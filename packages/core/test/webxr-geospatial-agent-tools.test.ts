@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { availableToolNames } from '../src/node/gemini/tool-catalog';
 import { describe, it, expect } from 'vitest';
 import { GeminiService } from '../src/node/gemini-service';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
@@ -27,8 +28,10 @@ describe('WebXR Geospatial Agent Tools & Capability Resolution', () => {
         const fnDeclsContainer = toolDeclarations.find((t: any) => t.functionDeclarations);
         expect(fnDeclsContainer).toBeDefined();
 
-        const fnDecls: any[] = fnDeclsContainer.functionDeclarations;
-        const toolNames = fnDecls.map((d: any) => d.name);
+        // Declared up front or loadable by name through load_tools (tool-catalog.ts).
+        const toolNames = availableToolNames(toolDeclarations).all;
+        // Their full declarations, as offered once loaded.
+        const fnDecls: any[] = (geminiService as any).buildToolDeclarations({ ...request, loadedTools: toolNames }).find((t: any) => t.functionDeclarations).functionDeclarations;
 
         expect(toolNames).toContain('webxr_geospatial_align_coordinates');
         expect(toolNames).toContain('webxr_geospatial_calibrate');

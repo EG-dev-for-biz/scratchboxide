@@ -17,7 +17,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { packConfidenceTexel, unpackConfidenceTexel, type BakedTexturePlanes } from '../src/common/spatial/texture-pass-contracts';
-import { inpaintMaskedTexels, INPAINT_RUNG } from '../src/node/3d-engine/staged-location/texture-inpaint';
+import { inpaintMaskedTexels, INPAINT_RUNG, INPAINT_MAX_SIDE } from '../src/node/3d-engine/staged-location/texture-inpaint';
 import type { EnhanceModelClient } from '../src/node/3d-engine/staged-location/texture-enhance';
 import type { LaidOutUvAtlas } from '../src/node/3d-engine/staged-location/texture-uv';
 import { decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
@@ -92,5 +92,41 @@ describe('inpainting the texels an occluder hid', () => {
         const merged = Uint8Array.from(s.planes.albedo);
         for (let i = 0; i < SIDE * SIDE; i++) if (r.planes!.albedo[i * 4 + 3]) merged.set(r.planes!.albedo.subarray(i * 4, i * 4 + 4), i * 4);
         fs.writeFileSync(path.join(out, 'texture_inpaint_masked.png'), encodePng(SIDE, SIDE, Buffer.from(merged)));
+    });
+
+    it('restamps a crisp nearest-neighbour hole before the bilinear downsize, so the model never sees a blended purple fringe', async () => {
+        // a rect bigger than INPAINT_MAX_SIDE forces the scale <= 1 branch (the bilinear resizer), which is the one that
+        // used to blend the hole's hard magenta edge into the real texels around it
+        const BIG = 1536;
+        const inBigHole = (x: number, y: number) => x >= 500 && x < 1000 && y >= 500 && y < 1000;
+        const a = facadeAtlas(BIG);
+        const atlas = { ...a, layout: { rects: [{ x: 0, y: 0, width: BIG, height: BIG, kind: 'chart', mapIndex: 0 }] } } as unknown as LaidOutUvAtlas;
+        const N = BIG * BIG, albedo = new Uint8Array(N * 4), conf = { width: BIG, height: BIG, data: new Uint8Array(N * 4) };
+        for (let y = 0; y < BIG; y++) for (let x = 0; x < BIG; x++) {
+            if (inBigHole(x, y)) continue;
+            const i = y * BIG + x, c = facadeAlbedo((x + 0.5) / BIG * 10, (1 - (y + 0.5) / BIG) * 6);
+            albedo.set([c[0], c[1], c[2], 255], i * 4);
+            packConfidenceTexel(conf, i, 0, 0.5, 2);
+        }
+        const planes: BakedTexturePlanes = { layerKey: 'l2', width: BIG, height: BIG, albedo, confidence: conf, provenance: [{ source: 'tile-photo-transfer', label: 'photo-inferred', method: 't', coverage: 1 }], degradations: [] };
+        const masked = new Uint8Array(N).fill(1);
+
+        let sent: { width: number; height: number; rgba: Uint8Array } | undefined;
+        const capture = model(img => { sent = { width: img.width, height: img.height, rgba: Uint8Array.from(img.rgba) }; });
+        await inpaintMaskedTexels({ atlas, planes, masked, client: capture, models: ['m'] });
+
+        expect(sent).toBeDefined();
+        expect(Math.max(sent!.width, sent!.height)).toBeLessThanOrEqual(INPAINT_MAX_SIDE); // confirms the downsize branch ran
+
+        // the same nearest-neighbour mapping texture-inpaint.ts restamps the hole with, recomputed independently here
+        const nearestHole = (x: number, y: number) => inBigHole(Math.min(BIG - 1, Math.floor((x * BIG) / sent!.width)), Math.min(BIG - 1, Math.floor((y * BIG) / sent!.height)));
+        let checked = 0;
+        for (let y = 0; y < sent!.height; y++) for (let x = 0; x < sent!.width; x++) {
+            if (!nearestHole(x, y)) continue;
+            checked++;
+            const o = (y * sent!.width + x) * 4;
+            expect(Array.from(sent!.rgba.subarray(o, o + 4))).toEqual([255, 0, 255, 255]);
+        }
+        expect(checked).toBeGreaterThan(0); // the hole actually survived, pure, into the sent image, not a blend the gate would miss
     });
 });

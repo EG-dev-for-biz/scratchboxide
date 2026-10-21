@@ -1215,6 +1215,11 @@ export interface PanoRegistrationInput {
     frames: RegistrationFrame[];
     /** Start correction (e.g. from the Gemini + PnP fallback). Bounds stay relative to the nominal eye. */
     initialCorrection?: PoseCorrection;
+    /**
+     * Polish only: `initialCorrection` is taken as the basin (e.g. a learned seed), so the coarse grid and the multi-start are
+     * skipped and the start is refined by one bounded Nelder-Mead per truncation, at most `maxEvals` cost evaluations each.
+     */
+    polishOnly?: { maxEvals: number };
 }
 
 export interface RegistrationBounds { horizontalMeters: number; verticalMeters: number; yawDeg: number; pitchDeg: number; rollDeg: number }
@@ -1334,6 +1339,8 @@ export interface PanoRegistrationResult {
     /** Terms used by the objective (silhouette, crease, contour, texture-line, photometric). */
     objective: string[];
     timingsMs: Record<string, number>;
+    /** Cost evaluations of the pose search (grid, Nelder-Mead, recheck) and of the gates' per-frame refinements. */
+    evaluations: { search: number; gates: number };
 }
 
 const DEFAULT_BOUNDS: RegistrationBounds = { horizontalMeters: 4, verticalMeters: 0.7, yawDeg: 3, pitchDeg: 1.5, rollDeg: 1.5 };
@@ -1610,10 +1617,14 @@ export class StreetViewPoseRegistrar {
         return photometricNcc(pf.feats.pPos, pf.feats.pVal, pf.feats.pCount, 1, this.camera(input, pf.frame, corr), pf.photo);
     }
 
+    /** Cost evaluations since the current registerPano started. */
+    private evaluations = 0;
+
     private objective(input: PanoRegistrationInput, frames: PreparedFrame[], trunc: number, coarse: boolean, priorCentre?: number[]) {
         const pw = this.opts.priorWeight ?? 0.5;
         return (x: number[]) => {
             const px = priorCentre ? x : x;
+            this.evaluations++;
             return this.dataCost(input, frames, x, trunc, coarse) + pw * this.priorChi2(px);
         };
     }
@@ -1747,6 +1758,7 @@ export class StreetViewPoseRegistrar {
 
     registerPano(input: PanoRegistrationInput, photos?: PhotoFeatures[]): PanoRegistrationResult {
         const t0 = Date.now();
+        this.evaluations = 0;
         const timings: Record<string, number> = {};
         const lap = (k: string, since: number) => { timings[k] = Date.now() - since; return Date.now(); };
         let t = Date.now();
@@ -1775,7 +1787,7 @@ export class StreetViewPoseRegistrar {
         const grid: { x: number[]; f: number; key: string }[] = [];
         const costAt = new Map<string, number>();
         const cl = (v: number, i: number) => Math.min(hi[i], Math.max(lo[i], v));
-        for (const dp of local ? [0] : pitches) {
+        for (const dp of input.polishOnly ? [] : local ? [0] : pitches) {
             for (let ix = -nH; ix <= nH; ix++) for (let iz = -nH; iz <= nH; iz++) for (let iy = -nY; iy <= nY; iy++) {
                 const x = [cl(centre[0] + ix * step, 0), start[1], cl(centre[2] + iz * step, 2), cl(centre[3] + iy * ystep, 3), cl(start[4] + dp, 4), start[5]];
                 const f = coarseObj(x);
@@ -1794,7 +1806,7 @@ export class StreetViewPoseRegistrar {
             return true;
         }).sort((a, b) => a.f - b.f).slice(0, this.opts.coarseTopK ?? 5);
         t = lap('coarseGrid', t);
-        const coarseBest = minima.length ? minima[0].f : coarseObj(start);
+        const coarseBest = minima.length ? minima[0].f : input.polishOnly ? NaN : coarseObj(start);
         this.log(`[${input.panoId}] coarse: ${grid.length} poses, best ${coarseBest.toFixed(2)} at ${minima[0]?.x.map(v => v.toFixed(2)).join(',')}`);
 
         // Bounded Nelder-Mead from each minimum (coarse truncation, then fine truncation)
@@ -1802,16 +1814,18 @@ export class StreetViewPoseRegistrar {
         let best = { x: start, fx: Infinity };
         const seeds = minima.length ? minima.map(m => m.x) : [start];
         if (!seeds.some(s => s.every((v, i) => v === start[i]))) seeds.push(start);
+        const polish = input.polishOnly?.maxEvals;
         for (const s of seeds) {
-            const a = nelderMead(this.objective(input, prepared, Tc, false), s, nmStep, lo, hi, 400);
-            const b = nelderMead(this.objective(input, prepared, T, false), a.x, nmStep.map(v => v * 0.5), lo, hi, 400);
+            const a = nelderMead(this.objective(input, prepared, Tc, false), s, polish ? nmStep.map(v => v * 0.5) : nmStep, lo, hi, polish ?? 400);
+            const b = nelderMead(this.objective(input, prepared, T, false), a.x, nmStep.map(v => v * 0.5), lo, hi, polish ?? 400);
             if (b.fx < best.fx) best = { x: b.x, fx: b.fx };
         }
         t = lap('nelderMead', t);
 
         // Visibility recheck at the refined pose with the strict sky-side test, then final refinement
         prepared = this.prepareFrames(input, feats, arrayToCorrection(best.x), true);
-        const fin = nelderMead(this.objective(input, prepared, T, false), best.x, nmStep.map(v => v * 0.3), lo, hi, 500);
+        const fin = nelderMead(this.objective(input, prepared, T, false), best.x, nmStep.map(v => v * 0.3), lo, hi, polish ?? 500);
+        const searchEvaluations = this.evaluations;
         const x = fin.x;
         const corr = arrayToCorrection(x);
         t = lap('recheckRefine', t);
@@ -1850,6 +1864,7 @@ export class StreetViewPoseRegistrar {
             });
         }
         for (const r of reports) { r.reasons = evaluateFrameGates(r, atBound, this.gates); r.accepted = r.reasons.length === 0; }
+        const gateEvaluations = this.evaluations - searchEvaluations;
         t = lap('gates', t);
         timings.total = Date.now() - t0;
         const move = Math.hypot(corr.dx, corr.dz);
@@ -1860,7 +1875,8 @@ export class StreetViewPoseRegistrar {
             frames: reports, accepted: reports.some(r => r.accepted),
             method: input.initialCorrection ? 'correspondence-seeded' : 'search',
             objective: ['silhouette', 'crease', 'contour', ...(this.textureLines ? ['texture-line'] : []), ...(this.textured && (this.opts.photometricWeight ?? 150) > 0 ? ['photometric'] : [])],
-            timingsMs: timings
+            timingsMs: timings,
+            evaluations: { search: searchEvaluations, gates: gateEvaluations }
         };
     }
 }

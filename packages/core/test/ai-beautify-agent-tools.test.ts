@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { availableToolNames } from '../src/node/gemini/tool-catalog';
 import { describe, it, expect } from 'vitest';
 import { GeminiService } from '../src/node/gemini-service';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
@@ -27,8 +28,8 @@ describe('AI Beautify Agent Tool & Capability Resolution', () => {
         const fnDeclsContainer = toolDeclarations.find((t: any) => t.functionDeclarations);
         expect(fnDeclsContainer).toBeDefined();
 
-        const fnDecls: any[] = fnDeclsContainer.functionDeclarations;
-        const toolNames = fnDecls.map((d: any) => d.name);
+        // Declared up front or loadable by name through load_tools (tool-catalog.ts).
+        const toolNames = availableToolNames(toolDeclarations).all;
 
         expect(toolNames).not.toContain('build_beautify_prompt');
         expect(toolNames).toContain('survey_beautify_station');

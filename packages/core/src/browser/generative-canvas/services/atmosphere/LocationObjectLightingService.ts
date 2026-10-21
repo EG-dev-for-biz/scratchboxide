@@ -30,6 +30,12 @@ export interface DelightUniformsConfig {
     uTwilightSkyTint: [number, number, number];
     uGroundBounceTint: [number, number, number];
     uGroundDeWash: number;
+    /** Enables Cartesian normal snapping to cardinal facade/roof planes (photogrammetric facet regularization). */
+    uNormalSnapEnabled?: boolean;
+    /** Dominant building/street azimuth in degrees (0 = world +X), e.g. UTDRA's `dominantStreetYawDeg`. */
+    uBuildingAzimuthDeg?: number;
+    /** Cosine-alignment band [lower, upper] over which a facet blends from its raw normal into the snapped cardinal normal. */
+    uNormalSnapBand?: [number, number];
 }
 
 export interface AtmosphereSceneLightingConfig {
@@ -98,6 +104,10 @@ export interface LocationObjectAtmosphereRequest {
     /** Window/portal openings on the model. Backlighting fixtures are created only for these; none are invented. */
     portals?: ArchitecturalPortalInput[];
     customDelightParams?: Partial<DelightUniformsConfig>;
+    /** Opt-in: snap photogrammetric facet normals to the building's cardinal walls/roof (shading-only, zero vertex drift). */
+    enableNormalSnap?: boolean;
+    /** Dominant building/street azimuth in degrees, e.g. from UTDRA's `dominantStreetYawDeg` telemetry. Required for enableNormalSnap. */
+    buildingAzimuthDeg?: number;
 }
 
 export interface LocationObjectAtmosphereResult {
@@ -208,8 +218,42 @@ export const LOCATION_DELIGHT_FRAGMENT_CHUNK = `
     // 3. Apply calibrated stone albedo reflectance tint
     vec3 stoneDelit = baseRgb * uStoneAlbedoTint;
 
+    // 3b. Cartesian Normal Snapping: regularize wobbly photogrammetric facet normals to the
+    // dominant building's cardinal wall/roof planes. Zero vertex drift — only the shading
+    // normal used below is affected, so GIS/collision geometry stays untouched.
+    #ifdef NORMAL_SNAP_ENABLED
+        vec3 rawDelightNorm = normalize(vDelightNormal);
+
+        // How close the raw facet already is to horizontal (roof/ground) vs. vertical (wall).
+        float snapVerticalAlign = abs(rawDelightNorm.y);
+
+        // Quantize the facet's horizontal azimuth to the nearest of the building's 4 cardinal walls.
+        vec2 snapHoriz = rawDelightNorm.xz;
+        float snapHorizLen = length(snapHoriz);
+        vec2 snapHorizDir = snapHorizLen > 0.0001 ? snapHoriz / snapHorizLen : vec2(1.0, 0.0);
+        float snapPixelAzimuth = atan(snapHorizDir.y, snapHorizDir.x);
+        float snapBuildingAzimuth = radians(uBuildingAzimuthDeg);
+        float snapGridStep = 1.5707963; // 90 degrees
+        float snapSnappedAzimuth = floor((snapPixelAzimuth - snapBuildingAzimuth) / snapGridStep + 0.5) * snapGridStep + snapBuildingAzimuth;
+        vec3 snapWallNormal = normalize(vec3(cos(snapSnappedAzimuth), 0.0, sin(snapSnappedAzimuth)));
+
+        // Quantize near-horizontal facets (flat roofs/plazas) to pure up/down.
+        vec3 snapFlatNormal = vec3(0.0, sign(rawDelightNorm.y + 0.0001), 0.0);
+
+        // Blend wall vs. flat ideal by how vertical the raw facet already reads.
+        vec3 snapIdealNormal = mix(snapWallNormal, snapFlatNormal, snapVerticalAlign);
+
+        // Only snap when the raw normal already roughly agrees with the ideal plane, so
+        // intentional curved/sculptural geometry (domes, cylindrical towers) is left alone.
+        float snapAlignment = dot(rawDelightNorm, snapIdealNormal);
+        float snapWeight = smoothstep(uNormalSnapBand.x, uNormalSnapBand.y, snapAlignment);
+
+        vec3 worldNorm = normalize(mix(rawDelightNorm, snapIdealNormal, snapWeight));
+    #else
+        vec3 worldNorm = normalize(vDelightNormal);
+    #endif
+
     // 4. Normal-dependent sky dome irradiance catch-light on upward-facing ledges
-    vec3 worldNorm = normalize(vDelightNormal);
     float upDot = clamp(worldNorm.y, 0.0, 1.0);
     stoneDelit = mix(stoneDelit, stoneDelit * uTwilightSkyTint * 2.2, upDot * 0.32);
 
@@ -389,6 +433,15 @@ export class LocationObjectLightingService {
         const sunDistance = Math.hypot(...sceneLighting.sunLight.position);
         sceneLighting.sunLight.position = [sunVec[0] * sunDistance, sunVec[1] * sunDistance, sunVec[2] * sunDistance];
 
+        // Wire opt-in Cartesian Normal Snapping (zero uninvited defaults — only active when requested).
+        if (request.enableNormalSnap) {
+            delightUniforms = {
+                ...delightUniforms,
+                uNormalSnapEnabled: true,
+                uBuildingAzimuthDeg: request.buildingAzimuthDeg ?? 0.0
+            };
+        }
+
         // Apply custom overrides if supplied
         if (request.customDelightParams) {
             delightUniforms = {
@@ -465,7 +518,15 @@ export class LocationObjectLightingService {
                     config?.uGroundBounceTint ? config.uGroundBounceTint[2] : 0.32
                 )
             },
-            uGroundDeWash: { value: config?.uGroundDeWash ?? 0.42 }
+            uGroundDeWash: { value: config?.uGroundDeWash ?? 0.42 },
+            // Cartesian Normal Snapping: shading-only facet regularization (no geometry edit).
+            uBuildingAzimuthDeg: { value: config?.uBuildingAzimuthDeg ?? 0.0 },
+            uNormalSnapBand: {
+                value: new THREE.Vector2(
+                    config?.uNormalSnapBand ? config.uNormalSnapBand[0] : 0.92,
+                    config?.uNormalSnapBand ? config.uNormalSnapBand[1] : 0.98
+                )
+            }
         };
 
         (material as any).userData.delightUniforms = u;
@@ -495,6 +556,7 @@ export class LocationObjectLightingService {
             shader.fragmentShader = `
                 #define DELIGHT_ENABLED 1
                 ${config?.uRealDelightEnabled ? '#define REAL_DELIGHT_ENABLED 1' : ''}
+                ${config?.uNormalSnapEnabled ? '#define NORMAL_SNAP_ENABLED 1' : ''}
                 uniform float uRealDelightEnabled;
                 uniform float uMeshShading;
                 uniform float uShadowLift;
@@ -503,6 +565,8 @@ export class LocationObjectLightingService {
                 uniform vec3 uTwilightSkyTint;
                 uniform vec3 uGroundBounceTint;
                 uniform float uGroundDeWash;
+                uniform float uBuildingAzimuthDeg;
+                uniform vec2 uNormalSnapBand;
                 varying vec3 vDelightNormal;
                 ${shader.fragmentShader}
             `;

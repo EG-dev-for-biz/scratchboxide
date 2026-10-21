@@ -311,6 +311,9 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 ### 13. Botany & Tree Synthesis (`botanical-tree-tools.ts`)
 - `botanical_synthesize_tree`: Grows one standalone SB-Veggie tree (space colonisation, studio clay) to the height and crown spread given; a location's trees are measured and rebuilt by `google_3d_tiles_get_clay`.
 
+### 13b. Streets (`sb-roadie-tools.ts`)
+- `sb_roadie`: SB-Roadie. Shelved (2026-10-21): refuses every call by default (`SCRATCHBOX_STAGED_ROADS=1` to try it). When enabled, "report" reads back how the staged place's streets were measured (kerb-to-kerb widths per street, kerbs found vs defaulted, medians); "rebuild" measures them again on the photo tiles along Google's road centrelines with the parameters given and replaces the scene's `l1r` road layer, textured from the tile photo rendered from above.
+
 ### 14. Codebase Lenses, Browser & Canvas Primitives (`lens-browser-tools.ts` & `canvas-tools.ts`)
 - `lens_project`: Projects file contents into interactive stage models.
 - `lens_unproject`: Writes stage state changes back to disk.

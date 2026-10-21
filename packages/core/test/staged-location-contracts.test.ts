@@ -374,7 +374,8 @@ describe('user decisions', () => {
         expect(PROVENANCE.photoCorrected).toBe('photo-corrected');
         const labels = DEFAULT_PROVENANCE_LEGEND.map(e => e.label);
         expect(new Set(labels).size).toBe(labels.length);
-        expect([...labels].sort()).toEqual(Object.values(PROVENANCE).sort());
+        // the scan labels, and Google's vector buildings (the first paint and the buildings past the tiles), carried unchanged
+        expect([...labels].sort()).toEqual([...Object.values(PROVENANCE), 'vector-modelled'].sort());
         // AGENTS.md: only geometry fitted to a scan, or measured from calibrated photos, may be labelled measured
         expect(labels).not.toContain('measured');
         expect(NON_MEASURED_PROVENANCE_LABELS).toEqual(['photo-inferred', 'photo-corrected', 'fitted-unobserved']);

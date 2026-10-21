@@ -83,10 +83,11 @@ describe('trees at four levels', () => {
         expect(json.extras.sbTrees.schema).toBe('scratchbox.trees-lod/3');
         const trees = json.nodes.filter((n: any) => n.extras?.sbTree !== undefined);
         expect(trees).toHaveLength(4);
-        // no species and no measured claim on anything a leaf is: the trees stay "grown to the measured crown"
-        const text = JSON.stringify(json);
-        expect(text).not.toMatch(/species/i);
+        // no measured claim on anything a leaf is: the trees stay "grown to the measured crown"; a species entry is a library
+        // choice by the crown's measurements, never a measurement of the tree
         for (const t of trees) {
+            expect(['library', 'unmatched']).toContain(t.extras.sbTree.species.provenance);
+            expect(t.extras.sbTree.species.measured.provenance).toBe('measured');
             expect(t.extras.sb.provenance.label).toBe('grown to the measured crown');
             expect(t.extras.sbTree.label).toBe('grown to the measured crown');
             for (const k of t.children) {

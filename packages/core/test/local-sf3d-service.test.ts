@@ -8,6 +8,7 @@
  * 3. TaskCapabilityResolver routing and tool offering for SF3D
  ********************************************************************************/
 
+import { availableToolNames } from '../src/node/gemini/tool-catalog';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -155,14 +156,20 @@ describe('Local SF3D Organic Prop Engine (no_pbr)', () => {
         expect(unnamed.suggestedNativeAction?.targetTool).not.toBe('generate_local_sf3d_organic_prop');
     });
 
-    it('3b. Is registered but not offered by default; a request naming SF3D gets it', () => {
+    it('3b. Is registered but not offered by default; load_tools lists it for when the user names SF3D', () => {
         const registry = createDefaultToolRegistry();
         expect(registry.has('generate_local_sf3d_organic_prop')).toBe(true);
-        const offered = (prompt: string) => (buildToolDeclarations({ prompt, mode: 'agent' } as any, registry) || [])
-            .flatMap((t: any) => (t.functionDeclarations || []).map((d: any) => d.name));
-        expect(offered('build a 3d model of a small mushroom')).not.toContain('generate_local_sf3d_organic_prop');
-        expect(offered('build a 3d model of a small mushroom')).toContain('build_3d_object_from_reference');
-        expect(offered('run SF3D on photo.png to make a 3d mesh')).toContain('generate_local_sf3d_organic_prop');
+        const tools = (prompt: string) => buildToolDeclarations({ prompt, mode: 'agent' } as any, registry);
+        const offered = availableToolNames(tools('build a 3d model of a small mushroom'));
+        expect(offered.declared).not.toContain('generate_local_sf3d_organic_prop');
+        expect(offered.declared).toContain('build_3d_object_from_reference');
+        // The model decides whether the request names it (no words in the prompt select tools): same offer either way.
+        expect(JSON.stringify(tools('run SF3D on photo.png to make a 3d mesh'))).toBe(JSON.stringify(tools('build a 3d model of a small mushroom')));
+        expect(offered.loadable).toContain('generate_local_sf3d_organic_prop');
+        const load = (tools('x') as any[]).flatMap(t => t.functionDeclarations || []).find((d: any) => d.name === 'load_tools');
+        expect(load.description).toMatch(/- generate_local_sf3d_organic_prop: Only when the user names it: /);
+        const loaded = availableToolNames(buildToolDeclarations({ prompt: 'x', mode: 'agent', loadedTools: ['generate_local_sf3d_organic_prop'] } as any, registry));
+        expect(loaded.declared).toContain('generate_local_sf3d_organic_prop');
     });
 
     it('4. Rejects invalid inputs gracefully with structured error', async () => {

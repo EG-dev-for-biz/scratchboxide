@@ -218,7 +218,7 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsOut
     }
     let packed = triangles[c.triOffset + tri];
     let local = (packed >> ((vi % 3u) * 8u)) & 0xffu;
-    let v = refs[c.refOffset + local] * 6u;
+    let v = refs[c.refOffset + local] * 8u; // position, normal, uv (SBVG_VERTEX_FLOATS)
     let p = vec3<f32>(vertices[v], vertices[v + 1u], vertices[v + 2u]);
     out.position = frame.viewProj * vec4<f32>(p, 1.0);
     out.normal = vec3<f32>(vertices[v + 3u], vertices[v + 4u], vertices[v + 5u]);
@@ -506,7 +506,7 @@ export class VirtualGeometryRenderer {
 
     private uploadLevel(header: SbvgHeader, index: number, file: Uint8Array) {
         const level = header.levels[index];
-        const parts = splitSbvgLevelBlock(level, file.subarray(level.byteOffset, level.byteOffset + level.byteLength));
+        const parts = splitSbvgLevelBlock(level, file.subarray(level.byteOffset, level.byteOffset + level.byteLength), header.version);
         const q = this.device.queue;
         const write = (buffer: any, offsetBytes: number, data: Uint8Array) => {
             if (data.byteLength > 0) q.writeBuffer(buffer, offsetBytes, data.buffer, data.byteOffset, data.byteLength);
@@ -542,6 +542,17 @@ export class VirtualGeometryRenderer {
 
     getCamera(): OrbitCamera {
         return { ...this.camera, target: [...this.camera.target] as [number, number, number] };
+    }
+
+    /** The orbit camera as a look-at view in the file's coordinates: what another renderer needs to draw the same shot. */
+    getView(): { eye: [number, number, number]; target: [number, number, number]; up: [number, number, number]; fovYDeg: number } {
+        const { eye, up } = this.basis();
+        return { eye: [eye[0], eye[1], eye[2]], target: [...this.camera.target] as [number, number, number], up: [up[0], up[1], up[2]], fovYDeg: (this.camera.fovY * 180) / Math.PI };
+    }
+
+    /** Scene bounds from the loaded header (file coordinates), or null before a file is loaded. */
+    getBounds(): { min: [number, number, number]; max: [number, number, number] } | null {
+        return this.header ? { min: [...this.header.aabbMin] as [number, number, number], max: [...this.header.aabbMax] as [number, number, number] } : null;
     }
 
     setErrorThreshold(px: number) {

@@ -28,6 +28,7 @@ import { stagedWorkspaceRoot } from './staged-location/stage-cache';
 import { getTileVegetationService } from './tile-vegetation-service';
 import { NativePythonRunnerService } from './native-python-runner-service';
 import { loadScanFit } from './scan-fit-loader';
+import { ensureMassingBinary } from './staged-location/pipeline-e/native-massing';
 
 export interface WarmupStep {
     name: string;
@@ -62,6 +63,8 @@ export function nativeWarmupSteps(workspaceRoot: string): WarmupStep[] {
     return [
         { name: 'tile_vegetation', run: async () => { await getTileVegetationService(workspaceRoot).ensureBinary(); } },
         { name: 'tile_refine', run: async () => { await getTileRefineService(workspaceRoot).ensureBinary(); } },
+        // the staged build's first paint (Google vector buildings extruded natively) runs this before anything else
+        { name: 'staged_massing', run: async () => { await ensureMassingBinary(); } },
         {
             name: 'scan_fit',
             run: async () => {

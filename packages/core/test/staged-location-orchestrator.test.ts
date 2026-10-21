@@ -70,14 +70,73 @@ function setup(spec: WorldSpec, opts: Parameters<typeof fakeNative>[2] = {}, ext
 const statusOf = (events: Array<{ e: StageEvent }>, stage: string) => events.filter(x => x.e.stage === stage).map(x => x.e.status);
 
 describe('a district', () => {
+    it('with an elevation sampler, the ground around the place is a measured terrain layer under everything; without one the stage is skipped', async () => {
+        const asked: number[] = [];
+        const elevation = { sample: async (points: Array<{ lat: number; lng: number }>) => { asked.push(points.length); return points.map((p, i) => 20 + 30 * Math.sin(i / 97) + 100 * (p.lat - 40.78)); } };
+        const s = setup(PARK, {}, { elevation });
+        const { result } = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: false }, s.deps, s.ctx);
+        expect(validateContract('StagedLocationResult', result)).toEqual([]);
+        expect(asked).toEqual([6561]);
+        expect(result.stages.find(x => x.stage === 'terrain')).toMatchObject({ status: 'committed' });
+        const sb = (result.artifact as any).data.stagedBuild;
+        const l0 = sb.layers.find((l: any) => l.layer === 'l0');
+        expect(l0).toMatchObject({ stage: 'terrain', order: 0, provenance: { label: 'measured', measuredGeometry: true } });
+        expect(l0.url).toMatch(/_terrain_[0-9a-f]{8}\.glb$/);
+        expect(l0.counts.vertices).toBe(6561);
+        expect(l0.counts.triangles).toBeGreaterThan(12000);
+        // the terrain is drawn first (order 0), under the tiles; it is never the ground objects stand on
+        expect(Math.min(...sb.layers.map((l: any) => l.order))).toBe(0);
+        const obj = (result.artifact as any).data.objects.find((o: any) => o.id === l0.objectId);
+        expect(obj.content.metadata.source).toBe('GoogleElevation');
+        expect(obj.content.metadata.isGround).toBeFalsy();
+
+        const none = setup(PARK);
+        const second = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: false }, none.deps, none.ctx);
+        expect(second.result.stages.find(x => x.stage === 'terrain')).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/Elevation API/) });
+    });
+
+    it('SB-Roadie is shelved: the roads stage is skipped even with Google road centrelines, and no road layer is built', async () => {
+        const s = setup(PARK, {}, { vectorEvidence: async () => ({ buildings: [], water: [], roads: [[[-25, 0], [25, 0]], [[0, -25], [0, 25]]], tiles: 1, zoom: 17 }) });
+        const { result } = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: false }, s.deps, s.ctx);
+        expect(validateContract('StagedLocationResult', result)).toEqual([]);
+        expect(result.stages.find(x => x.stage === 'roads')).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/shelved/) });
+        const sb = (result.artifact as any).data.stagedBuild;
+        expect(sb.layers.some((l: any) => l.layer === 'l1r')).toBe(false);
+        expect(statusOf(s.events, 'textures').pop()).toBe('committed');
+    });
+
+    it('with SCRATCHBOX_STAGED_ROADS=1, the streets are measured on the scan; a flat scan shows no kerb, so nothing is resurfaced and the stage says so', async () => {
+        const prev = process.env.SCRATCHBOX_STAGED_ROADS;
+        process.env.SCRATCHBOX_STAGED_ROADS = '1';
+        try {
+            const s = setup(PARK, {}, { vectorEvidence: async () => ({ buildings: [], water: [], roads: [[[-25, 0], [25, 0]], [[0, -25], [0, 25]]], tiles: 1, zoom: 17 }) });
+            const { result } = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: false }, s.deps, s.ctx);
+            expect(validateContract('StagedLocationResult', result)).toEqual([]);
+            // conservative: the flat synthetic ground steps up at no kerb, so no street is built rather than a guessed width
+            expect(result.stages.find(x => x.stage === 'roads')).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/both kerbs/) });
+            const sb = (result.artifact as any).data.stagedBuild;
+            expect(sb.layers.some((l: any) => l.layer === 'l1r')).toBe(false);
+            expect(statusOf(s.events, 'textures').pop()).toBe('committed');
+
+            const none = setup(PARK);
+            const second = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: false }, none.deps, none.ctx);
+            expect(second.result.stages.find(x => x.stage === 'roads')).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/vector data/) });
+        } finally {
+            if (prev === undefined) delete process.env.SCRATCHBOX_STAGED_ROADS; else process.env.SCRATCHBOX_STAGED_ROADS = prev;
+        }
+    });
+
     it('commits tiles, remesh and trees in order, each commit carrying the scene with one id and one camera', async () => {
         const s = setup(PARK);
         const { result, compat } = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: true }, s.deps, s.ctx);
         expect(validateContract('StagedLocationResult', result)).toEqual([]);
         expect(result.status).toBe('complete');
         // the stage order a user watches
-        const committed = s.events.filter(x => x.e.status === 'committed' && x.e.stage !== 'finish').map(x => x.e.stage);
+        const texturing = (stage: string) => stage === 'textures' || stage === 'textures-late';
+        const committed = s.events.filter(x => x.e.status === 'committed' && x.e.stage !== 'finish' && x.e.stage !== 'terrain' && !texturing(x.e.stage)).map(x => x.e.stage);
         expect(committed).toEqual(['resolve', 'tiles', 'trees-measure', 'remesh', 'trees']);
+        // the district is textured in the background (tile_refine's photo on the remesh), after the remesh commits
+        expect(statusOf(s.events, 'textures').pop()).toBe('committed');
         expect(statusOf(s.events, 'fit')).toEqual(['skipped']);
         expect(s.events.find(x => x.e.stage === 'fit')!.e).toMatchObject({ status: 'skipped' });
         expect(result.stages.find(x => x.stage === 'fit')!.reason).toBe('not an isolated structure');
@@ -85,8 +144,11 @@ describe('a district', () => {
         const arts = s.events.filter(x => x.artifact).map(x => x.artifact as any);
         expect(new Set(arts.map(a => a.id))).toEqual(new Set(['scene-stg-a1b2c301']));
         expect(new Set(arts.map(a => JSON.stringify(a.data.camera))).size).toBe(1);
-        expect(s.events.filter(x => x.e.status === 'running').every(x => !x.artifact)).toBe(true);
-        expect(arts.map(a => a.data.objects.length)).toEqual([1, 2, 3, 3]);
+        // a running event carries the scene only when it publishes a layer (a textured twin on its way)
+        expect(s.events.filter(x => x.e.status === 'running' && !x.e.layers?.length).every(x => !x.artifact)).toBe(true);
+        // a twin is a variant of its layer, never another object
+        expect(s.events.filter(x => x.artifact && !texturing(x.e.stage)).map(x => (x.artifact as any).data.objects.length)).toEqual([1, 2, 3, 3]);
+        expect(new Set(arts.map(a => a.data.objects.length))).toEqual(new Set([1, 2, 3]));
         for (const a of arts) expect(validateContract('StagedBuildState', a.data.stagedBuild)).toEqual([]);
         // seq strictly increases
         const seqs = s.events.map(x => x.e.seq);
@@ -831,7 +893,9 @@ describe('the call settles before it returns or throws', () => {
         expect(evidence.source).toContain("aimed at the structure's facades (no fit was accepted): they texture the remeshed scan");
         // what reads the images (vision, correction, detail) stays skipped: there is no fit to place detail on
         for (const id of ['vision', 'detail']) expect(result.stages.find(x => x.stage === id)).toMatchObject({ status: 'skipped', reason: 'there is no accepted fit to place detail on' });
-        expect(result.degradations.map(d => d.reasonCode)).toEqual(['canopy_not_masked', 'fit_rejected']);
+        // pipeline E is on by default for an isolated structure, but the arch has no usable vector footprint, so it falls
+        // back to the current pipeline (the same one this test exercises) and records why
+        expect(result.degradations.map(d => d.reasonCode)).toEqual(['canopy_not_masked', 'pipeline_e_fallback', 'fit_rejected']);
         // none of the three false statements: a 60 s limit, a run deadline, detail read from the tile photos
         const everything = JSON.stringify(result);
         expect(everything).not.toMatch(/run_deadline|time limit|60 s|tile photos only|read from the tile photos/);

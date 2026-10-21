@@ -20,8 +20,9 @@
  *
  * - Leaves: the entry whose colour is nearest the crown colour the tile photo shows (its hue, and weakly its saturation:
  *   brightness is normalised away, and haze greys a photo), and whose typical leaf length is nearest a length in proportion to the tree's height and crown
- *   radius. Its tint takes the entry's mean colour most of the way to the measured chromaticity (tintChromaShare), with
- *   a gentle brightness change.
+ *   radius. Its tint takes the entry's mean colour to the measured crown colour itself (per channel, the measured over
+ *   the entry's mean), so the leaves and the far masses read as the colour the scan showed; only a tint outside
+ *   [tintChannelMin, tintChannelMax] is clamped.
  * - Bark: the entry whose relief is nearest a relief that grows continuously with the tree's size (height and trunk
  *   radius): furrowed for large, old trees, smoother for young ones. Its tint moves it lightly toward a plausible bark
  *   albedo (the entry's own colour, a little desaturated, its luminance within the range bark has).
@@ -196,6 +197,7 @@ inline RGB leafOnPrior(const Library& lib) {
 /** What the choice reads of a tree: all measured or grown, none named. */
 struct TreeAppearance {
     MeasuredColour colour;
+    double leafLengthHintM{0};  // the leaf (or frond) length the leaf set is chosen by when > 0 (a species entry's); else from the tree's size
     double heightM{0};          // apex above support
     double crownRadiusM{0};     // mean of the measured sector radii
     double trunkRadiusM{0};
@@ -214,11 +216,9 @@ struct ChoiceParams {
     double leafPerCrownRadius{0.018};   // ... and leafPerCrownRadius x crown radius,
     double leafMinM{0.04}, leafMaxM{0.35};  // within these
     double margin{1.5};                 // entries within this cost of the best may be picked
-    double tintBrightnessMin{0.35}, tintBrightnessMax{1.4};
-    double tintChannelMin{0.2}, tintChannelMax{2.0};
-    // the share (as a power of the ratio) of the way from the entry's chromaticity to the measured one: a tile photo's
-    // crown colour carries haze and sky light, so the full shift would grey the leaves
-    double tintChromaShare{0.75};
+    // the tint is the measured crown colour over the entry's mean, per channel: the leaves come out the scan's colour.
+    // Only a ratio past these is held (a near-black channel of an entry, or a crown measured far darker than any leaf set)
+    double tintChannelMin{0.05}, tintChannelMax{8.0};
     // bark: the tree's size share s = mean of ln(H / youngH) / ln(oldH / youngH) and (r - youngR) / (oldR - youngR), both in [0, 1]
     double youngHeightM{5}, oldHeightM{28};
     double youngTrunkRadiusM{0.06}, oldTrunkRadiusM{0.45};
@@ -259,8 +259,15 @@ inline Choice choose(const Library& lib, const TreeAppearance& t, const ChoicePa
     out.colourMeasured = t.colour.known && t.colour.source == "measured";
     out.colourSource = t.colour.known ? t.colour.source : "none";
     // ---- leaves ----
-    out.targetLeafLengthM = targetLeafLength(t, C);
-    const RGB want = chromaticity(t.colour.meanLinear);
+    // a leaf length the caller asks for (a species entry's leaf or frond) is used when the library has leaves of that order;
+    // a frond no entry comes near would make the leaf cost pick the longest leaves whatever their look, so it is ignored
+    double hint = 0;
+    if (t.leafLengthHintM > 0 && !lib.leaves.empty()) {
+        double lo = lib.leaves.front().leafLengthM, hi = lo;
+        for (const auto& e : lib.leaves) { lo = std::min(lo, e.leafLengthM); hi = std::max(hi, e.leafLengthM); }
+        if (t.leafLengthHintM >= lo / 1.5 && t.leafLengthHintM <= hi * 1.5) hint = t.leafLengthHintM;
+    }
+    out.targetLeafLengthM = hint > 0 ? hint : targetLeafLength(t, C);
     std::vector<double> lc(lib.leaves.size());
     for (size_t i = 0; i < lib.leaves.size(); ++i) {
         const auto& e = lib.leaves[i];
@@ -280,15 +287,11 @@ inline Choice choose(const Library& lib, const TreeAppearance& t, const ChoicePa
     out.leafCost = lc[out.leaf];
     const LeafEntry& L = lib.leaves[out.leaf];
     if (t.colour.known) {
-        // the entry's chromaticity to the measured one, its brightness moved gently toward the measured
-        const RGB have = chromaticity(L.meanLinear);
-        const double g = std::clamp(std::sqrt(luminance(t.colour.meanLinear) / std::max(1e-6, luminance(L.meanLinear))), C.tintBrightnessMin, C.tintBrightnessMax);
-        RGB tint{};
-        for (int k = 0; k < 3; ++k) tint[static_cast<size_t>(k)] = std::pow(want[static_cast<size_t>(k)] / std::max(1e-6, have[static_cast<size_t>(k)]), C.tintChromaShare);
-        // keep the entry's own luminance under the chromaticity change, then scale it
-        RGB shifted{L.meanLinear[0] * tint[0], L.meanLinear[1] * tint[1], L.meanLinear[2] * tint[2]};
-        const double keep = luminance(L.meanLinear) / std::max(1e-9, luminance(shifted));
-        for (int k = 0; k < 3; ++k) out.leafTint[static_cast<size_t>(k)] = std::clamp(tint[static_cast<size_t>(k)] * keep * g, C.tintChannelMin, C.tintChannelMax);
+        // the entry's mean colour to the measured crown colour: the tinted mean is the measured colour, channel by channel
+        for (int k = 0; k < 3; ++k) {
+            const double ratio = t.colour.meanLinear[static_cast<size_t>(k)] / std::max(1e-6, L.meanLinear[static_cast<size_t>(k)]);
+            out.leafTint[static_cast<size_t>(k)] = std::clamp(ratio, C.tintChannelMin, C.tintChannelMax);
+        }
     }
     for (int k = 0; k < 3; ++k) out.massColourLinear[static_cast<size_t>(k)] = L.meanLinear[static_cast<size_t>(k)] * out.leafTint[static_cast<size_t>(k)];
     // ---- bark ----

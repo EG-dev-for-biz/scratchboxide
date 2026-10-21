@@ -83,7 +83,9 @@ export function stagedCamera(l1: Bounds3, target: Vec3, focusRadiusM: number, fo
     const azimuth = (45 * Math.PI) / 180;
     const inside = (p: Vec3) => p.every((v, k) => v >= l1.min[k] && v <= l1.max[k]);
     let position: Vec3 = target;
-    for (let elevation = 28; elevation <= 70; elevation += 5) {
+    // from 18° above the ground, so the skyline and a band of sky (an atmosphere's clouds) are in the first frame;
+    // steeper only when that point would be inside the tiles
+    for (let elevation = 18; elevation <= 70; elevation += 5) {
         const phi = ((90 - elevation) * Math.PI) / 180;
         position = [
             target[0] + distance * Math.sin(phi) * Math.sin(azimuth),

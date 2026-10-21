@@ -126,7 +126,7 @@ async function runScene3DDynamicExecutionTests() {
     assert.ok(skyDomeModule.hemiLight instanceof THREE.HemisphereLight, 'Must create hemisphere bounce light');
     assert.ok(skyDomeModule.sunLight instanceof THREE.DirectionalLight, 'Must create sun directional light');
 
-    const skyMat = skyDomeModule.skyDome.material as THREE.ShaderMaterial;
+    const skyMat = skyDomeModule.skyMaterial;
     assert.ok(skyMat.vertexShader.includes('vWorldPosition'), 'Vertex shader must calculate world position for scattering');
     assert.ok(skyMat.fragmentShader.includes('topColor') && skyMat.fragmentShader.includes('bottomColor'), 'Fragment shader must compute gradient scattering');
 

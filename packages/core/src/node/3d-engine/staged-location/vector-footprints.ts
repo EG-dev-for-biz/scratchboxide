@@ -140,6 +140,8 @@ export interface EvidenceRaster {
     /** Cells within ROAD_HALF_WIDTH_M of a road centreline. */
     road: Uint8Array;
     buildings: VectorBuilding[];
+    /** The road centrelines themselves (scan frame), for the stages that measure the streets. */
+    roads: Vec2[][];
 }
 
 /** Half the width of the carriageway a centreline stands for (m): what the terrain may count as street. */
@@ -162,7 +164,7 @@ export function rasterizeEvidence(ev: VectorEvidence, g: EvidenceGrid): Evidence
             }
         }
     }
-    return { building, water, road, buildings: ev.buildings };
+    return { building, water, road, buildings: ev.buildings, roads: ev.roads };
 }
 
 /** Point lookups over the evidence, rasterised at `cellMeters` over the square `radiusM` around the origin. */

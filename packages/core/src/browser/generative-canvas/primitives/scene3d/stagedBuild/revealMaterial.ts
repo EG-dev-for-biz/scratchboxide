@@ -93,7 +93,28 @@ export interface MeshStagedLook {
      * confidence texture, B channel; texels no stage produced, and surfaces without the texture, in the clay rung's).
      */
     rungs?: { colors: THREE.Color[] };
+    /**
+     * A stage is running on what is shown (useStagedBuild.ts): a band of the work colour sweeps up the layers at
+     * `phase` (0 at the lowest point, 1 at the highest), and the part below `fill` (the stage's reported progress) is
+     * tinted, so the viewport moves in step with the overlay's running stage.
+     */
+    work?: WorkSweep;
 }
+
+export interface WorkSweep {
+    /** 0..1 up the world-Y range of the layers being worked on. */
+    phase: number;
+    /** 0..1 of the stage's reported progress; 0 when the stage reports none. */
+    fill: number;
+    minY: number;
+    maxY: number;
+    color: THREE.Vector3;
+}
+
+/** The colour of the work sweep (sRGB hex, the overlay's running accent). */
+export const WORK_SWEEP_COLOR = '#A5B4FC';
+/** One sweep from the bottom of the layers to the top. */
+export const WORK_SWEEP_PERIOD_MS = 2400;
 
 interface StagedUniforms {
     uSbProgress: { value: number };
@@ -109,6 +130,11 @@ interface StagedUniforms {
     uSbPxScale: { value: number };
     uSbBackground: { value: THREE.Vector3 };
     uSbMarkColor: { value: THREE.Vector3 };
+    uSbWork: { value: number };
+    uSbWorkPhase: { value: number };
+    uSbWorkFill: { value: number };
+    uSbWorkRange: { value: THREE.Vector2 };
+    uSbWorkColor: { value: THREE.Vector3 };
     uSbClassColor?: { value: THREE.Color[] };
     uSbClassPattern?: { value: THREE.Vector2[] };
     uSbRungColor?: { value: THREE.Color[] };
@@ -137,9 +163,13 @@ export function stagedKindOf(m: THREE.Material): StagedMaterialKind | undefined 
 }
 
 /** What a staged material is drawing with right now (diagnostics and tests; nothing in the viewport reads it). */
-export function stagedMaterialUniforms(m: THREE.Material): { progress: number; stagger: number; fade: number; presence: number; background: THREE.Vector3 } | undefined {
+export function stagedMaterialUniforms(m: THREE.Material): { progress: number; stagger: number; fade: number; presence: number; background: THREE.Vector3; work?: { phase: number; fill: number; minY: number; maxY: number } } | undefined {
     const u = UNIFORMS.get(m);
-    return u ? { progress: u.uSbProgress.value, stagger: u.uSbStagger.value, fade: u.uSbFade.value, presence: u.uSbPresence.value, background: u.uSbBackground.value } : undefined;
+    if (!u) return undefined;
+    return {
+        progress: u.uSbProgress.value, stagger: u.uSbStagger.value, fade: u.uSbFade.value, presence: u.uSbPresence.value, background: u.uSbBackground.value,
+        ...(u.uSbWork.value > 0.5 ? { work: { phase: u.uSbWorkPhase.value, fill: u.uSbWorkFill.value, minY: u.uSbWorkRange.value.x, maxY: u.uSbWorkRange.value.y } } : {})
+    };
 }
 
 /** A merged mesh's per-part fade, presence and mark as its staged material draws them (diagnostics and tests). */
@@ -161,6 +191,7 @@ uniform float uSbStagger;
 uniform float uSbHasReveal;
 uniform float uSbHasDisp;
 varying float vSbRevealK;
+varying float vSbWorldY;
 #ifdef SB_PARTS
 attribute float ${PART_ATTRIBUTE};
 uniform vec4 uSbPartA[SB_PARTS];
@@ -194,6 +225,14 @@ const VERTEX_BODY = `
         transformed -= uSbHasDisp * ${DISP_ATTRIBUTE} * (1.0 - sbLocal);
         vSbRevealK = uSbHasReveal * (${REVEAL_ATTRIBUTE}.x * uSbStagger + ${REVEAL_ATTRIBUTE}.y * (1.0 - uSbStagger));
     }
+    {
+        // the work sweep runs up world Y (after the displacement above, so a surface still arriving is swept where it is)
+        vec4 sbWorld = vec4(transformed, 1.0);
+#ifdef USE_INSTANCING
+        sbWorld = instanceMatrix * sbWorld;
+#endif
+        vSbWorldY = (modelMatrix * sbWorld).y;
+    }
 #ifdef SB_PROVENANCE
     {${vertexClassGlsl()}
 #ifdef SB_PARTS
@@ -219,7 +258,13 @@ uniform float uSbMark;
 uniform float uSbPxScale;
 uniform vec3 uSbBackground;
 uniform vec3 uSbMarkColor;
+uniform float uSbWork;
+uniform float uSbWorkPhase;
+uniform float uSbWorkFill;
+uniform vec2 uSbWorkRange;
+uniform vec3 uSbWorkColor;
 varying float vSbRevealK;
+varying float vSbWorldY;
 #ifdef SB_PROVENANCE
 varying vec3 vSbColor;
 varying vec2 vSbPattern;
@@ -304,6 +349,14 @@ const FRAGMENT_END = `
         sbMarkOn = max(sbMarkOn, vSbPartA.z);
 #endif
         if (sbMarkOn > 0.5 && sbStripe(sbP, 10.0, 0.2, -1.0)) gl_FragColor.rgb = uSbMarkColor;
+        if (uSbWork > 0.5) {
+            // the work sweep: a bright band at the phase with a trail under it, and a faint tint up to the stage's progress
+            float sbT = clamp((vSbWorldY - uSbWorkRange.x) / max(1e-3, uSbWorkRange.y - uSbWorkRange.x), 0.0, 1.0);
+            float sbBand = 1.0 - smoothstep(0.0, 0.03, abs(sbT - uSbWorkPhase));
+            float sbTrail = sbT < uSbWorkPhase ? 0.35 * exp(-(uSbWorkPhase - sbT) * 16.0) : 0.0;
+            float sbFill = sbT < uSbWorkFill ? 0.12 : 0.0;
+            gl_FragColor.rgb = mix(gl_FragColor.rgb, uSbWorkColor, clamp(0.85 * sbBand + sbTrail + sbFill, 0.0, 0.9));
+        }
     }
 `;
 
@@ -360,7 +413,12 @@ function makeUniforms(): StagedUniforms {
         uSbMark: { value: 0 },
         uSbPxScale: { value: 1 },
         uSbBackground: { value: srgbVec(PROVENANCE_BACKGROUND) },
-        uSbMarkColor: { value: srgbVec(DEGRADED_OUTLINE_COLOR) }
+        uSbMarkColor: { value: srgbVec(DEGRADED_OUTLINE_COLOR) },
+        uSbWork: { value: 0 },
+        uSbWorkPhase: { value: 0 },
+        uSbWorkFill: { value: 0 },
+        uSbWorkRange: { value: new THREE.Vector2(0, 1) },
+        uSbWorkColor: { value: srgbVec(WORK_SWEEP_COLOR) }
     };
 }
 
@@ -444,6 +502,14 @@ function setUniforms(mat: THREE.Material, mesh: THREE.Object3D, look: MeshStaged
     u.uSbHasProud.value = geometry.getAttribute(VERTEX_ATTRIBUTE.proudBlock) ? 1 : 0;
     u.uSbHasRectify.value = geometry.getAttribute(VERTEX_ATTRIBUTE.rectifyDisplacement) ? 1 : 0;
     u.uSbMark.value = look.mark ? 1 : 0;
+    const w = look.work;
+    u.uSbWork.value = w ? 1 : 0;
+    if (w) {
+        u.uSbWorkPhase.value = w.phase;
+        u.uSbWorkFill.value = w.fill;
+        u.uSbWorkRange.value.set(w.minY, w.maxY);
+        u.uSbWorkColor.value.copy(w.color);
+    }
     const over = !!r?.overSource;
     if (mat.polygonOffset !== over) {
         mat.polygonOffset = over;
@@ -513,6 +579,7 @@ export function partArrays(looks: readonly PartLook[]): { look: MeshStagedLook; 
     let any = false, fading = false, overSource = false, noDisp = false;
     let prov: MeshStagedLook['provenance'];
     let rungs: MeshStagedLook['rungs'];
+    let work: MeshStagedLook['work'];
     for (const l of looks) {
         if (!l || l === 'hide' || l === 'conceal') { a.push([1, 1, 0, 0]); b.push([PART_GREY.r, PART_GREY.g, PART_GREY.b, 0]); continue; }
         any = true;
@@ -534,15 +601,18 @@ export function partArrays(looks: readonly PartLook[]): { look: MeshStagedLook; 
             b.push([PART_GREY.r, PART_GREY.g, PART_GREY.b, 0]);
         }
         if (l.rungs) rungs ??= l.rungs;
+        // the work sweep is one band over the whole scene: any part's is the mesh's
+        if (l.work) work ??= l.work;
     }
     if (!any) return null;
     const look: MeshStagedLook = {
         ...(fading || overSource ? { reveal: { progress: 1, stagger: 0, fade: 1, presence: 1, ...(overSource ? { overSource: true } : {}), ...(noDisp ? { noDisp: true } : {}) } } : {}),
         ...(prov ? { provenance: prov } : {}),
-        ...(rungs && !prov ? { rungs } : {})
+        ...(rungs && !prov ? { rungs } : {}),
+        ...(work ? { work } : {})
     };
     // a mark-only frame (a highlighted part, nothing else staged) still needs a staged material for the per-part mark
-    if (!look.reveal && !look.provenance && !look.rungs) look.reveal = { progress: 1, stagger: 0, fade: 1, presence: 1 };
+    if (!look.reveal && !look.provenance && !look.rungs && !look.work) look.reveal = { progress: 1, stagger: 0, fade: 1, presence: 1 };
     return { look, a, b, fading };
 }
 
@@ -579,7 +649,7 @@ export class StagedMaterialRegistry {
      */
     apply(mesh: THREE.Mesh | THREE.LineSegments, look: MeshStagedLook | null, opts: { allowCreate: boolean; pxScale: number; classCount: number; restores?: { left: number } }): boolean {
         this.fixClayStash(mesh);
-        if (!look || (!look.reveal && !look.provenance && !look.mark && !look.rungs)) {
+        if (!look || (!look.reveal && !look.provenance && !look.mark && !look.rungs && !look.work)) {
             // Putting a mesh's own material back disposes it (the renderer releases its program reference), which costs
             // about 20 µs: a district's 2,000 trees would stall the frame their reveal ends. Over the frame's budget a
             // mesh stays on its staged material, drawn fully revealed (identical pixels), and gets its own a frame later.
@@ -669,6 +739,16 @@ export class StagedMaterialRegistry {
         const created = this.apply(mesh, arrays.look, opts);
         const mat = mesh.material as THREE.Material;
         const u = isStagedMaterial(mat) ? UNIFORMS.get(mat) : undefined;
+        if (u) {
+            const w = arrays.look.work;
+            u.uSbWork.value = w ? 1 : 0;
+            if (w) {
+                u.uSbWorkPhase.value = w.phase;
+                u.uSbWorkFill.value = w.fill;
+                u.uSbWorkRange.value.set(w.minY, w.maxY);
+                u.uSbWorkColor.value.copy(w.color);
+            }
+        }
         if (u?.uSbPartA && u.uSbPartB) {
             const n = Math.min(u.uSbPartA.value.length, arrays.a.length);
             for (let i = 0; i < n; i++) { u.uSbPartA.value[i].fromArray(arrays.a[i]); u.uSbPartB.value[i].fromArray(arrays.b[i]); }

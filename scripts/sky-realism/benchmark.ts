@@ -13,6 +13,9 @@
  * The sun comes from the disc in the photo; with none visible, from the NOAA ephemeris when the capture time and its
  * UTC offset are known; otherwise the reference is skipped and listed with the reason. Nothing is assumed.
  *
+ * --fit-turbidity: for clear skies with the sun shining clear, the render's turbidity is the one at which the clear-sky
+ * model gives the photo's own direct:diffuse ratio, so the sky measures test the sky model rather than the default haze.
+ *
  * Writes <out>/report.json, <out>/report.html and side-by-side PNGs (photo | render), all tone-mapped the same way.
  */
 
@@ -24,8 +27,9 @@ import { integrateSpectrum, planckRadiance } from '../../packages/core/src/brows
 import { renderSkyDomeEquirects } from '../../packages/core/src/node/atmosphere-benchmark/sky-dome-equirect-renderer';
 import { scoreSkyRealism, scoreClouds, SKY_REALISM_TOLERANCES, SkyRealismScore } from '../../packages/core/src/node/atmosphere-benchmark/sky-realism-score';
 import { calculateNOAASolarPosition } from '../../packages/core/src/browser/generative-canvas/services/atmosphere/solar-position';
+import { solarIrradiance } from '../../packages/core/src/browser/generative-canvas/services/atmosphere/clear-sky-irradiance';
 import { encodePng } from '../../packages/core/src/node/3d-engine/staged-location/png-encode';
-import type { AtmosphericScatteringConfig } from '../../packages/core/src/browser/generative-canvas/services/atmosphere/atmosphere-types';
+import type { AtmosphericScatteringConfig, CloudShellLayer } from '../../packages/core/src/browser/generative-canvas/services/atmosphere/atmosphere-types';
 
 interface Reference {
     id: string;
@@ -39,6 +43,8 @@ interface Reference {
     minSampleElevationDeg?: number;
     /** The camera white balance the photo was processed at; the render gets the same adaptation before comparing. */
     whiteBalanceKelvin?: number;
+    /** The cloud the app would draw for this sky, read from the photo once (annotate-clouds.ts). */
+    clouds?: { cumulusSkyCover: number; cumulusBaseAltitudeMeters?: number; decks: CloudShellLayer[]; reasoning?: string; source: string };
 }
 
 function arg(name: string, fallback?: string): string {
@@ -69,6 +75,14 @@ async function referenceFile(ref: Reference): Promise<string> {
 /** The scene configuration the app would build for this sky: the measured sun, and cloud cover when the photo has cloud. */
 function configFor(ref: Reference, sunElevationDeg: number, clouds: CloudMeasurement | undefined): { config: AtmosphericScatteringConfig; note?: string } {
     const config: AtmosphericScatteringConfig = { sunElevation: sunElevationDeg, sunAzimuth: 180 };
+    // A reading of the photo's cloud (types and physical decks) is drawn as read, as the app's agent would draw it.
+    if (ref.clouds) {
+        const c = ref.clouds;
+        if (c.cumulusSkyCover > 0.01) Object.assign(config, { volumetricClouds: true, cloudCoverage: c.cumulusSkyCover, ...(c.cumulusBaseAltitudeMeters ? { cloudAltitude: c.cumulusBaseAltitudeMeters } : {}) });
+        if (c.decks.length) config.cloudLayers = c.decks;
+        const labels = c.decks.map(d => d.label ?? 'deck').join(', ');
+        return { config, note: `cloud read from the photo (${c.source}): cumulus ${c.cumulusSkyCover.toFixed(2)}${labels ? `, decks: ${labels}` : ''}` };
+    }
     if (ref.weather === 'overcast' || ref.weather === 'rain') {
         Object.assign(config, { volumetricClouds: true, cloudCoverage: 0.95 });
         return { config, note: 'overcast drawn as volumetric cover 0.95' };
@@ -113,6 +127,7 @@ function toneMapSky(img: EquirectImage, refY: number, into: Uint8Array, stride: 
 async function main() {
     const manifest: Reference[] = JSON.parse(fs.readFileSync(arg('manifest', path.join(__dirname, 'references.json')), 'utf8'));
     const out = arg('out');
+    const fitTurbidity = process.argv.includes('--fit-turbidity');
     fs.mkdirSync(out, { recursive: true });
 
     type Job = { ref: Reference; photo: EquirectImage; measured: SkyMeasurement; clouds?: CloudMeasurement; sunEl: number; sunSource: string; config: AtmosphericScatteringConfig; note?: string };
@@ -131,7 +146,20 @@ async function main() {
         if (sunEl === undefined) { skipped.push({ id: ref.id, reason: 'no sun disc and no capture time with a known UTC offset' }); continue; }
         // Clouds are measured on daytime skies with the sun at least 10° up (neutral-colour classification).
         const clouds = measured.sun && sunEl >= 10 ? measureClouds(photo, measured.sun) : undefined;
-        const { config, note } = configFor(ref, sunEl, clouds);
+        const { config, note: baseNote } = configFor(ref, sunEl, clouds);
+        let note = baseNote;
+        if (fitTurbidity && measured.sun && ref.weather === 'clear' && sunEl > 3) {
+            const sinEl = Math.sin((sunEl * Math.PI) / 180);
+            const photoRatio = (measured.sun.discToSkyRatio * sinEl) / measured.skyIrradianceRatio;
+            // directToDiffuse falls as turbidity rises: bisect on log T in [1, 12].
+            let lo = 0, hi = Math.log(12);
+            for (let k = 0; k < 40; k++) {
+                const mid = (lo + hi) / 2;
+                if (solarIrradiance(sunEl, { turbidity: Math.exp(mid) }).directToDiffuse > photoRatio) lo = mid; else hi = mid;
+            }
+            config.turbidity = +Math.exp((lo + hi) / 2).toFixed(3);
+            note = `${note ? note + '; ' : ''}turbidity ${config.turbidity} fitted to the photo's direct:diffuse ${photoRatio.toFixed(2)}`;
+        }
         jobs.push({ ref, photo: downsample(photo, 512, 256), measured, clouds, sunEl, sunSource, config, note });
     }
 

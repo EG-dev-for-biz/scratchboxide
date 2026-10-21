@@ -16,6 +16,7 @@ import { buildScrubbedEnv } from '../security/sandbox-policy';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { resolveRepoPython } from '../process/repo-python';
+import { defaultDurableAssetStore } from '../asset-store/durable-asset-store';
 
 const execFileAsync = promisify(execFile);
 
@@ -406,6 +407,16 @@ export class NativePythonRunnerService {
             if (written) {
                 glbPath = written;
                 glbBase64 = fs.readFileSync(written).toString('base64');
+                // the durable copy outside this checkout (asset-store): a saved scene's /build/3d-python URL keeps working
+                const servedDir = path.resolve(repoRoot, 'build/3d-python');
+                const rel = path.relative(servedDir, written);
+                if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+                    try {
+                        defaultDurableAssetStore()?.putFile(written, { servedPath: `/build/3d-python/${rel.split(path.sep).join('/')}`, origin: '3d-python', workspace: repoRoot });
+                    } catch (err) {
+                        console.warn(`[NativePythonRunnerService] ${written} was written but not recorded in the asset store: ${(err as Error).message}`);
+                    }
+                }
             }
 
             return {

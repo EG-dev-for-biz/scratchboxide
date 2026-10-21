@@ -39,6 +39,8 @@ import { ViewportHistoryButtons } from './scene3d/ViewportHistoryButtons';
 import type { HistoryEditMeta } from './scene3d/useViewportHistory';
 import { ObjectEditCapture, createGeometrySwapEdit } from '../services/viewport-history-deltas';
 import { attachHistoryShortcuts } from '../services/viewport-history';
+import { assetRecoveryClient, recoverableAssetPath, type AssetRecoveryState } from '../services/asset-recovery-client';
+import { stripEmbeddedGlb } from '../../../common/strip-embedded-glb';
 import {
     TransformGizmoEngine,
     computeAxisTranslation,
@@ -184,7 +186,7 @@ import type { SceneBudgetTelemetry } from './scene3d/lightingRigs';
 import { useStagedBuild } from './scene3d/stagedBuild/useStagedBuild';
 import { readStagedBuild, type StagedSceneData } from './scene3d/stagedBuild/stagedBuildState';
 import { mergeStagedParts, mergeStagedPartsEnabled } from './scene3d/stagedBuild/mergeStagedParts';
-import { carryStagedChoice, carryTwinObjects, type StagedMaterialModeFields } from './scene3d/stagedBuild/texturedTwins';
+import { carryStagedChoice, carryTwinObjects, twinSourceOf, type StagedMaterialModeFields } from './scene3d/stagedBuild/texturedTwins';
 import { prepareTexturedTwinModel } from './scene3d/stagedBuild/texturedTwinModel';
 import { refreshFacadeReflections } from './scene3d/stagedBuild/facadeMaterialLook';
 
@@ -273,6 +275,8 @@ export type {
 
 export interface Scene3DPrimitiveProps {
     data: Scene3DData;
+    /** The full artifact wrapping `data`, when one exists — needed to call `onMorphArtifact` (it morphs the artifact, not just its data). */
+    activeArtifact?: CanvasArtifact;
     onUpdate?: (updatedData: Scene3DData) => void;
     onPromptAction?: (promptText: string) => void;
     onMorphArtifact?: (artifact: CanvasArtifact, targetType: string) => void;
@@ -645,6 +649,7 @@ import { loadServedGeneratorGlb } from '../../../common/strip-embedded-glb';
 import { PhotorealGaussianSplatMesh } from '../services/spatial/PhotorealGaussianSplatMesh';
 import { EWA_CUTOFF_SIGMA, EWA_SPLAT_GLSL } from '../../../common/spatial/splat-ewa-projection';
 import { DEFAULT_SCENE_RENDER_MODE } from '../../../common/scene-atmosphere-opt-in';
+import { ViewAsMenu } from './shared/ViewAsMenu';
 
 // ==========================================
 // Pluggable Splat Representation (ISplatViewer)
@@ -943,6 +948,8 @@ interface ExternalLoadStatus {
     /** 0 when the server sends no Content-Length. */
     total: number;
     error?: string;
+    /** The file was rebuilt from its recipe after the original was lost (asset recovery). */
+    rebuilt?: boolean;
 }
 
 /** Request URL for an objects[] durableUri: bare '/<file>.glb' paths are served from /models/. */
@@ -952,6 +959,17 @@ function resolveExternalModelUri(rawUri: string): string {
         if (fileName && (fileName.endsWith('.glb') || fileName.endsWith('.gltf'))) return `/models/${fileName}`;
     }
     return rawUri;
+}
+
+/** A finished recovery's distinct reasons, each once with its count ("13 files: never recorded in the asset store, …"). */
+function recoveryReasons(job: { items: Array<{ outcome: string; detail?: string }> }): string[] {
+    const counts = new Map<string, number>();
+    for (const item of job.items) {
+        if (item.outcome !== 'unrecoverable' && item.outcome !== 'failed') continue;
+        const reason = item.detail || (item.outcome === 'failed' ? 'the rebuild failed' : 'not recoverable');
+        counts.set(reason, (counts.get(reason) ?? 0) + 1);
+    }
+    return [...counts.entries()].map(([reason, n]) => `${n === 1 ? '1 file' : `${n} files`}: ${reason}`);
 }
 
 /** Objects sourced from a ground-tile service are only shown in the ground mode matching their source. */
@@ -970,7 +988,8 @@ function isVisibleForGroundMode(obj: Media4DObject, groundTileMode: GroundTileMo
 }
 
 const formatLoadStatus = (status: ExternalLoadStatus | undefined): string => {
-    if (!status || status.phase === 'ready') return '';
+    if (!status) return '';
+    if (status.phase === 'ready') return status.rebuilt ? 'rebuilt' : '';
     if (status.phase === 'error') return '!';
     if (status.phase === 'parse') return 'parsing';
     if (status.total > 0) return `${Math.min(99, Math.floor((status.loaded / status.total) * 100))}%`;
@@ -1077,6 +1096,7 @@ function mergeExternalSceneData(prev: Scene3DData, streamed: Scene3DData): Scene
 
 export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     data,
+    activeArtifact,
     onUpdate,
     onPromptAction,
     onMorphArtifact,
@@ -1112,6 +1132,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // Rendering options: a scene that names no mode is textured (each surface's own material); clay only when asked for
     const [renderMode, setRenderMode] = React.useState<Scene3DRenderMode>(data?.renderMode || DEFAULT_SCENE_RENDER_MODE);
     const renderModeRef = useLatest(renderMode);
+    // The trees of a staged place follow the staged build's clay/textured switch (textured by default): clay only
+    // when that switch says clay, while the other layers wait in clay for their twins (texturedTwins.ts).
+    const stagedMaterialMode = readStagedBuild(sceneData)?.materialMode;
+    const treesClay = renderMode === 'clay' && (!readStagedBuild(sceneData) || stagedMaterialMode === 'clay');
+    const treesClayRef = useLatest(treesClay);
     const [cameraMode, setCameraMode] = React.useState<'orbit' | 'fps'>('orbit');
     const [worldBranch, setWorldBranch] = React.useState<string>(data?.worldBranch || 'earth/main');
     const [hasGeoCoordinates, setHasGeoCoordinates] = React.useState<boolean>(false);
@@ -1163,6 +1188,26 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [externalLoadStatus, setExternalLoadStatus] = React.useState<Record<string, ExternalLoadStatus>>({});
     // Bumped to re-run the loader for objects whose last load failed (nothing else changes then).
     const [externalLoadRetryNonce, setExternalLoadRetryNonce] = React.useState(0);
+    // Files that failed to load are recovered automatically (restored from the asset store or rebuilt from their
+    // recipe, asset-recovery-client.ts); the job's progress shows over the viewport and the files load again when it ends.
+    const [assetRecovery, setAssetRecovery] = React.useState<AssetRecoveryState>(() => assetRecoveryClient.getState());
+    React.useEffect(() => assetRecoveryClient.subscribe(setAssetRecovery), []);
+    const rebuiltAssetPathsRef = React.useRef(new Set<string>());
+    const handledRecoveryJobRef = React.useRef<string | undefined>(undefined);
+    const [recoveryNoticeJobId, setRecoveryNoticeJobId] = React.useState<string | undefined>(undefined);
+    React.useEffect(() => {
+        const job = assetRecovery.job;
+        if (!job) return;
+        setRecoveryNoticeJobId(job.id);
+        if (job.status === 'running' || handledRecoveryJobRef.current === job.id) return;
+        handledRecoveryJobRef.current = job.id;
+        const recovered = job.items.filter(i => i.outcome === 'restored' || i.outcome === 'rebuilt');
+        for (const item of recovered) if (item.outcome === 'rebuilt') rebuiltAssetPathsRef.current.add(item.path);
+        if (recovered.length > 0) setExternalLoadRetryNonce(n => n + 1);
+        // the summary stays a while, then clears (a running job replaces it at once)
+        const t = setTimeout(() => setRecoveryNoticeJobId(current => (current === job.id ? undefined : current)), 12_000);
+        return () => clearTimeout(t);
+    }, [assetRecovery]);
     /**
      * Superseded staged layers the staged-build hook released (layerEviction.ts): the loader keeps them unloaded (their
      * scene objects, URL and metadata, stay) until the hook needs them again, then loads them like any object.
@@ -1631,7 +1676,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     // render mode swaps them reversibly (applyClayRenderMode).
                     for (const child of liveScene.children) {
                         if (child.name.startsWith(EXTERNAL_OBJECT_ROOT_PREFIX) && !child.userData.sbEnvironment) continue;
-                        TileClayProcessor.applyClayMaterial(child, data.clayPreset as any);
+                        TileClayProcessor.applyClayMaterial(child, data.clayPreset as any, { skip: mesh => !treesClayRef.current && !!mesh.userData?.sbTreeLodMesh });
                     }
                 }
             }
@@ -2313,6 +2358,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
                 // 1–2. Sky dome, cloud shadows, aerial perspective, god rays
                 skyDomeModuleRef.current?.update?.(t, deltaSec);
+                skyDomeModuleRef.current?.followCamera?.(camera);
                 terrainCloudShadowsRef.current?.update(t, skyDomeModuleRef.current?.sunDirection);
                 aerialPerspectiveRef.current?.update(t, deltaSec);
                 godRaysRef.current?.update?.(t, deltaSec);
@@ -2495,6 +2541,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         const handle = syncTilesLayer(stack, tilesInputRef.current, {
             onLayerReady: (tilesLayer, terrainManager) => {
                 tilesRendererRef.current = tilesLayer;
+                // tiles light up (and take the sun's shadows) only while the scene has an atmosphere sun
+                (tilesLayer as any).setLit?.(classifyAtmosphere(atmosphereInputRef.current).isSkySkybox);
                 terrainManagerRef.current = terrainManager;
             },
             onError: message => setTilesError(message),
@@ -2572,6 +2620,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             createProceduralBiomeTerrain
         });
         atmosphereRef.current = handle;
+        // Google's tiles are unlit as delivered: lit while the atmosphere's sun is on, their own photo look otherwise
+        (tilesRendererRef.current as any)?.setLit?.(classifyAtmosphere(atmosphereInputRef.current).isSkySkybox);
         const placeProbes = placeReflectionsRef.current;
         if (placeProbes) {
             placeProbes.setActive(placeReflectionsEnabled() && classifyAtmosphere(atmosphereInputRef.current).placeReflections);
@@ -3000,6 +3050,15 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         };
         const setStatus = (id: string, status: ExternalLoadStatus) =>
             setExternalLoadStatus(prev => ({ ...prev, [id]: status }));
+        /** A served file that failed to load is recovered once (restored from the asset store or rebuilt from its recipe). */
+        const requestRecovery = (loadUri: string) => {
+            const servedPath = recoverableAssetPath(loadUri);
+            if (servedPath && !assetRecoveryClient.outcomeOf(servedPath)) assetRecoveryClient.request([servedPath]);
+        };
+        const readyStatus = (loadUri: string): ExternalLoadStatus => {
+            const servedPath = recoverableAssetPath(loadUri);
+            return { phase: 'ready', loaded: 0, total: 0, ...(servedPath && rebuiltAssetPathsRef.current.has(servedPath) ? { rebuilt: true } : {}) };
+        };
         /**
          * What a model's pose derives from: its authored transform and the ground it was seated on.
          * A ground-mode switch swaps the surface under a snapped hero (tiles torn down or replaced), so
@@ -3127,12 +3186,13 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     if (isActiveNow(def)) liveScene.add(splatMesh);
                     currentMap.set(obj.id, splatMesh);
                     activeSplatMeshesRef.current.set(obj.id, splatMesh);
-                    setStatus(obj.id, { phase: 'ready', loaded: 0, total: 0 });
+                    setStatus(obj.id, readyStatus(uri));
                     refreshEntities();
                     if (splatMesh.parent) autoFrameIfNeeded();
                 }).catch(err => {
                     if (settlePending()) setStatus(obj.id, { phase: 'error', loaded: 0, total: 0, error: String(err?.message ?? err) });
                     console.warn(`[External Splat Loader Error] Failed to load ${uri}:`, err);
+                    requestRecovery(uri);
                 });
                 return;
             }
@@ -3190,7 +3250,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                             .catch(err => console.warn('[Scene3D] tree textures not applied:', (err as Error).message));
                     }
                     // A staged layer's textured twin keeps its photo material under the clay pass, and its confidence texture is loaded.
-                    void prepareTexturedTwinModel(gltf).then(() => {
+                    void prepareTexturedTwinModel(gltf, { twin: !!twinSourceOf(def) }).then(() => {
                         // the facade material reading's glass reflects the scene: render its probe once the textures are in,
                         // and again for the other twins (this layer is now part of what they see)
                         const stack = stackRef.current;
@@ -3203,12 +3263,12 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                         const merged = mergeStagedParts(model);
                         if (merged) model.userData.sbMergedReport = merged;
                     }
-                    applyClayRenderMode([model], renderModeRef.current === 'clay');
+                    applyClayRenderMode([model], renderModeRef.current === 'clay', { trees: treesClayRef.current });
                     // An explicit material on the object wins over the clay default.
                     syncObjectMaterial(model, latestDef(obj).material, renderModeRef.current === 'clay');
                     currentMap.set(obj.id, model);
                     placeReflectionsRef.current?.invalidate();
-                    setStatus(obj.id, { phase: 'ready', loaded: 0, total: 0 });
+                    setStatus(obj.id, readyStatus(uri));
 
                     if (attach) {
                         settleOnGround(model, def, liveScene);
@@ -3252,6 +3312,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 (err) => {
                     if (settlePending()) setStatus(obj.id, { phase: 'error', loaded: 0, total: 0, error: String((err as any)?.message ?? err) });
                     console.warn(`[External Model Loader Error] Failed to load ${uri}:`, err);
+                    requestRecovery(uri);
                 }
             );
         });
@@ -3355,8 +3416,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             scene.getObjectByName('scratchbox-cpp-generated-root'),
             ...Array.from(customMeshRegistryRef.current.values(), e => e.mesh),
             ...Array.from(externalObjectsMapRef.current.values())
-        ], renderMode === 'clay');
-    }, [renderMode]);
+        ], renderMode === 'clay', { trees: treesClay });
+    }, [renderMode, treesClay]);
 
     React.useEffect(() => {
         // Registry outlives individual syncs; free everything on unmount.
@@ -3881,11 +3942,36 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const objectLoadErrors = React.useMemo(() => {
         const declared = new Set((sceneData.objects || []).map(o => o.id));
         if (sceneData.splatUrl) declared.add('primary-location-splat');
+        // a file whose recovery is running is not reported as failed while it may still come back
+        const job = assetRecovery.job;
+        const recovering = new Set(job && job.status === 'running' ? job.items.filter(i => i.outcome === 'pending').map(i => i.path) : []);
+        const servedPathOf = (id: string): string | undefined => {
+            const raw = (sceneData.objects || []).find(o => o.id === id)?.content?.durableUri ?? (id === 'primary-location-splat' ? sceneData.splatUrl : undefined);
+            return raw ? recoverableAssetPath(resolveExternalModelUri(raw)) : undefined;
+        };
         return Object.entries(externalLoadStatus)
-            .filter(([id, st]) => st.phase === 'error' && declared.has(id))
+            .filter(([id, st]) => st.phase === 'error' && declared.has(id) && !recovering.has(servedPathOf(id) ?? ''))
             .map(([id, st]) => ({ id, error: st.error || 'the file could not be loaded' }));
-    }, [externalLoadStatus, sceneData.objects, sceneData.splatUrl]);
+    }, [externalLoadStatus, sceneData.objects, sceneData.splatUrl, assetRecovery]);
     const drawsBiomeTerrain = drawsProceduralBiomeTerrain({ renderMode, terrainBiomes: sceneData.features?.terrainBiomes, hasGeoCoordinates, has3DTiles });
+    // Lost staged files with no recipe (made before the store) can still be rebuilt from the scene's own place.
+    const recoveryRebuild = React.useMemo(() => {
+        const job = assetRecovery.job;
+        const staged = readStagedBuild(sceneData);
+        if (!job || job.status === 'running' || !staged?.place?.query) return undefined;
+        const lost = job.items.filter(i => i.outcome === 'unrecoverable' || i.outcome === 'failed').map(i => i.path).filter(p => p.startsWith('/models/'));
+        if (lost.length === 0) return undefined;
+        const place = staged.place;
+        // the scene itself goes along (its GLB bytes stripped): a district rebuilt into it is carved around its kept structure
+        const scene = { id: activeArtifact?.id ?? staged.artifactId, type: '3d-scene', data: stripEmbeddedGlb(sceneData) };
+        return () => assetRecoveryClient.rebuild(lost, {
+            query: place.query,
+            isolate: !!staged.structure || lost.some(p => /_iso_/.test(p)),
+            trees: true,
+            ...(place.resolvedAddress && Number.isFinite(place.lat) && Number.isFinite(place.lng) && (place.lat !== 0 || place.lng !== 0)
+                ? { place: { lat: place.lat, lng: place.lng, formattedAddress: place.resolvedAddress } } : {})
+        }, scene);
+    }, [assetRecovery, sceneData, activeArtifact?.id]);
     const viewportNotices = React.useMemo(() => resolveViewportNotice({
         webglError,
         generatorError: currentGeneratorError,
@@ -3894,8 +3980,17 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         hasAuxiliaryContent: !!sceneData.vectorRoadmap?.groundBlueprint || wantsWasmMesh || drawsBiomeTerrain,
         objectLoadErrors,
         undrawableObjects,
-        opticsIssues
-    }), [webglError, currentGeneratorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh, drawsBiomeTerrain, objectLoadErrors, undrawableObjects, opticsIssues]);
+        opticsIssues,
+        assetRecovery: assetRecovery.job && assetRecovery.job.id === recoveryNoticeJobId ? {
+            running: assetRecovery.job.status === 'running',
+            message: assetRecovery.job.message,
+            fraction: assetRecovery.job.fraction,
+            files: assetRecovery.job.items.length,
+            onCancel: () => { void assetRecoveryClient.cancel(); },
+            reasons: recoveryReasons(assetRecovery.job),
+            ...(recoveryRebuild ? { onRebuild: recoveryRebuild } : {})
+        } : undefined
+    }), [webglError, currentGeneratorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh, drawsBiomeTerrain, objectLoadErrors, undrawableObjects, opticsIssues, assetRecovery, recoveryNoticeJobId, recoveryRebuild]);
 
     const handleExportGlb = React.useCallback(async () => {
         if (!threeSceneRef.current) return;
@@ -4279,6 +4374,12 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
                     <span>3D Scene</span>
                 </div>
+                {onMorphArtifact && activeArtifact && (
+                    <ViewAsMenu
+                        currentType="3d-scene"
+                        onSelect={targetType => onMorphArtifact(activeArtifact, targetType)}
+                    />
+                )}
                 {(() => {
                     const badge = sceneData.geoAnchor && sceneData.geoAnchor.active !== false ? groundDatumBadge(sceneData.geoAnchor) : null;
                     return badge && (

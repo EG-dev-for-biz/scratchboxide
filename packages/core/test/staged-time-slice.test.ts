@@ -17,6 +17,7 @@ import { castCamera } from '../src/node/3d-engine/staged-location/survey-casting
 import { computeSlotOffer, computeSlotOfferAsync, readFittedShells } from '../src/node/3d-engine/staged-location/slot-exposure';
 import { timeSlicer } from '../src/node/3d-engine/staged-location/time-slice';
 import { findArchFit } from './helpers/real-arch-data';
+import { startLoadProbe } from './helpers/load-probe';
 
 /** The longest gap between ticks of a 2 ms timer while `work` runs (how long the thread was held in one block). */
 async function longestBlock(work: () => Promise<unknown> | unknown): Promise<number> {
@@ -87,12 +88,15 @@ describe('time-sliced main-thread work of the vision stage', () => {
         expect(solid).toBeDefined();
         const sync = computeSlotOffer(fit, [], solid);
         let sliced: typeof sync | undefined;
+        const probe = startLoadProbe();
         const block = await longestBlock(async () => { sliced = await computeSlotOfferAsync(fit, [], solid); });
+        const load = await probe.stop();
         expect([...sliced!.offeredIds]).toEqual([...sync.offeredIds]);
         expect(sliced!.entries).toEqual(sync.entries);
         expect(sliced!.hidden).toBe(sync.hidden);
         expect(sync.covers.size).toBeGreaterThan(0);
-        // one slot's cover took 13 ms at most here; the whole offer ~150 ms (0.5 s live, in one block before)
-        expect(block).toBeLessThan(60);
+        // one slot's cover took 13 ms at most here; the whole offer ~150 ms (0.5 s live, in one block before). The bound
+        // is for an idle machine; under the suite's load a cover runs as much slower as any CPU work does
+        expect(block, JSON.stringify(load)).toBeLessThan(60 * load.slowdown);
     });
 });

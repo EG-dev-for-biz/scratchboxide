@@ -190,7 +190,9 @@ export const DEFAULT_PROVENANCE_LEGEND: ReadonlyArray<Omit<ProvenanceLegendEntry
     { label: PROVENANCE.photoCorrected, color: '#F0E442', pattern: 'solid' },
     { label: PROVENANCE.photoInferred, color: '#CC79A7', pattern: 'dots' },
     { label: PROVENANCE.smoothedScan, color: '#E69F00', pattern: 'dots' },
-    { label: PROVENANCE.grownToMeasuredCrown, color: '#009E73', pattern: 'solid' }
+    { label: PROVENANCE.grownToMeasuredCrown, color: '#009E73', pattern: 'solid' },
+    /** Google's vector buildings (footprints and heights, modelled volumes) carried unchanged: the first paint and past the tiles. */
+    { label: 'vector-modelled', color: '#9933FF', pattern: 'stripes' }
 ];
 
 /** 2 px lines outlining degraded parts (a slot whose detail fell to the flat fitted face). */
@@ -804,8 +806,23 @@ export interface TreeTextureExtras {
     colourProvenance: 'measured' | 'neighbours' | 'prior' | 'none';
 }
 
-/** Node extras `sbTree` of each tree node. Carries no species or measured claim for leaves (its crown colour is measured from the photo). */
-export interface TreeNodeExtras { id: number; hashSeed: number; label: string; crown?: TreeCrownExtras; colour?: TreeColourExtras; texture?: TreeTextureExtras }
+/**
+ * The tree species library entry a tree grew with (assets/vegetation/species/index.json), chosen by its crown's measurements
+ * (nearest first; `entry` null and provenance 'unmatched' when the crown is far from every entry and grew with the grower's
+ * own ratios). `measured` is what the choice read of the crown, all measured by strip; `grownWith` the proportions the
+ * tree was grown with. The entry's id and label are labels for people and prompts; nothing branches on them.
+ */
+export interface TreeSpeciesExtras {
+    measured: { heightM: number; meanRadiusM: number; aspect: number; topShare: number; depthM: number; samples: number; hueDeg?: number; saturation?: number; provenance: 'measured' };
+    entry: string | null;
+    label?: string;
+    cost: number;
+    provenance: 'library' | 'unmatched';
+    grownWith: { stems: number; crownBaseRatio: number; trunkRadiusPerHeight: number };
+}
+
+/** Node extras `sbTree` of each tree node. Carries no measured claim for leaves (its crown colour is measured from the photo; a species entry is a library choice). */
+export interface TreeNodeExtras { id: number; hashSeed: number; label: string; crown?: TreeCrownExtras; colour?: TreeColourExtras; texture?: TreeTextureExtras; species?: TreeSpeciesExtras }
 
 /** Root extras `sbTrees` of the trees GLB. psiSeason 0..1 scales leaf density (0 bare winter, 1 full summer). */
 export interface TreesGlbRootExtras {
@@ -1834,6 +1851,14 @@ const DEFINITIONS = {
             }),
             massColourLinear: arr(ref('nonneg'), { minItems: 3, maxItems: 3 }),
             colourProvenance: { enum: ['measured', 'neighbours', 'prior', 'none'] }
+        }),
+        species: obj(['measured', 'entry', 'cost', 'provenance', 'grownWith'], {
+            measured: obj(['heightM', 'meanRadiusM', 'aspect', 'topShare', 'depthM', 'samples', 'provenance'], {
+                heightM: { type: 'number', exclusiveMinimum: 0 }, meanRadiusM: { type: 'number', exclusiveMinimum: 0 }, aspect: { type: 'number', exclusiveMinimum: 0 },
+                topShare: ref('unit'), depthM: ref('nonneg'), samples: NONNEG_INT, hueDeg: NUM, saturation: ref('nonneg'), provenance: { const: 'measured' }
+            }),
+            entry: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] }, label: STR, cost: ref('nonneg'), provenance: { enum: ['library', 'unmatched'] },
+            grownWith: obj(['stems', 'crownBaseRatio', 'trunkRadiusPerHeight'], { stems: { type: 'integer', minimum: 1 }, crownBaseRatio: ref('unit'), trunkRadiusPerHeight: { type: 'number', exclusiveMinimum: 0 } })
         })
     }),
     TreesGlbRootExtras: obj(['schema', 'psiSeason', 'clusterLibrary'], {
@@ -1846,6 +1871,7 @@ const DEFINITIONS = {
             leafCard: obj(['widthRatio', 'uv', 'leafAttribute'], { widthRatio: { type: 'number', exclusiveMinimum: 0 }, uv: STR, leafAttribute: STR })
         }),
         textures: obj(['schema', 'index', 'woodUv', 'chosenBy'], { schema: STR, index: STR, woodUv: STR, chosenBy: STR }),
+        species: obj(['schema', 'index', 'chosenBy'], { schema: STR, index: STR, chosenBy: STR }),
         crownCards: obj(['schema', 'meshes', 'cols', 'rows', 'clayLeafAspect', 'leaf', 'cells'], {
             schema: { const: 'scratchbox.crown-cards/1' }, meshes: arr({ type: 'string', minLength: 1 }, { minItems: 1 }),
             cols: { type: 'integer', minimum: 1 }, rows: { type: 'integer', minimum: 1 }, clayLeafAspect: { type: 'number', exclusiveMinimum: 0 }, leaf: STR,

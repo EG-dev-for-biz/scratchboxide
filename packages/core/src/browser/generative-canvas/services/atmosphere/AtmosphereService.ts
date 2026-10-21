@@ -25,7 +25,7 @@ import {
     AtmosphericEstimationResult
 } from './atmosphere-types';
 import { AtmosphereImageEstimationService } from './AtmosphereImageEstimationService';
-import { createAtmosphericSkyDome, requireLocation } from './AtmosphericSkyDome';
+import { createAtmosphericSkyDome, layerCoverageForSkyCover, requireLocation } from './AtmosphericSkyDome';
 import {
     createAerialPerspectiveEffect,
     AerialPerspectiveEffect,
@@ -242,9 +242,10 @@ export class AtmosphereService {
         if (density !== undefined) this.config.cloudDensity = density;
         if (altitude !== undefined) this.config.cloudAltitude = altitude;
 
-        if (this.skyDomeModule && (this.skyDomeModule.skyDome.material as THREE.ShaderMaterial).uniforms) {
-            const uniforms = (this.skyDomeModule.skyDome.material as THREE.ShaderMaterial).uniforms;
-            if (coverage !== undefined && uniforms.uCloudCoverage) uniforms.uCloudCoverage.value = coverage;
+        if (this.skyDomeModule) {
+            const uniforms = this.skyDomeModule.skyMaterial.uniforms;
+            // coverage is the sky cover seen from the ground; the shader takes the layer's plan coverage
+            if (coverage !== undefined && uniforms.uCloudCoverage) uniforms.uCloudCoverage.value = layerCoverageForSkyCover(coverage);
             if (density !== undefined && uniforms.uCloudDensity) uniforms.uCloudDensity.value = density;
             if (altitude !== undefined && uniforms.uCloudAltitude) uniforms.uCloudAltitude.value = altitude;
         }

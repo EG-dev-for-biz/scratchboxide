@@ -14,6 +14,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import http from 'http';
 import { createStandaloneServer, createToolsServer } from '../server/app';
+import { requireGoogleCredentials } from '../../packages/core/test/helpers/requirements';
 
 async function runStandaloneServerTests() {
     console.log('🧪 Running Standalone Express Server Backend Tests...\n');
@@ -82,13 +83,22 @@ async function runStandaloneServerTests() {
         assert.ok(configData !== null && typeof configData === 'object');
         console.log('  ✓ Test 4 Passed: /workspace/config returns workspace configuration');
 
-        // Test 5: Media Generation Capabilities
+        // Test 5: Media Generation Capabilities. The probe asks Google which models are reachable, so with
+        // credentials it reports the generators; without them it says so with a 503 and an error (no fallback).
         console.log('  Testing GET /media/capabilities ...');
         const mediaRes = await fetch(`${baseUrl}/media/capabilities`);
-        assert.strictEqual(mediaRes.status, 200, '/media/capabilities should return 200');
-        const mediaData = await mediaRes.json();
-        assert.ok(mediaData.image !== undefined);
-        console.log('  ✓ Test 5 Passed: /media/capabilities returns media generator metadata');
+        if (requireGoogleCredentials().ok) {
+            assert.strictEqual(mediaRes.status, 200, '/media/capabilities should return 200');
+            const mediaData = await mediaRes.json();
+            assert.ok(mediaData.image !== undefined);
+            console.log('  ✓ Test 5 Passed: /media/capabilities returns media generator metadata');
+        } else {
+            assert.strictEqual(mediaRes.status, 503, '/media/capabilities should return 503 without Google credentials');
+            const mediaData = await mediaRes.json();
+            assert.strictEqual(mediaData.success, false);
+            assert.ok(typeof mediaData.error === 'string' && mediaData.error.length > 0, 'the 503 names why');
+            console.log('  ✓ Test 5 Passed: /media/capabilities reports the missing credentials (no Google credentials here)');
+        }
 
         // Test 6: Project Artifacts Graph
         console.log('  Testing GET /workspace/project-artifacts ...');

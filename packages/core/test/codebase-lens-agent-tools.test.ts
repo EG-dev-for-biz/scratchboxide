@@ -8,6 +8,7 @@ import { test } from 'vitest';
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { availableToolNames } from '../src/node/gemini/tool-catalog';
 import * as assert from 'assert';
 import { GeminiService } from '../src/node/gemini-service';
 import {
@@ -40,8 +41,10 @@ async function runCodebaseLensAgentToolsTests() {
     const fnDeclsContainer = toolDeclarations.find((t: any) => t.functionDeclarations);
     assert.ok(fnDeclsContainer, 'Must contain functionDeclarations container');
 
-    const fnDecls: any[] = fnDeclsContainer.functionDeclarations;
-    const toolNames = fnDecls.map((d: any) => d.name);
+    // Declared up front or loadable by name through load_tools (tool-catalog.ts).
+    const toolNames = availableToolNames(toolDeclarations).all;
+    // Their full declarations, as offered once loaded.
+    const fnDecls: any[] = (geminiService as any).buildToolDeclarations({ ...request, loadedTools: toolNames }).find((t: any) => t.functionDeclarations).functionDeclarations;
 
     assert.ok(toolNames.includes('lens_project'), 'Must declare lens_project tool');
     assert.ok(toolNames.includes('lens_unproject'), 'Must declare lens_unproject tool');

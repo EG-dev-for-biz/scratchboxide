@@ -66,6 +66,7 @@ import {
     type StagedBuildState,
     type StagedActiveSceneReport,
     type StagedLayer,
+    type StagedTexturedVariant,
     type StagedLocationResult,
     type StripRoi,
     type VisionModelUse
@@ -74,9 +75,18 @@ import { glbMeshCounts, plantTrees, summarizeTrees, type LocationClayTrees } fro
 import { TileVegetationError, type TileVegetationPlantRequest, type TileVegetationPlantResult, type TileVegetationStripRequest, type TileVegetationStripResult } from '../tile-vegetation-service';
 import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service';
 import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorEvidence } from './vector-footprints';
+import {
+    coveredShare, frameToLatLng, paintProvenance, selectPaintBuildings, tilePlanCoverage, writePaintGlb, VECTOR_ISOLATE_RADIUS_M, VECTOR_MASSING_VERSION,
+    VECTOR_MODELLED_LABEL, VECTOR_OUTER_MAX_COVERED_SHARE, type ElevationLookup, type PaintBuilding, type PaintSelection
+} from './vector-first-paint';
 import { VisionModelChain, type VisionGenAIClient } from '../../gemini/vision-model-chain';
 import { segmentOwnershipViews } from './ownership-masks';
-import { geodeticToScan, loadScanMesh, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
+import { buildGroundModel, geodeticToScan, loadScanMesh, surfaceModel, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
+import { buildRoadMesh, measureRoadSurfaces, sbRoadieEnabled, writeRoadsGlb, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
+import { renderTopDownPhoto } from './top-down-photo';
+import { synthesizeRoadTextures } from './road-texture';
+import * as jpegJs from 'jpeg-js';
+import { TERRAIN_INNER_RADIUS_M, TERRAIN_INNER_STEP_M, TERRAIN_OUTER_STEP_M, TERRAIN_RADIUS_M, buildTerrainMesh, planTerrainGrid, writeTerrainGlb } from './terrain-surround';
 import { readGlbScene, renderFrameDepth, sceneToRenderMesh } from '../../spatial/StreetViewPoseRegistrar';
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
 import { StageCache, sha256File, stageKey, stagedReplyCache, type CachedStage } from './stage-cache';
@@ -87,7 +97,7 @@ import {
 import { describeRemeshProvenance, readRemeshProvenance } from './remesh-provenance';
 import { putBackScannedTrees } from './scanned-trees';
 import {
-    checkIsolate, grownOutline, pickOnScan, FOOTPRINT_TOLERANCE_M, sizeExtraction, structureKeepCells, writeIsolationPick, ISOLATE_PRECISION_MIN, ISOLATE_ROOFED_MIN, NO_STRUCTURE_DISTRICT_RADIUS_M, type StructurePickResult
+    canopyLookup, checkIsolate, grownOutline, pickOnScan, FOOTPRINT_TOLERANCE_M, sizeExtraction, structureKeepCells, writeIsolationPick, ISOLATE_PRECISION_MIN, ISOLATE_ROOFED_MIN, NO_STRUCTURE_DISTRICT_RADIUS_M, type StructurePickResult
 } from './extraction-sizing';
 import {
     discoverPanos, facadeGeometry, fetchViews, missingCredentials, EVIDENCE_STAGE_BUDGET_MS, type EvidenceImage, type PanoCandidate, type StreetViewEvidenceDeps
@@ -128,12 +138,15 @@ import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../commo
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
 import { palettesFromSurvey, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
 import { facadeMaterialsEnabled, gatherMaterialEvidence, scanFacePlanes, segmenterTool, type MaterialEvidence, type SegmentImage } from './facade-material-evidence';
-import { prepareTextureSources, type TextureSourcesInput } from './texture-sources';
+import { prepareTextureSources, type TextureSources, type TextureSourcesInput } from './texture-sources';
+import { ownershipChange, OWNERSHIP_MATERIAL_SHARE } from './ownership-change';
+import { tileRefineTwin, TILE_REFINE_TWIN_VERSION, type TileRefineTwin } from './tile-refine-twin';
 import { maskTemporaryInViews, textureTemporaryEnabled, visionTemporaryChecker, TEMPORARY_CHECK_VERSION } from './temporary-structures';
 import { objectSegmenter, ownViews, OWNERSHIP_VERSION, type OwnershipSegmenter } from './streetview-ownership';
 import { correctViewsLighting, lightingModels, lightingPromptVariant, textureArmOptions, LIGHTING_MODEL_LITE, type LightingCorrectedView } from './texture-lighting';
 import { TextureWorkerPool, textureWorkersEnabled } from './texture-worker-pool';
 import { eventLoopStats, runBlockTracer } from './event-loop-stats';
+import { recordStageTimeline } from './stage-timeline';
 import type { EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { fetchFootprints, type FootprintSource } from './facade-footprints';
@@ -141,14 +154,17 @@ import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSIO
 import type { MassingRun } from './pipeline-e/native-massing';
 import { mslToTileY, type SolarRoof } from './pipeline-e/solar-roof';
 import { runInferenceE, type InferenceOutcome, type StepRecord } from './pipeline-e/inference';
+import { runVersionFEnhanced, stagedGeometryF } from './version-f/f2';
 import { gateDecision, photoMatchGate, pipelineERelief, runReliefStage, GENERATED_LABEL, MEASURED_AVERAGED_LABEL, RELIEF_GATE_JUDGE, RELIEF_PARAMS, RELIEF_VERSION, type PhotoGateResult, type ReliefOutcome } from './pipeline-e/relief';
 import { crownsFromStrip } from './pipeline-e/occluders';
 import { enhanceGuards, enhanceModels, genAiPlateClient, stagedEnhance, ENHANCE_STREET_VIEWS } from './pipeline-e/enhance';
+import { stagedShapeProgram } from './pipeline-e/shape-program';
+import { runShapeStage, SHAPE_STAGE_VERSION } from './pipeline-e/shape-stage';
 import { projectionViewsFromEvidence } from './texture-pass';
 import { registeredSurveyViews } from './streetview-registered-views';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
 import { facadeGrammarEnabled, grammarFileText, runFacadeGrammarPass, FACADE_GRAMMAR_GATE_VERSION, FACADE_GRAMMAR_PROMPT_VERSION, type GrammarFacadeOutcome } from './facade-grammar';
-import { TEXTURE_LADDER_RUNGS, type TexturePassDegradation, type TexturePassRecord, type TextureLayerBundle } from '../../../common/spatial/texture-pass-contracts';
+import { TEXTURE_LADDER_RUNGS, type ProjectionView, type TexturePassDegradation, type TexturePassRecord, type TextureLayerBundle } from '../../../common/spatial/texture-pass-contracts';
 
 /** What the evidence stage spent: free metadata queries, billed images and the seconds the images took. */
 export interface EvidenceCost { metadataCalls: number; cachedCalls: number; imagesRequested: number; imagesFetched: number; fetchMs: number }
@@ -158,6 +174,8 @@ const NO_EVIDENCE_COST: EvidenceCost = { metadataCalls: 0, cachedCalls: 0, image
 // stages
 // ----------------------------------------------------------------------------------------------------------------
 
+/** The ownership vote's outlines are waited for this long; a view not outlined by then is left out of the vote. */
+export const OWNERSHIP_VOTE_WINDOW_MS = 60_000;
 /** The focused run readings get at most this long after the wide reading (and less when the wide reading ran long). */
 export const VISION_RUNS_ALLOWANCE_MS = 120_000;
 /** What the vision stage keeps back from its limit: the merge, the cache write and the records after the readings. */
@@ -168,7 +186,14 @@ const MIN_RUNS_WINDOW_MS = 30_000;
 /** Canonical order (-1: no layer), overlay title and per-stage time limit. */
 export const STAGES = {
     resolve: { order: -1, title: 'Place', budgetMs: 10_000 },
+    // the first paint: Google's vector buildings extruded natively while the tiles stream (vector-first-paint.ts); it ends once
+    // the tiles have committed and the buildings they do not cover are kept as their own layer
+    vector: { order: 0, title: 'Google vector massing', budgetMs: 120_000 },
     tiles: { order: 1, title: 'Google 3D Tiles', budgetMs: 360_000 },
+    // the real ground around the place from the Google Elevation API, out to TERRAIN_RADIUS_M, under everything else
+    terrain: { order: 0, title: 'Surrounding terrain', budgetMs: 120_000 },
+    // the streets: Google's road centrelines measured kerb to kerb on the scan, textured from the tile photo rendered from above
+    roads: { order: 2, title: 'Road surfaces', budgetMs: 240_000 },
     survey: { order: -1, title: 'Surveying the four faces', budgetMs: EVIDENCE_DISCOVERY_ALLOWANCE_MS + SURVEY_IMAGE_TIMEOUT_MS + SURVEY_VISION_TIMEOUT_MS + 15_000 },
     evidence: { order: -1, title: 'Street View close-ups', budgetMs: EVIDENCE_STAGE_BUDGET_MS + 30_000 + MATCH_TIMEOUT_MS + 60_000 + EDGE_REGISTRATION_BUDGET_MS + 15_000 + JOINT_REGISTRATION_BUDGET_MS + 30_000 },
     'trees-measure': { order: -1, title: 'Measuring the trees', budgetMs: 300_000 },
@@ -176,7 +201,8 @@ export const STAGES = {
     // the facades' grammars read from the tile photo (three readings per facade, concurrently), gated, and the relief run
     // again with the accepted ones; pipeline E's inference runs here too, and in its enhanced mode (the default within E) also a registered
     // Street View survey (about 3 min, alongside the readings) and up to 8 redraws (about 2.5 min)
-    grammar: { order: 2, title: 'Facade grammar', budgetMs: 420_000 },
+    // version F (experiment, SCRATCHBOX_STAGED_GEOMETRY=f) reads, adjusts and redraws in this slot: a longer limit
+    grammar: { order: 2, title: 'Facade grammar', budgetMs: (process.env.SCRATCHBOX_STAGED_GEOMETRY ?? '').trim().toLowerCase() === 'f' ? 900_000 : 420_000 },
     // pipeline E: measured relief on the clean massing (the scan averaged along what repeats), then the photo-match gate
     relief: { order: 2, title: 'Measured relief', budgetMs: 480_000 },
     fit: { order: 3, title: 'Scan-fitted rebuild', budgetMs: 30_000 },
@@ -189,12 +215,17 @@ export const STAGES = {
     detail: { order: 4, title: 'Photo-inferred detail', budgetMs: 45_000 },
     figures: { order: 4, title: 'Figures', budgetMs: EVIDENCE_DISCOVERY_ALLOWANCE_MS + SURVEY_IMAGE_TIMEOUT_MS + 2 * FIGURE_VISION_TIMEOUT_MS + 4 * 120_000 + 30_000 },
     trees: { order: 5, title: 'Trees', budgetMs: 300_000 },
+    // the multi-view mask vote on what belongs to the structure: after the first (geometric) isolate is shown; it replaces that
+    // isolate only when it changes it materially (ownership-change.ts), and the rebuild then runs again on the voted remesh
+    ownership: { order: -1, title: 'Ownership vote', budgetMs: 300_000 },
     /**
      * Background: the real-world texture pass (textured twins of the staged layers); clay is the first result and the viewport crossfades to each twin as it commits (unless the user chose clay). The
      * limit covers the first layers (about 2 to 3 min live) plus the wait for the photo-read detail the rebuild commits
      * later (about 4 min after the Street View close-ups live), whose layers are textured once it settles.
      */
-    textures: { order: -1, title: 'Real textures', budgetMs: 600_000 }
+    textures: { order: -1, title: 'Real textures', budgetMs: 600_000 },
+    /** Background: the twins of the layers committed after the remesh (fit, detail, grammar, figures), as each lands; it waits for the rebuild and the grammar to settle. */
+    'textures-late': { order: -1, title: 'Real textures of later layers', budgetMs: 1_200_000 }
 } as const;
 export type StageId = keyof typeof STAGES;
 export const STAGE_IDS = Object.keys(STAGES) as StageId[];
@@ -280,6 +311,8 @@ export interface ScanFitDeps {
 export interface StagedLocationDeps {
     cache: StageCache;
     geocode(query: string, signal?: AbortSignal): Promise<ResolvedPlace>;
+    /** Heights above mean sea level (metres) for geodetic points, in order (the Google Elevation API); absent without a key. */
+    elevation?: { sample(points: Array<{ lat: number; lng: number }>, signal?: AbortSignal): Promise<number[]> };
     /** Extracts the leaves within radiusM of (lat, lng) into `outDir` (textured.glb, geometry.glb). */
     extract(req: { lat: number; lng: number; radiusM: number; outDir: string; place: ResolvedPlace; signal?: AbortSignal; onProgress?: (message: string) => void }): Promise<StagedExtraction>;
     vegetation: {
@@ -290,6 +323,8 @@ export interface StagedLocationDeps {
     };
     /** Building footprints, water and roads from Google vector data around (lat, lng), in its scan frame; absent without credentials. */
     vectorEvidence?(req: { lat: number; lng: number; radiusM: number }): Promise<VectorEvidence>;
+    /** Terrain heights above mean sea level (the Google Elevation API): the first paint's building bases; absent without a Maps key. */
+    elevations?: ElevationLookup;
     refine: {
         refine(req: TileRefineRequest): Promise<TileRefineResult>;
         /** Registered views of the tile around the structure the geometric isolate finds, for the multi-view mask vote. */
@@ -341,6 +376,8 @@ export interface StagedLocationContext {
     activeArtifact?: CanvasArtifact;
     /** A retry: the run to rebuild and the one stage to recompute (bypassing its cache). */
     retry?: { runId: string; stage: StageId };
+    /** A resume: the run to rebuild as recorded; cached stages are reused, nothing is bypassed. */
+    resume?: { runId: string };
 }
 
 /** No real data exists to show: the place could not be resolved, or the tiles do not cover it. */
@@ -539,6 +576,26 @@ class StagedRun {
         for (const [id, meta] of Object.entries(this.layerMeta)) meta.isGround = id === objectId;
     }
 
+    /**
+     * Opens stages again for a second pass (the ownership vote replaced the remesh they were built on): their summaries go back
+     * to pending and the degradations they recorded on the first pass are taken out of the run's (returned, for the run notes).
+     */
+    reopen(ids: string[]): DegradationRecord[] {
+        if (this.closed) return [];
+        const set = new Set(ids);
+        for (const s of this.state.stages) {
+            if (!set.has(s.stage)) continue;
+            s.status = 'pending';
+            delete s.reason;
+            s.layerIds = [];
+            s.degradationIds = [];
+            s.timings = { startedAtMs: this.now(), cached: false };
+        }
+        const dropped = this.state.degradations.filter(d => set.has(d.stage));
+        this.state.degradations = this.state.degradations.filter(d => !set.has(d.stage));
+        return dropped;
+    }
+
     degrade(record: DegradationRecord): DegradationRecord {
         if (this.closed) return record;
         if (!this.state.degradations.some(d => d.id === record.id)) this.state.degradations.push(record);
@@ -556,6 +613,7 @@ function defaultLegendText(label: ProvenanceLabel): string {
         case PROVENANCE.photoCorrected: return 'a fitted value changed by the photos inside what the scan allows';
         case PROVENANCE.photoInferred: return 'read from photos, with a confidence: inference, not measurement';
         case PROVENANCE.grownToMeasuredCrown: return 'SB-Veggie trees grown to the measured crown';
+        case VECTOR_MODELLED_LABEL: return "Google's vector buildings (footprints and heights) carried unchanged: not scan measurement";
         default: return String(label);
     }
 }
@@ -611,9 +669,18 @@ class Runner {
         this.run.emit(id, 'skipped', { reason, degradations });
     }
 
-    async stage<T>(def: StageDef<T>, extraSignal?: AbortSignal): Promise<Omit<StageResult<T>, 'status'> & { status: StageResult<T>['status'] | 'stopped' }> {
+    /**
+     * The stages built on the remesh (grammar, the rebuild, the textures) and the signal that ends them when the ownership
+     * vote replaces that remesh: they are skipped, with the reason, and run again on the voted remesh.
+     */
+    passSignal?: () => AbortSignal;
+    static readonly PASS_STAGES: ReadonlySet<StageId> = new Set<StageId>(['grammar', 'relief', 'fit', 'evidence', 'project', 'vision', 'correct', 'detail', 'figures', 'textures', 'textures-late']);
+
+    async stage<T>(def: StageDef<T>, extraSignalIn?: AbortSignal): Promise<Omit<StageResult<T>, 'status'> & { status: StageResult<T>['status'] | 'stopped' }> {
         if (this.ctx.signal?.aborted) throw abortError();
         const id = def.id;
+        const pass = this.passSignal && Runner.PASS_STAGES.has(id) ? this.passSignal() : undefined;
+        const extraSignal = pass && extraSignalIn ? AbortSignal.any([extraSignalIn, pass]) : (pass ?? extraSignalIn);
         if (this.pastDeadline) {
             const reason = `stopped at the time limit before ${STAGES[id].title.toLowerCase()}`;
             this.run.emit(id, 'stopped', { reason });
@@ -846,6 +913,8 @@ export interface TextureStageValue {
     }>;
     tileUnavailable?: string;
     viewsUnavailable?: string;
+    /** The twins are tile_refine's own photo-textured remesh (a district), not the texture pass's bake. */
+    tileRefine?: boolean;
 }
 
 /** The fitted charts a layer is textured with, as a key: a layer textured with charts a later refit replaced is textured again. */
@@ -870,8 +939,38 @@ export function weightedShares(parts: Array<{ shares: number[]; texels: number }
 export function describeTextures(v: TextureStageValue): string {
     const pct = (x: number) => `${Math.round(x * 1000) / 10}%`;
     const rungs = v.shares.map((x, r) => (x > 0 ? `${TEXTURE_LADDER_RUNGS[r]} ${pct(x)}` : '')).filter(Boolean).join(', ');
+    if (v.tileRefine) return `textured ${v.layers.map(l => l.layer).join(', ')} with the tile photo tile_refine carries onto its remesh (as captured, not de-lit): ${rungs}; photo-derived texels are photo-inferred`;
     return `textured ${v.layers.map(l => l.layer).join(', ')} from ${v.views} registered Street View view${v.views === 1 ? '' : 's'}${v.tileUnavailable ? '' : ' and the tile photo'}: ${rungs}`
         + `${v.modelsUsed.length ? `; enhanced by ${v.modelsUsed.join(', ')}` : ''}; photo-derived texels are photo-inferred`;
+}
+
+/**
+ * The camera of a run whose first layer is the vector first paint: for a district, the one the tiles will give (the anchor on
+ * the ground, the requested radius), so the view does not move when they arrive; for an isolated structure, framed on the
+ * vector building under the place (or the nearest one within 30 m), which the tiles' structure pick then refines.
+ */
+export function vectorCamera(bounds: { min: [number, number, number]; max: [number, number, number] }, buildings: PaintBuilding[], isolate: boolean, radiusM: number, bases?: number[]): StagedCamera {
+    if (!isolate) return stagedCamera(bounds, [0, 0, 0], radiusM);
+    let best = -1, bestD = Infinity;
+    buildings.forEach((b, i) => { const d = Math.hypot(b.centroid[0], b.centroid[1]); if (d < bestD) { bestD = d; best = i; } });
+    if (best < 0 || bestD > 30) return stagedCamera(bounds, [0, 0, 0], radiusM);
+    const b = buildings[best];
+    const top = Math.max(0, ...b.parts.map(p => p.topH), ...b.volumes.flatMap(v => v.vertices.map(q => q[1])));
+    const y0 = bases?.[best] ?? 0;
+    const half = Math.sqrt(Math.max(1, b.areaM2)) / 2;
+    return stagedCamera(bounds, [b.centroid[0], y0 + top / 2, b.centroid[1]], Math.hypot(half, half, top / 2));
+}
+
+/** The remesh the scene stands on now: the voted remesh once the ownership vote replaced the first isolate, else the remesh. */
+function currentRemeshLayer(run: StagedRun): StagedLayer | undefined {
+    return run.state.layers.filter(l => !l.retired && ((l.layer === 'l2' && l.stage === 'remesh') || l.layer === 'l2v')).pop();
+}
+
+/** A promise with its resolve, for a stage that waits on a decision another stage makes. */
+function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>(r => { resolve = r; });
+    return { promise, resolve };
 }
 
 function loadMesh(files: Array<string | undefined>): RenderMesh3D {
@@ -882,6 +981,9 @@ function loadMesh(files: Array<string | undefined>): RenderMesh3D {
 // ----------------------------------------------------------------------------------------------------------------
 // the run
 // ----------------------------------------------------------------------------------------------------------------
+
+/** A district layer published without the kept structure's footprint (keptStructureCarver). */
+const CARVED_URL = /_around_[0-9a-f]{8}\.glb$/;
 
 /** What the district layers lost to the kept structure, per layer (the result's activeScene.footprintHidden). */
 const FOOTPRINT_REPORTS = new WeakMap<StagedRun, { footprint?: StructureFootprint; error?: string; layers: Array<{ objectId: string; removedTriangles: number; keptTriangles: number }> }>();
@@ -897,7 +999,8 @@ function keptStructureCarver(run: StagedRun, cache: StageCache, base: string): (
     FOOTPRINT_REPORTS.set(run, report);
     let measured = false;
     return (layer, meta) => {
-        if (meta.source !== 'Google3DTilesClay' || meta.vegetation) return layer;
+        // a layer already carved (its later commits: a textured twin added) is not carved again
+        if (meta.source !== 'Google3DTilesClay' || meta.vegetation || CARVED_URL.test(layer.url)) return layer;
         const carried = run.carried!;
         if (!measured) {
             measured = true;
@@ -969,9 +1072,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     // a retry rebuilds the recorded request exactly; the model never re-words it
     let request = requestIn;
     let recordedArtifactId: string | undefined;
-    if (ctx.retry) {
-        const rec = cache.readRunRecord<RunRecord>(ctx.retry.runId);
-        if (!rec) throw new StagedLocationHardFailure('resolve', 'unknown_run', `There is no staged run ${ctx.retry.runId} to retry (its record is not in .scratchbox/cache/staged_location/runs).`);
+    const recordedRunId = ctx.retry?.runId ?? ctx.resume?.runId;
+    if (recordedRunId) {
+        const rec = cache.readRunRecord<RunRecord>(recordedRunId);
+        if (!rec) throw new StagedLocationHardFailure('resolve', 'unknown_run', `There is no staged run ${recordedRunId} to ${ctx.retry ? 'retry' : 'resume'} (its record is not in .scratchbox/cache/staged_location/runs).`);
         request = rec.request;
         recordedArtifactId = rec.artifactId;
     }
@@ -981,6 +1085,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     // call whose first token is late is sent once more (VisionModelChainOptions.hedgeAfterMs)
     const chainExtras = (id: StageId) => ({ hedgeAfterMs: VISION_HEDGE_AFTER_MS, ...(bypass(id) ? {} : { replyCache: stagedReplyCache(cache) }) });
     const runId = deps.newRunId?.() ?? crypto.randomBytes(4).toString('hex');
+    cache.activeRunId = runId;
+    // every stage event also goes to the run's wall-clock timeline (runs/<runId>/timeline.jsonl)
+    const timelineFile = (() => { try { return path.join(path.dirname(cache.runRecordPath(runId)), 'timeline.jsonl'); } catch { return undefined; } })();
+    if (timelineFile) ctx = { ...ctx, emitStage: recordStageTimeline(timelineFile, runId, now(), ctx.emitStage, now) };
     // main-thread blocks over the whole run, kept as a run note (event-loop-stats.ts)
     let runningStages: () => string[] = () => [];
     const blockTracer = runBlockTracer(() => runningStages());
@@ -1001,6 +1109,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     let placeValue: ResolvedPlace | undefined;
     // every stage promise the call starts is settled before it returns or throws, so none runs on, or rejects unseen, after it
     const siblings: Array<Promise<unknown>> = [];
+    // the tiles' extraction, for the stages that start before it and finish after it (the vector first paint)
+    let tilesSettle!: (v: { extraction: StagedExtraction; key: string } | undefined) => void;
+    const tilesReady = new Promise<{ extraction: StagedExtraction; key: string } | undefined>(r => { tilesSettle = r; });
+    // the texture worker threads load for seconds (ts-node): an isolated structure's start loading as soon as its tiles are in
+    let earlyTexturePool: TextureWorkerPool | undefined;
+    const takeEarlyPool = (): TextureWorkerPool | undefined => { const p = earlyTexturePool; earlyTexturePool = undefined; return p; };
 
     try {
         // ---------------- resolve ----------------
@@ -1036,6 +1150,147 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             run.carried = partitionActiveScene(intoActive, request.isolate ? placeValue : undefined);
             if (run.carried.structure.length) run.layerTransform = keptStructureCarver(run, cache, base);
         }
+
+        // ---------------- vector (the first paint: Google's vector buildings, extruded natively, beside the tile download) ----------------
+        // it commits l0 as soon as it is built, unless the tiles were first; once the tiles commit, the buildings they do not cover
+        // (a district past the leaf-tile cap) are kept as l0o, on bases measured against the tiles' own frame
+        const vectorPromise = runner.stage<{ buildings: number; outer: number }>({
+            id: 'vector',
+            run: async io => {
+                if (!deps.vectorEvidence) return { status: 'skipped', source: '', reason: 'no Google vector data: no service account is configured for vectortiles.featuretiles' };
+                const place = placeValue!;
+                const radiusM = request.isolate ? VECTOR_ISOLATE_RADIUS_M : (request.radiusM ?? 250);
+                const msBy: Record<string, number> = {};
+                const t0 = now();
+                const key = stageKey(VECTOR_MASSING_VERSION, place.lat.toFixed(6), place.lng.toFixed(6), Math.round(radiusM));
+                const key8 = key.slice(0, 8);
+                run.keys.vector = key;
+                type Inputs = { sel: PaintSelection; elevations?: number[]; elevationError?: string; tiles: number };
+                // the vector data and the elevations are cached together (an answer without elevations is not cached)
+                const hit = !bypass('vector') ? cache.get<Inputs>('vector', key) : undefined;
+                let inputs = hit && now() - hit.builtAtMs < EXTRACTION_TTL_MS ? hit.value : undefined;
+                run.cacheStatus.vector = inputs ? 'hit' : bypass('vector') ? 'bypassed' : 'miss';
+                if (!inputs) {
+                    io.progress(`reading Google's vector buildings within ${Math.round(radiusM)} m`);
+                    let t = now();
+                    const ev = await deps.vectorEvidence({ lat: place.lat, lng: place.lng, radiusM });
+                    msBy.fetch = now() - t;
+                    const sel = selectPaintBuildings(ev, radiusM);
+                    let elevations: number[] | undefined, elevationError: string | undefined;
+                    if (!deps.elevations) elevationError = 'no Google Maps API key is set for the Elevation API';
+                    else if (sel.buildings.length) {
+                        t = now();
+                        try { elevations = await deps.elevations([{ lat: place.lat, lng: place.lng }, ...sel.buildings.map(b => frameToLatLng(place, b.centroid))], io.signal); } catch (err) { if (io.signal.aborted) throw err; elevationError = errorMessage(err); }
+                        msBy.elevation = now() - t;
+                    }
+                    inputs = { sel, ...(elevations ? { elevations } : {}), ...(elevationError ? { elevationError } : {}), tiles: ev.tiles };
+                    if (elevations) { const value = inputs; await cache.run('vector', key, async () => ({ value }), { bypass: true }); }
+                }
+                const { sel, elevations, elevationError } = inputs;
+                const left = [
+                    sel.partsWithoutHeight ? `${sel.partsWithoutHeight} footprint part${sel.partsWithoutHeight === 1 ? '' : 's'} with no height in the vector data not drawn` : '',
+                    sel.buildingsWithoutHeight ? `${sel.buildingsWithoutHeight} building${sel.buildingsWithoutHeight === 1 ? '' : 's'} with no height at all left out` : ''
+                ].filter(Boolean).join('; ');
+                if (!sel.buildings.length) return { status: 'skipped', source: '', reason: `Google's vector data has no building with a height within ${Math.round(radiusM)} m${left ? ` (${left})` : ''}`, breakdownMs: msBy };
+                const baseNote = (frame: 'street' | 'tiles') => elevations
+                    ? `each building stands on the Google Elevation API's terrain height at its centroid, relative to ${frame === 'street' ? 'the terrain at the place (the street level the tiles also take as their origin, to about a metre)' : "the tiles' own frame height"}`
+                    : `every building stands at the street level of the place (no terrain heights: ${elevationError ?? 'not asked'})`;
+                const layerOf = (glb: { url: string; bytes: number }, layer: 'l0' | 'l0o', counts: { vertices: number; triangles: number }, note: string, builtAtMs: number, cached: boolean, revealAfter: string[]): StagedLayer => ({
+                    objectId: layerObjectId(key, layer), stage: 'vector', layer, order: STAGES.vector.order, url: glb.url, bytes: glb.bytes,
+                    provenance: paintProvenance(note, `vectortiles:${key8}`), provenanceLabels: [VECTOR_MODELLED_LABEL], supersedes: [], revealAfter,
+                    reveal: { durationMs: 700, stagger: 0.6, crossfadeFrom: [] }, cached, builtAtMs, counts
+                });
+                const meta: StagedLayerObjectMeta = { source: 'GoogleVectorMassing', resolvedAddress: place.formattedAddress, extra: { vectorMassing: true } };
+                const committed: StagedLayer[] = [];
+                const degradations: DegradationRecord[] = [];
+                const refusedNote = (refused: Array<{ buildings: string[]; error: string }>, layer: string) => {
+                    if (!refused.length) return;
+                    const n = refused.reduce((a, r) => a + r.buildings.length, 0);
+                    degradations.push(run.degrade(record('vector', 'vector_buildings_refused', {
+                        part: { description: `${n} vector building${n === 1 ? '' : 's'} of ${layer}` }, intended: 'every vector building with a height, extruded', fellTo: 'those buildings left out of the vector massing',
+                        provenanceAfter: VECTOR_MODELLED_LABEL, reason: `the native massing tool refused them (${refused[0].error.slice(0, 200)})`, transient: false, runId, now: now(), suffix: layer
+                    })));
+                };
+                // ---- l0: everything, unless the tiles were first ----
+                let paintedFirst = false;
+                if (!run.state.layers.some(l => l.layer === 'l1')) {
+                    const t = now();
+                    const ground0 = elevations?.[0];
+                    const pkey = stageKey(key, 'first', elevations ? 'elev' : 'street');
+                    const entry = await cache.run<{ counts: { vertices: number; triangles: number }; refused: Array<{ buildings: string[]; error: string }>; nativeMs: number }>('vector', pkey, async dir => {
+                        const r = await writePaintGlb(sel.buildings, (_b, i) => (elevations && ground0 !== undefined ? elevations[i + 1] - ground0 : 0), { dir, stage: 'vector', stageKey: pkey, provenance: paintProvenance(baseNote('street'), `vectortiles:${key8}`), signal: io.signal });
+                        return { value: { counts: r.counts, refused: r.refused, nativeMs: r.nativeMs } };
+                    }, { publish: () => [{ from: 'vector_massing.glb', as: `${base}_vector_${pkey.slice(0, 8)}.glb` }], bypass: bypass('vector') });
+                    msBy.native = entry.cached ? 0 : entry.value.nativeMs;
+                    msBy.first = now() - t;
+                    // the tiles may have committed while it was built: then it is not shown where they are
+                    if (!run.state.layers.some(l => l.layer === 'l1')) {
+                        const note = `${sel.buildings.length} buildings within ${Math.round(radiusM)} m from Google's vector data${left ? `; ${left}` : ''}; ${baseNote('street')}; shown until the 3D Tiles arrive`;
+                        const l0 = layerOf(entry.published[0], 'l0', entry.value.counts, note, entry.builtAtMs, entry.cached, []);
+                        // the scene's place until the tiles give their own anchor (the viewport reads lat 0, lng 0 as no place)
+                        if (!run.state.layers.length) run.geoAnchor = { lat: place.lat, lng: place.lng, ...(typeof place.elevation === 'number' ? { elevation: place.elevation } : {}) };
+                        if (!run.camera) {
+                            const bounds = glbBounds(path.join(entry.dir, 'vector_massing.glb'));
+                            if (bounds) run.camera = vectorCamera(bounds, sel.buildings, request.isolate, radiusM, elevations && ground0 !== undefined ? elevations.slice(1).map(e => e - ground0) : undefined);
+                        }
+                        run.commit(l0, meta);
+                        committed.push(l0);
+                        refusedNote(entry.value.refused, 'l0');
+                        paintedFirst = true;
+                        msBy.firstPaint = now() - t0;
+                        run.emit('vector', 'running', { message: `${sel.buildings.length} vector buildings shown (${((now() - t0) / 1000).toFixed(1)} s)`, layers: [l0] }, true);
+                    }
+                }
+                // ---- l0o: past the tiles (districts only: an isolated structure is the one building asked for) ----
+                const tiles = await tilesReady;
+                let outerCount = 0;
+                if (tiles && !request.isolate) {
+                    const t = now();
+                    const coverage = tilePlanCoverage(tiles.extraction.geometryGlb);
+                    const outer = sel.buildings.map((b, i) => ({ b, i })).filter(({ b }) => coveredShare(b, coverage) <= VECTOR_OUTER_MAX_COVERED_SHARE);
+                    msBy.coverage = now() - t;
+                    outerCount = outer.length;
+                    if (outer.length) {
+                        const frameElev = typeof tiles.extraction.geoAnchor.elevation === 'number' ? tiles.extraction.geoAnchor.elevation : elevations?.[0];
+                        const okey = stageKey(key, 'outer', tiles.key, elevations ? `elev:${frameElev}` : 'street', outer.map(o => o.b.id));
+                        const t2 = now();
+                        const entry = await cache.run<{ counts: { vertices: number; triangles: number }; refused: Array<{ buildings: string[]; error: string }>; nativeMs: number }>('vector', okey, async dir => {
+                            const list: PaintBuilding[] = outer.map(o => o.b);
+                            const r = await writePaintGlb(list, (_b, k) => (elevations && frameElev !== undefined ? elevations[outer[k].i + 1] - frameElev : 0), { dir, stage: 'vector', stageKey: okey, provenance: paintProvenance(baseNote('tiles'), `vectortiles:${key8}`), signal: io.signal });
+                            return { value: { counts: r.counts, refused: r.refused, nativeMs: r.nativeMs } };
+                        }, { publish: () => [{ from: 'vector_massing.glb', as: `${base}_vector_outer_${okey.slice(0, 8)}.glb` }], bypass: bypass('vector') });
+                        msBy.outer = now() - t2;
+                        const reach = tiles.extraction.truncated ? `the tiles reach ${Math.round(tiles.extraction.coveredRadiusM)} of the ${Math.round(tiles.extraction.radiusM)} m asked for` : 'the tiles do not cover them';
+                        const note = `${outer.length} vector buildings the 3D Tiles do not cover (${reach}; at most ${Math.round(VECTOR_OUTER_MAX_COVERED_SHARE * 100)}% of a building's plan under the tiles); ${baseNote('tiles')}; Google's modelled footprints and heights, not scanned`;
+                        const l1 = run.state.layers.find(l => l.layer === 'l1');
+                        const l0o = layerOf(entry.published[0], 'l0o', entry.value.counts, note, entry.builtAtMs, entry.cached, l1 ? [l1.objectId] : []);
+                        run.commit(l0o, meta);
+                        committed.push(l0o);
+                        refusedNote(entry.value.refused, 'l0o');
+                        run.note(VECTOR_MODELLED_LABEL, note);
+                        run.emit('vector', 'running', { message: `${outer.length} vector buildings kept past the tiles`, layers: [l0o] }, true);
+                    }
+                }
+                if (!paintedFirst && !outerCount) {
+                    return { status: 'skipped', source: '', reason: tiles ? `the 3D Tiles arrived first (${((now() - t0) / 1000).toFixed(1)} s) and cover every vector building` : 'the tiles did not commit', breakdownMs: msBy };
+                }
+                if (!committed.some(l => l.layer === 'l0o')) run.note(VECTOR_MODELLED_LABEL, `${sel.buildings.length} buildings from Google's vector data (${baseNote('street')}), shown until the 3D Tiles arrived`);
+                return {
+                    status: degradations.length ? 'degraded' : 'committed', value: { buildings: sel.buildings.length, outer: outerCount }, layers: committed, degradations, breakdownMs: msBy,
+                    cached: run.cacheStatus.vector === 'hit',
+                    source: `${sel.buildings.length} buildings from Google vector data${paintedFirst ? `, shown in ${((msBy.firstPaint ?? 0) / 1000).toFixed(1)} s` : ' (the tiles were first)'}${outerCount ? `; ${outerCount} kept past the tiles` : ''}${left ? `; ${left}` : ''}`
+                };
+            },
+            degrade: async err => ({
+                status: 'degraded', source: 'no vector massing: the tiles are the first 3D', reason: `the vector massing could not be built (${errorMessage(err)})`,
+                degradations: [run.degrade(record('vector', 'vector_massing_failed', {
+                    part: { description: 'the first paint (Google vector buildings)' }, intended: 'a vector massing of the area while the tiles stream', fellTo: 'nothing until the 3D Tiles arrive',
+                    provenanceAfter: PROVENANCE.asScanned, reason: `the vector massing could not be built (${errorMessage(err)})`, cause: err, transient: true, runId, now: now()
+                }))]
+            })
+        });
+        vectorPromise.catch(() => undefined);
+        siblings.push(vectorPromise);
 
         // ---------------- tiles ----------------
         type TilesValue = { extraction: StagedExtraction; key: string; sizedTo: 'structure' | 'request' | 'district-fallback'; structure?: StructurePickResult; ground?: GroundModel; scan?: ScanMesh; unmaskedTop?: Float32Array; canopy?: CanopyMask; vector?: EvidenceLookup; vectorError?: string; rounds: number; cached: boolean; builtAtMs: number };
@@ -1103,11 +1358,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const target: [number, number, number] = st ? [st.centroid.x, st.groundY + st.heightM / 2, st.centroid.z] : [0, 0, 0];
                 const focus = st ? Math.hypot((st.bounds.maxX - st.bounds.minX) / 2, st.heightM / 2, (st.bounds.maxZ - st.bounds.minZ) / 2) : e.radiusM;
                 run.camera = stagedCamera(bounds, target, focus);
+                // the vector first paint, when it was shown, fades out under the tiles
+                const painted = run.state.layers.filter(l => l.layer === 'l0').map(l => l.objectId);
                 const layer: StagedLayer = {
                     objectId: layerObjectId(value.key, 'l1'), stage: 'tiles', layer: 'l1', order: STAGES.tiles.order, url: published.url, bytes: published.bytes,
                     provenance: { label: PROVENANCE.asScanned, measuredGeometry: true, method: 'Google Photorealistic 3D Tiles, leaf LOD, as downloaded', sources: [{ kind: 'tile-extraction', id: `extract:${key8}` }] },
-                    provenanceLabels: [PROVENANCE.asScanned], supersedes: [], revealAfter: [],
-                    reveal: { durationMs: 1200, stagger: 1, crossfadeFrom: [], ...(orderUrl ? { orderUrl } : {}) },
+                    provenanceLabels: [PROVENANCE.asScanned], supersedes: painted, revealAfter: [],
+                    reveal: { durationMs: 1200, stagger: 1, crossfadeFrom: painted, ...(orderUrl ? { orderUrl } : {}) },
                     cached: value.cached, builtAtMs: value.builtAtMs, counts: layerCounts(e.geometryGlb)
                 };
                 run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, isGround: true, extra: { rawGlbPath: e.rawGlbPath ?? e.texturedGlb } });
@@ -1141,11 +1398,54 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             hardFail: err => new StagedLocationHardFailure('tiles', 'no_tile_coverage', `No Photorealistic 3D Tiles could be extracted at ${placeValue!.formattedAddress}: ${errorMessage(err)}`)
         });
         persist();
+        tilesSettle(tiles.value ? { extraction: tiles.value.extraction, key: tiles.value.key } : undefined);
         if (tiles.status === 'stopped' || !tiles.value) throw new StagedLocationHardFailure('tiles', 'run_deadline', `The run reached its time limit before any tiles were extracted, so there is nothing to show.`);
         const t = tiles.value;
         const extraction = t.extraction;
         const structure = request.isolate && t.sizedTo === 'structure' ? t.structure : undefined;
         const isolateMode = !!structure;
+
+        // ---------------- terrain (starts now and runs beside everything else; needs only the extraction's frame) ----------------
+        if (!deps.elevation) {
+            runner.skip('terrain', 'no Google Maps API key for the Elevation API, so the ground around the place is not measured');
+        } else {
+            const elevation = deps.elevation;
+            siblings.push(runner.stage({
+                id: 'terrain',
+                run: async io => {
+                    const origin: GeodeticOrigin = { lat: placeValue!.lat, lng: placeValue!.lng, heightMeters: extraction.originEllipsoidalHeightM };
+                    const holeRadiusM = Math.max(0, extraction.coveredRadiusM - TERRAIN_INNER_STEP_M / 2);
+                    const key = stageKey('terrain/v1', origin.lat.toFixed(6), origin.lng.toFixed(6), origin.heightMeters.toFixed(2), TERRAIN_RADIUS_M, TERRAIN_INNER_RADIUS_M, TERRAIN_INNER_STEP_M, TERRAIN_OUTER_STEP_M, Math.round(holeRadiusM));
+                    run.keys.terrain = key;
+                    const key8 = key.slice(0, 8);
+                    const entry = await cache.run<{ minY: number; maxY: number; samples: number; holeTriangles: number }>('terrain', key, async dir => {
+                        const plan = planTerrainGrid(origin);
+                        io.progress(`measuring the ground at ${plan.points.length.toLocaleString('en-US')} points out to ${TERRAIN_RADIUS_M / 1000} km`);
+                        const heights = await elevation.sample(plan.points, io.signal);
+                        const mesh = buildTerrainMesh(origin, plan, heights, holeRadiusM);
+                        writeTerrainGlb(path.join(dir, 'terrain.glb'), mesh, { radiusM: TERRAIN_RADIUS_M, holeRadiusM, samples: plan.points.length, source: 'Google Elevation API (EGM96)' });
+                        return { value: { minY: mesh.minY, maxY: mesh.maxY, samples: plan.points.length, holeTriangles: mesh.holeTriangles }, inputs: { origin, radiusM: TERRAIN_RADIUS_M, holeRadiusM } };
+                    }, { publish: () => [{ from: 'terrain.glb', as: `${base}_terrain_${key8}.glb` }], bypass: bypass('terrain') });
+                    run.cacheStatus.terrain = entry.cached ? 'hit' : 'miss';
+                    const pub = entry.published[0];
+                    const layer: StagedLayer = {
+                        objectId: layerObjectId(key, 'l0'), stage: 'terrain', layer: 'l0', order: STAGES.terrain.order, url: pub.url, bytes: pub.bytes,
+                        provenance: {
+                            label: 'measured', measuredGeometry: true,
+                            method: `Google Elevation API heightfield (EGM96 mean sea level into the tile frame), ${TERRAIN_INNER_STEP_M} m grid to ${TERRAIN_INNER_RADIUS_M / 1000} km and ${TERRAIN_OUTER_STEP_M} m to ${TERRAIN_RADIUS_M / 1000} km, left out under the tiles`,
+                            sources: [{ kind: 'elevation', id: `terrain:${key8}` }],
+                            note: `${entry.value.samples.toLocaleString('en-US')} measured heights, ${(entry.value.maxY - entry.value.minY).toFixed(1)} m of relief`
+                        },
+                        provenanceLabels: ['measured'], supersedes: [], revealAfter: [],
+                        reveal: { durationMs: 1200, stagger: 0.4, crossfadeFrom: [] },
+                        cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pub.path)
+                    };
+                    run.commit(layer, { source: 'GoogleElevation', resolvedAddress: placeValue!.formattedAddress, extra: { terrainRadiusM: TERRAIN_RADIUS_M, holeRadiusM, samples: entry.value.samples } });
+                    return { status: 'committed', source: `Google Elevation API: ${entry.value.samples.toLocaleString('en-US')} heights out to ${TERRAIN_RADIUS_M / 1000} km`, layers: [layer], cached: entry.cached, builtAtMs: entry.builtAtMs };
+                }
+            }).catch(err => { if (err?.name === 'AbortError') throw err; run.emit('terrain', 'failed', { reason: errorMessage(err) }); return undefined; }));
+        }
+
 
         // ---------------- survey (pass 1: starts now and runs beside the remesh and the fit; needs only the structure pick) ----------------
         const visionForSurvey = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
@@ -1168,7 +1468,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // building's vector footprint, else the current pipeline runs and the reason is recorded
         const pipelineE = stagedPipelineE() && request.isolate;
         const eBuildings = structure?.vectorFootprint?.used && t.vector ? t.vector.raster.buildings.filter(b => structure.vectorFootprint!.featureIds.includes(b.id)) : [];
-        const eWhyNot = !pipelineE ? undefined : !isolateMode ? 'the structure could not be isolated' : !eBuildings.length ? `the structure's footprint did not come from Google vector data (${structure?.vectorFootprint?.reason ?? 'no vector footprint at the place'})` : undefined;
+        // the shape program trial (SCRATCHBOX_STAGED_SHAPE_PROGRAM) shapes from the tree-free scan: a vector footprint only
+        // bounds the height map where the two agree, so a footprint that disagrees (or none) does not send the build back
+        const shapeMode = pipelineE ? stagedShapeProgram() : undefined;
+        const shapeFootprint = t.vector && structure?.vectorFootprint?.featureIds?.length ? t.vector.raster.buildings.filter(b => structure.vectorFootprint!.featureIds.includes(b.id)) : [];
+        const eWhyNot = !pipelineE ? undefined : !isolateMode ? 'the structure could not be isolated' : !eBuildings.length && !shapeMode ? `the structure's footprint did not come from Google vector data (${structure?.vectorFootprint?.reason ?? 'no vector footprint at the place'})` : undefined;
         const eEligible = pipelineE && !eWhyNot;
         const startSurvey = (): void => {
         if (isolateMode && visionForSurvey) {
@@ -1377,6 +1681,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             // a Stop rejects it; whoever awaits it sees that, and nobody else is left holding a rejection nobody handles
             evidencePromise.catch(() => undefined);
             siblings.push(evidencePromise);
+            evidenceDecided.resolve();
         };
 
         // ---------------- figures (compact scanned blobs on a fitted pedestal: read from a close-up, built inside the blob's bounds) ----------------
@@ -1577,360 +1882,420 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             siblings.push(figuresPromise as Promise<unknown>);
         };
 
-        // ---------------- textures (background: after the photo survey/registration and the fit commit; the clay layers never wait for it) ----------------
+        // ---------------- textures (background: the clay layers never wait for it) ----------------
+        // Two stages, both started as soon as the remesh commits:
+        //  - 'textures': an isolated structure's layers get a twin baked from the tile photo first (seconds); once the Street View
+        //    close-ups are in (the survey, the fit's evidence) each layer is baked again with them, and that twin replaces the
+        //    first only where Street View adds texels. A district, or a structure that could not be isolated, gets tile_refine's
+        //    own photo-textured remesh as its twin (tile-refine-twin.ts): unwrapping a million triangles would take minutes.
+        //  - 'textures-late': every layer committed after that (the fit's, the detail, the grammar's l2g, figures) is textured as
+        //    it lands; once the rebuild and the grammar have settled, the twins are checked against the settled scene. The first
+        //    stage never waits for them.
         let texturesPromise: Promise<unknown> | undefined;
+        let lateTexturesPromise: Promise<unknown> | undefined;
         let textureValue: TextureStageValue | undefined;
         /** The facade grammar stage (it commits l2g, a layer the texture pass must texture however late it lands). */
         const grammarGate: { settled?: Promise<unknown> } = {};
+        /** Resolved once the rebuild has decided its Street View close-ups (evidencePromise is set, or none will come). */
+        let evidenceDecided = deferred<void>();
+        /** Resolved once the fit stage has returned (its charts are known), or the rebuild ended without one. */
+        let fitDecided = deferred<void>();
+        /** tile_refine's photo-textured output per committed remesh layer (the source of a district's twins). */
+        const refineTextured = new Map<string, string>();
+        type TexTarget = { layer: StagedLayer; file: string; surfaces?: Array<{ id: string; chart: any }>; late?: boolean };
+        type TexOutcome = {
+            layer: StagedLayer; out: Omit<TextureLayerOutcome, 'glb' | 'measureLoo'>; url: string; bytes: number; cached: boolean; builtAtMs: number;
+            surfaces: string; late: boolean; sources: 'tile' | 'street-view' | 'tile-refine'; streetViewTried?: boolean
+        };
         const startTextures = (): void => {
             if (texturesPromise) return;
-            if (deps.textures?.disabled) { runner.skip('textures', deps.textures.disabled); return; }
-            const waits = [surveyPromise, evidencePromise].filter((p): p is NonNullable<typeof p> => !!p).map(p => (p as Promise<unknown>).catch(() => undefined));
-            texturesPromise = Promise.all(waits).then(() => runner.stage<TextureStageValue>({
-                id: 'textures',
-                run: async io => {
-                    // the stage's CPU work runs in worker threads; the main thread's event-loop delay over the stage is recorded
-                    let texturePool: TextureWorkerPool | undefined;
-                    const loopDelay = monitorEventLoopDelay({ resolution: 10 });
-                    loopDelay.enable();
-                    try {
-                    const started = now();
-                    const evidence = evidencePromise ? await evidencePromise.catch(() => undefined) : undefined;
-                    const fitNow = rebuildOut.refit?.value ?? rebuildOut.fit?.value;
-                    // what gets a textured twin: every committed mesh layer the scene shows, or stands on (the ground), except vegetation;
-                    // a layer another layer supersedes is hidden once that one reveals, so it is skipped unless it is the ground
-                    const fitSurfaces = () => (rebuildOut.refit ?? rebuildOut.fit)?.value.surfaces.filter(x => x.chart).map(x => ({ id: x.id, chart: x.chart })) ?? [];
-                    const handled = new Set<string>();
-                    const arm = textureArmOptions();
-                    const armTargets = arm.targetLayers;
-                    const pick = (): Array<{ layer: StagedLayer; file: string; surfaces?: Array<{ id: string; chart: any }>; late?: boolean }> => {
-                        const live = run.state.layers.filter(l => !l.retired);
-                        const superseded = new Set(live.flatMap(l => l.supersedes));
-                        return live.filter(l => {
-                            const meta = run.layerMeta[l.objectId];
-                            if (handled.has(l.objectId) || l.textured || meta?.vegetation || !(l.counts.triangles > 0)) return false;
-                            // bake-off arms (SCRATCHBOX_TEXTURE_TARGET_LAYERS, experiment only): exactly the named layers, superseded or not
-                            if (armTargets) return armTargets.includes(l.layer) && fs.existsSync(path.join(cache.modelsDir, path.basename(l.url)));
-                            if (superseded.has(l.objectId) && !meta?.isGround) return false;
-                            return fs.existsSync(path.join(cache.modelsDir, path.basename(l.url)));
-                        }).map(l => ({ layer: l, file: path.join(cache.modelsDir, path.basename(l.url)), surfaces: fitSurfaces() }));
-                    };
-                    const targets = pick();
-                    if (!targets.length) return { status: 'skipped', source: '', reason: 'no committed mesh layer to texture' };
+            if (deps.textures?.disabled) { runner.skip('textures', deps.textures.disabled); runner.skip('textures-late', deps.textures.disabled); return; }
+            // a district (or a structure tile_refine could not isolate) is textured with tile_refine's own photo
+            const mode: 'texture-pass' | 'tile-refine' = isolateOk ? 'texture-pass' : 'tile-refine';
+            const texStarted = now();
+            const pass = { rebuild: rebuildPromise, grammar: grammarGate.settled };
+            const outcomes: TexOutcome[] = [];
+            const handled = new Set<string>();
+            const looJobs = new Map<string, NonNullable<TextureLayerOutcome['measureLoo']>>();
+            const extraDegradations: TexturePassDegradation[] = [];
+            const arm = textureArmOptions();
+            const armTargets = arm.targetLayers;
+            const fitSurfaces = () => (rebuildOut.refit ?? rebuildOut.fit)?.value.surfaces.filter(x => x.chart).map(x => ({ id: x.id, chart: x.chart })) ?? [];
+            const loopDelay = monitorEventLoopDelay({ resolution: 10 });
+            loopDelay.enable();
+            // the threads started loading when the tiles committed (earlyTexturePool); a second pass starts its own
+            const texturePool = mode === 'texture-pass' && textureWorkersEnabled() ? (takeEarlyPool() ?? new TextureWorkerPool()) : undefined;
+            const warming = texturePool?.warm();
+            warming?.catch(() => undefined);
+            const enhance = deps.textures?.enhance;
+            const lightingClient = deps.textures?.lighting;
+            const lightingModelIds = deps.textures?.lightingModels ?? lightingModels();
+            const timed = (into: Record<string, number>) => async <R>(k: string, work: () => Promise<R>): Promise<R> => { const t0 = now(); try { return await work(); } finally { into[k] = (into[k] ?? 0) + now() - t0; } };
+            const mainMs: Record<string, number> = {}, lateMs: Record<string, number> = {};
+            // what gets a twin: every committed mesh layer the scene shows, or stands on (the ground), except vegetation and the
+            // vector massing; a superseded layer is skipped unless it is the ground; the voted remesh is the next pass's own target
+            const pick = (opts: { late?: boolean } = {}): TexTarget[] => {
+                const live = run.state.layers.filter(l => !l.retired);
+                const superseded = new Set(live.flatMap(l => l.supersedes));
+                return live.filter(l => {
+                    const meta = run.layerMeta[l.objectId];
+                    if (handled.has(l.objectId) || l.textured || meta?.vegetation || meta?.extra?.vectorMassing || meta?.extra?.selfTextured || !(l.counts.triangles > 0)) return false;
+                    if (opts.late && l.layer === 'l2v') return false;
+                    if (mode === 'tile-refine' && !refineTextured.has(l.objectId)) return false;
+                    // bake-off arms (SCRATCHBOX_TEXTURE_TARGET_LAYERS, experiment only): exactly the named layers, superseded or not
+                    if (armTargets) return armTargets.includes(l.layer) && fs.existsSync(path.join(cache.modelsDir, path.basename(l.url)));
+                    if (superseded.has(l.objectId) && !meta?.isGround) return false;
+                    return fs.existsSync(path.join(cache.modelsDir, path.basename(l.url)));
+                }).map(l => ({ layer: l, file: path.join(cache.modelsDir, path.basename(l.url)), surfaces: fitSurfaces(), ...(opts.late ? { late: true } : {}) }));
+            };
+            const progress = (message: string) => {
+                run.state.texturePass = {
+                    status: 'running', layersDone: outcomes.length, layersTotal: Math.max(handled.size, outcomes.length),
+                    ...(outcomes.length ? { rungShares: weightedShares(outcomes.map(o => ({ shares: o.out.rungShares, texels: o.out.atlasTexels }))) } : {}), message
+                };
+            };
+            // at most TEXTURE_LAYER_CONCURRENCY layers at once, over both stages
+            let running = 0;
+            const waiting: Array<() => void> = [];
+            const withSlot = async <R>(fn: () => Promise<R>): Promise<R> => {
+                if (running >= TEXTURE_LAYER_CONCURRENCY) await new Promise<void>(r => waiting.push(r));
+                running++;
+                try { return await fn(); } finally { running--; waiting.shift()?.(); }
+            };
 
-                    // the sources, once for every layer: decoded, parsed and indexed in a texture worker thread (texture-worker-pool.ts),
-                    // the layers' CPU work after them too, so the main thread keeps serving the vision calls running beside the stage
-                    const images = evidence?.images ?? [];
-                    // photo tier A anchors each pano on the tile outline through a WIDE view of it: the survey's and the ring's
-                    // whole-face views (registered by the same joint poses), used by that tier only
-                    const surveyRes = surveyPromise ? (await surveyPromise.catch(() => undefined))?.result : undefined;
-                    const wideHeld = [
-                        ...(surveyRes?.read ?? []).flatMap(r => { const bytes = surveyImageBytes(surveyRes!, r.imageIndex); return bytes ? [{ view: r.view, bytes, widthPx: r.widthPx, heightPx: r.heightPx, sha256: r.sha256 }] : []; }),
-                        ...(evidence?.match ? matchRingImages(evidence.match) : [])
-                    ];
-                    const sourcesInput: TextureSourcesInput = {
-                        images, wide: wideHeld as EvidenceImage[], ...(evidence?.registration ? { registration: evidence.registration } : {}),
-                        ...(extraction.texturedGlb ? { texturedGlb: extraction.texturedGlb } : {}),
-                        // the scan is the occluder and the judge of what the photos show: a fitted face where the scan has no surface
-                        // (an arch opening) is not painted with the sky seen through it; the full tile mesh: the real opening, the
-                        // statues, the trees and the buildings behind decide what each photo shows
-                        occluderFiles: [remeshed?.clayGlb], contextFiles: [extraction.geometryGlb]
-                    };
-                    texturePool = textureWorkersEnabled() ? new TextureWorkerPool() : undefined;
-                    // the threads load while the first prepares the sources; the layers start once they all can
-                    const warming = texturePool?.warm();
-                    const sources = texturePool ? await texturePool.prepare(sourcesInput, io.signal) : prepareTextureSources(sourcesInput, now);
-                    await warming;
-                    const { views: sourceViews, failures, wideViews, tile, tileUnavailable, tileLoadMs, tileSha, occluder, context } = sources;
-                    // bake-off arms (SCRATCHBOX_TEXTURE_STREET_VIEW=off, experiment only): the layers are textured from the tile photo alone
-                    let views = arm.streetView === 'off' ? [] : sourceViews;
-                    // pixel ownership: a photo pixel textures the structure only if the photo shows the structure there
-                    // (streetview-ownership.ts); views it cannot vouch for texture nothing, and the tile photo takes their texels
-                    const ownVision = visionAvailable;
-                    const segmenter = process.env.SCRATCHBOX_TEXTURE_OWNERSHIP === '0' ? false : deps.textures?.segmenter
-                        ?? objectSegmenter(ownVision ? { modelSource: { getGenAIClient: async () => ownVision.client, getModelCandidates: () => ownVision.candidates } } : {});
-                    let ownershipKey: string | undefined;
-                    if (views.length && segmenter && occluder.indices.length) {
-                        const to = now();
-                        const own = await ownViews({ views, structure: occluder, ...(ownVision ? { target: request.query } : {}), ...(context.indices.length ? { context } : {}), segment: segmenter, signal: io.signal, onProgress: m => io.progress(`textures: ${m}`), ...(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR ? { debugDir: path.join(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR, runId) } : {}) });
-                        views = own.views;
-                        const kept = own.records.filter(r => r.status === 'segmented').length;
-                        ownershipKey = `sv-ownership/${OWNERSHIP_VERSION}:${sha256Bytes(Buffer.concat(views.map(v => Buffer.from(v.ownerMask ?? new Uint8Array(0)))))}`;
-                        cache.writeRunNote(runId, 'texture_ownership', { ms: now() - to, records: own.records });
-                        io.progress(`textures: the structure was cut out of ${kept} of ${own.records.length} Street View photos; ${own.records.length - kept} photos vouch for no pixel (${own.records.find(r => r.status === 'refused')?.reason ?? 'none'})`);
+            // ---- the sources: the tile photo alone (the first twins), then with the Street View close-ups ----
+            type Src = {
+                kind: 'tile' | 'street-view'; views: ProjectionView[]; viewsUnavailable?: string; prepared: TextureSources; imagesSha: string[]; wideSha: string[]; poseHash: unknown[];
+                residual?: number; ownershipKey?: string; temporaryKey?: string; lightingViews?: LightingCorrectedView[]; lightingUnavailable?: string;
+                materials?: MaterialEvidence; materialsUnavailable?: string; materialsKey: string; palette: ReturnType<typeof palettesFromSurvey>; density: number; nativeBest: number
+            };
+            const prepare = async (input: TextureSourcesInput, signal: AbortSignal): Promise<TextureSources> => {
+                const sources = texturePool ? await texturePool.prepare(input, signal) : prepareTextureSources(input, now);
+                if (warming) await warming;
+                return sources;
+            };
+            const baseInput = (): Pick<TextureSourcesInput, 'texturedGlb' | 'occluderFiles' | 'contextFiles'> => ({
+                ...(extraction.texturedGlb ? { texturedGlb: extraction.texturedGlb } : {}),
+                // the scan is the occluder and the judge of what the photos show; the full tile mesh: the real opening, the
+                // statues, the trees and the buildings behind decide what each photo shows
+                occluderFiles: [remeshedNow?.clayGlb], contextFiles: [extraction.geometryGlb]
+            });
+            const densityFor = (nativeSamples: number[], prepared: TextureSources, views: ProjectionView[]) => {
+                const best = Math.min(...nativeSamples.filter(v => v > 0), ...(prepared.tile && Number.isFinite(prepared.tile.texelSizeM) && !views.length ? [prepared.tile.texelSizeM] : []));
+                const cap = deps.textures?.maxDensityTexelsPerMeter ?? 20;
+                return { density: Number.isFinite(best) && best > 0 ? Math.min(cap, 1 / best) : cap, best };
+            };
+            const tileSource = async (signal: AbortSignal): Promise<Src> => {
+                const prepared = await prepare({ images: [], wide: [], ...baseInput() }, signal);
+                const d = densityFor([], prepared, []);
+                return {
+                    kind: 'tile', views: [], prepared, imagesSha: [], wideSha: [], poseHash: [], palette: palettesFromSurvey(run.state.materialHints?.faces),
+                    viewsUnavailable: arm.streetView === 'off' ? 'Street View is turned off for this build (SCRATCHBOX_TEXTURE_STREET_VIEW=off, an experiment arm)' : 'the first twin is baked from the tile photo alone, before the Street View close-ups are in; they refine it where they add texels',
+                    materialsKey: facadeMaterialsEnabled() ? 'materials-first-twin' : 'materials-off', density: d.density, nativeBest: d.best
+                };
+            };
+            /** The Street View sources, or why there are none (then the tile-photo twins stand). */
+            const streetViewSource = async (io: StageIO, step: ReturnType<typeof timed>): Promise<{ src?: Src; why: string }> => {
+                await evidenceDecided.promise;
+                const evidence = evidencePromise ? await evidencePromise.catch(() => undefined) : undefined;
+                const images = evidence?.images ?? [];
+                const why = arm.streetView === 'off' ? 'Street View is turned off for this build (SCRATCHBOX_TEXTURE_STREET_VIEW=off, an experiment arm)'
+                    : images.length ? '' : evidence ? `the Street View stage ${evidence.status === 'skipped' ? 'was skipped' : 'returned no image'}` : (visionAvailable ? 'the Street View stage did not run' : 'no vision model is configured, so no Street View close-ups were fetched');
+                if (why) return { why };
+                // photo tier A anchors each pano on the tile outline through a WIDE view of it: the survey's and the ring's whole-face views
+                const surveyRes = surveyPromise ? (await surveyPromise.catch(() => undefined))?.result : undefined;
+                const wideHeld = [
+                    ...(surveyRes?.read ?? []).flatMap(r => { const bytes = surveyImageBytes(surveyRes!, r.imageIndex); return bytes ? [{ view: r.view, bytes, widthPx: r.widthPx, heightPx: r.heightPx, sha256: r.sha256 }] : []; }),
+                    ...(evidence?.match ? matchRingImages(evidence.match) : [])
+                ];
+                const prepared = await step('prepareStreetView', () => prepare({ images, wide: wideHeld as EvidenceImage[], ...(evidence?.registration ? { registration: evidence.registration } : {}), ...baseInput() }, io.signal));
+                let views = prepared.views;
+                if (!views.length) return { why: `none of the ${images.length} grounding images decoded (${prepared.failures[0] ?? ''})` };
+                // pixel ownership: a photo pixel textures the structure only if the photo shows the structure there (streetview-ownership.ts)
+                const ownVision = visionAvailable;
+                const segmenter = process.env.SCRATCHBOX_TEXTURE_OWNERSHIP === '0' ? false : deps.textures?.segmenter
+                    ?? objectSegmenter(ownVision ? { modelSource: { getGenAIClient: async () => ownVision.client, getModelCandidates: () => ownVision.candidates } } : {});
+                let ownershipKey: string | undefined;
+                const { occluder, context } = prepared;
+                if (segmenter && occluder.indices.length) {
+                    const to = now();
+                    const own = await step('streetViewOwnership', () => ownViews({ views, structure: occluder, ...(ownVision ? { target: request.query } : {}), ...(context.indices.length ? { context } : {}), segment: segmenter, signal: io.signal, onProgress: m => io.progress(`textures: ${m}`), ...(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR ? { debugDir: path.join(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR, runId) } : {}) }));
+                    views = own.views;
+                    const kept = own.records.filter(r => r.status === 'segmented').length;
+                    ownershipKey = `sv-ownership/${OWNERSHIP_VERSION}:${sha256Bytes(Buffer.concat(views.map(v => Buffer.from(v.ownerMask ?? new Uint8Array(0)))))}`;
+                    cache.writeRunNote(runId, 'texture_ownership', { ms: now() - to, records: own.records });
+                    io.progress(`textures: the structure was cut out of ${kept} of ${own.records.length} Street View photos; ${own.records.length - kept} photos vouch for no pixel (${own.records.find(r => r.status === 'refused')?.reason ?? 'none'})`);
+                }
+                // temporary structures (SCRATCHBOX_TEXTURE_TEMPORARY=1 only): what is outlined as temporary in front of the structure textures nothing
+                let temporaryKey: string | undefined;
+                if (views.length && textureTemporaryEnabled() && visionAvailable) {
+                    const tt = now();
+                    const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: io.signal, ...chainExtras('textures'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                    const tmp = await step('temporaryCheck', () => maskTemporaryInViews({ views, check: visionTemporaryChecker(chain), target: request.query, signal: io.signal, onProgress: m => io.progress(`textures: ${m}`) }));
+                    views = tmp.views;
+                    temporaryKey = `sv-temporary/${TEMPORARY_CHECK_VERSION}:${sha256Bytes(Buffer.from(JSON.stringify(tmp.records.map(r => [r.panoId, r.flagged, r.maskedPixels]))))}`;
+                    cache.writeRunNote(runId, 'texture_temporary', { ms: now() - tt, records: tmp.records });
+                    const flagged = tmp.records.filter(r => r.flagged);
+                    io.progress(`textures: ${flagged.length} of ${tmp.records.length} Street View photos show something temporary in front of the structure${flagged.length ? ` (${flagged.map(r => r.description).filter(Boolean).slice(0, 3).join('; ')}); those regions texture nothing` : ''}`);
+                }
+                // the model lighting correction of the Street View photos (texture-lighting.ts), once for every layer
+                let lightingViews: LightingCorrectedView[] | undefined;
+                let lightingUnavailable: string | undefined;
+                if (lightingClient && views.length) {
+                    const tl = now();
+                    io.progress(`textures: correcting the lighting of ${views.length} Street View photos with ${lightingModelIds.join(', ')} (detail-locked)`);
+                    try {
+                        const maskFor = context.indices.length ? (k: number) => {
+                            const d = renderFrameDepth(context, views[k].camera), m = new Uint8Array(d.length);
+                            for (let i = 0; i < d.length; i++) m[i] = Number.isFinite(d[i]) && d[i] < 1e8 ? 1 : 0;
+                            return m;
+                        } : undefined;
+                        const r = await correctViewsLighting({ views, client: lightingClient, models: lightingModelIds, ...(maskFor ? { maskFor } : {}), signal: io.signal });
+                        lightingViews = r.corrected;
+                        cache.writeRunNote(runId, 'texture_lighting_views', { models: lightingModelIds, ms: now() - tl, corrected: r.corrected.length, records: r.records });
+                        io.progress(`textures: lighting: ${r.corrected.length} of ${views.length} photos came back as a usable relighting (${Math.round((now() - tl) / 1000)} s)`);
+                        if (!r.corrected.length) lightingUnavailable = `none of the ${views.length} Street View photos came back as a usable relighting (${r.records.find(x => x.reason)?.reason ?? 'no answer'})`;
+                    } catch (err) {
+                        if (isAbort(err) || io.signal.aborted) throw err;
+                        lightingUnavailable = `the lighting correction of the Street View photos failed (${errorMessage(err)})`;
                     }
-                    // temporary structures (SCRATCHBOX_TEXTURE_TEMPORARY=1, or legacy SCRATCHBOX_SURVEY_TEMPORARY=1, only): what the vision model outlines as temporary in front of
-                    // the structure (scaffolding, netting, ...) is taken out of each view's ownership mask, an occluder for the bake
-                    let temporaryKey: string | undefined;
-                    if (views.length && textureTemporaryEnabled() && visionAvailable) {
-                        const tt = now();
-                        const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: io.signal, ...chainExtras('textures'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
-                        const tmp = await maskTemporaryInViews({ views, check: visionTemporaryChecker(chain), target: request.query, signal: io.signal, onProgress: m => io.progress(`textures: ${m}`) });
-                        views = tmp.views;
-                        temporaryKey = `sv-temporary/${TEMPORARY_CHECK_VERSION}:${sha256Bytes(Buffer.from(JSON.stringify(tmp.records.map(r => [r.panoId, r.flagged, r.maskedPixels]))))}`;
-                        cache.writeRunNote(runId, 'texture_temporary', { ms: now() - tt, records: tmp.records });
-                        const flagged = tmp.records.filter(r => r.flagged);
-                        io.progress(`textures: ${flagged.length} of ${tmp.records.length} Street View photos show something temporary in front of the structure${flagged.length ? ` (${flagged.map(r => r.description).filter(Boolean).slice(0, 3).join('; ')}); those regions texture nothing` : ''}`);
-                    }
-                    const viewsUnavailable = arm.streetView === 'off' ? 'Street View is turned off for this build (SCRATCHBOX_TEXTURE_STREET_VIEW=off, an experiment arm)' : images.length ? (views.length ? undefined : `none of the ${images.length} grounding images decoded (${failures[0] ?? ''})`)
-                        : evidence ? `the Street View stage ${evidence.status === 'skipped' ? 'was skipped' : 'returned no image'}` : (visionAvailable ? 'the Street View stage did not run' : 'no vision model is configured, so no Street View close-ups were fetched');
-                    const palette = palettesFromSurvey(run.state.materialHints?.faces);
-                    const bestSample = Math.min(...images.map(i => i.nativeSampleM).filter(v => v > 0), ...(tile && Number.isFinite(tile.texelSizeM) && !views.length ? [tile.texelSizeM] : []));
-                    const cap = deps.textures?.maxDensityTexelsPerMeter ?? 20;
-                    const density = Number.isFinite(bestSample) && bestSample > 0 ? Math.min(cap, 1 / bestSample) : cap;
-                    const residual = evidence?.registration?.afterRmsM;
-                    const poseHash = evidence?.registration ? [
-                        ...[...evidence.registration.corrections.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)),
-                        ...[...(evidence.registration.warps?.entries() ?? [])].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([id, w]) => [id, Array.from(w.dh), Array.from(w.dp)])
-                    ] : [];
-                    const enhance = deps.textures?.enhance;
-                    // the model lighting correction of the Street View photos (texture-lighting.ts), once for every layer: the calls in
-                    // parallel, each answer detail-locked to its photo; which corrected photos a layer uses is that layer's gate
-                    const lightingClient = deps.textures?.lighting;
-                    const lightingModelIds = deps.textures?.lightingModels ?? lightingModels();
-                    let lightingViews: LightingCorrectedView[] | undefined;
-                    let lightingUnavailable: string | undefined;
-                    if (lightingClient && views.length) {
-                        const tl = now();
-                        io.progress(`textures: correcting the lighting of ${views.length} Street View photos with ${lightingModelIds.join(', ')} (detail-locked)`);
+                }
+                // the facade material reading's evidence (opt-in)
+                let materials: MaterialEvidence | undefined;
+                let materialsUnavailable: string | undefined;
+                if (facadeMaterialsEnabled()) {
+                    if (!visionAvailable && !deps.textures?.segment) materialsUnavailable = 'no vision model is configured to segment the photos';
+                    else {
+                        const tm = now();
                         try {
-                            // the subject of each photo: whatever the tile mesh shows there (not the sky), so neither blur reads it
-                            const maskFor = context.indices.length ? (k: number) => {
-                                const d = renderFrameDepth(context, views[k].camera), m = new Uint8Array(d.length);
-                                for (let i = 0; i < d.length; i++) m[i] = Number.isFinite(d[i]) && d[i] < 1e8 ? 1 : 0;
-                                return m;
-                            } : undefined;
-                            const r = await correctViewsLighting({ views, client: lightingClient, models: lightingModelIds, ...(maskFor ? { maskFor } : {}), signal: io.signal });
-                            lightingViews = r.corrected;
-                            cache.writeRunNote(runId, 'texture_lighting_views', { models: lightingModelIds, ms: now() - tl, corrected: r.corrected.length, records: r.records });
-                            io.progress(`textures: lighting: ${r.corrected.length} of ${views.length} photos came back as a usable relighting (${Math.round((now() - tl) / 1000)} s)`);
-                            if (!r.corrected.length) lightingUnavailable = `none of the ${views.length} Street View photos came back as a usable relighting (${r.records.find(x => x.reason)?.reason ?? 'no answer'})`;
+                            materials = await gatherMaterialEvidence({
+                                views, surfaces: fitSurfaces().length ? fitSurfaces() : occluder ? scanFacePlanes(occluder) : [], ...(prepared.tile ? { tile: prepared.tile } : {}), segment: deps.textures?.segment ?? segmenterTool(), signal: io.signal,
+                                onProgress: m => io.progress(`textures: ${m}`)
+                            });
+                            io.progress(`textures: facade material masks: ${materials.views.length} Street View views, ${materials.surfaces.length} tile faces, ${materials.calls} segmentation calls (${materials.failedCalls} failed) in ${((now() - tm) / 1000).toFixed(1)} s`);
+                            if (!materials.views.length && !materials.surfaces.length) { materialsUnavailable = `no mask was read (${materials.unavailable.join('; ') || 'no source'})`; materials = undefined; }
                         } catch (err) {
                             if (isAbort(err) || io.signal.aborted) throw err;
-                            lightingUnavailable = `the lighting correction of the Street View photos failed (${errorMessage(err)})`;
+                            materialsUnavailable = `the masks could not be gathered (${errorMessage(err)})`;
                         }
                     }
-                    // the facade material reading's evidence (opt-in): masks from the Street View views and the tile's fitted faces,
-                    // gathered once for every layer
-                    let materials: MaterialEvidence | undefined;
-                    let materialsUnavailable: string | undefined;
-                    if (facadeMaterialsEnabled()) {
-                        if (!visionAvailable && !deps.textures?.segment) materialsUnavailable = 'no vision model is configured to segment the photos';
-                        else {
-                            const tm = now();
-                            try {
-                                materials = await gatherMaterialEvidence({
-                                    // the fitted faces; a layer set without a fit is read on the scan's own planar faces
-                                    views, surfaces: fitSurfaces().length ? fitSurfaces() : occluder ? scanFacePlanes(occluder) : [], ...(tile ? { tile } : {}), segment: deps.textures?.segment ?? segmenterTool(), signal: io.signal,
-                                    onProgress: m => io.progress(`textures: ${m}`)
-                                });
-                                io.progress(`textures: facade material masks: ${materials.views.length} Street View views, ${materials.surfaces.length} tile faces, ${materials.calls} segmentation calls (${materials.failedCalls} failed) in ${((now() - tm) / 1000).toFixed(1)} s`);
-                                if (!materials.views.length && !materials.surfaces.length) { materialsUnavailable = `no mask was read (${materials.unavailable.join('; ') || 'no source'})`; materials = undefined; }
-                            } catch (err) {
-                                if (isAbort(err) || io.signal.aborted) throw err;
-                                materialsUnavailable = `the masks could not be gathered (${errorMessage(err)})`;
-                            }
-                        }
+                }
+                const materialsKey = materials ? sha256Bytes(Buffer.concat([...materials.views.map(v => Buffer.from(v.mask)), ...materials.surfaces.map(f => Buffer.from(f.mask))])) : facadeMaterialsEnabled() ? 'materials-unavailable' : 'materials-off';
+                const d = densityFor(images.map(i => i.nativeSampleM), prepared, views);
+                const poseHash = evidence?.registration ? [
+                    ...[...evidence.registration.corrections.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)),
+                    ...[...(evidence.registration.warps?.entries() ?? [])].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([id, w]) => [id, Array.from(w.dh), Array.from(w.dp)])
+                ] : [];
+                return {
+                    why: '', src: {
+                        kind: 'street-view', views, prepared, imagesSha: images.map(i => i.sha256), wideSha: wideHeld.map(i => i.sha256), poseHash, ...(evidence?.registration ? { residual: evidence.registration.afterRmsM } : {}),
+                        ...(ownershipKey ? { ownershipKey } : {}), ...(temporaryKey ? { temporaryKey } : {}), ...(lightingViews ? { lightingViews } : {}), ...(lightingUnavailable ? { lightingUnavailable } : {}),
+                        ...(materials ? { materials } : {}), ...(materialsUnavailable ? { materialsUnavailable } : {}), materialsKey, palette: palettesFromSurvey(run.state.materialHints?.faces), density: d.density, nativeBest: d.best
                     }
-                    const materialsKey = materials ? sha256Bytes(Buffer.concat([...materials.views.map(v => Buffer.from(v.mask)), ...materials.surfaces.map(f => Buffer.from(f.mask))])) : facadeMaterialsEnabled() ? 'materials-unavailable' : 'materials-off';
-                    const outcomes: Array<{ layer: StagedLayer; out: Omit<TextureLayerOutcome, 'glb' | 'measureLoo'>; url: string; bytes: number; cached: boolean; builtAtMs: number; surfaces: string; late: boolean }> = [];
-                    // leave-one-pano-out fits, run once every layer is textured (TextureLayerOutcome.measureLoo)
-                    const looJobs = new Map<string, NonNullable<TextureLayerOutcome['measureLoo']>>();
-                    const done = (k: number) => {
-                        run.state.texturePass = {
-                            status: 'running', layersDone: k, layersTotal: targets.length,
-                            ...(outcomes.length ? { rungShares: weightedShares(outcomes.map(o => ({ shares: o.out.rungShares, texels: o.out.atlasTexels }))) } : {}),
-                            message: k < targets.length ? `texturing ${targets[k].layer.layer}` : 'textures ready'
-                        };
-                    };
-                    done(0);
-                    // layers in parallel (TEXTURE_LAYER_CONCURRENCY at once): one layer's projection runs while another waits on
-                    // its image model, so the stage's wall clock is not the sum of every layer's enhancement
-                    const textureOne = async (target: typeof targets[number]) => {
-                        handled.add(target.layer.objectId);
-                        const clay = fs.readFileSync(target.file);
-                        const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces), ...(!(rebuildOut.refit ?? rebuildOut.fit) && views.length ? ['no-fit-held-out-gate/2'] : []), ...(lightingClient ? [`light:${lightingModelIds.join(',')}:${lightingPromptVariant()}:${lightingViews?.length ?? 0}`] : []), ...(arm.key ? [arm.key] : []), ...(ownershipKey ? [ownershipKey] : []), ...(temporaryKey ? [temporaryKey] : []), materialsKey);
-                        const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
-                            const bake = (bakeViews: typeof views, bakeUnavailable: string | undefined) => (texturePool ? texturePool.textureLayer.bind(texturePool) : textureLayer)({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
-                                views: bakeViews, ...(wideViews.length ? { photoTierViews: wideViews } : {}), ...(photoTierEnabled() ? { photoTier: true } : {}), ...(bakeUnavailable ? { viewsUnavailable: bakeUnavailable } : {}), occluder,
-                                ...(materials ? { materials } : {}), ...(materialsUnavailable ? { materialsUnavailable } : {}), ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
-                                delight: { latitude: run.geoAnchor.lat, longitude: run.geoAnchor.lng },
-                                ...(tile ? { tile } : {}), ...(tileUnavailable ? { tileUnavailable } : {}),
-                                ...(residual !== undefined ? { registrationResidualM: residual } : {}),
-                                ...(enhance ? { enhance: { client: enhance, ...(deps.textures?.enhanceModels ? { models: deps.textures.enhanceModels } : {}) } } : { enhanceUnavailable: 'no image model client is configured for it' }),
-                                ...(lightingViews?.length ? { lightingViews } : {}), ...(lightingClient ? { lighting: { client: lightingClient, models: lightingModelIds } } : {}), ...(lightingUnavailable ? { lightingUnavailable } : {}),
-                                palette, densityTexelsPerMeter: density, maxSide: deps.textures?.maxSide ?? 2048, signal: io.signal,
-                                onProgress: m => { io.progress(`textures: ${m}`); run.emit('textures', 'running', { message: m }); }
-                            });
-                            let out = await bake(views, viewsUnavailable);
-                            // the no-fit rung keeps its Street View only where it shows the structure better than the clay does, on
-                            // enough held-out evidence: when fewer than NO_FIT_MIN_SCORED_VIEWS held-out views score the layer, or they find
-                            // its edges no nearer their own than the clay's, the layer is baked again from the tile photo, and says why
-                            const heldOut = out.bundle.fit;
-                            // bake-off arms (SCRATCHBOX_TEXTURE_STREET_VIEW=keep, experiment only): the no-fit rung's Street View is kept without its held-out gate
-                            const noFit = !(rebuildOut.refit ?? rebuildOut.fit) && views.length > 0 && arm.streetView !== 'keep';
-                            const scored = heldOut && typeof heldOut.chamferPx === 'number' && typeof heldOut.clayChamferPx === 'number' ? heldOut : undefined;
-                            const why = !noFit ? undefined
-                                : !scored ? 'no held-out view could score it'
-                                : scored.scoredViews < NO_FIT_MIN_SCORED_VIEWS ? `only ${scored.scoredViews} held-out views scored it (at least ${NO_FIT_MIN_SCORED_VIEWS} are needed to decide)`
-                                : scored.chamferPx! >= scored.clayChamferPx! ? `its held-out edge chamfer ${scored.chamferPx} px is no better than the clay's ${scored.clayChamferPx} px over ${scored.scoredViews} views`
-                                : undefined;
-                            if (why) {
-                                const reason = `Street View aimed at the facades (no fit was accepted) was set aside on ${target.layer.layer}: ${why}, so the layer is textured from the tile photo`;
-                                io.progress(`textures: ${reason}`);
-                                (out as TextureLayerOutcome & { release?: () => void }).release?.();
-                                const again = await bake([], reason);
-                                out = { ...again, degradations: [...again.degradations, { stage: 'projection', reasonCode: 'street_view_set_aside', reason, layerKey: target.layer.layer, fromRung: 1, toRung: 2 }] };
-                            }
-                            fs.writeFileSync(path.join(dir, 'twin.glb'), out.glb);
-                            // a worker's layer keeps its thread for the leave-one-pano-out job; the pool's close ends it if it never runs
-                            const { glb: _glb, measureLoo, release: _release, ...value } = out as TextureLayerOutcome & { release?: () => void };
-                            if (measureLoo) looJobs.set(target.layer.objectId, measureLoo);
-                            return { value };
-                        }, { publish: () => [{ from: 'twin.glb', as: `${base}_${target.layer.layer}_tex_${key.slice(0, 8)}.glb` }], bypass: bypass('textures') });
-                        const pub = entry.published[0];
-                        const prior = outcomes.findIndex(o => o.layer.objectId === target.layer.objectId);
-                        if (prior >= 0) outcomes.splice(prior, 1);
-                        outcomes.push({ layer: target.layer, out: entry.value, url: pub.url, bytes: pub.bytes, cached: entry.cached, builtAtMs: entry.builtAtMs, surfaces: surfacesKey(target.surfaces), late: !!target.late });
-                        // the layer gains its textured variant: same object, clay stays mounted; the viewport crossfades to it (textured is the default material mode)
-                        const current = run.state.layers.find(l => l.objectId === target.layer.objectId) ?? target.layer;
-                        const updated: StagedLayer = {
-                            ...current,
-                            textured: {
-                                url: pub.url, bytes: pub.bytes, ladderRung: entry.value.bundle.ladderRung, rungShares: entry.value.rungShares.map(x => round(x, 4)),
-                                provenance: entry.value.bundle.provenance.map(p => ({ ...p, coverage: round(p.coverage, 4) })), confidenceChannels: CONFIDENCE_CHANNELS,
-                                builtAtMs: entry.builtAtMs, cached: entry.cached
-                            }
-                        };
-                        run.commit(updated, run.layerMeta[current.objectId]);
-                        const k = outcomes.length;
-                        done(k);
-                        run.emit('textures', 'running', { message: `${target.layer.layer} textured`, layers: [updated], progress: Math.min(1, k / targets.length) }, true);
-                    };
-                    // at most TEXTURE_LAYER_CONCURRENCY layers at once, the first targets and the late ones alike, in the order they came
-                    let running = 0;
-                    const waiting: Array<() => void> = [];
-                    const withSlot = async (fn: () => Promise<void>) => {
-                        if (running >= TEXTURE_LAYER_CONCURRENCY) await new Promise<void>(r => waiting.push(r));
-                        running++;
-                        try { await fn(); } finally { running--; waiting.shift()?.(); }
-                    };
-                    const textureAll = (list: typeof targets) => Promise.all(list.map(t => withSlot(() => textureOne(t))));
-                    // a layer the rebuild commits later (photo-read detail, a refit body, figures) is textured as soon as it lands,
-                    // beside the others; once the rebuild settles, each is checked against what the settled scene asks of it
-                    const lateWork: Array<Promise<unknown>> = [];
-                    const takeLate = () => {
-                        const late = pick().map(t => ({ ...t, late: true }));
-                        for (const t of late) handled.add(t.layer.objectId);
-                        if (!late.length) return;
-                        targets.push(...late);
-                        const work = textureAll(late);
-                        work.catch(() => undefined);
-                        lateWork.push(work);
-                    };
-                    const onCommit = (layer: StagedLayer) => { if (request.isolate && !layer.textured && !handled.has(layer.objectId)) takeLate(); };
-                    // the leave-one-pano-out fits (TextureLayerOutcome.measureLoo), one at a time, each layer once: those textured first
-                    // are measured while the rebuild settles (the thread is mostly waiting on the model then), the rest after
-                    // within the stage's own limit (the layers come first): what is left of it, less a margin, is the measurement's
-                    const looDeadline = started + STAGES.textures.budgetMs - TEXTURE_LOO_MARGIN_MS;
-                    const measured = new Set<object>();
-                    const looLane = async () => {
-                        // layers the rectified photo tier wrote come first (their fit is the one in question), then the others in order
-                        const pending = outcomes.filter(o => !measured.has(o));
-                        for (const o of [...pending.filter(x => (x.out.photoTier?.texelShare ?? 0) > 0), ...pending.filter(x => !((x.out.photoTier?.texelShare ?? 0) > 0))]) {
-                            if (measured.has(o) || !outcomes.includes(o)) continue;
-                            measured.add(o);
-                            const job = looJobs.get(o.layer.objectId);
-                            if (!job || !o.out.bundle.fit) continue;
-                            const left = looDeadline - now();
-                            if (left < 10_000) { io.progress(`textures: ${o.layer.layer}: no time left in the stage for the leave-one-pano-out fit`); continue; }
-                            const tl = now();
-                            try {
-                                const { materials: materialsLoo, ...loo } = await job(Math.min(LOO_BUDGET_MS, left));
-                                const materials = o.out.bundle.materials && materialsLoo ? { ...o.out.bundle.materials, loo: materialsLoo } : o.out.bundle.materials;
-                                o.out = { ...o.out, bundle: { ...o.out.bundle, fit: { ...o.out.bundle.fit!, loo }, ...(materials ? { materials } : {}) }, ...(materials ? { materials } : {}), timingsMs: { ...o.out.timingsMs, fitLoo: now() - tl } };
-                                if (materialsLoo) io.progress(`textures: ${o.layer.layer}: facade materials, walls' held-out fit before ${materialsLoo.wallBefore.chamferPx ?? 'n/a'} px / NCC ${materialsLoo.wallBefore.gradNcc ?? 'n/a'}, after ${materialsLoo.wallAfter.chamferPx ?? 'n/a'} px / NCC ${materialsLoo.wallAfter.gradNcc ?? 'n/a'} (${materialsLoo.reason})`);
-                                io.progress(`textures: ${o.layer.layer}: leave-one-pano-out fit over ${loo.panos} panos${loo.sampled ? ` (sampled: ${loo.panos} of ${loo.panosTotal})` : ''}: texture edge chamfer ${loo.chamferPx ?? 'n/a'} px, gradient NCC ${loo.gradNcc ?? 'n/a'}${loo.skipped ? ` (${loo.skipped} panos past the budget)` : ''}`);
-                            } catch (err) {
-                                if (isAbort(err) || io.signal.aborted) throw err;
-                                io.progress(`textures: ${o.layer.layer}: the leave-one-pano-out fit could not be measured (${errorMessage(err)})`);
-                            }
-                            await new Promise(r => setImmediate(r));
-                        }
-                    };
-                    run.commitListeners.add(onCommit);
+                };
+            };
+
+            // ---- one layer, one source set: the bake (cached), published ----
+            const bake = async (target: TexTarget, src: Src, io: StageIO, stage: StageId) => {
+                const clay = fs.readFileSync(target.file);
+                const views = src.views;
+                const { tile, tileUnavailable, tileSha, occluder, context, wideViews } = src.prepared;
+                const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), src.imagesSha, src.wideSha, src.poseHash, tileSha, src.palette, !!enhance, src.density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces), ...(!(rebuildOut.refit ?? rebuildOut.fit) && views.length ? ['no-fit-held-out-gate/2'] : []), ...(lightingClient && views.length ? [`light:${lightingModelIds.join(',')}:${lightingPromptVariant()}:${src.lightingViews?.length ?? 0}`] : []), ...(arm.key ? [arm.key] : []), ...(src.ownershipKey ? [src.ownershipKey] : []), ...(src.temporaryKey ? [src.temporaryKey] : []), src.materialsKey);
+                let loo: NonNullable<TextureLayerOutcome['measureLoo']> | undefined;
+                const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
+                    const run1 = (bakeViews: ProjectionView[], bakeUnavailable: string | undefined) => (texturePool ? texturePool.textureLayer.bind(texturePool) : textureLayer)({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
+                        views: bakeViews, ...(wideViews.length && bakeViews.length ? { photoTierViews: wideViews } : {}), ...(photoTierEnabled() ? { photoTier: true } : {}), ...(bakeUnavailable ? { viewsUnavailable: bakeUnavailable } : {}), occluder,
+                        ...(src.materials ? { materials: src.materials } : {}), ...(src.materialsUnavailable ? { materialsUnavailable: src.materialsUnavailable } : {}), ...(context.indices.length ? { context } : {}), observedSurface: TEXTURE_OBSERVED_SURFACE, poseEdgeGuardShare: TEXTURE_POSE_EDGE_GUARD_SHARE,
+                        delight: { latitude: run.geoAnchor.lat, longitude: run.geoAnchor.lng },
+                        ...(tile ? { tile } : {}), ...(tileUnavailable ? { tileUnavailable } : {}),
+                        ...(src.residual !== undefined ? { registrationResidualM: src.residual } : {}),
+                        ...(enhance ? { enhance: { client: enhance, ...(deps.textures?.enhanceModels ? { models: deps.textures.enhanceModels } : {}) } } : { enhanceUnavailable: 'no image model client is configured for it' }),
+                        ...(src.lightingViews?.length ? { lightingViews: src.lightingViews } : {}), ...(lightingClient && bakeViews.length ? { lighting: { client: lightingClient, models: lightingModelIds } } : {}), ...(src.lightingUnavailable ? { lightingUnavailable: src.lightingUnavailable } : {}),
+                        palette: src.palette, densityTexelsPerMeter: src.density, maxSide: deps.textures?.maxSide ?? 2048, signal: io.signal,
+                        onProgress: m => { io.progress(`textures: ${m}`); progress(m); run.emit(stage, 'running', { message: m }); }
+                    });
+                    let out = await run1(views, src.viewsUnavailable);
+                    // the no-fit rung keeps its Street View only where it shows the structure better than the clay does, on enough
+                    // held-out evidence; otherwise the layer is baked again from the tile photo, and says why
+                    const heldOut = out.bundle.fit;
+                    const noFit = !(rebuildOut.refit ?? rebuildOut.fit) && views.length > 0 && arm.streetView !== 'keep';
+                    const scored = heldOut && typeof heldOut.chamferPx === 'number' && typeof heldOut.clayChamferPx === 'number' ? heldOut : undefined;
+                    const why = !noFit ? undefined
+                        : !scored ? 'no held-out view could score it'
+                        : scored.scoredViews < NO_FIT_MIN_SCORED_VIEWS ? `only ${scored.scoredViews} held-out views scored it (at least ${NO_FIT_MIN_SCORED_VIEWS} are needed to decide)`
+                        : scored.chamferPx! >= scored.clayChamferPx! ? `its held-out edge chamfer ${scored.chamferPx} px is no better than the clay's ${scored.clayChamferPx} px over ${scored.scoredViews} views`
+                        : undefined;
+                    if (why) {
+                        const reason = `Street View aimed at the facades (no fit was accepted) was set aside on ${target.layer.layer}: ${why}, so the layer is textured from the tile photo`;
+                        io.progress(`textures: ${reason}`);
+                        (out as TextureLayerOutcome & { release?: () => void }).release?.();
+                        const again = await run1([], reason);
+                        out = { ...again, degradations: [...again.degradations, { stage: 'projection', reasonCode: 'street_view_set_aside', reason, layerKey: target.layer.layer, fromRung: 1, toRung: 2 }] };
+                    }
+                    fs.writeFileSync(path.join(dir, 'twin.glb'), out.glb);
+                    const { glb: _glb, measureLoo, release: _release, ...value } = out as TextureLayerOutcome & { release?: () => void };
+                    loo = measureLoo;
+                    return { value };
+                }, { publish: () => [{ from: 'twin.glb', as: `${base}_${target.layer.layer}_tex_${key.slice(0, 8)}.glb` }], bypass: bypass('textures') });
+                return { entry, loo };
+            };
+            /** The layer gains (or changes) its textured variant: same object, clay stays mounted; the viewport crossfades to it. */
+            const commitTwin = (target: TexTarget, o: Omit<TexOutcome, 'layer'>, ladderRung: number, provenance: StagedTexturedVariant['provenance'], stage: StageId) => {
+                const prior = outcomes.findIndex(x => x.layer.objectId === target.layer.objectId);
+                if (prior >= 0) outcomes.splice(prior, 1);
+                outcomes.push({ ...o, layer: target.layer });
+                const current = run.state.layers.find(l => l.objectId === target.layer.objectId) ?? target.layer;
+                const updated: StagedLayer = {
+                    ...current,
+                    textured: { url: o.url, bytes: o.bytes, ladderRung, rungShares: o.out.rungShares.map(x => round(x, 4)), provenance: provenance.map(p => ({ ...p, coverage: round(p.coverage, 4) })), confidenceChannels: CONFIDENCE_CHANNELS, builtAtMs: o.builtAtMs, cached: o.cached }
+                };
+                run.commit(updated, run.layerMeta[current.objectId]);
+                progress(`${target.layer.layer} textured`);
+                run.emit(stage, 'running', { message: `${target.layer.layer} textured (${o.sources === 'street-view' ? 'Street View and the tile photo' : o.sources === 'tile-refine' ? "tile_refine's tile photo" : 'the tile photo'})`, layers: [updated], progress: Math.min(1, outcomes.length / Math.max(1, handled.size)) }, true);
+            };
+            const textureWith = async (target: TexTarget, src: Src, io: StageIO, stage: StageId): Promise<'committed' | 'kept'> => {
+                const { entry, loo } = await bake(target, src, io, stage);
+                const sv = (entry.value.rungShares[0] ?? 0) + (entry.value.rungShares[1] ?? 0);
+                const had = outcomes.find(x => x.layer.objectId === target.layer.objectId);
+                if (had) had.streetViewTried = src.kind === 'street-view' || had.streetViewTried;
+                // a Street View bake replaces the tile-photo twin only where it adds texels
+                if (src.kind === 'street-view' && had && had.sources !== 'street-view' && !(sv > 0)) {
+                    const reason = `Street View added no texel to ${target.layer.layer} (its photos do not reach this layer's surface past the ownership and visibility checks), so the twin baked from the tile photo stands`;
+                    extraDegradations.push({ stage: 'projection', reasonCode: 'street_view_no_texels', reason, layerKey: target.layer.layer, fromRung: 0, toRung: 2 });
+                    io.progress(`textures: ${reason}`);
+                    return 'kept';
+                }
+                if (loo) looJobs.set(target.layer.objectId, loo); else looJobs.delete(target.layer.objectId);
+                const pub = entry.published[0];
+                commitTwin(target, { out: entry.value, url: pub.url, bytes: pub.bytes, cached: entry.cached, builtAtMs: entry.builtAtMs, surfaces: surfacesKey(target.surfaces), late: !!target.late, sources: src.kind, streetViewTried: src.kind === 'street-view' }, entry.value.bundle.ladderRung, entry.value.bundle.provenance, stage);
+                return 'committed';
+            };
+            /** A district's twin: tile_refine's own photo-textured remesh (tile-refine-twin.ts). */
+            const textureFromRefine = async (target: TexTarget, stage: StageId) => {
+                const src = refineTextured.get(target.layer.objectId)!;
+                let bytes: Uint8Array = fs.readFileSync(src);
+                // a district staged around a kept structure: its twin loses the structure's footprint as its clay layer did
+                const carvedBy = CARVED_URL.test(target.layer.url) ? FOOTPRINT_REPORTS.get(run)?.footprint : undefined;
+                if (carvedBy) bytes = hideFootprintInGlb(bytes, carvedBy).glb;
+                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes));
+                const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number }>('textures', key, async dir => {
+                    const twin = tileRefineTwin(bytes, target.layer.layer);
+                    fs.writeFileSync(path.join(dir, 'twin.glb'), twin.glb);
+                    return { value: { rungShares: twin.rungShares, provenance: twin.provenance, ladderRung: twin.ladderRung, triangles: twin.triangles } };
+                }, { publish: () => [{ from: 'twin.glb', as: `${base}_${target.layer.layer}_tex_${key.slice(0, 8)}.glb` }], bypass: bypass('textures') });
+                const pub = entry.published[0];
+                const out = {
+                    layerKey: target.layer.layer, rungShares: entry.value.rungShares, atlasTexels: entry.value.triangles, atlas: { width: 0, height: 0, texelsPerMeter: 0 } as unknown as TextureLayerOutcome['atlas'],
+                    // no atlas: the twin keeps each primitive's own UVs into its leaf image
+                    bundle: { layerKey: target.layer.layer, uv: [], ladderRung: entry.value.ladderRung, rungReason: "tile_refine's photo-textured remesh (each primitive's UVs into its leaf tile's image)", provenance: entry.value.provenance } as unknown as TextureLayerOutcome['bundle'],
+                    degradations: [], modelsUsed: [], timingsMs: {}
+                } as unknown as Omit<TextureLayerOutcome, 'glb' | 'measureLoo'>;
+                commitTwin(target, { out, url: pub.url, bytes: pub.bytes, cached: entry.cached, builtAtMs: entry.builtAtMs, surfaces: 'none', late: !!target.late, sources: 'tile-refine' }, entry.value.ladderRung, entry.value.provenance, stage);
+            };
+            // the leave-one-pano-out fits (Street View twins only), one at a time, within the stage's own limit
+            const measured = new Set<object>();
+            const looLane = async (io: StageIO, started: number, budgetMs: number) => {
+                const looDeadline = started + budgetMs - TEXTURE_LOO_MARGIN_MS;
+                const pending = outcomes.filter(o => !measured.has(o));
+                for (const o of [...pending.filter(x => (x.out.photoTier?.texelShare ?? 0) > 0), ...pending.filter(x => !((x.out.photoTier?.texelShare ?? 0) > 0))]) {
+                    if (measured.has(o) || !outcomes.includes(o)) continue;
+                    measured.add(o);
+                    const job = looJobs.get(o.layer.objectId);
+                    if (!job || !o.out.bundle.fit) continue;
+                    looJobs.delete(o.layer.objectId);
+                    const left = looDeadline - now();
+                    if (left < 10_000) { io.progress(`textures: ${o.layer.layer}: no time left in the stage for the leave-one-pano-out fit`); continue; }
+                    const tl = now();
                     try {
-                        await textureAll(targets.slice());
-                        if (request.isolate) {
-                            const early = looLane();
-                            early.catch(() => undefined);
-                            await rebuildPromise.catch(() => undefined);
-                            if (figuresPromise) await (figuresPromise as Promise<unknown>).catch(() => undefined);
-                            // the facade grammar runs beside the rebuild and on a first build often outlasts it (its vision reading):
-                            // its l2g is the layer the scene shows, so the stage keeps listening until the grammar has settled
-                            if (grammarGate.settled) await grammarGate.settled.catch(() => undefined);
-                            run.commitListeners.delete(onCommit);
-                            takeLate();
-                            for (let i = 0; i < lateWork.length; i++) await lateWork[i];
-                            // what the settled scene asks of the layers textured early: a layer another one now hides is not
-                            // textured (unless it is the ground); one textured with charts a later refit replaced is textured again
-                            const live = run.state.layers.filter(l => !l.retired);
-                            const superseded = new Set(live.flatMap(l => l.supersedes));
-                            const redo: typeof targets = [];
-                            for (const o of outcomes.filter(x => x.late)) {
-                                const meta = run.layerMeta[o.layer.objectId];
-                                const current = run.state.layers.find(l => l.objectId === o.layer.objectId);
-                                if (!current || current.retired || (superseded.has(o.layer.objectId) && !meta?.isGround)) {
-                                    outcomes.splice(outcomes.indexOf(o), 1);
-                                    looJobs.delete(o.layer.objectId);
-                                    if (current) { const { textured: _t, ...clay } = current; run.commit(clay, run.layerMeta[current.objectId]); }
-                                    continue;
-                                }
-                                const surfaces = fitSurfaces();
-                                if (surfacesKey(surfaces) !== o.surfaces) {
-                                    const t = targets.find(x => x.layer.objectId === o.layer.objectId)!;
-                                    redo.push({ ...t, surfaces });
-                                }
+                        const { materials: materialsLoo, ...loo } = await job(Math.min(LOO_BUDGET_MS, left));
+                        const materials = o.out.bundle.materials && materialsLoo ? { ...o.out.bundle.materials, loo: materialsLoo } : o.out.bundle.materials;
+                        o.out = { ...o.out, bundle: { ...o.out.bundle, fit: { ...o.out.bundle.fit!, loo }, ...(materials ? { materials } : {}) }, ...(materials ? { materials } : {}), timingsMs: { ...o.out.timingsMs, fitLoo: now() - tl } };
+                        if (materialsLoo) io.progress(`textures: ${o.layer.layer}: facade materials, walls' held-out fit before ${materialsLoo.wallBefore.chamferPx ?? 'n/a'} px / NCC ${materialsLoo.wallBefore.gradNcc ?? 'n/a'}, after ${materialsLoo.wallAfter.chamferPx ?? 'n/a'} px / NCC ${materialsLoo.wallAfter.gradNcc ?? 'n/a'} (${materialsLoo.reason})`);
+                        io.progress(`textures: ${o.layer.layer}: leave-one-pano-out fit over ${loo.panos} panos${loo.sampled ? ` (sampled: ${loo.panos} of ${loo.panosTotal})` : ''}: texture edge chamfer ${loo.chamferPx ?? 'n/a'} px, gradient NCC ${loo.gradNcc ?? 'n/a'}${loo.skipped ? ` (${loo.skipped} panos past the budget)` : ''}`);
+                    } catch (err) {
+                        if (isAbort(err) || io.signal.aborted) throw err;
+                        io.progress(`textures: ${o.layer.layer}: the leave-one-pano-out fit could not be measured (${errorMessage(err)})`);
+                    }
+                    await new Promise(r => setImmediate(r));
+                }
+            };
+            const value = (status: 'running' | 'committed'): TextureStageValue => {
+                const sceneIndex = (id: string) => run.state.layers.findIndex(l => l.objectId === id);
+                const ordered = [...outcomes].sort((a, b) => (a.late === b.late ? sceneIndex(a.layer.objectId) - sceneIndex(b.layer.objectId) : a.late ? 1 : -1));
+                const layers: TextureLayerBundle[] = ordered.map(o => ({ ...o.out.bundle, maps: { albedo: `${o.url}#albedo` }, confidence: `${o.url}#confidence` }));
+                const passDegradations: TexturePassDegradation[] = [...ordered.flatMap(o => o.out.degradations), ...extraDegradations];
+                const timingsMs: Record<string, number> = { total: now() - texStarted, ...Object.fromEntries(Object.entries(mainMs).map(([k, v]) => [`step.${k}`, v])), ...Object.fromEntries(Object.entries(lateMs).map(([k, v]) => [`late.${k}`, v])), ...eventLoopStats(loopDelay), ...(texturePool ? { textureWorkers: texturePool.size } : {}) };
+                for (const o of ordered) for (const [kk, v] of Object.entries(o.out.timingsMs ?? {})) timingsMs[`${o.layer.layer}.${kk}`] = v;
+                const shares = weightedShares(ordered.map(o => ({ shares: o.out.rungShares, texels: o.out.atlasTexels })));
+                run.state.texturePass = { status: status === 'committed' ? 'committed' : 'running', layersDone: ordered.length, layersTotal: Math.max(handled.size, ordered.length), rungShares: shares.map(x => round(x, 4)), message: status === 'committed' ? 'textures ready' : 'texturing the later layers' };
+                const sv = ordered.filter(o => o.sources === 'street-view').length;
+                const record: TexturePassRecord = { passVersion: mode === 'tile-refine' ? TILE_REFINE_TWIN_VERSION : TEXTURE_PASS_VERSION, layers, degradations: passDegradations, timingsMs };
+                return {
+                    record, shares, views: sv ? (svSrc?.views.length ?? 0) : 0, modelsUsed: [...new Set(ordered.flatMap(o => o.out.modelsUsed ?? []))],
+                    layers: ordered.map(o => ({ layer: o.layer.layer, objectId: o.layer.objectId, url: o.url, rungShares: o.out.rungShares, atlasTexels: o.out.atlasTexels, atlas: o.out.atlas, projection: o.out.projection, enhance: o.out.enhance, cached: o.cached })),
+                    ...(tileSrc?.prepared.tileUnavailable ? { tileUnavailable: tileSrc.prepared.tileUnavailable } : {}),
+                    ...(mode === 'tile-refine' ? { viewsUnavailable: 'a district is textured with the tile photo tile_refine carries onto its remesh; Street View is read for an isolated structure only' } : svWhy ? { viewsUnavailable: svWhy } : {}),
+                    ...(mode === 'tile-refine' ? { tileRefine: true } : {})
+                };
+            };
+            let tileSrc: Src | undefined;
+            let tileSrcP: Promise<Src> | undefined;
+            const getTileSrc = async (signal: AbortSignal): Promise<Src> => (tileSrc = await (tileSrcP ??= tileSource(signal)));
+            let svSrc: Src | undefined;
+            let svWhy = '';
+            /** The Street View pass: ready once its sources are; done once every tile-photo twin taken so far was tried with them. */
+            const sv = { ready: false, loopDone: false };
+            const refineWithStreetView = async (target: TexTarget, io: StageIO, stage: StageId) => {
+                if (!svSrc) return;
+                const current = run.state.layers.find(l => l.objectId === target.layer.objectId);
+                if (!current || current.retired) return;
+                await withSlot(() => textureWith({ ...target, surfaces: fitSurfaces().length && target.late ? fitSurfaces() : target.surfaces }, svSrc!, io, stage));
+            };
+
+            texturesPromise = runner.stage<TextureStageValue>({
+                id: 'textures',
+                run: async io => {
+                    const started = now();
+                    const step = timed(mainMs);
+                    const targets = pick();
+                    if (!targets.length) return { status: 'skipped', source: '', reason: 'no committed mesh layer to texture' };
+                    for (const t of targets) handled.add(t.layer.objectId);
+                    if (mode === 'tile-refine') {
+                        await step('tileRefineTwins', () => Promise.all(targets.map(t => withSlot(() => textureFromRefine(t, 'textures')))));
+                        textureValue = value('running');
+                        return { status: 'committed', value: textureValue, layers: outcomes.map(o => run.state.layers.find(l => l.objectId === o.layer.objectId)!).filter(Boolean), source: `${describeTextures(textureValue)}; the twins of later layers follow as they land`, cached: outcomes.every(o => o.cached), breakdownMs: { ...mainMs, total: now() - started } };
+                    }
+                    // the first twins: the tile photo alone
+                    const first = await step('prepareSources', () => getTileSrc(io.signal));
+                    await step('firstLayers', () => Promise.all(targets.map(t => withSlot(() => textureWith(t, first, io, 'textures')))));
+                    mainMs.firstTwin = now() - started;
+                    // then with the Street View close-ups, where they add texels
+                    const got = await step('waitStreetView', () => streetViewSource(io, step));
+                    svWhy = got.why;
+                    if (got.src) {
+                        svSrc = got.src;
+                        sv.ready = true;
+                        await step('streetViewLayers', async () => {
+                            // every layer twinned from the tile photo so far, again until none is left untried (late ones land meanwhile)
+                            for (;;) {
+                                const todo = outcomes.filter(o => o.sources === 'tile' && !o.streetViewTried);
+                                if (!todo.length) break;
+                                for (const o of todo) o.streetViewTried = true;
+                                await Promise.all(todo.map(o => refineWithStreetView({ layer: run.state.layers.find(l => l.objectId === o.layer.objectId) ?? o.layer, file: path.join(cache.modelsDir, path.basename(o.layer.url)), surfaces: o.late ? fitSurfaces() : undefined, late: o.late }, io, 'textures')));
                             }
-                            if (redo.length) await textureAll(redo);
-                            await early;
-                        }
-                    } finally {
-                        run.commitListeners.delete(onCommit);
-                    }
-                    // the layers in a fixed order: the first targets as picked, then the late ones in scene order
-                    const sceneIndex = (id: string) => run.state.layers.findIndex(l => l.objectId === id);
-                    const firstIndex = new Map(targets.filter(t => !t.late).map((t, i) => [t.layer.objectId, i]));
-                    outcomes.sort((a, b) => (a.late === b.late ? (a.late ? sceneIndex(a.layer.objectId) - sceneIndex(b.layer.objectId) : firstIndex.get(a.layer.objectId)! - firstIndex.get(b.layer.objectId)!) : a.late ? 1 : -1));
-                    const passDegradations: TexturePassDegradation[] = outcomes.flatMap(o => o.out.degradations);
-                    await looLane();
-                    const layers: TextureLayerBundle[] = outcomes.map(o => ({ ...o.out.bundle, maps: { albedo: `${o.url}#albedo` }, confidence: `${o.url}#confidence` }));
-                    loopDelay.disable();
-                    const timingsMs: Record<string, number> = { total: now() - started, tileLoad: tileLoadMs, ...eventLoopStats(loopDelay), ...(texturePool ? { textureWorkers: texturePool.size } : {}) };
-                    cache.writeRunNote(runId, 'texture_timings', timingsMs);
-                    io.progress(`textures: main-thread event-loop delay over the stage: p99 ${timingsMs.eventLoopP99Ms} ms, max ${timingsMs.eventLoopMaxMs} ms (${texturePool ? `${texturePool.size} texture worker threads` : 'texture work on the main thread'})`);
-                    for (const o of outcomes) for (const [kk, v] of Object.entries(o.out.timingsMs)) timingsMs[`${o.layer.layer}.${kk}`] = v;
-                    const record: TexturePassRecord = { passVersion: TEXTURE_PASS_VERSION, layers, degradations: passDegradations, timingsMs };
-                    // the held-out fit per layer, kept with the run so rounds can be compared on the same measure
-                    cache.writeRunNote(runId, 'texture_fit', outcomes.map(o => ({ layer: o.layer.layer, fit: o.out.bundle.fit ?? null, ...(o.out.bundle.materials ? { materials: o.out.bundle.materials } : {}), sourceSeam: o.out.sourceSeam ?? null, maskedFill: o.out.maskedFill ?? null, inpaint: o.out.inpaint ?? null, lighting: o.out.lighting ?? null, projection: o.out.projection ? { outputSeam: o.out.projection.outputSeam, context: o.out.projection.context, alignment: o.out.projection.alignment && { nccBefore: o.out.projection.alignment.nccBefore, nccAfter: o.out.projection.alignment.nccAfter }, poseRefine: o.out.projection.poseRefine } : null, rungShares: o.out.rungShares, timingsMs: o.out.timingsMs })));
-                    const shares = weightedShares(outcomes.map(o => ({ shares: o.out.rungShares, texels: o.out.atlasTexels })));
-                    run.state.texturePass = { status: 'committed', layersDone: outcomes.length, layersTotal: targets.length, rungShares: shares.map(x => round(x, 4)), message: 'textures ready' };
-                    textureValue = {
-                        record, shares, views: views.length, modelsUsed: [...new Set(outcomes.flatMap(o => o.out.modelsUsed))],
-                        layers: outcomes.map(o => ({ layer: o.layer.layer, objectId: o.layer.objectId, url: o.url, rungShares: o.out.rungShares, atlasTexels: o.out.atlasTexels, atlas: o.out.atlas, projection: o.out.projection, enhance: o.out.enhance, cached: o.cached })),
-                        tileUnavailable, viewsUnavailable
-                    };
+                        });
+                        await step('looLane', () => looLane(io, started, STAGES.textures.budgetMs));
+                    } else io.progress(`textures: no Street View pass (${svWhy}); the twins baked from the tile photo stand`);
+                    sv.loopDone = true;
+                    textureValue = value('running');
                     return {
-                        status: 'committed', value: textureValue, layers: outcomes.map(o => run.state.layers.find(l => l.objectId === o.layer.objectId)!).filter(Boolean),
-                        source: describeTextures(textureValue), cached: outcomes.every(o => o.cached), builtAtMs: Math.max(...outcomes.map(o => o.builtAtMs)),
-                        breakdownMs: timingsMs
+                        status: 'committed', value: textureValue, layers: outcomes.filter(o => !o.late).map(o => run.state.layers.find(l => l.objectId === o.layer.objectId)!).filter(Boolean),
+                        source: `${describeTextures(textureValue)}; tile-photo twins first, ${svSrc ? 'then Street View where it adds texels' : `no Street View pass (${svWhy})`}`,
+                        cached: outcomes.every(o => o.cached), breakdownMs: { ...mainMs, total: now() - started }
                     };
-                    } finally {
-                        loopDelay.disable();
-                        texturePool?.close();
-                    }
                 },
                 degrade: async err => {
+                    sv.loopDone = true;
                     run.state.texturePass = { status: 'degraded', layersDone: run.state.layers.filter(l => l.textured).length, layersTotal: run.state.layers.filter(l => l.textured).length, message: `the texture pass failed: ${errorMessage(err)}` };
                     return {
                         status: 'degraded', source: 'the layers stay studio grey clay', reason: `the texture pass failed (${errorMessage(err)}); the layers stay clay`,
@@ -1941,10 +2306,106 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         }))]
                     };
                 }
-            }));
+            });
             texturesPromise.catch(() => undefined);
             siblings.push(texturesPromise);
+
+            lateTexturesPromise = runner.stage<TextureStageValue>({
+                id: 'textures-late',
+                run: async io => {
+                    const started = now();
+                    const step = timed(lateMs);
+                    const lateWork: Array<Promise<unknown>> = [];
+                    const textureLate = async (target: TexTarget) => {
+                        let t = target;
+                        if (mode === 'tile-refine') { await withSlot(() => textureFromRefine(t, 'textures-late')); return; }
+                        // a fitted layer is textured with the fit's charts: they are known once the fit stage has returned (it commits its
+                        // layers just before), so the layer is not textured twice
+                        await fitDecided.promise;
+                        t = { ...t, surfaces: fitSurfaces() };
+                        // the first twins' sources (the tile photo) until the Street View ones are ready, then those
+                        const src = sv.ready && svSrc ? svSrc : await getTileSrc(io.signal);
+                        await withSlot(() => textureWith(t, src, io, 'textures-late'));
+                        if (src.kind === 'tile' && sv.ready && sv.loopDone && svSrc) {
+                            const o = outcomes.find(x => x.layer.objectId === t.layer.objectId);
+                            if (o && !o.streetViewTried) { o.streetViewTried = true; await refineWithStreetView(t, io, 'textures-late'); }
+                        }
+                    };
+                    const takeLate = () => {
+                        // the first stage's own targets are not late; it takes them before this stage can (both start together)
+                        const late = pick({ late: true });
+                        for (const t of late) handled.add(t.layer.objectId);
+                        for (const t of late) { const w = textureLate(t); w.catch(() => undefined); lateWork.push(w); }
+                    };
+                    const onCommit = (layer: StagedLayer) => { if (!layer.textured && !handled.has(layer.objectId)) takeLate(); };
+                    run.commitListeners.add(onCommit);
+                    try {
+                        // the first stage takes the layers standing now; this one everything committed from here on
+                        await Promise.resolve();
+                        takeLate();
+                        await step('waitRebuildGrammar', async () => {
+                            await (pass.rebuild ?? Promise.resolve()).catch(() => undefined);
+                            if (figuresPromise) await (figuresPromise as Promise<unknown>).catch(() => undefined);
+                            if (pass.grammar) await pass.grammar.catch(() => undefined);
+                        });
+                        run.commitListeners.delete(onCommit);
+                        takeLate();
+                        // a late layer that could not be textured fails the stage (it degrades to clay, with the reason), after the others settled
+                        let lateError: unknown;
+                        await step('lateLayers', async () => { for (let i = 0; i < lateWork.length; i++) await lateWork[i].catch(err => { lateError ??= err; }); });
+                        if (lateError) throw lateError;
+                        // the first stage's Street View pass may still be running on a late layer
+                        await (texturesPromise ?? Promise.resolve()).catch(() => undefined);
+                        // what the settled scene asks of the layers textured late: a layer another one now hides is not textured (unless
+                        // it is the ground); one textured with charts a later refit replaced is textured again
+                        const live = run.state.layers.filter(l => !l.retired);
+                        const superseded = new Set(live.flatMap(l => l.supersedes));
+                        const redo: TexTarget[] = [];
+                        for (const o of outcomes.filter(x => x.late)) {
+                            const meta = run.layerMeta[o.layer.objectId];
+                            const current = run.state.layers.find(l => l.objectId === o.layer.objectId);
+                            if (!current || current.retired || (superseded.has(o.layer.objectId) && !meta?.isGround)) {
+                                outcomes.splice(outcomes.indexOf(o), 1);
+                                looJobs.delete(o.layer.objectId);
+                                if (current) { const { textured: _t, ...clay } = current; run.commit(clay, run.layerMeta[current.objectId]); }
+                                continue;
+                            }
+                            if (mode === 'texture-pass' && surfacesKey(fitSurfaces()) !== o.surfaces) redo.push({ layer: current, file: path.join(cache.modelsDir, path.basename(current.url)), surfaces: fitSurfaces(), late: true });
+                        }
+                        if (redo.length) { const src = svSrc ?? await getTileSrc(io.signal); await step('redo', () => Promise.all(redo.map(t => withSlot(() => textureWith(t, src, io, 'textures-late'))))); }
+                        if (mode === 'texture-pass') await step('looLane', () => looLane(io, started, STAGES['textures-late'].budgetMs));
+                    } finally {
+                        run.commitListeners.delete(onCommit);
+                    }
+                    if (outcomes.length) textureValue = value('committed');
+                    else run.state.texturePass = { status: 'skipped', layersDone: 0, layersTotal: 0, message: 'no layer was textured' };
+                    cache.writeRunNote(runId, 'texture_timings', { ...Object.fromEntries(Object.entries(mainMs).map(([k, v]) => [`step.${k}`, v])), ...Object.fromEntries(Object.entries(lateMs).map(([k, v]) => [`late.${k}`, v])) });
+                    cache.writeRunNote(runId, 'texture_fit', outcomes.map(o => ({ layer: o.layer.layer, sources: o.sources, fit: o.out.bundle?.fit ?? null, ...(o.out.bundle?.materials ? { materials: o.out.bundle.materials } : {}), sourceSeam: o.out.sourceSeam ?? null, maskedFill: o.out.maskedFill ?? null, inpaint: o.out.inpaint ?? null, lighting: o.out.lighting ?? null, projection: o.out.projection ? { outputSeam: o.out.projection.outputSeam, context: o.out.projection.context, alignment: o.out.projection.alignment && { nccBefore: o.out.projection.alignment.nccBefore, nccAfter: o.out.projection.alignment.nccAfter }, poseRefine: o.out.projection.poseRefine } : null, rungShares: o.out.rungShares, timingsMs: o.out.timingsMs })));
+                    const lateLayers = outcomes.filter(o => o.late);
+                    return {
+                        status: 'committed', ...(textureValue ? { value: textureValue } : {}), layers: lateLayers.map(o => run.state.layers.find(l => l.objectId === o.layer.objectId)!).filter(Boolean),
+                        source: lateLayers.length ? `textured ${lateLayers.map(o => o.layer.layer).join(', ')} as they landed (${lateLayers.map(o => o.sources).filter((x, i, a) => a.indexOf(x) === i).join(', ')})` : 'no later layer needed a twin',
+                        cached: lateLayers.every(o => o.cached), breakdownMs: { ...lateMs, total: now() - started }
+                    };
+                },
+                degrade: async err => ({
+                    status: 'degraded', source: 'the later layers stay studio grey clay', reason: `texturing the later layers failed (${errorMessage(err)})`,
+                    degradations: [run.degrade(record('textures-late', 'texture_late_failed', {
+                        part: { description: 'the real-world textures of the layers committed after the remesh' }, intended: 'photo textures on every later layer', fellTo: 'studio grey clay on those layers',
+                        provenanceAfter: rebuildOut.fit ? PROVENANCE.fitted : PROVENANCE.remeshed, reason: `texturing the later layers failed (${errorMessage(err)})`,
+                        cause: err, transient: true, runId, now: now(), reuses: ['resolve', 'tiles', 'remesh', 'fit', 'evidence']
+                    }))]
+                })
+            });
+            lateTexturesPromise.catch(() => undefined);
+            siblings.push(lateTexturesPromise);
+            void Promise.allSettled([texturesPromise, lateTexturesPromise]).then(() => { loopDelay.disable(); texturePool?.close(); });
         };
+
+        if (structure && !deps.textures?.disabled && textureWorkersEnabled() && !eEligible) {
+            earlyTexturePool = new TextureWorkerPool();
+            earlyTexturePool.warm().catch(() => undefined);
+        }
 
         // ---------------- trees-measure ----------------
         let strip: TileVegetationStripResult | undefined;
@@ -1976,12 +2437,99 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             runner.skip('trees-measure', 'trees were not asked for');
         }
 
+        // ---------------- roads (SB-Roadie: Google's road centrelines measured kerb to kerb on the tree-stripped scan; runs beside the remesh) ----------------
+        let roadsMeasured: RoadSurface[] | undefined;
+        type RoadStageValue = { stats: RoadMesh['stats']; measuredKerbShare: number; photo: { width: number; height: number; texelM: number; ms: number }; markings?: { runs: number; markings: number; dashed: number; solid: number } } | undefined;
+        const roadsPromise: Promise<unknown> = (async () => {
+            if (!sbRoadieEnabled()) { runner.skip('roads', 'SB-Roadie is shelved for now (SCRATCHBOX_STAGED_ROADS=1 to try it)'); return; }
+            const covered = extraction.coveredRadiusM;
+            // the vector evidence the sizing fetched (an isolate), else fetched now for the extraction's cover (a district)
+            let vector = t.vector;
+            if (!vector && deps.vectorEvidence) {
+                try { vector = evidenceLookup(await deps.vectorEvidence({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: covered + 20 }), covered + 20); }
+                catch (err) { if (isAbort(err)) throw err; runner.skip('roads', `no Google vector data (${errorMessage(err)})`); return; }
+            }
+            if (!vector) { runner.skip('roads', t.vectorError ? `no Google vector data (${t.vectorError})` : 'no Google vector data: no service account is configured for vectortiles.featuretiles'); return; }
+            const centrelines = vector.raster.roads.filter(l => l.some(([x, z]) => Math.hypot(x, z) <= covered));
+            if (!centrelines.length) { runner.skip('roads', 'no road centreline from Google vector data runs through the extraction'); return; }
+            await runner.stage<RoadStageValue>({
+                id: 'roads',
+                run: async io => {
+                    const tileForRoads = strip ? strip.devegetatedGlb : extraction.texturedGlb;
+                    const key = stageKey('roads/v5', t.key, strip ? strip.cacheKey : 'scan', crypto.createHash('sha256').update(JSON.stringify(centrelines)).digest('hex').slice(0, 16), covered.toFixed(1), ROAD_SURFACE_PARAMS.liftM);
+                    run.keys.roads = key;
+                    const key8 = key.slice(0, 8);
+                    const entry = await cache.run<RoadStageValue>('roads', key, async dir => {
+                        io.progress(`measuring ${centrelines.length} street${centrelines.length === 1 ? '' : 's'} kerb to kerb on the ${strip ? 'tree-stripped ' : ''}scan`);
+                        // the tree-stripped tile (the trees stage's own output) when the trees were measured: no canopy over the streets
+                        const scan = strip ? loadScanMesh(tileForRoads) : t.scan ?? loadScanMesh(extraction.texturedGlb);
+                        const grid = { ...surfaceModel(scan, 0.5), cellM: 0.5 };
+                        const canopy = !strip && t.canopy ? canopyLookup(t.canopy) : undefined;
+                        // the terrain the scan shows (the walkable street surface): a line whose street stands far above it runs under a roof or deck
+                        const ground = t.ground ?? buildGroundModel(scan, { cellMeters: 1, ...(canopy ? { exclude: canopy } : {}), water: vector!.waterAt, road: vector!.roadAt });
+                        // SB-Veggie comes first: the measured crowns (their stems and mean radii) are kept clear of
+                        const avoid = strip ? ((JSON.parse(fs.readFileSync(strip.crownsJson, 'utf8')) as { crowns?: any[] }).crowns ?? [])
+                            .filter(c => c.status === 'tree' && Array.isArray(c.stem) && Array.isArray(c.sectorRadii))
+                            .map(c => ({ x: Number(c.stem[0]), z: Number(c.stem[1]), radiusM: (c.sectorRadii as number[]).reduce((a, b) => a + b, 0) / 16 })) : [];
+                        const roads = measureRoadSurfaces({
+                            roads: centrelines, grid, within: (x, z) => Math.hypot(x, z) <= covered, ...(canopy ? { exclude: canopy } : {}), buildingAt: vector!.buildingAt, groundAt: ground.groundAt, avoid
+                        });
+                        if (!roads.length) return { value: undefined, inputs: { centrelines: centrelines.length, covered, noRoadResurfaced: true } };
+                        const planar = buildRoadMesh(roads);
+                        const stations = roads.reduce((n, r) => n + r.stations.length, 0);
+                        const measuredKerbShare = stations ? roads.reduce((n, r) => n + r.measuredKerbShare * r.stations.length, 0) / stations : 0;
+                        io.progress(`reading the road surfaces from the tile photo over ${planar.stats.stations} stations`);
+                        const photo = renderTopDownPhoto(fs.readFileSync(tileForRoads), planar.uvFrame, { texelM: 0.1, maxPx: 4096 });
+                        // the surfaces redrawn: tarmac and markings read along each street (cars and shadows do not repeat), lines redrawn crisp
+                        const atlas = synthesizeRoadTextures(roads, photo, planar.uvFrame);
+                        const mesh = buildRoadMesh(roads, ROAD_SURFACE_PARAMS, atlas);
+                        const jpeg = jpegJs.encode({ data: Buffer.from(atlas.rgba.buffer, atlas.rgba.byteOffset, atlas.rgba.byteLength), width: atlas.width, height: atlas.height }, 90).data;
+                        writeRoadsGlb(path.join(dir, 'roads.glb'), mesh, {
+                            stats: mesh.stats, measuredKerbShare, liftM: ROAD_SURFACE_PARAMS.liftM, markings: atlas.stats,
+                            source: 'SB-Roadie: Google vector road centrelines; kerbs, levels and camber measured on the tree-stripped photo tiles; tarmac and lane markings read along each street from the tile photo and redrawn'
+                        }, { jpeg: Buffer.from(jpeg), width: atlas.width, height: atlas.height });
+                        fs.writeFileSync(path.join(dir, 'roads.json'), JSON.stringify({ schema: 'scratchbox.road-surfaces/1', roads }));
+                        return { value: { stats: mesh.stats, measuredKerbShare, photo: { width: atlas.width, height: atlas.height, texelM: photo.texelM, ms: photo.ms }, markings: atlas.stats }, inputs: { centrelines: centrelines.length, covered, tile: path.basename(tileForRoads) } };
+                    }, { publish: (dir, value) => (value ? [{ from: 'roads.glb', as: `${base}_roads_${key8}.glb` }] : []), bypass: bypass('roads') });
+                    run.cacheStatus.roads = entry.cached ? 'hit' : 'miss';
+                    if (!entry.value) {
+                        return { status: 'skipped', source: '', reason: `none of the ${centrelines.length} streets had both kerbs measured on the scan over ${ROAD_SURFACE_PARAMS.minRunLengthM} m, so nothing was resurfaced` };
+                    }
+                    roadsMeasured = (JSON.parse(fs.readFileSync(path.join(entry.dir, 'roads.json'), 'utf8')) as { roads: RoadSurface[] }).roads;
+                    const pub = entry.published[0];
+                    const v = entry.value;
+                    const measured = v.measuredKerbShare >= 0.5;
+                    const layer: StagedLayer = {
+                        objectId: layerObjectId(key, 'l1r'), stage: 'roads', layer: 'l1r', order: STAGES.roads.order, url: pub.url, bytes: pub.bytes,
+                        provenance: {
+                            label: measured ? 'measured' : VECTOR_MODELLED_LABEL, measuredGeometry: measured, confidence: v.measuredKerbShare,
+                            method: 'SB-Roadie: ribbons swept along Google vector road centrelines through levels read low on the tree-stripped photo tiles at stations every 2 m; kerbs where the scan steps up (a default half-width where none shows); the tarmac colour and the lane markings read along each street from the tile photo (what repeats along the road) and redrawn',
+                            sources: [{ kind: 'vector-tiles', id: `roads:${key8}` }, { kind: 'tile-extraction', id: `extract:${t.key.slice(0, 8)}` }],
+                            note: `${v.stats.roads} street runs, ${v.stats.stations} stations; ${v.stats.measuredKerbs} kerbs measured, ${v.stats.defaultKerbs} defaulted; ${v.stats.medians} median stations; ${Math.round(v.stats.sidewalkM)} m of sidewalk; ${Object.values(v.stats.droppedStations).reduce((a, b) => a + b, 0)} stations left out (${v.stats.droppedStations.noKerb} without both kerbs measured, ${v.stats.droppedStations.underTree} under a measured tree, ${v.stats.droppedStations.noSurface} no street surface near the line, ${v.stats.droppedStations.aboveGround} under a roof or deck, ${v.stats.droppedStations.uneven} uneven); ${v.markings ? `${v.markings.markings} lane markings read and redrawn (${v.markings.solid} solid, ${v.markings.dashed} dashed); ` : ''}stands ${ROAD_SURFACE_PARAMS.liftM} m above the scan`
+                        },
+                        provenanceLabels: measured ? ['measured', VECTOR_MODELLED_LABEL] : [VECTOR_MODELLED_LABEL], supersedes: [], revealAfter: [],
+                        reveal: { durationMs: 1500, stagger: 0.3, crossfadeFrom: [] },
+                        cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pub.path)
+                    };
+                    run.commit(layer, { source: 'GoogleVectorRoads', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true, roads: v.stats.roads, measuredKerbShare: v.measuredKerbShare, photo: v.photo } });
+                    return { status: 'committed', source: `${v.stats.roads} streets measured kerb to kerb (${Math.round(100 * v.measuredKerbShare)} % of kerbs found), textured from the tile photo`, layers: [layer], cached: entry.cached };
+                }
+            }).catch(err => {
+                if (err?.name === 'AbortError') throw err;
+                run.emit('roads', 'failed', { reason: errorMessage(err) });
+                return undefined;
+            });
+        })();
+        siblings.push(roadsPromise);
+
         // ---------------- remesh ----------------
         // facade grammar: on by flag, with a vision model, on a relief that runs
         const grammarOn = facadeGrammarEnabled() && !!visionAvailable && (request.relief ?? TILE_REFINE_RELIEF_DEFAULT) !== false;
         let remeshRequest: TileRefineRequest | undefined;
         type RemeshValue = { refined?: TileRefineResult; flattened?: ScanFitFlattenResult; groundLayerId: string; groundFile: string; committed: boolean };
         let eState: { stage: MassingStageResult; refined: TileRefineResult; layer: StagedLayer; key: string; ms: number } | undefined;
+        /** The ownership vote to run after the first isolate commits: what it needs to remesh the same structure again. */
+        let voteLater: { tilePath: string; isolatePick?: string; pick?: { pick: StructurePickResult; ground: GroundModel }; request: TileRefineRequest; orthos: { reliefOrthos?: boolean } } | undefined;
         /** The residual audit of one pipeline E native run, into the build notes (and a degradation when it failed or left clusters unsure). */
         const recordResidualAudit = (stage: StageId, massingRun: MassingRun, layerName: string): string => {
             const a = massingRun.audit;
@@ -2041,12 +2589,26 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         solarNote = `${solar.length} Solar roof facets (imagery ${sr.imageryQuality ?? '?'}, ${sr.imageryDate ?? 'date unknown'})`;
                     } catch (err) { solarNote = `no Solar roof facets (${errorMessage(err)})`; }
                 }
-                const key = stageKey(PIPELINE_E_VERSION, refined.cacheKey, sha256File(tilePath).slice(0, 16), sha256Bytes(Buffer.from(JSON.stringify({ eBuildings, solar }))));
+                const key = stageKey(PIPELINE_E_VERSION, refined.cacheKey, sha256File(tilePath).slice(0, 16), sha256Bytes(Buffer.from(JSON.stringify({ eBuildings, solar }))), ...(shapeMode ? [SHAPE_STAGE_VERSION, shapeMode, request.query.trim()] : []));
                 const dir = path.join(cache.dir, 'pipeline_e', key.slice(0, 24));
                 io.progress('pipeline E: the clean massing, its orthos and the scanned residual');
                 const ground = picked.ground;
                 const scanTop = (x: number, z: number) => { const i = ground.cellIndex(x, z); return i < 0 ? NaN : ground.top[i]; };
-                const r = await runMassingStage({ tilePath, isolateGlb: refined.rawClayGlb, buildings: eBuildings, groundY: picked.pick.groundY, scanTop, cells: picked.pick.cells, solar, outDir: dir, signal: io.signal }, 'remesh', key);
+                let shapeMassing: MassingStageResult['massing'] | undefined;
+                if (shapeMode) {
+                    io.progress(`shape program trial (${shapeMode}): trees out, the height map${shapeMode === 'program' ? ', the program and its fit' : ''}`);
+                    const shapeT0 = now();
+                    const shapeVision = visionAvailable ? new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...chainExtras('remesh'), ...(deps.sleep ? { sleep: deps.sleep } : {}) }) : undefined;
+                    const sr = await runShapeStage({
+                        mode: shapeMode, isolateGlb: refined.rawClayGlb, groundY: picked.pick.groundY, footprintLoops: shapeFootprint.flatMap(b => (b.extruded?.length ? b.extruded.flatMap(p => p.loops) : b.parts.flat())),
+                        ...(strip ? { crownsJson: strip.crownsJson, removedTreesGlb: strip.removedTreesGlb } : {}), scanTop, cells: picked.pick.cells, place: placeValue!.formattedAddress || request.query,
+                        ...(shapeVision ? { vision: shapeVision } : {}), outDir: path.join(dir, 'shape'), signal: io.signal
+                    });
+                    shapeMassing = sr.massing;
+                    cache.writeRunNote(runId, 'shape_program', { mode: shapeMode, ms: now() - shapeT0, timingsMs: sr.timingsMs, notes: sr.notes, trees: sr.trees, scan: sr.scan, files: sr.files, check: sr.massing.check, parts: sr.massing.parts.length, meshes: sr.massing.meshes.length, ...(sr.program ? { program: { model: sr.program.model, elements: sr.program.validated.elements.length, problems: sr.program.problems, parameters: sr.program.parameters, fit: sr.program.fit, correction: sr.program.correction } } : {}) });
+                    io.progress(`shape program trial: ${sr.notes.join('; ')}`);
+                }
+                const r = await runMassingStage({ tilePath, isolateGlb: refined.rawClayGlb, buildings: eBuildings, groundY: picked.pick.groundY, scanTop, cells: picked.pick.cells, solar, outDir: dir, signal: io.signal, ...(shapeMassing ? { massing: shapeMassing } : {}) }, 'remesh', key);
                 cache.writeRunNote(runId, 'pipeline_e', { check: r.massing.check, solar: r.massing.solar, solarNote, notes: r.massing.notes, timingsMs: r.timingsMs, native: r.run ? { timingsMs: r.run.report.timingsMs, snap: r.run.report.snap, residual: r.run.report.residual, faces: r.run.report.faces.length } : undefined });
                 const c = r.massing.check;
                 if (!c.ok || !r.run || !r.files) return fallBack('pipeline_e_fallback', `${c.reason ?? 'the massing could not be built'} (plan IoU ${c.iou}, roof ${c.heightErrMedianM} m off the scan, median; ${c.heightErrP90M} m at the 90th percentile)`);
@@ -2102,6 +2664,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 }
                 io.progress(isolateMode ? 'remeshing the structure' : 'remeshing the district');
                 const tilePath = strip ? strip.devegetatedGlb : extraction.texturedGlb;
+                // where the stage's time goes (the stage summary's breakdownMs)
+                const remeshMs: Record<string, number> = {};
+                const timed = async <R>(k: string, work: () => Promise<R>): Promise<R> => { const t0 = now(); try { return await work(); } finally { remeshMs[k] = (remeshMs[k] ?? 0) + now() - t0; } };
                 // object ownership: outlines of the requested structure in registered views of the tile, voted onto its triangles
                 // the shared structure pick: tile_refine isolates exactly this footprint on this terrain
                 // (picked again, by the same rule at the same seed, on the scan tile_refine is given: with the measured trees
@@ -2113,39 +2678,23 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const bytesKey = crypto.createHash('sha256').update(remeshPick.pick.footprintMask).update(Buffer.from(Float32Array.from(remeshPick.ground.ground).buffer)).update(Buffer.from(Float32Array.from(remeshPick.ground.top).buffer)).digest('hex').slice(0, 16);
                     isolatePick = writeIsolationPick(path.join(path.dirname(tilePath), `structure_pick_${bytesKey}.sbip`), remeshPick.pick, remeshPick.ground);
                 }
-                let ownership: { masksDir: string } | undefined;
-                let ownershipRec: DegradationRecord | undefined;
+                // object ownership: the first isolate is the geometric rules' (footprint and connectivity), shown at once; the multi-view
+                // mask vote (a dozen vision calls, as slow as the slowest) runs afterwards as its own stage and replaces this isolate
+                // only when it changes the structure materially (ownership-change.ts)
                 if (isolateMode && deps.refine.renderOwnershipViews) {
-                    if (!visionAvailable) {
-                        run.note(PROVENANCE.remeshed, 'object ownership: the geometric rules alone (footprint and connectivity) decide what belongs to the structure: no vision model is configured for the multi-view mask vote');
-                    } else {
-                        try {
-                            io.progress('rendering views of the structure for the ownership vote');
-                            const views = await deps.refine.renderOwnershipViews({ tilePath, isolate: true, anchor: { x: structure!.seed.x, z: structure!.seed.z }, ...(isolatePick ? { isolatePick } : {}) });
-                            const masksDir = path.join(views.dir, `masks_${crypto.createHash('sha256').update(request.query.trim()).digest('hex').slice(0, 16)}`);
-                            const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...chainExtras('remesh'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
-                            const seg = await segmentOwnershipViews({ viewsDir: views.dir, masksDir, target: request.query.trim(), chain, concurrency: 6, onProgress: m => io.progress(m) });
-                            if (seg.masks < 2) throw new Error(`only ${seg.masks} of ${seg.views} views got a usable outline (${seg.skipped.slice(0, 3).map(x => `${x.view}: ${x.reason}`).join('; ')})`);
-                            ownership = { masksDir };
-                            run.note(PROVENANCE.remeshed, `object ownership: ${seg.model ?? 'the vision model'} outlined the structure in ${seg.masks} of ${seg.views} views of the tile; the multi-view vote decides the raised triangles near it, the geometric rules the rest`);
-                        } catch (err) {
-                            ownershipRec = run.degrade(record('remesh', 'ownership_vote_unavailable', {
-                                part: { description: 'what belongs to the structure' }, intended: 'object ownership by multi-view mask voting', fellTo: 'the structure as the geometric rules isolate it (footprint and connectivity)',
-                                provenanceAfter: PROVENANCE.remeshed, reason: `the multi-view mask vote could not be made (${errorMessage(err)})`, cause: err, transient: false, runId, now: now()
-                            }));
-                        }
-                    }
+                    if (!visionAvailable) run.note(PROVENANCE.remeshed, 'object ownership: the geometric rules alone (footprint and connectivity) decide what belongs to the structure: no vision model is configured for the multi-view mask vote');
+                    else run.note(PROVENANCE.remeshed, 'object ownership: the geometric rules (footprint and connectivity) decide what belongs to the structure in the first isolate; the multi-view mask vote runs beside the rest of the build and replaces it only when it changes the structure materially');
                 }
                 const reliefOpt = (request.relief ?? TILE_REFINE_RELIEF_DEFAULT) === false ? { relief: false } : {};
                 remeshRequest = {
                     tilePath,
                     ...(isolateMode ? { isolate: true, anchor: { x: structure!.seed.x, z: structure!.seed.z }, ...(isolatePick ? { isolatePick } : {}) } : {}),
-                    ...(ownership ? { ownership } : {}),
                     ...reliefOpt
                 };
                 // the facades' orthophotos for the grammar reading (facade-grammar.ts), only when it will run
                 const orthos = grammarOn ? { reliefOrthos: true } : {};
-                let r = await deps.refine.refine({ ...remeshRequest, ...orthos });
+                if (isolateMode && deps.refine.renderOwnershipViews && visionAvailable) voteLater = { tilePath, ...(isolatePick ? { isolatePick } : {}), ...(remeshPick ? { pick: remeshPick } : {}), request: remeshRequest, orthos };
+                let r = await timed('tileRefine', () => deps.refine.refine({ ...remeshRequest!, ...orthos }));
                 // the isolated structure must be the one picked; when it is not (or tile_refine wrote no isolated scan to
                 // check), the district around it is remeshed whole and shown instead, labelled: never isolated fragments
                 const isolateDegradations: DegradationRecord[] = [];
@@ -2172,7 +2721,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         io.progress('remeshing the district around the structure');
                         let district: TileRefineResult | undefined, districtErr: unknown;
                         const districtRequest: TileRefineRequest = { tilePath, ...reliefOpt };
-                        try { district = await deps.refine.refine({ ...districtRequest, ...orthos }); } catch (err) { districtErr = err; }
+                        try { district = await timed('tileRefineDistrict', () => deps.refine.refine({ ...districtRequest, ...orthos })); } catch (err) { districtErr = err; }
                         // the grammar is read from, and applied to, the remesh that stands
                         if (district) remeshRequest = districtRequest;
                         isolateDegradations.push(run.degrade(record('remesh', 'isolate_mismatch', {
@@ -2221,13 +2770,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     extra: { rawGlbPath: extraction.rawGlbPath ?? extraction.texturedGlb, treesRemoved: Number(strip?.stats?.triangles?.removed ?? 0) > 0 }
                 });
                 run.setGround(layer.objectId);
-                const degradations: DegradationRecord[] = [...(ownershipRec ? [ownershipRec] : []), ...isolateDegradations];
+                const degradations: DegradationRecord[] = [...isolateDegradations];
+                refineTextured.set(layer.objectId, r.texturedGlb);
                 let status: 'committed' | 'degraded' = 'committed';
                 if (degradations.length) status = 'degraded';
                 return {
                     status, value: { refined: r, groundLayerId: layer.objectId, groundFile: r.clayGlb, committed: true },
                     source: `tile_refine: ${layer.counts.triangles.toLocaleString('en-US')} triangles${prov.summary.relief?.carvedVertices ? `, ${prov.summary.relief.carvedVertices} vertices carved by photo relief (photo-inferred)` : ''}`,
-                    layers: [layer], degradations, cached: r.cached, builtAtMs: remembered.builtAtMs
+                    layers: [layer], degradations, cached: r.cached, builtAtMs: remembered.builtAtMs, breakdownMs: remeshMs
                 };
             },
             degrade: async (err, io) => {
@@ -2277,8 +2827,128 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             }
         });
         persist();
-        const remeshed = remesh.status !== 'stopped' && remesh.value?.committed === true ? remesh.value.refined : undefined;
-        const isolateOk = isolateMode && !!remeshed?.rawClayGlb && !run.state.degradations.some(d => d.reasonCode === 'isolate_mismatch');
+        // what this pass built on the remesh is ended when the ownership vote replaces it (Runner.passSignal)
+        let passStop = new AbortController();
+        runner.passSignal = () => passStop.signal;
+        // the remesh the rest of the build stands on: the first isolate, until the ownership vote replaces it (a second pass)
+        let remeshedNow = remesh.status !== 'stopped' && remesh.value?.committed === true ? remesh.value.refined : undefined;
+        let isolateOk = isolateMode && !!remeshedNow?.rawClayGlb && !run.state.degradations.some(d => d.reasonCode === 'isolate_mismatch');
+        let groundOverride: { groundFile: string; groundLayerId: string } | undefined;
+
+        // ---------------- ownership: the multi-view mask vote, run after the first (geometric) isolate is shown ----------------
+        type VoteOutcome = { material: boolean; refined?: TileRefineResult; request: TileRefineRequest; isolateOk: boolean; layer?: StagedLayer };
+        const ownershipRun = async (v: NonNullable<typeof voteLater>): Promise<VoteOutcome | undefined> => {
+            const r = await runner.stage<VoteOutcome>({
+                id: 'ownership',
+                run: async io => {
+                    const msBy: Record<string, number> = {};
+                    const timed = async <R>(k: string, work: () => Promise<R>): Promise<R> => { const t0 = now(); try { return await work(); } finally { msBy[k] = (msBy[k] ?? 0) + now() - t0; } };
+                    const first = remeshedNow;
+                    const firstLayer = currentRemeshLayer(run);
+                    if (!first || !firstLayer) return { status: 'skipped', source: '', reason: 'the remesh committed nothing to compare the vote with' };
+                    const firstWasIsolate = isolateOk;
+                    const notUsed = (reasonCode: string, reason: string, cause?: unknown): StageResult<VoteOutcome> => ({
+                        status: 'degraded', value: { material: false, request: v.request, isolateOk: firstWasIsolate }, source: 'the geometric isolate stands', reason, breakdownMs: msBy,
+                        degradations: [run.degrade(record('ownership', reasonCode, {
+                            part: { description: 'what belongs to the structure' }, intended: 'object ownership by multi-view mask voting', fellTo: 'the structure as the geometric rules isolate it (footprint and connectivity)',
+                            provenanceAfter: PROVENANCE.remeshed, reason, ...(cause ? { cause } : {}), transient: false, runId, now: now()
+                        }))]
+                    });
+                    let masksDir: string, seg: Pick<Awaited<ReturnType<typeof segmentOwnershipViews>>, 'masks' | 'views' | 'skipped' | 'model' | 'cut'>;
+                    // the outlines of an identical earlier vote (the same first isolate, place and models) are read back: a view the
+                    // window cut is not asked again on every repeat
+                    const voteKey = stageKey('ownership-vote/v1', first.cacheKey, request.query.trim(), visionAvailable!.candidates, OWNERSHIP_VOTE_WINDOW_MS);
+                    const voteHit = !bypass('ownership') ? cache.get<{ masksDir: string; masks: number; views: number; model?: string }>('ownership', voteKey) : undefined;
+                    if (voteHit && fs.existsSync(path.join(voteHit.value.masksDir, 'views.txt'))) {
+                        masksDir = voteHit.value.masksDir;
+                        seg = { masks: voteHit.value.masks, views: voteHit.value.views, skipped: [], ...(voteHit.value.model ? { model: voteHit.value.model } : {}) };
+                        run.cacheStatus.ownership = 'hit';
+                    } else try {
+                        io.progress('rendering views of the structure for the ownership vote');
+                        const views = await timed('ownershipViews', () => deps.refine.renderOwnershipViews!({ tilePath: v.tilePath, isolate: true, anchor: { x: structure!.seed.x, z: structure!.seed.z }, ...(v.isolatePick ? { isolatePick: v.isolatePick } : {}) }));
+                        masksDir = path.join(views.dir, `masks_${crypto.createHash('sha256').update(request.query.trim()).digest('hex').slice(0, 16)}`);
+                        // the views not outlined within OWNERSHIP_VOTE_WINDOW_MS are left out (their triangles keep the geometric rules):
+                        // one late call (live: 299 s) must not hold the build's finish
+                        const cut = new AbortController();
+                        const cutTimer = setTimeout(() => cut.abort(Object.assign(new Error(`not outlined within the vote's ${Math.round(OWNERSHIP_VOTE_WINDOW_MS / 1000)} s`), { name: 'TimeoutError' })), OWNERSHIP_VOTE_WINDOW_MS);
+                        const chain = new VisionModelChain<string>({ client: visionAvailable!.client, candidates: visionAvailable!.candidates, signal: ctx.signal ? AbortSignal.any([ctx.signal, cut.signal]) : cut.signal, ...chainExtras('remesh'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                        try {
+                            // 12 at once; from 30 s on the vote goes ahead on a quorum of outlines (OWNERSHIP_VOTE_RULE), the window is the backstop
+                            seg = await timed('ownershipVision', () => segmentOwnershipViews({ viewsDir: views.dir, masksDir, target: request.query.trim(), chain, concurrency: 12, onProgress: m => io.progress(m) }));
+                        } finally {
+                            clearTimeout(cutTimer);
+                        }
+                        if (ctx.signal?.aborted) throw abortError();
+                        if (cut.signal.aborted) io.progress(`ownership vote: ${seg.masks} of ${seg.views} views outlined within ${Math.round(OWNERSHIP_VOTE_WINDOW_MS / 1000)} s; the others are left out`);
+                        if (seg.masks < 2) throw new Error(`only ${seg.masks} of ${seg.views} views got a usable outline (${seg.skipped.slice(0, 3).map(x => `${x.view}: ${x.reason}`).join('; ')})`);
+                        const outlines = { masksDir, masks: seg.masks, views: seg.views, ...(seg.model ? { model: seg.model } : {}) };
+                        await cache.run('ownership', voteKey, async () => ({ value: outlines }), { bypass: true });
+                        run.cacheStatus.ownership = 'miss';
+                    } catch (err) {
+                        if (isAbort(err) || io.signal.aborted) throw err;
+                        return notUsed('ownership_vote_unavailable', `the multi-view mask vote could not be made (${errorMessage(err)}); the geometric isolate stands`, err);
+                    }
+                    const votedRequest: TileRefineRequest = { ...v.request, ownership: { masksDir } };
+                    const voted = await timed('tileRefine', () => deps.refine.refine({ ...votedRequest, ...v.orthos }));
+                    const picked = v.pick?.pick ?? structure!;
+                    const terrain = v.pick?.ground ?? t.ground;
+                    if (!voted.rawClayGlb || !terrain) return notUsed('ownership_vote_not_used', 'tile_refine wrote no voted isolate to check; the geometric isolate stands');
+                    const chk = checkIsolate(voted.rawClayGlb, picked, terrain);
+                    if (!chk.ok) return notUsed('ownership_vote_not_used', `the voted isolate is not the structure picked (${Math.round(chk.recall * 100)}% of the pick covered, ${Math.round(chk.precision * 100)}% of it on the pick, ${Math.round(chk.roofed * 100)}% roofed); the geometric isolate stands`);
+                    // how much the vote moved: compared on the isolates' raw scan triangles (a first isolate that fell back to the district is replaced outright)
+                    const change = firstWasIsolate && first.rawClayGlb ? ownershipChange(first.rawClayGlb, voted.rawClayGlb) : undefined;
+                    const moved = change ? `${round(change.share * 100, 1)}% of the structure's scan surface (${round(change.onlySecondM2, 1)} m² joined, ${round(change.onlyFirstM2, 1)} m² left)` : 'the first isolate had fallen back to the district around the structure';
+                    run.note(PROVENANCE.remeshed, `object ownership: ${seg.model ?? 'the vision model'} outlined the structure in ${seg.masks} of ${seg.views} views of the tile${seg.cut ? ` (${seg.cut.note})` : ''}; the vote moved ${moved}`);
+                    if (change && !change.material) {
+                        return {
+                            status: 'committed', value: { material: false, request: votedRequest, isolateOk: true }, breakdownMs: msBy,
+                            source: `the vote moved ${moved}, under the ${Math.round(OWNERSHIP_MATERIAL_SHARE * 100)}% that would replace the geometric isolate; the first isolate and everything built on it stand (the vote's own remesh is not shown)`
+                        };
+                    }
+                    // material: the voted remesh replaces the first isolate and what was built on it (the rebuild runs again on it)
+                    run.keys.remesh = voted.cacheKey;
+                    const key8 = voted.cacheKey.slice(0, 8);
+                    const remembered = cache.remember('remesh', voted.cacheKey, { clay: voted.clayGlb }, [{ from: voted.clayGlb, as: `${base}_remesh_${key8}.glb` }], { ms: voted.ms });
+                    const pub = remembered.published[0];
+                    const prov = readRemeshProvenance(voted.clayGlb);
+                    const carved = prov.summary.relief?.carvedVertices ?? 0;
+                    const counts = layerCounts(voted.clayGlb);
+                    const reliefShare = carved > 0 && counts.vertices > 0 ? Math.min(1, carved / counts.vertices) : 0;
+                    const builtOnFirst = run.state.layers.filter(l => !l.retired && l.objectId !== firstLayer.objectId && ['grammar', 'fit', 'correct', 'detail', 'figures'].includes(l.stage)).map(l => l.objectId);
+                    const layer: StagedLayer = {
+                        objectId: layerObjectId(voted.cacheKey, 'l2v'), stage: 'ownership', layer: 'l2v', order: STAGES.remesh.order, url: pub.url, bytes: pub.bytes,
+                        provenance: {
+                            label: PROVENANCE.remeshed, measuredGeometry: carved === 0,
+                            ...(carved > 0 ? { confidence: round(1 - reliefShare, 4), inferred: { reliefCarvedVertices: carved, reliefMaxAbsHeightM: prov.summary.relief!.maxAbsHeightM } } : {}),
+                            method: `tile_refine with the multi-view ownership vote: ${seg.model ?? 'the vision model'}'s outlines in ${seg.masks} views decide the raised triangles near the structure, the geometric rules the rest`,
+                            sources: [{ kind: 'stage-output', id: `remesh:${key8}` }], note: `the vote moved ${moved}; it replaces the first isolate and the rebuild runs again on it`
+                        },
+                        provenanceLabels: [PROVENANCE.remeshed, ...((prov.summary.proudBlocks?.keptAsScannedVertices ?? 0) > 0 ? [PROVENANCE.asScanned] : []), ...(carved > 0 ? [PROVENANCE.photoInferred] : [])],
+                        vertexProvenance: prov.summary, supersedes: [firstLayer.objectId, ...builtOnFirst], revealAfter: [],
+                        reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [firstLayer.objectId, ...builtOnFirst] }, cached: voted.cached, builtAtMs: remembered.builtAtMs, counts
+                    };
+                    run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, extra: { rawGlbPath: extraction.rawGlbPath ?? extraction.texturedGlb, treesRemoved: Number(strip?.stats?.triangles?.removed ?? 0) > 0 } });
+                    run.setGround(layer.objectId);
+                    refineTextured.set(layer.objectId, voted.texturedGlb);
+                    // what this pass still has running on the first isolate is set aside: the next pass builds it on the voted remesh
+                    passStop.abort('the ownership vote replaced the first isolate, so this stage runs again on the voted remesh');
+                    run.state.structure = { ...run.state.structure!, isolateIoU: round(chk.iou, 3), isolateAgreement: round(chk.agreement, 3) };
+                    return {
+                        status: 'committed', value: { material: true, refined: voted, request: votedRequest, isolateOk: true, layer }, layers: [layer], breakdownMs: msBy, cached: voted.cached,
+                        source: `the vote moved ${moved} (at least ${Math.round(OWNERSHIP_MATERIAL_SHARE * 100)}%): the voted remesh replaces the first isolate and the rebuild runs again on it`
+                    };
+                },
+                // the vote never fails the build: the geometric isolate stands, and says why
+                degrade: async err => ({
+                    status: 'degraded', value: { material: false, request: v.request, isolateOk }, source: 'the geometric isolate stands', reason: `the ownership vote did not finish (${errorMessage(err)}); the geometric isolate stands`,
+                    degradations: [run.degrade(record('ownership', 'ownership_vote_unavailable', {
+                        part: { description: 'what belongs to the structure' }, intended: 'object ownership by multi-view mask voting', fellTo: 'the structure as the geometric rules isolate it (footprint and connectivity)',
+                        provenanceAfter: PROVENANCE.remeshed, reason: `the ownership vote did not finish (${errorMessage(err)}); the geometric isolate stands`, cause: err, transient: true, runId, now: now()
+                    }))]
+                })
+            });
+            return r.status === 'stopped' ? undefined : r.value;
+        };
 
         // ---------------- pipeline E inference (the grammar stage's slot): roof, bands, windows, bays, fill, straightening, colour ----------------
         const eInferenceRun = async (e: NonNullable<typeof eState>): Promise<{ out: InferenceOutcome; layer: StagedLayer } | undefined> => {
@@ -2329,21 +2999,25 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         return got.views;
                     } : undefined;
                     const enhance = deps.textures?.enhance;
-                    const out = await runInferenceE({
+                    const inferenceInput: Parameters<typeof runInferenceE>[0] = {
                         massing: r.massing, run: r.run!, textures: r.textures!, tilePath: strip ? strip.devegetatedGlb : extraction.texturedGlb, isolateGlb: e.refined.rawClayGlb!,
                         dir: path.join(cache.dir, 'pipeline_e', e.key.slice(0, 24), 'inference'), stage: 'grammar', stageKey: e.key,
                         ...(chain ? { chain } : {}), ...(streetViews ? { streetViews } : {}), structureMesh, crowns,
                         ...(enhance ? { inpaint: { client: enhance, models: [LIGHTING_MODEL_LITE] } } : {}),
                         ...(enhanceOn && visionAvailable ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), locationName: placeValue!.formattedAddress, guards: enhanceGuards(), cacheDir: path.join(cache.dir, 'enhance_plates'), ...(guideViews ? { streetViews: guideViews } : {}) } } : {}),
                         solar: [], anchor: structure!.seed, signal: io.signal, onProgress: m => io.progress(m)
-                    });
+                    };
+                    // version F (experiment, SCRATCHBOX_STAGED_GEOMETRY=f): its procedural geometry in place of E's inference, E's enhanced texturing on it
+                    const out = stagedGeometryF() && visionAvailable
+                        ? await runVersionFEnhanced({ ...inferenceInput, place: placeValue!.formattedAddress, genai: visionAvailable.client })
+                        : await runInferenceE(inferenceInput);
                     cache.writeRunNote(runId, 'pipeline_e_inference', { steps: out.steps, timingsMs: out.timingsMs });
                     recordResidualAudit('grammar', out.run, enhanceOn ? 'enhanced layer' : 'inferred layer');
                     const kept = out.steps.filter(s => s.accepted > 0);
                     const conf = Math.max(0.05, Math.min(1, ...out.grammars.map(g => g.confidence), 0.75));
                     const key8 = e.key.slice(0, 8);
                     // the enhanced layer is published under its own name: it never replaces the plain inferred one
-                    const suffix = enhanceOn ? 'enhanced' : 'inferred';
+                    const suffix = stagedGeometryF() && visionAvailable ? 'versionf' : enhanceOn ? 'enhanced' : 'inferred';
                     const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_${suffix}.glb`);
                     const pubTex = cache.publishFile(out.files.texturedGlb, `${base}_massing_${key8}_${suffix}_tex.glb`);
                     const enh = out.enhanced;
@@ -2482,6 +3156,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
 
         // ---------------- facade grammar (photo-inferred window lattices on the remeshed facades) ----------------
         const grammarRun = async (): Promise<void> => {
+            const remeshed = remeshedNow;
             if (eState) { const inf = await eInferenceRun(eState); await eReliefRun(eState, inf); return; }
             runner.skip('relief', 'the measured relief runs on pipeline E\'s clean massing (SCRATCHBOX_STAGED_PIPELINE=e)');
             if (!grammarOn) {
@@ -2489,9 +3164,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 return;
             }
             const orthosDir = remeshed?.reliefOrthosDir;
-            const l2 = run.state.layers.find(l => l.layer === 'l2' && l.stage === 'remesh');
+            const l2 = currentRemeshLayer(run);
             if (!remeshed || !orthosDir || !remeshRequest || !l2) { runner.skip('grammar', remeshed ? 'the remesh wrote no facade orthophotos' : 'the remesh failed, so there are no remeshed facades to read'); return; }
-            type GrammarValue = { facades: GrammarFacadeOutcome[]; calls: number; passMs: number; footprintsNote?: string; refine?: { cacheKey: string; clayGlb: string; stats: Record<string, any>; ms: number } };
+            type GrammarValue = { facades: GrammarFacadeOutcome[]; calls: number; passMs: number; footprintsNote?: string; refine?: { cacheKey: string; clayGlb: string; texturedGlb?: string; stats: Record<string, any>; ms: number } };
             await runner.stage<GrammarValue>({
                 id: 'grammar',
                 run: async io => {
@@ -2522,7 +3197,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             fs.writeFileSync(path.join(dir, 'grammar.json'), JSON.stringify(pass.accepted, null, 1));
                             io.progress(`relief with ${pass.accepted.length} facade grammar${pass.accepted.length === 1 ? '' : 's'}`);
                             const r = await deps.refine.refine({ ...remeshRequest!, facadeGrammar: file });
-                            value.refine = { cacheKey: r.cacheKey, clayGlb: r.clayGlb, stats: { relief: { grammar: r.stats?.relief?.grammar ?? [], lattices: (r.stats?.relief?.lattices ?? []).filter((l: any) => l.grammar) } }, ms: r.ms };
+                            value.refine = { cacheKey: r.cacheKey, clayGlb: r.clayGlb, texturedGlb: r.texturedGlb, stats: { relief: { grammar: r.stats?.relief?.grammar ?? [], lattices: (r.stats?.relief?.lattices ?? []).filter((l: any) => l.grammar) } }, ms: r.ms };
                         }
                         return { value };
                     }, { bypass: bypass('grammar') });
@@ -2565,6 +3240,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         provenanceLabels: [PROVENANCE.remeshed, PROVENANCE.photoInferred], vertexProvenance: prov.summary, supersedes: [l2.objectId], revealAfter: [l2.objectId],
                         reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [l2.objectId] }, cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(v.refine.clayGlb)
                     };
+                    // tile_refine's photo-textured output of the grammar's relief: a district's twin of l2g (an entry cached before it
+                    // was kept asks tile_refine again, from its own cache)
+                    if (!isolateOk) {
+                        let textured = v.refine.texturedGlb && fs.existsSync(v.refine.texturedGlb) ? v.refine.texturedGlb : undefined;
+                        if (!textured) {
+                            try { textured = (await deps.refine.refine({ ...remeshRequest!, facadeGrammar: path.join(entry.dir, 'grammar.txt') })).texturedGlb; } catch (err) { io.progress(`facade grammar: tile_refine's textured output of l2g could not be had (${errorMessage(err)}); l2g stays clay`); }
+                        }
+                        if (textured) refineTextured.set(layer.objectId, textured);
+                    }
                     run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress });
                     run.note(PROVENANCE.photoInferred, note);
                     return {
@@ -2583,17 +3267,21 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 })
             });
         };
-        const grammarPromise = grammarRun().catch(err => {
-            if (isAbort(err)) throw err;
-            const why = `the facade grammar stopped on an unexpected error (${errorMessage(err)})`;
-            const st = run.summary('grammar').status;
-            if (st === 'pending' || st === 'running') run.emit('grammar', 'degraded', { source: "the relief's own window lattices stand", reason: why, degradations: [] }, true);
-        });
-        grammarGate.settled = grammarPromise;
-        siblings.push(grammarPromise);
+        const startGrammar = (): void => {
+            const grammarPromise = grammarRun().catch(err => {
+                if (isAbort(err)) throw err;
+                const why = `the facade grammar stopped on an unexpected error (${errorMessage(err)})`;
+                const st = run.summary('grammar').status;
+                if (st === 'pending' || st === 'running') run.emit('grammar', 'degraded', { source: "the relief's own window lattices stand", reason: why, degradations: [] }, true);
+            });
+            grammarGate.settled = grammarPromise;
+            siblings.push(grammarPromise);
+        };
+        startGrammar();
 
         // ---------------- trees (plant) ‖ the rebuild ----------------
         const treesRun = async (): Promise<{ trees?: LocationClayTrees; putBack?: { triangles: number; crowns: number; reason: string } }> => {
+            const remeshed = remeshedNow;
             if (!request.trees) { runner.skip('trees', 'trees were not asked for'); return {}; }
             if (!strip) { runner.skip('trees', 'the trees were not measured, so the scan keeps its own'); return {}; }
             if (!remeshed) {
@@ -2617,8 +3305,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         summaryTrees = summarizeTrees(strip!, undefined, { isolate: isolateMode, stripMs: strip!.ms });
                         return { status: 'committed', value: summaryTrees, source: summaryTrees.outcome };
                     }
+                    // SB-Veggie comes first: the trees stand where they were measured; the road stage keeps its ribbons clear of their crowns
+                    const stripForPlant = strip!;
                     io.progress(`growing ${toPlant} SB-Veggie trees to their measured crowns`);
-                    const planted = await plantTrees({ vegetation: deps.vegetation }, strip!, {
+                    const planted = await plantTrees({ vegetation: deps.vegetation }, stripForPlant, {
                         treeTriangleBudget: request.treeTriangleBudget,
                         supportMeshPath: isolateMode ? remeshed.clayGlb : undefined,
                         groundMeshPath: remeshed.clayGlb,
@@ -2729,8 +3419,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
 
         // ---------------- the rebuild (isolated structure) ----------------
         type Rebuild = { figures?: FigureRecord[]; anchored?: AnchorNote[]; located?: DetailPlan; fit?: ScanFitFitResult; refit?: ScanFitFitResult; spec?: OrnamentSpec; rejected?: PrimitiveCorrection[]; detail?: ScanFitOrnamentResult; droppedNotResolvable: number; sourceLimits?: SourceLimits; evidenceCounts?: { tileOrthos: number; streetView: number }; runReadings?: RunReadingReport; registration?: NonNullable<NonNullable<StagedLocationResult['ornament']>['registration']>; slotsOffered?: { offered: number; total: number; hidden: number; unseen: number; exposureJudged: boolean }; passThroughHidden?: PassThroughSplit };
-        const rebuildOut: Rebuild = { droppedNotResolvable: 0 };
-        const rebuildRun = async (): Promise<Rebuild> => {
+        let rebuildOut: Rebuild = { droppedNotResolvable: 0 };
+        // the texture pass's Street View phase waits until the rebuild has decided its close-ups (or that none will come)
+        const rebuildRun = async (): Promise<Rebuild> => { try { return await rebuildChain(); } finally { fitDecided.resolve(); evidenceDecided.resolve(); } };
+        const rebuildChain = async (): Promise<Rebuild> => {
+            const remeshed = remeshedNow;
             const out = rebuildOut;
             const skipRest = (reason: string, from: StageId[] = ['fit', 'evidence', 'project', 'vision', 'correct', 'detail', 'figures']) => {
                 // the Street View fetch may still be running: it is ended as not needed, saying why
@@ -2743,6 +3436,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 skipRest(why);
                 runner.skip('survey', why);
                 runner.skip('textures', 'pipeline E textures its faces from orthographic renders of the tile photo');
+                runner.skip('textures-late', 'pipeline E textures its faces from orthographic renders of the tile photo');
                 return out;
             }
             if (!isolateMode) { skipRest('the structure could not be isolated, so it is shown without a rebuild'); return out; }
@@ -2759,7 +3453,6 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 skipRest('there is no fitted structure to place detail on', ['project', 'vision', 'correct', 'detail', 'figures']);
                 // the remeshed scan is still textured, with Street View aimed at the structure's facades (the no-fit rung)
                 startEvidence(undefined);
-                startTextures();
                 return out;
             }
             // fit: with the building's plan from Google vector data, and its neighbours', when the pick used it
@@ -2849,15 +3542,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // the remeshed scan still gets its textures: Street View aimed at the structure's facades (the no-fit rung: nothing is
                 // read from the images, they are projected onto the remeshed scan), then the tile photo where they do not reach
                 startEvidence(undefined);
-                startTextures();
                 return out;
             }
             out.fit = fitted.value;
+            fitDecided.resolve();
             const fit = fitted.value.value;
             persist();
             if (rebuildPossible && visionAvailable) startEvidence(fit);
             if (rebuildPossible) startFigures(fit, out);
-            startTextures();
 
             // evidence, projection, vision
             if (!visionAvailable) {
@@ -3177,44 +3869,95 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             return out;
         };
         // an unexpected error in the glue between the rebuild's stages degrades what has not run, like any failed stage
-        const rebuildPromise = rebuildRun().catch((err): Rebuild => {
-            if (isAbort(err)) throw err;
-            const why = `the rebuild stopped on an unexpected error (${errorMessage(err)})`;
-            evidenceStop.abort(why);
-            const open = (['fit', 'evidence', 'project', 'vision', 'correct', 'detail', 'figures'] as StageId[]).filter(id => run.summary(id).status === 'pending');
-            const standing = run.state.layers.some(l => l.layer === 'l3b' || l.layer === 'l3br');
-            const rec = run.degrade(record(open[0] ?? 'fit', 'rebuild_failed', {
-                part: { description: standing ? 'the rest of the rebuild' : 'the structure' }, intended: standing ? 'photo-read detail on the fitted structure' : 'a scan-fitted rebuild',
-                fellTo: standing ? 'the fitted faces as built so far' : 'the remeshed scan', provenanceAfter: standing ? PROVENANCE.fitted : PROVENANCE.remeshed,
-                reason: why, cause: err, transient: true, runId, now: now(), reuses: ['resolve', 'tiles', 'trees-measure', 'remesh']
-            }));
-            open.forEach((id, k) => runner.skip(id, why, k === 0 ? [rec] : []));
-            return rebuildOut;
-        });
-        siblings.push(rebuildPromise);
+        let rebuildPromise: Promise<Rebuild> = Promise.resolve(rebuildOut);
+        const startRebuild = (): void => {
+            rebuildPromise = rebuildRun().catch((err): Rebuild => {
+                if (isAbort(err)) throw err;
+                const why = `the rebuild stopped on an unexpected error (${errorMessage(err)})`;
+                evidenceStop.abort(why);
+                const open = (['fit', 'evidence', 'project', 'vision', 'correct', 'detail', 'figures'] as StageId[]).filter(id => run.summary(id).status === 'pending');
+                const standing = run.state.layers.some(l => l.layer === 'l3b' || l.layer === 'l3br');
+                const rec = run.degrade(record(open[0] ?? 'fit', 'rebuild_failed', {
+                    part: { description: standing ? 'the rest of the rebuild' : 'the structure' }, intended: standing ? 'photo-read detail on the fitted structure' : 'a scan-fitted rebuild',
+                    fellTo: standing ? 'the fitted faces as built so far' : 'the remeshed scan', provenanceAfter: standing ? PROVENANCE.fitted : PROVENANCE.remeshed,
+                    reason: why, cause: err, transient: true, runId, now: now(), reuses: ['resolve', 'tiles', 'trees-measure', 'remesh']
+                }));
+                open.forEach((id, k) => runner.skip(id, why, k === 0 ? [rec] : []));
+                return rebuildOut;
+            });
+            siblings.push(rebuildPromise);
+        };
+        startRebuild();
+        // the texture pass starts from the first remesh, beside the rebuild (pipeline E textures its own faces)
+        if (remeshedNow && !eState) startTextures();
 
-        // both branches, and the Street View fetch, are settled before the call goes on: none runs, or rejects unseen, after it
-        const settled = await Promise.allSettled([treesPromise, rebuildPromise, ...(evidencePromise ? [evidencePromise] : []), ...(surveyPromise ? [surveyPromise] : []), ...(figuresPromise ? [figuresPromise] : [])]);
-        // the figures stage starts inside the rebuild, after the line above built its list, so it is awaited here: finishing before it would
-        // stop it ("not started before the run ended") whenever every other stage came from cache
-        const late = await Promise.allSettled(siblings);
-        // the texture pass starts inside the rebuild; a run that never reached it (no isolated structure, no fitter) says why
-        runner.skip('textures', request.isolate ? 'the rebuild did not reach the texture pass (no remeshed, fitted structure)' : 'the texture pass runs on an isolated structure');
-        const failure = [...settled, ...late].find((r): r is PromiseRejectedResult => r.status === 'rejected');
+        // ---------------- ownership (the multi-view mask vote, after the first isolate is shown) ----------------
+        const ownershipPromise = voteLater && isolateMode ? ownershipRun(voteLater) : Promise.resolve(undefined);
+        if (!voteLater) runner.skip('ownership', !isolateMode ? 'not an isolated structure' : !deps.refine.renderOwnershipViews ? 'tile_refine cannot render ownership views in this build' : !visionAvailable ? (deps.vision && 'unavailable' in deps.vision ? deps.vision.unavailable : 'no vision model is configured') : 'the remesh did not run the geometric isolate');
+        ownershipPromise.catch(() => undefined);
+        siblings.push(ownershipPromise);
+
+        /** Every sibling settled, including those a stage started while the others were awaited (figures start inside the rebuild). */
+        const settleAll = async (): Promise<PromiseSettledResult<unknown>[]> => {
+            let seen = 0;
+            const all: PromiseSettledResult<unknown>[] = [];
+            while (seen < siblings.length) {
+                const batch = siblings.slice(seen);
+                seen = siblings.length;
+                all.push(...await Promise.allSettled(batch));
+            }
+            return all;
+        };
+        let results = await settleAll();
+        let failure = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
         if (failure) throw failure.reason;
-        const treesOut = (settled[0] as PromiseFulfilledResult<Awaited<typeof treesPromise>>).value;
-        const rebuild = (settled[1] as PromiseFulfilledResult<Awaited<typeof rebuildPromise>>).value;
+
+        // ---------------- the second pass: the vote changed the structure materially ----------------
+        const vote = await ownershipPromise;
+        if (vote?.material && vote.refined) {
+            const redo: StageId[] = ['grammar', 'relief', 'fit', 'evidence', 'project', 'vision', 'correct', 'detail', 'figures', 'textures', 'textures-late'];
+            const dropped = run.reopen(redo);
+            if (dropped.length) cache.writeRunNote(runId, 'first_pass_degradations', dropped);
+            remeshedNow = vote.refined;
+            remeshRequest = vote.request;
+            isolateOk = vote.isolateOk;
+            groundOverride = { groundFile: vote.refined.clayGlb, groundLayerId: vote.layer!.objectId };
+            passStop = new AbortController();
+            rebuildOut = { droppedNotResolvable: 0 };
+            texturesPromise = undefined;
+            lateTexturesPromise = undefined;
+            textureValue = undefined;
+            evidencePromise = undefined;
+            figuresPromise = undefined;
+            evidenceDecided = deferred<void>();
+            fitDecided = deferred<void>();
+            startGrammar();
+            startRebuild();
+            startTextures();
+            results = await settleAll();
+            failure = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+            if (failure) throw failure.reason;
+        }
+        takeEarlyPool()?.close();
+        // a run that never started the texture pass says why
+        const noTextures = remeshedNow ? 'the texture pass did not start' : 'the remesh failed, so there is no remeshed layer to texture';
+        runner.skip('textures', noTextures);
+        runner.skip('textures-late', noTextures);
+        const treesOut = await treesPromise;
+        const rebuild = await rebuildPromise;
         persist();
 
         // ---------------- finish ----------------
         cache.writeRunNote(runId, 'main_thread', blockTracer.stop());
         return finishRun(run, {
-            request, place: placeValue, extraction, structure, sizedTo: t.sizedTo, remeshed, groundFile: remesh.value?.groundFile, groundLayerId: remesh.value?.groundLayerId ?? run.state.layers.find(l => l.layer === 'l1')?.objectId,
+            request, place: placeValue, extraction, structure, sizedTo: t.sizedTo, remeshed: remeshedNow, groundFile: groundOverride?.groundFile ?? remesh.value?.groundFile, groundLayerId: groundOverride?.groundLayerId ?? remesh.value?.groundLayerId ?? run.state.layers.find(l => l.layer === 'l1')?.objectId,
             trees: treesOut.trees, putBack: treesOut.putBack, rebuild, strip, ...(textureValue ? { textures: textureValue } : {}), now, persist
         });
     } catch (err) {
         // the Street View fetch and the two branches are ended with the call: none is left running, or rejecting unseen, behind it
+        tilesSettle(undefined);
         await Promise.allSettled(siblings);
+        try { takeEarlyPool()?.close(); } catch { /* nothing to free */ }
         if ((err as Error)?.name === 'AbortError') {
             run.state.runState = 'stopped';
             for (const s of run.state.stages) if (s.status === 'running' || s.status === 'pending') s.status = 'stopped';
@@ -3248,7 +3991,7 @@ function commitFitLayers(run: StagedRun, r: ScanFitFitResult, key: string, base:
     const correctedIds = corrected?.ids;
     const out: StagedLayer[] = [];
     const prior = (layer: string) => run.state.layers.filter(l => l.layer === layer).pop();
-    const remesh = run.state.layers.find(l => l.layer === 'l2');
+    const remesh = currentRemeshLayer(run);
     const fitRecord = (label: ProvenanceLabel): ProvenanceRecord => {
         const sources = [{ kind: 'stage-output' as const, id: `fit:${key.slice(0, 8)}` }];
         // a value the photos moved is read from the photos, not measured in the scan: it says so, with the correction's confidence
@@ -3379,7 +4122,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
         p.triangles += l.counts.triangles;
         provenance.set(l.provenance.label, p);
     }
-    const remeshLayer = run.state.layers.find(l => l.layer === 'l2' && l.stage === 'remesh' && l.provenance.label === PROVENANCE.remeshed);
+    const remeshLayer = run.state.layers.filter(l => ((l.layer === 'l2' && l.stage === 'remesh') || l.layer === 'l2v') && l.provenance.label === PROVENANCE.remeshed).pop();
     const byStage = Object.fromEntries(run.state.stages.filter(s => s.timings.ms !== undefined).map(s => [s.stage, s.timings.ms!]));
     // what is said to have been built is what the detail build built and committed as a layer, not what the reading kept
     const detailLayerMounted = visible.some(l => l.layer === 'l4');

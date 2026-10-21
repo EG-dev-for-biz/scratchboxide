@@ -14,6 +14,7 @@
  * script guide is read on demand instead of riding along in every instruction.
  */
 
+import { availableToolNames } from '../src/node/gemini/tool-catalog';
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -96,7 +97,8 @@ describe('3D intent policy', () => {
             for (const prompt of PROMPTS) {
                 const request = { prompt, mode } as GeminiGenerateRequest;
                 const system = await buildSystemInstruction(request);
-                const offered = (buildToolDeclarations(request, registry) || []).flatMap(t => t.functionDeclarations || []).map(d => d.name);
+                // Declared up front or loadable by name through load_tools (tool-catalog.ts).
+                const offered = availableToolNames(buildToolDeclarations(request, registry)).all;
                 const offersTools = ['build_3d_object_from_reference', 'execute_3d_python_script', 'google_3d_tiles_get_clay'].every(n => offered.includes(n));
                 if (mode === 'plan' || mode === 'ask') {
                     expect(offered, `${mode}: ${prompt}`).not.toContain('build_3d_object_from_reference');
@@ -169,7 +171,8 @@ describe('3D intent policy', () => {
     it('says a place comes back remeshed with its measured trees, clay first then its real textures, and reports only what the result contains', () => {
         // google_3d_tiles_get_clay remeshes the tiles and regrows the trees measured in them (trees defaults to true);
         // a tile with no measurable canopy has none, so the model reports the result rather than promising trees.
-        expect(SPATIAL_INTENT_POLICY).toMatch(/A real-world place[^\n]*remeshed, with the trees measured in the tiles regrown in place as SB-Veggie trees; the clay massing shows first and the viewport crossfades to the real textures on its own/);
+        // SB-Roadie road resurfacing is shelved (2026-10-21): a staged place's streets stay the scanned tiles for now
+        expect(SPATIAL_INTENT_POLICY).toMatch(/A real-world place[^\n]*remeshed, with the trees measured in the tiles regrown in place as SB-Veggie trees \(its streets stay the scanned tiles for now: SB-Roadie road resurfacing is shelved\); the clay massing shows first and the viewport crossfades to the real textures on its own/);
         expect(SPATIAL_INTENT_POLICY).toContain('pass trees: false only when the user asks for no trees');
         // textured by default, clay on request; the follow-ups offer a clay view and material refinement, not "add textures"
         expect(SPATIAL_INTENT_POLICY).toContain('New objects and places are textured by default');
@@ -253,7 +256,9 @@ describe('sb script guide', () => {
         const scripted = await buildSystemInstruction({ prompt: 'refactor the login handler', mode: 'agent', activeArtifact: SCRIPT_SCENE } as any);
         expect(SB_PYTHON_SCRIPT_GUIDE.length).toBeGreaterThan(14_000);
         expect(scripted.length - unrelated.length).toBeGreaterThanOrEqual(SB_PYTHON_SCRIPT_GUIDE.length);
-        expect(unrelated.length).toBeLessThan(50_000);
+        // Measured 2026-10-21: 50,144 characters (50,043 on main after the midday-lighting sentence of 4c149bee; the
+        // load_tools line of the tool catalog adds 101). The ceiling guards against the guide coming back, not this.
+        expect(unrelated.length).toBeLessThan(51_000);
     });
 
     it('is served by read_sb_script_guide, offered next to execute_3d_python_script', async () => {

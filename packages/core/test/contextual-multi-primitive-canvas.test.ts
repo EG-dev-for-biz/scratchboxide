@@ -236,6 +236,27 @@ async function runContextualPrimitiveTests() {
 
     const graphFrom3D = morphScene3DToNodeGraph(sceneData1);
     assert.ok(graphFrom3D.nodes && graphFrom3D.nodes.length > 0);
+    // Real decomposition, not a fixed stub: one node per customMesh, plus the
+    // 3 scaffold nodes (camera/environment/renderer) — never a hardcoded count.
+    const expectedMeshCount = sceneData1.customMeshes?.length ?? 0;
+    const meshNodes = graphFrom3D.nodes.filter(n => n.id.startsWith('mesh-'));
+    assert.strictEqual(meshNodes.length, expectedMeshCount,
+        'Node graph should contain exactly one node per scene mesh, not a fixed placeholder count');
+    // Plus camera/environment/renderer scaffold, plus one real node per
+    // operatorStack entry (synthesizeContextual3DScene dispatches operators
+    // internally while building the scene, so this is real edit history, not
+    // a placeholder — see operator-history-dag.test.ts).
+    const expectedOpCount = sceneData1.operatorStack?.length ?? 0;
+    const opNodes = graphFrom3D.nodes.filter(n => n.id.startsWith('op-'));
+    assert.strictEqual(opNodes.length, expectedOpCount,
+        'Node graph should contain exactly one node per real operatorStack entry');
+    assert.strictEqual(graphFrom3D.nodes.length, expectedMeshCount + 3 + expectedOpCount,
+        'Node graph should be mesh nodes plus camera/environment/renderer scaffold plus real operator-history nodes only');
+    const firstMesh = sceneData1.customMeshes![0];
+    const firstMeshNode = graphFrom3D.nodes.find(n => n.id === `mesh-${firstMesh.id}`);
+    assert.ok(firstMeshNode, 'Each scene mesh should produce a corresponding graph node by id');
+    assert.deepStrictEqual(firstMeshNode!.parameters?.position, firstMesh.position,
+        'Mesh node parameters should carry the real mesh position, not a placeholder');
 
     const metricsFrom3D = morphScene3DToMetrics(sceneData1);
     assert.ok(metricsFrom3D.metrics && metricsFrom3D.metrics.length > 0);
@@ -289,3 +310,77 @@ async function runContextualPrimitiveTests() {
 test('contextual-multi-primitive-canvas.test', async () => {
     await runContextualPrimitiveTests();
 }, 180_000);
+
+test('node-graph scene write-back: edit a node, regenerate the real scene', async () => {
+    const scene = synthesizeContextual3DScene('build me a 3d scene of the battle at lexington', {});
+    assert.ok(scene.customMeshes && scene.customMeshes.length > 0, 'fixture scene should have real meshes to edit');
+
+    const graph = morphScene3DToNodeGraph(scene);
+    const targetMesh = scene.customMeshes![0];
+    const targetNode = graph.nodes.find(n => n.id === `mesh-${targetMesh.id}`);
+    assert.ok(targetNode, 'decomposed graph should contain a node for the target mesh');
+
+    // Artist edits the node's position in the graph view.
+    const movedPosition: [number, number, number] = [
+        (targetMesh.position?.[0] ?? 0) + 25,
+        (targetMesh.position?.[1] ?? 0) + 5,
+        (targetMesh.position?.[2] ?? 0) + 25
+    ];
+    targetNode!.parameters = { ...targetNode!.parameters, position: movedPosition };
+
+    const untouchedMesh = scene.customMeshes!.find(m => m.id !== targetMesh.id);
+
+    const regenerated = morphNodeGraphToScene3D(graph, scene);
+
+    const regeneratedTarget = regenerated.customMeshes!.find(m => m.id === targetMesh.id);
+    assert.ok(regeneratedTarget, 'edited mesh should still exist in the regenerated scene');
+    assert.deepStrictEqual(regeneratedTarget!.position, movedPosition,
+        'editing a node parameter should move the real mesh, not synthesize unrelated geometry');
+
+    if (untouchedMesh) {
+        const regeneratedUntouched = regenerated.customMeshes!.find(m => m.id === untouchedMesh.id);
+        assert.ok(regeneratedUntouched, 'meshes not edited in the graph should still be present');
+        assert.deepStrictEqual(regeneratedUntouched!.position, untouchedMesh.position,
+            'editing one node should not perturb other meshes');
+    }
+
+    assert.ok(regenerated.operatorStack && regenerated.operatorStack.some(op => op.operator === 'sb_set_transform'),
+        'write-back should go through the real operator engine, recording history, not a side-door mutation');
+    console.log('  ✓ Node-graph write-back test passed: edited node moved the real mesh via the operator engine.');
+});
+
+test('morphArtifact round-trip: 3d-scene -> node-graph -> 3d-scene carries the base scene automatically', async () => {
+    const scene = synthesizeContextual3DScene('build me a 3d scene of the battle at lexington', {});
+    assert.ok(scene.customMeshes && scene.customMeshes.length > 0, 'fixture scene should have real meshes');
+
+    const sceneArtifact: CanvasArtifact = {
+        id: 'art-scene-1',
+        type: '3d-scene',
+        title: scene.title,
+        summary: scene.subtitle || '',
+        data: scene,
+        createdAt: new Date().toISOString(),
+        version: 1
+    };
+
+    const graphArtifact = morphArtifact(sceneArtifact, 'node-graph');
+    assert.strictEqual(graphArtifact.type, 'node-graph');
+    const graphData = graphArtifact.data as NodeGraphData;
+    assert.strictEqual(graphData.sourceArtifact?.type, '3d-scene',
+        'decomposed graph should remember the scene it came from');
+
+    const targetMesh = scene.customMeshes![0];
+    const targetNode = graphData.nodes.find(n => n.id === `mesh-${targetMesh.id}`);
+    assert.ok(targetNode, 'graph should contain a node for the target mesh');
+    targetNode!.parameters = { ...targetNode!.parameters, position: [99, 1, 99] };
+
+    // Morph back WITHOUT passing a baseScene explicitly — morphArtifact must
+    // recover it from graphData.sourceArtifact on its own.
+    const sceneBackArtifact = morphArtifact(graphArtifact, '3d-scene');
+    const sceneBack = sceneBackArtifact.data as Scene3DData;
+    const movedMesh = sceneBack.customMeshes!.find(m => m.id === targetMesh.id);
+    assert.ok(movedMesh, 'edited mesh should survive the round trip');
+    assert.deepStrictEqual(movedMesh!.position, [99, 1, 99],
+        'morphArtifact should pass the remembered base scene through automatically, giving real write-back, not sphere-ring synthesis');
+    console.log('  ✓ morphArtifact round-trip test passed: sourceArtifact carried the base scene automatically.');
+});

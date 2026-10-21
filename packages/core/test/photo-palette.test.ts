@@ -11,6 +11,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
+import * as path from 'path';
 import * as jpegJs from 'jpeg-js';
 import { measurePalette, paletteOfJpeg, decodeJpegInMemory } from '../src/node/3d-engine/staged-location/photo-palette';
 import { ProColorGradeMatchingService as Colour } from '../src/node/image/ProColorGradeMatchingService';
@@ -37,11 +38,25 @@ describe('measured palette', () => {
     it('recovers the known colours of a synthetic image, with their shares, through a real JPEG decode in memory', () => {
         const img = stripes();
         const jpeg = jpegJs.encode(img, 95).data;
-        const listing = () => new Set([...fs.readdirSync(os.tmpdir()), ...fs.readdirSync(process.cwd())]);
-        const before = listing();
-        const p = paletteOfJpeg(jpeg);
+        // a temp dir of this test's own for the call (os.tmpdir() reads TMPDIR): the suite's other forks write their own
+        // temp files to the shared one at the same time, and those are not this call's
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-photo-palette-'));
+        const sharedTmp = process.env.TMPDIR;
+        process.env.TMPDIR = tmp;
+        let p: ReturnType<typeof paletteOfJpeg>;
+        let created: string[];
+        try {
+            expect(os.tmpdir()).toBe(tmp);
+            const listing = () => new Set([...fs.readdirSync(tmp), ...fs.readdirSync(process.cwd())]);
+            const before = listing();
+            p = paletteOfJpeg(jpeg);
+            created = [...listing()].filter(f => !before.has(f));
+        } finally {
+            if (sharedTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = sharedTmp;
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
         // nothing new on disk (no temp file, no image), nothing spawned (no ffmpeg): the decode and the measurement are in memory
-        expect([...listing()].filter(f => !before.has(f))).toEqual([]);
+        expect(created).toEqual([]);
         expect(p.measuredFromPhoto).toBe(true);
         expect(p.colours.length).toBe(3);
         const near = (truth: number[]) => p.colours.find(c => deltaE(c.srgb, truth) < 3.5);

@@ -18,6 +18,7 @@
  */
 
 import * as React from 'react';
+import { WORK_SWEEP_COLOR, WORK_SWEEP_PERIOD_MS } from './revealMaterial';
 import type { DegradationRecord, StageStatus, StageSummary, StagedBuildState, StagedLayer, StagedTexturePassState } from '../../../../../common/spatial/staged-location-contracts';
 import type { LayerRevealFrame } from './revealScheduler';
 import type { LegendRow } from './provenanceShading';
@@ -64,6 +65,8 @@ export interface StagedBuildOverlayProps {
     showReplaced: boolean;
     onToggleShowReplaced: () => void;
     onReplay: () => void;
+    /** Resume a run that stopped, failed or was interrupted: the chat is asked to call the tool with resumeRunId. */
+    onResume?: () => void;
     onRetry: (record: DegradationRecord) => void;
     onHighlight: (record: DegradationRecord) => void;
     highlightedId?: string;
@@ -157,7 +160,9 @@ const HIDDEN: React.CSSProperties = { position: 'absolute', width: 1, height: 1,
 const HUD_CLEARANCE_PX = 56;
 /** Below this much room under the toolstrip the panel docks beside it instead. */
 const MIN_PANEL_HEIGHT_PX = 180;
-const FOCUS_CSS = '.sb-staged-overlay button:focus-visible{outline:2px solid #56B4E9;outline-offset:2px}';
+const FOCUS_CSS = '.sb-staged-overlay button:focus-visible{outline:2px solid #56B4E9;outline-offset:2px}'
+    // the running stage's bar sweeps at the viewport's work-sweep period (revealMaterial.ts), so the two read as one motion
+    + `@keyframes sb-staged-sweep{from{left:-18%}to{left:100%}}.sb-staged-sweep{position:relative;height:3px;margin-top:6px;border-radius:2px;background:rgba(165,180,252,0.18);overflow:hidden}.sb-staged-sweep>i{position:absolute;top:0;bottom:0;width:18%;border-radius:2px;background:${WORK_SWEEP_COLOR};animation:sb-staged-sweep ${WORK_SWEEP_PERIOD_MS}ms linear infinite}@media (prefers-reduced-motion: reduce){.sb-staged-sweep>i{animation:none;left:0}}`;
 
 function seconds(ms: number | undefined): string {
     if (ms === undefined || !Number.isFinite(ms)) return '';
@@ -316,6 +321,9 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
             {liveProgress?.message || liveProgress?.progress !== undefined
                 ? <div style={{ color: MUTED }}>{[liveProgress.progress !== undefined ? `${Math.round(liveProgress.progress * 100)}%` : '', liveProgress.message ?? ''].filter(Boolean).join(' · ')}</div>
                 : null}
+            {current && current.status === 'running' && !runOver
+                ? <div className="sb-staged-sweep" data-testid="sb-staged-sweep" aria-hidden="true"><i style={{ animationDelay: `${-(Date.now() % WORK_SWEEP_PERIOD_MS)}ms` }} /></div>
+                : null}
             {runOver ? <div style={{ marginTop: 4 }} data-testid="sb-staged-runstate">{runSentence(state, props.interrupted)}</div> : null}
 
             <ul style={{ listStyle: 'none', margin: '8px 0 0', padding: 0, display: 'flex', flexWrap: 'wrap', gap: 4 }} aria-label="Stages">
@@ -398,6 +406,9 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
                 </button>
                 {runOver ? (
                     <>
+                        {props.onResume && (state.runState !== 'finished' || props.interrupted) ? (
+                            <button type="button" className="sb-staged-build-button" style={{ ...BUTTON, background: 'rgba(86,180,233,0.25)', borderColor: '#56B4E9' }} onClick={props.onResume} data-testid="sb-staged-resume" aria-label="Resume the staged build where it stopped">Resume build</button>
+                        ) : null}
                         <button type="button" className="sb-staged-build-button" style={BUTTON} onClick={props.onReplay} data-testid="sb-staged-replay">Replay build</button>
                         <button type="button" className="sb-staged-build-button" style={{ ...BUTTON, ...(props.showReplaced ? { background: 'rgba(255,255,255,0.2)' } : {}) }} aria-pressed={props.showReplaced} onClick={props.onToggleShowReplaced} data-testid="sb-staged-show-replaced">Show replaced layers</button>
                     </>

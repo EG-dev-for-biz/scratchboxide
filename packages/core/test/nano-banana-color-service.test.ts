@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { availableToolNames } from '../src/node/gemini/tool-catalog';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as os from 'os';
 import * as path from 'path';
@@ -405,17 +406,17 @@ describe('Nano Banana Method 2: Two-Step Color Transfer Service', () => {
             expect(prompt).not.toContain('cinematic contrast');
         });
 
-        it('buildToolDeclarations includes the palette application tool on color transfer prompts', () => {
+        it('buildToolDeclarations makes the palette application tool available (loadable by name), not the raw steps', () => {
             const registry = createDefaultToolRegistry();
 
             const configs = buildToolDeclarations({
                 prompt: 'Please extract color palette from reference.jpg and transfer color to target.png using nano banana'
             }, registry);
 
-            const funcDecls = configs?.flatMap(c => c.functionDeclarations || []) || [];
-            expect(funcDecls.some(d => d.name === 'nano_banana_apply_color_palette')).toBe(true);
-            expect(funcDecls.some(d => d.name === 'nano_banana_extract_color_palette')).toBe(false);
-            expect(funcDecls.some(d => d.name === 'nano_banana_transfer_color')).toBe(false);
+            const names = availableToolNames(configs).all;
+            expect(names).toContain('nano_banana_apply_color_palette');
+            expect(names).not.toContain('nano_banana_extract_color_palette');
+            expect(names).not.toContain('nano_banana_transfer_color');
         });
     });
 

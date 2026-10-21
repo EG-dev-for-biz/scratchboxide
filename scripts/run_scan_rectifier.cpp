@@ -51,7 +51,10 @@ static void usage() {
         "                --normal-agree-deg D (15)  --aabb-grow M (1.0)  --max-snap-induced M (0.25)\n"
         "                --split-min-step M (0.15)  --split-min-separation F (0.75)  --no-level-split\n"
         "                --local-orient-radius M (45)  --local-orient-sigma M (15)  --family-lock-deg D (0.3)\n"
-        "  snapping:     --tau-wall M (0.5)  --tau-roof M (0.4)  --tau-corner M (0.7)  --support-grow M (0.7)\n"
+        "  inclined:     --no-inclined-regions  --min-inclined-area M2 (10)  --inclined-az-snap-deg D (3)\n"
+        "                --pitch-snap-deg D (3)  --pitch-consensus-radius M (30)  --pitch-window-deg D (4)\n"
+        "                --inclined-max-explained F (0.5)\n"
+        "  snapping:     --tau-wall M (0.5)  --tau-roof M (0.4)  --tau-inclined M (0.4)  --tau-corner M (0.7)  --support-grow M (0.7)\n"
         "                --full-strength F (0.6)  --max-disp M (0.75)  --dead-band M (0.05)  --foreign-snap  --no-snap\n"
         "  tiers:        --tier-roof-tol M (0.4)  --tier-parapet-tol M (0.3)  --tier-min-area M2 (20)  --no-tiers\n"
         "                --tier-bandwidth M (0.06)  --tier-merge M (0.12)\n"
@@ -75,6 +78,7 @@ static void usage() {
         "                --no-relief-protection (framed panels are snapped at their own level unless this is set)\n"
         "                --no-sheets  --sheet-min-relief M (0.08)  --sheet-max-angle D (4)  --sheet-flat-spread M (0.08)  --sheet-min-area M2 (3)\n"
         "                --sheet-max-width M (3)  --sheet-ring-width M (3)  --sheet-ring-all-samples  --sheet-min-main-relief M (0.1)  --sheet-min-aspect F (3)\n"
+        "                --no-proud-blocks (also snap blocks standing off a wall on their own risers)  --proud-block-min-relief M (0.08)\n"
         "  facing:       --foreign-facing-dot F (-0.5)  --keep-unlevelable-roofs  --tier-local-radius M (6)  --tier-local-min-area M2 (8)\n"
         "  opposed:      --no-opposed  --opposed-zero-passes N (1)  --opposed-escalate  --opposed-max-gap M (1.5)  --opposed-keep-fraction F (0.5)  --opposed-keep-min M (0.05)  --fold-deg D (165; 0 = off)\n"
         "  slivers:      --drop-collapsed (flag collapsing bevels 2 instead of keeping a sliver)  --collapse-keep-width M (0.002)  --collapse-max-nudge M (0.02)\n"
@@ -202,6 +206,14 @@ int main(int argc, char** argv) {
         else if (a == "--plumb-snap-deg") p.plumbSnapDeg = num("--plumb-snap-deg");
         else if (a == "--min-wall-area") p.minWallArea = num("--min-wall-area");
         else if (a == "--min-roof-area") p.minRoofArea = num("--min-roof-area");
+        else if (a == "--no-inclined-regions") p.inclinedRegions = false;
+        else if (a == "--min-inclined-area") p.minInclinedArea = num("--min-inclined-area");
+        else if (a == "--inclined-az-snap-deg") p.inclinedAzimuthSnapDeg = num("--inclined-az-snap-deg");
+        else if (a == "--pitch-snap-deg") p.pitchSnapDeg = num("--pitch-snap-deg");
+        else if (a == "--pitch-consensus-radius") p.pitchConsensusRadius = num("--pitch-consensus-radius");
+        else if (a == "--pitch-window-deg") p.pitchConsensusWindowDeg = num("--pitch-window-deg");
+        else if (a == "--tau-inclined") p.tauInclined = num("--tau-inclined");
+        else if (a == "--inclined-max-explained") p.inclinedMaxExplainedShare = num("--inclined-max-explained");
         else if (a == "--max-rms") p.maxRegionRms = num("--max-rms");
         else if (a == "--normal-agree-deg") p.normalAgreementDeg = num("--normal-agree-deg");
         else if (a == "--aabb-grow") p.regionAabbGrow = num("--aabb-grow");
@@ -227,6 +239,8 @@ int main(int argc, char** argv) {
         else if (a == "--collapse-from") p.collapseFromArea = num("--collapse-from");
         else if (a == "--collapse-to") p.collapseToArea = num("--collapse-to");
         else if (a == "--no-sheets") p.extractSheets = false;
+        else if (a == "--no-proud-blocks") p.proudBlockMinRelief = 0;
+        else if (a == "--proud-block-min-relief") p.proudBlockMinRelief = num("--proud-block-min-relief");
         else if (a == "--relief-min-step") p.reliefMinStep = num("--relief-min-step");
         else if (a == "--relief-panel-max-width") p.reliefPanelMaxWidth = num("--relief-panel-max-width");
         else if (a == "--relief-panel-min-height") p.reliefPanelMinHeight = num("--relief-panel-min-height");

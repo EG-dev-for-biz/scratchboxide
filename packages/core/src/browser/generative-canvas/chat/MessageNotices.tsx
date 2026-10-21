@@ -43,6 +43,7 @@ export function describeModelProvenance(p: ModelAnswerProvenance): ProvenanceDes
         notices.push(`Answered with the ${CREDENTIAL_LABEL['api-key']} — ${p.credentialNote}`);
     }
     for (const note of p.helperNotes || []) notices.push(note);
+    if (p.routing) notices.push(`Routing: ${p.routing}`);
     return {
         label: `Answered by ${p.modelUsed} · ${CREDENTIAL_LABEL[p.credential]}`,
         notice: notices.length > 0 ? notices.join('. ') : undefined

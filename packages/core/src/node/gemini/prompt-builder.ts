@@ -20,6 +20,7 @@ import { isReadOnlyMode } from './tool-permissions';
 import { OBJECT_BUILD_SOURCE, type BuiltObjectRecord } from '../../common/spatial/object-build-spec';
 import { stagedBuildContext } from '../3d-engine/staged-location/staged-summary';
 import { SB_API_SUMMARY } from '../3d-engine/sb-api.generated';
+import { toolOfferMode } from './tool-catalog';
 
 /** Workspace-intelligence services the system instruction draws context from. */
 export interface PromptContextServices {
@@ -412,12 +413,12 @@ export const SPATIAL_INTENT_POLICY = `
 Decide from the meaning of the request, not from particular words, which case applies, then call that tool:
 - One specific object or an abstract form (a single prop, vehicle, creature, character, piece of furniture, sculpture or artifact) with no real place: call build_3d_object_from_reference with the request in the user's words plus any details from the conversation (and dimensionsHintMeters when they give a size). It draws an internal reference, reads it into a build spec and builds that one object natively.
 - An imagined environment, a landscape, or a scene of several objects (anything that is neither one object nor a real place): write an sb Python script and run it with execute_3d_python_script. Call read_sb_script_guide before writing the script unless its rules ("WRITING SB PYTHON SCRIPTS") are already in these instructions.
-- A real-world place (landmark, building, street, district, address or coordinates) and nothing else to build: call google_3d_tiles_get_clay with the place as query. It geocodes the place with Google Places and stages its Google 3D Tiles remeshed, with the trees measured in the tiles regrown in place as SB-Veggie trees; the clay massing shows first and the viewport crossfades to the real textures on its own as the background texture pass finishes them (pass trees: false only when the user asks for no trees); tell the user the address it resolved and what its result says it contains, nothing more. Pass isolate: true when the user wants one building or structure rather than the area around it, and radiusMeters when they give an extent. Use google_3d_tiles_get_full_texture only when they ask for photo texture.
+- A real-world place (landmark, building, street, district, address or coordinates) and nothing else to build: call google_3d_tiles_get_clay with the place as query. It geocodes the place with Google Places and stages its Google 3D Tiles remeshed, with the trees measured in the tiles regrown in place as SB-Veggie trees (its streets stay the scanned tiles for now: SB-Roadie road resurfacing is shelved); the clay massing shows first and the viewport crossfades to the real textures on its own as the background texture pass finishes them (pass trees: false only when the user asks for no trees); tell the user the address it resolved and what its result says it contains, nothing more. Pass isolate: true when the user wants one building or structure rather than the area around it, and radiusMeters when they give an extent. Use google_3d_tiles_get_full_texture only when they ask for photo texture.
 - One object at a real-world place: call build_3d_object_from_reference with location set to the place and placement set to where the object stands relative to the place's geocoded anchor (metres east and north of it, and the compass heading its front faces), worked out from what the user said, such as in front of an entrance or across a square. The anchor is often the middle of a building, so an object meant to stand beside it needs an offset. When the active scene already shows that place (google_3d_tiles_get_clay staged it, or objects were built there), pass addToActiveScene: true so the object joins that scene instead of the place being staged again.
 - Several objects at a real-world place: call build_3d_object_from_reference once per object, each with the same location and its own placement. While the active scene is an object build staged at that location, each call adds its object beside the objects already there. Leave room for each object's whole size: a placement under a tree crown or on top of another object fails before anything is built, and an object that would pass through a crown, a trunk, another object or a wall fails after its build; both name spots where it fits, and the second returns the spec to rebuild there with specJson.
 Never supply coordinates from memory: pass the place name or address (or coordinates the user gave) and let the tool geocode it. Do not build real places with scripts.
 To change an object that build_3d_object_from_reference built (its shape or size, or a base or plinth under it, added as parts), call build_3d_object_from_reference again with specJson set to that object's spec with the change made, and, when it stands at a place, with the same location and placement (or a new placement to move it) and replaceObjectId set to its id; that rebuilds the spec as given, keeps it where it stood, and draws no new reference. A scene a script built is changed by running the edited script with execute_3d_python_script, which opens the result as a new scene.
-New objects and places are textured by default (their own materials; a staged place shows clay first and crossfades to its real textures when they are ready) with studio lighting and no ground. Use studio grey clay only when the user asks for it (renderMode "clay", the staged build's "Show clay", or a clay-only tool such as the clay blockout runner); a clay choice stays until the user asks for textures again. After building one, offer follow-ups in two groups instead of doing them: staging and environments (a real-world place, a plinth or cyclorama, atmosphere and sun position, or the studio void), then views and material refinement (a clay view for reviewing the shape; changing a part's colour, roughness, metalness or other material values with sb_set_material_pbr through scene_3d_dispatch_operators, or rebuilding with adjusted materials; 2DGS surfels; 3DGS splats). Offer pbr_synthesize_material only when the user asks for procedural texture maps: its maps come out as uniform procedural noise, so it is not a follow-up to suggest after a build.
+New objects and places are textured by default (their own materials; a staged place shows clay first and crossfades to its real textures when they are ready) with studio lighting and no ground. A sky, atmosphere or clouds are added only when the request asks for them; when it does without naming a time of day, light it as a clear midday (atmosphere_configure_scene with preset "midday", and clouds when asked for), not golden hour or dusk. Use studio grey clay only when the user asks for it (renderMode "clay", the staged build's "Show clay", or a clay-only tool such as the clay blockout runner); a clay choice stays until the user asks for textures again. After building one, offer follow-ups in two groups instead of doing them: staging and environments (a real-world place, a plinth or cyclorama, atmosphere and sun position, or the studio void), then views and material refinement (a clay view for reviewing the shape; changing a part's colour, roughness, metalness or other material values with sb_set_material_pbr through scene_3d_dispatch_operators, or rebuilding with adjusted materials; 2DGS surfels; 3DGS splats). Offer pbr_synthesize_material only when the user asks for procedural texture maps: its maps come out as uniform procedural noise, so it is not a follow-up to suggest after a build.
 When one of these tools fails, report its error; do not substitute another tool's output.`;
 
 /**
@@ -617,9 +618,28 @@ export function scriptingInPlay(request: Pick<GeminiGenerateRequest, 'activeArti
 }
 
 /**
- * Construct rich system instruction injecting Canvas Primitives, active Superpowers, and schemas.
+ * The system instruction in two parts. `stable` holds what is the same on every turn of a workspace and mode (persona,
+ * project instructions, knowledge, skills, memories, tool guide, capabilities, 3D policy), so it is byte-identical
+ * across turns and the model's prompt cache can reuse it with the tool declarations after it. `turnContext` holds what
+ * changes per request (attached skills and MCP tools, symbols matched to the prompt, workspace exemplars, diagnostics,
+ * recent diffs, the script guide while a script-built scene is open); the chat sends it with the request in the
+ * contents, after the cached prefix.
+ */
+export interface SystemInstructionParts {
+    stable: string;
+    turnContext: string;
+}
+
+/**
+ * Construct rich system instruction injecting Canvas Primitives, active Superpowers, and schemas: the stable part
+ * followed by this request's context (see buildSystemInstructionParts).
  */
 export async function buildSystemInstruction(request: GeminiGenerateRequest, services: Partial<PromptContextServices> = {}): Promise<string> {
+    const { stable, turnContext } = await buildSystemInstructionParts(request, services);
+    return turnContext ? `${stable}\n\n${turnContext}` : stable;
+}
+
+export async function buildSystemInstructionParts(request: GeminiGenerateRequest, services: Partial<PromptContextServices> = {}): Promise<SystemInstructionParts> {
     const isAgent = request.mode === 'agent';
     const isPlan = request.mode === 'plan';
     const isAsk = request.mode === 'ask';
@@ -787,7 +807,8 @@ ${CANVAS_PRIMITIVES_SPECIFICATION}
     let workspaceToolsSection = '';
     if (request.enableWorkspaceTools !== false) {
         workspaceToolsSection = `\n\n### NATIVE WORKSPACE TOOLS & AUTONOMOUS REACT ENVIRONMENT:
-You have direct, sandboxed function-calling access to the developer's workspace and terminal.
+You have direct, sandboxed function-calling access to the developer's workspace and terminal.${toolOfferMode() === 'catalog' ? `
+Tools not yet declared are listed in load_tools: load the ones a task needs by name, then call them.` : ''}
 Available workspace tools:
 - mount_canvas_primitive: Declaratively mount an interactive visual canvas primitive on the stage (3D scene, live code sandbox, kanban board, markdown document, or node graph).
 - ask_user_question: Ask the user a structured multiple-choice question with answer options, radio/checkboxes, and an optional recommended path when requirements are ambiguous.
@@ -858,13 +879,16 @@ If a task needs a capability that is not available natively (e.g. neural image-t
 
     // The 3D intent policy goes to every prompt in a mode that offers the 3D tools (Plan and Ask offer only read-only
     // tools, the same test the tool registry applies); the script guide only while a script-built scene is worked on.
-    const spatialSection = isReadOnlyMode(request.mode) ? '' : SPATIAL_INTENT_POLICY + (scriptingInPlay(request) ? SB_PYTHON_SCRIPT_GUIDE : '');
+    const spatialSection = isReadOnlyMode(request.mode) ? '' : SPATIAL_INTENT_POLICY;
+    const scriptGuideSection = !isReadOnlyMode(request.mode) && scriptingInPlay(request) ? SB_PYTHON_SCRIPT_GUIDE : '';
 
     const closingInstruction = isCodingMode
         ? '\n\nDeliver concise, technically rigorous responses with clear reasoning and tool-driven progress.'
         : '\n\nDeliver insightful, Cupertino-grade results. Output a friendly intro explanation followed by the complete ```json codeblock.';
 
-    return `${basePersona}${projectInstructionsSection}${workingMethodSection}${projectKnowledgeSection}${skillIndexSection}${superpowersSection}${mcpSection}${contextGraphSection}${patternMatchingSection}${lspDiagnosticSection}${diffMemorySection}${memoriesSection}${workspaceToolsSection}${nativeCapabilitiesSection}${spatialSection}${closingInstruction}`;
+    const stable = `${basePersona}${projectInstructionsSection}${workingMethodSection}${projectKnowledgeSection}${skillIndexSection}${memoriesSection}${workspaceToolsSection}${nativeCapabilitiesSection}${spatialSection}${closingInstruction}`;
+    const turnContext = `${superpowersSection}${mcpSection}${contextGraphSection}${patternMatchingSection}${lspDiagnosticSection}${diffMemorySection}${scriptGuideSection}`.trim();
+    return { stable, turnContext };
 }
 
 /**

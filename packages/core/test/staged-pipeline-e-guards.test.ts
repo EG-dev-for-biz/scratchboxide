@@ -322,7 +322,7 @@ describe('enhanced mode: the Street View photo', () => {
         expect(stagedEnhance({} as NodeJS.ProcessEnv)).toBe(true);
         expect(stagedEnhance({ SCRATCHBOX_STAGED_ENHANCE: '0' } as NodeJS.ProcessEnv)).toBe(false);
         const { stagedPipelineE } = await import('../src/node/3d-engine/staged-location/pipeline-e/pipeline-e');
-        expect(stagedPipelineE({} as NodeJS.ProcessEnv)).toBe(false);
+        expect(stagedPipelineE({} as NodeJS.ProcessEnv)).toBe(true);
     });
 
     it('aims a street-level view of the same pano at the lower storeys', async () => {

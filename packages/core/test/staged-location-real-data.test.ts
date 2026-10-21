@@ -124,7 +124,7 @@ describe.skipIf(!cp.requirement.ok || !cp.data?.plant)(withReason('Central Park 
         const serverMs = Date.now() - t0;
         expect(validateContract('StagedLocationResult', result)).toEqual([]);
         expect(result.status).toBe('complete');
-        expect(s.events.filter(x => x.e.status === 'committed' && x.e.stage !== 'finish').map(x => x.e.stage)).toEqual(['resolve', 'tiles', 'trees-measure', 'remesh', 'trees']);
+        expect(s.events.filter(x => x.e.status === 'committed' && x.e.stage !== 'finish' && x.e.stage !== 'terrain' && x.e.stage !== 'textures' && x.e.stage !== 'textures-late').map(x => x.e.stage)).toEqual(['resolve', 'tiles', 'trees-measure', 'remesh', 'trees']);
         for (const stage of ['fit', 'evidence', 'project', 'vision', 'correct', 'detail']) {
             expect(result.stages.find(x => x.stage === stage), stage).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/not an isolated structure/) });
         }
