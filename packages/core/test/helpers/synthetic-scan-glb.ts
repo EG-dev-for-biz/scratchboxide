@@ -115,7 +115,9 @@ export function readGlb(file: string): Glb {
                 for (const p of m.primitives) {
                     if (p.attributes[name] === undefined) continue;
                     const acc = json.accessors[p.attributes[name]], view = json.bufferViews[acc.bufferView];
-                    out.push(new Float32Array(bin.buffer.slice(bin.byteOffset + (view.byteOffset ?? 0), bin.byteOffset + (view.byteOffset ?? 0) + acc.count * 4)));
+                    const components = ({ SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 } as Record<string, number>)[acc.type] ?? 1;
+                    const start = bin.byteOffset + (view.byteOffset ?? 0) + (acc.byteOffset ?? 0);
+                    out.push(new Float32Array(bin.buffer.slice(start, start + acc.count * components * 4)));
                 }
             return out;
         }

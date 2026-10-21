@@ -30,8 +30,10 @@ import {
     undistortCameraPoint,
     circleOfConfusionMm,
     circleOfConfusionPx,
-    frameHeightOnSensorMm
+    frameHeightOnSensorMm,
+    MAX_BLUR_RADIUS_FRAME_FRACTION
 } from '../src/browser/generative-canvas/primitives/scene3d/viewportOptics';
+import { focalLengthForFov } from '../src/browser/generative-canvas/primitives/scene3d/cameraSettings';
 import { computeBrownConradyUV, LENS_DISTORTION_SHADER } from '../src/browser/generative-canvas/services/optics/LensDistortionEffect';
 import { CINEMATIC_BOKEH_SHADER } from '../src/browser/generative-canvas/services/optics/CinematicBokehPass';
 import { VfxPlateMatchmoveService } from '../src/browser/generative-canvas/services/video/VfxPlateMatchmoveService';
@@ -173,6 +175,22 @@ describe('depth of field: thin-lens circle of confusion', () => {
         const fov = 2 * Math.atan(12 / 50) * 180 / Math.PI;
         expect(frameHeightOnSensorMm(50, fov)).toBeCloseTo(24, 10);
         expect(circleOfConfusionPx(50, 2, 5, 10, fov, 1080)).toBeCloseTo(circleOfConfusionMm(50, 2, 5, 10) / 24 * 1080, 10);
+    });
+
+    it('the first-pass default lens (135 mm, f/2) reads as visibly shallow on a typical staged shot, unlike the old one (an auto-derived ~29 mm lens)', () => {
+        // a typical staged shot: an 8 m foreground subject, open country/skyline 30 m behind it, at the scene's usual 45 deg FOV
+        const fovDeg = 45, heightPx = 1080, focusM = 8, backgroundM = 30;
+        const defaultBlurPx = circleOfConfusionPx(135, 2, focusM, backgroundM, fovDeg, heightPx) / 2;
+        // visibly shallow: a background several pixels soft, not sub-pixel
+        expect(defaultBlurPx).toBeGreaterThan(3);
+        // still well inside the renderer's own blur-radius ceiling (never relies on it being clamped to look shallow)
+        expect(defaultBlurPx).toBeLessThan(0.5 * MAX_BLUR_RADIUS_FRAME_FRACTION * heightPx);
+        // the lens this replaced (no explicit focalLengthMm: derived from the scene's own FOV on an assumed 36 x 24 mm sensor)
+        // stayed close to deep focus at any f-stop - this is the actual bug, not just a smaller number
+        const derivedMm = focalLengthForFov(fovDeg, 24);
+        const oldBlurPx = circleOfConfusionPx(derivedMm, 2.8, focusM, backgroundM, fovDeg, heightPx) / 2;
+        expect(oldBlurPx).toBeLessThan(1.5);
+        expect(defaultBlurPx).toBeGreaterThan(oldBlurPx * 3);
     });
 
     it('the bokeh shader computes the same diameter; the viewport passes radius = diameter / 2 (uBokehScale 0.5)', () => {

@@ -87,7 +87,7 @@ import { buildRoadMesh, measureRoadSurfaces, sbRoadieEnabled, writeRoadsGlb, ROA
 import { renderTopDownPhoto } from './top-down-photo';
 import { synthesizeRoadTextures } from './road-texture';
 import * as jpegJs from 'jpeg-js';
-import { TERRAIN_INNER_RADIUS_M, TERRAIN_INNER_STEP_M, TERRAIN_OUTER_STEP_M, TERRAIN_RADIUS_M, buildTerrainMesh, planTerrainGrid, writeTerrainGlb } from './terrain-surround';
+import { TERRAIN_INNER_RADIUS_M, TERRAIN_INNER_STEP_M, TERRAIN_OUTER_STEP_M, TERRAIN_RADIUS_M, buildTerrainMesh, coverageHoleFromGlb, planTerrainGrid, terrainHeroGapM, writeTerrainGlb } from './terrain-surround';
 import { readGlbScene, renderFrameDepth, sceneToRenderMesh } from '../../spatial/StreetViewPoseRegistrar';
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
 import { StageCache, sha256File, stageKey, stagedReplyCache, type CachedStage } from './stage-cache';
@@ -1431,17 +1431,20 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 id: 'terrain',
                 run: async io => {
                     const origin: GeodeticOrigin = { lat: placeValue!.lat, lng: placeValue!.lng, heightMeters: extraction.originEllipsoidalHeightM };
-                    const holeRadiusM = Math.max(0, extraction.coveredRadiusM - TERRAIN_INNER_STEP_M / 2);
-                    const key = stageKey('terrain/v1', origin.lat.toFixed(6), origin.lng.toFixed(6), origin.heightMeters.toFixed(2), TERRAIN_RADIUS_M, TERRAIN_INNER_RADIUS_M, TERRAIN_INNER_STEP_M, TERRAIN_OUTER_STEP_M, Math.round(holeRadiusM));
+                    // the hole is the ground the tiles actually occupy (their vertices, not a disc) plus a clear gap, so the
+                    // two ground surfaces never share a patch and fight there
+                    const heroGapM = terrainHeroGapM();
+                    const key = stageKey('terrain/v2', origin.lat.toFixed(6), origin.lng.toFixed(6), origin.heightMeters.toFixed(2), TERRAIN_RADIUS_M, TERRAIN_INNER_RADIUS_M, TERRAIN_INNER_STEP_M, TERRAIN_OUTER_STEP_M, t.key.slice(0, 16), heroGapM);
                     run.keys.terrain = key;
                     const key8 = key.slice(0, 8);
-                    const entry = await cache.run<{ minY: number; maxY: number; samples: number; holeTriangles: number }>('terrain', key, async dir => {
+                    const entry = await cache.run<{ minY: number; maxY: number; samples: number; holeTriangles: number; hole: Record<string, number | string> }>('terrain', key, async dir => {
+                        const hole = coverageHoleFromGlb(extraction.geometryGlb, { gapM: heroGapM });
                         const plan = planTerrainGrid(origin);
                         io.progress(`measuring the ground at ${plan.points.length.toLocaleString('en-US')} points out to ${TERRAIN_RADIUS_M / 1000} km`);
                         const heights = await elevation.sample(plan.points, io.signal);
-                        const mesh = buildTerrainMesh(origin, plan, heights, holeRadiusM);
-                        writeTerrainGlb(path.join(dir, 'terrain.glb'), mesh, { radiusM: TERRAIN_RADIUS_M, holeRadiusM, samples: plan.points.length, source: 'Google Elevation API (EGM96)' });
-                        return { value: { minY: mesh.minY, maxY: mesh.maxY, samples: plan.points.length, holeTriangles: mesh.holeTriangles }, inputs: { origin, radiusM: TERRAIN_RADIUS_M, holeRadiusM } };
+                        const mesh = buildTerrainMesh(origin, plan, heights, hole);
+                        writeTerrainGlb(path.join(dir, 'terrain.glb'), mesh, { radiusM: TERRAIN_RADIUS_M, hole: hole.describe(), heroGapM, samples: plan.points.length, source: 'Google Elevation API (EGM96)' });
+                        return { value: { minY: mesh.minY, maxY: mesh.maxY, samples: plan.points.length, holeTriangles: mesh.holeTriangles, hole: hole.describe() }, inputs: { origin, radiusM: TERRAIN_RADIUS_M, heroGapM, tiles: t.key } };
                     }, { publish: () => [{ from: 'terrain.glb', as: `${base}_terrain_${key8}.glb` }], bypass: bypass('terrain') });
                     run.cacheStatus.terrain = entry.cached ? 'hit' : 'miss';
                     const pub = entry.published[0];
@@ -1457,7 +1460,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         reveal: { durationMs: 1200, stagger: 0.4, crossfadeFrom: [] },
                         cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pub.path)
                     };
-                    run.commit(layer, { source: 'GoogleElevation', resolvedAddress: placeValue!.formattedAddress, extra: { terrainRadiusM: TERRAIN_RADIUS_M, holeRadiusM, samples: entry.value.samples } });
+                    run.commit(layer, { source: 'GoogleElevation', resolvedAddress: placeValue!.formattedAddress, extra: { terrainRadiusM: TERRAIN_RADIUS_M, heroGapM, hole: entry.value.hole, samples: entry.value.samples } });
                     return { status: 'committed', source: `Google Elevation API: ${entry.value.samples.toLocaleString('en-US')} heights out to ${TERRAIN_RADIUS_M / 1000} km`, layers: [layer], cached: entry.cached, builtAtMs: entry.builtAtMs };
                 }
             }).catch(err => { if (err?.name === 'AbortError') throw err; run.emit('terrain', 'failed', { reason: errorMessage(err) }); return undefined; }));

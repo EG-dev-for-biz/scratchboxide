@@ -69,7 +69,7 @@ export function buildHeadlessAtmosphere(options: Partial<AtmosphericScatteringCo
         volumetricClouds: options.volumetricClouds ?? false,
         cloudCoverage: options.cloudCoverage ?? 0.0,
         cloudDensity: options.cloudDensity ?? 0.0,
-        cloudAltitude: options.cloudAltitude ?? 1200,
+        cloudAltitude: options.cloudAltitude ?? 2200,
         aerialPerspectiveEnabled: options.aerialPerspectiveEnabled ?? false,
         inscatteringIntensity: options.inscatteringIntensity ?? 0.0,
         aerialPerspectiveRange: options.aerialPerspectiveRange ?? 220.0,

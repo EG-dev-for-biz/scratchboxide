@@ -49,6 +49,13 @@ export interface TileRefineRequest {
      */
     facadeFlatten?: boolean | { band?: number };
     /**
+     * Tile-chunk seam weld (default on, tolerance 0.03): the first stage, before isolation, the raw clay write and
+     * the rectifier's orientation vote. Boundary positions of adjacent tile pieces within the tolerance are welded and
+     * the triangles the weld collapses are dropped (scratchbox_tile_seam_weld.hpp). `false` turns it off;
+     * `{ toleranceM }` sets the tolerance (0..1 m).
+     */
+    seamWeld?: boolean | { toleranceM?: number };
+    /**
      * Keep only the structure under the anchor (its whole connected footprint and everything above it, never cut)
      * plus a ground apron, and refine just that. `true`, or `{ apron }` to set the apron width in metres (default 4).
      */
@@ -308,6 +315,18 @@ export class TileRefineService {
                 keyParams.flattenBand = band;
             }
         }
+        if (req.seamWeld === false) {
+            cliArgs.push('--no-seam-weld');
+            keyParams.seamWeld = false;
+        } else if (req.seamWeld !== undefined && req.seamWeld !== true) {
+            if (typeof req.seamWeld !== 'object' || req.seamWeld === null) throw new TileRefineError('bad_request', 'seamWeld must be a boolean or { toleranceM }');
+            const tol = req.seamWeld.toleranceM;
+            if (tol !== undefined) {
+                if (!Number.isFinite(tol) || tol <= 0 || tol > 1) throw new TileRefineError('bad_request', 'seamWeld.toleranceM must be a number of metres in (0, 1]');
+                cliArgs.push('--seam-weld-tolerance', String(tol));
+                keyParams.seamWeldToleranceM = tol;
+            }
+        }
         if (req.isolate !== undefined && req.isolate !== false) {
             if (req.isolate !== true && (typeof req.isolate !== 'object' || req.isolate === null)) {
                 throw new TileRefineError('bad_request', 'isolate must be true or { apron }');
@@ -547,6 +566,17 @@ export function summarizeTileRefineStats(stats: Record<string, any>): Record<str
         stagesMs: stats.stagesMs,
         triangles: stats.triangles,
         outputTriangles: stats.outputs?.triangles,
+        seamWeld: stats.seamWeld?.enabled ? {
+            toleranceM: stats.seamWeld.toleranceM,
+            pieces: stats.seamWeld.pieces,
+            contactsFound: stats.seamWeld.contactsFound,
+            groupsWelded: stats.seamWeld.groupsWelded,
+            groupsReverted: stats.seamWeld.groupsReverted,
+            stripPiecesDropped: stats.seamWeld.stripPiecesDropped,
+            trianglesDropped: stats.seamWeld.trianglesDropped,
+            meanWeldDisplacementM: stats.seamWeld.meanWeldDisplacementM,
+            maxWeldDisplacementM: stats.seamWeld.maxWeldDisplacementM
+        } : undefined,
         isolate: stats.isolate?.enabled ? {
             triangles: stats.isolate.triangles,
             footprintBounds: stats.isolate.footprintBounds,

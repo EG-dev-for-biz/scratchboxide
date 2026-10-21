@@ -203,12 +203,11 @@ describe('configure_physical_camera sets the scene camera\'s FOV, or says NOT ap
         expect(out.resultPayload.notAppliedParts.join(' ')).toMatch(/anamorphic desqueeze/);
     });
 
-    it('without a focus it stores the lens, draws no blur and says why', async () => {
+    it('without a focus it still draws depth of field, measuring it live (manual with nothing stored reads like autofocus; 2026-10-21)', async () => {
         const out = await physicalCameraHandlers.configure_physical_camera({ focalLengthMm: 35, apertureFStop: 2 }, withScene(clayScene())) as any;
         expect(out.resultPayload.applied).toBe(true);
-        expect(out.resultPayload.passes).toEqual([]);
-        expect(out.resultPayload.depthOfField).toBeUndefined();
-        expect(out.resultPayload.notAppliedParts[0]).toMatch(/no focus distance, focus mode, point or object was given/);
+        expect(out.resultPayload.passes).toEqual(['depth-of-field', 'output']);
+        expect(out.resultPayload.notAppliedParts ?? []).not.toContainEqual(expect.stringMatching(/no focus distance, focus mode, point or object was given/));
     });
 });
 

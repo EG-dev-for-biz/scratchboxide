@@ -373,9 +373,9 @@ export function syncAtmosphere(
                     cloudShadowIntensity: atmoConfig.cloudShadowIntensity ?? 0.65,
                     cloudShadowScale: atmoConfig.cloudShadowScale ?? 0.015,
                     atmosphereShadowLength: atmoConfig.atmosphereShadowLength ?? 1.0,
-                    cloudAltitude: atmoConfig.cloudAltitude ?? 1200.0,
+                    cloudAltitude: atmoConfig.cloudAltitude ?? 2200.0,
                     cloudCoverage: atmoConfig.cloudCoverage ?? (atmoConfig.volumetricClouds === true ? 0.35 : 0.0),
-                    cloudDensity: atmoConfig.cloudDensity ?? (atmoConfig.volumetricClouds === true ? 0.45 : 0.0),
+                    cloudDensity: atmoConfig.cloudDensity ?? ((atmoConfig.volumetricClouds === true || (atmoConfig.cloudCoverage ?? 0) > 0) ? 0.3 : 0.0),
                     windVector: atmoConfig.windVector ?? [0.05, 0.02]
                 }, width, height);
             } catch (e) {
@@ -389,9 +389,9 @@ export function syncAtmosphere(
                 cloudShadowIntensity: atmoConfig.cloudShadowIntensity ?? 0.65,
                 cloudShadowScale: atmoConfig.cloudShadowScale ?? 0.015,
                 atmosphereShadowLength: atmoConfig.atmosphereShadowLength ?? 1.0,
-                cloudAltitude: atmoConfig.cloudAltitude ?? 1200.0,
+                cloudAltitude: atmoConfig.cloudAltitude ?? 2200.0,
                 cloudCoverage: atmoConfig.cloudCoverage ?? (atmoConfig.volumetricClouds === true ? 0.35 : 0.0),
-                cloudDensity: atmoConfig.cloudDensity ?? (atmoConfig.volumetricClouds === true ? 0.45 : 0.0),
+                cloudDensity: atmoConfig.cloudDensity ?? ((atmoConfig.volumetricClouds === true || (atmoConfig.cloudCoverage ?? 0) > 0) ? 0.3 : 0.0),
                 windVector: atmoConfig.windVector ?? [0.05, 0.02]
             });
         }

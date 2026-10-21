@@ -84,7 +84,7 @@ describe('applyFirstPassBaseline (textured by default, clay on request)', () => 
     it('gives a first-pass camera continuous autofocus and a narrow depth of field by default', () => {
         const src = { ...modelAuthoredScene(), camera: { position: [0, 2, 8] as [number, number, number], target: [0, 1, 0] as [number, number, number] } };
         const out = applyFirstPassBaseline(src, 'ferarri on road');
-        expect(out.camera.lens).toEqual({ depthOfField: true, focusMode: 'auto', apertureFStop: 2.8 });
+        expect(out.camera.lens).toEqual({ depthOfField: true, focusMode: 'auto', apertureFStop: 2, focalLengthMm: 135 });
         // position and target themselves are untouched
         expect(out.camera.position).toEqual(src.camera.position);
         expect(out.camera.target).toEqual(src.camera.target);

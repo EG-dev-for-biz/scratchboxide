@@ -23,6 +23,8 @@ export class VolumetricGodRays implements VolumetricGodRaysModule {
     private sunPos: THREE.Vector3;
     private spreadRadius: number;
     private rayCount: number;
+    private baseIntensity: number;
+    private cloudVisibility = 1;
 
     constructor(
         scene: THREE.Scene,
@@ -49,11 +51,13 @@ export class VolumetricGodRays implements VolumetricGodRaysModule {
             ? (typeof config.color === 'string' ? new THREE.Color(config.color) : new THREE.Color(config.color))
             : new THREE.Color(defaultColorHex);
 
+        this.baseIntensity = config.intensity !== undefined ? config.intensity : 0.28;
+
         this.rayMaterial = new THREE.ShaderMaterial({
             uniforms: {
                 uTime: { value: 0 },
                 uColor: { value: initialColor },
-                uIntensity: { value: config.intensity !== undefined ? config.intensity : 0.28 },
+                uIntensity: { value: this.baseIntensity },
                 uShimmerSpeed: { value: config.shimmerSpeed ?? 1.5 }
             },
             vertexShader: `
@@ -148,7 +152,23 @@ export class VolumetricGodRays implements VolumetricGodRaysModule {
     }
 
     public setIntensity(intensity: number): void {
-        this.rayMaterial.uniforms.uIntensity.value = intensity;
+        this.baseIntensity = intensity;
+        this.applyIntensity();
+    }
+
+    /**
+     * Share of the sun a cloud currently leaves visible (0 behind a thick deck, 1 clear), the same measured signal
+     * SunGlare's halo already dims by (SunGlare.ts: cloudVisibility, the baked sky's radiance at the sun against its
+     * cloudless value). Rays stream from the sun itself, so cloud crossing the disc should dim and diffuse them the
+     * same way it does the glare, not leave them at a constant brightness regardless of what the sky is doing.
+     */
+    public setCloudVisibility(visibility: number): void {
+        this.cloudVisibility = Math.max(0, Math.min(1, visibility));
+        this.applyIntensity();
+    }
+
+    private applyIntensity(): void {
+        this.rayMaterial.uniforms.uIntensity.value = this.baseIntensity * this.cloudVisibility;
     }
 
     public dispose(): void {

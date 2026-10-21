@@ -18,8 +18,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-    TERRAIN_INNER_RADIUS_M, TERRAIN_INNER_STEP_M, TERRAIN_OUTER_STEP_M, TERRAIN_RADIUS_M,
-    buildTerrainMesh, planTerrainGrid, terrainAxis, writeTerrainGlb
+    TERRAIN_HERO_GAP_M, TERRAIN_INNER_RADIUS_M, TERRAIN_INNER_STEP_M, TERRAIN_OUTER_STEP_M, TERRAIN_RADIUS_M,
+    buildTerrainMesh, coverageHole, planTerrainGrid, terrainAxis, terrainHeroGapM, writeTerrainGlb
 } from '../src/node/3d-engine/staged-location/terrain-surround';
 import { mslToTileY } from '../src/node/3d-engine/staged-location/pipeline-e/solar-roof';
 import { measureGlbMeshCounts } from '../src/common/glb-mesh-counts';
@@ -61,15 +61,59 @@ describe('terrain-surround', () => {
         expect(Math.abs(mesh.positions[i * 3 + 2])).toBeLessThan(1);
         expect(mesh.positions[i * 3 + 1]).toBeCloseTo(mslToTileY(13, plan.points[i].lat, plan.points[i].lng, origin.heightMeters), 3);
         expect(mesh.maxY - mesh.minY).toBeCloseTo(6, 1);
-        // the triangles whose corners all lie within 120 m of the place are left out: the 5 x 5 inner points span 2 cells each way
+        // every triangle that touches the 120 m disc is left out, so no kept triangle has a corner within it
         expect(mesh.holeTriangles).toBeGreaterThan(0);
         expect(mesh.indices.length / 3 + mesh.holeTriangles).toBe(8 * 8 * 2);
+        for (let k = 0; k < mesh.indices.length; k++) {
+            const v = mesh.indices[k];
+            expect(Math.hypot(mesh.positions[v * 3], mesh.positions[v * 3 + 2])).toBeGreaterThan(120);
+        }
         const file = path.join(WORK, 'terrain.glb');
         const written = writeTerrainGlb(file, mesh, { radiusM: 300 });
         expect(written.bytes).toBeGreaterThan(1000);
         const counts = measureGlbMeshCounts(fs.readFileSync(file));
         expect(counts.vertexCount).toBe(81);
         expect(counts.triangleCount).toBe(mesh.indices.length / 3);
+    });
+
+    it('keeps the terrain a clear gap away from the ground the tiles actually occupy, not a disc', () => {
+        const origin = { lat: 0, lng: 0, heightMeters: 0 };
+        const axis = terrainAxis(400, 400, 50, 50); // 17 x 17, 50 m cells
+        const plan = planTerrainGrid(origin, axis);
+        const heights = plan.points.map(() => 0);
+        // the tiles: a 100 m x 200 m block of ground offset to the east, reaching x in [0, 100], z in [-100, 100]
+        const tiles: number[] = [];
+        for (let x = 0; x <= 100; x += 5) for (let z = -100; z <= 100; z += 5) tiles.push(x, 3, z);
+        const hole = coverageHole(tiles, { cellM: 10, gapM: TERRAIN_HERO_GAP_M });
+        expect(hole.describe()).toMatchObject({ kind: 'tile-coverage', gapM: TERRAIN_HERO_GAP_M });
+        expect(hole.covers(50, 0)).toBe(true);
+        expect(hole.covers(110, 0)).toBe(true);   // within the 15 m gap of the tiles' east edge
+        expect(hole.covers(-30, 0)).toBe(false);  // 30 m west of the tiles: terrain
+        expect(hole.covers(0, 140)).toBe(false);
+        const mesh = buildTerrainMesh(origin, plan, heights, hole);
+        expect(mesh.holeTriangles).toBeGreaterThan(0);
+        // no kept triangle has a corner on the tiles or within the gap, and the far west of the grid is all kept
+        const nearest = { d: Infinity };
+        for (let k = 0; k < mesh.indices.length; k++) {
+            const v = mesh.indices[k];
+            const x = mesh.positions[v * 3], z = mesh.positions[v * 3 + 2];
+            expect(hole.covers(x, z)).toBe(false);
+            if (Math.abs(z) <= 100) nearest.d = Math.min(nearest.d, x <= 0 ? -x : x - 100);
+        }
+        expect(nearest.d).toBeGreaterThanOrEqual(TERRAIN_HERO_GAP_M);
+        expect(nearest.d).toBeLessThanOrEqual(TERRAIN_HERO_GAP_M + 50); // one grid cell past the gap at most
+        // a disc reaching the tiles' farthest corner (what a radius must do to clear them) takes the terrain west of
+        // the place as well, where there are no tiles
+        const disc = buildTerrainMesh(origin, plan, heights, Math.hypot(100, 100));
+        expect(disc.holeTriangles).toBeGreaterThan(mesh.holeTriangles * 1.5);
+        expect(() => coverageHole([], {})).toThrow(/no vertices/);
+    });
+
+    it('reads the gap from the environment, continuous, never negative', () => {
+        expect(terrainHeroGapM({})).toBe(TERRAIN_HERO_GAP_M);
+        expect(terrainHeroGapM({ SCRATCHBOX_TERRAIN_HERO_GAP_M: '7.5' })).toBe(7.5);
+        expect(terrainHeroGapM({ SCRATCHBOX_TERRAIN_HERO_GAP_M: '-3' })).toBe(TERRAIN_HERO_GAP_M);
+        expect(terrainHeroGapM({ SCRATCHBOX_TERRAIN_HERO_GAP_M: 'wide' })).toBe(TERRAIN_HERO_GAP_M);
     });
 
     it('refuses a height count that does not match the grid', () => {
