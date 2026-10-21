@@ -2713,8 +2713,16 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             provenanceAfter: PROVENANCE.remeshed, reason, ...(cause ? { cause } : {}), transient: false, runId, now: now()
                         }))]
                     });
-                    let masksDir: string, seg: Awaited<ReturnType<typeof segmentOwnershipViews>>;
-                    try {
+                    let masksDir: string, seg: Pick<Awaited<ReturnType<typeof segmentOwnershipViews>>, 'masks' | 'views' | 'skipped' | 'model'>;
+                    // the outlines of an identical earlier vote (the same first isolate, place and models) are read back: a view the
+                    // window cut is not asked again on every repeat
+                    const voteKey = stageKey('ownership-vote/v1', first.cacheKey, request.query.trim(), visionAvailable!.candidates, OWNERSHIP_VOTE_WINDOW_MS);
+                    const voteHit = !bypass('ownership') ? cache.get<{ masksDir: string; masks: number; views: number; model?: string }>('ownership', voteKey) : undefined;
+                    if (voteHit && fs.existsSync(path.join(voteHit.value.masksDir, 'views.txt'))) {
+                        masksDir = voteHit.value.masksDir;
+                        seg = { masks: voteHit.value.masks, views: voteHit.value.views, skipped: [], ...(voteHit.value.model ? { model: voteHit.value.model } : {}) };
+                        run.cacheStatus.ownership = 'hit';
+                    } else try {
                         io.progress('rendering views of the structure for the ownership vote');
                         const views = await timed('ownershipViews', () => deps.refine.renderOwnershipViews!({ tilePath: v.tilePath, isolate: true, anchor: { x: structure!.seed.x, z: structure!.seed.z }, ...(v.isolatePick ? { isolatePick: v.isolatePick } : {}) }));
                         masksDir = path.join(views.dir, `masks_${crypto.createHash('sha256').update(request.query.trim()).digest('hex').slice(0, 16)}`);
@@ -2731,6 +2739,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         if (ctx.signal?.aborted) throw abortError();
                         if (cut.signal.aborted) io.progress(`ownership vote: ${seg.masks} of ${seg.views} views outlined within ${Math.round(OWNERSHIP_VOTE_WINDOW_MS / 1000)} s; the others are left out`);
                         if (seg.masks < 2) throw new Error(`only ${seg.masks} of ${seg.views} views got a usable outline (${seg.skipped.slice(0, 3).map(x => `${x.view}: ${x.reason}`).join('; ')})`);
+                        const outlines = { masksDir, masks: seg.masks, views: seg.views, ...(seg.model ? { model: seg.model } : {}) };
+                        await cache.run('ownership', voteKey, async () => ({ value: outlines }), { bypass: true });
+                        run.cacheStatus.ownership = 'miss';
                     } catch (err) {
                         if (isAbort(err) || io.signal.aborted) throw err;
                         return notUsed('ownership_vote_unavailable', `the multi-view mask vote could not be made (${errorMessage(err)}); the geometric isolate stands`, err);
