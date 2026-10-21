@@ -343,7 +343,7 @@ export function legendRows(state: StagedBuildState, legend: Map<ProvenanceLabel,
  * One colour per TEXTURE_LADDER_RUNGS entry, by index (Okabe-Ito, distinguishable under the common colour-vision
  * deficiencies; the clay rung keeps the studio clay grey). A rung index past the list draws the last colour.
  */
-export const TEXTURE_RUNG_COLORS: readonly string[] = ['#009E73', '#56B4E9', '#E69F00', '#CC79A7', '#D55E00', '#B0B8C4'];
+export const TEXTURE_RUNG_COLORS: readonly string[] = ['#009E73', '#56B4E9', '#E69F00', '#F0E442', '#CC79A7', '#D55E00', '#B0B8C4'];
 
 export function textureRungColor(rung: number): string {
     return TEXTURE_RUNG_COLORS[Math.min(TEXTURE_RUNG_COLORS.length - 1, Math.max(0, Math.floor(rung)))];
