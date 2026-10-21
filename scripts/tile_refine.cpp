@@ -124,6 +124,10 @@ static void usage() {
         "  --stitch-tol M          rectifier chunk-seam stitch tolerance (default 0.015; 0 = no stitch)\n"
         "  --plane-turn DEG        rectifier: an in-plane face may not end more than DEG off its plane (default 6; 0 = off)\n"
         "  --melt-range M          rectifier: capture range of melted (tilted-facet) wall vertices (default 0.7; 0 = off)\n"
+        "  --dead-band M           rectifier: moves shorter than M are not applied (default 0.05)\n"
+        "  --max-rms M             rectifier: a region whose plane fit RMS exceeds M is not snapped (default 0.35)\n"
+        "  --foreign-snap          rectifier: also pull vertices of no region onto a nearby plane\n"
+        "  --denoise               rectifier: crease-preserving denoise of unclassified steep surfaces\n"
         "  --no-proud-blocks       rectifier and flatten: also snap blocks standing off a wall on their own risers (keystones,\n"
         "                          medallions, deep reveals) instead of keeping their offset\n"
         "  --occluder-tol M        visibility: a surface hides a point only when at least M in front (default 0.02)\n"
@@ -204,6 +208,10 @@ int main(int argc, char** argv) {
         else if (a == "--plane-turn") p.rect.guardPlaneMaxTurnDeg = num();
         else if (a == "--melt-range") p.rect.meltCaptureRange = num();
         else if (a == "--no-proud-blocks") p.rect.proudBlockMinRelief = 0;
+        else if (a == "--dead-band") p.rect.snapDeadBand = num();
+        else if (a == "--max-rms") p.rect.maxRegionRms = num();
+        else if (a == "--foreign-snap") p.rect.foreignPlaneSnap = true;
+        else if (a == "--denoise") p.rect.denoise = true;
         else if (a == "--occluder-tol") p.vis.occluderTolerance = num();
         else if (a == "--street-sites") p.vis.streetSites = static_cast<int>(num());
         else if (a == "--roof-sites") p.vis.roofSites = static_cast<int>(num());
