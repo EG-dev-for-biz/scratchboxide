@@ -239,10 +239,27 @@ Three readings. (1) The camera+sun term is 38% of the variance and is *not* text
 
 **Where that leaves the "exceed gaming" question.** Per-sample gains at the first hit are exhausted (Sobol took them; ReSTIR DI and guiding are measured losses per unit time). The remaining noise is (a) sub-pixel geometry under the sun and (b) one-bounce sunlight. (a) is prefiltering: render from a coarser re-textured cut (Phase 8 made the 2-4 px cuts faithful) so a pixel sees one facet, and measure the agreement/noise trade. (b) is the domain of ReSTIR GI (reservoirs over *secondary hit points* with their outgoing radiance, reused spatially) and of radiance caching; a guide over "where are the sunlit surfaces" is the same idea in guiding form. Both act on the bounce ray, not the sky ray, and that is where the next measurement belongs.
 
+## Phase 11 (2026-10-21): ReSTIR GI over second hits, measured and rejected
+
+**What was built** (`optimizations.restirGi`, `giSpatial`; off by default; `GiSample` buffers 20-21): past its first hit a path gathers into a separate accumulator with the throughput reset to one, so its second hit (or escape direction) with that radiance is a sample of weight 1/pdf. Each pass resamples the path's own sample with `giSpatial` neighbours' samples of the previous pass (16 px, same facing within 25°, depth within 10%), each reconnected to this first hit with the Jacobian of the solid-angle pdf between the two first hits (p_r = p_q · (cos_q / cos_r) · (d_r² / d_q²); directions need none), and shades the choice after one visibility ray. Passes read only the previous pass, so they stay independent. With no neighbours the estimator reproduces the path tracer (1.357e-3 vs 1.370e-3 at 8 spp, mean ratio 1.0000), which checks the plumbing. A first build had the Jacobian inverted (RMSE 4.6x worse, fireflies of 15x the image mean).
+
+| variant (8 spp / 32 spp) | RMSE | mean ratio | GPU ms (32) | rays (32) |
+| :-- | --: | --: | --: | --: |
+| Sobol | 1.370e-3 / 6.28e-4 | 1.0000 | 586 | 63.6 M |
+| GI, 3 neighbours, Jacobian in [1e-3, 1e3] | 1.408e-3 / 8.26e-4 | 0.9991 | 732 | 69.4 M |
+| GI, 8 neighbours, same | 1.380e-3 / 7.35e-4 | 0.9986 | 819 | 71.8 M |
+| GI, 3 neighbours, Jacobian in [0.2, 5] | **1.291e-3** / 6.07e-4 | 0.9993 | 735 | 69.3 M |
+| GI, 8 neighbours, same | **1.258e-3** / 6.17e-4 | 0.9990 | 837 | 71.8 M |
+
+The loose bound converges slower than Sobol (8 to 32 spp: 1.7x instead of 2.2x) because of a few fireflies: without the worst 1% of pixels the 8-neighbour GI is already better than Sobol at 32 spp (4.35e-4 vs 4.68e-4), but 22 pixels off by up to 15x the mean set the RMSE. Those are the plain 1/M resampling weights meeting reconnection pdfs that differ by orders of magnitude between domains, the failure the GRIS pairwise-MIS weights (Lin et al. 2022) exist to bound; the tight Jacobian bound removes the fireflies by rejection at a 0.1% bias. The best case is then 6-8% less error per sample at 8 spp, 2-3% at 32, for 22-43% more GPU time: **a loss per unit of time, rejected as a default; kept behind its flag**.
+
+**Why the pool is empty.** The ray counts give the acceptance rate: 8 neighbours tried add 8.2 M visibility rays over 29.5 M samples, so a neighbour's sample is chosen in 28% of samples, which puts the mean reservoir at about 1.4 candidates. At the 1 px cut of a scanned tile, pixels 16 px apart rarely share a normal within 25° and a depth within 10%: the same sub-pixel geometry that holds 38% of the variance also starves spatial reuse. ReSTIR GI's published gains come from surfaces that are locally flat at the pixel scale; a photogrammetry city at full detail is not one.
+
+**Standing conclusion after Phases 9-11.** Three per-sample techniques (ReSTIR DI, visibility-guided sky sampling, ReSTIR GI) are each implemented, unbiased or measured to 0.1%, and each a loss per unit of GPU time on this scene; Sobol with the a-trous denoiser and MetalFX stays the configuration. The measured structure of the noise says the next lever is geometric: render from the 2 px re-textured cut so a pixel sees one facet and neighbours see each other, which addresses the 38% primary term *and* feeds every reuse method. Measure it first; only then re-run the GI variant on it.
+
 ## Next (plan)
 
-- One-bounce sunlight: ReSTIR GI over secondary hits (spatial reuse of hit points with their outgoing radiance, Jacobian-corrected) measured against Sobol on the bench shot; or sunlit-surface guiding of the first bounce.
-- Sub-pixel geometry: render from the 2 px re-textured cut and measure noise vs agreement with the 0.5 px cut.
+- Sub-pixel geometry: render from the 2 px re-textured cut and measure noise vs agreement with the 0.5 px cut; re-run `sobol+restir-gi` on that cut.
 - Metallic-roughness atlases; a quad-aware pairing to lift the 81% paired share.
 - Phase 4: the a-trous denoiser on the GPU and temporal reuse.
 - Rays: rasterize the camera hit with the existing WebGPU cluster pass; coarser cuts for bounce and shadow rays; any-hit shadow rays (done); merged per-chunk acceleration structures; better samplers; MetalFX upscale.

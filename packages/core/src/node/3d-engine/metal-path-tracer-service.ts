@@ -107,6 +107,8 @@ export interface MetalPathTraceRequest {
          * unit of GPU time, kept for the bench): histogram tile size in pixels, its bands x sectors, samples per hit.
          */
         guidedSky?: boolean; guideTile?: number; guideBands?: number; guideSectors?: number; guideSamples?: number;
+        /** ReSTIR GI over second hits with `giSpatial` neighbours (measured as a loss per unit of GPU time, kept for the bench). */
+        restirGi?: boolean; giSpatial?: number;
     };
     exposureEv?: number;
     camera?: MetalPathTraceCamera | MetalPathTraceAutoCamera;
@@ -150,6 +152,8 @@ export interface MetalPathTraceStats {
         guideBands: number;
         guideSectors: number;
         guideSamples: number;
+        restirGi: boolean;
+        giSpatial: number;
         bounceCut: { thresholdPx: number; clusters: number; triangles: number; accelerationBuildMs: number };
     };
     denoiseBackend: 'metal' | 'cpu' | 'none';
