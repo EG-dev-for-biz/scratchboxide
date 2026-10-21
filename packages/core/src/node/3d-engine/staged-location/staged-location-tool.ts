@@ -33,6 +33,7 @@ import { GeminiClient } from '../../gemini/gemini-client';
 import { createStreetViewGroundingImageService } from '../../spatial/StreetViewGroundingImageService';
 import { Google3DTileBlockoutPipelineService, getGoogle3DTilesFullTexture } from '../../spatial/Google3DTileBlockoutPipelineService';
 import { resolveMapsApiKey } from '../../../browser/generative-canvas/services/google-maps-service';
+import { GoogleElevationService } from '../../../browser/generative-canvas/services/google-elevation-service';
 import { getTileRefineService } from '../tile-refine-service';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
 import { fetchVectorEvidence } from './vector-footprints';
@@ -199,8 +200,20 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
         vision = { unavailable: err instanceof Error ? err.message : String(err) };
     }
 
+    // the ground around the place: the Google Elevation API on the Maps key (the app's elevation standard, EGM96 MSL)
+    const mapsKey = resolveMapsApiKey();
+    const elevationService = mapsKey ? new GoogleElevationService({ apiKey: mapsKey }) : undefined;
     return {
         cache,
+        ...(elevationService ? {
+            elevation: {
+                sample: async (points: Array<{ lat: number; lng: number }>) => {
+                    const results = await elevationService.getElevationForLocations(points);
+                    if (results.length !== points.length) throw new Error(`the Elevation API answered ${results.length} of ${points.length} points`);
+                    return results.map(r => r.elevation);
+                }
+            }
+        } : {}),
         geocode: async (query, signal) => {
             const anchor = await new Google3DTileBlockoutPipelineService().resolveAddress(query, undefined, stoppableFetch(signal));
             return {

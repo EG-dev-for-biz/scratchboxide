@@ -70,6 +70,31 @@ function setup(spec: WorldSpec, opts: Parameters<typeof fakeNative>[2] = {}, ext
 const statusOf = (events: Array<{ e: StageEvent }>, stage: string) => events.filter(x => x.e.stage === stage).map(x => x.e.status);
 
 describe('a district', () => {
+    it('with an elevation sampler, the ground around the place is a measured terrain layer under everything; without one the stage is skipped', async () => {
+        const asked: number[] = [];
+        const elevation = { sample: async (points: Array<{ lat: number; lng: number }>) => { asked.push(points.length); return points.map((p, i) => 20 + 30 * Math.sin(i / 97) + 100 * (p.lat - 40.78)); } };
+        const s = setup(PARK, {}, { elevation });
+        const { result } = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: false }, s.deps, s.ctx);
+        expect(validateContract('StagedLocationResult', result)).toEqual([]);
+        expect(asked).toEqual([6561]);
+        expect(result.stages.find(x => x.stage === 'terrain')).toMatchObject({ status: 'committed' });
+        const sb = (result.artifact as any).data.stagedBuild;
+        const l0 = sb.layers.find((l: any) => l.layer === 'l0');
+        expect(l0).toMatchObject({ stage: 'terrain', order: 0, provenance: { label: 'measured', measuredGeometry: true } });
+        expect(l0.url).toMatch(/_terrain_[0-9a-f]{8}\.glb$/);
+        expect(l0.counts.vertices).toBe(6561);
+        expect(l0.counts.triangles).toBeGreaterThan(12000);
+        // the terrain is drawn first (order 0), under the tiles; it is never the ground objects stand on
+        expect(Math.min(...sb.layers.map((l: any) => l.order))).toBe(0);
+        const obj = (result.artifact as any).data.objects.find((o: any) => o.id === l0.objectId);
+        expect(obj.content.metadata.source).toBe('GoogleElevation');
+        expect(obj.content.metadata.isGround).toBeFalsy();
+
+        const none = setup(PARK);
+        const second = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: false }, none.deps, none.ctx);
+        expect(second.result.stages.find(x => x.stage === 'terrain')).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/Elevation API/) });
+    });
+
     it('commits tiles, remesh and trees in order, each commit carrying the scene with one id and one camera', async () => {
         const s = setup(PARK);
         const { result, compat } = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: true }, s.deps, s.ctx);
@@ -77,7 +102,7 @@ describe('a district', () => {
         expect(result.status).toBe('complete');
         // the stage order a user watches
         const committed = s.events.filter(x => x.e.status === 'committed' && x.e.stage !== 'finish').map(x => x.e.stage);
-        expect(committed).toEqual(['resolve', 'tiles', 'trees-measure', 'remesh', 'trees', 'textures']);
+        expect(committed.filter(x => x !== 'terrain')).toEqual(['resolve', 'tiles', 'trees-measure', 'remesh', 'trees', 'textures']);
         expect(statusOf(s.events, 'fit')).toEqual(['skipped']);
         expect(s.events.find(x => x.e.stage === 'fit')!.e).toMatchObject({ status: 'skipped' });
         expect(result.stages.find(x => x.stage === 'fit')!.reason).toBe('not an isolated structure');
