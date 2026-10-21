@@ -132,6 +132,29 @@ describe('sb_set_camera_lens focus modes', () => {
         expect(planViewportOptics({ focalLengthMm: 85, apertureFStop: 1.4, focusMode: 'auto' }).passes).toContain('depth-of-field');
         expect(planViewportOptics({ focalLengthMm: 85, apertureFStop: 1.4, focusMode: 'track', focusPoint: { localPosition: [0, 0, -5] } }).passes).toContain('depth-of-field');
     });
+
+    it('manual focus with nothing stored measures like auto focus instead of refusing to draw depth of field', () => {
+        // the exact lens an f-stop chip or depthOfField toggle can produce: no focusMode set (so 'manual'), no distance
+        const bare = { focalLengthMm: 85, apertureFStop: 2.8, depthOfField: true };
+        expect(effectiveFocusMode(bare)).toBe('manual');
+        const controller = new ViewportFocusController();
+        controller.configure(bare);
+        expect(controller.focusMode).toBe('manual');
+        expect(controller.measures).toBe(true);
+        expect(planViewportOptics(bare).passes).toContain('depth-of-field');
+        expect(planViewportOptics(bare).issues).toEqual([]);
+
+        // once a distance is set, manual becomes a precise override again (the viewport no longer measures it)
+        const withDistance = { ...bare, focusDistanceMeters: 12 };
+        controller.configure(withDistance);
+        expect(controller.measures).toBe(false);
+        expect(planViewportOptics(withDistance).passes).toContain('depth-of-field');
+
+        // an explicit focusObjectId is still resolved by the viewport's own chain, not measured here
+        const withObject = { ...bare, focusMode: 'manual' as const, focusObjectId: 'hero' };
+        controller.configure(withObject);
+        expect(controller.measures).toBe(false);
+    });
 });
 
 describe('auto focus maths', () => {

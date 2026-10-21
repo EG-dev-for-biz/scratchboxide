@@ -20,9 +20,13 @@
  *   frame it is taken to world space through the object's current matrix and its depth along the view axis is the
  *   focus distance, so it follows a moving camera and a moving object. A lost object holds the last distance and
  *   says so.
+ * - manual focus with nothing stored yet (no focusDistanceMeters, no focusObjectId): read the same continuous
+ *   autofocus as above until a distance or focus object is set. This is what keeps depth of field from ever refusing
+ *   to draw just because a distance hasn't been picked — manual is a precise override once given one, not a
+ *   precondition for drawing at all.
  *
- * Manual focus and a whole tracked object (focusObjectId) stay with ViewportOpticsChain. Nothing here branches on
- * scene content: the AF area, pull time and point are continuous values.
+ * Manual focus with a stored distance, and a whole tracked object (focusObjectId), stay with ViewportOpticsChain.
+ * Nothing here branches on scene content: the AF area, pull time and point are continuous values.
  */
 
 import * as THREE from 'three';
@@ -62,10 +66,18 @@ export function effectiveFocusMode(lens: SceneCameraLens | undefined | null): Fo
     return isFocusPoint(lens?.focusPoint) || (typeof lens?.focusObjectId === 'string' && lens.focusObjectId) ? 'track' : 'manual';
 }
 
-/** True when the viewport measures the focus distance itself (auto focus or a tracked point), so none needs to be stored. */
+/**
+ * True when the viewport measures the focus distance itself, so none needs to be stored: auto focus, a tracked
+ * point, or manual focus with nothing stored yet (depth of field then draws from a continuous autofocus read instead
+ * of refusing to draw — manual becomes a precise override the moment a distance or focus object is set, never a
+ * trap that blocks depth of field on an unset field).
+ */
 export function lensMeasuresFocus(lens: SceneCameraLens | undefined | null): boolean {
     const mode = effectiveFocusMode(lens);
-    return mode === 'auto' || (mode === 'track' && isFocusPoint(lens?.focusPoint));
+    if (mode === 'auto') return true;
+    if (mode === 'track') return isFocusPoint(lens?.focusPoint);
+    const hasStoredFocus = finitePositive(lens?.focusDistanceMeters) || (typeof lens?.focusObjectId === 'string' && lens.focusObjectId.length > 0);
+    return !hasStoredFocus;
 }
 
 export function autoFocusAreaOf(lens: SceneCameraLens | undefined | null): number {
@@ -258,9 +270,11 @@ export class ViewportFocusController {
     ): number | null | undefined {
         if (!this.measures) return undefined;
         const minDepth = finitePositive(this.lens?.focalLengthMm) ? this.lens!.focalLengthMm! / 1000 : 0;
-        const d = this.mode === 'auto'
-            ? this.autoFocus(renderer, camera, depthTexture, frame, minDepth, nowMs)
-            : this.trackPoint(camera, resolveObject, minDepth);
+        // only an actual tracked point follows an object; every other measuring case (auto, or manual with nothing
+        // stored yet) reads the live autofocus the same way
+        const d = this.mode === 'track'
+            ? this.trackPoint(camera, resolveObject, minDepth)
+            : this.autoFocus(renderer, camera, depthTexture, frame, minDepth, nowMs);
         if (this.status.notice) issues.push(this.status.notice);
         this.status.distanceMeters = d;
         return d;

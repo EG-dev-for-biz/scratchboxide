@@ -36,10 +36,19 @@ export function firstPassRenderMode(prompt: string | undefined, authored?: unkno
 }
 
 /**
+ * First-pass cameras come with physical lens optics on (user decision 2026-10-21): continuous autofocus (no upfront
+ * focus distance to get wrong, no "lens optics not fully drawn" notice from a manual focus with nothing to focus on)
+ * and a narrow, shallow depth of field (f/2.8 — enough to separate the subject from its surroundings without being so
+ * thin ordinary framing loses things). A model that authors its own `camera.lens` keeps it unchanged, same precedence
+ * as renderMode.
+ */
+const DEFAULT_CAMERA_LENS = { depthOfField: true, focusMode: 'auto' as const, apertureFStop: 2.8 };
+
+/**
  * First-pass 3D scenes open textured (user decision 2026-10-19: textured by default, clay on request): the materials
  * the model or the engine authored are kept and the render mode is firstPassRenderMode. Sky and atmosphere the model
  * authored on its own are dropped unless the prompt explicitly asks for them (the AGENTS.md opt-in gate); geometry,
- * materials, camera and geodetic anchoring pass through unchanged.
+ * materials, camera and geodetic anchoring pass through unchanged except for the camera lens default above.
  */
 export function applyFirstPassBaseline<T extends Record<string, any>>(data: T, prompt: string): T {
     const wantsAtmosphere = ATMOSPHERE_OPT_IN.test(prompt);
@@ -54,6 +63,7 @@ export function applyFirstPassBaseline<T extends Record<string, any>>(data: T, p
     }
     out.renderMode = firstPassRenderMode(prompt, data.renderMode);
     out.features = features;
+    if (data.camera && !data.camera.lens) out.camera = { ...data.camera, lens: { ...DEFAULT_CAMERA_LENS } };
     return out as T;
 }
 
