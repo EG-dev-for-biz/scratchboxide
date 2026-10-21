@@ -64,7 +64,10 @@ function resetClay(mat: THREE.MeshStandardMaterial): void {
  * own clay material because custom-mesh sync mutates materials in place; re-applying resets it.
  * Returns the number of meshes touched.
  */
-export function applyClayRenderMode(roots: Array<THREE.Object3D | null | undefined>, enabled: boolean): number {
+export function applyClayRenderMode(roots: Array<THREE.Object3D | null | undefined>, enabled: boolean, opts: { trees?: boolean } = {}): number {
+    // the trees of a staged place follow the staged build's own clay/textured switch, not only the render mode:
+    // textured by default, they keep their leaf and bark textures while the clay layers wait for their twins
+    const trees = opts.trees ?? enabled;
     let touched = 0;
     for (const root of roots) {
         root?.traverse(obj => {
@@ -78,7 +81,7 @@ export function applyClayRenderMode(roots: Array<THREE.Object3D | null | undefin
                 // base only: the controller puts it (or its dither variant) on the mesh at the next frame
                 // a crown card (treeLod/treeCrownCards.ts) wears its own clay: the same surface, cut out by the card's leaves
                 const clay = (mesh.userData.sbTreeClay as THREE.Material | undefined) ?? sharedTreeClayMaterial();
-                if (enabled) {
+                if (trees) {
                     if (mesh.userData.sbLodBase !== clay) { mesh.userData[ORIGINAL_KEY] = mesh.userData.sbLodBase; mesh.userData.sbLodBase = clay; }
                     mesh.material = clay;
                     touched++;
