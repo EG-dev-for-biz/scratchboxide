@@ -346,6 +346,26 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
         expect(changed).toBeGreaterThan(0.2 * gpu.length);
     });
 
+    it('the scrambled Halton sampler converges to the PCG image with lower error per sample', async ctx => {
+        if (!device.raytracing) return ctx.skip();
+        const common = { sbvgPath: texturedSbvg, width: 160, height: 120, maxBounces: 4, seed: 11, lighting: sunLighting, camera: sphereCamera, materials: { glbPath: texturedGlb } };
+        const reference = await service.render({ ...common, outputDir: path.join(tmp, 'ref512'), samplesPerPixel: 512 });
+        const err = (r: MetalPathTraceResult) => {
+            const a = readLinearColor(r), b = readLinearColor(reference);
+            let sq = 0;
+            for (let i = 0; i < a.length; i++) sq += (a[i] - b[i]) ** 2;
+            return Math.sqrt(sq / a.length);
+        };
+        const pcg8 = await service.render({ ...common, outputDir: path.join(tmp, 'pcg8'), samplesPerPixel: 8 });
+        const sobol8 = await service.render({ ...common, outputDir: path.join(tmp, 'sobol8'), samplesPerPixel: 8, optimizations: { sampler: 'sobol' } });
+        const sobol64 = await service.render({ ...common, outputDir: path.join(tmp, 'sobol64'), samplesPerPixel: 64, optimizations: { sampler: 'sobol' } });
+        expect(sobol8.stats.optimizations.sampler).toBe('sobol');
+        expect(err(sobol8)).toBeLessThan(err(pcg8));
+        // Unbiased: more samples bring it to the reference, not to a different image.
+        expect(err(sobol64)).toBeLessThan(0.5 * err(sobol8));
+        expect(Math.abs(sobol64.stats.meanLinearLuminance / reference.stats.meanLinearLuminance - 1)).toBeLessThan(0.01);
+    });
+
     it('runs a resident session: frames accumulate for a view, a new view restarts them, close ends the process', async ctx => {
         if (!device.raytracing) return ctx.skip();
         const session = await service.openSession({ sbvgPath: texturedSbvg, glbPath: texturedGlb, lighting: sunLighting }, { dir: path.join(tmp, 'session') });
@@ -357,7 +377,7 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
 
             const view = { width: 160, height: 120, camera: sphereCamera, targetSpp: 12 };
             const started = await session.setView(view);
-            expect(started).toMatchObject({ seq: 1, width: 160, height: 120, lighting: 'sky', targetSpp: 12 });
+            expect(started).toMatchObject({ seq: 1, width: 160, height: 120, renderWidth: 160, renderHeight: 120, renderScale: 1, sampler: 'sobol', lighting: 'sky', targetSpp: 12 });
             expect(started.cut.rebuilt).toBe(true);
             expect(started.cut.triangles).toBeGreaterThan(1000);
 
@@ -406,6 +426,16 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
                 session.on('frame', f => { if (f.seq === plain.seq) { clearTimeout(timer); resolve(f); } });
             });
             expect(plainFrame.historyPixels).toBe(0);
+            // Half-size tracing with a MetalFX upscale still delivers the view-sized frame.
+            const scaled = await session.setView({ ...view, renderScale: 0.5, sampler: 'pcg' });
+            expect(scaled).toMatchObject({ renderWidth: 80, renderHeight: 60, renderScale: 0.5, sampler: 'pcg', width: 160, height: 120 });
+            const scaledFrame = await new Promise<any>((resolve, reject) => {
+                const timer = setTimeout(() => reject(new Error('no upscaled frame')), 20_000);
+                session.on('frame', f => { if (f.seq === scaled.seq && f.done) { clearTimeout(timer); resolve(f); } });
+            });
+            expect(scaledFrame).toMatchObject({ renderWidth: 80, renderHeight: 60, width: 160, height: 120 });
+            expect(scaledFrame.upscaleMs).toBeGreaterThan(0);
+            expect(session.readFrame()!.rgba.length).toBe(160 * 120 * 4);
             // A view with a bad size is refused without killing the session.
             await expect(session.setView({ ...view, width: 2 })).rejects.toThrow(/between 8 and 8192/);
             expect(session.alive).toBe(true);

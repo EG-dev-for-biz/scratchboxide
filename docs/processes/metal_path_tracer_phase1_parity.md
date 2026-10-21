@@ -82,9 +82,25 @@ Agreement: mean ratio 0.99999; 8x8-block mean relative difference 0.040%; 19 of 
 
 **Honest limits.** The temporal blend trusts history that passes the depth/normal test, so lighting that changes between views (the Sun toggle) lingers up to the 32-sample cap before fading; disocclusions show the raw-sample noise until the filter catches up; the helper's cut rebuild is still synchronous.
 
+## Phase 5 (2026-10-20): ray cost, each idea measured against the baseline
+
+The harness is `scripts/bench_sbvg_pathtracer.cjs` (the Phase 1 shot: textured Flatiron, 1280x720, 64 spp, sun). Every speed idea is a flag in the helper's `optimizations` and scored on GPU render time and on 8x8-block bias against the baseline image; samplers are scored by RMSE against a 1024 spp reference. Baseline today: 329,205-triangle cut, 126.7 M rays, 925-964 ms, 131-137 M rays/s.
+
+| Idea | Result | Verdict |
+| :-- | :-- | :-- |
+| Acceleration structure "prefer fast build" | trace 0.91x; the build itself was not faster here | rejected, kept as a flag |
+| Coarser cut for bounce and shadow rays (4 / 8 / 16 px, rays start past the cut's error bound) | 1.13x / 1.19x / 1.28x, but block bias 3.3% / 6.5% / 16.9% with maxima of hundreds of percent: this DAG's coarse levels carry 9-18 m of error, so shadows and bounce light land on the wrong walls | rejected on photogrammetry, kept as a flag |
+| Rasterized primary hit (one visibility pass per frame, each jittered sample re-intersects its pixel's triangle, edges trace) | 0.94x (1025 vs 964 ms) with 20% fewer traced rays; biased at silhouettes (1.7% block mean, 14% of blocks over 2%) because a jittered ray can meet a closer triangle than the one under the pixel centre, and checking that is a trace. Half the pixels see sky anyway | rejected, kept as a flag |
+| Merged acceleration structures | the tracer has always built one structure over the whole cut (no per-cluster instances), so there was nothing to merge | n/a |
+| Owen-scrambled Sobol sampler (Joe-Kuo direction vectors for 32 dimensions, Burley's nested scramble per pixel and dimension, 6 dimensions per bounce, PCG past the table) | RMSE vs reference, Flatiron 8 / 32 spp: 1.44e-3 / 6.5e-4 against PCG's 2.25e-3 / 1.12e-3; clay sphere 8 / 32 / 128 / 512 spp: 2.1e-3 / 9.9e-4 / 3.7e-4 / 2.1e-4 against 3.2e-3 / 1.5e-3 / 7.5e-4 / 3.4e-4. PCG needs 2.5-3x the samples for the same error; the sampler costs ~17% per sample | **adopted**: default in the resident mode (`view.sampler`, `pcg` on request); the one-shot default stays PCG for the CPU parity tests |
+| MetalFX spatial upscale (resident mode `renderScale`) | 64 spp frame, 1280x720: 702 ms full size; 303 ms traced at 854x480 + 0.2 ms upscale (PSNR 35.3 dB against the full-size frame); 268 ms at 640x360 (33.6 dB) | **adopted** as an option (`virtualGeometry.pathTrace.renderScale`, default 1); the HUD says what the frame was traced at |
+
+Two samplers were measured and thrown away on the way: Halton with higher primes under Owen scrambling (worse than PCG below 64 samples: its first samples in base 19 or 23 fill a few of many cells), and base-2 radical inverses with an independent scramble per dimension (best at 8 spp, then stalled at 1.9e-3 from 32 spp on, because every dimension is the same sequence re-permuted and a pixel's samples lie on a curve). A Laine-Karras constant that is odd (0xc7afe785) zeroes bit 0 of `x ^= x * c` and halves the pixel jitter range; Burley's constants are even.
+
+**What this means for the viewport:** the honest wins are fewer samples for the same error (Sobol) and fewer pixels (MetalFX), not faster rays; on an M1 Ultra the hardware intersector already spends only ~20% of its rays on primaries and has no cheaper geometry to trace against until the DAG's coarse levels are re-textured.
+
 ## Next (plan)
 
-- Ray-cost work against the Phase 1 baseline: rasterized primary hit, coarser cuts for bounce rays, merged acceleration structures, better samplers, MetalFX upscale.
-- Re-textured coarse levels for charted photogrammetry, so the DAG regains its depth without crossing seams.
+- Re-textured coarse levels for charted photogrammetry, so the DAG regains its depth without crossing seams; that is also what would make a coarser bounce cut usable.
 - Phase 4: the a-trous denoiser on the GPU and temporal reuse.
 - Rays: rasterize the camera hit with the existing WebGPU cluster pass; coarser cuts for bounce and shadow rays; any-hit shadow rays (done); merged per-chunk acceleration structures; better samplers; MetalFX upscale.
