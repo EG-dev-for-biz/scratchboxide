@@ -288,7 +288,7 @@ float remapClamped(float v, float l0, float h0, float l1, float h1) {
 }
 // Cumulus density at world point p (metres from the observer); h is the normalised height in the layer.
 // detail 0-1: the erosion's weight (fades with distance, where it would only alias; 0 for the light march).
-float cumulusDensity(vec3 p, float detail, out float h) {
+float cumulusDensity(vec3 p, float detail, float ramp, out float h) {
     float alt = length(p + vec3(0.0, 6371000.0, 0.0)) - 6371000.0;
     h = (alt - uCloudAltitude) / CUMULUS_THICKNESS;
     if (h <= 0.0 || h >= 1.0) return 0.0;
@@ -302,7 +302,9 @@ float cumulusDensity(vec3 p, float detail, out float h) {
     float topThreshold = perlinWorleyQuantile(1.0 - uCloudCoverage * 0.12) + 0.06;
     float threshold = mix(baseThreshold, topThreshold, smoothstep(0.1, 1.0, h));
     float base = perlinWorley3D(vec3(w.x, w.y * 1.6, w.z) * 0.0006, uTime);
-    float shape = remapClamped(base, threshold, threshold + 0.07, 0.0, 1.0) * smoothstep(0.0, 0.04, h);
+    // ramp: the shape's edge width, crisp close by and wider far away (cumulusEdgeRamp), so distant cloud merges into
+    // a soft bank instead of speckling along the horizon. The light march passes the view sample's ramp.
+    float shape = remapClamped(base, threshold, threshold + ramp, 0.0, 1.0) * smoothstep(0.0, 0.04, h);
     if (detail <= 0.0 || shape <= 0.0) return shape;
     // Erosion: wispy (worley) at the base, billowy (inverted worley: cauliflower puffs) toward the tops.
     float wf = worley3D(w * 0.0035) * 0.625 + worley3D(w * 0.0081) * 0.25 + worley3D(w * 0.017) * 0.125;
@@ -497,7 +499,9 @@ void main() {
                 if (t > tEnd) break;
                 vec3 p = rayDir * t;
                 float h;
-                float d = cumulusDensity(p, 1.0 - smoothstep(8000.0, 25000.0, t), h);
+                float detailW = 1.0 - smoothstep(8000.0, 25000.0, t);
+                float ramp = mix(0.25, 0.07, detailW);
+                float d = cumulusDensity(p, detailW, ramp, h);
                 if (d > 0.002 && skipped) {
                     // A double stride landed inside cloud: back up half of it once so the cloud's edge is not stepped over.
                     skipped = false;
@@ -511,7 +515,7 @@ void main() {
                     for (int k = 0; k < 6; k++) {
                         lt += ls;
                         float hh;
-                        od += cumulusDensity(p + uSunDirection * lt, 0.0, hh) * ls;
+                        od += cumulusDensity(p + uSunDirection * lt, 0.0, ramp, hh) * ls;
                         ls *= 2.0;
                     }
                     // Direct beam (single scattering, two-lobe phase) plus the multiply scattered light that diffuses
@@ -520,8 +524,11 @@ void main() {
                     float tauSun = sigmaT * od;
                     float ph = mix(henyeyGreenstein(cosViewSun, 0.8), henyeyGreenstein(cosViewSun, -0.3), 0.3);
                     float diffuseT = 1.0 / (1.0 + 0.75 * (1.0 - 0.85) * tauSun);
-                    // Multiply scattered light keeps part of the droplets' forward bias (Wrenninge: g halves per octave).
-                    float msPhase = mix(1.0, henyeyGreenstein(cosViewSun, 0.4) * 12.566371, 0.5);
+                    // Multiply scattered light keeps part of the droplets' forward bias (Wrenninge: g halves per octave),
+                    // but only near the sunlit surface: a few optical depths in, the light has scattered many times and
+                    // is isotropic, so a thick backlit cloud is dark with a bright thin rim.
+                    float forwardBias = 0.5 * exp(-tauSun / 8.0);
+                    float msPhase = mix(1.0, henyeyGreenstein(cosViewSun, 0.4) * 12.566371, forwardBias);
                     vec3 sunL = sunE * (exp(-tauSun) * ph + diffuseT * msPhase * 3.0 / 12.566371);
                     // Sky light: the zenith's on the tops, the darker horizon/ground light under the base.
                     // A cloud sees the sky, other cloud and the ground, so its ambient light is half desaturated.
@@ -743,6 +750,7 @@ export function createAtmosphericSkyDome(
     const bakeSize = Math.max(64, Math.round(options.bakeResolution ?? SKY_BAKE_RESOLUTION));
     const bakeTarget = new THREE.WebGLCubeRenderTarget(bakeSize, { type: THREE.HalfFloatType, generateMipmaps: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
     const bakeCamera = new THREE.CubeCamera(1, radius * 4, bakeTarget);
+    let disposed = false;
     bakeScene.add(bakeCamera);
     const displayMat = new THREE.ShaderMaterial({
         vertexShader: ATMOSPHERE_VERTEX_SHADER,
@@ -929,6 +937,8 @@ export function createAtmosphericSkyDome(
         },
         setCloudLayers: (layers) => applyCloudLayers(layers),
         dispose: () => {
+            if (disposed) return;
+            disposed = true;
             scene.remove(skyDome);
             scene.remove(sunMesh);
             scene.remove(hemiLight);
@@ -936,7 +946,14 @@ export function createAtmosphericSkyDome(
             skyGeo.dispose();
             skyMat.dispose();
             displayMat.dispose();
-            bakeTarget.dispose();
+            // three's WebGLCubeRenderTarget dispose reads the renderer's per-face framebuffers, which do not exist
+            // when the dome goes before its first bake (a scene closed at once) or after the renderer was disposed;
+            // it then throws "Cannot read properties of undefined (reading '0')" out of a React cleanup
+            try {
+                bakeTarget.dispose();
+            } catch {
+                bakeTarget.texture.dispose();
+            }
             skyLutTexture?.dispose();
             sunGeo.dispose();
             sunMat.dispose();

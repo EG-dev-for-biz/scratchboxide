@@ -15,6 +15,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { solarIrradiance } from '../src/browser/generative-canvas/services/atmosphere/clear-sky-irradiance';
+import { correlatedColorTemperature } from '../src/browser/generative-canvas/services/atmosphere/spectral-sun';
 import { buildPhysicalSkyLut, physicalSkyRowElevation } from '../src/browser/generative-canvas/services/atmosphere/physical-sky';
 import { computeDiurnalLightingProfile, skyLightColorHex } from '../src/browser/generative-canvas/services/atmosphere/diurnal-lighting';
 
@@ -62,6 +63,20 @@ describe('physical sky', () => {
         const toward = at(lut, 3, 0), zen = at(lut, 89, 48);
         expect(toward[0]).toBeGreaterThan(3 * toward[2]);
         expect(zen[2]).toBeGreaterThan(zen[0]);
+    });
+
+    it('spectral colour: a daytime zenith of ~10,000-30,000 K, and a twilight zenith bluer still (ozone Chappuis band)', () => {
+        const toXy = (v: number[]) => {
+            const X = 0.4124 * v[0] + 0.3576 * v[1] + 0.1805 * v[2], Y = 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2], Z = 0.0193 * v[0] + 0.1192 * v[1] + 0.9505 * v[2];
+            return { x: X / (X + Y + Z), y: Y / (X + Y + Z) };
+        };
+        const day = at(buildPhysicalSkyLut({ sunElevationDeg: 45, turbidity: 2 }), 89, 48);
+        const { x, y } = toXy(day);
+        const cct = correlatedColorTemperature(x, y).kelvin;
+        expect(cct).toBeGreaterThan(10000);
+        expect(cct).toBeLessThan(30000);
+        const dusk = at(buildPhysicalSkyLut({ sunElevationDeg: -6, turbidity: 2 }), 89, 48);
+        expect(dusk[2] / dusk[0]).toBeGreaterThan(day[2] / day[0]);
     });
 
     it('after sunset the Earth shadow darkens the sky by orders of magnitude', () => {
