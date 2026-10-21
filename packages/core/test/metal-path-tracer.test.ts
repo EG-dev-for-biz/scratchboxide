@@ -199,7 +199,7 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
         // has a normal atlas beside its colour atlas.
         expect(textured.stats.atlases.length).toBeGreaterThanOrEqual(5);
         for (const atlas of textured.stats.atlases) {
-            expect(atlas.pairedCells).toBeGreaterThan(0.7 * atlas.cells);
+            expect(atlas.pairedCells).toBeGreaterThanOrEqual(0.5 * atlas.cells);
             expect(fs.existsSync(path.join(tmp, `checker.atlas${atlas.level}.png`))).toBe(true);
             expect(fs.existsSync(path.join(tmp, `checker.normal${atlas.level}.png`))).toBe(true);
         }

@@ -151,8 +151,34 @@ The baked normals carry the source's facet shading onto the coarse triangles: at
 
 **Limits.** The normal atlas floors grazing normals at z = 0.05, so a coarse triangle spanning a wall-roof edge shades its wall texels darkly rather than flat; pairing is greedy (81% paired, not the 100% a quad-mesh would give); metallic and roughness are still per-level factors, not maps.
 
+## Phase 8 (2026-10-20): stuck groups merged, and the DAG runs to the top
+
+**Diagnosis first.** A build instrumented with rejection counters showed what a stuck group is: the partition's leftovers, one to five clusters of 3-150 triangles with 30-99% of their vertices on borders with other groups, every one of them exhausting its collapse heap. Healthy groups (about 7 clusters, 220-540 triangles) at the coarse levels were also exhausting their heaps after ~1,500 link-condition rejections each: a scanned tile is a non-manifold soup, and the link condition (common neighbours must be exactly the edge's apexes) refuses most collapses at pinch points. Coarse clusters also hold only ~33 triangles because their 128-wedge table fills first, which made groups of 8 clusters small and border-heavy.
+
+**Three changes, measured one at a time on Flatiron.**
+
+| builder | levels | stuck groups per level | coarsest level |
+| :-- | --: | :-- | --: |
+| Phase 7 | 7 | 163 / 324 / 335 / 308 / 309 / 255 | 42,605 triangles |
+| + stuck groups merge into the neighbour sharing the most vertices (nearest group when none; union re-simplified with only its outer border locked, up to 32 clusters) | 6 | 0 / 1 / 0 / 9 / 24 | 39,804 |
+| + groups grow to `kGroupTriangles` (1,024) rather than 8 clusters | 5 | 0 / 0 / 1 / 11 | 41,762 |
+| + no link condition (an edge collapse needs a live triangle on it, the flip test stays; two triangles folded onto the same three vertices keep one) | **18** | 0 everywhere but 1 at level 4 | **2 triangles** |
+
+The first two alone could not continue the DAG: they removed the stuck groups but the healthy ones were still walled in by the link condition. Without it every level halves to the top (201k, 101k, 50k, 25k, 12.5k, 6.2k, 3.1k, 1.6k, 775, 387, 193, 96, 48, 24, 12, 6, 2), the level-1 error drops from 1.24 m to 0.47 m (more candidates, cheaper collapses chosen), and the build takes 8.9 s. The merge step still matters at levels 1-6 (36, 120, 60, 20, 5, 1 groups merged). The group's border stays locked, so a topology change inside a group cannot open a crack between groups; the closed-sphere fixture test (every level closed, no open edges) guards the manifold case, and the checker sphere now reaches 34 triangles at level 8.
+
+**Render agreement with full detail** (same camera, 1280x720, 128 spp, denoised, block means against the 0.5 px cut):
+
+| cut | Phase 7: triangles / error | Phase 8: triangles / error |
+| :-- | --: | --: |
+| 1 px | 216k / - | 103k / 0.56% |
+| 4 px | - | 39k / 1.26% |
+| 8 px | 83k / 3.46% | **22k / 2.05%** |
+| 24 px | 56k / 9.35% | **12.5k / 3.05%** |
+
+A quarter of the triangles for a lower error at 8 px, and the 24 px cut goes from shards to whole buildings (crops in the chat log). This reopens the coarse bounce cut measured and rejected in Phases 5 and 6: that bias was geometric, from levels with 9-44 m of error; those levels now carry 1.7-3.6 m at the same triangle counts.
+
 ## Next (plan)
 
-- A group-merging step for stuck groups so the DAG continues past level 7; metallic-roughness atlases; a quad-aware pairing (pair across the longest shared edge first) to lift the 81% paired share.
+- Re-measure the coarse bounce cut on the new DAG (`bench_sbvg_pathtracer.cjs`, bounce-cut-{4,8,16}px); metallic-roughness atlases; a quad-aware pairing to lift the 81% paired share.
 - Phase 4: the a-trous denoiser on the GPU and temporal reuse.
 - Rays: rasterize the camera hit with the existing WebGPU cluster pass; coarser cuts for bounce and shadow rays; any-hit shadow rays (done); merged per-chunk acceleration structures; better samplers; MetalFX upscale.

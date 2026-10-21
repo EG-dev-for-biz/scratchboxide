@@ -47,7 +47,7 @@ const INCLUDE_DIR = path.join(REPO_ROOT, 'packages/core/src/native/3d-engine/inc
 
 const clang = requireBinary(process.env.CXX || 'clang++', 'install clang++ (C++20)');
 /** sha256 of the .sbvg the builder writes for the determinism fixture (bumpySphere(60, 120) at [10, 2, -3]). */
-const DETERMINISTIC_FIXTURE_SHA256 = 'b585a9d3e4a41257993a015e976f7b36ca4b7a638c786c97907fae97e1e7e4c6';
+const DETERMINISTIC_FIXTURE_SHA256 = '3c3029664abd68d2fe50ef3346a72c86091c74f81f0abda73ae9b333e3bcac02';
 const SCREENSHOTS = path.join(REPO_ROOT, 'test-results', 'screenshots');
 const ARCH_GLB = 'deploy/cloud-run/spatial-separator/assets/arch_constantine_sb_archi.glb';
 
@@ -253,6 +253,13 @@ describe.skipIf(!clang.ok)(withReason('Virtual geometry builder (C++20 cluster L
             expect(h.aabbMax[k] - h.aabbMin[k]).toBeLessThan(4.4);
         }
         expect(h.levelCount).toBeGreaterThanOrEqual(6);
+        // A closed surface simplifies all the way: no group is ever carried up unchanged, and the
+        // partition's leftover groups are merged rather than left stuck.
+        expect(sphereStats.levels.length).toBe(h.levelCount - 1);
+        for (const level of sphereStats.levels) {
+            expect(level.stuckGroups, `level ${level.level}`).toBe(0);
+            expect(level.mergedGroups).toBeGreaterThanOrEqual(0);
+        }
         expect(h.levels[0].level).toBe(h.levelCount - 1); // coarsest first
         expect(h.levels[h.levels.length - 1].level).toBe(0);
     });
