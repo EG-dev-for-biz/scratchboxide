@@ -151,9 +151,12 @@ describe.skipIf(!stagedChrome.ok || !archReady)('Washington Square Arch: remesh 
         for (const p of [0.25, 0.5, 1]) { await advanceTo(page, 'stg-300dd401-l1', p); await page.screenshot(`real_arch_raw_scan_${Math.round(p * 100)}`); }
 
         const st1 = { ...st0, layers: [raw, remesh], stages: st0.stages.map(s => (s.stage === 'remesh' ? { ...s, status: 'committed' as const, layerIds: [remesh.objectId] } : s)) };
-        const before = (await page.eval<{ covered: number }>('sbHarness.coverage()')).covered;
         await page.eval(`sbHarness.update(${JSON.stringify(stagedSceneData(st1, { camera }))})`);
         await page.waitFor(`sbHarness.attached('stg-cec31de8-l2')`);
+        // the raw scan alone, measured once the crossfade is about to start: while the remesh stage was still running the
+        // scan wore the work sweep (useStagedBuild.ts), which is not part of what the crossfade must keep covered
+        await page.step(1, STEP);
+        const before = (await page.eval<{ covered: number }>('sbHarness.coverage()')).covered;
         const cov: number[] = [];
         for (const p of [0.25, 0.5, 1]) {
             await advanceTo(page, 'stg-cec31de8-l2', p);
