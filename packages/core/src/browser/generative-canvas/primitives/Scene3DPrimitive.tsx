@@ -40,6 +40,7 @@ import type { HistoryEditMeta } from './scene3d/useViewportHistory';
 import { ObjectEditCapture, createGeometrySwapEdit } from '../services/viewport-history-deltas';
 import { attachHistoryShortcuts } from '../services/viewport-history';
 import { assetRecoveryClient, recoverableAssetPath, type AssetRecoveryState } from '../services/asset-recovery-client';
+import { stripEmbeddedGlb } from '../../../common/strip-embedded-glb';
 import {
     TransformGizmoEngine,
     computeAxisTranslation,
@@ -3956,14 +3957,16 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         const lost = job.items.filter(i => i.outcome === 'unrecoverable' || i.outcome === 'failed').map(i => i.path).filter(p => p.startsWith('/models/'));
         if (lost.length === 0) return undefined;
         const place = staged.place;
+        // the scene itself goes along (its GLB bytes stripped): a district rebuilt into it is carved around its kept structure
+        const scene = { id: activeArtifact?.id ?? staged.artifactId, type: '3d-scene', data: stripEmbeddedGlb(sceneData) };
         return () => assetRecoveryClient.rebuild(lost, {
             query: place.query,
             isolate: !!staged.structure || lost.some(p => /_iso_/.test(p)),
             trees: true,
             ...(place.resolvedAddress && Number.isFinite(place.lat) && Number.isFinite(place.lng) && (place.lat !== 0 || place.lng !== 0)
                 ? { place: { lat: place.lat, lng: place.lng, formattedAddress: place.resolvedAddress } } : {})
-        });
-    }, [assetRecovery, sceneData]);
+        }, scene);
+    }, [assetRecovery, sceneData, activeArtifact?.id]);
     const viewportNotices = React.useMemo(() => resolveViewportNotice({
         webglError,
         generatorError: currentGeneratorError,

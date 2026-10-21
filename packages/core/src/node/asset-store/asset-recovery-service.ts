@@ -44,7 +44,7 @@ export interface RecoveryJob {
 
 /** Re-runs a staged location build from its recorded request and reports the files it published. */
 export interface StagedRebuilder {
-    (request: unknown, ctx: { workspaceRoot: string; signal: AbortSignal; reportProgress: (message: string, fraction?: number) => void }):
+    (request: unknown, ctx: { workspaceRoot: string; signal: AbortSignal; reportProgress: (message: string, fraction?: number) => void; activeArtifact?: { id: string; type: string; data?: unknown } }):
         Promise<{ runId: string; layers: Array<{ url: string }> }>;
 }
 
@@ -54,6 +54,11 @@ export interface RecoveryStartOptions {
      * still knows its place, so the viewport offers to rebuild the location from it.
      */
     fallbackStaged?: { request: unknown };
+    /**
+     * The scene the files belong to (a CanvasArtifact). A district rebuilt with it is staged into it as the original
+     * was, which is what makes the district remesh carved around the scene's kept structure.
+     */
+    activeArtifact?: { id: string; type: string; data?: unknown };
 }
 
 export interface AssetRecoveryOptions {
@@ -140,6 +145,7 @@ export class AssetRecoveryService {
             if (this.store.lookup(item.path)) {
                 item.outcome = 'restored';
                 item.detail = 'served from the asset store';
+                this.materialize(item);
             }
         }
         // 2. recipes, grouped so one lost run is rebuilt once
@@ -147,8 +153,9 @@ export class AssetRecoveryService {
         // a staged file with no recipe of its own is rebuilt from the scene's place when the caller gives it
         // an isolated structure and its district are two runs: a file name with "_iso" came from the isolated one
         const fallbackRequest = opts.fallbackStaged && this.options.rebuildStaged ? opts.fallbackStaged.request as Record<string, unknown> : undefined;
+        // the district is staged into the scene when the scene is given: that carves its remesh around the kept structure
         const fallbackGroup = (isolate: boolean) => ({
-            recipe: { id: `fallback:staged:${isolate ? 'isolated' : 'district'}`, kind: 'staged-location', body: { request: { ...fallbackRequest, isolate } } },
+            recipe: { id: `fallback:staged:${isolate ? 'isolated' : 'district'}`, kind: 'staged-location', body: { request: { ...fallbackRequest, isolate, ...(!isolate && opts.activeArtifact ? { stageIntoActiveScene: true } : {}) } } },
             items: [] as RecoveryItem[]
         });
         const fallbacks = fallbackRequest ? { isolated: fallbackGroup(true), district: fallbackGroup(false) } : undefined;
@@ -200,7 +207,8 @@ export class AssetRecoveryService {
             try {
                 const result = await this.options.rebuildStaged!(request, {
                     workspaceRoot: this.options.workspaceRoot, signal,
-                    reportProgress: (message, fraction) => { job.message = `${message}${label}`; job.fraction = fraction; }
+                    reportProgress: (message, fraction) => { job.message = `${message}${label}`; job.fraction = fraction; },
+                    ...(opts.activeArtifact ? { activeArtifact: opts.activeArtifact } : {})
                 });
                 const produced = new Map<string, string>();
                 const urls = new Set<string>([...result.layers.map(l => l.url), ...(result.runId ? this.store.servedByRecipe(`staged:${result.runId}`).map(s => s.path) : [])]);
@@ -211,14 +219,14 @@ export class AssetRecoveryService {
                     if (key && !produced.has(key)) produced.set(key, url);
                 }
                 for (const item of group.items) {
-                    if (this.store.lookup(item.path)) {
-                        // the rebuild published the very same name (same cache keys)
-                        item.outcome = 'restored';
-                        item.detail = `published again by run ${result.runId}`;
-                        continue;
-                    }
                     const key = layerNameKey(item.path);
                     const replacement = key ? produced.get(key) : undefined;
+                    if (this.store.lookup(item.path)) {
+                        item.outcome = 'restored';
+                        item.detail = `published again by run ${result.runId}`;
+                        this.materialize(item);
+                        continue;
+                    }
                     if (!replacement || !this.store.lookup(replacement)) {
                         item.outcome = 'failed';
                         item.detail = `run ${result.runId} published no file for this layer (${[...urls].map(u => path.posix.basename(u)).join(', ') || 'nothing'})`;
@@ -227,6 +235,7 @@ export class AssetRecoveryService {
                     this.store.alias(item.path, replacement, { origin: 'recovery', rebuilt: true, workspace: this.options.workspaceRoot, recipeId: `staged:${result.runId}` });
                     item.outcome = 'rebuilt';
                     item.detail = `rebuilt by run ${result.runId} as ${path.posix.basename(replacement)}`;
+                    this.materialize(item);
                 }
             } catch (err) {
                 const reason = signal.aborted ? 'cancelled' : (err as Error).message;
@@ -241,6 +250,16 @@ export class AssetRecoveryService {
             counts.failed ? `${counts.failed} failed` : '', counts.unrecoverable ? `${counts.unrecoverable} not recoverable` : ''
         ].filter(Boolean).join(', ') || 'Nothing to recover';
         job.fraction = 1;
+    }
+
+    /** The recovered file written back to <workspace>/public/models, where the staged build reads kept structure files from. */
+    private materialize(item: RecoveryItem): void {
+        if (!item.path.startsWith('/models/')) return;
+        try {
+            this.store.materialize(item.path, path.join(this.options.workspaceRoot, 'public', 'models'));
+        } catch (err) {
+            item.detail = `${item.detail ?? ''}; not written back to public/models: ${(err as Error).message}`;
+        }
     }
 
     /**
