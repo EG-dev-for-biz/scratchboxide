@@ -42,7 +42,10 @@ test('findGooglePano skips user photospheres for a Google capture nearby', async
     let i = 0;
     const pano = await StreetViewGroundingImageService.findGooglePano(40.75, -73.98, 'key', (async () => ok(metas[Math.min(i++, 1)])) as any);
     assert.deepStrictEqual(pano, { panoId: 'googlePano', lat: 3, lng: 4, date: '2026-04', copyright: '© Google' });
-    assert.ok(isGoogleCapture('© 2026 Google') === false && isGoogleCapture('© Google'));
+    // the metadata endpoint wrote "© Google" until October 2026 and "© 2026 Google" since (live, 2026-10-21: 299 of 299 Google
+    // panos round the Haughwout); a contributor's name never stands between the sign and "Google"
+    assert.ok(isGoogleCapture('© 2026 Google') && isGoogleCapture('© Google') && isGoogleCapture('©Google'));
+    assert.ok(!isGoogleCapture('© Threshold 360') && !isGoogleCapture('© Alejandro Sanchez') && !isGoogleCapture('© 2026 Threshold 360') && !isGoogleCapture(undefined));
 });
 
 test('findGooglePano sends a ring\'s metadata requests together and still picks the first Google capture in ring order', async () => {

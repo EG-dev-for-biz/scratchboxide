@@ -76,9 +76,13 @@ export interface StreetViewGroundingDeps {
     retryDelayMs?: number;
 }
 
-/** Only Google's own captures are eligible; user-contributed photospheres are refused ("Pano is not published or eligible"). */
+/**
+ * Only Google's own captures are eligible; user-contributed photospheres are refused ("Pano is not published or eligible").
+ * The metadata endpoint wrote "© Google" until October 2026 and writes "© 2026 Google" since (a year before the name): both
+ * are Google's. A contributor's name never comes between the sign and "Google" (their panos read "© <name>").
+ */
 export function isGoogleCapture(copyright: string | undefined): boolean {
-    return /©\s*Google\b/i.test(copyright || '');
+    return /©\s*(?:\d{4}\s+)?Google\b/i.test(copyright || '');
 }
 
 export class StreetViewGroundingImageService {

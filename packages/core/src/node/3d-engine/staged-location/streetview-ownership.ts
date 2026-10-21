@@ -180,8 +180,11 @@ export interface ViewOwnershipRecord {
     panoId: string;
     /** 'segmented': the mask stands; 'refused': no pixel of the view is vouched for (why in `reason`). */
     status: 'segmented' | 'refused';
-    /** How the segmenter was prompted: the description with the geometry's box as a hint, or the geometry alone. */
-    prompts: 'description+geometry' | 'geometry';
+    /**
+     * How the segmenter was prompted: the description with the geometry's box as a hint, the geometry alone (no description
+     * given), or the geometry alone because the view's registered pose holds (`describe` said so: no vision call spent).
+     */
+    prompts: 'description+geometry' | 'geometry' | 'geometry (registered pose)';
     reason?: string;
     targetPixels: number;
     maskPixels: number;
@@ -246,6 +249,14 @@ export async function ownViews(input: {
      * neighbour standing exactly where the structure projects from the structure).
      */
     target?: string;
+    /**
+     * Per view, whether the structure's cut-out is prompted with the description (a vision call that places the points and
+     * refuses a photo that does not show the structure) or from the geometry alone. Default: the description whenever there
+     * is one. A view whose pose was registered against the tile mesh to a few decimetres needs no vision call: the geometry
+     * says where the structure is, and the cut-out's agreement with it (OWNERSHIP_MIN_IOU) still judges the photo. The
+     * occluder cut-out keeps the description either way.
+     */
+    describe?: (view: ProjectionView, index: number) => boolean;
     /** Writes one overlay PNG per view here (diagnostics): the photo dimmed outside the cut-out, the projection's edge in red. */
     debugDir?: string;
     /**
@@ -262,9 +273,11 @@ export async function ownViews(input: {
             const v = input.views[k];
             const t0 = Date.now();
             const W = v.camera.width, H = v.camera.height;
+            const described = !!input.target && (input.describe ? input.describe(v, k) : true);
+            const prompts: ViewOwnershipRecord['prompts'] = described ? 'description+geometry' : input.target ? 'geometry (registered pose)' : 'geometry';
             const refuse = (reason: string, targetPixels: number, extra: Partial<ViewOwnershipRecord> = {}) => {
                 out[k] = { ...v, ownerMask: new Uint8Array(W * H) };
-                records[k] = { panoId: v.panoId, status: 'refused', prompts: input.target ? 'description+geometry' : 'geometry', reason, targetPixels, maskPixels: 0, ms: Date.now() - t0, ...extra };
+                records[k] = { panoId: v.panoId, status: 'refused', prompts, reason, targetPixels, maskPixels: 0, ms: Date.now() - t0, ...extra };
             };
             try {
                 if (input.signal?.aborted) throw input.signal.reason ?? new Error('stopped');
@@ -275,7 +288,7 @@ export async function ownViews(input: {
                 }
                 let raw: Uint8Array;
                 try {
-                    raw = await input.segment(v.image, { box: p.box, positive: p.positive, negative: p.negative, ...(input.target ? { target: input.target } : {}) }, input.signal);
+                    raw = await input.segment(v.image, { box: p.box, positive: p.positive, negative: p.negative, ...(described ? { target: input.target } : {}) }, input.signal);
                 } catch (err) {
                     if (!(err instanceof OwnershipTargetNotFound)) throw err;
                     refuse(`the structure is not in this photo (${err.reason})`, p.targetPixels);
@@ -315,7 +328,7 @@ export async function ownViews(input: {
                 if (input.debugDir) writeOverlay(path.join(input.debugDir, `${String(k).padStart(2, '0')}_${v.panoId}_owned.png`), v.image, mask, p, occD);
                 out[k] = { ...v, ownerMask: mask };
                 input.onMasks?.(k, { owner: mask, occluders: occD });
-                records[k] = { panoId: v.panoId, status: 'segmented', prompts: input.target ? 'description+geometry' : 'geometry', targetPixels: p.targetPixels, maskPixels: m, iou: Math.round(iou * 1000) / 1000,
+                records[k] = { panoId: v.panoId, status: 'segmented', prompts, targetPixels: p.targetPixels, maskPixels: m, iou: Math.round(iou * 1000) / 1000,
                     occluders: { depthPixels: depthPx, segmentedPixels: segPx, grownPixels: grownPx, removedPixels: removed, segmenter: segNote }, ms: Date.now() - t0 };
             } catch (err) {
                 if (input.signal?.aborted) throw err;

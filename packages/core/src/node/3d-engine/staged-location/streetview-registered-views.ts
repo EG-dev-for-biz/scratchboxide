@@ -23,13 +23,51 @@ import { fetchViews, knownRefusals, type EvidenceImage, type PanoCandidate, type
 import { footprintSurveyFaces, selectSurveyViews, surveyCandidates, surveyViewFor, SURVEY_IMAGE_TIMEOUT_MS, SURVEY_REFUSAL_RETRIES, type SurveyFaceTarget, type SurveyView } from './face-survey';
 import type { StructurePickResult } from './extraction-sizing';
 import { runPanoRegistrationOffThread, type PanoRegistrationJob, type PanoRegistrationOutcome } from './pano-registration-run';
-import type { HeldImage } from './pano-edge-registration';
+import type { Registration } from './pano-registration';
+import type { EdgePanoOutcome, HeldImage } from './pano-edge-registration';
 import { projectionViewFromRegistered } from './texture-projection-views';
 import { ownViews, type OwnershipSegmenter, type ViewOwnershipRecord } from './streetview-ownership';
 
 const angleBetween = (a: number, b: number) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
 /** A requested face heading is matched to the structure's nearest facade within this angle. */
 export const FACE_MATCH_TOLERANCE_DEG = 45;
+/**
+ * A view posed against the tile mesh (edges or jointly) to at most this residual needs no vision call to place the
+ * structure in its photo: the geometry prompts the segmenter, and the cut-out's agreement with the projection still
+ * judges it (streetview-ownership.ts `describe`). The Haughwout survey registered every pano jointly at 0.25-0.35 m.
+ */
+export const OWNERSHIP_TRUST_RESIDUAL_M = 0.6;
+
+/** Whether `registration` posed the pano against the tile mesh (edges or jointly) to at most `maxResidualM`. */
+export function trustedRegisteredPose(registration: Pick<Registration, 'perPano'> | undefined, panoId: string, maxResidualM = OWNERSHIP_TRUST_RESIDUAL_M): boolean {
+    const per = registration?.perPano.find(p => p.panoId === panoId);
+    return !!per && (per.method === 'edges' || per.method === 'joint') && per.edgeResidualM !== undefined && Number.isFinite(per.edgeResidualM) && per.edgeResidualM <= maxResidualM;
+}
+
+/**
+ * The context mesh for the ownership and occluder masks of a structure that is not itself part of the tile mesh (pipeline
+ * E's clean massing): the tile mesh without the structure's own scan. With the scan left in, every cornice and arch hood
+ * the melted scan bulges past the massing plane counted as "something in front" (the Haughwout's ornament rows were cut out
+ * of its owned pixels in stripes, and a frontal street-level view lost its target region and was refused). Triangles are
+ * matched by centroid within `cellM` (the isolate is written from the tile's own triangles, so they coincide).
+ */
+export function contextWithoutStructure(context: RenderMesh3D, structure: RenderMesh3D, cellM = 0.02): RenderMesh3D {
+    const key = (V: ArrayLike<number>, a: number, b: number, c: number) => {
+        const x = (V[a] + V[b] + V[c]) / 3, y = (V[a + 1] + V[b + 1] + V[c + 1]) / 3, z = (V[a + 2] + V[b + 2] + V[c + 2]) / 3;
+        return `${Math.round(x / cellM)},${Math.round(y / cellM)},${Math.round(z / cellM)}`;
+    };
+    const own = new Set<string>();
+    const SV = structure.vertices, SI = structure.indices;
+    for (let t = 0; t + 2 < SI.length; t += 3) own.add(key(SV, SI[t] * 3, SI[t + 1] * 3, SI[t + 2] * 3));
+    if (!own.size) return context;
+    const CV = context.vertices, CI = context.indices;
+    const kept: number[] = [];
+    for (let t = 0; t + 2 < CI.length; t += 3) {
+        if (own.has(key(CV, CI[t] * 3, CI[t + 1] * 3, CI[t + 2] * 3))) continue;
+        kept.push(CI[t], CI[t + 1], CI[t + 2]);
+    }
+    return { vertices: CV, indices: Uint32Array.from(kept) };
+}
 
 export interface SurveyRefusal { faceId: string; panoId: string; error: string; replacedBy?: string }
 export interface SurveyFetchFailure { faceId: string; panoId: string; error: string; transient: boolean }
@@ -168,8 +206,20 @@ export async function registeredSurveyViews(input: {
     register?: (job: PanoRegistrationJob, opts: { signal?: AbortSignal; log?: (m: string) => void }) => Promise<PanoRegistrationOutcome>;
     /** Also a street-level view (streetLevelView) of each planned view's pano (default false). */
     streetLevel?: boolean;
+    /** Diagnostics: one ownership overlay PNG per view is written here (ownViews). */
+    debugDir?: string;
+    /**
+     * A view registered (edges or jointly) to at most this residual is cut out from the geometry alone, without the vision
+     * call that places the structure in the photo (default OWNERSHIP_TRUST_RESIDUAL_M; 0 never trusts a pose).
+     */
+    trustRegisteredM?: number;
     signal?: AbortSignal; onProgress?: (m: string) => void;
-}): Promise<{ views: RegisteredView[]; images: EvidenceImage[]; refusals: SurveyRefusal[]; failures: SurveyFetchFailure[]; registrationError?: string; ms: { fetch: number; register: number; own: number } }> {
+}): Promise<{
+    views: RegisteredView[]; images: EvidenceImage[]; refusals: SurveyRefusal[]; failures: SurveyFetchFailure[]; registrationError?: string;
+    /** How the registration went, per pano: the edge pose taken or not and why, and the joint fit's verdict (why a view stayed nominal). */
+    registration?: { panos: Array<{ panoId: string; chosen: string; reason: string; edgeResidualPx: EdgePanoOutcome['edgeResidualPx'] }>; joint?: { chosen: string; reason: string } };
+    ms: { fetch: number; register: number; own: number };
+}> {
     const progress = input.onProgress ?? (() => undefined);
     const faces = structureFaces(input.site.structure);
     const planned = planSurveyViews(input.panos, faces, input.site, input.maxViews);
@@ -199,13 +249,21 @@ export async function registeredSurveyViews(input: {
         jpeg: im.bytes, ...(registration ? { registration } : {}), ...(im.view.date ? { captureDate: im.view.date } : {})
     }));
     t = Date.now();
-    const own = await ownViews({ views: pviews, structure: input.structureMesh, concurrency: 4, ...(input.context ? { context: input.context } : {}), segment: input.segment, ...(input.target ? { target: input.target } : {}), signal: input.signal, onProgress: progress });
+    const trust = input.trustRegisteredM ?? OWNERSHIP_TRUST_RESIDUAL_M;
+    const own = await ownViews({
+        views: pviews, structure: input.structureMesh, concurrency: 4, ...(input.context ? { context: input.context } : {}), segment: input.segment, ...(input.target ? { target: input.target } : {}),
+        describe: v => !trustedRegisteredPose(registration, v.panoId, trust), ...(input.debugDir ? { debugDir: input.debugDir } : {}), signal: input.signal, onProgress: progress
+    });
     const views: RegisteredView[] = own.views.map((v, k) => {
         const per = registration?.perPano.find(p => p.panoId === v.panoId);
         const method = per?.method ?? 'nominal';
         return { ...v, faceId: (got.images[k].view as SurveyView).faceId, registration: { method, residualM: per?.edgeResidualM ?? null }, ownership: own.records[k] };
     });
-    return { views, images: got.images, refusals: got.refusals, failures: got.failures, ...(registrationError ? { registrationError } : {}), ms: { fetch: fetchMs, register: registerMs, own: Date.now() - t } };
+    const how = outcome ? {
+        panos: (outcome.edge?.panos ?? []).map(p => ({ panoId: p.panoId, chosen: p.chosen, reason: p.reason, edgeResidualPx: p.edgeResidualPx })),
+        ...(outcome.joint ? { joint: { chosen: outcome.joint.chosen, reason: outcome.joint.reason } } : {})
+    } : undefined;
+    return { views, images: got.images, refusals: got.refusals, failures: got.failures, ...(registrationError ? { registrationError } : {}), ...(how ? { registration: how } : {}), ms: { fetch: fetchMs, register: registerMs, own: Date.now() - t } };
 }
 
 export { sceneToRenderMesh, readGlbScene };
