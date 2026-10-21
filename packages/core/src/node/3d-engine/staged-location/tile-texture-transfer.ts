@@ -91,6 +91,13 @@ export interface TileTriangles {
     flatLinear: Float32Array;
     textures: TileTexture[];
     /**
+     * Per triangle, 1 when its material is a fill a stage laid over surfaces the photo does not cover (the tree strip's
+     * caps and skirts: material extras.scratchbox.photoInferredFill), carried from neighbouring texels. Drawn like any
+     * texture, but not the scan's photo of that surface: the photo transfer (buildTileSurface) never samples it.
+     * Absent (a soup built by hand): no fill.
+     */
+    fill?: Uint8Array;
+    /**
      * With readTileTriangles(glb, { pbr: true }): each triangle's glTF metallic-roughness material (index into `materials`,
      * -1 = none: drawn as roughness 1, dielectric). Selections and copies of the soup may drop it (it is optional).
      */
@@ -278,7 +285,7 @@ export function readTileTriangles(glb: Uint8Array, options: { nodeTags?: boolean
         return textures.length - 1;
     };
 
-    const pos: number[] = [], uv: number[] = [], nrm: number[] = [], texIdx: number[] = [], flat: number[] = [], tag: number[] = [], attr: number[] = [];
+    const pos: number[] = [], uv: number[] = [], nrm: number[] = [], texIdx: number[] = [], flat: number[] = [], tag: number[] = [], attr: number[] = [], fillFlag: number[] = [];
     // accessors are read once (instanced cluster meshes are shared by many nodes)
     const accessors = new Map<number, Float64Array>();
     const accessor = (i: number): Float64Array => { let a = accessors.get(i); if (!a) accessors.set(i, a = readAccessor(json, bin, i)); return a; };
@@ -308,6 +315,7 @@ export function readTileTriangles(glb: Uint8Array, options: { nodeTags?: boolean
                 const ti = hasUv && texInfo && (texInfo.texCoord ?? 0) === 0 ? textureFor(texInfo.index) : -1;
                 const f = pbr?.baseColorFactor || [1, 1, 1, 1];
                 const pm = pbrFor(prim.material);
+                const isFill = mat?.extras?.scratchbox?.photoInferredFill === true ? 1 : 0;
                 // an untextured surface's colour is the base colour factor times its vertex colours (COLOR_0, glTF 2.0
                 // 3.9.2), e.g. SB-Veggie's bark and leaves; averaged over the triangle's corners
                 const C = ti < 0 && prim.attributes.COLOR_0 !== undefined ? accessor(prim.attributes.COLOR_0) : undefined;
@@ -337,6 +345,7 @@ export function readTileTriangles(glb: Uint8Array, options: { nodeTags?: boolean
                         else uv.push(0, 0, 0, 0, 0, 0);
                         nrm.push(nx, ny, nz);
                         texIdx.push(ti);
+                        fillFlag.push(isFill);
                         tag.push(nodeIndex);
                         if (options.vertexAttribute) {
                             if (A) for (const v of [a, b, c]) attr.push(A[v * aw], aw > 1 ? A[v * aw + 1] : 0);
@@ -356,7 +365,7 @@ export function readTileTriangles(glb: Uint8Array, options: { nodeTags?: boolean
     for (const r of roots) visit(r, IDENTITY);
     const out: TileTriangles = {
         positions: Float32Array.from(pos), uvs: Float32Array.from(uv), normals: Float32Array.from(nrm),
-        texture: Int32Array.from(texIdx), flatLinear: Float32Array.from(flat), textures,
+        texture: Int32Array.from(texIdx), flatLinear: Float32Array.from(flat), textures, fill: Uint8Array.from(fillFlag),
         ...(options.pbr ? { pbr: { material: Int32Array.from(pbrIdx), materials: pbrMaterials } } : {})
     };
     return options.nodeTags ? { ...out, node: Int32Array.from(tag), ...(options.vertexAttribute ? { attribute: Float32Array.from(attr) } : {}) } : out;
@@ -369,6 +378,11 @@ export function selectTriangles(t: TileTriangles, keep: ArrayLike<number | boole
     for (let i = 0; i < n; i++) if (keep[i]) count++;
     const idx = new Int32Array(count);
     for (let i = 0, d = 0; i < n; i++) if (keep[i]) idx[d++] = i;
+    const pickBytes = (a: Uint8Array, n: number, from: Int32Array): Uint8Array => {
+        const out = new Uint8Array(n);
+        for (let d = 0; d < n; d++) out[d] = a[from[d]];
+        return out;
+    };
     const pick = <A extends Float32Array | Int32Array>(a: A, w: number, out: A): A => {
         for (let d = 0; d < count; d++) {
             const s = idx[d] * w, o = d * w;
@@ -379,6 +393,7 @@ export function selectTriangles(t: TileTriangles, keep: ArrayLike<number | boole
     return {
         positions: pick(t.positions, 9, new Float32Array(count * 9)), uvs: pick(t.uvs, 6, new Float32Array(count * 6)), normals: pick(t.normals, 3, new Float32Array(count * 3)),
         texture: pick(t.texture, 1, new Int32Array(count)), flatLinear: pick(t.flatLinear, 3, new Float32Array(count * 3)), textures: t.textures,
+        ...(t.fill ? { fill: pickBytes(t.fill, count, idx) } : {}),
         ...(t.cutout ? { cutout: { ...t.cutout, clay: pick(t.cutout.clay, 1, new Int32Array(count)), textured: pick(t.cutout.textured, 1, new Int32Array(count)) } } : {})
     };
 }
@@ -543,6 +558,7 @@ export function buildTileSurface(tris: TileTriangles, options: TileSurfaceOption
     const delight = options.delight === undefined ? PHOTOGRAMMETRIC_DELIGHT.defaults : options.delight;
     const cp = new Float64Array(5), best = new Float64Array(5), col = new Float64Array(3);
     const stack = new Int32Array(128);
+    const fill = tris.fill && tris.fill.length === n ? tris.fill : undefined;
 
     // Texel size: median over textured triangles of world edge length / UV edge length in texels.
     const sizes: number[] = [];
@@ -573,6 +589,7 @@ export function buildTileSurface(tris: TileTriangles, options: TileSurfaceOption
                 if (bvh.left[id] < 0) {
                     for (let i = bvh.start[id]; i < bvh.start[id] + bvh.count[id]; i++) {
                         const t = bvh.order[i];
+                        if (fill && fill[t]) continue; // a stage's fill over a surface the photo does not cover: not the photo
                         const c = tris.normals[t * 3] * nq[0] + tris.normals[t * 3 + 1] * nq[1] + tris.normals[t * 3 + 2] * nq[2];
                         if (c < minCos) continue; // back face or far skin of a thin wall
                         closestOnTriangle(p, tris.positions, t, cp);

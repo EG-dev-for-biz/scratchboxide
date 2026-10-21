@@ -868,6 +868,18 @@ export function remeshNote(stats: Record<string, any>, vertexText: string, strip
     if (removed > 0) {
         const skirts = strip?.skirts?.areaM2 ? Object.values(strip.skirts.areaM2 as Record<string, number>).reduce((s, v) => s + Number(v || 0), 0) : 0;
         parts.push(`where trees were removed the ground was closed (${(strip?.triangles?.cap ?? 0).toLocaleString('en-US')} cap triangles${skirts >= 1 ? `, ${Math.round(skirts)} m² of closing walls` : ''}), which is not in the scan`);
+        const fill = strip?.fill;
+        if (fill?.enabled) {
+            const gen = Number(fill.cap?.generatedAreaM2 ?? 0) + Number(fill.skirt?.generatedAreaM2 ?? 0);
+            const conf = (k: any) => (Number(k?.meanConfidence ?? 0)).toFixed(2);
+            parts.push(`the closed ground and walls carry photo-inferred texels from the scan's photo around them (caps: confidence ${conf(fill.cap)}, closing walls: ${conf(fill.skirt)})${gen >= 0.5 ? `, except ${Math.round(gen)} m² with no photographed neighbour, which is generated (the tile's mean colour)` : ''}`);
+        }
+        const dec = strip?.skirtDecisions;
+        if (dec) {
+            const sum = (field: 'dropped' | 'shortened') => Object.values(dec as Record<string, any>).filter(v => v && typeof v === 'object' && v[field]).reduce((a, v) => ({ count: a.count + Number(v[field].count ?? 0), area: a.area + Number(v[field].areaM2 ?? v[field].areaRemovedM2 ?? 0) }), { count: 0, area: 0 });
+            const dropped = sum('dropped'), shortened = sum('shortened');
+            if (dropped.count || shortened.count) parts.push(`${dropped.count ? `${dropped.count} closing walls (${Math.round(dropped.area)} m²) were not built` : ''}${dropped.count && shortened.count ? ' and ' : ''}${shortened.count ? `${shortened.count} were cut down (${Math.round(shortened.area)} m² off)` : ''} where the scan has the real wall behind them`);
+        }
     }
     if (vertexText) parts.push(vertexText);
     return parts.join('; ');
@@ -2425,7 +2437,24 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     run.keys['trees-measure'] = r.cacheKey;
                     run.cacheStatus['trees-measure'] = r.cached ? 'hit' : 'miss';
                     const removed = Number(r.stats?.triangles?.removed ?? 0);
-                    return { status: 'committed', value: r, source: `tile_vegetation strip: ${removed.toLocaleString('en-US')} canopy triangles measured as trees and removed`, cached: r.cached };
+                    // the caps and skirts that closed the ground carry photo-inferred texels; the pieces with no photographed
+                    // neighbour are generated (the tile's mean colour) and said so, one record per kind
+                    const degradations: DegradationRecord[] = [];
+                    const fill = r.stats?.fill;
+                    for (const kind of ['cap', 'skirt'] as const) {
+                        const k = fill?.[kind];
+                        const generatedArea = Number(k?.generatedAreaM2 ?? 0), pieces = Number(k?.piecesGenerated ?? 0);
+                        if (!(fill?.enabled && pieces > 0 && generatedArea > 0.05)) continue;
+                        degradations.push(run.degrade(record('trees-measure', 'strip_fill_generated', {
+                            part: { description: kind === 'cap' ? 'the ground closed where trees were removed' : 'the walls closed down to the ground where trees were removed' },
+                            intended: 'photo-inferred texels from the scan\'s photo of the surface around the piece',
+                            fellTo: `the tile's mean colour of such surfaces (generated) on ${pieces} piece${pieces === 1 ? '' : 's'}, ${generatedArea.toFixed(1)} m²`,
+                            provenanceAfter: 'generated',
+                            reason: `no kept photographed surface facing the same way lies within reach of ${pieces === 1 ? 'this piece' : 'these pieces'}: the scan has nothing to carry a texel from, so the piece is coloured, not sampled`,
+                            transient: false, runId, now: now(), suffix: kind
+                        })));
+                    }
+                    return { status: 'committed', value: r, source: `tile_vegetation strip: ${removed.toLocaleString('en-US')} canopy triangles measured as trees and removed`, cached: r.cached, ...(degradations.length ? { degradations } : {}) };
                 },
                 degrade: async err => ({
                     status: 'degraded', source: 'the scan keeps its trees',

@@ -81,6 +81,32 @@ export interface TileVegetationStripParams {
     capGrid?: number;
     seamGap?: number;
     sampleSpacing?: number;
+    /**
+     * The fill of the caps and skirts the strip builds where trees stood (1, default): each carries photo-inferred texels
+     * sampled from the kept scan's own photo of the surface around it and carried across it from the nearest real texel
+     * (confidence exp(-d / fillConfidenceScale)); a piece with no real neighbour takes the tile's mean colour of such
+     * surfaces and is labelled generated. 0: the legacy flat clay primitives.
+     */
+    fill?: number;
+    /** Texel of the fill (0.1 m; coarser only to keep the atlas within fillAtlasMaxPx, the atlas's longest side, 4096). */
+    fillTexel?: number;
+    fillAtlasMaxPx?: number;
+    /** How far beyond a piece the real scan is read (2 m). */
+    fillContext?: number;
+    /** A kept surface within this of a texel's place (0.35 m), facing the way the piece does (|cos| at least fillNormalCos, 0.6), is the real surface there. */
+    fillSurfaceTol?: number;
+    fillNormalCos?: number;
+    /** Carried this far from a real texel, a fill texel's confidence is 1/e (3 m). */
+    fillConfidenceScale?: number;
+    /**
+     * A skirt on architecture (a wall, a roof edge) is kept off the real wall (1, default): where the scan has a surface
+     * behind it within skirtBackedReach (0.4 m) rising from the skirt's foot, the skirt is cut down to the part above it;
+     * backed to within skirtMin of its top, or over skirtBackedShare (0.5) of its face with no such band, it is not built.
+     * 0: every skirt is built whole.
+     */
+    skirtDropBacked?: number;
+    skirtBackedReach?: number;
+    skirtBackedShare?: number;
     /** How each tree crown is regrown before anything is removed (plant grows them again with the same). */
     crownBaseRatio?: number;
     trunkRadiusPerHeight?: number;
