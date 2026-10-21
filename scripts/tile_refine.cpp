@@ -78,7 +78,8 @@ static void usage() {
         "usage: tile_refine --input <tile.glb> --out-textured <A.glb> --out-clay <B.glb> --stats <S.json> [options]\n"
         "  --anchor X,Z            hero anchor in the tile frame (default 0,0)\n"
         "  --no-seam-weld          skip the tile-chunk seam weld pre-pass (scratchbox_tile_seam_weld.hpp)\n"
-        "  --seam-weld-tolerance M seam weld: boundary vertex pairs within M of each other are welded (default 0.03)\n"
+        "  --seam-weld-tolerance M seam weld: boundary positions of adjacent pieces within M of each other are welded (default 0.03)\n"
+        "  --seam-weld-no-drop     seam weld: keep the strip pieces and the triangles the weld collapses\n"
         "  --isolate               keep only the structure under the anchor (whole: its connected footprint, courtyards and\n"
         "                          everything above it, never cut) plus a ground apron; every stage runs on that subset\n"
         "  --apron M               isolate: ground kept around the footprint (default 4)\n"
@@ -185,7 +186,7 @@ int main(int argc, char** argv) {
         }
         else if (a == "--no-seam-weld") p.seamWeldEnabled = false;
         else if (a == "--seam-weld-tolerance") p.seamWeld.weldToleranceM = num();
-        else if (a == "--seam-weld-no-drop") p.seamWeld.sliverAspectMin = 1e9;
+        else if (a == "--seam-weld-no-drop") { p.seamWeld.sliverAspectMin = 1e9; p.seamWeld.dropStripPieces = false; }
         else if (a == "--no-relief") p.relief = false;
         else if (a == "--relief-own-regions") p.reliefOnWallPlanes = false;
         else if (a == "--relief-orthos") p.reliefParams.orthoExportDir = next();

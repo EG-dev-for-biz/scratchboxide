@@ -790,13 +790,8 @@ private:
         js << "  \"input\": {\"path\": \"" << jsonEscape(input) << "\", \"vertices\": " << V << ", \"triangles\": " << F << ", \"images\": " << scene.images.size()
            << ", \"materials\": " << scene.materials.size() << ", \"boundsMin\": " << vec(bbMin) << ", \"boundsMax\": " << vec(bbMax) << "},\n";
         if (P.seamWeldEnabled && seamWeldResult.ok) {
-            const auto& sw = seamWeldResult.stats;
-            js << "  \"seamWeld\": {\"pieces\": " << sw.pieceCount << ", \"boundaryVerts\": " << sw.boundaryVerts
-               << ", \"contactsFound\": " << sw.contactsFound << ", \"vertsWelded\": " << sw.vertsWelded
-               << ", \"trianglesDropped\": " << sw.trianglesDropped << ", \"meanWeldDisplacementM\": " << num(sw.meanWeldDisplacementM)
-               << ", \"maxWeldDisplacementM\": " << num(sw.maxWeldDisplacementM) << ", \"gapHistogram\": [";
-            for (size_t k = 0; k < sw.gapHistogram.size(); ++k) js << (k ? ", " : "") << sw.gapHistogram[k];
-            js << "]},\n";
+            js << "  \"seamWeld\": {\"enabled\": true, \"toleranceM\": " << num(P.seamWeld.weldToleranceM) << ", "
+               << tile_seam_weld::TileSeamWeld::statsJson(seamWeldResult.stats) << "},\n";
         } else if (!P.seamWeldEnabled) {
             js << "  \"seamWeld\": {\"enabled\": false},\n";
         } else {
