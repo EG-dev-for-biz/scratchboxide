@@ -76,7 +76,8 @@ import { TileVegetationError, type TileVegetationPlantRequest, type TileVegetati
 import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service';
 import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorEvidence } from './vector-footprints';
 import {
-    coveredShare, frameToLatLng, paintProvenance, selectPaintBuildings, tilePlanCoverage, writePaintGlb, VECTOR_ISOLATE_RADIUS_M, VECTOR_MASSING_VERSION,
+    coveredShare, frameToLatLng, paintGeneratedHeightProvenance, paintProvenance, selectPaintBuildings, tilePlanCoverage, writePaintGlb,
+    GENERATED_HEIGHT_LABEL, PLAUSIBLE_DEFAULT_HEIGHT_M, VECTOR_ISOLATE_RADIUS_M, VECTOR_MASSING_VERSION,
     VECTOR_MODELLED_LABEL, VECTOR_OUTER_MAX_COVERED_SHARE, type ElevationLookup, type PaintBuilding, type PaintSelection
 } from './vector-first-paint';
 import { VisionModelChain, type VisionGenAIClient } from '../../gemini/vision-model-chain';
@@ -1189,16 +1190,19 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 }
                 const { sel, elevations, elevationError } = inputs;
                 const left = [
-                    sel.partsWithoutHeight ? `${sel.partsWithoutHeight} footprint part${sel.partsWithoutHeight === 1 ? '' : 's'} with no height in the vector data not drawn` : '',
-                    sel.buildingsWithoutHeight ? `${sel.buildingsWithoutHeight} building${sel.buildingsWithoutHeight === 1 ? '' : 's'} with no height at all left out` : ''
+                    sel.partsGivenDefaultHeight ? `${sel.partsGivenDefaultHeight} footprint part${sel.partsGivenDefaultHeight === 1 ? '' : 's'} with no height in the vector data shown at a plausible ${PLAUSIBLE_DEFAULT_HEIGHT_M} m (generated)` : '',
+                    sel.buildingsGivenDefaultHeight ? `${sel.buildingsGivenDefaultHeight} building${sel.buildingsGivenDefaultHeight === 1 ? '' : 's'} with no measured height at all, shown at ${PLAUSIBLE_DEFAULT_HEIGHT_M} m (generated)` : '',
+                    sel.buildingsWithNoFootprint ? `${sel.buildingsWithNoFootprint} building${sel.buildingsWithNoFootprint === 1 ? '' : 's'} with no footprint shape and no Google volume left out` : ''
                 ].filter(Boolean).join('; ');
-                if (!sel.buildings.length) return { status: 'skipped', source: '', reason: `Google's vector data has no building with a height within ${Math.round(radiusM)} m${left ? ` (${left})` : ''}`, breakdownMs: msBy };
+                if (!sel.buildings.length) return { status: 'skipped', source: '', reason: `Google's vector data has no building with a footprint or volume within ${Math.round(radiusM)} m${left ? ` (${left})` : ''}`, breakdownMs: msBy };
                 const baseNote = (frame: 'street' | 'tiles') => elevations
                     ? `each building stands on the Google Elevation API's terrain height at its centroid, relative to ${frame === 'street' ? 'the terrain at the place (the street level the tiles also take as their origin, to about a metre)' : "the tiles' own frame height"}`
                     : `every building stands at the street level of the place (no terrain heights: ${elevationError ?? 'not asked'})`;
                 const layerOf = (glb: { url: string; bytes: number }, layer: 'l0' | 'l0o', counts: { vertices: number; triangles: number }, note: string, builtAtMs: number, cached: boolean, revealAfter: string[]): StagedLayer => ({
                     objectId: layerObjectId(key, layer), stage: 'vector', layer, order: STAGES.vector.order, url: glb.url, bytes: glb.bytes,
-                    provenance: paintProvenance(note, `vectortiles:${key8}`), provenanceLabels: [VECTOR_MODELLED_LABEL], supersedes: [], revealAfter,
+                    provenance: paintProvenance(note, `vectortiles:${key8}`),
+                    provenanceLabels: sel.buildingsGivenDefaultHeight ? [VECTOR_MODELLED_LABEL, GENERATED_HEIGHT_LABEL] : [VECTOR_MODELLED_LABEL],
+                    supersedes: [], revealAfter,
                     reveal: { durationMs: 700, stagger: 0.6, crossfadeFrom: [] }, cached, builtAtMs, counts
                 });
                 const meta: StagedLayerObjectMeta = { source: 'GoogleVectorMassing', resolvedAddress: place.formattedAddress, extra: { vectorMassing: true } };
@@ -1219,7 +1223,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const ground0 = elevations?.[0];
                     const pkey = stageKey(key, 'first', elevations ? 'elev' : 'street');
                     const entry = await cache.run<{ counts: { vertices: number; triangles: number }; refused: Array<{ buildings: string[]; error: string }>; nativeMs: number }>('vector', pkey, async dir => {
-                        const r = await writePaintGlb(sel.buildings, (_b, i) => (elevations && ground0 !== undefined ? elevations[i + 1] - ground0 : 0), { dir, stage: 'vector', stageKey: pkey, provenance: paintProvenance(baseNote('street'), `vectortiles:${key8}`), signal: io.signal });
+                        const r = await writePaintGlb(sel.buildings, (_b, i) => (elevations && ground0 !== undefined ? elevations[i + 1] - ground0 : 0), { dir, stage: 'vector', stageKey: pkey, provenance: paintProvenance(baseNote('street'), `vectortiles:${key8}`), generatedHeightProvenance: paintGeneratedHeightProvenance(`vectortiles:${key8}`), signal: io.signal });
                         return { value: { counts: r.counts, refused: r.refused, nativeMs: r.nativeMs } };
                     }, { publish: () => [{ from: 'vector_massing.glb', as: `${base}_vector_${pkey.slice(0, 8)}.glb` }], bypass: bypass('vector') });
                     msBy.native = entry.cached ? 0 : entry.value.nativeMs;
@@ -1257,7 +1261,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const t2 = now();
                         const entry = await cache.run<{ counts: { vertices: number; triangles: number }; refused: Array<{ buildings: string[]; error: string }>; nativeMs: number }>('vector', okey, async dir => {
                             const list: PaintBuilding[] = outer.map(o => o.b);
-                            const r = await writePaintGlb(list, (_b, k) => (elevations && frameElev !== undefined ? elevations[outer[k].i + 1] - frameElev : 0), { dir, stage: 'vector', stageKey: okey, provenance: paintProvenance(baseNote('tiles'), `vectortiles:${key8}`), signal: io.signal });
+                            const r = await writePaintGlb(list, (_b, k) => (elevations && frameElev !== undefined ? elevations[outer[k].i + 1] - frameElev : 0), { dir, stage: 'vector', stageKey: okey, provenance: paintProvenance(baseNote('tiles'), `vectortiles:${key8}`), generatedHeightProvenance: paintGeneratedHeightProvenance(`vectortiles:${key8}`), signal: io.signal });
                             return { value: { counts: r.counts, refused: r.refused, nativeMs: r.nativeMs } };
                         }, { publish: () => [{ from: 'vector_massing.glb', as: `${base}_vector_outer_${okey.slice(0, 8)}.glb` }], bypass: bypass('vector') });
                         msBy.outer = now() - t2;

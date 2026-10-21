@@ -13,8 +13,13 @@
  * bake, no residual) into a light clay massing layer the viewport shows while the 3D Tiles stream.
  *
  *   - Each building is its footprint parts (outer rings and holes) extruded from minHeightMeters to heightMeters above its
- *     base, and Google's modelled 3D volume where it has one (its triangles as given). A part without a height is not
- *     drawn: nothing is guessed. The counts left out are reported.
+ *     base, and Google's modelled 3D volume where it has one (its triangles as given).
+ *   - A part with no height in the vector data (AGENTS.md §4 "Believability first, honestly labelled"): its measured
+ *     footprint is still drawn, extruded to PLAUSIBLE_DEFAULT_HEIGHT_M, so the first paint shows a believable building
+ *     instead of a gap. A building whose every part needed this is labelled `generated` (the height is a plausible guess,
+ *     not Google's data); one where only some parts did keeps `vector-modelled` (the building overall is measured). The
+ *     counts of parts and buildings given the default height are reported, same as the share left out for falling
+ *     outside the requested radius.
  *   - A building's base is the Google Elevation API's terrain height at its centroid, relative to the frame's street level:
  *     before the tiles, the elevation at the geocoded point (the tiles' own origin is the street there, so the two agree to
  *     about a metre); after them, the frame's own height (geoAnchor.elevation). Without elevations every base is the
@@ -43,6 +48,15 @@ export const VECTOR_MODELLED_LABEL = 'vector-modelled';
 export const VECTOR_ISOLATE_RADIUS_M = 40;
 /** A building is kept beside the tiles when at most this share of its footprint lies where the tiles reach. */
 export const VECTOR_OUTER_MAX_COVERED_SHARE = 0.5;
+/**
+ * A footprint part or building with no measured height in the vector data still gets drawn, at this height above its
+ * base, so the first paint is a believable building rather than a gap (AGENTS.md §4). About 4 storeys at 3 m each: dense
+ * enough to read as a building at street scale without claiming to know a real one's actual height. Never shown as
+ * `vector-modelled`: a guessed height is always labelled `generated`.
+ */
+export const PLAUSIBLE_DEFAULT_HEIGHT_M = 12;
+/** The label of a building whose height (not its footprint) is a plausible default, not Google's data. */
+export const GENERATED_HEIGHT_LABEL = 'generated';
 /** The tiles' plan coverage is measured on cells this large (any tile vertex in a cell covers it). */
 export const VECTOR_COVERAGE_CELL_M = 4;
 /** Elevation API requests carry at most this many points (the API takes 512; this keeps the URL short). */
@@ -60,16 +74,20 @@ export interface PaintBuilding {
     centroid: Vec2;
     /** Plan area of its outer rings, m². */
     areaM2: number;
-    parts: Array<{ loops: Vec2[][]; minH: number; topH: number }>;
+    parts: Array<{ loops: Vec2[][]; minH: number; topH: number; heightGuessed?: boolean }>;
     volumes: Array<{ vertices: Array<[number, number, number]>; indices: number[] }>;
+    /** True when every part's height is PLAUSIBLE_DEFAULT_HEIGHT_M, not Google's data: the building node is labelled `generated`. */
+    heightGuessed?: boolean;
 }
 
 export interface PaintSelection {
     buildings: PaintBuilding[];
-    /** Footprint parts with no height in the vector data (not drawn). */
-    partsWithoutHeight: number;
-    /** Buildings with nothing to draw (every part without a height, no volume). */
-    buildingsWithoutHeight: number;
+    /** Footprint parts with no height in the vector data, drawn at PLAUSIBLE_DEFAULT_HEIGHT_M instead. */
+    partsGivenDefaultHeight: number;
+    /** Buildings with no measured height anywhere (every part, no volume), drawn at PLAUSIBLE_DEFAULT_HEIGHT_M and labelled `generated`. */
+    buildingsGivenDefaultHeight: number;
+    /** Buildings with no footprint shape and no Google volume at all: no evidence one exists here, so nothing is drawn. */
+    buildingsWithNoFootprint: number;
     /** Buildings whose centroid lies beyond the requested radius (the vector tiles are whole tiles). */
     outsideRadius: number;
 }
@@ -91,7 +109,7 @@ function outerArea(b: VectorBuilding): { area: number; cx: number; cz: number } 
 /** The buildings within `radiusM` of the place that have something to draw, and what was left out. */
 export function selectPaintBuildings(ev: VectorEvidence, radiusM: number): PaintSelection {
     const out: PaintBuilding[] = [];
-    let partsWithoutHeight = 0, buildingsWithoutHeight = 0, outsideRadius = 0;
+    let partsGivenDefaultHeight = 0, buildingsGivenDefaultHeight = 0, buildingsWithNoFootprint = 0, outsideRadius = 0;
     for (const b of ev.buildings) {
         const { area, cx, cz } = outerArea(b);
         const volumes = (b.volumes ?? []).filter(v => v.vertices.length >= 4 && v.indices.length >= 12);
@@ -106,16 +124,23 @@ export function selectPaintBuildings(ev: VectorEvidence, radiusM: number): Paint
         const extruded = (b.extruded ?? []).filter(p => !(p.planOnly && volumes.length > 0));
         const parts: PaintBuilding['parts'] = [];
         for (const p of extruded) {
-            if (!(p.heightM !== undefined && p.heightM > (p.minHeightM ?? 0))) { partsWithoutHeight++; continue; }
             const loops = p.loops.map(l => simplifyRing(l)).filter(l => l.length >= 3 && Math.abs(ringArea(l)) >= 1);
             if (!loops.length) continue;
-            parts.push({ loops, minH: p.minHeightM ?? 0, topH: p.heightM });
+            const minH = p.minHeightM ?? 0;
+            const measured = p.heightM !== undefined && p.heightM > minH;
+            const heightGuessed = !measured;
+            if (heightGuessed) partsGivenDefaultHeight++;
+            parts.push({ loops, minH, topH: measured ? p.heightM! : minH + PLAUSIBLE_DEFAULT_HEIGHT_M, heightGuessed });
         }
-        if (!parts.length && !volumes.length) { buildingsWithoutHeight++; continue; }
-        out.push({ id: b.id, centroid, areaM2: area, parts, volumes: volumes.map(v => ({ vertices: v.vertices.map(q => [q[0], q[1], q[2]] as [number, number, number]), indices: v.indices.slice() })) });
+        // no footprint shape and no Google volume at all: genuinely nothing to draw, nothing is guessed about a building
+        // whose existence and extent we have no evidence for (distinct from one whose extent is known but height is not).
+        if (!parts.length && !volumes.length) { buildingsWithNoFootprint++; continue; }
+        const heightGuessed = parts.length > 0 && parts.every(p => p.heightGuessed) && !volumes.length;
+        if (heightGuessed) buildingsGivenDefaultHeight++;
+        out.push({ id: b.id, centroid, areaM2: area, parts, volumes: volumes.map(v => ({ vertices: v.vertices.map(q => [q[0], q[1], q[2]] as [number, number, number]), indices: v.indices.slice() })), heightGuessed });
     }
     out.sort((a, b) => Math.hypot(a.centroid[0], a.centroid[1]) - Math.hypot(b.centroid[0], b.centroid[1]) || (a.id < b.id ? -1 : 1));
-    return { buildings: out, partsWithoutHeight, buildingsWithoutHeight, outsideRadius };
+    return { buildings: out, partsGivenDefaultHeight, buildingsGivenDefaultHeight, buildingsWithNoFootprint, outsideRadius };
 }
 
 /** Geodetic position of a frame point (x east, z south) of the place. */
@@ -169,10 +194,12 @@ export interface PaintGlb {
 
 /**
  * Extrudes `buildings` natively into `dir`/vector_massing.glb. One run for all; if the tool refuses it, the buildings are
- * run again in chunks and a chunk it still refuses is left out and reported (never replaced by anything).
+ * run again in chunks and a chunk it still refuses is left out and reported (never replaced by anything). Most nodes carry
+ * `opts.provenance`; a building whose height is a plausible guess (`PaintBuilding.heightGuessed`) carries
+ * `opts.generatedHeightProvenance` instead, labelled `generated`, not `opts.provenance`'s `vector-modelled`.
  */
 export async function writePaintGlb(buildings: PaintBuilding[], baseY: (b: PaintBuilding, index: number) => number, opts: {
-    dir: string; stage: string; stageKey: string; provenance: ProvenanceRecord; signal?: AbortSignal; chunk?: number;
+    dir: string; stage: string; stageKey: string; provenance: ProvenanceRecord; generatedHeightProvenance?: ProvenanceRecord; signal?: AbortSignal; chunk?: number;
 }): Promise<PaintGlb> {
     fs.mkdirSync(opts.dir, { recursive: true });
     const index = new Map(buildings.map((b, i) => [b, i]));
@@ -200,6 +227,7 @@ export async function writePaintGlb(buildings: PaintBuilding[], baseY: (b: Paint
         if (!runs.length) throw err;
     }
     const nativeMs = Date.now() - t0;
+    const heightGuessedIds = new Set(buildings.filter(b => b.heightGuessed).map(b => b.id));
     // one node per building (the tool writes one per face: tens of thousands on a district, most of the file their extras)
     const merged = mergeByBuilding(runs.flatMap(r => r.nodes));
     const file = path.join(opts.dir, 'vector_massing.glb');
@@ -207,7 +235,9 @@ export async function writePaintGlb(buildings: PaintBuilding[], baseY: (b: Paint
         name: m.id, positions: m.positions, normals: m.normals, indices: m.indices,
         extras: {
             sb: {
-                schema: 'scratchbox.staged-node/2', stage: opts.stage, provenance: opts.provenance, buildOrder: i, buildCount: merged.length, revealKind: 'rise',
+                schema: 'scratchbox.staged-node/2', stage: opts.stage,
+                provenance: heightGuessedIds.has(m.id) && opts.generatedHeightProvenance ? opts.generatedHeightProvenance : opts.provenance,
+                buildOrder: i, buildCount: merged.length, revealKind: 'rise',
                 reveal: { attribute: null, displacement: null, durationShare: 1 / Math.max(1, merged.length) }, ids: { surfaceId: m.id },
                 counts: { vertices: m.positions.length / 3, triangles: m.indices.length / 3 }
             }
@@ -290,5 +320,15 @@ export function paintProvenance(note: string, sourceId: string): ProvenanceRecor
         label: VECTOR_MODELLED_LABEL, measuredGeometry: false, confidence: 1,
         method: 'Google vector feature tiles (vectortiles.featuretiles): building footprints extruded to their heights, and the modelled 3D volume where Google has one, carried unchanged and built natively (staged_massing); not scan measurement',
         sources: [{ kind: 'vector-data', id: sourceId }], note
+    };
+}
+
+/** The provenance record of a first-paint building whose footprint is measured but whose height is PLAUSIBLE_DEFAULT_HEIGHT_M. */
+export function paintGeneratedHeightProvenance(sourceId: string): ProvenanceRecord {
+    return {
+        label: GENERATED_HEIGHT_LABEL, measuredGeometry: false, confidence: 0.2,
+        method: `the measured footprint extruded to a plausible default of ${PLAUSIBLE_DEFAULT_HEIGHT_M} m (believability first, AGENTS.md §4): the vector data has no height for this building`,
+        sources: [{ kind: 'vector-data', id: sourceId }],
+        note: `no height in the vector data; shown at a plausible ${PLAUSIBLE_DEFAULT_HEIGHT_M} m, not measured`
     };
 }
