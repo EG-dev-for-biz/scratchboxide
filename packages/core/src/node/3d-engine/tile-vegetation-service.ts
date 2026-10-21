@@ -141,9 +141,10 @@ export interface TileVegetationPlantParams {
     /** Distance between leaf clusters / cluster reach (0.5). */
     stationSpacing?: number;
     /**
-     * Distances (m from the camera) at which a viewport changes a tree's level: near up to lodNearPerHeight x its height (1,
-     * 12-30 m, at most lodNearMax), near-mid up to lodNearMidPerHeight x its height (6, 25-100 m, at most lodNearMidMax), mid
-     * up to lodFarPerHeight x its height (8, 60-140 m, at most lodFarMax), far beyond, dithered over lodFade (6 m) or more.
+     * Distances (m from the camera) at which a viewport changes a tree's level: near up to lodNearPerHeight x its height
+     * (1.3, 15-40 m, at most lodNearMax), near-mid up to lodNearMidPerHeight x its height (7.5, 35-150 m, at most
+     * lodNearMidMax), mid up to lodFarPerHeight x its height (10, 130-260 m, at most lodFarMax), far beyond, dithered over
+     * lodFade (8 m) or more. These defaults match scratchbox_tile_vegetation.hpp's PlantParams (2026-10-21).
      */
     lodNearPerHeight?: number;
     /** The far level's wood (trunk and main limbs): clamp(farWoodTrianglesPerHeight x tree height, farWoodMinTriangles, farWoodMaxTriangles) triangles (24, 160, 600). */

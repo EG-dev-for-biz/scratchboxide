@@ -709,7 +709,11 @@ export class TreeLodController {
                 let isFocusTree = false;
                 for (let o: THREE.Object3D | null = focusObj ?? null; o && !isFocusTree; o = o.parent) if (o === t.node) isFocusTree = true;
                 if (!isFocusTree && dof.focusPoint && dof.focusPoint.distanceTo(sphere.center) <= sphere.radius) isFocusTree = true;
-                if (isFocusTree || (dof.focusM >= zc - sphere.radius && dof.focusM <= zc + sphere.radius)) protectedByFocus = true;
+                // hysteresis on the focus-plane membership test itself: once a tree is protected, the plane of focus has to
+                // clear its sphere by a margin (not just touch the edge) before protection lifts, so autofocus's small,
+                // constant resampling jitter at a knife-edge boundary cannot flip a tree in and out of full detail every frame
+                const margin = r.focusProtected ? Math.max(0.15 * sphere.radius, this.opts.hysteresisM) : 0;
+                if (isFocusTree || (dof.focusM >= zc - sphere.radius - margin && dof.focusM <= zc + sphere.radius + margin)) protectedByFocus = true;
                 else {
                     const nearest = dof.focusM < zc - sphere.radius ? zc - sphere.radius : zc + sphere.radius;
                     blur = 0.5 * circleOfConfusionPx(dof.focalLengthMm, dof.apertureFStop, dof.focusM, Math.max(1e-3, nearest), fovDeg, heightPx);
