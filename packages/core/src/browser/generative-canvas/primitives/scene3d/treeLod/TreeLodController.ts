@@ -25,6 +25,7 @@ import {
     type LodBand, type LodEdges, type TreeLodViewInput, type TreeLodViewOptions
 } from './treeLodMath';
 import { circleOfConfusionPx } from '../viewportOptics';
+import { TreeFarBatch, treeFarBatchEnabled } from './treeFarBatch';
 
 /**
  * Per-tree level of detail for a trees GLB that follows the tree LOD contract (staged-location-contracts.ts): every
@@ -113,6 +114,8 @@ export interface TreeLodOptions {
     crownShading?: CrownShadingInput;
     /** How the camera's view chooses the levels (defaults DEFAULT_TREE_LOD_VIEW). */
     view?: TreeLodViewInput;
+    /** Draw every tree's far level as one mesh per material (treeFarBatch.ts); default treeFarBatchEnabled(). */
+    farBatch?: boolean;
 }
 
 /** The view options (common/spatial/tree-lod-math.ts, shared with the photo-match evaluator's still-frame tree render). */
@@ -199,6 +202,9 @@ export interface TreeLodStats {
     fovDeg: number;
     /** JS time spent in update() (ms). */
     updateMs: number;
+    /** Trees whose far level is drawn by the far batch (treeFarBatch.ts: one draw per material for all of them), and its draw calls. */
+    farBatchedTrees: number;
+    farBatchDraws: number;
     /** Trees whose leaves carry a crown (crown shading applies to them when it is on). */
     crownTrees: number;
     /** Leaf meshes that carry crown attributes. */
@@ -321,7 +327,7 @@ const BUDGET_RELEASE_MARGIN = 0.02;
 export class TreeLodController {
     readonly psiSeason: number | undefined;
     private readonly trees: TreeState[] = [];
-    private readonly opts: Required<Omit<TreeLodOptions, 'now' | 'crownShading' | 'view'>> & { now: () => number };
+    private readonly opts: Required<Omit<TreeLodOptions, 'now' | 'crownShading' | 'view' | 'farBatch'>> & { now: () => number };
     private readonly variants = new Map<THREE.Material, Map<string, THREE.Material>>();
     private forced: number | undefined;
     private readonly levelCount: number;
@@ -334,8 +340,10 @@ export class TreeLodController {
     readonly stats: TreeLodStats = {
         trees: 0, visibleTrees: 0, culledTrees: 0, atLevel: [0, 0, 0, 0], fading: 0, estimatedTriangles: 0, estimatedShadowTriangles: 0, shadowOnlyTrees: 0, commits: 0, deferredCommits: 0, newVariants: 0,
         demotedTrees: 0, budgetDeferredStarts: 0, still: false, settledTrees: 0, triangleBudget: 0, budgetScale: 1, reservedTriangles: 0, treeBudget: 0, screenSpace: true, blurDemotedTrees: 0, focusProtectedTrees: 0, fovealCentreNdc: [0, 0], frameHeightPx: 0, fovDeg: 0,
-        updateMs: 0, crownTrees: 0, crownLeafMeshes: 0, crownLobeTrees: 0, crownLobeMeshes: 0, crownLobeFallbackMeshes: 0
+        updateMs: 0, farBatchedTrees: 0, farBatchDraws: 0, crownTrees: 0, crownLeafMeshes: 0, crownLobeTrees: 0, crownLobeMeshes: 0, crownLobeFallbackMeshes: 0
     };
+    /** The far level of every tree drawn as one mesh per material (treeFarBatch.ts); undefined when opted out or the file has no trees. */
+    private farBatch: TreeFarBatch | undefined;
     private view: TreeLodViewOptions;
     private viewKey = '';
     private readonly tintVariants = new Map<THREE.Material, THREE.Material[]>();
@@ -386,7 +394,13 @@ export class TreeLodController {
             if (s) this.trees.push(s);
         }
         this.stats.trees = this.trees.length;
+        if (this.trees.length && (options.farBatch ?? treeFarBatchEnabled())) {
+            this.farBatch = new TreeFarBatch(root, this.trees.map(t => ({ node: t.node, meshes: t.levels[this.levelCount - 1].meshes })), this.levelCount - 1);
+        }
     }
+
+    /** The far batch (tests and diagnostics); undefined when the far level is drawn tree by tree. */
+    get farLevelBatch(): TreeFarBatch | undefined { return this.farBatch; }
 
     /** The crown shading in force. */
     get crownShading(): Readonly<CrownShadingOptions> { return this.crown; }
@@ -890,6 +904,20 @@ export class TreeLodController {
             if (!done) s.deferredCommits++;
             s.commits++;
         }
+        if (this.farBatch) {
+            const far = n - 1;
+            const sync = this.farBatch.sync(
+                this.trees.map(t => ({ applied: t.levels[far].applied, inMain: !t.culled && t.inMain, casts: t.castLevel === far })),
+                this.trees.map(t => t.levels[far].gate),
+                (m, base) => this.fullMaterialOf(m, base, far)
+            );
+            // a tree back on its own far meshes shows its gate again at the next commit
+            for (const i of sync.left) if (this.trees[i].levels[far].applied !== 'off') this.trees[i].levels[far].applied = 'redress';
+            const fb = this.farBatch.stats;
+            s.farBatchedTrees = fb.batchedTrees; s.farBatchDraws = fb.groups;
+        } else {
+            s.farBatchedTrees = 0; s.farBatchDraws = 0;
+        }
         s.updateMs = this.opts.now() - t0;
         return s;
     }
@@ -929,6 +957,8 @@ export class TreeLodController {
 
     /** Puts the trees back as loaded (levels shown by the loader's own structure) and frees the dither variants. */
     dispose(): void {
+        this.farBatch?.dispose();
+        this.farBatch = undefined;
         for (const t of this.trees) {
             for (const l of t.levels) {
                 for (const m of l.meshes) {
@@ -967,7 +997,7 @@ export function formatTreeLodStats(all: readonly TreeLodStats[], scene?: { main:
     return [
         `trees ${sum(s => s.trees)}  seen ${sum(s => s.visibleTrees)}  shadow-only ${sum(s => s.shadowOnlyTrees)}  culled ${sum(s => s.culledTrees)}`,
         `near ${sum(s => s.atLevel[0])}  near-mid ${sum(s => s.atLevel[1])}  mid ${sum(s => s.atLevel[2])}  far ${sum(s => s.atLevel[3])}  fading ${sum(s => s.fading)}${s0.still ? `  still: settled ${sum(s => s.settledTrees)}` : ''}`,
-        `tri ${m(sum(s => s.estimatedTriangles))} + shadow ${m(sum(s => s.estimatedShadowTriangles))}  budget-demoted ${sum(s => s.demotedTrees)}${sum(s => s.budgetDeferredStarts) ? ` (waiting ${sum(s => s.budgetDeferredStarts)})` : ''}  blur-demoted ${sum(s => s.blurDemotedTrees)}  in focus ${sum(s => s.focusProtectedTrees)}`,
+        `tri ${m(sum(s => s.estimatedTriangles))} + shadow ${m(sum(s => s.estimatedShadowTriangles))}  budget-demoted ${sum(s => s.demotedTrees)}${sum(s => s.budgetDeferredStarts) ? ` (waiting ${sum(s => s.budgetDeferredStarts)})` : ''}  blur-demoted ${sum(s => s.blurDemotedTrees)}  in focus ${sum(s => s.focusProtectedTrees)}  far batch ${sum(s => s.farBatchedTrees)} trees in ${sum(s => s.farBatchDraws)} draws`,
         // the one budget split: the rest of the scene (buildings, context, hero) first, the trees in what is left
         `budget ${m(s0.triangleBudget)}${s0.budgetScale < 1 ? ` (GPU-adapted x${s0.budgetScale.toFixed(2)})` : ''} = scene ${m(scene ? scene.main : 0)} + shadow ${m(scene ? scene.shadow : 0)} + trees ${m(sum(s => s.estimatedTriangles + s.estimatedShadowTriangles))} (trees may use ${m(Math.max(0, s0.triangleBudget - (scene ? scene.main + scene.shadow : 0)))})`,
         `${mode}  fovea (${s0.fovealCentreNdc[0].toFixed(2)}, ${s0.fovealCentreNdc[1].toFixed(2)})  update ${sum(s => s.updateMs).toFixed(2)} ms`
