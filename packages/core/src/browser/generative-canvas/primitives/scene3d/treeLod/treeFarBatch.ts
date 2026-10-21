@@ -287,12 +287,17 @@ export class TreeFarBatch {
         return { batchedTrees: this.batchedAs.filter(Boolean).length, groups: this.groups.length };
     }
 
-    /** The group key a mesh joins this frame ('' when it is left to itself), from the per-mesh cache. */
-    private keyOf(m: THREE.Mesh, fullOf: (m: THREE.Mesh, base: THREE.Material) => THREE.Material): string {
+    /**
+     * The group key a mesh joins this frame ('' when it is left to itself), from the per-mesh cache: three identity reads a
+     * frame; the full material is asked again only when the base changed or the caller says its mapping changed (`force`: a
+     * crown or tint toggle, which gives the same base a different full material).
+     */
+    private keyOf(m: THREE.Mesh, fullOf: (m: THREE.Mesh, base: THREE.Material) => THREE.Material, force: boolean): string {
         const base = m.userData.sbLodBase as THREE.Material | undefined;
         const geometry = m.geometry as THREE.BufferGeometry;
-        const full = base ? fullOf(m, base) : undefined;
         const c = this.cache.get(m);
+        if (!force && c && c.base === base && c.material === m.material && c.depth === m.customDepthMaterial && c.geometry === geometry) return c.key;
+        const full = base ? fullOf(m, base) : undefined;
         if (c && c.base === base && c.material === m.material && c.full === full && c.depth === m.customDepthMaterial && c.geometry === geometry) return c.key;
         let key = '';
         if (base && full && !Array.isArray(m.material) && !isStagedMaterial(m.material as THREE.Material) && !(m as THREE.InstancedMesh).isInstancedMesh && geometry?.getAttribute('position')) {
@@ -306,11 +311,11 @@ export class TreeFarBatch {
     }
 
     /** The keys a tree's far meshes join, joined; '' when any of them is left to itself (then the whole tree is). */
-    private treeKey(t: FarBatchTree, fullOf: (m: THREE.Mesh, base: THREE.Material) => THREE.Material): string {
+    private treeKey(t: FarBatchTree, fullOf: (m: THREE.Mesh, base: THREE.Material) => THREE.Material, force: boolean): string {
         if (!t.meshes.length) return '';
         let key = '';
         for (const m of t.meshes) {
-            const k = this.keyOf(m, fullOf);
+            const k = this.keyOf(m, fullOf, force);
             if (!k) return '';
             key = key ? `${key};${k}` : k;
         }
@@ -323,9 +328,9 @@ export class TreeFarBatch {
      * per-tree far gates hidden for batched trees. Returns whether the batch was rebuilt and the trees that left it (their own
      * far gates are the controller's to show again).
      */
-    sync(states: FarTreeState[], gates: THREE.Object3D[], fullOf: (m: THREE.Mesh, base: THREE.Material) => THREE.Material): { regrouped: boolean; left: number[] } {
+    sync(states: FarTreeState[], gates: THREE.Object3D[], fullOf: (m: THREE.Mesh, base: THREE.Material) => THREE.Material, force = false): { regrouped: boolean; left: number[] } {
         let regroup = this.stale;
-        const keys = this.trees.map(t => this.treeKey(t, fullOf));
+        const keys = this.trees.map(t => this.treeKey(t, fullOf, force));
         const left: number[] = [];
         for (let i = 0; i < keys.length; i++) {
             if (keys[i] !== this.batchedAs[i]) regroup = true;
@@ -383,7 +388,7 @@ export class TreeFarBatch {
             if (!keys[i]) continue;
             for (const mesh of this.trees[i].meshes) {
                 const base = mesh.userData.sbLodBase as THREE.Material;
-                const k = this.keyOf(mesh, fullOf);
+                const k = this.keyOf(mesh, fullOf, false);
                 const p = parts.get(k) ?? parts.set(k, { full: fullOf(mesh, base), breakup: isBreakupDepthMaterial(mesh.customDepthMaterial), members: [] }).get(k)!;
                 p.members.push({ tree: i, mesh, geometry: batchGeometry(mesh) });
             }

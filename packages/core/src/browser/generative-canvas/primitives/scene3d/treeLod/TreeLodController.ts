@@ -25,7 +25,7 @@ import {
     type LodBand, type LodEdges, type TreeLodViewInput, type TreeLodViewOptions
 } from './treeLodMath';
 import { circleOfConfusionPx } from '../viewportOptics';
-import { TreeFarBatch, treeFarBatchEnabled } from './treeFarBatch';
+import { TreeFarBatch, treeFarBatchEnabled, type FarTreeState } from './treeFarBatch';
 
 /**
  * Per-tree level of detail for a trees GLB that follows the tree LOD contract (staged-location-contracts.ts): every
@@ -344,6 +344,10 @@ export class TreeLodController {
     };
     /** The far level of every tree drawn as one mesh per material (treeFarBatch.ts); undefined when opted out or the file has no trees. */
     private farBatch: TreeFarBatch | undefined;
+    /** The per-frame inputs of the far batch, allocated once (the crown and view keys it was last synced under). */
+    private farStates: FarTreeState[] = [];
+    private farGates: THREE.Object3D[] = [];
+    private farSyncKey = '';
     private view: TreeLodViewOptions;
     private viewKey = '';
     private readonly tintVariants = new Map<THREE.Material, THREE.Material[]>();
@@ -395,7 +399,10 @@ export class TreeLodController {
         }
         this.stats.trees = this.trees.length;
         if (this.trees.length && (options.farBatch ?? treeFarBatchEnabled())) {
-            this.farBatch = new TreeFarBatch(root, this.trees.map(t => ({ node: t.node, meshes: t.levels[this.levelCount - 1].meshes })), this.levelCount - 1);
+            const far = this.levelCount - 1;
+            this.farBatch = new TreeFarBatch(root, this.trees.map(t => ({ node: t.node, meshes: t.levels[far].meshes })), far);
+            this.farStates = this.trees.map(() => ({ applied: 'off', inMain: false, casts: false }));
+            this.farGates = this.trees.map(t => t.levels[far].gate);
         }
     }
 
@@ -906,11 +913,15 @@ export class TreeLodController {
         }
         if (this.farBatch) {
             const far = n - 1;
-            const sync = this.farBatch.sync(
-                this.trees.map(t => ({ applied: t.levels[far].applied, inMain: !t.culled && t.inMain, casts: t.castLevel === far })),
-                this.trees.map(t => t.levels[far].gate),
-                (m, base) => this.fullMaterialOf(m, base, far)
-            );
+            for (let i = 0; i < this.trees.length; i++) {
+                const t = this.trees[i], st = this.farStates[i];
+                st.applied = t.levels[far].applied; st.inMain = !t.culled && t.inMain; st.casts = t.castLevel === far;
+            }
+            // a crown or view (tint) change maps the same base to another full material: the batch is told to look again
+            const syncKey = `${this.crownKey}|${this.viewKey}`;
+            const force = syncKey !== this.farSyncKey;
+            this.farSyncKey = syncKey;
+            const sync = this.farBatch.sync(this.farStates, this.farGates, (m, base) => this.fullMaterialOf(m, base, far), force);
             // a tree back on its own far meshes shows its gate again at the next commit
             for (const i of sync.left) if (this.trees[i].levels[far].applied !== 'off') this.trees[i].levels[far].applied = 'redress';
             const fb = this.farBatch.stats;
