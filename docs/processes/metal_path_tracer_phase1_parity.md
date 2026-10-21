@@ -177,8 +177,40 @@ The first two alone could not continue the DAG: they removed the stuck groups bu
 
 A quarter of the triangles for a lower error at 8 px, and the 24 px cut goes from shards to whole buildings (crops in the chat log). This reopens the coarse bounce cut measured and rejected in Phases 5 and 6: that bias was geometric, from levels with 9-44 m of error; those levels now carry 1.7-3.6 m at the same triangle counts.
 
+**Coarse bounce cut, re-measured on the deep DAG** (bench camera, 195k-triangle primary cut, 64 spp, 8x8-block bias against the baseline):
+
+| variant | bounce tris | speed | block bias | Phase 6 bias |
+| :-- | --: | --: | :-- | --: |
+| bounce-cut-4px (shadows and bounces) | 87k | 1.12x | 4.7% (max 582%, 24% of blocks over 2%) | - |
+| bounce-cut-8px | 56k | 1.19x | 8.3% (max 983%, 27%) | 8.4% |
+| bounce-cut-16px | 38k | 1.24x | 15.0% (max 1934%, 31%) | - |
+| gi-cut-4px (bounce light only) | 87k | 1.08x | 1.6% (max 53%, 20%) | - |
+| gi-cut-8px | 56k | 1.13x | 2.1% (max 90%, 24%) | 1.9% |
+| gi-cut-16px | 38k | 1.17x | 2.7% (max 155%, 27%) | 2.6% |
+
+The bias is the same as on the 7-level DAG although those levels went from 9-44 m of error to 1.7-3.6 m, so it was never the shattered geometry: it is the offset between the fine surface a path hits and any coarser surface its next ray is traced against. A shadow ray leaving a fine hit finds the coarse wall in front of it (black blocks) or behind it (light leaks through a street canyon, the 10x blocks), and metres of offset do that as well as tens. **Rejected again, for good**: a bounce cut only works where the coarse surface sits within the ray's own offset epsilon, which on a scanned city means the 1 px cut. The bench flags stay for the record. The honest speed path for bounces remains fewer samples (Sobol) and fewer pixels (MetalFX).
+
+## Phase 9 (2026-10-20): ReSTIR DI for the sky, measured and rejected
+
+**Where the noise is.** On the bench shot (Sobol, RMSE against a 1024 spp reference of the same transport), the full path tracer sits at 1.370e-3 / 6.28e-4 at 8 / 32 spp and the direct-only transport (`maxBounces: 1`: sun shadow ray plus the first hit's sky through its BSDF ray) at 1.308e-3 / 5.92e-4. About 95% of the error is first-hit lighting; the bounces add almost nothing. So the sky at the first hit is the right target, and ReSTIR DI (Bitterli 2020) is the standard tool for it.
+
+**What was built** (`optimizations.restir`, off by default; `restirCandidates`, `restirSpatial`, `restirTemporal`; kernels `restirSkyLighting` and `restir_spatial`, buffers 14-17): per pixel, cosine-sampled sky directions are resampled into a reservoir with target p̂ = luminance(BSDF x sky x cos), the chosen direction is shaded with one visibility ray (an occluded choice is dropped from the reservoir: visibility reuse), and the first hit's BSDF ray no longer counts the sky so nothing is counted twice. Temporal mode keeps the reservoir across the frame's passes (M capped at 20 candidates' worth); fresh mode restarts it each pass and merges neighbours' previous-pass reservoirs (16 px, same facing, depth within 10%), double-buffered so reads never race writes. A first version drew the candidates from Sobol dimensions 6-30, which overlap the next bounce's dimensions; they come from the pixel's PCG stream now. The sun stays a delta light with its own shadow ray.
+
+| variant | 1 spp | 8 spp | 32 spp | mean ratio (32) | GPU ms (32) |
+| :-- | --: | --: | --: | --: | --: |
+| Sobol (baseline) | 5.96e-3 | **1.370e-3** | **6.28e-4** | 1.0000 | 539 |
+| ReSTIR temporal, 8 candidates, 3 neighbours | 6.02e-3 | 1.505e-3 | 9.44e-4 | 0.9884 | 737 |
+| ReSTIR fresh, 8 candidates, no neighbours | 6.02e-3 | 1.446e-3 | 6.58e-4 | 1.0000 | 737 |
+| ReSTIR fresh, 32 candidates | 6.02e-3 | 1.439e-3 | 6.56e-4 | 1.0000 | 898 |
+| ReSTIR fresh, 8 candidates, 3 neighbours (previous pass) | - | 1.837e-3 | 1.81e-3 | 1.0161 | 768 |
+| ReSTIR fresh, 8 candidates, 8 neighbours | - | 2.094e-3 | 2.01e-3 | 1.0264 | 807 |
+
+**Why it loses here.** Resampling only helps where the target function tracks the integrand: for a sun+sky scene whose sun is sampled separately, the sky LUT is smooth and the cosine term is already in the proposal, so 32 candidates are no better than 8 (the target is nearly flat). The noise that is left is visibility, which the target cannot see. Temporal reuse with visibility reuse converges on *visible* directions and goes 1.2% dark, the known bias of that variant, and correlates successive passes so the RMSE stalls; spatial reuse goes 1.6-2.6% bright (a neighbour's W already encodes its visibility, so re-weighting it here over-counts visible directions), and the unbiased fix costs one visibility ray per neighbour, which is the budget the method was meant to save. At 1 spp, the game regime, it is a wash (6.02e-3 vs 5.96e-3) for 30% more GPU time. **Rejected**; the flags stay in the helper and in the bench's sampler table for the record.
+
+**What would address the visibility term:** sampling sky directions from a per-pixel visibility estimate learned over the passes (a small hemisphere histogram of shadow-ray outcomes), combined with BSDF sampling by MIS so it stays unbiased: path guiding for the first hit. That targets the term the measurements say is left.
+
 ## Next (plan)
 
-- Re-measure the coarse bounce cut on the new DAG (`bench_sbvg_pathtracer.cjs`, bounce-cut-{4,8,16}px); metallic-roughness atlases; a quad-aware pairing to lift the 81% paired share.
+- Visibility-guided sky sampling at the first hit (per-pixel hemisphere histogram + MIS); metallic-roughness atlases; a quad-aware pairing to lift the 81% paired share.
 - Phase 4: the a-trous denoiser on the GPU and temporal reuse.
 - Rays: rasterize the camera hit with the existing WebGPU cluster pass; coarser cuts for bounce and shadow rays; any-hit shadow rays (done); merged per-chunk acceleration structures; better samplers; MetalFX upscale.

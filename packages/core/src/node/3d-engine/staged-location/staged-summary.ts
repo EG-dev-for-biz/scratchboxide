@@ -42,6 +42,8 @@ export interface StagedSummaryInput extends Omit<StagedLocationResult, 'digest' 
     switchLocation?: string;
     /** The background texture pass, measured: share of texels per rung (TEXTURE_LADDER_RUNGS order), views, models. */
     textures?: { shares: number[]; views: number; modelsUsed: string[]; layers: string[]; totalMs: number; tileUnavailable?: string; viewsUnavailable?: string };
+    /** A district: the remesh's textured twin is the scan's own photogrammetric textures (no per-wall texture pass). */
+    scanTextures?: { layer: string; treesTakenOut: boolean };
 }
 
 /** The chat pill that switches the staged layers to their textured twins (the tool staged_location_material_mode). */
@@ -339,7 +341,12 @@ function lowerFirst(s: string): string { return s && /^[A-Z][a-z]/.test(s) ? s[0
 /** Rule "textures": what the texture pass made, rung by rung as measured; the viewport crossfades to it unless clay was chosen. */
 export function texturesSentence(input: StagedSummaryInput): string {
     const t = input.textures;
-    if (!t) return '';
+    if (!t) {
+        const sc = input.scanTextures;
+        if (!sc) return '';
+        return `Real textures are ready for ${sc.layer} (${showsClay(input) ? 'shown in clay, as the user chose' : 'shown by default'}): the scan's own photogrammetric textures as Google downloaded them${sc.treesTakenOut ? ', with the trees taken out where they were regrown' : ''}. `
+            + 'A district has no per-wall texture pass (that runs on an isolated structure), so these are photo textures as scanned, labelled as-scanned, not photo-corrected.';
+    }
     const pct = (x: number) => `${Math.round(x * 1000) / 10}%`;
     const rungs = t.shares.map((x, r) => (x > 0 ? `${pct(x)} ${TEXTURE_LADDER_RUNGS[r]}` : '')).filter(Boolean).join(', ');
     const sources = [t.views ? `${t.views} registered Street View view${t.views === 1 ? '' : 's'}` : `no Street View view (${t.viewsUnavailable ?? 'none'})`, t.tileUnavailable ? `no tile photo (${t.tileUnavailable})` : 'the Google tile photo'].join(' and ');
@@ -400,7 +407,7 @@ export function summarizeStagedBuild(input: StagedSummaryInput): { digest: strin
     const switchBlock = input.switchLocation
         ? `\n\nSwitch location: other places Google found for this text. Put these lines in your reply unchanged, as they are pill buttons the user can click to redo the build at that place:\n${input.switchLocation}`
         : '';
-    const texturesBlock = !input.textures ? '' : showsClay(input)
+    const texturesBlock = !input.textures && !input.scanTextures ? '' : showsClay(input)
         ? `\n\nViews & Materials: put this line in your reply unchanged, it is a pill button the user can click to see the real textures (the clay they chose stays until then):\n${SHOW_TEXTURES_PILL}`
         : `\n\nViews & Materials: put this line in your reply unchanged, it is a pill button the user can click to see the build in studio clay instead of its real textures:\n${SHOW_CLAY_PILL}`;
     return { digest: stagedDigest(input), summary: sentences.join(' ') + texturesBlock + switchBlock };

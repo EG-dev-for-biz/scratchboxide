@@ -130,6 +130,7 @@ public:
             if (!library) throw Error(std::string("Metal kernel compilation failed: ") + (error ? error.localizedDescription.UTF8String : "unknown error"));
             initPso_ = makePipeline(library, "pt_init");
             samplePso_ = makePipeline(library, "pt_sample");
+            restirSpatialPso_ = makePipeline(library, "restir_spatial");
             dnPreparePso_ = makePipeline(library, "dn_prepare");
             dnGradientsPso_ = makePipeline(library, "dn_gradients");
             dnBlurPso_ = makePipeline(library, "dn_blur");
@@ -238,6 +239,19 @@ public:
 
     /** 0: PCG32 per pixel (the CPU tracer's stream); 1: per-pixel Owen-scrambled Sobol. */
     void setSampler(uint32_t sampler) { sampler_ = sampler; }
+
+    /**
+     * ReSTIR for the sky at the first hit: `candidates` cosine-sampled sky directions per pixel per pass are
+     * resampled into a reservoir kept across the frame's passes, `spatial` random neighbours (within 16 px,
+     * same facing and depth) are merged in between passes, and the chosen direction is shaded with one
+     * visibility ray. Sky lighting only (`lighting.sun`); the sun keeps its own shadow ray.
+     */
+    void setRestir(bool enabled, uint32_t candidates = 8, uint32_t spatial = 3, bool temporal = true) {
+        restir_ = enabled;
+        restirTemporal_ = temporal;
+        restirCandidates_ = std::max<uint32_t>(1, candidates);
+        restirSpatial_ = spatial;
+    }
 
     /**
      * Rasterize the primary cut once per frame into a visibility texture (triangle id per pixel centre);
@@ -464,6 +478,9 @@ public:
         u.bounceShadowRays = bounceShadowRays_ ? 1 : 0;
         u.sampler = sampler_;
         u.usePrimaryRaster = primaryRaster_ ? 1 : 0;
+        u.restir = restir_ && lighting.mode == Lighting::Mode::Sky ? (restirTemporal_ ? 1 : 2) : 0;
+        u.restirCandidates = restirCandidates_;
+        u.restirSpatial = restirSpatial_;
 
         std::vector<float> lut(3, 0.0f);
         if (lighting.mode == Lighting::Mode::Sky) {
@@ -497,6 +514,17 @@ public:
             frameUniforms_ = [device_ newBufferWithBytes:&u length:sizeof(Uniforms) options:MTLResourceStorageModeShared];
             frameLut_ = [device_ newBufferWithBytes:lut.data() length:lut.size() * sizeof(float) options:MTLResourceStorageModeShared];
             if (!framePixels_ || !frameUniforms_ || !frameLut_) throw Error("could not allocate render buffers");
+            if (u.restir != 0) {
+                reservoirA_ = [device_ newBufferWithLength:n * sizeof(Reservoir) options:MTLResourceStorageModePrivate];
+                reservoirB_ = [device_ newBufferWithLength:n * sizeof(Reservoir) options:MTLResourceStorageModePrivate];
+                surfaces_ = [device_ newBufferWithLength:n * sizeof(PrimarySurface) options:MTLResourceStorageModePrivate];
+                surfacesB_ = [device_ newBufferWithLength:n * sizeof(PrimarySurface) options:MTLResourceStorageModePrivate];
+                if (!reservoirA_ || !reservoirB_ || !surfaces_ || !surfacesB_) throw Error("could not allocate the ReSTIR buffers");
+            } else {
+                reservoirA_ = reservoirB_ = surfaces_ = surfacesB_ = nil;
+            }
+            if (!dummyRestir_) dummyRestir_ = [device_ newBufferWithLength:64 options:MTLResourceStorageModePrivate];
+            frameRestir_ = u.restir != 0;
             frameUniform_ = uniformMaterial != nullptr;
             frameWidth_ = w;
             frameHeight_ = h;
@@ -510,6 +538,10 @@ public:
             [encoder setComputePipelineState:initPso_];
             [encoder setBuffer:framePixels_ offset:0 atIndex:0];
             [encoder setBuffer:frameUniforms_ offset:0 atIndex:1];
+            [encoder setBuffer:(frameRestir_ ? reservoirA_ : dummyRestir_) offset:0 atIndex:2];
+            [encoder setBuffer:(frameRestir_ ? surfaces_ : dummyRestir_) offset:0 atIndex:3];
+            [encoder setBuffer:(frameRestir_ ? reservoirB_ : dummyRestir_) offset:0 atIndex:4];
+            [encoder setBuffer:(frameRestir_ ? surfacesB_ : dummyRestir_) offset:0 atIndex:5];
             [encoder dispatchThreads:MTLSizeMake(static_cast<NSUInteger>(w), static_cast<NSUInteger>(h), 1) threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
             [encoder endEncoding];
             submit(commands);
@@ -545,11 +577,33 @@ public:
                 const uint32_t pass[4] = {static_cast<uint32_t>(frameSpp_ + k), sobolDims_, 0, 0};
                 [encoder setBytes:pass length:sizeof(pass) atIndex:12];
                 [encoder setBuffer:sobolBuffer_ offset:0 atIndex:13];
+                [encoder setBuffer:(frameRestir_ ? reservoirA_ : dummyRestir_) offset:0 atIndex:14];
+                [encoder setBuffer:(frameRestir_ ? surfaces_ : dummyRestir_) offset:0 atIndex:15];
+                [encoder setBuffer:(frameRestir_ ? reservoirB_ : dummyRestir_) offset:0 atIndex:16];
+                [encoder setBuffer:(frameRestir_ ? surfacesB_ : dummyRestir_) offset:0 atIndex:17];
                 if (!frameUniform_) {
                     for (id<MTLTexture> texture : textures_) [encoder useResource:texture usage:MTLResourceUsageRead];
                 }
                 [encoder dispatchThreads:grid threadsPerThreadgroup:group];
                 [encoder endEncoding];
+                if (frameRestir_ && !restirTemporal_) {
+                    // Fresh mode merges neighbours inside the pass from the previous pass's buffers: swap both pairs.
+                    std::swap(reservoirA_, reservoirB_);
+                    std::swap(surfaces_, surfacesB_);
+                } else if (frameRestir_ && restirSpatial_ > 0) {
+                    // Neighbours' reservoirs merge into a second buffer, which the next pass reads.
+                    id<MTLComputeCommandEncoder> spatial = [commands computeCommandEncoder];
+                    [spatial setComputePipelineState:restirSpatialPso_];
+                    [spatial setBuffer:reservoirA_ offset:0 atIndex:0];
+                    [spatial setBuffer:reservoirB_ offset:0 atIndex:1];
+                    [spatial setBuffer:surfaces_ offset:0 atIndex:2];
+                    [spatial setBuffer:frameUniforms_ offset:0 atIndex:3];
+                    [spatial setBuffer:frameLut_ offset:0 atIndex:4];
+                    [spatial setBytes:pass length:sizeof(pass) atIndex:5];
+                    [spatial dispatchThreads:grid threadsPerThreadgroup:group];
+                    [spatial endEncoding];
+                    std::swap(reservoirA_, reservoirB_);
+                }
             }
             submit(commands);
             frameSpp_ += std::max(1, passes);
@@ -829,6 +883,17 @@ private:
     id<MTLCommandQueue> queue_{nil};
     id<MTLComputePipelineState> initPso_{nil};
     id<MTLComputePipelineState> samplePso_{nil};
+    id<MTLComputePipelineState> restirSpatialPso_{nil};
+    id<MTLBuffer> reservoirA_{nil};
+    id<MTLBuffer> reservoirB_{nil};
+    id<MTLBuffer> surfaces_{nil};
+    id<MTLBuffer> surfacesB_{nil};
+    id<MTLBuffer> dummyRestir_{nil};
+    bool frameRestir_{false};
+    bool restir_{false};
+    bool restirTemporal_{true};
+    uint32_t restirCandidates_{8};
+    uint32_t restirSpatial_{3};
     id<MTLComputePipelineState> dnPreparePso_{nil};
     id<MTLComputePipelineState> dnGradientsPso_{nil};
     id<MTLComputePipelineState> dnBlurPso_{nil};

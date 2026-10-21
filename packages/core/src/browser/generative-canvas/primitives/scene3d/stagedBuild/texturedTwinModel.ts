@@ -37,7 +37,7 @@ function confidenceIndexOf(m: THREE.Material): number | undefined {
  * untouched. A confidence texture that fails to load leaves its material without one (the rung shading then draws that
  * surface in the clay rung's colour) and is reported on the console.
  */
-export function prepareTexturedTwinModel(gltf: GltfLike): Promise<number> {
+export function prepareTexturedTwinModel(gltf: GltfLike, opts: { twin?: boolean } = {}): Promise<number> {
     const byIndex = new Map<number, THREE.Material[]>();
     gltf.scene.traverse(o => {
         const mesh = o as THREE.Mesh;
@@ -52,7 +52,9 @@ export function prepareTexturedTwinModel(gltf: GltfLike): Promise<number> {
             if (!list.includes(m)) list.push(m);
             byIndex.set(idx, list);
         }
-        if (textured) mesh.userData[KEEP_AUTHORED_MATERIAL_KEY] = true;
+        // a twin's textured surfaces are the point of it: a photogrammetric twin (the scan's own textures, no confidence
+        // texture) keeps its photo materials under the clay pass as much as a texture-pass twin does
+        if (textured || (opts.twin && mats.some(m => !!(m as THREE.MeshStandardMaterial | null)?.map))) mesh.userData[KEEP_AUTHORED_MATERIAL_KEY] = true;
     });
     const parser = gltf.parser;
     // the facade material reading (glass, coursing) on the same surfaces, when the twin carries it

@@ -120,10 +120,19 @@ if (process.env.BENCH_SAMPLERS === '1') {
     const ref = render('reference-1024', { samplesPerPixel: 1024 });
     console.log('\n| Sampler | spp | RMSE vs 1024 spp |');
     console.log('| :-- | --: | --: |');
-    for (const sampler of ['pcg', 'sobol']) {
+    const SAMPLERS = {
+        pcg: { sampler: 'pcg' },
+        sobol: { sampler: 'sobol' },
+        // ReSTIR over sky directions at the first hit (measured and rejected: see docs/processes/metal_path_tracer_phase1_parity.md).
+        'sobol+restir-temporal': { sampler: 'sobol', restir: true, restirCandidates: 8, restirSpatial: 3 },
+        'sobol+restir-fresh': { sampler: 'sobol', restir: true, restirTemporal: false, restirCandidates: 8, restirSpatial: 0 },
+        'sobol+restir-fresh-spatial': { sampler: 'sobol', restir: true, restirTemporal: false, restirCandidates: 8, restirSpatial: 3 }
+    };
+    const mean = a => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i]; return s / a.length; };
+    for (const [name, optimizations] of Object.entries(SAMPLERS)) {
         for (const spp of [8, 32]) {
-            const r = render(`${sampler}-${spp}`, { samplesPerPixel: spp, optimizations: { sampler } });
-            console.log(`| ${sampler} | ${spp} | ${rmse(r.color, ref.color).toExponential(3)} |`);
+            const r = render(`${name}-${spp}`, { samplesPerPixel: spp, optimizations });
+            console.log(`| ${name} | ${spp} | ${rmse(r.color, ref.color).toExponential(3)} (mean ratio ${(mean(r.color) / mean(ref.color)).toFixed(4)}) |`);
         }
     }
 }

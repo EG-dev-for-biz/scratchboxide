@@ -365,6 +365,8 @@ export interface StagedLocationContext {
     activeArtifact?: CanvasArtifact;
     /** A retry: the run to rebuild and the one stage to recompute (bypassing its cache). */
     retry?: { runId: string; stage: StageId };
+    /** A resume: the run to rebuild as recorded; cached stages are reused, nothing is bypassed. */
+    resume?: { runId: string };
 }
 
 /** No real data exists to show: the place could not be resolved, or the tiles do not cover it. */
@@ -439,6 +441,8 @@ class StagedRun {
     private closed = false;
     /** The active scene this run is staged into, split (kept-structure.ts); set once the place is resolved. */
     carried?: ActiveScenePartition;
+    /** A district's remesh took the scan's own textures as its twin (the textures stage). */
+    scanTextures?: { layer: string; treesTakenOut: boolean };
     /** Applied to every layer as it commits (the district without the kept structure's own scan); it may return the layer unchanged. */
     layerTransform?: (layer: StagedLayer, meta: StagedLayerObjectMeta) => StagedLayer;
 
@@ -1059,9 +1063,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     // a retry rebuilds the recorded request exactly; the model never re-words it
     let request = requestIn;
     let recordedArtifactId: string | undefined;
-    if (ctx.retry) {
-        const rec = cache.readRunRecord<RunRecord>(ctx.retry.runId);
-        if (!rec) throw new StagedLocationHardFailure('resolve', 'unknown_run', `There is no staged run ${ctx.retry.runId} to retry (its record is not in .scratchbox/cache/staged_location/runs).`);
+    const recordedRunId = ctx.retry?.runId ?? ctx.resume?.runId;
+    if (recordedRunId) {
+        const rec = cache.readRunRecord<RunRecord>(recordedRunId);
+        if (!rec) throw new StagedLocationHardFailure('resolve', 'unknown_run', `There is no staged run ${recordedRunId} to ${ctx.retry ? 'retry' : 'resume'} (its record is not in .scratchbox/cache/staged_location/runs).`);
         request = rec.request;
         recordedArtifactId = rec.artifactId;
     }
@@ -2713,7 +2718,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             provenanceAfter: PROVENANCE.remeshed, reason, ...(cause ? { cause } : {}), transient: false, runId, now: now()
                         }))]
                     });
-                    let masksDir: string, seg: Pick<Awaited<ReturnType<typeof segmentOwnershipViews>>, 'masks' | 'views' | 'skipped' | 'model'>;
+                    let masksDir: string, seg: Pick<Awaited<ReturnType<typeof segmentOwnershipViews>>, 'masks' | 'views' | 'skipped' | 'model' | 'cut'>;
                     // the outlines of an identical earlier vote (the same first isolate, place and models) are read back: a view the
                     // window cut is not asked again on every repeat
                     const voteKey = stageKey('ownership-vote/v1', first.cacheKey, request.query.trim(), visionAvailable!.candidates, OWNERSHIP_VOTE_WINDOW_MS);
@@ -2732,7 +2737,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const cutTimer = setTimeout(() => cut.abort(Object.assign(new Error(`not outlined within the vote's ${Math.round(OWNERSHIP_VOTE_WINDOW_MS / 1000)} s`), { name: 'TimeoutError' })), OWNERSHIP_VOTE_WINDOW_MS);
                         const chain = new VisionModelChain<string>({ client: visionAvailable!.client, candidates: visionAvailable!.candidates, signal: ctx.signal ? AbortSignal.any([ctx.signal, cut.signal]) : cut.signal, ...chainExtras('remesh'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
                         try {
-                            seg = await timed('ownershipVision', () => segmentOwnershipViews({ viewsDir: views.dir, masksDir, target: request.query.trim(), chain, concurrency: 6, onProgress: m => io.progress(m) }));
+                            // 12 at once; from 30 s on the vote goes ahead on a quorum of outlines (OWNERSHIP_VOTE_RULE), the window is the backstop
+                            seg = await timed('ownershipVision', () => segmentOwnershipViews({ viewsDir: views.dir, masksDir, target: request.query.trim(), chain, concurrency: 12, onProgress: m => io.progress(m) }));
                         } finally {
                             clearTimeout(cutTimer);
                         }
@@ -2756,7 +2762,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     // how much the vote moved: compared on the isolates' raw scan triangles (a first isolate that fell back to the district is replaced outright)
                     const change = firstWasIsolate && first.rawClayGlb ? ownershipChange(first.rawClayGlb, voted.rawClayGlb) : undefined;
                     const moved = change ? `${round(change.share * 100, 1)}% of the structure's scan surface (${round(change.onlySecondM2, 1)} m² joined, ${round(change.onlyFirstM2, 1)} m² left)` : 'the first isolate had fallen back to the district around the structure';
-                    run.note(PROVENANCE.remeshed, `object ownership: ${seg.model ?? 'the vision model'} outlined the structure in ${seg.masks} of ${seg.views} views of the tile; the vote moved ${moved}`);
+                    run.note(PROVENANCE.remeshed, `object ownership: ${seg.model ?? 'the vision model'} outlined the structure in ${seg.masks} of ${seg.views} views of the tile${seg.cut ? ` (${seg.cut.note})` : ''}; the vote moved ${moved}`);
                     if (change && !change.material) {
                         return {
                             status: 'committed', value: { material: false, request: votedRequest, isolateOk: true }, breakdownMs: msBy,
@@ -4052,6 +4058,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
         ...(exemptInferred.length ? { exemptInferred } : {}),
         ...(gate.exemptionsRefused.length || refusedHere.length ? { exemptionsRefused: [...refusedHere, ...gate.exemptionsRefused] } : {}),
         droppedNotResolvable: f.rebuild.droppedNotResolvable,
+        ...(run.scanTextures ? { scanTextures: run.scanTextures } : {}),
         ...(f.textures ? { textures: { shares: f.textures.shares, views: f.textures.views, modelsUsed: f.textures.modelsUsed, layers: f.textures.layers.map(l => l.layer), totalMs: f.textures.record.timingsMs.total ?? 0, ...(f.textures.tileUnavailable ? { tileUnavailable: f.textures.tileUnavailable } : {}), ...(f.textures.viewsUnavailable ? { viewsUnavailable: f.textures.viewsUnavailable } : {}) } } : {})
     };
     const switchPills = buildSwitchLocationPills({ ...f.place, ...(f.place.alternatives?.length ? { alternatives: f.place.alternatives } : {}) }, { query: f.request.query, isolate: f.request.isolate, radiusM: f.request.radiusM, trees: f.request.trees, stageIntoActiveScene: f.request.stageIntoActiveScene });

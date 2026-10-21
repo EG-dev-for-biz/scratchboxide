@@ -20,7 +20,7 @@
 
 import type { Content, GenerateContentResponse } from '@google/genai';
 import { GeneratorFailedError, SegmentTargetNotFoundError } from '../../common/errors/pipeline-errors';
-import { VisionModelChain, type VisionGenAIClient, type VisionAttempt } from '../gemini/vision-model-chain';
+import { VISION_CALL_POLICY, VisionModelChain, type VisionGenAIClient, type VisionAttempt } from '../gemini/vision-model-chain';
 import { describeThinking } from '../gemini/thinking-config';
 
 export const SEGMENT_LOCATOR_PROMPT_VERSION = 'segment-locator/v1';
@@ -209,7 +209,7 @@ export class SegmentTargetLocator {
         let lastModel = chain.current;
         let thinking: LocatedTarget['thinking'];
         for (let round = 0; round < 2; round++) {
-            const res = await chain.generate({ contents, config }, { stage: 'locate-target', thinkingBudget: SEGMENT_LOCATOR_THINKING_BUDGET });
+            const res = await chain.generate({ contents, config }, { stage: 'locate-target', thinkingBudget: SEGMENT_LOCATOR_THINKING_BUDGET, ...VISION_CALL_POLICY['locate-target'] });
             calls++;
             lastModel = res.model;
             thinking = res.thinking ? describeThinking(res.thinking) : undefined;

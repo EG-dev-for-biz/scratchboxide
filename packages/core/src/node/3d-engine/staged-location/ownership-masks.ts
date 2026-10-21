@@ -20,11 +20,16 @@
  *
  * A view the model cannot read, or where it says the structure is not visible, gets no mask: it then casts no vote,
  * which is recorded, never guessed.
+ *
+ * The vote does not wait for its slowest answers once it has enough (OWNERSHIP_VOTE_RULE): each call is hedged and has
+ * a deadline (VISION_CALL_POLICY.ownership), and from `afterMs` into the vote, as soon as a quorum of the views has
+ * outlines, the calls still out are aborted. Their views cast no vote, each recorded with that reason, and the result
+ * says how many were cut and why (`cut`).
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
-import type { VisionModelChain } from '../../gemini/vision-model-chain';
+import { VISION_CALL_POLICY, type VisionModelChain } from '../../gemini/vision-model-chain';
 import { encodePng } from './png-encode';
 import { decodeImageInMemory } from './tile-texture-transfer';
 
@@ -103,6 +108,14 @@ export function outlinePrompt(target: string, width: number, height: number): st
         'Answer with JSON only: {"visible": boolean, "polygons": [{"outer": [[y, x], ...], "holes": [[[y, x], ...], ...]}]}, coordinates normalised to 0-1000 ([y, x] order, like box_2d).';
 }
 
+/**
+ * When the vote goes ahead without its slowest views: from `afterMs` after it starts, as soon as at least `share` of the
+ * views (rounded up) have outlines. Replayed on 72 recorded ownership latencies (six votes of 12 views, 12 at a time,
+ * hedged): every vote ended at 30 s (waiting for all, 6 at a time: 42-75 s) with 9-11 views voting
+ * (docs/processes/vision_call_hedging.md).
+ */
+export const OWNERSHIP_VOTE_RULE = { afterMs: 30_000, share: 0.75 };
+
 export interface SegmentOwnershipResult {
     /** Where views.txt and the masks are (a copy of the views list next to the masks). */
     masksDir: string;
@@ -111,6 +124,8 @@ export interface SegmentOwnershipResult {
     skipped: Array<{ view: string; reason: string }>;
     model?: string;
     ms: number;
+    /** The views whose calls were aborted when the quorum was in (OWNERSHIP_VOTE_RULE), and the sentence that reports it. */
+    cut?: { views: string[]; quorum: number; afterMs: number; note: string };
 }
 
 /**
@@ -119,6 +134,8 @@ export interface SegmentOwnershipResult {
  */
 export async function segmentOwnershipViews(opts: {
     viewsDir: string; masksDir: string; target: string; chain: VisionModelChain<string>; concurrency?: number; onProgress?: (m: string) => void;
+    /** When the vote stops waiting for its slowest views (default OWNERSHIP_VOTE_RULE; false: it waits for every one). */
+    vote?: { afterMs: number; share: number } | false;
 }): Promise<SegmentOwnershipResult> {
     const t0 = Date.now();
     const views = readOwnershipViewList(opts.viewsDir);
@@ -127,18 +144,34 @@ export async function segmentOwnershipViews(opts: {
     const skipped: SegmentOwnershipResult['skipped'] = [];
     let masks = 0, done = 0, model: string | undefined;
     let next = 0;
+    const rule = opts.vote === false ? undefined : opts.vote ?? OWNERSHIP_VOTE_RULE;
+    const quorum = rule ? Math.max(1, Math.ceil(rule.share * views.length)) : 0;
+    const inFlight = new Map<string, AbortController>();
+    const cutViews: string[] = [];
+    let cutAt: number | undefined;
+    // from afterMs on, the vote goes ahead once the quorum of outlines is in: the calls still out are aborted
+    const maybeCut = () => {
+        if (!rule || cutAt !== undefined || masks < quorum || Date.now() - t0 < rule.afterMs || next >= views.length && inFlight.size === 0) return;
+        cutAt = Date.now() - t0;
+        for (const [, ctl] of inFlight) ctl.abort(Object.assign(new Error('the vote went ahead without this view'), { name: 'AbortError' }));
+    };
+    const cutTimer = rule ? setTimeout(maybeCut, rule.afterMs) : undefined;
+    const cutReason = () => `no answer by the time the vote went ahead (${Math.round((cutAt ?? 0) / 1000)} s in, with ${masks} of ${views.length} outlines; quorum ${quorum})`;
     const work = async () => {
         for (let i; (i = next++) < views.length;) {
             const v = views[i];
             const out = path.join(opts.masksDir, `${v.name}.mask.png`);
+            if (cutAt !== undefined) { cutViews.push(v.name); skipped.push({ view: v.name, reason: cutReason() }); done++; continue; }
+            const ctl = new AbortController();
+            inFlight.set(v.name, ctl);
             try {
                 const png = fs.readFileSync(path.join(opts.viewsDir, `${v.name}.png`));
                 const img = decodeImageInMemory(png);
                 if (img.width !== v.width || img.height !== v.height) throw new Error(`the view image is ${img.width}x${img.height}, views.txt says ${v.width}x${v.height}`);
                 const r = await opts.chain.generate({
                     contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: png.toString('base64') } }, { text: outlinePrompt(opts.target, v.width, v.height) }] }],
-                    config: { responseMimeType: 'application/json', temperature: 0 }
-                }, { stage: 'ownership' });
+                    config: { responseMimeType: 'application/json', temperature: 0, abortSignal: ctl.signal }
+                }, { stage: 'ownership', ...VISION_CALL_POLICY.ownership, valid: res => { try { parseOutlineReply(res.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? ''); return true; } catch { return false; } } });
                 const text = r.response.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
                 const reply = parseOutlineReply(text);
                 r.remember();
@@ -147,12 +180,23 @@ export async function segmentOwnershipViews(opts: {
                 fs.writeFileSync(out, encodePng(v.width, v.height, rasterizeOutlines(reply.polygons, v.width, v.height), 1));
                 masks++;
             } catch (err) {
-                skipped.push({ view: v.name, reason: err instanceof Error ? err.message : String(err) });
+                if (ctl.signal.aborted && cutAt !== undefined) { cutViews.push(v.name); skipped.push({ view: v.name, reason: cutReason() }); }
+                else skipped.push({ view: v.name, reason: err instanceof Error ? err.message : String(err) });
             } finally {
+                inFlight.delete(v.name);
                 opts.onProgress?.(`outlining the structure: ${++done} of ${views.length} views`);
+                maybeCut();
             }
         }
     };
-    await Promise.all(Array.from({ length: Math.max(1, Math.min(opts.concurrency ?? 4, views.length)) }, work));
-    return { masksDir: opts.masksDir, masks, views: views.length, skipped, model, ms: Date.now() - t0 };
+    try {
+        await Promise.all(Array.from({ length: Math.max(1, Math.min(opts.concurrency ?? 4, views.length)) }, work));
+    } finally {
+        clearTimeout(cutTimer);
+    }
+    const cut = cutViews.length && rule ? {
+        views: cutViews, quorum, afterMs: rule.afterMs,
+        note: `the vote went ahead ${Math.round((cutAt ?? 0) / 1000)} s in without ${cutViews.length} view${cutViews.length === 1 ? '' : 's'} still unanswered (${cutViews.join(', ')}): ${masks} of ${views.length} had outlines, at least ${quorum} needed`
+    } : undefined;
+    return { masksDir: opts.masksDir, masks, views: views.length, skipped, model, ms: Date.now() - t0, ...(cut ? { cut } : {}) };
 }
