@@ -94,3 +94,49 @@ export function followStagedRun(runId: string, opts: {
     void tick();
     return { stop: () => { stopped = true; if (timer) clearTimeout(timer); } };
 }
+
+type SharedListener = { onEvents: Parameters<typeof followStagedRun>[1]['onEvents']; onEnd: Parameters<typeof followStagedRun>[1]['onEnd'] };
+interface SharedEntry {
+    follower: StagedRunFollower;
+    listeners: Set<SharedListener>;
+    ended?: { status: StagedRunSnapshot['status'] | 'unknown'; snapshot?: StagedRunSnapshot };
+}
+const shared = new Map<string, SharedEntry>();
+
+/**
+ * One follower per run for the whole page, however many viewports or effect re-runs ask for it: each caller gets the
+ * run's events from its own subscription on; the poll stops when the last caller leaves or the run ends.
+ */
+export function followStagedRunShared(runId: string, listener: SharedListener, opts: { after?: number; pollMs?: number; fetchImpl?: typeof fetch } = {}): () => void {
+    let entry: SharedEntry | undefined = shared.get(runId);
+    if (entry?.ended) {
+        listener.onEnd(entry.ended.status, entry.ended.snapshot);
+        return () => undefined;
+    }
+    if (!entry) {
+        const listeners = new Set<SharedListener>();
+        const e: SharedEntry = { listeners, follower: { stop: () => undefined } };
+        e.follower = followStagedRun(runId, {
+            after: opts.after, pollMs: opts.pollMs, fetchImpl: opts.fetchImpl,
+            onEvents: (events, artifact, snapshot) => { for (const l of [...listeners]) l.onEvents(events, artifact, snapshot); },
+            onEnd: (status, snapshot) => {
+                e.ended = { status, snapshot };
+                for (const l of [...listeners]) l.onEnd(status, snapshot);
+                // a finished run is forgotten after a while, so a later page state can ask again
+                const t = setTimeout(() => { if (shared.get(runId) === e) shared.delete(runId); }, 60_000);
+                (t as { unref?: () => void }).unref?.();
+            }
+        });
+        shared.set(runId, e);
+        entry = e;
+    }
+    entry.listeners.add(listener);
+    const e = entry;
+    return () => {
+        e.listeners.delete(listener);
+        if (e.listeners.size === 0 && !e.ended) {
+            e.follower.stop();
+            if (shared.get(runId) === e) shared.delete(runId);
+        }
+    };
+}

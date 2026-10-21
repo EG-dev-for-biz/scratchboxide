@@ -52,7 +52,7 @@ import { FACADE_MATERIAL_SOURCE } from './facadeMaterialLook';
 import { TEXTURE_RUNG_COLORS, classUniforms, hexToRgb01, legendRows, patternCode, provenanceBackground, resolveLegend, shadingClasses, styleFor, textureRungLegendRows, uncertaintyCoverage, type LegendStyle } from './provenanceShading';
 import { EVICT_AFTER_MS, evictionCandidates, evictionEnabled, sameSet, stepEviction } from './layerEviction';
 import { isInterrupted, isRunSettled, publishStageEvent, stageEventsFor, streamedProgress, subscribeStageEvents, withStreamedEvents, type StageProgress } from './stagedBuildState';
-import { followStagedRun } from './stagedRunClient';
+import { followStagedRunShared } from './stagedRunClient';
 import { readStagedBuild } from './stagedBuildState';
 import type { CanvasArtifact } from '../../../canvas-types';
 import {
@@ -437,8 +437,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
                 return { ...(artifact.data as Scene3DData) };
             }, { operator: 'sb_staged_run_reattach', params: { runId } }, { history: false });
         };
-        const follower = followStagedRun(runId, {
-            after: known.length ? known[known.length - 1].seq : undefined,
+        const stopFollowing = followStagedRunShared(runId, {
             onEvents: (events, artifact, snapshot) => {
                 for (const e of events) publishStageEvent(e);
                 applyArtifact(artifact);
@@ -456,8 +455,8 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
                 if (status === 'unknown') return;
                 applyArtifact(snapshot?.artifact);
             }
-        });
-        return () => follower.stop();
+        }, { after: known.length ? known[known.length - 1].seq : undefined });
+        return stopFollowing;
     }, [liveRunId, liveRunState, mutateSceneData, pageLoadedAtMs]);
 
     const [events, setEvents] = React.useState<readonly StageEvent[]>(() => (runId ? stageEventsFor(runId) : []));

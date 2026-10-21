@@ -15,7 +15,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { StagedRunRegistry, clientDisconnectedError, isClientDisconnect } from '../src/node/3d-engine/staged-location/staged-run-registry';
-import { followStagedRun } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/stagedRunClient';
+import { followStagedRun, followStagedRunShared } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/stagedRunClient';
 import type { StageEvent } from '../src/common/spatial/staged-location-contracts';
 
 const ev = (seq: number, status: StageEvent['status'] = 'running'): StageEvent => ({
@@ -97,5 +97,29 @@ describe('followStagedRun', () => {
         const { fetchImpl } = server([{ status: 404 }]);
         const ended = await new Promise<string>(resolve => { followStagedRun('abcd1234', { pollMs: 1, fetchImpl, onEvents: () => undefined, onEnd: s => resolve(s) }); });
         expect(ended).toBe('unknown');
+    });
+
+    it('shares one poll per run between every caller on the page', async () => {
+        const { fetchImpl, calls } = server([
+            { status: 200, body: snap([ev(1)], 'running') },
+            { status: 200, body: snap([ev(2, 'committed')], 'finished', art(2)) }
+        ]);
+        const a: number[] = [], b: number[] = [];
+        const ends: string[] = [];
+        const done = new Promise<void>(resolve => {
+            const stopA = followStagedRunShared('abcd1234', { onEvents: e => a.push(...e.map(x => x.seq)), onEnd: s => { ends.push(`a:${s}`); } }, { pollMs: 1, fetchImpl });
+            followStagedRunShared('abcd1234', { onEvents: e => b.push(...e.map(x => x.seq)), onEnd: s => { ends.push(`b:${s}`); resolve(); } }, { pollMs: 1, fetchImpl });
+            void stopA;
+        });
+        await done;
+        expect(a).toEqual([1, 2]);
+        expect(b).toEqual([1, 2]);
+        expect(ends.sort()).toEqual(['a:finished', 'b:finished']);
+        expect(calls.length).toBe(2);
+        // a caller arriving after the end hears the end at once, with no new poll
+        const late: string[] = [];
+        followStagedRunShared('abcd1234', { onEvents: () => undefined, onEnd: s => late.push(s) }, { pollMs: 1, fetchImpl });
+        expect(late).toEqual(['finished']);
+        expect(calls.length).toBe(2);
     });
 });
