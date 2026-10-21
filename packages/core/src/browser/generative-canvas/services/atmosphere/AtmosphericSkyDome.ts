@@ -743,6 +743,7 @@ export function createAtmosphericSkyDome(
     const bakeSize = Math.max(64, Math.round(options.bakeResolution ?? SKY_BAKE_RESOLUTION));
     const bakeTarget = new THREE.WebGLCubeRenderTarget(bakeSize, { type: THREE.HalfFloatType, generateMipmaps: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
     const bakeCamera = new THREE.CubeCamera(1, radius * 4, bakeTarget);
+    let disposed = false;
     bakeScene.add(bakeCamera);
     const displayMat = new THREE.ShaderMaterial({
         vertexShader: ATMOSPHERE_VERTEX_SHADER,
@@ -929,6 +930,8 @@ export function createAtmosphericSkyDome(
         },
         setCloudLayers: (layers) => applyCloudLayers(layers),
         dispose: () => {
+            if (disposed) return;
+            disposed = true;
             scene.remove(skyDome);
             scene.remove(sunMesh);
             scene.remove(hemiLight);
@@ -936,7 +939,14 @@ export function createAtmosphericSkyDome(
             skyGeo.dispose();
             skyMat.dispose();
             displayMat.dispose();
-            bakeTarget.dispose();
+            // three's WebGLCubeRenderTarget dispose reads the renderer's per-face framebuffers, which do not exist
+            // when the dome goes before its first bake (a scene closed at once) or after the renderer was disposed;
+            // it then throws "Cannot read properties of undefined (reading '0')" out of a React cleanup
+            try {
+                bakeTarget.dispose();
+            } catch {
+                bakeTarget.texture.dispose();
+            }
             skyLutTexture?.dispose();
             sunGeo.dispose();
             sunMat.dispose();
