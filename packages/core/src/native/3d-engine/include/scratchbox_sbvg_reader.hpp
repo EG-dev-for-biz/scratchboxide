@@ -59,6 +59,8 @@ struct Atlas {
     float roughness{1.0f};
     /** Resolved next to the .sbvg. */
     std::string imagePath;
+    /** Version 5: the level's baked normal map (glTF encoding, in each triangle's tangent frame); empty when none. */
+    std::string normalImagePath;
 };
 
 struct File {
@@ -111,8 +113,8 @@ inline File readFile(const std::string& path) {
     if (word(0) != vgeo::kSbvgMagic) throw FormatError(path + ": not an .sbvg file");
     File file;
     file.version = word(1);
-    if (file.version < 2 || file.version > 4) {
-        throw FormatError(path + ": .sbvg version " + std::to_string(file.version) + " (this reader handles versions 2 to 4)");
+    if (file.version < 2 || file.version > 5) {
+        throw FormatError(path + ": .sbvg version " + std::to_string(file.version) + " (this reader handles versions 2 to 5)");
     }
     const uint32_t fileVertexFloats = file.version >= 3 ? vgeo::kSbvgVertexFloats : 6;
     const bool hasMaterials = file.version >= 3;
@@ -202,16 +204,24 @@ inline File readFile(const std::string& path) {
             atlas.height = word(w + 3);
             atlas.metallic = fword(w + 4);
             atlas.roughness = fword(w + 5);
-            const uint32_t nameLen = word(w + 6);
-            w += 7;
-            const size_t nameWords = (nameLen + 3) / 4;
-            if ((w + nameWords) * 4 > bytes.size() || nameLen > 1024) throw FormatError(path + ": atlas name is truncated");
-            const std::string name(reinterpret_cast<const char*>(bytes.data() + w * 4), nameLen);
-            if (name.find('/') != std::string::npos || name.find('\\') != std::string::npos || name.find("..") != std::string::npos) throw FormatError(path + ": atlas name leaves the directory");
+            w += 6;
+            auto readName = [&](std::string& outName) {
+                if ((w + 1) * 4 > bytes.size()) throw FormatError(path + ": atlas table is truncated");
+                const uint32_t nameLen = word(w);
+                w += 1;
+                const size_t nameWords = (nameLen + 3) / 4;
+                if ((w + nameWords) * 4 > bytes.size() || nameLen > 1024) throw FormatError(path + ": atlas name is truncated");
+                outName.assign(reinterpret_cast<const char*>(bytes.data() + w * 4), nameLen);
+                if (outName.find('/') != std::string::npos || outName.find('\\') != std::string::npos || outName.find("..") != std::string::npos) throw FormatError(path + ": atlas name leaves the directory");
+                w += nameWords;
+            };
+            std::string name, normalName;
+            readName(name);
+            if (file.version >= 5) readName(normalName);
             atlas.imagePath = (std::filesystem::path(dir) / name).string();
+            if (!normalName.empty()) atlas.normalImagePath = (std::filesystem::path(dir) / normalName).string();
             if (atlas.materialId != file.materialCount + a) throw FormatError(path + ": atlas material ids are not consecutive");
             file.atlases.push_back(atlas);
-            w += nameWords;
         }
     }
     const uint32_t materialLimit = file.materialCount + static_cast<uint32_t>(file.atlases.size());

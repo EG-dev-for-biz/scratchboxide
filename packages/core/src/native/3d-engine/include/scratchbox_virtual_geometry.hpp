@@ -44,7 +44,7 @@
  * borders, and each such level has one material of its own, appended after the glTF materials, whose
  * base colour is an atlas PNG written next to the file (atlas table at the end, version 4).
  *
- * Layout (little-endian, 4-byte words), version 4:
+ * Layout (little-endian, 4-byte words), version 5:
  *   header (128 bytes)          see writeSbvg (word 24: skipped non-triangle primitives,
  *                               word 25: dropped degenerate triangles, word 26: glTF material count,
  *                               word 27: atlas count, words 28-29: atlas table byte offset,
@@ -60,8 +60,9 @@
  *     refs       refCount u32             (global vertex index per cluster-local vertex)
  *     triangles  triCount u32             (cluster-local i0 | i1 << 8 | i2 << 16)
  *     materials  triCount u32             (glTF material index, a level atlas material, or 0xFFFFFFFF; version 3+)
- *   atlas table (version 4), per atlas: level, material id, width, height, metallic f32, roughness f32,
- *                               name length, name bytes padded to 4
+ *   atlas table (version 4+), per atlas: level, material id, width, height, metallic f32, roughness f32,
+ *                               name length, name bytes padded to 4; version 5 adds the normal atlas's
+ *                               name the same way (length 0 when the level has none)
  */
 
 #include "scratchbox_texture.hpp"
@@ -88,7 +89,7 @@ constexpr uint32_t kMaxClusterVertices = 128;
 constexpr uint32_t kMaxClusterTriangles = 128;
 constexpr uint32_t kGroupSize = 8;
 constexpr uint32_t kSbvgMagic = 0x47564253; // 'SBVG'
-constexpr uint32_t kSbvgVersion = 4;
+constexpr uint32_t kSbvgVersion = 5;
 constexpr uint32_t kSbvgHeaderBytes = 128;
 constexpr uint32_t kSbvgLevelWords = 16;
 constexpr uint32_t kSbvgClusterWords = 32;
@@ -782,10 +783,36 @@ struct AtlasImage {
         const F3 bottom = fetch(x0, y0 + 1) * (1.0f - tx) + fetch(x0 + 1, y0 + 1) * tx;
         return top * (1.0f - ty) + bottom * ty;
     }
+
+    /** Bilinear, clamped lookup of the stored bytes as 0..1 values (data maps such as normals). */
+    F3 sampleRaw(const F2& uv) const {
+        if (width == 0 || height == 0) return F3(0.5f, 0.5f, 1.0f);
+        const float fx = std::clamp(uv.x, 0.0f, 1.0f) * width - 0.5f;
+        const float fy = std::clamp(uv.y, 0.0f, 1.0f) * height - 0.5f;
+        const float x0f = std::floor(fx), y0f = std::floor(fy);
+        const float tx = fx - x0f, ty = fy - y0f;
+        const int x0 = static_cast<int>(x0f), y0 = static_cast<int>(y0f);
+        auto fetch = [&](int x, int y) {
+            x = std::clamp(x, 0, static_cast<int>(width) - 1);
+            y = std::clamp(y, 0, static_cast<int>(height) - 1);
+            const uint8_t* p = rgb.data() + (static_cast<size_t>(y) * width + x) * 3;
+            return F3(p[0] / 255.0f, p[1] / 255.0f, p[2] / 255.0f);
+        };
+        const F3 top = fetch(x0, y0) * (1.0f - tx) + fetch(x0 + 1, y0) * tx;
+        const F3 bottom = fetch(x0, y0 + 1) * (1.0f - tx) + fetch(x0 + 1, y0 + 1) * tx;
+        return top * (1.0f - ty) + bottom * ty;
+    }
 };
 
 /** Linear RGB albedo of a source material at a uv. */
 using SourceSampler = std::function<F3(uint32_t material, const F2& uv)>;
+
+/**
+ * World-space shading normal of a source material at a uv, given the source triangle's tangent frame
+ * (T, B, N as the tracer derives them from positions and uvs). Returns false when the material has
+ * no normal map, in which case the interpolated vertex normal N stands.
+ */
+using NormalSampler = std::function<bool(uint32_t material, const F2& uv, const F3& T, const F3& B, const F3& N, F3& out)>;
 
 /** The finer surface a group of coarse triangles was simplified from. */
 struct SourceSet {
@@ -801,6 +828,8 @@ struct BakeRequest {
     std::vector<SourceSet> sources;     // per group
     std::vector<float> groupError;      // per group: how far the coarse surface may sit from its source
     SourceSampler sample;
+    /** Optional: the source's own normal maps (an earlier level's normal atlas); vertex normals otherwise. */
+    NormalSampler sampleNormal;
     /** Finest texel worth baking, in world units. */
     float minTexelWorld{0.05f};
     uint32_t maxAtlasSize{8192};
@@ -808,8 +837,12 @@ struct BakeRequest {
 
 struct BakeResult {
     AtlasImage atlas;
+    /** The finer surface's shading normals in each coarse triangle's tangent frame, glTF normal-map encoded. */
+    AtlasImage normal;
     std::vector<F2> cornerUv;   // per coarse corner
     uint32_t cells{0};
+    /** Cells shared by two triangles along a common edge. */
+    uint32_t pairedCells{0};
     uint64_t texels{0};
     /** Average texel size in world units after fitting the size cap. */
     float texelWorld{0.0f};
@@ -835,7 +868,9 @@ struct LevelAtlas {
     uint32_t level{0};
     uint32_t materialId{0};
     AtlasImage image;
+    AtlasImage normal;
     uint32_t cells{0};
+    uint32_t pairedCells{0};
     uint64_t texels{0};
     float texelWorld{0.0f};
     uint32_t missed{0};
@@ -1682,14 +1717,25 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24, cons
                 request.sample = retex->sampleLevel0;
             } else {
                 const AtlasImage* previous = &dag.atlases.back().image;
+                const AtlasImage* previousNormal = &dag.atlases.back().normal;
                 request.sample = [previous](uint32_t, const F2& uv) { return previous->sampleLinear(uv); };
+                // The previous level's baked normals, decoded in the source triangle's own frame.
+                request.sampleNormal = [previousNormal](uint32_t, const F2& uv, const F3& T, const F3& B, const F3& N, F3& out) {
+                    if (previousNormal->width == 0) return false;
+                    const F3 e = previousNormal->sampleRaw(uv);
+                    const F3 tn(2.0f * e.x - 1.0f, 2.0f * e.y - 1.0f, 2.0f * e.z - 1.0f);
+                    out = normalize(T * tn.x + B * tn.y + N * tn.z);
+                    return dot(out, out) > 0.0f;
+                };
             }
             BakeResult baked = retex->bake(request);
             LevelAtlas atlas;
             atlas.level = level + 1;
             atlas.materialId = m.materialCount + static_cast<uint32_t>(dag.atlases.size());
             atlas.image = std::move(baked.atlas);
+            atlas.normal = std::move(baked.normal);
             atlas.cells = baked.cells;
+            atlas.pairedCells = baked.pairedCells;
             atlas.texels = baked.texels;
             atlas.texelWorld = baked.texelWorld;
             atlas.missed = baked.missed;
@@ -1761,6 +1807,11 @@ struct SbvgSummary {
 /** Name of the PNG holding a level's atlas, next to the .sbvg: `<stem>.atlas<level>.png`. */
 inline std::string atlasFileName(const std::string& stem, uint32_t level) {
     return stem + ".atlas" + std::to_string(level) + ".png";
+}
+
+/** Name of the PNG holding a level's baked normal map: `<stem>.normal<level>.png`. */
+inline std::string normalAtlasFileName(const std::string& stem, uint32_t level) {
+    return stem + ".normal" + std::to_string(level) + ".png";
 }
 
 /** Element count or index stored in a 32-bit field; throws instead of wrapping. */
@@ -1895,16 +1946,32 @@ inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path, uin
     while ((words.size() + body.size()) % 4) body.push_back(0);
     const uint64_t tableOffset = uint64_t(words.size() + body.size()) * 4;
     const std::filesystem::path dir = std::filesystem::path(path).parent_path();
-    for (const LevelAtlas& atlas : dag.atlases) {
-        const std::string name = atlasFileName(atlasStem, atlas.level);
-        texture::ImageBuffer image(static_cast<int>(atlas.image.width), static_cast<int>(atlas.image.height), 3);
-        image.data = atlas.image.rgb;
+    auto writePng = [&](const AtlasImage& atlas, const std::string& name) {
+        texture::ImageBuffer image(static_cast<int>(atlas.width), static_cast<int>(atlas.height), 3);
+        image.data = atlas.rgb;
         const std::vector<uint8_t> png = texture::encodePng(image);
         std::ofstream pf(dir / name, std::ios::binary);
         if (!pf) throw std::runtime_error("cannot write " + (dir / name).string());
         pf.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
         if (!pf) throw std::runtime_error("failed writing " + (dir / name).string());
         sum.atlasBytes += png.size();
+    };
+    auto putName = [&](const std::string& name) {
+        body.push_back(static_cast<uint32_t>(name.size()));
+        const size_t nameWords = (name.size() + 3) / 4;
+        const size_t at = body.size();
+        body.resize(at + nameWords, 0);
+        std::memcpy(body.data() + at, name.data(), name.size());
+    };
+    for (const LevelAtlas& atlas : dag.atlases) {
+        const std::string name = atlasFileName(atlasStem, atlas.level);
+        writePng(atlas.image, name);
+        // Version 5: the normal atlas follows the colour atlas; an empty name means the level has none.
+        std::string normalName;
+        if (atlas.normal.width > 0 && atlas.normal.height > 0) {
+            normalName = normalAtlasFileName(atlasStem, atlas.level);
+            writePng(atlas.normal, normalName);
+        }
         body.push_back(atlas.level);
         body.push_back(atlas.materialId);
         body.push_back(atlas.image.width);
@@ -1914,11 +1981,8 @@ inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path, uin
         body.push_back(bits);
         std::memcpy(&bits, &atlas.roughness, 4);
         body.push_back(bits);
-        body.push_back(static_cast<uint32_t>(name.size()));
-        const size_t nameWords = (name.size() + 3) / 4;
-        const size_t at = body.size();
-        body.resize(at + nameWords, 0);
-        std::memcpy(body.data() + at, name.data(), name.size());
+        putName(name);
+        putName(normalName);
     }
     words[27] = static_cast<uint32_t>(dag.atlases.size());
     putU64(&words[28], tableOffset);

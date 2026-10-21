@@ -194,7 +194,8 @@ struct MaterialSource {
     double loadMs{0.0};
 };
 
-MaterialSource loadMaterials(const std::string& glbPath, const sbvg::File& file) {
+/** `atlasNormals` false leaves the baked normal atlases out (for measuring their effect); colour atlases always load. */
+MaterialSource loadMaterials(const std::string& glbPath, const sbvg::File& file, bool atlasNormals = true) {
     if (file.version < 3) throw std::runtime_error("this .sbvg carries no material ids (version " + std::to_string(file.version) + "); rebuild it from its GLB");
     MaterialSource source;
     source.glbPath = glbPath;
@@ -209,23 +210,32 @@ MaterialSource loadMaterials(const std::string& glbPath, const sbvg::File& file)
     // gltf::GlbSceneReader appends a default material when a primitive has none; the atlas materials
     // must sit exactly at materialCount, materialCount + 1, ... as the file's triangles name them.
     source.scene.materials.resize(file.materialCount);
-    for (const sbvg::Atlas& atlas : file.atlases) {
-        std::ifstream in(atlas.imagePath, std::ios::binary);
-        if (!in) throw std::runtime_error("atlas of level " + std::to_string(atlas.level) + " is missing: " + atlas.imagePath);
+    auto loadAtlasImage = [&](const std::string& imagePath, uint32_t level, const char* what) {
+        std::ifstream in(imagePath, std::ios::binary);
+        if (!in) throw std::runtime_error(std::string(what) + " of level " + std::to_string(level) + " is missing: " + imagePath);
         std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
         png::DecodeResult decoded = png::decode(bytes.data(), bytes.size(), png::OutputFormat::Rgb);
-        if (!decoded.ok) throw std::runtime_error("atlas of level " + std::to_string(atlas.level) + " failed to decode: " + decoded.error);
+        if (!decoded.ok) throw std::runtime_error(std::string(what) + " of level " + std::to_string(level) + " failed to decode: " + decoded.error);
         gltf::SceneImage image;
         image.mimeType = "image/png";
         image.decoded = true;
         image.pixels = std::move(decoded.image);
         source.scene.images.push_back(std::move(image));
+        return static_cast<int>(source.scene.images.size() - 1);
+    };
+    for (const sbvg::Atlas& atlas : file.atlases) {
         gltf::SceneMaterial material;
-        material.baseColorImage = static_cast<int>(source.scene.images.size() - 1);
+        material.baseColorImage = loadAtlasImage(atlas.imagePath, atlas.level, "atlas");
         material.wrapS = 33071;
         material.wrapT = 33071;
         material.metallicFactor = atlas.metallic;
         material.roughnessFactor = atlas.roughness;
+        if (atlasNormals && !atlas.normalImagePath.empty()) {
+            material.normalImage = loadAtlasImage(atlas.normalImagePath, atlas.level, "normal atlas");
+            material.normalWrapS = 33071;
+            material.normalWrapT = 33071;
+            material.normalScale = 1.0f;
+        }
         source.scene.materials.push_back(material);
     }
     for (const auto& image : source.scene.images) if (image.decoded) ++source.imagesDecoded;
@@ -327,7 +337,7 @@ int renderOnce(const std::string& configPath) {
         const std::string materialsGlb = config["materials"]["glbPath"].asString("");
         const bool sceneMaterials = !materialsGlb.empty();
         MaterialSource source;
-        if (sceneMaterials) source = loadMaterials(materialsGlb, file);
+        if (sceneMaterials) source = loadMaterials(materialsGlb, file, boolOr(config["materials"]["atlasNormals"], true));
 
         render::RenderOutput out;
         std::string deviceName = "cpu";
