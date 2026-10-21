@@ -45,6 +45,7 @@ import type { LensBridge } from './lens-bridge';
 import { buildContents, buildSystemInstruction, type PromptContextServices } from './prompt-builder';
 import { buildPendingPythonGenerator, continueTurnArtifact, parseOrSynthesizeArtifact, withOpenArtifactRule } from './artifact-synthesis';
 import { AgentVerificationService } from './agent-verification-service';
+import { ChatTurnTimer } from './chat-turn-telemetry';
 
 export type StreamEventSink = (event: GeminiStreamEvent) => void;
 
@@ -235,6 +236,8 @@ interface TurnAttemptState {
     currentModel?: string;
     /** Helper calls of the turn that fell back or failed (shown on the reply). */
     helperNotes: string[];
+    /** When the turn reached the server (Date.now()); the [chat-turn] timings count from here. */
+    startedAt?: number;
 }
 
 /**
@@ -276,6 +279,7 @@ export class StreamingEngine {
         onEvent: StreamEventSink,
         signal?: AbortSignal
     ): Promise<GeminiGenerateResponse> {
+        const turnStartedAt = Date.now();
         throwIfAborted(signal);
 
         // Vertex (service account) is preferred; the Gemini API key answers when there is no service account, or when
@@ -352,7 +356,7 @@ export class StreamingEngine {
         }
 
         throwIfAborted(signal);
-        const attempt: TurnAttemptState = { modelResponded: false, helperNotes };
+        const attempt: TurnAttemptState = { modelResponded: false, helperNotes, startedAt: turnStartedAt };
         // The fallback list stays, but every turn starts from the requested (or configured) model again: a model that
         // answered once is not made the default for later turns. Each skipped model is reported with its reason.
         const candidates = this.client.getModelCandidates(request.model);
@@ -581,6 +585,7 @@ export class StreamingEngine {
         signal?: AbortSignal,
         attempt: TurnAttemptState = { modelResponded: false, helperNotes: [] }
     ): Promise<GeminiGenerateResponse> {
+        const turnStartedAt = attempt.startedAt ?? Date.now();
         const url = auth.type === 'vertex'
             ? this.client.vertexModelUrl(auth.projectId, model, 'streamGenerateContent')
             : `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(auth.apiKey)}`;
@@ -694,22 +699,40 @@ export class StreamingEngine {
                 }
             }
 
+            const body = JSON.stringify(payload);
+            const turnTools = payload.tools?.flatMap(t => 'functionDeclarations' in t && Array.isArray(t.functionDeclarations) ? t.functionDeclarations : []) ?? [];
+            const timer = new ChatTurnTimer(turnStartedAt, {
+                model,
+                call: currentTurn,
+                role: currentTurn === 1 ? 'route' : 'continue',
+                thinking: JSON.stringify(payload.generationConfig.thinkingConfig),
+                systemChars: systemInstructionText.length,
+                staticSystemChars: 0,
+                turnContextChars: 0,
+                toolCount: turnTools.length,
+                toolBytes: JSON.stringify(turnTools).length,
+                contentsBytes: JSON.stringify(payload.contents).length
+            });
+            timer.sent();
             const response = await fetchFn(url, {
                 method: 'POST',
                 headers,
-                body: JSON.stringify(payload),
+                body,
                 signal
             });
 
             if (!response.ok) {
                 const errBody = await response.text();
+                timer.log();
                 throw new Error(`AI request failed (${response.status}): ${errBody}`);
             }
             attempt.modelResponded = true;
 
             await this.consumeSseLines(response, line => {
+                timer.firstByte();
                 const parsed = parseSseDataLine(line);
                 if (parsed) {
+                    const before = turnDetectedToolCalls.length;
                     this.processChunk(
                         parsed as VertexGenerateContentJson,
                         accumulatedThoughts,
@@ -724,8 +747,11 @@ export class StreamingEngine {
                         mergeGrounding,
                         reason => { lastFinishReason = reason; }
                     );
+                    for (const call of turnDetectedToolCalls.slice(before)) timer.functionCall(call.name || '');
                 }
             });
+            timer.usage(finalUsage as never, lastFinishReason);
+            timer.log();
 
             // If no tools requested this turn, check for planning completion or verification
             if (turnDetectedToolCalls.length === 0) {
