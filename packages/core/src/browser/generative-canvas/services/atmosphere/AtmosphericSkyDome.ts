@@ -675,8 +675,10 @@ export function createAtmosphericSkyDome(
         // cloudCoverage is the sky cover an observer sees; the layer's own (plan) coverage is lower because cloud
         // sides fill sky too (measured table, layerCoverageForSkyCover).
         uCloudCoverage: { value: layerCoverageForSkyCover(config.cloudCoverage ?? (config.volumetricClouds === true ? 0.35 : 0.0)) },
-        uCloudDensity: { value: config.cloudDensity ?? (config.volumetricClouds === true ? 0.45 : 0.0) },
-        uCloudAltitude: { value: config.cloudAltitude ?? 1200.0 },
+        // density's own default follows the same "explicitly enabled or coverage is passed" rule as coverage above: coverage
+        // with no density given is not an invisible cloud (sigmaT 0), it is a cloud at a believable default density
+        uCloudDensity: { value: config.cloudDensity ?? ((config.volumetricClouds === true || (config.cloudCoverage ?? 0) > 0) ? 0.3 : 0.0) },
+        uCloudAltitude: { value: config.cloudAltitude ?? 2200.0 },
         uTime: { value: 0.0 },
 
         uShellLayerCount: { value: 0 },
@@ -769,6 +771,11 @@ export function createAtmosphericSkyDome(
     // an environment helper, not a scene object: it follows the camera every frame (see followCamera), so a click
     // selecting it would put the transform gizmo at the camera's own position, scaled to the ~0 distance between them
     skyDome.userData.isHelper = true;
+    // a sky dome sits gigantic and centred exactly on the camera (see followCamera): three's default per-object frustum
+    // test on a sphere that size, that close to the eye, is exactly the case it is least reliable at, and can wrongly
+    // cull the whole dome depending on the camera's current framing. The offscreen bake dome already disables this
+    // (bakeDome.frustumCulled = false above); the one actually drawn on screen needs the same.
+    skyDome.frustumCulled = false;
     skyDome.renderOrder = -1000;
     scene.add(skyDome);
 

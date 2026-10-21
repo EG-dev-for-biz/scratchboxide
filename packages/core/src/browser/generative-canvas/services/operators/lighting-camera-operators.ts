@@ -340,7 +340,7 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
                     longitude: longitude ?? existingAtmo.longitude,
                     cloudCoverage: params.cloudCoverage ?? existingAtmo.cloudCoverage ?? 0.0,
                     cloudDensity: params.cloudDensity ?? existingAtmo.cloudDensity ?? 0.0,
-                    cloudAltitude: params.cloudAltitude ?? existingAtmo.cloudAltitude ?? 1200.0,
+                    cloudAltitude: params.cloudAltitude ?? existingAtmo.cloudAltitude ?? 2200.0,
                     volumetricClouds: params.volumetricClouds ?? existingAtmo.volumetricClouds ?? false,
                     // Only a chosen colour temperature is stored: without one the viewport colours the sun from its spectral beam.
                     ...((params.kelvinTemperature ?? existingAtmo.kelvinTemperature) !== undefined ? { kelvinTemperature: params.kelvinTemperature ?? existingAtmo.kelvinTemperature } : {}),

@@ -178,6 +178,10 @@ describe('Atmospheric Capabilities First-Class APIs', () => {
             expect(handle.skyDomeModule).toBeDefined();
             expect(handle.godRays).toBeDefined();
             expect(handle.cloudShadows).toBeDefined();
+            // the dome sits gigantic and centred exactly on the camera (followCamera): three's default per-object
+            // frustum test is least reliable at exactly that size/distance and can wrongly cull the whole sky
+            // depending on framing (confirmed live - a built scene's sky silently failed to draw). Never culled.
+            expect(handle.skyDomeModule.skyDome.frustumCulled).toBe(false);
 
             atmosphere.setDiurnalTimeOfDay(17.5, 37.77, -122.41);
             expect(atmosphere.config.timeOfDay).toBe(17.5);

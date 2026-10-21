@@ -486,7 +486,7 @@ export class AerialPerspectiveEffect {
             uCloudShadowIntensity: { value: options.cloudShadowIntensity ?? 0.65 },
             uCloudShadowScale: { value: options.cloudShadowScale ?? 0.015 },
             uAtmosphereShadowLength: { value: options.atmosphereShadowLength ?? 1.0 },
-            uCloudAltitude: { value: options.cloudAltitude ?? 1200.0 },
+            uCloudAltitude: { value: options.cloudAltitude ?? 2200.0 },
             uCloudCoverage: { value: options.cloudCoverage ?? 0.35 },
             uCloudDensity: { value: options.cloudDensity ?? 0.45 },
             uWindVector: { value: new THREE.Vector2(options.windVector?.[0] ?? 0.05, options.windVector?.[1] ?? 0.02) },

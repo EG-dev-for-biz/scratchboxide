@@ -33,7 +33,7 @@ export class TerrainCloudShadows {
             cloudShadowIntensity: config.cloudShadowIntensity ?? 0.65,
             cloudShadowScale: config.cloudShadowScale ?? 0.015,
             atmosphereShadowLength: config.atmosphereShadowLength ?? 1.0,
-            cloudAltitude: config.cloudAltitude ?? 1200.0,
+            cloudAltitude: config.cloudAltitude ?? 2200.0,
             cloudCoverage: config.cloudCoverage ?? 0.35,
             cloudDensity: config.cloudDensity ?? 0.45,
             windVector: config.windVector ?? [0.05, 0.02]
@@ -45,7 +45,7 @@ export class TerrainCloudShadows {
             uCloudShadowIntensity: { value: this.config.cloudShadowIntensity ?? 0.65 },
             uCloudShadowScale: { value: this.config.cloudShadowScale ?? 0.015 },
             uAtmosphereShadowLength: { value: this.config.atmosphereShadowLength ?? 1.0 },
-            uCloudAltitude: { value: this.config.cloudAltitude ?? 1200.0 },
+            uCloudAltitude: { value: this.config.cloudAltitude ?? 2200.0 },
             uCloudCoverage: { value: this.config.cloudCoverage ?? 0.35 },
             uCloudDensity: { value: this.config.cloudDensity ?? 0.45 },
             uWindVector: { value: new THREE.Vector2(this.config.windVector?.[0] ?? 0.05, this.config.windVector?.[1] ?? 0.02) },
