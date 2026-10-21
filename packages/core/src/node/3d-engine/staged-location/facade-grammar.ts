@@ -84,7 +84,19 @@ export const MIN_OPENING_DISTINCTNESS = 0.04;
 export const EDGE_TRUNCATION_PX = 8;
 /** The longest side of an image sent to the model. */
 export const GRAMMAR_IMAGE_MAX_SIDE = 1600;
-export const GRAMMAR_CONCURRENCY = 6;
+/**
+ * How many grammar readings are out at once, across every facade of the pass (one pool; each facade is judged as soon as
+ * its own five readings are in). Before 2026-10-21 the pass read 3 facades at a time, each waiting for all 5 of its readings:
+ * about 4 rounds of "slowest of 5" at the Flatiron District (12 facades, 60 readings), 35-40 s each
+ * (docs/processes/vision_call_hedging.md). The chain keeps its own caps: at most VISION_HEDGE_MAX_IN_FLIGHT duplicates
+ * and no duplicate to a model in its 429 pause. SCRATCHBOX_GRAMMAR_READ_POOL overrides.
+ */
+export const GRAMMAR_READ_POOL = 14;
+
+export function grammarReadPool(env: NodeJS.ProcessEnv = process.env): number {
+    const v = Number(env.SCRATCHBOX_GRAMMAR_READ_POOL);
+    return Number.isFinite(v) && v >= 1 ? Math.floor(v) : GRAMMAR_READ_POOL;
+}
 
 export function facadeGrammarEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
     const v = env.SCRATCHBOX_FACADE_GRAMMAR;
@@ -938,13 +950,13 @@ export function selectGrammarFacades(facades: ReliefOrthoFacade[], anchor: { x: 
         .slice(0, max);
 }
 
-async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
-    const out: R[] = new Array(items.length);
-    let next = 0;
-    await Promise.all(Array.from({ length: Math.max(1, Math.min(n, items.length)) }, async () => {
-        for (let i; (i = next++) < items.length;) out[i] = await fn(items[i]);
-    }));
-    return out;
+/** A counting semaphore: at most `n` callers inside at once, admitted in the order they asked. */
+export function readingPool(n: number): <R>(fn: () => Promise<R>) => Promise<R> {
+    let inside = 0;
+    const waiting: Array<() => void> = [];
+    const enter = () => new Promise<void>(resolve => { if (inside < n) { inside++; resolve(); } else waiting.push(() => { inside++; resolve(); }); });
+    const leave = () => { inside--; waiting.shift()?.(); };
+    return async fn => { await enter(); try { return await fn(); } finally { leave(); } };
 }
 
 /**
@@ -952,10 +964,14 @@ async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Prom
  * whole orthophoto (the grammar used) and four with parts hidden (the held-out check). A facade whose reading fails, or whose
  * grammar fails a gate, keeps the relief's own lattice; the outcome says why. Each reading is hedged and has a deadline
  * (VISION_CALL_POLICY.grammar): a whole reading with no answer by then is a failed reading (the relief's lattice stays,
- * the reason says "no answer within ..."), a held-out reading with none is not scored.
+ * the reason says "no answer within ..."), a held-out reading with none is not scored. Every facade's readings go through
+ * one pool of `readPool` (default grammarReadPool()) calls in flight, in facade order, and each facade is judged as soon as
+ * its own five are in.
  */
 export async function runFacadeGrammarPass(opts: {
     orthosDir: string; chain: VisionModelChain<string>; anchor?: { x: number; z: number }; maxFacades?: number; signal?: AbortSignal; onProgress?: (m: string) => void;
+    /** Readings in flight at once across the pass (default grammarReadPool()). */
+    readPool?: number;
     /** Diagnostic overlays (the photo with the relief's cells and the grammar's) are written here when set. */
     overlayDir?: string;
     /** Vector building footprints in the tile frame (facade-footprints.ts): an independent check of each grammar. */
@@ -965,11 +981,13 @@ export async function runFacadeGrammarPass(opts: {
     const all = readReliefOrthos(opts.orthosDir);
     const chosen = selectGrammarFacades(all, opts.anchor, opts.maxFacades);
     let calls = 0, done = 0;
-    const jobs = chosen.map(f => ({ f }));
-    const results = await pool(jobs, Math.max(1, Math.floor(GRAMMAR_CONCURRENCY / 2)), async ({ f }): Promise<GrammarFacadeOutcome> => {
+    const take = readingPool(Math.max(1, opts.readPool ?? grammarReadPool()));
+    const results = await Promise.all(chosen.map(async (f): Promise<GrammarFacadeOutcome> => {
         const tf = Date.now();
         const base: GrammarFacadeOutcome = { facadeId: f.facadeId, areaM2: r3(f.area_m2), accepted: false, reason: '', reliefCells: reliefLatticeCells(f).length, readings: [], ms: 0 };
         try {
+            // the facades before this one get their readings sent before this one's ortho is decoded (CPU)
+            await new Promise<void>(resolve => setImmediate(resolve));
             if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('stopped');
             const o = decodeOrtho(fs.readFileSync(path.join(opts.orthosDir, f.image)));
             let covered = 0;
@@ -983,7 +1001,7 @@ export async function runFacadeGrammarPass(opts: {
             const views: Array<Hidden | undefined> = [undefined, ...folds.map(x => x.hidden)];
             const reads = await Promise.all(views.map(async h => {
                 calls++;
-                try { return await readGrammar(opts.chain, f, o, full, h); } catch (err) { return err instanceof Error ? err : new Error(String(err)); }
+                try { return await take(() => readGrammar(opts.chain, f, o, full, h)); } catch (err) { return err instanceof Error ? err : new Error(String(err)); }
             }));
             const labels = ['whole', ...folds.map(x => x.fold)];
             reads.forEach((r, k) => base.readings.push(r instanceof Error
@@ -1026,7 +1044,7 @@ export async function runFacadeGrammarPass(opts: {
         } finally {
             opts.onProgress?.(`facade grammar: ${++done} of ${chosen.length} facades read`);
         }
-    });
+    }));
     return { facades: results, accepted: results.filter(r => r.accepted && r.grammar).map(r => r.grammar!), calls, ms: Date.now() - t0 };
 }
 
