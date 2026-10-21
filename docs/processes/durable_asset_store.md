@@ -1,7 +1,7 @@
 # Durable asset store: files outlive the checkout, missing ones come back
 
 **Date:** 2026-10-20
-**Status:** Verified (stages 1–3 live; the real rebuild path verified end to end in the user's app on the Washington Square scene, 12 of 13 lost files back)
+**Status:** Verified (stages 1–3 live; the real rebuild path verified end to end in the user's app on the Washington Square scene, all 13 lost files back)
 
 ## Why
 
@@ -84,15 +84,18 @@ staged runs. What it taught, each fixed the same day:
   at the same place (within 60 m), newest first;
 - an isolated structure and its district are two runs: split the fallback by the `_iso` token.
 
-Result: 6 structure layers rebuilt in 2.8 s (cached stages), then 4 textured twins and the district's trees in 108 s;
-the scene shows the textured arch, its trees and the surrounding buildings again. One file is still missing: the
-district remesh carved around the kept structure (`…_remesh_<key>_around_<key>.glb`, orchestrator.ts `_around_`), which
-only a run staged into the active scene makes; the recovery reports it as failed with the run's file list.
+Result: 6 structure layers rebuilt in 2.8 s (cached stages), then 4 textured twins and the district's trees in 108 s,
+and last the district remesh carved around the kept structure (`…_remesh_<key>_around_<key>.glb`): the scene goes along
+with an explicit rebuild (GLB bytes stripped) and the district run is staged into it, as the original was, after the
+recovered structure files are written back to `public/models` where that run reads them (269 s, a fresh district run).
+Two more rules came out of it: a sweep keeps the record of a file the store wrote back (origin, recipe, rebuilt), and
+an explicit rebuild may re-point a name that a rebuild matched or a sweep recorded, never one a run published itself;
+a lost name is never its own replacement. The scene shows the textured arch, its trees and the surrounding buildings.
 
 ## Not yet
 
-- The carved district remesh above: the recovery could carve it itself from the restored structure files and the new
-  district remesh (`hideFootprintInGlb`), given the anchor offset between the two runs.
+- Names still carry the query's slug and a run key; the store, not the name, is now the identity, but a stable
+  `<place-id>_<layer>` naming would make matches exact instead of token-based.
 - A view of the project log in the app (today it is the API only).
 
 ## Candidate tool/service ideas
