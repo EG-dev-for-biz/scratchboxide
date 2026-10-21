@@ -919,6 +919,9 @@ export function createAtmosphericSkyDome(
         sunLight.shadow.bias = -0.0005;
         sunLight.shadow.mapSize.width = 2048;
         sunLight.shadow.mapSize.height = 2048;
+        // golden hour's own softer shadow edge (diurnalProfile.shadowSoftness, 1.8x) was computed but never applied
+        // anywhere - every phase rendered the same hard PCF radius regardless of time of day
+        sunLight.shadow.radius = diurnalProfile.shadowSoftness ?? 1;
     }
     scene.add(sunLight);
 
@@ -946,6 +949,7 @@ export function createAtmosphericSkyDome(
         sunLight.color.copy(effSun);
         sunLight.intensity = diurnalProfile.sunIntensity;
         sunLight.castShadow = diurnalProfile.castShadows;
+        if (sunLight.shadow) sunLight.shadow.radius = diurnalProfile.shadowSoftness ?? 1;
 
         const hemiKelvin = effectiveSunKelvin(diurnalProfile, config, diurnalProfile.isGoldenHour);
         hemiLight.intensity = diurnalProfile.skyLightIntensity;

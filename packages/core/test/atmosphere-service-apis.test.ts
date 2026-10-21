@@ -89,6 +89,19 @@ describe('Atmospheric Capabilities First-Class APIs', () => {
         });
     });
 
+    describe('golden hour\'s softer shadow edge reaches the actual sun light', () => {
+        it('sets sunLight.shadow.radius from diurnalProfile.shadowSoftness (was computed but never applied)', () => {
+            const golden = createAtmosphericSkyDome(new THREE.Scene(), false, { sunElevation: 3, sunAzimuth: 180 });
+            expect(golden.diurnalProfile.isGoldenHour).toBe(true);
+            expect(golden.diurnalProfile.shadowSoftness).toBeCloseTo(1.8, 6);
+            expect(golden.sunLight.shadow!.radius).toBeCloseTo(1.8, 6);
+
+            const midday = createAtmosphericSkyDome(new THREE.Scene(), false, { sunElevation: 45, sunAzimuth: 180 });
+            expect(midday.diurnalProfile.isGoldenHour).toBe(false);
+            expect(midday.sunLight.shadow!.radius).toBeCloseTo(1, 6);
+        });
+    });
+
     describe('VolumetricGodRays Class & Factory', () => {
         it('instantiates, updates, and disposes volumetric god rays cleanly', () => {
             const scene = new THREE.Scene();
