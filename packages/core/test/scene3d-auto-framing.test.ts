@@ -71,7 +71,10 @@ describe('Scene 3D Auto-Framing & Standoff Camera', () => {
         const scene = new THREE.Scene();
         const tiles = new THREE.Group();
         tiles.name = 'external-object-staged-location-123';
+        // sbEnvironment (ground-snapping) is set on all staged geometry; sbFramingBackground (framing exclusion) is
+        // narrower and is what this scenario actually needs — see the terrain-vs-hero test below for why they differ.
         tiles.userData.sbEnvironment = true;
+        tiles.userData.sbFramingBackground = true;
         tiles.add(new THREE.Mesh(new THREE.BoxGeometry(500, 60, 500), new THREE.MeshStandardMaterial()));
         scene.add(tiles);
         const bench = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.9, 0.6), new THREE.MeshStandardMaterial());
@@ -82,6 +85,62 @@ describe('Scene 3D Auto-Framing & Standoff Camera', () => {
         expect(bounds.sphere.radius).toBeLessThan(2);
         expect(bounds.sphere.center.x).toBeCloseTo(3);
         expect(bounds.sphere.center.y).toBeCloseTo(30.45);
+    });
+
+    it('frames the staged building itself, not just a terrain disc, when there is no separate hero (the vector-first-paint/terrain bug)', () => {
+        // Both carry sbEnvironment=true (every staged layer does, for ground-snapping — see isEnvironmentDef in
+        // Scene3DPrimitive.tsx), but only terrain carries the narrower sbFramingBackground. Before this fix, the
+        // building was excluded from framing bounds right along with terrain, leaving only the multi-kilometre
+        // terrain disc to frame on and rendering the actual structure as an invisible speck.
+        const scene = new THREE.Scene();
+        const terrain = new THREE.Group();
+        terrain.name = 'external-object-staged-terrain-456';
+        terrain.userData.sbEnvironment = true;
+        terrain.userData.sbFramingBackground = true;
+        terrain.add(new THREE.Mesh(new THREE.CircleGeometry(4000, 32), new THREE.MeshStandardMaterial()));
+        scene.add(terrain);
+
+        const building = new THREE.Group();
+        building.name = 'external-object-staged-tiles-789';
+        building.userData.sbEnvironment = true; // ground-snapping still applies; framing must not treat it as background
+        const buildingMesh = new THREE.Mesh(new THREE.BoxGeometry(18, 25, 18), new THREE.MeshStandardMaterial());
+        buildingMesh.position.set(0, 12.5, 0);
+        building.add(buildingMesh);
+        scene.add(building);
+
+        const bounds = computeSceneGeometryBounds(scene);
+        // Frames the ~18-25 m building, not the 8 km terrain disc.
+        expect(bounds.sphere.radius).toBeLessThan(20);
+        expect(bounds.sphere.center.y).toBeCloseTo(12.5, 0);
+
+        const autoFrame = calculateStandoffCamera(bounds, undefined, { force: true });
+        expect(autoFrame).not.toBeNull();
+        expect(autoFrame!.distance).toBeLessThan(200); // not the ~9.5 km standoff a terrain-sized bound would need
+    });
+
+    it('frames a staged building whose draw-call-merged meshes are named sb-merged-parts-N, not skipped as an internal helper', () => {
+        // mergeStagedParts.ts (viewport draw-call reduction) names a building's merged meshes `sb-merged-parts-<n>`.
+        // `sb-` is also the viewport's own internal-helper prefix (sb-selection-helper, sb-grid-helper, ...); the
+        // un-narrowed check skipped these real meshes too, so a merged building contributed nothing to any framing
+        // bound. Found live: with terrain also present and excluded, NOTHING remained to frame, leaving a blank
+        // terrain-only view even though the building was fully loaded and visible.
+        const scene = new THREE.Scene();
+        for (let i = 0; i < 3; i++) {
+            const part = new THREE.Mesh(new THREE.BoxGeometry(6, 10, 6), new THREE.MeshStandardMaterial());
+            part.name = `sb-merged-parts-${i}`;
+            part.position.set(i * 5, 5, 0);
+            scene.add(part);
+        }
+        const helper = new THREE.Mesh(new THREE.BoxGeometry(100, 100, 100), new THREE.MeshStandardMaterial());
+        helper.name = 'sb-selection-helper';
+        helper.position.set(500, 500, 500);
+        scene.add(helper);
+
+        const bounds = computeSceneGeometryBounds(scene);
+        expect(bounds.hasGeometry).toBe(true);
+        // Frames the three ~6-10 m merged parts (centre around x=5), not the 100 m helper box at (500,500,500).
+        expect(bounds.sphere.radius).toBeLessThan(20);
+        expect(bounds.sphere.center.x).toBeCloseTo(5, -1);
     });
 
     it('detects camera clipping INSIDE the mesh and automatically backs out to standoff distance', () => {

@@ -3214,6 +3214,12 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     model.name = `${EXTERNAL_OBJECT_ROOT_PREFIX}${obj.id}`;
                     model.userData.sbSourceUri = uri;
                     model.userData.sbEnvironment = isEnvironmentDef(def);
+                    // `sbEnvironment` means "ground-snapping background" and is true for the whole staged build (terrain
+                    // AND the hero tiles/building: every attached hero snaps onto all of it) — too broad for camera
+                    // framing, where excluding the hero building along with terrain left only a multi-kilometre terrain
+                    // disc to frame on, rendering the actual structure as an invisible speck (computeSceneGeometryBounds,
+                    // autoFraming.ts). This narrower flag is true only for the terrain stage itself.
+                    model.userData.sbFramingBackground = def?.content?.metadata?.stage === 'terrain';
                     applySpatial(model, def.space?.spatial3d);
 
                     model.traverse((child) => {

@@ -41,10 +41,14 @@ export interface SceneBoundsResult {
  * Computes bounding box and sphere of scene geometry, ignoring helper grids, lights, and skies.
  * Intelligently identifies focal hero geometry vs massive flat ground planes to prevent camera over-retreat.
  */
-/** Environment layers (location tiles, ground) are tagged when attached; framing focuses on what sits on them. */
+/**
+ * Terrain is tagged `sbFramingBackground` when attached (narrower than `sbEnvironment`, which also covers the hero
+ * tiles/building, since every placed object snaps onto all of it): framing focuses on what sits on the ground, not
+ * the kilometres-wide ground itself.
+ */
 function hasEnvironmentAncestor(object: THREE.Object3D): boolean {
     for (let cur: THREE.Object3D | null = object; cur; cur = cur.parent) {
-        if (cur.userData?.sbEnvironment) return true;
+        if (cur.userData?.sbFramingBackground) return true;
     }
     return false;
 }
@@ -63,7 +67,12 @@ export function computeSceneGeometryBounds(scene: THREE.Scene): SceneBoundsResul
         if ((child as any).isGridHelper || child.userData?.isGizmo || child.userData?.handleType) return;
         const name = child.name || '';
         if (
-            name.startsWith('sb-') ||
+            // `sb-` is also the viewport's own internal-helper prefix (sb-selection-helper, sb-grid-helper, ...), but
+            // mergeStagedParts.ts (the draw-call-reduction work) names a staged building's REAL merged meshes
+            // `sb-merged-parts-<n>`: skipping those here excluded the hero building from every framing bound, leaving
+            // only background geometry (e.g. terrain) to frame on — the second half of the vector-first-paint/terrain
+            // "nothing structural" bug, found live with a staged Haughwout build.
+            (name.startsWith('sb-') && !name.startsWith('sb-merged-parts-')) ||
             name.startsWith('atmosphere_') ||
             name.startsWith('terrain_') ||
             name.startsWith('grid_') ||
