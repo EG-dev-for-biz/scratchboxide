@@ -764,6 +764,8 @@ export function createAtmosphericSkyDome(
     });
     const skyDome = new THREE.Mesh(skyGeo, displayMat);
     skyDome.name = 'AtmosphericSkyDome';
+    // the sky's own shader, never the scene-wide clay pass (TileClayProcessor, clayRenderMode): a clayed dome is a flat grey wall
+    skyDome.userData.sbKeepAuthoredMaterial = true;
     skyDome.renderOrder = -1000;
     scene.add(skyDome);
 
@@ -843,6 +845,8 @@ export function createAtmosphericSkyDome(
     });
     const sunMesh = new THREE.Mesh(sunGeo, sunMat);
     sunMesh.name = 'PhysicalSunDisc';
+    // the sky's own shader, never the scene-wide clay pass (TileClayProcessor, clayRenderMode): a clayed dome is a flat grey wall
+    sunMesh.userData.sbKeepAuthoredMaterial = true;
     const sunDistance = radius * 0.65;
     sunMesh.position.copy(sunDirection).multiplyScalar(sunDistance);
     // The dome's shader draws the disc; this mesh stays as the sun's position marker (read by the viewport) but is

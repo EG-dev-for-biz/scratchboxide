@@ -106,6 +106,8 @@ export class SunGlare {
         });
         this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.material);
         this.mesh.name = 'AtmosphericSunGlare';
+        // its own additive sprite material, never the scene-wide clay pass
+        this.mesh.userData.sbKeepAuthoredMaterial = true;
         this.mesh.frustumCulled = false;
         this.mesh.renderOrder = 1e9;
         this.mesh.onBeforeRender = (renderer, scene, camera) => this.beforeRender(renderer as THREE.WebGLRenderer, scene, camera);
