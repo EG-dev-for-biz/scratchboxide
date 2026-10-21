@@ -157,6 +157,8 @@ export interface TileVegetationPlantParams {
     lodNearMidMax?: number;
     lodFarMax?: number;
     lodFade?: number;
+    /** How far (m) a hero-area tree (see TileVegetationPlantRequest.heroRoi) holds full quality at (3000). */
+    heroFullQualityM?: number;
     supportTolerance?: number;
     /** With groundMeshPath: a trunk base further than this from the mounted model at its stem is reported (0.5 m). */
     groundTolerance?: number;
@@ -245,6 +247,13 @@ export interface TileVegetationPlantRequest {
     supportMeshPath?: string;
     /** The model the trees are mounted on: every trunk base is measured against it at its stem (stats.offGround). */
     groundMeshPath?: string;
+    /**
+     * A tree whose stem lies inside this polygon (tile frame) holds full (near) quality at any distance a staged scene's
+     * camera realistically reaches, instead of its own height-scaled distance bands; a tree outside it (or, with no
+     * heroRoi, every tree) keeps the normal bands. The viewport's GPU-adaptive triangle budget is unaffected and stays
+     * free to demote a hero tree under real load, same as any other tree.
+     */
+    heroRoi?: StripRoi;
     params?: TileVegetationPlantParams;
     /**
      * Write the trees GLB with KHR_mesh_quantization (default true; three's GLTFLoader reads it natively). stats.glb gives
@@ -697,6 +706,7 @@ export class TileVegetationService {
         if (req.sceneTriangleCap !== undefined && !(Number.isFinite(req.sceneTriangleCap) && req.sceneTriangleCap >= 1)) throw new TileVegetationError('bad_request', 'sceneTriangleCap must be a number of at least 1');
         const budget = req.triangleBudget !== undefined ? { triangleBudget: Math.floor(req.triangleBudget) } : { sceneTriangleCap: Math.floor(req.sceneTriangleCap!) };
         if (typeof req.seed !== 'string' || !/^[0-9a-fA-F]{1,16}$/.test(req.seed)) throw new TileVegetationError('bad_request', 'seed must be 1-16 hex digits');
+        const heroRoi = req.heroRoi === undefined ? undefined : checkRoi(req.heroRoi);
         const publishTarget = req.publishAs === undefined ? undefined : this.resolvePublishTarget(req.publishAs);
         const { flags, key: keyParams } = paramFlags(req.params);
         const timeoutMs = req.timeoutMs ?? this.defaultTimeoutMs;
@@ -726,7 +736,7 @@ export class TileVegetationService {
         const speciesIndex = req.species === false ? undefined : treeSpeciesIndexPath(this.repoRoot);
         hash.update('\0species\0');
         if (speciesIndex) sha256File(speciesIndex, hash);
-        hash.update('\0').update(JSON.stringify({ ...keyParams, ...budget, seed: req.seed.toLowerCase(), quantize, reveal }));
+        hash.update('\0').update(JSON.stringify({ ...keyParams, ...budget, seed: req.seed.toLowerCase(), quantize, reveal, ...(heroRoi ? { heroRoi: heroRoi.polygon } : {}) }));
         const key = hash.digest('hex');
         const plantOnce = () => this.cached(key, ['trees.glb', 'stats.json'], async (dir, signal) => {
             // the stage key in the GLB's root extras is this cache key: the same bytes in every run that reuses them
@@ -735,6 +745,10 @@ export class TileVegetationService {
                 '--seed', req.seed, '--quantize', quantize ? '1' : '0', '--reveal', reveal ? '1' : '0', '--stage-key', key, ...flags];
             if (support) args.push('--support-mesh', support);
             if (ground) args.push('--ground-mesh', ground);
+            if (heroRoi) {
+                fs.writeFileSync(path.join(dir, 'hero-roi.json'), JSON.stringify(heroRoi));
+                args.push('--hero-roi-json', path.join(dir, 'hero-roi.json'));
+            }
             if (correction) args.push('--crown-correction', correction);
             if (textureIndex) args.push('--texture-index', textureIndex, '--texture-index-label', TREE_TEXTURE_INDEX);
             if (speciesIndex) args.push('--species-index', speciesIndex, '--species-index-label', TREE_SPECIES_INDEX);

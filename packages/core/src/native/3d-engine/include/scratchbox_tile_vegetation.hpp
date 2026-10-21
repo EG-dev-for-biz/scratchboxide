@@ -937,6 +937,15 @@ struct PlantParams {
     double lodFadeM{7.0};
     double lodNearMidFadeShare{0.2}; // the near-mid to mid handover dissolves over this share of its distance (at least lodFadeM)
     double lodFarFadeShare{0.25};    // the mid to far handover dissolves over this share of its distance (at least lodFadeM)
+    /**
+     * A tree whose stem lies inside this polygon (tile frame, x east z south, metres; fewer than 3 points: no hero area,
+     * the default) ignores the near/near-mid/mid distance bands above and holds full (near) quality at any distance a
+     * staged scene's camera realistically reaches (heroFullQualityM). The viewport's own GPU-adaptive triangle budget is
+     * untouched and stays free to demote it under real load like any other tree: this removes the authored distance
+     * cutoff only, never the runtime performance safety net.
+     */
+    std::vector<std::array<double, 2>> heroPolygon;
+    double heroFullQualityM{3000.0};
     // The tree texture library (scratchbox_tree_textures.hpp; null: none): each tree's leaf set and bark are chosen from it
     // by appearance, its wood carries UVs in the chosen bark's tiles, and the choice and tints are in its extras.
     std::shared_ptr<const tree_textures::Library> textures;
@@ -4402,7 +4411,18 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
  */
 struct LodBands { double d0{0}, dNearMid{0}, d1{0}, fade{0}, fadeNearMid{0}, fade1{0}; };
 
-inline LodBands lodBandsFor(double heightM, const PlantParams& P) {
+/** Whether (x, z) lies inside a closed polygon (tile frame metres); false for an empty or under-3-point polygon (no hero area). */
+inline bool pointInPolygon(double x, double z, const std::vector<std::array<double, 2>>& poly) {
+    if (poly.size() < 3) return false;
+    bool inside = false;
+    for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++) {
+        const double xi = poly[i][0], zi = poly[i][1], xj = poly[j][0], zj = poly[j][1];
+        if ((zi > z) != (zj > z) && x < (xj - xi) * (z - zi) / (zj - zi) + xi) inside = !inside;
+    }
+    return inside;
+}
+
+inline LodBands lodBandsFor(double heightM, const PlantParams& P, bool fullQuality = false) {
     LodBands b;
     b.fade = P.lodFadeM;
     // the far handover swaps leaves for solid masses and a viewer sees the whole crown change: it dissolves over a wider band, a share of the distance
@@ -4413,6 +4433,9 @@ inline LodBands lodBandsFor(double heightM, const PlantParams& P) {
     // room for the near-mid band between the two others: its handovers never overlap theirs
     b.d1 = std::max(b.d0 + 0.5 * b.fade + b.fadeNearMid + 0.5 * b.fade1, std::clamp(P.lodFarPerHeight * heightM, P.lodFarMinM, P.lodFarMaxM));
     b.dNearMid = std::clamp(nearMid, b.d0 + 0.5 * (b.fade + b.fadeNearMid), b.d1 - 0.5 * (b.fadeNearMid + b.fade1));
+    // a hero-area tree: hold near quality out to heroFullQualityM instead of its own height-scaled bands (never closer
+    // than the bands already gave it, for a very tall tree whose own far band already reaches past heroFullQualityM)
+    if (fullQuality) b.d0 = b.dNearMid = b.d1 = std::max(P.heroFullQualityM, b.d1);
     return b;
 }
 
@@ -4440,7 +4463,7 @@ inline LodFrameEstimate estimateLodFrames(const PlantResult& R, const PlantParam
         T t;
         t.x = (*tr.crown)["stem"][0].num;
         t.z = (*tr.crown)["stem"][1].num;
-        t.b = lodBandsFor(tr.heightAboveSupport, P);
+        t.b = lodBandsFor(tr.heightAboveSupport, P, pointInPolygon(t.x, t.z, P.heroPolygon));
         t.tri = {static_cast<double>(tr.lod.drawnLevel0()), static_cast<double>(tr.lod.drawnNearMid()), static_cast<double>(tr.lod.drawnLevel1()), static_cast<double>(tr.lod.drawnFar(tr.foliage.indices.size() / 3))};
         trees.push_back(t);
     }
@@ -4666,7 +4689,8 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
             const tree_lod::TreeLod& L = tr.lod;
             const std::string base = node.name;
             const double H = tr.heightAboveSupport;
-            const LodBands bands = lodBandsFor(H, P);
+            const bool heroTree = pointInPolygon((*tr.crown)["stem"][0].num, (*tr.crown)["stem"][1].num, P.heroPolygon);
+            const LodBands bands = lodBandsFor(H, P, heroTree);
             const double d0 = bands.d0, dNM = bands.dNearMid, d1 = bands.d1, fade = bands.fade, fadeNM = bands.fadeNearMid, fade1 = bands.fade1;
             auto lodExtras = [&](int level, double lo, double hi, double fadeM, size_t tris, bool instanced, const std::string& more = std::string()) {
                 return "{\"sbLod\":{\"level\":" + std::to_string(level) + ",\"minDistM\":" + json::num(std::max(0.0, lo)) + ",\"maxDistM\":" + json::num(hi) +
@@ -4780,7 +4804,7 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
                          ",\"far\":{\"woodTriangles\":" + std::to_string(L.farWoodTriangles) + ",\"woodPrunedBelowRadiusM\":" + json::num(L.farWoodPrunedBelowRadiusM) +
                          ",\"drawnTriangles\":" + std::to_string(L.drawnFar(tr.foliage.indices.size() / 3)) + "}" +
                          ",\"fillStations\":" + std::to_string(L.coverage.fillStations) + (L.midCards() ? ",\"crownCards\":" + detail::crownCardsJson(L) : std::string()) +
-                         ",\"coverage\":" + detail::coverageJson(L.coverage) + "}";
+                         ",\"coverage\":" + detail::coverageJson(L.coverage) + (heroTree ? ",\"hero\":true" : std::string()) + "}";
             // the crown envelope of the delivered leaves (tree node frame = the tile frame): a viewer shades the leaves with its normals
             std::string crownJson;
             const tree_lod::CrownEllipsoid ce = tree_lod::crownOfLeaves(L, lib);
