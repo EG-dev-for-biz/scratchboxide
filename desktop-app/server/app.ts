@@ -560,6 +560,9 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     const artifactStore = new ProjectArtifactStore();
     const browserProxy = new BrowserProxyService();
     const geminiService = new GeminiService();
+    // the chat's first-call warm-up (chat-prompt-warmup.ts) is started by the listen callbacks, never here, so a test that
+    // builds the app scans no workspace
+    app.locals.geminiService = geminiService;
     const memoriesService = new UserMemoriesService();
     const mediaCredentials = new GoogleMediaCredentialsService();
     const mediaAssets = new MediaAssetStore();

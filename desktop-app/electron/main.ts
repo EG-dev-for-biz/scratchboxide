@@ -15,6 +15,7 @@ import * as fs from 'fs';
 import { createStandaloneServer, createToolsServer, resolveLaunchToken } from '../server/app';
 import { resolveRendererDist } from '../server/renderer-dist';
 import { warmNativeEngine } from '../../packages/core/src/node/3d-engine/native-warmup';
+import type { GeminiService } from '../../packages/core/src/node/gemini-service';
 
 function resolveAppIconPath(): string | undefined {
     const candidates = [
@@ -145,6 +146,8 @@ async function startBackendServer(): Promise<void> {
             markDone();
             // Build the native engines a location request needs now that the server is up, so the first request finds them ready.
             void warmNativeEngine();
+            // Build a first chat turn's payload once (prompt builder, tool catalogue, workspace pattern scan), so the first turn does not.
+            void (serverApp.locals.geminiService as GeminiService).warmChatPrompt();
         });
         attachListenErrorHandler(serverInstance, 'API', BACKEND_PORT, markDone);
 

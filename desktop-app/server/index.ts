@@ -11,6 +11,7 @@ import * as http from 'http';
 import { createStandaloneServer, createToolsServer, resolveLaunchToken } from './app';
 import { resolveRendererDist } from './renderer-dist';
 import { warmNativeEngine } from '../../packages/core/src/node/3d-engine/native-warmup';
+import type { GeminiService } from '../../packages/core/src/node/gemini-service';
 
 const PORT = parseInt(process.env.PORT || process.env.SCRATCHBOX_API_PORT || '3001', 10);
 const TOOLS_PORT = parseInt(process.env.SCRATCHBOX_TOOLS_PORT || '3002', 10);
@@ -62,6 +63,8 @@ const apiServer = app.listen(PORT, HOST, () => {
     }
     // Build the native engines a location request needs now that the server is up, so the first request finds them ready.
     void warmNativeEngine();
+    // Build a first chat turn's payload once (prompt builder, tool catalogue, workspace pattern scan), so the first turn does not.
+    void (app.locals.geminiService as GeminiService).warmChatPrompt();
 });
 attachListenErrorHandler(apiServer, 'API', PORT);
 
