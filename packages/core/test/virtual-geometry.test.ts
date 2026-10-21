@@ -47,7 +47,7 @@ const INCLUDE_DIR = path.join(REPO_ROOT, 'packages/core/src/native/3d-engine/inc
 
 const clang = requireBinary(process.env.CXX || 'clang++', 'install clang++ (C++20)');
 /** sha256 of the .sbvg the builder writes for the determinism fixture (bumpySphere(60, 120) at [10, 2, -3]). */
-const DETERMINISTIC_FIXTURE_SHA256 = 'fbeeb03b5fc9da29142a60cfd9e1aa5cb069b700c211da4af5dd985fc20d450b';
+const DETERMINISTIC_FIXTURE_SHA256 = 'b585a9d3e4a41257993a015e976f7b36ca4b7a638c786c97907fae97e1e7e4c6';
 const SCREENSHOTS = path.join(REPO_ROOT, 'test-results', 'screenshots');
 const ARCH_GLB = 'deploy/cloud-run/spatial-separator/assets/arch_constantine_sb_archi.glb';
 
@@ -494,9 +494,9 @@ describe.skipIf(!clang.ok)(withReason('Virtual geometry builder (C++20 cluster L
         expect(tool.resultPayload.artifact.data.virtualGeometry.buildStats.skippedPrimitives).toBe(1);
     });
 
-    it('writes format version 4 with uvs, materials and an atlas table; reads versions 1 to 3; refuses unknown versions clearly', () => {
-        expect(SBVG_VERSION).toBe(4);
-        expect(sphere.header.version).toBe(4);
+    it('writes format version 5 with uvs, materials and an atlas table naming colour and normal atlases; reads versions 1 to 4; refuses unknown versions clearly', () => {
+        expect(SBVG_VERSION).toBe(5);
+        expect(sphere.header.version).toBe(5);
         expect(sphere.header.materialCount).toBe(0);
         // No materials, so nothing to re-texture: no atlases, and the file ends where the level blocks end.
         expect(sphere.header.atlasCount).toBe(0);
@@ -527,9 +527,9 @@ describe.skipIf(!clang.ok)(withReason('Virtual geometry builder (C++20 cluster L
         expect(h1.levels[0]).toMatchObject({ byteOffset: v1.length, byteLength: 128 });
         expect(h1.skippedPrimitives).toBe(0);
 
-        const v5 = Buffer.from(v2);
-        v5.writeUInt32LE(5, 4);
-        expect(() => parseSbvgHeader(new Uint8Array(v5))).toThrow(/unsupported version 5.*rebuild/);
+        const v6 = Buffer.from(v2);
+        v6.writeUInt32LE(6, 4);
+        expect(() => parseSbvgHeader(new Uint8Array(v6))).toThrow(/unsupported version 6.*rebuild/);
     });
 
     it('is deterministic: the same fixture always gives the same bytes (no FMA contraction, total-order heap ties)', async () => {

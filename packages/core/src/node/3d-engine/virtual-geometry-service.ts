@@ -78,8 +78,8 @@ int main(int argc, char** argv) {
         std::printf("],\\"atlases\\":[");
         for (size_t i = 0; i < dag.atlases.size(); ++i) {
             const auto& a = dag.atlases[i];
-            std::printf("%s{\\"level\\":%u,\\"materialId\\":%u,\\"width\\":%u,\\"height\\":%u,\\"cells\\":%u,\\"texels\\":%llu,\\"texelWorld\\":%g,\\"missed\\":%u,\\"bakeMs\\":%.1f}",
-                        i ? "," : "", a.level, a.materialId, a.image.width, a.image.height, a.cells, (unsigned long long)a.texels, (double)a.texelWorld, a.missed, a.bakeMs);
+            std::printf("%s{\\"level\\":%u,\\"materialId\\":%u,\\"width\\":%u,\\"height\\":%u,\\"cells\\":%u,\\"pairedCells\\":%u,\\"texels\\":%llu,\\"texelWorld\\":%g,\\"missed\\":%u,\\"bakeMs\\":%.1f}",
+                        i ? "," : "", a.level, a.materialId, a.image.width, a.image.height, a.cells, a.pairedCells, (unsigned long long)a.texels, (double)a.texelWorld, a.missed, a.bakeMs);
         }
         std::printf("]}\\n");
         return 0;
@@ -126,7 +126,7 @@ export interface VirtualGeometryBuildStats {
     loadMs: number;
     dagMs: number;
     levels: VirtualGeometryLevelStats[];
-    atlases: Array<{ level: number; materialId: number; width: number; height: number; cells: number; texels: number; texelWorld: number; missed: number; bakeMs: number }>;
+    atlases: Array<{ level: number; materialId: number; width: number; height: number; cells: number; pairedCells: number; texels: number; texelWorld: number; missed: number; bakeMs: number }>;
 }
 
 export interface VirtualGeometryBuildResult {
@@ -224,7 +224,7 @@ export function atlasSiblings(sbvgPath: string): string[] {
     } catch {
         return [];
     }
-    const re = new RegExp(`^${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.atlas\\d+\\.png$`);
+    const re = new RegExp(`^${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(atlas|normal)\\d+\\.png$`);
     return names.filter(n => re.test(n)).map(n => path.join(dir, n));
 }
 

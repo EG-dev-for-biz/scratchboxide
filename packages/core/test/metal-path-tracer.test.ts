@@ -194,7 +194,15 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
         texturedGlb = path.join(tmp, 'checker.glb');
         writeSphereGlb(texturedGlb, true);
         texturedSbvg = path.join(tmp, 'checker.sbvg');
-        await builder.build(texturedGlb, texturedSbvg);
+        const textured = await builder.build(texturedGlb, texturedSbvg);
+        // Re-textured coarse levels: most triangles share their atlas cell with an edge neighbour, and each level
+        // has a normal atlas beside its colour atlas.
+        expect(textured.stats.atlases.length).toBeGreaterThanOrEqual(5);
+        for (const atlas of textured.stats.atlases) {
+            expect(atlas.pairedCells).toBeGreaterThan(0.7 * atlas.cells);
+            expect(fs.existsSync(path.join(tmp, `checker.atlas${atlas.level}.png`))).toBe(true);
+            expect(fs.existsSync(path.join(tmp, `checker.normal${atlas.level}.png`))).toBe(true);
+        }
     });
 
     it('probe names the device and says whether it ray traces', async () => {
@@ -270,8 +278,9 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
         };
         const gpu = await service.render({ ...common, outputDir: path.join(tmp, 'checker_gpu'), backend: 'metal' });
         const cpu = await service.render({ ...common, outputDir: path.join(tmp, 'checker_cpu'), backend: 'cpu' });
-        // One glTF material and texture, plus an atlas per re-textured level; the cpu backend uploads nothing.
-        expect(gpu.stats.materials).toMatchObject({ source: 'glb', count: 1, images: 1 + gpu.stats.file.atlases, imagesDecoded: 1 + gpu.stats.file.atlases, texturesUploaded: 1 + gpu.stats.file.atlases });
+        // One glTF material and texture, plus a colour and a normal atlas per re-textured level; the cpu backend uploads nothing.
+        const atlasImages = 2 * gpu.stats.file.atlases;
+        expect(gpu.stats.materials).toMatchObject({ source: 'glb', count: 1, images: 1 + atlasImages, imagesDecoded: 1 + atlasImages, texturesUploaded: 1 + atlasImages });
         expect(gpu.stats.materials.atlasMaterials).toBe(gpu.stats.file.atlases);
         expect(cpu.stats.materials).toMatchObject({ source: 'glb', count: 1, texturesUploaded: 0 });
         expect(gpu.stats.file.leafTriangles).toBeGreaterThan(8000);
@@ -376,11 +385,11 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
         };
         const fine = await service.render({ ...common, outputDir: path.join(tmp, 'atlas_fine'), lod: { thresholdPx: 1, finestLevel: 0 } });
         const coarse = await service.render({ ...common, outputDir: path.join(tmp, 'atlas_coarse'), lod: { thresholdPx: 1, finestLevel: 3 } });
-        // The re-textured file: one glTF material, one atlas material per coarse level, one PNG each, all uploaded.
+        // The re-textured file: one glTF material, one atlas material per coarse level with a colour and a normal PNG, all uploaded.
         expect(fine.stats.file.atlases).toBeGreaterThanOrEqual(5);
         expect(fine.stats.materials.count).toBe(1);
-        expect(fine.stats.materials.imagesDecoded).toBe(1 + fine.stats.file.atlases);
-        expect(fine.stats.materials.texturesUploaded).toBe(1 + fine.stats.file.atlases);
+        expect(fine.stats.materials.imagesDecoded).toBe(1 + 2 * fine.stats.file.atlases);
+        expect(fine.stats.materials.texturesUploaded).toBe(1 + 2 * fine.stats.file.atlases);
         expect(coarse.stats.cut.triangles).toBeLessThan(0.5 * fine.stats.cut.triangles);
         // Level 3 of the sphere is a few thousand triangles with a 3 cm error: the baked checkerboard agrees with
         // the full-detail render to a few percent in block means (silhouettes move, the texture does not).
@@ -405,8 +414,8 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
         try {
             expect(session.alive).toBe(true);
             expect(session.opened).toMatchObject({ device: device.device, materials: { source: 'glb', count: 1 } });
-            // The glTF texture plus one atlas per re-textured level.
-            expect(session.opened!.materials.texturesUploaded).toBe(1 + session.opened!.file.atlases);
+            // The glTF texture plus a colour and a normal atlas per re-textured level.
+            expect(session.opened!.materials.texturesUploaded).toBe(1 + 2 * session.opened!.file.atlases);
             expect(session.opened!.file.atlases).toBeGreaterThanOrEqual(5);
             expect(session.opened!.file.leafTriangles).toBeGreaterThan(8000);
             expect(session.latestFrame()).toBeNull();

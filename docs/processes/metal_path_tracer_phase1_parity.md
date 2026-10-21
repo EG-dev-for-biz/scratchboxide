@@ -121,8 +121,38 @@ Level 1 bakes 12.4 M texels at a 0.29 m texel in 0.9 s with 4% of texels falling
 
 **Costs and limits.** Per-triangle cells triple the coarse levels' vertex count and make the file 3x larger; cells of a few texels show the gutter's clamped colours as a fuzz along edges at the coarsest levels; the bake only carries base colour (no normal or metallic-roughness maps on coarse levels); groups the simplifier cannot reduce by 15% are still carried up unchanged, which is what stops the DAG at 7 levels (300 of 450 groups stuck at level 5).
 
+## Phase 7 (2026-10-20): paired atlas cells and baked normal maps (`.sbvg` version 5)
+
+**What.** Two triangles that share an edge now share one square atlas cell with the common edge on its diagonal (greedy pairing, largest triangles first; a triangle without a free neighbour takes the lower half of a cell of its own), so a pair has four wedges instead of six and half the cells; cell sizes follow the pair's summed area at the same texel rule as before. Every level also gets a normal atlas beside its colour atlas: for each texel the baker takes the source surface's shading normal at the projected point (the interpolated vertex normal, refined by the source's own normal map when it has one; the previous level's normal atlas above level 1) and encodes it in the coarse triangle's tangent frame, derived from its cell uvs exactly as the tracer's `shade()` derives it (`retex::tangentFrame`), in the glTF encoding with the z component floored at 0.05. The atlas table rows carry the normal PNG's name after the colour PNG's (version 5; version 4 rows without it are still read), the helper loads it as the atlas material's normal map (clamped, scale 1; `materials.atlasNormals: false` leaves them out for measurement), and the build cache counts the normal PNGs as the file's siblings.
+
+**Flatiron** (403,385 triangles, 209 textures), Phase 6 build vs this one:
+
+| | per-triangle cells (v4) | paired cells + normals (v5) |
+| :-- | --: | --: |
+| DAG levels / clusters | 7 / 25,643 | 7 / 21,653 |
+| coarse-level wedges per triangle | 3.00 (1,554,936) | 2.11 (1,074,509) |
+| file wedges | 2,053,556 | 1,573,129 (-23%) |
+| level 1 cells | 201,680 | 111,524 (81% of triangles paired) |
+| level 1 atlas | 4096x3076, 0.29 m texel, 4.1% texels missed | 4096x3431, 0.19 m texel, 2.4% missed |
+| colour atlas PNG | 81 MB | 68 MB, plus 68 MB of normal PNG |
+| file | 85 MB | 67 MB |
+| builder (20 threads) | 9.3 s | 10.2 s (normal bake and pairing add 0.9 s) |
+
+Fewer gutters and no empty half-squares leave room under the 4096 cap, so the level-1 atlas lands on a finer texel at the same byte count; the atlases are stored PNGs (no deflate gain on photogrammetry), so the normal maps double the atlas bytes on disk. The checker sphere goes from 10 to 11 levels and 32,748 to 24,332 wedges, and its normal atlases are 99.6-99.8% flat (it is a sphere of flat shading normals), as they should be.
+
+**Render agreement with full detail** (1280x720, 128 spp, denoised, block means against the 0.5 px cut, 8x8 blocks):
+
+| cut | triangles | v4 build | v5, colour only | v5, colour + normals |
+| :-- | --: | --: | --: | --: |
+| 8 px | 83k | 3.54% (RMS 11.1%) | 3.95% (RMS 10.7%) | **3.46% (RMS 9.3%)** |
+| 24 px | 56k | 10.7% (RMS 16.7%) | 9.57% (RMS 15.8%) | **9.35% (RMS 15.2%)** |
+
+The baked normals carry the source's facet shading onto the coarse triangles: at the 8 px cut they take the block error from 3.95% to 3.46% and the pixel RMS from 10.7% to 9.3%, better than the Phase 6 build with its three-wedge cells. The 24 px cut (level 3-4, metres of error) stays geometrically broken from the test camera whatever its texturing; that is the stuck-group limit noted in Phase 6, not a texturing problem.
+
+**Limits.** The normal atlas floors grazing normals at z = 0.05, so a coarse triangle spanning a wall-roof edge shades its wall texels darkly rather than flat; pairing is greedy (81% paired, not the 100% a quad-mesh would give); metallic and roughness are still per-level factors, not maps.
+
 ## Next (plan)
 
-- Share cell edges between neighbouring triangles (quads) to halve the atlas and the wedge count; bake normal maps into the atlases; a group-merging step for stuck groups so the DAG continues past level 7.
+- A group-merging step for stuck groups so the DAG continues past level 7; metallic-roughness atlases; a quad-aware pairing (pair across the longest shared edge first) to lift the 81% paired share.
 - Phase 4: the a-trous denoiser on the GPU and temporal reuse.
 - Rays: rasterize the camera hit with the existing WebGPU cluster pass; coarser cuts for bounce and shadow rays; any-hit shadow rays (done); merged per-chunk acceleration structures; better samplers; MetalFX upscale.
