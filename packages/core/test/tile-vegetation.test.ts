@@ -221,10 +221,11 @@ describe('tile_vegetation strip on a synthetic photo-textured tile', () => {
         expect(strip.stats.skirts.areaM2).toEqual({ onWalls: 0, onLevelSurfaces: 0, onKeptCanopy: 0, onOther: 0 });
         expect(strip.stats.holes.capMaxRiseM).toBeLessThan(0.35);
         expectValidGlb(fs.readFileSync(strip.devegetatedGlb));
-        // the photographs ride along unchanged
+        // the photographs ride along unchanged (the fill atlas of the caps and skirts comes after them)
         const rawGlb = parseGlb(fs.readFileSync(path.join(work, 'tile.glb')));
         const outGlb = parseGlb(fs.readFileSync(strip.devegetatedGlb));
-        expect(outGlb.json.images).toHaveLength(rawGlb.json.images.length);
+        expect(outGlb.json.images).toHaveLength(rawGlb.json.images.length + 1);
+        expect(outGlb.json.materials.find((m: any) => m.name === 'VegetationFill')?.extras?.scratchbox?.photoInferredFill).toBe(true);
         const bytes = (g: { json: any; bin: Buffer }, i: number) => {
             const v = g.json.bufferViews[g.json.images[i].bufferView];
             return g.bin.subarray(v.byteOffset ?? 0, (v.byteOffset ?? 0) + v.byteLength);

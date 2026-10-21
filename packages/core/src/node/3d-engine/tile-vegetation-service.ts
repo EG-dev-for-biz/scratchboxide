@@ -81,6 +81,39 @@ export interface TileVegetationStripParams {
     capGrid?: number;
     seamGap?: number;
     sampleSpacing?: number;
+    /**
+     * The fill of the caps and skirts the strip builds where trees stood (1, default): each carries photo-inferred texels
+     * sampled from the kept scan's own photo of the surface around it and carried across it from the nearest real texel
+     * (confidence exp(-d / fillConfidenceScale)); a piece with no real neighbour takes the tile's mean colour of such
+     * surfaces and is labelled generated. 0: the legacy flat clay primitives.
+     */
+    fill?: number;
+    /** Texel of the fill (0.1 m; coarser only to keep the atlas within fillAtlasMaxPx, the atlas's longest side, 4096). */
+    fillTexel?: number;
+    fillAtlasMaxPx?: number;
+    /** How far beyond a piece the real scan is read (2 m). */
+    fillContext?: number;
+    /** A kept surface within this of a texel's place (0.35 m), facing the way the piece does (|cos| at least fillNormalCos, 0.6), is the real surface there. */
+    fillSurfaceTol?: number;
+    fillNormalCos?: number;
+    /** Carried this far from a real texel, a fill texel's confidence is 1/e (3 m). */
+    fillConfidenceScale?: number;
+    /**
+     * A skirt on architecture (a wall, a roof edge) is kept off the real wall (1, default): where the scan has a surface
+     * behind it within skirtBackedReach (0.4 m) rising from the skirt's foot, the skirt is cut down to the part above it;
+     * backed to within skirtMin of its top, or over skirtBackedShare (0.5) of its face with no such band, it is not built.
+     * 0: every skirt is built whole.
+     */
+    skirtDropBacked?: number;
+    skirtBackedReach?: number;
+    skirtBackedShare?: number;
+    /**
+     * Buildings win over trees: a triangle the removal would take that lies on a kept wall it touches (within facadeGuard
+     * (0.15 m) of the wall's plane, facing like it, |cos| at least facadeGuardCos (0.9)) is facade whatever the classifier
+     * called it and stays; the cut stops at the facade (stats.buildingGuard). 0: off.
+     */
+    facadeGuard?: number;
+    facadeGuardCos?: number;
     /** How each tree crown is regrown before anything is removed (plant grows them again with the same). */
     crownBaseRatio?: number;
     trunkRadiusPerHeight?: number;
@@ -91,6 +124,12 @@ export interface TileVegetationStripParams {
     trunkLean?: number;
     /** Share of a crown's measured surface the regrown leaves must reach for it to be removed and rebuilt (0.9). */
     minSurfaceReached?: number;
+    /**
+     * Buildings win over trees: the regrown crown is kept this far (1 m: a leaf cluster's reach) off the scanned walls the crown met (crowns.json
+     * `walls`, measured by strip): attractors and surface samples behind a wall or within the clearance are left out of
+     * the growth (stats.keptOffWalls, per tree keptOffWalls). 0: no clipping.
+     */
+    wallClearance?: number;
     /** Share of a crown's measured surface that may hang more than supportStep below its support before that support is not its ground (0.1). */
     maxCrownBelowSupport?: number;
     /**
@@ -127,6 +166,8 @@ export interface TileVegetationPlantParams {
     minSurfaceReached?: number;
     /** 1 (default): every tree is written at three levels (near: instanced leaf clusters, mid: fewer larger leaves, far: blob masses); 0: the far level alone. */
     lod?: number;
+    /** Buildings win over trees: the regrown crown is kept this far (1 m) off the scanned walls the crown met (crowns.json `walls`); 0: no clipping. */
+    wallClearance?: number;
     /** 0 bare .. 1 full summer (default 1): scales leaf density at every level. */
     psiSeason?: number;
     /** Blade length = clamp(leafSizeRatio x crown height, leafMin, leafMax) metres (0.0065, 0.08, 0.14). */

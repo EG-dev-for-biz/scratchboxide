@@ -51,6 +51,12 @@ struct SceneMaterial {
     float occlusionStrength{1.0f};
     bool doubleSided{false};
     bool unlit{false};
+    /**
+     * material.extras.scratchbox.photoInferredFill: its texture is a fill a stage laid over surfaces the photo does not
+     * cover (the tree strip's caps and skirts), carried from real neighbouring texels: not the scan's own photo, whatever
+     * its pixels, and consumers that bake or measure the scan's photo must not count it as such.
+     */
+    bool photoInferredFill{false};
 };
 
 struct SceneImage {
@@ -268,6 +274,7 @@ private:
             if (factor.arr.size() == 4) {
                 sm.baseColorFactor = Vec4(factor[0].asFloat(1), factor[1].asFloat(1), factor[2].asFloat(1), factor[3].asFloat(1));
             }
+            sm.photoInferredFill = m["extras"]["scratchbox"]["photoInferredFill"].b;
             sm.metallicFactor = pbr["metallicFactor"].asFloat(1.0f);
             sm.roughnessFactor = pbr["roughnessFactor"].asFloat(1.0f);
             int textureIndex = pbr["baseColorTexture"]["index"].asInt(-1);

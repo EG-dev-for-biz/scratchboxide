@@ -126,6 +126,19 @@ export interface TreeOffGround {
     gapM: number | null;
 }
 
+/** One kind of strip fill piece (caps, skirts): what it covers and where its texels came from. */
+export interface StripFillKindSummary {
+    pieces: number;
+    piecesGenerated: number;
+    areaM2: number;
+    generatedAreaM2: number;
+    /** Share of the pieces' texels with a real photo of their own, carried from one, or generated. */
+    texelShare: { real: number; carried: number; generated: number };
+    meanCarriedM: number;
+    maxCarriedM: number;
+    meanConfidence: number;
+}
+
 export interface LocationClayTrees {
     /** Mounted trees model (absent when no tree was planted). */
     url?: string;
@@ -213,7 +226,38 @@ export interface LocationClayTrees {
         skirtMaxHeightM?: Record<string, number>;
         /** Largest height difference across one cap face (m). */
         capMaxRiseM?: number;
+        /**
+         * What each skirt category did with its skirts (one per hole-edge segment): built whole, cut down to the part the
+         * scan has no surface behind (shortened, with the area taken off), or not built because the scan has the surface
+         * behind it (dropped): a skirt is kept off a real wall.
+         */
+        skirtDecisions?: Record<string, { kept: { count: number; areaM2: number }; shortened: { count: number; areaRemovedM2: number }; dropped: { count: number; areaM2: number } }>;
+        /**
+         * The fill of the caps and skirts: photo-inferred texels sampled from the kept scan's photo around each piece and
+         * carried across it (meanConfidence falls with the distance carried); pieces with no real neighbour are generated
+         * (the tile's mean colour) and counted apart. clayAreaM2: what is left as flat clay (0 with the fill on).
+         */
+        fill?: {
+            enabled: boolean; texelM: number; clayAreaM2: { cap: number; skirt: number };
+            cap: StripFillKindSummary; skirt: StripFillKindSummary;
+            generated: Array<{ kind: string; areaM2: number; reason: string }>;
+        };
+        /**
+         * Buildings win over trees: triangles the removal took that lay on a kept wall or level surface, before and after
+         * the guard put the wall ones back (after.onWalls is 0 when the guard is on), what it put back, the removed
+         * triangles that meet a kept surface only along an edge (the crease where a crown meets a wall, roof or anything
+         * else), and the scanned walls measured for the crowns that touched them (plant keeps the regrown crowns off them).
+         */
+        buildingGuard?: {
+            facadeGuardM: number;
+            removedOnBuilding: { before: { onWalls: number; onLevelSurfaces: number }; after: { onWalls: number; onLevelSurfaces: number } };
+            keptAsBuilding: { count: number; areaM2: number };
+            removedMeetingAlongEdge: { onWalls: number; onLevelSurfaces: number; onOther: number };
+            crownsWithWalls: number; crownWalls: number;
+        };
     };
+    /** Buildings win over trees: trees whose regrown crown was kept off a scanned wall, and the share of their attractors left out (plant). */
+    keptOffWalls?: { trees: number; attractorsClipped: number; attractorsAtClippedCrowns: number; crownIds: number[] };
     ms: { strip: number; plant: number };
 }
 
@@ -424,6 +468,51 @@ export async function plantTrees(
     }
 }
 
+/** strip's skirtDecisions stats (by category), numbers only. */
+function skirtDecisionsSummary(d: Record<string, any>): NonNullable<LocationClayTrees['strip']['skirtDecisions']> {
+    const out: NonNullable<LocationClayTrees['strip']['skirtDecisions']> = {};
+    for (const [k, v] of Object.entries(d)) {
+        if (!v || typeof v !== 'object' || !('kept' in v)) continue;
+        out[k] = {
+            kept: { count: Number(v.kept?.count ?? 0), areaM2: Number(v.kept?.areaM2 ?? 0) },
+            shortened: { count: Number(v.shortened?.count ?? 0), areaRemovedM2: Number(v.shortened?.areaRemovedM2 ?? 0) },
+            dropped: { count: Number(v.dropped?.count ?? 0), areaM2: Number(v.dropped?.areaM2 ?? 0) }
+        };
+    }
+    return out;
+}
+
+/** strip's buildingGuard stats, numbers only. */
+function buildingGuardSummary(g: Record<string, any>): NonNullable<LocationClayTrees['strip']['buildingGuard']> {
+    const pair = (v: any) => ({ onWalls: Number(v?.onWalls ?? 0), onLevelSurfaces: Number(v?.onLevelSurfaces ?? 0) });
+    return {
+        facadeGuardM: Number(g.facadeGuardM ?? 0),
+        removedOnBuilding: { before: pair(g.removedOnBuilding?.before), after: pair(g.removedOnBuilding?.after) },
+        keptAsBuilding: { count: Number(g.keptAsBuilding?.count ?? 0), areaM2: Number(g.keptAsBuilding?.areaM2 ?? 0) },
+        removedMeetingAlongEdge: { ...pair(g.removedMeetingAlongEdge), onOther: Number(g.removedMeetingAlongEdge?.onOther ?? 0) },
+        crownsWithWalls: Number(g.crownsWithWalls ?? 0), crownWalls: Number(g.crownWalls ?? 0)
+    };
+}
+
+/** strip's fill stats: each kind's coverage and texel sources, and the pieces that had to be generated, with their reasons. */
+export function stripFillSummary(f: Record<string, any>): NonNullable<LocationClayTrees['strip']['fill']> {
+    const kind = (k: Record<string, any> | undefined): StripFillKindSummary => {
+        const tx = k?.texels ?? {};
+        const target = Math.max(1, Number(tx.target ?? 0));
+        return {
+            pieces: Number(k?.pieces ?? 0), piecesGenerated: Number(k?.piecesGenerated ?? 0), areaM2: Number(k?.areaM2 ?? 0), generatedAreaM2: Number(k?.generatedAreaM2 ?? 0),
+            texelShare: { real: Number(tx.real ?? 0) / target, carried: Number(tx.carried ?? 0) / target, generated: Number(tx.generated ?? 0) / target },
+            meanCarriedM: Number(k?.meanCarriedM ?? 0), maxCarriedM: Number(k?.maxCarriedM ?? 0), meanConfidence: Number(k?.meanConfidence ?? 0)
+        };
+    };
+    return {
+        enabled: f.enabled === true, texelM: Number(f.texelM ?? 0),
+        clayAreaM2: { cap: Number(f.clayAreaM2?.cap ?? 0), skirt: Number(f.clayAreaM2?.skirt ?? 0) },
+        cap: kind(f.cap), skirt: kind(f.skirt),
+        generated: (Array.isArray(f.degradations) ? f.degradations : []).map((d: any) => ({ kind: String(d.kind ?? ''), areaM2: Number(d.areaM2 ?? 0), reason: String(d.reason ?? '') }))
+    };
+}
+
 /**
  * The trees of a location, from strip's measurement and, when trees were planted, plant's stats: what was measured,
  * rebuilt, kept as scanned (each with why), short of its crown or off the mounted ground, and what closing the ground
@@ -483,7 +572,10 @@ export function summarizeTrees(
             openEdges: st.openEdges,
             skirtAreaM2: st.skirts?.areaM2,
             skirtMaxHeightM: st.skirts?.maxHeightByHangM,
-            capMaxRiseM: st.holes?.capMaxRiseM
+            capMaxRiseM: st.holes?.capMaxRiseM,
+            ...(st.skirtDecisions ? { skirtDecisions: skirtDecisionsSummary(st.skirtDecisions) } : {}),
+            ...(st.fill ? { fill: stripFillSummary(st.fill) } : {}),
+            ...(st.buildingGuard ? { buildingGuard: buildingGuardSummary(st.buildingGuard) } : {})
         },
         ms: { strip: opts.stripMs, plant: opts.plantMs ?? 0 }
     };
@@ -512,6 +604,13 @@ export function summarizeTrees(
             trees.measured -= trees.notOnStructure;
         }
         trees.inferred = planted.stats.inferred ?? {};
+        const kow = planted.stats.keptOffWalls;
+        if (kow && typeof kow === 'object') {
+            trees.keptOffWalls = {
+                trees: Number(kow.trees ?? 0), attractorsClipped: Number(kow.attractorsClipped ?? 0), attractorsAtClippedCrowns: Number(kow.attractorsAtClippedCrowns ?? 0),
+                crownIds: (Array.isArray(kow.perTree) ? kow.perTree : []).map((t: any) => Number(t.crownId))
+            };
+        }
         trees.shortOfCrown = (Array.isArray(planted.stats.shortOfCrown) ? planted.stats.shortOfCrown : []).map((t: any) => ({
             crownId: Number(t.crownId), crownSurfaceReached: Number(t.crownSurfaceReached), budget: Number(t.budget), reason: String(t.reason)
         }));

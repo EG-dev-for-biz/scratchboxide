@@ -36,9 +36,16 @@
  *   lowered onto that surface and capped there, so no cap face climbs to where the tree was and no hole opens; a tile
  *   with no tree is left as it is, whatever its ground. Where the hole edge stands off that surface (a wall or building
  *   side the tree hid, the side of a low planting or a tree that stays) a vertical skirt continues it down, and its
- *   area and height are reported by what it continues (and, on a crown that stays, on that crown). Lower roof
- *   vegetation stays in the scan untouched. Writes the devegetated tile (textures kept; cap and skirt are untextured
- *   primitives of their own), and a crown list with apex, stem, support (height, slope and where it was measured),
+ *   area and height are reported by what it continues (and, on a crown that stays, on that crown). A skirt on
+ *   architecture is kept off the real wall: where the scan has a surface behind it the skirt is cut down to the part
+ *   above that surface or not built (skirtDropBacked; the decisions are reported by category). Caps and skirts carry
+ *   photo-inferred texels of their own (scratchbox_strip_fill.hpp: the kept scan's photo of the surface around each
+ *   piece, carried across it from the nearest real texel, with a confidence that falls with the distance carried;
+ *   a piece with no real neighbour takes the tile's mean colour of such surfaces and is labelled generated), never
+ *   flat clay (fill false: the legacy clay primitives). Lower roof vegetation stays in the scan untouched. Writes the
+ *   devegetated tile (textures kept; the fill atlas as a texture of its own, its material marked photoInferredFill so
+ *   consumers that bake or measure the scan's photo do not count it), and a crown list with apex, stem, support
+ *   (height, slope and where it was measured),
  *   footprint, sector radii and voxel samples of the crown surface, in the tile frame and as lat/lng (the list stays in
  *   the cache; plant writes no geodetic data).
  *
@@ -57,6 +64,8 @@
 #include "scratchbox_io.hpp"
 #include "scratchbox_nature.hpp"
 #include "scratchbox_staged_glb.hpp"
+#include "scratchbox_png.hpp"
+#include "scratchbox_strip_fill.hpp"
 #include "scratchbox_tree_lod.hpp"
 #include "scratchbox_tree_species.hpp"
 #include "scratchbox_tree_textures.hpp"
@@ -524,6 +533,11 @@ struct GrowthParams {
     bool trunkRadiusPerHeightExplicit{false};
     double shellDepth{0.8};             // share of each surface sample's height above the crown base the crown fills
     double minSurfaceReached{0.9};      // share of the measured crown surface the regrown tree's leaves must reach
+    // Buildings win over trees: a crown is grown no closer than this to the scanned walls it met (CrownShape::walls,
+    // measured by strip): attractors and surface samples behind a wall's plane or within this of it are left out, so the
+    // regrown crown stands off the facade instead of filling the building (m; 0: no clipping). 1 m: a leaf cluster's reach,
+    // measured on a crown pressed to a wall (0.5 m left 0.12 % of its triangles 0.32 m into the building; 1 m none).
+    double wallClearance{1.0};
     uint64_t seed{0};                   // mixed with each crown id
     // Seeded per crown (a hash of seed and crown id: the same crown grows the same tree, no two alike):
     double crownBaseSpread{0.10};       // the crown base ratio varies by +/- this, so trunks do not all fork at the same relative height
@@ -543,6 +557,17 @@ struct GrowthParams {
     tree_species::ChoiceParams speciesChoice;
 };
 
+/**
+ * A scanned wall a crown met (strip: kept wall triangles the crown's removed triangles touched, clustered by plane):
+ * a point on it, its outward normal (towards the crown) and its area. The crown is regrown on the crown's side of it.
+ */
+struct CrownWall {
+    Vec3 point, normal;
+    Vec3 tangent;                 // unit, horizontal, in the wall's plane
+    double halfAlongM{0}, halfUpM{0};  // the wall's extent about `point` along the tangent and up (half widths)
+    double areaM2{0};
+};
+
 /** A measured crown, as crowns.json carries it (strip writes these values at full precision, so plant reads them back exactly). */
 struct CrownShape {
     int id{0};
@@ -556,6 +581,7 @@ struct CrownShape {
     // its colour in the tile's photo (measured; the species choice reads its hue), when strip measured one
     bool colourKnown{false};
     std::array<double, 3> colourMean{};
+    std::vector<CrownWall> walls;   // the scanned walls it met (GrowthParams::wallClearance keeps the regrown crown off them)
 };
 
 /**
@@ -615,6 +641,12 @@ struct CrownGrowth {
     std::string colonisationSummary;    // how colonisation went, in words (attractors reached, iterations, why it stopped)
     std::vector<Vec3> surface;          // the measured surface samples above the crown base (what the leaves must reach)
     size_t surfaceMassesNeeded{0};      // leaf masses the meshing needs to bring all of it it can within reachRadius
+    // buildings win over trees (GrowthParams::wallClearance): walls the crown was kept off, and the attractors and
+    // surface samples that lay behind them or within the clearance, left out of the growth
+    size_t wallsClipped{0}, attractorsClipped{0}, attractorsTotal{0}, surfaceClipped{0};
+    // the height the leaves must reach: the measured apex, or, when the clip took the surface samples at the apex (the
+    // crown's top lay against the wall), the top of the surface samples that remain
+    double apexTargetY{0};
     bool ok() const { return failure.empty(); }
     double surfaceShare() const { return surfaceSamples ? static_cast<double>(surfaceReached) / static_cast<double>(surfaceSamples) : 0.0; }
 };
@@ -748,6 +780,34 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
             addAttractor(s.x + jx, y + jy, s.z + jz);
         }
     }
+    g.attractorsTotal = attractors.size();
+    if (G.wallClearance > 0 && !c.walls.empty()) {
+        // buildings win over trees: nothing of the crown is grown behind a scanned wall it met, or within the clearance of
+        // it, over the wall's own extent (grown by the clearance): a low garden wall or a short return clips what stands
+        // against it, not the whole crown
+        auto behind = [&](const Vec3& q) {
+            for (const auto& w : c.walls) {
+                const Vec3 d = q - w.point;
+                if (static_cast<double>(d.dot(w.normal)) >= G.wallClearance) continue;
+                if (std::abs(static_cast<double>(d.dot(w.tangent))) > w.halfAlongM + G.wallClearance) continue;
+                if (std::abs(static_cast<double>(d.y)) > w.halfUpM + G.wallClearance) continue;
+                return true;
+            }
+            return false;
+        };
+        std::vector<Vec3> keptA, keptS;
+        for (const auto& a : attractors) { if (behind(a)) ++g.attractorsClipped; else keptA.push_back(a); }
+        for (const auto& v : surface) { if (behind(v)) ++g.surfaceClipped; else keptS.push_back(v); }
+        if (g.attractorsClipped || g.surfaceClipped) g.wallsClipped = c.walls.size();
+        attractors.swap(keptA);
+        surface.swap(keptS);
+    }
+    g.apexTargetY = c.apex.y;
+    if (g.surfaceClipped && !surface.empty()) {
+        double top = -std::numeric_limits<double>::infinity();
+        for (const auto& v : surface) top = std::max(top, static_cast<double>(v.y));
+        g.apexTargetY = std::min(g.apexTargetY, top);
+    }
     g.surfaceSamples = surface.size();
     if (attractors.size() < 3) {
         g.failureCode = "no_crown_above_base";
@@ -837,14 +897,14 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
     g.surface = std::move(surface);
     cfg.foliageSurface = g.surface;
     cfg.foliageSurfaceReach = static_cast<float>(g.reachRadius);
-    cfg.foliageTop = c.apex.y;
+    cfg.foliageTop = static_cast<float>(g.apexTargetY);
     g.surfaceMassesNeeded = nature::SpaceColonizationTreeGenerator::surfaceMassesNeeded(cfg, g.skeleton);
     if (g.surfaceShare() < G.minSurfaceReached) {
         g.failureCode = "crown_not_reached";
         g.failure = "the regrown tree's leaves reach " + detail::fixed(100.0 * g.surfaceShare(), 0) + "% of its measured crown surface (" +
                     std::to_string(g.surfaceReached) + " of " + std::to_string(g.surfaceSamples) + " samples within " + detail::fixed(g.reachRadius, 1) +
                     " m; " + detail::fixed(100.0 * G.minSurfaceReached, 0) + "% needed)";
-    } else if (g.leafTopY + g.reachRadius < static_cast<double>(c.apex.y)) {
+    } else if (g.leafTopY + g.reachRadius < g.apexTargetY) {
         g.failureCode = "apex_not_reached";
         g.failure = "the regrown tree's leaves reach " + detail::fixed(g.leafTopY - support, 1) + " m above its ground, short of its measured " +
                     detail::fixed(H, 1) + " m";
@@ -884,6 +944,17 @@ inline CrownShape crownShapeFromJson(const io::GlbJsonValue& c) {
     if (col.type == io::GlbJsonValue::Array && col.arr.size() == 3 && col[0].type == io::GlbJsonValue::Number) {
         s.colourKnown = true;
         for (size_t k = 0; k < 3; ++k) s.colourMean[k] = std::max(0.0, col[k].num);
+    }
+    for (const auto& w : c["walls"].arr) {
+        if (w["point"].arr.size() != 3 || w["normal"].arr.size() != 3 || w["tangent"].arr.size() != 3) continue;
+        CrownWall cw;
+        cw.point = Vec3(static_cast<float>(w["point"][0].num), static_cast<float>(w["point"][1].num), static_cast<float>(w["point"][2].num));
+        cw.normal = Vec3(static_cast<float>(w["normal"][0].num), static_cast<float>(w["normal"][1].num), static_cast<float>(w["normal"][2].num));
+        cw.tangent = Vec3(static_cast<float>(w["tangent"][0].num), static_cast<float>(w["tangent"][1].num), static_cast<float>(w["tangent"][2].num));
+        cw.halfAlongM = w["halfAlongM"].asFloat(0.0f);
+        cw.halfUpM = w["halfUpM"].asFloat(0.0f);
+        cw.areaM2 = w["areaM2"].asFloat(0.0f);
+        s.walls.push_back(cw);
     }
     return s;
 }
@@ -1106,9 +1177,10 @@ struct MeshedCrown {
               << "% of its measured crown surface (" << reach.reached << " of " << reach.samples << " samples within " << detail::fixed(g.reachRadius, 1) << " m; "
               << detail::fixed(100.0 * minSurfaceReached, 0) << "% needed; " << report.surfaceMasses << " of the " << report.surfaceMassesNeeded
               << " masses that reach it fit)";
-        } else if (reach.topY + g.reachRadius < static_cast<double>(c.apex.y)) {
+        } else if (reach.topY + g.reachRadius < g.apexTargetY) {
             m << "within its budget of " << budget << " triangles its leaves reach " << detail::fixed(reach.topY - c.supportY, 1) << " m above its ground, "
-              << detail::fixed(static_cast<double>(c.apex.y) - reach.topY, 1) << " m short of its measured " << detail::fixed(static_cast<double>(c.apex.y) - c.supportY, 1) << " m";
+              << detail::fixed(g.apexTargetY - reach.topY, 1) << " m short of its measured " << detail::fixed(g.apexTargetY - c.supportY, 1) << " m"
+              << (g.surfaceClipped ? " (the crown's top against the wall left out)" : "");
         }
         return m.str();
     }
@@ -1194,6 +1266,27 @@ struct StripParams {
     double fragmentMaxArea{300.0};   // a kept piece left hanging beside a removal, touching neither ground nor a wall or
                                      // roof, goes with the tree when it is no larger than this (m^2)
     double capGrid{1.5};             // spacing of interior cap points (m)
+    // Photo-inferred fill of the caps and skirts (scratchbox_strip_fill.hpp). fill false: the legacy flat clay primitives.
+    bool fill{true};
+    double fillTexel{0.1};           // texel of the fill (m); coarser only to keep the atlas within fillAtlasMaxPx
+    int fillAtlasMaxPx{4096};        // longest side of the fill atlas
+    double fillContext{2.0};         // the real scan is read this far beyond a piece (m)
+    double fillSurfaceTol{0.35};     // a kept surface within this of a texel's place is the real surface there (m) ...
+    double fillNormalCos{0.6};       // ... when it faces the way the piece does (|n . n of the piece| at least this)
+    double fillConfidenceScale{3.0}; // carried this far from a real texel the fill's confidence is 1/e (m)
+    // A skirt hanging on architecture (a wall, the edge of a roof) is a panel pasted over a real wall where the scan has a
+    // surface behind it: a kept, not-vegetation surface facing like the skirt within skirtBackedReach of its plane. Where
+    // that surface rises from the skirt's foot (a band backed in every column, at least skirtMin tall), the skirt is cut
+    // down to the part above it; a skirt backed to within skirtMin of its top, or over at least skirtBackedShare of its face
+    // with no such band, is not built. One with nothing real behind it is kept whole and filled.
+    bool skirtDropBacked{true};
+    double skirtBackedReach{0.4};    // m
+    double skirtBackedShare{0.5};
+    // Buildings win over trees: a triangle the removal would take that lies on a kept building surface (within
+    // facadeGuard of the plane of a kept wall or level surface it touches, facing like it, |cos| at least facadeGuardCos)
+    // is building, whatever the classifier called it, and stays; the cut stops at the facade. 0: off.
+    double facadeGuard{0.15};
+    double facadeGuardCos{0.9};      // (walls only: level surfaces are measured, not put back; see guardBuildings)
     double seamGap{1.0};             // hole boundaries broken by an open tile seam are joined across gaps up to this (m)
     double sampleSpacing{0.7};       // voxel size of the crown surface samples (m)
     GrowthParams growth;             // how each tree crown is regrown before anything is removed (see growCrown)
@@ -1272,6 +1365,7 @@ struct CrownRecord {
     bool regrowthMeshed{false};
     size_t regrowthBudget{0}, regrowthLeafMasses{0}, regrowthSurfaceMasses{0}, regrowthSurfaceMassesNeeded{0}, regrowthLeavesReached{0};
     double regrowthLeavesShare{0}, regrowthLeavesTopY{0};
+    std::vector<CrownWall> walls;    // the scanned walls its removed triangles touched (measureCrownWalls); plant keeps the regrown crown off them
     // a crown kept as scanned beside removed trees: its side over their rebuilt ground, closed down to it (skirt triangles
     // hung on its canopy, not in the scan)
     double keptSkirtAreaM2{0}, keptSkirtTopY{-std::numeric_limits<double>::infinity()}, keptSkirtBottomY{std::numeric_limits<double>::infinity()};
@@ -1291,6 +1385,36 @@ struct StripStats {
     double skirtAreaOnWallsM2{0}, skirtAreaOnLevelSurfacesM2{0}, skirtAreaOnKeptCanopyM2{0}, skirtAreaOnOtherM2{0}, skirtMaxHeightM{0};
     // tallest skirt by what it hangs on (walls, level surfaces, canopy that stays, anything else)
     double skirtMaxOnWallsM{0}, skirtMaxOnLevelSurfacesM{0}, skirtMaxOnKeptCanopyM{0}, skirtMaxOnOtherM{0};
+    // what each skirt category (walls, level surfaces, kept canopy, other: as skirtArea*) did with its skirts: built whole
+    // (kept), cut down to the part the real scan has no surface behind (shortened: the area taken off), or not built because
+    // the real scan has the surface behind it (dropped, skirtDropBacked), by count of skirt quads (one per hole-edge segment)
+    // and area; and the open edges the dropped ones leave on the kept triangles above them. skirtArea* above count what was
+    // built.
+    struct SkirtDecision { size_t count{0}; double areaM2{0}; };
+    std::array<SkirtDecision, 4> skirtKept{}, skirtShortened{}, skirtDropped{};
+    size_t openEdgesAtDroppedSkirts{0};
+    double capAreaM2{0};             // what the caps cover (m^2, their own faces)
+    // The fill of caps and skirts (StripParams::fill): what each kind covered, and how its texels were sourced
+    struct FillKind { size_t pieces{0}, piecesUnsourced{0}, piecesWidened{0}; double areaM2{0}, areaUnsourcedM2{0}, areaWidenedM2{0}; strip_fill::FillCounts counts; };
+    struct FillDegradation { std::string code, kind, reason; double areaM2{0}; std::array<double, 3> centre{}; };
+    bool fillEnabled{false};
+    FillKind fillCap, fillSkirt;
+    double fillTexelM{0};
+    int fillAtlasW{0}, fillAtlasH{0};
+    size_t fillPngBytes{0};
+    double fillGeneratedColourRgb[3]{0, 0, 0};   // the colour of pieces with no real neighbour (sRGB 0..1)
+    std::vector<FillDegradation> fillDegradations;
+    // Buildings win over trees (guardBuildings): triangles the removal took that lie on a kept building surface (on a
+    // wall, on a level surface), before and after the guard put them back, what it put back, and the removed triangles
+    // that only meet a kept surface along an edge (the crease where a crown meets a wall, roof or anything else: crown, not
+    // building; counted so the join is visible)
+    struct GuardCounts { size_t onWalls{0}, onLevelSurfaces{0}; };
+    GuardCounts guardBefore, guardAfter;
+    double guardM{0}, guardCos{0};
+    size_t guardKeptAsBuilding{0};
+    double guardKeptAsBuildingM2{0};
+    size_t creaseOnWalls{0}, creaseOnLevelSurfaces{0}, creaseOnOther{0};
+    size_t crownsWithWalls{0}, crownWalls{0};  // crowns whose removed triangles touched scanned walls, and the walls measured (CrownRecord::walls)
     double canopyTakenWithTreesM2{0}; // canopy outside the tree crowns removed with them (their drape, fragments): not replanted
     size_t fragmentsTaken{0};        // pieces of a tree's scan left hanging in the air beside its removal, taken with it
     double fragmentAreaTakenM2{0};
@@ -1534,6 +1658,9 @@ private:
         lap("regrowth");
         removeAndCapOnGround();
         lap("remove_and_cap");
+        measureCrownWalls();
+        buildFill();
+        lap("fill");
         writeDevegetated();
         writeRemoved();
         lap("write");
@@ -2587,6 +2714,19 @@ private:
     std::vector<Vec3> capPos;            // cap/skirt vertices
     std::vector<uint32_t> capTris;       // indices into capPos
     std::vector<uint8_t> capIsSkirt;     // per cap triangle
+    std::vector<int> capTriCrown;        // per cap triangle: the crown (work index) whose cap surface it lies on
+    // One skirt per hole-edge segment that was built (see closeHoles): the four cap vertices, what it hangs on, and the
+    // run (consecutive segments of one hole loop) it is laid out on for its fill; skirtTriQuad maps each skirt triangle to it
+    struct SkirtQuad {
+        uint32_t upperI{0}, upperN{0}, lowerI{0}, lowerN{0};
+        size_t keptTri{0};
+        int crown{-1}, loop{-1}, category{3};
+        double areaM2{0};
+        long run{-1};
+        int runVertex{0};
+    };
+    std::vector<SkirtQuad> skirtQuads;
+    std::vector<uint32_t> skirtTriQuad;
 
     /**
      * The surfaces things stand on, which the ground under a removed tree is rebuilt on: the lowest and the highest
@@ -2651,7 +2791,11 @@ private:
     std::vector<uint8_t> drapeFace;
     /** Triangles standing on the caller's structure cells (P.keep): architecture whatever their shape or colour. */
     std::vector<uint8_t> keepTri;
-    bool isArchitecture(size_t t) const { return (keepTri.size() == T && keepTri[t]) || (surface[t] && !chromaVeg[t] && !(drapeFace.size() == T && drapeFace[t])); }
+    std::vector<uint8_t> keptAsBuilding;  // per triangle: the removal would have taken it, guardBuildings kept it as building (kept across passes)
+    std::vector<uint32_t> guardSeed;      // per guarded triangle: the scanned building triangle whose plane it was measured against
+    bool isArchitecture(size_t t) const {
+        return (keepTri.size() == T && keepTri[t]) || (keptAsBuilding.size() == T && keptAsBuilding[t]) || (surface[t] && !chromaVeg[t] && !(drapeFace.size() == T && drapeFace[t]));
+    }
 
     /** Marks the triangles whose centroid stands on a P.keep cell (once; the mesh does not change between passes). */
     void markKeep() {
@@ -2782,6 +2926,9 @@ private:
         capPos.clear();
         capTris.clear();
         capIsSkirt.clear();
+        capTriCrown.clear();
+        skirtQuads.clear();
+        skirtTriQuad.clear();
         auto& s = R.stats;
         s.loops = s.openChains = s.linkedChains = s.holesBridged = s.forcedEars = s.capInteriorPoints = 0;
         s.capTurnedUp = s.capDegenerate = s.capsReversed = s.capFillCells = s.capFlips = 0;
@@ -2790,6 +2937,10 @@ private:
         s.skirtAreaOnWallsM2 = s.skirtAreaOnLevelSurfacesM2 = s.skirtAreaOnKeptCanopyM2 = s.skirtAreaOnOtherM2 = s.skirtMaxHeightM = 0;
         s.skirtMaxOnWallsM = s.skirtMaxOnLevelSurfacesM = s.skirtMaxOnKeptCanopyM = s.skirtMaxOnOtherM = 0;
         s.skirtTriangles = s.capTriangles = 0;
+        s.skirtKept = {};
+        s.skirtShortened = {};
+        s.skirtDropped = {};
+        s.openEdgesAtDroppedSkirts = 0;
         for (auto& c : R.crowns) {
             c.keptSkirtAreaM2 = 0;
             c.keptSkirtTopY = -std::numeric_limits<double>::infinity();
@@ -3159,6 +3310,7 @@ private:
             }
         }
         takeFloatingFragments();
+        guardBuildings();
         for (size_t t = 0; t < T; ++t) if (removedBy[t] >= 0) ++R.stats.removedTriangles;
         for (size_t c = 0; c < N; ++c) {
             if (!canopy[c] || surf.topTriangle[c] < 0 || removedBy[static_cast<size_t>(surf.topTriangle[c])] < 0) continue;
@@ -3230,6 +3382,174 @@ private:
                 R.stats.fragmentAreaTakenM2 += pieceArea;
             }
             if (taken == 0) break;
+        }
+    }
+
+    // ---------------------------------------------------------------- buildings win over trees
+    /** 0: a kept wall, 1: a kept level surface (both building), 2: another kept not-vegetation surface, -1: kept vegetation or removed. */
+    int keptSurfaceCategory(size_t k) const {
+        if (removedBy[k] >= 0 || veg[k]) return -1;
+        if (isArchitecture(k)) return std::abs(normal[k].y) < 0.7f ? 0 : 1;
+        return 2;
+    }
+
+    /** Whether removed triangle t lies on the surface of kept triangle k: within facadeGuard of its plane, facing like it. */
+    bool onKeptSurface(size_t t, size_t k) const {
+        if (std::abs(static_cast<double>(normal[t].dot(normal[k]))) < P.facadeGuardCos) return false;
+        return std::abs(static_cast<double>((centroid[t] - centroid[k]).dot(normal[k]))) <= P.facadeGuard;
+    }
+
+    /**
+     * Buildings win over trees: a triangle the removal took that lies on a kept wall it touches (across a welded edge,
+     * within facadeGuard of the wall's plane, facing like it) is facade whatever the classifier called it, and is put
+     * back; the wave runs along the facade from the kept wall into the cut, so the cut stops at the facade and the scan's
+     * own wall stays. Level surfaces are measured (removedOnBuilding) but not put back: the drape hem a crown lays on the
+     * paving around it, and a crown top beside a flat roof, are the crown's, and the ground under a removed tree is
+     * rebuilt from the surfaces around it.
+     */
+    void guardBuildings() {
+        auto& st = R.stats;
+        if (keptAsBuilding.size() != T) { keptAsBuilding.assign(T, 0); guardSeed.assign(T, 0); }
+        st.guardM = P.facadeGuard;
+        st.guardCos = P.facadeGuardCos;
+        // every triangle put back is measured against the plane of a scanned building triangle (the seed the wave started
+        // from), never against a neighbour already put back: the wave cannot creep over a rounded crown
+        auto seedOf = [&](uint32_t k) { return keptAsBuilding[k] ? guardSeed[k] : k; };
+        auto countOn = [&](StripStats::GuardCounts& out) {
+            out = {};
+            for (size_t t = 0; t < T; ++t) {
+                if (removedBy[t] < 0) continue;
+                int best = -1;
+                for (uint32_t e = adjStart[t]; e < adjStart[t + 1]; ++e) {
+                    const uint32_t k = adj[e];
+                    const int cat = keptSurfaceCategory(k);
+                    if (cat < 0 || cat > 1 || !onKeptSurface(t, seedOf(k))) continue;
+                    best = best < 0 ? cat : std::min(best, cat);
+                }
+                if (best == 0) ++out.onWalls;
+                else if (best == 1) ++out.onLevelSurfaces;
+            }
+        };
+        countOn(st.guardBefore);
+        if (P.facadeGuard > 0) {
+            std::vector<uint32_t> queue;
+            for (size_t t = 0; t < T; ++t) {
+                if (removedBy[t] < 0) continue;
+                for (uint32_t e = adjStart[t]; e < adjStart[t + 1]; ++e) {
+                    if (keptSurfaceCategory(adj[e]) == 0) { queue.push_back(static_cast<uint32_t>(t)); break; }
+                }
+            }
+            while (!queue.empty()) {
+                const uint32_t t = queue.back();
+                queue.pop_back();
+                if (removedBy[t] < 0) continue;
+                bool building = false;
+                for (uint32_t e = adjStart[t]; e < adjStart[t + 1] && !building; ++e) {
+                    const uint32_t k = adj[e];
+                    if (keptSurfaceCategory(k) != 0) continue;
+                    const uint32_t seed = seedOf(k);
+                    if (onKeptSurface(t, seed)) { building = true; guardSeed[t] = seed; }
+                }
+                if (!building) continue;
+                removedBy[t] = -1;
+                keptAsBuilding[t] = 1;
+                veg[t] = 0;
+                for (uint32_t e = adjStart[t]; e < adjStart[t + 1]; ++e) if (removedBy[adj[e]] >= 0) queue.push_back(adj[e]);
+            }
+        }
+        countOn(st.guardAfter);
+        // what the guard holds as building over every pass (a triangle put back stays building in the passes after)
+        st.guardKeptAsBuilding = 0;
+        st.guardKeptAsBuildingM2 = 0;
+        for (size_t t = 0; t < T; ++t) if (keptAsBuilding[t]) { ++st.guardKeptAsBuilding; st.guardKeptAsBuildingM2 += static_cast<double>(area[t]); }
+        st.creaseOnWalls = st.creaseOnLevelSurfaces = st.creaseOnOther = 0;
+        for (size_t t = 0; t < T; ++t) {
+            if (removedBy[t] < 0) continue;
+            int best = -1;
+            for (uint32_t e = adjStart[t]; e < adjStart[t + 1]; ++e) {
+                const int cat = keptSurfaceCategory(adj[e]);
+                if (cat >= 0) best = best < 0 ? cat : std::min(best, cat);
+            }
+            if (best == 0) ++st.creaseOnWalls;
+            else if (best == 1) ++st.creaseOnLevelSurfaces;
+            else if (best == 2) ++st.creaseOnOther;
+        }
+    }
+
+    /**
+     * The scanned walls each removed crown touched: kept wall triangles across a welded edge from its removed triangles,
+     * clustered by plane (normals within 25 degrees, within 0.5 m of the plane), each an area-weighted point and normal
+     * turned towards the crown. Written to crowns.json (CrownRecord::walls); plant grows the tree on the crown's side.
+     */
+    void measureCrownWalls() {
+        auto& st = R.stats;
+        st.crownsWithWalls = st.crownWalls = 0;
+        for (auto& c : R.crowns) c.walls.clear();
+        struct Cluster { Vec3 pointSum, normalSum; double area{0}; Vec3 seedPoint, seedNormal; std::vector<uint32_t> tris; };
+        std::unordered_map<int, std::vector<Cluster>> byCrown;
+        std::unordered_map<int, std::pair<Vec3, size_t>> crownCentre;  // sum of removed centroids, count
+        std::vector<uint8_t> seen(T, 0);
+        for (size_t t = 0; t < T; ++t) {
+            const int m = removedBy[t];
+            if (m < 0) continue;
+            auto& cc = crownCentre[m];
+            cc.first = cc.first + centroid[t];
+            ++cc.second;
+            for (uint32_t e = adjStart[t]; e < adjStart[t + 1]; ++e) {
+                const uint32_t k = adj[e];
+                if (seen[k] || keptSurfaceCategory(k) != 0) continue;
+                seen[k] = 1;
+                auto& clusters = byCrown[m];
+                Cluster* home = nullptr;
+                for (auto& cl : clusters) {
+                    if (std::abs(static_cast<double>(normal[k].dot(cl.seedNormal))) < 0.9) continue;
+                    if (std::abs(static_cast<double>((centroid[k] - cl.seedPoint).dot(cl.seedNormal))) > 0.5) continue;
+                    home = &cl;
+                    break;
+                }
+                if (!home) { clusters.push_back({}); home = &clusters.back(); home->seedPoint = centroid[k]; home->seedNormal = normal[k]; }
+                const Vec3 n = normal[k].dot(home->seedNormal) < 0 ? normal[k] * -1.0f : normal[k];
+                home->pointSum = home->pointSum + centroid[k] * area[k];
+                home->normalSum = home->normalSum + n * area[k];
+                home->area += static_cast<double>(area[k]);
+                home->tris.push_back(k);
+            }
+        }
+        for (auto& [m, clusters] : byCrown) {
+            const int ri = m >= 0 && static_cast<size_t>(m) < work.size() ? work[static_cast<size_t>(m)].recordIndex : -1;
+            if (ri < 0) continue;
+            auto& rec = R.crowns[static_cast<size_t>(ri)];
+            const auto& cc = crownCentre[m];
+            const Vec3 crown = cc.second ? cc.first * (1.0f / static_cast<float>(cc.second)) : Vec3(0, 0, 0);
+            for (const auto& cl : clusters) {
+                if (cl.area < 1.0) continue;
+                CrownWall w;
+                w.point = cl.pointSum * (1.0f / static_cast<float>(cl.area));
+                const float len = cl.normalSum.length();
+                if (len < 1e-9f) continue;
+                w.normal = cl.normalSum / len;
+                // turned towards the crown: the regrown tree lives on the crown's side of the wall
+                if ((crown - w.point).dot(w.normal) < 0) w.normal = w.normal * -1.0f;
+                w.areaM2 = cl.area;
+                // its extent: the wall triangles' corners along the horizontal tangent and up, about the point
+                Vec3 tg(-w.normal.z, 0.0f, w.normal.x);
+                const float tl = tg.length();
+                w.tangent = tl > 1e-6f ? tg / tl : Vec3(1, 0, 0);
+                double uLo = 1e30, uHi = -1e30, yLo = 1e30, yHi = -1e30;
+                for (uint32_t k : cl.tris) {
+                    for (int j = 0; j < 3; ++j) {
+                        const Vec3 d = pos[idx[3 * k + static_cast<size_t>(j)]] - w.point;
+                        const double u = d.dot(w.tangent);
+                        uLo = std::min(uLo, u); uHi = std::max(uHi, u); yLo = std::min(yLo, static_cast<double>(d.y)); yHi = std::max(yHi, static_cast<double>(d.y));
+                    }
+                }
+                // re-centre the point on the extent so the half widths are symmetric
+                w.point = w.point + w.tangent * static_cast<float>(0.5 * (uLo + uHi)) + Vec3(0.0f, static_cast<float>(0.5 * (yLo + yHi)), 0.0f);
+                w.halfAlongM = 0.5 * (uHi - uLo);
+                w.halfUpM = 0.5 * (yHi - yLo);
+                rec.walls.push_back(w);
+            }
+            if (!rec.walls.empty()) { ++st.crownsWithWalls; st.crownWalls += rec.walls.size(); }
         }
     }
 
@@ -3376,10 +3696,12 @@ private:
             top.emplace(wv, id);
             return id;
         };
-        auto addTri = [&](uint32_t a, uint32_t b, uint32_t c, bool skirt) {
+        auto addTri = [&](uint32_t a, uint32_t b, uint32_t c, bool skirt, int crownOf, uint32_t quadOf) {
             if (a == b || b == c || a == c) return;
             capTris.insert(capTris.end(), {a, b, c});
             capIsSkirt.push_back(skirt ? 1 : 0);
+            capTriCrown.push_back(crownOf);
+            if (skirt) skirtTriQuad.push_back(quadOf);
         };
         std::vector<std::vector<uint32_t>> polys(loops.size());
         for (size_t l = 0; l < loops.size(); ++l) {
@@ -3405,14 +3727,58 @@ private:
                 const size_t n = (i + 1) % loop.size();
                 if (loopKept[l][i] < 0) continue;  // no kept edge to hang a skirt on (seam gap, closing edge)
                 if (upper[i] == lower[i] && upper[n] == lower[n]) continue;
-                const size_t before = capIsSkirt.size();
-                addTri(upper[i], upper[n], lower[n], true);
-                addTri(upper[i], lower[n], lower[i], true);
                 // what the skirt hangs on (for the report): a wall, a roof or terrace, canopy that stays, anything else
                 const size_t t = static_cast<size_t>(loopKept[l][i]);
                 const long c = cellOf(centroid[t]);
                 const bool wall = isArchitecture(t) && std::abs(normal[t].y) < 0.7f, level = isArchitecture(t) && !wall;
                 const bool onCanopy = !isArchitecture(t) && c >= 0 && keptCell[static_cast<size_t>(c)];
+                const int category = wall ? 0 : level ? 1 : onCanopy ? 2 : 3;
+                // the skirt's own faces (a triangle with two corners on one vertex is not built)
+                auto faceArea = [&](uint32_t a, uint32_t b, uint32_t cc) {
+                    if (a == b || b == cc || a == cc) return 0.0;
+                    return 0.5 * static_cast<double>((capPos[b] - capPos[a]).cross(capPos[cc] - capPos[a]).length());
+                };
+                double quadArea = faceArea(upper[i], upper[n], lower[n]) + faceArea(upper[i], lower[n], lower[i]);
+                uint32_t footI = lower[i], footN = lower[n];
+                // a skirt on architecture is a panel pasted over a real wall where the scan has a surface behind it: cut
+                // down to the part above that surface, or not built at all
+                if (P.skirtDropBacked && category <= 1 && quadArea > 0) {
+                    const SkirtBacking bk = skirtBacking(capPos[upper[i]], capPos[upper[n]], capPos[lower[i]], capPos[lower[n]]);
+                    const double topY = std::min(capPos[upper[i]].y, capPos[upper[n]].y), footY = std::max(capPos[lower[i]].y, capPos[lower[n]].y);
+                    const bool drop = (bk.band && bk.bandTopY >= topY - P.skirtMin) || (!bk.band && bk.share >= P.skirtBackedShare);
+                    if (drop) {
+                        ++R.stats.skirtDropped[static_cast<size_t>(category)].count;
+                        R.stats.skirtDropped[static_cast<size_t>(category)].areaM2 += quadArea;
+                        ++R.stats.openEdgesAtDroppedSkirts;
+                        continue;
+                    }
+                    if (bk.band && bk.bandTopY - footY >= P.skirtMin) {
+                        // the foot rises to the top of the real surface; the quad's own foot vertices (its neighbours keep theirs)
+                        const Vec3 &pI = capPos[lower[i]], &pN = capPos[lower[n]];
+                        capPos.push_back(Vec3(pI.x, static_cast<float>(bk.bandTopY), pI.z));
+                        footI = static_cast<uint32_t>(capPos.size() - 1);
+                        capPos.push_back(Vec3(pN.x, static_cast<float>(bk.bandTopY), pN.z));
+                        footN = static_cast<uint32_t>(capPos.size() - 1);
+                        const double shortArea = faceArea(upper[i], upper[n], footN) + faceArea(upper[i], footN, footI);
+                        ++R.stats.skirtShortened[static_cast<size_t>(category)].count;
+                        R.stats.skirtShortened[static_cast<size_t>(category)].areaM2 += std::max(0.0, quadArea - shortArea);
+                        quadArea = shortArea;
+                    } else {
+                        ++R.stats.skirtKept[static_cast<size_t>(category)].count;
+                        R.stats.skirtKept[static_cast<size_t>(category)].areaM2 += quadArea;
+                    }
+                } else {
+                    ++R.stats.skirtKept[static_cast<size_t>(category)].count;
+                    R.stats.skirtKept[static_cast<size_t>(category)].areaM2 += quadArea;
+                }
+                const size_t before = capIsSkirt.size();
+                SkirtQuad q;
+                q.upperI = upper[i]; q.upperN = upper[n]; q.lowerI = footI; q.lowerN = footN;
+                q.keptTri = t; q.crown = crown; q.loop = static_cast<int>(l); q.category = category; q.areaM2 = quadArea;
+                skirtQuads.push_back(q);
+                const uint32_t qi = static_cast<uint32_t>(skirtQuads.size() - 1);
+                addTri(upper[i], upper[n], footN, true, crown, qi);
+                addTri(upper[i], footN, footI, true, crown, qi);
                 double& bucket = wall ? R.stats.skirtAreaOnWallsM2 : level ? R.stats.skirtAreaOnLevelSurfacesM2 : onCanopy ? R.stats.skirtAreaOnKeptCanopyM2 : R.stats.skirtAreaOnOtherM2;
                 double& tallest = wall ? R.stats.skirtMaxOnWallsM : level ? R.stats.skirtMaxOnLevelSurfacesM : onCanopy ? R.stats.skirtMaxOnKeptCanopyM : R.stats.skirtMaxOnOtherM;
                 // canopy that stays: the crown it belongs to carries the skirt on its record (a tree kept as scanned beside
@@ -3482,7 +3848,7 @@ private:
             }
             const size_t first = capTris.size();
             R.stats.forcedEars += detail::earClip(capPos, merged, capTris);
-            for (size_t k = first / 3; k < capTris.size() / 3; ++k) capIsSkirt.push_back(0);
+            for (size_t k = first / 3; k < capTris.size() / 3; ++k) { capIsSkirt.push_back(0); capTriCrown.push_back(loopCrown[l]); }
             // interior points on a grid, each splitting the cap triangle that holds it
             if (std::abs(areas[l]) > P.capGrid * P.capGrid) {
                 double minX = 1e30, maxX = -1e30, minZ = 1e30, maxZ = -1e30;
@@ -3515,6 +3881,8 @@ private:
                             capTris.insert(capTris.end(), {b, c, qi, c, a, qi});
                             capIsSkirt.push_back(0);
                             capIsSkirt.push_back(0);
+                            capTriCrown.push_back(loopCrown[l]);
+                            capTriCrown.push_back(loopCrown[l]);
                             ++R.stats.capInteriorPoints;
                             break;
                         }
@@ -3645,9 +4013,505 @@ private:
                 capTris.insert(capTris.end(), {v00, v01, v10, v10, v01, v11});
                 capIsSkirt.push_back(0);
                 capIsSkirt.push_back(0);
+                capTriCrown.push_back(crown);
+                capTriCrown.push_back(crown);
                 ++R.stats.capFillCells;
             }
         }
+    }
+
+    // ---------------------------------------------------------------- fill (caps and skirts carry photo-inferred texels)
+    strip_fill::TriangleIndex fillIndex;
+    bool fillIndexBuilt{false};
+
+    void ensureFillIndex() {
+        if (fillIndexBuilt) return;
+        fillIndex.build(pos, idx, 1.0);
+        fillIndexBuilt = true;
+    }
+
+    /** The scan's photo at barycentric w of triangle t (sRGB 0..255); a triangle with no photo gives its flat colour. */
+    void photoAt(size_t t, const double w[3], double rgb[3]) const {
+        const uint32_t m = scene.triangleMaterial[t];
+        const gltf::SceneMaterial* mat = m < scene.materials.size() ? &scene.materials[m] : nullptr;
+        const int im = mat ? mat->baseColorImage : -1;
+        if (!mat || im < 0 || im >= static_cast<int>(scene.images.size()) || scene.images[static_cast<size_t>(im)].pixels.empty()) {
+            const double f[3] = {mat ? mat->baseColorFactor.x : 0.7, mat ? mat->baseColorFactor.y : 0.7, mat ? mat->baseColorFactor.z : 0.7};
+            for (int k = 0; k < 3; ++k) rgb[k] = std::clamp(f[k], 0.0, 1.0) * 255.0;
+            return;
+        }
+        const auto& img = scene.images[static_cast<size_t>(im)].pixels;
+        const auto &a = scene.mesh.vertices[idx[3 * t]].uv, &b = scene.mesh.vertices[idx[3 * t + 1]].uv, &c = scene.mesh.vertices[idx[3 * t + 2]].uv;
+        const double u = w[0] * a.x + w[1] * b.x + w[2] * c.x, v = w[0] * a.y + w[1] * b.y + w[2] * c.y;
+        auto wrap = [](double x, int mode) {
+            if (mode == 33071) return std::clamp(x, 0.0, 1.0);
+            if (mode == 33648) { const double f = std::fmod(std::abs(x), 2.0); return f > 1.0 ? 2.0 - f : f; }
+            return x - std::floor(x);
+        };
+        const double fx = wrap(u, mat->wrapS) * img.width - 0.5, fy = wrap(v, mat->wrapT) * img.height - 0.5;
+        const int x0 = static_cast<int>(std::floor(fx)), y0 = static_cast<int>(std::floor(fy));
+        const double tx = fx - x0, ty = fy - y0;
+        auto texel = [&](int x, int y, int ch) {
+            const int xx = std::clamp(x, 0, img.width - 1), yy = std::clamp(y, 0, img.height - 1);
+            return static_cast<double>(img.data[img.getIndex(xx, yy) + static_cast<size_t>(std::min(ch, img.channels - 1))]);
+        };
+        for (int ch = 0; ch < 3; ++ch) {
+            const double top = texel(x0, y0, ch) * (1 - tx) + texel(x0 + 1, y0, ch) * tx, bot = texel(x0, y0 + 1, ch) * (1 - tx) + texel(x0 + 1, y0 + 1, ch) * tx;
+            rgb[ch] = top * (1 - ty) + bot * ty;
+        }
+    }
+
+    /** Whether a photo colour (sRGB 0..255) is the colour of vegetation, by the same chroma test the classifier uses. */
+    bool vegetationColour(const double rgb[3]) const {
+        const double s0 = rgb[0] / 255.0, s1 = rgb[1] / 255.0, s2 = rgb[2] / 255.0, sum = s0 + s1 + s2;
+        if (sum / 3.0 < P.darkGuard) return false;
+        const double r = s0 / sum, g = s1 / sum, bl = s2 / sum;
+        const double eg = 2 * g - r - bl, er = 1.4 * r - g;
+        return eg > P.exgMin && eg - er > P.exgrMin;
+    }
+
+    static double pointSegmentDistance(const Vec3& q, const Vec3& a, const Vec3& b) {
+        const Vec3 ab = b - a;
+        const double l2 = static_cast<double>(ab.lengthSquared());
+        const double t = l2 < 1e-18 ? 0.0 : std::clamp(static_cast<double>((q - a).dot(ab)) / l2, 0.0, 1.0);
+        return static_cast<double>((q - (a + ab * static_cast<float>(t))).length());
+    }
+
+    /** What the real scan has behind a skirt quad (skirtBacking). */
+    struct SkirtBacking {
+        double share{0};          // share of the sample points over its face with a real surface behind them
+        double bandTopY{-std::numeric_limits<double>::infinity()};  // top of the backed band rising from its foot (the lowest over its columns)
+        bool band{false};         // every column is backed from its foot up to bandTopY
+    };
+
+    /**
+     * What a skirt (sample points over its face) has behind it: a kept, not-vegetation triangle within skirtBackedReach of
+     * the skirt's plane that faces like it, straight behind the sample (its closest point stands off the sample no further
+     * sideways or up than a fraction of the sample spacing: a wall beside the skirt, or one ending within it, is not
+     * behind it, nor is anything touching the hole edge itself; the triangle the skirt hangs on counts where it does stand
+     * behind, as the scanned wall under a crown's underside does). Besides the share,
+     * the band of backed samples rising from the foot in every column: the real surface the skirt would be pasted over.
+     */
+    SkirtBacking skirtBacking(const Vec3& U0, const Vec3& U1, const Vec3& L0, const Vec3& L1) {
+        SkirtBacking out;
+        ensureFillIndex();
+        const double dx = static_cast<double>(U1.x) - U0.x, dz = static_cast<double>(U1.z) - U0.z, len = std::hypot(dx, dz);
+        if (len < 1e-6) return out;
+        const double nx = -dz / len, nz = dx / len;
+        const double span = std::max(std::abs(static_cast<double>(U0.y) - L0.y), std::abs(static_cast<double>(U1.y) - L1.y));
+        if (span < 1e-6) return out;
+        double step = std::max(0.1, 2.5 * P.fillTexel);
+        while ((len / step + 1) * (span / step + 1) > 2000) step *= 1.5;
+        const int na = std::max(1, static_cast<int>(std::ceil(len / step))), nb = std::max(1, static_cast<int>(std::ceil(span / step)));
+        const double lateral = 0.4 * step;   // how far sideways or up the backing surface's closest point may stand off a sample
+        int hits = 0;
+        bool band = true;
+        double bandTop = std::numeric_limits<double>::infinity();
+        for (int ia = 0; ia < na; ++ia) {
+            const double a = (ia + 0.5) / na;
+            const Vec3 up = U0 + (U1 - U0) * static_cast<float>(a), lo = L0 + (L1 - L0) * static_cast<float>(a);
+            int fromFoot = 0;   // backed rows counted up from the foot, until the first that is not
+            bool broken = false;
+            for (int ib = nb - 1; ib >= 0; --ib) {
+                const double b = (ib + 0.5) / nb;
+                const Vec3 q = up + (lo - up) * static_cast<float>(b);
+                strip_fill::TriangleIndex::Hit hit;
+                const bool found = fillIndex.closest(q, P.skirtBackedReach, [&](uint32_t t, const strip_fill::TriangleIndex::Hit& h) {
+                    if (removedBy[t] >= 0 || veg[t]) return false;
+                    if (std::abs(static_cast<double>(normal[t].x) * nx + static_cast<double>(normal[t].z) * nz) < P.fillNormalCos) return false;
+                    // not the hole edge itself: the surface point must stand off the edge segment
+                    const Vec3 &A = pos[idx[3 * t]], &B = pos[idx[3 * t + 1]], &C = pos[idx[3 * t + 2]];
+                    const Vec3 Q = A * static_cast<float>(h.w[0]) + B * static_cast<float>(h.w[1]) + C * static_cast<float>(h.w[2]);
+                    // straight behind the sample: not beside it along the skirt, not above or below it
+                    const double along = ((static_cast<double>(Q.x) - q.x) * dx + (static_cast<double>(Q.z) - q.z) * dz) / len;
+                    if (std::abs(along) > lateral || std::abs(static_cast<double>(Q.y) - q.y) > lateral) return false;
+                    return pointSegmentDistance(Q, U0, U1) > 0.1;
+                }, hit);
+                hits += found ? 1 : 0;
+                if (found && !broken) ++fromFoot;
+                else broken = true;
+            }
+            if (fromFoot == 0) band = false;
+            // the band's top in this column: the foot plus the backed rows' share of the column
+            bandTop = std::min(bandTop, static_cast<double>(lo.y) + (static_cast<double>(up.y) - lo.y) * (static_cast<double>(fromFoot) / nb));
+        }
+        out.share = static_cast<double>(hits) / static_cast<double>(na * nb);
+        out.band = band;
+        out.bandTopY = band ? bandTop : -std::numeric_limits<double>::infinity();
+        return out;
+    }
+
+    struct FillPiece {
+        bool cap{true};
+        std::vector<size_t> tris;          // the piece's triangles, indices into capTris / 3
+        std::vector<size_t> quads;         // skirt: skirtQuads indices of the run, in order
+        int crown{-1};
+        int category{3};
+        bool allowVegetation{false};
+        double u0{0}, v0{0};               // window origin: cap x, z; skirt s (arc along the run), y (the window's top)
+        int W{0}, H{0};
+        std::vector<double> sAt;           // skirt: arc length at each run vertex
+        std::vector<std::array<double, 2>> xz;
+        std::vector<double> yUp, yLow;     // skirt: upper and lower heights at each run vertex
+        strip_fill::Patch patch;
+        strip_fill::FillCounts counts;
+        double areaM2{0};
+        std::array<double, 3> centre{};
+        strip_fill::PackRect rect;
+        bool sourced{false};
+        bool widened{false};           // its real texels were found only with the widened surface tolerance
+    };
+    std::vector<FillPiece> fillPieces;
+    texture::ImageBuffer fillAtlas;
+    std::vector<uint8_t> fillAtlasPng;
+    std::vector<float> capTriUv;           // 6 floats per cap/skirt triangle (the atlas coordinates of its corners)
+    std::vector<uint8_t> capTriSourced;    // per cap/skirt triangle: its piece has real texels to carry (else generated flat)
+
+    /** Mean photo colour (sRGB 0..1) of kept, not-vegetation triangles chosen by `pick`, weighted by area; false when none. */
+    bool meanPhotoColour(const std::function<bool(size_t)>& pick, std::array<double, 3>& out) const {
+        double sum[3] = {0, 0, 0}, wsum = 0;
+        for (size_t t = 0; t < T; ++t) {
+            if (removedBy[t] >= 0 || veg[t] || std::isnan(triRgb[t][0]) || !pick(t)) continue;
+            for (int k = 0; k < 3; ++k) sum[k] += static_cast<double>(triRgb[t][static_cast<size_t>(k)]) * static_cast<double>(area[t]);
+            wsum += static_cast<double>(area[t]);
+        }
+        if (wsum <= 0) return false;
+        for (int k = 0; k < 3; ++k) {
+            const double lin = sum[k] / wsum;
+            out[static_cast<size_t>(k)] = lin <= 0.0031308 ? 12.92 * lin : 1.055 * std::pow(lin, 1.0 / 2.4) - 0.055;
+        }
+        return true;
+    }
+
+    /** Lays the cap and skirt pieces out, finds their real neighbours in the scan, fills the rest, and packs the atlas. */
+    void buildFill() {
+        auto& st = R.stats;
+        fillPieces.clear();
+        capTriUv.assign(capTris.size() / 3 * 6, 0.0f);
+        capTriSourced.assign(capTris.size() / 3, 0);
+        st.fillEnabled = P.fill;
+        st.fillCap = {};
+        st.fillSkirt = {};
+        st.fillDegradations.clear();
+        st.capAreaM2 = 0;
+        for (size_t k = 0; k < capIsSkirt.size(); ++k) {
+            const Vec3 &a = capPos[capTris[3 * k]], &b = capPos[capTris[3 * k + 1]], &c = capPos[capTris[3 * k + 2]];
+            if (!capIsSkirt[k]) st.capAreaM2 += 0.5 * static_cast<double>((b - a).cross(c - a).length());
+        }
+        if (!P.fill || capTris.empty()) return;
+        ensureFillIndex();
+        const double ctx = std::max(P.fillContext, 2.0 * P.fillTexel);
+
+        // ---- pieces: a cap is a connected set of cap triangles, a skirt is a run of consecutive skirt segments
+        {
+            const size_t nCap = capPos.size();
+            std::vector<uint32_t> parent(nCap);
+            for (size_t i = 0; i < nCap; ++i) parent[i] = static_cast<uint32_t>(i);
+            std::function<uint32_t(uint32_t)> find = [&](uint32_t x) { while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+            for (size_t k = 0; k < capIsSkirt.size(); ++k) {
+                if (capIsSkirt[k]) continue;
+                const uint32_t a = find(capTris[3 * k]), b = find(capTris[3 * k + 1]), c = find(capTris[3 * k + 2]);
+                parent[b] = a;
+                parent[find(c)] = a;
+            }
+            std::map<uint32_t, size_t> pieceOf;
+            for (size_t k = 0; k < capIsSkirt.size(); ++k) {
+                if (capIsSkirt[k]) continue;
+                const uint32_t root = find(capTris[3 * k]);
+                auto it = pieceOf.find(root);
+                if (it == pieceOf.end()) {
+                    it = pieceOf.emplace(root, fillPieces.size()).first;
+                    FillPiece pc;
+                    pc.cap = true;
+                    pc.crown = capTriCrown[k];
+                    fillPieces.push_back(std::move(pc));
+                }
+                fillPieces[it->second].tris.push_back(k);
+            }
+            for (size_t qi = 0; qi < skirtQuads.size();) {
+                size_t qj = qi + 1;
+                while (qj < skirtQuads.size() && skirtQuads[qj].loop == skirtQuads[qi].loop && skirtQuads[qj].category == skirtQuads[qi].category &&
+                       skirtQuads[qj].upperI == skirtQuads[qj - 1].upperN && skirtQuads[qj].lowerI == skirtQuads[qj - 1].lowerN) ++qj;
+                FillPiece pc;
+                pc.cap = false;
+                pc.crown = skirtQuads[qi].crown;
+                pc.category = skirtQuads[qi].category;
+                pc.allowVegetation = pc.category == 2;
+                const size_t run = fillPieces.size();
+                for (size_t q = qi; q < qj; ++q) {
+                    pc.quads.push_back(q);
+                    skirtQuads[q].run = static_cast<long>(run);
+                    skirtQuads[q].runVertex = static_cast<int>(q - qi);
+                }
+                auto pushVertex = [&](uint32_t upper, uint32_t lower) {
+                    const Vec3& u = capPos[upper];
+                    if (pc.sAt.empty()) pc.sAt.push_back(0.0);
+                    else pc.sAt.push_back(pc.sAt.back() + std::hypot(static_cast<double>(u.x) - pc.xz.back()[0], static_cast<double>(u.z) - pc.xz.back()[1]));
+                    pc.xz.push_back({static_cast<double>(u.x), static_cast<double>(u.z)});
+                    pc.yUp.push_back(static_cast<double>(u.y));
+                    pc.yLow.push_back(static_cast<double>(capPos[lower].y));
+                };
+                for (size_t q = qi; q < qj; ++q) pushVertex(skirtQuads[q].upperI, skirtQuads[q].lowerI);
+                pushVertex(skirtQuads[qj - 1].upperN, skirtQuads[qj - 1].lowerN);
+                fillPieces.push_back(std::move(pc));
+                qi = qj;
+            }
+            for (size_t k = 0; k < capIsSkirt.size(); ++k) {
+                if (capIsSkirt[k]) fillPieces[static_cast<size_t>(skirtQuads[skirtTriQuad[k]].run)].tris.push_back(k);
+            }
+        }
+
+        // ---- windows: each piece's bounding frame plus the context, at one texel size that keeps the atlas within its limit
+        const int gutter = 2;
+        const int maxPx = std::max(256, P.fillAtlasMaxPx);
+        double ts = P.fillTexel;
+        int atlasW = 0, atlasH = 0;
+        for (int attempt = 0; attempt < 64; ++attempt) {
+            double texelsTotal = 0;
+            std::vector<strip_fill::PackRect> rects(fillPieces.size());
+            for (size_t i = 0; i < fillPieces.size(); ++i) {
+                FillPiece& pc = fillPieces[i];
+                if (pc.cap) {
+                    double lo0 = 1e30, hi0 = -1e30, lo1 = 1e30, hi1 = -1e30;
+                    for (size_t k : pc.tris) {
+                        for (int j = 0; j < 3; ++j) {
+                            const Vec3& p = capPos[capTris[3 * k + static_cast<size_t>(j)]];
+                            lo0 = std::min(lo0, static_cast<double>(p.x)); hi0 = std::max(hi0, static_cast<double>(p.x));
+                            lo1 = std::min(lo1, static_cast<double>(p.z)); hi1 = std::max(hi1, static_cast<double>(p.z));
+                        }
+                    }
+                    pc.u0 = lo0 - ctx;
+                    pc.v0 = lo1 - ctx;
+                    pc.W = std::max(1, static_cast<int>(std::ceil((hi0 - lo0 + 2 * ctx) / ts)));
+                    pc.H = std::max(1, static_cast<int>(std::ceil((hi1 - lo1 + 2 * ctx) / ts)));
+                } else {
+                    double ylo = 1e30, yhi = -1e30;
+                    for (size_t j = 0; j < pc.sAt.size(); ++j) { ylo = std::min({ylo, pc.yUp[j], pc.yLow[j]}); yhi = std::max({yhi, pc.yUp[j], pc.yLow[j]}); }
+                    pc.u0 = -ctx;
+                    pc.v0 = yhi + ctx;
+                    pc.W = std::max(1, static_cast<int>(std::ceil((pc.sAt.back() + 2 * ctx) / ts)));
+                    pc.H = std::max(1, static_cast<int>(std::ceil((yhi - ylo + ctx) / ts)));
+                }
+                rects[i].w = pc.W;
+                rects[i].h = pc.H;
+                texelsTotal += double(pc.W + 2 * gutter) * double(pc.H + 2 * gutter);
+            }
+            int w = 256;
+            while (w < maxPx && double(w) * double(w) < texelsTotal * 1.25) w *= 2;
+            const int h = strip_fill::shelfPack(rects, w, gutter);
+            if (h <= maxPx) {
+                for (size_t i = 0; i < fillPieces.size(); ++i) fillPieces[i].rect = rects[i];
+                atlasW = w;
+                atlasH = h;
+                break;
+            }
+            ts *= 1.2;
+            if (attempt == 63) throw VegetationError("failed", "the fill of the strip's caps and skirts does not fit an atlas of " + std::to_string(maxPx) + " px");
+        }
+        st.fillTexelM = ts;
+        st.fillAtlasW = atlasW;
+        st.fillAtlasH = atlasH;
+
+        // ---- colours for pieces with no real neighbour at all (generated, and said so)
+        std::array<double, 3> capGenerated{0.5, 0.5, 0.5}, skirtGenerated{0.5, 0.5, 0.5};
+        {
+            std::array<double, 3> all{0.5, 0.5, 0.5};
+            const bool haveAll = meanPhotoColour([](size_t) { return true; }, all);
+            if (!meanPhotoColour([&](size_t t) { return normal[t].y >= 0.7f; }, capGenerated)) capGenerated = all;
+            if (!meanPhotoColour([&](size_t t) { return std::abs(normal[t].y) < 0.5f && isArchitecture(t); }, skirtGenerated)) skirtGenerated = all;
+            if (!haveAll) st.fillDegradations.push_back({"no_photo_colour", "tile", "the tile has no photographed kept triangle to take a colour from: pieces with no real neighbour are mid grey", 0.0, {0, 0, 0}});
+            for (int k = 0; k < 3; ++k) st.fillGeneratedColourRgb[k] = capGenerated[static_cast<size_t>(k)];
+        }
+
+        // ---- raster each piece, find its real texels in the scan, carry the rest
+        for (FillPiece& pc : fillPieces) {
+            strip_fill::Patch& pt = pc.patch;
+            pt.init(pc.W, pc.H, ts);
+            auto rasterTri = [&](double ax, double ay, double bx, double by, double cx, double cy) {
+                const double d = (bx - ax) * (cy - ay) - (cx - ax) * (by - ay);
+                if (std::abs(d) < 1e-12) return;
+                const int i0 = std::max(0, static_cast<int>(std::floor(std::min({ax, bx, cx}) - 0.5))), i1 = std::min(pt.W - 1, static_cast<int>(std::ceil(std::max({ax, bx, cx}))));
+                const int k0 = std::max(0, static_cast<int>(std::floor(std::min({ay, by, cy}) - 0.5))), k1 = std::min(pt.H - 1, static_cast<int>(std::ceil(std::max({ay, by, cy}))));
+                for (int k = k0; k <= k1; ++k) {
+                    for (int i = i0; i <= i1; ++i) {
+                        const double x = i + 0.5, y = k + 0.5;
+                        const double w1 = ((x - ax) * (cy - ay) - (cx - ax) * (y - ay)) / d, w2 = ((bx - ax) * (y - ay) - (x - ax) * (by - ay)) / d;
+                        if (w1 >= -1e-9 && w2 >= -1e-9 && 1 - w1 - w2 >= -1e-9) pt.target[static_cast<size_t>(k) * static_cast<size_t>(pt.W) + static_cast<size_t>(i)] = 1;
+                    }
+                }
+            };
+            std::array<double, 3> sum{0, 0, 0};
+            for (size_t k : pc.tris) {
+                const Vec3 &a = capPos[capTris[3 * k]], &b = capPos[capTris[3 * k + 1]], &c = capPos[capTris[3 * k + 2]];
+                sum = {sum[0] + (a.x + b.x + c.x) / 3, sum[1] + (a.y + b.y + c.y) / 3, sum[2] + (a.z + b.z + c.z) / 3};
+                if (pc.cap) {
+                    rasterTri((a.x - pc.u0) / ts, (a.z - pc.v0) / ts, (b.x - pc.u0) / ts, (b.z - pc.v0) / ts, (c.x - pc.u0) / ts, (c.z - pc.v0) / ts);
+                    pc.areaM2 += 0.5 * static_cast<double>((b - a).cross(c - a).length());
+                }
+            }
+            if (!pc.cap) {
+                for (size_t j = 0; j + 1 < pc.sAt.size(); ++j) {
+                    const double sI = (pc.sAt[j] - pc.u0) / ts, sN = (pc.sAt[j + 1] - pc.u0) / ts;
+                    const double uI = (pc.v0 - pc.yUp[j]) / ts, uN = (pc.v0 - pc.yUp[j + 1]) / ts, lI = (pc.v0 - pc.yLow[j]) / ts, lN = (pc.v0 - pc.yLow[j + 1]) / ts;
+                    rasterTri(sI, uI, sN, uN, sN, lN);
+                    rasterTri(sI, uI, sN, lN, sI, lI);
+                }
+                for (size_t q : pc.quads) pc.areaM2 += skirtQuads[q].areaM2;
+            }
+            if (!pc.tris.empty()) pc.centre = {sum[0] / static_cast<double>(pc.tris.size()), sum[1] / static_cast<double>(pc.tris.size()), sum[2] / static_cast<double>(pc.tris.size())};
+
+            // the texels to ask the scan about: every texel within the context of the piece
+            const int rad = std::max(1, static_cast<int>(std::ceil(ctx / ts)));
+            std::vector<uint8_t> wanted(pt.texels(), 0), tmp(pt.texels(), 0);
+            for (int k = 0; k < pt.H; ++k) {
+                int last = -1000000;
+                for (int i = 0; i < pt.W; ++i) { if (pt.target[static_cast<size_t>(k) * pt.W + i]) last = i; if (i - last <= rad) tmp[static_cast<size_t>(k) * pt.W + i] = 1; }
+                last = 1000000;
+                for (int i = pt.W - 1; i >= 0; --i) { if (pt.target[static_cast<size_t>(k) * pt.W + i]) last = i; if (last - i <= rad) tmp[static_cast<size_t>(k) * pt.W + i] = 1; }
+            }
+            for (int i = 0; i < pt.W; ++i) {
+                int last = -1000000;
+                for (int k = 0; k < pt.H; ++k) { if (tmp[static_cast<size_t>(k) * pt.W + i]) last = k; if (k - last <= rad) wanted[static_cast<size_t>(k) * pt.W + i] = 1; }
+                last = 1000000;
+                for (int k = pt.H - 1; k >= 0; --k) { if (tmp[static_cast<size_t>(k) * pt.W + i]) last = k; if (last - k <= rad) wanted[static_cast<size_t>(k) * pt.W + i] = 1; }
+            }
+            std::vector<uint32_t> query;
+            for (size_t i = 0; i < wanted.size(); ++i) if (wanted[i]) query.push_back(static_cast<uint32_t>(i));
+
+            // skirt: where on the run's polyline a texel's arc length falls
+            auto segmentAt = [&](double s) {
+                size_t j = 0;
+                while (j + 2 < pc.sAt.size() && s > pc.sAt[j + 1]) ++j;
+                return j;
+            };
+            auto realAt = [&](uint32_t texelIndex, double surfaceTol) {
+                const int col = static_cast<int>(texelIndex % static_cast<uint32_t>(pt.W)), row = static_cast<int>(texelIndex / static_cast<uint32_t>(pt.W));
+                Vec3 q;
+                double nx = 0, nz = 0;  // skirt: the horizontal normal of the run's segment
+                const double u = pc.u0 + (col + 0.5) * ts;
+                if (pc.cap) {
+                    const double z = pc.v0 + (row + 0.5) * ts;
+                    q = Vec3(static_cast<float>(u), static_cast<float>(capHeight(pc.crown, u, z)), static_cast<float>(z));
+                } else {
+                    const double y = pc.v0 - (row + 0.5) * ts;
+                    const size_t j = segmentAt(u);
+                    const double segLen = std::max(1e-9, pc.sAt[j + 1] - pc.sAt[j]);
+                    const double t = (u - pc.sAt[j]) / segLen;  // beyond the run's ends the end segments continue straight
+                    const double x = pc.xz[j][0] + (pc.xz[j + 1][0] - pc.xz[j][0]) * t, z = pc.xz[j][1] + (pc.xz[j + 1][1] - pc.xz[j][1]) * t;
+                    nx = -(pc.xz[j + 1][1] - pc.xz[j][1]) / segLen;
+                    nz = (pc.xz[j + 1][0] - pc.xz[j][0]) / segLen;
+                    q = Vec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+                }
+                strip_fill::TriangleIndex::Hit hit;
+                strip_fill::Rgb8 out;
+                const bool found = fillIndex.closest(q, surfaceTol, [&](uint32_t t, const strip_fill::TriangleIndex::Hit&) {
+                    if (removedBy[t] >= 0 || (veg[t] && !pc.allowVegetation)) return false;
+                    if (pc.cap) return std::abs(static_cast<double>(normal[t].y)) >= P.fillNormalCos;
+                    return std::abs(static_cast<double>(normal[t].x) * nx + static_cast<double>(normal[t].z) * nz) >= P.fillNormalCos;
+                }, hit);
+                if (!found) return std::make_pair(false, out);
+                double rgb[3];
+                photoAt(hit.tri, hit.w, rgb);
+                if (!pc.allowVegetation && vegetationColour(rgb)) return std::make_pair(false, out);
+                out.r = static_cast<uint8_t>(std::clamp(rgb[0] + 0.5, 0.0, 255.0));
+                out.g = static_cast<uint8_t>(std::clamp(rgb[1] + 0.5, 0.0, 255.0));
+                out.b = static_cast<uint8_t>(std::clamp(rgb[2] + 0.5, 0.0, 255.0));
+                return std::make_pair(true, out);
+            };
+            auto findReal = [&](double surfaceTol) {
+                std::atomic<size_t> found{0};
+                detail::parallelFor(query.size(), P.threads, [&](size_t lo, size_t hi, int) {
+                    size_t n = 0;
+                    for (size_t i = lo; i < hi; ++i) {
+                        const auto r = realAt(query[i], surfaceTol);
+                        if (r.first) { pt.real[query[i]] = 1; pt.rgb[query[i]] = r.second; ++n; }
+                    }
+                    found += n;
+                });
+                return found.load();
+            };
+            // a piece standing off every facing surface around it (a cap on a raised level whose ring is lower, a
+            // skirt beside a wall set back) is read again with a wider surface tolerance before it is given up:
+            // texels from further off, at half the confidence, said so
+            const double widenedTol = std::max(4.0 * P.fillSurfaceTol, 2.0);
+            if (findReal(P.fillSurfaceTol) == 0 && findReal(widenedTol) > 0) pc.widened = true;
+            pc.counts = strip_fill::fillFromNearest(pt, P.fillConfidenceScale);
+            if (pc.widened) {
+                pc.counts.confidenceSum *= 0.5;
+                st.fillDegradations.push_back({"widened_surface_tolerance", pc.cap ? "cap" : "skirt",
+                    std::string("no kept photographed surface facing the same way lies within ") + json::num(P.fillSurfaceTol) + " m of this " + (pc.cap ? "cap" : "skirt") +
+                    ": its texels are read from such surfaces up to " + json::num(widenedTol) + " m off (a lower or higher level around it), at half the confidence",
+                    pc.areaM2, pc.centre});
+            }
+            pc.sourced = pc.counts.sourced();
+            if (!pc.sourced) {
+                const auto& g = pc.cap ? capGenerated : skirtGenerated;
+                strip_fill::Rgb8 c;
+                c.r = static_cast<uint8_t>(std::clamp(g[0] * 255.0 + 0.5, 0.0, 255.0));
+                c.g = static_cast<uint8_t>(std::clamp(g[1] * 255.0 + 0.5, 0.0, 255.0));
+                c.b = static_cast<uint8_t>(std::clamp(g[2] * 255.0 + 0.5, 0.0, 255.0));
+                std::fill(pt.rgb.begin(), pt.rgb.end(), c);
+                st.fillDegradations.push_back({"no_real_neighbour", pc.cap ? "cap" : "skirt",
+                    std::string("no kept photographed surface facing the same way lies within ") + json::num(ctx) + " m of this " + (pc.cap ? "cap" : "skirt") +
+                    ": its texels are the tile's mean photo colour of such surfaces (generated, not sampled from the scan)",
+                    pc.areaM2, pc.centre});
+            }
+            auto& kind = pc.cap ? st.fillCap : st.fillSkirt;
+            ++kind.pieces;
+            kind.areaM2 += pc.areaM2;
+            kind.counts.targetTexels += pc.counts.targetTexels;
+            kind.counts.realTexels += pc.counts.realTexels;
+            kind.counts.carriedTexels += pc.counts.carriedTexels;
+            kind.counts.unsourcedTexels += pc.counts.unsourcedTexels;
+            kind.counts.carriedSumM += pc.counts.carriedSumM;
+            kind.counts.carriedMaxM = std::max(kind.counts.carriedMaxM, pc.counts.carriedMaxM);
+            kind.counts.confidenceSum += pc.counts.confidenceSum;
+            if (!pc.sourced) { ++kind.piecesUnsourced; kind.areaUnsourcedM2 += pc.areaM2; }
+            if (pc.widened) { ++kind.piecesWidened; kind.areaWidenedM2 += pc.areaM2; }
+        }
+
+        // ---- the atlas and the corners' coordinates
+        fillAtlas = texture::ImageBuffer(atlasW, atlasH, 3, 0);
+        for (int y = 0; y < atlasH; ++y) {
+            for (int x = 0; x < atlasW; ++x) {
+                const size_t o = fillAtlas.getIndex(x, y);
+                fillAtlas.data[o] = static_cast<uint8_t>(std::clamp(capGenerated[0] * 255.0, 0.0, 255.0));
+                fillAtlas.data[o + 1] = static_cast<uint8_t>(std::clamp(capGenerated[1] * 255.0, 0.0, 255.0));
+                fillAtlas.data[o + 2] = static_cast<uint8_t>(std::clamp(capGenerated[2] * 255.0, 0.0, 255.0));
+            }
+        }
+        for (const FillPiece& pc : fillPieces) {
+            const strip_fill::Patch& pt = pc.patch;
+            for (int y = -gutter; y < pt.H + gutter; ++y) {
+                for (int x = -gutter; x < pt.W + gutter; ++x) {
+                    const int sx = std::clamp(x, 0, pt.W - 1), sy = std::clamp(y, 0, pt.H - 1);
+                    const strip_fill::Rgb8 c = pt.rgb[static_cast<size_t>(sy) * static_cast<size_t>(pt.W) + static_cast<size_t>(sx)];
+                    const size_t o = fillAtlas.getIndex(pc.rect.x + x, pc.rect.y + y);
+                    fillAtlas.data[o] = c.r; fillAtlas.data[o + 1] = c.g; fillAtlas.data[o + 2] = c.b;
+                }
+            }
+        }
+        auto setUv = [&](size_t tri, int corner, const FillPiece& pc, double col, double row) {
+            capTriUv[6 * tri + 2 * static_cast<size_t>(corner)] = static_cast<float>((pc.rect.x + col) / atlasW);
+            capTriUv[6 * tri + 2 * static_cast<size_t>(corner) + 1] = static_cast<float>((pc.rect.y + row) / atlasH);
+        };
+        for (const FillPiece& pc : fillPieces) {
+            for (size_t k : pc.tris) {
+                capTriSourced[k] = pc.sourced ? 1 : 0;
+                for (int j = 0; j < 3; ++j) {
+                    const uint32_t id = capTris[3 * k + static_cast<size_t>(j)];
+                    const Vec3& p = capPos[id];
+                    if (pc.cap) { setUv(k, j, pc, (p.x - pc.u0) / ts, (p.z - pc.v0) / ts); continue; }
+                    const SkirtQuad& q = skirtQuads[skirtTriQuad[k]];
+                    const size_t jv = static_cast<size_t>(q.runVertex);
+                    const bool atI = id == q.upperI || id == q.lowerI;
+                    setUv(k, j, pc, (pc.sAt[atI ? jv : jv + 1] - pc.u0) / ts, (pc.v0 - p.y) / ts);
+                }
+            }
+        }
+        fillAtlasPng = png::encode(fillAtlas, 6);
+        if (fillAtlasPng.empty()) throw VegetationError("failed", "the fill atlas could not be encoded as PNG");
+        st.fillPngBytes = fillAtlasPng.size();
     }
 
     // ---------------------------------------------------------------- output
@@ -3738,17 +4602,22 @@ private:
                 pr.i.push_back(it->second);
             }
         }
-        // cap (ground or roof where a tree stood) and skirt (vertical, along the hole edges) primitives: flat-shaded corners
-        Prim cap, skirt;
+        // cap (ground or roof where a tree stood) and skirt (vertical, along the hole edges) primitives: flat-shaded corners.
+        // With fill, their texels come from the atlas, and pieces with no real neighbour at all are kept apart (generated).
+        Prim cap, skirt, capGenerated, skirtGenerated;
         for (size_t k = 0; k < capTris.size() / 3; ++k) {
-            Prim& pr = capIsSkirt[k] ? skirt : cap;
+            const bool generated = P.fill && !capTriSourced[k];
+            Prim& pr = capIsSkirt[k] ? (generated ? skirtGenerated : skirt) : (generated ? capGenerated : cap);
             const Vec3 &a = capPos[capTris[3 * k]], &b = capPos[capTris[3 * k + 1]], &c = capPos[capTris[3 * k + 2]];
             Vec3 n = (b - a).cross(c - a);
             n = n.lengthSquared() > 1e-20f ? n.normalized() : Vec3(0, 1, 0);
+            int corner = 0;
             for (const Vec3* p : {&a, &b, &c}) {
                 pr.p.insert(pr.p.end(), {p->x, p->y, p->z});
                 pr.n.insert(pr.n.end(), {n.x, n.y, n.z});
-                pr.uv.insert(pr.uv.end(), {0.0f, 0.0f});
+                if (P.fill) pr.uv.insert(pr.uv.end(), {capTriUv[6 * k + 2 * static_cast<size_t>(corner)], capTriUv[6 * k + 2 * static_cast<size_t>(corner) + 1]});
+                else pr.uv.insert(pr.uv.end(), {0.0f, 0.0f});
+                ++corner;
                 pr.i.push_back(static_cast<uint32_t>(pr.p.size() / 3 - 1));
             }
         }
@@ -3775,19 +4644,77 @@ private:
             materials.push_back(s + "}");
         }
         if (materials.empty()) materials.push_back("{\"pbrMetallicRoughness\":{\"metallicFactor\":0,\"roughnessFactor\":1}}");
+        // the legacy flat clay of caps and skirts (fill off)
         const size_t capMaterial = materials.size();
-        materials.push_back("{\"name\":\"VegetationRemovedCap\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[0.55,0.57,0.6,1],\"metallicFactor\":0,\"roughnessFactor\":0.85}}");
-        auto addPrim = [&](Prim& pr, size_t material, const std::string& name) {
+        if (!P.fill) materials.push_back("{\"name\":\"VegetationRemovedCap\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[0.55,0.57,0.6,1],\"metallicFactor\":0,\"roughnessFactor\":0.85}}");
+        // the fill atlas: a texture of its own, laid like the tile's own materials (the one most of the kept tile uses)
+        if (P.fill) {
+            size_t proto = 0;
+            for (size_t mi = 1; mi < M; ++mi) if (prims[mi].i.size() > prims[proto].i.size()) proto = mi;
+            const gltf::SceneMaterial protoMat = proto < scene.materials.size() ? scene.materials[proto] : gltf::SceneMaterial{};
+            const int view = gb.addView(fillAtlasPng.data(), fillAtlasPng.size(), 0);
+            images.push_back("{\"mimeType\":\"image/png\",\"bufferView\":" + std::to_string(view) + "}");
+            samplers.push_back("{\"magFilter\":9729,\"minFilter\":9729,\"wrapS\":33071,\"wrapT\":33071}");
+            textures.push_back("{\"source\":" + std::to_string(images.size() - 1) + ",\"sampler\":" + std::to_string(samplers.size() - 1) + "}");
+            std::string s = "{\"name\":\"VegetationFill\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,1,1,1],\"baseColorTexture\":{\"index\":" + std::to_string(textures.size() - 1) +
+                            "},\"metallicFactor\":" + json::num(protoMat.metallicFactor) + ",\"roughnessFactor\":" + json::num(protoMat.roughnessFactor) + "}";
+            if (protoMat.doubleSided) s += ",\"doubleSided\":true";
+            if (protoMat.unlit) { s += ",\"extensions\":{\"KHR_materials_unlit\":{}}"; anyUnlit = true; }
+            s += ",\"extras\":{\"scratchbox\":{\"photoInferredFill\":true}}}";
+            materials.push_back(s);
+        }
+        const size_t fillMaterial = materials.size() - 1;
+        // provenance of a fill primitive: what its pieces were sourced from, with the confidence the carry distance leaves
+        auto fillExtras = [&](bool isCap, bool sourced) -> std::string {
+            if (!P.fill) return std::string();
+            strip_fill::FillCounts fc;
+            size_t pieces = 0, widened = 0;
+            double areaM2 = 0;
+            for (const auto& pc : fillPieces) {
+                if (pc.cap != isCap || pc.sourced != sourced) continue;
+                ++pieces;
+                if (pc.widened) ++widened;
+                areaM2 += pc.areaM2;
+                fc.targetTexels += pc.counts.targetTexels; fc.realTexels += pc.counts.realTexels; fc.carriedTexels += pc.counts.carriedTexels;
+                fc.unsourcedTexels += pc.counts.unsourcedTexels; fc.carriedSumM += pc.counts.carriedSumM; fc.carriedMaxM = std::max(fc.carriedMaxM, pc.counts.carriedMaxM);
+                fc.confidenceSum += pc.counts.confidenceSum;
+            }
+            staged_glb::Provenance pv;
+            pv.measuredGeometry = false;
+            pv.sources.push_back({"tile-extraction", isCap ? "hole-ring" : "hole-edge-surface", "tile_vegetation strip"});
+            if (sourced) {
+                pv.label = "photo-inferred";
+                pv.confidence = fc.meanConfidence();
+                pv.method = isCap ? "the ground or roof under a removed tree: texels sampled from the kept scan's own photo of the surface around the hole (nadir), carried across it from the nearest real texel"
+                                  : "the wall or side a removed tree hid: texels sampled from the kept scan's own photo of the surface the skirt continues, carried down from the nearest real texel";
+                pv.note = std::to_string(fc.realTexels) + " texels with a real photo of their own, " + std::to_string(fc.carriedTexels) + " carried (mean " + json::num(fc.meanCarriedM()) +
+                          " m, at most " + json::num(fc.carriedMaxM) + " m from a real texel; confidence exp(-d / " + json::num(P.fillConfidenceScale) + " m))" +
+                          (widened ? "; " + std::to_string(widened) + " of " + std::to_string(pieces) + " pieces read from surfaces up to " + json::num(std::max(4.0 * P.fillSurfaceTol, 2.0)) + " m off their own level, at half the confidence" : "");
+            } else {
+                pv.label = "generated";
+                pv.confidence = 0.0;
+                pv.method = "no kept photographed surface facing the same way lies near: the tile's mean photo colour of such surfaces, not sampled from the surface itself";
+                pv.note = std::to_string(pieces) + " pieces with no real neighbour";
+            }
+            std::string e = "{\"scratchbox\":{\"stripFill\":{\"kind\":" + json::str(isCap ? "cap" : "skirt") + ",\"pieces\":" + std::to_string(pieces) + ",\"areaM2\":" + json::num(areaM2) +
+                            ",\"texels\":{\"target\":" + std::to_string(fc.targetTexels) + ",\"real\":" + std::to_string(fc.realTexels) + ",\"carried\":" + std::to_string(fc.carriedTexels) +
+                            ",\"unsourced\":" + std::to_string(fc.unsourcedTexels) + "},\"texelM\":" + json::num(R.stats.fillTexelM) + ",\"provenance\":" + pv.toJson() + "}}}";
+            return e;
+        };
+        auto addPrim = [&](Prim& pr, size_t material, const std::string& name, const std::string& extras = std::string()) {
             if (pr.i.empty()) return;
             const int aP = gb.addFloatAccessor(pr.p, 3, true), aN = gb.addFloatAccessor(pr.n, 3, false), aUV = gb.addFloatAccessor(pr.uv, 2, false), aI = gb.addIndexAccessor(pr.i);
             meshes.push_back("{\"name\":" + json::str(name) + ",\"primitives\":[{\"attributes\":{\"POSITION\":" + std::to_string(aP) + ",\"NORMAL\":" + std::to_string(aN) +
                              ",\"TEXCOORD_0\":" + std::to_string(aUV) + "},\"indices\":" + std::to_string(aI) + ",\"material\":" + std::to_string(material) + ",\"mode\":4}]}");
-            nodes.push_back("{\"name\":" + json::str(name) + ",\"mesh\":" + std::to_string(meshes.size() - 1) + "}");
+            nodes.push_back("{\"name\":" + json::str(name) + ",\"mesh\":" + std::to_string(meshes.size() - 1) + (extras.empty() ? std::string() : ",\"extras\":" + extras) + "}");
             children.push_back(std::to_string(nodes.size()));
         };
         for (size_t mi = 0; mi < M; ++mi) addPrim(prims[mi], mi, "tile_m" + std::to_string(mi));
-        addPrim(cap, capMaterial, "vegetation_removed_cap");
-        addPrim(skirt, capMaterial, "vegetation_removed_skirt");
+        const size_t stripMaterial = P.fill ? fillMaterial : capMaterial;
+        addPrim(cap, stripMaterial, "vegetation_removed_cap", fillExtras(true, true));
+        addPrim(skirt, stripMaterial, "vegetation_removed_skirt", fillExtras(false, true));
+        addPrim(capGenerated, stripMaterial, "vegetation_removed_cap_generated", fillExtras(true, false));
+        addPrim(skirtGenerated, stripMaterial, "vegetation_removed_skirt_generated", fillExtras(false, false));
         std::string j = "{\"asset\":{\"version\":\"2.0\",\"generator\":\"Scratchbox tile_vegetation strip\"},";
         if (anyUnlit) j += "\"extensionsUsed\":[\"KHR_materials_unlit\"],";
         j += "\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"name\":\"devegetated_tile\",\"children\":[" + detail::GlbBuilder::join(children) + "]}";
@@ -3928,6 +4855,19 @@ inline std::string crownsJson(const StripResult& r, const StripParams& P) {
             // kept as scanned, its side over rebuilt ground closed down to it: not in the scan
             s << ",\"keptSkirt\":{\"areaM2\":" << json::num(c.keptSkirtAreaM2) << ",\"topY\":" << json::num(c.keptSkirtTopY) << ",\"bottomY\":" << json::num(c.keptSkirtBottomY) << "}";
         }
+        if (!c.walls.empty()) {
+            // the scanned walls the removed crown touched (measured: kept wall triangles beside its removed triangles,
+            // by plane): plant grows the tree on the crown's side of each
+            s << ",\"walls\":[";
+            for (size_t w = 0; w < c.walls.size(); ++w) {
+                const auto& cw = c.walls[w];
+                s << (w ? "," : "") << "{\"point\":[" << json::num(cw.point.x) << "," << json::num(cw.point.y) << "," << json::num(cw.point.z) << "],\"normal\":["
+                  << json::num(cw.normal.x) << "," << json::num(cw.normal.y) << "," << json::num(cw.normal.z) << "],\"tangent\":["
+                  << json::num(cw.tangent.x) << "," << json::num(cw.tangent.y) << "," << json::num(cw.tangent.z) << "],\"halfAlongM\":" << json::num(cw.halfAlongM)
+                  << ",\"halfUpM\":" << json::num(cw.halfUpM) << ",\"areaM2\":" << json::num(cw.areaM2) << "}";
+            }
+            s << "]";
+        }
         if (c.colourKnown) {
             // measured in the tile's photo (linear sRGB): see measureCrownColour
             s << ",\"colour\":{\"meanLinearRgb\":[" << json::num(c.colourMean[0]) << "," << json::num(c.colourMean[1]) << "," << json::num(c.colourMean[2])
@@ -3958,6 +4898,44 @@ inline std::string stripStatsJson(const StripResult& r) {
       << "}, \"maxHeightM\": " << json::num(st.skirtMaxHeightM) << ", \"maxHeightByHangM\": {\"onWalls\": " << json::num(st.skirtMaxOnWallsM)
       << ", \"onLevelSurfaces\": " << json::num(st.skirtMaxOnLevelSurfacesM) << ", \"onKeptCanopy\": " << json::num(st.skirtMaxOnKeptCanopyM)
       << ", \"onOther\": " << json::num(st.skirtMaxOnOtherM) << "}},\n";
+    {
+        // what each category of skirt did: built, or not built because the real scan has the surface behind it
+        auto decision = [&](const char* name, size_t k, bool last) {
+            s << "\"" << name << "\": {\"kept\": {\"count\": " << st.skirtKept[k].count << ", \"areaM2\": " << json::num(st.skirtKept[k].areaM2) << "}, \"shortened\": {\"count\": "
+              << st.skirtShortened[k].count << ", \"areaRemovedM2\": " << json::num(st.skirtShortened[k].areaM2) << "}, \"dropped\": {\"count\": "
+              << st.skirtDropped[k].count << ", \"areaM2\": " << json::num(st.skirtDropped[k].areaM2) << "}}" << (last ? "" : ", ");
+        };
+        s << "  \"skirtDecisions\": {";
+        decision("onWalls", 0, false);
+        decision("onLevelSurfaces", 1, false);
+        decision("onKeptCanopy", 2, false);
+        decision("onOther", 3, true);
+        s << ", \"openEdgesAtDroppedSkirts\": " << st.openEdgesAtDroppedSkirts << "},\n";
+        auto kind = [&](const char* name, const StripStats::FillKind& k, bool last) {
+            s << "\"" << name << "\": {\"pieces\": " << k.pieces << ", \"piecesGenerated\": " << k.piecesUnsourced << ", \"piecesWidened\": " << k.piecesWidened << ", \"areaM2\": " << json::num(k.areaM2) << ", \"generatedAreaM2\": " << json::num(k.areaUnsourcedM2) << ", \"widenedAreaM2\": " << json::num(k.areaWidenedM2)
+              << ", \"texels\": {\"target\": " << k.counts.targetTexels << ", \"real\": " << k.counts.realTexels << ", \"carried\": " << k.counts.carriedTexels << ", \"generated\": " << k.counts.unsourcedTexels
+              << "}, \"meanCarriedM\": " << json::num(k.counts.meanCarriedM()) << ", \"maxCarriedM\": " << json::num(k.counts.carriedMaxM) << ", \"meanConfidence\": " << json::num(k.counts.meanConfidence()) << "}" << (last ? "" : ", ");
+        };
+        const double capClay = st.fillEnabled ? 0.0 : st.capAreaM2;
+        const double skirtClay = st.fillEnabled ? 0.0 : st.skirtAreaOnWallsM2 + st.skirtAreaOnLevelSurfacesM2 + st.skirtAreaOnKeptCanopyM2 + st.skirtAreaOnOtherM2;
+        s << "  \"fill\": {\"enabled\": " << (st.fillEnabled ? "true" : "false") << ", \"texelM\": " << json::num(st.fillTexelM) << ", \"atlas\": {\"width\": " << st.fillAtlasW << ", \"height\": " << st.fillAtlasH
+          << ", \"pngBytes\": " << st.fillPngBytes << "}, \"capAreaM2\": " << json::num(st.capAreaM2) << ", \"clayAreaM2\": {\"cap\": " << json::num(capClay) << ", \"skirt\": " << json::num(skirtClay) << "}, ";
+        kind("cap", st.fillCap, false);
+        kind("skirt", st.fillSkirt, false);
+        s << "\"generatedColourSrgb\": [" << json::num(st.fillGeneratedColourRgb[0]) << ", " << json::num(st.fillGeneratedColourRgb[1]) << ", " << json::num(st.fillGeneratedColourRgb[2]) << "], \"degradations\": [";
+        for (size_t i = 0; i < st.fillDegradations.size(); ++i) {
+            const auto& d = st.fillDegradations[i];
+            s << (i ? ", " : "") << "{\"code\": " << json::str(d.code) << ", \"kind\": " << json::str(d.kind) << ", \"areaM2\": " << json::num(d.areaM2) << ", \"centre\": [" << json::num(d.centre[0]) << ", "
+              << json::num(d.centre[1]) << ", " << json::num(d.centre[2]) << "], \"reason\": " << json::str(d.reason) << "}";
+        }
+        s << "]},\n";
+    }
+    s << "  \"buildingGuard\": {\"facadeGuardM\": " << json::num(st.guardM) << ", \"facadeGuardCos\": " << json::num(st.guardCos)
+      << ", \"removedOnBuilding\": {\"before\": {\"onWalls\": " << st.guardBefore.onWalls << ", \"onLevelSurfaces\": " << st.guardBefore.onLevelSurfaces
+      << "}, \"after\": {\"onWalls\": " << st.guardAfter.onWalls << ", \"onLevelSurfaces\": " << st.guardAfter.onLevelSurfaces << "}}"
+      << ", \"keptAsBuilding\": {\"count\": " << st.guardKeptAsBuilding << ", \"areaM2\": " << json::num(st.guardKeptAsBuildingM2) << "}"
+      << ", \"removedMeetingAlongEdge\": {\"onWalls\": " << st.creaseOnWalls << ", \"onLevelSurfaces\": " << st.creaseOnLevelSurfaces << ", \"onOther\": " << st.creaseOnOther << "}"
+      << ", \"crownsWithWalls\": " << st.crownsWithWalls << ", \"crownWalls\": " << st.crownWalls << "},\n";
     s << "  \"drape\": {\"sheets\": " << st.drapeSheets << ", \"sheetAreaM2\": " << json::num(st.drapeSheetAreaM2) << ", \"canopyTakenWithTreesM2\": " << json::num(st.canopyTakenWithTreesM2)
       << ", \"fragmentsTaken\": " << st.fragmentsTaken << ", \"fragmentAreaTakenM2\": " << json::num(st.fragmentAreaTakenM2) << "},\n";
     s << "  \"canopyAreaM2\": " << json::num(st.canopyAreaM2) << ",\n  \"treeCanopyAreaM2\": " << json::num(st.treeCanopyAreaM2) << ",\n";
@@ -4048,6 +5026,9 @@ struct PlantedTree {
     bool groundChecked{false};
     double groundGapM{std::numeric_limits<double>::quiet_NaN()};  // trunk base minus the nearest ground-mesh surface at its stem (NaN: none there)
     bool offGround{false};           // ... further than groundTolerance from it, or no surface there
+    // buildings win over trees: the scanned walls the crown was kept off, and the attractors and surface samples left out
+    size_t wallsClipped{0}, attractorsClipped{0}, attractorsTotal{0}, surfaceClipped{0};
+    std::string keptOffWallsShort;   // ... and why the tree grown off the wall does not fill the crown measured against it (empty: it does)
     const io::GlbJsonValue* crown{nullptr};
     // the textures chosen for it from PlantParams::textures (hasTextures false without a library)
     bool hasTextures{false};
@@ -4076,6 +5057,8 @@ struct PlantResult {
     size_t shortOfCrown{0};          // trees whose delivered leaves do not fill their crown within their budget
     bool groundChecked{false};
     size_t offGround{0};             // trees whose trunk base is not on the ground mesh (within groundTolerance)
+    size_t clippedAtWalls{0};        // trees whose crown was kept off a scanned wall (GrowthParams::wallClearance)
+    size_t attractorsClipped{0}, attractorsAtClippedCrowns{0};
     double ms{0};
 };
 
@@ -4165,10 +5148,17 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
 
     // grow every tree first: its own budget depends on what its leaf masses need
     std::vector<CrownGrowth> grown(n);
-    std::vector<std::string> errors(n), droppedCorrection(n);
+    std::vector<std::string> errors(n), droppedCorrection(n), clippedShort(n);
     detail::forEachIndex(n, P.threads, [&](size_t i) {
         try {
             grown[i] = growCrown(shapes[i], P.growth, sampleSpacing);
+            if (!grown[i].ok() && grown[i].wallsClipped && (grown[i].failureCode == "crown_not_reached" || grown[i].failureCode == "apex_not_reached")) {
+                // buildings win over trees: a crown kept off a scanned wall grows as far as the clearance lets it; that it
+                // does not fill the crown the scan measured against the wall is reported, not refused
+                clippedShort[i] = grown[i].failure;
+                grown[i].failure.clear();
+                grown[i].failureCode.clear();
+            }
             if (!grown[i].ok() && P.crownCorrections.count(shapes[i].id)) {
                 // the corrected crown does not regrow: the measured one (the crown strip regrew) is grown instead, and the
                 // correction is dropped for it (reported)
@@ -4295,6 +5285,11 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
             tr.trunkRadius = g.trunkRadius;
             tr.grownShare = g.surfaceShare();
             tr.reachRadius = g.reachRadius;
+            tr.wallsClipped = g.wallsClipped;
+            tr.attractorsClipped = g.attractorsClipped;
+            tr.attractorsTotal = g.attractorsTotal;
+            tr.surfaceClipped = g.surfaceClipped;
+            tr.keptOffWallsShort = clippedShort[i];
             tr.colonisation = g.colonisation;
             tr.crownBaseRatio = g.crownBaseRatio;
             tr.trunkRadiusPerHeight = g.trunkRadiusPerHeight;
@@ -4398,6 +5393,7 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
         R.triangles += (tr.wood.indices.size() + tr.foliage.indices.size()) / 3;
         R.shortOfCrown += tr.shortOfCrown.empty() ? 0 : 1;
         R.offGround += tr.offGround ? 1 : 0;
+        if (tr.wallsClipped) { ++R.clippedAtWalls; R.attractorsClipped += tr.attractorsClipped; R.attractorsAtClippedCrowns += tr.attractorsTotal; }
     }
     R.groundChecked = ground.p != nullptr;
     if (static_cast<double>(R.triangles) > total) throw VegetationError("budget_exceeded", "trees used " + std::to_string(R.triangles) + " triangles, over the budget of " + std::to_string(static_cast<size_t>(total)));
@@ -4541,6 +5537,10 @@ inline std::string treeExtrasMembers(const PlantedTree& tr, const PlantParams& P
     if (tr.groundChecked) {
         ex << ",\"groundGapM\":";
         if (std::isfinite(tr.groundGapM)) ex << json::num(tr.groundGapM); else ex << "null";
+    }
+    if (tr.wallsClipped) {
+        ex << ",\"keptOffWalls\":{\"walls\":" << tr.wallsClipped << ",\"attractorsClipped\":" << tr.attractorsClipped << ",\"attractorsTotal\":" << tr.attractorsTotal
+           << ",\"surfaceSamplesClipped\":" << tr.surfaceClipped << (tr.keptOffWallsShort.empty() ? std::string() : ",\"short\":" + json::str(tr.keptOffWallsShort)) << "}";
     }
     // `triangles` is the budgeted blob tree (what `triangleBudget` bounds); with levels the far level the file holds is the
     // delivered wood (given the whole budget, by the near levels) under the same blob masses: `farLevelTriangles`
@@ -4919,6 +5919,7 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
     members += "\"sbVeggie\":{\"trees\":" + std::to_string(R.trees.size()) + ",\"triangles\":" + std::to_string(R.triangles) + (R.library ? ",\"farLevelTriangles\":" + std::to_string(farTotal) : std::string()) +
                ",\"triangleBudget\":" + std::to_string(static_cast<size_t>(R.triangleBudget)) + ",\"shortOfCrown\":" + std::to_string(R.shortOfCrown) +
                (R.groundChecked ? ",\"offGround\":" + std::to_string(R.offGround) : std::string()) + ",\"keptAsScannedRings\":" + std::to_string(rings.size()) +
+               ",\"keptOffWalls\":{\"trees\":" + std::to_string(R.clippedAtWalls) + ",\"attractorsClipped\":" + std::to_string(R.attractorsClipped) + ",\"attractorsAtClippedCrowns\":" + std::to_string(R.attractorsAtClippedCrowns) + "}" +
                ",\"generator\":\"space colonisation\"}";
     staged_glb::WriteOptions opt;
     if (R.library) {

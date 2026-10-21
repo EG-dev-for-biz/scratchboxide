@@ -470,13 +470,18 @@ describe.skipIf(!haveTile)('tile vegetation on the Flatiron / Madison Square Par
         expect(grown.nodeRanges).toHaveLength(trees.length);
         // every tree's delivered leaves fill its crown at its own budget (measured on the trees GLB, against crowns.json)
         const byId = new Map<number, any>(crownsDoc.crowns.map((c: any) => [c.id, c]));
+        // buildings win over trees: a crown that met a scanned wall is grown on the crown's side of it (plant's
+        // keptOffWalls), so it fills what the clearance leaves of its measured surface, not the part against the wall
+        const keptOffWalls = new Set<number>(pipeline.trees!.keptOffWalls?.crownIds ?? []);
         for (const f of readTreeFoliage(fs.readFileSync(treesFile))) {
             const c = byId.get(f.crownId);
             const d = foliageReach(f, f.extras.foliageClumps, crownSurfaceAboveBase(c, f.extras.inferred.crownBaseRatio), f.extras.reachM);
+            if (keptOffWalls.has(f.crownId)) { expect(d.share).toBeGreaterThan(0.3); continue; }
             expect(d.share).toBeGreaterThanOrEqual(0.9);
             expect(d.topY + f.extras.reachM).toBeGreaterThanOrEqual(c.apex[1]);
         }
-        expect(pipeline.trees!.shortOfCrown).toEqual([]);
+        // (a crown kept off a scanned wall may fall short of the surface measured against the wall: reported, not refused)
+        expect(pipeline.trees!.shortOfCrown.filter(t => !keptOffWalls.has(t.crownId))).toEqual([]);
         // a tree kept as scanned is named with the side the removal beside it closed
         for (const k of pipeline.trees!.keptAsScanned) {
             const c = byId.get(k.crownId);

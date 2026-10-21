@@ -462,7 +462,10 @@ struct TileSource {
      *  added without one (the vegetation strip's caps and skirts where trees were taken out) do not, and are not a photo. */
     bool hasPhoto(size_t t) const {
         int img = imageOf(t);
-        return img >= 0 && img < static_cast<int>(scene.images.size()) && scene.images[static_cast<size_t>(img)].decoded;
+        if (!(img >= 0 && img < static_cast<int>(scene.images.size()) && scene.images[static_cast<size_t>(img)].decoded)) return false;
+        // the strip's fill of its caps and skirts is carried from neighbouring texels, not the scan's photo of that surface
+        const uint32_t mat = t < scene.triangleMaterial.size() ? scene.triangleMaterial[t] : 0;
+        return !(mat < scene.materials.size() && scene.materials[mat].photoInferredFill);
     }
 };
 
