@@ -84,12 +84,14 @@ export function genAiEnhanceClient(genai: unknown): EnhanceModelClient {
             parts.push({ text: `Reference photo ${k + 1} (real street-level view of the same surface, pano ${ref.panoId}):` });
             parts.push({ inlineData: { mimeType: ref.mimeType, data: Buffer.from(ref.bytes).toString('base64') } });
         });
+        const started = Date.now();
         const answer = await generateImageWithModels(genai, {
             models: request.models,
             contents: [{ role: 'user', parts }],
             imageConfig: { aspectRatio: nearestImageAspectRatio(request.image.width, request.image.height) },
             signal: request.signal
         });
+        console.log(`[image-call] ${answer.modelUsed} answered in ${Date.now() - started} ms (${request.image.width} x ${request.image.height}, ${request.references.length} reference photo(s))`);
         return {
             bytes: new Uint8Array(answer.data.buffer, answer.data.byteOffset, answer.data.byteLength), mimeType: answer.mimeType,
             modelUsed: answer.modelUsed, requestedModels: answer.requestedModels, skippedModels: answer.skippedModels, modelNote: answer.modelNote

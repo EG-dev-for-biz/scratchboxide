@@ -278,6 +278,7 @@ export class VisionModelChain<Stage extends string = string> {
                 const ms = this.now() - started;
                 const attempt: VisionAttempt = { model, ...(thinking ? { thinking: describeThinking(thinking) } : {}), ms, ...(ttftMs !== undefined ? { ttftMs } : {}), outcome: 'answered', ...(hedge.sent ? { hedged: true, hedgeWon: hedge.won } : {}) };
                 this.attempts.push(attempt);
+                console.log(`[vision-call] ${opts.stage} ${model} answered in ${ms} ms${ttftMs !== undefined ? ` (first token ${ttftMs} ms)` : ''}${hedge.sent ? ' hedged' : ''}`);
                 return { response, model, ms, ...(ttftMs !== undefined ? { ttftMs } : {}), ...(thinking ? { thinking } : {}), remember: () => this.record(params, opts, model, response, attempt) };
             } catch (err) {
                 const ms = this.now() - started;
@@ -297,6 +298,7 @@ export class VisionModelChain<Stage extends string = string> {
                     outcome: notFound ? 'not_found' : retryable && retry < VISION_TRANSIENT_RETRIES ? 'retried' : 'failed'
                 };
                 this.attempts.push(record);
+                console.log(`[vision-call] ${opts.stage} ${model} ${record.outcome} after ${ms} ms (${classified.code})`);
                 if (record.outcome === 'retried') {
                     await this.sleep(1000 * 2 ** retry);
                     continue;
@@ -371,6 +373,7 @@ export class VisionModelChain<Stage extends string = string> {
             this.answeredVersion = rec.answeredVersion;
         }
         this.attempts.push({ ...rec.attempt, cached: true });
+        console.log(`[vision-call] ${opts.stage} ${rec.model} replayed from the reply cache`);
         const response = {
             candidates: [{ content: { role: 'model', parts: [{ text: rec.text }] }, ...(rec.finishReason ? { finishReason: rec.finishReason } : {}) }],
             ...(rec.usageMetadata ? { usageMetadata: rec.usageMetadata } : {}), ...(rec.modelVersion ? { modelVersion: rec.modelVersion } : {})

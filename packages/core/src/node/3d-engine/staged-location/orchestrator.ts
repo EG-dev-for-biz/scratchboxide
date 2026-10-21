@@ -134,6 +134,7 @@ import { objectSegmenter, ownViews, OWNERSHIP_VERSION, type OwnershipSegmenter }
 import { correctViewsLighting, lightingModels, lightingPromptVariant, textureArmOptions, LIGHTING_MODEL_LITE, type LightingCorrectedView } from './texture-lighting';
 import { TextureWorkerPool, textureWorkersEnabled } from './texture-worker-pool';
 import { eventLoopStats, runBlockTracer } from './event-loop-stats';
+import { recordStageTimeline } from './stage-timeline';
 import type { EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { fetchFootprints, type FootprintSource } from './facade-footprints';
@@ -986,6 +987,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     const chainExtras = (id: StageId) => ({ hedgeAfterMs: VISION_HEDGE_AFTER_MS, ...(bypass(id) ? {} : { replyCache: stagedReplyCache(cache) }) });
     const runId = deps.newRunId?.() ?? crypto.randomBytes(4).toString('hex');
     cache.activeRunId = runId;
+    // every stage event also goes to the run's wall-clock timeline (runs/<runId>/timeline.jsonl)
+    const timelineFile = (() => { try { return path.join(path.dirname(cache.runRecordPath(runId)), 'timeline.jsonl'); } catch { return undefined; } })();
+    if (timelineFile) ctx = { ...ctx, emitStage: recordStageTimeline(timelineFile, runId, now(), ctx.emitStage, now) };
     // main-thread blocks over the whole run, kept as a run note (event-loop-stats.ts)
     let runningStages: () => string[] = () => [];
     const blockTracer = runBlockTracer(() => runningStages());
@@ -1604,6 +1608,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     loopDelay.enable();
                     try {
                     const started = now();
+                    // where the stage's time goes, beside the per-layer bake timings (texture_timings run note, breakdownMs)
+                    const stepMs: Record<string, number> = {};
+                    const step = async <R>(k: string, work: () => Promise<R>): Promise<R> => { const t0 = now(); try { return await work(); } finally { stepMs[k] = (stepMs[k] ?? 0) + now() - t0; } };
                     const evidence = evidencePromise ? await evidencePromise.catch(() => undefined) : undefined;
                     const fitNow = rebuildOut.refit?.value ?? rebuildOut.fit?.value;
                     // what gets a textured twin: every committed mesh layer the scene shows, or stands on (the ground), except vegetation;
@@ -1648,8 +1655,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     texturePool = textureWorkersEnabled() ? new TextureWorkerPool() : undefined;
                     // the threads load while the first prepares the sources; the layers start once they all can
                     const warming = texturePool?.warm();
-                    const sources = texturePool ? await texturePool.prepare(sourcesInput, io.signal) : prepareTextureSources(sourcesInput, now);
-                    await warming;
+                    const sources = await step('prepareSources', async () => texturePool ? await texturePool.prepare(sourcesInput, io.signal) : prepareTextureSources(sourcesInput, now));
+                    await step('workerWarmup', async () => { await warming; });
                     const { views: sourceViews, failures, wideViews, tile, tileUnavailable, tileLoadMs, tileSha, occluder, context } = sources;
                     // bake-off arms (SCRATCHBOX_TEXTURE_STREET_VIEW=off, experiment only): the layers are textured from the tile photo alone
                     let views = arm.streetView === 'off' ? [] : sourceViews;
@@ -1661,7 +1668,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     let ownershipKey: string | undefined;
                     if (views.length && segmenter && occluder.indices.length) {
                         const to = now();
-                        const own = await ownViews({ views, structure: occluder, ...(ownVision ? { target: request.query } : {}), ...(context.indices.length ? { context } : {}), segment: segmenter, signal: io.signal, onProgress: m => io.progress(`textures: ${m}`), ...(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR ? { debugDir: path.join(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR, runId) } : {}) });
+                        const own = await step('streetViewOwnership', () => ownViews({ views, structure: occluder, ...(ownVision ? { target: request.query } : {}), ...(context.indices.length ? { context } : {}), segment: segmenter, signal: io.signal, onProgress: m => io.progress(`textures: ${m}`), ...(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR ? { debugDir: path.join(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR, runId) } : {}) }));
                         views = own.views;
                         const kept = own.records.filter(r => r.status === 'segmented').length;
                         ownershipKey = `sv-ownership/${OWNERSHIP_VERSION}:${sha256Bytes(Buffer.concat(views.map(v => Buffer.from(v.ownerMask ?? new Uint8Array(0)))))}`;
@@ -1674,7 +1681,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (views.length && textureTemporaryEnabled() && visionAvailable) {
                         const tt = now();
                         const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: io.signal, ...chainExtras('textures'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
-                        const tmp = await maskTemporaryInViews({ views, check: visionTemporaryChecker(chain), target: request.query, signal: io.signal, onProgress: m => io.progress(`textures: ${m}`) });
+                        const tmp = await step('temporaryCheck', () => maskTemporaryInViews({ views, check: visionTemporaryChecker(chain), target: request.query, signal: io.signal, onProgress: m => io.progress(`textures: ${m}`) }));
                         views = tmp.views;
                         temporaryKey = `sv-temporary/${TEMPORARY_CHECK_VERSION}:${sha256Bytes(Buffer.from(JSON.stringify(tmp.records.map(r => [r.panoId, r.flagged, r.maskedPixels]))))}`;
                         cache.writeRunNote(runId, 'texture_temporary', { ms: now() - tt, records: tmp.records });
@@ -1755,7 +1762,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     done(0);
                     // layers in parallel (TEXTURE_LAYER_CONCURRENCY at once): one layer's projection runs while another waits on
                     // its image model, so the stage's wall clock is not the sum of every layer's enhancement
-                    const textureOne = async (target: typeof targets[number]) => {
+                    const textureOne = (target: typeof targets[number]) => step(`layer.${target.layer.layer}`, () => textureOneUntimed(target));
+                    const textureOneUntimed = async (target: typeof targets[number]) => {
                         handled.add(target.layer.objectId);
                         const clay = fs.readFileSync(target.file);
                         const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), images.map(i => i.sha256), wideHeld.map(i => i.sha256), poseHash, tileSha, palette, !!enhance, density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces), ...(!(rebuildOut.refit ?? rebuildOut.fit) && views.length ? ['no-fit-held-out-gate/2'] : []), ...(lightingClient ? [`light:${lightingModelIds.join(',')}:${lightingPromptVariant()}:${lightingViews?.length ?? 0}`] : []), ...(arm.key ? [arm.key] : []), ...(ownershipKey ? [ownershipKey] : []), ...(temporaryKey ? [temporaryKey] : []), materialsKey);
@@ -1869,18 +1877,20 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     };
                     run.commitListeners.add(onCommit);
                     try {
-                        await textureAll(targets.slice());
+                        await step('firstLayers', () => textureAll(targets.slice()));
                         if (request.isolate) {
                             const early = looLane();
                             early.catch(() => undefined);
+                            const waitT0 = now();
                             await rebuildPromise.catch(() => undefined);
                             if (figuresPromise) await (figuresPromise as Promise<unknown>).catch(() => undefined);
                             // the facade grammar runs beside the rebuild and on a first build often outlasts it (its vision reading):
                             // its l2g is the layer the scene shows, so the stage keeps listening until the grammar has settled
                             if (grammarGate.settled) await grammarGate.settled.catch(() => undefined);
+                            stepMs.waitRebuildGrammar = now() - waitT0;
                             run.commitListeners.delete(onCommit);
                             takeLate();
-                            for (let i = 0; i < lateWork.length; i++) await lateWork[i];
+                            await step('lateLayers', async () => { for (let i = 0; i < lateWork.length; i++) await lateWork[i]; });
                             // what the settled scene asks of the layers textured early: a layer another one now hides is not
                             // textured (unless it is the ground); one textured with charts a later refit replaced is textured again
                             const live = run.state.layers.filter(l => !l.retired);
@@ -1901,8 +1911,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                     redo.push({ ...t, surfaces });
                                 }
                             }
-                            if (redo.length) await textureAll(redo);
-                            await early;
+                            if (redo.length) await step('redo', () => textureAll(redo));
+                            await step('looTail', () => early);
                         }
                     } finally {
                         run.commitListeners.delete(onCommit);
@@ -1912,10 +1922,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const firstIndex = new Map(targets.filter(t => !t.late).map((t, i) => [t.layer.objectId, i]));
                     outcomes.sort((a, b) => (a.late === b.late ? (a.late ? sceneIndex(a.layer.objectId) - sceneIndex(b.layer.objectId) : firstIndex.get(a.layer.objectId)! - firstIndex.get(b.layer.objectId)!) : a.late ? 1 : -1));
                     const passDegradations: TexturePassDegradation[] = outcomes.flatMap(o => o.out.degradations);
-                    await looLane();
+                    await step('looLane', () => looLane());
                     const layers: TextureLayerBundle[] = outcomes.map(o => ({ ...o.out.bundle, maps: { albedo: `${o.url}#albedo` }, confidence: `${o.url}#confidence` }));
                     loopDelay.disable();
-                    const timingsMs: Record<string, number> = { total: now() - started, tileLoad: tileLoadMs, ...eventLoopStats(loopDelay), ...(texturePool ? { textureWorkers: texturePool.size } : {}) };
+                    const timingsMs: Record<string, number> = { total: now() - started, tileLoad: tileLoadMs, ...Object.fromEntries(Object.entries(stepMs).map(([k, v]) => [`step.${k}`, v])), ...eventLoopStats(loopDelay), ...(texturePool ? { textureWorkers: texturePool.size } : {}) };
                     cache.writeRunNote(runId, 'texture_timings', timingsMs);
                     io.progress(`textures: main-thread event-loop delay over the stage: p99 ${timingsMs.eventLoopP99Ms} ms, max ${timingsMs.eventLoopMaxMs} ms (${texturePool ? `${texturePool.size} texture worker threads` : 'texture work on the main thread'})`);
                     for (const o of outcomes) for (const [kk, v] of Object.entries(o.out.timingsMs)) timingsMs[`${o.layer.layer}.${kk}`] = v;
@@ -2125,6 +2135,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 }
                 io.progress(isolateMode ? 'remeshing the structure' : 'remeshing the district');
                 const tilePath = strip ? strip.devegetatedGlb : extraction.texturedGlb;
+                // where the stage's time goes (the stage summary's breakdownMs)
+                const remeshMs: Record<string, number> = {};
+                const timed = async <R>(k: string, work: () => Promise<R>): Promise<R> => { const t0 = now(); try { return await work(); } finally { remeshMs[k] = (remeshMs[k] ?? 0) + now() - t0; } };
                 // object ownership: outlines of the requested structure in registered views of the tile, voted onto its triangles
                 // the shared structure pick: tile_refine isolates exactly this footprint on this terrain
                 // (picked again, by the same rule at the same seed, on the scan tile_refine is given: with the measured trees
@@ -2144,10 +2157,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     } else {
                         try {
                             io.progress('rendering views of the structure for the ownership vote');
-                            const views = await deps.refine.renderOwnershipViews({ tilePath, isolate: true, anchor: { x: structure!.seed.x, z: structure!.seed.z }, ...(isolatePick ? { isolatePick } : {}) });
+                            const views = await timed('ownershipViews', () => deps.refine.renderOwnershipViews!({ tilePath, isolate: true, anchor: { x: structure!.seed.x, z: structure!.seed.z }, ...(isolatePick ? { isolatePick } : {}) }));
                             const masksDir = path.join(views.dir, `masks_${crypto.createHash('sha256').update(request.query.trim()).digest('hex').slice(0, 16)}`);
                             const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...chainExtras('remesh'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
-                            const seg = await segmentOwnershipViews({ viewsDir: views.dir, masksDir, target: request.query.trim(), chain, concurrency: 6, onProgress: m => io.progress(m) });
+                            const seg = await timed('ownershipVision', () => segmentOwnershipViews({ viewsDir: views.dir, masksDir, target: request.query.trim(), chain, concurrency: 6, onProgress: m => io.progress(m) }));
                             if (seg.masks < 2) throw new Error(`only ${seg.masks} of ${seg.views} views got a usable outline (${seg.skipped.slice(0, 3).map(x => `${x.view}: ${x.reason}`).join('; ')})`);
                             ownership = { masksDir };
                             run.note(PROVENANCE.remeshed, `object ownership: ${seg.model ?? 'the vision model'} outlined the structure in ${seg.masks} of ${seg.views} views of the tile; the multi-view vote decides the raised triangles near it, the geometric rules the rest`);
@@ -2168,7 +2181,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 };
                 // the facades' orthophotos for the grammar reading (facade-grammar.ts), only when it will run
                 const orthos = grammarOn ? { reliefOrthos: true } : {};
-                let r = await deps.refine.refine({ ...remeshRequest, ...orthos });
+                let r = await timed('tileRefine', () => deps.refine.refine({ ...remeshRequest!, ...orthos }));
                 // the isolated structure must be the one picked; when it is not (or tile_refine wrote no isolated scan to
                 // check), the district around it is remeshed whole and shown instead, labelled: never isolated fragments
                 const isolateDegradations: DegradationRecord[] = [];
@@ -2195,7 +2208,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         io.progress('remeshing the district around the structure');
                         let district: TileRefineResult | undefined, districtErr: unknown;
                         const districtRequest: TileRefineRequest = { tilePath, ...reliefOpt };
-                        try { district = await deps.refine.refine({ ...districtRequest, ...orthos }); } catch (err) { districtErr = err; }
+                        try { district = await timed('tileRefineDistrict', () => deps.refine.refine({ ...districtRequest, ...orthos })); } catch (err) { districtErr = err; }
                         // the grammar is read from, and applied to, the remesh that stands
                         if (district) remeshRequest = districtRequest;
                         isolateDegradations.push(run.degrade(record('remesh', 'isolate_mismatch', {
@@ -2250,7 +2263,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 return {
                     status, value: { refined: r, groundLayerId: layer.objectId, groundFile: r.clayGlb, committed: true },
                     source: `tile_refine: ${layer.counts.triangles.toLocaleString('en-US')} triangles${prov.summary.relief?.carvedVertices ? `, ${prov.summary.relief.carvedVertices} vertices carved by photo relief (photo-inferred)` : ''}`,
-                    layers: [layer], degradations, cached: r.cached, builtAtMs: remembered.builtAtMs
+                    layers: [layer], degradations, cached: r.cached, builtAtMs: remembered.builtAtMs, breakdownMs: remeshMs
                 };
             },
             degrade: async (err, io) => {
