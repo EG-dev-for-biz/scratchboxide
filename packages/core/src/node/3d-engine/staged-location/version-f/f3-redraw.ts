@@ -143,8 +143,8 @@ export interface RedrawWallOptions {
     cacheDir?: string; samples?: number; governor: ImageCallGovernor;
     /** The vision count (weak-fit walls only; the strong-fit walls read F's lattice). */
     counter?: FacadeCounter;
-    /** F's planned offset map of the wall and the tile's window NCC against it (the fit's strength). */
-    fit?: { planned: Float32Array; tileNcc: number };
+    /** F's planned offset map of the wall, the tile's window NCC against it (the fit's strength) and the tile's edge distance to it (m). */
+    fit?: { planned: Float32Array; tileNcc: number; tileEdgeDistM?: number };
     /** The reading's must-keep features on this wall. */
     features?: FeatureRegionPx[];
     unseen?: { source: number; familyLab?: [number, number, number]; inside?: Uint8Array };
@@ -204,7 +204,7 @@ export async function redrawWallBestOf(f: MassingFace, t: FaceTexture, use: Uint
         // storeys and bays: F's lattice on a strong-fit wall; the vision count (run now, alongside the other samples') on a weak one
         let counts: { tile?: FacadeCounts; plate?: FacadeCounts; unread?: string } | undefined;
         let lattice: LatticeCheck | undefined;
-        if (strong) { lattice = latticeIdentity(g.aligned, f, use, opts.fit!.planned, opts.fit!.tileNcc); counts = { unread: `read locally against F's lattice (${lattice.why})` }; }
+        if (strong) { lattice = latticeIdentity(g.aligned, f, use, opts.fit!.planned, opts.fit!.tileNcc, opts.fit!.tileEdgeDistM); counts = { unread: `read locally against F's lattice (${lattice.why})` }; }
         else if (unseen && coveredShare < UNSEEN_MIN_COUNT_SHARE) counts = { unread: `the tile covers ${(100 * coveredShare).toFixed(0)}% of the wall: its storeys and bays cannot be counted on it` };
         else if (opts.counter) {
             const plateSmall = resizeRgba({ width: t.width, height: t.height, rgba: g.aligned }, sw, sh);

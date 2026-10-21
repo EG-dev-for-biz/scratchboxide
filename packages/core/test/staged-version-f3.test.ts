@@ -250,26 +250,33 @@ describe('version F round 3: local gates, best of n, the image-call governor', (
         const prog = facadeProgram({ faces, parts: MASSING.parts, groundY: 0, params: TRUTH });
         const planned = programWallOffset(south, prog.openings, [], []);
         const use = new Uint8Array(W * H).fill(1);
-        const same = latticeIdentity(paint(W, H, planned), south, use, planned, 0.5);
+        const same = latticeIdentity(paint(W, H, planned), south, use, planned, 0.5, 0.05);
         expect(same.passed).toBe(true);
         expect(same.latticeNcc).toBeGreaterThan(0.8);
+        expect(same.edgeDistM).toBeLessThan(0.15);
         expect(same.storeys.planned).toBe(4); expect(same.storeys.shown).toBe(4); expect(same.storeys.extra).toBe(0);
         expect(same.bays.planned).toBe(7); expect(same.bays.shown).toBe(7);
-        // a plate that paints the openings over (no lattice at all) fails on the NCC
-        const blank = latticeIdentity(paint(W, H, new Float32Array(W * H).fill(0)), south, use, planned, 0.5);
+        // the same lattice with the glazing lit (lighter than the wall): the sign flips, the plate still passes
+        const lit = paint(W, H, planned); for (let i = 0; i < W * H; i++) if (planned[i] < -0.05) lit.set([235, 240, 245], i * 4);
+        expect(latticeIdentity(lit, south, use, planned, 0.5, 0.05).passed).toBe(true);
+        // a plate that paints the openings over (no lattice at all) fails on the correlation
+        const blank = latticeIdentity(paint(W, H, new Float32Array(W * H).fill(0)), south, use, planned, 0.5, 0.05);
         expect(blank.passed).toBe(false);
         expect(blank.storeys.shown).toBe(0);
-        // a plate with storeys at a different rhythm (5 where F plans 4): an extra dark row between planned storeys
+        // a plate with storeys at a different rhythm (5 where F plans 4) scores worse on both numbers (a close rhythm is not
+        // always outside the slack: the bound is the tile's own distance, which the melted tile sets loosely)
         const other = facadeProgram({ faces, parts: MASSING.parts, groundY: 0, params: { ...TRUTH, groundStoreyM: 3.2, upperStoreysM: [2.5] } });
-        const extra = latticeIdentity(paint(W, H, programWallOffset(south, other.openings, [], [])), south, use, planned, 0.5);
-        expect(extra.storeys.extra + (extra.storeys.planned - extra.storeys.shown)).toBeGreaterThan(0);
-        expect(extra.passed).toBe(false);
-        // a plate with half the bays painted over fails the bay count, not the storey count
+        const extra = latticeIdentity(paint(W, H, programWallOffset(south, other.openings, [], [])), south, use, planned, 0.5, 0.05);
+        expect(extra.latticeNcc).toBeLessThan(same.latticeNcc - 0.3);
+        expect(extra.edgeDistM).toBeGreaterThan(same.edgeDistM * 2);
+        // a plate with half the bays painted over: the borders of the painted half are far from any edge
         const halfOff = planned.slice();
         for (let y = 0; y < H; y++) for (let x = 0; x < W / 2; x++) if (halfOff[y * W + x] < -0.05) halfOff[y * W + x] = 0;
-        const half = latticeIdentity(paint(W, H, halfOff), south, use, planned, 0.5);
-        expect(half.bays.shown).toBeLessThan(half.bays.planned - 1);
-        expect(half.passed).toBe(false);
+        // (the lattice gate reads whether the plate shows F's lattice; painting distinct elements over is the region audit's
+        // job, plate-audit.ts, which runs on every candidate as well)
+        const half = latticeIdentity(paint(W, H, halfOff), south, use, planned, 0.5, 0.05);
+        expect(half.latticeNcc).toBeLessThan(same.latticeNcc - 0.2);
+        expect(half.edgeDistM).toBeGreaterThan(same.edgeDistM * 3);
         // the profile reader on its own
         const open = new Float32Array(40), dark = new Float32Array(40);
         for (let i = 0; i < 40; i++) { open[i] = (i >= 5 && i < 10) || (i >= 20 && i < 25) ? 1 : 0; dark[i] = open[i] ? 20 : 2; }

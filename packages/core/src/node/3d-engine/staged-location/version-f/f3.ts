@@ -228,7 +228,8 @@ export async function runVersionF3(input: F3Input): Promise<F3Outcome> {
             }
             const structure = guideOf(f);
             const sh = crypto.createHash('sha256').update(structure.png).update(STRUCTURE_GUIDE_SENTENCE).digest('hex').slice(0, 16);
-            const tileNcc = plan.after.walls.find(w => w.face === f.index)?.windowNcc ?? 0;
+            const wallAfter = plan.after.walls.find(w => w.face === f.index);
+            const tileNcc = wallAfter?.windowNcc ?? 0, tileEdgeDistM = wallAfter?.edgeDistM ?? NaN;
             const features = featureRegionsOnWall(plan.reading.params.featureRegions, f);
             gates.features.regions += features.length;
             const before = tex.rgba.slice();
@@ -236,7 +237,7 @@ export async function runVersionF3(input: F3Input): Promise<F3Outcome> {
                 client: structureGuidedPlateClient(input.genai, structure.png), models: enh.models, locationName: enh.locationName, ...(refTex ? { reference: refTex } : {}), source: ENH,
                 guards, ...(enh.cacheDir ? { cacheDir: path.join(enh.cacheDir, `version-f3-${sh}`) } : {}), ...(sv ? { streetView: sv, streetViewSource: sourceForPano(sv.view.panoId) } : {}), ...(noSv ? { noStreetView: noSv } : {}),
                 ...(chain ? { counter: visionFacadeCounter(chain) } : {}), ...(input.signal ? { signal: input.signal } : {}), governor,
-                ...(unseen ? {} : { fit: { planned: structure.offset, tileNcc } }), features,
+                ...(unseen ? {} : { fit: { planned: structure.offset, tileNcc, tileEdgeDistM } }), features,
                 ...(unseen ? { unseen: { source: UNSEEN, ...(familyLab ? { familyLab } : {}), ...(insideOf(f) ? { inside: insideOf(f)! } : {}) } } : {}),
                 onProgress: m => input.onProgress?.(`version F: ${m}`)
             });

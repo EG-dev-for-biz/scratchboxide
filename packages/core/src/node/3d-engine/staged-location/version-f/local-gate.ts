@@ -18,8 +18,11 @@
  *     the correlation with the absolute deviation counts), and its row and column profiles (the mean absolute deviation
  *     from the local wall tone, sign-free) are read along F's storey rows and bay columns: a planned storey the plate
  *     shows no contrasting row for is missing, a contrasting row in a gap between storeys is an extra one; bays likewise.
- *     The pass rule is the vision count's (COUNT_TOLERANCE of the planned count, always within one) plus the lattice NCC
- *     at least LATTICE_NCC_SHARE of the tile's own NCC against F. A weak-fit wall keeps the vision count.
+ *     On ornate fronts (Haughwout's cast iron) the piers and spandrels contrast as much as the windows, so those counts are
+ *     reported, not gated. The pass rule is sign-free: the magnitude of the lattice correlation at least LATTICE_NCC_SHARE
+ *     of the tile's own NCC against F (and MIN_LATTICE_NCC), and the mean distance from F's opening borders to the plate's
+ *     strong edges at most EDGE_DIST_SLACK times the tile's own (and MIN_EDGE_DIST_M): a plate of another wall, or one that
+ *     paints bays over, has its edges elsewhere. A weak-fit wall keeps the vision count.
  *   - **Must-keep features** (`featureGuard`): the features the reading listed on the wall (open type codes as labels,
  *     never routing) get regions; a candidate plate that erases, replaces or recolours one is rejected: the plate's
  *     band-passed structure in the region must correlate with the tile's (within the audit's drift), keep its contrast, and
@@ -44,13 +47,19 @@ export const STRONG_FIT_NCC = 0.25;
 export const LATTICE_NCC_SHARE = 0.6;
 /** ... and at least this on its own. */
 export const MIN_LATTICE_NCC = 0.15;
+/** The plate's edge distance to F's opening borders may be at most this many times the tile's own (and MIN_EDGE_DIST_M). */
+export const EDGE_DIST_SLACK = 2;
+export const MIN_EDGE_DIST_M = 0.35;
 /** A planned storey (bay) is shown when its row (column) contrast exceeds the neighbouring gaps' by this share (the local mean's blur spills into the gaps) plus PROFILE_MARGIN_ABS luma units. */
 export const PROFILE_MARGIN = 0.15;
 export const PROFILE_MARGIN_ABS = 1;
 /** A gap whose darkness reaches this share of the typical shown row's is an extra storey (bay) the plate added. */
 export const EXTRA_PROFILE_SHARE = 0.8;
-/** A must-keep feature region keeps its structure when the plate's band-pass correlates with the tile's (or the photo's) at least this. */
+/** A must-keep feature region keeps its structure when the plate's band-pass correlates with the tile's (or the photo's) at least this... */
 export const FEATURE_KEEP_NCC = 0.3;
+/** ... or at least this while keeping FEATURE_KEEP_CONTRAST of the tile's contrast and its tone (a crisp redraw of a smeared shopfront correlates weakly with the smear). */
+export const FEATURE_WEAK_NCC = 0.1;
+export const FEATURE_KEEP_CONTRAST = 0.6;
 /** ... and its tone when the mean CIELAB distance (lightness weighted) is at most this. */
 export const FEATURE_MAX_TONE_DE = 20;
 /** The Street View crop vouches for a region when it covers at least this share of it. */
@@ -65,6 +74,9 @@ export interface LatticeCheck {
     latticeNcc: number;
     /** The tile's own NCC against F on this wall (the fit's strength). */
     tileNcc: number;
+    /** Mean distance from F's opening borders to the plate's strong edges (m), and the tile's own. */
+    edgeDistM: number;
+    tileEdgeDistM: number;
     storeys: ProfileCount;
     bays: ProfileCount;
     passed: boolean;
@@ -129,17 +141,18 @@ export function profileCount(open: Float32Array, dark: Float32Array): ProfileCou
  * programWallOffset or structureGuidePng's offset; NaN outside the wall, below -0.05 m in an opening). `tileNcc` is the tile's
  * own window NCC against the same plan (the fit's strength: callers apply this check only when it is at least STRONG_FIT_NCC).
  */
-export function latticeIdentity(plate: Uint8Array, f: MassingFace, use: Uint8Array, planned: Float32Array, tileNcc: number): LatticeCheck {
+export function latticeIdentity(plate: Uint8Array, f: MassingFace, use: Uint8Array, planned: Float32Array, tileNcc: number, tileEdgeDistM = MIN_EDGE_DIST_M): LatticeCheck {
     const W = f.width, H = f.height, n = W * H;
     const luma = new Float32Array(n), depth = new Float32Array(n).fill(NaN);
     for (let i = 0; i < n; i++) luma[i] = use[i] && Number.isFinite(planned[i]) ? 0.2126 * plate[i * 4] + 0.7152 * plate[i * 4 + 1] + 0.0722 * plate[i * 4 + 2] : NaN;
     const tile: WallTile = { face: f, luma, depth };
     const ev = wallEvidence(tile);
-    const signed = compareWall(ev, planned).windowNcc;
+    const cmp = compareWall(ev, planned);
+    const signed = cmp.windowNcc, edgeDistM = cmp.edgeDistM;
     const absDark = new Float32Array(ev.dark.length);
     for (let i = 0; i < absDark.length; i++) absDark[i] = Number.isFinite(ev.dark[i]) ? Math.abs(ev.dark[i]) : NaN;
     const unsigned = compareWall({ ...ev, dark: absDark }, planned).windowNcc;
-    const latticeNcc = Math.max(signed, unsigned);
+    const latticeNcc = Math.max(Math.abs(signed), Math.abs(unsigned));
     // profiles: planned opening share and the plate's positive darkness per row and per column
     const rowOpen = new Float32Array(H), rowDark = new Float32Array(H), colOpen = new Float32Array(W), colDark = new Float32Array(W);
     const rowN = new Int32Array(H), colN = new Int32Array(W), rowD = new Int32Array(H), colD = new Int32Array(W);
@@ -154,10 +167,11 @@ export function latticeIdentity(plate: Uint8Array, f: MassingFace, use: Uint8Arr
     for (let y = 0; y < H; y++) { rowOpen[y] = rowN[y] ? rowOpen[y] / rowN[y] : 0; rowDark[y] = rowD[y] ? rowDark[y] / rowD[y] : NaN; }
     for (let x = 0; x < W; x++) { colOpen[x] = colN[x] ? colOpen[x] / colN[x] : 0; colDark[x] = colD[x] ? colDark[x] / colD[x] : NaN; }
     const storeys = profileCount(rowOpen, rowDark), bays = profileCount(colOpen, colDark);
-    const nccOk = latticeNcc >= Math.max(MIN_LATTICE_NCC, LATTICE_NCC_SHARE * tileNcc);
-    const passed = nccOk && storeys.passed && bays.passed;
-    const say = (k: string, c: ProfileCount) => `${k}: ${c.planned} planned, ${c.shown} shown on the plate, ${c.extra} extra${c.passed ? '' : ' (not the same wall)'}`;
-    return { latticeNcc, tileNcc, storeys, bays, passed, profiles: { rowOpen: [...rowOpen].map(v => Math.round(v * 100) / 100), rowDark: [...rowDark].map(v => Math.round(v * 10) / 10), colOpen: [...colOpen].map(v => Math.round(v * 100) / 100), colDark: [...colDark].map(v => Math.round(v * 10) / 10) }, why: `lattice NCC of the plate with F's openings ${latticeNcc.toFixed(3)} (signed ${signed.toFixed(3)}, unsigned ${unsigned.toFixed(3)}; the tile's ${tileNcc.toFixed(3)}; needs ${Math.max(MIN_LATTICE_NCC, LATTICE_NCC_SHARE * tileNcc).toFixed(3)})${nccOk ? '' : ': the plate does not show F\'s lattice'}; ${say('storeys', storeys)}; ${say('bays', bays)}` };
+    const needNcc = Math.max(MIN_LATTICE_NCC, LATTICE_NCC_SHARE * tileNcc), needEdge = Math.max(MIN_EDGE_DIST_M, EDGE_DIST_SLACK * (Number.isFinite(tileEdgeDistM) ? tileEdgeDistM : MIN_EDGE_DIST_M));
+    const nccOk = latticeNcc >= needNcc, edgeOk = Number.isFinite(edgeDistM) && edgeDistM <= needEdge;
+    const passed = nccOk && edgeOk;
+    const say = (k: string, c: ProfileCount) => `${k}: ${c.planned} planned, ${c.shown} with a contrasting row or column on the plate, ${c.extra} extra (reported)`;
+    return { latticeNcc, tileNcc, edgeDistM, tileEdgeDistM, storeys, bays, passed, profiles: { rowOpen: [...rowOpen].map(v => Math.round(v * 100) / 100), rowDark: [...rowDark].map(v => Math.round(v * 10) / 10), colOpen: [...colOpen].map(v => Math.round(v * 100) / 100), colDark: [...colDark].map(v => Math.round(v * 10) / 10) }, why: `lattice correlation of the plate with F's openings ${latticeNcc.toFixed(3)} (signed ${signed.toFixed(3)}, unsigned ${unsigned.toFixed(3)}; the tile's ${tileNcc.toFixed(3)}; needs ${needNcc.toFixed(3)})${nccOk ? '' : ': the plate does not show F\'s lattice'}; edges ${Number.isFinite(edgeDistM) ? edgeDistM.toFixed(3) : 'n/a'} m from F's opening borders (the tile's ${Number.isFinite(tileEdgeDistM) ? tileEdgeDistM.toFixed(3) : 'n/a'} m; at most ${needEdge.toFixed(3)})${edgeOk ? '' : ': the plate\'s edges lie elsewhere'}; ${say('storeys', storeys)}; ${say('bays', bays)}` };
 }
 
 export interface FeatureRegionPx { label: string; types: string[]; confidence: number; x0: number; y0: number; x1: number; y1: number }
@@ -250,9 +264,9 @@ export function featureGuard(input: Uint8Array, plate: Uint8Array, W: number, H:
         }
         const structure = Number.isFinite(bestNcc) ? bestNcc : NaN;
         const vouched = nccPhoto !== undefined && nccPhoto >= FEATURE_KEEP_NCC;
-        const structureOk = vouched || structure >= FEATURE_KEEP_NCC;
-        const contrastOk = vouched || contrastRatio >= ERASE_CONTRAST_RATIO;
         const toneOk = !(toneDe > FEATURE_MAX_TONE_DE);
+        const structureOk = vouched || structure >= FEATURE_KEEP_NCC || (structure >= FEATURE_WEAK_NCC && contrastRatio >= FEATURE_KEEP_CONTRAST && toneOk);
+        const contrastOk = vouched || contrastRatio >= ERASE_CONTRAST_RATIO;
         const kept = structureOk && contrastOk && toneOk;
         const why = `${reg.label} [${reg.types.join(' > ')}]: structure NCC ${Number.isFinite(structure) ? structure.toFixed(2) : 'n/a'}${nccPhoto !== undefined ? ` (Street View ${nccPhoto.toFixed(2)}, covering ${(100 * photoCover).toFixed(0)}%)` : ''}, contrast x${contrastRatio.toFixed(2)}, tone ${Number.isFinite(toneDe) ? toneDe.toFixed(1) : 'n/a'} dE: ${kept ? 'kept' : !structureOk ? 'replaced by something else' : !contrastOk ? 'erased' : 'recoloured'}`;
         out.push({ ...reg, ncc: structure, ...(nccPhoto !== undefined ? { nccPhoto } : {}), contrastRatio, toneDe, photoCover, kept, why });
