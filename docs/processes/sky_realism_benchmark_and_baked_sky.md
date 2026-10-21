@@ -69,17 +69,36 @@
 * Orbiting under the bench shows the baked blue sky with cumulus. No console errors.
 * Screenshot: `test-results/screenshots/sky_bake/live_app_bench_cumulus.jpg` (gitignored).
 
-## 4. Still open
+## 4. Second round (2026-10-21): typed clouds, spectral sky, calibrated decks
 
-* **Cloud bases** are ~30% too bright on the few clear-sun cloudy references (3-5 skies, noisy).
-* **Backlit clouds** toward a low sun are too evenly cream.
-* **Horizon:** a band of small distant clouds sits along it.
-* **The glow round the sun** is too wide (~40° against 10-15° in photos).
-* **Low-sun sky colour** is lavender where real skies are teal.
-* **Cloud type per reference:** most "partly cloudy" references are cirrus or stratocumulus. The benchmark always draws cumulus; it should pick the shell decks for those.
+* **Clouds read per photo** (`scripts/sky-realism/annotate-clouds.ts`):
+  * gemini-4-argon reads each cloudy reference once into a cumulus sky cover plus up to four physical shell decks;
+  * readings are cached in `references.json` with model and date;
+  * 33 of 34 are read. `kloofendal_overcast` timed out three times and is recorded as unread.
+
+  The benchmark draws each reading instead of cumulus everywhere. Fog gradient error 0.81 → 0.31, overcast 0.83 → 0.48. Cloud bases on clear-sun skies: +38% → +11%. The excess was cirrus and altocumulus scored against cumulus, so base lighting was left alone.
+* **Shell deck coverage = visible sky cover:**
+  * density starts at the threshold (a sub-threshold veil made 2% coverage show as 17-34%);
+  * a measured table maps coverage, as for the cumulus.
+* **Spectral physical sky:**
+  * 12 wavelengths, the 5778 K solar spectrum, CIE 1931;
+  * sky colour pass 20% → 33% (default haze), 33% → 43% with typed clouds;
+  * the high-sun zenith colour bias is halved.
+* **`--fit-turbidity`:** haze fitted per photo from its own direct:diffuse. The "glow too wide" was mostly the default haze (photos fit T 1.1-2.9).
+* **Backlit cumulus:**
+  * forward bias of multiply scattered light fades with optical depth;
+  * distant cloud merges into a soft bank.
+
+  A debug pass (terms switched off one at a time) showed the golden backlit cores come from diffusion through small, optically thin cumulus. The benchmark's photos agree: clouds near the sun are not too bright (bias -0.14, i.e. slightly dark). A sharper droplet phase made no measurable difference and was not kept.
+
+## 5. Still open
+
+* **Sky ~1.3x bright relative to the sun, with a 20-30% dark ring 45° from it.** Both persist with fitted haze. HDR lens glare in the photos adds light round the sun; separating it needs glare-free references (sky-scanner radiance data).
+* **Low suns stay slightly warm** (dUV ~+0.01, 4 photos).
+* **Readings that stack overlapping decks** over-cover (table_mountain_1). Cloud fraction from the read-then-draw path passes 50% (median 0.11).
 * **Worst-frame spikes** while clouds drift (24-30 ms).
 
-## 5. Candidate tool/service ideas
+## 6. Candidate tool/service ideas
 
 * **A scene-JSON loader hook for live checks.** There is no deterministic way to open a scene with a given atmosphere in the app without a chat turn (and its model calls).
 * **A frame-time probe** in the viewport that works while the pane is hidden, using GPU timer queries rather than requestAnimationFrame.
