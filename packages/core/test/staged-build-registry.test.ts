@@ -67,3 +67,19 @@ describe('StagedMaterialRegistry restore budget', () => {
         for (const { mesh, base } of set) expect(mesh.material).toBe(base);
     });
 });
+
+describe('work sweep', () => {
+    test('a staged material takes the sweep from the look and drops it when the stage ends', () => {
+        const registry = new StagedMaterialRegistry();
+        const geometry = new THREE.BoxGeometry(1, 1, 1);
+        const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial());
+        const sweep = { phase: 0.4, fill: 0.25, minY: -2, maxY: 30, color: new THREE.Vector3(0.65, 0.71, 0.99) };
+        registry.apply(mesh, { work: sweep }, { allowCreate: true, pxScale: 1, classCount: 1, restores: { left: 10 } });
+        const m = mesh.material as THREE.Material;
+        expect(isStagedMaterial(m)).toBe(true);
+        expect(stagedMaterialUniforms(m)?.work).toEqual({ phase: 0.4, fill: 0.25, minY: -2, maxY: 30 });
+        registry.beginFrame();
+        registry.apply(mesh, { mark: true }, { allowCreate: true, pxScale: 1, classCount: 1, restores: { left: 10 } });
+        expect(stagedMaterialUniforms(mesh.material as THREE.Material)?.work).toBeUndefined();
+    });
+});
