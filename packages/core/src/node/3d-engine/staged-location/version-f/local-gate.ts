@@ -48,8 +48,8 @@ export const LATTICE_NCC_SHARE = 0.6;
 /** ... and at least this on its own. */
 export const MIN_LATTICE_NCC = 0.15;
 /** The plate's edge distance to F's opening borders may be at most this many times the tile's own (and MIN_EDGE_DIST_M). */
-export const EDGE_DIST_SLACK = 2;
-export const MIN_EDGE_DIST_M = 0.35;
+export const EDGE_DIST_SLACK = 2.5;
+export const MIN_EDGE_DIST_M = 0.45;
 /** A planned storey (bay) is shown when its row (column) contrast exceeds the neighbouring gaps' by this share (the local mean's blur spills into the gaps) plus PROFILE_MARGIN_ABS luma units. */
 export const PROFILE_MARGIN = 0.15;
 export const PROFILE_MARGIN_ABS = 1;
