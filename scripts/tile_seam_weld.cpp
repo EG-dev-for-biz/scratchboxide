@@ -26,6 +26,7 @@
 #include "scratchbox_tile_seam_weld.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -44,7 +45,8 @@ static void usage() {
         "  --tolerance M      boundary groups of different pieces within M of each other are welded (default 0.03)\n"
         "  --no-drop          keep the triangles the weld collapses into slivers\n"
         "  --sliver-altitude-fraction F  a touched triangle is a sliver when its altitude is at most F x tolerance (default 0.5)\n"
-        "  --threads N        worker threads (default: all cores)\n";
+        "  --threads N        worker threads (default: all cores)\n"
+        "  --contacts-csv F   write every welded position (x y z, tile frame) with its gap in metres, for inspection\n";
 }
 
 /** The scene's mesh as the GLB writers take it: positions welded on bit-identical float3 (as tile_refine's own pass-through). */
@@ -93,7 +95,7 @@ static bool writeBytes(const std::string& file, const std::vector<uint8_t>& byte
 }
 
 int main(int argc, char** argv) {
-    std::string input, out, outClay, statsPath;
+    std::string input, out, outClay, statsPath, contactsCsv;
     TileSeamWeldParams p;
     bool drop = true;
     for (int i = 1; i < argc; ++i) {
@@ -107,6 +109,7 @@ int main(int argc, char** argv) {
         else if (a == "--no-drop") drop = false;
         else if (a == "--sliver-altitude-fraction") p.sliverAltitudeFraction = std::atof(next().c_str());
         else if (a == "--threads") p.threads = std::atoi(next().c_str());
+        else if (a == "--contacts-csv") contactsCsv = next();
         else if (a == "--help" || a == "-h") { usage(); return 0; }
         else { std::cerr << "unknown argument " << a << "\n"; usage(); return 2; }
     }
@@ -120,8 +123,20 @@ int main(int argc, char** argv) {
     const size_t inputTriangles = scene.mesh.indices.size() / 3;
     const auto t1 = std::chrono::steady_clock::now();
 
+    std::vector<scratchbox::geometry::Vec3> before;
+    if (!contactsCsv.empty()) { before.reserve(scene.mesh.vertices.size()); for (const auto& v : scene.mesh.vertices) before.push_back(v.position); }
     const auto r = TileSeamWeld::weldAndMarkSlivers(scene.mesh, p);
     if (!r.ok) { std::cerr << "tile_seam_weld: " << r.error << "\n"; return 1; }
+    if (!contactsCsv.empty()) {
+        std::ofstream c(contactsCsv);
+        if (!c) { std::cerr << "tile_seam_weld: cannot write " << contactsCsv << "\n"; return 1; }
+        c << "x,y,z,gap_m\n";
+        for (size_t v = 0; v < before.size(); ++v) {
+            const auto& a = before[v]; const auto& b = scene.mesh.vertices[v].position;
+            const double d = std::sqrt(double(a.x - b.x) * (a.x - b.x) + double(a.y - b.y) * (a.y - b.y) + double(a.z - b.z) * (a.z - b.z));
+            if (d > 1e-9) c << a.x << ',' << a.y << ',' << a.z << ',' << d << '\n';
+        }
+    }
     TileSeamWeld::compactDropped(scene.mesh, r.keepTriangle, {&scene.triangleMaterial});
     const auto t2 = std::chrono::steady_clock::now();
 
