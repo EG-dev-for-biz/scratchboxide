@@ -346,6 +346,8 @@ export interface StagedLocationContext {
     activeArtifact?: CanvasArtifact;
     /** A retry: the run to rebuild and the one stage to recompute (bypassing its cache). */
     retry?: { runId: string; stage: StageId };
+    /** A resume: the run to rebuild as recorded; cached stages are reused, nothing is bypassed. */
+    resume?: { runId: string };
 }
 
 /** No real data exists to show: the place could not be resolved, or the tiles do not cover it. */
@@ -974,9 +976,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     // a retry rebuilds the recorded request exactly; the model never re-words it
     let request = requestIn;
     let recordedArtifactId: string | undefined;
-    if (ctx.retry) {
-        const rec = cache.readRunRecord<RunRecord>(ctx.retry.runId);
-        if (!rec) throw new StagedLocationHardFailure('resolve', 'unknown_run', `There is no staged run ${ctx.retry.runId} to retry (its record is not in .scratchbox/cache/staged_location/runs).`);
+    const recordedRunId = ctx.retry?.runId ?? ctx.resume?.runId;
+    if (recordedRunId) {
+        const rec = cache.readRunRecord<RunRecord>(recordedRunId);
+        if (!rec) throw new StagedLocationHardFailure('resolve', 'unknown_run', `There is no staged run ${recordedRunId} to ${ctx.retry ? 'retry' : 'resume'} (its record is not in .scratchbox/cache/staged_location/runs).`);
         request = rec.request;
         recordedArtifactId = rec.artifactId;
     }

@@ -65,6 +65,8 @@ export interface StagedBuildOverlayProps {
     showReplaced: boolean;
     onToggleShowReplaced: () => void;
     onReplay: () => void;
+    /** Resume a run that stopped, failed or was interrupted: the chat is asked to call the tool with resumeRunId. */
+    onResume?: () => void;
     onRetry: (record: DegradationRecord) => void;
     onHighlight: (record: DegradationRecord) => void;
     highlightedId?: string;
@@ -404,6 +406,9 @@ export const StagedBuildOverlay: React.FC<StagedBuildOverlayProps> = props => {
                 </button>
                 {runOver ? (
                     <>
+                        {props.onResume && (state.runState !== 'finished' || props.interrupted) ? (
+                            <button type="button" className="sb-staged-build-button" style={{ ...BUTTON, background: 'rgba(86,180,233,0.25)', borderColor: '#56B4E9' }} onClick={props.onResume} data-testid="sb-staged-resume" aria-label="Resume the staged build where it stopped">Resume build</button>
+                        ) : null}
                         <button type="button" className="sb-staged-build-button" style={BUTTON} onClick={props.onReplay} data-testid="sb-staged-replay">Replay build</button>
                         <button type="button" className="sb-staged-build-button" style={{ ...BUTTON, ...(props.showReplaced ? { background: 'rgba(255,255,255,0.2)' } : {}) }} aria-pressed={props.showReplaced} onClick={props.onToggleShowReplaced} data-testid="sb-staged-show-replaced">Show replaced layers</button>
                     </>
