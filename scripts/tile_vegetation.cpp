@@ -150,8 +150,9 @@ static void readSpeciesIndex(const Args& a, GrowthParams& G) {
 }
 
 static void readGrowthFlags(const Args& a, GrowthParams& G) {
-    G.crownBaseRatio = a.num("crown-base-ratio", G.crownBaseRatio);
-    G.trunkRadiusPerHeight = a.num("trunk-radius-per-height", G.trunkRadiusPerHeight);
+    // the caller asked for this ratio itself: a species match (scratchbox_tree_species.hpp) does not override it
+    if (a.has("crown-base-ratio")) { G.crownBaseRatio = a.num("crown-base-ratio", G.crownBaseRatio); G.crownBaseRatioExplicit = true; }
+    if (a.has("trunk-radius-per-height")) { G.trunkRadiusPerHeight = a.num("trunk-radius-per-height", G.trunkRadiusPerHeight); G.trunkRadiusPerHeightExplicit = true; }
     G.shellDepth = a.num("shell-depth", G.shellDepth);
     G.minSurfaceReached = a.num("min-surface-reached", G.minSurfaceReached);
     G.crownBaseSpread = a.num("crown-base-spread", G.crownBaseSpread);
@@ -471,6 +472,10 @@ static int runPlant(const Args& a) {
         for (const auto& [name, field] : fields) {
             if (recorded[name].type == io::GlbJsonValue::Number) *field = recorded[name].num;
         }
+        // whether the measurement's own crownBaseRatio/trunkRadiusPerHeight came from the caller (not a species match):
+        // plant must grow the same crowns strip did, so it carries the same explicitness forward
+        if (recorded["crownBaseRatioExplicit"].type == io::GlbJsonValue::Bool) P.growth.crownBaseRatioExplicit = recorded["crownBaseRatioExplicit"].b;
+        if (recorded["trunkRadiusPerHeightExplicit"].type == io::GlbJsonValue::Bool) P.growth.trunkRadiusPerHeightExplicit = recorded["trunkRadiusPerHeightExplicit"].b;
         const std::pair<const char*, const char*> flags[] = {{"crown-base-ratio", "crownBaseRatio"}, {"trunk-radius-per-height", "trunkRadiusPerHeight"},
                                                              {"shell-depth", "shellDepth"}, {"min-surface-reached", "minSurfaceReached"},
                                                              {"crown-base-spread", "crownBaseSpread"}, {"trunk-lean", "trunkLeanShare"}};

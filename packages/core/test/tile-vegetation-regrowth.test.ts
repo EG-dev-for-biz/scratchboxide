@@ -300,7 +300,10 @@ describe('strip keeps a tree it cannot regrow as scanned', () => {
         const strip = await svc.strip({ tilePath: 'district.glb' });
         const doc = JSON.parse(fs.readFileSync(strip.crownsJson, 'utf8'));
         // the growth the removal was decided with, for plant to grow the same trees
-        expect(doc.growth).toEqual({ seed: strip.tileSha256.slice(0, 16), crownBaseRatio: 0.35, trunkRadiusPerHeight: 0.016, shellDepth: 0.8, minSurfaceReached: 0.9, crownBaseSpread: 0.1, branchAngleSpreadRad: 0.2, trunkLeanShare: 0.45, apicalDominance: 0.5, branchAngleMeanRad: 0.80795, internodeLengthM: 0 });
+        expect(doc.growth).toEqual({
+            seed: strip.tileSha256.slice(0, 16), crownBaseRatio: 0.35, crownBaseRatioExplicit: false, trunkRadiusPerHeight: 0.016, trunkRadiusPerHeightExplicit: false,
+            shellDepth: 0.8, minSurfaceReached: 0.9, crownBaseSpread: 0.1, branchAngleSpreadRad: 0.2, trunkLeanShare: 0.45, apicalDominance: 0.5, branchAngleMeanRad: 0.80795, internodeLengthM: 0
+        });
         const trees = doc.crowns.filter((c: any) => c.status === 'tree');
         expect(trees).toHaveLength(3);
         for (const c of trees) {

@@ -517,6 +517,11 @@ inline size_t delaunayFlips(const std::vector<Vec3>& p, std::vector<uint32_t>& t
 struct GrowthParams {
     double crownBaseRatio{0.35};        // crown base = support + ratio * (apex - support): not observed, inferred
     double trunkRadiusPerHeight{0.016}; // trunk radius = ratio * height: not observed, inferred
+    // The caller gave crownBaseRatio (or trunkRadiusPerHeight) itself, so a matched species entry's own ratio does not
+    // override it (growCrownAttempt): a caller that asks for a crown base past what any real tree can fill is asking to
+    // see that failure, not to have species quietly substitute a ratio that fills it.
+    bool crownBaseRatioExplicit{false};
+    bool trunkRadiusPerHeightExplicit{false};
     double shellDepth{0.8};             // share of each surface sample's height above the crown base the crown fills
     double minSurfaceReached{0.9};      // share of the measured crown surface the regrown tree's leaves must reach
     uint64_t seed{0};                   // mixed with each crown id
@@ -699,8 +704,8 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
         g.species = tree_species::choose(*G.species, d, detail::crownSeed(G.seed, c.id), G.speciesChoice);
         if (g.species.matched) {
             const auto& e = G.species->entries[g.species.entry];
-            baseRatio = e.crownBaseRatio;
-            trunkPerHeight = e.trunkRadiusPerHeight;
+            if (!G.crownBaseRatioExplicit) baseRatio = e.crownBaseRatio;
+            if (!G.trunkRadiusPerHeightExplicit) trunkPerHeight = e.trunkRadiusPerHeight;
             apical = e.apicalDominance;
             branchAngle = e.branchAngleRad;
             scaffold = e.scaffoldBranches;
@@ -3853,7 +3858,9 @@ inline std::string crownsJson(const StripResult& r, const StripParams& P) {
     char seedHex[17];
     std::snprintf(seedHex, sizeof(seedHex), "%016llx", static_cast<unsigned long long>(P.growth.seed));
     s << "\"growth\":{\"seed\":" << json::str(seedHex) << ",\"crownBaseRatio\":" << json::numPrecise(P.growth.crownBaseRatio)
-      << ",\"trunkRadiusPerHeight\":" << json::numPrecise(P.growth.trunkRadiusPerHeight) << ",\"shellDepth\":" << json::numPrecise(P.growth.shellDepth)
+      << ",\"crownBaseRatioExplicit\":" << (P.growth.crownBaseRatioExplicit ? "true" : "false")
+      << ",\"trunkRadiusPerHeight\":" << json::numPrecise(P.growth.trunkRadiusPerHeight)
+      << ",\"trunkRadiusPerHeightExplicit\":" << (P.growth.trunkRadiusPerHeightExplicit ? "true" : "false") << ",\"shellDepth\":" << json::numPrecise(P.growth.shellDepth)
       << ",\"minSurfaceReached\":" << json::numPrecise(P.growth.minSurfaceReached) << ",\"crownBaseSpread\":" << json::numPrecise(P.growth.crownBaseSpread)
       << ",\"branchAngleSpreadRad\":" << json::num(std::stod(detail::fixed(P.growth.morphology.branchAngleSpreadRad, 6))) << ",\"trunkLeanShare\":" << json::numPrecise(P.growth.trunkLeanShare)
       << ",\"apicalDominance\":" << json::num(std::stod(detail::fixed(P.growth.morphology.apicalDominance, 6))) << ",\"branchAngleMeanRad\":" << json::num(std::stod(detail::fixed(P.growth.morphology.branchAngleMeanRad, 6)))
