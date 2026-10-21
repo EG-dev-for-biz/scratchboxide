@@ -11,7 +11,7 @@ import * as path from 'path';
 import { runStagedLocation, type ScanFitDeps, type StagedLocationDeps } from '../src/node/3d-engine/staged-location/orchestrator';
 import { StageCache } from '../src/node/3d-engine/staged-location/stage-cache';
 import { validateContract, type StageEvent } from '../src/common/spatial/staged-location-contracts';
-import { TEXTURE_LADDER_RUNGS } from '../src/common/spatial/texture-pass-contracts';
+import { TEXTURE_LADDER_RUNGS, TEXTURE_RUNG_CLAY } from '../src/common/spatial/texture-pass-contracts';
 import type { CanvasArtifact } from '../src/browser/generative-canvas/canvas-types';
 import { SHOW_CLAY_PILL, SHOW_TEXTURES_PILL } from '../src/node/3d-engine/staged-location/staged-summary';
 import { TEXTURE_PASS_VERSION } from '../src/node/3d-engine/staged-location/texture-pass';
@@ -148,7 +148,7 @@ describe('the texture stage of the staged location build', () => {
         const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
         const sb = (result.artifact as any).data.stagedBuild;
         for (const l of sb.layers.filter((x: any) => x.textured)) {
-            expect(l.textured.rungShares[5]).toBeCloseTo(1, 3);
+            expect(l.textured.rungShares[TEXTURE_RUNG_CLAY]).toBeCloseTo(1, 3);
             expect(l.textured.provenance.filter((p: any) => p.coverage > 0).map((p: any) => p.source)).toEqual(['clay']);
         }
         const codes = result.texturePass!.degradations.map(d => d.reasonCode);
@@ -179,7 +179,7 @@ describe('the texture stage of the staged location build', () => {
         expect(result.stages.find(x => x.stage === 'textures')).toMatchObject({ status: 'committed', source: expect.stringMatching(/tile_refine carries onto its remesh/) });
         // this fake tile_refine writes no photo into its textured output: the twin says so (clay rung, labelled clay)
         const l2 = (result.artifact as any).data.stagedBuild.layers.find((l: any) => l.layer === 'l2');
-        expect(l2.textured.rungShares[5]).toBe(1);
+        expect(l2.textured.rungShares[TEXTURE_RUNG_CLAY]).toBe(1);
         expect(l2.textured.provenance.map((p: any) => p.source)).toEqual(['clay']);
     });
 });
