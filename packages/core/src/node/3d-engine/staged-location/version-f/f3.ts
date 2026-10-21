@@ -60,6 +60,15 @@ export const VERSION_F3_ID = 'version-f/v3';
 /** The textured twin is written again for the walls accepted so far at most this often while the redraw runs. */
 export const STREAM_INTERVAL_MS = 12_000;
 
+/** Measurement knobs: image calls in flight across the building (default f3-redraw.ts IMAGE_MAX_IN_FLIGHT) and a salt on the plate cache (a fresh set of plates). */
+export function imageInFlight(env: NodeJS.ProcessEnv = process.env): number | undefined {
+    const v = Number(env.SCRATCHBOX_VERSION_F_IMAGE_IN_FLIGHT ?? '');
+    return Number.isFinite(v) && v >= 1 ? Math.round(v) : undefined;
+}
+export function plateCacheSalt(env: NodeJS.ProcessEnv = process.env): string {
+    return (env.SCRATCHBOX_VERSION_F_PLATE_CACHE_SALT ?? '').trim();
+}
+
 /** Which round runs under SCRATCHBOX_STAGED_GEOMETRY=f: 3 (default) or 2. */
 export function versionFRound(env: NodeJS.ProcessEnv = process.env): 2 | 3 {
     return (env.SCRATCHBOX_VERSION_F_ROUND ?? '').trim() === '2' ? 2 : 3;
@@ -168,7 +177,8 @@ export async function runVersionF3(input: F3Input): Promise<F3Outcome> {
     const enhanced: RedrawWallRecord[] = [];
     const plates = new Map<number, { plate: Uint8Array; use: Uint8Array; unseen: boolean }>();
     const enhStep = rec('enhance');
-    const governor = new ImageCallGovernor();
+    const inFlight = imageInFlight();
+    const governor = new ImageCallGovernor(inFlight ? { maxInFlight: inFlight } : {});
     const gates: F3Outcome['gates'] = { lattice: { walls: 0, accepted: 0, rejected: 0 }, vision: { walls: 0, accepted: 0, rejected: 0 }, features: { regions: 0, wallsRejected: 0, lost: [] }, audit: { rejected: 0 }, samplesDrawn: 0, samplesEligible: 0 };
     let streamed = 0, lastStreamAt = 0, streaming: Promise<void> = Promise.resolve(), streamDue = false;
     const guides = new Map<number, { png: Buffer; offset: Float32Array }>();
@@ -227,7 +237,7 @@ export async function runVersionF3(input: F3Input): Promise<F3Outcome> {
                 else noSv = best.why;
             }
             const structure = guideOf(f);
-            const sh = crypto.createHash('sha256').update(structure.png).update(STRUCTURE_GUIDE_SENTENCE).digest('hex').slice(0, 16);
+            const sh = crypto.createHash('sha256').update(structure.png).update(STRUCTURE_GUIDE_SENTENCE).update(plateCacheSalt()).digest('hex').slice(0, 16);
             const wallAfter = plan.after.walls.find(w => w.face === f.index);
             const tileNcc = wallAfter?.windowNcc ?? 0, tileEdgeDistM = wallAfter?.edgeDistM ?? NaN;
             const features = featureRegionsOnWall(plan.reading.params.featureRegions, f);
@@ -261,7 +271,7 @@ export async function runVersionF3(input: F3Input): Promise<F3Outcome> {
     } else enhStep.skipped = 'enhanced mode is off';
     timingsMs.enhance = now() - t;
     enhStep.ms = timingsMs.enhance;
-    enhStep.notes.push(`image calls: ${governor.counts.calls}, rate-limited ${governor.counts.rateLimited}, retried ${governor.counts.retried}, waited ${governor.counts.waitedMs} ms, peak in flight ${governor.counts.peakInFlight}`);
+    enhStep.notes.push(`image calls: ${governor.counts.calls} (at most ${inFlight ?? 'the default'} in flight), rate-limited ${governor.counts.rateLimited}, retried ${governor.counts.retried}, waited ${governor.counts.waitedMs} ms, peak in flight ${governor.counts.peakInFlight}`);
     enhStep.notes.push(`gates: lattice (strong fit, NCC >= ${STRONG_FIT_NCC}) ${gates.lattice.accepted}/${gates.lattice.walls} accepted, vision count ${gates.vision.accepted}/${gates.vision.walls}, features ${gates.features.regions} regions on walls, ${gates.features.wallsRejected} walls lost their only eligible plates to a feature; samples ${gates.samplesEligible}/${gates.samplesDrawn} eligible`);
 
     // 5. agreement of each plate with F's openings (recorded; the plate follows F)
