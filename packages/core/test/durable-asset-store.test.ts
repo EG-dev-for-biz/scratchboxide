@@ -118,6 +118,14 @@ describe('DurableAssetStore', () => {
         const third = await store.backfill(models, '/models');
         expect(third).toMatchObject({ added: 1, unchanged: 1 });
         expect(store.lookup('/models/one.glb')?.sha256).toBe(sha256OfFile(path.join(models, 'one.glb')));
+
+        // a copy the store wrote back to disk keeps its record (origin, recipe, rebuilt) through the next sweep
+        store.putFile(writeGlb('r.glb', 640), { servedPath: '/models/other.glb', origin: 'staged-location', recipeId: 'staged:0000aaaa' });
+        store.alias('/models/lost.glb', '/models/other.glb', { origin: 'recovery', rebuilt: true });
+        store.materialize('/models/lost.glb', models);
+        const fourth = await store.backfill(models, '/models');
+        expect(fourth).toMatchObject({ added: 0, unchanged: 3 });
+        expect(store.lookup('/models/lost.glb')).toMatchObject({ rebuilt: true, origin: 'recovery', recipeId: 'staged:0000aaaa' });
         store.close();
     });
 

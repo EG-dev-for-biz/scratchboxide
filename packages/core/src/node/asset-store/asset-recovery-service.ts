@@ -146,7 +146,7 @@ export class AssetRecoveryService {
         for (const item of job.items) {
             if (item.outcome !== 'pending') continue;
             const found = this.store.lookup(item.path);
-            if (found && !(opts.fallbackStaged && found.rebuilt)) {
+            if (found && !(opts.fallbackStaged && this.rematchable(found))) {
                 item.outcome = 'restored';
                 item.detail = 'served from the asset store';
                 this.materialize(item);
@@ -178,7 +178,7 @@ export class AssetRecoveryService {
                 withoutRecipe(item, 'this file was never recorded in the asset store, so there is no recipe to rebuild it from');
                 continue;
             }
-            if (record.rebuilt && fallbacks) {
+            if (fallbacks && this.rematchable(record)) {
                 // re-matched against the fallback run's files, and re-pointed only when a different file matches
                 withoutRecipe(item, 'rebuilt earlier');
                 continue;
@@ -235,9 +235,9 @@ export class AssetRecoveryService {
                     const key = layerNameKey(item.path);
                     const replacement = key ? produced.get(key) : undefined;
                     const current = this.store.lookup(item.path);
-                    if (current && (!current.rebuilt || !replacement || this.store.lookup(replacement)?.sha256 === current.sha256)) {
+                    if (current && (!this.rematchable(current) || !replacement || this.store.lookup(replacement)?.sha256 === current.sha256)) {
                         item.outcome = 'restored';
-                        item.detail = current.rebuilt ? `already rebuilt as ${path.posix.basename(replacement ?? item.path)}` : `published again by run ${result.runId}`;
+                        item.detail = this.rematchable(current) ? `already rebuilt as ${path.posix.basename(replacement ?? item.path)}` : `published again by run ${result.runId}`;
                         this.materialize(item);
                         continue;
                     }
@@ -264,6 +264,15 @@ export class AssetRecoveryService {
             counts.failed ? `${counts.failed} failed` : '', counts.unrecoverable ? `${counts.unrecoverable} not recoverable` : ''
         ].filter(Boolean).join(', ') || 'Nothing to recover';
         job.fraction = 1;
+    }
+
+    /**
+     * A record an explicit rebuild may point elsewhere: one a rebuild matched by name, or one swept in from disk with
+     * no recipe of its own (a copy of unknown origin). A file a run published under its own name is never re-pointed.
+     */
+    private rematchable(record: { rebuilt: boolean; recipeId: string | null; origin: string }): boolean {
+        if (record.rebuilt) return true;
+        return record.origin === 'backfill' && (!record.recipeId || !this.store.recipe(record.recipeId));
     }
 
     /** Every /models file the scene's objects point at that the store holds, written back to <workspace>/public/models. */
