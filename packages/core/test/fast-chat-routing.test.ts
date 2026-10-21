@@ -53,7 +53,8 @@ describe('cacheable prompt prefix', () => {
     const build = (request: GeminiGenerateRequest) =>
         buildChatPayload(request, {}, buildToolDeclarations(request, registry), 'gemini-4-argon', { thinkingLevel: 'MEDIUM' });
 
-    it('keeps the system instruction and tools byte-identical across different requests and open artifacts', async () => {
+    it('with SCRATCHBOX_CHAT_STABLE_PREFIX=1, keeps the system instruction and tools byte-identical across requests and open artifacts', async () => {
+        process.env.SCRATCHBOX_CHAT_STABLE_PREFIX = '1';
         const a = await build({ prompt: 'Build a 3D scene of the Flatiron Building', mode: 'agent', enableWorkspaceTools: true });
         const b = await build({ prompt: 'make it golden hour', mode: 'agent', enableWorkspaceTools: true, activeArtifact: STAGED, chatHistory: [{ role: 'user', text: 'earlier' }] });
         const c = await build({ prompt: 'Write a product spec for a drone delivery service', mode: 'agent', enableWorkspaceTools: true });
@@ -70,11 +71,15 @@ describe('cacheable prompt prefix', () => {
         expect(b.shape.staticSystemChars).toBe(b.shape.systemChars);
     });
 
-    it('puts the context back in the system instruction with SCRATCHBOX_CHAT_STABLE_PREFIX=0', async () => {
-        process.env.SCRATCHBOX_CHAT_STABLE_PREFIX = '0';
+    it('by default puts the context at the end of the system instruction, after the stable sections, and keeps a cacheable layout for a cache', async () => {
         const b = await build({ prompt: 'make it golden hour', mode: 'agent', enableWorkspaceTools: true, activeArtifact: STAGED });
-        expect(b.payload.systemInstruction!.parts![0].text).toContain('scene-stg-1');
+        const system = b.payload.systemInstruction!.parts![0].text!;
+        expect(system.startsWith(b.stableSystem)).toBe(true);
+        expect(system.slice(b.stableSystem.length)).toContain('scene-stg-1');
         expect(b.payload.contents[b.payload.contents.length - 1].parts).toHaveLength(1);
+        expect(b.cacheable.systemInstruction!.parts![0].text).toBe(b.stableSystem);
+        expect(b.cacheable.contents[b.cacheable.contents.length - 1].parts![0].text).toContain('scene-stg-1');
+        expect(b.cacheable.tools).toBe(b.payload.tools);
     });
 
     it('adds no context part when there is none', () => {
@@ -299,9 +304,12 @@ describe('streaming engine', () => {
         expect(res.success).toBe(true);
         expect(ran).toEqual([{ place: 'Flatiron' }]);
         expect(chatAborted).toBe(true);
-        // Same instructions and tools to both; the call after the tool result goes to the chat model.
-        expect(JSON.stringify(bodies[0].systemInstruction)).toBe(JSON.stringify(bodies[1].systemInstruction));
+        // The same tools to both; the router (another model, reading the prefix from a cache) gets the stable system
+        // instruction with the request's context in the contents. The call after the tool result goes to the chat model.
         expect(JSON.stringify(bodies[0].tools)).toBe(JSON.stringify(bodies[1].tools));
+        const routerBody = urls[0].includes('gemini-3.8-flash') ? bodies[0] : bodies[1];
+        const chatBody = routerBody === bodies[0] ? bodies[1] : bodies[0];
+        expect(chatBody.systemInstruction.parts[0].text.startsWith(routerBody.systemInstruction.parts[0].text)).toBe(true);
         expect(urls[2]).toContain('gemini-4-argon');
         // The router's call is replayed to the chat model without the router's thought signature.
         const modelTurn = bodies[2].contents.find((c: any) => c.role === 'model');

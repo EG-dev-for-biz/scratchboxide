@@ -32,11 +32,16 @@ export interface VertexStreamPayload {
 }
 
 /**
- * Whether the per-request context goes after the cacheable prefix (in the contents). SCRATCHBOX_CHAT_STABLE_PREFIX=0
- * puts it back at the end of the system instruction, as before 2026-10-20.
+ * Where the per-request context goes for the chat model. By default at the end of the system instruction, after
+ * the stable sections: measured 2026-10-20 on gemini-4-argon with a 5.8k-character workspace context, the routing
+ * call at LOW took a median 4.9 s there against 5.9 s with the context in the request (and 7.3 s against 9.7 s at
+ * MEDIUM), and gemini-4-argon gains nothing from a byte-identical system instruction (it refuses explicit caches and
+ * its implicit cache hit about one call in six). SCRATCHBOX_CHAT_STABLE_PREFIX=1 sends the context with the request
+ * instead. A call that reads the prefix from an explicit cache (a router model, context-cache.ts) always uses the
+ * cacheable layout (`cacheable`), whatever this says.
  */
 export function stablePrefixEnabled(): boolean {
-    return process.env.SCRATCHBOX_CHAT_STABLE_PREFIX !== '0';
+    return process.env.SCRATCHBOX_CHAT_STABLE_PREFIX === '1';
 }
 
 /** The heading of the per-request context block sent with the request (see SystemInstructionParts). */
@@ -72,6 +77,8 @@ export function functionDeclarationCount(tools: GeminiToolConfig[] | undefined):
 
 export interface BuiltChatPayload {
     payload: VertexStreamPayload;
+    /** The same call with the system instruction holding only the stable sections (for an explicit context cache). */
+    cacheable: VertexStreamPayload;
     /** The stable system instruction (the cacheable prefix with the tools). */
     stableSystem: string;
     /** This request's context, sent in the contents. */
@@ -110,8 +117,14 @@ export async function buildChatPayload(
         }
     };
     if (modelTools) payload.tools = modelTools;
+    const cacheable: VertexStreamPayload = split ? payload : {
+        ...payload,
+        contents: withTurnContext(buildContents(request), turnContext),
+        systemInstruction: { role: 'system', parts: [{ text: stable }] }
+    };
     return {
         payload,
+        cacheable,
         stableSystem: stable,
         turnContext,
         shape: {

@@ -859,8 +859,11 @@ export class StreamingEngine {
             const router = currentTurn === 1 && functionDeclarationCount(payload.tools) > 0 ? routerConfig(model) : undefined;
             try {
                 if (router) {
+                    // Another model reads the prefix from an explicit cache, so it gets the cacheable layout (the request's
+                    // context in the contents); the chat model at another thinking level gets the chat call's layout.
+                    const routerBase = router.model !== model ? { ...built.cacheable, tools: payload.tools } : payload;
                     const routerPayload: VertexStreamPayload = {
-                        ...payload,
+                        ...routerBase,
                         generationConfig: { ...payload.generationConfig, thinkingConfig: router.thinkingConfig ?? this.client.getThinkingConfig(request, router.model) }
                     };
                     const routerUrl = auth.type === 'vertex'

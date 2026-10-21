@@ -35,15 +35,19 @@ export interface Variant {
 
 const VARIANTS: Record<string, Variant> = {
     reference: { name: 'reference', model: 'gemini-4-argon', thinkingLevel: 'MEDIUM', env: { SCRATCHBOX_CHAT_TOOLS: 'all', SCRATCHBOX_CHAT_STABLE_PREFIX: '0' } },
-    'stable-prefix': { name: 'stable-prefix', model: 'gemini-4-argon', thinkingLevel: 'MEDIUM', env: { SCRATCHBOX_CHAT_TOOLS: 'all' } },
-    'argon-low': { name: 'argon-low', model: 'gemini-4-argon', thinkingLevel: 'LOW', env: { SCRATCHBOX_CHAT_TOOLS: 'all' } },
-    'flash-all': { name: 'flash-all', model: 'gemini-3.8-flash', env: { SCRATCHBOX_CHAT_TOOLS: 'all' } },
-    catalog: { name: 'catalog', model: 'gemini-4-argon', thinkingLevel: 'MEDIUM', env: { SCRATCHBOX_CHAT_TOOLS: 'catalog' } },
-    'catalog-low': { name: 'catalog-low', model: 'gemini-4-argon', thinkingLevel: 'LOW', env: { SCRATCHBOX_CHAT_TOOLS: 'catalog' } },
-    'catalog-flash': { name: 'catalog-flash', model: 'gemini-3.8-flash', env: { SCRATCHBOX_CHAT_TOOLS: 'catalog' } },
+    'stable-prefix': { name: 'stable-prefix', model: 'gemini-4-argon', thinkingLevel: 'MEDIUM', env: { SCRATCHBOX_CHAT_TOOLS: 'all', SCRATCHBOX_CHAT_STABLE_PREFIX: '1' } },
+    'argon-low': { name: 'argon-low', model: 'gemini-4-argon', thinkingLevel: 'LOW', env: { SCRATCHBOX_CHAT_TOOLS: 'all', SCRATCHBOX_CHAT_STABLE_PREFIX: '1' } },
+    'flash-all': { name: 'flash-all', model: 'gemini-3.8-flash', env: { SCRATCHBOX_CHAT_TOOLS: 'all', SCRATCHBOX_CHAT_STABLE_PREFIX: '1' } },
+    catalog: { name: 'catalog', model: 'gemini-4-argon', thinkingLevel: 'MEDIUM', env: { SCRATCHBOX_CHAT_TOOLS: 'catalog', SCRATCHBOX_CHAT_STABLE_PREFIX: '1' } },
+    'catalog-low': { name: 'catalog-low', model: 'gemini-4-argon', thinkingLevel: 'LOW', env: { SCRATCHBOX_CHAT_TOOLS: 'catalog', SCRATCHBOX_CHAT_STABLE_PREFIX: '1' } },
+    'catalog-flash': { name: 'catalog-flash', model: 'gemini-3.8-flash', env: { SCRATCHBOX_CHAT_TOOLS: 'catalog', SCRATCHBOX_CHAT_STABLE_PREFIX: '1' } },
+    // The shipped default: catalog tools, the request's context at the end of the system instruction; the first call
+    // races the chat model at LOW against itself at MEDIUM (compose default-low over default-med).
+    'default-med': { name: 'default-med', model: 'gemini-4-argon', thinkingLevel: 'MEDIUM', env: { SCRATCHBOX_CHAT_TOOLS: 'catalog', SCRATCHBOX_CHAT_STABLE_PREFIX: '0' } },
+    'default-low': { name: 'default-low', model: 'gemini-4-argon', thinkingLevel: 'LOW', env: { SCRATCHBOX_CHAT_TOOLS: 'catalog', SCRATCHBOX_CHAT_STABLE_PREFIX: '0' } },
     // As the router runs in the chat: the client's thinking budget for a Gemini 3 model, prefix from the cache.
-    'router-flash': { name: 'router-flash', model: 'gemini-3.8-flash', thinking: { thinkingBudget: 1024 }, contextCache: true, env: { SCRATCHBOX_CHAT_TOOLS: 'catalog' } },
-    'router-flash-lite': { name: 'router-flash-lite', model: 'gemini-3.5-flash-lite', thinking: { thinkingBudget: 1024 }, contextCache: true, env: { SCRATCHBOX_CHAT_TOOLS: 'catalog' } }
+    'router-flash': { name: 'router-flash', model: 'gemini-3.8-flash', thinking: { thinkingBudget: 1024 }, contextCache: true, env: { SCRATCHBOX_CHAT_TOOLS: 'catalog', SCRATCHBOX_CHAT_STABLE_PREFIX: '1' } },
+    'router-flash-lite': { name: 'router-flash-lite', model: 'gemini-3.5-flash-lite', thinking: { thinkingBudget: 1024 }, contextCache: true, env: { SCRATCHBOX_CHAT_TOOLS: 'catalog', SCRATCHBOX_CHAT_STABLE_PREFIX: '1' } }
 };
 
 export interface CallResult {
