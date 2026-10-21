@@ -190,7 +190,9 @@ export const DEFAULT_PROVENANCE_LEGEND: ReadonlyArray<Omit<ProvenanceLegendEntry
     { label: PROVENANCE.photoCorrected, color: '#F0E442', pattern: 'solid' },
     { label: PROVENANCE.photoInferred, color: '#CC79A7', pattern: 'dots' },
     { label: PROVENANCE.smoothedScan, color: '#E69F00', pattern: 'dots' },
-    { label: PROVENANCE.grownToMeasuredCrown, color: '#009E73', pattern: 'solid' }
+    { label: PROVENANCE.grownToMeasuredCrown, color: '#009E73', pattern: 'solid' },
+    /** Google's vector buildings (footprints and heights, modelled volumes) carried unchanged: the first paint and past the tiles. */
+    { label: 'vector-modelled', color: '#9933FF', pattern: 'stripes' }
 ];
 
 /** 2 px lines outlining degraded parts (a slot whose detail fell to the flat fitted face). */

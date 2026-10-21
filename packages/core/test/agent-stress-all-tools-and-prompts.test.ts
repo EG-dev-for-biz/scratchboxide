@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { availableToolNames } from '../src/node/gemini/tool-catalog';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as os from 'os';
 import * as path from 'path';
@@ -202,7 +203,8 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
                 const fnConfig = toolConfigs!.find(c => 'functionDeclarations' in c) as any;
                 expect(fnConfig).toBeDefined();
 
-                const names = fnConfig.functionDeclarations.map((d: any) => d.name);
+                // Declared up front or loadable by name through load_tools (tool-catalog.ts); never chosen by words.
+                const names = availableToolNames(toolConfigs).all;
                 for (const expectedName of item.expected) {
                     expect(names).toContain(expectedName);
                 }

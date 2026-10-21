@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { availableToolNames } from '../src/node/gemini/tool-catalog';
 import { describe, it, expect } from 'vitest';
 import { GeminiService } from '../src/node/gemini-service';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
@@ -75,7 +76,9 @@ describe('Google 3D Tiles Agent Tools & Capability Resolution', () => {
             enableWorkspaceTools: true
         };
 
-        const toolDeclarations = (geminiService as any).buildToolDeclarations(request);
+        // Loadable by name through load_tools (tool-catalog.ts); once loaded its full declaration is offered.
+        expect(availableToolNames((geminiService as any).buildToolDeclarations(request)).loadable).toContain('plan_adaptive_survey_rig');
+        const toolDeclarations = (geminiService as any).buildToolDeclarations({ ...request, loadedTools: ['plan_adaptive_survey_rig'] });
         const fnDeclsContainer = toolDeclarations.find((t: any) => t.functionDeclarations);
         const fnDecls: any[] = fnDeclsContainer.functionDeclarations;
         const adaptiveRigTool = fnDecls.find((d: any) => d.name === 'plan_adaptive_survey_rig');

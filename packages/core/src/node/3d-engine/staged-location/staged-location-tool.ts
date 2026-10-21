@@ -37,6 +37,7 @@ import { GoogleElevationService } from '../../../browser/generative-canvas/servi
 import { getTileRefineService } from '../tile-refine-service';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
 import { fetchVectorEvidence } from './vector-footprints';
+import { fetchElevations } from './vector-first-paint';
 import { getTileVegetationService } from '../tile-vegetation-service';
 import { loadScanFit } from '../scan-fit-loader';
 import { StageCache, stagedWorkspaceRoot } from './stage-cache';
@@ -254,6 +255,8 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
         ...(gemini.ensureAuth()
             ? { vectorEvidence: (req: { lat: number; lng: number; radiusM: number }) => fetchVectorEvidence({ ...req, fetchTile: (x, y, z) => GoogleVectorTileService.fetchVectorTile(x, y, z, '') }) }
             : {}),
+        // terrain heights for the vector first paint's building bases (the Google Elevation API, the Maps key)
+        ...(resolveMapsApiKey() ? { elevations: (points: Array<{ lat: number; lng: number }>, signal?: AbortSignal) => fetchElevations(points, resolveMapsApiKey(), { ...(signal ? { signal } : {}) }) } : {}),
         ...(fitter.service ? { scanFit: fitter.service } : { scanFitUnavailable: fitter.unavailable }),
         // Solar API roof facets (pipeline E's massing, SCRATCHBOX_STAGED_PIPELINE=e)
         ...(resolveMapsApiKey() ? { solarRoof: (lat: number, lng: number) => solarRoofFromBuildingShape(lat, lng, workspaceRoot, resolveMapsApiKey()) } : {}),

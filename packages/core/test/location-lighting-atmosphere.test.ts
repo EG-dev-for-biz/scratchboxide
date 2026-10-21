@@ -273,7 +273,92 @@ describe('Image Location Resection & 3D Object Lighting/Atmosphere APIs', () => 
         });
     });
 
-    describe('5. Task Capability Resolver Routing', () => {
+    describe('5. Cartesian Normal Snapping', () => {
+        it('opt-in: enableNormalSnap sets uNormalSnapEnabled and passes azimuth through; snap band is absent from delightUniforms but carried by the shader uniform', () => {
+            const result = harmonizeLocationObjectAtmosphere({
+                latitude: 41.8902, longitude: 12.4922, isoDate: '2026-09-28T17:30:00Z',
+                preset: 'civil_twilight_dusk',
+                enableNormalSnap: true,
+                buildingAzimuthDeg: 27.5
+            });
+
+            expect(result.delightUniforms.uNormalSnapEnabled).toBe(true);
+            expect(result.delightUniforms.uBuildingAzimuthDeg).toBe(27.5);
+            // uNormalSnapBand is not stored in delightUniforms; the shader uniform carries the [0.92, 0.98] default.
+            expect(result.delightUniforms.uNormalSnapBand).toBeUndefined();
+        });
+
+        it('opt-out: without enableNormalSnap the snap flag is absent (zero uninvited defaults)', () => {
+            const result = harmonizeLocationObjectAtmosphere({
+                latitude: 41.8902, longitude: 12.4922, isoDate: '2026-09-28T17:30:00Z',
+                preset: 'civil_twilight_dusk'
+            });
+
+            expect(result.delightUniforms.uNormalSnapEnabled).toBeUndefined();
+            expect(result.delightUniforms.uBuildingAzimuthDeg).toBeUndefined();
+        });
+
+        it('applyPhotogrammetricDelightShader emits #define NORMAL_SNAP_ENABLED only when uNormalSnapEnabled is true', () => {
+            const snap = new THREE.MeshStandardMaterial();
+            LocationObjectLightingService.applyPhotogrammetricDelightShader(snap, { uNormalSnapEnabled: true, uBuildingAzimuthDeg: 45.0 });
+            const noSnap = new THREE.MeshStandardMaterial();
+            LocationObjectLightingService.applyPhotogrammetricDelightShader(noSnap, {});
+
+            const fakeSnap: any = { uniforms: {}, vertexShader: '#include <beginnormal_vertex>', fragmentShader: '#include <dithering_fragment>' };
+            const fakeNoSnap: any = { uniforms: {}, vertexShader: '#include <beginnormal_vertex>', fragmentShader: '#include <dithering_fragment>' };
+            snap.onBeforeCompile(fakeSnap, {} as any);
+            noSnap.onBeforeCompile(fakeNoSnap, {} as any);
+
+            expect(fakeSnap.fragmentShader).toContain('#define NORMAL_SNAP_ENABLED 1');
+            expect(fakeNoSnap.fragmentShader).not.toContain('#define NORMAL_SNAP_ENABLED');
+
+            // Both shaders declare the uniforms so GLSL compiles cleanly either way.
+            expect(fakeSnap.fragmentShader).toContain('uniform float uBuildingAzimuthDeg');
+            expect(fakeSnap.fragmentShader).toContain('uniform vec2 uNormalSnapBand');
+            expect(fakeNoSnap.fragmentShader).toContain('uniform float uBuildingAzimuthDeg');
+        });
+
+        it('applyPhotogrammetricDelightShader defaults uNormalSnapBand to [0.92, 0.98]', () => {
+            const material = new THREE.MeshStandardMaterial();
+            LocationObjectLightingService.applyPhotogrammetricDelightShader(material, { uNormalSnapEnabled: true });
+            const u = (material as any).userData.delightUniforms;
+            expect(u.uNormalSnapBand.value.x).toBeCloseTo(0.92);
+            expect(u.uNormalSnapBand.value.y).toBeCloseTo(0.98);
+        });
+
+        it('the fragment shader chunk contains the #ifdef NORMAL_SNAP_ENABLED GLSL block', () => {
+            const result = harmonizeLocationObjectAtmosphere({
+                latitude: 41.8902, longitude: 12.4922, isoDate: '2026-09-28T17:30:00Z',
+                preset: 'midday_clear', enableNormalSnap: true, buildingAzimuthDeg: 0.0
+            });
+            expect(result.shaderGLSL.fragmentShaderChunk).toContain('#ifdef NORMAL_SNAP_ENABLED');
+            expect(result.shaderGLSL.fragmentShaderChunk).toContain('uBuildingAzimuthDeg');
+            expect(result.shaderGLSL.fragmentShaderChunk).toContain('uNormalSnapBand');
+        });
+
+        it('tool summary appends snap info when enableNormalSnap is on, omits it when off', async () => {
+            const registry = createDefaultToolRegistry();
+            const snapOn = await registry.dispatch('geobox_harmonize_location_lighting', {
+                landmarkName: 'Pantheon, Rome',
+                latitude: 41.8986, longitude: 12.4769,
+                isoDate: '2026-09-28T17:30:00Z',
+                preset: 'civil_twilight_dusk',
+                enableNormalSnap: true,
+                buildingAzimuthDeg: 18.0
+            }, {} as any);
+            expect(snapOn.exec.summaryResult).toContain('Cartesian Normal Snapping enabled (azimuth: 18°)');
+
+            const snapOff = await registry.dispatch('geobox_harmonize_location_lighting', {
+                landmarkName: 'Pantheon, Rome',
+                latitude: 41.8986, longitude: 12.4769,
+                isoDate: '2026-09-28T17:30:00Z',
+                preset: 'civil_twilight_dusk'
+            }, {} as any);
+            expect(snapOff.exec.summaryResult).not.toContain('Cartesian Normal Snapping');
+        });
+    });
+
+    describe('6. Task Capability Resolver Routing', () => {
         it('should route "image location" tasks to native resection capability and tools', () => {
             const result = TaskCapabilityResolver.resolveTaskCapability(
                 'resect the image location and camera pose for this landmark photograph'

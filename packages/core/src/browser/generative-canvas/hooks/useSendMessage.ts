@@ -147,6 +147,8 @@ interface StreamProgress {
     executionPlanCard?: ExecutionPlanCardData;
     /** Which model and credential answered (from the stream's `done` event). */
     modelProvenance?: ModelAnswerProvenance;
+    /** Tools loaded with load_tools so far in the conversation (from the stream's `done` event). */
+    loadedTools?: string[];
     /** Notes from tool results whose media a model other than the requested one made (recordMediaModelNote). */
     mediaModelNotes: string[];
 }
@@ -495,6 +497,8 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                 chatHistory,
                 mode: d.aiInteractionMode || 'agent',
                 enableWorkspaceTools: true,
+                // Tools the model loaded earlier in this conversation stay offered (the latest reply's list holds them all).
+                loadedTools: [...updatedMessages].reverse().find(m => m.loadedTools && m.loadedTools.length > 0)?.loadedTools,
                 autoVerify: true,
                 workspaceRoot: d.activeWorkspace?.path
             },
@@ -518,6 +522,9 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                 }
                 if (event.groundingMetadata) {
                     progress.groundingMetadata = event.groundingMetadata;
+                }
+                if (event.loadedTools) {
+                    progress.loadedTools = event.loadedTools;
                 }
                 if (event.modelProvenance) {
                     progress.modelProvenance = event.modelProvenance;
@@ -725,6 +732,7 @@ function finalizeBackendMessage(d: SendMessageDeps, ctx: GenerationContext, back
             questionCard: backend.streamQuestionCard,
             executionPlanCard: backend.streamExecutionPlanCard,
             modelProvenance: ctx.progress.modelProvenance,
+            loadedTools: ctx.progress.loadedTools,
             mediaModelNote: mediaModelNoteOf(ctx.progress.mediaModelNotes)
         };
     } else if (usedBackend) {
@@ -741,6 +749,7 @@ function finalizeBackendMessage(d: SendMessageDeps, ctx: GenerationContext, back
             questionCard: backend.streamQuestionCard,
             executionPlanCard: backend.streamExecutionPlanCard,
             modelProvenance: ctx.progress.modelProvenance,
+            loadedTools: ctx.progress.loadedTools,
             mediaModelNote: mediaModelNoteOf(ctx.progress.mediaModelNotes)
         };
     } else {

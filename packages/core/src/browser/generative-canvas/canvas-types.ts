@@ -1583,6 +1583,8 @@ export interface ChatMessage {
     deepWriteResumed?: boolean;
     /** Which model and credential answered, and why when not the requested ones (shown on the message). */
     modelProvenance?: import('../../common/gemini-protocol').ModelAnswerProvenance;
+    /** Tools the model had loaded with load_tools by the end of this reply; sent back on the next request. */
+    loadedTools?: string[];
     /** The background vision check of the canvas, or why it could not run. */
     visualAudit?: import('../../common/visual-verification-protocol').VisualVerificationOutcome;
     textureMatrixContent?: import('../../common/media-generation-protocol').TextureMatrixResult;

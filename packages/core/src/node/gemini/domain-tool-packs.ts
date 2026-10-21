@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import type { ToolDeclaration } from './tools/types';
-import { TaskCapabilityResolver, type CapabilityResolutionResult, type TaskDomain } from '../agent/task-capability-resolver';
+import type { TaskDomain } from '../agent/task-capability-resolver';
 import { CANVAS_TOOL_DECLARATIONS } from './tools/canvas-tools';
 import { WORKSPACE_TOOL_DECLARATIONS } from './tools/workspace-tools';
 import { PYTHON_3D_TOOL_DECLARATIONS } from './tools/python-3d-tools';
@@ -201,119 +201,25 @@ export interface ResolveToolPacksOptions {
 }
 
 /**
- * Deterministically resolves which domain tool packs should be active for a request.
- * Runs pre-flight TaskCapabilityResolver to classify the task domain before the LLM generates tokens.
+ * The packs a request's switches select: the packs it names (toolPacks), else core workspace with the domain packs
+ * when workspace tools are allowed, plus lens and browser when they are switched on. Nothing here reads the prompt:
+ * tools are never chosen or withheld by words in the request (AGENTS.md ADA 1.2); the chat offers its entry set and
+ * the model loads the rest (tool-catalog.ts).
  */
-export function resolveDomainToolPacks(options: ResolveToolPacksOptions): {
-    packs: ToolPackName[];
-    capabilityResolution?: CapabilityResolutionResult;
-} {
+export function resolveDomainToolPacks(options: ResolveToolPacksOptions): { packs: ToolPackName[] } {
     const requested = options.requestedPacks;
     if (requested && requested.length > 0) {
         return { packs: Array.from(new Set(requested)) };
     }
-
-    const prompt = (options.prompt || '').trim();
-    let capabilityResolution: CapabilityResolutionResult | undefined;
-
-    if (prompt.length > 0) {
-        try {
-            capabilityResolution = TaskCapabilityResolver.resolveTaskCapability(prompt, {
-                domainHint: options.domainHint,
-                activeArtifact: options.activeArtifact
-            });
-        } catch {
-            // Graceful fallback
-        }
+    const packs: ToolPackName[] = [];
+    if (options.enableWorkspaceTools !== false) {
+        packs.push('core_workspace', 'geospatial_3d', 'mesh_surface', 'vfx_video');
     }
-
-    const packs = new Set<ToolPackName>();
-
-    // 1. Browser check
-    const isBrowserNeeded = !!(
-        options.enableBrowserTools ||
-        options.agent ||
-        (prompt && /browse|click|navigate|page|web|url|http|localhost/i.test(prompt))
-    );
-    if (isBrowserNeeded) {
-        packs.add('browser');
-    }
-
-    // 2. Lens check
-    const isLensNeeded = options.enableLensTools !== false && (
-        options.enableLensTools === true ||
-        !!(prompt && /lens|unproject|lens_project|lens_sync|codebase_lens/i.test(prompt))
-    );
-    if (isLensNeeded) {
-        packs.add('lens');
-    }
-
-    // 3. Workspace & domain packs check
-    const isWorkspaceAllowed = options.enableWorkspaceTools !== false;
-    if (isWorkspaceAllowed) {
-        // Core workspace is always provided when workspace tools are active
-        const isCoreNeeded =
-            options.enableWorkspaceTools === true ||
-            options.mode === 'agent' ||
-            options.mode === 'plan' ||
-            options.mode === 'ask' ||
-            !!options.agent ||
-            prompt.length === 0 ||
-            capabilityResolution?.canSolveNatively === true ||
-            /workspace|file|edit|patch|sandbox|compile|diagnostic|symbol|search/i.test(prompt);
-
-        if (isCoreNeeded) {
-            packs.add('core_workspace');
-        }
-
-        // Domain-specific packs based on Capability Resolution & Domain hints
-        const domain = capabilityResolution?.taskDomain || 'general';
-        const is3DActive = options.activeArtifact?.type === '3d-scene';
-        const isStagingPrompt = /stage|staging|place|ground|anchor|situate|relocate|location|at\s+[a-z]|on\s+[a-z]|beach|park|city|street|monaco|venice|cyclorama|plinth|pedestal|platform|cove|pavement|asphalt|boardwalk|vector|tiles/i.test(prompt);
-
-        if (domain === '3d' || is3DActive || isStagingPrompt || /3d|tile|photorealistic|satellite|geodetic|landmark|coordinates|address|utdra|uldra|decomposition|rectif|beautif|universal.*3d|webxr|geobox|splat/i.test(prompt)) {
-            packs.add('geospatial_3d');
-            packs.add('mesh_surface');
-            packs.add('core_workspace');
-        }
-
-        if (domain === 'vfx' || /vfx|video|timeline|nle|matchmove|brown-conrady|lens\s*distortion|camera\s*solve|ephemeris|solar|god_ray|turbidity|atmosphere|lighting|gaffer|usd|4dgs|tapir|avatar|performer/i.test(prompt)) {
-            packs.add('vfx_video');
-            packs.add('core_workspace');
-        }
-
-        if (/mesh|deform|taper|twist|bend|bulge|sculpt|lattice|botanical|tree|plant|rhytidome|uv|unwrap|texel|maxrects|pbr|nano.banana|color\s*match|palette|recolor/i.test(prompt)) {
-            packs.add('mesh_surface');
-            packs.add('core_workspace');
-        }
-
-        // If explicit enableWorkspaceTools is requested or mode === 'agent', ensure all domain packs are available
-        // to maintain 100% full compatibility with global agent stress test suites.
-        if (options.enableWorkspaceTools === true || options.mode === 'agent') {
-            packs.add('core_workspace');
-            packs.add('geospatial_3d');
-            packs.add('mesh_surface');
-            packs.add('vfx_video');
-        }
-    }
-
-    return {
-        packs: Array.from(packs),
-        capabilityResolution
-    };
+    if (options.enableLensTools === true) packs.push('lens');
+    if (options.enableBrowserTools === true || options.agent) packs.push('browser');
+    return { packs };
 }
 
-/**
- * Coerces and normalizes tool arguments defensively before execution:
- * - Parses stringified JSON objects / arrays (common LLM hallucination).
- * - Coerces string numbers to floats/integers when schema specifies NUMBER/INTEGER.
- * - Coerces string booleans ("true"/"false") to real booleans.
- * - Filters out unwanted null/undefined values.
- */
-/**
- * Models sometimes nest the real arguments one level down, e.g. { parameters: { script } }, which
- * reached handlers as a call with no script. Lift them when the wrapper is not a declared parameter.
- */
 function unwrapNestedArguments(rawArgs: Record<string, unknown>, schemaProps: Record<string, unknown> | undefined): Record<string, unknown> {
     if (!schemaProps) {
         return { ...rawArgs };

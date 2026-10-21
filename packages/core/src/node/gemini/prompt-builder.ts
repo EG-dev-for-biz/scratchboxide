@@ -20,6 +20,7 @@ import { isReadOnlyMode } from './tool-permissions';
 import { OBJECT_BUILD_SOURCE, type BuiltObjectRecord } from '../../common/spatial/object-build-spec';
 import { stagedBuildContext } from '../3d-engine/staged-location/staged-summary';
 import { SB_API_SUMMARY } from '../3d-engine/sb-api.generated';
+import { toolOfferMode } from './tool-catalog';
 
 /** Workspace-intelligence services the system instruction draws context from. */
 export interface PromptContextServices {
@@ -617,9 +618,28 @@ export function scriptingInPlay(request: Pick<GeminiGenerateRequest, 'activeArti
 }
 
 /**
- * Construct rich system instruction injecting Canvas Primitives, active Superpowers, and schemas.
+ * The system instruction in two parts. `stable` holds what is the same on every turn of a workspace and mode (persona,
+ * project instructions, knowledge, skills, memories, tool guide, capabilities, 3D policy), so it is byte-identical
+ * across turns and the model's prompt cache can reuse it with the tool declarations after it. `turnContext` holds what
+ * changes per request (attached skills and MCP tools, symbols matched to the prompt, workspace exemplars, diagnostics,
+ * recent diffs, the script guide while a script-built scene is open); the chat sends it with the request in the
+ * contents, after the cached prefix.
+ */
+export interface SystemInstructionParts {
+    stable: string;
+    turnContext: string;
+}
+
+/**
+ * Construct rich system instruction injecting Canvas Primitives, active Superpowers, and schemas: the stable part
+ * followed by this request's context (see buildSystemInstructionParts).
  */
 export async function buildSystemInstruction(request: GeminiGenerateRequest, services: Partial<PromptContextServices> = {}): Promise<string> {
+    const { stable, turnContext } = await buildSystemInstructionParts(request, services);
+    return turnContext ? `${stable}\n\n${turnContext}` : stable;
+}
+
+export async function buildSystemInstructionParts(request: GeminiGenerateRequest, services: Partial<PromptContextServices> = {}): Promise<SystemInstructionParts> {
     const isAgent = request.mode === 'agent';
     const isPlan = request.mode === 'plan';
     const isAsk = request.mode === 'ask';
@@ -787,7 +807,8 @@ ${CANVAS_PRIMITIVES_SPECIFICATION}
     let workspaceToolsSection = '';
     if (request.enableWorkspaceTools !== false) {
         workspaceToolsSection = `\n\n### NATIVE WORKSPACE TOOLS & AUTONOMOUS REACT ENVIRONMENT:
-You have direct, sandboxed function-calling access to the developer's workspace and terminal.
+You have direct, sandboxed function-calling access to the developer's workspace and terminal.${toolOfferMode() === 'catalog' ? `
+Tools not yet declared are listed in load_tools: load the ones a task needs by name, then call them.` : ''}
 Available workspace tools:
 - mount_canvas_primitive: Declaratively mount an interactive visual canvas primitive on the stage (3D scene, live code sandbox, kanban board, markdown document, or node graph).
 - ask_user_question: Ask the user a structured multiple-choice question with answer options, radio/checkboxes, and an optional recommended path when requirements are ambiguous.
@@ -858,13 +879,16 @@ If a task needs a capability that is not available natively (e.g. neural image-t
 
     // The 3D intent policy goes to every prompt in a mode that offers the 3D tools (Plan and Ask offer only read-only
     // tools, the same test the tool registry applies); the script guide only while a script-built scene is worked on.
-    const spatialSection = isReadOnlyMode(request.mode) ? '' : SPATIAL_INTENT_POLICY + (scriptingInPlay(request) ? SB_PYTHON_SCRIPT_GUIDE : '');
+    const spatialSection = isReadOnlyMode(request.mode) ? '' : SPATIAL_INTENT_POLICY;
+    const scriptGuideSection = !isReadOnlyMode(request.mode) && scriptingInPlay(request) ? SB_PYTHON_SCRIPT_GUIDE : '';
 
     const closingInstruction = isCodingMode
         ? '\n\nDeliver concise, technically rigorous responses with clear reasoning and tool-driven progress.'
         : '\n\nDeliver insightful, Cupertino-grade results. Output a friendly intro explanation followed by the complete ```json codeblock.';
 
-    return `${basePersona}${projectInstructionsSection}${workingMethodSection}${projectKnowledgeSection}${skillIndexSection}${superpowersSection}${mcpSection}${contextGraphSection}${patternMatchingSection}${lspDiagnosticSection}${diffMemorySection}${memoriesSection}${workspaceToolsSection}${nativeCapabilitiesSection}${spatialSection}${closingInstruction}`;
+    const stable = `${basePersona}${projectInstructionsSection}${workingMethodSection}${projectKnowledgeSection}${skillIndexSection}${memoriesSection}${workspaceToolsSection}${nativeCapabilitiesSection}${spatialSection}${closingInstruction}`;
+    const turnContext = `${superpowersSection}${mcpSection}${contextGraphSection}${patternMatchingSection}${lspDiagnosticSection}${diffMemorySection}${scriptGuideSection}`.trim();
+    return { stable, turnContext };
 }
 
 /**

@@ -7,6 +7,8 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { availableToolNames } from '../src/node/gemini/tool-catalog';
+import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
     createDefaultToolRegistry,
@@ -63,37 +65,26 @@ describe('Domain Tool Packs, Capability Resolution & Argument Coercion', () => {
     });
 
     describe('2. Intent-Driven Pre-Flight Capability Resolution (resolveDomainToolPacks)', () => {
-        it('resolves 3D architectural tasks via TaskCapabilityResolver to 3D and workspace packs', () => {
-            const res = resolveDomainToolPacks({
-                prompt: 'Create a stone Roman aqueduct with water arches and colonnades'
-            });
-
-            expect(res.capabilityResolution).toBeDefined();
-            expect(res.capabilityResolution?.taskDomain).toBe('3d');
-            expect(res.packs).toContain('core_workspace');
-            expect(res.packs).toContain('geospatial_3d');
-            expect(res.packs).toContain('mesh_surface');
-            expect(res.packs).not.toContain('browser');
+        it('selects packs from the request\'s switches only, never from words in the prompt (ADA 1.2)', () => {
+            const prompts = [
+                'Create a stone Roman aqueduct with water arches and colonnades',
+                'Calibrate optical camera lens distortion Brown-Conrady and matchmove video timeline',
+                'Spin up Trellis neural diffusion image-to-3d pipeline on a GPU',
+                'browse to localhost and project it via lens'
+            ];
+            for (const prompt of prompts) {
+                const res = resolveDomainToolPacks({ prompt });
+                expect(res.packs).toEqual(['core_workspace', 'geospatial_3d', 'mesh_surface', 'vfx_video']);
+                expect((res as any).capabilityResolution).toBeUndefined();
+            }
+            expect(resolveDomainToolPacks({ prompt: 'x', enableWorkspaceTools: false }).packs).toEqual([]);
+            expect(resolveDomainToolPacks({ prompt: 'x', enableLensTools: true, enableBrowserTools: true }).packs).toEqual(['core_workspace', 'geospatial_3d', 'mesh_surface', 'vfx_video', 'lens', 'browser']);
         });
 
-        it('resolves VFX matchmove and camera calibration tasks to vfx_video pack', () => {
-            const res = resolveDomainToolPacks({
-                prompt: 'Calibrate optical camera lens distortion Brown-Conrady and matchmove video timeline'
-            });
-
-            expect(res.capabilityResolution?.taskDomain).toBe('vfx');
-            expect(res.packs).toContain('vfx_video');
-            expect(res.packs).toContain('core_workspace');
-            expect(res.packs).not.toContain('browser');
-        });
-
-        it('reports neural diffusion tasks as not natively solvable without adding any extra pack', () => {
-            const res = resolveDomainToolPacks({
-                prompt: 'Spin up Trellis neural diffusion image-to-3d pipeline on a GPU'
-            });
-
-            expect(res.capabilityResolution?.canSolveNatively).toBe(false);
-            expect(res.packs).toContain('core_workspace');
+        it('still reports domains and unsupported tasks through the capability resolver (used by the capability routes)', () => {
+            expect(TaskCapabilityResolver.resolveTaskCapability('Create a stone Roman aqueduct with water arches and colonnades').taskDomain).toBe('3d');
+            expect(TaskCapabilityResolver.resolveTaskCapability('Calibrate optical camera lens distortion Brown-Conrady and matchmove video timeline').taskDomain).toBe('vfx');
+            expect(TaskCapabilityResolver.resolveTaskCapability('Spin up Trellis neural diffusion image-to-3d pipeline on a GPU').canSolveNatively).toBe(false);
         });
 
         it('honors explicitly requested tool packs', () => {
@@ -262,7 +253,8 @@ describe('Domain Tool Packs, Capability Resolution & Argument Coercion', () => {
             const fnConfig = configs!.find(c => 'functionDeclarations' in c) as any;
             expect(fnConfig).toBeDefined();
 
-            const names = fnConfig.functionDeclarations.map((d: any) => d.name);
+            // Declared up front or loadable by name through load_tools (tool-catalog.ts).
+            const names = availableToolNames(configs).all;
             expect(names).toContain('mount_canvas_primitive');
             expect(names).toContain('google_3d_tiles_get_clay');
             expect(names).toContain('mesh_apply_deformers');
@@ -278,7 +270,6 @@ describe('Domain Tool Packs, Capability Resolution & Argument Coercion', () => {
 
             for (const prompt of alienPrompts) {
                 const res = resolveDomainToolPacks({ prompt });
-                expect(res.capabilityResolution?.taskDomain).toBe('3d');
                 expect(res.packs).toContain('geospatial_3d');
                 expect(res.packs).toContain('mesh_surface');
                 expect(res.packs).toContain('core_workspace');

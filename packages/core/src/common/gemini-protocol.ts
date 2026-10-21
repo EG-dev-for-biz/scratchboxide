@@ -121,6 +121,11 @@ export interface GeminiGenerateRequest {
     requirePlanApproval?: boolean;
     autoVerify?: boolean;
     toolPacks?: Array<'core_workspace' | 'geospatial_3d' | 'mesh_surface' | 'vfx_video' | 'lens' | 'browser'>;
+    /**
+     * Tools the model loaded with load_tools earlier in this conversation (sent back on `done` as loadedTools); they
+     * are offered again after the entry set (tool-catalog.ts).
+     */
+    loadedTools?: string[];
     domainHint?: 'auto' | '3d' | 'vfx' | 'generative' | 'code' | 'general';
 }
 
@@ -224,6 +229,8 @@ export interface GeminiStreamEvent {
     modelUsed?: string;
     /** On `done` and `error`: which model and credential answered, and why not the requested ones. */
     modelProvenance?: ModelAnswerProvenance;
+    /** On `done`: every tool loaded with load_tools so far in the conversation (send it back as request.loadedTools). */
+    loadedTools?: string[];
     error?: string;
     verification?: VerificationOutcome;
     planApprovalRequired?: boolean;
@@ -260,6 +267,11 @@ export interface ModelAnswerProvenance {
      * the last model tried, not one that answered.
      */
     noModelAnswered?: boolean;
+    /**
+     * Set when a router model took part in the turn's first model call (fast-router.ts): which model chose the first
+     * tool call, or that the requested model answered it and why the router handed off.
+     */
+    routing?: string;
 }
 
 /** One item of the agent's visible checklist (`update_task_list`). */
@@ -280,6 +292,8 @@ export interface GeminiGenerateResponse {
     groundingMetadata?: GroundingMetadata;
     modelUsed: string;
     modelProvenance?: ModelAnswerProvenance;
+    /** Every tool loaded with load_tools so far in the conversation. */
+    loadedTools?: string[];
     questionCard?: import('../browser/generative-canvas/canvas-types').InteractiveQuestionCardData;
     executionPlanCard?: import('../browser/generative-canvas/canvas-types').ExecutionPlanCardData;
     usage?: {

@@ -6,7 +6,7 @@
  * of this file, via any medium, is strictly prohibited without explicit written
  * permission from Scratchbox LLC.
  ********************************************************************************/
-import type { Content, FunctionCall, Part } from '@google/genai';
+import type { FunctionCall, Part } from '@google/genai';
 import type {
     GeminiGenerateRequest,
     GeminiGenerateResponse,
@@ -23,9 +23,10 @@ import {
     GeminiClient,
     isModelNotFoundError,
     resolveFetch,
+    resolveVertexLocation,
     summarizeModelError,
+    vertexHost,
     type FetchLike,
-    type GeminiThinkingConfig,
     type VertexGenerateContentJson
 } from './gemini-client';
 import { compactChatHistory, HISTORY_SUMMARY_INSTRUCTION } from './history-compaction';
@@ -42,9 +43,14 @@ import {
 } from './tool-registry';
 import type { McpBridge } from './mcp-bridge';
 import type { LensBridge } from './lens-bridge';
-import { buildContents, buildSystemInstruction, type PromptContextServices } from './prompt-builder';
-import { buildPendingPythonGenerator, continueTurnArtifact, parseOrSynthesizeArtifact, withOpenArtifactRule } from './artifact-synthesis';
+import type { PromptContextServices } from './prompt-builder';
+import { buildPendingPythonGenerator, continueTurnArtifact, parseOrSynthesizeArtifact } from './artifact-synthesis';
+import { buildChatPayload, functionDeclarationCount, toolsForModel, type BuiltChatPayload, type VertexStreamPayload } from './chat-payload';
+import { LOAD_TOOLS_NAME } from './tool-catalog';
+import { describeRouteOutcome, raceRoutedCall, routerConfig, type StartStream } from './fast-router';
+import { ContextCacheManager, type ContextCacheTarget } from './context-cache';
 import { AgentVerificationService } from './agent-verification-service';
+import { ChatTurnTimer } from './chat-turn-telemetry';
 
 export type StreamEventSink = (event: GeminiStreamEvent) => void;
 
@@ -74,16 +80,6 @@ export interface StreamingEngineOptions {
 
 type UsageMetadata = NonNullable<GeminiStreamEvent['usage']> & Record<string, unknown>;
 
-interface VertexStreamPayload {
-    contents: Content[];
-    systemInstruction: Content;
-    generationConfig: {
-        temperature: number;
-        maxOutputTokens: number;
-        thinkingConfig: GeminiThinkingConfig;
-    };
-    tools?: GeminiToolConfig[];
-}
 
 interface AgentInteractionPayload {
     input: string;
@@ -235,6 +231,12 @@ interface TurnAttemptState {
     currentModel?: string;
     /** Helper calls of the turn that fell back or failed (shown on the reply). */
     helperNotes: string[];
+    /** When the turn reached the server (Date.now()); the [chat-turn] timings count from here. */
+    startedAt?: number;
+    /** When the credential for the turn was resolved (Date.now()). */
+    authAt?: number;
+    /** Set when a router took part in the first model call (fast-router.ts): who chose the first tool, and why. */
+    routing?: string;
 }
 
 /**
@@ -250,6 +252,8 @@ export class StreamingEngine {
     private readonly toolContext: (request: GeminiGenerateRequest) => ToolContext;
     private readonly executeSubagentTask: (request: SubagentRequest) => Promise<SubagentResponse>;
     private readonly synthesizeArtifact: ArtifactSynthesizer;
+    /** Explicit context caches of the chat's stable prefix, per model (context-cache.ts). */
+    readonly contextCache = new ContextCacheManager(() => resolveFetch());
 
     constructor(options: StreamingEngineOptions) {
         this.client = options.client;
@@ -260,6 +264,19 @@ export class StreamingEngine {
         this.toolContext = options.toolContext;
         this.executeSubagentTask = options.executeSubagentTask;
         this.synthesizeArtifact = options.synthesizeArtifact || parseOrSynthesizeArtifact;
+    }
+
+    /**
+     * The body of a chat request's first model call: the stable system instruction and the tools (the cacheable
+     * prefix), then the contents with this request's context (chat-payload.ts).
+     */
+    async buildFirstCallPayload(request: GeminiGenerateRequest, model: string): Promise<BuiltChatPayload> {
+        return buildChatPayload(request, this.promptServices(), this.buildToolDeclarations(request), model, this.client.getThinkingConfig(request, model));
+    }
+
+    private contextCacheTarget(auth: { projectId: string; token: string }): ContextCacheTarget {
+        const location = resolveVertexLocation();
+        return { apiBase: `https://${vertexHost(location)}/v1/projects/${auth.projectId}/locations/${location}`, projectId: auth.projectId, location, token: auth.token };
     }
 
     /** Vertex `tools` payload for a request (built-in suites, attached MCP tools, search, code execution). */
@@ -276,6 +293,7 @@ export class StreamingEngine {
         onEvent: StreamEventSink,
         signal?: AbortSignal
     ): Promise<GeminiGenerateResponse> {
+        const turnStartedAt = Date.now();
         throwIfAborted(signal);
 
         // Vertex (service account) is preferred; the Gemini API key answers when there is no service account, or when
@@ -307,6 +325,7 @@ export class StreamingEngine {
                     : 'No Google Cloud service account or Gemini API key configured.');
             }
         }
+        const authAt = Date.now();
 
         // If agent is specified, route to Agentic Interaction
         if (request.agent) {
@@ -352,7 +371,7 @@ export class StreamingEngine {
         }
 
         throwIfAborted(signal);
-        const attempt: TurnAttemptState = { modelResponded: false, helperNotes };
+        const attempt: TurnAttemptState = { modelResponded: false, helperNotes, startedAt: turnStartedAt, authAt };
         // The fallback list stays, but every turn starts from the requested (or configured) model again: a model that
         // answered once is not made the default for later turns. Each skipped model is reported with its reason.
         const candidates = this.client.getModelCandidates(request.model);
@@ -366,7 +385,8 @@ export class StreamingEngine {
                 : {}),
             credential: auth.type,
             ...(credentialNote ? { credentialNote } : {}),
-            ...(helperNotes.length > 0 ? { helperNotes } : {})
+            ...(helperNotes.length > 0 ? { helperNotes } : {}),
+            ...(attempt.routing ? { routing: attempt.routing } : {})
         });
         let response: GeminiGenerateResponse;
         try {
@@ -581,13 +601,11 @@ export class StreamingEngine {
         signal?: AbortSignal,
         attempt: TurnAttemptState = { modelResponded: false, helperNotes: [] }
     ): Promise<GeminiGenerateResponse> {
+        const turnStartedAt = attempt.startedAt ?? Date.now();
         const url = auth.type === 'vertex'
             ? this.client.vertexModelUrl(auth.projectId, model, 'streamGenerateContent')
             : `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(auth.apiKey)}`;
 
-        // While an artifact is open, the model is told how to continue it or start a new one (the reply's tag or
-        // envelope is read that way by artifact synthesis).
-        const systemInstructionText = withOpenArtifactRule(await buildSystemInstruction(request, this.promptServices()), request.activeArtifact);
         // The summary of older turns is a helper call: when the API key answered it, or it failed and the older
         // turns were dropped, the reply says so (helperNotes), not only a passing status line.
         const addHelperNote = (note: string) => {
@@ -611,35 +629,12 @@ export class StreamingEngine {
             undefined,
             (dropped, error) => addHelperNote(`${dropped} earlier message${dropped === 1 ? ' was' : 's were'} left out of the context: summarizing them with ${DEFAULT_SUBAGENT_MODEL} failed (${summarizeModelError(error)})`)
         );
-        const contents = buildContents(request);
-        const tools = this.buildToolDeclarations(request);
-
-        const payload: VertexStreamPayload = {
-            contents,
-            systemInstruction: {
-                role: 'system',
-                parts: [{ text: systemInstructionText }]
-            },
-            generationConfig: {
-                temperature: request.temperature !== undefined ? request.temperature : 0.7,
-                // Tool calls that carry a whole generated app run ~5k tokens; at 8192 they were cut off (MAX_TOKENS).
-                maxOutputTokens: 32768,
-                thinkingConfig: this.client.getThinkingConfig(request, model)
-            }
-        };
-        if (tools && tools.length > 0) {
-            // Gemini 3+ accepts googleSearch alongside functionDeclarations; earlier models reject the combination.
-            const hasFunctionDeclarations = tools.some(t => 'functionDeclarations' in t && Array.isArray(t.functionDeclarations) && t.functionDeclarations.length > 0);
-            const supportsMixedTools = Number(/^gemini-(\d+)/.exec(model)?.[1] ?? 0) >= 3;
-            if (hasFunctionDeclarations && !supportsMixedTools) {
-                if (request.requireGoogleSearch) {
-                    throw new Error(`@web needs Google Search grounding, but ${model} cannot take the search tool together with function tools; choose a Gemini 3 model or remove @web`);
-                }
-                payload.tools = tools.filter(t => 'functionDeclarations' in t);
-            } else {
-                payload.tools = tools;
-            }
-        }
+        const historyAt = Date.now();
+        const built = await this.buildFirstCallPayload(request, model);
+        const payloadAt = Date.now();
+        const payload = built.payload;
+        // Tools loaded with load_tools in this conversation (tool-catalog.ts).
+        const loadedTools = new Set(request.loadedTools || []);
 
         onEvent({
             type: 'status',
@@ -694,38 +689,222 @@ export class StreamingEngine {
                 }
             }
 
-            const response = await fetchFn(url, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify(payload),
-                signal
+            const timer = new ChatTurnTimer(turnStartedAt, {
+                ...built.shape,
+                model,
+                call: currentTurn,
+                role: currentTurn === 1 ? 'route' : 'continue',
+                thinking: JSON.stringify(payload.generationConfig.thinkingConfig),
+                contentsBytes: JSON.stringify(payload.contents).length,
+                // The first call's preparation (later calls reuse the payload).
+                ...(currentTurn === 1 ? {
+                    ...(attempt.authAt !== undefined ? { authMs: attempt.authAt - turnStartedAt } : {}),
+                    historyMs: historyAt - turnStartedAt,
+                    payloadMs: payloadAt - turnStartedAt
+                } : {})
             });
 
-            if (!response.ok) {
-                const errBody = await response.text();
-                throw new Error(`AI request failed (${response.status}): ${errBody}`);
-            }
-            attempt.modelResponded = true;
+            // One tool call: run it under its deadline, show its result, and return the parts for the next call.
+            const runToolCall = async (toolCall: FunctionCall, callModel: string): Promise<{ modelPart: Part; responsePart: Part }> => {
+                throwIfAborted(signal);
+                const toolName = toolCall.name || '';
+                const rawToolCall = toolCall as any;
+                // A thought signature belongs to the model that wrote it; a call the router wrote is sent to the chat
+                // model without one.
+                const sig = (callModel === model && (rawToolCall.thought_signature || rawToolCall.thoughtSignature)) ||
+                            'skip_thought_signature_validator';
+                const modelPart = {
+                    functionCall: {
+                        name: toolName,
+                        args: toolCall.args || {}
+                    },
+                    thought_signature: sig
+                } as any as Part;
 
-            await this.consumeSseLines(response, line => {
-                const parsed = parseSseDataLine(line);
-                if (parsed) {
-                    this.processChunk(
-                        parsed as VertexGenerateContentJson,
-                        accumulatedThoughts,
-                        turnDetectedToolCalls,
-                        model,
-                        onEvent,
-                        chunkText => {
-                            accumulatedText += chunkText;
-                            turnText += chunkText;
-                        },
-                        usage => { finalUsage = usage; },
-                        mergeGrounding,
-                        reason => { lastFinishReason = reason; }
-                    );
+                if (toolName === 'workspace_write_file' || toolName === 'workspace_apply_diff') {
+                    const fp = (toolCall.args as any)?.filePath;
+                    if (typeof fp === 'string') {
+                        modifiedFiles.add(fp);
+                    }
                 }
-            });
+
+                const { exec, resultPayload } = await this.executeToolCallWithDeadline({ id: toolCall.id, name: toolName, args: toolCall.args }, request, onEvent, model, signal);
+                mcpExecutions.push(exec);
+
+                if (toolName === 'mount_canvas_primitive' || (resultPayload && (resultPayload as any).artifact)) {
+                    const mountedArtifact: CanvasArtifact | undefined = (resultPayload as any)?.artifact
+                        ? continueTurnArtifact(streamMountedArtifact, (resultPayload as any).artifact as CanvasArtifact)
+                        : undefined;
+                    if (mountedArtifact) {
+                        // The model reads the result too: it names the artifact by the id the canvas shows.
+                        (resultPayload as any).artifact = mountedArtifact;
+                        request.activeArtifact = mountedArtifact;
+                        streamMountedArtifact = mountedArtifact;
+                        onEvent({ type: 'artifact_start', artifact: mountedArtifact, modelUsed: model });
+                        onEvent({ type: 'artifact_complete', artifact: mountedArtifact, modelUsed: model });
+                    }
+                }
+
+                if (toolName === 'ask_user_question' || (resultPayload && (resultPayload as any).questionCard)) {
+                    const questionCard = (resultPayload as any).questionCard;
+                    if (questionCard) {
+                        streamQuestionCard = questionCard;
+                        onEvent({ type: 'question_card', questionCard, modelUsed: model });
+                    }
+                }
+
+                if (toolName === 'present_execution_plan' || (resultPayload && (resultPayload as any).executionPlanCard)) {
+                    const executionPlanCard = (resultPayload as any).executionPlanCard;
+                    if (executionPlanCard) {
+                        streamExecutionPlanCard = executionPlanCard;
+                        onEvent({ type: 'execution_plan_card', executionPlanCard, modelUsed: model });
+                    }
+                }
+
+                if (resultPayload && Array.isArray((resultPayload as any).taskList)) {
+                    onEvent({ type: 'task_list', taskList: (resultPayload as any).taskList, modelUsed: model });
+                }
+
+                if ((resultPayload as any)?.questionCard || (resultPayload as any)?.executionPlanCard) {
+                    awaitingUser = true;
+                }
+
+                const callId = toolCall.id || `call-${Date.now()}`;
+                const toolResult = { id: callId, name: toolName, result: resultPayload };
+                onEvent({ type: 'tool_result', mcpExecution: exec, toolResult, modelUsed: model });
+
+                if (toolName === LOAD_TOOLS_NAME && Array.isArray((resultPayload as any)?.loaded)) {
+                    // Loaded tools are appended after the entry set for the rest of the request (and sent back on
+                    // `done` so the conversation's next request offers them too).
+                    for (const name of (resultPayload as any).loaded as string[]) loadedTools.add(name);
+                    request.loadedTools = [...loadedTools];
+                    payload.tools = toolsForModel(this.buildToolDeclarations(request), model, request.requireGoogleSearch);
+                    built.shape.toolCount = functionDeclarationCount(payload.tools);
+                    built.shape.toolBytes = payload.tools ? JSON.stringify(payload.tools).length : 0;
+                }
+
+                return {
+                    modelPart,
+                    responsePart: {
+                        functionResponse: {
+                            name: toolName,
+                            response: {
+                                name: toolName,
+                                content: toolResultForModel(toolName, exec, resultPayload)
+                            }
+                        }
+                    } as Part
+                };
+            };
+
+            // Tools start as soon as their functionCall part arrives, one after another in the order the model wrote
+            // them; the rest of the stream (usage, closing text) does not hold them up.
+            const toolRuns: Array<Promise<{ modelPart: Part; responsePart: Part }>> = [];
+            let toolChain: Promise<unknown> = Promise.resolve();
+            const startTool = (toolCall: FunctionCall, callModel: string) => {
+                const run = toolChain.then(() => {
+                    timer.toolStarted();
+                    return runToolCall(toolCall, callModel);
+                });
+                toolChain = run.catch(() => undefined);
+                toolRuns.push(run);
+            };
+            const handleLine = (line: string, lineModel: string) => {
+                timer.firstByte();
+                const parsed = parseSseDataLine(line);
+                if (!parsed) return;
+                const before = turnDetectedToolCalls.length;
+                this.processChunk(
+                    parsed as VertexGenerateContentJson,
+                    accumulatedThoughts,
+                    turnDetectedToolCalls,
+                    lineModel,
+                    onEvent,
+                    chunkText => {
+                        accumulatedText += chunkText;
+                        turnText += chunkText;
+                    },
+                    usage => { finalUsage = usage; },
+                    mergeGrounding,
+                    reason => { lastFinishReason = reason; }
+                );
+                for (const call of turnDetectedToolCalls.slice(before)) {
+                    timer.functionCall(call.name || '');
+                    startTool(call, lineModel);
+                }
+            };
+            const startStream = (streamUrl: string, streamPayload: VertexStreamPayload, streamModel: string, useCache = false): StartStream => async (streamSignal, onLine) => {
+                // The router reads the stable prefix from an explicit context cache when one is ready
+                // (context-cache.ts); the content it reads is the same either way. The chat model (gemini-4-argon)
+                // refuses explicit caches, so its calls do not ask.
+                const cacheName = useCache && auth.type === 'vertex'
+                    ? this.contextCache.lookup(this.contextCacheTarget({ projectId: auth.projectId, token: (headers['Authorization'] || '').replace(/^Bearer /, '') || auth.token }), streamModel, streamPayload.systemInstruction, streamPayload.tools)
+                    : undefined;
+                const send = (name: string | undefined) => {
+                    const { systemInstruction: _s, tools: _t, ...rest } = streamPayload;
+                    const sent = name ? { ...rest, cachedContent: name } : streamPayload;
+                    return fetchFn(streamUrl, { method: 'POST', headers, body: JSON.stringify(sent), signal: streamSignal });
+                };
+                let response = await send(cacheName);
+                if (cacheName) timer.cacheUsed(streamModel, cacheName);
+                if (!response.ok && cacheName) {
+                    const errBody = await response.text();
+                    if (!/cachedContent|cached content|NOT_FOUND/i.test(errBody)) {
+                        throw new Error(`AI request failed (${response.status}): ${errBody}`);
+                    }
+                    // The cache is gone (expired or deleted on the server): the same request without it.
+                    console.warn(`[context-cache] ${streamModel} cache ${cacheName} refused (${response.status}); sent without it: ${errBody.slice(0, 200)}`);
+                    this.contextCache.invalidate(cacheName);
+                    timer.cacheUsed(streamModel, undefined);
+                    response = await send(undefined);
+                }
+                if (!response.ok) {
+                    const errBody = await response.text();
+                    throw new Error(`AI request failed (${response.status}): ${errBody}`);
+                }
+                if (streamUrl === url) attempt.modelResponded = true;
+                await this.consumeSseLines(response, onLine);
+            };
+
+            timer.sent();
+            const router = currentTurn === 1 && functionDeclarationCount(payload.tools) > 0 ? routerConfig(model) : undefined;
+            try {
+                if (router) {
+                    // Another model reads the prefix from an explicit cache, so it gets the cacheable layout (the request's
+                    // context in the contents); the chat model at another thinking level gets the chat call's layout.
+                    const routerBase = router.model !== model ? { ...built.cacheable, tools: payload.tools } : payload;
+                    const routerPayload: VertexStreamPayload = {
+                        ...routerBase,
+                        generationConfig: { ...payload.generationConfig, thinkingConfig: router.thinkingConfig ?? this.client.getThinkingConfig(request, router.model) }
+                    };
+                    const routerUrl = auth.type === 'vertex'
+                        ? this.client.vertexModelUrl(auth.projectId, router.model, 'streamGenerateContent')
+                        : `https://generativelanguage.googleapis.com/v1beta/models/${router.model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(auth.apiKey)}`;
+                    const turnSignal = signal ?? new AbortController().signal;
+                    const outcome = await raceRoutedCall({
+                        router,
+                        chatModel: model,
+                        startRouter: startStream(routerUrl, routerPayload, router.model, router.model !== model),
+                        startChat: startStream(url, payload, model),
+                        handle: handleLine,
+                        signal: turnSignal
+                    });
+                    if (outcome.decidedBy === 'router') attempt.modelResponded = true;
+                    const routeNote = describeRouteOutcome(outcome, model);
+                    attempt.routing = routeNote;
+                    timer.routed(routeNote);
+                    if (outcome.decidedBy === 'router') {
+                        onEvent({ type: 'status', text: `Routing: ${routeNote}.`, modelUsed: router.model });
+                    }
+                } else {
+                    await startStream(url, payload, model)(signal ?? new AbortController().signal, line => handleLine(line, model));
+                }
+            } catch (err) {
+                timer.log();
+                throw err;
+            }
+            timer.usage(finalUsage as never, lastFinishReason);
+            timer.log();
 
             // If no tools requested this turn, check for planning completion or verification
             if (turnDetectedToolCalls.length === 0) {
@@ -780,90 +959,13 @@ export class StreamingEngine {
                 break;
             }
 
-            // Execute all requested tools
-            const toolResponseParts: Part[] = [];
+            const results = await Promise.all(toolRuns);
             const modelParts: Part[] = [];
             if (turnText) {
                 modelParts.push({ text: turnText });
             }
-
-            for (const toolCall of turnDetectedToolCalls) {
-                throwIfAborted(signal);
-                const toolName = toolCall.name || '';
-                const rawToolCall = toolCall as any;
-                const sig = rawToolCall.thought_signature ||
-                            rawToolCall.thoughtSignature ||
-                            'skip_thought_signature_validator';
-                modelParts.push({
-                    functionCall: {
-                        name: toolName,
-                        args: toolCall.args || {}
-                    },
-                    thought_signature: sig
-                } as any);
-
-                if (toolName === 'workspace_write_file' || toolName === 'workspace_apply_diff') {
-                    const fp = (toolCall.args as any)?.filePath;
-                    if (typeof fp === 'string') {
-                        modifiedFiles.add(fp);
-                    }
-                }
-
-                const { exec, resultPayload } = await this.executeToolCallWithDeadline({ id: toolCall.id, name: toolName, args: toolCall.args }, request, onEvent, model, signal);
-                mcpExecutions.push(exec);
-
-                if (toolName === 'mount_canvas_primitive' || (resultPayload && (resultPayload as any).artifact)) {
-                    const mountedArtifact: CanvasArtifact | undefined = (resultPayload as any)?.artifact
-                        ? continueTurnArtifact(streamMountedArtifact, (resultPayload as any).artifact as CanvasArtifact)
-                        : undefined;
-                    if (mountedArtifact) {
-                        // The model reads the result too: it names the artifact by the id the canvas shows.
-                        (resultPayload as any).artifact = mountedArtifact;
-                        request.activeArtifact = mountedArtifact;
-                        streamMountedArtifact = mountedArtifact;
-                        onEvent({ type: 'artifact_start', artifact: mountedArtifact, modelUsed: model });
-                        onEvent({ type: 'artifact_complete', artifact: mountedArtifact, modelUsed: model });
-                    }
-                }
-
-                if (toolName === 'ask_user_question' || (resultPayload && (resultPayload as any).questionCard)) {
-                    const questionCard = (resultPayload as any).questionCard;
-                    if (questionCard) {
-                        streamQuestionCard = questionCard;
-                        onEvent({ type: 'question_card', questionCard, modelUsed: model });
-                    }
-                }
-
-                if (toolName === 'present_execution_plan' || (resultPayload && (resultPayload as any).executionPlanCard)) {
-                    const executionPlanCard = (resultPayload as any).executionPlanCard;
-                    if (executionPlanCard) {
-                        streamExecutionPlanCard = executionPlanCard;
-                        onEvent({ type: 'execution_plan_card', executionPlanCard, modelUsed: model });
-                    }
-                }
-
-                if (resultPayload && Array.isArray((resultPayload as any).taskList)) {
-                    onEvent({ type: 'task_list', taskList: (resultPayload as any).taskList, modelUsed: model });
-                }
-
-                if ((resultPayload as any)?.questionCard || (resultPayload as any)?.executionPlanCard) {
-                    awaitingUser = true;
-                }
-
-                const callId = toolCall.id || `call-${Date.now()}`;
-                const toolResult = { id: callId, name: toolName, result: resultPayload };
-                onEvent({ type: 'tool_result', mcpExecution: exec, toolResult, modelUsed: model });
-
-                toolResponseParts.push({
-                    functionResponse: {
-                        name: toolName,
-                        response: {
-                            name: toolName,
-                            content: toolResultForModel(toolName, exec, resultPayload)
-                        }
-                    }
-                });
-            }
+            modelParts.push(...results.map(r => r.modelPart));
+            const toolResponseParts: Part[] = results.map(r => r.responsePart);
 
             // Append assistant model turn with functionCalls and user turn with functionResponses
             payload.contents.push({ role: 'model', parts: modelParts });
@@ -919,7 +1021,8 @@ export class StreamingEngine {
             mcpExecution: mcpExecutions[0],
             groundingMetadata: accumulatedGroundingMetadata,
             usage: finalUsage,
-            modelUsed: model
+            modelUsed: model,
+            ...(loadedTools.size > 0 ? { loadedTools: [...loadedTools] } : {})
         };
         if (artifact) {
             onEvent({ type: 'artifact_complete', ...summary });
@@ -936,7 +1039,8 @@ export class StreamingEngine {
             modelUsed: model,
             questionCard: streamQuestionCard,
             executionPlanCard: streamExecutionPlanCard,
-            usage: finalUsage
+            usage: finalUsage,
+            ...(loadedTools.size > 0 ? { loadedTools: [...loadedTools] } : {})
         };
     }
 

@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { availableToolNames } from '../src/node/gemini/tool-catalog';
 import { describe, it, expect, afterAll } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -40,8 +41,10 @@ describe('UTDRA / ULDRA Agent Tools & Capability Resolution', () => {
         };
 
         const toolDeclarations = (geminiService as any).buildToolDeclarations(request);
-        const fnDecls: any[] = toolDeclarations.find((t: any) => t.functionDeclarations).functionDeclarations;
-        const toolNames = fnDecls.map((d: any) => d.name);
+        // Declared up front or loadable by name through load_tools (tool-catalog.ts).
+        const toolNames = availableToolNames(toolDeclarations).all;
+        // Their full declarations, as offered once loaded.
+        const fnDecls: any[] = (geminiService as any).buildToolDeclarations({ ...request, loadedTools: toolNames }).find((t: any) => t.functionDeclarations).functionDeclarations;
 
         expect(toolNames).toContain('utdra_probe_tile');
         expect(toolNames).toContain('utdra_slice_elevation');
