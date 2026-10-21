@@ -1326,7 +1326,7 @@ struct StripStats {
     size_t openEdgesAtDroppedSkirts{0};
     double capAreaM2{0};             // what the caps cover (m^2, their own faces)
     // The fill of caps and skirts (StripParams::fill): what each kind covered, and how its texels were sourced
-    struct FillKind { size_t pieces{0}, piecesUnsourced{0}; double areaM2{0}, areaUnsourcedM2{0}; strip_fill::FillCounts counts; };
+    struct FillKind { size_t pieces{0}, piecesUnsourced{0}, piecesWidened{0}; double areaM2{0}, areaUnsourcedM2{0}, areaWidenedM2{0}; strip_fill::FillCounts counts; };
     struct FillDegradation { std::string code, kind, reason; double areaM2{0}; std::array<double, 3> centre{}; };
     bool fillEnabled{false};
     FillKind fillCap, fillSkirt;
@@ -3905,6 +3905,7 @@ private:
         std::array<double, 3> centre{};
         strip_fill::PackRect rect;
         bool sourced{false};
+        bool widened{false};           // its real texels were found only with the widened surface tolerance
     };
     std::vector<FillPiece> fillPieces;
     texture::ImageBuffer fillAtlas;
@@ -4129,7 +4130,7 @@ private:
                 while (j + 2 < pc.sAt.size() && s > pc.sAt[j + 1]) ++j;
                 return j;
             };
-            auto realAt = [&](uint32_t texelIndex) {
+            auto realAt = [&](uint32_t texelIndex, double surfaceTol) {
                 const int col = static_cast<int>(texelIndex % static_cast<uint32_t>(pt.W)), row = static_cast<int>(texelIndex / static_cast<uint32_t>(pt.W));
                 Vec3 q;
                 double nx = 0, nz = 0;  // skirt: the horizontal normal of the run's segment
@@ -4149,7 +4150,7 @@ private:
                 }
                 strip_fill::TriangleIndex::Hit hit;
                 strip_fill::Rgb8 out;
-                const bool found = fillIndex.closest(q, P.fillSurfaceTol, [&](uint32_t t, const strip_fill::TriangleIndex::Hit&) {
+                const bool found = fillIndex.closest(q, surfaceTol, [&](uint32_t t, const strip_fill::TriangleIndex::Hit&) {
                     if (removedBy[t] >= 0 || (veg[t] && !pc.allowVegetation)) return false;
                     if (pc.cap) return std::abs(static_cast<double>(normal[t].y)) >= P.fillNormalCos;
                     return std::abs(static_cast<double>(normal[t].x) * nx + static_cast<double>(normal[t].z) * nz) >= P.fillNormalCos;
@@ -4163,13 +4164,31 @@ private:
                 out.b = static_cast<uint8_t>(std::clamp(rgb[2] + 0.5, 0.0, 255.0));
                 return std::make_pair(true, out);
             };
-            detail::parallelFor(query.size(), P.threads, [&](size_t lo, size_t hi, int) {
-                for (size_t i = lo; i < hi; ++i) {
-                    const auto r = realAt(query[i]);
-                    if (r.first) { pt.real[query[i]] = 1; pt.rgb[query[i]] = r.second; }
-                }
-            });
+            auto findReal = [&](double surfaceTol) {
+                std::atomic<size_t> found{0};
+                detail::parallelFor(query.size(), P.threads, [&](size_t lo, size_t hi, int) {
+                    size_t n = 0;
+                    for (size_t i = lo; i < hi; ++i) {
+                        const auto r = realAt(query[i], surfaceTol);
+                        if (r.first) { pt.real[query[i]] = 1; pt.rgb[query[i]] = r.second; ++n; }
+                    }
+                    found += n;
+                });
+                return found.load();
+            };
+            // a piece standing off every facing surface around it (a cap on a raised level whose ring is lower, a
+            // skirt beside a wall set back) is read again with a wider surface tolerance before it is given up:
+            // texels from further off, at half the confidence, said so
+            const double widenedTol = std::max(4.0 * P.fillSurfaceTol, 2.0);
+            if (findReal(P.fillSurfaceTol) == 0 && findReal(widenedTol) > 0) pc.widened = true;
             pc.counts = strip_fill::fillFromNearest(pt, P.fillConfidenceScale);
+            if (pc.widened) {
+                pc.counts.confidenceSum *= 0.5;
+                st.fillDegradations.push_back({"widened_surface_tolerance", pc.cap ? "cap" : "skirt",
+                    std::string("no kept photographed surface facing the same way lies within ") + json::num(P.fillSurfaceTol) + " m of this " + (pc.cap ? "cap" : "skirt") +
+                    ": its texels are read from such surfaces up to " + json::num(widenedTol) + " m off (a lower or higher level around it), at half the confidence",
+                    pc.areaM2, pc.centre});
+            }
             pc.sourced = pc.counts.sourced();
             if (!pc.sourced) {
                 const auto& g = pc.cap ? capGenerated : skirtGenerated;
@@ -4194,6 +4213,7 @@ private:
             kind.counts.carriedMaxM = std::max(kind.counts.carriedMaxM, pc.counts.carriedMaxM);
             kind.counts.confidenceSum += pc.counts.confidenceSum;
             if (!pc.sourced) { ++kind.piecesUnsourced; kind.areaUnsourcedM2 += pc.areaM2; }
+            if (pc.widened) { ++kind.piecesWidened; kind.areaWidenedM2 += pc.areaM2; }
         }
 
         // ---- the atlas and the corners' coordinates
@@ -4394,11 +4414,12 @@ private:
         auto fillExtras = [&](bool isCap, bool sourced) -> std::string {
             if (!P.fill) return std::string();
             strip_fill::FillCounts fc;
-            size_t pieces = 0;
+            size_t pieces = 0, widened = 0;
             double areaM2 = 0;
             for (const auto& pc : fillPieces) {
                 if (pc.cap != isCap || pc.sourced != sourced) continue;
                 ++pieces;
+                if (pc.widened) ++widened;
                 areaM2 += pc.areaM2;
                 fc.targetTexels += pc.counts.targetTexels; fc.realTexels += pc.counts.realTexels; fc.carriedTexels += pc.counts.carriedTexels;
                 fc.unsourcedTexels += pc.counts.unsourcedTexels; fc.carriedSumM += pc.counts.carriedSumM; fc.carriedMaxM = std::max(fc.carriedMaxM, pc.counts.carriedMaxM);
@@ -4413,7 +4434,8 @@ private:
                 pv.method = isCap ? "the ground or roof under a removed tree: texels sampled from the kept scan's own photo of the surface around the hole (nadir), carried across it from the nearest real texel"
                                   : "the wall or side a removed tree hid: texels sampled from the kept scan's own photo of the surface the skirt continues, carried down from the nearest real texel";
                 pv.note = std::to_string(fc.realTexels) + " texels with a real photo of their own, " + std::to_string(fc.carriedTexels) + " carried (mean " + json::num(fc.meanCarriedM()) +
-                          " m, at most " + json::num(fc.carriedMaxM) + " m from a real texel; confidence exp(-d / " + json::num(P.fillConfidenceScale) + " m))";
+                          " m, at most " + json::num(fc.carriedMaxM) + " m from a real texel; confidence exp(-d / " + json::num(P.fillConfidenceScale) + " m))" +
+                          (widened ? "; " + std::to_string(widened) + " of " + std::to_string(pieces) + " pieces read from surfaces up to " + json::num(std::max(4.0 * P.fillSurfaceTol, 2.0)) + " m off their own level, at half the confidence" : "");
             } else {
                 pv.label = "generated";
                 pv.confidence = 0.0;
@@ -4623,7 +4645,7 @@ inline std::string stripStatsJson(const StripResult& r) {
         decision("onOther", 3, true);
         s << ", \"openEdgesAtDroppedSkirts\": " << st.openEdgesAtDroppedSkirts << "},\n";
         auto kind = [&](const char* name, const StripStats::FillKind& k, bool last) {
-            s << "\"" << name << "\": {\"pieces\": " << k.pieces << ", \"piecesGenerated\": " << k.piecesUnsourced << ", \"areaM2\": " << json::num(k.areaM2) << ", \"generatedAreaM2\": " << json::num(k.areaUnsourcedM2)
+            s << "\"" << name << "\": {\"pieces\": " << k.pieces << ", \"piecesGenerated\": " << k.piecesUnsourced << ", \"piecesWidened\": " << k.piecesWidened << ", \"areaM2\": " << json::num(k.areaM2) << ", \"generatedAreaM2\": " << json::num(k.areaUnsourcedM2) << ", \"widenedAreaM2\": " << json::num(k.areaWidenedM2)
               << ", \"texels\": {\"target\": " << k.counts.targetTexels << ", \"real\": " << k.counts.realTexels << ", \"carried\": " << k.counts.carriedTexels << ", \"generated\": " << k.counts.unsourcedTexels
               << "}, \"meanCarriedM\": " << json::num(k.counts.meanCarriedM()) << ", \"maxCarriedM\": " << json::num(k.counts.carriedMaxM) << ", \"meanConfidence\": " << json::num(k.counts.meanConfidence()) << "}" << (last ? "" : ", ");
         };
