@@ -48,7 +48,24 @@ export function createAssetRouter(store: DurableAssetStore, recovery: AssetRecov
             res.status(400).json({ success: false, error: `at most ${MAX_RECOVERY_PATHS} paths per recovery` });
             return;
         }
-        res.json({ success: true, job: recovery.start(paths) });
+        const fallback = req.body?.fallbackStagedRequest;
+        let opts: { fallbackStaged?: { request: unknown }; activeArtifact?: { id: string; type: string; data?: unknown } } = {};
+        if (fallback !== undefined) {
+            if (!fallback || typeof fallback !== 'object' || typeof fallback.query !== 'string' || !fallback.query.trim()) {
+                res.status(400).json({ success: false, error: 'fallbackStagedRequest needs a query (the place to rebuild)' });
+                return;
+            }
+            opts = { fallbackStaged: { request: { ...fallback, query: fallback.query.trim(), isolate: fallback.isolate === true, trees: fallback.trees !== false } } };
+        }
+        const scene = req.body?.activeArtifact;
+        if (scene !== undefined) {
+            if (!scene || typeof scene !== 'object' || scene.type !== '3d-scene' || typeof scene.id !== 'string') {
+                res.status(400).json({ success: false, error: 'activeArtifact must be the 3d-scene artifact the files belong to ({ id, type, data })' });
+                return;
+            }
+            opts.activeArtifact = { id: scene.id, type: scene.type, data: scene.data };
+        }
+        res.json({ success: true, job: recovery.start(paths, opts) });
     });
 
     router.get('/recover/:id', (req: Request, res: Response) => {

@@ -28,6 +28,10 @@ export interface ViewportRecoveryNotice {
     fraction?: number;
     files: number;
     onCancel: () => void;
+    /** Why files could not be recovered, one line per distinct reason with its count (a finished job). */
+    reasons?: string[];
+    /** Offered when the scene knows its place: rebuild the lost files from it. */
+    onRebuild?: () => void;
 }
 
 export interface ViewportNoticeInput {
@@ -73,9 +77,12 @@ export function resolveViewportNotice(input: ViewportNoticeInput): ViewportNotic
             title: recovery.running
                 ? `Recovering ${recovery.files === 1 ? 'a missing file' : `${recovery.files} missing files`}`
                 : `Recovery finished: ${recovery.message}`,
-            detail: recovery.running ? recovery.message : 'Rebuilt files are marked "rebuilt" in the model list.',
+            detail: recovery.running
+                ? recovery.message
+                : [...(recovery.reasons ?? []), ...(recovery.onRebuild ? ['The scene knows the place it was built from, so the lost files can be built again from it.'] : [])].join('\n') || 'Rebuilt files are marked "rebuilt" in the model list.',
             ...(recovery.running && recovery.fraction !== undefined ? { fraction: recovery.fraction } : {}),
-            ...(recovery.running ? { action: { label: 'Cancel', onClick: recovery.onCancel } } : {})
+            ...(recovery.running ? { action: { label: 'Cancel', onClick: recovery.onCancel } }
+                : recovery.onRebuild ? { action: { label: 'Rebuild this location', onClick: recovery.onRebuild } } : {})
         });
     }
     const loadErrors = input.objectLoadErrors || [];
@@ -131,7 +138,7 @@ export const ViewportNotice: React.FC<{ notices: ViewportNoticeEntry[] }> = ({ n
     return (
         <div
             className="sb-3d-viewport-notices"
-            style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 16, pointerEvents: 'none', zIndex: 15 }}
+            style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '16px 16px 16px 84px', pointerEvents: 'none', zIndex: 15 }}
         >
             {notices.map(n => (
                 <div

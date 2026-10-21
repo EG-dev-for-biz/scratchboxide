@@ -40,6 +40,7 @@ import type { HistoryEditMeta } from './scene3d/useViewportHistory';
 import { ObjectEditCapture, createGeometrySwapEdit } from '../services/viewport-history-deltas';
 import { attachHistoryShortcuts } from '../services/viewport-history';
 import { assetRecoveryClient, recoverableAssetPath, type AssetRecoveryState } from '../services/asset-recovery-client';
+import { stripEmbeddedGlb } from '../../../common/strip-embedded-glb';
 import {
     TransformGizmoEngine,
     computeAxisTranslation,
@@ -958,6 +959,17 @@ function resolveExternalModelUri(rawUri: string): string {
         if (fileName && (fileName.endsWith('.glb') || fileName.endsWith('.gltf'))) return `/models/${fileName}`;
     }
     return rawUri;
+}
+
+/** A finished recovery's distinct reasons, each once with its count ("13 files: never recorded in the asset store, …"). */
+function recoveryReasons(job: { items: Array<{ outcome: string; detail?: string }> }): string[] {
+    const counts = new Map<string, number>();
+    for (const item of job.items) {
+        if (item.outcome !== 'unrecoverable' && item.outcome !== 'failed') continue;
+        const reason = item.detail || (item.outcome === 'failed' ? 'the rebuild failed' : 'not recoverable');
+        counts.set(reason, (counts.get(reason) ?? 0) + 1);
+    }
+    return [...counts.entries()].map(([reason, n]) => `${n === 1 ? '1 file' : `${n} files`}: ${reason}`);
 }
 
 /** Objects sourced from a ground-tile service are only shown in the ground mode matching their source. */
@@ -3934,12 +3946,27 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         };
         return Object.entries(externalLoadStatus)
             .filter(([id, st]) => st.phase === 'error' && declared.has(id) && !recovering.has(servedPathOf(id) ?? ''))
-            .map(([id, st]) => {
-                const outcome = assetRecoveryClient.outcomeOf(servedPathOf(id) ?? '');
-                return { id, error: outcome && outcome.outcome !== 'restored' && outcome.outcome !== 'rebuilt' ? `${st.error || 'the file could not be loaded'}; ${outcome.detail || 'recovery failed'}` : st.error || 'the file could not be loaded' };
-            });
+            .map(([id, st]) => ({ id, error: st.error || 'the file could not be loaded' }));
     }, [externalLoadStatus, sceneData.objects, sceneData.splatUrl, assetRecovery]);
     const drawsBiomeTerrain = drawsProceduralBiomeTerrain({ renderMode, terrainBiomes: sceneData.features?.terrainBiomes, hasGeoCoordinates, has3DTiles });
+    // Lost staged files with no recipe (made before the store) can still be rebuilt from the scene's own place.
+    const recoveryRebuild = React.useMemo(() => {
+        const job = assetRecovery.job;
+        const staged = readStagedBuild(sceneData);
+        if (!job || job.status === 'running' || !staged?.place?.query) return undefined;
+        const lost = job.items.filter(i => i.outcome === 'unrecoverable' || i.outcome === 'failed').map(i => i.path).filter(p => p.startsWith('/models/'));
+        if (lost.length === 0) return undefined;
+        const place = staged.place;
+        // the scene itself goes along (its GLB bytes stripped): a district rebuilt into it is carved around its kept structure
+        const scene = { id: activeArtifact?.id ?? staged.artifactId, type: '3d-scene', data: stripEmbeddedGlb(sceneData) };
+        return () => assetRecoveryClient.rebuild(lost, {
+            query: place.query,
+            isolate: !!staged.structure || lost.some(p => /_iso_/.test(p)),
+            trees: true,
+            ...(place.resolvedAddress && Number.isFinite(place.lat) && Number.isFinite(place.lng) && (place.lat !== 0 || place.lng !== 0)
+                ? { place: { lat: place.lat, lng: place.lng, formattedAddress: place.resolvedAddress } } : {})
+        }, scene);
+    }, [assetRecovery, sceneData, activeArtifact?.id]);
     const viewportNotices = React.useMemo(() => resolveViewportNotice({
         webglError,
         generatorError: currentGeneratorError,
@@ -3954,9 +3981,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             message: assetRecovery.job.message,
             fraction: assetRecovery.job.fraction,
             files: assetRecovery.job.items.length,
-            onCancel: () => { void assetRecoveryClient.cancel(); }
+            onCancel: () => { void assetRecoveryClient.cancel(); },
+            reasons: recoveryReasons(assetRecovery.job),
+            ...(recoveryRebuild ? { onRebuild: recoveryRebuild } : {})
         } : undefined
-    }), [webglError, currentGeneratorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh, drawsBiomeTerrain, objectLoadErrors, undrawableObjects, opticsIssues, assetRecovery, recoveryNoticeJobId]);
+    }), [webglError, currentGeneratorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh, drawsBiomeTerrain, objectLoadErrors, undrawableObjects, opticsIssues, assetRecovery, recoveryNoticeJobId, recoveryRebuild]);
 
     const handleExportGlb = React.useCallback(async () => {
         if (!threeSceneRef.current) return;

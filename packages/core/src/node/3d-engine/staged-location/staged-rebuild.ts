@@ -13,13 +13,17 @@
  */
 
 import type { StagedBuildState } from '../../../common/spatial/staged-location-contracts';
+import type { CanvasArtifact } from '../../../browser/generative-canvas/canvas-types';
 import type { StagedRebuilder } from '../../asset-store/asset-recovery-service';
 import { runStagedLocation, type StagedLocationRequest } from './orchestrator';
 import { createStagedLocationDeps } from './staged-location-tool';
 
 export const rebuildStagedForRecovery: StagedRebuilder = async (request, ctx) => {
     const deps = await createStagedLocationDeps(ctx.workspaceRoot, { signal: ctx.signal });
-    const outcome = await runStagedLocation(request as StagedLocationRequest, deps, { signal: ctx.signal, reportProgress: ctx.reportProgress });
+    const outcome = await runStagedLocation(request as StagedLocationRequest, deps, {
+        signal: ctx.signal, reportProgress: ctx.reportProgress,
+        ...(ctx.activeArtifact ? { activeArtifact: ctx.activeArtifact as CanvasArtifact } : {})
+    });
     const artifact = outcome.result.artifact as { data?: { stagedBuild?: StagedBuildState } } | undefined;
     const staged = artifact?.data?.stagedBuild;
     return { runId: staged?.runId ?? '', layers: (staged?.layers ?? []).map(l => ({ url: l.url })) };

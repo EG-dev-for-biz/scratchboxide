@@ -1,7 +1,7 @@
 # Durable asset store: files outlive the checkout, missing ones come back
 
 **Date:** 2026-10-20
-**Status:** Verified (stages 1–3 live in an isolated instance; the rebuild path verified with a fake rebuilder in tests, not yet with a real staged run)
+**Status:** Verified (stages 1–3 live; the real rebuild path verified end to end in the user's app on the Washington Square scene, 12 of 13 lost files back)
 
 ## Why
 
@@ -71,12 +71,28 @@ scene on 2026-10-20). The user asked for the app to fetch data as needed and to 
 - Tests: `project-artifact-store-durable.test.ts` (4: the diff names changes without payloads; a save is logged and a
   checkout without the file gets the project back and keeps logging; a legacy file is imported once; the file-only mode).
 
+## The real rebuild (2026-10-20, the user's app on 3060)
+
+The Washington Square Arch scene had 13 files lost with a deleted worktree, all made before the store (no recipe).
+"Rebuild this location" (the fallback from the scene's own place) ran the isolated structure and then the district as two
+staged runs. What it taught, each fixed the same day:
+
+- the lost names carry the slug of the words the place was first asked for with (`…_new_york_iso_l3a_…`); a rebuild
+  from the resolved address publishes under another slug (`…_washington_square_iso_l3a_…`): match by layer token, not
+  the prefix;
+- the textured twins are published by the background texture pass after the run ends: take them from any run recorded
+  at the same place (within 60 m), newest first;
+- an isolated structure and its district are two runs: split the fallback by the `_iso` token.
+
+Result: 6 structure layers rebuilt in 2.8 s (cached stages), then 4 textured twins and the district's trees in 108 s;
+the scene shows the textured arch, its trees and the surrounding buildings again. One file is still missing: the
+district remesh carved around the kept structure (`…_remesh_<key>_around_<key>.glb`, orchestrator.ts `_around_`), which
+only a run staged into the active scene makes; the recovery reports it as failed with the run's file list.
+
 ## Not yet
 
-- A real staged rebuild end to end: run a location in the app, remove its files and blobs, reload. (The fake-rebuilder
-  test covers the aliasing; the real run uses the chat's own dependencies and credentials.)
-- Files made before the store existed have no recipe: they are restored only if a copy was swept in. The Washington
-  Square models are gone for good; the scene must be staged again.
+- The carved district remesh above: the recovery could carve it itself from the restored structure files and the new
+  district remesh (`hideFootprintInGlb`), given the anchor offset between the two runs.
 - A view of the project log in the app (today it is the API only).
 
 ## Candidate tool/service ideas
