@@ -445,7 +445,9 @@ export class VisionModelChain<Stage extends string = string> {
                     ...(hedge.sent ? { hedged: true, hedgeWon: false, ...(hedge.atMs !== undefined ? { hedgeAtMs: hedge.atMs } : {}) } : {})
                 };
                 this.attempts.push(record);
-                console.log(`[vision-call] ${opts.stage} ${model} ${record.outcome} after ${ms} ms (${classified.code})${hedge.sent ? ' hedged' : ''}`);
+                // a call its caller ended (its time limit, or a vote that went ahead without it) says so, not "transient"
+                const why = deadline?.aborted ? 'its deadline' : callAborted ? `ended by its caller: ${callSignal?.reason instanceof Error ? callSignal.reason.message : 'aborted'}` : classified.code;
+                console.log(`[vision-call] ${opts.stage} ${model} ${record.outcome} after ${ms} ms (${why})${hedge.sent ? ' hedged' : ''}`);
                 if (record.outcome === 'retried') {
                     // a 429 backs off longer than a 5xx: 2 s then 4 s (and hedges to this model pause, VisionHedgeBook.rateLimited)
                     await this.sleep((quota ? 2000 : 1000) * 2 ** retry);
