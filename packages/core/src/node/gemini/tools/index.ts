@@ -20,6 +20,7 @@ export * from './nano-banana-tools';
 export * from './algorithmic-uv-tools';
 export * from './adaptive-matchmove-tools';
 export * from './botanical-tree-tools';
+export * from './sb-roadie-tools';
 export * from './lighting-tools';
 export * from './universal-3d-structure-tools';
 export * from './python-3d-tools';
@@ -93,6 +94,7 @@ import {
     BOTANICAL_TREE_TOOL_DECLARATIONS,
     botanicalTreeHandlers
 } from './botanical-tree-tools';
+import { SB_ROADIE_TOOL_DECLARATIONS, sbRoadieHandlers } from './sb-roadie-tools';
 import {
     LIGHTING_TOOL_DECLARATIONS,
     lightingHandlers
@@ -178,7 +180,8 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...localSf3DHandlers,
     ...lensHandlers,
     ...browserHandlers,
-    ...botanicalTreeHandlers
+    ...botanicalTreeHandlers,
+    ...sbRoadieHandlers
 };
 
 export {

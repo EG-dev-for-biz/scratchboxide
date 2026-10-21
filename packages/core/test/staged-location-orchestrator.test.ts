@@ -95,6 +95,34 @@ describe('a district', () => {
         expect(second.result.stages.find(x => x.stage === 'terrain')).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/Elevation API/) });
     });
 
+    it('with Google road centrelines, the streets are measured on the scan and committed as a road layer carrying the tile photo; a flat scan gives vector-modelled widths', async () => {
+        const s = setup(PARK, {}, { vectorEvidence: async () => ({ buildings: [], water: [], roads: [[[-25, 0], [25, 0]], [[0, -25], [0, 25]]], tiles: 1, zoom: 17 }) });
+        const { result } = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: false }, s.deps, s.ctx);
+        expect(validateContract('StagedLocationResult', result)).toEqual([]);
+        expect(result.stages.find(x => x.stage === 'roads')).toMatchObject({ status: 'committed' });
+        const sb = (result.artifact as any).data.stagedBuild;
+        const l = sb.layers.find((l: any) => l.layer === 'l1r');
+        // no kerb steps up on the flat synthetic ground: every half-width is the default, so the layer says vector-modelled
+        expect(l).toMatchObject({ stage: 'roads', order: 2, provenance: { label: 'vector-modelled', measuredGeometry: false } });
+        expect(l.url).toMatch(/_roads_[0-9a-f]{8}\.glb$/);
+        expect(l.counts.triangles).toBeGreaterThan(50);
+        expect(l.provenance.note).toMatch(/2 streets/);
+        const obj = (result.artifact as any).data.objects.find((o: any) => o.id === l.objectId);
+        expect(obj.content.metadata).toMatchObject({ source: 'GoogleVectorRoads', selfTextured: true, roads: 2 });
+        // the GLB carries the tile photo rendered from above as its texture, on every node
+        const glb = fs.readFileSync(path.join(s.cache.modelsDir, path.basename(l.url)));
+        const json = JSON.parse(glb.subarray(20, 20 + glb.readUInt32LE(12)).toString('utf8'));
+        expect(json.images).toHaveLength(1);
+        for (const m of json.meshes) expect(m.primitives[0].attributes.TEXCOORD_0).toBeDefined();
+        // the texture pass leaves it alone (it carries its own photo)
+        expect(statusOf(s.events, 'textures').pop()).toBe('committed');
+        expect(result.stages.find(x => x.stage === 'textures')!.layers?.some((x: any) => x.layer === 'l1r')).toBeFalsy();
+
+        const none = setup(PARK);
+        const second = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: false }, none.deps, none.ctx);
+        expect(second.result.stages.find(x => x.stage === 'roads')).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/vector data/) });
+    });
+
     it('commits tiles, remesh and trees in order, each commit carrying the scene with one id and one camera', async () => {
         const s = setup(PARK);
         const { result, compat } = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: true }, s.deps, s.ctx);
