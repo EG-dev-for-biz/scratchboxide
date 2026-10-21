@@ -227,9 +227,11 @@ export class AssetRecoveryService {
                 const urls = new Set<string>([...result.layers.map(l => l.url), ...(result.runId ? this.store.servedByRecipe(`staged:${result.runId}`).filter(s => !s.rebuilt).map(s => s.path) : [])]);
                 // the run's own files first; then files other runs published at the same place (a twin the background
                 // texture pass published after an earlier run ended), newest first
+                // a lost name is never its own replacement, whatever its record says now
+                const lostNames = new Set(job.items.map(i => i.path));
                 for (const url of [...urls, ...this.publishedAtSamePlace(request, result.runId)]) {
                     const key = layerNameKey(url);
-                    if (key && !produced.has(key)) produced.set(key, url);
+                    if (key && !lostNames.has(url) && !produced.has(key)) produced.set(key, url);
                 }
                 for (const item of group.items) {
                     const key = layerNameKey(item.path);
