@@ -73,7 +73,7 @@ export interface AssetRecoveryOptions {
  * The part of a published file name that names its layer: a staged file is <slug>_<layer>_<key8><rest> (the slug is
  * the query's words, the key the stage cache key's first 8 hex digits), so two files of the same layer from different
  * runs share layer and rest even when the runs were asked for with different words for the place. A textured twin
- * keeps its "tex" token with the layer (l2_tex, massing_tex).
+ * keeps its "tex" token with the layer (l2_tex, massing_tex), a carved layer its "around" (remesh_around, tiles_around).
  */
 export function layerNameKey(servedPath: string): string | undefined {
     const name = path.posix.basename(servedPath);
@@ -81,9 +81,11 @@ export function layerNameKey(servedPath: string): string | undefined {
     const stem = name.slice(0, name.length - ext.length);
     const m = /^(.*)_([0-9a-f]{8})(.*)$/.exec(stem);
     if (!m) return undefined;
-    const tokens = m[1].split('_');
+    // keys inside the name (a layer carved around a kept structure is <layer>_<key8>_around_<key8>) are not part of it
+    const tokens = m[1].split('_').filter(t => !/^[0-9a-f]{8}$/.test(t));
     const last = tokens[tokens.length - 1];
-    const layer = last === 'tex' && tokens.length >= 2 ? `${tokens[tokens.length - 2]}_tex` : last;
+    // "tex" (a textured twin) and "around" (carved around the kept structure) qualify the layer before them
+    const layer = (last === 'tex' || last === 'around') && tokens.length >= 2 ? `${tokens[tokens.length - 2]}_${last}` : last;
     return `${layer}|${m[3]}${ext}`;
 }
 

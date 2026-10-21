@@ -49,6 +49,10 @@ describe('layerNameKey', () => {
         expect(layerNameKey('/models/wsp_massing_deadbeef_tex.glb')).toBe('massing|_tex.glb');
         expect(layerNameKey('/models/wsp_massing_deadbeef_tex.glb')).not.toBe(layerNameKey('/models/wsp_massing_deadbeef.glb'));
         expect(layerNameKey('/models/wsp_tiles_deadbeef.order.json')).toBe('tiles|.order.json');
+        // carved around a kept structure: the remesh and the tiles are different layers
+        expect(layerNameKey('/models/wsa_new_york_remesh_711be145_around_5057abf7.glb')).toBe('remesh_around|.glb');
+        expect(layerNameKey('/models/wsa_washington_square_remesh_7f2f9b1d_around_74562430.glb')).toBe('remesh_around|.glb');
+        expect(layerNameKey('/models/wsa_washington_square_tiles_150c191d_around_74562430.glb')).toBe('tiles_around|.glb');
         expect(layerNameKey('/models/plain.glb')).toBeUndefined();
     });
 });
