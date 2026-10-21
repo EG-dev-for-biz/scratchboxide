@@ -27,21 +27,22 @@ export const STARTER_BUTTONS: readonly StarterButton[] = [
         label: '3D Scene',
         // A real district in a major city: the request routes to the staged Google 3D Tiles build (prompt-builder.ts),
         // which remeshes and resurfaces every building, applies the real textures and regrows the measured trees.
-        // "textured" and "a sunny midday under a real sky with scattered clouds" are said outright: textures are the default, and the sky
-        // dome, scattering and solar ephemeris are opt-in (AGENTS.md §3.6), so the words must be in the request.
+        // "textured" and the golden-hour / sun-glow-through-clouds clause are said outright: textures are the default,
+        // and the sky dome, scattering and solar ephemeris are opt-in (AGENTS.md §3.6), so the words must be in the
+        // request. Golden hour (not midday) is this button's own chosen mood, not a general build default elsewhere.
         prompts: [
-            'Build a textured 3D scene of Shibuya Crossing in Tokyo with its surrounding streets, buildings and trees, on a sunny midday under a real sky with scattered clouds',
-            'Build a textured 3D scene of the Flatiron District in New York with its surrounding streets, buildings and trees, on a sunny midday under a real sky with scattered clouds',
-            'Build a textured 3D scene of Trafalgar Square in London with its surrounding streets, buildings and trees, on a sunny midday under a real sky with scattered clouds',
-            'Build a textured 3D scene of Place de la République in Paris with its surrounding streets, buildings and trees, on a sunny midday under a real sky with scattered clouds',
-            'Build a textured 3D scene of Potsdamer Platz in Berlin with its surrounding streets, buildings and trees, on a sunny midday under a real sky with scattered clouds',
-            'Build a textured 3D scene of Plaza de Cibeles in Madrid with its surrounding streets, buildings and trees, on a sunny midday under a real sky with scattered clouds',
-            'Build a textured 3D scene of Union Square in San Francisco with its surrounding streets, buildings and trees, on a sunny midday under a real sky with scattered clouds',
-            'Build a textured 3D scene of Federation Square in Melbourne with its surrounding streets, buildings and trees, on a sunny midday under a real sky with scattered clouds',
-            'Build a textured 3D scene of Piazza del Duomo in Milan with its surrounding streets, buildings and trees, on a sunny midday under a real sky with scattered clouds',
-            'Build a textured 3D scene of Nathan Phillips Square in Toronto with its surrounding streets, buildings and trees, on a sunny midday under a real sky with scattered clouds',
-            'Build a textured 3D scene of Dam Square in Amsterdam with its surrounding streets, buildings and trees, on a sunny midday under a real sky with scattered clouds',
-            'Build a textured 3D scene of Marina Bay in Singapore with its surrounding streets, buildings and trees, on a sunny midday under a real sky with scattered clouds',
+            'Build a textured 3D scene of Shibuya Crossing in Tokyo with its surrounding streets, buildings and trees, at a warm golden hour, with a soft warm glow and the low sun glowing through scattered clouds behind it',
+            'Build a textured 3D scene of the Flatiron District in New York with its surrounding streets, buildings and trees, at a warm golden hour, with a soft warm glow and the low sun glowing through scattered clouds behind it',
+            'Build a textured 3D scene of Trafalgar Square in London with its surrounding streets, buildings and trees, at a warm golden hour, with a soft warm glow and the low sun glowing through scattered clouds behind it',
+            'Build a textured 3D scene of Place de la République in Paris with its surrounding streets, buildings and trees, at a warm golden hour, with a soft warm glow and the low sun glowing through scattered clouds behind it',
+            'Build a textured 3D scene of Potsdamer Platz in Berlin with its surrounding streets, buildings and trees, at a warm golden hour, with a soft warm glow and the low sun glowing through scattered clouds behind it',
+            'Build a textured 3D scene of Plaza de Cibeles in Madrid with its surrounding streets, buildings and trees, at a warm golden hour, with a soft warm glow and the low sun glowing through scattered clouds behind it',
+            'Build a textured 3D scene of Union Square in San Francisco with its surrounding streets, buildings and trees, at a warm golden hour, with a soft warm glow and the low sun glowing through scattered clouds behind it',
+            'Build a textured 3D scene of Federation Square in Melbourne with its surrounding streets, buildings and trees, at a warm golden hour, with a soft warm glow and the low sun glowing through scattered clouds behind it',
+            'Build a textured 3D scene of Piazza del Duomo in Milan with its surrounding streets, buildings and trees, at a warm golden hour, with a soft warm glow and the low sun glowing through scattered clouds behind it',
+            'Build a textured 3D scene of Nathan Phillips Square in Toronto with its surrounding streets, buildings and trees, at a warm golden hour, with a soft warm glow and the low sun glowing through scattered clouds behind it',
+            'Build a textured 3D scene of Dam Square in Amsterdam with its surrounding streets, buildings and trees, at a warm golden hour, with a soft warm glow and the low sun glowing through scattered clouds behind it',
+            'Build a textured 3D scene of Marina Bay in Singapore with its surrounding streets, buildings and trees, at a warm golden hour, with a soft warm glow and the low sun glowing through scattered clouds behind it',
         ],
     },
     { icon: '🎬', label: 'Video NLE', prompts: ['Assemble a multi-track video timeline with color grading and title graphics'] },
