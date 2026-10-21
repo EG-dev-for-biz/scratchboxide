@@ -64,7 +64,8 @@ export function decodeImageInMemory(bytes: Uint8Array): RgbaImage8 {
         return { width: d.width, height: d.height, rgba: new Uint8Array(d.rgba.buffer, d.rgba.byteOffset, d.rgba.byteLength) };
     }
     if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8) {
-        const d = decodeJpegInMemory(bytes);
+        // a road layer embeds a 4096 x 4096 photo render: more than the default 256 MB decode allowance
+        const d = decodeJpegInMemory(bytes, 1024);
         return { width: d.width, height: d.height, rgba: d.data };
     }
     throw new Error('tile texture is neither PNG nor JPEG; it cannot be decoded in memory');

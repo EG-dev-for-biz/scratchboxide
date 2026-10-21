@@ -27,7 +27,7 @@ import { layerObject, layerObjectId } from '../../3d-engine/staged-location/stag
 import { evidenceLookup, fetchVectorEvidence } from '../../3d-engine/staged-location/vector-footprints';
 import { VECTOR_MODELLED_LABEL } from '../../3d-engine/staged-location/vector-first-paint';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
-import { loadScanMesh, surfaceModel } from '../../spatial/StreetViewSurveyPlanner';
+import { buildGroundModel, loadScanMesh, surfaceModel } from '../../spatial/StreetViewSurveyPlanner';
 import { buildRoadMesh, measureRoadSurfaces, writeRoadsGlb, ROAD_SURFACE_PARAMS, type RoadSurface, type RoadSurfaceParams } from '../../3d-engine/staged-location/road-surfaces';
 import { renderTopDownPhoto, topDownJpeg } from '../../3d-engine/staged-location/top-down-photo';
 import { measureGlbMeshCounts } from '../../../common/glb-mesh-counts';
@@ -133,7 +133,7 @@ export const sbRoadieHandlers: Record<string, ToolHandler> = {
         const vector = evidenceLookup(await fetchVectorEvidence({ lat, lng, radiusM: covered + 20, fetchTile: (x, y, z) => GoogleVectorTileService.fetchVectorTile(x, y, z, '') }), covered + 20);
         const centrelines = vector.raster.roads.filter(l => l.some(([x, z]) => Math.hypot(x, z) <= covered));
         if (!centrelines.length) throw new Error(`${SB_ROADIE_TOOL}: no road centreline from Google vector data runs through the extraction (${Math.round(covered)} m).`);
-        const key = stageKey('roads/v1', place.tilesKey, crypto.createHash('sha256').update(JSON.stringify(centrelines)).digest('hex').slice(0, 16), covered.toFixed(1), P.liftM, P.kerbRiseM, P.defaultHalfWidthM, P.stationM, texelM);
+        const key = stageKey('roads/v2', place.tilesKey, crypto.createHash('sha256').update(JSON.stringify(centrelines)).digest('hex').slice(0, 16), covered.toFixed(1), P.liftM, P.kerbRiseM, P.defaultHalfWidthM, P.stationM, texelM);
         const key8 = key.slice(0, 8);
         const base = `${data.stagedBuild.place.resolvedAddress.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'place'}`;
         type Value = { stats: ReturnType<typeof buildRoadMesh>['stats']; measuredKerbShare: number; photo: { width: number; height: number; texelM: number } };
@@ -141,7 +141,8 @@ export const sbRoadieHandlers: Record<string, ToolHandler> = {
             ctx?.reportProgress?.(`Measuring ${centrelines.length} streets kerb to kerb on the scan`);
             const scan = loadScanMesh(extraction.texturedGlb);
             const grid = { ...surfaceModel(scan, 0.5), cellM: 0.5 };
-            const roads = measureRoadSurfaces({ roads: centrelines, grid, within: (x, z) => Math.hypot(x, z) <= covered, buildingAt: vector.buildingAt }, P);
+            const ground = buildGroundModel(scan, { cellMeters: 1, water: vector.waterAt, road: vector.roadAt });
+            const roads = measureRoadSurfaces({ roads: centrelines, grid, within: (x, z) => Math.hypot(x, z) <= covered, buildingAt: vector.buildingAt, groundAt: ground.groundAt }, P);
             const mesh = buildRoadMesh(roads, P);
             const stations = roads.reduce((n, r) => n + r.stations.length, 0);
             const measuredKerbShare = stations ? roads.reduce((n, r) => n + r.measuredKerbShare * r.stations.length, 0) / stations : 0;

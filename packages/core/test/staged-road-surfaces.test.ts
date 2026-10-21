@@ -117,6 +117,34 @@ describe('road surfaces', () => {
         expect(nearestOffRoad(roads, 0, 6, 3)).toMatchObject({ movedM: 0.5 });
     });
 
+    it('moves a station from a vector line that misses the street onto the measured lane, and drops a line under a roof', () => {
+        const scan = loadScanMesh(tileFile);
+        const grid = { ...surfaceModel(scan, 0.5), cellM: 0.5 };
+        // Google's line 1.5 m south of the street's centre: every station is centred back between the kerbs, still 4 m out
+        const off = measureRoadSurfaces({ roads: [[[-28, 1.5], [28, 1.5]]], grid, within: () => true, exclude: (x, z) => Math.hypot(x + 12, z - 5.5) < 3.8 });
+        const mid = off.flatMap(r => r.stations).filter(s => Math.abs(s.x - 10) > 6 && Math.abs(s.x + 12) > 6);
+        expect(mid.length).toBeGreaterThan(10);
+        for (const s of mid) {
+            expect(Math.abs(s.z)).toBeLessThanOrEqual(0.6);
+            expect(Math.abs(s.shiftM)).toBeGreaterThan(1.0);
+            expect(Math.abs(s.left.halfWidthM - 4)).toBeLessThanOrEqual(0.6);
+            expect(Math.abs(s.right.halfWidthM - 4)).toBeLessThanOrEqual(0.6);
+        }
+        // a line that runs under a building (a tunnel): its stations over the roof stand 12 m above the terrain and are left out,
+        // and the road becomes two runs, one each side of the building
+        const roofed = buildSyntheticTile({ halfSize: 30, spacing: 0.5, trees: [], building: { x0: -8, z0: -27, x1: 8, z1: -23, height: 12 } });
+        const f = path.join(WORK, 'roofed.glb');
+        fs.writeFileSync(f, roofed);
+        const g2 = { ...surfaceModel(loadScanMesh(f), 0.5), cellM: 0.5 };
+        const tunnel = measureRoadSurfaces({ roads: [[[-28, -25], [28, -25]]], grid: g2, within: () => true, groundAt: () => 0 });
+        expect(tunnel.length).toBe(2);
+        expect(tunnel[0].dropped.aboveGround).toBeGreaterThanOrEqual(6);
+        for (const r of tunnel) for (const s of r.stations) { expect(Math.abs(s.x)).toBeGreaterThan(7); expect(s.profile[2]).toBeLessThan(0.2); }
+        // the flat ground shows no kerb: the widths are the default and say so
+        expect(tunnel[0].measuredKerbShare).toBe(0);
+        expect(tunnel[0].stations[0].left.kerb).toBe('vector-modelled');
+    });
+
     it('builds the ribbons once at the crossing, with kerb faces and sidewalks, and writes a textured GLB that reads the photo', () => {
         const mesh = buildRoadMesh(roads);
         expect(mesh.stats.roads).toBe(3);

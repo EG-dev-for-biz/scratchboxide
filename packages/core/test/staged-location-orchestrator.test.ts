@@ -106,7 +106,7 @@ describe('a district', () => {
         expect(l).toMatchObject({ stage: 'roads', order: 2, provenance: { label: 'vector-modelled', measuredGeometry: false } });
         expect(l.url).toMatch(/_roads_[0-9a-f]{8}\.glb$/);
         expect(l.counts.triangles).toBeGreaterThan(50);
-        expect(l.provenance.note).toMatch(/2 streets/);
+        expect(l.provenance.note).toMatch(/2 street runs/);
         const obj = (result.artifact as any).data.objects.find((o: any) => o.id === l.objectId);
         expect(obj.content.metadata).toMatchObject({ source: 'GoogleVectorRoads', selfTextured: true, roads: 2 });
         // the GLB carries the tile photo rendered from above as its texture, on every node

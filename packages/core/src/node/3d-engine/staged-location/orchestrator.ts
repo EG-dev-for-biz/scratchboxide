@@ -81,7 +81,7 @@ import {
 } from './vector-first-paint';
 import { VisionModelChain, type VisionGenAIClient } from '../../gemini/vision-model-chain';
 import { segmentOwnershipViews } from './ownership-masks';
-import { geodeticToScan, loadScanMesh, surfaceModel, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
+import { buildGroundModel, geodeticToScan, loadScanMesh, surfaceModel, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
 import { buildRoadMesh, drivableAt, measureRoadSurfaces, nearestOffRoad, writeRoadsGlb, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
 import { renderTopDownPhoto, topDownJpeg } from './top-down-photo';
 import { TERRAIN_INNER_RADIUS_M, TERRAIN_INNER_STEP_M, TERRAIN_OUTER_STEP_M, TERRAIN_RADIUS_M, buildTerrainMesh, planTerrainGrid, writeTerrainGlb } from './terrain-surround';
@@ -1461,7 +1461,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             await runner.stage<RoadStageValue>({
                 id: 'roads',
                 run: async io => {
-                    const key = stageKey('roads/v1', t.key, crypto.createHash('sha256').update(JSON.stringify(centrelines)).digest('hex').slice(0, 16), covered.toFixed(1), ROAD_SURFACE_PARAMS.liftM);
+                    const key = stageKey('roads/v2', t.key, crypto.createHash('sha256').update(JSON.stringify(centrelines)).digest('hex').slice(0, 16), covered.toFixed(1), ROAD_SURFACE_PARAMS.liftM);
                     run.keys.roads = key;
                     const key8 = key.slice(0, 8);
                     const entry = await cache.run<RoadStageValue>('roads', key, async dir => {
@@ -1469,8 +1469,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const scan = t.scan ?? loadScanMesh(extraction.texturedGlb);
                         const grid = { ...surfaceModel(scan, 0.5), cellM: 0.5 };
                         const canopy = t.canopy ? canopyLookup(t.canopy) : undefined;
+                        // the terrain the scan shows (the walkable street surface): a line whose street stands far above it runs under a roof or deck
+                        const ground = t.ground ?? buildGroundModel(scan, { cellMeters: 1, ...(canopy ? { exclude: canopy } : {}), water: vector!.waterAt, road: vector!.roadAt });
                         const roads = measureRoadSurfaces({
-                            roads: centrelines, grid, within: (x, z) => Math.hypot(x, z) <= covered, ...(canopy ? { exclude: canopy } : {}), buildingAt: vector!.buildingAt
+                            roads: centrelines, grid, within: (x, z) => Math.hypot(x, z) <= covered, ...(canopy ? { exclude: canopy } : {}), buildingAt: vector!.buildingAt, groundAt: ground.groundAt
                         });
                         const mesh = buildRoadMesh(roads);
                         const stations = roads.reduce((n, r) => n + r.stations.length, 0);
@@ -1496,7 +1498,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             label: measured ? 'measured' : VECTOR_MODELLED_LABEL, measuredGeometry: measured, confidence: v.measuredKerbShare,
                             method: 'ribbons swept along Google vector road centrelines through levels read low on the photo tiles at stations every 2 m; kerbs where the scan steps up (a default half-width where none shows); the tile photo rendered from above as the texture',
                             sources: [{ kind: 'vector-tiles', id: `roads:${key8}` }, { kind: 'tile-extraction', id: `extract:${t.key.slice(0, 8)}` }],
-                            note: `${v.stats.roads} streets, ${v.stats.stations} stations; ${v.stats.measuredKerbs} kerbs measured, ${v.stats.defaultKerbs} defaulted; ${v.stats.medians} median stations; ${Math.round(v.stats.sidewalkM)} m of sidewalk; stands ${ROAD_SURFACE_PARAMS.liftM} m above the scan`
+                            note: `${v.stats.roads} street runs, ${v.stats.stations} stations; ${v.stats.measuredKerbs} kerbs measured, ${v.stats.defaultKerbs} defaulted; ${v.stats.medians} median stations; ${Math.round(v.stats.sidewalkM)} m of sidewalk; ${v.stats.droppedStations.noSurface + v.stats.droppedStations.aboveGround + v.stats.droppedStations.uneven} stations left out (${v.stats.droppedStations.noSurface} no street surface near the line, ${v.stats.droppedStations.aboveGround} under a roof or deck, ${v.stats.droppedStations.uneven} uneven); stands ${ROAD_SURFACE_PARAMS.liftM} m above the scan`
                         },
                         provenanceLabels: measured ? ['measured', VECTOR_MODELLED_LABEL] : [VECTOR_MODELLED_LABEL], supersedes: [], revealAfter: [],
                         reveal: { durationMs: 1500, stagger: 0.3, crossfadeFrom: [] },

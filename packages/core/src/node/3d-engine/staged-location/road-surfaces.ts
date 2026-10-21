@@ -48,11 +48,27 @@ export interface RoadSurfaceParams {
     liftM: number;
     /** A rise of at least this at the centreline over the sides means the centreline runs along a median (m). */
     medianRiseM: number;
+    /**
+     * The street is looked for within this of the vector centreline (m): Google's line and the scan disagree by a few
+     * metres, so each station moves onto the flattest, lowest lane-wide window near it (its shift is recorded).
+     */
+    snapM: number;
+    /** Half the window a lane is looked for in (m). */
+    laneHalfWindowM: number;
+    /** The window's spread (80th minus 20th percentile) a street surface may have (m); more is a wall, a roof, a tree. */
+    maxSpreadM: number;
+    /** A street stands at most this far above the terrain the scan shows (m); higher it is a roof or bridge deck the line runs under (a tunnel). */
+    maxAboveGroundM: number;
+    /** A kerb is looked for from this distance out (m): nearer rises are cars, posts and furniture. */
+    minHalfWidthM: number;
+    /** The levels across one station may differ by at most this (m): more is not one carriageway. */
+    maxProfileRangeM: number;
 }
 
 export const ROAD_SURFACE_PARAMS: RoadSurfaceParams = {
     stationM: 2, lateralStepM: 0.25, maxHalfWidthM: 14, kerbRiseM: 0.08, kerbRunM: 0.75, levelPercentile: 0.2,
-    defaultHalfWidthM: 3.5, sidewalkMaxM: 4, liftM: 0.04, medianRiseM: 0.08
+    defaultHalfWidthM: 3.5, sidewalkMaxM: 4, liftM: 0.04, medianRiseM: 0.08,
+    snapM: 8, laneHalfWindowM: 2.5, maxSpreadM: 0.35, maxAboveGroundM: 2.5, minHalfWidthM: 2.0, maxProfileRangeM: 1.0
 };
 
 /** The scan's surface, highest point per cell (NaN where it has nothing). */
@@ -82,6 +98,8 @@ export interface RoadStation {
     median?: { leftEdgeM: number; rightEdgeM: number; level: number };
     /** Surface samples the cross-section read. */
     samples: number;
+    /** How far the station moved from the vector centreline onto the measured street (m, signed along the left normal). */
+    shiftM: number;
 }
 
 export interface RoadSurface {
@@ -90,6 +108,8 @@ export interface RoadSurface {
     lengthM: number;
     /** Share of the stations' kerbs (both sides) that were measured. */
     measuredKerbShare: number;
+    /** Stations left out, by reason: no street surface near the line (a roof, a wall, a tree), above the terrain (a tunnel's line), levels not one carriageway. */
+    dropped: { noSurface: number; aboveGround: number; uneven: number };
 }
 
 export interface RoadMeasureInput {
@@ -101,6 +121,8 @@ export interface RoadMeasureInput {
     exclude?: (x: number, z: number) => boolean;
     /** A building (> 0) at a point: a sidewalk ends there. */
     buildingAt?: (x: number, z: number) => number;
+    /** The terrain the scan shows at a point (NaN where unknown): a street level far above it is not a street. */
+    groundAt?: (x: number, z: number) => number;
 }
 
 function percentile(values: number[], p: number): number {
@@ -222,18 +244,29 @@ export function measureRoadSurfaces(input: RoadMeasureInput, P: RoadSurfaceParam
     const g = input.grid;
     const read = (x: number, z: number): number => (input.exclude && input.exclude(x, z) ? NaN : surfaceAt(g, x, z));
     const out: RoadSurface[] = [];
+    const steps = Math.round(P.maxHalfWidthM / P.lateralStepM);
     input.roads.forEach((line, ri) => {
         const pts = stationsAlong(line, P.stationM).filter(p => input.within(p.x, p.z));
         if (pts.length < 2) return;
-        const stations: RoadStation[] = [];
+        const dropped = { noSurface: 0, aboveGround: 0, uneven: 0 };
+        /** Consecutive kept stations make one run; a gap splits the road into separate surfaces. */
+        let run: RoadStation[] = [];
         let measured = 0;
+        const flush = (): void => {
+            if (run.length >= 2) {
+                let lengthM = 0;
+                for (let i = 1; i < run.length; i++) lengthM += Math.hypot(run[i].x - run[i - 1].x, run[i].z - run[i - 1].z);
+                out.push({ id: `road_${ri}${out.some(r => r.id.startsWith(`road_${ri}`)) ? `_${out.filter(r => r.id.startsWith(`road_${ri}`)).length}` : ''}`, stations: run, lengthM, measuredKerbShare: 0, dropped: { ...dropped } });
+            }
+            run = [];
+        };
         for (const p of pts) {
             const nx = -p.tz, nz = p.tx;
-            // the cross-section: lateral offsets, each the median of three reads along the road (-1, 0, +1 m)
-            const sec: Section = { d: [], h: [] };
-            const steps = Math.round(P.maxHalfWidthM / P.lateralStepM);
+            // the cross-section about the vector line: lateral offsets, each the median of three reads along the road (-1, 0, +1 m)
+            const wide: Section = { d: [], h: [] };
+            const span = steps + Math.round(P.snapM / P.lateralStepM);
             let samples = 0;
-            for (let k = -steps; k <= steps; k++) {
+            for (let k = -span; k <= span; k++) {
                 const d = k * P.lateralStepM;
                 const hs: number[] = [];
                 for (const a of [-1, 0, 1]) {
@@ -241,20 +274,46 @@ export function measureRoadSurfaces(input: RoadMeasureInput, P: RoadSurfaceParam
                     if (h === h) hs.push(h);
                 }
                 samples += hs.length;
-                sec.d.push(d);
-                sec.h.push(hs.length ? median(hs) : NaN);
+                wide.d.push(d);
+                wide.h.push(hs.length ? median(hs) : NaN);
             }
+            // a median under the line pins the station there (the line is the street's centre); else the street near the line is
+            // the lane-wide window with the least spread (and, among the flat ones, the lowest and nearest)
+            const atLine: Section = { d: wide.d.filter(d => Math.abs(d) <= P.maxHalfWidthM + 1e-9), h: wide.h.filter((_, i) => Math.abs(wide.d[i]) <= P.maxHalfWidthM + 1e-9) };
+            const pinned = findMedian(atLine, P);
+            let best: { c: number; level: number; spread: number } | undefined;
+            if (pinned) {
+                const vals = atLine.h.filter((h, i) => h === h && Math.abs(atLine.d[i]) <= 0.75);
+                best = { c: 0, level: percentile(vals, P.levelPercentile), spread: 0 };
+            }
+            for (let c = -P.snapM; !pinned && c <= P.snapM + 1e-9; c += P.lateralStepM * 2) {
+                const vals = wide.h.filter((h, i) => h === h && Math.abs(wide.d[i] - c) <= P.laneHalfWindowM);
+                if (vals.length < Math.max(4, Math.floor((2 * P.laneHalfWindowM) / P.lateralStepM) * 0.6)) continue;
+                const level = percentile(vals, P.levelPercentile), spread = percentile(vals, 0.8) - level;
+                if (spread > P.maxSpreadM) continue;
+                const score = spread + 0.03 * Math.abs(c) + 0.05 * level;
+                if (!best || score < best.spread + 0.03 * Math.abs(best.c) + 0.05 * best.level) best = { c, level, spread };
+            }
+            if (!best) { dropped.noSurface++; flush(); continue; }
+            if (input.groundAt) {
+                const g = input.groundAt(p.x + nx * best.c, p.z + nz * best.c);
+                if (g === g && best.level - g > P.maxAboveGroundM) { dropped.aboveGround++; flush(); continue; }
+            }
+            const sx = p.x + nx * best.c, sz = p.z + nz * best.c;
+            const sec: Section = { d: wide.d.map(d => d - best!.c).filter(d => Math.abs(d) <= P.maxHalfWidthM + 1e-9), h: [] };
+            sec.h = wide.h.filter((_, i) => Math.abs(wide.d[i] - best!.c) <= P.maxHalfWidthM + 1e-9);
             const medianStrip = findMedian(sec, P);
-            const fromL = medianStrip ? medianStrip.leftEdgeM : 0, fromR = medianStrip ? medianStrip.rightEdgeM : 0;
+            const fromL = Math.max(P.minHalfWidthM, medianStrip ? medianStrip.leftEdgeM : 0), fromR = Math.max(P.minHalfWidthM, medianStrip ? medianStrip.rightEdgeM : 0);
             const kl = findKerb(sec, -1, fromL, P), kr = findKerb(sec, 1, fromR, P);
+            let measuredHere = 0;
             const side = (sign: 1 | -1, k: { halfWidthM: number; kerbTopY: number } | undefined): RoadSide => {
                 if (!k) return { halfWidthM: P.defaultHalfWidthM, kerb: 'vector-modelled' };
-                measured++;
+                measuredHere++;
                 // the sidewalk: from the kerb outward at the kerb's level until a building, a further step, or sidewalkMaxM
                 let width = 0;
                 const levels: number[] = [];
                 for (let d = k.halfWidthM + P.lateralStepM; d <= k.halfWidthM + P.sidewalkMaxM; d += P.lateralStepM) {
-                    const x = p.x + nx * sign * d, z = p.z + nz * sign * d;
+                    const x = sx + nx * sign * d, z = sz + nz * sign * d;
                     if (input.buildingAt && input.buildingAt(x, z) > 0) break;
                     const h = read(x, z);
                     if (h !== h) break;
@@ -264,10 +323,20 @@ export function measureRoadSurfaces(input: RoadMeasureInput, P: RoadSurfaceParam
                 }
                 return { halfWidthM: k.halfWidthM, kerb: 'measured', kerbTopY: k.kerbTopY, ...(width >= 0.5 ? { sidewalk: { widthM: width, level: median(levels) } } : {}) };
             };
-            const left = side(-1, kl), right = side(1, kr);
+            let left = side(-1, kl), right = side(1, kr);
+            // both kerbs measured and no median: the station is centred between them (the line may run off-centre in the carriageway)
+            let recentre = 0;
+            if (kl && kr && !medianStrip) {
+                recentre = (kr.halfWidthM - kl.halfWidthM) / 2;
+                const half = (kl.halfWidthM + kr.halfWidthM) / 2;
+                left = { ...left, halfWidthM: half };
+                right = { ...right, halfWidthM: half };
+                for (let i = 0; i < sec.d.length; i++) sec.d[i] -= recentre;
+            }
+            const cx = sx + nx * recentre, cz = sz + nz * recentre;
             // the carriageway's level at five places across it (a low percentile of the samples around each)
             const at = (t: number): number => {
-                const inner = t < 0 ? fromL : fromR;
+                const inner = t < 0 ? (medianStrip ? medianStrip.leftEdgeM : 0) : (medianStrip ? medianStrip.rightEdgeM : 0);
                 const outerHalf = t < 0 ? left.halfWidthM : right.halfWidthM;
                 const d = t === 0 && medianStrip ? 0 : inner + (outerHalf - inner) * Math.abs(t);
                 const band = Math.max(0.5, 0.25 * (outerHalf - inner));
@@ -275,8 +344,17 @@ export function measureRoadSurfaces(input: RoadMeasureInput, P: RoadSurfaceParam
                 return percentile(vals, P.levelPercentile);
             };
             const profile: [number, number, number, number, number] = [at(-1), at(-0.5), at(0), at(0.5), at(1)];
-            stations.push({ x: p.x, z: p.z, tx: p.tx, tz: p.tz, nx, nz, profile, left, right, samples, ...(medianStrip ? { median: medianStrip } : {}) });
+            const finite = profile.filter(v => v === v);
+            if (finite.length && Math.max(...finite) - Math.min(...finite) > P.maxProfileRangeM) { dropped.uneven++; flush(); continue; }
+            measured += measuredHere;
+            run.push({ x: cx, z: cz, tx: p.tx, tz: p.tz, nx, nz, profile, left, right, samples, shiftM: best.c + recentre, ...(medianStrip ? { median: medianStrip } : {}) });
         }
+        flush();
+        const runs = out.filter(r => r.id === `road_${ri}` || r.id.startsWith(`road_${ri}_`));
+        const kept = runs.reduce((n, r) => n + r.stations.length, 0);
+        for (const r of runs) { r.measuredKerbShare = kept ? measured / (2 * kept) : 0; r.dropped = { ...dropped }; }
+        for (const r of runs) {
+        const stations = r.stations;
         // levels smoothed along the road (median of three stations) and gaps filled from neighbours; then lifted
         for (let k = 0; k < 5; k++) {
             const raw = stations.map(s => s.profile[k]);
@@ -284,8 +362,8 @@ export function measureRoadSurfaces(input: RoadMeasureInput, P: RoadSurfaceParam
                 const win = [raw[i - 1], raw[i], raw[i + 1]].filter(v => v !== undefined && v === v);
                 let v = win.length ? median(win) : NaN;
                 if (v !== v) {
-                    for (let r = 1; r < stations.length && v !== v; r++) {
-                        const a = raw[i - r], b = raw[i + r];
+                    for (let q = 1; q < stations.length && v !== v; q++) {
+                        const a = raw[i - q], b = raw[i + q];
                         if (a !== undefined && a === a) v = a; else if (b !== undefined && b === b) v = b;
                     }
                 }
@@ -296,9 +374,7 @@ export function measureRoadSurfaces(input: RoadMeasureInput, P: RoadSurfaceParam
             if (s.median) s.median.level += P.liftM;
             for (const sd of [s.left, s.right]) { if (sd.kerbTopY !== undefined) sd.kerbTopY += P.liftM; if (sd.sidewalk) sd.sidewalk.level += P.liftM; }
         }
-        let lengthM = 0;
-        for (let i = 1; i < stations.length; i++) lengthM += Math.hypot(stations[i].x - stations[i - 1].x, stations[i].z - stations[i - 1].z);
-        out.push({ id: `road_${ri}`, stations, lengthM, measuredKerbShare: measured / (2 * stations.length) });
+        }
     });
     return out;
 }
@@ -358,7 +434,7 @@ export interface RoadMesh {
     sidewalks: RoadMeshPart;
     /** The planar UV frame: uv = ((x - x0) / width, (z - z0) / height). */
     uvFrame: { x0: number; z0: number; widthM: number; heightM: number };
-    stats: { roads: number; stations: number; measuredKerbs: number; defaultKerbs: number; medians: number; sidewalkM: number; skippedQuads: number; triangles: number };
+    stats: { roads: number; stations: number; measuredKerbs: number; defaultKerbs: number; medians: number; sidewalkM: number; skippedQuads: number; triangles: number; droppedStations: { noSurface: number; aboveGround: number; uneven: number } };
     minY: number; maxY: number;
 }
 
@@ -397,7 +473,15 @@ export function buildRoadMesh(roads: RoadSurface[], P: RoadSurfaceParams = ROAD_
     const carriage = new PartBuilder(frame), kerbs = new PartBuilder(frame), walks = new PartBuilder(frame);
     const ordered = [...roads].sort((a, b) => b.lengthM - a.lengthM);
     const polygons = ordered.map(carriagewayPolygon);
-    const stats = { roads: roads.length, stations: 0, measuredKerbs: 0, defaultKerbs: 0, medians: 0, sidewalkM: 0, skippedQuads: 0, triangles: 0 };
+    const stats = { roads: roads.length, stations: 0, measuredKerbs: 0, defaultKerbs: 0, medians: 0, sidewalkM: 0, skippedQuads: 0, triangles: 0, droppedStations: { noSurface: 0, aboveGround: 0, uneven: 0 } };
+    // a road's runs share one dropped count: counted once per vector line
+    const seenLine = new Set<string>();
+    for (const r of roads) {
+        const line = r.id.replace(/_\d+$/, '');
+        if (seenLine.has(line)) continue;
+        seenLine.add(line);
+        stats.droppedStations.noSurface += r.dropped.noSurface; stats.droppedStations.aboveGround += r.dropped.aboveGround; stats.droppedStations.uneven += r.dropped.uneven;
+    }
     const onEarlier = (upTo: number, x: number, z: number): boolean => {
         for (let i = 0; i < upTo; i++) if (pointInPolygon(polygons[i], x, z)) return true;
         return false;
