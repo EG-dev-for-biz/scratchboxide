@@ -63,6 +63,12 @@ static void usage() {
         "    --ground-passes N (6: removal passes at most while trees are kept as scanned)\n"
         "    --footprint-dilation M (1) --drape-reach M (10) --clearance M (0.3) --support-band M (1.5)\n"
         "    --skirt-min M (0.3) --fragment-max-area M2 (300) --cap-grid M (1.5) --seam-gap M (1) --sample-spacing M (0.7) --threads N\n"
+        "    fill of the strip's caps and skirts (they carry photo-inferred texels of their own, never flat clay):\n"
+        "    --fill 0|1 (1: photo-inferred texels from the kept scan around each piece; 0: the legacy flat clay)\n"
+        "    --fill-texel M (0.1) --fill-atlas-max-px N (4096) --fill-context M (2: how far beyond a piece the real scan is read)\n"
+        "    --fill-surface-tol M (0.35) --fill-normal-cos V (0.6) --fill-confidence-scale M (3: carried this far a texel's confidence is 1/e)\n"
+        "    --skirt-drop-backed 0|1 (1: a skirt on a wall or roof edge is not built where the scan has the wall behind it)\n"
+        "    --skirt-backed-reach M (0.4) --skirt-backed-share V (0.5)\n"
         "    regrowth (white apex: a tree the regrown tree does not fill, kept as scanned):\n"
         "    --seed HEX (0) --crown-base-ratio V (0.35) --trunk-radius-per-height V (0.016) --shell-depth V (0.8) --min-surface-reached V (0.9)\n"
         "    --species-index PATH      the tree species library (assets/vegetation/species/index.json): each crown regrown with the\n"
@@ -292,6 +298,21 @@ static StripParams readStripParams(const Args& a) {
     P.seamGap = a.num("seam-gap", P.seamGap);
     P.sampleSpacing = a.num("sample-spacing", P.sampleSpacing);
     P.threads = static_cast<int>(a.num("threads", 0));
+    if (a.has("fill") && a.str("fill") != "0" && a.str("fill") != "1") throw VegetationError("bad_request", "--fill must be 0 or 1");
+    P.fill = a.has("fill") ? a.str("fill") == "1" : P.fill;
+    P.fillTexel = a.num("fill-texel", P.fillTexel);
+    P.fillAtlasMaxPx = static_cast<int>(a.num("fill-atlas-max-px", P.fillAtlasMaxPx));
+    P.fillContext = a.num("fill-context", P.fillContext);
+    P.fillSurfaceTol = a.num("fill-surface-tol", P.fillSurfaceTol);
+    P.fillNormalCos = a.num("fill-normal-cos", P.fillNormalCos);
+    P.fillConfidenceScale = a.num("fill-confidence-scale", P.fillConfidenceScale);
+    if (a.has("skirt-drop-backed") && a.str("skirt-drop-backed") != "0" && a.str("skirt-drop-backed") != "1") throw VegetationError("bad_request", "--skirt-drop-backed must be 0 or 1");
+    P.skirtDropBacked = a.has("skirt-drop-backed") ? a.str("skirt-drop-backed") == "1" : P.skirtDropBacked;
+    P.skirtBackedReach = a.num("skirt-backed-reach", P.skirtBackedReach);
+    P.skirtBackedShare = a.num("skirt-backed-share", P.skirtBackedShare);
+    if (!(P.fillTexel > 0) || !(P.fillContext > 0) || !(P.fillSurfaceTol > 0) || !(P.fillConfidenceScale > 0) || !(P.skirtBackedReach > 0)) throw VegetationError("bad_request", "--fill-texel, --fill-context, --fill-surface-tol, --fill-confidence-scale and --skirt-backed-reach must be > 0");
+    if (P.fillNormalCos < 0 || P.fillNormalCos > 1 || P.skirtBackedShare < 0 || P.skirtBackedShare > 1) throw VegetationError("bad_request", "--fill-normal-cos and --skirt-backed-share must be in [0, 1]");
+    if (P.fillAtlasMaxPx < 256 || P.fillAtlasMaxPx > 16384) throw VegetationError("bad_request", "--fill-atlas-max-px must be in [256, 16384]");
     readGrowthFlags(a, P.growth);
     P.growth.seed = parseSeed(a);
     readSpeciesIndex(a, P.growth);
