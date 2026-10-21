@@ -23,8 +23,9 @@ import {
 } from './diurnal-lighting';
 import { getSunVectorFromAngles } from './solar-position';
 import { buildPhysicalSkyLut } from './physical-sky';
+import { SunGlare } from './SunGlare';
 import { cloudShellUniformArrays, cloudShellWindSpeeds, MAX_CLOUD_SHELL_LAYERS, resolveCloudShellLayers } from './cloud-shell-layers';
-import { MissingInputError } from '../../../../common/errors/pipeline-errors';
+import { InvalidInputError, MissingInputError } from '../../../../common/errors/pipeline-errors';
 
 export const ATMOSPHERE_VERTEX_SHADER = /* glsl */ `
 varying vec3 vWorldPosition;
@@ -32,9 +33,26 @@ varying vec3 vNormal;
 
 void main() {
     vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-    vWorldPosition = worldPosition.xyz;
+    // the view direction from the dome's own centre (the dome follows the camera), not from the scene origin
+    vWorldPosition = worldPosition.xyz - (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
     vNormal = normalize(normalMatrix * normal);
     gl_Position = projectionMatrix * viewMatrix * worldPosition;
+}
+`;
+
+/** Cube-map face size the sky is baked at (texels per 90°: ~0.09° per texel). */
+export const SKY_BAKE_RESOLUTION = 1024;
+/** While clouds drift, how often (seconds of scene time) the bake starts another one-face-per-frame refresh. */
+export const SKY_REFRESH_SECONDS = 0.5;
+
+/** The visible dome: the baked sky looked up by view direction, then the renderer's tone mapping and colour space. */
+export const SKY_CUBE_DISPLAY_FRAGMENT_SHADER = /* glsl */ `
+uniform samplerCube uSkyCube;
+varying vec3 vWorldPosition;
+void main() {
+    gl_FragColor = vec4(textureCube(uSkyCube, normalize(vWorldPosition)).rgb, 1.0);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
 }
 `;
 
@@ -271,7 +289,7 @@ float remapClamped(float v, float l0, float h0, float l1, float h1) {
 }
 // Cumulus density at world point p (metres from the observer); h is the normalised height in the layer.
 // detail 0-1: the erosion's weight (fades with distance, where it would only alias; 0 for the light march).
-float cumulusDensity(vec3 p, float detail, out float h) {
+float cumulusDensity(vec3 p, float detail, float ramp, out float h) {
     float alt = length(p + vec3(0.0, 6371000.0, 0.0)) - 6371000.0;
     h = (alt - uCloudAltitude) / CUMULUS_THICKNESS;
     if (h <= 0.0 || h >= 1.0) return 0.0;
@@ -285,7 +303,9 @@ float cumulusDensity(vec3 p, float detail, out float h) {
     float topThreshold = perlinWorleyQuantile(1.0 - uCloudCoverage * 0.12) + 0.06;
     float threshold = mix(baseThreshold, topThreshold, smoothstep(0.1, 1.0, h));
     float base = perlinWorley3D(vec3(w.x, w.y * 1.6, w.z) * 0.0006, uTime);
-    float shape = remapClamped(base, threshold, threshold + 0.07, 0.0, 1.0) * smoothstep(0.0, 0.04, h);
+    // ramp: the shape's edge width, crisp close by and wider far away (cumulusEdgeRamp), so distant cloud merges into
+    // a soft bank instead of speckling along the horizon. The light march passes the view sample's ramp.
+    float shape = remapClamped(base, threshold, threshold + ramp, 0.0, 1.0) * smoothstep(0.0, 0.04, h);
     if (detail <= 0.0 || shape <= 0.0) return shape;
     // Erosion: wispy (worley) at the base, billowy (inverted worley: cauliflower puffs) toward the tops.
     float wf = worley3D(w * 0.0035) * 0.625 + worley3D(w * 0.0081) * 0.25 + worley3D(w * 0.017) * 0.125;
@@ -335,7 +355,8 @@ vec3 compositeCloudShells(vec3 sky, vec3 rayDir, float cosViewSun, vec3 ambient)
             float shape = shellFbm(q + warp * 1.2 + seed, octaves);
             float detail = shellFbm(q * 3.7 + warp * 2.0 + seed + 3.0, octaves - 2.0);
             float erosion = mix(mix(0.45, 1.0, smoothstep(0.3, 0.7, detail)), 1.0, smoothstep(0.08, 0.3, footprint));
-            float density = smoothstep(threshold - 0.12, threshold + 0.28, shape) * erosion;
+            // Density starts at the threshold (no faint veil below it, which slant views near the horizon turned into cloud).
+            float density = smoothstep(threshold, threshold + 0.25, shape) * erosion;
             density = mix(density, A.z, smoothstep(0.25, 1.0, footprint));
             if (density <= 0.001) continue;
             float trans = exp(-A.w / shells * density / mu);
@@ -433,9 +454,9 @@ void main() {
     float sunVisibility = smoothstep(-0.06, 0.02, sunH);
 
     if (!uIsNight && sunVisibility > 0.0) {
-        // Solar Disc (~0.53 degree angular diameter)
-        float cosSunRadius = 0.99988;
-        float sunDisc = smoothstep(cosSunRadius - 0.00025, cosSunRadius, cosViewSun);
+        // Solar disc: 0.267° angular radius (0.53° across), with a 0.05° anti-aliased edge. (It was cos 0.99988, a 0.89°
+        // radius with a soft edge to 1.56°: a disc over three times the sun's size.)
+        float sunDisc = smoothstep(cos(radians(0.267 + 0.05)), cos(radians(0.267)), cosViewSun);
 
         // Forward Mie scattering solar corona aureole
         float miePhase = henyeyGreenstein(cosViewSun, uMieDirectionalG);
@@ -461,10 +482,10 @@ void main() {
         float tStart = getAtmosphereDistance(rayDir, uCloudAltitude);
         float tEnd = min(getAtmosphereDistance(rayDir, uCloudAltitude + CUMULUS_THICKNESS), tStart + 30000.0);
         if (tStart < 90000.0) {
-            // About one step per 60 m of path (24-64 steps; double steps through clear air), jittered per pixel by interleaved gradient noise so
+            // About one step per 40 m of path (32-80 steps, affordable since the sky is baked; double steps through clear air), jittered per pixel by interleaved gradient noise so
             // the steps do not show as striations.
             float pathLen = tEnd - tStart;
-            int steps = int(clamp(pathLen / 60.0, 24.0, 64.0));
+            int steps = int(clamp(pathLen / 40.0, 32.0, 80.0));
             float dt = pathLen / float(steps);
             float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
             float t = tStart + dt * ign;
@@ -476,11 +497,13 @@ void main() {
             float T = 1.0;
             bool skipped = false;
             // Back-ups after a skipped stride use iterations but not steps, so the loop has headroom.
-            for (int i = 0; i < 96; i++) {
+            for (int i = 0; i < 112; i++) {
                 if (t > tEnd) break;
                 vec3 p = rayDir * t;
                 float h;
-                float d = cumulusDensity(p, 1.0 - smoothstep(8000.0, 25000.0, t), h);
+                float detailW = 1.0 - smoothstep(8000.0, 25000.0, t);
+                float ramp = mix(0.25, 0.07, detailW);
+                float d = cumulusDensity(p, detailW, ramp, h);
                 if (d > 0.002 && skipped) {
                     // A double stride landed inside cloud: back up half of it once so the cloud's edge is not stepped over.
                     skipped = false;
@@ -494,7 +517,7 @@ void main() {
                     for (int k = 0; k < 6; k++) {
                         lt += ls;
                         float hh;
-                        od += cumulusDensity(p + uSunDirection * lt, 0.0, hh) * ls;
+                        od += cumulusDensity(p + uSunDirection * lt, 0.0, ramp, hh) * ls;
                         ls *= 2.0;
                     }
                     // Direct beam (single scattering, two-lobe phase) plus the multiply scattered light that diffuses
@@ -503,8 +526,11 @@ void main() {
                     float tauSun = sigmaT * od;
                     float ph = mix(henyeyGreenstein(cosViewSun, 0.8), henyeyGreenstein(cosViewSun, -0.3), 0.3);
                     float diffuseT = 1.0 / (1.0 + 0.75 * (1.0 - 0.85) * tauSun);
-                    // Multiply scattered light keeps part of the droplets' forward bias (Wrenninge: g halves per octave).
-                    float msPhase = mix(1.0, henyeyGreenstein(cosViewSun, 0.4) * 12.566371, 0.5);
+                    // Multiply scattered light keeps part of the droplets' forward bias (Wrenninge: g halves per octave),
+                    // but only near the sunlit surface: a few optical depths in, the light has scattered many times and
+                    // is isotropic, so a thick backlit cloud is dark with a bright thin rim.
+                    float forwardBias = 0.5 * exp(-tauSun / 8.0);
+                    float msPhase = mix(1.0, henyeyGreenstein(cosViewSun, 0.4) * 12.566371, forwardBias);
                     vec3 sunL = sunE * (exp(-tauSun) * ph + diffuseT * msPhase * 3.0 / 12.566371);
                     // Sky light: the zenith's on the tops, the darker horizon/ground light under the base.
                     // A cloud sees the sky, other cloud and the ground, so its ambient light is half desaturated.
@@ -609,7 +635,7 @@ export function createAtmosphericSkyDome(
     scene: THREE.Scene,
     isSunset: boolean = false,
     config: AtmosphericScatteringConfig = {},
-    options: { sphereRadius?: number; distanceOffset?: number } = {}
+    options: { sphereRadius?: number; distanceOffset?: number; bakeResolution?: number } = {}
 ): AtmosphericSkyDomeModule {
     const radius = options.sphereRadius || 280;
 
@@ -716,10 +742,99 @@ export function createAtmosphericSkyDome(
         depthTest: true
     });
 
-    const skyDome = new THREE.Mesh(skyGeo, skyMat);
+    // The sky is a function of view direction only, so the expensive shader (physical sky, clouds) is baked into a cube
+    // map off-screen and the visible dome just looks it up. It re-bakes in full when any input changes (uniforms are
+    // compared each frame, so direct uniform writes count), and while clouds drift it refreshes a strip per frame.
+    const bakeScene = new THREE.Scene();
+    const bakeDome = new THREE.Mesh(skyGeo, skyMat);
+    bakeDome.frustumCulled = false;
+    bakeScene.add(bakeDome);
+    const bakeSize = Math.max(64, Math.round(options.bakeResolution ?? SKY_BAKE_RESOLUTION));
+    const bakeTarget = new THREE.WebGLCubeRenderTarget(bakeSize, { type: THREE.HalfFloatType, generateMipmaps: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+    const bakeCamera = new THREE.CubeCamera(1, radius * 4, bakeTarget);
+    let disposed = false;
+    bakeScene.add(bakeCamera);
+    const displayMat = new THREE.ShaderMaterial({
+        vertexShader: ATMOSPHERE_VERTEX_SHADER,
+        fragmentShader: SKY_CUBE_DISPLAY_FRAGMENT_SHADER,
+        uniforms: { uSkyCube: { value: bakeTarget.texture } },
+        side: THREE.BackSide,
+        depthWrite: false,
+        depthTest: true
+    });
+    const skyDome = new THREE.Mesh(skyGeo, displayMat);
     skyDome.name = 'AtmosphericSkyDome';
+    // the sky's own shader, never the scene-wide clay pass (TileClayProcessor, clayRenderMode): a clayed dome is a flat grey wall
+    skyDome.userData.sbKeepAuthoredMaterial = true;
     skyDome.renderOrder = -1000;
     scene.add(skyDome);
+
+    let bakedSignature = '';
+    let bakedTime = -Infinity;
+    let refreshFace = -1;
+    const uniformSignature = () => {
+        const parts: string[] = [];
+        for (const [name, u] of Object.entries(uniforms as Record<string, { value: unknown }>)) {
+            if (name === 'uTime') continue;
+            const v = u.value as any;
+            if (v && typeof v === 'object' && 'isTexture' in v) parts.push(`${name}:${v.uuid}:${v.version}`);
+            else if (Array.isArray(v)) parts.push(`${name}:${v.map((x: any) => (x && x.toArray ? x.toArray().join(',') : String(x))).join(';')}`);
+            else if (v && typeof v === 'object' && typeof v.toArray === 'function') parts.push(`${name}:${v.toArray().join(',')}`);
+            else parts.push(`${name}:${String(v)}`);
+        }
+        return parts.join('|');
+    };
+    // Clouds and wind-driven decks move with uTime; a clear sky does not.
+    const skyMoves = () => uniforms.uCloudCoverage.value > 0.0 || (uniforms.uShellWind.value as number[]).some((w, i) => i < uniforms.uShellLayerCount.value && w !== 0);
+    // A refresh while clouds drift goes one strip (an eighth of a face) per frame, so no frame carries a whole face.
+    const STRIPS = 8;
+    const savedScissor = new THREE.Vector4();
+    const renderFace = (renderer: THREE.WebGLRenderer, face: number, strip = -1) => {
+        if (bakeCamera.coordinateSystem !== renderer.coordinateSystem) {
+            bakeCamera.coordinateSystem = renderer.coordinateSystem;
+            bakeCamera.updateCoordinateSystem();
+        }
+        const target = renderer.getRenderTarget(), activeFace = renderer.getActiveCubeFace(), level = renderer.getActiveMipmapLevel();
+        const xr = renderer.xr.enabled, scissorTest = renderer.getScissorTest();
+        renderer.getScissor(savedScissor);
+        renderer.xr.enabled = false;
+        renderer.setRenderTarget(bakeTarget, face);
+        if (strip >= 0) {
+            const h = Math.ceil(bakeSize / STRIPS);
+            bakeTarget.scissor.set(0, strip * h, bakeSize, h);
+            bakeTarget.scissorTest = true;
+            renderer.setRenderTarget(bakeTarget, face);
+        }
+        renderer.render(bakeScene, bakeCamera.children[face] as THREE.Camera);
+        if (strip >= 0) {
+            bakeTarget.scissorTest = false;
+            bakeTarget.scissor.set(0, 0, bakeSize, bakeSize);
+        }
+        renderer.setRenderTarget(target, activeFace, level);
+        renderer.setScissor(savedScissor);
+        renderer.setScissorTest(scissorTest);
+        renderer.xr.enabled = xr;
+    };
+    skyDome.onBeforeRender = (renderer) => {
+        const signature = uniformSignature();
+        if (signature !== bakedSignature) {
+            // Inputs changed: the whole sky at once, so no frame shows a mix of old and new.
+            for (let face = 0; face < 6; face++) renderFace(renderer as THREE.WebGLRenderer, face);
+            bakedSignature = signature;
+            bakedTime = uniforms.uTime.value;
+            refreshFace = -1;
+            return;
+        }
+        if (refreshFace < 0 && skyMoves() && Math.abs(uniforms.uTime.value - bakedTime) >= SKY_REFRESH_SECONDS) {
+            refreshFace = 0;
+            bakedTime = uniforms.uTime.value;
+        }
+        if (refreshFace >= 0) {
+            // refreshFace counts strips: face = floor(n / STRIPS), strip = n % STRIPS
+            renderFace(renderer as THREE.WebGLRenderer, Math.floor(refreshFace / STRIPS), refreshFace % STRIPS);
+            refreshFace = refreshFace === 6 * STRIPS - 1 ? -1 : refreshFace + 1;
+        }
+    };
 
     // Glowing Sun Mesh
     const sunGeo = new THREE.SphereGeometry(Math.max(3, radius * 0.025), 16, 16);
@@ -730,9 +845,31 @@ export function createAtmosphericSkyDome(
     });
     const sunMesh = new THREE.Mesh(sunGeo, sunMat);
     sunMesh.name = 'PhysicalSunDisc';
+    // the sky's own shader, never the scene-wide clay pass (TileClayProcessor, clayRenderMode): a clayed dome is a flat grey wall
+    sunMesh.userData.sbKeepAuthoredMaterial = true;
     const sunDistance = radius * 0.65;
     sunMesh.position.copy(sunDirection).multiplyScalar(sunDistance);
+    // The dome's shader draws the disc; this mesh stays as the sun's position marker (read by the viewport) but is
+    // not drawn: at display brightness it showed as a grey dot in the middle of the sun.
+    sunMesh.visible = false;
     scene.add(sunMesh);
+
+    // Veiling glare round the sun (SunGlare.ts): measured strength 1 by default whenever this atmosphere has a sun.
+    const glareStrength = config.sunGlare ?? 1;
+    if (!(Number.isFinite(glareStrength) && glareStrength >= 0)) {
+        throw new InvalidInputError('createAtmosphericSkyDome', `sunGlare ${glareStrength}`, 'must be a number >= 0 (1 is the measured camera/eye glare, 0 none)');
+    }
+    const lum = (c: THREE.Color) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+    const sunGlare: SunGlare = new SunGlare({
+        sunDirection: () => sunDirection,
+        sunIrradiance: () => sunLight.color.clone().multiplyScalar(sunLight.intensity),
+        sunElevationDeg: () => initialElev,
+        skyCube: () => bakeTarget.texture,
+        // the disc term the dome's shader adds before cloud: 12 x the sun's colour x intensity (smoothstep visibility at the horizon)
+        clearDiscLuminance: () => 12 * lum(uniforms.uSunColor.value as THREE.Color) * uniforms.uSunIntensity.value * THREE.MathUtils.smoothstep(sunDirection.y, -0.06, 0.02),
+        skyObjects: (): THREE.Object3D[] => [skyDome, sunMesh, sunGlare.mesh]
+    }, glareStrength);
+    scene.add(sunGlare.mesh);
 
     // Dynamic Hemisphere Sky & Ground Ambient Bounce Light
     const hemiLight = new THREE.HemisphereLight(
@@ -778,7 +915,8 @@ export function createAtmosphericSkyDome(
         (sunMesh.material as THREE.MeshBasicMaterial).color.copy(effSun);
         (sunMesh.material as THREE.MeshBasicMaterial).opacity = diurnalProfile.isNight ? 0.0 : 0.95;
 
-        sunLight.position.copy(sunMesh.position);
+        // the light's own position along the sun direction (the disc may sit around the camera; see followCamera)
+        sunLight.position.copy(sunDirection).multiplyScalar(sunDistance);
         sunLight.color.copy(effSun);
         sunLight.intensity = diurnalProfile.sunIntensity;
         sunLight.castShadow = diurnalProfile.castShadows;
@@ -791,17 +929,27 @@ export function createAtmosphericSkyDome(
 
     return {
         skyDome,
+        skyMaterial: skyMat,
         sunMesh,
         hemiLight,
         sunLight,
         get sunDirection() {
             return sunDirection;
         },
+        sunGlare,
         get diurnalProfile() {
             return diurnalProfile;
         },
         update: (time: number, _delta: number) => {
             uniforms.uTime.value = time;
+        },
+        followCamera: (camera: THREE.Camera) => {
+            const far = (camera as THREE.PerspectiveCamera).far;
+            const scale = Number.isFinite(far) && far > 0 ? (far * 0.9) / radius : 1;
+            skyDome.position.copy(camera.position);
+            skyDome.scale.setScalar(scale);
+            sunMesh.position.copy(camera.position).addScaledVector(sunDirection, sunDistance * scale);
+            sunMesh.scale.setScalar(scale);
         },
         setSunCoordinates: (elevDeg: number, azimDeg: number) => {
             applySolarState(elevDeg, azimDeg);
@@ -816,12 +964,25 @@ export function createAtmosphericSkyDome(
         },
         setCloudLayers: (layers) => applyCloudLayers(layers),
         dispose: () => {
+            if (disposed) return;
+            disposed = true;
             scene.remove(skyDome);
             scene.remove(sunMesh);
             scene.remove(hemiLight);
             scene.remove(sunLight);
+            scene.remove(sunGlare.mesh);
+            sunGlare.dispose();
             skyGeo.dispose();
             skyMat.dispose();
+            displayMat.dispose();
+            // three's WebGLCubeRenderTarget dispose reads the renderer's per-face framebuffers, which do not exist
+            // when the dome goes before its first bake (a scene closed at once) or after the renderer was disposed;
+            // it then throws "Cannot read properties of undefined (reading '0')" out of a React cleanup
+            try {
+                bakeTarget.dispose();
+            } catch {
+                bakeTarget.texture.dispose();
+            }
             skyLutTexture?.dispose();
             sunGeo.dispose();
             sunMat.dispose();

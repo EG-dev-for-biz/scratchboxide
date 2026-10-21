@@ -92,7 +92,7 @@ import { GeminiClient } from '../gemini-client';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
 import { describeLocationClay, runLocationClayPipeline, type LocationClayResult } from '../../3d-engine/location-clay-pipeline';
 import {
-    runStagedLocationTool, STAGED_CLAY_TOOL_DESCRIPTION, STAGED_ISOLATE_DESCRIPTION, STAGED_PLACE_DESCRIPTION, STAGED_RADIUS_DESCRIPTION, STAGED_RETRY_RUN_DESCRIPTION, STAGED_RETRY_STAGE_DESCRIPTION
+    runStagedLocationTool, STAGED_CLAY_TOOL_DESCRIPTION, STAGED_ISOLATE_DESCRIPTION, STAGED_PLACE_DESCRIPTION, STAGED_RADIUS_DESCRIPTION, STAGED_RETRY_RUN_DESCRIPTION, STAGED_RETRY_STAGE_DESCRIPTION, STAGED_RESUME_RUN_DESCRIPTION
 } from '../../3d-engine/staged-location/staged-location-tool';
 import { findTileRefineRepoRoot } from '../../3d-engine/tile-refine-service';
 import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome, ToolParameterSchema, ToolResultPayload } from './types';
@@ -248,6 +248,10 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 retryStage: {
                     type: 'STRING',
                     description: STAGED_RETRY_STAGE_DESCRIPTION
+                },
+                resumeRunId: {
+                    type: 'STRING',
+                    description: STAGED_RESUME_RUN_DESCRIPTION
                 }
             },
             required: ['query']

@@ -73,7 +73,8 @@ public:
         const std::vector<Vec3>& scanPoints,
         const SbVeggieTemplate& tmpl,
         const SbVeggieOptimizerOptions& options = SbVeggieOptimizerOptions(),
-        const Vec3* explicitAnchor = nullptr
+        const Vec3* explicitAnchor = nullptr,
+        const SbVeggieParams* initialGuess = nullptr
     ) {
         auto startTime = std::chrono::high_resolution_clock::now();
         SbVeggieOptimizerResult result;
@@ -114,14 +115,20 @@ public:
         float canonicalHeight = 6.0f;
         float canonicalRadius = 2.7f;
 
-        // Initialize Mode 1 (Height): beta[1] in [-2.5, 2.5]
-        result.fittedParams.beta[1] = std::clamp((scanHeight - canonicalHeight) / (canonicalHeight * 0.35f), -2.5f, 2.5f);
+        if (initialGuess != nullptr) {
+            // Warm start (e.g. from a learned regressor); translation still comes from the scan or anchor.
+            for (int i = 0; i < 16; ++i) result.fittedParams.beta[i] = initialGuess->beta[i];
+            for (int i = 0; i < 8; ++i) result.fittedParams.scaffoldIK[i] = initialGuess->scaffoldIK[i];
+        } else {
+            // Initialize Mode 1 (Height): beta[1] in [-2.5, 2.5]
+            result.fittedParams.beta[1] = std::clamp((scanHeight - canonicalHeight) / (canonicalHeight * 0.35f), -2.5f, 2.5f);
 
-        // Initialize Mode 2 (Crown Spread): beta[2] in [-2.5, 2.5]
-        result.fittedParams.beta[2] = std::clamp((scanRadius - canonicalRadius) / (canonicalRadius * 0.40f), -2.5f, 2.5f);
+            // Initialize Mode 2 (Crown Spread): beta[2] in [-2.5, 2.5]
+            result.fittedParams.beta[2] = std::clamp((scanRadius - canonicalRadius) / (canonicalRadius * 0.40f), -2.5f, 2.5f);
 
-        // Mode 3: Crown base clearance
-        result.fittedParams.beta[3] = std::clamp((scanHeight * 0.30f - 1.8f) * 0.6f, -1.5f, 1.5f);
+            // Mode 3: Crown base clearance
+            result.fittedParams.beta[3] = std::clamp((scanHeight * 0.30f - 1.8f) * 0.6f, -1.5f, 1.5f);
+        }
 
         // Initial Chamfer Evaluation
         float initialLoss = evaluateChamferDistance(result.fittedParams, tmpl, subsampled);

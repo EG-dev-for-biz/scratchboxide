@@ -736,7 +736,6 @@ const demoMig360PanoramaData: Scene3DData = {
     sceneType: 'custom',
     renderMode: 'shaded',
     cameraMode: 'orbit',
-    selectedMeshId: 'shibuya-skybox-panorama',
     camera: {
         position: [0, 1.7, 0.1],
         target: [0, 1.7, 10],
@@ -756,27 +755,9 @@ const demoMig360PanoramaData: Scene3DData = {
         landmarkName: 'Shibuya Crossing Scramble',
         castingArchetype: 'Urban Street View Grounding',
         castingRationale: 'Grounded via Vertex AI Maps Imagery Grounding to official Street View panoId CAoSF0NJSE0wb2dLRUlDQWdJRHE4NkMtbXdF'
-    },
-    objects: [
-        {
-            id: 'shibuya-skybox-panorama',
-            content: {
-                type: '3d-model',
-                durableUri: '/panoramas/streetview_shibuya_crossing_4k.png',
-                mimeType: 'image/png',
-                metadata: {
-                    panoId: 'CAoSF0NJSE0wb2dLRUlDQWdJRHE4NkMtbXdF',
-                    groundingSource: 'Vertex AI Maps Imagery Grounding (MIG)',
-                    captureDate: '2024-05',
-                    projection: 'equirectangular_2_to_1',
-                    vehicleMastHeightMeters: 2.5
-                }
-            },
-            space: {
-                spatial3d: { x: 0, y: 0, z: 0 }
-            }
-        }
-    ]
+    }
+    // The Street View panorama (panoId above, public/panoramas/streetview_shibuya_crossing_4k.png) is a 2:1 image, not a
+    // 3D model, so it is not listed as a scene object: the viewport cannot draw an image as a model.
 };
 
 // ----------------------------------------------------------------------------------

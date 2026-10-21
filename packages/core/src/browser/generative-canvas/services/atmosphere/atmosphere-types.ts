@@ -122,6 +122,11 @@ export interface AtmosphericScatteringConfig {
     cloudDensity?: number;
     cloudAltitude?: number;
     volumetricClouds?: boolean;
+    /**
+     * Veiling glare round the sun (lens/eye): 1 is the average measured on real HDR skies (~2.8% of the sun's light in
+     * a halo falling as theta^-2.5), 0 none. Default 1 whenever the atmosphere has a sun.
+     */
+    sunGlare?: number;
     /** Thin cloud decks drawn as stacked curved shells, behind the volumetric layer. Strictly opt-in: none by default. */
     cloudLayers?: CloudShellLayer[];
     kelvinTemperature?: number;
@@ -183,16 +188,27 @@ export interface CloudShadowConfig {
 }
 
 export interface AtmosphericSkyDomeModule {
+    /** The visible dome: draws the sky baked from `skyMaterial`. */
     skyDome: THREE.Mesh;
+    /** The physical sky and cloud shader the dome is baked from; writing its uniforms re-bakes the sky. */
+    skyMaterial: THREE.ShaderMaterial;
     sunMesh: THREE.Mesh;
     hemiLight: THREE.HemisphereLight;
     sunLight: THREE.DirectionalLight;
     sunDirection: THREE.Vector3;
     diurnalProfile: DiurnalLightingProfile;
+    /**
+     * Keeps the sky around the view: centres the dome and sun disc on the camera and scales them to just inside its far
+     * plane, so the dome's edge is never seen however far the camera pulls back (a sky is at infinity). The sun light is
+     * not moved: its shadows stay fitted to the content.
+     */
+    followCamera?: (camera: THREE.Camera) => void;
     update: (time: number, delta: number) => void;
     setSunCoordinates: (elevationDeg: number, azimuthDeg: number) => void;
     setTimeOfDay: (timeHours: number, lat: number, lng: number) => void;
     setPreset: (preset: TimeOfDayPreset) => void;
+    /** The sun's veiling glare (visibility through cloud and past geometry, as last measured). */
+    sunGlare?: import('./SunGlare').SunGlare;
     /** Replaces the shell cloud decks (an empty list removes them). */
     setCloudLayers: (layers: CloudShellLayer[]) => void;
     dispose: () => void;

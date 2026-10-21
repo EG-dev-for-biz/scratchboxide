@@ -46,12 +46,15 @@ import type { RendererStack } from '../types';
 import { StagedBuildOverlay, type DegradationPlacementNote, type MaterialsSummary } from './StagedBuildOverlay';
 import { placeDegradations, type Placement, type PlacementRoot } from './degradationPlacement';
 import { nodeProgress, nodeRevealWindow, stepRevealSchedule, type LayerLoadState, type LayerRevealFrame, type RevealFrame, type RevealSchedule } from './revealScheduler';
-import { REVEAL_ATTRIBUTE, StagedMaterialRegistry, installRenderGuard, type MeshStagedLook, type PartLook } from './revealMaterial';
+import { REVEAL_ATTRIBUTE, StagedMaterialRegistry, WORK_SWEEP_COLOR, WORK_SWEEP_PERIOD_MS, installRenderGuard, type MeshStagedLook, type PartLook, type WorkSweep } from './revealMaterial';
 import { mergedPartsOf } from './mergeStagedParts';
 import { FACADE_MATERIAL_SOURCE } from './facadeMaterialLook';
-import { TEXTURE_RUNG_COLORS, classUniforms, legendRows, patternCode, provenanceBackground, resolveLegend, shadingClasses, styleFor, textureRungLegendRows, uncertaintyCoverage, type LegendStyle } from './provenanceShading';
+import { TEXTURE_RUNG_COLORS, classUniforms, hexToRgb01, legendRows, patternCode, provenanceBackground, resolveLegend, shadingClasses, styleFor, textureRungLegendRows, uncertaintyCoverage, type LegendStyle } from './provenanceShading';
 import { EVICT_AFTER_MS, evictionCandidates, evictionEnabled, sameSet, stepEviction } from './layerEviction';
-import { isInterrupted, isRunSettled, stageEventsFor, streamedProgress, subscribeStageEvents, withStreamedEvents, type StageProgress } from './stagedBuildState';
+import { isInterrupted, isRunSettled, publishStageEvent, stageEventsFor, streamedProgress, subscribeStageEvents, withStreamedEvents, type StageProgress } from './stagedBuildState';
+import { followStagedRunShared } from './stagedRunClient';
+import { readStagedBuild } from './stagedBuildState';
+import type { CanvasArtifact } from '../../../canvas-types';
 import {
     DEFAULT_MATERIAL_MODE, INITIAL_SWITCH, deriveMaterialLayers, isMaterialSwapLayer, materialModeOf, modelIdOf, nextSwitch, parseSwapId, twinObjectFor, twinObjectId, twinSourceOf, withStagedMaterialMode,
     type DerivedMaterialState, type EngagedTwin, type MaterialMode, type MaterialSwitch
@@ -151,6 +154,8 @@ interface RootInfo {
     /** Changes whenever the layer's nodes are rebuilt (a new model root, new ranks): what placement was computed for. */
     serial: number;
     nodes: NodeInfo[];
+    /** World bounds of the root when it was indexed (the work sweep's range). */
+    bounds?: THREE.Box3;
 }
 
 let rootSerial = 0;
@@ -303,6 +308,8 @@ interface LookContext {
     swap?: boolean;
     /** Provenance on a textured twin: per-texel rungs instead of the node's label. */
     rungs?: MeshStagedLook['rungs'];
+    /** A stage is running: the work sweep over every layer that is showing. */
+    work?: WorkSweep;
 }
 
 /** The rung colours as the shader takes them. */
@@ -342,6 +349,8 @@ export function lookFor(f: LayerRevealFrame, n: NodeInfo, ctx: LookContext): Mes
         reveal = { progress: 1, stagger, fade: 1, presence };
     }
     const rungs = ctx.provenanceOn && !ctx.overridden ? ctx.rungs : undefined;
+    // the sweep runs over what is drawn as itself: a revealed layer, never a ghost or a layer still arriving (that has its own motion)
+    const work = ctx.work && !ctx.ghost && !ctx.overridden && f.phase === 'revealed' ? ctx.work : undefined;
     const shaded = ctx.provenanceOn && !ctx.overridden && !rungs;
     const mark = !ctx.overridden && ((!!ctx.highlightOn && n.degradationIds.includes(ctx.highlightOn)) || (ctx.provenanceOn && n.degradationIds.length > 0));
     let provenance: MeshStagedLook['provenance'];
@@ -356,8 +365,31 @@ export function lookFor(f: LayerRevealFrame, n: NodeInfo, ctx: LookContext): Mes
         }
         provenance = n.prov.look;
     }
-    if (!reveal && !provenance && !mark && !rungs) return null;
-    return { ...(reveal ? { reveal } : {}), ...(provenance ? { provenance } : {}), ...(rungs ? { rungs } : {}), ...(mark ? { mark } : {}) };
+    if (!reveal && !provenance && !mark && !rungs && !work) return null;
+    return { ...(reveal ? { reveal } : {}), ...(provenance ? { provenance } : {}), ...(rungs ? { rungs } : {}), ...(mark ? { mark } : {}), ...(work ? { work } : {}) };
+}
+
+const WORK_COLOR = (() => { const [r, g, b] = hexToRgb01(WORK_SWEEP_COLOR); return new THREE.Vector3(r, g, b); })();
+
+/**
+ * The work sweep this frame: while a stage runs (and the run is live), a band at `phase` up the union of the showing
+ * layers' bounds, the stage's reported progress as the fill. Reduced motion holds the band at the progress instead.
+ */
+export function workSweepFor(state: StagedBuildState, progress: ReadonlyMap<string, StageProgress> | undefined, bounds: Array<THREE.Box3 | undefined>, nowMs: number, reducedMotion: boolean, pageLoadedAtMs: number): WorkSweep | undefined {
+    if (state.runState !== 'running' || isInterrupted(state, pageLoadedAtMs)) return undefined;
+    const running = state.stages.filter(s => s.status === 'running').sort((a, b) => b.timings.startedAtMs - a.timings.startedAtMs)[0];
+    if (!running) return undefined;
+    let minY = Infinity, maxY = -Infinity;
+    for (const b of bounds) {
+        if (!b || b.isEmpty()) continue;
+        minY = Math.min(minY, b.min.y);
+        maxY = Math.max(maxY, b.max.y);
+    }
+    if (!Number.isFinite(minY) || !Number.isFinite(maxY) || maxY - minY < 1e-3) return undefined;
+    const reported = progress?.get(running.stage)?.progress;
+    const fill = reported !== undefined && Number.isFinite(reported) ? Math.max(0, Math.min(1, reported)) : 0;
+    const phase = reducedMotion ? fill : (nowMs % WORK_SWEEP_PERIOD_MS) / WORK_SWEEP_PERIOD_MS;
+    return { phase, fill, minY, maxY, color: WORK_COLOR };
 }
 
 /** What the overlay host reads; it re-renders itself when notified, not the viewport. */
@@ -383,6 +415,49 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
     const { state, stackRef, objectRootsRef, loadStatus, mutateSceneData, onPromptAction, overriddenIds, sceneObjects, view, onEvictedChange } = opts;
     const runId = state?.runId;
     const pageLoadedAtMs = React.useRef(typeof performance !== 'undefined' ? performance.timeOrigin : 0).current;
+
+    // Re-attach: a run the scene shows as running or interrupted may still be live on the server (the page reloaded, or
+    // the chat stream ended while it ran). Its further events and artifacts are applied from the server's run registry,
+    // so a build never depends on the page that started it; a server that does not know the run leaves the scene as it
+    // is, and the overlay offers Resume.
+    const liveRunId = state?.runId;
+    const liveRunState = state?.runState;
+    React.useEffect(() => {
+        const runId = liveRunId;
+        if (!runId || (liveRunState !== 'running' && liveRunState !== 'interrupted')) return;
+        const known = stageEventsFor(runId);
+        const applyArtifact = (artifact: CanvasArtifact | undefined) => {
+            if (!artifact || artifact.type !== '3d-scene') return;
+            const incoming = readStagedBuild(artifact.data as Scene3DData);
+            if (!incoming || incoming.runId !== runId) return;
+            mutateSceneData(prev => {
+                const current = readStagedBuild(prev);
+                // the chat stream may have applied the same or a newer artifact already
+                if (current && current.runId === runId && current.updatedAtMs >= incoming.updatedAtMs && current.runState === incoming.runState) return prev;
+                return { ...(artifact.data as Scene3DData) };
+            }, { operator: 'sb_staged_run_reattach', params: { runId } }, { history: false });
+        };
+        const stopFollowing = followStagedRunShared(runId, {
+            onEvents: (events, artifact, snapshot) => {
+                for (const e of events) publishStageEvent(e);
+                applyArtifact(artifact);
+                if (snapshot.status === 'running') {
+                    // the server says the run is live: the page stops showing it as interrupted
+                    mutateSceneData(prev => {
+                        const current = readStagedBuild(prev);
+                        if (!current || current.runId !== runId) return prev;
+                        if (current.runState === 'running' && current.updatedAtMs >= pageLoadedAtMs) return prev;
+                        return { ...prev, stagedBuild: { ...current, runState: 'running', updatedAtMs: Date.now() } } as Scene3DData;
+                    }, { operator: 'sb_staged_run_reattach', params: { runId } }, { history: false });
+                }
+            },
+            onEnd: (status, snapshot) => {
+                if (status === 'unknown') return;
+                applyArtifact(snapshot?.artifact);
+            }
+        }, { after: known.length ? known[known.length - 1].seq : undefined });
+        return stopFollowing;
+    }, [liveRunId, liveRunState, mutateSceneData, pageLoadedAtMs]);
 
     const [events, setEvents] = React.useState<readonly StageEvent[]>(() => (runId ? stageEventsFor(runId) : []));
     React.useEffect(() => {
@@ -485,8 +560,8 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
     }, []);
 
     // Everything the per-frame guard reads, kept current without re-installing it.
-    const live = React.useRef({ overriddenIds, state: stagedState, owner: derived?.owner, settled, reducedMotion, provenanceOn, showReplaced, replayEpoch, highlight, loadStatus, replaying });
-    live.current = { overriddenIds, state: stagedState, owner: derived?.owner, settled, reducedMotion, provenanceOn, showReplaced, replayEpoch, highlight, loadStatus, replaying };
+    const live = React.useRef({ overriddenIds, state: stagedState, owner: derived?.owner, settled, reducedMotion, provenanceOn, showReplaced, replayEpoch, highlight, loadStatus, replaying, progress });
+    live.current = { overriddenIds, state: stagedState, owner: derived?.owner, settled, reducedMotion, provenanceOn, showReplaced, replayEpoch, highlight, loadStatus, replaying, progress };
 
     // The twins the switch needs are scene objects (loaded by the viewport like any layer); twins no longer needed go.
     React.useEffect(() => {
@@ -600,6 +675,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         }
         const info = buildRootInfo(layer, root, ranks);
         info.key = key;
+        info.bounds = new THREE.Box3().setFromObject(root);
         rootsRef.current.set(layer.objectId, info);
         return info;
     }, []);
@@ -693,6 +769,8 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         let drawn = 0;
         stats.ghosts = 0;
         const highlightOn = L.highlight && L.highlight.untilMs > Date.now() ? L.highlight.id : undefined;
+        // the sweep fills the waits: while a layer reveals or crossfades, that motion is the progress shown
+        const work = frame.animating ? undefined : workSweepFor(st, L.progress, infos.filter(([f]) => !f.hidden && f.phase !== 'retired').map(([, i]) => i.bounds), t0, L.reducedMotion, pageLoadedAtMs);
         for (const [f, info] of infos) {
             const ghost = ghostOf(f, L.showReplaced, twinRef.current.engaged);
             if (ghost) stats.ghosts++;
@@ -702,7 +780,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             const partLooks = new Map<THREE.Mesh, PartLook[]>();
             for (const n of info.nodes) {
                 const replaced = n.ids.surfaceId !== undefined && n.replaces.length === 0 ? replacedPresence.get(n.ids.surfaceId) : undefined;
-                const look = lookFor(f, n, { ghost, only, replaced, highlightOn, provenanceOn: L.provenanceOn, lg, overridden, swap: !!swap, ...(swap?.kind === 'tex' ? { rungs: RUNG_LOOK } : {}) });
+                const look = lookFor(f, n, { ghost, only, replaced, highlightOn, provenanceOn: L.provenanceOn, lg, overridden, swap: !!swap, ...(swap?.kind === 'tex' ? { rungs: RUNG_LOOK } : {}), ...(work ? { work } : {}) });
                 if (n.part) {
                     const list = partLooks.get(n.part.mesh) ?? partLooks.set(n.part.mesh, []).get(n.part.mesh)!;
                     list[n.part.index] = look;
@@ -740,7 +818,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         recordStat(stagedRevealStats.newMaterials, MAX_NEW_MATERIALS_PER_FRAME - budget);
         recordStat(stagedRevealStats.restored, MAX_RESTORES_PER_FRAME - restores.left);
         recordStat(stagedRevealStats.drawnStagedMeshes, drawn);
-    }, [objectRootsRef, legendFor, sidecarFor, rootInfoFor, exemptFromSettled]);
+    }, [objectRootsRef, legendFor, sidecarFor, rootInfoFor, exemptFromSettled, pageLoadedAtMs]);
 
     // The guard is on while anything reveals or waits to, while provenance, a highlight or ghosts are on; it follows
     // the renderer stack if that is re-created (StrictMode / HMR). This rAF loop keeps the guard and the overlay
@@ -766,7 +844,9 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             const replayPending = !!scheduleRef.current && scheduleRef.current.epoch !== L.replayEpoch;
             // A ghost drawn last frame must be concealed by a frame of the guard before it goes: restoring materials alone
             // would leave the replaced layer unhidden, drawn whole over (and z-fighting with) the layer that replaced it.
-            const needsGuard = !f || stale || replayPending || f.animating || f.pending || L.provenanceOn || highlightOn || ghosts || statsRef.current.ghosts > 0 || registryRef.current.deferredRestores > 0;
+            // a running stage keeps the guard on: its work sweep is drawn by the staged materials
+            const working = !!L.state && L.state.runState === 'running' && !isInterrupted(L.state, pageLoadedAtMs) && L.state.stages.some(s => s.status === 'running');
+            const needsGuard = !f || stale || replayPending || f.animating || f.pending || L.provenanceOn || highlightOn || ghosts || working || statsRef.current.ghosts > 0 || registryRef.current.deferredRestores > 0;
             if (scene && needsGuard && guardRef.current?.scene !== scene) {
                 guardRef.current?.uninstall();
                 guardRef.current = { scene, uninstall: installRenderGuard(scene, renderer => onFrame(renderer as THREE.WebGLRenderer, scene)) };
@@ -857,6 +937,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             showReplaced,
             onToggleShowReplaced: () => setShowReplaced(v => !v),
             onReplay: () => { setReplaying(true); setReplayEpoch(e => e + 1); },
+            ...(onPromptAction ? { onResume: () => onPromptAction(`Resume the staged build of ${st.place.query}: call google_3d_tiles_get_clay with ${JSON.stringify({ query: st.place.query, resumeRunId: st.runId })}`) } : {}),
             onRetry: (d: DegradationRecord) => {
                 if (!d.retry) return;
                 const title = st.stages.find(s => s.stage === d.stage)?.title || d.stage;

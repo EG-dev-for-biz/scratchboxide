@@ -21,8 +21,11 @@
  */
 
 import { solarRoofFromBuildingShape } from './pipeline-e/solar-roof';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import { isClientDisconnect, stagedRunRegistry } from './staged-run-registry';
+import type { CanvasArtifact } from '../../../browser/generative-canvas/canvas-types';
 import type { ToolContext, ToolHandlerOutcome, ToolResultPayload } from '../../gemini/tools/types';
 import { MissingInputError } from '../../../common/errors/pipeline-errors';
 import { STAGED_VISION_MODEL_DEFAULT } from '../../../common/spatial/staged-location-contracts';
@@ -76,6 +79,10 @@ export const STAGED_RETRY_RUN_DESCRIPTION =
     'Retry one stage of an earlier run: the retryRunId the last result gave (8 hex digits). The recorded request is rebuilt from the run, so the other ' +
     'arguments are ignored (pass the same query). Use it only for a degraded part the result marks as retryable.';
 
+export const STAGED_RESUME_RUN_DESCRIPTION =
+    'Resume an earlier run that stopped, failed or was interrupted: the runId of the scene\'s staged build (8 hex digits, scene-stg-<runId>). ' +
+    'The recorded request is rebuilt from the run; stages whose results are cached are reused and the rest run again. The other arguments are ignored.';
+
 export const STAGED_PLACE_DESCRIPTION =
     'A place already resolved, copied exactly from a "Switch location" choice the user clicked: {lat, lng, formattedAddress, placeId?, alternatives?}. ' +
     'When given, the query is not looked up again and the build is made at these coordinates. Never invent it; leave it out otherwise.';
@@ -89,6 +96,8 @@ const RUN_ID = /^[0-9a-f]{8}$/;
 export interface ParsedStagedArgs {
     request: StagedLocationRequest;
     retry?: { runId: string; stage: StageId };
+    /** Resume: the recorded request again, nothing bypassed. */
+    resume?: { runId: string };
 }
 
 function asString(v: unknown): string {
@@ -130,8 +139,15 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
         if (!STAGE_IDS.includes(retryStage as StageId)) throw new MissingInputError(toolName, `a retryStage of ${STAGE_IDS.join(', ')}`, `got ${JSON.stringify(args.retryStage)}`);
         retry = { runId: retryRunId, stage: retryStage as StageId };
     }
+    const resumeRunId = asString(args.resumeRunId);
+    let resume: ParsedStagedArgs['resume'];
+    if (resumeRunId) {
+        if (!RUN_ID.test(resumeRunId)) throw new MissingInputError(toolName, 'a resumeRunId of 8 hex digits', `got ${JSON.stringify(args.resumeRunId)}; use the scene's staged runId`);
+        if (retry) throw new MissingInputError(toolName, 'either resumeRunId or retryRunId', 'got both');
+        resume = { runId: resumeRunId };
+    }
     const query = asString(args.query);
-    if (!query && !retry) throw new MissingInputError(toolName, 'query', 'a place name, address or "lat, lng"');
+    if (!query && !retry && !resume) throw new MissingInputError(toolName, 'query', 'a place name, address or "lat, lng"');
     let treeTriangleBudget: number | undefined;
     if (args.treeTriangleBudget !== undefined && args.treeTriangleBudget !== null) {
         treeTriangleBudget = Number(args.treeTriangleBudget);
@@ -152,7 +168,8 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
             ...(typeof args.enhance === 'boolean' ? { enhance: args.enhance } : {}),
             ...(place ? { place } : {})
         },
-        ...(retry ? { retry } : {})
+        ...(retry ? { retry } : {}),
+        ...(resume ? { resume } : {})
     };
 }
 
@@ -277,22 +294,44 @@ export async function runStagedLocationTool(
     ctx: ToolContext,
     injected?: StagedLocationDeps
 ): Promise<ToolHandlerOutcome> {
-    const { request, retry } = parseStagedLocationArgs(toolName, args);
+    const { request, retry, resume } = parseStagedLocationArgs(toolName, args);
     const root = stagedWorkspaceRoot();
     // the caller's own copy of the raw extraction, where the extraction tools have always put it: the path as given when
     // absolute, else under public/models by its file name
     const wanted = typeof args.outputGlbPath === 'string' ? args.outputGlbPath.trim() : '';
     const copyTo = wanted ? (path.isAbsolute(wanted) ? wanted : path.resolve(root, 'public', 'models', path.basename(wanted))) : undefined;
-    const deps = injected ?? await createStagedLocationDeps(root, { signal: ctx.signal });
-    const outcome = await runStagedLocation(request, deps, {
-        signal: ctx.signal,
-        emitStage: ctx.emitStage,
-        reportProgress: ctx.reportProgress,
-        // the tool's remaining time, when the chat reports it (the computer-use plan adds the field); else the static budget
-        ...(typeof (ctx as unknown as { remainingMs?: () => number }).remainingMs === 'function' ? { remainingMs: (ctx as unknown as { remainingMs: () => number }).remainingMs } : {}),
-        activeArtifact: ctx.request?.activeArtifact,
-        ...(retry ? { retry } : {})
-    });
+    // The run outlives the chat stream: its own signal aborts on the user's Stop (or a deadline), never because the page
+    // went away. Its events and artifacts are kept in the run registry, where a reloaded page re-attaches.
+    const own = new AbortController();
+    const forwardAbort = () => { if (!isClientDisconnect(ctx.signal?.reason)) own.abort(ctx.signal?.reason); };
+    if (ctx.signal?.aborted) forwardAbort();
+    else ctx.signal?.addEventListener('abort', forwardAbort, { once: true });
+    const registry = stagedRunRegistry();
+    const runId = injected?.newRunId?.() ?? crypto.randomBytes(4).toString('hex');
+    registry.begin(runId, own);
+    const detach = registry.attach(runId, (event, artifact) => ctx.emitStage?.(event, artifact));
+    const deps = injected ?? await createStagedLocationDeps(root, { signal: own.signal });
+    let outcome: Awaited<ReturnType<typeof runStagedLocation>>;
+    try {
+        outcome = await runStagedLocation(request, { ...deps, newRunId: () => runId }, {
+            signal: own.signal,
+            emitStage: (event, artifact) => registry.record(runId, event, artifact),
+            reportProgress: ctx.reportProgress,
+            // the tool's remaining time, when the chat reports it (the computer-use plan adds the field); else the static budget
+            ...(typeof (ctx as unknown as { remainingMs?: () => number }).remainingMs === 'function' ? { remainingMs: (ctx as unknown as { remainingMs: () => number }).remainingMs } : {}),
+            activeArtifact: ctx.request?.activeArtifact,
+            ...(retry ? { retry } : {}),
+            ...(resume ? { resume } : {})
+        });
+    } catch (err) {
+        registry.end(runId, own.signal.aborted ? 'stopped' : 'failed', undefined, (err as Error)?.message ?? String(err));
+        detach();
+        ctx.signal?.removeEventListener('abort', forwardAbort);
+        throw err;
+    }
+    registry.end(runId, outcome.result.status === 'stopped' ? 'stopped' : 'finished', outcome.result.artifact as CanvasArtifact | undefined);
+    detach();
+    ctx.signal?.removeEventListener('abort', forwardAbort);
     if (copyTo && fs.existsSync(outcome.compat.glbPath)) {
         fs.mkdirSync(path.dirname(copyTo), { recursive: true });
         fs.copyFileSync(outcome.compat.glbPath, copyTo);

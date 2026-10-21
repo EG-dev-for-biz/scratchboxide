@@ -739,13 +739,15 @@ describe('scan rectifier: thin walls keep their order and piers stay proud', () 
         });
     }, 120_000);
 
+    // Ablations: the parapet and pier also stand on their own risers, so the proud-block guard (ab71cc6c) keeps them
+    // too; it is turned off here so each run shows what the one guard under test protects.
     it('turns the parapet inside out without the opposed-sheet guard', () => {
-        const out = run('relief_noopposed', ['--no-opposed']);
+        const out = run('relief_noopposed', ['--no-opposed', '--no-proud-blocks']);
         expect(parapetGap(out.positions)).toBeLessThan(0);
     }, 120_000);
 
     it('presses the pier into the facade without relief sheets', () => {
-        const out = run('relief_nosheets', ['--no-sheets']);
+        const out = run('relief_nosheets', ['--no-sheets', '--no-proud-blocks']);
         expect(pierProud(out.positions)).toBeLessThan(0.1);
     }, 120_000);
 });

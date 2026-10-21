@@ -28,15 +28,25 @@ import type { StationImageGenerator } from '../src/node/spatial/BeautifyStationS
 
 const DELAY_MS = 150;
 
-/** Records calls in flight; `wait` resolves after `ms` unless the signal fires first (then rejects AbortError). */
+/**
+ * Records calls in flight; `wait` resolves after `ms` unless the signal fires first (then rejects AbortError).
+ * Two measures of overlap come from the recorder's own timeline, so they hold on an idle machine and under
+ * the suite's load alike (a fixed multiple of DELAY_MS failed whenever the other forks stretched the work
+ * between calls): `serialMs`, the completed calls' own durations summed (what they take one after another),
+ * and `overlapMs`, the time a second, third, ... call was in flight beside another (what overlapping saved).
+ */
 function flightRecorder() {
-    const rec = { inFlight: 0, maxInFlight: 0, started: 0, aborted: 0, completed: 0 };
+    const rec = { inFlight: 0, maxInFlight: 0, started: 0, aborted: 0, completed: 0, serialMs: 0, overlapMs: 0 };
+    let lastT = Date.now();
+    const account = () => { const n = Date.now(); rec.overlapMs += (n - lastT) * Math.max(0, rec.inFlight - 1); lastT = n; };
     const wait = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
+        account();
         rec.started++;
         rec.inFlight++;
         rec.maxInFlight = Math.max(rec.maxInFlight, rec.inFlight);
-        const done = () => { rec.inFlight--; signal?.removeEventListener('abort', onAbort); };
-        const timer = setTimeout(() => { done(); rec.completed++; resolve(); }, ms);
+        const t0 = Date.now();
+        const done = () => { account(); rec.inFlight--; signal?.removeEventListener('abort', onAbort); };
+        const timer = setTimeout(() => { done(); rec.completed++; rec.serialMs += Date.now() - t0; resolve(); }, ms);
         const onAbort = () => { clearTimeout(timer); done(); rec.aborted++; reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); };
         if (signal?.aborted) { onAbort(); return; }
         signal?.addEventListener('abort', onAbort, { once: true });
@@ -71,7 +81,7 @@ describe('mapBounded / allAbortable', () => {
         const wall = Date.now() - t0;
         expect(out).toEqual([10, 8, 6, 4, 2, 0]);
         expect(rec.maxInFlight).toBe(6);
-        expect(wall).toBeLessThan(DELAY_MS * 2.5); // sequential would be ~6 x DELAY_MS
+        expect(wall).toBeLessThan(rec.serialMs); // sequential would be the six calls' summed time (~6 x DELAY_MS)
 
         const limited = flightRecorder();
         await mapBounded([1, 2, 3, 4, 5], async (_x, _i, s) => limited.wait(20, s), { limit: 2 });
@@ -123,8 +133,8 @@ describe('mesh_bake_ai_textures: six views at once', () => {
             expect(rec.completed).toBe(6);
             expect(prompts.map(p => p.match(/View direction: (\w+)/)?.[1])).toEqual(['Front', 'Back', 'Left', 'Right', 'Top', 'Bottom']);
             expect(result.views.map(v => v.name)).toEqual(['Front', 'Back', 'Left', 'Right', 'Top', 'Bottom']);
-            // Six sequential calls would take >= 6 x DELAY_MS of model time alone.
-            expect(wall).toBeLessThan(6 * DELAY_MS);
+            // Six sequential calls would take the calls' summed time (>= 6 x DELAY_MS) of model time alone.
+            expect(wall).toBeLessThan(rec.serialMs);
 
             const stop = flightRecorder();
             const ctl = new AbortController();
@@ -171,7 +181,7 @@ describe('panorama_generate_perspectives: views after the first at once', () => 
         expect(order.slice(2, 6).every(e => e.startsWith('start:'))).toBe(true);
         expect(rec.maxInFlight).toBe(4);
         expect(Object.keys(out.perspectives)).toEqual(['front', 'right', 'back', 'left', 'top', 'bottom']);
-        expect(wall).toBeLessThan(4 * DELAY_MS);          // sequential: 5 x DELAY_MS
+        expect(wall).toBeLessThan(rec.serialMs);          // sequential: the five calls' summed time (5 x DELAY_MS)
 
         const stop = flightRecorder();
         const ctl = new AbortController();
@@ -203,7 +213,7 @@ describe('spatial_keyframe_video_interpolation: both stills at once', () => {
         const svc = new SceneKeyframeVideoService({ client, generator: delayedGenerator(wait) });
         const t0 = Date.now();
         const out = await svc.synthesizeKeyframeInterpolationVideo({ mesh, startPose: pose, endPose: { ...pose, x: 2 }, prompt: 'a temple', width: 64, height: 48 });
-        expect(Date.now() - t0).toBeLessThan(2 * DELAY_MS);
+        expect(rec.overlapMs).toBeGreaterThan(DELAY_MS / 2);  // the two stills were in flight together for most of a call
         expect(rec.maxInFlight).toBe(2);
         expect(out.aspectRatio).toBe('16:9');
         expect([out.width, out.height]).toEqual([64, 36]);
@@ -304,13 +314,11 @@ describe('panorama: crops for local edits, seam and nadir at once, 4K delegation
         const { rec, wait } = flightRecorder();
         const log: Array<{ aspect: string; w: number; h: number }> = [];
         const svc = new Google360PanoramaPipelineService(panoClient(wait, DELAY_MS, log));
-        const t0 = Date.now();
         const res = await svc.generate360Panorama({ prompt: 'salt flats', width: 512, height: 256, inpaintNadir: true });
-        const wall = Date.now() - t0;
         expect(log.map(l => l.aspect)[0]).toBe('21:9');     // the base
         expect(log).toHaveLength(3);
         expect(rec.maxInFlight).toBe(2);                      // seam + nadir together
-        expect(wall).toBeLessThan(3 * DELAY_MS);              // sequential: 3 x DELAY_MS
+        expect(rec.overlapMs).toBeGreaterThan(DELAY_MS / 2);  // seam and nadir were in flight together for most of a call
         expect(res.seamHealed).toBe(true);
         expect(res.summary).toContain('Nadir infill');
         expect(res.summary).toContain('nothing was squeezed');

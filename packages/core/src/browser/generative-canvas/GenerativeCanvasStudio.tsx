@@ -200,6 +200,7 @@ export { StreamBufferQueue, captureActiveCanvasScreenshot } from './chat/streami
 import { StreamBufferQueue, captureActiveCanvasScreenshot, streamTokensAsync } from './chat/streaming-utils';
 import { useSendMessage } from './hooks/useSendMessage';
 import { LIVE_CODE_STARTER_APP } from './studio/liveCodeStarterTemplate';
+import { STARTER_BUTTONS, pickStarterPrompt } from './studio/starterPrompts';
 
 export interface GenerativeCanvasStudioProps {
     onOpenFolder?: () => void;
@@ -1440,18 +1441,12 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                                             maxWidth: '680px',
                                             margin: '20px auto 0 auto'
                                         }}>
-                                            {[
-                                                { icon: '✨', label: 'Interactive App', prompt: 'Build an interactive audio visualizer app with responsive controls' },
-                                                { icon: '🪐', label: '3D Scene', prompt: 'Build a procedural 3D sci-fi exploration environment with terrain and lighting' },
-                                                { icon: '🎬', label: 'Video NLE', prompt: 'Assemble a multi-track video timeline with color grading and title graphics' },
-                                                { icon: '📄', label: 'System Spec', prompt: 'Draft a technical architecture specification with interface invariants' },
-                                                { icon: '📊', label: 'KPI Dashboard', prompt: 'Dashboard for real-time telemetry metrics and system throughput' }
-                                            ].map(item => (
+                                            {STARTER_BUTTONS.map(item => (
                                                 <button
                                                     key={item.label}
                                                     type="button"
                                                     className="sb-btn sb-starter-chip"
-                                                    onClick={() => handleSendMessage(item.prompt)}
+                                                    onClick={() => handleSendMessage(pickStarterPrompt(item))}
                                                     style={{
                                                         display: 'inline-flex',
                                                         alignItems: 'center',
@@ -1466,7 +1461,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                                                         cursor: 'pointer',
                                                         transition: 'all 0.15s ease'
                                                     }}
-                                                    title={item.prompt}
+                                                    title={item.prompts.length > 1 ? `${item.prompts.length} example requests; each click picks one` : item.prompts[0]}
                                                 >
                                                     <span>{item.icon}</span>
                                                     <span>{item.label}</span>

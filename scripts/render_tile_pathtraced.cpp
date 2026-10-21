@@ -333,6 +333,8 @@ int main(int argc, char** argv) {
           << "  \"bvhNodes\": " << tracer.bvhNodeCount() << ",\n"
           << "  \"geometryCoverage\": " << out.geometryCoverage << ",\n"
           << "  \"nanSamples\": " << out.nanSamples << ",\n"
+          << "  \"rays\": " << out.rays << ",\n"
+          << "  \"raysPerSecond\": " << (out.renderMs > 0.0 ? static_cast<double>(out.rays) * 1000.0 / out.renderMs : 0.0) << ",\n"
           << "  \"renderMs\": " << out.renderMs << ",\n"
           << "  \"denoiseMs\": " << (denoise ? denoiseMs : 0.0) << ",\n"
           << "  \"totalMs\": " << totalMs << ",\n"

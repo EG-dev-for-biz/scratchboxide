@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { parseOrSynthesizeArtifact } from '../src/node/gemini/artifact-synthesis';
+import { buildPendingPythonGenerator, parseOrSynthesizeArtifact } from '../src/node/gemini/artifact-synthesis';
 import { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 
 describe('Python 3D Scene Architecture & Grounded Zero-Defaults Verification', () => {
-    it('1. Builds the 3d-scene the model sent with its scratchbox script, and mounts no scene from a bare code block', () => {
+    it('1. Builds the 3d-scene the model sent with its scratchbox script, and mounts no scene from a bare code block', async () => {
         const pythonCode = `import scratchbox as sb
 
 # Create a grounded showcase pedestal
@@ -28,12 +28,15 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
             + JSON.stringify({ type: '3d-scene', title: 'Pedestal sculpture', data: { pythonGenerator: { sourceCode: pythonCode } } })
             + '\n```';
 
-        const artifact = parseOrSynthesizeArtifact(
+        const synthesized = parseOrSynthesizeArtifact(
             'Create a procedural 3D sculpture on a pedestal',
             modelResponse,
             { prompt: 'Create a procedural 3D sculpture on a pedestal' } as any,
             []
         );
+        // Synthesis returns the scene unbuilt; the Python child runs afterwards, off the event loop (28d12471).
+        expect((synthesized?.data as Scene3DData | undefined)?.pythonGenerator?.glbBase64).toBeUndefined();
+        const artifact = await buildPendingPythonGenerator(synthesized);
 
         expect(artifact).toBeDefined();
         expect(artifact?.type).toBe('3d-scene');
@@ -45,7 +48,7 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
         expect(sceneData.pythonGenerator?.glbBase64).toBeDefined();
         expect(typeof sceneData.pythonGenerator?.glbBase64).toBe('string');
         expect(sceneData.pythonGenerator?.glbBase64?.length).toBeGreaterThan(50);
-    });
+    }, 60000);
 
     it('4. Executes the 5-Stage Spatial Architect pipeline with relative sockets, non-linear deformers, and catenary splines', async () => {
         const { NativePythonRunnerService } = await import('../src/node/3d-engine/native-python-runner-service');

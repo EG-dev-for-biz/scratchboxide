@@ -51,7 +51,7 @@ export interface MassingPart {
     provenance?: string;
 }
 
-export interface MassingMesh { id: string; vertices: Array<[number, number, number]>; indices: number[] }
+export interface MassingMesh { id: string; vertices: Array<[number, number, number]>; indices: number[]; /** The provenance token the native tool passes through to the solid's nodes (default: the spec's). */ provenance?: string }
 
 export interface MassingCheck {
     iou: number;
@@ -360,6 +360,11 @@ export function buildMassing(inp: MassingInputs): Massing {
             parts.push(part);
         }
     }
+    return { parts, meshes, notes, solar: solarReport, check: checkMassing(parts, meshes, inp) };
+}
+
+/** The massing's plan against the scan's structure cells (IoU) and its roof against the scan's top (median, 90th percentile). */
+export function checkMassing(parts: MassingPart[], meshes: MassingMesh[], inp: Pick<MassingInputs, 'groundY' | 'scanTop' | 'cells'>): MassingCheck {
     // the check against the scan
     const massingTop = new Map<string, number>();
     for (const p of parts) {
@@ -388,11 +393,7 @@ export function buildMassing(inp: MassingInputs): Massing {
     if (!massingTop.size) reason = 'the vector data hold no extruded part or modelled volume for the building';
     else if (iou < MIN_MASSING_IOU) reason = `the massing's plan agrees with the scan's structure on ${r2(iou)} (intersection over union; at least ${MIN_MASSING_IOU} needed)`;
     else if (!(hMed <= limit)) reason = `the massing's roof is ${r2(hMed)} m off the scan's (median; at most ${r2(limit)} m allowed)`;
-    return {
-        parts, meshes, notes,
-        solar: solarReport,
-        check: { iou: r2(iou), heightErrMedianM: r2(hMed), heightErrP90M: r2(hP90), massingCells: massingTop.size, scanCells: inp.cells.size, ok: !reason, ...(reason ? { reason } : {}) }
-    };
+    return { iou: r2(iou), heightErrMedianM: r2(hMed), heightErrP90M: r2(hP90), massingCells: massingTop.size, scanCells: inp.cells.size, ok: !reason, ...(reason ? { reason } : {}) };
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -432,7 +433,7 @@ export function massingSpecText(m: Pick<Massing, 'parts' | 'meshes'>, opts: {
         for (const pl of p.planes) L.push(`plane ${n6(pl.a)} ${n6(pl.b)} ${n6(pl.c)} ${tok(pl.tag)}`);
     }
     for (const mesh of m.meshes) {
-        L.push(`mesh ${tok(mesh.id)} ${mesh.vertices.length} ${mesh.indices.length / 3} ${prov}`);
+        L.push(`mesh ${tok(mesh.id)} ${mesh.vertices.length} ${mesh.indices.length / 3} ${mesh.provenance ? tok(mesh.provenance) : prov}`);
         for (const [x, y, z] of mesh.vertices) L.push(`v ${n6(x)} ${n6(y)} ${n6(z)}`);
         for (let i = 0; i + 2 < mesh.indices.length; i += 3) L.push(`t ${mesh.indices[i]} ${mesh.indices[i + 1]} ${mesh.indices[i + 2]}`);
     }

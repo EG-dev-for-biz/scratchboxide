@@ -9,7 +9,7 @@
 
 import * as React from 'react';
 import { BentoStageLayout } from '../BentoStageLayout';
-import { CanvasArtifact, InteractiveBrowserData, KanbanBoardData, LiveCodeSandboxData, MarkdownDocumentData, MetricDashboardData, NodeGraphData, Scene3DData, VideoTimelineData } from '../canvas-types';
+import { CanvasArtifact, InteractiveBrowserData, KanbanBoardData, LiveCodeSandboxData, MarkdownDocumentData, MetricDashboardData, NodeGraphData, PrimitiveType, Scene3DData, VideoTimelineData, getActiveUserName } from '../canvas-types';
 import { CanvasErrorBoundary } from '../CanvasErrorBoundary';
 import { InteractiveBrowserPrimitive } from '../primitives/InteractiveBrowserPrimitive';
 import { KanbanBoardPrimitive } from '../primitives/KanbanBoardPrimitive';
@@ -193,12 +193,13 @@ export const DocumentCodeSurfaces: React.FC<ArtifactStageProps> = props => {
 
 /** Kanban, node-graph, 3D scene and browser surfaces. */
 export const BoardGraphSpatialSurfaces: React.FC<ArtifactStageProps> = props => {
-    const { activeArtifact, activeWorkspace, layoutMode, handleUpdateArtifact, handleMorphArtifact, handleSurfaceAiPrompt } = props;
+    const { activeArtifact, activeWorkspace, layoutMode, handleUpdateArtifact, handleMorphArtifact, handleSurfaceAiPrompt, isGenerating } = props;
     return (
         <>
         {layoutMode === 'kanban' && (
             <CanvasErrorBoundary fallbackTitle="Kanban Board">
                 <KanbanBoardPrimitive
+                    activeArtifact={activeArtifact?.type === 'kanban-board' ? activeArtifact : undefined}
                     data={(activeArtifact?.type === 'kanban-board' ? (activeArtifact.data as KanbanBoardData) : undefined) || {
                         title: 'Sprint Roadmap Kanban Board',
                         subtitle: 'Multi-stage delivery board with real-time card synchronization',
@@ -243,7 +244,13 @@ export const BoardGraphSpatialSurfaces: React.FC<ArtifactStageProps> = props => 
                             handleUpdateArtifact({ ...activeArtifact, data: updatedData });
                         }
                     }}
+                    isAgentGenerating={isGenerating}
+                    onPromptAction={handleSurfaceAiPrompt}
                     onMorphArtifact={handleMorphArtifact}
+                    onMorphWholeBoard={(artifact, targetType) => {
+                        const morphed = morphArtifact(artifact, targetType as PrimitiveType);
+                        handleMorphArtifact(morphed);
+                    }}
                     onMorphCardToSandbox={sandboxData => {
                         handleMorphArtifact({
                             id: `art-code-${Date.now()}`,
@@ -295,6 +302,7 @@ export const BoardGraphSpatialSurfaces: React.FC<ArtifactStageProps> = props => 
                     ) : (
                     <Scene3DPrimitive
                         key={activeArtifact?.id || 'scene-3d-primitive'}
+                        activeArtifact={activeArtifact?.type === '3d-scene' ? activeArtifact : undefined}
                         data={(() => {
                             if (activeArtifact?.type === '3d-scene') {
                                 const d = (activeArtifact.data as Scene3DData) || {};
@@ -330,7 +338,10 @@ export const BoardGraphSpatialSurfaces: React.FC<ArtifactStageProps> = props => 
                             }
                         }}
                         onPromptAction={promptText => handleSurfaceAiPrompt(promptText)}
-                        onMorphArtifact={handleMorphArtifact}
+                        onMorphArtifact={(artifact, targetType) => {
+                            const morphed = morphArtifact(artifact, targetType as PrimitiveType);
+                            handleMorphArtifact(morphed);
+                        }}
                     />
                     )}
                 </CanvasErrorBoundary>

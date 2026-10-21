@@ -14,16 +14,30 @@
  */
 
 export const SBVG_MAGIC = 0x47564253; // 'SBVG'
-/** Version the builder writes. Version 2 has 64-bit level block offsets; version 1 files are still read. */
-export const SBVG_VERSION = 2;
+/**
+ * Version the builder writes. Version 5 names a baked normal atlas per re-textured level beside the
+ * colour atlas of version 4 (whose atlas table names the PNGs of the re-textured coarse levels, one
+ * material each, appended after the glTF materials); version 3 vertices carry a uv and every level
+ * block ends with one material index per triangle; version 2 has 64-bit level block offsets;
+ * versions 1 to 4 are still read.
+ */
+export const SBVG_VERSION = 5;
 export const SBVG_HEADER_BYTES = 128;
 export const SBVG_LEVEL_WORDS = 16;
 /** Level row size of version 1 files (32-bit block offset and length at words 9 and 10). */
 export const SBVG_V1_LEVEL_WORDS = 12;
 export const SBVG_CLUSTER_WORDS = 32;
 export const SBVG_CLUSTER_BYTES = SBVG_CLUSTER_WORDS * 4;
-export const SBVG_VERTEX_FLOATS = 6;
+/** position xyz, normal xyz, uv (version 3); versions 1 and 2 store 6 floats without the uv. */
+export const SBVG_VERTEX_FLOATS = 8;
 export const SBVG_VERTEX_BYTES = SBVG_VERTEX_FLOATS * 4;
+/** Material of a triangle whose primitive named no glTF material. */
+export const SBVG_NO_MATERIAL = 0xffffffff;
+
+/** Floats per vertex as stored in a file of this version. */
+export function sbvgFileVertexFloats(version: number): number {
+    return version >= 3 ? SBVG_VERTEX_FLOATS : 6;
+}
 
 export interface SbvgLevel {
     /** DAG level, 0 = full detail. Levels are stored coarsest first. */
@@ -57,6 +71,10 @@ export interface SbvgHeader {
     skippedPrimitives: number;
     /** Degenerate source triangles dropped while welding; 0 in version 1 files. */
     droppedDegenerate: number;
+    /** Length of the source glTF's materials array; 0 before version 3. */
+    materialCount: number;
+    /** Re-textured coarse levels with an atlas PNG next to the file; 0 before version 4. */
+    atlasCount: number;
     maxClusterVertices: number;
     maxClusterTriangles: number;
     aabbMin: [number, number, number];
@@ -85,9 +103,11 @@ export function parseSbvgHeader(bytes: Uint8Array): SbvgHeader {
     const f = (word: number) => view.getFloat32(word * 4, true);
     if (u(0) !== SBVG_MAGIC) throw new SbvgFormatError('sbvg: bad magic (not a virtual geometry file)');
     const version = u(1);
-    if (version !== 1 && version !== 2) {
-        throw new SbvgFormatError(`sbvg: unsupported version ${version} (this reader handles 1 and 2); rebuild the file from its GLB`);
+    if (version < 1 || version > 5) {
+        throw new SbvgFormatError(`sbvg: unsupported version ${version} (this reader handles 1 to 5); rebuild the file from its GLB`);
     }
+    const vertexBytes = sbvgFileVertexFloats(version) * 4;
+    const materialBytesPerTriangle = version >= 3 ? 4 : 0;
     const levelWords = version === 1 ? SBVG_V1_LEVEL_WORDS : SBVG_LEVEL_WORDS;
     // A 64-bit field as a JS number; offsets past 2^53 bytes cannot be addressed and are refused.
     const u64 = (word: number) => {
@@ -112,11 +132,13 @@ export function parseSbvgHeader(bytes: Uint8Array): SbvgHeader {
             byteOffset: version === 1 ? u(w + 9) : u64(w + 9),
             byteLength: version === 1 ? u(w + 10) : u64(w + 11)
         };
-        const expected = level.clusterCount * SBVG_CLUSTER_BYTES + level.vertexCount * SBVG_VERTEX_BYTES + (level.refCount + level.triangleCount) * 4;
+        const expected = level.clusterCount * SBVG_CLUSTER_BYTES + level.vertexCount * vertexBytes + level.refCount * 4 + level.triangleCount * (4 + materialBytesPerTriangle);
         if (expected !== level.byteLength) throw new SbvgFormatError(`sbvg: level ${level.level} block size mismatch`);
         fileBytes = Math.max(fileBytes, level.byteOffset + level.byteLength);
         levels.push(level);
     }
+    // Version 4 appends the atlas table after the level blocks; the header says where the file ends.
+    if (version >= 4) fileBytes = Math.max(fileBytes, u64(30));
     return {
         version,
         headerBytes,
@@ -129,6 +151,8 @@ export function parseSbvgHeader(bytes: Uint8Array): SbvgHeader {
         sourceTriangleCount: u(9),
         skippedPrimitives: version === 1 ? 0 : u(24),
         droppedDegenerate: version === 1 ? 0 : u(25),
+        materialCount: version >= 3 ? u(26) : 0,
+        atlasCount: version >= 4 ? u(27) : 0,
         maxClusterVertices: u(10),
         maxClusterTriangles: u(11),
         aabbMin: [f(12), f(13), f(14)],
@@ -139,8 +163,12 @@ export function parseSbvgHeader(bytes: Uint8Array): SbvgHeader {
     };
 }
 
-/** The four sections of one level block, as views into `block` (which starts at level.byteOffset). */
-export function splitSbvgLevelBlock(level: SbvgLevel, block: Uint8Array) {
+/**
+ * The sections of one level block, as views into `block` (which starts at level.byteOffset).
+ * `vertices` always holds SBVG_VERTEX_FLOATS floats per vertex: a file older than version 3 is
+ * repacked with uv (0, 0), so renderers see one layout. `materials` is empty before version 3.
+ */
+export function splitSbvgLevelBlock(level: SbvgLevel, block: Uint8Array, version: number = SBVG_VERSION) {
     if (block.byteLength < level.byteLength) throw new SbvgFormatError(`sbvg: level ${level.level} block truncated`);
     let at = block.byteOffset;
     const take = (bytes: number) => {
@@ -148,10 +176,17 @@ export function splitSbvgLevelBlock(level: SbvgLevel, block: Uint8Array) {
         at += bytes;
         return view;
     };
-    return {
-        clusters: take(level.clusterCount * SBVG_CLUSTER_BYTES),
-        vertices: take(level.vertexCount * SBVG_VERTEX_BYTES),
-        refs: take(level.refCount * 4),
-        triangles: take(level.triangleCount * 4)
-    };
+    const fileFloats = sbvgFileVertexFloats(version);
+    const clusters = take(level.clusterCount * SBVG_CLUSTER_BYTES);
+    let vertices = take(level.vertexCount * fileFloats * 4);
+    if (fileFloats !== SBVG_VERTEX_FLOATS) {
+        const src = new Float32Array(vertices.buffer, vertices.byteOffset, level.vertexCount * fileFloats);
+        const dst = new Float32Array(level.vertexCount * SBVG_VERTEX_FLOATS);
+        for (let v = 0; v < level.vertexCount; v++) dst.set(src.subarray(v * fileFloats, v * fileFloats + fileFloats), v * SBVG_VERTEX_FLOATS);
+        vertices = new Uint8Array(dst.buffer);
+    }
+    const refs = take(level.refCount * 4);
+    const triangles = take(level.triangleCount * 4);
+    const materials = version >= 3 ? take(level.triangleCount * 4) : new Uint8Array(0);
+    return { clusters, vertices, refs, triangles, materials };
 }

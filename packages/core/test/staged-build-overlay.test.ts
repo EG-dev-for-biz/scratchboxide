@@ -104,6 +104,9 @@ describe('overlay words and accessibility', () => {
         expect(html).toMatch(/aria-pressed="false"[^>]*>Show replaced layers/);
         const interrupted = fixtureState([L('l1')], { runState: 'interrupted', stageStatus: { remesh: 'stopped' } });
         expect(markup(props(interrupted, { interrupted: true }))).toContain('Interrupted. Google 3D Tiles stay in the scene. Not built: Remeshed scan');
+        // a run that did not finish offers Resume when the overlay can ask the chat; a finished one does not
+        expect(markup(props(interrupted, { interrupted: true, onResume: () => undefined }))).toContain('data-testid="sb-staged-resume"');
+        expect(markup(props(fixtureState([L('l1')], { runState: 'finished' }), { onResume: () => undefined }))).not.toContain('sb-staged-resume');
     });
 
     test('a failed run keeps what it built and names the stage that failed', () => {

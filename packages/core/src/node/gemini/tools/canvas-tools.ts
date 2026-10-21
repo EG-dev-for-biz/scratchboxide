@@ -7,8 +7,9 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { PRIMITIVE_TYPES, normalizePrimitiveType, type CanvasArtifact, type ArtifactData, type Scene3DData } from '../../../browser/generative-canvas/canvas-types';
+import { PRIMITIVE_TYPES, normalizePrimitiveType, type CanvasArtifact, type ArtifactData, type Scene3DData, type PrimitiveType } from '../../../browser/generative-canvas/canvas-types';
 import { UNTITLED_DOCUMENT_TITLE, modelDocumentSections, modelSandboxFiles, normalizeModelVideoTimeline } from '../artifact-synthesis';
+import { morphArtifact } from '../../../browser/generative-canvas/primitive-transformer-engine';
 import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
 import { formatSbApiErrors, sbTypeCheckMetadata, typeCheckSbScript } from '../../3d-engine/sb-script-typecheck';
 import { SB_API_VERSION } from '../../3d-engine/sb-api.generated';
@@ -74,6 +75,20 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 }
             },
             required: ['primitiveType', 'title', 'payload']
+        }
+    },
+    {
+        name: 'morph_canvas_primitive',
+        description: 'Convert the currently active canvas primitive on the stage into a different primitive VIEW of the same underlying content — e.g. show a 3D scene\'s existing meshes as a node graph, a document as a kanban board, a node graph back as a 3D scene. This projects the real structured data already on stage; it never regenerates or invents new content. Use this whenever the user asks to "view/show/convert/switch this as/to" a different primitive type. Do NOT use mount_canvas_primitive for this — that creates something new instead of re-viewing what is already there.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                targetType: {
+                    type: 'STRING',
+                    description: 'The primitive type to morph the active artifact into: "3d-scene", "node-graph", "kanban-board", "markdown-document", "metric-dashboard", or "live-code-sandbox"'
+                }
+            },
+            required: ['targetType']
         }
     },
     {
@@ -444,6 +459,45 @@ export const canvasHandlers: Record<string, ToolHandler> = {
                 artifact
             },
             summaryResult: `Mounted ${primitiveType} primitive: "${title}".`
+        };
+    },
+
+    morph_canvas_primitive(args, _ctx) {
+        const targetType = (asString(args.targetType) || '') as PrimitiveType;
+        const active = _ctx?.request?.activeArtifact;
+        if (!active) {
+            return {
+                status: 'failed',
+                resultPayload: { status: 'error', message: 'No active canvas primitive to convert. Mount something first, then ask to view it differently.' },
+                summaryResult: 'No active artifact to morph.'
+            };
+        }
+        if (!targetType) {
+            return {
+                status: 'failed',
+                resultPayload: { status: 'error', message: 'targetType is required.' },
+                summaryResult: 'Missing targetType.'
+            };
+        }
+        if (active.type === targetType) {
+            return {
+                resultPayload: { status: 'success', artifactId: active.id, primitiveType: active.type, title: active.title, summary: active.summary, artifact: active },
+                summaryResult: `"${active.title}" is already a ${targetType}.`
+            };
+        }
+
+        const morphed = morphArtifact(active, targetType);
+
+        return {
+            resultPayload: {
+                status: 'success',
+                artifactId: morphed.id,
+                primitiveType: morphed.type,
+                title: morphed.title,
+                summary: morphed.summary,
+                artifact: morphed
+            },
+            summaryResult: `Converted "${active.title}" to a ${targetType} view: "${morphed.title}".`
         };
     },
 

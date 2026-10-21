@@ -62,6 +62,8 @@ export class GooglePhotorealistic3DTilesLayer {
   private renderMode: 'clay' | 'textured' | 'grayscale' | 'blueprint';
   private clayPreset: ClayPresetId;
   private reorientPlugin: any = null;
+  /** True while a scene sun lights the tiles (setLit): tile meshes then carry lit materials that receive light and shadows. */
+  private lit = false;
   private styleUniforms: {
     uTileRenderMode: { value: number };
     uTileColor: { value: THREE.Color };
@@ -76,6 +78,7 @@ export class GooglePhotorealistic3DTilesLayer {
     uFlattenExcavateDepth: { value: number };
     uFlattenHeightTex: { value: THREE.DataTexture };
     uWeatherRain: { value: number };
+    uTileDelight: { value: number };
   };
 
   constructor(options: Google3DTilesLayerOptions = {}) {
@@ -105,7 +108,8 @@ export class GooglePhotorealistic3DTilesLayer {
       uFlattenMargin: { value: 0.8 },
       uFlattenExcavateDepth: { value: 0.0 },
       uFlattenHeightTex: { value: defaultFlattenTex },
-      uWeatherRain: { value: 0.0 }
+      uWeatherRain: { value: 0.0 },
+      uTileDelight: { value: 0.0 }
     };
 
     this.initTilesRenderer(options);
@@ -177,6 +181,7 @@ export class GooglePhotorealistic3DTilesLayer {
             } else if (mesh.material) {
               this.patchTileMaterial(mesh.material);
             }
+            if (this.lit) this.applyLighting(mesh);
           }
         });
         if (this.onTileLoaded) {
@@ -193,6 +198,48 @@ export class GooglePhotorealistic3DTilesLayer {
     } catch (err) {
       console.warn('[GooglePhotorealistic3DTilesLayer] TilesRenderer initialization error:', err);
     }
+  }
+
+  /**
+   * Lights the tiles with the scene's sun and sky, or returns them to their own look. Google's tiles arrive unlit
+   * (KHR_materials_unlit, no normals), so they ignore lights and show no cast shadows. Lit, each tile's unlit material is
+   * replaced by a standard material with the same photo, face normals from the surface (flat shading), and a lift of the
+   * photo's darkest texels so the capture's shade is not doubled; unlit again, the original materials come back.
+   */
+  public setLit(lit: boolean): void {
+    if (this.lit === lit) return;
+    this.lit = lit;
+    this.styleUniforms.uTileDelight.value = lit ? 1.0 : 0.0;
+    this.tilesRenderer?.group?.traverse((child: THREE.Object3D) => {
+      if ((child as THREE.Mesh).isMesh) this.applyLighting(child as THREE.Mesh);
+    });
+  }
+
+  public isLit(): boolean {
+    return this.lit;
+  }
+
+  private applyLighting(mesh: THREE.Mesh): void {
+    const swap = (m: THREE.Material): THREE.Material => {
+      if (this.lit) {
+        if (!(m as any).isMeshBasicMaterial) return m;
+        let twin = (m as any).userData.sbLitTwin as THREE.MeshStandardMaterial | undefined;
+        if (!twin) {
+          const basic = m as THREE.MeshBasicMaterial;
+          twin = new THREE.MeshStandardMaterial({
+            map: basic.map, color: basic.color.clone(), transparent: basic.transparent, opacity: basic.opacity,
+            side: basic.side, alphaTest: basic.alphaTest, roughness: 0.9, metalness: 0.0, flatShading: true
+          });
+          twin.name = `${basic.name || 'tile'}:lit`;
+          twin.userData.sbUnlitOriginal = basic;
+          (basic as any).userData.sbLitTwin = twin;
+          this.patchTileMaterial(twin);
+        }
+        return twin;
+      }
+      return ((m as any).userData?.sbUnlitOriginal as THREE.Material | undefined) ?? m;
+    };
+    mesh.material = Array.isArray(mesh.material) ? mesh.material.map(swap) : swap(mesh.material);
   }
 
   private patchTileMaterial(mat: THREE.Material): void {
@@ -218,6 +265,7 @@ export class GooglePhotorealistic3DTilesLayer {
       shader.uniforms.uFlattenExcavateDepth = this.styleUniforms.uFlattenExcavateDepth;
       shader.uniforms.uFlattenHeightTex = this.styleUniforms.uFlattenHeightTex;
       shader.uniforms.uWeatherRain = this.styleUniforms.uWeatherRain;
+      shader.uniforms.uTileDelight = this.styleUniforms.uTileDelight;
 
       // Vertex shader hooks for world position and normals
       shader.vertexShader = shader.vertexShader.replace(
@@ -234,7 +282,9 @@ export class GooglePhotorealistic3DTilesLayer {
         `
         #include <begin_vertex>
         vWorldPosition = (modelMatrix * vec4(transformed, 1.0)).xyz;
-        vWorldNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
+        vec3 spceWorldN = (modelMatrix * vec4(normal, 0.0)).xyz;
+        // Google's tiles carry no normals: a zero normal stays zero here and the fragment derives the face normal
+        vWorldNormal = dot(spceWorldN, spceWorldN) > 1e-12 ? normalize(spceWorldN) : vec3(0.0);
         `
       );
 
@@ -245,6 +295,7 @@ export class GooglePhotorealistic3DTilesLayer {
         uniform float uTileRoughness;
         uniform float uTileMetalness;
         uniform float uWeatherRain;
+        uniform float uTileDelight;
         ${CLASSIFIER_SHADER_CHUNK}
         uniform float uFlattenActive;
         uniform int uFlattenPolyCount;
@@ -321,7 +372,16 @@ export class GooglePhotorealistic3DTilesLayer {
         } else {
           // Mode 0: Photorealistic Dynamic PBR Material Classification
           #if defined(USE_MAP)
-            MaterialClass classified = classifyTileMaterial(diffuseColor.rgb, vWorldNormal, uWeatherRain);
+            vec3 spceN = vWorldNormal;
+            if (dot(spceN, spceN) < 0.25) spceN = normalize(cross(dFdx(vWorldPosition), dFdy(vWorldPosition)));
+            if (uTileDelight > 0.5) {
+              // The photo carries the capture's own sun and shade; under the scene's sun, lift its darkest texels so
+              // they are not shaded twice (an approximation: the capture's shadows are softened, not removed).
+              float spceLum = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+              float spceShade = 1.0 - smoothstep(0.06, 0.32, spceLum);
+              diffuseColor.rgb = min(diffuseColor.rgb * (1.0 + spceShade * 0.65), vec3(1.0));
+            }
+            MaterialClass classified = classifyTileMaterial(diffuseColor.rgb, spceN, uWeatherRain);
             #ifdef USE_ROUGHNESS
               roughnessFactor = classified.roughness;
             #endif

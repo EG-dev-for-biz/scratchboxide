@@ -41,7 +41,9 @@ describe('describeChatFailure', () => {
 
     it('keeps "unreachable" and server errors distinct', () => {
         expect(describeChatFailure('unreachable', 'Failed to fetch').text).toContain("Can't reach the Scratchbox server");
-        expect(describeChatFailure('server', 'HTTP 401: Missing or invalid Scratchbox launch token', 401).text).toContain('Restart the app');
+        const unauthorized = describeChatFailure('server', 'HTTP 401: Missing or invalid Scratchbox launch token', 401).text;
+        expect(unauthorized).toContain('`?token=…`'); // a browser tab needs the printed launch link
+        expect(unauthorized).toContain('In the desktop app, restart the app.');
         expect(describeChatFailure('server', 'HTTP 500: boom', 500).toast).toBe('Server error (500)');
     });
 });

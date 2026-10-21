@@ -12,9 +12,26 @@ import type { SceneContentKind } from './types';
 import type { GeneratorRunError } from './generatorRun';
 
 export interface ViewportNoticeEntry {
-    kind: 'webgl-error' | 'generator-error' | 'tiles-error' | 'object-load-error' | 'undrawable-objects' | 'optics' | 'focus' | 'empty';
+    kind: 'webgl-error' | 'generator-error' | 'tiles-error' | 'object-load-error' | 'undrawable-objects' | 'optics' | 'focus' | 'empty' | 'asset-recovery';
     title: string;
     detail?: string;
+    /** 0..1 of a running step, when known. */
+    fraction?: number;
+    /** A button under the detail (Cancel on a running recovery). */
+    action?: { label: string; onClick: () => void };
+}
+
+/** A recovery of files that failed to load (asset-recovery-client.ts), running or just ended. */
+export interface ViewportRecoveryNotice {
+    running: boolean;
+    message: string;
+    fraction?: number;
+    files: number;
+    onCancel: () => void;
+    /** Why files could not be recovered, one line per distinct reason with its count (a finished job). */
+    reasons?: string[];
+    /** Offered when the scene knows its place: rebuild the lost files from it. */
+    onRebuild?: () => void;
 }
 
 export interface ViewportNoticeInput {
@@ -33,6 +50,7 @@ export interface ViewportNoticeInput {
     undrawableObjects?: Array<{ id: string; reason: string }>;
     /** Lens values in camera.lens the viewport does not draw, and why (ViewportOpticsChain status). */
     opticsIssues?: string[];
+    assetRecovery?: ViewportRecoveryNotice;
 }
 
 const listOf = (items: string[]) => items.slice(0, 6).join('\n') + (items.length > 6 ? `\n… and ${items.length - 6} more` : '');
@@ -51,6 +69,21 @@ export function resolveViewportNotice(input: ViewportNoticeInput): ViewportNotic
     }
     if (input.tilesError) {
         notices.push({ kind: 'tiles-error', title: '3D Tiles unavailable', detail: input.tilesError });
+    }
+    const recovery = input.assetRecovery;
+    if (recovery) {
+        notices.push({
+            kind: 'asset-recovery',
+            title: recovery.running
+                ? `Recovering ${recovery.files === 1 ? 'a missing file' : `${recovery.files} missing files`}`
+                : `Recovery finished: ${recovery.message}`,
+            detail: recovery.running
+                ? recovery.message
+                : [...(recovery.reasons ?? []), ...(recovery.onRebuild ? ['The scene knows the place it was built from, so the lost files can be built again from it.'] : [])].join('\n') || 'Rebuilt files are marked "rebuilt" in the model list.',
+            ...(recovery.running && recovery.fraction !== undefined ? { fraction: recovery.fraction } : {}),
+            ...(recovery.running ? { action: { label: 'Cancel', onClick: recovery.onCancel } }
+                : recovery.onRebuild ? { action: { label: 'Rebuild this location', onClick: recovery.onRebuild } } : {})
+        });
     }
     const loadErrors = input.objectLoadErrors || [];
     if (loadErrors.length > 0) {
@@ -105,23 +138,37 @@ export const ViewportNotice: React.FC<{ notices: ViewportNoticeEntry[] }> = ({ n
     return (
         <div
             className="sb-3d-viewport-notices"
-            style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 16, pointerEvents: 'none', zIndex: 15 }}
+            style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '16px 16px 16px 84px', pointerEvents: 'none', zIndex: 15 }}
         >
             {notices.map(n => (
                 <div
                     key={n.kind}
                     data-testid="sb-3d-viewport-notice"
                     data-kind={n.kind}
-                    role={n.kind === 'empty' || n.kind === 'focus' ? 'status' : 'alert'}
-                    style={{ ...PANEL_STYLE, ...(n.kind === 'empty' || n.kind === 'focus' ? EMPTY_STYLE : ERROR_STYLE) }}
+                    role={n.kind === 'empty' || n.kind === 'focus' || n.kind === 'asset-recovery' ? 'status' : 'alert'}
+                    style={{ ...PANEL_STYLE, ...(n.kind === 'empty' || n.kind === 'focus' || n.kind === 'asset-recovery' ? EMPTY_STYLE : ERROR_STYLE) }}
                 >
                     <div style={{ fontWeight: 600 }}>{n.title}</div>
+                    {n.fraction !== undefined && (
+                        <div aria-hidden style={{ height: 3, marginTop: 6, borderRadius: 2, background: 'rgba(255, 255, 255, 0.12)' }}>
+                            <div style={{ height: '100%', width: `${Math.round(Math.max(0, Math.min(1, n.fraction)) * 100)}%`, borderRadius: 2, background: '#a5b4fc', transition: 'width 300ms' }} />
+                        </div>
+                    )}
                     {n.detail && (
                         <div style={{
                             // Error details are tool output (stderr, compiler messages): keep their layout.
                             ...(n.kind === 'empty' || n.kind === 'focus' ? {} : { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', whiteSpace: 'pre-wrap' as const }),
                             wordBreak: 'break-word', marginTop: 4, opacity: 0.9
                         }}>{n.detail}</div>
+                    )}
+                    {n.action && (
+                        <button
+                            type="button"
+                            className="sb-3d-viewport-notice-action"
+                            data-testid="sb-3d-viewport-notice-action"
+                            onClick={n.action.onClick}
+                            style={{ marginTop: 8, padding: '4px 10px', borderRadius: 6, border: '1px solid rgba(255, 255, 255, 0.2)', background: 'rgba(255, 255, 255, 0.08)', color: 'inherit', font: 'inherit', cursor: 'pointer' }}
+                        >{n.action.label}</button>
                     )}
                 </div>
             ))}

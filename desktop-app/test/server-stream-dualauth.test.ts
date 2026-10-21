@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import http from 'http';
 import { createStandaloneServer } from '../server/app';
+import { requireGoogleCredentials, withReason } from '../../packages/core/test/helpers/requirements';
+
+// Tests 2 and 3 talk to Google: connected status needs real credentials and the stream is a billed model call.
+const google = requireGoogleCredentials('live Gemini status and a streamed reply');
 
 describe('Server Gemini Streaming Dual-Auth & Dev Origin Bypass', () => {
     let server: http.Server;
@@ -33,7 +37,7 @@ describe('Server Gemini Streaming Dual-Auth & Dev Origin Bypass', () => {
         expect(res.status).toBe(401);
     });
 
-    it('2. GET /gemini/status returns connected: true with dual-auth', async () => {
+    it.skipIf(!google.ok)(withReason('2. GET /gemini/status returns connected: true with dual-auth', google), async () => {
         const res = await fetch(`${baseUrl}/gemini/status`, {
             headers: { 'X-Scratchbox-Token': token }
         });
@@ -43,7 +47,7 @@ describe('Server Gemini Streaming Dual-Auth & Dev Origin Bypass', () => {
         expect(['service-account', 'api-key']).toContain(data.authMethod);
     });
 
-    it('3. POST /gemini/generate-stream generates SSE stream from the dev origin with the token', async () => {
+    it.skipIf(!google.ok)(withReason('3. POST /gemini/generate-stream generates SSE stream from the dev origin with the token', google), async () => {
         const res = await fetch(`${baseUrl}/gemini/generate-stream`, {
             method: 'POST',
             headers: {

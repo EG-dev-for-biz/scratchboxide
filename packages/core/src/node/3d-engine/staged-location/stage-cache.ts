@@ -30,6 +30,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { resolveWithinRoot } from '../../security/path-guard';
 import { findTileRefineRepoRoot } from '../tile-refine-service';
+import { defaultDurableAssetStore } from '../../asset-store/durable-asset-store';
+
+/** The durable store's recipe id for a staged run. */
+export function stagedRecipeId(runId: string): string {
+    return `staged:${runId}`;
+}
 
 export const STAGE_CACHE_VERSION = 'staged_location/v1';
 
@@ -135,6 +141,8 @@ export class StageCache {
     readonly modelsDir: string;
     private readonly now: () => number;
     private readonly inFlight = new Map<string, Promise<CachedStage<unknown>>>();
+    /** The run publishing through this cache (the orchestrator sets it): published files are recorded under its recipe. */
+    activeRunId?: string;
 
     constructor(options: StageCacheOptions) {
         this.workspaceRoot = resolveWithinRoot(options.workspaceRoot, '.');
@@ -261,7 +269,17 @@ export class StageCache {
                 throw err;
             }
         }
-        return { name, path: target, url: `/models/${name}`, bytes, sha256, source };
+        const url = `/models/${name}`;
+        // the durable copy outside this checkout (asset-store): the URL keeps working after public/models is gone
+        try {
+            defaultDurableAssetStore()?.putFile(target, {
+                servedPath: url, origin: 'staged-location', workspace: this.workspaceRoot,
+                ...(this.activeRunId ? { recipeId: stagedRecipeId(this.activeRunId) } : {})
+            });
+        } catch (err) {
+            console.warn(`[stage-cache] ${url} was published but not recorded in the asset store: ${(err as Error).message}`);
+        }
+        return { name, path: target, url, bytes, sha256, source };
     }
 
     /** The published file as recorded, republished from its source when it is missing or differs; undefined when it cannot be. */
@@ -308,6 +326,12 @@ export class StageCache {
         const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
         fs.writeFileSync(tmp, JSON.stringify(record, null, 1));
         fs.renameSync(tmp, file);
+        // the recipe behind this run's published files: enough to rebuild them when every copy is lost
+        try {
+            defaultDurableAssetStore()?.putRecipe({ id: stagedRecipeId(runId), kind: 'staged-location', workspace: this.workspaceRoot, body: record });
+        } catch (err) {
+            console.warn(`[stage-cache] run ${runId} was recorded but not in the asset store: ${(err as Error).message}`);
+        }
     }
 
     /** A side file of a run (the registration's inputs: views and boxes, never image bytes), beside its record. */

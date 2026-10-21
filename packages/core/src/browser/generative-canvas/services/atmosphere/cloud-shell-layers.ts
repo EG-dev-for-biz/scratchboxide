@@ -80,12 +80,33 @@ export function resolveCloudShellLayers(layers: unknown, tool = 'cloudLayers'): 
     return packed.sort((a, b) => (b.baseAltitudeMeters + b.thicknessMeters) - (a.baseAltitudeMeters + a.thicknessMeters));
 }
 
+/**
+ * Visible sky cover (15-85° up, as a camera at 5400 K white balance sees it) for each internal coverage of a deck of
+ * optical depth 2, measured on this renderer (suns 25/50°, two cloud positions). The shader's coverage threshold is
+ * an uncalibrated noise level; this table makes a deck's `coverage` the sky cover it shows. Thinner decks show less,
+ * denser ones a little more, as they do in photographs.
+ */
+const SHELL_SKY_COVER: Array<[number, number]> = [
+    [0, 0], [0.02, 0.04], [0.05, 0.06], [0.1, 0.09], [0.15, 0.13], [0.2, 0.18], [0.3, 0.31], [0.4, 0.48], [0.5, 0.65],
+    [0.6, 0.79], [0.7, 0.89], [0.8, 0.95], [0.9, 0.98], [1, 1]
+];
+
+/** The shader's internal coverage that shows as `skyCover` of the sky (the measured table, inverted). */
+export function shellCoverageForSkyCover(skyCover: number): number {
+    const f = Math.min(1, Math.max(0, skyCover));
+    for (let i = 1; i < SHELL_SKY_COVER.length; i++) {
+        const [c0, f0] = SHELL_SKY_COVER[i - 1], [c1, f1] = SHELL_SKY_COVER[i];
+        if (f <= f1) return c0 + ((c1 - c0) * (f - f0)) / Math.max(1e-9, f1 - f0);
+    }
+    return 1;
+}
+
 /** The sky shader's uniform arrays for resolved decks (unused slots zeroed). */
 export function cloudShellUniformArrays(layers: PackedCloudShellLayer[]): { count: number; a: number[][]; b: number[][]; c: number[][] } {
     const a: number[][] = [], b: number[][] = [], c: number[][] = [];
     for (let i = 0; i < MAX_CLOUD_SHELL_LAYERS; i++) {
         const l = layers[i];
-        a.push(l ? [l.baseAltitudeMeters, l.thicknessMeters, l.coverage, l.opticalDepth] : [0, 0, 0, 0]);
+        a.push(l ? [l.baseAltitudeMeters, l.thicknessMeters, shellCoverageForSkyCover(l.coverage), l.opticalDepth] : [0, 0, 0, 0]);
         b.push(l ? [l.featureSizeMeters, l.streakElongation, l.streakHeadingRad, l.forwardScattering] : [1, 1, 0, 0]);
         c.push(l ? [...l.scatteringAlbedo, l.shellCount] : [0, 0, 0, 1]);
     }

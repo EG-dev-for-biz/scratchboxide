@@ -186,6 +186,13 @@ public:
     float sunCosHalfAngle() const { return sunCosHalfAngle_; }
     float sunSolidAngle() const { return sunSolidAngle_; }
     const AtmosphereParams& params() const { return params_; }
+    /** Basis sampleSunDirection spans the solar cone with. */
+    const Vec3& sunTangent() const { return sunTangent_; }
+    const Vec3& sunBitangent() const { return sunBitangent_; }
+    /** The table skyRadiance interpolates: elevationResolution() rows of azimuthResolution() entries. */
+    const std::vector<Vec3>& skyLut() const { return lut_; }
+    int azimuthResolution() const { return azimuthRes_; }
+    int elevationResolution() const { return elevationRes_; }
 
 private:
     void buildSunBasis() {

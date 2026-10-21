@@ -55,7 +55,13 @@ async function runNanoBananaPromptingTests() {
 
     // Test 4: Document Synthesis Engine Integration
     console.log('\nTest 4: Verifying Document Synthesis Engine produces contextual Nano Banana metadata...');
-    const doc1776 = synthesizeComprehensiveDocument('write an extensive document about 1776');
+    // Media is opt-in (b867569b, Multimedia Policy): a plain request carries no image or video section.
+    const plainDoc = synthesizeComprehensiveDocument('write an extensive document about 1776');
+    assert.ok(
+        !plainDoc.sections.some(s => s.type === 'editorial-image' || s.type === 'video'),
+        'No editorial/video section is injected when the prompt did not ask for media'
+    );
+    const doc1776 = synthesizeComprehensiveDocument('write an extensive document about 1776 with illustrations');
     const editorialSec = doc1776.sections.find(s => s.type === 'editorial-image' || s.type === 'video');
     assert.ok(editorialSec, 'Editorial/video section exists in synthesized 1776 document');
     assert.ok(editorialSec?.visualPrompt, 'Section contains rich visualPrompt');

@@ -32,9 +32,35 @@ const SHADINGS: Array<{ id: VirtualGeometryShading; label: string }> = [
     { id: 'lod-levels', label: 'LOD levels' }
 ];
 
+/** What the path-traced overlay knows about its session, for the HUD. */
+interface PathTraceStatus {
+    device: string;
+    triangles: number;
+    clusters: number;
+    spp: number;
+    targetSpp: number;
+    rays: number;
+    gpuMs: number;
+    width: number;
+    height: number;
+    materials: string;
+    denoised: boolean;
+    denoiseMs: number;
+    /** Pixels whose illumination came from the previous view (temporal reuse). */
+    historyPixels: number;
+    /** Size the frame was traced at before MetalFX scaled it to width x height. */
+    renderWidth: number;
+    renderHeight: number;
+    upscaleMs: number;
+    message?: string;
+}
+
+const DEFAULT_SUN = { elevationDeg: 42, azimuthDeg: 150 };
+
 const styles: Record<string, React.CSSProperties> = {
     root: { position: 'relative', width: '100%', height: '100%', flex: 1, minHeight: 0, overflow: 'hidden', background: '#292a2d' },
     canvas: { position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', touchAction: 'none', outline: 'none' },
+    overlay: { position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', pointerEvents: 'none' },
     toolbar: { position: 'absolute', top: 12, left: 12, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 },
     chip: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', borderRadius: 6, border: 'none', background: 'rgba(0,0,0,0.55)', color: 'rgba(255,255,255,0.9)', fontSize: 12, cursor: 'pointer' },
     hud: { position: 'absolute', bottom: 12, left: 12, padding: '8px 12px', borderRadius: 6, background: 'rgba(0,0,0,0.6)', color: 'rgba(255,255,255,0.9)', fontSize: 11, lineHeight: '20px', fontVariantNumeric: 'tabular-nums', pointerEvents: 'none' },
@@ -58,6 +84,11 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
     const [stats, setStats] = React.useState<VirtualGeometryStats | null>(null);
     const [threshold, setThreshold] = React.useState(vg.errorThresholdPx ?? 1);
     const [shading, setShading] = React.useState<VirtualGeometryShading>(vg.shading ?? 'clay');
+    const [pathTrace, setPathTrace] = React.useState(Boolean(vg.pathTrace?.enabled));
+    const [sun, setSun] = React.useState(Boolean(vg.pathTrace?.sun));
+    const [ptStatus, setPtStatus] = React.useState<PathTraceStatus | null>(null);
+    const overlayRef = React.useRef<HTMLCanvasElement | null>(null);
+    const loadedUrl = React.useRef<string | null>(null);
     const latest = React.useRef({ data, onUpdate });
     latest.current = { data, onUpdate };
 
@@ -122,6 +153,7 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
                 if (current.kind === 'none') throw new Error('This scene has no virtual geometry source: set virtualGeometry.sourceGlbPath to a GLB in the workspace.');
                 const url = current.kind === 'url' ? current.url : await build(current.request);
                 if (cancelled) return;
+                loadedUrl.current = url;
                 setPhase({ kind: 'streaming' });
                 renderer = new VirtualGeometryRenderer(canvas, {
                     errorThresholdPx: latestThreshold.current,
@@ -173,6 +205,173 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
         return () => ro.disconnect();
     }, []);
 
+    // Path tracing: one resident GPU session per toggle-on; the view follows the orbit camera and the
+    // newest frame is drawn over the WebGPU canvas (which pauses while the overlay covers it).
+    React.useEffect(() => {
+        const overlay = overlayRef.current;
+        const renderer = rendererRef.current;
+        if (!pathTrace || phase.kind !== 'ready' || !overlay || !renderer || !loadedUrl.current) {
+            if (overlay) overlay.getContext('2d')?.clearRect(0, 0, overlay.width, overlay.height);
+            if (!pathTrace) setPtStatus(null);
+            return;
+        }
+        let cancelled = false;
+        let sessionId: string | null = null;
+        let sentView = '';
+        let viewTimer: number | null = null;
+        let lastFrameTag = '';
+        let frameSeq = 0;
+        let done = false;
+        let status: PathTraceStatus | null = null;
+        const plan = virtualGeometryLoadPlan(latest.current.data.virtualGeometry, workspacePath);
+        const sunSpec = latest.current.data.virtualGeometry?.pathTrace?.sun ?? (sun ? DEFAULT_SUN : undefined);
+        const targetSpp = latest.current.data.virtualGeometry?.pathTrace?.targetSpp ?? 256;
+        const renderScale = Math.min(1, Math.max(0.25, latest.current.data.virtualGeometry?.pathTrace?.renderScale ?? 1));
+        const offscreen = document.createElement('canvas');
+        const post = async (route: string, body: unknown) => {
+            const res = await fetch(`/3d/path-trace/${route}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok || !json.success) throw new Error(json.error || `${route} failed (HTTP ${res.status})`);
+            return json;
+        };
+        const show = (patch: Partial<PathTraceStatus>) => {
+            status = { ...(status ?? { device: '', triangles: 0, clusters: 0, spp: 0, targetSpp, rays: 0, gpuMs: 0, width: 0, height: 0, materials: '', denoised: false, denoiseMs: 0, historyPixels: 0, renderWidth: 0, renderHeight: 0, upscaleMs: 0 }), ...patch };
+            setPtStatus(status);
+        };
+
+        const renderSize = () => {
+            const w = Math.max(8, Math.round(overlay.clientWidth));
+            const h = Math.max(8, Math.round(overlay.clientHeight));
+            const scale = Math.min(1, 1280 / w);
+            return { width: Math.round(w * scale), height: Math.round(h * scale) };
+        };
+
+        const sendView = async () => {
+            if (cancelled || !sessionId) return;
+            const v = renderer.getView();
+            const size = renderSize();
+            const body = {
+                sessionId, ...size,
+                camera: { position: v.eye, target: v.target, up: v.up, verticalFovDeg: v.fovYDeg },
+                lod: { thresholdPx: latestThreshold.current },
+                targetSpp,
+                renderScale
+            };
+            const tag = JSON.stringify(body);
+            if (tag === sentView) return;
+            sentView = tag;
+            try {
+                const started = await post('view', body);
+                if (cancelled) return;
+                frameSeq = started.seq;
+                done = false;
+                show({ triangles: started.cut.triangles, clusters: started.cut.clusters, spp: 0, rays: 0, gpuMs: 0, width: size.width, height: size.height, message: undefined });
+            } catch (err: any) {
+                if (!cancelled) show({ message: err?.message ?? String(err) });
+            }
+        };
+
+        const draw = (rgba: ArrayBuffer, width: number, height: number) => {
+            if (offscreen.width !== width || offscreen.height !== height) {
+                offscreen.width = width;
+                offscreen.height = height;
+            }
+            const octx = offscreen.getContext('2d');
+            const ctx = overlay.getContext('2d');
+            if (!octx || !ctx) return;
+            octx.putImageData(new ImageData(new Uint8ClampedArray(rgba), width, height), 0, 0);
+            if (overlay.width !== overlay.clientWidth || overlay.height !== overlay.clientHeight) {
+                overlay.width = Math.max(1, overlay.clientWidth);
+                overlay.height = Math.max(1, overlay.clientHeight);
+            }
+            ctx.imageSmoothingEnabled = true;
+            ctx.drawImage(offscreen, 0, 0, overlay.width, overlay.height);
+        };
+
+        const pollFrame = async () => {
+            if (cancelled || !sessionId || done) return;
+            try {
+                const res = await fetch(`/3d/path-trace/frame?sessionId=${encodeURIComponent(sessionId)}&after=${encodeURIComponent(lastFrameTag)}`);
+                if (cancelled) return;
+                if (res.status === 204) return;
+                if (!res.ok) throw new Error(`frame failed (HTTP ${res.status})`);
+                const seq = Number(res.headers.get('X-Frame-Seq'));
+                if (seq !== frameSeq) return; // a frame of the view before the last camera move
+                const spp = Number(res.headers.get('X-Frame-Spp'));
+                const width = Number(res.headers.get('X-Frame-Width'));
+                const height = Number(res.headers.get('X-Frame-Height'));
+                const rgba = await res.arrayBuffer();
+                if (cancelled || rgba.byteLength !== width * height * 4) return;
+                lastFrameTag = `${seq}.${spp}`;
+                done = res.headers.get('X-Frame-Done') === '1';
+                draw(rgba, width, height);
+                show({
+                    spp, rays: Number(res.headers.get('X-Frame-Rays')), gpuMs: Number(res.headers.get('X-Frame-Gpu-Ms')), width, height,
+                    denoised: res.headers.get('X-Frame-Denoised') === '1', denoiseMs: Number(res.headers.get('X-Frame-Denoise-Ms') ?? 0),
+                    historyPixels: Number(res.headers.get('X-Frame-History') ?? 0),
+                    renderWidth: Number(res.headers.get('X-Frame-Render-Width') ?? width), renderHeight: Number(res.headers.get('X-Frame-Render-Height') ?? height),
+                    upscaleMs: Number(res.headers.get('X-Frame-Upscale-Ms') ?? 0)
+                });
+            } catch (err: any) {
+                if (!cancelled) show({ message: err?.message ?? String(err) });
+            }
+        };
+
+        let ticker: number | null = null;
+        let lastCameraTag = '';
+        (async () => {
+            try {
+                show({ message: 'Opening the Metal path tracer…' });
+                const opened = await post('open', {
+                    sbvgUrl: loadedUrl.current,
+                    ...(plan.kind === 'build' ? { sourceGlbPath: plan.request.sourceGlbPath, workspaceRoot: plan.request.workspaceRoot } : {}),
+                    lighting: sunSpec ? { sun: sunSpec } : { studio: {} }
+                });
+                if (cancelled) { await post('close', { sessionId: opened.sessionId }).catch(() => undefined); return; }
+                sessionId = opened.sessionId;
+                const m = opened.materials;
+                show({ device: opened.device, materials: m.source === 'glb' ? `${m.count} materials · ${m.texturesUploaded} textures` : 'clay (no source GLB)', message: undefined });
+                renderer.stop();
+                await sendView();
+                ticker = window.setInterval(() => {
+                    if (cancelled) return;
+                    const v = renderer.getView();
+                    const size = renderSize();
+                    const tag = JSON.stringify({ v, size, t: latestThreshold.current });
+                    if (tag !== lastCameraTag) {
+                        lastCameraTag = tag;
+                        if (viewTimer !== null) window.clearTimeout(viewTimer);
+                        viewTimer = window.setTimeout(() => { void sendView(); }, 80);
+                    }
+                    void pollFrame();
+                }, 50);
+            } catch (err: any) {
+                if (!cancelled) show({ message: err?.message ?? String(err) });
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+            if (ticker !== null) window.clearInterval(ticker);
+            if (viewTimer !== null) window.clearTimeout(viewTimer);
+            renderer.start();
+            overlay.getContext('2d')?.clearRect(0, 0, overlay.width, overlay.height);
+            if (sessionId) void fetch('/3d/path-trace/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId }) }).catch(() => undefined);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [pathTrace, sun, phase.kind, source]);
+
+    const togglePathTrace = () => {
+        const next = !pathTrace;
+        setPathTrace(next);
+        persist({ pathTrace: { ...latest.current.data.virtualGeometry?.pathTrace, enabled: next } });
+    };
+    const toggleSun = () => {
+        const next = !sun;
+        setSun(next);
+        persist({ pathTrace: { ...latest.current.data.virtualGeometry?.pathTrace, sun: next ? DEFAULT_SUN : undefined } });
+    };
+
     const changeThreshold = (px: number) => {
         setThreshold(px);
         rendererRef.current?.setErrorThreshold(px);
@@ -186,6 +385,7 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
     return (
         <div className="sb-virtual-geometry" style={styles.root} data-testid="virtual-geometry-viewport">
             <canvas ref={canvasRef} style={styles.canvas} />
+            <canvas ref={overlayRef} style={{ ...styles.overlay, visibility: pathTrace ? 'visible' : 'hidden' }} data-testid="path-trace-overlay" />
 
             <div style={styles.toolbar}>
                 <div className="sb-segmented-control sb-segmented-control-xs">
@@ -206,10 +406,53 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
                     />
                     <span style={{ minWidth: 48, fontVariantNumeric: 'tabular-nums' }}>{threshold < 1 ? threshold.toFixed(2) : threshold.toFixed(1)} px</span>
                 </label>
-                <button type="button" style={styles.chip} onClick={() => rendererRef.current?.frameModel()}>
+                <button type="button" className="sb-btn sb-btn-ghost sb-btn-xs" style={styles.chip} onClick={() => rendererRef.current?.frameModel()}>
                     Frame
                 </button>
+                <button
+                    type="button"
+                    className={`sb-btn sb-btn-ghost sb-btn-xs ${pathTrace ? 'sb-segment-active' : ''}`}
+                    style={{ ...styles.chip, ...(pathTrace ? { background: 'rgba(59,130,246,0.75)' } : {}) }}
+                    onClick={togglePathTrace}
+                    aria-pressed={pathTrace}
+                    title="Progressive Metal path tracing of the LOD cut with the source GLB's materials"
+                    data-testid="path-trace-toggle"
+                >
+                    Path traced
+                </button>
+                {pathTrace && (
+                    <button
+                        type="button"
+                        className="sb-btn sb-btn-ghost sb-btn-xs"
+                        style={{ ...styles.chip, ...(sun ? { background: 'rgba(245,158,11,0.7)' } : {}) }}
+                        onClick={toggleSun}
+                        aria-pressed={sun}
+                        title={sun ? 'Physical sun and sky (42° up, 150° azimuth)' : 'Neutral studio dome; press for a sun'}
+                        data-testid="path-trace-sun"
+                    >
+                        {sun ? 'Sun' : 'Studio'}
+                    </button>
+                )}
             </div>
+
+            {pathTrace && ptStatus && (
+                <div style={{ ...styles.hud, bottom: 'auto', top: 48 }} data-testid="path-trace-stats">
+                    <div style={{ fontWeight: 600, color: '#fff' }}>Metal path tracer{ptStatus.device ? ` · ${ptStatus.device}` : ''}</div>
+                    {ptStatus.message ? (
+                        <div style={{ color: '#fcd34d', maxWidth: 420, whiteSpace: 'pre-wrap' }}>{ptStatus.message}</div>
+                    ) : (
+                        <>
+                            <div>
+                                {ptStatus.spp} of {ptStatus.targetSpp} spp · {ptStatus.width}×{ptStatus.height}
+                                {ptStatus.renderWidth > 0 && (ptStatus.renderWidth !== ptStatus.width || ptStatus.renderHeight !== ptStatus.height) ? ` (traced at ${ptStatus.renderWidth}×${ptStatus.renderHeight}, MetalFX ${ptStatus.upscaleMs.toFixed(1)} ms)` : ''}
+                                {ptStatus.gpuMs > 0 ? ` · ${(ptStatus.rays / ptStatus.gpuMs / 1000).toFixed(1)} M rays/s` : ''}
+                            </div>
+                            <div>Cut: {fmt(ptStatus.triangles)} triangles in {fmt(ptStatus.clusters)} clusters · {ptStatus.materials}</div>
+                            <div>{ptStatus.denoised ? `Denoised on the GPU in ${ptStatus.denoiseMs.toFixed(1)} ms` : 'Raw samples'}{ptStatus.historyPixels > 0 ? ` · ${fmt(ptStatus.historyPixels)} px reused from the last view` : ''}</div>
+                        </>
+                    )}
+                </div>
+            )}
 
             {stats && stats.clusterCount > 0 && (
                 <div style={styles.hud} data-testid="virtual-geometry-stats">

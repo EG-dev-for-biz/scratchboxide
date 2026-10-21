@@ -18,6 +18,9 @@ export * from './common/gemini-protocol';
 // API client auth configuration (per-launch token plumbing)
 export * from './common/api-client-config';
 
+// Texture-library signed-URL resolution (GCS-backed textures/extracted_textures assets)
+export * from './common/texture-url-resolver';
+
 // Project Artifact Graph Protocol
 export * from './common/project-artifact-graph-protocol';
 

@@ -87,8 +87,27 @@ describe.skipIf(!stagedChrome.ok)('staged reveal through the real loader', () =>
         expect(c50).toBeLessThan(c100);
         const states = await page.eval<Array<{ staged: string | null; visible: boolean }>>(`sbHarness.meshStates(${JSON.stringify(objectIdOf('l1'))})`);
         await page.step(4, STEP);
+        // the remesh stage is still running: the revealed tiles wear the work sweep (a staged material), every leaf showing
+        const sweeping = await page.eval<Array<{ staged: string | null; visible: boolean }>>(`sbHarness.meshStates(${JSON.stringify(objectIdOf('l1'))})`);
+        expect(sweeping.every(s => s.staged !== null && s.visible), 'while a stage runs the revealed layer carries the work sweep').toBe(true);
+        // the band itself: pixels of the accent (#A5B4FC, mixed into the clay) appear on the model, and move between frames
+        const accent: number[] = [];
+        const moved: number[] = [];
+        for (let i = 0; i < 12; i++) {
+            accent.push(await page.eval<number>('sbHarness.tinted(165, 180, 252, 14)'));
+            await page.eval(`sbHarness.keepFrame('sweep-${i}')`);
+            if (i > 0) moved.push((await page.eval<{ differing: number } | null>(`sbHarness.frameDiff('sweep-${i - 1}', 'sweep-${i}', 8)`))?.differing ?? -1);
+            await page.step(4, STEP);
+        }
+        const uniforms = JSON.stringify((await page.eval<unknown[]>(`sbHarness.workUniforms(${JSON.stringify(objectIdOf('l1'))})`)).slice(0, 2));
+        expect(Math.max(...accent), `accent pixels per frame: ${accent.join(', ')}; changed: ${moved.join(', ')}; uniforms: ${uniforms}`).toBeGreaterThan(50);
+        expect(Math.max(...moved), `the band moves: pixels changed between frames ${moved.join(', ')}`).toBeGreaterThan(50);
+        await page.screenshot('loader_path_tiles_work_sweep');
+        // no stage running any more: the original clay is back
+        await page.eval(`sbHarness.update(${JSON.stringify(stagedSceneData(fixtureState([L('l1')], { runState: 'running' })))})`);
+        await page.step(4, STEP);
         const after = await page.eval<Array<{ staged: string | null; visible: boolean }>>(`sbHarness.meshStates(${JSON.stringify(objectIdOf('l1'))})`);
-        expect(after.every(s => s.staged === null && s.visible), 'after the reveal the original clay is back and every leaf shows').toBe(true);
+        expect(after.every(s => s.staged === null && s.visible), 'after the reveal, with no stage running, the original clay is back and every leaf shows').toBe(true);
         expect(states.length).toBe(after.length);
 
         // The same layer as a plain scene (no staged build): the static render, against an empty scene's frame.

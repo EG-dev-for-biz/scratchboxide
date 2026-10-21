@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { Request, Response, Router } from 'express';
+import { clientDisconnectedError, stagedRunRegistry } from '../../../packages/core/src/node/3d-engine/staged-location/staged-run-registry';
 import {
     GeminiService,
     GoogleMediaCredentialsService,
@@ -127,11 +128,34 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
         const controller = new AbortController();
         res.on('close', () => {
             if (!res.writableEnded) {
-                controller.abort();
+                // named, so a long build (the staged location run) can tell a lost page from the user's Stop and carry on
+                controller.abort(clientDisconnectedError());
             }
         });
         return controller;
     };
+
+    // A staged location run this server is running or has run: what a reloaded page re-attaches to (its events after
+    // `after`, and the latest scene artifact), and the Stop a page sends for a run whose chat stream is gone.
+    router.get('/staged-runs/:runId', (req: Request, res: Response) => {
+        const runId = String(req.params.runId);
+        if (!/^[0-9a-f]{8}$/.test(runId)) {
+            res.status(400).json({ success: false, error: 'runId must be 8 hex digits' });
+            return;
+        }
+        const after = req.query.after === undefined ? undefined : Number(req.query.after);
+        const snapshot = stagedRunRegistry().snapshot(runId, after !== undefined && Number.isFinite(after) ? after : undefined);
+        if (!snapshot) {
+            res.status(404).json({ success: false, error: `this server has no staged run ${runId} (it may have restarted; the run can be resumed)` });
+            return;
+        }
+        res.json({ success: true, run: snapshot });
+    });
+    router.post('/staged-runs/:runId/stop', (req: Request, res: Response) => {
+        const runId = String(req.params.runId);
+        const stopped = /^[0-9a-f]{8}$/.test(runId) && stagedRunRegistry().stop(runId);
+        res.json({ success: true, stopped });
+    });
 
     const handleStream = async (req: Request, res: Response) => {
         const controller = openSse(req, res);

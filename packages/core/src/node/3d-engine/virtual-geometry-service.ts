@@ -21,32 +21,65 @@ import { parseSbvgHeader, SBVG_HEADER_BYTES, SBVG_VERSION } from '../../browser/
  * build statistics as one JSON line on stdout.
  */
 export const VIRTUAL_GEOMETRY_BUILDER_SOURCE = `
+#include "scratchbox_gltf_scene.hpp"
+#include "scratchbox_lod_retexture.hpp"
 #include "scratchbox_virtual_geometry.hpp"
 #include <chrono>
 #include <cstdio>
 using namespace scratchbox::vgeo;
 
 int main(int argc, char** argv) {
-    if (argc < 3) { std::fprintf(stderr, "usage: sbvg_builder <input.glb> <output.sbvg>\\n"); return 2; }
+    if (argc < 3) { std::fprintf(stderr, "usage: sbvg_builder <input.glb> <output.sbvg> [atlas stem]\\n"); return 2; }
+    const std::string atlasStem = argc > 3 ? argv[3] : "";
     try {
         auto t0 = std::chrono::steady_clock::now();
         SourceMesh src = GlbSceneLoader::loadFile(argv[1]);
         WeldedMesh mesh = weld(src);
         auto t1 = std::chrono::steady_clock::now();
-        ClusterDag dag = buildClusterDag(std::move(mesh));
+        // With materials, every coarse level is re-textured into an atlas of its own, so its
+        // simplification may cross UV seams and material borders.
+        scratchbox::gltf::GltfScene scene;
+        RetextureOptions retex;
+        const RetextureOptions* retexPtr = nullptr;
+        if (mesh.materialCount > 0) {
+            scene = scratchbox::gltf::GlbSceneReader::readFile(argv[1]);
+            if (!scene.ok) throw std::runtime_error("materials: " + scene.error);
+            retex.sampleLevel0 = [&scene](uint32_t material, const F2& uv) {
+                if (material >= scene.materials.size()) return F3(1, 1, 1);
+                const auto& m = scene.materials[material];
+                F3 base(m.baseColorFactor.x, m.baseColorFactor.y, m.baseColorFactor.z);
+                if (m.baseColorImage >= 0 && m.baseColorImage < static_cast<int>(scene.images.size()) && scene.images[static_cast<size_t>(m.baseColorImage)].decoded) {
+                    const F3 t = retex::sampleImageLinear(scene.images[static_cast<size_t>(m.baseColorImage)].pixels, uv, m.wrapS, m.wrapT);
+                    base = F3(base.x * t.x, base.y * t.y, base.z * t.z);
+                }
+                return base;
+            };
+            retex.bake = retex::bakeAtlas;
+            for (const auto& m : scene.materials) retex.materialFactors.push_back({m.metallicFactor, m.roughnessFactor});
+            retex.minTexelWorld = retex::sourceTexelWorld(mesh, scene);
+            retex.maxAtlasSize = 4096;
+            retexPtr = &retex;
+        }
+        ClusterDag dag = buildClusterDag(std::move(mesh), 24, retexPtr);
         auto t2 = std::chrono::steady_clock::now();
-        SbvgSummary s = writeSbvg(dag, argv[2], src.skippedPrimitives);
+        SbvgSummary s = writeSbvg(dag, argv[2], src.skippedPrimitives, atlasStem);
         auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
         std::printf("{\\"sourceTriangles\\":%u,\\"weldedVertices\\":%zu,\\"droppedDegenerate\\":%u,\\"skippedPrimitives\\":%u,"
                     "\\"vertexCount\\":%u,\\"clusterCount\\":%u,\\"triangleCount\\":%llu,\\"leafTriangleCount\\":%llu,\\"levelCount\\":%u,"
-                    "\\"fileBytes\\":%llu,\\"loadMs\\":%.1f,\\"dagMs\\":%.1f,\\"levels\\":[",
+                    "\\"fileBytes\\":%llu,\\"atlasCount\\":%u,\\"atlasBytes\\":%llu,\\"loadMs\\":%.1f,\\"dagMs\\":%.1f,\\"levels\\":[",
                     dag.mesh.sourceTriangles, dag.mesh.positions.size(), dag.mesh.droppedDegenerate, src.skippedPrimitives,
                     s.vertexCount, s.clusterCount, (unsigned long long)s.triangleCount, (unsigned long long)s.leafTriangleCount, s.levelCount,
-                    (unsigned long long)s.fileBytes, ms(t0, t1), ms(t1, t2));
+                    (unsigned long long)s.fileBytes, s.atlasCount, (unsigned long long)s.atlasBytes, ms(t0, t1), ms(t1, t2));
         for (size_t i = 0; i < dag.levels.size(); ++i) {
             const auto& l = dag.levels[i];
-            std::printf("%s{\\"level\\":%u,\\"clusters\\":%u,\\"triangles\\":%u,\\"groups\\":%u,\\"stuckGroups\\":%u,\\"maxError\\":%g}",
-                        i ? "," : "", l.level, l.clusters, l.triangles, l.groups, l.stuckGroups, (double)l.maxError);
+            std::printf("%s{\\"level\\":%u,\\"clusters\\":%u,\\"triangles\\":%u,\\"groups\\":%u,\\"stuckGroups\\":%u,\\"mergedGroups\\":%u,\\"maxError\\":%g}",
+                        i ? "," : "", l.level, l.clusters, l.triangles, l.groups, l.stuckGroups, l.mergedGroups, (double)l.maxError);
+        }
+        std::printf("],\\"atlases\\":[");
+        for (size_t i = 0; i < dag.atlases.size(); ++i) {
+            const auto& a = dag.atlases[i];
+            std::printf("%s{\\"level\\":%u,\\"materialId\\":%u,\\"width\\":%u,\\"height\\":%u,\\"cells\\":%u,\\"pairedCells\\":%u,\\"texels\\":%llu,\\"texelWorld\\":%g,\\"missed\\":%u,\\"bakeMs\\":%.1f}",
+                        i ? "," : "", a.level, a.materialId, a.image.width, a.image.height, a.cells, a.pairedCells, (unsigned long long)a.texels, (double)a.texelWorld, a.missed, a.bakeMs);
         }
         std::printf("]}\\n");
         return 0;
@@ -62,14 +95,18 @@ int main(int argc, char** argv) {
  * compute the same floats and the builder writes the same bytes on every host.
  */
 const BUILDER_FLAGS = defaultNativeFlags(['-ffp-contract=off']);
+/** The GLB reader inflates PNG textures and the atlases are written as PNG: zlib. */
+const BUILDER_LIBS = ['-lz'];
 
 export interface VirtualGeometryLevelStats {
     level: number;
     clusters: number;
     triangles: number;
     groups: number;
-    /** Groups whose locked borders left too little to simplify; carried up unchanged. */
+    /** Groups whose locked borders left too little to simplify even after merging; carried up unchanged. */
     stuckGroups: number;
+    /** Stuck groups that joined a neighbouring group before simplification was retried. */
+    mergedGroups: number;
     maxError: number;
 }
 
@@ -85,9 +122,13 @@ export interface VirtualGeometryBuildStats {
     leafTriangleCount: number;
     levelCount: number;
     fileBytes: number;
+    /** Re-textured coarse levels, each with an atlas PNG next to the file. */
+    atlasCount: number;
+    atlasBytes: number;
     loadMs: number;
     dagMs: number;
     levels: VirtualGeometryLevelStats[];
+    atlases: Array<{ level: number; materialId: number; width: number; height: number; cells: number; pairedCells: number; texels: number; texelWorld: number; missed: number; bakeMs: number }>;
 }
 
 export interface VirtualGeometryBuildResult {
@@ -104,7 +145,7 @@ export interface ServedVirtualGeometry {
     /** True when a file for the same GLB bytes and builder already existed; full stats are only known for a fresh build. */
     cached: boolean;
     /** Read from the file's header, so known for cached builds too. */
-    summary: { sourceTriangles: number; leafTriangles: number; clusterCount: number; levelCount: number; fileBytes: number; skippedPrimitives: number; droppedDegenerate: number };
+    summary: { sourceTriangles: number; leafTriangles: number; clusterCount: number; levelCount: number; fileBytes: number; skippedPrimitives: number; droppedDegenerate: number; atlasCount: number };
     stats?: VirtualGeometryBuildStats;
     buildMs?: number;
 }
@@ -175,6 +216,20 @@ function envNumber(name: string): number | undefined {
  * than maxAgeMs go, then the least recently used until the directory is within maxBytes; nothing used within
  * minIdleMs is removed. Temp files of builds that are no longer running go after a day.
  */
+/** The atlas PNGs written next to an .sbvg (`<stem>.atlas<level>.png`), whether or not they exist. */
+export function atlasSiblings(sbvgPath: string): string[] {
+    const dir = path.dirname(sbvgPath);
+    const stem = path.basename(sbvgPath, '.sbvg');
+    let names: string[] = [];
+    try {
+        names = fs.readdirSync(dir);
+    } catch {
+        return [];
+    }
+    const re = new RegExp(`^${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(atlas|normal)\\d+\\.png$`);
+    return names.filter(n => re.test(n)).map(n => path.join(dir, n));
+}
+
 export function pruneVirtualGeometryCache(options: VirtualGeometryCachePruneOptions = {}): { removed: string[]; bytesBefore: number; bytesAfter: number } {
     const dir = options.dir ?? virtualGeometryServeDir();
     const mb = envNumber('SCRATCHBOX_VIRTUAL_GEOMETRY_CACHE_MAX_MB');
@@ -200,8 +255,13 @@ export function pruneVirtualGeometryCache(options: VirtualGeometryCachePruneOpti
             continue;
         }
         if (!name.endsWith('.sbvg')) continue;
-        files.push({ name, bytes: st.size, used: st.mtimeMs });
-        result.bytesBefore += st.size;
+        // A file's atlas PNGs live and die with it.
+        let bytes = st.size;
+        for (const sibling of atlasSiblings(file)) {
+            try { bytes += fs.statSync(sibling).size; } catch { /* gone */ }
+        }
+        files.push({ name, bytes, used: st.mtimeMs });
+        result.bytesBefore += bytes;
     }
     files.sort((a, b) => a.used - b.used || (a.name < b.name ? -1 : 1));
     let total = result.bytesBefore;
@@ -209,6 +269,7 @@ export function pruneVirtualGeometryCache(options: VirtualGeometryCachePruneOpti
         const expired = now - f.used > maxAgeMs;
         if (!expired && total <= maxBytes) continue;
         if (now - f.used < minIdleMs || options.keep?.has(f.name)) continue;
+        for (const sibling of atlasSiblings(path.join(dir, f.name))) fs.rmSync(sibling, { force: true });
         fs.rmSync(path.join(dir, f.name), { force: true });
         total -= f.bytes;
         result.removed.push(f.name);
@@ -228,7 +289,8 @@ function summaryFromFile(file: string): ServedVirtualGeometry['summary'] {
         const h = parseSbvgHeader(new Uint8Array(all.buffer, all.byteOffset, all.byteLength));
         return {
             sourceTriangles: h.sourceTriangleCount, leafTriangles: h.leafTriangleCount, clusterCount: h.clusterCount,
-            levelCount: h.levelCount, fileBytes: h.fileBytes, skippedPrimitives: h.skippedPrimitives, droppedDegenerate: h.droppedDegenerate
+            levelCount: h.levelCount, fileBytes: h.fileBytes, skippedPrimitives: h.skippedPrimitives, droppedDegenerate: h.droppedDegenerate,
+            atlasCount: h.atlasCount
         };
     } finally {
         fs.closeSync(fd);
@@ -278,6 +340,7 @@ export class VirtualGeometryBuildService {
                         sourceCode: VIRTUAL_GEOMETRY_BUILDER_SOURCE,
                         includeDirs: [this.compiler.getSdkIncludePath()],
                         flags: BUILDER_FLAGS,
+                        libs: BUILDER_LIBS,
                         name: 'sbvg_builder'
                     });
                     this.compileMs = result.cacheHit ? 0 : result.compileMs;
@@ -300,10 +363,12 @@ export class VirtualGeometryBuildService {
         if (signal?.aborted) throw abortError();
         fs.mkdirSync(path.dirname(outputSbvgPath), { recursive: true });
         const tmp = `${outputSbvgPath}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+        // Atlas PNGs land next to the file under its final name; they are complete before the rename makes the file visible.
+        const atlasStem = path.basename(outputSbvgPath, '.sbvg');
         const start = Date.now();
         try {
             const stdout = await new Promise<string>((resolve, reject) => {
-                execFile(binary, [inputGlbPath, tmp], { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, signal, killSignal: 'SIGKILL' }, (err, out, stderr) => {
+                execFile(binary, [inputGlbPath, tmp, atlasStem], { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, signal, killSignal: 'SIGKILL' }, (err, out, stderr) => {
                     if (err) {
                         (err as any).stderr = stderr;
                         reject(err);
@@ -317,6 +382,7 @@ export class VirtualGeometryBuildService {
             return { sbvgPath: outputSbvgPath, stats, compileMs: this.compileMs, buildMs: Date.now() - start };
         } catch (err: any) {
             fs.rmSync(tmp, { force: true });
+            for (const sibling of atlasSiblings(outputSbvgPath)) fs.rmSync(sibling, { force: true });
             if (err instanceof VirtualGeometryBuildError) throw err;
             if (signal?.aborted || err?.name === 'AbortError') throw abortError();
             if (err?.killed) throw new VirtualGeometryBuildError(`Virtual geometry build timed out after ${Math.round(timeoutMs / 1000)} s`, err?.stderr);

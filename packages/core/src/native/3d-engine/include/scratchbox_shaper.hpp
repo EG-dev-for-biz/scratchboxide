@@ -573,10 +573,318 @@ public:
     }
 };
 
+class Sweep3D {
+public:
+    struct Frame {
+        Vec3 origin;
+        Vec3 tangent;
+        Vec3 normal;    // first transverse axis
+        Vec3 binormal;  // second transverse axis (tangent x normal)
+    };
+
+    /**
+     * Rotation-minimizing frames along a polyline carrier curve, via the double
+     * reflection method (Wang, Jüttler, Zheng, Liu — "Computation of Rotation
+     * Minimizing Frames", ACM TOG 2008). Unlike a per-segment Frenet or
+     * Gram-Schmidt frame, the transverse axes are propagated from the previous
+     * frame rather than re-derived from local curvature, so they don't flip or
+     * spin at inflection points, straight runs, or near-parallel tangents —
+     * the artifact a naive per-segment frame produces when sweeping a profile
+     * along a general carrier curve (limbs, hoses, struts, coils).
+     */
+    static std::vector<Frame> rotationMinimizingFrames(
+        const std::vector<Vec3>& curve,
+        Vec3 initialNormalHint = Vec3(0, 1, 0)
+    ) {
+        std::vector<Frame> frames;
+        size_t n = curve.size();
+        if (n < 2) return frames;
+        frames.resize(n);
+
+        std::vector<Vec3> tangent(n);
+        for (size_t i = 0; i < n; ++i) {
+            Vec3 dir = (i + 1 < n ? curve[i + 1] : curve[i]) - (i > 0 ? curve[i - 1] : curve[i]);
+            tangent[i] = dir.length() > 1e-8f ? dir.normalized() : Vec3(0, 0, 1);
+        }
+
+        // Seed frame 0: orthogonalize the hint normal against the tangent.
+        Vec3 t0 = tangent[0];
+        Vec3 hint = initialNormalHint;
+        if (std::abs(hint.normalized().dot(t0)) > 0.999f) {
+            hint = (std::abs(t0.y) < 0.9f) ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+        }
+        Vec3 n0 = (hint - t0 * t0.dot(hint)).normalized();
+        frames[0] = { curve[0], t0, n0, t0.cross(n0).normalized() };
+
+        for (size_t i = 0; i + 1 < n; ++i) {
+            const Frame& Fi = frames[i];
+            Vec3 v1 = curve[i + 1] - curve[i];
+            float c1 = v1.dot(v1);
+
+            Vec3 rL = Fi.normal;
+            Vec3 tL = Fi.tangent;
+            if (c1 > 1e-12f) {
+                rL = Fi.normal - v1 * (2.0f / c1 * v1.dot(Fi.normal));
+                tL = Fi.tangent - v1 * (2.0f / c1 * v1.dot(Fi.tangent));
+            }
+
+            Vec3 tNext = tangent[i + 1];
+            Vec3 v2 = tNext - tL;
+            float c2 = v2.dot(v2);
+
+            Vec3 rNext = rL;
+            if (c2 > 1e-12f) {
+                rNext = rL - v2 * (2.0f / c2 * v2.dot(rL));
+            }
+            rNext = (rNext - tNext * tNext.dot(rNext)).normalized();
+
+            frames[i + 1] = { curve[i + 1], tNext, rNext, tNext.cross(rNext).normalized() };
+        }
+
+        return frames;
+    }
+
+    /**
+     * Sweeps a 2D profile along an arbitrary carrier curve using rotation-minimizing
+     * frames, with optional continuous twist (radians, end-to-end) and non-uniform
+     * scale (end-to-end lerp). Produces slices consumable directly by Loft3D::skin.
+     */
+    static ScratchboxMesh sweep(
+        const std::vector<Vec3>& curve,
+        const std::vector<Vec2>& profile,
+        float totalTwistRad = 0.0f,
+        float startScale = 1.0f,
+        float endScale = 1.0f,
+        bool closeEnds = true,
+        const Vec4& color = {0.8f, 0.85f, 0.9f, 1.0f}
+    ) {
+        if (curve.size() < 2 || profile.size() < 3) return ScratchboxMesh("swept_mesh");
+
+        std::vector<Frame> frames = rotationMinimizingFrames(curve);
+        std::vector<std::vector<Vec3>> slices(frames.size());
+
+        for (size_t i = 0; i < frames.size(); ++i) {
+            float t = static_cast<float>(i) / static_cast<float>(frames.size() - 1);
+            float twist = t * totalTwistRad;
+            float scale = startScale + (endScale - startScale) * t;
+            float cosA = std::cos(twist);
+            float sinA = std::sin(twist);
+
+            const Frame& f = frames[i];
+            slices[i].reserve(profile.size());
+            for (const Vec2& p : profile) {
+                float x = (p.x * cosA - p.y * sinA) * scale;
+                float y = (p.x * sinA + p.y * cosA) * scale;
+                slices[i].push_back(f.origin + f.normal * x + f.binormal * y);
+            }
+        }
+
+        ScratchboxMesh mesh = Loft3D::skin(slices, closeEnds, color);
+        mesh.name = "swept_mesh";
+        return mesh;
+    }
+};
+
+class Replicator3D {
+public:
+    /**
+     * Repeats a seed mesh at a continuous pitch along a carrier curve (bolt circles on a
+     * closed loop, louvres, teeth, treads), oriented by rotation-minimizing frames so each
+     * instance follows the carrier's local tangent/normal/binormal rather than staying
+     * axis-aligned. The seed's local +Z maps to the carrier tangent, +X to the frame normal,
+     * +Y to the binormal.
+     *
+     * fitToLength spaces instances evenly from the curve's start to its end (so the last
+     * instance always lands exactly at the end); otherwise instances step at a fixed pitch
+     * from the start and may leave a remainder gap. mergeDistance welds coincident vertices
+     * between neighboring instances (the artifact naive per-instance duplication produces at
+     * a shared seam, e.g. adjoining tread teeth) — 0 disables welding.
+     */
+    static ScratchboxMesh alongCurve(
+        const ScratchboxMesh& seed,
+        const std::vector<Vec3>& curve,
+        float pitch,
+        float mergeDistance = 0.0f,
+        bool fitToLength = true
+    ) {
+        ScratchboxMesh out("replicated_mesh");
+        if (curve.size() < 2 || pitch <= 1e-6f || seed.vertices.empty()) return out;
+
+        std::vector<float> cum(curve.size(), 0.0f);
+        for (size_t i = 1; i < curve.size(); ++i) cum[i] = cum[i - 1] + (curve[i] - curve[i - 1]).length();
+        float total = cum.back();
+        if (total < 1e-6f) return out;
+
+        int count = std::max(1, fitToLength
+            ? static_cast<int>(std::lround(total / pitch)) + 1
+            : static_cast<int>(std::floor(total / pitch)) + 1);
+        std::vector<float> arcLens(static_cast<size_t>(count));
+        for (int i = 0; i < count; ++i) {
+            arcLens[static_cast<size_t>(i)] = fitToLength
+                ? (count > 1 ? total * static_cast<float>(i) / static_cast<float>(count - 1) : 0.0f)
+                : std::min(total, pitch * static_cast<float>(i));
+        }
+
+        // An augmented curve carrying every original vertex plus every exact instance
+        // position, inserted at its true arc-length place, so one rotation-minimizing-frame
+        // pass gives correctly propagated frames at the instance points directly, instead of
+        // re-deriving curvature locally at each one (which is what produces per-instance twist).
+        std::vector<Vec3> augmented;
+        std::vector<int> instanceFrame(static_cast<size_t>(count), -1);
+        augmented.push_back(curve[0]);
+        size_t ai = 0;
+        auto stampAt = [&](float arc) {
+            while (ai < arcLens.size() && arcLens[ai] <= arc + 1e-5f) {
+                instanceFrame[ai] = static_cast<int>(augmented.size()) - 1;
+                ++ai;
+            }
+        };
+        stampAt(cum[0]);
+        for (size_t i = 1; i < curve.size(); ++i) {
+            float segStart = cum[i - 1], segEnd = cum[i];
+            while (ai < arcLens.size() && arcLens[ai] < segEnd - 1e-5f) {
+                float t = (arcLens[ai] - segStart) / std::max(1e-9f, segEnd - segStart);
+                augmented.push_back(curve[i - 1] + (curve[i] - curve[i - 1]) * t);
+                instanceFrame[ai] = static_cast<int>(augmented.size()) - 1;
+                ++ai;
+            }
+            augmented.push_back(curve[i]);
+            stampAt(segEnd);
+        }
+        while (ai < arcLens.size()) { instanceFrame[ai] = static_cast<int>(augmented.size()) - 1; ++ai; }
+
+        std::vector<Sweep3D::Frame> frames = Sweep3D::rotationMinimizingFrames(augmented);
+
+        for (int i = 0; i < count; ++i) {
+            int fi = instanceFrame[static_cast<size_t>(i)];
+            if (fi < 0 || static_cast<size_t>(fi) >= frames.size()) continue;
+            const Sweep3D::Frame& f = frames[static_cast<size_t>(fi)];
+
+            ScratchboxMesh instance = seed;
+            for (auto& v : instance.vertices) {
+                Vec3 local = v.position;
+                v.position = f.origin + f.normal * local.x + f.binormal * local.y + f.tangent * local.z;
+                Vec3 n = f.normal * v.normal.x + f.binormal * v.normal.y + f.tangent * v.normal.z;
+                v.normal = n.length() > 1e-8f ? n.normalized() : v.normal;
+                Vec3 tanXyz(v.tangent.x, v.tangent.y, v.tangent.z);
+                Vec3 t = f.normal * tanXyz.x + f.binormal * tanXyz.y + f.tangent * tanXyz.z;
+                if (t.length() > 1e-8f) { t = t.normalized(); v.tangent = Vec4(t.x, t.y, t.z, v.tangent.w); }
+            }
+            instance.recomputeBounds();
+            out.append(instance);
+        }
+
+        if (mergeDistance > 1e-9f) weldCoincidentVertices(out, mergeDistance);
+        out.recomputeBounds();
+        return out;
+    }
+
+    /**
+     * Repeats a seed mesh over a flat lattice: pitchU/pitchV spacing, countU x countV
+     * instances, with alternating rows offset by rowOffsetU (brick-style bonding) when
+     * alternateRows is set. originNormal/originTangent/originBinormal place the lattice
+     * plane in world space (defaults: XZ plane, Y up). mergeDistance welds coincident
+     * vertices between neighboring instances, as in alongCurve.
+     */
+    static ScratchboxMesh onGrid(
+        const ScratchboxMesh& seed,
+        int countU, int countV,
+        float pitchU, float pitchV,
+        float rowOffsetU = 0.0f,
+        bool alternateRows = false,
+        float mergeDistance = 0.0f,
+        const Vec3& origin = Vec3(0, 0, 0),
+        const Vec3& axisU = Vec3(1, 0, 0),
+        const Vec3& axisV = Vec3(0, 0, 1)
+    ) {
+        ScratchboxMesh out("replicated_grid_mesh");
+        if (countU < 1 || countV < 1 || seed.vertices.empty()) return out;
+
+        for (int j = 0; j < countV; ++j) {
+            float rowShift = (alternateRows && (j % 2 != 0)) ? rowOffsetU : 0.0f;
+            for (int i = 0; i < countU; ++i) {
+                Vec3 offset = origin + axisU * (static_cast<float>(i) * pitchU + rowShift) + axisV * (static_cast<float>(j) * pitchV);
+                ScratchboxMesh instance = seed;
+                for (auto& v : instance.vertices) v.position += offset;
+                instance.recomputeBounds();
+                out.append(instance);
+            }
+        }
+
+        if (mergeDistance > 1e-9f) weldCoincidentVertices(out, mergeDistance);
+        out.recomputeBounds();
+        return out;
+    }
+
+private:
+    /**
+     * Merge-by-distance: welds vertices within epsilon of each other (the artifact naive
+     * per-instance duplication leaves at a shared seam between adjoining replicated copies),
+     * via a uniform spatial hash so it stays near-linear instead of all-pairs.
+     */
+    static void weldCoincidentVertices(ScratchboxMesh& mesh, float epsilon) {
+        if (mesh.vertices.empty()) return;
+        float cell = std::max(epsilon, 1e-6f);
+        auto keyOf = [&](const Vec3& p) {
+            return std::array<int64_t, 3>{
+                static_cast<int64_t>(std::floor(p.x / cell)),
+                static_cast<int64_t>(std::floor(p.y / cell)),
+                static_cast<int64_t>(std::floor(p.z / cell))
+            };
+        };
+        std::map<std::array<int64_t, 3>, std::vector<uint32_t>> grid;
+        for (uint32_t i = 0; i < mesh.vertices.size(); ++i) grid[keyOf(mesh.vertices[i].position)].push_back(i);
+
+        std::vector<uint32_t> remap(mesh.vertices.size());
+        std::vector<uint8_t> resolved(mesh.vertices.size(), 0);
+        float eps2 = epsilon * epsilon;
+
+        for (uint32_t i = 0; i < mesh.vertices.size(); ++i) {
+            if (resolved[i]) continue;
+            remap[i] = i;
+            resolved[i] = 1;
+            auto k = keyOf(mesh.vertices[i].position);
+            for (int64_t dx = -1; dx <= 1; ++dx)
+            for (int64_t dy = -1; dy <= 1; ++dy)
+            for (int64_t dz = -1; dz <= 1; ++dz) {
+                auto it = grid.find({k[0] + dx, k[1] + dy, k[2] + dz});
+                if (it == grid.end()) continue;
+                for (uint32_t j : it->second) {
+                    if (resolved[j] || j <= i) continue;
+                    if ((mesh.vertices[j].position - mesh.vertices[i].position).lengthSq() <= eps2) {
+                        remap[j] = i;
+                        resolved[j] = 1;
+                    }
+                }
+            }
+        }
+
+        std::vector<uint32_t> newIndexOf(mesh.vertices.size(), std::numeric_limits<uint32_t>::max());
+        std::vector<Vertex> newVerts;
+        newVerts.reserve(mesh.vertices.size());
+        for (uint32_t i = 0; i < mesh.vertices.size(); ++i) {
+            uint32_t root = remap[i];
+            if (newIndexOf[root] == std::numeric_limits<uint32_t>::max()) {
+                newIndexOf[root] = static_cast<uint32_t>(newVerts.size());
+                newVerts.push_back(mesh.vertices[root]);
+            }
+            newIndexOf[i] = newIndexOf[root];
+        }
+        for (auto& idx : mesh.indices) idx = newIndexOf[idx];
+        mesh.vertices = std::move(newVerts);
+    }
+};
+
 class Lathe3D {
 public:
     /**
      * Revolve a 2D profile curve around an axis to produce a watertight manifold.
+     *
+     * A full 2*PI sweep welds the seam ring (reuses the first ring's vertices
+     * instead of duplicating a coincident one at the end) so smooth normals
+     * blend across it instead of leaving a visible shading seam. A partial
+     * sweep instead caps both open ends with a fan of the profile polyline, so
+     * "watertight" holds for any totalAngleRad, not just the full circle.
      */
     static ScratchboxMesh revolve(
         const std::vector<Vec2>& profilePoints,
@@ -588,7 +896,10 @@ public:
         if (profilePoints.size() < 2 || radialSegments < 3) return mesh;
 
         size_t pts = profilePoints.size();
-        for (int s = 0; s <= radialSegments; ++s) {
+        bool isFullSweep = std::abs(totalAngleRad - TWO_PI) < 1e-4f;
+        int ringCount = isFullSweep ? radialSegments : (radialSegments + 1);
+
+        for (int s = 0; s < ringCount; ++s) {
             float u = static_cast<float>(s) / radialSegments;
             float angle = u * totalAngleRad;
             float cosA = std::cos(angle);
@@ -606,8 +917,8 @@ public:
         }
 
         for (int s = 0; s < radialSegments; ++s) {
-            uint32_t s0 = static_cast<uint32_t>(s * pts);
-            uint32_t s1 = static_cast<uint32_t>((s + 1) * pts);
+            uint32_t s0 = static_cast<uint32_t>((s % ringCount) * pts);
+            uint32_t s1 = static_cast<uint32_t>(((s + 1) % ringCount) * pts);
 
             for (size_t p = 0; p + 1 < pts; ++p) {
                 uint32_t i0 = s0 + static_cast<uint32_t>(p);
@@ -618,6 +929,20 @@ public:
                 mesh.addTriangle(i0, i1, i2);
                 mesh.addTriangle(i0, i2, i3);
             }
+        }
+
+        if (!isFullSweep) {
+            // Fan-cap the profile polyline at each open end (angle = 0 and angle = totalAngleRad).
+            auto capFan = [&](int ring, bool flip) {
+                uint32_t base = static_cast<uint32_t>(ring * pts);
+                for (size_t p = 1; p + 1 < pts; ++p) {
+                    uint32_t i0 = base, i1 = base + static_cast<uint32_t>(p), i2 = base + static_cast<uint32_t>(p + 1);
+                    if (flip) mesh.addTriangle(i0, i2, i1);
+                    else mesh.addTriangle(i0, i1, i2);
+                }
+            };
+            capFan(0, true);
+            capFan(ringCount - 1, false);
         }
 
         mesh.recomputeSmoothNormals();

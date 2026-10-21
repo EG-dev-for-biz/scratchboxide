@@ -426,7 +426,9 @@ export type GraphNodeCategory =
     | 'video-card'  // Video Card Node
     | 'audio'       // Audio Card
     | 'audio-card'  // Audio Card Node
-    | '3d-card';    // 3D Scene Card Node
+    | '3d-card'     // 3D Scene Card Node
+    | (string & {}); // Open extension: any domain-specific node kind (e.g. mesh tiers, pipeline stages)
+                     // a projection may need — never gate execution logic on this string.
 
 export type GraphExecutionStatus = 'active' | 'pending' | 'running' | 'completed' | 'error';
 
@@ -468,6 +470,14 @@ export interface NodeGraphData {
     edges: GraphEdge[];
     selectedNodeId?: string;
     viewport?: { x: number; y: number; zoom: number };
+    /**
+     * When this graph is a real decomposition of another artifact (e.g. a 3D
+     * scene's meshes), carries that artifact's type and data so morphing the
+     * graph back preserves what wasn't touched instead of re-synthesizing from
+     * nothing. `type` is open on purpose — any domain's structured data can be
+     * the graph's source, not just 3D scenes.
+     */
+    sourceArtifact?: { type: PrimitiveType | (string & {}); data: unknown };
 }
 
 // ==========================================
@@ -1129,6 +1139,19 @@ export interface Scene3DData {
         shading?: 'clay' | 'clusters' | 'lod-levels';
         /** Render back faces too (for meshes with inconsistent winding). */
         doubleSided?: boolean;
+        /**
+         * Progressive Metal path tracing of the LOD cut (macOS, a ray tracing GPU), drawn over the
+         * WebGPU view with the source GLB's materials. Lighting is the neutral studio dome unless a sun
+         * is set. Off by default.
+         */
+        pathTrace?: {
+            enabled?: boolean;
+            sun?: { elevationDeg: number; azimuthDeg: number };
+            /** Samples per pixel a view accumulates to (default 256). */
+            targetSpp?: number;
+            /** Trace at this fraction of the view size (0.25 to 1, default 1) and let MetalFX scale the frame up. */
+            renderScale?: number;
+        };
         buildStats?: {
             sourceTriangles: number;
             clusterCount: number;

@@ -74,6 +74,10 @@ describe('parseStagedLocationArgs', () => {
         expect(() => parseStagedLocationArgs('t', { retryRunId: 'xyz', retryStage: 'vision' })).toThrow(/retryRunId of 8 hex digits/);
         expect(() => parseStagedLocationArgs('t', { retryRunId: 'a1b2c3d4', retryStage: 'dessert' })).toThrow(/retryStage of resolve, tiles/);
         expect(() => parseStagedLocationArgs('t', { retryRunId: 'a1b2c3d4' })).toThrow(/retryStage/);
+        // resume: the run alone, no stage; never together with a retry
+        expect(parseStagedLocationArgs('t', { resumeRunId: 'a1b2c3d4' }).resume).toEqual({ runId: 'a1b2c3d4' });
+        expect(() => parseStagedLocationArgs('t', { resumeRunId: 'zz' })).toThrow(/resumeRunId of 8 hex digits/);
+        expect(() => parseStagedLocationArgs('t', { resumeRunId: 'a1b2c3d4', retryRunId: 'a1b2c3d4', retryStage: 'vision' })).toThrow(/either resumeRunId or retryRunId/);
         const retry = parseStagedLocationArgs('t', { retryRunId: 'a1b2c3d4', retryStage: 'vision' });
         expect(retry.retry).toEqual({ runId: 'a1b2c3d4', stage: 'vision' });
         expect(retry.request.query).toBe('');
