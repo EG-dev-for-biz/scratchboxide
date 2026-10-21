@@ -77,7 +77,7 @@ describe('a district', () => {
         expect(result.status).toBe('complete');
         // the stage order a user watches
         const committed = s.events.filter(x => x.e.status === 'committed' && x.e.stage !== 'finish').map(x => x.e.stage);
-        expect(committed).toEqual(['resolve', 'tiles', 'trees-measure', 'remesh', 'trees']);
+        expect(committed).toEqual(['resolve', 'tiles', 'trees-measure', 'remesh', 'trees', 'textures']);
         expect(statusOf(s.events, 'fit')).toEqual(['skipped']);
         expect(s.events.find(x => x.e.stage === 'fit')!.e).toMatchObject({ status: 'skipped' });
         expect(result.stages.find(x => x.stage === 'fit')!.reason).toBe('not an isolated structure');
@@ -86,7 +86,8 @@ describe('a district', () => {
         expect(new Set(arts.map(a => a.id))).toEqual(new Set(['scene-stg-a1b2c301']));
         expect(new Set(arts.map(a => JSON.stringify(a.data.camera))).size).toBe(1);
         expect(s.events.filter(x => x.e.status === 'running').every(x => !x.artifact)).toBe(true);
-        expect(arts.map(a => a.data.objects.length)).toEqual([1, 2, 3, 3]);
+        // tiles, remesh, trees, textures (the remesh's twin is a variant of the same object, not a new one), finish
+        expect(arts.map(a => a.data.objects.length)).toEqual([1, 2, 3, 3, 3]);
         for (const a of arts) expect(validateContract('StagedBuildState', a.data.stagedBuild)).toEqual([]);
         // seq strictly increases
         const seqs = s.events.map(x => x.e.seq);

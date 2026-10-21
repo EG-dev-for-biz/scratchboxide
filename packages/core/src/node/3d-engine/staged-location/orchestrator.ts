@@ -422,6 +422,8 @@ class StagedRun {
     private closed = false;
     /** The active scene this run is staged into, split (kept-structure.ts); set once the place is resolved. */
     carried?: ActiveScenePartition;
+    /** A district's remesh took the scan's own textures as its twin (the textures stage). */
+    scanTextures?: { layer: string; treesTakenOut: boolean };
     /** Applied to every layer as it commits (the district without the kept structure's own scan); it may return the layer unchanged. */
     layerTransform?: (layer: StagedLayer, meta: StagedLayerObjectMeta) => StagedLayer;
 
@@ -905,6 +907,8 @@ function keptStructureCarver(run: StagedRun, cache: StageCache, base: string): (
     let measured = false;
     return (layer, meta) => {
         if (meta.source !== 'Google3DTilesClay' || meta.vegetation) return layer;
+        // a layer committed again with more (a textured twin) keeps the carve it already has
+        if (/_around_[0-9a-f]{8}\.glb$/.test(layer.url)) return layer;
         const carried = run.carried!;
         if (!measured) {
             measured = true;
@@ -3241,8 +3245,42 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // the figures stage starts inside the rebuild, after the line above built its list, so it is awaited here: finishing before it would
         // stop it ("not started before the run ended") whenever every other stage came from cache
         const late = await Promise.allSettled(siblings);
-        // the texture pass starts inside the rebuild; a run that never reached it (no isolated structure, no fitter) says why
-        runner.skip('textures', request.isolate ? 'the rebuild did not reach the texture pass (no remeshed, fitted structure)' : 'the texture pass runs on an isolated structure');
+        // the texture pass starts inside the rebuild; a run that never reached it (no fitter) says why. A district (no isolated
+        // structure) has no per-wall pass: its remesh gets the scan's own photogrammetric textures as its textured twin.
+        if (request.isolate) {
+            runner.skip('textures', 'the rebuild did not reach the texture pass (no remeshed, fitted structure)');
+        } else if (run.summary('textures').status === 'pending') {
+            await runner.stage({
+                id: 'textures',
+                run: async () => {
+                    const l2 = run.state.layers.find(l => l.layer === 'l2' && !l.retired);
+                    if (!l2) return { status: 'skipped', source: '', reason: 'there is no remeshed district to texture' };
+                    // the scan with its trees taken out when they were regrown (else the trees would show twice); the raw scan otherwise
+                    const treesGrown = run.state.layers.some(l => l.layer === 'l5' && !l.retired);
+                    const source = strip?.devegetatedGlb ?? (treesGrown ? undefined : extraction.texturedGlb);
+                    if (!source || !fs.existsSync(source)) {
+                        return { status: 'skipped', source: '', reason: 'the trees were regrown but the tree-stripped scan is not on disk, so the scan\'s textures would show its trees twice' };
+                    }
+                    const key8 = l2.objectId.split('-')[1] ?? 'district';
+                    const pub = cache.publishFile(source, `${base}_l2_tex_${key8}.glb`);
+                    const rung = TEXTURE_LADDER_RUNGS.indexOf('tile photo transfer');
+                    const rungShares = TEXTURE_LADDER_RUNGS.map((_, i) => (i === rung ? 1 : 0));
+                    const updated: StagedLayer = {
+                        ...l2,
+                        textured: {
+                            url: pub.url, bytes: pub.bytes, ladderRung: rung, rungShares,
+                            provenance: [{ source: 'tile-extraction', label: PROVENANCE.asScanned, method: `Google Photorealistic 3D Tiles photogrammetric textures, as downloaded${strip ? ', trees taken out' : ''} (a district has no per-wall texture pass)`, coverage: 1 }],
+                            confidenceChannels: 'none: the scan\'s own textures, no per-texel confidence',
+                            builtAtMs: now(), cached: !!strip?.cached
+                        }
+                    };
+                    run.commit(updated, run.layerMeta[l2.objectId]);
+                    run.state.texturePass = { status: 'committed', layersDone: 1, layersTotal: 1, rungShares, message: 'the scan\'s photogrammetric textures' };
+                    run.scanTextures = { layer: 'l2', treesTakenOut: !!strip };
+                    return { status: 'committed', source: 'Google Photorealistic 3D Tiles: the photogrammetric textures of the scan', layers: [updated], cached: !!strip?.cached };
+                }
+            });
+        }
         const failure = [...settled, ...late].find((r): r is PromiseRejectedResult => r.status === 'rejected');
         if (failure) throw failure.reason;
         const treesOut = (settled[0] as PromiseFulfilledResult<Awaited<typeof treesPromise>>).value;
@@ -3496,6 +3534,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
         ...(exemptInferred.length ? { exemptInferred } : {}),
         ...(gate.exemptionsRefused.length || refusedHere.length ? { exemptionsRefused: [...refusedHere, ...gate.exemptionsRefused] } : {}),
         droppedNotResolvable: f.rebuild.droppedNotResolvable,
+        ...(run.scanTextures ? { scanTextures: run.scanTextures } : {}),
         ...(f.textures ? { textures: { shares: f.textures.shares, views: f.textures.views, modelsUsed: f.textures.modelsUsed, layers: f.textures.layers.map(l => l.layer), totalMs: f.textures.record.timingsMs.total ?? 0, ...(f.textures.tileUnavailable ? { tileUnavailable: f.textures.tileUnavailable } : {}), ...(f.textures.viewsUnavailable ? { viewsUnavailable: f.textures.viewsUnavailable } : {}) } } : {})
     };
     const switchPills = buildSwitchLocationPills({ ...f.place, ...(f.place.alternatives?.length ? { alternatives: f.place.alternatives } : {}) }, { query: f.request.query, isolate: f.request.isolate, radiusM: f.request.radiusM, trees: f.request.trees, stageIntoActiveScene: f.request.stageIntoActiveScene });
