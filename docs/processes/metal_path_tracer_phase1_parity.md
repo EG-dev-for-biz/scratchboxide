@@ -177,8 +177,21 @@ The first two alone could not continue the DAG: they removed the stuck groups bu
 
 A quarter of the triangles for a lower error at 8 px, and the 24 px cut goes from shards to whole buildings (crops in the chat log). This reopens the coarse bounce cut measured and rejected in Phases 5 and 6: that bias was geometric, from levels with 9-44 m of error; those levels now carry 1.7-3.6 m at the same triangle counts.
 
+**Coarse bounce cut, re-measured on the deep DAG** (bench camera, 195k-triangle primary cut, 64 spp, 8x8-block bias against the baseline):
+
+| variant | bounce tris | speed | block bias | Phase 6 bias |
+| :-- | --: | --: | :-- | --: |
+| bounce-cut-4px (shadows and bounces) | 87k | 1.12x | 4.7% (max 582%, 24% of blocks over 2%) | - |
+| bounce-cut-8px | 56k | 1.19x | 8.3% (max 983%, 27%) | 8.4% |
+| bounce-cut-16px | 38k | 1.24x | 15.0% (max 1934%, 31%) | - |
+| gi-cut-4px (bounce light only) | 87k | 1.08x | 1.6% (max 53%, 20%) | - |
+| gi-cut-8px | 56k | 1.13x | 2.1% (max 90%, 24%) | 1.9% |
+| gi-cut-16px | 38k | 1.17x | 2.7% (max 155%, 27%) | 2.6% |
+
+The bias is the same as on the 7-level DAG although those levels went from 9-44 m of error to 1.7-3.6 m, so it was never the shattered geometry: it is the offset between the fine surface a path hits and any coarser surface its next ray is traced against. A shadow ray leaving a fine hit finds the coarse wall in front of it (black blocks) or behind it (light leaks through a street canyon, the 10x blocks), and metres of offset do that as well as tens. **Rejected again, for good**: a bounce cut only works where the coarse surface sits within the ray's own offset epsilon, which on a scanned city means the 1 px cut. The bench flags stay for the record. The honest speed path for bounces remains fewer samples (Sobol) and fewer pixels (MetalFX).
+
 ## Next (plan)
 
-- Re-measure the coarse bounce cut on the new DAG (`bench_sbvg_pathtracer.cjs`, bounce-cut-{4,8,16}px); metallic-roughness atlases; a quad-aware pairing to lift the 81% paired share.
+- Metallic-roughness atlases; a quad-aware pairing to lift the 81% paired share; a sky-occlusion or light-cut for the far field (a different question from the bounce cut: coarse geometry as an occluder for rays that start far from it, not next to it).
 - Phase 4: the a-trous denoiser on the GPU and temporal reuse.
 - Rays: rasterize the camera hit with the existing WebGPU cluster pass; coarser cuts for bounce and shadow rays; any-hit shadow rays (done); merged per-chunk acceleration structures; better samplers; MetalFX upscale.

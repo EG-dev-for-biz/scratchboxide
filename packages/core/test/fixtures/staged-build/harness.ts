@@ -20,7 +20,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import * as THREE from 'three';
 import { Scene3DPrimitive } from '../../../src/browser/generative-canvas/primitives/Scene3DPrimitive';
 import { stagedRevealStats } from '../../../src/browser/generative-canvas/primitives/scene3d/stagedBuild/useStagedBuild';
-import { stagedMaterialUniforms, stagedPartUniforms } from '../../../src/browser/generative-canvas/primitives/scene3d/stagedBuild/revealMaterial';
+import { isStagedMaterial, stagedKindOf, stagedMaterialUniforms, stagedPartUniforms } from '../../../src/browser/generative-canvas/primitives/scene3d/stagedBuild/revealMaterial';
 import { PART_ATTRIBUTE, mergedPartsOf } from '../../../src/browser/generative-canvas/primitives/scene3d/stagedBuild/mergeStagedParts';
 import { publishStageEvent } from '../../../src/browser/generative-canvas/primitives/scene3d/stagedBuild/stagedBuildState';
 import '../../../src/style.css';
@@ -332,6 +332,26 @@ w.sbHarness = {
     attached: (id: string) => !!w.__SB_3D_EXTERNAL_OBJECTS__?.get(id)?.parent,
     ready: () => !!w.__SB_3D_STACK__,
     setReference: () => { reference = readPixels().data.slice(); },
+    /** Pixels within `tol` (per channel) of an sRGB colour: how much of the frame wears the work sweep's accent. */
+    tinted: (r: number, g: number, b: number, tol = 40) => {
+        const { data, width, height } = readPixels();
+        let n = 0;
+        for (let i = 0; i < width * height; i++) {
+            const o = i * 4;
+            if (Math.abs(data[o] - r) <= tol && Math.abs(data[o + 1] - g) <= tol && Math.abs(data[o + 2] - b) <= tol) n++;
+        }
+        return n;
+    },
+    /** The work-sweep uniforms each mesh of a model wears (null where the mesh has no staged material). */
+    workUniforms: (id: string) => {
+        const out: Array<{ name: string; kind: string | null; work: unknown }> = [];
+        w.__SB_3D_EXTERNAL_OBJECTS__?.get(id)?.traverse((o: THREE.Object3D) => {
+            const m = (o as THREE.Mesh).material as THREE.Material | undefined;
+            if (!m || Array.isArray(m)) return;
+            out.push({ name: o.name, kind: isStagedMaterial(m) ? stagedKindOf(m) ?? null : null, work: isStagedMaterial(m) ? stagedMaterialUniforms(m)?.work ?? null : null });
+        });
+        return out;
+    },
     /** Keeps the current frame under a name (it survives a remount), for frame-to-frame comparisons. */
     keepFrame: (name: string) => { kept.set(name, readPixels().data.slice()); return kept.get(name)!.length; },
     /** How two kept frames differ: the largest channel difference, and the pixels that differ by more than `threshold`. */

@@ -1,8 +1,8 @@
 # Process: Node-Graph ⇄ 3D Scene Write-Back Loop — Live UI Verification
 
-> **Recorded:** 2026-10-20 (updated same day — see §6 and §7 addenda)
-> **Status:** Verified — reachability gap closed, GLB decomposition gap closed, all live-tested on real generated scenes
-> **Tags:** `operate-scratchbox` `node-graph` `3d-scene` `primitive-transformer-engine` `direct-dispatch-operator-engine` `morph-canvas-primitive` `glb-parsing`
+> **Recorded:** 2026-10-20 (updated same day — see §6, §7 and §8 addenda)
+> **Status:** Verified — reachability gap closed, GLB decomposition gap closed, operator-history DAG added; all mechanisms unit-tested against real operator dispatches, decomposition live-tested on real generated scenes
+> **Tags:** `operate-scratchbox` `node-graph` `3d-scene` `primitive-transformer-engine` `direct-dispatch-operator-engine` `morph-canvas-primitive` `glb-parsing` `operator-stack-dag`
 > **Target Domain:** Generative Canvas — 3D Scene ⇄ Node Graph Primitive Morphing
 
 ---
@@ -82,6 +82,16 @@ Wired the same pattern into `KanbanBoardPrimitive.tsx` as the second primitive (
 **Live-verified:** generated a real kanban board through chat ("Mobile App Launch Roadmap", 3 columns × 2 cards), clicked View As → Node Graph, got the exact real count: "6 cards across 3 stages, projected from the live board." Screenshot sent to the user.
 
 4 new unit tests (`kanban-node-graph-writeback.test.ts`) cover: real per-card decomposition, honest zero-node output for an empty board, write-back editing one card without perturbing others, and the full `morphArtifact` round trip recovering the base board automatically via `sourceArtifact`. 12 tests total across 5 files, all passing; `tsc --noEmit` clean.
+
+## 9. Addendum (2026-10-20, same day): Phase 3 — Operator-History DAG
+
+Audited `operatorStack` population before building anything: `execute_3d_python_script` (`packages/core/src/node/gemini/tools/python-3d-tools.ts`, confirmed zero references to `operatorStack`/`actionLog`) never touches it. This is the dominant real path for **both** initial generation and — a new finding, confirmed live — natural-language edits too: asking the chat agent to "translate the first box 2 units to the left" re-ran `execute_3d_python_script` with recomputed coordinates rather than dispatching `sb_translate` through `DirectDispatchOperatorEngine`. So a Houdini-style "every edit as a DAG node" feature would be empty for both generation and ordinary chat-driven editing of a scene — not just generation, as assumed when this phase was first scoped.
+
+Built it anyway, scoped to what's real: `buildOperatorHistoryNodes` (`primitive-transformer-engine.ts`) projects `Scene3DData.operatorStack` — which **does** reliably fill once a scene is edited through the operator engine directly (the viewport's own transform/material tools, or an explicit operator-dispatch tool call) — into a real chronological DAG: one node per operator actually dispatched, chained `op[i] → op[i+1]` in true execution order, linked back to the mesh node it targeted. Nodes are marked `readOnly: true` with an `op-` id prefix (not `mesh-`), so the existing write-back loop in `morphNodeGraphToScene3D` naturally skips them — replaying an edited history entry would need a real undo/redo-aware re-execution model, explicitly out of scope.
+
+3 new tests (`operator-history-dag.test.ts`), all against real `DirectDispatchOperatorEngine.dispatch()` calls, no mocks: a scene with no `operatorStack` field shows zero operator nodes; two real dispatches (`sb_translate`, `sb_rotate`) produce a correctly chained and mesh-linked DAG with the right subtitle count; history nodes are confirmed read-only via the same id-prefix rule the write-back loop already uses. Along the way, discovered `synthesizeContextual3DScene` (the test-fixture synthesizer) dispatches operators internally during its own construction — a real non-empty baseline history, not a bug — which required fixing a stale node-count assertion in the original Phase 1 test (`contextual-multi-primitive-canvas.test.ts`) that didn't anticipate it.
+
+**Live-tested partially, not fully:** generated a real 2-box scene, asked the agent to translate one box via chat, confirmed (as predicted by the audit) that `operatorStack` stayed empty and the node graph correctly showed zero edit-history nodes rather than fabricating any. Did not complete a live test of the one path that *should* populate it (the viewport's own Translate/Move gizmo tool) — mechanism is proven correct by the 3 unit tests against the real engine, but that specific UI gesture is unconfirmed live.
 
 ## 5. Reproduction Steps
 
