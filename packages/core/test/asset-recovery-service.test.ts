@@ -206,20 +206,22 @@ describe('AssetRecoveryService', () => {
         const workspace = path.join(HOME, 'checkout-f');
         fs.mkdirSync(workspace, { recursive: true });
         store.putFile(writeFile(glbBytes(200, 1)), { servedPath: '/models/wsa_new_york_iso_l3b_8001dfec.glb', origin: 'test' });
+        // a kept structure file recovered by an earlier job: on disk again before the district is staged into the scene
+        store.putFile(writeFile(glbBytes(250, 3)), { servedPath: '/models/wsa_new_york_iso_l3c_8001dfec.glb', origin: 'test' });
         const seen: Array<Record<string, unknown>> = [];
         const rebuild: StagedRebuilder = async (req, ctx) => {
-            seen.push({ ...(req as Record<string, unknown>), scene: ctx.activeArtifact?.id });
+            seen.push({ ...(req as Record<string, unknown>), scene: ctx.activeArtifact?.id, keptOnDisk: fs.existsSync(path.join(workspace, 'public', 'models', 'wsa_new_york_iso_l3c_8001dfec.glb')) });
             store.putFile(writeFile(glbBytes(400, 2)), { servedPath: '/models/wsa_washington_square_remesh_eeeeeeee_around_5057abf7.glb', origin: 'staged-location', recipeId: 'staged:eeeeeeee' });
             return { runId: 'eeeeeeee', layers: [{ url: '/models/wsa_washington_square_remesh_eeeeeeee_around_5057abf7.glb' }] };
         };
         const service = new AssetRecoveryService(store, { workspaceRoot: workspace, rebuildStaged: rebuild });
         const job = await settled(service, service.start(
             ['/models/wsa_new_york_iso_l3b_8001dfec.glb', '/models/wsa_washington_square_remesh_711be145_around_5057abf7.glb'],
-            { fallbackStaged: { request: { query: 'Washington Square Arch', isolate: true, trees: true } }, activeArtifact: { id: 'scene-stg-8001dfec', type: '3d-scene', data: { objects: [] } } }
+            { fallbackStaged: { request: { query: 'Washington Square Arch', isolate: true, trees: true } }, activeArtifact: { id: 'scene-stg-8001dfec', type: '3d-scene', data: { objects: [{ id: 'kept', content: { durableUri: '/models/wsa_new_york_iso_l3c_8001dfec.glb' } }] } } }
         ).id);
         expect(job.items.map(i => i.outcome)).toEqual(['restored', 'rebuilt']);
         // the district run, staged into the scene; the isolated run is not asked for (no _iso file was lost)
-        expect(seen).toEqual([{ query: 'Washington Square Arch', isolate: false, trees: true, stageIntoActiveScene: true, scene: 'scene-stg-8001dfec' }]);
+        expect(seen).toEqual([{ query: 'Washington Square Arch', isolate: false, trees: true, stageIntoActiveScene: true, scene: 'scene-stg-8001dfec', keptOnDisk: true }]);
         // both files are on disk where the staged build reads kept structure files from
         expect(fs.readFileSync(path.join(workspace, 'public', 'models', 'wsa_new_york_iso_l3b_8001dfec.glb'))).toEqual(glbBytes(200, 1));
         expect(fs.readFileSync(path.join(workspace, 'public', 'models', 'wsa_washington_square_remesh_711be145_around_5057abf7.glb'))).toEqual(glbBytes(400, 2));

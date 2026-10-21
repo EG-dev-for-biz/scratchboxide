@@ -202,6 +202,9 @@ export class AssetRecoveryService {
                 continue;
             }
             const label = groups.size > 1 ? ` (${index} of ${groups.size})` : '';
+            // a run staged into the scene reads the scene's kept structure files from public/models: put every file of
+            // the scene the store holds back on disk first (they may have been recovered by an earlier job)
+            if (opts.activeArtifact && (request as { stageIntoActiveScene?: boolean }).stageIntoActiveScene) this.materializeScene(opts.activeArtifact);
             job.message = `Rebuilding ${group.items.length} file${group.items.length === 1 ? '' : 's'} from the recorded request${label}`;
             job.fraction = undefined;
             try {
@@ -250,6 +253,22 @@ export class AssetRecoveryService {
             counts.failed ? `${counts.failed} failed` : '', counts.unrecoverable ? `${counts.unrecoverable} not recoverable` : ''
         ].filter(Boolean).join(', ') || 'Nothing to recover';
         job.fraction = 1;
+    }
+
+    /** Every /models file the scene's objects point at that the store holds, written back to <workspace>/public/models. */
+    private materializeScene(scene: { data?: unknown }): void {
+        const objects = (scene.data as { objects?: Array<{ content?: { durableUri?: string } }> } | undefined)?.objects ?? [];
+        const dir = path.join(this.options.workspaceRoot, 'public', 'models');
+        for (const o of objects) {
+            const raw = o?.content?.durableUri;
+            if (typeof raw !== 'string' || !raw.startsWith('/')) continue;
+            // bare "/<file>.glb" is served from /models (the viewport's resolveExternalModelUri)
+            const servedPath = raw.startsWith('/models/') ? raw : /\.(glb|gltf)$/i.test(raw) && !raw.slice(1).includes('/') ? `/models${raw}` : raw;
+            if (!servedPath.startsWith('/models/')) continue;
+            try {
+                this.store.materialize(servedPath, dir);
+            } catch { /* a file that cannot be written back is reported by the run that needs it */ }
+        }
     }
 
     /** The recovered file written back to <workspace>/public/models, where the staged build reads kept structure files from. */
