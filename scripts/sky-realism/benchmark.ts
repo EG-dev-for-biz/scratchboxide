@@ -13,6 +13,9 @@
  * The sun comes from the disc in the photo; with none visible, from the NOAA ephemeris when the capture time and its
  * UTC offset are known; otherwise the reference is skipped and listed with the reason. Nothing is assumed.
  *
+ * --fit-turbidity: for clear skies with the sun shining clear, the render's turbidity is the one at which the clear-sky
+ * model gives the photo's own direct:diffuse ratio, so the sky measures test the sky model rather than the default haze.
+ *
  * Writes <out>/report.json, <out>/report.html and side-by-side PNGs (photo | render), all tone-mapped the same way.
  */
 
@@ -24,6 +27,7 @@ import { integrateSpectrum, planckRadiance } from '../../packages/core/src/brows
 import { renderSkyDomeEquirects } from '../../packages/core/src/node/atmosphere-benchmark/sky-dome-equirect-renderer';
 import { scoreSkyRealism, scoreClouds, SKY_REALISM_TOLERANCES, SkyRealismScore } from '../../packages/core/src/node/atmosphere-benchmark/sky-realism-score';
 import { calculateNOAASolarPosition } from '../../packages/core/src/browser/generative-canvas/services/atmosphere/solar-position';
+import { solarIrradiance } from '../../packages/core/src/browser/generative-canvas/services/atmosphere/clear-sky-irradiance';
 import { encodePng } from '../../packages/core/src/node/3d-engine/staged-location/png-encode';
 import type { AtmosphericScatteringConfig } from '../../packages/core/src/browser/generative-canvas/services/atmosphere/atmosphere-types';
 
@@ -113,6 +117,7 @@ function toneMapSky(img: EquirectImage, refY: number, into: Uint8Array, stride: 
 async function main() {
     const manifest: Reference[] = JSON.parse(fs.readFileSync(arg('manifest', path.join(__dirname, 'references.json')), 'utf8'));
     const out = arg('out');
+    const fitTurbidity = process.argv.includes('--fit-turbidity');
     fs.mkdirSync(out, { recursive: true });
 
     type Job = { ref: Reference; photo: EquirectImage; measured: SkyMeasurement; clouds?: CloudMeasurement; sunEl: number; sunSource: string; config: AtmosphericScatteringConfig; note?: string };
@@ -131,7 +136,20 @@ async function main() {
         if (sunEl === undefined) { skipped.push({ id: ref.id, reason: 'no sun disc and no capture time with a known UTC offset' }); continue; }
         // Clouds are measured on daytime skies with the sun at least 10° up (neutral-colour classification).
         const clouds = measured.sun && sunEl >= 10 ? measureClouds(photo, measured.sun) : undefined;
-        const { config, note } = configFor(ref, sunEl, clouds);
+        const { config, note: baseNote } = configFor(ref, sunEl, clouds);
+        let note = baseNote;
+        if (fitTurbidity && measured.sun && ref.weather === 'clear' && sunEl > 3) {
+            const sinEl = Math.sin((sunEl * Math.PI) / 180);
+            const photoRatio = (measured.sun.discToSkyRatio * sinEl) / measured.skyIrradianceRatio;
+            // directToDiffuse falls as turbidity rises: bisect on log T in [1, 12].
+            let lo = 0, hi = Math.log(12);
+            for (let k = 0; k < 40; k++) {
+                const mid = (lo + hi) / 2;
+                if (solarIrradiance(sunEl, { turbidity: Math.exp(mid) }).directToDiffuse > photoRatio) lo = mid; else hi = mid;
+            }
+            config.turbidity = +Math.exp((lo + hi) / 2).toFixed(3);
+            note = `${note ? note + '; ' : ''}turbidity ${config.turbidity} fitted to the photo's direct:diffuse ${photoRatio.toFixed(2)}`;
+        }
         jobs.push({ ref, photo: downsample(photo, 512, 256), measured, clouds, sunEl, sunSource, config, note });
     }
 
