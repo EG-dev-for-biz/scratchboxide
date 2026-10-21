@@ -72,8 +72,8 @@ int main(int argc, char** argv) {
                     (unsigned long long)s.fileBytes, s.atlasCount, (unsigned long long)s.atlasBytes, ms(t0, t1), ms(t1, t2));
         for (size_t i = 0; i < dag.levels.size(); ++i) {
             const auto& l = dag.levels[i];
-            std::printf("%s{\\"level\\":%u,\\"clusters\\":%u,\\"triangles\\":%u,\\"groups\\":%u,\\"stuckGroups\\":%u,\\"maxError\\":%g}",
-                        i ? "," : "", l.level, l.clusters, l.triangles, l.groups, l.stuckGroups, (double)l.maxError);
+            std::printf("%s{\\"level\\":%u,\\"clusters\\":%u,\\"triangles\\":%u,\\"groups\\":%u,\\"stuckGroups\\":%u,\\"mergedGroups\\":%u,\\"maxError\\":%g}",
+                        i ? "," : "", l.level, l.clusters, l.triangles, l.groups, l.stuckGroups, l.mergedGroups, (double)l.maxError);
         }
         std::printf("],\\"atlases\\":[");
         for (size_t i = 0; i < dag.atlases.size(); ++i) {
@@ -103,8 +103,10 @@ export interface VirtualGeometryLevelStats {
     clusters: number;
     triangles: number;
     groups: number;
-    /** Groups whose locked borders left too little to simplify; carried up unchanged. */
+    /** Groups whose locked borders left too little to simplify even after merging; carried up unchanged. */
     stuckGroups: number;
+    /** Stuck groups that joined a neighbouring group before simplification was retried. */
+    mergedGroups: number;
     maxError: number;
 }
 

@@ -354,7 +354,8 @@ vec3 compositeCloudShells(vec3 sky, vec3 rayDir, float cosViewSun, vec3 ambient)
             float shape = shellFbm(q + warp * 1.2 + seed, octaves);
             float detail = shellFbm(q * 3.7 + warp * 2.0 + seed + 3.0, octaves - 2.0);
             float erosion = mix(mix(0.45, 1.0, smoothstep(0.3, 0.7, detail)), 1.0, smoothstep(0.08, 0.3, footprint));
-            float density = smoothstep(threshold - 0.12, threshold + 0.28, shape) * erosion;
+            // Density starts at the threshold (no faint veil below it, which slant views near the horizon turned into cloud).
+            float density = smoothstep(threshold, threshold + 0.25, shape) * erosion;
             density = mix(density, A.z, smoothstep(0.25, 1.0, footprint));
             if (density <= 0.001) continue;
             float trans = exp(-A.w / shells * density / mu);

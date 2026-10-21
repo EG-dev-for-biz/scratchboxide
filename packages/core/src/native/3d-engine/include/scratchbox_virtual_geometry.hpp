@@ -88,6 +88,14 @@ namespace vgeo {
 constexpr uint32_t kMaxClusterVertices = 128;
 constexpr uint32_t kMaxClusterTriangles = 128;
 constexpr uint32_t kGroupSize = 8;
+/**
+ * Triangles a group grows to: kGroupSize full clusters. Coarse clusters are smaller than full (their
+ * wedge table fills first), so a group counts triangles, not clusters, and stays large enough to
+ * simplify: a small group is mostly border, and border vertices are locked.
+ */
+constexpr uint32_t kGroupTriangles = kGroupSize * kMaxClusterTriangles;
+/** Clusters a group may hold, growing to its triangle budget or after stuck groups have merged into it. */
+constexpr uint32_t kMaxMergedGroupSize = 4 * kGroupSize;
 constexpr uint32_t kSbvgMagic = 0x47564253; // 'SBVG'
 constexpr uint32_t kSbvgVersion = 5;
 constexpr uint32_t kSbvgHeaderBytes = 128;
@@ -1352,19 +1360,17 @@ private:
     }
 
     bool collapseIsValid(uint32_t from, uint32_t to) {
-        // Link condition: common neighbours must be exactly the apexes of the triangles on the edge.
-        std::vector<uint32_t> nf, nt;
-        neighbours(from, nf);
-        neighbours(to, nt);
-        uint32_t common = 0;
-        for (uint32_t w : nf) if (std::find(nt.begin(), nt.end(), w) != nt.end()) common++;
+        // The two must share a live triangle. No link condition: scanned surfaces are non-manifold
+        // soups whose coarse levels would otherwise stop simplifying (a group's border stays locked,
+        // so a topology change inside it cannot open a crack); a collapse that folds two triangles
+        // onto each other leaves one of them (see run()).
         uint32_t shared = 0;
         for (uint32_t t : vtris_[from]) {
             if (!triAlive_[t]) continue;
             const auto& tr = tri_[t];
             if (tr[0] == to || tr[1] == to || tr[2] == to) shared++;
         }
-        if (shared == 0 || common != shared) return false;
+        if (shared == 0) return false;
 
         // No triangle around `from` may flip or collapse to a sliver.
         F3 target = pos(to);
@@ -1450,6 +1456,22 @@ private:
             }
             vtris_[c.from].clear();
             alive_[c.from] = 0;
+            // Two triangles now on the same three vertices cover the same surface twice: keep the first.
+            {
+                auto& list = vtris_[c.to];
+                std::vector<std::array<uint32_t, 3>> seen;
+                for (uint32_t t : list) {
+                    if (!triAlive_[t]) continue;
+                    std::array<uint32_t, 3> key = tri_[t];
+                    std::sort(key.begin(), key.end());
+                    if (std::find(seen.begin(), seen.end(), key) != seen.end()) {
+                        triAlive_[t] = 0;
+                        liveTris_--;
+                    } else {
+                        seen.push_back(key);
+                    }
+                }
+            }
             q_[c.to].add(q_[c.from]);
             version_[c.to]++;
             maxCost_ = std::max(maxCost_, c.cost);
@@ -1490,8 +1512,11 @@ struct LevelStats {
     uint32_t clusters;
     uint32_t triangles;
     uint32_t groups;
+    /** Groups carried up unchanged because nothing in them could move, after merging. */
     uint32_t stuckGroups;
     float maxError;
+    /** Stuck groups that joined a neighbouring group before simplification was retried. */
+    uint32_t mergedGroups{0};
 };
 
 struct ClusterDag {
@@ -1517,8 +1542,9 @@ inline Sphere mergeSpheres(const std::vector<Sphere>& spheres) {
 }
 
 /**
- * Partition cluster ids into groups of up to kGroupSize, growing each group across the clusters
- * it shares the most vertices with, falling back to the nearest ungrouped cluster in space.
+ * Partition cluster ids into groups of up to kGroupTriangles triangles (and at most kMaxMergedGroupSize
+ * clusters), growing each group across the clusters it shares the most vertices with, falling back
+ * to the nearest ungrouped cluster in space.
  */
 inline std::vector<std::vector<uint32_t>> partitionGroups(const std::vector<uint32_t>& ids, const std::vector<Cluster>& clusters) {
     std::unordered_map<uint32_t, std::vector<uint32_t>> vertexUsers; // global vertex -> positions in ids
@@ -1549,10 +1575,11 @@ inline std::vector<std::vector<uint32_t>> partitionGroups(const std::vector<uint
         std::vector<uint32_t> group{seed};
         grouped[seed] = 1;
         grid.remove(seed);
+        uint32_t groupTris = clusters[ids[seed]].triangleCount();
         std::unordered_map<uint32_t, uint32_t> frontier;
         auto absorb = [&](uint32_t m) { for (auto [o, w] : neighbours[m]) if (!grouped[o]) frontier[o] += w; };
         absorb(seed);
-        while (group.size() < kGroupSize) {
+        while (groupTris < kGroupTriangles && group.size() < kMaxMergedGroupSize) {
             uint32_t best = UINT32_MAX, bestW = 0;
             for (auto [o, w] : frontier) {
                 if (grouped[o]) continue;
@@ -1572,6 +1599,7 @@ inline std::vector<std::vector<uint32_t>> partitionGroups(const std::vector<uint
             grid.remove(best);
             frontier.erase(best);
             absorb(best);
+            groupTris += clusters[ids[best]].triangleCount();
         }
         std::vector<uint32_t> out;
         for (uint32_t m : group) out.push_back(ids[m]);
@@ -1628,18 +1656,29 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24, cons
     while (current.size() > 1 && level + 1 < maxLevels) {
         auto groups = partitionGroups(current, dag.clusters);
 
-        // A vertex is locked when clusters of more than one group use it.
-        std::unordered_map<uint32_t, uint32_t> vertexGroup;
-        std::unordered_map<uint32_t, uint8_t> shared;
+        // Which groups use each vertex; a vertex is locked for a group when another group uses it too.
+        std::unordered_map<uint32_t, std::vector<uint32_t>> usersOf;
         for (uint32_t g = 0; g < groups.size(); ++g) {
             for (uint32_t id : groups[g]) {
                 for (uint32_t v : dag.clusters[id].vertices) {
-                    auto it = vertexGroup.find(v);
-                    if (it == vertexGroup.end()) vertexGroup.emplace(v, g);
-                    else if (it->second != g) shared[v] = 1;
+                    auto& users = usersOf[v];
+                    if (users.empty() || users.back() != g) users.push_back(g);
                 }
             }
         }
+        // Groups merge below; `unionOf` names the group each one has joined.
+        std::vector<uint32_t> unionOf(groups.size());
+        for (uint32_t g = 0; g < groups.size(); ++g) unionOf[g] = g;
+        auto find = [&](uint32_t g) {
+            while (unionOf[g] != g) { unionOf[g] = unionOf[unionOf[g]]; g = unionOf[g]; }
+            return g;
+        };
+        auto lockedFor = [&](uint32_t root) {
+            return [&, root](uint32_t v) {
+                for (uint32_t o : usersOf[v]) if (find(o) != root) return true;
+                return false;
+            };
+        };
 
         struct GroupResult {
             std::vector<uint32_t> members;
@@ -1650,11 +1689,10 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24, cons
             std::vector<uint32_t> parentTris, parentMaterials;
             std::vector<F2> parentUvs;
             SourceSet source;
+            /** Nothing in the group could move: it is carried up unchanged. */
+            bool stuck{false};
         };
-        std::vector<GroupResult> results;
-        LevelStats stats{level + 1, 0, 0, static_cast<uint32_t>(groups.size()), 0, 0};
-        uint64_t nextTriangles = 0;
-        for (const auto& group : groups) {
+        auto simplifyGroup = [&](const std::vector<uint32_t>& group, uint32_t root) {
             std::vector<uint32_t> tris, materials;
             std::vector<F2> uvs;
             std::vector<Sphere> spheres;
@@ -1670,8 +1708,7 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24, cons
                 childError = std::max(childError, c.selfError);
             }
             const uint64_t groupTris = tris.size() / 3;
-            SimplifyResult simp = LockedSimplifier::simplify(tris, uvs, materials, m, static_cast<uint32_t>(groupTris / 2),
-                                                             [&](uint32_t v) { return shared.count(v) > 0; }, !retexture);
+            SimplifyResult simp = LockedSimplifier::simplify(tris, uvs, materials, m, static_cast<uint32_t>(groupTris / 2), lockedFor(root), !retexture);
 
             GroupResult r;
             r.members = group;
@@ -1680,19 +1717,83 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24, cons
             if (retexture) r.source = SourceSet{tris, uvs, materials};
             if (uint64_t(simp.tris.size() / 3) > groupTris * 85 / 100) {
                 // Locked borders left too little to remove: carry the group up unchanged so every
-                // level still covers the whole surface (the next level groups it differently).
+                // level still covers the whole surface.
                 r.parentTris = std::move(tris);
                 r.parentUvs = std::move(uvs);
                 r.parentMaterials = std::move(materials);
-                stats.stuckGroups++;
+                r.stuck = true;
             } else {
                 r.parentTris = std::move(simp.tris);
                 r.parentUvs = std::move(simp.cornerUv);
                 r.parentMaterials = std::move(simp.materials);
                 r.error = childError + simp.error;
             }
+            return r;
+        };
+        std::vector<GroupResult> results;
+        LevelStats stats{level + 1, 0, 0, static_cast<uint32_t>(groups.size()), 0, 0};
+        for (uint32_t g = 0; g < groups.size(); ++g) results.push_back(simplifyGroup(groups[g], g));
+
+        // Stuck groups are the partition's leftovers: a few clusters whose vertices nearly all lie on
+        // borders with other groups, so nothing in them may move and the same clusters stay stuck at
+        // every level above. Each joins the group it shares the most vertices with (the nearest group
+        // when it shares none), and the union is simplified again with only its outer border locked.
+        {
+            std::vector<uint32_t> unionSize(groups.size());
+            for (uint32_t g = 0; g < groups.size(); ++g) unionSize[g] = static_cast<uint32_t>(groups[g].size());
+            for (uint32_t g = 0; g < groups.size(); ++g) {
+                if (!results[g].stuck) continue;
+                const uint32_t self = find(g);
+                std::unordered_map<uint32_t, uint32_t> sharedWith;
+                for (uint32_t id : groups[g]) {
+                    for (uint32_t v : dag.clusters[id].vertices) {
+                        for (uint32_t o : usersOf[v]) {
+                            const uint32_t root = find(o);
+                            if (root != self) sharedWith[root]++;
+                        }
+                    }
+                }
+                uint32_t target = UINT32_MAX, best = 0;
+                for (const auto& [root, n] : sharedWith) {
+                    if (unionSize[root] + unionSize[self] > kMaxMergedGroupSize) continue;
+                    if (n > best || (n == best && root < target)) { target = root; best = n; }
+                }
+                if (target == UINT32_MAX) {
+                    // An isolated piece: the nearest group whose LOD sphere it could share.
+                    float bestDistance = std::numeric_limits<float>::max();
+                    for (uint32_t o = 0; o < groups.size(); ++o) {
+                        const uint32_t root = find(o);
+                        if (root != o || root == self || unionSize[root] + unionSize[self] > kMaxMergedGroupSize) continue;
+                        const float d = length(results[o].sphere.center - results[g].sphere.center);
+                        if (d > 2.0f * (results[o].sphere.radius + results[g].sphere.radius)) continue;
+                        if (d < bestDistance) { bestDistance = d; target = root; }
+                    }
+                }
+                if (target == UINT32_MAX) continue;
+                unionOf[self] = target;
+                unionSize[target] += unionSize[self];
+                stats.mergedGroups++;
+            }
+            if (stats.mergedGroups > 0) {
+                std::vector<std::vector<uint32_t>> membersOf(groups.size());
+                std::vector<uint8_t> grew(groups.size(), 0);
+                for (uint32_t g = 0; g < groups.size(); ++g) {
+                    const uint32_t root = find(g);
+                    membersOf[root].insert(membersOf[root].end(), groups[g].begin(), groups[g].end());
+                    if (root != g) grew[root] = 1;
+                }
+                std::vector<GroupResult> mergedResults;
+                for (uint32_t g = 0; g < groups.size(); ++g) {
+                    if (find(g) != g) continue;
+                    mergedResults.push_back(grew[g] ? simplifyGroup(membersOf[g], g) : std::move(results[g]));
+                }
+                results = std::move(mergedResults);
+            }
+        }
+        uint64_t nextTriangles = 0;
+        for (const GroupResult& r : results) {
+            if (r.stuck) stats.stuckGroups++;
             nextTriangles += r.parentTris.size() / 3;
-            results.push_back(std::move(r));
         }
 
         // A level that removes almost nothing would only duplicate the one below: stop instead.

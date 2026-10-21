@@ -10,7 +10,25 @@
   "capturedLocalUnix": 1504006800,
   "utcOffsetHours": 2,
   "polyhavenId": "aristea_wreck_puresky",
-  "whiteBalanceKelvin": 5400
+  "whiteBalanceKelvin": 5400,
+  "clouds": {
+   "cumulusSkyCover": 0,
+   "decks": [
+    {
+     "baseAltitudeMeters": 4500,
+     "thicknessMeters": 400,
+     "coverage": 0.78,
+     "opticalDepth": 3.5,
+     "featureSizeMeters": 450,
+     "forwardScattering": 0.85,
+     "label": "altocumulus",
+     "streakElongation": 1.3,
+     "streakHeadingDeg": 45
+    }
+   ],
+   "reasoning": "An extensive deck of mid-level cellular altocumulus covers about three-quarters of the sky, with distinct small round cloudlets on its edge and a more consolidated, moderately bright sheet over the sun's position.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "autumn_field_puresky",
@@ -30,7 +48,36 @@
   ],
   "capturedLocalUnix": 1622654820,
   "utcOffsetHours": 2,
-  "polyhavenId": "belfast_sunset_puresky"
+  "polyhavenId": "belfast_sunset_puresky",
+  "clouds": {
+   "cumulusSkyCover": 0,
+   "decks": [
+    {
+     "baseAltitudeMeters": 8500,
+     "thicknessMeters": 600,
+     "coverage": 0.65,
+     "opticalDepth": 0.8,
+     "featureSizeMeters": 1800,
+     "forwardScattering": 0.78,
+     "label": "cirrostratus and cirrocumulus veil",
+     "streakElongation": 2.5,
+     "streakHeadingDeg": 110
+    },
+    {
+     "baseAltitudeMeters": 4000,
+     "thicknessMeters": 400,
+     "coverage": 0.35,
+     "opticalDepth": 2.2,
+     "featureSizeMeters": 800,
+     "forwardScattering": 0.84,
+     "label": "altocumulus patches",
+     "streakElongation": 1.5,
+     "streakHeadingDeg": 90
+    }
+   ],
+   "reasoning": "A high, diffuse veil of cirrostratus and fine cirrocumulus covers much of the sky, overlaid with darker, cellular patches of altocumulus near the horizon.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "citrus_orchard_puresky",
@@ -43,7 +90,37 @@
   "capturedLocalUnix": 1708842240,
   "utcOffsetHours": 2,
   "polyhavenId": "citrus_orchard_puresky",
-  "whiteBalanceKelvin": 5539
+  "whiteBalanceKelvin": 5539,
+  "clouds": {
+   "cumulusSkyCover": 0.45,
+   "cumulusBaseAltitudeMeters": 1200,
+   "decks": [
+    {
+     "baseAltitudeMeters": 8500,
+     "thicknessMeters": 1000,
+     "coverage": 0.65,
+     "opticalDepth": 0.8,
+     "featureSizeMeters": 10000,
+     "forwardScattering": 0.75,
+     "label": "cirrostratus",
+     "streakElongation": 2.5,
+     "streakHeadingDeg": 45
+    },
+    {
+     "baseAltitudeMeters": 4000,
+     "thicknessMeters": 500,
+     "coverage": 0.35,
+     "opticalDepth": 3,
+     "featureSizeMeters": 1500,
+     "forwardScattering": 0.83,
+     "label": "altocumulus",
+     "streakElongation": 1.2,
+     "streakHeadingDeg": 0
+    }
+   ],
+   "reasoning": "Scattered low cumulus puffs and stratocumulus sit below a widespread, translucent high cirrostratus veil near the zenith and patches of mid-level altocumulus.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "citrus_orchard_road_puresky",
@@ -56,7 +133,37 @@
   "capturedLocalUnix": 1708841580,
   "utcOffsetHours": 2,
   "polyhavenId": "citrus_orchard_road_puresky",
-  "whiteBalanceKelvin": 5539
+  "whiteBalanceKelvin": 5539,
+  "clouds": {
+   "cumulusSkyCover": 0.42,
+   "cumulusBaseAltitudeMeters": 1200,
+   "decks": [
+    {
+     "baseAltitudeMeters": 4500,
+     "thicknessMeters": 600,
+     "coverage": 0.5,
+     "opticalDepth": 2.5,
+     "featureSizeMeters": 1200,
+     "forwardScattering": 0.85,
+     "label": "altocumulus",
+     "streakElongation": 2,
+     "streakHeadingDeg": 45
+    },
+    {
+     "baseAltitudeMeters": 9000,
+     "thicknessMeters": 1000,
+     "coverage": 0.55,
+     "opticalDepth": 0.6,
+     "featureSizeMeters": 4000,
+     "forwardScattering": 0.75,
+     "label": "cirrostratus",
+     "streakElongation": 4,
+     "streakHeadingDeg": 90
+    }
+   ],
+   "reasoning": "Broken low-level cumulus and stratocumulus clouds cover roughly 42% of the sky, overlaid by patchy mid-level altocumulus and a soft upper cirrostratus veil illuminated by the low sun.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "drackenstein_quarry_puresky",
@@ -67,7 +174,37 @@
    9.657288
   ],
   "capturedLocalUnix": 1641135720,
-  "polyhavenId": "drackenstein_quarry_puresky"
+  "polyhavenId": "drackenstein_quarry_puresky",
+  "clouds": {
+   "cumulusSkyCover": 0.08,
+   "cumulusBaseAltitudeMeters": 1400,
+   "decks": [
+    {
+     "baseAltitudeMeters": 9000,
+     "thicknessMeters": 1200,
+     "coverage": 0.55,
+     "opticalDepth": 0.25,
+     "featureSizeMeters": 5000,
+     "forwardScattering": 0.75,
+     "label": "cirrus streaks and cirrostratus",
+     "streakElongation": 6,
+     "streakHeadingDeg": 45
+    },
+    {
+     "baseAltitudeMeters": 4500,
+     "thicknessMeters": 400,
+     "coverage": 0.12,
+     "opticalDepth": 1.5,
+     "featureSizeMeters": 800,
+     "forwardScattering": 0.82,
+     "label": "altocumulus patches",
+     "streakElongation": 1.5,
+     "streakHeadingDeg": 0
+    }
+   ],
+   "reasoning": "A veil of thin cirrus streaks covers about half the sky, accompanied by small patches of mid-level altocumulus and a few scattered low cumulus clouds near the horizon.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "drakensberg_solitary_mountain_puresky",
@@ -88,7 +225,47 @@
   "weather": "partly_cloudy",
   "capturedLocalUnix": 1565544540,
   "polyhavenId": "evening_road_01_puresky",
-  "whiteBalanceKelvin": 5400
+  "whiteBalanceKelvin": 5400,
+  "clouds": {
+   "cumulusSkyCover": 0,
+   "decks": [
+    {
+     "baseAltitudeMeters": 4200,
+     "thicknessMeters": 350,
+     "coverage": 0.45,
+     "opticalDepth": 2.2,
+     "featureSizeMeters": 350,
+     "forwardScattering": 0.84,
+     "label": "altocumulus",
+     "streakElongation": 1.6,
+     "streakHeadingDeg": 35
+    },
+    {
+     "baseAltitudeMeters": 8500,
+     "thicknessMeters": 800,
+     "coverage": 0.3,
+     "opticalDepth": 0.45,
+     "featureSizeMeters": 1800,
+     "forwardScattering": 0.76,
+     "label": "cirrus",
+     "streakElongation": 5.5,
+     "streakHeadingDeg": 80
+    },
+    {
+     "baseAltitudeMeters": 2200,
+     "thicknessMeters": 250,
+     "coverage": 0.15,
+     "opticalDepth": 4.5,
+     "featureSizeMeters": 900,
+     "forwardScattering": 0.85,
+     "label": "stratocumulus",
+     "streakElongation": 2.5,
+     "streakHeadingDeg": 90
+    }
+   ],
+   "reasoning": "A broken mid-level altocumulus deck with cellular patches covers the central sky, accompanied by wispy cirrus streaks and darker low cloud banks near the horizon.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "farm_field_puresky",
@@ -101,28 +278,147 @@
   "capturedLocalUnix": 1666448580,
   "utcOffsetHours": 2,
   "polyhavenId": "farm_field_puresky",
-  "whiteBalanceKelvin": 5313
+  "whiteBalanceKelvin": 5313,
+  "clouds": {
+   "cumulusSkyCover": 0.42,
+   "cumulusBaseAltitudeMeters": 1400,
+   "decks": [
+    {
+     "baseAltitudeMeters": 4500,
+     "thicknessMeters": 700,
+     "coverage": 0.5,
+     "opticalDepth": 5,
+     "featureSizeMeters": 4000,
+     "forwardScattering": 0.85,
+     "label": "altostratus",
+     "streakElongation": 2,
+     "streakHeadingDeg": 90
+    },
+    {
+     "baseAltitudeMeters": 9500,
+     "thicknessMeters": 800,
+     "coverage": 0.4,
+     "opticalDepth": 0.6,
+     "featureSizeMeters": 3000,
+     "forwardScattering": 0.75,
+     "label": "cirrus",
+     "streakElongation": 5,
+     "streakHeadingDeg": 60
+    }
+   ],
+   "reasoning": "A mix of scattered low cumulus tufts and darker mid-level clouds silhouettes against a thick, hazy grey-white altostratus sheet and high cirrus streaks.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "hilly_terrain_01_puresky",
   "timeOfDay": "sunset",
   "weather": "partly_cloudy",
   "capturedLocalUnix": 1559070960,
-  "polyhavenId": "hilly_terrain_01_puresky"
+  "polyhavenId": "hilly_terrain_01_puresky",
+  "clouds": {
+   "cumulusSkyCover": 0,
+   "decks": [
+    {
+     "baseAltitudeMeters": 9000,
+     "thicknessMeters": 800,
+     "coverage": 0.12,
+     "opticalDepth": 0.25,
+     "featureSizeMeters": 4500,
+     "forwardScattering": 0.75,
+     "label": "cirrus fibratus",
+     "streakElongation": 8,
+     "streakHeadingDeg": 45
+    },
+    {
+     "baseAltitudeMeters": 7500,
+     "thicknessMeters": 600,
+     "coverage": 0.15,
+     "opticalDepth": 0.15,
+     "featureSizeMeters": 8000,
+     "forwardScattering": 0.75,
+     "label": "cirrostratus",
+     "streakElongation": 3,
+     "streakHeadingDeg": 110
+    }
+   ],
+   "reasoning": "Mostly clear sky with sparse, wispy cirrus streaks arching near the zenith and a faint cirrostratus veil near the low sun. No convective cumulus clouds are present.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "industrial_sunset_02_puresky",
   "timeOfDay": "sunset",
   "weather": "partly_cloudy",
   "capturedLocalUnix": 1559161260,
-  "polyhavenId": "industrial_sunset_02_puresky"
+  "polyhavenId": "industrial_sunset_02_puresky",
+  "clouds": {
+   "cumulusSkyCover": 0.04,
+   "cumulusBaseAltitudeMeters": 1500,
+   "decks": [
+    {
+     "baseAltitudeMeters": 8500,
+     "thicknessMeters": 1000,
+     "coverage": 0.4,
+     "opticalDepth": 0.3,
+     "featureSizeMeters": 4000,
+     "forwardScattering": 0.75,
+     "label": "cirrus streaks",
+     "streakElongation": 6,
+     "streakHeadingDeg": 45
+    },
+    {
+     "baseAltitudeMeters": 3500,
+     "thicknessMeters": 300,
+     "coverage": 0.06,
+     "opticalDepth": 2.5,
+     "featureSizeMeters": 600,
+     "forwardScattering": 0.85,
+     "label": "altocumulus patches",
+     "streakElongation": 2,
+     "streakHeadingDeg": 90
+    }
+   ],
+   "reasoning": "The sky has a broad, thin veil of cirrus streaks diffusing the low sun, with a small patch of darker altocumulus and a few scattered cumulus fragments near the left horizon.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "industrial_sunset_puresky",
   "timeOfDay": "sunset",
   "weather": "partly_cloudy",
   "capturedLocalUnix": 1553708760,
-  "polyhavenId": "industrial_sunset_puresky"
+  "polyhavenId": "industrial_sunset_puresky",
+  "clouds": {
+   "cumulusSkyCover": 0.25,
+   "cumulusBaseAltitudeMeters": 1400,
+   "decks": [
+    {
+     "baseAltitudeMeters": 8500,
+     "thicknessMeters": 1200,
+     "coverage": 0.78,
+     "opticalDepth": 1.8,
+     "featureSizeMeters": 14000,
+     "forwardScattering": 0.75,
+     "label": "cirrostratus",
+     "streakElongation": 5,
+     "streakHeadingDeg": 20
+    },
+    {
+     "baseAltitudeMeters": 4500,
+     "thicknessMeters": 500,
+     "coverage": 0.3,
+     "opticalDepth": 3.5,
+     "featureSizeMeters": 2200,
+     "forwardScattering": 0.82,
+     "label": "altocumulus",
+     "streakElongation": 2,
+     "streakHeadingDeg": 90
+    }
+   ],
+   "reasoning": "The sky is largely veiled by an extensive upper-level cirrostratus sheet with broad streaks over the zenith and solar azimuth. Beneath this veil are scattered low cumulus puffs and patches of mid-level altocumulus.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "kloofendal_28d_misty_puresky",
@@ -135,7 +431,32 @@
   "capturedLocalUnix": 1686130440,
   "utcOffsetHours": 2,
   "polyhavenId": "kloofendal_28d_misty_puresky",
-  "whiteBalanceKelvin": 5313
+  "whiteBalanceKelvin": 5313,
+  "clouds": {
+   "cumulusSkyCover": 0,
+   "decks": [
+    {
+     "baseAltitudeMeters": 8500,
+     "thicknessMeters": 1200,
+     "coverage": 0.9,
+     "opticalDepth": 0.6,
+     "featureSizeMeters": 40000,
+     "streakElongation": 1.5,
+     "streakHeadingDeg": 90
+    },
+    {
+     "baseAltitudeMeters": 1500,
+     "thicknessMeters": 600,
+     "coverage": 0.45,
+     "opticalDepth": 2.2,
+     "featureSizeMeters": 8000,
+     "streakElongation": 2,
+     "streakHeadingDeg": 80
+    }
+   ],
+   "reasoning": "A pervasive, diffuse cirrostratus veil creates a broad solar halo and muted blue zenith, while a lower, patchy layer of soft stratus or heavy haze sits near the horizon.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "kloofendal_38d_partly_cloudy_puresky",
@@ -148,7 +469,37 @@
   "capturedLocalUnix": 1607096400,
   "utcOffsetHours": 2,
   "polyhavenId": "kloofendal_38d_partly_cloudy_puresky",
-  "whiteBalanceKelvin": 5319
+  "whiteBalanceKelvin": 5319,
+  "clouds": {
+   "cumulusSkyCover": 0.08,
+   "cumulusBaseAltitudeMeters": 1200,
+   "decks": [
+    {
+     "baseAltitudeMeters": 4500,
+     "thicknessMeters": 300,
+     "coverage": 0.35,
+     "opticalDepth": 2,
+     "featureSizeMeters": 350,
+     "forwardScattering": 0.85,
+     "label": "altocumulus",
+     "streakElongation": 1.3,
+     "streakHeadingDeg": 70
+    },
+    {
+     "baseAltitudeMeters": 8500,
+     "thicknessMeters": 500,
+     "coverage": 0.25,
+     "opticalDepth": 0.5,
+     "featureSizeMeters": 1200,
+     "forwardScattering": 0.75,
+     "label": "cirrus",
+     "streakElongation": 3,
+     "streakHeadingDeg": 80
+    }
+   ],
+   "reasoning": "A broken field of fine-grained altocumulus cells crosses the sun, accompanied by thin high cirrus patches and minor low cumulus along the horizon.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "kloofendal_43d_clear_puresky",
@@ -174,7 +525,26 @@
   "capturedLocalUnix": 1553262240,
   "utcOffsetHours": 2,
   "polyhavenId": "kloofendal_48d_partly_cloudy_puresky",
-  "whiteBalanceKelvin": 5400
+  "whiteBalanceKelvin": 5400,
+  "clouds": {
+   "cumulusSkyCover": 0.28,
+   "cumulusBaseAltitudeMeters": 1400,
+   "decks": [
+    {
+     "baseAltitudeMeters": 9500,
+     "thicknessMeters": 500,
+     "coverage": 0.18,
+     "opticalDepth": 0.4,
+     "featureSizeMeters": 4500,
+     "forwardScattering": 0.75,
+     "label": "cirrus",
+     "streakElongation": 6,
+     "streakHeadingDeg": 85
+    }
+   ],
+   "reasoning": "Fair-weather cumulus clouds (cumulus humilis and mediocris) are scattered across the sky from the horizon up toward the zenith, covering roughly a quarter of the sky. A thin, wispy cirrus layer is also visible high near the zenith and around the sun.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "kloofendal_misty_morning_puresky",
@@ -187,7 +557,23 @@
   "capturedLocalUnix": 1686126000,
   "utcOffsetHours": 2,
   "polyhavenId": "kloofendal_misty_morning_puresky",
-  "whiteBalanceKelvin": 5313
+  "whiteBalanceKelvin": 5313,
+  "clouds": {
+   "cumulusSkyCover": 0,
+   "decks": [
+    {
+     "baseAltitudeMeters": 800,
+     "thicknessMeters": 600,
+     "coverage": 1,
+     "opticalDepth": 10,
+     "featureSizeMeters": 5000,
+     "streakElongation": 1,
+     "streakHeadingDeg": 0
+    }
+   ],
+   "reasoning": "The sky is completely covered by a uniform, featureless stratus or altostratus overcast layer with a softly diffused bright region where the sun is hidden.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "kloofendal_overcast_puresky",
@@ -212,7 +598,36 @@
   ],
   "capturedLocalUnix": 1572627540,
   "utcOffsetHours": 2,
-  "polyhavenId": "kloppenheim_01_puresky"
+  "polyhavenId": "kloppenheim_01_puresky",
+  "clouds": {
+   "cumulusSkyCover": 0,
+   "decks": [
+    {
+     "baseAltitudeMeters": 900,
+     "thicknessMeters": 600,
+     "coverage": 0.92,
+     "opticalDepth": 6,
+     "featureSizeMeters": 3500,
+     "forwardScattering": 0.85,
+     "label": "stratus",
+     "streakElongation": 1,
+     "streakHeadingDeg": 0
+    },
+    {
+     "baseAltitudeMeters": 3200,
+     "thicknessMeters": 800,
+     "coverage": 1,
+     "opticalDepth": 4,
+     "featureSizeMeters": 6000,
+     "forwardScattering": 0.82,
+     "label": "altostratus",
+     "streakElongation": 1,
+     "streakHeadingDeg": 0
+    }
+   ],
+   "reasoning": "A nearly continuous, featureless grey stratus and altostratus overcast covers the entire sky, with a bright diffused glow near the horizon where the sun sits behind thinner patches.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "kloppenheim_02_puresky",
@@ -237,7 +652,37 @@
   ],
   "capturedLocalUnix": 1572698940,
   "utcOffsetHours": 2,
-  "polyhavenId": "kloppenheim_03_puresky"
+  "polyhavenId": "kloppenheim_03_puresky",
+  "clouds": {
+   "cumulusSkyCover": 0.03,
+   "cumulusBaseAltitudeMeters": 1400,
+   "decks": [
+    {
+     "baseAltitudeMeters": 8500,
+     "thicknessMeters": 1500,
+     "coverage": 0.72,
+     "opticalDepth": 2.2,
+     "featureSizeMeters": 5000,
+     "forwardScattering": 0.75,
+     "label": "dense cirrus and cirrostratus",
+     "streakElongation": 6,
+     "streakHeadingDeg": 45
+    },
+    {
+     "baseAltitudeMeters": 7000,
+     "thicknessMeters": 500,
+     "coverage": 0.25,
+     "opticalDepth": 1.5,
+     "featureSizeMeters": 600,
+     "forwardScattering": 0.78,
+     "label": "cirrocumulus / high altocumulus patches",
+     "streakElongation": 1.5,
+     "streakHeadingDeg": 120
+    }
+   ],
+   "reasoning": "Extensive, dense fibrous cirrus and cirrostratus cover most of the sky with patches of clear blue on the flanks, accompanied by fine-grained cirrocumulus below the sun and tiny distant cumulus on the horizon.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "kloppenheim_05_puresky",
@@ -250,7 +695,26 @@
   "capturedLocalUnix": 1572780120,
   "utcOffsetHours": 2,
   "polyhavenId": "kloppenheim_05_puresky",
-  "whiteBalanceKelvin": 5319
+  "whiteBalanceKelvin": 5319,
+  "clouds": {
+   "cumulusSkyCover": 0.06,
+   "cumulusBaseAltitudeMeters": 1400,
+   "decks": [
+    {
+     "baseAltitudeMeters": 8500,
+     "thicknessMeters": 1000,
+     "coverage": 0.7,
+     "opticalDepth": 0.25,
+     "featureSizeMeters": 12000,
+     "forwardScattering": 0.75,
+     "label": "cirrostratus veil",
+     "streakElongation": 3,
+     "streakHeadingDeg": 45
+    }
+   ],
+   "reasoning": "A widespread, translucent cirrostratus veil creates a bright solar aureole and slightly pales the blue sky, accompanied by a few small fair-weather cumulus puffs scattered near the horizon.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "kloppenheim_06_puresky",
@@ -263,7 +727,26 @@
   "capturedLocalUnix": 1572799620,
   "utcOffsetHours": 2,
   "polyhavenId": "kloppenheim_06_puresky",
-  "whiteBalanceKelvin": 5319
+  "whiteBalanceKelvin": 5319,
+  "clouds": {
+   "cumulusSkyCover": 0.14,
+   "cumulusBaseAltitudeMeters": 1400,
+   "decks": [
+    {
+     "baseAltitudeMeters": 8500,
+     "thicknessMeters": 800,
+     "coverage": 0.1,
+     "opticalDepth": 0.25,
+     "featureSizeMeters": 4000,
+     "forwardScattering": 0.75,
+     "label": "cirrus",
+     "streakElongation": 6,
+     "streakHeadingDeg": 75
+    }
+   ],
+   "reasoning": "Scattered fair-weather cumulus humilis and fractus puffs dot the sky with low overall coverage, concentrated partly near the bright solar glare on the horizon, accompanied by very faint, wispy high cirrus streaks.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "kloppenheim_07_puresky",
@@ -308,7 +791,37 @@
   "timeOfDay": "midday",
   "weather": "overcast",
   "capturedLocalUnix": 1455619320,
-  "polyhavenId": "mud_road_puresky"
+  "polyhavenId": "mud_road_puresky",
+  "clouds": {
+   "cumulusSkyCover": 0.45,
+   "cumulusBaseAltitudeMeters": 700,
+   "decks": [
+    {
+     "baseAltitudeMeters": 2800,
+     "thicknessMeters": 900,
+     "coverage": 1,
+     "opticalDepth": 10,
+     "featureSizeMeters": 4000,
+     "forwardScattering": 0.85,
+     "label": "altostratus",
+     "streakElongation": 1.5,
+     "streakHeadingDeg": 90
+    },
+    {
+     "baseAltitudeMeters": 600,
+     "thicknessMeters": 400,
+     "coverage": 0.55,
+     "opticalDepth": 7,
+     "featureSizeMeters": 900,
+     "forwardScattering": 0.85,
+     "label": "stratus fractus",
+     "streakElongation": 2,
+     "streakHeadingDeg": 110
+    }
+   ],
+   "reasoning": "A completely overcast sky with a uniform grey altostratus sheet above and darker, ragged low stratus/cumulus fractus patches at a low base beneath it.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "overcast_soil_puresky",
@@ -316,7 +829,26 @@
   "weather": "overcast",
   "capturedLocalUnix": 1697731980,
   "polyhavenId": "overcast_soil_puresky",
-  "whiteBalanceKelvin": 6900
+  "whiteBalanceKelvin": 6900,
+  "clouds": {
+   "cumulusSkyCover": 0.94,
+   "cumulusBaseAltitudeMeters": 750,
+   "decks": [
+    {
+     "baseAltitudeMeters": 3000,
+     "thicknessMeters": 900,
+     "coverage": 0.98,
+     "opticalDepth": 9,
+     "featureSizeMeters": 4500,
+     "forwardScattering": 0.85,
+     "label": "altostratus overcast",
+     "streakElongation": 1.3,
+     "streakHeadingDeg": 70
+    }
+   ],
+   "reasoning": "Complete dark-grey overcast of ragged, churning stratocumulus/nimbostratus with heavy, bulging low bases and a solid grey altostratus sheet above blocking all direct sun.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "pizzo_pernice_puresky",
@@ -341,7 +873,36 @@
   "timeOfDay": "sunset",
   "weather": "partly_cloudy",
   "capturedLocalUnix": 1557084600,
-  "polyhavenId": "quarry_04_puresky"
+  "polyhavenId": "quarry_04_puresky",
+  "clouds": {
+   "cumulusSkyCover": 0,
+   "decks": [
+    {
+     "baseAltitudeMeters": 9000,
+     "thicknessMeters": 900,
+     "coverage": 0.72,
+     "opticalDepth": 0.45,
+     "featureSizeMeters": 7000,
+     "forwardScattering": 0.76,
+     "label": "cirrostratus fibratus",
+     "streakElongation": 6,
+     "streakHeadingDeg": 70
+    },
+    {
+     "baseAltitudeMeters": 6800,
+     "thicknessMeters": 700,
+     "coverage": 0.35,
+     "opticalDepth": 1.4,
+     "featureSizeMeters": 3500,
+     "forwardScattering": 0.78,
+     "label": "denser cirrus and cirrostratus bands near horizon",
+     "streakElongation": 5,
+     "streakHeadingDeg": 100
+    }
+   ],
+   "reasoning": "The sky is covered by a widespread, translucent veil of cirrostratus with faint fibrous streaks and slightly denser, lower bands of high cloud concentrated near the horizon and across the low sun. There are no heaped convective cumulus clouds present.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "qwantani_afternoon_puresky",
@@ -380,7 +941,14 @@
   "capturedLocalUnix": 1724348820,
   "utcOffsetHours": 2,
   "polyhavenId": "qwantani_dusk_1_puresky",
-  "whiteBalanceKelvin": 5303
+  "whiteBalanceKelvin": 5303,
+  "clouds": {
+   "cumulusSkyCover": 0.05,
+   "cumulusBaseAltitudeMeters": 1200,
+   "decks": [],
+   "reasoning": "The sky is almost entirely clear blue with only a single low cumulus cloud near the horizon obstructing the sun and a few distant small fragments along the horizon.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "qwantani_dusk_2_puresky",
@@ -393,7 +961,26 @@
   "capturedLocalUnix": 1724349960,
   "utcOffsetHours": 2,
   "polyhavenId": "qwantani_dusk_2_puresky",
-  "whiteBalanceKelvin": 5303
+  "whiteBalanceKelvin": 5303,
+  "clouds": {
+   "cumulusSkyCover": 0.08,
+   "cumulusBaseAltitudeMeters": 1400,
+   "decks": [
+    {
+     "baseAltitudeMeters": 400,
+     "thicknessMeters": 800,
+     "coverage": 0.9,
+     "opticalDepth": 0.2,
+     "featureSizeMeters": 15000,
+     "forwardScattering": 0.85,
+     "label": "low atmospheric haze",
+     "streakElongation": 1,
+     "streakHeadingDeg": 0
+    }
+   ],
+   "reasoning": "The sky is almost entirely clear with a soft twilight glow and a diffuse low-level haze. A few sparse, distant cumulus clouds sit very low along the horizon.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "qwantani_late_afternoon_puresky",
@@ -523,7 +1110,26 @@
   "capturedLocalUnix": 1724000940,
   "utcOffsetHours": 2,
   "polyhavenId": "qwantani_sunset_puresky",
-  "whiteBalanceKelvin": 5303
+  "whiteBalanceKelvin": 5303,
+  "clouds": {
+   "cumulusSkyCover": 0.05,
+   "cumulusBaseAltitudeMeters": 1000,
+   "decks": [
+    {
+     "baseAltitudeMeters": 8500,
+     "thicknessMeters": 600,
+     "coverage": 0.35,
+     "opticalDepth": 0.25,
+     "featureSizeMeters": 4500,
+     "forwardScattering": 0.75,
+     "label": "cirrus fibratus",
+     "streakElongation": 6,
+     "streakHeadingDeg": 45
+    }
+   ],
+   "reasoning": "The sky is mostly blue with a veil of thin, wispy cirrus streaks arching above the low sun and a small bank of low clouds resting right along the horizon.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "rocky_ridge_puresky",
@@ -535,7 +1141,36 @@
   ],
   "capturedLocalUnix": 1436108760,
   "utcOffsetHours": 2,
-  "polyhavenId": "rocky_ridge_puresky"
+  "polyhavenId": "rocky_ridge_puresky",
+  "clouds": {
+   "cumulusSkyCover": 0,
+   "decks": [
+    {
+     "baseAltitudeMeters": 8500,
+     "thicknessMeters": 600,
+     "coverage": 0.65,
+     "opticalDepth": 0.6,
+     "featureSizeMeters": 3500,
+     "forwardScattering": 0.75,
+     "label": "cirrus fibratus streaks",
+     "streakElongation": 8,
+     "streakHeadingDeg": 120
+    },
+    {
+     "baseAltitudeMeters": 7500,
+     "thicknessMeters": 800,
+     "coverage": 0.45,
+     "opticalDepth": 1.2,
+     "featureSizeMeters": 8000,
+     "forwardScattering": 0.75,
+     "label": "cirrostratus veil",
+     "streakElongation": 3,
+     "streakHeadingDeg": 110
+    }
+   ],
+   "reasoning": "The sky contains extensive, sweeping bands of high-altitude cirrus fibratus and a diffuse cirrostratus veil strongly scattering the low sunlight, with no convective cumulus present.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "rosendal_park_sunset_puresky",
@@ -560,7 +1195,14 @@
   ],
   "capturedLocalUnix": 1498290060,
   "utcOffsetHours": 2,
-  "polyhavenId": "rustig_koppie_puresky"
+  "polyhavenId": "rustig_koppie_puresky",
+  "clouds": {
+   "cumulusSkyCover": 0.03,
+   "cumulusBaseAltitudeMeters": 1400,
+   "decks": [],
+   "reasoning": "The sky is almost entirely clear deep blue with only a few tiny, isolated fair-weather cumulus fractus puffs low near the horizon to the left of the sun.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "scythian_tombs_puresky",
@@ -572,7 +1214,37 @@
   ],
   "capturedLocalUnix": 1665331920,
   "polyhavenId": "scythian_tombs_puresky",
-  "whiteBalanceKelvin": 6000
+  "whiteBalanceKelvin": 6000,
+  "clouds": {
+   "cumulusSkyCover": 0.08,
+   "cumulusBaseAltitudeMeters": 1500,
+   "decks": [
+    {
+     "baseAltitudeMeters": 8500,
+     "thicknessMeters": 900,
+     "coverage": 0.85,
+     "opticalDepth": 0.7,
+     "featureSizeMeters": 3000,
+     "forwardScattering": 0.75,
+     "label": "cirrus fibratus and cirrostratus",
+     "streakElongation": 8,
+     "streakHeadingDeg": 20
+    },
+    {
+     "baseAltitudeMeters": 6500,
+     "thicknessMeters": 600,
+     "coverage": 0.25,
+     "opticalDepth": 1.2,
+     "featureSizeMeters": 1200,
+     "forwardScattering": 0.78,
+     "label": "cirrocumulus / high altocumulus",
+     "streakElongation": 2,
+     "streakHeadingDeg": 110
+    }
+   ],
+   "reasoning": "Extensive high cirrus streaks and cirrostratus cover most of the sky, streaming from the sun's direction, with a few small patches of lower cumulus or stratocumulus on the right.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "snow_field_2_puresky",
@@ -584,7 +1256,25 @@
   ],
   "capturedLocalUnix": 1644407520,
   "polyhavenId": "snow_field_2_puresky",
-  "whiteBalanceKelvin": 6350
+  "whiteBalanceKelvin": 6350,
+  "clouds": {
+   "cumulusSkyCover": 0,
+   "decks": [
+    {
+     "baseAltitudeMeters": 3200,
+     "thicknessMeters": 900,
+     "coverage": 0.94,
+     "opticalDepth": 6.5,
+     "featureSizeMeters": 1800,
+     "forwardScattering": 0.82,
+     "label": "altostratus / altocumulus sheet",
+     "streakElongation": 1.6,
+     "streakHeadingDeg": 75
+    }
+   ],
+   "reasoning": "Nearly complete overcast of a grey mid-level altostratus/altocumulus sheet with soft undular mottling and a small clear slot along one section of the horizon.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "snow_field_puresky",
@@ -596,7 +1286,37 @@
   ],
   "capturedLocalUnix": 1643211060,
   "polyhavenId": "snow_field_puresky",
-  "whiteBalanceKelvin": 6900
+  "whiteBalanceKelvin": 6900,
+  "clouds": {
+   "cumulusSkyCover": 0.45,
+   "cumulusBaseAltitudeMeters": 1400,
+   "decks": [
+    {
+     "baseAltitudeMeters": 4000,
+     "thicknessMeters": 900,
+     "coverage": 0.85,
+     "opticalDepth": 2.5,
+     "featureSizeMeters": 3500,
+     "forwardScattering": 0.82,
+     "label": "altostratus translucidus",
+     "streakElongation": 2.5,
+     "streakHeadingDeg": 70
+    },
+    {
+     "baseAltitudeMeters": 8500,
+     "thicknessMeters": 600,
+     "coverage": 0.65,
+     "opticalDepth": 0.45,
+     "featureSizeMeters": 2200,
+     "forwardScattering": 0.76,
+     "label": "cirrostratus",
+     "streakElongation": 4,
+     "streakHeadingDeg": 60
+    }
+   ],
+   "reasoning": "The sky is mostly covered by a mid-level altostratus and cirrostratus veil with a small patch of blue sky visible to the left of center, and softer, thicker low-to-mid level cloud masses near the horizon. Diffused sunlight brightens the central cloud layer without revealing the solar disk.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "sunflowers_puresky",
@@ -604,7 +1324,26 @@
   "weather": "partly_cloudy",
   "capturedLocalUnix": 1564992720,
   "polyhavenId": "sunflowers_puresky",
-  "whiteBalanceKelvin": 6550
+  "whiteBalanceKelvin": 6550,
+  "clouds": {
+   "cumulusSkyCover": 0.25,
+   "cumulusBaseAltitudeMeters": 1400,
+   "decks": [
+    {
+     "baseAltitudeMeters": 9500,
+     "thicknessMeters": 1000,
+     "coverage": 0.3,
+     "opticalDepth": 0.4,
+     "featureSizeMeters": 4000,
+     "forwardScattering": 0.75,
+     "label": "cirrus streaks",
+     "streakElongation": 6,
+     "streakHeadingDeg": 45
+    }
+   ],
+   "reasoning": "Scattered fair-weather cumulus puffs cover about a quarter of the sky from mid-elevations down to the horizon, accompanied by a thin, wispy layer of high cirrus streaks.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "syferfontein_0d_clear_puresky",
@@ -669,7 +1408,37 @@
   "capturedLocalUnix": 1464964200,
   "utcOffsetHours": 2,
   "polyhavenId": "table_mountain_1_puresky",
-  "whiteBalanceKelvin": 5400
+  "whiteBalanceKelvin": 5400,
+  "clouds": {
+   "cumulusSkyCover": 0.12,
+   "cumulusBaseAltitudeMeters": 1200,
+   "decks": [
+    {
+     "baseAltitudeMeters": 4000,
+     "thicknessMeters": 600,
+     "coverage": 0.45,
+     "opticalDepth": 2.5,
+     "featureSizeMeters": 1200,
+     "forwardScattering": 0.85,
+     "label": "altocumulus",
+     "streakElongation": 1.8,
+     "streakHeadingDeg": 120
+    },
+    {
+     "baseAltitudeMeters": 8500,
+     "thicknessMeters": 1000,
+     "coverage": 0.65,
+     "opticalDepth": 0.8,
+     "featureSizeMeters": 4000,
+     "forwardScattering": 0.75,
+     "label": "cirrostratus",
+     "streakElongation": 4.5,
+     "streakHeadingDeg": 135
+    }
+   ],
+   "reasoning": "A high, extensive veil of streaky cirrostratus covers much of the upper sky, accompanied by a mid-level layer of patchy altocumulus and a few low cumulus puffs near the horizon.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "table_mountain_2_puresky",
@@ -682,13 +1451,62 @@
   "capturedLocalUnix": 1464966120,
   "utcOffsetHours": 2,
   "polyhavenId": "table_mountain_2_puresky",
-  "whiteBalanceKelvin": 5400
+  "whiteBalanceKelvin": 5400,
+  "clouds": {
+   "cumulusSkyCover": 0.42,
+   "cumulusBaseAltitudeMeters": 1200,
+   "decks": [
+    {
+     "baseAltitudeMeters": 9000,
+     "thicknessMeters": 1000,
+     "coverage": 0.4,
+     "opticalDepth": 0.6,
+     "featureSizeMeters": 4000,
+     "forwardScattering": 0.75,
+     "label": "cirrus and cirrostratus",
+     "streakElongation": 5,
+     "streakHeadingDeg": 45
+    }
+   ],
+   "reasoning": "Moderately thick cumulus patches cover roughly 40% of the sky, overlaid by diffuse, streaky cirrus and cirrostratus near the zenith.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  },
  {
   "id": "wasteland_clouds_puresky",
   "timeOfDay": "sunset",
   "weather": "partly_cloudy",
   "capturedLocalUnix": 1554914160,
-  "polyhavenId": "wasteland_clouds_puresky"
+  "polyhavenId": "wasteland_clouds_puresky",
+  "clouds": {
+   "cumulusSkyCover": 0.12,
+   "cumulusBaseAltitudeMeters": 1400,
+   "decks": [
+    {
+     "baseAltitudeMeters": 8500,
+     "thicknessMeters": 1000,
+     "coverage": 0.35,
+     "opticalDepth": 0.5,
+     "featureSizeMeters": 4000,
+     "forwardScattering": 0.75,
+     "label": "cirrus streaks and veil",
+     "streakElongation": 5,
+     "streakHeadingDeg": 45
+    },
+    {
+     "baseAltitudeMeters": 3800,
+     "thicknessMeters": 600,
+     "coverage": 0.18,
+     "opticalDepth": 4.5,
+     "featureSizeMeters": 3000,
+     "forwardScattering": 0.82,
+     "label": "altostratus patch near sun",
+     "streakElongation": 2,
+     "streakHeadingDeg": 60
+    }
+   ],
+   "reasoning": "Scattered low cumulus puffs and one larger backlit cloud mass near the sun, accompanied by thin upper-level cirrus streaks across the sky.",
+   "source": "gemini-4-argon reading of the photo, 2026-10-21"
+  }
  }
 ]
