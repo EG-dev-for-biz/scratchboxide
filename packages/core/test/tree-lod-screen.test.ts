@@ -287,6 +287,33 @@ describe('TreeLodController depth-of-field demotion', () => {
         expect([0, 1, 2].map(i => levelOf(lod, i))).toEqual(sharp);
     });
 
+    it('focus-plane protection does not flicker at the sphere edge when the measured focus distance jitters a little', async () => {
+        const { root, cam, depths } = await depthRow();
+        const trees = treeNodes(root);
+        const c = clock();
+        const lod = new TreeLodController(root, { now: c.now, triangleBudget: 1e9, view: { foveal: { enabled: false } } });
+        const R1 = sphereOf(trees[1]).radius;
+        // focused well inside the middle tree: establishes protection
+        c.tick(); lod.update(cam, null, dofAt(depths[1]));
+        expect(lod.explain(1).focusProtected).toBe(true);
+        // autofocus jitter: the measured focus distance ticks back and forth a couple of cm either side of the sphere's
+        // edge (what a 100 ms-resampled, quantised depth read produces) - without hysteresis on the membership test
+        // itself this flips protection, and the blur demotion it holds at 0, on every single frame
+        const edge = depths[1] + R1;
+        let flips = 0, was = true;
+        for (let i = 0; i < 20; i++) {
+            c.tick();
+            lod.update(cam, null, dofAt(i % 2 === 0 ? edge - 0.02 : edge + 0.02));
+            const now = lod.explain(1).focusProtected;
+            if (now !== was) flips++;
+            was = now;
+        }
+        expect(flips).toBe(0);
+        // a real, sustained change (focus pulled well clear of the tree) still lifts protection
+        for (let i = 0; i < 10; i++) { c.tick(); lod.update(cam, null, dofAt(depths[2])); }
+        expect(lod.explain(1).focusProtected).toBe(false);
+    });
+
     it('a rack focus crossfades: the edges move at the bounded rate and the shares tile the hash in every frame', async () => {
         const { root, cam, depths } = await depthRow();
         const c = clock();

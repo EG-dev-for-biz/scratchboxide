@@ -926,13 +926,15 @@ struct PlantParams {
     // The distances (m from the camera) at which a viewport changes level, per tree, each a multiple of its height within a
     // range: near up to lodNearPerHeight x height (within [lodNearMinM, lodNearMaxM]), near-mid up to lodNearMidPerHeight x
     // height (within [lodNearMidMinM, lodNearMidMaxM]), mid up to lodFarPerHeight x height (within [lodFarMinM, lodFarMaxM]),
-    // far beyond. A leaf is about 3-4 px wide on a 1,000 px focal length at the near edge (12-30 m for 8-14 cm blades), the
-    // near-mid blades (about 1.7 x longer) at the near-mid edge; past that the mid cards and the far masses read the same.
+    // far beyond. Stretched 2026-10-21 (user decision: high-quality trees across the whole scene, not just close up) past the
+    // leaf-resolvability edges this file used to hold to (a leaf dropping under 3-4 px at a 1,000 px focal length, 12-30 m for
+    // 8-14 cm blades): the near-mid and mid (crown-card) levels already read as full trees from a distance at a fraction of
+    // near's triangle cost, so the stretch leans on them, holding the true high-poly near level to a more modest reach.
     // fadeM is the width of the band over which two levels dither into each other.
-    double lodNearPerHeight{1.0}, lodNearMinM{12.0}, lodNearMaxM{30.0};
-    double lodNearMidPerHeight{6.0}, lodNearMidMinM{25.0}, lodNearMidMaxM{100.0};
-    double lodFarPerHeight{8.0}, lodFarMinM{60.0}, lodFarMaxM{140.0};
-    double lodFadeM{6.0};
+    double lodNearPerHeight{1.15}, lodNearMinM{14.0}, lodNearMaxM{35.0};
+    double lodNearMidPerHeight{6.5}, lodNearMidMinM{30.0}, lodNearMidMaxM{120.0};
+    double lodFarPerHeight{9.0}, lodFarMinM{100.0}, lodFarMaxM{190.0};
+    double lodFadeM{7.0};
     double lodNearMidFadeShare{0.2}; // the near-mid to mid handover dissolves over this share of its distance (at least lodFadeM)
     double lodFarFadeShare{0.25};    // the mid to far handover dissolves over this share of its distance (at least lodFadeM)
     // The tree texture library (scratchbox_tree_textures.hpp; null: none): each tree's leaf set and bark are chosen from it
