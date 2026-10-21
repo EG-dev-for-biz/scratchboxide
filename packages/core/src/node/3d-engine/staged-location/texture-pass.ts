@@ -62,8 +62,12 @@ import type { DepthMap } from '../../../common/spatial/texture-pass-contracts';
 import { detectPlaneRepeats, repeatFill } from './texture-repeat';
 
 /** Part of every texture cache key: a change to the pass's maths is a new version. */
-/** Photo tier A is opt-in (round 6 on the arch: no leave-one-pano-out gain over the projection); SCRATCHBOX_PHOTO_TIER=1 turns it on for a server. */
-export const photoTierEnabled = (): boolean => process.env.SCRATCHBOX_PHOTO_TIER === '1';
+/**
+ * On by default (user decision, 2026-10-21: err toward clean geometry and complex textures wherever they come from);
+ * SCRATCHBOX_PHOTO_TIER=0 reverts to the plain projection (round 6 on the arch measured no leave-one-pano-out gain
+ * from tier A over it, which still stands - this is a deliberate override, not a reversal of that finding).
+ */
+export const photoTierEnabled = (): boolean => process.env.SCRATCHBOX_PHOTO_TIER !== '0';
 export const TEXTURE_PASS_VERSION = `texture-pass/14${photoTierEnabled() ? '+tier' : ''}${lightingCorrectionEnabled() ? `+light:${lightingModels().join(',')}:${lightingPromptVariant()}` : ''}${facadeMaterialsEnabled() ? '+mat2' : ''}`;
 export const RUNG_REPEATED = TEXTURE_LADDER_RUNGS.indexOf('repeated same-plane fill');
 export const RUNG_PALETTE = TEXTURE_LADDER_RUNGS.indexOf('measured palette colour');
