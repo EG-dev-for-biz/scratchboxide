@@ -233,6 +233,8 @@ interface TurnAttemptState {
     helperNotes: string[];
     /** When the turn reached the server (Date.now()); the [chat-turn] timings count from here. */
     startedAt?: number;
+    /** When the credential for the turn was resolved (Date.now()). */
+    authAt?: number;
     /** Set when a router took part in the first model call (fast-router.ts): who chose the first tool, and why. */
     routing?: string;
 }
@@ -323,6 +325,7 @@ export class StreamingEngine {
                     : 'No Google Cloud service account or Gemini API key configured.');
             }
         }
+        const authAt = Date.now();
 
         // If agent is specified, route to Agentic Interaction
         if (request.agent) {
@@ -368,7 +371,7 @@ export class StreamingEngine {
         }
 
         throwIfAborted(signal);
-        const attempt: TurnAttemptState = { modelResponded: false, helperNotes, startedAt: turnStartedAt };
+        const attempt: TurnAttemptState = { modelResponded: false, helperNotes, startedAt: turnStartedAt, authAt };
         // The fallback list stays, but every turn starts from the requested (or configured) model again: a model that
         // answered once is not made the default for later turns. Each skipped model is reported with its reason.
         const candidates = this.client.getModelCandidates(request.model);
@@ -626,7 +629,9 @@ export class StreamingEngine {
             undefined,
             (dropped, error) => addHelperNote(`${dropped} earlier message${dropped === 1 ? ' was' : 's were'} left out of the context: summarizing them with ${DEFAULT_SUBAGENT_MODEL} failed (${summarizeModelError(error)})`)
         );
+        const historyAt = Date.now();
         const built = await this.buildFirstCallPayload(request, model);
+        const payloadAt = Date.now();
         const payload = built.payload;
         // Tools loaded with load_tools in this conversation (tool-catalog.ts).
         const loadedTools = new Set(request.loadedTools || []);
@@ -690,7 +695,13 @@ export class StreamingEngine {
                 call: currentTurn,
                 role: currentTurn === 1 ? 'route' : 'continue',
                 thinking: JSON.stringify(payload.generationConfig.thinkingConfig),
-                contentsBytes: JSON.stringify(payload.contents).length
+                contentsBytes: JSON.stringify(payload.contents).length,
+                // The first call's preparation (later calls reuse the payload).
+                ...(currentTurn === 1 ? {
+                    ...(attempt.authAt !== undefined ? { authMs: attempt.authAt - turnStartedAt } : {}),
+                    historyMs: historyAt - turnStartedAt,
+                    payloadMs: payloadAt - turnStartedAt
+                } : {})
             });
 
             // One tool call: run it under its deadline, show its result, and return the parts for the next call.

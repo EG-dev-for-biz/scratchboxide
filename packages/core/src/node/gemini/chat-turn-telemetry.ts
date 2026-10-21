@@ -46,6 +46,12 @@ export interface ChatTurnRecord extends ChatTurnShape {
     /** What this call was for: 'route' (choose the first tool or answer) or 'continue' (after tool results). */
     role: 'route' | 'continue';
     thinking: string;
+    /** ms from the turn reaching the server to the credential being resolved (a Vertex access token or the API key). */
+    authMs?: number;
+    /** ms from the turn reaching the server to the chat history being compacted (a summary call when it is long). */
+    historyMs?: number;
+    /** ms from the turn reaching the server to the payload being built (system instruction, tools, contents). */
+    payloadMs?: number;
     /** ms from the turn reaching the server to the request being sent (payload building, history compaction). */
     sentMs: number;
     firstByteMs?: number;
