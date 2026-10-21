@@ -18,6 +18,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { decodePng } from '../src/node/texture-processing';
 import { renderMaterialPreview, CLAY_PREVIEW_MATERIAL } from '../src/node/3d-engine/material-preview-render';
+import { renderReviewViews } from '../src/node/3d-engine/visual-review';
 import { applyMaterialCorrections } from '../src/node/3d-engine/reference-object-builder';
 import type { TriangleSoup } from '../src/node/3d-engine/part-connectivity';
 import type { ObjectBuildSpec, PartMaterial } from '../src/common/spatial/object-build-spec';
@@ -131,12 +132,46 @@ describe('renderMaterialPreview', () => {
         expect(go).toBeGreaterThan(ro);
     });
 
+    it('exposes like a product photograph: white reads white without clipping, and a lit colour reads about its base colour', () => {
+        const white = renderMaterialPreview([{ soup: sphere([0, 0, 0], 0.5), material: { baseColor: [1, 1, 1], roughness: 0.9, metalness: 0, transmission: 0 } }], VIEW, 256);
+        const [wr, wg, wb] = patch(white, 128, 128);
+        expect(wr).toBeGreaterThan(215);
+        expect(wr).toBeLessThan(250);
+        expect(Math.abs(wr - wg) + Math.abs(wr - wb)).toBeLessThan(4);
+        // A deep red paint (linear 0.48, 0.05, 0.03: sRGB about 183, 63, 48) reads near that, not washed out or pink.
+        const red = renderMaterialPreview([{ soup: sphere([0, 0, 0], 0.5), material: { baseColor: [0.48, 0.05, 0.03], roughness: 0.6, metalness: 0, transmission: 0 } }], VIEW, 256);
+        const [r, g, b] = patch(red, 128, 128);
+        expect(r).toBeGreaterThan(150);
+        expect(r).toBeLessThan(200);
+        // (a little of the white card's sheen lies on the centre: a gloss, not a wash)
+        expect(g).toBeLessThan(95);
+        expect(b).toBeLessThan(85);
+        // Brass (a metal) facing the camera reflects a mid-grey room, so it reads about its tint, not brighter than white.
+        const brass = renderMaterialPreview([{ soup: sphere([0, 0, 0], 0.5), material: { baseColor: [0.55, 0.45, 0.25], roughness: 0.4, metalness: 1, transmission: 0 } }], VIEW, 256);
+        const [br] = patch(brass, 128, 128);
+        expect(br).toBeLessThan(wr);
+        expect(br).toBeGreaterThan(90);
+    });
+
     it('makes a glowing part brighter than the same part unlit', () => {
         const base: PartMaterial = { baseColor: [0.2, 0.15, 0.05], roughness: 0.6, metalness: 0, transmission: 0 };
         const dark = renderMaterialPreview([{ soup: sphere([0, 0, 0], 0.5), material: base }], VIEW, 128);
         const glow = renderMaterialPreview([{ soup: sphere([0, 0, 0], 0.5), material: { ...base, emissive: [1, 0.6, 0.1], emissiveStrength: 2 } }], VIEW, 128);
         save('material_preview_glow.png', glow);
         expect(patch(glow, 64, 64)[0]).toBeGreaterThan(patch(dark, 64, 64)[0] + 60);
+    });
+});
+
+describe('renderReviewViews', () => {
+    it('draws a small object (a 0.07 m bottle) instead of a blank frame: the near plane follows the camera distance', () => {
+        const [small] = renderReviewViews(sphere([0, 0, 0], 0.035), 256, { views: [{ label: 'three-quarter view', azimuthDeg: 35, elevationDeg: 22 }] });
+        const [large] = renderReviewViews(sphere([0, 0, 0], 3.5), 256, { views: [{ label: 'three-quarter view', azimuthDeg: 35, elevationDeg: 22 }] });
+        save('review_small_sphere.png', small.png);
+        const bg = pixel(small.png, 2, 2);
+        const centreSmall = pixel(small.png, 128, 128), centreLarge = pixel(large.png, 128, 128);
+        expect(centreSmall).not.toEqual(bg);
+        // the same framing at either scale
+        expect(Math.abs(centreSmall[0] - centreLarge[0])).toBeLessThan(3);
     });
 });
 

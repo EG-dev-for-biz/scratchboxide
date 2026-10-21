@@ -21,6 +21,11 @@
  * not depend on drawing order. A surface stops what is behind it in proportion to its opacity. Smooth vertex
  * normals, perspective-correct, 2x supersampled. No texture maps (the spec has none), no shadows, no refraction.
  *
+ * Exposure is set like a product photograph's: a white matte surface facing the camera reads WHITE_POINT (0.9 linear,
+ * sRGB 243), so a lit surface reads about its own base colour, and only highlights go over 1. Measured before this
+ * calibration (2026-10-21), every lit surface read 1.3-1.8x its base colour and bare metal reflected a near-white room,
+ * so the material check called nearly every part "too bright" and corrected it darker than the reference.
+ *
  * Nothing here reads part ids or labels for meaning: a part without a material is studio clay.
  */
 
@@ -92,6 +97,9 @@ function studioIrradiance(n: V3, lights: StudioLight[]): number {
     return e;
 }
 
+/** What a white matte surface facing the camera reads, linear (sRGB 243): the exposure of the render. */
+export const WHITE_POINT = 0.9;
+
 /** Linear 0..1+ to an sRGB byte, with a soft shoulder so highlights do not clip flat. */
 function toSrgbByte(x: number): number {
     const t = x <= 0 ? 0 : x < 0.8 ? x : 0.8 + 0.2 * (1 - Math.exp(-(x - 0.8) / 0.2));
@@ -153,7 +161,7 @@ function shadingOf(m: PartMaterial): Shading {
  * Shades one surface point: returns the light it sends to the camera (`add`) and the factor it multiplies the light
  * behind it by (`mult`, zero for an opaque surface).
  */
-function shade(s: Shading, n: V3, v: V3, lights: StudioLight[]): { add: V3; mult: V3 } {
+function shade(s: Shading, n: V3, v: V3, lights: StudioLight[], exposure: number): { add: V3; mult: V3 } {
     const ndv = Math.max(1e-3, dot(n, v));
     const r: V3 = [2 * ndv * n[0] - v[0], 2 * ndv * n[1] - v[1], 2 * ndv * n[2] - v[2]];
     const spec = studioRadiance(r, lights, s.sharpness);
@@ -165,7 +173,7 @@ function shade(s: Shading, n: V3, v: V3, lights: StudioLight[]): { add: V3; mult
     for (let k = 0; k < 3; k++) {
         const F = s.f0[k] + (1 - s.f0[k]) * grazing;
         const diffuse = s.base[k] * (1 - s.metal) * (1 - s.pass) * irr * (1 - F);
-        add[k] = (diffuse + F * spec) * (1 - ccF) + ccF * ccSpec + s.emit[k];
+        add[k] = ((diffuse + F * spec) * (1 - ccF) + ccF * ccSpec + s.emit[k]) * exposure;
         mult[k] = s.pass * (1 - F) * (1 - ccF) * s.base[k];
     }
     return { add, mult };
@@ -196,6 +204,9 @@ export function renderMaterialPreview(meshes: MaterialPreviewMesh[], view: Mater
     const up: V3 = [right[1] * fwd[2] - right[2] * fwd[1], right[2] * fwd[0] - right[0] * fwd[2], right[0] * fwd[1] - right[1] * fwd[0]];
     const focal = 1 / Math.tan((fov * Math.PI) / 360);
     const lights = studioLights(toCam);
+    // The camera's exposure: a white matte surface facing it reads WHITE_POINT (its irradiance times (1 - F0) at
+    // normal incidence for a dielectric is what such a surface sends back).
+    const exposure = WHITE_POINT / (studioIrradiance(toCam, lights) * 0.96);
     const near = 1e-3;
 
     // Nearest opaque surface per sample, then the see-through layers in front of it.
@@ -263,7 +274,7 @@ export function renderMaterialPreview(meshes: MaterialPreviewMesh[], view: Mater
                         const v = norm([eye[0] - wp[0], eye[1] - wp[1], eye[2] - wp[2]]);
                         // Surfaces are seen from either side (open sweeps, the inside of a vessel).
                         if (dot(n, v) < 0) n = [-n[0], -n[1], -n[2]];
-                        const out = shade(s, n, v, lights);
+                        const out = shade(s, n, v, lights, exposure);
                         if (opaquePass) {
                             depth[pi] = z;
                             for (let k = 0; k < 3; k++) colour[pi * 3 + k] = out.add[k];
