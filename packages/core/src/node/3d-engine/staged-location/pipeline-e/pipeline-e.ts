@@ -141,7 +141,7 @@ export function plainTextures(run: MassingRun): { textures: Map<number, FaceText
     for (const f of run.report.faces) {
         if (!f.width || f.kind === 'base') continue;
         const o = readFaceOrtho(run.dir, f);
-        if (o) textures.set(f.index, textureFromOrtho(o));
+        if (o) textures.set(f.index, textureFromOrtho(o, f.pixel));
     }
     const walls = run.report.faces.filter(f => f.kind === 'wall').map(f => textures.get(f.index)).filter((t): t is FaceTexture => !!t);
     const median = medianColour(walls) ?? medianColour([...textures.values()]) ?? [150, 150, 150];

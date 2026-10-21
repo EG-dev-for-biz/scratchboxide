@@ -16,6 +16,7 @@
 import { TEXTURE_LADDER_RUNGS } from '../../../../common/spatial/texture-pass-contracts';
 import type { FaceTexture, TexelSource } from './massing-glb';
 import type { FaceOrtho } from './native-massing';
+import { delightLinearPlane, linearToSrgb255, PHOTOGRAMMETRIC_DELIGHT, SRGB8_TO_LINEAR, TEXTURE_LIFT_CAP } from '../../../../common/spatial/photogrammetric-delight';
 
 const rung = (name: (typeof TEXTURE_LADDER_RUNGS)[number]) => TEXTURE_LADDER_RUNGS.indexOf(name);
 
@@ -30,12 +31,27 @@ export function baseLegend(): TexelSource[] {
     ];
 }
 
-/** Copies the ortho into a texture: covered texels as rendered (source tileOrtho), the rest 255-marked as not yet produced. */
-export function textureFromOrtho(o: FaceOrtho): FaceTexture {
+/**
+ * Copies the ortho into a texture: covered texels as rendered (source tileOrtho), de-lit (photogrammetric-delight.ts, the
+ * lift capped by local contrast so a genuinely dark feature like a window reveal keeps its darkness), the rest
+ * 255-marked as not yet produced. Grammar and relief (inference.ts) read their renders from this texture, so a baked
+ * cast shadow is lifted before anything measures from it, not after: measurements are read off the same de-lit face
+ * every other texel in the scene already gets, never off the raw tile ortho.
+ */
+export function textureFromOrtho(o: FaceOrtho, pixelM: number): FaceTexture {
     const N = o.width * o.height;
     const rgba = new Uint8Array(o.rgba);
     const source = new Uint8Array(N).fill(255);
-    for (let i = 0; i < N; i++) if (o.rgba[i * 4 + 3] === 255) source[i] = SRC.tileOrtho;
+    const has = new Uint8Array(N);
+    for (let i = 0; i < N; i++) if (o.rgba[i * 4 + 3] === 255) { source[i] = SRC.tileOrtho; has[i] = 1; }
+    const plane = new Float32Array(N * 3);
+    for (let i = 0; i < N; i++) if (has[i]) {
+        plane[i * 3] = SRGB8_TO_LINEAR[rgba[i * 4]]; plane[i * 3 + 1] = SRGB8_TO_LINEAR[rgba[i * 4 + 1]]; plane[i * 3 + 2] = SRGB8_TO_LINEAR[rgba[i * 4 + 2]];
+    }
+    delightLinearPlane(plane, has, o.width, o.height, PHOTOGRAMMETRIC_DELIGHT.defaults, { radiusTexels: Math.max(1, Math.round(TEXTURE_LIFT_CAP.radiusM / pixelM)), contrastGain: TEXTURE_LIFT_CAP.contrastGain });
+    for (let i = 0; i < N; i++) if (has[i]) {
+        rgba[i * 4] = Math.round(linearToSrgb255(plane[i * 3])); rgba[i * 4 + 1] = Math.round(linearToSrgb255(plane[i * 3 + 1])); rgba[i * 4 + 2] = Math.round(linearToSrgb255(plane[i * 3 + 2]));
+    }
     return { width: o.width, height: o.height, rgba, source };
 }
 
