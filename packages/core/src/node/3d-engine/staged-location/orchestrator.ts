@@ -161,7 +161,7 @@ import { enhanceGuards, enhanceModels, genAiPlateClient, stagedEnhance, ENHANCE_
 import { stagedShapeProgram } from './pipeline-e/shape-program';
 import { runShapeStage, SHAPE_STAGE_VERSION } from './pipeline-e/shape-stage';
 import { projectionViewsFromEvidence } from './texture-pass';
-import { registeredSurveyViews } from './streetview-registered-views';
+import { contextWithoutStructure, registeredSurveyViews, trustedRegisteredPose } from './streetview-registered-views';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
 import { facadeGrammarEnabled, grammarFileText, runFacadeGrammarPass, FACADE_GRAMMAR_GATE_VERSION, FACADE_GRAMMAR_PROMPT_VERSION, type GrammarFacadeOutcome } from './facade-grammar';
 import { TEXTURE_LADDER_RUNGS, type ProjectionView, type TexturePassDegradation, type TexturePassRecord, type TextureLayerBundle } from '../../../common/spatial/texture-pass-contracts';
@@ -2019,7 +2019,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const { occluder, context } = prepared;
                 if (segmenter && occluder.indices.length) {
                     const to = now();
-                    const own = await step('streetViewOwnership', () => ownViews({ views, structure: occluder, ...(ownVision ? { target: request.query } : {}), ...(context.indices.length ? { context } : {}), segment: segmenter, signal: io.signal, onProgress: m => io.progress(`textures: ${m}`), ...(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR ? { debugDir: path.join(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR, runId) } : {}) }));
+                    const own = await step('streetViewOwnership', () => ownViews({ views, structure: occluder, ...(ownVision ? { target: request.query } : {}), ...(context.indices.length ? { context } : {}), segment: segmenter, describe: v => !trustedRegisteredPose(evidence?.registration, v.panoId), signal: io.signal, onProgress: m => io.progress(`textures: ${m}`), ...(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR ? { debugDir: path.join(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR, runId) } : {}) }));
                     views = own.views;
                     const kept = own.records.filter(r => r.status === 'segmented').length;
                     ownershipKey = `sv-ownership/${OWNERSHIP_VERSION}:${sha256Bytes(Buffer.concat(views.map(v => Buffer.from(v.ownerMask ?? new Uint8Array(0)))))}`;
@@ -2964,40 +2964,41 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const sv = streetView ?? {};
                     const segmenter = process.env.SCRATCHBOX_TEXTURE_OWNERSHIP === '0' ? false : deps.textures?.segmenter
                         ?? objectSegmenter(visionAvailable ? { modelSource: { getGenAIClient: async () => visionAvailable.client, getModelCandidates: () => visionAvailable.candidates } } : {});
-                    const streetViews = !missingCredentials(sv) && segmenter ? async (mesh: RenderMesh3D) => {
-                        const found = await discoverOnce();
-                        const usable = found.panos.filter(p => !sv.refusedPanos?.has(p.panoId));
-                        const views = selectViewsForStructure(usable, footprintSurveyFaces(structure!), structure!, t.ground!, t.unmaskedTop ?? t.ground!.top);
-                        io.progress(`pipeline E: fetching ${views.length} Street View photos for the facades' colour`);
-                        const got = await fetchViews(views, sv, io.signal);
-                        if (got.images.length) run.state.attribution = [...new Set([...run.state.attribution, 'Street View ©Google'])];
-                        const pv = projectionViewsFromEvidence(got.images).views;
-                        const context = sceneToRenderMesh(readGlbScene(extraction.geometryGlb));
-                        const own = await ownViews({ views: pv, structure: mesh, ...(visionAvailable ? { target: request.query } : {}), context, segment: segmenter, signal: io.signal, onProgress: m => io.progress(`pipeline E: ${m}`) });
-                        cache.writeRunNote(runId, 'pipeline_e_ownership', { records: own.records, panos: got.images.map(i => i.view.panoId) });
-                        return own.views;
+                    // one Street View survey for both uses below: the views registered against the tile mesh (edges, then jointly) and
+                    // cut out by the ownership and occluder masks (streetview-registered-views.ts). The colour step used to fetch its own
+                    // views at nominal poses (about ±2 m): at the Haughwout the projection fell on the neighbours and 3 of 4 were refused.
+                    // The context for the masks is the tile mesh without the structure's own scan: the melted scan bulging past the
+                    // massing plane is not something in front of it.
+                    let survey: Promise<Awaited<ReturnType<typeof registeredSurveyViews>>> | undefined;
+                    const registeredSurvey = !missingCredentials(sv) && segmenter ? () => {
+                        survey ??= (async () => {
+                            const found = await discoverOnce();
+                            const usable = found.panos.filter(p => !sv.refusedPanos?.has(p.panoId));
+                            io.progress(`pipeline E: surveying the facades with Street View (${usable.length} Google panos near; registered views)`);
+                            const tileMesh = sceneToRenderMesh(readGlbScene(extraction.geometryGlb));
+                            const context = e.refined.rawClayGlb && fs.existsSync(e.refined.rawClayGlb) ? contextWithoutStructure(tileMesh, sceneToRenderMesh(readGlbScene(e.refined.rawClayGlb))) : tileMesh;
+                            const got = await registeredSurveyViews({
+                                site: { structure: structure!, ground: t.ground!, unmaskedTop: t.unmaskedTop ?? t.ground!.top }, panos: usable, maxViews: ENHANCE_STREET_VIEWS, streetLevel: true,
+                                sv: { ...sv, refusedPanos: sv.refusedPanos ?? new Map<string, string>() }, tileMeshFiles: [extraction.geometryGlb], structureMesh,
+                                context, segment: segmenter, ...(visionAvailable ? { target: request.query } : {}),
+                                ...(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR ? { debugDir: path.join(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR, runId, 'survey') } : {}),
+                                signal: io.signal, onProgress: m => io.progress(`pipeline E: Street View: ${m}`)
+                            });
+                            if (got.images.length) run.state.attribution = [...new Set([...run.state.attribution, 'Street View ©Google'])];
+                            cache.writeRunNote(runId, 'pipeline_e_enhance_streetview', {
+                                views: got.views.map(v => ({ panoId: v.panoId, faceId: v.faceId, registration: v.registration, ownership: v.ownership?.status, prompts: v.ownership?.prompts, iou: v.ownership?.iou, ownedPixels: v.ownerMask?.reduce((a, x) => a + (x ? 1 : 0), 0) ?? 0, occluders: v.ownership?.occluders })),
+                                refusals: got.refusals, failures: got.failures, registrationError: got.registrationError, registration: got.registration, ms: got.ms, panosNear: usable.length, contextCut: context !== tileMesh
+                            });
+                            cache.writeRunNote(runId, 'pipeline_e_ownership', { records: got.views.map(v => v.ownership).filter(Boolean), panos: got.images.map(i => i.view.panoId) });
+                            return got;
+                        })();
+                        return survey;
                     } : undefined;
+                    const streetViews = registeredSurvey ? async () => (await registeredSurvey()).views : undefined;
                     const crowns = strip ? crownsFromStrip(JSON.parse(fs.readFileSync(strip.crownsJson, 'utf8'))) : [];
                     const enhanceOn = request.enhance ?? stagedEnhance();
-                    // enhanced mode's own Street View survey: the views registered against the tile mesh (edges, then jointly) and
-                    // cut out, so each wall's redraw is guided by and checked against a photo whose pose holds (plate-streetview.ts)
-                    const guideViews = enhanceOn && enhanceGuards() && !missingCredentials(sv) && segmenter ? async () => {
-                        const found = await discoverOnce();
-                        const usable = found.panos.filter(p => !sv.refusedPanos?.has(p.panoId));
-                        io.progress('pipeline E: enhanced mode: surveying the facades with Street View (registered views)');
-                        const got = await registeredSurveyViews({
-                            site: { structure: structure!, ground: t.ground!, unmaskedTop: t.unmaskedTop ?? t.ground!.top }, panos: usable, maxViews: ENHANCE_STREET_VIEWS, streetLevel: true,
-                            sv: { ...sv, refusedPanos: sv.refusedPanos ?? new Map<string, string>() }, tileMeshFiles: [extraction.geometryGlb], structureMesh,
-                            context: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)), segment: segmenter, ...(visionAvailable ? { target: request.query } : {}),
-                            signal: io.signal, onProgress: m => io.progress(`pipeline E: enhanced mode: ${m}`)
-                        });
-                        if (got.images.length) run.state.attribution = [...new Set([...run.state.attribution, 'Street View ©Google'])];
-                        cache.writeRunNote(runId, 'pipeline_e_enhance_streetview', {
-                            views: got.views.map(v => ({ panoId: v.panoId, faceId: v.faceId, registration: v.registration, ownership: v.ownership?.status, iou: v.ownership?.iou, ownedPixels: v.ownerMask?.reduce((a, x) => a + (x ? 1 : 0), 0) ?? 0 })),
-                            refusals: got.refusals, failures: got.failures, registrationError: got.registrationError, ms: got.ms
-                        });
-                        return got.views;
-                    } : undefined;
+                    // enhanced mode's guidance and check of each wall's redraw use the same registered views (plate-streetview.ts)
+                    const guideViews = enhanceOn && enhanceGuards() && registeredSurvey ? async () => (await registeredSurvey()).views : undefined;
                     const enhance = deps.textures?.enhance;
                     const inferenceInput: Parameters<typeof runInferenceE>[0] = {
                         massing: r.massing, run: r.run!, textures: r.textures!, tilePath: strip ? strip.devegetatedGlb : extraction.texturedGlb, isolateGlb: e.refined.rawClayGlb!,
@@ -3011,7 +3012,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const out = stagedGeometryF() && visionAvailable
                         ? await runVersionFEnhanced({ ...inferenceInput, place: placeValue!.formattedAddress, genai: visionAvailable.client })
                         : await runInferenceE(inferenceInput);
-                    cache.writeRunNote(runId, 'pipeline_e_inference', { steps: out.steps, timingsMs: out.timingsMs });
+                    cache.writeRunNote(runId, 'pipeline_e_inference', { steps: out.steps, timingsMs: out.timingsMs, streetViewTexels: out.streetViewTexels });
                     recordResidualAudit('grammar', out.run, enhanceOn ? 'enhanced layer' : 'inferred layer');
                     const kept = out.steps.filter(s => s.accepted > 0);
                     const conf = Math.max(0.05, Math.min(1, ...out.grammars.map(g => g.confidence), 0.75));
