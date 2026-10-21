@@ -31,6 +31,12 @@ export class HeadlessMeshSilhouetteRenderer {
      * Renders a 3D mesh into depth and binary silhouette buffers using fast
      * software scanline rasterization in pure Node.js.
      */
+    /** The near clipping plane for a pose: 0.5 m, or 2 % of the camera's distance to its target when that is nearer. */
+    public static nearPlaneFor(pose: CameraPose6DOF): number {
+        const d = Math.hypot(pose.targetX - pose.x, pose.targetY - pose.y, pose.targetZ - pose.z);
+        return Math.min(0.5, Math.max(1e-4, 0.02 * d));
+    }
+
     public static renderMesh(
         mesh: RenderMesh3D,
         pose: CameraPose6DOF,
@@ -52,7 +58,9 @@ export class HeadlessMeshSilhouetteRenderer {
 
         const fovRad = (pose.fov * Math.PI) / 180.0;
         const aspect = width / height;
-        const near = 0.5;
+        // The near plane follows the camera's distance to its target: a fixed 0.5 m left everything closer than that
+        // unrendered, so a small object (a 0.07 m bottle framed at 0.26 m) came out as a blank frame.
+        const near = HeadlessMeshSilhouetteRenderer.nearPlaneFor(pose);
         const far = 20000.0;
 
         // 1. Build View Matrix (LookAt)
@@ -740,7 +748,7 @@ export class HeadlessMeshSilhouetteRenderer {
         const aspect = width / height;
         const fovRad = (pose.fov * Math.PI) / 180;
         const f = 1.0 / Math.tan(fovRad / 2);
-        const zNear = 0.5;
+        const zNear = HeadlessMeshSilhouetteRenderer.nearPlaneFor(pose);
         const zFar = 1000.0;
 
         const V = [
@@ -966,7 +974,7 @@ export class HeadlessMeshSilhouetteRenderer {
         const aspect = width / height;
         const fovRad = (pose.fov * Math.PI) / 180;
         const f = 1.0 / Math.tan(fovRad / 2);
-        const zNear = 0.5;
+        const zNear = HeadlessMeshSilhouetteRenderer.nearPlaneFor(pose);
         const zFar = 1000.0;
 
         const V = [
@@ -1132,7 +1140,7 @@ export class HeadlessMeshSilhouetteRenderer {
         const aspect = width / height;
         const fovRad = (pose.fov * Math.PI) / 180;
         const f = 1.0 / Math.tan(fovRad / 2);
-        const zNear = 0.5;
+        const zNear = HeadlessMeshSilhouetteRenderer.nearPlaneFor(pose);
         const zFar = 1000.0;
 
         const V = [
