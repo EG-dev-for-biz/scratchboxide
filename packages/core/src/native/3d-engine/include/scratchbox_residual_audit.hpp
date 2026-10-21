@@ -308,6 +308,13 @@ public:
                << ",\"baseAboveGroundM\":" << num(c.baseAboveGroundM) << ",\"topAboveGroundM\":" << num(c.topAboveGroundM) << "}"
                << ",\"symmetry\":{\"radialSymmetry\":" << num(c.radialSymmetry) << ",\"radiusMedianM\":" << num(c.radiusMedianM) << ",\"slicesUsed\":" << c.slicesUsed
                << ",\"crossSectionConstancy\":" << num(c.crossSectionConstancy) << ",\"periodicity\":" << num(c.periodicity) << ",\"periodM\":" << num(c.periodM) << "}"
+               << ",\"slices\":[";
+            for (size_t i = 0; i < c.slices.size(); ++i) {
+                const SliceFit& f = c.slices[i];
+                js << (i ? "," : "") << "{\"y\":" << num(f.y) << ",\"cx\":" << num(f.cx) << ",\"cz\":" << num(f.cz) << ",\"r\":" << num(f.r)
+                   << ",\"rmsRel\":" << num(f.rmsRel) << ",\"sectors\":" << num(f.sectors) << ",\"size\":" << num(f.size) << ",\"points\":" << f.points << "}";
+            }
+            js << "]"
                << ",\"photo\":" << (c.photo ? "{\"rgb\":[" + num(c.photoRgb[0]) + "," + num(c.photoRgb[1]) + "," + num(c.photoRgb[2]) + "],\"lumaStd\":" + num(c.photoLumaStd) + ",\"share\":" + num(c.photoShare) + "}" : std::string("null"))
                << ",\"triangleIds\":[";
             for (size_t i = 0; i < c.tris.size(); ++i) js << (i ? "," : "") << c.tris[i];

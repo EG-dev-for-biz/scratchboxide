@@ -29,6 +29,7 @@ import { baseLegend, fillNearest, medianColour, SRC, textureFromOrtho } from './
 import { facadeMaterialsEnabled } from '../facade-material-evidence';
 import { auditMassingRun, UNSURE_PROVENANCE } from './residual-audit-e';
 import { delightTileImageBytes } from './residual-tile-delight';
+import { RESIDUAL_SHAPE_TOKEN } from './residual-shape-fit';
 
 /** Below this share of its texels covered by the tile, a face is filled with one median colour. */
 export const LOW_COVERAGE = 0.35;
@@ -93,6 +94,13 @@ export interface MassingStageResult {
 
 /** The provenance record of a node of E's layer (open labels). */
 export function massingProvenance(node: Pick<MassingNode, 'kind' | 'provenance' | 'confidence'>, massing: Pick<Massing, 'check'>): ProvenanceRecord {
+    if (node.provenance === RESIDUAL_SHAPE_TOKEN) {
+        return {
+            label: 'measured', measuredGeometry: true, confidence: Math.max(0, Math.min(1, node.confidence ?? 0.5)),
+            method: 'residual audit: a residual cluster measured as confidently radially symmetric (its circle-fit median score, cross-section constancy) fit with a clean solid of revolution from its own measured per-slice radius, instead of its raw, unresolved scan triangles; coloured with its own measured average photo colour',
+            sources: [{ kind: 'tile-extraction', id: 'isolate' }]
+        };
+    }
     if (node.kind === 'residual') {
         const unsure = node.provenance === UNSURE_PROVENANCE;
         return {
@@ -167,7 +175,8 @@ export function writeMassingLayer(run: MassingRun, massing: Pick<Massing, 'check
     }
     const input = {
         nodes: run.nodes, faces: run.report.faces, stage, stageKey, textures, legend, tileImages, tileLegendIndex: 0,
-        provenanceOf: (n: MassingNode) => provenanceOf?.(n) ?? massingProvenance(n, massing)
+        provenanceOf: (n: MassingNode) => provenanceOf?.(n) ?? massingProvenance(n, massing),
+        ...(run.flatColours ? { flatColours: run.flatColours } : {})
     };
     const clayGlb = path.join(dir, `${name}_clay.glb`), texturedGlb = path.join(dir, `${name}_textured.glb`);
     fs.writeFileSync(clayGlb, writeMassingClayGlb(input));

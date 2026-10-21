@@ -125,6 +125,8 @@ export interface NativeCluster {
         overhangShare: number; medianDropM: number; maxDropM: number; supportY: number; baseAboveSupportM: number; topAboveSupportM: number; baseAboveGroundM: number | null; topAboveGroundM: number | null;
     };
     symmetry: { radialSymmetry: number; radiusMedianM: number; slicesUsed: number; crossSectionConstancy: number; periodicity: number; periodM: number };
+    /** Horizontal slices (sliceStepM apart): each slice's circle fit (y, cx, cz, r all world metres; r 0 when the fit failed). */
+    slices: Array<{ y: number; cx: number; cz: number; r: number; rmsRel: number; sectors: number; size: number; points: number }>;
     photo: { rgb: V3; lumaStd: number; share: number } | null;
     triangleIds: number[];
 }
