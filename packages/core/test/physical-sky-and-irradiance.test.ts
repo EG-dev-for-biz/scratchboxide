@@ -18,6 +18,9 @@ import { solarIrradiance } from '../src/browser/generative-canvas/services/atmos
 import { correlatedColorTemperature } from '../src/browser/generative-canvas/services/atmosphere/spectral-sun';
 import { buildPhysicalSkyLut, physicalSkyRowElevation } from '../src/browser/generative-canvas/services/atmosphere/physical-sky';
 import { computeDiurnalLightingProfile, skyLightColorHex } from '../src/browser/generative-canvas/services/atmosphere/diurnal-lighting';
+import { directSunColor, groundBounceColor } from '../src/browser/generative-canvas/services/atmosphere/AtmosphericSkyDome';
+import { kelvinToRGB } from '../src/browser/generative-canvas/services/atmosphere/kelvin';
+import * as THREE from 'three';
 
 describe('clear-sky irradiance (Bird & Hulstrom, Kasten & Czeplak)', () => {
     it('gives realistic clear-sky magnitudes', () => {
@@ -108,5 +111,40 @@ describe('scene lights follow the direct:diffuse split', () => {
         const p = computeDiurnalLightingProfile(60);
         const after = p.sunIntensity * Math.sin((60 * Math.PI) / 180) + p.skyLightIntensity * hexLum(skyLightColorHex(p));
         expect(after).toBeCloseTo(before, 6);
+    });
+});
+
+describe('a chosen colour temperature reaches every light, not just the direct sun', () => {
+    it('warms groundBounceColor by the same kelvin tint directSunColor uses, at golden hour and at night', () => {
+        const golden = computeDiurnalLightingProfile(2);
+        expect(golden.isGoldenHour).toBe(true);
+        const night = computeDiurnalLightingProfile(-10);
+        expect(night.isNight).toBe(true);
+        for (const profile of [golden, night]) {
+            const cool = groundBounceColor(profile, 2, 9000);
+            const warm = groundBounceColor(profile, 2, 2500);
+            // a lower kelvin (warmer) multiplies in a redder tint than a higher kelvin (cooler): more red, less blue
+            expect(warm.r / Math.max(1e-6, warm.b)).toBeGreaterThan(cool.r / Math.max(1e-6, cool.b));
+            // the untinted call (kelvin omitted) is the plain phase colour, unchanged from before this fix
+            const plain = groundBounceColor(profile, 2);
+            const expectedPlain = profile.isGoldenHour ? 0x431407 : 0x050811;
+            expect(plain.getHex()).toBe(new THREE.Color(expectedPlain).getHex());
+            // tinting is exactly the phase colour times kelvinToRGB(kelvin), the same pattern directSunColor uses
+            const expectedWarm = new THREE.Color(expectedPlain).multiply(kelvinToRGB(2500));
+            expect(warm.r).toBeCloseTo(expectedWarm.r, 6);
+            expect(warm.g).toBeCloseTo(expectedWarm.g, 6);
+            expect(warm.b).toBeCloseTo(expectedWarm.b, 6);
+        }
+    });
+
+    it('directSunColor and groundBounceColor warm together under the same explicit kelvin', () => {
+        const profile = computeDiurnalLightingProfile(2);
+        const config = { kelvinTemperature: 2200 };
+        const sun = directSunColor(profile, config, profile.isGoldenHour);
+        const ground = groundBounceColor(profile, 2, config.kelvinTemperature);
+        // both are warmed by the same kelvinToRGB(2200): their colour ratios (not absolute brightness) line up
+        const ratio = (c: THREE.Color) => c.r / Math.max(1e-6, c.b);
+        expect(ratio(ground)).toBeCloseTo(ratio(new THREE.Color(0x431407).multiply(kelvinToRGB(2200))), 6);
+        expect(ratio(sun)).toBeGreaterThan(1); // warm: redder than blue
     });
 });

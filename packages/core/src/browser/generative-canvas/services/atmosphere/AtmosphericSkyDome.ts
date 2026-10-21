@@ -575,14 +575,25 @@ export function requireLocation(tool: string, latitude: number | undefined, long
 }
 
 /**
+ * The colour temperature the direct sun actually uses this frame: the config's own explicit choice, else a
+ * phase-appropriate default. Shared by directSunColor and the ambient/ground bounce colours below, so a chosen or
+ * requested kelvin warms or cools every light in the scene together, not the direct sun alone.
+ */
+function effectiveSunKelvin(profile: { isNight: boolean }, config: AtmosphericScatteringConfig, warm: boolean): number {
+    return config.kelvinTemperature || (warm ? 3200 : (profile.isNight ? 12000 : 6500));
+}
+
+/**
  * The hemisphere light's ground colour by day: light bounced off the ground, the profile's ground albedo times the
  * irradiance reaching the ground (the sun on a level surface plus the sky) relative to the sky light the hemisphere is
  * scaled by. A navy ground colour (the old daytime value) lit every wall from below in blue and left clay scenes dark.
- * Golden hour and night keep their own tints.
+ * Golden hour and night keep their own tints, warmed or cooled by `kelvin` the same way directSunColor's phase tint
+ * is, so a chosen colour temperature reaches the bounce light too, not just the direct sun.
  */
-export function groundBounceColor(profile: { isGoldenHour: boolean; isNight: boolean; sunIntensity: number; skyLightIntensity: number; groundAlbedoLinear?: number[] }, elevationDeg: number): THREE.Color {
-    if (profile.isGoldenHour) return new THREE.Color(0x431407);
-    if (profile.isNight) return new THREE.Color(0x050811);
+export function groundBounceColor(profile: { isGoldenHour: boolean; isNight: boolean; sunIntensity: number; skyLightIntensity: number; groundAlbedoLinear?: number[] }, elevationDeg: number, kelvin?: number): THREE.Color {
+    const warmed = (hex: number) => kelvin === undefined ? new THREE.Color(hex) : new THREE.Color(hex).multiply(kelvinToRGB(kelvin));
+    if (profile.isGoldenHour) return warmed(0x431407);
+    if (profile.isNight) return warmed(0x050811);
     const albedo = profile.groundAlbedoLinear ?? [0.18, 0.18, 0.18];
     const level = Math.max(0, Math.sin((elevationDeg * Math.PI) / 180));
     const gain = (profile.sunIntensity * level + profile.skyLightIntensity) / Math.max(1e-3, profile.skyLightIntensity);
@@ -599,7 +610,7 @@ export function directSunColor(profile: DiurnalLightingProfile, config: Atmosphe
         const [r, g, b] = profile.sunLinearRgb;
         return new THREE.Color().setRGB(r, g, b, THREE.LinearSRGBColorSpace);
     }
-    const kelvin = config.kelvinTemperature || (warm ? 3200 : (profile.isNight ? 12000 : 6500));
+    const kelvin = effectiveSunKelvin(profile, config, warm);
     const tint = new THREE.Color(
         profile.isGoldenHour
             ? '#ffb355'
@@ -675,8 +686,10 @@ export function createAtmosphericSkyDome(
         // cloudCoverage is the sky cover an observer sees; the layer's own (plan) coverage is lower because cloud
         // sides fill sky too (measured table, layerCoverageForSkyCover).
         uCloudCoverage: { value: layerCoverageForSkyCover(config.cloudCoverage ?? (config.volumetricClouds === true ? 0.35 : 0.0)) },
-        uCloudDensity: { value: config.cloudDensity ?? (config.volumetricClouds === true ? 0.45 : 0.0) },
-        uCloudAltitude: { value: config.cloudAltitude ?? 1200.0 },
+        // density's own default follows the same "explicitly enabled or coverage is passed" rule as coverage above: coverage
+        // with no density given is not an invisible cloud (sigmaT 0), it is a cloud at a believable default density
+        uCloudDensity: { value: config.cloudDensity ?? ((config.volumetricClouds === true || (config.cloudCoverage ?? 0) > 0) ? 0.3 : 0.0) },
+        uCloudAltitude: { value: config.cloudAltitude ?? 2200.0 },
         uTime: { value: 0.0 },
 
         uShellLayerCount: { value: 0 },
@@ -769,6 +782,11 @@ export function createAtmosphericSkyDome(
     // an environment helper, not a scene object: it follows the camera every frame (see followCamera), so a click
     // selecting it would put the transform gizmo at the camera's own position, scaled to the ~0 distance between them
     skyDome.userData.isHelper = true;
+    // a sky dome sits gigantic and centred exactly on the camera (see followCamera): three's default per-object frustum
+    // test on a sphere that size, that close to the eye, is exactly the case it is least reliable at, and can wrongly
+    // cull the whole dome depending on the camera's current framing. The offscreen bake dome already disables this
+    // (bakeDome.frustumCulled = false above); the one actually drawn on screen needs the same.
+    skyDome.frustumCulled = false;
     skyDome.renderOrder = -1000;
     scene.add(skyDome);
 
@@ -876,10 +894,13 @@ export function createAtmosphericSkyDome(
     }, glareStrength);
     scene.add(sunGlare.mesh);
 
-    // Dynamic Hemisphere Sky & Ground Ambient Bounce Light
+    // Dynamic Hemisphere Sky & Ground Ambient Bounce Light. Warmed or cooled by the same kelvin as the direct sun
+    // (effectiveSunKelvin), so a chosen colour temperature reaches ambient-lit and shadowed surfaces too, not just
+    // the ones the sun hits directly.
+    const initialHemiKelvin = effectiveSunKelvin(diurnalProfile, config, diurnalProfile.isGoldenHour);
     const hemiLight = new THREE.HemisphereLight(
-        skyLightColorHex(diurnalProfile),
-        groundBounceColor(diurnalProfile, initialElev),
+        new THREE.Color(skyLightColorHex(diurnalProfile)).multiply(kelvinToRGB(initialHemiKelvin)),
+        groundBounceColor(diurnalProfile, initialElev, initialHemiKelvin),
         diurnalProfile.skyLightIntensity
     );
     hemiLight.name = 'AtmosphericHemisphereLight';
@@ -898,6 +919,9 @@ export function createAtmosphericSkyDome(
         sunLight.shadow.bias = -0.0005;
         sunLight.shadow.mapSize.width = 2048;
         sunLight.shadow.mapSize.height = 2048;
+        // golden hour's own softer shadow edge (diurnalProfile.shadowSoftness, 1.8x) was computed but never applied
+        // anywhere - every phase rendered the same hard PCF radius regardless of time of day
+        sunLight.shadow.radius = diurnalProfile.shadowSoftness ?? 1;
     }
     scene.add(sunLight);
 
@@ -925,10 +949,12 @@ export function createAtmosphericSkyDome(
         sunLight.color.copy(effSun);
         sunLight.intensity = diurnalProfile.sunIntensity;
         sunLight.castShadow = diurnalProfile.castShadows;
+        if (sunLight.shadow) sunLight.shadow.radius = diurnalProfile.shadowSoftness ?? 1;
 
+        const hemiKelvin = effectiveSunKelvin(diurnalProfile, config, diurnalProfile.isGoldenHour);
         hemiLight.intensity = diurnalProfile.skyLightIntensity;
-        hemiLight.color.set(skyLightColorHex(diurnalProfile));
-        hemiLight.groundColor.copy(groundBounceColor(diurnalProfile, elevDeg));
+        hemiLight.color.set(new THREE.Color(skyLightColorHex(diurnalProfile)).multiply(kelvinToRGB(hemiKelvin)));
+        hemiLight.groundColor.copy(groundBounceColor(diurnalProfile, elevDeg, hemiKelvin));
         applyPhysicalSky(elevDeg);
     };
 

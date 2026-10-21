@@ -17,9 +17,11 @@
  * Measured geometry: the surface is the API's samples, nothing invented between them beyond straight triangles.
  */
 
+import * as fs from 'fs';
 import { mslToTileY } from './pipeline-e/solar-roof';
 import { geodeticToScan, scanToGeodetic, type GeodeticOrigin } from '../../spatial/StreetViewSurveyPlanner';
 import { writeStagedGlbFile } from './staged-glb-writer';
+import { parseGlb, readSceneGeometry } from '../glb-geometry-patcher';
 
 /** How far the terrain reaches from the place, in every direction. */
 export const TERRAIN_RADIUS_M = 4000;
@@ -56,6 +58,88 @@ export function planTerrainGrid(origin: GeodeticOrigin, axis = terrainAxis()): T
     return { axis, points };
 }
 
+/**
+ * The clear space the terrain leaves around the tiles' own ground, in metres, so the two surfaces never share a
+ * patch of ground and fight there. Continuous; SCRATCHBOX_TERRAIN_HERO_GAP_M overrides it.
+ */
+export const TERRAIN_HERO_GAP_M = 15;
+export function terrainHeroGapM(env: NodeJS.ProcessEnv = process.env): number {
+    const v = Number(env.SCRATCHBOX_TERRAIN_HERO_GAP_M);
+    return Number.isFinite(v) && v >= 0 ? v : TERRAIN_HERO_GAP_M;
+}
+
+/** Where the terrain must leave the ground to something else: a point test in the tile frame's ground plane. */
+export interface TerrainHole {
+    /** True where the terrain must not be (under the tiles, or within the gap around them). */
+    covers(x: number, z: number): boolean;
+    /** What the hole was made from, for the GLB extras and the build report. */
+    describe(): Record<string, number | string>;
+}
+
+/** A disc of `radiusM` around the place, grown by `gapM`. */
+export function radialHole(radiusM: number, gapM = 0): TerrainHole {
+    const r = radiusM + gapM;
+    return { covers: (x, z) => Math.hypot(x, z) <= r, describe: () => ({ kind: 'radius', radiusM, gapM }) };
+}
+
+/**
+ * The ground the tiles actually occupy: their vertices binned into `cellM` ground cells, grown by `gapM` on every
+ * side. A leaf tile is kept whole, so the tiles reach past the covered radius by up to a leaf; measuring their
+ * vertices instead of assuming a disc is what keeps the terrain off the real tile edge.
+ */
+export function coverageHole(tilePositions: ArrayLike<number>, opts: { cellM?: number; gapM?: number } = {}): TerrainHole {
+    const cellM = opts.cellM ?? 10;
+    const gapM = opts.gapM ?? 0;
+    const n = Math.floor(tilePositions.length / 3);
+    if (n === 0) throw new Error('terrain: the tiles have no vertices to measure their ground from');
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (let i = 0; i < n; i++) {
+        const x = tilePositions[i * 3], z = tilePositions[i * 3 + 2];
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+    }
+    const grow = Math.ceil(gapM / cellM);
+    const x0 = minX - grow * cellM, z0 = minZ - grow * cellM;
+    const cols = Math.floor((maxX - x0) / cellM) + 1 + grow, rows = Math.floor((maxZ - z0) / cellM) + 1 + grow;
+    const occupied = new Uint8Array(cols * rows);
+    let occupiedCells = 0;
+    for (let i = 0; i < n; i++) {
+        const c = Math.floor((tilePositions[i * 3] - x0) / cellM), r = Math.floor((tilePositions[i * 3 + 2] - z0) / cellM);
+        const k = r * cols + c;
+        if (!occupied[k]) { occupied[k] = 1; occupiedCells++; }
+    }
+    // grow by the gap: a cell is covered when an occupied cell's nearest point lies within gapM of its centre
+    const covered = new Uint8Array(cols * rows);
+    let coveredCells = 0;
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            let hit = false;
+            for (let dr = -grow; dr <= grow && !hit; dr++) {
+                const rr = r + dr; if (rr < 0 || rr >= rows) continue;
+                for (let dc = -grow; dc <= grow; dc++) {
+                    const cc = c + dc; if (cc < 0 || cc >= cols || !occupied[rr * cols + cc]) continue;
+                    const ddx = Math.max(0, Math.abs(dc) - 1) * cellM, ddz = Math.max(0, Math.abs(dr) - 1) * cellM;
+                    if (Math.hypot(ddx, ddz) <= gapM) { hit = true; break; }
+                }
+            }
+            if (hit) { covered[r * cols + c] = 1; coveredCells++; }
+        }
+    }
+    return {
+        covers: (x, z) => {
+            const c = Math.floor((x - x0) / cellM), r = Math.floor((z - z0) / cellM);
+            return c >= 0 && c < cols && r >= 0 && r < rows && covered[r * cols + c] === 1;
+        },
+        describe: () => ({ kind: 'tile-coverage', cellM, gapM, tileVertices: n, occupiedCells, coveredCells })
+    };
+}
+
+/** The coverage hole of an extraction's geometry GLB (every rendered vertex, in the tile frame). */
+export function coverageHoleFromGlb(file: string, opts: { cellM?: number; gapM?: number } = {}): TerrainHole {
+    const { positions } = readSceneGeometry(parseGlb(fs.readFileSync(file)));
+    return coverageHole(positions, opts);
+}
+
 export interface TerrainMesh {
     positions: Float32Array;
     indices: Uint32Array;
@@ -68,9 +152,11 @@ export interface TerrainMesh {
 
 /**
  * The heightfield mesh from the grid's heights (metres above mean sea level, one per point, row-major), with every
- * triangle whose three corners lie within `holeRadiusM` of the place left out.
+ * triangle that touches the hole (any corner or its centre) left out, so no terrain triangle reaches onto the
+ * tiles' ground. A plain number is a disc of that radius.
  */
-export function buildTerrainMesh(origin: GeodeticOrigin, plan: TerrainPlan, heightsMsl: ArrayLike<number>, holeRadiusM: number): TerrainMesh {
+export function buildTerrainMesh(origin: GeodeticOrigin, plan: TerrainPlan, heightsMsl: ArrayLike<number>, hole: number | TerrainHole): TerrainMesh {
+    const h = typeof hole === 'number' ? radialHole(hole) : hole;
     const n = plan.axis.length;
     if (heightsMsl.length !== n * n) throw new Error(`terrain: ${heightsMsl.length} heights for a ${n} x ${n} grid`);
     const positions = new Float32Array(n * n * 3);
@@ -88,14 +174,17 @@ export function buildTerrainMesh(origin: GeodeticOrigin, plan: TerrainPlan, heig
             if (y > maxY) maxY = y;
         }
     }
-    const inHole = (i: number) => Math.hypot(positions[i * 3], positions[i * 3 + 2]) <= holeRadiusM;
+    const inHole = (i: number) => h.covers(positions[i * 3], positions[i * 3 + 2]);
+    const centreInHole = (t: number[]) => h.covers(
+        (positions[t[0] * 3] + positions[t[1] * 3] + positions[t[2] * 3]) / 3,
+        (positions[t[0] * 3 + 2] + positions[t[1] * 3 + 2] + positions[t[2] * 3 + 2]) / 3);
     const indices: number[] = [];
     let holeTriangles = 0;
     for (let r = 0; r < n - 1; r++) {
         for (let c = 0; c < n - 1; c++) {
             const a = r * n + c, b = a + 1, d = a + n, e = d + 1;
             for (const tri of [[a, d, b], [b, d, e]]) {
-                if (inHole(tri[0]) && inHole(tri[1]) && inHole(tri[2])) { holeTriangles++; continue; }
+                if (inHole(tri[0]) || inHole(tri[1]) || inHole(tri[2]) || centreInHole(tri)) { holeTriangles++; continue; }
                 indices.push(tri[0], tri[1], tri[2]);
             }
         }

@@ -89,6 +89,19 @@ describe('Atmospheric Capabilities First-Class APIs', () => {
         });
     });
 
+    describe('golden hour\'s softer shadow edge reaches the actual sun light', () => {
+        it('sets sunLight.shadow.radius from diurnalProfile.shadowSoftness (was computed but never applied)', () => {
+            const golden = createAtmosphericSkyDome(new THREE.Scene(), false, { sunElevation: 3, sunAzimuth: 180 });
+            expect(golden.diurnalProfile.isGoldenHour).toBe(true);
+            expect(golden.diurnalProfile.shadowSoftness).toBeCloseTo(1.8, 6);
+            expect(golden.sunLight.shadow!.radius).toBeCloseTo(1.8, 6);
+
+            const midday = createAtmosphericSkyDome(new THREE.Scene(), false, { sunElevation: 45, sunAzimuth: 180 });
+            expect(midday.diurnalProfile.isGoldenHour).toBe(false);
+            expect(midday.sunLight.shadow!.radius).toBeCloseTo(1, 6);
+        });
+    });
+
     describe('VolumetricGodRays Class & Factory', () => {
         it('instantiates, updates, and disposes volumetric god rays cleanly', () => {
             const scene = new THREE.Scene();
@@ -117,11 +130,37 @@ describe('Atmospheric Capabilities First-Class APIs', () => {
             expect(scene.children.includes(godRays.group)).toBe(false);
         });
 
+        it('a cloud in front of the sun dims and diffuses the rays, composed with (not replacing) the configured intensity', () => {
+            const scene = new THREE.Scene();
+            const godRays = new VolumetricGodRays(scene, new THREE.Vector3(50, 70, 50), false, { intensity: 0.4 });
+            expect(godRays.rayMaterial.uniforms.uIntensity.value).toBe(0.4);
+
+            // a thick cloud (SunGlare's cloudVisibility 0.2) dims the rays to a fifth of the configured intensity
+            godRays.setCloudVisibility(0.2);
+            expect(godRays.rayMaterial.uniforms.uIntensity.value).toBeCloseTo(0.08, 6);
+
+            // the cloud clears: back to the full configured intensity
+            godRays.setCloudVisibility(1);
+            expect(godRays.rayMaterial.uniforms.uIntensity.value).toBeCloseTo(0.4, 6);
+
+            // changing the configured intensity while a cloud still covers the sun keeps it dimmed by the same share
+            godRays.setCloudVisibility(0.5);
+            godRays.setIntensity(0.6);
+            expect(godRays.rayMaterial.uniforms.uIntensity.value).toBeCloseTo(0.3, 6);
+
+            // out of range visibility is clamped, never inverted or amplified
+            godRays.setCloudVisibility(-1);
+            expect(godRays.rayMaterial.uniforms.uIntensity.value).toBeCloseTo(0, 6);
+            godRays.setCloudVisibility(5);
+            expect(godRays.rayMaterial.uniforms.uIntensity.value).toBeCloseTo(0.6, 6);
+        });
+
         it('createVolumetricGodRays factory conforms to expected module interface', () => {
             const scene = new THREE.Scene();
             const mod = createVolumetricGodRays(scene, new THREE.Vector3(10, 20, 10), true);
             expect(mod.group).toBeDefined();
             mod.update(1.0, 0.016);
+            mod.setCloudVisibility(0.5);
             mod.dispose();
         });
     });
@@ -178,6 +217,10 @@ describe('Atmospheric Capabilities First-Class APIs', () => {
             expect(handle.skyDomeModule).toBeDefined();
             expect(handle.godRays).toBeDefined();
             expect(handle.cloudShadows).toBeDefined();
+            // the dome sits gigantic and centred exactly on the camera (followCamera): three's default per-object
+            // frustum test is least reliable at exactly that size/distance and can wrongly cull the whole sky
+            // depending on framing (confirmed live - a built scene's sky silently failed to draw). Never culled.
+            expect(handle.skyDomeModule.skyDome.frustumCulled).toBe(false);
 
             atmosphere.setDiurnalTimeOfDay(17.5, 37.77, -122.41);
             expect(atmosphere.config.timeOfDay).toBe(17.5);

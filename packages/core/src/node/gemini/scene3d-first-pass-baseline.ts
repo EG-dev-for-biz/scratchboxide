@@ -38,11 +38,22 @@ export function firstPassRenderMode(prompt: string | undefined, authored?: unkno
 /**
  * First-pass cameras come with physical lens optics on (user decision 2026-10-21): continuous autofocus (no upfront
  * focus distance to get wrong, no "lens optics not fully drawn" notice from a manual focus with nothing to focus on)
- * and a narrow, shallow depth of field (f/2.8 — enough to separate the subject from its surroundings without being so
- * thin ordinary framing loses things). A model that authors its own `camera.lens` keeps it unchanged, same precedence
- * as renderMode.
+ * and a narrow, shallow depth of field.
+ *
+ * The circle-of-confusion math (viewportOptics.ts) reads `focalLengthMm` on its own terms: it does not change the
+ * scene's actual field of view (that stays whatever the camera authored), it only emulates the sensor-relative optics
+ * of a lens that happens to produce that FOV at this focal length - exactly how real lens-equivalence emulation
+ * works. Leaving it unset (as this did before 2026-10-21) derives one FROM the scene's field of view on an assumed
+ * 36 x 24 mm sensor: at the usual ~45 deg FOV that is only about a 29 mm wide-normal lens, which stays close to deep
+ * focus at any f-stop - a typical staged shot (an 8 m foreground subject, a 30+ m background) blurred to under a
+ * pixel radius at f/2.8, reading as not shallow at all. 135 mm at f/2 (a classic portrait/product focal length) gives
+ * the same shot a several-pixel blur radius, clearly soft without ever approaching the renderer's own blur-radius
+ * cap (MAX_BLUR_RADIUS_FRAME_FRACTION), since the underlying physics stays honest either way.
+ *
+ * A model that authors its own `camera.lens` (including just its own focalLengthMm or apertureFStop) keeps it
+ * unchanged, same precedence as renderMode.
  */
-const DEFAULT_CAMERA_LENS = { depthOfField: true, focusMode: 'auto' as const, apertureFStop: 2.8 };
+const DEFAULT_CAMERA_LENS = { depthOfField: true, focusMode: 'auto' as const, apertureFStop: 2, focalLengthMm: 135 };
 
 /**
  * First-pass 3D scenes open textured (user decision 2026-10-19: textured by default, clay on request): the materials
