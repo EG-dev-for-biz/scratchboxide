@@ -19,7 +19,8 @@
  */
 
 import { PARAMETER_BOUNDS, type BuildingParameters } from './facade-parameters';
-import { facadeProgram, type ProgramInput, type WallLatticeAdjust } from './facade-program';
+import { facadeProgram, wallOpenings, wallPiers, type FacadeProgram, type ProgramInput, type WallLatticeAdjust } from './facade-program';
+import { wallRects, type CompareJob, type NativeCompare, type OffsetRect, type WallScore } from './native-compare';
 import { compareWall, programWallOffset, type WallEvidence } from './render-compare';
 
 export interface AdjustRound { round: number; objective: number; windowNcc: number; depthMaeM: number; changed: string[] }
@@ -187,4 +188,217 @@ export function adjustParameters(base: ProgramInput, evidence: WallEvidence[], i
         if (!changed.length) break;
     }
     return { params, perWall, rounds: out, evaluations, ms: Date.now() - t0 };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Round 3: the same search on the native kernel (native-compare.ts), in batches. Every candidate of a step is scored at once,
+// each wall on its own core; a wall whose rectangles a candidate did not change is answered from memory. The per-wall steps
+// (lattice pitch and phase, storey shift and scale) are independent between walls (the objective is a sum over walls), so
+// every wall's whole grid goes in one batch and each wall keeps its own best. The global knobs are searched best-first: all
+// the knobs' trials in one batch, the best improving one applied, again until none improves (at most MAX_PASSES per round).
+// ---------------------------------------------------------------------------------------------------------------------
+
+
+/** Best-first passes over the global knobs per coordinate round. */
+export const MAX_PASSES = 6;
+
+const wallObjective = (s: WallScore) => (1 - s.ncc) / 2 + DEPTH_WEIGHT * (Number.isFinite(s.depthMaeM) ? s.depthMaeM : 0.5);
+
+interface Candidate { params: BuildingParameters; perWall: Map<number, WallLatticeAdjust> }
+
+/** The rectangles of every seen wall for a whole program. */
+function programRects(prog: Pick<FacadeProgram, 'openings' | 'sweeps' | 'faceSweeps'>, evidence: WallEvidence[]): Map<number, OffsetRect[]> {
+    const out = new Map<number, OffsetRect[]>();
+    for (const ev of evidence) out.set(ev.tile.face.index, wallRects(ev.tile.face, prog.openings, prog.sweeps, prog.faceSweeps));
+    return out;
+}
+
+/** One wall's rectangles for a candidate that moves that wall only (its openings and piers; the sweeps from the base program). */
+function wallOnlyRects(base: ProgramInput, c: Candidate, ev: WallEvidence, sweeps: FacadeProgram['sweeps']): OffsetRect[] {
+    const f = ev.tile.face;
+    const inp: ProgramInput = { ...base, params: c.params, perWall: c.perWall };
+    const r = wallOpenings(inp, f, true);
+    const pier = wallPiers(inp, f, r.plan);
+    return wallRects(f, r.openings, sweeps, pier ? [pier] : []);
+}
+
+/** Area-weighted objective of per-wall scores. */
+function combine(scores: Map<number, WallScore>, evidence: WallEvidence[]): { objective: number; windowNcc: number; depthMaeM: number } {
+    let J = 0, ncc = 0, mae = 0, A = 0;
+    for (const ev of evidence) {
+        const s = scores.get(ev.tile.face.index);
+        if (!s) continue;
+        const a = ev.tile.face.area;
+        J += wallObjective(s) * a; ncc += s.ncc * a; mae += (Number.isFinite(s.depthMaeM) ? s.depthMaeM : 0.5) * a; A += a;
+    }
+    A = A || 1;
+    return { objective: J / A, windowNcc: ncc / A, depthMaeM: mae / A };
+}
+
+export interface NativeAdjustResult extends AdjustResult { batches: number; sentJobs: number; keptJobs: number }
+
+/**
+ * The bounded search of adjustParameters on the native kernel. `compare` holds the evidence of the seen walls (`evidence`,
+ * the same objects, give the faces and areas). A change is kept only when it lowers the objective, as before.
+ */
+export async function adjustParametersNative(base: ProgramInput, evidence: WallEvidence[], compare: NativeCompare, rounds = 3, options: { shapes?: boolean; onProgress?: (m: string) => void } = {}): Promise<NativeAdjustResult> {
+    const t0 = Date.now();
+    const B = PARAMETER_BOUNDS;
+    let params = clone(base.params);
+    const perWall = new Map<number, WallLatticeAdjust>();
+    let evaluations = 0;
+    const faces = evidence.map(e => e.tile.face.index);
+    /** Scores whole candidates (every wall) in one batch. */
+    const scoreFull = async (cands: Candidate[]): Promise<Array<ReturnType<typeof combine>>> => {
+        const jobs: CompareJob[] = [];
+        const progs = cands.map(c => facadeProgram({ ...base, params: c.params, perWall: c.perWall }));
+        for (const prog of progs) for (const [face, rects] of programRects(prog, evidence)) jobs.push({ face, rects });
+        evaluations += cands.length;
+        const scores = await compare.score(jobs);
+        return cands.map((_, k) => { const m = new Map<number, WallScore>(); faces.forEach((face, i) => m.set(face, scores[k * faces.length + i])); return combine(m, evidence); });
+    };
+    let cur = (await scoreFull([{ params, perWall }]))[0];
+    const out: AdjustRound[] = [{ round: 0, objective: cur.objective, windowNcc: cur.windowNcc, depthMaeM: cur.depthMaeM, changed: [] }];
+    // (a) storey grid, one batch
+    {
+        const g0 = params.groundStoreyM, u0 = [...params.upperStoreysM];
+        const cands: Array<Candidate & { g: number; k: number }> = [];
+        for (let dg = -1; dg <= 1.0001; dg += 0.2) for (let k = 0.85; k <= 1.1501; k += 0.025) {
+            const g = Math.max(B.storeyM[0], Math.min(B.storeyM[1], g0 + dg));
+            const trial = clone(params);
+            trial.groundStoreyM = g;
+            trial.upperStoreysM = u0.map(x => Math.max(B.storeyM[0], Math.min(B.storeyM[1], x * k)));
+            cands.push({ params: trial, perWall, g, k });
+        }
+        options.onProgress?.(`adjusting: storey grid, ${cands.length} candidates on ${faces.length} walls`);
+        const res = await scoreFull(cands);
+        let best = -1;
+        res.forEach((r, i) => { if (r.objective < (best < 0 ? cur.objective : res[best].objective) - 1e-4) best = i; });
+        const changed: string[] = [];
+        if (best >= 0) { params = cands[best].params; cur = res[best]; changed.push(`groundStoreyM ${g0.toFixed(2)}->${cands[best].g.toFixed(2)}`, `upper storeys x${cands[best].k.toFixed(3)}`); }
+        out.push({ round: 1, objective: cur.objective, windowNcc: cur.windowNcc, depthMaeM: cur.depthMaeM, changed });
+    }
+    // (b) per-wall grids, every wall's whole grid in one batch (walls independent); the sweeps are the base program's
+    const sweeps = facadeProgram({ ...base, params, perWall }).sweeps;
+    const perWallGrid = async (grid: (fi: number, a0: WallLatticeAdjust) => WallLatticeAdjust[], tol: number, label: (a: WallLatticeAdjust) => string): Promise<string[]> => {
+        const jobs: CompareJob[] = [];
+        const index: Array<{ ev: WallEvidence; cands: WallLatticeAdjust[] }> = [];
+        for (const ev of evidence) {
+            const fi = ev.tile.face.index, a0 = perWall.get(fi) ?? { pitchScale: 1, phaseM: 0 };
+            const cands = [a0, ...grid(fi, a0)];
+            index.push({ ev, cands });
+            for (const a of cands) jobs.push({ face: fi, rects: wallOnlyRects(base, { params, perWall: new Map(perWall).set(fi, a) }, ev, sweeps) });
+        }
+        evaluations += jobs.length;
+        const scores = await compare.score(jobs);
+        const changed: string[] = [];
+        let k = 0;
+        for (const { ev, cands } of index) {
+            const fi = ev.tile.face.index;
+            let bestJ = wallObjective(scores[k]), best = cands[0];
+            for (let i = 1; i < cands.length; i++) { const j = wallObjective(scores[k + i]); if (j < bestJ - tol) { bestJ = j; best = cands[i]; } }
+            k += cands.length;
+            if (best !== cands[0]) { perWall.set(fi, best); changed.push(`wall ${fi} ${label(best)}`); }
+        }
+        return changed;
+    };
+    {
+        options.onProgress?.(`adjusting: each wall's bay lattice and storeys, in parallel`);
+        const changed = await perWallGrid((_, a0) => {
+            const c: WallLatticeAdjust[] = [];
+            for (let ps = 0.88; ps <= 1.1201; ps += 0.02) for (let q = -6; q < 6; q++) c.push({ ...a0, pitchScale: ps, phaseM: (q / 12) * params.bayWidthM * ps });
+            return c;
+        }, 1e-4, a => `pitch x${a.pitchScale.toFixed(2)} phase ${a.phaseM.toFixed(2)} m`);
+        if (options.shapes) changed.push(...await perWallGrid((_, a0) => {
+            const c: WallLatticeAdjust[] = [];
+            for (let sh = -1.5; sh <= 1.5001; sh += 0.25) for (let sc = 0.9; sc <= 1.1001; sc += 0.025) c.push({ ...a0, storeyShiftM: sh, storeyScale: sc });
+            return c;
+        }, 2e-3, a => `storeys ${(a.storeyShiftM ?? 0) >= 0 ? '+' : ''}${(a.storeyShiftM ?? 0).toFixed(2)} m x${(a.storeyScale ?? 1).toFixed(3)}`));
+        cur = (await scoreFull([{ params, perWall }]))[0];
+        out.push({ round: 2, objective: cur.objective, windowNcc: cur.windowNcc, depthMaeM: cur.depthMaeM, changed });
+    }
+    // (c) coordinate rounds: best-first over all knobs, then each wall's pitch and phase at the round's scale
+    const K = knobs(params, !!options.shapes);
+    for (let r = 1; r <= rounds; r++) {
+        const changed: string[] = [];
+        const scale = Math.pow(0.5, r - 1);
+        for (let pass = 0; pass < MAX_PASSES; pass++) {
+            const cands: Array<Candidate & { what: string }> = [];
+            for (const k of K) {
+                if (k.enabled && !k.enabled(params)) continue;
+                for (const dir of [1, -1]) {
+                    const v0 = k.get(params), v = Math.max(k.lo, Math.min(k.hi, v0 + dir * k.step * scale));
+                    if (Math.abs(v - v0) < 1e-6) continue;
+                    const trial = clone(params);
+                    k.set(trial, v);
+                    cands.push({ params: trial, perWall, what: `${k.name} ${v0.toFixed(2)}->${v.toFixed(2)}` });
+                }
+            }
+            if (!cands.length) break;
+            options.onProgress?.(`adjusting: round ${r} pass ${pass + 1}, ${cands.length} knob trials`);
+            const res = await scoreFull(cands);
+            let best = -1;
+            res.forEach((x, i) => { if (x.objective < (best < 0 ? cur.objective : res[best].objective) - 1e-4) best = i; });
+            if (best < 0) break;
+            params = cands[best].params; cur = res[best]; changed.push(cands[best].what);
+        }
+        const sweepsR = facadeProgram({ ...base, params, perWall }).sweeps;
+        const pitch = params.bayWidthM;
+        const jobs: CompareJob[] = [];
+        const index: Array<{ ev: WallEvidence; cands: WallLatticeAdjust[]; what: string[] }> = [];
+        for (const ev of evidence) {
+            const fi = ev.tile.face.index, a = perWall.get(fi) ?? { pitchScale: 1, phaseM: 0 };
+            const cands: WallLatticeAdjust[] = [a], what = [''];
+            for (const [field, step] of [['phaseM', pitch * 0.08 * scale], ['pitchScale', 0.01 * scale]] as const) for (const dir of [1, -1]) {
+                const next = { ...a, [field]: a[field] + dir * step };
+                if (Math.abs(next.phaseM) > pitch / 2 || Math.abs(next.pitchScale - 1) > 0.15) continue;
+                cands.push(next); what.push(`wall ${fi} ${field} ${a[field].toFixed(2)}->${next[field].toFixed(2)}`);
+            }
+            index.push({ ev, cands, what });
+            for (const c of cands) jobs.push({ face: fi, rects: wallOnlyRects(base, { params, perWall: new Map(perWall).set(fi, c) }, ev, sweepsR) });
+        }
+        evaluations += jobs.length;
+        const scores = await compare.score(jobs);
+        let k = 0;
+        for (const { ev, cands, what } of index) {
+            let bestJ = wallObjective(scores[k]), best = 0;
+            for (let i = 1; i < cands.length; i++) { const j = wallObjective(scores[k + i]); if (j < bestJ - 1e-4) { bestJ = j; best = i; } }
+            k += cands.length;
+            if (best) { perWall.set(ev.tile.face.index, cands[best]); changed.push(what[best]); }
+        }
+        cur = (await scoreFull([{ params, perWall }]))[0];
+        out.push({ round: 2 + r, objective: cur.objective, windowNcc: cur.windowNcc, depthMaeM: cur.depthMaeM, changed });
+        if (!changed.length) break;
+    }
+    return { params, perWall, rounds: out, evaluations, ms: Date.now() - t0, batches: compare.counts.batches, sentJobs: compare.counts.sent, keptJobs: compare.counts.kept };
+}
+
+/**
+ * Round 3, step 8: the per-wall lattice and storeys of `walls` searched again on other evidence of those walls (a rectified
+ * Street View crop where one exists: sharper than the tile), the rest of the program as adjusted. `compare` holds that
+ * evidence. Returns the walls moved and the per-wall objective before and after on the new evidence.
+ */
+export async function refineWallsNative(base: ProgramInput, params: BuildingParameters, perWall: Map<number, WallLatticeAdjust>, evidence: WallEvidence[], compare: NativeCompare): Promise<{ perWall: Map<number, WallLatticeAdjust>; moved: Array<{ face: number; before: number; after: number; what: string }> }> {
+    const outPw = new Map(perWall);
+    const sweeps = facadeProgram({ ...base, params, perWall }).sweeps;
+    const jobs: CompareJob[] = [];
+    const index: Array<{ ev: WallEvidence; cands: WallLatticeAdjust[] }> = [];
+    for (const ev of evidence) {
+        const fi = ev.tile.face.index, a0 = perWall.get(fi) ?? { pitchScale: 1, phaseM: 0 };
+        const cands: WallLatticeAdjust[] = [a0];
+        for (let ps = 0.9; ps <= 1.1001; ps += 0.02) for (let q = -6; q < 6; q++) for (const sh of [-0.5, -0.25, 0, 0.25, 0.5]) cands.push({ ...a0, pitchScale: (a0.pitchScale ?? 1) * ps, phaseM: (a0.phaseM ?? 0) + (q / 12) * params.bayWidthM, storeyShiftM: (a0.storeyShiftM ?? 0) + sh });
+        index.push({ ev, cands });
+        for (const a of cands) jobs.push({ face: fi, rects: wallOnlyRects(base, { params, perWall: new Map(perWall).set(fi, a) }, ev, sweeps) });
+    }
+    const scores = await compare.score(jobs);
+    const moved: Array<{ face: number; before: number; after: number; what: string }> = [];
+    let k = 0;
+    for (const { ev, cands } of index) {
+        const j0 = wallObjective(scores[k]);
+        let bestJ = j0, best = 0;
+        for (let i = 1; i < cands.length; i++) { const j = wallObjective(scores[k + i]); if (j < bestJ - 2e-3) { bestJ = j; best = i; } }
+        k += cands.length;
+        if (best) { const a = cands[best]; outPw.set(ev.tile.face.index, a); moved.push({ face: ev.tile.face.index, before: j0, after: bestJ, what: `pitch x${a.pitchScale.toFixed(2)} phase ${a.phaseM.toFixed(2)} m storeys ${(a.storeyShiftM ?? 0) >= 0 ? '+' : ''}${(a.storeyShiftM ?? 0).toFixed(2)} m` }); }
+    }
+    return { perWall: outPw, moved };
 }
