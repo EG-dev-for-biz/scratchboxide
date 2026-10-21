@@ -87,8 +87,15 @@ describe.skipIf(!stagedChrome.ok)('staged reveal through the real loader', () =>
         expect(c50).toBeLessThan(c100);
         const states = await page.eval<Array<{ staged: string | null; visible: boolean }>>(`sbHarness.meshStates(${JSON.stringify(objectIdOf('l1'))})`);
         await page.step(4, STEP);
+        // the remesh stage is still running: the revealed tiles wear the work sweep (a staged material), every leaf showing
+        const sweeping = await page.eval<Array<{ staged: string | null; visible: boolean }>>(`sbHarness.meshStates(${JSON.stringify(objectIdOf('l1'))})`);
+        expect(sweeping.every(s => s.staged !== null && s.visible), 'while a stage runs the revealed layer carries the work sweep').toBe(true);
+        await page.screenshot('loader_path_tiles_work_sweep');
+        // no stage running any more: the original clay is back
+        await page.eval(`sbHarness.update(${JSON.stringify(stagedSceneData(fixtureState([L('l1')], { runState: 'running' })))})`);
+        await page.step(4, STEP);
         const after = await page.eval<Array<{ staged: string | null; visible: boolean }>>(`sbHarness.meshStates(${JSON.stringify(objectIdOf('l1'))})`);
-        expect(after.every(s => s.staged === null && s.visible), 'after the reveal the original clay is back and every leaf shows').toBe(true);
+        expect(after.every(s => s.staged === null && s.visible), 'after the reveal, with no stage running, the original clay is back and every leaf shows').toBe(true);
         expect(states.length).toBe(after.length);
 
         // The same layer as a plain scene (no staged build): the static render, against an empty scene's frame.
