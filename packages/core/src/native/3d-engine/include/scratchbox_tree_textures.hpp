@@ -197,6 +197,7 @@ inline RGB leafOnPrior(const Library& lib) {
 /** What the choice reads of a tree: all measured or grown, none named. */
 struct TreeAppearance {
     MeasuredColour colour;
+    double leafLengthHintM{0};  // the leaf (or frond) length the leaf set is chosen by when > 0 (a species entry's); else from the tree's size
     double heightM{0};          // apex above support
     double crownRadiusM{0};     // mean of the measured sector radii
     double trunkRadiusM{0};
@@ -258,7 +259,15 @@ inline Choice choose(const Library& lib, const TreeAppearance& t, const ChoicePa
     out.colourMeasured = t.colour.known && t.colour.source == "measured";
     out.colourSource = t.colour.known ? t.colour.source : "none";
     // ---- leaves ----
-    out.targetLeafLengthM = targetLeafLength(t, C);
+    // a leaf length the caller asks for (a species entry's leaf or frond) is used when the library has leaves of that order;
+    // a frond no entry comes near would make the leaf cost pick the longest leaves whatever their look, so it is ignored
+    double hint = 0;
+    if (t.leafLengthHintM > 0 && !lib.leaves.empty()) {
+        double lo = lib.leaves.front().leafLengthM, hi = lo;
+        for (const auto& e : lib.leaves) { lo = std::min(lo, e.leafLengthM); hi = std::max(hi, e.leafLengthM); }
+        if (t.leafLengthHintM >= lo / 1.5 && t.leafLengthHintM <= hi * 1.5) hint = t.leafLengthHintM;
+    }
+    out.targetLeafLengthM = hint > 0 ? hint : targetLeafLength(t, C);
     std::vector<double> lc(lib.leaves.size());
     for (size_t i = 0; i < lib.leaves.size(); ++i) {
         const auto& e = lib.leaves[i];

@@ -1,0 +1,154 @@
+{
+  "schema": "scratchbox.tree-species/1",
+  "about": "The proportions of real trees, chosen per measured crown by its measurements (height, crown radius over height, the share of its surface near the apex, its photo hue) so the parts a scan cannot see come from a tree of that shape. Every field is a continuous quantity; id, label and description are labels for people and prompts and nothing branches on them. Read by scratchbox_tree_species.hpp.",
+  "conventions": {
+    "heightM": "[min, max] apex above support the form is seen at; outside it the entry costs by the log distance to the nearer bound",
+    "crownRadiusPerHeight": "mean sector radius / height",
+    "crownBaseRatio": "crown base / height (0: foliage to the ground)",
+    "trunkRadiusPerHeight": "trunk radius at the base / height",
+    "topShare": "share of the crown's surface samples within 0.35 crown radii of the apex: a hemisphere about 0.58, a 45 degree cone about 0.12, a flat top near 1",
+    "stems": "stems leaving the ground; more than one grows as a shrub",
+    "scaffoldBranches": "primary limbs at the crown break (0: the grower's seeded 2-4)",
+    "leafLengthM / leafAspect": "the leaf or frond the leaf set is chosen by (length, width / length)",
+    "hueDeg": "[centre, spread] of the foliage's hue in the chromaticity plane (0 red, 60 yellow, 120 green); inside the spread costs nothing",
+    "apicalDominance": "0..1, the leader's momentum over the laterals; the grower stalls on a measured crown above about 0.65 (its branches overshoot the attractors), so a columnar form is expressed by the crown's own measurements, not by a higher value"
+  },
+  "entries": [
+    { "id": "london_plane", "label": "London plane", "description": "Broad spreading street tree with a tall clear trunk and a wide dome of large palmate leaves.", "heightM": [
+        10,
+        35
+      ], "crownRadiusPerHeight": 0.42, "crownBaseRatio": 0.32, "trunkRadiusPerHeight": 0.022, "topShare": 0.5, "stems": 1, "scaffoldBranches": 3, "apicalDominance": 0.45, "branchAngleRad": 0.8, "leafLengthM": 0.18, "leafAspect": 1, "hueDeg": [
+        112,
+        18
+      ]
+    },
+    { "id": "linden", "label": "Lime / linden", "description": "Dense, regular, tall-oval crown of small heart-shaped leaves on a straight trunk.", "heightM": [
+        10,
+        30
+      ], "crownRadiusPerHeight": 0.35, "crownBaseRatio": 0.25, "trunkRadiusPerHeight": 0.018, "topShare": 0.45, "stems": 1, "scaffoldBranches": 3, "apicalDominance": 0.55, "branchAngleRad": 0.7, "leafLengthM": 0.09, "leafAspect": 0.9, "hueDeg": [
+        108,
+        15
+      ]
+    },
+    { "id": "oak", "label": "Oak", "description": "Wide, heavy-limbed crown broader than tall, with lobed leaves; the trunk forks low into thick scaffolds.", "heightM": [
+        8,
+        30
+      ], "crownRadiusPerHeight": 0.55, "crownBaseRatio": 0.3, "trunkRadiusPerHeight": 0.025, "topShare": 0.55, "stems": 1, "scaffoldBranches": 4, "apicalDominance": 0.35, "branchAngleRad": 0.95, "leafLengthM": 0.11, "leafAspect": 0.6, "hueDeg": [
+        105,
+        15
+      ]
+    },
+    { "id": "maple", "label": "Maple", "description": "Rounded, even crown of palmate leaves, bright green turning yellow, orange and red in autumn.", "heightM": [
+        8,
+        25
+      ], "crownRadiusPerHeight": 0.45, "crownBaseRatio": 0.3, "trunkRadiusPerHeight": 0.02, "topShare": 0.5, "stems": 1, "scaffoldBranches": 3, "apicalDominance": 0.45, "branchAngleRad": 0.8, "leafLengthM": 0.12, "leafAspect": 1.1, "hueDeg": [
+        90,
+        45
+      ]
+    },
+    { "id": "honey_locust", "label": "Honey locust", "description": "Open, airy, flat-topped crown of fine pinnate leaves that casts light shade; a common sidewalk tree.", "heightM": [
+        8,
+        22
+      ], "crownRadiusPerHeight": 0.4, "crownBaseRatio": 0.35, "trunkRadiusPerHeight": 0.018, "topShare": 0.6, "stems": 1, "scaffoldBranches": 3, "apicalDominance": 0.5, "branchAngleRad": 0.85, "leafLengthM": 0.03, "leafAspect": 0.4, "hueDeg": [
+        95,
+        20
+      ]
+    },
+    { "id": "ginkgo", "label": "Ginkgo", "description": "Narrow, upright, irregular crown of fan-shaped leaves, yellow-green, gold in autumn.", "heightM": [
+        6,
+        25
+      ], "crownRadiusPerHeight": 0.28, "crownBaseRatio": 0.3, "trunkRadiusPerHeight": 0.02, "topShare": 0.35, "stems": 1, "scaffoldBranches": 3, "apicalDominance": 0.6, "branchAngleRad": 0.6, "leafLengthM": 0.07, "leafAspect": 1.2, "hueDeg": [
+        85,
+        25
+      ]
+    },
+    { "id": "birch", "label": "Birch", "description": "Light, open, narrow crown with fine drooping twigs and small leaves on a slender pale trunk.", "heightM": [
+        6,
+        22
+      ], "crownRadiusPerHeight": 0.3, "crownBaseRatio": 0.3, "trunkRadiusPerHeight": 0.014, "topShare": 0.4, "stems": 1, "scaffoldBranches": 3, "apicalDominance": 0.6, "branchAngleRad": 0.6, "leafLengthM": 0.06, "leafAspect": 0.8, "hueDeg": [
+        100,
+        15
+      ]
+    },
+    { "id": "italian_cypress", "label": "Italian cypress", "description": "A tall dark-green column, foliage to the ground, barely wider than its trunk.", "heightM": [
+        5,
+        25
+      ], "crownRadiusPerHeight": 0.08, "crownBaseRatio": 0.05, "trunkRadiusPerHeight": 0.012, "topShare": 0.2, "stems": 1, "scaffoldBranches": 0, "apicalDominance": 0.6, "branchAngleRad": 0.3, "leafLengthM": 0.005, "leafAspect": 0.3, "hueDeg": [
+        120,
+        20
+      ]
+    },
+    { "id": "stone_pine", "label": "Stone / umbrella pine", "description": "A flat, wide umbrella of dark needles held high on a tall bare trunk with few thick limbs.", "heightM": [
+        8,
+        25
+      ], "crownRadiusPerHeight": 0.6, "crownBaseRatio": 0.6, "trunkRadiusPerHeight": 0.03, "topShare": 0.85, "stems": 1, "scaffoldBranches": 5, "apicalDominance": 0.3, "branchAngleRad": 1.1, "leafLengthM": 0.14, "leafAspect": 0.02, "hueDeg": [
+        118,
+        18
+      ]
+    },
+    { "id": "spruce", "label": "Spruce / fir", "description": "A narrow dark cone from the ground up, whorls of level branches shortening to a sharp top.", "heightM": [
+        8,
+        40
+      ], "crownRadiusPerHeight": 0.18, "crownBaseRatio": 0.1, "trunkRadiusPerHeight": 0.015, "topShare": 0.12, "stems": 1, "scaffoldBranches": 0, "apicalDominance": 0.6, "branchAngleRad": 1.3, "leafLengthM": 0.02, "leafAspect": 0.1, "hueDeg": [
+        125,
+        18
+      ]
+    },
+    { "id": "scots_pine", "label": "Scots pine", "description": "An irregular rounded crown of long needles on a tall trunk cleared of branches for half its height.", "heightM": [
+        8,
+        30
+      ], "crownRadiusPerHeight": 0.3, "crownBaseRatio": 0.5, "trunkRadiusPerHeight": 0.02, "topShare": 0.5, "stems": 1, "scaffoldBranches": 4, "apicalDominance": 0.5, "branchAngleRad": 0.9, "leafLengthM": 0.05, "leafAspect": 0.03, "hueDeg": [
+        118,
+        18
+      ]
+    },
+    { "id": "date_palm", "label": "Date palm", "description": "A tall single stem carrying a rounded rosette of long arching pinnate fronds, grey-green to yellow-green.", "heightM": [
+        6,
+        25
+      ], "crownRadiusPerHeight": 0.3, "crownBaseRatio": 0.8, "trunkRadiusPerHeight": 0.035, "topShare": 0.5, "stems": 1, "scaffoldBranches": 10, "apicalDominance": 0.2, "branchAngleRad": 1.2, "leafLengthM": 3.5, "leafAspect": 0.15, "hueDeg": [
+        85,
+        12
+      ]
+    },
+    { "id": "fan_palm", "label": "Fan palm", "description": "A very tall slender stem with a small, flat-topped head of fan-shaped fronds.", "heightM": [
+        8,
+        28
+      ], "crownRadiusPerHeight": 0.18, "crownBaseRatio": 0.88, "trunkRadiusPerHeight": 0.03, "topShare": 0.7, "stems": 1, "scaffoldBranches": 12, "apicalDominance": 0.2, "branchAngleRad": 1.3, "leafLengthM": 1.5, "leafAspect": 1, "hueDeg": [
+        88,
+        12
+      ]
+    },
+    { "id": "olive", "label": "Olive", "description": "A low, broad, rounded grey-green crown on a short thick gnarled trunk.", "heightM": [
+        3,
+        12
+      ], "crownRadiusPerHeight": 0.6, "crownBaseRatio": 0.3, "trunkRadiusPerHeight": 0.035, "topShare": 0.6, "stems": 1, "scaffoldBranches": 4, "apicalDominance": 0.3, "branchAngleRad": 1, "leafLengthM": 0.06, "leafAspect": 0.2, "hueDeg": [
+        90,
+        25
+      ]
+    },
+    { "id": "eucalyptus", "label": "Eucalyptus", "description": "A tall, open, irregular crown of long narrow hanging leaves on a high smooth trunk.", "heightM": [
+        10,
+        45
+      ], "crownRadiusPerHeight": 0.3, "crownBaseRatio": 0.45, "trunkRadiusPerHeight": 0.02, "topShare": 0.35, "stems": 1, "scaffoldBranches": 3, "apicalDominance": 0.6, "branchAngleRad": 0.7, "leafLengthM": 0.15, "leafAspect": 0.15, "hueDeg": [
+        95,
+        25
+      ]
+    },
+    { "id": "hedge", "label": "Clipped hedge", "description": "A low, flat-topped, dense wall of small leaves, many stems from the ground, wider than tall.", "heightM": [
+        0.5,
+        3
+      ], "crownRadiusPerHeight": 1.2, "crownBaseRatio": 0, "trunkRadiusPerHeight": 0.01, "topShare": 0.9, "stems": 12, "scaffoldBranches": 0, "apicalDominance": 0.3, "branchAngleRad": 1, "leafLengthM": 0.03, "leafAspect": 0.5, "hueDeg": [
+        110,
+        20
+      ]
+    },
+    { "id": "shrub", "label": "Broadleaf shrub", "description": "A rounded mound of foliage from the ground, several stems, as tall as it is wide or a little wider.", "heightM": [
+        0.8,
+        4
+      ], "crownRadiusPerHeight": 0.8, "crownBaseRatio": 0.05, "trunkRadiusPerHeight": 0.012, "topShare": 0.6, "stems": 6, "scaffoldBranches": 0, "apicalDominance": 0.3, "branchAngleRad": 0.9, "leafLengthM": 0.07, "leafAspect": 0.6, "hueDeg": [
+        108,
+        25
+      ]
+    }
+  ]
+}

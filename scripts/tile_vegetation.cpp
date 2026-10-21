@@ -65,6 +65,9 @@ static void usage() {
         "    --skirt-min M (0.3) --fragment-max-area M2 (300) --cap-grid M (1.5) --seam-gap M (1) --sample-spacing M (0.7) --threads N\n"
         "    regrowth (white apex: a tree the regrown tree does not fill, kept as scanned):\n"
         "    --seed HEX (0) --crown-base-ratio V (0.35) --trunk-radius-per-height V (0.016) --shell-depth V (0.8) --min-surface-reached V (0.9)\n"
+        "    --species-index PATH      the tree species library (assets/vegetation/species/index.json): each crown regrown with the\n"
+        "                              proportions of the entry nearest its measurements (plant must be given the same library)\n"
+        "    --species-index-label S   how crowns.json names the library (default: the path given)\n"
         "    --removed-out PATH        also write what the removal took, as scanned, one node per crown (put back when the\n"
         "                              tree stage fails)\n"
         "    --roi-json PATH           a scratchbox.strip-roi/1 polygon: trees whose stem lies outside it are neither regrown nor\n"
@@ -85,6 +88,8 @@ static void usage() {
         "    --texture-index PATH      the tree texture library (assets/textures/trees/index.json): each tree's leaf set and\n"
         "                              bark chosen by appearance, its wood in the bark's tiles, the choice in its extras\n"
         "    --texture-index-label S   how the root extras name the library (default: the path given)\n"
+        "    --species-index PATH      the tree species library crowns.json was measured with (refused when it names another)\n"
+        "    --species-index-label S   how the root extras name the library (default: the path given)\n"
         "    --crown-base-ratio V --trunk-radius-per-height V --shell-depth V --min-surface-reached V\n"
         "                              (default: what crowns.json recorded as its growth, else 0.35, 0.016, 0.8, 0.9;\n"
         "                              a value other than the recorded one is refused)\n"
@@ -132,6 +137,18 @@ static uint64_t parseSeed(const Args& a) {
 }
 
 /** Growth ratios from flags over `G`; each must be a share in its range. */
+/** --species-index: the tree species library each crown is grown with (scratchbox_tree_species.hpp). */
+static void readSpeciesIndex(const Args& a, GrowthParams& G) {
+    if (!a.has("species-index")) return;
+    const auto idx = readFileBytes(a.str("species-index"));
+    try {
+        G.species = std::make_shared<const tree_species::Library>(tree_species::parseIndex(std::string(idx.begin(), idx.end())));
+    } catch (const tree_species::SpeciesIndexError& e) {
+        throw VegetationError("bad_input", std::string("--species-index: ") + e.what());
+    }
+    G.speciesIndex = a.has("species-index-label") ? a.str("species-index-label") : a.str("species-index");
+}
+
 static void readGrowthFlags(const Args& a, GrowthParams& G) {
     G.crownBaseRatio = a.num("crown-base-ratio", G.crownBaseRatio);
     G.trunkRadiusPerHeight = a.num("trunk-radius-per-height", G.trunkRadiusPerHeight);
@@ -272,6 +289,7 @@ static StripParams readStripParams(const Args& a) {
     P.threads = static_cast<int>(a.num("threads", 0));
     readGrowthFlags(a, P.growth);
     P.growth.seed = parseSeed(a);
+    readSpeciesIndex(a, P.growth);
     if (P.cell <= 0 || P.terrainCell <= 0 || P.sampleSpacing <= 0 || P.capGrid <= 0) throw VegetationError("bad_request", "cell sizes and spacings must be > 0");
 
     if (a.has("roi-json")) { P.roi = readRoi(a.str("roi-json")); P.keep = readKeep(a.str("roi-json")); }
@@ -465,6 +483,17 @@ static int runPlant(const Args& a) {
     }
     readGrowthFlags(a, P.growth);
     P.growth.seed = parseSeed(a);
+    readSpeciesIndex(a, P.growth);
+    if (recorded.type == io::GlbJsonValue::Object) {
+        // The species library the measurement grew its trees with decided which crowns it removed, as the growth ratios did
+        // (crowns.json without a growth record was not measured by strip: nothing to match)
+        const auto& recordedSpecies = doc["species"];
+        const std::string was = recordedSpecies.type == io::GlbJsonValue::Object && recordedSpecies["index"].type == io::GlbJsonValue::String ? recordedSpecies["index"].str : std::string();
+        if (was != P.growth.speciesIndex) {
+            throw VegetationError("bad_request", "the measurement grew its trees " + (was.empty() ? std::string("without a species library") : "with the species library " + was) +
+                                  (P.growth.speciesIndex.empty() ? std::string(", and plant was given none") : ", not " + P.growth.speciesIndex) + "; plant with the same, or measure again");
+        }
+    }
 
     auto readMesh = [](const std::string& path, const char* what, std::vector<Vec3>& positions, std::vector<uint32_t>& indices) {
         const auto glb = readFileBytes(path);
