@@ -797,10 +797,17 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
     // ------------------------------------------------------------------ (h) real Street View texels on the walls
     // (street-view-texels.ts): once the plates are decided, each wall takes the registered, owned photo where it sees the wall
     // sharper than the tile ortho; labelled photo-inferred. Before this step no Street View pixel reached a texel in pipeline E.
+    // Opt-in (SCRATCHBOX_STREETVIEW_TEXELS=1): on the one held-out bake-off run so far (Haughwout), baking real, correctly
+    // gated texels still lowered the overall and realism judge scores against not baking them at all (see
+    // docs/processes/streetview_value.md) even though the gates themselves worked as designed. Off by default until that is
+    // retested on more places or the agreement gate is tightened; absent = this step does not run, and its own reason is
+    // recorded the same way a missing Street View source is.
     t = now();
     const svtStep = rec('street-view-texels');
     const streetViewTexels: StreetViewTexelRecord[] = [];
-    {
+    if (process.env.SCRATCHBOX_STREETVIEW_TEXELS !== '1') {
+        svtStep.skipped = 'opt-in (SCRATCHBOX_STREETVIEW_TEXELS=1): not requested';
+    } else {
         const pool = new Map<string, GuideView>();
         const add = (v: ProjectionView & { registration?: GuideView['registration']; depth?: Float32Array }) => {
             const k = `${v.panoId}:${v.camera.fx.toFixed(1)}:${v.camera.eye.map(x => x.toFixed(2)).join(',')}:${v.camera.fwd.map(x => x.toFixed(4)).join(',')}`;
