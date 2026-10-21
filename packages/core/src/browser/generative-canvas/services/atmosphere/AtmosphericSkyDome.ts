@@ -23,8 +23,9 @@ import {
 } from './diurnal-lighting';
 import { getSunVectorFromAngles } from './solar-position';
 import { buildPhysicalSkyLut } from './physical-sky';
+import { SunGlare } from './SunGlare';
 import { cloudShellUniformArrays, cloudShellWindSpeeds, MAX_CLOUD_SHELL_LAYERS, resolveCloudShellLayers } from './cloud-shell-layers';
-import { MissingInputError } from '../../../../common/errors/pipeline-errors';
+import { InvalidInputError, MissingInputError } from '../../../../common/errors/pipeline-errors';
 
 export const ATMOSPHERE_VERTEX_SHADER = /* glsl */ `
 varying vec3 vWorldPosition;
@@ -453,9 +454,9 @@ void main() {
     float sunVisibility = smoothstep(-0.06, 0.02, sunH);
 
     if (!uIsNight && sunVisibility > 0.0) {
-        // Solar Disc (~0.53 degree angular diameter)
-        float cosSunRadius = 0.99988;
-        float sunDisc = smoothstep(cosSunRadius - 0.00025, cosSunRadius, cosViewSun);
+        // Solar disc: 0.267° angular radius (0.53° across), with a 0.05° anti-aliased edge. (It was cos 0.99988, a 0.89°
+        // radius with a soft edge to 1.56°: a disc over three times the sun's size.)
+        float sunDisc = smoothstep(cos(radians(0.267 + 0.05)), cos(radians(0.267)), cosViewSun);
 
         // Forward Mie scattering solar corona aureole
         float miePhase = henyeyGreenstein(cosViewSun, uMieDirectionalG);
@@ -844,7 +845,27 @@ export function createAtmosphericSkyDome(
     sunMesh.name = 'PhysicalSunDisc';
     const sunDistance = radius * 0.65;
     sunMesh.position.copy(sunDirection).multiplyScalar(sunDistance);
+    // The dome's shader draws the disc; this mesh stays as the sun's position marker (read by the viewport) but is
+    // not drawn: at display brightness it showed as a grey dot in the middle of the sun.
+    sunMesh.visible = false;
     scene.add(sunMesh);
+
+    // Veiling glare round the sun (SunGlare.ts): measured strength 1 by default whenever this atmosphere has a sun.
+    const glareStrength = config.sunGlare ?? 1;
+    if (!(Number.isFinite(glareStrength) && glareStrength >= 0)) {
+        throw new InvalidInputError('createAtmosphericSkyDome', `sunGlare ${glareStrength}`, 'must be a number >= 0 (1 is the measured camera/eye glare, 0 none)');
+    }
+    const lum = (c: THREE.Color) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+    const sunGlare: SunGlare = new SunGlare({
+        sunDirection: () => sunDirection,
+        sunIrradiance: () => sunLight.color.clone().multiplyScalar(sunLight.intensity),
+        sunElevationDeg: () => initialElev,
+        skyCube: () => bakeTarget.texture,
+        // the disc term the dome's shader adds before cloud: 12 x the sun's colour x intensity (smoothstep visibility at the horizon)
+        clearDiscLuminance: () => 12 * lum(uniforms.uSunColor.value as THREE.Color) * uniforms.uSunIntensity.value * THREE.MathUtils.smoothstep(sunDirection.y, -0.06, 0.02),
+        skyObjects: (): THREE.Object3D[] => [skyDome, sunMesh, sunGlare.mesh]
+    }, glareStrength);
+    scene.add(sunGlare.mesh);
 
     // Dynamic Hemisphere Sky & Ground Ambient Bounce Light
     const hemiLight = new THREE.HemisphereLight(
@@ -911,6 +932,7 @@ export function createAtmosphericSkyDome(
         get sunDirection() {
             return sunDirection;
         },
+        sunGlare,
         get diurnalProfile() {
             return diurnalProfile;
         },
@@ -944,6 +966,8 @@ export function createAtmosphericSkyDome(
             scene.remove(sunMesh);
             scene.remove(hemiLight);
             scene.remove(sunLight);
+            scene.remove(sunGlare.mesh);
+            sunGlare.dispose();
             skyGeo.dispose();
             skyMat.dispose();
             displayMat.dispose();

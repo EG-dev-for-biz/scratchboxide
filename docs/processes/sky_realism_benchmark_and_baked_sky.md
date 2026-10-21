@@ -91,6 +91,19 @@
 
   A debug pass (terms switched off one at a time) showed the golden backlit cores come from diffusion through small, optically thin cumulus. The benchmark's photos agree: clouds near the sun are not too bright (bias -0.14, i.e. slightly dark). A sharper droplet phase made no measurable difference and was not kept.
 
+### Sun glare (`SunGlare.ts`)
+
+* **Measured, not tuned by eye.** The radial profile round the sun in the 13 clear daytime photos, minus the sky, fits L/E = 4.2·θ^-2.5 per sr (θ in degrees). That is about 2.8% of the sun's energy, inside CIE eye glare (10·θ^-2). Photo/render ratio at 0.75-3°: 1.00, 0.99, 0.80, 0.72, 0.61.
+* **Drawn** as a screen-space additive overlay scaled by the scene sun's light; `sunGlare` (default 1, 0 for none) scales it.
+* **Occluded** by:
+  * cloud: the baked sky at the sun against the cloudless disc;
+  * geometry: a 16×16 probe through a frustum 1.2 discs wide, every 4 frames.
+
+  A clay block slid across the sun gave visibility 0 / 0.5 / 1 (behind / edge / clear).
+* **Not drawn** into cube captures (probes, the sky bake, the benchmark's panoramas).
+* **Sun disc:** the dome disc was 0.89° in radius (3.3× too big). It is now the true 0.267°, and the grey marker sphere is hidden.
+* **Limitation:** the probe draws alpha-tested leaves as solid quads.
+
 ## 5. Still open
 
 * **Sky ~1.3x bright relative to the sun, with a 20-30% dark ring 45° from it.** Both persist with fitted haze. HDR lens glare in the photos adds light round the sun; separating it needs glare-free references (sky-scanner radiance data).
