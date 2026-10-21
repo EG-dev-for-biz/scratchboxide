@@ -88,6 +88,16 @@ function nearestUp(img: RgbaImage8, w: number, h: number): RgbaImage8 {
     return { width: w, height: h, rgba: out };
 }
 
+/** Nearest-neighbour resize of a boolean mask (any scale), for restamping a crisp hole after a bilinear colour resize. */
+function nearestMask(mask: Uint8Array, srcW: number, srcH: number, w: number, h: number): Uint8Array {
+    const out = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const sx = Math.min(srcW - 1, Math.floor((x * srcW) / w)), sy = Math.min(srcH - 1, Math.floor((y * srcH) / h));
+        out[y * w + x] = mask[sy * srcW + sx];
+    }
+    return out;
+}
+
 /** Gradient NCC of two crops over `use` pixels (central differences of luma). Null when the original has no texture there. */
 function gradNcc(a: Uint8Array, b: Uint8Array, w: number, h: number, use: Uint8Array): number | null {
     let sab = 0, saa = 0, sbb = 0, n = 0;
@@ -159,8 +169,15 @@ export async function inpaintMaskedTexels(input: {
             }
             const scale = Math.min(INPAINT_MAX_SIDE / Math.max(w, hh), Math.max(1, INPAINT_MIN_SIDE / Math.max(w, hh)));
             const sw = Math.max(1, Math.round(w * scale)), sh = Math.max(1, Math.round(hh * scale));
-            // nearest-neighbour up (the hole's edge stays a clean magenta edge, never a pink fringe), the resizer down
-            const { padded, offset } = padToModelAspect(scale > 1 ? nearestUp({ width: w, height: hh, rgba: crop }, sw, sh) : resizeRgba({ width: w, height: hh, rgba: crop }, sw, sh));
+            // nearest-neighbour up keeps the hole's edge a clean magenta edge by construction; the resizer down blends it
+            // into a purple fringe against the real texels, which the model then (reasonably) reads as real and leaves in
+            // place, so restamp a crisp nearest-neighbour hole over that fringe before it ever reaches the model
+            const scaledCrop = scale > 1 ? nearestUp({ width: w, height: hh, rgba: crop }, sw, sh) : resizeRgba({ width: w, height: hh, rgba: crop }, sw, sh);
+            if (scale <= 1) {
+                const holeDown = nearestMask(isHole, w, hh, sw, sh);
+                for (let i = 0; i < sw * sh; i++) if (holeDown[i]) { const o = i * 4; scaledCrop.rgba[o] = 255; scaledCrop.rgba[o + 1] = 0; scaledCrop.rgba[o + 2] = 255; scaledCrop.rgba[o + 3] = 255; }
+            }
+            const { padded, offset } = padToModelAspect(scaledCrop);
             const t0 = Date.now();
             let answer;
             try {
