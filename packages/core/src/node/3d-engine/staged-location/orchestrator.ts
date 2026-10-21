@@ -446,8 +446,6 @@ class StagedRun {
     private closed = false;
     /** The active scene this run is staged into, split (kept-structure.ts); set once the place is resolved. */
     carried?: ActiveScenePartition;
-    /** A district's remesh took the scan's own textures as its twin (the textures stage). */
-    scanTextures?: { layer: string; treesTakenOut: boolean };
     /** Applied to every layer as it commits (the district without the kept structure's own scan); it may return the layer unchanged. */
     layerTransform?: (layer: StagedLayer, meta: StagedLayerObjectMeta) => StagedLayer;
 
@@ -4104,7 +4102,6 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
         ...(exemptInferred.length ? { exemptInferred } : {}),
         ...(gate.exemptionsRefused.length || refusedHere.length ? { exemptionsRefused: [...refusedHere, ...gate.exemptionsRefused] } : {}),
         droppedNotResolvable: f.rebuild.droppedNotResolvable,
-        ...(run.scanTextures ? { scanTextures: run.scanTextures } : {}),
         ...(f.textures ? { textures: { shares: f.textures.shares, views: f.textures.views, modelsUsed: f.textures.modelsUsed, layers: f.textures.layers.map(l => l.layer), totalMs: f.textures.record.timingsMs.total ?? 0, ...(f.textures.tileUnavailable ? { tileUnavailable: f.textures.tileUnavailable } : {}), ...(f.textures.viewsUnavailable ? { viewsUnavailable: f.textures.viewsUnavailable } : {}) } } : {})
     };
     const switchPills = buildSwitchLocationPills({ ...f.place, ...(f.place.alternatives?.length ? { alternatives: f.place.alternatives } : {}) }, { query: f.request.query, isolate: f.request.isolate, radiusM: f.request.radiusM, trees: f.request.trees, stageIntoActiveScene: f.request.stageIntoActiveScene });
