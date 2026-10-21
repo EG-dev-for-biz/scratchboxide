@@ -232,6 +232,23 @@ describe('Scene3D viewport controls', () => {
         expect(h.selections).toEqual([visiblePart]);
     });
 
+    it('userData.isHelper marks an object unpickable (an environment helper, like the atmosphere sky dome, that a user never selects)', () => {
+        h = createHarness();
+        const helperPart = quad('EnvironmentHelper', 4, 2); // nearer the camera
+        helperPart.userData.isHelper = true;
+        const visiblePart = quad('VisiblePart', 4, 0);
+        h.scene.add(helperPart, modelRoot('stage-visible', visiblePart));
+        h.scene.updateMatrixWorld(true);
+
+        // Sanity: three's raycaster has no opinion on userData, so the helper is the first real hit.
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(new THREE.Vector2(0, 0), h.camera);
+        expect(raycaster.intersectObjects(h.scene.children, true)[0].object).toBe(helperPart);
+
+        click(h);
+        expect(h.selections).toEqual([visiblePart]);
+    });
+
     it('a click on empty space clears a visible selection', () => {
         h = createHarness();
         h.scene.add(modelRoot('stage-a', quad('Hero_Part', 1, 0)));

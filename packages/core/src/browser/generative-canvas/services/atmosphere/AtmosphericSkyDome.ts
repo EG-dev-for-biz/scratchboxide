@@ -766,6 +766,9 @@ export function createAtmosphericSkyDome(
     skyDome.name = 'AtmosphericSkyDome';
     // the sky's own shader, never the scene-wide clay pass (TileClayProcessor, clayRenderMode): a clayed dome is a flat grey wall
     skyDome.userData.sbKeepAuthoredMaterial = true;
+    // an environment helper, not a scene object: it follows the camera every frame (see followCamera), so a click
+    // selecting it would put the transform gizmo at the camera's own position, scaled to the ~0 distance between them
+    skyDome.userData.isHelper = true;
     skyDome.renderOrder = -1000;
     scene.add(skyDome);
 
@@ -847,6 +850,8 @@ export function createAtmosphericSkyDome(
     sunMesh.name = 'PhysicalSunDisc';
     // the sky's own shader, never the scene-wide clay pass (TileClayProcessor, clayRenderMode): a clayed dome is a flat grey wall
     sunMesh.userData.sbKeepAuthoredMaterial = true;
+    // a position marker, not a scene object a user would ever want to select or move (see skyDome.userData.isHelper)
+    sunMesh.userData.isHelper = true;
     const sunDistance = radius * 0.65;
     sunMesh.position.copy(sunDirection).multiplyScalar(sunDistance);
     // The dome's shader draws the disc; this mesh stays as the sun's position marker (read by the viewport) but is

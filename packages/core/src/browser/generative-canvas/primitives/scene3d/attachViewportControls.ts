@@ -157,14 +157,14 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
     const isPickable = (item: THREE.Intersection): boolean => {
         let cur: THREE.Object3D | null = item.object;
         if (!cur || !cur.visible) return false;
-        if (cur === ctx.gizmoGroup.current || cur.userData?.isGizmo || cur.userData?.handleType) return false;
+        if (cur === ctx.gizmoGroup.current || cur.userData?.isGizmo || cur.userData?.isHelper || cur.userData?.handleType) return false;
         const ignored = ctx.ignoredPickObjects();
         if (cur === ctx.brushCursor.current || cur === ctx.selectionBox.current || ignored.includes(cur)) return false;
         while (cur) {
             // three's Raycaster ignores `visible`, so a hidden ancestor must veto the hit here.
             if (!cur.visible) return false;
             if (cur.name && (cur.name.startsWith('sb-gizmo-') || cur.name.startsWith('sb-selection-helper'))) return false;
-            if (cur.userData?.isGizmo) return false;
+            if (cur.userData?.isGizmo || cur.userData?.isHelper) return false;
             cur = cur.parent;
         }
         return true;
