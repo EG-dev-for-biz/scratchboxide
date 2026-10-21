@@ -37,8 +37,11 @@ import { linearToSrgb255 } from '../../../common/spatial/photogrammetric-delight
 import { encodePng } from './png-encode';
 import { decodeImageInMemory, type TileTextureSurface } from './tile-texture-transfer';
 
-/** The reading is opt-in until it passes on real data: SCRATCHBOX_FACADE_MATERIALS=1 turns it on for a server. */
-export const facadeMaterialsEnabled = (): boolean => process.env.SCRATCHBOX_FACADE_MATERIALS === '1';
+/**
+ * On by default (user decision, 2026-10-21: err toward clean geometry and complex textures wherever they come from);
+ * SCRATCHBOX_FACADE_MATERIALS=0 reverts to the measured-interior albedo this replaced (docs/processes/facade_materials_merge_eval.md).
+ */
+export const facadeMaterialsEnabled = (): boolean => process.env.SCRATCHBOX_FACADE_MATERIALS !== '0';
 /** The described surface the masks outline (an open description; nothing branches on its words). */
 export const FACADE_GLASS_TARGET = 'the glass window panes';
 /** Mask values. */

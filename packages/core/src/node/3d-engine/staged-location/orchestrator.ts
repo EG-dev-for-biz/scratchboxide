@@ -203,8 +203,9 @@ export const STAGES = {
     // the facades' grammars read from the tile photo (three readings per facade, concurrently), gated, and the relief run
     // again with the accepted ones; pipeline E's inference runs here too, and in its enhanced mode (the default within E) also a registered
     // Street View survey (about 3 min, alongside the readings) and up to 8 redraws (about 2.5 min)
-    // version F (experiment, SCRATCHBOX_STAGED_GEOMETRY=f) reads, adjusts and redraws in this slot: a longer limit
-    grammar: { order: 2, title: 'Facade grammar', budgetMs: (process.env.SCRATCHBOX_STAGED_GEOMETRY ?? '').trim().toLowerCase() === 'f' ? 900_000 : 420_000 },
+    // version F (on by default; SCRATCHBOX_STAGED_GEOMETRY=e reverts to E's own inference) reads, adjusts and redraws
+    // in this slot: a longer limit
+    grammar: { order: 2, title: 'Facade grammar', budgetMs: stagedGeometryF() ? 900_000 : 420_000 },
     // pipeline E: measured relief on the clean massing (the scan averaged along what repeats), then the photo-match gate
     relief: { order: 2, title: 'Measured relief', budgetMs: 480_000 },
     fit: { order: 3, title: 'Scan-fitted rebuild', budgetMs: 30_000 },
@@ -3061,8 +3062,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         ...(enhanceOn && visionAvailable ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), locationName: placeValue!.formattedAddress, guards: enhanceGuards(), cacheDir: path.join(cache.dir, 'enhance_plates'), ...(guideViews ? { streetViews: guideViews } : {}) } } : {}),
                         solar: [], anchor: structure!.seed, signal: io.signal, onProgress: m => io.progress(m)
                     };
-                    // version F (experiment, SCRATCHBOX_STAGED_GEOMETRY=f): its procedural geometry in place of E's inference, E's enhanced
-                    // texturing on it; round 3 (f3.ts) by default, SCRATCHBOX_VERSION_F_ROUND=2 for round 2 (f2.ts)
+                    // version F (on by default; SCRATCHBOX_STAGED_GEOMETRY=e reverts to E's own inference): its procedural
+                    // geometry in place of E's inference, E's enhanced texturing on it; round 3 (f3.ts) by default,
+                    // SCRATCHBOX_VERSION_F_ROUND=2 for round 2 (f2.ts)
                     const key8 = e.key.slice(0, 8);
                     let earlyLayers = 0;
                     // round 3 hands the layer over as it exists: the clay shape right after the adjustment, the textured twin as

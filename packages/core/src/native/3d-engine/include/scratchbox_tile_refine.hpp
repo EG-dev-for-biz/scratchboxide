@@ -830,7 +830,6 @@ private:
             rp.threads = static_cast<int>(threads);
             rp.anchorX = P.anchorX;
             rp.anchorZ = P.anchorZ;
-            rp.denoise = false;
             rp.cullHidden = true;
             rp.precomputedVisibility = visible;
             rect = scan_rectifier::ScanRectifier::rectifyMesh(scene.mesh, rp);

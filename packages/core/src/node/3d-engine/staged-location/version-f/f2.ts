@@ -53,9 +53,13 @@ import { check, planSummary, planVersionF, structureGuidePng, versionFProvenance
 
 export const VERSION_F2_ID = 'version-f/v2';
 
-/** SCRATCHBOX_STAGED_GEOMETRY=f: pipeline E's grammar stage builds version F's geometry instead of E's inference (experiment). */
+/**
+ * On by default (user decision, 2026-10-21: err toward clean, well-shaped geometry wherever it comes from): pipeline
+ * E's grammar stage builds version F's geometry instead of E's own inference. SCRATCHBOX_STAGED_GEOMETRY=e reverts
+ * to E's inference.
+ */
 export function stagedGeometryF(env: NodeJS.ProcessEnv = process.env): boolean {
-    return (env.SCRATCHBOX_STAGED_GEOMETRY ?? '').trim().toLowerCase() === 'f';
+    return (env.SCRATCHBOX_STAGED_GEOMETRY ?? 'f').trim().toLowerCase() !== 'e';
 }
 
 /** The sentence the redraw is given with F's structure picture. */
