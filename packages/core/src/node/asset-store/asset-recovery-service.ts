@@ -267,12 +267,11 @@ export class AssetRecoveryService {
     }
 
     /**
-     * A record an explicit rebuild may point elsewhere: one a rebuild matched by name, or one swept in from disk with
-     * no recipe of its own (a copy of unknown origin). A file a run published under its own name is never re-pointed.
+     * A record an explicit rebuild may point elsewhere: one a rebuild matched by name, or one swept in from disk (a copy
+     * of unknown origin, whatever recipe it inherited). A file a run published under its own name is never re-pointed.
      */
-    private rematchable(record: { rebuilt: boolean; recipeId: string | null; origin: string }): boolean {
-        if (record.rebuilt) return true;
-        return record.origin === 'backfill' && (!record.recipeId || !this.store.recipe(record.recipeId));
+    private rematchable(record: { rebuilt: boolean; origin: string }): boolean {
+        return record.rebuilt || record.origin === 'backfill';
     }
 
     /** Every /models file the scene's objects point at that the store holds, written back to <workspace>/public/models. */

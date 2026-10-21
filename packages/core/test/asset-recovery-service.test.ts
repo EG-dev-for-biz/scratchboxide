@@ -237,8 +237,11 @@ describe('AssetRecoveryService', () => {
         const store = new DurableAssetStore(path.join(HOME, 'home-g'));
         store.putFile(writeFile(glbBytes(100, 1)), { servedPath: '/models/wsa_sq_tiles_aaaaaaaa_around_bbbbbbbb.glb', origin: 'staged-location', recipeId: 'staged:aaaaaaaa' });
         store.putFile(writeFile(glbBytes(200, 2)), { servedPath: '/models/wsa_sq_remesh_aaaaaaaa_around_bbbbbbbb.glb', origin: 'staged-location', recipeId: 'staged:aaaaaaaa' });
-        // the earlier (wrong) match: the lost remesh carve points at the tiles carve
+        // the earlier (wrong) match: the lost remesh carve points at the tiles carve, then a sweep of the written-back
+        // copy made before the sweep kept records re-recorded it as a backfill that inherited the run's recipe
         store.alias('/models/wsa_ny_remesh_11111111_around_22222222.glb', '/models/wsa_sq_tiles_aaaaaaaa_around_bbbbbbbb.glb', { origin: 'recovery', rebuilt: true });
+        store.putFile(store.lookup('/models/wsa_ny_remesh_11111111_around_22222222.glb')!.file, { servedPath: '/models/wsa_ny_remesh_11111111_around_22222222.glb', origin: 'backfill' });
+        expect(store.lookup('/models/wsa_ny_remesh_11111111_around_22222222.glb')).toMatchObject({ rebuilt: false, origin: 'backfill', recipeId: 'staged:aaaaaaaa' });
         const rebuild: StagedRebuilder = async () => ({ runId: 'aaaaaaaa', layers: [] });
         const service = new AssetRecoveryService(store, { workspaceRoot: path.join(HOME, 'checkout-g'), rebuildStaged: rebuild });
         const lost = '/models/wsa_ny_remesh_11111111_around_22222222.glb';
