@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { TileClayProcessor } from '../src/browser/generative-canvas/services/TileClayProcessor';
-import { KEEP_AUTHORED_MATERIAL_KEY } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/texturedTwinModel';
+import { KEEP_AUTHORED_MATERIAL_KEY, prepareTexturedTwinModel } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/texturedTwinModel';
 
 describe('scene-wide clay pass and textured twins', () => {
     it('clays the clay layers and leaves a twin mesh with its photo material', () => {
@@ -25,5 +25,28 @@ describe('scene-wide clay pass and textured twins', () => {
         expect(twinMesh.material).toBe(photo);
         expect(photo.map).toBeTruthy();
         expect(twinMesh.userData.isClayMesh).toBeUndefined();
+    });
+
+    it('a twin with photo materials but no confidence texture (the scan\'s own textures) is marked to keep them; a clay layer is not', async () => {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3));
+        const make = () => {
+            const scene = new THREE.Scene();
+            const photo = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ map: new THREE.DataTexture(new Uint8Array([200, 180, 150, 255]), 1, 1) }));
+            const plain = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial());
+            scene.add(photo, plain);
+            return { scene, photo, plain };
+        };
+        const twin = make();
+        await prepareTexturedTwinModel({ scene: twin.scene }, { twin: true });
+        expect(twin.photo.userData[KEEP_AUTHORED_MATERIAL_KEY]).toBe(true);
+        expect(twin.plain.userData[KEEP_AUTHORED_MATERIAL_KEY]).toBeUndefined();
+        TileClayProcessor.applyClayMaterial(twin.scene, 'studio-grey' as any);
+        expect((twin.photo.material as THREE.MeshStandardMaterial).map).toBeTruthy();
+        expect(twin.plain.userData.isClayMesh).toBe(true);
+        // the same model loaded as an ordinary layer (not a twin) is clayed whole
+        const layer = make();
+        await prepareTexturedTwinModel({ scene: layer.scene });
+        expect(layer.photo.userData[KEEP_AUTHORED_MATERIAL_KEY]).toBeUndefined();
     });
 });
