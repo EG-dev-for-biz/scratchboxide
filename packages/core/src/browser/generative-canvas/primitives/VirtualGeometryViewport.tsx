@@ -48,6 +48,10 @@ interface PathTraceStatus {
     denoiseMs: number;
     /** Pixels whose illumination came from the previous view (temporal reuse). */
     historyPixels: number;
+    /** Size the frame was traced at before MetalFX scaled it to width x height. */
+    renderWidth: number;
+    renderHeight: number;
+    upscaleMs: number;
     message?: string;
 }
 
@@ -222,6 +226,7 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
         const plan = virtualGeometryLoadPlan(latest.current.data.virtualGeometry, workspacePath);
         const sunSpec = latest.current.data.virtualGeometry?.pathTrace?.sun ?? (sun ? DEFAULT_SUN : undefined);
         const targetSpp = latest.current.data.virtualGeometry?.pathTrace?.targetSpp ?? 256;
+        const renderScale = Math.min(1, Math.max(0.25, latest.current.data.virtualGeometry?.pathTrace?.renderScale ?? 1));
         const offscreen = document.createElement('canvas');
         const post = async (route: string, body: unknown) => {
             const res = await fetch(`/3d/path-trace/${route}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -230,7 +235,7 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
             return json;
         };
         const show = (patch: Partial<PathTraceStatus>) => {
-            status = { ...(status ?? { device: '', triangles: 0, clusters: 0, spp: 0, targetSpp, rays: 0, gpuMs: 0, width: 0, height: 0, materials: '', denoised: false, denoiseMs: 0, historyPixels: 0 }), ...patch };
+            status = { ...(status ?? { device: '', triangles: 0, clusters: 0, spp: 0, targetSpp, rays: 0, gpuMs: 0, width: 0, height: 0, materials: '', denoised: false, denoiseMs: 0, historyPixels: 0, renderWidth: 0, renderHeight: 0, upscaleMs: 0 }), ...patch };
             setPtStatus(status);
         };
 
@@ -249,7 +254,8 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
                 sessionId, ...size,
                 camera: { position: v.eye, target: v.target, up: v.up, verticalFovDeg: v.fovYDeg },
                 lod: { thresholdPx: latestThreshold.current },
-                targetSpp
+                targetSpp,
+                renderScale
             };
             const tag = JSON.stringify(body);
             if (tag === sentView) return;
@@ -302,7 +308,9 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
                 show({
                     spp, rays: Number(res.headers.get('X-Frame-Rays')), gpuMs: Number(res.headers.get('X-Frame-Gpu-Ms')), width, height,
                     denoised: res.headers.get('X-Frame-Denoised') === '1', denoiseMs: Number(res.headers.get('X-Frame-Denoise-Ms') ?? 0),
-                    historyPixels: Number(res.headers.get('X-Frame-History') ?? 0)
+                    historyPixels: Number(res.headers.get('X-Frame-History') ?? 0),
+                    renderWidth: Number(res.headers.get('X-Frame-Render-Width') ?? width), renderHeight: Number(res.headers.get('X-Frame-Render-Height') ?? height),
+                    upscaleMs: Number(res.headers.get('X-Frame-Upscale-Ms') ?? 0)
                 });
             } catch (err: any) {
                 if (!cancelled) show({ message: err?.message ?? String(err) });
@@ -434,7 +442,11 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
                         <div style={{ color: '#fcd34d', maxWidth: 420, whiteSpace: 'pre-wrap' }}>{ptStatus.message}</div>
                     ) : (
                         <>
-                            <div>{ptStatus.spp} of {ptStatus.targetSpp} spp · {ptStatus.width}×{ptStatus.height}{ptStatus.gpuMs > 0 ? ` · ${(ptStatus.rays / ptStatus.gpuMs / 1000).toFixed(1)} M rays/s` : ''}</div>
+                            <div>
+                                {ptStatus.spp} of {ptStatus.targetSpp} spp · {ptStatus.width}×{ptStatus.height}
+                                {ptStatus.renderWidth > 0 && (ptStatus.renderWidth !== ptStatus.width || ptStatus.renderHeight !== ptStatus.height) ? ` (traced at ${ptStatus.renderWidth}×${ptStatus.renderHeight}, MetalFX ${ptStatus.upscaleMs.toFixed(1)} ms)` : ''}
+                                {ptStatus.gpuMs > 0 ? ` · ${(ptStatus.rays / ptStatus.gpuMs / 1000).toFixed(1)} M rays/s` : ''}
+                            </div>
                             <div>Cut: {fmt(ptStatus.triangles)} triangles in {fmt(ptStatus.clusters)} clusters · {ptStatus.materials}</div>
                             <div>{ptStatus.denoised ? `Denoised on the GPU in ${ptStatus.denoiseMs.toFixed(1)} ms` : 'Raw samples'}{ptStatus.historyPixels > 0 ? ` · ${fmt(ptStatus.historyPixels)} px reused from the last view` : ''}</div>
                         </>

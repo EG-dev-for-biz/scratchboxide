@@ -24,6 +24,7 @@
 #include "scratchbox_io.hpp"
 #include "scratchbox_metal_pathtracer.hpp"
 #include "scratchbox_pathtracer.hpp"
+#include "scratchbox_png.hpp"
 #include "scratchbox_sbvg_reader.hpp"
 #include "scratchbox_sky.hpp"
 #include "scratchbox_texture.hpp"
@@ -193,7 +194,8 @@ struct MaterialSource {
     double loadMs{0.0};
 };
 
-MaterialSource loadMaterials(const std::string& glbPath, const sbvg::File& file) {
+/** `atlasNormals` false leaves the baked normal atlases out (for measuring their effect); colour atlases always load. */
+MaterialSource loadMaterials(const std::string& glbPath, const sbvg::File& file, bool atlasNormals = true) {
     if (file.version < 3) throw std::runtime_error("this .sbvg carries no material ids (version " + std::to_string(file.version) + "); rebuild it from its GLB");
     MaterialSource source;
     source.glbPath = glbPath;
@@ -204,6 +206,37 @@ MaterialSource loadMaterials(const std::string& glbPath, const sbvg::File& file)
     const uint32_t glbMaterials = glbMaterialCount(glbPath);
     if (glbMaterials != file.materialCount) {
         throw std::runtime_error("the .sbvg was built from a GLB with " + std::to_string(file.materialCount) + " materials; " + glbPath + " has " + std::to_string(glbMaterials));
+    }
+    // gltf::GlbSceneReader appends a default material when a primitive has none; the atlas materials
+    // must sit exactly at materialCount, materialCount + 1, ... as the file's triangles name them.
+    source.scene.materials.resize(file.materialCount);
+    auto loadAtlasImage = [&](const std::string& imagePath, uint32_t level, const char* what) {
+        std::ifstream in(imagePath, std::ios::binary);
+        if (!in) throw std::runtime_error(std::string(what) + " of level " + std::to_string(level) + " is missing: " + imagePath);
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        png::DecodeResult decoded = png::decode(bytes.data(), bytes.size(), png::OutputFormat::Rgb);
+        if (!decoded.ok) throw std::runtime_error(std::string(what) + " of level " + std::to_string(level) + " failed to decode: " + decoded.error);
+        gltf::SceneImage image;
+        image.mimeType = "image/png";
+        image.decoded = true;
+        image.pixels = std::move(decoded.image);
+        source.scene.images.push_back(std::move(image));
+        return static_cast<int>(source.scene.images.size() - 1);
+    };
+    for (const sbvg::Atlas& atlas : file.atlases) {
+        gltf::SceneMaterial material;
+        material.baseColorImage = loadAtlasImage(atlas.imagePath, atlas.level, "atlas");
+        material.wrapS = 33071;
+        material.wrapT = 33071;
+        material.metallicFactor = atlas.metallic;
+        material.roughnessFactor = atlas.roughness;
+        if (atlasNormals && !atlas.normalImagePath.empty()) {
+            material.normalImage = loadAtlasImage(atlas.normalImagePath, atlas.level, "normal atlas");
+            material.normalWrapS = 33071;
+            material.normalWrapT = 33071;
+            material.normalScale = 1.0f;
+        }
+        source.scene.materials.push_back(material);
     }
     for (const auto& image : source.scene.images) if (image.decoded) ++source.imagesDecoded;
     return source;
@@ -304,17 +337,36 @@ int renderOnce(const std::string& configPath) {
         const std::string materialsGlb = config["materials"]["glbPath"].asString("");
         const bool sceneMaterials = !materialsGlb.empty();
         MaterialSource source;
-        if (sceneMaterials) source = loadMaterials(materialsGlb, file);
+        if (sceneMaterials) source = loadMaterials(materialsGlb, file, boolOr(config["materials"]["atlasNormals"], true));
 
         render::RenderOutput out;
         std::string deviceName = "cpu";
         double accelerationBuildMs = 0.0;
         uint32_t texturesUploaded = 0;
         std::unique_ptr<metalpt::MetalPathTracer> metalTracer;
+        // Optional speed-ups, each measured by scripts/bench_sbvg_pathtracer.cjs; off by default.
+        const Json& opt = config["optimizations"];
+        const float bounceThresholdPx = numberOr(opt["bounceThresholdPx"], 0.0f);
+        const bool accelFastBuild = boolOr(opt["accelFastBuild"], false);
+        const std::string samplerName = opt["sampler"].asString("pcg");
+        if (samplerName != "pcg" && samplerName != "sobol") throw std::runtime_error("optimizations.sampler must be \"pcg\" or \"sobol\"");
+        const bool primaryRaster = boolOr(opt["primaryRaster"], false);
+        sbvg::Cut bounceCut;
         if (backend == "metal") {
             metalTracer = std::make_unique<metalpt::MetalPathTracer>();
             metalpt::MetalPathTracer& tracer = *metalTracer;
+            tracer.setPreferFastBuild(accelFastBuild);
+            tracer.setSampler(samplerName == "sobol" ? 1 : 0);
+            tracer.setPrimaryRaster(primaryRaster);
+            tracer.setBounceShadowRays(boolOr(opt["bounceShadowRays"], true));
             tracer.setGeometry(file.vertices, cut.indices, cut.materials);
+            if (bounceThresholdPx > 0.0f) {
+                sbvg::CutParams bounceParams = cutParams;
+                bounceParams.thresholdPx = bounceThresholdPx;
+                bounceCut = sbvg::selectCut(file, bounceParams);
+                if (bounceCut.indices.empty()) throw std::runtime_error("the bounce LOD cut selected no clusters");
+                tracer.setBounceGeometry(bounceCut.indices, bounceCut.materials, bounceThresholdPx / cutParams.lodScale);
+            }
             if (sceneMaterials) {
                 tracer.setMaterials(source.scene);
                 texturesUploaded = tracer.textureCount();
@@ -393,9 +445,13 @@ int renderOnce(const std::string& configPath) {
               << "  \"maxBounces\": " << settings.maxBounces << ",\n"
               << "  \"lighting\": " << jsonString(lighting.lighting.mode == metalpt::Lighting::Mode::Sky ? "sky" : "studio") << ",\n"
               << "  \"file\": { \"clusters\": " << file.clusters.size() << ", \"levels\": " << file.levelCount
-              << ", \"vertices\": " << file.vertexCount() << ", \"leafTriangles\": " << file.leafTriangleCount << " },\n"
+              << ", \"vertices\": " << file.vertexCount() << ", \"leafTriangles\": " << file.leafTriangleCount << ", \"atlases\": " << file.atlases.size() << " },\n"
               << "  \"cut\": { \"clusters\": " << cut.clusterIds.size() << ", \"triangles\": " << cut.triangleCount()
               << ", \"thresholdPx\": " << cutParams.thresholdPx << ", \"finestLevel\": " << cutParams.finestLevel << " },\n"
+              << "  \"optimizations\": { \"accelFastBuild\": " << (accelFastBuild ? "true" : "false") << ", \"sampler\": " << jsonString(samplerName)
+              << ", \"primaryRaster\": " << (primaryRaster ? "true" : "false") << ", \"rasterMs\": " << (metalTracer ? metalTracer->rasterMs() : 0.0)
+              << ", \"bounceCut\": { \"thresholdPx\": " << bounceThresholdPx << ", \"clusters\": " << bounceCut.clusterIds.size() << ", \"triangles\": " << bounceCut.triangleCount()
+              << ", \"accelerationBuildMs\": " << (metalTracer ? metalTracer->bounceBuildMs() : 0.0) << " } },\n"
               << "  \"rays\": " << out.rays << ",\n"
               << "  \"raysPerSecond\": " << (out.renderMs > 0.0 ? static_cast<double>(out.rays) * 1000.0 / out.renderMs : 0.0) << ",\n"
               << "  \"renderMs\": " << out.renderMs << ",\n"
@@ -411,7 +467,8 @@ int renderOnce(const std::string& configPath) {
               << "  \"denoiseBackend\": " << jsonString(denoiseBackend) << ",\n"
               << "  \"denoiseMs\": " << denoiseMs << ",\n"
               << "  \"materials\": { \"source\": " << jsonString(sceneMaterials ? "glb" : "uniform") << ", \"glbPath\": " << jsonString(materialsGlb)
-              << ", \"count\": " << (sceneMaterials ? source.scene.materials.size() : 1) << ", \"images\": " << source.scene.images.size() << ", \"imagesDecoded\": " << source.imagesDecoded
+              << ", \"count\": " << (sceneMaterials ? file.materialCount : 1) << ", \"atlasMaterials\": " << (sceneMaterials ? file.atlases.size() : 0)
+              << ", \"images\": " << source.scene.images.size() << ", \"imagesDecoded\": " << source.imagesDecoded
               << ", \"texturesUploaded\": " << texturesUploaded << ", \"loadMs\": " << source.loadMs << " },\n"
               << "  \"material\": { \"albedo\": " << jsonVec(material.albedo) << ", \"roughness\": " << material.roughness << ", \"metallic\": " << material.metallic << " },\n"
               << "  \"sun\": { \"elevationDeg\": " << lighting.elevationDeg << ", \"azimuthDeg\": " << lighting.azimuthDeg << " },\n"
@@ -503,6 +560,8 @@ private:
     bool exposureSet_{false};
     bool denoise_{true};
     bool temporal_{true};
+    float renderScale_{1.0f};
+    int outWidth_{0}, outHeight_{0};
     std::chrono::steady_clock::time_point lastWrite_;
 
     bool frameActive() const { return frameActive_ && tracer_ && tracer_->samplesPerPixel() < targetSpp_; }
@@ -581,9 +640,10 @@ private:
         s.precision(9);
         s << "{\"event\":\"opened\",\"device\":" << jsonString(tracer_->deviceName())
           << ",\"file\":{\"clusters\":" << file_.clusters.size() << ",\"levels\":" << file_.levelCount << ",\"vertices\":" << file_.vertexCount()
-          << ",\"leafTriangles\":" << file_.leafTriangleCount << ",\"materialCount\":" << file_.materialCount
+          << ",\"leafTriangles\":" << file_.leafTriangleCount << ",\"materialCount\":" << file_.materialCount << ",\"atlases\":" << file_.atlases.size()
           << ",\"aabbMin\":" << jsonVec(bounds_.min) << ",\"aabbMax\":" << jsonVec(bounds_.max) << "}"
           << ",\"materials\":{\"source\":" << jsonString(sceneMaterials_ ? "glb" : "uniform") << ",\"count\":" << (sceneMaterials_ ? file_.materialCount : 1)
+          << ",\"atlasMaterials\":" << (sceneMaterials_ ? file_.atlases.size() : 0)
           << ",\"images\":" << source_.scene.images.size() << ",\"imagesDecoded\":" << source_.imagesDecoded << ",\"texturesUploaded\":" << tracer_->textureCount() << "}"
           << ",\"openMs\":" << ms << "}";
         emit(s.str());
@@ -616,13 +676,23 @@ private:
 
     void view(const Json& cmd) {
         if (!opened_) throw std::runtime_error("open a file before view");
-        const int width = static_cast<int>(numberOr(cmd["width"], 0));
-        const int height = static_cast<int>(numberOr(cmd["height"], 0));
-        if (width < 8 || height < 8 || width > 8192 || height > 8192) throw std::runtime_error("view needs width and height between 8 and 8192");
+        const int outWidth = static_cast<int>(numberOr(cmd["width"], 0));
+        const int outHeight = static_cast<int>(numberOr(cmd["height"], 0));
+        if (outWidth < 8 || outHeight < 8 || outWidth > 8192 || outHeight > 8192) throw std::runtime_error("view needs width and height between 8 and 8192");
         if (!cmd["camera"].has("position") || !cmd["camera"].has("target")) throw std::runtime_error("view needs camera.position and camera.target");
-        const float aspect = static_cast<float>(width) / static_cast<float>(height);
+        // Below 1, the frame is traced at a fraction of the size and MetalFX scales it up to the view.
+        renderScale_ = std::clamp(numberOr(cmd["renderScale"], 1.0f), 0.25f, 1.0f);
+        const int width = std::max(8, static_cast<int>(std::lround(outWidth * renderScale_)));
+        const int height = std::max(8, static_cast<int>(std::lround(outHeight * renderScale_)));
+        outWidth_ = outWidth;
+        outHeight_ = outHeight;
+        const std::string samplerName = cmd["sampler"].asString("sobol");
+        if (samplerName != "pcg" && samplerName != "sobol") throw std::runtime_error("view.sampler must be \"pcg\" or \"sobol\"");
+        tracer_->setSampler(samplerName == "sobol" ? 1 : 0);
+        const float aspect = static_cast<float>(outWidth) / static_cast<float>(outHeight);
         render::CameraSpec camera = parseCamera(cmd["camera"], bounds_, aspect);
-        const sbvg::CutParams params = cutParamsFor(camera, height, cmd["lod"]);
+        // LOD is chosen for the pixels the viewer sees, not the traced size.
+        const sbvg::CutParams params = cutParamsFor(camera, outHeight, cmd["lod"]);
 
         const bool lodChanged = !haveCut_ || params.lodScale != cutParams_.lodScale || params.thresholdPx != cutParams_.thresholdPx
                              || params.near != cutParams_.near || params.finestLevel != cutParams_.finestLevel;
@@ -665,7 +735,8 @@ private:
         lastWrite_ = std::chrono::steady_clock::now() - std::chrono::seconds(1);
         std::ostringstream s;
         s.precision(9);
-        s << "{\"event\":\"view\",\"seq\":" << seq_ << ",\"width\":" << width << ",\"height\":" << height
+        s << "{\"event\":\"view\",\"seq\":" << seq_ << ",\"width\":" << outWidth << ",\"height\":" << outHeight
+          << ",\"renderWidth\":" << width << ",\"renderHeight\":" << height << ",\"renderScale\":" << renderScale_ << ",\"sampler\":" << jsonString(samplerName)
           << ",\"cut\":{\"clusters\":" << cut_.clusterIds.size() << ",\"triangles\":" << cut_.triangleCount() << ",\"thresholdPx\":" << cutParams_.thresholdPx
           << ",\"rebuilt\":" << ((lodChanged || moved) ? "true" : "false") << ",\"cutMs\":" << cutMs_ << ",\"accelerationBuildMs\":" << accelerationBuildMs << "}"
           << ",\"lighting\":" << jsonString(lighting_.lighting.mode == metalpt::Lighting::Mode::Sky ? "sky" : "studio") << ",\"targetSpp\":" << targetSpp_ << "}";
@@ -712,6 +783,11 @@ private:
             dst[2] = image.channels >= 3 ? src[2] : src[0];
             dst[3] = 255;
         }
+        double upscaleMs = 0.0;
+        if (out.width != outWidth_ || out.height != outHeight_) {
+            rgba = tracer_->upscaleRgba(rgba, out.width, out.height, outWidth_, outHeight_);
+            upscaleMs = tracer_->upscaleGpuMs();
+        }
         const std::filesystem::path tmp = dir_ / "frame.rgba.tmp";
         const std::filesystem::path final = dir_ / "frame.rgba";
         if (!writeBytes(tmp, rgba.data(), rgba.size())) throw std::runtime_error("failed to write " + tmp.string());
@@ -719,7 +795,8 @@ private:
         std::ostringstream s;
         s.precision(9);
         s << "{\"event\":\"frame\",\"seq\":" << seq_ << ",\"spp\":" << tracer_->samplesPerPixel() << ",\"rays\":" << out.rays
-          << ",\"gpuMs\":" << tracer_->frameGpuMs() << ",\"width\":" << out.width << ",\"height\":" << out.height
+          << ",\"gpuMs\":" << tracer_->frameGpuMs() << ",\"width\":" << outWidth_ << ",\"height\":" << outHeight_
+          << ",\"renderWidth\":" << out.width << ",\"renderHeight\":" << out.height << ",\"upscaleMs\":" << upscaleMs
           << ",\"coverage\":" << out.geometryCoverage << ",\"exposureEv\":" << exposureEv_ << ",\"path\":" << jsonString(final.string())
           << ",\"denoised\":" << (denoise_ ? "true" : "false") << ",\"denoiseMs\":" << denoiseMs << ",\"historyPixels\":" << historyPixels
           << ",\"done\":" << (tracer_->samplesPerPixel() >= targetSpp_ ? "true" : "false") << "}";

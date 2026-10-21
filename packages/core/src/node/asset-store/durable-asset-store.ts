@@ -193,6 +193,29 @@ export class DurableAssetStore {
         return found;
     }
 
+    /**
+     * Writes the stored bytes of `servedPath` back to `dir/<basename>` (the checkout copy, e.g. public/models) when that
+     * file is missing or differs, so code that reads published files from disk finds a recovered file where it expects
+     * it. Returns the file's path, or undefined when the store has no bytes for the path.
+     */
+    materialize(servedPath: string, dir: string): string | undefined {
+        const found = this.lookup(servedPath);
+        if (!found) return undefined;
+        const target = path.join(path.resolve(dir), path.posix.basename(found.path));
+        if (fs.existsSync(target) && fs.statSync(target).size === found.bytes && sha256OfFile(target) === found.sha256) return target;
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        const tmp = `${target}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+        try {
+            fs.copyFileSync(found.file, tmp, fs.constants.COPYFILE_FICLONE);
+            fs.renameSync(tmp, target);
+        } catch (err) {
+            fs.rmSync(tmp, { force: true });
+            throw err;
+        }
+        this.db.addEvent('asset.materialized', found.path, found.sha256, { file: target });
+        return target;
+    }
+
     /** The served row even when its bytes are gone (so a recipe can still be found for a rebuild). */
     record(servedPath: string): ServedRow | undefined {
         try {
@@ -261,12 +284,19 @@ export class DurableAssetStore {
                     const rel = path.relative(base, file).split(path.sep).join('/');
                     const servedPath = `${prefix}/${rel}`;
                     const known = this.db.scanned(file, stat.size, stat.mtimeMs);
-                    const current = known ? this.db.served(servedPath) : undefined;
+                    const current = this.db.served(servedPath);
                     if (known && current && current.sha256 === known && fs.existsSync(this.blobPath(known))) {
                         report.unchanged++;
                         continue;
                     }
                     const sha256 = await sha256OfFileStreamed(file);
+                    // the file on disk is what the record already says (a copy the store wrote back, or an unchanged
+                    // file seen for the first time by this sweep): the record keeps its origin, recipe and rebuilt flag
+                    if (current && current.sha256 === sha256 && fs.existsSync(this.blobPath(sha256))) {
+                        this.db.rememberScanned(file, stat.size, stat.mtimeMs, sha256);
+                        report.unchanged++;
+                        continue;
+                    }
                     const stored = this.putHashed(file, sha256, stat.size, { servedPath, origin: opts.origin ?? 'backfill', ...(opts.workspace ? { workspace: opts.workspace } : {}) });
                     this.db.rememberScanned(file, stat.size, stat.mtimeMs, stored.sha256);
                     report.added++;

@@ -230,6 +230,11 @@ export class AssetDb {
         return r ? { id: r.id as string, kind: r.kind as string, workspace: (r.workspace as string) ?? null, body: JSON.parse(r.body as string), createdAtMs: Number(r.createdAtMs) } : undefined;
     }
 
+    recipesOfKind(kind: string): RecipeRow[] {
+        const rows = this.stmt('SELECT id, kind, workspace, body, created_at_ms AS createdAtMs FROM recipes WHERE kind = ? ORDER BY created_at_ms DESC').all(kind) as Record<string, unknown>[];
+        return rows.map(r => ({ id: r.id as string, kind: r.kind as string, workspace: (r.workspace as string) ?? null, body: JSON.parse(r.body as string), createdAtMs: Number(r.createdAtMs) }));
+    }
+
     addEvent(kind: string, subject: string | null, sha256: string | null, detail?: unknown, atMs = Date.now()): void {
         this.stmt('INSERT INTO events (at_ms, kind, subject, sha256, detail) VALUES (?, ?, ?, ?, ?)')
             .run(atMs, kind, subject, sha256, detail === undefined ? null : JSON.stringify(detail));

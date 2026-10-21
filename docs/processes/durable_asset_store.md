@@ -1,7 +1,7 @@
 # Durable asset store: files outlive the checkout, missing ones come back
 
 **Date:** 2026-10-20
-**Status:** Verified (stages 1–3 live in an isolated instance; the rebuild path verified with a fake rebuilder in tests, not yet with a real staged run)
+**Status:** Verified (stages 1–3 live; the real rebuild path verified end to end in the user's app on the Washington Square scene, all 13 lost files back)
 
 ## Why
 
@@ -71,12 +71,31 @@ scene on 2026-10-20). The user asked for the app to fetch data as needed and to 
 - Tests: `project-artifact-store-durable.test.ts` (4: the diff names changes without payloads; a save is logged and a
   checkout without the file gets the project back and keeps logging; a legacy file is imported once; the file-only mode).
 
+## The real rebuild (2026-10-20, the user's app on 3060)
+
+The Washington Square Arch scene had 13 files lost with a deleted worktree, all made before the store (no recipe).
+"Rebuild this location" (the fallback from the scene's own place) ran the isolated structure and then the district as two
+staged runs. What it taught, each fixed the same day:
+
+- the lost names carry the slug of the words the place was first asked for with (`…_new_york_iso_l3a_…`); a rebuild
+  from the resolved address publishes under another slug (`…_washington_square_iso_l3a_…`): match by layer token, not
+  the prefix;
+- the textured twins are published by the background texture pass after the run ends: take them from any run recorded
+  at the same place (within 60 m), newest first;
+- an isolated structure and its district are two runs: split the fallback by the `_iso` token.
+
+Result: 6 structure layers rebuilt in 2.8 s (cached stages), then 4 textured twins and the district's trees in 108 s,
+and last the district remesh carved around the kept structure (`…_remesh_<key>_around_<key>.glb`): the scene goes along
+with an explicit rebuild (GLB bytes stripped) and the district run is staged into it, as the original was, after the
+recovered structure files are written back to `public/models` where that run reads them (269 s, a fresh district run).
+Two more rules came out of it: a sweep keeps the record of a file the store wrote back (origin, recipe, rebuilt), and
+an explicit rebuild may re-point a name that a rebuild matched or a sweep recorded, never one a run published itself;
+a lost name is never its own replacement. The scene shows the textured arch, its trees and the surrounding buildings.
+
 ## Not yet
 
-- A real staged rebuild end to end: run a location in the app, remove its files and blobs, reload. (The fake-rebuilder
-  test covers the aliasing; the real run uses the chat's own dependencies and credentials.)
-- Files made before the store existed have no recipe: they are restored only if a copy was swept in. The Washington
-  Square models are gone for good; the scene must be staged again.
+- Names still carry the query's slug and a run key; the store, not the name, is now the identity, but a stable
+  `<place-id>_<layer>` naming would make matches exact instead of token-based.
 - A view of the project log in the app (today it is the API only).
 
 ## Candidate tool/service ideas

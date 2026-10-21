@@ -18,6 +18,7 @@ import * as THREE from 'three';
 import {
     resolveCloudShellLayers,
     cloudShellUniformArrays,
+    shellCoverageForSkyCover,
     MAX_CLOUD_SHELL_LAYERS
 } from '../src/browser/generative-canvas/services/atmosphere/cloud-shell-layers';
 import { createAtmosphericSkyDome, ATMOSPHERE_FRAGMENT_SHADER } from '../src/browser/generative-canvas/services/atmosphere/AtmosphericSkyDome';
@@ -29,8 +30,8 @@ import { InvalidInputError } from '../src/common/errors/pipeline-errors';
 const cirrus = { label: 'cirrus', baseAltitudeMeters: 9000, thicknessMeters: 1200, coverage: 0.45, opticalDepth: 0.5, featureSizeMeters: 2500, streakElongation: 8, streakHeadingDeg: 70 };
 const sheet = { label: 'altostratus', baseAltitudeMeters: 4000, thicknessMeters: 1500, coverage: 0.85, opticalDepth: 6, featureSizeMeters: 6000 };
 
-function domeUniforms(dome: { skyDome: THREE.Mesh }) {
-    return (dome.skyDome.material as THREE.ShaderMaterial).uniforms;
+function domeUniforms(dome: { skyMaterial: THREE.ShaderMaterial }) {
+    return dome.skyMaterial.uniforms;
 }
 
 describe('cloud shell decks: validation and packing', () => {
@@ -70,7 +71,10 @@ describe('cloud shell decks: validation and packing', () => {
         const u = cloudShellUniformArrays(resolveCloudShellLayers([cirrus]));
         expect(u.count).toBe(1);
         expect(u.a).toHaveLength(MAX_CLOUD_SHELL_LAYERS);
-        expect(u.a[0]).toEqual([9000, 1200, 0.45, 0.5]);
+        // coverage is visible sky cover; the shader gets the internal coverage that shows as that cover
+        expect(u.a[0]).toEqual([9000, 1200, shellCoverageForSkyCover(0.45), 0.5]);
+        expect(shellCoverageForSkyCover(0.45)).toBeGreaterThan(0.3);
+        expect(shellCoverageForSkyCover(0.45)).toBeLessThan(0.45);
         expect(u.b[0][0]).toBe(2500);
         expect(u.b[0][1]).toBe(8);
         expect(u.c[0]).toEqual([1, 1, 1, 3]);
@@ -95,8 +99,8 @@ describe('cloud shell decks in the sky dome', () => {
         const dome = createAtmosphericSkyDome(scene, false, { sunElevation: 30, sunAzimuth: 180, cloudLayers: [sheet, cirrus] });
         const u = domeUniforms(dome);
         expect(u.uShellLayerCount.value).toBe(2);
-        expect(u.uShellA.value[0].toArray()).toEqual([9000, 1200, 0.45, 0.5]);
-        expect(u.uShellA.value[1].toArray()).toEqual([4000, 1500, 0.85, 6]);
+        expect(u.uShellA.value[0].toArray()).toEqual([9000, 1200, shellCoverageForSkyCover(0.45), 0.5]);
+        expect(u.uShellA.value[1].toArray()).toEqual([4000, 1500, shellCoverageForSkyCover(0.85), 6]);
         dome.setCloudLayers([]);
         expect(u.uShellLayerCount.value).toBe(0);
         expect(() => dome.setCloudLayers([{ ...cirrus, coverage: -1 }])).toThrow(InvalidInputError);
