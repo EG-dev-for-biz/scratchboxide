@@ -150,11 +150,13 @@ describe('trees at four levels', () => {
             // bands: each handover centred on lodBandsFor's distance, neighbours overlapping (no gap), handovers in order
             const H = t.extras.heightAboveSupportM as number;
             const b = levels.map((n: any) => n.extras.sbLod);
-            // lodBandsFor's defaults: near 1.0 H in [12, 30], near-mid 6.0 H in [25, 100], mid 8.0 H in [60, 140], fades 6 m, 0.2 and 0.25 of their distance
+            // lodBandsFor's defaults (2026-10-21): near 1.15 H in [14, 35], near-mid 6.5 H in [30, 120], mid 9.0 H in [100, 190],
+            // fades 7 m, 0.2 and 0.25 of their distance
+            const fade = 7;
             const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
-            const d0 = clamp(H, 12, 30), nm = clamp(6 * H, 25, 100), far = clamp(8 * H, 60, 140);
-            const fadeNM = Math.max(6, 0.2 * nm), fade1 = Math.max(6, 0.25 * far);
-            const d1 = Math.max(d0 + 3 + fadeNM + 0.5 * fade1, far), dNM = clamp(nm, d0 + 0.5 * (6 + fadeNM), d1 - 0.5 * (fadeNM + fade1));
+            const d0 = clamp(1.15 * H, 14, 35), nm = clamp(6.5 * H, 30, 120), far = clamp(9.0 * H, 100, 190);
+            const fadeNM = Math.max(fade, 0.2 * nm), fade1 = Math.max(fade, 0.25 * far);
+            const d1 = Math.max(d0 + 0.5 * fade + fadeNM + 0.5 * fade1, far), dNM = clamp(nm, d0 + 0.5 * (fade + fadeNM), d1 - 0.5 * (fadeNM + fade1));
             expect((b[0].maxDistM + b[1].minDistM) / 2).toBeCloseTo(d0, 2);
             expect((b[1].maxDistM + b[2].minDistM) / 2).toBeCloseTo(dNM, 2);
             expect((b[2].maxDistM + b[3].minDistM) / 2).toBeCloseTo(d1, 2);
@@ -267,4 +269,39 @@ int main(){ using namespace scratchbox; tree_lod::LodParams P; auto lib = tree_l
             expect(areas[k + 3]).toBeGreaterThan(areas[k + 4]); expect(areas[k + 4]).toBeGreaterThan(areas[k + 5]);
         }
     }, 120_000);
+
+describe('heroRoi: trees inside the hero area hold full quality at any distance', () => {
+    it('gives a tree inside heroRoi a near band reaching heroFullQualityM, and leaves a tree outside it on the normal bands', async () => {
+        // two identical trees, one inside a small hero square around the origin, one well outside it
+        const inside = crown(10, [0, 0], 0, 14, 4.5);
+        const outside = crown(11, [60, 60], 0, 14, 4.5);
+        const heroRoi = { schema: 'scratchbox.strip-roi/1' as const, polygon: [[-10, -10], [10, -10], [10, 10], [-10, 10]] as Array<[number, number]> };
+        const planted = await svc.plant({ crownsPath: writeCrowns('hero.json', [inside, outside]), triangleBudget: 16000, seed: 'aaaa1', heroRoi });
+        const { json } = parseGlb(fs.readFileSync(planted.treesGlb));
+        const trees = json.nodes.filter((n: any) => n.extras?.sbTree !== undefined);
+        expect(trees).toHaveLength(2);
+        const byId = (id: number) => trees.find((t: any) => t.extras.sbTree.id === id);
+        const levelsOf = (t: any) => t.children.map((k: number) => json.nodes[k]).sort((a: any, b: any) => a.extras.sbLod.level - b.extras.sbLod.level);
+
+        const heroLevels = levelsOf(byId(10));
+        expect(heroLevels[0].extras.sbLod.maxDistM).toBeGreaterThan(2900);   // heroFullQualityM default 3000, not the ~35 m normal near band
+        expect(byId(10).extras.lod.hero).toBe(true);
+
+        const normalLevels = levelsOf(byId(11));
+        expect(normalLevels[0].extras.sbLod.maxDistM).toBeLessThan(40);     // the ordinary near band (~35 m for a 14 m tall tree)
+        expect(byId(11).extras.lod.hero).toBeUndefined();
+    });
+
+    it('an unset heroRoi changes nothing: both trees keep the normal bands', async () => {
+        const a = crown(20, [0, 0], 0, 14, 4.5), b = crown(21, [60, 60], 0, 14, 4.5);
+        const planted = await svc.plant({ crownsPath: writeCrowns('nohero.json', [a, b]), triangleBudget: 16000, seed: 'aaaa0' });
+        const { json } = parseGlb(fs.readFileSync(planted.treesGlb));
+        const trees = json.nodes.filter((n: any) => n.extras?.sbTree !== undefined);
+        for (const t of trees) {
+            const l0 = t.children.map((k: number) => json.nodes[k]).find((n: any) => n.extras.sbLod.level === 0);
+            expect(l0.extras.sbLod.maxDistM).toBeLessThan(40);
+            expect(t.extras.lod.hero).toBeUndefined();
+        }
+    });
+});
 

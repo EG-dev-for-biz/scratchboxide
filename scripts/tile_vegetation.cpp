@@ -98,6 +98,10 @@ static void usage() {
         "    --crown-correction PATH   photo-inferred crown widths and bases (scratchbox.crown-correction/1), applied before growing\n"
         "    --crown-cards 0|1 (1) --crown-card-side-per-reach V (2) --crown-card-coverage-share V (1)   the mid level as large leaf-spray cards\n"
         "                                    (side V cluster reaches) placed until they cover V x what the mid clusters would\n"
+        "    --hero-roi-json PATH      a scratchbox.strip-roi/1 polygon: a tree whose stem lies inside it holds full (near)\n"
+        "                              quality at any realistic distance instead of its own height-scaled bands\n"
+        "                              (--hero-full-quality-m, default 3000); the GPU-adaptive viewport budget still applies\n"
+        "    --hero-full-quality-m M (3000)\n"
         "    --threads N\n";
 }
 
@@ -418,6 +422,9 @@ static int runPlant(const Args& a) {
     P.lodNearMaxM = a.num("lod-near-max", P.lodNearMaxM);
     P.lodFarMaxM = a.num("lod-far-max", P.lodFarMaxM);
     P.lodFadeM = a.num("lod-fade", P.lodFadeM);
+    if (a.has("hero-roi-json")) P.heroPolygon = readRoi(a.str("hero-roi-json"));
+    P.heroFullQualityM = a.num("hero-full-quality-m", P.heroFullQualityM);
+    if (!(P.heroFullQualityM > 0)) throw VegetationError("bad_request", "--hero-full-quality-m must be > 0");
     if (!(P.treeLod.leafMinM > 0) || P.treeLod.leafMaxM < P.treeLod.leafMinM) throw VegetationError("bad_request", "--leaf-min must be > 0 and --leaf-max at least --leaf-min");
     if (P.woodShare < 0 || P.woodShare > 1) throw VegetationError("bad_request", "--wood-share must be in [0, 1]");
     if (!(P.minTrianglesPerTree >= 1)) throw VegetationError("bad_request", "--min-triangles-per-tree must be at least 1");

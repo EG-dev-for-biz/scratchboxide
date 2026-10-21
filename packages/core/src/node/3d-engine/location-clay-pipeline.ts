@@ -79,6 +79,14 @@ export interface LocationClayRequest {
     relief?: boolean;
     /** Where strip may measure and regrow trees (an isolated structure's outline grown by the crown reach). */
     roi?: StripRoi;
+    /**
+     * Hero area: a planted tree whose stem lies inside this polygon holds full (near) quality at any realistic
+     * distance, rather than its own height-scaled distance bands (TileVegetationPlantRequest.heroRoi); the viewport's
+     * GPU-adaptive triangle budget still applies. Defaults to `roi` (an isolated structure's own outline is naturally
+     * its hero area too) when not given separately - pass this to mark a different or smaller area within a wider
+     * district build, where `roi` may be absent or cover more than the hero subject.
+     */
+    heroRoi?: StripRoi;
     /** The structure's seed in the tile frame, given to tile_refine as its anchor (isolate). */
     anchor?: { x: number; z: number };
     signal?: AbortSignal;
@@ -342,6 +350,7 @@ export async function runLocationClayPipeline(req: LocationClayRequest, deps?: L
                 supportMeshPath: req.isolate ? refined.r.clayGlb : undefined,
                 groundMeshPath: refined.file,
                 publishAs: measuredTrees.length > 0 ? `${base}_trees.glb` : undefined,
+                heroRoi: req.heroRoi ?? req.roi,
                 signal: req.signal
             }));
             timings.planting = Date.now() - tp;
@@ -386,7 +395,7 @@ function readCrowns(crownsJson: string): CrownRecord[] {
 export async function plantTrees(
     d: Pick<LocationClayDeps, 'vegetation'>,
     strip: TileVegetationStripResult,
-    opts: { treeTriangleBudget?: number; treeSeason?: number; supportMeshPath?: string; groundMeshPath?: string; publishAs?: string; signal?: AbortSignal }
+    opts: { treeTriangleBudget?: number; treeSeason?: number; supportMeshPath?: string; groundMeshPath?: string; publishAs?: string; heroRoi?: StripRoi; signal?: AbortSignal }
 ): Promise<TileVegetationPlantResult> {
     // never from the buildings: a park has many trees and few triangles of building
     const budget = opts.treeTriangleBudget !== undefined ? { triangleBudget: Math.floor(opts.treeTriangleBudget) } : { sceneTriangleCap: SCENE_TREE_TRIANGLE_CAP };
@@ -400,6 +409,7 @@ export async function plantTrees(
             // every trunk base is measured against the model the trees are mounted on
             groundMeshPath: opts.groundMeshPath,
             publishAs: opts.publishAs,
+            ...(opts.heroRoi ? { heroRoi: opts.heroRoi } : {}),
             ...(opts.treeSeason !== undefined ? { params: { psiSeason: opts.treeSeason } } : {}),
             signal: opts.signal
         });
