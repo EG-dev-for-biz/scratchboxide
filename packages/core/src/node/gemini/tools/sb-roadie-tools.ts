@@ -28,7 +28,7 @@ import { evidenceLookup, fetchVectorEvidence } from '../../3d-engine/staged-loca
 import { VECTOR_MODELLED_LABEL } from '../../3d-engine/staged-location/vector-first-paint';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
 import { buildGroundModel, loadScanMesh, surfaceModel } from '../../spatial/StreetViewSurveyPlanner';
-import { buildRoadMesh, measureRoadSurfaces, writeRoadsGlb, ROAD_SURFACE_PARAMS, type RoadSurface, type RoadSurfaceParams } from '../../3d-engine/staged-location/road-surfaces';
+import { buildRoadMesh, measureRoadSurfaces, sbRoadieEnabled, writeRoadsGlb, ROAD_SURFACE_PARAMS, type RoadSurface, type RoadSurfaceParams } from '../../3d-engine/staged-location/road-surfaces';
 import { renderTopDownPhoto } from '../../3d-engine/staged-location/top-down-photo';
 import { synthesizeRoadTextures } from '../../3d-engine/staged-location/road-texture';
 import * as jpegJs from 'jpeg-js';
@@ -41,7 +41,7 @@ export const SB_ROADIE_TOOL = 'sb_roadie';
 export const SB_ROADIE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: SB_ROADIE_TOOL,
-        description: 'SB-Roadie: the streets of the open staged place. With action "report" it returns how each street was measured (its length, the kerb-to-kerb width per side, how many kerbs the scan showed and how many were defaulted, medians, sidewalks). With action "rebuild" it measures the streets again on the photo tiles with the parameters given (the kerb rise that counts as a kerb, the default half-width where none shows, the stand-off above the scan, the photo texel) and replaces the scene\'s road layer with ribbons swept along Google\'s road centrelines through the measured levels, textured from the tile photo rendered from above. Needs a scene staged by google_3d_tiles_get_clay and Google vector data (the service account).',
+        description: 'SB-Roadie is shelved for now (2026-10-21): do not call this tool, it refuses every call. Road surfaces are not available; a staged place keeps its scanned streets. (When it returns: "report" reads back how each street was measured, "rebuild" measures the streets again on the photo tiles and replaces the scene\'s road layer, ribbons swept along Google\'s road centrelines through the measured levels, textured from the tile photo rendered from above. Needs a scene staged by google_3d_tiles_get_clay and Google vector data.)',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -104,6 +104,7 @@ function summarize(roads: RoadSurface[]): { streets: number; stations: number; m
 
 export const sbRoadieHandlers: Record<string, ToolHandler> = {
     [SB_ROADIE_TOOL]: async (args, ctx): Promise<ToolHandlerOutcome> => {
+        if (!sbRoadieEnabled()) throw new Error(`${SB_ROADIE_TOOL}: SB-Roadie is shelved for now; it is not offered to a build until it comes back (set SCRATCHBOX_STAGED_ROADS=1 to try it anyway).`);
         const action = args.action === 'rebuild' ? 'rebuild' : 'report';
         const place = openStagedPlace(ctx);
         const { cache, extraction, data } = place;

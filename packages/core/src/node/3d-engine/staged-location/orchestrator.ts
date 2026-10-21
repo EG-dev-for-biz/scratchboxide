@@ -82,7 +82,7 @@ import {
 import { VisionModelChain, type VisionGenAIClient } from '../../gemini/vision-model-chain';
 import { segmentOwnershipViews } from './ownership-masks';
 import { buildGroundModel, geodeticToScan, loadScanMesh, surfaceModel, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
-import { buildRoadMesh, measureRoadSurfaces, writeRoadsGlb, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
+import { buildRoadMesh, measureRoadSurfaces, sbRoadieEnabled, writeRoadsGlb, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
 import { renderTopDownPhoto } from './top-down-photo';
 import { synthesizeRoadTextures } from './road-texture';
 import * as jpegJs from 'jpeg-js';
@@ -2441,6 +2441,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         let roadsMeasured: RoadSurface[] | undefined;
         type RoadStageValue = { stats: RoadMesh['stats']; measuredKerbShare: number; photo: { width: number; height: number; texelM: number; ms: number }; markings?: { runs: number; markings: number; dashed: number; solid: number } } | undefined;
         const roadsPromise: Promise<unknown> = (async () => {
+            if (!sbRoadieEnabled()) { runner.skip('roads', 'SB-Roadie is shelved for now (SCRATCHBOX_STAGED_ROADS=1 to try it)'); return; }
             const covered = extraction.coveredRadiusM;
             // the vector evidence the sizing fetched (an isolate), else fetched now for the extraction's cover (a district)
             let vector = t.vector;

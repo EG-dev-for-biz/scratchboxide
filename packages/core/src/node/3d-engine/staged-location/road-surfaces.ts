@@ -71,6 +71,15 @@ export interface RoadSurfaceParams {
     buildSidewalks: boolean;
 }
 
+/**
+ * SCRATCHBOX_STAGED_ROADS=1 turns the roads stage (and the sb_roadie tool) on. Off by default: the resurfacing is
+ * shelved (2026-10-21) until the carve-under-the-ribbon work and a real-place photo-match judging pass land; the
+ * measurement and texture code stays in place, ready to pick back up.
+ */
+export function sbRoadieEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+    return env.SCRATCHBOX_STAGED_ROADS === '1';
+}
+
 export const ROAD_SURFACE_PARAMS: RoadSurfaceParams = {
     stationM: 2, lateralStepM: 0.25, maxHalfWidthM: 14, kerbRiseM: 0.08, kerbRunM: 0.75, levelPercentile: 0.2,
     defaultHalfWidthM: 3.5, sidewalkMaxM: 4, liftM: 0.04, medianRiseM: 0.08,
