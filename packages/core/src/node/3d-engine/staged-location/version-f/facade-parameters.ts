@@ -42,10 +42,25 @@ export interface OpeningParameters {
  * size; each spans `bayGroup` bays (an arcade opening over paired bays) and repeats every `storeyGroup` storeys (an arch
  * over two or three storeys). Both are counts read as numbers (rounded where they place openings).
  */
-export interface FacadeBand { bottomM: number; topM: number; opening: OpeningParameters; bayGroup: number; storeyGroup: number }
+export interface FacadeBand {
+    bottomM: number; topM: number; opening: OpeningParameters; bayGroup: number; storeyGroup: number;
+    /** Round 3: the pier between the arches of a group (m); the read piers' width, else 0.4 m, when absent. */
+    pierWidthM?: number;
+}
 
 /** One wall's own storeys (a double-height ground floor, a penthouse), keyed by the wall picture it was read from. */
-export interface WallStoreys { picture: number; faceKey?: string; groundStoreyM: number; upperStoreysM: number[] }
+export interface WallStoreys {
+    picture: number; faceKey?: string; groundStoreyM: number; upperStoreysM: number[];
+    /** Round 3 (a wall read on its own picture): its own bays, families and bands; absent fields take the building's. */
+    bayWidthM?: number; edgeMarginM?: number; window?: OpeningParameters; groundOpening?: OpeningParameters; facadeBands?: FacadeBand[];
+}
+
+/**
+ * Round 3: a feature the reading names on a wall picture, to be kept through the redraw (the must-keep guard, local-gate.ts).
+ * `types` are open feature-type codes (sb-feature-types.ts, Google's FEATURE_TYPE_* and ours SB_FEATURE_TYPE_*), labels only:
+ * nothing routes geometry by them. `box` is [x0, y0, x1, y1] in per-mille of the wall picture (x right, y down).
+ */
+export interface ReadFeature { picture: number; faceKey?: string; label: string; types: string[]; box: [number, number, number, number]; confidence: number }
 
 export interface BandParameters {
     /** Height of the band's centre above the ground (m). */
@@ -89,6 +104,8 @@ export interface BuildingParameters {
     materials: { wall: SurfaceParameters; trim: SurfaceParameters; glazing: SurfaceParameters };
     /** What the numbers cannot hold, in the model's words (recorded; nothing branches on it). */
     features: string[];
+    /** Round 3: distinct features on the wall pictures with their regions, kept through the redraw (labels only). */
+    featureRegions?: ReadFeature[];
     /** 0..1. */
     confidence: number;
 }
@@ -118,7 +135,7 @@ export const DEFAULT_PARAMETERS: BuildingParameters = {
     groundStoreyM: 4.2, upperStoreysM: [3.4], bayWidthM: 3.2, edgeMarginM: 0.8,
     window: { widthM: 1.3, heightM: 2.0, sillM: 0.9, recessM: 0.2 },
     groundOpening: { widthM: 2.4, heightM: 3.2, sillM: 0.3, recessM: 0.25 },
-    facadeBands: [], wallStoreys: [],
+    facadeBands: [], wallStoreys: [], featureRegions: [],
     plinth: { heightM: 0, projectionM: 0 }, bands: [], cornice: { thicknessM: 0, projectionM: 0 }, parapet: { heightM: 0 },
     piers: { widthM: 0, projectionM: 0 }, roof: { pitchDeg: 0, ridgeAzimuthDeg: 0, hipped: false }, rooftopVolumes: [],
     materials: { wall: { linearRgb: [0.25, 0.22, 0.2], roughness: 0.85 }, trim: { linearRgb: [0.4, 0.38, 0.35], roughness: 0.7 }, glazing: { linearRgb: [0.03, 0.035, 0.04], roughness: 0.1 } },
@@ -137,11 +154,23 @@ export const FACADE_PARAMETERS_PROMPT_ID = 'version-f/facade-parameters/v1';
 export const FACADE_PARAMETERS_PROMPT_ID_V2 = 'version-f/facade-parameters/v2';
 
 /** The reading prompt for the pictures described by `pictures` (in the order they are sent). */
-export function facadeParametersPrompt(place: string, pictures: ReadingPictureNote[], options: { shapes?: boolean } = {}): string {
+export const FACADE_PARAMETERS_PROMPT_ID_V3 = 'version-f/facade-parameters/v3';
+
+/**
+ * The reading prompt for the pictures described by `pictures` (in the order they are sent). Round 3 (`wall` given): the
+ * reading is of one wall, picture `wall.picture`, with the building's other pictures as context; it answers that wall's own
+ * numbers and names the distinct features on it with their regions (open type codes, labels only).
+ */
+export function facadeParametersPrompt(place: string, pictures: ReadingPictureNote[], options: { shapes?: boolean; wall?: { picture: number } } = {}): string {
     const shapes = options.shapes ? [
         '- every opening ("window", "groundOpening" and each band\'s "opening") also has "archRiseRatio" (the head\'s rise over half the opening\'s width: 0 flat, about 0.3-0.6 segmental, 1 semicircular) and "apexSharpness" (0 round, up to 1 for an equilateral pointed arch); the opening\'s heightM includes its head;',
         '- "facadeBands": horizontal zones whose openings differ from "window" (an arcade over two or three storeys, an arched top storey, a double-height ground floor): [{"bottomM","topM" (above the street),"opening":{...},"bayGroup" (how many bays one opening spans, 1 = one per bay),"storeyGroup" (how many storeys one opening spans)}];',
         '- "wallStoreys": walls (by their picture number) whose storeys differ from the rest: [{"picture":2,"groundStoreyM","upperStoreysM":[...]}];'
+    ] : [];
+    const wall = options.wall ? [
+        `This reading is of ONE wall: picture ${options.wall.picture}. Every number describes that wall (its own storeys, bays, openings, bands and arcades); the other pictures only give context (the building's depth, roof and neighbours).`,
+        '- an arcade (a band whose "bayGroup" is above 1) is one arch PER BAY between piers: give the band\'s "pierWidthM" (the pier between two arches, m) and its "opening" as the width of one group of arches;',
+        '- "featureRegions": the distinct features on THIS wall picture that must survive any redrawing (a clock, a sign, a statue, a fire escape, a balcony, an awning, a shopfront, a distinctive doorway), each with its region: [{"label": <a few words>, "types": [<feature type codes, general to specific, e.g. "SB_FEATURE_TYPE_FACADE_ELEMENT", "SB_FEATURE_TYPE_FACADE_ELEMENT_SIGN"; invent a code of that form when none fits, or "SB_FEATURE_TYPE_OBJECT">], "picture": ' + options.wall.picture + ', "box": [x0,y0,x1,y1] in per-mille of that picture (x right, y down), "confidence": 0..100}];'
     ] : [];
     return [
         `You are measuring the building "${place}" so it can be rebuilt procedurally from numbers. ${pictures.length} pictures follow, in this order:`,
@@ -160,6 +189,7 @@ export function facadeParametersPrompt(place: string, pictures: ReadingPictureNo
         ...shapes,
         '- "features": short free-text notes on anything the numbers cannot hold (arches, ornament, columns\' shape, signs, fire escapes, irregular bays), as many as you see;',
         '- "confidence": 0..100.',
+        ...wall,
         'Measure what the pictures show for this building only; do not invent storeys or bays that are not there.',
         'Answer with JSON only: {"groundStoreyM":4,"upperStoreysM":[3.5],"bayWidthM":3,"edgeMarginM":1,"window":{"widthM":1.2,"heightM":2,"sillM":0.9,"recessM":0.2},"groundOpening":{"widthM":2.5,"heightM":3,"sillM":0.3,"recessM":0.3},"plinth":{"heightM":0,"projectionM":0},"bands":[],"cornice":{"thicknessM":0,"projectionM":0},"parapet":{"heightM":0},"piers":{"widthM":0,"projectionM":0},"roof":{"pitchDeg":0,"ridgeAzimuthDeg":0,"hipped":false},"rooftopVolumes":[],"materials":{"wall":{"linearRgb":[0.2,0.2,0.2],"roughness":0.8},"trim":{"linearRgb":[0.3,0.3,0.3],"roughness":0.7},"glazing":{"linearRgb":[0.03,0.03,0.04],"roughness":0.1}},"features":[],"confidence":50}'
     ].join('\n');
@@ -218,19 +248,41 @@ export function parseFacadeParameters(text: string): { params: BuildingParameter
         if (Math.abs(x1 - x0) < 2 || Math.abs(y1 - y0) < 2) continue;
         vols.push({ box: [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)], heightM: clamp(h, PARAMETER_BOUNDS.rooftopHeightM) });
     }
-    const facadeBands: FacadeBand[] = [];
-    for (const e of (Array.isArray(j.facadeBands) ? j.facadeBands : []).map(obj)) {
-        const b0 = num(e.bottomM), b1 = num(e.topM);
-        if (b0 === undefined || b1 === undefined || b1 - b0 < 1) continue;
-        facadeBands.push({ bottomM: Math.max(0, b0), topM: b1, opening: opening(e.opening, d.window), bayGroup: clamp(num(e.bayGroup) ?? 1, PARAMETER_BOUNDS.groupCount), storeyGroup: clamp(num(e.storeyGroup) ?? 1, PARAMETER_BOUNDS.groupCount) });
-    }
-    facadeBands.sort((a, b) => a.bottomM - b.bottomM);
+    const parseBands = (v: unknown): FacadeBand[] => {
+        const out: FacadeBand[] = [];
+        for (const e of (Array.isArray(v) ? v : []).map(obj)) {
+            const b0 = num(e.bottomM), b1 = num(e.topM);
+            if (b0 === undefined || b1 === undefined || b1 - b0 < 1) continue;
+            const pierW = num(e.pierWidthM);
+            out.push({ bottomM: Math.max(0, b0), topM: b1, opening: opening(e.opening, d.window), bayGroup: clamp(num(e.bayGroup) ?? 1, PARAMETER_BOUNDS.groupCount), storeyGroup: clamp(num(e.storeyGroup) ?? 1, PARAMETER_BOUNDS.groupCount), ...(pierW !== undefined ? { pierWidthM: clamp(pierW, PARAMETER_BOUNDS.pierWidthM) } : {}) });
+        }
+        return out.sort((a, b) => a.bottomM - b.bottomM).slice(0, 12);
+    };
+    const facadeBands = parseBands(j.facadeBands);
     const wallStoreys: WallStoreys[] = [];
     for (const e of (Array.isArray(j.wallStoreys) ? j.wallStoreys : []).map(obj)) {
         const pic = num(e.picture), g = num(e.groundStoreyM);
         const up = (Array.isArray(e.upperStoreysM) ? e.upperStoreysM : []).map(num).filter((v): v is number => v !== undefined && v > 0).map(v => clamp(v, PARAMETER_BOUNDS.storeyM));
         if (pic === undefined || g === undefined || !up.length) continue;
-        wallStoreys.push({ picture: Math.round(pic), groundStoreyM: clamp(g, PARAMETER_BOUNDS.storeyM), upperStoreysM: up.slice(0, 80) });
+        const bw = num(e.bayWidthM), em = num(e.edgeMarginM);
+        wallStoreys.push({
+            picture: Math.round(pic), groundStoreyM: clamp(g, PARAMETER_BOUNDS.storeyM), upperStoreysM: up.slice(0, 80),
+            ...(bw !== undefined ? { bayWidthM: clamp(bw, PARAMETER_BOUNDS.bayWidthM) } : {}), ...(em !== undefined ? { edgeMarginM: clamp(em, PARAMETER_BOUNDS.edgeMarginM) } : {}),
+            ...(e.window && typeof e.window === 'object' ? { window: opening(e.window, d.window) } : {}), ...(e.groundOpening && typeof e.groundOpening === 'object' ? { groundOpening: opening(e.groundOpening, d.groundOpening) } : {}),
+            ...(Array.isArray(e.facadeBands) ? { facadeBands: parseBands(e.facadeBands) } : {})
+        });
+    }
+    // round 3: distinct features with their regions (open type codes, labels only)
+    const featureRegions: ReadFeature[] = [];
+    for (const e of (Array.isArray(j.featureRegions) ? j.featureRegions : []).map(obj)) {
+        const pic = num(e.picture), box = Array.isArray(e.box) ? e.box.map(num) : [];
+        const label = typeof e.label === 'string' ? e.label.trim().slice(0, 120) : '';
+        if (pic === undefined || box.length !== 4 || box.some(v => v === undefined) || !label) continue;
+        const [x0, y0, x1, y1] = box.map(v => Math.max(0, Math.min(1000, v!)));
+        if (Math.abs(x1 - x0) < 2 || Math.abs(y1 - y0) < 2) continue;
+        const types = (Array.isArray(e.types) ? e.types : typeof e.type === 'string' ? [e.type] : []).filter((t): t is string => typeof t === 'string' && t.trim() !== '').map(t => t.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_')).slice(0, 6);
+        const c = num(e.confidence);
+        featureRegions.push({ picture: Math.round(pic), label, types: types.length ? types : ['SB_FEATURE_TYPE_OBJECT'], box: [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)], confidence: c === undefined ? 0.5 : Math.max(0, Math.min(1, c > 1 ? c / 100 : c)) });
     }
     const roof = obj(j.roof), plinth = obj(j.plinth), cornice = obj(j.cornice), parapet = obj(j.parapet), piers = obj(j.piers), mat = obj(j.materials);
     const conf = num(j.confidence);
@@ -243,6 +295,7 @@ export function parseFacadeParameters(text: string): { params: BuildingParameter
         groundOpening: opening(j.groundOpening, d.groundOpening),
         facadeBands: facadeBands.slice(0, 12),
         wallStoreys: wallStoreys.slice(0, 12),
+        featureRegions: featureRegions.slice(0, 24),
         plinth: { heightM: clamp(num(plinth.heightM) ?? 0, PARAMETER_BOUNDS.plinthHeightM), projectionM: clamp(num(plinth.projectionM) ?? 0, PARAMETER_BOUNDS.projectionM) },
         bands,
         cornice: { thicknessM: clamp(num(cornice.thicknessM) ?? 0, [0, PARAMETER_BOUNDS.bandThicknessM[1]]), projectionM: clamp(num(cornice.projectionM) ?? 0, PARAMETER_BOUNDS.projectionM) },
