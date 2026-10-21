@@ -340,6 +340,14 @@ triangles, 4.3 MB), Colosseum 1.31 s. The tiles took 1.2, 1.3, 6.2 and 4.6 s.
 - **Warm first textured** is held by about 2 s of tile source loading done before the bake's cache is checked.
 - `staged-build-real-data-screens` (crossfade coverage) fails the same way on the commit before these changes.
 
+### After merging origin/main (hedged vision calls, the ownership quorum)
+
+The table above was measured before `vision-call-hedging` landed on main. One functional check of the merged branch,
+live: Haughwout cold (stage cache empty) first 3D 8.4 s (vector), first clay building 9.2 s, tile-photo twin 12.1 s, grammar
+14.4 s (hedged), the ownership vote went ahead on its quorum at 30 s, finished 40.3 s (70.3 s before the merge). Colosseum with
+a warm leaf-tile cache: the tiles (0.7 s) beat the vector fetch (1.4 s), so the vector stage was skipped and said so; the
+district twin came 0.3 s after the remesh. Not a benchmark: one run each, leaf cache warm for the Colosseum.
+
 ### Starting the vector fetch earlier (proposal, not done)
 
 The tool call is the first thing that names the place, 7–27 s after Enter. Without routing on nouns: (a) a lower thinking level
