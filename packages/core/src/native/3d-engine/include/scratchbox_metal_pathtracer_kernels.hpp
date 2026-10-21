@@ -23,7 +23,9 @@
  * Textures are bindless: a buffer of Metal resource ids, one per decoded glTF image.
  */
 
+#include <algorithm>
 #include <cstdint>
+#include <vector>
 
 namespace scratchbox {
 namespace metalpt {
@@ -48,8 +50,66 @@ struct Uniforms {
     uint32_t useMaterials{0};
     /** Index of the default material record, used by triangles without a glTF material. */
     uint32_t defaultMaterial{0};
+    /** 1: bounce and shadow rays trace the coarser bounce geometry (buffers 9-11) instead of the primary cut. */
+    uint32_t useBounceAccel{0};
+    /** World error of the bounce cut per unit of distance (threshold px / lod scale): rays start that far from the surface. */
+    float bounceErrorPerDistance{0.0f};
+    /** 0: PCG32 per pixel (the CPU tracer's stream); 1: per-pixel Owen-scrambled Halton. */
+    uint32_t sampler{0};
+    /** 1: the first hit comes from the visibility texture (rasterized triangle id) when the jittered ray still meets that triangle. */
+    uint32_t usePrimaryRaster{0};
+    /** With useBounceAccel: 1 traces shadow rays against the bounce geometry too, 0 keeps them on the primary cut. */
+    uint32_t bounceShadowRays{1};
+    uint32_t pad5{0}, pad6{0}, pad7{0};
 };
-static_assert(sizeof(Uniforms) == 4 * 56, "Uniforms must stay a flat array of 4-byte scalars");
+static_assert(sizeof(Uniforms) == 4 * 64, "Uniforms must stay a flat array of 4-byte scalars");
+
+/**
+ * Sobol direction vectors (32 words per dimension, first digit in the high bit) for `dims` dimensions:
+ * dimension 0 is the van der Corput sequence, the rest come from Joe and Kuo's primitive polynomials and
+ * initial values (new-joe-kuo-6.21201), of which the first 31 are kept here.
+ */
+inline std::vector<uint32_t> sobolDirectionVectors(uint32_t dims) {
+    struct Dim { uint32_t s, a; uint32_t m[8]; };
+    static const Dim table[] = {
+        {1, 0, {1}}, {2, 1, {1, 3}}, {3, 1, {1, 3, 1}}, {3, 2, {1, 1, 1}}, {4, 1, {1, 1, 3, 3}}, {4, 4, {1, 3, 5, 13}},
+        {5, 2, {1, 1, 5, 5, 17}}, {5, 4, {1, 1, 5, 5, 5}}, {5, 7, {1, 1, 7, 11, 19}}, {5, 11, {1, 1, 5, 1, 1}}, {5, 13, {1, 1, 1, 3, 11}},
+        {5, 14, {1, 3, 5, 5, 31}}, {6, 1, {1, 3, 3, 9, 7, 49}}, {6, 13, {1, 1, 1, 15, 21, 21}}, {6, 16, {1, 3, 1, 13, 27, 49}},
+        {6, 19, {1, 1, 1, 15, 7, 5}}, {6, 22, {1, 3, 1, 15, 13, 25}}, {6, 25, {1, 1, 5, 5, 19, 61}}, {7, 1, {1, 3, 7, 11, 23, 15, 103}},
+        {7, 4, {1, 3, 7, 13, 13, 15, 69}}, {7, 7, {1, 1, 3, 13, 7, 35, 63}}, {7, 8, {1, 1, 5, 9, 1, 25, 53}}, {7, 14, {1, 1, 1, 13, 9, 35, 107}},
+        {7, 19, {1, 1, 1, 5, 27, 61, 31}}, {7, 21, {1, 1, 5, 11, 19, 41, 61}}, {7, 28, {1, 1, 5, 3, 3, 13, 69}}, {7, 31, {1, 1, 7, 13, 25, 41, 43}},
+        {7, 32, {1, 1, 3, 7, 5, 37, 29}}, {7, 37, {1, 1, 7, 7, 13, 17, 65}}, {7, 41, {1, 3, 5, 1, 9, 61, 59}}, {7, 42, {1, 1, 7, 7, 21, 35, 57}}
+    };
+    const uint32_t available = 1 + static_cast<uint32_t>(sizeof(table) / sizeof(table[0]));
+    dims = std::min(dims, available);
+    std::vector<uint32_t> out(static_cast<size_t>(dims) * 32, 0);
+    for (uint32_t k = 0; k < 32; ++k) out[k] = 1u << (31 - k);
+    for (uint32_t d = 1; d < dims; ++d) {
+        const Dim& t = table[d - 1];
+        uint32_t* v = out.data() + static_cast<size_t>(d) * 32;
+        for (uint32_t i = 0; i < 32; ++i) {
+            if (i < t.s) {
+                v[i] = t.m[i] << (31 - i);
+            } else {
+                uint32_t x = v[i - t.s] ^ (v[i - t.s] >> t.s);
+                for (uint32_t k = 1; k < t.s; ++k) {
+                    if ((t.a >> (t.s - 1 - k)) & 1u) x ^= v[i - k];
+                }
+                v[i] = x;
+            }
+        }
+    }
+    return out;
+}
+
+/** Camera for the visibility pass: the same basis as Uniforms plus the depth range. */
+struct RasterUniforms {
+    float camPos[3], tanHalf;
+    float forward[3], aspect;
+    float right[3], near;
+    float up[3], far;
+};
+static_assert(sizeof(RasterUniforms) == 4 * 16, "RasterUniforms must stay a flat array of 4-byte scalars");
 
 /** Per-pixel accumulation and sample stream; one sample pass adds to it. */
 struct PixelState {
@@ -150,6 +210,17 @@ struct Uniforms {
     float hazeExtinction[3], pad0;
     float albedo[3], pad1;
     uint seedLo, seedHi, useMaterials, defaultMaterial;
+    uint useBounceAccel;
+    float bounceErrorPerDistance;
+    uint sampler, usePrimaryRaster;
+    uint bounceShadowRays, pad5, pad6, pad7;
+};
+
+struct RasterUniforms {
+    float camPos[3], tanHalf;
+    float forward[3], aspect;
+    float right[3], nearZ;
+    float up[3], farZ;
 };
 
 struct PixelState {
@@ -216,6 +287,95 @@ inline Pcg32 pcgSeed(ulong seed, ulong stream) {
     r.state += seed;
     pcgNext(r);
     return r;
+}
+
+// ---- Sample stream: PCG32 (the CPU tracer's) or per-pixel scrambled Halton -------------------------
+struct PassUniforms {
+    uint sampleIndex, sobolDims, pad1, pad2;
+};
+
+constant uint kPrimes[40] = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71,
+                             73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127, 131, 137, 139, 149, 151, 157, 163, 167, 173};
+
+inline uint hashU32(uint x) {
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+    return x;
+}
+
+/**
+ * Nested uniform scramble (Burley 2020) of an index whose first radical-inverse digit is the low bit:
+ * every multiplier is even or applied as a plain multiply, so each step is a bijection and bit i only
+ * ever depends on bits below it, which is what makes it an Owen scramble in base 2.
+ */
+inline uint owenScramble2(uint x, uint seed) {
+    x ^= x * 0x3d20adeau;
+    x += seed;
+    x *= (seed >> 16) | 1u;
+    x ^= x * 0x05526c56u;
+    x ^= x * 0x53a22864u;
+    return x;
+}
+
+/**
+ * Radical inverse of `index` in base `b` with Owen (nested) scrambling: each digit's permutation is
+ * drawn from the scrambled digits before it, so the first samples of a high base are stratified
+ * rather than a shifted lattice. Digits past the index are random, which jitters within the stratum.
+ */
+inline float scrambledRadicalInverse(uint index, uint b, uint seed) {
+    const float invBase = 1.0f / (float)b;
+    float invBaseN = 1.0f, result = 0.0f;
+    uint prefix = seed;
+    uint n = index;
+    for (uint digitIndex = 0u; digitIndex < 24u && invBaseN > 1e-8f; ++digitIndex) {
+        uint digit = n % b;
+        uint perm = hashU32(prefix ^ (digitIndex * 0x9e3779b9u)) % b;
+        uint scrambled = (digit + perm) % b;
+        invBaseN *= invBase;
+        result += (float)scrambled * invBaseN;
+        prefix = hashU32(prefix ^ ((scrambled + 1u) * 0x85ebca6bu));
+        n /= b;
+    }
+    return min(result, 0.99999994f);
+}
+
+struct Sampler {
+    uint mode;        // 0 pcg, 1 owen-scrambled sobol
+    Pcg32 rng;
+    uint index;       // sample index of this pixel
+    uint dim;         // next sobol dimension
+    uint pixelHash;
+    device const uint* sobol; // direction vectors, 32 per dimension
+    uint sobolDims;
+};
+
+/**
+ * Mode 1: Owen-scrambled Sobol. Each dimension has its own direction matrix (Joe-Kuo, uploaded as 32
+ * words per dimension), so no dimension is a function of another, and a per-pixel, per-dimension
+ * nested scramble decorrelates pixels. Past the table's dimensions the stream falls back to PCG32.
+ * (Measured on the way here: Halton with higher primes is worse below 64 samples, and base-2 radical
+ * inverses with independent scrambles per dimension stall, since every dimension is then the same
+ * sequence re-permuted and a pixel's samples lie on a curve.) The scramble mixes from the low bits up,
+ * so the Sobol value, first digit in the high bit, is reversed before it and back after.
+ */
+inline float nextSample(thread Sampler& s) {
+    if (s.mode == 0u) return pcgFloat(s.rng);
+    const uint dim = s.dim++;
+    if (dim >= s.sobolDims) return pcgFloat(s.rng);
+    uint v = 0u;
+    device const uint* dirs = s.sobol + dim * 32u;
+    for (uint i = s.index, k = 0u; i != 0u; i >>= 1u, ++k) {
+        if (i & 1u) v ^= dirs[k];
+    }
+    const uint seed = hashU32(s.pixelHash ^ (dim * 0x85ebca6bu));
+    v = reverse_bits(v);
+    v = owenScramble2(v, seed);
+    v = reverse_bits(v);
+    return min((float)v * (1.0f / 4294967296.0f), 0.99999994f);
+}
+
+/** Dimensions are laid out per bounce so every bounce's lobe gets its own well-stratified pair. */
+inline void startBounceDimensions(thread Sampler& s, uint bounce) {
+    if (s.mode != 0u) s.dim = 4u + bounce * 6u;
 }
 
 inline float tentSample(float u) {
@@ -421,11 +581,11 @@ inline float3 sampleVisibleNormal(thread const Bsdf& s, float u1, float u2) {
     return normalize(float3(s.alpha * nh.x, s.alpha * nh.y, max(1e-6f, nh.z)));
 }
 
-inline bool bsdfSample(thread const Bsdf& s, thread Pcg32& rng, thread float3& wiWorld, thread float3& weight) {
+inline bool bsdfSample(thread const Bsdf& s, thread Sampler& smp, thread float3& wiWorld, thread float3& weight) {
     if (s.wo.z <= 0.0f) return false;
-    float choice = pcgFloat(rng);
-    float u1 = pcgFloat(rng);
-    float u2 = pcgFloat(rng);
+    float choice = nextSample(smp);
+    float u1 = nextSample(smp);
+    float u2 = nextSample(smp);
     float3 l;
     if (choice < s.specularProbability) {
         float3 h = sampleVisibleNormal(s, u1, u2);
@@ -535,10 +695,35 @@ struct PathResult {
     bool hitGeometry;
 };
 
-inline PathResult tracePath(float3 origin, float3 dir, thread Pcg32& rng, constant Uniforms& u,
-                            device const Vertex* verts, device const uint* idx, device const float* lut,
-                            primitive_acceleration_structure accel, device const uint* triMaterials,
-                            device const MaterialRecord* materials, device const TextureRef* textures, thread uint& rays) {
+/** Geometry a ray set traces: the acceleration structure with the index and material buffers it was built from. */
+struct Geometry {
+    primitive_acceleration_structure accel;
+    device const uint* idx;
+    device const uint* triMaterials;
+};
+
+/** Moller-Trumbore against one triangle, both faces, with the intersector's barycentric convention (u for v1, v for v2). */
+inline bool intersectTriangle(device const Vertex* verts, device const uint* idx, uint tri, float3 origin, float3 dir,
+                              thread float& t, thread float& u, thread float& v) {
+    float3 p0 = f3(verts[idx[tri * 3]].position), p1 = f3(verts[idx[tri * 3 + 1]].position), p2 = f3(verts[idx[tri * 3 + 2]].position);
+    float3 e1 = p1 - p0, e2 = p2 - p0;
+    float3 pv = cross(dir, e2);
+    float det = dot(e1, pv);
+    if (abs(det) < 1e-12f) return false;
+    float inv = 1.0f / det;
+    float3 tv = origin - p0;
+    u = dot(tv, pv) * inv;
+    if (u < 0.0f || u > 1.0f) return false;
+    float3 qv = cross(tv, e1);
+    v = dot(dir, qv) * inv;
+    if (v < 0.0f || u + v > 1.0f) return false;
+    t = dot(e2, qv) * inv;
+    return t > 1e-4f;
+}
+
+inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, constant Uniforms& u,
+                            device const Vertex* verts, device const float* lut, Geometry primary, Geometry bounceGeo,
+                            device const MaterialRecord* materials, device const TextureRef* textures, uint visibleTriangle, thread uint& rays) {
     PathResult result;
     result.radiance = float3(0.0f);
     result.albedo = float3(0.0f);
@@ -557,17 +742,38 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Pcg32& rng, consta
     any.force_opacity(forced_opacity::opaque);
     any.accept_any_intersection(true);
 
+    // After the first hit, rays may trace the coarser bounce cut; they start past its error bound to miss its own surface.
+    float rayStart = 1e-4f;
     for (uint bounce = 0;; ++bounce) {
-        ++rays;
-        ray r(origin, dir, 1e-4f, 1e9f);
-        intersection_result<triangle_data> hit = closest.intersect(r, accel);
+        startBounceDimensions(smp, bounce);
+        const bool coarse = u.useBounceAccel != 0u && bounce > 0u;
+        const Geometry geo = coarse ? bounceGeo : primary;
+        intersection_result<triangle_data> hit;
+        bool resolved = false;
+        if (bounce == 0u && visibleTriangle != kNoMaterial) {
+            // The pixel's rasterized triangle, met exactly by this sample's jittered ray; at its edges the ray may
+            // miss it and is traced like any other.
+            float t, bu, bv;
+            if (intersectTriangle(verts, primary.idx, visibleTriangle, origin, dir, t, bu, bv)) {
+                hit.type = intersection_type::triangle;
+                hit.distance = t;
+                hit.primitive_id = visibleTriangle;
+                hit.triangle_barycentric_coord = float2(bu, bv);
+                resolved = true;
+            }
+        }
+        if (!resolved) {
+            ++rays;
+            ray r(origin, dir, rayStart, 1e9f);
+            hit = closest.intersect(r, geo.accel);
+        }
         if (hit.type == intersection_type::none) {
             float3 skyLight = sky ? skyRadiance(u, lut, dir) : f3(u.studioRadiance);
             if (sky && bounce == 0) skyLight += sunDiscRadiance(u, dir);
             accumulate(radiance, throughput * skyLight, bounce, u.clampIndirect);
             break;
         }
-        Surface surface = shade(u, verts, idx, triMaterials, materials, textures, hit.primitive_id, hit.triangle_barycentric_coord, origin, dir, hit.distance);
+        Surface surface = shade(u, verts, geo.idx, geo.triMaterials, materials, textures, hit.primitive_id, hit.triangle_barycentric_coord, origin, dir, hit.distance);
         if (bounce == 0) {
             result.hitGeometry = true;
             result.albedo = surface.baseColor;
@@ -584,15 +790,22 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Pcg32& rng, consta
 
         const float3 wo = -dir;
         Bsdf bsdf = makeBsdf(surface.shadingNormal, surface.baseColor, surface.metallic, surface.roughness, wo);
+        // Distance from the camera path so far, which bounds how far the bounce cut's surface may sit from this one.
+        // Rays into the coarse geometry start that far out along the normal, not along their own direction:
+        // a grazing ray would otherwise skip a long way across the surface and through nearby walls.
+        const float hitDistance = length(surface.position - f3(u.camPos));
+        const float coarseOffset = u.useBounceAccel != 0u ? max(kRayEpsilon, u.bounceErrorPerDistance * hitDistance) : kRayEpsilon;
         if (sky && u.sunVisible != 0u) {
-            float s1 = pcgFloat(rng);
-            float s2 = pcgFloat(rng);
+            float s1 = nextSample(smp);
+            float s2 = nextSample(smp);
             float3 wi = sampleSunDirection(u, s1, s2);
             float cosShading = dot(surface.shadingNormal, wi);
             if (cosShading > 0.0f && dot(surface.geometricNormal, wi) > 0.0f) {
                 ++rays;
-                ray shadow(surface.position + surface.geometricNormal * kRayEpsilon, wi, 1e-4f, 1e9f);
-                intersection_result<triangle_data> blocker = any.intersect(shadow, accel);
+                const bool coarseShadow = u.useBounceAccel != 0u && u.bounceShadowRays != 0u;
+                const Geometry shadowGeo = coarseShadow ? bounceGeo : primary;
+                ray shadow(surface.position + surface.geometricNormal * (coarseShadow ? coarseOffset : kRayEpsilon), wi, 1e-4f, 1e9f);
+                intersection_result<triangle_data> blocker = any.intersect(shadow, shadowGeo.accel);
                 if (blocker.type == intersection_type::none) {
                     accumulate(radiance, throughput * bsdfEval(bsdf, wi) * f3(u.sunIrradiance) * cosShading, bounce, u.clampIndirect);
                 }
@@ -601,18 +814,38 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Pcg32& rng, consta
 
         if (bounce >= u.maxBounces) break;
         float3 wi, weight;
-        if (!bsdfSample(bsdf, rng, wi, weight) || dot(surface.geometricNormal, wi) <= 0.0f) break;
+        if (!bsdfSample(bsdf, smp, wi, weight) || dot(surface.geometricNormal, wi) <= 0.0f) break;
         throughput = throughput * weight;
         if (bounce >= 2) {
             float q = min(0.95f, maxComponent(throughput));
-            if (q <= 0.0f || pcgFloat(rng) > q) break;
+            if (q <= 0.0f || nextSample(smp) > q) break;
             throughput = throughput / q;
         }
-        origin = surface.position + surface.geometricNormal * kRayEpsilon;
+        origin = surface.position + surface.geometricNormal * coarseOffset;
         dir = wi;
+        rayStart = 1e-4f;
     }
     result.radiance = radiance;
     return result;
+}
+
+// ---- Visibility pass: the triangle under each pixel centre, rasterized -----------------------------
+struct VisVertexOut {
+    float4 position [[position]];
+};
+
+vertex VisVertexOut vis_vertex(uint vid [[vertex_id]], device const Vertex* verts [[buffer(0)]], device const uint* idx [[buffer(1)]],
+                               constant RasterUniforms& r [[buffer(2)]]) {
+    float3 p = f3(verts[idx[vid]].position) - f3(r.camPos);
+    float x = dot(p, f3(r.right)), y = dot(p, f3(r.up)), z = dot(p, f3(r.forward));
+    VisVertexOut o;
+    // Clip x, y as the camera rays are generated (Uniforms), depth [0, 1] from nearZ to farZ.
+    o.position = float4(x / (r.tanHalf * r.aspect), y / r.tanHalf, r.farZ * (z - r.nearZ) / (r.farZ - r.nearZ), z);
+    return o;
+}
+
+fragment uint vis_fragment(VisVertexOut in [[stage_in]], uint primitiveId [[primitive_id]]) {
+    return primitiveId;
 }
 
 kernel void pt_init(device PixelState* pixels [[buffer(0)]], constant Uniforms& u [[buffer(1)]],
@@ -635,32 +868,45 @@ kernel void pt_sample(device PixelState* pixels [[buffer(0)]], constant Uniforms
                       device const float* lut [[buffer(4)]], primitive_acceleration_structure accel [[buffer(5)]],
                       device const uint* triMaterials [[buffer(6)]], device const MaterialRecord* materials [[buffer(7)]],
                       device const TextureRef* textures [[buffer(8)]],
+                      primitive_acceleration_structure bounceAccel [[buffer(9)]], device const uint* bounceIdx [[buffer(10)]],
+                      device const uint* bounceMaterials [[buffer(11)]],
+                      texture2d<uint, access::read> visibility [[texture(0)]], constant PassUniforms& pass [[buffer(12)]],
+                      device const uint* sobol [[buffer(13)]],
                       uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= u.width || gid.y >= u.height) return;
     uint pixel = gid.y * u.width + gid.x;
     device PixelState* p = pixels + pixel;
-    Pcg32 rng;
-    rng.state = p->rngState;
-    rng.inc = p->rngInc;
+    Sampler smp;
+    smp.mode = u.sampler;
+    smp.rng.state = p->rngState;
+    smp.rng.inc = p->rngInc;
+    smp.index = pass.sampleIndex;
+    smp.dim = 0u;
+    smp.pixelHash = hashU32(pixel ^ u.seedLo ^ (u.seedHi * 0x9e3779b9u));
+    smp.sobol = sobol;
+    smp.sobolDims = pass.sobolDims;
+    const Geometry primary{accel, idx, triMaterials};
+    const Geometry bounceGeo{bounceAccel, bounceIdx, bounceMaterials};
+    const uint visibleTriangle = u.usePrimaryRaster != 0u ? visibility.read(gid).x : kNoMaterial;
 
     const float3 camPos = f3(u.camPos), forward = f3(u.forward), right = f3(u.right), upv = f3(u.up);
-    float sx = ((float)gid.x + 0.5f + tentSample(pcgFloat(rng))) / (float)u.width;
-    float sy = ((float)gid.y + 0.5f + tentSample(pcgFloat(rng))) / (float)u.height;
+    float sx = ((float)gid.x + 0.5f + tentSample(nextSample(smp))) / (float)u.width;
+    float sy = ((float)gid.y + 0.5f + tentSample(nextSample(smp))) / (float)u.height;
     float3 dir = normalize(forward + right * ((2.0f * sx - 1.0f) * u.tanHalf * u.aspect) + upv * ((1.0f - 2.0f * sy) * u.tanHalf));
     float3 origin = camPos;
     if (u.apertureRadius > 0.0f) {
-        float l1 = pcgFloat(rng);
-        float l2 = pcgFloat(rng);
+        float l1 = nextSample(smp);
+        float l2 = nextSample(smp);
         float2 lens = concentricDisk(l1, l2);
         float3 focusPoint = camPos + dir * (u.focusDistance / max(dot(dir, forward), 1e-4f));
         origin = camPos + (right * lens.x + upv * lens.y) * u.apertureRadius;
         dir = normalize(focusPoint - origin);
     }
     uint rays = 0u;
-    PathResult s = tracePath(origin, dir, rng, u, verts, idx, lut, accel, triMaterials, materials, textures, rays);
+    PathResult s = tracePath(origin, dir, smp, u, verts, lut, primary, bounceGeo, materials, textures, visibleTriangle, rays);
     p->rays += rays;
-    p->rngState = rng.state;
-    p->rngInc = rng.inc;
+    p->rngState = smp.rng.state;
+    p->rngInc = smp.rng.inc;
     if (!finite3(s.radiance)) {
         p->nan += 1u;
         return;

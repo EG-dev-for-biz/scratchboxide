@@ -40,9 +40,15 @@
  * the target through the collapsed edge (LockedSimplifier::chartTargets), never across one: seams
  * never crack and no triangle ever straddles two materials or two charts.
  *
- * Layout (little-endian, 4-byte words), version 3:
+ * Coarse levels may be re-textured (RetextureOptions): their simplification then crosses seams and
+ * borders, and each such level has one material of its own, appended after the glTF materials, whose
+ * base colour is an atlas PNG written next to the file (atlas table at the end, version 4).
+ *
+ * Layout (little-endian, 4-byte words), version 5:
  *   header (128 bytes)          see writeSbvg (word 24: skipped non-triangle primitives,
- *                               word 25: dropped degenerate triangles, word 26: glTF material count)
+ *                               word 25: dropped degenerate triangles, word 26: glTF material count,
+ *                               word 27: atlas count, words 28-29: atlas table byte offset,
+ *                               words 30-31: file bytes)
  *   level table                 levelCount * 16 words, coarsest level first; the block's byte
  *                               offset and length are 64-bit (lo, hi word pairs at words 9-10 and
  *                               11-12), so files past 4 GiB are addressable. Version 1 used 12-word
@@ -53,15 +59,22 @@
  *                                          without uv in version 2)
  *     refs       refCount u32             (global vertex index per cluster-local vertex)
  *     triangles  triCount u32             (cluster-local i0 | i1 << 8 | i2 << 16)
- *     materials  triCount u32             (glTF material index or 0xFFFFFFFF; version 3 only)
+ *     materials  triCount u32             (glTF material index, a level atlas material, or 0xFFFFFFFF; version 3+)
+ *   atlas table (version 4+), per atlas: level, material id, width, height, metallic f32, roughness f32,
+ *                               name length, name bytes padded to 4; version 5 adds the normal atlas's
+ *                               name the same way (length 0 when the level has none)
  */
 
+#include "scratchbox_texture.hpp"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <queue>
 #include <stdexcept>
@@ -75,8 +88,16 @@ namespace vgeo {
 constexpr uint32_t kMaxClusterVertices = 128;
 constexpr uint32_t kMaxClusterTriangles = 128;
 constexpr uint32_t kGroupSize = 8;
+/**
+ * Triangles a group grows to: kGroupSize full clusters. Coarse clusters are smaller than full (their
+ * wedge table fills first), so a group counts triangles, not clusters, and stays large enough to
+ * simplify: a small group is mostly border, and border vertices are locked.
+ */
+constexpr uint32_t kGroupTriangles = kGroupSize * kMaxClusterTriangles;
+/** Clusters a group may hold, growing to its triangle budget or after stuck groups have merged into it. */
+constexpr uint32_t kMaxMergedGroupSize = 4 * kGroupSize;
 constexpr uint32_t kSbvgMagic = 0x47564253; // 'SBVG'
-constexpr uint32_t kSbvgVersion = 3;
+constexpr uint32_t kSbvgVersion = 5;
 constexpr uint32_t kSbvgHeaderBytes = 128;
 constexpr uint32_t kSbvgLevelWords = 16;
 constexpr uint32_t kSbvgClusterWords = 32;
@@ -739,6 +760,134 @@ inline WeldedMesh weld(const SourceMesh& src) {
 }
 
 // ============================================================================
+// Re-texturing of coarse levels (implemented in scratchbox_lod_retexture.hpp)
+// ============================================================================
+
+/** An 8-bit sRGB RGB atlas. */
+struct AtlasImage {
+    uint32_t width{0};
+    uint32_t height{0};
+    std::vector<uint8_t> rgb;
+
+    /** Bilinear, clamped lookup, decoded to linear RGB. */
+    F3 sampleLinear(const F2& uv) const {
+        if (width == 0 || height == 0) return F3(1, 1, 1);
+        const float fx = std::clamp(uv.x, 0.0f, 1.0f) * width - 0.5f;
+        const float fy = std::clamp(uv.y, 0.0f, 1.0f) * height - 0.5f;
+        const float x0f = std::floor(fx), y0f = std::floor(fy);
+        const float tx = fx - x0f, ty = fy - y0f;
+        const int x0 = static_cast<int>(x0f), y0 = static_cast<int>(y0f);
+        auto decode = [](uint8_t v) {
+            const float e = v / 255.0f;
+            return e <= 0.04045f ? e / 12.92f : std::pow((e + 0.055f) / 1.055f, 2.4f);
+        };
+        auto fetch = [&](int x, int y) {
+            x = std::clamp(x, 0, static_cast<int>(width) - 1);
+            y = std::clamp(y, 0, static_cast<int>(height) - 1);
+            const uint8_t* p = rgb.data() + (static_cast<size_t>(y) * width + x) * 3;
+            return F3(decode(p[0]), decode(p[1]), decode(p[2]));
+        };
+        const F3 top = fetch(x0, y0) * (1.0f - tx) + fetch(x0 + 1, y0) * tx;
+        const F3 bottom = fetch(x0, y0 + 1) * (1.0f - tx) + fetch(x0 + 1, y0 + 1) * tx;
+        return top * (1.0f - ty) + bottom * ty;
+    }
+
+    /** Bilinear, clamped lookup of the stored bytes as 0..1 values (data maps such as normals). */
+    F3 sampleRaw(const F2& uv) const {
+        if (width == 0 || height == 0) return F3(0.5f, 0.5f, 1.0f);
+        const float fx = std::clamp(uv.x, 0.0f, 1.0f) * width - 0.5f;
+        const float fy = std::clamp(uv.y, 0.0f, 1.0f) * height - 0.5f;
+        const float x0f = std::floor(fx), y0f = std::floor(fy);
+        const float tx = fx - x0f, ty = fy - y0f;
+        const int x0 = static_cast<int>(x0f), y0 = static_cast<int>(y0f);
+        auto fetch = [&](int x, int y) {
+            x = std::clamp(x, 0, static_cast<int>(width) - 1);
+            y = std::clamp(y, 0, static_cast<int>(height) - 1);
+            const uint8_t* p = rgb.data() + (static_cast<size_t>(y) * width + x) * 3;
+            return F3(p[0] / 255.0f, p[1] / 255.0f, p[2] / 255.0f);
+        };
+        const F3 top = fetch(x0, y0) * (1.0f - tx) + fetch(x0 + 1, y0) * tx;
+        const F3 bottom = fetch(x0, y0 + 1) * (1.0f - tx) + fetch(x0 + 1, y0 + 1) * tx;
+        return top * (1.0f - ty) + bottom * ty;
+    }
+};
+
+/** Linear RGB albedo of a source material at a uv. */
+using SourceSampler = std::function<F3(uint32_t material, const F2& uv)>;
+
+/**
+ * World-space shading normal of a source material at a uv, given the source triangle's tangent frame
+ * (T, B, N as the tracer derives them from positions and uvs). Returns false when the material has
+ * no normal map, in which case the interpolated vertex normal N stands.
+ */
+using NormalSampler = std::function<bool(uint32_t material, const F2& uv, const F3& T, const F3& B, const F3& N, F3& out)>;
+
+/** The finer surface a group of coarse triangles was simplified from. */
+struct SourceSet {
+    std::vector<uint32_t> tris;      // 3 global position ids per triangle
+    std::vector<F2> cornerUv;        // per corner
+    std::vector<uint32_t> materials; // per triangle
+};
+
+struct BakeRequest {
+    const WeldedMesh* mesh{nullptr};
+    std::vector<uint32_t> coarseTris;   // 3 global position ids per triangle
+    std::vector<uint32_t> groupOfTri;   // group index per coarse triangle
+    std::vector<SourceSet> sources;     // per group
+    std::vector<float> groupError;      // per group: how far the coarse surface may sit from its source
+    SourceSampler sample;
+    /** Optional: the source's own normal maps (an earlier level's normal atlas); vertex normals otherwise. */
+    NormalSampler sampleNormal;
+    /** Finest texel worth baking, in world units. */
+    float minTexelWorld{0.05f};
+    uint32_t maxAtlasSize{8192};
+};
+
+struct BakeResult {
+    AtlasImage atlas;
+    /** The finer surface's shading normals in each coarse triangle's tangent frame, glTF normal-map encoded. */
+    AtlasImage normal;
+    std::vector<F2> cornerUv;   // per coarse corner
+    uint32_t cells{0};
+    /** Cells shared by two triangles along a common edge. */
+    uint32_t pairedCells{0};
+    uint64_t texels{0};
+    /** Average texel size in world units after fitting the size cap. */
+    float texelWorld{0.0f};
+    /** Texels whose normal projection met no source triangle and took the nearest source point instead. */
+    uint32_t missed{0};
+};
+
+/**
+ * Re-texture every coarse level: its simplification then ignores UV seams and material borders and
+ * its triangles get uvs into a baked atlas of their own (one material per level, appended after the
+ * glTF materials). `bake` is retex::bakeAtlas; `sampleLevel0` reads the glTF materials.
+ */
+struct RetextureOptions {
+    SourceSampler sampleLevel0;
+    std::function<BakeResult(const BakeRequest&)> bake;
+    /** metallic, roughness per glTF material; the level materials take the area-dominant one's. */
+    std::vector<std::array<float, 2>> materialFactors;
+    float minTexelWorld{0.05f};
+    uint32_t maxAtlasSize{8192};
+};
+
+struct LevelAtlas {
+    uint32_t level{0};
+    uint32_t materialId{0};
+    AtlasImage image;
+    AtlasImage normal;
+    uint32_t cells{0};
+    uint32_t pairedCells{0};
+    uint64_t texels{0};
+    float texelWorld{0.0f};
+    uint32_t missed{0};
+    double bakeMs{0.0};
+    float metallic{1.0f};
+    float roughness{1.0f};
+};
+
+// ============================================================================
 // Uniform grid for nearest-unused-point queries
 // ============================================================================
 
@@ -1070,8 +1219,9 @@ public:
      */
     template <typename LockedFn>
     static SimplifyResult simplify(const std::vector<uint32_t>& tris, const std::vector<F2>& cornerUv, const std::vector<uint32_t>& materials,
-                                   const WeldedMesh& mesh, uint32_t targetTris, LockedFn locked) {
+                                   const WeldedMesh& mesh, uint32_t targetTris, LockedFn locked, bool keepCharts = true) {
         LockedSimplifier s(tris, cornerUv, materials, mesh);
+        s.keepCharts_ = keepCharts;
         for (uint32_t v = 0; v < s.globalOf_.size(); ++v) s.locked_[v] = locked(s.globalOf_[v]) ? 1 : 0;
         s.run(targetTris);
         return s.result();
@@ -1125,6 +1275,7 @@ private:
     std::vector<uint8_t> locked_;
     std::vector<uint8_t> alive_;
     std::vector<uint32_t> version_;
+    bool keepCharts_{true};
     std::priority_queue<Candidate, std::vector<Candidate>, std::greater<Candidate>> heap_;
     uint32_t liveTris_{0};
     double maxCost_{0};
@@ -1209,19 +1360,17 @@ private:
     }
 
     bool collapseIsValid(uint32_t from, uint32_t to) {
-        // Link condition: common neighbours must be exactly the apexes of the triangles on the edge.
-        std::vector<uint32_t> nf, nt;
-        neighbours(from, nf);
-        neighbours(to, nt);
-        uint32_t common = 0;
-        for (uint32_t w : nf) if (std::find(nt.begin(), nt.end(), w) != nt.end()) common++;
+        // The two must share a live triangle. No link condition: scanned surfaces are non-manifold
+        // soups whose coarse levels would otherwise stop simplifying (a group's border stays locked,
+        // so a topology change inside it cannot open a crack); a collapse that folds two triangles
+        // onto each other leaves one of them (see run()).
         uint32_t shared = 0;
         for (uint32_t t : vtris_[from]) {
             if (!triAlive_[t]) continue;
             const auto& tr = tri_[t];
             if (tr[0] == to || tr[1] == to || tr[2] == to) shared++;
         }
-        if (shared == 0 || common != shared) return false;
+        if (shared == 0) return false;
 
         // No triangle around `from` may flip or collapse to a sliver.
         F3 target = pos(to);
@@ -1237,7 +1386,8 @@ private:
             if (l1 <= 1e-12f * std::max(l0, 1e-12f)) return false;
             if (dot(n0, n1) < 0.25f * l0 * l1) return false;
         }
-        return chartTargets(from, to, false);
+        // A re-textured level gets fresh uvs, so its collapses may cross seams and material borders.
+        return !keepCharts_ || chartTargets(from, to, false);
     }
 
     /**
@@ -1292,7 +1442,7 @@ private:
             if (version_[c.from] != c.vFrom || version_[c.to] != c.vTo) continue;
             if (!collapseIsValid(c.from, c.to)) continue;
 
-            chartTargets(c.from, c.to, true);
+            if (keepCharts_) chartTargets(c.from, c.to, true);
             for (uint32_t t : vtris_[c.from]) {
                 if (!triAlive_[t]) continue;
                 auto& tr = tri_[t];
@@ -1306,6 +1456,22 @@ private:
             }
             vtris_[c.from].clear();
             alive_[c.from] = 0;
+            // Two triangles now on the same three vertices cover the same surface twice: keep the first.
+            {
+                auto& list = vtris_[c.to];
+                std::vector<std::array<uint32_t, 3>> seen;
+                for (uint32_t t : list) {
+                    if (!triAlive_[t]) continue;
+                    std::array<uint32_t, 3> key = tri_[t];
+                    std::sort(key.begin(), key.end());
+                    if (std::find(seen.begin(), seen.end(), key) != seen.end()) {
+                        triAlive_[t] = 0;
+                        liveTris_--;
+                    } else {
+                        seen.push_back(key);
+                    }
+                }
+            }
             q_[c.to].add(q_[c.from]);
             version_[c.to]++;
             maxCost_ = std::max(maxCost_, c.cost);
@@ -1346,8 +1512,11 @@ struct LevelStats {
     uint32_t clusters;
     uint32_t triangles;
     uint32_t groups;
+    /** Groups carried up unchanged because nothing in them could move, after merging. */
     uint32_t stuckGroups;
     float maxError;
+    /** Stuck groups that joined a neighbouring group before simplification was retried. */
+    uint32_t mergedGroups{0};
 };
 
 struct ClusterDag {
@@ -1355,6 +1524,8 @@ struct ClusterDag {
     std::vector<Cluster> clusters;
     std::vector<LevelStats> levels;
     uint32_t levelCount{0};
+    /** One baked atlas per re-textured level (levels 1 and up), in level order. */
+    std::vector<LevelAtlas> atlases;
 };
 
 inline Sphere mergeSpheres(const std::vector<Sphere>& spheres) {
@@ -1371,8 +1542,9 @@ inline Sphere mergeSpheres(const std::vector<Sphere>& spheres) {
 }
 
 /**
- * Partition cluster ids into groups of up to kGroupSize, growing each group across the clusters
- * it shares the most vertices with, falling back to the nearest ungrouped cluster in space.
+ * Partition cluster ids into groups of up to kGroupTriangles triangles (and at most kMaxMergedGroupSize
+ * clusters), growing each group across the clusters it shares the most vertices with, falling back
+ * to the nearest ungrouped cluster in space.
  */
 inline std::vector<std::vector<uint32_t>> partitionGroups(const std::vector<uint32_t>& ids, const std::vector<Cluster>& clusters) {
     std::unordered_map<uint32_t, std::vector<uint32_t>> vertexUsers; // global vertex -> positions in ids
@@ -1403,10 +1575,11 @@ inline std::vector<std::vector<uint32_t>> partitionGroups(const std::vector<uint
         std::vector<uint32_t> group{seed};
         grouped[seed] = 1;
         grid.remove(seed);
+        uint32_t groupTris = clusters[ids[seed]].triangleCount();
         std::unordered_map<uint32_t, uint32_t> frontier;
         auto absorb = [&](uint32_t m) { for (auto [o, w] : neighbours[m]) if (!grouped[o]) frontier[o] += w; };
         absorb(seed);
-        while (group.size() < kGroupSize) {
+        while (groupTris < kGroupTriangles && group.size() < kMaxMergedGroupSize) {
             uint32_t best = UINT32_MAX, bestW = 0;
             for (auto [o, w] : frontier) {
                 if (grouped[o]) continue;
@@ -1426,6 +1599,7 @@ inline std::vector<std::vector<uint32_t>> partitionGroups(const std::vector<uint
             grid.remove(best);
             frontier.erase(best);
             absorb(best);
+            groupTris += clusters[ids[best]].triangleCount();
         }
         std::vector<uint32_t> out;
         for (uint32_t m : group) out.push_back(ids[m]);
@@ -1434,10 +1608,32 @@ inline std::vector<std::vector<uint32_t>> partitionGroups(const std::vector<uint
     return groups;
 }
 
-inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24) {
+inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24, const RetextureOptions* retex = nullptr) {
     ClusterDag dag;
     dag.mesh = std::move(mesh);
     const WeldedMesh& m = dag.mesh;
+    const bool retexture = retex != nullptr && retex->bake && retex->sampleLevel0 && m.materialCount > 0;
+
+    // The level materials take the metallic and roughness of the material covering the most area.
+    float dominantMetallic = 1.0f, dominantRoughness = 1.0f;
+    if (retexture) {
+        std::unordered_map<uint32_t, double> areaOf;
+        for (size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+            const F3& a = m.positions[m.indices[t]];
+            const F3& b = m.positions[m.indices[t + 1]];
+            const F3& c = m.positions[m.indices[t + 2]];
+            areaOf[m.triMaterial[t / 3]] += 0.5 * length(cross(b - a, c - a));
+        }
+        uint32_t dominant = kNoMaterial;
+        double best = -1.0;
+        for (const auto& kv : areaOf) {
+            if (kv.second > best) { best = kv.second; dominant = kv.first; }
+        }
+        if (dominant != kNoMaterial && dominant < retex->materialFactors.size()) {
+            dominantMetallic = retex->materialFactors[dominant][0];
+            dominantRoughness = retex->materialFactors[dominant][1];
+        }
+    }
 
     dag.clusters = buildClusters(m.indices, m.cornerUv, m.triMaterial, m);
     std::vector<uint32_t> current(dag.clusters.size());
@@ -1460,29 +1656,43 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24) {
     while (current.size() > 1 && level + 1 < maxLevels) {
         auto groups = partitionGroups(current, dag.clusters);
 
-        // A vertex is locked when clusters of more than one group use it.
-        std::unordered_map<uint32_t, uint32_t> vertexGroup;
-        std::unordered_map<uint32_t, uint8_t> shared;
+        // Which groups use each vertex; a vertex is locked for a group when another group uses it too.
+        std::unordered_map<uint32_t, std::vector<uint32_t>> usersOf;
         for (uint32_t g = 0; g < groups.size(); ++g) {
             for (uint32_t id : groups[g]) {
                 for (uint32_t v : dag.clusters[id].vertices) {
-                    auto it = vertexGroup.find(v);
-                    if (it == vertexGroup.end()) vertexGroup.emplace(v, g);
-                    else if (it->second != g) shared[v] = 1;
+                    auto& users = usersOf[v];
+                    if (users.empty() || users.back() != g) users.push_back(g);
                 }
             }
         }
+        // Groups merge below; `unionOf` names the group each one has joined.
+        std::vector<uint32_t> unionOf(groups.size());
+        for (uint32_t g = 0; g < groups.size(); ++g) unionOf[g] = g;
+        auto find = [&](uint32_t g) {
+            while (unionOf[g] != g) { unionOf[g] = unionOf[unionOf[g]]; g = unionOf[g]; }
+            return g;
+        };
+        auto lockedFor = [&](uint32_t root) {
+            return [&, root](uint32_t v) {
+                for (uint32_t o : usersOf[v]) if (find(o) != root) return true;
+                return false;
+            };
+        };
 
         struct GroupResult {
             std::vector<uint32_t> members;
             Sphere sphere;
             float error;
             std::vector<Cluster> parents;
+            // Until the parents are clustered: the group's coarse triangles and what they came from.
+            std::vector<uint32_t> parentTris, parentMaterials;
+            std::vector<F2> parentUvs;
+            SourceSet source;
+            /** Nothing in the group could move: it is carried up unchanged. */
+            bool stuck{false};
         };
-        std::vector<GroupResult> results;
-        LevelStats stats{level + 1, 0, 0, static_cast<uint32_t>(groups.size()), 0, 0};
-        uint64_t nextTriangles = 0;
-        for (const auto& group : groups) {
+        auto simplifyGroup = [&](const std::vector<uint32_t>& group, uint32_t root) {
             std::vector<uint32_t> tris, materials;
             std::vector<F2> uvs;
             std::vector<Sphere> spheres;
@@ -1498,32 +1708,156 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24) {
                 childError = std::max(childError, c.selfError);
             }
             const uint64_t groupTris = tris.size() / 3;
-            SimplifyResult simp = LockedSimplifier::simplify(tris, uvs, materials, m, static_cast<uint32_t>(groupTris / 2), [&](uint32_t v) { return shared.count(v) > 0; });
+            SimplifyResult simp = LockedSimplifier::simplify(tris, uvs, materials, m, static_cast<uint32_t>(groupTris / 2), lockedFor(root), !retexture);
 
-            std::vector<uint32_t> parentTris, parentMaterials;
-            std::vector<F2> parentUvs;
-            float groupError = childError;
+            GroupResult r;
+            r.members = group;
+            r.sphere = mergeSpheres(spheres);
+            r.error = childError;
+            if (retexture) r.source = SourceSet{tris, uvs, materials};
             if (uint64_t(simp.tris.size() / 3) > groupTris * 85 / 100) {
                 // Locked borders left too little to remove: carry the group up unchanged so every
-                // level still covers the whole surface (the next level groups it differently).
-                parentTris = std::move(tris);
-                parentUvs = std::move(uvs);
-                parentMaterials = std::move(materials);
-                stats.stuckGroups++;
+                // level still covers the whole surface.
+                r.parentTris = std::move(tris);
+                r.parentUvs = std::move(uvs);
+                r.parentMaterials = std::move(materials);
+                r.stuck = true;
             } else {
-                parentTris = std::move(simp.tris);
-                parentUvs = std::move(simp.cornerUv);
-                parentMaterials = std::move(simp.materials);
-                groupError = childError + simp.error;
+                r.parentTris = std::move(simp.tris);
+                r.parentUvs = std::move(simp.cornerUv);
+                r.parentMaterials = std::move(simp.materials);
+                r.error = childError + simp.error;
             }
-            GroupResult r{group, mergeSpheres(spheres), groupError, buildClusters(parentTris, parentUvs, parentMaterials, m)};
-            for (const auto& p : r.parents) nextTriangles += p.triangleCount();
-            results.push_back(std::move(r));
+            return r;
+        };
+        std::vector<GroupResult> results;
+        LevelStats stats{level + 1, 0, 0, static_cast<uint32_t>(groups.size()), 0, 0};
+        for (uint32_t g = 0; g < groups.size(); ++g) results.push_back(simplifyGroup(groups[g], g));
+
+        // Stuck groups are the partition's leftovers: a few clusters whose vertices nearly all lie on
+        // borders with other groups, so nothing in them may move and the same clusters stay stuck at
+        // every level above. Each joins the group it shares the most vertices with (the nearest group
+        // when it shares none), and the union is simplified again with only its outer border locked.
+        {
+            std::vector<uint32_t> unionSize(groups.size());
+            for (uint32_t g = 0; g < groups.size(); ++g) unionSize[g] = static_cast<uint32_t>(groups[g].size());
+            for (uint32_t g = 0; g < groups.size(); ++g) {
+                if (!results[g].stuck) continue;
+                const uint32_t self = find(g);
+                std::unordered_map<uint32_t, uint32_t> sharedWith;
+                for (uint32_t id : groups[g]) {
+                    for (uint32_t v : dag.clusters[id].vertices) {
+                        for (uint32_t o : usersOf[v]) {
+                            const uint32_t root = find(o);
+                            if (root != self) sharedWith[root]++;
+                        }
+                    }
+                }
+                uint32_t target = UINT32_MAX, best = 0;
+                for (const auto& [root, n] : sharedWith) {
+                    if (unionSize[root] + unionSize[self] > kMaxMergedGroupSize) continue;
+                    if (n > best || (n == best && root < target)) { target = root; best = n; }
+                }
+                if (target == UINT32_MAX) {
+                    // An isolated piece: the nearest group whose LOD sphere it could share.
+                    float bestDistance = std::numeric_limits<float>::max();
+                    for (uint32_t o = 0; o < groups.size(); ++o) {
+                        const uint32_t root = find(o);
+                        if (root != o || root == self || unionSize[root] + unionSize[self] > kMaxMergedGroupSize) continue;
+                        const float d = length(results[o].sphere.center - results[g].sphere.center);
+                        if (d > 2.0f * (results[o].sphere.radius + results[g].sphere.radius)) continue;
+                        if (d < bestDistance) { bestDistance = d; target = root; }
+                    }
+                }
+                if (target == UINT32_MAX) continue;
+                unionOf[self] = target;
+                unionSize[target] += unionSize[self];
+                stats.mergedGroups++;
+            }
+            if (stats.mergedGroups > 0) {
+                std::vector<std::vector<uint32_t>> membersOf(groups.size());
+                std::vector<uint8_t> grew(groups.size(), 0);
+                for (uint32_t g = 0; g < groups.size(); ++g) {
+                    const uint32_t root = find(g);
+                    membersOf[root].insert(membersOf[root].end(), groups[g].begin(), groups[g].end());
+                    if (root != g) grew[root] = 1;
+                }
+                std::vector<GroupResult> mergedResults;
+                for (uint32_t g = 0; g < groups.size(); ++g) {
+                    if (find(g) != g) continue;
+                    mergedResults.push_back(grew[g] ? simplifyGroup(membersOf[g], g) : std::move(results[g]));
+                }
+                results = std::move(mergedResults);
+            }
+        }
+        uint64_t nextTriangles = 0;
+        for (const GroupResult& r : results) {
+            if (r.stuck) stats.stuckGroups++;
+            nextTriangles += r.parentTris.size() / 3;
         }
 
         // A level that removes almost nothing would only duplicate the one below: stop instead.
         if (!levelReducesEnough(nextTriangles, levelTriangles(current))) break;
         stats.triangles = static_cast<uint32_t>(nextTriangles);
+
+        if (retexture) {
+            // The level's atlas: every coarse triangle baked from its group's source surface.
+            const auto bakeStart = std::chrono::steady_clock::now();
+            BakeRequest request;
+            request.mesh = &m;
+            request.minTexelWorld = retex->minTexelWorld;
+            request.maxAtlasSize = retex->maxAtlasSize;
+            for (uint32_t g = 0; g < results.size(); ++g) {
+                GroupResult& r = results[g];
+                request.coarseTris.insert(request.coarseTris.end(), r.parentTris.begin(), r.parentTris.end());
+                request.groupOfTri.insert(request.groupOfTri.end(), r.parentTris.size() / 3, g);
+                request.sources.push_back(std::move(r.source));
+                request.groupError.push_back(r.error);
+            }
+            if (level == 0) {
+                request.sample = retex->sampleLevel0;
+            } else {
+                const AtlasImage* previous = &dag.atlases.back().image;
+                const AtlasImage* previousNormal = &dag.atlases.back().normal;
+                request.sample = [previous](uint32_t, const F2& uv) { return previous->sampleLinear(uv); };
+                // The previous level's baked normals, decoded in the source triangle's own frame.
+                request.sampleNormal = [previousNormal](uint32_t, const F2& uv, const F3& T, const F3& B, const F3& N, F3& out) {
+                    if (previousNormal->width == 0) return false;
+                    const F3 e = previousNormal->sampleRaw(uv);
+                    const F3 tn(2.0f * e.x - 1.0f, 2.0f * e.y - 1.0f, 2.0f * e.z - 1.0f);
+                    out = normalize(T * tn.x + B * tn.y + N * tn.z);
+                    return dot(out, out) > 0.0f;
+                };
+            }
+            BakeResult baked = retex->bake(request);
+            LevelAtlas atlas;
+            atlas.level = level + 1;
+            atlas.materialId = m.materialCount + static_cast<uint32_t>(dag.atlases.size());
+            atlas.image = std::move(baked.atlas);
+            atlas.normal = std::move(baked.normal);
+            atlas.cells = baked.cells;
+            atlas.pairedCells = baked.pairedCells;
+            atlas.texels = baked.texels;
+            atlas.texelWorld = baked.texelWorld;
+            atlas.missed = baked.missed;
+            atlas.metallic = dominantMetallic;
+            atlas.roughness = dominantRoughness;
+            atlas.bakeMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - bakeStart).count();
+            size_t corner = 0;
+            for (GroupResult& r : results) {
+                const size_t corners = r.parentTris.size();
+                r.parentUvs.assign(baked.cornerUv.begin() + static_cast<std::ptrdiff_t>(corner), baked.cornerUv.begin() + static_cast<std::ptrdiff_t>(corner + corners));
+                r.parentMaterials.assign(corners / 3, atlas.materialId);
+                corner += corners;
+            }
+            dag.atlases.push_back(std::move(atlas));
+        }
+        for (GroupResult& r : results) {
+            r.parents = buildClusters(r.parentTris, r.parentUvs, r.parentMaterials, m);
+            r.parentTris.clear();
+            r.parentUvs.clear();
+            r.parentMaterials.clear();
+        }
 
         std::vector<uint32_t> next;
         for (auto& r : results) {
@@ -1566,7 +1900,20 @@ struct SbvgSummary {
     uint64_t leafTriangleCount{0};
     uint32_t levelCount{0};
     uint64_t fileBytes{0};
+    uint32_t atlasCount{0};
+    /** Bytes of the atlas PNGs written next to the file. */
+    uint64_t atlasBytes{0};
 };
+
+/** Name of the PNG holding a level's atlas, next to the .sbvg: `<stem>.atlas<level>.png`. */
+inline std::string atlasFileName(const std::string& stem, uint32_t level) {
+    return stem + ".atlas" + std::to_string(level) + ".png";
+}
+
+/** Name of the PNG holding a level's baked normal map: `<stem>.normal<level>.png`. */
+inline std::string normalAtlasFileName(const std::string& stem, uint32_t level) {
+    return stem + ".normal" + std::to_string(level) + ".png";
+}
 
 /** Element count or index stored in a 32-bit field; throws instead of wrapping. */
 inline uint32_t sbvgU32(uint64_t v, const char* what) {
@@ -1579,7 +1926,12 @@ inline void putU64(uint32_t* w, uint64_t v) {
     w[1] = static_cast<uint32_t>(v >> 32);
 }
 
-inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path, uint32_t skippedPrimitives = 0) {
+/**
+ * Writes the file and its atlas PNGs (named `<atlasStem>.atlas<level>.png` in the file's directory;
+ * the stem defaults to the file's own, and a caller that writes to a temporary name passes the final one).
+ */
+inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path, uint32_t skippedPrimitives = 0, std::string atlasStem = "") {
+    if (atlasStem.empty()) atlasStem = std::filesystem::path(path).stem().string();
     const WeldedMesh& m = dag.mesh;
     std::vector<std::vector<uint32_t>> byLevel(dag.levelCount);
     for (uint32_t i = 0; i < dag.clusters.size(); ++i) byLevel[dag.clusters[i].level].push_back(i);
@@ -1691,6 +2043,52 @@ inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path, uin
     words[25] = m.droppedDegenerate;
     words[26] = m.materialCount;
 
+    // Atlas table (version 4): one row per re-textured level, naming the PNG next to the file.
+    while ((words.size() + body.size()) % 4) body.push_back(0);
+    const uint64_t tableOffset = uint64_t(words.size() + body.size()) * 4;
+    const std::filesystem::path dir = std::filesystem::path(path).parent_path();
+    auto writePng = [&](const AtlasImage& atlas, const std::string& name) {
+        texture::ImageBuffer image(static_cast<int>(atlas.width), static_cast<int>(atlas.height), 3);
+        image.data = atlas.rgb;
+        const std::vector<uint8_t> png = texture::encodePng(image);
+        std::ofstream pf(dir / name, std::ios::binary);
+        if (!pf) throw std::runtime_error("cannot write " + (dir / name).string());
+        pf.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+        if (!pf) throw std::runtime_error("failed writing " + (dir / name).string());
+        sum.atlasBytes += png.size();
+    };
+    auto putName = [&](const std::string& name) {
+        body.push_back(static_cast<uint32_t>(name.size()));
+        const size_t nameWords = (name.size() + 3) / 4;
+        const size_t at = body.size();
+        body.resize(at + nameWords, 0);
+        std::memcpy(body.data() + at, name.data(), name.size());
+    };
+    for (const LevelAtlas& atlas : dag.atlases) {
+        const std::string name = atlasFileName(atlasStem, atlas.level);
+        writePng(atlas.image, name);
+        // Version 5: the normal atlas follows the colour atlas; an empty name means the level has none.
+        std::string normalName;
+        if (atlas.normal.width > 0 && atlas.normal.height > 0) {
+            normalName = normalAtlasFileName(atlasStem, atlas.level);
+            writePng(atlas.normal, normalName);
+        }
+        body.push_back(atlas.level);
+        body.push_back(atlas.materialId);
+        body.push_back(atlas.image.width);
+        body.push_back(atlas.image.height);
+        uint32_t bits;
+        std::memcpy(&bits, &atlas.metallic, 4);
+        body.push_back(bits);
+        std::memcpy(&bits, &atlas.roughness, 4);
+        body.push_back(bits);
+        putName(name);
+        putName(normalName);
+    }
+    words[27] = static_cast<uint32_t>(dag.atlases.size());
+    putU64(&words[28], tableOffset);
+    putU64(&words[30], uint64_t(words.size() + body.size()) * 4);
+
     std::ofstream f(path, std::ios::binary);
     if (!f) throw std::runtime_error("cannot write " + path);
     f.write(reinterpret_cast<const char*>(words.data()), static_cast<std::streamsize>(words.size() * 4));
@@ -1701,6 +2099,7 @@ inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path, uin
     sum.clusterCount = static_cast<uint32_t>(clusterBase);
     sum.levelCount = dag.levelCount;
     sum.fileBytes = (words.size() + body.size()) * 4ull;
+    sum.atlasCount = static_cast<uint32_t>(dag.atlases.size());
     return sum;
 }
 

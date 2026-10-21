@@ -82,9 +82,103 @@ Agreement: mean ratio 0.99999; 8x8-block mean relative difference 0.040%; 19 of 
 
 **Honest limits.** The temporal blend trusts history that passes the depth/normal test, so lighting that changes between views (the Sun toggle) lingers up to the 32-sample cap before fading; disocclusions show the raw-sample noise until the filter catches up; the helper's cut rebuild is still synchronous.
 
+## Phase 5 (2026-10-20): ray cost, each idea measured against the baseline
+
+The harness is `scripts/bench_sbvg_pathtracer.cjs` (the Phase 1 shot: textured Flatiron, 1280x720, 64 spp, sun). Every speed idea is a flag in the helper's `optimizations` and scored on GPU render time and on 8x8-block bias against the baseline image; samplers are scored by RMSE against a 1024 spp reference. Baseline today: 329,205-triangle cut, 126.7 M rays, 925-964 ms, 131-137 M rays/s.
+
+| Idea | Result | Verdict |
+| :-- | :-- | :-- |
+| Acceleration structure "prefer fast build" | trace 0.91x; the build itself was not faster here | rejected, kept as a flag |
+| Coarser cut for bounce and shadow rays (4 / 8 / 16 px, rays start past the cut's error bound) | 1.13x / 1.19x / 1.28x, but block bias 3.3% / 6.5% / 16.9% with maxima of hundreds of percent: this DAG's coarse levels carry 9-18 m of error, so shadows and bounce light land on the wrong walls | rejected on photogrammetry, kept as a flag |
+| Rasterized primary hit (one visibility pass per frame, each jittered sample re-intersects its pixel's triangle, edges trace) | 0.94x (1025 vs 964 ms) with 20% fewer traced rays; biased at silhouettes (1.7% block mean, 14% of blocks over 2%) because a jittered ray can meet a closer triangle than the one under the pixel centre, and checking that is a trace. Half the pixels see sky anyway | rejected, kept as a flag |
+| Merged acceleration structures | the tracer has always built one structure over the whole cut (no per-cluster instances), so there was nothing to merge | n/a |
+| Owen-scrambled Sobol sampler (Joe-Kuo direction vectors for 32 dimensions, Burley's nested scramble per pixel and dimension, 6 dimensions per bounce, PCG past the table) | RMSE vs reference, Flatiron 8 / 32 spp: 1.44e-3 / 6.5e-4 against PCG's 2.25e-3 / 1.12e-3; clay sphere 8 / 32 / 128 / 512 spp: 2.1e-3 / 9.9e-4 / 3.7e-4 / 2.1e-4 against 3.2e-3 / 1.5e-3 / 7.5e-4 / 3.4e-4. PCG needs 2.5-3x the samples for the same error; the sampler costs ~17% per sample | **adopted**: default in the resident mode (`view.sampler`, `pcg` on request); the one-shot default stays PCG for the CPU parity tests |
+| MetalFX spatial upscale (resident mode `renderScale`) | 64 spp frame, 1280x720: 702 ms full size; 303 ms traced at 854x480 + 0.2 ms upscale (PSNR 35.3 dB against the full-size frame); 268 ms at 640x360 (33.6 dB) | **adopted** as an option (`virtualGeometry.pathTrace.renderScale`, default 1); the HUD says what the frame was traced at |
+
+Two samplers were measured and thrown away on the way: Halton with higher primes under Owen scrambling (worse than PCG below 64 samples: its first samples in base 19 or 23 fill a few of many cells), and base-2 radical inverses with an independent scramble per dimension (best at 8 spp, then stalled at 1.9e-3 from 32 spp on, because every dimension is the same sequence re-permuted and a pixel's samples lie on a curve). A Laine-Karras constant that is odd (0xc7afe785) zeroes bit 0 of `x ^= x * c` and halves the pixel jitter range; Burley's constants are even.
+
+**What this means for the viewport:** the honest wins are fewer samples for the same error (Sobol) and fewer pixels (MetalFX), not faster rays; on an M1 Ultra the hardware intersector already spends only ~20% of its rays on primaries and has no cheaper geometry to trace against until the DAG's coarse levels are re-textured.
+
+## Phase 6 (2026-10-20): re-textured coarse levels (`.sbvg` version 4)
+
+**What.** When the GLB has materials, every coarse level is simplified without regard to UV seams or material borders (only group borders stay locked) and gets an atlas of its own (`scratchbox_lod_retexture.hpp`): each coarse triangle takes a square cell (sized by its area at a texel tied to the level's error, never finer than the source textures' median texel, atlas capped at 4096 wide), and every texel is baked by projecting back along the coarse normal onto the surface the triangle was simplified from (two rays from either side through the point; the nearest source point as fallback) and sampling that surface's albedo: the glTF textures for level 1, the previous level's atlas above. Each level becomes one material appended after the glTF materials (base colour = the atlas PNG written next to the file, metallic and roughness of the area-dominant glTF material); the file's atlas table (header words 27-31) names them, and both readers, the helper (Metal and CPU reference) and the build service's cache (atlas PNGs live and die with their file) know version 4.
+
+**Flatiron** (403,385 triangles, 209 textures), builder 9.6 s on 20 threads:
+
+| | before | re-textured |
+| :-- | --: | --: |
+| DAG levels | 3 | 7 |
+| level 1 / 2 / 3 triangles | 206,764 / 158,074 / - | 201,680 / 106,233 / 67,846 |
+| coarsest level triangles | 158,074 | 43,401 |
+| 1 px cut for the test camera | 329,205 | 216,035 |
+| frame at 64 spp | 0.95 s | 0.96 s (fewer triangles, same rays) |
+| atlases | - | 6 levels, 4096x3076 down to 1024x690, 84 MB of PNG |
+| file | 28 MB | 85 MB (per-cell uvs: three wedges per coarse triangle) |
+
+Level 1 bakes 12.4 M texels at a 0.29 m texel in 0.9 s with 4% of texels falling back to the nearest-point search; the checker sphere goes from 9 to 10 levels with a 512x145 level-1 atlas, and a render from level 3 up (1,182 triangles instead of 2,719) keeps the checkerboard and agrees with full detail to 3.4% in block means. Rendering Flatiron from level 2 up (106k triangles) differs from full detail by 20% in block means from the test camera: that level carries up to 10 m of error and is meant for far views.
+
+**Coarser bounce cut, re-measured on the re-textured DAG:** 8 px cut, shadows and bounces on it: 8.4% block bias; bounce light only, shadows on the fine cut: 1.9% (16 px: 2.6%), with local maxima of 150-1300%, whether rays start past the error along their own direction or along the surface normal. Re-texturing fixed what the coarse levels look like, not where they are: the remaining bias is geometric, so the coarse bounce cut stays rejected for correctness and the flags stay in the harness.
+
+**Costs and limits.** Per-triangle cells triple the coarse levels' vertex count and make the file 3x larger; cells of a few texels show the gutter's clamped colours as a fuzz along edges at the coarsest levels; the bake only carries base colour (no normal or metallic-roughness maps on coarse levels); groups the simplifier cannot reduce by 15% are still carried up unchanged, which is what stops the DAG at 7 levels (300 of 450 groups stuck at level 5).
+
+## Phase 7 (2026-10-20): paired atlas cells and baked normal maps (`.sbvg` version 5)
+
+**What.** Two triangles that share an edge now share one square atlas cell with the common edge on its diagonal (greedy pairing, largest triangles first; a triangle without a free neighbour takes the lower half of a cell of its own), so a pair has four wedges instead of six and half the cells; cell sizes follow the pair's summed area at the same texel rule as before. Every level also gets a normal atlas beside its colour atlas: for each texel the baker takes the source surface's shading normal at the projected point (the interpolated vertex normal, refined by the source's own normal map when it has one; the previous level's normal atlas above level 1) and encodes it in the coarse triangle's tangent frame, derived from its cell uvs exactly as the tracer's `shade()` derives it (`retex::tangentFrame`), in the glTF encoding with the z component floored at 0.05. The atlas table rows carry the normal PNG's name after the colour PNG's (version 5; version 4 rows without it are still read), the helper loads it as the atlas material's normal map (clamped, scale 1; `materials.atlasNormals: false` leaves them out for measurement), and the build cache counts the normal PNGs as the file's siblings.
+
+**Flatiron** (403,385 triangles, 209 textures), Phase 6 build vs this one:
+
+| | per-triangle cells (v4) | paired cells + normals (v5) |
+| :-- | --: | --: |
+| DAG levels / clusters | 7 / 25,643 | 7 / 21,653 |
+| coarse-level wedges per triangle | 3.00 (1,554,936) | 2.11 (1,074,509) |
+| file wedges | 2,053,556 | 1,573,129 (-23%) |
+| level 1 cells | 201,680 | 111,524 (81% of triangles paired) |
+| level 1 atlas | 4096x3076, 0.29 m texel, 4.1% texels missed | 4096x3431, 0.19 m texel, 2.4% missed |
+| colour atlas PNG | 81 MB | 68 MB, plus 68 MB of normal PNG |
+| file | 85 MB | 67 MB |
+| builder (20 threads) | 9.3 s | 10.2 s (normal bake and pairing add 0.9 s) |
+
+Fewer gutters and no empty half-squares leave room under the 4096 cap, so the level-1 atlas lands on a finer texel at the same byte count; the atlases are stored PNGs (no deflate gain on photogrammetry), so the normal maps double the atlas bytes on disk. The checker sphere goes from 10 to 11 levels and 32,748 to 24,332 wedges, and its normal atlases are 99.6-99.8% flat (it is a sphere of flat shading normals), as they should be.
+
+**Render agreement with full detail** (1280x720, 128 spp, denoised, block means against the 0.5 px cut, 8x8 blocks):
+
+| cut | triangles | v4 build | v5, colour only | v5, colour + normals |
+| :-- | --: | --: | --: | --: |
+| 8 px | 83k | 3.54% (RMS 11.1%) | 3.95% (RMS 10.7%) | **3.46% (RMS 9.3%)** |
+| 24 px | 56k | 10.7% (RMS 16.7%) | 9.57% (RMS 15.8%) | **9.35% (RMS 15.2%)** |
+
+The baked normals carry the source's facet shading onto the coarse triangles: at the 8 px cut they take the block error from 3.95% to 3.46% and the pixel RMS from 10.7% to 9.3%, better than the Phase 6 build with its three-wedge cells. The 24 px cut (level 3-4, metres of error) stays geometrically broken from the test camera whatever its texturing; that is the stuck-group limit noted in Phase 6, not a texturing problem.
+
+**Limits.** The normal atlas floors grazing normals at z = 0.05, so a coarse triangle spanning a wall-roof edge shades its wall texels darkly rather than flat; pairing is greedy (81% paired, not the 100% a quad-mesh would give); metallic and roughness are still per-level factors, not maps.
+
+## Phase 8 (2026-10-20): stuck groups merged, and the DAG runs to the top
+
+**Diagnosis first.** A build instrumented with rejection counters showed what a stuck group is: the partition's leftovers, one to five clusters of 3-150 triangles with 30-99% of their vertices on borders with other groups, every one of them exhausting its collapse heap. Healthy groups (about 7 clusters, 220-540 triangles) at the coarse levels were also exhausting their heaps after ~1,500 link-condition rejections each: a scanned tile is a non-manifold soup, and the link condition (common neighbours must be exactly the edge's apexes) refuses most collapses at pinch points. Coarse clusters also hold only ~33 triangles because their 128-wedge table fills first, which made groups of 8 clusters small and border-heavy.
+
+**Three changes, measured one at a time on Flatiron.**
+
+| builder | levels | stuck groups per level | coarsest level |
+| :-- | --: | :-- | --: |
+| Phase 7 | 7 | 163 / 324 / 335 / 308 / 309 / 255 | 42,605 triangles |
+| + stuck groups merge into the neighbour sharing the most vertices (nearest group when none; union re-simplified with only its outer border locked, up to 32 clusters) | 6 | 0 / 1 / 0 / 9 / 24 | 39,804 |
+| + groups grow to `kGroupTriangles` (1,024) rather than 8 clusters | 5 | 0 / 0 / 1 / 11 | 41,762 |
+| + no link condition (an edge collapse needs a live triangle on it, the flip test stays; two triangles folded onto the same three vertices keep one) | **18** | 0 everywhere but 1 at level 4 | **2 triangles** |
+
+The first two alone could not continue the DAG: they removed the stuck groups but the healthy ones were still walled in by the link condition. Without it every level halves to the top (201k, 101k, 50k, 25k, 12.5k, 6.2k, 3.1k, 1.6k, 775, 387, 193, 96, 48, 24, 12, 6, 2), the level-1 error drops from 1.24 m to 0.47 m (more candidates, cheaper collapses chosen), and the build takes 8.9 s. The merge step still matters at levels 1-6 (36, 120, 60, 20, 5, 1 groups merged). The group's border stays locked, so a topology change inside a group cannot open a crack between groups; the closed-sphere fixture test (every level closed, no open edges) guards the manifold case, and the checker sphere now reaches 34 triangles at level 8.
+
+**Render agreement with full detail** (same camera, 1280x720, 128 spp, denoised, block means against the 0.5 px cut):
+
+| cut | Phase 7: triangles / error | Phase 8: triangles / error |
+| :-- | --: | --: |
+| 1 px | 216k / - | 103k / 0.56% |
+| 4 px | - | 39k / 1.26% |
+| 8 px | 83k / 3.46% | **22k / 2.05%** |
+| 24 px | 56k / 9.35% | **12.5k / 3.05%** |
+
+A quarter of the triangles for a lower error at 8 px, and the 24 px cut goes from shards to whole buildings (crops in the chat log). This reopens the coarse bounce cut measured and rejected in Phases 5 and 6: that bias was geometric, from levels with 9-44 m of error; those levels now carry 1.7-3.6 m at the same triangle counts.
+
 ## Next (plan)
 
-- Ray-cost work against the Phase 1 baseline: rasterized primary hit, coarser cuts for bounce rays, merged acceleration structures, better samplers, MetalFX upscale.
-- Re-textured coarse levels for charted photogrammetry, so the DAG regains its depth without crossing seams.
+- Re-measure the coarse bounce cut on the new DAG (`bench_sbvg_pathtracer.cjs`, bounce-cut-{4,8,16}px); metallic-roughness atlases; a quad-aware pairing to lift the 81% paired share.
 - Phase 4: the a-trous denoiser on the GPU and temporal reuse.
 - Rays: rasterize the camera hit with the existing WebGPU cluster pass; coarser cuts for bounce and shadow rays; any-hit shadow rays (done); merged per-chunk acceleration structures; better samplers; MetalFX upscale.

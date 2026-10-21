@@ -194,7 +194,15 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
         texturedGlb = path.join(tmp, 'checker.glb');
         writeSphereGlb(texturedGlb, true);
         texturedSbvg = path.join(tmp, 'checker.sbvg');
-        await builder.build(texturedGlb, texturedSbvg);
+        const textured = await builder.build(texturedGlb, texturedSbvg);
+        // Re-textured coarse levels: most triangles share their atlas cell with an edge neighbour, and each level
+        // has a normal atlas beside its colour atlas.
+        expect(textured.stats.atlases.length).toBeGreaterThanOrEqual(5);
+        for (const atlas of textured.stats.atlases) {
+            expect(atlas.pairedCells).toBeGreaterThanOrEqual(0.5 * atlas.cells);
+            expect(fs.existsSync(path.join(tmp, `checker.atlas${atlas.level}.png`))).toBe(true);
+            expect(fs.existsSync(path.join(tmp, `checker.normal${atlas.level}.png`))).toBe(true);
+        }
     });
 
     it('probe names the device and says whether it ray traces', async () => {
@@ -270,8 +278,11 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
         };
         const gpu = await service.render({ ...common, outputDir: path.join(tmp, 'checker_gpu'), backend: 'metal' });
         const cpu = await service.render({ ...common, outputDir: path.join(tmp, 'checker_cpu'), backend: 'cpu' });
-        expect(gpu.stats.materials).toMatchObject({ source: 'glb', count: 1, images: 1, imagesDecoded: 1, texturesUploaded: 1 });
-        expect(cpu.stats.materials).toMatchObject({ source: 'glb', count: 1, imagesDecoded: 1, texturesUploaded: 0 });
+        // One glTF material and texture, plus a colour and a normal atlas per re-textured level; the cpu backend uploads nothing.
+        const atlasImages = 2 * gpu.stats.file.atlases;
+        expect(gpu.stats.materials).toMatchObject({ source: 'glb', count: 1, images: 1 + atlasImages, imagesDecoded: 1 + atlasImages, texturesUploaded: 1 + atlasImages });
+        expect(gpu.stats.materials.atlasMaterials).toBe(gpu.stats.file.atlases);
+        expect(cpu.stats.materials).toMatchObject({ source: 'glb', count: 1, texturesUploaded: 0 });
         expect(gpu.stats.file.leafTriangles).toBeGreaterThan(8000);
         expect(Math.abs(gpu.stats.rays - cpu.stats.rays) / cpu.stats.rays).toBeLessThan(0.005);
         const agreement = compareLinear(gpu, cpu);
@@ -346,18 +357,72 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
         expect(changed).toBeGreaterThan(0.2 * gpu.length);
     });
 
+    it('the scrambled Halton sampler converges to the PCG image with lower error per sample', async ctx => {
+        if (!device.raytracing) return ctx.skip();
+        const common = { sbvgPath: texturedSbvg, width: 160, height: 120, maxBounces: 4, seed: 11, lighting: sunLighting, camera: sphereCamera, materials: { glbPath: texturedGlb } };
+        const reference = await service.render({ ...common, outputDir: path.join(tmp, 'ref512'), samplesPerPixel: 512 });
+        const err = (r: MetalPathTraceResult) => {
+            const a = readLinearColor(r), b = readLinearColor(reference);
+            let sq = 0;
+            for (let i = 0; i < a.length; i++) sq += (a[i] - b[i]) ** 2;
+            return Math.sqrt(sq / a.length);
+        };
+        const pcg8 = await service.render({ ...common, outputDir: path.join(tmp, 'pcg8'), samplesPerPixel: 8 });
+        const sobol8 = await service.render({ ...common, outputDir: path.join(tmp, 'sobol8'), samplesPerPixel: 8, optimizations: { sampler: 'sobol' } });
+        const sobol64 = await service.render({ ...common, outputDir: path.join(tmp, 'sobol64'), samplesPerPixel: 64, optimizations: { sampler: 'sobol' } });
+        expect(sobol8.stats.optimizations.sampler).toBe('sobol');
+        expect(err(sobol8)).toBeLessThan(err(pcg8));
+        // Unbiased: more samples bring it to the reference, not to a different image.
+        expect(err(sobol64)).toBeLessThan(0.5 * err(sobol8));
+        expect(Math.abs(sobol64.stats.meanLinearLuminance / reference.stats.meanLinearLuminance - 1)).toBeLessThan(0.01);
+    });
+
+    it('coarse levels carry their own baked atlases and render the checkerboard without the fine geometry', async ctx => {
+        if (!device.raytracing) return ctx.skip();
+        const common = {
+            sbvgPath: texturedSbvg, width: 320, height: 240, samplesPerPixel: 32, maxBounces: 4, seed: 5, lighting: sunLighting, camera: sphereCamera,
+            materials: { glbPath: texturedGlb }
+        };
+        const fine = await service.render({ ...common, outputDir: path.join(tmp, 'atlas_fine'), lod: { thresholdPx: 1, finestLevel: 0 } });
+        const coarse = await service.render({ ...common, outputDir: path.join(tmp, 'atlas_coarse'), lod: { thresholdPx: 1, finestLevel: 3 } });
+        // The re-textured file: one glTF material, one atlas material per coarse level with a colour and a normal PNG, all uploaded.
+        expect(fine.stats.file.atlases).toBeGreaterThanOrEqual(5);
+        expect(fine.stats.materials.count).toBe(1);
+        expect(fine.stats.materials.imagesDecoded).toBe(1 + 2 * fine.stats.file.atlases);
+        expect(fine.stats.materials.texturesUploaded).toBe(1 + 2 * fine.stats.file.atlases);
+        expect(coarse.stats.cut.triangles).toBeLessThan(0.5 * fine.stats.cut.triangles);
+        // Level 3 of the sphere is a few thousand triangles with a 3 cm error: the baked checkerboard agrees with
+        // the full-detail render to a few percent in block means (silhouettes move, the texture does not).
+        const agreement = compareLinear(coarse, fine);
+        expect(Math.abs(agreement.meanRatio - 1)).toBeLessThan(0.02);
+        expect(agreement.blockMeanRelDiff).toBeLessThan(0.08);
+        // And it is the checkerboard, not clay: hue varies across the sphere as in the fine render.
+        const c = readLinearColor(coarse), f = readLinearColor(fine);
+        let coarseDiffers = 0, fineDiffers = 0, n = 0;
+        for (let i = 0; i < c.length; i += 3) {
+            if (c[i] === 1 && c[i + 1] === 1) continue;
+            n++;
+            if (Math.abs(c[i] / Math.max(c[i + 2], 1e-6) - 1) > 0.5) coarseDiffers++;
+            if (Math.abs(f[i] / Math.max(f[i + 2], 1e-6) - 1) > 0.5) fineDiffers++;
+        }
+        expect(coarseDiffers / n).toBeGreaterThan(0.5 * (fineDiffers / n));
+    });
+
     it('runs a resident session: frames accumulate for a view, a new view restarts them, close ends the process', async ctx => {
         if (!device.raytracing) return ctx.skip();
         const session = await service.openSession({ sbvgPath: texturedSbvg, glbPath: texturedGlb, lighting: sunLighting }, { dir: path.join(tmp, 'session') });
         try {
             expect(session.alive).toBe(true);
-            expect(session.opened).toMatchObject({ device: device.device, materials: { source: 'glb', count: 1, texturesUploaded: 1 } });
+            expect(session.opened).toMatchObject({ device: device.device, materials: { source: 'glb', count: 1 } });
+            // The glTF texture plus a colour and a normal atlas per re-textured level.
+            expect(session.opened!.materials.texturesUploaded).toBe(1 + 2 * session.opened!.file.atlases);
+            expect(session.opened!.file.atlases).toBeGreaterThanOrEqual(5);
             expect(session.opened!.file.leafTriangles).toBeGreaterThan(8000);
             expect(session.latestFrame()).toBeNull();
 
             const view = { width: 160, height: 120, camera: sphereCamera, targetSpp: 12 };
             const started = await session.setView(view);
-            expect(started).toMatchObject({ seq: 1, width: 160, height: 120, lighting: 'sky', targetSpp: 12 });
+            expect(started).toMatchObject({ seq: 1, width: 160, height: 120, renderWidth: 160, renderHeight: 120, renderScale: 1, sampler: 'sobol', lighting: 'sky', targetSpp: 12 });
             expect(started.cut.rebuilt).toBe(true);
             expect(started.cut.triangles).toBeGreaterThan(1000);
 
@@ -406,6 +471,16 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
                 session.on('frame', f => { if (f.seq === plain.seq) { clearTimeout(timer); resolve(f); } });
             });
             expect(plainFrame.historyPixels).toBe(0);
+            // Half-size tracing with a MetalFX upscale still delivers the view-sized frame.
+            const scaled = await session.setView({ ...view, renderScale: 0.5, sampler: 'pcg' });
+            expect(scaled).toMatchObject({ renderWidth: 80, renderHeight: 60, renderScale: 0.5, sampler: 'pcg', width: 160, height: 120 });
+            const scaledFrame = await new Promise<any>((resolve, reject) => {
+                const timer = setTimeout(() => reject(new Error('no upscaled frame')), 20_000);
+                session.on('frame', f => { if (f.seq === scaled.seq && f.done) { clearTimeout(timer); resolve(f); } });
+            });
+            expect(scaledFrame).toMatchObject({ renderWidth: 80, renderHeight: 60, width: 160, height: 120 });
+            expect(scaledFrame.upscaleMs).toBeGreaterThan(0);
+            expect(session.readFrame()!.rgba.length).toBe(160 * 120 * 4);
             // A view with a bad size is refused without killing the session.
             await expect(session.setView({ ...view, width: 2 })).rejects.toThrow(/between 8 and 8192/);
             expect(session.alive).toBe(true);

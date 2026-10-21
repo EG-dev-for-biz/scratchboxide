@@ -47,7 +47,7 @@ const INCLUDE_DIR = path.join(REPO_ROOT, 'packages/core/src/native/3d-engine/inc
 
 const clang = requireBinary(process.env.CXX || 'clang++', 'install clang++ (C++20)');
 /** sha256 of the .sbvg the builder writes for the determinism fixture (bumpySphere(60, 120) at [10, 2, -3]). */
-const DETERMINISTIC_FIXTURE_SHA256 = 'd4c4184c07d842e03e83dbacc0fb8cd70ace134f9090148142dacf58086a060e';
+const DETERMINISTIC_FIXTURE_SHA256 = '3c3029664abd68d2fe50ef3346a72c86091c74f81f0abda73ae9b333e3bcac02';
 const SCREENSHOTS = path.join(REPO_ROOT, 'test-results', 'screenshots');
 const ARCH_GLB = 'deploy/cloud-run/spatial-separator/assets/arch_constantine_sb_archi.glb';
 
@@ -253,6 +253,13 @@ describe.skipIf(!clang.ok)(withReason('Virtual geometry builder (C++20 cluster L
             expect(h.aabbMax[k] - h.aabbMin[k]).toBeLessThan(4.4);
         }
         expect(h.levelCount).toBeGreaterThanOrEqual(6);
+        // A closed surface simplifies all the way: no group is ever carried up unchanged, and the
+        // partition's leftover groups are merged rather than left stuck.
+        expect(sphereStats.levels.length).toBe(h.levelCount - 1);
+        for (const level of sphereStats.levels) {
+            expect(level.stuckGroups, `level ${level.level}`).toBe(0);
+            expect(level.mergedGroups).toBeGreaterThanOrEqual(0);
+        }
         expect(h.levels[0].level).toBe(h.levelCount - 1); // coarsest first
         expect(h.levels[h.levels.length - 1].level).toBe(0);
     });
@@ -494,10 +501,13 @@ describe.skipIf(!clang.ok)(withReason('Virtual geometry builder (C++20 cluster L
         expect(tool.resultPayload.artifact.data.virtualGeometry.buildStats.skippedPrimitives).toBe(1);
     });
 
-    it('writes format version 3 with uvs and materials; reads versions 1 and 2; refuses unknown versions clearly', () => {
-        expect(SBVG_VERSION).toBe(3);
-        expect(sphere.header.version).toBe(3);
+    it('writes format version 5 with uvs, materials and an atlas table naming colour and normal atlases; reads versions 1 to 4; refuses unknown versions clearly', () => {
+        expect(SBVG_VERSION).toBe(5);
+        expect(sphere.header.version).toBe(5);
         expect(sphere.header.materialCount).toBe(0);
+        // No materials, so nothing to re-texture: no atlases, and the file ends where the level blocks end.
+        expect(sphere.header.atlasCount).toBe(0);
+        expect(sphere.header.fileBytes).toBe(fs.statSync(path.join(tmp, 'sphere.sbvg')).size);
         // No glTF material on the fixture: every triangle says so, and the uv slots are present (zero).
         expect(sphere.materials.length).toBe(sphere.header.triangleCount);
         expect(sphere.materials.every(m => m === SBVG_NO_MATERIAL)).toBe(true);
@@ -524,9 +534,9 @@ describe.skipIf(!clang.ok)(withReason('Virtual geometry builder (C++20 cluster L
         expect(h1.levels[0]).toMatchObject({ byteOffset: v1.length, byteLength: 128 });
         expect(h1.skippedPrimitives).toBe(0);
 
-        const v4 = Buffer.from(v2);
-        v4.writeUInt32LE(4, 4);
-        expect(() => parseSbvgHeader(new Uint8Array(v4))).toThrow(/unsupported version 4.*rebuild/);
+        const v6 = Buffer.from(v2);
+        v6.writeUInt32LE(6, 4);
+        expect(() => parseSbvgHeader(new Uint8Array(v6))).toThrow(/unsupported version 6.*rebuild/);
     });
 
     it('is deterministic: the same fixture always gives the same bytes (no FMA contraction, total-order heap ties)', async () => {

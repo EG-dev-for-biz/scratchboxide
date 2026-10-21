@@ -90,6 +90,12 @@ export interface MetalPathTraceRequest {
     denoise?: boolean;
     /** With denoise on the metal backend, also run the CPU filter on the same raw frame and write denoised_cpu.f32. */
     denoiseCheck?: boolean;
+    /**
+     * Metal backend speed options, each measured by scripts/bench_sbvg_pathtracer.cjs. `sampler: 'sobol'`
+     * lowers the error per sample; `bounceThresholdPx`, `primaryRaster` and `accelFastBuild` are kept for
+     * measurement and were found slower or biased on photogrammetry.
+     */
+    optimizations?: { sampler?: 'pcg' | 'sobol'; bounceThresholdPx?: number; primaryRaster?: boolean; accelFastBuild?: boolean };
     exposureEv?: number;
     camera?: MetalPathTraceCamera | MetalPathTraceAutoCamera;
     timeoutMs?: number;
@@ -103,7 +109,7 @@ export interface MetalPathTraceStats {
     samplesPerPixel: number;
     maxBounces: number;
     lighting: 'sky' | 'studio';
-    file: { clusters: number; levels: number; vertices: number; leafTriangles: number };
+    file: { clusters: number; levels: number; vertices: number; leafTriangles: number; atlases: number };
     cut: { clusters: number; triangles: number; thresholdPx: number; finestLevel: number };
     /** Closest-hit and shadow rays traced, counted by the kernels. */
     rays: number;
@@ -119,13 +125,23 @@ export interface MetalPathTraceStats {
     meanLinearLuminance: number;
     exposureEv: number;
     denoised: boolean;
+    optimizations: {
+        accelFastBuild: boolean;
+        sampler: 'pcg' | 'sobol';
+        primaryRaster: boolean;
+        rasterMs: number;
+        bounceCut: { thresholdPx: number; clusters: number; triangles: number; accelerationBuildMs: number };
+    };
     denoiseBackend: 'metal' | 'cpu' | 'none';
     /** GPU time (metal) or wall time (cpu) of the filter, in ms. */
     denoiseMs: number;
     materials: {
         source: 'glb' | 'uniform';
         glbPath: string;
+        /** glTF materials of the GLB. */
         count: number;
+        /** Materials appended for the file's re-textured coarse levels, one atlas PNG each. */
+        atlasMaterials: number;
         images: number;
         imagesDecoded: number;
         /** Decoded images uploaded to the GPU (0 on the cpu backend). */
@@ -175,12 +191,16 @@ export interface MetalPathTraceView {
     denoise?: boolean;
     /** Reproject the previous view's denoised illumination into this one (default true; needs denoise). */
     temporal?: boolean;
+    /** Trace at this fraction of the view size (0.25 to 1, default 1) and let MetalFX scale the frame up. */
+    renderScale?: number;
+    /** Sample stream: per-pixel Owen-scrambled Halton (default, lower error per sample) or the CPU tracer's PCG32. */
+    sampler?: 'sobol' | 'pcg';
 }
 
 export interface MetalPathTraceOpened {
     device: string;
-    file: { clusters: number; levels: number; vertices: number; leafTriangles: number; materialCount: number; aabbMin: [number, number, number]; aabbMax: [number, number, number] };
-    materials: { source: 'glb' | 'uniform'; count: number; images: number; imagesDecoded: number; texturesUploaded: number };
+    file: { clusters: number; levels: number; vertices: number; leafTriangles: number; materialCount: number; atlases: number; aabbMin: [number, number, number]; aabbMax: [number, number, number] };
+    materials: { source: 'glb' | 'uniform'; count: number; atlasMaterials: number; images: number; imagesDecoded: number; texturesUploaded: number };
     openMs: number;
 }
 
@@ -188,6 +208,10 @@ export interface MetalPathTraceViewStarted {
     seq: number;
     width: number;
     height: number;
+    renderWidth: number;
+    renderHeight: number;
+    renderScale: number;
+    sampler: 'sobol' | 'pcg';
     cut: { clusters: number; triangles: number; thresholdPx: number; rebuilt: boolean; cutMs: number; accelerationBuildMs: number };
     lighting: 'sky' | 'studio';
     targetSpp: number;
@@ -209,6 +233,11 @@ export interface MetalPathTraceFrame {
     denoiseMs: number;
     /** Pixels that took illumination from the previous view's history. */
     historyPixels: number;
+    /** Size the frame was traced at; smaller than width x height when a renderScale below 1 was asked for. */
+    renderWidth: number;
+    renderHeight: number;
+    /** GPU time of the MetalFX upscale, 0 when the frame was traced at full size. */
+    upscaleMs: number;
     done: boolean;
 }
 
@@ -443,6 +472,7 @@ export class MetalPathTracerService {
             denoiseCheck: request.denoiseCheck ?? false
         };
         if (request.lod) config.lod = request.lod;
+        if (request.optimizations) config.optimizations = request.optimizations;
         if (request.lighting) config.lighting = request.lighting;
         if (request.material) config.material = request.material;
         if (request.materials) {
@@ -502,7 +532,7 @@ export class MetalPathTracerService {
                         sourcePath: helperSourcePath(),
                         includeDirs: [this.compiler.getSdkIncludePath()],
                         flags: defaultNativeFlags(['-fobjc-arc']),
-                        libs: ['-lz', '-framework', 'Metal', '-framework', 'Foundation'],
+                        libs: ['-lz', '-framework', 'Metal', '-framework', 'MetalFX', '-framework', 'Foundation'],
                         name: 'sbvg_pathtracer'
                     });
                     this.compileMs = result.cacheHit ? 0 : result.compileMs;

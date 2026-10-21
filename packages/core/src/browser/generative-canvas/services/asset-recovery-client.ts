@@ -102,14 +102,14 @@ export class AssetRecoveryClient {
      * Rebuilds `servedPaths` from the scene's own place when they have no recipe (files made before the store): the
      * user asked for it, so their earlier "unrecoverable" verdicts are forgotten and the job starts at once.
      */
-    rebuild(servedPaths: string[], stagedRequest: { query: string; isolate?: boolean; trees?: boolean; place?: { lat: number; lng: number; formattedAddress: string } }): void {
+    rebuild(servedPaths: string[], stagedRequest: { query: string; isolate?: boolean; trees?: boolean; place?: { lat: number; lng: number; formattedAddress: string } }, activeArtifact?: { id: string; type: string; data?: unknown }): void {
         for (const p of servedPaths) {
             this.settled.delete(p);
             this.queued.add(p);
         }
         if (this.batchTimer) clearTimeout(this.batchTimer);
         this.batchTimer = undefined;
-        void this.flush(stagedRequest);
+        void this.flush(stagedRequest, activeArtifact);
     }
 
     async cancel(): Promise<void> {
@@ -129,10 +129,10 @@ export class AssetRecoveryClient {
         return base ? `${base.replace(/\/+$/, '')}${p}` : p;
     }
 
-    private async flush(fallbackStagedRequest?: unknown): Promise<void> {
+    private async flush(fallbackStagedRequest?: unknown, activeArtifact?: unknown): Promise<void> {
         // one job at a time: paths that arrive during a run go in the next one
         if (this.state.job?.status === 'running') {
-            this.batchTimer = setTimeout(() => { this.batchTimer = undefined; void this.flush(fallbackStagedRequest); }, POLL_MS);
+            this.batchTimer = setTimeout(() => { this.batchTimer = undefined; void this.flush(fallbackStagedRequest, activeArtifact); }, POLL_MS);
             return;
         }
         const paths = [...this.queued];
@@ -140,7 +140,7 @@ export class AssetRecoveryClient {
         if (paths.length === 0) return;
         try {
             const res = await this.fetchImpl(this.url('/api/assets/recover'), withApiHeaders({
-                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paths, ...(fallbackStagedRequest ? { fallbackStagedRequest } : {}) })
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paths, ...(fallbackStagedRequest ? { fallbackStagedRequest } : {}), ...(activeArtifact ? { activeArtifact } : {}) })
             }));
             const body = await res.json().catch(() => ({}));
             if (!res.ok || !body?.job) throw new Error(body?.error || `${res.status} ${res.statusText}`);
