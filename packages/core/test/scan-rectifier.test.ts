@@ -753,6 +753,205 @@ describe('scan rectifier: thin walls keep their order and piers stay proud', () 
 });
 
 // ---------------------------------------------------------------------------------------------
+// 1e. Inclined planes: a gable house off the axes whose two crinkled roof halves were scanned at
+//     34 and 36 degrees, the steeper one also turned 1 degree off its wall
+// ---------------------------------------------------------------------------------------------
+describe('scan rectifier: pitched roof halves share one pitch and face their walls', () => {
+    let seed = 777;
+    const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+    const deg = Math.PI / 180;
+    const th = 17 * deg;
+    const u: V = [Math.cos(th), 0, Math.sin(th)];   // ridge direction (20 m)
+    const w: V = [-Math.sin(th), 0, Math.cos(th)];  // across the house (12 m)
+    const up: V = [0, 1, 0];
+    const add = (...vs: Array<[number, V]>): V => vs.reduce<V>((acc, [k, v]) => [acc[0] + k * v[0], acc[1] + k * v[1], acc[2] + k * v[2]], [0, 0, 0]);
+    const planP = (s: number, r: number, y: number) => add([s, u], [r, w], [y, up]);
+    const unit = (v: V): V => { const l = len(v); return [v[0] / l, v[1] / l, v[2] / l]; };
+    // the scanned roof planes: left faces -w at 34 deg, right faces w turned 1 deg toward u at 36 deg; both eaves at 8 m mid-length
+    const nL = unit(add([-Math.sin(34 * deg), w], [Math.cos(34 * deg), up]));
+    const hR = unit(add([Math.cos(1 * deg), w], [Math.sin(1 * deg), u]));
+    const nR = unit(add([Math.sin(36 * deg), hR], [Math.cos(36 * deg), up]));
+    type Plane = { n: V; d: number };
+    const L: Plane = { n: nL, d: dot(nL, planP(0, -6, 8)) };
+    const R: Plane = { n: nR, d: dot(nR, planP(0, 6, 8)) };
+    const wallMinus: Plane = { n: w, d: -6 }, wallPlus: Plane = { n: w, d: 6 };
+    const gable = (s: number): Plane => ({ n: u, d: s });
+    const meet = (a: Plane, b: Plane, c: Plane): V => {
+        const det3 = (m: number[][]) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        const A = [a.n, b.n, c.n].map((n) => [...n]), rhs = [a.d, b.d, c.d];
+        const D = det3(A);
+        return [0, 1, 2].map((k) => det3(A.map((row, i) => row.map((x, j) => (j === k ? rhs[i] : x)))) / D) as V;
+    };
+    const eL = (s: number) => meet(L, wallMinus, gable(s)), eR = (s: number) => meet(R, wallPlus, gable(s)), ridge = (s: number) => meet(L, R, gable(s));
+
+    const chunks: Array<{ positions: number[]; indices: number[]; label: string }> = [];
+    const ridgeVerts: number[] = [];
+    let base = 0;
+    const orient = (positions: number[], indices: number[], outN: V) => {
+        const P = (i: number): V => [positions[3 * i], positions[3 * i + 1], positions[3 * i + 2]];
+        for (let k = 0; k < indices.length; k += 3) {
+            const n = cross(sub(P(indices[k + 1]), P(indices[k])), sub(P(indices[k + 2]), P(indices[k])));
+            if (dot(n, outN) < 0) [indices[k + 1], indices[k + 2]] = [indices[k + 2], indices[k + 1]];
+        }
+    };
+    /** Bilinear grid over a planar quad c0 c1 c2 c3 (c0->c1 and c3->c2 along i); interior vertices jittered along outN. */
+    const quad = (label: string, c: [V, V, V, V], nu: number, nv: number, outN: V, jitter: number, ridgeRow = false) => {
+        const positions: number[] = [], indices: number[] = [];
+        for (let j = 0; j <= nv; j++) {
+            for (let i = 0; i <= nu; i++) {
+                const a = i / nu, b = j / nv;
+                const bottom = add([1 - a, c[0]], [a, c[1]]), top = add([1 - a, c[3]], [a, c[2]]);
+                const interior = i > 0 && i < nu && j > 0 && j < nv;
+                const e = interior ? (rand() * 2 - 1) * jitter : 0;
+                const p = add([1 - b, bottom], [b, top], [e, outN]);
+                positions.push(...p);
+                if (ridgeRow && j === nv) ridgeVerts.push(base + positions.length / 3 - 1);
+            }
+        }
+        for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
+            const a = j * (nu + 1) + i;
+            indices.push(a, a + 1, a + nu + 2, a, a + nu + 2, a + nu + 1);
+        }
+        orient(positions, indices, outN);
+        chunks.push({ positions, indices, label });
+        base += positions.length / 3;
+    };
+    /** Subdivided flat triangle A B C (n segments per edge). */
+    const triangle = (label: string, A: V, B: V, C: V, n: number, outN: V) => {
+        const positions: number[] = [], indices: number[] = [];
+        const id = new Map<string, number>();
+        for (let i = 0; i <= n; i++) for (let j = 0; j <= n - i; j++) {
+            id.set(`${i},${j}`, positions.length / 3);
+            positions.push(...add([1 - (i + j) / n, A], [i / n, B], [j / n, C]));
+        }
+        const g = (i: number, j: number) => id.get(`${i},${j}`)!;
+        for (let i = 0; i < n; i++) for (let j = 0; j < n - i; j++) {
+            indices.push(g(i, j), g(i + 1, j), g(i, j + 1));
+            if (i + j < n - 1) indices.push(g(i + 1, j), g(i + 1, j + 1), g(i, j + 1));
+        }
+        orient(positions, indices, outN);
+        chunks.push({ positions, indices, label });
+        base += positions.length / 3;
+    };
+    quad('ground', [[-60, 0, -60], [60, 0, -60], [60, 0, 60], [-60, 0, 60]], 12, 12, up, 0);
+    quad('wall-w', [planP(-10, -6, 0), planP(10, -6, 0), eL(10), eL(-10)], 10, 4, [-w[0], -w[1], -w[2]], 0.08);
+    quad('wall+w', [planP(-10, 6, 0), planP(10, 6, 0), eR(10), eR(-10)], 10, 4, w, 0.08);
+    for (const s of [-10, 10]) {
+        const outN: V = s < 0 ? [-u[0], -u[1], -u[2]] : u;
+        quad(`gable${s}`, [planP(s, -6, 0), planP(s, 6, 0), eR(s), eL(s)], 4, 4, outN, 0);
+        triangle(`gable-top${s}`, eL(s), eR(s), ridge(s), 4, outN);
+    }
+    // crinkle well above the 5 cm snap dead band, so the residual it leaves is small against the input's
+    quad('roofL', [eL(-10), eL(10), ridge(10), ridge(-10)], 10, 4, nL, 0.15, true);
+    quad('roofR', [eR(-10), eR(10), ridge(10), ridge(-10)], 10, 4, nR, 0.15);
+
+    const vertLabel: string[] = [];
+    let scan: Scan;
+    const glb = () => path.join(tmp, 'gable.glb');
+    const footprints = () => path.join(tmp, 'gable.footprints.txt');
+    const run = (name: string, extra: string[] = []) => {
+        const side = path.join(tmp, `${name}.rectify.bin`);
+        runCli(['--input', glb(), '--out', side, '--rays', '64', '--rig-cams', '12', '--rig-aerial-res', '160', '--rig-street-width', '256', '--threads', '4', '--footprints', footprints(), ...extra]);
+        return { out: readSidecar(side), stats: JSON.parse(fs.readFileSync(side.replace(/\.bin$/, '.json'), 'utf8')) };
+    };
+    /** Least-squares plane through a label's vertices (height field along the scanned normal), independent of the kernel. */
+    const fitPlane = (P: Float32Array, label: string, approxN: V) => {
+        const e3 = approxN, e1 = unit(cross(up, e3)), e2 = cross(e3, e1);
+        const m = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], rhs = [0, 0, 0];
+        const pts: Array<[number, number, number]> = [];
+        for (let v = 0; v < vertLabel.length; v++) {
+            if (vertLabel[v] !== label) continue;
+            const q = at(P, v), x = [dot(e1, q), dot(e2, q), 1], h = dot(e3, q);
+            pts.push([x[0], x[1], h]);
+            for (let a = 0; a < 3; a++) { rhs[a] += x[a] * h; for (let b = 0; b < 3; b++) m[a][b] += x[a] * x[b]; }
+        }
+        const det3 = (M: number[][]) => M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1]) - M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0]) + M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0]);
+        const D = det3(m);
+        const [a, b, c] = [0, 1, 2].map((k) => det3(m.map((row, i) => row.map((x, j) => (j === k ? rhs[i] : x)))) / D);
+        const n = unit(add([1, e3], [-a, e1], [-b, e2]));
+        const rms = Math.sqrt(pts.reduce((s, [x1, x2, h]) => s + (h - a * x1 - b * x2 - c) ** 2, 0) / pts.length) / Math.sqrt(1 + a * a + b * b);
+        return { n, rms, pitchDeg: Math.acos(n[1]) / deg, azDeg: Math.atan2(n[2], n[0]) / deg };
+    };
+    const mod90 = (a: number, b: number) => ((((a - b + 45) % 90) + 90) % 90) - 45;
+    let main: { out: Sidecar; stats: any };
+
+    beforeAll(() => {
+        writeGlb(glb(), chunks);
+        for (const ch of chunks) for (let i = 0; i < ch.positions.length / 3; i++) vertLabel.push(ch.label);
+        const corners = [planP(-10, -6, 0), planP(10, -6, 0), planP(10, 6, 0), planP(-10, 6, 0)];
+        fs.writeFileSync(footprints(), corners.map((p) => `${p[0]} ${p[2]}`).join(' ') + '\n');
+        scan = readGlbScan(glb());
+        main = run('gable');
+    }, 180_000);
+
+    it('makes the roof halves inclined regions and snaps both to one pitch', () => {
+        const r = main.stats.regions;
+        expect(r.inclinedRegions).toBeGreaterThanOrEqual(2);
+        expect(r.pitchSnapped).toBeGreaterThanOrEqual(2);
+        expect(r.inclinedAzimuthSnapped).toBeGreaterThanOrEqual(1);
+        const L0 = fitPlane(scan.positions, 'roofL', nL), R0 = fitPlane(scan.positions, 'roofR', nR);
+        const L1 = fitPlane(main.out.positions, 'roofL', nL), R1 = fitPlane(main.out.positions, 'roofR', nR);
+        expect(Math.abs(L0.pitchDeg - R0.pitchDeg)).toBeGreaterThan(1.8);
+        expect(Math.abs(L1.pitchDeg - R1.pitchDeg)).toBeLessThan(0.2);
+        for (const f of [L1, R1]) { expect(f.pitchDeg).toBeGreaterThan(34.4); expect(f.pitchDeg).toBeLessThan(35.6); }
+        expect(L0.rms).toBeGreaterThan(0.04);
+        expect(R0.rms).toBeGreaterThan(0.04);
+        expect(L1.rms).toBeLessThan(0.5 * L0.rms);
+        expect(R1.rms).toBeLessThan(0.5 * R0.rms);
+    });
+
+    it('turns the twisted half to face its wall and levels the ridge', () => {
+        const wallAz = fitPlane(main.out.positions, 'wall+w', w).azDeg;
+        const before = fitPlane(scan.positions, 'roofR', nR), after = fitPlane(main.out.positions, 'roofR', nR);
+        expect(Math.abs(mod90(before.azDeg, wallAz))).toBeGreaterThan(0.8);
+        expect(Math.abs(mod90(after.azDeg, wallAz))).toBeLessThan(0.2);
+        const spread = (P: Float32Array) => { const ys = ridgeVerts.map((v) => P[3 * v + 1]); return Math.max(...ys) - Math.min(...ys); };
+        expect(spread(scan.positions)).toBeGreaterThan(0.08);
+        expect(spread(main.out.positions)).toBeLessThan(0.5 * spread(scan.positions));
+        // every ridge vertex sits on the line where the two output roof planes meet, up to the 5 cm snap dead band
+        const L1 = fitPlane(main.out.positions, 'roofL', nL);
+        const plane = (f: { n: V }, label: string) => {
+            let s = 0, k = 0;
+            for (let v = 0; v < vertLabel.length; v++) if (vertLabel[v] === label) { s += dot(f.n, at(main.out.positions, v)); k++; }
+            return { n: f.n, d: s / k };
+        };
+        const pl = plane(L1, 'roofL'), pr = plane(after, 'roofR');
+        const lineDir = unit(cross(pl.n, pr.n));
+        const p0 = meet(pl, pr, { n: lineDir, d: 0 });
+        expect(Math.abs(lineDir[1])).toBeLessThan(Math.sin(0.2 * deg));
+        for (const v of ridgeVerts) expect(len(cross(sub(at(main.out.positions, v), p0), lineDir))).toBeLessThan(0.06);
+    });
+
+    it('stays within the displacement budget, flips nothing and keeps the ridge closed', () => {
+        const disp = displacement(scan.positions, main.out.positions);
+        expect(disp.max).toBeLessThanOrEqual(0.75);
+        const fc = flipsAndCollapses(scan.positions, main.out.positions, scan.triangles, main.out.flags);
+        expect(fc.flips).toBe(0);
+        expect(fc.collapsedKept).toBe(0);
+        // the two halves' ridge rows were welded at the input: every left ridge vertex still has a right partner on it
+        const right = vertLabel.map((l, v) => (l === 'roofR' ? v : -1)).filter((v) => v >= 0);
+        for (const v of ridgeVerts) {
+            const p = at(scan.positions, v);
+            const partner = right.find((q) => len(sub(at(scan.positions, q), p)) < 1e-4)!;
+            expect(partner).toBeDefined();
+            expect(len(sub(at(main.out.positions, partner), at(main.out.positions, v)))).toBeLessThan(0.01);
+        }
+        renderComparison(path.join(SHOTS, 'scan_rectifier_gable_displacement.png'), scan, main.out, {
+            // down the ridge from the +u gable end and above, so both roof halves and the ridge line read
+            origin: [0, 8, 0], right: w, up: unit(add([0.866, up], [-0.5, u])), width: 520, height: 420, pxPerM: 16
+        });
+    });
+
+    it('leaves the roof crinkled without inclined regions', () => {
+        const off = run('gable_noinclined', ['--no-inclined-regions']);
+        expect(off.stats.regions.inclinedRegions).toBe(0);
+        const L0 = fitPlane(scan.positions, 'roofL', nL), L1 = fitPlane(off.out.positions, 'roofL', nL);
+        expect(L1.rms).toBeGreaterThan(0.8 * L0.rms);
+        expect(Math.abs(L1.pitchDeg - L0.pitchDeg)).toBeLessThan(0.2);
+    }, 120_000);
+});
+
+// ---------------------------------------------------------------------------------------------
 // 2. Real Google 3D tile (ESB district)
 // ---------------------------------------------------------------------------------------------
 describe.skipIf(!tileReq.ok)(withReason('scan rectifier: real ESB district tile', tileReq), () => {
