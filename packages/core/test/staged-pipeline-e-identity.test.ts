@@ -168,6 +168,22 @@ describe('enhanced mode: the identity gate', () => {
         shot('identity_rejected.png', [wall({ bays: 4 }), wall({ brick: [214, 208, 196] }), noise]);
     });
 
+    it('does not hold an unseen wall to counts its own fragmentary tile view undercounts (coverage between 0.25 and 0.35)', async () => {
+        // a 30%-covered band (between the old 0.25 cutoff and LOW_COVERAGE's 0.35): the tile side sent to the counter is
+        // mostly grey, so its own storey/bay run-count reads far fewer than the plate's, exactly the failure a real build
+        // (Haughwout, scene-stg-d9660711) hit at 30-33% coverage before this threshold moved to match LOW_COVERAGE
+        const use = new Uint8Array(W * H);
+        const bandRows = Math.round(0.3 * H);
+        for (let y = Math.floor((H - bandRows) / 2); y < Math.floor((H - bandRows) / 2) + bandRows; y++) for (let x = 0; x < W; x++) use[y * W + x] = 1;
+        const t = { width: W, height: H, rgba: wall({ noise: 18, blur: 3 }), source: new Uint8Array(W * H) };
+        const plate = wall({ dx: driftX, dy: driftY });
+        const client = async (r: PlateRequest) => ({ bytes: answer(plate, r), modelUsed: 'fake-lite' });
+        const r = await enhanceWall(face(), t, use, { client, models: ['fake-lite'], locationName: 'X', source: 3, counter, unseen: { source: 3 } });
+        expect(r.identity!.storeys.measured).toBe(false);
+        expect(r.why).toMatch(/its storeys and bays cannot be counted on it/);
+        expect(r.accepted).toBe(true);
+    });
+
     it('does not hold a wall to counts nobody could read, and says so', async () => {
         const t = { width: W, height: H, rgba: wall({ noise: 18, blur: 3 }), source: new Uint8Array(W * H) };
         const plate = wall({ dx: driftX });
