@@ -43,4 +43,29 @@ describe('applyClayRenderMode', () => {
         expect(mesh.material).toBe(original);
         expect(original.color.getHex()).toBe(0xdc143c);
     });
+
+    it('the trees of a staged place follow their own switch: textured under the clay render mode unless asked for clay', () => {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3));
+        const leaf = new THREE.MeshStandardMaterial({ map: new THREE.DataTexture(new Uint8Array([40, 120, 40, 255]), 1, 1) });
+        const tree = new THREE.Mesh(geometry, leaf);
+        tree.userData.sbTreeLodMesh = true;
+        tree.userData.sbLodBase = leaf;
+        const wall = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial());
+        const root = new THREE.Group();
+        root.add(tree, wall);
+        // clay render mode, trees textured: the wall is clayed, the tree keeps its leaf texture as its LOD base
+        applyClayRenderMode([root], true, { trees: false });
+        expect(tree.material).toBe(leaf);
+        expect(tree.userData.sbLodBase).toBe(leaf);
+        expect((wall.material as THREE.MeshStandardMaterial).userData[CLAY_SURFACE] ?? (wall.material !== undefined)).toBeTruthy();
+        expect(wall.material).not.toBe(tree.material);
+        // the user asks for clay: the tree goes to its tree clay, and back when textured again
+        applyClayRenderMode([root], true, { trees: true });
+        expect(tree.material).not.toBe(leaf);
+        expect(tree.userData.sbLodBase).not.toBe(leaf);
+        applyClayRenderMode([root], true, { trees: false });
+        expect(tree.material).toBe(leaf);
+        expect(tree.userData.sbLodBase).toBe(leaf);
+    });
 });

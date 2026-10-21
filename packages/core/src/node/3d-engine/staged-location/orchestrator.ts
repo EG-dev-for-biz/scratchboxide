@@ -82,6 +82,7 @@ import {
 import { VisionModelChain, type VisionGenAIClient } from '../../gemini/vision-model-chain';
 import { segmentOwnershipViews } from './ownership-masks';
 import { geodeticToScan, loadScanMesh, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
+import { TERRAIN_INNER_RADIUS_M, TERRAIN_INNER_STEP_M, TERRAIN_OUTER_STEP_M, TERRAIN_RADIUS_M, buildTerrainMesh, planTerrainGrid, writeTerrainGlb } from './terrain-surround';
 import { readGlbScene, renderFrameDepth, sceneToRenderMesh } from '../../spatial/StreetViewPoseRegistrar';
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
 import { StageCache, sha256File, stageKey, stagedReplyCache, type CachedStage } from './stage-cache';
@@ -185,6 +186,8 @@ export const STAGES = {
     // the tiles have committed and the buildings they do not cover are kept as their own layer
     vector: { order: 0, title: 'Google vector massing', budgetMs: 120_000 },
     tiles: { order: 1, title: 'Google 3D Tiles', budgetMs: 360_000 },
+    // the real ground around the place from the Google Elevation API, out to TERRAIN_RADIUS_M, under everything else
+    terrain: { order: 0, title: 'Surrounding terrain', budgetMs: 120_000 },
     survey: { order: -1, title: 'Surveying the four faces', budgetMs: EVIDENCE_DISCOVERY_ALLOWANCE_MS + SURVEY_IMAGE_TIMEOUT_MS + SURVEY_VISION_TIMEOUT_MS + 15_000 },
     evidence: { order: -1, title: 'Street View close-ups', budgetMs: EVIDENCE_STAGE_BUDGET_MS + 30_000 + MATCH_TIMEOUT_MS + 60_000 + EDGE_REGISTRATION_BUDGET_MS + 15_000 + JOINT_REGISTRATION_BUDGET_MS + 30_000 },
     'trees-measure': { order: -1, title: 'Measuring the trees', budgetMs: 300_000 },
@@ -302,6 +305,8 @@ export interface ScanFitDeps {
 export interface StagedLocationDeps {
     cache: StageCache;
     geocode(query: string, signal?: AbortSignal): Promise<ResolvedPlace>;
+    /** Heights above mean sea level (metres) for geodetic points, in order (the Google Elevation API); absent without a key. */
+    elevation?: { sample(points: Array<{ lat: number; lng: number }>, signal?: AbortSignal): Promise<number[]> };
     /** Extracts the leaves within radiusM of (lat, lng) into `outDir` (textured.glb, geometry.glb). */
     extract(req: { lat: number; lng: number; radiusM: number; outDir: string; place: ResolvedPlace; signal?: AbortSignal; onProgress?: (message: string) => void }): Promise<StagedExtraction>;
     vegetation: {
@@ -441,8 +446,6 @@ class StagedRun {
     private closed = false;
     /** The active scene this run is staged into, split (kept-structure.ts); set once the place is resolved. */
     carried?: ActiveScenePartition;
-    /** A district's remesh took the scan's own textures as its twin (the textures stage). */
-    scanTextures?: { layer: string; treesTakenOut: boolean };
     /** Applied to every layer as it commits (the district without the kept structure's own scan); it may return the layer unchanged. */
     layerTransform?: (layer: StagedLayer, meta: StagedLayerObjectMeta) => StagedLayer;
 
@@ -1395,6 +1398,47 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const extraction = t.extraction;
         const structure = request.isolate && t.sizedTo === 'structure' ? t.structure : undefined;
         const isolateMode = !!structure;
+
+        // ---------------- terrain (starts now and runs beside everything else; needs only the extraction's frame) ----------------
+        if (!deps.elevation) {
+            runner.skip('terrain', 'no Google Maps API key for the Elevation API, so the ground around the place is not measured');
+        } else {
+            const elevation = deps.elevation;
+            siblings.push(runner.stage({
+                id: 'terrain',
+                run: async io => {
+                    const origin: GeodeticOrigin = { lat: placeValue!.lat, lng: placeValue!.lng, heightMeters: extraction.originEllipsoidalHeightM };
+                    const holeRadiusM = Math.max(0, extraction.coveredRadiusM - TERRAIN_INNER_STEP_M / 2);
+                    const key = stageKey('terrain/v1', origin.lat.toFixed(6), origin.lng.toFixed(6), origin.heightMeters.toFixed(2), TERRAIN_RADIUS_M, TERRAIN_INNER_RADIUS_M, TERRAIN_INNER_STEP_M, TERRAIN_OUTER_STEP_M, Math.round(holeRadiusM));
+                    run.keys.terrain = key;
+                    const key8 = key.slice(0, 8);
+                    const entry = await cache.run<{ minY: number; maxY: number; samples: number; holeTriangles: number }>('terrain', key, async dir => {
+                        const plan = planTerrainGrid(origin);
+                        io.progress(`measuring the ground at ${plan.points.length.toLocaleString('en-US')} points out to ${TERRAIN_RADIUS_M / 1000} km`);
+                        const heights = await elevation.sample(plan.points, io.signal);
+                        const mesh = buildTerrainMesh(origin, plan, heights, holeRadiusM);
+                        writeTerrainGlb(path.join(dir, 'terrain.glb'), mesh, { radiusM: TERRAIN_RADIUS_M, holeRadiusM, samples: plan.points.length, source: 'Google Elevation API (EGM96)' });
+                        return { value: { minY: mesh.minY, maxY: mesh.maxY, samples: plan.points.length, holeTriangles: mesh.holeTriangles }, inputs: { origin, radiusM: TERRAIN_RADIUS_M, holeRadiusM } };
+                    }, { publish: () => [{ from: 'terrain.glb', as: `${base}_terrain_${key8}.glb` }], bypass: bypass('terrain') });
+                    run.cacheStatus.terrain = entry.cached ? 'hit' : 'miss';
+                    const pub = entry.published[0];
+                    const layer: StagedLayer = {
+                        objectId: layerObjectId(key, 'l0'), stage: 'terrain', layer: 'l0', order: STAGES.terrain.order, url: pub.url, bytes: pub.bytes,
+                        provenance: {
+                            label: 'measured', measuredGeometry: true,
+                            method: `Google Elevation API heightfield (EGM96 mean sea level into the tile frame), ${TERRAIN_INNER_STEP_M} m grid to ${TERRAIN_INNER_RADIUS_M / 1000} km and ${TERRAIN_OUTER_STEP_M} m to ${TERRAIN_RADIUS_M / 1000} km, left out under the tiles`,
+                            sources: [{ kind: 'elevation', id: `terrain:${key8}` }],
+                            note: `${entry.value.samples.toLocaleString('en-US')} measured heights, ${(entry.value.maxY - entry.value.minY).toFixed(1)} m of relief`
+                        },
+                        provenanceLabels: ['measured'], supersedes: [], revealAfter: [],
+                        reveal: { durationMs: 1200, stagger: 0.4, crossfadeFrom: [] },
+                        cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pub.path)
+                    };
+                    run.commit(layer, { source: 'GoogleElevation', resolvedAddress: placeValue!.formattedAddress, extra: { terrainRadiusM: TERRAIN_RADIUS_M, holeRadiusM, samples: entry.value.samples } });
+                    return { status: 'committed', source: `Google Elevation API: ${entry.value.samples.toLocaleString('en-US')} heights out to ${TERRAIN_RADIUS_M / 1000} km`, layers: [layer], cached: entry.cached, builtAtMs: entry.builtAtMs };
+                }
+            }).catch(err => { if (err?.name === 'AbortError') throw err; run.emit('terrain', 'failed', { reason: errorMessage(err) }); return undefined; }));
+        }
 
         // ---------------- survey (pass 1: starts now and runs beside the remesh and the fit; needs only the structure pick) ----------------
         const visionForSurvey = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
@@ -4058,7 +4102,6 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
         ...(exemptInferred.length ? { exemptInferred } : {}),
         ...(gate.exemptionsRefused.length || refusedHere.length ? { exemptionsRefused: [...refusedHere, ...gate.exemptionsRefused] } : {}),
         droppedNotResolvable: f.rebuild.droppedNotResolvable,
-        ...(run.scanTextures ? { scanTextures: run.scanTextures } : {}),
         ...(f.textures ? { textures: { shares: f.textures.shares, views: f.textures.views, modelsUsed: f.textures.modelsUsed, layers: f.textures.layers.map(l => l.layer), totalMs: f.textures.record.timingsMs.total ?? 0, ...(f.textures.tileUnavailable ? { tileUnavailable: f.textures.tileUnavailable } : {}), ...(f.textures.viewsUnavailable ? { viewsUnavailable: f.textures.viewsUnavailable } : {}) } } : {})
     };
     const switchPills = buildSwitchLocationPills({ ...f.place, ...(f.place.alternatives?.length ? { alternatives: f.place.alternatives } : {}) }, { query: f.request.query, isolate: f.request.isolate, radiusM: f.request.radiusM, trees: f.request.trees, stageIntoActiveScene: f.request.stageIntoActiveScene });

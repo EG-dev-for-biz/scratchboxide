@@ -278,7 +278,7 @@ export class TileClayProcessor {
   static applyClayMaterial(
     root: THREE.Object3D,
     presetOrConfig?: ClayPresetId | ClayMaterialConfig,
-    options?: { recursive?: boolean; cavityShading?: boolean }
+    options?: { recursive?: boolean; cavityShading?: boolean; skip?: (mesh: THREE.Mesh) => boolean }
   ): void {
     const isRecursive = options?.recursive ?? true;
     const clayMat = this.createClayMaterial(presetOrConfig);
@@ -287,6 +287,8 @@ export class TileClayProcessor {
       if (!mesh || !mesh.isMesh) return;
       // a mesh that draws its own authored material (a staged layer's textured twin) is never clayed over
       if (mesh.userData?.sbKeepAuthoredMaterial) return;
+      // the caller's own exceptions (the trees of a staged place shown textured)
+      if (options?.skip?.(mesh)) return;
 
       // Enable casting and receiving shadows for depth cues on the clay surface
       mesh.castShadow = true;

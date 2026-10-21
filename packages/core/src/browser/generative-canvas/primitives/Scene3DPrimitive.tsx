@@ -1132,6 +1132,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // Rendering options: a scene that names no mode is textured (each surface's own material); clay only when asked for
     const [renderMode, setRenderMode] = React.useState<Scene3DRenderMode>(data?.renderMode || DEFAULT_SCENE_RENDER_MODE);
     const renderModeRef = useLatest(renderMode);
+    // The trees of a staged place follow the staged build's clay/textured switch (textured by default): clay only
+    // when that switch says clay, while the other layers wait in clay for their twins (texturedTwins.ts).
+    const stagedMaterialMode = readStagedBuild(sceneData)?.materialMode;
+    const treesClay = renderMode === 'clay' && (!readStagedBuild(sceneData) || stagedMaterialMode === 'clay');
+    const treesClayRef = useLatest(treesClay);
     const [cameraMode, setCameraMode] = React.useState<'orbit' | 'fps'>('orbit');
     const [worldBranch, setWorldBranch] = React.useState<string>(data?.worldBranch || 'earth/main');
     const [hasGeoCoordinates, setHasGeoCoordinates] = React.useState<boolean>(false);
@@ -1671,7 +1676,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     // render mode swaps them reversibly (applyClayRenderMode).
                     for (const child of liveScene.children) {
                         if (child.name.startsWith(EXTERNAL_OBJECT_ROOT_PREFIX) && !child.userData.sbEnvironment) continue;
-                        TileClayProcessor.applyClayMaterial(child, data.clayPreset as any);
+                        TileClayProcessor.applyClayMaterial(child, data.clayPreset as any, { skip: mesh => !treesClayRef.current && !!mesh.userData?.sbTreeLodMesh });
                     }
                 }
             }
@@ -3258,7 +3263,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                         const merged = mergeStagedParts(model);
                         if (merged) model.userData.sbMergedReport = merged;
                     }
-                    applyClayRenderMode([model], renderModeRef.current === 'clay');
+                    applyClayRenderMode([model], renderModeRef.current === 'clay', { trees: treesClayRef.current });
                     // An explicit material on the object wins over the clay default.
                     syncObjectMaterial(model, latestDef(obj).material, renderModeRef.current === 'clay');
                     currentMap.set(obj.id, model);
@@ -3411,8 +3416,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             scene.getObjectByName('scratchbox-cpp-generated-root'),
             ...Array.from(customMeshRegistryRef.current.values(), e => e.mesh),
             ...Array.from(externalObjectsMapRef.current.values())
-        ], renderMode === 'clay');
-    }, [renderMode]);
+        ], renderMode === 'clay', { trees: treesClay });
+    }, [renderMode, treesClay]);
 
     React.useEffect(() => {
         // Registry outlives individual syncs; free everything on unmount.
