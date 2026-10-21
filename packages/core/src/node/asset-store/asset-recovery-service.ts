@@ -141,10 +141,12 @@ export class AssetRecoveryService {
     }
 
     private async run(job: RecoveryJob, signal: AbortSignal, opts: RecoveryStartOptions): Promise<void> {
-        // 1. the store
+        // 1. the store. An explicit rebuild (a fallback request) re-checks paths that point at a rebuilt file: that
+        // file was matched by name, and a later run may hold the right one.
         for (const item of job.items) {
             if (item.outcome !== 'pending') continue;
-            if (this.store.lookup(item.path)) {
+            const found = this.store.lookup(item.path);
+            if (found && !(opts.fallbackStaged && found.rebuilt)) {
                 item.outcome = 'restored';
                 item.detail = 'served from the asset store';
                 this.materialize(item);
@@ -174,6 +176,11 @@ export class AssetRecoveryService {
             const record = this.store.record(item.path);
             if (!record) {
                 withoutRecipe(item, 'this file was never recorded in the asset store, so there is no recipe to rebuild it from');
+                continue;
+            }
+            if (record.rebuilt && fallbacks) {
+                // re-matched against the fallback run's files, and re-pointed only when a different file matches
+                withoutRecipe(item, 'rebuilt earlier');
                 continue;
             }
             const recipe = record.recipeId ? this.store.recipe(record.recipeId) : undefined;
@@ -216,7 +223,8 @@ export class AssetRecoveryService {
                     ...(opts.activeArtifact ? { activeArtifact: opts.activeArtifact } : {})
                 });
                 const produced = new Map<string, string>();
-                const urls = new Set<string>([...result.layers.map(l => l.url), ...(result.runId ? this.store.servedByRecipe(`staged:${result.runId}`).map(s => s.path) : [])]);
+                // never a rebuilt alias (a lost name pointed at a file): only files a run published under their own name
+                const urls = new Set<string>([...result.layers.map(l => l.url), ...(result.runId ? this.store.servedByRecipe(`staged:${result.runId}`).filter(s => !s.rebuilt).map(s => s.path) : [])]);
                 // the run's own files first; then files other runs published at the same place (a twin the background
                 // texture pass published after an earlier run ended), newest first
                 for (const url of [...urls, ...this.publishedAtSamePlace(request, result.runId)]) {
@@ -226,9 +234,10 @@ export class AssetRecoveryService {
                 for (const item of group.items) {
                     const key = layerNameKey(item.path);
                     const replacement = key ? produced.get(key) : undefined;
-                    if (this.store.lookup(item.path)) {
+                    const current = this.store.lookup(item.path);
+                    if (current && (!current.rebuilt || !replacement || this.store.lookup(replacement)?.sha256 === current.sha256)) {
                         item.outcome = 'restored';
-                        item.detail = `published again by run ${result.runId}`;
+                        item.detail = current.rebuilt ? `already rebuilt as ${path.posix.basename(replacement ?? item.path)}` : `published again by run ${result.runId}`;
                         this.materialize(item);
                         continue;
                     }
@@ -296,7 +305,7 @@ export class AssetRecoveryService {
             const theirs = placeOf(body?.place) ?? placeOf(body?.request);
             if (!samePlace(want, theirs)) continue;
             for (const row of this.store.servedByRecipe(recipe.id)) {
-                if (this.store.lookup(row.path)) out.push(row.path);
+                if (!row.rebuilt && this.store.lookup(row.path)) out.push(row.path);
             }
         }
         return out;

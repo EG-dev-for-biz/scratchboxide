@@ -232,4 +232,26 @@ describe('AssetRecoveryService', () => {
         expect(store.events({ subject: '/models/wsa_new_york_iso_l3b_8001dfec.glb' })[0].kind).toBe('asset.materialized');
         store.close();
     });
+
+    it('re-points a path that an earlier rebuild matched to the wrong layer when an explicit rebuild finds the right one', async () => {
+        const store = new DurableAssetStore(path.join(HOME, 'home-g'));
+        store.putFile(writeFile(glbBytes(100, 1)), { servedPath: '/models/wsa_sq_tiles_aaaaaaaa_around_bbbbbbbb.glb', origin: 'staged-location', recipeId: 'staged:aaaaaaaa' });
+        store.putFile(writeFile(glbBytes(200, 2)), { servedPath: '/models/wsa_sq_remesh_aaaaaaaa_around_bbbbbbbb.glb', origin: 'staged-location', recipeId: 'staged:aaaaaaaa' });
+        // the earlier (wrong) match: the lost remesh carve points at the tiles carve
+        store.alias('/models/wsa_ny_remesh_11111111_around_22222222.glb', '/models/wsa_sq_tiles_aaaaaaaa_around_bbbbbbbb.glb', { origin: 'recovery', rebuilt: true });
+        const rebuild: StagedRebuilder = async () => ({ runId: 'aaaaaaaa', layers: [] });
+        const service = new AssetRecoveryService(store, { workspaceRoot: path.join(HOME, 'checkout-g'), rebuildStaged: rebuild });
+        const lost = '/models/wsa_ny_remesh_11111111_around_22222222.glb';
+        // automatic recovery leaves a present file alone
+        const auto = await settled(service, service.start([lost]).id);
+        expect(auto.items[0].outcome).toBe('restored');
+        // an explicit rebuild re-matches it
+        const job = await settled(service, service.start([lost], { fallbackStaged: { request: { query: 'WSA', isolate: false, trees: true } } }).id);
+        expect(job.items[0]).toMatchObject({ outcome: 'rebuilt', detail: 'rebuilt by run aaaaaaaa as wsa_sq_remesh_aaaaaaaa_around_bbbbbbbb.glb' });
+        expect(fs.readFileSync(store.lookup(lost)!.file)).toEqual(glbBytes(200, 2));
+        // and a second explicit rebuild finds nothing better to do
+        const again = await settled(service, service.start([lost], { fallbackStaged: { request: { query: 'WSA', isolate: false, trees: true } } }).id);
+        expect(again.items[0]).toMatchObject({ outcome: 'restored', detail: 'already rebuilt as wsa_sq_remesh_aaaaaaaa_around_bbbbbbbb.glb' });
+        store.close();
+    });
 });
