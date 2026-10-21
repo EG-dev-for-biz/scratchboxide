@@ -23,10 +23,15 @@ import { thinkingConfigFor } from './thinking-config';
  * Only the deciding stream reaches the chat; the other is discarded unseen. Every later call (after tool results)
  * goes to the chat model. The outcome (who routed, why) is logged and shown on the reply's provenance.
  *
- * SCRATCHBOX_CHAT_ROUTER selects the router: `off`, a Gemini model id, or `<model>@<LOW|MEDIUM|HIGH>` for a
- * thinking level. The default is chosen from the chat routing eval (docs/processes/fast_chat_routing.md).
+ * SCRATCHBOX_CHAT_ROUTER selects the router: `off`, a Gemini model id, `<model>@<LOW|MEDIUM|HIGH>` for a thinking
+ * level, or `@<level>` for the chat model itself at that level. The default, `@LOW`, is the chat model at a low
+ * thinking level: in the chat routing eval (docs/processes/fast_chat_routing.md, 2026-10-20) it chose tools as well
+ * as the reference or better (95% agreement, judged better 4 to 1) and answered the first call in a median 4.7 s
+ * against 10.1 s at MEDIUM, where the model spent 300-600 thought tokens on most routing calls. Text answers stay
+ * at the chat model's own level. gemini-3.8-flash as router was faster (2.2 s) but chose worse (judged 2 to 6), so
+ * it is not the default.
  */
-export const DEFAULT_CHAT_ROUTER = 'off';
+export const DEFAULT_CHAT_ROUTER = '@LOW';
 
 export interface RouterConfig {
     model: string;
@@ -39,7 +44,8 @@ export interface RouterConfig {
 export function routerConfig(chatModel: string, setting: string | undefined = process.env.SCRATCHBOX_CHAT_ROUTER ?? DEFAULT_CHAT_ROUTER): RouterConfig | undefined {
     const value = (setting || '').trim();
     if (!value || value === 'off' || value === '0' || value === 'false') return undefined;
-    const [model, level] = value.split('@');
+    const [named, level] = value.split('@');
+    const model = named || chatModel;
     if (!/^gemini-[\w.-]+$/.test(model)) throw new Error(`SCRATCHBOX_CHAT_ROUTER must be "off", a Gemini model id or <model>@<LOW|MEDIUM|HIGH>; got "${value}"`);
     let thinkingConfig: GeminiThinkingConfig | undefined;
     if (level) {
@@ -48,7 +54,7 @@ export function routerConfig(chatModel: string, setting: string | undefined = pr
         thinkingConfig = thinkingConfigFor(model, upper === 'LOW' ? 512 : upper === 'MEDIUM' ? 1024 : 4096);
     }
     if (model === chatModel && !thinkingConfig) return undefined;
-    return { model, thinkingConfig, label: value };
+    return { model, thinkingConfig, label: named ? value : `${model}${value}` };
 }
 
 /** What a streamed reply has shown so far. */

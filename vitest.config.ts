@@ -19,7 +19,9 @@ export default defineConfig({
         silent: 'passed-only',
         pool: 'forks',
         env: {
-            SCRATCHBOX_TEST: '1'
+            SCRATCHBOX_TEST: '1',
+            // Tests exercise the chat model's own first call; the routing race (fast-router.ts) is tested on its own.
+            SCRATCHBOX_CHAT_ROUTER: 'off'
         }
     }
 });

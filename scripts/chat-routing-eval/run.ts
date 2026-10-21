@@ -211,6 +211,8 @@ async function withRetry<T>(fn: () => Promise<T & { ok: boolean; error?: string 
 
 // ---------------------------------------------------------------- compare
 
+const JUDGE_VOTES = Number(process.env.EVAL_JUDGE_VOTES || 3);
+
 /** The arguments that decide what a call does, per tool; other tools compare their scalar arguments. */
 const KEY_ARGS: Record<string, string[]> = {
     google_3d_tiles_get_clay: ['address', 'location', 'query', 'isolate', 'radiusMeters', 'stageIntoActiveScene'],
@@ -313,11 +315,16 @@ async function main(): Promise<void> {
             const args = sameTool && a.tool ? argAgreement(a.tool, a.args, b.args) : undefined;
             const row: any = { id: r.id, family: r.family, ref: a.tool || 'TEXT', var: b.tool || 'TEXT', sameTool, args };
             if (!sameTool || (args !== undefined && args < 1)) {
-                const j = await withRetry(async () => ({ ok: true, ...(await judge(service, r, a, b)) }));
-                row.judge = (j as any).winner; row.reason = (j as any).reason;
+                // Three blind judgements (order shuffled each time); the majority decides, else a tie.
+                const votes: Array<{ winner: string; reason: string }> = [];
+                for (let k = 0; k < JUDGE_VOTES; k++) votes.push(await withRetry(async () => ({ ok: true, ...(await judge(service, r, a, b)) })) as any);
+                const count = (w: string) => votes.filter(v => v.winner === w).length;
+                row.judge = count('var') * 2 > JUDGE_VOTES ? 'var' : count('ref') * 2 > JUDGE_VOTES ? 'ref' : 'tie';
+                row.votes = votes.map(v => v.winner).join(',');
+                row.reason = votes.find(v => v.winner === row.judge)?.reason ?? votes[0].reason;
             }
             rows.push(row);
-            console.log(`${r.id.padEnd(22)} ${row.ref.padEnd(34)} ${row.var.padEnd(34)} args=${args === undefined ? '-' : args.toFixed(2)} ${row.judge ? `judge=${row.judge}: ${row.reason}` : ''}`);
+            console.log(`${r.id.padEnd(22)} ${row.ref.padEnd(34)} ${row.var.padEnd(34)} args=${args === undefined ? '-' : args.toFixed(2)} ${row.judge ? `judge=${row.judge} (${row.votes}): ${row.reason}` : ''}`);
         }
         const n = rows.length;
         const tool = rows.filter(x => x.sameTool).length;

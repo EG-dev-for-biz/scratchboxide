@@ -870,7 +870,7 @@ export class StreamingEngine {
                     const outcome = await raceRoutedCall({
                         router,
                         chatModel: model,
-                        startRouter: startStream(routerUrl, routerPayload, router.model, true),
+                        startRouter: startStream(routerUrl, routerPayload, router.model, router.model !== model),
                         startChat: startStream(url, payload, model),
                         handle: handleLine,
                         signal: turnSignal

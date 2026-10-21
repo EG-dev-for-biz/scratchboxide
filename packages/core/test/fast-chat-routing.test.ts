@@ -18,7 +18,7 @@ import { GeminiService } from '../src/node/gemini-service';
 import { buildChatPayload, TURN_CONTEXT_HEADING, withTurnContext } from '../src/node/gemini/chat-payload';
 import { buildToolDeclarations, createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { catalogLine, createLoadToolsHandler, ENTRY_TOOL_NAMES, LOAD_TOOLS_NAME } from '../src/node/gemini/tool-catalog';
-import { raceRoutedCall, routerConfig, describeRouteOutcome, type StartStream } from '../src/node/gemini/fast-router';
+import { DEFAULT_CHAT_ROUTER, raceRoutedCall, routerConfig, describeRouteOutcome, type StartStream } from '../src/node/gemini/fast-router';
 import { ChatTurnTimer } from '../src/node/gemini/chat-turn-telemetry';
 import type { GeminiGenerateRequest, GeminiStreamEvent } from '../src/common/gemini-protocol';
 import type { CanvasArtifact } from '../src/browser/generative-canvas/canvas-types';
@@ -198,6 +198,9 @@ describe('routing race', () => {
         expect(routerConfig('gemini-4-argon', 'off')).toBeUndefined();
         expect(routerConfig('gemini-4-argon', 'gemini-4-argon')).toBeUndefined();
         expect(routerConfig('gemini-4-argon', 'gemini-4-argon@LOW')).toMatchObject({ model: 'gemini-4-argon', thinkingConfig: { thinkingLevel: 'LOW' } });
+        // The default: the chat model itself at a low thinking level (a Gemini 3 model takes a budget).
+        expect(routerConfig('gemini-4-argon', DEFAULT_CHAT_ROUTER)).toMatchObject({ model: 'gemini-4-argon', thinkingConfig: { thinkingLevel: 'LOW' }, label: 'gemini-4-argon@LOW' });
+        expect(routerConfig('gemini-3.8-flash', '@LOW')).toMatchObject({ model: 'gemini-3.8-flash', thinkingConfig: { thinkingBudget: 512 } });
         expect(() => routerConfig('gemini-4-argon', 'flash please')).toThrow(/SCRATCHBOX_CHAT_ROUTER/);
         expect(() => routerConfig('gemini-4-argon', 'gemini-3.8-flash@FAST')).toThrow(/thinking level/);
     });
@@ -229,6 +232,7 @@ function makeService() {
 
 describe('streaming engine', () => {
     it('starts a tool when its functionCall part arrives, before the stream ends', async () => {
+        process.env.SCRATCHBOX_CHAT_ROUTER = 'off';
         const { service, register } = makeService();
         let streamEndedAt = 0;
         let toolStartedAt = 0;
@@ -310,7 +314,28 @@ describe('streaming engine', () => {
         expect((service as any).streaming.contextCache.unsupportedReason('gemini-3.8-flash')).toContain('does not support');
     });
 
+    it('by default races the chat model at LOW against itself and keeps the chat model\'s own answer for text', async () => {
+        process.env.SCRATCHBOX_CHAT_ROUTER = DEFAULT_CHAT_ROUTER;
+        const { service } = makeService();
+        const levels: string[] = [];
+        (globalThis as any).fetch = async (url: string, init: any) => {
+            if (url.endsWith('/cachedContents')) throw new Error('the same model never asks for a context cache');
+            const body = JSON.parse(init.body);
+            const level = body.generationConfig.thinkingConfig.thinkingLevel;
+            levels.push(level);
+            const chunks = level === 'LOW'
+                ? [{ text: textLine('quick low answer'), delayMs: 5 }, { text: usageLine(10, 0), delayMs: 5 }]
+                : [{ text: textLine('Gaussian splats are 3D gaussians.'), delayMs: 60 }, { text: usageLine(10, 0), delayMs: 5 }];
+            return { ok: true, status: 200, body: streamedBody(chunks, init.signal), text: async () => '' };
+        };
+        const res = await service.streamGenerate({ prompt: 'Explain how Gaussian splats work', model: 'gemini-4-argon', mode: 'agent', enableWorkspaceTools: true }, () => undefined);
+        expect(levels.sort()).toEqual(['LOW', 'MEDIUM']);
+        expect(res.text).toBe('Gaussian splats are 3D gaussians.');
+        expect(res.modelProvenance?.routing).toBe('gemini-4-argon answered the first call (router gemini-4-argon@LOW: answered in text, handed off)');
+    });
+
     it('returns the tools load_tools loaded, offers them on the next call, and keeps the first call\'s prefix', async () => {
+        process.env.SCRATCHBOX_CHAT_ROUTER = 'off';
         const { service } = makeService();
         const bodies: any[] = [];
         (globalThis as any).fetch = async (_url: string, init: any) => {
