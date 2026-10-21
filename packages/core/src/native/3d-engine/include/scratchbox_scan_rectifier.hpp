@@ -22,7 +22,9 @@
  *     open-air walkable surface (courts, plazas, flat roofs), a camera rig, and sight lines to viewer
  *     sites on every open-air walkable surface,
  *   - moves vertex positions a bounded distance onto robustly fitted planes (walls snap to the
- *     orientation their neighbourhood agrees on), their intersection lines (corners, cornices) and
+ *     orientation their neighbourhood agrees on; inclined planes such as pitched roofs take a wall direction
+ *     of their building and the pitch nearby slopes agree on), their intersection lines (corners, cornices,
+ *     ridges, eaves) and
  *     points, and onto per-footprint tier heights (area-density modes) that are supported next to
  *     the roof being moved; relief sheets (narrow, tall, flat strips standing off the wall's main plane:
  *     piers, pilasters) ride on their wall's snapped plane at their own step instead of being pressed in,
@@ -224,6 +226,19 @@ struct ScanRectifierParams {
     double localOrientationWindowDeg{3.0};  // only walls within this of the region's own azimuth (mod 90) vote
     double crossFootprintWeight{0.15};      // walls of another footprint vote with this factor
     double familyLockDeg{0.3};              // a consensus this close to a global family takes the family exactly
+    // Inclined planes: up-facing faces steeper than a level roof and shallower than a wall (pitched roofs, mansards,
+    // sloped glazing, ramps) form regions of their own. A region's downhill direction snaps to a wall direction of its
+    // building (its footprint's walls, then the global families) and its pitch to the consensus of nearby inclined
+    // regions, so the slopes of one roof end up with one pitch and level ridges and eaves.
+    bool inclinedRegions{true};
+    double minInclinedArea{10.0};
+    double tauInclined{0.4};
+    double inclinedAzimuthSnapDeg{3.0};     // downhill direction within this (mod 90) of a wall direction takes it
+    double pitchConsensusRadius{30.0};      // inclined regions within this vote on a shared pitch (m, horizontal)
+    double pitchConsensusSigma{12.0};       // Gaussian distance weight (m)
+    double pitchConsensusWindowDeg{4.0};    // only pitches within this of the current estimate vote
+    double pitchSnapDeg{3.0};               // a region takes the consensus pitch when it lies within this
+    double inclinedMaxExplainedShare{0.5};  // dropped when more of its area than this lies on the walls and levels found
 
     // Narrow relief: a crisp panel framed by other surfaces at both sides (a frontispiece's bay between its pylons, a
     // recessed strip between piers) standing at least reliefMinStep off its wall is snapped at its own level
@@ -432,8 +447,10 @@ struct ScanRectifierStats {
     // D4
     std::vector<OrientationFamily> families;
     // D5
-    size_t wallCandidates{0}, roofCandidates{0};
-    size_t wallRegions{0}, roofRegions{0}, rejectedSmall{0}, rejectedRms{0};
+    size_t wallCandidates{0}, roofCandidates{0}, inclinedCandidates{0};
+    size_t wallRegions{0}, roofRegions{0}, inclinedRegions{0}, rejectedSmall{0}, rejectedRms{0};
+    size_t inclinedAzimuthSnapped{0}, pitchSnapped{0}, inclinedSnapRejectedInduced{0}, inclinedExplained{0};
+    double inclinedArea{0}, inclinedExplainedArea{0}, pitchConsensusMaxChangeDeg{0};
     size_t familySnapped{0}, plumbSnapped{0}, levelSnapped{0}, snapRejectedInduced{0};
     size_t levelSplits{0}, localOrientationSnapped{0}, familyLocked{0};
     size_t sheets{0}, rejectedUnlevelable{0}, orientationOffFamily{0}, reliefProtectedVertices{0}, reliefPanelFaces{0};
@@ -1189,7 +1206,7 @@ private:
 // Planar region model
 // ============================================================================
 struct PlaneRegion {
-    int cls{0};              // 0 wall, 1 roof (a geometric class from the normal, not a semantic label)
+    int cls{0};              // 0 wall, 1 near-level, 2 inclined (a geometric class from the normal, not a semantic label)
     V3 n;                    // unit normal
     double d{0};             // plane: n.p = d
     double area{0};
@@ -1297,6 +1314,11 @@ public:
           << ", \"offsetTolerance\": " << p.offsetTolerance << ", \"regionAabbGrow\": " << p.regionAabbGrow
           << ", \"normalAgreementDeg\": " << p.normalAgreementDeg << ", \"minWallArea\": " << p.minWallArea
           << ", \"minRoofArea\": " << p.minRoofArea << ", \"planeHuber\": " << p.planeHuber
+          << ", \"inclinedRegions\": " << (p.inclinedRegions ? "true" : "false") << ", \"minInclinedArea\": " << p.minInclinedArea
+          << ", \"tauInclined\": " << p.tauInclined << ", \"inclinedAzimuthSnapDeg\": " << p.inclinedAzimuthSnapDeg
+          << ", \"pitchConsensusRadius\": " << p.pitchConsensusRadius << ", \"pitchConsensusSigma\": " << p.pitchConsensusSigma
+          << ", \"pitchConsensusWindowDeg\": " << p.pitchConsensusWindowDeg << ", \"pitchSnapDeg\": " << p.pitchSnapDeg
+          << ", \"inclinedMaxExplainedShare\": " << p.inclinedMaxExplainedShare
           << ", \"familySnapDeg\": " << p.familySnapDeg << ", \"plumbSnapDeg\": " << p.plumbSnapDeg
           << ", \"maxSnapInducedDisplacement\": " << p.maxSnapInducedDisplacement << ", \"maxRegionRms\": " << p.maxRegionRms
           << ", \"snap\": " << (p.snap ? "true" : "false") << ", \"tauWall\": " << p.tauWall << ", \"tauRoof\": " << p.tauRoof
@@ -1358,6 +1380,11 @@ public:
         o << "],\n";
         o << "  \"regions\": {\"wallCandidates\": " << s.wallCandidates << ", \"roofCandidates\": " << s.roofCandidates
           << ", \"wallRegions\": " << s.wallRegions << ", \"roofRegions\": " << s.roofRegions
+          << ", \"inclinedCandidates\": " << s.inclinedCandidates << ", \"inclinedRegions\": " << s.inclinedRegions
+          << ", \"inclinedArea\": " << s.inclinedArea << ", \"inclinedAzimuthSnapped\": " << s.inclinedAzimuthSnapped
+          << ", \"pitchSnapped\": " << s.pitchSnapped << ", \"pitchConsensusMaxChangeDeg\": " << s.pitchConsensusMaxChangeDeg
+          << ", \"inclinedSnapRejectedInduced\": " << s.inclinedSnapRejectedInduced
+          << ", \"inclinedExplained\": " << s.inclinedExplained << ", \"inclinedExplainedArea\": " << s.inclinedExplainedArea
           << ", \"rejectedSmall\": " << s.rejectedSmall << ", \"rejectedRms\": " << s.rejectedRms
           << ", \"familySnapped\": " << s.familySnapped << ", \"plumbSnapped\": " << s.plumbSnapped
           << ", \"levelSnapped\": " << s.levelSnapped << ", \"orientationSnapRejectedInduced\": " << s.snapRejectedInduced
@@ -2596,8 +2623,9 @@ private:
                 const V3& n = triN0[t];
                 if (std::abs(n.y) < P.wallMaxAbsNy) { cls[t] = 0; ++S.wallCandidates; }
                 else if (n.y > P.roofMinNy) { cls[t] = 1; ++S.roofCandidates; }
+                else if (P.inclinedRegions && n.y >= P.wallMaxAbsNy) { cls[t] = 2; ++S.inclinedCandidates; }
             }
-            // azimuth bin for walls (normal agreement pre-filter)
+            // azimuth bin for walls and inclined faces (normal agreement pre-filter)
             const double binDeg = std::max(1.0, P.normalAgreementDeg);
             const int azBins = std::max(1, static_cast<int>(std::floor(360.0 / binDeg)));
             std::vector<int> bin(F, 0);
@@ -2605,7 +2633,7 @@ private:
             const double g = P.regionAabbGrow;
             for (size_t t = 0; t < F; ++t) {
                 if (cls[t] < 0) continue;
-                if (cls[t] == 0) {
+                if (cls[t] != 1) {
                     double az = detail::wrapPeriod(detail::radToDeg(std::atan2(triN0[t].z, triN0[t].x)), 360.0);
                     bin[t] = std::min(azBins - 1, static_cast<int>(az / (360.0 / azBins)));
                 }
@@ -2659,7 +2687,7 @@ private:
                     const uint32_t i = static_cast<uint32_t>(ti);
                     int binsToCheck[3] = {bin[i], bin[i], bin[i]};
                     int nbins = 1;
-                    if (cls[i] == 0 && azBins > 1) {
+                    if (cls[i] != 1 && azBins > 1) {
                         binsToCheck[1] = (bin[i] + 1) % azBins;
                         binsToCheck[2] = (bin[i] - 1 + azBins) % azBins;
                         nbins = azBins >= 3 ? 3 : 2;
@@ -2732,6 +2760,7 @@ private:
                     for (size_t oi = b0; oi < b1; ++oi) {
                         auto& tris = compList[order[oi]];
                         const int c = cls[tris.front()];
+                        if (c == 2) continue;  // sheets are wall relief (piers, pilasters); a roof's levels are its own regions
                         extractSheets(tris, c == 0 ? P.minWallArea : P.minRoofArea, sheetsOf[order[oi]]);
                     }
                 });
@@ -2758,7 +2787,8 @@ private:
                         const int c = cls[tris.front()];
                         double area = 0;
                         for (uint32_t t : tris) area += triA0[t];
-                        if (area < (c == 0 ? P.minWallArea : P.minRoofArea) || static_cast<int>(tris.size()) < P.minRegionTriangles) { state[i] = 0; continue; }
+                        const double minArea = c == 0 ? P.minWallArea : c == 1 ? P.minRoofArea : P.minInclinedArea;
+                        if (area < minArea || static_cast<int>(tris.size()) < P.minRegionTriangles) { state[i] = 0; continue; }
                         RegionFit& f = cand[i];
                         f.tris = tris;
                         f.cls = c;
@@ -2784,23 +2814,34 @@ private:
             }
             // phase 2: orientation consensus of nearby walls
             computeLocalOrientations(fits);
-            // phase 3: orientation snapping (bounded by the induced displacement), residual check
+            // phase 3: orientation snapping (bounded by the induced displacement), residual check. Walls and level
+            // regions first; inclined regions are then admitted only where those planes do not already explain them,
+            // and take their direction and pitch consensus among the admitted ones.
             std::unordered_map<uint32_t, int32_t> regionOfKey;
-            for (auto& f : fits) {
-                PlaneRegion R;
-                if (!snapRegion(f, R)) {
-                    ++S.rejectedRms;
-                    for (uint32_t t : f.tris) triRegion[t] = -2 - static_cast<int32_t>(1000 + S.rejectedRms);
-                    continue;
+            for (int pass = 0; pass < 2; ++pass) {
+                if (pass == 1) {
+                    if (std::none_of(fits.begin(), fits.end(), [](const RegionFit& f) { return f.cls == 2; })) break;
+                    dropExplainedInclined(fits);
+                    computeInclinedConsensus(fits);
                 }
-                R.area = f.area;
-                R.triangleCount = static_cast<int>(f.tris.size());
-                int32_t id = static_cast<int32_t>(regions.size());
-                for (uint32_t t : f.tris) triRegion[t] = id;
-                regions.push_back(R);
-                regionOfKey[f.key] = id;
-                (f.cls == 0 ? S.wallRegions : S.roofRegions)++;
-                S.regionArea += f.area;
+                for (auto& f : fits) {
+                    if ((f.cls == 2) != (pass == 1) || f.dropped) continue;
+                    PlaneRegion R;
+                    if (!snapRegion(f, R)) {
+                        ++S.rejectedRms;
+                        for (uint32_t t : f.tris) triRegion[t] = -2 - static_cast<int32_t>(1000 + S.rejectedRms);
+                        continue;
+                    }
+                    R.area = f.area;
+                    R.triangleCount = static_cast<int>(f.tris.size());
+                    int32_t id = static_cast<int32_t>(regions.size());
+                    for (uint32_t t : f.tris) triRegion[t] = id;
+                    regions.push_back(R);
+                    regionOfKey[f.key] = id;
+                    (f.cls == 0 ? S.wallRegions : f.cls == 1 ? S.roofRegions : S.inclinedRegions)++;
+                    if (f.cls == 2) S.inclinedArea += f.area;
+                    S.regionArea += f.area;
+                }
             }
             // phase 4: each relief sheet takes its parent's snapped orientation, offset by its relief
             for (auto& ps : pendingSheets) {
@@ -3087,8 +3128,12 @@ private:
             double d{0};
             double azDeg{0};        // azimuth of the horizontal part of the fitted wall normal
             double tiltDeg{0};
-            double targetAzDeg{0};  // local orientation consensus (walls)
+            double targetAzDeg{0};  // local orientation consensus (walls); building wall direction (inclined)
             bool hasTarget{false};
+            double pitchDeg{0};     // inclined: angle of the fitted normal from vertical
+            double targetPitchDeg{0};
+            bool hasPitch{false};
+            bool dropped{false};    // inclined: explained by the wall and level planes already found
             bool locked{false};     // the consensus was replaced by a global family
             uint32_t key{0};        // the component's smallest triangle id (links relief sheets to it)
             V3 t1;                  // horizontal in-plane axis (walls)
@@ -3140,8 +3185,124 @@ private:
                 const V3 h = V3{n.x, 0, n.z}.normalized();
                 f.footprint = footprintAt(centroid.x - h.x * 0.75, centroid.z - h.z * 0.75);
                 if (f.footprint < 0) f.footprint = footprintAt(centroid.x + h.x * 0.75, centroid.z + h.z * 0.75);
+            } else if (f.cls == 2) {
+                f.pitchDeg = detail::radToDeg(std::acos(std::clamp(n.y, -1.0, 1.0)));
+                f.footprint = footprintAt(centroid.x, centroid.z);
             }
             return true;
+        }
+
+        /**
+         * Direction and pitch consensus per inclined region. Direction: the downhill azimuth's nearest wall direction
+         * (mod 90) among the walls of the same footprint within localOrientationRadius, then the global families, taken
+         * when within inclinedAzimuthSnapDeg. Pitch: mean shift over the pitches of inclined regions within
+         * pitchConsensusRadius (area- and distance-weighted, other footprints at crossFootprintWeight), each pass using
+         * only pitches within pitchConsensusWindowDeg of the current estimate; taken when within pitchSnapDeg.
+         */
+        /**
+         * An inclined region is a face of its own only where the wall and level planes already found do not explain it:
+         * when more than inclinedMaxExplainedShare of its area lies within a found plane's tau and support box (the test
+         * the snap uses), it is that plane's crinkle (a wall tilted past wallMaxAbsNy) or a bevel the mesher melted into
+         * the corner between them, and it is dropped. Its triangles stay unclaimed, as they were without inclined regions.
+         */
+        void dropExplainedInclined(std::vector<RegionFit>& fits) {
+            const double cell = 8.0;
+            auto ci = [&](double v) { return static_cast<int64_t>(std::floor(v / cell)); };
+            std::unordered_map<int64_t, std::vector<uint32_t>, detail::CellKeyHash> rgrid;
+            for (uint32_t r = 0; r < regions.size(); ++r) {
+                const auto& R = regions[r];
+                V3 lo{1e300, 1e300, 1e300}, hi{-1e300, -1e300, -1e300};
+                for (int a = 0; a < 2; ++a) for (int b = 0; b < 2; ++b) for (int c = 0; c < 2; ++c) {
+                    const V3 q = R.t1 * (a ? R.hi1 + P.supportGrow : R.lo1 - P.supportGrow) + R.t2 * (b ? R.hi2 + P.supportGrow : R.lo2 - P.supportGrow) + R.n * (R.d + (c ? R.tau : -R.tau));
+                    lo = V3{std::min(lo.x, q.x), std::min(lo.y, q.y), std::min(lo.z, q.z)};
+                    hi = V3{std::max(hi.x, q.x), std::max(hi.y, q.y), std::max(hi.z, q.z)};
+                }
+                for (int64_t x = ci(lo.x); x <= ci(hi.x); ++x)
+                    for (int64_t y = ci(lo.y); y <= ci(hi.y); ++y)
+                        for (int64_t z = ci(lo.z); z <= ci(hi.z); ++z) rgrid[detail::cellKey(x, y, z)].push_back(r);
+            }
+            std::vector<size_t> slopes;
+            for (size_t i = 0; i < fits.size(); ++i) if (fits[i].cls == 2) slopes.push_back(i);
+            std::vector<uint8_t> drop(slopes.size(), 0);
+            detail::parallelFor(slopes.size(), threads, 4, [&](size_t b0, size_t b1, unsigned) {
+                for (size_t k = b0; k < b1; ++k) {
+                    const RegionFit& f = fits[slopes[k]];
+                    double explained = 0;
+                    for (uint32_t t : f.tris) {
+                        const V3& c = triC0[t];
+                        auto it = rgrid.find(detail::cellKey(ci(c.x), ci(c.y), ci(c.z)));
+                        if (it == rgrid.end()) continue;
+                        for (uint32_t r : it->second) {
+                            const auto& R = regions[r];
+                            if (std::abs(R.n.dot(c) - R.d) > R.tau) continue;
+                            const double a1 = R.t1.dot(c), a2 = R.t2.dot(c);
+                            if (a1 < R.lo1 - P.supportGrow || a1 > R.hi1 + P.supportGrow || a2 < R.lo2 - P.supportGrow || a2 > R.hi2 + P.supportGrow) continue;
+                            explained += triA0[t];
+                            break;
+                        }
+                    }
+                    drop[k] = explained > P.inclinedMaxExplainedShare * f.area;
+                }
+            });
+            for (size_t k = 0; k < slopes.size(); ++k) {
+                if (!drop[k]) continue;
+                RegionFit& f = fits[slopes[k]];
+                f.dropped = true;
+                ++S.inclinedExplained;
+                S.inclinedExplainedArea += f.area;
+                for (uint32_t t : f.tris) triRegion[t] = -3;
+            }
+        }
+
+        void computeInclinedConsensus(std::vector<RegionFit>& fits) {
+            std::vector<size_t> slopes;
+            std::unordered_map<int32_t, std::vector<size_t>> wallsOf;
+            for (size_t i = 0; i < fits.size(); ++i) {
+                if (fits[i].cls == 2 && !fits[i].dropped) slopes.push_back(i);
+                else if (fits[i].cls == 0 && fits[i].footprint >= 0) wallsOf[fits[i].footprint].push_back(i);
+            }
+            if (slopes.empty()) return;
+            const double R2 = P.localOrientationRadius * P.localOrientationRadius;
+            for (size_t si : slopes) {
+                RegionFit& a = fits[si];
+                double best = 1e9;
+                auto consider = [&](double dirDeg) {
+                    const double dev = detail::wrapDiff(a.azDeg, dirDeg, 90.0);
+                    if (std::abs(dev) < std::abs(best)) best = dev;
+                };
+                if (a.footprint >= 0) {
+                    auto it = wallsOf.find(a.footprint);
+                    if (it != wallsOf.end())
+                        for (size_t wi : it->second) {
+                            const RegionFit& w = fits[wi];
+                            const double dx = w.centroid.x - a.centroid.x, dz = w.centroid.z - a.centroid.z;
+                            if (dx * dx + dz * dz <= R2) consider(w.hasTarget ? w.targetAzDeg : w.azDeg);
+                        }
+                }
+                if (std::abs(best) > P.inclinedAzimuthSnapDeg) for (const auto& fam : families) consider(fam.azimuthDeg);
+                if (std::abs(best) <= P.inclinedAzimuthSnapDeg) { a.targetAzDeg = a.azDeg - best; a.hasTarget = true; }
+            }
+            const double PR2 = P.pitchConsensusRadius * P.pitchConsensusRadius, s2 = 2.0 * P.pitchConsensusSigma * P.pitchConsensusSigma;
+            for (size_t si : slopes) {
+                RegionFit& a = fits[si];
+                double est = a.pitchDeg;
+                for (int pass = 0; pass < 4; ++pass) {
+                    double sw = 0, sp = 0;
+                    for (size_t sj : slopes) {
+                        const RegionFit& b = fits[sj];
+                        if (std::abs(b.pitchDeg - est) > P.pitchConsensusWindowDeg) continue;
+                        const double dx = b.centroid.x - a.centroid.x, dz = b.centroid.z - a.centroid.z, d2 = dx * dx + dz * dz;
+                        if (d2 > PR2) continue;
+                        double wgt = b.area * std::exp(-d2 / s2);
+                        if (a.footprint >= 0 && b.footprint >= 0 && a.footprint != b.footprint) wgt *= P.crossFootprintWeight;
+                        sw += wgt;
+                        sp += wgt * b.pitchDeg;
+                    }
+                    if (sw <= 0) break;
+                    est = sp / sw;
+                }
+                if (std::abs(est - a.pitchDeg) <= P.pitchSnapDeg) { a.targetPitchDeg = est; a.hasPitch = true; }
+            }
         }
 
         /**
@@ -3212,6 +3373,8 @@ private:
             V3 nFit = n;
             double dFit = d;
             bool plumb = false, fam = false, level = false;
+            bool incAz = false, incPitch = false;
+            double incPitchChange = 0;
             if (c == 0) {
                 double tilt = f.tiltDeg;
                 V3 nPlumb = n;
@@ -3254,6 +3417,31 @@ private:
                     if (f.locked) ++S.familyLocked; else ++S.localOrientationSnapped;
                     S.localOrientationMaxRotationDeg = std::max(S.localOrientationMaxRotationDeg, std::abs(bestDev));
                 }
+            } else if (c == 2) {
+                // downhill direction from the building's walls, pitch from the consensus; full, then each alone
+                const double az = detail::radToDeg(std::atan2(n.z, n.x));
+                const double azT = f.hasTarget ? f.targetAzDeg : az;
+                const double pT = f.hasPitch ? f.targetPitchDeg : f.pitchDeg;
+                auto normalOf = [](double azDeg, double pitchDeg) {
+                    const double a = detail::degToRad(azDeg), p = detail::degToRad(pitchDeg);
+                    return V3{std::cos(a) * std::sin(p), std::cos(p), std::sin(a) * std::sin(p)}.normalized();
+                };
+                struct Try { V3 n; bool az, pitch; };
+                std::vector<Try> tries;
+                if (f.hasTarget && f.hasPitch) tries.push_back({normalOf(azT, pT), true, true});
+                if (f.hasTarget) tries.push_back({normalOf(azT, f.pitchDeg), true, false});
+                if (f.hasPitch) tries.push_back({normalOf(az, pT), false, true});
+                bool used = false;
+                for (const auto& tr : tries) {
+                    const double dc = locate(tr.n);
+                    if (induced(tr.n, dc, nFit, dFit) > P.maxSnapInducedDisplacement) continue;
+                    n = tr.n; d = dc; used = true;
+                    incAz = tr.az;
+                    incPitch = tr.pitch;
+                    incPitchChange = tr.pitch ? std::abs(pT - f.pitchDeg) : 0.0;
+                    break;
+                }
+                if (!used && !tries.empty()) ++S.inclinedSnapRejectedInduced;
             } else {
                 double tiltDeg = detail::radToDeg(std::acos(std::clamp(n.y, -1.0, 1.0)));
                 if (tiltDeg <= P.plumbSnapDeg) {
@@ -3273,14 +3461,19 @@ private:
             for (size_t k = 0; k < pts.size(); ++k) { double r = n.dot(pts[k]) - d; sw += w[k]; sr += w[k] * r * r; }
             double rms = std::sqrt(sr / std::max(sw, 1e-300));
             if (rms > P.maxRegionRms) return false;
+            if (incAz) ++S.inclinedAzimuthSnapped;
+            if (incPitch) {
+                ++S.pitchSnapped;
+                S.pitchConsensusMaxChangeDeg = std::max(S.pitchConsensusMaxChangeDeg, incPitchChange);
+            }
             R.cls = c;
             R.n = n;
             R.d = d;
             R.rms = rms;
-            R.tau = c == 0 ? P.tauWall : P.tauRoof;
+            R.tau = c == 0 ? P.tauWall : c == 1 ? P.tauRoof : P.tauInclined;
             R.level = level;
             R.centroid = centroid;
-            if (c == 0) {
+            if (c != 1) {  // walls and inclined planes: t1 runs horizontally along the face (an eave, a wall's length)
                 R.t1 = V3{0, 1, 0}.cross(n).normalized();
                 if (R.t1.norm() < 0.5) detail::orthonormalBasis(n, R.t1, R.t2);
                 R.t2 = n.cross(R.t1);
