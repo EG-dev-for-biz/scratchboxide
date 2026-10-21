@@ -29,7 +29,7 @@ import { scoreSkyRealism, scoreClouds, SKY_REALISM_TOLERANCES, SkyRealismScore }
 import { calculateNOAASolarPosition } from '../../packages/core/src/browser/generative-canvas/services/atmosphere/solar-position';
 import { solarIrradiance } from '../../packages/core/src/browser/generative-canvas/services/atmosphere/clear-sky-irradiance';
 import { encodePng } from '../../packages/core/src/node/3d-engine/staged-location/png-encode';
-import type { AtmosphericScatteringConfig } from '../../packages/core/src/browser/generative-canvas/services/atmosphere/atmosphere-types';
+import type { AtmosphericScatteringConfig, CloudShellLayer } from '../../packages/core/src/browser/generative-canvas/services/atmosphere/atmosphere-types';
 
 interface Reference {
     id: string;
@@ -43,6 +43,8 @@ interface Reference {
     minSampleElevationDeg?: number;
     /** The camera white balance the photo was processed at; the render gets the same adaptation before comparing. */
     whiteBalanceKelvin?: number;
+    /** The cloud the app would draw for this sky, read from the photo once (annotate-clouds.ts). */
+    clouds?: { cumulusSkyCover: number; cumulusBaseAltitudeMeters?: number; decks: CloudShellLayer[]; reasoning?: string; source: string };
 }
 
 function arg(name: string, fallback?: string): string {
@@ -73,6 +75,14 @@ async function referenceFile(ref: Reference): Promise<string> {
 /** The scene configuration the app would build for this sky: the measured sun, and cloud cover when the photo has cloud. */
 function configFor(ref: Reference, sunElevationDeg: number, clouds: CloudMeasurement | undefined): { config: AtmosphericScatteringConfig; note?: string } {
     const config: AtmosphericScatteringConfig = { sunElevation: sunElevationDeg, sunAzimuth: 180 };
+    // A reading of the photo's cloud (types and physical decks) is drawn as read, as the app's agent would draw it.
+    if (ref.clouds) {
+        const c = ref.clouds;
+        if (c.cumulusSkyCover > 0.01) Object.assign(config, { volumetricClouds: true, cloudCoverage: c.cumulusSkyCover, ...(c.cumulusBaseAltitudeMeters ? { cloudAltitude: c.cumulusBaseAltitudeMeters } : {}) });
+        if (c.decks.length) config.cloudLayers = c.decks;
+        const labels = c.decks.map(d => d.label ?? 'deck').join(', ');
+        return { config, note: `cloud read from the photo (${c.source}): cumulus ${c.cumulusSkyCover.toFixed(2)}${labels ? `, decks: ${labels}` : ''}` };
+    }
     if (ref.weather === 'overcast' || ref.weather === 'rain') {
         Object.assign(config, { volumetricClouds: true, cloudCoverage: 0.95 });
         return { config, note: 'overcast drawn as volumetric cover 0.95' };
