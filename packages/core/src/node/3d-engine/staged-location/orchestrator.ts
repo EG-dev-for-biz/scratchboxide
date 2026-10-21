@@ -2855,13 +2855,23 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         }))]
                     });
                     let masksDir: string, seg: Pick<Awaited<ReturnType<typeof segmentOwnershipViews>>, 'masks' | 'views' | 'skipped' | 'model' | 'cut'>;
-                    // the outlines of an identical earlier vote (the same first isolate, place and models) are read back: a view the
-                    // window cut is not asked again on every repeat
-                    const voteKey = stageKey('ownership-vote/v1', first.cacheKey, request.query.trim(), visionAvailable!.candidates, OWNERSHIP_VOTE_WINDOW_MS);
-                    const voteHit = !bypass('ownership') ? cache.get<{ masksDir: string; masks: number; views: number; model?: string }>('ownership', voteKey) : undefined;
+                    let readBack: string | undefined;
+                    // The vote as it went ahead is read back for an identical later vote (the same first isolate, place and models):
+                    // its outlines, and which views cast none and why (cut by the quorum or the window, not visible, unreadable).
+                    // The rule: a view the vote went ahead without stays "not voted" in the provenance of every repeat; the record is
+                    // kept so a repeat does not ask those views live, which gave them outlines, a new set of masks, a new tile_refine
+                    // key and a new remesh, and ran the grammar, the rebuild and the textures again on it (warm Haughwout 44 -> 70 s,
+                    // docs/processes/vision_call_hedging.md). The vote is asked again only for a different first isolate (a new key)
+                    // or when the ownership stage is bypassed.
+                    const voteKey = stageKey('ownership-vote/v2', first.cacheKey, request.query.trim(), visionAvailable!.candidates, OWNERSHIP_VOTE_WINDOW_MS);
+                    type VoteRecord = { masksDir: string; masks: number; views: number; model?: string; skipped: Array<{ view: string; reason: string }>; cut?: NonNullable<typeof seg.cut>; runId: string };
+                    const voteHit = !bypass('ownership') ? cache.get<VoteRecord>('ownership', voteKey) : undefined;
                     if (voteHit && fs.existsSync(path.join(voteHit.value.masksDir, 'views.txt'))) {
                         masksDir = voteHit.value.masksDir;
-                        seg = { masks: voteHit.value.masks, views: voteHit.value.views, skipped: [], ...(voteHit.value.model ? { model: voteHit.value.model } : {}) };
+                        const notVoted = voteHit.value.skipped ?? [];
+                        seg = { masks: voteHit.value.masks, views: voteHit.value.views, skipped: notVoted, ...(voteHit.value.model ? { model: voteHit.value.model } : {}), ...(voteHit.value.cut ? { cut: voteHit.value.cut } : {}) };
+                        readBack = `read back from the vote of run ${voteHit.value.runId}${notVoted.length ? `; ${notVoted.length} of ${seg.views} views still cast no vote (${notVoted.map(x => `${x.view}: ${x.reason}`).join('; ')})` : ''}`;
+                        io.progress(`ownership vote: ${seg.masks} of ${seg.views} outlines ${readBack}`);
                         run.cacheStatus.ownership = 'hit';
                     } else try {
                         io.progress('rendering views of the structure for the ownership vote');
@@ -2881,7 +2891,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         if (ctx.signal?.aborted) throw abortError();
                         if (cut.signal.aborted) io.progress(`ownership vote: ${seg.masks} of ${seg.views} views outlined within ${Math.round(OWNERSHIP_VOTE_WINDOW_MS / 1000)} s; the others are left out`);
                         if (seg.masks < 2) throw new Error(`only ${seg.masks} of ${seg.views} views got a usable outline (${seg.skipped.slice(0, 3).map(x => `${x.view}: ${x.reason}`).join('; ')})`);
-                        const outlines = { masksDir, masks: seg.masks, views: seg.views, ...(seg.model ? { model: seg.model } : {}) };
+                        const outlines: VoteRecord = { masksDir, masks: seg.masks, views: seg.views, ...(seg.model ? { model: seg.model } : {}), skipped: seg.skipped, ...(seg.cut ? { cut: seg.cut } : {}), runId };
                         await cache.run('ownership', voteKey, async () => ({ value: outlines }), { bypass: true });
                         run.cacheStatus.ownership = 'miss';
                     } catch (err) {
@@ -2898,7 +2908,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     // how much the vote moved: compared on the isolates' raw scan triangles (a first isolate that fell back to the district is replaced outright)
                     const change = firstWasIsolate && first.rawClayGlb ? ownershipChange(first.rawClayGlb, voted.rawClayGlb) : undefined;
                     const moved = change ? `${round(change.share * 100, 1)}% of the structure's scan surface (${round(change.onlySecondM2, 1)} m² joined, ${round(change.onlyFirstM2, 1)} m² left)` : 'the first isolate had fallen back to the district around the structure';
-                    run.note(PROVENANCE.remeshed, `object ownership: ${seg.model ?? 'the vision model'} outlined the structure in ${seg.masks} of ${seg.views} views of the tile${seg.cut ? ` (${seg.cut.note})` : ''}; the vote moved ${moved}`);
+                    const notVoted = seg.skipped.filter(x => !seg.cut?.views.includes(x.view));
+                    run.note(PROVENANCE.remeshed, `object ownership: ${seg.model ?? 'the vision model'} outlined the structure in ${seg.masks} of ${seg.views} views of the tile${seg.cut ? ` (${seg.cut.note})` : ''}${notVoted.length ? ` (no vote from ${notVoted.map(x => `${x.view}: ${x.reason}`).join('; ')})` : ''}${readBack ? ` (${readBack})` : ''}; the vote moved ${moved}`);
                     if (change && !change.material) {
                         return {
                             status: 'committed', value: { material: false, request: votedRequest, isolateOk: true }, breakdownMs: msBy,

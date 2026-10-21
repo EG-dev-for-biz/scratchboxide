@@ -146,20 +146,27 @@ describe('the vector first paint', () => {
 });
 
 /** Views for the ownership vote and a vision model that outlines the whole view, after `delayMs`. */
-function voteDeps(dir: string, delayMs: number): Pick<StagedLocationDeps, 'vision'> & { renderOwnershipViews: NonNullable<StagedLocationDeps['refine']['renderOwnershipViews']> } {
+function voteDeps(dir: string, delayMs: number, opts: { notVisible?: string[] } = {}): Pick<StagedLocationDeps, 'vision'> & { renderOwnershipViews: NonNullable<StagedLocationDeps['refine']['renderOwnershipViews']>; calls: () => number } {
     fs.mkdirSync(dir, { recursive: true });
     const png = encodePng(16, 16, Buffer.alloc(16 * 16 * 4, 200));
     const names = ['v0', 'v1', 'v2'];
     for (const n of names) fs.writeFileSync(path.join(dir, `${n}.png`), png);
     fs.writeFileSync(path.join(dir, 'views.txt'), names.map(n => `${n} 16 16 0 0 0 0 0 0 0 0 0 60`).join('\n') + '\n');
     const reply = JSON.stringify({ visible: true, polygons: [{ outer: [[0, 0], [0, 1000], [1000, 1000], [1000, 0]], holes: [] }] });
+    const unseen = JSON.stringify({ visible: false, polygons: [] });
+    // the view a request outlines is told by its prompt's size line: every view is 16 x 16, so by the order asked (views.txt order)
+    let calls = 0;
     const client = {
         models: {
-            generateContent: async () => { await sleep(delayMs); return { candidates: [{ content: { parts: [{ text: reply }] }, finishReason: 'STOP' }], modelVersion: 'gemini-4-argon-001' } as any; },
+            generateContent: async () => {
+                const view = names[calls++ % names.length];
+                await sleep(delayMs);
+                return { candidates: [{ content: { parts: [{ text: opts.notVisible?.includes(view) ? unseen : reply }] }, finishReason: 'STOP' }], modelVersion: 'gemini-4-argon-001' } as any;
+            },
             generateContentStream: async () => { throw new Error('the ownership vote is not streamed'); }
         }
     };
-    return { vision: { client: client as never, candidates: ['gemini-4-argon'] }, renderOwnershipViews: async () => ({ dir, views: names, cached: false, ms: 5 }) };
+    return { vision: { client: client as never, candidates: ['gemini-4-argon'] }, renderOwnershipViews: async () => ({ dir, views: names, cached: false, ms: 5 }), calls: () => calls };
 }
 
 describe('the fast isolate first', () => {
@@ -224,6 +231,28 @@ describe('the fast isolate first', () => {
         expect(fitCommits[1]).toBeGreaterThan(ownershipDone);
         // the scene stands on the voted remesh
         expect((result.artifact as any).data.objects.find((o: any) => o.content.metadata.isGround).id).toBe(l2v.objectId);
+    });
+
+    it('a view that cast no vote stays "not voted" when the vote is read back on a repeat build, and the repeat asks no view live', async () => {
+        const s0 = setup(ARCH);
+        // v2 says the structure is not in its view: the vote goes ahead on v0 and v1, and v2 is recorded as casting no vote
+        const v = voteDeps(path.join(s0.root, 'views'), 50, { notVisible: ['v2'] });
+        const refineCalls: any[] = [];
+        const s = setup(ARCH, { vision: v.vision, scanFit: fitter(path.join(s0.root, 'fit')), refine: { refine: req => { refineCalls.push(req); return s0.native.deps.refine.refine(req); }, renderOwnershipViews: v.renderOwnershipViews } });
+        const first = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+        expect(v.calls()).toBe(3);
+        const legendOf = (r: typeof first) => (r.result.artifact as any).data.stagedBuild.provenanceLegend.find((e: any) => e.label === 'remeshed').description as string;
+        expect(legendOf(first)).toMatch(/outlined the structure in 2 of 3 views of the tile \(no vote from v2: the model did not find the structure in this view\); the vote moved/);
+        expect(legendOf(first)).not.toMatch(/read back/);
+        const masksDirs = refineCalls.filter(r => r.ownership?.masksDir).map(r => r.ownership.masksDir);
+        expect(masksDirs).toHaveLength(1);
+        // the same build again: the vote is read back as it went ahead; v2 is not asked live (that would change the masks, the
+        // remesh key and run the rebuild again), and it is still reported as not voting
+        const again = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+        expect(v.calls()).toBe(3);
+        expect(again.result.stages.find(x => x.stage === 'ownership')).toMatchObject({ status: 'committed' });
+        expect(legendOf(again)).toMatch(/outlined the structure in 2 of 3 views of the tile \(no vote from v2: the model did not find the structure in this view\) \(read back from the vote of run c1b2c301; 1 of 3 views still cast no vote \(v2: the model did not find the structure in this view\)\); the vote moved/);
+        expect(refineCalls.filter(r => r.ownership?.masksDir).map(r => r.ownership.masksDir)).toEqual([masksDirs[0], masksDirs[0]]);
     });
 
     it('measures the change on the scan triangles: 5% of the surface is the threshold', () => {
