@@ -94,6 +94,13 @@ export function packFaces(textures: Map<number, FaceTexture>, legend: TexelSourc
 
 function nextPow2(v: number): number { let p = 1; while (p < v) p <<= 1; return p; }
 
+/**
+ * A vertex ref at or below this is a flat-colour material, not a face or a tile photo: `FLAT_COLOUR_REF_BASE - id` indexes
+ * `MassingGlbInput.flatColours` (residual-shape-fit.ts: a cluster fit to a measured solid of revolution, coloured with its
+ * own measured average photo colour since no per-texel photo mapping exists for a curved surface like a tank).
+ */
+export const FLAT_COLOUR_REF_BASE = -1_000_000;
+
 export interface MassingGlbInput {
     nodes: MassingNode[];
     faces: MassingFace[];
@@ -102,6 +109,8 @@ export interface MassingGlbInput {
     stageKey: string;
     /** Per node: its provenance record (open labels). */
     provenanceOf: (node: MassingNode) => ProvenanceRecord;
+    /** Flat-colour materials (srgb 0..255) a node's vertices can ref via FLAT_COLOUR_REF_BASE - id; see its doc comment. */
+    flatColours?: Map<number, [number, number, number]>;
     /** Face textures by face index; the residual's tile photos by tile image index. */
     textures: Map<number, FaceTexture>;
     legend: TexelSource[];
@@ -193,6 +202,11 @@ export function writeMassingTexturedGlb(input: MassingGlbInput): { glb: Buffer; 
     }
     const flat = materials.length;
     materials.push({ name: 'StudioGreyClay', pbrMetallicRoughness: { baseColorFactor: [0.55, 0.57, 0.6, 1], metallicFactor: 0, roughnessFactor: 0.85 } });
+    const flatColourMaterial = new Map<number, number>();
+    for (const [id, [r, g, b]] of input.flatColours ?? []) {
+        materials.push({ name: `MeasuredColour${id}`, doubleSided: true, pbrMetallicRoughness: { baseColorFactor: [r / 255, g / 255, b / 255, 1], metallicFactor: 0, roughnessFactor: 0.85 } });
+        flatColourMaterial.set(id, materials.length - 1);
+    }
     const f32 = (a: Float32Array) => new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
     const gltfNodes: any[] = [{ name: 'staged', children: [] as number[], extras: { sb: { schema: 'scratchbox.staged-glb/2', stage: input.stage, stageKey: input.stageKey, frame: 'tile frame: x east, y up, z south (metres)' } } }];  // eslint-disable-line @typescript-eslint/no-explicit-any
     const facesByIndex = new Map(input.faces.map(f => [f.index, f]));
@@ -204,6 +218,10 @@ export function writeMassingTexturedGlb(input: MassingGlbInput): { glb: Buffer; 
         let material = flat;
         for (let v = 0; v < n; v++) {
             const ref = node.ref[v];
+            if (ref <= FLAT_COLOUR_REF_BASE) {
+                material = flatColourMaterial.get(FLAT_COLOUR_REF_BASE - ref) ?? flat;
+                continue;
+            }
             if (ref <= -2) {
                 material = tileMaterial.get(-ref - 2) ?? flat;
                 uv[2 * v] = node.st[2 * v]; uv[2 * v + 1] = node.st[2 * v + 1];

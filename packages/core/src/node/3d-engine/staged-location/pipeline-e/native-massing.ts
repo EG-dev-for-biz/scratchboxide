@@ -80,6 +80,8 @@ export interface MassingRun {
     dir: string; report: MassingReport; nodes: MassingNode[]; ms: number; binary: { path: string; built: boolean; buildMs?: number };
     /** The residual audit (residual-audit-e.ts) applied to `nodes`, or why it could not run. */
     audit?: ResidualAuditResult | { error: string };
+    /** Flat-colour materials a 'residual-shape' node's vertices ref (massing-glb.ts's FLAT_COLOUR_REF_BASE, residual-shape-fit.ts). */
+    flatColours?: Map<number, [number, number, number]>;
 }
 
 const CLI_SOURCE = path.join('scripts', 'staged_massing.cpp');
