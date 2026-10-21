@@ -43,19 +43,23 @@ describe('warmNativeEngine', () => {
         vi.spyOn(ScanFitService.prototype, 'ensureBinary').mockImplementation(async () => { await track('scan_fit', 5)(); return '/bin/sf'; });
         vi.spyOn(NativePythonRunnerService.prototype, 'ensureNativeModule').mockImplementation(async () => { await track('python', 1)(); return null; });
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-warm-'));
+        // the staged massing tool (the vector first paint) as a built binary: nothing is compiled here
+        const prevMassing = process.env.SCRATCHBOX_STAGED_MASSING_BIN;
+        process.env.SCRATCHBOX_STAGED_MASSING_BIN = '/bin/staged_massing';
         try {
             const lines: string[] = [];
             const report = await warmNativeEngine(root, { log: m => lines.push(m), env: {} });
-            expect(report.steps.map(s => s.name)).toEqual(['tile_vegetation', 'tile_refine', 'scan_fit', 'scratchbox_native (Python module)']);
-            expect(report.steps.map(s => s.ok)).toEqual([true, true, true, true]);
+            expect(report.steps.map(s => s.name)).toEqual(['tile_vegetation', 'tile_refine', 'staged_massing', 'scan_fit', 'scratchbox_native (Python module)']);
+            expect(report.steps.map(s => s.ok)).toEqual([true, true, true, true, true]);
             // the fitter is part of this build: it is built in its place in the order, with no note
-            expect(report.steps[2].note).toBeUndefined();
+            expect(report.steps[3].note).toBeUndefined();
             expect(events).toEqual(['start tile_vegetation', 'end tile_vegetation', 'start tile_refine', 'end tile_refine', 'start scan_fit', 'end scan_fit', 'start python', 'end python']);
             expect(maxActive).toBe(1);
-            expect(lines).toHaveLength(4);
+            expect(lines).toHaveLength(5);
             expect(lines[0]).toMatch(/\[native warm-up\] tile_vegetation: ready \(\d+\.\d s\)/);
-            expect(lines[3]).toMatch(/scratchbox_native \(Python module\): ready/);
+            expect(lines[4]).toMatch(/scratchbox_native \(Python module\): ready/);
         } finally {
+            if (prevMassing === undefined) delete process.env.SCRATCHBOX_STAGED_MASSING_BIN; else process.env.SCRATCHBOX_STAGED_MASSING_BIN = prevMassing;
             fs.rmSync(root, { recursive: true, force: true });
         }
     });
