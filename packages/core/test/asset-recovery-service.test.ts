@@ -49,6 +49,10 @@ describe('layerNameKey', () => {
         expect(layerNameKey('/models/wsp_massing_deadbeef_tex.glb')).toBe('massing|_tex.glb');
         expect(layerNameKey('/models/wsp_massing_deadbeef_tex.glb')).not.toBe(layerNameKey('/models/wsp_massing_deadbeef.glb'));
         expect(layerNameKey('/models/wsp_tiles_deadbeef.order.json')).toBe('tiles|.order.json');
+        // carved around a kept structure: the remesh and the tiles are different layers
+        expect(layerNameKey('/models/wsa_new_york_remesh_711be145_around_5057abf7.glb')).toBe('remesh_around|.glb');
+        expect(layerNameKey('/models/wsa_washington_square_remesh_7f2f9b1d_around_74562430.glb')).toBe('remesh_around|.glb');
+        expect(layerNameKey('/models/wsa_washington_square_tiles_150c191d_around_74562430.glb')).toBe('tiles_around|.glb');
         expect(layerNameKey('/models/plain.glb')).toBeUndefined();
     });
 });
@@ -226,6 +230,31 @@ describe('AssetRecoveryService', () => {
         expect(fs.readFileSync(path.join(workspace, 'public', 'models', 'wsa_new_york_iso_l3b_8001dfec.glb'))).toEqual(glbBytes(200, 1));
         expect(fs.readFileSync(path.join(workspace, 'public', 'models', 'wsa_washington_square_remesh_711be145_around_5057abf7.glb'))).toEqual(glbBytes(400, 2));
         expect(store.events({ subject: '/models/wsa_new_york_iso_l3b_8001dfec.glb' })[0].kind).toBe('asset.materialized');
+        store.close();
+    });
+
+    it('re-points a path that an earlier rebuild matched to the wrong layer when an explicit rebuild finds the right one', async () => {
+        const store = new DurableAssetStore(path.join(HOME, 'home-g'));
+        store.putFile(writeFile(glbBytes(100, 1)), { servedPath: '/models/wsa_sq_tiles_aaaaaaaa_around_bbbbbbbb.glb', origin: 'staged-location', recipeId: 'staged:aaaaaaaa' });
+        store.putFile(writeFile(glbBytes(200, 2)), { servedPath: '/models/wsa_sq_remesh_aaaaaaaa_around_bbbbbbbb.glb', origin: 'staged-location', recipeId: 'staged:aaaaaaaa' });
+        // the earlier (wrong) match: the lost remesh carve points at the tiles carve, then a sweep of the written-back
+        // copy made before the sweep kept records re-recorded it as a backfill that inherited the run's recipe
+        store.alias('/models/wsa_ny_remesh_11111111_around_22222222.glb', '/models/wsa_sq_tiles_aaaaaaaa_around_bbbbbbbb.glb', { origin: 'recovery', rebuilt: true });
+        store.putFile(store.lookup('/models/wsa_ny_remesh_11111111_around_22222222.glb')!.file, { servedPath: '/models/wsa_ny_remesh_11111111_around_22222222.glb', origin: 'backfill' });
+        expect(store.lookup('/models/wsa_ny_remesh_11111111_around_22222222.glb')).toMatchObject({ rebuilt: false, origin: 'backfill', recipeId: 'staged:aaaaaaaa' });
+        const rebuild: StagedRebuilder = async () => ({ runId: 'aaaaaaaa', layers: [] });
+        const service = new AssetRecoveryService(store, { workspaceRoot: path.join(HOME, 'checkout-g'), rebuildStaged: rebuild });
+        const lost = '/models/wsa_ny_remesh_11111111_around_22222222.glb';
+        // automatic recovery leaves a present file alone
+        const auto = await settled(service, service.start([lost]).id);
+        expect(auto.items[0].outcome).toBe('restored');
+        // an explicit rebuild re-matches it
+        const job = await settled(service, service.start([lost], { fallbackStaged: { request: { query: 'WSA', isolate: false, trees: true } } }).id);
+        expect(job.items[0]).toMatchObject({ outcome: 'rebuilt', detail: 'rebuilt by run aaaaaaaa as wsa_sq_remesh_aaaaaaaa_around_bbbbbbbb.glb' });
+        expect(fs.readFileSync(store.lookup(lost)!.file)).toEqual(glbBytes(200, 2));
+        // and a second explicit rebuild finds nothing better to do
+        const again = await settled(service, service.start([lost], { fallbackStaged: { request: { query: 'WSA', isolate: false, trees: true } } }).id);
+        expect(again.items[0]).toMatchObject({ outcome: 'restored', detail: 'already rebuilt as wsa_sq_remesh_aaaaaaaa_around_bbbbbbbb.glb' });
         store.close();
     });
 });
