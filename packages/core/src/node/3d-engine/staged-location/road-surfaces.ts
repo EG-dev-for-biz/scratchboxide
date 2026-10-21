@@ -63,12 +63,19 @@ export interface RoadSurfaceParams {
     minHalfWidthM: number;
     /** The levels across one station may differ by at most this (m): more is not one carriageway. */
     maxProfileRangeM: number;
+    /** Conservative: a station is built only when both its kerbs were measured on the scan (no default half-widths). */
+    requireBothKerbs: boolean;
+    /** A run shorter than this is not built (m). */
+    minRunLengthM: number;
+    /** Whether the sidewalk strips are built (off: carriageway and kerb faces only). */
+    buildSidewalks: boolean;
 }
 
 export const ROAD_SURFACE_PARAMS: RoadSurfaceParams = {
     stationM: 2, lateralStepM: 0.25, maxHalfWidthM: 14, kerbRiseM: 0.08, kerbRunM: 0.75, levelPercentile: 0.2,
     defaultHalfWidthM: 3.5, sidewalkMaxM: 4, liftM: 0.04, medianRiseM: 0.08,
-    snapM: 8, laneHalfWindowM: 2.5, maxSpreadM: 0.35, maxAboveGroundM: 2.5, minHalfWidthM: 2.0, maxProfileRangeM: 1.0
+    snapM: 8, laneHalfWindowM: 2.5, maxSpreadM: 0.35, maxAboveGroundM: 2.5, minHalfWidthM: 2.0, maxProfileRangeM: 1.0,
+    requireBothKerbs: true, minRunLengthM: 20, buildSidewalks: false
 };
 
 /** The scan's surface, highest point per cell (NaN where it has nothing). */
@@ -108,8 +115,8 @@ export interface RoadSurface {
     lengthM: number;
     /** Share of the stations' kerbs (both sides) that were measured. */
     measuredKerbShare: number;
-    /** Stations left out, by reason: no street surface near the line (a roof, a wall, a tree), above the terrain (a tunnel's line), levels not one carriageway. */
-    dropped: { noSurface: number; aboveGround: number; uneven: number };
+    /** Stations left out, by reason: no street surface near the line (a roof, a wall, a tree), above the terrain (a tunnel's line), levels not one carriageway, a kerb not measured, under a measured tree crown. */
+    dropped: { noSurface: number; aboveGround: number; uneven: number; noKerb: number; underTree: number };
 }
 
 export interface RoadMeasureInput {
@@ -123,6 +130,8 @@ export interface RoadMeasureInput {
     buildingAt?: (x: number, z: number) => number;
     /** The terrain the scan shows at a point (NaN where unknown): a street level far above it is not a street. */
     groundAt?: (x: number, z: number) => number;
+    /** Measured tree crowns (stem and mean radius): the trees come first, so a station whose carriageway reaches a crown's footprint is not built. */
+    avoid?: Array<{ x: number; z: number; radiusM: number }>;
 }
 
 function percentile(values: number[], p: number): number {
@@ -248,7 +257,7 @@ export function measureRoadSurfaces(input: RoadMeasureInput, P: RoadSurfaceParam
     input.roads.forEach((line, ri) => {
         const pts = stationsAlong(line, P.stationM).filter(p => input.within(p.x, p.z));
         if (pts.length < 2) return;
-        const dropped = { noSurface: 0, aboveGround: 0, uneven: 0 };
+        const dropped = { noSurface: 0, aboveGround: 0, uneven: 0, noKerb: 0, underTree: 0 };
         /** Consecutive kept stations make one run; a gap splits the road into separate surfaces. */
         let run: RoadStation[] = [];
         let measured = 0;
@@ -256,7 +265,9 @@ export function measureRoadSurfaces(input: RoadMeasureInput, P: RoadSurfaceParam
         let gap = 0;
         const drop = (): void => { if (++gap > 2) { flush(); gap = 0; } };
         const flush = (): void => {
-            if (run.length >= 2) {
+            let runLength = 0;
+            for (let i = 1; i < run.length; i++) runLength += Math.hypot(run[i].x - run[i - 1].x, run[i].z - run[i - 1].z);
+            if (run.length >= 2 && runLength >= P.minRunLengthM) {
                 let lengthM = 0;
                 for (let i = 1; i < run.length; i++) lengthM += Math.hypot(run[i].x - run[i - 1].x, run[i].z - run[i - 1].z);
                 out.push({ id: `road_${ri}${out.some(r => r.id.startsWith(`road_${ri}`)) ? `_${out.filter(r => r.id.startsWith(`road_${ri}`)).length}` : ''}`, stations: run, lengthM, measuredKerbShare: 0, dropped: { ...dropped } });
@@ -308,6 +319,15 @@ export function measureRoadSurfaces(input: RoadMeasureInput, P: RoadSurfaceParam
             const medianStrip = findMedian(sec, P);
             const fromL = Math.max(P.minHalfWidthM, medianStrip ? medianStrip.leftEdgeM : 0), fromR = Math.max(P.minHalfWidthM, medianStrip ? medianStrip.rightEdgeM : 0);
             const kl = findKerb(sec, -1, fromL, P), kr = findKerb(sec, 1, fromR, P);
+            if (P.requireBothKerbs && (!kl || !kr)) { dropped.noKerb++; drop(); continue; }
+            // the trees come first: a carriageway that reaches a measured crown's footprint is left to the tree
+            if (input.avoid && kl && kr) {
+                const hit = input.avoid.some(t => {
+                    const along = (t.x - sx) * p.tx + (t.z - sz) * p.tz, off = (t.x - sx) * nx + (t.z - sz) * nz;
+                    return Math.abs(along) <= t.radiusM + P.stationM / 2 && off >= -kl.halfWidthM - t.radiusM && off <= kr.halfWidthM + t.radiusM;
+                });
+                if (hit) { dropped.underTree++; drop(); continue; }
+            }
             let measuredHere = 0;
             const side = (sign: 1 | -1, k: { halfWidthM: number; kerbTopY: number } | undefined): RoadSide => {
                 if (!k) return { halfWidthM: P.defaultHalfWidthM, kerb: 'vector-modelled' };
@@ -444,7 +464,7 @@ export interface RoadMesh {
     sidewalks: RoadMeshPart;
     /** The planar UV frame: uv = ((x - x0) / width, (z - z0) / height) (without an atlas layout; with one, the UVs are road-aligned into the atlas). */
     uvFrame: { x0: number; z0: number; widthM: number; heightM: number };
-    stats: { roads: number; stations: number; measuredKerbs: number; defaultKerbs: number; medians: number; sidewalkM: number; skippedQuads: number; triangles: number; droppedStations: { noSurface: number; aboveGround: number; uneven: number } };
+    stats: { roads: number; stations: number; measuredKerbs: number; defaultKerbs: number; medians: number; sidewalkM: number; skippedQuads: number; triangles: number; droppedStations: { noSurface: number; aboveGround: number; uneven: number; noKerb: number; underTree: number } };
     minY: number; maxY: number;
 }
 
@@ -485,14 +505,14 @@ export function buildRoadMesh(roads: RoadSurface[], P: RoadSurfaceParams = ROAD_
     const carriage = new PartBuilder(frame), kerbs = new PartBuilder(frame), walks = new PartBuilder(frame);
     const ordered = [...roads].sort((a, b) => b.lengthM - a.lengthM);
     const polygons = ordered.map(carriagewayPolygon);
-    const stats = { roads: roads.length, stations: 0, measuredKerbs: 0, defaultKerbs: 0, medians: 0, sidewalkM: 0, skippedQuads: 0, triangles: 0, droppedStations: { noSurface: 0, aboveGround: 0, uneven: 0 } };
+    const stats = { roads: roads.length, stations: 0, measuredKerbs: 0, defaultKerbs: 0, medians: 0, sidewalkM: 0, skippedQuads: 0, triangles: 0, droppedStations: { noSurface: 0, aboveGround: 0, uneven: 0, noKerb: 0, underTree: 0 } };
     // a road's runs share one dropped count: counted once per vector line
     const seenLine = new Set<string>();
     for (const r of roads) {
         const line = r.id.replace(/_\d+$/, '');
         if (seenLine.has(line)) continue;
         seenLine.add(line);
-        stats.droppedStations.noSurface += r.dropped.noSurface; stats.droppedStations.aboveGround += r.dropped.aboveGround; stats.droppedStations.uneven += r.dropped.uneven;
+        for (const k of Object.keys(stats.droppedStations) as Array<keyof typeof stats.droppedStations>) stats.droppedStations[k] += r.dropped[k] ?? 0;
     }
     const onEarlier = (upTo: number, x: number, z: number): boolean => {
         for (let i = 0; i < upTo; i++) if (pointInPolygon(polygons[i], x, z)) return true;
@@ -539,7 +559,7 @@ export function buildRoadMesh(roads: RoadSurface[], P: RoadSurfaceParams = ROAD_
                 const top = kerbs.vertex(...at(d, sd.kerbTopY), uvKerb());
                 const foot = kerbs.vertex(...at(d, sign < 0 ? s.profile[0] : s.profile[4]), uvKerb());
                 if (sign < 0) { row.kl = top; row.sl = foot; } else { row.kr = top; row.sr = foot; }
-                if (sd.sidewalk) {
+                if (sd.sidewalk && P.buildSidewalks) {
                     const a = walks.vertex(...at(d, sd.sidewalk.level), uvSide()), b = walks.vertex(...at(d + sign * sd.sidewalk.widthM, sd.sidewalk.level), uvSide());
                     if (sign < 0) { row.wl = a; row.wr = b; (row as any).wl2 = b; (row as any).wl1 = a; } else { (row as any).wr1 = a; (row as any).wr2 = b; }
                 }

@@ -139,7 +139,7 @@ export const sbRoadieHandlers: Record<string, ToolHandler> = {
         const stripKey = place.stripKey;
         const stripDir = stripKey ? (() => { const dir = path.join(stagedWorkspaceRoot(), '.scratchbox', 'cache', 'tile_vegetation', stripKey); return fs.existsSync(path.join(dir, 'devegetated.glb')) ? dir : undefined; })() : undefined;
         const tileForRoads = stripDir ? path.join(stripDir, 'devegetated.glb') : extraction.texturedGlb;
-        const key = stageKey('roads/v4', place.tilesKey, stripKey ?? 'scan', crypto.createHash('sha256').update(JSON.stringify(centrelines)).digest('hex').slice(0, 16), covered.toFixed(1), P.liftM, P.kerbRiseM, P.defaultHalfWidthM, P.stationM, texelM);
+        const key = stageKey('roads/v5', place.tilesKey, stripKey ?? 'scan', crypto.createHash('sha256').update(JSON.stringify(centrelines)).digest('hex').slice(0, 16), covered.toFixed(1), P.liftM, P.kerbRiseM, P.defaultHalfWidthM, P.stationM, texelM);
         const key8 = key.slice(0, 8);
         const base = `${data.stagedBuild.place.resolvedAddress.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'place'}`;
         type Value = { stats: ReturnType<typeof buildRoadMesh>['stats']; measuredKerbShare: number; photo: { width: number; height: number; texelM: number } };
@@ -148,7 +148,13 @@ export const sbRoadieHandlers: Record<string, ToolHandler> = {
             const scan = loadScanMesh(tileForRoads);
             const grid = { ...surfaceModel(scan, 0.5), cellM: 0.5 };
             const ground = buildGroundModel(scan, { cellMeters: 1, water: vector.waterAt, road: vector.roadAt });
-            const roads = measureRoadSurfaces({ roads: centrelines, grid, within: (x, z) => Math.hypot(x, z) <= covered, buildingAt: vector.buildingAt, groundAt: ground.groundAt }, P);
+            // SB-Veggie comes first: the run's measured crowns are kept clear of
+            const crownsFile = stripDir ? path.join(stripDir, 'crowns.json') : undefined;
+            const avoid = crownsFile && fs.existsSync(crownsFile) ? ((JSON.parse(fs.readFileSync(crownsFile, 'utf8')) as { crowns?: any[] }).crowns ?? [])
+                .filter(c => c.status === 'tree' && Array.isArray(c.stem) && Array.isArray(c.sectorRadii))
+                .map(c => ({ x: Number(c.stem[0]), z: Number(c.stem[1]), radiusM: (c.sectorRadii as number[]).reduce((a, b) => a + b, 0) / 16 })) : [];
+            const roads = measureRoadSurfaces({ roads: centrelines, grid, within: (x, z) => Math.hypot(x, z) <= covered, buildingAt: vector.buildingAt, groundAt: ground.groundAt, avoid }, P);
+            if (!roads.length) throw new Error(`${SB_ROADIE_TOOL}: none of the ${centrelines.length} streets had both kerbs measured on the scan over ${P.minRunLengthM} m; nothing was resurfaced.`);
             const planar = buildRoadMesh(roads, P);
             const stations = roads.reduce((n, r) => n + r.stations.length, 0);
             const measuredKerbShare = stations ? roads.reduce((n, r) => n + r.measuredKerbShare * r.stations.length, 0) / stations : 0;

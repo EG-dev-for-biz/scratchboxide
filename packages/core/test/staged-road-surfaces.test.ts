@@ -122,8 +122,9 @@ describe('road surfaces', () => {
     it('moves a station from a vector line that misses the street onto the measured lane, and drops a line under a roof', () => {
         const scan = loadScanMesh(tileFile);
         const grid = { ...surfaceModel(scan, 0.5), cellM: 0.5 };
-        // Google's line 1.5 m south of the street's centre: every station is centred back between the kerbs, still 4 m out
-        const off = measureRoadSurfaces({ roads: [[[-28, 1.5], [28, 1.5]]], grid, within: () => true, exclude: (x, z) => Math.hypot(x + 12, z - 5.5) < 3.8 });
+        // Google's line 1.5 m south of the street's centre: every station is centred back between the kerbs, still 4 m out.
+        // minRunLengthM is relaxed here: this checks snapping and centring, not the conservative run-length gate (covered below)
+        const off = measureRoadSurfaces({ roads: [[[-28, 1.5], [28, 1.5]]], grid, within: () => true, exclude: (x, z) => Math.hypot(x + 12, z - 5.5) < 3.8 }, { ...ROAD_SURFACE_PARAMS, minRunLengthM: 0 });
         const mid = off.flatMap(r => r.stations).filter(s => Math.abs(s.x - 10) > 6 && Math.abs(s.x + 12) > 6);
         expect(mid.length).toBeGreaterThan(10);
         for (const s of mid) {
@@ -138,23 +139,35 @@ describe('road surfaces', () => {
         const f = path.join(WORK, 'roofed.glb');
         fs.writeFileSync(f, roofed);
         const g2 = { ...surfaceModel(loadScanMesh(f), 0.5), cellM: 0.5 };
-        const tunnel = measureRoadSurfaces({ roads: [[[-28, -25], [28, -25]]], grid: g2, within: () => true, groundAt: () => 0 });
+        // (both-kerb gating off here: the flat ground shows none, and the gate under test is the terrain one)
+        const tunnel = measureRoadSurfaces({ roads: [[[-28, -25], [28, -25]]], grid: g2, within: () => true, groundAt: () => 0 }, { ...ROAD_SURFACE_PARAMS, requireBothKerbs: false, minRunLengthM: 4 });
         expect(tunnel.length).toBe(2);
         expect(tunnel[0].dropped.aboveGround).toBeGreaterThanOrEqual(6);
         for (const r of tunnel) for (const s of r.stations) { expect(Math.abs(s.x)).toBeGreaterThan(7); expect(s.profile[2]).toBeLessThan(0.2); }
         // the flat ground shows no kerb: the widths are the default and say so
         expect(tunnel[0].measuredKerbShare).toBe(0);
         expect(tunnel[0].stations[0].left.kerb).toBe('vector-modelled');
+        // conservative by default: with no kerb measured nothing is built at all
+        expect(measureRoadSurfaces({ roads: [[[-28, -25], [28, -25]]], grid: g2, within: () => true, groundAt: () => 0 })).toEqual([]);
+        // the trees come first: a measured crown over the main street takes its stations out of the road
+        const treed = measureRoadSurfaces({ roads: [[[-28, 0], [28, 0]]], grid, within: () => true, exclude: (x, z) => Math.hypot(x + 12, z - 5.5) < 3.8, avoid: [{ x: 0, z: 2, radiusM: 3 }] });
+        const xs = treed.flatMap(r => r.stations.map(s => s.x));
+        expect(xs.some(x => Math.abs(x) <= 2)).toBe(false);
+        expect(treed.reduce((n, r) => n + r.dropped.underTree, 0)).toBeGreaterThanOrEqual(2);
     });
 
     it('builds the ribbons once at the crossing, with kerb faces and sidewalks, and writes a textured GLB that reads the photo', () => {
         const mesh = buildRoadMesh(roads);
         expect(mesh.stats.roads).toBe(3);
-        expect(mesh.stats.skippedQuads).toBeGreaterThan(0);
+        // conservative gating (both kerbs required) already stops each ribbon short of a crossing it cannot measure
+        // cleanly, so there is nothing left to skip there
+        expect(mesh.stats.skippedQuads).toBe(0);
         expect(mesh.stats.medians).toBeGreaterThan(10);
         expect(mesh.carriageway.indices.length).toBeGreaterThan(0);
         expect(mesh.kerbs.indices.length).toBeGreaterThan(0);
-        expect(mesh.sidewalks.indices.length).toBeGreaterThan(0);
+        // conservative: no sidewalk strips are built (the measured sidewalks stay in the stations for the tool's report)
+        expect(mesh.sidewalks.indices.length).toBe(0);
+        expect(roads[0].stations.some(s => s.left.sidewalk)).toBe(true);
         expect(mesh.carriageway.uv.length).toBe((mesh.carriageway.positions.length / 3) * 2);
         for (let i = 0; i < mesh.carriageway.uv.length; i++) { expect(mesh.carriageway.uv[i]).toBeGreaterThanOrEqual(0); expect(mesh.carriageway.uv[i]).toBeLessThanOrEqual(1); }
         // the photo from above: dark on the street, the ground colour beside it

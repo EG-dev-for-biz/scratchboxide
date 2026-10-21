@@ -82,7 +82,7 @@ import {
 import { VisionModelChain, type VisionGenAIClient } from '../../gemini/vision-model-chain';
 import { segmentOwnershipViews } from './ownership-masks';
 import { buildGroundModel, geodeticToScan, loadScanMesh, surfaceModel, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
-import { buildRoadMesh, drivableAt, measureRoadSurfaces, nearestOffRoad, writeRoadsGlb, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
+import { buildRoadMesh, measureRoadSurfaces, writeRoadsGlb, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
 import { renderTopDownPhoto } from './top-down-photo';
 import { synthesizeRoadTextures } from './road-texture';
 import * as jpegJs from 'jpeg-js';
@@ -2439,7 +2439,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
 
         // ---------------- roads (SB-Roadie: Google's road centrelines measured kerb to kerb on the tree-stripped scan; runs beside the remesh) ----------------
         let roadsMeasured: RoadSurface[] | undefined;
-        type RoadStageValue = { stats: RoadMesh['stats']; measuredKerbShare: number; photo: { width: number; height: number; texelM: number; ms: number }; markings?: { runs: number; markings: number; dashed: number; solid: number } };
+        type RoadStageValue = { stats: RoadMesh['stats']; measuredKerbShare: number; photo: { width: number; height: number; texelM: number; ms: number }; markings?: { runs: number; markings: number; dashed: number; solid: number } } | undefined;
         const roadsPromise: Promise<unknown> = (async () => {
             const covered = extraction.coveredRadiusM;
             // the vector evidence the sizing fetched (an isolate), else fetched now for the extraction's cover (a district)
@@ -2455,7 +2455,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 id: 'roads',
                 run: async io => {
                     const tileForRoads = strip ? strip.devegetatedGlb : extraction.texturedGlb;
-                    const key = stageKey('roads/v4', t.key, strip ? strip.cacheKey : 'scan', crypto.createHash('sha256').update(JSON.stringify(centrelines)).digest('hex').slice(0, 16), covered.toFixed(1), ROAD_SURFACE_PARAMS.liftM);
+                    const key = stageKey('roads/v5', t.key, strip ? strip.cacheKey : 'scan', crypto.createHash('sha256').update(JSON.stringify(centrelines)).digest('hex').slice(0, 16), covered.toFixed(1), ROAD_SURFACE_PARAMS.liftM);
                     run.keys.roads = key;
                     const key8 = key.slice(0, 8);
                     const entry = await cache.run<RoadStageValue>('roads', key, async dir => {
@@ -2466,9 +2466,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const canopy = !strip && t.canopy ? canopyLookup(t.canopy) : undefined;
                         // the terrain the scan shows (the walkable street surface): a line whose street stands far above it runs under a roof or deck
                         const ground = t.ground ?? buildGroundModel(scan, { cellMeters: 1, ...(canopy ? { exclude: canopy } : {}), water: vector!.waterAt, road: vector!.roadAt });
+                        // SB-Veggie comes first: the measured crowns (their stems and mean radii) are kept clear of
+                        const avoid = strip ? ((JSON.parse(fs.readFileSync(strip.crownsJson, 'utf8')) as { crowns?: any[] }).crowns ?? [])
+                            .filter(c => c.status === 'tree' && Array.isArray(c.stem) && Array.isArray(c.sectorRadii))
+                            .map(c => ({ x: Number(c.stem[0]), z: Number(c.stem[1]), radiusM: (c.sectorRadii as number[]).reduce((a, b) => a + b, 0) / 16 })) : [];
                         const roads = measureRoadSurfaces({
-                            roads: centrelines, grid, within: (x, z) => Math.hypot(x, z) <= covered, ...(canopy ? { exclude: canopy } : {}), buildingAt: vector!.buildingAt, groundAt: ground.groundAt
+                            roads: centrelines, grid, within: (x, z) => Math.hypot(x, z) <= covered, ...(canopy ? { exclude: canopy } : {}), buildingAt: vector!.buildingAt, groundAt: ground.groundAt, avoid
                         });
+                        if (!roads.length) return { value: undefined, inputs: { centrelines: centrelines.length, covered, noRoadResurfaced: true } };
                         const planar = buildRoadMesh(roads);
                         const stations = roads.reduce((n, r) => n + r.stations.length, 0);
                         const measuredKerbShare = stations ? roads.reduce((n, r) => n + r.measuredKerbShare * r.stations.length, 0) / stations : 0;
@@ -2484,8 +2489,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         }, { jpeg: Buffer.from(jpeg), width: atlas.width, height: atlas.height });
                         fs.writeFileSync(path.join(dir, 'roads.json'), JSON.stringify({ schema: 'scratchbox.road-surfaces/1', roads }));
                         return { value: { stats: mesh.stats, measuredKerbShare, photo: { width: atlas.width, height: atlas.height, texelM: photo.texelM, ms: photo.ms }, markings: atlas.stats }, inputs: { centrelines: centrelines.length, covered, tile: path.basename(tileForRoads) } };
-                    }, { publish: () => [{ from: 'roads.glb', as: `${base}_roads_${key8}.glb` }], bypass: bypass('roads') });
+                    }, { publish: (dir, value) => (value ? [{ from: 'roads.glb', as: `${base}_roads_${key8}.glb` }] : []), bypass: bypass('roads') });
                     run.cacheStatus.roads = entry.cached ? 'hit' : 'miss';
+                    if (!entry.value) {
+                        return { status: 'skipped', source: '', reason: `none of the ${centrelines.length} streets had both kerbs measured on the scan over ${ROAD_SURFACE_PARAMS.minRunLengthM} m, so nothing was resurfaced` };
+                    }
                     roadsMeasured = (JSON.parse(fs.readFileSync(path.join(entry.dir, 'roads.json'), 'utf8')) as { roads: RoadSurface[] }).roads;
                     const pub = entry.published[0];
                     const v = entry.value;
@@ -2496,7 +2504,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             label: measured ? 'measured' : VECTOR_MODELLED_LABEL, measuredGeometry: measured, confidence: v.measuredKerbShare,
                             method: 'SB-Roadie: ribbons swept along Google vector road centrelines through levels read low on the tree-stripped photo tiles at stations every 2 m; kerbs where the scan steps up (a default half-width where none shows); the tarmac colour and the lane markings read along each street from the tile photo (what repeats along the road) and redrawn',
                             sources: [{ kind: 'vector-tiles', id: `roads:${key8}` }, { kind: 'tile-extraction', id: `extract:${t.key.slice(0, 8)}` }],
-                            note: `${v.stats.roads} street runs, ${v.stats.stations} stations; ${v.stats.measuredKerbs} kerbs measured, ${v.stats.defaultKerbs} defaulted; ${v.stats.medians} median stations; ${Math.round(v.stats.sidewalkM)} m of sidewalk; ${v.stats.droppedStations.noSurface + v.stats.droppedStations.aboveGround + v.stats.droppedStations.uneven} stations left out (${v.stats.droppedStations.noSurface} no street surface near the line, ${v.stats.droppedStations.aboveGround} under a roof or deck, ${v.stats.droppedStations.uneven} uneven); ${v.markings ? `${v.markings.markings} lane markings read and redrawn (${v.markings.solid} solid, ${v.markings.dashed} dashed); ` : ''}stands ${ROAD_SURFACE_PARAMS.liftM} m above the scan`
+                            note: `${v.stats.roads} street runs, ${v.stats.stations} stations; ${v.stats.measuredKerbs} kerbs measured, ${v.stats.defaultKerbs} defaulted; ${v.stats.medians} median stations; ${Math.round(v.stats.sidewalkM)} m of sidewalk; ${Object.values(v.stats.droppedStations).reduce((a, b) => a + b, 0)} stations left out (${v.stats.droppedStations.noKerb} without both kerbs measured, ${v.stats.droppedStations.underTree} under a measured tree, ${v.stats.droppedStations.noSurface} no street surface near the line, ${v.stats.droppedStations.aboveGround} under a roof or deck, ${v.stats.droppedStations.uneven} uneven); ${v.markings ? `${v.markings.markings} lane markings read and redrawn (${v.markings.solid} solid, ${v.markings.dashed} dashed); ` : ''}stands ${ROAD_SURFACE_PARAMS.liftM} m above the scan`
                         },
                         provenanceLabels: measured ? ['measured', VECTOR_MODELLED_LABEL] : [VECTOR_MODELLED_LABEL], supersedes: [], revealAfter: [],
                         reveal: { durationMs: 1500, stagger: 0.3, crossfadeFrom: [] },
@@ -2505,7 +2513,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     run.commit(layer, { source: 'GoogleVectorRoads', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true, roads: v.stats.roads, measuredKerbShare: v.measuredKerbShare, photo: v.photo } });
                     return { status: 'committed', source: `${v.stats.roads} streets measured kerb to kerb (${Math.round(100 * v.measuredKerbShare)} % of kerbs found), textured from the tile photo`, layers: [layer], cached: entry.cached };
                 }
-            }).catch(err => { if (err?.name === 'AbortError') throw err; run.emit('roads', 'failed', { reason: errorMessage(err) }); return undefined; });
+            }).catch(err => {
+                if (err?.name === 'AbortError') throw err;
+                run.emit('roads', 'failed', { reason: errorMessage(err) });
+                return undefined;
+            });
         })();
         siblings.push(roadsPromise);
 
@@ -3292,40 +3304,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         summaryTrees = summarizeTrees(strip!, undefined, { isolate: isolateMode, stripMs: strip!.ms });
                         return { status: 'committed', value: summaryTrees, source: summaryTrees.outcome };
                     }
-                    // no rebuilt tree stands on a drivable carriageway: a stem the road measurement puts on one (its crown overhangs
-                    // the street) is moved to the nearest spot off it within half its crown radius; one with no such spot is not planted
-                    let stripForPlant = strip!;
-                    await roadsPromise.catch(() => undefined);
-                    if (roadsMeasured?.length) {
-                        const doc = JSON.parse(fs.readFileSync(strip!.crownsJson, 'utf8')) as { crowns?: any[] };
-                        let moved = 0, left = 0;
-                        for (const c of doc.crowns ?? []) {
-                            if (c.status !== 'tree' || !Array.isArray(c.stem)) continue;
-                            const [sx, sz] = c.stem as [number, number];
-                            if (!drivableAt(roadsMeasured, sx, sz)) continue;
-                            let r = 0;
-                            for (const v of (c.sectorRadii ?? []) as number[]) r += v / 16;
-                            const off = nearestOffRoad(roadsMeasured, sx, sz, Math.max(1, 0.5 * r));
-                            if (off) {
-                                c.stem = [off.x, off.z];
-                                c.stemMoved = { fromX: sx, fromZ: sz, movedM: off.movedM, reason: 'the stem lay on the measured drivable carriageway: moved to the nearest spot off it; its crown overhangs the street' };
-                                moved++;
-                            } else {
-                                c.status = 'on_carriageway';
-                                c.notPlanted = 'the stem lies on the measured drivable carriageway and no spot off it lies within half its crown radius';
-                                left++;
-                            }
-                        }
-                        if (moved || left) {
-                            const dir = path.join(cache.dir, 'roads');
-                            fs.mkdirSync(dir, { recursive: true });
-                            const edited = path.join(dir, `${strip!.cacheKey.slice(0, 16)}_${(run.keys.roads ?? 'r').slice(0, 8)}_crowns.json`);
-                            fs.writeFileSync(edited, JSON.stringify(doc));
-                            stripForPlant = { ...strip!, crownsJson: edited };
-                            io.progress(`${moved} tree${moved === 1 ? '' : 's'} moved off the carriageway to the kerb${left ? `, ${left} not planted (no spot off the street within reach)` : ''}`);
-                            run.note(PROVENANCE.grownToMeasuredCrown, `${moved} stems that the tree measurement put on a drivable carriageway were moved to the nearest spot off it${left ? `; ${left} with no such spot within half their crown radius were not planted` : ''}`);
-                        }
-                    }
+                    // SB-Veggie comes first: the trees stand where they were measured; the road stage keeps its ribbons clear of their crowns
+                    const stripForPlant = strip!;
                     io.progress(`growing ${toPlant} SB-Veggie trees to their measured crowns`);
                     const planted = await plantTrees({ vegetation: deps.vegetation }, stripForPlant, {
                         treeTriangleBudget: request.treeTriangleBudget,
