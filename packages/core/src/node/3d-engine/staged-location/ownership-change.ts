@@ -19,9 +19,11 @@ import { parseGlbNodes } from './glb-nodes';
 
 /**
  * The vote changes the structure materially when the triangles it moves in or out make up at least this share of the
- * surface of the two isolates together (3%: a cornice, a neighbour's party wall or a tree crown, not a few stray slivers).
+ * surface of the two isolates together: 5%, a neighbour's party wall or a tree crown, not the edges of the footprint.
+ * Measured live (Haughwout Building, 2026-10-20): the vote moved 3.0% (95 m² left, 27 m² joined, of 3,980 m²); at a 3%
+ * threshold that replaced the isolate and ran grammar, fit and textures a second time, +85 s to the finish for that 3%.
  */
-export const OWNERSHIP_MATERIAL_SHARE = 0.03;
+export const OWNERSHIP_MATERIAL_SHARE = 0.05;
 
 export interface OwnershipChange {
     /** Area (m²) in the first isolate only, in the second only, and in both. */

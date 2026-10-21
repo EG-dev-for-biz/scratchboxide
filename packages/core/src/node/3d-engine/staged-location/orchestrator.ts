@@ -654,9 +654,18 @@ class Runner {
         this.run.emit(id, 'skipped', { reason, degradations });
     }
 
-    async stage<T>(def: StageDef<T>, extraSignal?: AbortSignal): Promise<Omit<StageResult<T>, 'status'> & { status: StageResult<T>['status'] | 'stopped' }> {
+    /**
+     * The stages built on the remesh (grammar, the rebuild, the textures) and the signal that ends them when the ownership
+     * vote replaces that remesh: they are skipped, with the reason, and run again on the voted remesh.
+     */
+    passSignal?: () => AbortSignal;
+    static readonly PASS_STAGES: ReadonlySet<StageId> = new Set<StageId>(['grammar', 'relief', 'fit', 'evidence', 'project', 'vision', 'correct', 'detail', 'figures', 'textures', 'textures-late']);
+
+    async stage<T>(def: StageDef<T>, extraSignalIn?: AbortSignal): Promise<Omit<StageResult<T>, 'status'> & { status: StageResult<T>['status'] | 'stopped' }> {
         if (this.ctx.signal?.aborted) throw abortError();
         const id = def.id;
+        const pass = this.passSignal && Runner.PASS_STAGES.has(id) ? this.passSignal() : undefined;
+        const extraSignal = pass && extraSignalIn ? AbortSignal.any([extraSignalIn, pass]) : (pass ?? extraSignalIn);
         if (this.pastDeadline) {
             const reason = `stopped at the time limit before ${STAGES[id].title.toLowerCase()}`;
             this.run.emit(id, 'stopped', { reason });
@@ -2673,6 +2682,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             }
         });
         persist();
+        // what this pass built on the remesh is ended when the ownership vote replaces it (Runner.passSignal)
+        let passStop = new AbortController();
+        runner.passSignal = () => passStop.signal;
         // the remesh the rest of the build stands on: the first isolate, until the ownership vote replaces it (a second pass)
         let remeshedNow = remesh.status !== 'stopped' && remesh.value?.committed === true ? remesh.value.refined : undefined;
         let isolateOk = isolateMode && !!remeshedNow?.rawClayGlb && !run.state.degradations.some(d => d.reasonCode === 'isolate_mismatch');
@@ -2723,7 +2735,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (change && !change.material) {
                         return {
                             status: 'committed', value: { material: false, request: votedRequest, isolateOk: true }, breakdownMs: msBy,
-                            source: `the vote agrees with the geometric isolate: it moved ${moved}, under the ${Math.round(OWNERSHIP_MATERIAL_SHARE * 100)}% that would replace it; the first isolate and everything built on it stand`
+                            source: `the vote moved ${moved}, under the ${Math.round(OWNERSHIP_MATERIAL_SHARE * 100)}% that would replace the geometric isolate; the first isolate and everything built on it stand (the vote's own remesh is not shown)`
                         };
                     }
                     // material: the voted remesh replaces the first isolate and what was built on it (the rebuild runs again on it)
@@ -2751,6 +2763,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, extra: { rawGlbPath: extraction.rawGlbPath ?? extraction.texturedGlb, treesRemoved: Number(strip?.stats?.triangles?.removed ?? 0) > 0 } });
                     run.setGround(layer.objectId);
                     refineTextured.set(layer.objectId, voted.texturedGlb);
+                    // what this pass still has running on the first isolate is set aside: the next pass builds it on the voted remesh
+                    passStop.abort('the ownership vote replaced the first isolate, so this stage runs again on the voted remesh');
                     run.state.structure = { ...run.state.structure!, isolateIoU: round(chk.iou, 3), isolateAgreement: round(chk.agreement, 3) };
                     return {
                         status: 'committed', value: { material: true, refined: voted, request: votedRequest, isolateOk: true, layer }, layers: [layer], breakdownMs: msBy, cached: voted.cached,
@@ -3731,6 +3745,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             remeshRequest = vote.request;
             isolateOk = vote.isolateOk;
             groundOverride = { groundFile: vote.refined.clayGlb, groundLayerId: vote.layer!.objectId };
+            passStop = new AbortController();
             rebuildOut = { droppedNotResolvable: 0 };
             texturesPromise = undefined;
             lateTexturesPromise = undefined;

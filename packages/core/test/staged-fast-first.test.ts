@@ -13,7 +13,7 @@
  *   - the vector first paint (Google vector buildings, extruded natively) is on screen before the tiles, labelled
  *     vector-modelled; the tiles supersede it; a district keeps the buildings past the tiles' reach as their own layer;
  *   - the geometric isolate is the first clay building; the ownership vote runs after it, and its voted remesh replaces it
- *     (and the rebuild runs again) only when it moves at least 3% of the structure's surface;
+ *     (and the rebuild runs again) only when it moves at least 5% of the structure's surface;
  *   - a twin baked from the tile photo is published before the Street View steps (the fit, the close-ups);
  *   - districts are textured (tile_refine's photo on the district remesh), clay first; a clay request stays clay.
  * No network, no billed call.
@@ -182,7 +182,7 @@ describe('the fast isolate first', () => {
         expect(refineCalls.some(r => r.ownership?.masksDir)).toBe(true);
         const vote = result.stages.find(x => x.stage === 'ownership')!;
         expect(vote.status).toBe('committed');
-        expect(vote.source).toMatch(/^the vote agrees with the geometric isolate: it moved 0% of the structure's scan surface/);
+        expect(vote.source).toMatch(/^the vote moved 0% of the structure's scan surface .*, under the 5% that would replace the geometric isolate/);
         const final = (result.artifact as any).data.stagedBuild;
         expect(final.layers.some((l: any) => l.layer === 'l2v')).toBe(false);
         expect(final.layers.filter((l: any) => l.layer === 'l3b')).toHaveLength(1);
@@ -226,7 +226,7 @@ describe('the fast isolate first', () => {
         expect((result.artifact as any).data.objects.find((o: any) => o.content.metadata.isGround).id).toBe(l2v.objectId);
     });
 
-    it('measures the change on the scan triangles: 3% of the surface is the threshold', () => {
+    it('measures the change on the scan triangles: 5% of the surface is the threshold', () => {
         const dir = path.join(TMP, 'change');
         fs.mkdirSync(dir, { recursive: true });
         const a = writeTris(path.join(dir, 'a.glb'), building(-10, 10, -10, 10, 20));
@@ -236,7 +236,7 @@ describe('the fast isolate first', () => {
         const small = ownershipChange(a, b);
         expect(small.material).toBe(false);
         expect(small.onlySecondM2).toBeCloseTo(5, 3); // the walls and the roof of a 1 m block
-        expect(small.share).toBeLessThan(0.03);
+        expect(small.share).toBeLessThan(0.05);
         const big = ownershipChange(a, c);
         expect(big.material).toBe(true);
         expect(big.onlyFirstM2).toBe(0);
