@@ -127,7 +127,7 @@ async function runAtmosphericScatteringPipelineTests() {
     assert.ok(skyDome.hemiLight instanceof THREE.HemisphereLight, 'Must create hemisphere bounce light');
     assert.ok(skyDome.sunLight instanceof THREE.DirectionalLight, 'Must create sun directional light');
 
-    const shaderMat = skyDome.skyDome.material as THREE.ShaderMaterial;
+    const shaderMat = skyDome.skyMaterial;
     assert.ok(shaderMat instanceof THREE.ShaderMaterial, 'Sky dome material must be ShaderMaterial');
 
     // Shader assertions

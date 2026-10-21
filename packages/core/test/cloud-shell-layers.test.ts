@@ -29,8 +29,8 @@ import { InvalidInputError } from '../src/common/errors/pipeline-errors';
 const cirrus = { label: 'cirrus', baseAltitudeMeters: 9000, thicknessMeters: 1200, coverage: 0.45, opticalDepth: 0.5, featureSizeMeters: 2500, streakElongation: 8, streakHeadingDeg: 70 };
 const sheet = { label: 'altostratus', baseAltitudeMeters: 4000, thicknessMeters: 1500, coverage: 0.85, opticalDepth: 6, featureSizeMeters: 6000 };
 
-function domeUniforms(dome: { skyDome: THREE.Mesh }) {
-    return (dome.skyDome.material as THREE.ShaderMaterial).uniforms;
+function domeUniforms(dome: { skyMaterial: THREE.ShaderMaterial }) {
+    return dome.skyMaterial.uniforms;
 }
 
 describe('cloud shell decks: validation and packing', () => {

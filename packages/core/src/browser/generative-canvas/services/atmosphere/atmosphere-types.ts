@@ -183,7 +183,10 @@ export interface CloudShadowConfig {
 }
 
 export interface AtmosphericSkyDomeModule {
+    /** The visible dome: draws the sky baked from `skyMaterial`. */
     skyDome: THREE.Mesh;
+    /** The physical sky and cloud shader the dome is baked from; writing its uniforms re-bakes the sky. */
+    skyMaterial: THREE.ShaderMaterial;
     sunMesh: THREE.Mesh;
     hemiLight: THREE.HemisphereLight;
     sunLight: THREE.DirectionalLight;
