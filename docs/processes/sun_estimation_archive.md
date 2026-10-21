@@ -29,6 +29,10 @@ Footage matching needs much less: the sun's direction to within a few degrees, a
 
 Tests to bring along: `staged-tile-sun-facing.test.ts` (176 lines), the shadow parts of `staged-tile-sun.test.ts` (365), and the sun-detection parts of `measured-brdf.test.ts` (342).
 
+## Re-checked 2026-10-21 (integration pass)
+
+A session merging every branch with real unpushed/unmerged work into `main` (per a user request) reached `tile-sun` and `measured-brdf` independently, tried the merge, and hit real conflicts in the same three files this doc's own reasoning predicts (`orchestrator.ts`, `texture-pass.ts`, plus `staged-glb-writer.ts` for measured-brdf and `tile-texture-transfer.ts` for tile-sun) — both branches are still ~470-480 commits behind `main` and still collide with code `main` has since rewritten (the facade-materials roughness system in particular, which did not exist when this doc was written). The merges were aborted rather than resolved by guesswork, matching this doc's own "do not port the wiring" conclusion. No change to the decision above: still archived, still waiting on footage matching to start before porting the named pieces.
+
 ## Porting plan (when footage matching is active)
 
 1. **One standalone module** (e.g. `packages/core/src/node/spatial/sun-from-imagery/`), not wired into staged builds.
