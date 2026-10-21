@@ -825,6 +825,25 @@ function materialFacts(clay: boolean, materials: MaterialProvenance, spec: Objec
     };
 }
 
+/**
+ * The result's sentence on the material check: what the comparison of the build's material render with the reference
+ * found and corrected, what remains, and when it could not be had. Empty for a clay build.
+ */
+function materialCheckLine(result: ReferenceObjectBuildResult): string {
+    if (result.clay || result.materialChecks.length === 0) return '';
+    const corrected = result.materialChecks.flatMap(c => c.applied);
+    const last = result.materialChecks[result.materialChecks.length - 1];
+    const fixedLine = corrected.length
+        ? `The material render was compared with the reference and ${corrected.length} part surface${corrected.length === 1 ? ' was' : 's were'} corrected: ${corrected.slice(0, 8).map(c => `${c.partId} (${c.problem})`).join('; ')}${corrected.length > 8 ? `; and ${corrected.length - 8} more` : ''}.`
+        : 'The material render was compared with the reference; no surface needed a correction.';
+    const remaining = last.error
+        ? `The material render of pass ${result.resultPass} could not be compared with the reference (${last.error}), so whether its surfaces match is unchecked.`
+        : result.remainingMaterialDifferences.length
+            ? `Surface differences that remain in pass ${result.resultPass}: ${quoteDifferences(result.remainingMaterialDifferences)}.`
+            : '';
+    return [corrected.length || !last.error ? fixedLine : '', remaining].filter(Boolean).join(' ');
+}
+
 function fromReference(result: ReferenceObjectBuildResult): BuiltObject {
     const backendName = result.backend === 'vertex' ? 'Vertex AI' : result.backend === 'api-key' ? 'the Gemini API key' : 'an injected client';
     const lastPass = result.passes[result.passes.length - 1].pass;
@@ -855,6 +874,8 @@ function fromReference(result: ReferenceObjectBuildResult): BuiltObject {
             ...(result.revisionFailed ? { revisionFailed: result.revisionFailed } : {}),
             ...(result.comparisonFailed ? { comparisonFailed: result.comparisonFailed } : {}),
             remainingDifferences: result.remainingDifferences,
+            ...(result.clay ? {} : { materialChecks: result.materialChecks, remainingMaterialDifferences: result.remainingMaterialDifferences }),
+            timings: { totalMs: result.totalMs, stages: result.timings },
             ...(result.openProblems.length ? { openProblems: result.openProblems } : {})
         },
         lines: [
@@ -865,6 +886,7 @@ function fromReference(result: ReferenceObjectBuildResult): BuiltObject {
             `Reference drawn internally by ${describeImageModel(result.imageModel)} (not saved or shown); spec read by ${describeVisionModel(result.visionModel)}, via ${backendName}.`,
             materialFacts(result.clay, result.materials, result.spec).line,
             ...compared,
+            materialCheckLine(result),
             result.openProblems.length ? `Also unresolved: ${result.openProblems.join(' ')}` : ''
         ]
     };

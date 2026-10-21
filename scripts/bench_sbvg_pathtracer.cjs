@@ -128,7 +128,9 @@ if (process.env.BENCH_SAMPLERS === '1') {
         'sobol+restir-fresh': { sampler: 'sobol', restir: true, restirTemporal: false, restirCandidates: 8, restirSpatial: 0 },
         'sobol+restir-fresh-spatial': { sampler: 'sobol', restir: true, restirTemporal: false, restirCandidates: 8, restirSpatial: 3 },
         // Visibility-guided sky sampling with MIS (unbiased; measured: a few percent per sample, a loss per unit of GPU time).
-        'sobol+guided-sky': { sampler: 'sobol', guidedSky: true, guideTile: 8, guideBands: 8, guideSectors: 16 }
+        'sobol+guided-sky': { sampler: 'sobol', guidedSky: true, guideTile: 8, guideBands: 8, guideSectors: 16 },
+        // ReSTIR GI over second hits (measured: 6-8% per sample at 8 spp for 22-43% more GPU time; a loss per unit of time).
+        'sobol+restir-gi': { sampler: 'sobol', restirGi: true, giSpatial: 3 }
     };
     const mean = a => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i]; return s / a.length; };
     for (const [name, optimizations] of Object.entries(SAMPLERS)) {

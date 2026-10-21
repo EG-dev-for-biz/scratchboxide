@@ -625,6 +625,52 @@ export function validatePartMaterial(material: unknown, where: string, errors: s
     if (given(m.description) && typeof m.description !== 'string') errors.push(`${where}: material.description must be a string`);
 }
 
+/**
+ * Moves each child part's own geometry so it starts at its attach point, the way the spec's rules require: a child
+ * sweep whose first control point is not [0, 0, 0] has every control point shifted by minus that point; a child
+ * revolve's axisOrigin becomes [0, 0, 0] (the revolve moves with it), and a meridian whose axial distances do not
+ * span 0 is shifted along the axis so its nearer end is at 0. Shapes are unchanged; only where the child sits on its
+ * parent moves, so it touches the parent at the attach point. Returns the input untouched (and no notes) when
+ * nothing needs moving or the input is not a spec-shaped object; each move is described in `notes`.
+ */
+export function normalizeChildOrigins(input: unknown): { value: unknown; notes: string[] } {
+    if (!isRecord(input) || !Array.isArray(input.parts)) return { value: input, notes: [] };
+    const notes: string[] = [];
+    const round = (v: number) => +v.toFixed(4);
+    const parts = input.parts.map(raw => {
+        if (!isRecord(raw) || typeof raw.parentId !== 'string' || !raw.parentId) return raw;
+        const id = typeof raw.id === 'string' ? raw.id : '?';
+        const sweep = raw.sweep;
+        if (isRecord(sweep) && Array.isArray(sweep.controlPoints) && sweep.controlPoints.length >= 2 && sweep.controlPoints.every(isVec3)) {
+            const first = sweep.controlPoints[0] as Vec3;
+            if (Math.hypot(...first) > 1e-6) {
+                notes.push(`part "${id}": control points shifted by [${first.map(v => round(-v)).join(', ')}] m so the sweep starts at its attach point`);
+                return { ...raw, sweep: { ...sweep, controlPoints: (sweep.controlPoints as Vec3[]).map(q => [q[0] - first[0], q[1] - first[1], q[2] - first[2]]) } };
+            }
+            return raw;
+        }
+        const revolve = raw.revolve;
+        if (!isRecord(revolve)) return raw;
+        let next = revolve;
+        if (isVec3(revolve.axisOrigin) && Math.hypot(...revolve.axisOrigin) > 1e-6) {
+            notes.push(`part "${id}": axisOrigin [${revolve.axisOrigin.map(round).join(', ')}] set to [0, 0, 0] so the revolve's axis passes through its attach point`);
+            next = { ...next, axisOrigin: [0, 0, 0] };
+        }
+        const m = revolve.meridian;
+        if (Array.isArray(m) && m.length >= 2 && m.every(isPair)) {
+            const axial = (m as Array<[number, number]>).map(q => q[0]);
+            const lo = Math.min(...axial), hi = Math.max(...axial);
+            const shift = lo > 1e-6 ? -lo : hi < -1e-6 ? -hi : 0;
+            if (shift !== 0) {
+                notes.push(`part "${id}": meridian shifted ${round(shift)} m along the axis so it reaches its attach point`);
+                next = { ...next, meridian: (m as Array<[number, number]>).map(q => [q[0] + shift, q[1]]) };
+            }
+        }
+        return next === revolve ? raw : { ...raw, revolve: next };
+    });
+    return notes.length ? { value: { ...input, parts }, notes } : { value: input, notes };
+}
+
 /** Sweep and revolve parts with no material: a non-clay build gives them studio clay and says which they are. */
 export function partsWithoutMaterial(spec: ObjectBuildSpec): string[] {
     return spec.parts.filter(p => (p.sweep || p.revolve) && !p.material).map(p => p.id);

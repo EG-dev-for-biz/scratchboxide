@@ -28,12 +28,15 @@ import { withStagedMaterialMode } from '../src/browser/generative-canvas/primiti
 import { TerrainManager } from '../src/browser/generative-canvas/services/TerrainManager';
 import { glbToTriangleSoup, mergeTriangleSoups } from '../src/node/3d-engine/part-connectivity';
 import { renderReviewViews } from '../src/node/3d-engine/visual-review';
-import { REFERENCE_IMAGE_MODEL, buildObjectFromSpec, schemaInstruction, type ChatModelSource, type GenerateContentClient } from '../src/node/3d-engine/reference-object-builder';
+import { REFERENCE_IMAGE_MODEL, buildObjectFromSpec, objectBuildSpecPatchJsonSchema, schemaInstruction, type ChatModelSource, type GenerateContentClient } from '../src/node/3d-engine/reference-object-builder';
 import { activeObjectBuildContext } from '../src/node/gemini/prompt-builder';
 import { OBJECT_BUILD_SPEC_JSON_SCHEMA, objectBuildSpecJsonSchema, type ObjectBuildSpec, type PartMaterial } from '../src/common/spatial/object-build-spec';
 
 /** The spec schema a build with materials states (the default); a clay build states OBJECT_BUILD_SPEC_JSON_SCHEMA. */
 const SPEC_SCHEMA = objectBuildSpecJsonSchema({ materials: true });
+/** Every schema a spec request (a complete spec, or a patch in a correction or revision) may state. */
+const SPEC_SCHEMAS = [SPEC_SCHEMA, OBJECT_BUILD_SPEC_JSON_SCHEMA, objectBuildSpecPatchJsonSchema({ materials: true }), objectBuildSpecPatchJsonSchema({ materials: false })].map(schemaInstruction);
+const asksForSpec = (text: string) => SPEC_SCHEMAS.some(s => text.includes(s));
 import { NativePythonRunnerService, type PythonExecutionResult } from '../src/node/3d-engine/native-python-runner-service';
 import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
@@ -117,6 +120,14 @@ const PILLAR: ObjectBuildSpec = {
     parts: [{ id: 'pillar', label: 'pillar', material: GLAZE, revolve: revolve([[0, 0], [0, 0.8], [10, 0.8], [10, 0]]) }]
 };
 
+/** The patch reply that turns spec `from` into spec `to`: every part of `to`, the parts only `from` has removed, and its size. */
+const asPatch = (from: ObjectBuildSpec, to: ObjectBuildSpec) => JSON.stringify({
+    parts: to.parts,
+    removePartIds: from.parts.map(p => p.id).filter(id => !to.parts.some(q => q.id === id)),
+    boundingMeters: to.boundingMeters,
+    expectedBodies: to.expectedBodies
+});
+
 const NO_DIFFERENCES = '{"differences": []}';
 const highDifference = (problem: string, partId?: string) => JSON.stringify({ differences: [{ ...(partId ? { partId } : {}), problem, confidence: 'high' }] });
 
@@ -128,12 +139,17 @@ function fakeClient(opts: {
     specs?: string[];
     differences?: string[];
     unserved?: string[];
-    /** Every comparison call throws this (spec and image calls are answered as usual). */
+    /** Every shape comparison call throws this (spec, image and material calls are answered as usual). */
     comparisonError?: Error;
+    /** Answers to the material comparisons, in order (the last repeats; none listed: no differences). */
+    materialDifferences?: string[];
+    /** Every material comparison call throws this. */
+    materialError?: Error;
 }): GenerateContentClient & { calls: Call[] } {
     const images = [...(opts.image ?? [() => imageResponse()])];
     const specs = [...(opts.specs ?? [])];
     const diffs = [...(opts.differences ?? [])];
+    const materialDiffs = [...(opts.materialDifferences ?? [])];
     const calls: Call[] = [];
     return {
         calls,
@@ -146,10 +162,12 @@ function fakeClient(opts: {
                     const next = images.length > 1 ? images.shift()! : images[0];
                     return next(call);
                 }
-                // Spec requests carry the spec schema; comparisons carry the differences schema.
-                const isSpec = askedText(call).includes(schemaInstruction(SPEC_SCHEMA)) || askedText(call).includes(schemaInstruction(OBJECT_BUILD_SPEC_JSON_SCHEMA));
-                if (!isSpec && opts.comparisonError) throw opts.comparisonError;
-                const queue = isSpec ? specs : diffs;
+                // Spec requests carry the spec schema; comparisons carry the differences schema; material comparisons list the parts' materials.
+                const isSpec = asksForSpec(askedText(call));
+                const isMaterial = !isSpec && isMaterialCall(call);
+                if (isMaterial && opts.materialError) throw opts.materialError;
+                if (!isSpec && !isMaterial && opts.comparisonError) throw opts.comparisonError;
+                const queue = isSpec ? specs : isMaterial ? materialDiffs : diffs;
                 const text = queue.length > 1 ? queue.shift()! : (queue[0] ?? (isSpec ? '' : NO_DIFFERENCES));
                 return { candidates: [{ content: { parts: [{ text }] } }], modelVersion: params.model } as any;
             }
@@ -158,8 +176,9 @@ function fakeClient(opts: {
 }
 
 const askedText = (call: Call) => (call.contents as any[]).flatMap(c => c.parts || []).map((p: any) => p.text || '').join('\n');
-const isSpecCall = (call: Call) => !call.config?.responseModalities && (askedText(call).includes(schemaInstruction(SPEC_SCHEMA)) || askedText(call).includes(schemaInstruction(OBJECT_BUILD_SPEC_JSON_SCHEMA)));
-const isComparisonCall = (call: Call) => !call.config?.responseModalities && !isSpecCall(call);
+const isSpecCall = (call: Call) => !call.config?.responseModalities && asksForSpec(askedText(call));
+const isMaterialCall = (call: Call) => !call.config?.responseModalities && askedText(call).includes('Parts and their current materials:');
+const isComparisonCall = (call: Call) => !call.config?.responseModalities && !isSpecCall(call) && !isMaterialCall(call);
 
 function imageResponse(): any {
     return { candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: REFERENCE_B64 } }] }, finishReason: 'STOP' }], modelVersion: REFERENCE_IMAGE_MODEL };
@@ -536,13 +555,16 @@ describe('build_3d_object_from_reference', () => {
     });
 
     it('gives a spec only the interpreter rejects the same corrective re-ask, quoting its problem', async () => {
-        const client = fakeClient({ specs: [JSON.stringify(FLAT_COIN), JSON.stringify(VASE)] });
+        const client = fakeClient({ specs: [JSON.stringify(FLAT_COIN), asPatch(FLAT_COIN, VASE)] });
         const { run, pythonRuns } = handlerWith(client);
         const out = await run({ request: 'a fluted vase with a knob on top' });
         expect(out.status, String(out.resultPayload.error)).toBe('completed');
         const specCalls = client.calls.filter(isSpecCall);
         expect(specCalls).toHaveLength(2);
         expect(askedText(specCalls[1])).toContain('That build spec cannot be built');
+        // The re-ask asks only for what changes, against the patch schema.
+        expect(askedText(specCalls[1])).toContain('Reply with only what changes');
+        expect(askedText(specCalls[1])).toContain(schemaInstruction(objectBuildSpecPatchJsonSchema({ materials: true })));
         expect(askedText(specCalls[1])).toContain('part "coin" revolve.meridian: the outline encloses no area with the axis');
         expect(pythonRuns).toHaveLength(2);
         const passes = out.resultPayload.passes as any[];
@@ -709,7 +731,7 @@ describe('build_3d_object_from_reference', () => {
         expect(out.summaryResult).toContain('2 of 2 listed parts built and attached');
 
         // The comparison saw the reference and a clay render; the reference never comes back out.
-        const compare = client.calls[client.calls.length - 1];
+        const compare = client.calls.filter(isComparisonCall).pop()!;
         expect(compare.contents[0].parts.filter((p: any) => p.inlineData)).toHaveLength(2);
         const payloadJson = JSON.stringify(out.resultPayload);
         expect(payloadJson).not.toContain(REFERENCE_B64);
@@ -755,6 +777,142 @@ describe('build_3d_object_from_reference', () => {
         }
     }, 180_000);
 
+    it('revises with a patch: parts left out stay as they were, and child geometry is moved to its attach point instead of a re-ask', async () => {
+        const offsetKnob = { ...VASE.parts[1], revolve: { ...VASE.parts[1].revolve!, axisOrigin: [0, 0.3, 0] as [number, number, number] } };
+        const client = fakeClient({
+            specs: [JSON.stringify({ ...VASE, parts: [VASE.parts[0], offsetKnob] }), JSON.stringify({ parts: [{ ...VASE.parts[1], label: 'taller knob' }] })],
+            differences: [highDifference('The knob should be taller.', 'knob'), NO_DIFFERENCES]
+        });
+        const out = await handlerWith(client).run({ request: 'a fluted vase with a tall knob' });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        // No corrective re-ask: the knob's axisOrigin was moved to its attach point and recorded.
+        expect(client.calls.filter(c => askedText(c).includes('That build spec cannot be built'))).toHaveLength(0);
+        const passes = out.resultPayload.passes as any[];
+        expect(passes[0].specRequests).toBe(1);
+        expect(passes[0].normalizedChildren).toEqual(['part "knob": axisOrigin [0, 0.3, 0] set to [0, 0, 0] so the revolve\'s axis passes through its attach point']);
+        // The revision asked for a patch and returned only the knob; the vase part came through unchanged.
+        const revision = client.calls.find(c => askedText(c).includes('Correct the current build spec'))!;
+        expect(askedText(revision)).toContain('Parts you leave out stay exactly as they are.');
+        const spec = (out.resultPayload.artifact as any).data.objectBuild.spec;
+        expect(spec.parts.map((p: any) => [p.id, p.label])).toEqual([['vase', 'vase'], ['knob', 'taller knob']]);
+        expect(spec.parts[0]).toEqual(VASE.parts[0]);
+    }, 180_000);
+
+    it('compares a material render with the reference and corrects a wrong surface in a material-only pass', async () => {
+        const wrong = 'the knob is bare polished brass in the reference, not blue glaze';
+        const brass = { baseColor: [0.91, 0.78, 0.42], metalness: 1, roughness: 0.25 };
+        const client = fakeClient({
+            specs: [JSON.stringify(VASE)],
+            materialDifferences: [
+                JSON.stringify({ differences: [{ partId: 'knob', problem: wrong, confidence: 'high', correction: brass }, { partId: 'vase', problem: 'slightly darker blue', confidence: 'low', correction: { baseColor: [0.04, 0.1, 0.35] } }] }),
+                NO_DIFFERENCES
+            ]
+        });
+        const out = await handlerWith(client).run({ request: 'a fluted blue vase with a brass knob' });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        // One spec read, no revision call: the correction was applied to the spec and rebuilt natively.
+        expect(client.calls.filter(isSpecCall)).toHaveLength(1);
+        const materialCalls = client.calls.filter(isMaterialCall);
+        expect(materialCalls).toHaveLength(2);
+        // The material comparison saw the reference and a render, and was told each part's current factors.
+        expect(materialCalls[0].contents[0].parts.filter((p: any) => p.inlineData)).toHaveLength(2);
+        expect(askedText(materialCalls[0])).toContain('- knob (knob): {"baseColor":[0.05,0.12,0.4]');
+        const build = (out.resultPayload.artifact as any).data.objectBuild;
+        expect(build.passes.map((p: any) => [p.pass, p.source, p.materialDifferences, p.materialCorrections])).toEqual([[1, 'reference', 1, 1], [2, 'material', 0, 0]]);
+        expect(build.resultPass).toBe(2);
+        expect(build.materialChecks[0].applied).toEqual([{ partId: 'knob', problem: wrong, from: { baseColor: [0.05, 0.12, 0.4], roughness: 0.35, metalness: 0 }, to: brass }]);
+        expect(build.remainingMaterialDifferences).toEqual([]);
+        expect(build.spec.parts.find((p: any) => p.id === 'knob').material).toMatchObject({ ...brass, transmission: 0, description: 'satin blue glaze' });
+        // The low-confidence difference was recorded, not applied.
+        expect(build.spec.parts.find((p: any) => p.id === 'vase').material.baseColor).toEqual([0.05, 0.12, 0.4]);
+        expect(build.timings.stages.map((t: any) => t.stage)).toEqual(expect.arrayContaining(['reference-image', 'spec-read', 'native-build', 'measure', 'render', 'shape-compare', 'material-render', 'material-compare']));
+        expect(out.summaryResult).toContain(`1 part surface was corrected: knob (${wrong})`);
+        // The returned GLB carries the corrected factors.
+        const glb = fs.readFileSync(String(out.resultPayload.glbPath));
+        const json = JSON.parse(glb.toString('utf8', 20, 20 + glb.readUInt32LE(12)));
+        const knob = json.materials[json.meshes.find((m: any) => m.name === 'knob').primitives[0].material];
+        expect(knob.pbrMetallicRoughness.baseColorFactor.slice(0, 3).map((v: number) => +v.toFixed(4))).toEqual([0.91, 0.78, 0.42]);
+        expect(knob.pbrMetallicRoughness.metallicFactor).toBeCloseTo(1, 5);
+    }, 180_000);
+
+    it('folds material corrections into a shape revision, already applied to the spec it is given', async () => {
+        const client = fakeClient({
+            specs: [JSON.stringify(VASE), JSON.stringify(VASE)],
+            differences: [highDifference('The body should be taller.', 'vase'), NO_DIFFERENCES],
+            materialDifferences: [JSON.stringify({ differences: [{ partId: 'knob', problem: 'should be matte black', confidence: 'high', correction: { baseColor: [0.02, 0.02, 0.02], roughness: 0.8 } }] }), NO_DIFFERENCES]
+        });
+        const out = await handlerWith(client).run({ request: 'a tall fluted vase with a black knob' });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        const revisions = client.calls.filter(c => askedText(c).includes('Correct the current build spec'));
+        expect(revisions).toHaveLength(1);
+        const asked = askedText(revisions[0]);
+        expect(asked).toContain('Part "vase": The body should be taller.');
+        expect(asked).toContain('Part "knob" surface: should be matte black. Already corrected in the current spec (baseColor [0.02,0.02,0.02], roughness 0.8); keep that material.');
+        expect(asked).toContain('"baseColor":[0.02,0.02,0.02],"roughness":0.8');
+        const build = (out.resultPayload.artifact as any).data.objectBuild;
+        expect(build.passes.map((p: any) => p.source)).toEqual(['reference', 'revision']);
+    }, 180_000);
+
+    it('applies material corrections the last revision found in one more material-only pass, and no more', async () => {
+        const glow = JSON.stringify({ differences: [{ partId: 'knob', problem: 'glows far too brightly', confidence: 'high', correction: { emissive: [0.1, 0.4, 0.4], emissiveStrength: 0.5 } }] });
+        const client = fakeClient({
+            specs: [JSON.stringify(VASE), JSON.stringify({ parts: [] })],
+            differences: [highDifference('The body should be taller.', 'vase')],
+            materialDifferences: [NO_DIFFERENCES, NO_DIFFERENCES, glow, glow]
+        });
+        const out = await handlerWith(client).run({ request: 'a tall fluted vase with a softly glowing knob' });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        const build = (out.resultPayload.artifact as any).data.objectBuild;
+        expect(build.passes.map((p: any) => p.source)).toEqual(['reference', 'revision', 'revision', 'material']);
+        expect(build.resultPass).toBe(4);
+        expect(build.spec.parts.find((p: any) => p.id === 'knob').material).toMatchObject({ emissive: [0.1, 0.4, 0.4], emissiveStrength: 0.5 });
+        expect(build.materialChecks.map((m: any) => m.pass)).toEqual([1, 2, 3, 4]);
+        expect(build.materialChecks[2].applied).toHaveLength(1);
+        // The last check still lists the glow (the fake repeats it): recorded as remaining, never applied by a fifth pass.
+        expect(build.remainingMaterialDifferences.map((d: any) => d.partId)).toEqual(['knob']);
+        expect(client.calls.filter(isMaterialCall)).toHaveLength(4);
+    }, 180_000);
+
+    it('adds no pass when the material render matches, records corrections it cannot apply, and skips the check for clay', async () => {
+        const matched = fakeClient({ specs: [JSON.stringify(VASE)] });
+        const ok = await handlerWith(matched).run({ request: 'a fluted vase with a knob on top' });
+        expect(ok.status, String(ok.resultPayload.error)).toBe('completed');
+        expect((ok.resultPayload.artifact as any).data.objectBuild.passes).toHaveLength(1);
+        expect(matched.calls.filter(isMaterialCall)).toHaveLength(1);
+        expect(ok.summaryResult).toContain('no surface needed a correction');
+
+        const outOfRange = fakeClient({
+            specs: [JSON.stringify(VASE)],
+            materialDifferences: [JSON.stringify({ differences: [{ partId: 'knob', problem: 'glossier', confidence: 'high', correction: { roughness: 2 } }, { partId: 'lid', problem: 'no such part', confidence: 'high', correction: { roughness: 0.1 } }] })]
+        });
+        const kept = await handlerWith(outOfRange).run({ request: 'a fluted vase with a knob on top' });
+        expect(kept.status, String(kept.resultPayload.error)).toBe('completed');
+        const build = (kept.resultPayload.artifact as any).data.objectBuild;
+        expect(build.passes).toHaveLength(1);
+        expect(build.materialChecks[0].applied).toEqual([]);
+        expect(build.materialChecks[0].notApplied.map((n: any) => n.partId)).toEqual(['knob', 'lid']);
+        expect(build.materialChecks[0].notApplied[0].reason).toContain('roughness must be between 0 and 1');
+        expect(build.remainingMaterialDifferences.map((d: any) => d.partId)).toEqual(['knob', 'lid']);
+
+        const plain = { ...VASE, parts: VASE.parts.map(({ material: _m, ...p }) => p) };
+        const clay = fakeClient({ specs: [JSON.stringify(plain)] });
+        const clayOut = await handlerWith(clay).run({ request: 'a fluted vase in clay', clay: true });
+        expect(clayOut.status, String(clayOut.resultPayload.error)).toBe('completed');
+        expect(clay.calls.filter(isMaterialCall)).toHaveLength(0);
+        expect((clayOut.resultPayload.artifact as any).data.objectBuild.materialChecks).toBeUndefined();
+    }, 300_000);
+
+    it('keeps the build when the material comparison fails, and says the surfaces are unchecked', async () => {
+        const client = fakeClient({ specs: [JSON.stringify(VASE)], materialError: httpError(400, 'bad request') });
+        const out = await handlerWith(client).run({ request: 'a fluted vase with a knob on top' });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        const build = (out.resultPayload.artifact as any).data.objectBuild;
+        expect(build.passes).toHaveLength(1);
+        expect(build.passes[0].materialComparisonError).toContain('bad request');
+        expect(out.summaryResult).toContain('could not be compared with the reference');
+        expect(out.summaryResult).toContain('whether its surfaces match is unchecked');
+    }, 180_000);
+
     it('asks again when a part has no material or a factor is out of range, quoting each problem', async () => {
         const noMaterial = { ...VASE, parts: [{ ...VASE.parts[0], material: undefined }, VASE.parts[1]] };
         const outOfRange = { ...VASE, parts: [VASE.parts[0], { ...VASE.parts[1], material: { ...GLAZE, roughness: 1.4 } }] };
@@ -795,7 +953,7 @@ describe('build_3d_object_from_reference', () => {
     }, 180_000);
 
     it('revises a build whose parts float apart, sending the reference, the clay render and the conventions back', async () => {
-        const client = fakeClient({ specs: [JSON.stringify(DETACHED), JSON.stringify(VASE)] });
+        const client = fakeClient({ specs: [JSON.stringify(DETACHED), asPatch(DETACHED, VASE)] });
         const { run, pythonRuns } = handlerWith(client);
         const out = await run({ request: 'a fluted vase with a knob on top' });
         expect(out.status, String(out.resultPayload.error)).toBe('completed');
@@ -806,7 +964,7 @@ describe('build_3d_object_from_reference', () => {
         expect(passes[1]).toMatchObject({ source: 'revision', bodies: 1, problems: [], passedChecks: true });
         expect(out.resultPayload.resultPass).toBe(2);
         expect(pythonRuns).toHaveLength(2);
-        const revision = client.calls.find(c => askedText(c).includes('Return the complete corrected build spec'))!;
+        const revision = client.calls.find(c => askedText(c).includes('Correct the current build spec'))!;
         expect(revision.model).toBe(CHAT_MODEL);
         expect(revision.contents[0].parts.filter((p: any) => p.inlineData)).toHaveLength(2);
         // The stateless revision request carries the full conventions block the first request had.
@@ -831,7 +989,7 @@ describe('build_3d_object_from_reference', () => {
         const client = fakeClient({ specs: [JSON.stringify(VASE)], differences: [highDifference(left, 'knob')] });
         const out = await handlerWith(client).run({ request: 'a fluted vase with a tall finial' });
         expect(out.status, String(out.resultPayload.error)).toBe('completed');
-        const revisions = client.calls.filter(c => askedText(c).includes('Return the complete corrected build spec'));
+        const revisions = client.calls.filter(c => askedText(c).includes('Correct the current build spec'));
         expect(revisions).toHaveLength(2);
         expect(askedText(revisions[0])).toContain(`Part "knob": ${left}`);
         const build = (out.resultPayload.artifact as any).data.objectBuild;
@@ -858,7 +1016,7 @@ describe('build_3d_object_from_reference', () => {
     }, 180_000);
 
     it('reports a revision the interpreter rejects twice as failed and returns pass 1', async () => {
-        const client = fakeClient({ specs: [JSON.stringify(VASE), JSON.stringify(FLAT_COIN)], differences: [highDifference('The body should be taller.')] });
+        const client = fakeClient({ specs: [JSON.stringify(VASE), asPatch(VASE, FLAT_COIN), JSON.stringify({ parts: FLAT_COIN.parts })], differences: [highDifference('The body should be taller.')] });
         const out = await handlerWith(client).run({ request: 'a tall fluted vase' });
         expect(out.status, String(out.resultPayload.error)).toBe('completed');
         expect(out.resultPayload.revisionFailed).toMatchObject({ pass: 2, stage: 'build' });
@@ -899,7 +1057,7 @@ describe('build_3d_object_from_reference', () => {
         expect(out.summaryResult).toContain('so how closely it matches the reference is unchecked');
         expect(out.summaryResult).not.toContain('matched the reference with no high-confidence differences');
         // Nothing was left to fix, so no revision was asked for.
-        expect(broken.calls.filter(c => askedText(c).includes('Return the complete corrected build spec'))).toHaveLength(0);
+        expect(broken.calls.filter(c => askedText(c).includes('Correct the current build spec'))).toHaveLength(0);
     }, 180_000);
 
     it('keeps a build that passed every check when the comparison model keeps failing, and says which differences are unverified', async () => {
