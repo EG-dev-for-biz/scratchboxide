@@ -246,7 +246,13 @@ describe('the fast isolate first', () => {
 describe('the photo-textured version first', () => {
     it('publishes a twin baked from the tile photo before the fit and its Street View close-ups', async () => {
         const s0 = setup(ARCH);
-        const s = setup(ARCH, { scanFit: fitter(path.join(s0.root, 'fit'), { delayMs: 6000 }) });
+        // the fit (and the Street View close-ups it starts) does not answer until a twin is out: the twin cannot wait on them
+        let twinOut!: () => void;
+        const twinSeen = new Promise<void>(r => { twinOut = r; });
+        const sf = fitter(path.join(s0.root, 'fit'));
+        const s = setup(ARCH, { scanFit: { ...sf, fit: async req => { await Promise.race([twinSeen, sleep(60_000)]); return sf.fit(req); } } });
+        const emit = s.ctx.emitStage;
+        s.ctx.emitStage = (e, a) => { emit(e, a); if (e.stage === 'textures' && e.layers?.some(l => l.textured)) twinOut(); };
         const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
         const firstTwin = s.events.find(x => x.e.stage === 'textures' && x.e.layers?.some(l => l.textured))!;
         expect(firstTwin, 'a twin was published').toBeDefined();

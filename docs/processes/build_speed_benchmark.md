@@ -1,7 +1,7 @@
 # How fast a real place builds with default settings (2026-10-20)
 
 **Date:** 2026-10-20
-**Status:** Verified (9 live chat builds of 4 places, cold and warm, on `origin/main` `3c99f63c` plus timing logs only)
+**Status:** Verified (9 live chat builds of 4 places, cold and warm, on `origin/main` `3c99f63c` plus timing logs only). After: see "After: fast first (branch `staged-fast-first`)" below (8 more live builds, the same 4 places).
 
 ## What was measured
 
@@ -246,3 +246,112 @@ cold and warm, for each place.
   trees-visible per layer. This would replace the hand-rolled poller used here.
 - **A `staged_build_benchmark` script:** the same request cold and warm against an isolated `SCRATCHBOX_HOME`, printing
   this table.
+
+## After: fast first (branch `staged-fast-first`, 2026-10-20)
+
+**Status:** Verified live (8 chat builds: the same 4 places, cold and warm, on worktree `.claude/worktrees/staged-fast-first`,
+launch entry `scratchbox-staged-fast-first` on ports 3960/3961/3962, an isolated `SCRATCHBOX_HOME`; the cold set started
+with no `.scratchbox` stage cache, no tile_refine cache and an empty home; native binaries warm). Tests: 10 new
+(`staged-fast-first.test.ts`) and the staged suite.
+
+### What changed
+
+1. **Vector first paint.** A `vector` stage starts as soon as the place resolves, beside the tile download: Google's vector
+   buildings for the whole requested area (vectortiles.featuretiles), each building's terrain height from the Elevation API,
+   extruded natively by the staged massing tool with no tile (`vector-first-paint.ts`), one node per building, labelled
+   `vector-modelled` (new legend entry). It commits `l0` unless the tiles were first; `l1` supersedes and crossfades from it
+   and the viewport frees it like any superseded layer. A district keeps the buildings the tiles do not cover as `l0o`
+   (bases against the tiles' frame). The district camera is the one the tiles will give, so the view does not move.
+2. **The geometric isolate first.** The remesh commits tile_refine's geometric isolate at once; fit, evidence, grammar and
+   textures start from it. The ownership vote is its own stage afterwards, waits at most 60 s for its outlines
+   (`OWNERSHIP_VOTE_WINDOW_MS`: a view not outlined by then is left out), never fails the build, and replaces the isolate only
+   when it moves at least **5% of the isolate's scan surface** (`ownership-change.ts`, triangles matched by centroid); then
+   `l2v` supersedes the first isolate and what was built on it, the first pass's remaining work is ended
+   (`Runner.passSignal`) and grammar, rebuild and textures run again on it. An identical earlier vote's outlines are read back.
+3. **A twin from the tile photo first.** The texture stage starts at the remesh commit and bakes each layer from the tile photo
+   alone (about 3 s with the worker threads, which now start loading when an isolate's tiles are in); once the Street View
+   close-ups are in, each layer is baked again with them and replaces the tile twin only where Street View adds texels (else
+   the record says `street_view_no_texels`).
+4. **Textures do not wait for grammar or the rebuild.** A `textures-late` stage textures every later layer (fit, detail,
+   `l2g`, figures) as it lands, waiting only for the fit's charts so a layer is not baked twice.
+5. **Districts are textured.** tile_refine's own photo-textured remesh is the district's twin, and `l2g`'s
+   (`tile-refine-twin.ts`: confidence extras on every material, rung shares by area, labelled photo-inferred, "as captured,
+   not de-lit"); clay first, then the crossfade; a clay choice still shows clay. A district staged around a kept structure
+   carves its twin like its clay layer.
+
+### Timeline after (seconds from Enter)
+
+Server time the layer was published, then (in brackets) the page poller's first visible frame. The Browser pane was
+hidden for most of the runs, so the page's timers were throttled: the bracketed numbers lag by 0.5–3 s.
+
+| Run | Tool starts | First 3D | First clay building | Trees | First textured | Build finished | Chat reply done |
+|---|---|---|---|---|---|---|---|
+| Haughwout cold | 7.5 | 8.2 (8.4) vector | 9.4 (12.4) | none | 12.3 (14.4) l2 tile photo | 70.3 (grammar done 30.0; the vote held the rest) | 91.1 |
+| Haughwout warm | 8.1 | 8.1 (8.5) | 8.3 (11.3) | none | 10.6 (12.0) | 10.6 | 38.8 |
+| Washington Sq Arch cold | 7.7 | 8.3 (8.6) vector | 9.6 (12.6); fitted l3b 10.3 | none | 11.3 (18.1) late twins of the fit | 70.6 (everything else 45.8) | 99.1 |
+| Washington Sq Arch warm | 7.8 | 7.8 (8.3) | 7.9 (10.8) | none | 10.0 (11.8) | 10.0 | 30.6 |
+| Flatiron District cold | 8.3 | 10.0 (10.2) vector | 51.9 (54.2) | 56.2 (56.6) | 52.3 (55.3) district twin | 205.9 | 297.9 |
+| Flatiron District warm | 9.0 | 9.1 (10.9) | 9.7 (13.6) | 10.5 (17.5) | 10.3 (13.9) | 10.5 | 36.1 |
+| Colosseum cold | 21.7 | 23.2 (23.4) vector | 48.1 (49.1) | 56.8 (59.3) | 48.4 (49.7) district twin | 56.8 | 74.4 |
+| Colosseum warm | 26.7 | 26.7 (28.0) | 27.1 (28.0) | 27.6 (34.6) | 27.2 (30.0) | 27.7 | 47.3 |
+
+### Before and after (the benchmark's runs above against these)
+
+| Run | First 3D | First clay building | First textured | Finished |
+|---|---|---|---|---|
+| Haughwout cold | 10.0 → 8.2 | 87.0 → 9.4 | 131.5 → 12.3 | 183.8 → 70.3 |
+| Haughwout warm | 8.9 → 8.1 | 10.9 → 8.3 | 51.4 → 10.6 | 52.1 → 10.6 |
+| Arch cold | 11.9 → 8.3 | 51.9 → 9.6 | 57.9 → 11.3 | 107.0 → 70.6 |
+| Arch warm | 8.9 → 7.8 | 8.9 → 7.9 | 12.8 → 10.0 | 10.9 → 10.0 |
+| Flatiron cold | 15.5 → 10.0 | 53.1 → 51.9 | never → 52.3 | 282.0 → 205.9 |
+| Flatiron warm | 13.9 → 9.1 | 13.9 → 9.7 | never → 10.3 | 11.8 → 10.5 |
+| Colosseum cold | 12.9 → 23.2 (routing 7.4 → 21.7 s) | 37.0 → 48.1 | never → 48.4 | 47.0 → 56.8 |
+| Colosseum warm | 13.1 → 26.7 (routing 10.8 → 26.7 s) | 13.1 → 27.1 | never → 27.2 | 11.6 → 27.7 |
+
+**Time to first 3D after the tool starts** (what this change can move): Haughwout 2.7 → 0.7 s, Arch 2.2 → 0.6 s, Flatiron
+7.4 → 1.7 s, Colosseum 5.5 → 1.5 s cold; 0.0–0.1 s warm.
+
+**Vector fetch and extrude, cold** (`vector` breakdown, from the place to l0 on the server): Haughwout 0.50 s (fetch 0.37,
+elevations 0.12, native 0.01), Arch 0.41 s, Flatiron 1.40 s (fetch 0.69, elevations 0.30, native 0.34; 238 buildings, 47,903
+triangles, 4.3 MB), Colosseum 1.31 s. The tiles took 1.2, 1.3, 6.2 and 4.6 s.
+
+### Honest reading
+
+- **The chat model still bounds the first 3D.** Routing took 7.5–9.0 s on six runs and 21.7 and 26.7 s on the two Colosseum
+  runs (the other agents' load and the model; nothing in the build). The Colosseum rows are slower only by that; server-side
+  the Colosseum cold run reached its vector paint 1.5 s after the tool started and its textured district 26.7 s after.
+- **The machine was shared.** Other agents ran test suites and builds (load average 6–55 on 20 cores during the runs): the
+  cold Flatiron remesh and grammar ran 32 s and 154 s, against 33 s and 230 s in the benchmark; a shakedown Flatiron run under
+  heavier load took 45 s and 303 s.
+- **The ownership vote now holds the isolates' finish.** Cold Haughwout and Arch finished their other stages at 30 s and 46 s;
+  the vote's slowest outline call ran into its 60 s window both times (the non-streamed calls are not hedged: branch
+  `vision-call-hedging`). A shakedown run at the arch had one outline call answer after 299 s; before the window this failed the
+  whole tool call. With hedged calls the finish would be about 30 s and 46 s.
+- **The 5% threshold** was set after one measurement: Haughwout's vote moved 3.0% (95 m² left, 27 m² joined, of 3,980 m²). At
+  3% that replaced the isolate and ran grammar, fit and textures again, +85 s to the finish (shakedown run `ca74d8a2`). It is a
+  judgement, said in `ownership-change.ts`.
+- **Flatiron's tiles cover the whole 250 m.** The `radius_truncated` record says the scan "reaches 149 m" (the nearest 524
+  leaves); measured in plan, the leaf tiles cover 96–98% of every 25 m ring out to 250 m (55% to 275 m), so no building is left
+  for `l0o` there. The degradation's wording understates the coverage; not changed here.
+- **No Street View texel came in.** Haughwout and the arch found no Google pano facing them in these runs (the survey said
+  so), so the Street View phase had nothing to add; the tile-photo twins stand, recorded. In the shakedown Haughwout run the
+  phase ran (16 s ownership, 29 s re-bakes) and added no texel either.
+- **Districts' trees stay clay** (SB-Veggie geometry, no photo): the visual check called the Colosseum "mixed texture and clay".
+- **Warm first textured** is held by about 2 s of tile source loading done before the bake's cache is checked.
+- `staged-build-real-data-screens` (crossfade coverage) fails the same way on the commit before these changes.
+
+### Starting the vector fetch earlier (proposal, not done)
+
+The tool call is the first thing that names the place, 7–27 s after Enter. Without routing on nouns: (a) a lower thinking level
+for the routing turn (the benchmark's item 6); (b) streaming the function call and starting the place resolution and the vector
+fetch when its `query` argument is complete, before the rest of the call; (c) a speculative Places Text Search on every chat
+message, warming only the server's caches (never shown) — cheap, but it geocodes text that is not a place, so it needs the
+user's say.
+
+### Evidence
+
+Screenshots: `test-results/screenshots/staged_fast_first/` (gitignored): the vector first paint at Flatiron (`08_…t14s`,
+`04_…t19s` before the geoAnchor fix showed a "geoAnchor 0, 0" banner), textured isolates while the vote runs (`05_`, `07_`),
+the textured Flatiron and Colosseum districts (`02_`, `09_`), and a native render of the Flatiron vector massing (`00_`).
+Per-run timelines: `runs/<runId>/timeline.jsonl` (runs `a915e1f0`, `fc60dc47`, `02887cdd`, `e69cc874`, `62435fa3`,
+`43f163be`, `d09a0780`, `569b9dae`).
