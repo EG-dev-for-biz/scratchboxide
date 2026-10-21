@@ -72,7 +72,7 @@ describe('parseStagedLocationArgs', () => {
         expect(() => parseStagedLocationArgs('t', {})).toThrow(MissingInputError);
         expect(() => parseStagedLocationArgs('t', { query: 'q', treeTriangleBudget: 0 })).toThrow(/treeTriangleBudget of at least 1 triangle/);
         expect(() => parseStagedLocationArgs('t', { retryRunId: 'xyz', retryStage: 'vision' })).toThrow(/retryRunId of 8 hex digits/);
-        expect(() => parseStagedLocationArgs('t', { retryRunId: 'a1b2c3d4', retryStage: 'dessert' })).toThrow(/retryStage of resolve, tiles/);
+        expect(() => parseStagedLocationArgs('t', { retryRunId: 'a1b2c3d4', retryStage: 'dessert' })).toThrow(/retryStage of resolve, vector, tiles/);
         expect(() => parseStagedLocationArgs('t', { retryRunId: 'a1b2c3d4' })).toThrow(/retryStage/);
         const retry = parseStagedLocationArgs('t', { retryRunId: 'a1b2c3d4', retryStage: 'vision' });
         expect(retry.retry).toEqual({ runId: 'a1b2c3d4', stage: 'vision' });
