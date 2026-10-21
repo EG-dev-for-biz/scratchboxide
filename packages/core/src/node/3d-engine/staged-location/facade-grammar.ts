@@ -38,7 +38,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import type { VisionModelChain } from '../../gemini/vision-model-chain';
+import { VISION_CALL_POLICY, type VisionModelChain } from '../../gemini/vision-model-chain';
 import { PHOTO_CORRECTION_TOLERANCE_M } from '../../../common/spatial/staged-location-contracts';
 import { distanceTransform, gaussianBlur, sobel } from '../../spatial/StreetViewPoseRegistrar';
 import { encodePng } from './png-encode';
@@ -847,6 +847,8 @@ export function windowPng(o: OrthoRaster, win: ReadWindow, hidden?: Hidden): Buf
     return encodePng(w, h, px, 3);
 }
 
+const responseText = (r: { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }) => r.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
+
 export interface GrammarReading { reply: GrammarReply; tiers: GrammarTier[]; model: string; ms: number; cached: boolean }
 
 export async function readGrammar(chain: VisionModelChain<string>, f: ReliefOrthoFacade, o: OrthoRaster, win: ReadWindow, hidden?: Hidden): Promise<GrammarReading> {
@@ -854,8 +856,8 @@ export async function readGrammar(chain: VisionModelChain<string>, f: ReliefOrth
     const r = await chain.generate({
         contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: png.toString('base64') } }, { text: grammarPrompt((win.x1 - win.x0) * f.pixel, (win.y1 - win.y0) * f.pixel, win.x0 > 0 || win.x1 < o.width || win.y0 > 0 || win.y1 < o.height || !!hidden) }] }],
         config: { responseMimeType: 'application/json', temperature: 0 }
-    }, { stage: 'grammar' });
-    const text = r.response.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
+    }, { stage: 'grammar', ...VISION_CALL_POLICY.grammar, valid: res => { try { parseGrammarReply(responseText(res)); return true; } catch { return false; } } });
+    const text = responseText(r.response);
     const reply = parseGrammarReply(text);
     r.remember();
     // an opening the image's cut edge runs through is only part of an opening: it is not read (the facade's own edges are kept)
@@ -948,7 +950,9 @@ async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Prom
 /**
  * Reads, fits and gates the grammar of each selected facade of a relief ortho export. Five readings per facade: the
  * whole orthophoto (the grammar used) and four with parts hidden (the held-out check). A facade whose reading fails, or whose
- * grammar fails a gate, keeps the relief's own lattice; the outcome says why.
+ * grammar fails a gate, keeps the relief's own lattice; the outcome says why. Each reading is hedged and has a deadline
+ * (VISION_CALL_POLICY.grammar): a whole reading with no answer by then is a failed reading (the relief's lattice stays,
+ * the reason says "no answer within ..."), a held-out reading with none is not scored.
  */
 export async function runFacadeGrammarPass(opts: {
     orthosDir: string; chain: VisionModelChain<string>; anchor?: { x: number; z: number }; maxFacades?: number; signal?: AbortSignal; onProgress?: (m: string) => void;
