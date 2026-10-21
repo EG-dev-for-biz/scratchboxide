@@ -29,7 +29,9 @@ import { VECTOR_MODELLED_LABEL } from '../../3d-engine/staged-location/vector-fi
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
 import { buildGroundModel, loadScanMesh, surfaceModel } from '../../spatial/StreetViewSurveyPlanner';
 import { buildRoadMesh, measureRoadSurfaces, writeRoadsGlb, ROAD_SURFACE_PARAMS, type RoadSurface, type RoadSurfaceParams } from '../../3d-engine/staged-location/road-surfaces';
-import { renderTopDownPhoto, topDownJpeg } from '../../3d-engine/staged-location/top-down-photo';
+import { renderTopDownPhoto } from '../../3d-engine/staged-location/top-down-photo';
+import { synthesizeRoadTextures } from '../../3d-engine/staged-location/road-texture';
+import * as jpegJs from 'jpeg-js';
 import { measureGlbMeshCounts } from '../../../common/glb-mesh-counts';
 import { GeminiClient } from '../gemini-client';
 import type { StagedExtraction } from '../../3d-engine/staged-location/orchestrator';
@@ -65,7 +67,7 @@ function number(args: Record<string, unknown>, key: string, lo: number, hi: numb
 }
 
 /** The open scene's staged build, its run record and extraction (the roads stage's inputs), or an error saying what is missing. */
-function openStagedPlace(ctx: ToolContext): { active: CanvasArtifact; data: Scene3DData & { stagedBuild: StagedBuildState }; cache: StageCache; extraction: StagedExtraction; tilesKey: string; roadsKey?: string } {
+function openStagedPlace(ctx: ToolContext): { active: CanvasArtifact; data: Scene3DData & { stagedBuild: StagedBuildState }; cache: StageCache; extraction: StagedExtraction; tilesKey: string; roadsKey?: string; stripKey?: string } {
     const active = ctx?.request?.activeArtifact as CanvasArtifact | undefined;
     if (!active || active.type !== '3d-scene' || !active.data) throw new Error(`${SB_ROADIE_TOOL}: no 3D scene is open. Stage a place with google_3d_tiles_get_clay first.`);
     const data = active.data as Scene3DData & { stagedBuild?: StagedBuildState };
@@ -78,7 +80,7 @@ function openStagedPlace(ctx: ToolContext): { active: CanvasArtifact; data: Scen
     if (!hit) throw new Error(`${SB_ROADIE_TOOL}: the tile extraction of run ${data.stagedBuild.runId} is no longer in the stage cache; stage the place again.`);
     const extraction: StagedExtraction = { ...hit.value, texturedGlb: path.join(hit.dir, hit.value.texturedGlb), geometryGlb: path.join(hit.dir, hit.value.geometryGlb) };
     if (!fs.existsSync(extraction.texturedGlb)) throw new Error(`${SB_ROADIE_TOOL}: the photo tiles of run ${data.stagedBuild.runId} are no longer on disk; stage the place again.`);
-    return { active, data: data as Scene3DData & { stagedBuild: StagedBuildState }, cache, extraction, tilesKey, roadsKey: rec?.keys?.roads };
+    return { active, data: data as Scene3DData & { stagedBuild: StagedBuildState }, cache, extraction, tilesKey, roadsKey: rec?.keys?.roads, stripKey: rec?.keys?.['trees-measure'] };
 }
 
 function summarize(roads: RoadSurface[]): { streets: number; stations: number; measuredKerbShare: number; perStreet: Array<Record<string, unknown>> } {
@@ -133,25 +135,32 @@ export const sbRoadieHandlers: Record<string, ToolHandler> = {
         const vector = evidenceLookup(await fetchVectorEvidence({ lat, lng, radiusM: covered + 20, fetchTile: (x, y, z) => GoogleVectorTileService.fetchVectorTile(x, y, z, '') }), covered + 20);
         const centrelines = vector.raster.roads.filter(l => l.some(([x, z]) => Math.hypot(x, z) <= covered));
         if (!centrelines.length) throw new Error(`${SB_ROADIE_TOOL}: no road centreline from Google vector data runs through the extraction (${Math.round(covered)} m).`);
-        const key = stageKey('roads/v2', place.tilesKey, crypto.createHash('sha256').update(JSON.stringify(centrelines)).digest('hex').slice(0, 16), covered.toFixed(1), P.liftM, P.kerbRiseM, P.defaultHalfWidthM, P.stationM, texelM);
+        // the tree-stripped tile of this run's tree measurement, when the stage cache still has it; else the photo tiles as extracted
+        const stripKey = place.stripKey;
+        const stripDir = stripKey ? (() => { const dir = path.join(stagedWorkspaceRoot(), '.scratchbox', 'cache', 'tile_vegetation', stripKey); return fs.existsSync(path.join(dir, 'devegetated.glb')) ? dir : undefined; })() : undefined;
+        const tileForRoads = stripDir ? path.join(stripDir, 'devegetated.glb') : extraction.texturedGlb;
+        const key = stageKey('roads/v3', place.tilesKey, stripKey ?? 'scan', crypto.createHash('sha256').update(JSON.stringify(centrelines)).digest('hex').slice(0, 16), covered.toFixed(1), P.liftM, P.kerbRiseM, P.defaultHalfWidthM, P.stationM, texelM);
         const key8 = key.slice(0, 8);
         const base = `${data.stagedBuild.place.resolvedAddress.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'place'}`;
         type Value = { stats: ReturnType<typeof buildRoadMesh>['stats']; measuredKerbShare: number; photo: { width: number; height: number; texelM: number } };
         const entry = await cache.run<Value>('roads', key, async dir => {
             ctx?.reportProgress?.(`Measuring ${centrelines.length} streets kerb to kerb on the scan`);
-            const scan = loadScanMesh(extraction.texturedGlb);
+            const scan = loadScanMesh(tileForRoads);
             const grid = { ...surfaceModel(scan, 0.5), cellM: 0.5 };
             const ground = buildGroundModel(scan, { cellMeters: 1, water: vector.waterAt, road: vector.roadAt });
             const roads = measureRoadSurfaces({ roads: centrelines, grid, within: (x, z) => Math.hypot(x, z) <= covered, buildingAt: vector.buildingAt, groundAt: ground.groundAt }, P);
-            const mesh = buildRoadMesh(roads, P);
+            const planar = buildRoadMesh(roads, P);
             const stations = roads.reduce((n, r) => n + r.stations.length, 0);
             const measuredKerbShare = stations ? roads.reduce((n, r) => n + r.measuredKerbShare * r.stations.length, 0) / stations : 0;
-            ctx?.reportProgress?.('Rendering the tile photo from above');
-            const photo = renderTopDownPhoto(fs.readFileSync(extraction.texturedGlb), mesh.uvFrame, { texelM, maxPx: 4096 });
-            writeRoadsGlb(path.join(dir, 'roads.glb'), mesh, { stats: mesh.stats, measuredKerbShare, liftM: P.liftM, params: P, source: 'SB-Roadie: Google vector road centrelines; kerbs, levels and camber measured on the photo tiles; colour from the tile photo rendered from above' },
-                { jpeg: topDownJpeg(photo), width: photo.width, height: photo.height });
+            ctx?.reportProgress?.('Reading the road surfaces from the tile photo');
+            const photo = renderTopDownPhoto(fs.readFileSync(tileForRoads), planar.uvFrame, { texelM, maxPx: 4096 });
+            const atlas = synthesizeRoadTextures(roads, photo, planar.uvFrame);
+            const mesh = buildRoadMesh(roads, P, atlas);
+            const jpeg = jpegJs.encode({ data: Buffer.from(atlas.rgba.buffer, atlas.rgba.byteOffset, atlas.rgba.byteLength), width: atlas.width, height: atlas.height }, 90).data;
+            writeRoadsGlb(path.join(dir, 'roads.glb'), mesh, { stats: mesh.stats, measuredKerbShare, liftM: P.liftM, params: P, markings: atlas.stats, source: 'SB-Roadie: Google vector road centrelines; kerbs, levels and camber measured on the tree-stripped photo tiles; tarmac and lane markings read along each street from the tile photo and redrawn' },
+                { jpeg: Buffer.from(jpeg), width: atlas.width, height: atlas.height });
             fs.writeFileSync(path.join(dir, 'roads.json'), JSON.stringify({ schema: 'scratchbox.road-surfaces/1', roads, params: P } satisfies RoadRecord & { params: RoadSurfaceParams }));
-            return { value: { stats: mesh.stats, measuredKerbShare, photo: { width: photo.width, height: photo.height, texelM: photo.texelM } }, inputs: { params: P, texelM, centrelines: centrelines.length } };
+            return { value: { stats: mesh.stats, measuredKerbShare, photo: { width: atlas.width, height: atlas.height, texelM: photo.texelM } }, inputs: { params: P, texelM, centrelines: centrelines.length, tile: path.basename(tileForRoads) } };
         }, { publish: () => [{ from: 'roads.glb', as: `${base}_roads_${key8}.glb` }] });
         const roads = (JSON.parse(fs.readFileSync(path.join(entry.dir, 'roads.json'), 'utf8')) as RoadRecord).roads;
         const summary = summarize(roads);

@@ -39,6 +39,8 @@ export interface SyntheticTileSpec {
     halfSize: number;
     /** Streets sunk into the ground by their kerb height, in their own (dark) texture. */
     roads?: SyntheticRoad[];
+    /** Paint lane lines into the street texture: a dashed white line along x at z = 0 (5 m on, 5 m off) and a solid one along z at x = 0, 10, 20... */
+    roadMarkings?: boolean;
     /** Ground grid spacing (m). */
     spacing: number;
     trees: SyntheticTree[];
@@ -72,14 +74,16 @@ function hash(a: number, b: number, c: number): number {
     return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
-function texture(rgb: [number, number, number], seed: number): Buffer {
+function texture(rgb: [number, number, number], seed: number, markings = false): Buffer {
     const W = 32, H = 32;
     const px = Buffer.alloc(W * H * 4);
     for (let y = 0; y < H; y++) {
         for (let x = 0; x < W; x++) {
             const n = (hash(x, y, seed) - 0.5) * 16;
             const o = (y * W + x) * 4;
-            for (let c = 0; c < 3; c++) px[o + c] = Math.max(0, Math.min(255, Math.round(rgb[c] + n)));
+            // the UVs are world x 0.1, so one texel is 0.3125 m: row 0 lies along z = 0 (mod 10 m), column 0 along x = 0 (mod 10 m)
+            const line = markings && ((y === 0 && x < 16) || x === 0);
+            for (let c = 0; c < 3; c++) px[o + c] = line ? 240 : Math.max(0, Math.min(255, Math.round(rgb[c] + n)));
             px[o + 3] = 255;
         }
     }
@@ -272,7 +276,7 @@ export function buildSyntheticTile(spec: SyntheticTileSpec): Buffer {
         if (!p.idx.length) continue;
         let material: number | undefined;
         if (!spec.untextured) {
-            const png = spec.corruptTexture && rgb === FOLIAGE_RGB ? Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(40, 0x5a)]) : texture(rgb, seed);
+            const png = spec.corruptTexture && rgb === FOLIAGE_RGB ? Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(40, 0x5a)]) : texture(rgb, seed, !!spec.roadMarkings && p === road);
             images.push({ bufferView: addView(png), mimeType: 'image/png' });
             textures.push({ source: images.length - 1, sampler: 0 });
             materials.push({ pbrMetallicRoughness: { baseColorTexture: { index: textures.length - 1 }, metallicFactor: 0, roughnessFactor: 1 }, extensions: { KHR_materials_unlit: {} } });

@@ -24,6 +24,7 @@ import {
     buildRoadMesh, drivableAt, measureRoadSurfaces, nearestOffRoad, ROAD_SURFACE_PARAMS, stationsAlong, writeRoadsGlb, type RoadSurface
 } from '../src/node/3d-engine/staged-location/road-surfaces';
 import { renderTopDownPhoto, topDownJpeg } from '../src/node/3d-engine/staged-location/top-down-photo';
+import { synthesizeRoadTextures } from '../src/node/3d-engine/staged-location/road-texture';
 import { buildSyntheticTile, GROUND_RGB, ROAD_RGB } from './helpers/synthetic-textured-tile';
 import { parseGlb } from './helpers/clay-glb-render';
 import { measureGlbMeshCounts } from '../src/common/glb-mesh-counts';
@@ -41,7 +42,8 @@ const TILE = buildSyntheticTile({
         { x0: 10, z0: -30, x1: 10, z1: 30, halfWidth: 3, kerb: 0.12 },
         { x0: -30, z0: -15, x1: 30, z1: -15, halfWidth: 7, kerb: 0.12, median: { halfWidth: 1.5 } }
     ],
-    trees: [{ x: -12, z: 5.5, height: 9, radius: 3.5 }]
+    trees: [{ x: -12, z: 5.5, height: 9, radius: 3.5 }],
+    roadMarkings: true
 });
 const CENTRELINES: Vec2[][] = [[[-28, 0], [28, 0]], [[10, -28], [10, 28]], [[-28, -15], [28, -15]]];
 
@@ -164,7 +166,7 @@ describe('road surfaces', () => {
             return [photo.rgba[o], photo.rgba[o + 1], photo.rgba[o + 2]];
         };
         const near = (a: number[], b: number[], tol: number) => Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2])) <= tol;
-        expect(near(at(0, 1), ROAD_RGB, 40), `street ${at(0, 1)}`).toBe(true);
+        expect(near(at(3, 2.5), ROAD_RGB, 40), `street ${at(3, 2.5)}`).toBe(true);
         expect(near(at(0, 7), GROUND_RGB, 40), `ground ${at(0, 7)}`).toBe(true);
         expect(near(at(-5, -15), GROUND_RGB, 40), `median ${at(-5, -15)}`).toBe(true);
         const jpeg = topDownJpeg(photo);
@@ -179,5 +181,45 @@ describe('road surfaces', () => {
         expect(json.nodes[0].extras.sbRoads.uvFrame).toEqual(mesh.uvFrame);
         const counts = measureGlbMeshCounts(fs.readFileSync(file));
         expect(counts.triangleCount).toBe(mesh.stats.triangles);
+    });
+
+    it('reads the tarmac and the lane markings along each street from the photo and redraws them, solid or dashed as measured', () => {
+        const planar = buildRoadMesh(roads);
+        const photo = renderTopDownPhoto(fs.readFileSync(tileFile), planar.uvFrame, { texelM: 0.1 });
+        const atlas = synthesizeRoadTextures(roads, photo, planar.uvFrame);
+        expect(atlas.stats.runs).toBe(roads.length);
+        expect(atlas.height).toBeLessThanOrEqual(4096);
+        const ew = atlas.bands.get(roads[0].id)!, ns = atlas.bands.get(roads[1].id)!;
+        // the tarmac is the street's own colour, the sidewalk the ground's
+        const near = (a: number[], b: number[], tol: number) => Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2])) <= tol;
+        expect(near(ew.tarmacRgb, ROAD_RGB, 40), `tarmac ${ew.tarmacRgb}`).toBe(true);
+        expect(near(ew.sidewalkRgb, GROUND_RGB, 40), `sidewalk ${ew.sidewalkRgb}`).toBe(true);
+        // the main street carries a dashed white centre line (5 m on, 5 m off), the side street a solid one
+        const centreEw = ew.markings.find(m => Math.abs(m.acrossShare - 0.5) < 0.12);
+        expect(centreEw, JSON.stringify(ew.markings)).toBeDefined();
+        expect(centreEw!.dashed).toBe(true);
+        expect(Math.abs(centreEw!.dashM! - 5)).toBeLessThanOrEqual(1.5);
+        expect(Math.abs(centreEw!.gapM! - 5)).toBeLessThanOrEqual(1.5);
+        expect(centreEw!.rgb[0]).toBeGreaterThan(180);
+        expect(centreEw!.widthM).toBeLessThanOrEqual(0.45);
+        const centreNs = ns.markings.find(m => Math.abs(m.acrossShare - 0.5) < 0.12);
+        expect(centreNs, JSON.stringify(ns.markings)).toBeDefined();
+        expect(centreNs!.dashed).toBe(false);
+        // the band is painted: the centre row white on a dash, the tarmac beside it; the across stripes (every 10 m) are gone
+        const px = (band: typeof ew, col: number, row: number) => { const o = ((band.row0 + row) * atlas.width + col) * 4; return [atlas.rgba[o], atlas.rgba[o + 1], atlas.rgba[o + 2]]; };
+        const midRow = Math.min(ew.rows - 1, Math.floor(centreEw!.acrossShare * ew.rows));
+        // the run starts at x = -28: the painted dashes lie at x in [-30, -25), [-20, -15) ... so along 0.5 m is on one, 7.5 m is off
+        const onDash = px(ew, 2, midRow), offDash = px(ew, Math.round(7.5 / 0.2), midRow);
+        expect(onDash[0]).toBeGreaterThan(180);
+        expect(near(offDash, ROAD_RGB, 40), `off dash ${offDash}`).toBe(true);
+        expect(near(px(ew, 10, 3), ROAD_RGB, 40)).toBe(true);
+        // the ribbons take road-aligned UVs into the band
+        const mesh = buildRoadMesh(roads, ROAD_SURFACE_PARAMS, atlas);
+        for (let i = 0; i < mesh.carriageway.uv.length; i += 2) {
+            expect(mesh.carriageway.uv[i]).toBeGreaterThanOrEqual(0); expect(mesh.carriageway.uv[i]).toBeLessThanOrEqual(1);
+            expect(mesh.carriageway.uv[i + 1]).toBeGreaterThanOrEqual(0); expect(mesh.carriageway.uv[i + 1]).toBeLessThanOrEqual(1);
+        }
+        const vs = Array.from({ length: mesh.carriageway.uv.length / 2 }, (_, i) => mesh.carriageway.uv[i * 2 + 1] * atlas.height);
+        expect(Math.min(...vs)).toBeGreaterThanOrEqual(ew.row0 - 1e-6);
     });
 });
