@@ -24,9 +24,14 @@ import {
     TestingConvention,
     TestStyle
 } from '../common/pattern-matching-protocol';
+/** How long a workspace's pattern analysis is served as is before a fresh scan is started behind it (ms). */
+export const PATTERN_ANALYSIS_FRESH_MS = 60_000;
+
 export class CodebasePatternEngine {
     private analysisCache: Map<string, CodebasePatternAnalysis> = new Map();
     private lastAnalysis?: CodebasePatternAnalysis;
+    /** Scans in flight per workspace root, so a chat turn (or two at once) never starts a second one. */
+    private readonly scans = new Map<string, Promise<CodebasePatternAnalysis>>();
 
     public getLastAnalysis(): CodebasePatternAnalysis | undefined {
         return this.lastAnalysis;
@@ -41,10 +46,27 @@ export class CodebasePatternEngine {
         options: PatternExtractionOptions = {}
     ): Promise<CodebasePatternAnalysis> {
         const cached = this.analysisCache.get(workspaceRoot);
-        if (cached && Date.now() - cached.lastAnalyzed < 60000) {
+        if (cached) {
+            // A turn never waits for a rescan: an analysis older than PATTERN_ANALYSIS_FRESH_MS is served as it is and a fresh
+            // scan starts behind it (one per workspace at a time), so only the first turn at a workspace pays the ~0.6 s walk
+            // (the server's warm-up pays it at the default root before any turn: chat-prompt-warmup.ts).
+            if (Date.now() - cached.lastAnalyzed >= PATTERN_ANALYSIS_FRESH_MS && !this.scans.has(workspaceRoot)) {
+                void this.scanWorkspace(workspaceRoot, options).catch(() => undefined);
+            }
             return cached;
         }
+        const running = this.scans.get(workspaceRoot);
+        return running ?? this.scanWorkspace(workspaceRoot, options);
+    }
 
+    /** Walks the workspace and analyzes what it finds; the result replaces the cached analysis for the root. */
+    private scanWorkspace(workspaceRoot: string, options: PatternExtractionOptions): Promise<CodebasePatternAnalysis> {
+        const scan = this.walkAndAnalyze(workspaceRoot, options).finally(() => { if (this.scans.get(workspaceRoot) === scan) this.scans.delete(workspaceRoot); });
+        this.scans.set(workspaceRoot, scan);
+        return scan;
+    }
+
+    private async walkAndAnalyze(workspaceRoot: string, options: PatternExtractionOptions): Promise<CodebasePatternAnalysis> {
         const files: Array<{ path: string; content: string }> = [];
         const sampleLimit = options.maxExemplars ? options.maxExemplars * 10 : 30;
 

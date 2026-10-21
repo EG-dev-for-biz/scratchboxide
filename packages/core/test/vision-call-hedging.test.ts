@@ -369,6 +369,49 @@ describe('the grammar readings', () => {
     });
 });
 
+describe('the grammar reading pool', () => {
+    it('every facade\'s readings go through one pool, in facade order; a facade is judged when its own five are in, and the pass is not rounds of "slowest of five"', async () => {
+        // 12 facades, 5 readings each; every facade's whole reading takes 30 s, its four held-out readings 10 s. Read 3 facades at a
+        // time, each waiting for all five (the shape before 2026-10-21), the pass was 4 rounds of 30 s: 120 s
+        const dir = fs.mkdtempSync(path.join(TMP, 'orthos-pool-'));
+        const facades = [...Array(12).keys()].map(id => facadeOf(id + 1));
+        for (const f of facades) fs.writeFileSync(path.join(dir, f.meta.image), f.png);
+        fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify({ schema: 'scratchbox.relief-orthos/1', facades: facades.map(f => f.meta) }));
+        process.env.SCRATCHBOX_VISION_HEDGE = '0';
+        let inFlight = 0, maxInFlight = 0;
+        const order: number[] = [];
+        // the facade a request reads is told by the one whose photo the simulated reader can place the request's image in
+        const read = (params: any): { id: number; text: string } => {
+            const img = promptImage(params);
+            for (const f of facades) { try { return { id: f.meta.facadeId, text: simulatedReply(f.meta, f.png, img, f.truth) }; } catch { /* not this facade */ } }
+            throw new Error('the request\'s image is none of the facades');
+        };
+        const client = timedClient((i, params) => {
+            const r = read(params);
+            order.push(r.id);
+            inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+            return { ms: i % 5 === 0 ? 30_000 : 10_000, text: r.text };
+        });
+        const realGenerate = client.models.generateContent;
+        client.models.generateContent = (params: any) => realGenerate(params).finally(() => { inFlight--; });
+        const chain = new VisionModelChain<string>({ client, candidates: ['gemini-4-argon'], hedgeBook: new VisionHedgeBook() });
+        const t0 = Date.now();
+        const p = runFacadeGrammarPass({ orthosDir: dir, chain, maxFacades: 12, readPool: 14 });
+        await vi.runAllTimersAsync();
+        const pass = await p;
+        const ms = Date.now() - t0;
+        expect(pass.calls).toBe(60);
+        expect(maxInFlight).toBe(14);
+        // facade order: the first facade's five readings are sent before the second's, and so on
+        expect(order.slice(0, 15)).toEqual([1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3]);
+        expect(pass.facades.map(f => f.facadeId)).toEqual(facades.map(f => f.meta.facadeId));
+        for (const f of pass.facades) expect(f.readings.filter(r => r.error)).toEqual([]);
+        // 60 readings (48 x 10 s + 12 x 30 s) through 14 slots: about 60-70 s, against 120 s in rounds
+        expect(ms).toBeLessThan(0.7 * 120_000);
+        expect(ms).toBeGreaterThanOrEqual(60_000);
+    });
+});
+
 // ---------------------------------------------------------------------------------------------------------------
 // replay of the recorded latencies
 // ---------------------------------------------------------------------------------------------------------------

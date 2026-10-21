@@ -360,6 +360,9 @@ int renderOnce(const std::string& configPath) {
         const int guideBands = static_cast<int>(numberOr(opt["guideBands"], 4));
         const int guideSectors = static_cast<int>(numberOr(opt["guideSectors"], 8));
         const int guideSamples = static_cast<int>(numberOr(opt["guideSamples"], 1));
+        const bool restirGi = boolOr(opt["restirGi"], false);
+        const int giSpatial = static_cast<int>(numberOr(opt["giSpatial"], 3));
+        if (giSpatial < 0) throw std::runtime_error("optimizations.giSpatial must be at least 0");
         if (guideTile < 1 || guideBands < 1 || guideSectors < 1 || guideSamples < 1) throw std::runtime_error("optimizations.guideTile, guideBands, guideSectors and guideSamples must be at least 1");
         sbvg::Cut bounceCut;
         if (backend == "metal") {
@@ -371,6 +374,7 @@ int renderOnce(const std::string& configPath) {
             tracer.setBounceShadowRays(boolOr(opt["bounceShadowRays"], true));
             tracer.setRestir(restir, static_cast<uint32_t>(restirCandidates), static_cast<uint32_t>(restirSpatial), boolOr(opt["restirTemporal"], true));
             tracer.setGuidedSky(guidedSky, static_cast<uint32_t>(guideTile), static_cast<uint32_t>(guideBands), static_cast<uint32_t>(guideSectors), static_cast<uint32_t>(guideSamples));
+            tracer.setRestirGi(restirGi, static_cast<uint32_t>(giSpatial));
             tracer.setGeometry(file.vertices, cut.indices, cut.materials);
             if (bounceThresholdPx > 0.0f) {
                 sbvg::CutParams bounceParams = cutParams;
@@ -463,7 +467,7 @@ int renderOnce(const std::string& configPath) {
               << "  \"optimizations\": { \"accelFastBuild\": " << (accelFastBuild ? "true" : "false") << ", \"sampler\": " << jsonString(samplerName)
               << ", \"primaryRaster\": " << (primaryRaster ? "true" : "false") << ", \"rasterMs\": " << (metalTracer ? metalTracer->rasterMs() : 0.0)
               << ", \"restir\": " << (restir ? "true" : "false") << ", \"restirCandidates\": " << restirCandidates << ", \"restirSpatial\": " << restirSpatial
-              << ", \"guidedSky\": " << (guidedSky ? "true" : "false") << ", \"guideTile\": " << guideTile << ", \"guideBands\": " << guideBands << ", \"guideSectors\": " << guideSectors << ", \"guideSamples\": " << guideSamples
+              << ", \"guidedSky\": " << (guidedSky ? "true" : "false") << ", \"guideTile\": " << guideTile << ", \"guideBands\": " << guideBands << ", \"guideSectors\": " << guideSectors << ", \"guideSamples\": " << guideSamples << ", \"restirGi\": " << (restirGi ? "true" : "false") << ", \"giSpatial\": " << giSpatial << ", \"giMeanCandidates\": " << (metalTracer ? metalTracer->giMeanCandidates() : 0.0)
               << ", \"bounceCut\": { \"thresholdPx\": " << bounceThresholdPx << ", \"clusters\": " << bounceCut.clusterIds.size() << ", \"triangles\": " << bounceCut.triangleCount()
               << ", \"accelerationBuildMs\": " << (metalTracer ? metalTracer->bounceBuildMs() : 0.0) << " } },\n"
               << "  \"rays\": " << out.rays << ",\n"

@@ -18,6 +18,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { decodeImageInMemory, type RgbaImage8 } from '../tile-texture-transfer';
 import { auditResidual, removedTriangleIds, verdictByTriangle, writeAuditResult, trianglePhoto, type AuditSource, type ResidualAuditResult } from '../residual-audit';
+import { pickRadialShapeFits, buildResidualShapeNodes, type RadialShapeFit } from './residual-shape-fit';
 import type { MassingNode, MassingRun } from './native-massing';
 
 /** The provenance token of residual kept although the audit could not decide. */
@@ -72,14 +73,34 @@ export async function auditMassingRun(run: MassingRun, opts: { groundY?: number;
     });
     const result = await auditResidual({ solid, sources, ...(groundY !== undefined ? { groundY } : {}), dir: path.join(opts.outDir ?? run.dir, 'residual_audit'), ...(opts.signal ? { signal: opts.signal } : {}), idPrefix: `${path.basename(run.dir)}/residual` });
     if (apron) result.notes.splice(1, 0, `${apron} ground-apron triangles (wholly within ${APRON_HEIGHT_M} m of the ground) kept as scanned, not audited`);
+    const shapeFits = pickRadialShapeFits(result);
     writeAuditResult(path.join(opts.outDir ?? run.dir, 'residual_audit.json'), result);
-    applyAudit(run, result);
+    applyAudit(run, result, shapeFits);
+    if (shapeFits.length) {
+        try {
+            const { nodes, flatColours } = await buildResidualShapeNodes(shapeFits, path.join(opts.outDir ?? run.dir, 'residual_shape_fit'), { ...(opts.signal ? { signal: opts.signal } : {}) });
+            run.nodes.push(...nodes);
+            run.flatColours = flatColours;
+            result.notes.push(`${nodes.length} rooftop cluster${nodes.length === 1 ? '' : 's'} fit with a measured solid of revolution instead of its raw scan triangles (clusters ${shapeFits.map(f => f.clusterId).join(', ')})`);
+        } catch (err) {
+            if (opts.signal?.aborted) throw err;
+            result.notes.push(`${shapeFits.length} rooftop cluster${shapeFits.length === 1 ? '' : 's'} measured confidently radially symmetric, but the solid-of-revolution fit failed (${err instanceof Error ? err.message : String(err)}); kept as scanned`);
+        }
+    }
     return result;
 }
 
-/** Rewrites the run's residual nodes: artefact triangles dropped, unsure triangles moved to their own labelled nodes. */
-export function applyAudit(run: MassingRun, result: ResidualAuditResult): void {
+/**
+ * Rewrites the run's residual nodes: artefact triangles dropped, unsure triangles moved to their own labelled nodes. A
+ * triangle whose cluster has a shape fit (`shapeFits`, residual-shape-fit.ts) is dropped only when it sits within the
+ * fit's own measured height range (`baseY`..`topY`, a small margin either side for the slice spacing); anything of that
+ * cluster outside that range (a tank's support frame, say) is kept as scanned, same as before — the fit never deletes
+ * triangles it did not itself measure and replace.
+ */
+export function applyAudit(run: MassingRun, result: ResidualAuditResult, shapeFits: RadialShapeFit[] = []): void {
     const removed = removedTriangleIds(result), byTri = verdictByTriangle(result);
+    const fitByCluster = new Map(shapeFits.map(f => [f.clusterId, f]));
+    const sliceStepM = result.params.sliceStepM ?? 0.25;
     const out: MassingNode[] = [];
     for (const n of run.nodes) {
         if (n.kind !== 'residual') { out.push(n); continue; }
@@ -92,7 +113,14 @@ export function applyAudit(run: MassingRun, result: ResidualAuditResult): void {
             const id = idOf.get(t);
             if (id === undefined) { keep.push(t); continue; }
             if (removed.has(id)) continue;
-            (byTri.get(id)?.verdict === 'unsure' ? unsure : keep).push(t);
+            const cluster = byTri.get(id);
+            const fit = cluster && fitByCluster.get(cluster.id);
+            if (fit) {
+                const v = [n.indices[t * 3], n.indices[t * 3 + 1], n.indices[t * 3 + 2]];
+                const midY = (n.positions[v[0] * 3 + 1] + n.positions[v[1] * 3 + 1] + n.positions[v[2] * 3 + 1]) / 3;
+                if (midY >= fit.baseY - sliceStepM && midY <= fit.topY + sliceStepM) continue;
+            }
+            (cluster?.verdict === 'unsure' ? unsure : keep).push(t);
         }
         const take = (tris: number[], name: string, provenance: string): MassingNode => {
             const verts = new Map<number, number>();

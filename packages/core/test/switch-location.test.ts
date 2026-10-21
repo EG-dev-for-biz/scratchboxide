@@ -21,6 +21,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { ChatMarkdownRenderer } from '../src/browser/generative-canvas/ChatMarkdownRenderer';
 import { buildSwitchLocationPills, switchLocationLabel, switchLocationMarkdown } from '../src/common/spatial/switch-location';
 import { runStagedLocationTool } from '../src/node/3d-engine/staged-location/staged-location-tool';
+import { SHOW_CLAY_PILL } from '../src/node/3d-engine/staged-location/staged-summary';
 import { StageCache } from '../src/node/3d-engine/staged-location/stage-cache';
 import type { StagedLocationDeps } from '../src/node/3d-engine/staged-location/orchestrator';
 import type { ToolContext } from '../src/node/gemini/tools/types';
@@ -94,14 +95,21 @@ describe('Switch location', () => {
         const out = await runStagedLocationTool('google_3d_tiles_get_clay', { query: 'Central Park', radiusMeters: 60 }, withAlts.ctx, withAlts.deps);
         const summary = (out.resultPayload as any).summary as string;
         expect(summary).toContain('Switch location');
-        expect(summary.match(/\]\(prompt:/g)).toHaveLength(2);
-        expect(summary).toContain('[Central Park, Santa Clarita](prompt:');
-        expect(summary).toContain('[Central Park, Pasadena](prompt:');
+        // the switch block holds one pill per alternative; the only other pill in the summary is the materials one
+        // (textured by default, so a build offers "Show clay"), which comes before the switch block
+        const switchBlock = summary.slice(summary.indexOf('Switch location'));
+        expect(switchBlock.match(/\]\(prompt:/g)).toHaveLength(2);
+        expect(switchBlock).toContain('[Central Park, Santa Clarita](prompt:');
+        expect(switchBlock).toContain('[Central Park, Pasadena](prompt:');
+        const otherPills = summary.slice(0, summary.indexOf('Switch location')).match(/- \[[^\]]+\]\(prompt:[^)]*\)/g) ?? [];
+        expect(otherPills).toEqual([SHOW_CLAY_PILL]);
 
         const none = setup(async () => ({ ...NYC }));
         const out2 = await runStagedLocationTool('google_3d_tiles_get_clay', { query: 'Central Park', radiusMeters: 60 }, none.ctx, none.deps);
-        expect((out2.resultPayload as any).summary).not.toContain('Switch location');
-        expect((out2.resultPayload as any).summary).not.toContain('](prompt:');
+        const summary2 = (out2.resultPayload as any).summary as string;
+        expect(summary2).not.toContain('Switch location');
+        expect(summary2).not.toContain('Central Park, Santa Clarita');
+        expect(summary2.match(/- \[[^\]]+\]\(prompt:[^)]*\)/g) ?? []).toEqual([SHOW_CLAY_PILL]);
     });
 
     it('the chat renders those lines as pill buttons, and a click sends the prompt for that exact place', async () => {

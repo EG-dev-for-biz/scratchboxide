@@ -1,6 +1,10 @@
 # Process: Residual audit for staged location builds, and the 488 Broadway roof spike
 
 > **Recorded:** 2026-10-19
+> **Updated 2026-10-21:** a confidently radially-symmetric real-object cluster (a rooftop tank, a chimney) is now fit with a
+> clean solid of revolution from its own measured per-slice radius (`residual-shape-fit.ts`), instead of staying raw,
+> unresolved scan triangles — the water tower this session found and labelled (section 1) is built, not just labelled.
+> See section 5a.
 > **Status:** Verified (tool, pipeline E wiring, three live NYC builds); two findings left open (section 5)
 > **Tags:** `operate-scratchbox` `staged-location` `pipeline-e` `residual-audit` `scan-artefacts` `sb-feature-types`
 > **Target Domain:** Staged location builds (pipeline E), in-app Gemini tools (location evidence pack)
@@ -153,6 +157,34 @@ The audit's own effect was isolated with a control arm: the audited relief layer
   * Google Solar dataLayers DSM as a second height source. The DSM is 0.1–0.5 m per pixel (`solar-dsm.ts` asks for 0.5 m by default, so a 3.3 m tank is about 7 × 7 px). It is not wired into the audit.
   * Street View agreement per cluster.
 * **Photo agreement is weak evidence:** only the sky colour enters the verdict (0.15). The live builds had no sky-coloured clusters.
+
+## 5a. Shape fit (2026-10-21): a labelled tank is now a built tank
+
+A real-object cluster was kept as scanned either way — a round tank got the `ROOF_OBJECT_TANK` label, but still rendered
+with its own raw, unresolved scan triangles (its native UV straight into the shared tile photo), the same as a box-like
+bulkhead. `residual-shape-fit.ts` closes this for the radially-symmetric case:
+
+* The native tool already fits a Kasa circle to every horizontal slice through a cluster (`scratchbox_residual_audit.hpp`'s
+  `SliceFit`, `sliceStepM` apart) to score `radialSymmetry`; it just discarded the per-slice fits afterwards. They are now
+  serialised (`NativeCluster.slices`: y, cx, cz, r, rmsRel, sectors, per slice).
+* A slice counts toward the profile only above `MIN_SECTORS` (0.9: close to a full circle). On the tank-on-legs synthetic
+  fixture (residual-audit.test.ts) this is a sharp, not gradual, cut: the four support legs' slices measure 0.667 (noisy,
+  rmsRel 0.03-0.06), the tank wall's measure a clean 1.000 (rmsRel ~0.003) — confirmed against the native numbers, not
+  assumed. A cluster's support frame below a fitted tank keeps its own raw scanned triangles; the fit only ever replaces
+  triangles within its own measured height range.
+* The profile is revolved into a clean mesh by the existing shape-program trial's native generator (`emitRevolve`,
+  `scratchbox_shape_program.hpp`), reusing `scripts/shape_program.cpp`'s "mode program" with `fit 0 0` (no scan-target
+  fit — the profile is already measured, so nothing is fitted, only revolved). No new native geometry code.
+* Coloured with the cluster's own measured average photo colour (`NativeCluster.photo.rgb`) as a flat material
+  (`massing-glb.ts`'s `FLAT_COLOUR_REF_BASE`), since no per-texel photo mapping exists for a curved surface built this
+  way; a clay grey fallback when the cluster has no photo. Labelled `measured` (`RESIDUAL_SHAPE_TOKEN`), not `generated`:
+  the geometry comes from the cluster's own measured radii, not invention.
+* Tests: `residual-shape-fit.test.ts` (the tank-on-legs fixture end to end: native slice serialisation, the profile
+  picked, the native revolve, `applyAudit`'s per-triangle height split).
+
+Not done: lobed/non-circular bodies (a chimney's box-like cross-section, `ROOF_OBJECT_CHIMNEY`/`ROOF_OBJECT_BULKHEAD`)
+are not fit by this path (the shape-program's prism/sweep operators could cover them, but radial symmetry is the only
+measure wired through so far); a cluster just under `MIN_RADIAL_SYMMETRY` (0.5) or `MIN_SECTORS` stays exactly as before.
 
 ## 6. Feature-type model (scope addition)
 

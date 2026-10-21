@@ -261,6 +261,17 @@ public:
         if (guideBands_ * guideSectors_ > kGuideMaxBins) throw Error("the visibility histogram may have at most 1024 bins");
     }
 
+    /**
+     * ReSTIR GI: a path's second hit with the radiance it sends back to the first hit is resampled with
+     * `spatial` neighbours' samples of the previous pass (reconnected with the Jacobian, one visibility ray
+     * for the choice). Passes stay independent; the choice's visibility is not part of the selection, which
+     * is the method's known bias.
+     */
+    void setRestirGi(bool enabled, uint32_t spatial = 3) {
+        restirGi_ = enabled;
+        giSpatial_ = spatial;
+    }
+
     void setRestir(bool enabled, uint32_t candidates = 8, uint32_t spatial = 3, bool temporal = true) {
         restir_ = enabled;
         restirTemporal_ = temporal;
@@ -501,6 +512,8 @@ public:
         u.guideBands = guideBands_;
         u.guideSectors = guideSectors_;
         u.guideSamples = guideSamples_;
+        u.restirGi = restirGi_ ? 1 : 0;
+        u.giSpatial = giSpatial_;
 
         std::vector<float> lut(3, 0.0f);
         if (lighting.mode == Lighting::Mode::Sky) {
@@ -546,6 +559,15 @@ public:
             if (!dummyRestir_) dummyRestir_ = [device_ newBufferWithLength:2 * kGuideMaxBins * sizeof(uint32_t) options:MTLResourceStorageModePrivate];
             frameRestir_ = u.restir != 0;
             frameGuided_ = u.guided != 0;
+            frameGi_ = u.restirGi != 0;
+            if (frameGi_) {
+                giA_ = [device_ newBufferWithLength:n * sizeof(GiSample) options:MTLResourceStorageModePrivate];
+                giB_ = [device_ newBufferWithLength:n * sizeof(GiSample) options:MTLResourceStorageModePrivate];
+                if (!giA_ || !giB_) throw Error("could not allocate the ReSTIR GI sample buffers");
+            } else {
+                giA_ = giB_ = nil;
+            }
+            if (!dummyGi_) dummyGi_ = [device_ newBufferWithLength:sizeof(GiSample) options:MTLResourceStorageModePrivate];
             if (frameGuided_) {
                 const size_t tilesX = (static_cast<size_t>(w) + guideTile_ - 1) / guideTile_;
                 const size_t tilesY = (static_cast<size_t>(h) + guideTile_ - 1) / guideTile_;
@@ -575,6 +597,8 @@ public:
             [encoder setBuffer:(frameRestir_ ? surfacesB_ : dummyRestir_) offset:0 atIndex:5];
             [encoder setBuffer:(frameGuided_ ? guideHistograms_ : dummyRestir_) offset:0 atIndex:6];
             [encoder setBuffer:(frameGuided_ ? guidePending_ : dummyRestir_) offset:0 atIndex:7];
+            [encoder setBuffer:(frameGi_ ? giA_ : dummyGi_) offset:0 atIndex:8];
+            [encoder setBuffer:(frameGi_ ? giB_ : dummyGi_) offset:0 atIndex:9];
             [encoder dispatchThreads:MTLSizeMake(static_cast<NSUInteger>(w), static_cast<NSUInteger>(h), 1) threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
             [encoder endEncoding];
             submit(commands);
@@ -616,11 +640,14 @@ public:
                 [encoder setBuffer:(frameRestir_ ? surfacesB_ : dummyRestir_) offset:0 atIndex:17];
                 [encoder setBuffer:(frameGuided_ ? guideHistograms_ : dummyRestir_) offset:0 atIndex:18];
                 [encoder setBuffer:(frameGuided_ ? guidePending_ : dummyRestir_) offset:0 atIndex:19];
+                [encoder setBuffer:(frameGi_ ? giA_ : dummyGi_) offset:0 atIndex:20];
+                [encoder setBuffer:(frameGi_ ? giB_ : dummyGi_) offset:0 atIndex:21];
                 if (!frameUniform_) {
                     for (id<MTLTexture> texture : textures_) [encoder useResource:texture usage:MTLResourceUsageRead];
                 }
                 [encoder dispatchThreads:grid threadsPerThreadgroup:group];
                 [encoder endEncoding];
+                if (frameGi_) std::swap(giA_, giB_); // this pass's samples are the next pass's neighbours
                 if (frameGuided_) {
                     id<MTLComputeCommandEncoder> commit = [commands computeCommandEncoder];
                     [commit setComputePipelineState:guideCommitPso_];
@@ -674,6 +701,7 @@ public:
         const PixelState* state = static_cast<const PixelState*>(framePixels_.contents);
         const float inv = 1.0f / static_cast<float>(spp);
         size_t covered = 0;
+        uint64_t giCandidates = 0;
         for (size_t i = 0; i < n; ++i) {
             const PixelState& p = state[i];
             out.color[i] = Vec3(p.color[0], p.color[1], p.color[2]) * inv;
@@ -681,6 +709,7 @@ public:
             out.guides.variance[i] = static_cast<float>(std::max(0.0, static_cast<double>(p.lumSq) / spp - mean * mean) / spp);
             out.rays += p.rays;
             out.nanSamples += p.nan;
+            giCandidates += p.pad;
             if (p.hits * 2 >= static_cast<uint32_t>(spp)) {
                 out.guides.geometryMask[i] = 1;
                 out.guides.albedo[i] = Vec3(p.albedo[0], p.albedo[1], p.albedo[2]) / static_cast<float>(p.hits);
@@ -691,8 +720,12 @@ public:
         }
         out.geometryCoverage = static_cast<float>(covered) / static_cast<float>(n);
         out.renderMs = frameGpuSeconds_ * 1000.0;
+        giMeanCandidates_ = frameGi_ ? static_cast<double>(giCandidates) / (static_cast<double>(n) * spp) : 0.0;
         return out;
     }
+
+    /** ReSTIR GI: mean samples resampled per first hit (the path's own plus accepted neighbours) over the last readback. */
+    double giMeanCandidates() const { return giMeanCandidates_; }
 
     /**
      * Denoises the current frame on the GPU (the a-trous filter of scratchbox_denoise.hpp) and returns the
@@ -941,6 +974,13 @@ private:
     uint32_t guideSectors_{8};
     uint32_t guideSamples_{1};
     uint32_t guideWords_{0};
+    bool restirGi_{false};
+    bool frameGi_{false};
+    mutable double giMeanCandidates_{0.0};
+    uint32_t giSpatial_{3};
+    id<MTLBuffer> giA_{nil};
+    id<MTLBuffer> giB_{nil};
+    id<MTLBuffer> dummyGi_{nil};
     id<MTLComputePipelineState> guideCommitPso_{nil};
     id<MTLBuffer> guideHistograms_{nil};
     id<MTLBuffer> guidePending_{nil};

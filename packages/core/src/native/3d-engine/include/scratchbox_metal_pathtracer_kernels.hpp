@@ -78,9 +78,25 @@ struct Uniforms {
     uint32_t guideBands{4}, guideSectors{8};
     /** Guided sky samples per first hit (multi-sample MIS against the one BSDF ray). */
     uint32_t guideSamples{1};
-    uint32_t pad11{0}, pad12{0}, pad13{0};
+    /**
+     * 1: ReSTIR GI (buffers 20-21): everything a path gathers past its first hit becomes a sample (the second
+     * hit with its outgoing radiance), resampled with `giSpatial` neighbours' samples from the previous pass.
+     */
+    uint32_t restirGi{0}, giSpatial{3};
+    uint32_t pad13{0};
 };
 static_assert(sizeof(Uniforms) == 4 * 72, "Uniforms must stay a flat array of 4-byte scalars");
+
+/** A ReSTIR GI sample: a path's second hit (or escape direction) with the radiance it sent back to the first hit. */
+struct GiSample {
+    float x1[3], depth;      // the first hit it was gathered for
+    float n1[3];
+    uint32_t flags;          // bit 0 valid, bit 1 escaped (x2 is a direction)
+    float x2[3], pdf;        // second hit (or direction) and its solid-angle pdf at x1
+    float n2[3], pad;
+    float radiance[3], pad2; // outgoing radiance from x2 toward x1 (clamped as the path clamps indirect light)
+};
+static_assert(sizeof(GiSample) == 80, "GiSample layout is shared with the kernels");
 constexpr uint32_t kGuideMaxBins = 1024;
 
 /** One pixel's ReSTIR reservoir over sky directions: the chosen direction, its target value and the resampling weights. */
@@ -255,7 +271,16 @@ struct Uniforms {
     uint sampler, usePrimaryRaster;
     uint bounceShadowRays, restir, restirCandidates, restirSpatial;
     uint guided, guideTile, guideBands, guideSectors;
-    uint guideSamples, pad11, pad12, pad13;
+    uint guideSamples, restirGi, giSpatial, pad13;
+};
+
+struct GiSample {
+    float x1[3], depth;
+    float n1[3];
+    uint flags;
+    float x2[3], pdf;
+    float n2[3], pad;
+    float radiance[3], pad2;
 };
 
 struct RasterUniforms {
@@ -601,9 +626,18 @@ inline Bsdf makeBsdf(float3 shadingNormal, float3 baseColor, float metallic, flo
     s.f0 = float3(0.04f) * (1.0f - metallic) + baseColor * metallic;
     s.wo = toLocal(s, woWorld);
     float cosV = max(s.wo.z, 1e-4f);
-    float specularWeight = luminance(schlickFresnel(s.f0, cosV));
+    // The specular lobe is chosen in proportion to its directional albedo (Lazarov's fit of the GGX
+    // environment BRDF), not to Fresnel alone: a rough dielectric's lobe returns little and reflects below
+    // the horizon most of the time, so Fresnel-weighted selection spent 21% of first-hit samples on nothing.
+    // Any mixture weight is unbiased (the weight divides by the mixture pdf); this one measured 5-11% less
+    // error per sample. The CPU tracer's MetallicRoughnessBsdf must stay identical for parity.
+    float4 c0 = float4(-1.0f, -0.0275f, -0.572f, 0.022f), c1 = float4(1.0f, 0.0425f, 1.04f, -0.04f);
+    float4 r = roughness * c0 + c1;
+    float a004 = min(r.x * r.x, exp2(-9.28f * cosV)) * r.x + r.y;
+    float2 AB = float2(a004 * -1.04f + r.z, a004 * 1.04f + r.w);
+    float specularWeight = luminance(s.f0 * AB.x + float3(AB.y));
     float diffuseWeight = (1.0f - metallic) * luminance(baseColor);
-    s.specularProbability = clamp(specularWeight / max(specularWeight + diffuseWeight, 1e-6f), 0.1f, 0.9f);
+    s.specularProbability = clamp(specularWeight / max(specularWeight + diffuseWeight, 1e-6f), 0.02f, 0.9f);
     return s;
 }
 
@@ -753,6 +787,7 @@ struct PathResult {
     float3 normal;
     float depth;
     bool hitGeometry;
+    uint giCandidates; // ReSTIR GI: samples resampled at the first hit (own plus accepted neighbours), 0 when off
 };
 
 /** Geometry a ray set traces: the acceleration structure with the index and material buffers it was built from. */
@@ -965,18 +1000,71 @@ inline float3 guideSample(thread const GuideFrame& g, float u1, float u2, float 
     return guideDirection(g, bin, u2, u3);
 }
 
+// ---- ReSTIR GI over second hits -------------------------------------------------------------------
+// A path's own second hit with the radiance it sends back is one sample (weight 1/pdf); neighbours' samples
+// from the previous pass are resampled into it after reconnection to this first hit (Jacobian of the
+// solid-angle pdf between the two first hits; escaped samples are directions and need none), the choice is
+// shaded after one visibility ray. Passes stay independent since only the previous pass is read.
+struct GiCandidate {
+    float3 fCos;      // BSDF times cosine at this first hit toward the sample
+    float3 radiance;
+    float3 dir;
+    float distance;   // to the point, or 0 for a direction
+    float pHat;
+};
+
+/** Reconnects sample `y` (gathered at another first hit) to this first hit; false when it cannot contribute here. */
+inline bool giReconnect(thread const Bsdf& bsdf, float3 x1, float3 ng1, device const GiSample& y, thread GiCandidate& c, thread float& w) {
+    float3 radiance = float3(y.radiance[0], y.radiance[1], y.radiance[2]);
+    float jacobian = 1.0f;
+    if ((y.flags & 2u) != 0u) {
+        c.dir = float3(y.x2[0], y.x2[1], y.x2[2]);
+        c.distance = 0.0f;
+    } else {
+        float3 x2 = float3(y.x2[0], y.x2[1], y.x2[2]);
+        float3 n2 = float3(y.n2[0], y.n2[1], y.n2[2]);
+        float3 v = x2 - x1;
+        float dr2 = dot(v, v);
+        if (dr2 < 1e-8f) return false;
+        c.distance = sqrt(dr2);
+        c.dir = v / c.distance;
+        float3 x1q = float3(y.x1[0], y.x1[1], y.x1[2]);
+        float3 vq = x2 - x1q;
+        float dq2 = dot(vq, vq);
+        if (dq2 < 1e-8f) return false;
+        float cosR = abs(dot(n2, -c.dir));
+        float cosQ = abs(dot(n2, -vq / sqrt(dq2)));
+        if (cosQ < 1e-4f) return false;
+        // The sample's solid-angle pdf here is the neighbour's divided by this: p_r = p_q * (cosQ / cosR) * (dr2 / dq2).
+        jacobian = (cosR / cosQ) * (dq2 / dr2);
+        // Where the two first hits see the point very differently the weights explode into fireflies; such
+        // samples are left out (a rejection, hence a small bias, measured in the process doc).
+        if (jacobian < 0.2f || jacobian > 5.0f) return false;
+    }
+    float cosShading = dot(bsdf.n, c.dir);
+    if (cosShading <= 0.0f || dot(ng1, c.dir) <= 0.0f) return false;
+    c.fCos = bsdfEval(bsdf, c.dir) * cosShading;
+    c.radiance = radiance;
+    c.pHat = luminance(c.fCos * radiance);
+    if (!(c.pHat > 0.0f) || !(y.pdf > 0.0f)) return false;
+    w = c.pHat * jacobian / y.pdf;
+    return isfinite(w);
+}
+
 inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, constant Uniforms& u,
                             device const Vertex* verts, device const float* lut, Geometry primary, Geometry bounceGeo,
                             device const MaterialRecord* materials, device const TextureRef* textures, uint visibleTriangle, thread uint& rays,
                             device Reservoir* reservoir, device PrimarySurface* primarySurface,
                             device const Reservoir* prevReservoirs, device const PrimarySurface* prevSurfaces, uint2 gid,
-                            device const uint* guideHist, device atomic_uint* guidePending) {
+                            device const uint* guideHist, device atomic_uint* guidePending,
+                            device GiSample* giOut, device const GiSample* giPrev) {
     PathResult result;
     result.radiance = float3(0.0f);
     result.albedo = float3(0.0f);
     result.normal = float3(0.0f);
     result.depth = 0.0f;
     result.hitGeometry = false;
+    result.giCandidates = 0u;
     float3 radiance = float3(0.0f);
     float3 throughput = float3(1.0f);
     const bool sky = u.lighting == 1u;
@@ -988,6 +1076,17 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
     bool guideActive = false;
     GuideFrame guide;
     float firstBsdfPdf = 0.0f;
+    // ReSTIR GI: past the first hit the path gathers into giRadiance with throughput reset to one, so the
+    // sample's radiance is what arrives at the first hit per unit of BSDF response.
+    const bool gi = u.restirGi != 0u && !restir && !guided;
+    bool giActive = false;
+    float3 giRadiance = float3(0.0f);
+    float giPdf = 0.0f;
+    float3 giFCos = float3(0.0f);
+    GiSample own;
+    own.flags = 0u;
+    Bsdf bsdf1;
+    float3 x1 = float3(0.0f), ng1 = float3(0.0f);
 
     intersector<triangle_data> closest;
     closest.assume_geometry_type(geometry_type::triangle);
@@ -1032,11 +1131,24 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
                 skyLight = skyLight * (firstBsdfPdf / max(firstBsdfPdf + (float)max(u.guideSamples, 1u) * pg, 1e-12f));
                 guideRecord(guide, guideBin(guide, dir), true);
             }
-            accumulate(radiance, throughput * skyLight, bounce, u.clampIndirect);
+            if (giActive) {
+                if (bounce == 1u) {
+                    own.flags = 3u;
+                    own.x2[0] = dir.x; own.x2[1] = dir.y; own.x2[2] = dir.z;
+                }
+                accumulate(giRadiance, throughput * skyLight, bounce, u.clampIndirect);
+            } else {
+                accumulate(radiance, throughput * skyLight, bounce, u.clampIndirect);
+            }
             break;
         }
         if (bounce == 1u && guideActive) guideRecord(guide, guideBin(guide, dir), false);
         Surface surface = shade(u, verts, geo.idx, geo.triMaterials, materials, textures, hit.primitive_id, hit.triangle_barycentric_coord, origin, dir, hit.distance);
+        if (giActive && bounce == 1u) {
+            own.flags = 1u;
+            own.x2[0] = surface.position.x; own.x2[1] = surface.position.y; own.x2[2] = surface.position.z;
+            own.n2[0] = surface.geometricNormal.x; own.n2[1] = surface.geometricNormal.y; own.n2[2] = surface.geometricNormal.z;
+        }
         if (bounce == 0) {
             result.hitGeometry = true;
             result.albedo = surface.baseColor;
@@ -1058,10 +1170,13 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
         if (sky) {
             float3 opticalDepth = f3(u.hazeExtinction) * hit.distance;
             float3 transmittance = float3(exp(-opticalDepth.x), exp(-opticalDepth.y), exp(-opticalDepth.z));
-            accumulate(radiance, throughput * (horizonRadiance(u, lut, dir) * (float3(1.0f) - transmittance)), bounce, u.clampIndirect);
+            float3 inScatter = throughput * (horizonRadiance(u, lut, dir) * (float3(1.0f) - transmittance));
+            if (giActive) accumulate(giRadiance, inScatter, bounce, u.clampIndirect);
+            else accumulate(radiance, inScatter, bounce, u.clampIndirect);
             throughput = throughput * transmittance;
         }
-        radiance += throughput * surface.emission;
+        if (giActive) giRadiance += throughput * surface.emission;
+        else radiance += throughput * surface.emission;
 
         const float3 wo = -dir;
         Bsdf bsdf = makeBsdf(surface.shadingNormal, surface.baseColor, surface.metallic, surface.roughness, wo);
@@ -1082,7 +1197,9 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
                 ray shadow(surface.position + surface.geometricNormal * (coarseShadow ? coarseOffset : kRayEpsilon), wi, 1e-4f, 1e9f);
                 intersection_result<triangle_data> blocker = any.intersect(shadow, shadowGeo.accel);
                 if (blocker.type == intersection_type::none) {
-                    accumulate(radiance, throughput * bsdfEval(bsdf, wi) * f3(u.sunIrradiance) * cosShading, bounce, u.clampIndirect);
+                    float3 sunLight = throughput * bsdfEval(bsdf, wi) * f3(u.sunIrradiance) * cosShading;
+                    if (giActive) accumulate(giRadiance, sunLight, bounce, u.clampIndirect);
+                    else accumulate(radiance, sunLight, bounce, u.clampIndirect);
                 }
             }
         }
@@ -1122,6 +1239,19 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
         float3 wi, weight;
         if (!bsdfSample(bsdf, smp, wi, weight) || dot(surface.geometricNormal, wi) <= 0.0f) break;
         if (bounce == 0u && guideActive) firstBsdfPdf = bsdfPdf(bsdf, wi);
+        if (gi && bounce == 0u) {
+            giActive = true;
+            giPdf = bsdfPdf(bsdf, wi);
+            giFCos = bsdfEval(bsdf, wi) * dot(surface.shadingNormal, wi);
+            bsdf1 = bsdf;
+            x1 = surface.position;
+            ng1 = surface.geometricNormal;
+            own.x1[0] = x1.x; own.x1[1] = x1.y; own.x1[2] = x1.z;
+            own.depth = hit.distance;
+            own.n1[0] = surface.shadingNormal.x; own.n1[1] = surface.shadingNormal.y; own.n1[2] = surface.shadingNormal.z;
+            own.pdf = giPdf;
+            weight = float3(1.0f);
+        }
         throughput = throughput * weight;
         if (bounce >= 2) {
             float q = min(0.95f, maxComponent(throughput));
@@ -1131,6 +1261,56 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
         origin = surface.position + surface.geometricNormal * coarseOffset;
         dir = wi;
         rayStart = 1e-4f;
+    }
+    if (gi) {
+        if (giActive && (own.flags & 1u) != 0u && giPdf > 0.0f) {
+            own.radiance[0] = giRadiance.x; own.radiance[1] = giRadiance.y; own.radiance[2] = giRadiance.z;
+            // Resample: the path's own sample, then neighbours' samples of the previous pass reconnected here.
+            GiCandidate chosen;
+            chosen.fCos = giFCos;
+            chosen.radiance = giRadiance;
+            chosen.distance = 0.0f;
+            chosen.pHat = luminance(giFCos * giRadiance);
+            float wSum = chosen.pHat / giPdf;
+            uint M = 1u;
+            bool chosenIsOwn = true;
+            const float radius = 16.0f;
+            for (uint k = 0u; k < u.giSpatial; ++k) {
+                float2 d = concentricDisk(pcgFloat(smp.rng), pcgFloat(smp.rng)) * radius;
+                int qx = (int)gid.x + (int)round(d.x), qy = (int)gid.y + (int)round(d.y);
+                if (qx < 0 || qy < 0 || qx >= (int)u.width || qy >= (int)u.height) continue;
+                uint q = (uint)qy * u.width + (uint)qx;
+                device const GiSample& y = giPrev[q];
+                if ((y.flags & 1u) == 0u) continue;
+                if (dot(float3(y.n1[0], y.n1[1], y.n1[2]), bsdf1.n) < 0.9f) continue;
+                if (abs(y.depth - own.depth) > 0.1f * max(own.depth, 1e-3f)) continue;
+                GiCandidate c;
+                float w;
+                if (!giReconnect(bsdf1, x1, ng1, y, c, w)) continue;
+                wSum += w;
+                M += 1u;
+                if (pcgFloat(smp.rng) * wSum < w) {
+                    chosen = c;
+                    chosenIsOwn = false;
+                }
+            }
+            result.giCandidates = M;
+            if (chosen.pHat > 0.0f && wSum > 0.0f) {
+                float W = wSum / ((float)M * chosen.pHat);
+                bool visible = true;
+                if (!chosenIsOwn) {
+                    ++rays;
+                    ray shadow(x1 + ng1 * kRayEpsilon, chosen.dir, 1e-4f, chosen.distance > 0.0f ? max(chosen.distance - 2.0f * kRayEpsilon, 1e-4f) : 1e9f);
+                    intersection_result<triangle_data> blocker = any.intersect(shadow, primary.accel);
+                    visible = blocker.type == intersection_type::none;
+                }
+                if (visible) accumulate(radiance, chosen.fCos * chosen.radiance * W, 1u, u.clampIndirect);
+            }
+        } else if (giActive) {
+            // The path ended at the first hit: nothing past it, and no sample for the neighbours.
+            own.flags = 0u;
+        }
+        *giOut = own;
     }
     result.radiance = radiance;
     return result;
@@ -1159,9 +1339,14 @@ kernel void pt_init(device PixelState* pixels [[buffer(0)]], constant Uniforms& 
                     device Reservoir* reservoirs [[buffer(2)]], device PrimarySurface* surfaces [[buffer(3)]],
                     device Reservoir* reservoirsB [[buffer(4)]], device PrimarySurface* surfacesB [[buffer(5)]],
                     device uint* guideHistograms [[buffer(6)]], device uint* guidePending [[buffer(7)]],
+                    device GiSample* giA [[buffer(8)]], device GiSample* giB [[buffer(9)]],
                     uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= u.width || gid.y >= u.height) return;
     uint pixel = gid.y * u.width + gid.x;
+    if (u.restirGi != 0u) {
+        giA[pixel].flags = 0u;
+        giB[pixel].flags = 0u;
+    }
     if (u.guided != 0u) {
         // The first pixel of each tile clears the tile's counters.
         uint tile = max(u.guideTile, 1u);
@@ -1204,6 +1389,7 @@ kernel void pt_sample(device PixelState* pixels [[buffer(0)]], constant Uniforms
                       device Reservoir* reservoirs [[buffer(14)]], device PrimarySurface* surfaces [[buffer(15)]],
                       device const Reservoir* prevReservoirs [[buffer(16)]], device const PrimarySurface* prevSurfaces [[buffer(17)]],
                       device const uint* guideHistograms [[buffer(18)]], device atomic_uint* guidePending [[buffer(19)]],
+                      device GiSample* giOut [[buffer(20)]], device const GiSample* giPrev [[buffer(21)]],
                       uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= u.width || gid.y >= u.height) return;
     uint pixel = gid.y * u.width + gid.x;
@@ -1244,8 +1430,10 @@ kernel void pt_sample(device PixelState* pixels [[buffer(0)]], constant Uniforms
     uint rays = 0u;
     PathResult s = tracePath(origin, dir, smp, u, verts, lut, primary, bounceGeo, materials, textures, visibleTriangle, rays,
                              reservoirs + pixel, surfaces + pixel, prevReservoirs, prevSurfaces, gid,
-                             guideHistograms + guideIndex, guidePending + guideIndex);
+                             guideHistograms + guideIndex, guidePending + guideIndex,
+                             giOut + (u.restirGi != 0u ? pixel : 0u), giPrev);
     p->rays += rays;
+    p->pad += s.giCandidates;
     p->rngState = smp.rng.state;
     p->rngInc = smp.rng.inc;
     if (!finite3(s.radiance)) {

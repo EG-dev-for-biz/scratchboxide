@@ -82,6 +82,7 @@ import {
     maskEmail,
     errorMessage
 } from './gemini/gemini-client';
+import { warmChatPrompt, type ChatPromptWarmupOptions, type ChatPromptWarmupReport } from './gemini/chat-prompt-warmup';
 import { LensBridge, type LensContext, type LensSyncMode } from './gemini/lens-bridge';
 import { McpBridge } from './gemini/mcp-bridge';
 import {
@@ -565,6 +566,15 @@ export class GeminiService {
     /** Message contents array for Vertex AI and the AI Prompt Compiler. */
     public formatContents(request: GeminiGenerateRequest): any[] {
         return this.buildContents(request);
+    }
+
+    /**
+     * Builds a first agent turn's payload for the workspace root once and throws it away (chat-prompt-warmup.ts), so the
+     * first real turn after a start does not pay for the prompt builder's first run and the workspace pattern scan. No
+     * model is called. Never rejects; start it without awaiting it once the server listens.
+     */
+    public warmChatPrompt(options: ChatPromptWarmupOptions = {}): Promise<ChatPromptWarmupReport> {
+        return warmChatPrompt(request => this.streaming.buildFirstCallPayload(request, DEFAULT_GEMINI_MODEL), options);
     }
 
     public async compilePrompt(request: GeminiGenerateRequest): Promise<{ systemInstruction?: string; contents: any[] }> {

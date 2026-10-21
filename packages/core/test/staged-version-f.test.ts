@@ -252,9 +252,11 @@ describe('version F round 2: shape vocabulary (continuous)', () => {
         const params: BuildingParameters = { ...PARAMS, cornice: { thicknessM: 0, projectionM: 0 }, facadeBands: [{ bottomM: 6.5, topM: 13.5, opening: { widthM: 4.2, heightM: 5, sillM: 0.3, recessM: 0.3, archRiseRatio: 1 }, bayGroup: 2, storeyGroup: 2 }], wallStoreys: [{ picture: 1, faceKey: east.key, groundStoreyM: 6, upperStoreysM: [3] }] };
         const prog = facadeProgram({ faces, parts: MASSING.parts, groundY: 0, params });
         const main = prog.openings.filter(o => o.face === south.key && !/_h\d+$/.test(o.id));
-        // storeys 0 and 4 one per bay (7 + 7); the band from 7 m: one arched opening per two bays (3 pairs) per two storeys (7 and 13 -> only 7 fits)
-        expect(main.filter(o => o.t0 > 7).length).toBe(3);
-        expect(main.filter(o => o.t0 > 7).every(o => o.s1 - o.s0 > 4)).toBe(true);
+        // storeys 0 and 4 one per bay (7 + 7); the band from 7 m: a group of two bays (3 pairs) per two storeys (7 and 13 -> only
+        // 7 fits); round 3 builds each group as one arch per bay between piers (6 arches under 1.9 m), where round 2 made one
+        // 4.2 m slot per group (staged-version-f3.test.ts covers the piers)
+        expect(main.filter(o => o.t0 > 7).length).toBe(6);
+        expect(main.filter(o => o.t0 > 7).every(o => o.s1 - o.s0 < 2 && o.s1 - o.s0 > 1.5)).toBe(true);
         expect(prog.openings.some(o => o.face === south.key && /_h\d+$/.test(o.id))).toBe(true);
         // the east wall's ground storey is 6 m: its first upper openings start above 6 m, the building's at 4 m
         const eastUpper = prog.openings.filter(o => o.face === east.key && o.t0 > 1).map(o => o.t0);

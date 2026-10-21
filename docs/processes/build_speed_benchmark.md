@@ -363,3 +363,152 @@ Screenshots: `test-results/screenshots/staged_fast_first/` (gitignored): the vec
 the textured Flatiron and Colosseum districts (`02_`, `09_`), and a native render of the Flatiron vector massing (`00_`).
 Per-run timelines: `runs/<runId>/timeline.jsonl` (runs `a915e1f0`, `fc60dc47`, `02887cdd`, `e69cc874`, `62435fa3`,
 `43f163be`, `d09a0780`, `569b9dae`).
+
+## After: six small items (branch `speed-small-items`, 2026-10-21)
+
+**Status:** Verified live (worktree `.claude/worktrees/speed-small-items`, launch entry `scratchbox-speed-small-items` on
+ports 3990/3991/3992, an isolated `SCRATCHBOX_HOME`, `secrets.json` linked for the runs and removed after). The machine
+was shared with other agents throughout (load average 7–13 on 20 cores), so every absolute time below is slower than
+the benchmark's quiet runs; the comparisons that matter were taken in the same session, and for the viewport in the
+same page with the change toggled.
+
+### 1. The facade grammar reads through one pool (`facade-grammar.ts`)
+
+**Cause.** The pass read 3 facades at a time, each waiting for all 5 of its readings: about 4 rounds of "slowest of 5"
+at the Flatiron District, 35–40 s each (`vision_call_hedging.md`). **Change.** Every facade starts at once and its readings
+go through one counting semaphore (`GRAMMAR_READ_POOL` = 14 in flight, `SCRATCHBOX_GRAMMAR_READ_POOL` overrides),
+admitted in facade order; a facade is judged as soon as its own five are in. The chain's caps stand: the log showed
+"not hedged at 15000 ms (8 duplicates already out)", the 8-duplicate cap holding at 14 in flight.
+
+**Measured, Flatiron District cold** ("Build a 3D scene of the Flatiron District in New York, 250 m around the Flatiron
+Building, with the trees", run `d70b469e`, load average 9–12):
+
+| | benchmark (cold, 2026-10-20) | hedged, same day (`vision_call_hedging.md`) | pool (this run) |
+|---|---|---|---|
+| grammar stage | 229.9 s | — | **117.1 s** |
+| vision pass | 195.6 s, 60 calls | about 150 s | **88.0 s**, 40 calls (8 facades × 5; 4 facades too narrow for the held-out check, no reading) |
+| slowest reading | 189.7 s | 58.2 s | 72.0 s (hedged and deadlined as before) |
+| facades accepted | not recorded | 4, 4 and 7 of 12 over three readings | 1 of 12 (8 read; the other 7 failed the held-out gates; every reading answered, none lost) |
+| main thread | 14 blocks of 1.0–5.3 s | | 12 blocks over 1 s, the longest 6.4 s |
+
+On this run's own latencies the old shape would have taken about 143 s for the pass (rounds of 72, 32 and 39 s), so the
+pool saved about 40% of the pass here; against the benchmark's cold stage, 230 → 117 s. **The accepted count is not the
+pool's doing:** a pooled reading is the same request, parse check and gates as before (the unit test asserts no reading
+is lost), and the hedging doc already recorded 4, 4 and 7 accepted from three readings of the same orthophotos; today's
+answers passed 1. The test (`vision-call-hedging.test.ts`, "the grammar reading pool"): 12 facades, 60 readings, at most
+14 in flight, sent in facade order, no reading lost, 60–84 s against 120 s in rounds.
+
+### 2. The chat's first-call payload is warmed at server start (`chat-prompt-warmup.ts`)
+
+**Cause.** The first turn after a start built the prompt (tool catalogue, skill, knowledge and memory sections) and
+walked the workspace for the pattern scan (`analyzeWorkspacePatterns`, ~0.6 s, with a 60 s cache life so every turn more
+than a minute after the last paid it again). **Change.** Once the API server listens (standalone and Electron),
+`GeminiService.warmChatPrompt` builds a first agent turn's payload for the default workspace root (`process.cwd()`,
+the root the renderer resolves when no workspace is open) and throws it away; no model is called, the listen is not
+delayed, `SCRATCHBOX_CHAT_WARMUP=0` turns it off. The pattern cache is served at once and rescans behind itself once
+older than 60 s (one scan per root at a time), so a turn never waits for it.
+
+**Measured** (`[chat-turn]` `payloadMs` of the first turn of a freshly started server, same machine, same evening):
+
+| | first turn after a server start |
+|---|---|
+| fast_chat_routing.md (before) | 1.2 s; 3.4 s on a brand-new dev server |
+| warm-up off (`SCRATCHBOX_CHAT_WARMUP=0`, this session) | **451 ms** |
+| warm-up on (two server starts) | **41 ms** |
+
+The warm-up itself took 1.89 s and 1.93 s after the listen line (`[chat warm-up] first-call payload ready in 1.89 s
+(system 77,517 chars, 22 tools; workspace …/desktop-app)`).
+
+### 3. A cut ownership vote is read back honestly (`orchestrator.ts`)
+
+**Cause.** The vote's outlines were already cached for an identical later vote (f966676d), but the record kept only the
+masks and their counts: a repeat was reported as a whole vote. Before that commit a cut view was asked live on every
+repeat, which gave it an outline, new masks, a new tile_refine key and a new remesh, and ran the grammar, the rebuild and
+the textures again (warm Haughwout 44 → 70 s). **The rule, now stated in the code and in the record:** a view the vote
+went ahead without stays "not voted" on every repeat; the record (masks, the views that cast no vote with their reasons,
+the quorum cut, the run id; key `ownership-vote/v2`) exists so the repeat does not ask them live. The vote is asked again
+only for a different first isolate or when the ownership stage is bypassed.
+
+**Measured, Haughwout** (pipeline D: `SCRATCHBOX_STAGED_PIPELINE=d`; pipeline E is main's default now and has no
+ownership vote stage):
+
+| run | ownership stage | finish | what the record says |
+|---|---|---|---|
+| cold `3b997027` | 31.0 s (ownershipVision 30.0 s: the quorum went ahead at 30 s with 9 of 12 outlines, 3 views cut) | 32.2 s (tiles and vector cached from an earlier run; grammar 26.8 s) | "the vote went ahead 30 s in without 3 views still unanswered (view_e12_a000, view_e12_a135, view_e12_a270): 9 of 12 had outlines, at least 9 needed"; the vote moved 2.3% of the scan surface, under the 5% that replaces the isolate |
+| warm `a53ea539` | **0.04 s** (no vision call; tile_refine 18 ms from its cache) | **2.7 s** | "… (read back from the vote of run 3b997027; 3 of 12 views still cast no vote (view_e12_a000: no answer by the time the vote went ahead (30 s in, with 9 of 12 outlines; quorum 9); …))" |
+
+Against the hedging doc's warm Haughwout of 70.3 s (the cut views asked live, the remesh and everything on it rebuilt)
+and the benchmark's 44.2 s. Test: `staged-fast-first.test.ts`, a view that says the structure is not visible; the same
+build again makes no vision call, reuses the masks directory and still reports the view as not voting.
+
+### 4. The far level of the trees is one multi-draw batch per material (`treeFarBatch.ts`)
+
+**Cause.** Every tree drew its own far meshes (wood and blob masses): 690 tree draw calls at the Colosseum. **Change.**
+The far meshes of all the trees that wear the same full material go into one `THREE.BatchedMesh` (one geometry and one
+instance per far mesh, in its own frame; the state and the per-mesh attributes in a float texture read by the vertex
+shader; the dither's discard worn only while an instance dissolves; `?sbTreeFarBatch=0` opts out).
+
+**Measured, Colosseum district** (344 trees, 299 in view, 287 at the far level, one fixed camera set through
+`__SB_SET_CAMERA_VIEW__`, the batch toggled in the page, 8 interleaved rounds of 40 frames, `?sbViewportCost=1`):
+
+| | per-tree draws | far batch |
+|---|---|---|
+| tree draw calls | 566 | **9** |
+| renderer draw calls | 1,120 | **563** |
+| CPU in `renderer.render` per frame (median / min) | 14.1 / 13.9 ms | **10.1 / 9.3 ms** |
+| controller update per frame | 0.9 ms | 1.2 ms |
+| GPU frame p50 (median / min of rounds) | 2.75 / 2.66 ms | 3.20 / 2.93 ms (+0.45 ms, every round) |
+| GPU frame p95 (median / min) | 3.16 / 3.07 ms | 6.68 / 3.83 ms (the shared machine's bursts) |
+| pixels, same camera | — | mean abs diff 0.16/255; 0.49% of pixels differ by > 8, 0.014% by > 32 (depth ties between overlapping masses); the same state twice: 0 |
+
+**Honest reading.** The draw calls and the CPU per frame fall as intended and the frame is the same; the GPU time rises
+by about 0.45 ms at this view: a batched vertex fetches its instance matrix and state from textures, which the per-tree
+draws did not. The benchmark's 10.1 / 22.8 ms GPU for this scene was measured under load; today the same view measures
+2.7 ms when the machine is quiet and 10–36 ms during other agents' builds, so GPU figures from different sessions are
+not comparable. The far geometry now exists twice in memory (the hidden per-tree meshes for picking and the batch:
+about 333 k triangles here). A first version carried the per-mesh crown constants per vertex and missed the leaf
+material's per-mesh tint (`sbTreeTint`): one planting rendered dark (`04_crown_tint_bug_before_fix_off_on_diff.png`);
+the batch now carries every per-mesh attribute a material declares through the instance texels.
+
+### 5. District trees are textured when the district is textured
+
+No code change: main's 16fe095f already keeps the trees' leaf and bark textures while the layers wait in clay, and the
+district twin texturing (`staged-fast-first`) textures the district. Verified live at the Colosseum: textured by default
+(the trees wear the library's leaf and bark surfaces, the stage card offers "Show clay"), "Show clay" puts the trees in
+the shared tree clay with the rest (the batch regroups to 2 draws), "Show real textures" brings them back.
+Screenshots `05_colosseum_show_clay_on_request_trees_clay.jpg`, `05_colosseum_show_real_textures_trees_textured.jpg`.
+
+### 6. `switch-location.test.ts` "one pill per alternative"
+
+**Cause.** Since districts are textured (textured by default), every build's summary carries the materials pill
+("Show clay"), so the summary held three pills and the test expected two. **Fix (test only).** The pills per alternative
+are counted inside the "Switch location" block, and the only pill outside it is asserted to be the materials one.
+
+### Found on the way (not changed)
+
+- **Typing in the prompt box leaves the viewport's fly keys pressed.** After a prompt was typed and sent, the camera
+  drifted on its own until `keyup` events were dispatched by hand: the viewport's key handler saw the keydowns of the
+  typed letters but not their keyups. Two whole measurement runs were lost to it.
+- **Fit to View frames the 4 km terrain layer** of an isolate (the camera lands 9.5 km out), so the building is a speck
+  and the visual check reports "an empty flat plane" (38/100) although the building is there (9,356 triangles, 42 × 36 m).
+- **Pipeline E is the default**, so the ownership vote (a pipeline D stage) only runs with `SCRATCHBOX_STAGED_PIPELINE=d`.
+- **A chat turn interrupted by a Vite reload** (an edit to a browser file during a build) left the server's event loop
+  blocked at 99% CPU for more than five minutes on an isolate build of the Colosseum; not reproduced.
+
+### Evidence
+
+Screenshots in `test-results/screenshots/speed_small_items/` (gitignored): `01_flatiron_district_finished_grammar_117s`,
+`03_haughwout_cold_pipeline_d_vote_quorum_cut_32s`, `03_haughwout_warm_vote_read_back_2_7s`,
+`03_haughwout_warm_textured_building_close`, `04_colosseum_before_batch_off_664_tree_draws`,
+`04_colosseum_batch_on_fixed_camera_9_tree_draws`, `04_crown_tint_bug_before_fix_off_on_diff`,
+`05_colosseum_district_build_finished_textured_pill`, `05_colosseum_show_clay_on_request_trees_clay`,
+`05_colosseum_show_real_textures_trees_textured`. Per-run timelines: `.scratchbox/cache/staged_location/runs/<runId>/`
+(`d70b469e`, `3b997027`, `a53ea539`, `78f59f96`).
+
+### Candidate Tool/Service Ideas
+
+- **Release the fly keys when the prompt box takes focus** (or listen for keyups on `window`), so typing never moves the camera.
+- **Fit to View on the structure, not the terrain**: frame the staged layers that are not the terrain (or the structure's
+  bounds from `stagedBuild`), and give the visual check that framing.
+- **A `__SB_VIEWPORT_COST__.ab(name, on, off)`** that toggles a feature in the page and measures interleaved rounds with the
+  camera held, the method used here by hand.

@@ -63,9 +63,20 @@ export interface ProgramInput {
     topdown?: TopDown;
     /** Round 1's program exactly (no arch heads, bands of openings, per-wall storeys or the volume placement fix). */
     legacy?: boolean;
+    /**
+     * Round 3: real objects the residual audit found standing on the roof (plan boxes, absolute y): a read raised volume
+     * that overlaps one takes its measured footprint and height instead of the reading's box.
+     */
+    roofClusters?: Array<{ lo: [number, number, number]; hi: [number, number, number] }>;
 }
 
-export interface WallPlan { face: number; key: string; seen: boolean; bays: number; pitchM: number; centres: number[]; openings: number; abuttedShare: number }
+export interface WallPlan {
+    face: number; key: string; seen: boolean; bays: number; pitchM: number; centres: number[]; openings: number; abuttedShare: number;
+    /** Round 3: the piers between the bays a band groups (an arcade's piers), at s over [t0, t1] (absolute y). */
+    arcadePiers?: Array<{ s: number; t0: number; t1: number; widthM: number; projectionM: number }>;
+    /** Round 3: which reading placed this wall's lattice ('building' or the wall's own picture). */
+    readingFrom?: string;
+}
 
 export interface FacadeProgram {
     parts: MassingPart[];
@@ -159,9 +170,24 @@ export function wallStoreyLines(inp: ProgramInput, f: MassingFace): number[] {
     return storeyLines({ groundStoreyM: Math.max(2, g), upperStoreysM: up }, maxTop(f) - inp.groundY).map(y => inp.groundY + y);
 }
 
+/** A wall's own reading merged over the building's (round 3: a wall read on its own picture keeps its own families). */
+export function wallParams(inp: ProgramInput, f: MassingFace): { p: BuildingParameters; from: string } {
+    const p = inp.params;
+    const own = inp.legacy ? undefined : (p.wallStoreys ?? []).find(w => w.faceKey === f.key);
+    if (!own) return { p, from: 'building' };
+    return {
+        p: {
+            ...p, groundStoreyM: own.groundStoreyM, upperStoreysM: own.upperStoreysM,
+            ...(own.bayWidthM !== undefined ? { bayWidthM: own.bayWidthM } : {}), ...(own.edgeMarginM !== undefined ? { edgeMarginM: own.edgeMarginM } : {}),
+            ...(own.window ? { window: own.window } : {}), ...(own.groundOpening ? { groundOpening: own.groundOpening } : {}), ...(own.facadeBands ? { facadeBands: own.facadeBands } : {})
+        },
+        from: `picture ${own.picture}`
+    };
+}
+
 /** The openings of one wall: storeys x bays (grouped in the facade's bands), clipped to the wall, none against a neighbour. */
 export function wallOpenings(inp: ProgramInput, f: MassingFace, seen: boolean): { openings: OpeningItem[]; plan: WallPlan } {
-    const p = inp.params;
+    const { p, from } = wallParams(inp, f);
     const { centres, pitch } = bayCentres(f, p, inp.perWall?.get(f.index));
     const out: OpeningItem[] = [];
     const prov = seen ? LABEL.inferred : LABEL.generated;
@@ -169,6 +195,7 @@ export function wallOpenings(inp: ProgramInput, f: MassingFace, seen: boolean): 
     const lines = inp.legacy ? storeyLines(p, maxTop(f) - inp.groundY).map(y => inp.groundY + y) : wallStoreyLines(inp, f);
     const bands = inp.legacy ? [] : (p.facadeBands ?? []);
     let abutted = 0, tried = 0, families = 0;
+    const arcadePiers: NonNullable<WallPlan['arcadePiers']> = [];
     const bandOf = (y: number) => bands.find(b => y >= b.bottomM - 0.3 && y < b.topM - 0.5);
     lines.forEach((floor, k) => {
         const band = bandOf(floor - inp.groundY);
@@ -182,12 +209,28 @@ export function wallOpenings(inp: ProgramInput, f: MassingFace, seen: boolean): 
         const t0 = floor + o.sillM, t1 = t0 + o.heightM;
         if (t0 < bottomAbs(f) + 0.05) return;
         const bg = band ? Math.max(1, Math.round(band.bayGroup)) : 1;
-        const groups: number[] = [];
-        if (bg > 1 && centres.length >= bg) for (let b = 0; b + bg <= centres.length; b += bg) groups.push(centres.slice(b, b + bg).reduce((a, x) => a + x, 0) / bg);
-        else groups.push(...centres);
-        groups.forEach((c, b) => {
-            const s0 = Math.max(f.sMin + OPENING_CLEARANCE_M, c - o.widthM / 2), s1 = Math.min(f.sMax - OPENING_CLEARANCE_M, c + o.widthM / 2);
-            if (s1 - s0 < 0.6 * o.widthM) return;
+        // round 3: a band that groups bays is an arcade: one arch per bay between piers, not one slot over the group (round 2)
+        const arcade = bg > 1 && !inp.legacy && centres.length >= bg;
+        const pierW = arcade ? Math.max(0.25, band!.pierWidthM ?? (p.piers.widthM >= 0.1 ? p.piers.widthM : 0.4)) : 0;
+        const pierProj = arcade ? Math.max(0.08, p.piers.projectionM) : 0;
+        const groups: Array<{ c: number; w: number }> = [];
+        if (arcade) {
+            for (let b = 0; b + bg <= centres.length; b += bg) {
+                const gc = centres.slice(b, b + bg).reduce((a, x) => a + x, 0) / bg;
+                const groupW = Math.min(o.widthM, bg * pitch - 2 * OPENING_CLEARANCE_M);
+                const each = Math.min(pitch - pierW, (groupW - (bg - 1) * pierW) / bg);
+                if (each < 0.4) continue;
+                for (let j = 0; j < bg; j++) {
+                    const c = gc + (j - (bg - 1) / 2) * (each + pierW);
+                    groups.push({ c, w: each });
+                    if (j < bg - 1) arcadePiers.push({ s: c + each / 2 + pierW / 2, t0, t1, widthM: pierW, projectionM: pierProj });
+                }
+            }
+        } else if (bg > 1 && centres.length >= bg) for (let b = 0; b + bg <= centres.length; b += bg) groups.push({ c: centres.slice(b, b + bg).reduce((a, x) => a + x, 0) / bg, w: o.widthM });
+        else groups.push(...centres.map(c => ({ c, w: o.widthM })));
+        groups.forEach(({ c, w }, b) => {
+            const s0 = Math.max(f.sMin + OPENING_CLEARANCE_M, c - w / 2), s1 = Math.min(f.sMax - OPENING_CLEARANCE_M, c + w / 2);
+            if (s1 - s0 < 0.6 * w) return;
             const top = Math.min(topAbsAt(f, s0), topAbsAt(f, s1)) - OPENING_CLEARANCE_M - (p.cornice.thicknessM > 0 ? p.cornice.thicknessM : 0);
             if (t1 > top) return;
             tried++;
@@ -198,7 +241,9 @@ export function wallOpenings(inp: ProgramInput, f: MassingFace, seen: boolean): 
             rects.forEach(([a0, a1, b0, b1], j) => out.push({ id: j ? `${id}_h${j}` : id, face: f.key, s0: a0, s1: a1, t0: b0 - oy(f), t1: b1 - oy(f), depth: o.recessM, scanned: false, confidence: conf, provenance: prov }));
         });
     });
-    return { openings: out, plan: { face: f.index, key: f.key, seen, bays: centres.length, pitchM: pitch, centres, openings: families, abuttedShare: tried ? abutted / tried : 0 } };
+    // an arcade pier stands only between two openings that were both placed
+    const piers = arcadePiers.filter(ap => out.some(q => q.s1 <= ap.s + 0.01 && q.s1 >= ap.s - ap.widthM - 0.3 && q.t0 + oy(f) <= ap.t0 + 0.05) && out.some(q => q.s0 >= ap.s - 0.01 && q.s0 <= ap.s + ap.widthM + 0.3 && q.t0 + oy(f) <= ap.t0 + 0.05));
+    return { openings: out, plan: { face: f.index, key: f.key, seen, bays: centres.length, pitchM: pitch, centres, openings: families, abuttedShare: tried ? abutted / tried : 0, ...(piers.length ? { arcadePiers: piers } : {}), readingFrom: from } };
 }
 
 /** A wall's plan endpoints (y = 0). */
@@ -282,6 +327,48 @@ function eaveAndRidge(td: TopDown | undefined, part: MassingPart): { eave: numbe
     return { eave: q(rim, 0.5), ridge: q(inner, 0.97) };
 }
 
+/**
+ * The piers of one wall (a face sweep up each bay boundary): the read piers between the bays and, round 3, the arcade piers
+ * between the bays a band groups (wallOpenings marks them on the plan), each from the plinth (or its band's bottom) to the
+ * wall's top under the cornice.
+ */
+export function wallPiers(inp: ProgramInput, f: MassingFace, w: WallPlan): FaceSweepItem | undefined {
+    const p = inp.params;
+    const pw = p.piers.widthM >= 0.1 && p.piers.projectionM >= 0.03 ? p.piers : undefined;
+    const arcade = w.arcadePiers ?? [];
+    if (!pw && !arcade.length) return undefined;
+    if (w.bays < 1) return undefined;
+    const conf = Math.max(0.05, Math.min(1, p.confidence));
+    const seen = f.coverage >= SEEN_COVERAGE;
+    const placements: Array<[number, number, number]> = [];
+    const hwRead = pw ? pw.widthM / 2 : 0;
+    const cornice = p.cornice.thicknessM > 0.05 ? p.cornice.thicknessM : 0;
+    if (pw) {
+        const hw = hwRead;
+        const t0 = Math.max(bottomAbs(f), inp.groundY + p.plinth.heightM);
+        const bounds = [...w.centres.map(c => c - w.pitchM / 2), w.centres[w.centres.length - 1] + w.pitchM / 2];
+        for (const sb of bounds) {
+            if (sb - hw < f.sMin - 0.01 || sb + hw > f.sMax + 0.01) continue;
+            const top = Math.min(topAbsAt(f, sb - hw), topAbsAt(f, sb + hw)) - cornice;
+            const a0 = Math.max(t0, abutment(inp, f, sb - hw, sb + hw) + 0.3);
+            if (top - a0 >= 1) placements.push([a0 - oy(f), top - oy(f), sb]);
+        }
+    }
+    // arcade piers: the width the band's bays leave between their openings, over the band's height only
+    for (const a of arcade) {
+        const hw = a.widthM / 2;
+        if (a.s - hw < f.sMin - 0.01 || a.s + hw > f.sMax + 0.01) continue;
+        const top = Math.min(topAbsAt(f, a.s - hw), topAbsAt(f, a.s + hw), a.t1);
+        const a0 = Math.max(a.t0, abutment(inp, f, a.s - hw, a.s + hw) + 0.3);
+        if (top - a0 >= 0.5 && !placements.some(pl => Math.abs(pl[2] - a.s) < hw + hwRead)) placements.push([a0 - oy(f), top - oy(f), a.s]);
+    }
+    if (!placements.length) return undefined;
+    const hw = pw ? hwRead : arcade[0].widthM / 2, proj = pw ? pw.projectionM : arcade[0].projectionM;
+    const e = Math.min(0.03, hw / 4);
+    // one profile per face sweep: arcade piers wider than the read piers take the read width (the native tool caps the profile)
+    return { id: `pier_${f.index}`, confidence: seen ? conf : conf * 0.6, provenance: seen ? LABEL.inferred : LABEL.generated, face: f.key, axis: 1, profile: [[0, -hw], [proj, -hw + e], [proj, hw - e], [0, hw]], placements };
+}
+
 /** The whole facade program for one building. */
 export function facadeProgram(inp: ProgramInput): FacadeProgram {
     const p = inp.params;
@@ -329,24 +416,11 @@ export function facadeProgram(inp: ProgramInput): FacadeProgram {
     });
     // piers up each bay boundary
     const faceSweeps: FaceSweepItem[] = [];
-    if (p.piers.widthM >= 0.1 && p.piers.projectionM >= 0.03) {
-        const hw = p.piers.widthM / 2, e = Math.min(0.03, hw / 4);
-        for (const w of walls) {
-            const f = inp.faces[w.face];
-            if (!f || w.bays < 1) continue;
-            const t0 = Math.max(bottomAbs(f), inp.groundY + p.plinth.heightM);
-            const placements: Array<[number, number, number]> = [];
-            const bounds = [...w.centres.map(c => c - w.pitchM / 2), w.centres[w.centres.length - 1] + w.pitchM / 2];
-            for (const sb of bounds) {
-                if (sb - hw < f.sMin - 0.01 || sb + hw > f.sMax + 0.01) continue;
-                const top = Math.min(topAbsAt(f, sb - hw), topAbsAt(f, sb + hw)) - (p.cornice.thicknessM > 0.05 ? p.cornice.thicknessM : 0);
-                const a0 = Math.max(t0, abutment(inp, f, sb - hw, sb + hw) + 0.3);
-                if (top - a0 >= 1) placements.push([a0 - oy(f), top - oy(f), sb]);
-            }
-            if (!placements.length) continue;
-            const seen = f.coverage >= SEEN_COVERAGE;
-            faceSweeps.push({ id: `pier_${f.index}`, confidence: seen ? conf : conf * 0.6, provenance: seen ? LABEL.inferred : LABEL.generated, face: f.key, axis: 1, profile: [[0, -hw], [p.piers.projectionM, -hw + e], [p.piers.projectionM, hw - e], [0, hw]], placements });
-        }
+    for (const w of walls) {
+        const f = inp.faces[w.face];
+        if (!f) continue;
+        const pier = wallPiers(inp, f, w);
+        if (pier) faceSweeps.push(pier);
     }
     // roof: the read pitch on extruded parts, at the eave the scan measures
     const parts = inp.parts.map(q => ({ ...q, loops: q.loops.map(l => l.map(v => [v[0], v[1]] as Vec2)), planes: [...q.planes] }));
@@ -399,14 +473,52 @@ export function facadeProgram(inp: ProgramInput): FacadeProgram {
             };
             let k2 = 1;
             while (k2 > 0.2 && !insideHost(cx - (cx - x0) * k2, cz - (cz - z0) * k2, cx + (x1 - cx) * k2, cz + (z1 - cz) * k2)) k2 -= 0.05;
-            if (k2 <= 0.2) { notes.push(`raised volume ${k} dropped: it does not fit inside the roof it stands on`); return; }
+            let why = '';
+            if (k2 <= 0.2) {
+                if (inp.legacy) { notes.push(`raised volume ${k} dropped: it does not fit inside the roof it stands on`); return; }
+                // round 3: never dropped. Shrunk along each axis on its own (a long plant room along a narrow wing), else the
+                // smallest box the host holds at the middle of what lies on it, and the note says so
+                let kx = 1, kz = 1;
+                while (kx > 0.2 && !insideHost(cx - (cx - x0) * kx, cz - (cz - z0) * 0.3, cx + (x1 - cx) * kx, cz + (z1 - cz) * 0.3)) kx -= 0.05;
+                while (kz > 0.2 && !insideHost(cx - (cx - x0) * 0.3, cz - (cz - z0) * kz, cx + (x1 - cx) * 0.3, cz + (z1 - cz) * kz)) kz -= 0.05;
+                if (kx > 0.2 && insideHost(cx - (cx - x0) * kx, cz - (cz - z0) * 0.3, cx + (x1 - cx) * kx, cz + (z1 - cz) * 0.3)) { x0 = cx - (cx - x0) * kx; x1 = cx + (x1 - cx) * kx; z0 = cz - (cz - z0) * 0.3; z1 = cz + (z1 - cz) * 0.3; why = `shrunk across to fit its roof (x${kx.toFixed(2)} along, x0.30 across)`; }
+                else if (kz > 0.2 && insideHost(cx - (cx - x0) * 0.3, cz - (cz - z0) * kz, cx + (x1 - cx) * 0.3, cz + (z1 - cz) * kz)) { x0 = cx - (cx - x0) * 0.3; x1 = cx + (x1 - cx) * 0.3; z0 = cz - (cz - z0) * kz; z1 = cz + (z1 - cz) * kz; why = `shrunk across to fit its roof (x0.30 along, x${kz.toFixed(2)} across)`; }
+                else {
+                    // the smallest box, slid to the nearest place on the host that holds it (else left where it is, and said)
+                    let bx = cx, bz = cz, found = false;
+                    for (let rad = 0; rad <= 3 && !found; rad += 0.25) for (let ang = 0; ang < 360 && !found; ang += rad ? 30 : 360) {
+                        const tx = cx + rad * Math.cos((ang * Math.PI) / 180), tz = cz + rad * Math.sin((ang * Math.PI) / 180);
+                        if (insideHost(tx - 0.6, tz - 0.6, tx + 0.6, tz + 0.6)) { bx = tx; bz = tz; found = true; }
+                    }
+                    cx = bx; cz = bz; x0 = cx - 0.6; x1 = cx + 0.6; z0 = cz - 0.6; z1 = cz + 0.6;
+                    why = `kept as a 1.2 m box ${found ? `${Math.hypot(bx - cx, bz - cz) > 0 ? 'moved onto' : 'at the middle of'} what lies on its roof` : 'where the reading put it (it does not fit the roof there either)'}: the read footprint does not fit the roof it stands on (unsure)`;
+                }
+                k2 = 1;
+            }
             x0 = cx - (cx - x0) * k2; x1 = cx + (x1 - cx) * k2; z0 = cz - (cz - z0) * k2; z1 = cz + (z1 - cz) * k2;
-            if (x1 - x0 < 0.8 || z1 - z0 < 0.8) return;
+            // round 3: a real object the residual audit measured on this roof under the read box gives its footprint (clipped to the host)
+            let fromCluster = false;
+            for (const c of inp.roofClusters ?? []) {
+                const ix = Math.min(x1, c.hi[0]) - Math.max(x0, c.lo[0]), iz = Math.min(z1, c.hi[2]) - Math.max(z0, c.lo[2]);
+                if (ix <= 0 || iz <= 0) continue;
+                const ca = (c.hi[0] - c.lo[0]) * (c.hi[2] - c.lo[2]);
+                if (ca < 0.5 || (ix * iz) / ca < 0.3) continue;
+                let s = 1;
+                const ccx = (c.lo[0] + c.hi[0]) / 2, ccz = (c.lo[2] + c.hi[2]) / 2;
+                while (s > 0.3 && !insideHost(ccx - (ccx - c.lo[0]) * s, ccz - (ccz - c.lo[2]) * s, ccx + (c.hi[0] - ccx) * s, ccz + (c.hi[2] - ccz) * s)) s -= 0.05;
+                if (s <= 0.3) continue;
+                x0 = ccx - (ccx - c.lo[0]) * s; x1 = ccx + (c.hi[0] - ccx) * s; z0 = ccz - (ccz - c.lo[2]) * s; z1 = ccz + (c.hi[2] - ccz) * s; cx = ccx; cz = ccz;
+                fromCluster = true;
+                why = `${why ? `${why}; ` : ''}footprint from the scan's residual cluster the audit found on this roof${s < 1 ? ` (x${s.toFixed(2)} to fit)` : ''}`;
+                break;
+            }
+            if (x1 - x0 < 0.8 || z1 - z0 < 0.8) { x0 = cx - 0.6; x1 = cx + 0.6; z0 = cz - 0.6; z1 = cz + 0.6; why = `${why ? `${why}; ` : ''}widened to 1.2 m`; }
+            if (why) notes.push(`raised volume ${k}: ${why}`);
             const roof = roofAt(hostPart, cx, cz);
             const scanTop = medianTopIn(td, x0, z0, x1, z1);
             const topY = Number.isFinite(scanTop) && scanTop - roof >= 0.5 ? scanTop : roof + v.heightM;
             const id = `f-volume-${k}`;
-            parts.push({ id, baseY: roof - 0.3, topY, loops: [[[x0, z0], [x1, z0], [x1, z1], [x0, z1]]], planes: [], heightSource: Number.isFinite(scanTop) && scanTop - roof >= 0.5 ? 'scan' : 'photo', heights: { scanY: scanTop }, provenance: LABEL.inferred });
+            parts.push({ id, baseY: roof - 0.3, topY, loops: [[[x0, z0], [x1, z0], [x1, z1], [x0, z1]]], planes: [], heightSource: Number.isFinite(scanTop) && scanTop - roof >= 0.5 ? 'scan' : 'photo', heights: { scanY: scanTop }, provenance: fromCluster ? LABEL.measured : LABEL.inferred });
             volumeParts.push(id);
         });
     }

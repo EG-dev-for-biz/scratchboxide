@@ -60,8 +60,15 @@ export const MAX_UNSEEN_WALLS = 4;
 export const MIN_UNSEEN_EXPOSED_SHARE = 0.5;
 /** Below this share of a wall's texels covered by the tile, the plate is not aligned to it (too little to align on). */
 export const UNSEEN_MIN_ALIGN_SHARE = 0.1;
-/** Below this share covered, the storeys and bays are not counted on the tile. */
-export const UNSEEN_MIN_COUNT_SHARE = 0.25;
+/**
+ * Below this share covered, the storeys and bays are not counted on the tile. Matches LOW_COVERAGE (pipeline-e.ts): a wall
+ * is only in the unseen branch at all because the tile's view of it is too fragmentary to trust, so nothing in that same
+ * view should then be held against its plate either. Below 0.35 the two coincided only on the coverage band 0.25-0.35, a
+ * real build (Haughwout, scene-stg-d9660711) found three walls there: the tile's partial view undercounted every one of
+ * them (e.g. 1 or 2 storeys read where the plate and the building both have 5), rejecting plates whose aspect, colour and
+ * gross alignment were all otherwise fine.
+ */
+export const UNSEEN_MIN_COUNT_SHARE = 0.35;
 /** Below this share covered, the plate's colour family is checked against the building's median facade colour. */
 export const UNSEEN_MIN_COLOUR_SHARE = 0.05;
 /** An unseen wall's plate that leaves more than this share of the unseen texels flat mid-grey is refused. */

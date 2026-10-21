@@ -28,9 +28,20 @@ import { readFaceOrtho, runMassing, type MassingNode, type MassingRun } from './
 import { baseLegend, fillNearest, medianColour, SRC, textureFromOrtho } from './face-textures';
 import { facadeMaterialsEnabled } from '../facade-material-evidence';
 import { auditMassingRun, UNSURE_PROVENANCE } from './residual-audit-e';
+import { delightTileImageBytes } from './residual-tile-delight';
+import { RESIDUAL_SHAPE_TOKEN } from './residual-shape-fit';
 
 /** Below this share of its texels covered by the tile, a face is filled with one median colour. */
 export const LOW_COVERAGE = 0.35;
+/**
+ * Below this share, a face is taken as hardly seeing the tile at all (a party wall, the inside of the block) and filled
+ * with one flat colour. Above it (and below LOW_COVERAGE, which a different, unrelated use of this module reads to
+ * decide whether a wall is eligible for enhanced mode's "unseen" continuation drawing — inference.ts), fillNearest's
+ * finer, spatially-varying breadth-first fill is used instead, the same as a well-covered face already gets: a face at,
+ * say, 20% coverage has real photo detail over a fifth of it, and flattening the whole face to one colour discarded
+ * that real detail outside a narrow near-zero-coverage band, not just the genuinely blind cases the comment describes.
+ */
+export const FACE_HARDLY_SEEN_SHARE = 0.02;
 import type { SolarRoofSegment } from './solar-roof';
 
 /** The stage version; the material channels (massing-materials.ts) change every E layer's textured twin. */
@@ -92,6 +103,13 @@ export interface MassingStageResult {
 
 /** The provenance record of a node of E's layer (open labels). */
 export function massingProvenance(node: Pick<MassingNode, 'kind' | 'provenance' | 'confidence'>, massing: Pick<Massing, 'check'>): ProvenanceRecord {
+    if (node.provenance === RESIDUAL_SHAPE_TOKEN) {
+        return {
+            label: 'measured', measuredGeometry: true, confidence: Math.max(0, Math.min(1, node.confidence ?? 0.5)),
+            method: 'residual audit: a residual cluster measured as confidently radially symmetric (its circle-fit median score, cross-section constancy) fit with a clean solid of revolution from its own measured per-slice radius, instead of its raw, unresolved scan triangles; coloured with its own measured average photo colour',
+            sources: [{ kind: 'tile-extraction', id: 'isolate' }]
+        };
+    }
     if (node.kind === 'residual') {
         const unsure = node.provenance === UNSURE_PROVENANCE;
         return {
@@ -140,15 +158,17 @@ export function plainTextures(run: MassingRun): { textures: Map<number, FaceText
     for (const f of run.report.faces) {
         if (!f.width || f.kind === 'base') continue;
         const o = readFaceOrtho(run.dir, f);
-        if (o) textures.set(f.index, textureFromOrtho(o));
+        if (o) textures.set(f.index, textureFromOrtho(o, f.pixel));
     }
     const walls = run.report.faces.filter(f => f.kind === 'wall').map(f => textures.get(f.index)).filter((t): t is FaceTexture => !!t);
     const median = medianColour(walls) ?? medianColour([...textures.values()]) ?? [150, 150, 150];
     for (const [index, t] of textures) {
         const face = run.report.faces.find(f => f.index === index);
-        // a face the tile hardly sees (a party wall, the inside of the block) takes one flat colour, not a smear of a few texels
-        if ((face?.coverage ?? 0) < LOW_COVERAGE) {
-            const own = (face?.coverage ?? 0) >= 0.02 ? medianColour([t]) : undefined;
+        // a face the tile hardly sees at all (a party wall, the inside of the block) takes one flat colour, not a smear
+        // of a few texels; anything with more real coverage than that keeps its real detail, filled in the gaps same as
+        // a well-covered face (fillNearest), not flattened over it
+        if ((face?.coverage ?? 0) < FACE_HARDLY_SEEN_SHARE) {
+            const own = (face?.coverage ?? 0) > 0 ? medianColour([t]) : undefined;
             for (let i = 0; i < t.width * t.height; i++) if (t.source[i] === 255) { t.rgba.set(own ?? median, i * 4); t.rgba[i * 4 + 3] = 255; t.source[i] = SRC.facadeMedian; }
         } else fillNearest(t, undefined, median);
     }
@@ -157,14 +177,17 @@ export function plainTextures(run: MassingRun): { textures: Map<number, FaceText
 
 /** Writes the clay layer and its textured twin into `dir`. */
 export function writeMassingLayer(run: MassingRun, massing: Pick<Massing, 'check'>, textures: Map<number, FaceTexture>, legend: TexelSource[], dir: string, stage: string, stageKey: string, name = 'massing', provenanceOf?: (n: MassingNode) => ProvenanceRecord | undefined): MassingLayerFiles {
+    // de-lit (residual-tile-delight.ts): every other texel in the scene is de-lit on its way in, but a residual
+    // ("as-scanned") cluster renders straight off this shared image, its own native UV, nothing else touching it
     const tileImages = new Map<number, { bytes: Uint8Array; mimeType: string }>();
     for (const im of run.report.images) {
         const f = path.join(run.dir, im.file);
-        if (fs.existsSync(f)) tileImages.set(im.image, { bytes: fs.readFileSync(f), mimeType: im.mimeType || 'image/jpeg' });
+        if (fs.existsSync(f)) tileImages.set(im.image, { bytes: delightTileImageBytes(fs.readFileSync(f)), mimeType: 'image/png' });
     }
     const input = {
         nodes: run.nodes, faces: run.report.faces, stage, stageKey, textures, legend, tileImages, tileLegendIndex: 0,
-        provenanceOf: (n: MassingNode) => provenanceOf?.(n) ?? massingProvenance(n, massing)
+        provenanceOf: (n: MassingNode) => provenanceOf?.(n) ?? massingProvenance(n, massing),
+        ...(run.flatColours ? { flatColours: run.flatColours } : {})
     };
     const clayGlb = path.join(dir, `${name}_clay.glb`), texturedGlb = path.join(dir, `${name}_textured.glb`);
     fs.writeFileSync(clayGlb, writeMassingClayGlb(input));

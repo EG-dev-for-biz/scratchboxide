@@ -226,9 +226,15 @@ public:
         f0_ = Vec3(0.04f, 0.04f, 0.04f) * (1.0f - metallic_) + base_ * metallic_;
         wo_ = toLocal(wo);
         float cosV = std::max(wo_.z, 1e-4f);
-        float specularWeight = luminance(schlickFresnel(f0_, cosV));
+        // The specular lobe is chosen in proportion to its directional albedo (Lazarov's fit of the GGX
+        // environment BRDF) rather than Fresnel alone; see makeBsdf in the Metal kernels, which must match.
+        const float r0 = s.roughness * -1.0f + 1.0f, r1 = s.roughness * -0.0275f + 0.0425f;
+        const float r2 = s.roughness * -0.572f + 1.04f, r3 = s.roughness * 0.022f - 0.04f;
+        const float a004 = std::min(r0 * r0, std::exp2(-9.28f * cosV)) * r0 + r1;
+        const float scale = a004 * -1.04f + r2, bias = a004 * 1.04f + r3;
+        float specularWeight = luminance(f0_ * scale + Vec3(bias, bias, bias));
         float diffuseWeight = (1.0f - metallic_) * luminance(base_);
-        specularProbability_ = std::clamp(specularWeight / std::max(specularWeight + diffuseWeight, 1e-6f), 0.1f, 0.9f);
+        specularProbability_ = std::clamp(specularWeight / std::max(specularWeight + diffuseWeight, 1e-6f), 0.02f, 0.9f);
     }
 
     Vec3 eval(const Vec3& wiWorld) const {

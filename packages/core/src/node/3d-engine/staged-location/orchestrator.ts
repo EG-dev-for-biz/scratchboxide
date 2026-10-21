@@ -150,11 +150,12 @@ import { recordStageTimeline } from './stage-timeline';
 import type { EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { fetchFootprints, type FootprintSource } from './facade-footprints';
-import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, massingProvenance, type MassingStageResult } from './pipeline-e/pipeline-e';
+import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
 import type { MassingRun } from './pipeline-e/native-massing';
 import { mslToTileY, type SolarRoof } from './pipeline-e/solar-roof';
 import { runInferenceE, type InferenceOutcome, type StepRecord } from './pipeline-e/inference';
 import { runVersionFEnhanced, stagedGeometryF } from './version-f/f2';
+import { runVersionF3, versionFRound } from './version-f/f3';
 import { gateDecision, photoMatchGate, pipelineERelief, runReliefStage, GENERATED_LABEL, MEASURED_AVERAGED_LABEL, RELIEF_GATE_JUDGE, RELIEF_PARAMS, RELIEF_VERSION, type PhotoGateResult, type ReliefOutcome } from './pipeline-e/relief';
 import { crownsFromStrip } from './pipeline-e/occluders';
 import { enhanceGuards, enhanceModels, genAiPlateClient, stagedEnhance, ENHANCE_STREET_VIEWS } from './pipeline-e/enhance';
@@ -2855,13 +2856,23 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         }))]
                     });
                     let masksDir: string, seg: Pick<Awaited<ReturnType<typeof segmentOwnershipViews>>, 'masks' | 'views' | 'skipped' | 'model' | 'cut'>;
-                    // the outlines of an identical earlier vote (the same first isolate, place and models) are read back: a view the
-                    // window cut is not asked again on every repeat
-                    const voteKey = stageKey('ownership-vote/v1', first.cacheKey, request.query.trim(), visionAvailable!.candidates, OWNERSHIP_VOTE_WINDOW_MS);
-                    const voteHit = !bypass('ownership') ? cache.get<{ masksDir: string; masks: number; views: number; model?: string }>('ownership', voteKey) : undefined;
+                    let readBack: string | undefined;
+                    // The vote as it went ahead is read back for an identical later vote (the same first isolate, place and models):
+                    // its outlines, and which views cast none and why (cut by the quorum or the window, not visible, unreadable).
+                    // The rule: a view the vote went ahead without stays "not voted" in the provenance of every repeat; the record is
+                    // kept so a repeat does not ask those views live, which gave them outlines, a new set of masks, a new tile_refine
+                    // key and a new remesh, and ran the grammar, the rebuild and the textures again on it (warm Haughwout 44 -> 70 s,
+                    // docs/processes/vision_call_hedging.md). The vote is asked again only for a different first isolate (a new key)
+                    // or when the ownership stage is bypassed.
+                    const voteKey = stageKey('ownership-vote/v2', first.cacheKey, request.query.trim(), visionAvailable!.candidates, OWNERSHIP_VOTE_WINDOW_MS);
+                    type VoteRecord = { masksDir: string; masks: number; views: number; model?: string; skipped: Array<{ view: string; reason: string }>; cut?: NonNullable<typeof seg.cut>; runId: string };
+                    const voteHit = !bypass('ownership') ? cache.get<VoteRecord>('ownership', voteKey) : undefined;
                     if (voteHit && fs.existsSync(path.join(voteHit.value.masksDir, 'views.txt'))) {
                         masksDir = voteHit.value.masksDir;
-                        seg = { masks: voteHit.value.masks, views: voteHit.value.views, skipped: [], ...(voteHit.value.model ? { model: voteHit.value.model } : {}) };
+                        const notVoted = voteHit.value.skipped ?? [];
+                        seg = { masks: voteHit.value.masks, views: voteHit.value.views, skipped: notVoted, ...(voteHit.value.model ? { model: voteHit.value.model } : {}), ...(voteHit.value.cut ? { cut: voteHit.value.cut } : {}) };
+                        readBack = `read back from the vote of run ${voteHit.value.runId}${notVoted.length ? `; ${notVoted.length} of ${seg.views} views still cast no vote (${notVoted.map(x => `${x.view}: ${x.reason}`).join('; ')})` : ''}`;
+                        io.progress(`ownership vote: ${seg.masks} of ${seg.views} outlines ${readBack}`);
                         run.cacheStatus.ownership = 'hit';
                     } else try {
                         io.progress('rendering views of the structure for the ownership vote');
@@ -2881,7 +2892,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         if (ctx.signal?.aborted) throw abortError();
                         if (cut.signal.aborted) io.progress(`ownership vote: ${seg.masks} of ${seg.views} views outlined within ${Math.round(OWNERSHIP_VOTE_WINDOW_MS / 1000)} s; the others are left out`);
                         if (seg.masks < 2) throw new Error(`only ${seg.masks} of ${seg.views} views got a usable outline (${seg.skipped.slice(0, 3).map(x => `${x.view}: ${x.reason}`).join('; ')})`);
-                        const outlines = { masksDir, masks: seg.masks, views: seg.views, ...(seg.model ? { model: seg.model } : {}) };
+                        const outlines: VoteRecord = { masksDir, masks: seg.masks, views: seg.views, ...(seg.model ? { model: seg.model } : {}), skipped: seg.skipped, ...(seg.cut ? { cut: seg.cut } : {}), runId };
                         await cache.run('ownership', voteKey, async () => ({ value: outlines }), { bypass: true });
                         run.cacheStatus.ownership = 'miss';
                     } catch (err) {
@@ -2898,7 +2909,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     // how much the vote moved: compared on the isolates' raw scan triangles (a first isolate that fell back to the district is replaced outright)
                     const change = firstWasIsolate && first.rawClayGlb ? ownershipChange(first.rawClayGlb, voted.rawClayGlb) : undefined;
                     const moved = change ? `${round(change.share * 100, 1)}% of the structure's scan surface (${round(change.onlySecondM2, 1)} m² joined, ${round(change.onlyFirstM2, 1)} m² left)` : 'the first isolate had fallen back to the district around the structure';
-                    run.note(PROVENANCE.remeshed, `object ownership: ${seg.model ?? 'the vision model'} outlined the structure in ${seg.masks} of ${seg.views} views of the tile${seg.cut ? ` (${seg.cut.note})` : ''}; the vote moved ${moved}`);
+                    const notVoted = seg.skipped.filter(x => !seg.cut?.views.includes(x.view));
+                    run.note(PROVENANCE.remeshed, `object ownership: ${seg.model ?? 'the vision model'} outlined the structure in ${seg.masks} of ${seg.views} views of the tile${seg.cut ? ` (${seg.cut.note})` : ''}${notVoted.length ? ` (no vote from ${notVoted.map(x => `${x.view}: ${x.reason}`).join('; ')})` : ''}${readBack ? ` (${readBack})` : ''}; the vote moved ${moved}`);
                     if (change && !change.material) {
                         return {
                             status: 'committed', value: { material: false, request: votedRequest, isolateOk: true }, breakdownMs: msBy,
@@ -3008,15 +3020,37 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         ...(enhanceOn && visionAvailable ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), locationName: placeValue!.formattedAddress, guards: enhanceGuards(), cacheDir: path.join(cache.dir, 'enhance_plates'), ...(guideViews ? { streetViews: guideViews } : {}) } } : {}),
                         solar: [], anchor: structure!.seed, signal: io.signal, onProgress: m => io.progress(m)
                     };
-                    // version F (experiment, SCRATCHBOX_STAGED_GEOMETRY=f): its procedural geometry in place of E's inference, E's enhanced texturing on it
+                    // version F (experiment, SCRATCHBOX_STAGED_GEOMETRY=f): its procedural geometry in place of E's inference, E's enhanced
+                    // texturing on it; round 3 (f3.ts) by default, SCRATCHBOX_VERSION_F_ROUND=2 for round 2 (f2.ts)
+                    const key8 = e.key.slice(0, 8);
+                    let earlyLayers = 0;
+                    // round 3 hands the layer over as it exists: the clay shape right after the adjustment, the textured twin as
+                    // walls are redrawn; each is the same l2g object, replaced in place (the final commit below replaces it last)
+                    const onEarlyLayer = (files: MassingLayerFiles, phase: 'shape' | 'textures' | 'final', note: string) => {
+                        if (phase === 'final' || io.signal.aborted) return;
+                        earlyLayers++;
+                        const pubClayE = cache.publishFile(files.clayGlb, `${base}_massing_${key8}_versionf_${phase}${earlyLayers}.glb`);
+                        const pubTexE = cache.publishFile(files.texturedGlb, `${base}_massing_${key8}_versionf_${phase}${earlyLayers}_tex.glb`);
+                        const early: StagedLayer = {
+                            objectId: layerObjectId(e.key, 'l2g'), stage: 'grammar', layer: 'l2g', order: STAGES.grammar.order, url: pubClayE.url, bytes: pubClayE.bytes,
+                            provenance: { label: PROVENANCE.photoInferred, measuredGeometry: false, confidence: 0.5, method: 'version F round 3: the procedural shape (read per wall, adjusted natively against the tile); its walls are being redrawn', sources: [{ kind: 'stage-output', id: `version-f/v3:${key8}` }], note },
+                            provenanceLabels: ['vector-modelled', PROVENANCE.photoInferred, 'generated'], supersedes: [e.layer.objectId], revealAfter: [e.layer.objectId],
+                            reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [e.layer.objectId] }, cached: false, builtAtMs: now(), counts: layerCounts(files.clayGlb),
+                            textured: { url: pubTexE.url, bytes: pubTexE.bytes, ladderRung: files.texturedShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1), rungShares: files.texturedShares, provenance: [], confidenceChannels: 'R = index into provenance[], G = weight 0..255, B = ladder rung (TEXTURE_LADDER_RUNGS), A = 255 where a stage produced the texel', builtAtMs: now(), cached: false }
+                        };
+                        run.commit(early, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, extra: { pipeline: 'e' } });
+                        run.emit('grammar', 'running', { message: `version F: ${phase === 'shape' ? 'the clay shape is in' : 'textures streamed'} (${note})`, layers: [early] }, true);
+                    };
+                    const roofClusters = (r.run!.audit && !('error' in r.run!.audit) ? r.run!.audit.clusters : []).filter(c => c.verdict === 'real-object' && c.lo[1] >= Math.min(...r.massing.parts.map(p => p.topY)) - 1).map(c => ({ lo: c.lo, hi: c.hi }));
                     const out = stagedGeometryF() && visionAvailable
-                        ? await runVersionFEnhanced({ ...inferenceInput, place: placeValue!.formattedAddress, genai: visionAvailable.client })
+                        ? versionFRound() === 2
+                            ? await runVersionFEnhanced({ ...inferenceInput, place: placeValue!.formattedAddress, genai: visionAvailable.client })
+                            : await runVersionF3({ ...inferenceInput, place: placeValue!.formattedAddress, genai: visionAvailable.client, onLayer: onEarlyLayer, roofClusters })
                         : await runInferenceE(inferenceInput);
                     cache.writeRunNote(runId, 'pipeline_e_inference', { steps: out.steps, timingsMs: out.timingsMs, streetViewTexels: out.streetViewTexels });
                     recordResidualAudit('grammar', out.run, enhanceOn ? 'enhanced layer' : 'inferred layer');
                     const kept = out.steps.filter(s => s.accepted > 0);
                     const conf = Math.max(0.05, Math.min(1, ...out.grammars.map(g => g.confidence), 0.75));
-                    const key8 = e.key.slice(0, 8);
                     // the enhanced layer is published under its own name: it never replaces the plain inferred one
                     const suffix = stagedGeometryF() && visionAvailable ? 'versionf' : enhanceOn ? 'enhanced' : 'inferred';
                     const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_${suffix}.glb`);
