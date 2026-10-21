@@ -255,7 +255,9 @@ describe('sb script guide', () => {
         const scripted = await buildSystemInstruction({ prompt: 'refactor the login handler', mode: 'agent', activeArtifact: SCRIPT_SCENE } as any);
         expect(SB_PYTHON_SCRIPT_GUIDE.length).toBeGreaterThan(14_000);
         expect(scripted.length - unrelated.length).toBeGreaterThanOrEqual(SB_PYTHON_SCRIPT_GUIDE.length);
-        expect(unrelated.length).toBeLessThan(50_000);
+        // Measured 2026-10-21: 50,144 characters (50,043 on main after the midday-lighting sentence of 4c149bee; the
+        // load_tools line of the tool catalog adds 101). The ceiling guards against the guide coming back, not this.
+        expect(unrelated.length).toBeLessThan(51_000);
     });
 
     it('is served by read_sb_script_guide, offered next to execute_3d_python_script', async () => {
