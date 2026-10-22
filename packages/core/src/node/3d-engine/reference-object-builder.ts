@@ -66,7 +66,10 @@ import { NativePythonRunnerService, type PythonExecutionOptions, type PythonExec
 import {
     analyzePartConnectivityAsync,
     glbToNamedTriangleSoupsAsync,
+    isSbVeggieNearLevel,
+    isSbVeggieNode,
     mergeTriangleSoups,
+    sbVeggieCrownId,
     type ContactGraph,
     type FloatingPart,
     type PartConnectivityReport,
@@ -482,7 +485,7 @@ export function buildReferenceImagePrompt(request: string, options: { clay?: boo
 /** How materials are read, added to the conventions of a build that is not clay. */
 export function materialConventions(): string {
     return [
-        '- material: every sweep and revolve part has one, read from the picture (replicate copies and mirrored parts use their source part\'s; replicate and relief parts have none). Describe the surface itself, not the studio light: ignore highlights, reflections and shading when reading colour.',
+        '- material: every sweep and revolve part has one, read from the picture (replicate copies and mirrored parts use their source part\'s; replicate and relief parts have none; a crown part may give its foliage colour as baseColor). Describe the surface itself, not the studio light: ignore highlights, reflections and shading when reading colour.',
         '  baseColor is LINEAR RGB 0..1, not sRGB: convert each sRGB channel v/255 to about (v/255)^2.2 (sRGB 128 is 0.22, sRGB 200 is 0.6, sRGB 240 is 0.87). For a metal it is the metal\'s tint (steel about [0.56, 0.57, 0.58], brass [0.91, 0.78, 0.42], copper [0.95, 0.64, 0.54]).',
         '  roughness 0 mirror-smooth .. 1 chalky; metalness 1 only for bare metal, 0 for paint (even metallic paint), plastic, glass, stone, wood and organic matter; transmission 0 opaque, about 0.9-1 for clear glass, clear plastic or liquid (baseColor then tints what is seen through it); ior only for see-through parts (glass about 1.5, water 1.33); clearcoat for glossy lacquer, car paint or varnish; emissive (linear RGB) with emissiveStrength only for parts that glow.',
         '  A part takes the surface that covers most of it; where the finish changes, split the shape into parts so each has one surface.'
@@ -503,6 +506,7 @@ export function specConventions(dimensionsHintMeters?: Vec3, options: { material
         '  revolve: a meridian of [distance along the axis, radius] points revolved about axisDirection through axisOrigin. Trace the full outline: start and end at radius 0 to close the ends at the axis (a disc of radius r and thickness h is [[0, 0], [0, r], [h, r], [h, 0]]); a non-zero end radius is capped flat. Trace a hollow vessel by going up the outside and back down the inside. lobeCount and lobeDepthRatio add radial lobes (flutes, teeth, petals); helixPitchMeters twists them along the axis (0 = straight).',
         '  replicate: copies of seedPartId together with everything attached to it; the seed as built is copy 0 and is emitted only through the replicate. ring: each copy turned a further spanDeg / count degrees about the axis through centerMeters (spanDeg 360 = evenly round a full circle, more for a helix) and raised risePerCopyMeters. path: copies spaced evenly from the first to the last point, optionally turned with the path.',
         '  relief: grooves (negative depthMeters) or beads (positive) of widthMeters along curves on targetPartId. Curves are polylines of [u, v]: u from 0 to 1 along the part (along the carrier of a sweep, along the meridian of a revolve), v = angle / 360 around it; [[u, 0], [u, 1]] is a full ring and v past 1 wraps for spirals.',
+        '  crown: a tree, shrub or any other branching living crown is grown, never modelled: give it a crown block (trunkBaseMeters where its trunk meets the ground, heightMeters to the crown top, crownRadiiMeters its half spreads along X and Z, and when the picture shows them crownBaseHeightMeters, crownWidestAt (0 a cone widest at its base, 0.5 round, 0.8 an umbrella), crownTopExponent (1 cone, 2 dome, 4 flat) and trunkRadiusMeters) and it is grown as an SB-Veggie tree (branching and leaves inside that crown). Never build trunks, branches or foliage with sweep or revolve. A crown part is a root part (no parentId, no mirror, never a replicate seed) and counts as one piece in expectedBodies; its material baseColor, when there is one, is the foliage colour.',
         '- Attachment: every part except root parts has parentId (a sweep or revolve part) and attach {u, angleDeg, normalOffsetMeters}. The attach point is on the parent surface at u along it and angleDeg around it; u = 0 or 1 is the centre of that end. normalOffsetMeters moves the point along the surface normal: use a small negative value, about a quarter of the child\'s thickness, so the child sinks into its parent. A child\'s own coordinates are offsets in object axes from its attach point: a child sweep\'s first control point is [0, 0, 0], and a child revolve has axisOrigin [0, 0, 0] with a meridian whose axial distances span 0.',
         '- Angle 0 around a revolve points toward +Z (or +X when the axis is along Z) and angle 90 toward axisDirection x (angle-0 direction): for an upright axis 0 is front, 90 right, 180 back, 270 left. Angle 0 around a sweep is the section\'s up direction (toward +Y, or +Z for a vertical carrier) and 90 is the carrier direction x up.',
         '- Root parts (no parentId) use absolute coordinates. Use one root unless the object really is several separate pieces; expectedBodies is how many separate pieces you intend (usually 1). Every child must touch its parent.',
@@ -1266,17 +1270,25 @@ export async function measureBuild(
     throwIfAborted(options.signal, 'checks');
     let named: Map<string, TriangleSoup> | null;
     try {
-        named = await glbToNamedTriangleSoupsAsync(glb, { signal: options.signal });
+        // SB-Veggie trees (crown parts) are read at their far level only: their near levels instance up to a million leaf
+        // triangles each, and the far level is the tree's shape
+        named = await glbToNamedTriangleSoupsAsync(glb, { signal: options.signal, exclude: isSbVeggieNearLevel });
     } catch (err) {
         throwIfAborted(options.signal, 'checks');
         throw err;
     }
-    const meshes = named ? [...named].filter(([, s]) => s.indices.length > 0) : [];
-    if (meshes.length === 0) {
+    const read = named ? [...named].filter(([, s]) => s.indices.length > 0) : [];
+    // crown parts are grown by SB-Veggie (scratchbox_sb_veggie_grove.hpp), which checks each tree against its crown: the
+    // contact analysis measures the modelled parts, and each grown tree is one piece of its own
+    const treeMeshes = read.filter(([name]) => isSbVeggieNode(name));
+    const meshes = read.filter(([name]) => !isSbVeggieNode(name));
+    const grownTrees = new Set(treeMeshes.map(([name]) => sbVeggieCrownId(name)).filter((id): id is number => id !== undefined));
+    if (meshes.length === 0 && treeMeshes.length === 0) {
         throw new ReferenceObjectBuildError('checks', 'The built GLB could not be read back for checking.');
     }
-    // The whole build as one soup, each mesh's triangles a known range of it.
-    const soup = mergeTriangleSoups(meshes.map(([, s]) => s));
+    // The whole build as one soup, each mesh's triangles a known range of it; the renders see the trees too.
+    const modelled = mergeTriangleSoups(meshes.map(([, s]) => s));
+    const soup = treeMeshes.length ? mergeTriangleSoups([modelled, ...treeMeshes.map(([, s]) => s)]) : modelled;
     const triangleRange = new Map<string, [number, number]>();
     let first = 0;
     for (const [id, s] of meshes) {
@@ -1287,13 +1299,19 @@ export async function measureBuild(
     options.onSoup?.(soup, meshMap);
     await yieldToEventLoop();
     let whole: PartConnectivityReport;
-    try {
-        whole = await analyzePartConnectivityAsync(soup, { withGraph: true, signal: options.signal });
-    } catch (err) {
-        throwIfAborted(options.signal, 'checks');
-        throw err;
+    if (meshes.length === 0) {
+        // nothing modelled: the build is its grown trees
+        whole = { structureCount: 0, floatingParts: [], toleranceMeters: 0 } as unknown as PartConnectivityReport;
+    } else {
+        try {
+            whole = await analyzePartConnectivityAsync(modelled, { withGraph: true, signal: options.signal });
+        } catch (err) {
+            throwIfAborted(options.signal, 'checks');
+            throw err;
+        }
     }
     const { min, max } = soupBounds(soup);
+    const crownParts = spec.parts.filter(p => p.crown);
 
     const parts: PartBuildCheck[] = spec.parts.filter(p => p.sweep || p.revolve).map(p => {
         const own = named!.get(p.id);
@@ -1320,6 +1338,15 @@ export async function measureBuild(
         }
     }
 
+    // a crown part is built when its SB-Veggie tree is in the GLB (the grower numbers the trees in crown part order)
+    crownParts.forEach((p, i) => {
+        const tree = treeMeshes.filter(([name]) => sbVeggieCrownId(name) === i).map(([, s]) => s);
+        const b = tree.length ? soupBounds(mergeTriangleSoups(tree)) : undefined;
+        const sizeMeters: Vec3 = b ? [round3(b.max[0] - b.min[0]), round3(b.max[1] - b.min[1]), round3(b.max[2] - b.min[2])] : [0, 0, 0];
+        parts.push({ id: p.id, triangles: tree.reduce((n, s) => n + s.indices.length / 3, 0), sizeMeters, built: grownTrees.has(i) });
+    });
+    const bodies = whole.structureCount + grownTrees.size;
+
     const partBounds: PartBounds = new Map(meshes.map(([id, s]) => [id, soupBounds(s)]));
     return {
         soup,
@@ -1332,8 +1359,8 @@ export async function measureBuild(
         detachedParts: parts.filter(p => p.touchesParent === false).map(p => ({ id: p.id, parentId: p.parentId! })),
         connectivity: {
             // A check that could not run is not a pass.
-            passed: !whole.skippedReason && whole.structureCount === spec.expectedBodies,
-            bodies: whole.structureCount,
+            passed: !whole.skippedReason && bodies === spec.expectedBodies,
+            bodies,
             expectedBodies: spec.expectedBodies,
             floatingParts: whole.floatingParts,
             toleranceMeters: whole.toleranceMeters,
