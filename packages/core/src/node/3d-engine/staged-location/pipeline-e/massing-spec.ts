@@ -304,42 +304,64 @@ export function orientOutward(m: MassingMesh, directions = 32): { mesh: MassingM
 // height increases) and, when one is found, carves the loop into several nested, independently-extruded tiers - a
 // "wedding cake" stack - each still the ordinary SE(3) extrusion the four-operator policy (AGENTS.md 1.5) already
 // covers; no new geometric primitive, just more of the existing one, placed from measurement instead of guessed.
+//
+// The scan's own per-tier outline is never used as the tier's shape (that outline is just a noisy, stairstepped 1 m
+// raster, nothing an architect drew): it only says how much plan AREA each tier keeps. The tier's actual shape is the
+// vector footprint's own clean ring (the building's real corners and orientation), moved inward by the distance that
+// measured area implies (`insetRing`, below) - the photo-tile scan informs how much extra shape there is, the vector
+// data supplies what that shape is (user decision, 2026-10-21).
 
-/** Boundary of a set of 1 m grid cells (integer (ix,iz) keys, cell = [ix,ix+1]x[iz,iz+1]) as closed rings, largest-area first.
- *  Each inside cell emits its 4 edges CCW; an edge shared by two inside cells cancels against its own reverse, leaving only
- *  the outward boundary, which is then walked start-vertex to start-vertex into closed loops. */
-export function maskBoundary(cells: ReadonlySet<string>): Vec2[][] {
-    const edges = new Map<string, [Vec2, Vec2]>();
-    for (const key of cells) {
-        const [ix, iz] = key.split(',').map(Number);
-        const corners: Vec2[] = [[ix, iz], [ix + 1, iz], [ix + 1, iz + 1], [ix, iz + 1]];
-        for (let i = 0; i < 4; i++) {
-            const a = corners[i], b = corners[(i + 1) % 4];
-            const fk = `${a[0]},${a[1]}|${b[0]},${b[1]}`, rk = `${b[0]},${b[1]}|${a[0]},${a[1]}`;
-            if (edges.has(rk)) edges.delete(rk); else edges.set(fk, [a, b]);
-        }
+/** A simple ring moved inward by `d` on every edge (each edge's own line offset inward along its normal, new corners from
+ *  consecutive offset lines' intersection). Undefined if `d` collapses the ring (self-intersects, or area vanishes or
+ *  flips sign) - a scan-measured inset too large for this footprint to carry, left to the caller to cap or skip. */
+export function insetRing(ring: Vec2[], d: number): Vec2[] | undefined {
+    const n = ring.length;
+    if (n < 3) return undefined;
+    if (d <= 0) return ring;
+    const area0 = ringArea(ring);
+    if (Math.abs(area0) < 1e-6) return undefined;
+    const sign = area0 >= 0 ? 1 : -1;
+    // a ring opposite edges are apart by less than 2d would cross past each other: each axis of a box-like ring then
+    // flips, and for an even number of flipped axis-pairs (a square, say) the result still reads as a valid,
+    // same-winding ring - just the wrong one. The bounding box's own half-extent is a cheap, honest ceiling on any
+    // inset this method can carry, well short of that degenerate crossing.
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const [x, z] of ring) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+    if (d >= 0.49 * Math.min(x1 - x0, z1 - z0)) return undefined;
+    const lines: Array<{ p: Vec2; dir: Vec2 }> = [];
+    for (let i = 0; i < n; i++) {
+        const a = ring[i], b = ring[(i + 1) % n];
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1e-9;
+        const ux = (b[0] - a[0]) / len, uz = (b[1] - a[1]) / len;
+        const nx = sign > 0 ? -uz : uz, nz = sign > 0 ? ux : -ux;  // inward normal (rotate the edge direction +90 deg for a CCW/positive-area ring)
+        lines.push({ p: [a[0] + nx * d, a[1] + nz * d], dir: [ux, uz] });
     }
-    const byStart = new Map<string, [Vec2, Vec2]>();
-    for (const [, [a, b]] of edges) byStart.set(`${a[0]},${a[1]}`, [a, b]);
-    const used = new Set<string>();
-    const loops: Vec2[][] = [];
-    for (const [k0, [a0]] of edges) {
-        if (used.has(k0)) continue;
-        const loop: Vec2[] = [];
-        let cur = a0;
-        for (let guard = 0; guard < 100000; guard++) {
-            const e = byStart.get(`${cur[0]},${cur[1]}`);
-            if (!e) break;
-            const ek = `${e[0][0]},${e[0][1]}|${e[1][0]},${e[1][1]}`;
-            if (used.has(ek)) break;
-            used.add(ek);
-            loop.push(cur);
-            cur = e[1];
-            if (cur[0] === loop[0][0] && cur[1] === loop[0][1]) break;
-        }
-        if (loop.length >= 3) loops.push(loop);
+    const out: Vec2[] = [];
+    for (let i = 0; i < n; i++) {
+        const L1 = lines[(i - 1 + n) % n], L2 = lines[i];
+        const denom = L1.dir[0] * L2.dir[1] - L1.dir[1] * L2.dir[0];
+        if (Math.abs(denom) < 1e-9) { out.push(L2.p); continue; }
+        const t = ((L2.p[0] - L1.p[0]) * L2.dir[1] - (L2.p[1] - L1.p[1]) * L2.dir[0]) / denom;
+        out.push([L1.p[0] + L1.dir[0] * t, L1.p[1] + L1.dir[1] * t]);
     }
-    return loops.sort((a, b) => Math.abs(ringArea(b)) - Math.abs(ringArea(a)));
+    if (sign * ringArea(out) <= Math.abs(area0) * 0.01) return undefined;  // collapsed, self-intersected, or flipped
+    return out;
+}
+
+/** The inset distance whose ring area matches `targetArea` as closely as insetRing can get it (bisection on the real,
+ *  non-linear area-vs-distance curve - a first-order estimate alone is well off once the inset is a sizeable share of
+ *  the footprint). Returns 0 when even a zero inset is already at or under the target (a step the ring can't carry). */
+function insetDistanceForArea(ring: Vec2[], baseArea: number, targetArea: number): number {
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const [x, z] of ring) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+    let lo = 0, hi = 0.48 * Math.min(x1 - x0, z1 - z0);
+    const areaAt = (d: number) => { const r = d <= 0 ? ring : insetRing(ring, d); return r ? Math.abs(ringArea(r)) : 0; };
+    if (areaAt(hi) >= targetArea || baseArea <= targetArea) return areaAt(hi) >= targetArea ? hi : 0;
+    for (let iter = 0; iter < 30 && hi - lo > 1e-3; iter++) {
+        const mid = (lo + hi) / 2;
+        if (areaAt(mid) >= targetArea) lo = mid; else hi = mid;
+    }
+    return lo;
 }
 
 export interface HeightTier { baseY: number; topY: number; loop: Vec2[]; cells: ReadonlySet<string> }
@@ -358,6 +380,12 @@ const MAX_TIERS = 5;
  * samples are too few or too flat to call a real step rather than noise; the caller then keeps its one-part behaviour.
  */
 export function detectHeightTiers(loops: Vec2[][], scanTop: (x: number, z: number) => number, groundBaseY: number): HeightTier[] | undefined {
+    // only a single clean ring has one unambiguous shape to inset from; a footprint with a courtyard or a second,
+    // disjoint ring is left to the existing one-part behaviour rather than guessed at.
+    if (loops.length !== 1) return undefined;
+    const baseRing = loops[0];
+    const baseArea = Math.abs(ringArea(baseRing)), basePerimeter = baseRing.reduce((p, pt, i) => p + Math.hypot(pt[0] - baseRing[i === 0 ? baseRing.length - 1 : i - 1][0], pt[1] - baseRing[i === 0 ? baseRing.length - 1 : i - 1][1]), 0);
+    if (!(baseArea > 1) || !(basePerimeter > 1)) return undefined;
     const samples = samplesIn(loops).map(([x, z]): [number, number, number] => [x, z, scanTop(x, z)]).filter(s => Number.isFinite(s[2]));
     if (samples.length < MIN_TIER_SAMPLES) return undefined;
     const heights = samples.map(s => s[2]);
@@ -378,19 +406,28 @@ export function detectHeightTiers(loops: Vec2[][], scanTop: (x: number, z: numbe
     // the gap that would make a resulting middle tier too thin to be a real storey rather than scan noise.
     const filtered = boundaries.filter((L, i) => i <= 1 || L - boundaries[i - 1] >= HEIGHT_AGREEMENT_M);
     if (filtered.length < 2) return undefined;
+    // the scan only says how MUCH plan area a tier keeps, not its literal (noisy, stairstepped) outline - the outline
+    // itself comes from the vector footprint's own clean ring, moved inward by the distance that same area implies
+    // (A(d) ~= A0 - P0*d for a modest inset), so every tier keeps the building's real corners and orientation.
     const tiers: HeightTier[] = [];
+    let prevLoop = baseRing;
     for (let i = 0; i < filtered.length; i++) {
         const lo = filtered[i];
         const cells = new Set<string>();
         const atTier: number[] = [];
-        for (const [x, z, h] of samples) if (h >= lo) { cells.add(`${Math.floor(x)},${Math.floor(z)}`); if (i + 1 >= filtered.length || h < filtered[i + 1]) atTier.push(h); }
+        let area = 0;
+        for (const [x, z, h] of samples) if (h >= lo) { cells.add(`${Math.floor(x)},${Math.floor(z)}`); area++; if (i + 1 >= filtered.length || h < filtered[i + 1]) atTier.push(h); }
         if (cells.size < 4) continue;
-        const loop = maskBoundary(cells)[0]?.map((p): Vec2 => [p[0], p[1]]);
-        const simplified = loop ? simplifyRing(loop) : undefined;
-        if (!simplified || simplified.length < 3 || Math.abs(ringArea(simplified)) < 1) continue;
+        const d = insetDistanceForArea(baseRing, baseArea, area);
+        const loop = insetRing(baseRing, d) ?? (i === 0 ? baseRing : undefined);
+        if (!loop) continue;
+        // a tier can only nest inside the one below it, never grow past it - the inset is monotonic by construction
+        // (bigger d for a later tier, since its area is smaller), but guard it explicitly rather than trust that.
+        if (Math.abs(ringArea(loop)) >= Math.abs(ringArea(prevLoop)) - 1 && i > 0) continue;
+        prevLoop = loop;
         const baseY = i === 0 ? groundBaseY : lo;
         const topY = i + 1 < filtered.length ? filtered[i + 1] : (atTier.length ? quantile(atTier, 0.9) : lo + HEIGHT_AGREEMENT_M);
-        tiers.push({ baseY, topY, loop: simplified, cells });
+        tiers.push({ baseY, topY, loop, cells });
     }
     return tiers.length >= 2 ? tiers : undefined;
 }

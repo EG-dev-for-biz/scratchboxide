@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { buildMassing, detectHeightTiers, maskBoundary, ringArea } from '../src/node/3d-engine/staged-location/pipeline-e/massing-spec';
+import { buildMassing, detectHeightTiers, insetRing, ringArea } from '../src/node/3d-engine/staged-location/pipeline-e/massing-spec';
 
 /** A 40x40 m base, stepped back to a 16x16 m tower above 30 m, up to 45 m: two real tiers. */
 const BASE: Array<[number, number]> = [[0, 0], [40, 0], [40, 40], [0, 40]];
@@ -24,13 +24,18 @@ function scanTop(x: number, z: number): number {
     return 30;
 }
 
-describe('maskBoundary', () => {
-    it('traces a simple square of cells back to a closed ring of the same area', () => {
-        const cells = new Set<string>();
-        for (let x = 0; x < 5; x++) for (let z = 0; z < 5; z++) cells.add(`${x},${z}`);
-        const loops = maskBoundary(cells);
-        expect(loops.length).toBe(1);
-        expect(Math.abs(ringArea(loops[0]))).toBeCloseTo(25, 5);
+describe('insetRing', () => {
+    it('moves a square ring inward on every edge, keeping its shape and corner count', () => {
+        const square: Array<[number, number]> = [[0, 0], [40, 0], [40, 40], [0, 40]];
+        const inset = insetRing(square, 5)!;
+        expect(inset).toBeDefined();
+        expect(inset.length).toBe(4); // still a clean rectangle, not a stairstepped trace
+        expect(Math.abs(ringArea(inset))).toBeCloseTo(30 * 30, 3); // 40-2*5 per side
+    });
+
+    it('refuses to collapse the ring when the inset is too large for its own footprint', () => {
+        const square: Array<[number, number]> = [[0, 0], [10, 0], [10, 10], [0, 10]];
+        expect(insetRing(square, 8)).toBeUndefined();
     });
 });
 
@@ -47,6 +52,8 @@ describe('detectHeightTiers', () => {
         expect(area1).toBeLessThan(area0);
         expect(area1).toBeGreaterThan(200); // ~16x16
         expect(area1).toBeLessThan(320);
+        // the tier's shape is the base ring's own rectangle, inset - not a traced, stairstepped scan outline
+        expect(tiers![1].loop.length).toBe(4);
     });
 
     it('returns undefined for a flat roof (no real step, just scan noise)', () => {
