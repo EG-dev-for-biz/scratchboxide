@@ -207,6 +207,8 @@ const MIN_RUNS_WINDOW_MS = 30_000;
 /** Canonical order (-1: no layer), overlay title and per-stage time limit. */
 /** Why a stage is skipped on a procedural request (the 3D Building button): it runs its procedural pipeline and only what that builds on. */
 const PROCEDURAL_ONLY = 'procedural build only: the 3D Building build runs only the steps its procedural pipeline needs';
+/** The stages a procedural-only build runs: the place, the tiles, the vector data, the massing it builds on (remesh) and the procedural pipeline (grammar). */
+const PROCEDURAL_STAGES: ReadonlySet<string> = new Set(['resolve', 'tiles', 'vector', 'remesh', 'grammar', 'finish']);
 
 export const STAGES = {
     resolve: { order: -1, title: 'Place', budgetMs: 10_000 },
@@ -1200,6 +1202,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     runningStages = () => STAGE_IDS.filter(id => run.summary(id).status === 'running');
     const runner = new Runner(run, ctx, now);
     runner.proceduralOnly = request.procedural === true;
+    // a procedural-only build never lists the other stages, not even as pending before they are skipped
+    if (runner.proceduralOnly) for (const s of run.state.stages) if (!PROCEDURAL_STAGES.has(s.stage)) s.outOfScope = true;
     const base = `${slug(request.query)}${request.isolate ? '_iso' : ''}`;
     const persist = () => {
         const rec: RunRecord = {

@@ -69,6 +69,22 @@ function setup(spec: WorldSpec, opts: Parameters<typeof fakeNative>[2] = {}, ext
 
 const statusOf = (events: Array<{ e: StageEvent }>, stage: string) => events.filter(x => x.e.stage === stage).map(x => x.e.status);
 
+describe('a procedural-only build (the 3D Building button)', () => {
+    it('never lists a stage outside the procedural pipeline, not even as pending at the start', async () => {
+        const s = setup(PARK);
+        await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: true, procedural: true }, s.deps, s.ctx);
+        const allowed = new Set(['resolve', 'tiles', 'vector', 'remesh', 'grammar', 'finish']);
+        const listed = new Set<string>();
+        for (const { artifact } of s.events) for (const st of ((artifact as any)?.data?.stagedBuild?.stages ?? [])) listed.add(st.stage);
+        expect(listed.size).toBeGreaterThan(0);
+        expect([...listed].filter(id => !allowed.has(id))).toEqual([]);
+        // every skip outside the pipeline is marked out of scope, so the progress view drops it
+        const skips = s.events.filter(x => x.e.status === 'skipped' && !allowed.has(x.e.stage));
+        expect(skips.length).toBeGreaterThan(0);
+        expect(skips.every(x => x.e.outOfScope === true)).toBe(true);
+    });
+});
+
 describe('a district', () => {
     it('with an elevation sampler, the ground around the place is a measured terrain layer under everything; without one the stage is skipped', async () => {
         const asked: number[] = [];
