@@ -32,7 +32,7 @@ import { identityGate, type FacadeCounter, type FacadeCounts, type IdentityGate 
 import { streetBandTop } from '../pipeline-e/plate-streetview';
 import type { CellGrid } from '../pipeline-e/plate-audit';
 import { infillImageHoles } from '../../../image-hole-infill';
-import { facadeQuality, MAX_EMPTY_SHARE } from './quality';
+import { facadeQuality } from './quality';
 import type { EnhanceModelClient } from '../texture-enhance';
 
 /** A wall the tile hardly sees: what the tile does not cover is drawn as the wall continues (labelled `source`). */
@@ -163,7 +163,8 @@ export interface BuildFacadeTextureOptions {
     infill?: { client: EnhanceModelClient; models: string[] };
     /**
      * The quality score (quality.ts) decides too: the texture as it would be written must have no seam, no smeared run and at
-     * most MAX_EMPTY_SHARE flat grey or empty inside `inside` (the wall's polygon); with `infill`, empty areas are filled first.
+     * most MAX_EMPTY_SHARE flat grey or empty inside `inside` (the wall's polygon); with `infill`, what it faults is redrawn by
+     * generative infill first and scored again.
      */
     quality?: boolean;
     /** The wall's own polygon in its frame (the quality score's extent). */
@@ -229,10 +230,12 @@ export async function buildFacadeTexture(f: MassingFace, t: FaceTexture, use: Ui
     }
     if (opts.quality) {
         let q = facadeQuality(out, t.width, t.height, f.pixel, opts.inside);
-        if (!q.passed && q.emptyShare > MAX_EMPTY_SHARE && opts.infill) {
-            // the empty areas (flat grey) of the texture redrawn from around them, then scored again
-            const fill = await infillImageHoles({ image: { width: t.width, height: t.height, rgba: out }, client: opts.infill.client, models: opts.infill.models, colour: [128, 128, 128], tolerance: 4, ...(opts.signal ? { signal: opts.signal } : {}) });
-            if (fill.decision === 'accepted') { out = fill.image.rgba; q = facadeQuality(out, t.width, t.height, f.pixel, opts.inside); rec.why = `${rec.why}; empty areas filled by generative infill (${fill.filledPixels} texels)`; }
+        if (!q.passed && opts.infill) {
+            // what the score faults (empty areas, a band round each seam, the smeared runs) redrawn from around it, then scored again
+            const fill = await infillImageHoles({ image: { width: t.width, height: t.height, rgba: out }, client: opts.infill.client, models: opts.infill.models, mask: q.faultMask, ...(opts.signal ? { signal: opts.signal } : {}) });
+            (rec as FacadeTextureResult).infill = { decision: fill.decision, holePixels: fill.holePixels, filledPixels: fill.filledPixels, ...(fill.reason ? { reason: fill.reason } : {}), ...(fill.modelUsed ? { model: fill.modelUsed } : {}) };
+            if (fill.decision === 'accepted') { out = fill.image.rgba; q = facadeQuality(out, t.width, t.height, f.pixel, opts.inside); rec.why = `${rec.why}; ${fill.filledPixels} texels the quality score faulted redrawn by generative infill`; }
+            else rec.why = `${rec.why}; generative infill of what the quality score faulted was refused (${fill.reason ?? fill.decision})`;
         }
         (rec as FacadeTextureResult).quality = { passed: q.passed, emptyShare: q.emptyShare, seams: q.seams.rows.length + q.seams.cols.length, smearShare: q.smearShare, sharpness: q.sharpness, why: q.why };
         if (!q.passed) return { ...rec, ...extra, accepted: false, why: `${rec.why}; ${q.why}`, ms: Date.now() - t0 };

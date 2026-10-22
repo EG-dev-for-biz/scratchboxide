@@ -63,7 +63,7 @@ export function gLegend(): TexelSource[] {
     return [
         { source: 'pipeline-g-read', label: 'photo-inferred', method: 'pipeline G: a flat colour the vision model read off the survey plate of this wall (station renders of the photo tile laid onto the wall in metres), painted on the wall, its openings, bands and members', rung: rung('generated tileable PBR'), weight: 0.3 },
         { source: 'pipeline-g-continued', label: 'generated', method: "pipeline G: a part the survey did not see (an opening or member the reading continued from the wall's own repeats, or a wall nobody read, given the read walls' median colour)", rung: rung('generated tileable PBR'), weight: 0.15 },
-        { source: 'pipeline-g-enhanced', label: 'generated', method: `pipeline G: AI-enhanced from the survey plate of this wall by the facade texture builder (${TEXTURE_PLATE_PROMPT_ID}), kept through its identity gate and region audit`, rung: rung('generated tileable PBR'), weight: 0.25 }
+        { source: 'pipeline-g-enhanced', label: 'generated', method: `pipeline G: AI-enhanced from the survey plate of this wall by the facade texture builder (${TEXTURE_PLATE_PROMPT_ID}), kept through its identity gate and quality score, what the score faulted redrawn by generative infill`, rung: rung('generated tileable PBR'), weight: 0.25 }
     ];
 }
 
@@ -84,8 +84,8 @@ export interface PipelineGInput {
     signal?: AbortSignal;
     onProgress?: (m: string) => void;
     /** The facade texture builder's image model (absent: the walls keep their painted colours). */
-    enhance?: { client: PlateModelClient; models: string[]; guards?: boolean; cacheDir?: string;
-        /** Generative infill of what the builder flags or leaves empty (a survey plate is worse than its redraw: never reverted to). */
+    enhance?: { client: PlateModelClient; models: string[]; cacheDir?: string;
+        /** Generative infill of what the quality score faults (a survey plate is worse than its redraw: never reverted to). */
         infill?: { client: EnhanceModelClient; models: string[] } };
 }
 
@@ -287,7 +287,10 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
             if (!on) return;
             progress(`pipeline G: drawing the facade texture of wall ${f.index} (${Math.round(f.area)} m2)`);
             const r = await buildFacadeTexture(f, on.tex, on.use, {
-                client: e.client, models: e.models, locationName: input.place, source: G_SRC.enhanced, guards: e.guards ?? true,
+                client: e.client, models: e.models, locationName: input.place, source: G_SRC.enhanced,
+                // a survey plate is the melted tile: the region audit reads its blobs as elements the redraw erased, so G keeps the
+                // identity gate and lets the quality score (with infill of what it faults) judge the texture itself
+                guards: false,
                 ...(done[0] ? { reference: done[0] } : {}), ...(e.cacheDir ? { cacheDir: e.cacheDir } : {}),
                 counter: visionFacadeCounter(input.chain as VisionModelChain<string>), ...(input.signal ? { signal: input.signal } : {}),
                 ...(e.infill ? { infill: e.infill } : {}), quality: true

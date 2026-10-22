@@ -50,6 +50,8 @@ export interface FacadeQuality {
     /** Mean luminance gradient per texel over the wall (0..255 per texel). */
     sharpness: number;
     why: string;
+    /** Where the faults are (1), W x H: the empty texels, a band of SEAM_BAND_M either side of each seam, the smeared runs. */
+    faultMask: Uint8Array;
 }
 
 const luma = (rgba: Uint8Array, i: number) => 0.299 * rgba[i * 4] + 0.587 * rgba[i * 4 + 1] + 0.114 * rgba[i * 4 + 2];
@@ -119,6 +121,7 @@ export function facadeQuality(rgba: Uint8Array, W: number, H: number, pixelM: nu
     for (let i = 0; i < N; i++) L[i] = luma(rgba, i);
     // empty: flat mid-grey, or dark and flat with its neighbours (an unfilled hole), inside the wall
     let n = 0, empty = 0, grad = 0, gn = 0;
+    const emptyAt = new Uint8Array(N);
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
         const i = y * W + x;
         if (inside && !inside[i]) continue;
@@ -126,7 +129,7 @@ export function facadeQuality(rgba: Uint8Array, W: number, H: number, pixelM: nu
         const grey = Math.abs(rgba[i * 4] - 128) <= 4 && Math.abs(rgba[i * 4 + 1] - 128) <= 4 && Math.abs(rgba[i * 4 + 2] - 128) <= 4;
         const gx = x + 1 < W ? Math.abs(L[i + 1] - L[i]) : 0, gy = y + 1 < H ? Math.abs(L[i + W] - L[i]) : 0;
         const flatDark = L[i] < 6 && gx < 1 && gy < 1;
-        if (grey || flatDark) empty++;
+        if (grey || flatDark) { empty++; emptyAt[i] = 1; }
         grad += gx + gy; gn++;
     }
     const emptyShare = n ? empty / n : 0;
@@ -134,6 +137,7 @@ export function facadeQuality(rgba: Uint8Array, W: number, H: number, pixelM: nu
     // seams, along rows then columns, then smear
     const seams = { rows: seamLines(L, W, H, pixelM, true), cols: seamLines(L, W, H, pixelM, false) };
     let smearLines = 0;
+    const smearRuns: Array<{ rows: boolean; a0: number; a1: number }> = [];
     const runMin = Math.max(2, Math.round(SMEAR_RUN_M / pixelM));
     for (const rows of [true, false]) {
         const { step, n: cnt } = lineSteps(L, W, H, inside, rows);
@@ -145,7 +149,7 @@ export function facadeQuality(rgba: Uint8Array, W: number, H: number, pixelM: nu
             for (let a = 0; a < lines; a++) {
                 const flat = a + 1 < lines && cnt[a] > 0 && step[a] < SMEAR_STEP_SHARE * typical;
                 if (flat) run++;
-                if (!flat || a + 1 === lines) { if (run >= runMin) smearLines += run; run = 0; }
+                if (!flat || a + 1 === lines) { if (run >= runMin) { smearLines += run; smearRuns.push({ rows, a0: a - run, a1: a + 1 }); } run = 0; }
             }
         }
     }
@@ -158,8 +162,17 @@ export function facadeQuality(rgba: Uint8Array, W: number, H: number, pixelM: nu
     if (seams.rows.length || seams.cols.length) fails.push(`${seams.rows.length + seams.cols.length} seam${seams.rows.length + seams.cols.length === 1 ? '' : 's'} across the wall (${[...seams.rows.map(r => `row ${r}`), ...seams.cols.map(c => `column ${c}`)].slice(0, 4).join(', ')})`);
     if (smearShare > MAX_SMEAR_SHARE) fails.push(`${(100 * smearShare).toFixed(0)}% of its rows and columns in smeared runs over ${SMEAR_RUN_M} m (more than ${100 * MAX_SMEAR_SHARE}%)`);
     const r3 = (v: number) => Math.round(v * 1000) / 1000;
+    const faultMask = emptyShare > MAX_EMPTY_SHARE ? emptyAt.slice() : new Uint8Array(N);
+    const band = Math.max(1, Math.round(SEAM_BAND_M / pixelM));
+    const mark = (rows: boolean, a0: number, a1: number) => {
+        for (let a = Math.max(0, a0); a < Math.min(rows ? H : W, a1); a++) for (let b = 0; b < (rows ? W : H); b++) faultMask[rows ? a * W + b : b * W + a] = 1;
+    };
+    for (const r of seams.rows) mark(true, r - band, r + band);
+    for (const c of seams.cols) mark(false, c - band, c + band);
+    if (smearShare > MAX_SMEAR_SHARE) for (const r of smearRuns) mark(r.rows, r.a0, r.a1);
+    if (inside) for (let i = 0; i < N; i++) if (!inside[i]) faultMask[i] = 0;
     return {
-        passed: fails.length === 0, emptyShare: r3(emptyShare), seams, smearShare: r3(smearShare), sharpness: Math.round(sharpness * 100) / 100,
+        passed: fails.length === 0, emptyShare: r3(emptyShare), seams, smearShare: r3(smearShare), sharpness: Math.round(sharpness * 100) / 100, faultMask,
         why: fails.length ? `quality: ${fails.join('; ')}` : `quality: ${(100 * emptyShare).toFixed(0)}% empty, no seam, ${(100 * smearShare).toFixed(0)}% smeared, sharpness ${sharpness.toFixed(1)}`
     };
 }

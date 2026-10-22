@@ -3448,7 +3448,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         chain, place: placeValue!.formattedAddress || request.query, structure: structure!, ground: t.ground!,
                         anchor: { lat: placeValue!.lat, lng: placeValue!.lng, elevationMeters: 0 }, signal: io.signal, onProgress: m => io.progress(m),
                         // the facade texture builder on every read wall, as pipeline E's enhanced mode (the real-data view turns it off)
-                        ...((request.enhance ?? stagedEnhance()) ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), guards: enhanceGuards(), cacheDir: path.join(cache.dir, 'enhance_plates'), infill: { client: genAiEnhanceClient(visionAvailable.client), models: enhanceModels() } } } : {})
+                        ...((request.enhance ?? stagedEnhance()) ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), cacheDir: path.join(cache.dir, 'enhance_plates'), infill: { client: genAiEnhanceClient(visionAvailable.client), models: enhanceModels() } } } : {})
                     });
                     cache.writeRunNote(runId, 'pipeline_g', { steps: out.steps, timingsMs: out.timingsMs, plates: out.plates, stations: out.stations });
                     const key8 = e.key.slice(0, 8);

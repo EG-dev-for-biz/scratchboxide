@@ -45,6 +45,7 @@ function facade(seed = 7): Uint8Array {
 describe('facade texture quality', () => {
     it('passes a clean facade, its full-width string course not taken for a seam', () => {
         const q = facadeQuality(facade(), W, H, PX);
+        expect(q.faultMask.every(v => v === 0)).toBe(true);
         expect(q.seams.rows).toEqual([]);
         expect(q.seams.cols).toEqual([]);
         expect(q.emptyShare).toBe(0);
@@ -60,6 +61,11 @@ describe('facade texture quality', () => {
         expect(q.seams.rows.length).toBe(1);
         expect(Math.abs(q.seams.rows[0] - 100)).toBeLessThanOrEqual(2);
         expect(q.why).toMatch(/seam/);
+        // the fault mask: the band either side of the seam, nothing far from it
+        const band = Math.round(0.4 / PX);
+        expect(q.faultMask[(q.seams.rows[0]) * W + 50]).toBe(1);
+        expect(q.faultMask[(q.seams.rows[0] - band + 1) * W + 50]).toBe(1);
+        expect(q.faultMask[20 * W + 50]).toBe(0);
     });
 
     it('finds a stretched strip: one row repeated over 2 m', () => {
@@ -77,6 +83,9 @@ describe('facade texture quality', () => {
         const q = facadeQuality(a, W, H, PX);
         expect(q.emptyShare).toBeCloseTo((50 * 70) / (W * H), 2);
         expect(q.passed).toBe(false);
+        // the fault mask is the hole
+        expect(q.faultMask[10 * W + 10]).toBe(1);
+        expect(q.faultMask[100 * W + 150]).toBe(0);
         // the same grey corner outside the wall's polygon (a stepped top): not the wall, not counted
         const inside = new Uint8Array(W * H).fill(1);
         for (let y = 0; y < 50; y++) for (let x = 0; x < 70; x++) inside[y * W + x] = 0;
