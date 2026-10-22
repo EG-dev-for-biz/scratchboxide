@@ -392,6 +392,59 @@ export interface TileVegetationPlantResult {
     crownCorrection?: { path: string; provenance: 'photo-inferred'; trees: number; fromPhotos: number; median?: { widthScale: number; crownBaseRatio: number } };
 }
 
+/**
+ * One tree described by measurements (scratchbox.sb-veggie-trees/1, scratchbox_sb_veggie_grove.hpp): for scenes with no
+ * scan behind them. Grown by `grow` with the same planting a staged location's trees get (space colonisation, SB-Veggie
+ * leaf clusters, the species and texture libraries, the viewport's levels of detail), each tree labelled generated.
+ */
+export interface DescribedTreeSpec {
+    /** Trunk base [x, y, z], metres (y up). Default the origin. */
+    position?: [number, number, number];
+    /** Trunk base to crown top, metres. */
+    heightM: number;
+    /** Crown half-spread, metres (round crown), or crownRadiiM for [along x, along z]. */
+    crownRadiusM?: number;
+    crownRadiiM?: [number, number];
+    /** Lowest crown above the base, metres (omitted: the species entry nearest the crown's measurements gives it). */
+    crownBaseHeightM?: number;
+    /** Share of the crown's depth where it is widest: 0 a cone widest at its base, 0.5 a round crown (default), 0.8 an umbrella. */
+    crownWidestAt?: number;
+    /** The crown top's profile (1 - u^n)^(1/n): 1 a cone, 2 a dome (default), 4 a flat top. */
+    crownTopExponent?: number;
+    /** Trunk radius above the flare, metres (omitted: the species entry's ratio). */
+    trunkRadiusM?: number;
+    /** Leaf colour, linear RGB 0..1 (the species and leaf textures are chosen by it). */
+    leafLinearRgb?: [number, number, number];
+    /** Free text carried into the tree's extras; never changes the geometry. */
+    label?: string;
+}
+
+export interface TileVegetationGrowRequest {
+    trees: DescribedTreeSpec[];
+    /** Free text for the trees GLB's root extras. */
+    label?: string;
+    /** Total triangles all trees may use; omitted: each tree's own budget within SCENE_TREE_TRIANGLE_CAP. */
+    triangleBudget?: number;
+    /** Hex seed (1-16 digits); default the sha256 of the descriptions. */
+    seed?: string;
+    /** Write with KHR_mesh_quantization (default true). */
+    quantize?: boolean;
+    lod?: boolean;
+    psiSeason?: number;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+}
+
+export interface TileVegetationGrowResult {
+    treesGlb: string;
+    crownsJson: string;
+    stats: Record<string, any>;
+    seed: string;
+    cached: boolean;
+    ms: number;
+    cacheKey: string;
+}
+
 /** Where the crown correction measured for a crowns.json (by its sha256) is kept in a workspace. */
 export function crownCorrectionPathFor(workspaceRoot: string, crownsSha256: string): string {
     return path.join(workspaceRoot, '.scratchbox', 'cache', 'crown_correction', `${crownsSha256}.json`);
@@ -831,6 +884,54 @@ export class TileVegetationService {
         if (publishTarget) out.published = this.publish(res.treesGlb, publishTarget);
         out.ms = Date.now() - t0;
         return out;
+    }
+
+    /**
+     * Grows trees described by measurements (an imagined scene's, a single requested tree) with the staged location's
+     * planting: tile_vegetation grow (scratchbox_sb_veggie_grove.hpp), the species and texture libraries of this checkout.
+     */
+    async grow(req: TileVegetationGrowRequest): Promise<TileVegetationGrowResult> {
+        const t0 = Date.now();
+        if (!Array.isArray(req.trees) || req.trees.length === 0) throw new TileVegetationError('bad_request', 'grow needs at least one described tree');
+        if (req.triangleBudget !== undefined && !(Number.isFinite(req.triangleBudget) && req.triangleBudget >= 1)) throw new TileVegetationError('bad_request', 'triangleBudget must be a number of at least 1');
+        if (req.psiSeason !== undefined && !(req.psiSeason >= 0 && req.psiSeason <= 1)) throw new TileVegetationError('bad_request', 'psiSeason must be in [0, 1]');
+        const doc = JSON.stringify({ schema: 'scratchbox.sb-veggie-trees/1', ...(req.label ? { label: String(req.label).slice(0, 200) } : {}), trees: req.trees });
+        const seed = req.seed ?? crypto.createHash('sha256').update(doc).digest('hex').slice(0, 16);
+        if (!/^[0-9a-fA-F]{1,16}$/.test(seed)) throw new TileVegetationError('bad_request', 'seed must be 1-16 hex digits');
+        const quantize = req.quantize ?? true;
+        const lod = req.lod ?? true;
+        const timeoutMs = req.timeoutMs ?? this.defaultTimeoutMs;
+        const bin = await this.ensureBinary();
+        const textureIndex = treeTextureIndexPath(this.repoRoot);
+        const speciesIndex = treeSpeciesIndexPath(this.repoRoot);
+        const hash = crypto.createHash('sha256').update(CACHE_VERSION).update('\0grow\0').update(this.hashBinary(bin)).update('\0').update(doc);
+        hash.update('\0');
+        if (textureIndex) sha256File(textureIndex, hash);
+        hash.update('\0species\0');
+        if (speciesIndex) sha256File(speciesIndex, hash);
+        hash.update('\0').update(JSON.stringify({ seed: seed.toLowerCase(), quantize, lod, budget: req.triangleBudget ?? null, psi: req.psiSeason ?? null }));
+        const key = hash.digest('hex');
+        const res = await this.cached(key, ['trees.glb', 'stats.json', 'crowns.json'], async (dir, signal) => {
+            fs.writeFileSync(path.join(dir, 'trees.request.json'), doc);
+            const args = ['grow', '--trees', path.join(dir, 'trees.request.json'), '--out', path.join(dir, 'trees.glb'), '--stats', path.join(dir, 'stats.json'),
+                '--crowns-out', path.join(dir, 'crowns.json'), '--seed', seed, '--quantize', quantize ? '1' : '0', '--lod', lod ? '1' : '0', '--stage-key', key];
+            if (req.triangleBudget !== undefined) args.push('--triangle-budget', String(Math.floor(req.triangleBudget)));
+            if (req.psiSeason !== undefined) args.push('--psi-season', String(req.psiSeason));
+            if (textureIndex) args.push('--texture-index', textureIndex, '--texture-index-label', TREE_TEXTURE_INDEX);
+            if (speciesIndex) args.push('--species-index', speciesIndex, '--species-index-label', TREE_SPECIES_INDEX);
+            await runFile(bin, args, timeoutMs, signal);
+        }, (dir, cached) => ({
+            treesGlb: path.join(dir, 'trees.glb'),
+            crownsJson: path.join(dir, 'crowns.json'),
+            stats: JSON.parse(fs.readFileSync(path.join(dir, 'stats.json'), 'utf8')),
+            seed,
+            cached,
+            ms: 0,
+            cacheKey: key
+        }), req.signal);
+        const problem = treesGlbBoundsProblem(res.treesGlb);
+        if (problem) throw new TileVegetationError('plant_failed', `the grown trees were refused because ${problem}`);
+        return { ...res, ms: Date.now() - t0 };
     }
 
     private resolvePublishTarget(name: string): string {

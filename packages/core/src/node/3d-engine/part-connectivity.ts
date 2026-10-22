@@ -158,7 +158,7 @@ export type GlbInstanceMode = 'expand' | 'skip';
  * for its node (named by the node, else its mesh). Returns false when the buffer is not a GLB. Yields about every
  * READ_PER_YIELD values, so a large model can be read in slices.
  */
-function* walkGlbTriangles(glb: Buffer, sinkFor: (name: string) => SoupSink, instances: GlbInstanceMode = 'expand'): Generator<void, boolean, void> {
+function* walkGlbTriangles(glb: Buffer, sinkFor: (name: string) => SoupSink, instances: GlbInstanceMode = 'expand', exclude?: (nodeName: string) => boolean): Generator<void, boolean, void> {
     if (glb.length < 28 || glb.toString('utf8', 0, 4) !== 'glTF') return false;
     const jsonLength = glb.readUInt32LE(12);
     const gltf = JSON.parse(glb.toString('utf8', 20, 20 + jsonLength));
@@ -217,6 +217,8 @@ function* walkGlbTriangles(glb: Buffer, sinkFor: (name: string) => SoupSink, ins
     function* visit(nodeIndex: number, parent: Mat4): Generator<void, void, void> {
         const node = gltf.nodes?.[nodeIndex];
         if (!node) return;
+        // a node the caller leaves out is left out with everything under it
+        if (exclude && typeof node.name === 'string' && exclude(node.name)) return;
         const world = multiply(parent, nodeMatrix(node));
         if (typeof node.mesh === 'number') {
             const sink = sinkFor(typeof node.name === 'string' && node.name ? node.name : meshName(node.mesh));
@@ -289,25 +291,25 @@ export async function runInSlices<T>(
     }
 }
 
-function* soupSteps(glb: Buffer, colors: boolean, instances: GlbInstanceMode = 'expand'): Generator<void, TriangleSoup | null, void> {
+function* soupSteps(glb: Buffer, colors: boolean, instances: GlbInstanceMode = 'expand', exclude?: (nodeName: string) => boolean): Generator<void, TriangleSoup | null, void> {
     const sink = newSink(colors);
-    return (yield* walkGlbTriangles(glb, () => sink, instances)) ? toSoup(sink) : null;
+    return (yield* walkGlbTriangles(glb, () => sink, instances, exclude)) ? toSoup(sink) : null;
 }
 
 /**
  * The GLB as one world-space soup; `colors: false` skips reading vertex colours when only geometry is needed, and
  * `instances` says whether instanced meshes are expanded (the default) or left out.
  */
-export function glbToTriangleSoup(glb: Buffer, options: { colors?: boolean; instances?: GlbInstanceMode } = {}): TriangleSoup | null {
-    return runToEnd(soupSteps(glb, options.colors !== false, options.instances));
+export function glbToTriangleSoup(glb: Buffer, options: { colors?: boolean; instances?: GlbInstanceMode; exclude?: (nodeName: string) => boolean } = {}): TriangleSoup | null {
+    return runToEnd(soupSteps(glb, options.colors !== false, options.instances, options.exclude));
 }
 
 /** The same, read in slices of about `sliceMs` so a large model does not hold up the event loop. */
 export function glbToTriangleSoupAsync(
     glb: Buffer,
-    options: { colors?: boolean; instances?: GlbInstanceMode; signal?: AbortSignal; sliceMs?: number; abortError?: () => Error } = {}
+    options: { colors?: boolean; instances?: GlbInstanceMode; exclude?: (nodeName: string) => boolean; signal?: AbortSignal; sliceMs?: number; abortError?: () => Error } = {}
 ): Promise<TriangleSoup | null> {
-    return runInSlices(soupSteps(glb, options.colors !== false, options.instances), options);
+    return runInSlices(soupSteps(glb, options.colors !== false, options.instances, options.exclude), options);
 }
 
 /**
@@ -386,27 +388,47 @@ export function glbWorldBounds(glb: Buffer): { min: Vec3; max: Vec3 } | null {
  * One world-space soup per node name (the node's name, else its mesh's), in the order first seen; nodes that share
  * a name are merged. Null when the buffer is not a GLB.
  */
-export function glbToNamedTriangleSoups(glb: Buffer): Map<string, TriangleSoup> | null {
-    return runToEnd(namedSoupSteps(glb));
+export function glbToNamedTriangleSoups(glb: Buffer, options: { exclude?: (nodeName: string) => boolean } = {}): Map<string, TriangleSoup> | null {
+    return runToEnd(namedSoupSteps(glb, options.exclude));
 }
 
 /** The same, read in slices of about `sliceMs`. */
 export function glbToNamedTriangleSoupsAsync(
     glb: Buffer,
-    options: { signal?: AbortSignal; sliceMs?: number; abortError?: () => Error } = {}
+    options: { signal?: AbortSignal; sliceMs?: number; abortError?: () => Error; exclude?: (nodeName: string) => boolean } = {}
 ): Promise<Map<string, TriangleSoup> | null> {
-    return runInSlices(namedSoupSteps(glb), options);
+    return runInSlices(namedSoupSteps(glb, options.exclude), options);
 }
 
-function* namedSoupSteps(glb: Buffer): Generator<void, Map<string, TriangleSoup> | null, void> {
+function* namedSoupSteps(glb: Buffer, exclude?: (nodeName: string) => boolean): Generator<void, Map<string, TriangleSoup> | null, void> {
     const sinks = new Map<string, SoupSink>();
     const ok = yield* walkGlbTriangles(glb, name => {
         let sink = sinks.get(name);
         if (!sink) sinks.set(name, sink = newSink(true));
         return sink;
-    });
+    }, 'expand', exclude);
     if (!ok) return null;
     return new Map([...sinks].map(([name, sink]) => [name, toSoup(sink)]));
+}
+
+/**
+ * A node of an SB-Veggie trees layer (scratchbox_sb_veggie_grove.hpp / tile_vegetation plant: the root
+ * sb_veggie_trees, each tree sb_veggie_crown_<id> and its levels sb_veggie_crown_<id>_lod<k>). Such trees are grown and
+ * checked by the grower; a GLB's own structure checks leave them out.
+ */
+export function isSbVeggieNode(name: string): boolean {
+    return name.startsWith('sb_veggie_');
+}
+
+/** The near, near-mid and mid levels of an SB-Veggie tree (instanced leaves, up to a million triangles a tree); its far level is kept. */
+export function isSbVeggieNearLevel(name: string): boolean {
+    return /^sb_veggie_crown_\d+_lod[0-2]$/.test(name);
+}
+
+/** The id of the SB-Veggie tree a node belongs to (sb_veggie_crown_<id>...), or undefined. */
+export function sbVeggieCrownId(name: string): number | undefined {
+    const m = /^sb_veggie_crown_(\d+)/.exec(name);
+    return m ? Number(m[1]) : undefined;
 }
 
 /** Several soups as one (indices offset, colors kept when every soup has them). */

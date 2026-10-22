@@ -123,12 +123,14 @@ export const PROVENANCE = {
     /** A scanned lump smoothed (Taubin) with no vertex moved further than the scan's own tolerance: the rung under a figure read from a photo. Nothing added. */
     smoothedScan: 'smoothed-scan',
     /** SB-Veggie trees: stem, crown extent and height measured from the tiles, branching grown inside that crown. */
-    grownToMeasuredCrown: 'grown to the measured crown'
+    grownToMeasuredCrown: 'grown to the measured crown',
+    /** A plausible estimate or fill with no measurement behind it: e.g. an SB-Veggie tree grown into a crown a request described (scratchbox_sb_veggie_grove.hpp). measuredGeometry false, with a confidence. */
+    generated: 'generated'
 } as const;
 
 /** Labels whose geometry is not scan measurement: their ProvenanceRecord must say measuredGeometry false, with a confidence. */
 export const NON_MEASURED_PROVENANCE_LABELS: readonly ProvenanceLabel[] = [
-    PROVENANCE.photoInferred, PROVENANCE.photoCorrected, PROVENANCE.fittedUnobserved
+    PROVENANCE.photoInferred, PROVENANCE.photoCorrected, PROVENANCE.fittedUnobserved, PROVENANCE.generated
 ];
 
 export interface SourceRef {
@@ -191,6 +193,7 @@ export const DEFAULT_PROVENANCE_LEGEND: ReadonlyArray<Omit<ProvenanceLegendEntry
     { label: PROVENANCE.photoInferred, color: '#CC79A7', pattern: 'dots' },
     { label: PROVENANCE.smoothedScan, color: '#E69F00', pattern: 'dots' },
     { label: PROVENANCE.grownToMeasuredCrown, color: '#009E73', pattern: 'solid' },
+    { label: PROVENANCE.generated, color: '#009E73', pattern: 'dots' },
     /** Google's vector buildings (footprints and heights, modelled volumes) carried unchanged: the first paint and past the tiles. */
     { label: 'vector-modelled', color: '#9933FF', pattern: 'stripes' }
 ];

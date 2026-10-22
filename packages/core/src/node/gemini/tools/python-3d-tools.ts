@@ -14,7 +14,7 @@ import type { ToolDeclaration, ToolHandlerOutcome } from './types';
 import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
 import { PipelineError } from '../../../common/errors/pipeline-errors';
 import { GeometricComplexityGate, GeometricSceneMetrics, GeometricMeshSummary, ComplexityGateReport } from '../../../common/spatial/GeometricComplexityGate';
-import { analyzePartConnectivityAsync, ConnectivityAnalysisAbortedError, describeFloatingParts, glbToTriangleSoup, type PartConnectivityReport, type TriangleSoup } from '../../3d-engine/part-connectivity';
+import { analyzePartConnectivityAsync, ConnectivityAnalysisAbortedError, describeFloatingParts, glbToTriangleSoup, glbWorldBounds, isSbVeggieNearLevel, isSbVeggieNode, type PartConnectivityReport, type TriangleSoup } from '../../3d-engine/part-connectivity';
 import { callVisionModel, describeVisualProblems, reviewModelVisually, type VisualReviewResult } from '../../3d-engine/visual-review';
 import { formatSbApiErrors, sbTypeCheckMetadata, typeCheckSbScript } from '../../3d-engine/sb-script-typecheck';
 import { SB_API_CORE_SUMMARY, SB_API_VERSION } from '../../3d-engine/sb-api.generated';
@@ -64,6 +64,15 @@ export function extractGlbAnalysis(glbBuffer: Buffer): GlbAnalysisResult {
             }
         }
 
+        // World bounds through the node tree (node transforms, KHR_mesh_quantization dequantisation, GPU instances): an
+        // SB-Veggie trees layer stores quantised positions under node transforms, which accessor min/max alone misreads.
+        let world: ReturnType<typeof glbWorldBounds> = null;
+        try { world = glbWorldBounds(glbBuffer); } catch { world = null; }
+        if (world && world.min.every(Number.isFinite) && world.max.every(Number.isFinite)) {
+            [minX, minY, minZ] = world.min;
+            [maxX, maxY, maxZ] = world.max;
+            found = true;
+        }
         let bounds: GlbAabbBounds | null = null;
         if (found && isFinite(minX)) {
             const center: [number, number, number] = [
@@ -174,7 +183,8 @@ Usage notes:
 - Assemblies (legs, rungs, frames, struts, rails): compute the joint points first, then build each member between two joints with sb.sweep_curve_profile(path=[start, end], profile_dimensions=(r, r)). Take a connecting member's ends from points on the members it joins (a rung from lerp(top_a, foot_a, t) to lerp(top_b, foot_b, t)) so it attaches by construction; run member ends slightly into what they join. Do not place parts by rotating them about the origin and guessing offsets. Every result is checked: parts that touch nothing are listed in structuralIssues, and you must fix them.
 - Meshes have no clone(), copy() or transform. To duplicate: dup = sb.geometry.Mesh(); dup.append(mesh), then position it with translate, rotate_x/y/z (degrees) and scale.
 - Materials: sb.PbrMaterial(base_color=(r, g, b, a), roughness=, metallic=) or a preset such as sb.PbrMaterial.clay(). There is no separate materials module.
-- Scene and export: scene = sb.Scene(); scene.add_mesh(mesh); finish with sb.io.write_glb(OUTPUT_GLB_PATH, scene). A single Mesh can be written directly too.`;
+- Scene and export: scene = sb.Scene(); scene.add_mesh(mesh); finish with sb.io.write_glb(OUTPUT_GLB_PATH, scene). A single Mesh can be written directly too.
+- Trees, shrubs and any plant with a crown: sb.create_tree(position=(x, y, z), height=, crown_radius= (or (along x, along z)), crown_base_height=, crown_widest_at= (0 cone .. 0.5 round .. 0.8 umbrella), crown_top_exponent= (1 cone, 2 dome, 4 flat), trunk_radius=, leaf_color='#rrggbb', label=) returns an SB-Veggie tree described by those measurements; add it with scene.merge(tree) or world.add(tree) (world.scatter(tree, ...) plants copies) and it is grown natively when the scene is written (space colonisation, SB-Veggie leaf clusters, species and leaf textures, levels of detail). It is not a mesh: move it with translate / rotate_y / scale only. This is the only way to make vegetation: never build trees or foliage from cones, spheres, boxes, sweeps or lathes.`;
 
 export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
@@ -346,14 +356,19 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
             };
         }
 
+        const vegetation = sbVeggieOf(glbBuf);
         let structureReport: PartConnectivityReport | null = null;
         let visualReview: (VisualReviewResult & { imagePaths?: string[] }) | undefined;
         if (glbBuf) {
             let soup: TriangleSoup | null = null;
             try {
-                soup = glbToTriangleSoup(glbBuf);
+                // SB-Veggie trees (sb.create_tree) are grown natively and checked against their described crowns by the
+                // grower; their leaf clusters are separate parts by design, so the structure check reads everything else.
+                const structureSoup = vegetation ? glbToTriangleSoup(glbBuf, { exclude: isSbVeggieNode }) : glbToTriangleSoup(glbBuf);
+                // the visual review sees the trees at their far level (one level, not all four stacked)
+                soup = vegetation ? glbToTriangleSoup(glbBuf, { exclude: isSbVeggieNearLevel }) : structureSoup;
                 // Sliced so a large model never blocks the event loop; the turn's signal stops it.
-                if (soup) structureReport = await analyzePartConnectivityAsync(soup, { signal: _ctx?.signal });
+                if (structureSoup && structureSoup.indices.length > 0) structureReport = await analyzePartConnectivityAsync(structureSoup, { signal: _ctx?.signal });
             } catch (err: any) {
                 if (err instanceof ConnectivityAnalysisAbortedError) throw err;
                 console.warn('[execute_3d_python_script] Structural check skipped:', err?.message || err);
@@ -439,6 +454,8 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 glbGenerated: true,
                 vertexCount: writtenGeometry.totalVertices,
                 triangleCount: writtenGeometry.totalTriangles,
+                // the scene's trees: SB-Veggie, grown natively from sb.create_tree descriptions (absent: none)
+                vegetation,
                 executionTimeMs: result.executionTimeMs,
                 typeCheck: typeCheckMeta,
                 stdout: result.stdout,
@@ -505,6 +522,20 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
         };
     }
 };
+
+/** The SB-Veggie trees a GLB carries (its scene extras sbVeggie, written by the grower), or undefined. */
+export function sbVeggieOf(glb: Buffer): { generator: 'SB-Veggie'; trees: number; triangles?: number; levelsOfDetail: boolean } | undefined {
+    try {
+        if (glb.length < 20 || glb.toString('utf8', 0, 4) !== 'glTF') return undefined;
+        const json = JSON.parse(glb.toString('utf8', 20, 20 + glb.readUInt32LE(12)));
+        const scene = json.scenes?.[json.scene ?? 0];
+        const v = scene?.extras?.sbVeggie ?? json.extras?.sbVeggie;
+        if (!v || typeof v.trees !== 'number') return undefined;
+        return { generator: 'SB-Veggie', trees: v.trees, triangles: v.triangles, levelsOfDetail: !!(scene?.extras?.sbTrees ?? json.extras?.sbTrees) };
+    } catch {
+        return undefined;
+    }
+}
 
 /** Copies a GLB into public/models (when it is not already there) and returns its /models URL; errors propagate. */
 function publishToModels(glbPath: string): string {

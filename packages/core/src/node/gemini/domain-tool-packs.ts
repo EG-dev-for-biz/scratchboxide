@@ -62,13 +62,15 @@ export interface ToolPackDefinition {
 export const CORE_WORKSPACE_PACK: ToolPackDefinition = {
     id: 'core_workspace',
     displayName: 'Core Workspace & Canvas Studio',
-    description: 'File reading/writing, diagnostics, diffs, canvas primitive mounting, native 3D scripts and reference-built objects, image generation, user dialogue, and subagent delegation.',
+    description: 'File reading/writing, diagnostics, diffs, canvas primitive mounting, native 3D scripts, reference-built objects and SB-Veggie vegetation, image generation, user dialogue, and subagent delegation.',
     declarations: [
         ...CANVAS_TOOL_DECLARATIONS,
         ...WORKSPACE_TOOL_DECLARATIONS,
         ...PYTHON_3D_TOOL_DECLARATIONS,
         ...SB_SCRIPT_GUIDE_TOOL_DECLARATIONS,
         ...OBJECT_REFERENCE_TOOL_DECLARATIONS,
+        // the vegetation generator of every 3D path (SB-Veggie): offered wherever 3D scenes are
+        ...BOTANICAL_TREE_TOOL_DECLARATIONS,
         ...IMAGE_GENERATION_TOOL_DECLARATIONS
     ],
     toolNames: [
@@ -77,6 +79,7 @@ export const CORE_WORKSPACE_PACK: ToolPackDefinition = {
         ...PYTHON_3D_TOOL_DECLARATIONS.map(d => d.name),
         ...SB_SCRIPT_GUIDE_TOOL_DECLARATIONS.map(d => d.name),
         ...OBJECT_REFERENCE_TOOL_DECLARATIONS.map(d => d.name),
+        ...BOTANICAL_TREE_TOOL_DECLARATIONS.map(d => d.name),
         ...IMAGE_GENERATION_TOOL_DECLARATIONS.map(d => d.name)
     ]
 };
@@ -109,13 +112,12 @@ export const GEOSPATIAL_3D_PACK: ToolPackDefinition = {
 
 export const MESH_SURFACE_PACK: ToolPackDefinition = {
     id: 'mesh_surface',
-    displayName: 'Mesh Reshaping, Botanicals & Material Textures',
-    description: 'C++20 mesh shaping, SB-Rig auto-rigging (skeleton + skin weights for any mesh), botanical trees, algorithmic UV unwrap, MaxRects atlas binning, and analytical hair/groom forward splatting.',
+    displayName: 'Mesh Reshaping & Material Textures',
+    description: 'C++20 mesh shaping, SB-Rig auto-rigging (skeleton + skin weights for any mesh), algorithmic UV unwrap, MaxRects atlas binning, and analytical hair/groom forward splatting.',
     declarations: [
         ...MESH_SHAPING_TOOL_DECLARATIONS,
         ...SB_RIG_TOOL_DECLARATIONS,
         ...ALGORITHMIC_UV_TOOL_DECLARATIONS,
-        ...BOTANICAL_TREE_TOOL_DECLARATIONS,
         ...NANO_BANANA_TOOL_DECLARATIONS,
         ...TURNAROUND_TOOL_DECLARATIONS,
         ...ANALYTICAL_GROOM_TOOL_DECLARATIONS
@@ -124,7 +126,6 @@ export const MESH_SURFACE_PACK: ToolPackDefinition = {
         ...MESH_SHAPING_TOOL_DECLARATIONS.map(d => d.name),
         ...SB_RIG_TOOL_DECLARATIONS.map(d => d.name),
         ...ALGORITHMIC_UV_TOOL_DECLARATIONS.map(d => d.name),
-        ...BOTANICAL_TREE_TOOL_DECLARATIONS.map(d => d.name),
         ...NANO_BANANA_TOOL_DECLARATIONS.map(d => d.name),
         ...TURNAROUND_TOOL_DECLARATIONS.map(d => d.name),
         ...ANALYTICAL_GROOM_TOOL_DECLARATIONS.map(d => d.name)
