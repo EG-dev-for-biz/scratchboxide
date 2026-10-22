@@ -347,14 +347,21 @@ struct Modulation {
     double atPhase(double phi) const {
         return offset + cosAmp * std::cos(phi) + bumpAmp * bump(phi - bumpCentre) + (facetAmp != 0 ? facetAmp * (facetRaw(phi, K) - facetMean(K)) : 0.0);
     }
-    double at(double th) const {
-        if (!K) return 0;
-        double phi = std::fmod(K * (th - theta0), 2 * PI);
-        if (phi >= PI) phi -= 2 * PI;
-        if (phi < -PI) phi += 2 * PI;
-        return atPhase(phi);
+    /**
+     * Ribs the scan cannot resolve, from a reference outside it (detail input, labelled by the caller): refK raised ribs,
+     * each a bump of half width refWidth (a share of half a period) and edge exponent refExponent, refAmp of the radius,
+     * a rib on refTheta0 (on the measured crests when the counts are commensurate).
+     */
+    int refK{0};
+    double refWidth{0.1}, refAmp{0}, refExponent{8}, refTheta0{0};
+    static double wrapPhase(double phi) { phi = std::fmod(phi, 2 * PI); if (phi >= PI) phi -= 2 * PI; if (phi < -PI) phi += 2 * PI; return phi; }
+    double refAt(double th) const {
+        if (!refK || refAmp == 0) return 0;
+        return refAmp * std::exp(-std::pow(std::abs(wrapPhase(refK * (th - refTheta0))) / (refWidth * PI), refExponent));
     }
-    double maxAbs() const { if (!K) return 0; double m = 0; for (int i = 0; i < 512; ++i) m = std::max(m, std::abs(atPhase(-PI + 2 * PI * i / 512))); return m; }
+    double at(double th) const { return (K ? atPhase(wrapPhase(K * (th - theta0))) : 0.0) + refAt(th); }
+    double maxAbs() const { if (!K && !refK) return 0; double m = 0; for (int i = 0; i < 4096; ++i) m = std::max(m, std::abs(at(-PI + 2 * PI * i / 4096))); return m; }
+    double measuredMaxAbs() const { if (!K) return 0; double m = 0; for (int i = 0; i < 512; ++i) m = std::max(m, std::abs(atPhase(-PI + 2 * PI * i / 512))); return m; }
 };
 
 struct Stack {
@@ -436,8 +443,12 @@ struct Revolution {
     std::vector<float> pos, nrm;
     std::vector<uint32_t> idx;
     bool accepted{false};
+    bool referenceDetails{false};
     std::string reason;
 };
+
+/** Detail the scan cannot resolve, from a reference (one line: x z K widthM heightM exponent). */
+struct Detail { double x{0}, z{0}; int K{0}; double widthM{0.2}, heightM{0.1}, exponent{8}; };
 
 class RevolutionFit {
 public:
@@ -458,6 +469,7 @@ public:
     }
 
     const std::vector<Revolution>& revolutions() const { return revs_; }
+    void setDetails(std::vector<Detail> d) { details_ = std::move(d); }
 
     std::string reportJson() const {
         std::ostringstream o;
@@ -467,7 +479,7 @@ public:
         for (const auto& r : revs_) {
             if (!first) o << ",";
             first = false;
-            o << "{\"id\":" << r.id << ",\"accepted\":" << (r.accepted ? "true" : "false") << ",\"reason\":" << detail::jstr(r.reason)
+            o << "{\"id\":" << r.id << ",\"accepted\":" << (r.accepted ? "true" : "false") << ",\"referenceDetails\":" << (r.referenceDetails ? "true" : "false") << ",\"reason\":" << detail::jstr(r.reason)
               << ",\"plan\":{\"x\":" << detail::num(r.planX) << ",\"z\":" << detail::num(r.planZ) << ",\"r\":" << detail::num(r.planR) << ",\"peakY\":" << detail::num(r.peakY) << ",\"baseY\":" << detail::num(r.baseY) << ",\"levels\":" << r.levels << ",\"spread\":" << detail::num(r.planSpread) << "}"
               << ",\"axis\":{\"x\":" << detail::num(r.cx) << ",\"z\":" << detail::num(r.cz) << ",\"errM\":" << detail::num(r.axisErrM) << ",\"tiltDeg\":" << detail::num(r.tiltDeg) << ",\"slices\":" << r.slices.size() << ",\"slicesOk\":" << r.slicesOk
               << ",\"sliceRmsRelMedian\":" << detail::num(r.sliceRmsRelMedian) << ",\"sectorShareMedian\":" << detail::num(r.sectorShareMedian) << "}";
@@ -486,7 +498,9 @@ public:
                       << ",\"floorRel\":" << detail::num(m.floorRel) << ",\"bestK\":" << m.bestK << ",\"bestSignificance\":" << detail::num(m.bestSignificance)
                       << ",\"shape\":{\"theta0\":" << detail::num(m.theta0) << ",\"offset\":" << detail::num(m.offset) << ",\"cosAmp\":" << detail::num(m.cosAmp) << ",\"bumpAmp\":" << detail::num(m.bumpAmp)
                       << ",\"bumpWidth\":" << detail::num(m.bumpWidth) << ",\"bumpExponent\":" << detail::num(m.bumpExponent) << ",\"bumpCentre\":" << detail::num(m.bumpCentre) << ",\"facetAmp\":" << detail::num(m.facetAmp)
-                      << ",\"rmsRel\":" << detail::num(m.shapeRmsRel) << ",\"explained\":" << detail::num(m.shapeExplained) << "},\"harmonics\":[";
+                      << ",\"rmsRel\":" << detail::num(m.shapeRmsRel) << ",\"explained\":" << detail::num(m.shapeExplained) << "}"
+                      << ",\"reference\":" << (m.refK ? "{\"K\":" + std::to_string(m.refK) + ",\"width\":" + detail::num(m.refWidth) + ",\"amp\":" + detail::num(m.refAmp) + ",\"exponent\":" + detail::num(m.refExponent) + ",\"theta0\":" + detail::num(m.refTheta0) + "}" : std::string("null"))
+                      << ",\"harmonics\":[";
                     for (size_t i = 0; i < m.h.size(); ++i) { if (i) o << ","; o << "[" << detail::num(m.h[i][0]) << "," << detail::num(m.h[i][1]) << "," << detail::num(m.h[i][2]) << "]"; }
                     o << "]}";
                 };
@@ -540,6 +554,7 @@ private:
     std::vector<uint8_t> inRegion_;
     int summits_{0};
     std::vector<Revolution> revs_;
+    std::vector<Detail> details_;
 
     /** Deterministic area-weighted samples of triangle i (an R2 low-discrepancy sequence folded into the triangle). */
     template <class F> void sampleTri(size_t i, double density, F&& emit) const {
@@ -841,14 +856,15 @@ private:
         if (R.stacks.empty()) { R.reason = "no profile could be fitted"; return; }
         // the modulation, residuals and departures over the whole
         for (size_t k = 0; k < R.stacks.size(); ++k) fitModulation(R.stacks[k], k + 1 < R.stacks.size() ? &R.stacks[k + 1] : nullptr, mp);
-        // a part whose sections are polygons of few sides (a square turret roof) is not uniform about its axis
+        // a part whose sections are polygons of few sides (a square turret roof) is not uniform about its axis (measured only)
         for (const auto& st : R.stacks) for (const Modulation* m : {&st.bandMod, &st.capMod}) {
-            if (m->K > 0 && m->ampRel > p_.maxModulationRel) {
+            if (m->K > 0 && m->measuredMaxAbs() > p_.maxModulationRel) {
                 char b[200]; std::snprintf(b, sizeof b, "its sections are %d-periodic with a %.0f%% radial swing (at most %.0f%%): polygons of few sides, not circles", m->K, 100 * m->ampRel, 100 * p_.maxModulationRel);
                 R.reason = b; R.stacks.clear(); return;
             }
         }
         residuals(R, mp);
+        applyDetails(R);
         envelope(R);
         emit(R);
         R.accepted = true;
@@ -863,6 +879,24 @@ private:
     }
 
     /** Bands below y0 from the slices; the cap above y0 fitted to the meridian points. */
+    /** Reference ribs for the revolution whose axis is within 3 m of (x, z): on its first stack's cap. */
+    void applyDetails(Revolution& R) const {
+        for (const auto& d : details_) {
+            if (std::hypot(d.x - R.cx, d.z - R.cz) > 3 || R.stacks.empty() || !R.stacks[0].cap.present || d.K < 3) continue;
+            auto& st = R.stacks[0];
+            auto& m = st.capMod;
+            const double halfPeriodM = PI * st.cap.R0 / d.K;
+            m.refK = d.K;
+            m.refWidth = std::clamp(0.5 * d.widthM / halfPeriodM, 0.02, 0.9);
+            m.refAmp = d.heightM / std::max(0.5, st.cap.R0);
+            m.refExponent = d.exponent;
+            m.refTheta0 = (m.K && d.K % m.K == 0) ? m.theta0 : 0.0;
+            m.ampRel = m.maxAbs();
+            m.ampM = m.ampRel * st.cap.R0;
+            R.referenceDetails = true;
+        }
+    }
+
     void fitStack(const std::vector<MP>& pts, double yBottom, double yPeak, Stack& st, std::vector<MP>& above, const std::vector<Slice>* slicesIn, bool bandsOnly = false, double belowBaseR = 0) {
         st.yBottom = yBottom;
         double yTop = yBottom; for (const auto& m : pts) yTop = std::max(yTop, m.y);
@@ -1431,7 +1465,14 @@ private:
             // every crest (theta0: a facet's corner, a rib's ridge)
             const Modulation& dom = st.capMod.K ? st.capMod : st.bandMod;
             int N = p_.angularSegments;
-            if (dom.K) {
+            const int refK = st.capMod.refK;
+            if (refK) {
+                // the reference ribs: a whole number of samples per rib period, 10 across a rib's width
+                const int perR = static_cast<int>(std::ceil(std::max(4.0, 10.0 / std::max(0.02, st.capMod.refWidth))));
+                N = std::max(N, refK * perR);
+                const int L = dom.K ? std::lcm(refK, dom.K) : refK;
+                N = std::min(4096, ((N + L - 1) / L) * L);
+            } else if (dom.K) {
                 double per = 16;
                 for (const Modulation* m : {&st.capMod, &st.bandMod}) if (m->K && m->bumpAmp != 0) per = std::max(per, std::ceil(12.0 / std::max(0.02, m->bumpWidth)));
                 if (dom.facetAmp != 0) per = std::max(per, 24.0);
@@ -1439,7 +1480,7 @@ private:
                 N = std::min(2048, dom.K * perK);
                 N -= N % dom.K;
             }
-            const double thBase = dom.K ? dom.theta0 : -PI;
+            const double thBase = dom.K ? dom.theta0 : refK ? st.capMod.refTheta0 : -PI;
             // the meridian: (r, y, cap?) split into runs at corners (each run smooth-shaded on its own)
             struct MV { double r, y; bool cap; };
             std::vector<std::vector<MV>> runs;

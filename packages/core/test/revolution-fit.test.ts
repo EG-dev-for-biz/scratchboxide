@@ -21,6 +21,7 @@ import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { cutRevolutionsFromGlb, revolutionColourAtlas, revolutionCutMask, runRevolutionFit, writeRevolutionsGlb, type RevolutionFitRun } from '../src/node/3d-engine/staged-location/revolution-fit';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
+import { askRevolutionReference, referenceConsensus, referenceDetailLine, type ReferenceClient } from '../src/node/3d-engine/staged-location/revolution-reference';
 import { readGlbTriangles } from './helpers/clay-glb-render';
 import { AXIS, DOME, DRUM, LANTERN, MAST, RIBS, RING, ROOF_Y, domeR, syntheticScan } from './helpers/synthetic-dome';
 
@@ -211,6 +212,55 @@ describe('revolution fit (synthetic dome with a lantern and 12 ribs)', () => {
         expect(lantern.mastAbove).toBe(true);
         expect(lantern.cap!.cut).toBeLessThan(MAST.y1 - 1);
         expect(lantern.cap!.cut).toBeGreaterThan(LANTERN.y1);
+    }, 180_000);
+
+    it('adds ribs the scan cannot resolve only from what search-grounded references agree on, labelled as such', async () => {
+        const plain = syntheticScan({ ribs: false, lantern: false, seed: 11 });
+        const first = await runRevolutionFit(plain, tmp());
+        const r = first.report.revolutions.find(x => x.accepted)!;
+        // three answers (a fake client: tests never bill): raised ribs agreed, counts disagree (32, 20, 64)
+        const said = [{ ribCount: 32, ribsRaised: true, lanternHasFinial: true }, { ribCount: 28, ribsRaised: true, lanternHasFinial: true }, { ribCount: 64, ribsRaised: true, ribWidthM: 0.2, ribHeightM: 0.1, lanternHasFinial: true }];
+        let call = 0;
+        const client: ReferenceClient = { models: { generateContent: async (p: any) => {
+            expect(p.config.tools).toEqual([{ googleSearch: {} }]);
+            const a = said[call++];
+            return { candidates: [{ content: { parts: [{ text: '```json\n' + JSON.stringify({ ...a, evidence: 'test' }) + '\n```' }] }, groundingMetadata: { webSearchQueries: ['dome ribs'], groundingChunks: [{ web: { uri: 'https://example.org/dome' } }] } }] } as any;
+        } } };
+        const answers = await askRevolutionReference(client, ['m1', 'm2', 'm1'], 'prompt');
+        expect(answers.map(a => a.ribCount)).toEqual([32, 28, 64]);
+        expect(answers[0].queries).toEqual(['dome ribs']);
+        const ref = referenceConsensus(answers, r);
+        expect(ref.agreed.ribsRaised).toBe(true);
+        expect(ref.agreed.lanternHasFinial).toBe(true);
+        expect(ref.disagreed.ribCount).toEqual([32, 28, 64]);
+        // two of three cluster (32, 28): their median, 30, labelled an estimate
+        expect('K' in ref.ribs && ref.ribs.K).toBe(30);
+        expect('K' in ref.ribs && ref.ribs.countBasis).toMatch(/estimated/);
+        expect('K' in ref.ribs && ref.ribs.widthM).toBe(0.2);
+        // the fit run again with the detail: 32 narrow ribs on the cap, the measured profile unchanged
+        const second = await runRevolutionFit(plain, tmp(), {}, { detailLines: [referenceDetailLine(r, ref)!] });
+        const r2 = second.report.revolutions.find(x => x.accepted)!;
+        expect(r2.stacks[0].capModulation.reference?.K).toBe(30);
+        expect(r2.stacks[0].cap).toEqual(r.stacks[0].cap);
+        const mesh = second.meshes[0];
+        // count the ribs on a ring of vertices half way up the cap: radial maxima standing out of the shell
+        const cap = r2.stacks[0].cap!;
+        const yRing = cap.y0 + 0.4 * cap.H;
+        const ring: Array<[number, number]> = [];
+        for (let v = 0; v < mesh.positions.length / 3; v++) if (Math.abs(mesh.positions[v * 3 + 1] - yRing) < 0.06) ring.push([Math.atan2(mesh.positions[v * 3 + 2] - r2.axis.z, mesh.positions[v * 3] - r2.axis.x), Math.hypot(mesh.positions[v * 3] - r2.axis.x, mesh.positions[v * 3 + 2] - r2.axis.z)]);
+        ring.sort((a, b) => a[0] - b[0]);
+        const shell = [...ring.map(q => q[1])].sort((a, b) => a - b)[ring.length >> 1];
+        let ribs = 0, inRib = false;
+        for (const [, rr] of ring) { const up = rr > shell + 0.04; if (up && !inRib) ribs++; inRib = up; }
+        if (ring[0][1] > shell + 0.04 && ring[ring.length - 1][1] > shell + 0.04) ribs--;  // a rib across the +-pi seam
+        expect(ring.length).toBeGreaterThan(200);
+        expect(ribs).toBe(30);
+        // counts too scattered (32, 20, 64): nothing is filled
+        const scattered = referenceConsensus([answers[0], { ...answers[1], ribCount: 20 }, answers[2]], r);
+        expect('none' in scattered.ribs && scattered.ribs.none).toMatch(/too widely/);
+        // no agreement that the ribs are raised: nothing is added
+        const none = referenceConsensus([{ ...answers[0], ribsRaised: true }, { ...answers[1], ribsRaised: false }], r);
+        expect('none' in none.ribs).toBe(true);
     }, 180_000);
 
     it('finds no ribs on a plain dented dome (the noise is not read as a period)', async () => {

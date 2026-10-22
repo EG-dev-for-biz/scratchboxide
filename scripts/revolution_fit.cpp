@@ -12,7 +12,7 @@
  * are solids of revolution about a vertical axis, fits and rebuilds them, and writes report.json and mesh.bin into the
  * out dir. Prints {"ok":true,...} or {"ok":false,"error":...} and exits non-zero on failure.
  *
- *   revolution_fit <input.sbrv> <outDir> [key=value ...]
+ *   revolution_fit <input.sbrv> <outDir> [key=value ...] [detail=<file: x z K widthM heightM exponent per line>]
  *
  * Build:
  *   clang++ -std=c++20 -O3 -I packages/core/src/native/3d-engine/include scripts/revolution_fit.cpp -o build/3d-native/revolution_fit
@@ -21,6 +21,7 @@
 #include "scratchbox_revolution_fit.hpp"
 
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 
 int main(int argc, char** argv) {
@@ -31,15 +32,25 @@ int main(int argc, char** argv) {
     }
     try {
         Params p;
+        std::vector<Detail> details;
         for (int i = 3; i < argc; ++i) {
             const std::string a = argv[i];
             const auto eq = a.find('=');
             if (eq == std::string::npos) throw std::runtime_error("expected key=value, got " + a);
+            if (a.substr(0, eq) == "detail") {
+                // reference detail lines: x z K widthM heightM exponent
+                std::ifstream f(a.substr(eq + 1));
+                if (!f) throw std::runtime_error("cannot read " + a.substr(eq + 1));
+                Detail d;
+                while (f >> d.x >> d.z >> d.K >> d.widthM >> d.heightM >> d.exponent) details.push_back(d);
+                continue;
+            }
             p.set(a.substr(0, eq), std::stod(a.substr(eq + 1)));
         }
         const std::string out = argv[2];
         std::filesystem::create_directories(out);
         RevolutionFit fit(readInput(argv[1]), p);
+        fit.setDetails(details);
         fit.run();
         {
             std::ofstream r(out + "/report.json");

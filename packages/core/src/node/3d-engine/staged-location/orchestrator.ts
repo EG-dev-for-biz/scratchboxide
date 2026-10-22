@@ -88,6 +88,7 @@ import { assembleDistrictLayer, inBackground, districtMassingManifest, findStore
 import { objectInputHash } from '../../asset-store/scene-object-store';
 import { parseGlbBytes } from './glb-bytes';
 import { defaultDurableAssetStore } from '../../asset-store/durable-asset-store';
+import { REVOLUTION_REFERENCE_VERSION, revolutionReferenceEnabled, revolutionReferenceFor } from './revolution-reference';
 import { buildGroundSurface, groundHeightAt, PROCEDURAL_GROUND_VERSION, settleRoadsOnGround } from './procedural-ground';
 import {
     coveredShare, frameToLatLng, paintGeneratedHeightProvenance, paintProvenance, selectPaintBuildings, tilePlanCoverage, writePaintGlb,
@@ -3813,8 +3814,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const look = evidenceLookup(ev, covered + 20);
                     const vectorKey = crypto.createHash('sha256').update(JSON.stringify([ev.buildings.map(b => [b.id, b.parts, b.heightM ?? null, b.extruded ?? null]), ev.water, ev.roads])).digest('hex').slice(0, 16);
                     const revolutionsOn = revolutionFitEnabled();
+                    // detail the scan cannot resolve (ribs) from search-grounded references, when a model client is configured
+                    const referenceClient = revolutionsOn && revolutionReferenceEnabled() && deps.vision && 'client' in deps.vision ? deps.vision.client : undefined;
                     const surfaceMode = proceduralSurfaceMode();
-                    const key = stageKey(DISTRICT_MASSING_VERSION, districtEDetailEnabled() ? DISTRICT_E_DETAIL_VERSION : 'no-detail', stripped.cacheKey, vectorKey, refined.cacheKey, covered.toFixed(1), String(DISTRICT_TEXEL_M), procedural ? `${PROCEDURAL_GROUND_VERSION}+${PROCEDURAL_ROADS_VERSION}${deps.textures?.disabled && surfaceMode === 'photo' ? '' : `+${PROCEDURAL_MATERIALS_VERSION}+${surfaceMode}`}` : 'carve', ...(revolutionsOn ? [REVOLUTION_FIT_VERSION] : []));
+                    const key = stageKey(DISTRICT_MASSING_VERSION, districtEDetailEnabled() ? DISTRICT_E_DETAIL_VERSION : 'no-detail', stripped.cacheKey, vectorKey, refined.cacheKey, covered.toFixed(1), String(DISTRICT_TEXEL_M), procedural ? `${PROCEDURAL_GROUND_VERSION}+${PROCEDURAL_ROADS_VERSION}${deps.textures?.disabled && surfaceMode === 'photo' ? '' : `+${PROCEDURAL_MATERIALS_VERSION}+${surfaceMode}`}` : 'carve', ...(revolutionsOn ? [REVOLUTION_FIT_VERSION] : []), ...(referenceClient ? [REVOLUTION_REFERENCE_VERSION] : []));
                     run.keys.massing = key;
                     const key8 = key.slice(0, 8);
                     // the scene object store: each rebuilt building, the ground and the streets kept as their own versioned
@@ -3909,7 +3912,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                     r.remember();
                                     return text;
                                 } : undefined;
-                                return await reviseForRevolutions({ dir, scanGlb: stripped.devegetatedGlb, within, cutFiles: cutFiles.map(f => path.join(dir, f)), signal: io.signal, ...(judgePlan ? { judgePlan } : {}), outlines: ev.buildings.flatMap(b => [...(b.extruded ?? []).map(e => e.loops[0]), ...b.parts.map(pt => pt[0])]).filter(Boolean) as Array<Array<[number, number]>> });
+                                const origin: GeodeticOrigin = { lat: placeValue!.lat, lng: placeValue!.lng, heightMeters: 0 };
+                                const reference = referenceClient ? revolutionReferenceFor({ client: referenceClient, place: placeValue!.formattedAddress, toLatLng: (x, z) => scanToGeodetic(origin, x, 0, z) }) : undefined;
+                                return await reviseForRevolutions({ dir, scanGlb: stripped.devegetatedGlb, within, cutFiles: cutFiles.map(f => path.join(dir, f)), signal: io.signal, ...(judgePlan ? { judgePlan } : {}), ...(reference ? { reference } : {}), outlines: ev.buildings.flatMap(b => [...(b.extruded ?? []).map(e => e.loops[0]), ...b.parts.map(pt => pt[0])]).filter(Boolean) as Array<Array<[number, number]>> });
                             } catch (err) {
                                 if (isAbort(err)) throw err;
                                 cache.writeRunNote(runId, 'revolution_fit', { error: errorMessage(err) });
@@ -4084,7 +4089,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         objectId: layerObjectId(key, 'l2v'), stage: 'massing', layer: 'l2v', order: STAGES.massing.order, url: pubRev.url, bytes: pubRev.bytes,
                         provenance: {
                             label: 'generated', measuredGeometry: false, confidence: round(Math.min(...v.revolutions.revolutions.map(r => r.confidence)), 3),
-                            method: `${REVOLUTION_FIT_VERSION}: parts whose horizontal sections the scan measures as circles about one vertical axis, rebuilt as one smooth profile (rings where the sections step, stacked revolutions above the cap, periodic ribs only where the residual shows them) instead of the scan's dented copy; coloured per height from the de-lit tile photo`,
+                            method: `${REVOLUTION_FIT_VERSION}: parts whose horizontal sections the scan measures as circles about one vertical axis, rebuilt as one smooth profile (rings where the sections step, stacked revolutions above the cap, periodic ribs only where the residual shows them) instead of the scan's dented copy; masts as their measured sections; ribs the scan cannot resolve from search-grounded references only where they agree (an estimate where they disagree on a count), labelled per node; coloured per height from the de-lit tile photo`,
                             sources, note: v.revolutions.revolutions.map(r => r.summary).join(' | ')
                         },
                         provenanceLabels: ['generated'], supersedes: [], revealAfter: [], reveal: { durationMs: 1200, stagger: 0.3, crossfadeFrom: [] },

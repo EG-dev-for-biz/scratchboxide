@@ -29,6 +29,7 @@ import { encodePng } from './png-encode';
 import { writeStagedGlbFile, type StagedGlbNode } from './staged-glb-writer';
 import { buildTileSurface, readTileTriangles, selectTriangles, type TileTextureSurface } from './tile-texture-transfer';
 import { renderTopDownPhoto, topDownJpeg } from './top-down-photo';
+import { referenceDetailLine, type RevolutionReference } from './revolution-reference';
 
 export const REVOLUTION_FIT_VERSION = 'revolution-fit/2';
 
@@ -53,6 +54,8 @@ export interface RevolutionModulation {
      * + facetAmp (P(phi) - mean P), g(x) = exp(-|x / (bumpWidth pi)|^bumpExponent), P the radius of a K-gon's flat facets
      * with corners at phi = 0. Only the family that fits the folded residual carries an amplitude.
      */
+    /** Ribs from a reference the scan cannot resolve (revolution-reference.ts), on the cap: K ribs, half width `width` of half a period, `amp` of the radius. */
+    reference: { K: number; width: number; amp: number; exponent: number; theta0: number } | null;
     shape: { theta0: number; offset: number; cosAmp: number; bumpAmp: number; bumpWidth: number; bumpExponent: number; bumpCentre: number; facetAmp: number; rmsRel: number; explained: number };
     /** (k, a, b): m(theta) = sum a cos(k theta) + b sin(k theta), relative to the radius. */
     harmonics: Array<[number, number, number]>;
@@ -66,7 +69,7 @@ export interface RevolutionStack {
     mastAbove: boolean;
     /** Height over radius of the topmost run of thin sections (0: none). */
     slenderness: number;
-    bands: Array<{ y0: number; y1: number; r: number; slices: number }>;
+    bands: Array<{ y0: number; y1: number; r0: number; r1: number; slices: number }>;
     /** r(t) = R0 (1 - t^q)^(1/p) (1 + b 4 t (1 - t)), t = (y - y0) / H. */
     cap: { y0: number; R0: number; H: number; p: number; q: number; b: number; cut: number | null } | null;
     bandModulation: RevolutionModulation;
@@ -136,12 +139,17 @@ export function encodeRevolutionInput(positions: Float32Array, indices?: Uint32A
 }
 
 /** Runs the tool on a triangle mesh (tile frame) in `dir` (created); throws with the tool's own error. */
-export async function runRevolutionFit(mesh: { positions: Float32Array; indices?: Uint32Array }, dir: string, params: RevolutionFitParams = {}, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<RevolutionFitRun> {
+export async function runRevolutionFit(mesh: { positions: Float32Array; indices?: Uint32Array }, dir: string, params: RevolutionFitParams = {}, opts: { timeoutMs?: number; signal?: AbortSignal; detailLines?: string[] } = {}): Promise<RevolutionFitRun> {
     const binary = await ensureRevolutionBinary();
     fs.mkdirSync(dir, { recursive: true });
     const input = path.join(dir, 'input.sbrv');
     fs.writeFileSync(input, encodeRevolutionInput(mesh.positions, mesh.indices));
     const args = [input, dir, ...Object.entries(params).filter(([, v]) => v !== undefined && Number.isFinite(v)).map(([k, v]) => `${k}=${v}`)];
+    if (opts.detailLines?.length) {
+        const detail = path.join(dir, 'detail.txt');
+        fs.writeFileSync(detail, opts.detailLines.join('\n') + '\n');
+        args.push(`detail=${detail}`);
+    }
     const t0 = Date.now();
     const stdout = await new Promise<string>((resolve, reject) => {
         execFile(binary, args, { timeout: opts.timeoutMs ?? 300_000, killSignal: 'SIGKILL', maxBuffer: 8 * 1024 * 1024, ...(opts.signal ? { signal: opts.signal } : {}) }, (err, out, errOut) => {
@@ -227,14 +235,25 @@ export function describeRevolution(r: RevolutionRecord): string {
     if (r.stacks.length > 1) parts.push(`${r.stacks.length - 1} stacked revolution${r.stacks.length > 2 ? 's' : ''} above`);
     const mods = r.stacks.flatMap(s => [s.bandModulation, s.capModulation]).filter(m => m.K > 0);
     if (mods.length) parts.push(`periodic modulation ${mods.map(m => `K ${m.K}, ${(m.ampM * 100).toFixed(0)} cm, ${modulationShapeText(m)}`).join('; ')}`);
+    const refs = r.stacks.map(s => s.capModulation.reference).filter((x): x is NonNullable<typeof x> => !!x);
+    if (refs.length) parts.push(refs.map(x => `${x.K} raised ribs from search-grounded references (generated, ${(x.amp * 100).toFixed(1)}% of the radius high)`).join('; '));
     const masts = r.stacks.filter(s => s.bandsOnly);
     if (masts.length) parts.push(masts.map(s => `a mast to ${s.yTop.toFixed(1)} m at r ${(s.bands.reduce((a, b) => a + (b.r0 + b.r1) / 2, 0) / Math.max(1, s.bands.length)).toFixed(2)} m (slenderness ${s.slenderness.toFixed(0)}), no cap on it`).join('; '));
     return `axis at (${r.axis.x.toFixed(2)}, ${r.axis.z.toFixed(2)}) +- ${r.axis.errM.toFixed(2)} m; ${parts.join('; ')}; scan RMS ${r.fit.rmsM.toFixed(2)} m (truncated at 0.5 m: ${r.fit.rmsTruncM.toFixed(2)} m), ${Math.round(r.fit.within25cm * 100)}% within 25 cm; ${r.departures.length} local departure${r.departures.length === 1 ? '' : 's'} reported, not rebuilt`;
 }
 
 /** The node extras of a rebuilt revolution (staged provenance: an estimate fitted to the measured scan). */
-export function revolutionNodeExtras(r: RevolutionRecord): Record<string, unknown> {
+export function revolutionNodeExtras(r: RevolutionRecord, reference?: RevolutionReference): Record<string, unknown> {
+    const refRibs = reference && 'K' in reference.ribs ? reference.ribs : undefined;
     return {
+        ...(reference ? {
+            referenceDetail: {
+                provenance: 'generated', basis: 'search-grounded reference', applied: !!refRibs,
+                ...(refRibs ? { ribs: refRibs } : { reason: (reference.ribs as { none: string }).none }),
+                agreed: reference.agreed, disagreed: reference.disagreed,
+                answers: reference.answers.map(a => ({ model: a.model, ribCount: a.ribCount, lanternHasCupola: a.lanternHasCupola, lanternHasFinial: a.lanternHasFinial, finialKind: a.finialKind, evidence: a.evidence, queries: a.queries.slice(0, 12), sources: a.sources.slice(0, 8), ...(a.error ? { error: a.error } : {}) }))
+            }
+        } : {}),
         provenance: 'generated',
         confidence: revolutionConfidence(r),
         method: `${REVOLUTION_FIT_VERSION}: a solid of revolution whose vertical axis and smooth profile were fitted to the measured scan's horizontal sections, with rings, stacked revolutions and periodic ribs only where the scan's residual shows them; the scan's dents are not kept`,
@@ -326,12 +345,12 @@ function meridianRadius(s: RevolutionStack, y: number): number {
 }
 
 /** Writes the accepted revolutions as one staged GLB (one node each), coloured from `atlas` when given. */
-export function writeRevolutionsGlb(file: string, run: Pick<RevolutionFitRun, 'report' | 'meshes'>, atlas?: ReturnType<typeof revolutionColourAtlas>): { path: string; bytes: number; nodes: number } {
+export function writeRevolutionsGlb(file: string, run: Pick<RevolutionFitRun, 'report' | 'meshes'>, atlas?: ReturnType<typeof revolutionColourAtlas>, references?: Map<number, RevolutionReference>): { path: string; bytes: number; nodes: number } {
     const byId = new Map(run.report.revolutions.map(r => [r.id, r]));
     const nodes: StagedGlbNode[] = run.meshes.map(m => ({
         name: `revolution_${m.id}`, positions: m.positions, normals: m.normals, indices: m.indices,
         ...(atlas?.uv.get(m.id) ? { uv: atlas.uv.get(m.id)! } : {}),
-        extras: { ...revolutionNodeExtras(byId.get(m.id)!), ...(atlas ? { colour: 'per height, the median of the de-lit tile photo sampled around the rebuilt surface (photo-inferred, uniform about the axis as the shape is)' } : {}) }
+        extras: { ...revolutionNodeExtras(byId.get(m.id)!, references?.get(m.id)), ...(atlas ? { colour: 'per height, the median of the de-lit tile photo sampled around the rebuilt surface (photo-inferred, uniform about the axis as the shape is)' } : {}) }
     }));
     const out = writeStagedGlbFile(file, nodes, {
         rootExtras: { sbRevolutionFit: { version: REVOLUTION_FIT_VERSION, accepted: nodes.length, candidates: run.report.candidates } },
@@ -403,6 +422,8 @@ export interface RevolutionLayerSummary {
     rejected: Record<string, number>;
     revolutions: Array<{ id: number; axis: RevolutionRecord['axis']; fit: RevolutionRecord['fit']; confidence: number; stacks: number; modulationK: number[]; departures: number; summary: string }>;
     colourSampledShare: number;
+    /** Search-grounded references per accepted revolution: what they agreed on, and the ribs added (or why none were). */
+    references?: Array<{ id: number; agreed: RevolutionReference['agreed']; disagreed: RevolutionReference['disagreed']; ribs: RevolutionReference['ribs']; models: string[] }>;
     ms: number;
 }
 
@@ -551,7 +572,7 @@ export type PlanJudge = (image: { bytes: Uint8Array; mimeType: string }, prompt:
  * coloured from the same scan's photo and written to `<outDir>/revolutions.glb`. Returns the run (for cutting the parts
  * out of other layers) and a summary, or the summary alone when nothing was accepted.
  */
-export async function buildRevolutionLayer(input: { scanGlb: string; outDir: string; within?: (x: number, z: number) => boolean; params?: RevolutionFitParams; signal?: AbortSignal; /** Vector footprint outlines (x, z): a few-sided one under a part vetoes it (vectorOutlineVeto). */ outlines?: Array<Array<[number, number]>>; /** The plan-view check (revolutionPlanPrompt). */ judgePlan?: PlanJudge }): Promise<{ summary: RevolutionLayerSummary; run: RevolutionFitRun; file?: string }> {
+export async function buildRevolutionLayer(input: { scanGlb: string; outDir: string; within?: (x: number, z: number) => boolean; params?: RevolutionFitParams; signal?: AbortSignal; /** Vector footprint outlines (x, z): a few-sided one under a part vetoes it (vectorOutlineVeto). */ outlines?: Array<Array<[number, number]>>; /** The plan-view check (revolutionPlanPrompt). */ judgePlan?: PlanJudge; /** Search-grounded detail the scan cannot resolve (revolution-reference.ts). */ reference?: (r: RevolutionRecord) => Promise<RevolutionReference | undefined> }): Promise<{ summary: RevolutionLayerSummary; run: RevolutionFitRun; file?: string }> {
     const t0 = Date.now();
     const bytes = fs.readFileSync(input.scanGlb);
     let tris = readTileTriangles(bytes);
@@ -560,37 +581,63 @@ export async function buildRevolutionLayer(input: { scanGlb: string; outDir: str
         for (let t = 0; t < keep.length; t++) keep[t] = input.within((tris.positions[t * 9] + tris.positions[t * 9 + 3] + tris.positions[t * 9 + 6]) / 3, (tris.positions[t * 9 + 2] + tris.positions[t * 9 + 5] + tris.positions[t * 9 + 8]) / 3) ? 1 : 0;
         tris = selectTriangles(tris, keep);
     }
-    const run = await runRevolutionFit({ positions: tris.positions }, path.join(input.outDir, 'revolution_fit'), input.params ?? {}, input.signal ? { signal: input.signal } : {});
+    const fit = (detailLines?: string[]) => runRevolutionFit({ positions: tris.positions }, path.join(input.outDir, 'revolution_fit'), input.params ?? {}, { ...(input.signal ? { signal: input.signal } : {}), ...(detailLines ? { detailLines } : {}) });
+    // the plan-view verdict per part, by axis position, so a re-fit does not ask the model twice
+    const planVerdicts = new Map<string, string | undefined>();
     // planes first: a part whose sections are clearly a few-sided polygon is not a revolution
-    for (const r of run.report.revolutions.filter(x => x.accepted)) {
-        let why = (input.outlines ? vectorOutlineVeto(r, input.outlines) : undefined) ?? polygonalSections(r, tris.positions).reason;
-        if (!why && input.judgePlan) {
-            // straight down on the tile photo, three radii each way
-            const span = Math.max(12, r.plan.r * 6);
-            try {
-                const photo = renderTopDownPhoto(tris, { x0: r.axis.x - span / 2, z0: r.axis.z - span / 2, widthM: span, heightM: span }, { texelM: Math.max(0.05, span / 768), maxPx: 1024 });
-                why = planVetoReason(parseRevolutionPlan(await input.judgePlan({ bytes: topDownJpeg(photo), mimeType: 'image/jpeg' }, revolutionPlanPrompt(r.plan.r, span))));
-            } catch (err) {
-                if (input.signal?.aborted) throw err;
-                // no answer: the part keeps its fit (the scan and vector checks passed)
+    const veto = async (run: RevolutionFitRun) => {
+        for (const r of run.report.revolutions.filter(x => x.accepted)) {
+            let why = (input.outlines ? vectorOutlineVeto(r, input.outlines) : undefined) ?? polygonalSections(r, tris.positions).reason;
+            if (!why && input.judgePlan) {
+                const at = `${r.axis.x.toFixed(1)},${r.axis.z.toFixed(1)}`;
+                if (planVerdicts.has(at)) why = planVerdicts.get(at);
+                else {
+                    // straight down on the tile photo, three radii each way
+                    const span = Math.max(12, r.plan.r * 6);
+                    try {
+                        const photo = renderTopDownPhoto(tris, { x0: r.axis.x - span / 2, z0: r.axis.z - span / 2, widthM: span, heightM: span }, { texelM: Math.max(0.05, span / 768), maxPx: 1024 });
+                        why = planVetoReason(parseRevolutionPlan(await input.judgePlan({ bytes: topDownJpeg(photo), mimeType: 'image/jpeg' }, revolutionPlanPrompt(r.plan.r, span))));
+                        planVerdicts.set(at, why);
+                    } catch (err) {
+                        if (input.signal?.aborted) throw err;
+                        // no answer: the part keeps its fit (the scan and vector checks passed)
+                    }
+                }
             }
+            if (why) { r.accepted = false; r.reason = why; }
         }
-        if (why) { r.accepted = false; r.reason = why; }
+        run.meshes = run.meshes.filter(m => run.report.revolutions.some(r => r.id === m.id && r.accepted));
+        return run;
+    };
+    let run = await veto(await fit());
+    // detail the scan cannot resolve, from search-grounded references, for the parts the vetoes kept: the fit runs again
+    // with it (same scan, same fit) and the vetoes apply to the re-fit too
+    const references = new Map<number, RevolutionReference>();
+    if (input.reference) {
+        const lines: string[] = [];
+        for (const r of run.report.revolutions.filter(x => x.accepted)) {
+            const ref = await input.reference(r).catch(() => undefined);
+            if (!ref) continue;
+            references.set(r.id, ref);
+            const line = referenceDetailLine(r, ref);
+            if (line) lines.push(line);
+        }
+        if (lines.length) run = await veto(await fit(lines));
     }
-    run.meshes = run.meshes.filter(m => run.report.revolutions.some(r => r.id === m.id && r.accepted));
     const acc = run.report.revolutions.filter(r => r.accepted);
     const rejected: Record<string, number> = {};
     for (const r of run.report.revolutions.filter(x => !x.accepted)) { const k = r.reason.replace(/[\d.]+/g, 'N'); rejected[k] = (rejected[k] ?? 0) + 1; }
     const summary: RevolutionLayerSummary = {
         version: REVOLUTION_FIT_VERSION, candidates: run.report.candidates, accepted: acc.length, rejected,
         revolutions: acc.map(r => ({ id: r.id, axis: r.axis, fit: r.fit, confidence: revolutionConfidence(r), stacks: r.stacks.length, modulationK: r.stacks.flatMap(s => [s.bandModulation.K, s.capModulation.K]).filter(k => k > 0), departures: r.departures.length, summary: describeRevolution(r) })),
-        colourSampledShare: 0, ms: 0
+        colourSampledShare: 0, ms: 0,
+        ...(references.size ? { references: [...references].map(([id, ref]) => ({ id, agreed: ref.agreed, disagreed: ref.disagreed, ribs: ref.ribs, models: ref.answers.map(a => a.model) })) } : {})
     };
     if (!acc.length) { summary.ms = Date.now() - t0; return { summary, run }; }
     const atlas = revolutionColourAtlas(run, buildTileSurface(tris));
     summary.colourSampledShare = Math.round(atlas.sampledShare * 1000) / 1000;
     const file = path.join(input.outDir, 'revolutions.glb');
-    writeRevolutionsGlb(file, run, atlas);
+    writeRevolutionsGlb(file, run, atlas, references);
     summary.ms = Date.now() - t0;
     return { summary, run, file };
 }
@@ -600,8 +647,8 @@ export async function buildRevolutionLayer(input: { scanGlb: string; outDir: str
  * each of `cutFiles` (in place: the scan's dented copy and any massing block standing where a rebuilt part now stands).
  * Returns the summary with the triangles cut per file.
  */
-export async function reviseForRevolutions(input: { dir: string; scanGlb: string; within?: (x: number, z: number) => boolean; cutFiles: string[]; signal?: AbortSignal; outlines?: Array<Array<[number, number]>>; judgePlan?: PlanJudge }): Promise<RevolutionLayerSummary & { cut: Record<string, number> }> {
-    const { summary, run, file } = await buildRevolutionLayer({ scanGlb: input.scanGlb, outDir: input.dir, ...(input.within ? { within: input.within } : {}), ...(input.signal ? { signal: input.signal } : {}), ...(input.outlines ? { outlines: input.outlines } : {}), ...(input.judgePlan ? { judgePlan: input.judgePlan } : {}) });
+export async function reviseForRevolutions(input: { dir: string; scanGlb: string; within?: (x: number, z: number) => boolean; cutFiles: string[]; signal?: AbortSignal; outlines?: Array<Array<[number, number]>>; judgePlan?: PlanJudge; reference?: (r: RevolutionRecord) => Promise<RevolutionReference | undefined> }): Promise<RevolutionLayerSummary & { cut: Record<string, number> }> {
+    const { summary, run, file } = await buildRevolutionLayer({ scanGlb: input.scanGlb, outDir: input.dir, ...(input.within ? { within: input.within } : {}), ...(input.signal ? { signal: input.signal } : {}), ...(input.outlines ? { outlines: input.outlines } : {}), ...(input.judgePlan ? { judgePlan: input.judgePlan } : {}), ...(input.reference ? { reference: input.reference } : {}) });
     const cut: Record<string, number> = {};
     if (file) for (const f of input.cutFiles) {
         if (!fs.existsSync(f)) continue;
