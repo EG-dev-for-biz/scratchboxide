@@ -1,0 +1,25 @@
+{
+ "about": "What scripts/generate_surface_textures.ts asks the image model for: one entry per surface, described in words with the real-world patch one tile shows. Data only; add a line to add a surface.",
+ "surfaces": [
+  { "id": "asphalt_worn", "prompt": "a worn city asphalt road surface, mid grey with exposed light aggregate stones, fine hairline cracks and faint oil darkening", "realSizeM": [2, 2] },
+  { "id": "asphalt_fresh", "prompt": "fresh dark asphalt road surface, near black, fine even aggregate, slight sheen", "realSizeM": [2, 2] },
+  { "id": "concrete_footpath", "prompt": "a light grey broom-finished concrete footpath with saw-cut joints about every 1.2 m, light wear and a few stains", "realSizeM": [2.4, 2.4] },
+  { "id": "bluestone_pavers", "prompt": "dark blue-grey sawn bluestone (basalt) paving slabs, rectangular 600 by 300 mm laid in a stretcher bond, fine pores and tight joints", "realSizeM": [2.4, 2.4] },
+  { "id": "granite_setts", "prompt": "grey granite setts (cobbles) about 100 by 200 mm, laid in rows, rounded worn tops with dark gaps between", "realSizeM": [1.2, 1.2] },
+  { "id": "red_brick_wall", "prompt": "a red clay brick wall in stretcher bond, standard 230 by 76 mm bricks, slightly varied red-brown bricks, light grey mortar joints recessed a few millimetres", "realSizeM": [1.4, 1.4] },
+  { "id": "cream_brick_wall", "prompt": "a cream and buff brick wall in stretcher bond, standard bricks with slightly varied tones, pale mortar joints", "realSizeM": [1.4, 1.4] },
+  { "id": "sandstone_ashlar", "prompt": "a warm honey sandstone ashlar wall, dressed rectangular blocks about 600 by 300 mm, fine tooling marks, thin joints, light weathering", "realSizeM": [2.4, 2.4] },
+  { "id": "basalt_ashlar", "prompt": "a dark grey dressed bluestone (basalt) ashlar wall, rusticated rectangular blocks about 700 by 350 mm with chiselled faces and deep joints", "realSizeM": [2.8, 2.8] },
+  { "id": "painted_render", "prompt": "a smooth painted cement render wall, warm off-white, very fine texture with faint trowel marks and light grime", "realSizeM": [2, 2] },
+  { "id": "board_formed_concrete", "prompt": "a grey board-formed concrete wall showing horizontal timber board grain about 100 mm wide and tie holes in a grid", "realSizeM": [2.4, 2.4] },
+  { "id": "precast_concrete_panel", "prompt": "smooth light grey precast concrete facade panel with a faint sandblasted finish and subtle staining", "realSizeM": [2, 2] },
+  { "id": "standing_seam_metal", "prompt": "a dark charcoal standing seam metal roof or cladding, vertical seams about 400 mm apart, matte finish", "realSizeM": [2, 2] },
+  { "id": "corrugated_iron", "prompt": "galvanised corrugated iron sheeting, light grey zinc with faint mottling, corrugations running vertically about 76 mm apart", "realSizeM": [1.2, 1.2] },
+  { "id": "slate_roof", "prompt": "a grey-blue slate roof seen straight on, overlapping rectangular slates about 500 by 250 mm in courses, slightly uneven edges", "realSizeM": [2, 2] },
+  { "id": "terracotta_roof", "prompt": "an orange-red terracotta tiled roof seen straight on, interlocking Marseille tiles in courses, weathered with dark patches", "realSizeM": [2, 2] },
+  { "id": "lawn_grass", "prompt": "a mown green city lawn seen from above, dense short grass blades with slight colour variation and a few small clover patches", "realSizeM": [2, 2] },
+  { "id": "fine_gravel", "prompt": "a compacted fine gravel path seen from above, buff and grey crushed stone about 5 to 10 mm", "realSizeM": [1, 1] },
+  { "id": "timber_decking", "prompt": "weathered hardwood timber decking boards about 140 mm wide running horizontally, silver-brown with dark gaps between boards", "realSizeM": [1.4, 1.4] },
+  { "id": "painted_steel", "prompt": "flat painted structural steel, dark green gloss paint slightly chalky with fine scratches and a few rust spots", "realSizeM": [1, 1] }
+ ]
+}
