@@ -801,16 +801,16 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
     // ------------------------------------------------------------------ (h) real Street View texels on the walls
     // (street-view-texels.ts): once the plates are decided, each wall takes the registered, owned photo where it sees the wall
     // sharper than the tile ortho; labelled photo-inferred. Before this step no Street View pixel reached a texel in pipeline E.
-    // On by default (user decision, 2026-10-21: err toward clean geometry and complex textures wherever they come
-    // from); SCRATCHBOX_STREETVIEW_TEXELS=0 reverts to not baking them. On the one held-out bake-off run so far
-    // (Haughwout), baking real, correctly gated texels lowered the overall and realism judge scores against not
-    // baking them at all (see docs/processes/streetview_value.md) even though the gates themselves worked as
-    // designed - that measured finding still stands, this is a deliberate override of it, not a reversal of it.
+    // Off by default (user decision, 2026-10-21, reaffirmed): texturing infers from the 3D photo tiles themselves
+    // (tile-ortho projection + the photo-tier texture pass, texture-pass.ts) rather than pulling in a second,
+    // separately-registered photo source. This also matches the one held-out bake-off run so far (Haughwout),
+    // where baking real, correctly gated Street View texels lowered the overall and realism judge scores against
+    // not baking them at all (see docs/processes/streetview_value.md). SCRATCHBOX_STREETVIEW_TEXELS=1 opts back in.
     t = now();
     const svtStep = rec('street-view-texels');
     const streetViewTexels: StreetViewTexelRecord[] = [];
-    if (process.env.SCRATCHBOX_STREETVIEW_TEXELS === '0') {
-        svtStep.skipped = 'disabled (SCRATCHBOX_STREETVIEW_TEXELS=0): not requested';
+    if (process.env.SCRATCHBOX_STREETVIEW_TEXELS !== '1') {
+        svtStep.skipped = 'disabled by default (SCRATCHBOX_STREETVIEW_TEXELS=1 opts in): texturing infers from the 3D photo tiles instead';
     } else {
         const pool = new Map<string, GuideView>();
         const add = (v: ProjectionView & { registration?: GuideView['registration']; depth?: Float32Array }) => {
