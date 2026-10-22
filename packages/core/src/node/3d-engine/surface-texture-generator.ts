@@ -43,9 +43,11 @@ export const SURFACE_TEXTURE_PARAMS = {
      * The vision critic's repeat severity (0..1): painting stops once an attempt reaches the target, and a material whose best
      * attempt exceeds the maximum is not kept. The critic is harsh and ranks well but scores overlap (2026-10-22, 19 entries:
      * those showing a grid by eye 0.55-0.68, those that do not 0.28-0.65), so it selects among attempts more than it gates.
+     * The maximum was 0.6 until the second library: everything kept above 0.5 showed a defect by eye (corrugated and standing
+     * seam bands 0.55-0.58, footpath stains 0.58, ashlar placements 0.55).
      */
     targetRepeatSeverity: 0.45,
-    maxRepeatSeverity: 0.6,
+    maxRepeatSeverity: 0.5,
     /** Paintings at most per entry. */
     paintAttempts: 4,
     /** Wrap context given to the depth model on every side, as a share of the side. */

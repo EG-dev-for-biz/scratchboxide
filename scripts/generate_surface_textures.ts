@@ -12,7 +12,10 @@
  * each map at /models/surfaces/<id>/<map>.jpg, the index at /models/surfaces/index.json, each entry with its recipe so it
  * can be made again. Real model calls (billed); never run from tests.
  *
- *   tsx --env-file=.env scripts/generate_surface_textures.ts [--only id,id] [--out dir] [--concurrency 4]
+ *   tsx --env-file=.env scripts/generate_surface_textures.ts [--only id,id] [--out dir] [--concurrency 4] [--prune]
+ *
+ * --prune generates nothing: it drops from the stored index every entry the current standard would not keep (no critique,
+ * or a repeat severity over SURFACE_TEXTURE_PARAMS.maxRepeatSeverity) and prints what it dropped.
  *
  * Entries already in the stored index and not generated this run are kept; an entry that fails is removed from it.
  */
@@ -29,7 +32,7 @@ import { decodeImageToRgba, encodeRgbaToJpeg } from '../packages/core/src/node/i
 import { resampleRgba } from '../packages/core/src/node/texture-processing';
 import { encodePng } from '../packages/core/src/node/3d-engine/staged-location/png-encode';
 import { defaultDurableAssetStore } from '../packages/core/src/node/asset-store/durable-asset-store';
-import { generateSurfaceTexture, type SurfaceTextureModels, type SurfaceTextureSpec } from '../packages/core/src/node/3d-engine/surface-texture-generator';
+import { generateSurfaceTexture, SURFACE_TEXTURE_PARAMS, type SurfaceTextureModels, type SurfaceTextureSpec } from '../packages/core/src/node/3d-engine/surface-texture-generator';
 import { SURFACE_TEXTURE_SCHEMA, validateSurfaceTextureIndex, type SurfaceTextureEntry, type SurfaceTextureIndex } from '../packages/core/src/common/spatial/surface-texture-library';
 
 export const SURFACES_SERVED_DIR = '/models/surfaces';
@@ -40,6 +43,7 @@ function arg(name: string): string | undefined {
 }
 
 async function main(): Promise<void> {
+    if (process.argv.includes('--prune')) return prune();
     const specs = (JSON.parse(fs.readFileSync(path.join(__dirname, 'surface-textures', 'specs.json'), 'utf8')).surfaces as SurfaceTextureSpec[]);
     const only = arg('only')?.split(',').map(s => s.trim()).filter(Boolean);
     const todo = only ? specs.filter(s => only.includes(s.id)) : specs;
@@ -133,6 +137,23 @@ async function main(): Promise<void> {
     store.putFile(indexFile, { servedPath: `${SURFACES_SERVED_DIR}/index.json`, origin: 'surface-texture-library' });
     console.log(JSON.stringify({ entries: index.surfaces.length, generated: todo.length - failures.length, failures, out }));
     if (failures.length) process.exitCode = 1;
+}
+
+/** Drops from the stored index every entry the current standard would not keep. */
+function prune(): void {
+    const store = defaultDurableAssetStore();
+    const found = store?.lookup(`${SURFACES_SERVED_DIR}/index.json`);
+    if (!store || !found) throw new Error('No surface library in the asset store');
+    const index = JSON.parse(fs.readFileSync(found.file, 'utf8')) as SurfaceTextureIndex;
+    const keep = (e: SurfaceTextureEntry) => !!e.critique && e.critique.repeatSeverity <= SURFACE_TEXTURE_PARAMS.maxRepeatSeverity;
+    const dropped = index.surfaces.filter(e => !keep(e)).map(e => ({ id: e.id, repeatSeverity: e.critique?.repeatSeverity ?? null }));
+    index.surfaces = index.surfaces.filter(keep);
+    const problems = validateSurfaceTextureIndex(index);
+    if (problems.length) throw new Error(`index invalid after pruning: ${problems.join('; ')}`);
+    const file = path.join(fs.mkdtempSync(path.join(require('os').tmpdir(), 'surfaces-')), 'index.json');
+    fs.writeFileSync(file, JSON.stringify(index, null, 1));
+    store.putFile(file, { servedPath: `${SURFACES_SERVED_DIR}/index.json`, origin: 'surface-texture-library' });
+    console.log(JSON.stringify({ kept: index.surfaces.length, dropped }));
 }
 
 main().catch(e => { console.error(e); process.exit(1); });
