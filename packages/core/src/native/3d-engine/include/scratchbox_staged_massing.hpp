@@ -1432,18 +1432,17 @@ private:
                 moved.face = f.key;
                 moved.id = fs.id + ":" + std::to_string(i);
                 for (auto& pl : moved.placements) { pl[0] = std::clamp(pl[0] + d, f.sMin, f.sMax); pl[1] = std::clamp(pl[1] + d, f.sMin, f.sMax); }
-                emitFaceSweepOn(moved, i);
-                any = true;
+                any = emitFaceSweepOn(moved, i) || any;
                 if (!spec_.clipOpenings) break;
             }
             if (!any) rejectedSweeps_.push_back(fs.id);
             return;
         }
-        if (fi == faces_.size() || fs.profile.size() < 2 || fs.placements.empty()) { rejectedSweeps_.push_back(fs.id); return; }
-        emitFaceSweepOn(fs, fi);
+        if (fi == faces_.size() || fs.profile.size() < 2 || fs.placements.empty() || !emitFaceSweepOn(fs, fi)) rejectedSweeps_.push_back(fs.id);
     }
 
-    void emitFaceSweepOn(const FaceSweepSpec& in, size_t fi) {
+    /** Emits the sweep on face `fi`; false (nothing emitted) when it does not fit there. */
+    bool emitFaceSweepOn(const FaceSweepSpec& in, size_t fi) {
         const Face& f = faces_[fi];
         // a wall a neighbour part covers below: the profile (along s) never reaches below the wall's raised bottom
         FaceSweepSpec clipped = in;
@@ -1452,7 +1451,7 @@ private:
         if (spec_.clipOpenings && fs.axis == 0) {
             double c0 = 1e300, c1 = -1e300;
             for (const auto& q : fs.profile) { c0 = std::min(c0, q.second); c1 = std::max(c1, q.second); }
-            if (c1 - c0 < 0.3) { rejectedSweeps_.push_back(fs.id); return; }
+            if (c1 - c0 < 0.3) return false;
         }
         OutNode node;
         node.name = "facesweep:" + fs.id;
@@ -1507,8 +1506,9 @@ private:
                 tri(b0, b1, b2, cn); tri(b0, b2, b3, cn);
             }
         }
-        if (node.v.empty()) { rejectedSweeps_.push_back(fs.id); return; }
+        if (node.v.empty()) return false;
         nodes_.push_back(std::move(node));
+        return true;
     }
 
     void emitGeometry() {

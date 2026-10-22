@@ -275,7 +275,9 @@ export async function buildDistrictMassingLayer(input: { rows: DistrictBuildingM
         const dropped = dropWallBandResidual(run.nodes, walls);
         run.nodes = dropped.nodes;
         const reliefIds = new Set(walls.flatMap(w => w.reliefIds));
-        planeFirst = { residualRemovedTriangles: dropped.removedTriangles, residualRemovedAreaM2: dropped.removedAreaM2, residualKeptTriangles: dropped.keptTriangles, rejectedRelief: [...new Set([...run.report.rejectedOpenings, ...run.report.rejectedSweeps].map(reliefBaseId).filter(id => reliefIds.has(id)))] };
+        // a relief item the native tool clipped to a split wall's pieces is built when any piece of it is
+        const built = new Set(run.nodes.filter(n => /^(opening|facesweep):/.test(n.name)).map(n => reliefBaseId(n.name.replace(/^(opening|facesweep):/, ''))));
+        planeFirst = { residualRemovedTriangles: dropped.removedTriangles, residualRemovedAreaM2: dropped.removedAreaM2, residualKeptTriangles: dropped.keptTriangles, rejectedRelief: [...new Set([...run.report.rejectedOpenings, ...run.report.rejectedSweeps].map(reliefBaseId).filter(id => reliefIds.has(id) && !built.has(id)))] };
     }
     t = Date.now();
     const { textures, legend } = plainTextures(run);
