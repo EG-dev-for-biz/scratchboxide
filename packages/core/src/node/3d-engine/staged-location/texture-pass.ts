@@ -60,6 +60,7 @@ import { materialParamsImage, readFacadeMaterials, type FacadeMaterialRecord, ty
 import { bakeCourseProfile, courseProfilesImage } from './masonry-relief-native';
 import type { DepthMap } from '../../../common/spatial/texture-pass-contracts';
 import { detectPlaneRepeats, repeatFill } from './texture-repeat';
+import { libraryFill, type LibraryFillSpec } from './texture-library-fill';
 
 /** Part of every texture cache key: a change to the pass's maths is a new version. */
 /**
@@ -134,6 +135,18 @@ export interface TexturePassSources {
     lighting?: { client: EnhanceModelClient; models: string[] };
     /** Why the lighting correction did not run, when it was asked for. */
     lightingUnavailable?: string;
+    /**
+     * Apply the tile's lighting correction without the Street View agreement gate (every detail-locked answer stands):
+     * for a rebuilt surface no Street View reaches (a procedural district), where a baked shadow would otherwise stay.
+     */
+    lightingUngated?: boolean;
+    /**
+     * D's distance gate (m) between a texel and the tile surface it takes its colour from; default max(0.25, 2 x the
+     * registration residual). A rebuilt surface (a procedural district) stands off the scan by its fitting error: wider.
+     */
+    transferMaxDistanceM?: number;
+    /** The generated-PBR rung (rung 5) from the surface library, for texels no photo reaches (texture-library-fill.ts). */
+    generatedFill?: LibraryFillSpec;
     /** More registered views for photo tier A only (whole-face survey and ring views: its outline anchors). */
     photoTierViews?: ProjectionView[];
     /**
@@ -439,13 +452,13 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     if (src.tile) {
         progress('transferring the tile photo');
         try {
-            const maxDistanceM = Math.max(0.25, 2 * (src.registrationResidualM ?? 0));
+            const maxDistanceM = src.transferMaxDistanceM ?? Math.max(0.25, 2 * (src.registrationResidualM ?? 0));
             const lighting = src.lighting;
             const existing = planes;
             const correctCandidates = lighting ? async (plane: { rgb: Float32Array; has: Uint8Array; width: number; height: number; existing?: BakedTexturePlanes }) => {
                 const tl = Date.now();
                 progress('correcting the tile photo\'s lighting chart by chart with an image model (detail-locked)');
-                const r = await correctTilePlaneLighting({ atlas, plane, unpackRung: i => { const c = unpackConfidenceTexel(existing.confidence, i); return { covered: c.covered, rung: c.rung }; }, client: lighting.client, models: lighting.models, ...(src.signal ? { signal: src.signal } : {}) });
+                const r = await correctTilePlaneLighting({ atlas, plane, ...(src.lightingUngated ? { ungated: true } : {}), unpackRung: i => { const c = unpackConfidenceTexel(existing.confidence, i); return { covered: c.covered, rung: c.rung }; }, client: lighting.client, models: lighting.models, ...(src.signal ? { signal: src.signal } : {}) });
                 lightingTile = r.report;
                 timingsMs.tileLighting = Date.now() - tl;
                 if (r.report.applied) modelsUsed.push(...(r.provenance?.lightingCorrection?.models ?? []));
@@ -637,8 +650,15 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     timingsMs.repeatFill = Date.now() - t;
     aborted(src.signal);
 
-    // rung 4: measured palette; rung 5 (generated PBR) is not available; rung 6: clay
+    // rung 5: the surface library where the layer has one (a rebuilt surface), else rung 4: measured palette; rung 6: clay
     t = Date.now();
+    if (src.generatedFill) {
+        const lib = libraryFill(atlas, planes, src.generatedFill);
+        if (lib.filled) {
+            planes = mergeBakedPlanes(planes, lib);
+            progress(`${lib.filled} texels no photo reaches filled from the surface library (${lib.provenance.length} surfaces)`);
+        }
+    }
     const pal = paletteFill(atlas, planes, src.palette);
     const palTexels = countAlpha(pal);
     if (palTexels) {
