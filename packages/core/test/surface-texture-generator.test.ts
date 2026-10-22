@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { fineReliefBand, generateSurfaceTexture, parseSurfaceReading, quiltToTile, reliefFromDepth, wrapMismatch, wrapPad, type SurfaceTextureModels } from '../src/node/3d-engine/surface-texture-generator';
+import { fineReliefBand, generateSurfaceTexture, tileScaleContrast, parseSurfaceReading, quiltToTile, reliefFromDepth, wrapMismatch, wrapPad, type SurfaceTextureModels } from '../src/node/3d-engine/surface-texture-generator';
 import { rankSurfaceTextures, surfaceTint, validateSurfaceTextureIndex, SURFACE_TEXTURE_SCHEMA, type SurfaceTextureEntry } from '../src/common/spatial/surface-texture-library';
 
 /** A deterministic non-tiling image: bricks whose rows drift and whose colour ramps left to right. */
@@ -84,7 +84,7 @@ describe('surface texture generation', () => {
                 return out;
             }
         };
-        const g = await generateSurfaceTexture({ id: 'brick_test', prompt: 'a red brick wall', realSizeM: [1.4, 1.4] }, models, { sizePx: 128, quiltBand: 0.12, quiltFeatherPx: 2, depthPad: 0.25, reliefHighPass: 0.125, fineBandFrac: 0.03, fineWeight: 0.6, hollowRoughness: 0.12 });
+        const g = await generateSurfaceTexture({ id: 'brick_test', prompt: 'a red brick wall', realSizeM: [1.4, 1.4] }, models, { sizePx: 128, quiltBand: 0.12, quiltFeatherPx: 2, maxTileScaleContrast: 1, paintAttempts: 3, depthPad: 0.25, reliefHighPass: 0.125, fineBandFrac: 0.03, fineWeight: 0.6, hollowRoughness: 0.12 });
         expect(calls).toEqual(['paint 1:1', 'depth', 'depth', 'depth', 'depth', 'depth', 'read']);
         expect(g.wrapBefore).toBeGreaterThan(g.wrapAfter);
         expect(g.wrapAfter).toBeLessThan(2.5);
@@ -109,4 +109,17 @@ describe('surface texture generation', () => {
         expect(parseSurfaceReading('{"spanM":[2],"reliefM":0.01,"roughness":0.9,"metallic":0,"appearance":"x"}')).toBeUndefined();
         expect(wrapPad(new Uint8Array([1, 2, 3, 4]), 1, 1).length).toBe(9 * 4);
     });
+    it('scores a tile with a large stain as repeating and a fine pattern as not', () => {
+        // bricks with no tile-scale ramp (bricks() ramps its colour across the image, which is tile-scale variation)
+        const n = 128, fine = new Uint8Array(n * n * 4);
+        for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+            const row = Math.floor(y / 16), joint = y % 16 < 2 || (x + row * 16) % 32 < 3, v = joint ? 200 : 130 + ((row * 37 + Math.floor((x + row * 16) / 32) * 11) % 23);
+            fine.set([v, joint ? 200 : v * 0.5, joint ? 200 : v * 0.4, 255], (y * n + x) * 4);
+        }
+        const stained = Uint8Array.from(fine);
+        for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (Math.hypot(x - 40, y - 60) < 18) for (let c = 0; c < 3; c++) stained[(y * n + x) * 4 + c] *= 0.55;
+        expect(tileScaleContrast(fine, n)).toBeLessThan(0.09);
+        expect(tileScaleContrast(stained, n)).toBeGreaterThan(0.09);
+    });
 });
+

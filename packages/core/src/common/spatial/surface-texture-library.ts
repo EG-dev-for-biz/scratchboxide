@@ -49,6 +49,11 @@ export interface SurfaceTextureEntry {
         roughnessMean: number;
         roughnessSpread: number;
         metallic: number;
+        /**
+         * Luminance contrast at one and two cycles per tile (surface-texture-generator.ts tileScaleContrast): how strongly
+         * the tile shows as repetition over a large surface. Generated maps are painted again above 0.09.
+         */
+        tileScaleContrast?: number;
     };
     appearance: string;
     provenance: 'generated' | 'library';

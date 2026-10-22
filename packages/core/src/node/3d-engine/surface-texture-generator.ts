@@ -36,6 +36,10 @@ export const SURFACE_TEXTURE_PARAMS = {
     quiltBand: 0.12,
     /** Pixels either side of a quilting cut that are blended. */
     quiltFeatherPx: 2,
+    /** A colour map scoring above this tile-scale contrast (tileScaleContrast) is painted again. */
+    maxTileScaleContrast: 0.09,
+    /** Paintings at most per entry (a refusal or a map over the contrast gate is painted again; the lowest is kept). */
+    paintAttempts: 3,
     /** Wrap context given to the depth model on every side, as a share of the side. */
     depthPad: 0.25,
     /** Width of the box mean taken out of the depth as its trend, as a share of the side. */
@@ -51,7 +55,9 @@ export const SURFACE_TEXTURE_PARAMS = {
 export function surfaceColourPrompt(spec: SurfaceTextureSpec): string {
     return `A seamless tileable texture photograph of ${spec.prompt}. The image shows a ${spec.realSizeM[0]} m by ${spec.realSizeM[1]} m patch, `
         + 'seen straight on (orthographic, no perspective), filling the whole frame edge to edge with the surface only: no border, no horizon, '
-        + 'no objects, no people, no text. Even overcast light: no cast shadows, no highlights, no vignette. True colours.';
+        + 'no objects, no people, no text. Even overcast light: no cast shadows, no highlights, no vignette, no shading gradient. True colours. '
+        + 'Even appearance across the whole patch: no stain, patch, streak or band larger than a tenth of the patch, so it can repeat '
+        + 'over a large surface without the repeat showing.';
 }
 
 /** The image wrapped by `pad` pixels on every side (so a model reading it sees each edge's continuation). */
@@ -249,6 +255,34 @@ export function wrapMismatch(rgba: Uint8Array, w: number, h: number): number {
 
 const lum = (rgba: Uint8Array, i: number) => 0.2126 * SRGB_TO_LINEAR[rgba[i]] + 0.7152 * SRGB_TO_LINEAR[rgba[i + 1]] + 0.0722 * SRGB_TO_LINEAR[rgba[i + 2]];
 
+/**
+ * How strongly a tile will show as repetition when laid over a big surface: the contrast of its luminance at one and two
+ * cycles per tile (Fourier components with |kx|, |ky| <= 2, the constant left out), as the amplitude of the equivalent
+ * sinusoid over the mean. A stain a tenth of the tile across repeats as a grid of stains (asphalt, 2026-10-22) and scores
+ * high; a pattern finer than the tile (bricks, seams, boards) puts its energy at its own frequencies and scores low.
+ */
+export function tileScaleContrast(rgba: Uint8Array, n: number, sample = 128): number {
+    const m = Math.min(sample, n), step = n / m, l = new Float64Array(m * m);
+    let mean = 0;
+    for (let y = 0; y < m; y++) for (let x = 0; x < m; x++) {
+        let s = 0, c = 0;
+        for (let yy = Math.floor(y * step); yy < Math.floor((y + 1) * step); yy++) for (let xx = Math.floor(x * step); xx < Math.floor((x + 1) * step); xx++) { s += lum(rgba, (yy * n + xx) * 4); c++; }
+        l[y * m + x] = s / Math.max(1, c); mean += l[y * m + x];
+    }
+    mean /= m * m;
+    let energy = 0;
+    for (let ky = -2; ky <= 2; ky++) for (let kx = -2; kx <= 2; kx++) {
+        if (kx === 0 && ky === 0) continue;
+        let re = 0, im = 0;
+        for (let y = 0; y < m; y++) for (let x = 0; x < m; x++) {
+            const ph = -2 * Math.PI * (kx * x + ky * y) / m, v = l[y * m + x] - mean;
+            re += v * Math.cos(ph); im += v * Math.sin(ph);
+        }
+        energy += (re * re + im * im) / (m * m) ** 2;
+    }
+    return Math.sqrt(2 * energy) / Math.max(1e-6, mean);
+}
+
 /** Wrapped central-difference gradient magnitude. */
 function gradient(f: (x: number, y: number) => number, w: number, h: number): Float32Array {
     const g = new Float32Array(w * h);
@@ -351,10 +385,25 @@ export interface GeneratedSurface {
 export async function generateSurfaceTexture(spec: SurfaceTextureSpec, models: SurfaceTextureModels, P = SURFACE_TEXTURE_PARAMS): Promise<GeneratedSurface> {
     const N = P.sizePx;
     const prompt = surfaceColourPrompt(spec);
-    const painted = await models.paint(prompt, '1:1');
+    // painted until a map passes the tile-scale contrast gate (or the attempts run out: the lowest is kept, its score recorded)
+    let best: { painted: Awaited<ReturnType<SurfaceTextureModels['paint']>>; color: Uint8Array; contrast: number } | undefined;
+    const refusals: string[] = [];
+    for (let attempt = 0; attempt < P.paintAttempts && !(best && best.contrast <= P.maxTileScaleContrast); attempt++) {
+        let painted;
+        try {
+            painted = await models.paint(attempt === 0 ? prompt : `${prompt} (variation ${attempt + 1})`, '1:1');
+        } catch (e) {
+            refusals.push((e as Error).message);
+            continue;
+        }
+        const q = quiltToTile([painted.rgba], painted.width, painted.height, P.quiltBand, P.quiltFeatherPx);
+        const color = models.resize(q.maps[0], q.width, q.height, N);
+        const contrast = tileScaleContrast(color, N);
+        if (!best || contrast < best.contrast) best = { painted, color, contrast };
+    }
+    if (!best) throw new Error(`${spec.id}: no painting in ${P.paintAttempts} attempts: ${refusals.join(' | ')}`);
+    const { painted, color } = best;
     const wrapBefore = wrapMismatch(painted.rgba, painted.width, painted.height);
-    const q = quiltToTile([painted.rgba], painted.width, painted.height, P.quiltBand, P.quiltFeatherPx);
-    const color = models.resize(q.maps[0], q.width, q.height, N);
     const pad = Math.round(N * P.depthPad);
     const d = await models.depth({ rgba: wrapPad(color, N, pad), width: N + 2 * pad, height: N + 2 * pad });
     const coarse = reliefFromDepth(d.depths, N, pad, P.reliefHighPass);
@@ -399,7 +448,7 @@ export async function generateSurfaceTexture(spec: SurfaceTextureSpec, models: S
         entry: {
             id: spec.id, pixels: [N, N], realSizeM: reading.spanM, sizeSource: `vision reading of the texture's own features (asked for ${spec.realSizeM.join(' x ')} m)`,
             colour: surfaceColourStats(color),
-            surface: { normalSlopeMean: r3(normal.slopeMean), heightRange: r3(hi - lo), reliefM: reading.reliefM, roughnessMean: r3(rough.mean), roughnessSpread: r3(rough.spread), metallic: reading.metallic },
+            surface: { normalSlopeMean: r3(normal.slopeMean), heightRange: r3(hi - lo), reliefM: reading.reliefM, roughnessMean: r3(rough.mean), roughnessSpread: r3(rough.spread), metallic: reading.metallic, tileScaleContrast: r3(best.contrast) },
             appearance: reading.appearance, provenance: 'generated',
             source: { model: painted.model, prompt, heightModel: d.model, method: 'colour painted by the image model and quilted onto itself along the least-different cut so it tiles; relief from the depth model\'s reading of the wrap-padded colour map (trend removed, made periodic) plus the fine band of its readings of each quarter (overlapped and feathered); normals from it at the read relief and size; roughness the read mean, rougher in hollows' },
             heightAlignment: r3(alignment)
