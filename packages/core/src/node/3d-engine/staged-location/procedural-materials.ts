@@ -867,15 +867,16 @@ export interface ProceduralTexturingSummary {
 }
 
 /**
- * How the rebuilt surfaces get their look (user decision 2026-10-22, "just infer the textures on each surface"):
- * 'inferred' writes each surface in the library material the vision model inferred for it, at real scale, tinted to its
- * lit colour, over the measured lit-colour layer (no photo texel drawn, no baked shadow); 'photo' prepares clays for the
- * texture pass (the tile photo transferred onto each surface's own atlas, the library only where no photo reaches).
- * SCRATCHBOX_STAGED_SURFACE_TEXTURES=photo selects the texture pass; anything else infers.
+ * How the rebuilt surfaces get their look. 'photo' (the default, user decision 2026-10-22, the Haughwout scan-fitted
+ * rebuild: "augmented vector data with the inferred shapes from 3d photo tiles, textures stamped on from the google photo
+ * tiles") prepares clays for the texture pass: the tile photo transferred onto each surface's own atlas, its lighting
+ * corrected, the library only where no photo reaches. 'inferred' writes each surface in the library material the vision
+ * model inferred for it instead (tried as the default the same day: facades came out blank, the photo's windows and
+ * ornament lost). SCRATCHBOX_STAGED_SURFACE_TEXTURES=inferred selects it.
  */
 export type ProceduralSurfaceMode = 'inferred' | 'photo';
 export function proceduralSurfaceMode(env: NodeJS.ProcessEnv = process.env): ProceduralSurfaceMode {
-    return env.SCRATCHBOX_STAGED_SURFACE_TEXTURES?.trim().toLowerCase() === 'photo' ? 'photo' : 'inferred';
+    return env.SCRATCHBOX_STAGED_SURFACE_TEXTURES?.trim().toLowerCase() === 'inferred' ? 'inferred' : 'photo';
 }
 
 /** Flat per-vertex normals of an indexed mesh (area-weighted face normals summed at each vertex). */

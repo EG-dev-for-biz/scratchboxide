@@ -11,7 +11,7 @@
  * infer_surface_materials (gemini/tools/surface-material-tools.ts over staged-location/surface-inference.ts): the tool runs
  * the surface step on a stage folder in the mode asked (inferred by default), publishes the GLBs it wrote under /models
  * and reports the choices; a folder that is not a district massing stage is refused, naming what is missing; the
- * inferred mode is the default and SCRATCHBOX_STAGED_SURFACE_TEXTURES=photo selects the texture pass.
+ * the tool infers by default; a build takes the texture pass unless SCRATCHBOX_STAGED_SURFACE_TEXTURES=inferred.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -57,9 +57,9 @@ describe('infer_surface_materials', () => {
         expect(() => stageSurfaceFiles(dir)).toThrow(/missing district_massing_textured\.glb, buildings\.json, native\/report\.json/);
     });
 
-    it('infers by default; photo selects the texture pass; it is offered in the geospatial pack', () => {
-        expect(proceduralSurfaceMode({})).toBe('inferred');
-        expect(proceduralSurfaceMode({ SCRATCHBOX_STAGED_SURFACE_TEXTURES: 'photo' })).toBe('photo');
+    it('builds take the texture pass by default, inferred on request; it is offered in the geospatial pack', () => {
+        expect(proceduralSurfaceMode({})).toBe('photo');
+        expect(proceduralSurfaceMode({ SCRATCHBOX_STAGED_SURFACE_TEXTURES: 'inferred' })).toBe('inferred');
         expect(DEFAULT_TOOL_DECLARATIONS.some(d => d.name === SURFACE_MATERIALS_TOOL_NAME)).toBe(true);
         expect(GEOSPATIAL_3D_PACK.toolNames).toContain(SURFACE_MATERIALS_TOOL_NAME);
     });
