@@ -59,7 +59,7 @@ function distanceM(aLat: number, aLng: number, bLat: number, bLng: number): numb
 }
 
 /** The nearest existing object of `type` within `radiusM` of (lat, lng), or undefined. */
-function nearestExisting(db: AssetDb, type: string, lat: number, lng: number, radiusM: number): ObjectRow | undefined {
+export function findCatalogObject(db: AssetDb, type: string, lat: number, lng: number, radiusM: number): ObjectRow | undefined {
     const deg0 = Math.max(DEG_PER_M_LAT, degPerMLng(lat)) * radiusM;
     const candidates = db.objectsNear(lat, lng, deg0, type);
     let best: ObjectRow | undefined, bestD = Infinity;
@@ -78,17 +78,22 @@ function nearestExisting(db: AssetDb, type: string, lat: number, lng: number, ra
 export function recordDiscoveredObject(input: DiscoveredObjectInput): DiscoveredObjectResult {
     const store = defaultDurableAssetStore();
     if (!store) return { id: `unrecorded:${crypto.randomUUID()}`, isNew: false };
+    return recordDiscoveredObjectIn(store.db, input);
+}
+
+/** recordDiscoveredObject against a given database (the scene object store links the objects it keeps to this catalog). */
+export function recordDiscoveredObjectIn(db: AssetDb, input: DiscoveredObjectInput): DiscoveredObjectResult {
     const radiusM = input.dedupRadiusM ?? 3;
-    const existing = nearestExisting(store.db, input.type, input.lat, input.lng, radiusM);
+    const existing = findCatalogObject(db, input.type, input.lat, input.lng, radiusM);
     const id = existing?.id ?? `${input.source}:${input.type}:${crypto.randomUUID()}`;
-    store.db.upsertObject({
+    db.upsertObject({
         id, type: input.type, label: input.label ?? null, confidence: input.confidence ?? null, lat: input.lat, lng: input.lng,
         bboxLoLat: input.bboxLo.lat, bboxLoLng: input.bboxLo.lng, bboxLoAlt: input.bboxLo.alt,
         bboxHiLat: input.bboxHi.lat, bboxHiLng: input.bboxHi.lng, bboxHiAlt: input.bboxHi.alt,
         source: input.source, runId: input.runId ?? null, workspace: input.workspace ?? null,
         ...(existing ? { discoveredAtMs: existing.discoveredAtMs } : {})
     });
-    if (!existing) store.db.addEvent('object.discovered', id, null, { type: input.type, lat: input.lat, lng: input.lng, source: input.source });
+    if (!existing) db.addEvent('object.discovered', id, null, { type: input.type, lat: input.lat, lng: input.lng, source: input.source });
     return { id, isNew: !existing };
 }
 

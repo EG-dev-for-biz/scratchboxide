@@ -43,7 +43,7 @@ function loadSqlite(): { DatabaseSync: new (file: string) => DatabaseSync } {
     return mod as { DatabaseSync: new (file: string) => DatabaseSync };
 }
 
-export const ASSET_DB_SCHEMA_VERSION = 1;
+export const ASSET_DB_SCHEMA_VERSION = 2;
 
 /** A file in the store, by content. */
 export interface BlobRow {
@@ -158,6 +158,29 @@ CREATE TABLE IF NOT EXISTS objects (
 );
 CREATE INDEX IF NOT EXISTS objects_by_type ON objects(type);
 CREATE INDEX IF NOT EXISTS objects_by_location ON objects(lat, lng);
+CREATE TABLE IF NOT EXISTS object_versions (
+    object_key TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    identity TEXT NOT NULL,
+    location_hash TEXT NOT NULL,
+    input_hash TEXT NOT NULL,
+    glb_path TEXT NOT NULL,
+    glb_sha256 TEXT NOT NULL,
+    record_path TEXT NOT NULL,
+    catalog_id TEXT,
+    run_id TEXT,
+    workspace TEXT,
+    created_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (object_key, version)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS object_versions_by_input ON object_versions(object_key, input_hash);
+CREATE INDEX IF NOT EXISTS object_versions_by_location ON object_versions(location_hash, kind);
+CREATE TABLE IF NOT EXISTS object_current (
+    object_key TEXT PRIMARY KEY,
+    version INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
 `;
 
 /**
@@ -186,6 +209,34 @@ export interface ObjectRow {
     lastSeenAtMs: number;
 }
 
+/**
+ * One stored version of a rebuilt object's geometry (scene-object-store.ts): the GLB and its `scratchbox.object/1`
+ * record, both served paths in the store. A version is never rewritten; a changed input makes a new one and moves the
+ * object's current pointer (object_current) to it.
+ */
+export interface ObjectVersionRow {
+    /** `<kind>/<identity>@<locationHash>`: the object's stable key. */
+    objectKey: string;
+    /** 1, 2, ... per object key. */
+    version: number;
+    /** Open label: 'building', 'tree', 'ground', 'road', ... */
+    kind: string;
+    /** The producer's stable id for it (a Google vector feature id, an object catalog id, ...). */
+    identity: string;
+    /** The frame its coordinates are in (the build's ENU origin, hashed). */
+    locationHash: string;
+    /** Everything that determined the geometry, hashed. */
+    inputHash: string;
+    glbPath: string;
+    glbSha256: string;
+    recordPath: string;
+    /** The objects-table row (object-catalog.ts) this geometry belongs to, when one is known. */
+    catalogId: string | null;
+    runId: string | null;
+    workspace: string | null;
+    createdAtMs: number;
+}
+
 /** A project graph as kept in the database: the whole graph JSON, keyed by project and the checkout that saved it. */
 export interface ProjectRow {
     projectId: string;
@@ -209,7 +260,9 @@ export class AssetDb {
         this.db.exec('PRAGMA busy_timeout = 5000');
         this.db.exec('PRAGMA foreign_keys = ON');
         this.db.exec(SCHEMA);
-        this.db.prepare('INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)').run('schema_version', String(ASSET_DB_SCHEMA_VERSION));
+        // additive schema: a newer version only adds tables, so the recorded version only moves up
+        this.db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = MAX(CAST(meta.value AS INTEGER), CAST(excluded.value AS INTEGER))')
+            .run('schema_version', String(ASSET_DB_SCHEMA_VERSION));
     }
 
     private stmt(sql: string): StatementSync {
@@ -371,6 +424,59 @@ export class AssetDb {
         return Number((this.stmt('SELECT COUNT(*) AS n FROM objects').get() as { n: number }).n);
     }
 
+    /** Adds the next version of `row.objectKey` (its number is assigned here) and returns it. Does not move the current pointer. */
+    insertObjectVersion(row: Omit<ObjectVersionRow, 'version' | 'createdAtMs'> & { createdAtMs?: number }): number {
+        const last = this.stmt('SELECT MAX(version) AS v FROM object_versions WHERE object_key = ?').get(row.objectKey) as { v: number | null } | undefined;
+        const version = Number(last?.v ?? 0) + 1;
+        this.stmt('INSERT INTO object_versions (object_key, version, kind, identity, location_hash, input_hash, glb_path, glb_sha256, record_path, catalog_id, run_id, workspace, created_at_ms) '
+            + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            .run(row.objectKey, version, row.kind, row.identity, row.locationHash, row.inputHash, row.glbPath, row.glbSha256, row.recordPath, row.catalogId, row.runId, row.workspace, row.createdAtMs ?? Date.now());
+        return version;
+    }
+
+    /** Points a version's row at re-stored bytes (its blob was lost and the same input was stored again). */
+    repairObjectVersion(objectKey: string, version: number, glbSha256: string): void {
+        this.stmt('UPDATE object_versions SET glb_sha256 = ? WHERE object_key = ? AND version = ?').run(glbSha256, objectKey, version);
+    }
+
+    objectVersion(objectKey: string, version: number): ObjectVersionRow | undefined {
+        const r = this.stmt(objectVersionSelect('WHERE object_key = ? AND version = ?')).get(objectKey, version) as Record<string, unknown> | undefined;
+        return r ? toObjectVersion(r) : undefined;
+    }
+
+    objectVersionByInput(objectKey: string, inputHash: string): ObjectVersionRow | undefined {
+        const r = this.stmt(objectVersionSelect('WHERE object_key = ? AND input_hash = ?')).get(objectKey, inputHash) as Record<string, unknown> | undefined;
+        return r ? toObjectVersion(r) : undefined;
+    }
+
+    /** Every version of an object, oldest first. */
+    objectVersions(objectKey: string): ObjectVersionRow[] {
+        return (this.stmt(objectVersionSelect('WHERE object_key = ? ORDER BY version')).all(objectKey) as Record<string, unknown>[]).map(toObjectVersion);
+    }
+
+    currentObjectVersion(objectKey: string): ObjectVersionRow | undefined {
+        const r = this.stmt(objectVersionSelect('WHERE object_key = ? AND version = (SELECT version FROM object_current WHERE object_key = ?)')).get(objectKey, objectKey) as Record<string, unknown> | undefined;
+        return r ? toObjectVersion(r) : undefined;
+    }
+
+    setCurrentObjectVersion(objectKey: string, version: number, atMs = Date.now()): void {
+        this.stmt('INSERT INTO object_current (object_key, version, updated_at_ms) VALUES (?, ?, ?) ON CONFLICT(object_key) DO UPDATE SET version = excluded.version, updated_at_ms = excluded.updated_at_ms')
+            .run(objectKey, version, atMs);
+    }
+
+    /** The current version of every object stored in one frame (`locationHash`), of `kind` when given. */
+    currentObjectsAt(locationHash: string, kind?: string): ObjectVersionRow[] {
+        const where = 'JOIN object_current c ON c.object_key = v.object_key AND c.version = v.version WHERE v.location_hash = ?';
+        const rows = (kind !== undefined
+            ? this.stmt(objectVersionSelect(`${where} AND v.kind = ? ORDER BY v.object_key`, 'v')).all(locationHash, kind)
+            : this.stmt(objectVersionSelect(`${where} ORDER BY v.object_key`, 'v')).all(locationHash)) as Record<string, unknown>[];
+        return rows.map(toObjectVersion);
+    }
+
+    countObjectVersions(): number {
+        return Number((this.stmt('SELECT COUNT(*) AS n FROM object_versions').get() as { n: number }).n);
+    }
+
     close(): void {
         this.statements.clear();
         this.db.close();
@@ -389,6 +495,21 @@ function toObject(r: Record<string, unknown>): ObjectRow {
         bboxHiLat: Number(r.bboxHiLat), bboxHiLng: Number(r.bboxHiLng), bboxHiAlt: Number(r.bboxHiAlt),
         source: r.source as string, runId: (r.runId as string) ?? null, workspace: (r.workspace as string) ?? null,
         discoveredAtMs: Number(r.discoveredAtMs), lastSeenAtMs: Number(r.lastSeenAtMs)
+    };
+}
+
+const objectVersionSelect = (where: string, alias?: string) => {
+    const a = alias ? `${alias}.` : '';
+    return `SELECT ${a}object_key AS objectKey, ${a}version AS version, ${a}kind AS kind, ${a}identity AS identity, ${a}location_hash AS locationHash, `
+        + `${a}input_hash AS inputHash, ${a}glb_path AS glbPath, ${a}glb_sha256 AS glbSha256, ${a}record_path AS recordPath, ${a}catalog_id AS catalogId, `
+        + `${a}run_id AS runId, ${a}workspace AS workspace, ${a}created_at_ms AS createdAtMs FROM object_versions${alias ? ` ${alias}` : ''} ${where}`;
+};
+
+function toObjectVersion(r: Record<string, unknown>): ObjectVersionRow {
+    return {
+        objectKey: r.objectKey as string, version: Number(r.version), kind: r.kind as string, identity: r.identity as string, locationHash: r.locationHash as string,
+        inputHash: r.inputHash as string, glbPath: r.glbPath as string, glbSha256: r.glbSha256 as string, recordPath: r.recordPath as string,
+        catalogId: (r.catalogId as string) ?? null, runId: (r.runId as string) ?? null, workspace: (r.workspace as string) ?? null, createdAtMs: Number(r.createdAtMs)
     };
 }
 

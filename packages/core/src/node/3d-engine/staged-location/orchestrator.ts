@@ -77,9 +77,13 @@ import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service
 import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorEvidence } from './vector-footprints';
 import { auditDistrict, DISTRICT_AUDIT_VERSION, districtStreetAuditSummary, type DistrictStreetAuditSummary } from './district-residual-audit';
 import { buildSceneInventory, sceneInventorySummary, SCENE_INVENTORY_VERSION, type InventoryCrown, type SceneInventorySummary } from './scene-inventory';
-import { buildDistrictMassingLayer, districtMassingEnabled, DISTRICT_MASSING_VERSION, DISTRICT_TEXEL_M, massDistrict, planeFirstEnabled, proceduralDistrictEnabled } from './district-massing';
+import { buildDistrictMassingLayer, districtFootprint, districtMassingEnabled, DISTRICT_MASSING_PARAMS, DISTRICT_MASSING_VERSION, DISTRICT_TEXEL_M, massDistrict, planeFirstEnabled, proceduralDistrictEnabled } from './district-massing';
 import { REVOLUTION_FIT_VERSION, revolutionFitEnabled, reviseForRevolutions, type RevolutionLayerSummary } from './revolution-fit';
 import { wallSampleIndex } from './wall-plane-fit';
+import { assembleDistrictLayer, inBackground, districtMassingManifest, findStoredLayer, objectFrameOf, objectReuseEnabled, objectStoreEnabled, planDistrictObjects, readLayerManifests, storeSceneObjects, treesManifest, wholeLayerManifest, writeLayerManifests, type DistrictObjectPlan, type LayerObjectManifest } from './scene-objects';
+import { objectInputHash } from '../../asset-store/scene-object-store';
+import { parseGlbBytes } from './glb-bytes';
+import { defaultDurableAssetStore } from '../../asset-store/durable-asset-store';
 import { buildGroundSurface, groundHeightAt, PROCEDURAL_GROUND_VERSION, settleRoadsOnGround } from './procedural-ground';
 import {
     coveredShare, frameToLatLng, paintGeneratedHeightProvenance, paintProvenance, selectPaintBuildings, tilePlanCoverage, writePaintGlb,
@@ -496,6 +500,8 @@ function round(v: number, d = 3): number {
 class StagedRun {
     readonly state: StagedBuildState;
     readonly layerMeta: Record<string, StagedLayerObjectMeta> = {};
+    /** What each layer holds, by layer object id (scene-objects.ts): the separable objects kept when the build finishes. */
+    readonly objectManifests = new Map<string, LayerObjectManifest>();
     readonly cacheStatus: Record<string, 'hit' | 'miss' | 'bypassed'> = {};
     readonly keys: Partial<Record<StageId, string>> = {};
     camera?: StagedCamera;
@@ -3591,6 +3597,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 revolutions?: RevolutionLayerSummary & { cut: Record<string, number> };
                 /** Plane-first walls (wall-plane-fit.ts): walls by fit status, relief kept, scan lumps taken out of the residual. */
                 planeFirst?: { walls: number; measured: number; estimated: number; unseen: number; recesses: number; projections: number; rejectedRelief: number; residualRemovedTriangles: number; residualRemovedAreaM2: number };
+                /** The scene object store (scene-objects.ts): buildings taken from it unchanged instead of massed again, and the ground and streets. */
+                objects?: { reused: number; generated: number; planMs: number; groundReused?: boolean; roadsReused?: boolean };
                 procedural?: { ground: { vertices: number; triangles: number; openVertices: number; terrainVertices: number }; roads?: { roads: number; stations: number; measuredKerbs: number; defaultKerbs: number; triangles: number } };
             };
             const massingPromise = runner.stage<DistrictMassingValue>({
@@ -3604,26 +3612,65 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const key = stageKey(DISTRICT_MASSING_VERSION, stripped.cacheKey, vectorKey, refined.cacheKey, covered.toFixed(1), String(DISTRICT_TEXEL_M), procedural ? `${PROCEDURAL_GROUND_VERSION}+roads/v5-settled` : 'carve', ...(revolutionsOn ? [REVOLUTION_FIT_VERSION] : []));
                     run.keys.massing = key;
                     const key8 = key.slice(0, 8);
-                    const entry = await cache.run<DistrictMassingValue>('massing', key, async dir => {
-                        io.progress('massing every building from its footprint and the scan');
+                    // the scene object store: each rebuilt building, the ground and the streets kept as their own versioned
+                    // GLBs; a building whose own inputs are unchanged since it was stored is taken from there, not massed again
+                    const frame = objectFrameOf(extraction);
+                    const objectStore = objectStoreEnabled() ? defaultDurableAssetStore() : undefined;
+                    const reuseObjects = objectReuseEnabled();
+                    const objectVersions = { massing: DISTRICT_MASSING_VERSION, texelM: DISTRICT_TEXEL_M, params: DISTRICT_MASSING_PARAMS, revolutions: revolutionsOn ? REVOLUTION_FIT_VERSION : 'off' };
+                    const groundHash = objectInputHash('ground', PROCEDURAL_GROUND_VERSION, stripped.cacheKey, covered.toFixed(1), ev.water, ev.roads);
+                    const roadsHash = objectInputHash('road', 'roads/v5-settled', stripped.cacheKey, covered.toFixed(1), vectorKey, ROAD_SURFACE_PARAMS);
+                    const massProducer = { stage: 'massing', stageKey: key, layer: 'l2m', version: DISTRICT_MASSING_VERSION };
+                    const massRows = () => {
                         const scan = loadScanMesh(stripped.devegetatedGlb);
                         const ground = buildGroundModel(scan, { cellMeters: 1, water: look.waterAt, road: look.roadAt });
                         const within = (x: number, z: number) => Math.hypot(x, z) <= covered;
                         // plane first: the scan's near-vertical surface as samples, each wall fitted as one plane (wall-plane-fit.ts)
                         const walls = planeFirstEnabled() ? wallSampleIndex(scan.mesh.vertices, scan.mesh.indices, { keep: (x, z) => Math.hypot(x, z) <= covered + 10 }) : undefined;
                         const rows = massDistrict({ buildings: ev.buildings, look, ground, within, lenient: procedural, ...(walls ? { walls } : {}) });
+                        return { scan, ground, within, rows, okRows: rows.filter(r => r.ok && r.massing) };
+                    };
+                    const wholeManifest = (kind: string, identity: string, hash: string, file: string, layerName: string, version: string, labels: string[]): LayerObjectManifest =>
+                        wholeLayerManifest(kind, identity, hash, sha256File(file), { stage: 'massing', stageKey: key, layer: layerName, version }, { labels, confidence: null });
+                    const entry = await cache.run<DistrictMassingValue>('massing', key, async dir => {
+                        io.progress('massing every building from its footprint and the scan');
+                        const { scan, ground, within, rows, okRows } = massRows();
                         const reasons: Record<string, number> = {};
                         for (const r of rows.filter(x => !x.ok)) { const k = (r.reason ?? 'unknown').split(':')[0].replace(/[\d.]+/g, 'N'); reasons[k] = (reasons[k] ?? 0) + 1; }
                         const ok = rows.filter(r => r.ok);
                         const errs = ok.map(r => r.massing!.check.heightErrMedianM).sort((a, b) => a - b);
                         const summary = { buildings: rows.length, reasons, roofErrMedianM: errs.length ? errs[errs.length >> 1] : null };
                         fs.writeFileSync(path.join(dir, 'buildings.json'), JSON.stringify(rows.map(({ massing, ...r }) => ({ ...r, parts: massing?.parts.length ?? 0, roofErrMedianM: massing?.check.heightErrMedianM ?? null }))));
-                        io.progress(`${ok.length} of ${rows.length} buildings pass their check; building them`);
-                        const layer = await buildDistrictMassingLayer({ rows, look, within, scanGlb: stripped.devegetatedGlb, outDir: dir, stage: 'massing', stageKey: key, signal: io.signal });
-                        if (!layer) return { value: { rebuilt: 0, ...summary, removedTriangles: 0, residualOffFootprint: 0, timingsMs: {} } };
+                        const plan: DistrictObjectPlan | undefined = objectStore && okRows.length
+                            ? planDistrictObjects({ rows: okRows, buildings: ev.buildings, scan, look, within, frame, versions: objectVersions, store: objectStore, reuse: reuseObjects })
+                            : undefined;
+                        const reused = plan?.reusable ?? new Map<string, { file: string }>();
+                        io.progress(`${ok.length} of ${rows.length} buildings pass their check; building ${reused.size ? `${ok.length - reused.size} (${reused.size} unchanged since they were stored, reused)` : 'them'}`);
+                        const freshRows = rows.filter(r => !reused.has(r.id));
+                        const layer = freshRows.some(r => r.ok && r.massing)
+                            ? await buildDistrictMassingLayer({ rows: freshRows, look, within, scanGlb: stripped.devegetatedGlb, outDir: dir, stage: 'massing', stageKey: key, signal: io.signal })
+                            : undefined;
+                        if (!layer && !reused.size) return { value: { rebuilt: 0, ...summary, removedTriangles: 0, residualOffFootprint: 0, timingsMs: {} } };
+                        const texturedFile = path.join(dir, 'district_massing_textured.glb');
+                        const timingsMs: Record<string, number> = { ...(layer?.timingsMs ?? {}), ...(plan ? { objectPlan: plan.ms } : {}) };
+                        if (reused.size) {
+                            const tm = Date.now();
+                            // nothing massed now: the residual standing on no footprint comes from the store too (it is the same stage's)
+                            const unattributed = layer ? undefined : findStoredLayer(objectStore, reuseObjects, 'scan-residual', 'unattributed', frame, objectInputHash('scan-residual', DISTRICT_MASSING_VERSION, key));
+                            assembleDistrictLayer(layer?.files.texturedGlb, [...[...reused.values()].map(r => r.file), ...(unattributed ? [unattributed] : [])], texturedFile,
+                                { sb: { schema: 'scratchbox.staged-glb/2', stage: 'massing', stageKey: key, frame: 'tile frame: x east, y up, z south (metres)' } });
+                            timingsMs.reuseAssemble = Date.now() - tm;
+                        }
+                        // the cut of the scan's own buildings covers every rebuilt one, massed now or reused
+                        const footprint = districtFootprint(okRows, look, within, 1);
+                        const manifests: Record<string, LayerObjectManifest> = {};
+                        // listed once the layer is final (the revolution fit cuts it in place)
+                        const listBuildings = () => { if (plan) manifests['district_massing_textured.glb'] = districtMassingManifest(parseGlbBytes(fs.readFileSync(texturedFile)), sha256File(texturedFile), okRows, plan.owners, plan.hashes, massProducer); };
+                        const objects: DistrictMassingValue['objects'] = plan ? { reused: reused.size, generated: okRows.length - reused.size, planMs: plan.ms } : undefined;
+                        const residualOffFootprint = layer?.residualOffFootprint ?? 0;
                         const caveats = ok.filter(r => r.caveat).length;
                         const pfWalls = ok.flatMap(r => r.planeFirst?.walls ?? []);
-                        const planeFirst = layer.planeFirst ? {
+                        const planeFirst = layer?.planeFirst ? {
                             walls: pfWalls.length, measured: pfWalls.filter(w => w.fit.status === 'measured').length, estimated: pfWalls.filter(w => w.fit.status === 'estimated').length, unseen: pfWalls.filter(w => w.fit.status === 'unseen').length,
                             recesses: ok.reduce((a, r) => a + (r.planeFirst?.openings.length ?? 0), 0), projections: ok.reduce((a, r) => a + (r.planeFirst?.faceSweeps.length ?? 0), 0),
                             rejectedRelief: layer.planeFirst.rejectedRelief.length, residualRemovedTriangles: layer.planeFirst.residualRemovedTriangles, residualRemovedAreaM2: layer.planeFirst.residualRemovedAreaM2
@@ -3643,17 +3690,43 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         };
                         if (procedural) {
                             // the ground: one measured surface over the extraction, the photo's colour from above
-                            io.progress('building the ground from the measured street surface');
-                            const surf = buildGroundSurface({ ground, within, bounds: { x0: -covered, z0: -covered, x1: covered, z1: covered } });
+                            const groundFile = path.join(dir, 'ground.glb');
+                            const storedGround = findStoredLayer(objectStore, reuseObjects, 'ground', 'surface', frame, groundHash);
+                            let groundStats: { vertices: number; triangles: number; openVertices: number; terrainVertices: number };
                             const tileBytes = fs.readFileSync(stripped.devegetatedGlb);
-                            const groundPhoto = renderTopDownPhoto(tileBytes, surf.uvFrame, { texelM: 0.1, maxPx: 8192 });
-                            const groundJpeg = jpegJs.encode({ data: Buffer.from(groundPhoto.rgba.buffer, groundPhoto.rgba.byteOffset, groundPhoto.rgba.byteLength), width: groundPhoto.width, height: groundPhoto.height }, 88).data;
-                            const groundExtras = { version: PROCEDURAL_GROUND_VERSION, uvFrame: surf.uvFrame, stats: surf.stats, method: "the scan's open surface (within 1.5 m of the measured terrain, its local median) and the terrain where something stands on it; coloured from a top-down render of the tile photo" };
-                            writeStagedGlbFile(path.join(dir, 'ground.glb'), [{ name: 'ground', ...surf.mesh, extras: groundExtras }], { rootExtras: { sbGround: groundExtras }, generator: 'scratchbox staged-location procedural-ground', copyright: 'Google', texture: { bytes: groundJpeg, mimeType: 'image/jpeg' } });
+                            if (storedGround) {
+                                // the ground stored for these very inputs: its bytes as they were written
+                                io.progress('the ground is unchanged since it was stored: reusing it');
+                                const tg = Date.now();
+                                fs.copyFileSync(storedGround, groundFile);
+                                groundStats = parseGlbBytes(fs.readFileSync(groundFile)).json.nodes[0].extras.sbGround.stats;
+                                timingsMs.groundReused = Date.now() - tg;
+                            } else {
+                                io.progress('building the ground from the measured street surface');
+                                const tg = Date.now();
+                                const surf = buildGroundSurface({ ground, within, bounds: { x0: -covered, z0: -covered, x1: covered, z1: covered } });
+                                const groundPhoto = renderTopDownPhoto(tileBytes, surf.uvFrame, { texelM: 0.1, maxPx: 8192 });
+                                const groundJpeg = jpegJs.encode({ data: Buffer.from(groundPhoto.rgba.buffer, groundPhoto.rgba.byteOffset, groundPhoto.rgba.byteLength), width: groundPhoto.width, height: groundPhoto.height }, 88).data;
+                                const groundExtras = { version: PROCEDURAL_GROUND_VERSION, uvFrame: surf.uvFrame, stats: surf.stats, method: "the scan's open surface (within 1.5 m of the measured terrain, its local median) and the terrain where something stands on it; coloured from a top-down render of the tile photo" };
+                                writeStagedGlbFile(groundFile, [{ name: 'ground', ...surf.mesh, extras: groundExtras }], { rootExtras: { sbGround: groundExtras }, generator: 'scratchbox staged-location procedural-ground', copyright: 'Google', texture: { bytes: groundJpeg, mimeType: 'image/jpeg' } });
+                                groundStats = surf.stats;
+                                timingsMs.ground = Date.now() - tg;
+                            }
+                            if (plan) manifests['ground.glb'] = wholeManifest('ground', 'surface', groundHash, groundFile, 'l1g', PROCEDURAL_GROUND_VERSION, ['measured']);
                             // the streets: SB-Roadie's carriageways and kerbs over that ground, a default width where no kerb shows
                             let roadsStats: NonNullable<DistrictMassingValue['procedural']>['roads'];
                             const centrelines = ev.roads.filter(l => l.some(([x, z]) => within(x, z)));
-                            if (centrelines.length) {
+                            const roadsFile = path.join(dir, 'roads.glb');
+                            const storedRoads = centrelines.length ? findStoredLayer(objectStore, reuseObjects, 'road', 'network', frame, roadsHash) : undefined;
+                            if (storedRoads) {
+                                io.progress(`the ${centrelines.length} streets are unchanged since they were stored: reusing them`);
+                                const tr = Date.now();
+                                fs.copyFileSync(storedRoads, roadsFile);
+                                const st = parseGlbBytes(fs.readFileSync(roadsFile)).json.nodes[0].extras.sbRoads.stats;
+                                roadsStats = { roads: st.roads, stations: st.stations, measuredKerbs: st.measuredKerbs, defaultKerbs: st.defaultKerbs, triangles: st.triangles };
+                                timingsMs.roadsReused = Date.now() - tr;
+                            } else if (centrelines.length) {
+                                const tr = Date.now();
                                 io.progress(`measuring ${centrelines.length} streets kerb to kerb`);
                                 const P = { ...ROAD_SURFACE_PARAMS, requireBothKerbs: false, liftM: 0.08, buildSidewalks: false };
                                 const grid = { ...surfaceModel(scan, 0.5), cellM: 0.5 };
@@ -3669,19 +3742,25 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                     const atlas = synthesizeRoadTextures(roads, photo, planar.uvFrame);
                                     const mesh = buildRoadMesh(roads, P, atlas);
                                     const jpeg = jpegJs.encode({ data: Buffer.from(atlas.rgba.buffer, atlas.rgba.byteOffset, atlas.rgba.byteLength), width: atlas.width, height: atlas.height }, 90).data;
-                                    writeRoadsGlb(path.join(dir, 'roads.glb'), mesh, { stats: mesh.stats, liftM: P.liftM, markings: atlas.stats, source: 'SB-Roadie in a procedural district: Google vector road centrelines; kerbs measured on the tree-stripped scan where they show, a default width where they do not (labelled per station); tarmac and markings read from the tile photo and redrawn' }, { jpeg: Buffer.from(jpeg), width: atlas.width, height: atlas.height });
+                                    writeRoadsGlb(roadsFile, mesh, { stats: mesh.stats, liftM: P.liftM, markings: atlas.stats, source: 'SB-Roadie in a procedural district: Google vector road centrelines; kerbs measured on the tree-stripped scan where they show, a default width where they do not (labelled per station); tarmac and markings read from the tile photo and redrawn' }, { jpeg: Buffer.from(jpeg), width: atlas.width, height: atlas.height });
                                     roadsStats = { roads: mesh.stats.roads, stations: mesh.stats.stations, measuredKerbs: mesh.stats.measuredKerbs, defaultKerbs: mesh.stats.defaultKerbs, triangles: mesh.stats.triangles };
                                 }
+                                timingsMs.roads = Date.now() - tr;
                             }
                             const revolutions = await reviseRevolutions(['district_massing_textured.glb', 'district_massing_clay.glb']);
-                            return { value: { rebuilt: layer.rebuilt, ...summary, caveats, ...(planeFirst ? { planeFirst } : {}), removedTriangles: 0, residualOffFootprint: layer.residualOffFootprint, timingsMs: layer.timingsMs, ...(revolutions ? { revolutions } : {}), procedural: { ground: { vertices: surf.stats.vertices, triangles: surf.stats.triangles, openVertices: surf.stats.openVertices, terrainVertices: surf.stats.terrainVertices }, ...(roadsStats ? { roads: roadsStats } : {}) } } };
+                            listBuildings();
+                            if (plan && roadsStats && fs.existsSync(roadsFile)) manifests['roads.glb'] = wholeManifest('road', 'network', roadsHash, roadsFile, 'l2r', 'roads/v5-settled', ['measured', VECTOR_MODELLED_LABEL]);
+                            if (plan) writeLayerManifests(dir, manifests);
+                            return { value: { rebuilt: okRows.length, ...summary, caveats, ...(planeFirst ? { planeFirst } : {}), removedTriangles: 0, residualOffFootprint, timingsMs, ...(revolutions ? { revolutions } : {}), ...(objects ? { objects: { ...objects, groundReused: !!storedGround, roadsReused: !!storedRoads } } : {}), procedural: { ground: { vertices: groundStats.vertices, triangles: groundStats.triangles, openVertices: groundStats.openVertices, terrainVertices: groundStats.terrainVertices }, ...(roadsStats ? { roads: roadsStats } : {}) } } };
                         }
                         // the scan's own buildings out where the rebuilt ones stand: the clay remesh and tile_refine's textured twin alike
-                        const clay = hideFootprintInGlb(fs.readFileSync(refined.clayGlb), layer.footprint);
+                        const clay = hideFootprintInGlb(fs.readFileSync(refined.clayGlb), footprint);
                         fs.writeFileSync(path.join(dir, 'remesh_carved.glb'), clay.glb);
-                        fs.writeFileSync(path.join(dir, 'remesh_carved_textured.glb'), hideFootprintInGlb(fs.readFileSync(refined.texturedGlb), layer.footprint).glb);
+                        fs.writeFileSync(path.join(dir, 'remesh_carved_textured.glb'), hideFootprintInGlb(fs.readFileSync(refined.texturedGlb), footprint).glb);
                         const revolutions = await reviseRevolutions(['district_massing_textured.glb', 'district_massing_clay.glb', 'remesh_carved.glb', 'remesh_carved_textured.glb']);
-                        return { value: { rebuilt: layer.rebuilt, ...summary, caveats, ...(planeFirst ? { planeFirst } : {}), removedTriangles: clay.removedTriangles, residualOffFootprint: layer.residualOffFootprint, timingsMs: layer.timingsMs, ...(revolutions ? { revolutions } : {}) } };
+                        listBuildings();
+                        if (plan) writeLayerManifests(dir, manifests);
+                        return { value: { rebuilt: okRows.length, ...summary, caveats, ...(planeFirst ? { planeFirst } : {}), removedTriangles: clay.removedTriangles, residualOffFootprint, timingsMs, ...(revolutions ? { revolutions } : {}), ...(objects ? { objects } : {}) } };
                     }, {
                         publish: (dir, v) => !v.rebuilt ? []
                             : v.procedural ? [{ from: 'district_massing_textured.glb', as: `${base}_massing_${key8}.glb` }, { from: 'ground.glb', as: `${base}_ground_${key8}.glb` }, ...(fs.existsSync(path.join(dir, 'roads.glb')) ? [{ from: 'roads.glb', as: `${base}_proc_roads_${key8}.glb` }] : []), ...(v.revolutions?.accepted ? [{ from: 'revolutions.glb', as: `${base}_revolutions_${key8}.glb` }] : [])]
@@ -3690,6 +3769,28 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     });
                     const v = entry.value;
                     cache.writeRunNote(runId, 'district_massing', { key, cached: entry.cached, ...v });
+                    let manifests = v.rebuilt && objectStore ? readLayerManifests(entry.dir) : {};
+                    if (v.rebuilt && objectStore && !manifests['district_massing_textured.glb']) {
+                        // an entry massed before the object store: its buildings are listed now (the inputs are the entry's own)
+                        io.progress('listing the buildings of an earlier massing for the object store');
+                        try {
+                            const tb = Date.now();
+                            const { scan, within, okRows } = massRows();
+                            const plan = planDistrictObjects({ rows: okRows, buildings: ev.buildings, scan, look, within, frame, versions: objectVersions, reuse: false });
+                            const file = path.join(entry.dir, 'district_massing_textured.glb');
+                            manifests = { ...manifests, 'district_massing_textured.glb': districtMassingManifest(parseGlbBytes(fs.readFileSync(file)), sha256File(file), okRows, plan.owners, plan.hashes, massProducer) };
+                            if (v.procedural) {
+                                const g = path.join(entry.dir, 'ground.glb'), r = path.join(entry.dir, 'roads.glb');
+                                if (fs.existsSync(g)) manifests['ground.glb'] = wholeManifest('ground', 'surface', groundHash, g, 'l1g', PROCEDURAL_GROUND_VERSION, ['measured']);
+                                if (fs.existsSync(r)) manifests['roads.glb'] = wholeManifest('road', 'network', roadsHash, r, 'l2r', 'roads/v5-settled', ['measured', VECTOR_MODELLED_LABEL]);
+                            }
+                            writeLayerManifests(entry.dir, manifests);
+                            cache.writeRunNote(runId, 'object_manifest_backfill', { ms: Date.now() - tb, buildings: okRows.length });
+                        } catch (err) {
+                            if (isAbort(err)) throw err;
+                            cache.writeRunNote(runId, 'object_manifest_backfill', { error: errorMessage(err) });
+                        }
+                    }
                     if (!v.rebuilt) return { status: 'skipped', value: v, source: 'the remeshed scan stands', reason: `no building passed its check (${Object.entries(v.reasons).map(([k, n]) => `${n}: ${k}`).join('; ')})`, cached: entry.cached };
                     const [pubMass, pubCarved] = entry.published;
                     const remeshLayer = run.state.layers.find(l => l.objectId === remeshId)!;
@@ -3748,6 +3849,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         run.commit(layers[0], { source: 'DistrictMassing', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true, rebuilt: v.rebuilt } });
                         run.commit(groundLayer, { source: 'ProceduralGround', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true } });
                         if (revLayer) { run.commit(revLayer, { source: 'RevolutionFit', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true } }); layers.push(revLayer); }
+                        if (manifests['district_massing_textured.glb']) run.objectManifests.set(layers[0].objectId, { ...manifests['district_massing_textured.glb'], sourceFile: path.join(entry.dir, 'district_massing_textured.glb') });
+                        if (manifests['ground.glb']) run.objectManifests.set(groundLayer.objectId, { ...manifests['ground.glb'], sourceFile: path.join(entry.dir, 'ground.glb') });
                         run.setGround(groundLayer.objectId);
                         if (pubRoads && v.procedural.roads) {
                             const r = v.procedural.roads;
@@ -3763,11 +3866,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 textured: ownTwin(pubRoads, 'tarmac and lane markings read along each street from the top-down tile photo and redrawn')
                             };
                             run.commit(roadLayer, { source: 'GoogleVectorRoads', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true } });
+                            if (manifests['roads.glb']) run.objectManifests.set(roadLayer.objectId, { ...manifests['roads.glb'], sourceFile: path.join(entry.dir, 'roads.glb') });
                             layers.push(roadLayer);
                         }
                         return { status: 'committed', value: v, layers, source: `procedural district: ${v.rebuilt} of ${v.buildings} buildings rebuilt, the ground measured${v.procedural.roads ? `, ${v.procedural.roads.roads} streets` : ''}; the scan superseded (kept as the reference)`, cached: entry.cached, builtAtMs: entry.builtAtMs };
                     }
                     run.commit(massLayer, { source: 'DistrictMassing', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true, rebuilt: v.rebuilt } });
+                    if (manifests['district_massing_textured.glb']) run.objectManifests.set(massLayer.objectId, { ...manifests['district_massing_textured.glb'], sourceFile: path.join(entry.dir, 'district_massing_textured.glb') });
                     refineTextured.set(carvedLayer.objectId, path.join(entry.dir, 'remesh_carved_textured.glb'));
                     run.commit(carvedLayer, run.layerMeta[remeshId]);
                     run.setGround(carvedLayer.objectId);
@@ -3895,6 +4000,17 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 canopyAreaM2: summaryTrees.treeCanopyAreaM2, measuredFrom: extraction.rawGlbPath ?? extraction.texturedGlb
                             }
                         });
+                        // the scene object store keeps each grown tree as its own GLB when the build finishes
+                        if (objectStoreEnabled() && defaultDurableAssetStore()) {
+                            try {
+                                run.objectManifests.set(layers[0].objectId, {
+                                    ...treesManifest(parseGlbBytes(fs.readFileSync(planted.treesGlb)), sha256File(planted.treesGlb), { stage: 'trees', stageKey: planted.cacheKey, layer: 'l5', version: 'sb-veggie-trees' }),
+                                    sourceFile: planted.treesGlb
+                                });
+                            } catch (err) {
+                                cache.writeRunNote(runId, 'object_manifest_trees', { error: errorMessage(err) });
+                            }
+                        }
                     }
                     run.note(PROVENANCE.grownToMeasuredCrown, `SB-Veggie trees grown to the measured crown: ${summaryTrees.outcome}`);
                     const degradations = summaryTrees.keptAsScanned.map(k => run.degrade(record('trees', 'not_regrowable', {
@@ -4499,10 +4615,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
 
         // ---------------- finish ----------------
         cache.writeRunNote(runId, 'main_thread', blockTracer.stop());
-        return finishRun(run, {
+        const outcome = finishRun(run, {
             request, place: placeValue, extraction, structure, sizedTo: t.sizedTo, remeshed: remeshedNow, groundFile: groundOverride?.groundFile ?? remesh.value?.groundFile, groundLayerId: groundOverride?.groundLayerId ?? remesh.value?.groundLayerId ?? currentL1()?.objectId,
             trees: treesOut.trees, putBack: treesOut.putBack, rebuild, strip, ...(textureValue ? { textures: textureValue } : {}), now, persist
         });
+        keepSceneObjects(run, cache, outcome, extraction, request.query);
+        return outcome;
     } catch (err) {
         // the Street View fetch and the two branches are ended with the call: none is left running, or rejecting unseen, behind it
         tilesSettle(undefined);
@@ -4523,6 +4641,27 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         try { cache.writeRunNote(runId, 'main_thread', blockTracer.stop()); } catch { /* the note is diagnostics only */ }
         throw err;
     }
+}
+
+/**
+ * The finished scene into the scene object store (scene-objects.ts): each separable object of its layers as its own
+ * versioned GLB, and the scene's data with the versions it used. Informative like the rest of the asset store: a failure
+ * is written to the run's notes and never fails the build.
+ */
+function keepSceneObjects(run: StagedRun, cache: StageCache, outcome: StagedLocationOutcome, extraction: StagedExtraction, query: string): void {
+    if (!objectStoreEnabled()) return;
+    const store = defaultDurableAssetStore();
+    if (!store) return;
+    // after the result: the build does not wait for its objects to be cut and kept
+    inBackground(storeSceneObjects({
+        store, runId: run.runId, sceneId: run.state.artifactId, query, frame: objectFrameOf(extraction), layers: run.state.layers, manifests: run.objectManifests,
+        modelsDir: cache.modelsDir, scene: (outcome.result.artifact as { data?: unknown } | null)?.data ?? null, workspace: cache.workspaceRoot
+    }).then(report => {
+        cache.writeRunNote(run.runId, 'object_store', report);
+        console.log(`[staged-location] scene objects: ${report.objects} (${report.stored} stored, ${report.reused} reused, ${report.failed.length} failed) in ${report.ms} ms; scene ${report.scenePath ?? 'not kept'}`);
+    }, err => {
+        try { cache.writeRunNote(run.runId, 'object_store', { error: errorMessage(err) }); } catch { /* notes are diagnostics */ }
+    }));
 }
 
 /** The result's record of the pass-through scan hidden as redundant with the fitted surface. */
