@@ -64,13 +64,14 @@ export const STARTER_BUTTONS: readonly StarterButton[] = [
         // cameras on the street, metric wall plates from the photo tiles, a facade program read per wall, built natively on
         // the vector massing. 2026-10-22 (user ask): a random building from a curated set with strong, repeating facades the
         // reading does best on (Haughwout first, where G was measured); any building can still be asked for in chat.
+        // 2026-10-22: Wainwright (St. Louis) dropped - Places resolves it to the Wainwright State Office Building next door.
         prompts: [
             'Build a procedural 3D building of the E.V. Haughwout Building at 488 Broadway, New York: isolate it and rebuild it from scratch with the procedural pipeline, its arched windows, columns, cornices and shop fronts read from a survey of the photo tiles',
             'Build a procedural 3D building of the Puck Building at 295 Lafayette Street, New York: isolate it and rebuild it from scratch with the procedural pipeline, its arched windows, piers, cornices and shop fronts read from a survey of the photo tiles',
             'Build a procedural 3D building of the Gilsey House at 1200 Broadway, New York: isolate it and rebuild it from scratch with the procedural pipeline, its windows, columns, cornices and shop fronts read from a survey of the photo tiles',
             'Build a procedural 3D building of the Flatiron Building at 175 Fifth Avenue, New York: isolate it and rebuild it from scratch with the procedural pipeline, its windows, bands, cornices and shop fronts read from a survey of the photo tiles',
             'Build a procedural 3D building of The Rookery at 209 South LaSalle Street, Chicago: isolate it and rebuild it from scratch with the procedural pipeline, its arched windows, piers, cornices and shop fronts read from a survey of the photo tiles',
-            'Build a procedural 3D building of the Wainwright Building at 709 Chestnut Street, St. Louis: isolate it and rebuild it from scratch with the procedural pipeline, its windows, piers, frieze and cornice read from a survey of the photo tiles',
+            'Build a procedural 3D building of the Gunther Building at 469 Broome Street, New York: isolate it and rebuild it from scratch with the procedural pipeline, its windows, columns, cornices and shop fronts read from a survey of the photo tiles',
             'Build a procedural 3D building of the Guaranty Building at 140 Pearl Street, Buffalo: isolate it and rebuild it from scratch with the procedural pipeline, its windows, piers, cornice and shop fronts read from a survey of the photo tiles',
             'Build a procedural 3D building of the Bradbury Building at 304 South Broadway, Los Angeles: isolate it and rebuild it from scratch with the procedural pipeline, its arched windows, bands, cornice and shop fronts read from a survey of the photo tiles',
         ],
