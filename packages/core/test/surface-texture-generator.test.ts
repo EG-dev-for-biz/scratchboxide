@@ -77,15 +77,27 @@ describe('surface texture generation', () => {
                 for (let i = 0; i < d.length; i++) d[i] = 1 + (255 - img.rgba[i * 4 + 1]) / 255;   // mortar (pale) reads nearer
                 return { depths: d, model: 'stand-in-depth' };
             },
-            async read() { calls.push('read'); return JSON.stringify({ spanM: [1.4, 1.4], reliefM: 0.01, roughness: 0.85, metallic: 0, appearance: 'red brick in stretcher bond' }); },
+            async read(prompt, image) {
+                if (/look-development supervisor/.test(prompt)) {
+                    calls.push(`critique ${image.width}x${image.height}`);
+                    // the first attempt is judged to show its repeat, the second not
+                    const n = calls.filter(c => c.startsWith('critique')).length;
+                    return JSON.stringify({ repeatVisible: n === 1, repeatSeverity: n === 1 ? 0.7 : 0.1, realism: 0.8, notes: n === 1 ? 'a grid of dark stains' : 'reads as brick' });
+                }
+                calls.push('read');
+                return JSON.stringify({ spanM: [1.4, 1.4], reliefM: 0.01, roughness: 0.85, metallic: 0, appearance: 'red brick in stretcher bond' });
+            },
             resize: (rgba, w, h, size) => {
                 const out = new Uint8Array(size * size * 4);
                 for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) out.set(rgba.subarray((Math.floor(y * h / size) * w + Math.floor(x * w / size)) * 4, (Math.floor(y * h / size) * w + Math.floor(x * w / size)) * 4 + 4), (y * size + x) * 4);
                 return out;
             }
         };
-        const g = await generateSurfaceTexture({ id: 'brick_test', prompt: 'a red brick wall', realSizeM: [1.4, 1.4] }, models, { sizePx: 128, quiltBand: 0.12, quiltFeatherPx: 2, maxTileScaleContrast: 1, paintAttempts: 3, depthPad: 0.25, reliefHighPass: 0.125, fineBandFrac: 0.03, fineWeight: 0.6, hollowRoughness: 0.12 });
-        expect(calls).toEqual(['paint 1:1', 'depth', 'depth', 'depth', 'depth', 'depth', 'read']);
+        const g = await generateSurfaceTexture({ id: 'brick_test', prompt: 'a red brick wall', realSizeM: [1.4, 1.4] }, models, { sizePx: 128, quiltBand: 0.12, quiltFeatherPx: 2, maxRawTileScaleContrast: 1, targetRepeatSeverity: 0.35, maxRepeatSeverity: 0.6, paintAttempts: 4, depthPad: 0.25, reliefHighPass: 0.125, fineBandFrac: 0.03, fineWeight: 0.6, hollowRoughness: 0.12 });
+        // two attempts: the first judged to show its repeat, the second kept
+        const attempt = ['paint 1:1', 'depth', 'depth', 'depth', 'depth', 'depth', 'read', 'critique 960x320'];
+        expect(calls).toEqual([...attempt, ...attempt]);
+        expect(g.entry.critique).toEqual({ repeatSeverity: 0.1, realism: 0.8, notes: 'reads as brick' });
         expect(g.wrapBefore).toBeGreaterThan(g.wrapAfter);
         expect(g.wrapAfter).toBeLessThan(2.5);
         expect(g.color.length).toBe(128 * 128 * 4);
@@ -120,6 +132,20 @@ describe('surface texture generation', () => {
         for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (Math.hypot(x - 40, y - 60) < 18) for (let c = 0; c < 3; c++) stained[(y * n + x) * 4 + c] *= 0.55;
         expect(tileScaleContrast(fine, n)).toBeLessThan(0.09);
         expect(tileScaleContrast(stained, n)).toBeGreaterThan(0.09);
+    });
+    it('fails a material, with every reason, when no painting passes the critic', async () => {
+        const models: SurfaceTextureModels = {
+            async paint() { return { rgba: bricks(96, 96), width: 96, height: 96, model: 'stand-in-image' }; },
+            async depth(img) { return { depths: new Float32Array(img.width * img.height).fill(1), model: 'stand-in-depth' }; },
+            async read(prompt) {
+                return /look-development supervisor/.test(prompt)
+                    ? JSON.stringify({ repeatVisible: true, repeatSeverity: 0.8, realism: 0.5, notes: 'rust spots on a grid' })
+                    : JSON.stringify({ spanM: [1, 1], reliefM: 0.002, roughness: 0.5, metallic: 0.8, appearance: 'painted steel' });
+            },
+            resize: (rgba, w, h, size) => { const out = new Uint8Array(size * size * 4); for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) out.set(rgba.subarray((Math.floor(y * h / size) * w + Math.floor(x * w / size)) * 4, (Math.floor(y * h / size) * w + Math.floor(x * w / size)) * 4 + 4), (y * size + x) * 4); return out; }
+        };
+        await expect(generateSurfaceTexture({ id: 'steel_test', prompt: 'painted steel', realSizeM: [1, 1] }, models, { sizePx: 64, quiltBand: 0.12, quiltFeatherPx: 2, maxRawTileScaleContrast: 1, targetRepeatSeverity: 0.35, maxRepeatSeverity: 0.6, paintAttempts: 2, depthPad: 0.25, reliefHighPass: 0.125, fineBandFrac: 0.03, fineWeight: 0.6, hollowRoughness: 0.12 }))
+            .rejects.toThrow(/steel_test: no painting passed in 2 attempts: attempt 1: repeat 0.8 \(rust spots on a grid\) \| attempt 2: repeat 0.8/);
     });
 });
 

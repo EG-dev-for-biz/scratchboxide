@@ -61,6 +61,8 @@ export interface SurfaceTextureEntry {
     source?: { model: string; prompt: string; heightModel?: string; heightPrompt?: string; method: string };
     /** For a generated entry: how closely the height map's edges follow the colour map's (0..1, normalised cross-correlation). */
     heightAlignment?: number;
+    /** For a generated entry: the vision critic's judgement of its scene render (repeat severity and realism 0..1). */
+    critique?: { repeatSeverity: number; realism: number; notes: string };
 }
 
 export interface SurfaceTextureIndex {

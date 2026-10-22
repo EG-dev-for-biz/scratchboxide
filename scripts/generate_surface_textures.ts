@@ -14,7 +14,7 @@
  *
  *   tsx --env-file=.env scripts/generate_surface_textures.ts [--only id,id] [--out dir] [--concurrency 4]
  *
- * Entries already in the stored index are kept unless named with --only.
+ * Entries already in the stored index and not generated this run are kept; an entry that fails is removed from it.
  */
 
 import * as crypto from 'crypto';
@@ -101,8 +101,10 @@ async function main(): Promise<void> {
                     maps[key] = `${spec.id}/${key}.jpg`;
                 }
                 entries.set(spec.id, { ...g.entry, maps });
-                console.log(JSON.stringify({ id: spec.id, s: Math.round((Date.now() - t0) / 1000), wrapBefore: +g.wrapBefore.toFixed(2), wrapAfter: +g.wrapAfter.toFixed(2), alignment: g.entry.heightAlignment, sizeM: g.entry.realSizeM, reliefM: g.entry.surface.reliefM, roughness: g.entry.surface.roughnessMean, appearance: g.entry.appearance }));
+                console.log(JSON.stringify({ id: spec.id, s: Math.round((Date.now() - t0) / 1000), wrapBefore: +g.wrapBefore.toFixed(2), wrapAfter: +g.wrapAfter.toFixed(2), alignment: g.entry.heightAlignment, sizeM: g.entry.realSizeM, reliefM: g.entry.surface.reliefM, roughness: g.entry.surface.roughnessMean, critique: g.entry.critique, appearance: g.entry.appearance }));
             } catch (e) {
+                // a failed entry leaves the index (its earlier version failed the same standard or was never judged by it)
+                entries.delete(spec.id);
                 failures.push(`${spec.id}: ${(e as Error).message}`);
                 console.log(JSON.stringify({ id: spec.id, failed: (e as Error).message }));
             }

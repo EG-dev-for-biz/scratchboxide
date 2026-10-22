@@ -18,6 +18,7 @@
  */
 
 import { linearToLab, SRGB_TO_LINEAR } from './staged-location/texel-exposure';
+import { renderSurfaceSwatch } from './surface-swatch-render';
 import type { SurfaceTextureColour, SurfaceTextureEntry } from '../../common/spatial/surface-texture-library';
 
 /** One material to generate: what it looks like and how much of it one tile shows. Data, never branched on. */
@@ -36,10 +37,17 @@ export const SURFACE_TEXTURE_PARAMS = {
     quiltBand: 0.12,
     /** Pixels either side of a quilting cut that are blended. */
     quiltFeatherPx: 2,
-    /** A colour map scoring above this tile-scale contrast (tileScaleContrast) is painted again. */
-    maxTileScaleContrast: 0.09,
-    /** Paintings at most per entry (a refusal or a map over the contrast gate is painted again; the lowest is kept). */
-    paintAttempts: 3,
+    /** A painting whose own tile-scale contrast (tileScaleContrast, before equalising) exceeds this is painted again. */
+    maxRawTileScaleContrast: 0.2,
+    /**
+     * The vision critic's repeat severity (0..1): painting stops once an attempt reaches the target, and a material whose best
+     * attempt exceeds the maximum is not kept. The critic is harsh and ranks well but scores overlap (2026-10-22, 19 entries:
+     * those showing a grid by eye 0.55-0.68, those that do not 0.28-0.65), so it selects among attempts more than it gates.
+     */
+    targetRepeatSeverity: 0.45,
+    maxRepeatSeverity: 0.6,
+    /** Paintings at most per entry. */
+    paintAttempts: 4,
     /** Wrap context given to the depth model on every side, as a share of the side. */
     depthPad: 0.25,
     /** Width of the box mean taken out of the depth as its trend, as a share of the side. */
@@ -283,6 +291,101 @@ export function tileScaleContrast(rgba: Uint8Array, n: number, sample = 128): nu
     return Math.sqrt(2 * energy) / Math.max(1e-6, mean);
 }
 
+/** The tile's luminance at one and two cycles per tile (|kx|, |ky| <= 2), reconstructed at every pixel, plus its mean. */
+function tileScaleLuminance(rgba: Uint8Array, n: number, sample = 128): { low: Float32Array; mean: number } {
+    const m = Math.min(sample, n), step = n / m, l = new Float64Array(m * m);
+    let mean = 0;
+    for (let y = 0; y < m; y++) for (let x = 0; x < m; x++) {
+        let s = 0, c = 0;
+        for (let yy = Math.floor(y * step); yy < Math.floor((y + 1) * step); yy++) for (let xx = Math.floor(x * step); xx < Math.floor((x + 1) * step); xx++) { s += lum(rgba, (yy * n + xx) * 4); c++; }
+        l[y * m + x] = s / Math.max(1, c); mean += l[y * m + x];
+    }
+    mean /= m * m;
+    const low = new Float32Array(n * n).fill(mean);
+    for (let ky = -2; ky <= 2; ky++) for (let kx = -2; kx <= 2; kx++) {
+        if (kx === 0 && ky === 0) continue;
+        let re = 0, im = 0;
+        for (let y = 0; y < m; y++) for (let x = 0; x < m; x++) {
+            const ph = -2 * Math.PI * (kx * x + ky * y) / m, v = l[y * m + x] - mean;
+            re += v * Math.cos(ph); im += v * Math.sin(ph);
+        }
+        re /= m * m; im /= m * m;
+        // pixel (x, y) of the full image sits at sample coordinate ((x + 0.5) / step - 0.5)
+        for (let y = 0; y < n; y++) {
+            const sy = (y + 0.5) / step - 0.5;
+            for (let x = 0; x < n; x++) {
+                const ph = 2 * Math.PI * (kx * ((x + 0.5) / step - 0.5) + ky * sy) / m;
+                low[y * n + x] += re * Math.cos(ph) - im * Math.sin(ph);
+            }
+        }
+    }
+    return { low, mean };
+}
+
+/**
+ * The tile with its tile-scale luminance variation divided out (each pixel's linear colour times mean / its one- and
+ * two-cycle luminance): broad bands, a shading gradient or a big stain are what show a tile's repeat over a large surface,
+ * and the image model paints them however it is asked (standing seam, painted steel, 2026-10-22). Finer detail, hue and the
+ * mean stay; variation at the scene's scale is the scene's to add.
+ */
+export function equaliseTileScale(rgba: Uint8Array, n: number): Uint8Array {
+    const { low, mean } = tileScaleLuminance(rgba, n);
+    const out = new Uint8Array(rgba.length);
+    const enc = (v: number) => Math.round(255 * Math.min(1, Math.max(0, v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055)));
+    for (let i = 0; i < n * n; i++) {
+        const g = mean / Math.max(0.25 * mean, low[i]);
+        for (let c = 0; c < 3; c++) out[i * 4 + c] = enc(SRGB_TO_LINEAR[rgba[i * 4 + c]] * g);
+        out[i * 4 + 3] = 255;
+    }
+    return out;
+}
+
+/**
+ * The salient marks of a tile: isolated spots that stand out from their surroundings (a stain, a rust spot, a dark tile) and,
+ * few and the same in every repeat, show the repeat as a grid of marks (asphalt, terracotta, 2026-10-22). Luminance is
+ * band-passed (a fine box mean less a coarse one, over the coarse mean); pixels departing by more than `threshold` form
+ * marks (4-connected); a mark counts when its area lies between (n/64)^2 and (n/6)^2 (finer is grain, larger or joined into
+ * a network is the pattern itself). Returns how many marks and the share of the tile they cover.
+ */
+export function salientMarks(rgba: Uint8Array, n: number, threshold = 0.2): { count: number; share: number } {
+    const l = new Float32Array(n * n);
+    for (let i = 0; i < n * n; i++) l[i] = lum(rgba, i * 4);
+    const box = (src: Float32Array, r: number) => {
+        const pass = (a: Float32Array, horizontal: boolean) => {
+            const out = new Float32Array(n * n);
+            for (let p = 0; p < n; p++) {
+                const at = (b: number) => { const k = ((b % n) + n) % n; return horizontal ? a[p * n + k] : a[k * n + p]; };
+                let s = 0;
+                for (let b = -r; b <= r; b++) s += at(b);
+                for (let b = 0; b < n; b++) {
+                    if (horizontal) out[p * n + b] = s / (2 * r + 1); else out[b * n + p] = s / (2 * r + 1);
+                    s += at(b + r + 1) - at(b - r);
+                }
+            }
+            return out;
+        };
+        return pass(pass(src, true), false);
+    };
+    const fine = box(l, Math.max(1, Math.round(n / 256))), coarse = box(l, Math.max(2, Math.round(n / 24)));
+    const mark = new Int8Array(n * n);
+    for (let i = 0; i < n * n; i++) { const d = (fine[i] - coarse[i]) / Math.max(1e-4, coarse[i]); mark[i] = d < -threshold ? -1 : d > threshold ? 1 : 0; }
+    const seen = new Uint8Array(n * n), minA = (n / 64) ** 2, maxA = (n / 6) ** 2;
+    let count = 0, area = 0;
+    const stack: number[] = [];
+    for (let i = 0; i < n * n; i++) {
+        if (!mark[i] || seen[i]) continue;
+        let a = 0;
+        stack.push(i); seen[i] = 1;
+        while (stack.length) {
+            const p = stack.pop()!, x = p % n, y = (p - x) / n;
+            a++;
+            for (const q of [y * n + (x + 1) % n, y * n + (x + n - 1) % n, ((y + 1) % n) * n + x, ((y + n - 1) % n) * n + x]) if (!seen[q] && mark[q] === mark[i]) { seen[q] = 1; stack.push(q); }
+        }
+        if (a >= minA && a <= maxA) { count++; area += a; }
+    }
+    return { count, share: area / (n * n) };
+}
+
 /** Wrapped central-difference gradient magnitude. */
 function gradient(f: (x: number, y: number) => number, w: number, h: number): Float32Array {
     const g = new Float32Array(w * h);
@@ -321,15 +424,43 @@ export function normalFromHeight(height: Float32Array, w: number, h: number, siz
     return { rgba: out, slopeMean: slope / (w * h) };
 }
 
-/** Roughness map (RGBA grey): the reading's mean, up to `hollow` more in the deepest parts. Returns its mean and spread too. */
-export function roughnessFromHeight(height: Float32Array, w: number, h: number, mean: number, hollow: number): { rgba: Uint8Array; mean: number; spread: number } {
+/**
+ * Roughness map (RGBA grey): the reading's mean, up to `hollow` more in the deepest parts and up to `stain` more where the
+ * colour departs from its surroundings (a stain, wear, rust: a surface's finish changes with what marked it), so the sheen
+ * is not one uniform value over the whole tile. Returns its mean and spread too.
+ */
+export function roughnessFromHeight(height: Float32Array, w: number, h: number, mean: number, hollow: number, colour?: Uint8Array, stain = 0.15): { rgba: Uint8Array; mean: number; spread: number } {
     let hm = 0;
     for (const v of height) hm += v;
     hm /= height.length;
+    // the colour's local departure: luminance against a box mean over 1/32 of the side (wrapped)
+    let dev: Float32Array | undefined;
+    if (colour) {
+        const l = new Float32Array(w * h);
+        for (let i = 0; i < w * h; i++) l[i] = lum(colour, i * 4);
+        const r = Math.max(2, Math.round(w / 64));
+        const pass = (src: Float32Array, horizontal: boolean) => {
+            const out = new Float32Array(w * h);
+            const len = horizontal ? w : h, lines = horizontal ? h : w;
+            for (let a = 0; a < lines; a++) {
+                const at = (b: number) => { const k = ((b % len) + len) % len; return horizontal ? src[a * w + k] : src[k * w + a]; };
+                let s = 0;
+                for (let b = -r; b <= r; b++) s += at(b);
+                for (let b = 0; b < len; b++) {
+                    if (horizontal) out[a * w + b] = s / (2 * r + 1); else out[b * w + a] = s / (2 * r + 1);
+                    s += at(b + r + 1) - at(b - r);
+                }
+            }
+            return out;
+        };
+        const local = pass(pass(l, true), false);
+        dev = new Float32Array(w * h);
+        for (let i = 0; i < w * h; i++) dev[i] = Math.min(1, Math.abs(l[i] - local[i]) / Math.max(1e-4, local[i]) / 0.5);
+    }
     const out = new Uint8Array(w * h * 4);
     let s = 0, ss = 0;
     for (let i = 0; i < height.length; i++) {
-        const r = Math.min(1, Math.max(0, mean + hollow * (hm - height[i])));
+        const r = Math.min(1, Math.max(0, mean + hollow * (hm - height[i]) + (dev ? stain * (dev[i] - 0.25) : 0)));
         s += r; ss += r * r;
         const b = Math.round(r * 255);
         out[i * 4] = b; out[i * 4 + 1] = b; out[i * 4 + 2] = b; out[i * 4 + 3] = 255;
@@ -381,29 +512,29 @@ export interface GeneratedSurface {
     wrapAfter: number;
 }
 
-/** Generates one entry; throws with the reason when a step fails. */
-export async function generateSurfaceTexture(spec: SurfaceTextureSpec, models: SurfaceTextureModels, P = SURFACE_TEXTURE_PARAMS): Promise<GeneratedSurface> {
-    const N = P.sizePx;
-    const prompt = surfaceColourPrompt(spec);
-    // painted until a map passes the tile-scale contrast gate (or the attempts run out: the lowest is kept, its score recorded)
-    let best: { painted: Awaited<ReturnType<SurfaceTextureModels['paint']>>; color: Uint8Array; contrast: number } | undefined;
-    const refusals: string[] = [];
-    for (let attempt = 0; attempt < P.paintAttempts && !(best && best.contrast <= P.maxTileScaleContrast); attempt++) {
-        let painted;
-        try {
-            painted = await models.paint(attempt === 0 ? prompt : `${prompt} (variation ${attempt + 1})`, '1:1');
-        } catch (e) {
-            refusals.push((e as Error).message);
-            continue;
-        }
-        const q = quiltToTile([painted.rgba], painted.width, painted.height, P.quiltBand, P.quiltFeatherPx);
-        const color = models.resize(q.maps[0], q.width, q.height, N);
-        const contrast = tileScaleContrast(color, N);
-        if (!best || contrast < best.contrast) best = { painted, color, contrast };
-    }
-    if (!best) throw new Error(`${spec.id}: no painting in ${P.paintAttempts} attempts: ${refusals.join(' | ')}`);
-    const { painted, color } = best;
-    const wrapBefore = wrapMismatch(painted.rgba, painted.width, painted.height);
+/** The question the vision critic answers about a material's scene render (renderSurfaceSwatch). */
+export function surfaceCritiquePrompt(spec: SurfaceTextureSpec): string {
+    return `This render shows one tileable surface material laid at its real size over a large ground plane (left, receding about 30 m `
+        + `from eye height) and a wall (right, seen at an angle), under a low sun. The material was asked for as: ${spec.prompt}. Judge it as a `
+        + 'film look-development supervisor. Is the tiling repeat visible: the same marks, stains, spots, bands or features recurring on a '
+        + 'fixed grid? Does it read as the real material at the right scale? Reply with JSON only: {"repeatVisible": true|false, '
+        + '"repeatSeverity": 0..1 (0 no repeat can be seen, 1 an obvious grid), "realism": 0..1 (1 indistinguishable from a photograph of '
+        + 'the real surface), "notes": "what gives it away, in one sentence"}.';
+}
+
+export interface SurfaceCritique { repeatVisible: boolean; repeatSeverity: number; realism: number; notes: string }
+
+export function parseSurfaceCritique(text: string): SurfaceCritique | undefined {
+    let j: any;
+    try { j = JSON.parse(text.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim()); } catch { return undefined; }
+    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : undefined);
+    const sev = num(j?.repeatSeverity), real = num(j?.realism);
+    if (typeof j?.repeatVisible !== 'boolean' || sev === undefined || real === undefined) return undefined;
+    return { repeatVisible: j.repeatVisible, repeatSeverity: sev, realism: real, notes: typeof j.notes === 'string' ? j.notes.trim() : '' };
+}
+
+/** The relief (0..1 height) of a colour map: the depth model's whole reading plus the fine band of its quarter readings. */
+async function reliefOf(color: Uint8Array, N: number, models: SurfaceTextureModels, P: typeof SURFACE_TEXTURE_PARAMS): Promise<{ height: Float32Array; model: string }> {
     const pad = Math.round(N * P.depthPad);
     const d = await models.depth({ rgba: wrapPad(color, N, pad), width: N + 2 * pad, height: N + 2 * pad });
     const coarse = reliefFromDepth(d.depths, N, pad, P.reliefHighPass);
@@ -434,11 +565,54 @@ export async function generateSurfaceTexture(spec: SurfaceTextureSpec, models: S
     const ms = Float32Array.from(mixed).sort();
     const mlo = ms[Math.floor(ms.length * 0.025)], mhi = ms[Math.floor(ms.length * 0.975)];
     const height = mixed.map(v => Math.min(1, Math.max(0, (v - mlo) / Math.max(1e-6, mhi - mlo))));
-    const alignment = heightAlignment(color, height, N, N);
+    return { height, model: d.model };
+}
+
+/** Builds one candidate's maps from a painting: quilted, equalised, relief, reading, normals, roughness. */
+async function buildCandidate(spec: SurfaceTextureSpec, painted: Awaited<ReturnType<SurfaceTextureModels['paint']>>, models: SurfaceTextureModels, P: typeof SURFACE_TEXTURE_PARAMS) {
+    const N = P.sizePx;
+    const q = quiltToTile([painted.rgba], painted.width, painted.height, P.quiltBand, P.quiltFeatherPx);
+    const quilted = models.resize(q.maps[0], q.width, q.height, N);
+    const rawContrast = tileScaleContrast(quilted, N);
+    const color = equaliseTileScale(quilted, N);
+    const { height, model: heightModel } = await reliefOf(color, N, models, P);
     const reading = parseSurfaceReading(await models.read(surfaceReadingPrompt(spec), { rgba: color, width: N, height: N }));
     if (!reading) throw new Error(`${spec.id}: the surface reading did not parse`);
     const normal = normalFromHeight(height, N, N, reading.spanM, reading.reliefM);
-    const rough = roughnessFromHeight(height, N, N, reading.roughness, P.hollowRoughness);
+    const rough = roughnessFromHeight(height, N, N, reading.roughness, P.hollowRoughness, color);
+    return { painted, color, height, heightModel, reading, normal, rough, rawContrast, contrast: tileScaleContrast(color, N) };
+}
+
+/**
+ * Generates one entry. Each attempt paints the colour map, refuses a painting whose own large-scale structure is too strong
+ * (equalising takes it out of the colour, not out of what the depth model reads as relief), builds the maps, renders them as
+ * a scene would show them and has the vision critic judge the repeat; attempts go on until one passes, and the entry fails,
+ * with every reason, when none does (a material that shows its repeat is not stored).
+ */
+export async function generateSurfaceTexture(spec: SurfaceTextureSpec, models: SurfaceTextureModels, P = SURFACE_TEXTURE_PARAMS): Promise<GeneratedSurface> {
+    const N = P.sizePx;
+    const prompt = surfaceColourPrompt(spec);
+    const reasons: string[] = [];
+    let best: (Awaited<ReturnType<typeof buildCandidate>> & { critique: SurfaceCritique }) | undefined;
+    for (let attempt = 0; attempt < P.paintAttempts && !(best && best.critique.repeatSeverity <= P.targetRepeatSeverity); attempt++) {
+        let painted;
+        try {
+            painted = await models.paint(attempt === 0 ? prompt : `${prompt} (variation ${attempt + 1})`, '1:1');
+        } catch (e) {
+            reasons.push(`attempt ${attempt + 1}: ${(e as Error).message}`);
+            continue;
+        }
+        const c = await buildCandidate(spec, painted, models, P);
+        if (c.rawContrast > P.maxRawTileScaleContrast) { reasons.push(`attempt ${attempt + 1}: painted with tile-scale structure ${c.rawContrast.toFixed(3)} > ${P.maxRawTileScaleContrast}`); continue; }
+        const swatch = renderSurfaceSwatch({ color: { rgba: c.color, w: N, h: N }, normal: { rgba: c.normal.rgba, w: N, h: N }, roughness: { rgba: c.rough.rgba, w: N, h: N } }, c.reading.spanM);
+        const critique = parseSurfaceCritique(await models.read(surfaceCritiquePrompt(spec), swatch));
+        if (!critique) { reasons.push(`attempt ${attempt + 1}: the critique did not parse`); continue; }
+        if (critique.repeatSeverity > P.maxRepeatSeverity) reasons.push(`attempt ${attempt + 1}: repeat ${critique.repeatSeverity} (${critique.notes})`);
+        if (!best || critique.repeatSeverity < best.critique.repeatSeverity) best = { ...c, critique };
+    }
+    if (!best || best.critique.repeatSeverity > P.maxRepeatSeverity) throw new Error(`${spec.id}: no painting passed in ${P.paintAttempts} attempts: ${reasons.join(' | ')}`);
+    const { painted, color, height, heightModel, reading, normal, rough } = best;
+    const alignment = heightAlignment(color, height, N, N);
     const sorted = Float32Array.from(height).sort();
     const lo = sorted[Math.floor(sorted.length * 0.025)], hi = sorted[Math.floor(sorted.length * 0.975)];
     const heightRgba = new Uint8Array(N * N * 4);
@@ -450,9 +624,10 @@ export async function generateSurfaceTexture(spec: SurfaceTextureSpec, models: S
             colour: surfaceColourStats(color),
             surface: { normalSlopeMean: r3(normal.slopeMean), heightRange: r3(hi - lo), reliefM: reading.reliefM, roughnessMean: r3(rough.mean), roughnessSpread: r3(rough.spread), metallic: reading.metallic, tileScaleContrast: r3(best.contrast) },
             appearance: reading.appearance, provenance: 'generated',
-            source: { model: painted.model, prompt, heightModel: d.model, method: 'colour painted by the image model and quilted onto itself along the least-different cut so it tiles; relief from the depth model\'s reading of the wrap-padded colour map (trend removed, made periodic) plus the fine band of its readings of each quarter (overlapped and feathered); normals from it at the read relief and size; roughness the read mean, rougher in hollows' },
-            heightAlignment: r3(alignment)
+            source: { model: painted.model, prompt, heightModel, method: 'colour painted by the image model, quilted onto itself along the least-different cut so it tiles, its tile-scale luminance variation divided out; relief from the depth model\'s reading of the wrap-padded colour map (trend removed, made periodic) plus the fine band of its readings of each quarter (overlapped and feathered); normals from it at the read relief and size; roughness the read mean, rougher in hollows and where the colour departs locally; rendered at scene scale and passed by the vision critic' },
+            heightAlignment: r3(alignment),
+            critique: { repeatSeverity: best.critique.repeatSeverity, realism: best.critique.realism, notes: best.critique.notes }
         },
-        color, normal: normal.rgba, roughness: rough.rgba, height: heightRgba, size: N, wrapBefore, wrapAfter: wrapMismatch(color, N, N)
+        color, normal: normal.rgba, roughness: rough.rgba, height: heightRgba, size: N, wrapBefore: wrapMismatch(painted.rgba, painted.width, painted.height), wrapAfter: wrapMismatch(color, N, N)
     };
 }
