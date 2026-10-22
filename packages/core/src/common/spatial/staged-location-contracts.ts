@@ -959,6 +959,8 @@ export interface StageSummary {
     status: StageStatus;
     /** skipped / failed / degraded, one sentence. */
     reason?: string;
+    /** Skipped as outside this kind of build (StageEvent.outOfScope): the progress view leaves it out. */
+    outOfScope?: boolean;
     layerIds: string[];
     timings: StageTimings;
     degradationIds: string[];
@@ -1045,6 +1047,8 @@ export interface StageEvent {
     degradations: DegradationRecord[];
     timings: StageTimings;
     model?: VisionModelUse;
+    /** A skip that is not part of this kind of build (a pipeline G only build): the progress view leaves the stage out. */
+    outOfScope?: boolean;
 }
 
 // =============================================================================
@@ -1940,7 +1944,7 @@ const DEFINITIONS = {
         keptFrom: obj(['runId', 'place'], { runId: STR, place: STR })
     }),
     stageSummary: obj(['stage', 'order', 'title', 'source', 'status', 'layerIds', 'timings', 'degradationIds'], {
-        stage: STR, order: INT, title: STR, source: STR, status: ref('stageStatus'), reason: STR,
+        stage: STR, order: INT, title: STR, source: STR, status: ref('stageStatus'), reason: STR, outOfScope: BOOL,
         layerIds: arr(STR), timings: ref('stageTimings'), degradationIds: arr(STR), cost: ref('stageCost')
     }),
     structurePick: obj(['seed', 'geocodeToStructureM', 'footprintAreaM2', 'extractionRadiusM', 'containmentRounds'], {
@@ -2073,7 +2077,7 @@ const DEFINITIONS = {
             supersede: arr(obj(['objectId', 'by'], { objectId: STR, by: STR }))
         }),
         layers: arr(ref('stagedLayer')), degradations: arr(ref('DegradationRecord')),
-        timings: ref('stageTimings'), model: ref('visionModelUse')
+        timings: ref('stageTimings'), model: ref('visionModelUse'), outOfScope: BOOL
     }),
     StagedLocationResult: obj(['success', 'status', 'place', 'extraction', 'stages', 'degradations', 'provenance', 'complexityGate', 'sourceLimits', 'timingsMs', 'cache', 'artifact', 'digest', 'summary'], {
         success: { const: true }, status: { enum: ['complete', 'degraded', 'stopped'] },

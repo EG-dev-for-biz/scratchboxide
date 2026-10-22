@@ -205,6 +205,9 @@ export const VISION_STAGE_MARGIN_MS = 20_000;
 const MIN_RUNS_WINDOW_MS = 30_000;
 
 /** Canonical order (-1: no layer), overlay title and per-stage time limit. */
+/** Why a stage is skipped on a procedural request: the 3D Building button runs pipeline G and only what G builds on. */
+const G_ONLY = 'pipeline G only: the 3D Building build runs only the steps pipeline G needs';
+
 export const STAGES = {
     resolve: { order: -1, title: 'Place', budgetMs: 10_000 },
     // the first paint: Google's vector buildings extruded natively while the tiles stream (vector-first-paint.ts); it ends once
@@ -230,7 +233,8 @@ export const STAGES = {
     // Street View survey (about 3 min, alongside the readings) and up to 8 redraws (about 2.5 min)
     // version F (on by default; SCRATCHBOX_STAGED_GEOMETRY=e reverts to E's own inference) reads, adjusts and redraws
     // in this slot: a longer limit
-    grammar: { order: 2, title: 'Facade grammar', budgetMs: stagedGeometryF() ? 900_000 : 420_000 },
+    // pipeline G's tall walls read for up to READ_TIMEOUT_MAX_MS each (pipeline-g/read.ts), so its slot has the longer budget too
+    grammar: { order: 2, title: 'Facade grammar', budgetMs: 900_000 },
     // pipeline E: measured relief on the clean massing (the scan averaged along what repeats), then the photo-match gate
     relief: { order: 2, title: 'Measured relief', budgetMs: 480_000 },
     fit: { order: 3, title: 'Scan-fitted rebuild', budgetMs: 30_000 },
@@ -582,19 +586,20 @@ class StagedRun {
         this.state.provenanceLegend = this.legend();
         this.state.updatedAtMs = this.now();
         return composeStagedArtifact({
-            state: JSON.parse(JSON.stringify(this.state)), camera: this.camera, layerMeta: this.layerMeta, geoAnchor: this.geoAnchor,
+            state: { ...JSON.parse(JSON.stringify(this.state)), stages: this.state.stages.filter(st => !st.outOfScope).map(st => JSON.parse(JSON.stringify(st))) }, camera: this.camera, layerMeta: this.layerMeta, geoAnchor: this.geoAnchor,
             activeScene: this.activeScene, ...(this.carried ? { carried: this.carried } : {}), summary, version: this.version++
         });
     }
 
     /** Updates a stage's summary and streams it (with the scene on a commit, degrade or finish). */
-    emit(id: StageId, status: StageStatus, extra: { source?: string; reason?: string; layers?: StagedLayer[]; degradations?: DegradationRecord[]; model?: VisionModelUse; message?: string; progress?: number } = {}, withArtifact = false): void {
+    emit(id: StageId, status: StageStatus, extra: { source?: string; reason?: string; layers?: StagedLayer[]; degradations?: DegradationRecord[]; model?: VisionModelUse; message?: string; progress?: number; outOfScope?: boolean } = {}, withArtifact = false): void {
         if (this.closed) return;
         const s = this.summary(id);
         const wasRunning = s.status === 'running';
         s.status = status;
         if (extra.source !== undefined) s.source = extra.source;
         if (extra.reason !== undefined) s.reason = extra.reason;
+        if (extra.outOfScope) s.outOfScope = true;
         if (status === 'running' && !wasRunning) s.timings = { startedAtMs: this.now(), cached: false };
         if (status !== 'running' && status !== 'pending') {
             s.timings.endedAtMs = this.now();
@@ -607,6 +612,7 @@ class StagedRun {
             schema: 'scratchbox.stage-event/2', runId: this.runId, seq: ++this.seq, stage: id, order: s.order, status, title: s.title, source: s.source,
             ...(extra.progress !== undefined ? { progress: extra.progress } : {}),
             ...(extra.message ? { message: extra.message } : {}),
+            ...(extra.outOfScope ? { outOfScope: true } : {}),
             ...(extra.layers?.length ? {
                 patch: {
                     upsertObjects: extra.layers.map(l => l.objectId), removeObjects: [],
@@ -738,10 +744,13 @@ class Runner {
         return this.now() >= this.deadlineAt;
     }
 
+    /** A pipeline G only build: every skip is a step outside that build, left out of the progress view. */
+    gOnly = false;
+
     skip(id: StageId, reason: string, degradations: DegradationRecord[] = []): void {
         const s = this.run.summary(id);
         if (s.status !== 'pending') return;
-        this.run.emit(id, 'skipped', { reason, degradations });
+        this.run.emit(id, 'skipped', { reason, degradations, ...(this.gOnly ? { outOfScope: true } : {}) });
     }
 
     /**
@@ -1190,6 +1199,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     const run = new StagedRun(runId, request, ctx, now, artifactId, intoActive);
     runningStages = () => STAGE_IDS.filter(id => run.summary(id).status === 'running');
     const runner = new Runner(run, ctx, now);
+    runner.gOnly = request.procedural === true;
     const base = `${slug(request.query)}${request.isolate ? '_iso' : ''}`;
     const persist = () => {
         const rec: RunRecord = {
@@ -1517,6 +1527,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
 
         // ---------------- vehicles (vehicle-removal.ts): every later stage builds on the scan without them ----------------
         const devehicled = await (async (): Promise<typeof t.extraction | undefined> => {
+            if (request.procedural === true) { runner.skip('vehicles', G_ONLY); return undefined; }
             if (!vehicleRemovalEnabled() || !deps.vehicleRemoval) { runner.skip('vehicles', 'vehicle removal is off (SCRATCHBOX_STAGED_VEHICLES=0, or not in these deps)'); return undefined; }
             const vis = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
             const notRemoved = (reason: string, cause?: unknown, transient = false) => run.degrade(record('vehicles', 'vehicles_not_removed', {
@@ -1597,7 +1608,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const isolateMode = !!structure;
 
         // ---------------- terrain (starts now and runs beside everything else; needs only the extraction's frame) ----------------
-        if (!deps.elevation) {
+        if (request.procedural === true) {
+            runner.skip('terrain', G_ONLY);
+        } else if (!deps.elevation) {
             runner.skip('terrain', 'no Google Maps API key for the Elevation API, so the ground around the place is not measured');
         } else {
             const elevation = deps.elevation;
@@ -2640,7 +2653,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
 
         // ---------------- trees-measure ----------------
         let strip: TileVegetationStripResult | undefined;
-        if (request.trees) {
+        if (request.trees && request.procedural !== true) {
             // (the structure picked stays as scanned: a tree taken out beside it never takes its roof or walls along)
             const keep = structure && t.ground ? structureKeepCells(structure, t.ground) : undefined;
             const roi: StripRoi | undefined = structure ? { schema: 'scratchbox.strip-roi/1', polygon: grownOutline(structure.outline, ISOLATE_TREE_REACH_M), ...(keep ? { keep } : {}) } : undefined;
@@ -2684,13 +2697,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             });
             strip = measured.status === 'committed' ? measured.value : undefined;
         } else {
-            runner.skip('trees-measure', 'trees were not asked for');
+            runner.skip('trees-measure', request.procedural === true ? G_ONLY : 'trees were not asked for');
         }
 
         // ---------------- roads (SB-Roadie: Google's road centrelines measured kerb to kerb on the tree-stripped scan; runs beside the remesh) ----------------
         let roadsMeasured: RoadSurface[] | undefined;
         type RoadStageValue = { stats: RoadMesh['stats']; measuredKerbShare: number; photo: { width: number; height: number; texelM: number; ms: number }; markings?: { runs: number; markings: number; dashed: number; solid: number } } | undefined;
         const roadsPromise: Promise<unknown> = (async () => {
+            if (request.procedural === true) { runner.skip('roads', G_ONLY); return; }
             if (!sbRoadieEnabled()) { runner.skip('roads', 'SB-Roadie is shelved for now (SCRATCHBOX_STAGED_ROADS=1 to try it)'); return; }
             const covered = extraction.coveredRadiusM;
             // the vector evidence the sizing fetched (an isolate), else fetched now for the extraction's cover (a district)
@@ -2909,7 +2923,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         solarNote = `${solar.length} Solar roof facets (imagery ${sr.imageryQuality ?? '?'}, ${sr.imageryDate ?? 'date unknown'})`;
                     } catch (err) { solarNote = `no Solar roof facets (${errorMessage(err)})`; }
                 }
-                const key = stageKey(PIPELINE_E_VERSION, refined.cacheKey, sha256File(tilePath).slice(0, 16), sha256Bytes(Buffer.from(JSON.stringify({ eBuildings, solar }))), ...(shapeMode ? [SHAPE_STAGE_VERSION, shapeMode, request.query.trim()] : []));
+                const key = stageKey(PIPELINE_E_VERSION, refined.cacheKey, sha256File(tilePath).slice(0, 16), sha256Bytes(Buffer.from(JSON.stringify({ eBuildings, solar }))), ...(shapeMode ? [SHAPE_STAGE_VERSION, shapeMode, request.query.trim()] : []), ...(request.procedural === true ? ['footprint-massing'] : []));
                 const dir = path.join(cache.dir, 'pipeline_e', key.slice(0, 24));
                 io.progress('pipeline E: the clean massing, its orthos and the scanned residual');
                 const ground = picked.ground;
@@ -2928,7 +2942,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     cache.writeRunNote(runId, 'shape_program', { mode: shapeMode, ms: now() - shapeT0, timingsMs: sr.timingsMs, notes: sr.notes, trees: sr.trees, scan: sr.scan, files: sr.files, check: sr.massing.check, parts: sr.massing.parts.length, meshes: sr.massing.meshes.length, ...(sr.program ? { program: { model: sr.program.model, elements: sr.program.validated.elements.length, problems: sr.program.problems, parameters: sr.program.parameters, fit: sr.program.fit, correction: sr.program.correction } } : {}) });
                     io.progress(`shape program trial: ${sr.notes.join('; ')}`);
                 }
-                const r = await runMassingStage({ tilePath, isolateGlb: refined.rawClayGlb, buildings: eBuildings, groundY: picked.pick.groundY, scanTop, cells: picked.pick.cells, solar, outDir: dir, signal: io.signal, ...(shapeMassing ? { massing: shapeMassing } : {}) }, 'remesh', key);
+                const r = await runMassingStage({ tilePath, isolateGlb: refined.rawClayGlb, buildings: eBuildings, groundY: picked.pick.groundY, scanTop, cells: picked.pick.cells, solar, outDir: dir, signal: io.signal, ...(shapeMassing ? { massing: shapeMassing } : {}), ...(request.procedural === true ? { preferExtrusion: true, audit: false } : {}) }, 'remesh', key);
                 cache.writeRunNote(runId, 'pipeline_e', { check: r.massing.check, solar: r.massing.solar, solarNote, notes: r.massing.notes, timingsMs: r.timingsMs, native: r.run ? { timingsMs: r.run.report.timingsMs, snap: r.run.report.snap, residual: r.run.report.residual, faces: r.run.report.faces.length } : undefined });
                 const c = r.massing.check;
                 if (!c.ok || !r.run || !r.files) return fallBack('pipeline_e_fallback', `${c.reason ?? 'the massing could not be built'} (plan IoU ${c.iou}, roof ${c.heightErrMedianM} m off the scan, median; ${c.heightErrP90M} m at the 90th percentile)`);
@@ -3013,7 +3027,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 };
                 // the facades' orthophotos for the grammar reading (facade-grammar.ts), only when it will run
                 const orthos = grammarOn ? { reliefOrthos: true } : {};
-                if (isolateMode && deps.refine.renderOwnershipViews && visionAvailable) voteLater = { tilePath, ...(isolatePick ? { isolatePick } : {}), ...(remeshPick ? { pick: remeshPick } : {}), request: remeshRequest, orthos };
+                if (isolateMode && request.procedural !== true && deps.refine.renderOwnershipViews && visionAvailable) voteLater = { tilePath, ...(isolatePick ? { isolatePick } : {}), ...(remeshPick ? { pick: remeshPick } : {}), request: remeshRequest, orthos };
                 let r = await timed('tileRefine', () => deps.refine.refine({ ...remeshRequest!, ...orthos }));
                 // the isolated structure must be the one picked; when it is not (or tile_refine wrote no isolated scan to
                 // check), the district around it is remeshed whole and shown instead, labelled: never isolated fragments
@@ -3571,6 +3585,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 return;
             }
             if (eState) { const inf = await eInferenceRun(eState); await eReliefRun(eState, inf); return; }
+            if (stagedPipelineG(request)) {
+                // asked for a procedural rebuild, but G builds on E's vector massing and there is none: say so, never silently
+                run.degrade(record('grammar', 'pipeline_g_unavailable', {
+                    part: { description: 'the procedural rebuild of the structure' }, intended: 'pipeline G: facades read from a survey of the tile and built procedurally on the vector massing',
+                    fellTo: 'the current pipeline (remesh, fit, detail)', provenanceAfter: PROVENANCE.remeshed,
+                    reason: `pipeline G builds on pipeline E's vector massing, which this structure did not get (${eWhyNot ?? 'see the pipeline E fallback: the massing did not match the scan'})`,
+                    transient: false, runId, now: now()
+                }));
+            }
             runner.skip('relief', 'the measured relief runs on pipeline E\'s clean massing (SCRATCHBOX_STAGED_PIPELINE=e)');
             if (!grammarOn) {
                 runner.skip('grammar', !facadeGrammarEnabled() ? 'facade grammar is off (SCRATCHBOX_FACADE_GRAMMAR=0)' : !visionAvailable ? 'no vision model is configured' : 'the photometric relief is off');
@@ -4081,7 +4104,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- trees (plant) ‖ the rebuild ----------------
         const treesRun = async (): Promise<{ trees?: LocationClayTrees; putBack?: { triangles: number; crowns: number; reason: string } }> => {
             const remeshed = remeshedNow;
-            if (!request.trees) { runner.skip('trees', 'trees were not asked for'); return {}; }
+            if (!request.trees || request.procedural === true) { runner.skip('trees', request.procedural === true ? G_ONLY : 'trees were not asked for'); return {}; }
             if (!strip) { runner.skip('trees', 'the trees were not measured, so the scan keeps its own'); return {}; }
             if (!remeshed) {
                 const rec = run.degrade(record('trees', 'trees_stay_scanned', {
@@ -4279,11 +4302,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             };
             if (!request.isolate) { skipRest('not an isolated structure'); return out; }
             if (eState) {
-                const why = 'pipeline E built the structure from the vector massing (SCRATCHBOX_STAGED_PIPELINE=e)';
+                const g = request.procedural === true;
+                const why = g ? 'pipeline G rebuilds the structure procedurally on the footprint massing, from its own survey of the tile' : 'pipeline E built the structure from the vector massing (SCRATCHBOX_STAGED_PIPELINE=e)';
+                const tex = g ? 'pipeline G paints its faces from its survey plates' : 'pipeline E textures its faces from orthographic renders of the tile photo';
                 skipRest(why);
                 runner.skip('survey', why);
-                runner.skip('textures', 'pipeline E textures its faces from orthographic renders of the tile photo');
-                runner.skip('textures-late', 'pipeline E textures its faces from orthographic renders of the tile photo');
+                runner.skip('textures', tex);
+                runner.skip('textures-late', tex);
                 return out;
             }
             if (!isolateMode) { skipRest('the structure could not be isolated, so it is shown without a rebuild'); return out; }

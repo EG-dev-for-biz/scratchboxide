@@ -318,6 +318,12 @@ describe('the build state on the renderer side', () => {
         const progress = streamedProgress([ev(1, 'running', { progress: 0.4, message: 'flattening facades' })]);
         expect(progress.get('remesh')).toMatchObject({ progress: 0.4, message: 'flattening facades' });
         expect(streamedProgress([ev(1, 'running', { progress: 0.4 }), ev(2, 'committed')]).has('remesh')).toBe(false);
+        // a skip outside this kind of build (a pipeline G only build) leaves the progress view
+        const pending = mergeStageEvent(st, { ...ev(4, 'pending'), stage: 'terrain', title: 'Surrounding terrain' });
+        expect(pending.stages.some(s => s.stage === 'terrain')).toBe(true);
+        const g = { ...ev(5, 'skipped', { outOfScope: true }), stage: 'terrain', title: 'Surrounding terrain' };
+        expect(validateContract('StageEvent', g)).toEqual([]);
+        expect(mergeStageEvent(pending, g).stages.some(s => s.stage === 'terrain')).toBe(false);
         // another run's event is ignored
         expect(mergeStageEvent(st, { ...ev(3, 'failed'), runId: 'ffffffff' })).toBe(st);
     });
