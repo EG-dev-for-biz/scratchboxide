@@ -78,6 +78,10 @@ export const MASSING_PARAMS = {
 };
 
 export interface MassingStageInput {
+    /** Mass from footprints over Google's modelled volumes (MassingInputs.preferExtrusion): pipeline G's request. */
+    preferExtrusion?: boolean;
+    /** false: no residual audit of the native run (pipeline G only: the scan residue is not part of its build). */
+    audit?: boolean;
     /** The tile the faces are textured from (the devegetated tile when the trees were measured). */
     tilePath: string;
     /** The isolated scan (tile_refine's raw clay). */
@@ -217,13 +221,13 @@ export function writeMassingLayer(run: MassingRun, massing: Pick<Massing, 'check
 export async function runMassingStage(input: MassingStageInput, stage = 'remesh', stageKey = 'pipeline-e'): Promise<MassingStageResult> {
     const timingsMs: Record<string, number> = {};
     let t = Date.now();
-    const massing = input.massing ?? buildMassing({ buildings: input.buildings, groundY: input.groundY, scanTop: input.scanTop, cells: input.cells, ...(input.solar ? { solar: input.solar } : {}) });
+    const massing = input.massing ?? buildMassing({ buildings: input.buildings, groundY: input.groundY, scanTop: input.scanTop, cells: input.cells, ...(input.solar ? { solar: input.solar } : {}), ...(input.preferExtrusion ? { preferExtrusion: true } : {}) });
     timingsMs.massing = Date.now() - t;
     fs.mkdirSync(input.outDir, { recursive: true });
     fs.writeFileSync(path.join(input.outDir, 'massing.json'), JSON.stringify(massing, null, 1));
     if (!massing.check.ok) return { massing, timingsMs };
     t = Date.now();
-    const run = await runNativeMassing(massing, { tilePath: input.tilePath, isolateGlb: input.isolateGlb, dir: path.join(input.outDir, 'native'), groundY: input.groundY, ...(input.signal ? { signal: input.signal } : {}) });
+    const run = await runNativeMassing(massing, { tilePath: input.tilePath, isolateGlb: input.isolateGlb, dir: path.join(input.outDir, 'native'), groundY: input.groundY, ...(input.audit === false ? { audit: false } : {}), ...(input.signal ? { signal: input.signal } : {}) });
     timingsMs.native = Date.now() - t;
     t = Date.now();
     const { textures, legend } = plainTextures(run);

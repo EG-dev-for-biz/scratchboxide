@@ -19,7 +19,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { buildMassing, massingSpecText, simplifyRing, solarPlane, type Massing } from '../src/node/3d-engine/staged-location/pipeline-e/massing-spec';
+import { buildMassing, cellsFootprint, massingSpecText, ringArea, simplifyRing, solarPlane, type Massing } from '../src/node/3d-engine/staged-location/pipeline-e/massing-spec';
 import { readFaceOrtho, runMassing, type MassingNode } from '../src/node/3d-engine/staged-location/pipeline-e/native-massing';
 import { writeMassingTexturedGlb, type FaceTexture } from '../src/node/3d-engine/staged-location/pipeline-e/massing-glb';
 import { averageBays, bayGroups } from '../src/node/3d-engine/staged-location/pipeline-e/bay-average';
@@ -167,6 +167,33 @@ describe('footprint extrusion (native)', () => {
         const off = buildMassing({ buildings: [{ ...building, extruded: [{ loops: [[[30, 0], [50, 0], [50, -10], [30, -10]] as Array<[number, number]>], heightM: 12 }] }], groundY: 0, scanTop: () => 12, cells });
         expect(off.check.ok).toBe(false);
         expect(off.check.reason).toMatch(/intersection over union/);
+    });
+
+    it('masses a building from its footprint over its modelled volume when asked (pipeline G), and from the volume otherwise', () => {
+        const cells = new Set<string>();
+        for (let x = 0; x < 20; x++) for (let z = -10; z < 0; z++) cells.add(`${x},${z}`);
+        // a modelled box volume (heights from the ground) and the same footprint, plan only
+        const v: Array<[number, number, number]> = [[0, 0, 0], [20, 0, 0], [20, 0, -10], [0, 0, -10], [0, 12, 0], [20, 12, 0], [20, 12, -10], [0, 12, -10]];
+        const idx = [0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5, 2, 3, 7, 2, 7, 6, 3, 0, 4, 3, 4, 7, 4, 5, 6, 4, 6, 7];
+        const building = { id: 'b', parts: [], volumes: [{ vertices: v, indices: idx }], extruded: [{ loops: [[[0, 0], [20, 0], [20, -10], [0, -10]] as Array<[number, number]>], planOnly: true }] };
+        const asModelled = buildMassing({ buildings: [building], groundY: 0, scanTop: () => 12, cells });
+        expect(asModelled.meshes.length).toBe(1);
+        expect(asModelled.parts.length).toBe(0);
+        const fromFootprint = buildMassing({ buildings: [building], groundY: 0, scanTop: () => 12, cells, preferExtrusion: true });
+        expect(fromFootprint.meshes.length).toBe(0);
+        expect(fromFootprint.parts.length).toBe(1);
+        expect(fromFootprint.parts[0].topY).toBeCloseTo(12, 1);
+        // with no vector footprint, the scan's plan of the structure (its cells) is the footprint
+        const volumeOnly = buildMassing({ buildings: [{ ...building, extruded: [] }], groundY: 0, scanTop: () => 12, cells, preferExtrusion: true });
+        expect(volumeOnly.meshes.length).toBe(0);
+        expect(volumeOnly.parts.length).toBe(1);
+        expect(Math.abs(ringArea(volumeOnly.parts[0].loops[0]))).toBeCloseTo(200, 0);
+        // a stepped diagonal edge in the cells straightens to one edge
+        const tri = new Set<string>();
+        for (let x = 0; x < 30; x++) for (let z = 0; z <= x; z++) tri.add(`${x},${z}`);
+        const plan = cellsFootprint(tri)!;
+        expect(plan.length).toBeLessThanOrEqual(4);
+        expect(Math.abs(ringArea(plan))).toBeCloseTo(450, -1);
     });
 });
 

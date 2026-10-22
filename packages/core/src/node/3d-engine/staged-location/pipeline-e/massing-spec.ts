@@ -29,6 +29,8 @@ import type { VectorBuilding } from '../vector-footprints';
 import type { SolarRoofSegment } from './solar-roof';
 
 export const SIMPLIFY_TOLERANCE_M = 0.25;
+/** How far a traced cell boundary may stray from its straightened edge: twice a cell's half-diagonal, so 1 m steps and scan ragging go. */
+const STAIR_TOLERANCE_M = 1.5;
 export const COLLINEAR_DEG = 6;
 export const HEIGHT_AGREEMENT_M = 2.5;
 export const MIN_PITCHED_DEG = 10;
@@ -86,6 +88,11 @@ export interface MassingInputs {
     cells: ReadonlySet<string>;
     /** Solar roof facets with their centres and plane heights already in the tile frame. */
     solar?: Array<SolarRoofSegment & { x: number; z: number; y: number }>;
+    /**
+     * Footprints over modelled volumes: a building with both is massed from its footprint extruded to its height, not
+     * Google's modelled mesh (pipeline G builds facades on whole wall planes, which a modelled mesh splits into slivers).
+     */
+    preferExtrusion?: boolean;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -548,6 +555,72 @@ export function detectHeightTiers(loops: Vec2[][], scanTop: (x: number, z: numbe
     return tiers.length >= 2 ? tiers : undefined;
 }
 
+/**
+ * The scan's own plan of the structure: the outer boundary of its 1 m cells ("floor(x),floor(z)") traced as a ring, its
+ * steps straightened (STAIR_TOLERANCE_M) so a diagonal wall reads as one edge. Undefined for fewer than 4 cells.
+ */
+export function cellsFootprint(cells: ReadonlySet<string>): Vec2[] | undefined {
+    if (cells.size < 4) return undefined;
+    const has = (x: number, z: number) => cells.has(`${x},${z}`);
+    // directed boundary edges, the inside on the left: each corner has one outgoing edge, except where two cells touch
+    // only at a corner, which takes the left-most turn
+    const out = new Map<string, Vec2[]>();
+    const edge = (a: Vec2, b: Vec2) => { const k = `${a[0]},${a[1]}`; if (!out.has(k)) out.set(k, []); out.get(k)!.push(b); };
+    for (const c of cells) {
+        const [x, z] = c.split(',').map(Number);
+        if (!has(x, z - 1)) edge([x, z], [x + 1, z]);
+        if (!has(x + 1, z)) edge([x + 1, z], [x + 1, z + 1]);
+        if (!has(x, z + 1)) edge([x + 1, z + 1], [x, z + 1]);
+        if (!has(x - 1, z)) edge([x, z + 1], [x, z]);
+    }
+    const used = new Set<string>();
+    let best: Vec2[] | undefined;
+    for (const [k0, outs] of out) for (const first of outs) {
+        const ek = `${k0}>${first[0]},${first[1]}`;
+        if (used.has(ek)) continue;
+        const ring: Vec2[] = [];
+        let from = k0.split(',').map(Number) as Vec2, to = first;
+        for (let guard = 0; guard < 4 * cells.size + 8; guard++) {
+            const k = `${from[0]},${from[1]}>${to[0]},${to[1]}`;
+            if (used.has(k)) break;
+            used.add(k);
+            ring.push(from);
+            const opts = out.get(`${to[0]},${to[1]}`) ?? [];
+            const dir: Vec2 = [to[0] - from[0], to[1] - from[1]];
+            // left-most turn first: left, straight, right
+            const pick = [[-dir[1], dir[0]], dir, [dir[1], -dir[0]]].map(d => opts.find(o => o[0] - to[0] === d[0] && o[1] - to[1] === d[1])).find(Boolean);
+            if (!pick) break;
+            from = to; to = pick;
+        }
+        if (ring.length >= 4 && (!best || Math.abs(ringArea(ring)) > Math.abs(ringArea(best)))) best = ring;
+    }
+    if (!best) return undefined;
+    return simplifyRing(douglasPeuckerRing(best, STAIR_TOLERANCE_M));
+}
+
+/** A closed ring simplified globally (Douglas-Peucker from its two farthest-apart points): no point strays more than `tol`. */
+function douglasPeuckerRing(ring: Vec2[], tol: number): Vec2[] {
+    if (ring.length < 4) return ring;
+    let a = 0, b = 0, far = -1;
+    for (let i = 0; i < ring.length; i++) { const d = Math.hypot(ring[i][0] - ring[0][0], ring[i][1] - ring[0][1]); if (d > far) { far = d; b = i; } }
+    far = -1;
+    for (let i = 0; i < ring.length; i++) { const d = Math.hypot(ring[i][0] - ring[b][0], ring[i][1] - ring[b][1]); if (d > far) { far = d; a = i; } }
+    const keep = new Set<number>([a, b]);
+    const span = (i: number, j: number): void => {
+        const n = ring.length, len = (j - i + n) % n;
+        if (len < 2) return;
+        const p = ring[i], q = ring[j], dx = q[0] - p[0], dz = q[1] - p[1], L = Math.hypot(dx, dz) || 1;
+        let worst = -1, at = -1;
+        for (let k = 1; k < len; k++) {
+            const r = ring[(i + k) % n], d = Math.abs((r[0] - p[0]) * dz - (r[1] - p[1]) * dx) / L;
+            if (d > worst) { worst = d; at = (i + k) % n; }
+        }
+        if (worst > tol) { keep.add(at); span(i, at); span(at, j); }
+    };
+    span(a, b); span(b, a);
+    return [...keep].sort((x, y) => x - y).map(i => ring[i]);
+}
+
 // ------------------------------------------------------------------------------------------------
 // the massing
 // ------------------------------------------------------------------------------------------------
@@ -560,12 +633,19 @@ export function buildMassing(inp: MassingInputs): Massing {
     const solarReport = { segments: solar.length, inside: 0, pitchedKept: 0, pitchedRejected: 0, flatUsed: 0 };
     const usedSolar = new Set<number>();
     for (const b of inp.buildings) {
-        // the modelled volume, where Google has one, is the massing as given
-        for (const [vi, v] of (b.volumes ?? []).entries()) {
+        // the modelled volume, where Google has one, is the massing as given, unless the footprint is asked for: then the
+        // vector footprint, or, where the vector data has only the volume, the scan's plan of the structure
+        const footprints = inp.preferExtrusion === true ? (b.extruded ?? []).filter(p => p.loops.length > 0) : [];
+        if (inp.preferExtrusion === true && !footprints.length && (b.volumes?.length ?? 0) > 0) {
+            const plan = cellsFootprint(inp.cells);
+            if (plan) { footprints.push({ loops: [plan] }); notes.push(`${b.id}: no vector footprint, so the footprint is the scan's plan of the structure (${plan.length} corners, ${Math.round(Math.abs(ringArea(plan)))} m2)`); }
+        }
+        const fromFootprint = footprints.length > 0;
+        for (const [vi, v] of (fromFootprint ? [] : b.volumes ?? []).entries()) {
             if (v.vertices.length < 4 || v.indices.length < 12) continue;
             meshes.push(singleSided({ id: `${b.id}/v${vi}`, vertices: v.vertices.map(([x, h, z]) => [x, inp.groundY + h, z]), indices: v.indices.slice() }));
         }
-        const extruded = (b.extruded ?? []).filter(p => !(p.planOnly && (b.volumes?.length ?? 0) > 0));
+        const extruded = fromFootprint ? footprints : (b.extruded ?? []).filter(p => !(p.planOnly && (b.volumes?.length ?? 0) > 0));
         for (const [pi, p] of extruded.entries()) {
             const loops = p.loops.map(l => simplifyRing(l)).filter(l => l.length >= 3 && Math.abs(ringArea(l)) >= 1);
             if (!loops.length) continue;
