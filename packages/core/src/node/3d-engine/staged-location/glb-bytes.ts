@@ -40,7 +40,7 @@ export function parseGlbBytes(bytes: Uint8Array): ParsedGlb {
     return { json, bin };
 }
 
-function accessorLayout(json: any, index: number): { base: number; stride: number; elementBytes: number; count: number; comps: number; componentType: number; viewEnd: number } {
+export function accessorLayout(json: any, index: number): { base: number; stride: number; elementBytes: number; count: number; comps: number; componentType: number; viewEnd: number } {
     const a = json.accessors?.[index];
     if (!a) throw new Error(`accessor ${index} does not exist`);
     if (a.sparse) throw new Error(`accessor ${index} is sparse, which the texture pass does not read`);
