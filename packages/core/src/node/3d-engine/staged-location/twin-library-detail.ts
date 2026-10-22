@@ -21,7 +21,7 @@ import { decodeImageInMemory } from './tile-texture-transfer';
 import type { LibraryFillSpec } from './texture-library-fill';
 import type { SurfaceLibrary } from './surface-materials';
 
-export const TWIN_DETAIL_VERSION = 'twin-library-detail/1';
+export const TWIN_DETAIL_VERSION = 'twin-library-detail/2';
 
 /** How strongly the library's normal map bends the twin's shading (glTF normalTexture.scale). */
 export const TWIN_DETAIL_NORMAL_SCALE = 0.8;
@@ -46,6 +46,7 @@ export function addLibraryDetail(twin: Uint8Array, spec: LibraryFillSpec, librar
     const sampler = json.samplers.length - 1;
     // per entry: its normal map as stored, and a metallic-roughness image (G its roughness, B its metalness)
     const maps = new Map<number, { normal: number; mr: number }>();
+    const metalOf = new Map<number, number>();
     const mapsOf = (entryIndex: number) => {
         let m = maps.get(entryIndex);
         if (m) return m;
@@ -58,12 +59,14 @@ export function addLibraryDetail(twin: Uint8Array, spec: LibraryFillSpec, librar
         const nb = library.readMap(e, 'normal');
         const rough = decodeImageInMemory(library.readMap(e, 'roughness'));
         const mr = Buffer.alloc(rough.width * rough.height * 4);
-        const metal = Math.round(255 * e.surface.metallic);
-        for (let i = 0; i < rough.width * rough.height; i++) { mr[i * 4] = 255; mr[i * 4 + 1] = rough.rgba[i * 4 + 1]; mr[i * 4 + 2] = metal; mr[i * 4 + 3] = 255; }
+        // G roughness, B full (the metalness is the factor): a JPEG's subsampled chroma would turn a varying B, or an R far
+        // from G, into stray metalness (walls went dark under it; Federation Square, 2026-10-22)
+        for (let i = 0; i < rough.width * rough.height; i++) { const g = rough.rgba[i * 4 + 1]; mr[i * 4] = g; mr[i * 4 + 1] = g; mr[i * 4 + 2] = 255; mr[i * 4 + 3] = 255; }
         m = {
             normal: tex(new Uint8Array(nb), nb[0] === 0x89 ? 'image/png' : 'image/jpeg', `${e.id}_detail_normal`),
             mr: tex(new Uint8Array(jpegJs.encode({ data: mr, width: rough.width, height: rough.height }, 90).data), 'image/jpeg', `${e.id}_detail_roughness`)
         };
+        metalOf.set(entryIndex, e.surface.metallic);
         maps.set(entryIndex, m);
         return m;
     };
@@ -123,7 +126,7 @@ export function addLibraryDetail(twin: Uint8Array, spec: LibraryFillSpec, librar
                 const mat = JSON.parse(JSON.stringify(base));
                 mat.name = `${base.name ?? 'Twin'}_${entry.id}`;
                 mat.normalTexture = { index: m.normal, texCoord: 1, scale: TWIN_DETAIL_NORMAL_SCALE };
-                mat.pbrMetallicRoughness = { ...(mat.pbrMetallicRoughness ?? {}), metallicRoughnessTexture: { index: m.mr, texCoord: 1 }, metallicFactor: 1, roughnessFactor: 1 };
+                mat.pbrMetallicRoughness = { ...(mat.pbrMetallicRoughness ?? {}), metallicRoughnessTexture: { index: m.mr, texCoord: 1 }, metallicFactor: metalOf.get(u.entry) ?? 0, roughnessFactor: 1 };
                 mat.extras = { ...(mat.extras ?? {}), sbSurfaceDetail: { schema: 'scratchbox.surface-detail/1', version: TWIN_DETAIL_VERSION, entryId: entry.id, realSizeM: entry.realSizeM, provenance: 'generated', note: 'the library entry\'s normal and roughness maps at their real size under the twin\'s colour (TEXCOORD_1, world-scale planar); the colour is the texture pass\'s' } };
                 json.materials.push(mat);
                 materialFor.set(key, json.materials.length - 1);

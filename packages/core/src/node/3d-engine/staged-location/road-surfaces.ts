@@ -459,6 +459,9 @@ export function nearestOffRoad(roads: RoadSurface[], x: number, z: number, maxM:
     return undefined;
 }
 
+/** The procedural district's streets' version (their object-store hash and stage key): v6, the carriageway wound to face up. */
+export const PROCEDURAL_ROADS_VERSION = 'roads/v6-up';
+
 export interface RoadMeshPart { positions: Float32Array; indices: Uint32Array; uv: Float32Array }
 
 /** Where a run's texture lies in the atlas (road-texture.ts): the carriageway band's rows, the sidewalk and kerb rows, in atlas texels. */

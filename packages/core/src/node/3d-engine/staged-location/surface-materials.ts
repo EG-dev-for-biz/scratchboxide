@@ -443,8 +443,8 @@ export function buildLibraryMaterials(library: SurfaceLibrary, uses: LibraryMate
         }
         const rough = decodeImageInMemory(library.readMap(e, 'roughness'));
         const mr = Buffer.alloc(rough.width * rough.height * 4);
-        const metal = Math.round(255 * e.surface.metallic);
-        for (let i = 0; i < rough.width * rough.height; i++) { mr[i * 4] = 255; mr[i * 4 + 1] = rough.rgba[i * 4 + 1]; mr[i * 4 + 2] = metal; mr[i * 4 + 3] = 255; }
+        // G roughness, B full and the metalness in the factor (JPEG chroma would turn R far from G, or a varying B, into stray metalness)
+        for (let i = 0; i < rough.width * rough.height; i++) { const g = rough.rgba[i * 4 + 1]; mr[i * 4] = g; mr[i * 4 + 1] = g; mr[i * 4 + 2] = 255; mr[i * 4 + 3] = 255; }
         const color: StagedGlbImage = { bytes: new Uint8Array(jpegJs.encode({ data: tinted, width: col.width, height: col.height }, q).data), mimeType: 'image/jpeg', name: `${id}_color` };
         const normalBytes = library.readMap(e, 'normal');
         const normal: StagedGlbImage = { bytes: new Uint8Array(normalBytes), mimeType: normalBytes[0] === 0x89 ? 'image/png' : 'image/jpeg', name: `${id}_normal` };
@@ -456,7 +456,7 @@ export function buildLibraryMaterials(library: SurfaceLibrary, uses: LibraryMate
         const e = library.entry(u.entryId)!, m = maps.get(u.entryId)!, g = gains.get(u.entryId)!;
         const factor = want(u).map((w, k) => Math.min(1, w / Math.max(1e-6, g[k]))) as [number, number, number];
         return {
-            name: u.name, baseColor: m.color, normal: m.normal, metallicRoughness: m.mr, baseColorFactor: [factor[0], factor[1], factor[2], 1], roughness: 1, metallic: 1,
+            name: u.name, baseColor: m.color, normal: m.normal, metallicRoughness: m.mr, baseColorFactor: [factor[0], factor[1], factor[2], 1], roughness: 1, metallic: e.surface.metallic,
             extras: {
                 ...u.extras,
                 sbTexture: { confidenceTexture: '@image:confidence', confidenceChannels: 'R = index into provenance[], G = weight 0..255, B = ladder rung (TEXTURE_LADDER_RUNGS), A = 255 where a stage produced the texel' },

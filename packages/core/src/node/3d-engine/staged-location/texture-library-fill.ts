@@ -20,7 +20,7 @@ import { linearToSrgb255, SRGB8_TO_LINEAR } from '../../../common/spatial/photog
 import type { LaidOutUvAtlas } from './texture-uv';
 
 /** Part of the texture cache key of a layer filled from the library. */
-export const LIBRARY_FILL_VERSION = 'library-fill/2-mip';
+export const LIBRARY_FILL_VERSION = 'library-fill/3';
 
 export const RUNG_LIBRARY = TEXTURE_LADDER_RUNGS.indexOf('generated tileable PBR');
 
@@ -76,6 +76,7 @@ export function libraryFill(atlas: LaidOutUvAtlas, base: BakedTexturePlanes, spe
     const counts = new Map<number, number>();
     const useIndex = new Map<number, number>();
     const mips = new Map<number, ReturnType<typeof mipChain>>();
+    const surfaces = new Map<number, Set<number>>();
     let filled = 0;
     for (let i = 0; i < N; i++) {
         if (!T.covered[i] || T.gutter[i] || T.mapIndex[i] === 65535 || base.albedo[i * 4 + 3]) continue;
@@ -107,17 +108,20 @@ export function libraryFill(atlas: LaidOutUvAtlas, base: BakedTexturePlanes, spe
         const s = (py * m.w + px) * 3;
         for (let c = 0; c < 3; c++) out.albedo[i * 4 + c] = Math.round(linearToSrgb255(Math.min(1, m.lin[s + c] * u.tint[c])));
         out.albedo[i * 4 + 3] = 255;
-        if (!useIndex.has(use)) useIndex.set(use, useIndex.size);
-        packConfidenceTexel(out.confidence, i, useIndex.get(use)!, 0.5, RUNG_LIBRARY);
-        counts.set(use, (counts.get(use) ?? 0) + 1);
+        // one provenance entry per library entry (not per surface: a district has hundreds, and every node of the twin
+        // carries the list; the per-surface choice and tint are in the layer's own labels)
+        if (!useIndex.has(u.entry)) useIndex.set(u.entry, useIndex.size);
+        packConfidenceTexel(out.confidence, i, useIndex.get(u.entry)!, 0.5, RUNG_LIBRARY);
+        counts.set(u.entry, (counts.get(u.entry) ?? 0) + 1);
+        surfaces.set(u.entry, (surfaces.get(u.entry) ?? new Set<number>()).add(use));
         filled++;
     }
     let covered = 0;
     for (let i = 0; i < N; i++) if (T.covered[i] && !T.gutter[i]) covered++;
-    out.provenance = [...useIndex.keys()].map(use => ({
+    out.provenance = [...useIndex.keys()].map(entry => ({
         source: 'generated-pbr', label: 'generated',
-        method: `surface library entry ${spec.entries[spec.uses[use].entry].id} for ${spec.uses[use].key}, at its real size (${spec.entries[spec.uses[use].entry].realSizeM.join(' x ')} m a tile) and tinted to the colour measured on the surface; where no photo reaches`,
-        coverage: covered ? (counts.get(use) ?? 0) / covered : 0
+        method: `surface library entry ${spec.entries[entry].id} at its real size (${spec.entries[entry].realSizeM.join(' x ')} m a tile), chosen for ${surfaces.get(entry)?.size ?? 0} surface${(surfaces.get(entry)?.size ?? 0) === 1 ? '' : 's'} and tinted to the colour measured on each; where no photo reaches`,
+        coverage: covered ? (counts.get(entry) ?? 0) / covered : 0
     }));
     return { ...out, filled };
 }

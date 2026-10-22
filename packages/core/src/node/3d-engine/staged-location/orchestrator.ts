@@ -94,9 +94,13 @@ import { VisionModelChain, type VisionGenAIClient } from '../../gemini/vision-mo
 import { segmentOwnershipViews } from './ownership-masks';
 import { buildGroundModel, geodeticToScan, loadScanMesh, scanToGeodetic, surfaceModel, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
 import { removeVehicles, vehicleRemovalEnabled, visionVehicleJudge, VEHICLE_REMOVAL_PARAMS, VEHICLE_REMOVAL_VERSION, type VehicleRemovalReport } from './vehicle-removal';
-import { buildRoadMesh, measureRoadSurfaces, sbRoadieEnabled, writeRoadsGlb, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
+import { buildRoadMesh, measureRoadSurfaces, sbRoadieEnabled, writeRoadsGlb, PROCEDURAL_ROADS_VERSION, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
 import { renderTopDownPhoto } from './top-down-photo';
 import { synthesizeRoadTextures } from './road-texture';
+import { LIBRARY_FILL_VERSION, type LibraryFillSpec } from './texture-library-fill';
+import { addLibraryDetail, TWIN_DETAIL_VERSION } from './twin-library-detail';
+import { loadSurfaceLibrary, type SurfaceLibrary } from './surface-materials';
+import { loadFillSpec, prepareProceduralTexturing, PROCEDURAL_ATLAS_MAX_SIDE, PROCEDURAL_MATERIALS_VERSION, PROCEDURAL_TRANSFER_MAX_DISTANCE_M, type ProceduralTexturingSummary, type StoredFillSpec } from './procedural-materials';
 import * as jpegJs from 'jpeg-js';
 import { TERRAIN_INNER_RADIUS_M, TERRAIN_INNER_STEP_M, TERRAIN_OUTER_STEP_M, TERRAIN_RADIUS_M, buildTerrainMesh, coverageHoleFromGlb, planTerrainGrid, terrainHeroGapM, writeTerrainGlb } from './terrain-surround';
 import { readGlbScene, renderFrameDepth, sceneToRenderMesh } from '../../spatial/StreetViewPoseRegistrar';
@@ -2081,6 +2085,19 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         /** tile_refine's photo-textured output per committed remesh layer (the source of a district's twins). */
         const refineTextured = new Map<string, string>();
         type TexTarget = { layer: StagedLayer; file: string; surfaces?: Array<{ id: string; chart: any }>; late?: boolean };
+        /** A procedural district's rebuilt layer: textured by the texture pass even in a district, its library spec as the generated fill. */
+        const proceduralFillOf = (l: StagedLayer): string | undefined => { const f = run.layerMeta[l.objectId]?.extra?.proceduralFill; return typeof f === 'string' ? f : undefined; };
+        const fillSpecs = new Map<string, { spec: LibraryFillSpec; sha: string; library: SurfaceLibrary }>();
+        const fillSpecFor = (file: string): { spec: LibraryFillSpec; sha: string; library: SurfaceLibrary } => {
+            let got = fillSpecs.get(file);
+            if (!got) {
+                const text = fs.readFileSync(file, 'utf8'), library = loadSurfaceLibrary();
+                // the library's own version is part of the key: a regenerated entry is a new fill
+                got = { spec: loadFillSpec(JSON.parse(text) as StoredFillSpec, library), sha: sha256Bytes(Buffer.from(text + library.source)), library };
+                fillSpecs.set(file, got);
+            }
+            return got;
+        };
         type TexOutcome = {
             layer: StagedLayer; out: Omit<TextureLayerOutcome, 'glb' | 'measureLoo'>; url: string; bytes: number; cached: boolean; builtAtMs: number;
             surfaces: string; late: boolean; sources: 'tile' | 'street-view' | 'tile-refine'; streetViewTried?: boolean
@@ -2119,7 +2136,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const meta = run.layerMeta[l.objectId];
                     if (handled.has(l.objectId) || l.textured || meta?.vegetation || meta?.extra?.vectorMassing || meta?.extra?.selfTextured || !(l.counts.triangles > 0)) return false;
                     if (opts.late && l.layer === 'l2v') return false;
-                    if (mode === 'tile-refine' && !refineTextured.has(l.objectId)) return false;
+                    if (mode === 'tile-refine' && !refineTextured.has(l.objectId) && !meta?.extra?.proceduralFill) return false;
                     // bake-off arms (SCRATCHBOX_TEXTURE_TARGET_LAYERS, experiment only): exactly the named layers, superseded or not
                     if (armTargets) return armTargets.includes(l.layer) && fs.existsSync(path.join(cache.modelsDir, path.basename(l.url)));
                     if (superseded.has(l.objectId) && !meta?.isGround) return false;
@@ -2277,8 +2294,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             const bake = async (target: TexTarget, src: Src, io: StageIO, stage: StageId) => {
                 const clay = fs.readFileSync(target.file);
                 const views = src.views;
+                const fillFile = proceduralFillOf(target.layer);
+                const fill = fillFile ? fillSpecFor(fillFile) : undefined;
+                // a rebuilt surface no Street View reaches: the tile's relighting stands without the agreement gate (no baked shadow)
+                const ungated = !!fill && !views.length && !!lightingClient;
+                // a district-wide rebuilt layer at the tile photo's own texel needs a larger atlas than one structure's 2048
+                const maxSide = deps.textures?.maxSide ?? (fill ? PROCEDURAL_ATLAS_MAX_SIDE : 2048);
                 const { tile, tileUnavailable, tileSha, occluder, context, wideViews } = src.prepared;
-                const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), src.imagesSha, src.wideSha, src.poseHash, tileSha, src.palette, !!enhance, deps.textures?.enhanceMode ?? 'recreate', src.density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces), ...(!(rebuildOut.refit ?? rebuildOut.fit) && views.length ? ['no-fit-held-out-gate/2'] : []), ...(lightingClient && views.length ? [`light:${lightingModelIds.join(',')}:${lightingPromptVariant()}:${src.lightingViews?.length ?? 0}`] : []), ...(arm.key ? [arm.key] : []), ...(src.ownershipKey ? [src.ownershipKey] : []), ...(src.temporaryKey ? [src.temporaryKey] : []), src.materialsKey);
+                const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), src.imagesSha, src.wideSha, src.poseHash, tileSha, src.palette, !!enhance, deps.textures?.enhanceMode ?? 'recreate', src.density, maxSide, surfacesKey(target.surfaces), ...(!(rebuildOut.refit ?? rebuildOut.fit) && views.length ? ['no-fit-held-out-gate/2'] : []), ...(lightingClient && views.length ? [`light:${lightingModelIds.join(',')}:${lightingPromptVariant()}:${src.lightingViews?.length ?? 0}`] : []), ...(arm.key ? [arm.key] : []), ...(src.ownershipKey ? [src.ownershipKey] : []), ...(src.temporaryKey ? [src.temporaryKey] : []), src.materialsKey, ...(fill ? [`fill:${fill.sha}`, LIBRARY_FILL_VERSION, TWIN_DETAIL_VERSION, `transfer:${PROCEDURAL_TRANSFER_MAX_DISTANCE_M}`, 'islands-relit'] : []), ...(ungated ? [`light-ungated:${lightingModelIds.join(',')}:${lightingPromptVariant()}`] : []));
                 let loo: NonNullable<TextureLayerOutcome['measureLoo']> | undefined;
                 const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
                     const run1 = (bakeViews: ProjectionView[], bakeUnavailable: string | undefined) => (texturePool ? texturePool.textureLayer.bind(texturePool) : textureLayer)({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
@@ -2288,8 +2311,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         ...(tile ? { tile } : {}), ...(tileUnavailable ? { tileUnavailable } : {}),
                         ...(src.residual !== undefined ? { registrationResidualM: src.residual } : {}),
                         ...(enhance ? { enhance: { client: enhance, ...(deps.textures?.enhanceModels ? { models: deps.textures.enhanceModels } : {}), ...(deps.textures?.enhanceMode ? { mode: deps.textures.enhanceMode } : {}) } } : { enhanceUnavailable: 'no image model client is configured for it' }),
-                        ...(src.lightingViews?.length ? { lightingViews: src.lightingViews } : {}), ...(lightingClient && bakeViews.length ? { lighting: { client: lightingClient, models: lightingModelIds } } : {}), ...(src.lightingUnavailable ? { lightingUnavailable: src.lightingUnavailable } : {}),
-                        palette: src.palette, densityTexelsPerMeter: src.density, maxSide: deps.textures?.maxSide ?? 2048, signal: io.signal,
+                        ...(src.lightingViews?.length ? { lightingViews: src.lightingViews } : {}), ...(lightingClient && (bakeViews.length || ungated) ? { lighting: { client: lightingClient, models: lightingModelIds } } : {}), ...(src.lightingUnavailable ? { lightingUnavailable: src.lightingUnavailable } : {}),
+                        ...(ungated ? { lightingUngated: true } : {}), ...(fill ? { generatedFill: fill.spec, transferMaxDistanceM: PROCEDURAL_TRANSFER_MAX_DISTANCE_M } : {}),
+                        palette: src.palette, densityTexelsPerMeter: src.density, maxSide, signal: io.signal,
                         onProgress: m => { io.progress(`textures: ${m}`); progress(m); run.emit(stage, 'running', { message: m }); }
                     });
                     let out = await run1(views, src.viewsUnavailable);
@@ -2310,6 +2334,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const again = await run1([], reason);
                         out = { ...again, degradations: [...again.degradations, { stage: 'projection', reasonCode: 'street_view_set_aside', reason, layerKey: target.layer.layer, fromRung: 1, toRung: 2 }] };
                     }
+                    // a rebuilt layer: the library's relief and sheen under the twin's colour, at their real size
+                    if (fill) out = { ...out, glb: addLibraryDetail(out.glb, fill.spec, fill.library).glb };
                     fs.writeFileSync(path.join(dir, 'twin.glb'), out.glb);
                     const { glb: _glb, measureLoo, release: _release, ...value } = out as TextureLayerOutcome & { release?: () => void };
                     loo = measureLoo;
@@ -2444,7 +2470,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (!targets.length) return { status: 'skipped', source: '', reason: 'no committed mesh layer to texture' };
                     for (const t of targets) handled.add(t.layer.objectId);
                     if (mode === 'tile-refine') {
-                        await step('tileRefineTwins', () => Promise.all(targets.map(t => withSlot(() => textureFromRefine(t, 'textures')))));
+                        await step('tileRefineTwins', () => Promise.all(targets.map(async t => proceduralFillOf(t.layer) ? withSlot(async () => { await textureWith({ ...t, surfaces: [] }, await getTileSrc(io.signal), io, 'textures'); }) : withSlot(() => textureFromRefine(t, 'textures')))));
                         textureValue = value('running');
                         return { status: 'committed', value: textureValue, layers: outcomes.map(o => run.state.layers.find(l => l.objectId === o.layer.objectId)!).filter(Boolean), source: `${describeTextures(textureValue)}; the twins of later layers follow as they land`, cached: outcomes.every(o => o.cached), breakdownMs: { ...mainMs, total: now() - started } };
                     }
@@ -2501,6 +2527,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const lateWork: Array<Promise<unknown>> = [];
                     const textureLate = async (target: TexTarget) => {
                         let t = target;
+                        if (proceduralFillOf(t.layer)) {
+                            // a procedural district's rebuilt layer: the tile photo (a district reads no Street View), the library under it
+                            const src = await getTileSrc(io.signal);
+                            await withSlot(() => textureWith({ ...t, surfaces: [] }, src, io, 'textures-late'));
+                            return;
+                        }
                         if (mode === 'tile-refine') { await withSlot(() => textureFromRefine(t, 'textures-late')); return; }
                         // a fitted layer is textured with the fit's charts: they are known once the fit stage has returned (it commits its
                         // layers just before), so the layer is not textured twice
@@ -3599,7 +3631,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 planeFirst?: { walls: number; measured: number; estimated: number; unseen: number; recesses: number; projections: number; rejectedRelief: number; residualRemovedTriangles: number; residualRemovedAreaM2: number };
                 /** The scene object store (scene-objects.ts): buildings taken from it unchanged instead of massed again, and the ground and streets. */
                 objects?: { reused: number; generated: number; planMs: number; groundReused?: boolean; roadsReused?: boolean };
-                procedural?: { ground: { vertices: number; triangles: number; openVertices: number; terrainVertices: number }; roads?: { roads: number; stations: number; measuredKerbs: number; defaultKerbs: number; triangles: number } };
+                procedural?: {
+                    ground: { vertices: number; triangles: number; openVertices: number; terrainVertices: number }; roads?: { roads: number; stations: number; measuredKerbs: number; defaultKerbs: number; triangles: number };
+                    /** Prepared for the texture pass (procedural-materials.ts): the clays and the library fill; absent with the reason when it could not be. */
+                    texturePass?: ProceduralTexturingSummary; texturePassUnavailable?: string;
+                };
             };
             const massingPromise = runner.stage<DistrictMassingValue>({
                 id: 'massing',
@@ -3609,7 +3645,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const look = evidenceLookup(ev, covered + 20);
                     const vectorKey = crypto.createHash('sha256').update(JSON.stringify([ev.buildings.map(b => [b.id, b.parts, b.heightM ?? null, b.extruded ?? null]), ev.water, ev.roads])).digest('hex').slice(0, 16);
                     const revolutionsOn = revolutionFitEnabled();
-                    const key = stageKey(DISTRICT_MASSING_VERSION, stripped.cacheKey, vectorKey, refined.cacheKey, covered.toFixed(1), String(DISTRICT_TEXEL_M), procedural ? `${PROCEDURAL_GROUND_VERSION}+roads/v5-settled` : 'carve', ...(revolutionsOn ? [REVOLUTION_FIT_VERSION] : []));
+                    const key = stageKey(DISTRICT_MASSING_VERSION, stripped.cacheKey, vectorKey, refined.cacheKey, covered.toFixed(1), String(DISTRICT_TEXEL_M), procedural ? `${PROCEDURAL_GROUND_VERSION}+${PROCEDURAL_ROADS_VERSION}${deps.textures?.disabled ? '' : `+${PROCEDURAL_MATERIALS_VERSION}`}` : 'carve', ...(revolutionsOn ? [REVOLUTION_FIT_VERSION] : []));
                     run.keys.massing = key;
                     const key8 = key.slice(0, 8);
                     // the scene object store: each rebuilt building, the ground and the streets kept as their own versioned
@@ -3619,7 +3655,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const reuseObjects = objectReuseEnabled();
                     const objectVersions = { massing: DISTRICT_MASSING_VERSION, texelM: DISTRICT_TEXEL_M, params: DISTRICT_MASSING_PARAMS, revolutions: revolutionsOn ? REVOLUTION_FIT_VERSION : 'off' };
                     const groundHash = objectInputHash('ground', PROCEDURAL_GROUND_VERSION, stripped.cacheKey, covered.toFixed(1), ev.water, ev.roads);
-                    const roadsHash = objectInputHash('road', 'roads/v5-settled', stripped.cacheKey, covered.toFixed(1), vectorKey, ROAD_SURFACE_PARAMS);
+                    const roadsHash = objectInputHash('road', PROCEDURAL_ROADS_VERSION, stripped.cacheKey, covered.toFixed(1), vectorKey, ROAD_SURFACE_PARAMS);
                     const massProducer = { stage: 'massing', stageKey: key, layer: 'l2m', version: DISTRICT_MASSING_VERSION };
                     const massRows = () => {
                         const scan = loadScanMesh(stripped.devegetatedGlb);
@@ -3749,9 +3785,30 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             }
                             const revolutions = await reviseRevolutions(['district_massing_textured.glb', 'district_massing_clay.glb']);
                             listBuildings();
-                            if (plan && roadsStats && fs.existsSync(roadsFile)) manifests['roads.glb'] = wholeManifest('road', 'network', roadsHash, roadsFile, 'l2r', 'roads/v5-settled', ['measured', VECTOR_MODELLED_LABEL]);
+                            if (plan && roadsStats && fs.existsSync(roadsFile)) manifests['roads.glb'] = wholeManifest('road', 'network', roadsHash, roadsFile, 'l2r', PROCEDURAL_ROADS_VERSION, ['measured', VECTOR_MODELLED_LABEL]);
                             if (plan) writeLayerManifests(dir, manifests);
-                            return { value: { rebuilt: okRows.length, ...summary, caveats, ...(planeFirst ? { planeFirst } : {}), removedTriangles: 0, residualOffFootprint, timingsMs, ...(revolutions ? { revolutions } : {}), ...(objects ? { objects: { ...objects, groundReused: !!storedGround, roadsReused: !!storedRoads } } : {}), procedural: { ground: { vertices: groundStats.vertices, triangles: groundStats.triangles, openVertices: groundStats.openVertices, terrainVertices: groundStats.terrainVertices }, ...(roadsStats ? { roads: roadsStats } : {}) } } };
+                            // the texture pass's inputs (user decision 2026-10-22: the staged texture pass on the rebuilt geometry, the
+                            // surface library where no photo reaches; no baked shadows): clays and the library fill, read from the files
+                            let texturePass: ProceduralTexturingSummary | undefined, texturePassUnavailable: string | undefined;
+                            if (deps.textures?.disabled) texturePassUnavailable = deps.textures.disabled;
+                            else {
+                                const tp = Date.now();
+                                try {
+                                    const visionSrc = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
+                                    texturePass = await prepareProceduralTexturing({
+                                        dir, tileBytes, files: { ground: groundFile, ...(fs.existsSync(roadsFile) ? { roads: roadsFile } : {}), massing: texturedFile },
+                                        buildingIds: okRows.map(r => r.id), ...(layer?.run ? { run: layer.run } : {}),
+                                        include: (x, z) => within(x, z) && look.buildingAt(x, z) === 0 && !look.waterAt(x, z), library: loadSurfaceLibrary(),
+                                        ...(visionSrc ? { chain: new VisionModelChain<string>({ client: visionSrc.client, candidates: visionSrc.candidates, signal: io.signal, ...chainExtras('massing'), ...(deps.sleep ? { sleep: deps.sleep } : {}) }) } : {}),
+                                        ...(deps.vision && 'unavailable' in deps.vision ? { unavailable: deps.vision.unavailable } : {}), signal: io.signal, onProgress: m => io.progress(m)
+                                    });
+                                } catch (err) {
+                                    if (isAbort(err)) throw err;
+                                    texturePassUnavailable = `the rebuilt layers could not be prepared for the texture pass (${errorMessage(err)}); they keep the tile photo laid on them`;
+                                }
+                                timingsMs.texturePrep = Date.now() - tp;
+                            }
+                            return { value: { rebuilt: okRows.length, ...summary, caveats, ...(planeFirst ? { planeFirst } : {}), removedTriangles: 0, residualOffFootprint, timingsMs, ...(revolutions ? { revolutions } : {}), ...(objects ? { objects: { ...objects, groundReused: !!storedGround, roadsReused: !!storedRoads } } : {}), procedural: { ground: { vertices: groundStats.vertices, triangles: groundStats.triangles, openVertices: groundStats.openVertices, terrainVertices: groundStats.terrainVertices }, ...(roadsStats ? { roads: roadsStats } : {}), ...(texturePass ? { texturePass } : {}), ...(texturePassUnavailable ? { texturePassUnavailable } : {}) } } };
                         }
                         // the scan's own buildings out where the rebuilt ones stand: the clay remesh and tile_refine's textured twin alike
                         const clay = hideFootprintInGlb(fs.readFileSync(refined.clayGlb), footprint);
@@ -3763,6 +3820,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         return { value: { rebuilt: okRows.length, ...summary, caveats, ...(planeFirst ? { planeFirst } : {}), removedTriangles: clay.removedTriangles, residualOffFootprint, timingsMs, ...(revolutions ? { revolutions } : {}), ...(objects ? { objects } : {}) } };
                     }, {
                         publish: (dir, v) => !v.rebuilt ? []
+                            : v.procedural?.texturePass ? [
+                                // clay, for the texture pass to texture (the tile photo transferred and relit, the library where it does not reach)
+                                { from: 'massing_clay.glb', as: `${base}_massing_${key8}.glb` }, { from: 'ground_clay.glb', as: `${base}_ground_${key8}.glb` },
+                                ...(fs.existsSync(path.join(dir, 'roads_clay.glb')) ? [{ from: 'roads_clay.glb', as: `${base}_proc_roads_${key8}.glb` }] : []), ...(v.revolutions?.accepted ? [{ from: 'revolutions.glb', as: `${base}_revolutions_${key8}.glb` }] : [])
+                            ]
                             : v.procedural ? [{ from: 'district_massing_textured.glb', as: `${base}_massing_${key8}.glb` }, { from: 'ground.glb', as: `${base}_ground_${key8}.glb` }, ...(fs.existsSync(path.join(dir, 'roads.glb')) ? [{ from: 'roads.glb', as: `${base}_proc_roads_${key8}.glb` }] : []), ...(v.revolutions?.accepted ? [{ from: 'revolutions.glb', as: `${base}_revolutions_${key8}.glb` }] : [])]
                             : [{ from: 'district_massing_textured.glb', as: `${base}_massing_${key8}.glb` }, { from: 'remesh_carved.glb', as: `${base}_remesh_carved_${key8}.glb` }, ...(v.revolutions?.accepted ? [{ from: 'revolutions.glb', as: `${base}_revolutions_${key8}.glb` }] : [])],
                         bypass: bypass('massing')
@@ -3782,7 +3844,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             if (v.procedural) {
                                 const g = path.join(entry.dir, 'ground.glb'), r = path.join(entry.dir, 'roads.glb');
                                 if (fs.existsSync(g)) manifests['ground.glb'] = wholeManifest('ground', 'surface', groundHash, g, 'l1g', PROCEDURAL_GROUND_VERSION, ['measured']);
-                                if (fs.existsSync(r)) manifests['roads.glb'] = wholeManifest('road', 'network', roadsHash, r, 'l2r', 'roads/v5-settled', ['measured', VECTOR_MODELLED_LABEL]);
+                                if (fs.existsSync(r)) manifests['roads.glb'] = wholeManifest('road', 'network', roadsHash, r, 'l2r', PROCEDURAL_ROADS_VERSION, ['measured', VECTOR_MODELLED_LABEL]);
                             }
                             writeLayerManifests(entry.dir, manifests);
                             cache.writeRunNote(runId, 'object_manifest_backfill', { ms: Date.now() - tb, buildings: okRows.length });
@@ -3828,12 +3890,18 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (v.procedural) {
                         // the procedural district: the rebuilt buildings, the measured ground and the streets; the scan's layer is superseded
                         const [, pubGround, pubRoads] = entry.published;
-                        // the layer is its own textured twin (the top-down tile photo is in the file): the viewport keeps a twin's
-                        // photo material through its clay pass, as it does every other twin's
+                        // prepared for the texture pass: clay layers it textures (the tile photo transferred and relit, the library
+                        // where no photo reaches); otherwise each layer is its own textured twin (the tile photo laid on it): the
+                        // viewport keeps a twin's photo material through its clay pass, as it does every other twin's
+                        const tp = v.procedural.texturePass;
+                        const fillSpec = path.join(entry.dir, 'fill-spec.json');
                         const ownTwin = (pub: { url: string; bytes: number }, method: string): StagedLayer['textured'] => ({
                             url: pub.url, bytes: pub.bytes, ladderRung: 2, rungShares: [0, 0, 1, 0, 0, 0, 0],
                             provenance: [{ source: 'tile-photo', label: 'as-scanned', method, coverage: 1 }], confidenceChannels: CONFIDENCE_CHANNELS, builtAtMs: entry.builtAtMs, cached: entry.cached
                         });
+                        const twinOr = (pub: { url: string; bytes: number }, method: string): Pick<StagedLayer, 'textured'> => (tp ? {} : { textured: ownTwin(pub, method) });
+                        const texExtra = (extra: Record<string, unknown>) => ({ ...extra, ...(tp ? { proceduralFill: fillSpec } : { selfTextured: true }) });
+                        const texNote = tp ? `; textured by the texture pass (the tile photo transferred onto its own atlas, its lighting corrected; the surface library where no photo reaches: ${Object.entries(tp.entries).map(([k, n]) => `${k} x${n}`).join(', ')}, ${tp.byVision} chosen by the vision model, ${tp.byColour} by measured colour alone)` : v.procedural.texturePassUnavailable ? `; ${v.procedural.texturePassUnavailable}` : '';
                         const groundLayer: StagedLayer = {
                             objectId: layerObjectId(key, 'l1g'), stage: 'massing', layer: 'l1g', order: STAGES.remesh.order, url: pubGround.url, bytes: pubGround.bytes,
                             provenance: {
@@ -3843,11 +3911,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             },
                             provenanceLabels: ['measured'], supersedes: [remeshId], revealAfter: [], reveal: { durationMs: 1000, stagger: 0, crossfadeFrom: [remeshId] },
                             cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pubGround.path),
-                            textured: ownTwin(pubGround, 'a top-down render of the tile photo, planar onto the ground surface')
+                            ...twinOr(pubGround, 'a top-down render of the tile photo, planar onto the ground surface')
                         };
-                        const layers: StagedLayer[] = [{ ...massLayer, provenance: { ...massLayer.provenance, note: `${massLayer.provenance.note}; ${v.caveats ?? 0} rebuilt despite a failed check (lenient: the scan is not shown), labelled with it` } }, groundLayer];
-                        run.commit(layers[0], { source: 'DistrictMassing', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true, rebuilt: v.rebuilt } });
-                        run.commit(groundLayer, { source: 'ProceduralGround', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true } });
+                        if (tp) groundLayer.provenance = { ...groundLayer.provenance, method: groundLayer.provenance.method.replace(', coloured from a top-down render of the tile photo', ''), note: `${groundLayer.provenance.note}${texNote}; ${tp.groundRegions} ground regions by appearance (${tp.shadowedCells} cast-shadow cells set aside)` };
+                        const massCommitted: StagedLayer = { ...massLayer, provenance: { ...massLayer.provenance, ...(tp ? { method: massLayer.provenance.method.replace(', textured from the tile photo', '') } : {}), note: `${massLayer.provenance.note}; ${v.caveats ?? 0} rebuilt despite a failed check (lenient: the scan is not shown), labelled with it${texNote}` } };
+                        const layers: StagedLayer[] = [massCommitted, groundLayer];
+                        run.commit(layers[0], { source: 'DistrictMassing', resolvedAddress: placeValue!.formattedAddress, extra: texExtra({ rebuilt: v.rebuilt }) });
+                        run.commit(groundLayer, { source: 'ProceduralGround', resolvedAddress: placeValue!.formattedAddress, extra: texExtra({}) });
                         if (revLayer) { run.commit(revLayer, { source: 'RevolutionFit', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true } }); layers.push(revLayer); }
                         if (manifests['district_massing_textured.glb']) run.objectManifests.set(layers[0].objectId, { ...manifests['district_massing_textured.glb'], sourceFile: path.join(entry.dir, 'district_massing_textured.glb') });
                         if (manifests['ground.glb']) run.objectManifests.set(groundLayer.objectId, { ...manifests['ground.glb'], sourceFile: path.join(entry.dir, 'ground.glb') });
@@ -3863,9 +3933,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 },
                                 provenanceLabels: ['measured', VECTOR_MODELLED_LABEL], supersedes: [], revealAfter: [], reveal: { durationMs: 1200, stagger: 0.3, crossfadeFrom: [] },
                                 cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pubRoads.path),
-                                textured: ownTwin(pubRoads, 'tarmac and lane markings read along each street from the top-down tile photo and redrawn')
+                                ...twinOr(pubRoads, 'tarmac and lane markings read along each street from the top-down tile photo and redrawn')
                             };
-                            run.commit(roadLayer, { source: 'GoogleVectorRoads', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true } });
+                            if (tp) roadLayer.provenance = { ...roadLayer.provenance, method: roadLayer.provenance.method.replace('; tarmac and lane markings read from the tile photo and redrawn', ''), note: `${roadLayer.provenance.note}${texNote}` };
+                            run.commit(roadLayer, { source: 'GoogleVectorRoads', resolvedAddress: placeValue!.formattedAddress, extra: texExtra({}) });
                             if (manifests['roads.glb']) run.objectManifests.set(roadLayer.objectId, { ...manifests['roads.glb'], sourceFile: path.join(entry.dir, 'roads.glb') });
                             layers.push(roadLayer);
                         }
