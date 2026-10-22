@@ -239,6 +239,32 @@ export type StageId = keyof typeof STAGES;
  * does. Past it, images still queued keep their de-lit (not recreated) version - never the raw, un-de-lit one.
  */
 const TILE_REFINE_RECREATE_BUDGET_MS = 420_000;
+
+/**
+ * Atomic building integrity (AGENTS.md: "no extraction boundary, slice or frustum may cut through a building"), for
+ * a district build: a one-shot radius growth, from Google's own vector footprints, so a building the base radius
+ * only partly reaches (the screenshot this fixes: a tower split at its own tile seam, the top jogged sideways from
+ * the bottom - its footprint reached past a radius that stopped mid-tower) is extracted whole instead of cut. This
+ * already exists for an isolated structure (sizeExtraction/containmentRadius, extraction-sizing.ts); a district has
+ * no single structure to size around, so this grows once, around every building the base radius already touches, not
+ * iteratively round by round. Capped so one oversized building near the edge cannot balloon the whole extraction.
+ */
+const DISTRICT_CONTAINMENT_MAX_GROWTH_M = 100;
+
+/** The radius that keeps every building whole that the base radius already reaches at least one vertex of (capped by DISTRICT_CONTAINMENT_MAX_GROWTH_M past it), or the base radius unchanged if no building needs it. */
+export function districtContainmentRadiusM(ev: VectorEvidence, baseRadiusM: number): number {
+    let grown = baseRadiusM;
+    for (const b of ev.buildings) {
+        let nearest = Infinity, farthest = 0;
+        for (const part of b.parts) for (const loop of part) for (const [x, z] of loop) {
+            const d = Math.hypot(x, z);
+            if (d < nearest) nearest = d;
+            if (d > farthest) farthest = d;
+        }
+        if (nearest <= baseRadiusM && farthest > grown) grown = farthest;
+    }
+    return Math.min(baseRadiusM + DISTRICT_CONTAINMENT_MAX_GROWTH_M, grown);
+}
 export const STAGE_IDS = Object.keys(STAGES) as StageId[];
 
 /** The tool's budget is 40 minutes; the run stops starting stages 2 minutes before it. */
@@ -1326,7 +1352,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         siblings.push(vectorPromise);
 
         // ---------------- tiles ----------------
-        type TilesValue = { extraction: StagedExtraction; key: string; sizedTo: 'structure' | 'request' | 'district-fallback'; structure?: StructurePickResult; ground?: GroundModel; scan?: ScanMesh; unmaskedTop?: Float32Array; canopy?: CanopyMask; vector?: EvidenceLookup; vectorError?: string; rounds: number; cached: boolean; builtAtMs: number };
+        type TilesValue = { extraction: StagedExtraction; key: string; sizedTo: 'structure' | 'request' | 'district-fallback' | 'district-containment'; structure?: StructurePickResult; ground?: GroundModel; scan?: ScanMesh; unmaskedTop?: Float32Array; canopy?: CanopyMask; vector?: EvidenceLookup; vectorError?: string; rounds: number; cached: boolean; builtAtMs: number };
         /** One extraction, cached for 7 days by place and radius; the entry holds its files, named relative to it. */
         const extractCached = async (radiusM: number, io: StageIO): Promise<{ extraction: StagedExtraction; key: string; cached: boolean; builtAtMs: number }> => {
             const key = stageKey('extract/v2', placeValue!.lat.toFixed(6), placeValue!.lng.toFixed(6), Math.round(radiusM));
@@ -1369,8 +1395,20 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         }));
                     }
                 } else {
-                    const x = await extractCached(request.radiusM ?? 250, io);
-                    value = { extraction: x.extraction, key: x.key, sizedTo: 'request', rounds: 1, cached: x.cached, builtAtMs: x.builtAtMs };
+                    const baseRadiusM = request.radiusM ?? 250;
+                    let radiusM = baseRadiusM;
+                    if (deps.vectorEvidence) {
+                        try {
+                            const ev = await deps.vectorEvidence({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: baseRadiusM });
+                            radiusM = districtContainmentRadiusM(ev, baseRadiusM);
+                        } catch (err) {
+                            // atomic building integrity is best-effort for a district: a vector-fetch failure keeps the
+                            // base radius rather than failing the whole build over it
+                            if (io.signal.aborted) throw err;
+                        }
+                    }
+                    const x = await extractCached(radiusM, io);
+                    value = { extraction: x.extraction, key: x.key, sizedTo: radiusM > baseRadiusM ? 'district-containment' : 'request', rounds: 1, cached: x.cached, builtAtMs: x.builtAtMs };
                 }
                 // L1: the extraction as downloaded, geometry only, with the run's fixed camera
                 const e = value.extraction;
@@ -1424,7 +1462,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const degradations = run.state.degradations.filter(d => d.stage === 'tiles');
                 return {
                     status: degradations.length ? 'degraded' : 'committed', value,
-                    source: `${e.leafTiles} leaf tiles within ${Math.round(e.coveredRadiusM)} m${value.sizedTo === 'structure' ? ` (sized to the structure: ${Math.round(e.radiusM)} m, ${value.rounds} round${value.rounds === 1 ? '' : 's'})` : ''}`,
+                    source: `${e.leafTiles} leaf tiles within ${Math.round(e.coveredRadiusM)} m${value.sizedTo === 'structure' ? ` (sized to the structure: ${Math.round(e.radiusM)} m, ${value.rounds} round${value.rounds === 1 ? '' : 's'})` : value.sizedTo === 'district-containment' ? ` (grown from ${Math.round(request.radiusM ?? 250)} m to ${Math.round(e.radiusM)} m so a building the base radius reached is not cut by it)` : ''}`,
                     layers: [layer], degradations, cached: value.cached, builtAtMs: value.builtAtMs
                 };
             },
@@ -4200,7 +4238,7 @@ interface FinishInput {
     place: ResolvedPlace;
     extraction: StagedExtraction;
     structure?: StructurePickResult;
-    sizedTo: 'structure' | 'request' | 'district-fallback';
+    sizedTo: 'structure' | 'request' | 'district-fallback' | 'district-containment';
     remeshed?: TileRefineResult;
     groundFile?: string;
     groundLayerId?: string;

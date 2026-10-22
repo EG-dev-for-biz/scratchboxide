@@ -1152,7 +1152,7 @@ export interface StagedLocationResult {
     structure?: StructurePick;
     extraction: {
         requestedRadiusM?: number; radiusM: number;
-        sizedTo: 'structure' | 'request' | 'district-fallback';
+        sizedTo: 'structure' | 'request' | 'district-fallback' | 'district-containment';
         leafTiles: number; cached: boolean; ageDays?: number;
         geometricErrorM: number; texelM: number; attribution: string[];
     };
@@ -2076,7 +2076,7 @@ const DEFINITIONS = {
         place: obj(['query', 'resolvedAddress', 'lat', 'lng'], { query: STR, resolvedAddress: STR, lat: NUM, lng: NUM, elevationM: NUM, alternatives: arr(obj(['formattedAddress', 'lat', 'lng'], { name: STR, formattedAddress: STR, lat: NUM, lng: NUM, placeId: STR, userRatingCount: NUM })) }),
         structure: ref('structurePick'),
         extraction: obj(['radiusM', 'sizedTo', 'leafTiles', 'cached', 'geometricErrorM', 'texelM', 'attribution'], {
-            requestedRadiusM: ref('nonneg'), radiusM: ref('nonneg'), sizedTo: { enum: ['structure', 'request', 'district-fallback'] },
+            requestedRadiusM: ref('nonneg'), radiusM: ref('nonneg'), sizedTo: { enum: ['structure', 'request', 'district-fallback', 'district-containment'] },
             leafTiles: NONNEG_INT, cached: BOOL, ageDays: ref('nonneg'), geometricErrorM: ref('nonneg'), texelM: ref('nonneg'), attribution: arr(STR)
         }),
         stages: arr(ref('stageSummary')), degradations: arr(ref('DegradationRecord')),
