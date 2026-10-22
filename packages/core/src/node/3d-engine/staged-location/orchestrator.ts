@@ -2457,7 +2457,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             const measured = await runner.stage<TileVegetationStripResult>({
                 id: 'trees-measure',
                 run: async io => {
-                    const r = await deps.vegetation.strip({ tilePath: extraction.texturedGlb, signal: io.signal, ...(roi ? { roi } : {}) });
+                    // the same climate cost plantTrees is given below, so a crown's regrowability check and its final
+                    // geometry pick the same species (scratchbox_tree_species.hpp; user report, 2026-10-21).
+                    const r = await deps.vegetation.strip({ tilePath: extraction.texturedGlb, signal: io.signal, params: { latAbsDeg: Math.abs(run.geoAnchor.lat) }, ...(roi ? { roi } : {}) });
                     run.keys['trees-measure'] = r.cacheKey;
                     run.cacheStatus['trees-measure'] = r.cached ? 'hit' : 'miss';
                     const removed = Number(r.stats?.triangles?.removed ?? 0);
@@ -3450,6 +3452,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     io.progress(`growing ${toPlant} SB-Veggie trees to their measured crowns`);
                     const planted = await plantTrees({ vegetation: deps.vegetation }, stripForPlant, {
                         treeTriangleBudget: request.treeTriangleBudget,
+                        // a crown's shape alone can match a climate-limited species (a palm) regardless of where the
+                        // build actually is; this build's own measured latitude costs that match down (user report,
+                        // 2026-10-21, with a screenshot: a thin, tall "palm-shaped" tree in New York).
+                        latAbsDeg: Math.abs(run.geoAnchor.lat),
                         supportMeshPath: isolateMode ? remeshed.clayGlb : undefined,
                         groundMeshPath: remeshed.clayGlb,
                         signal: io.signal

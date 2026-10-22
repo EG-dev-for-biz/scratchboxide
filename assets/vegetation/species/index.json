@@ -108,7 +108,7 @@
       ], "crownRadiusPerHeight": 0.3, "crownBaseRatio": 0.8, "trunkRadiusPerHeight": 0.035, "topShare": 0.5, "stems": 1, "scaffoldBranches": 10, "apicalDominance": 0.2, "branchAngleRad": 1.2, "leafLengthM": 3.5, "leafAspect": 0.15, "hueDeg": [
         85,
         12
-      ]
+      ], "latAbsRangeDeg": [0, 33]
     },
     { "id": "fan_palm", "label": "Fan palm", "description": "A very tall slender stem with a small, flat-topped head of fan-shaped fronds.", "heightM": [
         8,
@@ -116,7 +116,7 @@
       ], "crownRadiusPerHeight": 0.18, "crownBaseRatio": 0.88, "trunkRadiusPerHeight": 0.03, "topShare": 0.7, "stems": 1, "scaffoldBranches": 12, "apicalDominance": 0.2, "branchAngleRad": 1.3, "leafLengthM": 1.5, "leafAspect": 1, "hueDeg": [
         88,
         12
-      ]
+      ], "latAbsRangeDeg": [0, 35]
     },
     { "id": "olive", "label": "Olive", "description": "A low, broad, rounded grey-green crown on a short thick gnarled trunk.", "heightM": [
         3,

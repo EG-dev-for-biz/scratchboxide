@@ -148,4 +148,16 @@ describe('tree species chosen per crown (plant)', () => {
         expect(extras(2).inferred.crownBaseY).toBeLessThan(0.5);
         for (const id of [0, 1, 2, 3]) expect(extras(id).crownSurfaceReached, `crown ${id}`).toBeGreaterThan(0.8);
     });
+
+    it('a build\'s own latitude keeps a shape-alike palm from matching outside where palms grow (user report, 2026-10-21)', async () => {
+        // the same tall-narrow-crown-bare-trunk-rounded-head measurements that matched date_palm/fan_palm above
+        // (entry 0, the "palm" fixture) - only this time the build is at New York's latitude, not unconstrained
+        const nyc = await svc.plant({ crownsPath: 'crowns.json', triangleBudget: 60000, seed: 'abc', params: { latAbsDeg: 40.7 } });
+        const { json: nycJson } = parseGlb(fs.readFileSync(nyc.treesGlb));
+        const palmAtNyc = nycJson.nodes.find((n: any) => n.extras?.sbTree?.id === 0)!.extras.sbTree as TreeNodeExtras;
+        expect(palmAtNyc.species).toBeDefined();
+        expect(['date_palm', 'fan_palm']).not.toContain(palmAtNyc.species!.entry);
+        // the measurements themselves are unchanged - only which species they are judged against
+        expect(palmAtNyc.species!.measured.aspect).toBeCloseTo(3.5 / 15, 1);
+    }, 900_000);
 });

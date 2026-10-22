@@ -117,6 +117,8 @@ export interface TileVegetationStripParams {
     /** How each tree crown is regrown before anything is removed (plant grows them again with the same). */
     crownBaseRatio?: number;
     trunkRadiusPerHeight?: number;
+    /** This build's own |latitude| (0..90): costs a species entry whose own latAbsRangeDeg does not reach it (scratchbox_tree_species.hpp), so a crown's shape alone cannot match a climate-limited species (a palm) outside where it grows. Omitted: uncosted. */
+    latAbsDeg?: number;
     shellDepth?: number;
     /** Seeded per crown: its crown base ratio varies by +/- this (0.10), the scaffold limbs' mean angle by +/- branchAngleSpread (0.20 rad), and the trunk leans trunkLean (0.45) of the way to the measured apex's offset. */
     crownBaseSpread?: number;
@@ -158,6 +160,8 @@ export interface TileVegetationPlantParams {
     trianglesPerCrownM2?: number;
     crownBaseRatio?: number;
     trunkRadiusPerHeight?: number;
+    /** This build's own |latitude| (0..90): costs a species entry whose own latAbsRangeDeg does not reach it (scratchbox_tree_species.hpp), so a crown's shape alone cannot match a climate-limited species (a palm) outside where it grows. Omitted: uncosted. Must be the same value strip was given, since it decided which crowns regrow with which species. */
+    latAbsDeg?: number;
     woodShare?: number;
     shellDepth?: number;
     crownBaseSpread?: number;

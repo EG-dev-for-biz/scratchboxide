@@ -166,6 +166,8 @@ static void readGrowthFlags(const Args& a, GrowthParams& G) {
     // the caller asked for this ratio itself: a species match (scratchbox_tree_species.hpp) does not override it
     if (a.has("crown-base-ratio")) { G.crownBaseRatio = a.num("crown-base-ratio", G.crownBaseRatio); G.crownBaseRatioExplicit = true; }
     if (a.has("trunk-radius-per-height")) { G.trunkRadiusPerHeight = a.num("trunk-radius-per-height", G.trunkRadiusPerHeight); G.trunkRadiusPerHeightExplicit = true; }
+    // the build's own |latitude|, for the species choice's climate cost (scratchbox_tree_species.hpp); absent: uncosted
+    G.latAbsDeg = a.num("lat-abs-deg", G.latAbsDeg);
     G.shellDepth = a.num("shell-depth", G.shellDepth);
     G.wallClearance = a.num("wall-clearance", G.wallClearance);
     if (G.wallClearance < 0) throw VegetationError("bad_request", "--wall-clearance must be >= 0");

@@ -555,6 +555,10 @@ struct GrowthParams {
     std::shared_ptr<const tree_species::Library> species;
     std::string speciesIndex;           // where the library was read from, as given (recorded in crowns.json and the trees' root extras)
     tree_species::ChoiceParams speciesChoice;
+    // This build's own |latitude| (CLI --lat-abs-deg; NaN when not given): costs a species entry whose own
+    // latAbsRangeDeg does not reach it (scratchbox_tree_species.hpp), so a crown measured in New York does not match
+    // a palm's shape alone and grow one - the climate a species needs is a measurement too, not just its proportions.
+    double latAbsDeg{std::numeric_limits<double>::quiet_NaN()};
 };
 
 /**
@@ -731,7 +735,8 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
     double apical = G.morphology.apicalDominance, branchAngle = G.morphology.branchAngleMeanRad;
     int scaffold = 0;
     if (G.species) {
-        const auto d = tree_species::describeCrown(c.apex, support, c.sectorRadii, c.samples, c.colourKnown ? &c.colourMean : nullptr, G.speciesChoice);
+        auto d = tree_species::describeCrown(c.apex, support, c.sectorRadii, c.samples, c.colourKnown ? &c.colourMean : nullptr, G.speciesChoice);
+        d.latAbsDeg = G.latAbsDeg;
         g.hasSpecies = true;
         g.species = tree_species::choose(*G.species, d, detail::crownSeed(G.seed, c.id), G.speciesChoice);
         if (g.species.matched) {
