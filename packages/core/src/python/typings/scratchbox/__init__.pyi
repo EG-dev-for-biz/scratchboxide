@@ -5,23 +5,21 @@ Autonomous, headless, real-time procedural creation with cinematic DCC fidelity.
 
 import collections.abc
 import scratchbox.human
-import scratchbox.plant
 import scratchbox.structure
 import scratchbox.terrain
+import scratchbox.vegetation
 import scratchbox.world
 import scratchbox_native
 import scratchbox_native.architecture
 import scratchbox_native.geometry
 import scratchbox_native.human
 import scratchbox_native.math
-import scratchbox_native.nature
 import typing
 
-__all__ = ['Any', 'Armature', 'Flora', 'Human', 'List', 'Optional', 'PbrMaterial', 'PbrMaterialWrapper', 'PlantPreset', 'PoseBone', 'PrincipledBsdfMaterial', 'RomanOrder', 'Scene', 'ShapeKeyBlock', 'ShapeKeys', 'Structure', 'StudioHuman', 'Terrain', 'Tuple', 'Union', 'World', 'adaptive_object', 'architecture', 'composer', 'constants', 'core', 'create_arched_blister', 'create_beveled_box', 'create_box', 'create_building', 'create_cambered_foil', 'create_catenary_cable', 'create_character', 'create_cone', 'create_cube', 'create_curved_building', 'create_cylinder', 'create_envelope', 'create_form', 'create_human', 'create_hydraulic_actuator', 'create_intake_strainer', 'create_ivy', 'create_lathe', 'create_loft', 'create_lofted_hull', 'create_louver_bay', 'create_panelized_loft', 'create_plane', 'create_revolving_component', 'create_sphere', 'create_spline_conduit_harness', 'create_structural_truss_member', 'create_studio_pedestal', 'create_subdivided_box', 'create_tower', 'create_tree', 'create_vegetation', 'create_wheel', 'create_wheel_assembly', 'export_glb', 'geometry', 'geospatial', 'hair', 'human', 'io', 'k', 'layout', 'math', 'nature', 'object_spec', 'os', 'pbr', 'plant', 'processing', 'py_math', 'random', 'replicate_metric_array', 'revolve_harmonic_solid', 'rig', 'sdf', 'shaper', 'structure', 'superellipse_loop', 'superellipse_point', 'sweep_curve_profile', 'sys', 'terrain', 'topology', 'validate_scene', 'validation', 'world', 'write_glb']
+__all__ = ['Any', 'Armature', 'Human', 'List', 'Optional', 'PbrMaterial', 'PbrMaterialWrapper', 'PoseBone', 'PrincipledBsdfMaterial', 'RomanOrder', 'SbVeggieTree', 'Scene', 'ShapeKeyBlock', 'ShapeKeys', 'Structure', 'StudioHuman', 'Terrain', 'Tuple', 'Union', 'World', 'adaptive_object', 'architecture', 'composer', 'constants', 'core', 'create_arched_blister', 'create_beveled_box', 'create_box', 'create_building', 'create_cambered_foil', 'create_catenary_cable', 'create_character', 'create_cone', 'create_cube', 'create_curved_building', 'create_cylinder', 'create_envelope', 'create_form', 'create_human', 'create_hydraulic_actuator', 'create_intake_strainer', 'create_ivy', 'create_lathe', 'create_loft', 'create_lofted_hull', 'create_louver_bay', 'create_panelized_loft', 'create_plane', 'create_revolving_component', 'create_sphere', 'create_spline_conduit_harness', 'create_structural_truss_member', 'create_studio_pedestal', 'create_subdivided_box', 'create_tower', 'create_tree', 'create_vegetation', 'create_wheel', 'create_wheel_assembly', 'export_glb', 'geometry', 'geospatial', 'hair', 'human', 'io', 'k', 'layout', 'math', 'nature', 'object_spec', 'os', 'pbr', 'processing', 'py_math', 'random', 'replicate_metric_array', 'revolve_harmonic_solid', 'rig', 'sdf', 'shaper', 'structure', 'superellipse_loop', 'superellipse_point', 'sweep_curve_profile', 'sys', 'terrain', 'topology', 'validate_scene', 'validation', 'vegetation', 'world', 'write_glb']
 
 Any = typing.Any
 Armature = scratchbox.human.Armature
-Flora = scratchbox.plant.PlantPreset
 Human = scratchbox.human.Human
 List = typing.List
 Optional = typing.Optional
@@ -313,10 +311,10 @@ class PbrMaterialWrapper:
     @staticmethod
     def wood_oak() -> scratchbox_native.geometry.PbrMaterial: ...
 
-PlantPreset = scratchbox.plant.PlantPreset
 PoseBone = scratchbox.human.PoseBone
 PrincipledBsdfMaterial = scratchbox.human.PrincipledBsdfMaterial
 RomanOrder = scratchbox_native.RomanOrder
+SbVeggieTree = scratchbox.vegetation.SbVeggieTree
 Scene = scratchbox.world.World
 ShapeKeyBlock = scratchbox.human.ShapeKeyBlock
 ShapeKeys = scratchbox.human.ShapeKeys
@@ -485,16 +483,19 @@ def create_tower(width: float = 16.0, depth: float = 16.0, floors: int = 14, twi
     """
 
 
-def create_tree(attractor_count: int = 120, crown_center: typing.Any = (0.0, 5.0, 0.0), crown_extents: typing.Any = (2.5, 3.5, 2.5), root_anchor: typing.Any = (0.0, 0.0, 0.0), perception_radius: float = 2.0, kill_radius: float = 0.5, branch_step_length: float = 0.25, clear_trunk_height: float = 1.5, base_radius: float = 0.25, tip_radius: float = 0.03, generate_leaves: bool = True, use_detailed_leaves: bool = True, leaf_density: typing.Optional[float] = None, season: typing.Optional[float] = None, material: typing.Any = None, name: str = 'SpaceColonizationTree', **kwargs) -> scratchbox_native.geometry.Mesh:
-    """Synthesizes botanical trees and vegetation adhering to Runions space colonization."""
+def create_tree(position: typing.Any = None, height: typing.Optional[float] = None, crown_radius: typing.Union[float, typing.Sequence[float], NoneType] = None, crown_base_height: typing.Optional[float] = None, crown_widest_at: float = 0.5, crown_top_exponent: float = 2.0, trunk_radius: typing.Optional[float] = None, leaf_color: typing.Any = None, label: typing.Optional[str] = None, name: typing.Optional[str] = None, **kwargs) -> scratchbox.vegetation.SbVeggieTree:
+    """
+    One SB-Veggie tree described by measurements (metres): position = trunk base (x, y, z); height = base to crown top;
+    crown_radius = crown half-spread (or (along x, along z)); crown_base_height = lowest crown above the base (None: from
+    the species library by the crown's shape); crown_widest_at = share of the crown's depth where it is widest (0: a cone
+    widest at its base, 0.5: a round crown, 0.8: an umbrella); crown_top_exponent = top profile (1 cone, 2 dome, 4 flat);
+    trunk_radius (None: from the species); leaf_color = sRGB (r, g, b) / '#rrggbb' (chooses species and leaf textures);
+    label = free text. Grown natively (space colonisation + SB-Veggie leaf clusters + levels of detail) when written.
+    """
 
 
-def create_vegetation(pos: typing.Tuple[float, float, float] = (0.0, 0.0, 0.0), height: float = 12.0, attractor_count: int = 120, crown_radius: float = 3.0, branch_step_length: float = 0.25, clear_trunk_height: float = 2.0, base_radius: float = 0.25, tip_radius: float = 0.03, perception_radius: float = 2.0, kill_radius: float = 0.5, generate_leaves: bool = True, use_detailed_leaves: bool = True, leaf_density: typing.Optional[float] = None, name: str = 'AdaptiveVegetation', **kwargs) -> typing.Any:
-    """
-    Creates open-domain continuous botanical flora or extraterrestrial vegetation
-    adhering to Runions space colonization and Da Vinci pipe conservation.
-    Satisfies ADA Pillar 1 (The Alien Planet Test).
-    """
+def create_vegetation(pos: typing.Any = (0.0, 0.0, 0.0), height: float = 12.0, crown_radius: typing.Union[float, typing.Sequence[float]] = 3.0, clear_trunk_height: typing.Optional[float] = None, **kwargs) -> scratchbox.vegetation.SbVeggieTree:
+    """Alias of create_tree with the older positional names (pos, height, crown_radius, clear_trunk_height = crown base)."""
 
 
 def create_wheel(radius: float = 0.35, width: float = 0.3, rim_radius: typing.Optional[float] = None, rim_recess: float = 0.04, tread_bevel: float = 0.025, axis: str = 'lateral', ground: bool = True, color: typing.Optional[typing.Tuple[float, float, float, float]] = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
@@ -530,7 +531,6 @@ nature: _NatureModule
 import scratchbox.object_spec as object_spec
 import os
 pbr: _PbrModule
-import scratchbox_native.plant as plant
 import scratchbox_native.processing as processing
 import math as py_math
 import random
@@ -590,6 +590,7 @@ def validate_scene(scene_or_mesh: typing.Any, auto_heal: bool = True) -> typing.
     """
 
 validation: _ValidationModule
+import scratchbox.vegetation as vegetation
 import scratchbox.world as world
 
 def write_glb(arg1, arg2=None) -> bool:
@@ -671,21 +672,26 @@ class _LayoutModule:
 
 
 class _NatureModule:
-    PlantPreset = scratchbox.plant.PlantPreset
-    Flora = scratchbox.plant.PlantPreset
+    """Trees are SB-Veggie trees (sb.create_tree, sb.vegetation); ivy is grown on an obstacle box."""
+    SbVeggieTree = scratchbox.vegetation.SbVeggieTree
     @staticmethod
-    def create_tree(attractor_count: int = 120, crown_center: typing.Any = (0.0, 5.0, 0.0), crown_extents: typing.Any = (2.5, 3.5, 2.5), root_anchor: typing.Any = (0.0, 0.0, 0.0), perception_radius: float = 2.0, kill_radius: float = 0.5, branch_step_length: float = 0.25, clear_trunk_height: float = 1.5, base_radius: float = 0.25, tip_radius: float = 0.03, generate_leaves: bool = True, use_detailed_leaves: bool = True, leaf_density: typing.Optional[float] = None, season: typing.Optional[float] = None, material: typing.Any = None, name: str = 'SpaceColonizationTree', **kwargs) -> scratchbox_native.geometry.Mesh:
-        """Synthesizes botanical trees and vegetation adhering to Runions space colonization."""
+    def create_tree(position: typing.Any = None, height: typing.Optional[float] = None, crown_radius: typing.Union[float, typing.Sequence[float], NoneType] = None, crown_base_height: typing.Optional[float] = None, crown_widest_at: float = 0.5, crown_top_exponent: float = 2.0, trunk_radius: typing.Optional[float] = None, leaf_color: typing.Any = None, label: typing.Optional[str] = None, name: typing.Optional[str] = None, **kwargs) -> scratchbox.vegetation.SbVeggieTree:
+        """
+        One SB-Veggie tree described by measurements (metres): position = trunk base (x, y, z); height = base to crown top;
+        crown_radius = crown half-spread (or (along x, along z)); crown_base_height = lowest crown above the base (None: from
+        the species library by the crown's shape); crown_widest_at = share of the crown's depth where it is widest (0: a cone
+        widest at its base, 0.5: a round crown, 0.8: an umbrella); crown_top_exponent = top profile (1 cone, 2 dome, 4 flat);
+        trunk_radius (None: from the species); leaf_color = sRGB (r, g, b) / '#rrggbb' (chooses species and leaf textures);
+        label = free text. Grown natively (space colonisation + SB-Veggie leaf clusters + levels of detail) when written.
+        """
+
+    @staticmethod
+    def create_vegetation(pos: typing.Any = (0.0, 0.0, 0.0), height: float = 12.0, crown_radius: typing.Union[float, typing.Sequence[float]] = 3.0, clear_trunk_height: typing.Optional[float] = None, **kwargs) -> scratchbox.vegetation.SbVeggieTree:
+        """Alias of create_tree with the older positional names (pos, height, crown_radius, clear_trunk_height = crown base)."""
 
     @staticmethod
     def create_ivy(root: typing.Any = (0.0, 0.0, 0.0), obstacle_min: typing.Any = (-4.0, 0.0, -4.0), obstacle_max: typing.Any = (4.0, 6.0, 4.0), max_steps: int = 60, cling_distance: typing.Optional[float] = None, material: typing.Any = None, name: str = 'IvyGrowth', **kwargs) -> scratchbox_native.geometry.Mesh:
         """Grows obstacle-clinging ivy vines from root across the obstacle AABB [obstacle_min, obstacle_max]."""
-
-    SpaceColonizationConfig = scratchbox_native.nature.SpaceColonizationConfig
-    SpaceColonizationTree: None
-    @staticmethod
-    def generate_tree(config: scratchbox_native.nature.SpaceColonizationConfig) -> scratchbox_native.geometry.Mesh:
-        """Generate a realistic botanical tree using Runions space colonization"""
 
     def __setattr__(self, name: str, value: typing.Any, /) -> None: ...
 

@@ -4,7 +4,7 @@ import collections.abc
 import scratchbox_native.geometry
 import typing
 
-__all__ = ['export_glb', 'export_glb_bytes', 'write_botanical_glb', 'write_glb']
+__all__ = ['export_glb', 'export_glb_bytes', 'write_glb']
 
 
 def export_glb(arg1, arg2=None) -> bytes: ...
@@ -17,10 +17,6 @@ def export_glb_bytes(mesh: scratchbox_native.geometry.Mesh) -> bytes:
 @typing.overload
 def export_glb_bytes(meshes: collections.abc.Sequence[scratchbox_native.geometry.Mesh]) -> bytes:
     """Export multiple ScratchboxMeshes directly as a Python bytes object containing .glb data"""
-
-
-def write_botanical_glb(path: str, meshes: collections.abc.Sequence[scratchbox_native.geometry.Mesh], texture_res: int = 512, season: float = 1.0, seed: int = 42) -> bool:
-    """Save botanical tree meshes to GLB embedding procedural Worley bark and botanical foliage PBR texture maps (Albedo, Normal, ORM)"""
 
 
 def write_glb(arg1, arg2=None) -> bool:

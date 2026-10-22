@@ -12,6 +12,7 @@ import random
 
 from .terrain import Terrain
 from .structure import Structure
+from . import vegetation
 
 class World:
     """The central agentic procedural world director."""
@@ -32,11 +33,15 @@ class World:
         self.structures: List[Structure] = []
         self.standalone_meshes: List[Any] = []
         self.scattered_meshes: List[Any] = []
+        # SB-Veggie trees (vegetation.py): grown natively and written into the GLB by compile_to_glb
+        self.trees: List[Any] = []
         self._rng = random.Random(self.seed)
 
     def add(self, entity: Any) -> "scratchbox_native.geometry.Mesh":
-        """Add any standalone mesh, structure, or terrain to the world."""
-        if hasattr(entity, "mesh"):
+        """Add any standalone mesh, structure, terrain or SB-Veggie tree to the world."""
+        if vegetation.is_tree(entity):
+            self.trees.append(entity)
+        elif hasattr(entity, "mesh"):
             self.standalone_meshes.append(entity.mesh)
         elif isinstance(entity, Terrain):
             self.terrains.append(entity)
@@ -249,6 +254,7 @@ class World:
         and follow natural ecological clustering.
         """
         import scratchbox_native
+        tree_asset = vegetation.is_tree(asset)
         if surface is None:
             if not self.terrains:
                 raise ValueError("No terrain surface available in World to scatter upon.")
@@ -257,9 +263,11 @@ class World:
         if avoid_structures is None:
             avoid_structures = self.structures
 
-        # Resolve asset mesh
+        # Resolve asset mesh (an SB-Veggie tree is scattered as trees, each grown on its own)
         source_mesh = asset
-        if hasattr(asset, "get_combined"):
+        if tree_asset:
+            pass
+        elif hasattr(asset, "get_combined"):
             source_mesh = asset.get_combined("Asset")
         elif hasattr(asset, "mesh"):
             source_mesh = asset.mesh
@@ -335,8 +343,17 @@ class World:
             # Valid placement point: sample terrain elevation
             py = surface.sample_height(px, pz)
 
-            # Instance asset mesh
             scale_factor = self._rng.uniform(min_scale, max_scale)
+            if tree_asset:
+                t = asset.copy()
+                t.position = [0.0, 0.0, 0.0]
+                t.scale(scale_factor)
+                t.translate(px, py, pz)
+                placed_instances.append(t)
+                self.trees.append(t)
+                continue
+
+            # Instance asset mesh
             rot_y = self._rng.uniform(0.0, 2.0 * math.pi)
             cos_r = math.cos(rot_y)
             sin_r = math.sin(rot_y)
@@ -373,17 +390,22 @@ class World:
         for sc in self.scattered_meshes:
             all_meshes.append(sc)
 
-        if not all_meshes:
+        trees = vegetation.trees_of(self.trees + all_meshes)
+
+        if not all_meshes and not trees:
             empty_mesh = scratchbox_native.geometry.Mesh("Empty")
             all_meshes.append(empty_mesh)
 
         # Export binary glTF 2.0 chunk
-        if len(all_meshes) == 1:
-            glb_data = io_mod.export_glb_bytes(all_meshes[0])
+        if not all_meshes:
+            glb_bytes = b""
+        elif len(all_meshes) == 1:
+            glb_bytes = bytes(io_mod.export_glb_bytes(all_meshes[0]))
         else:
-            glb_data = io_mod.export_glb_bytes(all_meshes)
-
-        glb_bytes = bytes(glb_data)
+            glb_bytes = bytes(io_mod.export_glb_bytes(all_meshes))
+        # the world's SB-Veggie trees, grown natively (seeded by the world's seed) and written into the same GLB
+        if trees:
+            glb_bytes = vegetation.attach_trees(glb_bytes, trees, seed=format(self.seed & 0xFFFFFFFFFFFFFFFF, "x"))
 
         # Write to path if requested or configured via environment
         main_mod = sys.modules.get("__main__")

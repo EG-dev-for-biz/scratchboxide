@@ -7,7 +7,7 @@ import scratchbox_native.geometry
 import scratchbox_native.math
 import typing
 
-__all__ = ['RomanOrder', 'architecture', 'composer', 'core', 'export_glb_bytes', 'geometry', 'hair', 'human', 'io', 'math', 'nature', 'plant', 'processing', 'render_sensor_passes', 'rig', 'sdf', 'shaper', 'topology']
+__all__ = ['RomanOrder', 'architecture', 'composer', 'core', 'export_glb_bytes', 'geometry', 'hair', 'human', 'io', 'math', 'nature', 'processing', 'render_sensor_passes', 'rig', 'sdf', 'shaper', 'topology', 'vegetation']
 
 
 class RomanOrder(enum.Enum):
@@ -36,7 +36,6 @@ import scratchbox_native.human as human
 import scratchbox_native.io as io
 import scratchbox_native.math as math
 import scratchbox_native.nature as nature
-import scratchbox_native.plant as plant
 import scratchbox_native.processing as processing
 
 def render_sensor_passes(mesh: scratchbox_native.geometry.Mesh, width: int = 512, height: int = 512, camera_position: scratchbox_native.math.Vec3 = ..., camera_target: scratchbox_native.math.Vec3 = ..., fov_degrees: float = 45.0, samples_per_pixel: int = 1, seed: int = 42) -> scratchbox_native.core.SensorPassesResult:
@@ -46,3 +45,4 @@ import scratchbox_native.rig as rig
 import scratchbox_native.sdf as sdf
 import scratchbox_native.shaper as shaper
 import scratchbox_native.topology as topology
+import scratchbox_native.vegetation as vegetation

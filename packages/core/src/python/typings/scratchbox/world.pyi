@@ -9,7 +9,7 @@ import scratchbox.terrain
 import scratchbox_native.geometry
 import typing
 
-__all__ = ['Any', 'Dict', 'List', 'Optional', 'Structure', 'Terrain', 'Tuple', 'World', 'math', 'os', 'random', 'sys']
+__all__ = ['Any', 'Dict', 'List', 'Optional', 'Structure', 'Terrain', 'Tuple', 'World', 'math', 'os', 'random', 'sys', 'vegetation']
 
 Any = typing.Any
 Dict = typing.Dict
@@ -21,10 +21,10 @@ Tuple = typing.Tuple
 
 class World:
     """The central agentic procedural world director."""
-    def __init__(self, seed: typing.Any = 1337, units: str = 'meters') -> None: ...
+    def __init__(self, seed: typing.Any = 1337, units: str = 'meters'): ...
 
     def add(self, entity: typing.Any) -> scratchbox_native.geometry.Mesh:
-        """Add any standalone mesh, structure, or terrain to the world."""
+        """Add any standalone mesh, structure, terrain or SB-Veggie tree to the world."""
 
     def add_mesh(self, mesh: typing.Any) -> scratchbox_native.geometry.Mesh:
         """Add any standalone mesh (building, prop, or custom asset) to the world."""
@@ -111,9 +111,11 @@ class World:
     structures: typing.Any
     standalone_meshes: typing.Any
     scattered_meshes: typing.Any
+    trees: typing.Any
     seed: typing.Any
 
 import math
 import os
 import random
 import sys
+import scratchbox.vegetation as vegetation
