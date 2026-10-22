@@ -8,9 +8,10 @@
  ********************************************************************************/
 
 /**
- * botanical_synthesize_tree grows one SB-Veggie tree (space colonisation through the native tile_vegetation plant
- * stage) to the measurements it is given, in studio clay. Nothing is assumed: no default height, no species
- * catalogue, no "identified" trees from a list; a missing measurement fails the call.
+ * botanical_synthesize_tree, the vegetation generator of every scene, grows SB-Veggie trees (space colonisation through
+ * the native tile_vegetation grow stage: the staged planting, its species library chosen by the crown's measurements and
+ * its four levels of detail) to the measurements it is given. A missing height or crown spread fails the call; what the
+ * description leaves out comes from the species entry nearest the crown and is reported as inferred.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -28,7 +29,9 @@ describe('botanical_synthesize_tree (SB-Veggie, space colonisation)', () => {
     it('declares one tool that needs the tree measurements and offers no species catalogue or scan query', () => {
         expect(BOTANICAL_TREE_TOOL_DECLARATIONS.map(d => d.name)).toEqual(['botanical_synthesize_tree']);
         const params = BOTANICAL_TREE_TOOL_DECLARATIONS[0].parameters as any;
-        expect(params.required).toEqual(['heightMeters', 'crownDiameterMeters']);
+        // one tree with the top-level fields or several with trees: the handler requires height and spread per tree
+        expect(Object.keys(params.properties)).toEqual(expect.arrayContaining(['heightMeters', 'crownDiameterMeters', 'trees']));
+        expect(params.properties.trees.items.required).toEqual(['heightMeters']);
         for (const gone of ['species', 'season', 'treeId', 'rawScanGlbPath', 'archetype']) expect(params.properties[gone]).toBeUndefined();
         const registry = createDefaultToolRegistry();
         expect(registry.get('botanical_query_separator_trees')).toBeUndefined();
@@ -37,7 +40,7 @@ describe('botanical_synthesize_tree (SB-Veggie, space colonisation)', () => {
 
     it('grows a clay tree to the requested height and spread, standing where it was asked, within its budget', async () => {
         const outcome = await botanicalTreeHandlers.botanical_synthesize_tree(
-            { heightMeters: 12, crownDiameterMeters: 8, position: [5, 2, -3], triangleBudget: 3000, label: 'plane tree' }, ctx);
+            { heightMeters: 12, crownDiameterMeters: 8, position: [5, 2, -3], triangleBudget: 3000, label: 'plane tree', openScene: false }, ctx);
         const r: any = outcome.resultPayload;
         expect(r.success).toBeUndefined();
         expect(r.generator).toBe('SB-Veggie (space colonisation)');
@@ -45,14 +48,17 @@ describe('botanical_synthesize_tree (SB-Veggie, space colonisation)', () => {
         expect(r.woodTriangles).toBeLessThanOrEqual(3000);
         expect(r.levelTriangles).toHaveLength(4);
         expect(r.triangles).toBe(r.levelTriangles[3]);
+        expect(r.provenance).toContain('generated');
         // near > near-mid > mid > far
         for (let k = 0; k < 3; k++) expect(r.levelTriangles[k]).toBeGreaterThan(r.levelTriangles[k + 1]);
         // the leaf masses stay inside the requested crown even at a coarse budget
         expect(Math.abs(r.grown.heightMeters - 12)).toBeLessThan(1.0);
         expect(r.grown.crownSpreadMeters).toBeGreaterThan(0.85 * 8);
         expect(r.grown.crownSpreadMeters).toBeLessThan(1.15 * 8);
-        expect(r.inferred).toMatchObject({ crownBaseRatio: 0.35, trunkRadiusPerHeight: 0.016 });
-        expect(outcome.summaryResult).toContain('Inferred, not given');
+        // what the description leaves out comes from the species library, reported as inferred
+        expect(r.inferred.crownBaseRatio).toBeGreaterThan(0);
+        expect(r.inferred.trunkRadiusM).toBeGreaterThan(0);
+        expect(outcome.summaryResult).toMatch(/inferred, not given/i);
 
         const buf = fs.readFileSync(r.outputGlbPath);
         expect(buf.subarray(0, 4).toString('latin1')).toBe('glTF');
@@ -75,9 +81,30 @@ describe('botanical_synthesize_tree (SB-Veggie, space colonisation)', () => {
 
     it('reports a given crown base and trunk radius as measured, not inferred', async () => {
         const r: any = (await botanicalTreeHandlers.botanical_synthesize_tree(
-            { heightMeters: 9, crownDiameterMeters: 6, crownBaseHeightMeters: 3, trunkRadiusMeters: 0.2, triangleBudget: 2000 }, ctx)).resultPayload;
+            { heightMeters: 9, crownDiameterMeters: 6, crownBaseHeightMeters: 3, trunkRadiusMeters: 0.2, triangleBudget: 2000, openScene: false }, ctx)).resultPayload;
         expect(r.inferred).toEqual({});
         expect(r.woodTriangles).toBeLessThanOrEqual(2000);
+        expect(r.trees[0].inferred).toEqual({});
+    }, 600_000);
+
+    it('grows a group of described trees in one call and opens them as a scene of SB-Veggie trees', async () => {
+        const outcome = await botanicalTreeHandlers.botanical_synthesize_tree({
+            trees: [
+                { heightMeters: 14, crownDiameterMeters: 4.5, crownWidestAt: 0.05, crownTopExponent: 1, position: [0, 0, 0], label: 'cone' },
+                { heightMeters: 9, crownDiameterMeters: 9, leafColor: '#5a7a2c', position: [10, 0, 2], label: 'round' }
+            ]
+        }, ctx);
+        const r: any = outcome.resultPayload;
+        expect(r.trees).toHaveLength(2);
+        expect(r.trees.map((t: any) => t.label)).toEqual(['cone', 'round']);
+        for (const t of r.trees) expect(t.levelTriangles).toHaveLength(4);
+        expect(r.trees[0].species?.entry).not.toBe(r.trees[1].species?.entry);
+        expect(r.artifact.type).toBe('3d-scene');
+        expect(r.artifact.data.objects[0].content.durableUri).toMatch(/^\/models\/sb_veggie_trees_[0-9a-f]{12}\.glb$/);
+        const json = parseGlb(fs.readFileSync(r.outputGlbPath)).json;
+        expect(json.extras.sbVeggie.trees).toBe(2);
+        const nodes = json.nodes.filter((n: any) => n.extras?.sbTree);
+        expect(nodes.map((n: any) => n.extras.sb.provenance.label)).toEqual(['generated', 'generated']);
     }, 600_000);
 
     it('fails, with nothing grown, when a measurement is missing or impossible', async () => {

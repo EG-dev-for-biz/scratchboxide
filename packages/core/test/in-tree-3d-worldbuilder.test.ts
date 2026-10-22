@@ -312,9 +312,9 @@ async function runWorldbuilderAndMeshEngineTests() {
     assert.ok(towerResult.mesh instanceof THREE.Group);
     assert.ok(towerResult.summary.includes('Tower'));
 
+    // trees are SB-Veggie only: this helper builds none (sb-veggie-lockdown.ts)
     const treeResult = generateProceduralThreeMeshFromPrompt('coniferous pine tree with tiered evergreen needles', THREE);
-    assert.ok(treeResult.mesh instanceof THREE.Group);
-    assert.ok(treeResult.summary.includes('tree'));
+    assert.ok(treeResult.mesh.name !== 'procedural-tree' && !/\btree asset\b/i.test(treeResult.summary));
 
     const houseResult = generateProceduralThreeMeshFromPrompt('stone dwelling with pitched timber roof', THREE);
     assert.ok(houseResult.mesh instanceof THREE.Group);

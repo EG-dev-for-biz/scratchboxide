@@ -34,12 +34,8 @@ bldg_cfg.floor_count = 3
 bldg_cfg.roof_type = sb.architecture.RoofType.Mansard
 building = sb.architecture.generate_building(bldg_cfg, "Townhouse")
 
-# 2. Nature: Space Colonization Tree
-tree_cfg = sb.nature.SpaceColonizationConfig()
-tree_cfg.attractor_count = 120
-tree_cfg.crown_center = sb.math.Vec3(0, 7.5, 0)
-tree_cfg.crown_extents = sb.math.Vec3(2.5, 3.5, 2.5)
-tree = sb.nature.generate_tree(tree_cfg)
+# 2. Nature: an SB-Veggie tree (grown natively when the scene is written)
+tree = sb.create_tree(position=(9.0, 0.35, 0.0), height=11.0, crown_radius=3.5)
 
 # 3. Geometry: Studio Pedestal
 pedestal = sb.geometry.create_studio_pedestal(7.0, 0.35, 0.05, 48)
@@ -50,7 +46,7 @@ scene.append(pedestal)
 scene.append(building)
 scene.append(tree)
 
-print(f"Generated Scene: {scene.vertex_count} vertices, {scene.triangle_count} triangles")
+print(f"Generated Scene: {scene.vertex_count} vertices, {scene.triangle_count} triangles, {len(scene._sb_veggie_trees)} SB-Veggie trees")
 
 # 5. Export to binary glTF 2.0 (.glb)
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)

@@ -34,11 +34,12 @@ describe('Adaptive Domain Architecture (ADA) - Open-Domain 3D Scene Synthesis', 
             
             // Verifies 70-20-10 multi-mesh hierarchy
             expect(scene.customMeshes).toBeDefined();
-            expect(scene.customMeshes!.length).toBeGreaterThanOrEqual(3);
+            expect(scene.customMeshes!.length).toBeGreaterThanOrEqual(2);
             const tiers = scene.customMeshes!.map(m => m.tier);
             expect(tiers).toContain('primary');
-            expect(tiers).toContain('secondary');
             expect(tiers).toContain('tertiary');
+            // the secondary tier (the crowns) is SB-Veggie trees grown by the scene's Python generator, never primitive stand-ins
+            expect(scene.pythonGenerator?.sourceCode).toContain('sb.create_tree(');
 
             // Preserves unpolluted spatial coordinates (no forced Manhattan/Tokyo Earth anchor)
             expect(scene.geoAnchor).toBeUndefined();
@@ -46,8 +47,8 @@ describe('Adaptive Domain Architecture (ADA) - Open-Domain 3D Scene Synthesis', 
             // Zero Default Fog: no uninvited haze
             expect(scene.features?.atmosphericScattering?.aerialPerspectiveEnabled).toBeFalsy();
 
-            // Attaches valid C++20 engine generator
-            expect(scene.cppGenerator?.sourceCode).toContain('#include "scratchbox_engine.hpp"');
+            // Attaches a native engine generator: the sb Python scene (terrain, monolith, SB-Veggie trees)
+            expect(scene.pythonGenerator?.sourceCode).toContain('import scratchbox as sb');
         });
 
         it('fails prompts no template or generator builds, never mounting an empty scene or primitive stand-ins named after their words', () => {

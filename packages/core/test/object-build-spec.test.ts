@@ -90,7 +90,7 @@ describe('validateObjectBuildSpec', () => {
 
     it('rejects a part with no operator, or with two', () => {
         expect(validateObjectBuildSpec(withPart(s => { delete s.parts[0].revolve; })).join('\n'))
-            .toContain('must have exactly one of sweep, revolve, replicate, relief (found none)');
+            .toContain('must have exactly one of sweep, revolve, replicate, relief, crown (found none)');
         expect(validateObjectBuildSpec(withPart(s => { s.parts[0].sweep = sweep(); })).join('\n'))
             .toContain('(found sweep, revolve)');
     });

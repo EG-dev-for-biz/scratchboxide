@@ -107,11 +107,11 @@ describe('tool catalog', () => {
 
     it('appends loaded tools after the entry set and load_tools, keeping that prefix unchanged', () => {
         const base = buildToolDeclarations({ prompt: 'x', mode: 'agent', enableWorkspaceTools: true }, registry) as any[];
-        const loaded = buildToolDeclarations({ prompt: 'x', mode: 'agent', enableWorkspaceTools: true, loadedTools: ['botanical_synthesize_tree', 'adaptive_matchmove_calibrate_sequence', 'no_such_tool'] }, registry) as any[];
+        const loaded = buildToolDeclarations({ prompt: 'x', mode: 'agent', enableWorkspaceTools: true, loadedTools: ['mesh_apply_deformers', 'adaptive_matchmove_calibrate_sequence', 'no_such_tool'] }, registry) as any[];
         const baseDecls = base[base.length - 1].functionDeclarations;
         const loadedDecls = loaded[loaded.length - 1].functionDeclarations;
         expect(JSON.stringify(loadedDecls.slice(0, baseDecls.length))).toBe(JSON.stringify(baseDecls));
-        expect(loadedDecls.slice(baseDecls.length).map((d: any) => d.name)).toEqual(['botanical_synthesize_tree', 'adaptive_matchmove_calibrate_sequence']);
+        expect(loadedDecls.slice(baseDecls.length).map((d: any) => d.name)).toEqual(['mesh_apply_deformers', 'adaptive_matchmove_calibrate_sequence']);
     });
 
     it('offers every tool with SCRATCHBOX_CHAT_TOOLS=all, and keeps Plan mode read-only', () => {
@@ -349,19 +349,19 @@ describe('streaming engine', () => {
         (globalThis as any).fetch = async (_url: string, init: any) => {
             bodies.push(JSON.parse(init.body));
             const chunks = bodies.length === 1
-                ? [{ text: callLine(LOAD_TOOLS_NAME, { tools: ['botanical_synthesize_tree'] }), delayMs: 1 }]
+                ? [{ text: callLine(LOAD_TOOLS_NAME, { tools: ['mesh_apply_deformers'] }), delayMs: 1 }]
                 : [{ text: textLine('Loaded.'), delayMs: 1 }];
             return { ok: true, status: 200, body: streamedBody(chunks, init.signal), text: async () => '' };
         };
         const events: GeminiStreamEvent[] = [];
         const res = await service.streamGenerate({ prompt: 'grow an oak', model: 'gemini-4-argon', mode: 'agent', enableWorkspaceTools: true }, e => events.push(e));
-        expect(res.loadedTools).toEqual(['botanical_synthesize_tree']);
-        expect(events.find(e => e.type === 'done')?.loadedTools).toEqual(['botanical_synthesize_tree']);
+        expect(res.loadedTools).toEqual(['mesh_apply_deformers']);
+        expect(events.find(e => e.type === 'done')?.loadedTools).toEqual(['mesh_apply_deformers']);
         const first = fnNames(bodies[0].tools);
         const second = fnNames(bodies[1].tools);
-        expect(first).not.toContain('botanical_synthesize_tree');
+        expect(first).not.toContain('mesh_apply_deformers');
         expect(second.slice(0, first.length)).toEqual(first);
-        expect(second[second.length - 1]).toBe('botanical_synthesize_tree');
+        expect(second[second.length - 1]).toBe('mesh_apply_deformers');
     });
 });
 

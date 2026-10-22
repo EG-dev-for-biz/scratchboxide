@@ -61,11 +61,9 @@ west = sb.create_building(
 west.translate(16.0, 0.6, 0.0)
 scene.merge(west)
 
-# 4. Botanical Trees (Space Colonization)
+# 4. Trees (SB-Veggie, grown natively when the scene is written)
 for pos in [(-9.0, 0.6, 8.0), (9.0, 0.6, 8.0)]:
-    tree = sb.create_tree(attractor_count=120, crown_center=(0, 5, 0), crown_extents=(2.5, 3.5, 2.5))
-    tree.translate(*pos)
-    scene.merge(tree)
+    scene.merge(sb.create_tree(position=pos, height=8.5, crown_radius=2.5, crown_base_height=1.5))
 
 # 5. Clinging Ivy on East wing plinth
 ivy = sb.create_ivy(root=(-10.0, 0.6, 3.0), obstacle_min=(-16, 0.6, -5), obstacle_max=(-10, 6, 5), max_steps=80)
@@ -74,8 +72,14 @@ scene.merge(ivy)
 # 6. Stream valid binary glTF 2.0
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 
+# the modelled meshes, and the SB-Veggie trees grown into the written GLB (what their near level draws up close)
+import json, struct
+_glb = open(OUTPUT_GLB_PATH, "rb").read()
+_js = json.loads(_glb[20:20 + struct.unpack_from("<I", _glb, 12)[0]])
 print(f"VERIFICATION_VERTEX_COUNT={scene.vertex_count}")
 print(f"VERIFICATION_TRIANGLE_COUNT={scene.triangle_count}")
+print(f"VERIFICATION_TREES={_js['scenes'][0]['extras']['sbVeggie']['trees']}")
+print(f"VERIFICATION_TREE_NEAR_TRIANGLES={sum(n['extras']['sbLod']['triangles'] for n in _js['nodes'] if (n.get('extras') or {}).get('sbLod', {}).get('level') == 0)}")
 print(f"VERIFICATION_ELAPSED={time.time() - start:.3f}")
 `;
 
@@ -103,9 +107,12 @@ print(f"VERIFICATION_ELAPSED={time.time() - start:.3f}")
         const vertexCount = parseInt(vMatch![1], 10);
         const triangleCount = parseInt(tMatch![1], 10);
 
-        // Verify genuine geometric complexity (dense multi-story buildings + trees > 50,000 vertices)
-        expect(vertexCount).toBeGreaterThan(50000);
-        expect(triangleCount).toBeGreaterThan(30000);
+        // Verify genuine geometric complexity: dense multi-story buildings, and the two SB-Veggie trees grown into the GLB
+        // (their near level draws instanced SB-Veggie leaf clusters: hundreds of thousands of triangles a tree)
+        expect(vertexCount).toBeGreaterThan(15000);
+        expect(triangleCount).toBeGreaterThan(10000);
+        expect(result.stdout).toContain('VERIFICATION_TREES=2');
+        expect(Number(result.stdout.match(/VERIFICATION_TREE_NEAR_TRIANGLES=(\d+)/)![1])).toBeGreaterThan(100000);
 
         // Verify glTF 2.0 binary header
         const glbBuf = fs.readFileSync(outGlb);
@@ -131,10 +138,8 @@ palais = sb.create_building(width=16.0, depth=12.0, floors=3, roof='mansard', na
 palais.translate(0, 0.4, 0)
 scene.merge(palais)
 
-# Flanking Space-Colonization Tree
-tree = sb.create_tree(attractor_count=100, crown_center=(0, 4, 0), crown_extents=(2.0, 3.0, 2.0))
-tree.translate(10.0, 0.4, 4.0)
-scene.merge(tree)
+# Flanking SB-Veggie tree
+scene.merge(sb.create_tree(position=(10.0, 0.4, 4.0), height=7.0, crown_radius=2.0, crown_base_height=1.0))
 
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 `;
