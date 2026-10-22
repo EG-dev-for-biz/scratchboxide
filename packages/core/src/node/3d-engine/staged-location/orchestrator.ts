@@ -82,7 +82,7 @@ import {
 } from './vector-first-paint';
 import { VisionModelChain, type VisionGenAIClient } from '../../gemini/vision-model-chain';
 import { segmentOwnershipViews } from './ownership-masks';
-import { buildGroundModel, geodeticToScan, loadScanMesh, surfaceModel, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
+import { buildGroundModel, geodeticToScan, loadScanMesh, scanToGeodetic, surfaceModel, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
 import { buildRoadMesh, measureRoadSurfaces, sbRoadieEnabled, writeRoadsGlb, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
 import { renderTopDownPhoto } from './top-down-photo';
 import { synthesizeRoadTextures } from './road-texture';
@@ -148,6 +148,7 @@ import { correctViewsLighting, lightingModels, lightingPromptVariant, textureArm
 import { TextureWorkerPool, textureWorkersEnabled } from './texture-worker-pool';
 import { eventLoopStats, runBlockTracer } from './event-loop-stats';
 import { recordStageTimeline } from './stage-timeline';
+import { recordDiscoveredObjects } from '../../asset-store/object-catalog';
 import type { EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { fetchFootprints, type FootprintSource } from './facade-footprints';
@@ -2601,6 +2602,20 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             }
             cache.writeRunNote(runId, `residual_audit_${layerName.replace(/\W+/g, '_')}`, { counts: a.counts, notes: a.notes, candidates: a.candidates, clusters: a.clusters.map(c => ({ id: c.id, verdict: c.verdict, confidence: c.confidence, reason: c.reason, types: c.feature.types, areaM2: c.areaM2, lo: c.lo, hi: c.hi, scores: c.scores })) });
             run.note(PROVENANCE.asScanned, `${layerName}: ${a.notes.slice(0, 6).join(' | ')}`);
+            // "everything in a tile" object catalog (user decision, 2026-10-21): every non-artefact cluster (a real
+            // object, or unsure - never a verdict the audit itself is confident is scan noise) gets recorded in the
+            // durable asset store's objects table, deduplicated against earlier discoveries at the same place.
+            const geoOrigin: GeodeticOrigin = { lat: run.geoAnchor.lat, lng: run.geoAnchor.lng, heightMeters: run.geoAnchor.elevation ?? 0 };
+            recordDiscoveredObjects(a.clusters.filter(c => c.verdict !== 'scan-artefact').map(c => {
+                const lo = scanToGeodetic(geoOrigin, c.lo[0], c.lo[1], c.lo[2]), hi = scanToGeodetic(geoOrigin, c.hi[0], c.hi[1], c.hi[2]);
+                const centre = scanToGeodetic(geoOrigin, (c.lo[0] + c.hi[0]) / 2, (c.lo[1] + c.hi[1]) / 2, (c.lo[2] + c.hi[2]) / 2);
+                return {
+                    type: c.feature.types[c.feature.types.length - 1] ?? 'SB_FEATURE_TYPE_OBJECT', label: c.reason, confidence: c.confidence,
+                    lat: centre.lat, lng: centre.lng, bboxLo: { lat: Math.min(lo.lat, hi.lat), lng: Math.min(lo.lng, hi.lng), alt: lo.alt },
+                    bboxHi: { lat: Math.max(lo.lat, hi.lat), lng: Math.max(lo.lng, hi.lng), alt: hi.alt },
+                    source: 'residual-audit', runId
+                };
+            }));
             if (a.counts.unsure > 0) {
                 const uns = a.clusters.filter(c => c.verdict === 'unsure').sort((p, q) => q.areaM2 - p.areaM2);
                 run.degrade(record(stage, 'residual_unsure', {
@@ -3390,7 +3405,26 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             await runner.stage<LocationClayTrees>({
                 id: 'trees',
                 run: async io => {
-                    const crowns = JSON.parse(fs.readFileSync(strip!.crownsJson, 'utf8')).crowns ?? [];
+                    const crownsFile = JSON.parse(fs.readFileSync(strip!.crownsJson, 'utf8'));
+                    const crowns = crownsFile.crowns ?? [];
+                    // "everything in a tile" object catalog (user decision, 2026-10-21): every measured crown is a
+                    // discovered tree, bounding box included - crowns.json's own frame.anchor is this run's measured
+                    // geodetic origin, so no separate conversion is needed to place it in the durable catalog.
+                    if (crownsFile.frame?.anchor) {
+                        const geoOrigin: GeodeticOrigin = { lat: crownsFile.frame.anchor.lat, lng: crownsFile.frame.anchor.lng, heightMeters: crownsFile.frame.anchor.ellipsoidalHeightM ?? 0 };
+                        recordDiscoveredObjects(crowns.filter((c: any) => c.status === 'tree' && c.stem && c.apex).map((c: any) => {
+                            const r = Math.max(0, ...(Array.isArray(c.sectorRadii) ? c.sectorRadii : [0]));
+                            const lo = scanToGeodetic(geoOrigin, c.stem[0] - r, c.supportY ?? c.apex[1], c.stem[1] - r);
+                            const hi = scanToGeodetic(geoOrigin, c.stem[0] + r, c.apex[1], c.stem[1] + r);
+                            const centre = scanToGeodetic(geoOrigin, c.stem[0], c.apex[1], c.stem[1]);
+                            return {
+                                type: 'SB_FEATURE_TYPE_TREE', label: `measured crown, ${Math.round((c.apexAboveSupport ?? 0) * 10) / 10} m tall, ${Math.round((c.areaM2 ?? 0))} m2`,
+                                lat: centre.lat, lng: centre.lng,
+                                bboxLo: { lat: Math.min(lo.lat, hi.lat), lng: Math.min(lo.lng, hi.lng), alt: lo.alt }, bboxHi: { lat: Math.max(lo.lat, hi.lat), lng: Math.max(lo.lng, hi.lng), alt: hi.alt },
+                                source: 'tree-crown', runId
+                            };
+                        }));
+                    }
                     const toPlant = crowns.filter((c: any) => c.status === 'tree').length;
                     const kept = crowns.filter((c: any) => c.status === 'not_regrowable').length;
                     if (toPlant === 0 && !(isolateMode && kept > 0)) {

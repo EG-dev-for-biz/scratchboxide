@@ -137,7 +137,54 @@ CREATE TABLE IF NOT EXISTS projects (
     updated_at_ms INTEGER NOT NULL,
     PRIMARY KEY (project_id, workspace)
 );
+CREATE TABLE IF NOT EXISTS objects (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    label TEXT,
+    confidence REAL,
+    lat REAL NOT NULL,
+    lng REAL NOT NULL,
+    bbox_lo_lat REAL NOT NULL,
+    bbox_lo_lng REAL NOT NULL,
+    bbox_lo_alt REAL NOT NULL,
+    bbox_hi_lat REAL NOT NULL,
+    bbox_hi_lng REAL NOT NULL,
+    bbox_hi_alt REAL NOT NULL,
+    source TEXT NOT NULL,
+    run_id TEXT,
+    workspace TEXT,
+    discovered_at_ms INTEGER NOT NULL,
+    last_seen_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS objects_by_type ON objects(type);
+CREATE INDEX IF NOT EXISTS objects_by_location ON objects(lat, lng);
 `;
+
+/**
+ * One discovered real-world object (a tree, a street-furniture piece, an unclassified scan residual kept as real) -
+ * the "everything in a tile" catalog (user decision, 2026-10-21): every staged-location build that finds a new
+ * object records it here, bounding box and discovery time included, instead of the classification being transient
+ * per-build JSON (what residual-audit.ts and tile_vegetation's crowns already produced, just never persisted).
+ */
+export interface ObjectRow {
+    /** Stable: a hash of (type, rounded centroid, source) - see object-catalog.ts's idFor(). */
+    id: string;
+    /** An SB_FEATURE_TYPE_* code (sb-feature-types.ts; open vocabulary). */
+    type: string;
+    /** The reason/description a classifier gave it, if any. */
+    label: string | null;
+    confidence: number | null;
+    lat: number;
+    lng: number;
+    bboxLoLat: number; bboxLoLng: number; bboxLoAlt: number;
+    bboxHiLat: number; bboxHiLng: number; bboxHiAlt: number;
+    /** What found it: 'residual-audit' | 'tree-crown' | ... (open). */
+    source: string;
+    runId: string | null;
+    workspace: string | null;
+    discoveredAtMs: number;
+    lastSeenAtMs: number;
+}
 
 /** A project graph as kept in the database: the whole graph JSON, keyed by project and the checkout that saved it. */
 export interface ProjectRow {
@@ -286,10 +333,63 @@ export class AssetDb {
         return rows.map(r => ({ projectId: r.projectId as string, workspace: r.workspace as string, artifacts: Number(r.artifacts), revisions: Number(r.revisions), updatedAtMs: Number(r.updatedAtMs) }));
     }
 
+    /** Inserts a newly discovered object, or (same id) refreshes its last-seen time and keeps its original discoveredAtMs. */
+    upsertObject(row: Omit<ObjectRow, 'discoveredAtMs' | 'lastSeenAtMs'> & { discoveredAtMs?: number; lastSeenAtMs?: number }): void {
+        const now = Date.now();
+        this.stmt(
+            'INSERT INTO objects (id, type, label, confidence, lat, lng, bbox_lo_lat, bbox_lo_lng, bbox_lo_alt, bbox_hi_lat, bbox_hi_lng, bbox_hi_alt, source, run_id, workspace, discovered_at_ms, last_seen_at_ms) '
+            + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
+            + 'ON CONFLICT(id) DO UPDATE SET label = excluded.label, confidence = excluded.confidence, lat = excluded.lat, lng = excluded.lng, '
+            + 'bbox_lo_lat = excluded.bbox_lo_lat, bbox_lo_lng = excluded.bbox_lo_lng, bbox_lo_alt = excluded.bbox_lo_alt, '
+            + 'bbox_hi_lat = excluded.bbox_hi_lat, bbox_hi_lng = excluded.bbox_hi_lng, bbox_hi_alt = excluded.bbox_hi_alt, '
+            + 'run_id = excluded.run_id, workspace = excluded.workspace, last_seen_at_ms = excluded.last_seen_at_ms'
+        ).run(
+            row.id, row.type, row.label, row.confidence, row.lat, row.lng, row.bboxLoLat, row.bboxLoLng, row.bboxLoAlt, row.bboxHiLat, row.bboxHiLng, row.bboxHiAlt,
+            row.source, row.runId, row.workspace, row.discoveredAtMs ?? now, row.lastSeenAtMs ?? now
+        );
+    }
+
+    object(id: string): ObjectRow | undefined {
+        const r = this.stmt(objectSelect('WHERE id = ?')).get(id) as Record<string, unknown> | undefined;
+        return r ? toObject(r) : undefined;
+    }
+
+    /** Objects of `type` (when given) whose centroid lies in a small lat/lng box around (lat, lng) - deg0 the box's half-width in degrees (object-catalog.ts converts a metre radius to this). */
+    objectsNear(lat: number, lng: number, deg0: number, type?: string): ObjectRow[] {
+        const rows = (type !== undefined
+            ? this.stmt(objectSelect('WHERE type = ? AND lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?')).all(type, lat - deg0, lat + deg0, lng - deg0, lng + deg0)
+            : this.stmt(objectSelect('WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?')).all(lat - deg0, lat + deg0, lng - deg0, lng + deg0)) as Record<string, unknown>[];
+        return rows.map(toObject);
+    }
+
+    objectsByType(type: string, limit = 1000): ObjectRow[] {
+        const rows = this.stmt(objectSelect('WHERE type = ? ORDER BY discovered_at_ms DESC LIMIT ?')).all(type, Math.max(1, Math.min(10_000, limit))) as Record<string, unknown>[];
+        return rows.map(toObject);
+    }
+
+    countObjects(): number {
+        return Number((this.stmt('SELECT COUNT(*) AS n FROM objects').get() as { n: number }).n);
+    }
+
     close(): void {
         this.statements.clear();
         this.db.close();
     }
+}
+
+const objectSelect = (where: string) => `SELECT id, type, label, confidence, lat, lng, `
+    + `bbox_lo_lat AS bboxLoLat, bbox_lo_lng AS bboxLoLng, bbox_lo_alt AS bboxLoAlt, bbox_hi_lat AS bboxHiLat, bbox_hi_lng AS bboxHiLng, bbox_hi_alt AS bboxHiAlt, `
+    + `source, run_id AS runId, workspace, discovered_at_ms AS discoveredAtMs, last_seen_at_ms AS lastSeenAtMs FROM objects ${where}`;
+
+function toObject(r: Record<string, unknown>): ObjectRow {
+    return {
+        id: r.id as string, type: r.type as string, label: (r.label as string) ?? null, confidence: r.confidence === null || r.confidence === undefined ? null : Number(r.confidence),
+        lat: Number(r.lat), lng: Number(r.lng),
+        bboxLoLat: Number(r.bboxLoLat), bboxLoLng: Number(r.bboxLoLng), bboxLoAlt: Number(r.bboxLoAlt),
+        bboxHiLat: Number(r.bboxHiLat), bboxHiLng: Number(r.bboxHiLng), bboxHiAlt: Number(r.bboxHiAlt),
+        source: r.source as string, runId: (r.runId as string) ?? null, workspace: (r.workspace as string) ?? null,
+        discoveredAtMs: Number(r.discoveredAtMs), lastSeenAtMs: Number(r.lastSeenAtMs)
+    };
 }
 
 function toProject(r: Record<string, unknown>): ProjectRow {
