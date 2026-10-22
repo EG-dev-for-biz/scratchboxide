@@ -76,6 +76,7 @@ import { TileVegetationError, type TileVegetationPlantRequest, type TileVegetati
 import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service';
 import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorEvidence } from './vector-footprints';
 import { auditDistrict, DISTRICT_AUDIT_VERSION, districtStreetAuditSummary, type DistrictStreetAuditSummary } from './district-residual-audit';
+import { buildSceneInventory, sceneInventorySummary, SCENE_INVENTORY_VERSION, type InventoryCrown, type SceneInventorySummary } from './scene-inventory';
 import {
     coveredShare, frameToLatLng, paintGeneratedHeightProvenance, paintProvenance, selectPaintBuildings, tilePlanCoverage, writePaintGlb,
     GENERATED_HEIGHT_LABEL, PLAUSIBLE_DEFAULT_HEIGHT_M, VECTOR_ISOLATE_RADIUS_M, VECTOR_MASSING_VERSION,
@@ -2621,7 +2622,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         })();
         siblings.push(roadsPromise);
 
-        // ---------------- the district's street audit (district-residual-audit.ts: labels and the object catalog, the build unchanged) ----------------
+        // ---------------- the district's scene inventory (scene-inventory.ts, with the street audit: labels, a run note and the object catalog; the build unchanged) ----------------
         if (!request.isolate && strip && deps.vectorEvidence) {
             const stripped = strip;
             siblings.push((async () => {
@@ -2629,33 +2630,50 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 try {
                     const ev = await deps.vectorEvidence!({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: covered + 20 });
                     const look = evidenceLookup(ev, covered + 20);
-                    const key = stageKey(DISTRICT_AUDIT_VERSION, stripped.cacheKey, crypto.createHash('sha256').update(JSON.stringify([ev.buildings.map(b => b.parts), ev.water, ev.roads, ev.rails ?? []])).digest('hex').slice(0, 16), covered.toFixed(1));
-                    const entry = await cache.run<DistrictStreetAuditSummary>('district_audit', key, async dir => {
+                    const vectorKey = crypto.createHash('sha256').update(JSON.stringify([ev.buildings.map(b => [b.id, b.parts, b.heightM ?? null]), ev.water, ev.roads, ev.rails ?? []])).digest('hex').slice(0, 16);
+                    const key = stageKey(SCENE_INVENTORY_VERSION, DISTRICT_AUDIT_VERSION, stripped.cacheKey, vectorKey, covered.toFixed(1));
+                    type InventoryValue = { inventory: SceneInventorySummary; street: DistrictStreetAuditSummary };
+                    const entry = await cache.run<InventoryValue>('scene-inventory', key, async dir => {
                         const scan = loadScanMesh(stripped.devegetatedGlb);
                         const ground = buildGroundModel(scan, { cellMeters: 1, water: look.waterAt, road: look.roadAt });
-                        const r = await auditDistrict({
-                            scan, ground, buildingAt: look.buildingAt, waterAt: look.waterAt, within: (x, z) => Math.hypot(x, z) <= covered, rails: ev.rails ?? [], roads: ev.roads,
+                        const within = (x: number, z: number) => Math.hypot(x, z) <= covered;
+                        const audit = await auditDistrict({
+                            scan, ground, buildingAt: look.buildingAt, waterAt: look.waterAt, within, rails: ev.rails ?? [], roads: ev.roads,
                             dir: path.join(dir, 'residual_audit'), ...(ctx.signal ? { signal: ctx.signal } : {}), idPrefix: `district/${key.slice(0, 8)}`
                         });
-                        fs.writeFileSync(path.join(dir, 'district_audit.json'), JSON.stringify(r));
-                        return { value: districtStreetAuditSummary(r) };
+                        fs.writeFileSync(path.join(dir, 'district_audit.json'), JSON.stringify(audit));
+                        const crownsInFile = (JSON.parse(fs.readFileSync(stripped.crownsJson, 'utf8')) as { crowns?: InventoryCrown[] }).crowns ?? [];
+                        const crowns = crownsInFile.filter(c => Array.isArray(c.stem) && Array.isArray(c.sectorRadii) && Array.isArray(c.apex));
+                        const inventory = buildSceneInventory({
+                            vector: ev, look, ground, within, audit, crowns, crownsInFile: crownsInFile.length,
+                            sourceIds: { extraction: `extract:${t.key.slice(0, 8)}`, vector: `vectortiles:${vectorKey.slice(0, 8)}`, trees: `strip:${stripped.cacheKey.slice(0, 8)}`, audit: `audit:${key.slice(0, 8)}` }
+                        });
+                        fs.writeFileSync(path.join(dir, 'scene_inventory.json'), JSON.stringify(inventory));
+                        return { value: { inventory: sceneInventorySummary(inventory), street: districtStreetAuditSummary(audit) } };
                     });
-                    const v = entry.value;
-                    cache.writeRunNote(runId, 'district_street_audit', { key, cached: entry.cached, ...v });
-                    run.note(PROVENANCE.asScanned, `the streets: ${v.notes.join(' | ')}`);
+                    const { inventory, street } = entry.value;
+                    cache.writeRunNote(runId, 'scene_inventory', {
+                        key, cached: entry.cached, file: path.join(entry.dir, 'scene_inventory.json'), audit: path.join(entry.dir, 'district_audit.json'),
+                        counts: inventory.counts, outsideExtraction: inventory.outsideExtraction, checks: inventory.checks,
+                        street: { counts: street.counts, notes: street.notes, split: street.split, rails: street.rails, uprights: street.uprights, reassessed: street.reassessed, ms: street.ms }
+                    });
                     const geoOrigin: GeodeticOrigin = { lat: run.geoAnchor.lat, lng: run.geoAnchor.lng, heightMeters: run.geoAnchor.elevation ?? 0 };
-                    recordDiscoveredObjects(v.catalog.map(c => {
+                    const toCatalog = (c: { type: string; label: string; confidence: number; lo: [number, number, number]; hi: [number, number, number] }, source: string) => {
                         const lo = scanToGeodetic(geoOrigin, c.lo[0], c.lo[1], c.lo[2]), hi = scanToGeodetic(geoOrigin, c.hi[0], c.hi[1], c.hi[2]);
                         const centre = scanToGeodetic(geoOrigin, (c.lo[0] + c.hi[0]) / 2, (c.lo[1] + c.hi[1]) / 2, (c.lo[2] + c.hi[2]) / 2);
                         return {
-                            type: c.type, label: c.reason, confidence: c.confidence, lat: centre.lat, lng: centre.lng,
+                            type: c.type, label: c.label, confidence: c.confidence, lat: centre.lat, lng: centre.lng,
                             bboxLo: { lat: Math.min(lo.lat, hi.lat), lng: Math.min(lo.lng, hi.lng), alt: lo.alt }, bboxHi: { lat: Math.max(lo.lat, hi.lat), lng: Math.max(lo.lng, hi.lng), alt: hi.alt },
-                            source: 'district-residual-audit', runId
+                            source, runId
                         };
-                    }));
+                    };
+                    recordDiscoveredObjects([
+                        ...inventory.buildings.map(b => toCatalog({ type: b.type, label: b.description, confidence: b.confidence, lo: b.lo, hi: b.hi }, 'scene-inventory')),
+                        ...street.catalog.map(c => toCatalog({ type: c.type, label: c.reason, confidence: c.confidence, lo: c.lo, hi: c.hi }, 'district-residual-audit'))
+                    ]);
                 } catch (err) {
                     if (isAbort(err) || ctx.signal?.aborted) return;
-                    run.note(PROVENANCE.asScanned, `the streets: the street audit could not run (${errorMessage(err)}); what stands in the streets is shown as scanned, unlabelled`);
+                    cache.writeRunNote(runId, 'scene_inventory', { error: `the scene inventory could not be built (${errorMessage(err)}); the build is unchanged, its streets unlabelled` });
                 }
             })());
         }

@@ -95,6 +95,34 @@ describe('a district', () => {
         expect(second.result.stages.find(x => x.stage === 'terrain')).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/Elevation API/) });
     });
 
+    it('inventories the district beside the build: every vector building, crown and street cluster once, with sources (the scene unchanged)', async () => {
+        const s = setup(PARK, {}, {
+            vectorEvidence: async () => ({ buildings: [{ id: 'b', parts: [[[[30, 30], [44, 30], [44, 40], [30, 40]]]], heightM: 9 }, { id: 'far', parts: [[[[300, 300], [310, 300], [310, 310], [300, 310]]]] }], water: [], roads: [[[-25, 0], [25, 0]]], rails: [[[-25, 4], [25, 4]], [[-25, -30], [25, -30]]], tiles: 1, zoom: 17 })
+        });
+        const { result } = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: true }, s.deps, s.ctx);
+        expect(validateContract('StagedLocationResult', result)).toEqual([]);
+        const note = JSON.parse(fs.readFileSync(path.join(s.root, '.scratchbox', 'cache', 'staged_location', 'runs', s.events[0].e.runId, 'scene_inventory.json'), 'utf8'));
+        expect(note.error).toBeUndefined();
+        // the gate
+        for (const c of note.checks) expect(c.ok, `${c.name}: ${c.detail}`).toBe(true);
+        expect(note.counts.byFamily.building).toBe(1);
+        expect(note.outsideExtraction.buildings).toBe(1);
+        expect(note.counts.byFamily.tree).toBe(3);
+        expect(note.counts.byFamily.road).toBe(1);
+        expect(note.counts.byFamily.rail).toBe(2);
+        expect(note.street.split.scanTriangles).toBeGreaterThan(0);
+        expect(note.street.rails).toMatchObject({ lines: 2, streetRunning: 1 });
+        // the full table: the building measured against the scan inside its footprint (the fake world's block is 9 m tall)
+        const inv = JSON.parse(fs.readFileSync(note.file, 'utf8'));
+        const b = inv.entities.find((e: any) => e.id === 'building/b');
+        expect(b.provenance.sources.map((x: any) => x.kind)).toEqual(['vector-tiles', 'tile-extraction']);
+        expect(b.measurements.scanHeightP90M).toBeGreaterThan(7);
+        expect(b.measurements.scanHeightP90M).toBeLessThan(11);
+        expect(inv.entities.find((e: any) => e.id === 'rail/0').measurements.streetRunningShare).toBe(1);
+        // labels only: no layer comes from it
+        expect((result.artifact as any).data.stagedBuild.layers.every((l: any) => !String(l.stage).includes('inventory'))).toBe(true);
+    });
+
     it('SB-Roadie is shelved: the roads stage is skipped even with Google road centrelines, and no road layer is built', async () => {
         const s = setup(PARK, {}, { vectorEvidence: async () => ({ buildings: [], water: [], roads: [[[-25, 0], [25, 0]], [[0, -25], [0, 25]]], tiles: 1, zoom: 17 }) });
         const { result } = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: false }, s.deps, s.ctx);

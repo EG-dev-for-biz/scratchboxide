@@ -150,7 +150,7 @@ export function fakeNative(root: string, spec: WorldSpec, opts: FakeOptions = {}
                 const treeTris = raw.filter(inCrown);
                 const devegetated = raw.filter(t => !inCrown(t));
                 writeTris(path.join(dir, 'devegetated.glb'), devegetated);
-                const crowns = spec.trees.map(t => ({ id: t.id, status: 'tree', areaM2: Math.round(Math.PI * t.r * t.r), footprint: Array.from({ length: 12 }, (_, k) => [t.x + (t.r + 0.8) * Math.cos((k * Math.PI) / 6), t.z + (t.r + 0.8) * Math.sin((k * Math.PI) / 6)]) }));
+                const crowns = spec.trees.map(t => ({ id: t.id, status: 'tree', areaM2: Math.round(Math.PI * t.r * t.r), stem: [t.x, t.z], apex: [t.x, t.h, t.z], supportY: 0, apexAboveSupport: t.h, sectorRadii: new Array(16).fill(t.r), footprint: Array.from({ length: 12 }, (_, k) => [t.x + (t.r + 0.8) * Math.cos((k * Math.PI) / 6), t.z + (t.r + 0.8) * Math.sin((k * Math.PI) / 6)]) }));
                 fs.writeFileSync(path.join(dir, 'crowns.json'), JSON.stringify({ version: 1, crowns }));
                 return {
                     devegetatedGlb: path.join(dir, 'devegetated.glb'), crownsJson: path.join(dir, 'crowns.json'), tileSha256: sha(fs.readFileSync(input)), cached: false, ms: 40, cacheKey: key,
