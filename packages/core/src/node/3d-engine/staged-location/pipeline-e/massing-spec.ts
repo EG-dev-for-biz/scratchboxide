@@ -38,6 +38,8 @@ export const MAX_HEIGHT_ERROR_M = 3;
 export const MAX_HEIGHT_ERROR_SHARE = 0.15;
 /** An upper tier stands where the scan reaches its height over at least this share of the tier's own (inset) plan. */
 export const MIN_TIER_SUPPORT = 0.6;
+/** A tier thinner than this is not a storey of the building: it is left out. */
+export const MIN_TIER_THICKNESS_M = 1;
 
 export interface RoofPlaneSpec { a: number; b: number; c: number; tag: string }
 
@@ -496,7 +498,11 @@ export function detectHeightTiers(loops: Vec2[][], scanTop: (x: number, z: numbe
     // T0 (the scan's own lowest sample, not a detected step) never counts as a tier boundary on its own; a real step can
     // still land right next to it (a sharp cliff shows up at T0+1). What has to be kept apart is two DETECTED steps -
     // the gap that would make a resulting middle tier too thin to be a real storey rather than scan noise.
-    const filtered = boundaries.filter((L, i) => i <= 1 || L - boundaries[i - 1] >= HEIGHT_AGREEMENT_M);
+    // a step within a storey of the street (part of the footprint scanned at street level: a courtyard, a dip, a hole in
+    // the scan) is not a tier of the building: the first tier rises from the ground to the first real step (Federation
+    // Square, 2026-10-22: lowest tiers 0-0.9 m thick, and inverted ones where the scan dipped under the measured street)
+    const filtered = boundaries.filter((L, i) => i <= 1 || L - boundaries[i - 1] >= HEIGHT_AGREEMENT_M)
+        .filter((L, i) => i === 0 || L >= groundBaseY + HEIGHT_AGREEMENT_M);
     if (filtered.length < 2) return undefined;
     // the scan only says how MUCH plan area a tier keeps, not its literal (noisy, stairstepped) outline - the outline
     // itself comes from the vector footprint's own clean ring, moved inward by the distance that same area implies
@@ -529,12 +535,14 @@ export function detectHeightTiers(loops: Vec2[][], scanTop: (x: number, z: numbe
                 if (last) {
                     const own = samples.filter(([x, z, h]) => inRing(x, z, last.loop) && h >= last.baseY).map(s => s[2]);
                     if (own.length) last.topY = quantile(own, 0.5);
+                    if (last.topY - last.baseY < MIN_TIER_THICKNESS_M) tiers.pop();
                 }
                 break;
             }
         }
         prevLoop = loop;
         const baseY = i === 0 ? groundBaseY : lo;
+        if (claimedTopY - baseY < MIN_TIER_THICKNESS_M) continue;
         tiers.push({ baseY, topY: claimedTopY, loop, cells });
     }
     return tiers.length >= 2 ? tiers : undefined;

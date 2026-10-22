@@ -155,6 +155,11 @@ export interface StructureFootprint {
     /** The structure's lowest point, new frame. */
     baseY: number;
     topY: number;
+    /**
+     * The ground under each cell, when the footprint covers many buildings on varied ground (a district): the cut then keeps
+     * what lies within the clearance of that cell's own ground, not of one ground measured around the whole footprint.
+     */
+    cellGroundY?: Map<string, number>;
 }
 
 interface TriangleVisitor { (a: Vec3, b: Vec3, c: Vec3): void }
@@ -234,7 +239,13 @@ export function structureFootprint(glbs: Uint8Array[], offset: Vec3, cellM = FOO
  * of the structure, which the kept rebuild stands in for). Positions and every other attribute are untouched: only the
  * index lists change (each trimmed primitive gets a new uint32 index accessor at the end of the binary chunk).
  */
-export function hideFootprintInGlb(bytes: Uint8Array, footprint: StructureFootprint): { glb: Buffer; removedTriangles: number; keptTriangles: number; groundY: number } {
+/**
+ * `keep: 'inside'` turns the cut round: only the triangles wholly over the footprint and above the ground clearance stay,
+ * the rest go: the scan of what stands on the footprint, for a tool that rebuilds it (the street under it stays in the layer
+ * it was cut from).
+ */
+export function hideFootprintInGlb(bytes: Uint8Array, footprint: StructureFootprint, opts: { keep?: 'outside' | 'inside' } = {}): { glb: Buffer; removedTriangles: number; keptTriangles: number; groundY: number } {
+    const inside = opts.keep === 'inside';
     const glb = parseGlbBytes(bytes);
     const json = glb.json;
     const world = nodeWorldMatrices(json);
@@ -276,7 +287,14 @@ export function hideFootprintInGlb(bytes: Uint8Array, footprint: StructureFootpr
                 const cy = (pos[v[0] * 3 + 1] + pos[v[1] * 3 + 1] + pos[v[2] * 3 + 1]) / 3;
                 const cz = (pos[v[0] * 3 + 2] + pos[v[1] * 3 + 2] + pos[v[2] * 3 + 2]) / 3;
                 const w = transformPoint(m, cx, cy, cz);
-                if (w[1] > minY && footprint.cells.has(`${Math.floor(w[0] / footprint.cellM)},${Math.floor(w[2] / footprint.cellM)}`)) { cut++; continue; }
+                const key = `${Math.floor(w[0] / footprint.cellM)},${Math.floor(w[2] / footprint.cellM)}`;
+                // kept inside: every corner over the footprint (a large scan triangle whose middle is on the footprint can
+                // reach far past it: a riverbank triangle over the water); cut outside: by its middle, as before
+                const cornerOver = (vi: number) => { const q = transformPoint(m, pos[vi * 3], pos[vi * 3 + 1], pos[vi * 3 + 2]); return footprint.cells.has(`${Math.floor(q[0] / footprint.cellM)},${Math.floor(q[2] / footprint.cellM)}`); };
+                const over = inside ? footprint.cells.has(key) && cornerOver(v[0]) && cornerOver(v[1]) && cornerOver(v[2]) : footprint.cells.has(key);
+                const cellGround = footprint.cellGroundY?.get(key);
+                const above = w[1] > (cellGround !== undefined ? cellGround + FOOTPRINT_GROUND_CLEARANCE_M : minY);
+                if (inside ? !(over && above) : (above && over)) { cut++; continue; }
                 keep.push(v[0], v[1], v[2]);
             }
             removed += cut;

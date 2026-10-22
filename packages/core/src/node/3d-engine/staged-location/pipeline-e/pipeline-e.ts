@@ -23,7 +23,9 @@ import * as path from 'path';
 import type { ProvenanceRecord } from '../../../../common/spatial/staged-location-contracts';
 import type { VectorBuilding } from '../vector-footprints';
 import { buildMassing, massingSpecText, type FaceSweepItem, type Massing, type OpeningItem, type SweepItem } from './massing-spec';
-import { writeMassingClayGlb, writeMassingTexturedGlb, type FaceTexture, type TexelSource } from './massing-glb';
+import * as jpegJs from 'jpeg-js';
+import { PHOTO_JPEG_QUALITY, writeMassingClayGlb, writeMassingTexturedGlb, type FaceTexture, type TexelSource } from './massing-glb';
+import { decodeImageInMemory } from '../tile-texture-transfer';
 import { readFaceOrtho, runMassing, type MassingNode, type MassingRun } from './native-massing';
 import { baseLegend, fillNearest, medianColour, SRC, textureFromOrtho } from './face-textures';
 import { repeatFillFace } from './face-texture-repeat';
@@ -185,17 +187,22 @@ export function plainTextures(run: MassingRun): { textures: Map<number, FaceText
 }
 
 /** Writes the clay layer and its textured twin into `dir`. */
-export function writeMassingLayer(run: MassingRun, massing: Pick<Massing, 'check'>, textures: Map<number, FaceTexture>, legend: TexelSource[], dir: string, stage: string, stageKey: string, name = 'massing', provenanceOf?: (n: MassingNode) => ProvenanceRecord | undefined): MassingLayerFiles {
+export function writeMassingLayer(run: MassingRun, massing: Pick<Massing, 'check'>, textures: Map<number, FaceTexture>, legend: TexelSource[], dir: string, stage: string, stageKey: string, name = 'massing', provenanceOf?: (n: MassingNode) => ProvenanceRecord | undefined, opts: { photoJpeg?: boolean } = {}): MassingLayerFiles {
     // de-lit (residual-tile-delight.ts): every other texel in the scene is de-lit on its way in, but a residual
     // ("as-scanned") cluster renders straight off this shared image, its own native UV, nothing else touching it
     const tileImages = new Map<number, { bytes: Uint8Array; mimeType: string }>();
     for (const im of run.report.images) {
         const f = path.join(run.dir, im.file);
-        if (fs.existsSync(f)) tileImages.set(im.image, { bytes: delightTileImageBytes(fs.readFileSync(f)), mimeType: 'image/png' });
+        if (!fs.existsSync(f)) continue;
+        const delit = delightTileImageBytes(fs.readFileSync(f));
+        if (opts.photoJpeg) {
+            const d = decodeImageInMemory(delit);
+            tileImages.set(im.image, { bytes: new Uint8Array(jpegJs.encode({ data: Buffer.from(d.rgba.buffer, d.rgba.byteOffset, d.rgba.byteLength), width: d.width, height: d.height }, PHOTO_JPEG_QUALITY).data), mimeType: 'image/jpeg' });
+        } else tileImages.set(im.image, { bytes: delit, mimeType: 'image/png' });
     }
     const input = {
         nodes: run.nodes, faces: run.report.faces, stage, stageKey, textures, legend, tileImages, tileLegendIndex: 0,
-        provenanceOf: (n: MassingNode) => provenanceOf?.(n) ?? massingProvenance(n, massing),
+        provenanceOf: (n: MassingNode) => provenanceOf?.(n) ?? massingProvenance(n, massing), ...(opts.photoJpeg ? { albedoJpeg: true } : {}),
         ...(run.flatColours ? { flatColours: run.flatColours } : {})
     };
     const clayGlb = path.join(dir, `${name}_clay.glb`), texturedGlb = path.join(dir, `${name}_textured.glb`);

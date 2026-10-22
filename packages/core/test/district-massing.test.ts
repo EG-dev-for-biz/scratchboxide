@@ -57,3 +57,42 @@ describe('massDistrict', () => {
         expect(by('small').reason).toMatch(/smaller than what was scanned/);
     });
 });
+
+describe('cutting a district\'s scan to the rebuilt footprints', () => {
+    it('keeps only triangles wholly over the footprint and above each cell\'s own ground, and the residual guard drops what lies off it', async () => {
+        const fs = await import('fs'), os = await import('os'), path = await import('path');
+        const { hideFootprintInGlb } = await import('../src/node/3d-engine/staged-location/kept-structure');
+        const { keepResidualOver } = await import('../src/node/3d-engine/staged-location/district-massing');
+        const { building, groundGrid, writeTris } = await import('./helpers/staged-synthetic-world');
+        const { readGlbTriangles } = await import('./helpers/clay-glb-render');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'district-cut-'));
+        // two buildings on ground at different levels (y 0 and y 5), and one big flat triangle whose middle is over the
+        // first footprint but which reaches 30 m past it (a riverbank triangle)
+        const lowBlock = building(0, 10, 0, 10, 12), highBlock = building(20, 30, 0, 10, 12).map(t => t.map((v, i) => (i % 3 === 1 ? v + 5 : v))) as never;
+        const big: number[][] = [[1, 0.5, 1], [9, 0.5, 9], [-25, 0.5, 5]];
+        const file = writeTris(path.join(dir, 'scan.glb'), [...groundGrid(40), ...lowBlock, ...highBlock, big as never]);
+        const cells = new Set<string>(), cellGroundY = new Map<string, number>();
+        for (let x = 0; x < 10; x++) for (let z = 0; z < 10; z++) { cells.add(`${x},${z}`); cellGroundY.set(`${x},${z}`, 0); }
+        for (let x = 20; x < 30; x++) for (let z = 0; z < 10; z++) { cells.add(`${x},${z}`); cellGroundY.set(`${x},${z}`, 5); }
+        const out = hideFootprintInGlb(fs.readFileSync(file), { cellM: 1, cells, baseY: 0, topY: 17, cellGroundY }, { keep: 'inside' });
+        const kept = readGlbTriangles(out.glb);
+        let low = 0, high = 0, ground = 0, wide = 0;
+        for (let t = 0; t < kept.indices.length; t += 3) {
+            const vs = [0, 1, 2].map(j => [0, 1, 2].map(k => kept.positions[kept.indices[t + j] * 3 + k]));
+            const c = [0, 1, 2].map(k => (vs[0][k] + vs[1][k] + vs[2][k]) / 3);
+            if (Math.max(...vs.map(v => v[0])) - Math.min(...vs.map(v => v[0])) > 20) wide++;
+            else if (c[1] < 0.3 || (c[0] >= 20 && c[1] < 5.3)) ground++;
+            else if (c[0] < 15) low++; else high++;
+        }
+        expect(wide).toBe(0);          // the triangle reaching past the footprint is not kept
+        expect(ground).toBe(0);        // the street under both buildings stays in the layer it was cut from
+        expect(low).toBeGreaterThan(0);
+        expect(high).toBeGreaterThan(0);
+        // the residual guard: a residual node's triangles off the cells go, those over them stay
+        const node = (pts: number[][]) => ({ name: 'residual:1', kind: 'residual', provenance: 'as-scanned', confidence: null, positions: Float32Array.from(pts.flat()), normals: new Float32Array(pts.length * 3), ref: new Int32Array(pts.length).fill(-2), st: new Float32Array(pts.length * 2), indices: Uint32Array.from(pts.map((_, i) => i)) });
+        const run = { nodes: [node([[1, 13, 1], [2, 13, 1], [1, 13, 2], [40, 0, 40], [41, 0, 40], [40, 0, 41]]), { ...node([[2, 0, 2], [3, 0, 2], [2, 0, 3]]), name: 'w:1', kind: 'wall' }] } as never;
+        expect(keepResidualOver(run, cells)).toBe(1);
+        expect((run as { nodes: Array<{ kind: string; indices: Uint32Array }> }).nodes.find(n => n.kind === 'residual')!.indices.length).toBe(3);
+        expect((run as { nodes: Array<{ kind: string }> }).nodes.some(n => n.kind === 'wall')).toBe(true);
+    });
+});
