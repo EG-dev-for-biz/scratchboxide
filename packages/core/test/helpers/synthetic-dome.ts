@@ -27,12 +27,24 @@ export const DOME = { y0: 14.6, R0: 6.0, H: 6.5 };
 export const LANTERN = { y0: 20.2, y1: 22.6, r: 1.25, capH: 1.3 };
 export const RIBS = { K: 12, ampRel: 0.035, sharp: 6 };
 
-/** The true (noise-free) radius of the dome's own surface at (y, theta), ribs included. */
-export function domeR(y: number, th: number, ribs: boolean): number {
+/** A thin mast on the lantern's cap: radius and top (m). */
+export const MAST = { r: 0.12, y1: 26.4 };
+
+/** Flat facets of a K-gon, corners at theta = 0 (mod 2 pi / K), relative to the polygon's mean radius over angle. */
+export function facetFactor(th: number, K: number): number {
+    let phi = (K * th) % (2 * Math.PI);
+    if (phi >= Math.PI) phi -= 2 * Math.PI;
+    if (phi < -Math.PI) phi += 2 * Math.PI;
+    const a = Math.PI / K, mean = (K / Math.PI) * Math.log(1 / Math.cos(a) + Math.tan(a));
+    return 1 / Math.cos((Math.PI - Math.abs(phi)) / K) / mean;
+}
+
+/** The true (noise-free) radius of the dome's own surface at (y, theta), ribs (or flat facets of a `facets`-gon) included. */
+export function domeR(y: number, th: number, ribs: boolean, facets = 0): number {
     const t = Math.min(1, Math.max(0, (y - DOME.y0) / DOME.H));
     const base = DOME.R0 * Math.sqrt(Math.max(0, 1 - t * t));
     const rib = ribs ? RIBS.ampRel * Math.pow(Math.max(0, Math.cos(RIBS.K * th)), RIBS.sharp) : 0;
-    return base * (1 + rib);
+    return base * (1 + rib) * (facets ? facetFactor(th, facets) : 1);
 }
 
 /**
@@ -71,7 +83,7 @@ function box(x0: number, z0: number, x1: number, z1: number, y0: number, y1: num
 }
 
 /** The synthetic scan: roof block, ribbed dome on a drum with a ring and a lantern, a plain box beside it. */
-export function syntheticScan(opts: { ribs: boolean; lantern: boolean; seed: number }): { positions: Float32Array; indices: Uint32Array; noiseRms: number } {
+export function syntheticScan(opts: { ribs: boolean; lantern: boolean; seed: number; facets?: number; mast?: boolean }): { positions: Float32Array; indices: Uint32Array; noiseRms: number } {
     const R = rng(opts.seed);
     // smooth dents: 10 Gaussian blobs of 0.25-0.5 m over 0.8-1.4 m (seven pushing in, three out: a coarse scan's lumps),
     // about a sixth of the surface, plus 6 cm per-vertex noise
@@ -103,12 +115,19 @@ export function syntheticScan(opts: { ribs: boolean; lantern: boolean; seed: num
         const t = Math.sin(phi);
         mer.push([DOME.R0 * Math.cos(phi), DOME.y0 + t * DOME.H, true]);
     }
-    revolve(mer, 240, (th, y, onDome) => onDome ? domeR(y, th, opts.ribs) / Math.max(1e-6, domeR(y, th, false)) - 1 : 0, noise, out);
+    revolve(mer, 240, (th, y, onDome) => onDome ? domeR(y, th, opts.ribs, opts.facets ?? 0) / Math.max(1e-6, domeR(y, th, false)) - 1 : 0, noise, out);
     if (opts.lantern) {
         const lm: Array<[number, number, boolean]> = [];
         for (let y = LANTERN.y0; y <= LANTERN.y1 + 1e-9; y += 0.3) lm.push([LANTERN.r, y, false]);
         for (let k = 1; k <= 12; k++) { const phi = (Math.PI / 2) * (k / 12); lm.push([LANTERN.r * Math.cos(phi), LANTERN.y1 + Math.sin(phi) * LANTERN.capH, false]); }
         revolve(lm, 64, () => 0, (x, y, z) => 0.04 * gauss() + 0 * (x + y + z), out);
+    }
+    if (opts.mast) {
+        // a thin pole standing on the lantern's cap: the scan's thin spike (few, coarse triangles)
+        const mm: Array<[number, number, boolean]> = [];
+        for (let y = LANTERN.y1 + LANTERN.capH - 0.3; y <= MAST.y1 + 1e-9; y += 0.4) mm.push([MAST.r, y, false]);
+        mm.push([0, MAST.y1 + 0.05, false]);
+        revolve(mm, 8, () => 0, () => 0.02 * gauss(), out);
     }
     return { positions: Float32Array.from(out.p), indices: Uint32Array.from(out.i), noiseRms: Math.sqrt(ss / Math.max(1, n)) };
 }

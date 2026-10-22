@@ -22,7 +22,7 @@ import { describe, expect, it } from 'vitest';
 import { cutRevolutionsFromGlb, revolutionColourAtlas, revolutionCutMask, runRevolutionFit, writeRevolutionsGlb, type RevolutionFitRun } from '../src/node/3d-engine/staged-location/revolution-fit';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 import { readGlbTriangles } from './helpers/clay-glb-render';
-import { AXIS, DOME, DRUM, LANTERN, RIBS, RING, ROOF_Y, domeR, syntheticScan } from './helpers/synthetic-dome';
+import { AXIS, DOME, DRUM, LANTERN, MAST, RIBS, RING, ROOF_Y, domeR, syntheticScan } from './helpers/synthetic-dome';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'revolution-fit-'));
 
@@ -162,6 +162,56 @@ describe('revolution fit (synthetic dome with a lantern and 12 ribs)', () => {
             expect(px(row)[0] > 100).toBe(mesh.positions[v * 3 + 1] > 18);
         }
     });
+
+    it('reads the 12 ribs as narrow raised ribs on a smooth shell, not a sinusoidal swing', () => {
+        const m = run.report.revolutions.find(x => x.accepted)!.stacks[0].capModulation;
+        expect(m.shape.bumpAmp, JSON.stringify(m.shape)).toBeGreaterThan(0);
+        expect(m.shape.cosAmp).toBe(0);
+        expect(m.shape.facetAmp).toBe(0);
+        expect(m.shape.bumpCentre).toBe(0);
+        // the true rib: cos^6 of 12 theta, e^-1 of its crest at 0.56 rad of phase: a width of 0.18 of half a period
+        expect(m.shape.bumpWidth).toBeGreaterThan(0.1);
+        expect(m.shape.bumpWidth).toBeLessThan(0.3);
+        expect(m.shape.bumpAmp).toBeGreaterThan(0.5 * RIBS.ampRel);
+        expect(m.shape.bumpAmp).toBeLessThan(1.5 * RIBS.ampRel);
+    });
+
+    it('reads flat facets as facets with sharp corners, and stands a thin mast on the lantern as a pole, not a cap', async () => {
+        const scanF = syntheticScan({ ribs: false, lantern: true, seed: 5, facets: 8, mast: true });
+        const runF = await runRevolutionFit(scanF, tmp());
+        const r = runF.report.revolutions.filter(x => x.accepted);
+        expect(r.length).toBe(1);
+        const m = r[0].stacks[0].capModulation;
+        expect(m.K, JSON.stringify(m)).toBe(8);
+        // the flat-facet family, or a cusp-edged bump (exponent at most 1.5) where it fits better: a corner, not a lobe
+        expect(m.shape.cosAmp).toBe(0);
+        expect(m.shape.facetAmp > 0 || (m.shape.bumpAmp > 0 && m.shape.bumpExponent <= 1.5), JSON.stringify(m.shape)).toBe(true);
+        // the rebuilt surface follows the true facets
+        const mesh = runF.meshes[0];
+        let ss = 0, n = 0;
+        for (let v = 0; v < mesh.positions.length / 3; v++) {
+            const x = mesh.positions[v * 3], y = mesh.positions[v * 3 + 1], z = mesh.positions[v * 3 + 2];
+            if (y < DOME.y0 + 0.4 || y > DOME.y0 + 0.75 * DOME.H) continue;
+            const th = Math.atan2(z - AXIS.z, x - AXIS.x);
+            const d = Math.hypot(x - AXIS.x, z - AXIS.z) - domeR(y, th, false, 8);
+            ss += d * d; n++;
+        }
+        expect(Math.sqrt(ss / n)).toBeLessThan(0.6 * scanF.noiseRms);
+        // the mast: the last stack, bands only (no cap invented on it), at the measured radius and height
+        const stacks = r[0].stacks;
+        const mast = stacks[stacks.length - 1];
+        expect(mast.bandsOnly, JSON.stringify(stacks.map(s => [s.bandsOnly, s.mastAbove, s.slenderness, s.cap]))).toBe(true);
+        expect(mast.cap).toBeNull();
+        const mr = mast.bands.reduce((a, b) => a + (b.r0 + b.r1) / 2, 0) / mast.bands.length;
+        expect(Math.abs(mr - MAST.r)).toBeLessThan(0.12);
+        expect(Math.abs(mast.yTop - MAST.y1)).toBeLessThan(0.5);
+        expect(mast.slenderness).toBeGreaterThan(8);
+        // the lantern's cap is cut flat where the mast stands
+        const lantern = stacks[stacks.length - 2];
+        expect(lantern.mastAbove).toBe(true);
+        expect(lantern.cap!.cut).toBeLessThan(MAST.y1 - 1);
+        expect(lantern.cap!.cut).toBeGreaterThan(LANTERN.y1);
+    }, 180_000);
 
     it('finds no ribs on a plain dented dome (the noise is not read as a period)', async () => {
         const plain = syntheticScan({ ribs: false, lantern: false, seed: 11 });

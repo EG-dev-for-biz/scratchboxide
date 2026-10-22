@@ -48,15 +48,27 @@ export interface RevolutionModulation {
     K: number; ampRel: number; ampM: number; significance: number; phaseAgreeDeg: number; floorRel: number;
     /** The strongest period count tested and its significance, kept or not. */
     bestK: number; bestSignificance: number;
+    /**
+     * The period's shape over phi = K (theta - theta0) in [-pi, pi): offset + cosAmp cos(phi) + bumpAmp g(phi - bumpCentre)
+     * + facetAmp (P(phi) - mean P), g(x) = exp(-|x / (bumpWidth pi)|^bumpExponent), P the radius of a K-gon's flat facets
+     * with corners at phi = 0. Only the family that fits the folded residual carries an amplitude.
+     */
+    shape: { theta0: number; offset: number; cosAmp: number; bumpAmp: number; bumpWidth: number; bumpExponent: number; bumpCentre: number; facetAmp: number; rmsRel: number; explained: number };
     /** (k, a, b): m(theta) = sum a cos(k theta) + b sin(k theta), relative to the radius. */
     harmonics: Array<[number, number, number]>;
 }
 
 export interface RevolutionStack {
     yBottom: number; yTop: number; points: number; rmsM: number; rmsTruncM: number;
+    /** Bands only, no cap: a thin part (a mast) measured as straight sections. */
+    bandsOnly: boolean;
+    /** The cap is cut flat where a mast (the next stack) stands on it. */
+    mastAbove: boolean;
+    /** Height over radius of the topmost run of thin sections (0: none). */
+    slenderness: number;
     bands: Array<{ y0: number; y1: number; r: number; slices: number }>;
     /** r(t) = R0 (1 - t^q)^(1/p) (1 + b 4 t (1 - t)), t = (y - y0) / H. */
-    cap: { y0: number; R0: number; H: number; p: number; q: number; b: number } | null;
+    cap: { y0: number; R0: number; H: number; p: number; q: number; b: number; cut: number | null } | null;
     bandModulation: RevolutionModulation;
     capModulation: RevolutionModulation;
     /** The unmodulated meridian (r, y), bottom axis -> out -> up -> top axis. */
@@ -196,6 +208,15 @@ export function revolutionConfidence(r: RevolutionRecord): number {
     return Math.round(Math.max(0, Math.min(1, c)) * 1000) / 1000;
 }
 
+/** The period's fitted shape in words (from its continuous numbers). */
+export function modulationShapeText(m: RevolutionModulation): string {
+    const sh = m.shape;
+    if (sh.facetAmp) return 'flat facets with sharp corners';
+    if (sh.cosAmp) return 'a sinusoidal swing';
+    if (sh.bumpAmp) return `${sh.bumpAmp > 0 === (sh.bumpCentre === 0) ? 'raised ribs' : 'grooves'} ${(sh.bumpWidth * 50).toFixed(0)}% of the period wide, edge exponent ${sh.bumpExponent}`;
+    return 'none';
+}
+
 /** One line of what was fitted, for provenance notes and run notes. */
 export function describeRevolution(r: RevolutionRecord): string {
     const s0 = r.stacks[0];
@@ -205,7 +226,9 @@ export function describeRevolution(r: RevolutionRecord): string {
     if (s0?.bands.length) parts.push(`${s0.bands.length} band${s0.bands.length === 1 ? '' : 's'} below it`);
     if (r.stacks.length > 1) parts.push(`${r.stacks.length - 1} stacked revolution${r.stacks.length > 2 ? 's' : ''} above`);
     const mods = r.stacks.flatMap(s => [s.bandModulation, s.capModulation]).filter(m => m.K > 0);
-    if (mods.length) parts.push(`periodic modulation K ${mods.map(m => `${m.K} (${(m.ampM * 100).toFixed(0)} cm)`).join(', ')}`);
+    if (mods.length) parts.push(`periodic modulation ${mods.map(m => `K ${m.K}, ${(m.ampM * 100).toFixed(0)} cm, ${modulationShapeText(m)}`).join('; ')}`);
+    const masts = r.stacks.filter(s => s.bandsOnly);
+    if (masts.length) parts.push(masts.map(s => `a mast to ${s.yTop.toFixed(1)} m at r ${(s.bands.reduce((a, b) => a + (b.r0 + b.r1) / 2, 0) / Math.max(1, s.bands.length)).toFixed(2)} m (slenderness ${s.slenderness.toFixed(0)}), no cap on it`).join('; '));
     return `axis at (${r.axis.x.toFixed(2)}, ${r.axis.z.toFixed(2)}) +- ${r.axis.errM.toFixed(2)} m; ${parts.join('; ')}; scan RMS ${r.fit.rmsM.toFixed(2)} m (truncated at 0.5 m: ${r.fit.rmsTruncM.toFixed(2)} m), ${Math.round(r.fit.within25cm * 100)}% within 25 cm; ${r.departures.length} local departure${r.departures.length === 1 ? '' : 's'} reported, not rebuilt`;
 }
 

@@ -41,6 +41,11 @@
  *      at most `maxTaper`; a band thinner than `minBandM` is allowed only as a ring standing proud of both neighbours (a
  *      cornice), else that y0 is no cap base. Every half slice (at most `maxCapBases`) is tried as y0; of those explaining the scan within
  *      `simplerShare` of the best, the one with the fewest bands (then the lowest) is kept.
+ *   4b. Masts. A stack whose base sections are at most `mastStackRadiusShare` of the radius of the stack below and whose
+ *      height over radius is at least `mastMinSlenderness`, or the topmost run of a stack's sections at most
+ *      `mastMaxRadiusShare` of its base radius that is that slender and changes radius by at most `mastMaxTaperShare` of
+ *      itself, is a mast: rebuilt as bands of its own measured section radii (each about its own centre, a ball or collar
+ *      where they stand proud), flat at its measured top; the cap below is cut flat at its foot. No cap is put on it.
  *   4. Stacked revolutions. Points standing more than `stackRiseM` above the fitted cap within `stackMaxRadiusShare` of its radius of the
  *      axis, over at least `stackMinAreaM2`, are a second revolution standing on the first (a lantern, a finial): the
  *      cap is refitted without them and they are fitted as their own stack (bands + cap) the same way, up to `maxStacks`.
@@ -122,12 +127,18 @@ struct Params {
     double stackRiseM{0.6};
     double stackMinAreaM2{0.8};
     double stackMaxRadiusShare{0.4};
+    double mastMaxRadiusShare{0.35};
+    double mastStackRadiusShare{0.15};
+    double mastMinSlenderness{4.0};
+    double mastMaxTaperShare{3.0};
+    double mastMinHeightM{0.8};
     int maxStacks{3};
     // periodic departures
     double ribSignificance{4.0};
     int minPeriods{4};
     double ribMinAmpM{0.05};
     double minModulationM{1.5};
+    double bumpPreference{0.8};
     // local departures
     double departureM{0.6};
     double departureMinAreaM2{2.0};
@@ -140,7 +151,7 @@ struct Params {
             {"maxRadiusM", &maxRadiusM}, {"minRadiusM", &minRadiusM}, {"minStackM", &minStackM}, {"maxContourSpread", &maxContourSpread},
             {"centreDrift", &centreDrift}, {"maxFailM", &maxFailM}, {"density", &density}, {"sliceM", &sliceM}, {"minSectorShare", &minSectorShare},
             {"maxSliceRmsRel", &maxSliceRmsRel}, {"minSliceShare", &minSliceShare}, {"maxTiltDeg", &maxTiltDeg}, {"maxModulationRel", &maxModulationRel}, {"sliceRmsFloorM", &sliceRmsFloorM}, {"ringStepM", &ringStepM}, {"ringStepRel", &ringStepRel}, {"minBandM", &minBandM}, {"simplerShare", &simplerShare}, {"coreScaleM", &coreScaleM}, {"maxTaper", &maxTaper},
-            {"stackRiseM", &stackRiseM}, {"stackMinAreaM2", &stackMinAreaM2}, {"stackMaxRadiusShare", &stackMaxRadiusShare}, {"ribSignificance", &ribSignificance}, {"ribMinAmpM", &ribMinAmpM}, {"minModulationM", &minModulationM},
+            {"stackRiseM", &stackRiseM}, {"stackMinAreaM2", &stackMinAreaM2}, {"stackMaxRadiusShare", &stackMaxRadiusShare}, {"mastMaxRadiusShare", &mastMaxRadiusShare}, {"mastStackRadiusShare", &mastStackRadiusShare}, {"mastMinSlenderness", &mastMinSlenderness}, {"mastMaxTaperShare", &mastMaxTaperShare}, {"mastMinHeightM", &mastMinHeightM}, {"ribSignificance", &ribSignificance}, {"ribMinAmpM", &ribMinAmpM}, {"minModulationM", &minModulationM}, {"bumpPreference", &bumpPreference},
             {"departureM", &departureM}, {"departureMinAreaM2", &departureMinAreaM2}, {"sinkM", &sinkM}};
         if (k == "minSlices") { minSlices = static_cast<int>(v); return; }
         if (k == "maxStacks") { maxStacks = static_cast<int>(v); return; }
@@ -274,8 +285,10 @@ inline double polyDist(const std::vector<std::array<double, 2>>& pl, double r, d
 struct Cap {
     bool present{false};
     double y0{0}, R0{0}, H{0}, p{2}, q{2}, b{0};
+    /** Where a mast stands on the cap: the cap ends there in a flat top (infinity: it closes at its apex). */
+    double cut{std::numeric_limits<double>::infinity()};
     double radiusAt(double y) const {
-        if (!present || H <= 0) return 0;
+        if (!present || H <= 0 || y > cut) return 0;
         const double t = (y - y0) / H;
         if (t < 0) return R0;
         if (t >= 1) return 0;
@@ -289,6 +302,14 @@ struct Cap {
             const double t = std::pow(std::sin(phi), 2.0 / std::max(0.5, q));
             o.push_back({i == n ? 0.0 : R0 * std::pow(std::max(0.0, 1 - std::pow(t, q)), 1 / p) * (1 + b * 4 * t * (1 - t)), y0 + t * H});
         }
+        if (std::isfinite(cut) && cut < y0 + H) {
+            std::vector<std::array<double, 2>> c;
+            for (const auto& q2 : o) if (q2[1] < cut) c.push_back(q2);
+            const double t = std::clamp((cut - y0) / H, 0.0, 1.0);
+            c.push_back({R0 * std::pow(std::max(0.0, 1 - std::pow(t, q)), 1 / p) * (1 + b * 4 * t * (1 - t)), cut});
+            c.push_back({0.0, cut});
+            return c;
+        }
         return o;
     }
 };
@@ -300,19 +321,50 @@ struct Band {
     double rAt(double y) const { return y1 > y0 ? r0 + (r1 - r0) * std::clamp((y - y0) / (y1 - y0), 0.0, 1.0) : r0; }
 };
 
-/** A K-periodic radial modulation m(theta) = sum_j a_j cos(j K theta) + b_j sin(j K theta), relative to the radius. */
+/**
+ * A K-periodic radial modulation, relative to the radius. Its shape over one period (phi = K (theta - theta0) wrapped to
+ * [-pi, pi), the residual's crest at phi = 0) is fitted to the residual folded over one period:
+ *     m(phi) = offset + cosAmp cos(phi) + bumpAmp g(phi - bumpCentre) + facetAmp (P(phi) - mean P)
+ * with g(x) = exp(-|x / (bumpWidth pi)|^bumpExponent) (bumpWidth: the rib's half width as a share of half the period;
+ * bumpExponent: its edge sharpness, 1 a cusp, 2 a smooth bump, 8+ flat-topped with sharp edges) and P the radius of a
+ * K-gon's flat facets, corners at phi = 0. Only the family that fits the folded residual best carries an amplitude.
+ */
 struct Modulation {
     int K{0};
-    std::vector<std::array<double, 3>> h;  // (k, a, b)
+    std::vector<std::array<double, 3>> h;  // the kept Fourier lines (k, a, b), reported
     double ampRel{0}, ampM{0}, significance{0}, phaseAgreeDeg{0}, floorRel{0};
     int bestK{0};
     double bestSignificance{0};
-    double at(double th) const { double m = 0; for (const auto& c : h) m += c[1] * std::cos(c[0] * th) + c[2] * std::sin(c[0] * th); return m; }
-    double maxAbs() const { double m = 0; for (const auto& c : h) m += std::hypot(c[1], c[2]); return m; }
+    double theta0{0}, offset{0}, cosAmp{0}, bumpAmp{0}, bumpWidth{0.25}, bumpExponent{2}, bumpCentre{0}, facetAmp{0};
+    double shapeRmsRel{0}, shapeExplained{0};
+    static double facetRaw(double phi, int K) { return 1.0 / std::cos((PI - std::abs(phi)) / K); }
+    static double facetMean(int K) { const double a = PI / K; return (K / PI) * std::log(1 / std::cos(a) + std::tan(a)); }
+    double bump(double x) const {
+        while (x > PI) x -= 2 * PI;
+        while (x < -PI) x += 2 * PI;
+        return std::exp(-std::pow(std::abs(x) / (bumpWidth * PI), bumpExponent));
+    }
+    double atPhase(double phi) const {
+        return offset + cosAmp * std::cos(phi) + bumpAmp * bump(phi - bumpCentre) + (facetAmp != 0 ? facetAmp * (facetRaw(phi, K) - facetMean(K)) : 0.0);
+    }
+    double at(double th) const {
+        if (!K) return 0;
+        double phi = std::fmod(K * (th - theta0), 2 * PI);
+        if (phi >= PI) phi -= 2 * PI;
+        if (phi < -PI) phi += 2 * PI;
+        return atPhase(phi);
+    }
+    double maxAbs() const { if (!K) return 0; double m = 0; for (int i = 0; i < 512; ++i) m = std::max(m, std::abs(atPhase(-PI + 2 * PI * i / 512))); return m; }
 };
 
 struct Stack {
     double yBottom{0}, yTop{0};
+    /** Bands only, no cap: a thin part measured as straight sections (a mast standing on the cap below it). */
+    bool bandsOnly{false};
+    /** The cap is cut where a mast stands on it (the next stack). */
+    bool mastAbove{false};
+    /** Height over radius of the stack's topmost run of thin sections (0: none measured). */
+    double slenderness{0};
     std::vector<Band> bands;
     Cap cap;
     Modulation bandMod, capMod;
@@ -353,7 +405,14 @@ struct Stack {
     }
 };
 
-struct Slice { double y{0}, cx{0}, cz{0}, r{0}, rmsRel{0}, sectors{0}; int n{0}; bool ok{false}; };
+struct Slice {
+    double y{0}, cx{0}, cz{0}, r{0}, rmsRel{0}, sectors{0};
+    /** The section's own radius: the median distance of its points from their own centre (a thin part that leans off
+     *  the axis has a small own radius however far its centre is from the axis). */
+    double rOwn{0};
+    int n{0};
+    bool ok{false};
+};
 
 struct Departure { double areaM2{0}, meanM{0}, thetaLoDeg{0}, thetaHiDeg{0}, yLo{0}, yHi{0}; int cells{0}; };
 
@@ -417,14 +476,17 @@ public:
             for (size_t s = 0; s < r.stacks.size(); ++s) {
                 const auto& st = r.stacks[s];
                 if (s) o << ",";
-                o << "{\"yBottom\":" << detail::num(st.yBottom) << ",\"yTop\":" << detail::num(st.yTop) << ",\"points\":" << st.points << ",\"rmsM\":" << detail::num(st.rmsM) << ",\"rmsTruncM\":" << detail::num(st.rmsTruncM) << ",\"bands\":[";
+                o << "{\"yBottom\":" << detail::num(st.yBottom) << ",\"yTop\":" << detail::num(st.yTop) << ",\"bandsOnly\":" << (st.bandsOnly ? "true" : "false") << ",\"mastAbove\":" << (st.mastAbove ? "true" : "false") << ",\"slenderness\":" << detail::num(st.slenderness) << ",\"points\":" << st.points << ",\"rmsM\":" << detail::num(st.rmsM) << ",\"rmsTruncM\":" << detail::num(st.rmsTruncM) << ",\"bands\":[";
                 for (size_t b = 0; b < st.bands.size(); ++b) { if (b) o << ","; o << "{\"y0\":" << detail::num(st.bands[b].y0) << ",\"y1\":" << detail::num(st.bands[b].y1) << ",\"r0\":" << detail::num(st.bands[b].r0) << ",\"r1\":" << detail::num(st.bands[b].r1) << ",\"slices\":" << st.bands[b].slices << "}"; }
                 o << "],\"cap\":";
-                if (st.cap.present) o << "{\"y0\":" << detail::num(st.cap.y0) << ",\"R0\":" << detail::num(st.cap.R0) << ",\"H\":" << detail::num(st.cap.H) << ",\"p\":" << detail::num(st.cap.p) << ",\"q\":" << detail::num(st.cap.q) << ",\"b\":" << detail::num(st.cap.b) << "}";
+                if (st.cap.present) o << "{\"y0\":" << detail::num(st.cap.y0) << ",\"R0\":" << detail::num(st.cap.R0) << ",\"H\":" << detail::num(st.cap.H) << ",\"p\":" << detail::num(st.cap.p) << ",\"q\":" << detail::num(st.cap.q) << ",\"b\":" << detail::num(st.cap.b) << ",\"cut\":" << detail::num(st.cap.cut) << "}";
                 else o << "null";
                 auto mod = [&](const Modulation& m) {
                     o << "{\"K\":" << m.K << ",\"ampRel\":" << detail::num(m.ampRel) << ",\"ampM\":" << detail::num(m.ampM) << ",\"significance\":" << detail::num(m.significance) << ",\"phaseAgreeDeg\":" << detail::num(m.phaseAgreeDeg)
-                      << ",\"floorRel\":" << detail::num(m.floorRel) << ",\"bestK\":" << m.bestK << ",\"bestSignificance\":" << detail::num(m.bestSignificance) << ",\"harmonics\":[";
+                      << ",\"floorRel\":" << detail::num(m.floorRel) << ",\"bestK\":" << m.bestK << ",\"bestSignificance\":" << detail::num(m.bestSignificance)
+                      << ",\"shape\":{\"theta0\":" << detail::num(m.theta0) << ",\"offset\":" << detail::num(m.offset) << ",\"cosAmp\":" << detail::num(m.cosAmp) << ",\"bumpAmp\":" << detail::num(m.bumpAmp)
+                      << ",\"bumpWidth\":" << detail::num(m.bumpWidth) << ",\"bumpExponent\":" << detail::num(m.bumpExponent) << ",\"bumpCentre\":" << detail::num(m.bumpCentre) << ",\"facetAmp\":" << detail::num(m.facetAmp)
+                      << ",\"rmsRel\":" << detail::num(m.shapeRmsRel) << ",\"explained\":" << detail::num(m.shapeExplained) << "},\"harmonics\":[";
                     for (size_t i = 0; i < m.h.size(); ++i) { if (i) o << ","; o << "[" << detail::num(m.h[i][0]) << "," << detail::num(m.h[i][1]) << "," << detail::num(m.h[i][2]) << "]"; }
                     o << "]}";
                 };
@@ -753,14 +815,24 @@ private:
         // the stacks: the first from the whole, the next from what stands above its cap near the axis
         std::vector<MP> rest = mp;
         double bottom = yBottom;
-        for (int k = 0; k < p_.maxStacks && rest.size() >= 60; ++k) {
+        bool mastNext = false;
+        for (int k = 0; k < p_.maxStacks && rest.size() >= (mastNext ? 12u : 60u); ++k) {
             Stack st;
             std::vector<MP> above;
-            fitStack(rest, bottom, R.peakY, st, above, k == 0 ? &sl : nullptr);
+            const double belowR = R.stacks.empty() ? 0 : (!R.stacks.back().bands.empty() ? R.stacks.back().bands.front().r0 : R.stacks.back().cap.R0);
+            fitStack(rest, bottom, R.peakY, st, above, k == 0 ? &sl : nullptr, mastNext, belowR);
             if (!st.cap.present && st.bands.empty()) break;
+            // a mast found on its own stands on the cap below, cut flat at its foot (the cap is not continued inside it)
+            if (st.bandsOnly && !R.stacks.empty() && !R.stacks.back().mastAbove && R.stacks.back().cap.present && st.yBottom > R.stacks.back().cap.y0 + 0.3) {
+                auto& prev = R.stacks.back();
+                prev.mastAbove = true;
+                prev.cap.cut = std::min(prev.cap.cut, st.yBottom);
+                prev.yTop = std::min(prev.yTop, prev.cap.cut);
+            }
             R.stacks.push_back(st);
+            mastNext = st.mastAbove;
             double area = 0; for (const auto& m : above) area += m.w;
-            if (area < p_.stackMinAreaM2 || above.size() < 60) break;
+            if (mastNext ? above.size() < 12 : (area < p_.stackMinAreaM2 || above.size() < 60)) break;
             double lo = 1e300; for (const auto& m : above) lo = std::min(lo, m.y);
             // the next stack stands on this cap: its bottom inside the cap, so the two solids meet without a gap
             bottom = lo;
@@ -791,7 +863,7 @@ private:
     }
 
     /** Bands below y0 from the slices; the cap above y0 fitted to the meridian points. */
-    void fitStack(const std::vector<MP>& pts, double yBottom, double yPeak, Stack& st, std::vector<MP>& above, const std::vector<Slice>* slicesIn) {
+    void fitStack(const std::vector<MP>& pts, double yBottom, double yPeak, Stack& st, std::vector<MP>& above, const std::vector<Slice>* slicesIn, bool bandsOnly = false, double belowBaseR = 0) {
         st.yBottom = yBottom;
         double yTop = yBottom; for (const auto& m : pts) yTop = std::max(yTop, m.y);
         st.yTop = yTop;
@@ -802,27 +874,50 @@ private:
         {
             const int ns = std::max(1, static_cast<int>(std::floor((yTop - yBottom) / s)));
             std::vector<std::vector<double>> rs(ns);
+            std::vector<std::vector<std::array<double, 2>>> xz(ns);
             std::vector<std::array<int, 24>> sec(ns, std::array<int, 24>{});
             for (const auto& m : pts) {
                 const int k = static_cast<int>(std::floor((m.y - yBottom) / s));
                 if (k < 0 || k >= ns) continue;
                 rs[k].push_back(m.r);
+                xz[k].push_back({m.r * std::cos(m.th), m.r * std::sin(m.th)});
                 sec[k][static_cast<int>((m.th + PI) / (2 * PI) * 24) % 24] = 1;
             }
             for (int k = 0; k < ns; ++k) {
                 Slice c; c.y = yBottom + (k + 0.5) * s; c.n = static_cast<int>(rs[k].size());
-                if (c.n >= 8) {
+                if (c.n >= 4) {
+                    double mx = 0, mz = 0; for (const auto& q : xz[k]) { mx += q[0]; mz += q[1]; }
+                    mx /= c.n; mz /= c.n;
+                    std::vector<double> dd; for (const auto& q : xz[k]) dd.push_back(std::hypot(q[0] - mx, q[1] - mz));
+                    c.rOwn = detail::median(dd);
                     c.r = detail::halfSampleMode(rs[k]);
+                    // a thin part's section is measured about its own centre (it may lean off the axis)
+                    if (bandsOnly) c.r = c.rOwn;
                     c.sectors = std::accumulate(sec[k].begin(), sec[k].end(), 0) / 24.0;
                     const double sd = 1.4826 * detail::mad(rs[k], c.r);
                     c.rmsRel = sd / std::max(1e-6, c.r);
-                    c.ok = c.sectors >= p_.minSectorShare && sd <= std::max(p_.maxSliceRmsRel * 1.5 * c.r, p_.sliceRmsFloorM);
+                    // a thin part's sections (a mast) are measured from fewer points and fill fewer sectors
+                    c.ok = bandsOnly || (c.n >= 8 && c.sectors >= p_.minSectorShare && sd <= std::max(p_.maxSliceRmsRel * 1.5 * c.r, p_.sliceRmsFloorM));
                 }
                 if (std::getenv("SB_REV_DEBUG")) std::fprintf(stderr, "stack slice y %.2f n %d r %.2f sectors %.2f sd %.3f ok %d\n", c.y, c.n, c.r, c.sectors, c.rmsRel * c.r, c.ok ? 1 : 0);
                 sl.push_back(c);
             }
         }
         (void)slicesIn;
+        // a whole stack that is thin against the one it stands on (its sections at most mastMaxRadiusShare of that one's
+        // base radius) and slender (height over radius at least mastMinSlenderness) is a mast: bands only, no cap
+        if (!bandsOnly && belowBaseR > 0) {
+            // the stack's own base: its lowest three measured sections
+            std::vector<double> rr; for (const auto& c : sl) if (c.n >= 4) { rr.push_back(c.rOwn); if (rr.size() >= 3) break; }
+            if (rr.size() >= 2) {
+                const double rm = std::max(0.03, detail::median(rr));
+                if (rm <= p_.mastStackRadiusShare * belowBaseR && (yTop - yBottom) / rm >= p_.mastMinSlenderness) {
+                    bandsOnly = true;
+                    for (auto& c : sl) if (c.n >= 4) { c.r = c.rOwn; c.ok = true; }
+                }
+            }
+        }
+        st.bandsOnly = bandsOnly;
         // the meridian points, thinned on a 2D grid (weights summed)
         std::vector<MP> mer;
         {
@@ -880,6 +975,35 @@ private:
             }
             return b;
         };
+        // a mast: its measured sections as frusta (a ball or collar where they stand proud), flat at its measured top
+        if (bandsOnly) {
+            // sections far wider than the mast's own (the top of the cap it stands in) are not the mast's
+            {
+                std::vector<double> rr; for (const auto& c : sl) if (c.n >= 4) rr.push_back(c.rOwn);
+                const double rm = rr.empty() ? 0 : detail::median(rr);
+                for (auto& c : sl) if (c.n >= 4) { c.r = c.rOwn; c.ok = c.rOwn <= 2.5 * rm + 0.1; }
+            }
+            bool valid = true;
+            auto b = buildBands(yTop, valid);
+            std::vector<const Slice*> ms; for (const auto& c : sl) if (c.ok) ms.push_back(&c);
+            if (ms.empty()) return;
+            if (!valid || b.empty()) {
+                double sw = 0, sy = 0, sr = 0, syy = 0, syr = 0;
+                for (auto* c : ms) { const double w = c->n; sw += w; sy += w * c->y; sr += w * c->r; syy += w * c->y * c->y; syr += w * c->y * c->r; }
+                const double vy = syy / sw - std::pow(sy / sw, 2), k = vy > 1e-9 ? (syr / sw - sy / sw * sr / sw) / vy : 0, a0 = sr / sw - k * sy / sw;
+                b = {Band{yBottom, yTop, a0 + k * yBottom, a0 + k * yTop, static_cast<int>(ms.size())}};
+            }
+            for (auto& x : b) { x.r0 = std::max(0.03, x.r0); x.r1 = std::max(0.03, x.r1); }
+            b.back().y1 = yTop;
+            st.bands = b; st.cap.present = false; st.yTop = yTop;
+            std::vector<double> rr; for (auto* c : ms) rr.push_back(c->r);
+            st.slenderness = (yTop - yBottom) / std::max(0.05, detail::median(rr));
+            const auto pl = st.meridianPolyline();
+            double ss = 0, w = 0, w25 = 0, st2 = 0;
+            for (const auto& m : pts) { const double d = detail::polyDist(pl, m.r, m.y); ss += m.w * d * d; st2 += m.w * std::min(d * d, 0.25); w += m.w; if (d <= 0.25) w25 += m.w; }
+            st.points = static_cast<int>(pts.size()); st.rmsM = std::sqrt(ss / std::max(1e-12, w)); st.rmsTruncM = std::sqrt(st2 / std::max(1e-12, w)); st.within25 = w25 / std::max(1e-12, w);
+            return;
+        }
         auto fitCap = [&](double y0, const std::vector<MP>& use, double trunc, Cap init, bool haveInit, bool quick = false) {
             // strictly above the base: a step's annulus at y0 belongs to the band below (the polyline's step explains it)
             std::vector<const MP*> sub; for (const auto& m : use) if (m.y >= y0 + 0.1) sub.push_back(&m);
@@ -986,10 +1110,43 @@ private:
             (void)fc;
             if (c.present) bestCap = c;
         }
+        // a mast on top: when nothing stacks on the cap, the topmost run of thin sections (at most mastMaxRadiusShare of the
+        // stack's base radius) that is slender (height over radius at least mastMinSlenderness) and nearly straight (its
+        // radius changes by at most mastMaxTaperShare of itself over its height) is not cap: the cap is refitted below it
+        // and cut flat there, and the run becomes a stack of bands of its own measured radius (no cap is invented on it)
+        {
+            double area = 0; for (const auto& m : above) area += m.w;
+            std::vector<double> lowR; for (const auto& c : sl) if (c.ok) { lowR.push_back(c.r); if (lowR.size() >= 3) break; }
+            const double baseR = lowR.empty() ? bestCap.R0 : detail::median(lowR);
+            int k = static_cast<int>(sl.size()) - 1;
+            while (k >= 0 && sl[k].n < 4) --k;
+            std::vector<const Slice*> run;
+            while (k >= 0 && sl[k].n >= 4 && sl[k].rOwn <= p_.mastMaxRadiusShare * baseR) { run.push_back(&sl[k]); --k; }
+            if ((above.size() < 60 || area < p_.stackMinAreaM2) && run.size() >= 2 && k >= 0) {
+                const double ys = run.back()->y - 0.5 * s;
+                std::vector<double> rr; for (auto* c : run) rr.push_back(c->rOwn);
+                const double rs = std::max(0.03, detail::median(rr)), h = yTop - ys;
+                double sw = 0, sy = 0, sr = 0, syy = 0, syr = 0;
+                for (auto* c : run) { sw += 1; sy += c->y; sr += c->rOwn; syy += c->y * c->y; syr += c->y * c->rOwn; }
+                const double vy = syy / sw - std::pow(sy / sw, 2), slope = vy > 1e-9 ? (syr / sw - sy / sw * sr / sw) / vy : 0;
+                const double taper = std::abs(slope) * h / rs;
+                st.slenderness = h / std::max(0.05, rs);
+                if (std::getenv("SB_REV_DEBUG")) std::fprintf(stderr, "mast? ys %.2f h %.2f rs %.2f slender %.1f taper %.2f above %zu area %.2f y0 %.2f baseR %.2f\n", ys, h, rs, st.slenderness, taper, above.size(), area, bestY0, baseR);
+                if (h >= p_.mastMinHeightM && st.slenderness >= p_.mastMinSlenderness && taper <= p_.mastMaxTaperShare && ys > bestY0 + 0.3) {
+                    above.clear();
+                    for (const auto& m : pts) if (m.y >= ys && m.r <= 2 * rs + 0.3) above.push_back(m);
+                    std::vector<MP> below; for (const auto& m : capUse) if (m.y < ys) below.push_back(m);
+                    for (int it = 0; it < 2; ++it) { auto [c, fc] = fitCap(bestY0, below, trunc, bestCap, true); (void)fc; if (c.present) bestCap = c; }
+                    bestCap.cut = ys;
+                    st.mastAbove = true;
+                    capUse = below;
+                }
+            }
+        }
         st.bands = bestBands;
         st.cap = bestCap;
-        // the stack's top is the cap's apex (a stacked revolution continues above it)
-        st.yTop = bestCap.y0 + bestCap.H;
+        // the stack's top is the cap's apex or its cut (a stacked revolution continues above it)
+        st.yTop = std::min(bestCap.y0 + bestCap.H, bestCap.cut);
         {
             const auto pl = st.meridianPolyline();
             double ss = 0, st2 = 0, w = 0, w25 = 0;
@@ -1014,6 +1171,68 @@ private:
         return r <= pl.back()[0] ? pl.back()[1] : c.y0;
     }
 
+    /**
+     * The shape of a kept period: the binned residual folded over one period about the fundamental's crest, fitted with a
+     * sinusoid, with the flat facets of a K-gon, and with a bump of continuous width and edge sharpness (at the crest or,
+     * a groove, half a period from it). The bump wins only when it explains clearly more (it has two more numbers).
+     */
+    void fitShape(Modulation& m, const std::vector<double>& v) const {
+        const int NB = static_cast<int>(v.size()), K = m.K;
+        if (!K || NB < 64) return;
+        std::complex<double> c1{0, 0};
+        for (int i = 0; i < NB; ++i) { const double th = -PI + (i + 0.5) * 2 * PI / NB; c1 += v[i] * std::complex<double>(std::cos(K * th), -std::sin(K * th)); }
+        m.theta0 = -std::arg(c1) / K;  // Re(c e^{iK th}) peaks where K th + arg c = 0
+        constexpr int NF = 48;
+        std::vector<double> f(NF, 0.0), phi(NF);
+        std::vector<int> cnt(NF, 0);
+        for (int i = 0; i < NB; ++i) {
+            const double th = -PI + (i + 0.5) * 2 * PI / NB;
+            double ph = std::fmod(K * (th - m.theta0), 2 * PI);
+            if (ph >= PI) ph -= 2 * PI;
+            if (ph < -PI) ph += 2 * PI;
+            const int j = std::clamp(static_cast<int>((ph + PI) / (2 * PI) * NF), 0, NF - 1);
+            f[j] += v[i]; ++cnt[j];
+        }
+        double fm = 0; int nf = 0;
+        for (int j = 0; j < NF; ++j) { phi[j] = -PI + (j + 0.5) * 2 * PI / NF; if (cnt[j]) { f[j] /= cnt[j]; fm += f[j]; ++nf; } }
+        if (nf < NF / 2) return;
+        fm /= nf;
+        double sst = 0; for (int j = 0; j < NF; ++j) if (cnt[j]) sst += (f[j] - fm) * (f[j] - fm);
+        // least squares of f ~ a + b basis
+        auto ls = [&](const std::function<double(double)>& basis, double& a, double& b) {
+            double sx = 0, sy = 0, sxx = 0, sxy = 0, n = 0;
+            for (int j = 0; j < NF; ++j) if (cnt[j]) { const double x = basis(phi[j]); sx += x; sy += f[j]; sxx += x * x; sxy += x * f[j]; ++n; }
+            const double d = n * sxx - sx * sx;
+            b = std::abs(d) > 1e-15 ? (n * sxy - sx * sy) / d : 0; a = (sy - b * sx) / n;
+            double e = 0; for (int j = 0; j < NF; ++j) if (cnt[j]) { const double r = f[j] - a - b * basis(phi[j]); e += r * r; }
+            return e;
+        };
+        double aC, bC, aF, bF;
+        const double eC = ls([](double x) { return std::cos(x); }, aC, bC);
+        const double fMean = Modulation::facetMean(K);
+        const double eF = ls([&](double x) { return Modulation::facetRaw(x, K) - fMean; }, aF, bF);
+        double eB = 1e300, aB = 0, bB = 0, wB = 0.25, nB = 2, cB = 0;
+        for (double centre : {0.0, PI}) for (int iw = 0; iw < 20; ++iw) {
+            const double w = 0.03 * std::pow(0.8 / 0.03, iw / 19.0);
+            for (double n : {1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0}) {
+                Modulation g; g.bumpWidth = w; g.bumpExponent = n;
+                double a, b;
+                const double e = ls([&](double x) { return g.bump(x - centre); }, a, b);
+                if (e < eB) { eB = e; aB = a; bB = b; wB = w; nB = n; cB = centre; }
+            }
+        }
+        m.cosAmp = m.bumpAmp = m.facetAmp = 0;
+        const double eCF = std::min(eC, eF);
+        double e;
+        // a sinusoid or facets swing about the profile (zero mean: the profile keeps its radius); a bump stands on a shell
+        // whose level relative to the profile is the fit's own intercept (the residual is measured from the profile)
+        if (eB < p_.bumpPreference * eCF) { m.offset = aB; m.bumpAmp = bB; m.bumpWidth = wB; m.bumpExponent = nB; m.bumpCentre = cB; e = eB; }
+        else if (eF < eC) { m.offset = 0; m.facetAmp = bF; e = eF; }
+        else { m.offset = 0; m.cosAmp = bC; e = eC; }
+        m.shapeRmsRel = std::sqrt(e / nf);
+        m.shapeExplained = sst > 0 ? 1 - e / sst : 0;
+    }
+
     /** K-periodic radial modulation of a stack's bands and its cap, from the relative residual. */
     void fitModulation(Stack& st, const Stack* next, const std::vector<MP>& all) {
         // a part shorter than minModulationM is tested only at the period the other part kept (a band of two slices cannot
@@ -1036,6 +1255,7 @@ private:
             for (auto* m : use) { meanR += st.radiusAt(m->y); ys.push_back(m->y); }
             meanR /= use.size(); yMid = detail::median(ys);
             constexpr int NB = 720;
+            std::vector<double> vAll;
             auto spectrum = [&](int half, std::vector<std::complex<double>>& c) {
                 std::vector<std::vector<double>> bins(NB);
                 for (auto* m : use) {
@@ -1058,6 +1278,7 @@ private:
                     v[i] = (v[(a + NB) % NB] * db + v[b % NB] * da) / std::max(1, da + db);
                 }
                 const double mean = std::accumulate(v.begin(), v.end(), 0.0) / NB;
+                if (half == 0) vAll = v;
                 c.assign(91, {0, 0});
                 for (int k = 1; k <= 90; ++k) {
                     std::complex<double> acc{0, 0};
@@ -1091,7 +1312,8 @@ private:
             for (int d = 2; K && d <= 4; ++d) {
                 if (K % d || K / d < p_.minPeriods) continue;
                 const int k = K / d;
-                if (signif(k) >= p_.ribSignificance && std::abs(c[k]) >= 3 * floorAt(k)) { K = k; best = signif(k); floor = floorAt(k); }
+                // (and carries a real share of the line it would be the fundamental of: a dent at k = K/2 is not)
+                if (signif(k) >= p_.ribSignificance && std::abs(c[k]) >= 3 * floorAt(k) && std::abs(c[k]) >= 0.3 * std::abs(c[K])) { K = k; best = signif(k); floor = floorAt(k); }
             }
             out.floorRel = floor; out.bestK = K; out.bestSignificance = best;
             double amp = 0;
@@ -1108,6 +1330,7 @@ private:
                 // m(th) = Re(c e^{i k th}) = a cos(k th) - b sin(k th) with c = a + i b
                 out.h.push_back({static_cast<double>(j * K), cj.real(), -cj.imag()});
             }
+            fitShape(out, vAll);
             out.ampRel = out.maxAbs(); out.ampM = out.ampRel * meanR;
         };
         double bandH = 0; for (const auto& b : st.bands) bandH += b.y1 - b.y0;
@@ -1204,9 +1427,19 @@ private:
     void emit(Revolution& R) {
         for (size_t k = 0; k < R.stacks.size(); ++k) {
             const auto& st = R.stacks[k];
-            int K = std::max(st.bandMod.K, st.capMod.K);
-            int N = std::max(p_.angularSegments, K * 16);
-            N = std::min(N, 1024);
+            // angular samples: a whole number per period, enough for the narrowest kept rib (12 across its width), a vertex on
+            // every crest (theta0: a facet's corner, a rib's ridge)
+            const Modulation& dom = st.capMod.K ? st.capMod : st.bandMod;
+            int N = p_.angularSegments;
+            if (dom.K) {
+                double per = 16;
+                for (const Modulation* m : {&st.capMod, &st.bandMod}) if (m->K && m->bumpAmp != 0) per = std::max(per, std::ceil(12.0 / std::max(0.02, m->bumpWidth)));
+                if (dom.facetAmp != 0) per = std::max(per, 24.0);
+                const int perK = static_cast<int>(std::ceil(std::max(per, static_cast<double>(p_.angularSegments) / dom.K)));
+                N = std::min(2048, dom.K * perK);
+                N -= N % dom.K;
+            }
+            const double thBase = dom.K ? dom.theta0 : -PI;
             // the meridian: (r, y, cap?) split into runs at corners (each run smooth-shaded on its own)
             struct MV { double r, y; bool cap; };
             std::vector<std::vector<MV>> runs;
@@ -1230,7 +1463,7 @@ private:
                 const size_t M = run.size();
                 std::vector<double> nacc((M) * N * 3, 0.0);
                 for (size_t i = 0; i < M; ++i) for (int a = 0; a < N; ++a) {
-                    const double th = -PI + 2 * PI * a / N;
+                    const double th = thBase + 2 * PI * a / N;
                     const double m = run[i].cap ? st.capMod.at(th) : st.bandMod.at(th);
                     const double r = run[i].r * (1 + m);
                     R.pos.push_back(static_cast<float>(R.cx + r * std::cos(th)));
@@ -1244,7 +1477,7 @@ private:
                     for (int a = 0; a < N; ++a) {
                         const int a1 = (a + 1) % N;
                         const size_t v00 = i * N + a, v01 = i * N + a1, v10 = (i + 1) * N + a, v11 = (i + 1) * N + a1;
-                        const double th = -PI + 2 * PI * (a + 0.5) / N;
+                        const double th = thBase + 2 * PI * (a + 0.5) / N;
                         const std::array<double, 3> out{dy * std::cos(th), -dr, dy * std::sin(th)};
                         auto tri = [&](size_t A, size_t B, size_t C) {
                             auto pa = P(A), pb = P(B), pc = P(C);
