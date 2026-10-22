@@ -3718,7 +3718,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             if (!revolutionsOn) return undefined;
                             io.progress('fitting the solids of revolution (domes, drums, lanterns) the scan measures');
                             try {
-                                return await reviseForRevolutions({ dir, scanGlb: stripped.devegetatedGlb, within, cutFiles: cutFiles.map(f => path.join(dir, f)), signal: io.signal });
+                                const vis = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
+                                const planChain = vis ? new VisionModelChain<string>({ client: vis.client, candidates: vis.candidates, signal: io.signal, ...chainExtras('massing'), ...(deps.sleep ? { sleep: deps.sleep } : {}) }) : undefined;
+                                const judgePlan = planChain ? async (image: { bytes: Uint8Array; mimeType: string }, prompt: string) => {
+                                    const r = await planChain.generate({ contents: [{ role: 'user', parts: [{ inlineData: { mimeType: image.mimeType, data: Buffer.from(image.bytes).toString('base64') } }, { text: prompt }] }], config: { responseMimeType: 'application/json', temperature: 0, abortSignal: io.signal } }, { stage: 'massing' });
+                                    const text = (r.response.candidates?.[0]?.content?.parts ?? []).filter(p => !(p as { thought?: boolean }).thought).map(p => p.text ?? '').join('');
+                                    r.remember();
+                                    return text;
+                                } : undefined;
+                                return await reviseForRevolutions({ dir, scanGlb: stripped.devegetatedGlb, within, cutFiles: cutFiles.map(f => path.join(dir, f)), signal: io.signal, ...(judgePlan ? { judgePlan } : {}), outlines: ev.buildings.flatMap(b => [...(b.extruded ?? []).map(e => e.loops[0]), ...b.parts.map(pt => pt[0])]).filter(Boolean) as Array<Array<[number, number]>> });
                             } catch (err) {
                                 if (isAbort(err)) throw err;
                                 cache.writeRunNote(runId, 'revolution_fit', { error: errorMessage(err) });

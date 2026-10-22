@@ -28,8 +28,9 @@ import { assembleGlb, nodeWorldMatrices, parseGlbBytes, readAccessor, transformP
 import { encodePng } from './png-encode';
 import { writeStagedGlbFile, type StagedGlbNode } from './staged-glb-writer';
 import { buildTileSurface, readTileTriangles, selectTriangles, type TileTextureSurface } from './tile-texture-transfer';
+import { renderTopDownPhoto, topDownJpeg } from './top-down-photo';
 
-export const REVOLUTION_FIT_VERSION = 'revolution-fit/1';
+export const REVOLUTION_FIT_VERSION = 'revolution-fit/2';
 
 const CLI_SOURCE = path.join('scripts', 'revolution_fit.cpp');
 const INCLUDE_DIR = path.join('packages', 'core', 'src', 'native', '3d-engine', 'include');
@@ -383,11 +384,151 @@ export interface RevolutionLayerSummary {
 }
 
 /**
+ * Planes first (user, 2026-10-22: square Gothic towers rebuilt as cylinders with cone hats were absurd): a part the fit
+ * accepted is kept only when its scan sections are not clearly a few-sided polygon. Each horizontal section gives an outline: the outer surface's distance from the axis in angular bins (the 90th
+ * percentile of the points in each bin), every section from its base to its top. A circle (the bins' mean) and the best regular polygon with POLYGON_SIDES sides at
+ * any rotation are fitted; a section is polygonal when the polygon leaves under `maxRatio` of the circle's residual and
+ * the outline swings by more than `minSwing` of its radius. A part most of whose tested sections are polygonal is
+ * returned with why; the plane-first massing stands there instead.
+ */
+export const POLYGON_SIDES = [4, 5, 6];
+export const PLANES_FIRST_VETO = { bins: 72, minBinShare: 0.5, maxRatio: 0.7, minSwing: 0.03, polygonalShare: 0.5, sliceM: 1, minSections: 3, sampleM: 0.15 };
+
+/** `positions`: the scan as triangle soup (nine floats a triangle). */
+export function polygonalSections(r: Pick<RevolutionRecord, 'axis' | 'stacks' | 'envelope'>, positions: Float32Array, P = PLANES_FIRST_VETO): { tested: number; polygonal: number; sides: number | null; reason?: string } {
+    if (!r.stacks.length) return { tested: 0, polygonal: 0, sides: null };
+    // every section from the part's base to its top (a tower fitted as one tapering cap has no straight band to test)
+    const y0 = Math.min(...r.stacks.map(s => s.yBottom)), y1 = Math.max(...r.stacks.map(s => s.yTop));
+    const rMax = Math.max(1, ...r.envelope.filter(([y]) => y >= y0 && y <= y1).map(([, rr]) => rr)) * 1.4;
+    const n = Math.max(1, Math.floor((y1 - y0) / P.sliceM));
+    const sections: number[][][] = Array.from({ length: n }, () => Array.from({ length: P.bins }, () => []));
+    const add = (x: number, y: number, z: number) => {
+        if (y < y0 || y >= y1) return;
+        const dx = x - r.axis.x, dz = z - r.axis.z, d = Math.hypot(dx, dz);
+        if (d > rMax) return;
+        const k = Math.min(n - 1, Math.floor((y - y0) / P.sliceM));
+        const b = Math.min(P.bins - 1, Math.floor(((Math.atan2(dz, dx) + Math.PI) / (2 * Math.PI)) * P.bins));
+        sections[k][b].push(d);
+    };
+    // a scan's vertices are too sparse for an outline per section: points are sampled over its triangles (triangle soup,
+    // nine floats each) at about `sampleM` apart
+    for (let t = 0; t + 8 < positions.length; t += 9) {
+        const ax = positions[t], ay = positions[t + 1], az = positions[t + 2], bx = positions[t + 3], by = positions[t + 4], bz = positions[t + 5], cx = positions[t + 6], cy = positions[t + 7], cz = positions[t + 8];
+        if (Math.max(ay, by, cy) < y0 || Math.min(ay, by, cy) >= y1) continue;
+        if (Math.min(Math.hypot(ax - r.axis.x, az - r.axis.z), Math.hypot(bx - r.axis.x, bz - r.axis.z), Math.hypot(cx - r.axis.x, cz - r.axis.z)) > rMax) continue;
+        const steps = Math.min(40, Math.max(1, Math.ceil(Math.max(Math.hypot(bx - ax, by - ay, bz - az), Math.hypot(cx - ax, cy - ay, cz - az)) / P.sampleM)));
+        for (let i = 0; i <= steps; i++) for (let j = 0; i + j <= steps; j++) {
+            const u = i / steps, w = j / steps;
+            add(ax + (bx - ax) * u + (cx - ax) * w, ay + (by - ay) * u + (cy - ay) * w, az + (bz - az) * u + (cz - az) * w);
+        }
+    }
+    let tested = 0, polygonal = 0;
+    const sideVotes = new Map<number, number>();
+    for (const sec of sections) {
+        const prof: Array<[number, number]> = [];
+        sec.forEach((ds, b) => { if (ds.length >= 3) { ds.sort((a, c) => a - c); prof.push([((b + 0.5) / P.bins) * 2 * Math.PI - Math.PI, ds[Math.floor(ds.length * 0.9)]]); } });
+        if (prof.length < P.bins * P.minBinShare) continue;
+        tested++;
+        const mean = prof.reduce((a, [, d]) => a + d, 0) / prof.length;
+        const circle = Math.sqrt(prof.reduce((a, [, d]) => a + (d - mean) ** 2, 0) / prof.length);
+        if (circle / mean < P.minSwing) continue;
+        let best = Infinity, bestSides = 0;
+        for (const ns of POLYGON_SIDES) {
+            const alpha = (2 * Math.PI) / ns;
+            for (let phi = 0; phi < alpha; phi += Math.PI / 90) {
+                const shape = prof.map(([t]) => { const u = ((((t - phi) % alpha) + alpha) % alpha) - alpha / 2; return Math.cos(Math.PI / ns) / Math.cos(u); });
+                let num = 0, den = 0;
+                prof.forEach(([, d], i) => { num += d * shape[i]; den += shape[i] * shape[i]; });
+                const a = num / den;
+                const rms = Math.sqrt(prof.reduce((acc, [, d], i) => acc + (d - a * shape[i]) ** 2, 0) / prof.length);
+                if (rms < best) { best = rms; bestSides = ns; }
+            }
+        }
+        if (best < P.maxRatio * circle) { polygonal++; sideVotes.set(bestSides, (sideVotes.get(bestSides) ?? 0) + 1); }
+    }
+    const sides = [...sideVotes].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+    const veto = tested >= P.minSections && polygonal >= tested * P.polygonalShare;
+    return { tested, polygonal, sides, ...(veto ? { reason: `planes first: ${polygonal} of ${tested} sections of its body are a ${sides}-sided polygon rather than a circle (the polygon leaves under ${Math.round(P.maxRatio * 100)}% of the circle's residual), so it stays plane-first massing` } : {}) };
+}
+
+/**
+ * Planes first from the vector data: where a Google vector part of comparable size (its area within OUTLINE_VETO.areaRange
+ * of the fitted plan circle's) stands under a fitted part's axis and is a few-sided polygon (at most `maxSides` corners
+ * after merging near-collinear ones, or an isoperimetric quotient under `minRoundness`), the part is that polygon, not a
+ * revolution: a photogrammetric scan melts a square tower's corners round (St Paul's Cathedral, Melbourne, 2026-10-22: two
+ * of its 23 sections read as square, the vector parts are squares), while a round building's outline comes as many sides.
+ */
+export const OUTLINE_VETO = { areaRange: [0.35, 2.8] as [number, number], maxSides: 8, minRoundness: 0.86, collinearDeg: 12 };
+
+export function vectorOutlineVeto(r: Pick<RevolutionRecord, 'axis' | 'plan'>, outlines: Array<Array<[number, number]>>, P = OUTLINE_VETO): string | undefined {
+    const circle = Math.PI * r.plan.r * r.plan.r;
+    for (const loop of outlines) {
+        if (loop.length < 3) continue;
+        let inside = false, area = 0, perim = 0;
+        for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
+            const [xi, zi] = loop[i], [xj, zj] = loop[j];
+            if ((zi > r.axis.z) !== (zj > r.axis.z) && r.axis.x < ((xj - xi) * (r.axis.z - zi)) / (zj - zi + 1e-12) + xi) inside = !inside;
+            area += xj * zi - xi * zj; perim += Math.hypot(xi - xj, zi - zj);
+        }
+        area = Math.abs(area) / 2;
+        if (!inside || area < P.areaRange[0] * circle || area > P.areaRange[1] * circle) continue;
+        // corners: vertices where the outline turns by more than collinearDeg
+        let corners = 0;
+        for (let i = 0; i < loop.length; i++) {
+            const a = loop[(i + loop.length - 1) % loop.length], b = loop[i], c = loop[(i + 1) % loop.length];
+            const t1 = Math.atan2(b[1] - a[1], b[0] - a[0]), t2 = Math.atan2(c[1] - b[1], c[0] - b[0]);
+            let turn = Math.abs(t2 - t1) * 180 / Math.PI; if (turn > 180) turn = 360 - turn;
+            if (turn > P.collinearDeg) corners++;
+        }
+        const roundness = (4 * Math.PI * area) / (perim * perim);
+        if (corners <= P.maxSides || roundness < P.minRoundness) return `planes first: the vector footprint under it is a ${corners}-cornered outline (roundness ${roundness.toFixed(2)}, ${Math.round(area)} m² against the fitted circle's ${Math.round(circle)} m²), so it stays plane-first massing`;
+    }
+    return undefined;
+}
+
+/**
+ * The plan-view check, when the scan and the vector data cannot tell (a photogrammetric scan melts a square tower round;
+ * a tower inside a larger building has no vector part of its own): the vision model is shown the tile photo straight down
+ * around the part and says whether the structure at the centre is circular in plan or a polygon, and how many sides.
+ * A polygon of at most 6 sides vetoes the revolution (planes first); an octagon is a faceted revolution (the fit's 8-fold
+ * modulation: on Flinders Street the dome, a cupola and a skylight all read octagonal, St Paul's tower square), and
+ * anything else, or no answer, keeps it.
+ */
+export function revolutionPlanPrompt(radiusM: number, spanM: number): string {
+    return `This is a photograph taken straight down from above, ${Math.round(spanM)} m across, centred on a tall structure about `
+        + `${Math.round(radiusM * 2)} m wide (a tower, spire, dome, drum or turret). Look only at the structure at the centre. Is its outline in plan `
+        + 'a circle (round, or so many sides it reads round) or a polygon with straight sides and corners (a square, rectangular, hexagonal '
+        + 'or octagonal tower or spire)? Reply with JSON only: {"plan": "circle" | "polygon", "sides": number of sides if a polygon, '
+        + '"confidence": 0..1, "what": "a few words on what you see"}.';
+}
+
+export function parseRevolutionPlan(text: string): { plan: 'circle' | 'polygon'; sides?: number; confidence: number; what: string } | undefined {
+    try {
+        const j = JSON.parse(text.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim());
+        if (j?.plan !== 'circle' && j?.plan !== 'polygon') return undefined;
+        const sides = typeof j.sides === 'number' && Number.isFinite(j.sides) ? Math.round(j.sides) : undefined;
+        const confidence = typeof j.confidence === 'number' ? Math.max(0, Math.min(1, j.confidence)) : 0.5;
+        return { plan: j.plan, ...(sides !== undefined ? { sides } : {}), confidence, what: typeof j.what === 'string' ? j.what : '' };
+    } catch { return undefined; }
+}
+
+/** Why a plan-view reply vetoes the revolution, or undefined when it keeps it. */
+export function planVetoReason(reply: ReturnType<typeof parseRevolutionPlan>): string | undefined {
+    if (!reply || reply.plan !== 'polygon' || reply.confidence < 0.5) return undefined;
+    const sides = reply.sides ?? 4;
+    if (sides > 6) return undefined;
+    return `planes first: seen straight down on the tile photo it is a ${sides}-sided polygon (${reply.what}; vision confidence ${reply.confidence}), so it stays plane-first massing`;
+}
+
+/** A vision call: an image and a prompt in, the reply's text out. */
+export type PlanJudge = (image: { bytes: Uint8Array; mimeType: string }, prompt: string) => Promise<string>;
+
+/**
  * The district's revolution parts rebuilt: the fit on the (tree-stripped, photo-textured) scan, the rebuilt parts
  * coloured from the same scan's photo and written to `<outDir>/revolutions.glb`. Returns the run (for cutting the parts
  * out of other layers) and a summary, or the summary alone when nothing was accepted.
  */
-export async function buildRevolutionLayer(input: { scanGlb: string; outDir: string; within?: (x: number, z: number) => boolean; params?: RevolutionFitParams; signal?: AbortSignal }): Promise<{ summary: RevolutionLayerSummary; run: RevolutionFitRun; file?: string }> {
+export async function buildRevolutionLayer(input: { scanGlb: string; outDir: string; within?: (x: number, z: number) => boolean; params?: RevolutionFitParams; signal?: AbortSignal; /** Vector footprint outlines (x, z): a few-sided one under a part vetoes it (vectorOutlineVeto). */ outlines?: Array<Array<[number, number]>>; /** The plan-view check (revolutionPlanPrompt). */ judgePlan?: PlanJudge }): Promise<{ summary: RevolutionLayerSummary; run: RevolutionFitRun; file?: string }> {
     const t0 = Date.now();
     const bytes = fs.readFileSync(input.scanGlb);
     let tris = readTileTriangles(bytes);
@@ -397,6 +538,23 @@ export async function buildRevolutionLayer(input: { scanGlb: string; outDir: str
         tris = selectTriangles(tris, keep);
     }
     const run = await runRevolutionFit({ positions: tris.positions }, path.join(input.outDir, 'revolution_fit'), input.params ?? {}, input.signal ? { signal: input.signal } : {});
+    // planes first: a part whose sections are clearly a few-sided polygon is not a revolution
+    for (const r of run.report.revolutions.filter(x => x.accepted)) {
+        let why = (input.outlines ? vectorOutlineVeto(r, input.outlines) : undefined) ?? polygonalSections(r, tris.positions).reason;
+        if (!why && input.judgePlan) {
+            // straight down on the tile photo, three radii each way
+            const span = Math.max(12, r.plan.r * 6);
+            try {
+                const photo = renderTopDownPhoto(tris, { x0: r.axis.x - span / 2, z0: r.axis.z - span / 2, widthM: span, heightM: span }, { texelM: Math.max(0.05, span / 768), maxPx: 1024 });
+                why = planVetoReason(parseRevolutionPlan(await input.judgePlan({ bytes: topDownJpeg(photo), mimeType: 'image/jpeg' }, revolutionPlanPrompt(r.plan.r, span))));
+            } catch (err) {
+                if (input.signal?.aborted) throw err;
+                // no answer: the part keeps its fit (the scan and vector checks passed)
+            }
+        }
+        if (why) { r.accepted = false; r.reason = why; }
+    }
+    run.meshes = run.meshes.filter(m => run.report.revolutions.some(r => r.id === m.id && r.accepted));
     const acc = run.report.revolutions.filter(r => r.accepted);
     const rejected: Record<string, number> = {};
     for (const r of run.report.revolutions.filter(x => !x.accepted)) { const k = r.reason.replace(/[\d.]+/g, 'N'); rejected[k] = (rejected[k] ?? 0) + 1; }
@@ -419,8 +577,8 @@ export async function buildRevolutionLayer(input: { scanGlb: string; outDir: str
  * each of `cutFiles` (in place: the scan's dented copy and any massing block standing where a rebuilt part now stands).
  * Returns the summary with the triangles cut per file.
  */
-export async function reviseForRevolutions(input: { dir: string; scanGlb: string; within?: (x: number, z: number) => boolean; cutFiles: string[]; signal?: AbortSignal }): Promise<RevolutionLayerSummary & { cut: Record<string, number> }> {
-    const { summary, run, file } = await buildRevolutionLayer({ scanGlb: input.scanGlb, outDir: input.dir, ...(input.within ? { within: input.within } : {}), ...(input.signal ? { signal: input.signal } : {}) });
+export async function reviseForRevolutions(input: { dir: string; scanGlb: string; within?: (x: number, z: number) => boolean; cutFiles: string[]; signal?: AbortSignal; outlines?: Array<Array<[number, number]>>; judgePlan?: PlanJudge }): Promise<RevolutionLayerSummary & { cut: Record<string, number> }> {
+    const { summary, run, file } = await buildRevolutionLayer({ scanGlb: input.scanGlb, outDir: input.dir, ...(input.within ? { within: input.within } : {}), ...(input.signal ? { signal: input.signal } : {}), ...(input.outlines ? { outlines: input.outlines } : {}), ...(input.judgePlan ? { judgePlan: input.judgePlan } : {}) });
     const cut: Record<string, number> = {};
     if (file) for (const f of input.cutFiles) {
         if (!fs.existsSync(f)) continue;
