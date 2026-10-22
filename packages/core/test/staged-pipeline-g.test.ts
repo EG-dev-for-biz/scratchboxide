@@ -16,7 +16,7 @@
 import { describe, expect, it } from 'vitest';
 import { emptyPlate, finishPlate, layStation, PLATE_PIXEL_M } from '../src/node/3d-engine/staged-location/pipeline-g/plates';
 import { programItems, parseProgram } from '../src/node/3d-engine/staged-location/pipeline-g/read';
-import { G_SRC, inOpening, paintFaces, stagedPipelineG, sweepFootprints } from '../src/node/3d-engine/staged-location/pipeline-g/pipeline-g';
+import { G_SRC, inOpening, paintFaces, plateOntoFace, stagedPipelineG, sweepFootprints } from '../src/node/3d-engine/staged-location/pipeline-g/pipeline-g';
 import type { MassingFace } from '../src/node/3d-engine/staged-location/pipeline-e/native-massing';
 import { aerialStations, AERIAL_VIEWS } from '../src/node/3d-engine/staged-location/pipeline-g/stations';
 import { SurveyStationRenderService } from '../src/node/spatial/SurveyStationRenderService';
@@ -125,6 +125,34 @@ describe('arched opening outline and paint', () => {
         const tex = paintFaces([unbaked], new Map([[WALL.key, programItems({ wallColour: '#336699' }, WALL, 'g0_')]]), [0, 0, 0]);
         expect(unbaked).toMatchObject({ pixel: 0.05, orthoSMin: 0, orthoTMax: 8, width: 200, height: 160 });
         expect([...tex.get(0)!.rgba.subarray(0, 3)]).toEqual([51, 102, 153]);
+    });
+});
+
+describe('facade texture input from the survey plate', () => {
+    it('resamples the plate onto the built face through world space, the painted texture where the plate saw nothing', () => {
+        // the surveyed face: the same wall, its frame's origin 2 m along (s runs 2 m short), so a plate texel at s = 3 lies at x = 5
+        const surveyed: MassingFace = { ...WALL, origin: [2, 0, 0], sMin: -2, sMax: 8 };
+        const pl = { ...emptyPlate(0, surveyed), coverage: 0.5 };
+        // the plate sees only its right half (x from 5 m), coloured by x so the mapping is visible
+        for (let y = 0; y < pl.h; y++) for (let x = 0; x < pl.w; x++) {
+            const s = surveyed.sMin + (x + 0.5) * PLATE_PIXEL_M;
+            if (s + 2 < 5) continue;
+            const j = y * pl.w + x;
+            pl.rgb.set([Math.round((s + 2) * 20), 50, 60], j * 3);
+            pl.relief[j] = 0;
+        }
+        const painted = paintFaces([WALL], new Map([[WALL.key, programItems({ wallColour: '#102030' }, WALL, 'g0_')]]), [0, 0, 0]).get(0)!;
+        const on = plateOntoFace(WALL, painted, pl, surveyed)!;
+        const px = (s: number, t: number) => Math.floor((WALL.orthoTMax - t) / WALL.pixel) * WALL.width + Math.floor((s - WALL.orthoSMin) / WALL.pixel);
+        // x = 7 m on the built face reads the plate texel at x = 7 m (red channel 140), and is marked seen
+        expect(Math.abs(on.tex.rgba[px(7.01, 4) * 4] - 140)).toBeLessThanOrEqual(1);
+        expect(on.use[px(7.01, 4)]).toBe(1);
+        // x = 2 m was not seen: the painted wall colour, unmarked
+        expect([...on.tex.rgba.subarray(px(2, 4) * 4, px(2, 4) * 4 + 3)]).toEqual([16, 32, 48]);
+        expect(on.use[px(2, 4)]).toBe(0);
+        expect(on.covered).toBeCloseTo(0.5, 1);
+        // the painted texture itself is not changed
+        expect(painted.rgba[px(7.01, 4) * 4]).toBe(16);
     });
 });
 

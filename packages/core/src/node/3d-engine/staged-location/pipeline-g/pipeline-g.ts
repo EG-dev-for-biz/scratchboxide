@@ -37,11 +37,14 @@ import { massingSpecText, type FaceSweepItem, type Massing, type OpeningItem } f
 import { runMassing, type MassingFace, type MassingRun } from '../pipeline-e/native-massing';
 import { writeMassingLayer } from '../pipeline-e/pipeline-e';
 import type { InferenceOutcome, StepRecord } from '../pipeline-e/inference';
+import { ENHANCE_CONCURRENCY, TEXTURE_PLATE_PROMPT_ID, type EnhanceWallRecord, type PlateModelClient } from '../pipeline-e/enhance';
+import { visionFacadeCounter } from '../pipeline-e/plate-identity';
+import { buildFacadeTexture } from '../facade-texture/facade-texture';
 import { planStations } from './stations';
 import { platePng, reliefPng, surveyPlates, type Plate } from './plates';
 import { MIN_READ_COVERAGE, PIPELINE_G_READ_VERSION, programItems, readPlate, type FacadeProgram, type ProgramItems } from './read';
 
-export const PIPELINE_G_VERSION = `pipeline-g/v2+${PIPELINE_G_READ_VERSION}`;
+export const PIPELINE_G_VERSION = `pipeline-g/v3+${PIPELINE_G_READ_VERSION}`;
 /** Native build parameters: the massing only, nothing baked from the tile, no scanned residual. */
 export const G_BUILD_PARAMS = { bake: 0, residual: 0, sections: 0, topdown: 0 } as const;
 /** Plates read at once. */
@@ -54,11 +57,12 @@ export function stagedPipelineG(request: { procedural?: boolean }, env: NodeJS.P
 
 const rung = (name: (typeof TEXTURE_LADDER_RUNGS)[number]) => TEXTURE_LADDER_RUNGS.indexOf(name);
 /** Texel sources of G's paint (indices into the legend). */
-export const G_SRC = { read: 0, continued: 1 } as const;
+export const G_SRC = { read: 0, continued: 1, enhanced: 2 } as const;
 export function gLegend(): TexelSource[] {
     return [
         { source: 'pipeline-g-read', label: 'photo-inferred', method: 'pipeline G: a flat colour the vision model read off the survey plate of this wall (station renders of the photo tile laid onto the wall in metres), painted on the wall, its openings, bands and members', rung: rung('generated tileable PBR'), weight: 0.3 },
-        { source: 'pipeline-g-continued', label: 'generated', method: "pipeline G: a part the survey did not see (an opening or member the reading continued from the wall's own repeats, or a wall nobody read, given the read walls' median colour)", rung: rung('generated tileable PBR'), weight: 0.15 }
+        { source: 'pipeline-g-continued', label: 'generated', method: "pipeline G: a part the survey did not see (an opening or member the reading continued from the wall's own repeats, or a wall nobody read, given the read walls' median colour)", rung: rung('generated tileable PBR'), weight: 0.15 },
+        { source: 'pipeline-g-enhanced', label: 'generated', method: `pipeline G: AI-enhanced from the survey plate of this wall by the facade texture builder (${TEXTURE_PLATE_PROMPT_ID}), kept through its identity gate and region audit`, rung: rung('generated tileable PBR'), weight: 0.25 }
     ];
 }
 
@@ -78,6 +82,8 @@ export interface PipelineGInput {
     anchor: GeodeticAnchor;
     signal?: AbortSignal;
     onProgress?: (m: string) => void;
+    /** The facade texture builder's image model (absent: the walls keep their painted colours). */
+    enhance?: { client: PlateModelClient; models: string[]; guards?: boolean; cacheDir?: string };
 }
 
 export interface PipelineGOutcome extends InferenceOutcome {
@@ -153,6 +159,32 @@ export function paintFaces(faces: MassingFace[], items: Map<string, ProgramItems
         textures.set(f.index, { width: f.width, height: f.height, rgba, source });
     }
     return textures;
+}
+
+/**
+ * A built face's texture for the facade texture builder: the survey plate of its wall resampled into the face's raster
+ * through world space (the plate is in the surveyed face's frame), over the painted texture where the plate saw nothing.
+ * `use` marks the texels a station saw. Undefined when the plate covers none of the face.
+ */
+export function plateOntoFace(f: MassingFace, painted: FaceTexture, pl: Plate, pf: MassingFace): { tex: FaceTexture; use: Uint8Array; covered: number } | undefined {
+    const rgba = painted.rgba.slice(), use = new Uint8Array(painted.width * painted.height);
+    let covered = 0;
+    const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const plPix = pl.widthM / pl.w;
+    for (let y = 0; y < painted.height; y++) for (let x = 0; x < painted.width; x++) {
+        const s = f.orthoSMin + (x + 0.5) * f.pixel, t = f.orthoTMax - (y + 0.5) * f.pixel;
+        const p = [0, 1, 2].map(k => f.origin[k] + s * f.axisS[k] + t * f.axisT[k]);
+        const d = [0, 1, 2].map(k => p[k] - pf.origin[k]);
+        const ps = dot(d, pf.axisS as number[]), pt = dot(d, pf.axisT as number[]);
+        const px = Math.floor((ps - pf.sMin) / plPix), py = Math.floor((pf.tMax - pt) / plPix);
+        if (px < 0 || py < 0 || px >= pl.w || py >= pl.h) continue;
+        const j = py * pl.w + px;
+        if (Number.isNaN(pl.relief[j])) continue;
+        const i = y * painted.width + x;
+        rgba[i * 4] = pl.rgb[j * 3]; rgba[i * 4 + 1] = pl.rgb[j * 3 + 1]; rgba[i * 4 + 2] = pl.rgb[j * 3 + 2]; rgba[i * 4 + 3] = 255;
+        use[i] = 1; covered++;
+    }
+    return covered ? { tex: { width: painted.width, height: painted.height, rgba, source: painted.source.slice() }, use, covered: covered / use.length } : undefined;
 }
 
 /** Runs `fn` over `xs` with at most `n` in flight. */
@@ -234,12 +266,47 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     const fallback: [number, number, number] = [0, 1, 2].map(k => Math.round(median(walls.map(w => w[k])))) as [number, number, number];
     const textures = paintFaces(run.report.faces, items, fallback);
     const legend = gLegend();
-    const files = writeMassingLayer(run, input.massing, textures, legend, input.dir, input.stage, input.stageKey, 'pipeline_g');
     timingsMs.paint = Date.now() - t;
     steps.push({ step: 'paint', proposed: textures.size, accepted: textures.size, rejected: 0, notes: [`${items.size} walls painted from their own reading, ${textures.size - items.size} faces from the read walls' median colour (generated)`], ms: timingsMs.paint });
 
+    // 6. facade textures: each read wall's survey plate redrawn by the facade texture builder, over its paint where accepted
+    const enhanced: EnhanceWallRecord[] = [];
+    if (input.enhance) {
+        t = Date.now();
+        const e = input.enhance;
+        const step: StepRecord = { step: 'facade textures', proposed: 0, accepted: 0, rejected: 0, notes: [], ms: 0 };
+        const plateOf = (f: MassingFace) => plates.find(p => p.key === f.key || f.key.startsWith(p.key + ':'));
+        const walls = run.report.faces.filter(f => f.kind === 'wall' && textures.has(f.index) && plateOf(f) && items.has(plateOf(f)!.key)).sort((a, b) => b.area - a.area);
+        const done: FaceTexture[] = [];
+        const one = async (f: MassingFace) => {
+            const pl = plateOf(f)!;
+            const on = plateOntoFace(f, textures.get(f.index)!, pl, faces[pl.face]);
+            if (!on) return;
+            progress(`pipeline G: drawing the facade texture of wall ${f.index} (${Math.round(f.area)} m2)`);
+            const r = await buildFacadeTexture(f, on.tex, on.use, {
+                client: e.client, models: e.models, locationName: input.place, source: G_SRC.enhanced, guards: e.guards ?? true,
+                ...(done[0] ? { reference: done[0] } : {}), ...(e.cacheDir ? { cacheDir: e.cacheDir } : {}),
+                counter: visionFacadeCounter(input.chain as VisionModelChain<string>), ...(input.signal ? { signal: input.signal } : {})
+            });
+            step.proposed++;
+            enhanced.push({ ...r, plate: undefined, guarded: undefined, labels: undefined, grid: undefined } as EnhanceWallRecord);
+            if (r.accepted) { step.accepted++; textures.set(f.index, on.tex); done.push(on.tex); }
+            else step.rejected++;
+            step.notes.push(`wall ${f.index}: ${r.accepted ? 'textured' : 'keeps its painted colours'}: ${r.why}${r.model ? ` (${r.model})` : ''}`);
+        };
+        // the largest wall alone, then ENHANCE_CONCURRENCY at a time, each referencing the first finished wall
+        for (let k = 0; k < walls.length;) {
+            const round = walls.slice(k, k === 0 ? 1 : k + ENHANCE_CONCURRENCY);
+            k += round.length;
+            await Promise.all(round.map(one));
+        }
+        step.ms = timingsMs.facadeTextures = Date.now() - t;
+        steps.push(step);
+    }
+    const files = writeMassingLayer(run, input.massing, textures, legend, input.dir, input.stage, input.stageKey, 'pipeline_g');
+
     return {
-        files, run, steps, legend, grammars: [], timingsMs, enhanced: [],
+        files, run, steps, legend, grammars: [], timingsMs, enhanced,
         build: { parts: input.massing.parts, sweeps: [], openings },
         textures, occluderMasks: new Map(),
         plates: plates.map(p => {
