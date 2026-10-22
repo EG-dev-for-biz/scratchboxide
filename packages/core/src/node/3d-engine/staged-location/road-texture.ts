@@ -296,3 +296,60 @@ export function synthesizeRoadTextures(roads: RoadSurface[], photo: TopDownPhoto
     }
     return { width, height, rgba, bands, stats };
 }
+
+/**
+ * The lane markings read into an atlas, as geometry: a thin ribbon per marking a little over the carriageway, solid or
+ * cut into its measured dashes, coloured (COLOR_0, linear) with its measured paint colour. For a road laid with a tiling
+ * material instead of the atlas, so the lines stay where the photo shows them. `skip(roadIndex, x, z)` leaves out what
+ * lies on another run's carriageway (a crossing is drawn once).
+ */
+export function buildRoadMarkings(roads: RoadSurface[], atlas: Pick<RoadAtlas, 'bands'>, opts: { liftM?: number; stepM?: number; skip?: (road: RoadSurface, x: number, z: number) => boolean } = {}): { positions: Float32Array; indices: Uint32Array; colors: Float32Array; stats: { markings: number; lengthM: number } } {
+    const lift = opts.liftM ?? 0.015, step = opts.stepM ?? 1;
+    const positions: number[] = [], indices: number[] = [], colors: number[] = [];
+    let markings = 0, lengthM = 0;
+    const lin = (v: number) => { const c = Math.max(0, Math.min(255, v)) / 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+    // the carriageway's level across a station (its five profile points), at t in [0, 1] from the left kerb
+    const levelAt = (s: RoadStation, t: number): number => {
+        const L = s.left.halfWidthM, R = s.right.halfWidthM, d = -L + t * (L + R);
+        const xs = [-L, -L / 2, 0, R / 2, R];
+        for (let k = 0; k + 1 < 5; k++) if (d <= xs[k + 1] || k === 3) { const f = Math.max(0, Math.min(1, (d - xs[k]) / Math.max(1e-6, xs[k + 1] - xs[k]))); return s.profile[k] + (s.profile[k + 1] - s.profile[k]) * f; }
+        return s.profile[2];
+    };
+    for (const r of roads) {
+        const band = atlas.bands.get(r.id);
+        if (!band || r.stations.length < 2) continue;
+        for (const m of band.markings) {
+            markings++;
+            const rgb = [lin(m.rgb[0]), lin(m.rgb[1]), lin(m.rgb[2])];
+            const spans: Array<[number, number]> = [];
+            if (m.dashed && m.dashM && m.gapM) {
+                const period = m.dashM + m.gapM;
+                for (let a = (m.phaseM ?? 0) - period; a < r.lengthM; a += period) { const a0 = Math.max(0, a), a1 = Math.min(r.lengthM, a + m.dashM); if (a1 > a0 + 0.05) spans.push([a0, a1]); }
+            } else spans.push([0, r.lengthM]);
+            for (const [a0, a1] of spans) {
+                let prev: [number, number] | undefined;
+                const n = Math.max(1, Math.ceil((a1 - a0) / step));
+                for (let k = 0; k <= n; k++) {
+                    const a = a0 + ((a1 - a0) * k) / n;
+                    const s = stationAt(r, a);
+                    const c = across(s, m.acrossShare);
+                    const y = levelAt(s, m.acrossShare) + lift;
+                    const hw = m.widthM / 2;
+                    const off = opts.skip?.(r, c.x, c.z);
+                    if (off) { prev = undefined; continue; }
+                    const b = positions.length / 3;
+                    positions.push(c.x - s.nx * hw, y, c.z - s.nz * hw, c.x + s.nx * hw, y, c.z + s.nz * hw);
+                    colors.push(...rgb, ...rgb);
+                    if (prev) {
+                        const [p0, p1] = prev;
+                        // up-facing, as the carriageway's level quads
+                        indices.push(p0, p1, b + 1, p0, b + 1, b);
+                        lengthM += (a1 - a0) / n;
+                    }
+                    prev = [b, b + 1];
+                }
+            }
+        }
+    }
+    return { positions: Float32Array.from(positions), indices: Uint32Array.from(indices), colors: Float32Array.from(colors), stats: { markings, lengthM: Math.round(lengthM) } };
+}

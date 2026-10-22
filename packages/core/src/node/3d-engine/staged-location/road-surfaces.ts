@@ -489,9 +489,16 @@ class PartBuilder {
         else this.uv.push((x - this.frame.x0) / this.frame.widthM, (z - this.frame.z0) / this.frame.heightM);
         return this.positions.length / 3 - 1;
     }
+    /** A vertical quad (a kerb face): a b on one station (foot, top or top, foot), d c on the next; faces the carriageway. */
     quad(a: number, b: number, c: number, d: number): void {
-        // a b on one station, d c on the next (a-b across, d-c across), counter-clockwise seen from above
         this.indices.push(a, c, b, a, d, c);
+    }
+    /**
+     * A level quad: a b on one station across the road (toward +normal), d c on the next; wound to face up. (Wound as quad()
+     * the carriageway faced down: drawn only because the viewport's clay is double-sided; Federation Square, 2026-10-22.)
+     */
+    quadUp(a: number, b: number, c: number, d: number): void {
+        this.indices.push(a, b, c, a, c, d);
     }
     part(): RoadMeshPart {
         return { positions: Float32Array.from(this.positions), indices: Uint32Array.from(this.indices), uv: Float32Array.from(this.uv) };
@@ -503,7 +510,11 @@ class PartBuilder {
  * levels), the kerb faces (vertical) and the sidewalks (flat at their level). Quads whose centre lies on another road's
  * carriageway (the crossing, built once by the longer road) are left out; a median's strip is built as a raised island.
  */
-export function buildRoadMesh(roads: RoadSurface[], P: RoadSurfaceParams = ROAD_SURFACE_PARAMS, atlas?: RoadAtlasLayout): RoadMesh {
+export function buildRoadMesh(roads: RoadSurface[], P: RoadSurfaceParams = ROAD_SURFACE_PARAMS, atlas?: RoadAtlasLayout | 'metres'): RoadMesh {
+    // 'metres': road-aligned UVs in metres (u along the run, v across it along the station normal; on a kerb face, v down
+    // from its top), for a tiling material scaled to its real size
+    const metres = atlas === 'metres';
+    const layout = atlas === 'metres' ? undefined : atlas;
     let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const r of roads) for (const s of r.stations) {
         const reach = Math.max(s.left.halfWidthM + (s.left.sidewalk?.widthM ?? 0), s.right.halfWidthM + (s.right.sidewalk?.widthM ?? 0)) + 1;
@@ -529,20 +540,21 @@ export function buildRoadMesh(roads: RoadSurface[], P: RoadSurfaceParams = ROAD_
     };
     ordered.forEach((r, ri) => {
         type Row = { c: number[]; kl?: number; kr?: number; sl?: number; sr?: number; wl?: number; wr?: number; ml?: number; mr?: number };
-        const band = atlas?.bands.get(r.id);
+        const band = layout?.bands.get(r.id);
         // road-aligned UVs: u along the run (0..1 of its length), v the atlas row of the across position
         let along = 0;
-        const rowV = (row: number) => (atlas ? (row + 0.5) / atlas.height : 0);
+        const rowV = (row: number) => (layout ? (row + 0.5) / layout.height : 0);
         const rows: Row[] = r.stations.map((s, si) => {
             if (si > 0) along += Math.hypot(s.x - r.stations[si - 1].x, s.z - r.stations[si - 1].z);
-            const u = band ? (Math.min(along, r.lengthM) / Math.max(1e-6, r.lengthM)) * (band.cols / atlas!.width) : 0;
+            const u = band ? (Math.min(along, r.lengthM) / Math.max(1e-6, r.lengthM)) * (band.cols / layout!.width) : 0;
             const uvAt = (d: number): [number, number] | undefined => {
+                if (metres) return [along, d];
                 if (!band) return undefined;
                 const t = (d + s.left.halfWidthM) / Math.max(1e-6, s.left.halfWidthM + s.right.halfWidthM);
-                return [u, (band.row0 + Math.max(0, Math.min(1, t)) * band.rows) / atlas!.height];
+                return [u, (band.row0 + Math.max(0, Math.min(1, t)) * band.rows) / layout!.height];
             };
-            const uvSide = (): [number, number] | undefined => (band ? [u, rowV(band.sideRow)] : undefined);
-            const uvKerb = (): [number, number] | undefined => (band ? [u, rowV(band.kerbRow)] : undefined);
+            const uvSide = (d = 0): [number, number] | undefined => (metres ? [along, d] : band ? [u, rowV(band.sideRow)] : undefined);
+            const uvKerb = (down = 0): [number, number] | undefined => (metres ? [along, down] : band ? [u, rowV(band.kerbRow)] : undefined);
             stats.stations++;
             for (const sd of [s.left, s.right]) { if (sd.kerb === 'measured') stats.measuredKerbs++; else stats.defaultKerbs++; }
             if (s.median) stats.medians++;
@@ -556,8 +568,8 @@ export function buildRoadMesh(roads: RoadSurface[], P: RoadSurfaceParams = ROAD_
                 const ls = [-s.left.halfWidthM, -s.left.halfWidthM + lw / 2, -s.median.leftEdgeM].map((d, k) => carriage.vertex(...at(d, s.profile[k === 2 ? 1 : k]), uvAt(d)));
                 const rs = [s.median.rightEdgeM, s.median.rightEdgeM + rw / 2, s.right.halfWidthM].map((d, k) => carriage.vertex(...at(d, s.profile[k === 0 ? 3 : k + 2]), uvAt(d)));
                 row.c = [...ls, ...rs];
-                row.ml = carriage.vertex(...at(-s.median.leftEdgeM, s.median.level), uvSide());
-                row.mr = carriage.vertex(...at(s.median.rightEdgeM, s.median.level), uvSide());
+                row.ml = carriage.vertex(...at(-s.median.leftEdgeM, s.median.level), uvSide(-s.median.leftEdgeM));
+                row.mr = carriage.vertex(...at(s.median.rightEdgeM, s.median.level), uvSide(s.median.rightEdgeM));
                 void lIn; void rIn;
             } else {
                 row.c = [-1, -0.5, 0, 0.5, 1].map((t, k) => { const d = t < 0 ? -s.left.halfWidthM * -t : s.right.halfWidthM * t; return carriage.vertex(...at(d, s.profile[k]), uvAt(d)); });
@@ -565,11 +577,12 @@ export function buildRoadMesh(roads: RoadSurface[], P: RoadSurfaceParams = ROAD_
             for (const [sd, sign] of [[s.left, -1], [s.right, 1]] as const) {
                 if (sd.kerbTopY === undefined) continue;
                 const d = sign * sd.halfWidthM;
-                const top = kerbs.vertex(...at(d, sd.kerbTopY), uvKerb());
-                const foot = kerbs.vertex(...at(d, sign < 0 ? s.profile[0] : s.profile[4]), uvKerb());
+                const footY = sign < 0 ? s.profile[0] : s.profile[4];
+                const top = kerbs.vertex(...at(d, sd.kerbTopY), uvKerb(0));
+                const foot = kerbs.vertex(...at(d, footY), uvKerb(sd.kerbTopY - footY));
                 if (sign < 0) { row.kl = top; row.sl = foot; } else { row.kr = top; row.sr = foot; }
                 if (sd.sidewalk && P.buildSidewalks) {
-                    const a = walks.vertex(...at(d, sd.sidewalk.level), uvSide()), b = walks.vertex(...at(d + sign * sd.sidewalk.widthM, sd.sidewalk.level), uvSide());
+                    const a = walks.vertex(...at(d, sd.sidewalk.level), uvSide(d)), b = walks.vertex(...at(d + sign * sd.sidewalk.widthM, sd.sidewalk.level), uvSide(d + sign * sd.sidewalk.widthM));
                     if (sign < 0) { row.wl = a; row.wr = b; (row as any).wl2 = b; (row as any).wl1 = a; } else { (row as any).wr1 = a; (row as any).wr2 = b; }
                 }
             }
@@ -582,27 +595,27 @@ export function buildRoadMesh(roads: RoadSurface[], P: RoadSurfaceParams = ROAD_
             const ra = rows[i], rb = rows[i + 1];
             const n = Math.min(ra.c.length, rb.c.length);
             if (ra.c.length === 6 && rb.c.length === 6) {
-                for (const [p, q] of [[0, 1], [1, 2], [3, 4], [4, 5]]) carriage.quad(ra.c[p], ra.c[q], rb.c[q], rb.c[p]);
+                for (const [p, q] of [[0, 1], [1, 2], [3, 4], [4, 5]]) carriage.quadUp(ra.c[p], ra.c[q], rb.c[q], rb.c[p]);
                 if (ra.ml !== undefined && ra.mr !== undefined && rb.ml !== undefined && rb.mr !== undefined) {
-                    carriage.quad(ra.ml, ra.mr, rb.mr, rb.ml);
-                    carriage.quad(ra.c[2], ra.ml, rb.ml, rb.c[2]);
-                    carriage.quad(ra.mr, ra.c[3], rb.c[3], rb.mr);
+                    carriage.quadUp(ra.ml, ra.mr, rb.mr, rb.ml);
+                    carriage.quadUp(ra.c[2], ra.ml, rb.ml, rb.c[2]);
+                    carriage.quadUp(ra.mr, ra.c[3], rb.c[3], rb.mr);
                 }
             } else if (n === 5 && ra.c.length === rb.c.length) {
-                for (let p = 0; p + 1 < 5; p++) carriage.quad(ra.c[p], ra.c[p + 1], rb.c[p + 1], rb.c[p]);
+                for (let p = 0; p + 1 < 5; p++) carriage.quadUp(ra.c[p], ra.c[p + 1], rb.c[p + 1], rb.c[p]);
             } else {
                 // a station with a median next to one without: bridge the outer edges only
-                carriage.quad(ra.c[0], ra.c[ra.c.length - 1], rb.c[rb.c.length - 1], rb.c[0]);
+                carriage.quadUp(ra.c[0], ra.c[ra.c.length - 1], rb.c[rb.c.length - 1], rb.c[0]);
             }
             if (ra.kl !== undefined && rb.kl !== undefined) kerbs.quad(ra.sl!, ra.kl, rb.kl, rb.sl!);
             if (ra.kr !== undefined && rb.kr !== undefined) kerbs.quad(ra.kr, ra.sr!, rb.sr!, rb.kr);
             const wa = ra as any, wb = rb as any;
             if (wa.wl1 !== undefined && wb.wl1 !== undefined && !onEarlier(ordered.length, a.x + a.nx * -(a.left.halfWidthM + 1), a.z + a.nz * -(a.left.halfWidthM + 1))) {
-                walks.quad(wa.wl2, wa.wl1, wb.wl1, wb.wl2);
+                walks.quadUp(wa.wl2, wa.wl1, wb.wl1, wb.wl2);
                 stats.sidewalkM += Math.hypot(b.x - a.x, b.z - a.z);
             }
             if (wa.wr1 !== undefined && wb.wr1 !== undefined && !onEarlier(ordered.length, a.x + a.nx * (a.right.halfWidthM + 1), a.z + a.nz * (a.right.halfWidthM + 1))) {
-                walks.quad(wa.wr1, wa.wr2, wb.wr2, wb.wr1);
+                walks.quadUp(wa.wr1, wa.wr2, wb.wr2, wb.wr1);
                 stats.sidewalkM += Math.hypot(b.x - a.x, b.z - a.z);
             }
         }
