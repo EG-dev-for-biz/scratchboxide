@@ -158,33 +158,57 @@ export function maskOverlay(render: { width: number; height: number; rgba: Uint8
 // =============================================================================
 
 export const REPLICA_CRITERIA = ['shape', 'materials', 'detail', 'errors', 'overall'] as const;
-export type ReplicaCriterion = typeof REPLICA_CRITERIA[number];
+/** With search-grounded references beside the tiles, two more: realism (could it be a photograph) and identity (is it this place). */
+export const REPLICA_GROUNDED_CRITERIA = [...REPLICA_CRITERIA, 'realism', 'identity'] as const;
+export type ReplicaCriterion = typeof REPLICA_GROUNDED_CRITERIA[number];
 export interface ReplicaDefect { what: string; where: string; severity: number }
-export type ReplicaScores = Record<ReplicaCriterion, number> & { defects: ReplicaDefect[]; note: string };
+export type ReplicaScores = Record<typeof REPLICA_CRITERIA[number], number> & Partial<Record<'realism' | 'identity', number>> & { defects: ReplicaDefect[]; note: string };
+
+/**
+ * How the renders of a judgement were made and what the judge is shown beside the tiles.
+ * `lit`: the renders carry the lit mode's sun, cast shadows and sky occlusion (photo-match-eval PHOTO_MATCH_LIT) instead of
+ * the flat headlight. `grounded`: that many search-grounded reference images of the real place (search-grounded-reference.ts)
+ * follow the tiles: generated, not photographs, roughly from the same viewpoint; the judge reads the real place's materials,
+ * detail and distinctive features from them, and scores realism and identity too.
+ */
+export interface ReplicaJudgeContext { lit?: boolean; grounded?: number }
+
+const lightSentence = (lit?: boolean) => lit
+    ? 'all lit by the same sun and sky (one fixed sun direction, cast shadows and ambient occlusion computed from each render\'s own geometry) on the same flat grey background (there is no sky in any image). '
+    : 'all with the same flat neutral light on the same flat grey background (there is no sky in any image). ';
 export interface BelievabilityScore { believability: number; defects: ReplicaDefect[]; note: string }
 
-export function replicaJudgePrompt(place: string, count: number): { preamble: string; closing: string } {
+export function replicaJudgePrompt(place: string, count: number, ctx: ReplicaJudgeContext = {}): { preamble: string; closing: string } {
+    const g = ctx.grounded ?? 0;
     return {
         preamble: `You are judging procedural 3D rebuilds of a real city district: ${place}. Image 0 is the reference: a render of Google's photogrammetry 3D tiles of the district ` +
             '(measured geometry with its aerial photo texture; it carries the scan\'s own artefacts: melted vehicles and trees, blobby street furniture, baked-in shadows, smeared undersides). ' +
             `Images 1 to ${count} are renders of rebuilds of the same district made from scratch, each from exactly the reference's camera, field of view and resolution, ` +
-            'all with the same flat neutral light on the same flat grey background (there is no sky in any image). Some renders may be untextured grey clay. ' +
+            lightSentence(ctx.lit) + 'Some renders may be untextured grey clay. ' +
+            (g ? `After the reference come ${g} search-grounded reference image${g > 1 ? 's' : ''} (labelled G1${g > 1 ? ` to G${g}` : ''}): drawn by an image model from real photographs Google Search found of the same place, ` +
+                'roughly from the same viewpoint. They are generated, not photographs, and their framing is not exact: use them for what the real place looks like (materials, colours, ornament, ' +
+                'window rhythm, distinctive features), use the tiles (image 0) for the layout and the camera. Where they disagree with each other, trust neither. ' : '') +
             'The renders are in no particular order and come from different methods.',
-        closing: `Is each render a believable replica of the reference? Score every render 1-10 (10 best) against the reference on five criteria:\n` +
+        closing: `Is each render a believable replica of the reference? Score every render 1-10 (10 best) against the reference on ${g ? 'seven' : 'five'} criteria:\n` +
             '- shape: massing, silhouettes, rooflines, setbacks, openings, the street and ground levels and the structures (bridges, canopies, towers, domes) in the right places and sizes;\n' +
             '- materials: the facade, roof and ground materials and their colours (an untextured clay render scores 1);\n' +
             '- detail: windows, cornices, ornament, mullions, kerbs, markings at a believable density and sharpness (finer and cleaner than the scan is better, not worse);\n' +
             '- errors: wrong or invented content, 10 = none (missing buildings or structures, floating or sunken parts, melted or broken geometry, stretched, smeared, repeated or doubled textures, baked shadows, holes);\n' +
             '- overall: how believably the render replicates the district in the reference.\n' +
+            (g ? '- realism: could the render be a photograph of a real city (convincing materials, sharpness, surface detail, light behaviour), whatever place it shows;\n' +
+                '- identity: would someone who knows this place recognise it (massing, window rhythm, materials, colour, distinctive features as the grounded references show them).\n' : '') +
             'Do not penalise a rebuild for leaving out the scan\'s own artefacts (melted cars, blob trees, baked shadows); do penalise real structure that is missing or wrong.\n' +
             'For every render also list its most visible defects, most severe first (at most 6), each with what is wrong, where in the image (e.g. "left foreground", "centre skyline") and a severity from 0 (cosmetic) to 1 (breaks the replica).\n' +
-            `Reply with JSON only: {"renders":[{"image":1,"shape":n,"materials":n,"detail":n,"errors":n,"overall":n,"defects":[{"what":"...","where":"...","severity":0.0}],"note":"at most 25 words on what decides it"}, ...]} with one entry for each of images 1 to ${count}.`
+            `Reply with JSON only: {"renders":[{"image":1,"shape":n,"materials":n,"detail":n,"errors":n,"overall":n,${g ? '"realism":n,"identity":n,' : ''}"defects":[{"what":"...","where":"...","severity":0.0}],"note":"at most 25 words on what decides it"}, ...]} with one entry for each of images 1 to ${count}.`
     };
 }
 
-export function believabilityPrompt(): string {
-    return 'This image is a render of a 3D model of a city, drawn with a flat neutral light on a flat grey background where the sky would be. ' +
-        'Ignore the grey background and the flat, shadowless light (every render has them). Could the city in this image be a photograph of a real city? ' +
+export function believabilityPrompt(lit?: boolean): string {
+    return (lit
+        ? 'This image is a render of a 3D model of a city, lit by a computed sun and sky (cast shadows, ambient occlusion) on a flat grey background where the sky would be. ' +
+            'Ignore the grey background (every render has it). Could the city in this image be a photograph of a real city? '
+        : 'This image is a render of a 3D model of a city, drawn with a flat neutral light on a flat grey background where the sky would be. ' +
+            'Ignore the grey background and the flat, shadowless light (every render has them). Could the city in this image be a photograph of a real city? ') +
         'Score its believability 1-10 (10 = indistinguishable from a photograph of a real place apart from the sky and light; 1 = obviously synthetic or broken), ' +
         'judging geometry, materials, surface detail, sharpness and anything melted, smeared, repeated, floating, missing or invented. ' +
         'List what most gives it away, most severe first (at most 6), each with what, where in the image, and a severity 0..1. ' +
@@ -208,7 +232,7 @@ function readDefects(v: unknown): ReplicaDefect[] {
     });
 }
 
-export function parseReplicaReply(text: string, count: number): { scores: ReplicaScores[]; problems: string[] } {
+export function parseReplicaReply(text: string, count: number, criteria: readonly ReplicaCriterion[] = REPLICA_CRITERIA): { scores: ReplicaScores[]; problems: string[] } {
     const j = readJson(text) as { renders?: Array<Record<string, unknown>> } | undefined;
     if (!j) return { scores: [], problems: ['the reply is not JSON'] };
     const problems: string[] = [], scores: ReplicaScores[] = [];
@@ -217,12 +241,12 @@ export function parseReplicaReply(text: string, count: number): { scores: Replic
         if (!r) { problems.push(`no entry for image ${k}`); continue; }
         const sc = {} as Record<ReplicaCriterion, number>;
         let ok = true;
-        for (const c of REPLICA_CRITERIA) {
+        for (const c of criteria) {
             const v = Number(r[c]);
             if (!Number.isFinite(v) || v < 1 || v > 10) { problems.push(`image ${k}: ${c} is ${String(r[c])}`); ok = false; break; }
             sc[c] = v;
         }
-        if (ok) scores[k - 1] = { ...sc, defects: readDefects(r.defects), note: typeof r.note === 'string' ? r.note : '' };
+        if (ok) scores[k - 1] = { ...(sc as Record<typeof REPLICA_CRITERIA[number], number>), defects: readDefects(r.defects), note: typeof r.note === 'string' ? r.note : '' };
     }
     return { scores, problems };
 }
@@ -261,15 +285,23 @@ export interface ReplicaJudgeRun { order: string[]; scores: Record<string, Repli
  */
 export async function judgeReplicaView(input: {
     client: JudgeClient; place: string; reference: Uint8Array; renders: Array<{ armId: string; png: Uint8Array }>; repeats?: number; seed: string; thinkingBudget?: number; temperature?: number;
+    /** The renders are lit (PHOTO_MATCH_LIT) rather than headlit: the prompt says so. */
+    lit?: boolean;
+    /** Search-grounded reference images of the place (generated; shown after the tiles as G1..Gn; adds realism and identity). */
+    grounded?: Array<{ bytes: Uint8Array; mimeType: string }>;
 }): Promise<ReplicaJudgeRun[]> {
     const runs: ReplicaJudgeRun[] = [];
+    const g = input.grounded ?? [];
+    const criteria = g.length ? REPLICA_GROUNDED_CRITERIA : REPLICA_CRITERIA;
     for (let r = 0; r < (input.repeats ?? 2); r++) {
         const order = seededShuffle(input.renders, `${input.seed}#${r}`);
-        const { preamble, closing } = replicaJudgePrompt(input.place, order.length);
+        const { preamble, closing } = replicaJudgePrompt(input.place, order.length, { lit: input.lit, grounded: g.length });
         const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [{ text: preamble }, { text: 'Image 0: the reference (photogrammetry tiles).' }, pngPart(input.reference)];
+        g.forEach((img, k) => parts.push({ text: `Image G${k + 1}: a search-grounded reference (generated from photographs of the real place; not a render, not scored).` }, { inlineData: { mimeType: img.mimeType, data: Buffer.from(img.bytes).toString('base64') } }));
         order.forEach((o, k) => parts.push({ text: `Image ${k + 1}: a rebuild.` }, pngPart(o.png)));
         parts.push({ text: closing });
-        const { value, model } = await askJson(input.client, parts, 'replica-judge', t => { const p = parseReplicaReply(t, order.length); return { value: p.problems.length ? undefined : p.scores, problems: p.problems }; }, input);
+        const stage = g.length ? 'replica-judge-grounded' : 'replica-judge';
+        const { value, model } = await askJson(input.client, parts, stage, t => { const p = parseReplicaReply(t, order.length, criteria); return { value: p.problems.length ? undefined : p.scores, problems: p.problems }; }, input);
         const scores: Record<string, ReplicaScores> = {};
         order.forEach((o, k) => { scores[o.armId] = value[k]; });
         runs.push({ order: order.map(o => o.armId), scores, model });
@@ -278,10 +310,10 @@ export async function judgeReplicaView(input: {
 }
 
 /** The believability of one render alone (no reference shown), `repeats` times. */
-export async function judgeBelievability(input: { client: JudgeClient; png: Uint8Array; repeats?: number; thinkingBudget?: number; temperature?: number }): Promise<Array<BelievabilityScore & { model: string }>> {
+export async function judgeBelievability(input: { client: JudgeClient; png: Uint8Array; repeats?: number; thinkingBudget?: number; temperature?: number; lit?: boolean }): Promise<Array<BelievabilityScore & { model: string }>> {
     const out: Array<BelievabilityScore & { model: string }> = [];
     for (let r = 0; r < (input.repeats ?? 2); r++) {
-        const { value, model } = await askJson(input.client, [pngPart(input.png), { text: believabilityPrompt() }], 'replica-believability', t => { const p = parseBelievabilityReply(t); return { value: p.score, problems: p.problems }; }, input);
+        const { value, model } = await askJson(input.client, [pngPart(input.png), { text: believabilityPrompt(input.lit) }], 'replica-believability', t => { const p = parseBelievabilityReply(t); return { value: p.score, problems: p.problems }; }, input);
         out.push({ ...value, model });
     }
     return out;
@@ -299,9 +331,10 @@ export function stat(values: number[]): Stat {
 /** Each arm's mean and spread per criterion over the runs. */
 export function aggregateReplicaRuns(runs: ReplicaJudgeRun[], armIds: string[]): Record<string, Record<ReplicaCriterion, Stat>> {
     const out: Record<string, Record<ReplicaCriterion, Stat>> = {};
+    const grounded = runs.some(r => Object.values(r.scores).some(s => typeof s?.realism === 'number'));
     for (const a of armIds) {
         out[a] = {} as Record<ReplicaCriterion, Stat>;
-        for (const c of REPLICA_CRITERIA) out[a][c] = stat(runs.map(r => r.scores[a]?.[c]).filter((x): x is number => typeof x === 'number'));
+        for (const c of grounded ? REPLICA_GROUNDED_CRITERIA : REPLICA_CRITERIA) out[a][c] = stat(runs.map(r => r.scores[a]?.[c]).filter((x): x is number => typeof x === 'number'));
     }
     return out;
 }
@@ -309,4 +342,62 @@ export function aggregateReplicaRuns(runs: ReplicaJudgeRun[], armIds: string[]):
 /** A render's pixels as the DecodedImage the metrics take. */
 export function asImage(r: ArmRender): { width: number; height: number; rgba: Uint8Array } {
     return { width: r.width, height: r.height, rgba: r.rgba };
+}
+
+// =============================================================================
+// Comparing two scorecards
+// =============================================================================
+
+/** One judged block of a view as report.json stores it (the headlight block is the view itself; the lit block is `view.lit`). */
+export interface JudgedBlock {
+    replica?: { stats?: Record<string, Partial<Record<ReplicaCriterion, Stat>>> };
+    believability?: Record<string, { stat?: Stat }>;
+}
+
+export interface ScoreDelta { baseline: Stat; current: Stat; delta: number; /** Standard error of the delta from both spreads. */ se: number; /** |delta| at least twice its standard error and at least 0.5. */ clear: boolean }
+
+/**
+ * Per view, per arm, the change of every judged criterion (and believability) from a baseline scorecard to the current one,
+ * with the delta's standard error from both runs' spreads (population sd over n repeats). A delta is `clear` when it is at
+ * least 0.5 and at least twice its standard error; anything less is within the judge's own noise.
+ */
+export function compareJudgedBlocks(baseline: Array<{ id: string } & JudgedBlock>, current: Array<{ id: string } & JudgedBlock>): Array<{ view: string; arm: string; criterion: string; d: ScoreDelta }> {
+    const out: Array<{ view: string; arm: string; criterion: string; d: ScoreDelta }> = [];
+    const delta = (b: Stat, c: Stat): ScoreDelta => {
+        const se = Math.sqrt((b.sd ** 2) / Math.max(1, b.n - 1) + (c.sd ** 2) / Math.max(1, c.n - 1));
+        const d = Math.round((c.mean - b.mean) * 100) / 100;
+        return { baseline: b, current: c, delta: d, se: Math.round(se * 100) / 100, clear: Math.abs(d) >= 0.5 && Math.abs(d) >= 2 * se };
+    };
+    for (const cv of current) {
+        const bv = baseline.find(v => v.id === cv.id);
+        if (!bv) continue;
+        for (const [arm, cs] of Object.entries(cv.replica?.stats ?? {})) {
+            const bs = bv.replica?.stats?.[arm];
+            if (!bs) continue;
+            for (const c of REPLICA_GROUNDED_CRITERIA) {
+                const b = bs[c], x = cs[c];
+                if (b?.n && x?.n) out.push({ view: cv.id, arm, criterion: c, d: delta(b, x) });
+            }
+        }
+        for (const [arm, cb] of Object.entries(cv.believability ?? {})) {
+            const b = bv.believability?.[arm]?.stat, x = cb.stat;
+            if (b?.n && x?.n) out.push({ view: cv.id, arm, criterion: 'believability', d: delta(b, x) });
+        }
+    }
+    return out;
+}
+
+/** Words of the view a search-grounded reference is asked to show it from, read from the camera's geometry (no labels). */
+export function groundedViewPhrase(v: Pick<ReplicaView, 'eye' | 'target' | 'hfovDeg'>, groundY?: number): string {
+    const d = [v.target[0] - v.eye[0], v.target[1] - v.eye[1], v.target[2] - v.eye[2]];
+    const horiz = Math.hypot(d[0], d[2]);
+    const pitch = (Math.atan2(d[1], horiz) * 180) / Math.PI;
+    // compass heading of the view: x east, z south
+    const heading = ((Math.atan2(d[0], -d[2]) * 180) / Math.PI + 360) % 360;
+    const names = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
+    const dir = names[Math.round(heading / 45) % 8];
+    const height = groundY === undefined ? undefined : v.eye[1] - groundY;
+    const where = height === undefined ? '' : height < 3 ? 'at eye level from the ground, ' : `from about ${Math.round(height)} m above the ground, `;
+    const tilt = Math.abs(pitch) < 4 ? 'looking level' : pitch < 0 ? `looking down about ${Math.round(-pitch)} degrees` : `looking up about ${Math.round(pitch)} degrees`;
+    return `${where}facing ${dir} (heading ${Math.round(heading)} degrees), ${tilt}, with a horizontal field of view of about ${Math.round(v.hfovDeg)} degrees`;
 }
