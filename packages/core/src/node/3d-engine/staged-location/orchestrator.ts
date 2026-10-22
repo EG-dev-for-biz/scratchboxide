@@ -2966,11 +2966,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     provenance: { ...massingProvenance({ kind: 'wall', provenance: 'massing', confidence: null }, r.massing), note },
                     provenanceLabels: ['vector-massing', PROVENANCE.asScanned], supersedes: [l1.objectId], revealAfter: [],
                     reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [l1.objectId] }, cached: false, builtAtMs: now(), counts,
-                    textured: {
+                    // the 3D Building build (request.procedural) shows no tile-photo texture: its massing stays clay until pipeline
+                    // G's own painted build replaces it (user decision 2026-10-22)
+                    ...(request.procedural === true ? {} : { textured: {
                         url: pubTex.url, bytes: pubTex.bytes, ladderRung: r.files.texturedShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1),
                         rungShares: r.files.texturedShares, provenance: legend.map(e => ({ source: e.source, label: e.label, method: e.method, coverage: 0 })),
                         confidenceChannels: 'R = index into provenance[], G = weight 0..255, B = ladder rung (TEXTURE_LADDER_RUNGS), A = 255 where a stage produced the texel', builtAtMs: now(), cached: false
-                    }
+                    } })
                 };
                 run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, extra: { rawGlbPath: extraction.rawGlbPath ?? extraction.texturedGlb, pipeline: 'e' } });
                 run.setGround(layer.objectId);
