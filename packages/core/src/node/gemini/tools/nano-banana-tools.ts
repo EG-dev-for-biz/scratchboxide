@@ -28,8 +28,7 @@ import { readImageDimensions, sniffImageFormat } from '../../image-codec-ffmpeg'
 import { defaultDurableAssetStore } from '../../asset-store/durable-asset-store';
 import type { ToolDeclaration, ToolHandler } from './types';
 import { infillImageHoles } from '../../image-hole-infill';
-import { bakeGritDecal, generateGritMap, GRIT_DEFAULT_STRENGTH } from '../../3d-engine/grit-decal';
-import { readTileTriangles } from '../../3d-engine/staged-location/tile-texture-transfer';
+import { bakeDecal, generateDecalImage, DECAL_DEFAULT_STRENGTH } from '../../3d-engine/asset-decal';
 import { genAiEnhanceClient } from '../../3d-engine/staged-location/texture-enhance';
 import { decodeImageInMemory } from '../../3d-engine/staged-location/tile-texture-transfer';
 import { encodePng } from '../../texture-processing';
@@ -363,22 +362,29 @@ export const IMAGE_GENERATION_TOOL_DECLARATIONS: ToolDeclaration[] = [
         }
     },
     {
-        name: 'asset_grit_decal',
-        description: 'Gives a 3D asset (a GLB) surface grit: an image model reads the weathering in a reference photo (a Street View frame, a survey station, a photo of the object), or paints the weathering described, as ONE large grayscale map that does not tile, which is baked into the GLB as a decal: a thin skin 1 cm off every near-vertical face, black with the map as its opacity, so any glTF viewer shows it over the asset\'s own materials. Openings and glass are left clean. The decal is labelled generated. Writes a new GLB and returns its path.',
+        name: 'asset_decal',
+        description: 'Lays a decal on a 3D asset (a GLB): any image over the asset\'s own materials, baked into the GLB as a decal node a few millimetres off the faces it covers, so any glTF viewer and the app show it. What it shows is up to you: your own image (a logo, a sign, a poster, a photo, a texture with transparency), or an image painted by an image model from your description (grime and weathering, graffiti, a mural, ivy, rust streaks, lettering, damage, wet patches...), optionally read from a reference photo of the real thing. Where it goes is numbers you choose: the faces (by slope, by part name, by the compass direction they face), and the mapping (once across them, repeated every N metres, or one patch of a given size at a given place). Opacity comes from the image\'s own transparency, else from how far each pixel is from the white it was painted on; colour is the image\'s own unless you give one colour. A generated decal is labelled generated, your own image photo-inferred. Writes a new GLB and returns its path.',
         parameters: {
             type: 'OBJECT',
             properties: {
-                glbPath: { type: 'STRING', description: 'Local path of the asset GLB to decal (relative paths resolve against the workspace).' },
-                referenceImageUrl: { type: 'STRING', description: 'Optional URL, base64 data URI, or local filepath of a photo showing the real surface and its weathering; without one the weathering is painted from the description alone.' },
-                weathering: { type: 'STRING', description: 'Optional description, in your own words, of the weathering to paint (e.g. "light dust only", "rust streaks running down from the ironwork", "damp and moss at the base", "a century of city soot"). Default: city soot, rain streaks and blotches, heavier at the base and under the top edge.' },
-                grimeColour: { type: 'STRING', description: 'Optional "#RRGGBB" colour of the grit (default black soot; e.g. rust orange or moss green).' },
-                strength: { type: 'NUMBER', description: 'Optional opacity of the heaviest grit, 0 to 1 (default 0.8).' },
-                includeParts: { type: 'STRING', description: 'Optional: only nodes whose name contains this text (case-insensitive) get grit.' },
-                excludeParts: { type: 'STRING', description: 'Optional: nodes whose name contains this text get none (default: openings and glass).' },
-                maxNormalY: { type: 'NUMBER', description: 'Optional: faces whose normal points up or down by more than this (0 = only vertical faces, 1 = every face including roofs) get none. Default 0.3 (walls).' },
-                offsetM: { type: 'NUMBER', description: 'Optional distance of the decal off the surface in metres (default 0.01).' },
-                model: { type: 'STRING', description: 'Optional image model id. When given, only that model is used; otherwise the default image models are tried in order.' },
-                outputPath: { type: 'STRING', description: 'Optional output GLB path. Default: next to the input as <name>_grit.glb.' }
+                glbPath: { type: 'STRING', description: 'Local path of the asset GLB (relative paths resolve against the workspace).' },
+                imageUrl: { type: 'STRING', description: 'Optional: the decal image itself (URL, data URI or file path), used as given. When absent the image is painted from `description`.' },
+                description: { type: 'STRING', description: 'Optional: what to paint, in your own words (e.g. "a century of city soot and rain streaks", "faded red graffiti tags along the bottom metre", "a hand-painted Victorian shop sign reading ROOKERY in gold", "ivy climbing from the base"). Default: city weathering.' },
+                referenceImageUrl: { type: 'STRING', description: 'Optional photo the painted decal should be read from or look like (a Street View frame, a survey station, a photo).' },
+                colour: { type: 'STRING', description: 'Optional "#RRGGBB": a one-colour decal (the image gives only its opacity), e.g. black soot, rust orange, moss green.' },
+                strength: { type: 'NUMBER', description: 'Optional overall opacity, 0 to 1 (default 0.8).' },
+                headingDeg: { type: 'NUMBER', description: 'Optional: only faces facing this compass heading (0 north, 90 east, 180 south, 270 west), within headingToleranceDeg.' },
+                headingToleranceDeg: { type: 'NUMBER', description: 'Optional tolerance for headingDeg (default 45).' },
+                patchCentre: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Optional [across, up]: place ONE patch, its centre as fractions of the covered faces (across 0 = left, 1 = right, seen from outside; up 0 = bottom, 1 = top). Needs patchSizeM.' },
+                patchSizeM: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Optional [width, height] of the patch in metres.' },
+                tileM: { type: 'NUMBER', description: 'Optional: repeat the image every this many metres instead of stretching it once.' },
+                includeParts: { type: 'STRING', description: 'Optional: only nodes whose name contains this text (case-insensitive).' },
+                excludeParts: { type: 'STRING', description: 'Optional: nodes whose name contains this text are left clear (default: openings and glass).' },
+                maxNormalY: { type: 'NUMBER', description: 'Optional: faces whose normal points up or down by more than this get none (0 = only vertical faces, 1 = every face). Default 0.3.' },
+                offsetM: { type: 'NUMBER', description: 'Optional distance off the surface in metres (default 0.01).' },
+                name: { type: 'STRING', description: 'Optional name of the decal node (default "decal").' },
+                model: { type: 'STRING', description: 'Optional image model id for a painted decal.' },
+                outputPath: { type: 'STRING', description: 'Optional output GLB path. Default: next to the input as <name>_decal.glb.' }
             },
             required: ['glbPath']
         }
@@ -386,48 +392,69 @@ export const IMAGE_GENERATION_TOOL_DECLARATIONS: ToolDeclaration[] = [
 ];
 
 export const imageGenerationHandlers: Record<string, ToolHandler> = {
-    asset_grit_decal: async (args, ctx) => {
-        const GRIT = 'asset_grit_decal';
+    asset_decal: async (args, ctx) => {
+        const TOOL_ID = 'asset_decal';
         const glbArg = asString(args.glbPath);
-        if (!glbArg) throw new MissingInputError(GRIT, 'glbPath', 'give the asset GLB to decal');
+        if (!glbArg) throw new MissingInputError(TOOL_ID, 'glbPath', 'give the asset GLB');
         const glbPath = path.isAbsolute(glbArg) ? glbArg : path.resolve(ctx?.workspaceRoot || process.cwd(), glbArg);
-        if (!(await fs.pathExists(glbPath))) throw new MissingInputError(GRIT, 'glbPath', `no file at ${glbPath}`);
-        const refArg = asString(args.referenceImageUrl);
-        const ref = refArg ? await loadInputImage(refArg, ctx?.workspaceRoot, ctx?.signal, GRIT, 'referenceImageUrl') : undefined;
-        const weathering = asString(args.weathering) || undefined;
-        const hexArg = asString(args.grimeColour);
-        const hm = hexArg ? /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hexArg) : null;
-        if (hexArg && !hm) throw new InvalidInputError(GRIT, 'grimeColour', `"${hexArg}" is not a #RRGGBB colour`);
+        if (!(await fs.pathExists(glbPath))) throw new MissingInputError(TOOL_ID, 'glbPath', `no file at ${glbPath}`);
+        const glb = new Uint8Array(await fs.readFile(glbPath));
+        const hex = (arg: string) => {
+            const v = asString(args[arg]);
+            if (!v) return undefined;
+            const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(v);
+            if (!m) throw new InvalidInputError(TOOL_ID, arg, `"${v}" is not a #RRGGBB colour`);
+            return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] as [number, number, number];
+        };
+        const num = (arg: string) => (typeof args[arg] === 'number' && Number.isFinite(args[arg]) ? args[arg] as number : undefined);
+        const pair = (arg: string) => { const v = args[arg]; return Array.isArray(v) && v.length === 2 && v.every(x => typeof x === 'number' && Number.isFinite(x)) ? [v[0], v[1]] as [number, number] : undefined; };
+        const centre = pair('patchCentre'), size = pair('patchSizeM');
+        if ((centre && !size) || (size && !centre)) throw new InvalidInputError(TOOL_ID, centre ? 'patchSizeM' : 'patchCentre', 'a patch needs both patchCentre and patchSizeM');
         const include = asString(args.includeParts).toLowerCase(), exclude = asString(args.excludeParts).toLowerCase();
         const keep = (n: string) => { const l = n.toLowerCase(); return (!include || l.includes(include)) && (exclude ? !l.includes(exclude) : !/opening|glass/.test(l)); };
-        const glb = new Uint8Array(await fs.readFile(glbPath));
-        let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
-        const tris = readTileTriangles(glb);
-        for (let i = 0; i < tris.positions.length; i += 3) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], tris.positions[i + k]); hi[k] = Math.max(hi[k], tris.positions[i + k]); }
-        const widthM = Math.max(hi[0] - lo[0], hi[2] - lo[2]), heightM = hi[1] - lo[1];
-        const models = resolveRequestedModels(asString(args.model) || undefined, IMAGE_MODEL_PRIORITY);
-        let genai: unknown;
-        try {
-            genai = await new GoogleMediaCredentialsService().createClient();
-        } catch (err) {
-            throw new MediaModelUnavailableError(models[0], `Google media credentials are not available (${(err as Error)?.message || err})`);
+        const placement = {
+            ...(num('maxNormalY') !== undefined ? { maxNormalY: num('maxNormalY') } : {}), ...(num('headingDeg') !== undefined ? { headingDeg: num('headingDeg') } : {}),
+            ...(num('headingToleranceDeg') !== undefined ? { headingToleranceDeg: num('headingToleranceDeg') } : {}), ...(num('tileM') !== undefined ? { tileM: num('tileM') } : {}),
+            ...(centre && size ? { patch: { centre, sizeM: size } } : {}), ...(num('offsetM') !== undefined ? { offsetM: num('offsetM') } : {})
+        };
+        // the decal image: given, or painted at the size it will cover
+        const imageArg = asString(args.imageUrl), description = asString(args.description) || undefined;
+        let image, label: 'generated' | 'photo-inferred', modelUsed: string | undefined, method: string;
+        if (imageArg) {
+            const img = await loadInputImage(imageArg, ctx?.workspaceRoot, ctx?.signal, TOOL_ID, 'imageUrl');
+            try { image = decodeImageInMemory(new Uint8Array(img.data)); } catch (err) { throw new InvalidInputError(TOOL_ID, 'imageUrl', `the image is not a PNG or JPEG (${(err as Error).message})`); }
+            label = 'photo-inferred';
+            method = `the given image ${imageArg}`;
+        } else {
+            // the size it will cover: the patch, a tile, or the covered faces (a dry bake measures them)
+            const probe = bakeDecal(glb, { width: 4, height: 4, rgba: new Uint8Array(64).fill(255) }, { ...placement, keep });
+            if (!probe.decalTriangles) throw new InvalidInputError(TOOL_ID, 'glbPath', 'no face of the asset matches the placement asked for');
+            const [wM, hM] = size ?? (placement.tileM ? [placement.tileM, placement.tileM] : [probe.widthM, probe.heightM]);
+            const refArg = asString(args.referenceImageUrl);
+            const ref = refArg ? await loadInputImage(refArg, ctx?.workspaceRoot, ctx?.signal, TOOL_ID, 'referenceImageUrl') : undefined;
+            const models = resolveRequestedModels(asString(args.model) || undefined, IMAGE_MODEL_PRIORITY);
+            let genai: unknown;
+            try {
+                genai = await new GoogleMediaCredentialsService().createClient();
+            } catch (err) {
+                throw new MediaModelUnavailableError(models[0], `Google media credentials are not available (${(err as Error)?.message || err})`);
+            }
+            const painted = await generateDecalImage({ client: genai, models, ...(description ? { description } : {}), ...(ref ? { reference: { bytes: new Uint8Array(ref.data), mimeType: ref.mimeType } } : {}), widthM: wM, heightM: hM, tiles: !!placement.tileM, ...(ctx?.signal ? { signal: ctx.signal } : {}) });
+            image = painted.image; modelUsed = painted.modelUsed; label = 'generated';
+            method = `${description ?? 'city weathering'}${refArg ? `, read from ${refArg}` : ''}, painted by ${painted.modelUsed}`;
         }
-        const map = await generateGritMap({ client: genai, models, ...(ref ? { reference: { bytes: new Uint8Array(ref.data), mimeType: ref.mimeType } } : {}), ...(weathering ? { weathering } : {}), widthM, heightM, ...(ctx?.signal ? { signal: ctx.signal } : {}) });
-        const strength = typeof args.strength === 'number' ? args.strength : GRIT_DEFAULT_STRENGTH;
-        const baked = bakeGritDecal(glb, map.map, {
-            strength, keep, ...(hm ? { colour: [parseInt(hm[1], 16), parseInt(hm[2], 16), parseInt(hm[3], 16)] as [number, number, number] } : {}),
-            ...(typeof args.maxNormalY === 'number' ? { maxNormalY: args.maxNormalY } : {}), ...(typeof args.offsetM === 'number' ? { offsetM: args.offsetM } : {}),
-            method: `${weathering ?? 'city grime'}${refArg ? ` read from ${refArg}` : ''}, painted by ${map.modelUsed} as one non-tiling map per surface`
-        });
+        const strength = num('strength') ?? DECAL_DEFAULT_STRENGTH, colour = hex('colour');
+        const baked = bakeDecal(glb, image, { ...placement, keep, strength, label, method, ...(colour ? { colour } : {}), ...(asString(args.name) ? { name: asString(args.name) } : {}) });
+        if (!baked.decalTriangles) throw new InvalidInputError(TOOL_ID, 'glbPath', 'no face of the asset matches the placement asked for');
         const requestedOut = asString(args.outputPath);
         const outputPath = requestedOut
             ? (path.isAbsolute(requestedOut) ? requestedOut : path.resolve(ctx?.workspaceRoot || process.cwd(), requestedOut))
-            : path.join(path.dirname(glbPath), `${path.basename(glbPath, path.extname(glbPath))}_grit.glb`);
+            : path.join(path.dirname(glbPath), `${path.basename(glbPath, path.extname(glbPath))}_decal.glb`);
         await fs.ensureDir(path.dirname(outputPath));
         await fs.writeFile(outputPath, baked.glb);
         return {
-            resultPayload: { success: true, glbPath, outputPath, decalTriangles: baked.decalTriangles, widthM: Math.round(widthM * 10) / 10, heightM: Math.round(heightM * 10) / 10, strength, modelUsed: map.modelUsed, modelNote: map.modelNote, provenance: { label: 'generated', method: 'grime decal from a reference photo' } },
-            summaryResult: `Baked a grit decal (${baked.decalTriangles} wall triangles, grime by ${map.modelUsed}, labelled generated) into ${outputPath}.`
+            resultPayload: { success: true, glbPath, outputPath, decalTriangles: baked.decalTriangles, coveredWidthM: Math.round(baked.widthM * 10) / 10, coveredHeightM: Math.round(baked.heightM * 10) / 10, strength, ...(modelUsed ? { modelUsed } : {}), provenance: { label, method } },
+            summaryResult: `Baked a decal (${baked.decalTriangles} triangles, ${label}: ${method}) into ${outputPath}.`
         };
     },
     image_infill_holes: async (args, ctx) => {
