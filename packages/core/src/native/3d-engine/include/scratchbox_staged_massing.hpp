@@ -112,6 +112,14 @@ struct Spec {
     std::string tile, isolate, outDir;
     double pixel{0.05}, slabBack{1.5}, slabFront{0.8}, protrusionReach{2.5};
     double snapMaxM{2.0}, snapMinSupport{0.15};
+    /** Walls snapped here (off when the caller placed them on fitted planes already; modelled volumes still snap). */
+    bool snapWalls{true};
+    /**
+     * Openings and face sweeps on an edge this solid split in pieces are clipped to every piece they overlap (each piece
+     * its own copy, id <id>:<k>), and to the part of a wall a neighbour part does not cover, instead of rejected when they
+     * cross a piece's end or reach below its raised bottom. Off by default (callers placing openings on a known piece).
+     */
+    bool clipOpenings{false};
     double residualProud{0.6}, residualCut{0.6}, residualClear{1.5}, residualOpen{2.0}, residualMinArea{2.0}, apronHeight{0.8}, attachReach{1.5};
     double maxFaceSide{3000};
     /**
@@ -553,7 +561,7 @@ public:
         if (haveTile_ && !spec_.isolate.empty()) matchIsolate();
         timings_.push_back({"match_isolate", detail::nowMs() - t});
         t = detail::nowMs();
-        if (haveTile_ && !isoTris_.empty() && spec_.snapMaxM > 0) { snapWalls(); snapMeshes(); }
+        if (haveTile_ && !isoTris_.empty() && spec_.snapMaxM > 0) { if (spec_.snapWalls) snapWalls(); snapMeshes(); }
         timings_.push_back({"snap", detail::nowMs() - t});
         t = detail::nowMs();
         buildFaces();
@@ -819,27 +827,51 @@ private:
         // frame (the whole edge's frame has its origin at the edge's start, a piece's at its own); an opening with no such wall
         // is reported, never dropped silently
         for (size_t oi = 0; oi < spec_.openings.size(); ++oi) {
-            auto& o = spec_.openings[oi];
             Face* host = nullptr;
             double shift = 0;
+            std::vector<std::pair<Face*, double>> pieces;
             for (auto& f : faces_) {
+                const auto& o = spec_.openings[oi];
                 // an extruded wall, or a vertical facet of a modelled volume (its own triangles, cut round the openings)
                 if (!f.wall && !(f.kind == "wall" && !f.meshTris.empty())) continue;
-                if (f.key == o.face) { host = &f; shift = 0; break; }
+                if (f.key == o.face) { host = &f; shift = 0; pieces.clear(); break; }
                 if (!f.wall) continue;
-                if (f.key.size() <= o.face.size() || f.key.compare(0, o.face.size(), o.face) != 0 || f.key[o.face.size()] != ':') continue;
-                const Part* part = nullptr;
-                for (const auto& pp : spec_.parts) if (pp.id == f.part) part = &pp;
-                if (!part || f.loop < 0 || static_cast<size_t>(f.loop) >= part->loops.size() || f.edge < 0 || static_cast<size_t>(f.edge) >= part->loops[static_cast<size_t>(f.loop)].size()) continue;
-                const V2 a = part->loops[static_cast<size_t>(f.loop)][static_cast<size_t>(f.edge)];
-                const double d = (V3{a.x, 0, a.z} - f.origin).dot(f.axisS);
+                const double d = pieceShift(f, o.face);
+                if (std::isnan(d)) continue;
                 const double sc = 0.5 * (o.s0 + o.s1) + d;
                 if (sc >= f.sMin && sc <= f.sMax) { host = &f; shift = d; }
+                if (spec_.clipOpenings && std::min(o.s1 + d, f.sMax - 0.03) - std::max(o.s0 + d, f.sMin + 0.03) >= 0.3) pieces.push_back({&f, d});
             }
-            if (!host) { rejectedOpenings_.push_back(o.id); continue; }
+            if (spec_.clipOpenings && pieces.size() > 1) {
+                // one copy per piece it overlaps, in that piece's frame (attached when the loop reaches it)
+                const OpeningSpec o = spec_.openings[oi];
+                int k = 0;
+                for (const auto& [f, d] : pieces) {
+                    OpeningSpec c = o;
+                    c.id = o.id + ":" + std::to_string(k++);
+                    c.face = f->key;
+                    c.s0 = std::max(o.s0 + d, f->sMin + 0.03);
+                    c.s1 = std::min(o.s1 + d, f->sMax - 0.03);
+                    spec_.openings.push_back(c);
+                }
+                continue;
+            }
+            if (!host) { rejectedOpenings_.push_back(spec_.openings[oi].id); continue; }
+            auto& o = spec_.openings[oi];
             o.s0 += shift; o.s1 += shift;
+            if (spec_.clipOpenings && host->wall && !o.scanned && o.t0 <= host->tBottom + 0.02 && o.t1 > host->tBottom + 0.35) o.t0 = host->tBottom + 0.03;
             attachOpening(*host, static_cast<int>(oi));
         }
+    }
+
+    /** For a piece of a split edge (<key>:<k>), the shift from the whole edge's frame (origin at its start) into the piece's; NaN when `f` is not a piece of `key`. */
+    double pieceShift(const Face& f, const std::string& key) const {
+        if (!f.wall || f.key.size() <= key.size() || f.key.compare(0, key.size(), key) != 0 || f.key[key.size()] != ':') return std::nan("");
+        const Part* part = nullptr;
+        for (const auto& pp : spec_.parts) if (pp.id == f.part) part = &pp;
+        if (!part || f.loop < 0 || static_cast<size_t>(f.loop) >= part->loops.size() || f.edge < 0 || static_cast<size_t>(f.edge) >= part->loops[static_cast<size_t>(f.loop)].size()) return std::nan("");
+        const V2 a = part->loops[static_cast<size_t>(f.loop)][static_cast<size_t>(f.edge)];
+        return (V3{a.x, 0, a.z} - f.origin).dot(f.axisS);
     }
 
     double wallTopAt(const Part& part, const V3& p) const { return part.roofAt(p.x, p.z); }
@@ -1383,8 +1415,45 @@ private:
     void emitFaceSweep(const FaceSweepSpec& fs) {
         size_t fi = faces_.size();
         for (size_t i = 0; i < faces_.size(); ++i) if (faces_[i].key == fs.face) { fi = i; break; }
+        if (fi == faces_.size() && fs.axis == 0 && !fs.placements.empty() && fs.profile.size() >= 2) {
+            // an edge this solid split in pieces (<key>:0, <key>:1, ...): each piece the placements overlap (clipOpenings),
+            // or the piece under their centre, the placements moved into that piece's frame (as openings are); along s only
+            double lo = 1e300, hi = -1e300;
+            for (const auto& pl : fs.placements) { lo = std::min({lo, pl[0], pl[1]}); hi = std::max({hi, pl[0], pl[1]}); }
+            bool any = false;
+            for (size_t i = 0; i < faces_.size(); ++i) {
+                const Face& f = faces_[i];
+                const double d = pieceShift(f, fs.face);
+                if (std::isnan(d)) continue;
+                const bool overlaps = std::min(hi + d, f.sMax) - std::max(lo + d, f.sMin) >= 0.3;
+                const double sc = 0.5 * (lo + hi) + d;
+                if (!(spec_.clipOpenings ? overlaps : (sc >= f.sMin && sc <= f.sMax))) continue;
+                FaceSweepSpec moved = fs;
+                moved.face = f.key;
+                moved.id = fs.id + ":" + std::to_string(i);
+                for (auto& pl : moved.placements) { pl[0] = std::clamp(pl[0] + d, f.sMin, f.sMax); pl[1] = std::clamp(pl[1] + d, f.sMin, f.sMax); }
+                emitFaceSweepOn(moved, i);
+                any = true;
+                if (!spec_.clipOpenings) break;
+            }
+            if (!any) rejectedSweeps_.push_back(fs.id);
+            return;
+        }
         if (fi == faces_.size() || fs.profile.size() < 2 || fs.placements.empty()) { rejectedSweeps_.push_back(fs.id); return; }
+        emitFaceSweepOn(fs, fi);
+    }
+
+    void emitFaceSweepOn(const FaceSweepSpec& in, size_t fi) {
         const Face& f = faces_[fi];
+        // a wall a neighbour part covers below: the profile (along s) never reaches below the wall's raised bottom
+        FaceSweepSpec clipped = in;
+        if (spec_.clipOpenings && f.wall && in.axis == 0) for (auto& q : clipped.profile) q.second = std::max(q.second, f.tBottom);
+        const FaceSweepSpec& fs = clipped;
+        if (spec_.clipOpenings && fs.axis == 0) {
+            double c0 = 1e300, c1 = -1e300;
+            for (const auto& q : fs.profile) { c0 = std::min(c0, q.second); c1 = std::max(c1, q.second); }
+            if (c1 - c0 < 0.3) { rejectedSweeps_.push_back(fs.id); return; }
+        }
         OutNode node;
         node.name = "facesweep:" + fs.id;
         node.kind = "sweep";
@@ -2101,6 +2170,8 @@ inline Spec readSpec(std::istream& in) {
             else if (name == "protrusionReach") s.protrusionReach = v;
             else if (name == "snapMaxM") s.snapMaxM = v;
             else if (name == "snapMinSupport") s.snapMinSupport = v;
+            else if (name == "snapWalls") s.snapWalls = v != 0;
+            else if (name == "clipOpenings") s.clipOpenings = v != 0;
             else if (name == "residualProud") s.residualProud = v;
             else if (name == "residualCut") s.residualCut = v;
             else if (name == "residualMinArea") s.residualMinArea = v;
