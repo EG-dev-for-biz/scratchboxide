@@ -25,6 +25,7 @@
 #include "scratchbox_kinematics.hpp"
 #include "scratchbox_skinning.hpp"
 #include "scratchbox_sb_rig.hpp"
+#include "scratchbox_sb_veggie_grove.hpp"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -712,71 +713,11 @@ NB_MODULE(scratchbox_native, m) {
     // ========================================================================
     // 4. NATURE & BOTANICAL SUBMODULE (Mtree & IvyGen)
     // ========================================================================
-    auto m_nat = m.def_submodule("nature", "Procedural botanical growth, trees and ivy");
+    auto m_nat = m.def_submodule("nature", "Ivy growth (trees: the vegetation submodule, SB-Veggie)");
 
-    nb::class_<SpaceColonizationConfig>(m_nat, "SpaceColonizationConfig")
-        .def(nb::init<>())
-        .def_rw("attractor_count", &SpaceColonizationConfig::attractorCount)
-        .def_rw("crown_center", &SpaceColonizationConfig::crownCenter)
-        .def_rw("crown_extents", &SpaceColonizationConfig::crownExtents)
-        .def_rw("root_anchor", &SpaceColonizationConfig::rootAnchor)
-        .def_rw("perception_radius", &SpaceColonizationConfig::perceptionRadius)
-        .def_rw("kill_radius", &SpaceColonizationConfig::killRadius)
-        .def_rw("branch_step_length", &SpaceColonizationConfig::branchStepLength)
-        .def_rw("clear_trunk_height", &SpaceColonizationConfig::clearTrunkHeight)
-        .def_rw("base_radius", &SpaceColonizationConfig::baseRadius)
-        .def_rw("tip_radius", &SpaceColonizationConfig::tipRadius)
-        .def_rw("da_vinci_exponent", &SpaceColonizationConfig::daVinciExponent)
-        .def_rw("generate_leaves", &SpaceColonizationConfig::generateLeaves)
-        .def_rw("use_detailed_leaves", &SpaceColonizationConfig::useDetailedLeaves)
-        .def_rw("spawn_lateral_twigs", &SpaceColonizationConfig::spawnLateralTwigs)
-        .def_rw("leaf_size", &SpaceColonizationConfig::leafSize)
-        .def_rw("leaves_per_tip", &SpaceColonizationConfig::leavesPerTip)
-        .def_rw("wood_color", &SpaceColonizationConfig::woodColor)
-        .def_rw("leaf_color", &SpaceColonizationConfig::leafColor)
-        .def_rw("use_twig_sprays", &SpaceColonizationConfig::useTwigSprays)
-        .def_rw("root_flare_multiplier", &SpaceColonizationConfig::rootFlareMultiplier)
-        .def_rw("root_flare_height", &SpaceColonizationConfig::rootFlareHeight)
-        .def_rw("volumetric_density", &SpaceColonizationConfig::volumetricDensity)
-        .def_rw("foliage_branch_radius_threshold", &SpaceColonizationConfig::foliageBranchRadiusThreshold)
-        .def_rw("lateral_twig_probability", &SpaceColonizationConfig::lateralTwigProbability)
-        .def_rw("outward_arch_factor", &SpaceColonizationConfig::outwardArchFactor)
-        .def_rw("growth_momentum_factor", &SpaceColonizationConfig::growthMomentumFactor)
-        .def_rw("cantilever_droop", &SpaceColonizationConfig::cantileverDroop)
-        .def_rw("is_shrub", &SpaceColonizationConfig::isShrub)
-        .def_rw("seed", &SpaceColonizationConfig::seed);
-
-    m_nat.def("generate_tree", [](const SpaceColonizationConfig& config) {
-        geometry::Mesh legacy = SpaceColonizationTreeGenerator::generateTree(config);
-        return legacy.toScratchboxMesh();
-    }, "config"_a, "Generate a realistic botanical tree using Runions space colonization");
-
-    m_nat.def("generate_tree_components", [](const SpaceColonizationConfig& config) {
-        auto [wood, foliage] = SpaceColonizationTreeGenerator::generateTreeComponents(config);
-        return std::make_pair(wood.toScratchboxMesh(), foliage.toScratchboxMesh());
-    }, "config"_a, "Generate separate wood and foliage components with proper material tagging and cylindrical UVs");
-
-    nb::class_<LSystemTreeParams>(m_nat, "LSystemTreeParams")
-        .def(nb::init<>())
-        .def_rw("max_depth", &LSystemTreeParams::maxDepth)
-        .def_rw("initial_length", &LSystemTreeParams::initialLength)
-        .def_rw("initial_radius", &LSystemTreeParams::initialRadius)
-        .def_rw("branch_angle_min", &LSystemTreeParams::branchAngleMin)
-        .def_rw("branch_angle_max", &LSystemTreeParams::branchAngleMax)
-        .def_rw("length_decay", &LSystemTreeParams::lengthDecay)
-        .def_rw("gravity_droop", &LSystemTreeParams::gravityDroop)
-        .def_rw("children_per_node", &LSystemTreeParams::childrenPerNode)
-        .def_rw("generate_leaves", &LSystemTreeParams::generateLeaves)
-        .def_rw("use_detailed_foliage_cards", &LSystemTreeParams::useDetailedFoliageCards)
-        .def_rw("transfer_smooth_normals", &LSystemTreeParams::transferSmoothNormals)
-        .def_rw("normal_transfer_mix_factor", &LSystemTreeParams::normalTransferMixFactor)
-        .def_rw("leaf_size", &LSystemTreeParams::leafSize)
-        .def_rw("seed", &LSystemTreeParams::seed);
-
-    m_nat.def("generate_lsystem_tree", [](const Vec3& root_pos, const LSystemTreeParams& params) {
-        geometry::Mesh legacy = generateProceduralTree(root_pos, params);
-        return legacy.toScratchboxMesh();
-    }, "root_pos"_a = Vec3(0, 0, 0), "params"_a = LSystemTreeParams(), "Generate an L-system tree with transferred envelope normals");
+    // Trees are not grown here: every tree in a scene is an SB-Veggie tree (the vegetation submodule below,
+    // scratchbox_sb_veggie_grove.hpp). The bare space-colonisation and L-system generators of scratchbox_nature.hpp
+    // are engine internals, not reachable from scripts.
 
     nb::class_<IvyConfig>(m_nat, "IvyConfig")
         .def(nb::init<>())
@@ -983,51 +924,48 @@ NB_MODULE(scratchbox_native, m) {
         return nb::bytes(reinterpret_cast<const char*>(glb.data()), glb.size());
     }, "meshes"_a, "Export multiple ScratchboxMeshes directly as a Python bytes object containing .glb data");
 
-    m_io.def("write_botanical_glb", [](const std::string& path, const std::vector<ScratchboxMesh>& meshes, int texture_res, float season, uint32_t seed) {
-        auto textures = botanical::BotanicalPbrTextureSynthesizer::createBotanicalEmbeddedTextures(texture_res, texture_res, season, seed, false);
-        auto glb = GlbWriter::serializeMultiMeshToGlb(meshes, textures);
-        std::ofstream out(path, std::ios::binary);
-        if (!out.is_open()) {
-            throw std::runtime_error("Failed to open file for writing: " + path);
+
+    // ========================================================================
+    // 8. VEGETATION SUBMODULE (SB-Veggie: scratchbox_sb_veggie_grove.hpp)
+    // ========================================================================
+    auto m_veg = m.def_submodule("vegetation", "SB-Veggie trees (the one vegetation generator): space colonisation inside described crowns, SB-Veggie leaf clusters, species and texture libraries, viewport levels of detail");
+
+    m_veg.def("grow_described_trees", [](const std::string& treesJson, const std::string& optionsJson) {
+        using namespace scratchbox::tile_vegetation;
+        try {
+            const io::GlbJsonValue doc = json::parse(treesJson);
+            const auto trees = parseDescribedTrees(doc);
+            const io::GlbJsonValue opt = json::parse(optionsJson.empty() ? std::string("{}") : optionsJson);
+            GroveOptions o;
+            auto num = [&](const char* k, double def) { return opt[k].type == io::GlbJsonValue::Number ? opt[k].num : def; };
+            auto str = [&](const char* k) { return opt[k].type == io::GlbJsonValue::String ? opt[k].str : std::string(); };
+            auto flag = [&](const char* k, bool def) { return opt[k].type == io::GlbJsonValue::Bool ? opt[k].b : def; };
+            o.triangleBudget = num("triangleBudget", 0);
+            o.sceneTriangleCap = num("sceneTriangleCap", o.sceneTriangleCap);
+            const std::string seed = str("seed");
+            if (!seed.empty()) {
+                if (seed.size() > 16 || seed.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos) throw VegetationError("bad_request", "seed must be 1-16 hex digits");
+                o.seed = std::stoull(seed, nullptr, 16);
+            }
+            o.speciesIndexPath = str("speciesIndexPath");
+            o.speciesIndexLabel = str("speciesIndexLabel");
+            o.textureIndexPath = str("textureIndexPath");
+            o.textureIndexLabel = str("textureIndexLabel");
+            o.lod = flag("lod", o.lod);
+            o.quantize = flag("quantize", o.quantize);
+            o.reveal = flag("reveal", o.reveal);
+            o.psiSeason = num("psiSeason", o.psiSeason);
+            o.latAbsDeg = num("latAbsDeg", o.latAbsDeg);
+            o.minSurfaceReached = num("minSurfaceReached", o.minSurfaceReached);
+            o.stageKey = str("stageKey");
+            if (doc["label"].type == io::GlbJsonValue::String) o.label = doc["label"].str.substr(0, 200);
+            const GroveResult r = growDescribedTrees(trees, o);
+            return nb::make_tuple(nb::bytes(reinterpret_cast<const char*>(r.glb.data()), r.glb.size()), r.statsJson, r.crownsJson);
+        } catch (const VegetationError& e) {
+            throw std::runtime_error("SB-Veggie " + e.code() + ": " + e.what());
         }
-        out.write(reinterpret_cast<const char*>(glb.data()), static_cast<std::streamsize>(glb.size()));
-        out.close();
-        return true;
-    }, "path"_a, "meshes"_a, "texture_res"_a = 512, "season"_a = 1.0f, "seed"_a = 42,
-       "Save botanical tree meshes to GLB embedding procedural Worley bark and botanical foliage PBR texture maps (Albedo, Normal, ORM)");
-
-    // ========================================================================
-    // 8. PLANT SUBMODULE (scratchbox_plant_builder.hpp)
-    // ========================================================================
-    auto m_plant = m.def_submodule("plant", "Procedural botanical plant presets and heroic biome assets");
-
-    nb::class_<plant::PlantBuildResult>(m_plant, "PlantBuildResult")
-        .def_rw("wood_mesh", &plant::PlantBuildResult::woodMesh)
-        .def_rw("foliage_mesh", &plant::PlantBuildResult::foliageMesh)
-        .def_rw("ground_clutter_mesh", &plant::PlantBuildResult::groundClutterMesh)
-        .def_rw("total_vertices", &plant::PlantBuildResult::totalVertices)
-        .def_rw("total_triangles", &plant::PlantBuildResult::totalTriangles)
-        .def("get_combined", &plant::PlantBuildResult::getCombined, "name"_a = "CombinedPlant");
-
-    m_plant.def("create_hero_redwood", [](const Vec3& pos, float height) {
-        return plant::PlantPresets::createHeroAncientRedwood(pos, height);
-    }, "pos"_a = Vec3(0, 0, 0), "height"_a = 28.0f, "Create hero ancient redwood with 8 buttress flutes and multi-tier conifer boughs");
-
-    m_plant.def("create_understory_dogwood", [](const Vec3& pos, float height) {
-        return plant::PlantPresets::createUnderstoryDogwood(pos, height);
-    }, "pos"_a = Vec3(0, 0, 0), "height"_a = 5.5f, "Create subcanopy understory dogwood tree");
-
-    m_plant.def("create_sword_fern_colony", [](const Vec3& pos, float radius, int fronds) {
-        return plant::PlantPresets::createSwordFernColony(pos, radius, fronds);
-    }, "pos"_a = Vec3(0, 0, 0), "radius"_a = 1.6f, "fronds"_a = 26, "Create arching sword fern colony");
-
-    m_plant.def("create_wood_sorrel_cushion", [](const Vec3& pos, float radius) {
-        return plant::PlantPresets::createWoodSorrelCushion(pos, radius);
-    }, "pos"_a = Vec3(0, 0, 0), "radius"_a = 0.95f, "Create trifoliate wood sorrel ground cushion");
-
-    m_plant.def("create_decaying_nurse_log", [](const Vec3& start, const Vec3& end, float radius) {
-        return plant::PlantPresets::createDecayingNurseLog(start, end, radius);
-    }, "start"_a = Vec3(-2, 0, 0), "end"_a = Vec3(2, 0, 0), "radius"_a = 0.5f, "Create decaying nurse log with polypore shelves");
+    }, "trees_json"_a, "options_json"_a = "{}",
+       "Grow described trees (scratchbox.sb-veggie-trees/1 JSON) as SB-Veggie trees; returns (trees GLB bytes, stats JSON, crowns JSON)");
 
     // ========================================================================
     // 9. CORE INVARIANT KERNEL (GeoMorph, ArchiMorph, Sensor Passes)
