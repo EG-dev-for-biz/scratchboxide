@@ -859,6 +859,46 @@ export function buildingOfNodeName(name: string, buildingIds: string[]): string 
 export interface ProceduralTexturingSummary {
     chosen: Record<string, number>; byVision: number; byColour: number; borrowed: number; entries: Record<string, number>; model?: string;
     groundRegions: number; shadowedCells: number;
+    /**
+     * mode 'inferred': the layers written in their inferred materials (file names in the stage's folder), ready to show as
+     * they are; no clay is written and the texture pass is not needed.
+     */
+    inferred?: { ground: string; roads?: string; massing: string };
+}
+
+/**
+ * How the rebuilt surfaces get their look (user decision 2026-10-22, "just infer the textures on each surface"):
+ * 'inferred' writes each surface in the library material the vision model inferred for it, at real scale, tinted to its
+ * lit colour, over the measured lit-colour layer (no photo texel drawn, no baked shadow); 'photo' prepares clays for the
+ * texture pass (the tile photo transferred onto each surface's own atlas, the library only where no photo reaches).
+ * SCRATCHBOX_STAGED_SURFACE_TEXTURES=photo selects the texture pass; anything else infers.
+ */
+export type ProceduralSurfaceMode = 'inferred' | 'photo';
+export function proceduralSurfaceMode(env: NodeJS.ProcessEnv = process.env): ProceduralSurfaceMode {
+    return env.SCRATCHBOX_STAGED_SURFACE_TEXTURES?.trim().toLowerCase() === 'photo' ? 'photo' : 'inferred';
+}
+
+/** Flat per-vertex normals of an indexed mesh (area-weighted face normals summed at each vertex). */
+function vertexNormals(positions: Float32Array, indices: Uint32Array): Float32Array {
+    const n = new Float32Array(positions.length);
+    for (let t = 0; t < indices.length; t += 3) {
+        const a = indices[t] * 3, b = indices[t + 1] * 3, c = indices[t + 2] * 3;
+        const ux = positions[b] - positions[a], uy = positions[b + 1] - positions[a + 1], uz = positions[b + 2] - positions[a + 2];
+        const vx = positions[c] - positions[a], vy = positions[c + 1] - positions[a + 1], vz = positions[c + 2] - positions[a + 2];
+        const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+        for (const v of [a, b, c]) { n[v] += nx; n[v + 1] += ny; n[v + 2] += nz; }
+    }
+    for (let v = 0; v < n.length; v += 3) { const l = Math.hypot(n[v], n[v + 1], n[v + 2]) || 1; n[v] /= l; n[v + 1] /= l; n[v + 2] /= l; }
+    return n;
+}
+
+/** Nodes merged into one mesh part with planar metre UVs (x east, z south), as the library road writer expects. */
+function metrePart(nodes: Array<{ positions: Float32Array; indices: Uint32Array }>): RoadMeshPart {
+    const pos: number[] = [], idx: number[] = [];
+    for (const n of nodes) { const base = pos.length / 3; for (const v of n.positions) pos.push(v); for (const i of n.indices) idx.push(base + i); }
+    const positions = Float32Array.from(pos), uv = new Float32Array((positions.length / 3) * 2);
+    for (let v = 0; v < positions.length / 3; v++) { uv[v * 2] = positions[v * 3]; uv[v * 2 + 1] = positions[v * 3 + 2]; }
+    return { positions, indices: Uint32Array.from(idx), uv };
 }
 
 /**
@@ -873,6 +913,8 @@ export async function prepareProceduralTexturing(input: {
     buildingIds: string[]; run?: Pick<MassingRun, 'dir' | 'report' | 'nodes'>;
     include: (x: number, z: number) => boolean; library: SurfaceLibrary;
     chain?: Pick<VisionModelChain<string>, 'generate'>; unavailable?: string; signal?: AbortSignal; onProgress?: (m: string) => void;
+    /** Default 'photo' (the texture pass); 'inferred' writes the layers in their inferred materials instead. */
+    mode?: ProceduralSurfaceMode;
 }): Promise<ProceduralTexturingSummary> {
     const say = input.onProgress ?? (() => undefined);
     const fs = await import('fs'), path = await import('path');
@@ -921,8 +963,40 @@ export async function prepareProceduralTexturing(input: {
         walls: pooledChoice('district:walls', pooled(walls.length ? walls : chosen), input.library, walls.length ? walls : chosen),
         roofs: pooledChoice('district:roofs', pooled(roofs.length ? roofs : chosen), input.library, roofs.length ? roofs : chosen)
     };
-    // the clays the texture pass lays its atlas on
     const massingNodes = readGlbNodes(fs.readFileSync(input.files.massing));
+    const entries: Record<string, number> = {}, chosenBy: Record<string, number> = {};
+    for (const c of chosen) { entries[c.entryId] = (entries[c.entryId] ?? 0) + 1; const k = c.key.startsWith('building:') ? 'buildings' : c.key.startsWith('ground:') ? 'ground' : c.key; chosenBy[k] = (chosenBy[k] ?? 0) + 1; }
+    const model = chosen.find(c => c.model)?.model;
+    const summary = { chosen: chosenBy, byVision: chosen.filter(c => c.by === 'vision').length, byColour: chosen.filter(c => c.by !== 'vision').length, borrowed: borrowed.length, entries, ...(model ? { model } : {}), groundRegions: regions.regions.length, shadowedCells: regions.stats.shadowedCells };
+    fs.writeFileSync(path.join(input.dir, 'materials.json'), JSON.stringify({ version: PROCEDURAL_MATERIALS_VERSION, mode: input.mode ?? 'photo', library: input.library.source, choices: chosen, borrowed, fallback, groundStats: regions.stats }, null, 1));
+    if (input.mode === 'inferred') {
+        // each surface in the material inferred for it, over the measured lit-colour layer; no photo texel is drawn
+        say('writing the rebuilt surfaces in their inferred materials');
+        const field = { photo, frame };
+        const groundSurface = { mesh: { positions: g0.positions, indices: g0.indices, uv: new Float32Array((g0.positions.length / 3) * 2) }, uvFrame: { x0: frame.x0, z0: frame.z0, widthM: frame.widthM, heightM: frame.heightM }, stats: { vertices: g0.positions.length / 3, triangles: g0.indices.length / 3, openVertices: 0, terrainVertices: 0, minY: 0, maxY: 0 } } as unknown as GroundSurface;
+        const note = { surfaces: 'inferred per surface by the vision model from the library (generated), tinted to the colour measured on lit tile-photo texels' };
+        writeLibraryGroundGlb(path.join(input.dir, 'ground_inferred.glb'), groundSurface, regions, choices, input.library, { ...note, uvFrame: frame }, { field });
+        let roads: string | undefined;
+        const cwChoice = choices.get('roads:carriageway'), kbChoice = choices.get('roads:kerbs') ?? cwChoice;
+        if (carriage.length && cwChoice && kbChoice) {
+            const mesh = { carriageway: metrePart(carriage), kerbs: metrePart(kerbs), sidewalks: metrePart([]) } as unknown as RoadMesh;
+            writeLibraryRoadsGlb(path.join(input.dir, 'roads_inferred.glb'), mesh, undefined, { carriageway: cwChoice, kerbs: kbChoice }, input.library, note, { field });
+            roads = 'roads_inferred.glb';
+        }
+        const runBuildings = input.run ? nodeBuildings(input.run, input.buildingIds) : [];
+        const byRunName = new Map((input.run?.nodes ?? []).map((n, i) => [n.name, runBuildings[i]]));
+        const nodes: MassingNode[] = massingNodes.map(n => {
+            const sb = (n.extras as { sb?: { provenance?: { label?: string; confidence?: number } } } | undefined)?.sb;
+            return { name: n.name, kind: /residual/.test(n.name) ? 'residual' : 'wall', provenance: sb?.provenance?.label ?? 'vector-modelled', confidence: sb?.provenance?.confidence ?? null, positions: n.positions, normals: vertexNormals(n.positions, n.indices), ref: new Int32Array(n.positions.length / 3), st: new Float32Array((n.positions.length / 3) * 2), indices: n.indices };
+        });
+        const provOf = new Map(massingNodes.map(n => [n.name, (n.extras as { sb?: { provenance?: ProvenanceRecord } } | undefined)?.sb?.provenance]));
+        writeLibraryMassingGlb(path.join(input.dir, 'massing_inferred.glb'), { nodes, report: undefined as never }, {
+            buildingOf: nodes.map(n => byRunName.get(n.name) ?? buildingOfNodeName(n.name, input.buildingIds)), choices, fallback, library: input.library,
+            provenanceOf: n => provOf.get(n.name) ?? ({ label: 'vector-modelled', confidence: null } as unknown as ProvenanceRecord), stage: 'massing', stageKey: path.basename(input.dir)
+        });
+        return { ...summary, inferred: { ground: 'ground_inferred.glb', ...(roads ? { roads } : {}), massing: 'massing_inferred.glb' } };
+    }
+    // the clays the texture pass lays its atlas on
     const runBuildings = input.run ? nodeBuildings(input.run, input.buildingIds) : [];
     const byRunName = new Map((input.run?.nodes ?? []).map((n, i) => [n.name, runBuildings[i]]));
     const names = massingNodes.map(n => n.name);
@@ -934,9 +1008,5 @@ export async function prepareProceduralTexturing(input: {
     }
     const spec = proceduralFillSpec({ library: input.library, choices, fallback, massing: { names, buildingOf: names.map(nm => byRunName.get(nm) ?? buildingOfNodeName(nm, input.buildingIds)) }, ground: regions, roads: carriage.length > 0 });
     fs.writeFileSync(path.join(input.dir, 'fill-spec.json'), JSON.stringify(spec));
-    fs.writeFileSync(path.join(input.dir, 'materials.json'), JSON.stringify({ version: PROCEDURAL_MATERIALS_VERSION, library: input.library.source, choices: chosen, borrowed, fallback, groundStats: regions.stats }, null, 1));
-    const entries: Record<string, number> = {}, chosenBy: Record<string, number> = {};
-    for (const c of chosen) { entries[c.entryId] = (entries[c.entryId] ?? 0) + 1; const k = c.key.startsWith('building:') ? 'buildings' : c.key.startsWith('ground:') ? 'ground' : c.key; chosenBy[k] = (chosenBy[k] ?? 0) + 1; }
-    const model = chosen.find(c => c.model)?.model;
-    return { chosen: chosenBy, byVision: chosen.filter(c => c.by === 'vision').length, byColour: chosen.filter(c => c.by !== 'vision').length, borrowed: borrowed.length, entries, ...(model ? { model } : {}), groundRegions: regions.regions.length, shadowedCells: regions.stats.shadowedCells };
+    return summary;
 }

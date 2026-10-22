@@ -103,6 +103,8 @@ import {
     locationEvidenceHandlers,
     LOCATION_REFERENCE_TOOL_DECLARATIONS,
     locationReferenceHandlers,
+    SURFACE_MATERIALS_TOOL_DECLARATIONS,
+    surfaceMaterialsHandlers,
     IMAGE_TO_PBR_TOOL_DECLARATIONS,
     imageToPbrHandlers,
     PBR_MATERIAL_TOOL_DECLARATIONS,
@@ -644,6 +646,9 @@ export function createDefaultToolRegistry(): ToolRegistry {
     }
     for (const decl of LOCATION_REFERENCE_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, locationReferenceHandlers[decl.name], 'workspace');
+    }
+    for (const decl of SURFACE_MATERIALS_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, surfaceMaterialsHandlers[decl.name], 'workspace');
     }
     for (const decl of ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, adaptiveMatchmoveHandlers[decl.name], 'workspace');

@@ -34,6 +34,7 @@ export * from './sb-script-guide-tools';
 export * from './virtual-geometry-tools';
 export * from './location-evidence-tools';
 export * from './location-reference-tools';
+export * from './surface-material-tools';
 
 
 import type { ToolDeclaration, ToolHandler } from './types';
@@ -42,6 +43,7 @@ import { TILE_REFINE_TOOL_DECLARATIONS, tileRefineHandlers } from './tile-refine
 import { VIRTUAL_GEOMETRY_TOOL_DECLARATIONS, virtualGeometryHandlers } from './virtual-geometry-tools';
 import { LOCATION_EVIDENCE_TOOL_DECLARATIONS, locationEvidenceHandlers } from './location-evidence-tools';
 import { LOCATION_REFERENCE_TOOL_DECLARATIONS, locationReferenceHandlers } from './location-reference-tools';
+import { SURFACE_MATERIALS_TOOL_DECLARATIONS, surfaceMaterialsHandlers } from './surface-material-tools';
 import { PBR_MATERIAL_TOOL_DECLARATIONS, pbrMaterialHandlers } from './pbr-material-tools';
 import { TURNAROUND_TOOL_DECLARATIONS, turnaroundHandlers } from './turnaround-tools';
 import { IMAGE_TO_PBR_TOOL_DECLARATIONS, imageToPbrHandlers } from './image-to-pbr-tools';
@@ -117,6 +119,7 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...VIRTUAL_GEOMETRY_TOOL_DECLARATIONS,
     ...LOCATION_EVIDENCE_TOOL_DECLARATIONS,
     ...LOCATION_REFERENCE_TOOL_DECLARATIONS,
+    ...SURFACE_MATERIALS_TOOL_DECLARATIONS,
     ...BOTANICAL_TREE_TOOL_DECLARATIONS,
     ...PANORAMA_TOOL_DECLARATIONS,
     ...UTDRA_TOOL_DECLARATIONS,
@@ -158,6 +161,7 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...virtualGeometryHandlers,
     ...locationEvidenceHandlers,
     ...locationReferenceHandlers,
+    ...surfaceMaterialsHandlers,
     ...panoramaHandlers,
     ...utdraHandlers,
     ...universal3DStructureHandlers,
