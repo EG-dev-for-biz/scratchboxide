@@ -111,18 +111,19 @@ async function main(): Promise<void> {
         report.views.push(entry);
         console.log(`[replica] ${v.id}: mask ${(entry.maskShare * 100).toFixed(1)}%; ${ARMS.map(a => `${a} ssim ${perceptual[a]?.ssim} edge ${perceptual[a]?.edgeChamferPx} dE ${perceptual[a]?.colourDeltaE} cov ${perceptual[a]?.coverage}`).join(' | ')}`);
         const writeSheet = () => {
+            // two short lines per tile (35 characters fit at this width): the metrics with the label, the judges below
+            const head = (id: string, short: string) => { const p = perceptual[id]; return p ? `${short} SSIM ${p.ssim ?? '-'} DE ${p.colourDeltaE == null ? '-' : Math.round(p.colourDeltaE)}` : short; };
             const sub = (id: string) => {
-                const p = perceptual[id];
                 const j = entry.replica?.stats?.[id], b = entry.believability?.[id];
-                return [j ? `REPLICA ${f1(j.overall)}` : '', b ? `BELIEVE ${f1(b.stat)}` : '', p ? `SSIM ${p.ssim ?? '-'} DE ${p.colourDeltaE ?? '-'}` : ''].filter(Boolean).join('  ');
+                return [j ? `REPLICA ${f1(j.overall)}` : '', b ? `BELIEVE ${f1(b.stat)}` : ''].filter(Boolean).join('  ') || 'NOT JUDGED';
             };
             const tiles = [
                 { image: rRef, label: LABEL.tiles, sublabel: entry.believability?.tiles ? `BELIEVE ${f1(entry.believability.tiles.stat)}` : 'REFERENCE' },
-                { image: rProc, label: LABEL.procedural, sublabel: sub('procedural') },
-                { image: rClay, label: LABEL.procedural_clay, sublabel: sub('procedural_clay') },
-                { image: rs.maskOverlay(rRef, mask), label: 'STRUCTURE MASK', sublabel: `${(entry.maskShare * 100).toFixed(1)}% OF THE VIEW` }
+                { image: rProc, label: head('procedural', 'B PROCEDURAL'), sublabel: sub('procedural') },
+                { image: rClay, label: head('procedural_clay', 'C CLAY'), sublabel: sub('procedural_clay') },
+                { image: rs.maskOverlay(rRef, mask), label: 'STRUCTURE MASK', sublabel: `${(entry.maskShare * 100).toFixed(1)}% OF VIEW` }
             ];
-            fs.writeFileSync(path.join(outDir, `${v.id}.png`), pm.composeGrid(tiles, { tileWidth: 640, columns: 2, title: `${v.id} - ${v.label}` }));
+            fs.writeFileSync(path.join(outDir, `${v.id}.png`), pm.composeGrid(tiles, { tileWidth: 640, columns: 2, title: `${v.id} - ${v.label}`.slice(0, 70) }));
             return tiles;
         };
         writeSheet();
