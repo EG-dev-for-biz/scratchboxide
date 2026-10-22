@@ -49,14 +49,18 @@ export const LAYER_OBJECTS_SCHEMA = 'scratchbox.layer-objects/1';
 /** The objects.json written beside a layer GLB. */
 export const LAYER_OBJECTS_FILE = 'objects.json';
 
-/** SCRATCHBOX_OBJECT_REUSE=0: builds never take a stored object instead of generating it (they still store what they make). */
+/**
+ * The scene object store is disconnected by default (user decision 2026-10-22: every build seen new, on its own merits,
+ * while the methods change; the infrastructure stays). SCRATCHBOX_OBJECT_REUSE=1: a build takes a stored object instead
+ * of generating it when its inputs are unchanged.
+ */
 export function objectReuseEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-    return env.SCRATCHBOX_OBJECT_REUSE !== '0';
+    return env.SCRATCHBOX_OBJECT_REUSE === '1';
 }
 
-/** SCRATCHBOX_OBJECT_STORE=0: finished builds keep no per-object versions (the layers are still in the asset store). */
+/** SCRATCHBOX_OBJECT_STORE=1: finished builds keep per-object versions (the layers are in the asset store either way). Off by default, as above. */
 export function objectStoreEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-    return env.SCRATCHBOX_OBJECT_STORE !== '0';
+    return env.SCRATCHBOX_OBJECT_STORE === '1';
 }
 
 export interface LayerObject {
