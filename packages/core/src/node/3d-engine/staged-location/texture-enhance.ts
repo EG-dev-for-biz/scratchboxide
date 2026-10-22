@@ -502,7 +502,11 @@ export async function enhanceTransferredAtlas(input: EnhanceTransferInput): Prom
         }
         const refs = pickReferenceViews(pts, nrm, views, input.maxReferences ?? 3);
         base.referencePanoIds = refs.map(r => r.view.panoId);
-        if (!refs.length) {
+        // 'sharpen' only ever recovers detail a real photo actually shows, so it has nothing to do without one. 'recreate'
+        // relights what the tile transfer already has (district-mode builds, most of the time, register no Street View
+        // view at all - "not an isolated structure" - so requiring one here made the whole rung dead weight for them);
+        // a reference is still used to ground the material's true colour when one is available, just not required.
+        if (!refs.length && mode === 'sharpen') {
             return { record: { ...base, reasonCode: 'enhance_no_reference', reason: `no registered Street View view sees ${job.label}, so there is nothing real to ground an enhancement; the transferred texture is kept` } };
         }
         if (job.gateable < MIN_GATEABLE_TEXELS || job.fill < MIN_CHART_FILL) {

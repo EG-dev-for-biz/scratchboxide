@@ -22,7 +22,8 @@ import { MediaModelUnavailableError } from '../src/common/errors/pipeline-errors
 import { decodePng, encodePng } from '../src/node/texture-processing';
 import { decodeImageInMemory, transferTilePhotoFromGlb, type RgbaImage8 } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 import {
-    enhancementGate, enhanceTransferredAtlas, RECREATE_GATE, resizeRgba, type EnhanceModelAnswer, type EnhanceModelClient, type EnhanceModelRequest
+    enhancementGate, enhanceTransferredAtlas, RECREATE_GATE, resizeRgba,
+    type EnhanceModelAnswer, type EnhanceModelClient, type EnhanceModelRequest, type EnhanceReferenceView
 } from '../src/node/3d-engine/staged-location/texture-enhance';
 import { facadeAlbedo, facadeAtlas, facadeViews } from './helpers/texture-pass-fixtures';
 import { buildTileGlb, facadeTileSheet } from './helpers/tile-photo-glb';
@@ -321,6 +322,19 @@ describe('tile photo recreation (tile-photo-recreated, mode: recreate)', () => {
         expect(['enhance_colour_drift', 'enhance_layout_changed']).toContain(underSharpenGate.reasonCode);
         const recoloured = enhancementGate(original, unsharp(tint(original, [1.25, 0.95, 0.7]), 1.2), mask, RECREATE_GATE);
         expect(recoloured).toMatchObject({ pass: false, reasonCode: 'enhance_material_drift' });
+    });
+
+    it('runs with no registered Street View view at all - district-mode builds register none ("not an isolated structure") - unlike sharpen mode, which has nothing to do without one', async () => {
+        const atlas = facadeAtlas(SIDE);
+        const transfer = await transferred(atlas);
+        const client = replayClient({ 'facade/s00': answerWith(img => unsharp(brightenLinear(img, 2.2), 1.2)) });
+        const noViews: EnhanceReferenceView[] = [];
+        const sharpenRes = await enhanceTransferredAtlas({ atlas, transfer, views: noViews, client, mode: 'sharpen' });
+        expect(sharpenRes.charts[0]).toMatchObject({ decision: 'skipped', reasonCode: 'enhance_no_reference' });
+        const recreateRes = await enhanceTransferredAtlas({ atlas, transfer, views: noViews, client, mode: 'recreate' });
+        expect(recreateRes.charts[0].decision).toBe('accepted');
+        expect(recreateRes.charts[0].referencePanoIds).toEqual([]);
+        expect(recreateRes.planes.provenance.map(p => p.source)).toEqual(['tile-photo-transfer', 'tile-photo-recreated']);
     });
 
     it('enhanceTransferredAtlas mode "recreate": accepts a relit chart, labels it tile-photo-recreated, names the lighting change honestly', async () => {
