@@ -83,7 +83,7 @@ const STATUS_RANK: Record<StageStatus, number> = { pending: 0, running: 1, commi
  */
 export function mergeStageEvent(state: StagedBuildState, event: StageEvent, authority: StagedBuildState = state): StagedBuildState {
     if (event.runId !== state.runId) return state;
-    // a step outside this kind of build (a pipeline G only build) is left out of the progress view
+    // a step outside this kind of build (a procedural-only build) is left out of the progress view
     if (event.outOfScope) return state.stages.some(s => s.stage === event.stage) ? { ...state, stages: state.stages.filter(s => s.stage !== event.stage) } : state;
     const existing = state.stages.find(s => s.stage === event.stage);
     if (existing) {

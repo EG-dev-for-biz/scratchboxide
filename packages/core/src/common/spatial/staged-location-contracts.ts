@@ -1047,7 +1047,7 @@ export interface StageEvent {
     degradations: DegradationRecord[];
     timings: StageTimings;
     model?: VisionModelUse;
-    /** A skip that is not part of this kind of build (a pipeline G only build): the progress view leaves the stage out. */
+    /** A skip that is not part of this kind of build (a procedural-only build): the progress view leaves the stage out. */
     outOfScope?: boolean;
 }
 

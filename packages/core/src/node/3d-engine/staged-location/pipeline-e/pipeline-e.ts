@@ -80,7 +80,7 @@ export const MASSING_PARAMS = {
 export interface MassingStageInput {
     /** Mass from footprints over Google's modelled volumes (MassingInputs.preferExtrusion): pipeline G's request. */
     preferExtrusion?: boolean;
-    /** false: no residual audit of the native run (pipeline G only: the scan residue is not part of its build). */
+    /** false: no residual audit of the native run (a procedural-only build: the scan residue is not part of it). */
     audit?: boolean;
     /** The tile the faces are textured from (the devegetated tile when the trees were measured). */
     tilePath: string;

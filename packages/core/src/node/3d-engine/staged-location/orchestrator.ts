@@ -205,8 +205,8 @@ export const VISION_STAGE_MARGIN_MS = 20_000;
 const MIN_RUNS_WINDOW_MS = 30_000;
 
 /** Canonical order (-1: no layer), overlay title and per-stage time limit. */
-/** Why a stage is skipped on a procedural request: the 3D Building button runs pipeline G and only what G builds on. */
-const G_ONLY = 'pipeline G only: the 3D Building build runs only the steps pipeline G needs';
+/** Why a stage is skipped on a procedural request (the 3D Building button): it runs its procedural pipeline and only what that builds on. */
+const PROCEDURAL_ONLY = 'procedural build only: the 3D Building build runs only the steps its procedural pipeline needs';
 
 export const STAGES = {
     resolve: { order: -1, title: 'Place', budgetMs: 10_000 },
@@ -744,13 +744,13 @@ class Runner {
         return this.now() >= this.deadlineAt;
     }
 
-    /** A pipeline G only build: every skip is a step outside that build, left out of the progress view. */
-    gOnly = false;
+    /** A procedural-only build (the 3D Building button): every skip is a step outside that build, left out of the progress view. */
+    proceduralOnly = false;
 
     skip(id: StageId, reason: string, degradations: DegradationRecord[] = []): void {
         const s = this.run.summary(id);
         if (s.status !== 'pending') return;
-        this.run.emit(id, 'skipped', { reason, degradations, ...(this.gOnly ? { outOfScope: true } : {}) });
+        this.run.emit(id, 'skipped', { reason, degradations, ...(this.proceduralOnly ? { outOfScope: true } : {}) });
     }
 
     /**
@@ -1199,7 +1199,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     const run = new StagedRun(runId, request, ctx, now, artifactId, intoActive);
     runningStages = () => STAGE_IDS.filter(id => run.summary(id).status === 'running');
     const runner = new Runner(run, ctx, now);
-    runner.gOnly = request.procedural === true;
+    runner.proceduralOnly = request.procedural === true;
     const base = `${slug(request.query)}${request.isolate ? '_iso' : ''}`;
     const persist = () => {
         const rec: RunRecord = {
@@ -1527,7 +1527,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
 
         // ---------------- vehicles (vehicle-removal.ts): every later stage builds on the scan without them ----------------
         const devehicled = await (async (): Promise<typeof t.extraction | undefined> => {
-            if (request.procedural === true) { runner.skip('vehicles', G_ONLY); return undefined; }
+            if (request.procedural === true) { runner.skip('vehicles', PROCEDURAL_ONLY); return undefined; }
             if (!vehicleRemovalEnabled() || !deps.vehicleRemoval) { runner.skip('vehicles', 'vehicle removal is off (SCRATCHBOX_STAGED_VEHICLES=0, or not in these deps)'); return undefined; }
             const vis = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
             const notRemoved = (reason: string, cause?: unknown, transient = false) => run.degrade(record('vehicles', 'vehicles_not_removed', {
@@ -1609,7 +1609,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
 
         // ---------------- terrain (starts now and runs beside everything else; needs only the extraction's frame) ----------------
         if (request.procedural === true) {
-            runner.skip('terrain', G_ONLY);
+            runner.skip('terrain', PROCEDURAL_ONLY);
         } else if (!deps.elevation) {
             runner.skip('terrain', 'no Google Maps API key for the Elevation API, so the ground around the place is not measured');
         } else {
@@ -2697,14 +2697,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             });
             strip = measured.status === 'committed' ? measured.value : undefined;
         } else {
-            runner.skip('trees-measure', request.procedural === true ? G_ONLY : 'trees were not asked for');
+            runner.skip('trees-measure', request.procedural === true ? PROCEDURAL_ONLY : 'trees were not asked for');
         }
 
         // ---------------- roads (SB-Roadie: Google's road centrelines measured kerb to kerb on the tree-stripped scan; runs beside the remesh) ----------------
         let roadsMeasured: RoadSurface[] | undefined;
         type RoadStageValue = { stats: RoadMesh['stats']; measuredKerbShare: number; photo: { width: number; height: number; texelM: number; ms: number }; markings?: { runs: number; markings: number; dashed: number; solid: number } } | undefined;
         const roadsPromise: Promise<unknown> = (async () => {
-            if (request.procedural === true) { runner.skip('roads', G_ONLY); return; }
+            if (request.procedural === true) { runner.skip('roads', PROCEDURAL_ONLY); return; }
             if (!sbRoadieEnabled()) { runner.skip('roads', 'SB-Roadie is shelved for now (SCRATCHBOX_STAGED_ROADS=1 to try it)'); return; }
             const covered = extraction.coveredRadiusM;
             // the vector evidence the sizing fetched (an isolate), else fetched now for the extraction's cover (a district)
@@ -4104,7 +4104,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- trees (plant) ‖ the rebuild ----------------
         const treesRun = async (): Promise<{ trees?: LocationClayTrees; putBack?: { triangles: number; crowns: number; reason: string } }> => {
             const remeshed = remeshedNow;
-            if (!request.trees || request.procedural === true) { runner.skip('trees', request.procedural === true ? G_ONLY : 'trees were not asked for'); return {}; }
+            if (!request.trees || request.procedural === true) { runner.skip('trees', request.procedural === true ? PROCEDURAL_ONLY : 'trees were not asked for'); return {}; }
             if (!strip) { runner.skip('trees', 'the trees were not measured, so the scan keeps its own'); return {}; }
             if (!remeshed) {
                 const rec = run.degrade(record('trees', 'trees_stay_scanned', {
