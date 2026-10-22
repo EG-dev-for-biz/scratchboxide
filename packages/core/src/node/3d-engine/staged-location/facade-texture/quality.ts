@@ -30,8 +30,12 @@ export const SEAM_BAND_M = 0.4;
 export const SEAM_MIN_SHIFT_M = 0.15;
 /** The largest jump searched, metres. */
 export const SEAM_MAX_SHIFT_M = 1.5;
-/** The bands must match at least this well somewhere (NCC), and in place at most SEAM_IN_PLACE of that. */
-export const SEAM_MIN_NCC = 0.5;
+/**
+ * The bands must match at least this well somewhere (NCC), and in place at most SEAM_IN_PLACE of that. A seam is the same
+ * content shifted, so it matches strongly; a change of rhythm between two real storeys (an entablature's brackets over an
+ * arcade's capitals: 0.53 at 0.2 m on the Haughwout's Broome St redraw) matches weakly and is not one.
+ */
+export const SEAM_MIN_NCC = 0.7;
 export const SEAM_IN_PLACE = 0.5;
 /** Rows (or columns) whose step to the next is under this share of the wall's median step count as repeating. */
 export const SMEAR_STEP_SHARE = 0.2;
