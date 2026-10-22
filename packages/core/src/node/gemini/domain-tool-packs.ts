@@ -31,6 +31,7 @@ import {
 import { UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS } from './tools/universal-3d-structure-tools';
 import { TILE_REFINE_TOOL_DECLARATIONS } from './tools/tile-refine-tools';
 import { LOCATION_EVIDENCE_TOOL_DECLARATIONS } from './tools/location-evidence-tools';
+import { LOCATION_REFERENCE_TOOL_DECLARATIONS } from './tools/location-reference-tools';
 import { MESH_SHAPING_TOOL_DECLARATIONS } from './tools/mesh-shaping-tools';
 import { SB_RIG_TOOL_DECLARATIONS } from './tools/sb-rig-tools';
 import { ALGORITHMIC_UV_TOOL_DECLARATIONS } from './tools/algorithmic-uv-tools';
@@ -94,6 +95,7 @@ export const GEOSPATIAL_3D_PACK: ToolPackDefinition = {
         ...UTDRA_TOOL_DECLARATIONS,
         ...TILE_REFINE_TOOL_DECLARATIONS,
         ...LOCATION_EVIDENCE_TOOL_DECLARATIONS,
+        ...LOCATION_REFERENCE_TOOL_DECLARATIONS,
         ...UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS,
         ...WEBXR_GEOSPATIAL_TOOL_DECLARATIONS,
         ...GEOBOX_PRECISION_TOOL_DECLARATIONS
@@ -104,6 +106,7 @@ export const GEOSPATIAL_3D_PACK: ToolPackDefinition = {
         ...UTDRA_TOOL_DECLARATIONS.map(d => d.name),
         ...TILE_REFINE_TOOL_DECLARATIONS.map(d => d.name),
         ...LOCATION_EVIDENCE_TOOL_DECLARATIONS.map(d => d.name),
+        ...LOCATION_REFERENCE_TOOL_DECLARATIONS.map(d => d.name),
         ...UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS.map(d => d.name),
         ...WEBXR_GEOSPATIAL_TOOL_DECLARATIONS.map(d => d.name),
         ...GEOBOX_PRECISION_TOOL_DECLARATIONS.map(d => d.name)
