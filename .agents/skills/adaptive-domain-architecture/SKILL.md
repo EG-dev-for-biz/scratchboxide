@@ -60,7 +60,7 @@ The **Adaptive Domain Architecture (ADA)** is the foundational architectural par
 ### Pillar 4: Ephemeral Execution (Python Nanobind & JIT C++20)
 - **Zero Static Scene Files**: Never write `arctic_outpost.cpp`, `desert_temple.cpp`, or similar one-off generator files into `scripts/` or `src/`.
 - **Dual Execution Engines**:
-  1. *Python Nanobind Dynamic Sandbox (`execute_3d_python_script`)*: Scripts run in a sandboxed Python subprocess importing `scratchbox as sb` (`sb.core`, `sb.shaper`, `sb.plant`, `sb.nature`, `sb.human`, `sb.terrain`), driving native C++20 algorithms directly in memory with sub-millisecond execution.
+  1. *Python Nanobind Dynamic Sandbox (`execute_3d_python_script`)*: Scripts run in a sandboxed Python subprocess importing `scratchbox as sb` (`sb.core`, `sb.shaper`, `sb.create_tree` for SB-Veggie trees, `sb.human`, `sb.terrain`), driving native C++20 algorithms directly in memory with sub-millisecond execution.
   2. *Ephemeral C++20 JIT Compilation (`NativeCppCompilerService`)*: On-the-fly Apple Clang compilation (`clang++ -std=c++20 -O3`) synthesizing temporary procedural modules in memory, streaming binary `.glb` chunks, and cleaning up object files immediately.
 - Both paths preserve non-destructive reproducibility by attaching the procedural source directly to scene metadata (`data.cppGenerator.sourceCode` or `data.pythonGenerator.sourceCode`) without polluting the repo.
 

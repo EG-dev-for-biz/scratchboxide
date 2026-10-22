@@ -6,7 +6,7 @@ These prompt templates are engineered specifically for Google's model architectu
 
 ## 1. Procedural 3D & C++20 Geometry Synthesis (Gemini 2.5 Pro / 3.7 Pro)
 
-Use this template when synthesizing procedural geometry, Marching Cubes SDFs, or botanical L-systems using the native Scratchbox C++20 engine:
+Use this template when synthesizing procedural geometry or Marching Cubes SDFs using the native Scratchbox C++20 engine (vegetation is never synthesized here: trees are SB-Veggie trees, `sb.create_tree` / `botanical_synthesize_tree`):
 
 ```text
 System Instruction:

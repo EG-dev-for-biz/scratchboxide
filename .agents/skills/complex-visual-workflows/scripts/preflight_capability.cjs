@@ -70,7 +70,8 @@ function analyzeVisualPrompt(prompt) {
     nativeHeaders.push('#include "scratchbox_engine.hpp"');
     nativeHeaders.push('#include "scratchbox_math.hpp"');
     nativeHeaders.push('#include "scratchbox_archie.hpp"');
-    nativeHeaders.push('#include "scratchbox_veggie.hpp"');
+    nativeTools.push('botanical_synthesize_tree / sb.create_tree (SB-Veggie: the only vegetation generator)');
+    nativeHeaders.push('#include "scratchbox_sb_veggie_grove.hpp"');
     cliCommands.push('sbox bake --clay --resolution 4k');
   }
 

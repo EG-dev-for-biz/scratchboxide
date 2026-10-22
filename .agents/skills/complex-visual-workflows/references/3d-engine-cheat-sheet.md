@@ -87,7 +87,7 @@ Include directly in ephemerally compiled C++ modules:
 | `scratchbox_math.hpp` | `Vec3`, `Quat`, `Mat4`, SIMD ops | High-performance vector mathematics |
 | `scratchbox_shaper.hpp` | `BernsteinFFD`, `Taper`, `Twist`, `Bend` | Parametric mesh reshaping and non-linear deformation |
 | `scratchbox_archie.hpp` | `ArchieBuilding`, `FenestrationBay` | Architectural massing, mansard roofs, facade relief |
-| `scratchbox_veggie.hpp` | `VeggieTree`, `LSystemGrowth` | Botanical branching, Golden Ratio phyllotaxis ($137.5^\circ$) |
+| `scratchbox_sb_veggie_grove.hpp` | `DescribedTree`, `growDescribedTrees` | SB-Veggie trees from measurements (the only vegetation generator; generator code using the older tree generators is refused). In scenes use `sb.create_tree` or `botanical_synthesize_tree` |
 | `scratchbox_hair.hpp` | `HarmonicGuideCurves`, `MarschnerAlbedo` | Analytical hair, fur, and groom splat projection |
 | `scratchbox_spz.hpp` | `SpzEncoder`, `SpzDecoder` | Niantic SPZ v2 streaming serialization ($< 100$ms) |
 | `scratchbox_4dgs_humanoid.hpp` | `SbHumanAvatar`, `LinearBlendSkinning` | 22-joint canonical dynamic humanoid performer |
