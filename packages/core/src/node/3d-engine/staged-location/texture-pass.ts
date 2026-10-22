@@ -114,7 +114,7 @@ export interface TexturePassSources {
     /** Registration residual (m) for D's distance gate max(0.25, 2 * residual). */
     registrationResidualM?: number;
     /** Optional model enhancement of D's texels; absent = the rung is not attempted, with the reason. */
-    enhance?: { client: EnhanceModelClient; models?: string[]; budgetMs?: number };
+    enhance?: { client: EnhanceModelClient; models?: string[]; budgetMs?: number; mode?: 'sharpen' | 'recreate' };
     enhanceUnavailable?: string;
     /**
      * Photo tier A (photo-tier-rectify.ts): rectified Street View pixels on the fitted planar faces, above the projection.
@@ -467,7 +467,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
                 const timer = setTimeout(() => budget.abort(Object.assign(new Error(`the enhancement passed its ${Math.round(budgetMs / 1000)} s budget`), { name: 'TimeoutError' })), budgetMs);
                 try {
                     const refs: EnhanceReferenceView[] = src.views.map(v => ({ panoId: v.panoId, camera: v.camera, image: v.image }));
-                    const res = await enhanceTransferredAtlas({ atlas, transfer, views: refs, client: src.enhance.client, ...(src.enhance.models ? { models: src.enhance.models } : {}), signal: src.signal, budgetSignal: budget.signal });
+                    const res = await enhanceTransferredAtlas({ atlas, transfer, views: refs, client: src.enhance.client, ...(src.enhance.models ? { models: src.enhance.models } : {}), ...(src.enhance.mode ? { mode: src.enhance.mode } : {}), signal: src.signal, budgetSignal: budget.signal });
                     const before = new Set(transfer.degradations);
                     degradations.push(...res.planes.degradations.filter(d => !before.has(d)));
                     transfer = res.planes;

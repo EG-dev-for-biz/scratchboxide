@@ -47,8 +47,13 @@ import { decodeImageInMemory, type RgbaImage8 } from './tile-texture-transfer';
 export const LIGHTING_MODEL_LITE = 'gemini-3.1-flash-lite-image';
 export const LIGHTING_MODEL_FULL = 'gemini-3.1-flash-image';
 
-/** SCRATCHBOX_TEXTURE_LIGHTING=1 turns the correction on for a server (off by default). */
-export const lightingCorrectionEnabled = (): boolean => process.env.SCRATCHBOX_TEXTURE_LIGHTING === '1';
+/**
+ * On by default (user decision, 2026-10-21: the photo-tile scan should inform texture, not be presented as-is - the
+ * same now applies to its baked lighting, which this is the detail-locked way to remove: the model's own pixels are
+ * never used, only a smoothed lighting-ratio field measured against the real photo). SCRATCHBOX_TEXTURE_LIGHTING=0
+ * turns it back off.
+ */
+export const lightingCorrectionEnabled = (): boolean => process.env.SCRATCHBOX_TEXTURE_LIGHTING !== '0';
 
 /**
  * Experiment arm (photo-match bake-off): the tile correction forced on. Every map of the layer's atlas is sent (a scan's island

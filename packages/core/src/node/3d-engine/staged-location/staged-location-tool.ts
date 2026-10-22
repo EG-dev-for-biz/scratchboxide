@@ -269,11 +269,18 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
             metadataCachePath: path.join(cache.dir, 'streetview', 'metadata.json')
         },
         vision,
-        // the texture pass's optional enhancement rung: the image model edits the tile transfer, kept only past its edge
-        // gate (SCRATCHBOX_TEXTURE_ENHANCE=0 turns the rung off); and the model lighting correction of the photos, detail-locked
-        // (texture-lighting.ts; SCRATCHBOX_TEXTURE_LIGHTING=1 turns it on, SCRATCHBOX_TEXTURE_LIGHTING_MODELS picks the model)
+        // the texture pass's model texture rung: the image model redraws the tile transfer, kept only past its gate
+        // (SCRATCHBOX_TEXTURE_ENHANCE=0 turns the rung off); default mode 'recreate' (user decision, 2026-10-21) removes
+        // the scan's own baked shadow/highlight and recovers the material's true colour, gated on structure and
+        // hue/chroma, not on lighting (texture-enhance.ts RECREATE_GATE; SCRATCHBOX_TEXTURE_ENHANCE_MODE=sharpen reverts
+        // to the earlier, lighting-locked sharpen-only mode). The detail-locked model lighting correction of the photos
+        // (texture-lighting.ts; on by default, SCRATCHBOX_TEXTURE_LIGHTING=0 turns it off) runs alongside it, wherever a
+        // registered Street View view agrees - a second, independent de-light pass, not a duplicate of the one above.
         textures: 'client' in vision ? {
-            ...(process.env.SCRATCHBOX_TEXTURE_ENHANCE !== '0' ? { enhance: genAiEnhanceClient(vision.client) } : {}),
+            ...(process.env.SCRATCHBOX_TEXTURE_ENHANCE !== '0' ? {
+                enhance: genAiEnhanceClient(vision.client),
+                enhanceMode: process.env.SCRATCHBOX_TEXTURE_ENHANCE_MODE === 'sharpen' ? 'sharpen' as const : 'recreate' as const
+            } : {}),
             ...(lightingCorrectionEnabled() ? { lighting: genAiEnhanceClient(vision.client), lightingModels: lightingModels() } : {})
         } : {}
     };

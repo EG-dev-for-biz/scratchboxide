@@ -352,6 +352,8 @@ export interface StagedLocationDeps {
      */
     textures?: {
         enhance?: EnhanceModelClient; enhanceModels?: string[]; maxDensityTexelsPerMeter?: number; maxSide?: number; disabled?: string;
+        /** 'recreate' (default) removes the tile transfer's own baked shadow/highlight and recovers the material's true colour, gated on structure and hue/chroma; 'sharpen' is the earlier, lighting-locked mode. See texture-enhance.ts. */
+        enhanceMode?: 'sharpen' | 'recreate';
         /**
          * The model lighting correction of the Street View photos and the tile photo (texture-lighting.ts; SCRATCHBOX_TEXTURE_LIGHTING);
          * absent = not run. `lightingModels` default lightingModels().
@@ -2126,7 +2128,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const clay = fs.readFileSync(target.file);
                 const views = src.views;
                 const { tile, tileUnavailable, tileSha, occluder, context, wideViews } = src.prepared;
-                const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), src.imagesSha, src.wideSha, src.poseHash, tileSha, src.palette, !!enhance, src.density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces), ...(!(rebuildOut.refit ?? rebuildOut.fit) && views.length ? ['no-fit-held-out-gate/2'] : []), ...(lightingClient && views.length ? [`light:${lightingModelIds.join(',')}:${lightingPromptVariant()}:${src.lightingViews?.length ?? 0}`] : []), ...(arm.key ? [arm.key] : []), ...(src.ownershipKey ? [src.ownershipKey] : []), ...(src.temporaryKey ? [src.temporaryKey] : []), src.materialsKey);
+                const key = stageKey(TEXTURE_PASS_VERSION, target.layer.layer, sha256Bytes(clay), src.imagesSha, src.wideSha, src.poseHash, tileSha, src.palette, !!enhance, deps.textures?.enhanceMode ?? 'recreate', src.density, deps.textures?.maxSide ?? 2048, surfacesKey(target.surfaces), ...(!(rebuildOut.refit ?? rebuildOut.fit) && views.length ? ['no-fit-held-out-gate/2'] : []), ...(lightingClient && views.length ? [`light:${lightingModelIds.join(',')}:${lightingPromptVariant()}:${src.lightingViews?.length ?? 0}`] : []), ...(arm.key ? [arm.key] : []), ...(src.ownershipKey ? [src.ownershipKey] : []), ...(src.temporaryKey ? [src.temporaryKey] : []), src.materialsKey);
                 let loo: NonNullable<TextureLayerOutcome['measureLoo']> | undefined;
                 const entry = await cache.run<Omit<TextureLayerOutcome, 'glb'>>('textures', key, async dir => {
                     const run1 = (bakeViews: ProjectionView[], bakeUnavailable: string | undefined) => (texturePool ? texturePool.textureLayer.bind(texturePool) : textureLayer)({ layerKey: target.layer.layer, clayGlb: clay, ...(target.surfaces?.length ? { surfaces: target.surfaces } : {}) }, {
@@ -2135,7 +2137,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         delight: { latitude: run.geoAnchor.lat, longitude: run.geoAnchor.lng },
                         ...(tile ? { tile } : {}), ...(tileUnavailable ? { tileUnavailable } : {}),
                         ...(src.residual !== undefined ? { registrationResidualM: src.residual } : {}),
-                        ...(enhance ? { enhance: { client: enhance, ...(deps.textures?.enhanceModels ? { models: deps.textures.enhanceModels } : {}) } } : { enhanceUnavailable: 'no image model client is configured for it' }),
+                        ...(enhance ? { enhance: { client: enhance, ...(deps.textures?.enhanceModels ? { models: deps.textures.enhanceModels } : {}), ...(deps.textures?.enhanceMode ? { mode: deps.textures.enhanceMode } : {}) } } : { enhanceUnavailable: 'no image model client is configured for it' }),
                         ...(src.lightingViews?.length ? { lightingViews: src.lightingViews } : {}), ...(lightingClient && bakeViews.length ? { lighting: { client: lightingClient, models: lightingModelIds } } : {}), ...(src.lightingUnavailable ? { lightingUnavailable: src.lightingUnavailable } : {}),
                         palette: src.palette, densityTexelsPerMeter: src.density, maxSide: deps.textures?.maxSide ?? 2048, signal: io.signal,
                         onProgress: m => { io.progress(`textures: ${m}`); progress(m); run.emit(stage, 'running', { message: m }); }
