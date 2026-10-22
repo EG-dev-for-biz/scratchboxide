@@ -14,7 +14,9 @@
  * the standoff that frames it, then up to RING_VIEWS more 4 m apart and spread in bearing. A synthetic camera can also rise:
  * each street eye gets a twin at the face's mid-height on the same spot. Every station is then measured from its own depth
  * (a clay render of the tile): kept only when at least MIN_ON_FACE of its frame lies on its face and under MAX_BLOCKED is
- * closer than BLOCKED_M (a camera inside or against a neighbour). Nothing here knows what the structure is.
+ * closer than BLOCKED_M (a camera inside or against a neighbour). Before them, AERIAL_VIEWS aerials frame the whole
+ * structure from above (aerialStations), so the upper floors and the roof edge are surveyed too. Nothing here knows what
+ * the structure is.
  */
 
 import { stationFromLookAt } from '../../../../common/spatial/SurveySynthesisEngine';
@@ -40,6 +42,13 @@ export const MIN_FACE_AREA_M2 = 40;
 export const MIN_ON_FACE = 0.15;
 export const MAX_BLOCKED = 0.05;
 export const BLOCKED_M = 1.5;
+/** Aerial stations: this many, evenly in bearing (the first on the diagonal off the largest wall), this far above the horizon. */
+export const AERIAL_VIEWS = 4;
+export const AERIAL_ELEVATION_DEG = 35;
+/** An aerial is kept when this share of its frame lies on the walls together (the rest is roof, sky and street). */
+export const AERIAL_MIN_ON_WALLS = 0.01;
+/** Margin around the structure's bounding sphere in an aerial frame. */
+export const AERIAL_MARGIN = 1.15;
 /** Station optics: a 24 mm lens on full frame, 16:9. */
 export const STATION_OPTICS = { focalLengthMm: 24, sensorWidthMm: 36, aspectRatio: 16 / 9 };
 
@@ -76,7 +85,7 @@ export function onFace(f: Pick<MassingFace, 'origin' | 'axisS' | 'axisT' | 'norm
     return s < f.sMin || s >= f.sMax || t < f.tMin || t >= f.tMax ? undefined : { s, t, off };
 }
 
-export interface GStation { station: ColmapCameraPose; face: number; row: 'street' | 'mid'; distanceM: number; onFace: number }
+export interface GStation { station: ColmapCameraPose; face: number; row: 'aerial' | 'street' | 'mid'; distanceM: number; onFace: number }
 export interface StationPlan { stations: GStation[]; faces: number[]; candidates: number; skipped: Array<{ face: string; reason: string }>; dropped: Array<{ name: string; onFace: number; blocked: number }> }
 
 /**
@@ -106,6 +115,15 @@ export function planStations(opts: {
     const stations: GStation[] = [];
     const dropped: StationPlan['dropped'] = [];
     let id = 1;
+    // first, the aerials: the whole structure framed from above at AERIAL_ELEVATION_DEG, each kept for the wall it sees most
+    for (const { station: st, distanceM } of aerialStations(walls.map(x => x.f), structure, opts.anchor, id)) {
+        // an aerial frames the whole structure, so it is kept by the share of its frame on all the walls together
+        const seen = walls.map(w => ({ w, ...probe(opts.tileMesh, st, w.f) })).sort((a, b) => b.onFace - a.onFace);
+        const total = seen.reduce((t, x) => t + x.onFace, 0), blocked = seen[0]?.blocked ?? 0;
+        if (!seen.length || total < AERIAL_MIN_ON_WALLS || blocked > MAX_BLOCKED) { dropped.push({ name: st.name, onFace: +total.toFixed(3), blocked: +blocked.toFixed(3) }); continue; }
+        stations.push({ station: st, face: seen[0].w.i, row: 'aerial', distanceM, onFace: +total.toFixed(3) });
+        id++;
+    }
     for (const v of [...plan.views, ...ring]) {
         const w = walls.find(x => x.f.key === v.faceId);
         if (!w) continue;
@@ -122,6 +140,32 @@ export function planStations(opts: {
         }
     }
     return { stations, faces: walls.map(x => x.i), candidates: panos.length, skipped: plan.skipped.map(s => ({ face: s.faceId, reason: s.reason })), dropped };
+}
+
+/**
+ * AERIAL_VIEWS cameras around the structure, looking down at AERIAL_ELEVATION_DEG on the centre of its bounding box, each
+ * far enough back that the bounding sphere (the walls' extent, ground to top) fits the vertical field of view with
+ * AERIAL_MARGIN. Bearings start on the diagonal off the largest wall's normal, so each view sees two walls and the roof.
+ */
+export function aerialStations(walls: MassingFace[], structure: Pick<StructurePickResult, 'groundY' | 'centroid'>, anchor: GeodeticAnchor, firstId: number): Array<{ station: ColmapCameraPose; distanceM: number }> {
+    if (!walls.length) return [];
+    let lo: V3 = [Infinity, Infinity, Infinity], hi: V3 = [-Infinity, -Infinity, -Infinity];
+    for (const f of walls) for (const [ss, tt] of [[f.sMin, f.tMin], [f.sMax, f.tMin], [f.sMin, f.tMax], [f.sMax, f.tMax]]) {
+        const p = faceAt(f, ss, tt);
+        lo = [Math.min(lo[0], p[0]), Math.min(lo[1], p[1]), Math.min(lo[2], p[2])];
+        hi = [Math.max(hi[0], p[0]), Math.max(hi[1], p[1]), Math.max(hi[2], p[2])];
+    }
+    const centre: V3 = [(lo[0] + hi[0]) / 2, (Math.min(lo[1], structure.groundY) + hi[1]) / 2, (lo[2] + hi[2]) / 2];
+    const radius = Math.hypot(hi[0] - lo[0], hi[1] - Math.min(lo[1], structure.groundY), hi[2] - lo[2]) / 2;
+    const vfov = 2 * Math.atan(Math.tan(Math.atan(STATION_OPTICS.sensorWidthMm / (2 * STATION_OPTICS.focalLengthMm))) / STATION_OPTICS.aspectRatio);
+    const dist = AERIAL_MARGIN * radius / Math.sin(vfov / 2);
+    const main = [...walls].sort((a, b) => b.area - a.area)[0];
+    const base = Math.atan2(main.normal[2], main.normal[0]) + Math.PI / 4, el = AERIAL_ELEVATION_DEG * Math.PI / 180;
+    return Array.from({ length: AERIAL_VIEWS }, (_, k) => {
+        const b = base + k * 2 * Math.PI / AERIAL_VIEWS;
+        const eye: V3 = [centre[0] + Math.cos(b) * Math.cos(el) * dist, centre[1] + Math.sin(el) * dist, centre[2] + Math.sin(b) * Math.cos(el) * dist];
+        return { station: stationFromLookAt(firstId + k, eye, centre, STATION_OPTICS, anchor, { name: `G_aerial_${k}` }), distanceM: +(Math.cos(el) * dist).toFixed(1) };
+    });
 }
 
 /** The share of a station's frame on face `f`, and closer than BLOCKED_M, from a 320 x 180 clay depth of the tile. */

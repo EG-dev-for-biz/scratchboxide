@@ -41,7 +41,7 @@ import { planStations } from './stations';
 import { platePng, reliefPng, surveyPlates, type Plate } from './plates';
 import { MIN_READ_COVERAGE, PIPELINE_G_READ_VERSION, programItems, readPlate, type FacadeProgram, type ProgramItems } from './read';
 
-export const PIPELINE_G_VERSION = `pipeline-g/v1+${PIPELINE_G_READ_VERSION}`;
+export const PIPELINE_G_VERSION = `pipeline-g/v2+${PIPELINE_G_READ_VERSION}`;
 /** Native build parameters: the massing only, nothing baked from the tile, no scanned residual. */
 export const G_BUILD_PARAMS = { bake: 0, residual: 0, sections: 0, topdown: 0 } as const;
 /** Plates read at once. */
@@ -177,11 +177,14 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     const plan = planStations({ allFaces: faces, structure: input.structure, ground: input.ground, tileMesh, anchor: input.anchor });
     timingsMs.stations = Date.now() - t;
     steps.push({ step: 'survey stations', proposed: plan.stations.length + plan.dropped.length, accepted: plan.stations.length, rejected: plan.dropped.length, notes: [`${plan.candidates} candidate eyes on the walkable street`, ...plan.skipped.map(s => `${s.face}: ${s.reason}`)], ms: timingsMs.stations });
+    // the plan on disk before anything can fail, so a failed run still shows where its cameras stood
+    fs.writeFileSync(path.join(input.dir, 'stations.json'), JSON.stringify({ candidates: plan.candidates, stations: plan.stations.map(s => ({ name: s.station.name, face: s.face, row: s.row, distanceM: s.distanceM, onFace: s.onFace })), dropped: plan.dropped, skipped: plan.skipped }, null, 1));
     if (!plan.stations.length) throw new Error(`no survey station sees a wall of the structure (${plan.candidates} candidate eyes on the walkable street; ${plan.skipped.map(s => s.reason).join('; ') || 'every placed station was blocked'})`);
 
     // 2. plates
     t = Date.now();
-    const faceIdx = [...new Set(plan.stations.map(s => s.face))];
+    // every surveyed wall gets a plate: an aerial lays onto walls no street station reached
+    const faceIdx = [...new Set([...plan.stations.map(s => s.face), ...(plan.stations.some(s => s.row === 'aerial') ? plan.faces : [])])];
     const { plates } = await surveyPlates({ stations: plan.stations, faces, faceIdx, tileGlb: input.tilePath, ...(input.signal ? { signal: input.signal } : {}), onProgress: progress });
     for (const pl of plates) {
         fs.writeFileSync(path.join(input.dir, 'plates', `face_${pl.face}_colour.png`), platePng(pl, false));

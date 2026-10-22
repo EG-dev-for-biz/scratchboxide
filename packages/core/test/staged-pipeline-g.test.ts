@@ -18,6 +18,8 @@ import { emptyPlate, finishPlate, layStation, PLATE_PIXEL_M } from '../src/node/
 import { programItems, parseProgram } from '../src/node/3d-engine/staged-location/pipeline-g/read';
 import { G_SRC, inOpening, paintFaces, stagedPipelineG, sweepFootprints } from '../src/node/3d-engine/staged-location/pipeline-g/pipeline-g';
 import type { MassingFace } from '../src/node/3d-engine/staged-location/pipeline-e/native-massing';
+import { aerialStations, AERIAL_VIEWS } from '../src/node/3d-engine/staged-location/pipeline-g/stations';
+import { SurveyStationRenderService } from '../src/node/spatial/SurveyStationRenderService';
 
 /** A 10 m x 8 m wall facing +z (south) at z = 0, s along +x from 0, t up from 0. */
 const WALL: MassingFace = {
@@ -123,5 +125,26 @@ describe('arched opening outline and paint', () => {
         const tex = paintFaces([unbaked], new Map([[WALL.key, programItems({ wallColour: '#336699' }, WALL, 'g0_')]]), [0, 0, 0]);
         expect(unbaked).toMatchObject({ pixel: 0.05, orthoSMin: 0, orthoTMax: 8, width: 200, height: 160 });
         expect([...tex.get(0)!.rgba.subarray(0, 3)]).toEqual([51, 102, 153]);
+    });
+});
+
+describe('pipeline G aerial stations', () => {
+    it('frames the whole structure from above, four bearings around it', () => {
+        const walls = [WALL, { ...WALL, index: 1, key: 'w:p:0:1', normal: [1, 0, 0] as [number, number, number], axisS: [0, 0, -1] as [number, number, number], origin: [10, 0, 0] as [number, number, number], sMax: 6 }];
+        const aerials = aerialStations(walls, { groundY: 0, centroid: { x: 5, z: -3 } }, { lat: 0, lng: 0, elevationMeters: 0 }, 1);
+        expect(aerials.length).toBe(AERIAL_VIEWS);
+        const corners: Array<[number, number, number]> = [[0, 0, 0], [10, 0, 0], [10, 0, -6], [0, 0, -6], [0, 8, 0], [10, 8, 0], [10, 8, -6], [0, 8, -6]];
+        for (const { station } of aerials) {
+            const { pose, intrinsics } = SurveyStationRenderService.stationToCameraPose6DOF(station, 1280, 720);
+            expect(pose.y).toBeGreaterThan(8);
+            const eye = [pose.x, pose.y, pose.z], fwd = [pose.targetX - pose.x, pose.targetY - pose.y, pose.targetZ - pose.z];
+            const fl = Math.hypot(fwd[0], fwd[1], fwd[2]);
+            // every corner of the structure lies inside the vertical field of view's cone
+            for (const c of corners) {
+                const d = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
+                const cos = (d[0] * fwd[0] + d[1] * fwd[1] + d[2] * fwd[2]) / (Math.hypot(d[0], d[1], d[2]) * fl);
+                expect(Math.acos(cos) * 180 / Math.PI).toBeLessThan(intrinsics.verticalFovDegrees / 2);
+            }
+        }
     });
 });

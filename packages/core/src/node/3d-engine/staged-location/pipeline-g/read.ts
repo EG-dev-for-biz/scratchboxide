@@ -19,13 +19,18 @@
 import type { VisionModelChain } from '../../../gemini/vision-model-chain';
 import type { FaceSweepItem, OpeningItem } from '../pipeline-e/massing-spec';
 import type { MassingFace } from '../pipeline-e/native-massing';
-import { platePng, reliefPng, type Plate } from './plates';
+import { PLATE_PIXEL_M, platePng, reliefPng, type Plate } from './plates';
 
 export const PIPELINE_G_READ_VERSION = 'pipeline-g-read/v1';
 /** A plate is read when at least this share of it was seen. */
 export const MIN_READ_COVERAGE = 0.35;
 export const READ_MAX_OUTPUT_TOKENS = 16000;
 export const READ_TIMEOUT_MS = 180_000;
+/** A taller wall has more storeys to read: READ_TIMEOUT_MS up to 30 m, then this much more per metre, up to READ_TIMEOUT_MAX_MS. */
+export const READ_TIMEOUT_PER_M_MS = 4_000;
+export const READ_TIMEOUT_MAX_MS = 420_000;
+/** The read deadline for a plate `heightM` tall. */
+export const readTimeoutMs = (heightM: number): number => Math.min(READ_TIMEOUT_MAX_MS, READ_TIMEOUT_MS + Math.max(0, heightM - 30) * READ_TIMEOUT_PER_M_MS);
 /** Confidence of what the model read off the plate, and of what it continued into unseen parts. */
 export const READ_CONFIDENCE = 0.5;
 export const FILLED_CONFIDENCE = 0.3;
@@ -136,6 +141,6 @@ export async function readPlate(chain: Pick<VisionModelChain<string>, 'generate'
     const res = await chain.generate({
         contents: [{ role: 'user', parts: [{ text: readPrompt(place, plate) }, { inlineData: { mimeType: 'image/png', data: platePng(plate).toString('base64') } }, { inlineData: { mimeType: 'image/png', data: reliefPng(plate).toString('base64') } }] }],
         config: { responseMimeType: 'application/json', maxOutputTokens: READ_MAX_OUTPUT_TOKENS, ...(signal ? { abortSignal: signal } : {}) }
-    }, { stage: 'grammar', deadlineMs: READ_TIMEOUT_MS });
+    }, { stage: 'grammar', deadlineMs: readTimeoutMs(plate.h * PLATE_PIXEL_M) });
     return { program: parseProgram(res.response.text ?? ''), model: res.model, ms: res.ms };
 }
