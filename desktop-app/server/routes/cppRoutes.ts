@@ -12,6 +12,7 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import { NativeCppCompilerService, NativePythonRunnerService } from '../../../packages/core/src/node';
 import { RouteContext } from './types';
+import { cppVegetationViolations, vegetationViolationMessage } from '../../../packages/core/src/common/spatial/sb-veggie-lockdown';
 
 export function createCppRouter(cppCompiler: NativeCppCompilerService, ctx: RouteContext): Router {
     const { sendError } = ctx;
@@ -22,6 +23,13 @@ export function createCppRouter(cppCompiler: NativeCppCompilerService, ctx: Rout
             const { sourceCode, optimization, args, assets, geoAnchor, tileGlbBase64, tileAssetId } = req.body || {};
             if (!sourceCode || typeof sourceCode !== 'string') {
                 res.status(400).json({ error: 'Missing "sourceCode" parameter' });
+                return;
+            }
+            // SB-Veggie is the one vegetation generator: a generator that grows trees with a retired engine generator is
+            // refused before it is compiled (sb-veggie-lockdown.ts)
+            const vegetation = cppVegetationViolations(sourceCode);
+            if (vegetation.length) {
+                res.status(422).json({ success: false, code: 'vegetation_outside_sb_veggie', error: vegetationViolationMessage('C++ generator', vegetation), symbols: vegetation });
                 return;
             }
 

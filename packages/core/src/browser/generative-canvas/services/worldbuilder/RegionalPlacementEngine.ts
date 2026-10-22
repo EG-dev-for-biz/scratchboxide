@@ -135,6 +135,9 @@ export function getActorHalfHeight(actorType: string, scaleY: number = 1.0): num
             return 1.0 * scaleY;
         case 'Sphere':
             return 0.5 * scaleY;
+        case 'SbVeggieTree':
+            // an SB-Veggie tree's position is its trunk base, on the ground
+            return 0;
         default:
             return 0.5 * scaleY;
     }
@@ -213,7 +216,9 @@ export function placeRegionalObjects(
                 actorType = 'Sphere';
                 defaultColor = '#334155';
             } else if (rawCategory.includes('tree') || rawCategory.includes('pine') || rawCategory.includes('cactus') || rawCategory.includes('elm') || rawCategory.includes('foliage')) {
-                actorType = 'Cone';
+                // a place for an SB-Veggie tree (grown natively from measurements: sb.create_tree / botanical_synthesize_tree),
+                // never a primitive stand-in (common/spatial/sb-veggie-lockdown.ts)
+                actorType = 'SbVeggieTree';
                 defaultColor = '#1e3f20';
             }
 

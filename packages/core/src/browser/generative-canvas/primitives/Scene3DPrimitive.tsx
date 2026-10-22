@@ -23,6 +23,7 @@ import type {
     GroundTileMode
 } from '../canvas-types';
 import { VideoTimelineTracks } from './video/VideoTimelineTracks';
+import { scriptVegetationViolations, vegetationViolationMessage } from '../../../common/spatial/sb-veggie-lockdown';
 import type { TimelineTrack, VideoTimelineData, NleTool } from '../services/video/videoTypes';
 import {
     evaluateFalloff,
@@ -369,7 +370,6 @@ export interface DynamicScriptContext {
     createWorldBuilderScene?: typeof createWorldBuilderScene;
     generateNativeBuildingMeshBuffer?: typeof generateNativeBuildingMeshBuffer;
     buildNativeThreeGeometry?: typeof buildNativeThreeGeometry;
-    generateProceduralThreeMeshFromPrompt?: typeof generateProceduralThreeMeshFromPrompt;
     sculptBuildingFrom3DTiles?: typeof sculptBuildingFrom3DTiles;
     snapFootprintsToTerrain?: typeof snapFootprintsToTerrain;
     inspectSceneMeshTopology?: typeof inspectSceneMeshTopology;
@@ -605,6 +605,9 @@ export const executeDynamicThreeScript = (
     scriptCode: string,
     context: DynamicScriptContext
 ): { update?: (time: number, delta: number) => void; dispose?: () => void; error?: string | null } => {
+    // SB-Veggie is the one vegetation generator: a script that builds trees from primitives is not run (sb-veggie-lockdown.ts)
+    const vegetation = scriptVegetationViolations(scriptCode);
+    if (vegetation.length) return { error: vegetationViolationMessage('viewport script', vegetation) };
     try {
         // Strip ES module import/export keywords for execution in Function constructor
         let sanitized = scriptCode
@@ -2184,6 +2187,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 const lod = model.parent ? (model.userData.sbTreeLod as TreeLodController | undefined) : undefined;
                 if (lod) out.push(lod);
             });
+            // a generated model's SB-Veggie trees (sb.create_tree in a Python scene, written into its GLB)
+            const generated = stack.scene?.getObjectByName('scratchbox-cpp-generated-root');
+            const generatedLod = generated?.parent ? (generated.userData.sbTreeLod as TreeLodController | undefined) : undefined;
+            if (generatedLod) out.push(generatedLod);
             return out;
         };
         const updateTreeLods = (now: number): void => {
@@ -2752,7 +2759,6 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 createWorldBuilderScene,
                 generateNativeBuildingMeshBuffer,
                 buildNativeThreeGeometry,
-                generateProceduralThreeMeshFromPrompt,
                 sculptBuildingFrom3DTiles,
                 snapFootprintsToTerrain,
                 inspectSceneMeshTopology
@@ -2942,6 +2948,16 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 }
                 gltf.scene.name = 'scratchbox-cpp-generated-root';
                 scene.add(gltf.scene);
+                gltf.scene.updateMatrixWorld(true);
+                // SB-Veggie trees in the generated GLB (scene extras sbTrees, nodes with sbTree): the same level-of-detail
+                // controller and tree textures a staged place's trees get, attached before the clay pass
+                const treeLod = new TreeLodController(gltf.scene, { crownShading: sceneDataRef.current?.treeCrownShading, view: sceneDataRef.current?.treeLod });
+                if (treeLod.hasTrees) {
+                    gltf.scene.userData.sbTreeLod = treeLod;
+                    loadTreeTextureLibrary()
+                        .then(lib => { gltf.scene.userData.sbTreeTextures = applyTreeTextures(gltf.scene, lib); })
+                        .catch(err => console.warn('[Scene3D] tree textures not applied:', (err as Error).message));
+                }
                 gltf.scene.traverse((child) => {
                     if ((child as any).isMesh) {
                         const m = child as THREE.Mesh;
@@ -2960,7 +2976,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                         }
                     }
                 });
-                applyClayRenderMode([gltf.scene], renderModeRef.current === 'clay');
+                applyClayRenderMode([gltf.scene], renderModeRef.current === 'clay', { trees: treesClayRef.current });
                 // Shared metric ground logic: snap procedural geometry to terrain or 3D tile surface
                 if (terrainManagerRef.current) {
                     terrainManagerRef.current.snapObjectToGround(gltf.scene, 0);

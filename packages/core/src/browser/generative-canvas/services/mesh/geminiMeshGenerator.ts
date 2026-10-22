@@ -160,39 +160,8 @@ export function generateProceduralThreeMeshFromPrompt(
         };
     }
 
-    // 2. Tree / Foliage / Vegetation
-    if (/tree|foliage|pine|forest|wood|plant|palm|oak/i.test(p)) {
-        const group = new ThreeLib.Group();
-        group.name = 'procedural-tree';
-
-        const isPine = /pine|conifer|evergreen|fir/i.test(p);
-        const trunkMat = new ThreeLib.MeshStandardMaterial({ color: 0x4a3728, roughness: 0.9, metalness: 0.0 });
-        const foliageMat = new ThreeLib.MeshStandardMaterial({ color: isPine ? 0x1e3f20 : 0x22c55e, roughness: 0.8, metalness: 0.0 });
-
-        const trunk = new ThreeLib.Mesh(new ThreeLib.CylinderGeometry(0.4, 0.7, 5, 8), trunkMat);
-        trunk.position.y = 2.5;
-        group.add(trunk);
-
-        if (isPine) {
-            for (let t = 0; t < 3; t++) {
-                const cone = new ThreeLib.Mesh(new ThreeLib.ConeGeometry(2.4 - t * 0.5, 3.5, 8), foliageMat);
-                cone.position.y = 5 + t * 2.2;
-                group.add(cone);
-            }
-        } else {
-            const canopy = new ThreeLib.Mesh(new ThreeLib.SphereGeometry(2.8, 12, 12), foliageMat);
-            canopy.position.y = 6.5;
-            canopy.scale.set(1.1, 1.2, 1.1);
-            group.add(canopy);
-        }
-
-        return {
-            mesh: group,
-            geometry: trunk.geometry,
-            material: foliageMat,
-            summary: `Procedural ${isPine ? 'coniferous pine' : 'deciduous broadleaf'} tree asset.`
-        };
-    }
+    // Vegetation is never built here: every tree is an SB-Veggie tree (sb.create_tree, botanical_synthesize_tree;
+    // common/spatial/sb-veggie-lockdown.ts), and viewport scripts that call this helper are refused.
 
     // 3. Castle / Fortress / Stone Dwelling / House
     if (/house|building|castle|fortress|chalet|dwelling|outpost|cottage/i.test(p)) {
