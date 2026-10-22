@@ -158,3 +158,22 @@ describe('TriangleRayIndex (orientOutward\'s ray test)', () => {
         expect(flipped).toBeGreaterThan(20);
     });
 });
+
+describe('detectHeightTiers: a tier must stand where it is put', () => {
+    it('does not read a neighbour\'s wall scanned along a shared edge as an upper tier, and still finds a real setback', async () => {
+        const { detectHeightTiers } = await import('../src/node/3d-engine/staged-location/pipeline-e/massing-spec');
+        const ring: Array<[number, number]> = [[0, 0], [10, 0], [10, 20], [0, 20]];
+        // a row building with a 24 m roof; its last 1.5 m along x = 10 is the next building's 55 m wall, as the scan's top shows it
+        const strip = (x: number, z: number) => (x >= 8.5 ? 55 : 24);
+        const t = detectHeightTiers([ring], strip, 0);
+        expect(t === undefined || t.every(tier => tier.topY < 30)).toBe(true);
+        // a real setback: the middle 6 x 14 m rises to 40 m
+        const setback = (x: number, z: number) => (x >= 2 && x <= 8 && z >= 3 && z <= 17 ? 40 : 24);
+        const s = detectHeightTiers([ring], setback, 0)!;
+        expect(s).toBeDefined();
+        expect(s.length).toBe(2);
+        expect(s[1].topY).toBeGreaterThan(38);
+        expect(s[0].topY).toBeGreaterThan(22);
+        expect(s[0].topY).toBeLessThan(26);
+    });
+});

@@ -36,6 +36,8 @@ export const MIN_MASSING_IOU = 0.6;
 /** The roof's median absolute error may be at most this, or this share of the building's height when that is larger. */
 export const MAX_HEIGHT_ERROR_M = 3;
 export const MAX_HEIGHT_ERROR_SHARE = 0.15;
+/** An upper tier stands where the scan reaches its height over at least this share of the tier's own (inset) plan. */
+export const MIN_TIER_SUPPORT = 0.6;
 
 export interface RoofPlaneSpec { a: number; b: number; c: number; tag: string }
 
@@ -514,10 +516,26 @@ export function detectHeightTiers(loops: Vec2[][], scanTop: (x: number, z: numbe
         // a tier can only nest inside the one below it, never grow past it - the inset is monotonic by construction
         // (bigger d for a later tier, since its area is smaller), but guard it explicitly rather than trust that.
         if (Math.abs(ringArea(loop)) >= Math.abs(ringArea(prevLoop)) - 1 && i > 0) continue;
+        // the scan must reach the height this tier claims (its top) over most of where the tier is put (the inset middle of the footprint),
+        // not only somewhere in the footprint: a taller neighbour's wall scanned along a shared edge raises a strip of edge
+        // cells, which by area alone reads as an upper tier and was placed in the middle, 15-30 m over a row building's
+        // real roof (Flatiron district, 2026-10-22). An unsupported tier ends the stack.
+        const claimedTopY = i + 1 < filtered.length ? filtered[i + 1] : (atTier.length ? quantile(atTier, 0.9) : lo + HEIGHT_AGREEMENT_M);
+        if (i > 0) {
+            let inside = 0, reach = 0;
+            for (const [x, z, h] of samples) if (inRing(x, z, loop)) { inside++; if (h >= claimedTopY - HEIGHT_AGREEMENT_M) reach++; }
+            if (!inside || reach / inside < MIN_TIER_SUPPORT) {
+                const last = tiers[tiers.length - 1];
+                if (last) {
+                    const own = samples.filter(([x, z, h]) => inRing(x, z, last.loop) && h >= last.baseY).map(s => s[2]);
+                    if (own.length) last.topY = quantile(own, 0.5);
+                }
+                break;
+            }
+        }
         prevLoop = loop;
         const baseY = i === 0 ? groundBaseY : lo;
-        const topY = i + 1 < filtered.length ? filtered[i + 1] : (atTier.length ? quantile(atTier, 0.9) : lo + HEIGHT_AGREEMENT_M);
-        tiers.push({ baseY, topY, loop, cells });
+        tiers.push({ baseY, topY: claimedTopY, loop, cells });
     }
     return tiers.length >= 2 ? tiers : undefined;
 }
