@@ -69,7 +69,7 @@ async function runHybridPromptingArchitectureTests() {
     assert.ok(payload.spatial_envelope_lock.framingRules.some(r => r.includes('Zero pan, zoom, crop')));
 
     // Verify rendering_instruction (verbatim de-noising narrative)
-    assert.ok(payload.rendering_instruction.startsWith('Transform this photorealistic 3D tiles rendering of Grand Army Plaza and The Plaza Hotel'));
+    assert.ok(payload.rendering_instruction.startsWith('Transform this malformed 3D photogrammetry render of Grand Army Plaza and The Plaza Hotel'));
     assert.ok(payload.rendering_instruction.includes('camera at coordinates 40.764500, -73.974400, facing 225°'));
     assert.ok(payload.rendering_instruction.includes('CRITICAL FRAMING RULES — non-negotiable:'));
     assert.ok(payload.rendering_instruction.includes('Subject distance: approximately 180 meters from camera'));
@@ -107,7 +107,7 @@ async function runHybridPromptingArchitectureTests() {
         heading: 90
     });
     assert.ok(!proseResult.startsWith('{'), 'Default call must return prose string, not JSON');
-    assert.ok(proseResult.includes('Transform this photorealistic 3D tiles rendering of Colosseum, Rome'));
+    assert.ok(proseResult.includes('Transform this malformed 3D photogrammetry render of Colosseum, Rome'));
 
     // 3.2 format: 'hybrid' mode
     const hybridResult = buildBeautifyPrompt({

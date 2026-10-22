@@ -358,6 +358,6 @@ describe('enhanced mode (alignment, reported, and plate prompt)', () => {
         expect(p).toMatch(/Keep every object, edge, letter and ornament exactly where it is/);
         expect(p).toMatch(/no depth of field, no haze/);
         expect(p).toMatch(/adjacent wall/);
-        expect(svc.buildBeautifyPrompt({ locationName: 'X', coords: '1.000000, 2.000000', heading: 0, aspectRatio: '16:9', earthUrl: 'u' })).toMatch(/^Transform this photorealistic 3D tiles rendering of X/);
+        expect(svc.buildBeautifyPrompt({ locationName: 'X', coords: '1.000000, 2.000000', heading: 0, aspectRatio: '16:9', earthUrl: 'u' })).toMatch(/^Transform this malformed 3D photogrammetry render of X/);
     });
 });

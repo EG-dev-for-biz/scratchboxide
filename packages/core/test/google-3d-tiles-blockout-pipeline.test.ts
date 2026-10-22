@@ -126,7 +126,7 @@ async function runBlockoutPipelineTests() {
     assert.strictEqual(omniPlan.imageRef, '<IMAGE_REF_0>');
     assert.strictEqual(omniPlan.stage1BlockoutFrameExtraction.rawFrame1Asset?.uri, blockoutFrame1Asset.uri);
     assert.strictEqual(omniPlan.omniVideoRequest.referenceAssets?.[0]?.uri, blockoutVideoAsset.uri);
-    assert.ok(omniPlan.stage2NanoBananaRestyle.prompt.includes('Transform this photorealistic 3D tiles rendering of Midtown Manhattan Empire State Building along 5th Avenue'));
+    assert.ok(omniPlan.stage2NanoBananaRestyle.prompt.includes('Transform this malformed 3D photogrammetry render of Midtown Manhattan Empire State Building along 5th Avenue'));
     assert.ok(omniPlan.omniVideoRequest.prompt.includes('Follow the 6-DoF camera trajectory, depth parallax, vanishing points, and geometric boundaries of <VIDEO_REF_0>.'));
 
     console.log('  ✓ Test 5 Passed: Blockout pipeline output seamlessly binds into 3-Stage Dual Omni pipeline plan');

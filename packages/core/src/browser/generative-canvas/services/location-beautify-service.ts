@@ -105,6 +105,14 @@ export const TILE_DRAIN_FRAME_MS = 50;
 export const CAMERA_ALTITUDE_M = 250;
 export const CAMERA_TILT_DEG = 45;
 
+/**
+ * What a 3D tiles render is, said plainly in every Beautify prompt: the image model was told it was a "photorealistic"
+ * rendering and kept its melted shapes, or drew the place from memory instead. Calling it malformed photogrammetry asks it
+ * to repair the surfaces it is given.
+ */
+export const TILES_RENDER_SUBJECT = 'malformed 3D photogrammetry render';
+export const TILES_RENDER_NOTE = 'It is a mesh rebuilt automatically from aerial photographs: the shapes are roughly right but melted, warped and smeared, edges are rounded off, small parts are fused into blobs, and the texture is blurred and stretched.';
+
 export type LocationMood = 'dawn' | 'golden-hour' | 'midday' | 'overcast' | 'dusk' | 'night';
 
 export interface LocationCoordinates {
@@ -280,8 +288,8 @@ export function buildHybridPromptPayload(options: BuildHybridPromptOptions): Hyb
     }
 
     const renderingInstruction =
-        `Transform this photorealistic 3D tiles rendering of ${options.locationName} ` +
-        `(camera at coordinates ${coordsStr}, facing ${heading}°) into a photorealistic photograph. ` +
+        `Transform this ${TILES_RENDER_SUBJECT} of ${options.locationName} ` +
+        `(camera at coordinates ${coordsStr}, facing ${heading}°) into a photorealistic photograph. ${TILES_RENDER_NOTE} ` +
         `Map reference: ${earthUrl}. ${atmosphere}` +
         `This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. ` +
         `CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly ${aspectRatio} aspect ratio, matching the reference image canvas. ` +
@@ -381,10 +389,10 @@ export interface BeautifyPromptOptions extends StationLockOptions {
 }
 
 /**
- * Builds the exact AI Beautify prompt template transforming a 3D tiles rendering into a photorealistic photograph.
+ * Builds the exact AI Beautify prompt template transforming a 3D tiles render (malformed photogrammetry) into a photorealistic photograph.
  *
  * Exact template:
- * Transform this photorealistic 3D tiles rendering of {locationName} (camera at coordinates {coords}, facing {heading}°) into a photorealistic photograph. Map reference: {earthUrl}. {moodPromptContext}This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly {aspectRatio} aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.{subjectDistanceHint}{styleSuffix}
+ * Transform this malformed 3D photogrammetry render of {locationName} (camera at coordinates {coords}, facing {heading}°) into a photorealistic photograph. {TILES_RENDER_NOTE} Map reference: {earthUrl}. {moodPromptContext}This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly {aspectRatio} aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.{subjectDistanceHint}{styleSuffix}
  *
  * When subject distance is available, {subjectDistanceHint} becomes:
  * " Subject distance: approximately {distance} meters from camera (use this for depth-of-field, focus, and aerial-perspective haze)."
@@ -512,7 +520,7 @@ export function buildBeautifyPrompt(options: BeautifyPromptOptions): string {
         cameraHeightMeters: options.cameraHeightMeters, horizonRowFraction: options.horizonRowFraction, solar: options.solar
     });
 
-    return `Transform this photorealistic 3D tiles rendering of ${options.locationName} (camera at coordinates ${coordsStr}, facing ${heading}°) into a photorealistic photograph. Map reference: ${earthUrl}. ${moodPromptContext}This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly ${aspectRatio} aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.${subjectDistanceHint}${stationLockHint}${styleSuffix}`;
+    return `Transform this ${TILES_RENDER_SUBJECT} of ${options.locationName} (camera at coordinates ${coordsStr}, facing ${heading}°) into a photorealistic photograph. ${TILES_RENDER_NOTE} Map reference: ${earthUrl}. ${moodPromptContext}This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly ${aspectRatio} aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.${subjectDistanceHint}${stationLockHint}${styleSuffix}`;
 }
 
 /** Identifies the texture-plate prompt wording (recorded with every texel it produced). */
@@ -628,7 +636,7 @@ export function buildLocationBeautifyPrompt(ctx: LocationBeautifyContext): strin
 
     const eraDirective = ctx.eraContext ? ` Era and period styling: ${ctx.eraContext}.` : '';
 
-    return `Transform this photorealistic 3D tiles rendering of ${ctx.locationName} (camera at coordinates ${coordsStr}, facing ${heading}°) into a photorealistic photograph. Map reference: ${earthUrl}. ${moodDirective}. ${styleDirective}.${eraDirective} This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly ${aspectRatio} aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.${subjectDistanceHint} No map insets, compass overlays, mini-maps, navigation UI, coordinate labels, or any graphical overlays — clean photograph only.`;
+    return `Transform this ${TILES_RENDER_SUBJECT} of ${ctx.locationName} (camera at coordinates ${coordsStr}, facing ${heading}°) into a photorealistic photograph. ${TILES_RENDER_NOTE} Map reference: ${earthUrl}. ${moodDirective}. ${styleDirective}.${eraDirective} This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly ${aspectRatio} aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.${subjectDistanceHint} No map insets, compass overlays, mini-maps, navigation UI, coordinate labels, or any graphical overlays — clean photograph only.`;
 }
 
 export interface BeautifySectionOptions {
