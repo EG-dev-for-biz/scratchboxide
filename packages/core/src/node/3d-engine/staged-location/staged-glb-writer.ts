@@ -41,6 +41,36 @@ export interface StagedGlbNode {
     uv?: Float32Array;
     /** Node extras (StagedNodeExtras for staged layers). */
     extras?: unknown;
+    /** COLOR_0, linear RGB 0..1, 3 per vertex: multiplies the material's base colour (glTF). */
+    colors?: Float32Array;
+    /**
+     * The node drawn as several primitives, each with its own index list and one of the options' `materials` (by index
+     * into that list): a surface with more than one material. Replaces `indices`; the vertices are shared.
+     */
+    parts?: Array<{ indices: Uint32Array; material: number }>;
+    /** The whole node drawn with one of the options' `materials` (by index into that list) instead of the texture or clay. */
+    material?: number;
+}
+
+/** An embedded image (JPEG or PNG bytes). */
+export interface StagedGlbImage { bytes: Uint8Array; mimeType: 'image/jpeg' | 'image/png'; name?: string }
+
+/**
+ * A material written beside the clay and photo ones: a tiling PBR material (base colour, normal and metallic-roughness
+ * maps, repeated) or a plain colour. Materials naming the same image object share it in the file.
+ */
+export interface StagedGlbMaterial {
+    name: string;
+    baseColorFactor?: [number, number, number, number];
+    baseColor?: StagedGlbImage;
+    normal?: StagedGlbImage;
+    normalScale?: number;
+    /** glTF metallicRoughness: G roughness, B metalness (times the factors). */
+    metallicRoughness?: StagedGlbImage;
+    roughness?: number;
+    metallic?: number;
+    doubleSided?: boolean;
+    extras?: Record<string, unknown>;
 }
 
 export interface StagedGlbOptions {
@@ -54,11 +84,22 @@ export interface StagedGlbOptions {
     texture?: { bytes: Uint8Array; mimeType: 'image/jpeg' | 'image/png' };
     /** The textured material's surface (default: roughness 0.9, not metallic, the texture clamped at its edges). */
     textureMaterial?: { roughness?: number; metallic?: number; repeat?: boolean };
+    /** Further materials nodes name by `material` or `parts` (their textures repeat). */
+    materials?: StagedGlbMaterial[];
+    /** Small embedded images the materials' extras refer to (e.g. a confidence texture), by key: the texture index is written into `extras` where the string `@image:<key>` stands. */
+    extraImages?: Record<string, StagedGlbImage>;
 }
 
 function pad4(buf: Buffer, fill = 0): Buffer {
     const rem = buf.length % 4;
     return rem === 0 ? buf : Buffer.concat([buf, Buffer.alloc(4 - rem, fill)]);
+}
+
+function concatIndices(parts: Uint32Array[]): Uint32Array {
+    const out = new Uint32Array(parts.reduce((a, p) => a + p.length, 0));
+    let o = 0;
+    for (const p of parts) { out.set(p, o); o += p.length; }
+    return out;
 }
 
 /** Area-weighted vertex normals of an indexed triangle mesh. */
@@ -97,7 +138,7 @@ export function writeStagedGlb(nodes: StagedGlbNode[], options: StagedGlbOptions
     for (const node of nodes) {
         const count = node.positions.length / 3;
         if (!Number.isInteger(count)) throw new Error('staged GLB: positions must hold 3 numbers per vertex');
-        const indices = node.indices ?? Uint32Array.from({ length: count - (count % 3) }, (_, i) => i);
+        const indices = node.indices ?? (node.parts ? concatIndices(node.parts.map(p => p.indices)) : Uint32Array.from({ length: count - (count % 3) }, (_, i) => i));
         const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
         for (let i = 0; i < node.positions.length; i += 3) {
             for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], node.positions[i + k]); max[k] = Math.max(max[k], node.positions[i + k]); }
@@ -113,18 +154,69 @@ export function writeStagedGlb(nodes: StagedGlbNode[], options: StagedGlbOptions
             accessors.push({ bufferView: addView(f32(values), 34962), componentType: 5126, count, type: 'SCALAR' });
             attributes[name] = accessors.length - 1;
         }
+        const ownMaterial = node.parts !== undefined || node.material !== undefined;
+        for (const k of [node.material, ...(node.parts ?? []).map(p => p.material)]) {
+            if (k !== undefined && !(options.materials && k >= 0 && k < options.materials.length)) throw new Error(`staged GLB: material ${k} is not among the ${options.materials?.length ?? 0} given`);
+        }
         if (node.uv) {
             if (node.uv.length !== count * 2) throw new Error(`staged GLB: ${node.uv.length / 2} UVs for ${count} vertices`);
-            if (!options.texture) throw new Error('staged GLB: a node carries UVs but no texture was given');
+            if (!options.texture && !ownMaterial) throw new Error('staged GLB: a node carries UVs but no texture was given');
             accessors.push({ bufferView: addView(f32(node.uv), 34962), componentType: 5126, count, type: 'VEC2' });
             attributes.TEXCOORD_0 = accessors.length - 1;
-            textured = true;
+            if (!ownMaterial) textured = true;
         }
-        accessors.push({ bufferView: addView(Buffer.from(indices.buffer, indices.byteOffset, indices.byteLength), 34963), componentType: 5125, count: indices.length, type: 'SCALAR' });
-        meshes.push({ primitives: [{ attributes, indices: accessors.length - 1, mode: 4, material: node.uv ? 1 : 0 }] });
+        if (node.colors) {
+            if (node.colors.length !== count * 3) throw new Error(`staged GLB: ${node.colors.length / 3} colours for ${count} vertices`);
+            accessors.push({ bufferView: addView(f32(node.colors), 34962), componentType: 5126, count, type: 'VEC3' });
+            attributes.COLOR_0 = accessors.length - 1;
+        }
+        const primitive = (idx: Uint32Array, material: number) => {
+            accessors.push({ bufferView: addView(Buffer.from(idx.buffer, idx.byteOffset, idx.byteLength), 34963), componentType: 5125, count: idx.length, type: 'SCALAR' });
+            return { attributes, indices: accessors.length - 1, mode: 4, material };
+        };
+        // materials: 0 clay, 1 the photo texture (when any node uses it; renumbered below), then options.materials
+        if (node.parts) meshes.push({ primitives: node.parts.filter(p => p.indices.length).map(p => primitive(p.indices, -1 - p.material)) });
+        else meshes.push({ primitives: [primitive(indices, node.material !== undefined ? -1 - node.material : node.uv ? 1 : 0)] });
         gltfNodes.push({ name: node.name ?? `node_${meshes.length - 1}`, mesh: meshes.length - 1, ...(node.extras !== undefined ? { extras: node.extras } : {}) });
         gltfNodes[0].children.push(gltfNodes.length - 1);
     }
+    // the further materials, their images shared by object identity, and the extra images
+    const firstOwn = textured ? 2 : 1;
+    for (const m of meshes) for (const p of m.primitives) if (p.material < 0) p.material = firstOwn + (-1 - p.material);
+    const images: any[] = [], textures: any[] = [];
+    if (textured) {
+        images.push({ bufferView: addView(Buffer.from(options.texture!.bytes)), mimeType: options.texture!.mimeType });
+        textures.push({ source: 0, sampler: 0 });
+    }
+    const imageTexture = new Map<StagedGlbImage, number>();
+    const textureOf = (im: StagedGlbImage, sampler: number): number => {
+        const key = imageTexture.get(im);
+        if (key !== undefined && textures[key].sampler === sampler) return key;
+        images.push({ bufferView: addView(Buffer.from(im.bytes)), mimeType: im.mimeType, ...(im.name ? { name: im.name } : {}) });
+        textures.push({ source: images.length - 1, sampler, ...(im.name ? { name: im.name } : {}) });
+        imageTexture.set(im, textures.length - 1);
+        return textures.length - 1;
+    };
+    const ownMaterials = options.materials ?? [];
+    const extraImageIndex = new Map<string, number>();
+    for (const [k, im] of Object.entries(options.extraImages ?? {})) extraImageIndex.set(k, textureOf(im, 2));
+    const withImageRefs = (v: unknown): unknown => {
+        if (typeof v === 'string' && v.startsWith('@image:')) { const i = extraImageIndex.get(v.slice(7)); if (i === undefined) throw new Error(`staged GLB: no extra image ${v.slice(7)}`); return i; }
+        if (Array.isArray(v)) return v.map(withImageRefs);
+        if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, withImageRefs(x)]));
+        return v;
+    };
+    const ownJson = ownMaterials.map(m => ({
+        name: m.name, ...(m.doubleSided ? { doubleSided: true } : {}),
+        pbrMetallicRoughness: {
+            ...(m.baseColorFactor ? { baseColorFactor: m.baseColorFactor } : {}),
+            ...(m.baseColor ? { baseColorTexture: { index: textureOf(m.baseColor, 1) } } : {}),
+            ...(m.metallicRoughness ? { metallicRoughnessTexture: { index: textureOf(m.metallicRoughness, 1) } } : {}),
+            metallicFactor: m.metallic ?? (m.metallicRoughness ? 1 : 0), roughnessFactor: m.roughness ?? (m.metallicRoughness ? 1 : 0.85)
+        },
+        ...(m.normal ? { normalTexture: { index: textureOf(m.normal, 1), ...(m.normalScale !== undefined ? { scale: m.normalScale } : {}) } } : {}),
+        ...(m.extras ? { extras: withImageRefs(m.extras) } : {})
+    }));
     const json = {
         asset: {
             version: '2.0', generator: options.generator ?? 'scratchbox-staged-location',
@@ -137,12 +229,19 @@ export function writeStagedGlb(nodes: StagedGlbNode[], options: StagedGlbOptions
         meshes,
         materials: [
             { name: 'StudioGreyClay', pbrMetallicRoughness: { baseColorFactor: [0.55, 0.57, 0.6, 1], metallicFactor: 0, roughnessFactor: 0.85 } },
-            ...(textured ? [{ name: 'PhotoTextured', pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: options.textureMaterial?.metallic ?? 0, roughnessFactor: options.textureMaterial?.roughness ?? 0.9 } }] : [])
+            ...(textured ? [{ name: 'PhotoTextured', pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: options.textureMaterial?.metallic ?? 0, roughnessFactor: options.textureMaterial?.roughness ?? 0.9 } }] : []),
+            ...ownJson
         ],
-        ...(textured ? {
-            images: [{ bufferView: addView(Buffer.from(options.texture!.bytes)), mimeType: options.texture!.mimeType }],
-            samplers: [{ magFilter: 9729, minFilter: 9987, wrapS: options.textureMaterial?.repeat ? 10497 : 33071, wrapT: options.textureMaterial?.repeat ? 10497 : 33071 }],
-            textures: [{ source: 0, sampler: 0 }]
+        ...(images.length ? {
+            images,
+            samplers: [
+                { magFilter: 9729, minFilter: 9987, wrapS: options.textureMaterial?.repeat ? 10497 : 33071, wrapT: options.textureMaterial?.repeat ? 10497 : 33071 },
+                // the further materials' maps tile
+                { magFilter: 9729, minFilter: 9987, wrapS: 10497, wrapT: 10497 },
+                // raw lookups (a confidence texture): nearest, no mipmaps
+                { magFilter: 9728, minFilter: 9728, wrapS: 33071, wrapT: 33071 }
+            ],
+            textures
         } : {}),
         accessors,
         bufferViews,
