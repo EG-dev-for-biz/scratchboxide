@@ -41,7 +41,8 @@ import type { MassingRun } from './pipeline-e/native-massing';
 import { FOOTPRINT_GROUND_CLEARANCE_M, hideFootprintInGlb, type StructureFootprint } from './kept-structure';
 import { APRON_HEIGHT_M } from './pipeline-e/residual-audit-e';
 import { inLoops } from './pipeline-e/massing-spec';
-import { dropWallBandResidual, planeFirstMassing, PLANE_RELIEF_TOKEN, WALL_PLANE_FIT_VERSION, type PlaneFirstMassing, type PlaneFirstWall, type WallSampleIndex } from './wall-plane-fit';
+import { carveCourtyards, COURTYARD_FLOOR_TOKEN, fitRooftopSolids, roofDebrisDecider, ROOF_AND_VOIDS_VERSION, ROOFTOP_SOLID_TOKEN, type RooftopRecord, type VoidRecord } from './roof-and-voids';
+import { dropResidualClusters, dropWallBandResidual, planeFirstMassing, PLANE_RELIEF_TOKEN, WALL_PLANE_FIT_VERSION, type PlaneFirstMassing, type PlaneFirstWall, type WallSampleIndex } from './wall-plane-fit';
 import type { ProvenanceRecord } from '../../../common/spatial/staged-location-contracts';
 import type { MassingNode } from './pipeline-e/native-massing';
 import type { MassingPart } from './pipeline-e/massing-spec';
@@ -51,7 +52,7 @@ export function planeFirstEnabled(env: NodeJS.ProcessEnv = process.env): boolean
     return env.SCRATCHBOX_STAGED_PLANE_FIRST !== '0';
 }
 
-export const DISTRICT_MASSING_VERSION = `district-massing/1${planeFirstEnabled() ? `+${WALL_PLANE_FIT_VERSION}` : ''}`;
+export const DISTRICT_MASSING_VERSION = `district-massing/1${planeFirstEnabled() ? `+${WALL_PLANE_FIT_VERSION}+${ROOF_AND_VOIDS_VERSION}` : ''}`;
 
 /** The district massing stage runs when SCRATCHBOX_STAGED_DISTRICT_MASSING=1, or with the procedural district (off until measured live). */
 export function districtMassingEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -100,7 +101,7 @@ export interface DistrictBuildingMassing {
      */
     caveat?: string;
     /** Plane first: the walls fitted to the scan, their relief as native items, and the overhang left once the walls moved. */
-    planeFirst?: Omit<PlaneFirstMassing<MassingPart>, 'parts'> & { overhangAfterShare: number };
+    planeFirst?: Omit<PlaneFirstMassing<MassingPart>, 'parts'> & { overhangAfterShare: number; voids: VoidRecord[]; rooftops: RooftopRecord[] };
     ms: number;
 }
 
@@ -157,14 +158,20 @@ export function massDistrictBuilding(b: VectorBuilding, index: number, fp: { cel
     caveats.push(...soft);
     const massing = buildMassing({ buildings: [b], groundY, scanTop: ground.topAt, cells: raised });
     let planeFirst: DistrictBuildingMassing['planeFirst'];
+    let rooftopSolids: MassingPart[] = [];
     if (opts.walls && massing.parts.length) {
-        const pf = planeFirstMassing(massing.parts, opts.walls, (part, x, z) => inLoops(x, z, part.loops), { idPrefix: `pf${index}_` });
-        massing.parts = pf.parts;
+        // enclosed voids first (their rings are then fitted like any wall), then the walls, then what stands on the roofs
+        const cy = carveCourtyards(massing.parts, ground.topAt);
+        const pf = planeFirstMassing(cy.parts, opts.walls, (part, x, z) => inLoops(x, z, part.loops), { idPrefix: `pf${index}_`, register: process.env.SCRATCHBOX_STAGED_PLANE_REGISTER !== '0' });
+        const floors = cy.floors.map(f => ({ ...f.floor, loops: [pf.parts.find(p => p.id === f.host)!.loops[f.holeLoop]] }));
+        const roofs = fitRooftopSolids(pf.parts, ground.topAt);
+        massing.parts = [...pf.parts, ...floors];
+        rooftopSolids = roofs.solids;
         // the overhang once the walls stand on the scanned facades: ring cells the moved walls now take in
         let after = 0;
         for (const k of ring) { const [x, z] = k.split(',').map(Number); if (!pf.parts.some(p => inLoops(x + 0.5, z + 0.5, p.loops))) after++; }
         const { parts: _parts, ...rest } = pf;
-        planeFirst = { ...rest, overhangAfterShare: r2(after / Math.max(1, fp.cells.length)) };
+        planeFirst = { ...rest, overhangAfterShare: r2(after / Math.max(1, fp.cells.length)), voids: cy.voids, rooftops: roofs.records };
         if (overhangShare > P.maxOverhangShare) caveats.push(`with the walls on the planes the scan measures, ${Math.round(planeFirst.overhangAfterShare * 100)}% remains outside them`);
     }
     // pipeline E's roof check over the raised footprint (its plan check is the isolate's and does not apply here)
@@ -173,6 +180,8 @@ export function massDistrictBuilding(b: VectorBuilding, index: number, fp: { cel
     // a roof off the scan is not a wall question: plane first leaves it a reason (a pitched or spired roof the flat massing
     // would erase is a measured distinctive feature); only the procedural district, where the scan is not shown, rebuilds it
     else if (roof.reason && !/plan agrees/.test(roof.reason)) { if (opts.lenient) caveats.push(roof.reason); else reason = roof.reason; }
+    // the rooftop solids join after the roof check: they never make a roof the check refused pass
+    if (rooftopSolids.length) massing.parts = [...massing.parts, ...rooftopSolids];
     return { ...common, massing, ok: !reason, ...(reason ? { reason } : {}), ...(caveats.length ? { caveat: caveats.join('; ') } : {}), ...(planeFirst ? { planeFirst } : {}), ms: Date.now() - t0 };
 }
 
@@ -233,7 +242,7 @@ export interface DistrictMassingLayer {
     /** Residual triangles the native run returned off the rebuilt footprints, taken out (keepResidualOver). */
     residualOffFootprint: number;
     /** Plane first: the scan's lumps on fitted walls taken out of the residual, and the relief items the native tool did not take. */
-    planeFirst?: { residualRemovedTriangles: number; residualRemovedAreaM2: number; residualKeptTriangles: number; rejectedRelief: string[] };
+    planeFirst?: { residualRemovedTriangles: number; residualRemovedAreaM2: number; residualKeptTriangles: number; rejectedRelief: string[]; debris: Record<string, { clusters: number; triangles: number; areaM2: number }> };
     timingsMs: Record<string, number>;
 }
 
@@ -274,10 +283,13 @@ export async function buildDistrictMassingLayer(input: { rows: DistrictBuildingM
     if (pf.length) {
         const dropped = dropWallBandResidual(run.nodes, walls);
         run.nodes = dropped.nodes;
+        // roof debris: splinters and the scan's noise on the rebuilt roofs
+        const debris = dropResidualClusters(run.nodes, roofDebrisDecider(ok.flatMap(r => r.massing!.parts)));
+        run.nodes = debris.nodes;
         const reliefIds = new Set(walls.flatMap(w => w.reliefIds));
         // a relief item the native tool clipped to a split wall's pieces is built when any piece of it is
         const built = new Set(run.nodes.filter(n => /^(opening|facesweep):/.test(n.name)).map(n => reliefBaseId(n.name.replace(/^(opening|facesweep):/, ''))));
-        planeFirst = { residualRemovedTriangles: dropped.removedTriangles, residualRemovedAreaM2: dropped.removedAreaM2, residualKeptTriangles: dropped.keptTriangles, rejectedRelief: [...new Set([...run.report.rejectedOpenings, ...run.report.rejectedSweeps].map(reliefBaseId).filter(id => reliefIds.has(id) && !built.has(id)))] };
+        planeFirst = { residualRemovedTriangles: dropped.removedTriangles, residualRemovedAreaM2: dropped.removedAreaM2, residualKeptTriangles: debris.keptTriangles, debris: debris.byReason, rejectedRelief: [...new Set([...run.report.rejectedOpenings, ...run.report.rejectedSweeps].map(reliefBaseId).filter(id => reliefIds.has(id) && !built.has(id)))] };
     }
     t = Date.now();
     const { textures, legend } = plainTextures(run);
@@ -339,7 +351,31 @@ export function planeFirstProvenance(rows: DistrictBuildingMassing[], massing: P
     const sources = [{ kind: 'vector-data', id: 'google-vectortiles' }, { kind: 'tile-extraction', id: 'isolate' }];
     const caveatOf = (row: DistrictBuildingMassing) => (row.caveat ? `; rebuilt despite a failed check: ${row.caveat}` : '');
     const conf = (row: DistrictBuildingMassing, c: number) => r2(Math.max(0.05, Math.min(1, row.caveat ? c * 0.6 : c)));
+    const rooftopOf = new Map<string, { rec: RooftopRecord; row: DistrictBuildingMassing }>();
+    const voidOf = new Map<string, { rec: VoidRecord; row: DistrictBuildingMassing }>();
+    for (const row of rows) {
+        for (const rec of row.planeFirst?.rooftops ?? []) rooftopOf.set(rec.solid, { rec, row });
+        for (const rec of row.planeFirst?.voids ?? []) if (rec.floorPart) voidOf.set(rec.floorPart, { rec, row });
+    }
+    // a node's part, from its face key (w:<part>:<loop>:<edge>[:k], r:<part>:<i>, b:<part>)
+    const partOf = (name: string) => name.replace(/^[wrb]:/, '').replace(/(:\d+)+$/, '');
     return (n: MassingNode) => {
+        if (n.provenance === ROOFTOP_SOLID_TOKEN) {
+            const hit = rooftopOf.get(partOf(n.name));
+            return {
+                label: 'generated', measuredGeometry: false, confidence: hit ? conf(hit.row, Math.max(0.2, Math.min(0.8, hit.rec.fill - 0.1))) : 0.4,
+                method: `${ROOF_AND_VOIDS_VERSION}: a region of the scan standing over the rebuilt roof, rebuilt as the simplest prism that fills it (a rectangle in the building's or the region's frame, or a regular polygon) from the roof to the height the scan measures there (the median of its upper half)`,
+                sources, ...(hit ? { note: `${hit.rec.shape}, ${hit.rec.areaM2} m2, ${hit.rec.heightM} m tall; fills ${Math.round(hit.rec.fill * 100)}% of the scanned region's plan; the scan's top about the prism's ${hit.rec.topRmsM} m RMS${caveatOf(hit.row)}` } : {})
+            };
+        }
+        if (n.provenance === COURTYARD_FLOOR_TOKEN) {
+            const hit = voidOf.get(partOf(n.name));
+            return {
+                label: 'measured', measuredGeometry: true, confidence: hit ? conf(hit.row, 0.6) : 0.5,
+                method: `${ROOF_AND_VOIDS_VERSION}: the floor of an enclosed void (courtyard, light well) the scan shows far under the roof, at the median height the scan measures there; the void's ring fitted like any wall`,
+                sources, ...(hit ? { note: `void of ${hit.rec.areaM2} m2 (${hit.rec.shape}, fills ${Math.round(hit.rec.fill * 100)}%), ${hit.rec.depthM} m deep${caveatOf(hit.row)}` } : {})
+            };
+        }
         if (n.provenance === PLANE_RELIEF_TOKEN) {
             const id = reliefBaseId(n.name.replace(/^(opening|facesweep):/, ''));
             const hit = byRelief.get(id);
