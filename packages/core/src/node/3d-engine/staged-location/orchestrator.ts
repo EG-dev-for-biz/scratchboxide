@@ -77,8 +77,9 @@ import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service
 import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorEvidence } from './vector-footprints';
 import { auditDistrict, DISTRICT_AUDIT_VERSION, districtStreetAuditSummary, type DistrictStreetAuditSummary } from './district-residual-audit';
 import { buildSceneInventory, sceneInventorySummary, SCENE_INVENTORY_VERSION, type InventoryCrown, type SceneInventorySummary } from './scene-inventory';
-import { buildDistrictMassingLayer, districtMassingEnabled, DISTRICT_MASSING_VERSION, DISTRICT_TEXEL_M, massDistrict, proceduralDistrictEnabled } from './district-massing';
+import { buildDistrictMassingLayer, districtMassingEnabled, DISTRICT_MASSING_VERSION, DISTRICT_TEXEL_M, massDistrict, planeFirstEnabled, proceduralDistrictEnabled } from './district-massing';
 import { REVOLUTION_FIT_VERSION, revolutionFitEnabled, reviseForRevolutions, type RevolutionLayerSummary } from './revolution-fit';
+import { wallSampleIndex } from './wall-plane-fit';
 import { buildGroundSurface, groundHeightAt, PROCEDURAL_GROUND_VERSION, settleRoadsOnGround } from './procedural-ground';
 import {
     coveredShare, frameToLatLng, paintGeneratedHeightProvenance, paintProvenance, selectPaintBuildings, tilePlanCoverage, writePaintGlb,
@@ -3501,6 +3502,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 rebuilt: number; buildings: number; reasons: Record<string, number>; roofErrMedianM: number | null; removedTriangles: number; residualOffFootprint: number; timingsMs: Record<string, number>;
                 caveats?: number;
                 revolutions?: RevolutionLayerSummary & { cut: Record<string, number> };
+                /** Plane-first walls (wall-plane-fit.ts): walls by fit status, relief kept, scan lumps taken out of the residual. */
+                planeFirst?: { walls: number; measured: number; estimated: number; unseen: number; recesses: number; projections: number; rejectedRelief: number; residualRemovedTriangles: number; residualRemovedAreaM2: number };
                 procedural?: { ground: { vertices: number; triangles: number; openVertices: number; terrainVertices: number }; roads?: { roads: number; stations: number; measuredKerbs: number; defaultKerbs: number; triangles: number } };
             };
             const massingPromise = runner.stage<DistrictMassingValue>({
@@ -3519,7 +3522,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const scan = loadScanMesh(stripped.devegetatedGlb);
                         const ground = buildGroundModel(scan, { cellMeters: 1, water: look.waterAt, road: look.roadAt });
                         const within = (x: number, z: number) => Math.hypot(x, z) <= covered;
-                        const rows = massDistrict({ buildings: ev.buildings, look, ground, within, lenient: procedural });
+                        // plane first: the scan's near-vertical surface as samples, each wall fitted as one plane (wall-plane-fit.ts)
+                        const walls = planeFirstEnabled() ? wallSampleIndex(scan.mesh.vertices, scan.mesh.indices, { keep: (x, z) => Math.hypot(x, z) <= covered + 10 }) : undefined;
+                        const rows = massDistrict({ buildings: ev.buildings, look, ground, within, lenient: procedural, ...(walls ? { walls } : {}) });
                         const reasons: Record<string, number> = {};
                         for (const r of rows.filter(x => !x.ok)) { const k = (r.reason ?? 'unknown').split(':')[0].replace(/[\d.]+/g, 'N'); reasons[k] = (reasons[k] ?? 0) + 1; }
                         const ok = rows.filter(r => r.ok);
@@ -3530,6 +3535,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const layer = await buildDistrictMassingLayer({ rows, look, within, scanGlb: stripped.devegetatedGlb, outDir: dir, stage: 'massing', stageKey: key, signal: io.signal });
                         if (!layer) return { value: { rebuilt: 0, ...summary, removedTriangles: 0, residualOffFootprint: 0, timingsMs: {} } };
                         const caveats = ok.filter(r => r.caveat).length;
+                        const pfWalls = ok.flatMap(r => r.planeFirst?.walls ?? []);
+                        const planeFirst = layer.planeFirst ? {
+                            walls: pfWalls.length, measured: pfWalls.filter(w => w.fit.status === 'measured').length, estimated: pfWalls.filter(w => w.fit.status === 'estimated').length, unseen: pfWalls.filter(w => w.fit.status === 'unseen').length,
+                            recesses: ok.reduce((a, r) => a + (r.planeFirst?.openings.length ?? 0), 0), projections: ok.reduce((a, r) => a + (r.planeFirst?.faceSweeps.length ?? 0), 0),
+                            rejectedRelief: layer.planeFirst.rejectedRelief.length, residualRemovedTriangles: layer.planeFirst.residualRemovedTriangles, residualRemovedAreaM2: layer.planeFirst.residualRemovedAreaM2
+                        } : undefined;
+                        fs.writeFileSync(path.join(dir, 'plane_first_walls.json'), JSON.stringify(ok.filter(r => r.planeFirst).map(r => ({ id: r.id, caveat: r.caveat ?? null, overhangAfterShare: r.planeFirst!.overhangAfterShare, summary: r.planeFirst!.summary, walls: r.planeFirst!.walls }))));
                         // the district's solids of revolution (revolution-fit.ts): rebuilt clean, their scan and massing cut out
                         const reviseRevolutions = async (cutFiles: string[]) => {
                             if (!revolutionsOn) return undefined;
@@ -3575,14 +3587,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 }
                             }
                             const revolutions = await reviseRevolutions(['district_massing_textured.glb', 'district_massing_clay.glb']);
-                            return { value: { rebuilt: layer.rebuilt, ...summary, caveats, removedTriangles: 0, residualOffFootprint: layer.residualOffFootprint, timingsMs: layer.timingsMs, ...(revolutions ? { revolutions } : {}), procedural: { ground: { vertices: surf.stats.vertices, triangles: surf.stats.triangles, openVertices: surf.stats.openVertices, terrainVertices: surf.stats.terrainVertices }, ...(roadsStats ? { roads: roadsStats } : {}) } } };
+                            return { value: { rebuilt: layer.rebuilt, ...summary, caveats, ...(planeFirst ? { planeFirst } : {}), removedTriangles: 0, residualOffFootprint: layer.residualOffFootprint, timingsMs: layer.timingsMs, ...(revolutions ? { revolutions } : {}), procedural: { ground: { vertices: surf.stats.vertices, triangles: surf.stats.triangles, openVertices: surf.stats.openVertices, terrainVertices: surf.stats.terrainVertices }, ...(roadsStats ? { roads: roadsStats } : {}) } } };
                         }
                         // the scan's own buildings out where the rebuilt ones stand: the clay remesh and tile_refine's textured twin alike
                         const clay = hideFootprintInGlb(fs.readFileSync(refined.clayGlb), layer.footprint);
                         fs.writeFileSync(path.join(dir, 'remesh_carved.glb'), clay.glb);
                         fs.writeFileSync(path.join(dir, 'remesh_carved_textured.glb'), hideFootprintInGlb(fs.readFileSync(refined.texturedGlb), layer.footprint).glb);
                         const revolutions = await reviseRevolutions(['district_massing_textured.glb', 'district_massing_clay.glb', 'remesh_carved.glb', 'remesh_carved_textured.glb']);
-                        return { value: { rebuilt: layer.rebuilt, ...summary, removedTriangles: clay.removedTriangles, residualOffFootprint: layer.residualOffFootprint, timingsMs: layer.timingsMs, ...(revolutions ? { revolutions } : {}) } };
+                        return { value: { rebuilt: layer.rebuilt, ...summary, caveats, ...(planeFirst ? { planeFirst } : {}), removedTriangles: clay.removedTriangles, residualOffFootprint: layer.residualOffFootprint, timingsMs: layer.timingsMs, ...(revolutions ? { revolutions } : {}) } };
                     }, {
                         publish: (dir, v) => !v.rebuilt ? []
                             : v.procedural ? [{ from: 'district_massing_textured.glb', as: `${base}_massing_${key8}.glb` }, { from: 'ground.glb', as: `${base}_ground_${key8}.glb` }, ...(fs.existsSync(path.join(dir, 'roads.glb')) ? [{ from: 'roads.glb', as: `${base}_proc_roads_${key8}.glb` }] : []), ...(v.revolutions?.accepted ? [{ from: 'revolutions.glb', as: `${base}_revolutions_${key8}.glb` }] : [])]
@@ -3600,9 +3612,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         objectId: layerObjectId(key, 'l2m'), stage: 'massing', layer: 'l2m', order: STAGES.massing.order, url: pubMass.url, bytes: pubMass.bytes,
                         provenance: {
                             label: VECTOR_MODELLED_LABEL, measuredGeometry: false, confidence: 0.8,
-                            method: `${DISTRICT_MASSING_VERSION}: each building that passes its own check (footprint raised in the scan, no scan spilling past it, roof within pipeline E's error, wholly inside the extraction) rebuilt from its Google footprint at the heights and setbacks the scan measures, walls snapped to the scanned facades, textured from the tile photo`,
+                            method: `${DISTRICT_MASSING_VERSION}: each building that passes its own check (footprint raised in the scan, no scan spilling past it, roof within pipeline E's error, wholly inside the extraction) rebuilt from its Google footprint at the heights and setbacks the scan measures, ${v.planeFirst ? "each wall one plumb plane at the depth the scan measures (its lumps snapped flat), relief only where the scan departs from the plane consistently over a real area; buildings failing a soft check rebuilt with it as their caveat" : 'walls snapped to the scanned facades'}, textured from the tile photo`,
                             sources: [{ kind: 'vector-tiles', id: `vectortiles:${vectorKey.slice(0, 8)}` }, { kind: 'tile-extraction', id: `extract:${t.key.slice(0, 8)}` }],
-                            note: `${v.rebuilt} of ${v.buildings} buildings rebuilt (roof ${v.roofErrMedianM} m off the scan, median); the rest keep the scan${why ? ` (${why})` : ''}`
+                            note: `${v.rebuilt} of ${v.buildings} buildings rebuilt (roof ${v.roofErrMedianM} m off the scan, median); the rest keep the scan${why ? ` (${why})` : ''}${v.planeFirst ? `; plane-first walls: ${v.planeFirst.measured} measured planes, ${v.planeFirst.estimated} estimated (no clean plane, labelled generated), ${v.planeFirst.unseen} on the footprint edge (the scan does not see them); ${v.planeFirst.recesses} recesses and ${v.planeFirst.projections} projections kept (${v.planeFirst.rejectedRelief} did not fit their wall); ${v.planeFirst.residualRemovedAreaM2} m2 of scan lumps on the walls snapped flat; ${v.caveats ?? 0} rebuilt despite a failed check, labelled with it` : ''}`
                         },
                         provenanceLabels: [VECTOR_MODELLED_LABEL, PROVENANCE.asScanned], supersedes: [], revealAfter: [],
                         reveal: { durationMs: 1200, stagger: 0.3, crossfadeFrom: [] }, cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pubMass.path)
