@@ -73,6 +73,8 @@ export interface DecodedFeatureTile {
     landuse: DecodedPolygon[];
     water: DecodedPolygon[];
     roads: DecodedLine[];
+    /** Rail centrelines (Google's FEATURE_TYPE_RAIL lines): street-running track and dedicated track alike, told apart by measurement, not by type. */
+    rails: DecodedLine[];
     pois: Array<{ id: string; type: 'Point'; point: [number, number]; properties: Record<string, any> }>;
     modeledVolumes: DecodedModeledVolume[];
     /** Every feature of the tile in the sb-feature/1 model, carried unchanged: Google's types and geometry blocks as received (tile grid units). */
@@ -142,7 +144,7 @@ export function stripsToTriangles(strips: Array<{ vertexIndices?: number[] }>): 
 const hasType = (types: string[] | undefined, re: RegExp) => (types || []).some(t => re.test(t));
 
 export function decodeFeatureTile(tile: FeatureTileJson, idPrefix = `${tile.zoom}/${tile.x}/${tile.y}`): DecodedFeatureTile {
-    const out: DecodedFeatureTile = { buildings: [], buildingFootprints2D: [], landuse: [], water: [], roads: [], pois: [], modeledVolumes: [], features: [] };
+    const out: DecodedFeatureTile = { buildings: [], buildingFootprints2D: [], landuse: [], water: [], roads: [], rails: [], pois: [], modeledVolumes: [], features: [] };
     const centre = gridToLngLat(tile, TILE_GRID / 2, TILE_GRID / 2);
     const unit = gridUnitMeters(centre[1], tile.zoom);
 
@@ -152,6 +154,7 @@ export function decodeFeatureTile(tile: FeatureTileJson, idPrefix = `${tile.zoom
         const isBuilding = hasType(types, /^FEATURE_TYPE_BUILDING$|_BUILDING$/);
         const isWater = hasType(types, /WATER/);
         const isRoad = hasType(types, /ROAD|HIGHWAY|STREET/);
+        const isRail = hasType(types, /^FEATURE_TYPE_RAIL$/);
         const isLanduse = hasType(types, /NATURAL|LAND_COVER|PARK|VEGETATION|CROPS|URBAN_AREA/);
         const properties = { types };
         out.features.push(sbFeatureFromGoogle(feature, `${idPrefix}/f${fi}`, tile));
@@ -181,8 +184,8 @@ export function decodeFeatureTile(tile: FeatureTileJson, idPrefix = `${tile.zoom
         });
         (g.lines || []).forEach((l: any, i: number) => {
             const xs = cumulative(l?.vertexOffsets?.xOffsets), ys = cumulative(l?.vertexOffsets?.yOffsets);
-            if (xs.length < 2 || !isRoad) return;
-            out.roads.push({ id: `${idPrefix}/f${fi}/l${i}`, type: 'LineString', points: xs.map((x, k) => gridToLngLat(tile, x, ys[k])), properties });
+            if (xs.length < 2 || !(isRoad || isRail)) return;
+            (isRoad ? out.roads : out.rails).push({ id: `${idPrefix}/f${fi}/l${i}`, type: 'LineString', points: xs.map((x, k) => gridToLngLat(tile, x, ys[k])), properties });
         });
         (g.modeledVolumes || []).forEach((mv: any, i: number) => {
             const xs = cumulative(mv.vertexOffsets?.xOffsets), ys = cumulative(mv.vertexOffsets?.yOffsets), zs = cumulative(mv.vertexOffsets?.zOffsets);

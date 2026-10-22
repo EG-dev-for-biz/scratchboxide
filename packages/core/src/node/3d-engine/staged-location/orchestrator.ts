@@ -75,6 +75,7 @@ import { glbMeshCounts, plantTrees, summarizeTrees, type LocationClayTrees } fro
 import { TileVegetationError, type TileVegetationPlantRequest, type TileVegetationPlantResult, type TileVegetationStripRequest, type TileVegetationStripResult } from '../tile-vegetation-service';
 import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service';
 import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorEvidence } from './vector-footprints';
+import { auditDistrict, DISTRICT_AUDIT_VERSION, districtStreetAuditSummary, type DistrictStreetAuditSummary } from './district-residual-audit';
 import {
     coveredShare, frameToLatLng, paintGeneratedHeightProvenance, paintProvenance, selectPaintBuildings, tilePlanCoverage, writePaintGlb,
     GENERATED_HEIGHT_LABEL, PLAUSIBLE_DEFAULT_HEIGHT_M, VECTOR_ISOLATE_RADIUS_M, VECTOR_MASSING_VERSION,
@@ -2619,6 +2620,45 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             });
         })();
         siblings.push(roadsPromise);
+
+        // ---------------- the district's street audit (district-residual-audit.ts: labels and the object catalog, the build unchanged) ----------------
+        if (!request.isolate && strip && deps.vectorEvidence) {
+            const stripped = strip;
+            siblings.push((async () => {
+                const covered = extraction.coveredRadiusM;
+                try {
+                    const ev = await deps.vectorEvidence!({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: covered + 20 });
+                    const look = evidenceLookup(ev, covered + 20);
+                    const key = stageKey(DISTRICT_AUDIT_VERSION, stripped.cacheKey, crypto.createHash('sha256').update(JSON.stringify([ev.buildings.map(b => b.parts), ev.water, ev.roads, ev.rails ?? []])).digest('hex').slice(0, 16), covered.toFixed(1));
+                    const entry = await cache.run<DistrictStreetAuditSummary>('district_audit', key, async dir => {
+                        const scan = loadScanMesh(stripped.devegetatedGlb);
+                        const ground = buildGroundModel(scan, { cellMeters: 1, water: look.waterAt, road: look.roadAt });
+                        const r = await auditDistrict({
+                            scan, ground, buildingAt: look.buildingAt, waterAt: look.waterAt, within: (x, z) => Math.hypot(x, z) <= covered, rails: ev.rails ?? [], roads: ev.roads,
+                            dir: path.join(dir, 'residual_audit'), ...(ctx.signal ? { signal: ctx.signal } : {}), idPrefix: `district/${key.slice(0, 8)}`
+                        });
+                        fs.writeFileSync(path.join(dir, 'district_audit.json'), JSON.stringify(r));
+                        return { value: districtStreetAuditSummary(r) };
+                    });
+                    const v = entry.value;
+                    cache.writeRunNote(runId, 'district_street_audit', { key, cached: entry.cached, ...v });
+                    run.note(PROVENANCE.asScanned, `the streets: ${v.notes.join(' | ')}`);
+                    const geoOrigin: GeodeticOrigin = { lat: run.geoAnchor.lat, lng: run.geoAnchor.lng, heightMeters: run.geoAnchor.elevation ?? 0 };
+                    recordDiscoveredObjects(v.catalog.map(c => {
+                        const lo = scanToGeodetic(geoOrigin, c.lo[0], c.lo[1], c.lo[2]), hi = scanToGeodetic(geoOrigin, c.hi[0], c.hi[1], c.hi[2]);
+                        const centre = scanToGeodetic(geoOrigin, (c.lo[0] + c.hi[0]) / 2, (c.lo[1] + c.hi[1]) / 2, (c.lo[2] + c.hi[2]) / 2);
+                        return {
+                            type: c.type, label: c.reason, confidence: c.confidence, lat: centre.lat, lng: centre.lng,
+                            bboxLo: { lat: Math.min(lo.lat, hi.lat), lng: Math.min(lo.lng, hi.lng), alt: lo.alt }, bboxHi: { lat: Math.max(lo.lat, hi.lat), lng: Math.max(lo.lng, hi.lng), alt: hi.alt },
+                            source: 'district-residual-audit', runId
+                        };
+                    }));
+                } catch (err) {
+                    if (isAbort(err) || ctx.signal?.aborted) return;
+                    run.note(PROVENANCE.asScanned, `the streets: the street audit could not run (${errorMessage(err)}); what stands in the streets is shown as scanned, unlabelled`);
+                }
+            })());
+        }
 
         // ---------------- remesh ----------------
         // facade grammar: on by flag, with a vision model, on a relief that runs

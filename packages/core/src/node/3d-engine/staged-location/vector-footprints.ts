@@ -36,6 +36,8 @@ export interface VectorEvidence {
     water: Vec2[][][];
     /** Road centrelines. */
     roads: Vec2[][];
+    /** Rail centrelines (Google FEATURE_TYPE_RAIL lines), when the tiles carried any. */
+    rails?: Vec2[][];
     tiles: number;
     zoom: number;
 }
@@ -46,6 +48,7 @@ interface TileFeatures {
     buildingFootprints2D?: Array<{ id: string; ring: Array<[number, number]>; innerRings?: Array<Array<[number, number]>> }>;
     water: Array<{ ring: Array<[number, number]>; innerRings?: Array<Array<[number, number]>> }>;
     roads: Array<{ points: Array<[number, number]> }>;
+    rails?: Array<{ points: Array<[number, number]> }>;
     /** Modeled 3D buildings: [lng, lat, height] vertices and triangle indices. */
     modeledVolumes?: Array<{ id: string; vertices: Array<[number, number, number]>; indices: number[]; heightMeters?: number }>;
 }
@@ -77,6 +80,7 @@ export async function fetchVectorEvidence(opts: {
     const featureOf = (id: string) => id.split('/').slice(0, 4).join('/');  // z/x/y/f<i>: one feature, all its parts
     const water: Vec2[][][] = [];
     const roads: Vec2[][] = [];
+    const rails: Vec2[][] = [];
     for (const t of tiles) {
         const planOnly = new Set(t.buildingFootprints2D ?? []);
         for (const p of [...t.buildings, ...(t.buildingFootprints2D ?? [])]) {
@@ -106,8 +110,9 @@ export async function fetchVectorEvidence(opts: {
         }
         for (const w of t.water) water.push([w.ring, ...(w.innerRings ?? [])].map(r => r.map(toScan)));
         for (const r of t.roads) roads.push(r.points.map(toScan));
+        for (const r of t.rails ?? []) rails.push(r.points.map(toScan));
     }
-    return { buildings: [...byFeature.values()], water, roads, tiles: tiles.length, zoom: z };
+    return { buildings: [...byFeature.values()], water, roads, rails, tiles: tiles.length, zoom: z };
 }
 
 export interface EvidenceGrid { x0: number; z0: number; nx: number; nz: number; cellMeters: number }

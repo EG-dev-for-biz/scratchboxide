@@ -100,6 +100,8 @@ export interface DecodedVectorTileData {
     landuse: VectorFeaturePolygon[];
     water: VectorFeaturePolygon[];
     roads: VectorFeatureLine[];
+    /** Rail centrelines (Google FEATURE_TYPE_RAIL lines). */
+    rails?: VectorFeatureLine[];
     pois?: VectorFeaturePoint[];
     /** True 3D building meshes (enableModeledVolumes); vertices are [lng, lat, height above the building base]. */
     modeledVolumes?: DecodedModeledVolume[];
@@ -441,6 +443,7 @@ export class GoogleVectorTileService {
             landuse: decoded.landuse,
             water: decoded.water,
             roads: decoded.roads,
+            rails: decoded.rails,
             pois: decoded.pois,
             modeledVolumes: decoded.modeledVolumes,
             buildingFootprints2D: decoded.buildingFootprints2D
