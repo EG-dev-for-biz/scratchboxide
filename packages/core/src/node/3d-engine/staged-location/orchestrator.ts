@@ -89,6 +89,7 @@ import {
 import { VisionModelChain, type VisionGenAIClient } from '../../gemini/vision-model-chain';
 import { segmentOwnershipViews } from './ownership-masks';
 import { buildGroundModel, geodeticToScan, loadScanMesh, scanToGeodetic, surfaceModel, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
+import { removeVehicles, vehicleRemovalEnabled, visionVehicleJudge, VEHICLE_REMOVAL_PARAMS, VEHICLE_REMOVAL_VERSION, type VehicleRemovalReport } from './vehicle-removal';
 import { buildRoadMesh, measureRoadSurfaces, sbRoadieEnabled, writeRoadsGlb, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
 import { renderTopDownPhoto } from './top-down-photo';
 import { synthesizeRoadTextures } from './road-texture';
@@ -199,6 +200,9 @@ export const STAGES = {
     // the tiles have committed and the buildings they do not cover are kept as their own layer
     vector: { order: 0, title: 'Google vector massing', budgetMs: 120_000 },
     tiles: { order: 1, title: 'Google 3D Tiles', budgetMs: 360_000 },
+    // the vehicles the scan baked in, read by the vision model in top-down crops and patched out of the scan every later
+    // stage builds on (vehicle-removal.ts; user rule, 2026-10-22); its layer replaces the raw tiles
+    vehicles: { order: 1, title: 'Removing vehicles', budgetMs: 480_000 },
     // the real ground around the place from the Google Elevation API, out to TERRAIN_RADIUS_M, under everything else
     terrain: { order: 0, title: 'Surrounding terrain', budgetMs: 120_000 },
     // the streets: Google's road centrelines measured kerb to kerb on the scan, textured from the tile photo rendered from above
@@ -383,6 +387,11 @@ export interface StagedLocationDeps {
     streetView?: StreetViewEvidenceDeps;
     /** The vision model client and the models to try (the staged default first); or why there is none. */
     vision?: { client: VisionGenAIClient; candidates: string[] } | { unavailable: string };
+    /**
+     * Vehicle removal (vehicle-removal.ts) reads the scan with `vision`: true in the app's deps (createStagedLocationDeps);
+     * stand-in deps leave it out, so their vision replies are not asked about vehicles.
+     */
+    vehicleRemoval?: boolean;
     /** Google Solar API roof facets of the building closest to (lat, lng) (pipeline E's massing); absent without a key. */
     solarRoof?(lat: number, lng: number): Promise<SolarRoof>;
     /** Vector building footprints near a place (facade grammar's independent check); default: Google vector feature tiles. */
@@ -1481,7 +1490,85 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         tilesSettle(tiles.value ? { extraction: tiles.value.extraction, key: tiles.value.key } : undefined);
         if (tiles.status === 'stopped' || !tiles.value) throw new StagedLocationHardFailure('tiles', 'run_deadline', `The run reached its time limit before any tiles were extracted, so there is nothing to show.`);
         const t = tiles.value;
-        const extraction = t.extraction;
+
+        // ---------------- vehicles (vehicle-removal.ts): every later stage builds on the scan without them ----------------
+        const devehicled = await (async (): Promise<typeof t.extraction | undefined> => {
+            if (!vehicleRemovalEnabled() || !deps.vehicleRemoval) { runner.skip('vehicles', 'vehicle removal is off (SCRATCHBOX_STAGED_VEHICLES=0, or not in these deps)'); return undefined; }
+            const vis = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
+            const notRemoved = (reason: string, cause?: unknown, transient = false) => run.degrade(record('vehicles', 'vehicles_not_removed', {
+                part: { description: 'the vehicles the scan baked into the streets' }, intended: 'every vehicle read from the scan photo removed and the street under it patched',
+                fellTo: 'the scan with its vehicles (melted lumps on the carriageways and kerbsides)', provenanceAfter: PROVENANCE.asScanned, reason,
+                ...(cause !== undefined ? { cause } : {}), transient, runId, now: now(), reuses: ['resolve', 'tiles']
+            }));
+            if (!vis) {
+                // as the survey does without a model: skipped, the reason said where the stages are read
+                runner.skip('vehicles', `no vision model is configured (${deps.vision && 'unavailable' in deps.vision ? deps.vision.unavailable : 'none'}), so the scan keeps its vehicles: they cannot be told from the street furniture`);
+                return undefined;
+            }
+            const r = await runner.stage<{ extraction: typeof t.extraction; report: VehicleRemovalReport }>({
+                id: 'vehicles',
+                run: async io => {
+                    const e = t.extraction;
+                    const covered = e.coveredRadiusM;
+                    let look: EvidenceLookup | undefined = t.vector;
+                    let vectorNote = t.vector ? 'vector' : 'none';
+                    if (!look && deps.vectorEvidence) {
+                        try { look = evidenceLookup(await deps.vectorEvidence({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: covered + 20 }), covered + 20); vectorNote = 'vector'; }
+                        catch (err) { if (isAbort(err) || io.signal.aborted) throw err; vectorNote = `none (${errorMessage(err)})`; }
+                    }
+                    const key = stageKey(VEHICLE_REMOVAL_VERSION, t.key, vectorNote === 'none' ? 'none' : 'vector', covered.toFixed(1), vis.candidates, VEHICLE_REMOVAL_PARAMS);
+                    run.keys.vehicles = key;
+                    type V = { textured: string; geometry: string; report: VehicleRemovalReport };
+                    const entry = await cache.run<V>('vehicles', key, async dir => {
+                        io.progress('reading the vehicles from above');
+                        const scan = t.scan ?? loadScanMesh(e.texturedGlb);
+                        const ground = buildGroundModel(scan, { cellMeters: 1, ...(look ? { water: look.waterAt, road: look.roadAt } : {}) });
+                        const chain = new VisionModelChain<string>({ client: vis.client, candidates: vis.candidates, signal: io.signal, ...chainExtras('vehicles'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                        const out = await removeVehicles({
+                            texturedGlb: e.texturedGlb, geometryGlb: e.geometryGlb, scan, ground, judge: visionVehicleJudge(chain), outDir: dir, signal: io.signal,
+                            look: { ...(look ? { buildingAt: look.buildingAt, waterAt: look.waterAt, roadAt: look.roadAt } : {}), within: (x, z) => Math.hypot(x, z) <= covered },
+                            log: m => io.progress(m)
+                        });
+                        if (out.report.failedCalls.length) throw new Error(`the vision model could not read ${out.report.failedCalls.length} of ${out.report.crops} crops (${out.report.failedCalls[0].error})`);
+                        const rel = (p: string) => (path.dirname(p) === dir ? path.basename(p) : p);
+                        return { value: { textured: rel(out.texturedGlb), geometry: rel(out.geometryGlb ?? e.geometryGlb), report: out.report } };
+                    });
+                    const abs = (p: string) => (path.isAbsolute(p) ? p : path.join(entry.dir, p));
+                    const report = entry.value.report;
+                    run.cacheStatus.vehicles = entry.cached ? 'hit' : 'miss';
+                    cache.writeRunNote(runId, 'vehicles', { key, cached: entry.cached, dir: entry.dir, notes: report.notes, vehicles: report.vehicles, boxOnly: report.boxOnlyVehicles, unpatched: report.unpatchedVehicles, transientKept: report.transientKept, removed: report.removed, patch: report.patch, crops: report.crops, candidates: report.candidates, ms: report.ms, rawExtraction: e.texturedGlb });
+                    if (!report.removed.length) return { status: 'committed', value: { extraction: e, report }, source: `no vehicle to remove (${report.candidates} candidates read in ${report.crops} crops)`, cached: entry.cached, builtAtMs: entry.builtAtMs };
+                    const extraction = { ...e, texturedGlb: abs(entry.value.textured), geometryGlb: abs(entry.value.geometry), rawGlbPath: abs(entry.value.textured) };
+                    // the tiles without the vehicles replace the raw tiles in the viewport
+                    const raw = run.state.layers.find(l => l.layer === 'l1');
+                    const key8 = key.slice(0, 8);
+                    const published = cache.publishFile(extraction.geometryGlb, `${base}_tiles_${t.key.slice(0, 8)}_novehicles_${key8}.glb`);
+                    const area = report.removed.reduce((s, x) => s + x.areaM2, 0);
+                    const generatedShare = report.removed.reduce((s, x) => s + x.areaM2 * x.provenance.texture.generatedShare, 0) / Math.max(area, 1e-6);
+                    const note = `${report.removed.length} vehicle region${report.removed.length === 1 ? '' : 's'} (${report.vehicles} vehicles read by the vision model, ${Math.round(area)} m²) removed: the surface under each estimated from the measured scan around it (generated: nothing was measured under a vehicle), its texels mirrored from the scan's own photo of the road beyond it (photo-inferred; ${Math.round(generatedShare * 100)} % filled from surroundings: generated)`;
+                    const layer: StagedLayer = {
+                        objectId: layerObjectId(key, 'l1'), stage: 'vehicles', layer: 'l1', order: STAGES.tiles.order, url: published.url, bytes: published.bytes,
+                        provenance: { label: PROVENANCE.asScanned, measuredGeometry: true, method: 'Google Photorealistic 3D Tiles, leaf LOD, with the vehicles the scan baked in removed (vehicle-removal.ts)', sources: [{ kind: 'tile-extraction', id: `extract:${t.key.slice(0, 8)}` }], note },
+                        provenanceLabels: [PROVENANCE.asScanned, 'generated'], supersedes: raw ? [raw.objectId] : [], revealAfter: [],
+                        reveal: { durationMs: 800, stagger: 0, crossfadeFrom: raw ? [raw.objectId] : [] },
+                        cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(extraction.geometryGlb)
+                    };
+                    run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, isGround: true, extra: { rawGlbPath: extraction.texturedGlb, vehiclesRemoved: report.removed.length } });
+                    run.setGround(layer.objectId);
+                    run.note('generated', note);
+                    return { status: 'committed', value: { extraction, report }, source: report.notes[0] ?? note, layers: [layer], cached: entry.cached, builtAtMs: entry.builtAtMs };
+                },
+                degrade: async err => ({
+                    status: 'degraded', source: 'the scan keeps its vehicles', reason: `the vehicles could not be removed: ${errorMessage(err)}`,
+                    degradations: [notRemoved(`the vehicles could not be removed (${errorMessage(err)})`, err, true)]
+                })
+            });
+            persist();
+            return r.status === 'committed' ? r.value?.extraction : undefined;
+        })();
+        const extraction = devehicled ?? t.extraction;
+        /** The tiles layer standing now: the one without the vehicles once that has committed. */
+        const currentL1 = () => [...run.state.layers].reverse().find(l => l.layer === 'l1');
         const structure = request.isolate && t.sizedTo === 'structure' ? t.structure : undefined;
         const isolateMode = !!structure;
 
@@ -2797,7 +2884,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const key8 = key.slice(0, 8);
                 const pubClay = cache.publishFile(r.files.clayGlb, `${base}_massing_${key8}.glb`);
                 const pubTex = cache.publishFile(r.files.texturedGlb, `${base}_massing_${key8}_tex.glb`);
-                const l1 = run.state.layers.find(l => l.layer === 'l1')!;
+                const l1 = currentL1()!;
                 const counts = layerCounts(r.files.clayGlb);
                 const residual = r.run.report.residual;
                 const auditLine = recordResidualAudit('remesh', r.run, 'massing layer');
@@ -2927,7 +3014,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 if ((prov.summary.proudBlocks?.keptAsScannedVertices ?? 0) > 0) labels.push(PROVENANCE.asScanned);
                 if ((prov.summary.relief?.carvedVertices ?? 0) > 0) labels.push(PROVENANCE.photoInferred);
                 run.note(PROVENANCE.remeshed, `tile_refine remesh: ${note || 'no change beyond the remesh itself'}`);
-                const l1 = run.state.layers.find(l => l.layer === 'l1')!;
+                const l1 = currentL1()!;
                 const remeshCounts = layerCounts(r.clayGlb);
                 // the layer is measured only where the scan is: vertices carved by photo relief are inferred, and the record says so
                 const carved = prov.summary.relief?.carvedVertices ?? 0;
@@ -2962,7 +3049,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             },
             degrade: async (err, io) => {
                 const why = errorMessage(err);
-                const l1 = run.state.layers.find(l => l.layer === 'l1')!;
+                const l1 = currentL1()!;
                 if (deps.scanFit) {
                     try {
                         const f = await deps.scanFit.flatten({ inputGlb: extraction.texturedGlb, ...(structure ? { footprint: structure.outline } : {}), signal: io.signal });
@@ -4413,7 +4500,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- finish ----------------
         cache.writeRunNote(runId, 'main_thread', blockTracer.stop());
         return finishRun(run, {
-            request, place: placeValue, extraction, structure, sizedTo: t.sizedTo, remeshed: remeshedNow, groundFile: groundOverride?.groundFile ?? remesh.value?.groundFile, groundLayerId: groundOverride?.groundLayerId ?? remesh.value?.groundLayerId ?? run.state.layers.find(l => l.layer === 'l1')?.objectId,
+            request, place: placeValue, extraction, structure, sizedTo: t.sizedTo, remeshed: remeshedNow, groundFile: groundOverride?.groundFile ?? remesh.value?.groundFile, groundLayerId: groundOverride?.groundLayerId ?? remesh.value?.groundLayerId ?? currentL1()?.objectId,
             trees: treesOut.trees, putBack: treesOut.putBack, rebuild, strip, ...(textureValue ? { textures: textureValue } : {}), now, persist
         });
     } catch (err) {

@@ -1101,6 +1101,7 @@ export const STAGED_DEGRADE_LADDER: readonly DegradeRung[] = [
     { stage: 'tiles', failure: 'no structure of 3 m or more stands within 30 m of the anchor', fellTo: 'the remeshed area around the anchor, without a rebuild', provenanceAfter: PROVENANCE.remeshed, reasonCode: 'no_structure_at_anchor' },
     { stage: 'tiles', failure: 'the canopy mask fails', fellTo: 'the structure picked on the unmasked surface model', provenanceAfter: PROVENANCE.asScanned, reasonCode: 'canopy_not_masked' },
     { stage: 'tiles', failure: 'the structure still touches the extraction edge after 3 rounds or at 150 m', fellTo: 'the remeshed district around it, without a rebuild', provenanceAfter: PROVENANCE.remeshed, reasonCode: 'containment_failed' },
+    { stage: 'vehicles', failure: 'the vehicles cannot be read or patched (no vision model, a failed call)', fellTo: 'the scan with its vehicles', provenanceAfter: PROVENANCE.asScanned, reasonCode: 'vehicles_not_removed' },
     { stage: 'trees-measure', failure: 'strip fails', fellTo: "the scan's own trees, left in the remeshed scan", provenanceAfter: PROVENANCE.remeshed, reasonCode: 'trees_not_measured' },
     { stage: 'remesh', failure: 'tile_refine fails or times out', fellTo: 'the raw scan with its facades flattened, its scanned trees kept in it', provenanceAfter: PROVENANCE.scanFlattened, reasonCode: 'remesh_failed' },
     { stage: 'remesh', failure: 'flattening the raw scan fails too', fellTo: 'the raw scan as downloaded', provenanceAfter: PROVENANCE.asScanned, reasonCode: 'flatten_failed' },

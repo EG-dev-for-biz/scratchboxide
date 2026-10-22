@@ -269,6 +269,7 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
             metadataCachePath: path.join(cache.dir, 'streetview', 'metadata.json')
         },
         vision,
+        vehicleRemoval: true,
         // the texture pass's model texture rung: the image model redraws the tile transfer, kept only past its gate
         // (SCRATCHBOX_TEXTURE_ENHANCE=0 turns the rung off); default mode 'recreate' (user decision, 2026-10-21) removes
         // the scan's own baked shadow/highlight and recovers the material's true colour, gated on structure and
