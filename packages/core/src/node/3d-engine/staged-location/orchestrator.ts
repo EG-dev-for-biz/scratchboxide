@@ -3985,6 +3985,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (!v.rebuilt) return { status: 'skipped', value: v, source: 'the remeshed scan stands', reason: `no building passed its check (${Object.entries(v.reasons).map(([k, n]) => `${n}: ${k}`).join('; ')})`, cached: entry.cached };
                     const [pubMass, pubCarved] = entry.published;
                     const remeshLayer = run.state.layers.find(l => l.objectId === remeshId)!;
+                    // the facade grammar's l2g is the same scan with windows read in, landing in parallel: once it has settled, the
+                    // layers here replace it too, or it stands over the rebuilt buildings
+                    await grammarGate.settled;
+                    const replaced = [remeshId, ...run.state.layers.filter(l => l.layer === 'l2g' && !l.retired).map(l => l.objectId)];
                     const why = Object.entries(v.reasons).map(([k, n]) => `${n} ${k}`).join('; ');
                     const sources = [{ kind: 'vector-tiles', id: `vectortiles:${vectorKey.slice(0, 8)}` }, { kind: 'tile-extraction', id: `extract:${t.key.slice(0, 8)}` }];
                     const massLayer: StagedLayer = {
@@ -4001,7 +4005,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const carvedLayer: StagedLayer = {
                         ...remeshLayer, objectId: layerObjectId(key, 'l2c'), stage: 'massing', layer: 'l2c', url: pubCarved.url, bytes: pubCarved.bytes,
                         provenance: { ...remeshLayer.provenance, note: `${remeshLayer.provenance.note ? `${remeshLayer.provenance.note}; ` : ''}the ${v.rebuilt} rebuilt buildings' scan taken out (${v.removedTriangles} triangles)` },
-                        supersedes: [remeshId], revealAfter: [], reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [remeshId] }, cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pubCarved.path)
+                        supersedes: replaced, revealAfter: [], reveal: { durationMs: 800, stagger: 0, crossfadeFrom: replaced }, cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pubCarved.path)
                     };
                     delete (carvedLayer as Partial<StagedLayer>).textured;
                     // the rebuilt solids of revolution: their own layer, self-coloured from the tile photo
@@ -4042,7 +4046,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 method: `${PROCEDURAL_GROUND_VERSION}: the street surface the scan measures (its open surface's local median; the terrain where something stands on it), coloured from a top-down render of the tile photo`,
                                 sources, note: `${v.procedural.ground.openVertices} vertices on the scan's open surface, ${v.procedural.ground.terrainVertices} on the terrain under something standing there`
                             },
-                            provenanceLabels: ['measured'], supersedes: [remeshId], revealAfter: [], reveal: { durationMs: 1000, stagger: 0, crossfadeFrom: [remeshId] },
+                            provenanceLabels: ['measured'], supersedes: replaced, revealAfter: [], reveal: { durationMs: 1000, stagger: 0, crossfadeFrom: replaced },
                             cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pubGround.path),
                             ...twinOr(pubGround, 'a top-down render of the tile photo, planar onto the ground surface')
                         };
