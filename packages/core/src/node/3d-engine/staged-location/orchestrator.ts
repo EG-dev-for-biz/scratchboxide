@@ -77,7 +77,8 @@ import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service
 import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorEvidence } from './vector-footprints';
 import { auditDistrict, DISTRICT_AUDIT_VERSION, districtStreetAuditSummary, type DistrictStreetAuditSummary } from './district-residual-audit';
 import { buildSceneInventory, sceneInventorySummary, SCENE_INVENTORY_VERSION, type InventoryCrown, type SceneInventorySummary } from './scene-inventory';
-import { buildDistrictMassingLayer, districtMassingEnabled, DISTRICT_MASSING_VERSION, DISTRICT_TEXEL_M, massDistrict } from './district-massing';
+import { buildDistrictMassingLayer, districtMassingEnabled, DISTRICT_MASSING_VERSION, DISTRICT_TEXEL_M, massDistrict, proceduralDistrictEnabled } from './district-massing';
+import { buildGroundSurface, groundHeightAt, PROCEDURAL_GROUND_VERSION, settleRoadsOnGround } from './procedural-ground';
 import {
     coveredShare, frameToLatLng, paintGeneratedHeightProvenance, paintProvenance, selectPaintBuildings, tilePlanCoverage, writePaintGlb,
     GENERATED_HEIGHT_LABEL, PLAUSIBLE_DEFAULT_HEIGHT_M, VECTOR_ISOLATE_RADIUS_M, VECTOR_MASSING_VERSION,
@@ -3494,8 +3495,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- the district's rebuilt buildings (district-massing.ts) ----------------
         if (!request.isolate && strip && deps.vectorEvidence && remesh.value?.refined && remesh.value.committed && districtMassingEnabled()) {
             const stripped = strip, refined = remesh.value.refined, remeshId = remesh.value.groundLayerId;
+            const procedural = proceduralDistrictEnabled();
             type DistrictMassingValue = {
                 rebuilt: number; buildings: number; reasons: Record<string, number>; roofErrMedianM: number | null; removedTriangles: number; residualOffFootprint: number; timingsMs: Record<string, number>;
+                caveats?: number;
+                procedural?: { ground: { vertices: number; triangles: number; openVertices: number; terrainVertices: number }; roads?: { roads: number; stations: number; measuredKerbs: number; defaultKerbs: number; triangles: number } };
             };
             const massingPromise = runner.stage<DistrictMassingValue>({
                 id: 'massing',
@@ -3504,7 +3508,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const ev = await deps.vectorEvidence!({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: covered + 20 });
                     const look = evidenceLookup(ev, covered + 20);
                     const vectorKey = crypto.createHash('sha256').update(JSON.stringify([ev.buildings.map(b => [b.id, b.parts, b.heightM ?? null, b.extruded ?? null]), ev.water, ev.roads])).digest('hex').slice(0, 16);
-                    const key = stageKey(DISTRICT_MASSING_VERSION, stripped.cacheKey, vectorKey, refined.cacheKey, covered.toFixed(1), String(DISTRICT_TEXEL_M));
+                    const key = stageKey(DISTRICT_MASSING_VERSION, stripped.cacheKey, vectorKey, refined.cacheKey, covered.toFixed(1), String(DISTRICT_TEXEL_M), procedural ? `${PROCEDURAL_GROUND_VERSION}+roads/v5-settled` : 'carve');
                     run.keys.massing = key;
                     const key8 = key.slice(0, 8);
                     const entry = await cache.run<DistrictMassingValue>('massing', key, async dir => {
@@ -3512,7 +3516,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const scan = loadScanMesh(stripped.devegetatedGlb);
                         const ground = buildGroundModel(scan, { cellMeters: 1, water: look.waterAt, road: look.roadAt });
                         const within = (x: number, z: number) => Math.hypot(x, z) <= covered;
-                        const rows = massDistrict({ buildings: ev.buildings, look, ground, within });
+                        const rows = massDistrict({ buildings: ev.buildings, look, ground, within, lenient: procedural });
                         const reasons: Record<string, number> = {};
                         for (const r of rows.filter(x => !x.ok)) { const k = (r.reason ?? 'unknown').split(':')[0].replace(/[\d.]+/g, 'N'); reasons[k] = (reasons[k] ?? 0) + 1; }
                         const ok = rows.filter(r => r.ok);
@@ -3522,18 +3526,59 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         io.progress(`${ok.length} of ${rows.length} buildings pass their check; building them`);
                         const layer = await buildDistrictMassingLayer({ rows, look, within, scanGlb: stripped.devegetatedGlb, outDir: dir, stage: 'massing', stageKey: key, signal: io.signal });
                         if (!layer) return { value: { rebuilt: 0, ...summary, removedTriangles: 0, residualOffFootprint: 0, timingsMs: {} } };
+                        const caveats = ok.filter(r => r.caveat).length;
+                        if (procedural) {
+                            // the ground: one measured surface over the extraction, the photo's colour from above
+                            io.progress('building the ground from the measured street surface');
+                            const surf = buildGroundSurface({ ground, within, bounds: { x0: -covered, z0: -covered, x1: covered, z1: covered } });
+                            const tileBytes = fs.readFileSync(stripped.devegetatedGlb);
+                            const groundPhoto = renderTopDownPhoto(tileBytes, surf.uvFrame, { texelM: 0.1, maxPx: 8192 });
+                            const groundJpeg = jpegJs.encode({ data: Buffer.from(groundPhoto.rgba.buffer, groundPhoto.rgba.byteOffset, groundPhoto.rgba.byteLength), width: groundPhoto.width, height: groundPhoto.height }, 88).data;
+                            const groundExtras = { version: PROCEDURAL_GROUND_VERSION, uvFrame: surf.uvFrame, stats: surf.stats, method: "the scan's open surface (within 1.5 m of the measured terrain, its local median) and the terrain where something stands on it; coloured from a top-down render of the tile photo" };
+                            writeStagedGlbFile(path.join(dir, 'ground.glb'), [{ name: 'ground', ...surf.mesh, extras: groundExtras }], { rootExtras: { sbGround: groundExtras }, generator: 'scratchbox staged-location procedural-ground', copyright: 'Google', texture: { bytes: groundJpeg, mimeType: 'image/jpeg' } });
+                            // the streets: SB-Roadie's carriageways and kerbs over that ground, a default width where no kerb shows
+                            let roadsStats: NonNullable<DistrictMassingValue['procedural']>['roads'];
+                            const centrelines = ev.roads.filter(l => l.some(([x, z]) => within(x, z)));
+                            if (centrelines.length) {
+                                io.progress(`measuring ${centrelines.length} streets kerb to kerb`);
+                                const P = { ...ROAD_SURFACE_PARAMS, requireBothKerbs: false, liftM: 0.08, buildSidewalks: false };
+                                const grid = { ...surfaceModel(scan, 0.5), cellM: 0.5 };
+                                const avoid = ((JSON.parse(fs.readFileSync(stripped.crownsJson, 'utf8')) as { crowns?: any[] }).crowns ?? [])
+                                    .filter(c => c.status === 'tree' && Array.isArray(c.stem) && Array.isArray(c.sectorRadii))
+                                    .map(c => ({ x: Number(c.stem[0]), z: Number(c.stem[1]), radiusM: (c.sectorRadii as number[]).reduce((a, b) => a + b, 0) / 16 }));
+                                const measured = measureRoadSurfaces({ roads: centrelines, grid, within, buildingAt: look.buildingAt, groundAt: ground.groundAt, avoid }, P);
+                                // where the streets run and how wide they are come from the scan; their levels from the measured ground
+                                const roads = settleRoadsOnGround(measured, (x, z) => groundHeightAt(ground, x, z).y, { liftM: P.liftM, defaultHalfWidthM: P.defaultHalfWidthM });
+                                if (roads.length) {
+                                    const planar = buildRoadMesh(roads, P);
+                                    const photo = renderTopDownPhoto(tileBytes, planar.uvFrame, { texelM: 0.1, maxPx: 4096 });
+                                    const atlas = synthesizeRoadTextures(roads, photo, planar.uvFrame);
+                                    const mesh = buildRoadMesh(roads, P, atlas);
+                                    const jpeg = jpegJs.encode({ data: Buffer.from(atlas.rgba.buffer, atlas.rgba.byteOffset, atlas.rgba.byteLength), width: atlas.width, height: atlas.height }, 90).data;
+                                    writeRoadsGlb(path.join(dir, 'roads.glb'), mesh, { stats: mesh.stats, liftM: P.liftM, markings: atlas.stats, source: 'SB-Roadie in a procedural district: Google vector road centrelines; kerbs measured on the tree-stripped scan where they show, a default width where they do not (labelled per station); tarmac and markings read from the tile photo and redrawn' }, { jpeg: Buffer.from(jpeg), width: atlas.width, height: atlas.height });
+                                    roadsStats = { roads: mesh.stats.roads, stations: mesh.stats.stations, measuredKerbs: mesh.stats.measuredKerbs, defaultKerbs: mesh.stats.defaultKerbs, triangles: mesh.stats.triangles };
+                                }
+                            }
+                            return { value: { rebuilt: layer.rebuilt, ...summary, caveats, removedTriangles: 0, residualOffFootprint: layer.residualOffFootprint, timingsMs: layer.timingsMs, procedural: { ground: { vertices: surf.stats.vertices, triangles: surf.stats.triangles, openVertices: surf.stats.openVertices, terrainVertices: surf.stats.terrainVertices }, ...(roadsStats ? { roads: roadsStats } : {}) } } };
+                        }
                         // the scan's own buildings out where the rebuilt ones stand: the clay remesh and tile_refine's textured twin alike
                         const clay = hideFootprintInGlb(fs.readFileSync(refined.clayGlb), layer.footprint);
                         fs.writeFileSync(path.join(dir, 'remesh_carved.glb'), clay.glb);
                         fs.writeFileSync(path.join(dir, 'remesh_carved_textured.glb'), hideFootprintInGlb(fs.readFileSync(refined.texturedGlb), layer.footprint).glb);
                         return { value: { rebuilt: layer.rebuilt, ...summary, removedTriangles: clay.removedTriangles, residualOffFootprint: layer.residualOffFootprint, timingsMs: layer.timingsMs } };
-                    }, { publish: (_dir, v) => (v.rebuilt ? [{ from: 'district_massing_textured.glb', as: `${base}_massing_${key8}.glb` }, { from: 'remesh_carved.glb', as: `${base}_remesh_carved_${key8}.glb` }] : []), bypass: bypass('massing') });
+                    }, {
+                        publish: (dir, v) => !v.rebuilt ? []
+                            : v.procedural ? [{ from: 'district_massing_textured.glb', as: `${base}_massing_${key8}.glb` }, { from: 'ground.glb', as: `${base}_ground_${key8}.glb` }, ...(fs.existsSync(path.join(dir, 'roads.glb')) ? [{ from: 'roads.glb', as: `${base}_proc_roads_${key8}.glb` }] : [])]
+                            : [{ from: 'district_massing_textured.glb', as: `${base}_massing_${key8}.glb` }, { from: 'remesh_carved.glb', as: `${base}_remesh_carved_${key8}.glb` }],
+                        bypass: bypass('massing')
+                    });
                     const v = entry.value;
                     cache.writeRunNote(runId, 'district_massing', { key, cached: entry.cached, ...v });
                     if (!v.rebuilt) return { status: 'skipped', value: v, source: 'the remeshed scan stands', reason: `no building passed its check (${Object.entries(v.reasons).map(([k, n]) => `${n}: ${k}`).join('; ')})`, cached: entry.cached };
                     const [pubMass, pubCarved] = entry.published;
                     const remeshLayer = run.state.layers.find(l => l.objectId === remeshId)!;
                     const why = Object.entries(v.reasons).map(([k, n]) => `${n} ${k}`).join('; ');
+                    const sources = [{ kind: 'vector-tiles', id: `vectortiles:${vectorKey.slice(0, 8)}` }, { kind: 'tile-extraction', id: `extract:${t.key.slice(0, 8)}` }];
                     const massLayer: StagedLayer = {
                         objectId: layerObjectId(key, 'l2m'), stage: 'massing', layer: 'l2m', order: STAGES.massing.order, url: pubMass.url, bytes: pubMass.bytes,
                         provenance: {
@@ -3551,6 +3596,48 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         supersedes: [remeshId], revealAfter: [], reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [remeshId] }, cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pubCarved.path)
                     };
                     delete (carvedLayer as Partial<StagedLayer>).textured;
+                    if (v.procedural) {
+                        // the procedural district: the rebuilt buildings, the measured ground and the streets; the scan's layer is superseded
+                        const [, pubGround, pubRoads] = entry.published;
+                        // the layer is its own textured twin (the top-down tile photo is in the file): the viewport keeps a twin's
+                        // photo material through its clay pass, as it does every other twin's
+                        const ownTwin = (pub: { url: string; bytes: number }, method: string): StagedLayer['textured'] => ({
+                            url: pub.url, bytes: pub.bytes, ladderRung: 2, rungShares: [0, 0, 1, 0, 0, 0, 0],
+                            provenance: [{ source: 'tile-photo', label: 'as-scanned', method, coverage: 1 }], confidenceChannels: CONFIDENCE_CHANNELS, builtAtMs: entry.builtAtMs, cached: entry.cached
+                        });
+                        const groundLayer: StagedLayer = {
+                            objectId: layerObjectId(key, 'l1g'), stage: 'massing', layer: 'l1g', order: STAGES.remesh.order, url: pubGround.url, bytes: pubGround.bytes,
+                            provenance: {
+                                label: 'measured', measuredGeometry: true, confidence: v.procedural.ground.vertices ? round(v.procedural.ground.openVertices / v.procedural.ground.vertices, 3) : 0,
+                                method: `${PROCEDURAL_GROUND_VERSION}: the street surface the scan measures (its open surface's local median; the terrain where something stands on it), coloured from a top-down render of the tile photo`,
+                                sources, note: `${v.procedural.ground.openVertices} vertices on the scan's open surface, ${v.procedural.ground.terrainVertices} on the terrain under something standing there`
+                            },
+                            provenanceLabels: ['measured'], supersedes: [remeshId], revealAfter: [], reveal: { durationMs: 1000, stagger: 0, crossfadeFrom: [remeshId] },
+                            cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pubGround.path),
+                            textured: ownTwin(pubGround, 'a top-down render of the tile photo, planar onto the ground surface')
+                        };
+                        const layers: StagedLayer[] = [{ ...massLayer, provenance: { ...massLayer.provenance, note: `${massLayer.provenance.note}; ${v.caveats ?? 0} rebuilt despite a failed check (lenient: the scan is not shown), labelled with it` } }, groundLayer];
+                        run.commit(layers[0], { source: 'DistrictMassing', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true, rebuilt: v.rebuilt } });
+                        run.commit(groundLayer, { source: 'ProceduralGround', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true } });
+                        run.setGround(groundLayer.objectId);
+                        if (pubRoads && v.procedural.roads) {
+                            const r = v.procedural.roads;
+                            const roadLayer: StagedLayer = {
+                                objectId: layerObjectId(key, 'l2r'), stage: 'massing', layer: 'l2r', order: STAGES.roads.order, url: pubRoads.url, bytes: pubRoads.bytes,
+                                provenance: {
+                                    label: r.measuredKerbs >= r.defaultKerbs ? 'measured' : VECTOR_MODELLED_LABEL, measuredGeometry: true, confidence: round(r.measuredKerbs / Math.max(1, r.measuredKerbs + r.defaultKerbs), 3),
+                                    method: 'SB-Roadie: carriageways and kerbs swept along Google vector road centrelines through the levels the scan measures; kerbs measured where they show, a default width where they do not; tarmac and lane markings read from the tile photo and redrawn',
+                                    sources, note: `${r.roads} street runs, ${r.stations} stations; ${r.measuredKerbs} kerbs measured, ${r.defaultKerbs} defaulted`
+                                },
+                                provenanceLabels: ['measured', VECTOR_MODELLED_LABEL], supersedes: [], revealAfter: [], reveal: { durationMs: 1200, stagger: 0.3, crossfadeFrom: [] },
+                                cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pubRoads.path),
+                                textured: ownTwin(pubRoads, 'tarmac and lane markings read along each street from the top-down tile photo and redrawn')
+                            };
+                            run.commit(roadLayer, { source: 'GoogleVectorRoads', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true } });
+                            layers.push(roadLayer);
+                        }
+                        return { status: 'committed', value: v, layers, source: `procedural district: ${v.rebuilt} of ${v.buildings} buildings rebuilt, the ground measured${v.procedural.roads ? `, ${v.procedural.roads.roads} streets` : ''}; the scan superseded (kept as the reference)`, cached: entry.cached, builtAtMs: entry.builtAtMs };
+                    }
                     run.commit(massLayer, { source: 'DistrictMassing', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true, rebuilt: v.rebuilt } });
                     refineTextured.set(carvedLayer.objectId, path.join(entry.dir, 'remesh_carved_textured.glb'));
                     run.commit(carvedLayer, run.layerMeta[remeshId]);

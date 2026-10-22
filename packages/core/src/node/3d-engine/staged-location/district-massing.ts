@@ -35,9 +35,18 @@ import { APRON_HEIGHT_M } from './pipeline-e/residual-audit-e';
 
 export const DISTRICT_MASSING_VERSION = 'district-massing/1';
 
-/** The district massing stage runs when SCRATCHBOX_STAGED_DISTRICT_MASSING=1 (off until measured live against the remesh). */
+/** The district massing stage runs when SCRATCHBOX_STAGED_DISTRICT_MASSING=1, or with the procedural district (off until measured live). */
 export function districtMassingEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-    return env.SCRATCHBOX_STAGED_DISTRICT_MASSING === '1';
+    return env.SCRATCHBOX_STAGED_DISTRICT_MASSING === '1' || proceduralDistrictEnabled(env);
+}
+
+/**
+ * SCRATCHBOX_STAGED_PROCEDURAL=1: the district is shown rebuilt, not scanned: every building the scan confirms rebuilt
+ * (lenient), the ground a measured surface, the streets SB-Roadie's carriageways and kerbs; the scan stays as the reference
+ * the rebuilt layers supersede (user direction, 2026-10-22: the tiles as a visual reference, the scene recreated).
+ */
+export function proceduralDistrictEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+    return env.SCRATCHBOX_STAGED_PROCEDURAL === '1';
 }
 
 /**
