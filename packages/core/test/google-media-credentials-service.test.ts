@@ -89,6 +89,16 @@ test('the Vertex media client defaults to the chat location, where Gemini 3.x im
     }
 });
 
+test('Vertex is used whenever its credentials are configured, even with an API key stored; the key only without them', async () => {
+    const service = new GoogleMediaCredentialsService();
+    (service as any).getApiKey = async () => 'AIzaFAKEKEYFORTESTSONLY0123456789';
+    (service as any).getVertexAuth = async () => ({ project: 'test-project' });
+    (service as any).hasVertexCredentials = () => true;
+    assert.strictEqual(((await service.createClient()) as any).vertexai, true);
+    (service as any).hasVertexCredentials = () => false;
+    assert.notStrictEqual(((await service.createClient()) as any).vertexai, true);
+});
+
 test('warns once when GOOGLE_CLOUD_LOCATION differs from the Vertex location in use', async () => {
     const { GoogleMediaCredentialsService } = await import('../src/node/google-media-credentials-service');
     const saved = { loc: process.env.GOOGLE_CLOUD_LOCATION, proj: process.env.GOOGLE_CLOUD_PROJECT };
