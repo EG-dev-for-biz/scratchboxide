@@ -221,6 +221,10 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'BOOLEAN',
                     description: 'Enhanced appearance (default true with the vector-massing pipeline, SCRATCHBOX_STAGED_PIPELINE=e): each large wall is redrawn once by an image model from its tile photo, guided by a registered Street View photo of the wall where one shows it, kept only where its windows and edges stay in place and nothing distinct (a fire escape, a storefront, signage, the colour) is erased or contradicted, and labelled generated ("AI-enhanced from tile"); the result says how many walls were enhanced or rejected. Pass false for the real-data view (tile photo and real sources only), e.g. when the user asks for the real data.'
                 },
+                procedural: {
+                    type: 'BOOLEAN',
+                    description: 'With isolate: rebuild the structure procedurally (pipeline G) instead of detailing its scan. Survey cameras on the street around it are rendered from the photo tiles onto measured wall elevations, each wall is read as a facade program in metres (rows of openings with their arched heads, cornices and bands, piers and colonnettes, shop fronts, colours) and built natively on the vector massing, every face painted from its reading: a clean, procedural building, nothing of the scan in it. What was read is labelled photo-inferred, what was continued into unseen parts generated. Pass true when the user asks for a procedural building, a building built from scratch, or "3D Building" of a named building; default false.'
+                },
                 atomicBuildingIntegrity: {
                     type: 'BOOLEAN',
                     description: 'Enforce Atomic Building Integrity rule: guarantees zero horizontal roof slicing, zero bisected building envelopes, and multi-tier zenith camera settle (defaults to true)'

@@ -168,6 +168,7 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
             ...(treeTriangleBudget !== undefined ? { treeTriangleBudget } : {}),
             stageIntoActiveScene: args.stageIntoActiveScene === true,
             ...(typeof args.enhance === 'boolean' ? { enhance: args.enhance } : {}),
+            ...(args.procedural === true ? { procedural: true } : {}),
             ...(place ? { place } : {})
         },
         ...(retry ? { retry } : {}),

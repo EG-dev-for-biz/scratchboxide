@@ -170,6 +170,7 @@ import type { EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { fetchFootprints, type FootprintSource } from './facade-footprints';
 import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
+import { PIPELINE_G_VERSION, runPipelineG, stagedPipelineG } from './pipeline-g/pipeline-g';
 import type { MassingRun } from './pipeline-e/native-massing';
 import { mslToTileY, type SolarRoof } from './pipeline-e/solar-roof';
 import { runInferenceE, type InferenceOutcome, type StepRecord } from './pipeline-e/inference';
@@ -336,6 +337,11 @@ export interface StagedLocationRequest {
      * or contradicts nothing distinct; labelled generated.
      */
     enhance?: boolean;
+    /**
+     * Pipeline G (with isolate): the structure's facades rebuilt procedurally from a survey of the tile (pipeline-g/), in
+     * place of pipeline E's inference; SCRATCHBOX_STAGED_GEOMETRY=g turns it on for every isolated build.
+     */
+    procedural?: boolean;
 }
 
 export interface StagedExtraction {
@@ -3407,6 +3413,51 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             return done;
         };
 
+        // ---------------- pipeline G (the grammar stage's slot, request.procedural): the facades rebuilt procedurally from a survey of the tile ----------------
+        const gRun = async (e: NonNullable<typeof eState>): Promise<void> => {
+            if (!visionAvailable) { runner.skip('grammar', 'pipeline G reads its survey with a vision model, and none is configured'); return; }
+            await runner.stage<{ steps: StepRecord[] }>({
+                id: 'grammar',
+                run: async io => {
+                    const t0 = now();
+                    const r = e.stage;
+                    const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...chainExtras('grammar'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                    const out = await runPipelineG({
+                        massing: r.massing, run: r.run!, tilePath: strip ? strip.devegetatedGlb : extraction.texturedGlb,
+                        dir: path.join(cache.dir, 'pipeline_g', stageKey(PIPELINE_G_VERSION, e.key).slice(0, 24)), stage: 'grammar', stageKey: e.key,
+                        chain, place: placeValue!.formattedAddress || request.query, structure: structure!, ground: t.ground!,
+                        anchor: { lat: placeValue!.lat, lng: placeValue!.lng, elevationMeters: 0 }, signal: io.signal, onProgress: m => io.progress(m)
+                    });
+                    cache.writeRunNote(runId, 'pipeline_g', { steps: out.steps, timingsMs: out.timingsMs, plates: out.plates, stations: out.stations });
+                    const key8 = e.key.slice(0, 8);
+                    const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_pipelineg.glb`);
+                    const pubTex = cache.publishFile(out.files.texturedGlb, `${base}_massing_${key8}_pipelineg_tex.glb`);
+                    const describe = out.steps.map(s => `${s.step}: ${s.accepted} of ${s.proposed}`).join('; ');
+                    const layer: StagedLayer = {
+                        objectId: layerObjectId(e.key, 'l2g'), stage: 'grammar', layer: 'l2g', order: STAGES.grammar.order, url: pubClay.url, bytes: pubClay.bytes,
+                        provenance: { label: PROVENANCE.photoInferred, measuredGeometry: false, confidence: 0.5, method: 'pipeline G: survey stations path-traced from the photo tile, laid onto metric wall plates, read as facade programs (arched openings, bands, piers, colonnettes) and built natively on the vector massing; faces painted from the reading', sources: [{ kind: 'stage-output', id: `pipeline-g:${key8}` }], note: describe },
+                        provenanceLabels: ['vector-massing', PROVENANCE.photoInferred, 'generated'], supersedes: [e.layer.objectId], revealAfter: [e.layer.objectId],
+                        reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [e.layer.objectId] }, cached: false, builtAtMs: now(), counts: layerCounts(out.files.clayGlb),
+                        textured: {
+                            url: pubTex.url, bytes: pubTex.bytes, ladderRung: out.files.texturedShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1),
+                            rungShares: out.files.texturedShares, provenance: out.legend.map(x => ({ source: x.source, label: x.label, method: x.method, coverage: 0 })),
+                            confidenceChannels: 'R = index into provenance[], G = weight 0..255, B = ladder rung (TEXTURE_LADDER_RUNGS), A = 255 where a stage produced the texel', builtAtMs: now(), cached: false
+                        }
+                    };
+                    run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, extra: { pipeline: 'g' } });
+                    run.note(PROVENANCE.photoInferred, `pipeline G: ${describe}`);
+                    return { status: 'committed', value: { steps: out.steps }, layers: [layer], source: `pipeline G in ${((now() - t0) / 1000).toFixed(0)} s: ${describe}` };
+                },
+                degrade: async err => ({
+                    status: 'degraded', source: 'the clean massing stands without the procedural facades', reason: `pipeline G failed (${errorMessage(err)})`,
+                    degradations: [run.degrade(record('grammar', 'pipeline_g_failed', {
+                        part: { description: 'the procedural facades of the massing' }, intended: 'facades read from a survey of the tile and built procedurally (arches, bands, members)', fellTo: 'the clean massing with its tile ortho textures',
+                        provenanceAfter: 'vector-massing', reason: `pipeline G failed (${errorMessage(err)})`, cause: err, transient: true, runId, now: now(), reuses: ['resolve', 'tiles', 'trees-measure', 'remesh']
+                    }))]
+                })
+            });
+        };
+
         // ---------------- pipeline E relief: measured detail by averaging the scan along repeats, after the clean (and inferred) layer ----------------
         const eReliefRun = async (e: NonNullable<typeof eState>, inf: { out: InferenceOutcome; layer: StagedLayer } | undefined): Promise<void> => {
             if (!pipelineERelief()) { runner.skip('relief', 'the measured relief is off (SCRATCHBOX_STAGED_PIPELINE_E_RELIEF=0)'); return; }
@@ -3514,6 +3565,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- facade grammar (photo-inferred window lattices on the remeshed facades) ----------------
         const grammarRun = async (): Promise<void> => {
             const remeshed = remeshedNow;
+            if (eState && stagedPipelineG(request)) {
+                await gRun(eState);
+                runner.skip('relief', 'pipeline G builds the facades procedurally from its survey; the measured relief would put scan detail back');
+                return;
+            }
             if (eState) { const inf = await eInferenceRun(eState); await eReliefRun(eState, inf); return; }
             runner.skip('relief', 'the measured relief runs on pipeline E\'s clean massing (SCRATCHBOX_STAGED_PIPELINE=e)');
             if (!grammarOn) {
