@@ -52,6 +52,8 @@ export interface StagedGlbOptions {
     generator?: string;
     /** One embedded base-colour texture for the nodes that carry `uv` (JPEG or PNG bytes). */
     texture?: { bytes: Uint8Array; mimeType: 'image/jpeg' | 'image/png' };
+    /** The textured material's surface (default: roughness 0.9, not metallic, the texture clamped at its edges). */
+    textureMaterial?: { roughness?: number; metallic?: number; repeat?: boolean };
 }
 
 function pad4(buf: Buffer, fill = 0): Buffer {
@@ -135,11 +137,11 @@ export function writeStagedGlb(nodes: StagedGlbNode[], options: StagedGlbOptions
         meshes,
         materials: [
             { name: 'StudioGreyClay', pbrMetallicRoughness: { baseColorFactor: [0.55, 0.57, 0.6, 1], metallicFactor: 0, roughnessFactor: 0.85 } },
-            ...(textured ? [{ name: 'PhotoTextured', pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: 0, roughnessFactor: 0.9 } }] : [])
+            ...(textured ? [{ name: 'PhotoTextured', pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: options.textureMaterial?.metallic ?? 0, roughnessFactor: options.textureMaterial?.roughness ?? 0.9 } }] : [])
         ],
         ...(textured ? {
             images: [{ bufferView: addView(Buffer.from(options.texture!.bytes)), mimeType: options.texture!.mimeType }],
-            samplers: [{ magFilter: 9729, minFilter: 9987, wrapS: 33071, wrapT: 33071 }],
+            samplers: [{ magFilter: 9729, minFilter: 9987, wrapS: options.textureMaterial?.repeat ? 10497 : 33071, wrapT: options.textureMaterial?.repeat ? 10497 : 33071 }],
             textures: [{ source: 0, sampler: 0 }]
         } : {}),
         accessors,

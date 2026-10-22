@@ -50,7 +50,7 @@ export function groundHeightAt(ground: Pick<GroundModel, 'groundAt' | 'topAt' | 
     return { y: g, open: false };
 }
 
-export function buildGroundSurface(input: { ground: Pick<GroundModel, 'groundAt' | 'topAt' | 'cellMeters'>; within: (x: number, z: number) => boolean; bounds: { x0: number; z0: number; x1: number; z1: number } }, P = PROCEDURAL_GROUND_PARAMS): GroundSurface {
+export function buildGroundSurface(input: { ground: Pick<GroundModel, 'groundAt' | 'topAt' | 'cellMeters'>; within: (x: number, z: number) => boolean; bounds: { x0: number; z0: number; x1: number; z1: number }; skip?: (x: number, z: number) => boolean }, P = PROCEDURAL_GROUND_PARAMS): GroundSurface {
     const { x0, z0, x1, z1 } = input.bounds;
     const n = Math.max(1, Math.ceil((x1 - x0) / P.cellM)), m = Math.max(1, Math.ceil((z1 - z0) / P.cellM));
     const frame = { x0, z0, widthM: n * P.cellM, heightM: m * P.cellM };
@@ -72,7 +72,7 @@ export function buildGroundSurface(input: { ground: Pick<GroundModel, 'groundAt'
     };
     for (let k = 0; k < m; k++) for (let i = 0; i < n; i++) {
         const cx = x0 + (i + 0.5) * P.cellM, cz = z0 + (k + 0.5) * P.cellM;
-        if (!input.within(cx, cz)) continue;
+        if (!input.within(cx, cz) || input.skip?.(cx, cz)) continue;
         const a = vertex(i, k), b = vertex(i + 1, k), c = vertex(i + 1, k + 1), d = vertex(i, k + 1);
         if (a < 0 || b < 0 || c < 0 || d < 0) continue;
         // up-facing (y up, z south): a (x0,z0) -> d (x0,z1) -> c (x1,z1) winds counter-clockwise seen from above
@@ -117,4 +117,55 @@ export function settleRoadsOnGround(roads: RoadSurface[], heightAt: (x: number, 
             return out;
         }).filter(st => Number.isFinite(st.profile[2]))
     }));
+}
+
+/**
+ * The water's level: a low percentile of the scan's surface over the water areas (a bridge deck or a boat stands above it,
+ * the water does not), or undefined when the scan holds too little of it.
+ */
+export function measureWaterLevel(waterAt: (x: number, z: number) => boolean, topAt: (x: number, z: number) => number, within: (x: number, z: number) => boolean, bounds: { x0: number; z0: number; x1: number; z1: number }, cellM = 2): number | undefined {
+    const ys: number[] = [];
+    for (let x = bounds.x0; x < bounds.x1; x += cellM) for (let z = bounds.z0; z < bounds.z1; z += cellM) {
+        if (!within(x, z) || !waterAt(x, z)) continue;
+        const t = topAt(x, z);
+        if (Number.isFinite(t)) ys.push(t);
+    }
+    if (ys.length < 20) return undefined;
+    ys.sort((a, b) => a - b);
+    return ys[Math.floor(ys.length * 0.15)];
+}
+
+/**
+ * The water: one flat sheet at its measured level over Google's water areas, a cell wider all round so it runs under the
+ * banks; UVs in metres / `tileM` for a tileable surface.
+ */
+export function buildWaterSurface(input: { waterAt: (x: number, z: number) => boolean; within: (x: number, z: number) => boolean; bounds: { x0: number; z0: number; x1: number; z1: number }; levelY: number; cellM?: number; tileM?: number }): RoadMeshPart & { cells: number } {
+    const cell = input.cellM ?? 2, tile = input.tileM ?? 12;
+    const positions: number[] = [], uv: number[] = [], indices: number[] = [];
+    let cells = 0;
+    const wetNear = (x: number, z: number) => { for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) if (input.waterAt(x + dx * cell, z + dz * cell)) return true; return false; };
+    for (let x = input.bounds.x0; x < input.bounds.x1; x += cell) for (let z = input.bounds.z0; z < input.bounds.z1; z += cell) {
+        const cx = x + cell / 2, cz = z + cell / 2;
+        if (!input.within(cx, cz) || !wetNear(cx, cz)) continue;
+        const b = positions.length / 3;
+        for (const [px, pz] of [[x, z], [x, z + cell], [x + cell, z + cell], [x + cell, z]]) { positions.push(px, input.levelY, pz); uv.push(px / tile, pz / tile); }
+        indices.push(b, b + 1, b + 2, b, b + 2, b + 3);
+        cells++;
+    }
+    return { positions: Float32Array.from(positions), indices: Uint32Array.from(indices), uv: Float32Array.from(uv), cells };
+}
+
+/** A tileable water texture (RGBA, size x size): the measured colour of the water, with soft ripples. */
+export function waterTexture(rgb: [number, number, number], size = 256): Uint8Array {
+    const out = new Uint8Array(size * size * 4);
+    const TAU = Math.PI * 2;
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+        const u = x / size, v = y / size;
+        // a few periodic waves (whole periods across the tile, so it tiles)
+        const w = 0.5 * Math.sin(TAU * (3 * u + 1 * v)) + 0.3 * Math.sin(TAU * (-2 * u + 5 * v) + 1.3) + 0.2 * Math.sin(TAU * (7 * u + 4 * v) + 0.4);
+        const k = 1 + 0.06 * w;
+        const i = (y * size + x) * 4;
+        out[i] = Math.max(0, Math.min(255, rgb[0] * k)); out[i + 1] = Math.max(0, Math.min(255, rgb[1] * k)); out[i + 2] = Math.max(0, Math.min(255, rgb[2] * k)); out[i + 3] = 255;
+    }
+    return out;
 }
