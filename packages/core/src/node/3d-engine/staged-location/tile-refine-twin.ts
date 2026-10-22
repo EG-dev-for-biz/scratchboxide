@@ -10,7 +10,7 @@
 /**
  * The textured twin of a remesh whose texture pass would have to unwrap a whole district (a million triangles): the
  * photo-textured GLB tile_refine already writes beside its clay output (the same triangles, each primitive's UVs into the
- * leaf tile's own photo, as captured: not de-lit), made into a twin the viewport crossfades to.
+ * leaf tile's own photo), made into a twin the viewport crossfades to.
  *
  *   - Every material gets the texture-pass extras (extras.sbTexture.confidenceTexture) so the viewport keeps the photo under
  *     its clay pass and shades its rung: a 1 x 1 confidence texel, R = provenance index, G = 255, B = rung, A = 255.
@@ -19,19 +19,55 @@
  *   - Materials are drawn from both sides, like the clay they swap with.
  *
  * Nothing is re-projected or invented; the geometry bytes are tile_refine's.
+ *
+ * Every embedded leaf-tile photo is de-lit (the same analytic lift/compress curve every other texture source in the
+ * app already applies, photogrammetric-delight.ts) and, when a model client is given (`opts.recreate`), further
+ * recreated by an image model: the same `recreate` mode and structural gate texture-enhance.ts already built for the
+ * richer texture-pass.ts pipeline (RECREATE_GATE - edges and openings stay put, the material's hue/chroma stays put,
+ * only its lighting and fine surface detail change), run per leaf-tile image rather than per UV-atlas chart, with no
+ * grounding reference needed (recreate mode never required one - see texture-enhance.ts). A rejected or failed
+ * recreate keeps the de-lit image, never the raw one: each image degrades one rung at a time, the same shape every
+ * other stage in this app degrades (user decision, 2026-10-21 - "do this" - converting this from a pure, synchronous
+ * function into an async one that calls an image model, staged: Stage 1 shipped the analytic de-light on its own
+ * first, verified live; this stage adds the model recreate on top of it, same append-only GLB shape, same fallback
+ * ladder, bounded concurrency and a time budget so a district with hundreds of leaf photos still finishes).
  */
 
 import * as jpegJs from 'jpeg-js';
 import { TEXTURE_LADDER_RUNGS, TEXTURE_RUNG_CLAY } from '../../../common/spatial/texture-pass-contracts';
 import { delightLinearRgb, linearToSrgb255, PHOTOGRAMMETRIC_DELIGHT, SRGB8_TO_LINEAR } from '../../../common/spatial/photogrammetric-delight';
+import { IMAGE_MODEL_PRIORITY } from '../../../common/media-generation-protocol';
+import { MediaModelUnavailableError } from '../../../common/errors/pipeline-errors';
 import { assembleGlb, parseGlbBytes, readAccessor } from './glb-bytes';
 import { encodePng } from './png-encode';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
-import { decodeImageInMemory } from './tile-texture-transfer';
+import { decodeImageInMemory, type RgbaImage8 } from './tile-texture-transfer';
+import {
+    boxDownsample, cropImage, enhancementGate, padToModelAspect, RECREATE_GATE, recreatePrompt,
+    type EnhanceModelClient, type EnhanceModelRequest
+} from './texture-enhance';
 
-export const TILE_REFINE_TWIN_VERSION = 'tile-refine-twin/v1';
+export const TILE_REFINE_TWIN_VERSION = 'tile-refine-twin/v2';
 /** The rung of a photo texel from the tile (TEXTURE_LADDER_RUNGS). */
 export const RUNG_TILE_PHOTO = TEXTURE_LADDER_RUNGS.indexOf('tile photo transfer');
+
+export interface TileRefineRecreateOptions {
+    client: EnhanceModelClient;
+    /** Models to try in order; default IMAGE_MODEL_PRIORITY. */
+    models?: string[];
+    /** Images in flight at once. Default 12 (a call takes 10 to 20 s; the wall clock, not the cost, is the limit). */
+    concurrency?: number;
+    /** Largest side of an image sent to the model. Default 1536. */
+    maxModelSide?: number;
+    /** Past this many ms from the call, no new image starts; images already running finish, the rest keep their de-lit version. */
+    budgetMs?: number;
+    signal?: AbortSignal;
+}
+
+export interface TileRefineRecreateReport {
+    attempted: number; accepted: number; rejected: number; failed: number; timedOut: number;
+    modelsUsed: string[];
+}
 
 export interface TileRefineTwin {
     glb: Buffer;
@@ -40,6 +76,7 @@ export interface TileRefineTwin {
     provenance: Array<{ source: string; label: string; method: string; coverage: number }>;
     ladderRung: number;
     triangles: number;
+    recreate?: TileRefineRecreateReport;
 }
 
 function triArea(p: Float64Array, a: number, b: number, c: number): number {
@@ -48,8 +85,73 @@ function triArea(p: Float64Array, a: number, b: number, c: number): number {
     return 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
 }
 
+const png = (img: RgbaImage8): Uint8Array => encodePng(img.width, img.height, Buffer.from(img.rgba.buffer, img.rgba.byteOffset, img.rgba.byteLength), 4);
+
+/** One embedded photo, decoded and de-lit, ready to encode or to try recreating. */
+interface ImageJob { originalIndex: number; name: string; mimeType: string; delit: RgbaImage8; }
+
+function delightImage(decoded: RgbaImage8): RgbaImage8 {
+    const out = new Uint8Array(decoded.rgba.length);
+    for (let p = 0; p < decoded.rgba.length; p += 4) {
+        const [lr, lg, lb] = delightLinearRgb(SRGB8_TO_LINEAR[decoded.rgba[p]], SRGB8_TO_LINEAR[decoded.rgba[p + 1]], SRGB8_TO_LINEAR[decoded.rgba[p + 2]]);
+        out[p] = Math.round(linearToSrgb255(lr)); out[p + 1] = Math.round(linearToSrgb255(lg)); out[p + 2] = Math.round(linearToSrgb255(lb)); out[p + 3] = decoded.rgba[p + 3];
+    }
+    return { width: decoded.width, height: decoded.height, rgba: out };
+}
+
+function encodeAs(img: RgbaImage8, mimeType: string): Uint8Array {
+    const rgbaBuf = Buffer.from(img.rgba.buffer, img.rgba.byteOffset, img.rgba.byteLength);
+    return mimeType === 'image/jpeg' ? new Uint8Array(jpegJs.encode({ data: rgbaBuf, width: img.width, height: img.height }, 90).data) : encodePng(img.width, img.height, rgbaBuf, 4);
+}
+
+/**
+ * Tries to recreate one de-lit leaf-tile image with the model: same RECREATE_GATE texture-enhance.ts already uses,
+ * no grounding reference (recreate mode never needed one). Returns the de-lit image unchanged on a rejection, a model
+ * failure, or a decode failure - never throws for those, so one bad leaf tile never costs the rest of the district.
+ */
+async function recreateOne(job: ImageJob, opts: TileRefineRecreateOptions, models: string[]): Promise<{ image: RgbaImage8; decision: 'accepted' | 'rejected' | 'model_failed'; modelUsed?: string }> {
+    const { padded, offset } = padToModelAspect(job.delit);
+    const sent = boxDownsample(padded, opts.maxModelSide ?? 1536);
+    const request: EnhanceModelRequest = {
+        label: job.name, models, prompt: recreatePrompt(sent.width, sent.height, 0),
+        image: { mimeType: 'image/png', bytes: png(sent), width: sent.width, height: sent.height },
+        references: [], signal: opts.signal
+    };
+    let answer;
+    try {
+        answer = await opts.client(request);
+    } catch (error) {
+        if (opts.signal?.aborted || !(error instanceof MediaModelUnavailableError)) throw error;
+        return { image: job.delit, decision: 'model_failed' };
+    }
+    let decoded: RgbaImage8;
+    try { decoded = decodeImageInMemory(answer.bytes); } catch { return { image: job.delit, decision: 'model_failed', modelUsed: answer.modelUsed }; }
+    const resized = decoded.width === padded.width && decoded.height === padded.height ? decoded : resizeToExact(decoded, padded.width, padded.height);
+    const candidate = cropImage(resized, offset[0], offset[1], job.delit.width, job.delit.height);
+    const mask = new Uint8Array(job.delit.width * job.delit.height).fill(1);
+    const verdict = enhancementGate(job.delit, candidate, mask, RECREATE_GATE);
+    return verdict.pass ? { image: candidate, decision: 'accepted', modelUsed: answer.modelUsed } : { image: job.delit, decision: 'rejected', modelUsed: answer.modelUsed };
+}
+
+/** Bilinear resize to an exact size (the model's answer can come back at a slightly different size than asked). */
+function resizeToExact(img: RgbaImage8, width: number, height: number): RgbaImage8 {
+    const out = new Uint8Array(width * height * 4);
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const fx = ((x + 0.5) * img.width) / width - 0.5, fy = ((y + 0.5) * img.height) / height - 0.5;
+        const x0 = Math.max(0, Math.min(img.width - 1, Math.floor(fx))), y0 = Math.max(0, Math.min(img.height - 1, Math.floor(fy)));
+        const x1 = Math.min(img.width - 1, x0 + 1), y1 = Math.min(img.height - 1, y0 + 1);
+        const tx = Math.max(0, Math.min(1, fx - x0)), ty = Math.max(0, Math.min(1, fy - y0));
+        for (let k = 0; k < 4; k++) {
+            const a = img.rgba[(y0 * img.width + x0) * 4 + k], b = img.rgba[(y0 * img.width + x1) * 4 + k];
+            const c = img.rgba[(y1 * img.width + x0) * 4 + k], d = img.rgba[(y1 * img.width + x1) * 4 + k];
+            out[(y * width + x) * 4 + k] = Math.round((a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty);
+        }
+    }
+    return { width, height, rgba: out };
+}
+
 /** The twin of tile_refine's photo-textured output `texturedGlb` (its bytes) for the layer `layerKey`. */
-export function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string): TileRefineTwin {
+export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, opts?: { recreate?: TileRefineRecreateOptions }): Promise<TileRefineTwin> {
     const g = parseGlbBytes(texturedGlb);
     const json = JSON.parse(JSON.stringify(g.json));
     const materials: any[] = json.materials ?? (json.materials = []);
@@ -77,55 +179,72 @@ export function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string): TileR
     rungShares[RUNG_TILE_PHOTO] = photoArea / total;
     rungShares[TEXTURE_RUNG_CLAY] += bareArea / total;
 
-    // the binary chunk: appended to below, both for the de-lit photos and the confidence texels
-    const bin: Uint8Array[] = [g.bin];
-    let binLength = g.bin.byteLength;
-    const pad = () => { const r = binLength % 4; if (r) { bin.push(new Uint8Array(4 - r)); binLength += 4 - r; } };
     json.images = json.images ?? [];
     json.textures = json.textures ?? [];
 
-    // de-light every embedded photo in place (user decision, 2026-10-21: a district build's own quick twin - the one
-    // the viewport actually shows, since unwrapping a whole district for the richer texture-pass.ts pipeline is too
-    // slow - was carrying tile_refine's baked shadow and highlight unmodified; this is the same analytic lift/compress
-    // curve every other texture source in the app already applies (photogrammetric-delight.ts), run once per leaf
-    // tile's own photo here rather than per texel of a rebuilt atlas, so it stays cheap at district scale). The
-    // original bytes are left in the buffer (an orphaned, unreferenced range) and the de-lit copy is appended new,
-    // the same append-only shape the confidence texels below already use.
-    let delit = 0;
-    const delitImageIndex = new Map<number, number>();
+    // Stage 1 (always): decode and de-light every embedded photo. Stage 2 (opts.recreate given): try an image-model
+    // recreate on top of the de-lit baseline, gated, concurrency-bounded and time-budgeted.
+    const jobs: ImageJob[] = [];
     json.images.forEach((im: any, i: number) => {
         if (im.bufferView === undefined || (im.mimeType !== 'image/jpeg' && im.mimeType !== 'image/png')) return;
         const view = json.bufferViews[im.bufferView];
         const raw = g.bin.subarray(view.byteOffset ?? 0, (view.byteOffset ?? 0) + view.byteLength);
-        let decoded: ReturnType<typeof decodeImageInMemory>;
+        let decoded: RgbaImage8;
         try { decoded = decodeImageInMemory(raw); } catch { return; }
-        const out = new Uint8Array(decoded.rgba.length);
-        for (let p = 0; p < decoded.rgba.length; p += 4) {
-            const [lr, lg, lb] = delightLinearRgb(SRGB8_TO_LINEAR[decoded.rgba[p]], SRGB8_TO_LINEAR[decoded.rgba[p + 1]], SRGB8_TO_LINEAR[decoded.rgba[p + 2]]);
-            out[p] = Math.round(linearToSrgb255(lr)); out[p + 1] = Math.round(linearToSrgb255(lg)); out[p + 2] = Math.round(linearToSrgb255(lb)); out[p + 3] = decoded.rgba[p + 3];
-        }
-        const rgbaBuf = Buffer.from(out.buffer, out.byteOffset, out.byteLength);
-        const bytes = im.mimeType === 'image/jpeg'
-            ? new Uint8Array(jpegJs.encode({ data: rgbaBuf, width: decoded.width, height: decoded.height }, 90).data)
-            : encodePng(decoded.width, decoded.height, rgbaBuf, 4);
+        jobs.push({ originalIndex: i, name: im.name ?? `image_${i}`, mimeType: im.mimeType, delit: delightImage(decoded) });
+    });
+
+    const finalImage = new Map<number, RgbaImage8>();
+    for (const job of jobs) finalImage.set(job.originalIndex, job.delit);
+    let recreate: TileRefineRecreateReport | undefined;
+    if (opts?.recreate && jobs.length) {
+        const ro = opts.recreate;
+        const models = ro.models?.length ? ro.models : [...IMAGE_MODEL_PRIORITY];
+        const deadline = ro.budgetMs !== undefined ? Date.now() + ro.budgetMs : undefined;
+        let attempted = 0, accepted = 0, rejected = 0, failed = 0, timedOut = 0;
+        const modelsUsed = new Set<string>();
+        let next = 0;
+        const worker = async () => {
+            while (next < jobs.length) {
+                const job = jobs[next++];
+                if (ro.signal?.aborted) throw ro.signal.reason instanceof Error ? ro.signal.reason : new Error('tile-refine recreate aborted');
+                if (deadline !== undefined && Date.now() >= deadline) { timedOut++; continue; }
+                attempted++;
+                const r = await recreateOne(job, ro, models);
+                if (r.modelUsed) modelsUsed.add(r.modelUsed);
+                if (r.decision === 'accepted') accepted++; else if (r.decision === 'rejected') rejected++; else failed++;
+                finalImage.set(job.originalIndex, r.image);
+            }
+        };
+        await Promise.all(Array.from({ length: Math.max(1, Math.min(ro.concurrency ?? 12, jobs.length)) }, worker));
+        recreate = { attempted, accepted, rejected, failed, timedOut, modelsUsed: Array.from(modelsUsed) };
+    }
+
+    // the binary chunk: appended to below, both for the final (de-lit or recreated) photos and the confidence texels
+    const bin: Uint8Array[] = [g.bin];
+    let binLength = g.bin.byteLength;
+    const pad = () => { const r = binLength % 4; if (r) { bin.push(new Uint8Array(4 - r)); binLength += 4 - r; } };
+    const finalImageIndex = new Map<number, number>();
+    for (const job of jobs) {
+        const img = finalImage.get(job.originalIndex)!;
+        const bytes = encodeAs(img, job.mimeType);
         pad();
         json.bufferViews.push({ buffer: 0, byteOffset: binLength, byteLength: bytes.length });
         bin.push(bytes);
         binLength += bytes.length;
-        json.images.push({ name: im.name, mimeType: im.mimeType, bufferView: json.bufferViews.length - 1 });
-        delitImageIndex.set(i, json.images.length - 1);
-        delit++;
-    });
-    if (delit) for (const t of json.textures) if (t.source !== undefined && delitImageIndex.has(t.source)) t.source = delitImageIndex.get(t.source);
+        json.images.push({ name: job.name, mimeType: job.mimeType, bufferView: json.bufferViews.length - 1 });
+        finalImageIndex.set(job.originalIndex, json.images.length - 1);
+    }
+    if (finalImageIndex.size) for (const t of json.textures) if (t.source !== undefined && finalImageIndex.has(t.source)) t.source = finalImageIndex.get(t.source);
 
+    const delit = jobs.length;
+    const method = () => {
+        const base = `tile_refine's remesh carries the leaf tiles' own photos (UVs into each leaf's image), de-lit (shadowLift ${PHOTOGRAMMETRIC_DELIGHT.defaults.shadowLift}, highlightCompress ${PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress}; ${delit} of ${delit} photos)`;
+        if (!recreate) return base;
+        return `${base}, further recreated by ${recreate.modelsUsed.join(', ') || 'an image model'} removing the scan's own baked shadow/highlight and recovering the material's true colour (gated on structure and hue/chroma): ${recreate.accepted} of ${recreate.attempted} accepted (${recreate.rejected} rejected, ${recreate.failed} model failures${recreate.timedOut ? `, ${recreate.timedOut} ran out of time` : ''})`;
+    };
     const provenance = [
-        {
-            source: 'tile-photo', label: 'photo-inferred',
-            method: delit
-                ? `tile_refine's remesh carries the leaf tiles' own photos (UVs into each leaf's image), de-lit (shadowLift ${PHOTOGRAMMETRIC_DELIGHT.defaults.shadowLift}, highlightCompress ${PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress}; ${delit} of ${json.images.length - delit} photos)`
-                : "tile_refine's remesh carries the leaf tiles' own photos (UVs into each leaf's image), as captured: not de-lit",
-            coverage: photoArea / total
-        },
+        { source: 'tile-photo', label: 'photo-inferred', method: delit ? method() : "tile_refine's remesh carries the leaf tiles' own photos (UVs into each leaf's image), as captured: not de-lit", coverage: photoArea / total },
         { source: 'clay', label: 'clay', method: 'no photo on these triangles', coverage: bareArea / total }
     ].filter(p => p.coverage > 0);
     const indexOf = (source: string) => provenance.findIndex(p => p.source === source);
@@ -134,11 +253,11 @@ export function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string): TileR
     json.samplers.push({ magFilter: 9728, minFilter: 9728, wrapS: 10497, wrapT: 10497 });
     const sampler = json.samplers.length - 1;
     const confTexture = (provIndex: number, rung: number): number => {
-        const png = encodePng(1, 1, Uint8Array.from([provIndex, 255, rung, 255]), 4);
+        const p = encodePng(1, 1, Uint8Array.from([provIndex, 255, rung, 255]), 4);
         pad();
-        json.bufferViews.push({ buffer: 0, byteOffset: binLength, byteLength: png.length });
-        bin.push(png);
-        binLength += png.length;
+        json.bufferViews.push({ buffer: 0, byteOffset: binLength, byteLength: p.length });
+        bin.push(p);
+        binLength += p.length;
         json.images.push({ name: `${layerKey}_confidence_${rung}`, mimeType: 'image/png', bufferView: json.bufferViews.length - 1 });
         json.textures.push({ sampler, source: json.images.length - 1, name: `${layerKey}_confidence_${rung}` });
         return json.textures.length - 1;
@@ -165,5 +284,5 @@ export function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string): TileR
     let o = 0;
     for (const b of bin) { out.set(b, o); o += b.byteLength; }
     const ladderRung = rungShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1);
-    return { glb: assembleGlb(json, out), rungShares, provenance, ladderRung, triangles };
+    return { glb: assembleGlb(json, out), rungShares, provenance, ladderRung, triangles, ...(recreate ? { recreate } : {}) };
 }

@@ -347,11 +347,11 @@ describe('districts are textured by default', () => {
         expect(textured.twins.map(l => l.layer)).toEqual(['l2']);
     });
 
-    it('the tile_refine twin labels the triangles without a photo as clay, by area', () => {
+    it('the tile_refine twin labels the triangles without a photo as clay, by area', async () => {
         const dir = path.join(TMP, 'twin');
         fs.mkdirSync(dir, { recursive: true });
         const file = writeTris(path.join(dir, 'tex.glb'), building(0, 10, 0, 10, 10));
-        const bare = tileRefineTwin(fs.readFileSync(file), 'l2');
+        const bare = await tileRefineTwin(fs.readFileSync(file), 'l2');
         expect(bare.rungShares[5]).toBeCloseTo(1, 6);
         expect(bare.provenance).toEqual([expect.objectContaining({ source: 'clay', coverage: 1 })]);
     });

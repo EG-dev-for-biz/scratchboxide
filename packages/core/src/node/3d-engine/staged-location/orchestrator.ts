@@ -231,6 +231,13 @@ export const STAGES = {
     'textures-late': { order: -1, title: 'Real textures of later layers', budgetMs: 1_200_000 }
 } as const;
 export type StageId = keyof typeof STAGES;
+
+/**
+ * A district's tile-refine twin (tile-refine-twin.ts) can carry hundreds of leaf-tile photos; this caps how long its
+ * model recreate pass runs within the textures stage's own 600 s budget, leaving room for everything else the stage
+ * does. Past it, images still queued keep their de-lit (not recreated) version - never the raw, un-de-lit one.
+ */
+const TILE_REFINE_RECREATE_BUDGET_MS = 420_000;
 export const STAGE_IDS = Object.keys(STAGES) as StageId[];
 
 /** The tool's budget is 40 minutes; the run stops starting stages 2 minutes before it. */
@@ -2205,9 +2212,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // a district staged around a kept structure: its twin loses the structure's footprint as its clay layer did
                 const carvedBy = CARVED_URL.test(target.layer.url) ? FOOTPRINT_REPORTS.get(run)?.footprint : undefined;
                 if (carvedBy) bytes = hideFootprintInGlb(bytes, carvedBy).glb;
-                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes));
+                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), !!enhance);
                 const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number }>('textures', key, async dir => {
-                    const twin = tileRefineTwin(bytes, target.layer.layer);
+                    const twin = await tileRefineTwin(bytes, target.layer.layer, enhance ? {
+                        recreate: {
+                            client: enhance, ...(deps.textures?.enhanceModels ? { models: deps.textures.enhanceModels } : {}),
+                            budgetMs: TILE_REFINE_RECREATE_BUDGET_MS
+                        }
+                    } : undefined);
                     fs.writeFileSync(path.join(dir, 'twin.glb'), twin.glb);
                     return { value: { rungShares: twin.rungShares, provenance: twin.provenance, ladderRung: twin.ladderRung, triangles: twin.triangles } };
                 }, { publish: () => [{ from: 'twin.glb', as: `${base}_${target.layer.layer}_tex_${key.slice(0, 8)}.glb` }], bypass: bypass('textures') });

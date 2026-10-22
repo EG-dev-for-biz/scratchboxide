@@ -465,13 +465,13 @@ export function padToModelAspect(img: RgbaImage8): { padded: RgbaImage8; offset:
     return { padded: { width: W, height: H, rgba: out }, offset: [ox, oy] };
 }
 
-function cropImage(img: RgbaImage8, x0: number, y0: number, w: number, h: number): RgbaImage8 {
+export function cropImage(img: RgbaImage8, x0: number, y0: number, w: number, h: number): RgbaImage8 {
     const out = new Uint8Array(w * h * 4);
     for (let y = 0; y < h; y++) out.set(img.rgba.subarray(((y0 + y) * img.width + x0) * 4, ((y0 + y) * img.width + x0 + w) * 4), y * w * 4);
     return { width: w, height: h, rgba: out };
 }
 
-function boxDownsample(img: RgbaImage8, maxSide: number): RgbaImage8 {
+export function boxDownsample(img: RgbaImage8, maxSide: number): RgbaImage8 {
     const s = Math.max(img.width, img.height) / maxSide;
     if (s <= 1) return img;
     return resizeRgba(img, Math.max(1, Math.round(img.width / s)), Math.max(1, Math.round(img.height / s)));
