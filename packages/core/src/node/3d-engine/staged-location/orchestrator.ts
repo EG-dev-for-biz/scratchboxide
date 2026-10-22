@@ -961,7 +961,7 @@ export function weightedShares(parts: Array<{ shares: number[]; texels: number }
 export function describeTextures(v: TextureStageValue): string {
     const pct = (x: number) => `${Math.round(x * 1000) / 10}%`;
     const rungs = v.shares.map((x, r) => (x > 0 ? `${TEXTURE_LADDER_RUNGS[r]} ${pct(x)}` : '')).filter(Boolean).join(', ');
-    if (v.tileRefine) return `textured ${v.layers.map(l => l.layer).join(', ')} with the tile photo tile_refine carries onto its remesh (as captured, not de-lit): ${rungs}; photo-derived texels are photo-inferred`;
+    if (v.tileRefine) return `textured ${v.layers.map(l => l.layer).join(', ')} with the tile photo tile_refine carries onto its remesh, de-lit (the shadow and highlight it was captured under lifted/compressed): ${rungs}; photo-derived texels are photo-inferred`;
     return `textured ${v.layers.map(l => l.layer).join(', ')} from ${v.views} registered Street View view${v.views === 1 ? '' : 's'}${v.tileUnavailable ? '' : ' and the tile photo'}: ${rungs}`
         + `${v.modelsUsed.length ? `; enhanced by ${v.modelsUsed.join(', ')}` : ''}; photo-derived texels are photo-inferred`;
 }

@@ -311,7 +311,7 @@ describe('districts are textured by default', () => {
         expect(validateContract('StagedLocationResult', result)).toEqual([]);
         const tex = result.stages.find(x => x.stage === 'textures')!;
         expect(tex.status).toBe('committed');
-        expect(tex.source).toMatch(/with the tile photo tile_refine carries onto its remesh \(as captured, not de-lit\)/);
+        expect(tex.source).toMatch(/with the tile photo tile_refine carries onto its remesh, de-lit/);
         // clay first: the remesh commits without a twin, the twin follows in a later event
         const remeshCommit = s.events.find(x => x.e.stage === 'remesh' && x.e.status === 'committed')!;
         expect(remeshCommit.e.layers!.every(l => !l.textured)).toBe(true);

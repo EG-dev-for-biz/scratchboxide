@@ -21,10 +21,13 @@
  * Nothing is re-projected or invented; the geometry bytes are tile_refine's.
  */
 
+import * as jpegJs from 'jpeg-js';
 import { TEXTURE_LADDER_RUNGS, TEXTURE_RUNG_CLAY } from '../../../common/spatial/texture-pass-contracts';
+import { delightLinearRgb, linearToSrgb255, PHOTOGRAMMETRIC_DELIGHT, SRGB8_TO_LINEAR } from '../../../common/spatial/photogrammetric-delight';
 import { assembleGlb, parseGlbBytes, readAccessor } from './glb-bytes';
 import { encodePng } from './png-encode';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
+import { decodeImageInMemory } from './tile-texture-transfer';
 
 export const TILE_REFINE_TWIN_VERSION = 'tile-refine-twin/v1';
 /** The rung of a photo texel from the tile (TEXTURE_LADDER_RUNGS). */
@@ -70,21 +73,62 @@ export function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string): TileR
     }
     const total = photoArea + bareArea;
     if (!(total > 0)) throw new Error('tile_refine wrote no triangles to texture');
-    const provenance = [
-        { source: 'tile-photo', label: 'photo-inferred', method: "tile_refine's remesh carries the leaf tiles' own photos (UVs into each leaf's image), as captured: not de-lit", coverage: photoArea / total },
-        { source: 'clay', label: 'clay', method: 'no photo on these triangles', coverage: bareArea / total }
-    ].filter(p => p.coverage > 0);
     const rungShares = new Array<number>(TEXTURE_LADDER_RUNGS.length).fill(0);
     rungShares[RUNG_TILE_PHOTO] = photoArea / total;
     rungShares[TEXTURE_RUNG_CLAY] += bareArea / total;
-    const indexOf = (source: string) => provenance.findIndex(p => p.source === source);
 
-    // the confidence texels, appended to the binary chunk as PNGs
+    // the binary chunk: appended to below, both for the de-lit photos and the confidence texels
     const bin: Uint8Array[] = [g.bin];
     let binLength = g.bin.byteLength;
     const pad = () => { const r = binLength % 4; if (r) { bin.push(new Uint8Array(4 - r)); binLength += 4 - r; } };
     json.images = json.images ?? [];
     json.textures = json.textures ?? [];
+
+    // de-light every embedded photo in place (user decision, 2026-10-21: a district build's own quick twin - the one
+    // the viewport actually shows, since unwrapping a whole district for the richer texture-pass.ts pipeline is too
+    // slow - was carrying tile_refine's baked shadow and highlight unmodified; this is the same analytic lift/compress
+    // curve every other texture source in the app already applies (photogrammetric-delight.ts), run once per leaf
+    // tile's own photo here rather than per texel of a rebuilt atlas, so it stays cheap at district scale). The
+    // original bytes are left in the buffer (an orphaned, unreferenced range) and the de-lit copy is appended new,
+    // the same append-only shape the confidence texels below already use.
+    let delit = 0;
+    const delitImageIndex = new Map<number, number>();
+    json.images.forEach((im: any, i: number) => {
+        if (im.bufferView === undefined || (im.mimeType !== 'image/jpeg' && im.mimeType !== 'image/png')) return;
+        const view = json.bufferViews[im.bufferView];
+        const raw = g.bin.subarray(view.byteOffset ?? 0, (view.byteOffset ?? 0) + view.byteLength);
+        let decoded: ReturnType<typeof decodeImageInMemory>;
+        try { decoded = decodeImageInMemory(raw); } catch { return; }
+        const out = new Uint8Array(decoded.rgba.length);
+        for (let p = 0; p < decoded.rgba.length; p += 4) {
+            const [lr, lg, lb] = delightLinearRgb(SRGB8_TO_LINEAR[decoded.rgba[p]], SRGB8_TO_LINEAR[decoded.rgba[p + 1]], SRGB8_TO_LINEAR[decoded.rgba[p + 2]]);
+            out[p] = Math.round(linearToSrgb255(lr)); out[p + 1] = Math.round(linearToSrgb255(lg)); out[p + 2] = Math.round(linearToSrgb255(lb)); out[p + 3] = decoded.rgba[p + 3];
+        }
+        const rgbaBuf = Buffer.from(out.buffer, out.byteOffset, out.byteLength);
+        const bytes = im.mimeType === 'image/jpeg'
+            ? new Uint8Array(jpegJs.encode({ data: rgbaBuf, width: decoded.width, height: decoded.height }, 90).data)
+            : encodePng(decoded.width, decoded.height, rgbaBuf, 4);
+        pad();
+        json.bufferViews.push({ buffer: 0, byteOffset: binLength, byteLength: bytes.length });
+        bin.push(bytes);
+        binLength += bytes.length;
+        json.images.push({ name: im.name, mimeType: im.mimeType, bufferView: json.bufferViews.length - 1 });
+        delitImageIndex.set(i, json.images.length - 1);
+        delit++;
+    });
+    if (delit) for (const t of json.textures) if (t.source !== undefined && delitImageIndex.has(t.source)) t.source = delitImageIndex.get(t.source);
+
+    const provenance = [
+        {
+            source: 'tile-photo', label: 'photo-inferred',
+            method: delit
+                ? `tile_refine's remesh carries the leaf tiles' own photos (UVs into each leaf's image), de-lit (shadowLift ${PHOTOGRAMMETRIC_DELIGHT.defaults.shadowLift}, highlightCompress ${PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress}; ${delit} of ${json.images.length - delit} photos)`
+                : "tile_refine's remesh carries the leaf tiles' own photos (UVs into each leaf's image), as captured: not de-lit",
+            coverage: photoArea / total
+        },
+        { source: 'clay', label: 'clay', method: 'no photo on these triangles', coverage: bareArea / total }
+    ].filter(p => p.coverage > 0);
+    const indexOf = (source: string) => provenance.findIndex(p => p.source === source);
     json.samplers = json.samplers ?? [];
     json.bufferViews = json.bufferViews ?? [];
     json.samplers.push({ magFilter: 9728, minFilter: 9728, wrapS: 10497, wrapT: 10497 });
