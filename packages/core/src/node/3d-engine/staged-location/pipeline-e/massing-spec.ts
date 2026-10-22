@@ -292,6 +292,110 @@ export function orientOutward(m: MassingMesh, directions = 32): { mesh: MassingM
 }
 
 // ------------------------------------------------------------------------------------------------
+// stepped massing from the scan's own heightfield
+// ------------------------------------------------------------------------------------------------
+//
+// Google's vector data gives most ordinary buildings one footprint and one height per extruded part - true setbacks
+// only come through when Google happens to hand over a true 3D "modelled volume" (buildMassing's `b.volumes` branch
+// above) or several separate extruded rings. For everything else, a stepped building was being flattened to one box
+// even though the scan's own heightfield (already read into every part via `inp.scanTop`, the ground model's DSM)
+// shows the real setbacks. This section reads that same heightfield one level further: instead of taking its single
+// median as the part's one roof height, it looks for a stepped "hypsometric" profile (plan area shrinking in jumps as
+// height increases) and, when one is found, carves the loop into several nested, independently-extruded tiers - a
+// "wedding cake" stack - each still the ordinary SE(3) extrusion the four-operator policy (AGENTS.md 1.5) already
+// covers; no new geometric primitive, just more of the existing one, placed from measurement instead of guessed.
+
+/** Boundary of a set of 1 m grid cells (integer (ix,iz) keys, cell = [ix,ix+1]x[iz,iz+1]) as closed rings, largest-area first.
+ *  Each inside cell emits its 4 edges CCW; an edge shared by two inside cells cancels against its own reverse, leaving only
+ *  the outward boundary, which is then walked start-vertex to start-vertex into closed loops. */
+export function maskBoundary(cells: ReadonlySet<string>): Vec2[][] {
+    const edges = new Map<string, [Vec2, Vec2]>();
+    for (const key of cells) {
+        const [ix, iz] = key.split(',').map(Number);
+        const corners: Vec2[] = [[ix, iz], [ix + 1, iz], [ix + 1, iz + 1], [ix, iz + 1]];
+        for (let i = 0; i < 4; i++) {
+            const a = corners[i], b = corners[(i + 1) % 4];
+            const fk = `${a[0]},${a[1]}|${b[0]},${b[1]}`, rk = `${b[0]},${b[1]}|${a[0]},${a[1]}`;
+            if (edges.has(rk)) edges.delete(rk); else edges.set(fk, [a, b]);
+        }
+    }
+    const byStart = new Map<string, [Vec2, Vec2]>();
+    for (const [, [a, b]] of edges) byStart.set(`${a[0]},${a[1]}`, [a, b]);
+    const used = new Set<string>();
+    const loops: Vec2[][] = [];
+    for (const [k0, [a0]] of edges) {
+        if (used.has(k0)) continue;
+        const loop: Vec2[] = [];
+        let cur = a0;
+        for (let guard = 0; guard < 100000; guard++) {
+            const e = byStart.get(`${cur[0]},${cur[1]}`);
+            if (!e) break;
+            const ek = `${e[0][0]},${e[0][1]}|${e[1][0]},${e[1][1]}`;
+            if (used.has(ek)) break;
+            used.add(ek);
+            loop.push(cur);
+            cur = e[1];
+            if (cur[0] === loop[0][0] && cur[1] === loop[0][1]) break;
+        }
+        if (loop.length >= 3) loops.push(loop);
+    }
+    return loops.sort((a, b) => Math.abs(ringArea(b)) - Math.abs(ringArea(a)));
+}
+
+export interface HeightTier { baseY: number; topY: number; loop: Vec2[]; cells: ReadonlySet<string> }
+
+/** The constants that govern how readily a flat footprint is split into stepped tiers from the scan alone: conservative,
+ *  since a wrong tier (an artefact of scan noise or a rooftop object) would understate the building rather than just
+ *  under-detail it - MIN_TIER_SAMPLES and MIN_TIER_DROP_SHARE both have to agree a step is real before one is cut. */
+const MIN_TIER_SAMPLES = 25;
+const MIN_TIER_DROP_SHARE = 0.08;
+const MIN_TIER_DROP_M2 = 9;
+const MAX_TIERS = 5;
+
+/**
+ * Stepped tiers of one flat footprint from the scan's own heightfield (a "hypsometric" cut: plan area at or above a
+ * rising height threshold, split where that area drops sharply - a setback). Returns undefined when the footprint's
+ * samples are too few or too flat to call a real step rather than noise; the caller then keeps its one-part behaviour.
+ */
+export function detectHeightTiers(loops: Vec2[][], scanTop: (x: number, z: number) => number, groundBaseY: number): HeightTier[] | undefined {
+    const samples = samplesIn(loops).map(([x, z]): [number, number, number] => [x, z, scanTop(x, z)]).filter(s => Number.isFinite(s[2]));
+    if (samples.length < MIN_TIER_SAMPLES) return undefined;
+    const heights = samples.map(s => s[2]);
+    const hMin = Math.min(...heights), hMax = Math.max(...heights);
+    if (hMax - hMin < HEIGHT_AGREEMENT_M * 1.5) return undefined;
+    const totalArea = samples.length;
+    const T0 = Math.floor(hMin), T1 = Math.ceil(hMax);
+    const areaAt = (T: number) => samples.reduce((n, s) => n + (s[2] >= T ? 1 : 0), 0);
+    const boundaries: number[] = [T0];
+    let prevArea = areaAt(T0);
+    for (let T = T0 + 1; T <= T1 && boundaries.length <= MAX_TIERS; T++) {
+        const a = areaAt(T);
+        if (prevArea - a >= Math.max(MIN_TIER_DROP_M2, totalArea * MIN_TIER_DROP_SHARE) && a > 0) boundaries.push(T);
+        prevArea = a;
+    }
+    // T0 (the scan's own lowest sample, not a detected step) never counts as a tier boundary on its own; a real step can
+    // still land right next to it (a sharp cliff shows up at T0+1). What has to be kept apart is two DETECTED steps -
+    // the gap that would make a resulting middle tier too thin to be a real storey rather than scan noise.
+    const filtered = boundaries.filter((L, i) => i <= 1 || L - boundaries[i - 1] >= HEIGHT_AGREEMENT_M);
+    if (filtered.length < 2) return undefined;
+    const tiers: HeightTier[] = [];
+    for (let i = 0; i < filtered.length; i++) {
+        const lo = filtered[i];
+        const cells = new Set<string>();
+        const atTier: number[] = [];
+        for (const [x, z, h] of samples) if (h >= lo) { cells.add(`${Math.floor(x)},${Math.floor(z)}`); if (i + 1 >= filtered.length || h < filtered[i + 1]) atTier.push(h); }
+        if (cells.size < 4) continue;
+        const loop = maskBoundary(cells)[0]?.map((p): Vec2 => [p[0], p[1]]);
+        const simplified = loop ? simplifyRing(loop) : undefined;
+        if (!simplified || simplified.length < 3 || Math.abs(ringArea(simplified)) < 1) continue;
+        const baseY = i === 0 ? groundBaseY : lo;
+        const topY = i + 1 < filtered.length ? filtered[i + 1] : (atTier.length ? quantile(atTier, 0.9) : lo + HEIGHT_AGREEMENT_M);
+        tiers.push({ baseY, topY, loop: simplified, cells });
+    }
+    return tiers.length >= 2 ? tiers : undefined;
+}
+
+// ------------------------------------------------------------------------------------------------
 // the massing
 // ------------------------------------------------------------------------------------------------
 
@@ -343,20 +447,38 @@ export function buildMassing(inp: MassingInputs): Massing {
             const part: MassingPart = { id, baseY, topY, loops, planes: [], heightSource, heights: { ...(vectorY !== undefined ? { vectorY } : {}), ...(solarY !== undefined ? { solarY } : {}), ...(scanY !== undefined ? { scanY } : {}) } };
             // pitched facets: kept one by one (largest first) while each lowers the roof's error against the scan
             const pitched = inside.filter(({ s }) => s.pitchDeg >= MIN_PITCHED_DEG).sort((u, v) => v.s.areaM2 - u.s.areaM2);
-            if (pitched.length) {
-                const pts = samples.filter(([x, z]) => Number.isFinite(inp.scanTop(x, z)));
+            const fitPitched = (target: MassingPart, pts: Vec2[]) => {
+                if (!pitched.length || !pts.length) return;
                 const ridge = quantile(pts.map(([x, z]) => inp.scanTop(x, z)), 0.97);
-                const capped = { ...part, topY: Number.isFinite(ridge) ? Math.max(ridge, part.topY) : part.topY };
+                const capped = { ...target, topY: Number.isFinite(ridge) ? Math.max(ridge, target.topY) : target.topY };
                 const err = (q: Pick<MassingPart, 'topY' | 'baseY' | 'planes'>) => median(pts.map(([x, z]) => Math.abs(roofAt(q, x, z) - inp.scanTop(x, z))));
-                let cur = err(part);
+                let cur = err(target);
                 for (const { s, k } of pitched) {
                     const trial = { ...capped, planes: [...capped.planes, solarPlane(s)] };
                     const e = err(trial);
                     if (e < cur * 0.95 && e < 1.5) { capped.planes = trial.planes; cur = e; solarReport.pitchedKept++; usedSolar.add(k); }
                     else solarReport.pitchedRejected++;
                 }
-                if (capped.planes.length) { part.planes = capped.planes; part.topY = capped.topY; }
+                if (capped.planes.length) { target.planes = capped.planes; target.topY = capped.topY; }
+            };
+            // a single flat vector footprint can still hide a stepped/setback building (Google's 2.5D tiles rarely carry
+            // more than one ring per building); the scan's own heightfield already in hand (scanTop) is read one step
+            // further here for a real plan-area step, and only replaces the flat part when one is found - see
+            // "stepped massing from the scan's own heightfield" above
+            const tiers = heightSource === 'scan' || agree(vectorY) || agree(solarY) ? detectHeightTiers(loops, inp.scanTop, baseY) : undefined;
+            if (tiers) {
+                for (const [ti, tier] of tiers.entries()) {
+                    const tierPart: MassingPart = {
+                        id: `${id}/t${ti}`, baseY: tier.baseY, topY: tier.topY, loops: [tier.loop], planes: [],
+                        heightSource: 'scan', heights: { scanY: tier.topY },
+                    };
+                    if (ti === tiers.length - 1) fitPitched(tierPart, samplesIn([tier.loop]).filter(([x, z]) => Number.isFinite(inp.scanTop(x, z))));
+                    parts.push(tierPart);
+                }
+                notes.push(`part ${id}: ${tiers.length} stepped tiers detected from the scan's heightfield (floors at ${tiers.map(t => (t.baseY - inp.groundY).toFixed(1)).join(', ')} m) in place of one flat part`);
+                continue;
             }
+            fitPitched(part, samples.filter(([x, z]) => Number.isFinite(inp.scanTop(x, z))));
             parts.push(part);
         }
     }
