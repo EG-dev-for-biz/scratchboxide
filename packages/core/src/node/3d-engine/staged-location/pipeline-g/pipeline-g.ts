@@ -40,6 +40,7 @@ import type { InferenceOutcome, StepRecord } from '../pipeline-e/inference';
 import { ENHANCE_CONCURRENCY, TEXTURE_PLATE_PROMPT_ID, type EnhanceWallRecord, type PlateModelClient } from '../pipeline-e/enhance';
 import { visionFacadeCounter } from '../pipeline-e/plate-identity';
 import { buildFacadeTexture } from '../facade-texture/facade-texture';
+import type { EnhanceModelClient } from '../texture-enhance';
 import { planStations } from './stations';
 import { platePng, reliefPng, surveyPlates, type Plate } from './plates';
 import { MIN_READ_COVERAGE, PIPELINE_G_READ_VERSION, programItems, readPlate, type FacadeProgram, type ProgramItems } from './read';
@@ -83,7 +84,9 @@ export interface PipelineGInput {
     signal?: AbortSignal;
     onProgress?: (m: string) => void;
     /** The facade texture builder's image model (absent: the walls keep their painted colours). */
-    enhance?: { client: PlateModelClient; models: string[]; guards?: boolean; cacheDir?: string };
+    enhance?: { client: PlateModelClient; models: string[]; guards?: boolean; cacheDir?: string;
+        /** Generative infill of what the builder flags or leaves empty (a survey plate is worse than its redraw: never reverted to). */
+        infill?: { client: EnhanceModelClient; models: string[] } };
 }
 
 export interface PipelineGOutcome extends InferenceOutcome {
@@ -286,7 +289,8 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
             const r = await buildFacadeTexture(f, on.tex, on.use, {
                 client: e.client, models: e.models, locationName: input.place, source: G_SRC.enhanced, guards: e.guards ?? true,
                 ...(done[0] ? { reference: done[0] } : {}), ...(e.cacheDir ? { cacheDir: e.cacheDir } : {}),
-                counter: visionFacadeCounter(input.chain as VisionModelChain<string>), ...(input.signal ? { signal: input.signal } : {})
+                counter: visionFacadeCounter(input.chain as VisionModelChain<string>), ...(input.signal ? { signal: input.signal } : {}),
+                ...(e.infill ? { infill: e.infill } : {}), quality: true
             });
             step.proposed++;
             enhanced.push({ ...r, plate: undefined, guarded: undefined, labels: undefined, grid: undefined } as EnhanceWallRecord);

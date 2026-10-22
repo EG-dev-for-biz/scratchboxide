@@ -267,6 +267,10 @@ export interface EnhanceWallRecord {
     /** The Street View photo that guided and checked the redraw, or why there was none. */
     streetView?: EnhanceStreetViewRecord;
     noStreetView?: string;
+    /** The flagged regions redrawn by generative infill instead of reverted (facade-texture.ts, the `infill` option). */
+    infill?: { decision: string; holePixels: number; filledPixels: number; reason?: string; model?: string };
+    /** The quality score of the texture as written (facade-texture/quality.ts, the `quality` option). */
+    quality?: { passed: boolean; emptyShare: number; seams: number; smearShare: number; sharpness: number; why: string };
 }
 
 /**
@@ -302,7 +306,9 @@ export function enhanceOrder(faces: MassingFace[], textures: Map<number, FaceTex
  * when the tile flagged them (the photo is the better evidence at street level); cells that contradict the photo are flagged.
  */
 export function guardPlate(input: Uint8Array, aligned: Uint8Array, W: number, H: number, use: Uint8Array, pixelM: number, photo?: { rect: RectifiedPhoto; bandTop: number }): {
-    audit: EnhanceAuditRecord; reject: boolean; why: string; rgba: Uint8Array; weight: Float32Array; labels: string[]; grid: CellGrid; photo?: PhotoCheck
+    audit: EnhanceAuditRecord; reject: boolean; why: string; rgba: Uint8Array; weight: Float32Array; labels: string[]; grid: CellGrid; photo?: PhotoCheck;
+    /** The flagged pixels (1), before feathering: what a revert takes back, or what generative infill redraws. */
+    mask: Uint8Array
 } {
     const a = auditPlate(input, aligned, W, H, use, pixelM);
     const labels = a.labels.slice();
@@ -319,7 +325,8 @@ export function guardPlate(input: Uint8Array, aligned: Uint8Array, W: number, H:
     const flaggedAreaM2 = Math.round(regions.reduce((s, r) => s + r.areaM2, 0) * 10) / 10;
     const share = a.coveredAreaM2 > 0 ? flaggedAreaM2 / a.coveredAreaM2 : 0;
     const reject = share > MAX_FLAGGED_SHARE;
-    const { rgba, weight } = revertRegions(input, aligned, W, H, cellMaskToPixels(flagged, a.grid, W, H), pixelM);
+    const mask = cellMaskToPixels(flagged, a.grid, W, H);
+    const { rgba, weight } = revertRegions(input, aligned, W, H, mask, pixelM);
     let reverted = 0;
     for (let i = 0; i < W * H; i++) if (use[i] && weight[i] >= 0.5) reverted++;
     const byKind = new Map<string, number>();
@@ -333,7 +340,7 @@ export function guardPlate(input: Uint8Array, aligned: Uint8Array, W: number, H:
     const why = regions.length
         ? `${regions.length} region${regions.length === 1 ? '' : 's'} that erase, replace or recolour a distinct element (${kinds}), ${(100 * share).toFixed(0)}% of ${a.coveredAreaM2.toFixed(0)} m2${reject ? `: more than ${100 * MAX_FLAGGED_SHARE}%, the wall keeps its tile texture` : `: ${audit.revertedAreaM2.toFixed(1)} m2 reverted to the tile texture`}`
         : 'no region erases, replaces or recolours a distinct element of the tile';
-    return { audit, reject, why: `${why}${inventedDetailM2 ? `; ${inventedDetailM2} m2 of finer detail drawn over ordinary wall kept` : ''}${photoKept ? `; ${audit.photoKeptM2} m2 the tile check flagged kept because the Street View photo shows it` : ''}`, rgba, weight, labels, grid: a.grid, ...(check ? { photo: check } : {}) };
+    return { audit, reject, why: `${why}${inventedDetailM2 ? `; ${inventedDetailM2} m2 of finer detail drawn over ordinary wall kept` : ''}${photoKept ? `; ${audit.photoKeptM2} m2 the tile check flagged kept because the Street View photo shows it` : ''}`, rgba, weight, labels, grid: a.grid, mask, ...(check ? { photo: check } : {}) };
 }
 
 // redrawing a wall and gating it: facade-texture/facade-texture.ts (buildFacadeTexture), the one facade texture builder

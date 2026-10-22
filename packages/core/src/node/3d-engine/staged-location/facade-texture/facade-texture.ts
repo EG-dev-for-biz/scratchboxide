@@ -31,6 +31,9 @@ import {
 import { identityGate, type FacadeCounter, type FacadeCounts, type IdentityGate } from '../pipeline-e/plate-identity';
 import { streetBandTop } from '../pipeline-e/plate-streetview';
 import type { CellGrid } from '../pipeline-e/plate-audit';
+import { infillImageHoles } from '../../../image-hole-infill';
+import { facadeQuality, MAX_EMPTY_SHARE } from './quality';
+import type { EnhanceModelClient } from '../texture-enhance';
 
 /** A wall the tile hardly sees: what the tile does not cover is drawn as the wall continues (labelled `source`). */
 export interface UnseenWall { source: number; familyLab?: [number, number, number]; inside?: Uint8Array }
@@ -151,6 +154,20 @@ export interface BuildFacadeTextureOptions {
      * inputs gets the same plate on every rebuild.
      */
     cacheDir?: string;
+    /**
+     * Regions the audit flags (erased, replaced or recoloured against the input) are redrawn by generative infill from the
+     * accepted plate around them (image-hole-infill.ts, the inpaint lock), not reverted to the input, and the wall is not
+     * refused for how much was flagged. For inputs worse than the redraw (pipeline G's survey plates of the melted tile),
+     * where a revert would paste the melt back. A fill the lock refuses falls back to the revert (and the share limit).
+     */
+    infill?: { client: EnhanceModelClient; models: string[] };
+    /**
+     * The quality score (quality.ts) decides too: the texture as it would be written must have no seam, no smeared run and at
+     * most MAX_EMPTY_SHARE flat grey or empty inside `inside` (the wall's polygon); with `infill`, empty areas are filled first.
+     */
+    quality?: boolean;
+    /** The wall's own polygon in its frame (the quality score's extent). */
+    inside?: Uint8Array;
 }
 
 export type FacadeTextureResult = EnhanceWallRecord & { plate?: Uint8Array; guarded?: Uint8Array; labels?: string[]; grid?: CellGrid };
@@ -195,9 +212,31 @@ export async function buildFacadeTexture(f: MassingFace, t: FaceTexture, use: Ui
         const gp = guardPlate(t.rgba, g.aligned, t.width, t.height, use, f.pixel, sv ? { rect: sv.rect, bandTop: streetBandTop(f) } : undefined);
         if (svRec && gp.photo) Object.assign(svRec, { shiftPx: gp.photo.shiftPx, nccPlate: gp.photo.nccPlate, nccInput: gp.photo.nccInput, comparedCells: gp.photo.comparedCells, supportedCells: gp.photo.supportedCells, contradictedCells: gp.photo.contradictedCells });
         extra = { audit: gp.audit, guarded: gp.rgba, labels: gp.labels, grid: gp.grid };
-        if (gp.reject) return { ...rec, ...extra, accepted: false, why: `${rec.why}; ${gp.why}`, ms: Date.now() - t0 };
-        out = gp.rgba; weight = gp.weight;
-        rec.why = `${rec.why}; ${gp.why}`;
+        let flagged = 0;
+        for (let i = 0; i < gp.mask.length; i++) if (gp.mask[i] && use[i]) flagged++;
+        const fill = opts.infill && flagged ? await infillImageHoles({ image: { width: t.width, height: t.height, rgba: g.aligned }, client: opts.infill.client, models: opts.infill.models, mask: gp.mask, ...(opts.signal ? { signal: opts.signal } : {}) }) : undefined;
+        if (fill) (rec as FacadeTextureResult).infill = { decision: fill.decision, holePixels: fill.holePixels, filledPixels: fill.filledPixels, ...(fill.reason ? { reason: fill.reason } : {}), ...(fill.modelUsed ? { model: fill.modelUsed } : {}) };
+        if (fill?.decision === 'accepted') {
+            // the flagged regions redrawn from the plate around them: the whole wall is the redraw, nothing taken back from the input
+            out = fill.image.rgba; weight = undefined;
+            rec.why = `${rec.why}; ${gp.audit.regions.length} flagged region${gp.audit.regions.length === 1 ? '' : 's'} (${(100 * gp.audit.flaggedShare).toFixed(0)}% of the wall) redrawn by generative infill (${fill.modelUsed}, ${fill.filledPixels} texels) instead of reverted`;
+        } else {
+            const fell = fill ? `; generative infill of the flagged regions was refused (${fill.reason ?? fill.decision}), so they revert` : '';
+            if (gp.reject) return { ...rec, ...extra, accepted: false, why: `${rec.why}; ${gp.why}${fell}`, ms: Date.now() - t0 };
+            out = gp.rgba; weight = gp.weight;
+            rec.why = `${rec.why}; ${gp.why}${fell}`;
+        }
+    }
+    if (opts.quality) {
+        let q = facadeQuality(out, t.width, t.height, f.pixel, opts.inside);
+        if (!q.passed && q.emptyShare > MAX_EMPTY_SHARE && opts.infill) {
+            // the empty areas (flat grey) of the texture redrawn from around them, then scored again
+            const fill = await infillImageHoles({ image: { width: t.width, height: t.height, rgba: out }, client: opts.infill.client, models: opts.infill.models, colour: [128, 128, 128], tolerance: 4, ...(opts.signal ? { signal: opts.signal } : {}) });
+            if (fill.decision === 'accepted') { out = fill.image.rgba; q = facadeQuality(out, t.width, t.height, f.pixel, opts.inside); rec.why = `${rec.why}; empty areas filled by generative infill (${fill.filledPixels} texels)`; }
+        }
+        (rec as FacadeTextureResult).quality = { passed: q.passed, emptyShare: q.emptyShare, seams: q.seams.rows.length + q.seams.cols.length, smearShare: q.smearShare, sharpness: q.sharpness, why: q.why };
+        if (!q.passed) return { ...rec, ...extra, accepted: false, why: `${rec.why}; ${q.why}`, ms: Date.now() - t0 };
+        rec.why = `${rec.why}; ${q.why}`;
     }
     writeFacadeTexture(t, out, weight, use, guide && opts.streetViewSource !== undefined ? opts.streetViewSource : opts.source, unseen);
     return { ...rec, ...extra, ms: Date.now() - t0 };

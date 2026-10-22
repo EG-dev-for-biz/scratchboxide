@@ -24,6 +24,8 @@ import { auditPlate, cellMaskToPixels, revertRegions, MAX_FLAGGED_SHARE } from '
 import { bestStreetViewForWall, rectifyViewOntoWall, streetBandTop, verifyAgainstPhoto, type GuideView } from '../src/node/3d-engine/staged-location/pipeline-e/plate-streetview';
 import { guardPlate, type PlateRequest } from '../src/node/3d-engine/staged-location/pipeline-e/enhance';
 import { buildFacadeTexture } from '../src/node/3d-engine/staged-location/facade-texture/facade-texture';
+import { decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
+import type { EnhanceModelRequest } from '../src/node/3d-engine/staged-location/texture-enhance';
 import { buildTexturePlatePrompt } from '../src/browser/generative-canvas/services/location-beautify-service';
 import type { MassingFace } from '../src/node/3d-engine/staged-location/pipeline-e/native-massing';
 import type { PinholeCamera } from '../src/common/spatial/texture-pass-contracts';
@@ -200,6 +202,38 @@ describe('enhanced mode: the invention and erasure check', () => {
         expect(on.accepted).toBe(false);
         expect(on.audit!.flaggedShare).toBeGreaterThan(MAX_FLAGGED_SHARE);
         expect(Array.from(t.source).every(v => v === 0)).toBe(true);
+    });
+
+    it('redraws the flagged regions by generative infill instead of rejecting the wall, when an infill model is given', async () => {
+        const input = soften(wall());
+        const plate = wall((xm, ym) => (xm < 16 && !(ym > 3.5 && ((xm % 3) / 3) > 0.3 && ((xm % 3) / 3) < 0.7 && (((ym - 3.5) % 3.5) / 3.5) > 0.2 && (((ym - 3.5) % 3.5) / 3.5) < 0.8) ? [92, 58, 44] : undefined));
+        const client = async (r: PlateRequest) => ({ bytes: new Uint8Array(encodePng(r.width, r.height, Buffer.from(padTo(plate, r.width, r.height)), 4)), modelUsed: 'fake' });
+        // the infill model: each magenta texel takes the nearest real texel on its row (a continuation from around the hole)
+        const infillCalls: string[] = [];
+        const infill = async (q: EnhanceModelRequest) => {
+            infillCalls.push(q.label);
+            const img = decodeImageInMemory(q.image.bytes), { width: w, height: h } = img, px = Uint8Array.from(img.rgba);
+            const magenta = (i: number) => px[i * 4] > 200 && px[i * 4 + 1] < 90 && px[i * 4 + 2] > 200;
+            for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+                const i = y * w + x;
+                if (!magenta(i)) continue;
+                for (let d = 1; d < w; d++) {
+                    const l = x - d >= 0 && !magenta(i - d) ? i - d : -1, r = x + d < w && !magenta(i + d) ? i + d : -1, k = l >= 0 ? l : r;
+                    if (k >= 0) { px.copyWithin(i * 4, k * 4, k * 4 + 4); break; }
+                }
+            }
+            return { bytes: new Uint8Array(encodePng(w, h, Buffer.from(px), 4)), modelUsed: 'fake-infill' };
+        };
+        const t = { width: W, height: H, rgba: input.slice(), source: new Uint8Array(W * H) };
+        const r = await buildFacadeTexture(face(), t, all(), { client, models: ['fake'], locationName: 'X', source: 3, infill: { client: infill as never, models: ['fake-infill'] } });
+        expect(infillCalls.length).toBe(1);
+        expect(r.infill?.decision).toBe('accepted');
+        expect(r.infill!.filledPixels).toBeGreaterThan(0);
+        // accepted although the flagged share is over the limit: nothing reverts to the input, every texel is the redraw's
+        expect(r.audit!.flaggedShare).toBeGreaterThan(MAX_FLAGGED_SHARE);
+        expect(r.accepted).toBe(true);
+        expect(Array.from(t.source).every(v => v === 3)).toBe(true);
+        expect(r.why).toMatch(/redrawn by generative infill/);
     });
 });
 
