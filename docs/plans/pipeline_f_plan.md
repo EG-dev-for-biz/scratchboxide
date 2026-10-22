@@ -61,6 +61,8 @@ The front page "3D Building" button (`studio/starterPrompts.ts`, curated list) r
 
 Registration: the stack works only if every source lands on the face within about a pixel. Plates share the tile camera; Street View and Beautify views need per-image registration (done for the Broome St seed: edge NCC 0.65), are down-weighted when they register poorly, and dropped below edge NCC 0.5.
 
+Narrow facades: E's window grammar held-out check (`facade-grammar.ts`, `MIN_HELD_OUT_WIDTH_M`) refuses a facade narrower than about 8 m where the scan covers it ("too narrow to hold half of it out"), which is most SoHo and NYC 25 ft lots. F reaches it through `inference.ts`, its planned second reader, so before that reader joins, a narrow facade needs another check: hold out storeys instead of a half width, or check against a sibling facade of the same block.
+
 Street View coverage: grounding images exist for US panoramas only; elsewhere only the Static API, so the Street View seed and independent occluder evidence are thinner outside the US.
 
 Naming: calling this "pipeline G v2" instead of F would avoid retiring the existing version F code; the plan keeps F unless the user decides otherwise.
