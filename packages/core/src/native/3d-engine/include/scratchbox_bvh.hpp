@@ -470,8 +470,16 @@ public:
                     }
                 }
             } else {
-                stack[stackPtr++] = node.offsetOrSecondChild;
-                stack[stackPtr++] = nodeIdx + 1;
+                // nearer box last (popped first): the best distance shrinks sooner, so more of the far subtree is pruned
+                auto boxSq = [&](uint32_t i) {
+                    const auto& b = nodes[i].bounds;
+                    Vec3 c(std::clamp(p.x, b.min.x, b.max.x), std::clamp(p.y, b.min.y, b.max.y), std::clamp(p.z, b.min.z, b.max.z));
+                    return (p - c).lengthSquared();
+                };
+                uint32_t a = nodeIdx + 1, b = node.offsetOrSecondChild;
+                if (boxSq(a) > boxSq(b)) std::swap(a, b);
+                stack[stackPtr++] = b;
+                stack[stackPtr++] = a;
             }
         }
 
