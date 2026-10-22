@@ -264,8 +264,15 @@ const months = (d?: string) => { const m = /^(\d{4})-(\d{2})/.exec(d ?? ''); ret
  * arch has about 24 within 100 m, most of them from 2021 and one from 2026: a 3-year window would have kept the one);
  * recency is a factor in the view score instead.
  */
-export async function discoverPanos(origin: GeodeticOrigin, facades: FacadeGeometry[], deps: StreetViewEvidenceDeps, signal?: AbortSignal, centre?: { x: number; z: number }): Promise<{ panos: PanoCandidate[]; metadataCalls: number; cachedCalls: number; rejectedNotGoogle: number; rejectedRefused: number; superseded: PanoCandidate[] }> {
-    const points = candidatePoints(facades, centre);
+export async function discoverPanos(origin: GeodeticOrigin, facades: FacadeGeometry[], deps: StreetViewEvidenceDeps, signal?: AbortSignal, centre?: { x: number; z: number }): Promise<PanoDiscovery> {
+    return discoverPanosAt(origin, candidatePoints(facades, centre), deps, signal, centre);
+}
+
+export interface PanoDiscovery { panos: PanoCandidate[]; metadataCalls: number; cachedCalls: number; rejectedNotGoogle: number; rejectedRefused: number; superseded: PanoCandidate[] }
+
+/** discoverPanos at any street points (tile frame): the nearest pano to each, Google captures only, thinned and capped the same way. */
+/** `ignoreRefusals`: keep panos the grounding API refused (for a caller that reads them through another API). */
+export async function discoverPanosAt(origin: GeodeticOrigin, points: Array<{ x: number; z: number }>, deps: StreetViewEvidenceDeps, signal?: AbortSignal, centre?: { x: number; z: number }, maxKept = MAX_CANDIDATE_PANOS, ignoreRefusals = false): Promise<PanoDiscovery> {
     const cache: Record<string, any> = deps.metadataCachePath && fs.existsSync(deps.metadataCachePath) ? JSON.parse(fs.readFileSync(deps.metadataCachePath, 'utf8')) : {};
     let calls = 0, cached = 0;
     const answers = await mapLimit(points, 8, async p => {
@@ -291,7 +298,7 @@ export async function discoverPanos(origin: GeodeticOrigin, facades: FacadeGeome
     }
     const ok = answers.filter(a => a && a.status === 'OK');
     // the grounding API's own refusals are left out before thinning, so an eligible pano beside one is kept
-    const refused = knownRefusals(deps);
+    const refused = ignoreRefusals ? new Map<string, string>() : knownRefusals(deps);
     const google = ok.filter(a => isGoogleCapture(a.copyright));
     const byId = new Map<string, PanoCandidate>();
     for (const a of google) {
@@ -307,7 +314,7 @@ export async function discoverPanos(origin: GeodeticOrigin, facades: FacadeGeome
     const superseded: PanoCandidate[] = [];
     for (const p of sorted) (kept.some(q => Math.hypot(q.x - p.x, q.z - p.z) < 6) ? superseded : kept).push(p);
     if (centre) kept.sort((a, b) => Math.hypot(a.x - centre.x, a.z - centre.z) - Math.hypot(b.x - centre.x, b.z - centre.z));
-    kept.splice(MAX_CANDIDATE_PANOS);
+    kept.splice(maxKept);
     return {
         panos: kept, metadataCalls: calls, cachedCalls: cached, rejectedNotGoogle: new Set(ok.filter(a => !isGoogleCapture(a.copyright)).map(a => a.panoId)).size,
         rejectedRefused: new Set(google.filter(a => refused.has(a.panoId)).map(a => a.panoId)).size, superseded
