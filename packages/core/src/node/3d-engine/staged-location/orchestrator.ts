@@ -3409,16 +3409,30 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const crowns = crownsFile.crowns ?? [];
                     // "everything in a tile" object catalog (user decision, 2026-10-21): every measured crown is a
                     // discovered tree, bounding box included - crowns.json's own frame.anchor is this run's measured
-                    // geodetic origin, so no separate conversion is needed to place it in the durable catalog.
+                    // geodetic origin, so no separate conversion is needed to place it in the durable catalog. A crown
+                    // the extraction boundary cuts through (status cut_at_boundary[_removed]) is cataloged too, at
+                    // lower confidence and labelled as truncated, instead of vanishing as unlabelled raw scan geometry
+                    // (user report, 2026-10-21, with a screenshot: an unrecognisable blob at an extraction edge that
+                    // "may only be detectable by seeing the adjacent tile" - this crown IS already measured enough to
+                    // know it is probably a tree; what is missing is the neighbouring tile's geometry to regrow it,
+                    // not the knowledge that something is there. Growing the extraction to the whole crown, the way
+                    // sizeExtraction already does for buildings (extraction-sizing.ts), is the fuller fix and is not
+                    // done here - this only stops the honest, already-measured half of the answer from being thrown away).
                     if (crownsFile.frame?.anchor) {
                         const geoOrigin: GeodeticOrigin = { lat: crownsFile.frame.anchor.lat, lng: crownsFile.frame.anchor.lng, heightMeters: crownsFile.frame.anchor.ellipsoidalHeightM ?? 0 };
-                        recordDiscoveredObjects(crowns.filter((c: any) => c.status === 'tree' && c.stem && c.apex).map((c: any) => {
+                        const catalogable = crowns.filter((c: any) => (c.status === 'tree' || c.status === 'cut_at_boundary' || c.status === 'cut_at_boundary_removed') && c.stem && c.apex);
+                        recordDiscoveredObjects(catalogable.map((c: any) => {
+                            const cut = c.status !== 'tree';
                             const r = Math.max(0, ...(Array.isArray(c.sectorRadii) ? c.sectorRadii : [0]));
                             const lo = scanToGeodetic(geoOrigin, c.stem[0] - r, c.supportY ?? c.apex[1], c.stem[1] - r);
                             const hi = scanToGeodetic(geoOrigin, c.stem[0] + r, c.apex[1], c.stem[1] + r);
                             const centre = scanToGeodetic(geoOrigin, c.stem[0], c.apex[1], c.stem[1]);
                             return {
-                                type: 'SB_FEATURE_TYPE_TREE', label: `measured crown, ${Math.round((c.apexAboveSupport ?? 0) * 10) / 10} m tall, ${Math.round((c.areaM2 ?? 0))} m2`,
+                                type: 'SB_FEATURE_TYPE_TREE',
+                                label: cut
+                                    ? `crown cut by the extraction boundary (${Math.round((c.areaM2 ?? 0))} m2 measured so far); likely a tree, not regrown - the neighbouring tile has the rest of it`
+                                    : `measured crown, ${Math.round((c.apexAboveSupport ?? 0) * 10) / 10} m tall, ${Math.round((c.areaM2 ?? 0))} m2`,
+                                confidence: cut ? 0.4 : 1,
                                 lat: centre.lat, lng: centre.lng,
                                 bboxLo: { lat: Math.min(lo.lat, hi.lat), lng: Math.min(lo.lng, hi.lng), alt: lo.alt }, bboxHi: { lat: Math.max(lo.lat, hi.lat), lng: Math.max(lo.lng, hi.lng), alt: hi.alt },
                                 source: 'tree-crown', runId
