@@ -8,7 +8,8 @@
  ********************************************************************************/
 
 /**
- * Staged-location pipeline E (off by default; SCRATCHBOX_STAGED_PIPELINE=e): fast clean lines from Google's vector massing.
+ * Staged-location pipeline E (the default for an isolated building; SCRATCHBOX_STAGED_PIPELINE=d or 0 turns it off): fast
+ * clean lines from Google's vector massing.
  *
  *   1. Massing (massing-spec.ts): the vector footprint and heights, Solar roof facets, the modelled volume where one exists,
  *      checked against the scan; a massing that disagrees falls back to the current pipeline, with the numbers.

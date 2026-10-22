@@ -1645,8 +1645,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         };
         const surveyStop = new AbortController();
         let surveyPromise: Promise<{ result?: SurveyResult; status: string }> | undefined;
-        // pipeline E (SCRATCHBOX_STAGED_PIPELINE=e, off by default): the structure from the vector massing; it needs the
-        // building's vector footprint, else the current pipeline runs and the reason is recorded
+        // pipeline E, the default for an isolated building (SCRATCHBOX_STAGED_PIPELINE=d or 0 turns it off; user decision
+        // 2026-10-22 confirms it): the structure from the vector massing; it needs the building's vector footprint, else
+        // the remesh pipeline runs and the reason is recorded
         const pipelineE = stagedPipelineE() && request.isolate;
         const eBuildings = structure?.vectorFootprint?.used && t.vector ? t.vector.raster.buildings.filter(b => structure.vectorFootprint!.featureIds.includes(b.id)) : [];
         // the shape program trial (SCRATCHBOX_STAGED_SHAPE_PROGRAM) shapes from the tree-free scan: a vector footprint only
