@@ -27,7 +27,10 @@ import { runInferenceE, type InferenceOutcome } from './pipeline-e/inference';
 import { runReliefStage, type ReliefOutcome } from './pipeline-e/relief';
 import type { DistrictMassingLayer } from './district-massing';
 
-export const DISTRICT_E_DETAIL_VERSION = 'district-e-detail/1';
+export const DISTRICT_E_DETAIL_VERSION = 'district-e-detail/2';
+
+/** The most walls the facade grammar reads in a district (an isolated building reads 12): the nearest to the place first. */
+export const DISTRICT_GRAMMAR_MAX_FACADES = 48;
 
 /** On unless SCRATCHBOX_STAGED_DISTRICT_E_DETAIL=0. */
 export function districtEDetailEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -54,7 +57,7 @@ export async function districtEDetail(input: {
     try {
         inf = await runInferenceE({
             massing: layer.massing, run: layer.run, textures: layer.textures, tilePath: input.scanGlb, isolateGlb: layer.isolateGlb,
-            dir: path.join(input.dir, 'inference'), stage: 'massing', stageKey: input.stageKey,
+            dir: path.join(input.dir, 'inference'), stage: 'massing', stageKey: input.stageKey, maxFacades: DISTRICT_GRAMMAR_MAX_FACADES,
             ...(input.chain ? { chain: input.chain } : {}), ...(input.crowns ? { crowns: input.crowns } : {}),
             ...(input.signal ? { signal: input.signal } : {}), ...(input.onProgress ? { onProgress: input.onProgress } : {})
         });

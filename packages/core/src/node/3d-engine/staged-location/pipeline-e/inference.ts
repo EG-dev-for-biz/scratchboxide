@@ -27,7 +27,7 @@ import type { Vec2 } from '../../../../common/spatial/staged-location-contracts'
 import type { VisionModelChain } from '../../../gemini/vision-model-chain';
 import { renderFrameDepth } from '../../../spatial/StreetViewPoseRegistrar';
 import type { RenderMesh3D } from '../../../spatial/HeadlessMeshSilhouetteRenderer';
-import { grammarCells, runFacadeGrammarPass, type FacadeGrammar, type GrammarFacadeOutcome } from '../facade-grammar';
+import { grammarCells, MIN_PHOTO_COVERAGE, runFacadeGrammarPass, type FacadeGrammar, type GrammarFacadeOutcome } from '../facade-grammar';
 import { encodePng } from '../png-encode';
 import { averageBays, bayGroups } from './bay-average';
 import { bandProfile, bandPrompt, decideBands, parapetProfile, parseBandReply, type BandDecision } from './band-infer';
@@ -83,6 +83,8 @@ export interface InferenceInput {
         /** Where the model's answers are cached per wall (enhance.ts cachedPlate). */
         cacheDir?: string;
     };
+    /** The most walls the facade grammar reads (default MAX_GRAMMAR_FACADES, sized for one building; a district reads more). */
+    maxFacades?: number;
     signal?: AbortSignal;
     onProgress?: (m: string) => void;
 }
@@ -128,8 +130,9 @@ async function askJson<T>(chain: VisionModelChain<string>, png: Buffer, prompt: 
 }
 
 /** Writes the walls' orthos as a relief-orthos index (facade-grammar.ts reads it). */
-export function writeWallOrthoIndex(run: MassingRun, minAreaM2 = 80): string {
-    const facades = run.report.faces.filter(f => f.kind === 'wall' && f.width > 0 && f.area >= minAreaM2 && fs.existsSync(path.join(run.dir, `ortho_${f.index}.png`))).map(f => ({
+export function writeWallOrthoIndex(run: MassingRun, minAreaM2 = 80, minCoverage = MIN_PHOTO_COVERAGE): string {
+    // walls the photo hardly covers (party walls, the inside of a block) are not offered: they would take a grammar reading's place
+    const facades = run.report.faces.filter(f => f.kind === 'wall' && f.width > 0 && f.area >= minAreaM2 && (f.coverage ?? 0) >= minCoverage && fs.existsSync(path.join(run.dir, `ortho_${f.index}.png`))).map(f => ({
         facadeId: f.index, planeIndex: f.index, image: `ortho_${f.index}.png`, area_m2: f.area,
         centroid: [f.origin[0] + f.axisS[0] * (f.sMin + f.sMax) / 2, (f.tMin + f.tMax) / 2, f.origin[2] + f.axisS[2] * (f.sMin + f.sMax) / 2],
         normal: f.normal, axisS: f.axisS, axisT: f.axisT, sMin: f.sMin, sMax: f.sMax, tMin: f.tMin, tMax: f.tMax,
@@ -259,7 +262,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
     const bandReads = chain ? run.report.sections.map(sec => askJson(chain, fs.readFileSync(path.join(run.dir, sec.image)), bandPrompt(sec), parseBandReply).catch(e => e as Error)) : [];
     const wallFaces = faces.filter(f => f.kind === 'wall' && f.width > 0 && f.area >= 80 && f.coverage >= LOW_COVERAGE);
     const occReads = chain ? wallFaces.map(f => askJson(chain, fs.readFileSync(path.join(run.dir, `ortho_${f.index}.png`)), occluderPrompt(f.width * f.pixel, f.height * f.pixel), parseOccluderReply).catch(e => e as Error)) : [];
-    const grammarRead = chain ? runFacadeGrammarPass({ orthosDir: writeWallOrthoIndex(run), chain, ...(input.anchor ? { anchor: input.anchor } : {}), ...(input.signal ? { signal: input.signal } : {}), onProgress: m => progress(m), overlayDir: path.join(input.dir, 'grammar_overlays') }).catch(e => e as Error) : undefined;
+    const grammarRead = chain ? runFacadeGrammarPass({ orthosDir: writeWallOrthoIndex(run), chain, ...(input.maxFacades ? { maxFacades: input.maxFacades } : {}), ...(input.anchor ? { anchor: input.anchor } : {}), ...(input.signal ? { signal: input.signal } : {}), onProgress: m => progress(m), overlayDir: path.join(input.dir, 'grammar_overlays') }).catch(e => e as Error) : undefined;
     const svRead = input.streetViews && input.structureMesh ? input.streetViews(input.structureMesh).catch(e => e as Error) : undefined;
     const guideRead = input.enhance && input.enhance.guards !== false && input.enhance.streetViews ? input.enhance.streetViews().catch(e => e as Error) : undefined;
 
