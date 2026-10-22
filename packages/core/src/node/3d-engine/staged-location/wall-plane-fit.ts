@@ -532,6 +532,94 @@ export function findSteps(fit: Pick<WallPlaneFit, 'residual' | 'status' | 'lengt
 }
 
 // ------------------------------------------------------------------------------------------------
+// a building's footprint registered to the scan
+// ------------------------------------------------------------------------------------------------
+
+export interface FootprintRegistration {
+    applied: boolean;
+    reason?: string;
+    /** The shift (plan, metres) and the rotation about `centre` (degrees, counter-clockwise seen from above with x east, z south: positive turns x toward z). */
+    shift: Vec2; rotationDeg: number; centre: Vec2;
+    /** Walls used, and the RMS of their offsets before and after the registration (length- and inlier-weighted). */
+    walls: number; offsetRmsBeforeM: number; offsetRmsAfterM: number;
+    /** The scan cells within 0.2 m of the walls' planes, fitted from the footprint as given and as registered. */
+    inliersBefore?: number; inliersAfter?: number;
+    transform: (q: Vec2) => Vec2;
+}
+
+export const REGISTRATION_PARAMS = {
+    /** A rotation is taken only up to this, and only when the walls' lever arms constrain it. */
+    maxRotationDeg: 3,
+    /** Huber scale for the walls' offsets, metres (a wall the scan puts on a different facade counts less). */
+    huberM: 0.3,
+    /** The registration must explain the offsets this much better (RMS) to be applied, and at least minWalls walls. */
+    minGain: 0.8,
+    minWalls: 3,
+    /** ... and the walls refitted from the registered footprint must agree with this many times the scan cells. */
+    minInlierGain: 1.1
+};
+
+/**
+ * The footprint as a whole moved onto the scan: the 2D shift (and a small rotation) that best explains the measured walls'
+ * offsets, o_i ~ n_i . (T + theta perp(m_i - c)), by Huber-weighted least squares. Applied only when both shift directions are
+ * constrained (the smaller eigenvalue at least a fifth of the larger), within the wall-fit reach, and it explains the offsets
+ * clearly better than leaving the footprint where it is.
+ */
+export function registerFootprint(walls: Array<{ a: Vec2; b: Vec2; outward: Vec2; offsetM: number; weight: number }>, P = WALL_FIT_PARAMS, Rg = REGISTRATION_PARAMS): FootprintRegistration {
+    const id = (q: Vec2): Vec2 => q;
+    const ws = walls.filter(w => w.weight > 0 && Number.isFinite(w.offsetM));
+    const tot = ws.reduce((t, w) => t + w.weight, 0);
+    const c: Vec2 = tot ? [ws.reduce((t, w) => t + w.weight * (w.a[0] + w.b[0]) / 2, 0) / tot, ws.reduce((t, w) => t + w.weight * (w.a[1] + w.b[1]) / 2, 0) / tot] : [0, 0];
+    const rms0 = tot ? Math.sqrt(ws.reduce((t, w) => t + w.weight * w.offsetM * w.offsetM, 0) / tot) : NaN;
+    const none = (reason: string): FootprintRegistration => ({ applied: false, reason, shift: [0, 0], rotationDeg: 0, centre: c, walls: ws.length, offsetRmsBeforeM: r3(rms0), offsetRmsAfterM: r3(rms0), transform: id });
+    if (ws.length < Rg.minWalls) return none(`${ws.length} measured walls (at least ${Rg.minWalls} needed)`);
+    // rows: [n.x, n.z, n . perp(m - c)] with perp(v) = (-v.z, v.x)
+    const rows = ws.map(w => {
+        const m: Vec2 = [(w.a[0] + w.b[0]) / 2 - c[0], (w.a[1] + w.b[1]) / 2 - c[1]];
+        return { x: [w.outward[0], w.outward[1], w.outward[0] * -m[1] + w.outward[1] * m[0]], o: w.offsetM, w: w.weight };
+    });
+    const solve = (cols: number, rw: number[]): number[] | undefined => {
+        const A = Array.from({ length: cols }, () => new Array(cols).fill(0)), bb = new Array(cols).fill(0);
+        rows.forEach((r, i) => { for (let j = 0; j < cols; j++) { bb[j] += rw[i] * r.x[j] * r.o; for (let k = 0; k < cols; k++) A[j][k] += rw[i] * r.x[j] * r.x[k]; } });
+        // the shift block's conditioning
+        const tr = A[0][0] + A[1][1], det2 = A[0][0] * A[1][1] - A[0][1] * A[1][0], disc = Math.sqrt(Math.max(0, (tr * tr) / 4 - det2));
+        if (!(tr > 0) || tr / 2 - disc < 0.2 * (tr / 2 + disc)) return undefined;
+        // Gaussian elimination
+        const M = A.map((row, j) => [...row, bb[j]]);
+        for (let j = 0; j < cols; j++) {
+            let piv = j;
+            for (let k = j + 1; k < cols; k++) if (Math.abs(M[k][j]) > Math.abs(M[piv][j])) piv = k;
+            if (Math.abs(M[piv][j]) < 1e-9) return undefined;
+            [M[j], M[piv]] = [M[piv], M[j]];
+            for (let k = 0; k < cols; k++) if (k !== j) { const f = M[k][j] / M[j][j]; for (let l = j; l <= cols; l++) M[k][l] -= f * M[j][l]; }
+        }
+        return M.map((row, j) => row[cols] / row[j]);
+    };
+    const fit = (cols: number): number[] | undefined => {
+        let rw = rows.map(r => r.w), x: number[] | undefined;
+        for (let it = 0; it < 4; it++) {
+            x = solve(cols, rw);
+            if (!x) return undefined;
+            rw = rows.map(r => { const e = Math.abs(r.o - r.x.slice(0, cols).reduce((t, v, j) => t + v * x![j], 0)); return r.w * (e <= Rg.huberM ? 1 : Rg.huberM / e); });
+        }
+        return x;
+    };
+    let x = fit(3);
+    if (!x || Math.abs((Math.atan(x[2]) * 180) / Math.PI) > Rg.maxRotationDeg) x = fit(2);
+    if (!x) return none('the measured walls do not constrain both directions of a shift');
+    const th = x.length > 2 ? x[2] : 0;
+    const rms1 = Math.sqrt(rows.reduce((t, r) => { const e = r.o - (r.x[0] * x![0] + r.x[1] * x![1] + r.x[2] * th); return t + r.w * e * e; }, 0) / tot);
+    const shiftM = Math.hypot(x[0], x[1]);
+    const reach = Math.min(P.reachBackM, P.reachFrontM);
+    if (shiftM > reach) return none(`the shift the walls ask for (${shiftM.toFixed(1)} m) is past the wall-fit reach (${reach} m)`);
+    if (!(rms1 <= Rg.minGain * rms0)) return { ...none(`the registration explains the walls' offsets no better (RMS ${r3(rms0)} -> ${r3(rms1)} m)`), offsetRmsAfterM: r3(rms1) };
+    const cs = Math.cos(th), sn = Math.sin(th);
+    // o = n . (T + th perp(m - c)): the footprint point q goes to c + R(th) (q - c) + T, R(th) turning x toward z for th > 0
+    const transform = (q: Vec2): Vec2 => { const dx = q[0] - c[0], dz = q[1] - c[1]; return [c[0] + cs * dx - sn * dz + x![0], c[1] + sn * dx + cs * dz + x![1]]; };
+    return { applied: true, shift: [r3(x[0]), r3(x[1])], rotationDeg: r3((th * 180) / Math.PI), centre: [r3(c[0]), r3(c[1])], walls: ws.length, offsetRmsBeforeM: r3(rms0), offsetRmsAfterM: r3(rms1), transform };
+}
+
+// ------------------------------------------------------------------------------------------------
 // a building's massing, plane first
 // ------------------------------------------------------------------------------------------------
 
@@ -554,6 +642,8 @@ export interface PlaneFirstMassing<P> {
     openings: Array<{ id: string; face: string; s0: number; s1: number; t0: number; t1: number; depth: number; scanned: boolean; confidence: number; provenance: string }>;
     faceSweeps: Array<{ id: string; confidence: number; provenance: string; face: string; axis: 0 | 1; profile: Array<[number, number]>; placements: Array<[number, number, number]> }>;
     summary: PlaneFirstSummary;
+    /** The footprint's registration to the scan, applied before the walls were fitted (registerFootprint). */
+    registration: Omit<FootprintRegistration, 'transform'>;
 }
 
 export interface PlaneFirstSummary {
@@ -577,7 +667,7 @@ const tokKey = (s: string) => s.replace(/\s+/g, '_') || '_';
  * re-intersected), and each wall's relief as native items: a recess as an opening of its measured depth, a projection as a
  * face sweep (a box of its depth). Parts are any objects with id, loops, baseY and topY (pipeline E's MassingPart).
  */
-export function planeFirstMassing<P extends { id: string; loops: Vec2[][]; baseY: number; topY: number }>(parts: P[], ix: WallSampleIndex, inside: (part: P, x: number, z: number) => boolean, opts: { idPrefix?: string; P?: typeof WALL_FIT_PARAMS; R?: typeof RELIEF_PARAMS; S?: typeof STEP_PARAMS } = {}): PlaneFirstMassing<P> {
+export function planeFirstMassing<P extends { id: string; loops: Vec2[][]; baseY: number; topY: number }>(parts: P[], ix: WallSampleIndex, inside: (part: P, x: number, z: number) => boolean, opts: { idPrefix?: string; P?: typeof WALL_FIT_PARAMS; R?: typeof RELIEF_PARAMS; S?: typeof STEP_PARAMS; /** Register the footprint to the scan before fitting the walls (default true). */ register?: boolean } = {}): PlaneFirstMassing<P> {
     const walls: PlaneFirstWall[] = [];
     const openings: PlaneFirstMassing<P>['openings'] = [];
     const faceSweeps: PlaneFirstMassing<P>['faceSweeps'] = [];
@@ -585,7 +675,7 @@ export function planeFirstMassing<P extends { id: string; loops: Vec2[][]; baseY
     let n = 0;
     type Piece = { fit: WallPlaneFit; a: Vec2; b: Vec2; outward: Vec2; line: FittedLine };
     // each edge of each part: one plane, or, where the scan steps along it, one plane per run
-    const all: Piece[][][][] = parts.map(part => part.loops.map(loop => {
+    const fitAll = (ps: P[]): Piece[][][][] => ps.map(part => part.loops.map(loop => {
         const nrm = outwardNormals(loop, (x, z) => inside(part, x, z));
         return loop.map((a, e): Piece[] => {
             const b = loop[(e + 1) % loop.length];
@@ -616,6 +706,22 @@ export function planeFirstMassing<P extends { id: string; loops: Vec2[][]; baseY
             return merged;
         });
     }));
+    // the footprint registered to the scan first (registerFootprint): the vector data and the tiles can stand a metre apart,
+    // the same for every wall of a building; each wall's own plane is then measured from the registered edge
+    let all = fitAll(parts);
+    const registration = registerFootprint(all.flat(3).filter(pc => pc.fit.status === 'measured').map(pc => ({ a: pc.a, b: pc.b, outward: pc.outward, offsetM: pc.fit.offsetM, weight: pc.fit.lengthM * pc.fit.inlierShare })), opts.P);
+    if (registration.applied && opts.register !== false) {
+        // kept only when the walls fitted from the registered footprint agree with the scan clearly better (the scan cells
+        // within 0.2 m of their planes), never on the offsets' least squares alone
+        const agree = (pcs: Piece[][][][]) => pcs.flat(3).reduce((t, pc) => t + pc.fit.seenCells * pc.fit.inlierShare, 0);
+        const xf = registration.transform;
+        const moved = parts.map(part => ({ ...part, loops: part.loops.map(l => l.map(xf)) }));
+        const refit = fitAll(moved);
+        const before = agree(all), after = agree(refit);
+        registration.inliersBefore = Math.round(before); registration.inliersAfter = Math.round(after);
+        if (after >= REGISTRATION_PARAMS.minInlierGain * before) { parts = moved; all = refit; }
+        else { registration.applied = false; registration.reason = `the walls fitted from the registered footprint agree with the scan no better (${Math.round(before)} -> ${Math.round(after)} cells within 0.2 m of their planes)`; }
+    }
     // the building's own shift: where the walls the scan measures agree the whole footprint stands off the scan (the vector
     // data and the tiles registered a little apart), the least-squares translation of their planes, when it constrains both
     // directions; a wall the scan does not see moves with it rather than staying where the vector data put it
@@ -721,7 +827,8 @@ export function planeFirstMassing<P extends { id: string; loops: Vec2[][]; baseY
             walls.push({ key, part: part.id, loop: w.li, edge: w.e, fit, a: a2, b: b2, outward: piece.outward, baseY: part.baseY, topY: part.topY, reliefIds, reliefIndex });
         }
     }
-    return { parts: out, walls, openings, faceSweeps, summary: planeFirstSummary(walls, openings.length, faceSweeps.length) };
+    const { transform: _xf, ...reg } = registration;
+    return { parts: out, walls, openings, faceSweeps, registration: { ...reg, applied: reg.applied && opts.register !== false }, summary: planeFirstSummary(walls, openings.length, faceSweeps.length) };
 }
 
 export function planeFirstSummary(walls: PlaneFirstWall[], recesses: number, projections: number): PlaneFirstSummary {
@@ -786,10 +893,26 @@ export function dropWallBandResidual<N extends ResidualNodeLike>(nodes: N[], wal
         }
         return false;
     };
-    // the residual triangles, welded across nodes (1 mm)
-    type Tri = { node: number; t: number; area: number; band: boolean };
+    const res = dropResidualClusters(nodes, cl => {
+        let ab = 0;
+        for (const t of cl.tris) if (inBand(t.c[0], t.c[1], t.c[2])) ab += t.area;
+        return cl.areaM2 > 0 && ab >= share * cl.areaM2 ? 'wall' : undefined;
+    }, opts.subset);
+    return { nodes: res.nodes, removedTriangles: res.removedTriangles, removedAreaM2: res.removedAreaM2, keptTriangles: res.keptTriangles };
+}
+
+/** One residual cluster: its triangles' centroids and areas, and all its vertex positions (x, y, z flattened). */
+export interface ResidualCluster { areaM2: number; tris: Array<{ c: [number, number, number]; area: number }>; points: number[] }
+
+/**
+ * The residual triangles (nodes of kind 'residual'), welded across nodes at 1 mm into clusters; each cluster for which
+ * `decide` names a reason is removed. Returns the nodes without those triangles and what was removed, by reason.
+ */
+export function dropResidualClusters<N extends ResidualNodeLike>(nodes: N[], decide: (cl: ResidualCluster) => string | undefined, subsetFn?: (n: N, keep: number[]) => N): { nodes: N[]; removedTriangles: number; removedAreaM2: number; keptTriangles: number; byReason: Record<string, { clusters: number; triangles: number; areaM2: number }> } {
+    type Tri = { node: number; t: number; area: number; c: [number, number, number] };
     const tris: Tri[] = [];
     const byVert = new Map<string, number[]>();
+    const vkey = (P: Float32Array, o: number) => `${Math.round(P[o] * 1000)},${Math.round(P[o + 1] * 1000)},${Math.round(P[o + 2] * 1000)}`;
     nodes.forEach((nd, ni) => {
         if (nd.kind !== 'residual') return;
         const P = nd.positions, I = nd.indices;
@@ -798,37 +921,36 @@ export function dropWallBandResidual<N extends ResidualNodeLike>(nodes: N[], wal
             const ux = P[v[1]] - P[v[0]], uy = P[v[1] + 1] - P[v[0] + 1], uz = P[v[1] + 2] - P[v[0] + 2];
             const wx = P[v[2]] - P[v[0]], wy = P[v[2] + 1] - P[v[0] + 1], wz = P[v[2] + 2] - P[v[0] + 2];
             const area = 0.5 * Math.hypot(uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx);
-            const cx = (P[v[0]] + P[v[1]] + P[v[2]]) / 3, cy = (P[v[0] + 1] + P[v[1] + 1] + P[v[2] + 1]) / 3, cz = (P[v[0] + 2] + P[v[1] + 2] + P[v[2] + 2]) / 3;
             const id = tris.length;
-            tris.push({ node: ni, t, area, band: inBand(cx, cy, cz) });
-            for (const o of v) {
-                const k = `${Math.round(P[o] * 1000)},${Math.round(P[o + 1] * 1000)},${Math.round(P[o + 2] * 1000)}`;
-                const l = byVert.get(k);
-                if (l) l.push(id); else byVert.set(k, [id]);
-            }
+            tris.push({ node: ni, t, area, c: [(P[v[0]] + P[v[1]] + P[v[2]]) / 3, (P[v[0] + 1] + P[v[1] + 1] + P[v[2] + 1]) / 3, (P[v[0] + 2] + P[v[1] + 2] + P[v[2] + 2]) / 3] });
+            for (const o of v) { const k = vkey(P, o); const l = byVert.get(k); if (l) l.push(id); else byVert.set(k, [id]); }
         }
     });
-    // clusters
     const comp = new Int32Array(tris.length).fill(-1);
     const drop = new Uint8Array(tris.length);
-    const vertsOf = (id: number): string[] => {
-        const nd = nodes[tris[id].node], P = nd.positions, I = nd.indices, t = tris[id].t;
-        return [0, 1, 2].map(k => { const o = I[t * 3 + k] * 3; return `${Math.round(P[o] * 1000)},${Math.round(P[o + 1] * 1000)},${Math.round(P[o + 2] * 1000)}`; });
-    };
-    let nc = 0;
-    for (let s = 0; s < tris.length; s++) {
-        if (comp[s] >= 0) continue;
-        const stack = [s], members: number[] = [];
-        comp[s] = nc;
+    const byReason: Record<string, { clusters: number; triangles: number; areaM2: number }> = {};
+    for (let s0 = 0; s0 < tris.length; s0++) {
+        if (comp[s0] >= 0) continue;
+        const stack = [s0], members: number[] = [];
+        comp[s0] = s0;
         while (stack.length) {
             const i = stack.pop()!;
             members.push(i);
-            for (const k of vertsOf(i)) for (const j of byVert.get(k) ?? []) if (comp[j] < 0) { comp[j] = nc; stack.push(j); }
+            const nd = nodes[tris[i].node];
+            for (let k = 0; k < 3; k++) for (const j of byVert.get(vkey(nd.positions, nd.indices[tris[i].t * 3 + k] * 3)) ?? []) if (comp[j] < 0) { comp[j] = s0; stack.push(j); }
         }
-        let a = 0, ab = 0;
-        for (const i of members) { a += tris[i].area; if (tris[i].band) ab += tris[i].area; }
-        if (a > 0 && ab >= share * a) for (const i of members) drop[i] = 1;
-        nc++;
+        const points: number[] = [];
+        let areaM2 = 0;
+        for (const i of members) {
+            areaM2 += tris[i].area;
+            const nd = nodes[tris[i].node];
+            for (let k = 0; k < 3; k++) { const o = nd.indices[tris[i].t * 3 + k] * 3; points.push(nd.positions[o], nd.positions[o + 1], nd.positions[o + 2]); }
+        }
+        const why = decide({ areaM2, tris: members.map(i => ({ c: tris[i].c, area: tris[i].area })), points });
+        if (!why) continue;
+        for (const i of members) drop[i] = 1;
+        const r = (byReason[why] ??= { clusters: 0, triangles: 0, areaM2: 0 });
+        r.clusters++; r.triangles += members.length; r.areaM2 = r3(r.areaM2 + areaM2);
     }
     let removedTriangles = 0, removedAreaM2 = 0, keptTriangles = 0;
     const keepBy = new Map<number, number[]>();
@@ -838,14 +960,14 @@ export function dropWallBandResidual<N extends ResidualNodeLike>(nodes: N[], wal
         const l = keepBy.get(tr.node);
         if (l) l.push(tr.t); else keepBy.set(tr.node, [tr.t]);
     });
-    const subset = opts.subset ?? ((nd: N, keep: number[]) => subsetNode(nd, keep));
+    const subset = subsetFn ?? ((nd: N, keep: number[]) => subsetNode(nd, keep));
     const outNodes = nodes.flatMap((nd, ni) => {
         if (nd.kind !== 'residual') return [nd];
         const keep = keepBy.get(ni) ?? [];
         if (keep.length === nd.indices.length / 3) return [nd];
         return keep.length ? [subset(nd, keep)] : [];
     });
-    return { nodes: outNodes, removedTriangles, removedAreaM2: r3(removedAreaM2), keptTriangles };
+    return { nodes: outNodes, removedTriangles, removedAreaM2: r3(removedAreaM2), keptTriangles, byReason };
 }
 
 /** A node keeping only triangles `keep` (its per-vertex arrays compacted: any Float32Array / Int32Array of n * width). */
