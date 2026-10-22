@@ -207,7 +207,9 @@ export function surveyViewFor(face: SurveyFaceTarget, pick: SurveyCandidate): Su
 /**
  * One pano per face, each looking at its face from the outward side, all different, at different bearings from the
  * structure where the candidates allow. A face no pano sees is skipped, with the reason. The faces with the fewest
- * candidates choose first, so a face with one possible pano gets it.
+ * candidates choose first, so a face with one possible pano gets it. MAX_SURVEY_FACES caps the faces because each Street
+ * View image costs a call; `rendered` lifts that cap for cameras that are free renders of the tile (pipeline G's stations),
+ * leaving only `max`.
  */
 export function selectSurveyViews(
     panos: PanoCandidate[],
@@ -215,9 +217,10 @@ export function selectSurveyViews(
     structure: Pick<StructurePickResult, 'cells' | 'groundY' | 'centroid'>,
     ground: Pick<GroundModel, 'cellIndex' | 'groundAt'>,
     top: Float32Array,
-    max = MAX_SURVEY_FACES
+    max = MAX_SURVEY_FACES,
+    opts: { rendered?: boolean } = {}
 ): SurveyPlan {
-    const limit = Math.max(0, Math.min(MAX_SURVEY_FACES, max));
+    const limit = Math.max(0, opts.rendered ? max : Math.min(MAX_SURVEY_FACES, max));
     const candidates = surveyCandidates(panos, faces, structure, ground, top);
     const order = [...faces].sort((a, b) => candidates.get(a.faceId)!.length - candidates.get(b.faceId)!.length || a.headingDeg - b.headingDeg);
     const used = new Set<string>();

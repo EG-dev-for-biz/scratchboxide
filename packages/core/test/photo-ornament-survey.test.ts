@@ -63,6 +63,17 @@ describe('which panos look at which faces', () => {
         expect(byHeading(0).panoId).not.toBe('N2');
     });
 
+    it('caps the faces at the Street View image budget, unless the cameras are free renders', () => {
+        const base = footprintSurveyFaces(STRUCTURE);
+        // a second face looking north (as a long wall split in two would): five faces for four images
+        const faces = [...base, { ...base.find(f => f.headingDeg === 0)!, faceId: 'north-2' }];
+        const capped = selectSurveyViews(PANOS, faces, STRUCTURE, GROUND, new Float32Array(0), faces.length);
+        expect(capped.views.length).toBe(4);
+        expect(capped.skipped.some(s => /image budget of 4/.test(s.reason))).toBe(true);
+        const rendered = selectSurveyViews(PANOS, faces, STRUCTURE, GROUND, new Float32Array(0), faces.length, { rendered: true });
+        expect(rendered.views.length).toBe(5);
+    });
+
     it('skips a face no pano looks at and says why, and never reuses one pano for two faces', () => {
         const faces = footprintSurveyFaces(STRUCTURE);
         const plan = selectSurveyViews([pano('N1', 0, -34), pano('E1', 44, 1), pano('S1', -4, 38)], faces, STRUCTURE, GROUND, new Float32Array(0));

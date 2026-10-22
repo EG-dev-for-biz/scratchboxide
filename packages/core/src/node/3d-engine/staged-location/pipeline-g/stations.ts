@@ -109,7 +109,7 @@ export function planStations(opts: {
         if (i < 0 || structure.cells.has(`${Math.floor(x)},${Math.floor(z)}`)) continue;
         if (ground.walkable ? ground.walkable[i] : ground.open[i]) panos.push({ panoId: `g${panos.length}`, lat: 0, lng: 0, x, z });
     }
-    const plan = selectSurveyViews(panos, targets, structure, ground, ground.top, targets.length);
+    const plan = selectSurveyViews(panos, targets, structure, ground, ground.top, targets.length, { rendered: true });
     const cands = surveyCandidates(panos, targets, structure, ground, ground.top);
     const ring = planRingViews(targets, cands, { faces: plan.views.map(v => ({ faceId: v.faceId, skipped: false, elements: [] })), read: plan.views.map(v => ({ view: v })) } as never, RING_VIEWS, false);
     const stations: GStation[] = [];
