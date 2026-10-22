@@ -164,6 +164,102 @@ Clay; grey is the rebuilt massing, orange the as-scanned residual, blue the carv
 The existing district, pipeline-E, version-F, shape-program and residual-audit suites also pass (69 tests).
 `npm run typecheck` exits 0.
 
+## Round 2: registration, enclosed voids, roof debris
+
+All three changes are on with plane first (cache version `district-massing/1+wall-plane-fit/1+roof-and-voids/1`). The
+same views were re-rendered and checked: `after_round2_wide.png`, `after_round2_f75.png` and `after_round2_f83.png`.
+
+### Footprint registration
+
+`registerFootprint` in `wall-plane-fit.ts` fits a 2D shift (and a rotation of at most 3°) to the building's measured
+walls before the walls are fitted. It is Huber-weighted least squares of `o_i ≈ n_i · (T + θ perp(m_i − c))`.
+
+- It is offered only when both shift directions are constrained and the offsets' RMS drops by at least 20%. Offered to
+  31 of 94 buildings: median shift 1.84 m, offset RMS 1.39 → 0.69 m.
+- It is kept only when the walls refitted from the registered footprint agree with at least 1.1× the scan cells (within
+  0.2 m of their planes). That leaves 5 of 92.
+- When I applied it whenever offered, the same-57 metric got slightly worse:
+  - RMS 1.17 m with registration, 1.15 m without;
+  - more than 3 m from any surface: 7.9% with, 7.2% without;
+  - newly rebuilt buildings, RMS: 1.05 m with, 0.82 m without.
+- `SCRATCHBOX_STAGED_PLANE_REGISTER=0` turns registration off.
+- The district-wide 0.8 m shift is not a per-building constant. The per-wall planes already absorb it.
+
+### Enclosed voids
+
+`carveCourtyards` in `roof-and-voids.ts` carves a region inside a part as an inner ring when all of these hold:
+
+- the scan's top lies at least max(4 m, 25% of the height) under the roof;
+- the region is at least 2 m inside the outer ring, at least 20 m², with no side shorter than 3 m;
+- 75% of the part's cells within 3 m of it stand near the roof (enclosed);
+- a rectangle or 16-gon fills at least 60% of it.
+
+The new ring's walls are fitted like any other. When the void's floor stands more than 1 m over the base, a floor part
+(labelled `measured`) is added up to the median floor height.
+
+- Without the enclosure test, the cathedral's aisles were "carved", which let its roof check pass. With it, the
+  cathedral keeps its scan again.
+- In this district only one void qualifies (29 m², with a floor).
+- The far samples are not courtyards. 84% of them lie inside the rebuilt solid more than 6 m up, along walls where two
+  footprints overlap (`plan_far_samples_f58.png`). That is the scan standing more than 3 m behind the planes at upper
+  floors, which no relief rule takes.
+
+### Rooftop solids
+
+`fitRooftopSolids` rebuilds each 4-connected region of the scan as one prism when it:
+
+- stands at least 1.2 m over a part's roof;
+- is at least 1 m inside the outer ring;
+- covers at least 4 m², and no more than 35% of the part (a larger region is a tier, not a rooftop object);
+- has its holes filled (a hollow lantern is one solid).
+
+The prism is the rectangle or 16-gon that best fills the region (at least 55%), running from the roof to the median of
+the region's upper half. Each is labelled `generated`, with its fill and the scan top's RMS about it.
+
+- Result: 118 solids, 8,689 m², 23 of them polygons.
+- The solids join after the roof check, so they never rescue a roof the check refused.
+- `location_reference_images` was not used. The scan resolves these to prism level, and nothing finer is modelled.
+
+### Roof debris
+
+`roofDebrisDecider` runs over welded residual clusters after the wall-band drop:
+
+- splinters: second principal extent under 0.5 m and area under 15 m²; 66 clusters, 49 m²;
+- hidden: at least 60% inside the rebuilt solid. These are the scan's surfaces under the roof, whose tips poke through as
+  the thin shards on the big block's roof. 142 clusters, 57,514 m²;
+- roof noise: at least 70% within 1 m of a rebuilt roof; 21 clusters, 359 m².
+
+Real rooftop clusters (the spires on parts left as scan, canopies) stay.
+
+### Numbers
+
+On the same 57 buildings:
+
+| measure | before | round 1 | round 2 |
+| :--- | ---: | ---: | ---: |
+| visible as-scanned residual | 16,552 m² | | 3,987 m² (−76%) |
+| visible residual on walls | 5,584 m² | 2,978 m² | 1,822 m² |
+
+Distance from the scan's wall samples to the visible surface (layer plus carved remesh). The round-1 figures counted the
+hidden cut residual as a surface:
+
+| buildings | measure | before | round 1 | round 2 |
+| :--- | :--- | ---: | ---: | ---: |
+| same 57 | RMS | 0.38 m | 0.91 m | 1.13 m |
+| | P50 | | | 0.28 m |
+| | P90 | | | 2.35 m |
+| | within 0.3 m | 78% | 64% | 52% |
+| | farther than 3 m | 0.1% | 4.8% | 6.9% |
+| newly rebuilt | RMS | 0.43 m | | 0.82 m |
+| | within 0.3 m | 87% | | 61% |
+
+Rebuilt: 92 of 116. 4 tests in `packages/core/test/roof-and-voids.test.ts`:
+
+- a light well is carved and a notch is not;
+- a plant room and a hollow lantern become prisms, and the parapet is left;
+- splinters, hidden scan and roof noise are dropped, and a canopy is kept;
+- a 0.7 / 1.1 m shift is recovered, and walls of one direction are refused.
+
 ## Gaps
 
 - The 20 buildings the scan shows as street (raised share under 0.6, several at 0.45 to 0.59) are not rebuilt. A
@@ -171,6 +267,7 @@ The existing district, pipeline-E, version-F, shape-program and residual-audit s
 - Relief is boxes only: recesses and projections. Bays at an angle, curved facades and colonnade piers are not modelled
   as such. A colonnade comes out as one recess.
 - The scan→surface distance worsened where the scan holds deep courtyards inside the footprint.
-- The 0.8 m vector/scan shift could be applied per building before the per-wall fit, rather than only to unseen walls.
+- Upper floors set back more than 3 m behind the fitted planes inside overlapping footprints (the 6.9% of samples more than 3 m away) need a tier or relief rule of their own.
+- Some long scan triangles still bridge notches in the carved remesh (the blue sliver in `after_round2_f75.png`).
 - Not yet seen live in the app (the district massing stage is still behind `SCRATCHBOX_STAGED_DISTRICT_MASSING=1`), and
   the photo-match judge was not run.
