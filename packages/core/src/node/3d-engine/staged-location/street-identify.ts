@@ -29,7 +29,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { GeodeticOrigin, GroundModel } from '../../spatial/StreetViewSurveyPlanner';
 import * as crypto from 'crypto';
-import { groundingRequestFovDeg, renderFrameDepth, type FrameCamera, type PoseCorrection } from '../../spatial/StreetViewPoseRegistrar';
+import { groundingRequestFovDeg, projectToFrame, renderFrameDepth, type FrameCamera, type PoseCorrection } from '../../spatial/StreetViewPoseRegistrar';
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
 import type { Vec2, Vec3 } from '../../../common/spatial/staged-location-contracts';
 import { SB_FEATURE_CODES, SB_FEATURE_PREFIX, reviewUnknownCodes, typesFromLabels, type SbFeature, type SbFeatureTypeLabel } from '../../../common/spatial/sb-feature-types';
@@ -77,6 +77,15 @@ export const STREET_IDENTIFY_PARAMS = {
     sameSpotMaxRangeM: 15,
     /** The label rule's radius grows with range: this share of the farther view's range, at least mergeRadiusM. */
     mergeRadiusPerRange: 0.06,
+    /**
+     * Reprojection: an object placed from some views is drawn into each other view that should see it (in frame, within
+     * maxRangeM, not behind the tile mesh by more than `occlusionToleranceM`); a box there overlapping it by at least
+     * `reprojectOverlap` on both axes (interval IoU, boxes at least `reprojectMinWidthPx` wide) is the same object. The model
+     * rarely lists a thing again from the next pano under the same words, so the boxes, not the words, decide.
+     */
+    reprojectOverlap: 0.35,
+    reprojectMinWidthPx: 24,
+    occlusionToleranceM: 1.5,
     /** An object within this (plan) of an inventory entity's box stands on it. */
     matchRadiusM: 1.5,
     /** An object counts as fixed to a building only when its foot is this close to the footprint (a bin by a wall is not). */
@@ -270,8 +279,27 @@ const sameThing = (a: StreetDetection, b: StreetDetection) => (a.code && b.code 
 const median = (a: number[]) => { const s = a.filter(Number.isFinite).sort((x, y) => x - y); return s.length ? s[s.length >> 1] : NaN; };
 const r2 = (v: number) => Math.round(v * 100) / 100;
 
-/** Detections from different views whose feet land within `mergeRadiusM` and that say the same are one object. */
-export function mergeDetections(dets: StreetDetection[], P = STREET_IDENTIFY_PARAMS): StreetObject[] {
+/** What the reprojection pass needs of each view: its camera, and the tile mesh's depth seen from it (view z). */
+export interface ViewGeometry { cam: FrameCamera; depth: Float32Array; depthCam: FrameCamera }
+
+const intervalIoU = (a0: number, a1: number, b0: number, b1: number) => { const i = Math.max(0, Math.min(a1, b1) - Math.max(a0, b0)); const u = Math.max(a1, b1) - Math.min(a0, b0); return u > 0 ? i / u : 0; };
+
+/** The box (0..1000) an upright object of this foot, height and width makes in `cam`, its foot's view z; undefined out of frame. */
+export function projectObjectBox(cam: FrameCamera, foot: Vec3, heightM: number, widthM: number): { box: [number, number, number, number]; z: number } | undefined {
+    const f = projectToFrame(cam, foot), t = projectToFrame(cam, [foot[0], foot[1] + Math.max(0.2, heightM), foot[2]]);
+    if (!f || !t) return undefined;
+    const half = (Math.max(0.15, widthM) / 2) * cam.fx / f[2];
+    const x0 = Math.min(f[0], t[0]) - half, x1 = Math.max(f[0], t[0]) + half, y0 = Math.min(f[1], t[1]), y1 = Math.max(f[1], t[1]);
+    if (x1 < 0 || x0 > cam.width || y1 < 0 || y0 > cam.height || f[0] < 0 || f[0] > cam.width || f[1] < 0 || f[1] > cam.height) return undefined;
+    return { box: [(y0 / cam.height) * 1000, (x0 / cam.width) * 1000, (y1 / cam.height) * 1000, (x1 / cam.width) * 1000], z: f[2] };
+}
+
+/**
+ * Detections from different views are one object when their feet land within `mergeRadiusM` (growing with range) and they
+ * say the same, or land on the same spot at the same height from near views; then, with each view's geometry, when an
+ * object drawn into another view that should see it overlaps a box there.
+ */
+export function mergeDetections(dets: StreetDetection[], P = STREET_IDENTIFY_PARAMS, geometry?: Array<ViewGeometry | undefined>): StreetObject[] {
     const cast = dets.map((d, i) => ({ d, i })).filter(x => x.d.cast);
     const group: number[] = cast.map((_, k) => k);
     const find = (k: number): number => (group[k] === k ? k : (group[k] = find(group[k])));
@@ -284,6 +312,39 @@ export function mergeDetections(dets: StreetDetection[], P = STREET_IDENTIFY_PAR
         const labelRadius = Math.max(P.mergeRadiusM, P.mergeRadiusPerRange * far);
         const sameSpot = far <= P.sameSpotMaxRangeM && d <= P.sameSpotM && Math.max(hA, hB) / Math.min(hA, hB) <= P.sameHeightRatio;
         if ((d <= labelRadius && sameThing(A, B)) || sameSpot) group[find(a)] = find(b);
+    }
+    if (geometry) {
+        const members = () => { const m = new Map<number, number[]>(); cast.forEach((_, k) => m.set(find(k), [...(m.get(find(k)) ?? []), k])); return m; };
+        const byView = new Map<number, number[]>();
+        cast.forEach((c, k) => byView.set(c.d.view, [...(byView.get(c.d.view) ?? []), k]));
+        for (const ks of members().values()) {
+            const ds = ks.map(k => cast[k].d);
+            const foot = [0, 1, 2].map(j => median(ds.map(d => d.cast!.foot[j]))) as Vec3;
+            const h = median(ds.map(d => d.cast!.heightM)), w = median(ds.map(d => d.cast!.widthM));
+            const seen = new Set(ds.map(d => d.view));
+            geometry.forEach((g, v) => {
+                if (!g || seen.has(v)) return;
+                const p = projectObjectBox(g.cam, foot, h, w);
+                if (!p) return;
+                const range = Math.hypot(foot[0] - g.cam.eye[0], foot[2] - g.cam.eye[2]);
+                if (range > P.maxRangeM) return;
+                // hidden behind the tile mesh from this camera: not expected in this view
+                const fp = projectToFrame(g.depthCam, foot)!;
+                const px = Math.min(g.depthCam.width - 1, Math.max(0, Math.round(fp[0]))), py = Math.min(g.depthCam.height - 1, Math.max(0, Math.round(fp[1]) - 2));
+                if (g.depth[py * g.depthCam.width + px] < p.z - P.occlusionToleranceM) return;
+                const minW = (P.reprojectMinWidthPx / g.cam.width) * 1000;
+                const widen = (b: number[]) => { const c = (b[1] + b[3]) / 2, half = Math.max(b[3] - b[1], minW) / 2; return [c - half, c + half]; };
+                const [px0, px1] = widen(p.box);
+                let best: { k: number; score: number } | undefined;
+                for (const k of byView.get(v) ?? []) {
+                    const b = cast[k].d.box;
+                    const [bx0, bx1] = widen(b);
+                    const score = Math.min(intervalIoU(px0, px1, bx0, bx1), intervalIoU(p.box[0], p.box[2], b[0], b[2]));
+                    if (score >= P.reprojectOverlap && (!best || score > best.score)) best = { k, score };
+                }
+                if (best) group[find(best.k)] = find(ks[0]);
+            });
+        }
     }
     const byRoot = new Map<number, number[]>();
     cast.forEach((_, k) => byRoot.set(find(k), [...(byRoot.get(find(k)) ?? []), k]));
@@ -465,6 +526,7 @@ export async function identifyStreetObjects(input: StreetIdentifyInput): Promise
     const views: StreetIdentifyView[] = [];
     let modelCalls = 0, cachedCalls = 0;
     const proposed = new Set<string>();
+    const geometry: Array<ViewGeometry | undefined> = [];
     if (input.imagesDir) fs.mkdirSync(input.imagesDir, { recursive: true });
     await mapConcurrent(images, P.concurrency, async (im, index) => {
         const v = im.view;
@@ -500,6 +562,7 @@ export async function identifyStreetObjects(input: StreetIdentifyInput): Promise
         }
         view.readings = readings.length;
         const depth = renderFrameDepth(input.tileMesh, depthCam);
+        geometry[index] = { cam, depth, depthCam };
         for (const rd of readings) {
             if (rd.code) for (const c of reviewUnknownCodes([rd.code])) proposed.add(c);
             const d: StreetDetection = { ...rd, view: index };
@@ -519,7 +582,7 @@ export async function identifyStreetObjects(input: StreetIdentifyInput): Promise
         }
     });
 
-    const objects = mergeDetections(detections, P);
+    const objects = mergeDetections(detections, P, geometry);
     if (input.inventory) matchToInventory(objects, input.inventory, P);
     const cast = detections.filter(d => d.cast).length;
     const matched = objects.filter(o => o.match).length;

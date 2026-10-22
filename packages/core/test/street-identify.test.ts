@@ -16,7 +16,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { applyStreetIdentification, castReading, fetchStaticViews, matchToInventory, mergeDetections, parseStreetOutdoors, parseStreetReply, pickPanos, streetPoints, type StreetDetection, type StreetIdentifyResult } from '../src/node/3d-engine/staged-location/street-identify';
+import { applyStreetIdentification, castReading, fetchStaticViews, matchToInventory, mergeDetections, parseStreetOutdoors, parseStreetReply, projectObjectBox, pickPanos, streetPoints, type StreetDetection, type StreetIdentifyResult } from '../src/node/3d-engine/staged-location/street-identify';
 import { castCamera } from '../src/node/3d-engine/staged-location/survey-casting';
 import { projectToFrame, renderFrameDepth } from '../src/node/spatial/StreetViewPoseRegistrar';
 import type { SceneInventory } from '../src/node/3d-engine/staged-location/scene-inventory';
@@ -116,6 +116,33 @@ describe('merging and matching', () => {
         expect(by('projecting sign').match).toMatchObject({ entityId: 'building/a', relation: 'ATTACHED_TO' });
         expect(by('trash bin').match).toBeUndefined();                       // a metre off the wall: on the pavement
         expect(by('bench').match).toMatchObject({ entityId: 'tree/7', relation: 'UNDER' });
+    });
+});
+
+describe('reprojection', () => {
+    it('merges the same pole seen from two panos under two names, though one view placed it 2.5 m off, and keeps a neighbour apart', () => {
+        const mk = (eye: V3, headingDeg: number) => {
+            const cam = castCamera({ ...view(headingDeg, eye), widthPx: 800, heightPx: 600 });
+            const depthCam = castCamera({ ...view(headingDeg, eye), widthPx: 400, heightPx: 300 });
+            return { cam, depthCam, depth: renderFrameDepth(GROUND, depthCam) };
+        };
+        const A = mk([0, 2.5, 0], 0), B = mk([12, 2.5, 0], 315);            // two panos 12 m apart, both looking at the pole
+        const pole: V3 = [4, 0, -10], hydrant: V3 = [-2, 0, -9];
+        const detOf = (g: typeof A, viewIdx: number, label: string, truth: V3, h: number, placed: V3): StreetDetection =>
+            ({ view: viewIdx, label, box: poleBox(g.cam, truth, h, 0.35), baseVisible: true, permanent: true, confidence: 0.8, cast: { foot: placed, rangeM: 11, heightM: h, widthM: 0.35 } });
+        const dets = [
+            detOf(A, 0, 'street light pole', pole, 6, [6.4, 0, -10]),       // placed 2.4 m off: the position rules cannot join it
+            detOf(B, 1, 'lamp standard', pole, 6, pole),                      // another name
+            detOf(A, 0, 'fire hydrant', hydrant, 0.8, hydrant)
+        ];
+        expect(mergeDetections(dets)).toHaveLength(3);
+        const objs = mergeDetections(dets, undefined, [A, B]);
+        expect(objs).toHaveLength(2);
+        const lamp = objs.find(o => o.views.length === 2)!;
+        expect(lamp.labels.map(l => l.label).sort()).toEqual(['lamp standard', 'street light pole']);
+        expect(objs.find(o => o.label === 'fire hydrant')!.views).toEqual([0]);
+        // the object's box drawn into a camera that cannot see it (behind it) is not expected there
+        expect(projectObjectBox(castCamera({ ...view(180), widthPx: 800, heightPx: 600 }), pole, 6, 0.35)).toBeUndefined();
     });
 });
 
