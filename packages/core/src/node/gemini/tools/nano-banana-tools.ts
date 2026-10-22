@@ -28,6 +28,8 @@ import { readImageDimensions, sniffImageFormat } from '../../image-codec-ffmpeg'
 import { defaultDurableAssetStore } from '../../asset-store/durable-asset-store';
 import type { ToolDeclaration, ToolHandler } from './types';
 import { infillImageHoles } from '../../image-hole-infill';
+import { bakeGritDecal, generateGritMap, GRIT_DEFAULT_STRENGTH } from '../../3d-engine/grit-decal';
+import { readTileTriangles } from '../../3d-engine/staged-location/tile-texture-transfer';
 import { genAiEnhanceClient } from '../../3d-engine/staged-location/texture-enhance';
 import { decodeImageInMemory } from '../../3d-engine/staged-location/tile-texture-transfer';
 import { encodePng } from '../../texture-processing';
@@ -359,10 +361,75 @@ export const IMAGE_GENERATION_TOOL_DECLARATIONS: ToolDeclaration[] = [
             },
             required: ['imagePath']
         }
+    },
+    {
+        name: 'asset_grit_decal',
+        description: 'Gives a 3D asset (a GLB) surface grit: an image model reads the weathering in a reference photo (a Street View frame, a survey station, a photo of the object), or paints the weathering described, as ONE large grayscale map that does not tile, which is baked into the GLB as a decal: a thin skin 1 cm off every near-vertical face, black with the map as its opacity, so any glTF viewer shows it over the asset\'s own materials. Openings and glass are left clean. The decal is labelled generated. Writes a new GLB and returns its path.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                glbPath: { type: 'STRING', description: 'Local path of the asset GLB to decal (relative paths resolve against the workspace).' },
+                referenceImageUrl: { type: 'STRING', description: 'Optional URL, base64 data URI, or local filepath of a photo showing the real surface and its weathering; without one the weathering is painted from the description alone.' },
+                weathering: { type: 'STRING', description: 'Optional description, in your own words, of the weathering to paint (e.g. "light dust only", "rust streaks running down from the ironwork", "damp and moss at the base", "a century of city soot"). Default: city soot, rain streaks and blotches, heavier at the base and under the top edge.' },
+                grimeColour: { type: 'STRING', description: 'Optional "#RRGGBB" colour of the grit (default black soot; e.g. rust orange or moss green).' },
+                strength: { type: 'NUMBER', description: 'Optional opacity of the heaviest grit, 0 to 1 (default 0.8).' },
+                includeParts: { type: 'STRING', description: 'Optional: only nodes whose name contains this text (case-insensitive) get grit.' },
+                excludeParts: { type: 'STRING', description: 'Optional: nodes whose name contains this text get none (default: openings and glass).' },
+                maxNormalY: { type: 'NUMBER', description: 'Optional: faces whose normal points up or down by more than this (0 = only vertical faces, 1 = every face including roofs) get none. Default 0.3 (walls).' },
+                offsetM: { type: 'NUMBER', description: 'Optional distance of the decal off the surface in metres (default 0.01).' },
+                model: { type: 'STRING', description: 'Optional image model id. When given, only that model is used; otherwise the default image models are tried in order.' },
+                outputPath: { type: 'STRING', description: 'Optional output GLB path. Default: next to the input as <name>_grit.glb.' }
+            },
+            required: ['glbPath']
+        }
     }
 ];
 
 export const imageGenerationHandlers: Record<string, ToolHandler> = {
+    asset_grit_decal: async (args, ctx) => {
+        const GRIT = 'asset_grit_decal';
+        const glbArg = asString(args.glbPath);
+        if (!glbArg) throw new MissingInputError(GRIT, 'glbPath', 'give the asset GLB to decal');
+        const glbPath = path.isAbsolute(glbArg) ? glbArg : path.resolve(ctx?.workspaceRoot || process.cwd(), glbArg);
+        if (!(await fs.pathExists(glbPath))) throw new MissingInputError(GRIT, 'glbPath', `no file at ${glbPath}`);
+        const refArg = asString(args.referenceImageUrl);
+        const ref = refArg ? await loadInputImage(refArg, ctx?.workspaceRoot, ctx?.signal, GRIT, 'referenceImageUrl') : undefined;
+        const weathering = asString(args.weathering) || undefined;
+        const hexArg = asString(args.grimeColour);
+        const hm = hexArg ? /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hexArg) : null;
+        if (hexArg && !hm) throw new InvalidInputError(GRIT, 'grimeColour', `"${hexArg}" is not a #RRGGBB colour`);
+        const include = asString(args.includeParts).toLowerCase(), exclude = asString(args.excludeParts).toLowerCase();
+        const keep = (n: string) => { const l = n.toLowerCase(); return (!include || l.includes(include)) && (exclude ? !l.includes(exclude) : !/opening|glass/.test(l)); };
+        const glb = new Uint8Array(await fs.readFile(glbPath));
+        let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+        const tris = readTileTriangles(glb);
+        for (let i = 0; i < tris.positions.length; i += 3) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], tris.positions[i + k]); hi[k] = Math.max(hi[k], tris.positions[i + k]); }
+        const widthM = Math.max(hi[0] - lo[0], hi[2] - lo[2]), heightM = hi[1] - lo[1];
+        const models = resolveRequestedModels(asString(args.model) || undefined, IMAGE_MODEL_PRIORITY);
+        let genai: unknown;
+        try {
+            genai = await new GoogleMediaCredentialsService().createClient();
+        } catch (err) {
+            throw new MediaModelUnavailableError(models[0], `Google media credentials are not available (${(err as Error)?.message || err})`);
+        }
+        const map = await generateGritMap({ client: genai, models, ...(ref ? { reference: { bytes: new Uint8Array(ref.data), mimeType: ref.mimeType } } : {}), ...(weathering ? { weathering } : {}), widthM, heightM, ...(ctx?.signal ? { signal: ctx.signal } : {}) });
+        const strength = typeof args.strength === 'number' ? args.strength : GRIT_DEFAULT_STRENGTH;
+        const baked = bakeGritDecal(glb, map.map, {
+            strength, keep, ...(hm ? { colour: [parseInt(hm[1], 16), parseInt(hm[2], 16), parseInt(hm[3], 16)] as [number, number, number] } : {}),
+            ...(typeof args.maxNormalY === 'number' ? { maxNormalY: args.maxNormalY } : {}), ...(typeof args.offsetM === 'number' ? { offsetM: args.offsetM } : {}),
+            method: `${weathering ?? 'city grime'}${refArg ? ` read from ${refArg}` : ''}, painted by ${map.modelUsed} as one non-tiling map per surface`
+        });
+        const requestedOut = asString(args.outputPath);
+        const outputPath = requestedOut
+            ? (path.isAbsolute(requestedOut) ? requestedOut : path.resolve(ctx?.workspaceRoot || process.cwd(), requestedOut))
+            : path.join(path.dirname(glbPath), `${path.basename(glbPath, path.extname(glbPath))}_grit.glb`);
+        await fs.ensureDir(path.dirname(outputPath));
+        await fs.writeFile(outputPath, baked.glb);
+        return {
+            resultPayload: { success: true, glbPath, outputPath, decalTriangles: baked.decalTriangles, widthM: Math.round(widthM * 10) / 10, heightM: Math.round(heightM * 10) / 10, strength, modelUsed: map.modelUsed, modelNote: map.modelNote, provenance: { label: 'generated', method: 'grime decal from a reference photo' } },
+            summaryResult: `Baked a grit decal (${baked.decalTriangles} wall triangles, grime by ${map.modelUsed}, labelled generated) into ${outputPath}.`
+        };
+    },
     image_infill_holes: async (args, ctx) => {
         const INFILL = 'image_infill_holes';
         const imagePath = asString(args.imagePath);
