@@ -27,6 +27,10 @@ import { generateImageWithModels } from '../../google-media-generation-service';
 import { readImageDimensions, sniffImageFormat } from '../../image-codec-ffmpeg';
 import { defaultDurableAssetStore } from '../../asset-store/durable-asset-store';
 import type { ToolDeclaration, ToolHandler } from './types';
+import { infillImageHoles } from '../../image-hole-infill';
+import { genAiEnhanceClient } from '../../3d-engine/staged-location/texture-enhance';
+import { decodeImageInMemory } from '../../3d-engine/staged-location/tile-texture-transfer';
+import { encodePng } from '../../texture-processing';
 
 const TOOL = 'nano_banana_apply_color_palette';
 
@@ -339,10 +343,77 @@ export const IMAGE_GENERATION_TOOL_DECLARATIONS: ToolDeclaration[] = [
             },
             required: ['prompt']
         }
+    },
+    {
+        name: 'image_infill_holes',
+        description: 'Fills the holes in an image generatively: the pixels a mask marks, or the flat regions of one colour (by default white, as a re-projected view leaves where nothing was seen) at least minHolePixels large. The holes and the pixels around them go to an image model with the holes in magenta; the answer is kept only when it reproduces the real pixels around the holes and joins them at the rim, and only hole pixels are replaced. The fill is labelled generated. When the answer is rejected the image is left as it was and the result says why. Writes a PNG and returns its path.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                imagePath: { type: 'STRING', description: 'URL, base64 data URI, or local filepath of the PNG or JPEG image with holes.' },
+                maskPath: { type: 'STRING', description: 'Optional mask image of the same size: pixels brighter than mid-grey are holes. When given, holeColour is ignored.' },
+                holeColour: { type: 'STRING', description: 'Optional "#RRGGBB" colour of the holes when there is no mask (default "#ffffff").' },
+                minHolePixels: { type: 'NUMBER', description: 'Optional smallest flat region that counts as a hole (default 64 pixels).' },
+                model: { type: 'STRING', description: 'Optional image model id. When given, only that model is used; otherwise the default image models are tried in order.' },
+                outputPath: { type: 'STRING', description: 'Optional output PNG path (relative paths resolve against the workspace). Default: next to a local input as <name>_infilled.png, else infilled_<timestamp>.png in the workspace.' }
+            },
+            required: ['imagePath']
+        }
     }
 ];
 
 export const imageGenerationHandlers: Record<string, ToolHandler> = {
+    image_infill_holes: async (args, ctx) => {
+        const INFILL = 'image_infill_holes';
+        const imagePath = asString(args.imagePath);
+        if (!imagePath) throw new MissingInputError(INFILL, 'imagePath', 'give the image with holes');
+        const src = await loadInputImage(imagePath, ctx?.workspaceRoot, ctx?.signal, INFILL, 'imagePath');
+        let image;
+        try { image = decodeImageInMemory(new Uint8Array(src.data)); } catch (err) { throw new InvalidInputError(INFILL, 'imagePath', `the image is not a PNG or JPEG (${(err as Error).message})`); }
+        let mask: Uint8Array | undefined;
+        const maskPath = asString(args.maskPath);
+        if (maskPath) {
+            const m = decodeImageInMemory(new Uint8Array((await loadInputImage(maskPath, ctx?.workspaceRoot, ctx?.signal, INFILL, 'maskPath')).data));
+            if (m.width !== image.width || m.height !== image.height) throw new InvalidInputError(INFILL, 'maskPath', `the mask is ${m.width} x ${m.height}, the image ${image.width} x ${image.height}`);
+            mask = new Uint8Array(m.width * m.height);
+            for (let i = 0; i < mask.length; i++) mask[i] = m.rgba[i * 4] + m.rgba[i * 4 + 1] + m.rgba[i * 4 + 2] > 3 * 128 ? 1 : 0;
+        }
+        const hex = asString(args.holeColour);
+        const hm = hex ? /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex) : null;
+        if (hex && !hm) throw new InvalidInputError(INFILL, 'holeColour', `"${hex}" is not a #RRGGBB colour`);
+        const colour = hm ? [parseInt(hm[1], 16), parseInt(hm[2], 16), parseInt(hm[3], 16)] as [number, number, number] : undefined;
+        const minPixels = typeof args.minHolePixels === 'number' && args.minHolePixels > 0 ? Math.round(args.minHolePixels) : undefined;
+        const models = resolveRequestedModels(asString(args.model) || undefined, IMAGE_MODEL_PRIORITY);
+        let genai: unknown;
+        try {
+            genai = await new GoogleMediaCredentialsService().createClient();
+        } catch (err) {
+            throw new MediaModelUnavailableError(models[0], `Google media credentials are not available (${(err as Error)?.message || err})`);
+        }
+        const res = await infillImageHoles({ image, client: genAiEnhanceClient(genai), models, ...(mask ? { mask } : {}), ...(colour ? { colour } : {}), ...(minPixels ? { minPixels } : {}), ...(ctx?.signal ? { signal: ctx.signal } : {}) });
+        const requestedOut = asString(args.outputPath);
+        const outputPath = requestedOut
+            ? (path.isAbsolute(requestedOut) ? requestedOut : path.resolve(ctx?.workspaceRoot || process.cwd(), requestedOut))
+            : src.localPath
+                ? path.join(path.dirname(src.localPath), `${path.basename(src.localPath, path.extname(src.localPath))}_infilled.png`)
+                : path.join(ctx?.workspaceRoot || process.cwd(), `infilled_${Date.now()}.png`);
+        const accepted = res.decision === 'accepted';
+        if (accepted) {
+            await fs.ensureDir(path.dirname(outputPath));
+            await fs.writeFile(outputPath, encodePng(res.image.width, res.image.height, Buffer.from(res.image.rgba)));
+        }
+        return {
+            resultPayload: {
+                success: accepted, imagePath, ...(accepted ? { outputPath } : {}), decision: res.decision, ...(res.reason ? { reason: res.reason } : {}),
+                holePixels: res.holePixels, filledPixels: res.filledPixels, width: image.width, height: image.height,
+                ...(res.modelUsed ? { modelUsed: res.modelUsed } : {}), ...(res.metrics ? { metrics: res.metrics } : {}), ...(res.provenance ? { provenance: res.provenance } : {})
+            },
+            summaryResult: accepted
+                ? `Filled ${res.filledPixels} hole pixels of ${imagePath} with ${res.modelUsed} (labelled generated) -> ${outputPath}.`
+                : res.decision === 'no_holes' ? `No holes found in ${imagePath}${mask ? ' (the mask is empty)' : ''}; nothing written.`
+                : `The holes of ${imagePath} were not filled: ${res.reason ?? res.decision}. The image is unchanged; nothing written.`
+        };
+    },
     [GENERATE_IMAGE]: async (args, ctx) => {
         const prompt = asString(args.prompt).trim();
         if (!prompt) throw new MissingInputError(GENERATE_IMAGE, 'prompt', 'describe the picture to make');
