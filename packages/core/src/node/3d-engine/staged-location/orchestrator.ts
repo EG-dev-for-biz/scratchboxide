@@ -77,6 +77,7 @@ import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service
 import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorEvidence } from './vector-footprints';
 import { auditDistrict, DISTRICT_AUDIT_VERSION, districtStreetAuditSummary, type DistrictStreetAuditSummary } from './district-residual-audit';
 import { buildSceneInventory, sceneInventorySummary, SCENE_INVENTORY_VERSION, type InventoryCrown, type SceneInventorySummary } from './scene-inventory';
+import { buildDistrictMassingLayer, districtMassingEnabled, DISTRICT_MASSING_VERSION, DISTRICT_TEXEL_M, massDistrict } from './district-massing';
 import {
     coveredShare, frameToLatLng, paintGeneratedHeightProvenance, paintProvenance, selectPaintBuildings, tilePlanCoverage, writePaintGlb,
     GENERATED_HEIGHT_LABEL, PLAUSIBLE_DEFAULT_HEIGHT_M, VECTOR_ISOLATE_RADIUS_M, VECTOR_MASSING_VERSION,
@@ -203,6 +204,9 @@ export const STAGES = {
     evidence: { order: -1, title: 'Street View close-ups', budgetMs: EVIDENCE_STAGE_BUDGET_MS + 30_000 + MATCH_TIMEOUT_MS + 60_000 + EDGE_REGISTRATION_BUDGET_MS + 15_000 + JOINT_REGISTRATION_BUDGET_MS + 30_000 },
     'trees-measure': { order: -1, title: 'Measuring the trees', budgetMs: 300_000 },
     remesh: { order: 2, title: 'Remeshed scan', budgetMs: 300_000 },
+    // a district's rebuilt buildings: pipeline E's massing for every building that passes its own check, and the remesh carved
+    // where they stand (district-massing.ts); off unless SCRATCHBOX_STAGED_DISTRICT_MASSING=1
+    massing: { order: 2, title: 'Rebuilt buildings', budgetMs: 420_000 },
     // the facades' grammars read from the tile photo (three readings per facade, concurrently), gated, and the relief run
     // again with the accepted ones; pipeline E's inference runs here too, and in its enhanced mode (the default within E) also a registered
     // Street View survey (about 3 min, alongside the readings) and up to 8 redraws (about 2.5 min)
@@ -1972,6 +1976,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         let textureValue: TextureStageValue | undefined;
         /** The facade grammar stage (it commits l2g, a layer the texture pass must texture however late it lands). */
         const grammarGate: { settled?: Promise<unknown> } = {};
+        /** The district massing stage (it commits l2c and l2m, which the texture pass must take however late they land). */
+        const massingGate: { settled?: Promise<unknown> } = {};
         /** Resolved once the rebuild has decided its Street View close-ups (evidencePromise is set, or none will come). */
         let evidenceDecided = deferred<void>();
         /** Resolved once the fit stage has returned (its charts are known), or the rebuild ended without one. */
@@ -1989,7 +1995,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             // a district (or a structure tile_refine could not isolate) is textured with tile_refine's own photo
             const mode: 'texture-pass' | 'tile-refine' = isolateOk ? 'texture-pass' : 'tile-refine';
             const texStarted = now();
-            const pass = { rebuild: rebuildPromise, grammar: grammarGate.settled };
+            const pass = { rebuild: rebuildPromise, grammar: grammarGate.settled, massing: massingGate.settled };
             const outcomes: TexOutcome[] = [];
             const handled = new Set<string>();
             const looJobs = new Map<string, NonNullable<TextureLayerOutcome['measureLoo']>>();
@@ -2428,6 +2434,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             await (pass.rebuild ?? Promise.resolve()).catch(() => undefined);
                             if (figuresPromise) await (figuresPromise as Promise<unknown>).catch(() => undefined);
                             if (pass.grammar) await pass.grammar.catch(() => undefined);
+                            if (pass.massing) await pass.massing.catch(() => undefined);
                         });
                         run.commitListeners.delete(onCommit);
                         takeLate();
@@ -3483,6 +3490,90 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             siblings.push(grammarPromise);
         };
         startGrammar();
+
+        // ---------------- the district's rebuilt buildings (district-massing.ts) ----------------
+        if (!request.isolate && strip && deps.vectorEvidence && remesh.value?.refined && remesh.value.committed && districtMassingEnabled()) {
+            const stripped = strip, refined = remesh.value.refined, remeshId = remesh.value.groundLayerId;
+            type DistrictMassingValue = {
+                rebuilt: number; buildings: number; reasons: Record<string, number>; roofErrMedianM: number | null; removedTriangles: number; residualOffFootprint: number; timingsMs: Record<string, number>;
+            };
+            const massingPromise = runner.stage<DistrictMassingValue>({
+                id: 'massing',
+                run: async io => {
+                    const covered = extraction.coveredRadiusM;
+                    const ev = await deps.vectorEvidence!({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: covered + 20 });
+                    const look = evidenceLookup(ev, covered + 20);
+                    const vectorKey = crypto.createHash('sha256').update(JSON.stringify([ev.buildings.map(b => [b.id, b.parts, b.heightM ?? null, b.extruded ?? null]), ev.water, ev.roads])).digest('hex').slice(0, 16);
+                    const key = stageKey(DISTRICT_MASSING_VERSION, stripped.cacheKey, vectorKey, refined.cacheKey, covered.toFixed(1), String(DISTRICT_TEXEL_M));
+                    run.keys.massing = key;
+                    const key8 = key.slice(0, 8);
+                    const entry = await cache.run<DistrictMassingValue>('massing', key, async dir => {
+                        io.progress('massing every building from its footprint and the scan');
+                        const scan = loadScanMesh(stripped.devegetatedGlb);
+                        const ground = buildGroundModel(scan, { cellMeters: 1, water: look.waterAt, road: look.roadAt });
+                        const within = (x: number, z: number) => Math.hypot(x, z) <= covered;
+                        const rows = massDistrict({ buildings: ev.buildings, look, ground, within });
+                        const reasons: Record<string, number> = {};
+                        for (const r of rows.filter(x => !x.ok)) { const k = (r.reason ?? 'unknown').split(':')[0].replace(/[\d.]+/g, 'N'); reasons[k] = (reasons[k] ?? 0) + 1; }
+                        const ok = rows.filter(r => r.ok);
+                        const errs = ok.map(r => r.massing!.check.heightErrMedianM).sort((a, b) => a - b);
+                        const summary = { buildings: rows.length, reasons, roofErrMedianM: errs.length ? errs[errs.length >> 1] : null };
+                        fs.writeFileSync(path.join(dir, 'buildings.json'), JSON.stringify(rows.map(({ massing, ...r }) => ({ ...r, parts: massing?.parts.length ?? 0, roofErrMedianM: massing?.check.heightErrMedianM ?? null }))));
+                        io.progress(`${ok.length} of ${rows.length} buildings pass their check; building them`);
+                        const layer = await buildDistrictMassingLayer({ rows, look, within, scanGlb: stripped.devegetatedGlb, outDir: dir, stage: 'massing', stageKey: key, signal: io.signal });
+                        if (!layer) return { value: { rebuilt: 0, ...summary, removedTriangles: 0, residualOffFootprint: 0, timingsMs: {} } };
+                        // the scan's own buildings out where the rebuilt ones stand: the clay remesh and tile_refine's textured twin alike
+                        const clay = hideFootprintInGlb(fs.readFileSync(refined.clayGlb), layer.footprint);
+                        fs.writeFileSync(path.join(dir, 'remesh_carved.glb'), clay.glb);
+                        fs.writeFileSync(path.join(dir, 'remesh_carved_textured.glb'), hideFootprintInGlb(fs.readFileSync(refined.texturedGlb), layer.footprint).glb);
+                        return { value: { rebuilt: layer.rebuilt, ...summary, removedTriangles: clay.removedTriangles, residualOffFootprint: layer.residualOffFootprint, timingsMs: layer.timingsMs } };
+                    }, { publish: (_dir, v) => (v.rebuilt ? [{ from: 'district_massing_textured.glb', as: `${base}_massing_${key8}.glb` }, { from: 'remesh_carved.glb', as: `${base}_remesh_carved_${key8}.glb` }] : []), bypass: bypass('massing') });
+                    const v = entry.value;
+                    cache.writeRunNote(runId, 'district_massing', { key, cached: entry.cached, ...v });
+                    if (!v.rebuilt) return { status: 'skipped', value: v, source: 'the remeshed scan stands', reason: `no building passed its check (${Object.entries(v.reasons).map(([k, n]) => `${n}: ${k}`).join('; ')})`, cached: entry.cached };
+                    const [pubMass, pubCarved] = entry.published;
+                    const remeshLayer = run.state.layers.find(l => l.objectId === remeshId)!;
+                    const why = Object.entries(v.reasons).map(([k, n]) => `${n} ${k}`).join('; ');
+                    const massLayer: StagedLayer = {
+                        objectId: layerObjectId(key, 'l2m'), stage: 'massing', layer: 'l2m', order: STAGES.massing.order, url: pubMass.url, bytes: pubMass.bytes,
+                        provenance: {
+                            label: VECTOR_MODELLED_LABEL, measuredGeometry: false, confidence: 0.8,
+                            method: `${DISTRICT_MASSING_VERSION}: each building that passes its own check (footprint raised in the scan, no scan spilling past it, roof within pipeline E's error, wholly inside the extraction) rebuilt from its Google footprint at the heights and setbacks the scan measures, walls snapped to the scanned facades, textured from the tile photo`,
+                            sources: [{ kind: 'vector-tiles', id: `vectortiles:${vectorKey.slice(0, 8)}` }, { kind: 'tile-extraction', id: `extract:${t.key.slice(0, 8)}` }],
+                            note: `${v.rebuilt} of ${v.buildings} buildings rebuilt (roof ${v.roofErrMedianM} m off the scan, median); the rest keep the scan${why ? ` (${why})` : ''}`
+                        },
+                        provenanceLabels: [VECTOR_MODELLED_LABEL, PROVENANCE.asScanned], supersedes: [], revealAfter: [],
+                        reveal: { durationMs: 1200, stagger: 0.3, crossfadeFrom: [] }, cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pubMass.path)
+                    };
+                    const carvedLayer: StagedLayer = {
+                        ...remeshLayer, objectId: layerObjectId(key, 'l2c'), stage: 'massing', layer: 'l2c', url: pubCarved.url, bytes: pubCarved.bytes,
+                        provenance: { ...remeshLayer.provenance, note: `${remeshLayer.provenance.note ? `${remeshLayer.provenance.note}; ` : ''}the ${v.rebuilt} rebuilt buildings' scan taken out (${v.removedTriangles} triangles)` },
+                        supersedes: [remeshId], revealAfter: [], reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [remeshId] }, cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pubCarved.path)
+                    };
+                    delete (carvedLayer as Partial<StagedLayer>).textured;
+                    run.commit(massLayer, { source: 'DistrictMassing', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true, rebuilt: v.rebuilt } });
+                    refineTextured.set(carvedLayer.objectId, path.join(entry.dir, 'remesh_carved_textured.glb'));
+                    run.commit(carvedLayer, run.layerMeta[remeshId]);
+                    run.setGround(carvedLayer.objectId);
+                    return { status: 'committed', value: v, layers: [massLayer, carvedLayer], source: `${v.rebuilt} of ${v.buildings} buildings rebuilt from their footprints and the scan, the remesh carved where they stand`, cached: entry.cached, builtAtMs: entry.builtAtMs };
+                },
+                degrade: async err => ({
+                    status: 'degraded', source: 'the remeshed scan stands', reason: `the district's buildings could not be rebuilt (${errorMessage(err)})`,
+                    degradations: [run.degrade(record('massing', 'district_massing_failed', {
+                        part: { description: "the district's buildings" }, intended: 'each building rebuilt from its footprint and the scan, the remesh carved where it stands',
+                        fellTo: 'the remeshed scan', provenanceAfter: PROVENANCE.remeshed, reason: `the district massing failed (${errorMessage(err)})`, cause: err, transient: false, runId, now: now(), reuses: ['resolve', 'tiles', 'trees-measure', 'remesh']
+                    }))]
+                })
+            }).catch(err => { if (isAbort(err)) throw err; });
+            massingGate.settled = massingPromise;
+            siblings.push(massingPromise);
+        } else {
+            runner.skip('massing', request.isolate ? 'an isolated structure is rebuilt by its own pipeline'
+                : !districtMassingEnabled() ? 'the district massing is off (SCRATCHBOX_STAGED_DISTRICT_MASSING=1 to try it)'
+                : !strip ? 'the trees were not measured: there is no tree-free scan to measure the buildings on'
+                : !deps.vectorEvidence ? 'no Google vector data: no footprints to rebuild from'
+                : 'the remesh did not commit: there is nothing to rebuild the buildings in');
+        }
 
         // ---------------- trees (plant) ‖ the rebuild ----------------
         const treesRun = async (): Promise<{ trees?: LocationClayTrees; putBack?: { triangles: number; crowns: number; reason: string } }> => {

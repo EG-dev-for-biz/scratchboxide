@@ -35,6 +35,11 @@ import { APRON_HEIGHT_M } from './pipeline-e/residual-audit-e';
 
 export const DISTRICT_MASSING_VERSION = 'district-massing/1';
 
+/** The district massing stage runs when SCRATCHBOX_STAGED_DISTRICT_MASSING=1 (off until measured live against the remesh). */
+export function districtMassingEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+    return env.SCRATCHBOX_STAGED_DISTRICT_MASSING === '1';
+}
+
 /**
  * The face texel of a district's rebuilt buildings, metres: pipeline E's 5 cm suits one hero structure; 53 Federation
  * Square buildings at 5 cm wrote 151 MB of texture. The leaf tiles' own photo is coarser than this.
@@ -62,6 +67,11 @@ export interface DistrictBuildingMassing {
     massing?: Massing;
     ok: boolean;
     reason?: string;
+    /**
+     * Lenient (a procedural district, where the scan is not shown and a building left out would be missing): a check the
+     * building failed but was rebuilt anyway, from its footprint and what the scan does measure. Its confidence is lower.
+     */
+    caveat?: string;
     ms: number;
 }
 
@@ -82,7 +92,7 @@ export function footprintCellsByBuilding(look: EvidenceLookup, within: (x: numbe
     return out;
 }
 
-export function massDistrictBuilding(b: VectorBuilding, index: number, fp: { cells: Array<[number, number]>; outside: number }, look: EvidenceLookup, ground: Pick<GroundModel, 'groundAt' | 'topAt'>, P = DISTRICT_MASSING_PARAMS): DistrictBuildingMassing {
+export function massDistrictBuilding(b: VectorBuilding, index: number, fp: { cells: Array<[number, number]>; outside: number }, look: EvidenceLookup, ground: Pick<GroundModel, 'groundAt' | 'topAt'>, P = DISTRICT_MASSING_PARAMS, opts: { lenient?: boolean } = {}): DistrictBuildingMassing {
     const t0 = Date.now();
     const base = { id: b.id, index, footprintCells: fp.cells.length };
     const gs = fp.cells.map(([x, z]) => ground.groundAt(x + 0.5, z + 0.5)).filter(Number.isFinite).sort((p, q) => p - q);
@@ -105,23 +115,28 @@ export function massDistrictBuilding(b: VectorBuilding, index: number, fp: { cel
     const overhangShare = ring.size / Math.max(1, fp.cells.length);
     const common = { ...base, groundY: r2(groundY), raisedShare: r2(raisedShare), overhangShare: r2(overhangShare) };
     let reason: string | undefined;
-    if (fp.outside > 0) reason = `the footprint runs past the extraction (${fp.outside} of its cells outside): the scan holds only part of the building`;
-    else if (raisedShare < P.minRaisedShare) reason = `only ${Math.round(raisedShare * 100)}% of the footprint stands ${P.raisedM} m over the street in the scan (at least ${Math.round(P.minRaisedShare * 100)}% needed): the vector data and the scan disagree that a building stands here`;
-    else if (overhangShare > P.maxOverhangShare) reason = `the scan stands raised over ${Math.round(overhangShare * 100)}% of the footprint's area just outside it, where no footprint is (at most ${Math.round(P.maxOverhangShare * 100)}%): the footprint is smaller than what was scanned`;
+    const caveats: string[] = [];
+    // the scan showing street where the footprint is: real data leads, nothing is built there (lenient or not)
+    if (raisedShare < P.minRaisedShare) reason = `only ${Math.round(raisedShare * 100)}% of the footprint stands ${P.raisedM} m over the street in the scan (at least ${Math.round(P.minRaisedShare * 100)}% needed): the vector data and the scan disagree that a building stands here`;
     if (reason) return { ...common, ok: false, reason, ms: Date.now() - t0 };
+    const soft: string[] = [];
+    if (fp.outside > 0) soft.push(`the footprint runs past the extraction (${fp.outside} of its cells outside): the scan holds only part of the building`);
+    if (overhangShare > P.maxOverhangShare) soft.push(`the scan stands raised over ${Math.round(overhangShare * 100)}% of the footprint's area just outside it, where no footprint is (at most ${Math.round(P.maxOverhangShare * 100)}%): the footprint is smaller than what was scanned`);
+    if (soft.length && !opts.lenient) return { ...common, ok: false, reason: soft[0], ms: Date.now() - t0 };
+    caveats.push(...soft);
     const massing = buildMassing({ buildings: [b], groundY, scanTop: ground.topAt, cells: raised });
     // pipeline E's roof check over the raised footprint (its plan check is the isolate's and does not apply here)
     const roof = checkMassing(massing.parts, massing.meshes, { groundY, scanTop: ground.topAt, cells: raised });
     if (!roof.massingCells) reason = 'the vector data hold no extruded part or modelled volume for the building';
-    else if (roof.reason && !/plan agrees/.test(roof.reason)) reason = roof.reason;
-    return { ...common, massing, ok: !reason, ...(reason ? { reason } : {}), ms: Date.now() - t0 };
+    else if (roof.reason && !/plan agrees/.test(roof.reason)) { if (opts.lenient) caveats.push(roof.reason); else reason = roof.reason; }
+    return { ...common, massing, ok: !reason, ...(reason ? { reason } : {}), ...(caveats.length ? { caveat: caveats.join('; ') } : {}), ms: Date.now() - t0 };
 }
 
 /** Every building of the district reaching the extraction, massed and checked. */
-export function massDistrict(input: { buildings: VectorBuilding[]; look: EvidenceLookup; ground: Pick<GroundModel, 'groundAt' | 'topAt'>; within: (x: number, z: number) => boolean }, P = DISTRICT_MASSING_PARAMS): DistrictBuildingMassing[] {
+export function massDistrict(input: { buildings: VectorBuilding[]; look: EvidenceLookup; ground: Pick<GroundModel, 'groundAt' | 'topAt'>; within: (x: number, z: number) => boolean; lenient?: boolean }, P = DISTRICT_MASSING_PARAMS): DistrictBuildingMassing[] {
     const fps = footprintCellsByBuilding(input.look, input.within);
     const out: DistrictBuildingMassing[] = [];
-    for (const [b, fp] of [...fps].sort((p, q) => p[0] - q[0])) if (fp.cells.length) out.push(massDistrictBuilding(input.buildings[b], b, fp, input.look, input.ground, P));
+    for (const [b, fp] of [...fps].sort((p, q) => p[0] - q[0])) if (fp.cells.length) out.push(massDistrictBuilding(input.buildings[b], b, fp, input.look, input.ground, P, { lenient: input.lenient }));
     return out;
 }
 
