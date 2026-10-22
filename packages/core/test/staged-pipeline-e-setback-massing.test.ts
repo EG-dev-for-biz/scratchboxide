@@ -83,3 +83,78 @@ describe('buildMassing with a stepped scan under one flat vector footprint', () 
         expect(massing.parts[0].topY).toBeCloseTo(20, 0);
     });
 });
+
+describe('TriangleRayIndex (orientOutward\'s ray test)', () => {
+    it('answers every ray exactly as testing each triangle with rayHit does, and orientOutward is unchanged', async () => {
+        const { TriangleRayIndex, rayHit, orientOutward } = await import('../src/node/3d-engine/staged-location/pipeline-e/massing-spec');
+        // a closed, non-convex volume: a 20 x 30 x 12 m block with a 6 x 6 x 25 m tower standing out of its roof, each face
+        // split into a grid of triangles, some wound the wrong way
+        const V: Array<[number, number, number]> = [], I: number[] = [];
+        const box = (lo: number[], hi: number[], n: number) => {
+            const faces: Array<(u: number, v: number) => number[]> = [
+                (u, v) => [lo[0] + u * (hi[0] - lo[0]), hi[1], lo[2] + v * (hi[2] - lo[2])], (u, v) => [lo[0] + v * (hi[0] - lo[0]), lo[1], lo[2] + u * (hi[2] - lo[2])],
+                (u, v) => [lo[0] + u * (hi[0] - lo[0]), lo[1] + v * (hi[1] - lo[1]), lo[2]], (u, v) => [lo[0] + v * (hi[0] - lo[0]), lo[1] + u * (hi[1] - lo[1]), hi[2]],
+                (u, v) => [lo[0], lo[1] + u * (hi[1] - lo[1]), lo[2] + v * (hi[2] - lo[2])], (u, v) => [hi[0], lo[1] + v * (hi[1] - lo[1]), lo[2] + u * (hi[2] - lo[2])]
+            ];
+            for (const f of faces) for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+                const b = V.length;
+                V.push(f(i / n, j / n) as [number, number, number], f((i + 1) / n, j / n) as [number, number, number], f((i + 1) / n, (j + 1) / n) as [number, number, number], f(i / n, (j + 1) / n) as [number, number, number]);
+                const flip = (i + j) % 3 === 0;
+                I.push(...(flip ? [b, b + 2, b + 1, b, b + 3, b + 2] : [b, b + 1, b + 2, b, b + 2, b + 3]));
+            }
+        };
+        box([0, 0, 0], [20, 12, 30], 4);
+        box([7, 12, 12], [13, 37, 18], 3);
+        const index = new TriangleRayIndex(V, I);
+        const T = I.length / 3;
+        let rng = 7;
+        const rand = () => ((rng = (rng * 1103515245 + 12345) % 2147483648) / 2147483648);
+        let hits = 0;
+        for (let r = 0; r < 3000; r++) {
+            const o = [rand() * 40 - 10, rand() * 45 - 4, rand() * 50 - 10];
+            const d0 = [rand() - 0.5, rand() - 0.5, rand() - 0.5], l = Math.hypot(...d0), d = d0.map(x => x / l);
+            const skip = Math.floor(rand() * T);
+            let brute = false;
+            for (let t = 0; t < T && !brute; t++) if (t !== skip && rayHit(o, d, V[I[t * 3]], V[I[t * 3 + 1]], V[I[t * 3 + 2]]) > 0) brute = true;
+            expect(index.anyHit(o, d, skip)).toBe(brute);
+            if (brute) hits++;
+        }
+        expect(hits).toBeGreaterThan(300);
+        // orientOutward with the index gives exactly the triangles the all-pairs test gave (the algorithm before the index)
+        const { mesh, flipped } = orientOutward({ id: 'v', vertices: V, indices: I });
+        const dirs: number[][] = [];
+        for (let i = 0, g = Math.PI * (3 - Math.sqrt(5)); i < 32; i++) { const y = 1 - (2 * (i + 0.5)) / 32, rr = Math.sqrt(1 - y * y), a = g * i; dirs.push([Math.cos(a) * rr, y, Math.sin(a) * rr]); }
+        const BARY = [[1 / 3, 1 / 3], [0.7, 0.15], [0.15, 0.7], [0.15, 0.15], [0.45, 0.45], [0.45, 0.1], [0.1, 0.45]];
+        const out = I.slice();
+        let brutelyFlipped = 0;
+        const escapes = (o: number[], side: number[], self: number) => {
+            let n = 0;
+            for (const d of dirs) {
+                if (d[0] * side[0] + d[1] * side[1] + d[2] * side[2] < 0.05) continue;
+                let blocked = false;
+                for (let q = 0; q < T && !blocked; q++) if (q !== self && rayHit(o, d, V[out[q * 3]], V[out[q * 3 + 1]], V[out[q * 3 + 2]]) > 0) blocked = true;
+                if (!blocked) n++;
+            }
+            return n;
+        };
+        for (let t = 0; t < T; t++) {
+            const a = V[out[t * 3]], b = V[out[t * 3 + 1]], c = V[out[t * 3 + 2]];
+            const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            const nv = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+            const len = Math.hypot(nv[0], nv[1], nv[2]);
+            if (len < 1e-12) continue;
+            const nn = nv.map(x => x / len), back = nn.map(x => -x);
+            let front = 0, behind = 0;
+            for (const [l1, l2] of BARY) {
+                const l3 = 1 - l1 - l2;
+                const p = [0, 1, 2].map(k => l1 * a[k] + l2 * b[k] + l3 * c[k]);
+                front += escapes(p.map((x, k) => x + nn[k] * 1e-3), nn, t);
+                behind += escapes(p.map((x, k) => x - nn[k] * 1e-3), back, t);
+            }
+            if (behind > front) { const tmp = out[t * 3 + 1]; out[t * 3 + 1] = out[t * 3 + 2]; out[t * 3 + 2] = tmp; brutelyFlipped++; }
+        }
+        expect(mesh.indices).toEqual(out);
+        expect(flipped).toBe(brutelyFlipped);
+        expect(flipped).toBeGreaterThan(20);
+    });
+});

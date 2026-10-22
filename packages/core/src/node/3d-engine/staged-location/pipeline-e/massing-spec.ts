@@ -217,7 +217,7 @@ export function singleSided(m: MassingMesh): MassingMesh {
 }
 
 /** Ray-triangle hit distance along `dir` from `o` (Möller-Trumbore), or -1. */
-function rayHit(o: number[], dir: number[], a: number[], b: number[], c: number[]): number {
+export function rayHit(o: number[], dir: number[], a: number[], b: number[], c: number[]): number {
     const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
     const p = [dir[1] * e2[2] - dir[2] * e2[1], dir[2] * e2[0] - dir[0] * e2[2], dir[0] * e2[1] - dir[1] * e2[0]];
     const det = e1[0] * p[0] + e1[1] * p[1] + e1[2] * p[2];
@@ -231,6 +231,96 @@ function rayHit(o: number[], dir: number[], a: number[], b: number[], c: number[
     if (v < 0 || u + v > 1) return -1;
     const t = (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]) * inv;
     return t > 1e-6 ? t : -1;
+}
+
+/**
+ * Whether a ray from `o` along `dir` hits any triangle but `skip`, with rayHit's arithmetic, over a median-split bounding
+ * volume hierarchy of the triangles' boxes: the same answers as testing every triangle, without the quadratic cost (a
+ * modelled volume of a few thousand triangles took minutes to orient: 32 rays from 7 points on each side of every triangle).
+ */
+export class TriangleRayIndex {
+    private readonly tri: Float64Array;
+    private readonly lo: Float64Array; private readonly hi: Float64Array;
+    /** Node: [box lo xyz, box hi xyz] in nlo/nhi; left child index (or -1 for a leaf), right child, leaf start, leaf count. */
+    private readonly nlo: number[] = []; private readonly nhi: number[] = [];
+    private readonly left: number[] = []; private readonly right: number[] = []; private readonly start: number[] = []; private readonly count: number[] = [];
+    private readonly order: Int32Array;
+
+    constructor(V: ReadonlyArray<ArrayLike<number>>, indices: ArrayLike<number>) {
+        const T = Math.floor(indices.length / 3);
+        this.tri = new Float64Array(T * 9);
+        this.lo = new Float64Array(T * 3); this.hi = new Float64Array(T * 3);
+        for (let t = 0; t < T; t++) for (let j = 0; j < 3; j++) {
+            const v = V[indices[t * 3 + j]];
+            for (let k = 0; k < 3; k++) {
+                this.tri[t * 9 + j * 3 + k] = v[k];
+                if (j === 0) { this.lo[t * 3 + k] = v[k]; this.hi[t * 3 + k] = v[k]; } else { this.lo[t * 3 + k] = Math.min(this.lo[t * 3 + k], v[k]); this.hi[t * 3 + k] = Math.max(this.hi[t * 3 + k], v[k]); }
+            }
+        }
+        this.order = Int32Array.from({ length: T }, (_, i) => i);
+        if (T) this.build(0, T);
+    }
+
+    private build(s: number, e: number): number {
+        const node = this.left.length;
+        const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+        for (let i = s; i < e; i++) { const t = this.order[i]; for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], this.lo[t * 3 + k]); hi[k] = Math.max(hi[k], this.hi[t * 3 + k]); } }
+        this.nlo.push(...lo); this.nhi.push(...hi); this.left.push(-1); this.right.push(-1); this.start.push(s); this.count.push(e - s);
+        if (e - s <= 4) return node;
+        const axis = [0, 1, 2].sort((a, b) => (hi[b] - lo[b]) - (hi[a] - lo[a]))[0];
+        const centre = (t: number) => this.lo[t * 3 + axis] + this.hi[t * 3 + axis];
+        const sub = Array.from(this.order.subarray(s, e)).sort((a, b) => centre(a) - centre(b));
+        this.order.set(sub, s);
+        const m = (s + e) >> 1;
+        const l = this.build(s, m), r = this.build(m, e);
+        this.left[node] = l; this.right[node] = r;
+        return node;
+    }
+
+    private boxHit(n: number, o: ArrayLike<number>, d: ArrayLike<number>): boolean {
+        let t0 = 0, t1 = Infinity;
+        for (let k = 0; k < 3; k++) {
+            const lo = this.nlo[n * 3 + k], hi = this.nhi[n * 3 + k];
+            if (Math.abs(d[k]) < 1e-15) { if (o[k] < lo || o[k] > hi) return false; continue; }
+            let a = (lo - o[k]) / d[k], b = (hi - o[k]) / d[k];
+            if (a > b) { const tmp = a; a = b; b = tmp; }
+            t0 = Math.max(t0, a); t1 = Math.min(t1, b);
+            if (t0 > t1 + 1e-9) return false;
+        }
+        return true;
+    }
+
+    /** rayHit(o, dir, a, b, c) > 0 for some triangle other than `skip`. */
+    anyHit(o: ArrayLike<number>, dir: ArrayLike<number>, skip: number): boolean {
+        if (!this.left.length) return false;
+        const stack = [0];
+        const P = this.tri;
+        while (stack.length) {
+            const n = stack.pop()!;
+            if (!this.boxHit(n, o, dir)) continue;
+            if (this.left[n] >= 0) { stack.push(this.left[n], this.right[n]); continue; }
+            for (let i = this.start[n]; i < this.start[n] + this.count[n]; i++) {
+                const t = this.order[i];
+                if (t === skip) continue;
+                const b = t * 9;
+                const e10 = P[b + 3] - P[b], e11 = P[b + 4] - P[b + 1], e12 = P[b + 5] - P[b + 2];
+                const e20 = P[b + 6] - P[b], e21 = P[b + 7] - P[b + 1], e22 = P[b + 8] - P[b + 2];
+                const p0 = dir[1] * e22 - dir[2] * e21, p1 = dir[2] * e20 - dir[0] * e22, p2 = dir[0] * e21 - dir[1] * e20;
+                const det = e10 * p0 + e11 * p1 + e12 * p2;
+                if (Math.abs(det) < 1e-12) continue;
+                const inv = 1 / det;
+                const s0 = o[0] - P[b], s1 = o[1] - P[b + 1], s2 = o[2] - P[b + 2];
+                const u = (s0 * p0 + s1 * p1 + s2 * p2) * inv;
+                if (u < 0 || u > 1) continue;
+                const q0 = s1 * e12 - s2 * e11, q1 = s2 * e10 - s0 * e12, q2 = s0 * e11 - s1 * e10;
+                const v = (dir[0] * q0 + dir[1] * q1 + dir[2] * q2) * inv;
+                if (v < 0 || u + v > 1) continue;
+                const tt = (e20 * q0 + e21 * q1 + e22 * q2) * inv;
+                if (tt > 1e-6) return true;
+            }
+        }
+        return false;
+    }
 }
 
 /** Barycentric sample points over a triangle (its centroid and six points toward its corners and edges). */
@@ -260,13 +350,13 @@ export function orientOutward(m: MassingMesh, directions = 32): { mesh: MassingM
     const out = m.indices.slice(0, T * 3);
     const dirs = sphereDirections(directions);
     let flipped = 0;
+    // flipping a triangle's winding (below) never moves it, so the index over the triangles as given answers every ray
+    const index = new TriangleRayIndex(V, out);
     const escapes = (o: number[], side: number[], self: number): number => {
         let n = 0;
         for (const d of dirs) {
             if (d[0] * side[0] + d[1] * side[1] + d[2] * side[2] < 0.05) continue;
-            let blocked = false;
-            for (let s = 0; s < T && !blocked; s++) if (s !== self && rayHit(o, d, V[out[s * 3]], V[out[s * 3 + 1]], V[out[s * 3 + 2]]) > 0) blocked = true;
-            if (!blocked) n++;
+            if (!index.anyHit(o, d, self)) n++;
         }
         return n;
     };
