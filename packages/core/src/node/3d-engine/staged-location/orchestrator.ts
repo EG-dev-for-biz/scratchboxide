@@ -79,7 +79,7 @@ import { auditDistrict, DISTRICT_AUDIT_VERSION, districtStreetAuditSummary, type
 import { buildSceneInventory, sceneInventorySummary, SCENE_INVENTORY_VERSION, type InventoryCrown, type SceneInventorySummary } from './scene-inventory';
 import { buildDistrictMassingLayer, districtFootprint, districtMassingEnabled, DISTRICT_MASSING_PARAMS, DISTRICT_MASSING_VERSION, DISTRICT_TEXEL_M, massDistrict, planeFirstEnabled, proceduralDistrictEnabled } from './district-massing';
 import { REVOLUTION_FIT_VERSION, revolutionFitEnabled, reviseForRevolutions, type RevolutionLayerSummary } from './revolution-fit';
-import { cleanRemesh, remeshCleanupEnabled, REMESH_CLEANUP_PARAMS, REMESH_CLEANUP_VERSION, type RemeshCleanupStats } from './remesh-cleanup';
+import { describePolish, polishRemesh, REMESH_POLISH_VERSION } from './remesh-polish';
 import { wallSampleIndex } from './wall-plane-fit';
 import { assembleDistrictLayer, inBackground, districtMassingManifest, findStoredLayer, objectFrameOf, objectReuseEnabled, objectStoreEnabled, planDistrictObjects, readLayerManifests, storeSceneObjects, treesManifest, wholeLayerManifest, writeLayerManifests, type DistrictObjectPlan, type LayerObjectManifest } from './scene-objects';
 import { objectInputHash } from '../../asset-store/scene-object-store';
@@ -3041,20 +3041,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         if (district) r = district;
                     }
                 }
-                // the scan smoothed before it is textured: scraps out, the surface denoised with its edges kept (remesh-cleanup.ts)
-                if (remeshCleanupEnabled()) {
-                    const cleanDir = path.join(path.dirname(r.clayGlb), 'cleanup', REMESH_CLEANUP_VERSION.replace(/\W+/g, '_'));
-                    const cleanClay = path.join(cleanDir, 'clay.glb'), cleanTex = r.texturedGlb ? path.join(cleanDir, 'textured.glb') : undefined, statsFile = path.join(cleanDir, 'stats.json');
-                    if (!fs.existsSync(statsFile)) {
-                        const c = await timed('cleanup', async () => cleanRemesh(fs.readFileSync(r.clayGlb), r.texturedGlb ? [fs.readFileSync(r.texturedGlb)] : []));
-                        fs.mkdirSync(cleanDir, { recursive: true });
-                        fs.writeFileSync(cleanClay, c.clay);
-                        if (cleanTex) fs.writeFileSync(cleanTex, c.others[0]);
-                        fs.writeFileSync(statsFile, JSON.stringify(c.stats));
+                // the scan cleaned and its rectified facades rebuilt on their photo's lines before it is textured (remesh-polish.ts)
+                {
+                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}) }));
+                    if (pol.clayGlb !== r.clayGlb) {
+                        run.note(PROVENANCE.remeshed, `remesh polish (${REMESH_POLISH_VERSION}): ${describePolish(pol.stats)}`);
+                        r = { ...r, cacheKey: pol.cacheKey, clayGlb: pol.clayGlb, ...(pol.texturedGlb ? { texturedGlb: pol.texturedGlb } : {}) };
                     }
-                    const cs = JSON.parse(fs.readFileSync(statsFile, 'utf8')) as RemeshCleanupStats;
-                    run.note(PROVENANCE.remeshed, `remesh cleanup (${REMESH_CLEANUP_VERSION}): ${cs.piecesRemoved} loose scan pieces under ${REMESH_CLEANUP_PARAMS.minPieceAreaM2} m² removed (${cs.trianglesRemoved} triangles, ${cs.areaRemovedM2} m²); the surface smoothed with its edges kept (bilateral normal filtering), vertices moved ${cs.meanShiftM} m on average, never more than ${REMESH_CLEANUP_PARAMS.maxShiftM} m from the scan`);
-                    r = { ...r, cacheKey: crypto.createHash('sha256').update(`${r.cacheKey}+${REMESH_CLEANUP_VERSION}`).digest('hex'), clayGlb: cleanClay, ...(cleanTex ? { texturedGlb: cleanTex } : {}) };
                 }
                 run.keys.remesh = r.cacheKey;
                 run.cacheStatus.remesh = r.cached ? 'hit' : 'miss';
@@ -3553,7 +3546,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             fs.writeFileSync(path.join(dir, 'grammar.json'), JSON.stringify(pass.accepted, null, 1));
                             io.progress(`relief with ${pass.accepted.length} facade grammar${pass.accepted.length === 1 ? '' : 's'}`);
                             const r = await deps.refine.refine({ ...remeshRequest!, facadeGrammar: file });
-                            value.refine = { cacheKey: r.cacheKey, clayGlb: r.clayGlb, texturedGlb: r.texturedGlb, stats: { relief: { grammar: r.stats?.relief?.grammar ?? [], lattices: (r.stats?.relief?.lattices ?? []).filter((l: any) => l.grammar) } }, ms: r.ms };
+                            // the same polish as the remesh; the facades whose grammar was accepted keep the grammar's windows
+                            const pol = polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, orthosDir, skipFacades: value.facades.filter(f => f.accepted && f.grammar).map(f => f.facadeId) });
+                            value.refine = { cacheKey: pol.cacheKey, clayGlb: pol.clayGlb, ...(pol.texturedGlb ? { texturedGlb: pol.texturedGlb } : {}), stats: { relief: { grammar: r.stats?.relief?.grammar ?? [], lattices: (r.stats?.relief?.lattices ?? []).filter((l: any) => l.grammar) } }, ms: r.ms };
                         }
                         return { value };
                     }, { bypass: bypass('grammar') });
