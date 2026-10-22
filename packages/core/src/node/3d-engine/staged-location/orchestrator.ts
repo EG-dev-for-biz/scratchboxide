@@ -78,6 +78,7 @@ import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorEvid
 import { auditDistrict, DISTRICT_AUDIT_VERSION, districtStreetAuditSummary, type DistrictStreetAuditSummary } from './district-residual-audit';
 import { buildSceneInventory, sceneInventorySummary, SCENE_INVENTORY_VERSION, type InventoryCrown, type SceneInventorySummary } from './scene-inventory';
 import { buildDistrictMassingLayer, districtMassingEnabled, DISTRICT_MASSING_VERSION, DISTRICT_TEXEL_M, massDistrict, proceduralDistrictEnabled } from './district-massing';
+import { REVOLUTION_FIT_VERSION, revolutionFitEnabled, reviseForRevolutions, type RevolutionLayerSummary } from './revolution-fit';
 import { buildGroundSurface, groundHeightAt, PROCEDURAL_GROUND_VERSION, settleRoadsOnGround } from './procedural-ground';
 import {
     coveredShare, frameToLatLng, paintGeneratedHeightProvenance, paintProvenance, selectPaintBuildings, tilePlanCoverage, writePaintGlb,
@@ -3499,6 +3500,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             type DistrictMassingValue = {
                 rebuilt: number; buildings: number; reasons: Record<string, number>; roofErrMedianM: number | null; removedTriangles: number; residualOffFootprint: number; timingsMs: Record<string, number>;
                 caveats?: number;
+                revolutions?: RevolutionLayerSummary & { cut: Record<string, number> };
                 procedural?: { ground: { vertices: number; triangles: number; openVertices: number; terrainVertices: number }; roads?: { roads: number; stations: number; measuredKerbs: number; defaultKerbs: number; triangles: number } };
             };
             const massingPromise = runner.stage<DistrictMassingValue>({
@@ -3508,7 +3510,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const ev = await deps.vectorEvidence!({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: covered + 20 });
                     const look = evidenceLookup(ev, covered + 20);
                     const vectorKey = crypto.createHash('sha256').update(JSON.stringify([ev.buildings.map(b => [b.id, b.parts, b.heightM ?? null, b.extruded ?? null]), ev.water, ev.roads])).digest('hex').slice(0, 16);
-                    const key = stageKey(DISTRICT_MASSING_VERSION, stripped.cacheKey, vectorKey, refined.cacheKey, covered.toFixed(1), String(DISTRICT_TEXEL_M), procedural ? `${PROCEDURAL_GROUND_VERSION}+roads/v5-settled` : 'carve');
+                    const revolutionsOn = revolutionFitEnabled();
+                    const key = stageKey(DISTRICT_MASSING_VERSION, stripped.cacheKey, vectorKey, refined.cacheKey, covered.toFixed(1), String(DISTRICT_TEXEL_M), procedural ? `${PROCEDURAL_GROUND_VERSION}+roads/v5-settled` : 'carve', ...(revolutionsOn ? [REVOLUTION_FIT_VERSION] : []));
                     run.keys.massing = key;
                     const key8 = key.slice(0, 8);
                     const entry = await cache.run<DistrictMassingValue>('massing', key, async dir => {
@@ -3527,6 +3530,18 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const layer = await buildDistrictMassingLayer({ rows, look, within, scanGlb: stripped.devegetatedGlb, outDir: dir, stage: 'massing', stageKey: key, signal: io.signal });
                         if (!layer) return { value: { rebuilt: 0, ...summary, removedTriangles: 0, residualOffFootprint: 0, timingsMs: {} } };
                         const caveats = ok.filter(r => r.caveat).length;
+                        // the district's solids of revolution (revolution-fit.ts): rebuilt clean, their scan and massing cut out
+                        const reviseRevolutions = async (cutFiles: string[]) => {
+                            if (!revolutionsOn) return undefined;
+                            io.progress('fitting the solids of revolution (domes, drums, lanterns) the scan measures');
+                            try {
+                                return await reviseForRevolutions({ dir, scanGlb: stripped.devegetatedGlb, within, cutFiles: cutFiles.map(f => path.join(dir, f)), signal: io.signal });
+                            } catch (err) {
+                                if (isAbort(err)) throw err;
+                                cache.writeRunNote(runId, 'revolution_fit', { error: errorMessage(err) });
+                                return undefined;
+                            }
+                        };
                         if (procedural) {
                             // the ground: one measured surface over the extraction, the photo's colour from above
                             io.progress('building the ground from the measured street surface');
@@ -3559,17 +3574,19 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                     roadsStats = { roads: mesh.stats.roads, stations: mesh.stats.stations, measuredKerbs: mesh.stats.measuredKerbs, defaultKerbs: mesh.stats.defaultKerbs, triangles: mesh.stats.triangles };
                                 }
                             }
-                            return { value: { rebuilt: layer.rebuilt, ...summary, caveats, removedTriangles: 0, residualOffFootprint: layer.residualOffFootprint, timingsMs: layer.timingsMs, procedural: { ground: { vertices: surf.stats.vertices, triangles: surf.stats.triangles, openVertices: surf.stats.openVertices, terrainVertices: surf.stats.terrainVertices }, ...(roadsStats ? { roads: roadsStats } : {}) } } };
+                            const revolutions = await reviseRevolutions(['district_massing_textured.glb', 'district_massing_clay.glb']);
+                            return { value: { rebuilt: layer.rebuilt, ...summary, caveats, removedTriangles: 0, residualOffFootprint: layer.residualOffFootprint, timingsMs: layer.timingsMs, ...(revolutions ? { revolutions } : {}), procedural: { ground: { vertices: surf.stats.vertices, triangles: surf.stats.triangles, openVertices: surf.stats.openVertices, terrainVertices: surf.stats.terrainVertices }, ...(roadsStats ? { roads: roadsStats } : {}) } } };
                         }
                         // the scan's own buildings out where the rebuilt ones stand: the clay remesh and tile_refine's textured twin alike
                         const clay = hideFootprintInGlb(fs.readFileSync(refined.clayGlb), layer.footprint);
                         fs.writeFileSync(path.join(dir, 'remesh_carved.glb'), clay.glb);
                         fs.writeFileSync(path.join(dir, 'remesh_carved_textured.glb'), hideFootprintInGlb(fs.readFileSync(refined.texturedGlb), layer.footprint).glb);
-                        return { value: { rebuilt: layer.rebuilt, ...summary, removedTriangles: clay.removedTriangles, residualOffFootprint: layer.residualOffFootprint, timingsMs: layer.timingsMs } };
+                        const revolutions = await reviseRevolutions(['district_massing_textured.glb', 'district_massing_clay.glb', 'remesh_carved.glb', 'remesh_carved_textured.glb']);
+                        return { value: { rebuilt: layer.rebuilt, ...summary, removedTriangles: clay.removedTriangles, residualOffFootprint: layer.residualOffFootprint, timingsMs: layer.timingsMs, ...(revolutions ? { revolutions } : {}) } };
                     }, {
                         publish: (dir, v) => !v.rebuilt ? []
-                            : v.procedural ? [{ from: 'district_massing_textured.glb', as: `${base}_massing_${key8}.glb` }, { from: 'ground.glb', as: `${base}_ground_${key8}.glb` }, ...(fs.existsSync(path.join(dir, 'roads.glb')) ? [{ from: 'roads.glb', as: `${base}_proc_roads_${key8}.glb` }] : [])]
-                            : [{ from: 'district_massing_textured.glb', as: `${base}_massing_${key8}.glb` }, { from: 'remesh_carved.glb', as: `${base}_remesh_carved_${key8}.glb` }],
+                            : v.procedural ? [{ from: 'district_massing_textured.glb', as: `${base}_massing_${key8}.glb` }, { from: 'ground.glb', as: `${base}_ground_${key8}.glb` }, ...(fs.existsSync(path.join(dir, 'roads.glb')) ? [{ from: 'roads.glb', as: `${base}_proc_roads_${key8}.glb` }] : []), ...(v.revolutions?.accepted ? [{ from: 'revolutions.glb', as: `${base}_revolutions_${key8}.glb` }] : [])]
+                            : [{ from: 'district_massing_textured.glb', as: `${base}_massing_${key8}.glb` }, { from: 'remesh_carved.glb', as: `${base}_remesh_carved_${key8}.glb` }, ...(v.revolutions?.accepted ? [{ from: 'revolutions.glb', as: `${base}_revolutions_${key8}.glb` }] : [])],
                         bypass: bypass('massing')
                     });
                     const v = entry.value;
@@ -3596,6 +3613,18 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         supersedes: [remeshId], revealAfter: [], reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [remeshId] }, cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pubCarved.path)
                     };
                     delete (carvedLayer as Partial<StagedLayer>).textured;
+                    // the rebuilt solids of revolution: their own layer, self-coloured from the tile photo
+                    const pubRev = v.revolutions?.accepted ? entry.published.find(p => p.url.includes(`_revolutions_${key8}`)) : undefined;
+                    const revLayer: StagedLayer | undefined = pubRev && v.revolutions ? {
+                        objectId: layerObjectId(key, 'l2v'), stage: 'massing', layer: 'l2v', order: STAGES.massing.order, url: pubRev.url, bytes: pubRev.bytes,
+                        provenance: {
+                            label: 'generated', measuredGeometry: false, confidence: round(Math.min(...v.revolutions.revolutions.map(r => r.confidence)), 3),
+                            method: `${REVOLUTION_FIT_VERSION}: parts whose horizontal sections the scan measures as circles about one vertical axis, rebuilt as one smooth profile (rings where the sections step, stacked revolutions above the cap, periodic ribs only where the residual shows them) instead of the scan's dented copy; coloured per height from the de-lit tile photo`,
+                            sources, note: v.revolutions.revolutions.map(r => r.summary).join(' | ')
+                        },
+                        provenanceLabels: ['generated'], supersedes: [], revealAfter: [], reveal: { durationMs: 1200, stagger: 0.3, crossfadeFrom: [] },
+                        cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pubRev.path)
+                    } : undefined;
                     if (v.procedural) {
                         // the procedural district: the rebuilt buildings, the measured ground and the streets; the scan's layer is superseded
                         const [, pubGround, pubRoads] = entry.published;
@@ -3619,6 +3648,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const layers: StagedLayer[] = [{ ...massLayer, provenance: { ...massLayer.provenance, note: `${massLayer.provenance.note}; ${v.caveats ?? 0} rebuilt despite a failed check (lenient: the scan is not shown), labelled with it` } }, groundLayer];
                         run.commit(layers[0], { source: 'DistrictMassing', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true, rebuilt: v.rebuilt } });
                         run.commit(groundLayer, { source: 'ProceduralGround', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true } });
+                        if (revLayer) { run.commit(revLayer, { source: 'RevolutionFit', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true } }); layers.push(revLayer); }
                         run.setGround(groundLayer.objectId);
                         if (pubRoads && v.procedural.roads) {
                             const r = v.procedural.roads;
@@ -3642,7 +3672,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     refineTextured.set(carvedLayer.objectId, path.join(entry.dir, 'remesh_carved_textured.glb'));
                     run.commit(carvedLayer, run.layerMeta[remeshId]);
                     run.setGround(carvedLayer.objectId);
-                    return { status: 'committed', value: v, layers: [massLayer, carvedLayer], source: `${v.rebuilt} of ${v.buildings} buildings rebuilt from their footprints and the scan, the remesh carved where they stand`, cached: entry.cached, builtAtMs: entry.builtAtMs };
+                    if (revLayer) run.commit(revLayer, { source: 'RevolutionFit', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true } });
+                    return { status: 'committed', value: v, layers: [massLayer, carvedLayer, ...(revLayer ? [revLayer] : [])], source: `${v.rebuilt} of ${v.buildings} buildings rebuilt from their footprints and the scan, the remesh carved where they stand`, cached: entry.cached, builtAtMs: entry.builtAtMs };
                 },
                 degrade: async err => ({
                     status: 'degraded', source: 'the remeshed scan stands', reason: `the district's buildings could not be rebuilt (${errorMessage(err)})`,
