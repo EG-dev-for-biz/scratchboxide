@@ -79,6 +79,7 @@ import { auditDistrict, DISTRICT_AUDIT_VERSION, districtStreetAuditSummary, type
 import { buildSceneInventory, sceneInventorySummary, SCENE_INVENTORY_VERSION, type InventoryCrown, type SceneInventorySummary } from './scene-inventory';
 import { buildDistrictMassingLayer, districtFootprint, districtMassingEnabled, DISTRICT_MASSING_PARAMS, DISTRICT_MASSING_VERSION, DISTRICT_TEXEL_M, massDistrict, planeFirstEnabled, proceduralDistrictEnabled } from './district-massing';
 import { REVOLUTION_FIT_VERSION, revolutionFitEnabled, reviseForRevolutions, type RevolutionLayerSummary } from './revolution-fit';
+import { districtEDetail, districtEDetailEnabled, DISTRICT_E_DETAIL_VERSION } from './district-e-detail';
 import { describePolish, polishRemesh, REMESH_POLISH_VERSION } from './remesh-polish';
 import { wallSampleIndex } from './wall-plane-fit';
 import { assembleDistrictLayer, inBackground, districtMassingManifest, findStoredLayer, objectFrameOf, objectReuseEnabled, objectStoreEnabled, planDistrictObjects, readLayerManifests, storeSceneObjects, treesManifest, wholeLayerManifest, writeLayerManifests, type DistrictObjectPlan, type LayerObjectManifest } from './scene-objects';
@@ -222,7 +223,7 @@ export const STAGES = {
     remesh: { order: 2, title: 'Remeshed scan', budgetMs: 300_000 },
     // a district's rebuilt buildings: pipeline E's massing for every building that passes its own check, and the remesh carved
     // where they stand (district-massing.ts); off unless SCRATCHBOX_STAGED_DISTRICT_MASSING=1
-    massing: { order: 2, title: 'Rebuilt buildings', budgetMs: 420_000 },
+    massing: { order: 2, title: 'Rebuilt buildings', budgetMs: 1_500_000 },
     // the facades' grammars read from the tile photo (three readings per facade, concurrently), gated, and the relief run
     // again with the accepted ones; pipeline E's inference runs here too, and in its enhanced mode (the default within E) also a registered
     // Street View survey (about 3 min, alongside the readings) and up to 8 redraws (about 2.5 min)
@@ -1430,6 +1431,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         try {
                             const ev = await deps.vectorEvidence({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: baseRadiusM });
                             radiusM = districtContainmentRadiusM(ev, baseRadiusM);
+                            // a second round: the grown area reaches a second ring of buildings, which the first round did not
+                            // size it for (Haughwout, 2026-10-22: 23 of 87 footprints ran past the extraction); the same cap holds
+                            if (radiusM > baseRadiusM) {
+                                const ev2 = await deps.vectorEvidence({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM });
+                                radiusM = Math.min(baseRadiusM + DISTRICT_CONTAINMENT_MAX_GROWTH_M, districtContainmentRadiusM(ev2, radiusM));
+                            }
                         } catch (err) {
                             // atomic building integrity is best-effort for a district: a vector-fetch failure keeps the
                             // base radius rather than failing the whole build over it
@@ -3658,7 +3665,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const vectorKey = crypto.createHash('sha256').update(JSON.stringify([ev.buildings.map(b => [b.id, b.parts, b.heightM ?? null, b.extruded ?? null]), ev.water, ev.roads])).digest('hex').slice(0, 16);
                     const revolutionsOn = revolutionFitEnabled();
                     const surfaceMode = proceduralSurfaceMode();
-                    const key = stageKey(DISTRICT_MASSING_VERSION, stripped.cacheKey, vectorKey, refined.cacheKey, covered.toFixed(1), String(DISTRICT_TEXEL_M), procedural ? `${PROCEDURAL_GROUND_VERSION}+${PROCEDURAL_ROADS_VERSION}${deps.textures?.disabled && surfaceMode === 'photo' ? '' : `+${PROCEDURAL_MATERIALS_VERSION}+${surfaceMode}`}` : 'carve', ...(revolutionsOn ? [REVOLUTION_FIT_VERSION] : []));
+                    const key = stageKey(DISTRICT_MASSING_VERSION, districtEDetailEnabled() ? DISTRICT_E_DETAIL_VERSION : 'no-detail', stripped.cacheKey, vectorKey, refined.cacheKey, covered.toFixed(1), String(DISTRICT_TEXEL_M), procedural ? `${PROCEDURAL_GROUND_VERSION}+${PROCEDURAL_ROADS_VERSION}${deps.textures?.disabled && surfaceMode === 'photo' ? '' : `+${PROCEDURAL_MATERIALS_VERSION}+${surfaceMode}`}` : 'carve', ...(revolutionsOn ? [REVOLUTION_FIT_VERSION] : []));
                     run.keys.massing = key;
                     const key8 = key.slice(0, 8);
                     // the scene object store: each rebuilt building, the ground and the streets kept as their own versioned
@@ -3700,6 +3707,21 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             ? await buildDistrictMassingLayer({ rows: freshRows, look, within, scanGlb: stripped.devegetatedGlb, outDir: dir, stage: 'massing', stageKey: key, signal: io.signal })
                             : undefined;
                         if (!layer && !reused.size) return { value: { rebuilt: 0, ...summary, removedTriangles: 0, residualOffFootprint: 0, timingsMs: {} } };
+                        // pipeline E's detail on every building massed now: inference, then measured relief (district-e-detail.ts)
+                        if (layer && districtEDetailEnabled()) {
+                            const td = Date.now();
+                            io.progress(`pipeline E detail on ${layer.rebuilt} buildings: roofs, bands, windows, textures, then measured relief`);
+                            const vis = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
+                            const chain = vis ? new VisionModelChain<string>({ client: vis.client, candidates: vis.candidates, signal: io.signal, ...chainExtras('massing'), ...(deps.sleep ? { sleep: deps.sleep } : {}) }) : undefined;
+                            const detail = await districtEDetail({ layer, scanGlb: stripped.devegetatedGlb, dir: path.join(dir, 'detail'), stageKey: key, ...(chain ? { chain } : {}), signal: io.signal, onProgress: m => io.progress(m) });
+                            if (detail.files.texturedGlb !== layer.files.texturedGlb) {
+                                fs.copyFileSync(detail.files.texturedGlb, layer.files.texturedGlb);
+                                fs.copyFileSync(detail.files.clayGlb, layer.files.clayGlb);
+                            }
+                            cache.writeRunNote(runId, 'district_e_detail', detail);
+                            run.note(PROVENANCE.photoInferred, `pipeline E detail on the district's ${layer.rebuilt} rebuilt buildings: ${detail.inference ? detail.inference.steps.map(s2 => `${s2.step} ${s2.accepted}/${s2.proposed}${s2.skipped ? ` (skipped: ${s2.skipped})` : ''}`).join(', ') : 'no inference'}; ${detail.relief ? `measured relief: ${detail.relief.built} features built (bands ${detail.relief.counts.bands.accepted}, reveals ${detail.relief.counts.reveals.accepted})` : 'no measured relief'}; ${detail.notes.join('; ')}`);
+                            layer.timingsMs.detail = Date.now() - td;
+                        }
                         const texturedFile = path.join(dir, 'district_massing_textured.glb');
                         const timingsMs: Record<string, number> = { ...(layer?.timingsMs ?? {}), ...(plan ? { objectPlan: plan.ms } : {}) };
                         if (reused.size) {

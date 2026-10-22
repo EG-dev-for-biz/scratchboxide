@@ -22,7 +22,8 @@
  *   - whole: the footprint lies inside the extraction (a building the scan only partly covers is never rebuilt from part).
  * A building that fails keeps the scan, with the reason.
  *
- * Plane first (wall-plane-fit.ts; on unless SCRATCHBOX_STAGED_PLANE_FIRST=0, user direction 2026-10-22): every wall is one
+ * Plane first (wall-plane-fit.ts; off unless SCRATCHBOX_STAGED_PLANE_FIRST=1: the user rejected vertical planes everywhere,
+ * 2026-10-22, preferring pipeline E's walls moved onto the facades the scan measures): every wall is one
  * plumb plane on its footprint edge at the depth the scan measures, relief only where the scan departs from it consistently
  * over a real area, and the scan's lumps on the walls taken out of the residual. A building failing a soft check (running
  * past the extraction, scan spilling past its footprint) is then rebuilt anyway with the failure as its
@@ -37,6 +38,7 @@ import type { GroundModel } from '../../spatial/StreetViewSurveyPlanner';
 import type { EvidenceLookup, VectorBuilding } from './vector-footprints';
 import { buildMassing, checkMassing, type Massing } from './pipeline-e/massing-spec';
 import { massingProvenance, plainTextures, runNativeMassing, writeMassingLayer, type MassingLayerFiles } from './pipeline-e/pipeline-e';
+import type { FaceTexture, TexelSource } from './pipeline-e/massing-glb';
 import type { MassingRun } from './pipeline-e/native-massing';
 import { FOOTPRINT_GROUND_CLEARANCE_M, hideFootprintInGlb, type StructureFootprint } from './kept-structure';
 import { APRON_HEIGHT_M } from './pipeline-e/residual-audit-e';
@@ -47,16 +49,19 @@ import type { ProvenanceRecord } from '../../../common/spatial/staged-location-c
 import type { MassingNode } from './pipeline-e/native-massing';
 import type { MassingPart } from './pipeline-e/massing-spec';
 
-/** Plane-first walls (wall-plane-fit.ts): on unless SCRATCHBOX_STAGED_PLANE_FIRST=0. */
+/** Plane-first walls (wall-plane-fit.ts): off unless SCRATCHBOX_STAGED_PLANE_FIRST=1. */
 export function planeFirstEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-    return env.SCRATCHBOX_STAGED_PLANE_FIRST !== '0';
+    return env.SCRATCHBOX_STAGED_PLANE_FIRST === '1';
 }
 
 export const DISTRICT_MASSING_VERSION = `district-massing/1${planeFirstEnabled() ? `+${WALL_PLANE_FIT_VERSION}+${ROOF_AND_VOIDS_VERSION}` : ''}`;
 
-/** The district massing stage runs when SCRATCHBOX_STAGED_DISTRICT_MASSING=1, or with the procedural district (off until measured live). */
+/**
+ * The district massing stage: pipeline E's massing for every building the scan confirms, the default for districts (user
+ * decision 2026-10-22, "pipeline E as our default for districts"); SCRATCHBOX_STAGED_DISTRICT_MASSING=0 turns it off.
+ */
 export function districtMassingEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-    return env.SCRATCHBOX_STAGED_DISTRICT_MASSING === '1' || proceduralDistrictEnabled(env);
+    return env.SCRATCHBOX_STAGED_DISTRICT_MASSING !== '0' || proceduralDistrictEnabled(env);
 }
 
 /**
@@ -244,6 +249,11 @@ export interface DistrictMassingLayer {
     /** Plane first: the scan's lumps on fitted walls taken out of the residual, and the relief items the native tool did not take. */
     planeFirst?: { residualRemovedTriangles: number; residualRemovedAreaM2: number; residualKeptTriangles: number; rejectedRelief: string[]; debris: Record<string, { clusters: number; triangles: number; areaM2: number }> };
     timingsMs: Record<string, number>;
+    /** What pipeline E's inference and relief take (district-e-detail.ts): the combined massing, its plain textures, the cropped scan. */
+    massing: Massing;
+    textures: Map<number, FaceTexture>;
+    legend: TexelSource[];
+    isolateGlb: string;
 }
 
 /**
@@ -298,7 +308,8 @@ export async function buildDistrictMassingLayer(input: { rows: DistrictBuildingM
     const provenanceOf = pf.length ? planeFirstProvenance(ok, { check }) : undefined;
     const files = writeMassingLayer(run, { check }, textures, legend, input.outDir, input.stage, input.stageKey, 'district_massing', provenanceOf, { photoJpeg: true });
     timingsMs.glb = Date.now() - t;
-    return { files, run, footprint: districtFootprint(ok, input.look, input.within, 1), rebuilt: ok.length, residualOffFootprint: offFootprint, timingsMs, ...(planeFirst ? { planeFirst } : {}) };
+    const massing: Massing = { parts, meshes, check, solar: { segments: 0, inside: 0, pitchedKept: 0, pitchedRejected: 0, flatUsed: 0 }, notes: [`${ok.length} buildings massed together`] };
+    return { files, run, footprint: districtFootprint(ok, input.look, input.within, 1), rebuilt: ok.length, residualOffFootprint: offFootprint, timingsMs, ...(planeFirst ? { planeFirst } : {}), massing, textures, legend, isolateGlb: isolate };
 }
 
 /**
