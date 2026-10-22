@@ -23,6 +23,12 @@ import { stagedWorkspaceRoot } from '../../3d-engine/staged-location/stage-cache
 import { VisionModelChain } from '../vision-model-chain';
 import { resolveRepoRoot } from './nano-banana-tools';
 import type { ToolDeclaration, ToolHandler } from './types';
+import { harvestSurveySwatches, type StationBeautifier, type SurveySwatchHarvestResult } from '../../spatial/survey-swatch-harvest';
+import { geminiJsonVision, indexPbrLibrary, matchSwatchToLibrary, resolvePbrLibrary, type PbrMatch } from '../../spatial/pbr-library-match';
+import { cachedGeminiSegmenter } from '../../spatial/StreetViewMaterialHarvester';
+import { SurveyStationRenderService } from '../../spatial/SurveyStationRenderService';
+import { BeautifyStationService, createDefaultStationImageGenerator } from '../../spatial/BeautifyStationService';
+import { GoogleMediaCredentialsService } from '../../google-media-credentials-service';
 
 export const SURFACE_MATERIALS_TOOL_NAME = 'infer_surface_materials';
 
@@ -80,8 +86,101 @@ export function createSurfaceMaterialsHandler(deps: { run?: typeof inferStageSur
     };
 }
 
-export const SURFACE_MATERIALS_TOOL_DECLARATIONS: ToolDeclaration[] = [SURFACE_MATERIALS_TOOL_DECLARATION];
+// =============================================================================
+// survey_harvest_swatches: texture swatches of a building from AI Beautify survey stations, matched to the PBR library
+// =============================================================================
+
+export const SURVEY_SWATCHES_TOOL_NAME = 'survey_harvest_swatches';
+
+export const SURVEY_SWATCHES_TOOL_DECLARATION: ToolDeclaration = {
+    name: SURVEY_SWATCHES_TOOL_NAME,
+    description: 'Harvest texture swatches of one building from a survey of its Google 3D Tiles: survey stations square-on to each facade and '
+        + 'off-axis, at street and mid height, plus four framed aerials, each path-traced and run through AI Beautify (exact poses, no Street '
+        + 'View needed); the material harvester then rectifies clean patches into tileable PBR swatches (albedo, normal, ORM, height) at a '
+        + 'measured metres-per-pixel, keeping only patches on the building itself. Each swatch can be matched to its closest material in the '
+        + 'local PBR texture library. Everything is labelled generated (from renders of the tiles), never measured. Takes several minutes: '
+        + 'one image call per station.',
+    parameters: {
+        type: 'OBJECT',
+        properties: {
+            place: { type: 'STRING', description: 'The building: an address or name (geocoded), or "lat, lng".' },
+            beautify: { type: 'BOOLEAN', description: 'Run each station through AI Beautify before harvesting (default true; false harvests the raw tile renders).' },
+            subjectOnly: { type: 'BOOLEAN', description: 'Keep only swatches on the building itself, not neighbours or the street (default true).' },
+            matchLibrary: { type: 'BOOLEAN', description: 'Match each swatch to the closest material of the local PBR texture library (default true).' },
+            libraryPath: { type: 'STRING', description: 'Optional PBR library folder (default SCRATCHBOX_PBR_LIBRARY, else the studio RAID copy).' },
+            outputDir: { type: 'STRING', description: 'Optional output folder (default .scratchbox/survey_swatches/<place> in the workspace).' }
+        },
+        required: ['place']
+    }
+};
+
+const slug = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 48);
+
+export function createSurveySwatchesHandler(deps: {
+    staged?: Pick<Awaited<ReturnType<typeof createStagedLocationDeps>>, 'geocode' | 'extract'>;
+    harvest?: typeof harvestSurveySwatches; vision?: unknown; beautifier?: StationBeautifier | null;
+    match?: (s: SurveySwatchHarvestResult['swatches'][number], workDir: string) => Promise<PbrMatch>;
+} = {}): ToolHandler {
+    return async (args, ctx) => {
+        const placeArg = str(args.place);
+        if (!placeArg) throw new MissingInputError(SURVEY_SWATCHES_TOOL_NAME, 'place', 'the building to survey (address, name or "lat, lng")');
+        const root = stagedWorkspaceRoot();
+        const staged = deps.staged ?? await createStagedLocationDeps(root, { signal: ctx?.signal });
+        const ll = /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/.exec(placeArg);
+        const place = ll ? { lat: Number(ll[1]), lng: Number(ll[2]), formattedAddress: placeArg } : await staged.geocode(placeArg, ctx?.signal);
+        const outDir = str(args.outputDir) || path.join(root, '.scratchbox', 'survey_swatches', `${slug(place.formattedAddress)}_${place.lat.toFixed(5)}_${place.lng.toFixed(5)}`);
+        const tilesDir = path.join(outDir, 'tiles');
+        let tileGlb = path.join(tilesDir, 'textured.glb');
+        if (!fs.existsSync(tileGlb)) {
+            ctx?.reportProgress?.('downloading the Google 3D Tiles around the building');
+            fs.mkdirSync(tilesDir, { recursive: true });
+            tileGlb = (await staged.extract({ lat: place.lat, lng: place.lng, radiusM: 60, outDir: tilesDir, place: place as never, ...(ctx?.signal ? { signal: ctx.signal } : {}), onProgress: m => ctx?.reportProgress?.(m) })).texturedGlb;
+        }
+        const vision = deps.vision ?? await new GoogleMediaCredentialsService().createVertexClient();
+        let beautifier = deps.beautifier;
+        if (beautifier === undefined && args.beautify !== false) {
+            const renderer = new SurveyStationRenderService();
+            await renderer.loadMesh(tileGlb);
+            beautifier = new BeautifyStationService(renderer, createDefaultStationImageGenerator({ workspaceRoot: root, imageSize: '2K' })) as unknown as StationBeautifier;
+        }
+        const harvestDir = path.join(outDir, args.beautify === false ? 'raw' : 'beautified');
+        const r = await (deps.harvest ?? harvestSurveySwatches)({
+            tileGlb, anchor: { lat: place.lat, lng: place.lng, elevationMeters: 0 }, place: place.formattedAddress, outDir: harvestDir,
+            segmenter: cachedGeminiSegmenter(vision as never, path.join(harvestDir, 'segmentation'), { allowNetwork: true }),
+            ...(beautifier ? { beautifier } : {}), subjectOnly: args.subjectOnly !== false, log: m => ctx?.reportProgress?.(m), ...(ctx?.signal ? { signal: ctx.signal } : {})
+        });
+        const matches: Array<PbrMatch | { error: string }> = [];
+        let libraryNote = 'library matching off';
+        if (args.matchLibrary !== false && r.swatches.length) {
+            try {
+                let match = deps.match;
+                if (!match) {
+                    const lib = resolvePbrLibrary(str(args.libraryPath) || undefined);
+                    ctx?.reportProgress?.(`indexing the PBR library at ${lib}`);
+                    const index = await indexPbrLibrary(lib);
+                    const jv = geminiJsonVision(vision as never);
+                    match = (s, workDir) => matchSwatchToLibrary({ photo: s.files.photoSwatch, description: s.description, sizeMeters: s.sizeMeters }, index, jv, workDir);
+                    libraryNote = `${index.names.length} materials in ${lib}`;
+                } else libraryNote = 'library matching';
+                for (const s of r.swatches) {
+                    try { matches.push(await match(s, path.join(harvestDir, 'library_match'))); } catch (err) { matches.push({ error: (err as Error).message }); }
+                }
+            } catch (err) { libraryNote = `library matching skipped: ${(err as Error).message}`; }
+        }
+        const swatches = r.swatches.map((s, i) => ({ ...s, ...(matches[i] ? { libraryMatch: matches[i] } : {}) }));
+        const kept = r.stations.filter(s => s.kept).length;
+        const summary = `Harvested ${swatches.length} swatches of ${place.formattedAddress} from ${kept} of ${r.stations.length} survey stations${args.beautify === false ? '' : ' (AI Beautify)'}`
+            + `${r.droppedOffSubject ? `, ${r.droppedOffSubject} off the building dropped` : ''}, ${r.rejected} proposals rejected; ${libraryNote}. Labelled generated.`;
+        return {
+            resultPayload: { success: true, place, outDir, libraryPath: r.libraryPath, hero: r.hero, stations: r.stations, swatches, rejected: r.rejected, droppedOffSubject: r.droppedOffSubject, provenance: { label: 'generated', basis: args.beautify === false ? 'survey station renders of the Google 3D Tiles' : 'AI Beautify images of survey station renders of the Google 3D Tiles' }, summary },
+            summaryResult: summary
+        };
+    };
+}
+
+export const SURFACE_MATERIALS_TOOL_DECLARATIONS: ToolDeclaration[] = [SURFACE_MATERIALS_TOOL_DECLARATION, SURVEY_SWATCHES_TOOL_DECLARATION];
 
 export const surfaceMaterialsHandlers: Record<string, ToolHandler> = {
-    [SURFACE_MATERIALS_TOOL_NAME]: createSurfaceMaterialsHandler()
+    [SURFACE_MATERIALS_TOOL_NAME]: createSurfaceMaterialsHandler(),
+    [SURVEY_SWATCHES_TOOL_NAME]: createSurveySwatchesHandler()
 };
