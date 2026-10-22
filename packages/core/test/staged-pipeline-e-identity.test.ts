@@ -21,7 +21,8 @@ import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
-import { enhanceWall, ENHANCE_MODEL_DEFAULT, type PlateRequest } from '../src/node/3d-engine/staged-location/pipeline-e/enhance';
+import { ENHANCE_MODEL_DEFAULT, type PlateRequest } from '../src/node/3d-engine/staged-location/pipeline-e/enhance';
+import { buildFacadeTexture } from '../src/node/3d-engine/staged-location/facade-texture/facade-texture';
 import { auditPlate } from '../src/node/3d-engine/staged-location/pipeline-e/plate-audit';
 import { countPrompt, parseCountReply, type FacadeCounter } from '../src/node/3d-engine/staged-location/pipeline-e/plate-identity';
 import { refitLatticeToPlate } from '../src/node/3d-engine/staged-location/pipeline-e/plate-lattice';
@@ -110,7 +111,7 @@ const counter: FacadeCounter = async (tile, plate) => ({ tile: await countOne(ti
 async function redraw(plate: Uint8Array, opts: { aspect?: number } = {}) {
     const t = { width: W, height: H, rgba: wall({ noise: 18, blur: 3 }), source: new Uint8Array(W * H) };
     const client = async (r: PlateRequest) => ({ bytes: answer(plate, r, opts.aspect), modelUsed: 'fake-lite' });
-    const r = await enhanceWall(face(), t, all(), { client, models: ['fake-lite'], locationName: 'X', source: 3, counter });
+    const r = await buildFacadeTexture(face(), t, all(), { client, models: ['fake-lite'], locationName: 'X', source: 3, counter });
     return { r, t };
 }
 
@@ -178,7 +179,7 @@ describe('enhanced mode: the identity gate', () => {
         const t = { width: W, height: H, rgba: wall({ noise: 18, blur: 3 }), source: new Uint8Array(W * H) };
         const plate = wall({ dx: driftX, dy: driftY });
         const client = async (r: PlateRequest) => ({ bytes: answer(plate, r), modelUsed: 'fake-lite' });
-        const r = await enhanceWall(face(), t, use, { client, models: ['fake-lite'], locationName: 'X', source: 3, counter, unseen: { source: 3 } });
+        const r = await buildFacadeTexture(face(), t, use, { client, models: ['fake-lite'], locationName: 'X', source: 3, counter, unseen: { source: 3 } });
         expect(r.identity!.storeys.measured).toBe(false);
         expect(r.why).toMatch(/its storeys and bays cannot be counted on it/);
         expect(r.accepted).toBe(true);
@@ -187,7 +188,7 @@ describe('enhanced mode: the identity gate', () => {
     it('does not hold a wall to counts nobody could read, and says so', async () => {
         const t = { width: W, height: H, rgba: wall({ noise: 18, blur: 3 }), source: new Uint8Array(W * H) };
         const plate = wall({ dx: driftX });
-        const r = await enhanceWall(face(), t, all(), { client: async (q: PlateRequest) => ({ bytes: answer(plate, q), modelUsed: 'fake' }), models: ['fake'], locationName: 'X', source: 3, counter: async () => { throw new Error('quota'); } });
+        const r = await buildFacadeTexture(face(), t, all(), { client: async (q: PlateRequest) => ({ bytes: answer(plate, q), modelUsed: 'fake' }), models: ['fake'], locationName: 'X', source: 3, counter: async () => { throw new Error('quota'); } });
         expect(r.accepted).toBe(true);
         expect(r.identity!.storeys.measured).toBe(false);
         expect(r.why).toMatch(/storeys: not counted \(the count could not be read: quota\)/);

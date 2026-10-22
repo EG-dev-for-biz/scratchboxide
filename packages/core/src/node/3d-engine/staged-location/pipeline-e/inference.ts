@@ -43,7 +43,8 @@ import { decideRoof, parseRoofReply, roofPrompt, PARAPET_THICKNESS_M, type RoofD
 import { straighten, type StraightenResult } from './straighten';
 import type { EnhanceModelClient } from '../texture-enhance';
 import { decodeOrtho, checkAgainstScan, readReliefOrthos, readGrammar, fitGrammar, onFacade } from '../facade-grammar';
-import { enhanceOrder, enhanceWall, ENHANCE_CONCURRENCY, MAX_UNSEEN_WALLS, MIN_ENHANCE_AREA_M2, MIN_UNSEEN_EXPOSED_SHARE, TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID, TEXTURE_PLATE_UNSEEN_PROMPT_ID, type EnhanceWallRecord, type PlateModelClient, type WallStreetView } from './enhance';
+import { enhanceOrder, ENHANCE_CONCURRENCY, MAX_UNSEEN_WALLS, MIN_ENHANCE_AREA_M2, MIN_UNSEEN_EXPOSED_SHARE, TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID, TEXTURE_PLATE_UNSEEN_PROMPT_ID, type EnhanceWallRecord, type PlateModelClient, type WallStreetView } from './enhance';
+import { buildFacadeTexture } from '../facade-texture/facade-texture';
 import { exposedShare, solidGrid } from './exposure';
 import { labPlanes } from './plate-audit';
 import { medianColour } from './face-textures';
@@ -640,7 +641,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             }
             progress(`enhanced mode: ${unseen ? 'drawing the unseen wall' : 'redrawing wall'} ${f.index} (${Math.round(f.area)} m2)${sv ? `, guided by Street View ${sv.view.panoId}` : ''}`);
             const before = { width: tex.width, height: tex.height, rgba: tex.rgba.slice() };
-            const r = await enhanceWall(f, tex, use, {
+            const r = await buildFacadeTexture(f, tex, use, {
                 client: input.enhance!.client, models: input.enhance!.models, locationName: input.enhance!.locationName, ...(refTex ? { reference: refTex } : {}), source: ENH,
                 guards, ...(input.enhance!.cacheDir ? { cacheDir: input.enhance!.cacheDir } : {}), ...(sv ? { streetView: sv, streetViewSource: sourceForPano(sv.view.panoId) } : {}), ...(noSv ? { noStreetView: noSv } : {}),
                 ...(chain ? { counter: visionFacadeCounter(chain) } : {}), ...(input.signal ? { signal: input.signal } : {}),

@@ -1,0 +1,204 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
+ *
+ * This software and associated documentation files are proprietary and confidential
+ * to Scratchbox LLC. Unauthorized copying, modification, distribution, or use
+ * of this file, via any medium, is strictly prohibited without explicit written
+ * permission from Scratchbox LLC.
+ ********************************************************************************/
+
+/**
+ * The facade texture builder: the one way a wall's texture is redrawn, whatever pipeline built the wall. A wall's
+ * straight-on plate (its texels in the face's metric (s, t) frame, `use` marking the ones a real source covers) goes to the
+ * image model with the AI Beautify prompt's texture-plate variant, and the answer is kept only through the gates of
+ * pipeline E's enhanced mode (enhance.ts: the corrective warp, the identity gate, the region audit, the Street View check).
+ *
+ * The steps are separate so a caller can draw once (buildFacadeTexture, pipeline E and version F round 2) or many times and
+ * pick (version F round 3's best-of-n): prepareFacadeRequest, plateFromAnswer, alignAndIdentify, writeFacadeTexture.
+ */
+
+import { buildTexturePlatePrompt, TEXTURE_PLATE_UNSEEN_PROMPT_ID } from '../../../../browser/generative-canvas/services/location-beautify-service';
+import { decodeImageInMemory, type RgbaImage8 } from '../tile-texture-transfer';
+import { padToModelAspect, resizeRgba } from '../texture-enhance';
+import { encodePng } from '../png-encode';
+import type { FaceTexture } from '../pipeline-e/massing-glb';
+import type { MassingFace } from '../pipeline-e/native-massing';
+import {
+    alignPlate, cachedPlate, guardPlate, identityRecord, preserveClause, unseenGreyShare, ENHANCE_MAX_SIDE, UNSEEN_MAX_GREY_SHARE, UNSEEN_MIN_ALIGN_SHARE,
+    UNSEEN_MIN_COLOUR_SHARE, UNSEEN_MIN_COUNT_SHARE, type AlignResult, type EnhanceAuditRecord, type EnhanceStreetViewRecord, type EnhanceWallRecord,
+    type PlateAnswer, type PlateModelClient, type PlateRequest, type WallStreetView
+} from '../pipeline-e/enhance';
+import { identityGate, type FacadeCounter, type FacadeCounts, type IdentityGate } from '../pipeline-e/plate-identity';
+import { streetBandTop } from '../pipeline-e/plate-streetview';
+import type { CellGrid } from '../pipeline-e/plate-audit';
+
+/** A wall the tile hardly sees: what the tile does not cover is drawn as the wall continues (labelled `source`). */
+export interface UnseenWall { source: number; familyLab?: [number, number, number]; inside?: Uint8Array }
+
+/** Everything one model request for a wall is made of, and what is needed to read its answer back onto the plate. */
+export interface PreparedFacade {
+    request: PlateRequest;
+    /** The plate as sent, before padding (sw x sh). */
+    small: RgbaImage8;
+    padded: RgbaImage8;
+    offset: [number, number];
+    sw: number; sh: number;
+    N: number;
+    coveredShare: number;
+    widthM: number; heightM: number;
+}
+
+/** The plate as sent to the model: at most ENHANCE_MAX_SIDE long, padded to a model aspect, an unseen wall's gaps mid-grey. */
+export function prepareFacadeRequest(f: MassingFace, t: FaceTexture, use: Uint8Array, opts: {
+    locationName: string; models: string[]; reference?: FaceTexture; signal?: AbortSignal;
+    /** The Street View photo sent to the model with the plate (absent: none sent). */
+    streetView?: WallStreetView;
+    unseen?: UnseenWall;
+}): PreparedFacade {
+    const scale = Math.min(1, ENHANCE_MAX_SIDE / Math.max(t.width, t.height));
+    const sw = Math.max(16, Math.round(t.width * scale)), sh = Math.max(16, Math.round(t.height * scale));
+    const N = t.width * t.height;
+    let coveredN = 0;
+    for (let i = 0; i < N; i++) if (use[i]) coveredN++;
+    const coveredShare = N ? coveredN / N : 0;
+    // an unseen wall goes to the model with what the tile does not cover in flat mid-grey, to be drawn as the wall continues
+    const sent = opts.unseen ? (() => { const g = t.rgba.slice(); for (let i = 0; i < N; i++) if (!use[i]) { g[i * 4] = 128; g[i * 4 + 1] = 128; g[i * 4 + 2] = 128; g[i * 4 + 3] = 255; } return g; })() : t.rgba;
+    const small: RgbaImage8 = resizeRgba({ width: t.width, height: t.height, rgba: sent }, sw, sh);
+    const { padded, offset } = padToModelAspect(small);
+    const r = opts.reference;
+    const ref = r ? (() => { const rs = Math.min(1, 768 / Math.max(r.width, r.height)); const s = resizeRgba({ width: r.width, height: r.height, rgba: r.rgba }, Math.max(8, Math.round(r.width * rs)), Math.max(8, Math.round(r.height * rs))); return new Uint8Array(encodePng(s.width, s.height, Buffer.from(s.rgba), 4)); })() : undefined;
+    const prompt = buildTexturePlatePrompt({ locationName: opts.locationName, widthM: t.width * f.pixel, heightM: t.height * f.pixel, widthPx: padded.width, heightPx: padded.height, preserveClause: preserveClause(padded.width, padded.height), withReference: !!ref, ...(opts.streetView ? { withStreetView: true } : {}), ...(opts.unseen ? { unseen: true } : {}) });
+    const image = new Uint8Array(encodePng(padded.width, padded.height, Buffer.from(padded.rgba), 4));
+    const request: PlateRequest = { prompt, image, width: padded.width, height: padded.height, ...(ref ? { reference: ref } : {}), ...(opts.streetView ? { streetView: opts.streetView.crop } : {}), models: opts.models, ...(opts.signal ? { signal: opts.signal } : {}) };
+    return { request, small, padded, offset: offset as [number, number], sw, sh, N, coveredShare, widthM: t.width * f.pixel, heightM: t.height * f.pixel };
+}
+
+/** The model's answer read back onto the plate's full size (the padding cut away). Throws when the answer cannot be decoded. */
+export function plateFromAnswer(bytes: Uint8Array, prep: PreparedFacade, t: FaceTexture): { back: Uint8Array; answered: { width: number; height: number } } {
+    const dec = decodeImageInMemory(bytes);
+    const { padded, offset, sw, sh } = prep;
+    const full = resizeRgba(dec, padded.width, padded.height);
+    const inner = new Uint8Array(sw * sh * 4);
+    for (let y = 0; y < sh; y++) inner.set(full.rgba.subarray(((offset[1] + y) * full.width + offset[0]) * 4, ((offset[1] + y) * full.width + offset[0] + sw) * 4), y * sw * 4);
+    return { back: resizeRgba({ width: sw, height: sh, rgba: inner }, t.width, t.height).rgba, answered: { width: dec.width, height: dec.height } };
+}
+
+export type FacadeCountsRead = { tile?: FacadeCounts; plate?: FacadeCounts; unread?: string };
+
+/**
+ * The corrective warp and the identity gate of one answer. The storeys and bays are read by `count` when given (a caller's
+ * own reading, e.g. version F's lattice), else by `counter` (the vision count of the plate as sent against the aligned
+ * answer); an unseen wall's plate must also draw its gaps rather than leave them grey.
+ */
+export async function alignAndIdentify(f: MassingFace, t: FaceTexture, use: Uint8Array, prep: PreparedFacade, back: Uint8Array, answered: { width: number; height: number }, opts: {
+    unseen?: UnseenWall; counter?: FacadeCounter; signal?: AbortSignal;
+    count?: (aligned: Uint8Array) => Promise<FacadeCountsRead> | FacadeCountsRead;
+}): Promise<{ g: AlignResult; idg: IdentityGate; counts: FacadeCountsRead; grossNotMeasured?: string }> {
+    const { unseen } = opts;
+    // too little of an unseen wall is covered to align the answer on: it is taken as answered, and the gate says so
+    const alignable = !unseen || prep.coveredShare >= UNSEEN_MIN_ALIGN_SHARE;
+    const g: AlignResult = alignable ? alignPlate(t.rgba, back, t.width, t.height, use, f.pixel)
+        : { dx: 0, dy: 0, scale: 1, chamferPx: 0, lostShare: 0, accepted: true, why: 'not aligned', aligned: back };
+    const grossNotMeasured = alignable ? undefined : `the tile covers ${(100 * prep.coveredShare).toFixed(0)}% of the wall, under ${100 * UNSEEN_MIN_ALIGN_SHARE}%: too little to align on`;
+    let counts: FacadeCountsRead;
+    if (opts.count) counts = await opts.count(g.aligned);
+    else if (unseen && prep.coveredShare < UNSEEN_MIN_COUNT_SHARE) counts = { unread: `the tile covers ${(100 * prep.coveredShare).toFixed(0)}% of the wall: its storeys and bays cannot be counted on it` };
+    else if (opts.counter) {
+        // the tile as sent and the aligned plate at the same size, counted together
+        const plateSmall = resizeRgba({ width: t.width, height: t.height, rgba: g.aligned }, prep.sw, prep.sh);
+        try {
+            counts = await opts.counter(new Uint8Array(encodePng(prep.sw, prep.sh, Buffer.from(prep.small.rgba), 4)), new Uint8Array(encodePng(prep.sw, prep.sh, Buffer.from(plateSmall.rgba), 4)), prep.widthM, prep.heightM);
+        } catch (err) {
+            if (opts.signal?.aborted) throw err;
+            counts = { unread: `the count could not be read: ${(err as Error).message.slice(0, 120)}` };
+        }
+    } else counts = { unread: 'no vision model to count with' };
+    const colourAgainst = unseen?.familyLab && prep.coveredShare < UNSEEN_MIN_COLOUR_SHARE ? unseen.familyLab : undefined;
+    const idg = identityGate(t.rgba, g.aligned, t.width, t.height, use, { askedAspect: prep.padded.width / prep.padded.height, answeredAspect: answered.width / answered.height, chamferPx: g.chamferPx, lostShare: g.lostShare, counts, ...(grossNotMeasured ? { grossNotMeasured } : {}), ...(colourAgainst ? { colourAgainst } : {}) });
+    // an unseen wall's plate must draw the unseen part, not leave it grey
+    if (unseen) {
+        const grey = unseenGreyShare(g.aligned, use, prep.N, unseen.inside);
+        if (grey > UNSEEN_MAX_GREY_SHARE) { idg.passed = false; idg.why = `${idg.why}; ${(100 * grey).toFixed(0)}% of the unseen part left flat mid-grey (more than ${100 * UNSEEN_MAX_GREY_SHARE}%)`; }
+    }
+    return { g, idg, counts, ...(grossNotMeasured ? { grossNotMeasured } : {}) };
+}
+
+/** Writes an accepted plate into the wall's texture: texels the guards did not revert (weight under 0.5) take `source`. */
+export function writeFacadeTexture(t: FaceTexture, out: Uint8Array, weight: Float32Array | undefined, use: Uint8Array, source: number, unseen?: UnseenWall): void {
+    for (let i = 0; i < t.width * t.height; i++) {
+        t.rgba[i * 4] = out[i * 4]; t.rgba[i * 4 + 1] = out[i * 4 + 1]; t.rgba[i * 4 + 2] = out[i * 4 + 2]; t.rgba[i * 4 + 3] = 255;
+        if (!weight || weight[i] < 0.5) t.source[i] = unseen && !use[i] ? unseen.source : source;
+    }
+}
+
+export interface BuildFacadeTextureOptions {
+    client: PlateModelClient; models: string[]; locationName: string; reference?: FaceTexture; source: number; signal?: AbortSignal;
+    guards?: boolean; streetView?: WallStreetView; streetViewSource?: number; noStreetView?: string;
+    /** When the photo-guided redraw fails the identity gate, redraw once without the photo (default true). */
+    retryWithoutPhoto?: boolean;
+    /** Do not send the photo; only check the plate against it (the redraw after a photo-guided one failed the gate). */
+    photoCheckOnly?: boolean;
+    /** Reads storey and bay counts of the tile and of the plate (plate-identity.ts); without it the counts are not checked. */
+    counter?: FacadeCounter;
+    /**
+     * A wall the tile hardly sees: its uncovered texels are sent mid-grey with the unseen prompt (drawn as the wall continues)
+     * and labelled `source` when accepted; `familyLab` is the building's median facade colour (CIELAB), the colour family
+     * checked when the tile covers too little of the wall to have one.
+     */
+    unseen?: UnseenWall;
+    /**
+     * Where answers are kept, keyed by everything the model is sent (models, prompt, images): the same wall with the same
+     * inputs gets the same plate on every rebuild.
+     */
+    cacheDir?: string;
+}
+
+export type FacadeTextureResult = EnhanceWallRecord & { plate?: Uint8Array; guarded?: Uint8Array; labels?: string[]; grid?: CellGrid };
+
+/**
+ * Redraws one wall once and gates it: the identity gate, then (guards on) the invention and erasure check and, with a
+ * Street View photo of the wall, the photo check; flagged regions revert to the input, feathered. On acceptance the wall's
+ * texels become the guarded plate with `source` (or `streetViewSource` when a photo guided it); reverted texels keep theirs.
+ */
+export async function buildFacadeTexture(f: MassingFace, t: FaceTexture, use: Uint8Array, opts: BuildFacadeTextureOptions): Promise<FacadeTextureResult> {
+    const t0 = Date.now();
+    const guards = opts.guards ?? true;
+    const sv = guards ? opts.streetView : undefined;
+    // the photo is sent to the model unless this is the redraw without it (it then only checks the plate)
+    const guide = !!sv && !opts.photoCheckOnly;
+    const unseen = opts.unseen;
+    const prep = prepareFacadeRequest(f, t, use, { locationName: opts.locationName, models: opts.models, ...(opts.reference ? { reference: opts.reference } : {}), ...(opts.signal ? { signal: opts.signal } : {}), ...(guide ? { streetView: sv } : {}), ...(unseen ? { unseen } : {}) });
+    const svRec: EnhanceStreetViewRecord | undefined = sv ? { ...(guide ? {} : { checkOnly: true }), panoId: sv.view.panoId, method: sv.view.registration?.method ?? 'nominal', bandCover: Math.round(sv.rect.bandCover * 1000) / 1000, pxPerM: Math.round(sv.rect.pxPerM * 10) / 10 } : undefined;
+    const base = { face: f.index, key: f.key, ...(svRec ? { streetView: svRec } : {}), ...(guards && !sv && opts.noStreetView ? { noStreetView: opts.noStreetView } : {}) };
+    let answer: PlateAnswer;
+    try {
+        answer = await cachedPlate(opts.cacheDir, prep.request, opts.client);
+    } catch (err) {
+        if (opts.signal?.aborted) throw err;
+        return { ...base, accepted: false, why: `the model did not answer (${(err as Error).message.slice(0, 160)})`, ms: Date.now() - t0 };
+    }
+    let read: ReturnType<typeof plateFromAnswer>;
+    try { read = plateFromAnswer(answer.bytes, prep, t); } catch (err) { return { ...base, accepted: false, why: `the answer cannot be decoded (${(err as Error).message})`, model: answer.modelUsed, ms: Date.now() - t0 }; }
+    const { g, idg } = await alignAndIdentify(f, t, use, prep, read.back, read.answered, { ...(unseen ? { unseen } : {}), ...(opts.counter ? { counter: opts.counter } : {}), ...(opts.signal ? { signal: opts.signal } : {}) });
+    const why0 = `${unseen ? `a wall the tile hardly sees (${(100 * prep.coveredShare).toFixed(0)}% covered), drawn as it continues (${TEXTURE_PLATE_UNSEEN_PROMPT_ID}); ` : ''}corrective warp ${g.dx}, ${g.dy} px, scale ${g.scale.toFixed(3)}; ${idg.why}`;
+    const rec = { ...base, accepted: idg.passed, why: idg.passed ? why0 : `not the same wall: ${why0}`, model: answer.modelUsed, chamferPx: g.chamferPx, lostShare: g.lostShare, identity: identityRecord(idg), ms: Date.now() - t0, plate: g.aligned };
+    if (!idg.passed && guide && opts.retryWithoutPhoto !== false) {
+        // the photo pulled the redraw away from the wall: one more redraw without it; the tile check and the check against the
+        // photo still apply
+        const again = await buildFacadeTexture(f, t, use, { ...opts, photoCheckOnly: true });
+        return { ...again, ms: Date.now() - t0, streetView: { ...(again.streetView ?? svRec!), guidedRejected: rec.why } };
+    }
+    if (!idg.passed) return rec;
+    let out = g.aligned, weight: Float32Array | undefined;
+    let extra: { audit?: EnhanceAuditRecord; guarded?: Uint8Array; labels?: string[]; grid?: CellGrid } = {};
+    if (guards) {
+        const gp = guardPlate(t.rgba, g.aligned, t.width, t.height, use, f.pixel, sv ? { rect: sv.rect, bandTop: streetBandTop(f) } : undefined);
+        if (svRec && gp.photo) Object.assign(svRec, { shiftPx: gp.photo.shiftPx, nccPlate: gp.photo.nccPlate, nccInput: gp.photo.nccInput, comparedCells: gp.photo.comparedCells, supportedCells: gp.photo.supportedCells, contradictedCells: gp.photo.contradictedCells });
+        extra = { audit: gp.audit, guarded: gp.rgba, labels: gp.labels, grid: gp.grid };
+        if (gp.reject) return { ...rec, ...extra, accepted: false, why: `${rec.why}; ${gp.why}`, ms: Date.now() - t0 };
+        out = gp.rgba; weight = gp.weight;
+        rec.why = `${rec.why}; ${gp.why}`;
+    }
+    writeFacadeTexture(t, out, weight, use, guide && opts.streetViewSource !== undefined ? opts.streetViewSource : opts.source, unseen);
+    return { ...rec, ...extra, ms: Date.now() - t0 };
+}

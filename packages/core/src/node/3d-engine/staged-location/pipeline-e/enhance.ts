@@ -28,19 +28,17 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { LIGHTING_MODEL_LITE, LIGHTING_PROMPTS } from '../texture-lighting';
-import { buildTexturePlatePrompt, TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID, TEXTURE_PLATE_UNSEEN_PROMPT_ID } from '../../../../browser/generative-canvas/services/location-beautify-service';
+import { TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID, TEXTURE_PLATE_UNSEEN_PROMPT_ID } from '../../../../browser/generative-canvas/services/location-beautify-service';
 import { edgeMap, exactDistanceTransform } from '../../../spatial/StreetViewStage3Metrics';
-import { decodeImageInMemory, type RgbaImage8 } from '../tile-texture-transfer';
-import { padToModelAspect, resizeRgba } from '../texture-enhance';
-import { encodePng } from '../png-encode';
+import { resizeRgba } from '../texture-enhance';
 import { generateImageWithModels } from '../../../google-media-generation-service';
 import { nearestImageAspectRatio } from '../../../../common/media-generation-protocol';
 import { lumaPlane } from './image-ops';
 import type { FaceTexture } from './massing-glb';
 import type { MassingFace } from './native-massing';
 import { auditPlate, cellMaskToPixels, describeRegions, revertRegions, KEPT_KINDS, MAX_FLAGGED_SHARE, type CellGrid, type FlaggedRegion } from './plate-audit';
-import { streetBandTop, verifyAgainstPhoto, type GuideView, type PhotoCheck, type RectifiedPhoto } from './plate-streetview';
-import { identityGate, GROSS_MAX_CHAMFER_PX, GROSS_MAX_LOST_SHARE, type FacadeCounter, type FacadeCounts, type IdentityGate } from './plate-identity';
+import { verifyAgainstPhoto, type GuideView, type PhotoCheck, type RectifiedPhoto } from './plate-streetview';
+import { GROSS_MAX_CHAMFER_PX, GROSS_MAX_LOST_SHARE, type IdentityGate } from './plate-identity';
 
 export const ENHANCE_MAX_SIDE = 1024;
 export const MAX_SHIFT_PX = 6;
@@ -338,118 +336,6 @@ export function guardPlate(input: Uint8Array, aligned: Uint8Array, W: number, H:
     return { audit, reject, why: `${why}${inventedDetailM2 ? `; ${inventedDetailM2} m2 of finer detail drawn over ordinary wall kept` : ''}${photoKept ? `; ${audit.photoKeptM2} m2 the tile check flagged kept because the Street View photo shows it` : ''}`, rgba, weight, labels, grid: a.grid, ...(check ? { photo: check } : {}) };
 }
 
-/**
- * Redraws one wall once and gates it: the identity gate, then (guards on) the invention and erasure check and, with a
- * Street View photo of the wall, the photo check; flagged regions revert to the input, feathered. On acceptance the wall's
- * texels become the guarded plate with `source` (or `streetViewSource` when a photo guided it); reverted texels keep theirs.
- */
-export async function enhanceWall(f: MassingFace, t: FaceTexture, use: Uint8Array, opts: {
-    client: PlateModelClient; models: string[]; locationName: string; reference?: FaceTexture; source: number; signal?: AbortSignal;
-    guards?: boolean; streetView?: WallStreetView; streetViewSource?: number; noStreetView?: string;
-    /** When the photo-guided redraw fails the identity gate, redraw once without the photo (default true). */
-    retryWithoutPhoto?: boolean;
-    /** Do not send the photo; only check the plate against it (the redraw after a photo-guided one failed the gate). */
-    photoCheckOnly?: boolean;
-    /** Reads storey and bay counts of the tile and of the plate (plate-identity.ts); without it the counts are not checked. */
-    counter?: FacadeCounter;
-    /**
-     * A wall the tile hardly sees: its uncovered texels are sent mid-grey with the unseen prompt (drawn as the wall continues)
-     * and labelled `source` when accepted; `familyLab` is the building's median facade colour (CIELAB), the colour family
-     * checked when the tile covers too little of the wall to have one.
-     */
-    unseen?: { source: number; familyLab?: [number, number, number]; inside?: Uint8Array };
-
-    /**
-     * Where answers are kept, keyed by everything the model is sent (models, prompt, images): the same wall with the same
-     * inputs gets the same plate on every rebuild.
-     */
-    cacheDir?: string;
-}): Promise<EnhanceWallRecord & { plate?: Uint8Array; guarded?: Uint8Array; labels?: string[]; grid?: CellGrid }> {
-    const t0 = Date.now();
-    const guards = opts.guards ?? true;
-    const sv = guards ? opts.streetView : undefined;
-    // the photo is sent to the model unless this is the redraw without it (it then only checks the plate)
-    const guide = !!sv && !opts.photoCheckOnly;
-    const scale = Math.min(1, ENHANCE_MAX_SIDE / Math.max(t.width, t.height));
-    const sw = Math.max(16, Math.round(t.width * scale)), sh = Math.max(16, Math.round(t.height * scale));
-    const N = t.width * t.height;
-    let coveredN = 0;
-    for (let i = 0; i < N; i++) if (use[i]) coveredN++;
-    const coveredShare = N ? coveredN / N : 0;
-    const unseen = opts.unseen;
-    // an unseen wall goes to the model with what the tile does not cover in flat mid-grey, to be drawn as the wall continues
-    const sent = unseen ? (() => { const g = t.rgba.slice(); for (let i = 0; i < N; i++) if (!use[i]) { g[i * 4] = 128; g[i * 4 + 1] = 128; g[i * 4 + 2] = 128; g[i * 4 + 3] = 255; } return g; })() : t.rgba;
-    const small: RgbaImage8 = resizeRgba({ width: t.width, height: t.height, rgba: sent }, sw, sh);
-    const { padded, offset } = padToModelAspect(small);
-    const ref = opts.reference ? (() => { const rs = Math.min(1, 768 / Math.max(opts.reference.width, opts.reference.height)); const r = resizeRgba({ width: opts.reference.width, height: opts.reference.height, rgba: opts.reference.rgba }, Math.max(8, Math.round(opts.reference.width * rs)), Math.max(8, Math.round(opts.reference.height * rs))); return new Uint8Array(encodePng(r.width, r.height, Buffer.from(r.rgba), 4)); })() : undefined;
-    const prompt = buildTexturePlatePrompt({ locationName: opts.locationName, widthM: t.width * f.pixel, heightM: t.height * f.pixel, widthPx: padded.width, heightPx: padded.height, preserveClause: preserveClause(padded.width, padded.height), withReference: !!ref, ...(guide ? { withStreetView: true } : {}), ...(unseen ? { unseen: true } : {}) });
-    const svRec: EnhanceStreetViewRecord | undefined = sv ? { ...(guide ? {} : { checkOnly: true }), panoId: sv.view.panoId, method: sv.view.registration?.method ?? 'nominal', bandCover: Math.round(sv.rect.bandCover * 1000) / 1000, pxPerM: Math.round(sv.rect.pxPerM * 10) / 10 } : undefined;
-    const base = { face: f.index, key: f.key, ...(svRec ? { streetView: svRec } : {}), ...(guards && !sv && opts.noStreetView ? { noStreetView: opts.noStreetView } : {}) };
-    let answer: PlateAnswer;
-    const image = new Uint8Array(encodePng(padded.width, padded.height, Buffer.from(padded.rgba), 4));
-    const widthM = t.width * f.pixel, heightM = t.height * f.pixel;
-    const request: PlateRequest = { prompt, image, width: padded.width, height: padded.height, ...(ref ? { reference: ref } : {}), ...(guide ? { streetView: sv!.crop } : {}), models: opts.models, ...(opts.signal ? { signal: opts.signal } : {}) };
-    try {
-        answer = await cachedPlate(opts.cacheDir, request, opts.client);
-    } catch (err) {
-        if (opts.signal?.aborted) throw err;
-        return { ...base, accepted: false, why: `the model did not answer (${(err as Error).message.slice(0, 160)})`, ms: Date.now() - t0 };
-    }
-    let dec: RgbaImage8;
-    try { dec = decodeImageInMemory(answer.bytes); } catch (err) { return { ...base, accepted: false, why: `the answer cannot be decoded (${(err as Error).message})`, model: answer.modelUsed, ms: Date.now() - t0 }; }
-    const full = resizeRgba(dec, padded.width, padded.height);
-    const inner = new Uint8Array(sw * sh * 4);
-    for (let y = 0; y < sh; y++) inner.set(full.rgba.subarray(((offset[1] + y) * full.width + offset[0]) * 4, ((offset[1] + y) * full.width + offset[0] + sw) * 4), y * sw * 4);
-    const back = resizeRgba({ width: sw, height: sh, rgba: inner }, t.width, t.height).rgba;
-    // too little of an unseen wall is covered to align the answer on: it is taken as answered, and the gate says so
-    const alignable = !unseen || coveredShare >= UNSEEN_MIN_ALIGN_SHARE;
-    const g: AlignResult = alignable ? alignPlate(t.rgba, back, t.width, t.height, use, f.pixel)
-        : { dx: 0, dy: 0, scale: 1, chamferPx: 0, lostShare: 0, accepted: true, why: 'not aligned', aligned: back };
-    const grossNotMeasured = alignable ? undefined : `the tile covers ${(100 * coveredShare).toFixed(0)}% of the wall, under ${100 * UNSEEN_MIN_ALIGN_SHARE}%: too little to align on`;
-    let counts: { tile?: FacadeCounts; plate?: FacadeCounts; unread?: string } | undefined;
-    if (unseen && coveredShare < UNSEEN_MIN_COUNT_SHARE) counts = { unread: `the tile covers ${(100 * coveredShare).toFixed(0)}% of the wall: its storeys and bays cannot be counted on it` };
-    else if (opts.counter) {
-        // the tile as sent and the aligned plate at the same size, counted together
-        const plateSmall = resizeRgba({ width: t.width, height: t.height, rgba: g.aligned }, sw, sh);
-        try {
-            counts = await opts.counter(new Uint8Array(encodePng(sw, sh, Buffer.from(small.rgba), 4)), new Uint8Array(encodePng(sw, sh, Buffer.from(plateSmall.rgba), 4)), widthM, heightM);
-        } catch (err) {
-            if (opts.signal?.aborted) throw err;
-            counts = { unread: `the count could not be read: ${(err as Error).message.slice(0, 120)}` };
-        }
-    } else counts = { unread: 'no vision model to count with' };
-    const colourAgainst = unseen?.familyLab && coveredShare < UNSEEN_MIN_COLOUR_SHARE ? unseen.familyLab : undefined;
-    const idg = identityGate(t.rgba, g.aligned, t.width, t.height, use, { askedAspect: padded.width / padded.height, answeredAspect: dec.width / dec.height, chamferPx: g.chamferPx, lostShare: g.lostShare, counts, ...(grossNotMeasured ? { grossNotMeasured } : {}), ...(colourAgainst ? { colourAgainst } : {}) });
-    // an unseen wall's plate must draw the unseen part, not leave it grey
-    if (unseen) {
-        const grey = unseenGreyShare(g.aligned, use, N, unseen.inside);
-        if (grey > UNSEEN_MAX_GREY_SHARE) { idg.passed = false; idg.why = `${idg.why}; ${(100 * grey).toFixed(0)}% of the unseen part left flat mid-grey (more than ${100 * UNSEEN_MAX_GREY_SHARE}%)`; }
-    }
-    const why0 = `${unseen ? `a wall the tile hardly sees (${(100 * coveredShare).toFixed(0)}% covered), drawn as it continues (${TEXTURE_PLATE_UNSEEN_PROMPT_ID}); ` : ''}corrective warp ${g.dx}, ${g.dy} px, scale ${g.scale.toFixed(3)}; ${idg.why}`;
-    const rec = { ...base, accepted: idg.passed, why: idg.passed ? why0 : `not the same wall: ${why0}`, model: answer.modelUsed, chamferPx: g.chamferPx, lostShare: g.lostShare, identity: identityRecord(idg), ms: Date.now() - t0, plate: g.aligned };
-    if (!idg.passed && guide && opts.retryWithoutPhoto !== false) {
-        // the photo pulled the redraw away from the wall: one more redraw without it; the tile check and the check against the
-        // photo still apply
-        const again = await enhanceWall(f, t, use, { ...opts, photoCheckOnly: true });
-        return { ...again, ms: Date.now() - t0, streetView: { ...(again.streetView ?? svRec!), guidedRejected: rec.why } };
-    }
-    if (!idg.passed) return rec;
-    let out = g.aligned, weight: Float32Array | undefined;
-    let extra: { audit?: EnhanceAuditRecord; guarded?: Uint8Array; labels?: string[]; grid?: CellGrid } = {};
-    if (guards) {
-        const gp = guardPlate(t.rgba, g.aligned, t.width, t.height, use, f.pixel, sv ? { rect: sv.rect, bandTop: streetBandTop(f) } : undefined);
-        if (svRec && gp.photo) Object.assign(svRec, { shiftPx: gp.photo.shiftPx, nccPlate: gp.photo.nccPlate, nccInput: gp.photo.nccInput, comparedCells: gp.photo.comparedCells, supportedCells: gp.photo.supportedCells, contradictedCells: gp.photo.contradictedCells });
-        extra = { audit: gp.audit, guarded: gp.rgba, labels: gp.labels, grid: gp.grid };
-        if (gp.reject) return { ...rec, ...extra, accepted: false, why: `${rec.why}; ${gp.why}`, ms: Date.now() - t0 };
-        out = gp.rgba; weight = gp.weight;
-        rec.why = `${rec.why}; ${gp.why}`;
-    }
-    const src = guide && opts.streetViewSource !== undefined ? opts.streetViewSource : opts.source;
-    for (let i = 0; i < t.width * t.height; i++) {
-        t.rgba[i * 4] = out[i * 4]; t.rgba[i * 4 + 1] = out[i * 4 + 1]; t.rgba[i * 4 + 2] = out[i * 4 + 2]; t.rgba[i * 4 + 3] = 255;
-        if (!weight || weight[i] < 0.5) t.source[i] = unseen && !use[i] ? unseen.source : src;
-    }
-    return { ...rec, ...extra, ms: Date.now() - t0 };
-}
+// redrawing a wall and gating it: facade-texture/facade-texture.ts (buildFacadeTexture), the one facade texture builder
 
 export { TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID, TEXTURE_PLATE_UNSEEN_PROMPT_ID };
