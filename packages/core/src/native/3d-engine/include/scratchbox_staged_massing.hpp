@@ -98,7 +98,13 @@ struct MeshSolid { std::string id, provenance; std::vector<V3> v; std::vector<ui
 /** A profile (outward offset, height: absolute y, or above each wall's own top with relativeToTop) swept along walls (wall keys, any order; split walls resolve to their pieces). */
 struct SweepSpec { std::string id, provenance; double confidence{0}; std::vector<std::pair<double, double>> profile; std::vector<std::string> faces; bool relativeToTop{false}; };
 
-struct OpeningSpec { std::string id, face, provenance; double s0{0}, s1{0}, t0{0}, t1{0}, depth{0}, confidence{0}; bool scanned{false}; };
+/**
+ * An opening in a wall's (s, t): a rectangle [s0, s1] x [t0, t1], or, with `archRise` > 0, a rectangle up to t1 - archRise
+ * crowned by a circular arc from (s0, t1 - archRise) through (mid, t1) to (s1, t1 - archRise) (a semicircle at half the width,
+ * a segmental arch below that; clamped to half the width). Arches are cut on extruded walls; a modelled volume's facet keeps
+ * the rectangle.
+ */
+struct OpeningSpec { std::string id, face, provenance; double s0{0}, s1{0}, t0{0}, t1{0}, depth{0}, confidence{0}, archRise{0}; bool scanned{false}; };
 
 /**
  * A profile swept along one axis of a face's own frame (a curve sweep on the face plane): `axis` 0 sweeps along s with the
@@ -1104,7 +1110,9 @@ private:
             ok = o.s1 > o.s0 + 0.15 && o.t1 > o.t0 + 0.15;
             for (double s : {a0, 0.5 * (a0 + a1), a1}) for (double t : {b0, 0.5 * (b0 + b1), b1}) if (ok && !inFacet(s, t)) ok = false;
         } else {
-            ok = o.s1 > o.s0 + 0.05 && o.t1 > o.t0 + 0.05 && o.s0 > f.sMin + 0.02 && o.s1 < f.sMax - 0.02 && o.t0 > f.tBottom + (o.scanned ? -1e9 : 0.02) &&
+            // a street-level opening (a door, a shop front) may reach the wall's bottom: within 5 cm of it, it starts there
+            if (!o.scanned && o.t0 < f.tBottom + 0.05 && o.t0 > f.tBottom - 0.05) spec_.openings[static_cast<size_t>(oi)].t0 = f.tBottom;
+            ok = o.s1 > o.s0 + 0.05 && o.t1 > o.t0 + 0.05 && o.s0 > f.sMin + 0.02 && o.s1 < f.sMax - 0.02 && o.t0 >= f.tBottom - (o.scanned ? 1e9 : 1e-9) &&
                  o.t1 < std::min(topAt(o.s0), topAt(o.s1)) - 0.05;
         }
         for (int other : f.openings) {
@@ -1115,6 +1123,34 @@ private:
         f.openings.push_back(oi);
     }
     std::vector<std::string> rejectedOpenings_;
+
+    /**
+     * An opening's outline in its face's (s, t), counter-clockwise seen from outside: (s0, t0), (s1, t0), up the right jamb,
+     * the head from right to left (the line t1, or the arch sampled about every 11 degrees), down the left jamb. Convex.
+     */
+    static std::vector<std::pair<double, double>> openingOutline(const Face& f, const OpeningSpec& o) {
+        const double half = 0.5 * (o.s1 - o.s0), mid = 0.5 * (o.s0 + o.s1);
+        const double rise = (f.wall && f.meshTris.empty()) ? std::min({o.archRise, half, 0.95 * (o.t1 - o.t0)}) : 0.0;
+        if (rise < 0.01) return {{o.s0, o.t0}, {o.s1, o.t0}, {o.s1, o.t1}, {o.s0, o.t1}};
+        constexpr double kPi = 3.14159265358979323846;
+        const double spring = o.t1 - rise;
+        const double r = (half * half + rise * rise) / (2 * rise), cy = o.t1 - r;
+        const double a0 = std::atan2(spring - cy, half), a1 = kPi - a0;
+        const int n = std::max(4, static_cast<int>(std::ceil((a1 - a0) / (kPi / 16))));
+        std::vector<std::pair<double, double>> out{{o.s0, o.t0}, {o.s1, o.t0}, {o.s1, spring}};
+        for (int k = 1; k < n; ++k) { double a = a0 + (a1 - a0) * k / n; out.push_back({mid + r * std::cos(a), cy + r * std::sin(a)}); }
+        out.push_back({o.s0, spring});
+        return out;
+    }
+    /** The top of an opening's outline at s (the head polyline: from index 2 on, s descending). */
+    static double outlineTopAt(const std::vector<std::pair<double, double>>& ol, double s) {
+        for (size_t i = 2; i + 1 < ol.size(); ++i) {
+            const auto& a = ol[i];
+            const auto& b = ol[i + 1];
+            if (s <= a.first + 1e-9 && s >= b.first - 1e-9) return a.first - b.first > 1e-12 ? b.second + (a.second - b.second) * (s - b.first) / (a.first - b.first) : std::max(a.second, b.second);
+        }
+        return ol[2].second;
+    }
 
     // ------------------------------------------------------------------------------------------------
     // geometry
@@ -1169,11 +1205,16 @@ private:
             return;
         }
         if (f.wall) {
-            // vertical slabs between every top-polyline vertex and opening edge; each slab is the bottom-to-top column minus the
-            // openings spanning it (rectangles), the last piece a trapezoid under the top line
+            // vertical slabs between every top-polyline vertex and opening outline vertex; each slab is the bottom-to-top column
+            // minus the openings spanning it (their heads straight across the slab: an arch's samples are slab edges), the
+            // last piece a trapezoid under the top line
             std::vector<double> xs;
+            std::vector<std::vector<std::pair<double, double>>> outlines;
             for (const auto& q : f.top) xs.push_back(q.first);
-            for (int oi : f.openings) { xs.push_back(spec_.openings[static_cast<size_t>(oi)].s0); xs.push_back(spec_.openings[static_cast<size_t>(oi)].s1); }
+            for (int oi : f.openings) {
+                outlines.push_back(openingOutline(f, spec_.openings[static_cast<size_t>(oi)]));
+                for (const auto& p : outlines.back()) xs.push_back(p.first);
+            }
             std::sort(xs.begin(), xs.end());
             xs.erase(std::unique(xs.begin(), xs.end(), [](double a, double b) { return std::abs(a - b) < 1e-6; }), xs.end());
             auto topAt = [&](double s) {
@@ -1188,19 +1229,20 @@ private:
                 double sa = xs[i], sb = xs[i + 1];
                 if (sb - sa < 1e-6) continue;
                 double sm = 0.5 * (sa + sb);
-                std::vector<std::pair<double, double>> cut;
-                for (int oi : f.openings) {
-                    const auto& o = spec_.openings[static_cast<size_t>(oi)];
-                    if (o.s0 <= sm && sm <= o.s1) cut.push_back({o.t0, o.t1});
+                std::vector<std::array<double, 3>> cut;  // bottom, head at sa, head at sb
+                for (size_t k = 0; k < f.openings.size(); ++k) {
+                    const auto& o = spec_.openings[static_cast<size_t>(f.openings[k])];
+                    if (o.s0 <= sm && sm <= o.s1) cut.push_back({o.t0, outlineTopAt(outlines[k], sa), outlineTopAt(outlines[k], sb)});
                 }
                 std::sort(cut.begin(), cut.end());
-                double cur = f.tBottom;
+                double curA = f.tBottom, curB = f.tBottom;
                 for (const auto& c : cut) {
-                    if (c.first > cur + 1e-6) { put(sa, cur); put(sb, cur); put(sb, c.first); put(sa, cur); put(sb, c.first); put(sa, c.first); }
-                    cur = std::max(cur, c.second);
+                    if (c[0] > curA + 1e-6 || c[0] > curB + 1e-6) { put(sa, curA); put(sb, curB); put(sb, c[0]); put(sa, curA); put(sb, c[0]); put(sa, c[0]); }
+                    curA = std::max(curA, c[1]);
+                    curB = std::max(curB, c[2]);
                 }
                 double ta = topAt(sa), tb = topAt(sb);
-                if (ta > cur + 1e-6 || tb > cur + 1e-6) { put(sa, cur); put(sb, cur); put(sb, tb); put(sa, cur); put(sb, tb); put(sa, ta); }
+                if (ta > curA + 1e-6 || tb > curB + 1e-6) { put(sa, curA); put(sb, curB); put(sb, tb); put(sa, curA); put(sb, tb); put(sa, ta); }
             }
             return;
         }
@@ -1253,13 +1295,30 @@ private:
                 }
             };
             V3 back = f.n * (-o.depth);
-            V3 a = f.at(o.s0, o.t0), b = f.at(o.s1, o.t0), c = f.at(o.s1, o.t1), d = f.at(o.s0, o.t1);
-            std::array<std::pair<double, double>, 4> st{{{o.s0, o.t0}, {o.s1, o.t0}, {o.s1, o.t1}, {o.s0, o.t1}}};
-            quad(a + back, b + back, c + back, d + back, f.n, st);
-            quad(a, b, b + back, a + back, f.axisT, {{{o.s0, o.t0}, {o.s1, o.t0}, {o.s1, o.t0}, {o.s0, o.t0}}});       // sill (faces up)
-            quad(d, c, c + back, d + back, f.axisT * -1, {{{o.s0, o.t1}, {o.s1, o.t1}, {o.s1, o.t1}, {o.s0, o.t1}}});  // head (faces down)
-            quad(a, d, d + back, a + back, f.axisS, {{{o.s0, o.t0}, {o.s0, o.t1}, {o.s0, o.t1}, {o.s0, o.t0}}});       // jamb (faces +s)
-            quad(b, c, c + back, b + back, f.axisS * -1, {{{o.s1, o.t0}, {o.s1, o.t1}, {o.s1, o.t1}, {o.s1, o.t0}}});
+            const auto ol = openingOutline(f, o);
+            // the back panel (the outline is convex: a fan), facing out
+            for (size_t k = 1; k + 1 < ol.size(); ++k) {
+                V3 ps[3] = {f.at(ol[0].first, ol[0].second) + back, f.at(ol[k].first, ol[k].second) + back, f.at(ol[k + 1].first, ol[k + 1].second) + back};
+                const std::pair<double, double> st[3] = {ol[0], ol[k], ol[k + 1]};
+                bool flip = (ps[1] - ps[0]).cross(ps[2] - ps[0]).dot(f.n) < 0;
+                for (int j = 0; j < 3; ++j) {
+                    int q = flip ? (j == 0 ? 0 : 3 - j) : j;
+                    OutVertex v;
+                    v.p = ps[q]; v.n = f.n; v.face = static_cast<int>(fi); v.s = st[q].first; v.t = st[q].second;
+                    r.idx.push_back(static_cast<uint32_t>(r.v.size()));
+                    r.v.push_back(v);
+                }
+            }
+            // a reveal along every outline edge, facing into the opening (sill up, jambs across, head or arch soffit down)
+            for (size_t k = 0; k < ol.size(); ++k) {
+                const auto& p = ol[k];
+                const auto& q = ol[(k + 1) % ol.size()];
+                double ds = q.first - p.first, dt = q.second - p.second, len = std::hypot(ds, dt);
+                if (len < 1e-9) continue;
+                V3 n = f.axisS * (-dt / len) + f.axisT * (ds / len);
+                V3 a = f.at(p.first, p.second), b = f.at(q.first, q.second);
+                quad(a, b, b + back, a + back, n, {{p, q, q, p}});
+            }
             nodes_.push_back(std::move(r));
         }
     }
@@ -2142,7 +2201,7 @@ private:
  *   part <id> <baseY> <topY> <provenance>          then: loop <n> x z ... (first outer), plane <a> <b> <c> <tag>
  *   mesh <id> <nv> <nt> <provenance>               then: v x y z (nv lines), t i j k (nt lines)
  *   sweep <id> <confidence> <provenance> <np> o y ... <nf> <face> ... [top]   (top: y is above each wall's own top)
- *   opening <id> <face> <s0> <s1> <t0> <t1> <depth> <scanned 0|1> <confidence> <provenance>
+ *   opening <id> <face> <s0> <s1> <t0> <t1> <depth> <scanned 0|1> <confidence> <provenance> [arch <rise>]
  *   facesweep <id> <confidence> <provenance> <face> <axis 0|1> <np> o c ... <nplace> a0 a1 dc ...
  */
 inline Spec readSpec(std::istream& in) {
@@ -2250,8 +2309,12 @@ inline Spec readSpec(std::istream& in) {
             OpeningSpec o;
             int sc;
             ls >> o.id >> o.face >> o.s0 >> o.s1 >> o.t0 >> o.t1 >> o.depth >> sc >> o.confidence >> o.provenance;
-            if (!ls) fail("opening needs id face s0 s1 t0 t1 depth scanned confidence provenance");
+            if (!ls) fail("opening needs id face s0 s1 t0 t1 depth scanned confidence provenance [arch rise]");
             o.scanned = sc != 0;
+            std::string flag;
+            if (ls >> flag) {
+                if (flag != "arch" || !(ls >> o.archRise) || o.archRise < 0) fail("opening: unknown trailing token " + flag + " (only \"arch <rise>\")");
+            }
             s.openings.push_back(o);
         } else if (k == "facesweep") {
             FaceSweepSpec w;

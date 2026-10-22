@@ -91,6 +91,64 @@ describe('footprint extrusion (native)', () => {
         expect(r.report.faces.filter(f => f.kind === 'roof').length).toBe(2);
     });
 
+    it('cuts an arched opening (the wall loses the rectangle and the arch, the recess closes it), a plain rectangle unchanged, and a door from the ground', async () => {
+        const dir = tmp();
+        const m: Pick<Massing, 'parts' | 'meshes'> = { parts: [{ id: 'g', baseY: 0, topY: 10, loops: [[[0, 0], [10, 0], [10, -6], [0, -6]]], planes: [], heightSource: 'vector', heights: {} }], meshes: [] };
+        const probe = await runMassing(massingSpecText(m, { outDir: dir, params: { bake: 0, sections: 0, topdown: 0, residual: 0 } }), dir);
+        const wall = probe.report.faces.find(f => f.kind === 'wall' && Math.abs(f.sMax - f.sMin - 10) < 1e-6)!;
+        const mid = 0.5 * (wall.sMin + wall.sMax);
+        const openings = [
+            { id: 'arch', face: wall.key, s0: mid - 1, s1: mid + 1, t0: 2, t1: 6, depth: 0.3, scanned: false, confidence: 0.5, provenance: 'photo-inferred', archRiseM: 1 },
+            { id: 'rect', face: wall.key, s0: wall.sMin + 1, s1: wall.sMin + 2.5, t0: 2, t1: 5, depth: 0.3, scanned: false, confidence: 0.5, provenance: 'photo-inferred' },
+            // a shop front read 2 cm above the street: it starts at the wall's bottom
+            { id: 'door', face: wall.key, s0: wall.sMax - 3, s1: wall.sMax - 1.5, t0: 0.02, t1: 2.5, depth: 0.3, scanned: false, confidence: 0.5, provenance: 'photo-inferred' }
+        ];
+        const spec = massingSpecText(m, { outDir: dir, params: { bake: 0, sections: 0, topdown: 0, residual: 0 }, openings });
+        expect(spec).toContain(' arch 1');
+        const r = await runMassing(spec, dir);
+        expect(r.report.rejectedOpenings).toEqual([]);
+        const st = (n: MassingNode) => {
+            const out: Array<[number, number]> = [];
+            for (let i = 0; i < n.positions.length; i += 3) {
+                const d = [n.positions[i] - wall.origin[0], n.positions[i + 1] - wall.origin[1], n.positions[i + 2] - wall.origin[2]];
+                out.push([d[0] * wall.axisS[0] + d[1] * wall.axisS[1] + d[2] * wall.axisS[2], d[0] * wall.axisT[0] + d[1] * wall.axisT[1] + d[2] * wall.axisT[2]]);
+            }
+            return out;
+        };
+        const tris = (n: MassingNode, keep: (i: number) => boolean = () => true) => {
+            const p = st(n), out: Array<[[number, number], [number, number], [number, number]]> = [];
+            for (let i = 0; i < n.indices.length; i += 3) if (keep(i)) out.push([p[n.indices[i]], p[n.indices[i + 1]], p[n.indices[i + 2]]]);
+            return out;
+        };
+        const area = (ts: ReturnType<typeof tris>) => ts.reduce((a, [p, q, s]) => a + Math.abs((q[0] - p[0]) * (s[1] - p[1]) - (s[0] - p[0]) * (q[1] - p[1])) / 2, 0);
+        const covers = (ts: ReturnType<typeof tris>, s: number, t: number) => ts.some(([p, q, u]) => {
+            const d = (q[0] - p[0]) * (u[1] - p[1]) - (u[0] - p[0]) * (q[1] - p[1]);
+            const a = ((s - p[0]) * (u[1] - p[1]) - (u[0] - p[0]) * (t - p[1])) / d, b = ((q[0] - p[0]) * (t - p[1]) - (s - p[0]) * (q[1] - p[1])) / d;
+            return a >= 0 && b >= 0 && a + b <= 1;
+        });
+        // the arch: 2 x 3 m below the springing line plus a semicircle of radius 1 sampled in 16 segments
+        const segment = 0.5 * 16 * Math.sin(Math.PI / 16);
+        const wallNode = r.nodes.find(n => n.name === wall.key)!;
+        const wallTris = tris(wallNode);
+        expect(area(wallTris)).toBeCloseTo(10 * 10 - (6 + segment) - 1.5 * 3 - 1.5 * 2.5, 3);
+        expect(covers(wallTris, wall.sMax - 2.25, 0.01)).toBe(false);  // open down to the street
+        expect(covers(wallTris, mid, 5.9)).toBe(false);           // under the crown: open
+        expect(covers(wallTris, mid - 0.97, 5.9)).toBe(true);     // the spandrel beside the crown: wall
+        expect(covers(wallTris, mid - 0.97, 4.5)).toBe(false);    // the jamb's inside below the springing: open
+        // the recess: its back panel (facing out, 0.3 m behind) has the hole's area; the rectangle keeps 2 back + 8 reveal triangles
+        const arch = r.nodes.find(n => n.name === 'opening:arch')!;
+        const backOnly = (n: MassingNode) => (i: number) => {
+            const v = n.indices[i] * 3;
+            return Math.abs(n.normals[v] - wall.normal[0]) + Math.abs(n.normals[v + 1] - wall.normal[1]) + Math.abs(n.normals[v + 2] - wall.normal[2]) < 1e-6;
+        };
+        expect(area(tris(arch, backOnly(arch)))).toBeCloseTo(6 + segment, 3);
+        const rect = r.nodes.find(n => n.name === 'opening:rect')!;
+        expect(rect.indices.length / 3).toBe(10);
+        expect(area(tris(rect, backOnly(rect)))).toBeCloseTo(4.5, 6);
+        const door = r.nodes.find(n => n.name === 'opening:door')!;
+        expect(Math.min(...st(door).map(p => p[1]))).toBeCloseTo(0, 6);
+    });
+
     it('simplifies a noisy plan ring to its corners', () => {
         const ring: Array<[number, number]> = [];
         for (let i = 0; i <= 20; i++) ring.push([i, 0.03 * Math.sin(i)]);
