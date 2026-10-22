@@ -16,6 +16,7 @@ import { SurveyStationRenderService } from '../src/node/spatial/SurveyStationRen
 import * as BeautifyModule from '../src/node/spatial/BeautifyStationService';
 import { BeautifyStationService, createDefaultStationImageGenerator, createGoogleStationImageGenerator, ensureStationPng, warpStationImage, type StationImageGenerator } from '../src/node/spatial/BeautifyStationService';
 import { encode as encodeJpeg } from 'jpeg-js';
+import { CHAINED_STATION_STYLE_LOCK, STATION_DETAIL_SENTENCE } from '../src/browser/generative-canvas/services/location-beautify-service';
 import { decodePng, encodePng } from '../src/node/texture-processing';
 import type { GeodeticAnchor } from '../src/common/spatial/colmap-vector-reference-types';
 
@@ -147,7 +148,10 @@ describe('BeautifyStationService: render -> prompt -> generate -> QC -> aligned 
         expect(second.accepted).toBe(true);
         expect(calls[1].hasReference).toBe(true);
         expect(calls[1].hasMask).toBe(true);
-        expect(calls[1].prompt).toContain('reference photograph');
+        // a chained station takes its look from the previous photograph, not new detail of its own
+        expect(calls[1].prompt).toContain(CHAINED_STATION_STYLE_LOCK);
+        expect(calls[1].prompt).not.toContain(STATION_DETAIL_SENTENCE);
+        expect(calls[0].prompt).toContain(STATION_DETAIL_SENTENCE);
         expect(second.warp).toBeDefined();
         // The warp must cover a large part of the frame but leave disocclusion holes
         expect(second.warp!.coveredFraction).toBeGreaterThan(0.3);

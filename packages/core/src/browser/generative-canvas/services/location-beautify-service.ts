@@ -586,6 +586,47 @@ export interface StationBeautifyContext {
  * pitch, fov, lens, height, horizon, standoff, sun) is read from the station record so the prompt,
  * the blockout render and the depth-to-splat unprojection share one pose.
  */
+/** The station template's closing detail ask: on a chained station it is replaced by CHAINED_STATION_STYLE_LOCK. */
+export const STATION_DETAIL_SENTENCE = 'Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.';
+
+/**
+ * A chained station's look comes from the previous accepted photograph (the second image, re-projected into this view),
+ * not from new detail of the model's own: said in place of STATION_DETAIL_SENTENCE.
+ */
+export const CHAINED_STATION_STYLE_LOCK = 'Style and subject lock: the second image is the previous photograph of this same place, taken from a neighbouring vantage point and re-projected into this view. Take every texture, material, colour, weathering detail, light and the look of the subject from it, and add no texture or detail of your own: where the second image covers the frame, show exactly what it shows, in the first image\'s geometry; only the regions marked white in the third image (mask) are new, and they continue the second image\'s style, as another frame of the same photograph.';
+
+/**
+ * What a Street View seed prompt clears from the photograph (said right after "with no obstructions"): street furniture
+ * whole, from foot to lamp head, and every other building nearer the camera than the subject, so the one building left in
+ * front of the camera is the subject the chain is about. The subject's own fixtures stay.
+ */
+export function streetViewObstructionsNote(subject: string): string {
+    return `The subject is ${subject}. Obstructions are everything standing between the camera and the subject: street lamps whole (the pole, the arm and the lamp head, wherever the head hangs), traffic lights, signs on posts, wires, trees, vehicles, people, scaffolding and sidewalk sheds, and every other building nearer the camera than the subject, including a building at the edge of the frame. Remove them all: where a nearer building stood, show the open street, sidewalk and sky beyond it and the subject continuing behind it. Keep the subject's own fire escapes, shop fronts, awnings and lettering. Each facade continues as it does where nothing covers it.`;
+}
+
+/**
+ * The AI Beautify prompt for the first image of a chain when that image is a real Street View photograph, not a tile
+ * render: the station prompt (buildStationBeautifyPrompt) with the subject said as what it is, obstructions cleared, and
+ * the reference described as the Street View capture. Every camera fact (coordinates, heading, pitch, field of view, eye
+ * height, aspect) comes from the station the photograph was registered to, so it holds for whatever angle Street View caught.
+ */
+export function buildStreetViewSeedBeautifyPrompt(station: ColmapCameraPose, ctx: StationBeautifyContext): string {
+    const base = buildStationBeautifyPrompt(station, { ...ctx, format: 'prose' });
+    const swaps: Array<[string, string]> = [
+        [`Transform this ${TILES_RENDER_SUBJECT} of`, 'Transform this Street View photograph of'],
+        [`into a photorealistic photograph. ${TILES_RENDER_NOTE}`, `into a photorealistic photograph WITH NO OBSTRUCTIONS. ${streetViewObstructionsNote(ctx.locationName)}`],
+        ['the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates.', 'the reference image shows the actual buildings, streets, and terrain at these exact coordinates as Street View captured them.'],
+        // the template's "every building stays" would forbid clearing a nearer building, so only the kept ones stay put
+        ['(3) Every building, street, and rooftop must stay in the same on-image position', '(3) The subject, the streets and every building you keep must stay in the same on-image position']
+    ];
+    let out = base;
+    for (const [from, to] of swaps) {
+        if (!out.includes(from)) throw new Error(`buildStreetViewSeedBeautifyPrompt: the station template no longer contains "${from.slice(0, 60)}"`);
+        out = out.replace(from, to);
+    }
+    return out;
+}
+
 export function buildStationBeautifyPrompt(station: ColmapCameraPose, ctx: StationBeautifyContext): string {
     const m = station.beautify;
     const aspect = station.aspectRatio ? aspectRatioLabel(station.aspectRatio) : '16:9';

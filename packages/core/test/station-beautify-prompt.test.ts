@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';
-import { buildBeautifyPrompt, buildHybridPromptPayload, buildStationBeautifyPrompt } from '../src/browser/generative-canvas/services/location-beautify-service';
+import { buildBeautifyPrompt, buildHybridPromptPayload, buildStationBeautifyPrompt, buildStreetViewSeedBeautifyPrompt, streetViewObstructionsNote, TILES_RENDER_NOTE } from '../src/browser/generative-canvas/services/location-beautify-service';
 import { buildBlockoutNanoBananaPrompt } from '../src/browser/generative-canvas/services/video/omniVideoPromptService';
 import { stationFromLookAt } from '../src/common/spatial/SurveySynthesisEngine';
 import type { GeodeticAnchor } from '../src/common/spatial/colmap-vector-reference-types';
@@ -36,6 +36,18 @@ describe('Station-grounded AI Beautify prompt', () => {
         expect(i('Subject distance')).toBeLessThan(i('Camera lock'));
         expect(i('Camera lock')).toBeLessThan(i('Sun:'));
         expect(i('Sun:')).toBeLessThan(i('Editorial'));
+    });
+
+    it('a Street View seed says it is a photograph, clears obstructions, and keeps every camera fact of its own station', () => {
+        const sv = stationFromLookAt(9, [-42.6, 2.0, 18.9], [-30, 6, 21], { focalLengthMm: 36 / (2 * Math.tan(25 * Math.PI / 180)), sensorWidthMm: 36, aspectRatio: 4 / 3 }, ANCHOR);
+        const p = buildStreetViewSeedBeautifyPrompt(sv, { locationName: 'E.V. Haughwout Building, 488 Broadway, New York', moodPromptContext: 'Overcast daylight, soft even light, no hard shadows. ' });
+        expect(p.startsWith('Transform this Street View photograph of E.V. Haughwout Building, 488 Broadway, New York (camera at coordinates')).toBe(true);
+        expect(p).toContain(`facing ${Math.round(sv.yawDegrees)}°) into a photorealistic photograph WITH NO OBSTRUCTIONS. ${streetViewObstructionsNote('E.V. Haughwout Building, 488 Broadway, New York')}`);
+        expect(p).toContain('the reference image shows the actual buildings, streets, and terrain at these exact coordinates as Street View captured them.');
+        expect(p).toContain('Output MUST use exactly 4:3 aspect ratio');
+        expect(p).toContain('Camera lock: 38.6mm lens, 50.0° horizontal field of view, pitch 17.4°, 2 m above ground.');
+        expect(p).not.toContain(TILES_RENDER_NOTE);
+        expect(p).not.toContain('3D-rendered');
     });
 
     it('without station facts the prompt is unchanged (no camera lock slot emitted)', () => {

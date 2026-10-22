@@ -10,7 +10,7 @@
 import { SurveyStationRenderService, EMPTY_DEPTH, type StationBlockoutRender } from './SurveyStationRenderService';
 import { HeadlessMeshSilhouetteRenderer } from './HeadlessMeshSilhouetteRenderer';
 import { SubPixelEdgeAlignmentOptimizer, computeSobelField, evaluateEdgeOverlap, type CameraPose6DOF, type SobelEdgeField } from './SubPixelEdgeAlignmentOptimizer';
-import { buildStationBeautifyPrompt, type StationBeautifyContext } from '../../browser/generative-canvas/services/location-beautify-service';
+import { buildStationBeautifyPrompt, CHAINED_STATION_STYLE_LOCK, STATION_DETAIL_SENTENCE, type StationBeautifyContext } from '../../browser/generative-canvas/services/location-beautify-service';
 import { cameraBasis, yawPitchFromForward, type PinholeIntrinsics } from '../../common/spatial/SurveySynthesisEngine';
 import type { ColmapCameraPose } from '../../common/spatial/colmap-vector-reference-types';
 import { decodePng, encodePng, type StoneAlbedoPreset } from '../texture-processing';
@@ -232,7 +232,8 @@ export class BeautifyStationService {
                 { rgba: ref.image.rgba, depth: ref.blockout.depth, width: ref.image.width, height: ref.image.height, intrinsics: ref.blockout.intrinsics, station: ref.alignedStation },
                 { intrinsics: blockout.intrinsics, station, width, height }
             );
-            prompt += ' Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.';
+            if (!prompt.includes(STATION_DETAIL_SENTENCE)) throw new Error('BeautifyStationService: the station prompt no longer ends with the detail sentence the chain lock replaces');
+            prompt = prompt.replace(STATION_DETAIL_SENTENCE, CHAINED_STATION_STYLE_LOCK);
         }
 
         const maxRerolls = options.maxRerolls ?? (isDraft ? 1 : 2);
