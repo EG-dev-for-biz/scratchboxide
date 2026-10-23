@@ -171,6 +171,7 @@ import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { fetchFootprints, type FootprintSource } from './facade-footprints';
 import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
 import { PIPELINE_G_VERSION, runPipelineG, stagedPipelineG } from './pipeline-g/pipeline-g';
+import type { GroundedReferenceClient } from '../../spatial/search-grounded-reference';
 import type { MassingRun } from './pipeline-e/native-massing';
 import { mslToTileY, type SolarRoof } from './pipeline-e/solar-roof';
 import { runInferenceE, type InferenceOutcome, type StepRecord } from './pipeline-e/inference';
@@ -3452,7 +3453,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         anchor: { lat: placeValue!.lat, lng: placeValue!.lng, elevationMeters: 0 }, signal: io.signal, onProgress: m => io.progress(m),
                         // the facade texture builder on every read wall, as pipeline E's enhanced mode (the real-data view turns it off):
                         // Nano Banana Lite redraws, the full model fills (infill, and walls with unseen areas: Lite leaves them grey)
-                        ...((request.enhance ?? stagedEnhance()) ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), cacheDir: path.join(cache.dir, 'enhance_plates'), infill: { client: genAiEnhanceClient(visionAvailable.client), models: [LIGHTING_MODEL_FULL] }, unseenModels: [LIGHTING_MODEL_FULL] } } : {})
+                        ...((request.enhance ?? stagedEnhance()) ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), cacheDir: path.join(cache.dir, 'enhance_plates'), infill: { client: genAiEnhanceClient(visionAvailable.client), models: [LIGHTING_MODEL_FULL] }, unseenModels: [LIGHTING_MODEL_FULL] } } : {}),
+                        // a search-grounded reference of every wall still weak after its re-read (references.ts), for the brief, not the
+                        // build; the same toggle as enhance (generated help, off in the real-data view)
+                        ...((request.enhance ?? stagedEnhance()) ? { references: { client: visionAvailable.client as unknown as GroundedReferenceClient, outputDir: path.join(cache.dir, 'location_reference') } } : {}),
+                        // the brief and its images published under public/, outside the chat tools' IGNORED_DIRS (.scratchbox/cache is
+                        // one of them): workspace_view_file and workspace_view_image can only reach what is published here
+                        publicDir: path.resolve(cache.modelsDir, '..', 'briefs', e.key.slice(0, 8))
                     });
                     cache.writeRunNote(runId, 'pipeline_g', { steps: out.steps, timingsMs: out.timingsMs, plates: out.plates, stations: out.stations, ...(out.brief ? { brief: out.brief } : {}) });
                     if (out.brief && 'path' in out.brief) BUILDING_BRIEFS.set(run, out.brief);

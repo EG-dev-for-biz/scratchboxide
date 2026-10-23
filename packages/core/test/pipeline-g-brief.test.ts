@@ -55,6 +55,52 @@ describe('pipeline G building brief', () => {
         const prop = (STAGED_LOCATION_SCHEMA.definitions.StagedLocationResult as { properties: Record<string, { required?: string[] }> }).properties.buildingBrief;
         expect(prop.required).toEqual(['path', 'images']);
     });
+
+    it('publishes brief.json and its images to publicDir, outside the chat tools\' .scratchbox/cache IGNORED_DIRS block, leaving a missing image\'s path unchanged', () => {
+        // the "cache" source tree (stands for .scratchbox/cache, which workspace_view_file/workspace_view_image refuse):
+        // two plates' colour images happen to share a basename (two different faces' dirs), one render, no roof plate file.
+        const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'g-brief-cache-'));
+        const publicDir = fs.mkdtempSync(path.join(os.tmpdir(), 'g-brief-public-'));
+        const renderSrc = path.join(cacheDir, 'survey', 'station_3.png');
+        fs.mkdirSync(path.dirname(renderSrc), { recursive: true });
+        fs.writeFileSync(renderSrc, 'render-bytes');
+        const colourA = path.join(cacheDir, 'a', 'face_0_colour.png'), colourB = path.join(cacheDir, 'b', 'face_0_colour.png');
+        fs.mkdirSync(path.dirname(colourA), { recursive: true }); fs.writeFileSync(colourA, 'colour-a');
+        fs.mkdirSync(path.dirname(colourB), { recursive: true }); fs.writeFileSync(colourB, 'colour-b');
+        const station = { id: 3, name: 'G_0_street_g1', positionLocalENU: [5, 1.6, 20] as [number, number, number], forwardVector: [0, 0, -1] as [number, number, number] } as never;
+        const walls = [WALL, { ...WALL, index: 2, key: 'w:p:0:1' }];
+        const rec = writeBuildingBrief({
+            dir: cacheDir, publicDir, place: 'Test Building', groundY: 0,
+            massing: { parts: [{ id: 'p', baseY: 0, topY: 8, loops: [[[0, 0], [10, 0], [10, -6], [0, -6]]], planes: [], heightSource: 'vector', heights: {} }] },
+            roofObjects: [], builtFaces: walls, facades: [],
+            stations: [{ station, face: 0, row: 'street', distanceM: 20, onFace: 0.4 }], renders: [{ station: 3, file: renderSrc }],
+            plates: [
+                { key: walls[0].key, face: walls[0], coverage: 0.8, widthM: 10, heightM: 8, colour: colourA, relief: path.join(cacheDir, 'missing_relief.png') },
+                { key: walls[1].key, face: walls[1], coverage: 0.5, widthM: 10, heightM: 8, colour: colourB, relief: path.join(cacheDir, 'also_missing.png') }
+            ],
+            roofPlates: [], files: { clayGlb: '/x/clay.glb', texturedGlb: '/x/tex.glb' },
+            steps: []
+        });
+        // brief.json itself lives under publicDir, not the cache dir
+        expect(path.dirname(rec.path)).toBe(publicDir);
+        expect(fs.existsSync(path.join(cacheDir, 'brief.json'))).toBe(false);
+        const b = JSON.parse(fs.readFileSync(rec.path, 'utf8'));
+        // the render and both colour images were copied into publicDir, their content intact, never left pointing into cacheDir
+        const render = b.stations[0].render as string;
+        expect(path.dirname(render)).toBe(publicDir);
+        expect(fs.readFileSync(render, 'utf8')).toBe('render-bytes');
+        const [c0, c1] = [b.plates[0].colourImage as string, b.plates[1].colourImage as string];
+        expect(path.dirname(c0)).toBe(publicDir); expect(path.dirname(c1)).toBe(publicDir);
+        expect(fs.readFileSync(c0, 'utf8')).toBe('colour-a'); expect(fs.readFileSync(c1, 'utf8')).toBe('colour-b');
+        // same basename from two different source dirs: the second copy is renamed, not overwritten or dropped
+        expect(c0).not.toBe(c1);
+        expect(path.basename(c0)).toBe('face_0_colour.png');
+        expect(path.basename(c1)).toBe('face_0_colour_2.png');
+        // a reliefImage that was never written stays as its original (missing) path rather than breaking the brief
+        expect(b.plates[0].reliefImage).toBe(path.join(cacheDir, 'missing_relief.png'));
+        expect(fs.existsSync(b.plates[0].reliefImage)).toBe(false);
+        expect(rec.images).toBe(5);
+    });
 });
 
 describe('compactJson', () => {

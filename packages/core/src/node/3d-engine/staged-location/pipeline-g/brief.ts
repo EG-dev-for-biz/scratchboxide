@@ -12,9 +12,18 @@
  * whoever works on the building next (the chat model with its tools, a script, a person): the massing parts (footprint
  * loops, heights, roof planes) and the objects on the roof; every wall and roof face with its frame; the facades grouped
  * from a footprint's piers; every survey station's pose and its render; every wall plate (colour and relief images, the
- * reading of it and how well that reading fits it); the roof plate; the build's own GLBs. All coordinates are the tile
- * frame (x east, y up, z south, metres); a face's point is origin + s * axisS + t * axisT. The brief says what each part
- * is (measured, read, generated) and never claims more.
+ * reading of it and how well that reading fits it, and, for a wall still weak after its re-read, a search-grounded
+ * reference of it drawn from what Google Search found, with its two models' accounts and sources: references.ts); the
+ * roof plate; the build's own GLBs. All coordinates are the tile frame (x east, y up, z south, metres); a face's point is
+ * origin + s * axisS + t * axisT. The brief says what each part is (measured, read, generated) and never claims more.
+ *
+ * `.scratchbox/cache`, where the rest of a staged build's working files live, is one of the chat tools' IGNORED_DIRS
+ * (workspace-tools.ts): workspace_view_file and workspace_view_image refuse anything under it. A brief written there is
+ * invisible to the very tools it exists for. When `publicDir` is given, every image the brief would otherwise point into
+ * the cache with (station renders, plate colour and relief images, the roof plate, a search-grounded reference) is copied
+ * there instead, and brief.json itself is written there, not in the cache: public/, like public/models (massing-glb.ts's
+ * published GLBs), is outside IGNORED_DIRS. Without `publicDir` (tests, a caller that reads the brief another way) the
+ * cache-dir behaviour is unchanged.
  */
 
 import * as fs from 'fs';
@@ -31,9 +40,9 @@ import type { GStation } from './stations';
 export const BRIEF_SCHEMA = 'scratchbox.building-brief/1';
 
 export interface BuildingBriefRecord {
-    /** The brief's JSON. */
+    /** The brief's JSON, under `publicDir` when given (so workspace_view_file can open it), else under `dir`. */
     path: string;
-    /** Survey photographs, plates and the roof plate written with it. */
+    /** Survey photographs, plates, the roof plate and any weak-wall references written with it, alongside the JSON. */
     images: number;
 }
 
@@ -59,6 +68,28 @@ export function compactJson(value: unknown, indent = 0): string {
     return `{\n${entries.map(([k, v]) => `${padIn}${JSON.stringify(k)}: ${compactJson(v, indent + 1)}`).join(',\n')}\n${pad}}`;
 }
 
+/**
+ * Copies `src` into `dir` (its own basename; a second file of the same name gets a short suffix so nothing is
+ * overwritten) and returns the copy's path; `src` unchanged if it does not exist or `dir` is not given, so a missing or
+ * not-yet-wired image never breaks the rest of the brief.
+ */
+function publish(src: string, dir: string | undefined, used: Set<string>): string {
+    if (!src || !dir) return src;
+    try {
+        if (!fs.existsSync(src)) return src;
+        fs.mkdirSync(dir, { recursive: true });
+        const ext = path.extname(src), base = path.basename(src, ext);
+        let name = `${base}${ext}`, n = 1;
+        while (used.has(name)) name = `${base}_${++n}${ext}`;
+        used.add(name);
+        const out = path.join(dir, name);
+        fs.copyFileSync(src, out);
+        return out;
+    } catch {
+        return src;
+    }
+}
+
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
 const v3 = (v: readonly number[]) => v.map(r3);
 const faceRecord = (f: MassingFace) => ({
@@ -68,16 +99,24 @@ const faceRecord = (f: MassingFace) => ({
 
 export function writeBuildingBrief(input: {
     dir: string; place: string; groundY: number;
+    /** Where brief.json and its images are published so workspace_view_file / workspace_view_image can reach them (see the module comment); omit to write into `dir` as before. */
+    publicDir?: string;
     massing: Pick<Massing, 'parts'>; roofObjects: RoofObject[];
     builtFaces: MassingFace[]; facades: FacadeGroup[];
     stations: GStation[]; renders: Array<{ station: number; file: string }>;
-    plates: Array<{ key: string; face: MassingFace; coverage: number; widthM: number; heightM: number; colour: string; relief: string; program?: FacadeProgram; check?: ReadingCheck }>;
+    plates: Array<{
+        key: string; face: MassingFace; coverage: number; widthM: number; heightM: number; colour: string; relief: string; program?: FacadeProgram; check?: ReadingCheck;
+        /** A search-grounded reference for a wall still weak after its re-read (references.ts); never a measurement. */
+        references?: Array<{ model: string; image: string; account: string; queries: string[]; sources: Array<{ title?: string; uri?: string }> }>;
+    }>;
     roofPlates: Array<{ key: string; coverage: number; colour: string }>;
     files: { clayGlb: string; texturedGlb: string };
     steps: StepRecord[];
 }): BuildingBriefRecord {
     fs.mkdirSync(input.dir, { recursive: true });
-    const renderOf = new Map(input.renders.map(r => [r.station, r.file]));
+    const used = new Set<string>();
+    const pub = (src: string) => publish(src, input.publicDir, used);
+    const renderOf = new Map(input.renders.map(r => [r.station, pub(r.file)]));
     const brief = {
         schema: BRIEF_SCHEMA,
         place: input.place,
@@ -89,13 +128,19 @@ export function writeBuildingBrief(input: {
         faces: input.builtFaces.filter(f => f.kind === 'wall' || f.kind === 'roof').map(faceRecord),
         facades: input.facades.map(g => ({ key: g.face.key, members: g.members.map(m => m.key), widthM: r3(g.face.sMax - g.face.sMin), heightM: r3(g.face.tMax - g.face.tMin), face: faceRecord(g.face) })),
         stations: input.stations.map(s => ({ name: s.station.name, row: s.row, face: s.face, position: v3(s.station.positionLocalENU), forward: v3(s.station.forwardVector), distanceM: s.distanceM, render: renderOf.get(s.station.id) })),
-        plates: input.plates.map(p => ({ key: p.key, face: faceRecord(p.face), coverage: r3(p.coverage), widthM: r3(p.widthM), heightM: r3(p.heightM), colourImage: p.colour, reliefImage: p.relief, imageFrame: 'u = metres from the left edge, h = metres up from the bottom edge, 0.05 m per pixel; relief: warm stands proud of the face, cool sets back, black unseen', ...(p.program ? { reading: p.program } : {}), ...(p.check ? { readingFit: { explains: p.check.explained, lift: p.check.lift, weak: p.check.weak } } : {}) })),
-        roofPlates: input.roofPlates.map(p => ({ key: p.key, coverage: r3(p.coverage), colourImage: p.colour })),
+        plates: input.plates.map(p => ({
+            key: p.key, face: faceRecord(p.face), coverage: r3(p.coverage), widthM: r3(p.widthM), heightM: r3(p.heightM), colourImage: pub(p.colour), reliefImage: pub(p.relief),
+            imageFrame: 'u = metres from the left edge, h = metres up from the bottom edge, 0.05 m per pixel; relief: warm stands proud of the face, cool sets back, black unseen',
+            ...(p.program ? { reading: p.program } : {}), ...(p.check ? { readingFit: { explains: p.check.explained, lift: p.check.lift, weak: p.check.weak } } : {}),
+            ...(p.references?.length ? { searchGroundedReferences: { note: 'Drawn by an image model from what Google Search found for this wall; a reference for detail the survey could not read, never a measurement. Use what the references agree on and the scan does not contradict.', references: p.references.map(r => ({ ...r, image: pub(r.image) })) } } : {})
+        })),
+        roofPlates: input.roofPlates.map(p => ({ key: p.key, coverage: r3(p.coverage), colourImage: pub(p.colour) })),
         build: { clayGlb: input.files.clayGlb, texturedGlb: input.files.texturedGlb, note: 'pipeline G\'s build: sb.read_glb reads it into meshes a script can add to' },
         steps: input.steps.map(s => ({ step: s.step, accepted: s.accepted, proposed: s.proposed, ...(s.skipped ? { skipped: s.skipped } : {}), notes: s.notes.slice(0, 12) }))
     };
-    const file = path.join(input.dir, 'brief.json');
+    const file = path.join(input.publicDir ?? input.dir, 'brief.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, compactJson(brief));
-    const images = input.renders.length + input.plates.length * 2 + input.roofPlates.length;
+    const images = input.renders.length + input.plates.length * 2 + input.roofPlates.length + input.plates.reduce((a, p) => a + (p.references?.length ?? 0), 0);
     return { path: file, images };
 }

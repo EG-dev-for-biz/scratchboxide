@@ -16,7 +16,8 @@
  *   1. places survey stations by the staged survey's own rules (stations.ts),
  *   2. path-traces them from the tile with metric depth and lays them onto metric wall plates (plates.ts),
  *   3. reads every well-seen plate as a facade program in metres (read.ts), checks each reading against its plate (check.ts)
- *      and reads a wall again when its reading does not fit, keeping the reading that fits better,
+ *      and reads a wall again when its reading does not fit, keeping the reading that fits better (alongside this, asks a
+ *      search-grounded reference of every wall still weak after that, for the brief rather than the build: references.ts),
  *   4. builds it natively on the massing, with what stands on the roof built from the scan's measures (roof-objects.ts:
  *      skylights, bulkheads, penthouses, tanks as parts with their outlines, heights and fitted roof planes), (scratchbox_staged_massing.hpp: arched openings with their frames, mullions and
  *      transoms, sills and surrounds, swept bands, members) with no tile
@@ -25,8 +26,11 @@
  *   6. paints each face from its own reading: wall colour, glazing in its openings, band and member colours on their
  *      footprints; a wall nobody read takes the read walls' median colour.
  * Everything read is photo-inferred, everything continued into unseen parts and every unread wall generated; the measured
- * massing stays vector-modelled. Measured on the Haughwout Building (2026-10-22): arched arcades on both street walls, piers
- * and colonnettes, bands and cornice, shop fronts to the pavement, about 44,000 vertices.
+ * massing stays vector-modelled. A weak wall's search-grounded reference never feeds the build itself (nothing it shows is
+ * built automatically): it is written into the brief for whoever next works from the brief to look at and use only where
+ * its two independent references agree and the scan does not contradict them, labelled generated. Measured on the
+ * Haughwout Building (2026-10-22): arched arcades on both street walls, piers and colonnettes, bands and cornice, shop
+ * fronts to the pavement, about 44,000 vertices.
  */
 
 import * as crypto from 'crypto';
@@ -55,6 +59,8 @@ import { groupFacades, layBack } from './facades';
 import { roofObjects, type RoofObject } from './roof-objects';
 import { writeBuildingBrief, type BuildingBriefRecord } from './brief';
 import { closePlateGaps, redrawRoof, roofStations, ROOF_PLATE_PROMPT_ID, type RoofTextureRecord } from './roof-texture';
+import { weakWallReferences, type WeakWallReference } from './references';
+import type { GroundedReferenceClient } from '../../../spatial/search-grounded-reference';
 
 export const PIPELINE_G_VERSION = `pipeline-g/v3+${PIPELINE_G_READ_VERSION}`;
 /** Native build parameters: the massing only, nothing baked from the tile, no scanned residual. */
@@ -102,6 +108,10 @@ export interface PipelineGInput {
         infill?: { client: EnhanceModelClient; models: string[] };
         /** The models for a wall with unseen areas (the facade texture builder's unseenModels). */
         unseenModels?: string[] };
+    /** A search-grounded reference for every wall the check marks weak, written into the brief (references.ts; absent: none are fetched). */
+    references?: { client: GroundedReferenceClient; models?: string[]; outputDir: string };
+    /** Where the building brief and its images are published, outside the chat tools' IGNORED_DIRS (brief.ts; absent: workspace_view_file cannot reach the brief). */
+    publicDir?: string;
 }
 
 export interface PipelineGOutcome extends InferenceOutcome {
@@ -418,6 +428,16 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     steps.push({ step: 'facade reading', proposed: readable.length, accepted: items.size, rejected: readable.length - items.size, notes: readings.map(r => ('error' in r && r.error) ? `${r.pl.key}: not read (${r.error})` : `${r.pl.key}: ${'model' in r ? r.model : ''}${'cached' in r && r.cached ? ' (cached)' : ''}${'check' in r && r.check ? `; ${checkNote(r.check)}` : ''}${'reread' in r && r.reread ? `; read again (${r.reread.kept} reading kept${'first' in r.reread && r.reread.first ? `, the first ${checkNote(r.reread.first)}` : ''}${'second' in r.reread && r.reread.second ? `, the second ${checkNote(r.reread.second)}` : ''}${'error' in r.reread && r.reread.error ? `, the second failed: ${r.reread.error}` : ''})` : ''}`), ms: timingsMs.read });
     if (!items.size) throw new Error(`no wall could be read (${readings.map(r => ('error' in r && r.error) || '').filter(Boolean).join('; ')})`);
 
+    // a search-grounded reference for every wall the check still marks weak (references.ts): started now, awaited just
+    // before the brief is written, so it runs alongside the build rather than adding its own time to the total
+    const tRef = Date.now();
+    const referencesPromise: Promise<WeakWallReference[]> = input.references
+        ? weakWallReferences({
+            client: input.references.client, place: input.place, models: input.references.models, outputDir: input.references.outputDir,
+            signal: input.signal, plates: readable.map(pl => ({ face: surveyFaces[pl.face], check: (readings.find(r => r.pl.key === pl.key) as { check?: ReadingCheck } | undefined)?.check }))
+        })
+        : Promise.resolve([]);
+
     // what was read on a grouped facade laid back onto its walls (facades.ts); a wall read on its own keeps its reading
     const built = new Map<string, ProgramItems>();
     const dropped: string[] = [];
@@ -537,21 +557,36 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     }
     const files = writeMassingLayer(run, input.massing, textures, legend, input.dir, input.stage, input.stageKey, 'pipeline_g');
 
+    // the weak-wall references (started right after the facade reading step) joined here, alongside everything else
+    const references = await referencesPromise;
+    if (input.references) {
+        const got = references.reduce((a, r) => a + r.references.length, 0);
+        steps.push({
+            step: 'weak-wall references', proposed: references.length, accepted: references.filter(r => r.references.length > 0).length, rejected: references.filter(r => !r.references.length).length,
+            notes: references.length ? references.map(r => r.skipped ? `${r.face}: not fetched (${r.skipped})` : `${r.face}: ${r.references.length} reference${r.references.length === 1 ? '' : 's'} (${r.references.map(x => x.model).join(', ')})`) : ['no wall was still weak after its reading'],
+            ms: Date.now() - tRef
+        });
+        if (got) progress(`pipeline G: ${got} search-grounded reference${got === 1 ? '' : 's'} of ${references.filter(r => r.references.length).length} weak wall${references.filter(r => r.references.length).length === 1 ? '' : 's'}`);
+    }
+    const referencesByFace = new Map(references.map(r => [r.face, r.references]));
+
     // the building brief beside the build (brief.ts): what the next tool, script or person works from
     let brief: BuildingBriefRecord | { error: string };
     try {
         brief = writeBuildingBrief({
-            dir: briefDir, place: input.place, groundY: input.structure.groundY,
+            dir: briefDir, ...(input.publicDir ? { publicDir: input.publicDir } : {}), place: input.place, groundY: input.structure.groundY,
             massing: { parts: [...input.massing.parts, ...roofParts] }, roofObjects: roofObjectRecords,
             builtFaces: run.report.faces, facades: grouping.groups,
             stations: [...plan.stations, ...roofStationList.map(r => ({ station: r.station, face: r.faces[0] ?? -1, row: 'aerial' as const, distanceM: 0, onFace: 0 }))],
             renders: [...wallRenders, ...roofRenders],
             plates: plates.map(pl => {
                 const rd = readings.find(x => x.pl.key === pl.key);
+                const refs = referencesByFace.get(pl.key);
                 return {
                     key: pl.key, face: surveyFaces[pl.face], coverage: pl.coverage, widthM: pl.widthM, heightM: pl.heightM,
                     colour: path.join(input.dir, 'plates', `face_${pl.face}_colour.png`), relief: path.join(input.dir, 'plates', `face_${pl.face}_relief.png`),
-                    ...(rd && 'program' in rd && rd.program ? { program: rd.program } : {}), ...(rd && 'check' in rd && rd.check ? { check: rd.check } : {})
+                    ...(rd && 'program' in rd && rd.program ? { program: rd.program } : {}), ...(rd && 'check' in rd && rd.check ? { check: rd.check } : {}),
+                    ...(refs?.length ? { references: refs.map(r => ({ model: r.model, image: r.path, account: r.account, queries: r.queries, sources: r.sources })) } : {})
                 };
             }),
             roofPlates: roofPlates.map(p => ({ key: p.key, coverage: p.coverage, colour: path.join(input.dir, 'plates', `roof_${p.face}_colour.png`) })),
