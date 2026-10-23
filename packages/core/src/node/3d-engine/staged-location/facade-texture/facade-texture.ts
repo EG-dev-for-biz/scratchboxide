@@ -153,6 +153,8 @@ export function prepareFacadeRequest(f: MassingFace, t: FaceTexture, use: Uint8A
     /** The Street View photo sent to the model with the plate (absent: none sent). */
     streetView?: WallStreetView;
     unseen?: UnseenWall;
+    /** The lowest metres of the wall to describe to the model as the street level to draw (TexturePlatePromptOptions.streetBand). */
+    streetBandM?: number;
 }): PreparedFacade {
     const scale = Math.min(1, ENHANCE_MAX_SIDE / Math.max(t.width, t.height));
     const sw = Math.max(16, Math.round(t.width * scale)), sh = Math.max(16, Math.round(t.height * scale));
@@ -169,7 +171,8 @@ export function prepareFacadeRequest(f: MassingFace, t: FaceTexture, use: Uint8A
     const { padded, offset } = padToModelAspect(small);
     const r = opts.reference;
     const ref = r ? (() => { const rs = Math.min(1, 768 / Math.max(r.width, r.height)); const s = resizeRgba({ width: r.width, height: r.height, rgba: r.rgba }, Math.max(8, Math.round(r.width * rs)), Math.max(8, Math.round(r.height * rs))); return new Uint8Array(encodePng(s.width, s.height, Buffer.from(s.rgba), 4)); })() : undefined;
-    const prompt = buildTexturePlatePrompt({ locationName: opts.locationName, widthM: t.width * f.pixel, heightM: t.height * f.pixel, widthPx: padded.width, heightPx: padded.height, preserveClause: preserveClause(padded.width, padded.height), withReference: !!ref, ...(opts.streetView ? { withStreetView: true } : {}), ...(opts.unseen && !opts.unseen.fill ? { unseen: true } : {}) });
+    const prompt = buildTexturePlatePrompt({ locationName: opts.locationName, widthM: t.width * f.pixel, heightM: t.height * f.pixel, widthPx: padded.width, heightPx: padded.height, preserveClause: preserveClause(padded.width, padded.height), withReference: !!ref, ...(opts.streetView ? { withStreetView: true } : {}), ...(opts.unseen && !opts.unseen.fill ? { unseen: true } : {}),
+        ...(opts.streetBandM ? { streetBand: { bandM: opts.streetBandM, bandPx: Math.round((opts.streetBandM / (t.height * f.pixel)) * sh) + (padded.height - sh) - offset[1] } } : {}) });
     const image = new Uint8Array(encodePng(padded.width, padded.height, Buffer.from(padded.rgba), 4));
     const request: PlateRequest = { prompt, image, width: padded.width, height: padded.height, ...(ref ? { reference: ref } : {}), ...(opts.streetView ? { streetView: opts.streetView.crop } : {}), models: opts.models, ...(opts.signal ? { signal: opts.signal } : {}) };
     return { request, small, surveyed, padded, offset: offset as [number, number], sw, sh, N, coveredShare, widthM: t.width * f.pixel, heightM: t.height * f.pixel };
@@ -266,6 +269,8 @@ export interface BuildFacadeTextureOptions {
      * Haughwout, run 653c06f8: 59% of Broadway's unseen part left grey).
      */
     unseenModels?: string[];
+    /** The lowest metres of the wall: described to the model as the street level, drawn as the ground floor (prepareFacadeRequest). */
+    streetBandM?: number;
     /**
      * The quality score (quality.ts) decides too: the texture as it would be written must have no seam, no smeared run and at
      * most MAX_EMPTY_SHARE flat grey or empty inside `inside` (the wall's polygon); with `infill`, what it faults is redrawn by
@@ -295,7 +300,7 @@ export async function buildFacadeTexture(f: MassingFace, t: FaceTexture, use: Ui
     let uncovered = 0;
     for (let i = 0; i < use.length; i++) if (!use[i]) uncovered++;
     const models = unseen && opts.unseenModels?.length && uncovered > UNSEEN_MODEL_SHARE * use.length ? opts.unseenModels : opts.models;
-    const prep = prepareFacadeRequest(f, t, use, { locationName: opts.locationName, models, ...(opts.reference ? { reference: opts.reference } : {}), ...(opts.signal ? { signal: opts.signal } : {}), ...(guide ? { streetView: sv } : {}), ...(unseen ? { unseen } : {}) });
+    const prep = prepareFacadeRequest(f, t, use, { locationName: opts.locationName, models, ...(opts.reference ? { reference: opts.reference } : {}), ...(opts.signal ? { signal: opts.signal } : {}), ...(guide ? { streetView: sv } : {}), ...(unseen ? { unseen } : {}), ...(opts.streetBandM ? { streetBandM: opts.streetBandM } : {}) });
     const svRec: EnhanceStreetViewRecord | undefined = sv ? { ...(guide ? {} : { checkOnly: true }), panoId: sv.view.panoId, method: sv.view.registration?.method ?? 'nominal', bandCover: Math.round(sv.rect.bandCover * 1000) / 1000, pxPerM: Math.round(sv.rect.pxPerM * 10) / 10 } : undefined;
     const base = { face: f.index, key: f.key, ...(svRec ? { streetView: svRec } : {}), ...(guards && !sv && opts.noStreetView ? { noStreetView: opts.noStreetView } : {}) };
     let answer: PlateAnswer;

@@ -198,8 +198,8 @@ export function paintFaces(faces: MassingFace[], items: Map<string, ProgramItems
 /**
  * The band of a wall above the street, metres, where the tile melts what stands at the kerb into the facade (vehicles, vans,
  * people, street furniture): not in front of the wall, so PLATE_PROUD_M does not see it, and pipeline G does not run the
- * vehicle removal. It is never taken as seen: it is filled with the median of the ground floor's bays as the plate shows them
- * (the clutter, different in each bay, outvoted), and from the reading where too few bays vote.
+ * vehicle removal. It is never taken as seen: it is sent as the painted reading (the read shopfront openings), and the model is
+ * told it is the street level to draw as the ground floor.
  */
 export const STREET_CLUTTER_M = 2.5;
 
@@ -245,7 +245,7 @@ export const PLATE_PROUD_M = 0.6;
  */
 export function plateOntoFace(f: MassingFace, painted: FaceTexture, pl: Plate, pf: MassingFace): { tex: FaceTexture; use: Uint8Array; covered: number; openings: Uint8Array; street: Uint8Array } | undefined {
     const rgba = painted.rgba.slice(), use = new Uint8Array(painted.width * painted.height);
-    // the street band texels the plate covers: never seen (see STREET_CLUTTER_M), only voted on across the ground floor's bays
+    // the street band texels the plate covers: never seen (see STREET_CLUTTER_M)
     const street = new Uint8Array(painted.width * painted.height);
     // what the stations saw through (no surface within the plate's slab): the openings, once only enclosed holes are kept
     const through = new Uint8Array(painted.width * painted.height);
@@ -271,7 +271,7 @@ export function plateOntoFace(f: MassingFace, painted: FaceTexture, pl: Plate, p
         if (Math.abs(pl.rgb[j * 3] - 128) <= 4 && Math.abs(pl.rgb[j * 3 + 1] - 128) <= 4 && Math.abs(pl.rgb[j * 3 + 2] - 128) <= 4) continue;
         const i = y * painted.width + x;
         rgba[i * 4] = pl.rgb[j * 3]; rgba[i * 4 + 1] = pl.rgb[j * 3 + 1]; rgba[i * 4 + 2] = pl.rgb[j * 3 + 2]; rgba[i * 4 + 3] = 255;
-        // the street band: laid on (a source the bays of the ground floor outvote the clutter in) but never taken as seen
+        // the street band: laid on (so it is drawn over it) but never taken as seen
         if (inBand) { street[i] = 1; continue; }
         use[i] = 1; covered++;
     }
@@ -428,9 +428,11 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
                 ...(e.infill ? { infill: e.infill } : {}), ...(e.unseenModels ? { unseenModels: e.unseenModels } : {}), quality: true,
                 // what no station saw of the wall itself is drawn as the wall continues (never the melt)
                 // sent as a fill feathered in: never as grey holes, whose outlines the model paints, nor flat paint, which it keeps flat
-                // the median of the storey row's bays at the same place in the bay (the street band's from the ground floor's
-                // bays as the plate shows them, the clutter outvoted), the painted reading where too few bays vote
-                unseen: { source: G_SRC.enhanced, fill: repeatFill(on.tex.rgba, on.use, on.tex.width, on.tex.height, f.pixel, textures.get(f.index)!.rgba, on.use.map((u, k) => u | on.street[k])) }, openings: on.openings
+                // the median of the storey row's bays at the same place in the bay, the painted reading where too few bays vote;
+                // the street band is the painted reading (its read shopfront openings), described to the model as the street
+                // level to draw (the median of its melted clutter came back as rows of odd panels)
+                unseen: { source: G_SRC.enhanced, fill: repeatFill(on.tex.rgba, on.use, on.tex.width, on.tex.height, f.pixel, textures.get(f.index)!.rgba) }, openings: on.openings,
+                streetBandM: STREET_CLUTTER_M
             });
             step.proposed++;
             enhanced.push({ ...r, plate: undefined, guarded: undefined, labels: undefined, grid: undefined } as EnhanceWallRecord);

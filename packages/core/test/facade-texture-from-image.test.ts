@@ -106,4 +106,19 @@ describe('facade texture from a wall picture', () => {
         expect(top(seen, cx, 2)).toEqual([128, 128, 128]);
         expect(sent.rgba.some((v, k) => k % 4 === 0 && v > 180 && sent.rgba[k + 1] < 60)).toBe(true);
     });
+
+    it('tells the model the bottom of the wall is the street level to draw as the ground floor, in its own pixels', async () => {
+        const prompts: string[] = [];
+        const client = async (r: PlateRequest) => { prompts.push(r.prompt); return { bytes: answer(facade(), r), modelUsed: 'fake' }; };
+        const face = { index: 0, key: 'w', kind: 'wall', part: 'p', loop: 0, edge: 0, wall: true, normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0], origin: [0, 0, 0], sMin: 0, sMax: W * PX, tMin: 0, tMax: H * PX, tBottom: 0, area: W * H * PX * PX, pixel: PX, orthoSMin: 0, orthoTMax: H * PX, width: W, height: H, coverage: 1, openings: [], top: [] };
+        const mk = () => ({ width: W, height: H, rgba: facade(), source: new Uint8Array(W * H) });
+        await buildFacadeTexture(face as never, mk(), new Uint8Array(W * H).fill(1), { client, models: ['fake'], locationName: 'X', source: 1, guards: false, streetBandM: 2.5 });
+        await buildFacadeTexture(face as never, mk(), new Uint8Array(W * H).fill(1), { client, models: ['fake'], locationName: 'X', source: 1, guards: false });
+        expect(prompts[0]).toMatch(/lowest 2\.5 m of the wall\) is street level/);
+        expect(prompts[0]).toMatch(/draw no vehicles, people, poles or street furniture/);
+        // 2.5 m of an 8 m wall drawn 160 px tall: 50 px of plate, plus whatever padding lies below it
+        const px = Number(/The bottom (\d+) px of the plate/.exec(prompts[0])![1]);
+        expect(px).toBeGreaterThanOrEqual(50);
+        expect(prompts[1]).not.toMatch(/street level/);
+    });
 });
