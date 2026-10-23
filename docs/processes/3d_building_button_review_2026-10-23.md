@@ -20,7 +20,8 @@
 * **Button → prompt → tool.** New Chat → 3D Building sent the Fallingwater prompt; the model called `google_3d_tiles_get_clay` with `{ isolate, trees, procedural }` within 5 s. Routing is fine.
 * **Fallingwater (run a44d2ee7, 8 min 13 s, degraded).** Screenshot `docs/screenshots/3d_building_button_2026-10-23/01_fallingwater_district_fallback.jpg`: a 300 m textured district of forested hillside, no house. See §3.
 * **Flatiron before the fix (run 7b928a5b, 10 min 23 s, degraded).** The textured remeshed scan of the Flatiron (which reads well on its own: `02_flatiron_scan_fallback.jpg`), but pipeline G never ran. See §3.
-* **Flatiron after the fix (run 92f97642).** Filled in below once the run completes.
+* **Flatiron after the lock fix (run 92f97642, 11 min 43 s).** The massing passed again (IoU 0.93, roof 2.42 m, 4 stepped tiers, 13 of 13 Solar facets rejected) and pipeline G ran to the end: 12 of 64 stations, 4 roof plates, 1 of 6 wall plates read (45 %), 94 of 94 elements built, 56 faces painted, 4 roof textures redrawn, 2 weak-wall references. Then the run was lost to the lock's second bug: `checkFootprintLock` wrote a run note named `footprint_lock_pipeline_G_layer`, the stage cache allows `[a-z_-]` only, and the grammar stage fell back (`03_flatiron_after_lock_fix_g_ran_then_note_name_failed.jpg`). Fixed (`44e02b3a`).
+* **Flatiron, third run (5c3555af, 15 min 50 s).** Stations planned in 7 s, then the plate rendering (`surveyPlates`, on the Node main thread in 2-17 s blocks per `main_thread.json`) ran past the grammar slot's 900 s limit. The machine was the cause: load average 27-31 at the time (three Chrome helpers at ~200 % CPU, the Browser pane's WebKit at 168 %); the same step took 78 s in run 2. Not a code regression, but a limit worth knowing: G's own worst case (plates + a 420 s tall-wall read + a 420 s re-read + roof textures + references) does not fit 900 s even on a quiet machine, and the slot kills a build that is almost done rather than committing what it has.
 
 ---
 
@@ -56,6 +57,7 @@
 * **Native rejection reasons per opening** (outside wall / above top / overlap) in the native tool's JSON, surfaced in the `native build` step, so continuation errors are visible.
 * **Continuation dedupe before the build:** continued openings that overlap a read opening or another continuation on the same face are dropped in TypeScript, not left to the native tool.
 * **Per-wall read gate:** a reading that explains under 5% of its plate after the re-read should fall to the median-colour wall (generated) rather than build a lattice nobody saw.
+* **The grammar slot commits what G has when its budget runs out** (the stations, plates and readings are on disk; a build with the walls read so far is better than the massing alone), and G's budget is sized from its own steps (plates + READ_TIMEOUT_MAX_MS × 2 + textures), not a flat 900 s. The plate renders should also leave the main thread (a worker, as the remesh does), so a loaded machine slows them without stalling the server.
 * **Run summary in chat names the first cause.** The chat's finish summary lists eight degraded stages for the Flatiron; the first one (the massing check) is the only cause. Lead with it.
 
 ---
