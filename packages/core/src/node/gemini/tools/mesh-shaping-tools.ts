@@ -9,6 +9,7 @@
 
 import * as fs from 'fs-extra';
 import { NativeMeshReshaperService, MeshDeformationOp } from '../../3d-engine/native-mesh-reshaper-service';
+import { NativeMeshEditService, type MeshEditOperation } from '../../3d-engine/native-mesh-edit-service';
 import * as path from 'path';
 import { TileRestyleService, type TileRestyleField, type TileRestyleForm, type TileRestyleSurface } from '../../3d-engine/tile-restyle-service';
 import { resolveWithinRoot } from '../../security/path-guard';
@@ -36,6 +37,8 @@ async function requireInputGlb(tool: string, value: unknown): Promise<string> {
     }
     return inputGlbPath;
 }
+
+const XYZ: ToolParameterSchema = { type: 'ARRAY', items: { type: 'NUMBER' }, description: '[x, y, z]' };
 
 const fmt = (v: [number, number, number]) => `[${v.map(n => Number(n.toFixed(3))).join(', ')}]`;
 
@@ -91,6 +94,62 @@ export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'STRING',
                     description: 'Optional path where the deformed binary glTF 2.0 (.glb) is written.'
                 }
+            },
+            required: ['operations', 'inputGlbPath']
+        }
+    },
+    {
+        name: 'mesh_edit',
+        description: 'Model a given 3D mesh (.glb) with explicit edits in the native C++20 engine, in order: '
+            + 'boolean {op: union | subtract | intersect, operand: one of {glbPath} (another closed mesh), {box: {center, size, rotationDeg?}}, {cylinder: {start, end, radius, segments?}}, {sphere: {center, radius, segments?}}} - cut holes, slots and pockets, merge parts, trim to a shape; the cut faces keep sharp edges and a hole gets walls; '
+            + 'cut {point, normal} - removes everything on the side the normal points to and caps the section; '
+            + 'extrude {select, distance?, inset?} - the selected faces pulled inward by inset (metres, in their own plane, leaving a ring) and then moved by distance along their normals (negative pushes in: a recess), joined by side walls. '
+            + 'select = {direction?, coneDeg? (default 30), regionMin?, regionMax?}: faces whose normal is within coneDeg of direction AND whose centre lies in the box [regionMin, regionMax] given as fractions of the mesh\'s bounds (0 = min, 1 = max per axis); give both when a direction alone would also catch faces elsewhere (a hole\'s far wall faces the same way as the outer face). '
+            + 'All lengths and positions are metres in the mesh\'s own space; read the mesh\'s bounds first if you do not know them. Booleans need closed solids. '
+            + 'The result reports each edit\'s counts and openEdges (0 = still a closed solid). Normals are hard across edges sharper than creaseDeg (default 30). '
+            + 'Works on an untextured mesh with one material and no node transforms; anything else is refused with the reason.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                operations: {
+                    type: 'ARRAY',
+                    description: 'Edits to apply, in order; see the tool description for what each type needs.',
+                    items: {
+                        type: 'OBJECT',
+                        properties: {
+                            type: { type: 'STRING', description: 'boolean, cut or extrude.' },
+                            op: { type: 'STRING', description: 'boolean: union, subtract or intersect.' },
+                            operand: {
+                                type: 'OBJECT',
+                                description: 'boolean: the other solid, exactly one of glbPath, box, cylinder, sphere.',
+                                properties: {
+                                    glbPath: { type: 'STRING', description: 'Another closed .glb mesh, in the same space.' },
+                                    box: { type: 'OBJECT', properties: { center: XYZ, size: XYZ, rotationDeg: XYZ } },
+                                    cylinder: { type: 'OBJECT', properties: { start: XYZ, end: XYZ, radius: { type: 'NUMBER' }, segments: { type: 'NUMBER' } } },
+                                    sphere: { type: 'OBJECT', properties: { center: XYZ, radius: { type: 'NUMBER' }, segments: { type: 'NUMBER' } } }
+                                }
+                            },
+                            point: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'cut: a point on the plane [x, y, z].' },
+                            normal: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'cut: the side removed [x, y, z].' },
+                            select: {
+                                type: 'OBJECT',
+                                description: 'extrude: which faces.',
+                                properties: {
+                                    direction: XYZ,
+                                    coneDeg: { type: 'NUMBER' },
+                                    regionMin: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Fractions of the bounds [u, v, w].' },
+                                    regionMax: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Fractions of the bounds [u, v, w].' }
+                                }
+                            },
+                            distance: { type: 'NUMBER', description: 'extrude: metres along the normals (negative = into the surface).' },
+                            inset: { type: 'NUMBER', description: 'extrude: metres inward in the faces\' plane (>= 0).' }
+                        },
+                        required: ['type']
+                    }
+                },
+                inputGlbPath: INPUT_GLB_PARAMETER,
+                outputGlbPath: { type: 'STRING', description: 'Optional path where the edited binary glTF 2.0 (.glb) is written.' },
+                creaseDeg: { type: 'NUMBER', description: 'Optional: normals are smooth across edges shallower than this, hard across sharper ones (default 30).' }
             },
             required: ['operations', 'inputGlbPath']
         }
@@ -188,6 +247,7 @@ export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
 ];
 
 const reshaperService = new NativeMeshReshaperService();
+const meshEditService = new NativeMeshEditService();
 const tileRestyleService = new TileRestyleService();
 
 export const meshShapingHandlers: Record<string, ToolHandler> = {
@@ -213,6 +273,27 @@ export const meshShapingHandlers: Record<string, ToolHandler> = {
                 operationsApplied: result.operationsApplied
             },
             summaryResult: `Applied ${t.operationsCount} deformation(s) to ${inputGlbPath} (measured bounds ${fmt(t.inputBoundsMin)} to ${fmt(t.inputBoundsMax)}) in ${t.processingTimeMs.toFixed(1)} ms: ${t.outputVertices} vertices, ${t.outputTriangles} triangles. Output: ${result.outputGlbPath}`
+        };
+    },
+
+    mesh_edit: async (args, _ctx) => {
+        const operations = Array.isArray(args.operations) ? (args.operations as MeshEditOperation[]) : [];
+        if (operations.length === 0) {
+            throw new MissingInputError('mesh_edit', 'operations', 'give at least one edit; none is chosen for you');
+        }
+        const inputGlbPath = await requireInputGlb('mesh_edit', args.inputGlbPath);
+        const r = await meshEditService.edit({
+            inputGlbPath, operations,
+            ...(asString(args.outputGlbPath) ? { outputGlbPath: asString(args.outputGlbPath) } : {}),
+            ...(typeof args.creaseDeg === 'number' ? { creaseDeg: args.creaseDeg } : {})
+        });
+        const each = r.operations.map(o => o.type === 'extrude'
+            ? `extrude: ${o.selectedFaces} faces selected, ${o.boundaryEdges} boundary edges`
+            : `${o.type}: ${o.trianglesBefore} -> ${o.trianglesAfter} triangles`).join('; ');
+        return {
+            status: 'completed',
+            resultPayload: { status: 'success', success: true, ...r },
+            summaryResult: `Edited ${path.basename(inputGlbPath)} (${each}): ${r.outputTriangles} triangles, ${r.openEdges === 0 ? 'a closed solid' : `${r.openEdges} open edges`}, bounds ${fmt(r.boundsMin)} to ${fmt(r.boundsMax)}. Output: ${r.outputGlbPath}`
         };
     },
 
