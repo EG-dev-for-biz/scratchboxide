@@ -164,10 +164,15 @@ export function paintFaces(faces: MassingFace[], items: Map<string, ProgramItems
     return textures;
 }
 
+/** A plate texel standing further than this off the wall plane is something in front of the wall (a car, a person, a pole, melted into the tile). */
+export const PLATE_PROUD_M = 0.6;
+
 /**
  * A built face's texture for the facade texture builder: the survey plate of its wall resampled into the face's raster
  * through world space (the plate is in the surveyed face's frame), over the painted texture where the plate saw nothing.
- * `use` marks the texels a station saw. Undefined when the plate covers none of the face.
+ * `use` marks the texels a station saw of the wall itself: not the plate's unseen mid-grey, and not what stands more than
+ * PLATE_PROUD_M off the plane (the street clutter melted into the tile in front of the ground floor). The builder draws the
+ * rest as the wall continues. Undefined when the plate covers none of the face.
  */
 export function plateOntoFace(f: MassingFace, painted: FaceTexture, pl: Plate, pf: MassingFace): { tex: FaceTexture; use: Uint8Array; covered: number } | undefined {
     const rgba = painted.rgba.slice(), use = new Uint8Array(painted.width * painted.height);
@@ -182,7 +187,8 @@ export function plateOntoFace(f: MassingFace, painted: FaceTexture, pl: Plate, p
         const px = Math.floor((ps - pf.sMin) / plPix), py = Math.floor((pf.tMax - pt) / plPix);
         if (px < 0 || py < 0 || px >= pl.w || py >= pl.h) continue;
         const j = py * pl.w + px;
-        if (Number.isNaN(pl.relief[j])) continue;
+        if (Number.isNaN(pl.relief[j]) || Math.abs(pl.relief[j]) > PLATE_PROUD_M) continue;
+        if (Math.abs(pl.rgb[j * 3] - 128) <= 4 && Math.abs(pl.rgb[j * 3 + 1] - 128) <= 4 && Math.abs(pl.rgb[j * 3 + 2] - 128) <= 4) continue;
         const i = y * painted.width + x;
         rgba[i * 4] = pl.rgb[j * 3]; rgba[i * 4 + 1] = pl.rgb[j * 3 + 1]; rgba[i * 4 + 2] = pl.rgb[j * 3 + 2]; rgba[i * 4 + 3] = 255;
         use[i] = 1; covered++;
@@ -293,7 +299,10 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
                 guards: false,
                 ...(done[0] ? { reference: done[0] } : {}), ...(e.cacheDir ? { cacheDir: e.cacheDir } : {}),
                 counter: visionFacadeCounter(input.chain as VisionModelChain<string>), ...(input.signal ? { signal: input.signal } : {}),
-                ...(e.infill ? { infill: e.infill } : {}), quality: true
+                ...(e.infill ? { infill: e.infill } : {}), quality: true,
+                // what no station saw of the wall itself goes to the model mid-grey, to be drawn as the wall continues (never the
+                // painted colours, never the melt)
+                unseen: { source: G_SRC.enhanced }
             });
             step.proposed++;
             enhanced.push({ ...r, plate: undefined, guarded: undefined, labels: undefined, grid: undefined } as EnhanceWallRecord);
