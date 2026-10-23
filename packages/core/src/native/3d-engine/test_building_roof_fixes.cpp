@@ -100,11 +100,63 @@ void testFlatParapetRoofDeckConnected() {
     std::cout << "  [PASS]\n";
 }
 
+// BarrelVault has no roof geometry of its own yet; it must not silently fall through to the flat-parapet
+// default (a shape unrelated to what was asked for). Routed to the dome branch instead, it should rise a
+// real curved amount above totalH, not sit at the flat parapet's much smaller fixed height.
+void testBarrelVaultRoutesToCurvedRoof() {
+    std::cout << "[Test Building] BarrelVault: routes to a curved roof, not the flat-parapet default...\n";
+
+    BuildingConfig cfg;
+    cfg.width = 10.0f;
+    cfg.depth = 8.0f;
+    cfg.floorCount = 1;
+    cfg.floorHeight = 3.4f;
+    cfg.groundFloorHeight = 4.0f;
+    cfg.plinthHeight = 0.5f;
+    cfg.roofType = RoofType::BarrelVault;
+
+    ScratchboxMesh mesh = ProceduralBuildingGenerator::generateBuilding(cfg, "Vault");
+    float totalH = cfg.plinthHeight + cfg.groundFloorHeight;
+    std::cout << "  bounds.max.y=" << mesh.bounds.max.y << " (totalH=" << totalH << ")\n";
+    // A flat-parapet roof would top out at totalH + parapetHeight (default 1.1f); the dome branch's default
+    // rise is min(halfW, halfD) * 0.65, noticeably more for this config (2.6).
+    assert(mesh.bounds.max.y > totalH + 2.0f && "BarrelVault must route to the dome branch's curved roof height, not the flat-parapet default");
+
+    std::cout << "  [PASS]\n";
+}
+
+// generateRoof's totalH (the rectilinear, non-curved path) must not invert when floorCount==0 — reachable
+// by constructing BuildingConfig directly, bypassing create_building's Python-side clamp.
+void testGenerateRoofZeroFloorsNoInversion() {
+    std::cout << "[Test Building] generateRoof: floorCount=0 does not sink the roof below the plinth...\n";
+
+    BuildingConfig cfg;
+    cfg.width = 10.0f;
+    cfg.depth = 8.0f;
+    cfg.superellipseExponent = 10.0f; // force the rectilinear path (generateRoof), not generateCurvedBuilding
+    cfg.floorCount = 0;
+    cfg.floorHeight = 3.4f;
+    cfg.groundFloorHeight = 4.0f;
+    cfg.plinthHeight = 0.5f;
+    cfg.roofType = RoofType::FlatParapet;
+
+    ScratchboxMesh mesh = ProceduralBuildingGenerator::generateBuilding(cfg, "ZeroFloors");
+    float expected = cfg.plinthHeight + cfg.groundFloorHeight;
+    std::cout << "  bounds.max.y=" << mesh.bounds.max.y << " (expected roof at/above " << expected << ")\n";
+    // Pre-fix, floorCount-1 == -1 subtracted a whole floorHeight instead of adding none, sinking the roof
+    // below plinth + groundFloorHeight.
+    assert(mesh.bounds.max.y >= expected - 0.01f && "the roof must not sink below plinth + groundFloorHeight when floorCount=0");
+
+    std::cout << "  [PASS]\n";
+}
+
 } // namespace
 
 int main() {
     testCurvedBuildingNoFloatingRoof();
     testFlatParapetRoofDeckConnected();
+    testBarrelVaultRoutesToCurvedRoof();
+    testGenerateRoofZeroFloorsNoInversion();
     std::cout << "[Test Building] All curved-building + flat-parapet-roof fix tests passed.\n";
     return 0;
 }

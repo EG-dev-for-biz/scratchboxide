@@ -350,7 +350,11 @@ public:
         }
 
         // 3. Curved Roof System
-        if (cfg.roofType == RoofType::Dome) {
+        // BarrelVault has no roof geometry of its own yet (a true vault is single-axis-curved, swept along one
+        // axis rather than revolved around a point — distinct new geometry, not built here). Routed to the dome
+        // branch explicitly rather than falling through to the `else` flat-parapet default below: an honest,
+        // visible simplification ("not yet a true vault"), not a silent substitution of an unrelated roof shape.
+        if (cfg.roofType == RoofType::Dome || cfg.roofType == RoofType::BarrelVault) {
             int rings = 8;
             float rH = cfg.roofHeight > 0.1f ? cfg.roofHeight : (std::min(halfW, halfD) * 0.65f);
             for (int r = 0; r < rings; ++r) {
@@ -837,7 +841,10 @@ private:
     }
 
     static void generateRoof(const BuildingConfig& cfg, ScratchboxMesh& mesh) {
-        float totalH = cfg.plinthHeight + cfg.groundFloorHeight + cfg.floorHeight * static_cast<float>(cfg.floorCount - 1);
+        // std::max(0, ...): matches the guard in generateCurvedBuilding — without it, floorCount==0 (reachable by
+        // constructing BuildingConfig directly, bypassing create_building's Python-side clamp) makes floorCount-1
+        // negative, subtracting a floorHeight instead of adding one and sinking the roof below the plinth.
+        float totalH = cfg.plinthHeight + cfg.groundFloorHeight + cfg.floorHeight * static_cast<float>(std::max(0, cfg.floorCount - 1));
 
         switch (cfg.roofType) {
             case RoofType::FlatParapet:
