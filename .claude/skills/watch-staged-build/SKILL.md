@@ -19,7 +19,7 @@ update it only when the user sets a new benchmark.
 
 Runs live under `.scratchbox/cache/staged_location/runs/<8-hex-id>/` of the worktree the app instance runs from
 (`stages.json` has the request and resolved place; `timeline.jsonl` grows per stage; `pipeline_e.json` is the massing
-check; `pipeline_g.json` the G steps; `facade_grammar.json`, `texture_fit.json` the old pipeline's). The newest directory
+check; `pipeline_h.json` (or `pipeline_g.json`) the rebuild's steps; `facade_grammar.json`, `texture_fit.json` the old pipeline's). The newest directory
 is the run just started. The massing itself (its `check`, `solar` report and `notes`) is in
 `.scratchbox/cache/staged_location/pipeline_e/<key>/massing.json`, newest by mtime.
 

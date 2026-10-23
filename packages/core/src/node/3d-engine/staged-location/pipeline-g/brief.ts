@@ -36,6 +36,7 @@ import type { FacadeGroup } from './facades';
 import type { FacadeProgram } from './read';
 import type { RoofObject } from './roof-objects';
 import type { GStation } from './stations';
+import { LEDGER_SCHEMA, type LedgerEntry } from '../pipeline-h/ledger';
 
 export const BRIEF_SCHEMA = 'scratchbox.building-brief/1';
 
@@ -112,6 +113,8 @@ export function writeBuildingBrief(input: {
     roofPlates: Array<{ key: string; coverage: number; colour: string }>;
     files: { clayGlb: string; texturedGlb: string };
     steps: StepRecord[];
+    /** The evidence ledger (pipeline-h/ledger.ts): every decision between sources, with the candidates not taken. */
+    ledger?: LedgerEntry[];
 }): BuildingBriefRecord {
     fs.mkdirSync(input.dir, { recursive: true });
     const used = new Set<string>();
@@ -136,7 +139,8 @@ export function writeBuildingBrief(input: {
         })),
         roofPlates: input.roofPlates.map(p => ({ key: p.key, coverage: r3(p.coverage), colourImage: pub(p.colour) })),
         build: { clayGlb: input.files.clayGlb, texturedGlb: input.files.texturedGlb, note: 'pipeline G\'s build: sb.read_glb reads it into meshes a script can add to' },
-        steps: input.steps.map(s => ({ step: s.step, accepted: s.accepted, proposed: s.proposed, ...(s.skipped ? { skipped: s.skipped } : {}), notes: s.notes.slice(0, 12) }))
+        steps: input.steps.map(s => ({ step: s.step, accepted: s.accepted, proposed: s.proposed, ...(s.skipped ? { skipped: s.skipped } : {}), notes: s.notes.slice(0, 12) })),
+        ...(input.ledger ? { ledger: { schema: LEDGER_SCHEMA, entries: input.ledger } } : {})
     };
     const file = path.join(input.publicDir ?? input.dir, 'brief.json');
     fs.mkdirSync(path.dirname(file), { recursive: true });
