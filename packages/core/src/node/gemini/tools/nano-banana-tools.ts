@@ -28,7 +28,7 @@ import { readImageDimensions, sniffImageFormat } from '../../image-codec-ffmpeg'
 import { defaultDurableAssetStore } from '../../asset-store/durable-asset-store';
 import type { ToolDeclaration, ToolHandler } from './types';
 import { infillImageHoles } from '../../image-hole-infill';
-import { bakeDecal, generateDecalImage, DECAL_DEFAULT_STRENGTH } from '../../3d-engine/asset-decal';
+import { bakeDecal, decalAsset, generateDecalImage, DECAL_DEFAULT_STRENGTH } from '../../3d-engine/asset-decal';
 import { genAiEnhanceClient } from '../../3d-engine/staged-location/texture-enhance';
 import { decodeImageInMemory } from '../../3d-engine/staged-location/tile-texture-transfer';
 import { encodePng } from '../../texture-processing';
@@ -368,7 +368,7 @@ export const IMAGE_GENERATION_TOOL_DECLARATIONS: ToolDeclaration[] = [
             type: 'OBJECT',
             properties: {
                 glbPath: { type: 'STRING', description: 'Local path of the asset GLB (relative paths resolve against the workspace).' },
-                imageUrl: { type: 'STRING', description: 'Optional: the decal image itself (URL, data URI or file path), used as given. When absent the image is painted from `description`.' },
+                imageUrl: { type: 'STRING', description: 'Optional: the decal image itself (URL, data URI or file path), used as given; e.g. a decal asset made by decal_generate. When absent the image is painted from `description`.' },
                 description: { type: 'STRING', description: 'Optional: what to paint, in your own words (e.g. "a century of city soot and rain streaks", "faded red graffiti tags along the bottom metre", "a hand-painted Victorian shop sign reading ROOKERY in gold", "ivy climbing from the base"). Default: city weathering.' },
                 referenceImageUrl: { type: 'STRING', description: 'Optional photo the painted decal should be read from or look like (a Street View frame, a survey station, a photo).' },
                 colour: { type: 'STRING', description: 'Optional "#RRGGBB": a one-colour decal (the image gives only its opacity), e.g. black soot, rust orange, moss green.' },
@@ -388,10 +388,67 @@ export const IMAGE_GENERATION_TOOL_DECLARATIONS: ToolDeclaration[] = [
             },
             required: ['glbPath']
         }
+    },
+    {
+        name: 'decal_generate',
+        description: 'Makes decal assets: transparent PNG images of anything you describe (a sign, a logo, graffiti, a mural, a poster, ivy, rust streaks, stains, cracks, soot, road markings, numbers, a texture that tiles...), painted by an image model on white and cut out (the opacity is each pixel\'s distance from the white), optionally modelled on a reference photo. Each comes with a JSON sidecar recording its real-world size, whether it tiles, what it shows and its provenance (generated). They are files you keep and reuse: lay one on a model with asset_decal (its imageUrl), show it, or put it in a document. Each image is a separate billed call: make only the decals asked for.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                description: { type: 'STRING', description: 'What the decal shows, in your own words. Required unless referenceImageUrl alone says it.' },
+                referenceImageUrl: { type: 'STRING', description: 'Optional photo it should be read from or look like (URL, data URI or file path).' },
+                sizeM: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Optional [width, height] in metres the decal spans in the world (default [2, 2]); sets its aspect and is recorded for placing it.' },
+                tiles: { type: 'BOOLEAN', description: 'Optional: paint it to tile seamlessly (default false).' },
+                colour: { type: 'STRING', description: 'Optional "#RRGGBB": a one-colour decal (the painting gives only its shape and opacity).' },
+                count: { type: 'NUMBER', description: 'Optional number of variants (default 1, at most 4).' },
+                name: { type: 'STRING', description: 'Optional short name for the files.' },
+                model: { type: 'STRING', description: 'Optional image model id.' },
+                outputDir: { type: 'STRING', description: 'Optional folder. Default: the app-served build/generated-images/decals.' }
+            }
+        }
     }
 ];
 
 export const imageGenerationHandlers: Record<string, ToolHandler> = {
+    decal_generate: async (args, ctx) => {
+        const TOOL_ID = 'decal_generate';
+        const description = asString(args.description).trim();
+        const refArg = asString(args.referenceImageUrl);
+        if (!description && !refArg) throw new MissingInputError(TOOL_ID, 'description', 'describe the decal, or give a reference photo of it');
+        const sz = Array.isArray(args.sizeM) && args.sizeM.length === 2 && args.sizeM.every((x: unknown) => typeof x === 'number' && x > 0) ? [args.sizeM[0], args.sizeM[1]] as [number, number] : [2, 2] as [number, number];
+        const tiles = asBoolean(args.tiles, false);
+        const count = Math.max(1, Math.min(GENERATE_IMAGE_MAX_COUNT, Math.round(typeof args.count === 'number' ? args.count : 1)));
+        const cv = asString(args.colour), cm = cv ? /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(cv) : null;
+        if (cv && !cm) throw new InvalidInputError(TOOL_ID, 'colour', `"${cv}" is not a #RRGGBB colour`);
+        const colour = cm ? [parseInt(cm[1], 16), parseInt(cm[2], 16), parseInt(cm[3], 16)] as [number, number, number] : undefined;
+        const ref = refArg ? await loadInputImage(refArg, ctx?.workspaceRoot, ctx?.signal, TOOL_ID, 'referenceImageUrl') : undefined;
+        const models = resolveRequestedModels(asString(args.model) || undefined, IMAGE_MODEL_PRIORITY);
+        let genai: unknown;
+        try {
+            genai = await new GoogleMediaCredentialsService().createClient();
+        } catch (err) {
+            throw new MediaModelUnavailableError(models[0], `Google media credentials are not available (${(err as Error)?.message || err})`);
+        }
+        const repoRoot = resolveRepoRoot();
+        const outArg = asString(args.outputDir);
+        const dir = outArg ? (path.isAbsolute(outArg) ? outArg : path.resolve(ctx?.workspaceRoot || process.cwd(), outArg)) : path.join(repoRoot, GENERATED_IMAGES_DIR, 'decals');
+        await fs.ensureDir(dir);
+        const stem = `${imageFileStem(asString(args.name) || undefined, description || 'decal')}_${Date.now().toString(36)}`;
+        const decals = [];
+        for (let k = 0; k < count; k++) {
+            const painted = await generateDecalImage({ client: genai, models, ...(description ? { description } : {}), ...(ref ? { reference: { bytes: new Uint8Array(ref.data), mimeType: ref.mimeType } } : {}), widthM: sz[0], heightM: sz[1], tiles, ...(ctx?.signal ? { signal: ctx.signal } : {}) });
+            const asset = decalAsset(painted.image, { description: description || `read from ${refArg}`, sizeM: sz, tiles, label: 'generated', method: `painted by ${painted.modelUsed} on white and cut out by distance from white`, model: painted.modelUsed, ...(refArg ? { reference: refArg } : {}) }, colour);
+            const file = path.join(dir, `${stem}${count > 1 ? `_${k + 1}` : ''}.png`);
+            await fs.writeFile(file, asset.png);
+            await fs.writeFile(file.replace(/\.png$/, '.json'), JSON.stringify(asset.meta, null, 1));
+            const url = servedGeneratedImageUrl(file, repoRoot);
+            decals.push({ path: file, sidecar: file.replace(/\.png$/, '.json'), ...(url ? { url } : {}), sizeM: sz, pixels: asset.meta.pixels, modelUsed: painted.modelUsed });
+        }
+        return {
+            resultPayload: { success: true, decals, provenance: { label: 'generated' } },
+            summaryResult: `Made ${decals.length} decal${decals.length === 1 ? '' : 's'} (${sz[0]} x ${sz[1]} m${tiles ? ', tiling' : ''}): ${decals.map(d => d.path).join(', ')}. Lay one on a model with asset_decal (imageUrl).`
+        };
+    },
     asset_decal: async (args, ctx) => {
         const TOOL_ID = 'asset_decal';
         const glbArg = asString(args.glbPath);

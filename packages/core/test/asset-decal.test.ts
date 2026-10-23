@@ -10,7 +10,7 @@
 /** asset-decal.ts: the prompt follows what is asked; the decal lands where it is placed, as it is coloured. No model call. */
 
 import { describe, expect, it } from 'vitest';
-import { bakeDecal, decalPrompt, decalTexture, DECAL_DEFAULT_DESCRIPTION } from '../src/node/3d-engine/asset-decal';
+import { bakeDecal, decalAsset, decalPrompt, decalTexture, DECAL_DEFAULT_DESCRIPTION } from '../src/node/3d-engine/asset-decal';
 import { writeStagedGlb } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 import { decodeImageInMemory, readGlbChunks } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 
@@ -107,6 +107,15 @@ describe('asset decal', () => {
         // east face (seen from the east, south = z 8 on the left): z 6; west face: z 2
         expect(centreAt(90, 2)).toBeCloseTo(6, 3);
         expect(centreAt(270, 2)).toBeCloseTo(2, 3);
+    });
+
+    it('makes a decal asset: a transparent PNG cut out of the white it was painted on, with its size and provenance', () => {
+        const a = decalAsset(solid(0, 0, 0), { description: 'a black stencil', sizeM: [3, 1], tiles: false, label: 'generated', method: 'test', model: 'm' });
+        expect(a.meta).toMatchObject({ schema: 'scratchbox.decal/1', description: 'a black stencil', sizeM: [3, 1], tiles: false, label: 'generated', pixels: [8, 8] });
+        const img = decodeImageInMemory(new Uint8Array(a.png));
+        expect(img.rgba[4 * (4 * img.width + 4) + 3]).toBe(255);
+        const clear = decodeImageInMemory(new Uint8Array(decalAsset(solid(255, 255, 255), { description: 'nothing', sizeM: [1, 1], tiles: false, label: 'generated', method: 'test' }).png));
+        expect(clear.rgba[4 * (4 * clear.width + 4) + 3]).toBe(0);
     });
 
     it('repeats every tileM metres when asked', () => {

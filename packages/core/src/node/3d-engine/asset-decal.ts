@@ -111,6 +111,26 @@ export function decalTexture(img: RgbaImage8, strength: number, colour?: [number
     return { png: encodePng(w, h, out), width: w, height: h };
 }
 
+/** What a decal asset's sidecar records: what it is, how big it is in the world, and where it came from. */
+export interface DecalAssetMeta {
+    schema: 'scratchbox.decal/1';
+    description: string;
+    /** Real-world size the image spans (width, height), metres. */
+    sizeM: [number, number];
+    tiles: boolean;
+    pixels: [number, number];
+    label: 'generated' | 'photo-inferred';
+    method: string;
+    model?: string;
+    reference?: string;
+}
+
+/** A decal asset from a painted (or given) image: the transparent PNG (decalTexture at full strength) and its sidecar. */
+export function decalAsset(image: RgbaImage8, meta: Omit<DecalAssetMeta, 'schema' | 'pixels'>, colour?: [number, number, number]): { png: Buffer; meta: DecalAssetMeta } {
+    const tex = decalTexture(image, 1, colour);
+    return { png: tex.png, meta: { schema: 'scratchbox.decal/1', ...meta, pixels: [tex.width, tex.height] } };
+}
+
 /** Bakes `image` into `glb` as a decal node on the faces `opts` selects, mapped as `opts` says. */
 export function bakeDecal(glb: Uint8Array, image: RgbaImage8, opts: DecalBakeOptions = {}): DecalBakeResult {
     const strength = Math.max(0, Math.min(1, opts.strength ?? DECAL_DEFAULT_STRENGTH));
