@@ -61,6 +61,8 @@ describe('PBR library', () => {
     make('slate_roof', 'gray', ['slate_roof_diff_1k.jpg', 'slate_roof_nor_gl_1k.jpg']);
     fs.mkdirSync(path.join(lib, 'no_maps'));
 
+    const { encodeEmbedding, cosineSimilarity } = require('../src/node/spatial/pbr-library-match');
+
     /** An object store in memory, as Cloud Storage would hold the library and its index. */
     const memoryStore = (seed: Record<string, Buffer> = {}) => {
         const objects = new Map(Object.entries(seed));
@@ -119,6 +121,43 @@ describe('PBR library', () => {
         expect(m.maps.normal).toBe('slate_roof_nor_gl_1k.jpg');
         expect(fs.existsSync(m.localMaps!.color!)).toBe(true);
         expect(asked[0]).toContain('Bricks001, slate_roof');
+    });
+
+    it('computes embeddings and uses fast cosine similarity search', async () => {
+        const { fastMatchSwatchToLibrary } = require('../src/node/spatial/pbr-library-match');
+        const l = await openPbrLibrary(lib, { cacheDir: tmp() });
+        const swatch = path.join(tmp(), 'swatch.png');
+        execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=gray:s=32x32', '-frames:v', '1', swatch]);
+
+        // Create a fake index with embeddings
+        const index = {
+            version: 1,
+            library: 'gs://test',
+            embedDim: 1408,
+            materials: [
+                { name: 'Bricks001', maps: l.maps('Bricks001'), embed: encodeEmbedding(Array(1408).fill(0.5)) },
+                { name: 'slate_roof', maps: l.maps('slate_roof'), embed: encodeEmbedding(Array(1408).fill(0.3)) }
+            ]
+        };
+
+        // Mock embedding client that returns consistent embeddings
+        const embedClient = async (images: string[]) =>
+            images.map(() => ({ embedding: Array(1408).fill(0.4) }));
+
+        // Mock vision that only gets called if the top two are close
+        let visionCalls = 0;
+        const vision = async (parts: any[]) => {
+            visionCalls++;
+            return { number: 1, confidence: 0.85, why: 'visual pick' };
+        };
+
+        const m = await fastMatchSwatchToLibrary({ photo: swatch, description: 'grey', sizeMeters: { u: 1, v: 1 } }, l, index, embedClient, vision, tmp(), { fetchMaps: true });
+
+        // Fast matcher should have found and returned a match, possibly with or without visual pick depending on embedding scores
+        expect(m.name).toBeTruthy();
+        expect(m.shortlist.length).toBeGreaterThan(0);
+        expect(m.maps.color || m.maps.preview).toBeTruthy();
+        expect(['embedding', 'visual']).toContain(m.method);
     });
 });
 

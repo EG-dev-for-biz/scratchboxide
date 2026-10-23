@@ -24,7 +24,7 @@ import { VisionModelChain } from '../vision-model-chain';
 import { resolveRepoRoot } from './nano-banana-tools';
 import type { ToolDeclaration, ToolHandler } from './types';
 import { harvestSurveySwatches, type StationBeautifier, type SurveySwatchHarvestResult } from '../../spatial/survey-swatch-harvest';
-import { geminiJsonVision, matchSwatchToLibrary, openPbrLibrary, resolvePbrLibrary, type PbrMatch } from '../../spatial/pbr-library-match';
+import { fastMatchSwatchToLibrary, geminiJsonVision, matchSwatchToLibrary, openPbrLibrary, resolvePbrLibrary, vertexEmbeddingsClient, type PbrLibraryIndexFile, type PbrMatch } from '../../spatial/pbr-library-match';
 import { cachedGeminiSegmenter } from '../../spatial/StreetViewMaterialHarvester';
 import { SurveyStationRenderService } from '../../spatial/SurveyStationRenderService';
 import { BeautifyStationService, createDefaultStationImageGenerator } from '../../spatial/BeautifyStationService';
@@ -161,12 +161,46 @@ export function createSurveySwatchesHandler(deps: {
                     const library = await openPbrLibrary(where);
                     const jv = geminiJsonVision(vision as never);
                     const fetchMaps = args.fetchMaps === true;
-                    match = (s, workDir) => matchSwatchToLibrary({ photo: s.files.photoSwatch, description: s.description, sizeMeters: s.sizeMeters }, library, jv, workDir, { fetchMaps });
-                    libraryNote = `${library.names.length} materials in ${where}`;
+
+                    // Try to load the index to check for embeddings
+                    let index: PbrLibraryIndexFile | undefined;
+                    let fastMatcher: typeof match | undefined;
+                    try {
+                        if (where.startsWith('gs://')) {
+                            const indexStore = await (await import('../../spatial/pbr-library-match')).cloudStore(`${where}_index`);
+                            const indexJson = await indexStore.read('index.json');
+                            index = JSON.parse(indexJson.toString('utf8'));
+                            if (index.embedDim) {
+                                const embedClient = vertexEmbeddingsClient();
+                                ctx?.reportProgress?.(`using fast embedding-based matching (${index.materials.filter(m => m.embed).length} materials have embeddings)`);
+                                fastMatcher = (s, workDir) => fastMatchSwatchToLibrary({ photo: s.files.photoSwatch, description: s.description, sizeMeters: s.sizeMeters }, library, index!, embedClient, jv, workDir, { fetchMaps });
+                            }
+                        }
+                    } catch {
+                        // No embeddings available, use slow matcher
+                    }
+
+                    if (!fastMatcher) match = (s, workDir) => matchSwatchToLibrary({ photo: s.files.photoSwatch, description: s.description, sizeMeters: s.sizeMeters }, library, jv, workDir, { fetchMaps });
+                    else match = fastMatcher;
+
+                    libraryNote = `${library.names.length} materials in ${where}${fastMatcher ? ' (fast embedding search)' : ''}`;
                 } else libraryNote = 'library matching';
-                for (const s of r.swatches) {
-                    try { matches.push(await match(s, path.join(harvestDir, 'library_match'))); } catch (err) { matches.push({ error: (err as Error).message }); }
-                }
+
+                // Match swatches in parallel (4 at a time)
+                const concurrency = 4;
+                let next = 0;
+                await Promise.all(Array.from({ length: Math.min(concurrency, r.swatches.length) }, async () => {
+                    for (let i; (i = next++) < r.swatches.length;) {
+                        const s = r.swatches[i];
+                        try {
+                            const result = await match(s, path.join(harvestDir, 'library_match'));
+                            matches[i] = result;
+                            ctx?.reportProgress?.(`matched swatch ${i + 1} of ${r.swatches.length}`);
+                        } catch (err) {
+                            matches[i] = { error: (err as Error).message };
+                        }
+                    }
+                }));
             } catch (err) { libraryNote = `library matching skipped: ${(err as Error).message}`; }
         }
         const swatches = r.swatches.map((s, i) => ({ ...s, ...(matches[i] ? { libraryMatch: matches[i] } : {}) }));
