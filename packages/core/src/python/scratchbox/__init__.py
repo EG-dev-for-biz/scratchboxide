@@ -1408,6 +1408,13 @@ if _native is not None and hasattr(_native, "io"):
         io.write_glb = write_glb
         io.export_glb = export_glb
 
+# Reading a GLB back into meshes (glb_read.py): a script can start from an existing model and sculpt it.
+from .glb_read import read_glb  # noqa: E402
+if _native is not None and hasattr(_native, "io"):
+    _native.io.read_glb = read_glb
+if io is not None:
+    io.read_glb = read_glb
+
 from .adaptive_object import (
     create_panelized_loft,
     create_hydraulic_actuator,
@@ -1446,6 +1453,7 @@ validation = _ValidationModule()
 from . import object_spec
 
 __all__ = [
+    "read_glb",
     "create_panelized_loft",
     "create_hydraulic_actuator",
     "create_louver_bay",
