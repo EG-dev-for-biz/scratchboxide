@@ -18,7 +18,7 @@
  *    when SCRATCHBOX_HEAP_SNAPSHOT_DIR is set.
  * 2. Run builds headless through the tool entry the server uses (fresh dependencies per build, as in the server):
  *      SCRATCHBOX_REPLAY_DIR=<rec> SCRATCHBOX_ROOT=<worktree> node --expose-gc -r ts-node/register \
- *        scripts/dev/staged-replay.ts --runs 3 --query "Washington Square Arch" [--isolate false]
+ *        scripts/dev/staged-replay.ts --runs 3 --query "Washington Square Arch" [--isolate false] [--procedural true]
  *    The run-variant stage caches (survey .. textures) are cleared before each build after the first; the tiles and
  *    the geocode stay cached. Prints the heap after a forced GC after each build and the peak heap.
  *
@@ -243,7 +243,8 @@ async function runHeadless(argv: string[]): Promise<void> {
     for (let k = 0; k < runs; k++) {
         if (k) for (const d of RUN_VARIANT_STAGES) fs.rmSync(path.join(root, '.scratchbox/cache/staged_location', d), { recursive: true, force: true });
         const t0 = Date.now();
-        const out = await runStagedLocationTool('google_3d_tiles_get_clay', { query, isolate: arg('isolate', 'true') !== 'false', trees: true }, {
+        // --procedural true: the 3D Building button's request (isolate + pipeline G), so a benchmark build runs headless
+        const out = await runStagedLocationTool('google_3d_tiles_get_clay', { query, isolate: arg('isolate', 'true') !== 'false', trees: true, ...(arg('procedural', 'false') === 'true' ? { procedural: true } : {}) }, {
             reportProgress: () => undefined, emitStage: () => undefined
         });
         heaps.push(heapAfterGcMB());
