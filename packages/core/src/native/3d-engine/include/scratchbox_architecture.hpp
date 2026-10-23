@@ -141,7 +141,9 @@ public:
         ScratchboxMesh mesh(name);
         mesh.material = cfg.materials.wall;
 
-        float totalH = cfg.plinthHeight + cfg.groundFloorHeight + cfg.floorHeight * static_cast<float>(std::max(1, cfg.floorCount - 1));
+        // std::max(0, ...): a 1-story building (floorCount==1) builds exactly 1 floor below (the facade loop over
+        // [0, floorCount) agrees), so the roof must sit right on top of it, not one extra floorHeight higher.
+        float totalH = cfg.plinthHeight + cfg.groundFloorHeight + cfg.floorHeight * static_cast<float>(std::max(0, cfg.floorCount - 1));
         float halfW = cfg.width * 0.5f;
         float halfD = cfg.depth * 0.5f;
         float avgR = std::sqrt(0.5f * (halfW * halfW + halfD * halfD));
@@ -222,6 +224,11 @@ public:
             Vec3 wBase0 = getStationPoint(0.0f, th0, cfg.plinthHeight, 1.0f);
             Vec3 wBase1 = getStationPoint(0.0f, th1, cfg.plinthHeight, 1.0f);
             addQuad(mesh, p3, p2, wBase1, wBase0, Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 0.9f);
+
+            // Bottom ground-contact cap (degenerate fan, matching the roof deck's own fan-cap convention below):
+            // closes the plinth ring at y = 0 so the base is a manifold solid, not an open bowl.
+            Vec3 groundCenter(0.0f, 0.0f, 0.0f);
+            addQuad(mesh, p1, p0, groundCenter, groundCenter, Vec3(0, -1, 0), cfg.materials.foundation.baseColorFactor * 0.8f);
         }
 
         // 2. Stories & Facades
@@ -902,10 +909,30 @@ private:
             Vec3(inX, totalH + ph, -inZ), Vec3(inX, totalH + ph, inZ),
             Vec3(0, 1, 0), cfg.materials.roof.baseColorFactor);
 
-        // Flat roof deck surface
+        // Inner parapet walls: close the gap between the coping's inner edge (totalH + ph) and the roof deck
+        // (totalH) — each is the matching outer wall's quad, reversed and inset, so its normal faces inward.
         addQuad(mesh,
-            Vec3(-inX, totalH + 0.1f, inZ), Vec3(inX, totalH + 0.1f, inZ),
-            Vec3(inX, totalH + 0.1f, -inZ), Vec3(-inX, totalH + 0.1f, -inZ),
+            Vec3(-inX, totalH + ph, inZ), Vec3(inX, totalH + ph, inZ),
+            Vec3(inX, totalH, inZ), Vec3(-inX, totalH, inZ),
+            Vec3(0, 0, -1), cfg.materials.wall.baseColorFactor * 0.85f);
+        addQuad(mesh,
+            Vec3(inX, totalH + ph, -inZ), Vec3(-inX, totalH + ph, -inZ),
+            Vec3(-inX, totalH, -inZ), Vec3(inX, totalH, -inZ),
+            Vec3(0, 0, 1), cfg.materials.wall.baseColorFactor * 0.85f);
+        addQuad(mesh,
+            Vec3(-inX, totalH + ph, -inZ), Vec3(-inX, totalH + ph, inZ),
+            Vec3(-inX, totalH, inZ), Vec3(-inX, totalH, -inZ),
+            Vec3(1, 0, 0), cfg.materials.wall.baseColorFactor * 0.85f);
+        addQuad(mesh,
+            Vec3(inX, totalH + ph, inZ), Vec3(inX, totalH + ph, -inZ),
+            Vec3(inX, totalH, -inZ), Vec3(inX, totalH, inZ),
+            Vec3(-1, 0, 0), cfg.materials.wall.baseColorFactor * 0.85f);
+
+        // Flat roof deck surface, flush with the top floor slab (totalH) so its edges exactly match the inner
+        // parapet walls' bottom edges above — manifold-connected, not a disconnected plate floating at +0.1m.
+        addQuad(mesh,
+            Vec3(-inX, totalH, inZ), Vec3(inX, totalH, inZ),
+            Vec3(inX, totalH, -inZ), Vec3(-inX, totalH, -inZ),
             Vec3(0, 1, 0), cfg.materials.roof.baseColorFactor * 0.75f);
     }
 

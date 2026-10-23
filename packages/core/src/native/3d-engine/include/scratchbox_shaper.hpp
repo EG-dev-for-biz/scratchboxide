@@ -885,12 +885,21 @@ public:
      * blend across it instead of leaving a visible shading seam. A partial
      * sweep instead caps both open ends with a fan of the profile polyline, so
      * "watertight" holds for any totalAngleRad, not just the full circle.
+     *
+     * A full sweep is watertight only when the profile's own ends already sit on the axis (radius 0); a profile
+     * that doesn't (a dome/spire/finial's drum, or any tube-like cross-section) leaves the top and/or bottom ring
+     * open. capEnds (default false, so every existing caller's output is unchanged) closes whichever end(s) of a
+     * full sweep have radius > 0 with a flat disk fanned from the axis — distinct from the partial-sweep end caps
+     * above, which close the two flat radial cut faces of a wedge, not a sweep's own axial hole. Left false by
+     * default because an open-ended tube/pipe/duct profile is sometimes deliberately left open, to be closed later
+     * by a boolean union with whatever it connects to.
      */
     static ScratchboxMesh revolve(
         const std::vector<Vec2>& profilePoints,
         int radialSegments = 32,
         float totalAngleRad = TWO_PI,
-        const Vec4& color = {0.8f, 0.85f, 0.9f, 1.0f}
+        const Vec4& color = {0.8f, 0.85f, 0.9f, 1.0f},
+        bool capEnds = false
     ) {
         ScratchboxMesh mesh("lathed_mesh");
         if (profilePoints.size() < 2 || radialSegments < 3) return mesh;
@@ -943,6 +952,29 @@ public:
             };
             capFan(0, true);
             capFan(ringCount - 1, false);
+        } else if (capEnds) {
+            // Close an open axial hole at a profile end whose radius isn't already 0: a flat disk fanned from a
+            // new axis-center vertex across that end's ring (fixed profile index, varying azimuthal ring s) — not
+            // capFan above, which fans across profile points at one fixed azimuthal ring instead.
+            auto capAxisDisk = [&](size_t profileIdx, bool normalDown) {
+                float y = profilePoints[profileIdx].y;
+                uint32_t centerIdx = static_cast<uint32_t>(mesh.vertices.size());
+                mesh.addVertex({Vec3(0.0f, y, 0.0f), Vec3(0, normalDown ? -1.0f : 1.0f, 0), Vec2(0.5f, 0.5f), color});
+                for (int s = 0; s < radialSegments; ++s) {
+                    uint32_t i0 = static_cast<uint32_t>(s * pts + profileIdx);
+                    uint32_t i1 = static_cast<uint32_t>(((s + 1) % radialSegments) * pts + profileIdx);
+                    if (normalDown) mesh.addTriangle(centerIdx, i1, i0);
+                    else mesh.addTriangle(centerIdx, i0, i1);
+                }
+            };
+            // Winding points the cap away from the rest of the profile (outward), whichever end is "up": compare
+            // against the neighbouring profile point's y rather than assuming point 0 is the bottom.
+            if (profilePoints.front().x > 1e-5f) {
+                capAxisDisk(0, pts > 1 ? profilePoints[1].y >= profilePoints[0].y : true);
+            }
+            if (profilePoints.back().x > 1e-5f) {
+                capAxisDisk(pts - 1, pts > 1 ? profilePoints[pts - 2].y >= profilePoints[pts - 1].y : false);
+            }
         }
 
         mesh.recomputeSmoothNormals();
