@@ -5,7 +5,7 @@ import {
     UniversalRoadFeature,
     SpatialVectorDataSet
 } from '../src/node/spatial/SpatialVectorDataService';
-import { GoogleVectorTileService } from '../src/node/spatial/GoogleVectorTileService';
+import { GoogleVectorTileService, type DecodedVectorTileData } from '../src/node/spatial/GoogleVectorTileService';
 import { LocalTangentPlane } from '../src/common/coordinate/LocalTangentPlane';
 
 describe('SpatialVectorDataService & Universal Spatial Intelligence API', () => {
@@ -25,9 +25,8 @@ describe('SpatialVectorDataService & Universal Spatial Intelligence API', () => 
     });
 
     it('queries vector tiles, projects to sub-millimeter ENU, and enforces reality grounding', async () => {
-        // Mock decodeTileBuffer
-        const origDecode = GoogleVectorTileService.decodeTileBuffer;
-        GoogleVectorTileService.decodeTileBuffer = () => ({
+        // The decoded feature tile every fetched tile returns (no network)
+        const tileData = (): DecodedVectorTileData => ({
             buildings: [
                 {
                     id: 'bldg-esb',
@@ -138,9 +137,7 @@ describe('SpatialVectorDataService & Universal Spatial Intelligence API', () => 
 
         // Mock fetchVectorTile so network is bypassed
         const origFetch = GoogleVectorTileService.fetchVectorTile;
-        GoogleVectorTileService.fetchVectorTile = async (x, y, z) => {
-            return GoogleVectorTileService.decodeTileBuffer(new ArrayBuffer(0), x, y, z);
-        };
+        GoogleVectorTileService.fetchVectorTile = async () => tileData();
 
         try {
             const dataset = await SpatialVectorDataService.querySpatialVectorData({
@@ -291,14 +288,12 @@ describe('SpatialVectorDataService & Universal Spatial Intelligence API', () => 
             }
 
         } finally {
-            GoogleVectorTileService.decodeTileBuffer = origDecode;
             GoogleVectorTileService.fetchVectorTile = origFetch;
         }
     });
 
     it('adheres to ADA standards: open literals, continuous parameters, and analytical heading math', async () => {
-        const origDecode = GoogleVectorTileService.decodeTileBuffer;
-        GoogleVectorTileService.decodeTileBuffer = () => ({
+        const tileData = (): DecodedVectorTileData => ({
             buildings: [],
             roads: [
                 {
@@ -338,9 +333,7 @@ describe('SpatialVectorDataService & Universal Spatial Intelligence API', () => 
         });
 
         const origFetch = GoogleVectorTileService.fetchVectorTile;
-        GoogleVectorTileService.fetchVectorTile = async (x, y, z) => {
-            return GoogleVectorTileService.decodeTileBuffer(new ArrayBuffer(0), x, y, z);
-        };
+        GoogleVectorTileService.fetchVectorTile = async () => tileData();
 
         try {
             const dataset = await SpatialVectorDataService.querySpatialVectorData({
@@ -383,7 +376,6 @@ describe('SpatialVectorDataService & Universal Spatial Intelligence API', () => 
             expect(directFallback.zoom).toBe(17);
             expect(directFallback.staticMapUrl).toContain('maptype=hybrid');
         } finally {
-            GoogleVectorTileService.decodeTileBuffer = origDecode;
             GoogleVectorTileService.fetchVectorTile = origFetch;
         }
     });

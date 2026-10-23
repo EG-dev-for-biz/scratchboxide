@@ -3,8 +3,8 @@
  *
  * Spatial Vector Data Service & Semantic Intelligence API
  *
- * Provides unified, queryable, and reality-grounded access to 2D vector roadmap
- * and parcel data for 3D scene construction and semantic inspection:
+ * Provides unified, queryable, and reality-grounded access to Google vector feature tiles
+ * (building footprints and modelled volumes, roads, water, land use, POIs) for 3D scene construction and semantic inspection:
  * 1. Sub-millimeter co-registration with Google Photorealistic 3D Tiles via LocalTangentPlane.
  * 2. Universal Spatial Identifiers (urn:scratchbox:spatial:<layer>:<geohash>:<id>).
  * 3. Kinematic road network graphs with lane centerlines, heading angles, and speed limits.
@@ -19,7 +19,6 @@ import {
     GoogleVectorTileService,
     latLngToTile,
     wgs84ToLocalEnu,
-    mvtPointToLatLng,
     DecodedVectorTileData,
     VectorFeaturePolygon,
     VectorFeatureLine,
@@ -254,7 +253,7 @@ export class SpatialVectorDataService {
     }
 
     /**
-     * Queries Google 2D roadmap vector tiles, extracts the maximal useful data yield,
+     * Queries Google vector feature tiles (footprints, modelled volumes, roads, water, land use, POIs), extracts the maximal useful data yield,
      * and projects all entities into local metric ENU space co-registered with Google 3D Tiles.
      */
     public static async querySpatialVectorData(

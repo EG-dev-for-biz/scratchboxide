@@ -27,6 +27,7 @@ import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { readTileTriangles, decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 import { renderTriangles, PHOTO_MATCH_BACKGROUND, PHOTO_MATCH_CLAY, type JudgeClient } from '../src/node/3d-engine/staged-location/photo-match-eval';
 import { castCamera } from '../src/node/3d-engine/staged-location/survey-casting';
+import { orthoReferenceCamera, orthoReferenceRecord, type OrthoReference } from '../src/node/3d-engine/staged-location/ortho-reference';
 import type { PanoCandidate } from '../src/node/3d-engine/staged-location/streetview-evidence';
 import {
     collectPanoIds, createPhotoMatchEvaluateHandler, visibleStagedLayers, PHOTO_MATCH_EVALUATE_TOOL, type HeldOutRegistration, type PhotoMatchDeps
@@ -193,11 +194,19 @@ const PANOS: PanoCandidate[] = [
     { panoId: 'HIDDEN_EAST', lat: 0, lng: 0, date: '2025-07', copyright: '© Google', x: 52, z: 0 }
 ];
 
-function fakeDeps(root: string, opts: { panos?: PanoCandidate[]; unlocked?: string[]; judgeCalls?: { n: number } } = {}): PhotoMatchDeps {
+function fakeDeps(root: string, opts: { panos?: PanoCandidate[]; unlocked?: string[]; judgeCalls?: { n: number }; satellite?: boolean } = {}): PhotoMatchDeps {
     const street = readTileTriangles(fs.readFileSync(path.join(root, '.scratchbox/cache/staged_location/tiles', TILES_KEY, 'textured.glb')));
     const panos = opts.panos ?? PANOS;
     return {
         stagedRoot: () => root,
+        // the "satellite": the street rendered straight down at the GSD of a zoom-19 Static Maps crop (512 px, scale 1)
+        ...(opts.satellite ? {
+            satelliteOrtho: async (): Promise<OrthoReference> => {
+                const rec = orthoReferenceRecord({ lat: PLACE.lat, lng: PLACE.lng, zoom: 19, scale: 1, widthPx: 512, heightPx: 512 });
+                const r = renderTriangles([street], orthoReferenceCamera(rec), { supersample: 1 });
+                return { ...rec, bytes: encodePng(512, 512, r.rgba, 4), image: { width: 512, height: 512, rgba: r.rgba } };
+            }
+        } : {}),
         discover: async () => panos,
         grounding: () => ({
             // the "photo": the street rendered from the requested view (the pano eye 2.5 m over the ground)
@@ -343,7 +352,52 @@ describe('photo_match_evaluate tool', () => {
             expect(v.clayJudge.stats.build.shape.mean).toBeGreaterThanOrEqual(1);
         }
         expect(r.summary).toMatch(/Clay, untextured, shape only \(3 of 3 views\)/);
+        // the satellite second opinion is opt-in: not fetched, not rendered, said so
+        expect(r.satelliteOrtho).toEqual({ used: false, requested: false, note: expect.stringMatching(/includeSatelliteOrtho/) });
+        expect(r.summary).not.toMatch(/Satellite/);
     }, 120_000);
+
+    it('adds a Static Maps satellite crop as a second opinion on request: top-down renders at its GSD, judged apart from the scores', async () => {
+        const calls = { n: 0 };
+        const handler = createPhotoMatchEvaluateHandler(() => fakeDeps(root, { judgeCalls: calls, satellite: true }));
+        const out = await handler({ views: 2, runs: 1, includeSatelliteOrtho: true }, ctxFor(root, staged.scene));
+        const r = out.resultPayload as any;
+        expect(out.status, JSON.stringify(r).slice(0, 600)).toBe('completed');
+        const sat = r.satelliteOrtho;
+        expect(sat.used).toBe(true);
+        expect(sat.source).toBe('google_static_maps');
+        expect(sat.gsdMetresPerPixel).toBeCloseTo(0.226, 3);
+        expect(sat.widthM).toBeCloseTo(0.22636537381611962 * 512, 1);
+        expect(sat.size).toEqual([512, 512]);
+        expect(sat.capturedAt).toBeNull();
+        expect(sat.captureDateNote).toMatch(/no capture date/);
+        expect(sat.camera).toMatch(/orthographic/);
+        expect(fs.existsSync(sat.image)).toBe(true);
+        expect(fs.readFileSync(sat.grid).subarray(1, 4).toString()).toBe('PNG');
+        for (const f of Object.values(sat.renders)) expect(fs.existsSync(f as string)).toBe(true);
+        // judged like a view, textured and in clay; the raw scan (the street the "satellite" shows) beats the wrongly textured build
+        expect(sat.judge.stats.raw.overall.mean).toBeGreaterThanOrEqual(sat.judge.stats.build.overall.mean);
+        expect(sat.clayJudge.stats.raw.shape.mean).toBeGreaterThanOrEqual(1);
+        expect(sat.pixel.raw.coverage).toBeGreaterThan(0.95);
+        expect(sat.pixel.raw.ssim).toBeGreaterThan(sat.pixel.build.ssim);
+        // kept out of the street-view scores: two views judged (textured + clay each) plus the satellite's two calls
+        expect(r.views).toHaveLength(2);
+        expect(r.views.map((v: any) => v.id)).not.toContain('sat_ortho');
+        expect(r.clayJudged).toBe(2);
+        expect(calls.n).toBe(2 * 1 * 2 + 2);
+        expect(r.summary).toMatch(/Satellite second opinion \(Google Static Maps, top-down at 0\.226 m\/px, capture date unknown; not counted in the scores\)/);
+        fs.copyFileSync(sat.grid, path.join(SHOTS, 'tool_photo_match_satellite.png'));
+        if (sat.clayGrid) fs.copyFileSync(sat.clayGrid, path.join(SHOTS, 'tool_photo_match_satellite_clay.png'));
+
+        // asked for without a satellite source: the street views are still judged and the second opinion says why it is missing
+        const bare = await createPhotoMatchEvaluateHandler(() => fakeDeps(root))({ views: 1, runs: 1, clay: false, includeSatelliteOrtho: true }, ctxFor(root, staged.scene));
+        const b = bare.resultPayload as any;
+        expect(bare.status).toBe('completed');
+        expect(b.satelliteOrtho.used).toBe(false);
+        expect(b.satelliteOrtho.code).toBe('satellite_unavailable');
+        expect(b.summary).toMatch(/Satellite second opinion \(includeSatelliteOrtho\) was requested but not used/);
+        expect(b.views).toHaveLength(1);
+    }, 180_000);
 
     it('scores shape in clay where the texture hides it: a wrong height with the real texture loses, the right shape with a wrong texture wins', async () => {
         // B: the target 6 m too short, with the real facade texture; A: the right shape, wrongly textured

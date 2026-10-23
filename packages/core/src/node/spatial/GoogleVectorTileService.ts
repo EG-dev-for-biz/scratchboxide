@@ -10,8 +10,6 @@
 import { mapLimit } from '../../common/map-limit';
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import Pbf from 'pbf';
-import { VectorTile } from '@mapbox/vector-tile';
 import { decodeFeatureTile, type DecodedModeledVolume } from './google-feature-tile-decoder';
 import { fetchSolarDsm, type DsmRaster } from './solar-dsm';
 import { convexHull, densifyRoads, fuseBuilding, RoadPointIndex, streetLevelNear, type FusedBuilding, type LngLat } from './building-shape-fusion';
@@ -196,7 +194,8 @@ export interface VectorWorldStagingResult {
 }
 
 /**
- * Converts MVT tile coordinates [0..extent] to geodetic [lng, lat].
+ * Converts a position inside a Web Mercator tile ([0..extent] along x and y, extent = the tile's own grid, e.g. 4096) to
+ * geodetic [lng, lat]. Pure tile arithmetic: used for tile bounds and tests, not tied to any tile encoding.
  */
 export function mvtPointToLatLng(
     x: number,
@@ -346,14 +345,14 @@ export class EarClippingTriangulator {
 }
 
 /**
- * Service for ingesting Google 2D roadmap vector tiles and staging 3D world populations.
+ * Google vector feature tiles (vectortiles.featuretiles JSON: building footprints and modelled volumes, roads, rails, water,
+ * land use and POIs, decoded by google-feature-tile-decoder.ts) and the 3D world populations staged from them. The tiles are
+ * fetched with the app's service account (OAuth); the old Map Tiles session / MVT path is gone (that API no longer answers).
  */
 /** Vector tiles fetched at once by the district builders (3x3 to 7x7 grids). */
 export const VECTOR_TILE_FETCH_CONCURRENCY = 6;
 
 export class GoogleVectorTileService {
-    private static sessionToken: string | null = null;
-    private static sessionPromise: Promise<string | null> | null = null;
     private static tileCache = new Map<string, DecodedVectorTileData>();
     /** One credential request shared by the tiles fetched together (see VECTOR_TILE_FETCH_CONCURRENCY). */
     private static pendingAuth?: { provider: () => Promise<{ token: string; project: string }>; promise: Promise<{ token: string; project: string }>; at: number };
@@ -364,52 +363,13 @@ export class GoogleVectorTileService {
     }
 
     /**
-     * Obtains an active Map Tiles API session token for 2D roadmap vector tiles.
-     */
-    public static async getSessionToken(apiKey: string, fetchImpl: typeof fetch = fetch): Promise<string | null> {
-        if (this.sessionToken) return this.sessionToken;
-        if (this.sessionPromise) return this.sessionPromise;
-
-        this.sessionPromise = (async () => {
-            try {
-                if (!apiKey) return null;
-                const url = `https://tile.googleapis.com/v1/createSession?key=${apiKey}`;
-                const res = await fetchImpl(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        mapType: 'roadmap',
-                        language: 'en-US',
-                        region: 'US',
-                        overlay: true
-                    })
-                });
-
-                if (!res.ok) {
-                    console.warn(`[GoogleVectorTileService] createSession returned status ${res.status}`);
-                    return null;
-                }
-
-                const json = (await res.json()) as any;
-                this.sessionToken = json?.session || null;
-                return this.sessionToken;
-            } catch (err: any) {
-                console.warn(`[GoogleVectorTileService] Failed to create vector tile session: ${err?.message}`);
-                return null;
-            }
-        })();
-
-        return this.sessionPromise;
-    }
-
-    /**
      * Fetches and decodes Google Vector Tiles (vectortiles.featuretiles JSON) for tile (x, y, z).
      */
     public static async fetchVectorTile(
         x: number,
         y: number,
         z: number,
-        /** Unused: vector tiles authenticate with the service account (API keys are refused). Kept for callers. */
+        /** Not sent: feature tiles authenticate with the service account (the endpoint refuses API keys). Kept because callers pass it. */
         _apiKey: string,
         fetchImpl: typeof fetch = fetch
     ): Promise<DecodedVectorTileData> {
@@ -481,119 +441,8 @@ export class GoogleVectorTileService {
     };
 
     /**
-     * Decodes Mapbox Vector Tile (.mvt / .pbf) buffer into structured building, road, and water features.
-     */
-    public static decodeTileBuffer(
-        buffer: ArrayBuffer,
-        tileX: number,
-        tileY: number,
-        zoom: number
-    ): DecodedVectorTileData {
-        const result: DecodedVectorTileData = {
-            buildings: [],
-            landuse: [],
-            water: [],
-            roads: [],
-            pois: []
-        };
-
-        if (!buffer || buffer.byteLength === 0) return result;
-
-        try {
-            const PbfConstructor = typeof Pbf === 'function' ? Pbf : (Pbf as any).default || Pbf;
-            const pbf = new PbfConstructor(new Uint8Array(buffer));
-            const tile = new VectorTile(pbf as any);
-
-            for (const layerName of Object.keys(tile.layers)) {
-                const layer = tile.layers[layerName];
-                if (!layer) continue;
-
-                const lowerName = layerName.toLowerCase();
-                const isBuildingLayer = lowerName.includes('building') || lowerName.includes('structure');
-                const isLanduseLayer = lowerName.includes('landuse') || lowerName.includes('park') || lowerName.includes('green');
-                const isWaterLayer = lowerName.includes('water');
-                const isRoadLayer = lowerName.includes('road') || lowerName.includes('transport') || lowerName.includes('street');
-                const isPoiLayer = lowerName.includes('poi') || lowerName.includes('place') || lowerName.includes('label');
-
-                for (let i = 0; i < layer.length; i++) {
-                    const feature = layer.feature(i);
-                    const props = feature.properties || {};
-                    const rawGeom = feature.loadGeometry();
-                    if (!rawGeom || rawGeom.length === 0) continue;
-
-                    // Type 1 = Point, Type 2 = LineString, Type 3 = Polygon
-                    if (feature.type === 1) {
-                        for (const ptList of rawGeom) {
-                            for (const p of ptList) {
-                                const point = mvtPointToLatLng(p.x, p.y, layer.extent, tileX, tileY, zoom);
-                                result.pois!.push({
-                                    id: `${layerName}-${i}`,
-                                    type: 'Point',
-                                    point,
-                                    properties: props
-                                });
-                            }
-                        }
-                    } else if (feature.type === 3) {
-                        for (const ringPts of rawGeom) {
-                            if (ringPts.length < 3) continue;
-                            const ring: Array<[number, number]> = ringPts.map(p =>
-                                mvtPointToLatLng(p.x, p.y, layer.extent, tileX, tileY, zoom)
-                            );
-
-                            const polygonFeature: VectorFeaturePolygon = {
-                                id: `${layerName}-${i}-${ring.length}`,
-                                type: 'Polygon',
-                                ring,
-                                properties: props
-                            };
-
-                            if (isBuildingLayer || props.type === 'building') {
-                                result.buildings.push(polygonFeature);
-                            } else if (isLanduseLayer || props.class === 'park' || props.type === 'park' || props.class === 'grass') {
-                                result.landuse.push(polygonFeature);
-                            } else if (isWaterLayer || props.class === 'water') {
-                                result.water.push(polygonFeature);
-                            }
-                        }
-                    } else if (feature.type === 2) {
-                        for (const linePts of rawGeom) {
-                            if (linePts.length < 2) continue;
-                            const points: Array<[number, number]> = linePts.map(p =>
-                                mvtPointToLatLng(p.x, p.y, layer.extent, tileX, tileY, zoom)
-                            );
-
-                            const lineFeature: VectorFeatureLine = {
-                                id: `${layerName}-${i}-${points.length}`,
-                                type: 'LineString',
-                                points,
-                                properties: props
-                            };
-
-                            if (isRoadLayer || props.class === 'road' || props.highway) {
-                                result.roads.push(lineFeature);
-                            } else if (isWaterLayer) {
-                                result.water.push({
-                                    id: lineFeature.id,
-                                    type: 'Polygon',
-                                    ring: points,
-                                    properties: props
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (err: any) {
-            console.warn(`[GoogleVectorTileService] Error parsing tile protobuf: ${err?.message}`);
-        }
-
-        return result;
-    }
-
-    /**
      * Stages a complete 3D vector world population in 18% Studio Grey Clay.
-     * Ingests Google 2D roadmap vector tiles, extrudes building massing, road ribbons,
+     * Ingests Google vector feature tiles (footprints, modelled volumes, roads, water), extrudes building massing, road ribbons,
      * water basins, and packs them into a standard binary glTF 2.0 (.glb) for stage void placement.
      */
     public static async stage3DVectorWorld(options: VectorWorldStagingOptions): Promise<VectorWorldStagingResult> {
