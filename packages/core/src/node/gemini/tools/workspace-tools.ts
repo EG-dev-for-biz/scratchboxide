@@ -136,6 +136,9 @@ function resolveInRoot(root: string, rel: string): string {
 // Workspace Declarations & Handlers
 // ============================================================================
 
+const IMAGE_MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
+const MAX_VIEW_IMAGE_BYTES = 8_000_000;
+
 export const WORKSPACE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'workspace_read_file',
@@ -160,6 +163,18 @@ export const WORKSPACE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 startLine: { type: 'NUMBER', description: 'Optional 1-based start line (inclusive)' },
                 endLine: { type: 'NUMBER', description: 'Optional 1-based end line (inclusive)' },
                 contentOffset: { type: 'NUMBER', description: 'Optional byte offset for viewing large files' }
+            },
+            required: ['filePath']
+        }
+    },
+    {
+        name: 'workspace_view_image',
+        description: 'Look at an image file in the workspace (PNG, JPEG or WebP): it is shown to you after this call, so you can judge it yourself, e.g. a survey photograph, a wall plate or a render of your own build to compare with them. Paths come from a tool result or the user. Up to 8 images per turn are shown.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                filePath: { type: 'STRING', description: 'Relative or absolute path of the image inside the workspace' },
+                label: { type: 'STRING', description: 'Optional: what the image is, said with it (e.g. "station 3, north wall from the street")' }
             },
             required: ['filePath']
         }
@@ -344,6 +359,22 @@ export const workspaceHandlers: Record<string, ToolHandler> = {
         return {
             resultPayload: { status: 'success', filePath: relPath, totalLines, startLine, endLine, content: selectedContent },
             summaryResult: `Read ${relPath} (lines ${startLine}-${endLine} of ${totalLines}).`
+        };
+    },
+
+    async workspace_view_image(args, ctx) {
+        const relPath = asString(args.filePath);
+        assertSafeWorkspacePath(relPath, 'view');
+        const fullPath = resolveInRoot(ctx.workspaceRoot, relPath);
+        const mimeType = IMAGE_MIME[path.extname(fullPath).toLowerCase()];
+        if (!mimeType) throw new Error(`Not an image this tool shows (PNG, JPEG or WebP): ${relPath}`);
+        if (!await fs.pathExists(fullPath)) throw new Error(`File not found: ${relPath}`);
+        const bytes = (await fs.stat(fullPath)).size;
+        if (bytes > MAX_VIEW_IMAGE_BYTES) throw new Error(`The image is ${(bytes / 1e6).toFixed(1)} MB, over ${MAX_VIEW_IMAGE_BYTES / 1e6} MB: view a smaller copy`);
+        const label = asString(args.label) || relPath;
+        return {
+            resultPayload: { status: 'success', filePath: relPath, bytes, shown: true, modelImages: [{ path: fullPath, mimeType, label }] },
+            summaryResult: `Looked at ${relPath}.`
         };
     },
 

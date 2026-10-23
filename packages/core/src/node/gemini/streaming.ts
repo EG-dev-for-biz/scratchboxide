@@ -6,6 +6,7 @@
  * of this file, via any medium, is strictly prohibited without explicit written
  * permission from Scratchbox LLC.
  ********************************************************************************/
+import * as fs from 'fs';
 import type { FunctionCall, Part } from '@google/genai';
 import type {
     GeminiGenerateRequest,
@@ -677,6 +678,8 @@ export class StreamingEngine {
             throwIfAborted(signal);
             currentTurn++;
             const turnDetectedToolCalls: FunctionCall[] = [];
+            /** What is left of the turn's image allowance (modelImageParts). */
+            const imageBudget = { left: MAX_MODEL_IMAGES_PER_TURN };
             let turnText = '';
 
             if (auth.type === 'vertex' && currentTurn > 1) {
@@ -705,7 +708,7 @@ export class StreamingEngine {
             });
 
             // One tool call: run it under its deadline, show its result, and return the parts for the next call.
-            const runToolCall = async (toolCall: FunctionCall, callModel: string): Promise<{ modelPart: Part; responsePart: Part }> => {
+            const runToolCall = async (toolCall: FunctionCall, callModel: string): Promise<{ modelPart: Part; responsePart: Part; imageParts?: Part[] }> => {
                 throwIfAborted(signal);
                 const toolName = toolCall.name || '';
                 const rawToolCall = toolCall as any;
@@ -783,6 +786,8 @@ export class StreamingEngine {
                     built.shape.toolBytes = payload.tools ? JSON.stringify(payload.tools).length : 0;
                 }
 
+                // images a tool shows the model (resultPayload.modelImages): sent as images after the tool responses, not as JSON
+                const shown = modelImageParts(toolName, resultPayload, imageBudget);
                 return {
                     modelPart,
                     responsePart: {
@@ -790,16 +795,17 @@ export class StreamingEngine {
                             name: toolName,
                             response: {
                                 name: toolName,
-                                content: toolResultForModel(toolName, exec, resultPayload)
+                                content: toolResultForModel(toolName, exec, shown.payload)
                             }
                         }
-                    } as Part
+                    } as Part,
+                    ...(shown.parts.length ? { imageParts: shown.parts } : {})
                 };
             };
 
             // Tools start as soon as their functionCall part arrives, one after another in the order the model wrote
             // them; the rest of the stream (usage, closing text) does not hold them up.
-            const toolRuns: Array<Promise<{ modelPart: Part; responsePart: Part }>> = [];
+            const toolRuns: Array<Promise<{ modelPart: Part; responsePart: Part; imageParts?: Part[] }>> = [];
             let toolChain: Promise<unknown> = Promise.resolve();
             const startTool = (toolCall: FunctionCall, callModel: string) => {
                 const run = toolChain.then(() => {
@@ -965,7 +971,7 @@ export class StreamingEngine {
                 modelParts.push({ text: turnText });
             }
             modelParts.push(...results.map(r => r.modelPart));
-            const toolResponseParts: Part[] = results.map(r => r.responsePart);
+            const toolResponseParts: Part[] = [...results.map(r => r.responsePart), ...results.flatMap(r => r.imageParts ?? [])];
 
             // Append assistant model turn with functionCalls and user turn with functionResponses
             payload.contents.push({ role: 'model', parts: modelParts });
@@ -1380,6 +1386,43 @@ export const TOOL_FAILURE_INSTRUCTION = 'This tool call failed. If the error is 
  * workspace_* tools (the model is editing code and fixes what fails) and timed-out calls, whose payload already says
  * not to call the tool again.
  */
+/** Images a tool shows the model per turn (each loads its full bytes into the context). */
+export const MAX_MODEL_IMAGES_PER_TURN = 8;
+export const MAX_MODEL_IMAGE_BYTES = 8_000_000;
+
+/**
+ * The images a tool's result asks to show the model (resultPayload.modelImages: { path | data, mimeType, label }), as
+ * parts that follow the turn's tool responses: a label, then the image. Only a tool's own code puts them there (a path
+ * the model asked for went through that tool's checks). The payload sent as JSON lists them by label instead. `budget`
+ * counts what the turn has left; an image past it, unreadable or too large, is listed with why it was not shown.
+ */
+export function modelImageParts(toolName: string, resultPayload: any, budget: { left: number }): { payload: any; parts: Part[] } {
+    const list = Array.isArray(resultPayload?.modelImages) ? resultPayload.modelImages as Array<{ path?: string; data?: string; mimeType?: string; label?: string }> : undefined;
+    if (!list) return { payload: resultPayload, parts: [] };
+    const parts: Part[] = [], listed: Array<{ label: string; shown: boolean; why?: string }> = [];
+    for (const img of list) {
+        const label = img.label || img.path || 'image';
+        if (budget.left <= 0) { listed.push({ label, shown: false, why: `over ${MAX_MODEL_IMAGES_PER_TURN} images this turn` }); continue; }
+        let data = img.data;
+        try {
+            if (!data && img.path) {
+                const st = fs.statSync(img.path);
+                if (st.size > MAX_MODEL_IMAGE_BYTES) { listed.push({ label, shown: false, why: `${(st.size / 1e6).toFixed(1)} MB, too large` }); continue; }
+                data = fs.readFileSync(img.path).toString('base64');
+            }
+        } catch (err) {
+            listed.push({ label, shown: false, why: `could not be read (${err instanceof Error ? err.message : String(err)})` });
+            continue;
+        }
+        if (!data) { listed.push({ label, shown: false, why: 'no image' }); continue; }
+        budget.left--;
+        parts.push({ text: `Image from ${toolName}: ${label}` } as Part, { inlineData: { mimeType: img.mimeType || 'image/png', data } } as Part);
+        listed.push({ label, shown: true });
+    }
+    const { modelImages: _omit, ...rest } = resultPayload;
+    return { payload: { ...rest, images: listed }, parts };
+}
+
 export function toolResultForModel(toolName: string, exec: Pick<McpExecutionState, 'status'> | undefined, resultPayload: any): any {
     const prepared = prepareToolResultForModel(toolName, resultPayload);
     const failed = exec?.status === 'failed' || resultPayload?.success === false || resultPayload?.status === 'error' || resultPayload?.status === 'failed';

@@ -15,6 +15,7 @@
 export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
     'workspace_read_file',
     'workspace_view_file',
+    'workspace_view_image',
     'workspace_list_directory',
     'workspace_search',
     'workspace_grep_search',
