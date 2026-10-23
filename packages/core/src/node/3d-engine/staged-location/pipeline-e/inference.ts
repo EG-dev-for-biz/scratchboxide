@@ -48,7 +48,7 @@ import { buildFacadeTexture } from '../facade-texture/facade-texture';
 import { exposedShare, solidGrid } from './exposure';
 import { labPlanes } from './plate-audit';
 import { medianColour } from './face-textures';
-import { bestStreetViewForWall, rectifiedReference, streetBandTop, type GuideView } from './plate-streetview';
+import { bestStreetViewForWall, rectifiedReference, wallReference, streetBandTop, type GuideView } from './plate-streetview';
 import { applyStreetViewTexels, type StreetViewTexelRecord } from './street-view-texels';
 import { visionFacadeCounter } from './plate-identity';
 import { refitLatticeToPlate, plateLatticeOpenings } from './plate-lattice';
@@ -636,7 +636,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             let sv: WallStreetView | undefined, noSv = noGuide;
             if (guards && guide.length) {
                 const best = bestStreetViewForWall(f, guide);
-                if (best.view && best.rect) sv = { view: best.view, rect: best.rect, crop: rectifiedReference(best.rect, tex.width, tex.height), why: best.why };
+                if (best.view && best.rect) sv = { view: best.view, rect: best.rect, crop: wallReference(f, best.view, best.rect, tex.width, tex.height), why: best.why };
                 else noSv = best.why;
             }
             progress(`enhanced mode: ${unseen ? 'drawing the unseen wall' : 'redrawing wall'} ${f.index} (${Math.round(f.area)} m2)${sv ? `, guided by Street View ${sv.view.panoId}` : ''}`);

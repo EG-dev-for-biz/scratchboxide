@@ -79,12 +79,16 @@ export interface HoleInfillResult {
     /** The crop sent: x, y, width, height. */
     crop?: [number, number, number, number];
     provenance?: { label: 'generated'; method: string };
+    /** 1 where a pixel was replaced by the fill (accepted only), at the image's size. */
+    filledMask?: Uint8Array;
 }
 
 /** Fills the holes of `image` (findHoles) through the inpaint lock; only hole pixels change. */
 export async function infillImageHoles(input: {
     image: RgbaImage8; client: EnhanceModelClient; models: string[];
     mask?: Uint8Array; colour?: [number, number, number]; tolerance?: number; minPixels?: number; signal?: AbortSignal;
+    /** The instruction sent with the magenta holes (default photoInfillPrompt). */
+    prompt?: (w: number, h: number) => string;
 }): Promise<HoleInfillResult> {
     const { width: w, height: h } = input.image;
     const found = findHoles(input.image, input);
@@ -113,10 +117,11 @@ export async function infillImageHoles(input: {
         if (hole[i]) isHole[o] = 1; else { useKeep[o] = 1; kept++; }
     }
     if (kept < cw * ch * 0.1) return { image: input.image, holePixels, filledPixels: 0, decision: 'nothing_around', reason: `only ${kept} of ${cw * ch} pixels around the holes are real, too little to continue from`, crop: [cx, cy, cw, ch] };
-    const out = await inpaintImage({ crop, w: cw, h: ch, isHole, useKeep, client: input.client, models: input.models, label: `infill ${holePixels} hole pixels`, prompt: photoInfillPrompt, ...(input.signal ? { signal: input.signal } : {}) });
+    const out = await inpaintImage({ crop, w: cw, h: ch, isHole, useKeep, client: input.client, models: input.models, label: `infill ${holePixels} hole pixels`, prompt: input.prompt ?? photoInfillPrompt, ...(input.signal ? { signal: input.signal } : {}) });
     const base = { holePixels, crop: [cx, cy, cw, ch] as [number, number, number, number], ...(out.modelUsed ? { modelUsed: out.modelUsed } : {}), ...(out.metrics ? { metrics: out.metrics } : {}) };
     if (out.decision !== 'accepted' || !out.rgba) return { image: input.image, filledPixels: 0, decision: out.decision, ...(out.reason ? { reason: out.reason } : {}), ...base };
     const rgba = Uint8Array.from(input.image.rgba);
+    const filledMask = new Uint8Array(w * h);
     let filled = 0;
     for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) {
         const o = y * cw + x;
@@ -124,10 +129,11 @@ export async function infillImageHoles(input: {
         const i = (cy + y) * w + cx + x;
         rgba.set(out.rgba.subarray(o * 4, o * 4 + 3), i * 4);
         rgba[i * 4 + 3] = 255;
+        filledMask[i] = 1;
         filled++;
     }
     return {
-        image: { width: w, height: h, rgba }, filledPixels: filled, decision: 'accepted', ...base,
+        image: { width: w, height: h, rgba }, filledPixels: filled, filledMask, decision: 'accepted', ...base,
         provenance: { label: 'generated', method: `holes filled by ${out.modelUsed} from the pixels around them, kept only where the answer reproduced the real pixels and joined them at the rim; no real view of these pixels exists` }
     };
 }

@@ -53,7 +53,35 @@ export const SUPPORT_NCC = 0.3;
 /** The depth test: the massing must be the nearest surface within this, metres. */
 export const DEPTH_TOLERANCE_M = 1.2;
 
-export type GuideView = ProjectionView & { registration?: { method: string; residualM: number | null }; depth?: Float32Array };
+export type GuideView = ProjectionView & {
+    registration?: { method: string; residualM: number | null }; depth?: Float32Array;
+    /** The obstruction-free copy of `image` and where it is generated (streetview-clean.ts): for the model's reference only. */
+    cleanImage?: ProjectionView['image']; cleanFilledMask?: Uint8Array;
+};
+
+/**
+ * The view as a REFERENCE for an image model: its obstruction-free copy when it has one (the filled pixels count as showing
+ * the wall), else the view itself. Never for checks against the photograph (verifyAgainstPhoto): those read the photo as captured.
+ */
+export function referenceView(v: GuideView): GuideView {
+    if (!v.cleanImage || !v.cleanFilledMask) return v;
+    const owner = v.ownerMask ? Uint8Array.from(v.ownerMask) : undefined;
+    if (owner) for (let i = 0; i < owner.length; i++) if (v.cleanFilledMask[i]) owner[i] = 1;
+    // the depth test would reject the filled pixels (the occluder's depth is still in the map): the reference copy skips it there
+    return { ...v, image: v.cleanImage, ...(owner ? { ownerMask: owner } : {}), ...(v.depth ? { depth: depthWithout(v.depth, v.cleanFilledMask) } : {}) };
+}
+
+function depthWithout(depth: Float32Array, filled: Uint8Array): Float32Array {
+    const d = Float32Array.from(depth);
+    for (let i = 0; i < d.length; i++) if (filled[i]) d[i] = NaN;
+    return d;
+}
+
+/** The model's reference image of a wall from its best view: rectified from the view's obstruction-free copy when there is one. */
+export function wallReference(face: MassingFace, v: GuideView, rect: RectifiedPhoto, W: number, H: number): Uint8Array {
+    const r = referenceView(v);
+    return rectifiedReference(r === v ? rect : rectifyViewOntoWall(face, r, streetBandTop(face)), W, H);
+}
 
 export interface RectifiedPhoto {
     panoId: string;
@@ -108,7 +136,7 @@ export function rectifyViewOntoWall(face: MassingFace, v: GuideView, bandTop = s
         if (u < 1 || w < 1 || u >= cam.width - 2 || w >= cam.height - 2) { no(y, 'frame'); continue; }
         const pi = Math.floor(w) * cam.width + Math.floor(u);
         if (v.ownerMask && !v.ownerMask[pi]) { no(y, 'owner'); continue; }
-        if (v.depth && !(Math.abs(v.depth[pi] - q.z) < DEPTH_TOLERANCE_M)) { no(y, 'depth'); continue; }
+        if (v.depth && !Number.isNaN(v.depth[pi]) && !(Math.abs(v.depth[pi] - q.z) < DEPTH_TOLERANCE_M)) { no(y, 'depth'); continue; }
         if (v.warp) { const d = warpAt(v.warp, cam.width, cam.height, u, w); u = Math.max(0, Math.min(cam.width - 1.001, u + d[0])); w = Math.max(0, Math.min(cam.height - 1.001, w + d[1])); }
         const x0 = Math.floor(u), y0 = Math.floor(w), fx = u - x0, fy = w - y0, iw = img.width;
         const i = y * W + x;

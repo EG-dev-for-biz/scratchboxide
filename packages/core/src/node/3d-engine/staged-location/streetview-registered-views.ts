@@ -27,6 +27,8 @@ import type { Registration } from './pano-registration';
 import type { EdgePanoOutcome, HeldImage } from './pano-edge-registration';
 import { projectionViewFromRegistered } from './texture-projection-views';
 import { ownViews, type OwnershipSegmenter, type ViewOwnershipRecord } from './streetview-ownership';
+import { cleanStreetViewImage, streetViewCleanEnabled, type StreetViewCleanResult } from './streetview-clean';
+import type { EnhanceModelClient } from './texture-enhance';
 
 const angleBetween = (a: number, b: number) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
 /** A requested face heading is matched to the structure's nearest facade within this angle. */
@@ -192,7 +194,15 @@ export function streetLevelView(v: SurveyView, face: SurveyFaceTarget, groundY: 
 export interface ViewRegistration { method: 'joint' | 'edges' | 'nominal' | (string & {}); residualM: number | null }
 
 /** A Street View view in memory with its registered pose, ownership mask and how it was registered. */
-export type RegisteredView = ProjectionView & { registration: ViewRegistration; faceId: string; ownership?: ViewOwnershipRecord };
+export type RegisteredView = ProjectionView & {
+    registration: ViewRegistration; faceId: string; ownership?: ViewOwnershipRecord;
+    /**
+     * The obstruction-free copy of `image` (streetview-clean.ts): the pixels in front of the structure filled, `cleanFilledMask`
+     * 1 where a pixel is generated. A reference for image models only; `image` and `ownerMask` stay the photograph as captured.
+     */
+    cleanImage?: ProjectionView['image']; cleanFilledMask?: Uint8Array;
+    clean?: Pick<StreetViewCleanResult, 'decision' | 'occluderPixels' | 'filledPixels' | 'reason' | 'modelUsed' | 'cached'>;
+};
 
 /**
  * The survey's views of a structure, registered and cut out, in memory (nothing written): planSurveyViews over `panos`
@@ -213,6 +223,8 @@ export async function registeredSurveyViews(input: {
      * call that places the structure in the photo (default OWNERSHIP_TRUST_RESIDUAL_M; 0 never trusts a pose).
      */
     trustRegisteredM?: number;
+    /** Make each view's obstruction-free copy (cleanImage) through this image client (streetview-clean.ts); absent: none made. */
+    clean?: { client: EnhanceModelClient; models: string[]; cacheDir?: string };
     signal?: AbortSignal; onProgress?: (m: string) => void;
 }): Promise<{
     views: RegisteredView[]; images: EvidenceImage[]; refusals: SurveyRefusal[]; failures: SurveyFetchFailure[]; registrationError?: string;
@@ -250,20 +262,43 @@ export async function registeredSurveyViews(input: {
     }));
     t = Date.now();
     const trust = input.trustRegisteredM ?? OWNERSHIP_TRUST_RESIDUAL_M;
+    const occluderMasks = new Map<number, Uint8Array>();
     const own = await ownViews({
         views: pviews, structure: input.structureMesh, concurrency: 4, ...(input.context ? { context: input.context } : {}), segment: input.segment, ...(input.target ? { target: input.target } : {}),
-        describe: v => !trustedRegisteredPose(registration, v.panoId, trust), ...(input.debugDir ? { debugDir: input.debugDir } : {}), signal: input.signal, onProgress: progress
+        describe: v => !trustedRegisteredPose(registration, v.panoId, trust), ...(input.debugDir ? { debugDir: input.debugDir } : {}), signal: input.signal, onProgress: progress,
+        onMasks: (k, m) => occluderMasks.set(k, m.occluders)
     });
     const views: RegisteredView[] = own.views.map((v, k) => {
         const per = registration?.perPano.find(p => p.panoId === v.panoId);
         const method = per?.method ?? 'nominal';
         return { ...v, faceId: (got.images[k].view as SurveyView).faceId, registration: { method, residualM: per?.edgeResidualM ?? null }, ownership: own.records[k] };
     });
+    if (input.clean && streetViewCleanEnabled()) {
+        const c = input.clean;
+        const jobs = views.map((v, k) => ({ v, occ: occluderMasks.get(k) })).filter(j => j.occ && j.v.ownership?.status === 'segmented');
+        if (jobs.length) progress(`removing what stands in front of the structure from ${jobs.length} Street View photo(s)`);
+        await pool(jobs, 4, async ({ v, occ }) => {
+            try {
+                const r = await cleanStreetViewImage({ image: v.image, occluders: occ!, client: c.client, models: c.models, ...(c.cacheDir ? { cacheDir: c.cacheDir } : {}), ...(input.signal ? { signal: input.signal } : {}) });
+                v.clean = { decision: r.decision, occluderPixels: r.occluderPixels, filledPixels: r.filledPixels, ...(r.reason ? { reason: r.reason } : {}), ...(r.modelUsed ? { modelUsed: r.modelUsed } : {}), ...(r.cached ? { cached: true } : {}) };
+                if (r.filledPixels) { v.cleanImage = r.image; v.cleanFilledMask = r.filledMask; }
+            } catch (err) {
+                if (input.signal?.aborted) throw err;
+                v.clean = { decision: 'model_failed', occluderPixels: 0, filledPixels: 0, reason: err instanceof Error ? err.message : String(err) };
+            }
+        });
+    }
     const how = outcome ? {
         panos: (outcome.edge?.panos ?? []).map(p => ({ panoId: p.panoId, chosen: p.chosen, reason: p.reason, edgeResidualPx: p.edgeResidualPx })),
         ...(outcome.joint ? { joint: { chosen: outcome.joint.chosen, reason: outcome.joint.reason } } : {})
     } : undefined;
     return { views, images: got.images, refusals: got.refusals, failures: got.failures, ...(registrationError ? { registrationError } : {}), ...(how ? { registration: how } : {}), ms: { fetch: fetchMs, register: registerMs, own: Date.now() - t } };
+}
+
+/** Runs `fn` over `xs` with at most `n` in flight. */
+async function pool<T>(xs: T[], n: number, fn: (x: T) => Promise<void>): Promise<void> {
+    let i = 0;
+    await Promise.all(Array.from({ length: Math.min(n, xs.length) }, async () => { while (i < xs.length) await fn(xs[i++]); }));
 }
 
 export { sceneToRenderMesh, readGlbScene };

@@ -3395,11 +3395,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 sv: { ...sv, refusedPanos: sv.refusedPanos ?? new Map<string, string>() }, tileMeshFiles: [extraction.geometryGlb], structureMesh,
                                 context, segment: segmenter, ...(visionAvailable ? { target: request.query } : {}),
                                 ...(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR ? { debugDir: path.join(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR, runId, 'survey') } : {}),
+                                // the views' obstruction-free copies, for the image model's references (streetview-clean.ts)
+                                ...(deps.textures?.enhance ? { clean: { client: deps.textures.enhance, models: [LIGHTING_MODEL_FULL, LIGHTING_MODEL_LITE], cacheDir: path.join(cache.dir, 'streetview_clean') } } : {}),
                                 signal: io.signal, onProgress: m => io.progress(`pipeline E: Street View: ${m}`)
                             });
                             if (got.images.length) run.state.attribution = [...new Set([...run.state.attribution, 'Street View ©Google'])];
                             cache.writeRunNote(runId, 'pipeline_e_enhance_streetview', {
-                                views: got.views.map(v => ({ panoId: v.panoId, faceId: v.faceId, registration: v.registration, ownership: v.ownership?.status, prompts: v.ownership?.prompts, iou: v.ownership?.iou, ownedPixels: v.ownerMask?.reduce((a, x) => a + (x ? 1 : 0), 0) ?? 0, occluders: v.ownership?.occluders })),
+                                views: got.views.map(v => ({ panoId: v.panoId, faceId: v.faceId, registration: v.registration, ownership: v.ownership?.status, prompts: v.ownership?.prompts, iou: v.ownership?.iou, ownedPixels: v.ownerMask?.reduce((a, x) => a + (x ? 1 : 0), 0) ?? 0, occluders: v.ownership?.occluders, ...(v.clean ? { clean: v.clean } : {}) })),
                                 refusals: got.refusals, failures: got.failures, registrationError: got.registrationError, registration: got.registration, ms: got.ms, panosNear: usable.length, contextCut: context !== tileMesh
                             });
                             cache.writeRunNote(runId, 'pipeline_e_ownership', { records: got.views.map(v => v.ownership).filter(Boolean), panos: got.images.map(i => i.view.panoId) });

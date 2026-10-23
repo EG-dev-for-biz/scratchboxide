@@ -44,7 +44,7 @@ import { enhanceOrder, ENHANCE_CONCURRENCY, MAX_UNSEEN_WALLS, MIN_ENHANCE_AREA_M
 import { buildFacadeTexture } from '../facade-texture/facade-texture';
 import { exposedShare, solidGrid } from '../pipeline-e/exposure';
 import { labPlanes } from '../pipeline-e/plate-audit';
-import { bestStreetViewForWall, rectifiedReference, type GuideView } from '../pipeline-e/plate-streetview';
+import { bestStreetViewForWall, rectifiedReference, wallReference, type GuideView } from '../pipeline-e/plate-streetview';
 import { visionFacadeCounter } from '../pipeline-e/plate-identity';
 import { parentFace, reframe, writeEnhanceDiagnostic, type InferenceInput, type InferenceOutcome, type StepRecord } from '../pipeline-e/inference';
 import { evaluate } from './adjust';
@@ -173,7 +173,7 @@ export async function runVersionFEnhanced(input: F2Input): Promise<F2Outcome> {
             let sv: WallStreetView | undefined, noSv = noGuide;
             if (guards && guide.length) {
                 const best = bestStreetViewForWall(f, guide);
-                if (best.view && best.rect) sv = { view: best.view, rect: best.rect, crop: rectifiedReference(best.rect, tex.width, tex.height), why: best.why };
+                if (best.view && best.rect) sv = { view: best.view, rect: best.rect, crop: wallReference(f, best.view, best.rect, tex.width, tex.height), why: best.why };
                 else noSv = best.why;
             }
             const structure = structureGuidePng(plan, f);
