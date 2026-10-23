@@ -281,7 +281,7 @@ export async function registeredSurveyViews(input: {
             try {
                 let structurePixels = 0;
                 for (let i = 0; i < occ!.length; i++) if (occ![i] || v.ownerMask?.[i]) structurePixels++;
-                const r = await cleanStreetViewImage({ image: v.image, occluders: occ!, client: c.client, models: c.models, registrationNcc: registrationNcc(outcome, v.panoId), structurePixels, ...(input.target ? { verify: occluderVerifier(input.segment, input.target, input.signal) } : {}), ...(c.cacheDir ? { cacheDir: c.cacheDir } : {}), ...(input.signal ? { signal: input.signal } : {}) });
+                const r = await cleanStreetViewImage({ image: v.image, occluders: occ!, client: c.client, models: c.models, ...(v.ownership?.prompts === 'description' ? {} : { registrationNcc: registrationNcc(outcome, v.panoId) }), structurePixels, ...(input.target ? { verify: occluderVerifier(input.segment, input.target, input.signal) } : {}), ...(c.cacheDir ? { cacheDir: c.cacheDir } : {}), ...(input.signal ? { signal: input.signal } : {}) });
                 v.clean = { decision: r.decision, occluderPixels: r.occluderPixels, filledPixels: r.filledPixels, ...(r.verify ? { verify: r.verify } : {}), ...(r.reason ? { reason: r.reason } : {}), ...(r.modelUsed ? { modelUsed: r.modelUsed } : {}), ...(r.cached ? { cached: true } : {}) };
                 if (r.filledPixels) { v.cleanImage = r.image; v.cleanFilledMask = r.filledMask; }
             } catch (err) {

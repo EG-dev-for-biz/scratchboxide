@@ -48,7 +48,7 @@ import { runPanoRegistrationOffThread, type PanoRegistrationJob, type PanoRegist
 import { EDGE_REG_MAX_WIDTH_PX, type HeldImage } from '../../../3d-engine/staged-location/pano-edge-registration';
 import { JOINT_METRIC_WIDTH_PX, JOINT_WIDTHS_PX } from '../../../3d-engine/staged-location/pano-joint-registration';
 import { projectionViewFromRegistered } from '../../../3d-engine/staged-location/texture-projection-views';
-import { objectSegmenter, occluderVerifier, ownViews, type OwnershipSegmenter, type ViewOwnershipRecord } from '../../../3d-engine/staged-location/streetview-ownership';
+import { objectSegmenter, occluderVerifier, ownViews, visionObstructionLister, type ObstructionLister, type OwnershipSegmenter, type ViewOwnershipRecord } from '../../../3d-engine/staged-location/streetview-ownership';
 import { cleanStreetViewImage, registrationNcc, streetViewCleanEnabled } from '../../../3d-engine/staged-location/streetview-clean';
 import { genAiEnhanceClient, type EnhanceModelClient } from '../../../3d-engine/staged-location/texture-enhance';
 import { LIGHTING_MODEL_FULL, LIGHTING_MODEL_LITE } from '../../../3d-engine/staged-location/texture-lighting';
@@ -162,6 +162,8 @@ export interface StreetViewSurveyDeps {
     streetView: StreetViewEvidenceDeps;
     /** The ownership segmenter (default: the repo's MediaPipe interactive segmenter + GrabCut, objectSegmenter()). */
     segmenter?: OwnershipSegmenter;
+    /** Lists the obstructions in each photo (a vision model); the occluders are then cut out one instance per box. */
+    obstructions?: ObstructionLister;
     /** The edge + joint registration (default: runPanoRegistrationOffThread). */
     register?: (job: PanoRegistrationJob, opts: { signal?: AbortSignal; log?: (m: string) => void }) => Promise<PanoRegistrationOutcome>;
     /** The temporary-structure question (default with the tool: the vision model chain, visionTemporaryChecker). */
@@ -618,7 +620,7 @@ export async function runStreetViewSurvey(site: SurveySite, options: StreetViewS
         const segment = deps.segmenter ?? objectSegmenter();
         const own = await ownViews({
             views: pviews, structure: site.structureMesh, ...(context.indices.length ? { context } : {}), segment,
-            ...(options.target ? { target: options.target } : {}), signal: deps.signal, onProgress: progress, onMasks: (k, m) => masks.set(k, m)
+            ...(options.target ? { target: options.target } : {}), ...(deps.obstructions ? { listObstructions: deps.obstructions } : {}), signal: deps.signal, onProgress: progress, onMasks: (k, m) => masks.set(k, m)
         });
         for (const [k, rec] of own.records.entries()) {
             const view = views[k], W = view.widthPx, H = view.heightPx;
@@ -640,7 +642,7 @@ export async function runStreetViewSurvey(site: SurveySite, options: StreetViewS
                     try {
                         let structurePixels = 0;
                         for (let i = 0; i < m.owner.length; i++) if (m.owner[i] || m.occluders[i]) structurePixels++;
-                        const r = await cleanStreetViewImage({ image: pviews[k].image, occluders: m.occluders, client: deps.clean.client, models: deps.clean.models, registrationNcc: registrationNcc(reg, view.panoId), structurePixels, ...(options.target ? { verify: occluderVerifier(segment, options.target, deps.signal) } : {}), ...(deps.clean.cacheDir ? { cacheDir: deps.clean.cacheDir } : {}), ...(deps.signal ? { signal: deps.signal } : {}) });
+                        const r = await cleanStreetViewImage({ image: pviews[k].image, occluders: m.occluders, client: deps.clean.client, models: deps.clean.models, ...(rec.prompts === 'description' ? {} : { registrationNcc: registrationNcc(reg, view.panoId) }), structurePixels, ...(options.target ? { verify: occluderVerifier(segment, options.target, deps.signal, deps.obstructions) } : {}), ...(deps.clean.cacheDir ? { cacheDir: deps.clean.cacheDir } : {}), ...(deps.signal ? { signal: deps.signal } : {}) });
                         let imagePath: string | undefined, filledMaskPath: string | undefined;
                         if (r.filledPixels) {
                             const cleanFile = path.join(path.dirname(path.resolve(options.workspaceRoot ?? '.', view.imagePath)), `${stem}_clean.png`);
@@ -878,6 +880,8 @@ export const streetviewSurveyHandler: ToolHandler = async (args, ctx) => {
     }, {
         streetView: { ...sv, refusedPanos: sv.refusedPanos ?? new Map<string, string>() },
         ...(ownership ? { segmenter: objectSegmenter(vision ? { modelSource: { getGenAIClient: async () => vision.client, getModelCandidates: () => vision.candidates } } : {}) } : {}),
+        // with a vision model: each obstruction in front of the structure listed with a box, then cut out on its own
+        ...(ownership && vision ? { obstructions: visionObstructionLister(new VisionModelChain<string>({ client: vision.client, candidates: vision.candidates, signal: ctx.signal, hedgeAfterMs: VISION_HEDGE_AFTER_MS, replyCache: stagedReplyCache(stagedDeps.cache) })) } : {}),
         // with masks and an image model: an obstruction-free copy of each view beside the raw capture (the raw stays the measurement)
         ...(ownership && vision ? { clean: { client: genAiEnhanceClient(vision.client), models: [LIGHTING_MODEL_FULL, LIGHTING_MODEL_LITE], cacheDir: path.join(stagedDeps.cache.dir, 'streetview_clean') } } : {}),
         // the temporary-structure question: the staged vision chain, its usable replies recorded in the staged cache

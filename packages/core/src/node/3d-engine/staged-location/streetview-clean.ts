@@ -38,7 +38,8 @@ export const CLEAN_MIN_PIXELS = 64;
 /** Most of the structure a fill may redraw: filled pixels over the structure's owned + occluded pixels in the view. */
 export const CLEAN_MAX_FILL_SHARE = 0.3;
 /**
- * Least held-out gradient NCC of the view's registration for a clean-up: the occluders are located inside the structure's
+ * Least held-out gradient NCC of the view's registration for a clean-up when its outline comes from the pose (geometry prompts;
+ * a described cut-out is located pose-free and needs no registration): the occluders are located inside the structure's
  * projected silhouette, and below this the projection does not say where the structure is (the 488 Broadway survey's
  * views registered at 0.02, where the silhouette sat on the neighbours).
  */

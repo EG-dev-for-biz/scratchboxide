@@ -24,7 +24,7 @@ import type { Vec3 } from '../src/common/spatial/staged-location-contracts';
 import type { DepthMap, PinholeCamera, ProjectionView } from '../src/common/spatial/texture-pass-contracts';
 import { bakeStreetViewProjection, type ProjectionBakeResult } from '../src/node/3d-engine/staged-location/texture-projection';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { dilateMask, growThinVertical, thinOccluderDescription, maskIou, occluderDescription, ownershipPrompts, OwnershipTargetNotFound, ownViews, OWNERSHIP_MIN_IOU, type OwnershipSegmenter } from '../src/node/3d-engine/staged-location/streetview-ownership';
+import { dilateMask, growThinVertical, thinOccluderDescription, maskIou, occluderDescription, ownershipPrompts, OwnershipTargetNotFound, ownViews, OWNERSHIP_MIN_IOU, parseObstructionReply, type ObstructionLister, type OwnershipSegmenter } from '../src/node/3d-engine/staged-location/streetview-ownership';
 import { renderFrameDepth } from '../src/node/spatial/StreetViewPoseRegistrar';
 import { FACADE, facadeAtlas, lookAtCamera } from './helpers/texture-pass-fixtures';
 
@@ -152,7 +152,7 @@ describe('Street View projection: pixel ownership', () => {
         const by = Object.fromEntries(own.records.map(x => [x.panoId, x]));
         expect(seen.filter(t => t === 'the test facade').length).toBe(3);
         expect(seen.filter(t => t === occluderDescription('the test facade')).length).toBe(1); // only the kept view is asked what stands in front
-        expect(by.front).toMatchObject({ status: 'segmented', prompts: 'description+geometry' });
+        expect(by.front).toMatchObject({ status: 'segmented', prompts: 'description', poseAgrees: true });
         expect(by.front.iou!).toBeGreaterThan(OWNERSHIP_MIN_IOU);
         expect(by.left).toMatchObject({ status: 'refused', maskPixels: 0 });
         expect(by.left.reason).toMatch(/not in this photo \(the photo shows a green neighbour/);
@@ -242,6 +242,61 @@ describe('Street View projection: pixel ownership', () => {
         expect(rec.occluders!.thinPixels).toBeGreaterThan(50);
         expect(mask[(H >> 1) * W + 121]).toBe(0);
         expect(mask[(H >> 1) * W + 80]).toBe(1);
+    });
+
+    it('takes the outline from the described cut-out, not the pose, and keeps only small obstruction instances inside it', async () => {
+        // the pose is off: the facade projects 90 px left of where the photo shows it
+        const cam = lookAtCamera(EYES.front, [5, 3, 0], 240, 144, 70);
+        const shot = shoot(cam, () => undefined);
+        const W = cam.width, H = cam.height;
+        const projected = new Uint8Array(W * H);
+        for (let i = 0; i < W * H; i++) projected[i] = Number.isFinite(shot.depth.depthM[i]) ? 1 : 0;
+        const inPhoto = (x: number, y: number) => x >= 90 && projected[y * W + x - 90] === 1; // where the photo shows the facade
+        const pole = (x: number, y: number) => x >= 150 && x < 153 && y >= 20 && inPhoto(x, y);
+        const neighbourVan = (x: number, y: number) => x < 30 && y > 80; // beside the facade, not in front of it
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (pole(x, y) || neighbourVan(x, y)) shot.image.rgba.set([25, 25, 30, 255], (y * W + x) * 4);
+        const boxed: Array<[number, number, number, number] | undefined> = [];
+        const segment: OwnershipSegmenter = async (_image, prompts) => {
+            const m = new Uint8Array(W * H);
+            if (prompts.target === 'the test facade') {
+                boxed.push(prompts.box);
+                for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (inPhoto(x, y) && !pole(x, y)) m[y * W + x] = 1;
+                return m;
+            }
+            // a box prompt: the dark pixels in the box (or, for the whole-facade box, everything in it)
+            const [x0, y0, x1, y1] = prompts.box!;
+            for (let y = Math.floor(y0 * H); y < Math.ceil(y1 * H); y++) for (let x = Math.floor(x0 * W); x < Math.ceil(x1 * W); x++)
+                if (x1 - x0 > 0.5 || shot.image.rgba[(y * W + x) * 4] < 60) m[y * W + x] = 1;
+            return m;
+        };
+        let fy0 = H, fy1 = 0;
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (inPhoto(x, y)) { fy0 = Math.min(fy0, y); fy1 = Math.max(fy1, y); }
+        const reply = JSON.stringify({ objects: [
+            { label: 'a signal pole', box_2d: [Math.round(1000 * 20 / H), Math.round(1000 * 149 / W), 1000, Math.round(1000 * 154 / W)] },
+            { label: 'a van', box_2d: [Math.round(1000 * 80 / H), 0, 1000, Math.round(1000 * 30 / W)] },
+            { label: 'scaffolding', box_2d: [Math.round(1000 * fy0 / H), Math.round(1000 * 90 / W), Math.round(1000 * (fy1 + 1) / H), 1000] }
+        ] });
+        const list: ObstructionLister = async () => parseObstructionReply(reply);
+        let occ = new Uint8Array(0);
+        const own = await ownViews({ views: [{ panoId: 'p', camera: cam, image: shot.image, poseQuality: 1, poseSigmaPx: 0 }], structure: facadeMesh(), segment, target: 'the test facade', listObstructions: list, onMasks: (_k, m) => { occ = m.occluders; } });
+        const rec = own.records[0];
+        expect(boxed).toEqual([undefined]); // located with no hint from the pose
+        expect(rec.status).toBe('segmented');
+        expect(rec.poseAgrees).toBe(false);
+        expect(rec.iou!).toBeLessThan(OWNERSHIP_MIN_IOU);
+        const kept = rec.occluders!.instances!.filter(i => i.kept).map(i => i.label);
+        expect(kept).toEqual(['a signal pole']);
+        expect(rec.occluders!.instances!.find(i => i.label === 'a van')!.why).toMatch(/outside/);
+        expect(rec.occluders!.instances!.find(i => i.label === 'scaffolding')!.why).toMatch(/percent of the structure/);
+        let poleOcc = 0, vanOcc = 0;
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { if (pole(x, y) && occ[y * W + x]) poleOcc++; if (neighbourVan(x, y) && occ[y * W + x]) vanOcc++; }
+        expect(poleOcc).toBeGreaterThan(100);
+        expect(vanOcc).toBe(0);
+        // the owner mask follows the photo, not the projection
+        const mask = own.views[0].ownerMask!;
+        expect(mask[(H >> 1) * W + 200]).toBe(1);
+        expect(mask[(H >> 1) * W + 60]).toBe(0); // where the pose put the facade
+        expect(mask[(H >> 1) * W + 151]).toBe(0);
     });
 
     it('grows only along thin lines and dilates without touching the image border', () => {
