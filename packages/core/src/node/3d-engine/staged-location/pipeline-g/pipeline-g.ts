@@ -9,7 +9,7 @@
 
 /**
  * Pipeline G: the isolated structure rebuilt procedurally from a survey of the photo tile, in pipeline E's grammar slot
- * (request.procedural, or SCRATCHBOX_STAGED_GEOMETRY=g everywhere). E's massing stands as built (the vector footprint, its
+ * (request.procedural, set for every isolated building unless the caller passes procedural false; or SCRATCHBOX_STAGED_GEOMETRY=g everywhere). E's massing stands as built (the vector footprint, its
  * walls on the facades the scan measures); G then
  *   1. places survey stations by the staged survey's own rules (stations.ts),
  *   2. path-traces them from the tile with metric depth and lays them onto metric wall plates (plates.ts),

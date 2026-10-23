@@ -67,9 +67,9 @@ export const STAGED_CLAY_TOOL_DESCRIPTION =
 
 export const STAGED_ISOLATE_DESCRIPTION =
     'Return only the structure at the anchor (its whole connected footprint and everything above it, never cut, with a small ground apron) instead of the ' +
-    'whole district, and rebuild it: a fitted architectural model of the scan with continuous measured residuals, then facade detail read from tile photos and ' +
-    'Street View images (up to 4 per building, Google captures only), labelled photo-inferred. The extraction is sized to the structure, so radiusMeters is ' +
-    'ignored. Use it when the user asks for one building or object rather than an area.';
+    'whole district, and rebuild it: procedurally by default (pipeline G, see procedural), or with procedural false a model of the scan on the vector ' +
+    'massing with facade detail read from tile photos and Street View images (up to 4 per building, Google captures only), labelled photo-inferred. The ' +
+    'extraction is sized to the structure, so radiusMeters is ignored. Use it when the user asks for one building or object rather than an area.';
 
 export const STAGED_RADIUS_DESCRIPTION =
     'Extraction radius in metres around the anchor for a district (default 250). The nearest 524 leaf tiles are kept; when the radius holds more, the result ' +
@@ -168,7 +168,8 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
             ...(treeTriangleBudget !== undefined ? { treeTriangleBudget } : {}),
             stageIntoActiveScene: args.stageIntoActiveScene === true,
             ...(typeof args.enhance === 'boolean' ? { enhance: args.enhance } : {}),
-            ...(args.procedural === true ? { procedural: true } : {}),
+            // one building is rebuilt procedurally by pipeline G unless the caller asks for its scan detailed (user decision 2026-10-22)
+            ...(args.isolate === true && args.procedural !== false ? { procedural: true } : {}),
             ...(place ? { place } : {})
         },
         ...(retry ? { retry } : {}),

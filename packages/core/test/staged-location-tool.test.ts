@@ -64,8 +64,11 @@ const clayArgs = { query: 'Central Park', radiusMeters: 60 };
 describe('parseStagedLocationArgs', () => {
     it('reads a place request: isolate, radius, trees (on by default), budget, staging', () => {
         expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: ' Washington Square Arch ', isolate: true, radiusMeters: 90, treeTriangleBudget: 50_000, stageIntoActiveScene: true }).request)
-            .toEqual({ query: 'Washington Square Arch', isolate: true, radiusM: 90, trees: true, treeTriangleBudget: 50_000, stageIntoActiveScene: true });
+            .toEqual({ query: 'Washington Square Arch', isolate: true, radiusM: 90, trees: true, treeTriangleBudget: 50_000, stageIntoActiveScene: true, procedural: true });
         expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', trees: false }).request).toMatchObject({ trees: false, isolate: false });
+        // one building is pipeline G's unless procedural false asks for the scan detailed; a district is never procedural
+        expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', isolate: true, procedural: false }).request).not.toHaveProperty('procedural');
+        expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', procedural: true }).request).not.toHaveProperty('procedural');
     });
 
     it('needs a query, a sound tree budget, and for a retry a run id of 8 hex digits and a known stage; a retry needs no query', () => {
