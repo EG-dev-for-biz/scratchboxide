@@ -17,6 +17,9 @@
  *     HEIGHT_AGREEMENT_M of the scan's roof there; otherwise the scan's roof (median) stands, and the record says so.
  *   - Roof: pitched Solar facets inside a part are planes y = a + b x + c z; the roof is the lower envelope of the kept planes
  *     capped at the top. A facet is kept only when adding it lowers the part's roof error against the scan (greedy, by area).
+ *     When the footprint is massed over a modelled volume, the volume's top surface is read as a roof prior (planes and
+ *     tiers, volume-roof-prior.ts) carried on the massing for the roof decisions: an upper tier takes the volume's clean
+ *     outline where the scan's tier agrees with it; roof-infer.ts checks the volume's planes against the scan like a reading.
  *   - The check: the massing's plan against the scan's structure cells (intersection over union) and its roof against the
  *     scan's top (median absolute error). A massing below MIN_MASSING_IOU, or further off than the height limit, is not used:
  *     the build falls back to the current pipeline with these numbers as the reason.
@@ -27,6 +30,7 @@
 import type { Vec2 } from '../../../../common/spatial/staged-location-contracts';
 import type { VectorBuilding } from '../vector-footprints';
 import type { SolarRoofSegment } from './solar-roof';
+import { reconcileTiers, volumeRoofPrior, type VolumeRoofPrior } from './volume-roof-prior';
 
 export const SIMPLIFY_TOLERANCE_M = 0.25;
 /** How far a traced cell boundary may stray from its straightened edge: twice a cell's half-diagonal, so 1 m steps and scan ragging go. */
@@ -67,6 +71,8 @@ export interface MassingPart {
     heights: { vectorY?: number; solarY?: number; scanY?: number };
     /** The provenance token the native tool passes through to the part's nodes (default: the spec's). */
     provenance?: string;
+    /** Which source decided the part's roof shape (an open label) and why; a part without one has a flat top at its height. */
+    roof?: { source: 'solar' | 'photo-inferred' | 'vector-modelled' | 'scan' | (string & {}); note: string };
 }
 
 export interface MassingMesh { id: string; vertices: Array<[number, number, number]>; indices: number[]; /** The provenance token the native tool passes through to the solid's nodes (default: the spec's). */ provenance?: string }
@@ -87,6 +93,11 @@ export interface Massing {
     check: MassingCheck;
     solar: { segments: number; inside: number; pitchedKept: number; pitchedRejected: number; flatUsed: number };
     notes: string[];
+    /**
+     * The roof prior read from the modelled volume when the footprint was massed over it (volume-roof-prior.ts): guidance for
+     * the roof decisions (the inference's decideRoof), never the massing itself.
+     */
+    roofPrior?: VolumeRoofPrior;
 }
 
 export interface MassingInputs {
@@ -659,6 +670,7 @@ export function buildMassing(inp: MassingInputs): Massing {
     // the footprint is the source of truth: with no Google building for the structure at all, the 3D tiles' plan of it is
     // (the orchestrator sends a structure with no Google building here only on a procedural, 3D Building, request)
     const buildings: VectorBuilding[] = inp.preferExtrusion === true && !inp.buildings.length ? [{ id: 'tiles-footprint', parts: [], volumes: [{ vertices: [], indices: [] }] }] : inp.buildings;
+    let roofPrior: VolumeRoofPrior | undefined;
     for (const b of buildings) {
         // the modelled volume, where Google has one, is the massing as given, unless the footprint is asked for: then the
         // vector footprint, or, where the vector data has only the volume, the scan's plan of the structure
@@ -668,6 +680,16 @@ export function buildMassing(inp: MassingInputs): Massing {
             if (plan) { footprints.push({ loops: [plan] }); notes.push(`${b.id}: no vector footprint, so the footprint is the scan's plan of the structure (${plan.length} corners, ${Math.round(Math.abs(ringArea(plan)))} m2)`); }
         }
         const fromFootprint = footprints.length > 0;
+        // the footprint over the volume: the volume's roof massing (its top planes, its tiers) still seeds the roof decisions,
+        // as guidance the scan checks; it never places a wall (volume-roof-prior.ts)
+        let prior: VolumeRoofPrior | undefined;
+        if (fromFootprint && b.volumes?.some(v => v.vertices.length >= 4 && v.indices.length >= 12)) {
+            prior = volumeRoofPrior(b.volumes, inp.groundY);
+            if (prior) {
+                notes.push(...prior.notes.map(n => `${b.id}: ${n}`));
+                roofPrior = roofPrior ? { planes: [...roofPrior.planes, ...prior.planes], tiers: [...roofPrior.tiers, ...prior.tiers].sort((u, v) => u.topY - v.topY), triangles: roofPrior.triangles + prior.triangles, topTriangles: roofPrior.topTriangles + prior.topTriangles, notes: [...roofPrior.notes, ...prior.notes] } : prior;
+            }
+        }
         for (const [vi, v] of (fromFootprint ? [] : b.volumes ?? []).entries()) {
             if (v.vertices.length < 4 || v.indices.length < 12) continue;
             meshes.push(singleSided({ id: `${b.id}/v${vi}`, vertices: v.vertices.map(([x, h, z]) => [x, inp.groundY + h, z]), indices: v.indices.slice(), ...(b.provenance ? { provenance: b.provenance } : {}) }));
@@ -744,18 +766,24 @@ export function buildMassing(inp: MassingInputs): Massing {
                     if (inp.preferExtrusion === true ? (e <= cur && em <= curMean + 1e-6) : (e < cur * 0.95 && e < 1.5)) { capped.planes = trial.planes; cur = e; curMean = em; solarReport.pitchedKept++; usedSolar.add(k); }
                     else solarReport.pitchedRejected++;
                 }
-                if (capped.planes.length) { target.planes = capped.planes; target.topY = capped.topY; }
+                if (capped.planes.length) { target.planes = capped.planes; target.topY = capped.topY; target.roof = { source: 'solar', note: `${capped.planes.length} pitched Solar facet${capped.planes.length === 1 ? '' : 's'} kept where each lowered the roof's error against the scan (median ${cur.toFixed(2)} m)` }; }
             };
             // a single flat vector footprint can still hide a stepped/setback building (Google's 2.5D tiles rarely carry
             // more than one ring per building); the scan's own heightfield already in hand (scanTop) is read one step
             // further here for a real plan-area step, and only replaces the flat part when one is found - see
             // "stepped massing from the scan's own heightfield" above
-            const tiers = heightSource === 'scan' || agree(vectorY) || agree(solarY) ? detectHeightTiers(loops, inp.scanTop, baseY) : undefined;
+            const scanTiers = heightSource === 'scan' || agree(vectorY) || agree(solarY) ? detectHeightTiers(loops, inp.scanTop, baseY) : undefined;
+            // the modelled volume's tiers against the scan's: a volume outline is taken for an upper tier's plan only where
+            // the two agree (the scan keeps the height); the notes say where they do not
+            const reconciled = reconcileTiers(scanTiers, prior, inp.groundY);
+            notes.push(...reconciled.notes.map(n => `part ${id}: ${n}`));
+            const tiers = reconciled.tiers;
             if (tiers) {
                 for (const [ti, tier] of tiers.entries()) {
                     const tierPart: MassingPart = {
                         id: `${id}/t${ti}`, baseY: tier.baseY, topY: tier.topY, loops: [tier.loop], planes: [],
                         heightSource: 'scan', heights: { scanY: tier.topY }, ...(b.provenance ? { provenance: b.provenance } : {}),
+                        ...(tier.planSource === 'modelled-volume' && tier.note ? { roof: { source: 'scan', note: tier.note } } : {}),
                     };
                     if (ti === tiers.length - 1) fitPitched(tierPart, samplesIn([tier.loop]).filter(([x, z]) => Number.isFinite(inp.scanTop(x, z))));
                     parts.push(tierPart);
@@ -767,7 +795,7 @@ export function buildMassing(inp: MassingInputs): Massing {
             parts.push(part);
         }
     }
-    return { parts, meshes, notes, solar: solarReport, check: checkMassing(parts, meshes, inp) };
+    return { parts, meshes, notes, solar: solarReport, check: checkMassing(parts, meshes, inp), ...(roofPrior ? { roofPrior } : {}) };
 }
 
 /** The massing's plan against the scan's structure cells (IoU) and its roof against the scan's top (median, 90th percentile). */
@@ -840,6 +868,8 @@ export function massingSpecText(m: Pick<Massing, 'parts' | 'meshes'>, opts: {
     for (const [k, v] of Object.entries(opts.params ?? {})) L.push(`param ${k} ${n6(v)}`);
     const prov = tok(opts.provenance ?? 'massing');
     for (const p of m.parts) {
+        // which source decided the roof, for the record ('#' lines are comments to readSpec)
+        L.push(`# roof ${tok(p.id)} ${p.roof ? `${tok(p.roof.source)}: ${p.roof.note}` : `flat top at the ${p.heightSource} height${p.planes.length ? ` under ${p.planes.length} plane${p.planes.length === 1 ? '' : 's'}` : ''}`}`.replace(/[\r\n]+/g, ' '));
         L.push(`part ${tok(p.id)} ${n6(p.baseY)} ${n6(p.topY)} ${p.provenance ? tok(p.provenance) : prov}`);
         for (const l of p.loops) L.push(`loop ${l.length} ${l.map(([x, z]) => `${n6(x)} ${n6(z)}`).join(' ')}`);
         for (const pl of p.planes) L.push(`plane ${n6(pl.a)} ${n6(pl.b)} ${n6(pl.c)} ${tok(pl.tag)}`);
