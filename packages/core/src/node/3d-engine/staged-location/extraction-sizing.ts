@@ -767,30 +767,14 @@ export async function sizeExtraction<E extends SizingExtraction>(deps: SizingDep
     let vector: EvidenceLookup | undefined, vectorError: string | undefined;
     /** The last extraction that succeeded: real data the call can fall back to when a later, larger one fails. */
     let held: { extraction: E; radius: number; round: number } | undefined;
-    for (let round = 1; ; round++) {
+    /** Canopy, Google vector evidence, the masked ground model, and the pick — the per-round work an extraction is given
+     *  once it exists, pulled out so the no-structure widening below can reuse it on its own extraction instead of a
+     *  second deps.extract for the radius it already has. Reads/writes canopyAvailable, vector, vectorError, notes and
+     *  timings in the enclosing scope, as the loop body already did inline before this was pulled out. */
+    const pickRound = async (extraction: E, radius: number) => {
         let t = now();
-        deps.onProgress?.(round === 1 ? `Extracting a ${radius} m probe around the place` : `Extracting ${radius} m to contain the whole structure (round ${round})`);
-        let extraction: E;
-        try {
-            extraction = await deps.extract(radius, round);
-        } catch (err) {
-            // the first extraction has nothing to fall back to (no tile coverage); a larger one that fails leaves the district
-            // at the last radius that did come back, which is real data
-            if (!held || deps.signal?.aborted) throw err;
-            notes.push({
-                reasonCode: 'containment_failed',
-                reason: `extracting ${radius} m to contain the structure failed (${(err as Error).message}); showing the district at ${held.radius} m around it without a rebuild`,
-                error: (err as Error).message
-            });
-            return { extraction: held.extraction, radiusM: held.radius, rounds: held.round, sizedTo: 'district-fallback', notes, timingsMs: timings };
-        }
-        held = { extraction, radius, round };
-        timings[`extract_r${radius}`] = now() - t;
-        t = now();
-        // the canopy first: the terrain is measured with tree crowns left out, then the crowns take the terrain's value
         let mask: CanopyMask | undefined;
         if (canopyAvailable) {
-            t = now();
             try {
                 mask = await deps.canopy!(extraction.texturedGlb);
             } catch (err) {
@@ -818,21 +802,71 @@ export async function sizeExtraction<E extends SizingExtraction>(deps: SizingDep
         let ground = unmasked, canopyCells = 0;
         if (mask) { const m = maskCanopy(unmasked, mask); ground = m.masked; canopyCells = m.cells; }
         timings[`dsm_r${radius}`] = now() - t;
-        const structure = pickStructure(scan, ground, { canopyCellsMasked: canopyCells, ...(vector ? { footprints: { buildingAt: vector.buildingAt, buildings: vector.raster.buildings } } : {}) });
+        // nothing tall within STRUCTURE_SEED_SEARCH_M of the anchor retries on a wider extraction (a landmark-scale
+        // place name often geocodes well clear of the structure itself), so the search window passed here must grow
+        // with it too: the extraction alone being wider does nothing if pickStructure's own search radius stays fixed
+        // at the original 30 m. The first probe (radius === PROBE_RADIUS_M) is unaffected (max(30, 25) = 30, the same
+        // default as before this widening existed).
+        const seedSearchM = Math.max(STRUCTURE_SEED_SEARCH_M, radius);
+        const structure = pickStructure(scan, ground, { seedSearchM, canopyCellsMasked: canopyCells, ...(vector ? { footprints: { buildingAt: vector.buildingAt, buildings: vector.raster.buildings } } : {}) });
+        return { structure, scan, ground, unmasked, mask, seedSearchM };
+    };
+    for (let round = 1; ; round++) {
+        let t = now();
+        deps.onProgress?.(round === 1 ? `Extracting a ${radius} m probe around the place` : `Extracting ${radius} m to contain the whole structure (round ${round})`);
+        let extraction: E;
+        try {
+            extraction = await deps.extract(radius, round);
+        } catch (err) {
+            // the first extraction has nothing to fall back to (no tile coverage); a larger one that fails leaves the district
+            // at the last radius that did come back, which is real data
+            if (!held || deps.signal?.aborted) throw err;
+            notes.push({
+                reasonCode: 'containment_failed',
+                reason: `extracting ${radius} m to contain the structure failed (${(err as Error).message}); showing the district at ${held.radius} m around it without a rebuild`,
+                error: (err as Error).message
+            });
+            return { extraction: held.extraction, radiusM: held.radius, rounds: held.round, sizedTo: 'district-fallback', notes, timingsMs: timings };
+        }
+        held = { extraction, radius, round };
+        timings[`extract_r${radius}`] = now() - t;
+        let { structure, scan, ground, unmasked, mask, seedSearchM } = await pickRound(extraction, radius);
         if (!structure) {
-            notes.push({ reasonCode: 'no_structure_at_anchor', reason: `no structure ${STRUCTURE_MIN_HEIGHT_M} m or taller stands within ${STRUCTURE_SEED_SEARCH_M} m of the place; showing the area around it` });
-            if (radius === NO_STRUCTURE_DISTRICT_RADIUS_M) return { extraction, radiusM: radius, rounds: round, sizedTo: 'district-fallback', notes, timingsMs: timings };
+            if (radius >= NO_STRUCTURE_DISTRICT_RADIUS_M) {
+                notes.push({ reasonCode: 'no_structure_at_anchor', reason: `no structure ${STRUCTURE_MIN_HEIGHT_M} m or taller stands within ${seedSearchM} m of the place; showing the area around it` });
+                return { extraction, radiusM: radius, rounds: round, sizedTo: 'district-fallback', notes, timingsMs: timings };
+            }
+            // a cheap, local-only look first (an extraction already downloaded, an unmasked pick on it — no canopy or
+            // vector classification spent yet): is a wider look even worth its cost before paying for it for real? By
+            // far the common case (a genuine plaza, a park) finds nothing here either and gives up having spent no more
+            // than this one extra extraction and pick, same as before this widening existed.
+            let wider: E;
             try {
-                const district = await deps.extract(NO_STRUCTURE_DISTRICT_RADIUS_M, round + 1);
-                return { extraction: district, radiusM: NO_STRUCTURE_DISTRICT_RADIUS_M, rounds: round, sizedTo: 'district-fallback', notes, timingsMs: timings };
+                wider = await deps.extract(NO_STRUCTURE_DISTRICT_RADIUS_M, round + 1);
             } catch (err) {
                 if (deps.signal?.aborted) throw err;
-                // the wider area did not come back: the area already extracted stands in, whole, as it was downloaded
                 notes.push({
-                    reasonCode: 'district_extract_failed',
-                    reason: `extracting the ${NO_STRUCTURE_DISTRICT_RADIUS_M} m district failed (${(err as Error).message}); showing the ${radius} m already extracted around the place`,
+                    reasonCode: 'containment_failed',
+                    reason: `extracting ${NO_STRUCTURE_DISTRICT_RADIUS_M} m to contain the structure failed (${(err as Error).message}); showing the district at ${held.radius} m around it without a rebuild`,
                     error: (err as Error).message
                 });
+                return { extraction: held.extraction, radiusM: held.radius, rounds: held.round, sizedTo: 'district-fallback', notes, timingsMs: timings };
+            }
+            const widerScan = loadScanMesh(wider.texturedGlb);
+            const widerGround = buildGroundModel(widerScan, { cellMeters: 1 });
+            if (!pickStructure(widerScan, widerGround, { seedSearchM: NO_STRUCTURE_DISTRICT_RADIUS_M })) {
+                notes.push({ reasonCode: 'no_structure_at_anchor', reason: `no structure ${STRUCTURE_MIN_HEIGHT_M} m or taller stands within ${NO_STRUCTURE_DISTRICT_RADIUS_M} m of the place; showing the area around it` });
+                return { extraction: wider, radiusM: NO_STRUCTURE_DISTRICT_RADIUS_M, rounds: round + 1, sizedTo: 'district-fallback', notes, timingsMs: timings };
+            }
+            // something real does stand further out: the full round (canopy, vector, the real masked pick) on this same
+            // extraction, not a second deps.extract for the radius it already has
+            radius = NO_STRUCTURE_DISTRICT_RADIUS_M;
+            round++;
+            extraction = wider;
+            held = { extraction, radius, round };
+            ({ structure, scan, ground, unmasked, mask, seedSearchM } = await pickRound(extraction, radius));
+            if (!structure) {
+                notes.push({ reasonCode: 'no_structure_at_anchor', reason: `no structure ${STRUCTURE_MIN_HEIGHT_M} m or taller stands within ${seedSearchM} m of the place; showing the area around it` });
                 return { extraction, radiusM: radius, rounds: round, sizedTo: 'district-fallback', notes, timingsMs: timings };
             }
         }
