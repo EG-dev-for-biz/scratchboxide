@@ -48,7 +48,7 @@ import { runPanoRegistrationOffThread, type PanoRegistrationJob, type PanoRegist
 import { EDGE_REG_MAX_WIDTH_PX, type HeldImage } from '../../../3d-engine/staged-location/pano-edge-registration';
 import { JOINT_METRIC_WIDTH_PX, JOINT_WIDTHS_PX } from '../../../3d-engine/staged-location/pano-joint-registration';
 import { projectionViewFromRegistered } from '../../../3d-engine/staged-location/texture-projection-views';
-import { objectSegmenter, ownViews, type OwnershipSegmenter, type ViewOwnershipRecord } from '../../../3d-engine/staged-location/streetview-ownership';
+import { objectSegmenter, occluderVerifier, ownViews, type OwnershipSegmenter, type ViewOwnershipRecord } from '../../../3d-engine/staged-location/streetview-ownership';
 import { cleanStreetViewImage, streetViewCleanEnabled } from '../../../3d-engine/staged-location/streetview-clean';
 import { genAiEnhanceClient, type EnhanceModelClient } from '../../../3d-engine/staged-location/texture-enhance';
 import { LIGHTING_MODEL_FULL, LIGHTING_MODEL_LITE } from '../../../3d-engine/staged-location/texture-lighting';
@@ -248,7 +248,7 @@ export interface SurveyedViewResult {
          * The obstruction-free copy beside the raw capture: a REFERENCE, never a measurement (its filled pixels are generated,
          * labelled so); imagePath stays the photograph as captured.
          */
-        clean?: { imagePath?: string; filledMaskPath?: string; occluderPixels: number; filledPixels: number; decision: string; reason?: string; modelUsed?: string; provenance: string };
+        clean?: { imagePath?: string; filledMaskPath?: string; occluderPixels: number; filledPixels: number; decision: string; verify?: { attempts: Array<{ residualPixels: number; residualShare: number }>; verdict: string }; reason?: string; modelUsed?: string; provenance: string };
     };
     /** With checkTemporary: does anything temporary cover or stand in front of the structure in this view (the vision model's answer). */
     temporary?: SurveyedTemporary;
@@ -615,8 +615,9 @@ export async function runStreetViewSurvey(site: SurveySite, options: StreetViewS
         }));
         const context = sceneToRenderMesh(site.tileMeshFiles.filter(f => fs.existsSync(f)).flatMap(f => readGlbScene(f)));
         const masks = new Map<number, { owner: Uint8Array; occluders: Uint8Array }>();
+        const segment = deps.segmenter ?? objectSegmenter();
         const own = await ownViews({
-            views: pviews, structure: site.structureMesh, ...(context.indices.length ? { context } : {}), segment: deps.segmenter ?? objectSegmenter(),
+            views: pviews, structure: site.structureMesh, ...(context.indices.length ? { context } : {}), segment,
             ...(options.target ? { target: options.target } : {}), signal: deps.signal, onProgress: progress, onMasks: (k, m) => masks.set(k, m)
         });
         for (const [k, rec] of own.records.entries()) {
@@ -637,7 +638,7 @@ export async function runStreetViewSurvey(site: SurveySite, options: StreetViewS
                 view.ownership = { status: rec.status, ...(rec.iou !== undefined ? { iou: rec.iou } : {}), ownerMaskPath: rel(ownerFile), occluderMaskPath: rel(occFile), ownerPixels, occluderPixels, ...(temporaryPixels !== undefined ? { temporaryPixels } : {}) };
                 if (deps.clean && streetViewCleanEnabled()) {
                     try {
-                        const r = await cleanStreetViewImage({ image: pviews[k].image, occluders: m.occluders, client: deps.clean.client, models: deps.clean.models, ...(deps.clean.cacheDir ? { cacheDir: deps.clean.cacheDir } : {}), ...(deps.signal ? { signal: deps.signal } : {}) });
+                        const r = await cleanStreetViewImage({ image: pviews[k].image, occluders: m.occluders, client: deps.clean.client, models: deps.clean.models, ...(options.target ? { verify: occluderVerifier(segment, options.target, deps.signal) } : {}), ...(deps.clean.cacheDir ? { cacheDir: deps.clean.cacheDir } : {}), ...(deps.signal ? { signal: deps.signal } : {}) });
                         let imagePath: string | undefined, filledMaskPath: string | undefined;
                         if (r.filledPixels) {
                             const cleanFile = path.join(path.dirname(path.resolve(options.workspaceRoot ?? '.', view.imagePath)), `${stem}_clean.png`);
@@ -646,7 +647,7 @@ export async function runStreetViewSurvey(site: SurveySite, options: StreetViewS
                             writeMask(filledFile, r.filledMask, W, H);
                             imagePath = rel(cleanFile); filledMaskPath = rel(filledFile);
                         }
-                        view.ownership.clean = { ...(imagePath ? { imagePath } : {}), ...(filledMaskPath ? { filledMaskPath } : {}), occluderPixels: r.occluderPixels, filledPixels: r.filledPixels, decision: r.decision, ...(r.reason ? { reason: r.reason } : {}), ...(r.modelUsed ? { modelUsed: r.modelUsed } : {}), provenance: r.filledPixels ? `${r.filledPixels} px generated: ${r.provenance.method}` : r.provenance.method };
+                        view.ownership.clean = { ...(imagePath ? { imagePath } : {}), ...(filledMaskPath ? { filledMaskPath } : {}), occluderPixels: r.occluderPixels, filledPixels: r.filledPixels, decision: r.decision, ...(r.verify ? { verify: r.verify } : {}), ...(r.reason ? { reason: r.reason } : {}), ...(r.modelUsed ? { modelUsed: r.modelUsed } : {}), provenance: r.filledPixels ? `${r.filledPixels} px generated: ${r.provenance.method}` : r.provenance.method };
                     } catch (err) {
                         if (deps.signal?.aborted) throw err;
                         view.ownership.clean = { occluderPixels: 0, filledPixels: 0, decision: 'model_failed', reason: err instanceof Error ? err.message : String(err), provenance: 'the Street View photograph as captured' };

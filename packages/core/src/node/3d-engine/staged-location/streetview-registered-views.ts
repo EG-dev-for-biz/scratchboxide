@@ -26,7 +26,7 @@ import { runPanoRegistrationOffThread, type PanoRegistrationJob, type PanoRegist
 import type { Registration } from './pano-registration';
 import type { EdgePanoOutcome, HeldImage } from './pano-edge-registration';
 import { projectionViewFromRegistered } from './texture-projection-views';
-import { ownViews, type OwnershipSegmenter, type ViewOwnershipRecord } from './streetview-ownership';
+import { occluderVerifier, ownViews, type OwnershipSegmenter, type ViewOwnershipRecord } from './streetview-ownership';
 import { cleanStreetViewImage, streetViewCleanEnabled, type StreetViewCleanResult } from './streetview-clean';
 import type { EnhanceModelClient } from './texture-enhance';
 
@@ -201,7 +201,7 @@ export type RegisteredView = ProjectionView & {
      * 1 where a pixel is generated. A reference for image models only; `image` and `ownerMask` stay the photograph as captured.
      */
     cleanImage?: ProjectionView['image']; cleanFilledMask?: Uint8Array;
-    clean?: Pick<StreetViewCleanResult, 'decision' | 'occluderPixels' | 'filledPixels' | 'reason' | 'modelUsed' | 'cached'>;
+    clean?: Pick<StreetViewCleanResult, 'decision' | 'occluderPixels' | 'filledPixels' | 'reason' | 'modelUsed' | 'cached' | 'verify'>;
 };
 
 /**
@@ -279,8 +279,8 @@ export async function registeredSurveyViews(input: {
         if (jobs.length) progress(`removing what stands in front of the structure from ${jobs.length} Street View photo(s)`);
         await pool(jobs, 4, async ({ v, occ }) => {
             try {
-                const r = await cleanStreetViewImage({ image: v.image, occluders: occ!, client: c.client, models: c.models, ...(c.cacheDir ? { cacheDir: c.cacheDir } : {}), ...(input.signal ? { signal: input.signal } : {}) });
-                v.clean = { decision: r.decision, occluderPixels: r.occluderPixels, filledPixels: r.filledPixels, ...(r.reason ? { reason: r.reason } : {}), ...(r.modelUsed ? { modelUsed: r.modelUsed } : {}), ...(r.cached ? { cached: true } : {}) };
+                const r = await cleanStreetViewImage({ image: v.image, occluders: occ!, client: c.client, models: c.models, ...(input.target ? { verify: occluderVerifier(input.segment, input.target, input.signal) } : {}), ...(c.cacheDir ? { cacheDir: c.cacheDir } : {}), ...(input.signal ? { signal: input.signal } : {}) });
+                v.clean = { decision: r.decision, occluderPixels: r.occluderPixels, filledPixels: r.filledPixels, ...(r.verify ? { verify: r.verify } : {}), ...(r.reason ? { reason: r.reason } : {}), ...(r.modelUsed ? { modelUsed: r.modelUsed } : {}), ...(r.cached ? { cached: true } : {}) };
                 if (r.filledPixels) { v.cleanImage = r.image; v.cleanFilledMask = r.filledMask; }
             } catch (err) {
                 if (input.signal?.aborted) throw err;

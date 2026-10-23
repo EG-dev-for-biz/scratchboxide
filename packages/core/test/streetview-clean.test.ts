@@ -77,6 +77,42 @@ describe('obstruction-free Street View copy', () => {
         expect(image.rgba[(70 * W + 100) * 4 + 1]).toBe(140);
     });
 
+    it('checks the fill for what is still standing there: one retry with a stronger instruction, then the photo is kept as captured', async () => {
+        const { image, occluders } = photo();
+        const prompts: string[] = [];
+        // a fill that keeps redrawing the tree trunk where it stood
+        const stubborn: EnhanceModelClient = async req => {
+            prompts.push(req.prompt);
+            const out = await rowFill(req);
+            // the request may be a crop: redraw a 6 px trunk in the middle of each row's hole
+            const asked = decodeImageInMemory(req.image.bytes), img = decodeImageInMemory(out.bytes), p = Uint8Array.from(img.rgba);
+            for (let y = 0; y < img.height; y++) {
+                const xs: number[] = [];
+                for (let x = 0; x < img.width; x++) if (isMagenta(asked.rgba, (y * img.width + x) * 4)) xs.push(x);
+                if (xs.length) { const mid = (xs[0] + xs[xs.length - 1]) >> 1; for (let x = mid - 3; x < mid + 3; x++) p.set([40, 140, 50], (y * img.width + x) * 4); }
+            }
+            return { ...out, bytes: new Uint8Array(encodePng(img.width, img.height, Buffer.from(p))) };
+        };
+        const verify = async (cleaned: RgbaImage8, filled: Uint8Array) => {
+            const m = new Uint8Array(W * H);
+            for (let i = 0; i < W * H; i++) if (filled[i] && cleaned.rgba[i * 4 + 1] > 130 && cleaned.rgba[i * 4] < 60) m[i] = 1;
+            return m;
+        };
+        const r = await cleanStreetViewImage({ image, occluders, client: stubborn, models: ['x'], verify });
+        expect(prompts).toHaveLength(2);
+        expect(prompts[1]).not.toBe(prompts[0]);
+        expect(r.decision).toBe('rejected_residual');
+        expect(r.image).toBe(image);
+        expect(r.provenance.label).toBe('as-captured');
+        expect(r.verify!.verdict).toBe('rejected');
+        expect(r.verify!.attempts).toHaveLength(2);
+        expect(r.verify!.attempts[0].residualShare).toBeGreaterThan(0.03);
+        // an honest fill passes the same check first time
+        const ok = await cleanStreetViewImage({ image, occluders, client: rowFill, models: ['x'], verify });
+        expect(ok.decision).toBe('accepted');
+        expect(ok.verify).toMatchObject({ verdict: 'accepted', attempts: [{ residualPixels: 0 }] });
+    });
+
     it('a failed or rejected fill leaves the photo as captured, with the reason', async () => {
         const { image, occluders } = photo();
         const failed = await cleanStreetViewImage({ image, occluders, client: broken, models: ['x'] });

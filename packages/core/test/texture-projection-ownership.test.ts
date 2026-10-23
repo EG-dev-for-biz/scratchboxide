@@ -24,7 +24,7 @@ import type { Vec3 } from '../src/common/spatial/staged-location-contracts';
 import type { DepthMap, PinholeCamera, ProjectionView } from '../src/common/spatial/texture-pass-contracts';
 import { bakeStreetViewProjection, type ProjectionBakeResult } from '../src/node/3d-engine/staged-location/texture-projection';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { dilateMask, growThinVertical, maskIou, occluderDescription, ownershipPrompts, OwnershipTargetNotFound, ownViews, OWNERSHIP_MIN_IOU, type OwnershipSegmenter } from '../src/node/3d-engine/staged-location/streetview-ownership';
+import { dilateMask, growThinVertical, thinOccluderDescription, maskIou, occluderDescription, ownershipPrompts, OwnershipTargetNotFound, ownViews, OWNERSHIP_MIN_IOU, type OwnershipSegmenter } from '../src/node/3d-engine/staged-location/streetview-ownership';
 import { renderFrameDepth } from '../src/node/spatial/StreetViewPoseRegistrar';
 import { FACADE, facadeAtlas, lookAtCamera } from './helpers/texture-pass-fixtures';
 
@@ -142,7 +142,7 @@ describe('Street View projection: pixel ownership', () => {
         const seen: Array<string | undefined> = [];
         const segment: OwnershipSegmenter = async (image, prompts) => {
             seen.push(prompts.target);
-            if (prompts.target === occluderDescription('the test facade')) return new Uint8Array(image.width * image.height); // nothing in front
+            if (prompts.target === occluderDescription('the test facade') || prompts.target === thinOccluderDescription('the test facade')) return new Uint8Array(image.width * image.height); // nothing in front
             const k = views.findIndex(v => v.image === image);
             if (views[k].panoId === 'left') throw new OwnershipTargetNotFound('the photo shows a green neighbour, not the structure');
             if (views[k].panoId === 'right') return new Uint8Array(image.width * image.height).map((_, i) => (i % image.width < 30 ? 1 : 0)); // a strip at the edge
@@ -188,10 +188,11 @@ describe('Street View projection: pixel ownership', () => {
                 for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (sign(x, y)) m[y * W + x] = 1;
                 return m;
             }
+            if (prompts.target === thinOccluderDescription('the test facade')) return new Uint8Array(W * H); // misses the pole too
             return structure;
         };
         const own = await ownViews({ views: [view], structure: facadeMesh(), segment, target: 'the test facade' });
-        expect(asked).toEqual(['the test facade', occluderDescription('the test facade')]);
+        expect(asked).toEqual(['the test facade', occluderDescription('the test facade'), thinOccluderDescription('the test facade')]);
         const rec = own.records[0];
         expect(rec.status).toBe('segmented');
         expect(rec.occluders!.segmentedPixels).toBeGreaterThan(500);
@@ -209,6 +210,38 @@ describe('Street View projection: pixel ownership', () => {
         expect(occluded).toBeGreaterThan(20);
         expect(wrong(res).baked).toBeLessThan(atlas.width * atlas.height);
         for (let t = 0; t < atlas.width * atlas.height; t++) if (res.albedo[t * 4 + 3] === 255) expect(res.albedo[t * 4]).toBeGreaterThan(100); // no dark sign or pole
+    });
+
+    it('counts as occluders only pixels inside the structure silhouette, and adds thin crossings the second query finds', async () => {
+        // a camera wide enough to see sky beside the facade
+        const cam = lookAtCamera([5, 1.7, -9], [5, 3, 0], 240, 144, 90);
+        const shot = shoot(cam, () => undefined);
+        const W = cam.width, H = cam.height;
+        const structure = new Uint8Array(W * H);
+        for (let i = 0; i < W * H; i++) structure[i] = Number.isFinite(shot.depth.depthM[i]) ? 1 : 0;
+        let left = W; for (let i = 0; i < W * H; i++) if (structure[i]) left = Math.min(left, i % W);
+        expect(left).toBeGreaterThan(30);
+        // the occluder query returns a neighbour building beside the facade (outside its silhouette);
+        // the thin query returns a 2 px pole crossing the facade at x = 120
+        const neighbour = (x: number) => x < left - 8;
+        const pole = (x: number, y: number) => x >= 120 && x < 122 && structure[y * W + x] === 1;
+        const segment: OwnershipSegmenter = async (_image, prompts) => {
+            const m = new Uint8Array(W * H);
+            if (prompts.target === occluderDescription('the test facade')) { for (let i = 0; i < W * H; i++) if (neighbour(i % W)) m[i] = 1; return m; }
+            if (prompts.target === thinOccluderDescription('the test facade')) { for (let i = 0; i < W * H; i++) if (pole(i % W, Math.floor(i / W))) m[i] = 1; return m; }
+            return structure;
+        };
+        let occ = new Uint8Array(0);
+        const own = await ownViews({ views: [{ panoId: 'p', camera: cam, image: shot.image, poseQuality: 1, poseSigmaPx: 0 }], structure: facadeMesh(), segment, target: 'the test facade', onMasks: (_k, m) => { occ = m.occluders; } });
+        const rec = own.records[0], mask = own.views[0].ownerMask!;
+        expect(rec.status).toBe('segmented');
+        let neighbourOcc = 0, poleOcc = 0;
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { if (neighbour(x) && occ[y * W + x]) neighbourOcc++; if (pole(x, y) && occ[y * W + x]) poleOcc++; }
+        expect(neighbourOcc).toBe(0);
+        expect(poleOcc).toBeGreaterThan(50);
+        expect(rec.occluders!.thinPixels).toBeGreaterThan(50);
+        expect(mask[(H >> 1) * W + 121]).toBe(0);
+        expect(mask[(H >> 1) * W + 80]).toBe(1);
     });
 
     it('grows only along thin lines and dilates without touching the image border', () => {

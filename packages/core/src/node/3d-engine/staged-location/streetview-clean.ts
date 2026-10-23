@@ -29,7 +29,9 @@ import type { RgbaImage8 } from './tile-texture-transfer';
 import { encodePng } from '../../texture-processing';
 import { decodeImageInMemory } from './tile-texture-transfer';
 
-export const STREETVIEW_CLEAN_VERSION = 1;
+export const STREETVIEW_CLEAN_VERSION = 2;
+/** After a fill, an occluder still found on more than this share of the filled pixels fails the check (retry once, then reject). */
+export const CLEAN_MAX_RESIDUAL_SHARE = 0.03;
 /** Fewer occluder pixels than this is nothing worth a model call. */
 export const CLEAN_MIN_PIXELS = 64;
 
@@ -46,6 +48,11 @@ export const occluderRemovalPrompt = (w: number, h: number): string =>
     'in the same perspective and light), or the ground and street continuing where the hole reaches below the building. ' +
     'Do not change any pixel outside the magenta regions. Draw no trees, foliage, vehicles, people, poles, signs, wires or scaffolding, and leave no magenta. Answer with the full image at the same framing.';
 
+/** The retry after a fill left an occluder standing: the same request, said harder. */
+export const occluderRemovalRetryPrompt = (w: number, h: number): string =>
+    occluderRemovalPrompt(w, h) + ' A previous attempt redrew part of the removed object (a pole, banner, sign, branch or vehicle) inside the magenta regions: that is wrong. ' +
+    'Inside the magenta regions there must be ONLY the building surface (or ground) that is behind it, nothing standing in front of it.';
+
 export interface StreetViewCleanResult {
     /** The clean copy (the input itself when nothing was filled). */
     image: RgbaImage8;
@@ -53,7 +60,9 @@ export interface StreetViewCleanResult {
     filledMask: Uint8Array;
     occluderPixels: number;
     filledPixels: number;
-    decision: HoleInfillResult['decision'] | 'disabled' | 'too_few_occluders';
+    decision: HoleInfillResult['decision'] | 'disabled' | 'too_few_occluders' | 'rejected_residual';
+    /** The check after the fill (verify given): occluder pixels still found inside the filled area, per attempt. */
+    verify?: { attempts: Array<{ residualPixels: number; residualShare: number }>; verdict: 'accepted' | 'retried' | 'rejected' };
     reason?: string;
     modelUsed?: string;
     /** Filled pixels: generated, with why; every other pixel is the photograph's own. */
@@ -72,6 +81,11 @@ export function cleanKey(image: RgbaImage8, occluders: Uint8Array): string {
  */
 export async function cleanStreetViewImage(input: {
     image: RgbaImage8; occluders: Uint8Array; client: EnhanceModelClient; models: string[]; cacheDir?: string; signal?: AbortSignal;
+    /**
+     * The check after a fill: the occluder detection run on the cleaned copy (1 = still something standing in front),
+     * judged inside the filled pixels only. Absent: no check.
+     */
+    verify?: (cleaned: RgbaImage8, filledMask: Uint8Array) => Promise<Uint8Array>;
 }): Promise<StreetViewCleanResult> {
     const { image, occluders } = input;
     const n = image.width * image.height;
@@ -84,20 +98,42 @@ export async function cleanStreetViewImage(input: {
     const key = input.cacheDir ? cleanKey(image, occluders) : undefined;
     const hit = key ? readCached(input.cacheDir!, key, image, occ) : undefined;
     if (hit) return hit;
-    let out: HoleInfillResult;
-    try {
-        out = await infillImageHoles({ image, mask: occluders, client: input.client, models: input.models, prompt: occluderRemovalPrompt, ...(input.signal ? { signal: input.signal } : {}) });
-    } catch (err) {
-        if (input.signal?.aborted) throw err;
-        out = { image, holePixels: occ, filledPixels: 0, decision: 'model_failed', reason: `the image model did not answer (${err instanceof Error ? err.message : String(err)}); the occluders stay masked out` };
+    const fill = async (prompt: (w: number, h: number) => string): Promise<HoleInfillResult> => {
+        try {
+            return await infillImageHoles({ image, mask: occluders, client: input.client, models: input.models, prompt, ...(input.signal ? { signal: input.signal } : {}) });
+        } catch (err) {
+            if (input.signal?.aborted) throw err;
+            return { image, holePixels: occ, filledPixels: 0, decision: 'model_failed', reason: `the image model did not answer (${err instanceof Error ? err.message : String(err)}); the occluders stay masked out` };
+        }
+    };
+    // the check: what the occluder detection still finds inside the filled pixels of a cleaned copy
+    const residual = async (r: HoleInfillResult) => {
+        const found = await input.verify!(r.image, r.filledMask!);
+        let n = 0, f = 0;
+        for (let i = 0; i < found.length; i++) if (r.filledMask![i]) { f++; if (found[i]) n++; }
+        return { residualPixels: n, residualShare: f ? Math.round((n / f) * 1000) / 1000 : 0 };
+    };
+    let out = await fill(occluderRemovalPrompt);
+    let verify: StreetViewCleanResult['verify'];
+    if (out.decision === 'accepted' && out.filledMask && input.verify) {
+        const attempts = [await residual(out)];
+        if (attempts[0].residualShare > CLEAN_MAX_RESIDUAL_SHARE) {
+            const again = await fill(occluderRemovalRetryPrompt);
+            if (again.decision === 'accepted' && again.filledMask) attempts.push(await residual(again));
+            const ok = attempts.length > 1 && attempts[1].residualShare <= CLEAN_MAX_RESIDUAL_SHARE;
+            verify = { attempts, verdict: ok ? 'retried' : 'rejected' };
+            if (ok) out = again;
+            else out = { image, holePixels: occ, filledPixels: 0, decision: 'rejected_residual' as HoleInfillResult['decision'],
+                reason: `the fill left something standing in front of the structure (${(100 * attempts[attempts.length - 1].residualShare).toFixed(1)} percent of the filled pixels still read as an occluder after ${attempts.length} attempt(s)); the photograph is kept as captured, its occluders masked out` };
+        } else verify = { attempts, verdict: 'accepted' };
     }
     const result: StreetViewCleanResult = out.decision === 'accepted' && out.filledMask
         ? {
-            image: out.image, filledMask: out.filledMask, occluderPixels: occ, filledPixels: out.filledPixels, decision: 'accepted', ...(out.modelUsed ? { modelUsed: out.modelUsed } : {}),
-            provenance: { label: 'generated', method: `occluders in front of the structure (trees, vehicles, people, street furniture) removed: ${out.provenance?.method ?? 'filled through the inpaint lock'}` }
+            image: out.image, filledMask: out.filledMask, occluderPixels: occ, filledPixels: out.filledPixels, decision: 'accepted', ...(out.modelUsed ? { modelUsed: out.modelUsed } : {}), ...(verify ? { verify } : {}),
+            provenance: { label: 'generated', method: `occluders in front of the structure (trees, vehicles, people, street furniture) removed: ${out.provenance?.method ?? 'filled through the inpaint lock'}${verify ? `; checked after the fill (${verify.verdict}, residual ${(100 * verify.attempts[verify.attempts.length - 1].residualShare).toFixed(1)} percent)` : ''}` }
         }
         : {
-            image, filledMask: none, occluderPixels: occ, filledPixels: 0, decision: out.decision, ...(out.modelUsed ? { modelUsed: out.modelUsed } : {}),
+            image, filledMask: none, occluderPixels: occ, filledPixels: 0, decision: out.decision as StreetViewCleanResult['decision'], ...(out.modelUsed ? { modelUsed: out.modelUsed } : {}), ...(verify ? { verify } : {}),
             reason: out.reason ?? `the fill was not kept (${out.decision}); the occluders stay masked out`, provenance: asCaptured
         };
     if (key) writeCached(input.cacheDir!, key, result);
@@ -109,11 +145,11 @@ function readCached(dir: string, key: string, image: RgbaImage8, occ: number): S
     if (!fs.existsSync(meta)) return undefined;
     try {
         const m = JSON.parse(fs.readFileSync(meta, 'utf8'));
-        if (m.decision !== 'accepted') return { image, filledMask: new Uint8Array(image.width * image.height), occluderPixels: occ, filledPixels: 0, decision: m.decision, reason: m.reason, provenance: m.provenance, cached: true };
+        if (m.decision !== 'accepted') return { image, filledMask: new Uint8Array(image.width * image.height), occluderPixels: occ, filledPixels: 0, decision: m.decision, reason: m.reason, provenance: m.provenance, ...(m.verify ? { verify: m.verify } : {}), cached: true };
         const img = decodeImageInMemory(fs.readFileSync(path.join(dir, `${key}.png`)));
         const mask = new Uint8Array(fs.readFileSync(path.join(dir, `${key}.mask`)));
         if (img.width !== image.width || img.height !== image.height || mask.length !== image.width * image.height) return undefined;
-        return { image: img, filledMask: mask, occluderPixels: occ, filledPixels: m.filledPixels, decision: 'accepted', ...(m.modelUsed ? { modelUsed: m.modelUsed } : {}), provenance: m.provenance, cached: true };
+        return { image: img, filledMask: mask, occluderPixels: occ, filledPixels: m.filledPixels, decision: 'accepted', ...(m.modelUsed ? { modelUsed: m.modelUsed } : {}), ...(m.verify ? { verify: m.verify } : {}), provenance: m.provenance, cached: true };
     } catch { return undefined; }
 }
 
@@ -125,5 +161,5 @@ function writeCached(dir: string, key: string, r: StreetViewCleanResult): void {
     }
     // a model failure is transient: not cached, so the next build asks again
     if (r.decision === 'model_failed') return;
-    fs.writeFileSync(path.join(dir, `${key}.json`), JSON.stringify({ decision: r.decision, reason: r.reason, filledPixels: r.filledPixels, modelUsed: r.modelUsed, provenance: r.provenance }));
+    fs.writeFileSync(path.join(dir, `${key}.json`), JSON.stringify({ decision: r.decision, reason: r.reason, filledPixels: r.filledPixels, modelUsed: r.modelUsed, provenance: r.provenance, verify: r.verify }));
 }
