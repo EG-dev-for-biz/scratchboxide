@@ -9,8 +9,10 @@
 
 /**
  * Object or abstract-form request -> native geometry with per-part PBR materials (or all clay on request), in four stages:
- *   1. Reference: Nano Banana Lite (gemini-3.1-flash-lite-image, exactly that model) draws one isolated object in its
- *      real colours and materials under neutral studio light (a clay build asks for a uniform grey clay object).
+ *   1. Reference: a build in materials is drawn in the workspace's Style DNA on the hosted Scratchbox Studio
+ *      (styleDnaReferenceSource: evenly lit, diffused, deep focus, the object whole, with its real wear) when the Studio
+ *      connection is configured; otherwise, for clay, or when Studio fails (said so in imageModel.fallbackReason), Nano
+ *      Banana Lite (gemini-3.1-flash-lite-image) draws one isolated object under neutral studio light.
  *      The image stays a Buffer in this process: it is never written to disk, the media store, public/ or the chat.
  *   2. Build spec: the model chat runs on (the request's model, else the chat's default, walking the chat's own
  *      fallback list on "model not found" and saying so) reads the reference into an ObjectBuildSpec, on the chat's
@@ -41,9 +43,10 @@
  * buildObjectFromSpec builds a given spec (an edit of an earlier one) through stages 3 and 4 only, with no model call:
  * it fails with every problem listed instead of revising. A stop kills the Python process and ends the build at the
  * stage it reached. Nothing here reads part labels or ids for meaning: ids only pair spec parts with their meshes.
- * There is no other image model, template, neural reconstruction or text-only path to fall back to.
+ * There is no other image source, template, neural reconstruction or text-only path to fall back to.
  */
 
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import type { Content, GenerateContentParameters, GenerateContentResponse, Part } from '@google/genai';
 import {
@@ -78,8 +81,9 @@ import {
 import { renderReviewViews } from './visual-review';
 import { materialPreviewMeshes, renderMaterialPreview } from './material-preview-render';
 import { downscaleForVision } from '../vision-image-downscale';
+import { generateStyleDnaImage, studioMcpConfigFromEnv, type StudioImagePresets } from '../scratchbox-studio/studio-mcp-client';
 
-/** Nano Banana Lite. The only model the reference image is ever requested from. */
+/** Nano Banana Lite: the reference model for clay builds, and when the Style DNA source is not configured or fails. */
 export const REFERENCE_IMAGE_MODEL = 'gemini-3.1-flash-lite-image';
 /** Revision passes after the first build. */
 export const MAX_REVISION_PASSES = 2;
@@ -169,6 +173,42 @@ export interface ReferenceObjectBuilderDeps {
      * rate, so a patch of a few parts comes back several times faster than the whole spec.
      */
     patchReplies?: boolean;
+    /**
+     * Where a build that is not clay gets its reference: the workspace's Style DNA on the hosted Scratchbox Studio
+     * (styleDnaReferenceSource) by default when SCRATCHBOX_MCP_* is configured. null always uses REFERENCE_IMAGE_MODEL.
+     * A source that fails falls back to REFERENCE_IMAGE_MODEL, and the result says why (imageModel.fallbackReason).
+     */
+    styleReference?: StyleReferenceSource | null;
+}
+
+/** Draws the reference for a request in a house style; `answered` names what drew it (shown in provenance). */
+export type StyleReferenceSource = (request: string, signal?: AbortSignal) => Promise<{ data: Buffer; mimeType: string; answered: string }>;
+
+/** Presets laid over the workspace's Style DNA for a reference: even, diffused light and everything in focus, so shape and finish read. */
+export const STYLE_DNA_REFERENCE_PRESETS: StudioImagePresets = { lighting: 'overcast soft', depthOfField: 'deep focus', framing: 'entire body' };
+
+/** The reference request in the workspace's Style DNA, for a build that is not clay. */
+export function buildStyleDnaReferencePrompt(request: string): string {
+    return [
+        `Reference picture for building a 3D model of: ${request}.`,
+        'Exactly one complete object, whole and uncropped, centred, in a three-quarter view from slightly above.',
+        'Its real colours and materials, with the real wear, weathering, grime and markings such an object has in use.',
+        'Evenly lit, diffused lighting; everything in sharp focus, deep depth of field, no bokeh or blur.',
+        'Plain seamless neutral backdrop; no props, people or hands.'
+    ].join(' ');
+}
+
+/** The Studio Style DNA reference source, when the Studio connection is configured (SCRATCHBOX_MCP_*). */
+export function styleDnaReferenceSource(env: Record<string, string | undefined> = process.env): StyleReferenceSource | undefined {
+    const config = studioMcpConfigFromEnv(env);
+    if (!config) return undefined;
+    return async (request, signal) => {
+        const prompt = buildStyleDnaReferencePrompt(request);
+        const key = `sbx-objref-${crypto.createHash('sha256').update(prompt).update(String(Date.now())).digest('hex').slice(0, 32)}`;
+        const image = await generateStyleDnaImage(config, { prompt, idempotencyKey: key, aspectRatio: '1:1', presets: STYLE_DNA_REFERENCE_PRESETS }, signal ? { signal } : {});
+        const look = Object.entries(image.effectivePresets).filter(([k]) => k !== 'aspectRatio').map(([, v]) => v).join(', ');
+        return { data: image.data, mimeType: image.mimeType, answered: `Scratchbox Studio Style DNA${look ? ` (${look})` : ''}` };
+    };
 }
 
 export interface ReferenceDifference {
@@ -291,6 +331,8 @@ export interface ModelUse {
     requested: string;
     /** The model version the API reports for the answer (the requested id when the API reports none). */
     answered: string;
+    /** Why something other than `requested` answered (the Style DNA source failed). */
+    fallbackReason?: string;
 }
 
 export interface VisionModelUse extends ModelUse {
@@ -1750,16 +1792,30 @@ export async function buildObjectFromReference(
     const clock = new BuildStageClock();
     const vision = new VisionModel(client, candidates, requestedModel ? 'request' : 'chat-default', deps, input.signal, clock);
 
-    progress(`Drawing an internal reference with ${REFERENCE_IMAGE_MODEL}`, 0.05);
     const clay = input.clay === true;
-    let generated: { image: ReferenceImage; answered: string } | undefined = await clock.time('reference-image',
-        () => generateReferenceImage(client, input.request, deps, input.signal, clay), g => ({ model: g.answered }));
+    // a build in materials draws its reference in the workspace's Style DNA when Scratchbox Studio is configured; clay keeps the plain model
+    const styleSource = clay ? undefined : deps.styleReference === null ? undefined : (deps.styleReference ?? styleDnaReferenceSource());
+    let imageModel: ModelUse = { requested: styleSource ? 'scratchbox-studio/style-dna' : REFERENCE_IMAGE_MODEL, answered: '' };
+    progress(styleSource ? 'Drawing an internal reference in the Scratchbox Studio Style DNA' : `Drawing an internal reference with ${REFERENCE_IMAGE_MODEL}`, 0.05);
+    let generated: { image: ReferenceImage; answered: string } | undefined = await clock.time('reference-image', async () => {
+        if (styleSource) {
+            try {
+                const s = await styleSource(input.request, input.signal);
+                return { image: { data: s.data, mimeType: s.mimeType }, answered: s.answered };
+            } catch (err) {
+                if (input.signal?.aborted) throw err;
+                imageModel = { ...imageModel, fallbackReason: `the Style DNA reference could not be had (${errorMessage(err)}); drawn by ${REFERENCE_IMAGE_MODEL} instead` };
+                progress(`Style DNA reference unavailable; drawing it with ${REFERENCE_IMAGE_MODEL}`, 0.06);
+            }
+        }
+        return generateReferenceImage(client, input.request, deps, input.signal, clay);
+    }, g => ({ model: g.answered }));
     let uploadedName: string | undefined;
     try {
         const prepared = await clock.time('reference-prep', () => prepareReferenceForReading(client as FilesCapableClient, generated!.image, input.signal));
         uploadedName = prepared.uploadedName;
         const reference = prepared.reference;
-        const imageModel: ModelUse = { requested: REFERENCE_IMAGE_MODEL, answered: generated.answered };
+        imageModel = { ...imageModel, answered: generated.answered };
 
         progress(`Reading the reference into a build spec with ${vision.current}`, 0.2);
         const firstSpec = await requestBuildableSpec(vision, [{

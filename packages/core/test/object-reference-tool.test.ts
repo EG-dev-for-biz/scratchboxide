@@ -28,7 +28,7 @@ import { withStagedMaterialMode } from '../src/browser/generative-canvas/primiti
 import { TerrainManager } from '../src/browser/generative-canvas/services/TerrainManager';
 import { glbToTriangleSoup, mergeTriangleSoups } from '../src/node/3d-engine/part-connectivity';
 import { renderReviewViews } from '../src/node/3d-engine/visual-review';
-import { REFERENCE_IMAGE_MODEL, buildObjectFromSpec, objectBuildSpecPatchJsonSchema, schemaInstruction, type ChatModelSource, type GenerateContentClient } from '../src/node/3d-engine/reference-object-builder';
+import { REFERENCE_IMAGE_MODEL, buildObjectFromSpec, objectBuildSpecPatchJsonSchema, schemaInstruction, type ChatModelSource, type GenerateContentClient, type ReferenceObjectBuilderDeps } from '../src/node/3d-engine/reference-object-builder';
 import { activeObjectBuildContext } from '../src/node/gemini/prompt-builder';
 import { OBJECT_BUILD_SPEC_JSON_SCHEMA, objectBuildSpecJsonSchema, type ObjectBuildSpec, type PartMaterial } from '../src/common/spatial/object-build-spec';
 
@@ -206,6 +206,7 @@ function handlerWith(client: GenerateContentClient | undefined, extra: {
     stageAtLocation?: (args: Record<string, unknown>, ctx: ToolContext) => Promise<ToolHandlerOutcome>;
     buildTimeoutMs?: number;
     prepareEngine?: () => Promise<string | null>;
+    styleReference?: ReferenceObjectBuilderDeps['styleReference'];
 } = {}) {
     const pythonRuns: string[] = [];
     const runPython = extra.runPython ?? ((script: string, options: any) => NativePythonRunnerService.getInstance().runScript(script, options));
@@ -216,7 +217,9 @@ function handlerWith(client: GenerateContentClient | undefined, extra: {
             outputDir: path.join(TMP, 'build'),
             sleep: async () => undefined,
             ...(extra.buildTimeoutMs ? { buildTimeoutMs: extra.buildTimeoutMs } : {}),
-            ...(extra.prepareEngine ? { prepareEngine: extra.prepareEngine } : {})
+            ...(extra.prepareEngine ? { prepareEngine: extra.prepareEngine } : {}),
+            // a developer's own SCRATCHBOX_MCP_* never reaches these tests: the Studio source only when a test passes one
+            styleReference: extra.styleReference ?? null
         },
         stageAtLocation: extra.stageAtLocation,
         publicModelsDir: MODELS_DIR
@@ -750,6 +753,40 @@ describe('build_3d_object_from_reference', () => {
         expect(written.filter(file => file.startsWith(TMP) && IMAGE_EXT.test(file))).toEqual([]);
         expect(written.some(file => file.startsWith(MODELS_DIR) && file.endsWith('.glb'))).toBe(true);
     }, 180_000);
+
+    it('draws the reference in the Scratchbox Studio Style DNA when a source is configured, and says so', async () => {
+        const styleCalls: string[] = [];
+        const styleImage = Buffer.from(REFERENCE_B64, 'base64');
+        const client = fakeClient({ specs: [JSON.stringify(VASE)] });
+        const out = await handlerWith(client, {
+            styleReference: async (request) => { styleCalls.push(request); return { data: styleImage, mimeType: 'image/png', answered: 'Scratchbox Studio Style DNA (bright editorial, overcast soft, deep focus)' }; }
+        }).run({ request: 'a fluted vase with a knob on top' });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        expect(styleCalls).toEqual(['a fluted vase with a knob on top']);
+        // no Nano Banana call: the spec is read from the Style DNA image
+        expect(client.calls.filter(c => c.config?.responseModalities)).toHaveLength(0);
+        const specParts = client.calls.find(isSpecCall)!.contents[0].parts;
+        expect(Buffer.from(specParts[0].inlineData.data, 'base64').equals(styleImage)).toBe(true);
+        expect(out.resultPayload.imageModel).toMatchObject({ requested: 'scratchbox-studio/style-dna', answered: 'Scratchbox Studio Style DNA (bright editorial, overcast soft, deep focus)' });
+        expect(out.summaryResult).toContain('Reference drawn internally by Scratchbox Studio Style DNA (bright editorial, overcast soft, deep focus)');
+    }, 180_000);
+
+    it('falls back to the reference model when the Style DNA source fails, and says why', async () => {
+        const client = fakeClient({ specs: ['not json', 'still not json'] });
+        const out = await handlerWith(client, { styleReference: async () => { throw new Error('Scratchbox Studio ai.generate_images failed (HTTP 503)'); } })
+            .run({ request: 'a ceramic teapot' });
+        // the reference was drawn by Nano Banana Lite instead, before the spec stage
+        expect(client.calls[0].model).toBe(REFERENCE_IMAGE_MODEL);
+        expect(out.resultPayload.stage).toBe('build-spec');
+    });
+
+    it('never asks the Style DNA source for a clay build', async () => {
+        let asked = 0;
+        const client = fakeClient({ specs: ['not json', 'still not json'] });
+        await handlerWith(client, { styleReference: async () => { asked++; throw new Error('unused'); } }).run({ request: 'a teapot in clay', clay: true });
+        expect(asked).toBe(0);
+        expect(JSON.stringify(client.calls[0].contents)).toContain('uniform mid-grey clay');
+    });
 
     it('a clay request draws a clay reference, reads no materials and shows every part in clay', async () => {
         const plain: ObjectBuildSpec = { ...VASE, parts: VASE.parts.map(({ material: _m, ...p }) => p) };
