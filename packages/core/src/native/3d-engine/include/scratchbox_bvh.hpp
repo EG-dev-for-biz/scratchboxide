@@ -548,6 +548,27 @@ inline std::vector<float> computeMeshRTAO(
     return ao;
 }
 
+/**
+ * Bakes computeMeshRTAO's per-vertex occlusion into vertex colour, at `intensity` strength — the same
+ * lerp(1, ao, intensity) * colour.rgb convention processing::DifferentialGeometryEngine::bakeCavityAO uses for
+ * its (curvature-based, not ray-traced) cavity AO, so a script can swap one bake for the other freely.
+ */
+inline void bakeMeshRTAO(
+    ScratchboxMesh& mesh,
+    int samplesPerVertex = 16,
+    float maxDistance = 1.5f,
+    float intensity = 1.0f,
+    uint32_t seed = 42
+) {
+    std::vector<float> ao = computeMeshRTAO(mesh, samplesPerVertex, maxDistance, seed);
+    for (size_t i = 0; i < mesh.vertices.size(); ++i) {
+        float occ = 1.0f + (ao[i] - 1.0f) * intensity; // lerp(1, ao[i], intensity)
+        mesh.vertices[i].color.x *= occ;
+        mesh.vertices[i].color.y *= occ;
+        mesh.vertices[i].color.z *= occ;
+    }
+}
+
 } // namespace bvh
 } // namespace scratchbox
 
