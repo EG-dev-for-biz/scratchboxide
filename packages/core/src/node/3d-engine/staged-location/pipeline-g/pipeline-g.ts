@@ -193,6 +193,32 @@ export function paintFaces(faces: MassingFace[], items: Map<string, ProgramItems
     return textures;
 }
 
+/** A seen-through hole larger than this is not an opening (a part of the wall no station reached). */
+export const MAX_OPENING_M2 = 20;
+
+/** The holes of `mask` that are openings: connected regions not touching the frame's edge and under MAX_OPENING_M2. */
+export function enclosedHoles(mask: Uint8Array, W: number, H: number, pixelM: number): Uint8Array {
+    const out = new Uint8Array(W * H), seen = new Uint8Array(W * H), maxPx = MAX_OPENING_M2 / (pixelM * pixelM);
+    for (let s = 0; s < W * H; s++) {
+        if (!mask[s] || seen[s]) continue;
+        const region: number[] = [], stack = [s];
+        seen[s] = 1;
+        let edge = false;
+        while (stack.length) {
+            const i = stack.pop()!;
+            region.push(i);
+            const x = i % W, y = (i - x) / W;
+            if (x === 0 || y === 0 || x === W - 1 || y === H - 1) edge = true;
+            for (const j of [i - 1, i + 1, i - W, i + W]) {
+                if (j < 0 || j >= W * H || Math.abs((j % W) - x) > 1 || seen[j] || !mask[j]) continue;
+                seen[j] = 1; stack.push(j);
+            }
+        }
+        if (!edge && region.length <= maxPx) for (const i of region) out[i] = 1;
+    }
+    return out;
+}
+
 /**
  * A plate texel standing further than this in front of the wall's own surface (the median offset of the plate's texels from
  * the massing plane: the melted scan sits off the plane as a whole) is something in front of the wall: a car, a person, a
@@ -207,8 +233,10 @@ export const PLATE_PROUD_M = 0.6;
  * PLATE_PROUD_M in front of the wall's surface (the street clutter melted into the tile before the ground floor). The builder draws the
  * rest as the wall continues. Undefined when the plate covers none of the face.
  */
-export function plateOntoFace(f: MassingFace, painted: FaceTexture, pl: Plate, pf: MassingFace): { tex: FaceTexture; use: Uint8Array; covered: number } | undefined {
+export function plateOntoFace(f: MassingFace, painted: FaceTexture, pl: Plate, pf: MassingFace): { tex: FaceTexture; use: Uint8Array; covered: number; openings: Uint8Array } | undefined {
     const rgba = painted.rgba.slice(), use = new Uint8Array(painted.width * painted.height);
+    // what the stations saw through (no surface within the plate's slab): the openings, once only enclosed holes are kept
+    const through = new Uint8Array(painted.width * painted.height);
     let covered = 0;
     const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     const plPix = pl.widthM / pl.w;
@@ -225,13 +253,14 @@ export function plateOntoFace(f: MassingFace, painted: FaceTexture, pl: Plate, p
         const px = Math.floor((ps - pf.sMin) / plPix), py = Math.floor((pf.tMax - pt) / plPix);
         if (px < 0 || py < 0 || px >= pl.w || py >= pl.h) continue;
         const j = py * pl.w + px;
-        if (Number.isNaN(pl.relief[j]) || pl.relief[j] - surface > PLATE_PROUD_M) continue;
+        if (Number.isNaN(pl.relief[j])) { through[y * painted.width + x] = 1; continue; }
+        if (pl.relief[j] - surface > PLATE_PROUD_M) continue;
         if (Math.abs(pl.rgb[j * 3] - 128) <= 4 && Math.abs(pl.rgb[j * 3 + 1] - 128) <= 4 && Math.abs(pl.rgb[j * 3 + 2] - 128) <= 4) continue;
         const i = y * painted.width + x;
         rgba[i * 4] = pl.rgb[j * 3]; rgba[i * 4 + 1] = pl.rgb[j * 3 + 1]; rgba[i * 4 + 2] = pl.rgb[j * 3 + 2]; rgba[i * 4 + 3] = 255;
         use[i] = 1; covered++;
     }
-    return covered ? { tex: { width: painted.width, height: painted.height, rgba, source: painted.source.slice() }, use, covered: covered / use.length } : undefined;
+    return covered ? { tex: { width: painted.width, height: painted.height, rgba, source: painted.source.slice() }, use, covered: covered / use.length, openings: enclosedHoles(through, painted.width, painted.height, f.pixel) } : undefined;
 }
 
 /** Runs `fn` over `xs` with at most `n` in flight. */
@@ -372,9 +401,10 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
                 ...(done[0] ? { reference: done[0] } : {}), ...(e.cacheDir ? { cacheDir: e.cacheDir } : {}),
                 counter: visionFacadeCounter(input.chain as VisionModelChain<string>), ...(input.signal ? { signal: input.signal } : {}),
                 ...(e.infill ? { infill: e.infill } : {}), ...(e.unseenModels ? { unseenModels: e.unseenModels } : {}), quality: true,
-                // what no station saw of the wall itself goes to the model mid-grey, to be drawn as the wall continues (never the
-                // painted colours, never the melt)
-                unseen: { source: G_SRC.enhanced }
+                // what no station saw of the wall itself is drawn as the wall continues (never the melt)
+                // sent as the painted reading (its openings and wall colour), feathered in: never as grey holes, whose outlines the
+                // model paints
+                unseen: { source: G_SRC.enhanced, fill: textures.get(f.index)!.rgba }, openings: on.openings
             });
             step.proposed++;
             enhanced.push({ ...r, plate: undefined, guarded: undefined, labels: undefined, grid: undefined } as EnhanceWallRecord);

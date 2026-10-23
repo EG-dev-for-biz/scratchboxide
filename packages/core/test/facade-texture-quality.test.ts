@@ -14,7 +14,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { facadeQuality } from '../src/node/3d-engine/staged-location/facade-texture/quality';
+import { facadeQuality, openingsKept } from '../src/node/3d-engine/staged-location/facade-texture/quality';
+import { featheredFill } from '../src/node/3d-engine/staged-location/facade-texture/facade-texture';
 
 const PX = 0.05, W = 200, H = 160;
 
@@ -92,5 +93,38 @@ describe('facade texture quality', () => {
         const qi = facadeQuality(a, W, H, PX, inside);
         expect(qi.emptyShare).toBe(0);
         expect(qi.passed).toBe(true);
+    });
+
+    it('keeps openings where the survey saw through: windows pass, wall painted over them fails', () => {
+        const good = facade();
+        // the seen-through holes: the windows
+        const holes = new Uint8Array(W * H);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const s = x * PX, t = (H - 1 - y) * PX, bay = s % 2;
+            if (bay > 0.7 && bay < 1.6 && (t % 2.6) > 0.6 && (t % 2.6) < 2.0 && !(t > 4 && t < 4.3)) holes[y * W + x] = 1;
+        }
+        expect(openingsKept(good, W, H, holes).passed).toBe(true);
+        // the redraw painted the wall's brick over every window
+        const bad = good.slice();
+        // (each pane takes the wall 1 m to its left: brick, the same tone and texture as the wall around it)
+        for (let i = 0; i < W * H; i++) if (holes[i]) bad.set(good.subarray((i - 20) * 4, (i - 20) * 4 + 4), i * 4);
+        const r = openingsKept(bad, W, H, holes);
+        expect({ passed: r.passed, contrast: r.contrast, smooth: r.smoothRatio }).toMatchObject({ passed: false });
+        expect(r.why).toMatch(/painted over the openings/);
+    });
+
+    it('sends unseen texels as a fill blended into the seen ones: nothing grey, no hard outline', () => {
+        const rgba = facade(), fill = new Uint8Array(W * H * 4), use = new Uint8Array(W * H).fill(1);
+        for (let i = 0; i < W * H; i++) fill.set([40, 45, 55, 255], i * 4);
+        for (let y = 60; y < 100; y++) for (let x = 60; x < 120; x++) { use[y * W + x] = 0; rgba.set([128, 128, 128, 255], (y * W + x) * 4); }
+        const sent = featheredFill(rgba, fill, use, W, H);
+        let grey = 0;
+        for (let i = 0; i < W * H; i++) if (sent[i * 4] === 128 && sent[i * 4 + 1] === 128 && sent[i * 4 + 2] === 128) grey++;
+        expect(grey).toBe(0);
+        // deep inside the hole: the fill; on its edge: blended between fill and wall
+        expect(Array.from(sent.subarray((80 * W + 90) * 4, (80 * W + 90) * 4 + 3))).toEqual([40, 45, 55]);
+        const e = (60 * W + 90) * 4;
+        expect(sent[e]).toBeGreaterThan(40);
+        expect(sent[e]).toBeLessThan(rgba[(57 * W + 90) * 4] + 1);
     });
 });

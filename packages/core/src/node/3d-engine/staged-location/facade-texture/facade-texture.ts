@@ -32,14 +32,47 @@ import { identityGate, type FacadeCounter, type FacadeCounts, type IdentityGate 
 import { streetBandTop } from '../pipeline-e/plate-streetview';
 import type { CellGrid } from '../pipeline-e/plate-audit';
 import { infillImageHoles } from '../../../image-hole-infill';
-import { facadeQuality } from './quality';
+import { facadeQuality, openingsKept } from './quality';
 import type { EnhanceModelClient } from '../texture-enhance';
 
 /** A wall with more than this share of its texels to draw as it continues is redrawn by `unseenModels` when given. */
 export const UNSEEN_MODEL_SHARE = 0.02;
 
-/** A wall the tile hardly sees: what the tile does not cover is drawn as the wall continues (labelled `source`). */
-export interface UnseenWall { source: number; familyLab?: [number, number, number]; inside?: Uint8Array }
+/** The band, texels, over which a fill is blended into the seen texels around it (no hard outline left to draw). */
+export const UNSEEN_FEATHER_PX = 3;
+
+/**
+ * A wall the tile hardly sees: what the tile does not cover is drawn as the wall continues (labelled `source`). With `fill`
+ * (W x H RGBA, e.g. the facade reading painted: its openings, bands and wall colour), the unseen texels are sent as that fill
+ * feathered into the seen ones, with the ordinary prompt, instead of flat mid-grey: a model handed grey holes paints their
+ * outlines (the Haughwout's Broome St, run of b7ff299c: jagged grey plaster where the melted windows were).
+ */
+export interface UnseenWall { source: number; familyLab?: [number, number, number]; inside?: Uint8Array; fill?: Uint8Array }
+
+/** The texels as sent: the seen ones as they are, the unseen ones from `fill`, the band between blended over UNSEEN_FEATHER_PX. */
+export function featheredFill(rgba: Uint8Array, fill: Uint8Array, use: Uint8Array, W: number, H: number): Uint8Array {
+    const out = new Uint8Array(W * H * 4);
+    for (let i = 0; i < W * H; i++) { const src = use[i] ? rgba : fill; out[i * 4] = src[i * 4]; out[i * 4 + 1] = src[i * 4 + 1]; out[i * 4 + 2] = src[i * 4 + 2]; out[i * 4 + 3] = 255; }
+    const r = UNSEEN_FEATHER_PX, res = out.slice();
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        let mixed = false;
+        for (let dy = -r; dy <= r && !mixed; dy++) for (let dx = -r; dx <= r && !mixed; dx++) {
+            const xx = x + dx, yy = y + dy;
+            if (xx >= 0 && yy >= 0 && xx < W && yy < H && use[yy * W + xx] !== use[i]) mixed = true;
+        }
+        if (!mixed) continue;
+        let s0 = 0, s1 = 0, s2 = 0, n = 0;
+        for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+            const xx = x + dx, yy = y + dy;
+            if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+            const j = (yy * W + xx) * 4;
+            s0 += out[j]; s1 += out[j + 1]; s2 += out[j + 2]; n++;
+        }
+        res[i * 4] = Math.round(s0 / n); res[i * 4 + 1] = Math.round(s1 / n); res[i * 4 + 2] = Math.round(s2 / n);
+    }
+    return res;
+}
 
 /** Everything one model request for a wall is made of, and what is needed to read its answer back onto the plate. */
 export interface PreparedFacade {
@@ -67,13 +100,14 @@ export function prepareFacadeRequest(f: MassingFace, t: FaceTexture, use: Uint8A
     let coveredN = 0;
     for (let i = 0; i < N; i++) if (use[i]) coveredN++;
     const coveredShare = N ? coveredN / N : 0;
-    // an unseen wall goes to the model with what the tile does not cover in flat mid-grey, to be drawn as the wall continues
-    const sent = opts.unseen ? (() => { const g = t.rgba.slice(); for (let i = 0; i < N; i++) if (!use[i]) { g[i * 4] = 128; g[i * 4 + 1] = 128; g[i * 4 + 2] = 128; g[i * 4 + 3] = 255; } return g; })() : t.rgba;
+    // an unseen wall goes to the model with what the tile does not cover in flat mid-grey, to be drawn as the wall continues,
+    // or, given a fill, as that fill feathered into what the tile does cover
+    const sent = opts.unseen?.fill ? featheredFill(t.rgba, opts.unseen.fill, use, t.width, t.height) : opts.unseen ? (() => { const g = t.rgba.slice(); for (let i = 0; i < N; i++) if (!use[i]) { g[i * 4] = 128; g[i * 4 + 1] = 128; g[i * 4 + 2] = 128; g[i * 4 + 3] = 255; } return g; })() : t.rgba;
     const small: RgbaImage8 = resizeRgba({ width: t.width, height: t.height, rgba: sent }, sw, sh);
     const { padded, offset } = padToModelAspect(small);
     const r = opts.reference;
     const ref = r ? (() => { const rs = Math.min(1, 768 / Math.max(r.width, r.height)); const s = resizeRgba({ width: r.width, height: r.height, rgba: r.rgba }, Math.max(8, Math.round(r.width * rs)), Math.max(8, Math.round(r.height * rs))); return new Uint8Array(encodePng(s.width, s.height, Buffer.from(s.rgba), 4)); })() : undefined;
-    const prompt = buildTexturePlatePrompt({ locationName: opts.locationName, widthM: t.width * f.pixel, heightM: t.height * f.pixel, widthPx: padded.width, heightPx: padded.height, preserveClause: preserveClause(padded.width, padded.height), withReference: !!ref, ...(opts.streetView ? { withStreetView: true } : {}), ...(opts.unseen ? { unseen: true } : {}) });
+    const prompt = buildTexturePlatePrompt({ locationName: opts.locationName, widthM: t.width * f.pixel, heightM: t.height * f.pixel, widthPx: padded.width, heightPx: padded.height, preserveClause: preserveClause(padded.width, padded.height), withReference: !!ref, ...(opts.streetView ? { withStreetView: true } : {}), ...(opts.unseen && !opts.unseen.fill ? { unseen: true } : {}) });
     const image = new Uint8Array(encodePng(padded.width, padded.height, Buffer.from(padded.rgba), 4));
     const request: PlateRequest = { prompt, image, width: padded.width, height: padded.height, ...(ref ? { reference: ref } : {}), ...(opts.streetView ? { streetView: opts.streetView.crop } : {}), models: opts.models, ...(opts.signal ? { signal: opts.signal } : {}) };
     return { request, small, padded, offset: offset as [number, number], sw, sh, N, coveredShare, widthM: t.width * f.pixel, heightM: t.height * f.pixel };
@@ -121,8 +155,8 @@ export async function alignAndIdentify(f: MassingFace, t: FaceTexture, use: Uint
     } else counts = { unread: 'no vision model to count with' };
     const colourAgainst = unseen?.familyLab && prep.coveredShare < UNSEEN_MIN_COLOUR_SHARE ? unseen.familyLab : undefined;
     const idg = identityGate(t.rgba, g.aligned, t.width, t.height, use, { askedAspect: prep.padded.width / prep.padded.height, answeredAspect: answered.width / answered.height, chamferPx: g.chamferPx, lostShare: g.lostShare, counts, ...(grossNotMeasured ? { grossNotMeasured } : {}), ...(colourAgainst ? { colourAgainst } : {}) });
-    // an unseen wall's plate must draw the unseen part, not leave it grey
-    if (unseen) {
+    // an unseen wall's plate must draw the unseen part, not leave it grey (a filled wall was sent nothing grey)
+    if (unseen && !unseen.fill) {
         const grey = unseenGreyShare(g.aligned, use, prep.N, unseen.inside);
         if (grey > UNSEEN_MAX_GREY_SHARE) { idg.passed = false; idg.why = `${idg.why}; ${(100 * grey).toFixed(0)}% of the unseen part left flat mid-grey (more than ${100 * UNSEEN_MAX_GREY_SHARE}%)`; }
     }
@@ -178,6 +212,8 @@ export interface BuildFacadeTextureOptions {
     quality?: boolean;
     /** The wall's own polygon in its frame (the quality score's extent). */
     inside?: Uint8Array;
+    /** Texels the survey saw through (openings, 1): with `quality`, the redraw must still show openings there (quality.ts openingsKept). */
+    openings?: Uint8Array;
 }
 
 export type FacadeTextureResult = EnhanceWallRecord & { plate?: Uint8Array; guarded?: Uint8Array; labels?: string[]; grid?: CellGrid };
@@ -210,7 +246,7 @@ export async function buildFacadeTexture(f: MassingFace, t: FaceTexture, use: Ui
     let read: ReturnType<typeof plateFromAnswer>;
     try { read = plateFromAnswer(answer.bytes, prep, t); } catch (err) { return { ...base, accepted: false, why: `the answer cannot be decoded (${(err as Error).message})`, model: answer.modelUsed, ms: Date.now() - t0 }; }
     const { g, idg } = await alignAndIdentify(f, t, use, prep, read.back, read.answered, { ...(unseen ? { unseen } : {}), ...(opts.counter ? { counter: opts.counter } : {}), ...(opts.signal ? { signal: opts.signal } : {}) });
-    const why0 = `${unseen ? `a wall the tile hardly sees (${(100 * prep.coveredShare).toFixed(0)}% covered), drawn as it continues (${TEXTURE_PLATE_UNSEEN_PROMPT_ID}); ` : ''}corrective warp ${g.dx}, ${g.dy} px, scale ${g.scale.toFixed(3)}; ${idg.why}`;
+    const why0 = `${unseen ? `${(100 * prep.coveredShare).toFixed(0)}% of the wall seen, the rest drawn as it continues (${unseen.fill ? 'sent as the given fill, feathered' : TEXTURE_PLATE_UNSEEN_PROMPT_ID}); ` : ''}corrective warp ${g.dx}, ${g.dy} px, scale ${g.scale.toFixed(3)}; ${idg.why}`;
     const rec = { ...base, accepted: idg.passed, why: idg.passed ? why0 : `not the same wall: ${why0}`, model: answer.modelUsed, chamferPx: g.chamferPx, lostShare: g.lostShare, identity: identityRecord(idg), ms: Date.now() - t0, plate: g.aligned };
     if (!idg.passed && guide && opts.retryWithoutPhoto !== false) {
         // the photo pulled the redraw away from the wall: one more redraw without it; the tile check and the check against the
@@ -249,9 +285,11 @@ export async function buildFacadeTexture(f: MassingFace, t: FaceTexture, use: Ui
             if (fill.decision === 'accepted') { out = fill.image.rgba; q = facadeQuality(out, t.width, t.height, f.pixel, opts.inside); rec.why = `${rec.why}; ${fill.filledPixels} texels the quality score faulted redrawn by generative infill`; }
             else rec.why = `${rec.why}; generative infill of what the quality score faulted was refused (${fill.reason ?? fill.decision})`;
         }
-        (rec as FacadeTextureResult).quality = { passed: q.passed, emptyShare: q.emptyShare, seams: q.seams.rows.length + q.seams.cols.length, smearShare: q.smearShare, sharpness: q.sharpness, why: q.why };
-        if (!q.passed) return { ...rec, ...extra, accepted: false, why: `${rec.why}; ${q.why}`, ms: Date.now() - t0 };
-        rec.why = `${rec.why}; ${q.why}`;
+        const ok = opts.openings ? openingsKept(out, t.width, t.height, opts.openings) : undefined;
+        (rec as FacadeTextureResult).quality = { passed: q.passed && (ok?.passed ?? true), emptyShare: q.emptyShare, seams: q.seams.rows.length + q.seams.cols.length, smearShare: q.smearShare, sharpness: q.sharpness, why: q.why, ...(ok ? { openings: { passed: ok.passed, contrast: ok.contrast, smoothRatio: ok.smoothRatio } } : {}) };
+        const qWhy = ok ? `${q.why}; ${ok.why}` : q.why;
+        if (!q.passed || (ok && !ok.passed)) return { ...rec, ...extra, accepted: false, why: `${rec.why}; ${qWhy}`, ms: Date.now() - t0 };
+        rec.why = `${rec.why}; ${qWhy}`;
     }
     writeFacadeTexture(t, out, weight, use, guide && opts.streetViewSource !== undefined ? opts.streetViewSource : opts.source, unseen);
     return { ...rec, ...extra, ms: Date.now() - t0 };

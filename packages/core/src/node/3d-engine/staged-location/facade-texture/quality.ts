@@ -180,3 +180,53 @@ export function facadeQuality(rgba: Uint8Array, W: number, H: number, pixelM: nu
         why: fails.length ? `quality: ${fails.join('; ')}` : `quality: ${(100 * emptyShare).toFixed(0)}% empty, no seam, ${(100 * smearShare).toFixed(0)}% smeared, sharpness ${sharpness.toFixed(1)}`
     };
 }
+
+/**
+ * What the survey saw through (the plate's holes: openings whose recess lies beyond the plate's slab) must still read as
+ * openings in the redraw: differ from the wall around them in luminance by OPENING_MIN_CONTRAST, or be at least
+ * OPENING_MIN_SMOOTH_RATIO times as smooth (glazing). Calibrated on the Haughwout (2026-10-22): four good redraws 24-59 levels
+ * from the wall and 2.1-5.8 times as smooth; the one that painted grey plaster over them 4 levels, 0.65 times.
+ */
+export const OPENING_MIN_CONTRAST = 12;
+export const OPENING_MIN_SMOOTH_RATIO = 1.5;
+
+export interface OpeningsKept { passed: boolean; contrast: number; smoothRatio: number; holeShare: number; why: string }
+
+/** Whether the redraw still shows openings where the survey saw through (`holes`, 1); the wall is everything else. */
+export function openingsKept(rgba: Uint8Array, W: number, H: number, holes: Uint8Array): OpeningsKept {
+    const N = W * H, L = new Float32Array(N);
+    for (let i = 0; i < N; i++) L[i] = luma(rgba, i);
+    // local smoothness: the standard deviation of luminance over 5 x 5
+    const smooth = new Uint8Array(N);
+    for (let y = 2; y + 2 < H; y++) for (let x = 2; x + 2 < W; x++) {
+        let s = 0, s2 = 0;
+        for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) { const v = L[(y + dy) * W + x + dx]; s += v; s2 += v * v; }
+        const m = s / 25;
+        smooth[y * W + x] = s2 / 25 - m * m < 25 ? 1 : 0;
+    }
+    // the inside of each side, 2 texels in from the boundary (no edge texels on either side)
+    const inner = (want: number) => {
+        const m = new Uint8Array(N);
+        for (let y = 2; y + 2 < H; y++) for (let x = 2; x + 2 < W; x++) {
+            let ok = true;
+            for (let dy = -2; dy <= 2 && ok; dy++) for (let dx = -2; dx <= 2 && ok; dx++) if ((holes[(y + dy) * W + x + dx] ? 1 : 0) !== want) ok = false;
+            m[y * W + x] = ok ? 1 : 0;
+        }
+        return m;
+    };
+    const hin = inner(1), win = inner(0);
+    let hn = 0, hl = 0, hs = 0, wn = 0, wl = 0, ws = 0;
+    for (let i = 0; i < N; i++) {
+        if (hin[i]) { hn++; hl += L[i]; hs += smooth[i]; }
+        if (win[i]) { wn++; wl += L[i]; ws += smooth[i]; }
+    }
+    const holeShare = hn / N;
+    if (hn < 0.01 * N || !wn) return { passed: true, contrast: 0, smoothRatio: 1, holeShare: Math.round(holeShare * 1000) / 1000, why: 'openings: too few seen-through texels to check' };
+    const contrast = Math.abs(hl / hn - wl / wn), smoothRatio = (hs / hn) / Math.max(1e-3, ws / wn);
+    const passed = contrast >= OPENING_MIN_CONTRAST || smoothRatio >= OPENING_MIN_SMOOTH_RATIO;
+    return {
+        passed, contrast: Math.round(contrast * 10) / 10, smoothRatio: Math.round(smoothRatio * 100) / 100, holeShare: Math.round(holeShare * 1000) / 1000,
+        why: passed ? `openings kept where the survey saw through (${contrast.toFixed(0)} levels from the wall, ${smoothRatio.toFixed(1)} times as smooth)`
+            : `where the survey saw through the wall (openings) the redraw shows wall (${contrast.toFixed(0)} levels from it, ${smoothRatio.toFixed(1)} times as smooth): it painted over the openings`
+    };
+}

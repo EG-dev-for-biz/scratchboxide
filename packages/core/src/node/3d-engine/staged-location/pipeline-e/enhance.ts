@@ -270,7 +270,7 @@ export interface EnhanceWallRecord {
     /** The flagged regions redrawn by generative infill instead of reverted (facade-texture.ts, the `infill` option). */
     infill?: { decision: string; holePixels: number; filledPixels: number; reason?: string; model?: string };
     /** The quality score of the texture as written (facade-texture/quality.ts, the `quality` option). */
-    quality?: { passed: boolean; emptyShare: number; seams: number; smearShare: number; sharpness: number; why: string };
+    quality?: { passed: boolean; emptyShare: number; seams: number; smearShare: number; sharpness: number; why: string; openings?: { passed: boolean; contrast: number; smoothRatio: number } };
 }
 
 /**

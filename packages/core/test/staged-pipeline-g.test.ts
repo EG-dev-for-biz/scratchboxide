@@ -16,7 +16,7 @@
 import { describe, expect, it } from 'vitest';
 import { emptyPlate, finishPlate, layStation, PLATE_PIXEL_M } from '../src/node/3d-engine/staged-location/pipeline-g/plates';
 import { programItems, parseProgram } from '../src/node/3d-engine/staged-location/pipeline-g/read';
-import { G_SRC, inOpening, paintFaces, plateOntoFace, stagedPipelineG, sweepFootprints } from '../src/node/3d-engine/staged-location/pipeline-g/pipeline-g';
+import { enclosedHoles, G_SRC, inOpening, paintFaces, plateOntoFace, stagedPipelineG, sweepFootprints } from '../src/node/3d-engine/staged-location/pipeline-g/pipeline-g';
 import type { MassingFace } from '../src/node/3d-engine/staged-location/pipeline-e/native-massing';
 import { aerialStations, AERIAL_VIEWS } from '../src/node/3d-engine/staged-location/pipeline-g/stations';
 import { SurveyStationRenderService } from '../src/node/spatial/SurveyStationRenderService';
@@ -162,6 +162,19 @@ describe('facade texture input from the survey plate', () => {
         const onBlob = plateOntoFace(WALL, painted, blob, surveyed)!;
         expect(onBlob.use[px(9, 0.5)]).toBe(0);
         expect(onBlob.use[px(7.01, 4)]).toBe(1);
+    });
+});
+
+describe('openings from the survey: enclosed seen-through holes', () => {
+    it('keeps a hole inside the wall and drops one open to the frame\'s edge or larger than an opening', () => {
+        const W = 100, H = 80, m = new Uint8Array(W * H);
+        for (let y = 20; y < 40; y++) for (let x = 20; x < 30; x++) m[y * W + x] = 1;     // a window, 0.5 x 1 m at 0.05 m
+        for (let y = 0; y < 10; y++) for (let x = 60; x < 70; x++) m[y * W + x] = 1;      // open to the top edge
+        const o = enclosedHoles(m, W, H, 0.05);
+        expect(o[30 * W + 25]).toBe(1);
+        expect(o[5 * W + 65]).toBe(0);
+        // the same window at 2 m per texel is 800 m2: not an opening
+        expect(enclosedHoles(m, W, H, 2)[30 * W + 25]).toBe(0);
     });
 });
 
