@@ -439,7 +439,7 @@ function readCrowns(crownsJson: string): CrownRecord[] {
 export async function plantTrees(
     d: Pick<LocationClayDeps, 'vegetation'>,
     strip: TileVegetationStripResult,
-    opts: { treeTriangleBudget?: number; treeSeason?: number; latAbsDeg?: number; supportMeshPath?: string; groundMeshPath?: string; publishAs?: string; heroRoi?: StripRoi; signal?: AbortSignal }
+    opts: { treeTriangleBudget?: number; treeSeason?: number; latAbsDeg?: number; supportMeshPath?: string; groundMeshPath?: string; publishAs?: string; heroRoi?: StripRoi; groundCover?: TileVegetationPlantRequest['groundCover']; signal?: AbortSignal }
 ): Promise<TileVegetationPlantResult> {
     // never from the buildings: a park has many trees and few triangles of building
     const budget = opts.treeTriangleBudget !== undefined ? { triangleBudget: Math.floor(opts.treeTriangleBudget) } : { sceneTriangleCap: SCENE_TREE_TRIANGLE_CAP };
@@ -455,6 +455,8 @@ export async function plantTrees(
             groundMeshPath: opts.groundMeshPath,
             publishAs: opts.publishAs,
             ...(opts.heroRoi ? { heroRoi: opts.heroRoi } : {}),
+            // the ground program's planted regions: recorded by the service (no understorey grammar in tile_vegetation yet), never faked
+            ...(opts.groundCover ? { groundCover: opts.groundCover } : {}),
             ...(Object.keys(params).length ? { params } : {}),
             signal: opts.signal
         });

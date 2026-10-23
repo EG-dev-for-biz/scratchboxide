@@ -322,6 +322,13 @@ export interface TileVegetationPlantRequest {
     /** Copy the trees GLB to public/models/<publishAs> (a plain *.glb name). */
     publishAs?: string;
     /**
+     * Regions the ground program (procedural-ground.ts groundCoverRegions) asks for low vegetation in: boundary loops in
+     * the tile frame (empty: the whole ground) and a density 0..1. tile_vegetation (scripts/tile_vegetation.cpp) grows
+     * measured crowns only and has no understorey grammar yet, so nothing is planted from them: the request is validated
+     * and recorded in the result's `groundCover` with that reason, never silently dropped and never faked.
+     */
+    groundCover?: Array<{ loops: Array<Array<[number, number]>>; density: number; areaM2: number; labels: string[] }>;
+    /**
      * Photo-inferred crown corrections (scratchbox.crown-correction/1, tree-crown-photo-check.ts): each crown's width and
      * base, applied before it is grown. Absent: the correction recorded for these crowns (by the sha256 of crowns.json, under
      * .scratchbox/cache/crown_correction/) when there is one; false: none.
@@ -390,7 +397,11 @@ export interface TileVegetationPlantResult {
     rebuiltStaleCache?: string;
     /** The photo-inferred crown correction the trees were grown with (absent: none). */
     crownCorrection?: { path: string; provenance: 'photo-inferred'; trees: number; fromPhotos: number; median?: { widthScale: number; crownBaseRatio: number } };
+    /** What became of the `groundCover` regions asked for (absent: none asked): how many, their area, and that none was planted, with the reason. */
+    groundCover?: { regions: number; areaM2: number; planted: 0; reason: string };
 }
+
+export const GROUND_COVER_UNSUPPORTED = 'tile_vegetation (scripts/tile_vegetation.cpp) grows measured crowns only and has no understorey grammar yet: the regions are recorded, nothing is planted in them';
 
 /**
  * One tree described by measurements (scratchbox.sb-veggie-trees/1, scratchbox_sb_veggie_grove.hpp): for scenes with no
@@ -805,6 +816,14 @@ export class TileVegetationService {
         const budget = req.triangleBudget !== undefined ? { triangleBudget: Math.floor(req.triangleBudget) } : { sceneTriangleCap: Math.floor(req.sceneTriangleCap!) };
         if (typeof req.seed !== 'string' || !/^[0-9a-fA-F]{1,16}$/.test(req.seed)) throw new TileVegetationError('bad_request', 'seed must be 1-16 hex digits');
         const heroRoi = req.heroRoi === undefined ? undefined : checkRoi(req.heroRoi);
+        if (req.groundCover !== undefined) {
+            if (!Array.isArray(req.groundCover)) throw new TileVegetationError('bad_request', 'groundCover must be an array of regions');
+            for (const r of req.groundCover) {
+                if (!r || !Array.isArray(r.loops) || !(Number.isFinite(r.density) && r.density >= 0 && r.density <= 1) || !(Number.isFinite(r.areaM2) && r.areaM2 >= 0) || !Array.isArray(r.labels)) {
+                    throw new TileVegetationError('bad_request', 'each groundCover region needs loops (arrays of [x, z]), a density 0..1, an areaM2 >= 0 and labels');
+                }
+            }
+        }
         const publishTarget = req.publishAs === undefined ? undefined : this.resolvePublishTarget(req.publishAs);
         const { flags, key: keyParams } = paramFlags(req.params);
         const timeoutMs = req.timeoutMs ?? this.defaultTimeoutMs;
@@ -881,6 +900,7 @@ export class TileVegetationService {
                 ...(doc.median ? { median: { widthScale: doc.median.widthScale, crownBaseRatio: doc.median.crownBaseRatio } } : {})
             };
         }
+        if (req.groundCover !== undefined) out.groundCover = { regions: req.groundCover.length, areaM2: req.groundCover.reduce((a, r) => a + r.areaM2, 0), planted: 0, reason: GROUND_COVER_UNSUPPORTED };
         if (publishTarget) out.published = this.publish(res.treesGlb, publishTarget);
         out.ms = Date.now() - t0;
         return out;
