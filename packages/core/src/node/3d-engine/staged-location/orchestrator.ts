@@ -31,6 +31,8 @@
 
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import { footprintConformance, FOOTPRINT_MAX_PROJECTION_M } from './footprint-lock';
+import { readTileTriangles } from './tile-texture-transfer';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import * as path from 'path';
 import type { CanvasArtifact } from '../../../browser/generative-canvas/canvas-types';
@@ -207,6 +209,11 @@ const MIN_RUNS_WINDOW_MS = 30_000;
 
 /** Canonical order (-1: no layer), overlay title and per-stage time limit. */
 /** Why a stage is skipped on a procedural request (the 3D Building button): it runs its procedural pipeline and only what that builds on. */
+/**
+ * The footprint is the source of truth for every rebuild (user decision, 2026-10-22): Google's footprint, else the 3D tiles'
+ * plan of the structure; height and roof from the Solar API first; no wall moved onto the scan. In every cache key it reaches.
+ */
+export const FOOTPRINT_LOCK_VERSION = 'footprint-lock/v1';
 const PROCEDURAL_ONLY = 'procedural build only: the 3D Building build runs only the steps its procedural pipeline needs';
 /** The stages a procedural-only build runs: the place, the tiles, the vector data, the massing it builds on (remesh) and the procedural pipeline (grammar). */
 const PROCEDURAL_STAGES: ReadonlySet<string> = new Set(['resolve', 'tiles', 'vector', 'remesh', 'grammar', 'finish']);
@@ -1712,7 +1719,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // bounds the height map where the two agree, so a footprint that disagrees (or none) does not send the build back
         const shapeMode = pipelineE ? stagedShapeProgram() : undefined;
         const shapeFootprint = t.vector && structure?.vectorFootprint?.featureIds?.length ? t.vector.raster.buildings.filter(b => structure.vectorFootprint!.featureIds.includes(b.id)) : [];
-        const eWhyNot = !pipelineE ? undefined : !isolateMode ? 'the structure could not be isolated' : !eBuildings.length && !shapeMode ? `the structure's footprint did not come from Google vector data (${structure?.vectorFootprint?.reason ?? 'no vector footprint at the place'})` : undefined;
+        const eWhyNot = !pipelineE ? undefined : !isolateMode ? 'the structure could not be isolated'
+            // without a Google footprint, a 3D Building (procedural) build takes the 3D tiles' plan of the structure as its footprint
+            // (buildMassing); any other structure (an arch, a monument) keeps the scan fit, which follows its own shape
+            : !eBuildings.length && !shapeMode && request.procedural !== true ? `the structure's footprint did not come from Google vector data (${structure?.vectorFootprint?.reason ?? 'no vector footprint at the place'})` : undefined;
         const eEligible = pipelineE && !eWhyNot;
         const startSurvey = (): void => {
         if (isolateMode && visionForSurvey) {
@@ -2883,6 +2893,20 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         /** The ownership vote to run after the first isolate commits: what it needs to remesh the same structure again. */
         let voteLater: { tilePath: string; isolatePick?: string; pick?: { pick: StructurePickResult; ground: GroundModel }; request: TileRefineRequest; orthos: { reliefOrthos?: boolean } } | undefined;
         /** The residual audit of one pipeline E native run, into the build notes (and a degradation when it failed or left clusters unsure). */
+        /** The footprint lock's check of a built layer against the footprint its massing stood on: recorded, and a breach degraded. */
+        const checkFootprintLock = (stage: StageId, layerName: string, glb: string, parts: Array<{ loops: Array<Array<[number, number]>> }>): string => {
+            const loops = parts.flatMap(p => p.loops);
+            if (!loops.length) return 'footprint lock: no footprint to check against';
+            const c = footprintConformance(readTileTriangles(fs.readFileSync(glb)).positions, loops);
+            cache.writeRunNote(runId, `footprint_lock_${layerName.replace(/\W+/g, '_')}`, c);
+            const say = `footprint lock (${layerName}): ${Math.round(c.outsideShare * 1000) / 10}% of the vertices stand outside the footprint, at most ${c.maxOutsideM} m (projections may reach ${FOOTPRINT_MAX_PROJECTION_M} m)`;
+            run.note(PROVENANCE.photoInferred, say);
+            if (!c.ok) run.degrade(record(stage, 'footprint_breach', {
+                part: { description: `the ${layerName}` }, intended: `every wall on the footprint, projections within ${FOOTPRINT_MAX_PROJECTION_M} m of it`, fellTo: 'the layer as built, its breach recorded',
+                provenanceAfter: PROVENANCE.photoInferred, reason: `${c.beyondLimit} vertices stand more than ${FOOTPRINT_MAX_PROJECTION_M} m outside the footprint (at most ${c.maxOutsideM} m)`, transient: false, runId, now: now(), suffix: layerName.replace(/\W+/g, '_')
+            }));
+            return say;
+        };
         const recordResidualAudit = (stage: StageId, massingRun: MassingRun, layerName: string): string => {
             const a = massingRun.audit;
             if (!a) return 'residual audit: nothing to audit';
@@ -2955,7 +2979,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         solarNote = `${solar.length} Solar roof facets (imagery ${sr.imageryQuality ?? '?'}, ${sr.imageryDate ?? 'date unknown'})`;
                     } catch (err) { solarNote = `no Solar roof facets (${errorMessage(err)})`; }
                 }
-                const key = stageKey(PIPELINE_E_VERSION, refined.cacheKey, sha256File(tilePath).slice(0, 16), sha256Bytes(Buffer.from(JSON.stringify({ eBuildings, solar }))), ...(shapeMode ? [SHAPE_STAGE_VERSION, shapeMode, request.query.trim()] : []), ...(request.procedural === true ? ['footprint-massing'] : []));
+                const key = stageKey(PIPELINE_E_VERSION, refined.cacheKey, sha256File(tilePath).slice(0, 16), sha256Bytes(Buffer.from(JSON.stringify({ eBuildings, solar }))), ...(shapeMode ? [SHAPE_STAGE_VERSION, shapeMode, request.query.trim()] : []), FOOTPRINT_LOCK_VERSION);
                 const dir = path.join(cache.dir, 'pipeline_e', key.slice(0, 24));
                 io.progress('pipeline E: the clean massing, its orthos and the scanned residual');
                 const ground = picked.ground;
@@ -2974,12 +2998,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     cache.writeRunNote(runId, 'shape_program', { mode: shapeMode, ms: now() - shapeT0, timingsMs: sr.timingsMs, notes: sr.notes, trees: sr.trees, scan: sr.scan, files: sr.files, check: sr.massing.check, parts: sr.massing.parts.length, meshes: sr.massing.meshes.length, ...(sr.program ? { program: { model: sr.program.model, elements: sr.program.validated.elements.length, problems: sr.program.problems, parameters: sr.program.parameters, fit: sr.program.fit, correction: sr.program.correction } } : {}) });
                     io.progress(`shape program trial: ${sr.notes.join('; ')}`);
                 }
-                const r = await runMassingStage({ tilePath, isolateGlb: refined.rawClayGlb, buildings: eBuildings, groundY: picked.pick.groundY, scanTop, cells: picked.pick.cells, solar, outDir: dir, signal: io.signal, ...(shapeMassing ? { massing: shapeMassing } : {}), ...(request.procedural === true ? { preferExtrusion: true, audit: false } : {}) }, 'remesh', key);
+                const r = await runMassingStage({ tilePath, isolateGlb: refined.rawClayGlb, buildings: eBuildings, groundY: picked.pick.groundY, scanTop, cells: picked.pick.cells, solar, outDir: dir, signal: io.signal, ...(shapeMassing ? { massing: shapeMassing } : {}), preferExtrusion: true, ...(request.procedural === true ? { audit: false } : {}) }, 'remesh', key);
                 cache.writeRunNote(runId, 'pipeline_e', { check: r.massing.check, solar: r.massing.solar, solarNote, notes: r.massing.notes, timingsMs: r.timingsMs, native: r.run ? { timingsMs: r.run.report.timingsMs, snap: r.run.report.snap, residual: r.run.report.residual, faces: r.run.report.faces.length } : undefined });
                 const c = r.massing.check;
                 if (!c.ok || !r.run || !r.files) return fallBack('pipeline_e_fallback', `${c.reason ?? 'the massing could not be built'} (plan IoU ${c.iou}, roof ${c.heightErrMedianM} m off the scan, median; ${c.heightErrP90M} m at the 90th percentile)`);
                 run.keys.remesh = key;
                 run.cacheStatus.remesh = 'miss';
+                checkFootprintLock('remesh', 'massing layer', r.files.clayGlb, r.massing.parts);
                 const key8 = key.slice(0, 8);
                 const pubClay = cache.publishFile(r.files.clayGlb, `${base}_massing_${key8}.glb`);
                 const pubTex = cache.publishFile(r.files.texturedGlb, `${base}_massing_${key8}_tex.glb`);
@@ -3487,6 +3512,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     });
                     cache.writeRunNote(runId, 'pipeline_g', { steps: out.steps, timingsMs: out.timingsMs, plates: out.plates, stations: out.stations, ...(out.brief ? { brief: out.brief } : {}) });
                     if (out.brief && 'path' in out.brief) BUILDING_BRIEFS.set(run, out.brief);
+                    checkFootprintLock('grammar', 'pipeline G layer', out.files.clayGlb, r.massing.parts);
                     const key8 = e.key.slice(0, 8);
                     const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_pipelineg.glb`);
                     const pubTex = cache.publishFile(out.files.texturedGlb, `${base}_massing_${key8}_pipelineg_tex.glb`);
@@ -4377,6 +4403,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             }
             // fit: with the building's plan from Google vector data, and its neighbours', when the pick used it
             const vf = structure!.vectorFootprint;
+            // Google's footprint, when the pick accepted it as this structure's (one it rejected belongs to something else)
             const fitPrior = vf?.used && t.vector ? footprintPriorFor(t.vector.raster.buildings, vf.featureIds) : undefined;
             const fitKey = stageKey('scan_fit/fit/v3', remeshed.cacheKey, sha256File(remeshed.rawClayGlb!), structure!.seed, fitPrior ? sha256Bytes(Buffer.from(JSON.stringify(fitPrior))) : 'no-prior');
             run.keys.fit = fitKey;
