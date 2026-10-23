@@ -783,7 +783,11 @@ export interface SweepItem {
     relativeToTop?: boolean;
 }
 /** An opening in a wall's (s, t); `archRiseM` > 0 crowns it with a circular arc rising that far above its springing line (scratchbox_staged_massing.hpp OpeningSpec). */
-export interface OpeningItem { id: string; face: string; s0: number; s1: number; t0: number; t1: number; depth: number; scanned: boolean; confidence: number; provenance: string; archRiseM?: number }
+export interface OpeningItem {
+    id: string; face: string; s0: number; s1: number; t0: number; t1: number; depth: number; scanned: boolean; confidence: number; provenance: string; archRiseM?: number;
+    /** Divided glazing: a frame frameM wide round the outline, cols - 1 mullions and rows - 1 transoms barM wide, depthM proud of the glass. */
+    panes?: { cols: number; rows: number; barM: number; frameM: number; depthM: number };
+}
 /**
  * A profile swept along one axis of a face's own frame (scratchbox_staged_massing.hpp FaceSweepSpec): axis 0 along s with the
  * profile in (offset, t), 1 along t with it in (offset, s); offset(c) >= 0 at increasing c; each placement [a0, a1, dc]
@@ -817,6 +821,6 @@ export function massingSpecText(m: Pick<Massing, 'parts' | 'meshes'>, opts: {
     }
     for (const s of opts.sweeps ?? []) L.push(`sweep ${tok(s.id)} ${n6(s.confidence)} ${tok(s.provenance)} ${s.profile.length} ${s.profile.map(([o, y]) => `${n6(o)} ${n6(y)}`).join(' ')} ${s.faces.length} ${s.faces.map(tok).join(' ')}${s.relativeToTop ? ' top' : ''}`);
     for (const w of opts.faceSweeps ?? []) L.push(`facesweep ${tok(w.id)} ${n6(w.confidence)} ${tok(w.provenance)} ${tok(w.face)} ${w.axis} ${w.profile.length} ${w.profile.map(([o, c]) => `${n6(o)} ${n6(c)}`).join(' ')} ${w.placements.length} ${w.placements.map(q => q.map(n6).join(' ')).join(' ')}`);
-    for (const o of opts.openings ?? []) L.push(`opening ${tok(o.id)} ${tok(o.face)} ${n6(o.s0)} ${n6(o.s1)} ${n6(o.t0)} ${n6(o.t1)} ${n6(o.depth)} ${o.scanned ? 1 : 0} ${n6(o.confidence)} ${tok(o.provenance)}${o.archRiseM && o.archRiseM > 0 ? ` arch ${n6(o.archRiseM)}` : ''}`);
+    for (const o of opts.openings ?? []) L.push(`opening ${tok(o.id)} ${tok(o.face)} ${n6(o.s0)} ${n6(o.s1)} ${n6(o.t0)} ${n6(o.t1)} ${n6(o.depth)} ${o.scanned ? 1 : 0} ${n6(o.confidence)} ${tok(o.provenance)}${o.archRiseM && o.archRiseM > 0 ? ` arch ${n6(o.archRiseM)}` : ''}${o.panes ? ` panes ${Math.max(1, Math.round(o.panes.cols))} ${Math.max(1, Math.round(o.panes.rows))} ${n6(o.panes.barM)} ${n6(o.panes.frameM)} ${n6(o.panes.depthM)}` : ''}`);
     return L.join('\n') + '\n';
 }

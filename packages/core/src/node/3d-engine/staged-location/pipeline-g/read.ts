@@ -21,7 +21,7 @@ import type { FaceSweepItem, OpeningItem } from '../pipeline-e/massing-spec';
 import type { MassingFace } from '../pipeline-e/native-massing';
 import { PLATE_PIXEL_M, platePng, reliefPng, type Plate } from './plates';
 
-export const PIPELINE_G_READ_VERSION = 'pipeline-g-read/v1';
+export const PIPELINE_G_READ_VERSION = 'pipeline-g-read/v2';
 /** A plate is read when at least this share of it was seen. */
 export const MIN_READ_COVERAGE = 0.35;
 export const READ_MAX_OUTPUT_TOKENS = 16000;
@@ -37,7 +37,15 @@ export const FILLED_CONFIDENCE = 0.3;
 
 export interface FacadeProgram {
     wallColour?: string;
-    openings?: Array<{ h0: number; h1: number; archRise?: number; depth?: number; colour?: string; cols?: number[][]; filledCols?: number[][] }>;
+    openings?: Array<{
+        h0: number; h1: number; archRise?: number; depth?: number; colour?: string; cols?: number[][]; filledCols?: number[][];
+        /** The glazing's divisions: panes across and up, the bar and frame widths, their colour. */
+        panes?: { cols?: number; rows?: number; bar?: number; frame?: number; colour?: string };
+        /** A projecting sill under each opening of the row. */
+        sill?: { out?: number; height?: number; overhang?: number; colour?: string };
+        /** A raised surround (architrave) round each opening of the row. */
+        surround?: { width?: number; out?: number; colour?: string };
+    }>;
     horizontal?: Array<{ h: number; u0: number; u1: number; colour?: string; profile?: number[][] }>;
     vertical?: Array<{ u?: number[]; filledU?: number[]; h0: number; h1: number; colour?: string; profile?: number[][] }>;
     notes?: string;
@@ -53,12 +61,14 @@ Coordinates: u = metres from the LEFT edge of the image, h = metres up from the 
 Describe the wall as a procedural program. Return JSON only:
 {
  "wallColour": "#rrggbb",
- "openings": [ { "h0": n, "h1": n, "archRise": n, "depth": n, "colour": "#rrggbb", "cols": [[u0, u1], ...], "filledCols": [[u0, u1], ...] } ],
+ "openings": [ { "h0": n, "h1": n, "archRise": n, "depth": n, "colour": "#rrggbb", "cols": [[u0, u1], ...], "filledCols": [[u0, u1], ...],
+   "panes": { "cols": n, "rows": n, "bar": n, "frame": n, "colour": "#rrggbb" }, "sill": { "out": n, "height": n, "overhang": n, "colour": "#rrggbb" }, "surround": { "width": n, "out": n, "colour": "#rrggbb" } } ],
  "horizontal": [ { "h": n, "u0": n, "u1": n, "colour": "#rrggbb", "profile": [[dh, out], ...] } ],
  "vertical": [ { "u": [n, ...], "filledU": [n, ...], "h0": n, "h1": n, "colour": "#rrggbb", "profile": [[du, out], ...] } ],
  "notes": "one or two sentences: what you saw, what you were unsure of"
 }
 - openings: one entry per row of openings that share a bottom and top (windows, doors, shop fronts); cols lists every opening in that row, left to right. depth is how far the glass sits behind the wall face (0.1 - 0.6 m). colour is the glazing / opening colour. h1 is the very top of the opening (the crown of an arch); archRise is how far the head rises above the point where it springs from the jambs: 0 for a flat head, half the opening width for a round (semicircular) arch, less for a segmental arch.
+- panes, sill, surround (optional, per row; leave a key out when the image does not show it): panes is how the glazing of each opening in the row is divided: cols panes across and rows panes up (1 and 1 for undivided glass), bar the width of the mullions and transoms between panes (0.03 - 0.15 m), frame the width of the frame round the glass (0.03 - 0.2 m), colour the frames' colour. sill is a projecting sill under each opening: out how far it stands proud of the wall (0.03 - 0.3 m), height its thickness (0.04 - 0.3 m), overhang how far it runs past each side of the opening (0 - 0.3 m). surround is a raised band framing each opening (architrave, moulded casing): width its face width (0.05 - 0.6 m), out how far it stands proud (0.02 - 0.3 m). Read each row's own: shop fronts, arched windows and plain windows differ.
 - horizontal: every horizontal projecting element (cornice, belt course, sill band, entablature, string course, balcony slab) running from u0 to u1 at height h; profile is its cross-section as [dh, out] pairs, dh = metres above (+) or below (-) h in increasing order, out = metres it stands proud of the wall (>= 0; 0 at both ends).
 - vertical: every vertical projecting element (pilaster, engaged column, pier, mullion between openings). Give each distinct kind as its own entry: the broad piers between bays, and separately the slender colonnettes (thin engaged columns, often in pairs) that flank or divide the openings within a bay, each colonnette listed by its own centre u, with a rounded profile; u is the centre of each repeat, from h0 to h1; profile is its cross-section across its width as [du, out] pairs, du = metres left (-) / right (+) of its centre in increasing order, out >= 0 with 0 at both ends.
 - Be exhaustive in what is shown: every window, every door and shop front at street level (a ground-floor opening that reaches the pavement has h0 = 0), every band, every pilaster and colonnette. Where part of the wall is unseen or hidden (grey, or behind a fire escape, scaffolding, a tree, a vehicle), continue the wall's own repeats into it (the bay rhythm, the storey rows, the ground-floor openings) so no part of the wall is left blank: put the openings you continued, not saw, in filledCols, and the members in filledU; never invent a feature that no visible part of the wall shows. Keep within 0 <= u <= ${W}, 0 <= h <= ${H}.`;
@@ -87,14 +97,17 @@ export interface ProgramItems {
     faceSweeps: FaceSweepItem[];
     wallColour: [number, number, number];
     colours: Map<string, [number, number, number]>;
-    counts: { openings: number; filledOpenings: number; horizontal: number; vertical: number; filledVertical: number };
+    counts: { openings: number; filledOpenings: number; horizontal: number; vertical: number; filledVertical: number; paned: number; sills: number; surrounds: number };
 }
+
+/** How far the glazing bars stand proud of the glass (at most 80% of the opening's depth). */
+export const PANE_DEPTH_M = 0.06;
 
 /** The program read off face `f`'s plate (u from its sMin, h from its tMin) in the face's (s, t). */
 export function programItems(prog: FacadeProgram, f: Pick<MassingFace, 'key' | 'sMin' | 'sMax' | 'tMin' | 'tMax'>, idPrefix: string): ProgramItems {
     const W = f.sMax - f.sMin, H = f.tMax - f.tMin;
     const S = (u: number) => f.sMin + clamp(u, 0, W), T = (h: number) => f.tMin + clamp(h, 0, H);
-    const out: ProgramItems = { openings: [], faceSweeps: [], wallColour: hexColour(prog.wallColour, [150, 145, 140]), colours: new Map(), counts: { openings: 0, filledOpenings: 0, horizontal: 0, vertical: 0, filledVertical: 0 } };
+    const out: ProgramItems = { openings: [], faceSweeps: [], wallColour: hexColour(prog.wallColour, [150, 145, 140]), colours: new Map(), counts: { openings: 0, filledOpenings: 0, horizontal: 0, vertical: 0, filledVertical: 0, paned: 0, sills: 0, surrounds: 0 } };
     for (const [ti, row] of (prog.openings ?? []).entries()) {
         if (!(Number(row.h1) > Number(row.h0))) continue;
         const cols = [...(row.cols ?? []).map(c => ({ c, filled: false })), ...(row.filledCols ?? []).map(c => ({ c, filled: true }))];
@@ -109,6 +122,53 @@ export function programItems(prog: FacadeProgram, f: Pick<MassingFace, 'key' | '
             out.colours.set(id, hexColour(row.colour, [40, 44, 50]));
             out.counts.openings++;
             if (filled) out.counts.filledOpenings++;
+        }
+        const rowOpenings = out.openings.filter(o => o.id.startsWith(`${idPrefix}o${ti}_`));
+        if (!rowOpenings.length) continue;
+        const paneCols = Math.round(Number(row.panes?.cols)), paneRows = Math.round(Number(row.panes?.rows));
+        const bar = clamp(row.panes?.bar ?? 0.06, 0.02, 0.2), frame = clamp(row.panes?.frame ?? 0.06, 0, 0.25);
+        if (row.panes && paneCols >= 1 && paneRows >= 1 && (paneCols > 1 || paneRows > 1 || frame > 0)) {
+            for (const o of rowOpenings) {
+                o.panes = { cols: Math.min(paneCols, 16), rows: Math.min(paneRows, 16), barM: bar, frameM: Math.min(frame, (o.s1 - o.s0) / 4, (o.t1 - o.t0) / 4), depthM: Math.min(PANE_DEPTH_M, 0.8 * o.depth) };
+                out.colours.set(`${o.id}:frame`, hexColour(row.panes.colour, [30, 30, 32]));
+            }
+            out.counts.paned += rowOpenings.length;
+        }
+        // a sill and a surround are swept along the face, one item per row with a placement per opening
+        const prov = (o: OpeningItem) => o.provenance === 'generated';
+        const rowSeen = rowOpenings.filter(o => !prov(o)), rowFilled = rowOpenings.filter(prov);
+        const both = [['', rowSeen], ['f', rowFilled]] as const;
+        if (row.sill && Number(row.sill.out) > 0) {
+            const outM = clamp(row.sill.out, 0.02, 0.4), hM = clamp(row.sill.height ?? 0.1, 0.03, 0.4), ov = clamp(row.sill.overhang ?? 0.05, 0, 0.4);
+            // the sill's top at the opening's bottom, its body below it
+            const profile: Array<[number, number]> = [[0, -hM], [outM, -hM + 0.005], [outM, -0.005], [0, 0]];
+            for (const [suffix, list] of both) {
+                if (!list.length) continue;
+                const id = `${idPrefix}o${ti}s${suffix}`;
+                out.faceSweeps.push({ id, confidence: suffix ? FILLED_CONFIDENCE : READ_CONFIDENCE, provenance: suffix ? 'generated' : 'photo-inferred', face: f.key, axis: 0, profile, placements: list.map(o => [o.s0 - ov, o.s1 + ov, o.t0] as [number, number, number]) });
+                out.colours.set(id, hexColour(row.sill.colour, out.wallColour));
+                out.counts.sills += list.length;
+            }
+        }
+        if (row.surround && Number(row.surround.width) > 0 && Number(row.surround.out) > 0) {
+            const wM = clamp(row.surround.width, 0.03, 0.8), outM = clamp(row.surround.out, 0.01, 0.4);
+            const colour = hexColour(row.surround.colour, out.wallColour);
+            // jambs outside each side up to the springing line, and a head above a flat-headed opening (an arch keeps its jambs)
+            const left: Array<[number, number]> = [[0, -wM], [outM, -wM + 0.005], [outM, -0.005], [0, 0]];
+            const right: Array<[number, number]> = [[0, 0], [outM, 0.005], [outM, wM - 0.005], [0, wM]];
+            for (const [suffix, list] of both) {
+                if (!list.length) continue;
+                const conf = suffix ? FILLED_CONFIDENCE : READ_CONFIDENCE, p = suffix ? 'generated' : 'photo-inferred';
+                const spring = (o: OpeningItem) => o.t1 - (o.archRiseM ?? 0);
+                const items: FaceSweepItem[] = [
+                    { id: `${idPrefix}o${ti}jl${suffix}`, confidence: conf, provenance: p, face: f.key, axis: 1, profile: left, placements: list.map(o => [o.t0, spring(o), o.s0] as [number, number, number]) },
+                    { id: `${idPrefix}o${ti}jr${suffix}`, confidence: conf, provenance: p, face: f.key, axis: 1, profile: right, placements: list.map(o => [o.t0, spring(o), o.s1] as [number, number, number]) }
+                ];
+                const flat = list.filter(o => (o.archRiseM ?? 0) < 0.01);
+                if (flat.length) items.push({ id: `${idPrefix}o${ti}hd${suffix}`, confidence: conf, provenance: p, face: f.key, axis: 0, profile: right, placements: flat.map(o => [o.s0 - wM, o.s1 + wM, o.t1] as [number, number, number]) });
+                for (const it of items) { out.faceSweeps.push(it); out.colours.set(it.id, colour); }
+                out.counts.surrounds += list.length;
+            }
         }
     }
     for (const [k, b] of (prog.horizontal ?? []).entries()) {

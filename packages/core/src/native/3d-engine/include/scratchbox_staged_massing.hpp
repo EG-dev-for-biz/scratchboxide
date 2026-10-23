@@ -103,8 +103,11 @@ struct SweepSpec { std::string id, provenance; double confidence{0}; std::vector
  * crowned by a circular arc from (s0, t1 - archRise) through (mid, t1) to (s1, t1 - archRise) (a semicircle at half the width,
  * a segmental arch below that; clamped to half the width). Arches are cut on extruded walls; a modelled volume's facet keeps
  * the rectangle.
+ * With `panes`, the glazing is divided: a frame `frame` wide around the outline and `paneCols` - 1 mullions and `paneRows` - 1
+ * transoms `bar` wide, evenly spaced, each standing `barDepth` proud of the glass at the back of the recess.
  */
-struct OpeningSpec { std::string id, face, provenance; double s0{0}, s1{0}, t0{0}, t1{0}, depth{0}, confidence{0}, archRise{0}; bool scanned{false}; };
+struct OpeningSpec { std::string id, face, provenance; double s0{0}, s1{0}, t0{0}, t1{0}, depth{0}, confidence{0}, archRise{0}; bool scanned{false};
+    int paneCols{0}, paneRows{0}; double bar{0}, frame{0}, barDepth{0}; };
 
 /**
  * A profile swept along one axis of a face's own frame (a curve sweep on the face plane): `axis` 0 sweeps along s with the
@@ -1322,7 +1325,64 @@ private:
                 V3 a = f.at(p.first, p.second), b = f.at(q.first, q.second);
                 quad(a, b, b + back, a + back, n, {{p, q, q, p}});
             }
+            emitPanes(f, o, ol, quad);
             nodes_.push_back(std::move(r));
+        }
+    }
+
+    /**
+     * The divided glazing of an opening (OpeningSpec panes): prisms standing barDepth proud of the glass at the back of the
+     * recess, each a quadrilateral in the face's (s, t) given counter-clockwise: the frame along every outline edge (inset
+     * `frame`), then the mullions and transoms evenly spaced inside it, clipped to the outline's head.
+     */
+    template <class Quad>
+    void emitPanes(const Face& f, const OpeningSpec& o, const std::vector<std::pair<double, double>>& ol, Quad& quad) const {
+        if (o.paneCols < 1 || o.paneRows < 1 || o.barDepth <= 0 || (o.frame <= 0 && o.bar <= 0) || (o.paneCols == 1 && o.paneRows == 1 && o.frame <= 0)) return;
+        const double barDepth = std::min(o.barDepth, 0.9 * o.depth);
+        const V3 glass = f.n * (-o.depth), front = f.n * (-o.depth + barDepth);
+        using ST = std::pair<double, double>;
+        auto prism = [&](const std::array<ST, 4>& q) {
+            auto P = [&](const ST& p, const V3& off) { return f.at(p.first, p.second) + off; };
+            quad(P(q[0], front), P(q[1], front), P(q[2], front), P(q[3], front), f.n, q);
+            for (int k = 0; k < 4; ++k) {
+                const ST& a = q[static_cast<size_t>(k)];
+                const ST& b = q[static_cast<size_t>((k + 1) % 4)];
+                double ds = b.first - a.first, dt = b.second - a.second, len = std::hypot(ds, dt);
+                if (len < 1e-9) continue;
+                V3 n = f.axisS * (dt / len) + f.axisT * (-ds / len);
+                quad(P(a, glass), P(b, glass), P(b, front), P(a, front), n, {a, b, b, a});
+            }
+        };
+        const double fw = std::max(0.0, o.frame), bw = std::max(0.0, o.bar);
+        // the frame: each outline edge's band inset by fw (the outline runs counter-clockwise in (s, t): inward is its left)
+        if (fw > 0) {
+            for (size_t k = 0; k < ol.size(); ++k) {
+                const ST& p = ol[k];
+                const ST& q = ol[(k + 1) % ol.size()];
+                double ds = q.first - p.first, dt = q.second - p.second, len = std::hypot(ds, dt);
+                if (len < 1e-9) continue;
+                const double is = -dt / len * fw, it = ds / len * fw;
+                prism({p, q, ST{q.first + is, q.second + it}, ST{p.first + is, p.second + it}});
+            }
+        }
+        if (bw <= 0) return;
+        const double sa = o.s0 + fw, sb = o.s1 - fw, ta = o.t0 + fw;
+        // mullions, each up to the head above it
+        for (int k = 1; k < o.paneCols; ++k) {
+            const double sc = o.s0 + (o.s1 - o.s0) * k / o.paneCols, s0 = sc - bw / 2, s1 = sc + bw / 2;
+            const double top = std::min(outlineTopAt(ol, s0), outlineTopAt(ol, s1)) - fw;
+            if (top > ta + 1e-3) prism({ST{s0, ta}, ST{s1, ta}, ST{s1, top}, ST{s0, top}});
+        }
+        // transoms, each across the width the head leaves at its height
+        for (int k = 1; k < o.paneRows; ++k) {
+            const double tc = o.t0 + (o.t1 - o.t0) * k / o.paneRows, t0 = tc - bw / 2, t1 = tc + bw / 2;
+            double l = sb, rgt = sa;
+            const int steps = 96;
+            for (int j = 0; j <= steps; ++j) {
+                const double s = sa + (sb - sa) * j / steps;
+                if (outlineTopAt(ol, s) - fw >= t1) { l = std::min(l, s); rgt = std::max(rgt, s); }
+            }
+            if (rgt > l + 1e-3) prism({ST{l, t0}, ST{rgt, t0}, ST{rgt, t1}, ST{l, t1}});
         }
     }
 
@@ -2315,8 +2375,15 @@ inline Spec readSpec(std::istream& in) {
             if (!ls) fail("opening needs id face s0 s1 t0 t1 depth scanned confidence provenance [arch rise]");
             o.scanned = sc != 0;
             std::string flag;
-            if (ls >> flag) {
-                if (flag != "arch" || !(ls >> o.archRise) || o.archRise < 0) fail("opening: unknown trailing token " + flag + " (only \"arch <rise>\")");
+            while (ls >> flag) {
+                if (flag == "arch") {
+                    if (!(ls >> o.archRise) || o.archRise < 0) fail("opening: arch needs a rise >= 0");
+                } else if (flag == "panes") {
+                    if (!(ls >> o.paneCols >> o.paneRows >> o.bar >> o.frame >> o.barDepth) || o.paneCols < 1 || o.paneRows < 1 || o.bar < 0 || o.frame < 0 || o.barDepth < 0)
+                        fail("opening: panes needs cols >= 1, rows >= 1, bar, frame and barDepth >= 0");
+                } else {
+                    fail("opening: unknown trailing token " + flag + " (\"arch <rise>\" or \"panes <cols> <rows> <bar> <frame> <barDepth>\")");
+                }
             }
             s.openings.push_back(o);
         } else if (k == "facesweep") {

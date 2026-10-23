@@ -79,7 +79,7 @@ describe('facade program', () => {
 
     it('keeps what was read photo-inferred and what was continued generated', () => {
         expect(items.openings.map(o => o.provenance)).toEqual(['photo-inferred', 'photo-inferred', 'generated']);
-        expect(items.counts).toEqual({ openings: 3, filledOpenings: 1, horizontal: 1, vertical: 2, filledVertical: 1 });
+        expect(items.counts).toEqual({ openings: 3, filledOpenings: 1, horizontal: 1, vertical: 2, filledVertical: 1, paned: 0, sills: 0, surrounds: 0 });
         expect(items.faceSweeps.map(w => [w.id, w.provenance, w.axis])).toEqual([['g0_h0', 'photo-inferred', 0], ['g0_v0', 'photo-inferred', 1], ['g0_v0f', 'generated', 1]]);
     });
 

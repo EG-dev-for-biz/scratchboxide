@@ -68,7 +68,13 @@ export function programShapes(prog: FacadeProgram): CheckShape[] {
         if (!(h1 > h0)) continue;
         for (const c of [...(row.cols ?? []), ...(row.filledCols ?? [])]) {
             const u0 = Number(c?.[0]), u1 = Number(c?.[1]);
-            if (u1 > u0) out.push({ kind: 'opening', u0, u1, h0, h1, archRise: Math.max(0, Math.min(Number(row.archRise) || 0, (u1 - u0) / 2)) });
+            if (!(u1 > u0)) continue;
+            out.push({ kind: 'opening', u0, u1, h0, h1, archRise: Math.max(0, Math.min(Number(row.archRise) || 0, (u1 - u0) / 2)) });
+            // a sill and a surround's jambs are projecting members beside the opening
+            const sOut = Number(row.sill?.out), sH = Number(row.sill?.height ?? 0.1), ov = Number(row.sill?.overhang ?? 0.05);
+            if (sOut > 0 && sH > 0) out.push({ kind: 'member', u0: u0 - ov, u1: u1 + ov, h0: h0 - sH, h1: h0 });
+            const jw = Number(row.surround?.width);
+            if (jw > 0 && Number(row.surround?.out) > 0) out.push({ kind: 'member', u0: u0 - jw, u1: u0, h0, h1: h1 - (Number(row.archRise) || 0) }, { kind: 'member', u0: u1, u1: u1 + jw, h0, h1: h1 - (Number(row.archRise) || 0) });
         }
     }
     const span = (prof: number[][] | undefined): [number, number] | undefined => {

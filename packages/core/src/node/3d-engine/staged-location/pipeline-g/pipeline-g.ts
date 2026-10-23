@@ -15,7 +15,8 @@
  *   2. path-traces them from the tile with metric depth and lays them onto metric wall plates (plates.ts),
  *   3. reads every well-seen plate as a facade program in metres (read.ts), checks each reading against its plate (check.ts)
  *      and reads a wall again when its reading does not fit, keeping the reading that fits better,
- *   4. builds it natively on the massing (scratchbox_staged_massing.hpp: arched openings, swept bands, members) with no tile
+ *   4. builds it natively on the massing (scratchbox_staged_massing.hpp: arched openings with their frames, mullions and
+ *      transoms, sills and surrounds, swept bands, members) with no tile
  *      texture and no scanned residual, and
  *   5. paints each face from its own reading: wall colour, glazing in its openings, band and member colours on their
  *      footprints; a wall nobody read takes the read walls' median colour.
@@ -107,6 +108,21 @@ export function inOpening(o: Pick<OpeningItem, 's0' | 's1' | 't0' | 't1' | 'arch
     return (s - cx) ** 2 + (t - cy) ** 2 <= r * r;
 }
 
+/**
+ * Whether (s, t) lies on an opening's divided glazing (OpeningItem panes): within frameM of its outline, or on one of its
+ * evenly spaced mullions or transoms (scratchbox_staged_massing.hpp emitPanes lays them the same way).
+ */
+export function onPaneBar(o: OpeningItem, s: number, t: number): boolean {
+    const p = o.panes;
+    if (!p || !inOpening(o, s, t)) return false;
+    const fw = p.frameM;
+    if (fw > 0 && !inOpening({ s0: o.s0 + fw, s1: o.s1 - fw, t0: o.t0 + fw, t1: o.t1 - fw, archRiseM: Math.max(0, (o.archRiseM ?? 0) - fw) }, s, t)) return true;
+    const half = p.barM / 2;
+    for (let k = 1; k < p.cols; k++) if (Math.abs(s - (o.s0 + ((o.s1 - o.s0) * k) / p.cols)) <= half) return true;
+    for (let k = 1; k < p.rows; k++) if (Math.abs(t - (o.t0 + ((o.t1 - o.t0) * k) / p.rows)) <= half) return true;
+    return false;
+}
+
 /** The (s, t) footprint of a face sweep on its face: [s0, s1, t0, t1] per placement. */
 export function sweepFootprints(w: FaceSweepItem): Array<[number, number, number, number]> {
     // the whole profile's span: its ends sit on the face at offset 0 and it stands proud between them
@@ -160,6 +176,12 @@ export function paintFaces(faces: MassingFace[], items: Map<string, ProgramItems
             };
             for (const w of own.faceSweeps) for (const [s0, s1, t0, t1] of sweepFootprints(w)) put(s0, s1, t0, t1, own.colours.get(w.id) ?? wallC, w.provenance === 'generated' ? G_SRC.continued : G_SRC.read);
             for (const o of own.openings) put(o.s0, o.s1, o.t0, o.t1, own.colours.get(o.id) ?? [40, 44, 50], o.provenance === 'generated' ? G_SRC.continued : G_SRC.read, (s, t) => inOpening(o, s, t));
+            // divided glazing: the frame and bars in their own colour (the native build stands them proud of the glass there)
+            for (const o of own.openings) {
+                if (!o.panes) continue;
+                const fc = own.colours.get(`${o.id}:frame`) ?? [30, 30, 32];
+                put(o.s0, o.s1, o.t0, o.t1, fc, o.provenance === 'generated' ? G_SRC.continued : G_SRC.read, (s, t) => onPaneBar(o, s, t));
+            }
         }
         textures.set(f.index, { width: f.width, height: f.height, rgba, source });
     }
@@ -295,8 +317,8 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     const buildDir = path.join(input.dir, 'build');
     const run = await runMassing(massingSpecText(input.massing, { outDir: buildDir, tile: input.tilePath, params: { ...G_BUILD_PARAMS }, openings, faceSweeps }), buildDir, { ...(input.signal ? { signal: input.signal } : {}) });
     timingsMs.build = Date.now() - t;
-    const c = [...items.values()].reduce((a, x) => ({ o: a.o + x.counts.openings, fo: a.fo + x.counts.filledOpenings, h: a.h + x.counts.horizontal, v: a.v + x.counts.vertical, fv: a.fv + x.counts.filledVertical }), { o: 0, fo: 0, h: 0, v: 0, fv: 0 });
-    steps.push({ step: 'native build', proposed: openings.length + faceSweeps.length, accepted: openings.length + faceSweeps.length - run.report.rejectedOpenings.length - run.report.rejectedSweeps.length, rejected: run.report.rejectedOpenings.length + run.report.rejectedSweeps.length, notes: [`${c.o} openings (${c.fo} continued into unseen parts), ${c.h} horizontal profiles, ${c.v} vertical members (${c.fv} continued)`, ...run.report.rejectedOpenings.map(id => `opening ${id} rejected by the native tool`)], ms: timingsMs.build });
+    const c = [...items.values()].reduce((a, x) => ({ o: a.o + x.counts.openings, fo: a.fo + x.counts.filledOpenings, h: a.h + x.counts.horizontal, v: a.v + x.counts.vertical, fv: a.fv + x.counts.filledVertical, pn: a.pn + x.counts.paned, sl: a.sl + x.counts.sills, sr: a.sr + x.counts.surrounds }), { o: 0, fo: 0, h: 0, v: 0, fv: 0, pn: 0, sl: 0, sr: 0 });
+    steps.push({ step: 'native build', proposed: openings.length + faceSweeps.length, accepted: openings.length + faceSweeps.length - run.report.rejectedOpenings.length - run.report.rejectedSweeps.length, rejected: run.report.rejectedOpenings.length + run.report.rejectedSweeps.length, notes: [`${c.o} openings (${c.fo} continued into unseen parts; ${c.pn} with divided glazing, ${c.sl} with sills, ${c.sr} with surrounds), ${c.h} horizontal profiles, ${c.v} vertical members (${c.fv} continued)`, ...run.report.rejectedOpenings.map(id => `opening ${id} rejected by the native tool`)], ms: timingsMs.build });
 
     // 5. paint
     t = Date.now();
