@@ -133,6 +133,7 @@ describe('facade texture input from the survey plate', () => {
         // the surveyed face: the same wall, its frame's origin 2 m along (s runs 2 m short), so a plate texel at s = 3 lies at x = 5
         const surveyed: MassingFace = { ...WALL, origin: [2, 0, 0], sMin: -2, sMax: 8 };
         const pl = { ...emptyPlate(0, surveyed), coverage: 0.5 };
+        const H0 = pl.h;
         // the plate sees only its right half (x from 5 m), coloured by x so the mapping is visible
         for (let y = 0; y < pl.h; y++) for (let x = 0; x < pl.w; x++) {
             const s = surveyed.sMin + (x + 0.5) * PLATE_PIXEL_M;
@@ -153,6 +154,14 @@ describe('facade texture input from the survey plate', () => {
         expect(on.covered).toBeCloseTo(0.5, 1);
         // the painted texture itself is not changed
         expect(painted.rgba[px(7.01, 4) * 4]).toBe(16);
+        // the wall set back 1 m from the massing plane is still the wall; a blob standing 1 m in front of it is not
+        const back = { ...pl, relief: pl.relief.map(v => (Number.isNaN(v) ? v : v - 1)) };
+        expect(plateOntoFace(WALL, painted, back, surveyed)!.covered).toBeCloseTo(0.5, 1);
+        const blob = { ...pl, relief: Float32Array.from(pl.relief) };
+        for (let y = 0; y < pl.h; y++) for (let x = 0; x < pl.w; x++) { const s = surveyed.sMin + (x + 0.5) * PLATE_PIXEL_M; if (s + 2 > 8 && (H0 - y) * PLATE_PIXEL_M < 1.5) blob.relief[y * pl.w + x] = 1; }
+        const onBlob = plateOntoFace(WALL, painted, blob, surveyed)!;
+        expect(onBlob.use[px(9, 0.5)]).toBe(0);
+        expect(onBlob.use[px(7.01, 4)]).toBe(1);
     });
 });
 

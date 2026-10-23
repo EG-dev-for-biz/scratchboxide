@@ -164,14 +164,18 @@ export function paintFaces(faces: MassingFace[], items: Map<string, ProgramItems
     return textures;
 }
 
-/** A plate texel standing further than this off the wall plane is something in front of the wall (a car, a person, a pole, melted into the tile). */
+/**
+ * A plate texel standing further than this in front of the wall's own surface (the median offset of the plate's texels from
+ * the massing plane: the melted scan sits off the plane as a whole) is something in front of the wall: a car, a person, a
+ * pole, melted into the tile.
+ */
 export const PLATE_PROUD_M = 0.6;
 
 /**
  * A built face's texture for the facade texture builder: the survey plate of its wall resampled into the face's raster
  * through world space (the plate is in the surveyed face's frame), over the painted texture where the plate saw nothing.
  * `use` marks the texels a station saw of the wall itself: not the plate's unseen mid-grey, and not what stands more than
- * PLATE_PROUD_M off the plane (the street clutter melted into the tile in front of the ground floor). The builder draws the
+ * PLATE_PROUD_M in front of the wall's surface (the street clutter melted into the tile before the ground floor). The builder draws the
  * rest as the wall continues. Undefined when the plate covers none of the face.
  */
 export function plateOntoFace(f: MassingFace, painted: FaceTexture, pl: Plate, pf: MassingFace): { tex: FaceTexture; use: Uint8Array; covered: number } | undefined {
@@ -179,6 +183,11 @@ export function plateOntoFace(f: MassingFace, painted: FaceTexture, pl: Plate, p
     let covered = 0;
     const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     const plPix = pl.widthM / pl.w;
+    // the wall's own surface: the median offset of what the stations saw
+    const offs: number[] = [];
+    for (let j = 0; j < pl.relief.length; j += 7) if (!Number.isNaN(pl.relief[j])) offs.push(pl.relief[j]);
+    offs.sort((a, b) => a - b);
+    const surface = offs.length ? offs[Math.floor(offs.length / 2)] : 0;
     for (let y = 0; y < painted.height; y++) for (let x = 0; x < painted.width; x++) {
         const s = f.orthoSMin + (x + 0.5) * f.pixel, t = f.orthoTMax - (y + 0.5) * f.pixel;
         const p = [0, 1, 2].map(k => f.origin[k] + s * f.axisS[k] + t * f.axisT[k]);
@@ -187,7 +196,7 @@ export function plateOntoFace(f: MassingFace, painted: FaceTexture, pl: Plate, p
         const px = Math.floor((ps - pf.sMin) / plPix), py = Math.floor((pf.tMax - pt) / plPix);
         if (px < 0 || py < 0 || px >= pl.w || py >= pl.h) continue;
         const j = py * pl.w + px;
-        if (Number.isNaN(pl.relief[j]) || Math.abs(pl.relief[j]) > PLATE_PROUD_M) continue;
+        if (Number.isNaN(pl.relief[j]) || pl.relief[j] - surface > PLATE_PROUD_M) continue;
         if (Math.abs(pl.rgb[j * 3] - 128) <= 4 && Math.abs(pl.rgb[j * 3 + 1] - 128) <= 4 && Math.abs(pl.rgb[j * 3 + 2] - 128) <= 4) continue;
         const i = y * painted.width + x;
         rgba[i * 4] = pl.rgb[j * 3]; rgba[i * 4 + 1] = pl.rgb[j * 3 + 1]; rgba[i * 4 + 2] = pl.rgb[j * 3 + 2]; rgba[i * 4 + 3] = 255;
