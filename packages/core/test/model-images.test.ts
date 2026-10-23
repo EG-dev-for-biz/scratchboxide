@@ -68,4 +68,38 @@ describe('images shown to the model', () => {
         await expect(Promise.resolve(workspaceHandlers.workspace_view_image({ filePath: '../../etc/x.png' }, ctx))).rejects.toThrow();
         expect(READ_ONLY_TOOLS.has('workspace_view_image')).toBe(true);
     });
+
+    it('reads a staged build\'s own published files (public/models, public/briefs) by absolute path regardless of the chat\'s own open workspace', async () => {
+        // the chat's open project folder (e.g. desktop-app, a subfolder the IDE sidebar shows) and the staged build's own
+        // fixed root (stagedWorkspaceRoot(): SCRATCHBOX_ROOT, a different checkout entirely here) are unrelated directories
+        const openWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-open-'));
+        const stagedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-staged-'));
+        const briefDir = path.join(stagedRoot, 'public', 'briefs', 'abcd1234');
+        fs.mkdirSync(briefDir, { recursive: true });
+        fs.writeFileSync(path.join(briefDir, 'brief.json'), JSON.stringify({ schema: 'x' }));
+        fs.writeFileSync(path.join(briefDir, 'face_0_colour.png'), PNG);
+        const prevRoot = process.env.SCRATCHBOX_ROOT;
+        process.env.SCRATCHBOX_ROOT = stagedRoot;
+        try {
+            const ctx = { workspaceRoot: openWorkspace } as never;
+            const fileRes = await workspaceHandlers.workspace_view_file({ filePath: path.join(briefDir, 'brief.json') }, ctx);
+            expect(fileRes.resultPayload.content).toContain('"schema":"x"');
+            const imgRes = await workspaceHandlers.workspace_view_image({ filePath: path.join(briefDir, 'face_0_colour.png') }, ctx);
+            expect((imgRes.resultPayload.modelImages as Array<{ mimeType: string }>)[0].mimeType).toBe('image/png');
+            // a path that is absolute but outside BOTH the staged public root and the open workspace is still refused
+            const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-elsewhere-'));
+            fs.writeFileSync(path.join(elsewhere, 'x.json'), '{}');
+            await expect(Promise.resolve(workspaceHandlers.workspace_view_file({ filePath: path.join(elsewhere, 'x.json') }, ctx))).rejects.toThrow(/outside the workspace root/);
+            // a path outside public/ but still inside the staged root is not granted this carve-out either
+            const nonPublic = path.join(stagedRoot, 'secrets.json');
+            fs.writeFileSync(nonPublic, '{}');
+            await expect(Promise.resolve(workspaceHandlers.workspace_view_file({ filePath: nonPublic }, ctx))).rejects.toThrow(/outside the workspace root/);
+            // a plain relative path still resolves against the open workspace, unaffected by the staged-root carve-out
+            fs.writeFileSync(path.join(openWorkspace, 'readme.txt'), 'hello');
+            const rel = await workspaceHandlers.workspace_view_file({ filePath: 'readme.txt' }, ctx);
+            expect(rel.resultPayload.content).toContain('hello');
+        } finally {
+            if (prevRoot === undefined) delete process.env.SCRATCHBOX_ROOT; else process.env.SCRATCHBOX_ROOT = prevRoot;
+        }
+    });
 });

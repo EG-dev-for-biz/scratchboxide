@@ -12,6 +12,7 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import type { SymbolKind } from '../../../common/context-graph-protocol';
 import { resolveWithinRoot, PathTraversalError } from '../../security/path-guard';
+import { stagedWorkspaceRoot } from '../../3d-engine/staged-location/stage-cache';
 import type { ToolDeclaration, ToolHandler, ToolContext, ToolHandlerOutcome } from './types';
 
 export const IGNORED_DIRS = [
@@ -130,6 +131,27 @@ function resolveInRoot(root: string, rel: string): string {
         }
         throw err;
     }
+}
+
+/**
+ * A staged build's own published files (public/models, public/briefs: massing-glb.ts, pipeline-g/brief.ts) live under
+ * stagedWorkspaceRoot() — a fixed location tied to the repo checkout, not to whichever project folder the current chat
+ * happens to have open (ctx.workspaceRoot: the IDE's "workspace", set per chat, often a subfolder such as desktop-app).
+ * A read-only tool resolves an absolute path there directly, so the chat model can open a building brief or a published
+ * GLB regardless of the open workspace; falls back to the ordinary ctx.workspaceRoot confinement for everything else,
+ * and a write operation never takes this path (staged-location-tool.ts callers still write it relative to their own
+ * workspaceRoot, through the ordinary resolveInRoot).
+ */
+function resolveReadPath(ctx: Pick<ToolContext, 'workspaceRoot'>, rel: string): string {
+    if (path.isAbsolute(rel)) {
+        try {
+            return resolveWithinRoot(path.join(stagedWorkspaceRoot(), 'public'), rel);
+        } catch (err) {
+            if (!(err instanceof PathTraversalError)) throw err;
+            // not under the staged build's own public/ root: fall through to the open workspace
+        }
+    }
+    return resolveInRoot(ctx.workspaceRoot, rel);
 }
 
 // ============================================================================
@@ -365,7 +387,7 @@ export const workspaceHandlers: Record<string, ToolHandler> = {
     async workspace_view_image(args, ctx) {
         const relPath = asString(args.filePath);
         assertSafeWorkspacePath(relPath, 'view');
-        const fullPath = resolveInRoot(ctx.workspaceRoot, relPath);
+        const fullPath = resolveReadPath(ctx, relPath);
         const mimeType = IMAGE_MIME[path.extname(fullPath).toLowerCase()];
         if (!mimeType) throw new Error(`Not an image this tool shows (PNG, JPEG or WebP): ${relPath}`);
         if (!await fs.pathExists(fullPath)) throw new Error(`File not found: ${relPath}`);
@@ -381,7 +403,7 @@ export const workspaceHandlers: Record<string, ToolHandler> = {
     async workspace_view_file(args, ctx) {
         const relPath = asString(args.filePath);
         assertSafeWorkspacePath(relPath, 'view');
-        const fullPath = resolveInRoot(ctx.workspaceRoot, relPath);
+        const fullPath = resolveReadPath(ctx, relPath);
         if (!await fs.pathExists(fullPath)) {
             throw new Error(`File not found: ${relPath}`);
         }
