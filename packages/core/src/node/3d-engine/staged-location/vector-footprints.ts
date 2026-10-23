@@ -210,7 +210,7 @@ export interface EvidenceLookup {
     roadAt(x: number, z: number): boolean;
     /** The type codes of the land-use area at (x, z), undefined off every area. Labels: never branch geometry on them. */
     landuseAt(x: number, z: number): string[] | undefined;
-    /** The evidence's named points of interest (scan frame), for whoever names a building (building-name.ts). Labels only. */
+    /** The named points of interest the tiles carried (scan frame): the pick matches a place's words against their names; building-name.ts names the building from them. Labels only. */
     pois: NonNullable<VectorEvidence['pois']>;
 }
 
