@@ -33,7 +33,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { TEXTURE_LADDER_RUNGS } from '../../../../common/spatial/texture-pass-contracts';
-import type { GeodeticAnchor } from '../../../../common/spatial/colmap-vector-reference-types';
+import type { ColmapCameraPose, GeodeticAnchor } from '../../../../common/spatial/colmap-vector-reference-types';
 import { HeadlessMeshSilhouetteRenderer } from '../../../spatial/HeadlessMeshSilhouetteRenderer';
 import type { GroundModel } from '../../../spatial/StreetViewSurveyPlanner';
 import type { VisionModelChain } from '../../../gemini/vision-model-chain';
@@ -52,7 +52,8 @@ import { platePng, reliefPng, surveyPlates, type Plate } from './plates';
 import { MIN_READ_COVERAGE, PIPELINE_G_READ_VERSION, programItems, readPlate, type FacadeProgram, type ProgramItems } from './read';
 import { checkPlate, checkReading, type ReadingCheck } from './check';
 import { groupFacades, layBack } from './facades';
-import { roofObjects } from './roof-objects';
+import { roofObjects, type RoofObject } from './roof-objects';
+import { writeBuildingBrief, type BuildingBriefRecord } from './brief';
 import { closePlateGaps, redrawRoof, roofStations, ROOF_PLATE_PROMPT_ID, type RoofTextureRecord } from './roof-texture';
 
 export const PIPELINE_G_VERSION = `pipeline-g/v3+${PIPELINE_G_READ_VERSION}`;
@@ -105,6 +106,8 @@ export interface PipelineGInput {
 
 export interface PipelineGOutcome extends InferenceOutcome {
     plates: Array<{ face: string; coverage: number; read: boolean; model?: string; notes?: string; counts?: ProgramItems['counts']; check?: ReadingCheck; reread?: 'first' | 'second' }>;
+    /** The building brief written beside the build (brief.ts), or why it was not. */
+    brief?: BuildingBriefRecord | { error: string };
     stations: { kept: number; dropped: number; candidates: number; skipped: Array<{ face: string; reason: string }> };
 }
 
@@ -340,7 +343,8 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     t = Date.now();
     // every surveyed wall gets a plate: an aerial lays onto walls no street station reached
     const faceIdx = [...new Set([...plan.stations.map(s => s.face), ...(plan.stations.some(s => s.row === 'aerial') ? plan.faces : [])])];
-    const { plates } = await surveyPlates({ stations: plan.stations, faces: surveyFaces, faceIdx, tileGlb: input.tilePath, ...(input.signal ? { signal: input.signal } : {}), onProgress: progress });
+    const briefDir = path.join(input.dir, 'brief');
+    const { plates, renders: wallRenders } = await surveyPlates({ keepRendersDir: path.join(briefDir, 'survey'), stations: plan.stations, faces: surveyFaces, faceIdx, tileGlb: input.tilePath, ...(input.signal ? { signal: input.signal } : {}), onProgress: progress });
     for (const pl of plates) {
         fs.writeFileSync(path.join(input.dir, 'plates', `face_${pl.face}_colour.png`), platePng(pl, false));
         fs.writeFileSync(path.join(input.dir, 'plates', `face_${pl.face}_relief.png`), reliefPng(pl));
@@ -348,14 +352,18 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     timingsMs.plates = Date.now() - t;
     // the roof, from above (roof-texture.ts): its own station and plates, only when there is an image model to redraw them
     let roofPlates: Plate[] = [];
+    let roofRenders: Array<{ station: number; file: string }> = [];
+    let roofStationList: Array<{ station: ColmapCameraPose; faces: number[] }> = [];
     if (input.enhance) {
         const tr = Date.now();
         const roofIdx = surveyFaces.map((f, i) => ({ f, i })).filter(x => x.f.kind === 'roof');
         const rs = roofStations(roofIdx.map(x => x.f), input.anchor, 900);
+        roofStationList = rs.map(s => ({ station: s.station, faces: s.faces.map(k => roofIdx[k].i) }));
         if (rs.length) {
             try {
-                const rp = await surveyPlates({ stations: rs, faces: surveyFaces, faceIdx: rs.flatMap(s => s.faces.map(k => roofIdx[k].i)), tileGlb: input.tilePath, ...(input.signal ? { signal: input.signal } : {}), onProgress: progress });
+                const rp = await surveyPlates({ keepRendersDir: path.join(briefDir, 'survey'), stations: rs, faces: surveyFaces, faceIdx: rs.flatMap(s => s.faces.map(k => roofIdx[k].i)), tileGlb: input.tilePath, ...(input.signal ? { signal: input.signal } : {}), onProgress: progress });
                 roofPlates = rp.plates;
+                roofRenders = rp.renders;
                 const laidShare = roofPlates.map(p => p.coverage);
                 const closed = roofPlates.map(p => closePlateGaps(p));
                 for (const pl of roofPlates) fs.writeFileSync(path.join(input.dir, 'plates', `roof_${pl.face}_colour.png`), platePng(pl, false));
@@ -428,9 +436,11 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     const faceSweeps = [...built.values()].flatMap(x => x.faceSweeps);
     // what stands on the roof, built from what the scan measures there (roof-objects.ts)
     let roofParts: Massing['parts'] = [];
+    let roofObjectRecords: RoofObject[] = [];
     try {
         const ro = await roofObjects(input.run, input.massing.parts, { groundY: input.structure.groundY, dir: input.dir, ...(input.signal ? { signal: input.signal } : {}) });
         roofParts = ro.parts;
+        roofObjectRecords = ro.objects;
         steps.push({ step: 'roof objects', proposed: ro.audit?.clusters.length ?? 0, accepted: ro.parts.length, rejected: (ro.audit?.clusters.length ?? 0) - ro.parts.length, notes: ro.notes, ms: Date.now() - t });
     } catch (err) {
         if (input.signal?.aborted) throw err;
@@ -527,8 +537,32 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     }
     const files = writeMassingLayer(run, input.massing, textures, legend, input.dir, input.stage, input.stageKey, 'pipeline_g');
 
+    // the building brief beside the build (brief.ts): what the next tool, script or person works from
+    let brief: BuildingBriefRecord | { error: string };
+    try {
+        brief = writeBuildingBrief({
+            dir: briefDir, place: input.place, groundY: input.structure.groundY,
+            massing: { parts: [...input.massing.parts, ...roofParts] }, roofObjects: roofObjectRecords,
+            builtFaces: run.report.faces, facades: grouping.groups,
+            stations: [...plan.stations, ...roofStationList.map(r => ({ station: r.station, face: r.faces[0] ?? -1, row: 'aerial' as const, distanceM: 0, onFace: 0 }))],
+            renders: [...wallRenders, ...roofRenders],
+            plates: plates.map(pl => {
+                const rd = readings.find(x => x.pl.key === pl.key);
+                return {
+                    key: pl.key, face: surveyFaces[pl.face], coverage: pl.coverage, widthM: pl.widthM, heightM: pl.heightM,
+                    colour: path.join(input.dir, 'plates', `face_${pl.face}_colour.png`), relief: path.join(input.dir, 'plates', `face_${pl.face}_relief.png`),
+                    ...(rd && 'program' in rd && rd.program ? { program: rd.program } : {}), ...(rd && 'check' in rd && rd.check ? { check: rd.check } : {})
+                };
+            }),
+            roofPlates: roofPlates.map(p => ({ key: p.key, coverage: p.coverage, colour: path.join(input.dir, 'plates', `roof_${p.face}_colour.png`) })),
+            files, steps
+        });
+    } catch (err) {
+        brief = { error: err instanceof Error ? err.message : String(err) };
+    }
+
     return {
-        files, run, steps, legend, grammars: [], timingsMs, enhanced,
+        files, run, steps, legend, grammars: [], timingsMs, enhanced, brief,
         build: { parts: [...input.massing.parts, ...roofParts], sweeps: [], openings },
         textures, occluderMasks: new Map(),
         plates: plates.map(p => {

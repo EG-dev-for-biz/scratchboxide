@@ -1204,6 +1204,11 @@ export interface StagedLocationResult {
     /** The background texture pass (textured twins of the staged layers), when it ran. */
     texturePass?: TexturePassRecord;
     /**
+     * Pipeline G's building brief (pipeline-g/brief.ts): a JSON of the massing, roof objects, faces, facades, survey stations
+     * with their renders, wall plates with their readings, and the build's GLBs, with the images beside it.
+     */
+    buildingBrief?: { path: string; images: number };
+    /**
      * When the build was staged into the active scene: what of that scene it kept and what it took out, by object id, so
      * nothing is said to have been kept that was not. A structure rebuild an earlier build made is kept (the district goes
      * around it) unless this build rebuilds the structure at the same place.
@@ -2120,6 +2125,7 @@ const DEFINITIONS = {
             note: STR
         }),
         materialHints: ref('materialHints'), texturePass: ref('TexturePassRecord'), figures: arr(ref('figureRecord')),
+        buildingBrief: obj(['path', 'images'], { path: STR, images: NONNEG_INT }),
         photoCost: obj(['total', 'byStage'], { total: ref('stageCost'), byStage: { type: 'object', additionalProperties: ref('stageCost') } }),
         // trees-fix's LocationClayTrees (node/3d-engine/location-clay-pipeline.ts) owns its own shape
         trees: { type: 'object' },

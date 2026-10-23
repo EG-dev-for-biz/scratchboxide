@@ -15,6 +15,8 @@
  * for the reading to undo.
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
 import type { ColmapCameraPose } from '../../../../common/spatial/colmap-vector-reference-types';
 import { SurveyStationRenderService } from '../../../spatial/SurveyStationRenderService';
 import type { MassingFace } from '../pipeline-e/native-massing';
@@ -79,18 +81,26 @@ export function finishPlate(pl: Plate & { score: Float32Array }): Plate {
 }
 
 /** Renders every station from the photo tile and lays it onto the plates of `faceIdx`. */
-export async function surveyPlates(opts: { stations: Array<{ station: ColmapCameraPose }>; faces: MassingFace[]; faceIdx: number[]; tileGlb: string; signal?: AbortSignal; onProgress?: (m: string) => void }): Promise<{ plates: Plate[]; laid: Array<{ station: number; texels: number[] }> }> {
+/** `keepRendersDir`: each station's render is also written there as station_<id>.png (the building brief's survey photographs). */
+export async function surveyPlates(opts: { stations: Array<{ station: ColmapCameraPose }>; faces: MassingFace[]; faceIdx: number[]; tileGlb: string; signal?: AbortSignal; onProgress?: (m: string) => void; keepRendersDir?: string }): Promise<{ plates: Plate[]; laid: Array<{ station: number; texels: number[] }>; renders: Array<{ station: number; file: string }> }> {
     const plates = opts.faceIdx.map(i => emptyPlate(i, opts.faces[i]));
     const renderer = new SurveyStationRenderService();
     const laid: Array<{ station: number; texels: number[] }> = [];
+    const renders: Array<{ station: number; file: string }> = [];
+    if (opts.keepRendersDir) fs.mkdirSync(opts.keepRendersDir, { recursive: true });
     for (const [n, { station }] of opts.stations.entries()) {
         if (opts.signal?.aborted) throw new DOMException('aborted', 'AbortError');
         // no workDir: the renderer makes its own and removes it after reading the image and depth back (a given one is kept)
         const r = await renderer.renderStation(station, { renderMode: 'albedo', glbPath: opts.tileGlb, width: STATION_WIDTH, height: STATION_HEIGHT, samplesPerPixel: STATION_SAMPLES });
+        if (opts.keepRendersDir) {
+            const file = path.join(opts.keepRendersDir, `station_${station.id}.png`);
+            fs.writeFileSync(file, encodePng(r.width, r.height, Buffer.from(r.rgba), 4));
+            renders.push({ station: station.id, file });
+        }
         laid.push({ station: station.id, texels: layStation({ rgba: r.rgba, depth: r.depth, cameraPose: r.cameraPose as never, intrinsics: r.intrinsics, width: r.width, height: r.height }, station.id, plates, opts.faces) });
         opts.onProgress?.(`pipeline G: station ${n + 1} of ${opts.stations.length} laid on the wall plates`);
     }
-    return { plates: plates.map(finishPlate), laid };
+    return { plates: plates.map(finishPlate), laid, renders };
 }
 
 /** The plate as a PNG, metre ticks on all four edges (every 1 m, longer every 5 m) so a reader can measure. */

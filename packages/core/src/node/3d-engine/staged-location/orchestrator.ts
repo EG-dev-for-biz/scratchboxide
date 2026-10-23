@@ -1088,6 +1088,9 @@ function loadMesh(files: Array<string | undefined>): RenderMesh3D {
 /** A district layer published without the kept structure's footprint (keptStructureCarver). */
 const CARVED_URL = /_around_[0-9a-f]{8}\.glb$/;
 
+/** Pipeline G's building brief of a run (the result's buildingBrief). */
+const BUILDING_BRIEFS = new WeakMap<StagedRun, { path: string; images: number }>();
+
 /** What the district layers lost to the kept structure, per layer (the result's activeScene.footprintHidden). */
 const FOOTPRINT_REPORTS = new WeakMap<StagedRun, { footprint?: StructureFootprint; error?: string; layers: Array<{ objectId: string; removedTriangles: number; keptTriangles: number }> }>();
 
@@ -3451,7 +3454,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         // Nano Banana Lite redraws, the full model fills (infill, and walls with unseen areas: Lite leaves them grey)
                         ...((request.enhance ?? stagedEnhance()) ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), cacheDir: path.join(cache.dir, 'enhance_plates'), infill: { client: genAiEnhanceClient(visionAvailable.client), models: [LIGHTING_MODEL_FULL] }, unseenModels: [LIGHTING_MODEL_FULL] } } : {})
                     });
-                    cache.writeRunNote(runId, 'pipeline_g', { steps: out.steps, timingsMs: out.timingsMs, plates: out.plates, stations: out.stations });
+                    cache.writeRunNote(runId, 'pipeline_g', { steps: out.steps, timingsMs: out.timingsMs, plates: out.plates, stations: out.stations, ...(out.brief ? { brief: out.brief } : {}) });
+                    if (out.brief && 'path' in out.brief) BUILDING_BRIEFS.set(run, out.brief);
                     const key8 = e.key.slice(0, 8);
                     const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_pipelineg.glb`);
                     const pubTex = cache.publishFile(out.files.texturedGlb, `${base}_massing_${key8}_pipelineg_tex.glb`);
@@ -5085,6 +5089,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
         ...(activeScene ? { activeScene } : {}),
         ...(run.state.materialHints ? { materialHints: run.state.materialHints } : {}),
         ...(f.textures ? { texturePass: f.textures.record } : {}),
+        ...(BUILDING_BRIEFS.get(run) ? { buildingBrief: BUILDING_BRIEFS.get(run)! } : {}),
         ...(photoCost ? { photoCost } : {}),
         ...(f.rebuild.figures?.length ? { figures: f.rebuild.figures } : {}),
         ...(f.trees ? { trees: f.trees } : {}),
