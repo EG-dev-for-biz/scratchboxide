@@ -697,12 +697,19 @@ export function buildMassing(inp: MassingInputs): Massing {
             const agree = (y: number | undefined) => y !== undefined && scanY !== undefined && Math.abs(y - scanY) <= HEIGHT_AGREEMENT_M;
             let topY: number, heightSource: MassingPart['heightSource'];
             if (inp.preferExtrusion === true) {
-                // the footprint lock: height from the Solar API first, then the vector data, then the scan; a disagreement is said
-                if (solarY !== undefined) { topY = solarY; heightSource = 'solar'; solarReport.flatUsed += flat.length; flat.forEach(f => usedSolar.add(f.k)); }
-                else if (vectorY !== undefined) { topY = vectorY; heightSource = 'vector'; }
-                else if (scanY !== undefined) { topY = scanY; heightSource = 'scan'; }
+                // the footprint lock: the Solar API's height where it agrees with the scan, else the vector data's where that
+                // agrees, else the scan's own (user decision 2026-10-23: vector and Solar data are guidance, useful where
+                // present and in agreement; not every building is documented, or documented well); Solar or vector alone
+                // only with no scan height at all. A disagreement is said.
+                if (agree(solarY)) { topY = solarY!; heightSource = 'solar'; solarReport.flatUsed += flat.length; flat.forEach(f => usedSolar.add(f.k)); }
+                else if (agree(vectorY)) { topY = vectorY!; heightSource = 'vector'; }
+                else if (scanY !== undefined) {
+                    topY = scanY; heightSource = 'scan';
+                    if (solarY !== undefined || vectorY !== undefined) notes.push(`part ${id}: height from the scan (${(scanY - inp.groundY).toFixed(1)} m); ${solarY !== undefined ? `Solar ${(solarY - inp.groundY).toFixed(1)} m` : ''}${solarY !== undefined && vectorY !== undefined ? ' and ' : ''}${vectorY !== undefined ? `vector ${(vectorY - inp.groundY).toFixed(1)} m` : ''} disagreed by more than ${HEIGHT_AGREEMENT_M} m`);
+                }
+                else if (solarY !== undefined) { topY = solarY; heightSource = 'solar'; solarReport.flatUsed += flat.length; flat.forEach(f => usedSolar.add(f.k)); notes.push(`part ${id}: height from Solar (${(solarY - inp.groundY).toFixed(1)} m); the scan has no roof here`); }
+                else if (vectorY !== undefined) { topY = vectorY; heightSource = 'vector'; notes.push(`part ${id}: height from the vector data (${(vectorY - inp.groundY).toFixed(1)} m); the scan has no roof here`); }
                 else { notes.push(`part ${id}: no height from Solar, the vector data or the scan; left out`); continue; }
-                if (scanY !== undefined && Math.abs(topY - scanY) > HEIGHT_AGREEMENT_M) notes.push(`part ${id}: height from ${heightSource} (${(topY - inp.groundY).toFixed(1)} m), ${(topY - scanY).toFixed(1)} m off the scan's roof`);
             } else if (agree(solarY)) { topY = solarY!; heightSource = 'solar'; solarReport.flatUsed += flat.length; flat.forEach(f => usedSolar.add(f.k)); }
             else if (agree(vectorY)) { topY = vectorY!; heightSource = 'vector'; }
             else if (scanY !== undefined) {
@@ -719,7 +726,9 @@ export function buildMassing(inp: MassingInputs): Massing {
                 const ridge = quantile(pts.map(([x, z]) => inp.scanTop(x, z)), 0.97);
                 const capped = { ...target, topY: Number.isFinite(ridge) ? Math.max(ridge, target.topY) : target.topY };
                 const err = (q: Pick<MassingPart, 'topY' | 'baseY' | 'planes'>) => median(pts.map(([x, z]) => Math.abs(roofAt(q, x, z) - inp.scanTop(x, z))));
-                let cur = err(target);
+                // the mean sees a facet that is wrong over a minority of the plan, which the median does not
+                const errMean = (q: Pick<MassingPart, 'topY' | 'baseY' | 'planes'>) => { const d = pts.map(([x, z]) => Math.abs(roofAt(q, x, z) - inp.scanTop(x, z))).filter(Number.isFinite); return d.length ? d.reduce((a, v) => a + v, 0) / d.length : 0; };
+                let cur = err(target), curMean = errMean(target);
                 for (const { s, k } of pitched) {
                     // a facet whose plane runs under this part's own floor somewhere over it is not this part's roof (the
                     // Haughwout's real roof facet, offered to a false upper tier, cut that tier's walls to 0.2 m)
@@ -728,8 +737,11 @@ export function buildMassing(inp: MassingInputs): Massing {
                     if (roofUnderFloor(plane, pts, target.baseY)) { solarReport.pitchedRejected++; continue; }
                     const trial = { ...capped, planes: [...capped.planes, plane] };
                     const e = err(trial);
-                    // the footprint lock takes the Solar API's roof facets as measured; otherwise each must lower the roof's error
-                    if (inp.preferExtrusion === true || (e < cur * 0.95 && e < 1.5)) { capped.planes = trial.planes; cur = e; solarReport.pitchedKept++; usedSolar.add(k); }
+                    // the footprint lock takes a Solar roof facet as measured as long as it does not raise the roof's error against
+                    // the scan (the Flatiron's 12 pitched facets, all kept, put its roof 22.9 m off the scan at the median and
+                    // failed the massing: a facet that contradicts the scan is not this roof); otherwise each must lower it
+                    const em = inp.preferExtrusion === true ? errMean(trial) : 0;
+                    if (inp.preferExtrusion === true ? (e <= cur && em <= curMean + 1e-6) : (e < cur * 0.95 && e < 1.5)) { capped.planes = trial.planes; cur = e; curMean = em; solarReport.pitchedKept++; usedSolar.add(k); }
                     else solarReport.pitchedRejected++;
                 }
                 if (capped.planes.length) { target.planes = capped.planes; target.topY = capped.topY; }

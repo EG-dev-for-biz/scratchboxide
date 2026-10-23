@@ -40,12 +40,20 @@ describe('the footprint lock', () => {
         expect(m.notes.join(' ')).toMatch(/scan's plan of the structure/);
     });
 
-    it('takes the height from the Solar API first, even where the scan disagrees, and says so', () => {
+    it('takes the height from the Solar API where it agrees with the scan, else the scan\'s own, and says so', () => {
         const building = { id: 'b', parts: [], extruded: [{ loops: [square], heightM: 14 }] };
         const solar = [{ x: 10, z: -5, y: 16, pitchDeg: 2, azimuthDeg: 180, areaM2: 150 } as any];
-        const m = buildMassing({ buildings: [building], groundY: 0, scanTop: () => 12, cells, solar, preferExtrusion: true });
-        expect(m.parts[0]).toMatchObject({ heightSource: 'solar', topY: 16 });
-        expect(m.notes.join(' ')).toMatch(/height from solar \(16\.0 m\), 4\.0 m off the scan/);
+        // Solar 16 m and vector 14 m against a 10 m scan: the scan leads, both disagreements said
+        const m = buildMassing({ buildings: [building], groundY: 0, scanTop: () => 10, cells, solar, preferExtrusion: true });
+        expect(m.parts[0]).toMatchObject({ heightSource: 'scan', topY: 10 });
+        expect(m.notes.join(' ')).toMatch(/height from the scan \(10\.0 m\); Solar 16\.0 m and vector 14\.0 m disagreed by more than/);
+        // Solar within the agreement of the scan: Solar's height, as measured
+        const agreeing = buildMassing({ buildings: [building], groundY: 0, scanTop: () => 15, cells, solar, preferExtrusion: true });
+        expect(agreeing.parts[0]).toMatchObject({ heightSource: 'solar', topY: 16 });
+        // no scan roof at all: Solar stands in, and says the scan has none
+        const noScan = buildMassing({ buildings: [building], groundY: 0, scanTop: () => NaN, cells, solar, preferExtrusion: true });
+        expect(noScan.parts[0]).toMatchObject({ heightSource: 'solar', topY: 16 });
+        expect(noScan.notes.join(' ')).toMatch(/the scan has no roof here/);
     });
 
     it('reads a gently pitched Solar facet as a flat roof (level wall tops), a steep one as the roof it is', () => {
@@ -55,7 +63,13 @@ describe('the footprint lock', () => {
         const steep = { x: 10, z: -5, y: 15, pitchDeg: 35, azimuthDeg: 180, areaM2: 150 } as any;
         const a = buildMassing({ buildings: [building], groundY: 0, scanTop: () => 14, cells, solar: [flat, gentle], preferExtrusion: true });
         expect(a.parts[0].planes.length).toBe(0);
-        const b = buildMassing({ buildings: [building], groundY: 0, scanTop: () => 14, cells, solar: [flat, steep], preferExtrusion: true });
+        // the steep facet is the roof when the scan slopes with it; over a scan that is flat at 14 m it contradicts the
+        // measurement and is not this roof (the Flatiron's 12 facets, all kept, put its massing 22.9 m off the scan)
+        const sloping = (_x: number, z: number) => Math.max(1, 15 - Math.tan((35 * Math.PI) / 180) * (z + 5));
+        const b = buildMassing({ buildings: [building], groundY: 0, scanTop: sloping, cells, solar: [flat, steep], preferExtrusion: true });
         expect(b.parts[0].planes.length).toBe(1);
+        const c = buildMassing({ buildings: [building], groundY: 0, scanTop: () => 14, cells, solar: [flat, steep], preferExtrusion: true });
+        expect(c.parts[0].planes.length).toBe(0);
+        expect(c.solar.pitchedRejected).toBe(1);
     });
 });
