@@ -116,6 +116,7 @@ struct BuildingConfig {
 
     // Continuous Curvilinear & Parametric Manifold (ADA Continuous Invariant)
     float curvature{0.0f};              // 0.0 = rectangular, 1.0 = superellipse/elliptical
+    float vaultProfileExponent{2.0f};   // Barrel vault cross-section exponent p (2 = circular, <2 pointed, >2 flat-topped)
     float superellipseExponent{2.4f};   // Lamé exponent m (2.0 = ellipse, 2.4 = squircle, 10.0 = box)
     float twistDegrees{0.0f};           // Helical rotation across height (degrees)
     float taper{1.0f};                  // Crown scale ratio relative to base
@@ -350,11 +351,48 @@ public:
         }
 
         // 3. Curved Roof System
-        // BarrelVault has no roof geometry of its own yet (a true vault is single-axis-curved, swept along one
-        // axis rather than revolved around a point — distinct new geometry, not built here). Routed to the dome
-        // branch explicitly rather than falling through to the `else` flat-parapet default below: an honest,
-        // visible simplification ("not yet a true vault"), not a silent substitution of an unrelated roof shape.
-        if (cfg.roofType == RoofType::Dome || cfg.roofType == RoofType::BarrelVault) {
+        if (cfg.roofType == RoofType::BarrelVault) {
+            // Single-axis vault sprung from the wall-top ring itself (shared positions, no crack), its axis along the
+            // ring's longer extent. Each ring point moves inward across the axis by s_k and rises by
+            // rise_i * (1 - s_k^p)^(1/p); rise_i scales with the point's distance from the axis, so rounded ends
+            // taper back to the wall top and the vault closes itself.
+            std::vector<Vec3> top(bays);
+            float extX = 0.0f, extZ = 0.0f;
+            for (int i = 0; i < bays; ++i) {
+                top[i] = getStationPoint(1.0f, 2.0f * PI * static_cast<float>(i) / static_cast<float>(bays), totalH, 1.0f);
+                extX = std::max(extX, std::abs(top[i].x)); extZ = std::max(extZ, std::abs(top[i].z));
+            }
+            const bool axisX = extX >= extZ;
+            const float acrossMax = std::max(1e-3f, axisX ? extZ : extX);
+            const float rH = cfg.roofHeight > 0.1f ? cfg.roofHeight : acrossMax;
+            const float p = std::max(0.2f, cfg.vaultProfileExponent);
+            const int K = std::max(4, static_cast<int>(std::ceil(acrossMax / 0.5f)));
+            auto at = [&](int i, int k) -> Vec3 {
+                const Vec3& q = top[i];
+                float sk = 1.0f - static_cast<float>(k) / static_cast<float>(K);
+                float across = axisX ? q.z : q.x;
+                float rise = rH * std::abs(across) / acrossMax * std::pow(std::max(0.0f, 1.0f - std::pow(sk, p)), 1.0f / p);
+                return axisX ? Vec3(q.x, totalH + rise, q.z * sk) : Vec3(q.x * sk, totalH + rise, q.z);
+            };
+            ScratchboxMesh vault("vault");
+            for (int k = 0; k < K; ++k) {
+                for (int i = 0; i < bays; ++i) {
+                    int j = (i + 1) % bays;
+                    Vec3 a = at(i, k), b = at(j, k), c = at(j, k + 1), d = at(i, k + 1);
+                    Vec3 qc = (a + b + c + d) * 0.25f;
+                    Vec3 away = axisX ? Vec3(0.0f, qc.y - totalH, qc.z) : Vec3(qc.x, qc.y - totalH, 0.0f);
+                    Vec3 n = (b - a).cross(d - a);
+                    if (n.length() < 1e-9f) n = (c - b).cross(a - b);
+                    if (n.dot(away) < 0.0f) { std::swap(b, d); n = n * -1.0f; }
+                    float len = n.length();
+                    addQuad(vault, a, b, c, d, len > 1e-9f ? n / len : Vec3(0, 1, 0), cfg.materials.roof.baseColorFactor);
+                }
+            }
+            vault.weldVertices(1e-4f);
+            uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+            for (const auto& v : vault.vertices) mesh.addVertex(v);
+            for (size_t t = 0; t + 2 < vault.indices.size(); t += 3) mesh.addTriangle(base + vault.indices[t], base + vault.indices[t + 1], base + vault.indices[t + 2]);
+        } else if (cfg.roofType == RoofType::Dome) {
             int rings = 8;
             float rH = cfg.roofHeight > 0.1f ? cfg.roofHeight : (std::min(halfW, halfD) * 0.65f);
             for (int r = 0; r < rings; ++r) {

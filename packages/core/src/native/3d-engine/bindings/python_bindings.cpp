@@ -694,6 +694,7 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("window_height", &BuildingConfig::windowHeight)
         .def_rw("window_recess_depth", &BuildingConfig::windowRecessDepth)
         .def_rw("roof_type", &BuildingConfig::roofType)
+        .def_rw("vault_profile_exponent", &BuildingConfig::vaultProfileExponent)
         .def_rw("roof_pitch_degrees", &BuildingConfig::roofPitchDegrees)
         .def_rw("roof_height", &BuildingConfig::roofHeight)
         .def_rw("roof_overhang", &BuildingConfig::roofOverhang)
