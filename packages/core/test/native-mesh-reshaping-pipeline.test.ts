@@ -137,8 +137,8 @@ describe('Native mesh reshaping takes explicit operations on a given mesh', () =
 describe('Agent tools and routing', () => {
     it('mesh_apply_deformers is the only mesh deformation tool (mesh_edit models: booleans, cuts, extrude); mesh_reshape_via_prompt and the tile restructure tools are gone', () => {
         // tile_restyle (continuous fields and forms on the open tile) is the restructurer's replacement in this pack.
-        expect(MESH_SHAPING_TOOL_DECLARATIONS.map(d => d.name)).toEqual(['mesh_apply_deformers', 'mesh_edit', 'tile_restyle']);
-        expect(Object.keys(meshShapingHandlers)).toEqual(['mesh_apply_deformers', 'mesh_edit', 'tile_restyle']);
+        expect(MESH_SHAPING_TOOL_DECLARATIONS.map(d => d.name)).toEqual(['mesh_apply_deformers', 'mesh_edit', 'mesh_inspect', 'tile_restyle']);
+        expect(Object.keys(meshShapingHandlers)).toEqual(['mesh_apply_deformers', 'mesh_edit', 'mesh_inspect', 'tile_restyle']);
         const names = createDefaultToolRegistry().names();
         for (const removed of ['mesh_reshape_via_prompt', 'tile_restructure_via_prompt', 'tile_apply_terraforming_and_primitives']) {
             expect(names).not.toContain(removed);

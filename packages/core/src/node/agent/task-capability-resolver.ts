@@ -412,10 +412,10 @@ export class TaskCapabilityResolver {
                     targetService: 'AdaptiveMatchmoveCalibrationService',
                     details: 'Calibrate sequence milestones, optimize Brown-Conrady lens breathing, and synthesize continuous C2 Hermite camera trajectory.'
                 };
-            } else if (/\bboolean|\b(union|subtract|intersect)\b[\s\w-]{0,30}(mesh|solid|glb)|\b(drill|bore|punch)\b|\bhole\b[\s\w-]{0,20}\b(in|through)\b|\b(extrude|inset|bevel|chamfer|fillet)\b|\b(slice|cut)\b[\s\w-]{0,30}\b(plane|in half|off)\b/i.test(lower)) {
+            } else if (/\bboolean|\b(union|subtract|intersect)\b[\s\w-]{0,30}(mesh|solid|glb)|\b(drill|bore|punch)\b|\bhole\b[\s\w-]{0,20}\b(in|through)\b|\b(extrude|inset|bevel|chamfer|fillet|hollow|solidify|fracture|shatter|decimate|subdivide)\b|\b(mirror|array)\b[\s\w-]{0,30}(mesh|model|copies)|\bshell\b[\s\w-]{0,20}(mesh|thick)|\b(sweep|knurl|groove)\b|\b(slice|cut)\b[\s\w-]{0,30}\b(plane|in half|off)\b/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
-                nativeCapabilities.push('Native C++20 mesh edits (scratchbox_mesh_edit.hpp): BSP booleans, capped plane cuts, region inset/extrude, edge bevels');
+                nativeCapabilities.push('Native C++20 mesh edits (scratchbox_mesh_edit.hpp): BSP booleans, capped plane cuts, region inset/extrude, edge bevels, shell, mirror/array, sweep, clean/decimate, fracture, subdivide/smooth/relief; mesh_inspect measures first');
                 nativeCapabilities.push('In-App Agent Tool: mesh_edit (explicit edits on a given GLB; reports openEdges)');
                 rationale = 'The native engine models a given mesh directly: union/subtract/intersect with another closed GLB or a measured box, cylinder or sphere, plane cuts with a capped section, and inset/extrude of faces selected by direction and region.';
                 suggestedNativeAction = {

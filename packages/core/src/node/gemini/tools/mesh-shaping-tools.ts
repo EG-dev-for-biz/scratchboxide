@@ -105,6 +105,17 @@ export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
             + 'cut {point, normal} - removes everything on the side the normal points to and caps the section; '
             + 'extrude {select, distance?, inset?} - the selected faces pulled inward by inset (metres, in their own plane, leaving a ring) and then moved by distance along their normals (negative pushes in: a recess), joined by side walls. '
             + 'bevel {width, segments? (1 = flat chamfer, more = round fillet), minAngleDeg? (default 30), select? {regionMin, regionMax}} - rounds or chamfers the convex edges whose faces turn by at least minAngleDeg, width metres onto each face; edges shorter than twice the width (facets of a curved rim) are left sharp and counted; concave edges are not bevelled. '
+            + 'shell {thickness} - hollows a solid (or gives a surface a wall) thickness metres inward (negative = outward). '
+            + 'mirror {point, normal, fuse? (default true)} - adds the mesh reflected in that plane. '
+            + 'array {count, offset?, stepDeg?, axisPoint?, axisDir?, fuse? (default true)} - count copies, each moved by offset and/or turned stepDeg about the axis from the one before (rows, rings, spirals). '
+            + 'sweep {path [[x,y,z]...], radius + segments? or profile [[u,v]...], scaleStart?, scaleEnd?, twistDeg?, op? union | subtract} - a profile swept along a path and added (mouldings, rails, pipes, ribs) or cut away (grooves, channels). '
+            + 'clean {} - removes points that add nothing (inside flat faces, along straight edges); the shape is unchanged, use it after booleans. '
+            + 'decimate {targetTriangles? | ratio? | maxErrorM?} - fewer triangles, never moving the surface more than maxErrorM. '
+            + 'fracture {pieces, seed?, impact?, spread?, gap?} - Voronoi pieces, smaller around an impact point; gap moves each piece that far out from the middle. '
+            + 'subdivide {edgeLength, select?}; smooth {iterations?, strength?, edgeLength?, select?}; relief {amplitude, direction?, period?, duty?, softness?, roughness?, noiseScale?, seed?, edgeLength?, select?} - '
+            + 'relief moves the selection along its normals: bands across direction every period metres (duty = raised share, softness = edge ramp share) plus noise (roughness x amplitude, noiseScale metres); negative amplitude cuts grooves. '
+            + 'Give edgeLength (metres) to split the selection finely enough first; the border of a selection never moves, so the mesh stays closed. Without select these act on every face. '
+            + 'Call mesh_inspect first to read the bounds, closedness and the largest flat faces (with ready-made regionMin/regionMax). '
             + 'select = {direction?, coneDeg? (default 30), regionMin?, regionMax?}: faces whose normal is within coneDeg of direction AND whose centre lies in the box [regionMin, regionMax] given as fractions of the mesh\'s bounds (0 = min, 1 = max per axis); give both when a direction alone would also catch faces elsewhere (a hole\'s far wall faces the same way as the outer face). '
             + 'All lengths and positions are metres in the mesh\'s own space; read the mesh\'s bounds first if you do not know them. Booleans need closed solids. '
             + 'The result reports each edit\'s counts and openEdges (0 = still a closed solid). Normals are hard across edges sharper than creaseDeg (default 30). '
@@ -118,8 +129,8 @@ export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     items: {
                         type: 'OBJECT',
                         properties: {
-                            type: { type: 'STRING', description: 'boolean, cut, extrude or bevel.' },
-                            op: { type: 'STRING', description: 'boolean: union, subtract or intersect.' },
+                            type: { type: 'STRING', description: 'boolean, cut, extrude, bevel, shell, mirror, array, sweep, clean, decimate, fracture, subdivide, smooth or relief.' },
+                            op: { type: 'STRING', description: 'boolean: union, subtract or intersect; sweep: union or subtract.' },
                             operand: {
                                 type: 'OBJECT',
                                 description: 'boolean: the other solid, exactly one of glbPath, box, cylinder, sphere.',
@@ -130,11 +141,11 @@ export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
                                     sphere: { type: 'OBJECT', properties: { center: XYZ, radius: { type: 'NUMBER' }, segments: { type: 'NUMBER' } } }
                                 }
                             },
-                            point: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'cut: a point on the plane [x, y, z].' },
-                            normal: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'cut: the side removed [x, y, z].' },
+                            point: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'cut, mirror: a point on the plane [x, y, z].' },
+                            normal: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'cut: the side removed; mirror: the plane\'s normal [x, y, z].' },
                             select: {
                                 type: 'OBJECT',
-                                description: 'extrude: which faces.',
+                                description: 'extrude, subdivide, smooth, relief: which faces.',
                                 properties: {
                                     direction: XYZ,
                                     coneDeg: { type: 'NUMBER' },
@@ -146,7 +157,38 @@ export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
                             inset: { type: 'NUMBER', description: 'extrude: metres inward in the faces\' plane (>= 0).' },
                             width: { type: 'NUMBER', description: 'bevel: metres from the edge onto each face.' },
                             segments: { type: 'NUMBER', description: 'bevel: 1 = chamfer, 2..32 = fillet facets.' },
-                            minAngleDeg: { type: 'NUMBER', description: 'bevel: only edges whose faces turn by at least this (default 30).' }
+                            minAngleDeg: { type: 'NUMBER', description: 'bevel: only edges whose faces turn by at least this (default 30).' },
+                            thickness: { type: 'NUMBER', description: 'shell: wall thickness in metres (negative = outward).' },
+                            fuse: { type: 'BOOLEAN', description: 'mirror, array: union the copies into one solid (default true).' },
+                            count: { type: 'NUMBER', description: 'array: copies including the original (2..1000).' },
+                            offset: XYZ,
+                            stepDeg: { type: 'NUMBER', description: 'array: turn per copy, degrees.' },
+                            axisPoint: XYZ,
+                            axisDir: XYZ,
+                            path: { type: 'ARRAY', description: 'sweep: [[x, y, z], ...] metres.', items: { type: 'ARRAY', items: { type: 'NUMBER' } } },
+                            radius: { type: 'NUMBER', description: 'sweep: round profile radius (metres).' },
+                            profile: { type: 'ARRAY', description: 'sweep: [[u, v], ...] metres across the path.', items: { type: 'ARRAY', items: { type: 'NUMBER' } } },
+                            scaleStart: { type: 'NUMBER' },
+                            scaleEnd: { type: 'NUMBER' },
+                            twistDeg: { type: 'NUMBER' },
+                            targetTriangles: { type: 'NUMBER' },
+                            ratio: { type: 'NUMBER', description: 'decimate: share of triangles to keep (0..1).' },
+                            maxErrorM: { type: 'NUMBER', description: 'decimate: most the surface may move, metres.' },
+                            pieces: { type: 'NUMBER', description: 'fracture: 2..256.' },
+                            seed: { type: 'NUMBER' },
+                            impact: XYZ,
+                            spread: { type: 'NUMBER', description: 'fracture: metres around the impact the seeds spread.' },
+                            gap: { type: 'NUMBER', description: 'fracture: metres each piece moves out.' },
+                            edgeLength: { type: 'NUMBER', description: 'subdivide, smooth, relief: split the selection\'s edges longer than this (metres).' },
+                            iterations: { type: 'NUMBER' },
+                            strength: { type: 'NUMBER', description: 'smooth: 0..1.' },
+                            amplitude: { type: 'NUMBER', description: 'relief: metres along the normals (negative = in).' },
+                            direction: XYZ,
+                            period: { type: 'NUMBER', description: 'relief: metres between bands.' },
+                            duty: { type: 'NUMBER', description: 'relief: raised share of each period (0..1).' },
+                            softness: { type: 'NUMBER', description: 'relief: share of a period each band edge takes to rise.' },
+                            roughness: { type: 'NUMBER', description: 'relief: noise as a share of amplitude.' },
+                            noiseScale: { type: 'NUMBER', description: 'relief: metres per noise cell.' }
                         },
                         required: ['type']
                     }
@@ -156,6 +198,19 @@ export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 creaseDeg: { type: 'NUMBER', description: 'Optional: normals are smooth across edges shallower than this, hard across sharper ones (default 30).' }
             },
             required: ['operations', 'inputGlbPath']
+        }
+    },
+    {
+        name: 'mesh_inspect',
+        description: 'Measure a given 3D mesh (.glb) before editing it: bounds and size (metres), area, volume, whether it is a closed solid (open and non-manifold edges, inside-out), its sharp convex and concave edges, '
+            + 'and its largest flat faces, each with its normal, area and the regionMin/regionMax (fractions of the bounds) that mesh_edit\'s select takes. Reads only; changes nothing.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputGlbPath: { type: 'STRING', description: 'Path to the .glb to measure.' },
+                sharpAngleDeg: { type: 'NUMBER', description: 'Optional: an edge is sharp when its faces turn by at least this (default 30).' }
+            },
+            required: ['inputGlbPath']
         }
     },
     {
@@ -294,11 +349,26 @@ export const meshShapingHandlers: Record<string, ToolHandler> = {
         const each = r.operations.map(o => o.type === 'extrude'
             ? `extrude: ${o.selectedFaces} faces selected, ${o.boundaryEdges} boundary edges`
             : o.type === 'bevel' ? `bevel: ${o.edges} edges${Number(o.shortEdgesLeftSharp) ? `, ${o.shortEdgesLeftSharp} short edges left sharp` : ''}`
+            : o.type === 'fracture' ? `fracture: ${o.pieces} pieces`
+            : o.type === 'clean' || o.type === 'decimate' ? `${o.type}: ${o.trianglesBefore} -> ${o.trianglesAfter} triangles (surface moved at most ${o.maxErrorM} m)`
             : `${o.type}: ${o.trianglesBefore} -> ${o.trianglesAfter} triangles`).join('; ');
         return {
             status: 'completed',
             resultPayload: { status: 'success', success: true, ...r },
             summaryResult: `Edited ${path.basename(inputGlbPath)} (${each}): ${r.outputTriangles} triangles, ${r.openEdges === 0 ? 'a closed solid' : `${r.openEdges} open edges`}, bounds ${fmt(r.boundsMin)} to ${fmt(r.boundsMax)}. Output: ${r.outputGlbPath}`
+        };
+    },
+
+    mesh_inspect: async (args, _ctx) => {
+        const inputGlbPath = asString(args.inputGlbPath);
+        if (!inputGlbPath) throw new MissingInputError('mesh_inspect', 'inputGlbPath', 'give the path of the .glb to measure');
+        const r = await meshEditService.inspect(inputGlbPath, typeof args.sharpAngleDeg === 'number' ? args.sharpAngleDeg : undefined);
+        return {
+            status: 'completed',
+            resultPayload: { status: 'success', success: true, ...r },
+            summaryResult: `${path.basename(inputGlbPath)}: ${r.triangles} triangles, size ${fmt(r.size)} m, bounds ${fmt(r.boundsMin)} to ${fmt(r.boundsMax)}, `
+                + (r.closed ? `a closed solid of ${r.volumeM3.toFixed(3)} m³${r.insideOut ? ' (inside out)' : ''}` : `not closed (${r.openEdges} open, ${r.nonManifoldEdges} non-manifold edges)`)
+                + `, ${r.sharpEdges.convex} convex and ${r.sharpEdges.concave} concave sharp edges, ${r.planarGroups} flat face groups.`
         };
     },
 

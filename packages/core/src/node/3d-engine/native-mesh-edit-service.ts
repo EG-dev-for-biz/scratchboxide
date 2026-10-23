@@ -10,7 +10,8 @@
 /**
  * Modelling edits on a given mesh in the native engine (scripts/run_mesh_edit_pipeline.cpp, scratchbox_mesh_edit.hpp):
  * booleans with another GLB or a measured solid, plane cuts with a capped section, inset and extrude of a selected
- * region, chamfers and fillets on convex edges. Every operation is explicit; an invalid one fails the call with the reason. The result reports each
+ * region, chamfers and fillets on convex edges, shells, mirrors and arrays, sweeps, clean-up and decimation, fracture,
+ * and subdivide, smooth and relief on a selection; and an inspection of a mesh's bounds, closedness and faces. Every operation is explicit; an invalid one fails the call with the reason. The result reports each
  * operation's counts and how many edges are left open (0 for a closed solid).
  */
 
@@ -33,7 +34,28 @@ export type MeshEditOperation =
     | { type: 'boolean'; op: 'union' | 'subtract' | 'intersect'; operand: MeshEditOperand }
     | { type: 'cut'; point: V3; normal: V3 }
     | { type: 'extrude'; select: { direction?: V3; coneDeg?: number; regionMin?: V3; regionMax?: V3 }; distance?: number; inset?: number }
-    | { type: 'bevel'; width: number; segments?: number; minAngleDeg?: number; select?: { regionMin?: V3; regionMax?: V3 } };
+    | { type: 'bevel'; width: number; segments?: number; minAngleDeg?: number; select?: MeshEditSelect }
+    | { type: 'shell'; thickness: number }
+    | { type: 'mirror'; point: V3; normal: V3; fuse?: boolean }
+    | { type: 'array'; count: number; offset?: V3; stepDeg?: number; axisPoint?: V3; axisDir?: V3; fuse?: boolean }
+    | { type: 'sweep'; path: V3[]; radius?: number; segments?: number; profile?: Array<[number, number]>; scaleStart?: number; scaleEnd?: number; twistDeg?: number; op?: 'union' | 'subtract' }
+    | { type: 'clean' }
+    | { type: 'decimate'; targetTriangles?: number; ratio?: number; maxErrorM?: number }
+    | { type: 'fracture'; pieces: number; seed?: number; impact?: V3; spread?: number; gap?: number }
+    | { type: 'subdivide'; edgeLength: number; select?: MeshEditSelect }
+    | { type: 'smooth'; iterations?: number; strength?: number; edgeLength?: number; select?: MeshEditSelect }
+    | { type: 'relief'; amplitude: number; direction?: V3; period?: number; duty?: number; softness?: number; roughness?: number; noiseScale?: number; seed?: number; edgeLength?: number; select?: MeshEditSelect };
+
+export interface MeshEditSelect { direction?: V3; coneDeg?: number; regionMin?: V3; regionMax?: V3 }
+
+/** What mesh_inspect reports about a mesh (scratchbox_mesh_edit_ops.hpp inspectJson). */
+export interface MeshInspection {
+    triangles: number; points: number; boundsMin: V3; boundsMax: V3; size: V3; areaM2: number; volumeM3: number;
+    closed: boolean; openEdges: number; nonManifoldEdges: number; insideOut: boolean;
+    sharpEdges: { angleDeg: number; convex: number; concave: number; totalLengthM: number };
+    planarGroups: number;
+    largestFaces: Array<{ normal: V3; areaM2: number; triangles: number; boundsMin: V3; boundsMax: V3; regionMin: V3; regionMax: V3 }>;
+}
 
 export interface MeshEditResult {
     outputGlbPath: string;
@@ -61,6 +83,26 @@ export class NativeMeshEditService {
             sourcePath: path.resolve(process.cwd(), 'scripts/run_mesh_edit_pipeline.cpp'),
             includeDir: this.compiler.getSdkIncludePath()
         });
+    }
+
+    /** Bounds, area, volume, closedness, sharp edges and the largest flat faces (with their bounds-fraction regions). */
+    async inspect(inputGlbPath: string, sharpDeg?: number): Promise<MeshInspection> {
+        if (!inputGlbPath || !fs.existsSync(inputGlbPath)) throw new MissingInputError('mesh_inspect', 'inputGlbPath', `${inputGlbPath || '(none)'} does not exist`);
+        const issues = rawMeshReadIssues(fs.readFileSync(inputGlbPath));
+        if (issues.geometry.length) throw new MissingInputError('mesh_inspect', 'inputGlbPath', `${inputGlbPath} cannot be read faithfully: ${issues.geometry.join('; ')}`);
+        const bin = await this.ensureBinary();
+        const args = ['--input', inputGlbPath, '--inspect', ...(sharpDeg !== undefined ? ['--creaseDeg', String(sharpDeg)] : [])];
+        let stdout: string;
+        try {
+            ({ stdout } = await runPipelineBinary(bin, args));
+        } catch (err: any) {
+            const detail = String(err?.stderr || err?.message || err).trim().replace(/^Error:\s*/, '');
+            if (err?.code === 2) throw new MissingInputError('mesh_inspect', 'inputGlbPath', detail);
+            throw new GeneratorFailedError('cpp', `mesh inspect failed: ${detail}`);
+        }
+        const line = stdout.match(/\[RESULT\]\s+(\{.*\})/);
+        if (!line) throw new GeneratorFailedError('cpp', `the mesh edit pipeline reported no inspection. ${stdout.slice(-1500)}`);
+        return JSON.parse(line[1]).inspect as MeshInspection;
     }
 
     /** Throws MissingInputError for a missing or unreadable mesh or an invalid operation, GeneratorFailedError for a failed run. */
