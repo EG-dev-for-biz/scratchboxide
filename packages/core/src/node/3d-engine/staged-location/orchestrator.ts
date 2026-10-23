@@ -3368,7 +3368,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- pipeline E inference (the grammar stage's slot): roof, bands, windows, bays, fill, straightening, colour ----------------
         // one Street View survey of the structure for a stage: the views registered against the tile mesh and cut out by the
         // ownership and occluder masks, with their obstruction-free copies (pipeline E's inference and pipeline G's walls)
-        const streetSurveyFor = (e: NonNullable<typeof eState>, io: { progress(m: string): void; signal: AbortSignal }, structureMesh: ReturnType<typeof sceneToRenderMesh>) => {
+        // pipeline G's walls take the few views that show the most of them: the survey runs inside its stage's time limit
+        const G_STREET_VIEWS = 4;
+        const streetSurveyFor = (e: NonNullable<typeof eState>, io: { progress(m: string): void; signal: AbortSignal }, structureMesh: ReturnType<typeof sceneToRenderMesh>, maxViews = ENHANCE_STREET_VIEWS) => {
             const sv = streetView ?? {};
             const segmenter = process.env.SCRATCHBOX_TEXTURE_OWNERSHIP === '0' ? false : deps.textures?.segmenter
                 ?? objectSegmenter(visionAvailable ? { modelSource: { getGenAIClient: async () => visionAvailable.client, getModelCandidates: () => visionAvailable.candidates } } : {});
@@ -3386,7 +3388,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const tileMesh = sceneToRenderMesh(readGlbScene(extraction.geometryGlb));
                     const context = e.refined.rawClayGlb && fs.existsSync(e.refined.rawClayGlb) ? contextWithoutStructure(tileMesh, sceneToRenderMesh(readGlbScene(e.refined.rawClayGlb))) : tileMesh;
                     const got = await registeredSurveyViews({
-                        site: { structure: structure!, ground: t.ground!, unmaskedTop: t.unmaskedTop ?? t.ground!.top }, panos: usable, maxViews: ENHANCE_STREET_VIEWS, streetLevel: true,
+                        site: { structure: structure!, ground: t.ground!, unmaskedTop: t.unmaskedTop ?? t.ground!.top }, panos: usable, maxViews, streetLevel: true,
                         sv: { ...sv, refusedPanos: sv.refusedPanos ?? new Map<string, string>() }, tileMeshFiles: [extraction.geometryGlb], structureMesh,
                         context, segment: segmenter, ...(visionAvailable ? { target: request.query } : {}),
                         ...(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR ? { debugDir: path.join(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR, runId, 'survey') } : {}),
@@ -3508,7 +3510,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const r = e.stage;
                     const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...chainExtras('grammar'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
                     // the walls' street-level references: the registered Street View views with their obstruction-free copies
-                    const gSurvey = (request.enhance ?? stagedEnhance()) ? streetSurveyFor(e, io, sceneToRenderMesh(readGlbScene(r.files!.clayGlb))) : undefined;
+                    const gSurvey = (request.enhance ?? stagedEnhance()) ? streetSurveyFor(e, io, sceneToRenderMesh(readGlbScene(r.files!.clayGlb)), G_STREET_VIEWS) : undefined;
                     const out = await runPipelineG({
                         massing: r.massing, run: r.run!, tilePath: strip ? strip.devegetatedGlb : extraction.texturedGlb,
                         dir: path.join(cache.dir, 'pipeline_g', stageKey(PIPELINE_G_VERSION, e.key).slice(0, 24)), stage: 'grammar', stageKey: e.key,

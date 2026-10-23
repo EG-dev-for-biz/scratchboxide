@@ -70,6 +70,11 @@ export const PIPELINE_G_VERSION = `pipeline-g/v3+${PIPELINE_G_READ_VERSION}`;
 export const G_BUILD_PARAMS = { bake: 0, residual: 0, sections: 0, topdown: 0, snapMaxM: 0 } as const;
 /** Plates read at once. */
 export const READ_POOL = 4;
+/**
+ * The Street View survey (registration, cut-outs, obstruction-free copies) runs beside the stations and the reading from
+ * the start; when the walls are drawn it is waited for at most this long, then the walls go without it (said so).
+ */
+export const G_STREET_VIEW_WAIT_MS = 120_000;
 
 /** Pipeline G for this request: asked for (procedural), or SCRATCHBOX_STAGED_GEOMETRY=g. */
 export function stagedPipelineG(request: { procedural?: boolean }, env: NodeJS.ProcessEnv = process.env): boolean {
@@ -412,6 +417,10 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     const progress = (m: string) => input.onProgress?.(m);
     fs.mkdirSync(path.join(input.dir, 'plates'), { recursive: true });
     const faces = input.run.report.faces;
+    // the Street View survey, started now so it runs beside the stations and the reading (it takes minutes)
+    const surveyStarted = Date.now();
+    const streetViews = input.enhance?.streetViews?.();
+    streetViews?.catch(() => undefined);
     // the walls grouped into the facades the survey sees (facades.ts): a footprint tracing piers or bays is surveyed and read
     // a street front at a time, and what is read laid back onto its walls
     const grouping = groupFacades(faces);
@@ -579,7 +588,13 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
         let guide: GuideView[] = [], noGuide: string | undefined = e.streetViews ? undefined : 'no Street View source';
         if (e.streetViews) {
             progress('pipeline G: surveying the facades with Street View');
-            try { guide = await e.streetViews(); if (!guide.length) noGuide = 'no Street View photo of the structure'; } catch (err) {
+            try {
+                let timer: ReturnType<typeof setTimeout> | undefined;
+                const late = new Promise<'late'>(res => { timer = setTimeout(() => res('late'), G_STREET_VIEW_WAIT_MS); });
+                const got = await Promise.race([streetViews!, late]).finally(() => clearTimeout(timer));
+                if (got === 'late') noGuide = `the Street View survey had not finished ${Math.round((Date.now() - surveyStarted) / 1000)} s after it started (waited ${G_STREET_VIEW_WAIT_MS / 1000} s at the walls)`;
+                else { guide = got; if (!guide.length) noGuide = 'no Street View photo of the structure'; }
+            } catch (err) {
                 if (input.signal?.aborted) throw err;
                 noGuide = `the Street View survey failed (${(err as Error).message.slice(0, 160)})`;
             }
