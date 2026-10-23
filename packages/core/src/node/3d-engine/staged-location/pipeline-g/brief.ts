@@ -37,6 +37,28 @@ export interface BuildingBriefRecord {
     images: number;
 }
 
+/**
+ * JSON that only breaks a value onto multiple lines when its single-line form would run past COMPACT_WIDTH characters:
+ * plain JSON.stringify(v, null, 1) puts every number of every coordinate pair on its own line, which turned this file
+ * into 7,800+ lines for one building, too many for workspace_view_file to read in a couple of calls. Any value short
+ * enough (a vector, a face's frame, often a whole small object) stays on one line in its ordinary compact form; only a
+ * value that does not fit is expanded, one line per element or property, each tried compact again in turn.
+ */
+export const COMPACT_WIDTH = 320;
+export function compactJson(value: unknown, indent = 0): string {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value);
+    const flat = JSON.stringify(value);
+    if (flat.length <= COMPACT_WIDTH) return flat;
+    const pad = '  '.repeat(indent), padIn = '  '.repeat(indent + 1);
+    if (Array.isArray(value)) {
+        if (!value.length) return '[]';
+        return `[\n${value.map(v => `${padIn}${compactJson(v, indent + 1)}`).join(',\n')}\n${pad}]`;
+    }
+    const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== undefined);
+    if (!entries.length) return '{}';
+    return `{\n${entries.map(([k, v]) => `${padIn}${JSON.stringify(k)}: ${compactJson(v, indent + 1)}`).join(',\n')}\n${pad}}`;
+}
+
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
 const v3 = (v: readonly number[]) => v.map(r3);
 const faceRecord = (f: MassingFace) => ({
@@ -73,7 +95,7 @@ export function writeBuildingBrief(input: {
         steps: input.steps.map(s => ({ step: s.step, accepted: s.accepted, proposed: s.proposed, ...(s.skipped ? { skipped: s.skipped } : {}), notes: s.notes.slice(0, 12) }))
     };
     const file = path.join(input.dir, 'brief.json');
-    fs.writeFileSync(file, JSON.stringify(brief, null, 1));
+    fs.writeFileSync(file, compactJson(brief));
     const images = input.renders.length + input.plates.length * 2 + input.roofPlates.length;
     return { path: file, images };
 }
