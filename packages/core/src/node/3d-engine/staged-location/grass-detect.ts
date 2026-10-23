@@ -15,7 +15,9 @@
  *     (a* well below zero, with chroma), not a grey plaza or a brown path.
  * A majority filter removes speckle, and patches under `minPatchM2` are dropped. Each grass cell carries a confidence
  * from how green it is and how close to the terrain it lies; the mask is photo-inferred (read off photographs), never
- * measured. Known gap: grass under a tree crown is hidden from above and is not found here.
+ * measured. Water is never grass: a green pond or fountain pool passes both tests, so cells inside Google's vector water
+ * areas (rasterizeEvidence's `water`, on the ground grid), grown by `waterMarginM`, are left out when the caller has them.
+ * Known gap: grass under a tree crown is hidden from above and is not found here.
  */
 
 import type { GroundModel } from '../../spatial/StreetViewSurveyPlanner';
@@ -34,7 +36,9 @@ export const GRASS_DETECT_PARAMS = {
     /** Least chroma (sqrt(a*^2 + b*^2)) of a green cell. */
     minChroma: 7,
     majorityPasses: 2,
-    minPatchM2: 4
+    minPatchM2: 4,
+    /** How far past a vector water area's edge a cell is still water (m): the polygon and the scan disagree by about a metre. */
+    waterMarginM: 1.5
 };
 
 export interface GrassMask {
@@ -48,15 +52,17 @@ export interface GrassMask {
     areaM2: number;
     patches: Array<{ cells: number; areaM2: number; centre: [number, number]; meanConfidence: number }>;
     /** Cells looked at, and why the rest were not grass. */
-    stats: { measured: number; tooHigh: number; notGreen: number; noColour: number; speckle: number };
+    stats: { measured: number; tooHigh: number; water: number; notGreen: number; noColour: number; speckle: number };
     provenance: { label: 'photo-inferred'; method: string };
 }
 
-export function detectGrass(photo: TopDownPhoto, frame: TopDownFrame, ground: GroundModel, P = GRASS_DETECT_PARAMS): GrassMask {
+/** `water`, when given, is 1 per ground-grid cell inside a vector water area (rasterizeEvidence over the ground model's grid). */
+export function detectGrass(photo: TopDownPhoto, frame: TopDownFrame, ground: GroundModel, P = GRASS_DETECT_PARAMS, evidence?: { water?: Uint8Array }): GrassMask {
     const { nx, nz, cellMeters: cellM, x0, z0 } = ground;
     const N = nx * nz;
     const raw = new Uint8Array(N), score = new Float32Array(N);
-    const stats = { measured: 0, tooHigh: 0, notGreen: 0, noColour: 0, speckle: 0 };
+    const stats = { measured: 0, tooHigh: 0, water: 0, notGreen: 0, noColour: 0, speckle: 0 };
+    const water = evidence?.water ? grow(evidence.water, nx, nz, Math.round(P.waterMarginM / cellM)) : undefined;
     const per = Math.max(1, Math.round(cellM / photo.texelM));
     const buf = new Uint8Array(per * per * 4);
     for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
@@ -66,6 +72,7 @@ export function detectGrass(photo: TopDownPhoto, frame: TopDownFrame, ground: Gr
         stats.measured++;
         const above = top - g;
         if (above > P.maxAboveGroundM) { stats.tooHigh++; continue; }
+        if (water?.[c]) { stats.water++; continue; }
         const cx = x0 + i * cellM, cz = z0 + k * cellM;
         const px0 = Math.floor((cx - frame.x0) / photo.texelM), py0 = Math.floor((cz - frame.z0) / photo.texelM);
         let n = 0;
@@ -133,8 +140,19 @@ export function detectGrass(photo: TopDownPhoto, frame: TopDownFrame, ground: Gr
     patches.sort((p, q) => q.areaM2 - p.areaM2);
     return {
         version: GRASS_DETECT_VERSION, x0, z0, nx, nz, cellM, mask, confidence, cells, areaM2: cells * cellM * cellM, patches, stats,
-        provenance: { label: 'photo-inferred', method: `ground-level cells (within ${P.maxAboveGroundM} m of the terrain) whose lit top-down colour is vegetation green (CIELAB a* <= ${P.greenA}), majority-filtered, patches >= ${P.minPatchM2} m2` }
+        provenance: { label: 'photo-inferred', method: `ground-level cells (within ${P.maxAboveGroundM} m of the terrain) whose lit top-down colour is vegetation green (CIELAB a* <= ${P.greenA}), majority-filtered, patches >= ${P.minPatchM2} m2${water ? `, outside vector water areas (+${P.waterMarginM} m)` : ', no vector water areas given'}` }
     };
+}
+
+/** `m` grown by `r` cells (a square neighbourhood). */
+function grow(m: Uint8Array, nx: number, nz: number, r: number): Uint8Array {
+    if (r <= 0) return m;
+    const out = new Uint8Array(m.length);
+    for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
+        if (!m[k * nx + i]) continue;
+        for (let kk = Math.max(0, k - r); kk <= Math.min(nz - 1, k + r); kk++) out.fill(1, kk * nx + Math.max(0, i - r), kk * nx + Math.min(nx - 1, i + r) + 1);
+    }
+    return out;
 }
 
 /** The top-down photo with the grass mask laid over it (green tint by confidence, outlines bright), RGBA. */
