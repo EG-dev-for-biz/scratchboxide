@@ -305,7 +305,8 @@ public:
         // gets an extra quadric for a plane through the edge, perpendicular to the adjacent face (a "fin"), weighted
         // heavily. Two straight, co-linear fin planes from the same crease agree everywhere along it, so the crease
         // can still be simplified; moving either endpoint off the crease plane (eg. rounding a box's corner) does not.
-        if (opt.preserveCreases) {
+        // preserveBoundary alone pins only the open-boundary edges; preserveCreases adds the sharp interior ones.
+        if (opt.preserveCreases || opt.preserveBoundary) {
             std::unordered_map<uint64_t, std::array<int32_t, 2>> edgeTris;
             auto edgeKey = [](uint32_t a, uint32_t b) -> uint64_t {
                 if (a > b) std::swap(a, b);
@@ -326,7 +327,7 @@ public:
             for (const auto& [key, tris] : edgeTris) {
                 uint32_t a = static_cast<uint32_t>(key >> 32), b = static_cast<uint32_t>(key & 0xffffffffu);
                 bool isCrease = (tris[1] < 0);
-                if (!isCrease) {
+                if (!isCrease && opt.preserveCreases) {
                     float nd = triangles[tris[0]].normal.dot(triangles[tris[1]].normal);
                     isCrease = nd < creaseCos;
                 }
