@@ -36,6 +36,11 @@ TARGET_VERTICES = 40000
 MAX_TRIANGLES = 450000
 PART_VERTEX_CAP = 160000
 CREASE_DEGREES = 30.0
+# Fillets on sharp revolve corners: a razor edge catches no highlight and reads as CG. Each corner sharper than
+# CREASE_DEGREES is replaced by a curve this share of the part's own extent, never more than EDGE_ROUND_MAX_SHARE of
+# either edge it joins (so neighbouring fillets never overlap).
+EDGE_ROUND_FRACTION = 0.02
+EDGE_ROUND_MAX_SHARE = 0.3
 _DENSE_PER_SEGMENT = 48
 _EPS = 1e-9
 _OPERATORS = ("sweep", "revolve", "replicate", "relief", "crown")
@@ -824,6 +829,44 @@ def _meridian_orientation(meridian):
     return 1 if area > 0 else -1
 
 
+
+def _round_meridian(meridian):
+    """
+    The meridian with every corner sharper than CREASE_DEGREES replaced by a quadratic fillet, and an end that stops
+    off the axis first closed to it (so the cap's rim is a corner that is rounded too). Radii stay 0 or more: a fillet
+    is a convex blend of points that are.
+    """
+    pts = list(meridian)
+    if pts[0][1] > 1e-7:
+        pts.insert(0, (pts[0][0], 0.0))
+    if pts[-1][1] > 1e-7:
+        pts.append((pts[-1][0], 0.0))
+    zs = [z for z, _ in pts]
+    scale = max(max(zs) - min(zs), max(r for _, r in pts))
+    out = [pts[0]]
+    for k in range(1, len(pts) - 1):
+        a, b, c = pts[k - 1], pts[k], pts[k + 1]
+        d1 = (b[0] - a[0], b[1] - a[1])
+        d2 = (c[0] - b[0], c[1] - b[1])
+        l1, l2 = math.hypot(*d1), math.hypot(*d2)
+        if l1 < 1e-9 or l2 < 1e-9:
+            out.append(b)
+            continue
+        turn = math.degrees(math.acos(max(-1.0, min(1.0, (d1[0] * d2[0] + d1[1] * d2[1]) / (l1 * l2)))))
+        size = min(EDGE_ROUND_MAX_SHARE * min(l1, l2), EDGE_ROUND_FRACTION * scale)
+        if turn <= CREASE_DEGREES or size < 1e-5:
+            out.append(b)
+            continue
+        p0 = (b[0] - d1[0] / l1 * size, b[1] - d1[1] / l1 * size)
+        p2 = (b[0] + d2[0] / l2 * size, b[1] + d2[1] / l2 * size)
+        segs = max(2, int(math.ceil(turn / 15.0)))
+        for i in range(segs + 1):
+            t = i / float(segs)
+            w0, w1, w2 = (1 - t) ** 2, 2 * t * (1 - t), t * t
+            out.append((w0 * p0[0] + w1 * b[0] + w2 * p2[0], max(0.0, w0 * p0[1] + w1 * b[1] + w2 * p2[1])))
+    out.append(pts[-1])
+    return out
+
 def _build_revolve(part, origin, edge, relief_ops):
     rv = part["revolve"]
     pid = part["id"]
@@ -837,21 +880,31 @@ def _build_revolve(part, origin, edge, relief_ops):
         raise SpecError('part "%s" revolve.meridian: the outline encloses no area with the axis, so it revolves into nothing; '
                         'trace the full outline from the axis and back, e.g. [[0, 0], [0, r], [h, r], [h, 0]] for a disc of radius r '
                         'and thickness h' % pid)
-    dense, knots = _dense_curve(meridian, False, float(rv["smoothing"]))
-    dense = [(z, max(0.0, r)) for z, r in dense]
-    acc = _arc_lengths(dense)
-    total = acc[-1]
     lobes = int(rv["lobeCount"])
     depth = float(rv["lobeDepthRatio"])
     pitch = float(rv["helixPitchMeters"])
-    r_max = max(r for _, r in dense)
-    max_perimeter = 2 * math.pi * r_max
 
-    around = min(512, max(12, int(math.ceil(max_perimeter / edge)), 8 * lobes))
-    around += (-around) % 4
-    extra_u, extra_v = _relief_refinement(relief_ops, total, max_perimeter)
-    us = _u_samples(acc, knots, edge, extra_u)
-    vs = sorted(set([j / float(around) for j in range(around)] + list(extra_v)))
+    def sample(mer):
+        dense, knots = _dense_curve(mer, False, float(rv["smoothing"]))
+        dense = [(z, max(0.0, r)) for z, r in dense]
+        acc = _arc_lengths(dense)
+        r_max = max(r for _, r in dense)
+        max_perimeter = 2 * math.pi * r_max
+        around = min(512, max(12, int(math.ceil(max_perimeter / edge)), 8 * lobes))
+        around += (-around) % 4
+        extra_u, extra_v = _relief_refinement(relief_ops, acc[-1], max_perimeter)
+        us = _u_samples(acc, knots, edge, extra_u)
+        vs = sorted(set([j / float(around) for j in range(around)] + list(extra_v)))
+        return dense, knots, acc, us, vs
+
+    # rounded corners unless the extra rows would put the part over its sample budget (then it keeps its sharp edges)
+    rounded = _round_meridian(meridian)
+    dense, knots, acc, us, vs = sample(rounded)
+    if len(us) * len(vs) > PART_VERTEX_CAP:
+        dense, knots, acc, us, vs = sample(meridian)
+    else:
+        meridian = rounded
+    total = acc[-1]
     _check_grid_budget(pid, len(us), len(vs))
 
     surface = _Surface("revolve", pid)
@@ -1483,6 +1536,40 @@ def part_material(sb, pid, material):
     return mat
 
 
+
+# Ambient occlusion baked into vertex colour: rays per vertex, and how far a ray looks as a share of the object's diagonal
+AO_SAMPLES = 32
+AO_REACH_SHARE = 0.12
+AO_INTENSITY = 0.85
+
+
+def _occlusion(sb, built):
+    """
+    Per part, per vertex, the grey multiplier lerp(1, ao, AO_INTENSITY), with ao ray-traced over every part at once (a
+    bonnet shades the body under it, a chain the boss it hangs from), not part by part.
+    """
+    combined = sb.geometry.Mesh("occlusion")
+    lo, hi = [float("inf")] * 3, [float("-inf")] * 3
+    start = 0
+    for _owner, positions, normals, triangles in built:
+        for p, n in zip(positions, normals):
+            combined.add_vertex(sb.math.Vec3(p[0], p[1], p[2]), sb.math.Vec3(n[0], n[1], n[2]))
+            for k in range(3):
+                lo[k] = min(lo[k], p[k])
+                hi[k] = max(hi[k], p[k])
+        for a, b, c in triangles:
+            combined.add_triangle(a + start, b + start, c + start)
+        start += len(positions)
+    if start == 0:
+        return [[] for _ in built]
+    diagonal = math.sqrt(sum((hi[k] - lo[k]) ** 2 for k in range(3)))
+    ao = list(combined.compute_rtao(AO_SAMPLES, max(0.01, AO_REACH_SHARE * diagonal), 42))
+    out, i = [], 0
+    for _owner, positions, _n, _t in built:
+        out.append([1.0 + (ao[i + j] - 1.0) * AO_INTENSITY for j in range(len(positions))])
+        i += len(positions)
+    return out
+
 def build(spec, clay=False):
     """
     Builds the spec into an sb.Scene: one mesh per part, the lowest point resting on y = 0. Each part's mesh (with
@@ -1498,15 +1585,18 @@ def build(spec, clay=False):
     for tree in crown_trees(spec, shift_y):
         scene.add(tree)
     materials = {} if clay else dict((p["id"], p.get("material")) for p in spec["parts"])
-    for owner, positions, normals, triangles in built:
+    occlusion = _occlusion(sb, built)
+    for (owner, positions, normals, triangles), occ in zip(built, occlusion):
         mesh = sb.geometry.Mesh(owner)
-        for p, n in zip(positions, normals):
-            mesh.add_vertex(vec3(p[0], p[1], p[2]), vec3(n[0], n[1], n[2]))
+        uv0 = sb.math.Vec2(0.0, 0.0)
+        for p, n, o in zip(positions, normals, occ):
+            mesh.add_vertex(vec3(p[0], p[1], p[2]), vec3(n[0], n[1], n[2]), uv0, sb.math.Vec4(o, o, o, 1.0))
         for a, b, c in triangles:
             mesh.add_triangle(a, b, c)
         mesh.recompute_bounds()
         # Assigned directly, not through apply_material, which also paints the base colour into the vertex colours:
-        # glTF viewers multiply COLOR_0 by baseColorFactor, which would square every colour. Vertices stay white.
+        # glTF viewers multiply COLOR_0 by baseColorFactor, which would square every colour. The vertex colour carries
+        # only the grey ambient occlusion, which darkens creases without changing the part's colour.
         mesh.material = part_material(sb, owner, materials.get(owner))
         scene.add_mesh(mesh)
     return scene
