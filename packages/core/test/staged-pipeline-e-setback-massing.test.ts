@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { buildMassing, detectHeightTiers, insetRing, ringArea } from '../src/node/3d-engine/staged-location/pipeline-e/massing-spec';
+import { buildMassing, detectHeightTiers, insetRing, ringArea, roofUnderFloor } from '../src/node/3d-engine/staged-location/pipeline-e/massing-spec';
 
 /** A 40x40 m base, stepped back to a 16x16 m tower above 30 m, up to 45 m: two real tiers. */
 const BASE: Array<[number, number]> = [[0, 0], [40, 0], [40, 40], [0, 40]];
@@ -56,6 +56,18 @@ describe('detectHeightTiers', () => {
         expect(tiers![1].loop.length).toBe(4);
     });
 
+    it('does not cut a tier that stands back less than a setback (a cornice band rounded off by the scan)', () => {
+        // a 24 x 24 m block: its roof at 30 m everywhere but a 0.6 m rim the scan rounds down to 23 m (the Haughwout: a
+        // 0.6 m "tier" over 89% of the footprint)
+        const ring: Array<[number, number]> = [[0, 0], [24, 0], [24, 24], [0, 24]];
+        const rim = (x: number, z: number) => (x < 0.6 || z < 0.6 || x > 23.4 || z > 23.4 ? 23 : 30);
+        expect(detectHeightTiers([ring], rim, 0)).toBeUndefined();
+        // the same block with its upper storeys set back 3 m is two tiers
+        const terrace = (x: number, z: number) => (x < 3 || z < 3 || x > 21 || z > 21 ? 23 : 30);
+        const tiers = detectHeightTiers([ring], terrace, 0)!;
+        expect(tiers.length).toBe(2);
+    });
+
     it('returns undefined for a flat roof (no real step, just scan noise)', () => {
         const flat = detectHeightTiers([BASE], () => 20 + Math.random() * 0.1, 0);
         expect(flat).toBeUndefined();
@@ -72,6 +84,15 @@ describe('buildMassing with a stepped scan under one flat vector footprint', () 
         const tallest = Math.max(...massing.parts.map(p => p.topY));
         expect(tallest).toBeGreaterThan(40); // the real tower height, not the vector's flat 30 m
         expect(massing.notes.some(n => /stepped tiers detected/.test(n))).toBe(true);
+    });
+
+    it('never gives a part a Solar roof facet that runs under its own floor', () => {
+        // the Haughwout's real roof facet (17.6-22.7 m over the building), offered to a false upper tier floored at 23 m
+        const plane = { a: 20.593188, b: -0.134201, c: 0.236237, tag: 'solar:15.2deg@30' };
+        const plan: Array<[number, number]> = [[11.02, 1.8], [16.7, 4.97], [10.79, 14.72], [-16.18, -0.23], [-6.01, -16.28], [14.44, -3.42]];
+        expect(roofUnderFloor(plane, plan, 23)).toBe(true);
+        // the same facet over the building from the ground is its roof
+        expect(roofUnderFloor(plane, plan, 0.35)).toBe(false);
     });
 
     it('still emits one flat part when the vector height already agrees with a flat scan', () => {

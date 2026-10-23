@@ -42,6 +42,12 @@ export const MAX_HEIGHT_ERROR_SHARE = 0.15;
 export const MIN_TIER_SUPPORT = 0.6;
 /** A tier thinner than this is not a storey of the building: it is left out. */
 export const MIN_TIER_THICKNESS_M = 1;
+/**
+ * An upper tier must stand back at least this far inside the one below it: less is a cornice, a parapet or a roof edge
+ * the scan rounds off, not a setback (the Haughwout, 2026-10-22: a 0.6 m "tier" over 89% of the footprint, which the
+ * native build then stacked onto walls that coincide with the ones below).
+ */
+export const MIN_TIER_SETBACK_M = 1.5;
 
 export interface RoofPlaneSpec { a: number; b: number; c: number; tag: string }
 
@@ -171,6 +177,11 @@ function samplesIn(loops: Vec2[][], step = 1): Vec2[] {
 }
 
 /** A Solar facet as a plane y = a + b x + c z: through its centre, rising against its azimuth (north = -z, east = +x). */
+/** Whether a roof plane runs under a part's own floor (plus a storey's least thickness) anywhere over `pts`: then it is not that part's roof. */
+export function roofUnderFloor(plane: RoofPlaneSpec, pts: Vec2[], baseY: number): boolean {
+    return pts.some(([x, z]) => plane.a + plane.b * x + plane.c * z < baseY + MIN_TIER_THICKNESS_M);
+}
+
 export function solarPlane(s: { pitchDeg: number; azimuthDeg: number; x: number; z: number; y: number }): RoofPlaneSpec {
     const k = Math.tan((s.pitchDeg * Math.PI) / 180), az = (s.azimuthDeg * Math.PI) / 180;
     const dx = Math.sin(az), dz = -Math.cos(az);  // downslope direction in the frame
@@ -515,7 +526,7 @@ export function detectHeightTiers(loops: Vec2[][], scanTop: (x: number, z: numbe
     // itself comes from the vector footprint's own clean ring, moved inward by the distance that same area implies
     // (A(d) ~= A0 - P0*d for a modest inset), so every tier keeps the building's real corners and orientation.
     const tiers: HeightTier[] = [];
-    let prevLoop = baseRing;
+    let prevLoop = baseRing, prevD = 0;
     for (let i = 0; i < filtered.length; i++) {
         const lo = filtered[i];
         const cells = new Set<string>();
@@ -529,6 +540,13 @@ export function detectHeightTiers(loops: Vec2[][], scanTop: (x: number, z: numbe
         // a tier can only nest inside the one below it, never grow past it - the inset is monotonic by construction
         // (bigger d for a later tier, since its area is smaller), but guard it explicitly rather than trust that.
         if (Math.abs(ringArea(loop)) >= Math.abs(ringArea(prevLoop)) - 1 && i > 0) continue;
+        // a step that stands back less than MIN_TIER_SETBACK_M is not a setback: the tier below runs on through it, to the
+        // scan's median height over its own plan
+        if (i > 0 && d - prevD < MIN_TIER_SETBACK_M) {
+            const last = tiers[tiers.length - 1];
+            if (last) { const own = samples.filter(([x, z, h]) => inRing(x, z, last.loop) && h >= last.baseY).map(s => s[2]); if (own.length) last.topY = Math.max(last.topY, quantile(own, 0.5)); }
+            continue;
+        }
         // the scan must reach the height this tier claims (its top) over most of where the tier is put (the inset middle of the footprint),
         // not only somewhere in the footprint: a taller neighbour's wall scanned along a shared edge raises a strip of edge
         // cells, which by area alone reads as an upper tier and was placed in the middle, 15-30 m over a row building's
@@ -547,7 +565,7 @@ export function detectHeightTiers(loops: Vec2[][], scanTop: (x: number, z: numbe
                 break;
             }
         }
-        prevLoop = loop;
+        prevLoop = loop; prevD = d;
         const baseY = i === 0 ? groundBaseY : lo;
         if (claimedTopY - baseY < MIN_TIER_THICKNESS_M) continue;
         tiers.push({ baseY, topY: claimedTopY, loop, cells });
@@ -687,7 +705,11 @@ export function buildMassing(inp: MassingInputs): Massing {
                 const err = (q: Pick<MassingPart, 'topY' | 'baseY' | 'planes'>) => median(pts.map(([x, z]) => Math.abs(roofAt(q, x, z) - inp.scanTop(x, z))));
                 let cur = err(target);
                 for (const { s, k } of pitched) {
-                    const trial = { ...capped, planes: [...capped.planes, solarPlane(s)] };
+                    // a facet whose plane runs under this part's own floor somewhere over it is not this part's roof (the
+                    // Haughwout's real roof facet, offered to a false upper tier, cut that tier's walls to 0.2 m)
+                    const plane = solarPlane(s);
+                    if (roofUnderFloor(plane, pts, target.baseY)) { solarReport.pitchedRejected++; continue; }
+                    const trial = { ...capped, planes: [...capped.planes, plane] };
                     const e = err(trial);
                     if (e < cur * 0.95 && e < 1.5) { capped.planes = trial.planes; cur = e; solarReport.pitchedKept++; usedSolar.add(k); }
                     else solarReport.pitchedRejected++;
