@@ -11,6 +11,8 @@
  * Pipeline G: the isolated structure rebuilt procedurally from a survey of the photo tile, in pipeline E's grammar slot
  * (request.procedural, set for every isolated building unless the caller passes procedural false; or SCRATCHBOX_STAGED_GEOMETRY=g everywhere). E's massing stands as built (the vector footprint, its
  * walls on the facades the scan measures); G then
+ *   0. groups the walls of a footprint that traces piers or bays into the facades they make (facades.ts), surveyed and read
+ *      whole, what is read laid back onto the walls,
  *   1. places survey stations by the staged survey's own rules (stations.ts),
  *   2. path-traces them from the tile with metric depth and lays them onto metric wall plates (plates.ts),
  *   3. reads every well-seen plate as a facade program in metres (read.ts), checks each reading against its plate (check.ts)
@@ -47,6 +49,7 @@ import { planStations } from './stations';
 import { platePng, reliefPng, surveyPlates, type Plate } from './plates';
 import { MIN_READ_COVERAGE, PIPELINE_G_READ_VERSION, programItems, readPlate, type FacadeProgram, type ProgramItems } from './read';
 import { checkPlate, checkReading, type ReadingCheck } from './check';
+import { groupFacades, layBack } from './facades';
 
 export const PIPELINE_G_VERSION = `pipeline-g/v3+${PIPELINE_G_READ_VERSION}`;
 /** Native build parameters: the massing only, nothing baked from the tile, no scanned residual. */
@@ -243,12 +246,17 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     const progress = (m: string) => input.onProgress?.(m);
     fs.mkdirSync(path.join(input.dir, 'plates'), { recursive: true });
     const faces = input.run.report.faces;
+    // the walls grouped into the facades the survey sees (facades.ts): a footprint tracing piers or bays is surveyed and read
+    // a street front at a time, and what is read laid back onto its walls
+    const grouping = groupFacades(faces);
+    const surveyFaces = grouping.surveyFaces;
+    if (grouping.groups.length) steps.push({ step: 'facades', proposed: grouping.groups.reduce((a, g) => a + g.members.length, 0), accepted: grouping.groups.length, rejected: 0, notes: grouping.groups.map(g => `${g.face.key}: ${g.members.length} walls read as one facade ${(g.face.sMax - g.face.sMin).toFixed(1)} m wide`), ms: 0 });
 
     // 1. stations
     let t = Date.now();
     progress('pipeline G: placing the survey stations on the street');
     const tileMesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(input.tilePath);
-    const plan = planStations({ allFaces: faces, structure: input.structure, ground: input.ground, tileMesh, anchor: input.anchor });
+    const plan = planStations({ allFaces: surveyFaces, structure: input.structure, ground: input.ground, tileMesh, anchor: input.anchor });
     timingsMs.stations = Date.now() - t;
     steps.push({ step: 'survey stations', proposed: plan.stations.length + plan.dropped.length, accepted: plan.stations.length, rejected: plan.dropped.length, notes: [`${plan.candidates} candidate eyes on the walkable street`, ...plan.skipped.map(s => `${s.face}: ${s.reason}`)], ms: timingsMs.stations });
     // the plan on disk before anything can fail, so a failed run still shows where its cameras stood
@@ -259,7 +267,7 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     t = Date.now();
     // every surveyed wall gets a plate: an aerial lays onto walls no street station reached
     const faceIdx = [...new Set([...plan.stations.map(s => s.face), ...(plan.stations.some(s => s.row === 'aerial') ? plan.faces : [])])];
-    const { plates } = await surveyPlates({ stations: plan.stations, faces, faceIdx, tileGlb: input.tilePath, ...(input.signal ? { signal: input.signal } : {}), onProgress: progress });
+    const { plates } = await surveyPlates({ stations: plan.stations, faces: surveyFaces, faceIdx, tileGlb: input.tilePath, ...(input.signal ? { signal: input.signal } : {}), onProgress: progress });
     for (const pl of plates) {
         fs.writeFileSync(path.join(input.dir, 'plates', `face_${pl.face}_colour.png`), platePng(pl, false));
         fs.writeFileSync(path.join(input.dir, 'plates', `face_${pl.face}_relief.png`), reliefPng(pl));
@@ -304,30 +312,41 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     });
     timingsMs.read = Date.now() - t;
     const items = new Map<string, ProgramItems>();
-    for (const r of readings) if ('program' in r && r.program) items.set(r.pl.key, programItems(r.program, faces[r.pl.face], `g${r.pl.face}_`));
+    for (const r of readings) if ('program' in r && r.program) items.set(r.pl.key, programItems(r.program, surveyFaces[r.pl.face], `g${r.pl.face}_`));
     const checkNote = (c: ReadingCheck) => `explains ${Math.round(c.explained * 100)}% of the plate (${c.lift}x its displaced copies), edges P ${c.precision} R ${c.recall}, opening contrast ${c.openingContrast}`;
     steps.push({ step: 'facade reading', proposed: readable.length, accepted: items.size, rejected: readable.length - items.size, notes: readings.map(r => ('error' in r && r.error) ? `${r.pl.key}: not read (${r.error})` : `${r.pl.key}: ${'model' in r ? r.model : ''}${'cached' in r && r.cached ? ' (cached)' : ''}${'check' in r && r.check ? `; ${checkNote(r.check)}` : ''}${'reread' in r && r.reread ? `; read again (${r.reread.kept} reading kept${'first' in r.reread && r.reread.first ? `, the first ${checkNote(r.reread.first)}` : ''}${'second' in r.reread && r.reread.second ? `, the second ${checkNote(r.reread.second)}` : ''}${'error' in r.reread && r.reread.error ? `, the second failed: ${r.reread.error}` : ''})` : ''}`), ms: timingsMs.read });
     if (!items.size) throw new Error(`no wall could be read (${readings.map(r => ('error' in r && r.error) || '').filter(Boolean).join('; ')})`);
 
+    // what was read on a grouped facade laid back onto its walls (facades.ts); a wall read on its own keeps its reading
+    const built = new Map<string, ProgramItems>();
+    const dropped: string[] = [];
+    for (const [key, it] of items) {
+        const group = grouping.groups.find(g => g.face.key === key);
+        if (!group) { built.set(key, it); continue; }
+        const laid = layBack(group, it);
+        for (const [k, v] of laid.byMember) built.set(k, v);
+        dropped.push(...laid.droppedOpenings);
+    }
+
     // 4. build
     t = Date.now();
     progress('pipeline G: building the facades natively on the massing');
-    const openings = [...items.values()].flatMap(x => x.openings);
-    const faceSweeps = [...items.values()].flatMap(x => x.faceSweeps);
+    const openings = [...built.values()].flatMap(x => x.openings);
+    const faceSweeps = [...built.values()].flatMap(x => x.faceSweeps);
     const buildDir = path.join(input.dir, 'build');
     const run = await runMassing(massingSpecText(input.massing, { outDir: buildDir, tile: input.tilePath, params: { ...G_BUILD_PARAMS }, openings, faceSweeps }), buildDir, { ...(input.signal ? { signal: input.signal } : {}) });
     timingsMs.build = Date.now() - t;
-    const c = [...items.values()].reduce((a, x) => ({ o: a.o + x.counts.openings, fo: a.fo + x.counts.filledOpenings, h: a.h + x.counts.horizontal, v: a.v + x.counts.vertical, fv: a.fv + x.counts.filledVertical, pn: a.pn + x.counts.paned, sl: a.sl + x.counts.sills, sr: a.sr + x.counts.surrounds }), { o: 0, fo: 0, h: 0, v: 0, fv: 0, pn: 0, sl: 0, sr: 0 });
-    steps.push({ step: 'native build', proposed: openings.length + faceSweeps.length, accepted: openings.length + faceSweeps.length - run.report.rejectedOpenings.length - run.report.rejectedSweeps.length, rejected: run.report.rejectedOpenings.length + run.report.rejectedSweeps.length, notes: [`${c.o} openings (${c.fo} continued into unseen parts; ${c.pn} with divided glazing, ${c.sl} with sills, ${c.sr} with surrounds), ${c.h} horizontal profiles, ${c.v} vertical members (${c.fv} continued)`, ...run.report.rejectedOpenings.map(id => `opening ${id} rejected by the native tool`)], ms: timingsMs.build });
+    const c = [...built.values()].reduce((a, x) => ({ o: a.o + x.counts.openings, fo: a.fo + x.counts.filledOpenings, h: a.h + x.counts.horizontal, v: a.v + x.counts.vertical, fv: a.fv + x.counts.filledVertical, pn: a.pn + x.counts.paned, sl: a.sl + x.counts.sills, sr: a.sr + x.counts.surrounds }), { o: 0, fo: 0, h: 0, v: 0, fv: 0, pn: 0, sl: 0, sr: 0 });
+    steps.push({ step: 'native build', proposed: openings.length + faceSweeps.length, accepted: openings.length + faceSweeps.length - run.report.rejectedOpenings.length - run.report.rejectedSweeps.length, rejected: run.report.rejectedOpenings.length + run.report.rejectedSweeps.length, notes: [`${c.o} openings (${c.fo} continued into unseen parts; ${c.pn} with divided glazing, ${c.sl} with sills, ${c.sr} with surrounds), ${c.h} horizontal profiles, ${c.v} vertical members (${c.fv} continued)`, ...run.report.rejectedOpenings.map(id => `opening ${id} rejected by the native tool`), ...(dropped.length ? [`${dropped.length} openings read on a grouped facade lay across walls and were not built (${dropped.slice(0, 8).join(', ')}${dropped.length > 8 ? ', ...' : ''})`] : [])], ms: timingsMs.build });
 
     // 5. paint
     t = Date.now();
     const walls = [...items.values()].map(x => x.wallColour);
     const fallback: [number, number, number] = [0, 1, 2].map(k => Math.round(median(walls.map(w => w[k])))) as [number, number, number];
-    const textures = paintFaces(run.report.faces, items, fallback);
+    const textures = paintFaces(run.report.faces, built, fallback);
     const legend = gLegend();
     timingsMs.paint = Date.now() - t;
-    steps.push({ step: 'paint', proposed: textures.size, accepted: textures.size, rejected: 0, notes: [`${items.size} walls painted from their own reading, ${textures.size - items.size} faces from the read walls' median colour (generated)`], ms: timingsMs.paint });
+    steps.push({ step: 'paint', proposed: textures.size, accepted: textures.size, rejected: 0, notes: [`${[...built.keys()].length} walls painted from their own reading or their facade's, ${textures.size - built.size} faces from the read walls' median colour (generated)`], ms: timingsMs.paint });
 
     // 6. facade textures: each read wall's survey plate redrawn by the facade texture builder, over its paint where accepted
     const enhanced: EnhanceWallRecord[] = [];
@@ -335,12 +354,12 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
         t = Date.now();
         const e = input.enhance;
         const step: StepRecord = { step: 'facade textures', proposed: 0, accepted: 0, rejected: 0, notes: [], ms: 0 };
-        const plateOf = (f: MassingFace) => plates.find(p => p.key === f.key || f.key.startsWith(p.key + ':'));
+        const plateOf = (f: MassingFace) => plates.find(p => p.key === f.key || f.key.startsWith(p.key + ':') || p.key === grouping.groupOf.get(f.key));
         const walls = run.report.faces.filter(f => f.kind === 'wall' && textures.has(f.index) && plateOf(f) && items.has(plateOf(f)!.key)).sort((a, b) => b.area - a.area);
         const done: FaceTexture[] = [];
         const one = async (f: MassingFace) => {
             const pl = plateOf(f)!;
-            const on = plateOntoFace(f, textures.get(f.index)!, pl, faces[pl.face]);
+            const on = plateOntoFace(f, textures.get(f.index)!, pl, surveyFaces[pl.face]);
             if (!on) return;
             progress(`pipeline G: drawing the facade texture of wall ${f.index} (${Math.round(f.area)} m2)`);
             const r = await buildFacadeTexture(f, on.tex, on.use, {
