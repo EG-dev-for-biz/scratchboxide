@@ -58,8 +58,10 @@ describe('facade texture from a wall picture', () => {
         for (let y = 100; y < H; y++) for (let x = 20; x < 80; x++) input.set([128, 128, 128, 255], (y * W + x) * 4);
         const sent: PlateRequest[] = [];
         const client = async (r: PlateRequest) => { sent.push(r); return { bytes: answer(truth, r), modelUsed: 'fake' }; };
-        const res = await buildFacadeTextureFromImage({ image: { width: W, height: H, rgba: input }, widthM: W * PX, heightM: H * PX, locationName: 'X', client, models: ['fake'] });
+        const res = await buildFacadeTextureFromImage({ image: { width: W, height: H, rgba: input }, widthM: W * PX, heightM: H * PX, locationName: 'X', client, models: ['fake-lite'], unseenModels: ['fake-full'] });
         expect(sent.length).toBe(1);
+        // a wall with unseen areas goes to the model that fills them
+        expect(sent[0].models).toEqual(['fake-full']);
         expect(sent[0].prompt).toMatch(/grey/i);
         expect(res.coveredShare).toBeCloseTo(1 - (60 * 60) / (W * H), 3);
         expect(res.accepted).toBe(true);
@@ -75,12 +77,16 @@ describe('facade texture from a wall picture', () => {
         const client = async (r: PlateRequest) => ({ bytes: answer(sheared, r), modelUsed: 'fake' });
         // the infill model answers with the holes still magenta: the inpaint lock refuses it
         const infill = async (q: { image: { bytes: Uint8Array } }) => ({ bytes: q.image.bytes, modelUsed: 'fake-infill' });
-        const res = await buildFacadeTextureFromImage({ image: { width: W, height: H, rgba: truth }, widthM: W * PX, heightM: H * PX, locationName: 'X', client, models: ['fake'], infill: { client: infill as never, models: ['fake-infill'] } });
+        const models: string[][] = [];
+        const seenClient = async (r: PlateRequest) => { models.push(r.models); return client(r); };
+        const res = await buildFacadeTextureFromImage({ image: { width: W, height: H, rgba: truth }, widthM: W * PX, heightM: H * PX, locationName: 'X', client: seenClient, models: ['fake'], unseenModels: ['fake-full'], infill: { client: infill as never, models: ['fake-infill'] } });
         expect(res.accepted).toBe(false);
         expect(res.quality?.seams).toBeGreaterThan(0);
         expect(res.infill?.decision).toBe('rejected');
         expect(res.why).toMatch(/seam/);
         expect(res.texture).toBeUndefined();
+        // a fully seen wall keeps the redraw model
+        expect(models).toEqual([['fake']]);
         void decodeImageInMemory;
     });
 });

@@ -35,6 +35,9 @@ import { infillImageHoles } from '../../../image-hole-infill';
 import { facadeQuality } from './quality';
 import type { EnhanceModelClient } from '../texture-enhance';
 
+/** A wall with more than this share of its texels to draw as it continues is redrawn by `unseenModels` when given. */
+export const UNSEEN_MODEL_SHARE = 0.02;
+
 /** A wall the tile hardly sees: what the tile does not cover is drawn as the wall continues (labelled `source`). */
 export interface UnseenWall { source: number; familyLab?: [number, number, number]; inside?: Uint8Array }
 
@@ -162,6 +165,12 @@ export interface BuildFacadeTextureOptions {
      */
     infill?: { client: EnhanceModelClient; models: string[] };
     /**
+     * The models that redraw a wall with unseen areas (more than UNSEEN_MODEL_SHARE of it to be drawn as it continues), in
+     * place of `models`: the Lite model redraws a seen wall well but leaves what it is asked to fill flat grey (the
+     * Haughwout, run 653c06f8: 59% of Broadway's unseen part left grey).
+     */
+    unseenModels?: string[];
+    /**
      * The quality score (quality.ts) decides too: the texture as it would be written must have no seam, no smeared run and at
      * most MAX_EMPTY_SHARE flat grey or empty inside `inside` (the wall's polygon); with `infill`, what it faults is redrawn by
      * generative infill first and scored again.
@@ -185,7 +194,10 @@ export async function buildFacadeTexture(f: MassingFace, t: FaceTexture, use: Ui
     // the photo is sent to the model unless this is the redraw without it (it then only checks the plate)
     const guide = !!sv && !opts.photoCheckOnly;
     const unseen = opts.unseen;
-    const prep = prepareFacadeRequest(f, t, use, { locationName: opts.locationName, models: opts.models, ...(opts.reference ? { reference: opts.reference } : {}), ...(opts.signal ? { signal: opts.signal } : {}), ...(guide ? { streetView: sv } : {}), ...(unseen ? { unseen } : {}) });
+    let uncovered = 0;
+    for (let i = 0; i < use.length; i++) if (!use[i]) uncovered++;
+    const models = unseen && opts.unseenModels?.length && uncovered > UNSEEN_MODEL_SHARE * use.length ? opts.unseenModels : opts.models;
+    const prep = prepareFacadeRequest(f, t, use, { locationName: opts.locationName, models, ...(opts.reference ? { reference: opts.reference } : {}), ...(opts.signal ? { signal: opts.signal } : {}), ...(guide ? { streetView: sv } : {}), ...(unseen ? { unseen } : {}) });
     const svRec: EnhanceStreetViewRecord | undefined = sv ? { ...(guide ? {} : { checkOnly: true }), panoId: sv.view.panoId, method: sv.view.registration?.method ?? 'nominal', bandCover: Math.round(sv.rect.bandCover * 1000) / 1000, pxPerM: Math.round(sv.rect.pxPerM * 10) / 10 } : undefined;
     const base = { face: f.index, key: f.key, ...(svRec ? { streetView: svRec } : {}), ...(guards && !sv && opts.noStreetView ? { noStreetView: opts.noStreetView } : {}) };
     let answer: PlateAnswer;
@@ -260,6 +272,8 @@ export interface FacadeImageInput {
     models: string[];
     /** Generative infill of what the quality score faults (and, with `audit`, of what the region audit flags). */
     infill?: { client: EnhanceModelClient; models: string[] };
+    /** The models that redraw a picture with unseen areas (buildFacadeTexture's unseenModels). */
+    unseenModels?: string[];
     /** Counts the input's and the redraw's storeys and bays (plate-identity.ts visionFacadeCounter); without it they are not counted. */
     counter?: FacadeCounter;
     /** The region audit against the input (default off: on a melted or partial input it reads the melt as elements erased). */
@@ -294,7 +308,7 @@ export async function buildFacadeTextureFromImage(input: FacadeImageInput): Prom
     const ref: FaceTexture | undefined = input.reference ? { width: input.reference.width, height: input.reference.height, rgba: input.reference.rgba, source: new Uint8Array(input.reference.width * input.reference.height) } : undefined;
     const r = await buildFacadeTexture(face, t, use, {
         client: input.client, models: input.models, locationName: input.locationName, source: 1, guards: input.audit === true, quality: true,
-        ...(seen < W * H ? { unseen: { source: 1 } } : {}), ...(ref ? { reference: ref } : {}), ...(input.infill ? { infill: input.infill } : {}),
+        ...(seen < W * H ? { unseen: { source: 1 } } : {}), ...(ref ? { reference: ref } : {}), ...(input.infill ? { infill: input.infill } : {}), ...(input.unseenModels ? { unseenModels: input.unseenModels } : {}),
         ...(input.counter ? { counter: input.counter } : {}), ...(input.cacheDir ? { cacheDir: input.cacheDir } : {}), ...(input.signal ? { signal: input.signal } : {})
     });
     return { ...r, coveredShare: seen / (W * H), ...(r.accepted ? { texture: { width: W, height: H, rgba: t.rgba } } : {}) };

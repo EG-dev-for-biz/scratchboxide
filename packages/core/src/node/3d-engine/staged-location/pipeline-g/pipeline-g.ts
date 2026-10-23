@@ -92,7 +92,9 @@ export interface PipelineGInput {
     /** The facade texture builder's image model (absent: the walls keep their painted colours). */
     enhance?: { client: PlateModelClient; models: string[]; cacheDir?: string;
         /** Generative infill of what the quality score faults (a survey plate is worse than its redraw: never reverted to). */
-        infill?: { client: EnhanceModelClient; models: string[] } };
+        infill?: { client: EnhanceModelClient; models: string[] };
+        /** The models for a wall with unseen areas (the facade texture builder's unseenModels). */
+        unseenModels?: string[] };
 }
 
 export interface PipelineGOutcome extends InferenceOutcome {
@@ -369,7 +371,7 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
                 guards: false,
                 ...(done[0] ? { reference: done[0] } : {}), ...(e.cacheDir ? { cacheDir: e.cacheDir } : {}),
                 counter: visionFacadeCounter(input.chain as VisionModelChain<string>), ...(input.signal ? { signal: input.signal } : {}),
-                ...(e.infill ? { infill: e.infill } : {}), quality: true,
+                ...(e.infill ? { infill: e.infill } : {}), ...(e.unseenModels ? { unseenModels: e.unseenModels } : {}), quality: true,
                 // what no station saw of the wall itself goes to the model mid-grey, to be drawn as the wall continues (never the
                 // painted colours, never the melt)
                 unseen: { source: G_SRC.enhanced }

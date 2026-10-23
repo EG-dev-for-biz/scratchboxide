@@ -161,7 +161,7 @@ import { ownershipChange, OWNERSHIP_MATERIAL_SHARE } from './ownership-change';
 import { tileRefineTwin, TILE_REFINE_TWIN_VERSION, type TileRefineTwin } from './tile-refine-twin';
 import { maskTemporaryInViews, textureTemporaryEnabled, visionTemporaryChecker, TEMPORARY_CHECK_VERSION } from './temporary-structures';
 import { objectSegmenter, ownViews, OWNERSHIP_VERSION, type OwnershipSegmenter } from './streetview-ownership';
-import { correctViewsLighting, lightingModels, lightingPromptVariant, textureArmOptions, LIGHTING_MODEL_LITE, type LightingCorrectedView } from './texture-lighting';
+import { correctViewsLighting, lightingModels, lightingPromptVariant, textureArmOptions, LIGHTING_MODEL_FULL, LIGHTING_MODEL_LITE, type LightingCorrectedView } from './texture-lighting';
 import { TextureWorkerPool, textureWorkersEnabled } from './texture-worker-pool';
 import { eventLoopStats, runBlockTracer } from './event-loop-stats';
 import { recordStageTimeline } from './stage-timeline';
@@ -3447,8 +3447,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         dir: path.join(cache.dir, 'pipeline_g', stageKey(PIPELINE_G_VERSION, e.key).slice(0, 24)), stage: 'grammar', stageKey: e.key,
                         chain, place: placeValue!.formattedAddress || request.query, structure: structure!, ground: t.ground!,
                         anchor: { lat: placeValue!.lat, lng: placeValue!.lng, elevationMeters: 0 }, signal: io.signal, onProgress: m => io.progress(m),
-                        // the facade texture builder on every read wall, as pipeline E's enhanced mode (the real-data view turns it off)
-                        ...((request.enhance ?? stagedEnhance()) ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), cacheDir: path.join(cache.dir, 'enhance_plates'), infill: { client: genAiEnhanceClient(visionAvailable.client), models: enhanceModels() } } } : {})
+                        // the facade texture builder on every read wall, as pipeline E's enhanced mode (the real-data view turns it off):
+                        // Nano Banana Lite redraws, the full model fills (infill, and walls with unseen areas: Lite leaves them grey)
+                        ...((request.enhance ?? stagedEnhance()) ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), cacheDir: path.join(cache.dir, 'enhance_plates'), infill: { client: genAiEnhanceClient(visionAvailable.client), models: [LIGHTING_MODEL_FULL] }, unseenModels: [LIGHTING_MODEL_FULL] } } : {})
                     });
                     cache.writeRunNote(runId, 'pipeline_g', { steps: out.steps, timingsMs: out.timingsMs, plates: out.plates, stations: out.stations });
                     const key8 = e.key.slice(0, 8);
