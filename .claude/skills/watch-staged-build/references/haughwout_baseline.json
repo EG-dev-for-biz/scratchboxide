@@ -1,0 +1,28 @@
+{
+  "name": "E.V. Haughwout Building, 488 Broadway, New York (pipeline G, 2026-10-23, user-set benchmark)",
+  "source": "the user's screenshot of the build summary, 2026-10-23, and run 245b6c58 (pipeline_g.json)",
+  "summaryFromScreenshot": {
+    "finishS": 346,
+    "footprintPlanIoU": 0.885,
+    "triangles": 38142,
+    "vertices": 114426,
+    "surveyStations": "24 of 42 street-level stations and 1 roof station",
+    "wallPlatesRead": "2 of 6",
+    "roofObjects": 3,
+    "nativeElements": "149 of 164",
+    "facesPainted": "53 of 53",
+    "facadeTextures": "3 of 5",
+    "roofTextures": "1 of 1",
+    "degradations": 0
+  },
+  "measures": {
+    "pipelineGRan": true,
+    "massingOk": true,
+    "degradedCount": 0,
+    "triangles": 38142,
+    "wallPlatesRead": 2,
+    "nativeBuildShare": 0.908,
+    "facadeTexturesShare": 0.6,
+    "roofTextures": 1
+  }
+}
