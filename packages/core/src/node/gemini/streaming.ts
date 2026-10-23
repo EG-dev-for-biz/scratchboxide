@@ -714,15 +714,20 @@ export class StreamingEngine {
                 const toolName = toolCall.name || '';
                 const rawToolCall = toolCall as any;
                 // A thought signature belongs to the model that wrote it; a call the router wrote is sent to the chat
-                // model without one.
-                const sig = (callModel === model && (rawToolCall.thought_signature || rawToolCall.thoughtSignature)) ||
-                            'skip_thought_signature_validator';
+                // model without one (the explicit skip sentinel). Within one model turn, only the first of several
+                // function calls carries its own signature (Gemini signs the turn's thought once, not every call) —
+                // the rest genuinely have none, so the field is left off rather than filled with the skip sentinel:
+                // mixing a real signature and the skip sentinel across calls in the same turn is what Vertex rejected
+                // as "Requests ending with a model turn are not supported" (its content-validator discards the whole
+                // malformed turn, which from the outside looks like the conversation ending on a model turn).
+                const realSig = callModel === model && (rawToolCall.thought_signature || rawToolCall.thoughtSignature);
+                const sig = realSig || (callModel !== model ? 'skip_thought_signature_validator' : undefined);
                 const modelPart = {
                     functionCall: {
                         name: toolName,
                         args: toolCall.args || {}
                     },
-                    thought_signature: sig
+                    ...(sig ? { thought_signature: sig } : {})
                 } as any as Part;
 
                 if (toolName === 'workspace_write_file' || toolName === 'workspace_apply_diff') {
@@ -972,11 +977,19 @@ export class StreamingEngine {
                 modelParts.push({ text: turnText });
             }
             modelParts.push(...results.map(r => r.modelPart));
-            const toolResponseParts: Part[] = [...results.map(r => r.responsePart), ...results.flatMap(r => r.imageParts ?? [])];
+            const toolResponseParts: Part[] = results.map(r => r.responsePart);
+            const imageParts: Part[] = results.flatMap(r => r.imageParts ?? []);
 
-            // Append assistant model turn with functionCalls and user turn with functionResponses
+            // Append assistant model turn with functionCalls and user turn with functionResponses. A tool's own
+            // images (modelImageParts) go in a separate user turn right after: mixed into the same content as the
+            // functionResponse parts, Vertex rejected the whole request as "Requests ending with a model turn are
+            // not supported" even though the array's last role genuinely was 'user' — its function-response turn
+            // parser seems to expect that content to hold only functionResponse parts.
             payload.contents.push({ role: 'model', parts: modelParts });
             payload.contents.push({ role: 'user', parts: toolResponseParts });
+            if (imageParts.length) {
+                payload.contents.push({ role: 'user', parts: imageParts });
+            }
 
             // A question or plan card is a request for the user's decision: stop and wait for it.
             if (awaitingUser) {
@@ -1229,6 +1242,13 @@ export class StreamingEngine {
                     onEvent({ type: 'thought', thought: part.text || '', modelUsed: model });
                 } else if (part.functionCall) {
                     const rawPart = part as any;
+                    // Gemini signs a turn's thought once, not every call in it: only the first of several function
+                    // calls in one candidate turn carries a real signature. Defaulting every signature-less call to
+                    // the skip sentinel (as this used to) made runToolCall's own real-vs-skip check always see a
+                    // truthy value and never the genuine fallback, so a turn with one real signature and several
+                    // sentinel ones went out as sent — which Vertex rejects ("Requests ending with a model turn are
+                    // not supported"). Leaving the field off when there is no real signature lets runToolCall decide
+                    // whether this call's call model warrants the explicit skip sentinel.
                     const sig = rawPart.thought_signature ||
                                 rawPart.thoughtSignature ||
                                 rawPart.functionCall?.thought_signature ||
@@ -1236,11 +1256,10 @@ export class StreamingEngine {
                                 (cand as any)?.thought_signature ||
                                 (cand as any)?.thoughtSignature ||
                                 (chunk as any)?.thought_signature ||
-                                (chunk as any)?.thoughtSignature ||
-                                'skip_thought_signature_validator';
+                                (chunk as any)?.thoughtSignature;
                     detectedToolCalls.push({
                         ...part.functionCall,
-                        thought_signature: sig
+                        ...(sig ? { thought_signature: sig } : {})
                     } as any);
                     const callObj = {
                         id: part.functionCall.id || `call-${Date.now()}`,
