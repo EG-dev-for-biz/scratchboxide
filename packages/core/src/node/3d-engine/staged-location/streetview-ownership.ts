@@ -37,7 +37,7 @@ import { encodePng } from './png-encode';
 import { decodeImageInMemory } from './tile-texture-transfer';
 
 /** Part of the texture cache key: a change to the ownership step is a new version. */
-export const OWNERSHIP_VERSION = 3;
+export const OWNERSHIP_VERSION = 4;
 /** Below this agreement between the cut-out and the structure's projection, the view vouches for no pixel. */
 export const OWNERSHIP_MIN_IOU = 0.3;
 /** The structure needs this share of the view's pixels for a cut-out to be asked for. */
@@ -384,23 +384,21 @@ export async function ownViews(input: {
                     continue;
                 }
                 const mask = dilateMask(raw, W, H, OWNERSHIP_DILATE_PX);
-                // what stands in front of the structure: an occluder is something BETWEEN the camera and the structure's own surface,
-                // so only pixels inside the structure's projected silhouette (grown a little for overhanging crowns and arms) can be
-                // occluders, whatever the segmenter says; a neighbour standing beside the structure is never one. Within it: the
-                // depth test's occluders, the segmenter's "anything in front" and thin-structure cut-outs, grown along thin lines.
+                // what stands in front of the structure: an occluder is something BETWEEN the camera and the structure's own surface.
+                // A pixel is one only when the segmenter ("anything in front" or the thin-structure query, grown along thin lines) marks
+                // it AND the depth does not contradict it: it lies inside the structure's projected silhouette (its visible or hidden
+                // surface, grown a little for overhanging crowns and arms), so a neighbour beside the structure is never one. Depth
+                // alone never makes an occluder: a pose that is off puts the silhouette behind a neighbour, and the neighbour is not
+                // in front of anything. depthPixels counts the segmenter's occluders the depth test agrees are in front.
                 const sil = structureSilhouette(p, W, H);
                 const occ = new Uint8Array(W * H);
                 let depthPx = 0, segPx = 0, grownPx = 0, removed = 0, thinPx = 0;
-                for (let i = 0; i < occ.length; i++) if (p.hidden[i]) { occ[i] = 1; if (mask[i]) depthPx++; }
                 let segNote = 'not asked (no description of the structure)';
                 if (input.target) {
                     const d = await detectOccluders(v.image, input.segment, input.target, p.box, sil, input.signal);
-                    for (let i = 0; i < occ.length; i++) if (d.mask[i] && !occ[i]) { occ[i] = 1; if (mask[i]) segPx++; }
+                    for (let i = 0; i < occ.length; i++) if (d.mask[i]) { occ[i] = 1; if (mask[i]) segPx++; if (p.hidden[i]) depthPx++; }
                     thinPx = d.thinPixels; grownPx = d.grownPixels;
                     segNote = d.notes.join('; ');
-                } else {
-                    const gv = growThinVertical(occ, v.image, mask);
-                    for (let i = 0; i < occ.length; i++) if (gv[i] && !occ[i]) { grownPx++; occ[i] = 1; }
                 }
                 const occD = dilateMask(occ, W, H, Math.max(2, Math.round(OCCLUDER_DILATE_SHARE * Math.max(W, H))));
                 for (let i = 0; i < occD.length; i++) if (!sil[i]) occD[i] = 0;

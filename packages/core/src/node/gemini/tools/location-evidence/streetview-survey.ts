@@ -49,7 +49,7 @@ import { EDGE_REG_MAX_WIDTH_PX, type HeldImage } from '../../../3d-engine/staged
 import { JOINT_METRIC_WIDTH_PX, JOINT_WIDTHS_PX } from '../../../3d-engine/staged-location/pano-joint-registration';
 import { projectionViewFromRegistered } from '../../../3d-engine/staged-location/texture-projection-views';
 import { objectSegmenter, occluderVerifier, ownViews, type OwnershipSegmenter, type ViewOwnershipRecord } from '../../../3d-engine/staged-location/streetview-ownership';
-import { cleanStreetViewImage, streetViewCleanEnabled } from '../../../3d-engine/staged-location/streetview-clean';
+import { cleanStreetViewImage, registrationNcc, streetViewCleanEnabled } from '../../../3d-engine/staged-location/streetview-clean';
 import { genAiEnhanceClient, type EnhanceModelClient } from '../../../3d-engine/staged-location/texture-enhance';
 import { LIGHTING_MODEL_FULL, LIGHTING_MODEL_LITE } from '../../../3d-engine/staged-location/texture-lighting';
 import { encodePng } from '../../../3d-engine/staged-location/png-encode';
@@ -638,7 +638,9 @@ export async function runStreetViewSurvey(site: SurveySite, options: StreetViewS
                 view.ownership = { status: rec.status, ...(rec.iou !== undefined ? { iou: rec.iou } : {}), ownerMaskPath: rel(ownerFile), occluderMaskPath: rel(occFile), ownerPixels, occluderPixels, ...(temporaryPixels !== undefined ? { temporaryPixels } : {}) };
                 if (deps.clean && streetViewCleanEnabled()) {
                     try {
-                        const r = await cleanStreetViewImage({ image: pviews[k].image, occluders: m.occluders, client: deps.clean.client, models: deps.clean.models, ...(options.target ? { verify: occluderVerifier(segment, options.target, deps.signal) } : {}), ...(deps.clean.cacheDir ? { cacheDir: deps.clean.cacheDir } : {}), ...(deps.signal ? { signal: deps.signal } : {}) });
+                        let structurePixels = 0;
+                        for (let i = 0; i < m.owner.length; i++) if (m.owner[i] || m.occluders[i]) structurePixels++;
+                        const r = await cleanStreetViewImage({ image: pviews[k].image, occluders: m.occluders, client: deps.clean.client, models: deps.clean.models, registrationNcc: registrationNcc(reg, view.panoId), structurePixels, ...(options.target ? { verify: occluderVerifier(segment, options.target, deps.signal) } : {}), ...(deps.clean.cacheDir ? { cacheDir: deps.clean.cacheDir } : {}), ...(deps.signal ? { signal: deps.signal } : {}) });
                         let imagePath: string | undefined, filledMaskPath: string | undefined;
                         if (r.filledPixels) {
                             const cleanFile = path.join(path.dirname(path.resolve(options.workspaceRoot ?? '.', view.imagePath)), `${stem}_clean.png`);
@@ -911,3 +913,4 @@ export const streetviewSurveyHandler: ToolHandler = async (args, ctx) => {
         summaryResult: summary
     };
 };
+

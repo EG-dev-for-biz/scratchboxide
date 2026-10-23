@@ -17,7 +17,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanStreetViewImage, CLEAN_MIN_PIXELS } from '../src/node/3d-engine/staged-location/streetview-clean';
+import { cleanStreetViewImage, CLEAN_MAX_FILL_SHARE, CLEAN_MIN_PIXELS, CLEAN_MIN_REGISTRATION_NCC } from '../src/node/3d-engine/staged-location/streetview-clean';
 import { referenceView, type GuideView } from '../src/node/3d-engine/staged-location/pipeline-e/plate-streetview';
 import type { EnhanceModelClient } from '../src/node/3d-engine/staged-location/texture-enhance';
 import { decodeImageInMemory, type RgbaImage8 } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
@@ -111,6 +111,46 @@ describe('obstruction-free Street View copy', () => {
         const ok = await cleanStreetViewImage({ image, occluders, client: rowFill, models: ['x'], verify });
         expect(ok.decision).toBe('accepted');
         expect(ok.verify).toMatchObject({ verdict: 'accepted', attempts: [{ residualPixels: 0 }] });
+    });
+
+    it('skips a weakly registered view and refuses a fill over the cap, without a model call', async () => {
+        const { image, occluders } = photo();
+        const weak = await cleanStreetViewImage({ image, occluders, client: rowFill, models: ['x'], registrationNcc: 0.02 });
+        expect(weak.decision).toBe('weak_registration');
+        expect(weak.reason).toMatch(/registration too weak to locate occluders/);
+        const unmeasured = await cleanStreetViewImage({ image, occluders, client: rowFill, models: ['x'], registrationNcc: null });
+        expect(unmeasured.decision).toBe('weak_registration');
+        const big = await cleanStreetViewImage({ image, occluders, client: rowFill, models: ['x'], structurePixels: Math.floor(1500 / CLEAN_MAX_FILL_SHARE) - 1 });
+        expect(big.decision).toBe('fill_too_large');
+        expect(big.image).toBe(image);
+        expect(calls).toBe(0);
+        const ok = await cleanStreetViewImage({ image, occluders, client: rowFill, models: ['x'], registrationNcc: CLEAN_MIN_REGISTRATION_NCC + 0.1, structurePixels: W * H });
+        expect(ok.decision).toBe('accepted');
+    });
+
+    it('leaves no hole colour in the composite where the model left the bottom edge unfilled', async () => {
+        // the tree reaches the bottom of the frame; the model fills every hole row but the last 8 rows of its answer (the
+        // request is upscaled, so that is a few photo rows, resampled into a pinkish band)
+        const { image } = photo();
+        const occluders = new Uint8Array(W * H);
+        for (let y = 100; y < H; y++) for (let x = 90; x < 120; x++) { occluders[y * W + x] = 1; image.rgba.set([40, 140, 50, 255], (y * W + x) * 4); }
+        const edgeLazy: EnhanceModelClient = async req => {
+            const out = await rowFill(req);
+            const asked = decodeImageInMemory(req.image.bytes), img = decodeImageInMemory(out.bytes), p = Uint8Array.from(img.rgba);
+            for (let y = img.height - 3; y < img.height; y++) for (let x = 0; x < img.width; x++) { const o = (y * img.width + x) * 4; if (isMagenta(asked.rgba, o)) p.set([255, 0, 255], o); }
+            return { ...out, bytes: new Uint8Array(encodePng(img.width, img.height, Buffer.from(p))) };
+        };
+        const r = await cleanStreetViewImage({ image, occluders, client: edgeLazy, models: ['x'] });
+        expect(r.decision).toBe('accepted');
+        // out of the photo's gamut: anything pinker than the wall (red and blue both well above green)
+        const pink = (o: number) => r.image.rgba[o] - r.image.rgba[o + 1] > 60 && r.image.rgba[o + 2] - r.image.rgba[o + 1] > 60;
+        let band = 0, restored = 0;
+        for (let i = 0; i < W * H; i++) {
+            if (pink(i * 4)) band++;
+            if (Math.floor(i / W) === H - 1 && occluders[i] && !r.filledMask[i] && r.image.rgba[i * 4 + 1] === 140) restored++;
+        }
+        expect(band).toBe(0);
+        expect(restored).toBe(30); // the unfilled bottom row is the photo as captured, not the hole colour
     });
 
     it('a failed or rejected fill leaves the photo as captured, with the reason', async () => {

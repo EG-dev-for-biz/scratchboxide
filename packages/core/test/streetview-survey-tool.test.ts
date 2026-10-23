@@ -165,8 +165,14 @@ describe('streetview_survey (synthetic street, recorded-style inputs, no network
         // inline (no worker thread), with budgets a test can afford
         register: async (job, o) => runPanoRegistration({ ...job, edgeBudgetMs: 40_000, jointBudgetMs: 40_000 }, o.log),
         // the segmenter: the photo's own pixels of the building's stone and windows (what a cut-out of this photo shows)
-        segmenter: async image => {
+        // asked what stands in front, it finds the green kiosk; asked for thin structures, nothing
+        segmenter: async (image, prompts) => {
             const m = new Uint8Array(image.width * image.height);
+            if (prompts.target?.startsWith('long thin structures')) return m;
+            if (prompts.target?.startsWith('anything standing in front')) {
+                for (let i = 0; i < m.length; i++) m[i] = image.rgba[i * 4 + 1] > 130 && image.rgba[i * 4] < 70 ? 1 : 0;
+                return m;
+            }
             for (let i = 0; i < m.length; i++) {
                 const r = image.rgba[i * 4], g = image.rgba[i * 4 + 1], b = image.rgba[i * 4 + 2];
                 const stone = r > 150 && r - b > 50, glass = r < 70 && g < 75 && b < 85 && b > 35;
@@ -210,7 +216,7 @@ describe('streetview_survey (synthetic street, recorded-style inputs, no network
 
     it('surveys every face: refusals replaced and reported, bytes as returned, poses registered nearer the truth, masks, coverage', async () => {
         const outDir = path.join(root, 'build', 'streetview-grounding');
-        const res = await runStreetViewSurvey(site, { maxViews: 6, ownershipMasks: true, outDir, workspaceRoot: root }, surveyDeps());
+        const res = await runStreetViewSurvey(site, { maxViews: 6, ownershipMasks: true, target: 'the test building', outDir, workspaceRoot: root }, surveyDeps());
 
         expect(res.views.length).toBe(6);
         expect(res.discovery.panosFound).toBeGreaterThanOrEqual(10);
