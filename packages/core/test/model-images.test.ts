@@ -32,8 +32,10 @@ describe('images shown to the model', () => {
         const budget = { left: MAX_MODEL_IMAGES_PER_TURN };
         const r = modelImageParts('survey_tool', { status: 'success', modelImages: [{ path: file, mimeType: 'image/png', label: 'station 3' }, { path: path.join(dir, 'missing.png'), label: 'gone' }] }, budget);
         expect(r.parts).toHaveLength(2);
-        expect((r.parts[0] as { text: string }).text).toBe('Image from survey_tool: station 3');
-        expect((r.parts[1] as { inlineData: { data: string } }).inlineData.data).toBe(PNG.toString('base64'));
+        expect((r.parts[0] as { text: string }).text).toMatch(/^Image from survey_tool: station 3 \(\d+ x \d+ px\)$/);
+        const inline = r.parts[1] as { inlineData: { data: string; mimeType: string } };
+        expect(inline.inlineData.mimeType).toBe('image/jpeg');
+        expect(inline.inlineData.data.length).toBeGreaterThan(0);
         expect(r.payload.modelImages).toBeUndefined();
         expect(r.payload.images[0]).toEqual({ label: 'station 3', shown: true });
         expect(r.payload.images[1].shown).toBe(false);

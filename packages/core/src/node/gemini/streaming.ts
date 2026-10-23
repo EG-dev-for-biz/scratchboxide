@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 import * as fs from 'fs';
+import { modelImage } from './model-image';
 import type { FunctionCall, Part } from '@google/genai';
 import type {
     GeminiGenerateRequest,
@@ -679,7 +680,7 @@ export class StreamingEngine {
             currentTurn++;
             const turnDetectedToolCalls: FunctionCall[] = [];
             /** What is left of the turn's image allowance (modelImageParts). */
-            const imageBudget = { left: MAX_MODEL_IMAGES_PER_TURN };
+            const imageBudget = { left: MAX_MODEL_IMAGES_PER_TURN, bytesLeft: MAX_MODEL_IMAGE_TURN_BYTES };
             let turnText = '';
 
             if (auth.type === 'vertex' && currentTurn > 1) {
@@ -1386,37 +1387,46 @@ export const TOOL_FAILURE_INSTRUCTION = 'This tool call failed. If the error is 
  * workspace_* tools (the model is editing code and fixes what fails) and timed-out calls, whose payload already says
  * not to call the tool again.
  */
-/** Images a tool shows the model per turn (each loads its full bytes into the context). */
+/** Images a tool shows the model per turn, and the bytes they may add to the request together (after model-image.ts). */
 export const MAX_MODEL_IMAGES_PER_TURN = 8;
 export const MAX_MODEL_IMAGE_BYTES = 8_000_000;
+export const MAX_MODEL_IMAGE_TURN_BYTES = 3_000_000;
 
 /**
  * The images a tool's result asks to show the model (resultPayload.modelImages: { path | data, mimeType, label }), as
- * parts that follow the turn's tool responses: a label, then the image. Only a tool's own code puts them there (a path
+ * parts that follow the turn's tool responses: a label, then the image, scaled to at most 1024 px and sent as a JPEG
+ * (model-image.ts). Only a tool's own code puts them there (a path
  * the model asked for went through that tool's checks). The payload sent as JSON lists them by label instead. `budget`
  * counts what the turn has left; an image past it, unreadable or too large, is listed with why it was not shown.
  */
-export function modelImageParts(toolName: string, resultPayload: any, budget: { left: number }): { payload: any; parts: Part[] } {
+export function modelImageParts(toolName: string, resultPayload: any, budget: { left: number; bytesLeft?: number }): { payload: any; parts: Part[] } {
     const list = Array.isArray(resultPayload?.modelImages) ? resultPayload.modelImages as Array<{ path?: string; data?: string; mimeType?: string; label?: string }> : undefined;
     if (!list) return { payload: resultPayload, parts: [] };
     const parts: Part[] = [], listed: Array<{ label: string; shown: boolean; why?: string }> = [];
     for (const img of list) {
         const label = img.label || img.path || 'image';
         if (budget.left <= 0) { listed.push({ label, shown: false, why: `over ${MAX_MODEL_IMAGES_PER_TURN} images this turn` }); continue; }
-        let data = img.data;
+        let bytes: Uint8Array | undefined;
         try {
-            if (!data && img.path) {
+            if (img.data) bytes = Buffer.from(img.data, 'base64');
+            else if (img.path) {
                 const st = fs.statSync(img.path);
                 if (st.size > MAX_MODEL_IMAGE_BYTES) { listed.push({ label, shown: false, why: `${(st.size / 1e6).toFixed(1)} MB, too large` }); continue; }
-                data = fs.readFileSync(img.path).toString('base64');
+                bytes = fs.readFileSync(img.path);
             }
         } catch (err) {
             listed.push({ label, shown: false, why: `could not be read (${err instanceof Error ? err.message : String(err)})` });
             continue;
         }
-        if (!data) { listed.push({ label, shown: false, why: 'no image' }); continue; }
+        if (!bytes) { listed.push({ label, shown: false, why: 'no image' }); continue; }
+        // made small enough to send (model-image.ts); an image that does not decode goes as it is
+        const small = modelImage(bytes);
+        const data = small ? small.data.toString('base64') : Buffer.from(bytes).toString('base64');
+        const mimeType = small ? 'image/jpeg' : img.mimeType || 'image/png';
+        if (budget.bytesLeft !== undefined && data.length > budget.bytesLeft) { listed.push({ label, shown: false, why: 'over this turn\'s image size allowance' }); continue; }
         budget.left--;
-        parts.push({ text: `Image from ${toolName}: ${label}` } as Part, { inlineData: { mimeType: img.mimeType || 'image/png', data } } as Part);
+        if (budget.bytesLeft !== undefined) budget.bytesLeft -= data.length;
+        parts.push({ text: `Image from ${toolName}: ${label}${small ? ` (${small.width} x ${small.height} px)` : ''}` } as Part, { inlineData: { mimeType, data } } as Part);
         listed.push({ label, shown: true });
     }
     const { modelImages: _omit, ...rest } = resultPayload;
