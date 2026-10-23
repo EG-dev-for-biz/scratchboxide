@@ -186,12 +186,17 @@ describe('object spec materials: native build', () => {
         for (const ext of ['KHR_materials_clearcoat', 'KHR_materials_transmission', 'KHR_materials_ior', 'KHR_materials_emissive_strength']) {
             expect(json.extensionsUsed).toContain(ext);
         }
-        // Vertex colours stay white, so a viewer that multiplies COLOR_0 by baseColorFactor shows the factor itself
-        // (not its square): the soup (base colour x vertex colour) carries the enamel red exactly.
+        // Vertex colours carry only grey ambient occlusion, so a viewer that multiplies COLOR_0 by baseColorFactor
+        // shows the factor itself on open surfaces (not its square): the soup (base colour x vertex colour) carries the
+        // enamel red exactly there, and a darker red of the same hue where another part shades it.
         const c = soup.colors!;
-        let red = 0;
-        for (let i = 0; i < c.length; i += 3) if (close([c[i], c[i + 1], c[i + 2]], [0.6, 0.02, 0.015])) red++;
+        let red = 0, occluded = 0;
+        for (let i = 0; i < c.length; i += 3) {
+            if (close([c[i], c[i + 1], c[i + 2]], [0.6, 0.02, 0.015])) red++;
+            else if (c[i] > 0.06 && c[i] < 0.6 * 0.9 && Math.abs(c[i + 1] / c[i] - 0.02 / 0.6) < 0.005) occluded++;
+        }
         expect(red).toBeGreaterThan(100);
+        expect(occluded).toBeGreaterThan(0);
     }, 240_000);
 
     it('a clay build gives every part studio clay whatever the spec says', async () => {
