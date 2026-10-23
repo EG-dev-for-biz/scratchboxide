@@ -36,8 +36,12 @@ import type { FacadeGroup } from './facades';
 import type { FacadeProgram } from './read';
 import type { RoofObject } from './roof-objects';
 import type { GStation } from './stations';
+import type { BuildingNames, Poi } from '../building-name';
 
 export const BRIEF_SCHEMA = 'scratchbox.building-brief/1';
+
+/** How far around the footprint the brief lists Google's points of interest, as context for whoever works on the building next. */
+export const BRIEF_NEARBY_POI_M = 60;
 
 export interface BuildingBriefRecord {
     /** The brief's JSON, under `publicDir` when given (so workspace_view_file can open it), else under `dir`. */
@@ -99,6 +103,10 @@ const faceRecord = (f: MassingFace) => ({
 
 export function writeBuildingBrief(input: {
     dir: string; place: string; groundY: number;
+    /** What the evidence calls the building (building-name.ts): POIs in or by the footprint and the request's own phrase. */
+    names?: BuildingNames;
+    /** Google's points of interest within BRIEF_NEARBY_POI_M of the footprint, each with its distance from the footprint's edge. */
+    nearbyPois?: Array<Poi & { distanceM: number }>;
     /** Where brief.json and its images are published so workspace_view_file / workspace_view_image can reach them (see the module comment); omit to write into `dir` as before. */
     publicDir?: string;
     massing: Pick<Massing, 'parts'>; roofObjects: RoofObject[];
@@ -107,7 +115,9 @@ export function writeBuildingBrief(input: {
     plates: Array<{
         key: string; face: MassingFace; coverage: number; widthM: number; heightM: number; colour: string; relief: string; program?: FacadeProgram; check?: ReadingCheck;
         /** A search-grounded reference for a wall still weak after its re-read (references.ts); never a measurement. */
-        references?: Array<{ model: string; image: string; account: string; queries: string[]; sources: Array<{ title?: string; uri?: string }> }>;
+        references?: Array<{ model: string; image: string; account: string; queries: string[]; sources: Array<{ title?: string; uri?: string }>;
+            /** The place the models were asked to look the wall up by (references.ts referenceQuery): the building's name and city, or its address. */
+            query?: string }>;
     }>;
     roofPlates: Array<{ key: string; coverage: number; colour: string }>;
     files: { clayGlb: string; texturedGlb: string };
@@ -120,6 +130,8 @@ export function writeBuildingBrief(input: {
     const brief = {
         schema: BRIEF_SCHEMA,
         place: input.place,
+        ...(input.names ? { names: { note: 'What the evidence calls this building: Google points of interest inside the footprint or within 5 m of it (source poi, with their type codes as labels and their distance from the footprint edge) and the request\'s own words for it (source request). primary is the name the search-grounded references were looked up by.', ...(input.names.primary ? { primary: input.names.primary } : {}), candidates: input.names.names } } : {}),
+        ...(input.nearbyPois?.length ? { nearbyPois: { note: `Google points of interest within ${BRIEF_NEARBY_POI_M} m of the footprint (scan frame, x east, z south; distanceM from the footprint edge, 0 inside it), as context: labels, never geometry.`, pois: input.nearbyPois.map(p => ({ ...(p.name ? { name: p.name } : {}), types: p.types ?? [], x: r3(p.x), z: r3(p.z), distanceM: r3(p.distanceM) })) } } : {}),
         frame: 'tile frame: x east, y up, z south, metres; a face point is origin + s * axisS + t * axisT',
         groundY: r3(input.groundY),
         how: 'Massing parts and faces are the vector footprint at the heights the scan and Google Solar measure (vector-modelled); roof objects are fitted to the scan (scan-fitted); plates are station renders of the photo tiles laid onto each face in metres; readings are what a vision model read off a plate (photo-inferred), with how much of the plate they explain; nothing here is a photograph of the real building except through the tiles.',

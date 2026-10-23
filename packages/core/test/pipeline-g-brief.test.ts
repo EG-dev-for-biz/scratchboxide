@@ -9,8 +9,8 @@
 
 /**
  * Pipeline G's building brief (pipeline-g/brief.ts): written beside the build with the massing, roof objects, faces,
- * stations with their renders, plates with their readings and fit, and the build's files; the result's buildingBrief
- * validates against the staged result's schema.
+ * stations with their renders, plates with their readings and fit, the building's names and the POIs around it, and the
+ * build's files; the result's buildingBrief validates against the staged result's schema.
  */
 
 import * as fs from 'fs';
@@ -33,16 +33,25 @@ describe('pipeline G building brief', () => {
         const station = { id: 3, name: 'G_0_street_g1', positionLocalENU: [5, 1.6, 20] as [number, number, number], forwardVector: [0, 0, -1] as [number, number, number] } as never;
         const rec = writeBuildingBrief({
             dir, place: 'Test Building', groundY: 0,
+            names: { primary: 'Test Hall', names: [{ name: 'Test Hall', source: 'poi', distanceM: 0, types: ['FEATURE_TYPE_POI', 'FEATURE_TYPE_HISTORIC'] }, { name: 'the old hall', source: 'request', distanceM: 0, types: [] }] },
+            nearbyPois: [{ x: 5, z: -3, name: 'Test Hall', types: ['FEATURE_TYPE_POI', 'FEATURE_TYPE_HISTORIC'], distanceM: 0 }, { x: 30, z: 10, name: 'A Park', types: ['FEATURE_TYPE_PARK'], distanceM: 22.3456 }],
             massing: { parts: [{ id: 'p', baseY: 0, topY: 8, loops: [[[0, 0], [10, 0], [10, -6], [0, -6]]], planes: [], heightSource: 'vector', heights: {} }] },
             roofObjects: [], builtFaces: [WALL, { ...WALL, index: 1, key: 'b:p:0', kind: 'base' }], facades: [],
             stations: [{ station, face: 0, row: 'street', distanceM: 20, onFace: 0.4 }], renders: [{ station: 3, file: path.join(dir, 'survey', 'station_3.png') }],
-            plates: [{ key: WALL.key, face: WALL, coverage: 0.8, widthM: 10, heightM: 8, colour: '/x/face_0_colour.png', relief: '/x/face_0_relief.png', program: { wallColour: '#aa8866', openings: [{ h0: 1, h1: 3, cols: [[1, 2]] }] }, check: { explained: 0.2, lift: 4, weak: false } as never }],
+            plates: [{ key: WALL.key, face: WALL, coverage: 0.8, widthM: 10, heightM: 8, colour: '/x/face_0_colour.png', relief: '/x/face_0_relief.png', program: { wallColour: '#aa8866', openings: [{ h0: 1, h1: 3, cols: [[1, 2]] }] }, check: { explained: 0.2, lift: 4, weak: false } as never,
+                references: [{ model: 'gemini-3-pro-image', image: '/x/missing_ref.png', account: 'five storeys', queries: ['test hall facade'], sources: [], query: 'Test Hall, Testville' }] }],
             roofPlates: [], files: { clayGlb: '/x/clay.glb', texturedGlb: '/x/tex.glb' },
             steps: [{ step: 'facade reading', proposed: 1, accepted: 1, rejected: 0, notes: ['ok'], ms: 1 }]
         });
-        expect(rec.images).toBe(3);
+        expect(rec.images).toBe(4);
         const b = JSON.parse(fs.readFileSync(rec.path, 'utf8'));
         expect(b.schema).toBe(BRIEF_SCHEMA);
+        // the names decided, with their sources, distances and type codes, and the POIs around the building
+        expect(b.names.primary).toBe('Test Hall');
+        expect(b.names.candidates).toEqual([{ name: 'Test Hall', source: 'poi', distanceM: 0, types: ['FEATURE_TYPE_POI', 'FEATURE_TYPE_HISTORIC'] }, { name: 'the old hall', source: 'request', distanceM: 0, types: [] }]);
+        expect(b.nearbyPois.pois).toEqual([{ name: 'Test Hall', types: ['FEATURE_TYPE_POI', 'FEATURE_TYPE_HISTORIC'], x: 5, z: -3, distanceM: 0 }, { name: 'A Park', types: ['FEATURE_TYPE_PARK'], x: 30, z: 10, distanceM: 22.346 }]);
+        // the reference record says which query the models were asked with
+        expect(b.plates[0].searchGroundedReferences.references[0].query).toBe('Test Hall, Testville');
         expect(b.faces.map((f: { kind: string }) => f.kind)).toEqual(['wall']);
         expect(b.massing[0].loops[0]).toHaveLength(4);
         expect(b.stations[0]).toMatchObject({ name: 'G_0_street_g1', row: 'street', render: path.join(dir, 'survey', 'station_3.png') });
