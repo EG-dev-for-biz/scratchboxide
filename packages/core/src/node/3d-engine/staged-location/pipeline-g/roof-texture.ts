@@ -28,6 +28,7 @@ import { padToModelAspect, resizeRgba } from '../texture-enhance';
 import type { FaceTexture } from '../pipeline-e/massing-glb';
 import { alignPlate, cachedPlate, type PlateModelClient } from '../pipeline-e/enhance';
 import type { MassingFace } from '../pipeline-e/native-massing';
+import type { Plate } from './plates';
 import { STATION_OPTICS } from './stations';
 
 type V3 = [number, number, number];
@@ -64,6 +65,43 @@ export function roofStations(roofs: MassingFace[], anchor: GeodeticAnchor, first
     const along: V3 = hi[0] - lo[0] >= hi[2] - lo[2] ? [0, 0, 1] : [1, 0, 0];
     const eye: V3 = [centre[0] + along[0] * dist * Math.sin(tilt), centre[1] + dist * Math.cos(tilt), centre[2] + along[2] * dist * Math.sin(tilt)];
     return [{ station: stationFromLookAt(firstId, eye, centre, STATION_OPTICS, anchor, { name: 'G_roof_0' }), faces: up.map(x => x.i) }];
+}
+
+/** A plate texel no station hit, with seen texels this close on two opposite sides, is filled from them. */
+export const GAP_RADIUS_PX = 2;
+
+/**
+ * Closes the gaps a distant station leaves in a plate: its pixels are coarser than the plate's texels, so what it saw lands
+ * as a grid of dots. A texel no station hit takes the inverse-distance mean colour and relief of the seen texels within
+ * GAP_RADIUS_PX when they lie on two opposite sides of it, left and right or above and below (a gap inside what was seen;
+ * the edge of what was not has them on one side only); the plate's coverage is recounted. Returns the number of texels filled.
+ */
+export function closePlateGaps(pl: Plate, radius = GAP_RADIUS_PX): number {
+    const { w, h } = pl;
+    const seen = (j: number) => !Number.isNaN(pl.relief[j]);
+    const fill: Array<{ j: number; rgb: [number, number, number]; relief: number }> = [];
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const j = y * w + x;
+        if (seen(j)) continue;
+        const sides = [false, false, false, false];
+        let sw = 0, r = 0, g = 0, b = 0, rel = 0;
+        for (let dy = -radius; dy <= radius; dy++) for (let dx = -radius; dx <= radius; dx++) {
+            if (!dx && !dy) continue;
+            const xx = x + dx, yy = y + dy;
+            if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+            const k = yy * w + xx;
+            if (!seen(k)) continue;
+            if (dx < 0) sides[0] = true; if (dx > 0) sides[1] = true; if (dy < 0) sides[2] = true; if (dy > 0) sides[3] = true;
+            const wt = 1 / Math.hypot(dx, dy);
+            sw += wt; r += wt * pl.rgb[k * 3]; g += wt * pl.rgb[k * 3 + 1]; b += wt * pl.rgb[k * 3 + 2]; rel += wt * pl.relief[k];
+        }
+        if (((sides[0] && sides[1]) || (sides[2] && sides[3])) && sw > 0) fill.push({ j, rgb: [Math.round(r / sw), Math.round(g / sw), Math.round(b / sw)], relief: rel / sw });
+    }
+    for (const f of fill) { pl.rgb.set(f.rgb, f.j * 3); pl.relief[f.j] = f.relief; }
+    let cov = 0;
+    for (let j = 0; j < w * h; j++) if (seen(j)) cov++;
+    pl.coverage = cov / (w * h);
+    return fill.length;
 }
 
 export function roofPlatePrompt(o: { locationName: string; widthM: number; heightM: number; widthPx: number; heightPx: number }): string {

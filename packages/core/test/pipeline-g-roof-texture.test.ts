@@ -20,7 +20,8 @@ import type { MassingFace } from '../src/node/3d-engine/staged-location/pipeline
 import type { PlateModelClient } from '../src/node/3d-engine/staged-location/pipeline-e/enhance';
 import { decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { redrawRoof, roofPlatePrompt, roofStations } from '../src/node/3d-engine/staged-location/pipeline-g/roof-texture';
+import { closePlateGaps, redrawRoof, roofPlatePrompt, roofStations } from '../src/node/3d-engine/staged-location/pipeline-g/roof-texture';
+import { emptyPlate, finishPlate } from '../src/node/3d-engine/staged-location/pipeline-g/plates';
 
 /** A 30 x 20 m flat roof at y = 12: s east from x = 0, t north (−z) from z = 0, facing up. */
 const ROOF: MassingFace = {
@@ -86,6 +87,22 @@ describe('pipeline G roof texture', () => {
         expect(refused.accepted).toBe(false);
         expect(refused.why).toMatch(/keeps its painted colour/);
         expect(bad.rgba[0]).toBe(40);
+    });
+
+    it('closes the gaps a distant station leaves between its pixels, never past the edge of what it saw', () => {
+        const pl = finishPlate(emptyPlate(0, ROOF));
+        // every third texel hit, over the left half only
+        for (let y = 0; y < pl.h; y += 3) for (let x = 0; x < pl.w / 2; x += 3) { const j = y * pl.w + x; pl.relief[j] = 0; pl.rgb.set([200, 100, 50], j * 3); }
+        const before = pl.relief.filter(v => !Number.isNaN(v)).length;
+        expect(closePlateGaps(pl)).toBeGreaterThan(before * 5);
+        // inside the dotted half: filled with the dots' colour
+        const j = 31 * pl.w + 31;
+        expect(Number.isNaN(pl.relief[j])).toBe(false);
+        expect([...pl.rgb.subarray(j * 3, j * 3 + 3)]).toEqual([200, 100, 50]);
+        // the right half, which nothing saw, stays unseen
+        expect(Number.isNaN(pl.relief[31 * pl.w + Math.floor(pl.w * 0.75)])).toBe(true);
+        expect(pl.coverage).toBeGreaterThan(0.45);
+        expect(pl.coverage).toBeLessThan(0.55);
     });
 
     it('asks for the roof continued where no camera saw it', () => {

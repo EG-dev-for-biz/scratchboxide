@@ -53,7 +53,7 @@ import { MIN_READ_COVERAGE, PIPELINE_G_READ_VERSION, programItems, readPlate, ty
 import { checkPlate, checkReading, type ReadingCheck } from './check';
 import { groupFacades, layBack } from './facades';
 import { roofObjects } from './roof-objects';
-import { redrawRoof, roofStations, ROOF_PLATE_PROMPT_ID, type RoofTextureRecord } from './roof-texture';
+import { closePlateGaps, redrawRoof, roofStations, ROOF_PLATE_PROMPT_ID, type RoofTextureRecord } from './roof-texture';
 
 export const PIPELINE_G_VERSION = `pipeline-g/v3+${PIPELINE_G_READ_VERSION}`;
 /** Native build parameters: the massing only, nothing baked from the tile, no scanned residual. */
@@ -332,8 +332,10 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
             try {
                 const rp = await surveyPlates({ stations: rs, faces: surveyFaces, faceIdx: rs.flatMap(s => s.faces.map(k => roofIdx[k].i)), tileGlb: input.tilePath, ...(input.signal ? { signal: input.signal } : {}), onProgress: progress });
                 roofPlates = rp.plates;
+                const laidShare = roofPlates.map(p => p.coverage);
+                const closed = roofPlates.map(p => closePlateGaps(p));
                 for (const pl of roofPlates) fs.writeFileSync(path.join(input.dir, 'plates', `roof_${pl.face}_colour.png`), platePng(pl, false));
-                steps.push({ step: 'roof survey', proposed: roofPlates.length, accepted: roofPlates.filter(p => p.coverage > 0).length, rejected: roofPlates.filter(p => p.coverage <= 0).length, notes: roofPlates.map(p => `${p.key}: ${Math.round(p.coverage * 100)}% seen from above`), ms: Date.now() - tr });
+                steps.push({ step: 'roof survey', proposed: roofPlates.length, accepted: roofPlates.filter(p => p.coverage > 0).length, rejected: roofPlates.filter(p => p.coverage <= 0).length, notes: roofPlates.map((p, k) => `${p.key}: ${Math.round(laidShare[k] * 100)}% of its texels hit from above, ${Math.round(p.coverage * 100)}% after the gaps between the station's pixels were closed (${closed[k]} texels)`), ms: Date.now() - tr });
             } catch (err) {
                 if (input.signal?.aborted) throw err;
                 steps.push({ step: 'roof survey', proposed: rs.length, accepted: 0, rejected: rs.length, skipped: `the roof station could not be rendered (${err instanceof Error ? err.message : String(err)})`, notes: [], ms: Date.now() - tr });
@@ -476,11 +478,15 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     if (input.enhance && roofPlates.length) {
         t = Date.now();
         const e = input.enhance;
-        for (const f of run.report.faces.filter(x => x.kind === 'roof' && textures.has(x.index))) {
+        const skippedRoofs: string[] = [];
+        for (const f of run.report.faces.filter(x => x.kind === 'roof' && x.normal[1] > 0.3)) {
             const pl = roofPlates.find(p => p.key === f.key || f.key.startsWith(p.key + ':'));
-            if (!pl || pl.coverage <= 0) continue;
+            // a roof object's own top has no plate (they are parts added after the survey): it keeps its paint, unsaid
+            if (!pl) { if (!f.part.startsWith('roof-object-')) skippedRoofs.push(`${f.key}: no plate`); continue; }
+            if (!textures.has(f.index)) { skippedRoofs.push(`${f.key}: not painted`); continue; }
+            if (pl.coverage <= 0) { skippedRoofs.push(`${f.key}: its plate saw none of it`); continue; }
             const on = plateOntoFace(f, textures.get(f.index)!, pl, surveyFaces[pl.face]);
-            if (!on) continue;
+            if (!on) { skippedRoofs.push(`${f.key}: none of its plate lands on the built roof (what the plate saw stands off it, or outside it)`); continue; }
             progress(`pipeline G: drawing the roof texture (${Math.round(f.area)} m2)`);
             try {
                 roofRecords.push(await redrawRoof(f, textures.get(f.index)!, on, { client: e.client, locationName: input.place, source: G_SRC.roof, ...(e.cacheDir ? { cacheDir: e.cacheDir } : {}), ...(input.signal ? { signal: input.signal } : {}) }));
@@ -490,7 +496,7 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
             }
         }
         timingsMs.roofTexture = Date.now() - t;
-        steps.push({ step: 'roof texture', proposed: roofRecords.length, accepted: roofRecords.filter(r => r.accepted).length, rejected: roofRecords.filter(r => !r.accepted).length, notes: roofRecords.map(r => `roof ${r.face}: ${r.why}${r.model ? ` (${r.model})` : ''}`), ms: timingsMs.roofTexture });
+        steps.push({ step: 'roof texture', proposed: roofRecords.length, accepted: roofRecords.filter(r => r.accepted).length, rejected: roofRecords.filter(r => !r.accepted).length, notes: [...roofRecords.map(r => `roof ${r.face}: ${r.why}${r.model ? ` (${r.model})` : ''}`), ...skippedRoofs.map(s => `not redrawn: ${s}`)], ms: timingsMs.roofTexture });
     }
     const files = writeMassingLayer(run, input.massing, textures, legend, input.dir, input.stage, input.stageKey, 'pipeline_g');
 
