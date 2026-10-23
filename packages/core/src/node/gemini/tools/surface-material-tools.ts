@@ -24,7 +24,7 @@ import { VisionModelChain } from '../vision-model-chain';
 import { resolveRepoRoot } from './nano-banana-tools';
 import type { ToolDeclaration, ToolHandler } from './types';
 import { harvestSurveySwatches, type StationBeautifier, type SurveySwatchHarvestResult } from '../../spatial/survey-swatch-harvest';
-import { geminiJsonVision, indexPbrLibrary, matchSwatchToLibrary, resolvePbrLibrary, type PbrMatch } from '../../spatial/pbr-library-match';
+import { geminiJsonVision, matchSwatchToLibrary, openPbrLibrary, resolvePbrLibrary, type PbrMatch } from '../../spatial/pbr-library-match';
 import { cachedGeminiSegmenter } from '../../spatial/StreetViewMaterialHarvester';
 import { SurveyStationRenderService } from '../../spatial/SurveyStationRenderService';
 import { BeautifyStationService, createDefaultStationImageGenerator } from '../../spatial/BeautifyStationService';
@@ -107,7 +107,8 @@ export const SURVEY_SWATCHES_TOOL_DECLARATION: ToolDeclaration = {
             beautify: { type: 'BOOLEAN', description: 'Run each station through AI Beautify before harvesting (default true; false harvests the raw tile renders).' },
             subjectOnly: { type: 'BOOLEAN', description: 'Keep only swatches on the building itself, not neighbours or the street (default true).' },
             matchLibrary: { type: 'BOOLEAN', description: 'Match each swatch to the closest material of the local PBR texture library (default true).' },
-            libraryPath: { type: 'STRING', description: 'Optional PBR library folder (default SCRATCHBOX_PBR_LIBRARY, else the studio RAID copy).' },
+            libraryPath: { type: 'STRING', description: 'Optional PBR library location: a gs:// URI or a local folder (default SCRATCHBOX_PBR_LIBRARY, else gs://scoutscan-pbr-library/PBR_Textures_Library).' },
+            fetchMaps: { type: 'BOOLEAN', description: 'Download each matched material\'s maps (colour, normal, roughness, displacement...) into the local cache and return their paths (default false: their gs:// URIs only; 8K sets are 100-170 MB each).' },
             outputDir: { type: 'STRING', description: 'Optional output folder (default .scratchbox/survey_swatches/<place> in the workspace).' }
         },
         required: ['place']
@@ -155,12 +156,13 @@ export function createSurveySwatchesHandler(deps: {
             try {
                 let match = deps.match;
                 if (!match) {
-                    const lib = resolvePbrLibrary(str(args.libraryPath) || undefined);
-                    ctx?.reportProgress?.(`indexing the PBR library at ${lib}`);
-                    const index = await indexPbrLibrary(lib, undefined, undefined, m => ctx?.reportProgress?.(m));
+                    const where = resolvePbrLibrary(str(args.libraryPath) || undefined);
+                    ctx?.reportProgress?.(`opening the PBR library at ${where}`);
+                    const library = await openPbrLibrary(where);
                     const jv = geminiJsonVision(vision as never);
-                    match = (s, workDir) => matchSwatchToLibrary({ photo: s.files.photoSwatch, description: s.description, sizeMeters: s.sizeMeters }, index, jv, workDir);
-                    libraryNote = `${index.names.length} materials in ${lib}`;
+                    const fetchMaps = args.fetchMaps === true;
+                    match = (s, workDir) => matchSwatchToLibrary({ photo: s.files.photoSwatch, description: s.description, sizeMeters: s.sizeMeters }, library, jv, workDir, { fetchMaps });
+                    libraryNote = `${library.names.length} materials in ${where}`;
                 } else libraryNote = 'library matching';
                 for (const s of r.swatches) {
                     try { matches.push(await match(s, path.join(harvestDir, 'library_match'))); } catch (err) { matches.push({ error: (err as Error).message }); }
