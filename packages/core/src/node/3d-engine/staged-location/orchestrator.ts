@@ -74,7 +74,7 @@ import {
 import { glbMeshCounts, plantTrees, summarizeTrees, type LocationClayTrees } from '../location-clay-pipeline';
 import { TileVegetationError, type TileVegetationPlantRequest, type TileVegetationPlantResult, type TileVegetationStripRequest, type TileVegetationStripResult } from '../tile-vegetation-service';
 import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service';
-import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorEvidence } from './vector-footprints';
+import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorBuilding, type VectorEvidence } from './vector-footprints';
 import { auditDistrict, DISTRICT_AUDIT_VERSION, districtStreetAuditSummary, type DistrictStreetAuditSummary } from './district-residual-audit';
 import { buildSceneInventory, sceneInventorySummary, SCENE_INVENTORY_VERSION, type InventoryCrown, type SceneInventorySummary } from './scene-inventory';
 import { buildDistrictMassingLayer, districtFootprint, districtMassingEnabled, DISTRICT_MASSING_PARAMS, DISTRICT_MASSING_VERSION, DISTRICT_TEXEL_M, massDistrict, planeFirstEnabled, proceduralDistrictEnabled } from './district-massing';
@@ -169,7 +169,7 @@ import { recordDiscoveredObjects } from '../../asset-store/object-catalog';
 import { genAiEnhanceClient, type EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { fetchFootprints, type FootprintSource } from './facade-footprints';
-import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
+import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, SCAN_FOOTPRINT_TOKEN, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
 import { PIPELINE_G_VERSION, runPipelineG, stagedPipelineG } from './pipeline-g/pipeline-g';
 import type { GroundedReferenceClient } from '../../spatial/search-grounded-reference';
 import type { MassingRun } from './pipeline-e/native-massing';
@@ -296,6 +296,22 @@ export function districtContainmentRadiusM(ev: VectorEvidence, baseRadiusM: numb
     }
     return Math.min(baseRadiusM + DISTRICT_CONTAINMENT_MAX_GROWTH_M, grown);
 }
+
+/**
+ * A fallback building for pipeline E/G when Google's vector data has no footprint at the place (e.g. the Great Pyramid
+ * of Giza: Google's vector tiles carry no building there) — extruded from the structure's own convex outline on the
+ * scan (StructurePickResult.outline, already computed in the tiles stage regardless of vector data) and its measured
+ * height, instead of leaving pipeline E unable to run and the build falling back to an unstructured remeshed scan.
+ * Labelled SCAN_FOOTPRINT_TOKEN ('measured', not 'vector-massing': a real, if simplified, measurement of the scan) by
+ * buildMassing/massingProvenance via VectorBuilding.provenance. The outline is its raw convex hull, not squared to right
+ * angles or otherwise regularized — a footprint-regularization pass on it would be a natural follow-up, not done here.
+ * Returns undefined when there is no structure, a usable vector footprint already exists, or the outline is degenerate.
+ */
+export function scanDerivedFootprint(structure: Pick<StructurePickResult, 'outline' | 'heightM'> | undefined): VectorBuilding | undefined {
+    if (!structure || structure.outline.length < 3) return undefined;
+    return { id: 'scan-derived-footprint', parts: [], extruded: [{ loops: [structure.outline], heightM: structure.heightM }], provenance: SCAN_FOOTPRINT_TOKEN };
+}
+
 export const STAGE_IDS = Object.keys(STAGES) as StageId[];
 
 /** The tool's budget is 40 minutes; the run stops starting stages 2 minutes before it. */
@@ -1683,7 +1699,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // 2026-10-22 confirms it): the structure from the vector massing; it needs the building's vector footprint, else
         // the remesh pipeline runs and the reason is recorded
         const pipelineE = stagedPipelineE() && request.isolate;
-        const eBuildings = structure?.vectorFootprint?.used && t.vector ? t.vector.raster.buildings.filter(b => structure.vectorFootprint!.featureIds.includes(b.id)) : [];
+        // no usable vector footprint at the place (eg. the Great Pyramid of Giza): pipeline E still runs, on the
+        // structure's own convex outline on the scan instead of leaving it to the unstructured remeshed-scan fallback.
+        // structure.vectorFootprint is only present when a vector-evidence lookup actually ran (extraction-sizing.ts);
+        // it stays undefined, not {used:false}, when none was attempted at all (no credentials, vector-less test
+        // fixtures) — the scan fallback only replaces a lookup that genuinely ran and found nothing, never a lookup
+        // that was never tried, so it does not change behaviour anywhere vector evidence is simply not in the picture.
+        const eBuildings = structure?.vectorFootprint?.used && t.vector
+            ? t.vector.raster.buildings.filter(b => structure.vectorFootprint!.featureIds.includes(b.id))
+            : (() => { const b = structure?.vectorFootprint && !structure.vectorFootprint.used ? scanDerivedFootprint(structure) : undefined; return b ? [b] : []; })();
         // the shape program trial (SCRATCHBOX_STAGED_SHAPE_PROGRAM) shapes from the tree-free scan: a vector footprint only
         // bounds the height map where the two agree, so a footprint that disagrees (or none) does not send the build back
         const shapeMode = pipelineE ? stagedShapeProgram() : undefined;

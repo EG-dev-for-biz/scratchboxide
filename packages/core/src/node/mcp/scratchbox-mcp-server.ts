@@ -64,6 +64,15 @@ import {
     TURNAROUND_TOOL_DECLARATIONS, turnaroundHandlers,
     NANO_BANANA_TOOL_DECLARATIONS, nanoBananaHandlers,
     IMAGE_GENERATION_TOOL_DECLARATIONS, imageGenerationHandlers,
+
+    OBJECT_REFERENCE_TOOL_DECLARATIONS, objectReferenceHandlers,
+    SB_SCRIPT_GUIDE_TOOL_DECLARATIONS, sbScriptGuideHandlers,
+    VIRTUAL_GEOMETRY_TOOL_DECLARATIONS, virtualGeometryHandlers,
+    LOCATION_EVIDENCE_TOOL_DECLARATIONS, locationEvidenceHandlers,
+    LOCATION_REFERENCE_TOOL_DECLARATIONS, locationReferenceHandlers,
+    SURFACE_MATERIALS_TOOL_DECLARATIONS, surfaceMaterialsHandlers,
+    ALGORITHMIC_UV_TOOL_DECLARATIONS, algorithmicUvHandlers,
+    SB_RIG_TOOL_DECLARATIONS, sbRigHandlers,
     type ToolDeclaration,
     type ToolHandler,
     type ToolContext,
@@ -96,6 +105,15 @@ const STANDALONE_PACKS: Array<[ToolDeclaration[], Record<string, ToolHandler>]> 
     [TURNAROUND_TOOL_DECLARATIONS, turnaroundHandlers],
     [NANO_BANANA_TOOL_DECLARATIONS, nanoBananaHandlers],
     [IMAGE_GENERATION_TOOL_DECLARATIONS, imageGenerationHandlers],
+
+    [OBJECT_REFERENCE_TOOL_DECLARATIONS, objectReferenceHandlers],
+    [SB_SCRIPT_GUIDE_TOOL_DECLARATIONS, sbScriptGuideHandlers],
+    [VIRTUAL_GEOMETRY_TOOL_DECLARATIONS, virtualGeometryHandlers],
+    [LOCATION_EVIDENCE_TOOL_DECLARATIONS, locationEvidenceHandlers],
+    [LOCATION_REFERENCE_TOOL_DECLARATIONS, locationReferenceHandlers],
+    [SURFACE_MATERIALS_TOOL_DECLARATIONS, surfaceMaterialsHandlers],
+    [ALGORITHMIC_UV_TOOL_DECLARATIONS, algorithmicUvHandlers],
+    [SB_RIG_TOOL_DECLARATIONS, sbRigHandlers],
 ];
 
 const allDeclarations: ToolDeclaration[] = [];

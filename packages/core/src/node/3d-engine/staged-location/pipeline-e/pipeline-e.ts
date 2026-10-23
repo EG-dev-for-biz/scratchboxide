@@ -53,6 +53,10 @@ export const PIPELINE_E_VERSION = `pipeline-e/v2${facadeMaterialsEnabled() ? '+m
 /** Provenance tokens of the shape program trial's parts (passed through the native tool to the nodes). */
 export const SHAPE_TIERS_TOKEN = 'shape-tiers-measured';
 export const SHAPE_PROGRAM_TOKEN = 'shape-program-inferred';
+/** The provenance token of a part extruded from the scan's own convex outline (orchestrator.ts's scanDerivedFootprint),
+ *  used instead of Google's vector footprint when there is none at the place: a real measurement of the scan, simplified
+ *  to its hull, not a guess, so it is labelled 'measured' rather than falling through to 'vector-massing'. */
+export const SCAN_FOOTPRINT_TOKEN = 'scan-footprint-measured';
 
 /**
  * On by default for an isolated structure (2026-10-21, the round-3 bake-off: E-enhanced scored highest of every arm on
@@ -131,6 +135,9 @@ export function massingProvenance(node: Pick<MassingNode, 'kind' | 'provenance' 
     // model from the tree-free scan, its numbers fitted to the scan (the parameters and their labels in the stage's note)
     if (node.provenance === SHAPE_TIERS_TOKEN) return { label: 'measured', measuredGeometry: true, confidence: 0.8, method: 'shape program trial: stacked extrusions at the tree-free scan\'s tier heights (height-map modes), outlines traced from its height map and squared to the dominant wall directions', sources: [{ kind: 'tile-extraction', id: 'isolate' }] };
     if (node.provenance === SHAPE_PROGRAM_TOKEN) return { label: 'photo-inferred', measuredGeometry: false, confidence: 0.6, method: 'shape program trial: the structure read by a vision model from a contact sheet of the tree-free scan (one call, structured output), as continuous geometric operators; every numeric handle fitted to the scan\'s height map and oblique silhouettes (measured)', sources: [{ kind: 'tile-extraction', id: 'isolate' }, { kind: 'stage-output', id: 'shape-program' }] };
+    // no Google vector footprint at the place: extruded from the scan's own convex outline instead (orchestrator.ts's
+    // scanDerivedFootprint) — a real measurement of the scan, simplified to its hull, so 'measured', not 'vector-massing'
+    if (node.provenance === SCAN_FOOTPRINT_TOKEN) return { label: 'measured', measuredGeometry: true, confidence: Math.max(0, Math.min(1, massing.check.iou)), method: 'no Google vector footprint at the place: the structure\'s own convex outline on the scan, extruded to its measured height, instead of a vector footprint', sources: [{ kind: 'tile-extraction', id: 'isolate' }], note: `plan IoU with the scan ${massing.check.iou}, roof ${massing.check.heightErrMedianM} m off the scan (median)` };
     if (node.provenance === 'photo-inferred' || (node.kind === 'roof' && node.provenance.includes('photo-inferred'))) return { label: 'photo-inferred', measuredGeometry: false, confidence: Math.max(0, Math.min(1, node.confidence ?? 0.5)), method: `pipeline E inference: ${node.kind} read from the tile's photo and kept where the scan agrees`, sources: [{ kind: 'stage-output', id: 'pipeline-e-inference' }] };
     return {
         label: 'vector-massing', measuredGeometry: false, confidence: Math.max(0, Math.min(1, massing.check.iou)),

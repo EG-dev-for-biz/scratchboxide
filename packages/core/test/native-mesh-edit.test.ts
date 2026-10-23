@@ -163,6 +163,72 @@ describe('mesh_edit: booleans, cuts and extrusions on a given mesh', () => {
         fs.writeFileSync(path.join(SHOTS, 'mesh-edit-bevel.png'), renderClayPng([{ positions: t.positions, indices: t.indices }], { kind: 'aerial', width: 900, height: 640, bearingDeg: 120, elevationDeg: 30 }));
     }, 120_000);
 
+    it('shell, mirror, array and fracture keep the volumes a hand calculation gives', async () => {
+        const vol = async (name: string, operations: MeshEditOperation[]) => {
+            const r = await service.edit({ inputGlbPath: input, outputGlbPath: path.join(WORK, `${name}.glb`), operations });
+            const s = solidStats(r.outputGlbPath);
+            expect(r.openEdges, name).toBe(0);
+            expect(s.open, name).toBe(0);
+            return { r, v: s.volume };
+        };
+        // a 0.1 m wall: 4 less the 1.8 x 0.8 x 1.8 m cavity
+        expect((await vol('shell', [{ type: 'shell', thickness: 0.1 }])).v).toBeCloseTo(4 - 1.8 * 0.8 * 1.8, 6);
+        expect((await vol('mirror', [{ type: 'mirror', point: [1.2, 0, 0], normal: [1, 0, 0] }])).v).toBeCloseTo(8, 6);
+        // overlapping copies fuse: three blocks 1.5 m apart overlap 0.5 m twice
+        expect((await vol('row', [{ type: 'array', count: 3, offset: [1.5, 0, 0] }])).v).toBeCloseTo(4 * 3 - 2 * 0.5 * 1 * 2, 5);
+        expect((await vol('ring', [{ type: 'array', count: 4, stepDeg: 90, axisPoint: [3, 0, 0], axisDir: [0, 1, 0] }])).v).toBeCloseTo(16, 5);
+        const f = await vol('fracture', [{ type: 'fracture', pieces: 8, seed: 3 }]);
+        expect(f.v).toBeCloseTo(4, 5);
+        expect(f.r.operations[0]).toMatchObject({ pieces: 8 });
+    }, 180_000);
+
+    it('a sweep adds a rail and cuts a channel', async () => {
+        const rail = await service.edit({ inputGlbPath: input, outputGlbPath: path.join(WORK, 'rail.glb'), operations: [{ type: 'sweep', path: [[-1.5, 0.5, 0], [1.5, 0.5, 0]], radius: 0.1, segments: 32 }] });
+        // the half of a 3 m rod above the top face, with the ends that stick out whole
+        const rodArea = 0.5 * 32 * 0.01 * Math.sin((2 * Math.PI) / 32);
+        expect(solidStats(rail.outputGlbPath).volume).toBeCloseTo(4 + rodArea * (0.5 * 2 + 1), 4);
+        const channel = await service.edit({ inputGlbPath: input, outputGlbPath: path.join(WORK, 'channel.glb'), operations: [{ type: 'sweep', op: 'subtract', path: [[0, 0.5, -2], [0, 0.5, 2]], profile: [[-0.2, -0.1], [0.2, -0.1], [0.2, 0.1], [-0.2, 0.1]] }] });
+        expect(solidStats(channel.outputGlbPath).volume).toBeCloseTo(4 - 0.4 * 0.1 * 2, 5);
+        expect(channel.openEdges).toBe(0);
+    }, 120_000);
+
+    it('clean drops the points booleans leave without changing the shape; decimate bounds how far the surface moves', async () => {
+        const messy = await service.edit({ inputGlbPath: input, outputGlbPath: path.join(WORK, 'messy.glb'), operations: [DRILL, { type: 'boolean', op: 'union', operand: { sphere: { center: [-1, 0.5, 0], radius: 0.4 } } }] });
+        const clean = await service.edit({ inputGlbPath: messy.outputGlbPath, outputGlbPath: path.join(WORK, 'clean.glb'), operations: [{ type: 'clean' }] });
+        expect(clean.outputTriangles).toBeLessThan(messy.outputTriangles * 0.6);
+        expect(solidStats(clean.outputGlbPath).volume).toBeCloseTo(solidStats(messy.outputGlbPath).volume, 5);
+        expect(clean.openEdges).toBe(0);
+        const lod = await service.edit({ inputGlbPath: messy.outputGlbPath, outputGlbPath: path.join(WORK, 'lod.glb'), operations: [{ type: 'decimate', maxErrorM: 0.02 }] });
+        expect(Number(lod.operations[0].maxErrorM)).toBeLessThanOrEqual(0.02);
+        expect(lod.openEdges).toBe(0);
+    }, 120_000);
+
+    it('relief cuts grooves into the top only and smooth rounds a block, both staying closed', async () => {
+        const grooves = await service.edit({
+            inputGlbPath: input, outputGlbPath: path.join(WORK, 'grooves.glb'),
+            operations: [{ type: 'relief', select: { direction: [0, 1, 0], coneDeg: 5 }, edgeLength: 0.05, amplitude: -0.03, direction: [1, 0, 0], period: 0.25, duty: 0.3 }]
+        });
+        const g = solidStats(grooves.outputGlbPath);
+        expect(g.open).toBe(0);
+        expect(g.volume).toBeLessThan(4 - 0.005);
+        expect(g.volume).toBeGreaterThan(4 - 2 * 2 * 0.03 * 0.3 - 0.002);
+        expect(grooves.boundsMin[1]).toBeCloseTo(-0.5, 6);
+        const round = await service.edit({ inputGlbPath: input, outputGlbPath: path.join(WORK, 'round.glb'), operations: [{ type: 'smooth', edgeLength: 0.1, iterations: 20 }] });
+        expect(round.openEdges).toBe(0);
+        const t = readGlbTriangles(fs.readFileSync(grooves.outputGlbPath));
+        fs.writeFileSync(path.join(SHOTS, 'mesh-edit-relief.png'), renderClayPng([{ positions: t.positions, indices: t.indices }], { kind: 'aerial', width: 900, height: 640, bearingDeg: 150, elevationDeg: 40 }));
+    }, 180_000);
+
+    it('mesh_inspect reports bounds, closedness and the largest faces with ready-made regions', async () => {
+        const r = await service.inspect(input);
+        expect(r.closed).toBe(true);
+        expect(r.volumeM3).toBeCloseTo(4, 6);
+        expect(r.size).toEqual([2, 1, 2]);
+        expect(r.sharpEdges.convex).toBe(12);   // the box's 12 edges (each face's diagonal is flat)
+        expect(r.sharpEdges.concave).toBe(0);
+        expect(r.largestFaces[0].areaM2).toBeCloseTo(4, 6);
+    }, 60_000);
+
     it('refuses what it cannot do faithfully, with the reason', async () => {
         await expect(service.edit({ inputGlbPath: input, operations: [] })).rejects.toBeInstanceOf(MissingInputError);
         await expect(service.edit({ inputGlbPath: path.join(WORK, 'none.glb'), operations: [DRILL] })).rejects.toBeInstanceOf(MissingInputError);

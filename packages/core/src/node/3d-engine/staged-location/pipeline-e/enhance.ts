@@ -143,11 +143,11 @@ export function preserveClause(width: number, height: number): string {
 
 export interface AlignResult { dx: number; dy: number; scale: number; chamferPx: number; lostShare: number; accepted: boolean; why: string; aligned: Uint8Array }
 
-/** Edge pixels of an RGBA image over the `use` pixels. */
-function edges(rgba: Uint8Array, W: number, H: number, use: Uint8Array): Uint8Array { return edgeMap(lumaPlane(rgba, W, H), W, H, use, 0.88, 1); }
+/** Edge pixels of an RGBA image over the `use` pixels. Exported for pipeline-g.ts's geometry alignment (alignTextureToOpenings), which targets a synthetic opening-boundary map rather than a second photo. */
+export function edges(rgba: Uint8Array, W: number, H: number, use: Uint8Array): Uint8Array { return edgeMap(lumaPlane(rgba, W, H), W, H, use, 0.88, 1); }
 
-/** Samples `src` (W x H) shifted and scaled about the centre (bilinear). */
-function transform(src: Uint8Array, W: number, H: number, dx: number, dy: number, s: number): Uint8Array {
+/** Samples `src` (W x H) shifted and scaled about the centre (bilinear). Exported for pipeline-g.ts's geometry alignment. */
+export function transform(src: Uint8Array, W: number, H: number, dx: number, dy: number, s: number): Uint8Array {
     const out = new Uint8Array(W * H * 4), cx = W / 2, cy = H / 2;
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
         const sx = Math.max(0, Math.min(W - 1.001, (x - cx - dx) / s + cx)), sy = Math.max(0, Math.min(H - 1.001, (y - cy - dy) / s + cy));
@@ -271,6 +271,13 @@ export interface EnhanceWallRecord {
     infill?: { decision: string; holePixels: number; filledPixels: number; reason?: string; model?: string };
     /** The quality score of the texture as written (facade-texture/quality.ts, the `quality` option). */
     quality?: { passed: boolean; emptyShare: number; seams: number; smearShare: number; sharpness: number; why: string; openings?: { passed: boolean; contrast: number; smoothRatio: number } };
+    /**
+     * The plate's texture vs. the wall's own built openings (pipeline-g.ts's alignTextureToOpenings, run before the facade
+     * texture builder sees it): a residual drift the plate's purely geometric reprojection onto the wall cannot catch, such
+     * as a survey station's pose being a little off. Absent when the wall has no read openings, or the plate saw none of
+     * them.
+     */
+    geometryAlign?: { dx: number; dy: number; chamferPx: number; coveredOpenings: number; why: string };
 }
 
 /**

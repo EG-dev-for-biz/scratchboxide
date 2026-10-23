@@ -511,6 +511,13 @@ NB_MODULE(scratchbox_native, m) {
             processing::DifferentialGeometryEngine::bakeCavityAO(self, intensity);
             return self;
         }, "intensity"_a = 0.65f)
+        .def("bake_rtao", [](ScratchboxMesh& self, int samplesPerVertex, float maxDistance, float intensity, uint32_t seed) -> ScratchboxMesh& {
+            bvh::bakeMeshRTAO(self, samplesPerVertex, maxDistance, intensity, seed);
+            return self;
+        }, "samples_per_vertex"_a = 16, "max_distance"_a = 1.5f, "intensity"_a = 1.0f, "seed"_a = 42)
+        .def("compute_rtao", [](const ScratchboxMesh& self, int samplesPerVertex, float maxDistance, uint32_t seed) {
+            return bvh::computeMeshRTAO(self, samplesPerVertex, maxDistance, seed);
+        }, "samples_per_vertex"_a = 16, "max_distance"_a = 1.5f, "seed"_a = 42)
         .def("slice_by_plane", [](ScratchboxMesh& self, const Vec3& planePoint, const Vec3& planeNormal, bool keepPositive, bool capCut) -> ScratchboxMesh& {
             ScratchboxMesh res = processing::PlanarSlicer::slice(self, planePoint, planeNormal, keepPositive, capCut);
             self.vertices = std::move(res.vertices);
@@ -529,18 +536,21 @@ NB_MODULE(scratchbox_native, m) {
             self.bounds = res.bounds;
             return self;
         }, "target_edge_length"_a = 0.25f, "iterations"_a = 4, "crease_angle_deg"_a = 45.0f)
-        .def("decimate_qem", [](ScratchboxMesh& self, size_t targetTriangles, float targetRatio, float maxError, bool preserveBoundary) -> ScratchboxMesh& {
+        .def("decimate_qem", [](ScratchboxMesh& self, size_t targetTriangles, float targetRatio, float maxError, bool preserveBoundary, bool preserveCreases, float creaseAngleDeg) -> ScratchboxMesh& {
             processing::DecimateOptions opt;
             opt.targetTriangles = targetTriangles;
             opt.targetRatio = targetRatio;
             opt.maxError = maxError;
             opt.preserveBoundary = preserveBoundary;
+            opt.preserveCreases = preserveCreases;
+            opt.creaseAngleDeg = creaseAngleDeg;
             ScratchboxMesh res = processing::QuadricDecimator::decimate(self, opt);
             self.vertices = std::move(res.vertices);
             self.indices = std::move(res.indices);
             self.bounds = res.bounds;
             return self;
-        }, "target_triangles"_a = 0, "target_ratio"_a = 0.5f, "max_error"_a = 1e9f, "preserve_boundary"_a = true)
+        }, "target_triangles"_a = 0, "target_ratio"_a = 0.5f, "max_error"_a = 1e9f, "preserve_boundary"_a = true,
+           "preserve_creases"_a = false, "crease_angle_deg"_a = 45.0f)
         .def("decimate", [](ScratchboxMesh& self, float ratio, size_t targetTriangles) -> ScratchboxMesh& {
             processing::DecimateOptions opt;
             opt.targetTriangles = targetTriangles;
@@ -621,9 +631,9 @@ NB_MODULE(scratchbox_native, m) {
         return ScratchboxMesh::createArchedBlister(bounds, archRadius, swell, gridPhi, gridW, sideSign, color);
     }, "bounds"_a = Vec3(0.35f, 0.45f, 0.9f), "arch_radius"_a = 0.40f, "swell"_a = 0.08f, "grid_phi"_a = 16, "grid_w"_a = 8, "side_sign"_a = 1.0f, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f));
 
-    m_geom.def("create_lathe", [](const std::vector<Vec2>& profile, int radialSegments, float totalAngleRad, const Vec4& color) {
-        return shaper::Lathe3D::revolve(profile, radialSegments, totalAngleRad, color);
-    }, "profile"_a, "radial_segments"_a = 32, "total_angle_rad"_a = math::TWO_PI, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f));
+    m_geom.def("create_lathe", [](const std::vector<Vec2>& profile, int radialSegments, float totalAngleRad, const Vec4& color, bool capEnds) {
+        return shaper::Lathe3D::revolve(profile, radialSegments, totalAngleRad, color, capEnds);
+    }, "profile"_a, "radial_segments"_a = 32, "total_angle_rad"_a = math::TWO_PI, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f), "cap_ends"_a = false);
 
     m_geom.def("create_loft", [](const std::vector<std::vector<Vec3>>& slices, bool closeEnds, const Vec4& color) {
         return shaper::Loft3D::skin(slices, closeEnds, color);
@@ -912,9 +922,9 @@ NB_MODULE(scratchbox_native, m) {
         return shaper::Loft3D::skin(slices, closeEnds, color);
     }, "slices"_a, "close_ends"_a = true, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f), "Loft skin between 3D station slices");
 
-    m_shaper.def("lathe", [](const std::vector<Vec2>& profile, int radialSegments, float totalAngleRad, const Vec4& color) {
-        return shaper::Lathe3D::revolve(profile, radialSegments, totalAngleRad, color);
-    }, "profile"_a, "radial_segments"_a = 32, "total_angle_rad"_a = math::TWO_PI, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f), "Revolve 2D profile into rotational solid");
+    m_shaper.def("lathe", [](const std::vector<Vec2>& profile, int radialSegments, float totalAngleRad, const Vec4& color, bool capEnds) {
+        return shaper::Lathe3D::revolve(profile, radialSegments, totalAngleRad, color, capEnds);
+    }, "profile"_a, "radial_segments"_a = 32, "total_angle_rad"_a = math::TWO_PI, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f), "cap_ends"_a = false, "Revolve 2D profile into rotational solid; cap_ends closes an open axial hole on a full sweep");
 
     m_shaper.def("sweep", [](const std::vector<Vec3>& curve, const std::vector<Vec2>& profile, float totalTwistRad, float startScale, float endScale, bool closeEnds, const Vec4& color) {
         return shaper::Sweep3D::sweep(curve, profile, totalTwistRad, startScale, endScale, closeEnds, color);
@@ -1202,15 +1212,19 @@ NB_MODULE(scratchbox_native, m) {
     }, "mesh"_a, "iterations"_a = 10, "lambda_val"_a = 0.5f, "mu_val"_a = -0.53f, "preserve_boundaries"_a = true,
        "Apply volume-preserving, non-shrinking Taubin low-pass smoothing filter");
 
-    m_proc.def("decimate_qem", [](const ScratchboxMesh& mesh, size_t targetTriangles, float targetRatio, float maxError, bool preserveBoundary) {
+    m_proc.def("decimate_qem", [](const ScratchboxMesh& mesh, size_t targetTriangles, float targetRatio, float maxError, bool preserveBoundary, bool preserveCreases, float creaseAngleDeg) {
         processing::DecimateOptions opt;
         opt.targetTriangles = targetTriangles;
         opt.targetRatio = targetRatio;
         opt.maxError = maxError;
         opt.preserveBoundary = preserveBoundary;
+        opt.preserveCreases = preserveCreases;
+        opt.creaseAngleDeg = creaseAngleDeg;
         return processing::QuadricDecimator::decimate(mesh, opt);
     }, "mesh"_a, "target_triangles"_a = 0, "target_ratio"_a = 0.5f, "max_error"_a = 1e9f, "preserve_boundary"_a = true,
-       "Garland-Heckbert Quadric Error Metrics (QEM) decimation preserving surface silhouettes and curvature");
+       "preserve_creases"_a = false, "crease_angle_deg"_a = 45.0f,
+       "Garland-Heckbert Quadric Error Metrics (QEM) decimation preserving surface silhouettes and curvature; "
+       "preserve_creases locks sharp edges (dihedral angle >= crease_angle_deg) with an extra constraint quadric");
 
     m_proc.def("poisson_sample", [](const ScratchboxMesh& mesh, size_t count, float minDistance, uint32_t seed) {
         processing::PoissonSampleOptions opt;
@@ -1235,6 +1249,16 @@ NB_MODULE(scratchbox_native, m) {
     m_proc.def("bake_cavity_ao", [](ScratchboxMesh& mesh, float intensity) {
         processing::DifferentialGeometryEngine::bakeCavityAO(mesh, intensity);
     }, "mesh"_a, "intensity"_a = 0.65f, "Bake geometric cavity ambient occlusion into vertex colors");
+
+    m_proc.def("compute_rtao", [](const ScratchboxMesh& mesh, int samplesPerVertex, float maxDistance, uint32_t seed) {
+        return bvh::computeMeshRTAO(mesh, samplesPerVertex, maxDistance, seed);
+    }, "mesh"_a, "samples_per_vertex"_a = 16, "max_distance"_a = 1.5f, "seed"_a = 42,
+       "Per-vertex ambient occlusion in [0, 1] from BVH cosine-weighted hemisphere ray casts (1 = fully open, 0 = fully occluded)");
+
+    m_proc.def("bake_rtao", [](ScratchboxMesh& mesh, int samplesPerVertex, float maxDistance, float intensity, uint32_t seed) {
+        bvh::bakeMeshRTAO(mesh, samplesPerVertex, maxDistance, intensity, seed);
+    }, "mesh"_a, "samples_per_vertex"_a = 16, "max_distance"_a = 1.5f, "intensity"_a = 1.0f, "seed"_a = 42,
+       "Bake BVH ray-traced ambient occlusion (compute_rtao) into vertex colors");
 
     m_proc.def("clean_mesh", [](const ScratchboxMesh& mesh, float weldEpsilon) {
         processing::CleanMeshOptions opt;

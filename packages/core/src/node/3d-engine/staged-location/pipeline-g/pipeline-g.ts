@@ -47,7 +47,9 @@ import { massingSpecText, type FaceSweepItem, type Massing, type OpeningItem } f
 import { readFaceOrtho, runMassing, type MassingFace, type MassingRun } from '../pipeline-e/native-massing';
 import { writeMassingLayer } from '../pipeline-e/pipeline-e';
 import type { InferenceOutcome, StepRecord } from '../pipeline-e/inference';
-import { ENHANCE_CONCURRENCY, TEXTURE_PLATE_PROMPT_ID, type EnhanceWallRecord, type PlateModelClient } from '../pipeline-e/enhance';
+import { ENHANCE_CONCURRENCY, MAX_SHIFT_PX, SEARCH_SIDE, TEXTURE_PLATE_PROMPT_ID, edges, transform, type EnhanceWallRecord, type PlateModelClient } from '../pipeline-e/enhance';
+import { exactDistanceTransform } from '../../../spatial/StreetViewStage3Metrics';
+import { resizeRgba } from '../texture-enhance';
 import { visionFacadeCounter } from '../pipeline-e/plate-identity';
 import { buildFacadeTexture, repeatFill } from '../facade-texture/facade-texture';
 import type { EnhanceModelClient } from '../texture-enhance';
@@ -318,6 +320,78 @@ export function plateOntoFace(f: MassingFace, painted: FaceTexture, pl: Plate, p
     return covered ? { tex: { width: painted.width, height: painted.height, rgba, source: painted.source.slice() }, use, covered: covered / use.length, openings: enclosedHoles(through, painted.width, painted.height, f.pixel), street } : undefined;
 }
 
+export interface GeometryAlignResult { dx: number; dy: number; chamferPx: number; coveredOpenings: number; why: string; aligned: Uint8Array }
+
+/** The opening rectangles' own silhouette (inOpening, which already draws the arch) rasterised at (W, H) over a grid pixel pM metres wide, and its boundary pixels (a mask transition) restricted to `use`: a chamfer target like alignPlate's edges(), built from geometry instead of a second photo. */
+function openingBoundary(openings: Array<Pick<OpeningItem, 's0' | 's1' | 't0' | 't1' | 'archRiseM'>>, frame: Pick<MassingFace, 'orthoSMin' | 'orthoTMax'>, W: number, H: number, pM: number, use: Uint8Array): { boundary: Uint8Array; covered: number } {
+    const mask = new Uint8Array(W * H);
+    let covered = 0;
+    for (const o of openings) {
+        const x0 = Math.max(0, Math.floor((o.s0 - frame.orthoSMin) / pM)), x1 = Math.min(W - 1, Math.ceil((o.s1 - frame.orthoSMin) / pM));
+        const y0 = Math.max(0, Math.floor((frame.orthoTMax - o.t1) / pM)), y1 = Math.min(H - 1, Math.ceil((frame.orthoTMax - o.t0) / pM));
+        let seen = false;
+        for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+            const s = frame.orthoSMin + (x + 0.5) * pM, t = frame.orthoTMax - (y + 0.5) * pM;
+            if (!inOpening(o, s, t)) continue;
+            mask[y * W + x] = 1;
+            if (use[y * W + x]) seen = true;
+        }
+        if (seen) covered++;
+    }
+    const boundary = new Uint8Array(W * H);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        if (!mask[i] || !use[i]) continue;
+        if (x === 0 || y === 0 || x === W - 1 || y === H - 1 || !mask[i - 1] || !mask[i + 1] || !mask[i - W] || !mask[i + W]) boundary[i] = 1;
+    }
+    return { boundary, covered };
+}
+
+/**
+ * A small corrective shift (alignPlate's edge-chamfer search, translation only: the grid plateOntoFace wrote the texture
+ * onto is already correctly scaled, so unlike alignPlate there is no scale to search) that brings a texture plateOntoFace
+ * already placed by its geometric reprojection nearest the wall's OWN known openings (the facade program's read
+ * rectangles, the same ones the native build actually opened) — catching a residual drift the reprojection cannot, such
+ * as a survey station's calibrated pose being a little off the true camera. Openings plateOntoFace's own `use` never
+ * covers (behind cladding the plate never saw) are excluded from both the target and the reported count; a wall with
+ * none covered, or no read openings at all, is returned unchanged.
+ */
+export function alignTextureToOpenings(texture: Uint8Array, W: number, H: number, use: Uint8Array, openings: Array<Pick<OpeningItem, 's0' | 's1' | 't0' | 't1' | 'archRiseM'>>, frame: Pick<MassingFace, 'orthoSMin' | 'orthoTMax' | 'pixel'>, pixelM: number): GeometryAlignResult {
+    if (!openings.length) return { dx: 0, dy: 0, chamferPx: 0, coveredOpenings: 0, why: 'no read openings on this wall to align against', aligned: texture };
+    const full = openingBoundary(openings, frame, W, H, frame.pixel, use);
+    if (!full.covered) return { dx: 0, dy: 0, chamferPx: 0, coveredOpenings: 0, why: 'none of the read openings land where the plate saw the wall', aligned: texture };
+    // the search on a copy at most SEARCH_SIDE px long (shift in its pixels, like alignPlate), the measurement at full size
+    const k = Math.min(1, SEARCH_SIDE / Math.max(W, H));
+    const w = Math.max(8, Math.round(W * k)), h = Math.max(8, Math.round(H * k));
+    const texS = resizeRgba({ width: W, height: H, rgba: texture }, w, h).rgba;
+    const useS = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) useS[y * w + x] = use[Math.min(H - 1, Math.floor((y + 0.5) / k)) * W + Math.min(W - 1, Math.floor((x + 0.5) / k))];
+    const { boundary: boundaryS } = openingBoundary(openings, frame, w, h, frame.pixel / k, useS);
+    const dtS = exactDistanceTransform(boundaryS, w, h);
+    const meanS = (img: Uint8Array) => {
+        const e = edges(img, w, h, useS);
+        let s = 0, n = 0;
+        for (let i = 0; i < w * h; i++) if (e[i] && useS[i]) { s += Math.min(8, dtS[i]); n++; }
+        return n ? s / n : 8;
+    };
+    const R = Math.max(1, Math.round(MAX_SHIFT_PX * k));
+    let best = { dx: 0, dy: 0, v: meanS(texS) };
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+        if (!dx && !dy) continue;
+        const v = meanS(transform(texS, w, h, dx, dy, 1));
+        if (v < best.v - 1e-6) best = { dx, dy, v };
+    }
+    const dx = Math.round(best.dx / k), dy = Math.round(best.dy / k);
+    const aligned = (dx || dy) ? transform(texture, W, H, dx, dy, 1) : texture;
+    // the measurement at full size, against the full-resolution boundary already built above
+    const dtFull = exactDistanceTransform(full.boundary, W, H);
+    const eAligned = edges(aligned, W, H, use);
+    let s = 0, n = 0;
+    for (let i = 0; i < W * H; i++) if (eAligned[i] && use[i]) { s += Math.min(8, dtFull[i]); n++; }
+    const chamferPx = Math.round((n ? s / n : 8) * 100) / 100;
+    return { dx, dy, chamferPx, coveredOpenings: full.covered, why: `corrective shift ${dx}, ${dy} px (${(dx * pixelM).toFixed(2)}, ${(dy * pixelM).toFixed(2)} m) against ${full.covered} read opening${full.covered === 1 ? '' : 's'} the plate saw; mean edge-to-opening-boundary distance ${chamferPx.toFixed(2)} px (${(chamferPx * pixelM).toFixed(2)} m)`, aligned };
+}
+
 /** Runs `fn` over `xs` with at most `n` in flight. */
 async function pool<T, R>(xs: T[], n: number, fn: (x: T) => Promise<R>): Promise<R[]> {
     const out: R[] = new Array(xs.length);
@@ -491,12 +565,24 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
         const e = input.enhance;
         const step: StepRecord = { step: 'facade textures', proposed: 0, accepted: 0, rejected: 0, notes: [], ms: 0 };
         const plateOf = (f: MassingFace) => plates.find(p => p.key === f.key || f.key.startsWith(p.key + ':') || p.key === grouping.groupOf.get(f.key));
+        // the same lookup paintFaces used, so the geometry alignment below targets exactly the openings this wall was painted with
+        const ownOf = (f: MassingFace) => built.get(f.key) ?? [...built.entries()].find(([k]) => f.key.startsWith(k + ':'))?.[1];
         const walls = run.report.faces.filter(f => f.kind === 'wall' && textures.has(f.index) && plateOf(f) && items.has(plateOf(f)!.key)).sort((a, b) => b.area - a.area);
         const done: FaceTexture[] = [];
         const one = async (f: MassingFace) => {
             const pl = plateOf(f)!;
             const on = plateOntoFace(f, textures.get(f.index)!, pl, surveyFaces[pl.face]);
             if (!on) return;
+            // the plate's own geometric reprojection can still drift from the wall's built openings (eg. a station's pose a
+            // little off): a small corrective shift against what the wall itself was actually opened at, before the facade
+            // texture builder sees it (so its reference crop and the quality score both judge the corrected texture)
+            const ownOpenings = ownOf(f)?.openings ?? [];
+            let geometryAlign: EnhanceWallRecord['geometryAlign'];
+            if (ownOpenings.length) {
+                const align = alignTextureToOpenings(on.tex.rgba, on.tex.width, on.tex.height, on.use, ownOpenings, f, f.pixel);
+                if (align.dx || align.dy) on.tex.rgba = align.aligned;
+                geometryAlign = { dx: align.dx, dy: align.dy, chamferPx: align.chamferPx, coveredOpenings: align.coveredOpenings, why: align.why };
+            }
             progress(`pipeline G: drawing the facade texture of wall ${f.index} (${Math.round(f.area)} m2)`);
             const r = await buildFacadeTexture(f, on.tex, on.use, {
                 client: e.client, models: e.models, locationName: input.place, source: G_SRC.enhanced,
@@ -515,7 +601,7 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
                 streetBandM: STREET_CLUTTER_M
             });
             step.proposed++;
-            enhanced.push({ ...r, plate: undefined, guarded: undefined, labels: undefined, grid: undefined } as EnhanceWallRecord);
+            enhanced.push({ ...r, plate: undefined, guarded: undefined, labels: undefined, grid: undefined, ...(geometryAlign ? { geometryAlign } : {}) } as EnhanceWallRecord);
             if (r.accepted) { step.accepted++; textures.set(f.index, on.tex); done.push(on.tex); }
             else step.rejected++;
             step.notes.push(`wall ${f.index}: ${r.accepted ? 'textured' : 'keeps its painted colours'}: ${r.why}${r.model ? ` (${r.model})` : ''}`);
