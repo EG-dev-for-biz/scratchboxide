@@ -639,6 +639,35 @@ NB_MODULE(scratchbox_native, m) {
         return shaper::Loft3D::skin(slices, closeEnds, color);
     }, "slices"_a, "close_ends"_a = true, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f));
 
+    m_geom.def("create_sweep", [](const std::vector<Vec3>& curve, const std::vector<Vec2>& profile, float totalTwistRad, float startScale, float endScale, bool closeEnds, const Vec4& color) {
+        return shaper::Sweep3D::sweep(curve, profile, totalTwistRad, startScale, endScale, closeEnds, color);
+    }, "curve"_a, "profile"_a, "total_twist_rad"_a = 0.0f, "start_scale"_a = 1.0f, "end_scale"_a = 1.0f, "close_ends"_a = true, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f));
+
+    // Named for what each actually does rather than the caller's shape: onGrid is a 2D countU x countV grid (not
+    // strictly "linear"), alongCurve follows an arbitrary polyline (not strictly "circular" — closing the curve
+    // on itself is what makes a circular array, the function itself doesn't require it).
+    m_geom.def("replicate_on_grid", [](const ScratchboxMesh& seed, int countU, int countV, float pitchU, float pitchV, float rowOffsetU, bool alternateRows, float mergeDistance, const Vec3& origin, const Vec3& axisU, const Vec3& axisV) {
+        return shaper::Replicator3D::onGrid(seed, countU, countV, pitchU, pitchV, rowOffsetU, alternateRows, mergeDistance, origin, axisU, axisV);
+    }, "seed"_a, "count_u"_a, "count_v"_a, "pitch_u"_a, "pitch_v"_a, "row_offset_u"_a = 0.0f, "alternate_rows"_a = false, "merge_distance"_a = 0.0f,
+       "origin"_a = Vec3(0, 0, 0), "axis_u"_a = Vec3(1, 0, 0), "axis_v"_a = Vec3(0, 0, 1));
+
+    m_geom.def("replicate_along_curve", [](const ScratchboxMesh& seed, const std::vector<Vec3>& curve, float pitch, float mergeDistance, bool fitToLength) {
+        return shaper::Replicator3D::alongCurve(seed, curve, pitch, mergeDistance, fitToLength);
+    }, "seed"_a, "curve"_a, "pitch"_a, "merge_distance"_a = 0.0f, "fit_to_length"_a = true,
+       "Repeat seed at a continuous pitch along curve (close the curve on itself for a circular array)");
+
+    m_geom.def("extrude_polygon", [](const std::vector<Vec2>& footprint, float baseY, float height, const Vec4& color) {
+        return footprints::extrudePolygon(footprint, baseY, height, color);
+    }, "footprint"_a, "base_y"_a = 0.0f, "height"_a = 1.0f, "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f),
+       "Extrude a 2D XZ polygon along +Y into a closed, capped solid (walls + top + bottom)");
+
+    m_geom.def("merge_meshes", [](const std::vector<ScratchboxMesh>& meshes) {
+        ScratchboxMesh out("merged_mesh");
+        for (const auto& mesh : meshes) out.append(mesh);
+        out.recomputeBounds();
+        return out;
+    }, "meshes"_a, "Merge a list of meshes into one (vertices and triangles concatenated)");
+
     // ========================================================================
     // 3. ARCHITECTURE SUBMODULE (Building Tools / OSM)
     // ========================================================================
@@ -896,6 +925,27 @@ NB_MODULE(scratchbox_native, m) {
     m_shaper.def("lathe", [](const std::vector<Vec2>& profile, int radialSegments, float totalAngleRad, const Vec4& color, bool capEnds) {
         return shaper::Lathe3D::revolve(profile, radialSegments, totalAngleRad, color, capEnds);
     }, "profile"_a, "radial_segments"_a = 32, "total_angle_rad"_a = math::TWO_PI, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f), "cap_ends"_a = false, "Revolve 2D profile into rotational solid; cap_ends closes an open axial hole on a full sweep");
+
+    m_shaper.def("sweep", [](const std::vector<Vec3>& curve, const std::vector<Vec2>& profile, float totalTwistRad, float startScale, float endScale, bool closeEnds, const Vec4& color) {
+        return shaper::Sweep3D::sweep(curve, profile, totalTwistRad, startScale, endScale, closeEnds, color);
+    }, "curve"_a, "profile"_a, "total_twist_rad"_a = 0.0f, "start_scale"_a = 1.0f, "end_scale"_a = 1.0f, "close_ends"_a = true, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f),
+       "Sweep 2D profile along a 3D carrier curve with rotation-minimizing frames (limbs, hoses, struts, coils)");
+
+    m_shaper.def("replicate_on_grid", [](const ScratchboxMesh& seed, int countU, int countV, float pitchU, float pitchV, float rowOffsetU, bool alternateRows, float mergeDistance, const Vec3& origin, const Vec3& axisU, const Vec3& axisV) {
+        return shaper::Replicator3D::onGrid(seed, countU, countV, pitchU, pitchV, rowOffsetU, alternateRows, mergeDistance, origin, axisU, axisV);
+    }, "seed"_a, "count_u"_a, "count_v"_a, "pitch_u"_a, "pitch_v"_a, "row_offset_u"_a = 0.0f, "alternate_rows"_a = false, "merge_distance"_a = 0.0f,
+       "origin"_a = Vec3(0, 0, 0), "axis_u"_a = Vec3(1, 0, 0), "axis_v"_a = Vec3(0, 0, 1),
+       "Repeat seed over a flat U x V lattice (bolt patterns, tile fields, brick-bonded rows)");
+
+    m_shaper.def("replicate_along_curve", [](const ScratchboxMesh& seed, const std::vector<Vec3>& curve, float pitch, float mergeDistance, bool fitToLength) {
+        return shaper::Replicator3D::alongCurve(seed, curve, pitch, mergeDistance, fitToLength);
+    }, "seed"_a, "curve"_a, "pitch"_a, "merge_distance"_a = 0.0f, "fit_to_length"_a = true,
+       "Repeat seed at a continuous pitch along curve, oriented by rotation-minimizing frames (bolt circles, louvres, teeth, treads)");
+
+    m_shaper.def("extrude_polygon", [](const std::vector<Vec2>& footprint, float baseY, float height, const Vec4& color) {
+        return footprints::extrudePolygon(footprint, baseY, height, color);
+    }, "footprint"_a, "base_y"_a = 0.0f, "height"_a = 1.0f, "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f),
+       "Extrude a 2D XZ polygon along +Y into a closed, capped solid (walls + top + bottom)");
 
     // ========================================================================
     // 7. IO & STREAMING SUBMODULE

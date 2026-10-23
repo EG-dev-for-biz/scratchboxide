@@ -128,6 +128,62 @@ public:
     }
 };
 
+/**
+ * Extrudes an arbitrary 2D polygon (XZ footprint, CCW or CW — PolygonTriangulator::triangulate corrects winding)
+ * straight up by height along +Y into a closed, capped solid: side walls plus a top AND a bottom cap, so the result
+ * is a valid standalone CSG operand (BuildingMassingGenerator::extrudeSinglePrism caps only the top, since a
+ * building's underside is never seen once it is placed — this is the general-purpose primitive, not tied to that
+ * assumption).
+ */
+inline ScratchboxMesh extrudePolygon(const std::vector<Vec2>& footprint, float baseY, float height, const Vec4& color = Vec4(0.8f, 0.8f, 0.8f, 1.0f)) {
+    ScratchboxMesh mesh("extruded_polygon");
+    if (footprint.size() < 3) return mesh;
+    const float topY = baseY + height;
+    const size_t n = footprint.size();
+
+    // Side walls
+    float uCoord = 0.0f;
+    for (size_t i = 0; i < n; ++i) {
+        const Vec2 p0 = footprint[i], p1 = footprint[(i + 1) % n];
+        const Vec2 seg = p1 - p0;
+        const float segLen = seg.length();
+        if (segLen < 1e-4f) continue;
+        const Vec3 wallNormal(seg.y / segLen, 0.0f, -seg.x / segLen);
+        const Vec4 tangent(seg.x / segLen, 0.0f, seg.y / segLen, 1.0f);
+        const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+        const float u0 = uCoord, u1 = uCoord + segLen;
+        uCoord = u1;
+        mesh.vertices.push_back(Vertex(Vec3(p0.x, baseY, p0.y), wallNormal, Vec2(u0, 0.0f), color, tangent));
+        mesh.vertices.push_back(Vertex(Vec3(p1.x, baseY, p1.y), wallNormal, Vec2(u1, 0.0f), color, tangent));
+        mesh.vertices.push_back(Vertex(Vec3(p1.x, topY, p1.y), wallNormal, Vec2(u1, 1.0f), color, tangent));
+        mesh.vertices.push_back(Vertex(Vec3(p0.x, topY, p0.y), wallNormal, Vec2(u0, 1.0f), color, tangent));
+        mesh.indices.push_back(base + 0); mesh.indices.push_back(base + 1); mesh.indices.push_back(base + 2);
+        mesh.indices.push_back(base + 0); mesh.indices.push_back(base + 2); mesh.indices.push_back(base + 3);
+    }
+
+    const std::vector<uint32_t> capTris = PolygonTriangulator::triangulate(footprint);
+
+    // Top cap: normal +Y, CCW winding already correct for the triangulator's corrected (CCW) ordering
+    {
+        const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+        const Vec4 tangent(1.0f, 0.0f, 0.0f, 1.0f);
+        for (const auto& p : footprint) mesh.vertices.push_back(Vertex(Vec3(p.x, topY, p.y), Vec3(0, 1, 0), Vec2(p.x, p.y), color, tangent));
+        for (uint32_t idx : capTris) mesh.indices.push_back(base + idx);
+    }
+    // Bottom cap: same triangles, reversed winding so the normal faces -Y
+    {
+        const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+        const Vec4 tangent(1.0f, 0.0f, 0.0f, 1.0f);
+        for (const auto& p : footprint) mesh.vertices.push_back(Vertex(Vec3(p.x, baseY, p.y), Vec3(0, -1, 0), Vec2(p.x, p.y), color, tangent));
+        for (size_t i = 0; i + 2 < capTris.size(); i += 3) {
+            mesh.indices.push_back(base + capTris[i]); mesh.indices.push_back(base + capTris[i + 2]); mesh.indices.push_back(base + capTris[i + 1]);
+        }
+    }
+
+    for (const auto& v : mesh.vertices) mesh.bounds.expand(v.position);
+    return mesh;
+}
+
 class BuildingMassingGenerator {
 public:
     /**
