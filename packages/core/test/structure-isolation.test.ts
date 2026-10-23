@@ -297,6 +297,33 @@ describe('Google vector data as evidence', () => {
         expect(pick.footprintMask[ground.cellIndex(10.5, 0.5)]).toBe(PICK_OTHER);
     });
 
+    it('keeps the low wings of a tall dome inside one vector footprint (the US Capitol), where the scan alone cuts them', () => {
+        // a 10 x 10 m drum 40 m tall, with 20 m wings 15 m long on each side: the wings are under half the drum's height
+        const scene = [...plane(-60, 60, -60, 60, 0), ...boxTris(-5, 5, -5, 5, 40), ...boxTris(-20, -5, -5, 5, 15), ...boxTris(5, 20, -5, 5, 15)];
+        const scan = loadScanMesh(writeTris(path.join(TMP, 'capitol.glb'), scene));
+        const ground = buildGroundModel(scan, { cellMeters: 1 });
+        const alone = pickStructure(scan, ground, { anchor: { x: 0, z: 0 } })!;
+        expect(alone.footprintSource).toBe('scan-geometry');
+        expect(alone.bounds.maxX - alone.bounds.minX).toBeLessThan(14); // the geometric rule: the drum alone
+        const ev: VectorEvidence = { buildings: [{ id: 'capitol', parts: [[rect(-20, -5, 20, 5)]] }], water: [], roads: [], tiles: 1, zoom: 17 };
+        const L = evidenceLookup(ev, 60);
+        const pick = pickStructure(scan, ground, { anchor: { x: 0, z: 0 }, footprints: { buildingAt: L.buildingAt, buildings: ev.buildings } })!;
+        shotWithPick('pick_vector_footprint_dome_and_wings', scene, pick.cells, 41, [-30, -15, 30, 15]);
+        expect(pick.footprintSource).toBe('vector-footprint');
+        expect(pick.vectorFootprint).toMatchObject({ used: true, featureIds: ['capitol'], enclosesStructure: false });
+        // drum and both wings, the whole footprint
+        expect(pick.bounds.minX).toBeLessThanOrEqual(-19);
+        expect(pick.bounds.maxX).toBeGreaterThanOrEqual(19);
+        expect(pick.areaM2).toBeGreaterThan(40 * 10 * 0.9);
+        expect(pick.coreHeightM).toBe(0);
+        expect(pick.footprintMask[ground.cellIndex(-15.5, 0.5)]).toBe(PICK_STRUCTURE);
+        // the strip keeps the wings as structure too, not only the drum
+        const keep = structureKeepCells(pick, ground)!;
+        let kept = 0;
+        for (let i = 0, v = 0; i < keep.runs.length; i++, v ^= 1) if (v) kept += keep.runs[i];
+        expect(kept).toBeGreaterThan(40 * 10 * 0.8);
+    });
+
     it('keeps the geometric rule, with the reason, where the vector footprint disagrees with the scan', () => {
         const scene = [...plane(-60, 60, -60, 60, 0), ...boxTris(-14, 0, -8, 8, 15)];
         const scan = loadScanMesh(writeTris(path.join(TMP, 'disagree.glb'), scene));

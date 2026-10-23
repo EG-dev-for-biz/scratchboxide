@@ -226,7 +226,7 @@ function flood4(nx: number, nz: number, seed: number, pass: (c: number) => boole
  *    the structure abuts),
  * so a tower, a steeple or an upper storey joins its base and the base its tower, while the building next door does not.
  */
-export function joinParts(comp: Uint8Array, above: Float32Array, nx: number, nz: number, seed: number, partStepM: number): { kept: Uint8Array; parts: number; lowCutM: number } {
+export function joinParts(comp: Uint8Array, above: Float32Array, nx: number, nz: number, seed: number, partStepM: number, keepAll = false): { kept: Uint8Array; parts: number; lowCutM: number } {
     const N = nx * nz;
     const part = new Int32Array(N).fill(-1);
     const area: number[] = [];
@@ -281,14 +281,14 @@ export function joinParts(comp: Uint8Array, above: Float32Array, nx: number, nz:
             const enclosed = onS >= STRUCTURE_ENCLOSED_SHARE * rim[p];
             const low = h90[p] < lowCut;
             const over = seedH < STRUCTURE_LOW_ATTACHMENT_FRACTION * h90[p] && area[p] > sArea;
-            if (!enclosed && (low || over)) continue;
+            if (!keepAll && !enclosed && (low || over)) continue;
             inS[p] = 1; sArea += area[p];
             changed = true;
         }
     }
     const kept = new Uint8Array(N);
     for (let c = 0; c < N; c++) if (part[c] >= 0 && inS[part[c]]) kept[c] = 1;
-    return { kept, parts: P, lowCutM: lowCut };
+    return { kept, parts: P, lowCutM: keepAll ? 0 : lowCut };
 }
 
 /** Building footprints as the pick reads them: the feature index + 1 at a point (0: none), and the features. */
@@ -507,8 +507,11 @@ export function pickStructure(scan: ScanMesh, ground: GroundModel, opts: PickOpt
             }
         }
     }
-    // parts across height discontinuities, joined to the seed's part by the structure rule
-    const parts = joinParts(comp, above, nx, nz, seed, opts.partStepM ?? STRUCTURE_PART_STEP_M);
+    // parts across height discontinuities, joined to the seed's part by the structure rule. A vector footprint drawn tight
+    // to the building already separates it from its neighbours, so every part inside it is the building: a dome or tower
+    // twice the height of its wings (the US Capitol) must not cut the wings as low attachments. A footprint that encloses
+    // a yard keeps the height rule, since its raised cells can include trees the canopy classifier missed.
+    const parts = joinParts(comp, above, nx, nz, seed, opts.partStepM ?? STRUCTURE_PART_STEP_M, !!fp?.used && !fp.enclosesStructure);
     // a part left out below the low cut is a low attachment; one left out above it is the taller structure next door
     const coreHeightM = parts.lowCutM;
     const footprintMask = new Uint8Array(N);
