@@ -20,6 +20,7 @@
  */
 
 import type { SkippedMediaModel } from '../../common/media-generation-protocol';
+import { obstructionFreeNote } from '../../browser/generative-canvas/services/location-beautify-service';
 
 /** Independent references come from different models (the same model asked twice tends to repeat itself). */
 export const GROUNDED_REFERENCE_MODELS = ['gemini-3-pro-image', 'gemini-3.1-flash-image'];
@@ -58,7 +59,7 @@ export function groundedReferencePrompt(req: GroundedReferenceRequest): string {
     const questions = req.questions?.length ? ` Then answer in a short paragraph: ${req.questions.join('; ')}.` : ' Then describe in a short paragraph what you found about its form, materials and details.';
     return `Use Google Search to find real photographs of ${req.subject} of ${req.place}, and make an accurate photographic reference image of it`
         + `${req.view ? `, seen ${req.view}` : ''}. Be faithful to the real place as it is today: its proportions, divisions, ornament, materials and colours; `
-        + 'do not invent or embellish anything you did not find. Even daylight, no people or vehicles in front of the subject.' + questions;
+        + 'do not invent or embellish anything you did not find. Even daylight. ' + obstructionFreeNote() + questions;
 }
 
 /** The surface of @google/genai's client used here (injectable for tests). */

@@ -44,6 +44,7 @@ import * as jpegJs from 'jpeg-js';
 import { blur1, ciede2000, edgeMap, exactDistanceTransform, laplacianVariance, linearRgbToLab, maskedNcc } from '../../spatial/StreetViewStage3Metrics';
 import { SRGB8_TO_LINEAR } from '../../../common/spatial/photogrammetric-delight';
 import { decodeImageInMemory, TILE_TRANSFER_RUNG, type RgbaImage8 } from './tile-texture-transfer';
+import { obstructionFreeNote } from '../../../browser/generative-canvas/services/location-beautify-service';
 
 // =============================================================================
 // Model client (injected)
@@ -317,6 +318,7 @@ export function enhancePrompt(width: number, height: number, referenceCount: num
         `Return the same texture, ${width} x ${height} px, enhanced only: restore the sharpness and fine surface detail of features that are already visible, at low strength.`,
         'Keep every feature exactly where it is, at the same size and shape. Do not add, remove, move, straighten, repeat or restyle anything. Keep the colours and the overall brightness.',
         'Do not add lighting, shadows, reflections, people, vehicles, signs or text. Keep the framing: no crop, zoom, rotation or border.',
+        `The one exception to changing nothing: trees, foliage, vehicles, people and street furniture baked into the texture in front of the surface are not part of it. ${obstructionFreeNote('this surface')}`,
         referenceCount
             ? `The ${referenceCount === 1 ? 'next image is a real street-level photo' : `next ${referenceCount} images are real street-level photos`} of the same surface: use them only to recover the true detail of features the texture already shows.`
             : ''
@@ -330,6 +332,7 @@ export function recreatePrompt(width: number, height: number, referenceCount: nu
         `Return the same surface, ${width} x ${height} px, repainted as a clean, evenly lit albedo map: remove every baked cast shadow, ambient-occlusion dark patch and sun-glare highlight, and restore the material's true, consistent colour and fine detail underneath, as if lit by flat, shadowless overcast daylight from every direction.`,
         'Keep every feature exactly where it is, at the same size, shape and count: every window, ledge, pilaster, joint and sign stays put. Do not add, remove, move, straighten, repeat or invent any feature, and keep the real material (the same stone, brick, glass or metal) - only its lighting changes, never what it is made of.',
         'Do not add new reflections, people, vehicles, signs or text. Keep the framing: no crop, zoom, rotation or border.',
+        `The one exception to keeping every feature: trees, foliage, vehicles, people and street furniture baked into the texture in front of the surface are not part of it. ${obstructionFreeNote('this surface')}`,
         referenceCount
             ? `The ${referenceCount === 1 ? 'next image is a real street-level photo' : `next ${referenceCount} images are real street-level photos`} of the same surface: use them to recover the material's true colour and detail where the first image's shadow hides it.`
             : ''

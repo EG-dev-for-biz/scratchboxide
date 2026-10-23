@@ -30,6 +30,7 @@ import { alignPlate, cachedPlate, type PlateModelClient } from '../pipeline-e/en
 import type { MassingFace } from '../pipeline-e/native-massing';
 import type { Plate } from './plates';
 import { STATION_OPTICS } from './stations';
+import { obstructionFreeNote } from '../../../../browser/generative-canvas/services/location-beautify-service';
 
 type V3 = [number, number, number];
 
@@ -105,7 +106,7 @@ export function closePlateGaps(pl: Plate, radius = GAP_RADIUS_PX): number {
 }
 
 export function roofPlatePrompt(o: { locationName: string; widthM: number; heightM: number; widthPx: number; heightPx: number }): string {
-    return `Transform this orthographic texture plate of the roof of ${o.locationName} (a flat view straight down onto the roof, ${o.widthM.toFixed(1)} m by ${o.heightM.toFixed(1)} m, resampled from a photorealistic 3D tiles scan) into a clean, photorealistic texture plate of the same roof. CRITICAL RULES — non-negotiable: (1) It stays a flat orthographic view straight down: no perspective, no camera tilt, no depth of field, no haze. (2) Keep every edge, parapet, joint, drain, hatch and the footprint of every object on the roof exactly where it is, at the same size and orientation. (3) The flat mid-grey areas are parts of this same roof that the survey could not see, or the footprints of objects standing on it: fill each as the roof around it continues, with the same surface, colour and joint pattern, and add no objects, lettering or features that the plate does not show. (4) Give it crisp, realistic roofing materials (membrane, gravel, metal, tiles, glass or whatever the plate shows), free of scan blur and smears. (5) Light it evenly, as under a bright overcast sky: no cast shadows, no sun hot spots. Answer with the full plate at ${o.widthPx} x ${o.heightPx} px.`;
+    return `Transform this orthographic texture plate of the roof of ${o.locationName} (a flat view straight down onto the roof, ${o.widthM.toFixed(1)} m by ${o.heightM.toFixed(1)} m, resampled from a photorealistic 3D tiles scan) into a clean, photorealistic texture plate of the same roof. CRITICAL RULES — non-negotiable: (1) It stays a flat orthographic view straight down: no perspective, no camera tilt, no depth of field, no haze. (2) Keep every edge, parapet, joint, drain, hatch and the footprint of every object on the roof exactly where it is, at the same size and orientation. (3) The flat mid-grey areas are parts of this same roof that the survey could not see, or the footprints of objects standing on it: fill each as the roof around it continues, with the same surface, colour and joint pattern, and add no objects, lettering or features that the plate does not show. (4) Give it crisp, realistic roofing materials (membrane, gravel, metal, tiles, glass or whatever the plate shows), free of scan blur and smears. (5) Light it evenly, as under a bright overcast sky: no cast shadows, no sun hot spots. Answer with the full plate at ${o.widthPx} x ${o.heightPx} px. ${obstructionFreeNote('the roof')} Tree crowns overhanging the roof are drawn as the roof below them; rooftop equipment that belongs to the building (plant, hatches, skylights, water tanks, railings) stays.`;
 }
 
 export interface RoofTextureRecord { face: number; accepted: boolean; why: string; model?: string; chamferPx?: number; lostShare?: number; covered: number }

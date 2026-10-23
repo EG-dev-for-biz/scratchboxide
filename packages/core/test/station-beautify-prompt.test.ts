@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';
-import { buildBeautifyPrompt, buildHybridPromptPayload, buildStationBeautifyPrompt, buildStreetViewSeedBeautifyPrompt, streetViewObstructionsNote, TILES_RENDER_NOTE } from '../src/browser/generative-canvas/services/location-beautify-service';
+import { buildBeautifyPrompt, buildHybridPromptPayload, buildStationBeautifyPrompt, buildStreetViewSeedBeautifyPrompt, streetViewObstructionsNote, TILES_RENDER_NOTE, OBSTRUCTION_FREE_NOTE } from '../src/browser/generative-canvas/services/location-beautify-service';
 import { buildBlockoutNanoBananaPrompt } from '../src/browser/generative-canvas/services/video/omniVideoPromptService';
 import { stationFromLookAt } from '../src/common/spatial/SurveySynthesisEngine';
 import type { GeodeticAnchor } from '../src/common/spatial/colmap-vector-reference-types';
@@ -110,7 +110,7 @@ describe('Station-grounded AI Beautify prompt', () => {
         expect(cleanNanoBananaPrompt).not.toContain('Cinematic 35mm');
         expect(cleanNanoBananaPrompt).not.toContain('Subject distance: approximately 250 meters');
         // Ends strictly with the canonical framing template
-        expect(cleanNanoBananaPrompt.endsWith('taken from this exact vantage point.')).toBe(true);
+        expect(cleanNanoBananaPrompt.endsWith('taken from this exact vantage point. ' + OBSTRUCTION_FREE_NOTE)).toBe(true);
 
         // 4. buildBlockoutNanoBananaPrompt WITH user prompted style: injected strictly in styleSuffix
         const styledNanoBananaPrompt = buildBlockoutNanoBananaPrompt({
@@ -118,6 +118,6 @@ describe('Station-grounded AI Beautify prompt', () => {
             coordinates: { lat: 41.8902, lng: 12.4922 },
             styleSuffix: ' High contrast chiaroscuro oil painting.'
         });
-        expect(styledNanoBananaPrompt.endsWith('taken from this exact vantage point. High contrast chiaroscuro oil painting.')).toBe(true);
+        expect(styledNanoBananaPrompt.endsWith('taken from this exact vantage point. ' + OBSTRUCTION_FREE_NOTE + ' High contrast chiaroscuro oil painting.')).toBe(true);
     });
 });
