@@ -48,7 +48,7 @@ export function colourMapOf(dir: string): string | undefined {
 export interface PbrLibraryIndex { root: string; names: string[]; thumbs: Map<string, string> }
 
 /** Every material of `root` with a colour map, thumbnailed once into `cacheDir` (re-used on later calls). */
-export async function indexPbrLibrary(root: string, cacheDir = path.join(os.homedir(), '.scratchbox', 'pbr-library-thumbs'), concurrency = 8): Promise<PbrLibraryIndex> {
+export async function indexPbrLibrary(root: string, cacheDir = path.join(os.homedir(), '.scratchbox', 'pbr-library-thumbs'), concurrency = 8, onProgress?: (m: string) => void): Promise<PbrLibraryIndex> {
     const dir = path.join(cacheDir, Buffer.from(root).toString('base64url').slice(0, 40));
     fs.mkdirSync(dir, { recursive: true });
     const folders = fs.readdirSync(root, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name);
@@ -56,6 +56,7 @@ export async function indexPbrLibrary(root: string, cacheDir = path.join(os.home
     let next = 0;
     await Promise.all(Array.from({ length: concurrency }, async () => {
         for (let i; (i = next++) < folders.length;) {
+            if (i % 200 === 0) onProgress?.(`indexing the PBR library: ${i} of ${folders.length} materials`);
             const name = folders[i], out = path.join(dir, `${name}.jpg`);
             if (fs.existsSync(out)) { thumbs.set(name, out); continue; }
             const src = colourMapOf(path.join(root, name));

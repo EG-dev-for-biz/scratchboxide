@@ -157,7 +157,7 @@ export function createSurveySwatchesHandler(deps: {
                 if (!match) {
                     const lib = resolvePbrLibrary(str(args.libraryPath) || undefined);
                     ctx?.reportProgress?.(`indexing the PBR library at ${lib}`);
-                    const index = await indexPbrLibrary(lib);
+                    const index = await indexPbrLibrary(lib, undefined, undefined, m => ctx?.reportProgress?.(m));
                     const jv = geminiJsonVision(vision as never);
                     match = (s, workDir) => matchSwatchToLibrary({ photo: s.files.photoSwatch, description: s.description, sizeMeters: s.sizeMeters }, index, jv, workDir);
                     libraryNote = `${index.names.length} materials in ${lib}`;
