@@ -21,7 +21,8 @@
  *      skylights, bulkheads, penthouses, tanks as parts with their outlines, heights and fitted roof planes), (scratchbox_staged_massing.hpp: arched openings with their frames, mullions and
  *      transoms, sills and surrounds, swept bands, members) with no tile
  *      texture and no scanned residual, and
- *   5. paints each face from its own reading: wall colour, glazing in its openings, band and member colours on their
+ *   5. surveys the roof from above and redraws it as its texture (roof-texture.ts), labelled generated, and
+ *   6. paints each face from its own reading: wall colour, glazing in its openings, band and member colours on their
  *      footprints; a wall nobody read takes the read walls' median colour.
  * Everything read is photo-inferred, everything continued into unseen parts and every unread wall generated; the measured
  * massing stays vector-modelled. Measured on the Haughwout Building (2026-10-22): arched arcades on both street walls, piers
@@ -52,6 +53,7 @@ import { MIN_READ_COVERAGE, PIPELINE_G_READ_VERSION, programItems, readPlate, ty
 import { checkPlate, checkReading, type ReadingCheck } from './check';
 import { groupFacades, layBack } from './facades';
 import { roofObjects } from './roof-objects';
+import { redrawRoof, roofStations, ROOF_PLATE_PROMPT_ID, type RoofTextureRecord } from './roof-texture';
 
 export const PIPELINE_G_VERSION = `pipeline-g/v3+${PIPELINE_G_READ_VERSION}`;
 /** Native build parameters: the massing only, nothing baked from the tile, no scanned residual. */
@@ -66,12 +68,13 @@ export function stagedPipelineG(request: { procedural?: boolean }, env: NodeJS.P
 
 const rung = (name: (typeof TEXTURE_LADDER_RUNGS)[number]) => TEXTURE_LADDER_RUNGS.indexOf(name);
 /** Texel sources of G's paint (indices into the legend). */
-export const G_SRC = { read: 0, continued: 1, enhanced: 2 } as const;
+export const G_SRC = { read: 0, continued: 1, enhanced: 2, roof: 3 } as const;
 export function gLegend(): TexelSource[] {
     return [
         { source: 'pipeline-g-read', label: 'photo-inferred', method: 'pipeline G: a flat colour the vision model read off the survey plate of this wall (station renders of the photo tile laid onto the wall in metres), painted on the wall, its openings, bands and members', rung: rung('generated tileable PBR'), weight: 0.3 },
         { source: 'pipeline-g-continued', label: 'generated', method: "pipeline G: a part the survey did not see (an opening or member the reading continued from the wall's own repeats, or a wall nobody read, given the read walls' median colour)", rung: rung('generated tileable PBR'), weight: 0.15 },
-        { source: 'pipeline-g-enhanced', label: 'generated', method: `pipeline G: AI-enhanced from the survey plate of this wall by the facade texture builder (${TEXTURE_PLATE_PROMPT_ID}), kept through its identity gate and quality score, what the score faulted redrawn by generative infill`, rung: rung('generated tileable PBR'), weight: 0.25 }
+        { source: 'pipeline-g-enhanced', label: 'generated', method: `pipeline G: AI-enhanced from the survey plate of this wall by the facade texture builder (${TEXTURE_PLATE_PROMPT_ID}), kept through its identity gate and quality score, what the score faulted redrawn by generative infill`, rung: rung('generated tileable PBR'), weight: 0.25 },
+        { source: 'pipeline-g-roof', label: 'generated', method: `pipeline G: the roof redrawn by the image model (${ROOF_PLATE_PROMPT_ID}) from its survey plate, a station looking down on it, kept where its edges held to the plate`, rung: rung('generated tileable PBR'), weight: 0.25 }
     ];
 }
 
@@ -319,6 +322,24 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
         fs.writeFileSync(path.join(input.dir, 'plates', `face_${pl.face}_relief.png`), reliefPng(pl));
     }
     timingsMs.plates = Date.now() - t;
+    // the roof, from above (roof-texture.ts): its own station and plates, only when there is an image model to redraw them
+    let roofPlates: Plate[] = [];
+    if (input.enhance) {
+        const tr = Date.now();
+        const roofIdx = surveyFaces.map((f, i) => ({ f, i })).filter(x => x.f.kind === 'roof');
+        const rs = roofStations(roofIdx.map(x => x.f), input.anchor, 900);
+        if (rs.length) {
+            try {
+                const rp = await surveyPlates({ stations: rs, faces: surveyFaces, faceIdx: rs.flatMap(s => s.faces.map(k => roofIdx[k].i)), tileGlb: input.tilePath, ...(input.signal ? { signal: input.signal } : {}), onProgress: progress });
+                roofPlates = rp.plates;
+                for (const pl of roofPlates) fs.writeFileSync(path.join(input.dir, 'plates', `roof_${pl.face}_colour.png`), platePng(pl, false));
+                steps.push({ step: 'roof survey', proposed: roofPlates.length, accepted: roofPlates.filter(p => p.coverage > 0).length, rejected: roofPlates.filter(p => p.coverage <= 0).length, notes: roofPlates.map(p => `${p.key}: ${Math.round(p.coverage * 100)}% seen from above`), ms: Date.now() - tr });
+            } catch (err) {
+                if (input.signal?.aborted) throw err;
+                steps.push({ step: 'roof survey', proposed: rs.length, accepted: 0, rejected: rs.length, skipped: `the roof station could not be rendered (${err instanceof Error ? err.message : String(err)})`, notes: [], ms: Date.now() - tr });
+            }
+        }
+    }
     const readable = plates.filter(p => p.coverage >= MIN_READ_COVERAGE);
     steps.push({ step: 'wall plates', proposed: plates.length, accepted: readable.length, rejected: plates.length - readable.length, notes: plates.map(p => `${p.key}: ${Math.round(p.coverage * 100)}% seen from ${p.stations.length} stations`), ms: timingsMs.plates });
     if (!readable.length) throw new Error(`no wall was seen well enough to read (best ${Math.round(Math.max(...plates.map(p => p.coverage)) * 100)}% of a wall; at least ${Math.round(MIN_READ_COVERAGE * 100)}% is needed)`);
@@ -448,6 +469,28 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
         }
         step.ms = timingsMs.facadeTextures = Date.now() - t;
         steps.push(step);
+    }
+
+    // 7. the roof's texture: each roof face of the massing redrawn from its plate (roof-texture.ts)
+    const roofRecords: RoofTextureRecord[] = [];
+    if (input.enhance && roofPlates.length) {
+        t = Date.now();
+        const e = input.enhance;
+        for (const f of run.report.faces.filter(x => x.kind === 'roof' && textures.has(x.index))) {
+            const pl = roofPlates.find(p => p.key === f.key || f.key.startsWith(p.key + ':'));
+            if (!pl || pl.coverage <= 0) continue;
+            const on = plateOntoFace(f, textures.get(f.index)!, pl, surveyFaces[pl.face]);
+            if (!on) continue;
+            progress(`pipeline G: drawing the roof texture (${Math.round(f.area)} m2)`);
+            try {
+                roofRecords.push(await redrawRoof(f, textures.get(f.index)!, on, { client: e.client, locationName: input.place, source: G_SRC.roof, ...(e.cacheDir ? { cacheDir: e.cacheDir } : {}), ...(input.signal ? { signal: input.signal } : {}) }));
+            } catch (err) {
+                if (input.signal?.aborted) throw err;
+                roofRecords.push({ face: f.index, accepted: false, why: `the redraw failed (${err instanceof Error ? err.message : String(err)}): the roof keeps its painted colour`, covered: on.covered });
+            }
+        }
+        timingsMs.roofTexture = Date.now() - t;
+        steps.push({ step: 'roof texture', proposed: roofRecords.length, accepted: roofRecords.filter(r => r.accepted).length, rejected: roofRecords.filter(r => !r.accepted).length, notes: roofRecords.map(r => `roof ${r.face}: ${r.why}${r.model ? ` (${r.model})` : ''}`), ms: timingsMs.roofTexture });
     }
     const files = writeMassingLayer(run, input.massing, textures, legend, input.dir, input.stage, input.stageKey, 'pipeline_g');
 
