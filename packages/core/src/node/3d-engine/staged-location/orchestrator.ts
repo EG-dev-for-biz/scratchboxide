@@ -89,7 +89,7 @@ import { objectInputHash } from '../../asset-store/scene-object-store';
 import { parseGlbBytes } from './glb-bytes';
 import { defaultDurableAssetStore } from '../../asset-store/durable-asset-store';
 import { REVOLUTION_REFERENCE_VERSION, revolutionReferenceEnabled, revolutionReferenceFor } from './revolution-reference';
-import { buildGroundSurface, groundHeightAt, PROCEDURAL_GROUND_VERSION, settleRoadsOnGround } from './procedural-ground';
+import { buildGroundProgram, buildGroundSurface, crownCanopyAt, groundCoverRegions, groundHeightAt, groundProgramNotes, landuseAreaAt, PROCEDURAL_GROUND_VERSION, settleRoadsOnGround, type GroundProgram } from './procedural-ground';
 import {
     coveredShare, frameToLatLng, paintGeneratedHeightProvenance, paintProvenance, selectPaintBuildings, tilePlanCoverage, writePaintGlb,
     GENERATED_HEIGHT_LABEL, PLAUSIBLE_DEFAULT_HEIGHT_M, VECTOR_ISOLATE_RADIUS_M, VECTOR_MASSING_VERSION,
@@ -3814,7 +3814,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 /** The scene object store (scene-objects.ts): buildings taken from it unchanged instead of massed again, and the ground and streets. */
                 objects?: { reused: number; generated: number; planMs: number; groundReused?: boolean; roadsReused?: boolean };
                 procedural?: {
-                    ground: { vertices: number; triangles: number; openVertices: number; terrainVertices: number }; roads?: { roads: number; stations: number; measuredKerbs: number; defaultKerbs: number; triangles: number };
+                    /** `program`: the ground program (procedural-ground.ts): each land-use region's measurements and the material decided from them. */
+                    ground: { vertices: number; triangles: number; openVertices: number; terrainVertices: number; program?: Omit<GroundProgram, 'vertexRegion'> }; roads?: { roads: number; stations: number; measuredKerbs: number; defaultKerbs: number; triangles: number };
                     /** Prepared for the texture pass (procedural-materials.ts): the clays and the library fill; absent with the reason when it could not be. */
                     texturePass?: ProceduralTexturingSummary; texturePassUnavailable?: string;
                 };
@@ -3839,7 +3840,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const objectStore = objectStoreEnabled() ? defaultDurableAssetStore() : undefined;
                     const reuseObjects = objectReuseEnabled();
                     const objectVersions = { massing: DISTRICT_MASSING_VERSION, texelM: DISTRICT_TEXEL_M, params: DISTRICT_MASSING_PARAMS, revolutions: revolutionsOn ? REVOLUTION_FIT_VERSION : 'off' };
-                    const groundHash = objectInputHash('ground', PROCEDURAL_GROUND_VERSION, stripped.cacheKey, covered.toFixed(1), ev.water, ev.roads);
+                    const groundHash = objectInputHash('ground', PROCEDURAL_GROUND_VERSION, stripped.cacheKey, covered.toFixed(1), ev.water, ev.roads, ev.landuse ?? []);
                     const roadsHash = objectInputHash('road', PROCEDURAL_ROADS_VERSION, stripped.cacheKey, covered.toFixed(1), vectorKey, ROAD_SURFACE_PARAMS);
                     const massProducer = { stage: 'massing', stageKey: key, layer: 'l2m', version: DISTRICT_MASSING_VERSION };
                     const massRows = () => {
@@ -3938,24 +3939,40 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             // the ground: one measured surface over the extraction, the photo's colour from above
                             const groundFile = path.join(dir, 'ground.glb');
                             const storedGround = findStoredLayer(objectStore, reuseObjects, 'ground', 'surface', frame, groundHash);
-                            let groundStats: { vertices: number; triangles: number; openVertices: number; terrainVertices: number };
+                            let groundStats: { vertices: number; triangles: number; openVertices: number; terrainVertices: number; program?: Omit<GroundProgram, 'vertexRegion'> };
                             const tileBytes = fs.readFileSync(stripped.devegetatedGlb);
                             if (storedGround) {
                                 // the ground stored for these very inputs: its bytes as they were written
                                 io.progress('the ground is unchanged since it was stored: reusing it');
                                 const tg = Date.now();
                                 fs.copyFileSync(storedGround, groundFile);
-                                groundStats = parseGlbBytes(fs.readFileSync(groundFile)).json.nodes[0].extras.sbGround.stats;
+                                const sbGround = parseGlbBytes(fs.readFileSync(groundFile)).json.nodes[0].extras.sbGround;
+                                groundStats = { ...sbGround.stats, ...(sbGround.program ? { program: sbGround.program } : {}) };
                                 timingsMs.groundReused = Date.now() - tg;
                             } else {
                                 io.progress('building the ground from the measured street surface');
                                 const tg = Date.now();
-                                const surf = buildGroundSurface({ ground, within, bounds: { x0: -covered, z0: -covered, x1: covered, z1: covered } });
+                                const bounds = { x0: -covered, z0: -covered, x1: covered, z1: covered };
+                                const surf = buildGroundSurface({ ground, within, bounds });
                                 const groundPhoto = renderTopDownPhoto(tileBytes, surf.uvFrame, { texelM: 0.1, maxPx: 8192 });
+                                // the ground program: each land-use area of the vector evidence read as a region, its material decided from
+                                // the scan's roughness, the measured crowns, the carriageways and the photo's colour (the type codes ride along as labels)
+                                const landuseAreas = ev.landuse ?? [];
+                                const crownDiscs = ((JSON.parse(fs.readFileSync(stripped.crownsJson, 'utf8')) as { crowns?: any[] }).crowns ?? [])
+                                    .filter(c => c.status === 'tree' && Array.isArray(c.stem) && Array.isArray(c.sectorRadii))
+                                    .map(c => ({ x: Number(c.stem[0]), z: Number(c.stem[1]), radiusM: (c.sectorRadii as number[]).reduce((a, b) => a + b, 0) / 16 }));
+                                const { vertexRegion, ...program } = buildGroundProgram({
+                                    ground, within, bounds, surface: surf, areas: landuseAreas, areaAt: landuseAreaAt(look), roadAt: look.roadAt,
+                                    canopyAt: crownCanopyAt(crownDiscs), photo: { photo: groundPhoto, frame: surf.uvFrame }
+                                });
                                 const groundJpeg = jpegJs.encode({ data: Buffer.from(groundPhoto.rgba.buffer, groundPhoto.rgba.byteOffset, groundPhoto.rgba.byteLength), width: groundPhoto.width, height: groundPhoto.height }, 88).data;
-                                const groundExtras = { version: PROCEDURAL_GROUND_VERSION, uvFrame: surf.uvFrame, stats: surf.stats, method: "the scan's open surface (within 1.5 m of the measured terrain, its local median) and the terrain where something stands on it; coloured from a top-down render of the tile photo" };
-                                writeStagedGlbFile(groundFile, [{ name: 'ground', ...surf.mesh, extras: groundExtras }], { rootExtras: { sbGround: groundExtras }, generator: 'scratchbox staged-location procedural-ground', copyright: 'Google', texture: { bytes: groundJpeg, mimeType: 'image/jpeg' } });
-                                groundStats = surf.stats;
+                                const groundExtras = {
+                                    version: PROCEDURAL_GROUND_VERSION, uvFrame: surf.uvFrame, stats: surf.stats, method: "the scan's open surface (within 1.5 m of the measured terrain, its local median) and the terrain where something stands on it; coloured from a top-down render of the tile photo",
+                                    program, provenance: { heights: 'measured', material: 'generated: decided from the measurements per region (program.regions[].material.why)' },
+                                    groundCover: { regions: groundCoverRegions(program, landuseAreas).map(({ loops, ...r }) => r), status: 'not planted: SB-Veggie (scripts/tile_vegetation.cpp) grows measured crowns only and has no low-vegetation input yet' }
+                                };
+                                writeStagedGlbFile(groundFile, [{ name: 'ground', ...surf.mesh, attributes: { _SB_GROUND_REGION: Float32Array.from(vertexRegion) }, extras: groundExtras }], { rootExtras: { sbGround: groundExtras }, generator: 'scratchbox staged-location procedural-ground', copyright: 'Google', texture: { bytes: groundJpeg, mimeType: 'image/jpeg' } });
+                                groundStats = { ...surf.stats, program };
                                 timingsMs.ground = Date.now() - tg;
                             }
                             if (plan) manifests['ground.glb'] = wholeManifest('ground', 'surface', groundHash, groundFile, 'l1g', PROCEDURAL_GROUND_VERSION, ['measured']);
@@ -4020,7 +4037,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 }
                                 timingsMs.texturePrep = Date.now() - tp;
                             }
-                            return { value: { rebuilt: okRows.length, ...summary, caveats, ...(planeFirst ? { planeFirst } : {}), removedTriangles: 0, residualOffFootprint, timingsMs, ...(revolutions ? { revolutions } : {}), ...(objects ? { objects: { ...objects, groundReused: !!storedGround, roadsReused: !!storedRoads } } : {}), procedural: { ground: { vertices: groundStats.vertices, triangles: groundStats.triangles, openVertices: groundStats.openVertices, terrainVertices: groundStats.terrainVertices }, ...(roadsStats ? { roads: roadsStats } : {}), ...(texturePass ? { texturePass } : {}), ...(texturePassUnavailable ? { texturePassUnavailable } : {}) } } };
+                            return { value: { rebuilt: okRows.length, ...summary, caveats, ...(planeFirst ? { planeFirst } : {}), removedTriangles: 0, residualOffFootprint, timingsMs, ...(revolutions ? { revolutions } : {}), ...(objects ? { objects: { ...objects, groundReused: !!storedGround, roadsReused: !!storedRoads } } : {}), procedural: { ground: { vertices: groundStats.vertices, triangles: groundStats.triangles, openVertices: groundStats.openVertices, terrainVertices: groundStats.terrainVertices, ...(groundStats.program ? { program: groundStats.program } : {}) }, ...(roadsStats ? { roads: roadsStats } : {}), ...(texturePass ? { texturePass } : {}), ...(texturePassUnavailable ? { texturePassUnavailable } : {}) } } };
                         }
                         // the scan's own buildings out where the rebuilt ones stand: the clay remesh and tile_refine's textured twin alike
                         const clay = hideFootprintInGlb(fs.readFileSync(refined.clayGlb), footprint);
@@ -4132,7 +4149,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             provenance: {
                                 label: 'measured', measuredGeometry: true, confidence: v.procedural.ground.vertices ? round(v.procedural.ground.openVertices / v.procedural.ground.vertices, 3) : 0,
                                 method: `${PROCEDURAL_GROUND_VERSION}: the street surface the scan measures (its open surface's local median; the terrain where something stands on it), coloured from a top-down render of the tile photo`,
-                                sources, note: `${v.procedural.ground.openVertices} vertices on the scan's open surface, ${v.procedural.ground.terrainVertices} on the terrain under something standing there`
+                                sources, note: `${v.procedural.ground.openVertices} vertices on the scan's open surface, ${v.procedural.ground.terrainVertices} on the terrain under something standing there${v.procedural.ground.program ? `; ground program (material generated per region from the measurements; ${v.procedural.ground.program.landuse.areas} Google land-use areas, type codes as labels: ${v.procedural.ground.program.landuse.typeCodes.join(', ') || 'none'}): ${groundProgramNotes(v.procedural.ground.program).join(' | ')}` : ''}`
                             },
                             provenanceLabels: ['measured'], supersedes: replaced, revealAfter: [], reveal: { durationMs: 1000, stagger: 0, crossfadeFrom: replaced },
                             cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pubGround.path),
