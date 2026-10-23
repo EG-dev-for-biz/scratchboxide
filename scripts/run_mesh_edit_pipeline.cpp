@@ -139,7 +139,40 @@ static std::string applyOperation(ScratchboxMesh& mesh, const GlbJsonValue& op) 
         return "{\"type\":\"extrude\",\"selectedFaces\":" + std::to_string(st.selectedFaces) + ",\"boundaryEdges\":" + std::to_string(st.boundaryEdges)
             + ",\"sideTriangles\":" + std::to_string(st.sideTriangles) + ",\"trianglesAfter\":" + std::to_string(mesh.indices.size() / 3) + "}";
     }
-    throw UsageError("unknown operation type \"" + type + "\" (boolean, cut or extrude)");
+    if (type == "bevel") {
+        BevelOptions o;
+        o.width = requireNumber(op, "width", "bevel");
+        if (!(o.width > 0)) throw UsageError("bevel needs width > 0 (metres)");
+        o.segments = int(optionalNumber(op, "segments", 1, "bevel"));
+        if (o.segments < 1 || o.segments > 32) throw UsageError("bevel segments must be 1..32");
+        o.minAngleDeg = optionalNumber(op, "minAngleDeg", 30, "bevel");
+        const GlbJsonValue& s = op["select"];
+        if (s.type == GlbJsonValue::Object && (s.has("regionMin") || s.has("regionMax"))) {
+            o.hasRegion = true;
+            o.regionMin = s.has("regionMin") ? toVec3(requireD3(s, "regionMin", "select")) : Vec3(0, 0, 0);
+            o.regionMax = s.has("regionMax") ? toVec3(requireD3(s, "regionMax", "select")) : Vec3(1, 1, 1);
+        }
+        std::vector<BevelEdge> edges;
+        size_t shortEdges = 0;
+        // an edge shorter than twice the width (a facet of a curved rim) is left sharp and counted
+        for (const auto& e : convexEdges(mesh, o, float(std::max(1e-6, 1e-5 * diag)))) {
+            if ((e.b - e.a).length() < o.width * 2) ++shortEdges; else edges.push_back(e);
+        }
+        if (edges.empty()) throw UsageError("bevel found no convex edge turning by at least " + std::to_string(int(o.minAngleDeg)) + " degrees and longer than twice the width in the selection" + (shortEdges ? " (" + std::to_string(shortEdges) + " shorter ones)" : ""));
+        if (edges.size() > 400) throw UsageError("bevel found " + std::to_string(edges.size()) + " edges; narrow it with select or minAngleDeg (at most 400)");
+        const double eps = std::max(1e-9, 1e-7 * diag);
+        std::vector<CsgPolygon> polys = meshToPolygons(mesh);
+        for (const auto& e : edges) {
+            std::vector<CsgPolygon> cutter = bevelCutter(e, o.width, o.segments, eps);
+            if (!cutter.empty()) polys = booleanPolygons(std::move(polys), std::move(cutter), BooleanOp::Subtract, eps);
+        }
+        closeTJunctions(polys, eps * 10);
+        PbrMaterial material = mesh.material;
+        mesh = polygonsToMesh(polys, mesh.name);
+        mesh.material = material;
+        return "{\"type\":\"bevel\",\"edges\":" + std::to_string(edges.size()) + ",\"shortEdgesLeftSharp\":" + std::to_string(shortEdges) + ",\"trianglesBefore\":" + std::to_string(before) + ",\"trianglesAfter\":" + std::to_string(mesh.indices.size() / 3) + "}";
+    }
+    throw UsageError("unknown operation type \"" + type + "\" (boolean, cut, extrude or bevel)");
 }
 
 int main(int argc, char** argv) {

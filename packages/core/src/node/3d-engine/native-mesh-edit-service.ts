@@ -10,7 +10,7 @@
 /**
  * Modelling edits on a given mesh in the native engine (scripts/run_mesh_edit_pipeline.cpp, scratchbox_mesh_edit.hpp):
  * booleans with another GLB or a measured solid, plane cuts with a capped section, inset and extrude of a selected
- * region. Every operation is explicit; an invalid one fails the call with the reason. The result reports each
+ * region, chamfers and fillets on convex edges. Every operation is explicit; an invalid one fails the call with the reason. The result reports each
  * operation's counts and how many edges are left open (0 for a closed solid).
  */
 
@@ -32,7 +32,8 @@ export type MeshEditOperand =
 export type MeshEditOperation =
     | { type: 'boolean'; op: 'union' | 'subtract' | 'intersect'; operand: MeshEditOperand }
     | { type: 'cut'; point: V3; normal: V3 }
-    | { type: 'extrude'; select: { direction?: V3; coneDeg?: number; regionMin?: V3; regionMax?: V3 }; distance?: number; inset?: number };
+    | { type: 'extrude'; select: { direction?: V3; coneDeg?: number; regionMin?: V3; regionMax?: V3 }; distance?: number; inset?: number }
+    | { type: 'bevel'; width: number; segments?: number; minAngleDeg?: number; select?: { regionMin?: V3; regionMax?: V3 } };
 
 export interface MeshEditResult {
     outputGlbPath: string;

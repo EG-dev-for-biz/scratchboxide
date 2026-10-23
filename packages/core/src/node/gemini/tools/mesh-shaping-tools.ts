@@ -104,6 +104,7 @@ export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
             + 'boolean {op: union | subtract | intersect, operand: one of {glbPath} (another closed mesh), {box: {center, size, rotationDeg?}}, {cylinder: {start, end, radius, segments?}}, {sphere: {center, radius, segments?}}} - cut holes, slots and pockets, merge parts, trim to a shape; the cut faces keep sharp edges and a hole gets walls; '
             + 'cut {point, normal} - removes everything on the side the normal points to and caps the section; '
             + 'extrude {select, distance?, inset?} - the selected faces pulled inward by inset (metres, in their own plane, leaving a ring) and then moved by distance along their normals (negative pushes in: a recess), joined by side walls. '
+            + 'bevel {width, segments? (1 = flat chamfer, more = round fillet), minAngleDeg? (default 30), select? {regionMin, regionMax}} - rounds or chamfers the convex edges whose faces turn by at least minAngleDeg, width metres onto each face; edges shorter than twice the width (facets of a curved rim) are left sharp and counted; concave edges are not bevelled. '
             + 'select = {direction?, coneDeg? (default 30), regionMin?, regionMax?}: faces whose normal is within coneDeg of direction AND whose centre lies in the box [regionMin, regionMax] given as fractions of the mesh\'s bounds (0 = min, 1 = max per axis); give both when a direction alone would also catch faces elsewhere (a hole\'s far wall faces the same way as the outer face). '
             + 'All lengths and positions are metres in the mesh\'s own space; read the mesh\'s bounds first if you do not know them. Booleans need closed solids. '
             + 'The result reports each edit\'s counts and openEdges (0 = still a closed solid). Normals are hard across edges sharper than creaseDeg (default 30). '
@@ -117,7 +118,7 @@ export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     items: {
                         type: 'OBJECT',
                         properties: {
-                            type: { type: 'STRING', description: 'boolean, cut or extrude.' },
+                            type: { type: 'STRING', description: 'boolean, cut, extrude or bevel.' },
                             op: { type: 'STRING', description: 'boolean: union, subtract or intersect.' },
                             operand: {
                                 type: 'OBJECT',
@@ -142,7 +143,10 @@ export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
                                 }
                             },
                             distance: { type: 'NUMBER', description: 'extrude: metres along the normals (negative = into the surface).' },
-                            inset: { type: 'NUMBER', description: 'extrude: metres inward in the faces\' plane (>= 0).' }
+                            inset: { type: 'NUMBER', description: 'extrude: metres inward in the faces\' plane (>= 0).' },
+                            width: { type: 'NUMBER', description: 'bevel: metres from the edge onto each face.' },
+                            segments: { type: 'NUMBER', description: 'bevel: 1 = chamfer, 2..32 = fillet facets.' },
+                            minAngleDeg: { type: 'NUMBER', description: 'bevel: only edges whose faces turn by at least this (default 30).' }
                         },
                         required: ['type']
                     }
@@ -289,6 +293,7 @@ export const meshShapingHandlers: Record<string, ToolHandler> = {
         });
         const each = r.operations.map(o => o.type === 'extrude'
             ? `extrude: ${o.selectedFaces} faces selected, ${o.boundaryEdges} boundary edges`
+            : o.type === 'bevel' ? `bevel: ${o.edges} edges${Number(o.shortEdgesLeftSharp) ? `, ${o.shortEdgesLeftSharp} short edges left sharp` : ''}`
             : `${o.type}: ${o.trianglesBefore} -> ${o.trianglesAfter} triangles`).join('; ');
         return {
             status: 'completed',

@@ -138,6 +138,31 @@ describe('mesh_edit: booleans, cuts and extrusions on a given mesh', () => {
         fs.writeFileSync(path.join(SHOTS, 'mesh-edit-block.png'), renderClayPng([{ positions: t.positions, indices: t.indices }], { kind: 'aerial', width: 900, height: 640, bearingDeg: 150, elevationDeg: 35 }));
     }, 120_000);
 
+    it('bevels: a chamfer and a fillet take the volume a hand calculation gives, and the result stays closed', async () => {
+        // all 12 edges of the block (total length 20 m), fillet radius 0.1 m: each metre loses w^2 (1 - pi/4) less a facet's sliver
+        const fillet = await service.edit({ inputGlbPath: input, outputGlbPath: path.join(WORK, 'fillet.glb'), operations: [{ type: 'bevel', width: 0.1, segments: 6 }] });
+        const f = solidStats(fillet.outputGlbPath);
+        expect(fillet.openEdges).toBe(0);
+        expect(f.open).toBe(0);
+        expect(fillet.operations[0]).toMatchObject({ type: 'bevel', edges: 12 });
+        expect(f.volume).toBeGreaterThan(4 - 20 * 0.01 * (1 - Math.PI / 4) - 0.003);
+        expect(f.volume).toBeLessThan(4 - 20 * 0.01 * (1 - Math.PI / 4) + 0.003);
+        // only the top four edges, chamfered: 8 m of edge, each metre losing w^2 / 2, the corners where two meet once
+        const top = await service.edit({ inputGlbPath: input, outputGlbPath: path.join(WORK, 'chamfer.glb'), operations: [{ type: 'bevel', width: 0.1, select: { regionMin: [0, 0.9, 0] } }] });
+        expect(top.operations[0]).toMatchObject({ edges: 4 });
+        expect(solidStats(top.outputGlbPath).volume).toBeGreaterThan(4 - 8 * 0.005 - 1e-4);
+        expect(solidStats(top.outputGlbPath).volume).toBeLessThan(4 - 8 * 0.005 + 0.002);
+    }, 120_000);
+
+    it('bevels the drilled, bossed block: the hole\'s facet edges are left sharp and counted, and it renders', async () => {
+        const r = await service.edit({ inputGlbPath: input, outputGlbPath: path.join(WORK, 'bevelled.glb'), operations: [DRILL, BOSS, { type: 'bevel', width: 0.06, segments: 5 }] });
+        expect(r.openEdges).toBe(0);
+        expect(Number(r.operations[2].shortEdgesLeftSharp)).toBeGreaterThan(0);
+        const t = readGlbTriangles(fs.readFileSync(r.outputGlbPath));
+        fs.mkdirSync(SHOTS, { recursive: true });
+        fs.writeFileSync(path.join(SHOTS, 'mesh-edit-bevel.png'), renderClayPng([{ positions: t.positions, indices: t.indices }], { kind: 'aerial', width: 900, height: 640, bearingDeg: 120, elevationDeg: 30 }));
+    }, 120_000);
+
     it('refuses what it cannot do faithfully, with the reason', async () => {
         await expect(service.edit({ inputGlbPath: input, operations: [] })).rejects.toBeInstanceOf(MissingInputError);
         await expect(service.edit({ inputGlbPath: path.join(WORK, 'none.glb'), operations: [DRILL] })).rejects.toBeInstanceOf(MissingInputError);

@@ -15,6 +15,7 @@
  * - face selection by direction and region (a cone around a direction, a box in fractions of the mesh's bounds);
  * - extrude and inset of a selected region: the region moved along its normals and/or shrunk inside its own plane, joined
  *   to the rest by side walls on its boundary;
+ * - bevels: a chamfer or a round fillet on each sharp convex edge, the corner wedge subtracted;
  * - crease normals: smooth across shallow edges, hard across sharp ones.
  * The operand solids of a boolean are measurements (centre, size, radius, end points), not named shapes.
  */
@@ -695,6 +696,114 @@ inline uint32_t openEdges(const ScratchboxMesh& m, float tol) {
     uint32_t open = 0;
     for (const auto& [_, c] : count) if (c == 1) ++open;
     return open;
+}
+
+struct BevelOptions {
+    double width = 0;          // metres from the edge to where the bevel meets each face
+    int segments = 1;          // 1 = a flat chamfer; more = a round fillet of that many facets
+    double minAngleDeg = 30;   // edges whose faces turn by at least this much
+    bool hasRegion = false;
+    Vec3 regionMin, regionMax; // edge midpoints inside this box, as fractions of the mesh's bounds
+};
+
+struct BevelEdge { D3 a, b, n1, n2; };
+
+/**
+ * The sharp convex edges of a closed mesh, each as one straight run: the triangle edges between two faces whose normals
+ * turn by at least minAngleDeg, where each face lies behind the other's plane (a ridge, not a valley), joined end to
+ * end while they share a point and the same two face directions.
+ */
+inline std::vector<BevelEdge> convexEdges(const ScratchboxMesh& m, const BevelOptions& o, float weldTol) {
+    uint32_t points = 0;
+    const std::vector<uint32_t> wid = weldIds(m, weldTol, &points);
+    std::vector<Vec3> pos(points);
+    for (size_t i = 0; i < m.vertices.size(); ++i) pos[wid[i]] = m.vertices[i].position;
+    const size_t faces = m.indices.size() / 3;
+    std::unordered_map<uint64_t, std::vector<uint32_t>> edgeFaces;
+    for (size_t f = 0; f < faces; ++f) for (int k = 0; k < 3; ++k) {
+        uint32_t a = wid[m.indices[3 * f + k]], b = wid[m.indices[3 * f + (k + 1) % 3]];
+        if (a == b) continue;
+        edgeFaces[(uint64_t(std::min(a, b)) << 32) | std::max(a, b)].push_back(uint32_t(f));
+    }
+    AABB box;
+    for (const auto& p : pos) box.expand(p);
+    const Vec3 size = box.max - box.min;
+    const double cosMin = std::cos(o.minAngleDeg * M_PI / 180.0);
+    struct Run { uint32_t a, b; Vec3 n1, n2; };
+    std::vector<Run> runs;
+    for (const auto& [key, fs] : edgeFaces) {
+        if (fs.size() != 2) continue;
+        const uint32_t a = uint32_t(key >> 32), b = uint32_t(key & 0xffffffffu);
+        float ar1 = 0, ar2 = 0;
+        const Vec3 n1 = faceNormal(m, fs[0], &ar1), n2 = faceNormal(m, fs[1], &ar2);
+        if (!(ar1 > 0) || !(ar2 > 0) || n1.dot(n2) > cosMin) continue;
+        // convex: the second face's far corner lies behind the first face's plane
+        Vec3 far = pos[a];
+        for (int k = 0; k < 3; ++k) { const uint32_t v = wid[m.indices[3 * fs[1] + k]]; if (v != a && v != b) far = pos[v]; }
+        if (n1.dot(far - pos[a]) > -1e-6f * size.length()) continue;
+        if (o.hasRegion) {
+            const Vec3 c = (pos[a] + pos[b]) * 0.5f;
+            auto frac = [](float v, float lo, float ext) { return ext > 0 ? (v - lo) / ext : 0.5f; };
+            const Vec3 u(frac(c.x, box.min.x, size.x), frac(c.y, box.min.y, size.y), frac(c.z, box.min.z, size.z));
+            if (u.x < o.regionMin.x - 1e-4f || u.x > o.regionMax.x + 1e-4f || u.y < o.regionMin.y - 1e-4f || u.y > o.regionMax.y + 1e-4f || u.z < o.regionMin.z - 1e-4f || u.z > o.regionMax.z + 1e-4f) continue;
+        }
+        runs.push_back({a, b, n1, n2});
+    }
+    // join runs sharing a point and both face directions (a long edge split into pieces by earlier cuts)
+    std::vector<int> parent(runs.size());
+    for (size_t i = 0; i < runs.size(); ++i) parent[i] = int(i);
+    std::function<int(int)> find = [&](int x) { return parent[x] == x ? x : parent[x] = find(parent[x]); };
+    std::unordered_map<uint32_t, std::vector<int>> atPoint;
+    for (size_t i = 0; i < runs.size(); ++i) { atPoint[runs[i].a].push_back(int(i)); atPoint[runs[i].b].push_back(int(i)); }
+    auto same = [](const Run& r, const Run& q) {
+        return (r.n1.dot(q.n1) > 0.9999f && r.n2.dot(q.n2) > 0.9999f) || (r.n1.dot(q.n2) > 0.9999f && r.n2.dot(q.n1) > 0.9999f);
+    };
+    for (const auto& [_, list] : atPoint) for (size_t i = 0; i < list.size(); ++i) for (size_t j = i + 1; j < list.size(); ++j) {
+        if (same(runs[list[i]], runs[list[j]])) parent[find(list[i])] = find(list[j]);
+    }
+    std::unordered_map<int, std::vector<int>> groups;
+    for (size_t i = 0; i < runs.size(); ++i) groups[find(int(i))].push_back(int(i));
+    std::vector<BevelEdge> out;
+    for (const auto& [_, g] : groups) {
+        const Run& r0 = runs[g[0]];
+        const Vec3 dir = (pos[r0.b] - pos[r0.a]).normalized();
+        float lo = 1e30f, hi = -1e30f;
+        for (int i : g) for (uint32_t v : {runs[i].a, runs[i].b}) { const float t = (pos[v] - pos[r0.a]).dot(dir); lo = std::min(lo, t); hi = std::max(hi, t); }
+        const Vec3 A = pos[r0.a] + dir * lo, B = pos[r0.a] + dir * hi;
+        auto d3 = [](const Vec3& v) { return D3{v.x, v.y, v.z}; };
+        out.push_back({d3(A), d3(B), d3(r0.n1), d3(r0.n2)});
+    }
+    return out;
+}
+
+/**
+ * The solid a bevel removes at one convex edge: the wedge between the edge and the chord joining the two lines where
+ * the bevel meets the faces (width from the edge on each face), less, for a fillet, the cylinder tangent to both faces
+ * there, so what is left is a round of that radius.
+ */
+inline std::vector<CsgPolygon> bevelCutter(const BevelEdge& e, double width, int segments, double eps) {
+    D3 dir = e.b - e.a;
+    const double L = dir.length();
+    if (!(L > 0)) return {};
+    dir = dir * (1.0 / L);
+    D3 d1 = e.n1.cross(dir), d2 = e.n2.cross(dir);
+    d1 = d1 * (1.0 / d1.length()); d2 = d2 * (1.0 / d2.length());
+    if (d1.dot(e.n2) > 0) d1 = d1 * -1.0;
+    if (d2.dot(e.n1) > 0) d2 = d2 * -1.0;
+    const D3 T1 = e.a + d1 * width, T2 = e.a + d2 * width, M = (T1 + T2) * 0.5;
+    D3 up = e.a - M;
+    const double h = up.length();
+    if (!(h > eps)) return {};
+    up = up * (1.0 / h);
+    const D3 side = dir.cross(up);
+    const double W = (T1 - T2).length() * 1.5, ext = std::max(eps * 64, 1e-4 * L);
+    std::vector<CsgPolygon> wedge = boxPolygons(M + up * h + dir * (L / 2), {L + 2 * ext, 2 * h, W}, dir, up, side);
+    if (segments <= 1) return wedge;
+    const double cosPhi = std::clamp(e.n1.dot(e.n2), -0.999, 0.999), phi = std::acos(cosPhi);
+    const double r = width / std::tan(phi / 2);
+    const D3 C = e.a - (e.n1 + e.n2) * (r / (1 + cosPhi));
+    const int around = std::max(8, int(std::lround(segments * 2 * M_PI / phi)));
+    return booleanPolygons(std::move(wedge), cylinderPolygons(C - dir * (2 * ext), C + dir * (L + 2 * ext), r, around), BooleanOp::Subtract, eps);
 }
 
 /** Triangles with no area removed (a boolean's slivers); their vertices stay until the mesh is re-cornered. */
