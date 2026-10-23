@@ -21,6 +21,7 @@ import * as path from 'path';
 import { MissingInputError } from '../src/common/errors/pipeline-errors';
 import { NativeMeshEditService, type MeshEditOperation } from '../src/node/3d-engine/native-mesh-edit-service';
 import { meshShapingHandlers } from '../src/node/gemini/tools/mesh-shaping-tools';
+import { resolveTaskCapability } from '../src/node/agent/task-capability-resolver';
 import { writeFixtureGlb, type FixtureMesh } from './helpers/mesh-glb-fixtures';
 import { readGlbTriangles, renderClayPng } from './helpers/clay-glb-render';
 
@@ -150,4 +151,13 @@ describe('mesh_edit: booleans, cuts and extrusions on a given mesh', () => {
         expect(res.status).toBe('completed');
         expect(res.summaryResult).toMatch(/a closed solid/);
     }, 120_000);
+
+    it('modelling requests are routed to mesh_edit, deformations still to mesh_apply_deformers', () => {
+        for (const ask of ['drill a hole through this mesh', 'extrude the top face of the mesh by 20 cm', 'subtract a cylinder from this mesh', 'slice this 3D mesh in half with a plane']) {
+            expect(resolveTaskCapability(ask).tier1Assessment.suggestedNativeAction?.targetTool, ask).toBe('mesh_edit');
+        }
+        // with a 3D scene open, a request that never says "mesh" goes there too
+        expect(resolveTaskCapability('drill a hole through this block', { activeArtifact: { type: '3d-scene' } } as never).tier1Assessment.suggestedNativeAction?.targetTool).toBe('mesh_edit');
+        expect(resolveTaskCapability('taper the top of this mesh and twist it 45 degrees').tier1Assessment.suggestedNativeAction?.targetTool).toBe('mesh_apply_deformers');
+    });
 });
