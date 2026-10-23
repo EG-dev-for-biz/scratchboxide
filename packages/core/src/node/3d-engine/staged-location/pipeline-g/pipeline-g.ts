@@ -40,7 +40,7 @@ import type { VisionModelChain } from '../../../gemini/vision-model-chain';
 import type { StructurePickResult } from '../extraction-sizing';
 import type { FaceTexture, TexelSource } from '../pipeline-e/massing-glb';
 import { massingSpecText, type FaceSweepItem, type Massing, type OpeningItem } from '../pipeline-e/massing-spec';
-import { runMassing, type MassingFace, type MassingRun } from '../pipeline-e/native-massing';
+import { readFaceOrtho, runMassing, type MassingFace, type MassingRun } from '../pipeline-e/native-massing';
 import { writeMassingLayer } from '../pipeline-e/pipeline-e';
 import type { InferenceOutcome, StepRecord } from '../pipeline-e/inference';
 import { ENHANCE_CONCURRENCY, TEXTURE_PLATE_PROMPT_ID, type EnhanceWallRecord, type PlateModelClient } from '../pipeline-e/enhance';
@@ -68,13 +68,14 @@ export function stagedPipelineG(request: { procedural?: boolean }, env: NodeJS.P
 
 const rung = (name: (typeof TEXTURE_LADDER_RUNGS)[number]) => TEXTURE_LADDER_RUNGS.indexOf(name);
 /** Texel sources of G's paint (indices into the legend). */
-export const G_SRC = { read: 0, continued: 1, enhanced: 2, roof: 3 } as const;
+export const G_SRC = { read: 0, continued: 1, enhanced: 2, roof: 3, measured: 4 } as const;
 export function gLegend(): TexelSource[] {
     return [
         { source: 'pipeline-g-read', label: 'photo-inferred', method: 'pipeline G: a flat colour the vision model read off the survey plate of this wall (station renders of the photo tile laid onto the wall in metres), painted on the wall, its openings, bands and members', rung: rung('generated tileable PBR'), weight: 0.3 },
         { source: 'pipeline-g-continued', label: 'generated', method: "pipeline G: a part the survey did not see (an opening or member the reading continued from the wall's own repeats, or a wall nobody read, given the read walls' median colour)", rung: rung('generated tileable PBR'), weight: 0.15 },
         { source: 'pipeline-g-enhanced', label: 'generated', method: `pipeline G: AI-enhanced from the survey plate of this wall by the facade texture builder (${TEXTURE_PLATE_PROMPT_ID}), kept through its identity gate and quality score, what the score faulted redrawn by generative infill`, rung: rung('generated tileable PBR'), weight: 0.25 },
-        { source: 'pipeline-g-roof', label: 'generated', method: `pipeline G: the roof redrawn by the image model (${ROOF_PLATE_PROMPT_ID}) from its survey plate, a station looking down on it, kept where its edges held to the plate`, rung: rung('generated tileable PBR'), weight: 0.25 }
+        { source: 'pipeline-g-roof', label: 'generated', method: `pipeline G: the roof redrawn by the image model (${ROOF_PLATE_PROMPT_ID}) from its survey plate, a station looking down on it, kept where its edges held to the plate`, rung: rung('generated tileable PBR'), weight: 0.25 },
+        { source: 'pipeline-g-measured-colour', label: 'photo-inferred', method: "pipeline G: a face nobody read, in the one flat colour measured on its own bake of the tile photo (pipeline E's ortho of it, the mean of its lit texels): no texture of the photo drawn", rung: rung('generated tileable PBR'), weight: 0.2 }
     ];
 }
 
@@ -161,16 +162,38 @@ export function ensurePaintFrame(f: MassingFace): void {
     f.height = Math.max(1, Math.ceil((f.tMax - f.tMin) / pixel));
 }
 
+/**
+ * A face's own colour, measured on pipeline E's bake of it from the tile photo (its ortho in `dir`): the mean colour of its
+ * lit texels (luma between the 60th and 90th percentile of its covered texels, so baked shadow does not darken it).
+ */
+export function measuredFaceColour(dir: string, f: Pick<MassingFace, 'index' | 'width' | 'height'>): [number, number, number] | undefined {
+    let o;
+    try { o = readFaceOrtho(dir, f); } catch { return undefined; }
+    if (!o) return undefined;
+    const px: Array<[number, number, number, number]> = [];
+    for (let i = 0; i < o.width * o.height; i++) {
+        if (o.rgba[i * 4 + 3] < 128) continue;
+        const r = o.rgba[i * 4], g = o.rgba[i * 4 + 1], b = o.rgba[i * 4 + 2];
+        px.push([0.299 * r + 0.587 * g + 0.114 * b, r, g, b]);
+    }
+    if (px.length < 100) return undefined;
+    px.sort((a, b) => a[0] - b[0]);
+    const lit = px.slice(Math.floor(px.length * 0.6), Math.floor(px.length * 0.9));
+    return [1, 2, 3].map(k => Math.round(lit.reduce((s, p) => s + p[k], 0) / lit.length)) as [number, number, number];
+}
+
 /** The paint: per face of the built run, its raster in the face's ortho frame (given one when it was built without). */
-export function paintFaces(faces: MassingFace[], items: Map<string, ProgramItems>, fallback: [number, number, number]): Map<number, FaceTexture> {
+export function paintFaces(faces: MassingFace[], items: Map<string, ProgramItems>, fallback: [number, number, number], measured?: Map<string, [number, number, number]>): Map<number, FaceTexture> {
     const textures = new Map<number, FaceTexture>();
     for (const f of faces) {
         if (f.kind === 'base') continue;
         ensurePaintFrame(f);
         if (!f.width || !f.height) continue;
         const own = items.get(f.key) ?? [...items.entries()].find(([k]) => f.key.startsWith(k + ':'))?.[1];
-        const wallC = own?.wallColour ?? (f.kind === 'roof' ? fallback.map(c => Math.round(c * 0.6)) as [number, number, number] : fallback);
-        const wallSrc = own ? G_SRC.read : G_SRC.continued;
+        // a face nobody read: its own measured colour, else the read walls' median (a roof darker)
+        const measuredC = own ? undefined : measured?.get(f.key) ?? [...(measured ?? new Map<string, [number, number, number]>()).entries()].find(([k]) => f.key.startsWith(k + ':'))?.[1];
+        const wallC = own?.wallColour ?? measuredC ?? (f.kind === 'roof' ? fallback.map(c => Math.round(c * 0.6)) as [number, number, number] : fallback);
+        const wallSrc = own ? G_SRC.read : measuredC ? G_SRC.measured : G_SRC.continued;
         const rgba = new Uint8Array(f.width * f.height * 4), source = new Uint8Array(f.width * f.height).fill(wallSrc);
         for (let i = 0; i < f.width * f.height; i++) rgba.set([wallC[0], wallC[1], wallC[2], 255], i * 4);
         if (own) {
@@ -262,7 +285,8 @@ export function plateOntoFace(f: MassingFace, painted: FaceTexture, pl: Plate, p
     const surface = offs.length ? offs[Math.floor(offs.length / 2)] : 0;
     for (let y = 0; y < painted.height; y++) for (let x = 0; x < painted.width; x++) {
         const s = f.orthoSMin + (x + 0.5) * f.pixel, t = f.orthoTMax - (y + 0.5) * f.pixel;
-        const inBand = t - f.tBottom < STREET_CLUTTER_M;
+        // a wall's street band (a roof's t runs across it, not up: it has none)
+        const inBand = f.kind === 'wall' && t - f.tBottom < STREET_CLUTTER_M;
         const p = [0, 1, 2].map(k => f.origin[k] + s * f.axisS[k] + t * f.axisT[k]);
         const d = [0, 1, 2].map(k => p[k] - pf.origin[k]);
         const ps = dot(d, pf.axisS as number[]), pt = dot(d, pf.axisT as number[]);
@@ -422,10 +446,13 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     t = Date.now();
     const walls = [...items.values()].map(x => x.wallColour);
     const fallback: [number, number, number] = [0, 1, 2].map(k => Math.round(median(walls.map(w => w[k])))) as [number, number, number];
-    const textures = paintFaces(run.report.faces, built, fallback);
+    // each face nobody read in its own colour, measured on pipeline E's bake of it (not the read walls' median)
+    const measured = new Map<string, [number, number, number]>();
+    for (const f of input.run.report.faces) if (f.kind !== 'base' && f.width > 0 && f.height > 0) { const c = measuredFaceColour(input.run.dir, f); if (c) measured.set(f.key, c); }
+    const textures = paintFaces(run.report.faces, built, fallback, measured);
     const legend = gLegend();
     timingsMs.paint = Date.now() - t;
-    steps.push({ step: 'paint', proposed: textures.size, accepted: textures.size, rejected: 0, notes: [`${[...built.keys()].length} walls painted from their own reading or their facade's, ${textures.size - built.size} faces from the read walls' median colour (generated)`], ms: timingsMs.paint });
+    steps.push({ step: 'paint', proposed: textures.size, accepted: textures.size, rejected: 0, notes: [`${[...built.keys()].length} walls painted from their own reading or their facade's; of the other ${textures.size - built.size} faces, ${[...textures.values()].filter(x => x.source[0] === G_SRC.measured).length} in the colour measured on their own bake of the tile photo, the rest the read walls' median colour (generated)`], ms: timingsMs.paint });
 
     // 6. facade textures: each read wall's survey plate redrawn by the facade texture builder, over its paint where accepted
     const enhanced: EnhanceWallRecord[] = [];
