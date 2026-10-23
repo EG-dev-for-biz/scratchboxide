@@ -661,7 +661,7 @@ export function buildMassing(inp: MassingInputs): Massing {
         const fromFootprint = footprints.length > 0;
         for (const [vi, v] of (fromFootprint ? [] : b.volumes ?? []).entries()) {
             if (v.vertices.length < 4 || v.indices.length < 12) continue;
-            meshes.push(singleSided({ id: `${b.id}/v${vi}`, vertices: v.vertices.map(([x, h, z]) => [x, inp.groundY + h, z]), indices: v.indices.slice() }));
+            meshes.push(singleSided({ id: `${b.id}/v${vi}`, vertices: v.vertices.map(([x, h, z]) => [x, inp.groundY + h, z]), indices: v.indices.slice(), ...(b.provenance ? { provenance: b.provenance } : {}) }));
         }
         const extruded = fromFootprint ? footprints : (b.extruded ?? []).filter(p => !(p.planOnly && (b.volumes?.length ?? 0) > 0));
         for (const [pi, p] of extruded.entries()) {
@@ -695,7 +695,7 @@ export function buildMassing(inp: MassingInputs): Massing {
             } else if (vectorY !== undefined) { topY = vectorY; heightSource = 'vector'; }
             else if (solarY !== undefined) { topY = solarY; heightSource = 'solar'; }
             else { notes.push(`part ${id}: no height from the vector data, Solar or the scan; left out`); continue; }
-            const part: MassingPart = { id, baseY, topY, loops, planes: [], heightSource, heights: { ...(vectorY !== undefined ? { vectorY } : {}), ...(solarY !== undefined ? { solarY } : {}), ...(scanY !== undefined ? { scanY } : {}) } };
+            const part: MassingPart = { id, baseY, topY, loops, planes: [], heightSource, heights: { ...(vectorY !== undefined ? { vectorY } : {}), ...(solarY !== undefined ? { solarY } : {}), ...(scanY !== undefined ? { scanY } : {}) }, ...(b.provenance ? { provenance: b.provenance } : {}) };
             // pitched facets: kept one by one (largest first) while each lowers the roof's error against the scan
             const pitched = inside.filter(({ s }) => s.pitchDeg >= MIN_PITCHED_DEG).sort((u, v) => v.s.areaM2 - u.s.areaM2);
             const fitPitched = (target: MassingPart, pts: Vec2[]) => {
@@ -725,7 +725,7 @@ export function buildMassing(inp: MassingInputs): Massing {
                 for (const [ti, tier] of tiers.entries()) {
                     const tierPart: MassingPart = {
                         id: `${id}/t${ti}`, baseY: tier.baseY, topY: tier.topY, loops: [tier.loop], planes: [],
-                        heightSource: 'scan', heights: { scanY: tier.topY },
+                        heightSource: 'scan', heights: { scanY: tier.topY }, ...(b.provenance ? { provenance: b.provenance } : {}),
                     };
                     if (ti === tiers.length - 1) fitPitched(tierPart, samplesIn([tier.loop]).filter(([x, z]) => Number.isFinite(inp.scanTop(x, z))));
                     parts.push(tierPart);

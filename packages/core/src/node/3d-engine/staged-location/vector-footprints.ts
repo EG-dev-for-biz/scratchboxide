@@ -28,6 +28,9 @@ export interface VectorBuilding {
     id: string; parts: Vec2[][][]; heightM?: number;
     extruded?: Array<{ loops: Vec2[][]; heightM?: number; minHeightM?: number; planOnly?: boolean }>;
     volumes?: Array<{ vertices: Array<[number, number, number]>; indices: number[]; heightM?: number }>;
+    /** Overrides buildMassing's part/mesh provenance token for this building (default: unset, the spec's own token) —
+     *  for a building not actually from Google's vector data (e.g. orchestrator.ts's scanDerivedFootprint). */
+    provenance?: string;
 }
 
 export interface VectorEvidence {
