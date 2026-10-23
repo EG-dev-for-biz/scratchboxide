@@ -118,7 +118,7 @@ import {
 import { describeRemeshProvenance, readRemeshProvenance } from './remesh-provenance';
 import { putBackScannedTrees } from './scanned-trees';
 import {
-    canopyLookup, checkIsolate, grownOutline, pickOnScan, FOOTPRINT_TOLERANCE_M, sizeExtraction, structureKeepCells, writeIsolationPick, ISOLATE_PRECISION_MIN, ISOLATE_ROOFED_MIN, NO_STRUCTURE_DISTRICT_RADIUS_M, type StructurePickResult
+    canopyLookup, checkIsolate, grownOutline, pickOnScan, CONTAINMENT_MAX_RADIUS_M, FOOTPRINT_TOLERANCE_M, sizeExtraction, structureKeepCells, writeIsolationPick, ISOLATE_PRECISION_MIN, ISOLATE_ROOFED_MIN, NO_STRUCTURE_DISTRICT_RADIUS_M, type StructurePickResult
 } from './extraction-sizing';
 import {
     discoverPanos, facadeGeometry, fetchViews, missingCredentials, EVIDENCE_STAGE_BUDGET_MS, type EvidenceImage, type PanoCandidate, type StreetViewEvidenceDeps
@@ -1293,7 +1293,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             run: async io => {
                 if (!deps.vectorEvidence) return { status: 'skipped', source: '', reason: 'no Google vector data: no service account is configured for vectortiles.featuretiles' };
                 const place = placeValue!;
-                const radiusM = request.isolate ? VECTOR_ISOLATE_RADIUS_M : (request.radiusM ?? 250);
+                // an isolate's vector search reaches as far as its extraction may grow (the containment cap): the building
+                // the place names can stand well past the first paint's radius (a house that geocodes to its gate)
+                const radiusM = request.isolate ? Math.max(VECTOR_ISOLATE_RADIUS_M, CONTAINMENT_MAX_RADIUS_M) : (request.radiusM ?? 250);
                 const msBy: Record<string, number> = {};
                 const t0 = now();
                 const key = stageKey(VECTOR_MASSING_VERSION, place.lat.toFixed(6), place.lng.toFixed(6), Math.round(radiusM));
@@ -1456,7 +1458,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         extract: async radiusM => { const x = await extractCached(radiusM, io); last = x; return x.extraction; },
                         ...(deps.vegetation.canopy ? { canopy: async (tile: string) => (await deps.vegetation.canopy!({ tilePath: tile, signal: io.signal })).mask } : {}),
                         ...(deps.vectorEvidence ? { vector: async (radiusM: number) => evidenceLookup(await deps.vectorEvidence!({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM }), radiusM) } : {}),
-                        onProgress: m => io.progress(m), signal: io.signal
+                        placeName: request.query, onProgress: m => io.progress(m), signal: io.signal
                     });
                     value = { extraction: sizing.extraction, key: last!.key, sizedTo: sizing.sizedTo, structure: sizing.structure, ground: sizing.ground, scan: sizing.scan, unmaskedTop: sizing.unmaskedTop, ...(sizing.canopy ? { canopy: sizing.canopy } : {}), ...(sizing.vector ? { vector: sizing.vector } : {}), ...(sizing.vectorError ? { vectorError: sizing.vectorError } : {}), rounds: sizing.rounds, cached: last!.cached, builtAtMs: last!.builtAtMs };
                     for (const n of sizing.notes) {
@@ -1530,8 +1532,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     };
                     // what decided the footprint, said where the provenance is read
                     const vf = st.vectorFootprint;
-                    if (vf?.used) run.note(PROVENANCE.remeshed, `footprint from Google vector data: building ${vf.featureIds.join(', ')} (${Math.round(vf.areaM2)} m²), ${Math.round(vf.raisedShare * 100)}% of it raised in the scan, ${Math.round(vf.openShare * 100)}% open ground, ${Math.round(vf.canopyShare * 100)}% tree canopy${vf.enclosesStructure ? ' (larger than the structure: it encloses it)' : ''}; the scan's raised cells within ${FOOTPRINT_TOLERANCE_M} m of it are the structure (IoU ${vf.iou} with the footprint)`);
-                    else run.note(PROVENANCE.remeshed, `footprint from the scan's geometry alone: ${vf?.reason ?? (value.vectorError ? `Google vector data could not be read (${value.vectorError})` : 'no Google vector data was available')}`);
+                    const chosen = vf?.choice ? `; ${vf.choice.note}` : '';
+                    if (vf?.used) run.note(PROVENANCE.remeshed, `footprint from Google vector data: building ${vf.featureIds.join(', ')} (${Math.round(vf.areaM2)} m²), ${Math.round(vf.raisedShare * 100)}% of it raised in the scan, ${Math.round(vf.openShare * 100)}% open ground, ${Math.round(vf.canopyShare * 100)}% tree canopy${vf.enclosesStructure ? ' (larger than the structure: it encloses it)' : ''}; the scan's raised cells within ${FOOTPRINT_TOLERANCE_M} m of it are the structure (IoU ${vf.iou} with the footprint)${chosen}`);
+                    else run.note(PROVENANCE.remeshed, `footprint from the scan's geometry alone: ${vf?.reason ?? (value.vectorError ? `Google vector data could not be read (${value.vectorError})` : 'no Google vector data was available')}${chosen}`);
                 }
                 // the cap on leaf tiles can stop a large request short: the scan reaches less far than asked, and says so
                 if (e.truncated && e.coveredRadiusM < e.radiusM - 0.5) {

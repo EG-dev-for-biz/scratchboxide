@@ -16,7 +16,11 @@
  *     surface is kept for Street View visibility: trees do block a photo).
  *  4. Pick the structure: the 8-connected component of cells 3.0 m or more above the ground that holds the tall cell
  *     nearest the geocoded point, searched within 30 m: tile_refine's own isolate rule, so the probe and the remesh
- *     pick one structure. The seed cell is what tile_refine and scan_fit are given as their anchor.
+ *     pick one structure. The seed cell is what tile_refine and scan_fit are given as their anchor. With Google vector
+ *     buildings at hand the seed is chosen by footprint instead (chooseFootprint): the footprint under the place, else
+ *     the one holding or nearest a named POI whose name shares words with the request, else the one whose centroid is
+ *     nearest the place within the containment cap; the component grows from the tallest raised cell inside it. A chosen
+ *     footprint the probe does not reach widens the extraction to it (a place that geocodes to its gate, not its house).
  *  5. While the structure comes within 3 m of the extraction's edge, extract again by coordinates at (farthest
  *     footprint point) + max(8 m, 0.25 × its diagonal): at most 3 rounds, never past 150 m (the leaf cache serves the
  *     leaves already fetched).
@@ -82,7 +86,100 @@ export interface StructurePickResult {
         /** The footprint is larger than the structure: under FOOTPRINT_MIN_RAISED_SHARE of it is raised, but the raised
          *  structure at the place lies within it (a churchyard, a forecourt, a yard with its trees inside the outline). */
         enclosesStructure: boolean;
+        /** Which footprint was chosen and why (chooseFootprint), and how far the seed moved from the geocoded point. */
+        choice?: FootprintChoice;
     };
+}
+
+/**
+ * How the building footprint the pick seeds on was chosen: `under-place` (the footprint covers the geocoded point),
+ * `poi-name` (it holds, or is the nearest to, a named POI sharing words with the request), `nearest` (its centroid is the
+ * nearest to the place). Distances are from the geocoded point (m); `note` is the sentence the stage notes carry.
+ */
+export interface FootprintChoice {
+    by: 'under-place' | 'poi-name' | 'nearest' | (string & {});
+    featureId: string;
+    /** The feature index + 1 in the evidence (FootprintLookup.buildingAt's value). */
+    target: number;
+    centroid: { x: number; z: number };
+    distanceM: number;
+    /** The farthest the footprint's outline reaches from the geocoded point (m): what an extraction must cover. */
+    reachM: number;
+    poiName?: string;
+    note: string;
+}
+
+/** Words of a place name or query: lower-case alphanumeric tokens of three letters or more, without repeats. */
+export function placeWords(text: string | undefined): string[] {
+    if (!text) return [];
+    return [...new Set(text.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').split(/[^a-z0-9]+/).filter(w => w.length >= 3))];
+}
+
+/**
+ * The building footprint the pick seeds on, from the vector buildings within reach: the footprint under the place; else
+ * the footprint that holds (or, failing that, is nearest to) the POI whose name shares the most words with the request
+ * (plain token overlap, no landmark dictionary); else the footprint whose centroid is nearest the place within `maxM`.
+ * Undefined when no footprint qualifies. Nothing is read from a type code: a footprint is loops, a POI a point and a name.
+ */
+export function chooseFootprint(opts: {
+    buildings: Array<{ id: string; parts: Vec2[][][] }>;
+    pois?: Array<{ x: number; z: number; name?: string }>;
+    anchor?: { x: number; z: number };
+    placeName?: string;
+    maxM?: number;
+}): FootprintChoice | undefined {
+    const a = opts.anchor ?? { x: 0, z: 0 };
+    const maxM = opts.maxM ?? CONTAINMENT_MAX_RADIUS_M;
+    type Cand = { i: number; id: string; centroid: { x: number; z: number }; distanceM: number; reachM: number; contains(x: number, z: number): boolean };
+    const cands: Cand[] = [];
+    opts.buildings.forEach((b, i) => {
+        let sx = 0, sz = 0, n = 0, reach = 0;
+        for (const part of b.parts) for (const loop of part) for (const [x, z] of loop) reach = Math.max(reach, Math.hypot(x - a.x, z - a.z));
+        for (const part of b.parts) for (const [x, z] of part[0] ?? []) { sx += x; sz += z; n++; }
+        if (!n) return;
+        const centroid = { x: sx / n, z: sz / n };
+        const distanceM = Math.hypot(centroid.x - a.x, centroid.z - a.z);
+        if (distanceM > maxM) return;
+        cands.push({ i, id: b.id, centroid, distanceM, reachM: reach, contains: (x, z) => b.parts.some(part => pointInLoops(part, x, z)) });
+    });
+    if (!cands.length) return undefined;
+    const r3 = (v: number) => Math.round(v * 1000) / 1000;
+    const dir = (c: { x: number; z: number }) => {
+        const dx = c.x - a.x, dz = c.z - a.z, ew = dx > 0 ? 'east' : 'west', ns = dz > 0 ? 'south' : 'north';
+        return Math.abs(dx) >= 2 * Math.abs(dz) ? ew : Math.abs(dz) >= 2 * Math.abs(dx) ? ns : `${ns}-${ew}`;
+    };
+    const make = (c: Cand, by: FootprintChoice['by'], why: string, poiName?: string): FootprintChoice => ({
+        by, featureId: c.id, target: c.i + 1, centroid: { x: r3(c.centroid.x), z: r3(c.centroid.z) }, distanceM: r3(c.distanceM), reachM: r3(c.reachM), ...(poiName ? { poiName } : {}),
+        note: `footprint ${c.id} chosen ${why}${c.distanceM >= 5 ? `; the seed moved ${Math.round(c.distanceM)} m ${dir(c.centroid)} from the geocoded point to it` : ''}`
+    });
+    const under = cands.find(c => c.contains(a.x, a.z));
+    if (under) return make(under, 'under-place', 'because it covers the geocoded point');
+    const words = placeWords(opts.placeName);
+    if (words.length && opts.pois?.length) {
+        let best: { c: Cand; overlap: number; name: string; holds: boolean } | undefined;
+        for (const poi of opts.pois) {
+            if (!poi.name || Math.hypot(poi.x - a.x, poi.z - a.z) > maxM) continue;
+            const overlap = placeWords(poi.name).filter(w => words.includes(w)).length;
+            if (!overlap) continue;
+            const holding = cands.find(c => c.contains(poi.x, poi.z));
+            const c = holding ?? cands.reduce((m, q) => (Math.hypot(q.centroid.x - poi.x, q.centroid.z - poi.z) < Math.hypot(m.centroid.x - poi.x, m.centroid.z - poi.z) ? q : m));
+            const cand = { c, overlap, name: poi.name, holds: !!holding };
+            if (!best || overlap > best.overlap || (overlap === best.overlap && (Number(cand.holds) > Number(best.holds) || (cand.holds === best.holds && c.distanceM < best.c.distanceM)))) best = cand;
+        }
+        if (best) return make(best.c, 'poi-name', `because it ${best.holds ? 'holds' : 'is the footprint nearest'} the POI named '${best.name}', which shares ${best.overlap} word${best.overlap === 1 ? '' : 's'} with the place name`, best.name);
+    }
+    const nearest = cands.reduce((m, c) => (c.distanceM < m.distanceM ? c : m));
+    return make(nearest, 'nearest', `as the footprint nearest the geocoded point (${Math.round(nearest.distanceM)} m to its centroid${cands.length > 1 ? `, of ${cands.length} within ${Math.round(maxM)} m` : ''})`);
+}
+
+/** Even-odd point-in-polygon over a part's loops (outer ring and holes). */
+function pointInLoops(loops: Vec2[][], x: number, z: number): boolean {
+    let inside = false;
+    for (const r of loops) for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+        const [ax, az] = r[i], [bx, bz] = r[j];
+        if ((az > z) !== (bz > z) && x < ax + ((z - az) / (bz - az)) * (bx - ax)) inside = !inside;
+    }
+    return inside;
 }
 
 function cellKey(x: number, z: number): string {
@@ -291,8 +388,12 @@ export function joinParts(comp: Uint8Array, above: Float32Array, nx: number, nz:
     return { kept, parts: P, lowCutM: keepAll ? 0 : lowCut };
 }
 
-/** Building footprints as the pick reads them: the feature index + 1 at a point (0: none), and the features. */
-export interface FootprintLookup { buildingAt(x: number, z: number): number; buildings: Array<{ id: string }> }
+/**
+ * Building footprints as the pick reads them: the feature index + 1 at a point (0: none), and the features. `choice`
+ * (chooseFootprint) names the footprint the pick must seed on; without it the footprint under the place, under the seed
+ * or within FOOTPRINT_SEARCH_M of the place is taken, as before.
+ */
+export interface FootprintLookup { buildingAt(x: number, z: number): number; buildings: Array<{ id: string }>; choice?: FootprintChoice }
 
 /** The footprint found nearest the place is searched within this of it (m). */
 export const FOOTPRINT_SEARCH_M = 10;
@@ -320,15 +421,16 @@ function iouMasks(a: Uint8Array, b: Uint8Array, N: number): number {
  * raised in the scan; then the pick is limited to it grown by FOOTPRINT_TOLERANCE_M into the open (never into a
  * neighbouring footprint), seeded at its raised cell nearest the place.
  */
-function footprintAt(fp: FootprintLookup, g: GroundModel, tall: Uint8Array, a: { x: number; z: number }, rawSeed: number, minH: number):
-    { used: boolean; featureIds: string[]; mask: Uint8Array; limit: Uint8Array; seed: number; cells: number; raisedShare: number; openShare: number; canopyShare: number; enclosesStructure: boolean; reason?: string } {
+function footprintAt(fp: FootprintLookup, g: GroundModel, tall: Uint8Array, above: Float32Array, a: { x: number; z: number }, rawSeed: number, minH: number):
+    { used: boolean; featureIds: string[]; mask: Uint8Array; limit: Uint8Array; seed: number; cells: number; raisedShare: number; openShare: number; canopyShare: number; enclosesStructure: boolean; reason?: string; seedHint: number } {
     const { nx, nz, cellMeters: cell } = g;
     const N = nx * nz;
     const lab = new Int32Array(N);
     for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) lab[k * nx + i] = fp.buildingAt(g.x0 + (i + 0.5) * cell, g.z0 + (k + 0.5) * cell);
-    const none = (reason: string) => ({ used: false, featureIds: [], mask: new Uint8Array(N), limit: new Uint8Array(N), seed: rawSeed, cells: 0, raisedShare: 0, openShare: 0, canopyShare: 0, enclosesStructure: false, reason });
-    let target = fp.buildingAt(a.x, a.z);
-    if (!target) target = lab[rawSeed];
+    const none = (reason: string) => ({ used: false, featureIds: [], mask: new Uint8Array(N), limit: new Uint8Array(N), seed: rawSeed, cells: 0, raisedShare: 0, openShare: 0, canopyShare: 0, enclosesStructure: false, reason, seedHint: -1 });
+    // the footprint chosen for the place (chooseFootprint) wins; else the one under the place, under the seed, or nearest
+    let target = fp.choice?.target ?? fp.buildingAt(a.x, a.z);
+    if (!target && rawSeed >= 0) target = lab[rawSeed];
     if (!target) {
         const ai = Math.floor((a.x - g.x0) / cell), ak = Math.floor((a.z - g.z0) / cell), r = Math.ceil(FOOTPRINT_SEARCH_M / cell);
         let best = Infinity;
@@ -343,6 +445,10 @@ function footprintAt(fp: FootprintLookup, g: GroundModel, tall: Uint8Array, a: {
     let cells = 0, raised = 0, canopy = 0;
     for (let c = 0; c < N; c++) if (lab[c] === target) { mask[c] = 1; cells++; if (tall[c]) raised++; else if (g.canopy?.[c]) canopy++; }
     const featureIds = [fp.buildings[target - 1]?.id ?? String(target)];
+    if (!cells) return { ...none(`the chosen footprint ${featureIds[0]} lies outside the extraction`), featureIds };
+    // the tallest raised cell inside the footprint: the seed of a chosen footprint, used or not
+    let seedHint = -1;
+    for (let c = 0; c < N; c++) if (mask[c] && tall[c] && (seedHint < 0 || above[c] > above[seedHint])) seedHint = c;
     const raisedShare = cells ? raised / cells : 0;
     const canopyShare = cells ? canopy / cells : 0;
     const openShare = cells ? (cells - raised - canopy) / cells : 0;
@@ -360,7 +466,7 @@ function footprintAt(fp: FootprintLookup, g: GroundModel, tall: Uint8Array, a: {
     }
     let enclosesStructure = false;
     if (raisedShare < FOOTPRINT_MIN_RAISED_SHARE) {
-        const disagree = (why: string) => ({ ...none(`the vector footprint (${area} m²) and the scan disagree: only ${Math.round(raisedShare * 100)}% of it stands ${minH} m or more above the terrain in the scan (${Math.round(openShare * 100)}% open ground, ${Math.round(canopyShare * 100)}% canopy)${why}`), featureIds, mask, cells, ...shares });
+        const disagree = (why: string) => ({ ...none(`the vector footprint (${area} m²) and the scan disagree: only ${Math.round(raisedShare * 100)}% of it stands ${minH} m or more above the terrain in the scan (${Math.round(openShare * 100)}% open ground, ${Math.round(canopyShare * 100)}% canopy)${why}`), featureIds, mask, cells, ...shares, seedHint });
         if (raisedShare < FOOTPRINT_MIN_ENCLOSED_SHARE) return disagree('');
         // larger than the structure, or off it: the raised mass the footprint holds, followed past its outline (never into
         // another building's footprint), mostly lies within it only when the footprint encloses the structure
@@ -375,15 +481,20 @@ function footprintAt(fp: FootprintLookup, g: GroundModel, tall: Uint8Array, a: {
         if (spillShare > FOOTPRINT_MAX_SPILL_SHARE) return disagree(`, and ${Math.round(spillShare * 100)}% of the raised mass it holds reaches past it`);
         enclosesStructure = true;
     }
-    // the seed: the raised footprint cell nearest the place
-    const ai = (a.x - g.x0) / cell, ak = (a.z - g.z0) / cell;
-    let seed = -1, best = Infinity;
-    for (let c = 0; c < N; c++) {
-        if (!mask[c] || !tall[c]) continue;
-        const d = ((c % nx) + 0.5 - ai) ** 2 + (((c / nx) | 0) + 0.5 - ak) ** 2;
-        if (d < best) { best = d; seed = c; }
+    // the seed: the tallest raised cell of a chosen footprint (the component grows from the building's top); else the
+    // raised footprint cell nearest the place
+    let seed = -1;
+    if (fp.choice) seed = seedHint;
+    else {
+        const ai = (a.x - g.x0) / cell, ak = (a.z - g.z0) / cell;
+        let best = Infinity;
+        for (let c = 0; c < N; c++) {
+            if (!mask[c] || !tall[c]) continue;
+            const d = ((c % nx) + 0.5 - ai) ** 2 + (((c / nx) | 0) + 0.5 - ak) ** 2;
+            if (d < best) { best = d; seed = c; }
+        }
     }
-    return { used: seed >= 0, featureIds, mask, limit, seed: seed >= 0 ? seed : rawSeed, cells, ...shares, enclosesStructure };
+    return { used: seed >= 0, featureIds, mask, limit, seed: seed >= 0 ? seed : rawSeed, cells, ...shares, enclosesStructure, seedHint };
 }
 
 export interface PickOptions {
@@ -397,6 +508,10 @@ export interface PickOptions {
     partStepM?: number;
     /** Building footprints from Google vector data, as point lookups in the scan frame (vector-footprints.ts). */
     footprints?: FootprintLookup;
+    /** Road corridor cells (vector-footprints.ts roadAt): never part of a building component. */
+    roadAt?(x: number, z: number): boolean;
+    /** Land-use areas (vector-footprints.ts landuseAt): canopy under a land-use area is ground cover, never a roof garden. */
+    landuseAt?(x: number, z: number): string[] | undefined;
 }
 
 /**
@@ -410,12 +525,18 @@ export function pickStructure(scan: ScanMesh, ground: GroundModel, opts: PickOpt
     const N = nx * nz;
     const above = new Float32Array(N).fill(NaN);
     const tall = new Uint8Array(N);
+    const cx = (c: number) => ground.x0 + ((c % nx) + 0.5) * cell, cz = (c: number) => ground.z0 + (((c / nx) | 0) + 0.5) * cell;
     for (let c = 0; c < N; c++) {
         if (top[c] === top[c] && ground.ground[c] === ground.ground[c]) above[c] = top[c] - ground.ground[c];
         tall[c] = above[c] >= minH ? 1 : 0;
+        // a road corridor is never structure: raised scan over the street (a tree row, a gantry, facades the scan melted
+        // across it) cannot join the buildings on either side
+        if (tall[c] && opts.roadAt?.(cx(c), cz(c))) tall[c] = 0;
     }
     // tree canopy the structure encloses (a roof garden) is part of it: canopy cells the grid border cannot reach without
-    // crossing tall cells are tall
+    // crossing tall cells are tall. Canopy under a land-use area (a park, a forest, a lot: any area, whatever its code) is
+    // ground cover however it is enclosed, so a component never bridges through it; canopy elsewhere stands at ground
+    // height in the masked model and never joins two masses either.
     if (ground.canopy) {
         const outside = new Uint8Array(N);
         for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
@@ -423,7 +544,7 @@ export function pickStructure(scan: ScanMesh, ground: GroundModel, opts: PickOpt
             const c = k * nx + i;
             if (!tall[c] && !outside[c]) flood4(nx, nz, c, n => !tall[n], outside);
         }
-        for (let c = 0; c < N; c++) if (!outside[c] && !tall[c] && ground.canopy[c]) tall[c] = 1;
+        for (let c = 0; c < N; c++) if (!outside[c] && !tall[c] && ground.canopy[c] && !opts.landuseAt?.(cx(c), cz(c))) tall[c] = 1;
     }
     const ai = Math.floor((a.x - ground.x0) / cell), ak = Math.floor((a.z - ground.z0) / cell);
     const r = Math.ceil((opts.seedSearchM ?? STRUCTURE_SEED_SEARCH_M) / cell);
@@ -438,11 +559,15 @@ export function pickStructure(scan: ScanMesh, ground: GroundModel, opts: PickOpt
     };
     // (seeds stand on cells the scan itself shows raised, never on canopy the mass encloses)
     const raised = Uint8Array.from(tall, (t, c) => (t && above[c] >= minH ? 1 : 0));
-    const rawSeed = nearest(raised);
-    if (rawSeed < 0) return undefined;
+    let rawSeed = nearest(raised);
+    if (rawSeed < 0 && !opts.footprints?.choice) return undefined;
     // the building footprint from Google vector data, when it covers the place and agrees with the scan: it separates
     // touching buildings at their party walls; the scan decides the shape within it
-    const fp = opts.footprints ? footprintAt(opts.footprints, ground, raised, a, rawSeed, minH) : undefined;
+    const fp = opts.footprints ? footprintAt(opts.footprints, ground, raised, above, a, rawSeed, minH) : undefined;
+    // a footprint chosen for the place seeds the geometric rule too, on its tallest raised cell, when the scan does not
+    // agree with its outline: the place's building, not whatever stands nearest the geocoded point
+    if (fp && !fp.used && opts.footprints?.choice && fp.seedHint >= 0) rawSeed = fp.seedHint;
+    if (rawSeed < 0) return undefined;
     let seed = rawSeed;
     const comp = new Uint8Array(N);
     if (fp?.used) {
@@ -556,7 +681,8 @@ export function pickStructure(scan: ScanMesh, ground: GroundModel, opts: PickOpt
         ...(fp ? {
             vectorFootprint: {
                 used: fp.used, featureIds: fp.featureIds, areaM2: fp.cells * cell * cell, raisedShare: round3(fp.raisedShare), iou: round3(fp.used ? iouMasks(fp.mask, comp, N) : 0),
-                openShare: round3(fp.openShare), canopyShare: round3(fp.canopyShare), enclosesStructure: fp.enclosesStructure, ...(fp.reason ? { reason: fp.reason } : {})
+                openShare: round3(fp.openShare), canopyShare: round3(fp.canopyShare), enclosesStructure: fp.enclosesStructure, ...(fp.reason ? { reason: fp.reason } : {}),
+                ...(opts.footprints?.choice ? { choice: opts.footprints.choice } : {})
             }
         } : {})
     };
@@ -730,6 +856,8 @@ export interface SizingDeps<E extends SizingExtraction> {
     canopy?(texturedGlb: string): Promise<CanopyMask>;
     /** Google vector data (building footprints, water, roads) within a radius, in the scan frame; absent without credentials. */
     vector?(radiusM: number): Promise<EvidenceLookup>;
+    /** The request's place words (the query as typed): matched against the names of the POIs in the vector data. */
+    placeName?: string;
     onProgress?(message: string): void;
     /** A Stop or a time limit: an extraction that fails because of it is never turned into a district fallback. */
     signal?: AbortSignal;
@@ -791,7 +919,8 @@ export async function sizeExtraction<E extends SizingExtraction>(deps: SizingDep
         if (deps.vector && !vectorError) {
             t = now();
             try {
-                vector = await deps.vector(radius + CONTAINMENT_MARGIN_M + 20);
+                // at least the containment cap: the footprint the place names can stand well past the probe
+                vector = await deps.vector(Math.max(radius + CONTAINMENT_MARGIN_M + 20, CONTAINMENT_MAX_RADIUS_M));
             } catch (err) {
                 if (deps.signal?.aborted) throw err;
                 vectorError = (err as Error).message;
@@ -811,8 +940,9 @@ export async function sizeExtraction<E extends SizingExtraction>(deps: SizingDep
         // at the original 30 m. The first probe (radius === PROBE_RADIUS_M) is unaffected (max(30, 25) = 30, the same
         // default as before this widening existed).
         const seedSearchM = Math.max(STRUCTURE_SEED_SEARCH_M, radius);
-        const structure = pickStructure(scan, ground, { seedSearchM, canopyCellsMasked: canopyCells, ...(vector ? { footprints: { buildingAt: vector.buildingAt, buildings: vector.raster.buildings } } : {}) });
-        return { structure, scan, ground, unmasked, mask, seedSearchM };
+        const choice = vector ? chooseFootprint({ buildings: vector.raster.buildings, pois: vector.pois, placeName: deps.placeName }) : undefined;
+        const structure = pickStructure(scan, ground, { seedSearchM, canopyCellsMasked: canopyCells, ...(vector ? { footprints: { buildingAt: vector.buildingAt, buildings: vector.raster.buildings, ...(choice ? { choice } : {}) }, roadAt: vector.roadAt, landuseAt: vector.landuseAt } : {}) });
+        return { structure, scan, ground, unmasked, mask, seedSearchM, choice };
     };
     for (let round = 1; ; round++) {
         let t = now();
@@ -833,7 +963,15 @@ export async function sizeExtraction<E extends SizingExtraction>(deps: SizingDep
         }
         held = { extraction, radius, round };
         timings[`extract_r${radius}`] = now() - t;
-        let { structure, scan, ground, unmasked, mask, seedSearchM } = await pickRound(extraction, radius);
+        let { structure, scan, ground, unmasked, mask, seedSearchM, choice } = await pickRound(extraction, radius);
+        // the footprint chosen for the place reaches past this extraction: extract to contain it before judging what stands
+        // there (a house whose address geocodes to its gate), within the containment cap and rounds
+        if (choice && choice.reachM > radius - CONTAINMENT_MARGIN_M && radius < CONTAINMENT_MAX_RADIUS_M && round < CONTAINMENT_MAX_ROUNDS + 1) {
+            const next = Math.min(CONTAINMENT_MAX_RADIUS_M, Math.max(radius + 1, Math.ceil(choice.reachM + Math.max(8, CONTAINMENT_MARGIN_M * 2))));
+            deps.onProgress?.(`${choice.note}; extracting ${next} m to reach it`);
+            radius = next;
+            continue;
+        }
         if (!structure) {
             if (radius >= NO_STRUCTURE_DISTRICT_RADIUS_M) {
                 notes.push({ reasonCode: 'no_structure_at_anchor', reason: `no structure ${STRUCTURE_MIN_HEIGHT_M} m or taller stands within ${seedSearchM} m of the place; showing the area around it` });

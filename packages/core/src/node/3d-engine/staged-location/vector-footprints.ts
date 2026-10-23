@@ -210,6 +210,8 @@ export interface EvidenceLookup {
     roadAt(x: number, z: number): boolean;
     /** The type codes of the land-use area at (x, z), undefined off every area. Labels: never branch geometry on them. */
     landuseAt(x: number, z: number): string[] | undefined;
+    /** The named points of interest the tiles carried (scan frame): the pick matches a place's words against their names. */
+    pois: NonNullable<VectorEvidence['pois']>;
 }
 
 export function evidenceLookup(ev: VectorEvidence, radiusM: number, cellMeters = 1): EvidenceLookup {
@@ -221,7 +223,7 @@ export function evidenceLookup(ev: VectorEvidence, radiusM: number, cellMeters =
         return i < 0 || k < 0 || i >= grid.nx || k >= grid.nz ? -1 : k * grid.nx + i;
     };
     return {
-        raster, grid,
+        raster, grid, pois: ev.pois ?? [],
         buildingAt: (x, z) => { const c = at(x, z); return c < 0 ? 0 : raster.building[c]; },
         waterAt: (x, z) => { const c = at(x, z); return c >= 0 && raster.water[c] === 1; },
         roadAt: (x, z) => { const c = at(x, z); return c >= 0 && raster.road[c] === 1; },

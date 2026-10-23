@@ -29,7 +29,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-    canopyLookup, checkIsolate, maskCanopy, pickStructure, structureKeepCells, writeIsolationPick, PICK_CANOPY, PICK_LOW_ATTACHMENT, PICK_OPEN, PICK_OTHER, PICK_STRUCTURE
+    canopyLookup, checkIsolate, chooseFootprint, maskCanopy, pickStructure, placeWords, sizeExtraction, structureKeepCells, writeIsolationPick,
+    CONTAINMENT_MAX_RADIUS_M, PICK_CANOPY, PICK_LOW_ATTACHMENT, PICK_OPEN, PICK_OTHER, PICK_STRUCTURE
 } from '../src/node/3d-engine/staged-location/extraction-sizing';
 import type { CanopyMask } from '../src/common/spatial/staged-location-contracts';
 import { evidenceLookup, type VectorEvidence } from '../src/node/3d-engine/staged-location/vector-footprints';
@@ -424,5 +425,110 @@ describe('Google vector data as evidence', () => {
         const pick = pickStructure(scan, ground, { anchor: { x: -40, z: -25 } })!;
         expect(pick.areaM2).toBeLessThan(21 * 31 * 1.05);
         expect(pick.heightM).toBeGreaterThan(13);
+    });
+
+    it('seeds on the footprint nearest the place when the geocode lands 100 m from the only building (Fallingwater)', async () => {
+        // the house, 8 m tall, 100 m east of the geocoded point (an address that resolves to the gate); nothing else stands
+        const scene = [...plane(-140, 140, -140, 140, 0), ...boxTris(90, 110, -10, 10, 8)];
+        const file = writeTris(path.join(TMP, 'far_house.glb'), scene);
+        const scan = loadScanMesh(file);
+        const ground = buildGroundModel(scan, { cellMeters: 1 });
+        const ev: VectorEvidence = { buildings: [{ id: 'house', parts: [[rect(90, -10, 110, 10)]] }], water: [], roads: [], tiles: 1, zoom: 17 };
+        const L = evidenceLookup(ev, CONTAINMENT_MAX_RADIUS_M);
+        // the old rule: nothing 3 m or taller within 30 m of the geocode
+        expect(pickStructure(scan, ground, {})).toBeUndefined();
+        const choice = chooseFootprint({ buildings: ev.buildings, pois: L.pois })!;
+        expect(choice).toMatchObject({ by: 'nearest', featureId: 'house', target: 1 });
+        expect(choice.distanceM).toBeCloseTo(100, 0);
+        expect(choice.note).toMatch(/seed moved 100 m east/);
+        const pick = pickStructure(scan, ground, { footprints: { buildingAt: L.buildingAt, buildings: ev.buildings, choice } })!;
+        expect(pick.footprintSource).toBe('vector-footprint');
+        expect(pick.vectorFootprint).toMatchObject({ used: true, featureIds: ['house'], choice: { by: 'nearest', featureId: 'house' } });
+        expect(pick.centroid.x).toBeGreaterThan(98);
+        expect(pick.centroid.x).toBeLessThan(102);
+        expect(pick.areaM2).toBeGreaterThan(20 * 20 * 0.95);
+        expect(pick.areaM2).toBeLessThan(21 * 21 * 1.05);
+        expect(pick.geocodeToStructureM).toBeGreaterThan(85);
+        // the containment loop: the probe does not reach the chosen footprint, so it extracts to it, then picks the house
+        const radii: number[] = [];
+        const sized = await sizeExtraction({
+            extract: async r => { radii.push(r); return { texturedGlb: file }; },
+            vector: async r => evidenceLookup(ev, r),
+            placeName: 'Fallingwater, Mill Run, Pennsylvania'
+        });
+        expect(radii[0]).toBe(25);
+        expect(radii.length).toBe(2);
+        expect(radii[1]).toBeGreaterThan(110);
+        expect(radii[1]).toBeLessThanOrEqual(CONTAINMENT_MAX_RADIUS_M);
+        expect(sized.sizedTo).toBe('structure');
+        expect(sized.structure!.centroid.x).toBeGreaterThan(98);
+        expect(sized.structure!.vectorFootprint!.choice!.note).toMatch(/footprint house chosen as the footprint nearest the geocoded point \(100 m/);
+    });
+
+    it('prefers the footprint holding a POI named like the request over a nearer one', () => {
+        // two 10 m houses east of the place: 'near' at 30 m, 'far' at 70 m with a named POI inside it
+        const scene = [...plane(-100, 100, -60, 60, 0), ...boxTris(20, 40, -10, 10, 10), ...boxTris(60, 80, -10, 10, 10)];
+        const scan = loadScanMesh(writeTris(path.join(TMP, 'poi_name.glb'), scene));
+        const ground = buildGroundModel(scan, { cellMeters: 1 });
+        const ev: VectorEvidence = {
+            buildings: [{ id: 'near', parts: [[rect(20, -10, 40, 10)]] }, { id: 'far', parts: [[rect(60, -10, 80, 10)]] }],
+            water: [], roads: [], tiles: 1, zoom: 17,
+            pois: [{ x: 70, z: 0, types: ['FEATURE_TYPE_POI', 'FEATURE_TYPE_HISTORIC'], name: 'Fallingwater' }, { x: 30, z: 0, types: ['FEATURE_TYPE_POI'], name: 'Visitor Center' }]
+        };
+        const L = evidenceLookup(ev, 100);
+        expect(placeWords('Fallingwater, Mill Run, Pennsylvania')).toEqual(['fallingwater', 'mill', 'run', 'pennsylvania']);
+        // without the place's words the nearest footprint; with them the one holding the matching POI
+        expect(chooseFootprint({ buildings: ev.buildings, pois: L.pois })).toMatchObject({ by: 'nearest', featureId: 'near' });
+        const choice = chooseFootprint({ buildings: ev.buildings, pois: L.pois, placeName: 'Fallingwater, Mill Run, Pennsylvania' })!;
+        expect(choice).toMatchObject({ by: 'poi-name', featureId: 'far', poiName: 'Fallingwater' });
+        expect(choice.note).toMatch(/holds the POI named 'Fallingwater'/);
+        expect(choice.note).toMatch(/seed moved 70 m east/);
+        const pick = pickStructure(scan, ground, { footprints: { buildingAt: L.buildingAt, buildings: ev.buildings, choice } })!;
+        expect(pick.vectorFootprint).toMatchObject({ used: true, featureIds: ['far'] });
+        expect(pick.bounds.minX).toBeGreaterThanOrEqual(58);
+        expect(pick.bounds.maxX).toBeLessThanOrEqual(82);
+        expect(pick.footprintMask[ground.cellIndex(30.5, 0.5)]).toBe(PICK_OTHER);
+        // a POI whose name shares no word with the request changes nothing
+        expect(chooseFootprint({ buildings: ev.buildings, pois: L.pois, placeName: 'Kentuck Knob' })).toMatchObject({ by: 'nearest', featureId: 'near' });
+    });
+
+    it('never joins two masses through a road corridor or through canopy, enclosed or not', () => {
+        // A and B, 15 m, 20 m apart, joined by a 12 m tall, 12 m wide raised band the scan melted across the street at x = 0
+        const A = boxTris(-30, -10, -10, 10, 15), B = boxTris(10, 30, -10, 10, 15);
+        const bridge = boxTris(-10, 10, -6, 6, 12);
+        const scene = [...plane(-60, 60, -60, 60, 0), ...A, ...B, ...bridge];
+        const scan = loadScanMesh(writeTris(path.join(TMP, 'bridge.glb'), scene));
+        const ground = buildGroundModel(scan, { cellMeters: 1 });
+        // the geometric rule alone takes the band and B along (it is wider than the opening disc)
+        const joined = pickStructure(scan, ground, { anchor: { x: -20, z: 0 } })!;
+        expect(joined.bounds.maxX).toBeGreaterThan(28);
+        // a road down x = 0: its corridor is never structure, so the band is cut there and B stays out
+        const road: VectorEvidence = { buildings: [], water: [], roads: [[[0, -60], [0, 60]]], tiles: 1, zoom: 17 };
+        const R = evidenceLookup(road, 60);
+        const cut = pickStructure(scan, ground, { anchor: { x: -20, z: 0 }, roadAt: R.roadAt })!;
+        shotWithPick('pick_road_corridor_cuts_bridge', scene, cut.cells, 16, [-40, -20, 40, 20]);
+        expect(cut.bounds.maxX).toBeLessThanOrEqual(-2);
+        expect(cut.footprintMask[ground.cellIndex(20.5, 0.5)]).toBe(PICK_OTHER);
+        expect(cut.footprintMask[ground.cellIndex(0.5, 0.5)]).toBe(PICK_OPEN);
+        // the band is tree canopy (the mask says so): at ground height in the masked model, it joins nothing
+        const mask = canopyMask([[-10, -6, 10, 6]]);
+        const masked = maskCanopy(buildGroundModel(scan, { cellMeters: 1, exclude: canopyLookup(mask) }), mask).masked;
+        const canopy = pickStructure(scan, masked, { anchor: { x: -20, z: 0 } })!;
+        expect(canopy.bounds.maxX).toBeLessThanOrEqual(-9);
+        expect(canopy.footprintMask[masked.cellIndex(0.5, 0.5)]).toBe(PICK_CANOPY);
+        // canopy the masses enclose (walls along both sides of the yard) counts as a roof garden and joins them, unless a
+        // land-use area says the yard is ground cover: then the component never bridges through it
+        const walls = [...boxTris(-10, 10, -10, -6, 15), ...boxTris(-10, 10, 6, 10, 15)];
+        const yardScene = [...plane(-60, 60, -60, 60, 0), ...A, ...B, ...walls, ...bridge];
+        const yardScan = loadScanMesh(writeTris(path.join(TMP, 'yard.glb'), yardScene));
+        const yardGround = maskCanopy(buildGroundModel(yardScan, { cellMeters: 1, exclude: canopyLookup(mask) }), mask).masked;
+        const garden = pickStructure(yardScan, yardGround, { anchor: { x: -20, z: 0 } })!;
+        expect(garden.bounds.maxX).toBeGreaterThan(28);
+        const forest: VectorEvidence = { buildings: [], water: [], roads: [], tiles: 1, zoom: 17, landuse: [{ loops: [rect(-10, -6, 10, 6)], types: ['FEATURE_TYPE_MIXED_FOREST'] }] };
+        const F = evidenceLookup(forest, 60);
+        const yard = pickStructure(yardScan, yardGround, { anchor: { x: -20, z: 0 }, landuseAt: F.landuseAt })!;
+        shotWithPick('pick_landuse_canopy_not_a_bridge', yardScene, yard.cells, 16, [-40, -20, 40, 20]);
+        expect(yard.bounds.maxX).toBeLessThanOrEqual(-9);
+        expect(yard.footprintMask[yardGround.cellIndex(0.5, 0.5)]).toBe(PICK_CANOPY);
     });
 });
