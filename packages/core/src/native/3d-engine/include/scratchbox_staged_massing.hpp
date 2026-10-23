@@ -905,13 +905,16 @@ private:
         for (size_t k = 0; k + 1 < cuts.size(); ++k) {
             double sa = cuts[k], sb = cuts[k + 1];
             V3 pa{a.x + d.x * sa, 0, a.z + d.z * sa}, pb{a.x + d.x * sb, 0, a.z + d.z * sb};
-            // what covers the outside of this run: the highest other part there (its roof)
+            // what covers the outside of this run: the highest other part there (its roof) that stands from this part's base
+            // or below it. A part that starts higher (an upper tier, an overhang) covers nothing from the bottom of this run up:
+            // counting its roof dropped whole street walls under a stacked tier whose plan the snapped walls fell inside.
             V3 mid = (pa + pb) * 0.5;
             V3 outside{mid.x + n2.x * 0.1, 0, mid.z + n2.z * 0.1};
             double cover = -1e300;
             for (size_t pj = 0; pj < spec_.parts.size(); ++pj) {
                 if (pj == pi) continue;
                 const Part& o = spec_.parts[pj];
+                if (o.baseY > part.baseY + 0.05) continue;
                 if (detail::inPart(o, outside.x, outside.z)) cover = std::max(cover, std::min(o.roofAt(outside.x, outside.z), o.topY));
             }
             Face f;

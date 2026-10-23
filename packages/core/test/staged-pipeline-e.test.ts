@@ -76,6 +76,24 @@ describe('footprint extrusion (native)', () => {
         expect(r.report.faces.some(f => f.key.startsWith('w:b:0:3'))).toBe(false);
     });
 
+    it('keeps a lower part\'s wall under a part stacked above it that overhangs it (the upper part covers nothing from the ground up)', async () => {
+        const dir = tmp();
+        // the Haughwout's failure: E snapped two street walls of the lower tier inside the upper tier's plan, and the builder
+        // took the upper tier's roof as covering them from the ground, dropping both
+        const m: Pick<Massing, 'parts' | 'meshes'> = {
+            parts: [
+                { id: 't0', baseY: 0, topY: 23, loops: [[[0, 0], [24, 0], [24, -24], [0, -24]]], planes: [], heightSource: 'scan', heights: {} },
+                { id: 't1', baseY: 23, topY: 34, loops: [[[-1, 0], [24, 0], [24, -24], [-1, -24]]], planes: [], heightSource: 'scan', heights: {} }
+            ],
+            meshes: []
+        };
+        const r = await runMassing(massingSpecText(m, { outDir: dir, params: { bake: 0, sections: 0, topdown: 0, residual: 0 } }), dir);
+        const under = r.report.faces.find(f => f.key === 'w:t0:0:3');
+        expect(under).toBeDefined();
+        expect(under!.tBottom).toBeCloseTo(0, 6);
+        expect(under!.area).toBeCloseTo(24 * 23, 3);
+    });
+
     it('shapes a pitched roof from Solar facets as the lower envelope of planes, closed with gable walls', async () => {
         const dir = tmp();
         // a 10 x 8 m box, eaves at 6 m; two facets facing north and south, 30 degrees, ridge along x at z = -4
