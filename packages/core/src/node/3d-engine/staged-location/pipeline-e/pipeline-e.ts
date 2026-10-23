@@ -23,7 +23,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { ProvenanceRecord } from '../../../../common/spatial/staged-location-contracts';
 import type { VectorBuilding } from '../vector-footprints';
-import { buildMassing, massingSpecText, type FaceSweepItem, type Massing, type OpeningItem, type SweepItem } from './massing-spec';
+import { buildMassing, HEIGHT_AGREEMENT_M, massingSpecText, type FaceSweepItem, type Massing, type OpeningItem, type SweepItem } from './massing-spec';
 import * as jpegJs from 'jpeg-js';
 import { PHOTO_JPEG_QUALITY, writeMassingClayGlb, writeMassingTexturedGlb, type FaceTexture, type TexelSource } from './massing-glb';
 import { decodeImageInMemory } from '../tile-texture-transfer';
@@ -141,6 +141,13 @@ export function massingProvenance(node: Pick<MassingNode, 'kind' | 'provenance' 
     // no Google vector footprint at the place: extruded from the scan's own convex outline instead (orchestrator.ts's
     // scanDerivedFootprint) — a real measurement of the scan, simplified to its hull, so 'measured', not 'vector-massing'
     if (node.provenance === SCAN_FOOTPRINT_TOKEN) return { label: 'measured', measuredGeometry: true, confidence: Math.max(0, Math.min(1, massing.check.iou)), method: 'no Google vector footprint at the place: the structure\'s own convex outline on the scan, extruded to its measured height, instead of a vector footprint', sources: [{ kind: 'tile-extraction', id: 'isolate' }], note: `plan IoU with the scan ${massing.check.iou}, roof ${massing.check.heightErrMedianM} m off the scan (median)` };
+    // a roof shaped from the modelled volume's planes where the scan agreed (roof-infer.ts decideRoof, the volume's planes as a
+    // candidate): vector-modelled, its confidence from the fit's residual against the scan (inference.ts roofVectorModelledToken)
+    if (node.kind === 'roof' && node.provenance.includes('vector-modelled')) {
+        const residual = Number(/-r([0-9.]+)/.exec(node.provenance)?.[1]);
+        const confidence = Number.isFinite(residual) ? Math.max(0.05, Math.min(1, 1 - residual / HEIGHT_AGREEMENT_M)) : 0.5;
+        return { label: 'vector-modelled', measuredGeometry: false, confidence, method: 'pipeline E inference: roof planes read from Google\'s modelled 3D volume of the building (its top surface as planes), kept because they lower the roof\'s error against the scan', sources: [{ kind: 'vector-data', id: 'google-vectortiles' }, { kind: 'tile-extraction', id: 'isolate' }], ...(Number.isFinite(residual) ? { note: `roof ${residual.toFixed(2)} m off the scan (median)` } : {}) };
+    }
     if (node.provenance === 'photo-inferred' || (node.kind === 'roof' && node.provenance.includes('photo-inferred'))) return { label: 'photo-inferred', measuredGeometry: false, confidence: Math.max(0, Math.min(1, node.confidence ?? 0.5)), method: `pipeline E inference: ${node.kind} read from the tile's photo and kept where the scan agrees`, sources: [{ kind: 'stage-output', id: 'pipeline-e-inference' }] };
     return {
         label: 'vector-massing', measuredGeometry: false, confidence: Math.max(0, Math.min(1, massing.check.iou)),

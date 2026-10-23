@@ -289,10 +289,21 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             roofStep.notes.push(`read: pitch ${rr.value.pitchDeg} deg, ridge ${rr.value.ridgeAzimuthDeg} deg, ${rr.value.hipped ? 'hipped' : 'gabled or flat'}, parapet ${rr.value.parapetM} m, ${rr.value.blocks.length} raised blocks (conf ${rr.value.conf}, ${rr.value.notes ?? ''})`);
             for (const p of parts) {
                 const inside = (input.solar ?? []).filter(s => s.pitchDeg >= 10 && p.loops.length && p.loops[0].length && inLoopsLocal(s.x, s.z, p.loops));
-                const d = decideRoof(p, rr.value, top, inside, toPlan);
+                const d = decideRoof(p, rr.value, top, inside, toPlan, massing.roofPrior);
                 roofDecisions.push(d);
                 const conf = Math.max(0.05, Math.min(1, rr.value.conf / 100));
-                if (d.pitch.proposed) { roofStep.proposed++; if (d.pitch.accepted) { roofStep.accepted++; p.planes = d.pitch.planes!; p.topY = d.pitch.topY!; p.provenance = 'massing-roof-photo-inferred'; } else roofStep.rejected++; roofStep.notes.push(`part ${p.id} pitch: ${d.pitch.accepted ? 'kept' : 'not kept'}: ${d.pitch.why}`); }
+                if (d.pitch.proposed) {
+                    roofStep.proposed++;
+                    if (d.pitch.accepted) {
+                        roofStep.accepted++;
+                        p.planes = d.pitch.planes!; p.topY = d.pitch.topY!;
+                        // the roof's provenance: the reading's planes are photo-inferred (the volume agreeing is said); the
+                        // volume's own planes, corroborated by the scan, are vector-modelled with the fit's residual
+                        p.provenance = d.pitch.source === 'vector-modelled' ? roofVectorModelledToken(d.pitch.residualM ?? NaN) : 'massing-roof-photo-inferred';
+                        p.roof = { source: d.pitch.source ?? 'photo-inferred', note: `${d.pitch.corroborated ? `the reading, corroborated by the modelled volume (${d.pitch.corroborated.planes} planes at ${d.pitch.corroborated.pitchDeg.toFixed(1)} deg)` : d.pitch.source === 'vector-modelled' ? 'the modelled volume\'s planes, checked against the scan' : 'the reading, checked against the scan'}; ${d.pitch.why}` };
+                    } else roofStep.rejected++;
+                    roofStep.notes.push(`part ${p.id} pitch: ${d.pitch.accepted ? `kept (${d.pitch.source}${d.pitch.corroborated ? ', corroborated by the modelled volume' : ''})` : 'not kept'}: ${d.pitch.why}`);
+                }
                 if (d.parapet.proposed) {
                     roofStep.proposed++;
                     if (d.parapet.accepted) {
@@ -914,6 +925,14 @@ export function openingsFromGrammar(run: MassingRun, f: MassingFace, g: FacadeGr
         openings.push({ id: `${idPrefix}_${k}`, face: f.key, s0: c.s0, s1: c.s1, t0: c.t0, t1: c.t1, depth: ok ? Math.min(0.6, Math.max(0.08, depth)) : 0.12, scanned: false, confidence: g.confidence, provenance });
     });
     return { openings, measured, assumed };
+}
+
+/**
+ * The provenance token of a roof shaped from the modelled volume's planes where the scan agreed: `massing-roof-vector-modelled-r<residual m>`
+ * (pipeline-e.ts massingProvenance reads the residual back as the confidence).
+ */
+export function roofVectorModelledToken(residualM: number): string {
+    return `massing-roof-vector-modelled-r${Number.isFinite(residualM) ? residualM.toFixed(2) : 'nan'}`;
 }
 
 function inLoopsLocal(x: number, z: number, loops: Vec2[][]): boolean {

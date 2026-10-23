@@ -23,12 +23,23 @@
  *     roof inside it; built as a sweep (the wall continued up, a coping inward) at the measured height;
  *   - raised blocks: kept when the scan inside the box stands at least MIN_BLOCK_RISE_M above the roof; built as a part at
  *     the measured height.
+ *
+ * The modelled volume's roof prior (volume-roof-prior.ts), when the massing carries one, is a second source, never the
+ * decision: a volume plane whose pitch and fall agree with the reading (within SOLAR_PITCH_TOLERANCE_DEG) corroborates it,
+ * and the gain the reading must show against the scan halves (CORROBORATED_ROOF_GAIN); where the reading proposes no pitch
+ * the scan keeps, the volume's own planes are a candidate checked exactly like a reading (kept only when they lower the
+ * roof's error by MIN_ROOF_GAIN), labelled vector-modelled with the fit's residual.
  */
 
-import { inRing, inLoops, roofAt, type MassingPart, type RoofPlaneSpec } from './massing-spec';
+import { inRing, inLoops, roofAt, roofUnderFloor, type MassingPart, type RoofPlaneSpec } from './massing-spec';
+import { azimuthOffRidge, medianPitch, volumePlaneSpec, volumePlanesIn, type VolumeRoofPrior } from './volume-roof-prior';
 import type { Vec2 } from '../../../../common/spatial/staged-location-contracts';
 
 export const MIN_ROOF_GAIN = 0.1;
+/** The gain a reading must show when the modelled volume's roof corroborates its pitch and fall (two sources agree). */
+export const CORROBORATED_ROOF_GAIN = MIN_ROOF_GAIN / 2;
+/** A reading's pitch (and a volume plane's) must be at least this to shape a roof. */
+export const MIN_READ_PITCH_DEG = 8;
 export const SOLAR_PITCH_TOLERANCE_DEG = 10;
 export const MIN_BLOCK_RISE_M = 1.0;
 export const PARAPET_BAND_M = 0.8;
@@ -109,7 +120,15 @@ const median = (v: number[]) => { if (!v.length) return NaN; const s = [...v].so
 
 export interface RoofDecision {
     part: string;
-    pitch: { proposed: boolean; accepted: boolean; why: string; planes?: RoofPlaneSpec[]; topY?: number };
+    pitch: {
+        proposed: boolean; accepted: boolean; why: string; planes?: RoofPlaneSpec[]; topY?: number;
+        /** Which source the kept planes come from: the reading ('photo-inferred') or the modelled volume ('vector-modelled'). */
+        source?: 'photo-inferred' | 'vector-modelled' | (string & {});
+        /** The roof's median error against the scan with the kept planes, metres. */
+        residualM?: number;
+        /** Set when the modelled volume's planes agree with the reading's pitch and fall (a second source). */
+        corroborated?: { pitchDeg: number; azimuthOffRidgeDeg: number; planes: number };
+    };
     parapet: { proposed: boolean; accepted: boolean; why: string; heightM?: number };
     blocks: Array<{ accepted: boolean; why: string; loop?: Vec2[]; baseY?: number; topY?: number }>;
 }
@@ -118,30 +137,51 @@ export interface RoofDecision {
  * Checks one reading against one part. `top(x, z)` is the scan's top surface (the top-down render's height map); `solarPitches`
  * the pitched Solar facets inside the part (pitch, area); `toPlan` maps a per-mille image point to the tile frame (x, z).
  */
-export function decideRoof(part: MassingPart, reading: RoofReading, top: (x: number, z: number) => number, solarPitches: Array<{ pitchDeg: number; areaM2: number }>, toPlan: (px: number, py: number) => Vec2): RoofDecision {
+export function decideRoof(part: MassingPart, reading: RoofReading, top: (x: number, z: number) => number, solarPitches: Array<{ pitchDeg: number; areaM2: number }>, toPlan: (px: number, py: number) => Vec2, prior?: Pick<VolumeRoofPrior, 'planes'>): RoofDecision {
     const out: RoofDecision = { part: part.id, pitch: { proposed: false, accepted: false, why: '' }, parapet: { proposed: false, accepted: false, why: '' }, blocks: [] };
     const { inner, rim } = partSamples(part, PARAPET_BAND_M);
     const innerTop = inner.map(([x, z]) => top(x, z)).filter(Number.isFinite);
     const err = (p: Pick<MassingPart, 'topY' | 'baseY' | 'planes'>) => median(inner.concat(rim).map(([x, z]) => { const y = top(x, z); return Number.isFinite(y) ? Math.abs(roofAt(p, x, z) - y) : NaN; }).filter(Number.isFinite));
+    const eave = median(rim.map(([x, z]) => top(x, z)).filter(Number.isFinite));
+    const ridgeY = innerTop.length ? [...innerTop].sort((a, b) => a - b)[Math.floor(0.97 * (innerTop.length - 1))] : NaN;
+    const scanHasRoof = Number.isFinite(eave) && Number.isFinite(ridgeY);
+    // the modelled volume's pitched planes over this part, and whether they agree with the reading's pitch and fall
+    const volPlanes = volumePlanesIn(prior, part.loops, MIN_READ_PITCH_DEG);
+    const volMed = medianPitch(volPlanes);
+    const volOff = volPlanes.length ? Math.max(...volPlanes.map(p => azimuthOffRidge(p.azimuthDeg, reading.ridgeAzimuthDeg))) : NaN;
+    const volAgrees = reading.pitchDeg >= MIN_READ_PITCH_DEG && Number.isFinite(volMed) && Math.abs(volMed - reading.pitchDeg) <= SOLAR_PITCH_TOLERANCE_DEG && volOff <= SOLAR_PITCH_TOLERANCE_DEG;
     // pitch
-    if (reading.pitchDeg >= 8) {
+    if (reading.pitchDeg >= MIN_READ_PITCH_DEG) {
         out.pitch.proposed = true;
-        const eave = median(rim.map(([x, z]) => top(x, z)).filter(Number.isFinite));
-        const ridgeY = innerTop.length ? [...innerTop].sort((a, b) => a - b)[Math.floor(0.97 * (innerTop.length - 1))] : NaN;
-        if (!Number.isFinite(eave) || !Number.isFinite(ridgeY)) out.pitch.why = 'the scan has no roof here to check against';
+        if (!scanHasRoof) out.pitch.why = 'the scan has no roof here to check against';
         else {
             const planes = eavePlanes(part, reading.pitchDeg, reading.ridgeAzimuthDeg, reading.hipped, eave);
             const trial = { ...part, planes, topY: Math.max(ridgeY, eave + 0.5) };
             const before = err(part), after = err(trial);
-            const solarArea = solarPitches.reduce((a, s) => a + s.areaM2, 0);
-            let solarMed = NaN;
-            if (solarArea > 0) { let acc = 0; for (const s of [...solarPitches].sort((p, q) => p.pitchDeg - q.pitchDeg)) { acc += s.areaM2; if (acc >= solarArea / 2) { solarMed = s.pitchDeg; break; } } }
+            const solarMed = medianPitch(solarPitches);
             const solarOk = !Number.isFinite(solarMed) || Math.abs(solarMed - reading.pitchDeg) <= SOLAR_PITCH_TOLERANCE_DEG;
-            const gainOk = after <= before * (1 - MIN_ROOF_GAIN);
+            // two sources agreeing (the reading and the modelled volume) need show half the gain against the scan
+            const minGain = volAgrees ? CORROBORATED_ROOF_GAIN : MIN_ROOF_GAIN;
+            const gainOk = after <= before * (1 - minGain);
             out.pitch.accepted = planes.length > 0 && solarOk && gainOk;
-            out.pitch.why = `roof error against the scan ${before.toFixed(2)} -> ${after.toFixed(2)} m${Number.isFinite(solarMed) ? `; Solar pitch ${solarMed.toFixed(1)} deg against ${reading.pitchDeg.toFixed(1)}` : ''}${!planes.length ? '; no eave edge along the ridge' : ''}`;
-            if (out.pitch.accepted) { out.pitch.planes = planes; out.pitch.topY = trial.topY; }
+            out.pitch.why = `roof error against the scan ${before.toFixed(2)} -> ${after.toFixed(2)} m${Number.isFinite(solarMed) ? `; Solar pitch ${solarMed.toFixed(1)} deg against ${reading.pitchDeg.toFixed(1)}` : ''}${volPlanes.length ? `; the modelled volume's roof pitch ${volMed.toFixed(1)} deg, fall ${volOff.toFixed(0)} deg off the ridge's normal (${volAgrees ? 'agrees' : 'disagrees'})` : ''}${!planes.length ? '; no eave edge along the ridge' : ''}`;
+            if (out.pitch.accepted) {
+                out.pitch.planes = planes; out.pitch.topY = trial.topY; out.pitch.source = 'photo-inferred'; out.pitch.residualM = after;
+                if (volAgrees) out.pitch.corroborated = { pitchDeg: volMed, azimuthOffRidgeDeg: volOff, planes: volPlanes.length };
+            }
         }
+    }
+    // the modelled volume's own planes as a candidate where the reading left the roof flat: checked like a reading
+    if (!out.pitch.accepted && volPlanes.length && scanHasRoof) {
+        const pts = inner.concat(rim);
+        const planes = volPlanes.map(volumePlaneSpec).filter(pl => !roofUnderFloor(pl, pts, part.baseY));
+        const trial = { ...part, planes, topY: Math.max(ridgeY, eave + 0.5) };
+        const before = err(part), after = err(trial);
+        const accepted = planes.length > 0 && after <= before * (1 - MIN_ROOF_GAIN);
+        const why = `the modelled volume's ${planes.length} pitched plane${planes.length === 1 ? '' : 's'} (median pitch ${volMed.toFixed(1)} deg) as a candidate: roof error against the scan ${before.toFixed(2)} -> ${after.toFixed(2)} m${volPlanes.length > planes.length ? `; ${volPlanes.length - planes.length} under the part's floor, left out` : ''}`;
+        out.pitch.why = out.pitch.why ? `${out.pitch.why}; ${why}` : why;
+        out.pitch.proposed = true;
+        if (accepted) { out.pitch.accepted = true; out.pitch.planes = planes; out.pitch.topY = trial.topY; out.pitch.source = 'vector-modelled'; out.pitch.residualM = after; }
     }
     // parapet
     if (reading.parapetM >= 0.3) {
