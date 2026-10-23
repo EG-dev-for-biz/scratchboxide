@@ -113,7 +113,13 @@ export const SERVER_SECRET_ALLOWLIST = [
     'GOOGLE_CLOUD_LOCATION',
     'SCRATCHBOX_VERTEX_LOCATION',
     'GOOGLE_SERVICE_ACCOUNT_JSON',
-    'GOOGLE_OAUTH_CLIENT_ID'
+    'GOOGLE_OAUTH_CLIENT_ID',
+    // the hosted Scratchbox Studio MCP (scratchbox.ai): Style DNA reference images for object builds
+    'SCRATCHBOX_MCP_ENDPOINT',
+    'SCRATCHBOX_MCP_SECRET',
+    'SCRATCHBOX_MCP_USER_ID',
+    'SCRATCHBOX_MCP_WORKSPACE_ID',
+    'SCRATCHBOX_MCP_CANVAS_ID'
 ];
 
 /** Origins allowed to call the API when an Origin header is present. */
