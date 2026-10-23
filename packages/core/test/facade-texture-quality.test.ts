@@ -142,18 +142,21 @@ describe('facade texture quality', () => {
         expect(facadeQuality(b, W, H, PX).flatBlocksM2).toEqual([]);
     });
 
-    it('fills unseen texels from the wall\'s own repeat a bay over, and the excluded band from the base', () => {
+    it('fills along the storey from the median of its bays: a one-off is outvoted, nothing comes from a storey up or down', () => {
         const truth = facade(), rgba = truth.slice(), use = new Uint8Array(W * H).fill(1), base = new Uint8Array(W * H * 4);
         for (let i = 0; i < W * H; i++) base.set([10, 10, 10, 255], i * 4);
-        // one bay (2 m) of the wall unseen, from x = 4 m to 6 m, 2 m to 6 m up
-        for (let y = 40; y < 120; y++) for (let x = 80; x < 120; x++) use[y * W + x] = 0;
-        const exclude = new Uint8Array(W * H);
-        for (let y = 140; y < H; y++) for (let x = 0; x < W; x++) { exclude[y * W + x] = 1; use[y * W + x] = 0; }
-        const fill = repeatFill(rgba, use, W, H, PX, base, exclude);
-        // inside the unseen bay: the texel one bay along (the facade repeats every 2 m)
-        const i = (60 * W + 90) * 4;
-        expect(Array.from(fill.subarray(i, i + 3))).toEqual(Array.from(truth.subarray((60 * W + 130) * 4, (60 * W + 130) * 4 + 3)));
-        // the excluded band: the base
-        expect(Array.from(fill.subarray((150 * W + 10) * 4, (150 * W + 10) * 4 + 3))).toEqual([10, 10, 10]);
+        // a one-off: a bright clock in one bay (x 4.9-5.5 m, 3-3.6 m up), then the bay beside it unseen at the same height
+        const clock = (x: number, y: number) => x >= 98 && x < 110 && y >= 88 && y < 100;
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (clock(x, y)) rgba.set([240, 240, 230, 255], (y * W + x) * 4);
+        for (let y = 80; y < 110; y++) for (let x = 138; x < 152; x++) use[y * W + x] = 0;
+        // the top 1 m of the wall unseen across its whole width (a cornice strip no station saw)
+        for (let y = 0; y < 20; y++) for (let x = 0; x < W; x++) use[y * W + x] = 0;
+        const fill = repeatFill(rgba, use, W, H, PX, base);
+        // the unseen bay beside the clock: the bays' median, i.e. the wall, not the clock
+        const at = (x: number, y: number) => Array.from(fill.subarray((y * W + x) * 4, (y * W + x) * 4 + 3));
+        expect(at(140, 94)).not.toEqual([240, 240, 230]);
+        expect(at(140, 94)).toEqual(Array.from(truth.subarray((94 * W + 140) * 4, (94 * W + 140) * 4 + 3)));
+        // the unseen top strip: no bay of its rows was seen, and no storey is copied up: the base
+        expect(at(50, 10)).toEqual([10, 10, 10]);
     });
 });

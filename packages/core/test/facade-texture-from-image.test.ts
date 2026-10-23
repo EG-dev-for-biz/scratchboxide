@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { buildFacadeTextureFromImage } from '../src/node/3d-engine/staged-location/facade-texture/facade-texture';
+import { buildFacadeTexture, buildFacadeTextureFromImage } from '../src/node/3d-engine/staged-location/facade-texture/facade-texture';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 import type { PlateRequest } from '../src/node/3d-engine/staged-location/pipeline-e/enhance';
@@ -88,5 +88,22 @@ describe('facade texture from a wall picture', () => {
         // a fully seen wall keeps the redraw model
         expect(models).toEqual([['fake']]);
         void decodeImageInMemory;
+    });
+
+    it('counts storeys and bays on what the survey saw, not on the fill sent in its place', async () => {
+        const truth = facade(), fill = new Uint8Array(W * H * 4), use = new Uint8Array(W * H).fill(1);
+        for (let i = 0; i < W * H; i++) fill.set([200, 30, 30, 255], i * 4);
+        for (let y = 0; y < 30; y++) for (let x = 0; x < W; x++) use[y * W + x] = 0;
+        let counted: Uint8Array | undefined, sentImage: Uint8Array | undefined;
+        const counter = async (tile: Uint8Array) => { counted = tile; return { tile: { storeys: 3, bays: 5 }, plate: { storeys: 3, bays: 5 } }; };
+        const client = async (r: PlateRequest) => { sentImage = r.image; return { bytes: answer(truth, r), modelUsed: 'fake' }; };
+        const face = { index: 0, key: 'w', kind: 'wall', part: 'p', loop: 0, edge: 0, wall: true, normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0], origin: [0, 0, 0], sMin: 0, sMax: W * PX, tMin: 0, tMax: H * PX, tBottom: 0, area: W * H * PX * PX, pixel: PX, orthoSMin: 0, orthoTMax: H * PX, width: W, height: H, coverage: 1, openings: [], top: [] };
+        await buildFacadeTexture(face as never, { width: W, height: H, rgba: truth.slice(), source: new Uint8Array(W * H) }, use, { client, models: ['fake'], locationName: 'X', source: 1, guards: false, counter: counter as never, unseen: { source: 1, fill } });
+        const sent = decodeImageInMemory(sentImage!), seen = decodeImageInMemory(counted!);
+        // the model got the fill (red) in the unseen top strip; the counter got grey there
+        const top = (img: { width: number; rgba: Uint8Array }, x: number, y: number) => Array.from(img.rgba.subarray((y * img.width + x) * 4, (y * img.width + x) * 4 + 3));
+        const cx = Math.floor(seen.width / 2);
+        expect(top(seen, cx, 2)).toEqual([128, 128, 128]);
+        expect(sent.rgba.some((v, k) => k % 4 === 0 && v > 180 && sent.rgba[k + 1] < 60)).toBe(true);
     });
 });

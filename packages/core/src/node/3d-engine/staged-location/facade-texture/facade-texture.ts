@@ -72,39 +72,37 @@ function repeatLag(p: Float64Array, lo: number, hi: number, fallback: number): n
     return rs.find(([, r]) => r === best)![0];
 }
 
+/** A fill texel needs at least this many bays of its storey row seen at its place in the bay (so a one-off is outvoted). */
+export const MIN_FILL_BAYS = 3;
+
 /**
- * A fill for a wall's unseen texels from the wall itself: each takes the seen texel one, two or three bays along, or a storey
- * up or down (the nearest such repeat the survey saw, outside `exclude`), so the fill carries the wall's own texture rather
- * than flat paint (which the model keeps flat: the Haughwout's Broadway, a 91 m2 grey slab). Bay and storey come from the
- * seen texels' own repeats (1-6 m, 2.5-6 m). Texels no repeat reaches, and those in `exclude`, take `base` (e.g. the painted
- * reading).
+ * A fill for a wall's unseen texels from the wall itself, along its own storey only: each takes, per channel, the median of
+ * the texels at the same place in the bay (x mod bay) on the same row, over the bays `source` marks (default: the seen ones).
+ * Never a storey up or down (that added a storey above the Haughwout's cornice), and a one-off feature in one bay (its clock)
+ * is outvoted by the bays without it, so it is never repeated. The bay is the seen texels' own repeat (1-6 m). A texel with
+ * fewer than MIN_FILL_BAYS bays to vote takes `base` (e.g. the painted reading).
  */
-export function repeatFill(rgba: Uint8Array, use: Uint8Array, W: number, H: number, pixelM: number, base: Uint8Array, exclude?: Uint8Array): Uint8Array {
+export function repeatFill(rgba: Uint8Array, use: Uint8Array, W: number, H: number, pixelM: number, base: Uint8Array, source?: Uint8Array): Uint8Array {
+    const src = source ?? use;
     const N = W * H, L = new Float32Array(N);
     for (let i = 0; i < N; i++) L[i] = 0.299 * rgba[i * 4] + 0.587 * rgba[i * 4 + 1] + 0.114 * rgba[i * 4 + 2];
-    const col = new Float64Array(W), row = new Float64Array(H);
-    for (let y = 0; y + 1 < H; y++) for (let x = 0; x + 1 < W; x++) {
-        const i = y * W + x;
-        if (use[i] && use[i + 1]) col[x] += Math.abs(L[i + 1] - L[i]);
-        if (use[i] && use[i + W]) row[y] += Math.abs(L[i + W] - L[i]);
-    }
+    const col = new Float64Array(W);
+    for (let y = 0; y < H; y++) for (let x = 0; x + 1 < W; x++) { const i = y * W + x; if (use[i] && use[i + 1]) col[x] += Math.abs(L[i + 1] - L[i]); }
     const bay = repeatLag(col, Math.round(1 / pixelM), Math.round(6 / pixelM), Math.round(2 / pixelM));
-    const storey = repeatLag(row, Math.round(2.5 / pixelM), Math.round(6 / pixelM), Math.round(3.5 / pixelM));
-    const offsets: Array<[number, number]> = [];
-    for (const k of [1, -1, 2, -2, 3, -3]) offsets.push([k * bay, 0]);
-    for (const m of [1, -1]) for (const k of [0, 1, -1]) offsets.push([k * bay, m * storey]);
     const out = Uint8Array.from(base);
+    const vals: number[][] = [[], [], []];
+    const med = (v: number[]) => { v.sort((p, q) => p - q); return v[Math.floor(v.length / 2)]; };
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
         const i = y * W + x;
-        if (use[i] || exclude?.[i]) continue;
-        for (const [dx, dy] of offsets) {
-            const xx = x + dx, yy = y + dy;
-            if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
-            const j = yy * W + xx;
-            if (!use[j] || exclude?.[j]) continue;
-            out[i * 4] = rgba[j * 4]; out[i * 4 + 1] = rgba[j * 4 + 1]; out[i * 4 + 2] = rgba[j * 4 + 2]; out[i * 4 + 3] = 255;
-            break;
+        if (use[i]) continue;
+        vals[0].length = vals[1].length = vals[2].length = 0;
+        for (let xx = x % bay; xx < W; xx += bay) {
+            const j = y * W + xx;
+            if (!src[j] || (xx === x && !use[j])) continue;
+            vals[0].push(rgba[j * 4]); vals[1].push(rgba[j * 4 + 1]); vals[2].push(rgba[j * 4 + 2]);
         }
+        if (vals[0].length < MIN_FILL_BAYS) continue;
+        out[i * 4] = med(vals[0]); out[i * 4 + 1] = med(vals[1]); out[i * 4 + 2] = med(vals[2]); out[i * 4 + 3] = 255;
     }
     return out;
 }
@@ -139,6 +137,8 @@ export interface PreparedFacade {
     request: PlateRequest;
     /** The plate as sent, before padding (sw x sh). */
     small: RgbaImage8;
+    /** What the survey saw (sw x sh), the unseen texels mid-grey: what the storeys and bays are counted on when a fill was sent. */
+    surveyed: RgbaImage8;
     padded: RgbaImage8;
     offset: [number, number];
     sw: number; sh: number;
@@ -164,13 +164,15 @@ export function prepareFacadeRequest(f: MassingFace, t: FaceTexture, use: Uint8A
     // or, given a fill, as that fill feathered into what the tile does cover
     const sent = opts.unseen?.fill ? featheredFill(t.rgba, opts.unseen.fill, use, t.width, t.height) : opts.unseen ? (() => { const g = t.rgba.slice(); for (let i = 0; i < N; i++) if (!use[i]) { g[i * 4] = 128; g[i * 4 + 1] = 128; g[i * 4 + 2] = 128; g[i * 4 + 3] = 255; } return g; })() : t.rgba;
     const small: RgbaImage8 = resizeRgba({ width: t.width, height: t.height, rgba: sent }, sw, sh);
+    // counted on what was seen, never on a fill (a fill copied a storey up and the count read 6 storeys on both sides)
+    const surveyed: RgbaImage8 = opts.unseen?.fill ? resizeRgba({ width: t.width, height: t.height, rgba: (() => { const g = t.rgba.slice(); for (let i = 0; i < N; i++) if (!use[i]) { g[i * 4] = 128; g[i * 4 + 1] = 128; g[i * 4 + 2] = 128; g[i * 4 + 3] = 255; } return g; })() }, sw, sh) : small;
     const { padded, offset } = padToModelAspect(small);
     const r = opts.reference;
     const ref = r ? (() => { const rs = Math.min(1, 768 / Math.max(r.width, r.height)); const s = resizeRgba({ width: r.width, height: r.height, rgba: r.rgba }, Math.max(8, Math.round(r.width * rs)), Math.max(8, Math.round(r.height * rs))); return new Uint8Array(encodePng(s.width, s.height, Buffer.from(s.rgba), 4)); })() : undefined;
     const prompt = buildTexturePlatePrompt({ locationName: opts.locationName, widthM: t.width * f.pixel, heightM: t.height * f.pixel, widthPx: padded.width, heightPx: padded.height, preserveClause: preserveClause(padded.width, padded.height), withReference: !!ref, ...(opts.streetView ? { withStreetView: true } : {}), ...(opts.unseen && !opts.unseen.fill ? { unseen: true } : {}) });
     const image = new Uint8Array(encodePng(padded.width, padded.height, Buffer.from(padded.rgba), 4));
     const request: PlateRequest = { prompt, image, width: padded.width, height: padded.height, ...(ref ? { reference: ref } : {}), ...(opts.streetView ? { streetView: opts.streetView.crop } : {}), models: opts.models, ...(opts.signal ? { signal: opts.signal } : {}) };
-    return { request, small, padded, offset: offset as [number, number], sw, sh, N, coveredShare, widthM: t.width * f.pixel, heightM: t.height * f.pixel };
+    return { request, small, surveyed, padded, offset: offset as [number, number], sw, sh, N, coveredShare, widthM: t.width * f.pixel, heightM: t.height * f.pixel };
 }
 
 /** The model's answer read back onto the plate's full size (the padding cut away). Throws when the answer cannot be decoded. */
@@ -207,7 +209,7 @@ export async function alignAndIdentify(f: MassingFace, t: FaceTexture, use: Uint
         // the tile as sent and the aligned plate at the same size, counted together
         const plateSmall = resizeRgba({ width: t.width, height: t.height, rgba: g.aligned }, prep.sw, prep.sh);
         try {
-            counts = await opts.counter(new Uint8Array(encodePng(prep.sw, prep.sh, Buffer.from(prep.small.rgba), 4)), new Uint8Array(encodePng(prep.sw, prep.sh, Buffer.from(plateSmall.rgba), 4)), prep.widthM, prep.heightM);
+            counts = await opts.counter(new Uint8Array(encodePng(prep.sw, prep.sh, Buffer.from(prep.surveyed.rgba), 4)), new Uint8Array(encodePng(prep.sw, prep.sh, Buffer.from(plateSmall.rgba), 4)), prep.widthM, prep.heightM);
         } catch (err) {
             if (opts.signal?.aborted) throw err;
             counts = { unread: `the count could not be read: ${(err as Error).message.slice(0, 120)}` };
