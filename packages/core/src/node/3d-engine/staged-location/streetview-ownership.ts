@@ -41,7 +41,7 @@ import { ORNAMENT_THINKING_BUDGET } from './ornament-vision';
 import type { VisionModelChain } from '../../gemini/vision-model-chain';
 
 /** Part of the texture cache key: a change to the ownership step is a new version. */
-export const OWNERSHIP_VERSION = 5;
+export const OWNERSHIP_VERSION = 6;
 /**
  * Agreement between the cut-out and the structure's projection at which the pose is trusted. With geometry prompts (no
  * description) the outline depends on the pose, and below this the view vouches for no pixel; with the description the
@@ -58,6 +58,12 @@ export const OCCLUDER_INSTANCE_MAX_SHARE = 0.25;
 export const OCCLUDER_UNION_MAX_SHARE = 0.4;
 /** An instance counts when at least this share of it lies inside the outline. */
 export const OCCLUDER_MIN_INSIDE_SHARE = 0.5;
+/** Holes in the described cut-out fully enclosed by it and at most this share of the view are closed (a window it missed). */
+export const OUTLINE_HOLE_MAX_SHARE = 0.01;
+/** A crossing line runs over at least this share of the outline's extent along it... */
+export const LINE_MIN_INSIDE_SHARE = 0.2;
+/** ...and continues at least this share of the view's side outside the outline (a facade's own pilasters and cornices stop at its edge). */
+export const LINE_MIN_OUTSIDE_SHARE = 0.03;
 /** The structure needs this share of the view's pixels for a cut-out to be asked for. */
 export const OWNERSHIP_MIN_TARGET_SHARE = 0.01;
 /** Pixels the mask is grown by (the segmenter's edge and the texel footprint's own blur). */
@@ -302,6 +308,64 @@ export function structureSilhouette(p: Pick<OwnershipPrompts, 'target' | 'hidden
     return dilateMask(s, W, H, Math.max(2, Math.round(OCCLUDER_SILHOUETTE_GROW_SHARE * Math.max(W, H))));
 }
 
+/**
+ * The described cut-out with its small holes closed: a morphological close (a few pixels), then every hole fully enclosed
+ * by the cut-out and at most OUTLINE_HOLE_MAX_SHARE of the view filled (a window or shadow the segmenter left out).
+ */
+export function closeOutline(raw: Uint8Array, W: number, H: number): Uint8Array {
+    const r = Math.max(1, Math.round(0.004 * Math.max(W, H)));
+    const closed = erode(dilateMask(raw, W, H, r), W, H, r);
+    for (let i = 0; i < closed.length; i++) if (raw[i]) closed[i] = 1;
+    const seen = new Uint8Array(W * H), stack: number[] = [], comp: number[] = [], max = OUTLINE_HOLE_MAX_SHARE * W * H;
+    for (let s0 = 0; s0 < W * H; s0++) {
+        if (closed[s0] || seen[s0]) continue;
+        let border = false; comp.length = 0; stack.push(s0); seen[s0] = 1;
+        while (stack.length) {
+            const i = stack.pop()!, x = i % W, y = (i / W) | 0;
+            comp.push(i);
+            if (x === 0 || y === 0 || x === W - 1 || y === H - 1) border = true;
+            for (const j of [x > 0 ? i - 1 : -1, x < W - 1 ? i + 1 : -1, y > 0 ? i - W : -1, y < H - 1 ? i + W : -1]) if (j >= 0 && !closed[j] && !seen[j]) { seen[j] = 1; stack.push(j); }
+        }
+        if (!border && comp.length <= max) for (const i of comp) closed[i] = 1;
+    }
+    return closed;
+}
+
+/**
+ * Long thin dark lines crossing the structure's outline (poles, mast arms, wires), by columns and rows: a run of pixels
+ * darker than both sides `halfWidthPx` away that covers LINE_MIN_INSIDE_SHARE of the outline's extent along it AND
+ * continues LINE_MIN_OUTSIDE_SHARE of the view's side outside the outline. The structure's own pilasters, mullions and
+ * cornices stop at its edge, so they are not taken. Returns the runs' pixels inside the outline.
+ */
+export function crossingLines(image: { width: number; height: number; rgba: Uint8Array }, outline: Uint8Array, opts: { halfWidthPx?: number; contrast?: number } = {}): Uint8Array {
+    const W = image.width, H = image.height, w = opts.halfWidthPx ?? Math.max(3, Math.round(0.004 * Math.max(W, H))), k = opts.contrast ?? 18;
+    const L = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) L[i] = 0.299 * image.rgba[i * 4] + 0.587 * image.rgba[i * 4 + 1] + 0.114 * image.rgba[i * 4 + 2];
+    let x0 = W, y0 = H, x1 = -1, y1 = -1;
+    for (let i = 0; i < W * H; i++) if (outline[i]) { const x = i % W, y = (i / W) | 0; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    const out = new Uint8Array(W * H);
+    if (x1 < 0) return out;
+    // one scan direction: `n` lines of `len` pixels; at(line, t) is the pixel index, dark(line, t) the thin-line test across it
+    const scan = (n: number, len: number, at: (l: number, t: number) => number, dark: (l: number, t: number) => boolean, extent: number) => {
+        for (let l = 0; l < n; l++) {
+            let t = 0;
+            while (t < len) {
+                if (!dark(l, t)) { t++; continue; }
+                const run: number[] = [];
+                let gap = 0, u = t;
+                for (; u < len && gap <= 2; u++) { if (dark(l, u)) { run.push(at(l, u)); gap = 0; } else gap++; }
+                let inside = 0, outside = 0;
+                for (const i of run) { if (outline[i]) inside++; else outside++; }
+                if (inside >= LINE_MIN_INSIDE_SHARE * extent && outside >= LINE_MIN_OUTSIDE_SHARE * len) for (const i of run) if (outline[i]) out[i] = 1;
+                t = u;
+            }
+        }
+    };
+    scan(W, H, (x, y) => y * W + x, (x, y) => x - w >= 0 && x + w < W && L[y * W + x] < L[y * W + x - w] - k && L[y * W + x] < L[y * W + x + w] - k, y1 - y0 + 1);
+    scan(H, W, (y, x) => y * W + x, (y, x) => y - w >= 0 && y + w < H && L[y * W + x] < L[(y - w) * W + x] - k && L[y * W + x] < L[(y + w) * W + x] - k, x1 - x0 + 1);
+    return out;
+}
+
 /** One obstruction a vision model listed in a photo: what it is, and its box, normalised [x0, y0, x1, y1]. */
 export interface ObstructionBox { label: string; box: NormBox }
 /** Lists what stands in front of the structure in a photo (one box per thing). */
@@ -386,6 +450,15 @@ export async function detectOccluders(image: { width: number; height: number; rg
             segmentedPixels += add;
             instances.push({ label: c.label, pixels: c.inside, kept: true });
         }
+        // long thin lines crossing the outline that no box caught (mast arms, wires, poles), under the same union cap
+        const lines = crossingLines(image, within);
+        let add = 0;
+        for (let i = 0; i < lines.length; i++) if (lines[i] && !mask[i]) add++;
+        if (add && segmentedPixels + thinPixels + add <= OCCLUDER_UNION_MAX_SHARE * outline) {
+            for (let i = 0; i < lines.length; i++) if (lines[i]) mask[i] = 1;
+            thinPixels += add;
+            notes.push(`${add} px of thin lines crossing the outline`);
+        } else if (add) notes.push(`${add} px of thin lines crossing the outline not taken (over the cap for all obstructions together)`);
     } else {
         for (const [desc, which] of [[occluderDescription(target), 'front'], [thinOccluderDescription(target), 'thin']] as const) {
             try {
@@ -485,6 +558,8 @@ export async function ownViews(input: {
                     refuse(`the cut-out agrees with the structure's projection on ${(100 * iou).toFixed(0)} percent (intersection over union, at least ${100 * (described ? OWNERSHIP_SANITY_IOU : OWNERSHIP_MIN_IOU)} needed): the photo there shows something else, or the pose is far off`, p.targetPixels, { iou: Math.round(iou * 1000) / 1000 });
                     continue;
                 }
+                // a described cut-out is the outline itself: its small enclosed holes (a window it left out) are closed
+                if (described) raw = closeOutline(raw, W, H);
                 const mask = dilateMask(raw, W, H, OWNERSHIP_DILATE_PX);
                 // what stands in front of the structure: an occluder is something BETWEEN the camera and the structure's own surface,
                 // so only pixels inside the structure's outline count, and a neighbour beside it is never one. The outline is the

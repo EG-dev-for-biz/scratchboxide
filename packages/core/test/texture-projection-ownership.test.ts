@@ -24,7 +24,7 @@ import type { Vec3 } from '../src/common/spatial/staged-location-contracts';
 import type { DepthMap, PinholeCamera, ProjectionView } from '../src/common/spatial/texture-pass-contracts';
 import { bakeStreetViewProjection, type ProjectionBakeResult } from '../src/node/3d-engine/staged-location/texture-projection';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { dilateMask, growThinVertical, thinOccluderDescription, maskIou, occluderDescription, ownershipPrompts, OwnershipTargetNotFound, ownViews, OWNERSHIP_MIN_IOU, parseObstructionReply, type ObstructionLister, type OwnershipSegmenter } from '../src/node/3d-engine/staged-location/streetview-ownership';
+import { dilateMask, growThinVertical, thinOccluderDescription, maskIou, occluderDescription, ownershipPrompts, OwnershipTargetNotFound, ownViews, OWNERSHIP_MIN_IOU, parseObstructionReply, closeOutline, crossingLines, type ObstructionLister, type OwnershipSegmenter } from '../src/node/3d-engine/staged-location/streetview-ownership';
 import { renderFrameDepth } from '../src/node/spatial/StreetViewPoseRegistrar';
 import { FACADE, facadeAtlas, lookAtCamera } from './helpers/texture-pass-fixtures';
 
@@ -297,6 +297,41 @@ describe('Street View projection: pixel ownership', () => {
         expect(mask[(H >> 1) * W + 200]).toBe(1);
         expect(mask[(H >> 1) * W + 60]).toBe(0); // where the pose put the facade
         expect(mask[(H >> 1) * W + 151]).toBe(0);
+    });
+
+    it('takes a line crossing the outline (a pole into the sky) and leaves the facade\'s own pilasters and cornice', () => {
+        const W = 200, H = 160, rgba = new Uint8Array(W * H * 4);
+        const outline = new Uint8Array(W * H);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const i = y * W + x, facade = x >= 40 && x < 160 && y >= 30;
+            outline[i] = facade ? 1 : 0;
+            const v = facade ? 190 : 230; // stone, sky
+            rgba.set([v, v, v, 255], i * 4);
+            if (facade && (x % 20 === 0 || x % 20 === 1)) rgba.set([90, 90, 90, 255], i * 4); // pilasters, stopping at the facade's edge
+            if (facade && (y === 60 || y === 61)) rgba.set([90, 90, 90, 255], i * 4); // a cornice's shadow, edge to edge
+            if (x >= 107 && x < 110 && y >= 5) rgba.set([30, 30, 35, 255], i * 4); // a pole from the street up into the sky
+        }
+        const lines = crossingLines({ width: W, height: H, rgba }, outline, { halfWidthPx: 4 });
+        let pole = 0, pilaster = 0, cornice = 0;
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            if (!lines[y * W + x]) continue;
+            if (x >= 107 && x < 110) pole++; else if (y === 60 || y === 61) cornice++; else pilaster++;
+        }
+        expect(pole).toBeGreaterThan(200);
+        expect(pilaster).toBe(0);
+        expect(cornice).toBe(0);
+    });
+
+    it('closes small holes enclosed by the cut-out, not notches at its edge or large openings', () => {
+        const W = 100, H = 80, raw = new Uint8Array(W * H);
+        for (let y = 10; y < 70; y++) for (let x = 10; x < 90; x++) raw[y * W + x] = 1;
+        for (let y = 30; y < 34; y++) for (let x = 30; x < 34; x++) raw[y * W + x] = 0; // a missed window
+        for (let y = 10; y < 25; y++) for (let x = 60; x < 75; x++) raw[y * W + x] = 0; // a notch open to the sky
+        for (let y = 40; y < 65; y++) for (let x = 40; x < 80; x++) raw[y * W + x] = 0; // a large opening (12 % of the view)
+        const c = closeOutline(raw, W, H);
+        expect(c[31 * W + 31]).toBe(1);
+        expect(c[12 * W + 67]).toBe(0);
+        expect(c[50 * W + 60]).toBe(0);
     });
 
     it('grows only along thin lines and dilates without touching the image border', () => {

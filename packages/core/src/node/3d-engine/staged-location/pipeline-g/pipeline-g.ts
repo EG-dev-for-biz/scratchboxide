@@ -47,7 +47,8 @@ import { massingSpecText, type FaceSweepItem, type Massing, type OpeningItem } f
 import { readFaceOrtho, runMassing, type MassingFace, type MassingRun } from '../pipeline-e/native-massing';
 import { writeMassingLayer } from '../pipeline-e/pipeline-e';
 import type { InferenceOutcome, StepRecord } from '../pipeline-e/inference';
-import { ENHANCE_CONCURRENCY, MAX_SHIFT_PX, SEARCH_SIDE, TEXTURE_PLATE_PROMPT_ID, edges, transform, type EnhanceWallRecord, type PlateModelClient } from '../pipeline-e/enhance';
+import { ENHANCE_CONCURRENCY, MAX_SHIFT_PX, SEARCH_SIDE, TEXTURE_PLATE_PROMPT_ID, edges, transform, type EnhanceWallRecord, type PlateModelClient, type WallStreetView } from '../pipeline-e/enhance';
+import { bestStreetViewForWall, wallReference, type GuideView } from '../pipeline-e/plate-streetview';
 import { exactDistanceTransform } from '../../../spatial/StreetViewStage3Metrics';
 import { resizeRgba } from '../texture-enhance';
 import { visionFacadeCounter } from '../pipeline-e/plate-identity';
@@ -109,7 +110,12 @@ export interface PipelineGInput {
         /** Generative infill of what the quality score faults (a survey plate is worse than its redraw: never reverted to). */
         infill?: { client: EnhanceModelClient; models: string[] };
         /** The models for a wall with unseen areas (the facade texture builder's unseenModels). */
-        unseenModels?: string[] };
+        unseenModels?: string[];
+        /**
+         * The registered Street View views of the structure (streetview-registered-views.ts): each wall's best one is sent to
+         * the model with its plate, as its obstruction-free copy where the view has one (wallReference).
+         */
+        streetViews?: () => Promise<GuideView[]> };
     /** A search-grounded reference for every wall the check marks weak, written into the brief (references.ts; absent: none are fetched). */
     references?: { client: GroundedReferenceClient; models?: string[]; outputDir: string };
     /** Where the building brief and its images are published, outside the chat tools' IGNORED_DIRS (brief.ts; absent: workspace_view_file cannot reach the brief). */
@@ -569,6 +575,17 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
         const ownOf = (f: MassingFace) => built.get(f.key) ?? [...built.entries()].find(([k]) => f.key.startsWith(k + ':'))?.[1];
         const walls = run.report.faces.filter(f => f.kind === 'wall' && textures.has(f.index) && plateOf(f) && items.has(plateOf(f)!.key)).sort((a, b) => b.area - a.area);
         const done: FaceTexture[] = [];
+        // the Street View photos of the structure, once: each wall's best is its street-level reference
+        let guide: GuideView[] = [], noGuide: string | undefined = e.streetViews ? undefined : 'no Street View source';
+        if (e.streetViews) {
+            progress('pipeline G: surveying the facades with Street View');
+            try { guide = await e.streetViews(); if (!guide.length) noGuide = 'no Street View photo of the structure'; } catch (err) {
+                if (input.signal?.aborted) throw err;
+                noGuide = `the Street View survey failed (${(err as Error).message.slice(0, 160)})`;
+            }
+            const clean = guide.filter(v => v.cleanImage).length;
+            step.notes.push(`Street View: ${guide.length} registered view(s), ${clean} with an obstruction-free copy${noGuide ? ` (${noGuide})` : ''}`);
+        }
         const one = async (f: MassingFace) => {
             const pl = plateOf(f)!;
             const on = plateOntoFace(f, textures.get(f.index)!, pl, surveyFaces[pl.face]);
@@ -583,8 +600,15 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
                 if (align.dx || align.dy) on.tex.rgba = align.aligned;
                 geometryAlign = { dx: align.dx, dy: align.dy, chamferPx: align.chamferPx, coveredOpenings: align.coveredOpenings, why: align.why };
             }
-            progress(`pipeline G: drawing the facade texture of wall ${f.index} (${Math.round(f.area)} m2)`);
+            let sv: WallStreetView | undefined, noSv = noGuide;
+            if (guide.length) {
+                const best = bestStreetViewForWall(f, guide);
+                if (best.view && best.rect) sv = { view: best.view, rect: best.rect, crop: wallReference(f, best.view, best.rect, on.tex.width, on.tex.height), why: `${best.why}; ${best.view.cleanImage ? 'its obstruction-free copy (occluders filled, labelled generated)' : 'as captured (no obstruction-free copy)'}` };
+                else noSv = best.why;
+            }
+            progress(`pipeline G: drawing the facade texture of wall ${f.index} (${Math.round(f.area)} m2)${sv ? `, guided by Street View ${sv.view.panoId}${sv.view.cleanImage ? ' (obstruction-free copy)' : ''}` : ''}`);
             const r = await buildFacadeTexture(f, on.tex, on.use, {
+                ...(sv ? { streetView: sv, streetViewGuide: true } : {}), ...(noSv ? { noStreetView: noSv } : {}),
                 client: e.client, models: e.models, locationName: input.place, source: G_SRC.enhanced,
                 // a survey plate is the melted tile: the region audit reads its blobs as elements the redraw erased, so G keeps the
                 // identity gate and lets the quality score (with infill of what it faults) judge the texture itself
@@ -604,7 +628,7 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
             enhanced.push({ ...r, plate: undefined, guarded: undefined, labels: undefined, grid: undefined, ...(geometryAlign ? { geometryAlign } : {}) } as EnhanceWallRecord);
             if (r.accepted) { step.accepted++; textures.set(f.index, on.tex); done.push(on.tex); }
             else step.rejected++;
-            step.notes.push(`wall ${f.index}: ${r.accepted ? 'textured' : 'keeps its painted colours'}: ${r.why}${r.model ? ` (${r.model})` : ''}`);
+            step.notes.push(`wall ${f.index}: ${r.accepted ? 'textured' : 'keeps its painted colours'}: ${r.why}${r.model ? ` (${r.model})` : ''}${sv ? `; Street View reference: ${sv.why}` : noSv ? `; no Street View reference (${noSv})` : ''}`);
         };
         // the largest wall alone, then ENHANCE_CONCURRENCY at a time, each referencing the first finished wall
         for (let k = 0; k < walls.length;) {

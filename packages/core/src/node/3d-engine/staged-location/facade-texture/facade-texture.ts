@@ -239,6 +239,8 @@ export function writeFacadeTexture(t: FaceTexture, out: Uint8Array, weight: Floa
 export interface BuildFacadeTextureOptions {
     client: PlateModelClient; models: string[]; locationName: string; reference?: FaceTexture; source: number; signal?: AbortSignal;
     guards?: boolean; streetView?: WallStreetView; streetViewSource?: number; noStreetView?: string;
+    /** Send `streetView` to the model as its street-level reference even with the guards off (they alone otherwise enable it). */
+    streetViewGuide?: boolean;
     /** When the photo-guided redraw fails the identity gate, redraw once without the photo (default true). */
     retryWithoutPhoto?: boolean;
     /** Do not send the photo; only check the plate against it (the redraw after a photo-guided one failed the gate). */
@@ -293,7 +295,7 @@ export type FacadeTextureResult = EnhanceWallRecord & { plate?: Uint8Array; guar
 export async function buildFacadeTexture(f: MassingFace, t: FaceTexture, use: Uint8Array, opts: BuildFacadeTextureOptions): Promise<FacadeTextureResult> {
     const t0 = Date.now();
     const guards = opts.guards ?? true;
-    const sv = guards ? opts.streetView : undefined;
+    const sv = guards || opts.streetViewGuide ? opts.streetView : undefined;
     // the photo is sent to the model unless this is the redraw without it (it then only checks the plate)
     const guide = !!sv && !opts.photoCheckOnly;
     const unseen = opts.unseen;
