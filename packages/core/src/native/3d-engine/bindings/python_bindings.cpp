@@ -26,6 +26,7 @@
 #include "scratchbox_skinning.hpp"
 #include "scratchbox_sb_rig.hpp"
 #include "scratchbox_sb_veggie_grove.hpp"
+#include "scratchbox_mesh_edit.hpp"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -668,6 +669,30 @@ NB_MODULE(scratchbox_native, m) {
         return out;
     }, "meshes"_a, "Merge a list of meshes into one (vertices and triangles concatenated)");
 
+    // BSP mesh CSG (scratchbox_mesh_edit.hpp), the same booleanPolygons the mesh_edit tool and scripts/run_mesh_edit_pipeline.cpp
+    // already drive on an existing glb: here on two meshes directly, so an arch, a vault or a staircase composes from the
+    // universal operators (extrude/lathe/sweep a solid, then subtract/union/intersect it) instead of needing its own named
+    // primitive. eps and the T-junction weld after the boolean follow the same derivation as that pipeline: eps from the
+    // larger operand's own diagonal, not a fixed constant, since a boolean on a tiny or a huge pair of solids needs a
+    // different tolerance.
+    m_geom.def("boolean_mesh", [](const ScratchboxMesh& a, const ScratchboxMesh& b, const std::string& op) {
+        mesh_edit::BooleanOp bop;
+        if (op == "union") bop = mesh_edit::BooleanOp::Union;
+        else if (op == "subtract") bop = mesh_edit::BooleanOp::Subtract;
+        else if (op == "intersect") bop = mesh_edit::BooleanOp::Intersect;
+        else throw std::invalid_argument("boolean_mesh op must be \"union\", \"subtract\" or \"intersect\"");
+        std::vector<mesh_edit::CsgPolygon> pa = mesh_edit::meshToPolygons(a), pb = mesh_edit::meshToPolygons(b);
+        const mesh_edit::DBox ba = mesh_edit::boxOf(pa), bb = mesh_edit::boxOf(pb);
+        const double extent = std::max((ba.hi - ba.lo).length(), (bb.hi - bb.lo).length());
+        const double eps = std::max(1e-9, 1e-7 * std::max(extent, 1e-3));
+        std::vector<mesh_edit::CsgPolygon> result = mesh_edit::booleanPolygons(std::move(pa), std::move(pb), bop, eps);
+        mesh_edit::closeTJunctions(result, eps * 10);
+        ScratchboxMesh out = mesh_edit::polygonsToMesh(result, "boolean_mesh");
+        out.material = a.material;
+        out.recomputeBounds();
+        return out;
+    }, "a"_a, "b"_a, "op"_a, "Boolean a and b by BSP mesh CSG: op is \"union\", \"subtract\" or \"intersect\"");
+
     // ========================================================================
     // 3. ARCHITECTURE SUBMODULE (Building Tools / OSM)
     // ========================================================================
@@ -947,6 +972,25 @@ NB_MODULE(scratchbox_native, m) {
         return footprints::extrudePolygon(footprint, baseY, height, color);
     }, "footprint"_a, "base_y"_a = 0.0f, "height"_a = 1.0f, "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f),
        "Extrude a 2D XZ polygon along +Y into a closed, capped solid (walls + top + bottom)");
+
+    m_shaper.def("boolean_mesh", [](const ScratchboxMesh& a, const ScratchboxMesh& b, const std::string& op) {
+        mesh_edit::BooleanOp bop;
+        if (op == "union") bop = mesh_edit::BooleanOp::Union;
+        else if (op == "subtract") bop = mesh_edit::BooleanOp::Subtract;
+        else if (op == "intersect") bop = mesh_edit::BooleanOp::Intersect;
+        else throw std::invalid_argument("boolean_mesh op must be \"union\", \"subtract\" or \"intersect\"");
+        std::vector<mesh_edit::CsgPolygon> pa = mesh_edit::meshToPolygons(a), pb = mesh_edit::meshToPolygons(b);
+        const mesh_edit::DBox ba = mesh_edit::boxOf(pa), bb = mesh_edit::boxOf(pb);
+        const double extent = std::max((ba.hi - ba.lo).length(), (bb.hi - bb.lo).length());
+        const double eps = std::max(1e-9, 1e-7 * std::max(extent, 1e-3));
+        std::vector<mesh_edit::CsgPolygon> result = mesh_edit::booleanPolygons(std::move(pa), std::move(pb), bop, eps);
+        mesh_edit::closeTJunctions(result, eps * 10);
+        ScratchboxMesh out = mesh_edit::polygonsToMesh(result, "boolean_mesh");
+        out.material = a.material;
+        out.recomputeBounds();
+        return out;
+    }, "a"_a, "b"_a, "op"_a, "Boolean a and b by BSP mesh CSG: op is \"union\", \"subtract\" or \"intersect\" "
+       "(an arch, a vault or a staircase composes from this plus extrude/lathe/sweep, instead of its own named primitive)");
 
     // ========================================================================
     // 7. IO & STREAMING SUBMODULE

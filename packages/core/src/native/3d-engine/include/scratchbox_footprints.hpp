@@ -157,27 +157,30 @@ inline ScratchboxMesh extrudePolygon(const std::vector<Vec2>& footprint, float b
         mesh.vertices.push_back(Vertex(Vec3(p1.x, baseY, p1.y), wallNormal, Vec2(u1, 0.0f), color, tangent));
         mesh.vertices.push_back(Vertex(Vec3(p1.x, topY, p1.y), wallNormal, Vec2(u1, 1.0f), color, tangent));
         mesh.vertices.push_back(Vertex(Vec3(p0.x, topY, p0.y), wallNormal, Vec2(u0, 1.0f), color, tangent));
-        mesh.indices.push_back(base + 0); mesh.indices.push_back(base + 1); mesh.indices.push_back(base + 2);
-        mesh.indices.push_back(base + 0); mesh.indices.push_back(base + 2); mesh.indices.push_back(base + 3);
+        // CCW from outside (so meshToPolygons' Newell-derived plane normal, not just this quad's stored shading
+        // normal, actually faces out -- verified against a BSP boolean operand, where only the index winding matters):
+        mesh.indices.push_back(base + 0); mesh.indices.push_back(base + 2); mesh.indices.push_back(base + 1);
+        mesh.indices.push_back(base + 0); mesh.indices.push_back(base + 3); mesh.indices.push_back(base + 2);
     }
 
     const std::vector<uint32_t> capTris = PolygonTriangulator::triangulate(footprint);
 
-    // Top cap: normal +Y, CCW winding already correct for the triangulator's corrected (CCW) ordering
+    // Top cap, index winding verified against a BSP boolean operand (meshToPolygons/Newell), not assumed from the
+    // triangulator's own "CCW" doc comment, which -- same mismatch as the walls above -- pointed the wrong way here.
     {
         const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
         const Vec4 tangent(1.0f, 0.0f, 0.0f, 1.0f);
         for (const auto& p : footprint) mesh.vertices.push_back(Vertex(Vec3(p.x, topY, p.y), Vec3(0, 1, 0), Vec2(p.x, p.y), color, tangent));
-        for (uint32_t idx : capTris) mesh.indices.push_back(base + idx);
+        for (size_t i = 0; i + 2 < capTris.size(); i += 3) {
+            mesh.indices.push_back(base + capTris[i]); mesh.indices.push_back(base + capTris[i + 2]); mesh.indices.push_back(base + capTris[i + 1]);
+        }
     }
-    // Bottom cap: same triangles, reversed winding so the normal faces -Y
+    // Bottom cap: the triangulator's own order, which after the swap above is this cap's correct (-Y-facing) winding.
     {
         const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
         const Vec4 tangent(1.0f, 0.0f, 0.0f, 1.0f);
         for (const auto& p : footprint) mesh.vertices.push_back(Vertex(Vec3(p.x, baseY, p.y), Vec3(0, -1, 0), Vec2(p.x, p.y), color, tangent));
-        for (size_t i = 0; i + 2 < capTris.size(); i += 3) {
-            mesh.indices.push_back(base + capTris[i]); mesh.indices.push_back(base + capTris[i + 2]); mesh.indices.push_back(base + capTris[i + 1]);
-        }
+        for (uint32_t idx : capTris) mesh.indices.push_back(base + idx);
     }
 
     for (const auto& v : mesh.vertices) mesh.bounds.expand(v.position);
