@@ -34,6 +34,12 @@ const STAIR_TOLERANCE_M = 1.5;
 export const COLLINEAR_DEG = 6;
 export const HEIGHT_AGREEMENT_M = 2.5;
 export const MIN_PITCHED_DEG = 10;
+/**
+ * Under the footprint lock a Solar facet pitched less than this is read as a flat roof behind a parapet or cornice, not a
+ * roof plane: a roof plane sets the wall tops, and a gently pitched membrane would slope a flat-topped building's walls
+ * (the Haughwout's 11 degree facet ran its Broome wall top from 22.2 to 26.2 m).
+ */
+export const LOCK_FLAT_BELOW_PITCH_DEG = 15;
 export const MIN_MASSING_IOU = 0.6;
 /** The roof's median absolute error may be at most this, or this share of the building's height when that is larger. */
 export const MAX_HEIGHT_ERROR_M = 3;
@@ -650,11 +656,14 @@ export function buildMassing(inp: MassingInputs): Massing {
     const solar = inp.solar ?? [];
     const solarReport = { segments: solar.length, inside: 0, pitchedKept: 0, pitchedRejected: 0, flatUsed: 0 };
     const usedSolar = new Set<number>();
-    for (const b of inp.buildings) {
+    // the footprint is the source of truth: with no Google building for the structure at all, the 3D tiles' plan of it is
+    // (the orchestrator sends a structure with no Google building here only on a procedural, 3D Building, request)
+    const buildings: VectorBuilding[] = inp.preferExtrusion === true && !inp.buildings.length ? [{ id: 'tiles-footprint', parts: [], volumes: [{ vertices: [], indices: [] }] }] : inp.buildings;
+    for (const b of buildings) {
         // the modelled volume, where Google has one, is the massing as given, unless the footprint is asked for: then the
         // vector footprint, or, where the vector data has only the volume, the scan's plan of the structure
         const footprints = inp.preferExtrusion === true ? (b.extruded ?? []).filter(p => p.loops.length > 0) : [];
-        if (inp.preferExtrusion === true && !footprints.length && (b.volumes?.length ?? 0) > 0) {
+        if (inp.preferExtrusion === true && !footprints.length) {
             const plan = cellsFootprint(inp.cells);
             if (plan) { footprints.push({ loops: [plan] }); notes.push(`${b.id}: no vector footprint, so the footprint is the scan's plan of the structure (${plan.length} corners, ${Math.round(Math.abs(ringArea(plan)))} m2)`); }
         }
@@ -687,7 +696,14 @@ export function buildMassing(inp: MassingInputs): Massing {
             }
             const agree = (y: number | undefined) => y !== undefined && scanY !== undefined && Math.abs(y - scanY) <= HEIGHT_AGREEMENT_M;
             let topY: number, heightSource: MassingPart['heightSource'];
-            if (agree(solarY)) { topY = solarY!; heightSource = 'solar'; solarReport.flatUsed += flat.length; flat.forEach(f => usedSolar.add(f.k)); }
+            if (inp.preferExtrusion === true) {
+                // the footprint lock: height from the Solar API first, then the vector data, then the scan; a disagreement is said
+                if (solarY !== undefined) { topY = solarY; heightSource = 'solar'; solarReport.flatUsed += flat.length; flat.forEach(f => usedSolar.add(f.k)); }
+                else if (vectorY !== undefined) { topY = vectorY; heightSource = 'vector'; }
+                else if (scanY !== undefined) { topY = scanY; heightSource = 'scan'; }
+                else { notes.push(`part ${id}: no height from Solar, the vector data or the scan; left out`); continue; }
+                if (scanY !== undefined && Math.abs(topY - scanY) > HEIGHT_AGREEMENT_M) notes.push(`part ${id}: height from ${heightSource} (${(topY - inp.groundY).toFixed(1)} m), ${(topY - scanY).toFixed(1)} m off the scan's roof`);
+            } else if (agree(solarY)) { topY = solarY!; heightSource = 'solar'; solarReport.flatUsed += flat.length; flat.forEach(f => usedSolar.add(f.k)); }
             else if (agree(vectorY)) { topY = vectorY!; heightSource = 'vector'; }
             else if (scanY !== undefined) {
                 topY = scanY; heightSource = 'scan';
@@ -707,11 +723,13 @@ export function buildMassing(inp: MassingInputs): Massing {
                 for (const { s, k } of pitched) {
                     // a facet whose plane runs under this part's own floor somewhere over it is not this part's roof (the
                     // Haughwout's real roof facet, offered to a false upper tier, cut that tier's walls to 0.2 m)
+                    if (inp.preferExtrusion === true && s.pitchDeg < LOCK_FLAT_BELOW_PITCH_DEG) { solarReport.pitchedRejected++; continue; }
                     const plane = solarPlane(s);
                     if (roofUnderFloor(plane, pts, target.baseY)) { solarReport.pitchedRejected++; continue; }
                     const trial = { ...capped, planes: [...capped.planes, plane] };
                     const e = err(trial);
-                    if (e < cur * 0.95 && e < 1.5) { capped.planes = trial.planes; cur = e; solarReport.pitchedKept++; usedSolar.add(k); }
+                    // the footprint lock takes the Solar API's roof facets as measured; otherwise each must lower the roof's error
+                    if (inp.preferExtrusion === true || (e < cur * 0.95 && e < 1.5)) { capped.planes = trial.planes; cur = e; solarReport.pitchedKept++; usedSolar.add(k); }
                     else solarReport.pitchedRejected++;
                 }
                 if (capped.planes.length) { target.planes = capped.planes; target.topY = capped.topY; }

@@ -66,7 +66,7 @@ import type { GroundedReferenceClient } from '../../../spatial/search-grounded-r
 
 export const PIPELINE_G_VERSION = `pipeline-g/v3+${PIPELINE_G_READ_VERSION}`;
 /** Native build parameters: the massing only, nothing baked from the tile, no scanned residual. */
-export const G_BUILD_PARAMS = { bake: 0, residual: 0, sections: 0, topdown: 0 } as const;
+export const G_BUILD_PARAMS = { bake: 0, residual: 0, sections: 0, topdown: 0, snapMaxM: 0 } as const;
 /** Plates read at once. */
 export const READ_POOL = 4;
 
