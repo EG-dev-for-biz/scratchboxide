@@ -136,10 +136,13 @@ export function programItems(prog: FacadeProgram, f: Pick<MassingFace, 'key' | '
     return out;
 }
 
-/** Reads one plate with the vision chain. */
-export async function readPlate(chain: Pick<VisionModelChain<string>, 'generate'>, place: string, plate: Plate, signal?: AbortSignal): Promise<{ program: FacadeProgram; model: string; ms: number }> {
+/**
+ * Reads one plate with the vision chain. `again` is appended to the prompt when a first reading failed the check
+ * (check.ts): what it measured, so the second reading looks again rather than repeating the first.
+ */
+export async function readPlate(chain: Pick<VisionModelChain<string>, 'generate'>, place: string, plate: Plate, signal?: AbortSignal, again?: string): Promise<{ program: FacadeProgram; model: string; ms: number }> {
     const res = await chain.generate({
-        contents: [{ role: 'user', parts: [{ text: readPrompt(place, plate) }, { inlineData: { mimeType: 'image/png', data: platePng(plate).toString('base64') } }, { inlineData: { mimeType: 'image/png', data: reliefPng(plate).toString('base64') } }] }],
+        contents: [{ role: 'user', parts: [{ text: readPrompt(place, plate) + (again ? `\n\n${again}` : '') }, { inlineData: { mimeType: 'image/png', data: platePng(plate).toString('base64') } }, { inlineData: { mimeType: 'image/png', data: reliefPng(plate).toString('base64') } }] }],
         config: { responseMimeType: 'application/json', maxOutputTokens: READ_MAX_OUTPUT_TOKENS, ...(signal ? { abortSignal: signal } : {}) }
     }, { stage: 'grammar', deadlineMs: readTimeoutMs(plate.h * PLATE_PIXEL_M) });
     return { program: parseProgram(res.response.text ?? ''), model: res.model, ms: res.ms };

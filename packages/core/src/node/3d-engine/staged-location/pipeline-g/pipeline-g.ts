@@ -13,7 +13,8 @@
  * walls on the facades the scan measures); G then
  *   1. places survey stations by the staged survey's own rules (stations.ts),
  *   2. path-traces them from the tile with metric depth and lays them onto metric wall plates (plates.ts),
- *   3. reads every well-seen plate as a facade program in metres (read.ts),
+ *   3. reads every well-seen plate as a facade program in metres (read.ts), checks each reading against its plate (check.ts)
+ *      and reads a wall again when its reading does not fit, keeping the reading that fits better,
  *   4. builds it natively on the massing (scratchbox_staged_massing.hpp: arched openings, swept bands, members) with no tile
  *      texture and no scanned residual, and
  *   5. paints each face from its own reading: wall colour, glazing in its openings, band and member colours on their
@@ -44,6 +45,7 @@ import type { EnhanceModelClient } from '../texture-enhance';
 import { planStations } from './stations';
 import { platePng, reliefPng, surveyPlates, type Plate } from './plates';
 import { MIN_READ_COVERAGE, PIPELINE_G_READ_VERSION, programItems, readPlate, type FacadeProgram, type ProgramItems } from './read';
+import { checkPlate, checkReading, type ReadingCheck } from './check';
 
 export const PIPELINE_G_VERSION = `pipeline-g/v3+${PIPELINE_G_READ_VERSION}`;
 /** Native build parameters: the massing only, nothing baked from the tile, no scanned residual. */
@@ -90,7 +92,7 @@ export interface PipelineGInput {
 }
 
 export interface PipelineGOutcome extends InferenceOutcome {
-    plates: Array<{ face: string; coverage: number; read: boolean; model?: string; notes?: string; counts?: ProgramItems['counts'] }>;
+    plates: Array<{ face: string; coverage: number; read: boolean; model?: string; notes?: string; counts?: ProgramItems['counts']; check?: ReadingCheck; reread?: 'first' | 'second' }>;
     stations: { kept: number; dropped: number; candidates: number; skipped: Array<{ face: string; reason: string }> };
 }
 
@@ -250,12 +252,29 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     progress(`pipeline G: reading ${readable.length} wall${readable.length === 1 ? '' : 's'} as facade programs`);
     const readings = await pool(readable, READ_POOL, async (pl: Plate) => {
         const hash = crypto.createHash('sha256').update(PIPELINE_G_READ_VERSION).update(input.place).update(pl.rgb).update(Buffer.from(pl.relief.buffer)).digest('hex').slice(0, 24);
-        const cached = path.join(input.dir, 'plates', `reading_${hash}.json`);
-        if (fs.existsSync(cached)) return { pl, ...(JSON.parse(fs.readFileSync(cached, 'utf8')) as { program: FacadeProgram; model: string; ms: number }), cached: true };
-        try {
-            const r = await readPlate(input.chain, input.place, pl, input.signal);
+        const read = async (file: string, again?: string) => {
+            const cached = path.join(input.dir, 'plates', file);
+            if (fs.existsSync(cached)) return { ...(JSON.parse(fs.readFileSync(cached, 'utf8')) as { program: FacadeProgram; model: string; ms: number }), cached: true };
+            const r = await readPlate(input.chain, input.place, pl, input.signal, again);
             fs.writeFileSync(cached, JSON.stringify(r, null, 1));
-            return { pl, ...r, cached: false };
+            return { ...r, cached: false };
+        };
+        try {
+            // the check (check.ts): a reading that explains little of its plate, or no more than its own displaced copies, is
+            // read once more with what was measured, and the reading that explains more is kept
+            const cp = checkPlate(pl);
+            const first = await read(`reading_${hash}.json`);
+            const c1 = checkReading(cp, first.program);
+            if (!c1.weak) return { pl, ...first, check: c1 };
+            const again = `A first reading of this wall was checked against the image and did not fit it: drawn back onto Image 1, its openings and members account for ${Math.round(c1.explained * 100)}% of the wall's light and dark variation, about ${c1.lift}x what the same reading moved half a bay out of place does. Look again: measure each row's bottom and top and each opening's left and right edges off the tick marks, and list only what the image shows.`;
+            try {
+                const second = await read(`reading_${hash}_again.json`, again);
+                const c2 = checkReading(cp, second.program);
+                return c2.explained > c1.explained ? { pl, ...second, check: c2, reread: { kept: 'second' as const, first: c1 } } : { pl, ...first, check: c1, reread: { kept: 'first' as const, second: c2 } };
+            } catch (err) {
+                if (input.signal?.aborted) throw err;
+                return { pl, ...first, check: c1, reread: { kept: 'first' as const, error: err instanceof Error ? err.message : String(err) } };
+            }
         } catch (err) {
             if (input.signal?.aborted) throw err;
             return { pl, error: err instanceof Error ? err.message : String(err) };
@@ -264,7 +283,8 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     timingsMs.read = Date.now() - t;
     const items = new Map<string, ProgramItems>();
     for (const r of readings) if ('program' in r && r.program) items.set(r.pl.key, programItems(r.program, faces[r.pl.face], `g${r.pl.face}_`));
-    steps.push({ step: 'facade reading', proposed: readable.length, accepted: items.size, rejected: readable.length - items.size, notes: readings.map(r => ('error' in r && r.error) ? `${r.pl.key}: not read (${r.error})` : `${r.pl.key}: ${'model' in r ? r.model : ''}${'cached' in r && r.cached ? ' (cached)' : ''}`), ms: timingsMs.read });
+    const checkNote = (c: ReadingCheck) => `explains ${Math.round(c.explained * 100)}% of the plate (${c.lift}x its displaced copies), edges P ${c.precision} R ${c.recall}, opening contrast ${c.openingContrast}`;
+    steps.push({ step: 'facade reading', proposed: readable.length, accepted: items.size, rejected: readable.length - items.size, notes: readings.map(r => ('error' in r && r.error) ? `${r.pl.key}: not read (${r.error})` : `${r.pl.key}: ${'model' in r ? r.model : ''}${'cached' in r && r.cached ? ' (cached)' : ''}${'check' in r && r.check ? `; ${checkNote(r.check)}` : ''}${'reread' in r && r.reread ? `; read again (${r.reread.kept} reading kept${'first' in r.reread && r.reread.first ? `, the first ${checkNote(r.reread.first)}` : ''}${'second' in r.reread && r.reread.second ? `, the second ${checkNote(r.reread.second)}` : ''}${'error' in r.reread && r.reread.error ? `, the second failed: ${r.reread.error}` : ''})` : ''}`), ms: timingsMs.read });
     if (!items.size) throw new Error(`no wall could be read (${readings.map(r => ('error' in r && r.error) || '').filter(Boolean).join('; ')})`);
 
     // 4. build
@@ -336,7 +356,7 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
         textures, occluderMasks: new Map(),
         plates: plates.map(p => {
             const r = readings.find(x => x.pl.key === p.key);
-            return { face: p.key, coverage: +p.coverage.toFixed(3), read: items.has(p.key), ...(r && 'model' in r ? { model: r.model, notes: r.program?.notes } : {}), ...(items.get(p.key) ? { counts: items.get(p.key)!.counts } : {}) };
+            return { face: p.key, coverage: +p.coverage.toFixed(3), read: items.has(p.key), ...(r && 'model' in r ? { model: r.model, notes: r.program?.notes } : {}), ...(items.get(p.key) ? { counts: items.get(p.key)!.counts } : {}), ...(r && 'check' in r && r.check ? { check: r.check } : {}), ...(r && 'reread' in r && r.reread ? { reread: r.reread.kept } : {}) };
         }),
         stations: { kept: plan.stations.length, dropped: plan.dropped.length, candidates: plan.candidates, skipped: plan.skipped }
     };
