@@ -1,4 +1,28 @@
+# Python packages for the app's sidecars (the project .venv the server runs: `[Scratchbox Python] sidecars run on .venv`).
+# Pinned to the versions in that venv on 2026-10-23. Install: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# No credentials here: this file is committed. Secrets live in the gitignored secrets.json / ~/.scratchbox/secrets.json.
+
+# native engine bindings (scratchbox_native) and its build
 nanobind==3.1.0
-cmake>=3.15
+cmake==4.4.4
 # type-checks agent-written scratchbox scripts against the generated stubs (packages/core/src/python/typings)
 basedpyright==1.40.2
+
+# image and geometry processing in the sidecars (photo_tier, scratchbox python package)
+numpy==2.4.6
+opencv-python-headless==5.0.0.93
+pillow==13.0.0
+
+# pose detection (scripts/detect_pose.py)
+mediapipe==1.1.1
+
+# monocular depth: Depth Anything V2 Small (tools/depth/panorama_depth.py; weights in the gitignored .model-cache/)
+torch==2.14.1
+transformers==5.20.1
+huggingface_hub==2.2.0
+safetensors==0.8.0
+
+# Not installed in the default venv, used only by optional research scripts (install on demand):
+#   scipy, kornia, pycolmap (scripts/matchmove/*), gsplat, av, imageio (scripts/refine_multiview_avatar.py),
+#   hydra-core, omegaconf, lightning, ultralytics (scripts/run_gvhmr.py), rembg (local SF3D).
+# tools/depth/requirements.txt and tools/geobox/requirements.txt cover those tools on their own.
