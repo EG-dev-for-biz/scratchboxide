@@ -244,3 +244,58 @@ export async function buildFacadeTexture(f: MassingFace, t: FaceTexture, use: Ui
     writeFacadeTexture(t, out, weight, use, guide && opts.streetViewSource !== undefined ? opts.streetViewSource : opts.source, unseen);
     return { ...rec, ...extra, ms: Date.now() - t0 };
 }
+
+/** What `buildFacadeTextureFromImage` needs: a straight-on picture of one wall and its size in metres. */
+export interface FacadeImageInput {
+    /** The wall, straight on (rectified), W x H RGBA: a survey plate, a tile ortho, a rectified photo. */
+    image: RgbaImage8;
+    widthM: number;
+    heightM: number;
+    /** Texels to draw as the wall continues (1): unseen, occluded, holes. Default: the image's flat mid-grey texels. */
+    unseenMask?: Uint8Array;
+    /** A finished neighbouring wall, the reference for materials (any size). */
+    reference?: RgbaImage8;
+    locationName: string;
+    client: PlateModelClient;
+    models: string[];
+    /** Generative infill of what the quality score faults (and, with `audit`, of what the region audit flags). */
+    infill?: { client: EnhanceModelClient; models: string[] };
+    /** Counts the input's and the redraw's storeys and bays (plate-identity.ts visionFacadeCounter); without it they are not counted. */
+    counter?: FacadeCounter;
+    /** The region audit against the input (default off: on a melted or partial input it reads the melt as elements erased). */
+    audit?: boolean;
+    cacheDir?: string;
+    signal?: AbortSignal;
+}
+
+/**
+ * The facade texture builder on any straight-on wall picture, outside a staged build (the facade_texture_build tool, and
+ * scripts): the picture becomes a one-wall face of `widthM` x `heightM`, the unseen texels are drawn as the wall continues,
+ * and the redraw is kept only through the identity gate and the quality score (with infill of what the score faults). The
+ * result carries the texture when accepted.
+ */
+export async function buildFacadeTextureFromImage(input: FacadeImageInput): Promise<FacadeTextureResult & { texture?: RgbaImage8; coveredShare: number }> {
+    const { width: W, height: H } = input.image;
+    const pixel = input.widthM / W;
+    const face: MassingFace = {
+        index: 0, key: 'image', kind: 'wall', part: 'image', loop: 0, edge: 0, wall: true,
+        normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0], origin: [0, 0, 0],
+        sMin: 0, sMax: input.widthM, tMin: 0, tMax: input.heightM, tBottom: 0, area: input.widthM * input.heightM,
+        pixel, orthoSMin: 0, orthoTMax: input.heightM, width: W, height: H, coverage: 1, openings: [], top: []
+    };
+    const use = new Uint8Array(W * H);
+    let seen = 0;
+    for (let i = 0; i < W * H; i++) {
+        const grey = Math.abs(input.image.rgba[i * 4] - 128) <= 4 && Math.abs(input.image.rgba[i * 4 + 1] - 128) <= 4 && Math.abs(input.image.rgba[i * 4 + 2] - 128) <= 4;
+        use[i] = input.unseenMask ? (input.unseenMask[i] ? 0 : 1) : (grey ? 0 : 1);
+        seen += use[i];
+    }
+    const t: FaceTexture = { width: W, height: H, rgba: Uint8Array.from(input.image.rgba), source: new Uint8Array(W * H) };
+    const ref: FaceTexture | undefined = input.reference ? { width: input.reference.width, height: input.reference.height, rgba: input.reference.rgba, source: new Uint8Array(input.reference.width * input.reference.height) } : undefined;
+    const r = await buildFacadeTexture(face, t, use, {
+        client: input.client, models: input.models, locationName: input.locationName, source: 1, guards: input.audit === true, quality: true,
+        ...(seen < W * H ? { unseen: { source: 1 } } : {}), ...(ref ? { reference: ref } : {}), ...(input.infill ? { infill: input.infill } : {}),
+        ...(input.counter ? { counter: input.counter } : {}), ...(input.cacheDir ? { cacheDir: input.cacheDir } : {}), ...(input.signal ? { signal: input.signal } : {})
+    });
+    return { ...r, coveredShare: seen / (W * H), ...(r.accepted ? { texture: { width: W, height: H, rgba: t.rgba } } : {}) };
+}

@@ -32,6 +32,11 @@ import { bakeDecal, decalAsset, generateDecalImage, DECAL_DEFAULT_STRENGTH } fro
 import { genAiEnhanceClient } from '../../3d-engine/staged-location/texture-enhance';
 import { decodeImageInMemory } from '../../3d-engine/staged-location/tile-texture-transfer';
 import { encodePng } from '../../texture-processing';
+import { buildFacadeTextureFromImage } from '../../3d-engine/staged-location/facade-texture/facade-texture';
+import { genAiPlateClient } from '../../3d-engine/staged-location/pipeline-e/enhance';
+import { visionFacadeCounter } from '../../3d-engine/staged-location/pipeline-e/plate-identity';
+import { VisionModelChain } from '../vision-model-chain';
+import { FALLBACK_GEMINI_MODELS } from '../gemini-client';
 
 const TOOL = 'nano_banana_apply_color_palette';
 
@@ -406,6 +411,26 @@ export const IMAGE_GENERATION_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 outputDir: { type: 'STRING', description: 'Optional folder. Default: the app-served build/generated-images/decals.' }
             }
         }
+    },
+    {
+        name: 'facade_texture_build',
+        description: 'Builds a realistic texture of one building wall from a straight-on (rectified) picture of it: a survey plate, a 3D-tiles ortho, a rectified photo. The facade texture builder redraws the wall with an image model, keeping its framing, then keeps the redraw only when it is the same wall (identity gate: storeys and bays counted on both, colour family, framing, edge alignment) and a good texture (quality score: no seam, no smeared strip, little left empty); what the score faults is redrawn by generative infill. Flat mid-grey texels of the input (or a given mask) are drawn as the wall continues. Every texel written is labelled generated. Writes a PNG and a JSON record of every check, and says why when the wall is refused.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                imagePath: { type: 'STRING', description: 'URL, base64 data URI, or local filepath of the straight-on PNG or JPEG wall picture.' },
+                widthM: { type: 'NUMBER', description: 'The wall\'s width in metres (the picture\'s full width).' },
+                heightM: { type: 'NUMBER', description: 'Optional wall height in metres (default: from the picture\'s aspect).' },
+                locationName: { type: 'STRING', description: 'Optional name or address of the building, for the prompt (default "the building").' },
+                referencePath: { type: 'STRING', description: 'Optional finished texture of a neighbouring wall of the same building, the reference for materials and colour.' },
+                unseenMaskPath: { type: 'STRING', description: 'Optional mask of the same size: pixels brighter than mid-grey are drawn as the wall continues (unseen, occluded). Default: the picture\'s flat mid-grey pixels.' },
+                audit: { type: 'BOOLEAN', description: 'Optional region audit against the input (default false): use it when the input is a sharp, trustworthy picture; leave it off for melted or partial inputs.' },
+                countStoreysAndBays: { type: 'BOOLEAN', description: 'Optional (default true): count storeys and bays on the input and the redraw with a vision model, and refuse a redraw that changes them.' },
+                model: { type: 'STRING', description: 'Optional image model id; otherwise the default image models are tried in order.' },
+                outputPath: { type: 'STRING', description: 'Optional output PNG path (relative paths resolve against the workspace). Default: next to a local input as <name>_facade.png, else facade_<timestamp>.png in the workspace. The record is written beside it as .json.' }
+            },
+            required: ['imagePath', 'widthM']
+        }
     }
 ];
 
@@ -563,6 +588,63 @@ export const imageGenerationHandlers: Record<string, ToolHandler> = {
                 ? `Filled ${res.filledPixels} hole pixels of ${imagePath} with ${res.modelUsed} (labelled generated) -> ${outputPath}.`
                 : res.decision === 'no_holes' ? `No holes found in ${imagePath}${mask ? ' (the mask is empty)' : ''}; nothing written.`
                 : `The holes of ${imagePath} were not filled: ${res.reason ?? res.decision}. The image is unchanged; nothing written.`
+        };
+    },
+    facade_texture_build: async (args, ctx) => {
+        const FACADE = 'facade_texture_build';
+        const imagePath = asString(args.imagePath);
+        if (!imagePath) throw new MissingInputError(FACADE, 'imagePath', 'give the straight-on picture of the wall');
+        const widthM = Number(args.widthM);
+        if (!(widthM > 0)) throw new MissingInputError(FACADE, 'widthM', 'give the wall\'s width in metres');
+        const src = await loadInputImage(imagePath, ctx?.workspaceRoot, ctx?.signal, FACADE, 'imagePath');
+        let image;
+        try { image = decodeImageInMemory(new Uint8Array(src.data)); } catch (err) { throw new InvalidInputError(FACADE, 'imagePath', `the image is not a PNG or JPEG (${(err as Error).message})`); }
+        const heightM = Number(args.heightM) > 0 ? Number(args.heightM) : widthM * image.height / image.width;
+        const load = async (p: string, field: string) => { try { return decodeImageInMemory(new Uint8Array((await loadInputImage(p, ctx?.workspaceRoot, ctx?.signal, FACADE, field)).data)); } catch (err) { if (err instanceof InvalidInputError || err instanceof MissingInputError) throw err; throw new InvalidInputError(FACADE, field, `the image is not a PNG or JPEG (${(err as Error).message})`); } };
+        const referencePath = asString(args.referencePath);
+        const reference = referencePath ? await load(referencePath, 'referencePath') : undefined;
+        let unseenMask: Uint8Array | undefined;
+        const maskPath = asString(args.unseenMaskPath);
+        if (maskPath) {
+            const m = await load(maskPath, 'unseenMaskPath');
+            if (m.width !== image.width || m.height !== image.height) throw new InvalidInputError(FACADE, 'unseenMaskPath', `the mask is ${m.width} x ${m.height}, the image ${image.width} x ${image.height}`);
+            unseenMask = new Uint8Array(m.width * m.height);
+            for (let i = 0; i < unseenMask.length; i++) unseenMask[i] = m.rgba[i * 4] + m.rgba[i * 4 + 1] + m.rgba[i * 4 + 2] > 3 * 128 ? 1 : 0;
+        }
+        const models = resolveRequestedModels(asString(args.model) || undefined, IMAGE_MODEL_PRIORITY);
+        let genai: unknown;
+        try {
+            genai = await new GoogleMediaCredentialsService().createClient();
+        } catch (err) {
+            throw new MediaModelUnavailableError(models[0], `Google media credentials are not available (${(err as Error)?.message || err})`);
+        }
+        const counter = args.countStoreysAndBays === false ? undefined : visionFacadeCounter(new VisionModelChain<string>({ client: genai as never, candidates: FALLBACK_GEMINI_MODELS, ...(ctx?.signal ? { signal: ctx.signal } : {}) } as never));
+        const res = await buildFacadeTextureFromImage({
+            image, widthM, heightM, locationName: asString(args.locationName) || 'the building', client: genAiPlateClient(genai), models,
+            infill: { client: genAiEnhanceClient(genai), models }, ...(reference ? { reference } : {}), ...(unseenMask ? { unseenMask } : {}),
+            ...(counter ? { counter } : {}), audit: args.audit === true, ...(ctx?.signal ? { signal: ctx.signal } : {})
+        });
+        const requestedOut = asString(args.outputPath);
+        const outputPath = requestedOut
+            ? (path.isAbsolute(requestedOut) ? requestedOut : path.resolve(ctx?.workspaceRoot || process.cwd(), requestedOut))
+            : src.localPath
+                ? path.join(path.dirname(src.localPath), `${path.basename(src.localPath, path.extname(src.localPath))}_facade.png`)
+                : path.join(ctx?.workspaceRoot || process.cwd(), `facade_${Date.now()}.png`);
+        const record = {
+            accepted: res.accepted, why: res.why, ...(res.model ? { modelUsed: res.model } : {}), widthM, heightM: Math.round(heightM * 100) / 100, coveredShare: Math.round(res.coveredShare * 1000) / 1000,
+            ...(res.chamferPx !== undefined ? { chamferPx: res.chamferPx, lostShare: res.lostShare } : {}), ...(res.identity ? { identity: res.identity } : {}),
+            ...(res.quality ? { quality: res.quality } : {}), ...(res.infill ? { infill: res.infill } : {}), ...(res.audit ? { audit: { flaggedShare: res.audit.flaggedShare, regions: res.audit.regions.length } } : {}),
+            provenance: { label: 'generated', method: 'facade texture builder: redrawn from the input picture by an image model, kept through the identity gate and the quality score' }
+        };
+        await fs.ensureDir(path.dirname(outputPath));
+        const recordPath = outputPath.replace(/\.png$/i, '') + '.json';
+        await fs.writeFile(recordPath, JSON.stringify(record, null, 1));
+        if (res.accepted && res.texture) await fs.writeFile(outputPath, encodePng(res.texture.width, res.texture.height, Buffer.from(res.texture.rgba)));
+        return {
+            resultPayload: { success: res.accepted, imagePath, ...(res.accepted ? { outputPath } : {}), recordPath, ...record },
+            summaryResult: res.accepted
+                ? `Built the facade texture of ${imagePath} (${widthM} x ${heightM.toFixed(1)} m) with ${res.model} (labelled generated) -> ${outputPath}; record ${recordPath}.`
+                : `The facade texture of ${imagePath} was refused: ${res.why}. Nothing written but the record ${recordPath}.`
         };
     },
     [GENERATE_IMAGE]: async (args, ctx) => {
