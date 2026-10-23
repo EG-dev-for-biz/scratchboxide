@@ -3522,15 +3522,17 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         ...((request.enhance ?? stagedEnhance()) ? { references: { client: visionAvailable.client as unknown as GroundedReferenceClient, outputDir: path.join(cache.dir, 'location_reference') } } : {}),
                         // the brief and its images published under public/, outside the chat tools' IGNORED_DIRS (.scratchbox/cache is
                         // one of them): workspace_view_file and workspace_view_image can only reach what is published here
-                        publicDir: path.resolve(cache.modelsDir, '..', 'briefs', e.key.slice(0, 8))
+                        publicDir: path.resolve(cache.modelsDir, '..', 'briefs', e.key.slice(0, 8)),
+                        // what names the building (building-name.ts): the evidence's POIs, the request's words and the address
+                        naming: { ...(t.vector ? { pois: t.vector.pois } : {}), query: request.query, address: placeValue!.formattedAddress }
                     });
-                    cache.writeRunNote(runId, 'pipeline_g', { steps: out.steps, timingsMs: out.timingsMs, plates: out.plates, stations: out.stations, ...(out.brief ? { brief: out.brief } : {}) });
+                    cache.writeRunNote(runId, 'pipeline_g', { steps: out.steps, timingsMs: out.timingsMs, plates: out.plates, stations: out.stations, names: out.names, ...(out.brief ? { brief: out.brief } : {}) });
                     if (out.brief && 'path' in out.brief) BUILDING_BRIEFS.set(run, out.brief);
                     checkFootprintLock('grammar', 'pipeline G layer', out.files.clayGlb, r.massing.parts);
                     const key8 = e.key.slice(0, 8);
                     const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_pipelineg.glb`);
                     const pubTex = cache.publishFile(out.files.texturedGlb, `${base}_massing_${key8}_pipelineg_tex.glb`);
-                    const describe = out.steps.map(s => `${s.step}: ${s.accepted} of ${s.proposed}`).join('; ');
+                    const describe = `${out.names.primary ? `${out.names.primary}; ` : ''}${out.steps.map(s => `${s.step}: ${s.accepted} of ${s.proposed}`).join('; ')}`;
                     const layer: StagedLayer = {
                         objectId: layerObjectId(e.key, 'l2g'), stage: 'grammar', layer: 'l2g', order: STAGES.grammar.order, url: pubClay.url, bytes: pubClay.bytes,
                         provenance: { label: PROVENANCE.photoInferred, measuredGeometry: false, confidence: 0.5, method: 'pipeline G: survey stations path-traced from the photo tile, laid onto metric wall plates, read as facade programs (arched openings, bands, piers, colonnettes) and built natively on the vector massing; faces painted from the reading', sources: [{ kind: 'stage-output', id: `pipeline-g:${key8}` }], note: describe },

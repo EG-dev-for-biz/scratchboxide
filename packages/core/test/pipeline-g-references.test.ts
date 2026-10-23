@@ -10,15 +10,16 @@
 /**
  * Pipeline G's weak-wall references (pipeline-g/references.ts): a wall the check marks weak gets a search-grounded
  * reference, by its own size and compass heading; a wall that reads well is never asked; one wall's fetch failing does
- * not stop another's or throw; the subject and questions are built from the wall alone, with no model call. A stand-in
- * client: nothing is called over the network.
+ * not stop another's or throw; the subject and questions are built from the wall alone, with no model call; the models
+ * are asked by the building's name and city when the evidence named it (referenceQuery), by its address otherwise, and
+ * each result says which. A stand-in client: nothing is called over the network.
  */
 
 import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { headingDeg, weakWallReferences, weakWallSubject } from '../src/node/3d-engine/staged-location/pipeline-g/references';
+import { headingDeg, referenceQuery, weakWallReferences, weakWallSubject } from '../src/node/3d-engine/staged-location/pipeline-g/references';
 import type { MassingFace } from '../src/node/3d-engine/staged-location/pipeline-e/native-massing';
 import type { ReadingCheck } from '../src/node/3d-engine/staged-location/pipeline-g/check';
 
@@ -72,7 +73,7 @@ describe('weakWallReferences', () => {
         const s = standIn({ 'gemini-3-pro-image': 'image', 'gemini-3.1-flash-image': 'image' });
         const weak = face({ key: 'w:p:0:0', normal: [0, 0, -1] });
         const good = face({ key: 'w:p:0:1', normal: [1, 0, 0] });
-        const out = await weakWallReferences({ client: s.client as any, place: 'Test Building', outputDir: dir, plates: [{ face: weak, check: check(true) }, { face: good, check: check(false) }] });
+        const out = await weakWallReferences({ client: s.client as any, query: 'Test Building, Testville', outputDir: dir, plates: [{ face: weak, check: check(true) }, { face: good, check: check(false) }] });
         expect(out).toHaveLength(1);
         expect(out[0].face).toBe('w:p:0:0');
         expect(out[0].references).toHaveLength(2);
@@ -82,19 +83,42 @@ describe('weakWallReferences', () => {
         const prompts = s.requests.map(r => r.contents[0].parts[0].text as string);
         expect(prompts.every(p => /north-facing wall/.test(p))).toBe(true);
         expect(prompts.some(p => /east-facing/.test(p))).toBe(false);
+        // the models were asked by the query given, and the result says so
+        expect(prompts.every(p => p.includes('of Test Building, Testville'))).toBe(true);
+        expect(out[0].query).toBe('Test Building, Testville');
+    });
+
+    it('searches by the building name and its city when the evidence named it, by the address otherwise', async () => {
+        const address = '175 5th Ave, New York, NY 10010, USA';
+        expect(referenceQuery({ name: 'Flatiron Building', address })).toBe('Flatiron Building, New York');
+        expect(referenceQuery({ name: 'New York Public Library', address: '476 5th Ave, New York, NY 10018, USA' })).toBe('New York Public Library');
+        expect(referenceQuery({ name: '  ', address })).toBe(address);
+        expect(referenceQuery({ address })).toBe(address);
+
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'g-refs-'));
+        const weak = face({ key: 'w:p:0:0' });
+        const named = standIn({ 'gemini-3-pro-image': 'image', 'gemini-3.1-flash-image': 'image' });
+        await weakWallReferences({ client: named.client as any, query: referenceQuery({ name: 'Flatiron Building', address }), outputDir: dir, plates: [{ face: weak, check: check(true) }] });
+        expect(named.requests.map(r => r.contents[0].parts[0].text as string).every(p => p.includes('of Flatiron Building, New York') && !p.includes('175 5th Ave'))).toBe(true);
+
+        const unnamed = standIn({ 'gemini-3-pro-image': 'image', 'gemini-3.1-flash-image': 'image' });
+        const out = await weakWallReferences({ client: unnamed.client as any, query: referenceQuery({ address }), outputDir: dir, plates: [{ face: weak, check: check(true) }] });
+        expect(unnamed.requests.map(r => r.contents[0].parts[0].text as string).every(p => p.includes(`of ${address}`))).toBe(true);
+        expect(out[0].query).toBe(address);
     });
 
     it('does not ask when no plate is weak, and never throws for one wall failing', async () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'g-refs-'));
         const good = face({ key: 'w:p:0:0' });
-        const none = await weakWallReferences({ client: standIn({}).client as any, place: 'Test Building', outputDir: dir, plates: [{ face: good, check: check(false) }, { face: good, check: undefined }] });
+        const none = await weakWallReferences({ client: standIn({}).client as any, query: 'Test Building', outputDir: dir, plates: [{ face: good, check: check(false) }, { face: good, check: undefined }] });
         expect(none).toEqual([]);
 
         const s = standIn({ 'gemini-3-pro-image': 'throw', 'gemini-3.1-flash-image': 'throw' });
         const weak = face({ key: 'w:p:0:2' });
-        const failed = await weakWallReferences({ client: s.client as any, place: 'Test Building', outputDir: dir, plates: [{ face: weak, check: check(true) }] });
+        const failed = await weakWallReferences({ client: s.client as any, query: 'Test Building', outputDir: dir, plates: [{ face: weak, check: check(true) }] });
         expect(failed).toHaveLength(1);
         expect(failed[0].references).toEqual([]);
         expect(failed[0].skipped).toMatch(/No model gave/);
+        expect(failed[0].query).toBe('Test Building');
     });
 });

@@ -62,7 +62,9 @@ import { groupFacades, layBack } from './facades';
 import { roofObjects, type RoofObject } from './roof-objects';
 import { writeBuildingBrief, type BuildingBriefRecord } from './brief';
 import { closePlateGaps, redrawRoof, roofStations, ROOF_PLATE_PROMPT_ID, type RoofTextureRecord } from './roof-texture';
-import { weakWallReferences, type WeakWallReference } from './references';
+import { referenceQuery, weakWallReferences, type WeakWallReference } from './references';
+import { decideBuildingNames, footprintDistanceM, type BuildingNames, type Poi } from '../building-name';
+import { BRIEF_NEARBY_POI_M } from './brief';
 import type { GroundedReferenceClient } from '../../../spatial/search-grounded-reference';
 
 export const PIPELINE_G_VERSION = `pipeline-g/v3+${PIPELINE_G_READ_VERSION}`;
@@ -118,6 +120,11 @@ export interface PipelineGInput {
         streetViews?: () => Promise<GuideView[]> };
     /** A search-grounded reference for every wall the check marks weak, written into the brief (references.ts; absent: none are fetched). */
     references?: { client: GroundedReferenceClient; models?: string[]; outputDir: string };
+    /**
+     * What names the building (building-name.ts): the evidence's points of interest (scan frame), the request's query and the
+     * resolved address. The weak-wall references search by the name decided; the brief carries the names and nearby POIs.
+     */
+    naming?: { pois?: readonly Poi[]; query?: string; address?: string };
     /** Where the building brief and its images are published, outside the chat tools' IGNORED_DIRS (brief.ts; absent: workspace_view_file cannot reach the brief). */
     publicDir?: string;
 }
@@ -126,6 +133,8 @@ export interface PipelineGOutcome extends InferenceOutcome {
     plates: Array<{ face: string; coverage: number; read: boolean; model?: string; notes?: string; counts?: ProgramItems['counts']; check?: ReadingCheck; reread?: 'first' | 'second' }>;
     /** The building brief written beside the build (brief.ts), or why it was not. */
     brief?: BuildingBriefRecord | { error: string };
+    /** What the evidence calls the building (building-name.ts); `names.primary` is what the references searched by. */
+    names: BuildingNames;
     stations: { kept: number; dropped: number; candidates: number; skipped: Array<{ face: string; reason: string }> };
 }
 
@@ -510,10 +519,15 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
 
     // a search-grounded reference for every wall the check still marks weak (references.ts): started now, awaited just
     // before the brief is written, so it runs alongside the build rather than adding its own time to the total
+    // the building's name, from the POIs in or by its footprint and the request's own words (building-name.ts): the search
+    // query for the references, and a block of the brief; the address stands in when nothing names it
+    const names = decideBuildingNames({ parts: input.massing.parts.map(p => p.loops), pois: input.naming?.pois, query: input.naming?.query, address: input.naming?.address ?? input.place });
+    const searchQuery = referenceQuery({ name: names.primary, address: input.place });
+    if (names.primary) progress(`pipeline G: the building is named ${names.primary} (${names.names.find(n => n.name === names.primary)?.source === 'poi' ? 'a point of interest in its footprint' : 'the request'}); references search by "${searchQuery}"`);
     const tRef = Date.now();
     const referencesPromise: Promise<WeakWallReference[]> = input.references
         ? weakWallReferences({
-            client: input.references.client, place: input.place, models: input.references.models, outputDir: input.references.outputDir,
+            client: input.references.client, query: searchQuery, models: input.references.models, outputDir: input.references.outputDir,
             signal: input.signal, plates: readable.map(pl => ({ face: surveyFaces[pl.face], check: (readings.find(r => r.pl.key === pl.key) as { check?: ReadingCheck } | undefined)?.check }))
         })
         : Promise.resolve([]);
@@ -685,6 +699,7 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     try {
         brief = writeBuildingBrief({
             dir: briefDir, ...(input.publicDir ? { publicDir: input.publicDir } : {}), place: input.place, groundY: input.structure.groundY,
+            names, nearbyPois: (input.naming?.pois ?? []).map(p => ({ ...p, distanceM: footprintDistanceM(p.x, p.z, input.massing.parts.map(q => q.loops)) })).filter(p => p.distanceM <= BRIEF_NEARBY_POI_M).sort((a, b) => a.distanceM - b.distanceM),
             massing: { parts: [...input.massing.parts, ...roofParts] }, roofObjects: roofObjectRecords,
             builtFaces: run.report.faces, facades: grouping.groups,
             stations: [...plan.stations, ...roofStationList.map(r => ({ station: r.station, face: r.faces[0] ?? -1, row: 'aerial' as const, distanceM: 0, onFace: 0 }))],
@@ -696,7 +711,7 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
                     key: pl.key, face: surveyFaces[pl.face], coverage: pl.coverage, widthM: pl.widthM, heightM: pl.heightM,
                     colour: path.join(input.dir, 'plates', `face_${pl.face}_colour.png`), relief: path.join(input.dir, 'plates', `face_${pl.face}_relief.png`),
                     ...(rd && 'program' in rd && rd.program ? { program: rd.program } : {}), ...(rd && 'check' in rd && rd.check ? { check: rd.check } : {}),
-                    ...(refs?.length ? { references: refs.map(r => ({ model: r.model, image: r.path, account: r.account, queries: r.queries, sources: r.sources })) } : {})
+                    ...(refs?.length ? { references: refs.map(r => ({ model: r.model, image: r.path, account: r.account, queries: r.queries, sources: r.sources, query: searchQuery })) } : {})
                 };
             }),
             roofPlates: roofPlates.map(p => ({ key: p.key, coverage: p.coverage, colour: path.join(input.dir, 'plates', `roof_${p.face}_colour.png`) })),
@@ -707,7 +722,7 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     }
 
     return {
-        files, run, steps, legend, grammars: [], timingsMs, enhanced, brief,
+        files, run, steps, legend, grammars: [], timingsMs, enhanced, brief, names,
         build: { parts: [...input.massing.parts, ...roofParts], sweeps: [], openings },
         textures, occluderMasks: new Map(),
         plates: plates.map(p => {
