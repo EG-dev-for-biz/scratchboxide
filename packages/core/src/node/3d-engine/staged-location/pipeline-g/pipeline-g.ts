@@ -17,7 +17,8 @@
  *   2. path-traces them from the tile with metric depth and lays them onto metric wall plates (plates.ts),
  *   3. reads every well-seen plate as a facade program in metres (read.ts), checks each reading against its plate (check.ts)
  *      and reads a wall again when its reading does not fit, keeping the reading that fits better,
- *   4. builds it natively on the massing (scratchbox_staged_massing.hpp: arched openings with their frames, mullions and
+ *   4. builds it natively on the massing, with what stands on the roof built from the scan's measures (roof-objects.ts:
+ *      skylights, bulkheads, penthouses, tanks as parts with their outlines, heights and fitted roof planes), (scratchbox_staged_massing.hpp: arched openings with their frames, mullions and
  *      transoms, sills and surrounds, swept bands, members) with no tile
  *      texture and no scanned residual, and
  *   5. paints each face from its own reading: wall colour, glazing in its openings, band and member colours on their
@@ -50,6 +51,7 @@ import { platePng, reliefPng, surveyPlates, type Plate } from './plates';
 import { MIN_READ_COVERAGE, PIPELINE_G_READ_VERSION, programItems, readPlate, type FacadeProgram, type ProgramItems } from './read';
 import { checkPlate, checkReading, type ReadingCheck } from './check';
 import { groupFacades, layBack } from './facades';
+import { roofObjects } from './roof-objects';
 
 export const PIPELINE_G_VERSION = `pipeline-g/v3+${PIPELINE_G_READ_VERSION}`;
 /** Native build parameters: the massing only, nothing baked from the tile, no scanned residual. */
@@ -377,8 +379,18 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     progress('pipeline G: building the facades natively on the massing');
     const openings = [...built.values()].flatMap(x => x.openings);
     const faceSweeps = [...built.values()].flatMap(x => x.faceSweeps);
+    // what stands on the roof, built from what the scan measures there (roof-objects.ts)
+    let roofParts: Massing['parts'] = [];
+    try {
+        const ro = await roofObjects(input.run, input.massing.parts, { groundY: input.structure.groundY, dir: input.dir, ...(input.signal ? { signal: input.signal } : {}) });
+        roofParts = ro.parts;
+        steps.push({ step: 'roof objects', proposed: ro.audit?.clusters.length ?? 0, accepted: ro.parts.length, rejected: (ro.audit?.clusters.length ?? 0) - ro.parts.length, notes: ro.notes, ms: Date.now() - t });
+    } catch (err) {
+        if (input.signal?.aborted) throw err;
+        steps.push({ step: 'roof objects', proposed: 0, accepted: 0, rejected: 0, skipped: `the residual audit failed (${err instanceof Error ? err.message : String(err)}); the roof stays flat`, notes: [], ms: Date.now() - t });
+    }
     const buildDir = path.join(input.dir, 'build');
-    const run = await runMassing(massingSpecText(input.massing, { outDir: buildDir, tile: input.tilePath, params: { ...G_BUILD_PARAMS }, openings, faceSweeps }), buildDir, { ...(input.signal ? { signal: input.signal } : {}) });
+    const run = await runMassing(massingSpecText({ ...input.massing, parts: [...input.massing.parts, ...roofParts] }, { outDir: buildDir, tile: input.tilePath, params: { ...G_BUILD_PARAMS }, openings, faceSweeps }), buildDir, { ...(input.signal ? { signal: input.signal } : {}) });
     timingsMs.build = Date.now() - t;
     const c = [...built.values()].reduce((a, x) => ({ o: a.o + x.counts.openings, fo: a.fo + x.counts.filledOpenings, h: a.h + x.counts.horizontal, v: a.v + x.counts.vertical, fv: a.fv + x.counts.filledVertical, pn: a.pn + x.counts.paned, sl: a.sl + x.counts.sills, sr: a.sr + x.counts.surrounds }), { o: 0, fo: 0, h: 0, v: 0, fv: 0, pn: 0, sl: 0, sr: 0 });
     steps.push({ step: 'native build', proposed: openings.length + faceSweeps.length, accepted: openings.length + faceSweeps.length - run.report.rejectedOpenings.length - run.report.rejectedSweeps.length, rejected: run.report.rejectedOpenings.length + run.report.rejectedSweeps.length, notes: [`${c.o} openings (${c.fo} continued into unseen parts; ${c.pn} with divided glazing, ${c.sl} with sills, ${c.sr} with surrounds), ${c.h} horizontal profiles, ${c.v} vertical members (${c.fv} continued)`, ...run.report.rejectedOpenings.map(id => `opening ${id} rejected by the native tool`), ...(dropped.length ? [`${dropped.length} openings read on a grouped facade lay across walls and were not built (${dropped.slice(0, 8).join(', ')}${dropped.length > 8 ? ', ...' : ''})`] : [])], ms: timingsMs.build });
@@ -439,7 +451,7 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
 
     return {
         files, run, steps, legend, grammars: [], timingsMs, enhanced,
-        build: { parts: input.massing.parts, sweeps: [], openings },
+        build: { parts: [...input.massing.parts, ...roofParts], sweeps: [], openings },
         textures, occluderMasks: new Map(),
         plates: plates.map(p => {
             const r = readings.find(x => x.pl.key === p.key);
