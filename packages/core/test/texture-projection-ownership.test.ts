@@ -299,7 +299,7 @@ describe('Street View projection: pixel ownership', () => {
         expect(mask[(H >> 1) * W + 151]).toBe(0);
     });
 
-    it('takes a line crossing the outline (a pole into the sky) and leaves the facade\'s own pilasters and cornice', () => {
+    it('takes lines crossing the outline at any angle (a pole into the sky, a slanting mast arm) and leaves the facade\'s own pilasters and cornice', () => {
         const W = 200, H = 160, rgba = new Uint8Array(W * H * 4);
         const outline = new Uint8Array(W * H);
         for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
@@ -310,14 +310,16 @@ describe('Street View projection: pixel ownership', () => {
             if (facade && (x % 20 === 0 || x % 20 === 1)) rgba.set([90, 90, 90, 255], i * 4); // pilasters, stopping at the facade's edge
             if (facade && (y === 60 || y === 61)) rgba.set([90, 90, 90, 255], i * 4); // a cornice's shadow, edge to edge
             if (x >= 107 && x < 110 && y >= 5) rgba.set([30, 30, 35, 255], i * 4); // a pole from the street up into the sky
+            if (Math.abs(y - (12 + 0.45 * (x - 10))) < 1.6 && x < 150) rgba.set([30, 30, 35, 255], i * 4); // a mast arm, slanting down across it from the sky
         }
         const lines = crossingLines({ width: W, height: H, rgba }, outline, { halfWidthPx: 4 });
-        let pole = 0, pilaster = 0, cornice = 0;
+        let pole = 0, arm = 0, pilaster = 0, cornice = 0;
         for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
             if (!lines[y * W + x]) continue;
-            if (x >= 107 && x < 110) pole++; else if (y === 60 || y === 61) cornice++; else pilaster++;
+            if (x >= 106 && x < 112) pole++; else if (Math.abs(y - (12 + 0.45 * (x - 10))) < 3) arm++; else if (y === 60 || y === 61) cornice++; else pilaster++;
         }
         expect(pole).toBeGreaterThan(200);
+        expect(arm).toBeGreaterThan(60);
         expect(pilaster).toBe(0);
         expect(cornice).toBe(0);
     });
