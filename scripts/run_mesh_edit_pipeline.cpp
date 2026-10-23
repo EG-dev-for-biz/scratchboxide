@@ -10,7 +10,7 @@
 
 #include "scratchbox_engine.hpp"
 #include "scratchbox_io.hpp"
-#include "scratchbox_mesh_edit.hpp"
+#include "scratchbox_mesh_edit_ops.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -50,6 +50,39 @@ static D3 requireD3(const GlbJsonValue& o, const std::string& key, const std::st
 }
 
 static Vec3 toVec3(const D3& d) { return Vec3(float(d.x), float(d.y), float(d.z)); }
+
+/** select {direction?, coneDeg?, regionMin?, regionMax?}; absent or empty = every face (when allowAll). */
+static FaceSelection parseSelect(const GlbJsonValue& s, bool& all) {
+    FaceSelection sel;
+    all = true;
+    if (s.type != GlbJsonValue::Object) return sel;
+    if (s.has("direction")) { sel.hasDirection = true; sel.direction = toVec3(requireD3(s, "direction", "select")); sel.coneDeg = float(optionalNumber(s, "coneDeg", 30, "select")); all = false; }
+    if (s.has("regionMin") || s.has("regionMax")) {
+        sel.hasRegion = true; all = false;
+        sel.regionMin = s.has("regionMin") ? toVec3(requireD3(s, "regionMin", "select")) : Vec3(0, 0, 0);
+        sel.regionMax = s.has("regionMax") ? toVec3(requireD3(s, "regionMax", "select")) : Vec3(1, 1, 1);
+    }
+    return sel;
+}
+
+static std::vector<D3> requirePath(const GlbJsonValue& o, const std::string& key, const std::string& what) {
+    const GlbJsonValue& v = o[key];
+    if (v.type != GlbJsonValue::Array || v.arr.size() < 2) throw UsageError(what + " needs " + key + " as at least 2 [x, y, z] points");
+    std::vector<D3> out;
+    for (const auto& q : v.arr) {
+        if (q.type != GlbJsonValue::Array || q.arr.size() != 3) throw UsageError(what + " " + key + " points must be [x, y, z]");
+        out.push_back({q[0].num, q[1].num, q[2].num});
+    }
+    return out;
+}
+
+static void replaceWithPolygons(ScratchboxMesh& mesh, std::vector<CsgPolygon> polys, double eps) {
+    closeTJunctions(polys, eps * 10);
+    PbrMaterial material = mesh.material;
+    std::string name = mesh.name;
+    mesh = polygonsToMesh(polys, name);
+    mesh.material = material;
+}
 
 static std::vector<CsgPolygon> operandPolygons(const GlbJsonValue& operand, double& extent) {
     if (operand.type != GlbJsonValue::Object) throw UsageError("boolean needs an operand object: {glbPath}, {box}, {cylinder} or {sphere}");
@@ -172,22 +205,164 @@ static std::string applyOperation(ScratchboxMesh& mesh, const GlbJsonValue& op) 
         mesh.material = material;
         return "{\"type\":\"bevel\",\"edges\":" + std::to_string(edges.size()) + ",\"shortEdgesLeftSharp\":" + std::to_string(shortEdges) + ",\"trianglesBefore\":" + std::to_string(before) + ",\"trianglesAfter\":" + std::to_string(mesh.indices.size() / 3) + "}";
     }
-    throw UsageError("unknown operation type \"" + type + "\" (boolean, cut, extrude or bevel)");
+    const float tol = float(std::max(1e-6, 1e-5 * diag));
+    const double eps = std::max(1e-9, 1e-7 * diag);
+    auto counts = [&](const std::string& extra) {
+        return "{\"type\":\"" + type + "\"" + extra + ",\"trianglesBefore\":" + std::to_string(before) + ",\"trianglesAfter\":" + std::to_string(mesh.indices.size() / 3) + "}";
+    };
+    if (type == "shell") {
+        const double t = requireNumber(op, "thickness", "shell");
+        WMesh w = toWelded(mesh, tol);
+        mesh = fromWelded(shellMesh(w, t), mesh);
+        return counts(",\"thicknessM\":" + std::to_string(t));
+    }
+    if (type == "mirror" || type == "array") {
+        WMesh w = toWelded(mesh, tol);
+        std::vector<WMesh> copies;
+        if (type == "mirror") { copies.push_back(w); copies.push_back(mirrorMesh(w, requireD3(op, "point", "mirror"), requireD3(op, "normal", "mirror"))); }
+        else {
+            const D3 offset = op.has("offset") ? requireD3(op, "offset", "array") : D3{0, 0, 0};
+            const double step = optionalNumber(op, "stepDeg", 0, "array");
+            if (offset.length() == 0 && step == 0) throw UsageError("array needs an offset and/or stepDeg (with axisPoint and axisDir)");
+            copies = arrayCopies(w, int(requireNumber(op, "count", "array")), offset,
+                                 op.has("axisPoint") ? requireD3(op, "axisPoint", "array") : D3{0, 0, 0}, op.has("axisDir") ? requireD3(op, "axisDir", "array") : D3{0, 0, 0}, step);
+        }
+        const bool fuse = !op.has("fuse") || op["fuse"].type != GlbJsonValue::Bool || op["fuse"].b;
+        if (fuse) {
+            std::vector<CsgPolygon> acc = weldedToPolygons(copies[0]);
+            for (size_t i = 1; i < copies.size(); ++i) acc = booleanPolygons(std::move(acc), weldedToPolygons(copies[i]), BooleanOp::Union, eps);
+            replaceWithPolygons(mesh, std::move(acc), eps);
+        } else {
+            WMesh all;
+            for (const auto& c : copies) {
+                const uint32_t base = uint32_t(all.p.size());
+                all.p.insert(all.p.end(), c.p.begin(), c.p.end());
+                for (const auto& f : c.t) all.t.push_back({f[0] + base, f[1] + base, f[2] + base});
+            }
+            mesh = fromWelded(all, mesh);
+        }
+        return counts(",\"copies\":" + std::to_string(copies.size()) + ",\"fused\":" + (fuse ? "true" : "false"));
+    }
+    if (type == "sweep") {
+        std::vector<D3> path = requirePath(op, "path", "sweep");
+        std::vector<std::array<double, 2>> profile;
+        if (op.has("profile")) {
+            const GlbJsonValue& pr = op["profile"];
+            if (pr.type != GlbJsonValue::Array) throw UsageError("sweep profile must be [[u, v], ...]");
+            for (const auto& q : pr.arr) {
+                if (q.type != GlbJsonValue::Array || q.arr.size() != 2) throw UsageError("sweep profile points must be [u, v]");
+                profile.push_back({q[0].num, q[1].num});
+            }
+        } else {
+            const double r = requireNumber(op, "radius", "sweep (radius or profile)");
+            if (!(r > 0)) throw UsageError("sweep radius must be > 0");
+            const int segs = int(optionalNumber(op, "segments", 16, "sweep"));
+            if (segs < 3 || segs > 256) throw UsageError("sweep segments must be 3..256");
+            for (int i = 0; i < segs; ++i) profile.push_back({r * std::cos(2 * M_PI * i / segs), r * std::sin(2 * M_PI * i / segs)});
+        }
+        std::vector<CsgPolygon> solid = sweepPolygons(path, profile, optionalNumber(op, "scaleStart", 1, "sweep"), optionalNumber(op, "scaleEnd", 1, "sweep"), optionalNumber(op, "twistDeg", 0, "sweep"));
+        const std::string how = op.has("op") ? op["op"].asString("union") : "union";
+        BooleanOp bop = how == "subtract" ? BooleanOp::Subtract : (how == "union" ? BooleanOp::Union : (throw UsageError("sweep op must be union or subtract"), BooleanOp::Union));
+        replaceWithPolygons(mesh, booleanPolygons(meshToPolygons(mesh), std::move(solid), bop, eps), eps);
+        if (mesh.indices.empty()) throw UsageError("sweep left nothing");
+        return counts(",\"op\":\"" + how + "\"");
+    }
+    if (type == "clean" || type == "decimate") {
+        WMesh w = toWelded(mesh, tol);
+        double maxErr = 1e-6 * diag;
+        size_t target = 0;
+        if (type == "decimate") {
+            maxErr = optionalNumber(op, "maxErrorM", 1e30, "decimate");
+            if (op.has("targetTriangles")) target = size_t(requireNumber(op, "targetTriangles", "decimate"));
+            else if (op.has("ratio")) target = size_t(w.t.size() * std::clamp(requireNumber(op, "ratio", "decimate"), 0.0, 1.0));
+            else if (!op.has("maxErrorM")) throw UsageError("decimate needs targetTriangles, ratio or maxErrorM");
+        }
+        const CollapseStats st = collapseEdges(w, maxErr, target);
+        mesh = fromWelded(w, mesh);
+        std::ostringstream e; e << st.maxError;
+        return counts(",\"collapsed\":" + std::to_string(st.collapsed) + ",\"maxErrorM\":" + e.str());
+    }
+    if (type == "fracture") {
+        const bool hasImpact = op.has("impact");
+        auto pieces = fractureMesh(meshToPolygons(mesh), int(requireNumber(op, "pieces", "fracture")), uint32_t(optionalNumber(op, "seed", 1, "fracture")),
+                                   hasImpact, hasImpact ? requireD3(op, "impact", "fracture") : D3{0, 0, 0}, optionalNumber(op, "spread", diag * 0.25, "fracture"), eps);
+        const double gap = optionalNumber(op, "gap", 0, "fracture");
+        std::vector<CsgPolygon> all;
+        const DBox whole = boxOf(meshToPolygons(mesh));
+        const D3 middle = (whole.lo + whole.hi) * 0.5;
+        for (auto& pc : pieces) {
+            closeTJunctions(pc.polys, eps * 10);
+            if (gap > 0) {
+                // each piece moved gap metres straight out from the middle of the mesh, so the cracks open
+                DBox bb = boxOf(pc.polys);
+                D3 away = (bb.lo + bb.hi) * 0.5 - middle;
+                const double l = away.length();
+                if (l > 0) for (auto& p : pc.polys) for (auto& v : p.verts) v.p = v.p + away * (gap / l);
+            }
+            all.insert(all.end(), pc.polys.begin(), pc.polys.end());
+        }
+        PbrMaterial material = mesh.material;
+        mesh = polygonsToMesh(all, mesh.name);
+        mesh.material = material;
+        return counts(",\"pieces\":" + std::to_string(pieces.size()));
+    }
+    if (type == "subdivide" || type == "smooth" || type == "relief") {
+        bool all = true;
+        FaceSelection fs = parseSelect(op["select"], all);
+        WMesh w = toWelded(mesh, tol);
+        std::vector<uint8_t> sel = all ? std::vector<uint8_t>(w.t.size(), 1) : selectWelded(w, fs);
+        size_t chosen = 0;
+        for (auto x : sel) chosen += x;
+        if (!chosen) throw UsageError(type + ": the selection matched no faces");
+        const double edge = op.has("edgeLength") ? requireNumber(op, "edgeLength", type) : (type == "subdivide" ? (throw UsageError("subdivide needs edgeLength (metres)"), 0.0) : 0.0);
+        uint32_t splits = edge > 0 ? splitLongEdges(w, sel, edge, 2000000) : 0;
+        std::string extra = ",\"selectedFaces\":" + std::to_string(chosen) + ",\"edgeSplits\":" + std::to_string(splits);
+        if (type == "smooth") {
+            const uint32_t moved = smoothSelection(w, sel, int(optionalNumber(op, "iterations", 10, "smooth")), optionalNumber(op, "strength", 0.5, "smooth"));
+            extra += ",\"pointsMoved\":" + std::to_string(moved);
+        } else if (type == "relief") {
+            ReliefOptions ro;
+            ro.amplitude = requireNumber(op, "amplitude", "relief");
+            if (op.has("direction")) ro.direction = requireD3(op, "direction", "relief");
+            ro.period = optionalNumber(op, "period", 1, "relief");
+            ro.duty = optionalNumber(op, "duty", 0.5, "relief");
+            ro.softness = optionalNumber(op, "softness", 0.1, "relief");
+            ro.roughness = optionalNumber(op, "roughness", 0, "relief");
+            ro.noiseScale = optionalNumber(op, "noiseScale", 1, "relief");
+            ro.seed = uint32_t(optionalNumber(op, "seed", 1, "relief"));
+            const uint32_t moved = reliefSelection(w, sel, ro);
+            if (!moved) throw UsageError("relief moved nothing: the selection has no points away from its border; give edgeLength to subdivide it first");
+            extra += ",\"pointsMoved\":" + std::to_string(moved);
+        }
+        mesh = fromWelded(w, mesh);
+        return counts(extra);
+    }
+    throw UsageError("unknown operation type \"" + type + "\" (boolean, cut, extrude, bevel, shell, mirror, array, sweep, clean, decimate, fracture, subdivide, smooth or relief)");
 }
 
 int main(int argc, char** argv) {
     std::string inputPath, outputPath, operationsFile;
     double creaseDeg = 30;
+    bool inspect = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--input" && i + 1 < argc) inputPath = argv[++i];
         else if (arg == "--output" && i + 1 < argc) outputPath = argv[++i];
         else if (arg == "--operationsFile" && i + 1 < argc) operationsFile = argv[++i];
         else if (arg == "--creaseDeg" && i + 1 < argc) creaseDeg = std::stod(argv[++i]);
+        else if (arg == "--inspect") inspect = true;
         else { std::cerr << "Error: unknown argument " << arg << "\n"; return 2; }
     }
     try {
         if (inputPath.empty() || !fs::exists(inputPath)) throw UsageError("--input <mesh.glb> is required and must exist; no stand-in mesh is built");
+        if (inspect) {
+            ScratchboxMesh m = GlbReader::readGlb(inputPath);
+            if (m.indices.size() < 3) throw UsageError("--input " + inputPath + " has no triangles");
+            m.recomputeBounds();
+            const double d = (m.bounds.max - m.bounds.min).length();
+            std::cout << "[RESULT] {\"status\":\"success\",\"inspect\":" << inspectJson(m, float(std::max(1e-6, 1e-5 * d)), creaseDeg, 12) << "}\n" << std::flush;
+            return 0;
+        }
         if (outputPath.empty()) throw UsageError("--output <path.glb> is required");
         if (operationsFile.empty() || !fs::exists(operationsFile)) throw UsageError("--operationsFile is required; no operation is chosen for you");
         std::ifstream f(operationsFile);
