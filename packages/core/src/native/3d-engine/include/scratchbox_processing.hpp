@@ -30,6 +30,7 @@
 #include <vector>
 #include <cmath>
 #include <algorithm>
+#include <array>
 #include <unordered_map>
 #include <unordered_set>
 #include <set>
@@ -227,6 +228,11 @@ struct DecimateOptions {
     float maxError{1e9f};          // Maximum allowed quadric error threshold
     bool preserveBoundary{true};   // Protect open boundary edges with high penalty quadrics
     bool preventNormalFlips{true}; // Prevent triangle folding / inversions
+    bool preserveCreases{false};   // Lock sharp edges (open boundaries, or a dihedral angle >= creaseAngleDeg) with
+                                    // an extra constraint quadric, so simplification can still slide vertices along
+                                    // a crease but is heavily penalised for moving them off it
+    float creaseAngleDeg{45.0f};   // Dihedral angle threshold (same convention as IsotropicRemeshOptions) between
+                                    // two triangles sharing an edge that counts that edge as a crease
 };
 
 class QuadricDecimator {
@@ -291,6 +297,58 @@ public:
                 quadrics[i0] += q;
                 quadrics[i1] += q;
                 quadrics[i2] += q;
+            }
+        }
+
+        // 1b. Optional crease-preserving constraint quadrics: an edge with one adjacent face (an open boundary) or
+        // whose two adjacent faces' normals diverge by at least creaseAngleDeg is a "crease" — each of its endpoints
+        // gets an extra quadric for a plane through the edge, perpendicular to the adjacent face (a "fin"), weighted
+        // heavily. Two straight, co-linear fin planes from the same crease agree everywhere along it, so the crease
+        // can still be simplified; moving either endpoint off the crease plane (eg. rounding a box's corner) does not.
+        if (opt.preserveCreases) {
+            std::unordered_map<uint64_t, std::array<int32_t, 2>> edgeTris;
+            auto edgeKey = [](uint32_t a, uint32_t b) -> uint64_t {
+                if (a > b) std::swap(a, b);
+                return (static_cast<uint64_t>(a) << 32) | static_cast<uint64_t>(b);
+            };
+            for (size_t t = 0; t < initialTriCount; ++t) {
+                uint32_t tv[3] = { triangles[t].v[0], triangles[t].v[1], triangles[t].v[2] };
+                uint32_t pairs2[3][2] = { { tv[0], tv[1] }, { tv[1], tv[2] }, { tv[2], tv[0] } };
+                for (auto& pair : pairs2) {
+                    uint64_t k = edgeKey(pair[0], pair[1]);
+                    auto [it, inserted] = edgeTris.try_emplace(k, std::array<int32_t, 2>{ static_cast<int32_t>(t), -1 });
+                    if (!inserted && it->second[1] == -1 && it->second[0] != static_cast<int32_t>(t)) it->second[1] = static_cast<int32_t>(t);
+                }
+            }
+
+            constexpr double CREASE_WEIGHT = 1000.0;
+            float creaseCos = std::cos(opt.creaseAngleDeg * static_cast<float>(PI) / 180.0f);
+            for (const auto& [key, tris] : edgeTris) {
+                uint32_t a = static_cast<uint32_t>(key >> 32), b = static_cast<uint32_t>(key & 0xffffffffu);
+                bool isCrease = (tris[1] < 0);
+                if (!isCrease) {
+                    float nd = triangles[tris[0]].normal.dot(triangles[tris[1]].normal);
+                    isCrease = nd < creaseCos;
+                }
+                if (!isCrease) continue;
+
+                Vec3 pa = verts[a].position, pb = verts[b].position;
+                Vec3 edgeVec = pb - pa;
+                float edgeLen = edgeVec.length();
+                if (edgeLen < 1e-8f) continue;
+                Vec3 edgeDir = edgeVec * (1.0f / edgeLen);
+
+                Vec3 faceN = triangles[tris[0]].normal;
+                Vec3 finN = edgeDir.cross(faceN);
+                float finLen = finN.length();
+                if (finLen < 1e-8f) continue;
+                finN = finN * (1.0f / finLen);
+
+                double d = -finN.dot(pa);
+                SymmetricQuadric fin(finN.x, finN.y, finN.z, d);
+                fin *= (edgeLen * CREASE_WEIGHT);
+                quadrics[a] += fin;
+                quadrics[b] += fin;
             }
         }
 

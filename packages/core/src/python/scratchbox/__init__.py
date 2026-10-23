@@ -546,8 +546,10 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
             r = float(kwargs.get("target_ratio", ratio))
             max_err = float(kwargs.get("max_error", 1e9))
             pres_b = bool(kwargs.get("preserve_boundary", True))
+            pres_c = bool(kwargs.get("preserve_creases", False))
+            crease_deg = float(kwargs.get("crease_angle_deg", 45.0))
             if _orig_decimate_qem:
-                _orig_decimate_qem(self, t_tri, r, max_err, pres_b)
+                _orig_decimate_qem(self, t_tri, r, max_err, pres_b, pres_c, crease_deg)
             return self
 
         def _mesh_poisson_sample(self, count=100, min_distance=0.0, seed=42):
@@ -569,6 +571,19 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
             if _orig_bake_cavity_ao:
                 _orig_bake_cavity_ao(self, float(intensity))
             return self
+
+        _orig_bake_rtao = getattr(_NativeMesh, "bake_rtao", None)
+        _orig_compute_rtao = getattr(_NativeMesh, "compute_rtao", None)
+
+        def _mesh_bake_rtao(self, samples_per_vertex=16, max_distance=1.5, intensity=1.0, seed=42):
+            if _orig_bake_rtao:
+                _orig_bake_rtao(self, int(samples_per_vertex), float(max_distance), float(intensity), int(seed))
+            return self
+
+        def _mesh_compute_rtao(self, samples_per_vertex=16, max_distance=1.5, seed=42):
+            if _orig_compute_rtao:
+                return list(_orig_compute_rtao(self, int(samples_per_vertex), float(max_distance), int(seed)))
+            return [1.0] * len(self.vertices)
 
         _orig_compute_curvature_ao = getattr(_NativeMesh, "compute_curvature_ao", None)
         def _mesh_compute_curvature_ao(self, intensity=0.65):
@@ -630,6 +645,8 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
         _NativeMesh.fill_holes = _mesh_fill_holes
         _NativeMesh.isotropic_remesh = _mesh_isotropic_remesh
         _NativeMesh.bake_cavity_ao = _mesh_bake_cavity_ao
+        _NativeMesh.bake_rtao = _mesh_bake_rtao
+        _NativeMesh.compute_rtao = _mesh_compute_rtao
         _NativeMesh.compute_curvature_ao = _mesh_compute_curvature_ao
         _NativeMesh.bake_curvature_ao = _mesh_compute_curvature_ao
         _NativeMesh.slice_by_plane = _mesh_slice_by_plane
