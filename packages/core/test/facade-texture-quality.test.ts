@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { facadeQuality, openingsKept } from '../src/node/3d-engine/staged-location/facade-texture/quality';
-import { featheredFill } from '../src/node/3d-engine/staged-location/facade-texture/facade-texture';
+import { featheredFill, repeatFill } from '../src/node/3d-engine/staged-location/facade-texture/facade-texture';
 
 const PX = 0.05, W = 200, H = 160;
 
@@ -126,5 +126,34 @@ describe('facade texture quality', () => {
         const e = (60 * W + 90) * 4;
         expect(sent[e]).toBeGreaterThan(40);
         expect(sent[e]).toBeLessThan(rgba[(57 * W + 90) * 4] + 1);
+    });
+
+    it('finds a flat block inside the wall, and not the flat sky strip along the frame\'s edge', () => {
+        const a = facade();
+        // a 3 x 4 m slab of one flat colour in the middle of the wall
+        for (let y = 40; y < 120; y++) for (let x = 60; x < 120; x++) a.set([120, 120, 125, 255], (y * W + x) * 4);
+        const q = facadeQuality(a, W, H, PX);
+        expect(q.passed).toBe(false);
+        expect(q.flatBlocksM2[0]).toBeGreaterThan(8);
+        expect(q.faultMask[80 * W + 90]).toBe(1);
+        // the same flat colour as a strip along the top edge (sky above a cornice): not a block
+        const b = facade();
+        for (let y = 0; y < 40; y++) for (let x = 0; x < W; x++) b.set([200, 205, 210, 255], (y * W + x) * 4);
+        expect(facadeQuality(b, W, H, PX).flatBlocksM2).toEqual([]);
+    });
+
+    it('fills unseen texels from the wall\'s own repeat a bay over, and the excluded band from the base', () => {
+        const truth = facade(), rgba = truth.slice(), use = new Uint8Array(W * H).fill(1), base = new Uint8Array(W * H * 4);
+        for (let i = 0; i < W * H; i++) base.set([10, 10, 10, 255], i * 4);
+        // one bay (2 m) of the wall unseen, from x = 4 m to 6 m, 2 m to 6 m up
+        for (let y = 40; y < 120; y++) for (let x = 80; x < 120; x++) use[y * W + x] = 0;
+        const exclude = new Uint8Array(W * H);
+        for (let y = 140; y < H; y++) for (let x = 0; x < W; x++) { exclude[y * W + x] = 1; use[y * W + x] = 0; }
+        const fill = repeatFill(rgba, use, W, H, PX, base, exclude);
+        // inside the unseen bay: the texel one bay along (the facade repeats every 2 m)
+        const i = (60 * W + 90) * 4;
+        expect(Array.from(fill.subarray(i, i + 3))).toEqual(Array.from(truth.subarray((60 * W + 130) * 4, (60 * W + 130) * 4 + 3)));
+        // the excluded band: the base
+        expect(Array.from(fill.subarray((150 * W + 10) * 4, (150 * W + 10) * 4 + 3))).toEqual([10, 10, 10]);
     });
 });

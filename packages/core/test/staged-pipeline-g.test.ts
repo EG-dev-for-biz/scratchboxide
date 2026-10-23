@@ -145,22 +145,25 @@ describe('facade texture input from the survey plate', () => {
         const painted = paintFaces([WALL], new Map([[WALL.key, programItems({ wallColour: '#102030' }, WALL, 'g0_')]]), [0, 0, 0]).get(0)!;
         const on = plateOntoFace(WALL, painted, pl, surveyed)!;
         const px = (s: number, t: number) => Math.floor((WALL.orthoTMax - t) / WALL.pixel) * WALL.width + Math.floor((s - WALL.orthoSMin) / WALL.pixel);
-        // x = 7 m on the built face reads the plate texel at x = 7 m (red channel 140), and is marked seen
+        // x = 7 m on the built face reads the plate texel at x = 7 m (red channel 140), and is marked seen (4 m up: above the street band)
         expect(Math.abs(on.tex.rgba[px(7.01, 4) * 4] - 140)).toBeLessThanOrEqual(1);
         expect(on.use[px(7.01, 4)]).toBe(1);
         // x = 2 m was not seen: the painted wall colour, unmarked
         expect([...on.tex.rgba.subarray(px(2, 4) * 4, px(2, 4) * 4 + 3)]).toEqual([16, 32, 48]);
         expect(on.use[px(2, 4)]).toBe(0);
-        expect(on.covered).toBeCloseTo(0.5, 1);
+        // the right half above the 2.5 m street band; the band itself is never seen
+        expect(on.covered).toBeCloseTo(0.5 * (8 - 2.5) / 8, 1);
+        expect(on.use[px(7.01, 1)]).toBe(0);
+        expect(on.street[px(7.01, 1)]).toBe(1);
         // the painted texture itself is not changed
         expect(painted.rgba[px(7.01, 4) * 4]).toBe(16);
         // the wall set back 1 m from the massing plane is still the wall; a blob standing 1 m in front of it is not
         const back = { ...pl, relief: pl.relief.map(v => (Number.isNaN(v) ? v : v - 1)) };
-        expect(plateOntoFace(WALL, painted, back, surveyed)!.covered).toBeCloseTo(0.5, 1);
+        expect(plateOntoFace(WALL, painted, back, surveyed)!.covered).toBeCloseTo(0.5 * (8 - 2.5) / 8, 1);
         const blob = { ...pl, relief: Float32Array.from(pl.relief) };
-        for (let y = 0; y < pl.h; y++) for (let x = 0; x < pl.w; x++) { const s = surveyed.sMin + (x + 0.5) * PLATE_PIXEL_M; if (s + 2 > 8 && (H0 - y) * PLATE_PIXEL_M < 1.5) blob.relief[y * pl.w + x] = 1; }
+        for (let y = 0; y < pl.h; y++) for (let x = 0; x < pl.w; x++) { const s = surveyed.sMin + (x + 0.5) * PLATE_PIXEL_M; const tt = (H0 - y) * PLATE_PIXEL_M; if (s + 2 > 8 && tt > 3 && tt < 4.5) blob.relief[y * pl.w + x] = 1; }
         const onBlob = plateOntoFace(WALL, painted, blob, surveyed)!;
-        expect(onBlob.use[px(9, 0.5)]).toBe(0);
+        expect(onBlob.use[px(9, 3.6)]).toBe(0);
         expect(onBlob.use[px(7.01, 4)]).toBe(1);
     });
 });

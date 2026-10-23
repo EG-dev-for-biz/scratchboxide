@@ -49,6 +49,66 @@ export const UNSEEN_FEATHER_PX = 3;
  */
 export interface UnseenWall { source: number; familyLab?: [number, number, number]; inside?: Uint8Array; fill?: Uint8Array }
 
+/**
+ * The wall's bay or storey repeat: the first local peak (texels) in [lo, hi] of a profile's match with itself that reaches 60%
+ * of its best (a facade matches itself at every multiple of its bay too, a partly unseen one sometimes better: the first is the bay).
+ */
+function repeatLag(p: Float64Array, lo: number, hi: number, fallback: number): number {
+    let m = 0;
+    for (const v of p) m += v;
+    m /= Math.max(1, p.length);
+    const rs: Array<[number, number]> = [];
+    for (let d = Math.max(1, lo); d <= Math.min(hi, p.length - 2); d++) {
+        let num = 0, a = 0, b = 0;
+        for (let i = 0; i + d < p.length; i++) { const u = p[i] - m, v = p[i + d] - m; num += u * v; a += u * u; b += v * v; }
+        rs.push([d, a > 0 && b > 0 ? num / Math.sqrt(a * b) : -1]);
+    }
+    const best = Math.max(...rs.map(r => r[1]));
+    if (!(best > 0)) return fallback;
+    for (let k = 0; k < rs.length; k++) {
+        const r = rs[k][1], prev = k > 0 ? rs[k - 1][1] : -Infinity, next = k + 1 < rs.length ? rs[k + 1][1] : -Infinity;
+        if (r >= 0.6 * best && r >= prev && r >= next) return rs[k][0];
+    }
+    return rs.find(([, r]) => r === best)![0];
+}
+
+/**
+ * A fill for a wall's unseen texels from the wall itself: each takes the seen texel one, two or three bays along, or a storey
+ * up or down (the nearest such repeat the survey saw, outside `exclude`), so the fill carries the wall's own texture rather
+ * than flat paint (which the model keeps flat: the Haughwout's Broadway, a 91 m2 grey slab). Bay and storey come from the
+ * seen texels' own repeats (1-6 m, 2.5-6 m). Texels no repeat reaches, and those in `exclude`, take `base` (e.g. the painted
+ * reading).
+ */
+export function repeatFill(rgba: Uint8Array, use: Uint8Array, W: number, H: number, pixelM: number, base: Uint8Array, exclude?: Uint8Array): Uint8Array {
+    const N = W * H, L = new Float32Array(N);
+    for (let i = 0; i < N; i++) L[i] = 0.299 * rgba[i * 4] + 0.587 * rgba[i * 4 + 1] + 0.114 * rgba[i * 4 + 2];
+    const col = new Float64Array(W), row = new Float64Array(H);
+    for (let y = 0; y + 1 < H; y++) for (let x = 0; x + 1 < W; x++) {
+        const i = y * W + x;
+        if (use[i] && use[i + 1]) col[x] += Math.abs(L[i + 1] - L[i]);
+        if (use[i] && use[i + W]) row[y] += Math.abs(L[i + W] - L[i]);
+    }
+    const bay = repeatLag(col, Math.round(1 / pixelM), Math.round(6 / pixelM), Math.round(2 / pixelM));
+    const storey = repeatLag(row, Math.round(2.5 / pixelM), Math.round(6 / pixelM), Math.round(3.5 / pixelM));
+    const offsets: Array<[number, number]> = [];
+    for (const k of [1, -1, 2, -2, 3, -3]) offsets.push([k * bay, 0]);
+    for (const m of [1, -1]) for (const k of [0, 1, -1]) offsets.push([k * bay, m * storey]);
+    const out = Uint8Array.from(base);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        if (use[i] || exclude?.[i]) continue;
+        for (const [dx, dy] of offsets) {
+            const xx = x + dx, yy = y + dy;
+            if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+            const j = yy * W + xx;
+            if (!use[j] || exclude?.[j]) continue;
+            out[i * 4] = rgba[j * 4]; out[i * 4 + 1] = rgba[j * 4 + 1]; out[i * 4 + 2] = rgba[j * 4 + 2]; out[i * 4 + 3] = 255;
+            break;
+        }
+    }
+    return out;
+}
+
 /** The texels as sent: the seen ones as they are, the unseen ones from `fill`, the band between blended over UNSEEN_FEATHER_PX. */
 export function featheredFill(rgba: Uint8Array, fill: Uint8Array, use: Uint8Array, W: number, H: number): Uint8Array {
     const out = new Uint8Array(W * H * 4);

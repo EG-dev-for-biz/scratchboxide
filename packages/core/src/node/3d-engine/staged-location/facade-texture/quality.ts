@@ -19,6 +19,8 @@
  *     and poorly in place. A real string course or cornice line keeps the piers in line across it, so it is not a seam;
  *   - smear: runs of rows (or columns) longer than SMEAR_RUN_M that differ from each other by under SMEAR_STEP_SHARE of the
  *     wall's ordinary step (a stretched or repeated strip);
+ *   - flat blocks: a region inside the frame (not touching its edge: the sky a redraw adds above a cornice does) flatter than
+ *     FLAT_STD_LUMA over 5 x 5 and larger than FLAT_MAX_M2 (a plain slab the model kept from a flat input);
  *   - sharpness: the mean luminance gradient, reported (scale-dependent, not gated).
  */
 
@@ -45,12 +47,21 @@ export const SMEAR_MIN_TEXTURE = 0.25;
 export const SMEAR_RUN_M = 0.6;
 /** At most this share of the wall's rows plus columns in smeared runs. */
 export const MAX_SMEAR_SHARE = 0.06;
+/**
+ * A region inside the frame flatter than FLAT_STD_LUMA (5 x 5 standard deviation) and larger than FLAT_MAX_M2 is a flat
+ * block. Calibrated on the Haughwout's redraws (2026-10-22): five good ones' largest interior flat region 0.4-3.8 m2, the one
+ * that kept a flat painted fill 91 m2.
+ */
+export const FLAT_STD_LUMA = 1.5;
+export const FLAT_MAX_M2 = 8;
 
 export interface FacadeQuality {
     passed: boolean;
     emptyShare: number;
     seams: { rows: number[]; cols: number[] };
     smearShare: number;
+    /** The interior flat blocks over FLAT_MAX_M2, square metres, largest first. */
+    flatBlocksM2: number[];
     /** Mean luminance gradient per texel over the wall (0..255 per texel). */
     sharpness: number;
     why: string;
@@ -161,9 +172,39 @@ export function facadeQuality(rgba: Uint8Array, W: number, H: number, pixelM: nu
     const merge = (xs: number[]) => xs.filter((v, k) => k === 0 || v - xs[k - 1] > Math.round(SEAM_BAND_M / pixelM));
     seams.rows = merge(seams.rows); seams.cols = merge(seams.cols);
     const smearShare = smearLines / Math.max(1, W + H);
+    // flat blocks: 4-connected regions of very flat texels that do not touch the frame's edge
+    const flat = new Uint8Array(N);
+    for (let y = 2; y + 2 < H; y++) for (let x = 2; x + 2 < W; x++) {
+        let s = 0, s2 = 0;
+        for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) { const v = L[(y + dy) * W + x + dx]; s += v; s2 += v * v; }
+        const m = s / 25;
+        if (s2 / 25 - m * m < FLAT_STD_LUMA * FLAT_STD_LUMA) flat[y * W + x] = 1;
+    }
+    const blockMask = new Uint8Array(N), flatBlocksM2: number[] = [], seenF = new Uint8Array(N), maxPx = FLAT_MAX_M2 / (pixelM * pixelM);
+    for (let s = 0; s < N; s++) {
+        if (!flat[s] || seenF[s]) continue;
+        const region: number[] = [], stack = [s];
+        seenF[s] = 1;
+        let edge = false;
+        while (stack.length) {
+            const i = stack.pop()!;
+            region.push(i);
+            const x = i % W, y = (i - x) / W;
+            if (x <= 2 || y <= 2 || x >= W - 3 || y >= H - 3) edge = true;
+            for (const j of [i - 1, i + 1, i - W, i + W]) {
+                if (j < 0 || j >= N || Math.abs((j % W) - x) > 1 || seenF[j] || !flat[j]) continue;
+                seenF[j] = 1; stack.push(j);
+            }
+        }
+        if (edge || region.length <= maxPx) continue;
+        flatBlocksM2.push(Math.round(region.length * pixelM * pixelM * 10) / 10);
+        for (const i of region) blockMask[i] = 1;
+    }
+    flatBlocksM2.sort((a, b) => b - a);
     const fails: string[] = [];
     if (emptyShare > MAX_EMPTY_SHARE) fails.push(`${(100 * emptyShare).toFixed(0)}% of the wall left flat grey or empty (more than ${100 * MAX_EMPTY_SHARE}%)`);
     if (seams.rows.length || seams.cols.length) fails.push(`${seams.rows.length + seams.cols.length} seam${seams.rows.length + seams.cols.length === 1 ? '' : 's'} across the wall (${[...seams.rows.map(r => `row ${r}`), ...seams.cols.map(c => `column ${c}`)].slice(0, 4).join(', ')})`);
+    if (flatBlocksM2.length) fails.push(`${flatBlocksM2.length} flat block${flatBlocksM2.length === 1 ? '' : 's'} inside the wall (${flatBlocksM2.slice(0, 3).join(', ')} m2; over ${FLAT_MAX_M2} m2)`);
     if (smearShare > MAX_SMEAR_SHARE) fails.push(`${(100 * smearShare).toFixed(0)}% of its rows and columns in smeared runs over ${SMEAR_RUN_M} m (more than ${100 * MAX_SMEAR_SHARE}%)`);
     const r3 = (v: number) => Math.round(v * 1000) / 1000;
     const faultMask = emptyShare > MAX_EMPTY_SHARE ? emptyAt.slice() : new Uint8Array(N);
@@ -174,9 +215,10 @@ export function facadeQuality(rgba: Uint8Array, W: number, H: number, pixelM: nu
     for (const r of seams.rows) mark(true, r - band, r + band);
     for (const c of seams.cols) mark(false, c - band, c + band);
     if (smearShare > MAX_SMEAR_SHARE) for (const r of smearRuns) mark(r.rows, r.a0, r.a1);
+    for (let i = 0; i < N; i++) if (blockMask[i]) faultMask[i] = 1;
     if (inside) for (let i = 0; i < N; i++) if (!inside[i]) faultMask[i] = 0;
     return {
-        passed: fails.length === 0, emptyShare: r3(emptyShare), seams, smearShare: r3(smearShare), sharpness: Math.round(sharpness * 100) / 100, faultMask,
+        passed: fails.length === 0, emptyShare: r3(emptyShare), seams, smearShare: r3(smearShare), flatBlocksM2, sharpness: Math.round(sharpness * 100) / 100, faultMask,
         why: fails.length ? `quality: ${fails.join('; ')}` : `quality: ${(100 * emptyShare).toFixed(0)}% empty, no seam, ${(100 * smearShare).toFixed(0)}% smeared, sharpness ${sharpness.toFixed(1)}`
     };
 }

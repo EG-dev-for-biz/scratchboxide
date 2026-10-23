@@ -43,7 +43,7 @@ import { writeMassingLayer } from '../pipeline-e/pipeline-e';
 import type { InferenceOutcome, StepRecord } from '../pipeline-e/inference';
 import { ENHANCE_CONCURRENCY, TEXTURE_PLATE_PROMPT_ID, type EnhanceWallRecord, type PlateModelClient } from '../pipeline-e/enhance';
 import { visionFacadeCounter } from '../pipeline-e/plate-identity';
-import { buildFacadeTexture } from '../facade-texture/facade-texture';
+import { buildFacadeTexture, repeatFill } from '../facade-texture/facade-texture';
 import type { EnhanceModelClient } from '../texture-enhance';
 import { planStations } from './stations';
 import { platePng, reliefPng, surveyPlates, type Plate } from './plates';
@@ -193,6 +193,13 @@ export function paintFaces(faces: MassingFace[], items: Map<string, ProgramItems
     return textures;
 }
 
+/**
+ * The band of a wall above the street, metres, where the tile melts what stands at the kerb into the facade (vehicles, vans,
+ * people, street furniture): not in front of the wall, so PLATE_PROUD_M does not see it, and pipeline G does not run the
+ * vehicle removal. It is never taken as seen; it is drawn from the reading.
+ */
+export const STREET_CLUTTER_M = 2.5;
+
 /** A seen-through hole larger than this is not an opening (a part of the wall no station reached). */
 export const MAX_OPENING_M2 = 20;
 
@@ -233,8 +240,10 @@ export const PLATE_PROUD_M = 0.6;
  * PLATE_PROUD_M in front of the wall's surface (the street clutter melted into the tile before the ground floor). The builder draws the
  * rest as the wall continues. Undefined when the plate covers none of the face.
  */
-export function plateOntoFace(f: MassingFace, painted: FaceTexture, pl: Plate, pf: MassingFace): { tex: FaceTexture; use: Uint8Array; covered: number; openings: Uint8Array } | undefined {
+export function plateOntoFace(f: MassingFace, painted: FaceTexture, pl: Plate, pf: MassingFace): { tex: FaceTexture; use: Uint8Array; covered: number; openings: Uint8Array; street: Uint8Array } | undefined {
     const rgba = painted.rgba.slice(), use = new Uint8Array(painted.width * painted.height);
+    // the street band: never seen (see STREET_CLUTTER_M)
+    const street = new Uint8Array(painted.width * painted.height);
     // what the stations saw through (no surface within the plate's slab): the openings, once only enclosed holes are kept
     const through = new Uint8Array(painted.width * painted.height);
     let covered = 0;
@@ -247,6 +256,7 @@ export function plateOntoFace(f: MassingFace, painted: FaceTexture, pl: Plate, p
     const surface = offs.length ? offs[Math.floor(offs.length / 2)] : 0;
     for (let y = 0; y < painted.height; y++) for (let x = 0; x < painted.width; x++) {
         const s = f.orthoSMin + (x + 0.5) * f.pixel, t = f.orthoTMax - (y + 0.5) * f.pixel;
+        if (t - f.tBottom < STREET_CLUTTER_M) { street[y * painted.width + x] = 1; continue; }
         const p = [0, 1, 2].map(k => f.origin[k] + s * f.axisS[k] + t * f.axisT[k]);
         const d = [0, 1, 2].map(k => p[k] - pf.origin[k]);
         const ps = dot(d, pf.axisS as number[]), pt = dot(d, pf.axisT as number[]);
@@ -260,7 +270,7 @@ export function plateOntoFace(f: MassingFace, painted: FaceTexture, pl: Plate, p
         rgba[i * 4] = pl.rgb[j * 3]; rgba[i * 4 + 1] = pl.rgb[j * 3 + 1]; rgba[i * 4 + 2] = pl.rgb[j * 3 + 2]; rgba[i * 4 + 3] = 255;
         use[i] = 1; covered++;
     }
-    return covered ? { tex: { width: painted.width, height: painted.height, rgba, source: painted.source.slice() }, use, covered: covered / use.length, openings: enclosedHoles(through, painted.width, painted.height, f.pixel) } : undefined;
+    return covered ? { tex: { width: painted.width, height: painted.height, rgba, source: painted.source.slice() }, use, covered: covered / use.length, openings: enclosedHoles(through, painted.width, painted.height, f.pixel), street } : undefined;
 }
 
 /** Runs `fn` over `xs` with at most `n` in flight. */
@@ -402,9 +412,9 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
                 counter: visionFacadeCounter(input.chain as VisionModelChain<string>), ...(input.signal ? { signal: input.signal } : {}),
                 ...(e.infill ? { infill: e.infill } : {}), ...(e.unseenModels ? { unseenModels: e.unseenModels } : {}), quality: true,
                 // what no station saw of the wall itself is drawn as the wall continues (never the melt)
-                // sent as the painted reading (its openings and wall colour), feathered in: never as grey holes, whose outlines the
-                // model paints
-                unseen: { source: G_SRC.enhanced, fill: textures.get(f.index)!.rgba }, openings: on.openings
+                // sent as a fill feathered in: never as grey holes, whose outlines the model paints, nor flat paint, which it keeps flat
+                // the wall's own seen repeats (bays, storeys), the painted reading where none reaches and in the street band
+                unseen: { source: G_SRC.enhanced, fill: repeatFill(on.tex.rgba, on.use, on.tex.width, on.tex.height, f.pixel, textures.get(f.index)!.rgba, on.street) }, openings: on.openings
             });
             step.proposed++;
             enhanced.push({ ...r, plate: undefined, guarded: undefined, labels: undefined, grid: undefined } as EnhanceWallRecord);
