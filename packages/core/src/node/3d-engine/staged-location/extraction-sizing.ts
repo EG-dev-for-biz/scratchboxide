@@ -616,7 +616,8 @@ export function pickStructure(scan: ScanMesh, ground: GroundModel, opts: PickOpt
     const fp = opts.footprints ? footprintAt(opts.footprints, ground, raised, above, a, rawSeed, minH) : undefined;
     // a footprint chosen for the place seeds the geometric rule too, on its tallest raised cell, when the scan does not
     // agree with its outline: the place's building, not whatever stands nearest the geocoded point
-    if (fp && !fp.used && opts.footprints?.choice && fp.seedHint >= 0) rawSeed = fp.seedHint;
+    if (fp?.used) rawSeed = fp.seed;
+    else if (fp && opts.footprints?.choice && fp.seedHint >= 0) rawSeed = fp.seedHint;
     if (rawSeed < 0) return undefined;
     let seed = rawSeed;
     const comp = new Uint8Array(N);
