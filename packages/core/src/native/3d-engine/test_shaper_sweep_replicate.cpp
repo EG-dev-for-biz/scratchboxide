@@ -45,7 +45,12 @@ void testSweep3DFrames() {
 
     std::vector<Vec2> profile = { {0.1f, 0.0f}, {0.0f, 0.1f}, {-0.1f, 0.0f}, {0.0f, -0.1f} };
     auto swept = Sweep3D::sweep(helix, profile, PI, 1.0f, 0.5f, true);
-    assert(swept.vertices.size() == helix.size() * profile.size() + 2);
+    // Sweep3D caps through Loft3D::skin, whose end caps now triangulate the boundary loop directly (ear-clipping,
+    // correct on a concave cross-section) instead of fanning from one added center vertex per cap (the old "+2").
+    // Each cap still duplicates its own boundary ring as new vertices (profile.size() each) rather than reusing the
+    // strip's, so the cap can carry its own flat along-axis normal instead of sharing the strip's radial one --
+    // the same separate-vertices-per-face convention extrude_polygon uses for its own caps: +2*profile.size(), not +2.
+    assert(swept.vertices.size() == helix.size() * profile.size() + 2 * profile.size());
     assert(swept.indices.size() / 3 > 0);
 
     std::cout << "  - OK (" << swept.vertices.size() << " verts, no frame flips)\n";
