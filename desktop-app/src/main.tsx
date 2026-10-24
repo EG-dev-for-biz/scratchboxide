@@ -16,7 +16,11 @@ import App from './App';
 // Ensure apiBase is configured when running under browser or Vite dev server
 if (typeof window !== 'undefined') {
   const win = window as any;
-  const defaultApiBase = `http://127.0.0.1:${(typeof process !== 'undefined' && process.env?.SCRATCHBOX_API_PORT) || '3001'}`;
+  // Opened through a tunnel or LAN host, 127.0.0.1 is the viewer's own machine: go same-origin through the Vite proxy.
+  const isLoopback = ['127.0.0.1', 'localhost', '[::1]'].includes(window.location.hostname);
+  const defaultApiBase = isLoopback
+    ? `http://127.0.0.1:${(typeof process !== 'undefined' && process.env?.SCRATCHBOX_API_PORT) || '3001'}`
+    : '';
   if (!win.scratchbox) {
     win.scratchbox = { apiBase: defaultApiBase };
   } else if (!win.scratchbox.apiBase) {
