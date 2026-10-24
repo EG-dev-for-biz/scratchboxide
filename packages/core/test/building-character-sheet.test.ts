@@ -13,7 +13,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { stationFromLookAt } from '../src/common/spatial/SurveySynthesisEngine';
 import { SurveyStationRenderService } from '../src/node/spatial/SurveyStationRenderService';
-import { beautifyCharacterSheet } from '../src/node/spatial/building-character-sheet';
+import { beautifyCharacterSheet, checkSheetBorders } from '../src/node/spatial/building-character-sheet';
 import { registerBeautifyHandlers } from '../src/node/spatial/survey-router';
 import type { StationImageGenerator } from '../src/node/spatial/BeautifyStationService';
 import { CHARACTER_SHEET_FRAMING_LOCK, EVEN_LIGHT_SENTENCE, buildCharacterSheetPrompt } from '../src/browser/generative-canvas/services/location-beautify-service';
@@ -33,7 +33,7 @@ interface Call { prompt: string; width: number; height: number; aspectRatio: str
  * Answers with the reference sheet itself (a geometry-perfect "photograph"), scaled by `scale`, optionally with the
  * structure in quadrant `widenQuadrant` painted `widenPx` further right above the horizon.
  */
-function sheetGenerator(calls: Call[], opts: { scale?: number; widenQuadrant?: number; widenPx?: number } = {}): StationImageGenerator {
+function sheetGenerator(calls: Call[], opts: { scale?: number; widenQuadrant?: number; widenPx?: number; dividers?: boolean; frame?: boolean } = {}): StationImageGenerator {
     return {
         name: 'sheet-echo',
         async generate(args) {
@@ -49,6 +49,9 @@ function sheetGenerator(calls: Call[], opts: { scale?: number; widenQuadrant?: n
                     for (let x = last + 1; x <= Math.min(ox + W / 2 - 1, last + (opts.widenPx ?? 40)); x++) rgba.copy(rgba, (y * W + x) * 4, (y * W + last) * 4, (y * W + last) * 4 + 4);
                 }
             }
+            const ink = (x: number, y: number) => { const i = (y * W + x) * 4; rgba[i] = rgba[i + 1] = rgba[i + 2] = 20; };
+            if (opts.dividers) for (let t = 0; t < 2; t++) { for (let y = 0; y < H; y++) ink(W / 2 - 1 + t, y); for (let x = 0; x < W; x++) ink(x, H / 2 - 1 + t); }
+            if (opts.frame) for (let t = 0; t < 2; t++) { for (let y = 0; y < H; y++) { ink(t + 1, y); ink(W - 2 - t, y); } for (let x = 0; x < W; x++) { ink(x, t + 1); ink(x, H - 2 - t); } }
             const s = opts.scale ?? 1, OW = Math.round(W * s), OH = Math.round(H * s), out = Buffer.alloc(OW * OH * 4);
             for (let y = 0; y < OH; y++) for (let x = 0; x < OW; x++) rgba.copy(out, (y * OW + x) * 4, (Math.min(H - 1, Math.floor(y / s)) * W + Math.min(W - 1, Math.floor(x / s))) * 4, (Math.min(H - 1, Math.floor(y / s)) * W + Math.min(W - 1, Math.floor(x / s))) * 4 + 4);
             return { png: encodePng(OW, OH, out), modelUsed: 'gemini-3.1-flash-image' };
@@ -89,6 +92,7 @@ describe('building-survey character sheet', () => {
             expect(p.qc.outline!.overflow).toBeLessThan(0.03);
             expect(p.qc.passed).toBe(true);
         }
+        expect(res.borders).toEqual({ passed: true, lines: [], reason: undefined });
         expect(res.accepted).toBe(true);
         expect(res.modelUsed).toBe('gemini-3.1-flash-image');
     });
@@ -111,6 +115,41 @@ describe('building-survey character sheet', () => {
         for (const q of [0, 2, 3]) expect(res.panels[q].qc.passed).toBe(true);
     });
 
+    it('rejects and regenerates a sheet with dividing lines between the quadrants', async () => {
+        const calls: Call[] = [];
+        const res = await beautifyCharacterSheet(renderer, sheetGenerator(calls, { dividers: true }), stations(), 'Test Box', { panelWidth: PW, renderMode: 'clay', maxRerolls: 1 });
+        expect(calls).toHaveLength(2);
+        expect(res.accepted).toBe(false);
+        expect(res.borders.passed).toBe(false);
+        // the top panels' ground fills the horizontal divider's band in this scene, so only the vertical one can be judged
+        expect(res.borders.lines.map(l => l.band)).toEqual(['vertical divider']);
+        expect(res.borders.lines.every(l => l.coverage > 0.9)).toBe(true);
+        expect(res.borders.reason).toContain('vertical divider');
+    });
+
+    it('catches a frame drawn round the sheet on its outer edges, and still sees lines in a sheet answered at another resolution', async () => {
+        const framed = await beautifyCharacterSheet(renderer, sheetGenerator([], { frame: true }), stations(), 'Test Box', { panelWidth: PW, renderMode: 'clay', maxRerolls: 0 });
+        // the ground plane runs along the whole bottom edge in this scene, so there is no background there to judge
+        expect(framed.borders.lines.map(l => l.band).sort()).toEqual(['left edge', 'right edge', 'top edge']);
+        expect(framed.accepted).toBe(false);
+        const scaled = await beautifyCharacterSheet(renderer, sheetGenerator([], { dividers: true, scale: 1.7 }), stations(), 'Test Box', { panelWidth: PW, renderMode: 'clay', maxRerolls: 0 });
+        expect(scaled.borders.passed).toBe(false);
+    });
+
+    it('checkSheetBorders on its own: a clean sheet passes, the same sheet with dividers fails, structure reaching a band is not a line', async () => {
+        const st = stations();
+        const blockouts = st.map(x => renderer.renderStationBlockout(x, { width: PW, height: 180 }));
+        const clean = await beautifyCharacterSheet(renderer, sheetGenerator([]), st, 'Test Box', { panelWidth: PW, renderMode: 'clay', maxRerolls: 0 });
+        const sheet = decodePng(clean.inputPng);
+        expect(checkSheetBorders(sheet.rgba, sheet.width, sheet.height, blockouts).passed).toBe(true);
+        const lined = Buffer.from(sheet.rgba);
+        for (let y = 0; y < sheet.height; y++) for (const x of [sheet.width / 2 - 1, sheet.width / 2]) { const i = (y * sheet.width + x) * 4; lined[i] = lined[i + 1] = lined[i + 2] = 20; }
+        const hit = checkSheetBorders(lined, sheet.width, sheet.height, blockouts);
+        expect(hit.lines.map(l => l.band)).toEqual(['vertical divider']);
+        // without the panels' silhouettes, the ground reaching the borders would itself read as lines
+        expect(checkSheetBorders(sheet.rgba, sheet.width, sheet.height, []).passed).toBe(false);
+    });
+
     it('takes exactly four stations of one aspect ratio', async () => {
         await expect(beautifyCharacterSheet(renderer, sheetGenerator([]), stations().slice(0, 3), 'Test Box', { renderMode: 'clay' })).rejects.toThrow(/four stations, got 3/);
         expect(() => buildCharacterSheetPrompt({ locationName: 'x', stations: stations().slice(0, 2) })).toThrow(/four views, got 2/);
@@ -121,6 +160,7 @@ describe('building-survey character sheet', () => {
         const deps = registerBeautifyHandlers({}, sheetGenerator([]), WORK);
         const res = await deps.beautifySheet!({ stations: stations(), glbPath: GLB, locationName: 'Test Box', renderMode: 'clay', maxRerolls: 0, outDir: path.join(WORK, 'route') }, () => {});
         expect(res.accepted).toBe(true);
+        expect(res.borders.passed).toBe(true);
         expect(await fs.pathExists(res.sheetPath)).toBe(true);
         expect(await fs.pathExists(res.referencePath)).toBe(true);
         expect(res.panels).toHaveLength(4);

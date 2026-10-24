@@ -211,8 +211,8 @@ export function registerBeautifyHandlers(deps: SurveyApiDeps, generator: Station
             panels.push({ stationId: p.station.id, accepted: p.qc.passed, qc: p.qc, imagePath, blockoutPath, alignedStation: p.alignedStation });
         }
         const rejected = panels.filter(p => !p.accepted).length;
-        report(1, res.accepted ? 'Accepted' : `Rejected: ${rejected} of 4 panels failed`);
-        return { accepted: res.accepted, attempts: res.attempts, prompt: res.prompt, sheetPath: path.join(outDir, 'sheet_beautified.png'), referencePath: path.join(outDir, 'sheet_reference.png'), panels, modelUsed: res.modelUsed, imageSource: describeStationImageSource({ ...res, generator: generator.name }) };
+        report(1, res.accepted ? 'Accepted' : `Rejected: ${[rejected ? `${rejected} of 4 panels failed` : '', res.borders.reason || ''].filter(Boolean).join('; ')}`);
+        return { accepted: res.accepted, attempts: res.attempts, borders: res.borders, prompt: res.prompt, sheetPath: path.join(outDir, 'sheet_beautified.png'), referencePath: path.join(outDir, 'sheet_reference.png'), panels, modelUsed: res.modelUsed, imageSource: describeStationImageSource({ ...res, generator: generator.name }) };
     };
 
     const runSurveyPipeline = async (args: any, report: (p: number, msg?: string) => void) => {

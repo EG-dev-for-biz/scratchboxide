@@ -2870,7 +2870,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             const failed = res.panels.filter((p: any) => !p.accepted);
             return {
                 resultPayload: { success: true, ...res } as unknown as ToolResultPayload,
-                summaryResult: `Character sheet ${res.accepted ? 'accepted' : `rejected (${failed.map((p: any) => `station ${p.stationId}: ${p.qc.reason}`).join('; ')})`} after ${res.attempts} attempt(s) -> ${res.sheetPath}. ${res.imageSource}`
+                summaryResult: `Character sheet ${res.accepted ? 'accepted' : `rejected (${[...failed.map((p: any) => `station ${p.stationId}: ${p.qc.reason}`), res.borders?.reason].filter(Boolean).join('; ')})`} after ${res.attempts} attempt(s) -> ${res.sheetPath}. ${res.imageSource}`
             };
         }
         if (args.stationId === undefined) throw new MissingInputError('survey_beautify_station', 'stationId', 'or stationIds (four) for a character sheet');
