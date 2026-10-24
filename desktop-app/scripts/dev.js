@@ -2,18 +2,20 @@
 /********************************************************************************
  * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
- * Dev launcher: mints one per-launch API token and starts the backend and the
- * Vite dev server with it, so the Vite proxy can inject the token into every
- * forwarded request and the backend accepts exactly that token.
+ * Dev launcher: takes the API token (kept for 30 days across launches,
+ * launch-token.js) and starts the backend and the Vite dev server with it, so
+ * the Vite proxy can inject the token into every forwarded request and the
+ * backend accepts exactly that token.
  * Automatically opens Electron once the dev server is ready.
  ********************************************************************************/
 
-const crypto = require('crypto');
 const http = require('http');
 const path = require('path');
 const { spawn } = require('child_process');
+const { persistentLaunchToken } = require('./launch-token');
 
-const token = process.env.SCRATCHBOX_LAUNCH_TOKEN || crypto.randomBytes(32).toString('hex');
+const { token, expiresAtMs } = persistentLaunchToken();
+if (expiresAtMs) console.log(`[dev] launch token kept until ${new Date(expiresAtMs).toISOString().slice(0, 10)} (launch-token.js)`);
 const webPort = process.env.SCRATCHBOX_WEB_PORT || '3030';
 const apiPort = process.env.PORT || process.env.SCRATCHBOX_API_PORT || '3001';
 const host = '127.0.0.1';

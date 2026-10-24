@@ -1,7 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest';
 
 const g = globalThis as any;
-const originalKeys = ['window', 'document', 'location', 'history', 'sessionStorage', 'fetch'];
+const originalKeys = ['window', 'document', 'location', 'history', 'sessionStorage', 'localStorage', 'fetch'];
 const saved: Record<string, unknown> = {};
 for (const key of originalKeys) saved[key] = g[key];
 
@@ -78,4 +78,35 @@ test('a stale session token that the server rejects is dropped and the request r
     expect(seen[1]['X-Scratchbox-Token']).toBeUndefined();
     expect(store.has('scratchbox.launchToken')).toBe(false);
     expect(mod.getLaunchToken()).toBeUndefined();
+});
+
+function fakeLocalStorage() {
+    const kept = new Map<string, string>();
+    g.localStorage = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => kept.set(k, v), removeItem: (k: string) => kept.delete(k) };
+    return kept;
+}
+
+test('the token is kept for 30 days beyond the tab: a new tab signs in without the token URL', async () => {
+    fakeBrowser('http://127.0.0.1:3030/?token=abc123');
+    const kept = fakeLocalStorage();
+    let mod = await import('../src/common/api-client-config');
+    mod.installApiAuth();
+    const saved = JSON.parse(kept.get('scratchbox.launchToken.kept')!);
+    expect(saved.token).toBe('abc123');
+    expect(Date.now() - saved.savedAtMs).toBeLessThan(5_000);
+    // a new tab: its session storage is empty, the kept token is read
+    vi.resetModules();
+    fakeBrowser('http://127.0.0.1:3030/');
+    g.localStorage = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => kept.set(k, v), removeItem: (k: string) => kept.delete(k) };
+    mod = await import('../src/common/api-client-config');
+    await expect(mod.acquireLaunchToken()).resolves.toBe('abc123');
+});
+
+test('a kept token older than 30 days is not used, and is removed', async () => {
+    fakeBrowser('http://127.0.0.1:3030/');
+    const kept = fakeLocalStorage();
+    const mod = await import('../src/common/api-client-config');
+    kept.set('scratchbox.launchToken.kept', JSON.stringify({ token: 'old', savedAtMs: Date.now() - mod.KEPT_TOKEN_MAX_AGE_MS - 1 }));
+    await expect(mod.acquireLaunchToken()).resolves.toBeUndefined();
+    expect(kept.has('scratchbox.launchToken.kept')).toBe(false);
 });
