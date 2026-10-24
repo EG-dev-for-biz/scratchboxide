@@ -91,6 +91,8 @@ import {
     universal3DStructureHandlers,
     PYTHON_3D_TOOL_DECLARATIONS,
     python3DHandlers,
+    MASSING_TOOL_DECLARATIONS,
+    massingHandlers,
     LENS_TOOL_DECLARATIONS,
     lensHandlers,
     BROWSER_TOOL_DECLARATIONS,
@@ -715,6 +717,9 @@ export function createDefaultToolRegistry(): ToolRegistry {
     }
     for (const decl of PYTHON_3D_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, python3DHandlers[decl.name], 'workspace');
+    }
+    for (const decl of MASSING_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, massingHandlers[decl.name], 'workspace');
     }
     for (const decl of OBJECT_REFERENCE_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, objectReferenceHandlers[decl.name], 'workspace');
