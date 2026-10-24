@@ -19,7 +19,7 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { describe, expect, it } from 'vitest';
 import { onSubject, planTextureStations, TEXTURE_AERIALS, TEXTURE_STATION_STANDOFF_M } from '../src/node/spatial/survey-swatch-harvest';
-import { colourMapOf, indexPbrLibrary, matchSwatchToLibrary } from '../src/node/spatial/pbr-library-match';
+import { mapFilesOf, matchSwatchToLibrary, openPbrLibrary, publishPbrLibraryIndex } from '../src/node/spatial/pbr-library-match';
 import { createSurveySwatchesHandler, SURFACE_MATERIALS_TOOL_DECLARATIONS, SURVEY_SWATCHES_TOOL_NAME } from '../src/node/gemini/tools/surface-material-tools';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'swatch-'));
@@ -51,40 +51,113 @@ describe('texture survey stations', () => {
     });
 });
 
-describe('PBR library match', () => {
+describe('PBR library', () => {
     const lib = tmp();
-    const make = (name: string, colour: string, file: string) => {
+    const make = (name: string, colour: string, files: string[]) => {
         fs.mkdirSync(path.join(lib, name));
-        execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', `color=${colour}:s=64x64`, '-frames:v', '1', path.join(lib, name, file)]);
+        for (const f of files) execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', `color=${colour}:s=64x64`, '-frames:v', '1', path.join(lib, name, f)]);
     };
-    make('Bricks001', 'red', 'Bricks001.png');
-    make('slate_roof', 'gray', 'slate_roof_diff_1k.jpg');
+    make('Bricks001', 'red', ['Bricks001.png', 'Bricks001_2K-JPG_Color.jpg', 'Bricks001_8K-JPG_Color.jpg', 'Bricks001_8K-JPG_NormalGL.jpg', 'Bricks001_8K-JPG_Roughness.jpg']);
+    make('slate_roof', 'gray', ['slate_roof_diff_1k.jpg', 'slate_roof_nor_gl_1k.jpg']);
+    fs.mkdirSync(path.join(lib, 'no_maps'));
 
-    it('indexes every material with a colour map (preview or diffuse), once', async () => {
-        expect(colourMapOf(path.join(lib, 'slate_roof'))).toMatch(/slate_roof_diff_1k\.jpg$/);
-        const index = await indexPbrLibrary(lib, tmp());
-        expect(index.names).toEqual(['Bricks001', 'slate_roof']);
-        for (const t of index.thumbs.values()) expect(fs.existsSync(t)).toBe(true);
+    const { encodeEmbedding, cosineSimilarity } = require('../src/node/spatial/pbr-library-match');
+
+    /** An object store in memory, as Cloud Storage would hold the library and its index. */
+    const memoryStore = (seed: Record<string, Buffer> = {}) => {
+        const objects = new Map(Object.entries(seed));
+        const cache = tmp();
+        return {
+            objects,
+            read: async (rel: string) => { const b = objects.get(rel); if (!b) throw new Error(`no object ${rel}`); return b; },
+            write: async (rel: string, b: Buffer) => { objects.set(rel, b); },
+            localCopy: async (rel: string) => { const f = path.join(cache, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, objects.get(rel)!); return f; }
+        };
+    };
+
+    it('reads a material\'s maps by role from its file names, the largest JPG first', () => {
+        expect(mapFilesOf('Bricks001', fs.readdirSync(path.join(lib, 'Bricks001')))).toEqual({ preview: 'Bricks001.png', color: 'Bricks001_8K-JPG_Color.jpg', normal: 'Bricks001_8K-JPG_NormalGL.jpg', roughness: 'Bricks001_8K-JPG_Roughness.jpg' });
+        expect(mapFilesOf('slate_roof', ['slate_roof_diff_1k.jpg', 'slate_roof_nor_gl_1k.jpg'])).toEqual({ color: 'slate_roof_diff_1k.jpg', normal: 'slate_roof_nor_gl_1k.jpg' });
+    });
+
+    it('opens a local folder: materials with a preview or colour map, thumbnails on first use', async () => {
+        const l = await openPbrLibrary(lib, { cacheDir: tmp() });
+        expect(l.names).toEqual(['Bricks001', 'slate_roof']);
+        expect(fs.existsSync(await l.thumb('slate_roof'))).toBe(true);
+    });
+
+    it('publishes the index and thumbnails beside a library, and opens it from the store without touching the large maps', async () => {
+        const index = memoryStore();
+        const published = await publishPbrLibraryIndex(lib, 'gs://b/PBR', index, { thumbsDir: tmp() });
+        expect(published.materials.map(m => m.name)).toEqual(['Bricks001', 'slate_roof']);
+        expect([...index.objects.keys()].sort()).toEqual(['index.json', 'thumbs/Bricks001.jpg', 'thumbs/slate_roof.jpg']);
+        const library = memoryStore({ 'Bricks001/Bricks001_8K-JPG_NormalGL.jpg': Buffer.from('normal') });
+        const l = await openPbrLibrary('gs://b/PBR', { store: library, indexStore: index });
+        expect(l.names).toEqual(['Bricks001', 'slate_roof']);
+        expect(l.uri('Bricks001', l.maps('Bricks001').normal!)).toBe('gs://b/PBR/Bricks001/Bricks001_8K-JPG_NormalGL.jpg');
+        const got = await l.fetchMaps('Bricks001', ['normal']);
+        expect(fs.readFileSync(got.normal!, 'utf8')).toBe('normal');
+    });
+
+    it('says what to run when a gs:// library has no published index', async () => {
+        await expect(openPbrLibrary('gs://b/none', { store: memoryStore(), indexStore: memoryStore() })).rejects.toThrow(/publish_pbr_library_index/);
     });
 
     it('picks the material the model numbers in the shuffled contact image, from its shortlist', async () => {
-        const index = await indexPbrLibrary(lib, tmp());
+        const l = await openPbrLibrary(lib, { cacheDir: tmp() });
         const swatch = path.join(tmp(), 'swatch.png');
         execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=gray:s=32x32', '-frames:v', '1', swatch]);
         const asked: string[] = [];
-        let shown: string[] = [];
         const vision = async (parts: any[]) => {
             asked.push(parts[0].text);
             if (asked.length === 1) return { names: ['slate_roof', 'Bricks001', 'not_in_library'] };
             return { number: 2, confidence: 0.7, why: 'scripted' };
         };
-        // rand 0 reverses nothing but a fixed swap: [slate, bricks] -> swap(1, 0) -> [bricks, slate]
-        const m = await matchSwatchToLibrary({ photo: swatch, description: 'grey slate', sizeMeters: { u: 1, v: 1 } }, index, vision, tmp(), () => 0);
-        shown = m.shortlist;
-        expect(shown).toEqual(['Bricks001', 'slate_roof']);
+        // rand 0 swaps the two: [slate, bricks] -> [bricks, slate], so number 2 is slate_roof
+        const m = await matchSwatchToLibrary({ photo: swatch, description: 'grey slate', sizeMeters: { u: 1, v: 1 } }, l, vision, tmp(), { rand: () => 0, fetchMaps: true });
+        expect(m.shortlist).toEqual(['Bricks001', 'slate_roof']);
         expect(m.name).toBe('slate_roof');
         expect(m.confidence).toBe(0.7);
+        expect(m.maps.normal).toBe('slate_roof_nor_gl_1k.jpg');
+        expect(fs.existsSync(m.localMaps!.color!)).toBe(true);
         expect(asked[0]).toContain('Bricks001, slate_roof');
+    });
+
+    it('computes embeddings and uses fast cosine similarity search', async () => {
+        const { fastMatchSwatchToLibrary } = require('../src/node/spatial/pbr-library-match');
+        const l = await openPbrLibrary(lib, { cacheDir: tmp() });
+        const swatch = path.join(tmp(), 'swatch.png');
+        execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=gray:s=32x32', '-frames:v', '1', swatch]);
+
+        // Create a fake index with embeddings
+        const index = {
+            version: 1,
+            library: 'gs://test',
+            embedDim: 1408,
+            materials: [
+                { name: 'Bricks001', maps: l.maps('Bricks001'), embed: encodeEmbedding(Array(1408).fill(0.5)) },
+                { name: 'slate_roof', maps: l.maps('slate_roof'), embed: encodeEmbedding(Array(1408).fill(0.3)) }
+            ]
+        };
+
+        // Mock embedding client that returns consistent embeddings
+        const embedClient = async (images: string[]) =>
+            images.map(() => ({ embedding: Array(1408).fill(0.4) }));
+
+        // Mock vision that only gets called if the top two are close
+        let visionCalls = 0;
+        const vision = async (parts: any[]) => {
+            visionCalls++;
+            return { number: 1, confidence: 0.85, why: 'visual pick' };
+        };
+
+        const m = await fastMatchSwatchToLibrary({ photo: swatch, description: 'grey', sizeMeters: { u: 1, v: 1 } }, l, index, embedClient, vision, tmp(), { fetchMaps: true });
+
+        // Fast matcher should have found and returned a match, possibly with or without visual pick depending on embedding scores
+        expect(m.name).toBeTruthy();
+        expect(m.shortlist.length).toBeGreaterThan(0);
+        expect(m.maps.color || m.maps.preview).toBeTruthy();
+        expect(['embedding', 'visual']).toContain(m.method);
     });
 });
 
@@ -102,7 +175,7 @@ describe('survey_harvest_swatches tool', () => {
                 calls.push(`harvest ${path.basename(input.tileGlb)} subjectOnly=${input.subjectOnly}`);
                 return { outDir: input.outDir, libraryPath: 'lib.json', hero: { centroid: { x: 0, z: 0 }, groundY: 0, gridYawDeg: 0, heightMeters: 30, areaM2: 400 }, stations: [{ key: 'f0_0_street', kept: true, beautified: false }, { key: 'f1_0_street', kept: false, reason: 'blocked by nearby geometry', beautified: false }], swatches: [{ id: 's0', label: 'red brick', description: 'red brick', sizeMeters: { u: 1, v: 2 }, metresPerPixel: { u: 0.01, v: 0.01 }, files: { photoSwatch: 'p.png' }, score: 0.3, onSubject: true }], rejected: 4, droppedOffSubject: 2 };
             },
-            match: async s => ({ name: `match_for_${s.id}`, folder: 'f', colourMap: 'c', confidence: 0.9, why: 'w', shortlist: [] })
+            match: async s => ({ name: `match_for_${s.id}`, maps: {}, mapUris: {}, confidence: 0.9, why: 'w', shortlist: [] })
         });
         const r = await handler({ place: 'Somewhere', outputDir: out, beautify: false }, undefined as never) as any;
         expect(calls).toEqual(['geocode', 'harvest textured.glb subjectOnly=true']);

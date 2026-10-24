@@ -60,7 +60,8 @@ export const STARTER_BUTTONS: readonly StarterButton[] = [
     {
         icon: '🏛️',
         label: '3D Building',
-        // One real building rebuilt procedurally by pipeline G (google_3d_tiles_get_clay with isolate and procedural): survey
+        // One real building rebuilt procedurally by pipeline H (google_3d_tiles_get_clay with isolate and procedural; pipeline-h/,
+        // the default since 2026-10-23, on pipeline G's steps): survey
         // cameras on the street (and one looking straight down for the roof), metric wall plates from the photo tiles, a
         // facade program read per wall, built natively on the vector massing. 2026-10-23 (user ask): narrowed from the ~160
         // world landmarks this button briefly carried down to this North America set, chosen specifically because each one

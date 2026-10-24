@@ -31,6 +31,8 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     // Flatiron run took ~11 min. Reports progress per station, so a stalled model is caught by idleMs.
     survey_beautify_to_texture: { maxMs: 90 * MIN, idleMs: 10 * MIN },
     survey_beautify_to_splats: { maxMs: 90 * MIN, idleMs: 10 * MIN },
+    // one AI Beautify image call per texture station (28), then the harvest and the library match
+    survey_harvest_swatches: { maxMs: 90 * MIN, idleMs: 10 * MIN },
     location_generate_3dgs: { maxMs: 60 * MIN, idleMs: 10 * MIN },
     // The headless-Chrome tile runner allows itself up to ~38 min for a 72-frame orbit and has its own startup
     // and inactivity watchdogs; the blockout runner adds ffmpeg encodes (10 min cap each).

@@ -27,6 +27,7 @@ export * from './python-3d-tools';
 export * from './image-to-pbr-tools';
 export * from './turnaround-tools';
 export * from './pbr-material-tools';
+export * from './weathering-tools';
 export * from './local-sf3d-tools';
 export * from './tile-refine-tools';
 export * from './object-reference-tools';
@@ -45,6 +46,7 @@ import { LOCATION_EVIDENCE_TOOL_DECLARATIONS, locationEvidenceHandlers } from '.
 import { LOCATION_REFERENCE_TOOL_DECLARATIONS, locationReferenceHandlers } from './location-reference-tools';
 import { SURFACE_MATERIALS_TOOL_DECLARATIONS, surfaceMaterialsHandlers } from './surface-material-tools';
 import { PBR_MATERIAL_TOOL_DECLARATIONS, pbrMaterialHandlers } from './pbr-material-tools';
+import { WEATHERING_TOOL_DECLARATIONS, WEATHERING_TOOL_HANDLERS } from './weathering-tools';
 import { TURNAROUND_TOOL_DECLARATIONS, turnaroundHandlers } from './turnaround-tools';
 import { IMAGE_TO_PBR_TOOL_DECLARATIONS, imageToPbrHandlers } from './image-to-pbr-tools';
 import { PYTHON_3D_TOOL_DECLARATIONS, python3DHandlers } from './python-3d-tools';
@@ -144,6 +146,7 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...ANALYTICAL_GROOM_TOOL_DECLARATIONS,
     ...IMAGE_TO_PBR_TOOL_DECLARATIONS,
     ...PBR_MATERIAL_TOOL_DECLARATIONS,
+    ...WEATHERING_TOOL_DECLARATIONS,
     ...LOCAL_SF3D_TOOL_DECLARATIONS,
     ...TURNAROUND_TOOL_DECLARATIONS,
     ...LENS_TOOL_DECLARATIONS,
@@ -185,6 +188,7 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...analyticalGroomHandlers,
     ...imageToPbrHandlers,
     ...pbrMaterialHandlers,
+    ...WEATHERING_TOOL_HANDLERS,
     ...localSf3DHandlers,
     ...lensHandlers,
     ...browserHandlers,

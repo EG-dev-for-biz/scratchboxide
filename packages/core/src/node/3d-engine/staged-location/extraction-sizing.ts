@@ -59,6 +59,8 @@ export const NO_STRUCTURE_DISTRICT_RADIUS_M = 60;
 export interface StructurePickResult {
     /** Seed cell centre (tile frame x east, z south): the anchor tile_refine and scan_fit are given. */
     seed: { x: number; z: number };
+    /** What the seed was chosen on when not the nearest raised cell: 'vector building <id> (<d> m from the place)' (PickOptions.seedFromVector). */
+    seededOn?: string;
     geocodeToStructureM: number;
     /** World cells (1 m, floor(x), floor(z)) of the structure's component, undilated. */
     cells: Set<string>;
@@ -512,6 +514,49 @@ export interface PickOptions {
     roadAt?(x: number, z: number): boolean;
     /** Land-use areas (vector-footprints.ts landuseAt): canopy under a land-use area is ground cover, never a roof garden. */
     landuseAt?(x: number, z: number): string[] | undefined;
+    /**
+     * Seed the pick on the vector building nearest the anchor within the search window (its raised cell nearest the
+     * anchor), before the nearest raised cell: a landmark's address point is often the road or the visitor centre, and
+     * the nearest tall thing there is a tree (Fallingwater: the house's footprint stood 100 m away, the pick seeded on
+     * canopy and grew to the 150 m cap). Pipeline H. Without footprints, or with none raised in the window, as before.
+     */
+    seedFromVector?: boolean;
+}
+
+/**
+ * The raised cell, inside the vector building whose footprint cells come nearest the anchor within `searchM`, that is
+ * itself nearest the anchor; -1 when no building in the window has a raised cell.
+ */
+export function vectorSeed(fp: FootprintLookup, g: GroundModel, raised: Uint8Array, a: { x: number; z: number }, searchM: number): { seed: number; building?: string; distanceM: number } {
+    const { nx, nz, cellMeters: cell } = g;
+    const ai = Math.floor((a.x - g.x0) / cell), ak = Math.floor((a.z - g.z0) / cell), r = Math.ceil(searchM / cell);
+    let bestBuilding = 0, bestD = Infinity;
+    // the building nearest the anchor (by any of its footprint cells), among those with a raised cell
+    const hasRaised = new Map<number, boolean>();
+    for (let k = Math.max(0, ak - r); k <= Math.min(nz - 1, ak + r); k++) for (let i = Math.max(0, ai - r); i <= Math.min(nx - 1, ai + r); i++) {
+        const d2 = (i - ai) ** 2 + (k - ak) ** 2;
+        if (d2 > r * r) continue;
+        const b = fp.buildingAt(g.x0 + (i + 0.5) * cell, g.z0 + (k + 0.5) * cell);
+        if (!b) continue;
+        if (raised[k * nx + i]) hasRaised.set(b, true);
+        if (d2 < bestD && (hasRaised.get(b) || raisedInside(fp, g, raised, b, ai, ak, r))) { bestD = d2; bestBuilding = b; }
+    }
+    if (!bestBuilding) return { seed: -1, distanceM: Infinity };
+    let seed = -1, sd = Infinity;
+    for (let k = Math.max(0, ak - r); k <= Math.min(nz - 1, ak + r); k++) for (let i = Math.max(0, ai - r); i <= Math.min(nx - 1, ai + r); i++) {
+        if (!raised[k * nx + i] || fp.buildingAt(g.x0 + (i + 0.5) * cell, g.z0 + (k + 0.5) * cell) !== bestBuilding) continue;
+        const d2 = (i - ai) ** 2 + (k - ak) ** 2;
+        if (d2 < sd) { sd = d2; seed = k * nx + i; }
+    }
+    return { seed, building: fp.buildings[bestBuilding - 1]?.id ?? String(bestBuilding), distanceM: Math.sqrt(sd) * cell };
+}
+
+function raisedInside(fp: FootprintLookup, g: GroundModel, raised: Uint8Array, b: number, ai: number, ak: number, r: number): boolean {
+    const { nx, nz, cellMeters: cell } = g;
+    for (let k = Math.max(0, ak - r); k <= Math.min(nz - 1, ak + r); k++) for (let i = Math.max(0, ai - r); i <= Math.min(nx - 1, ai + r); i++) {
+        if (raised[k * nx + i] && fp.buildingAt(g.x0 + (i + 0.5) * cell, g.z0 + (k + 0.5) * cell) === b) return true;
+    }
+    return false;
 }
 
 /**
@@ -560,6 +605,11 @@ export function pickStructure(scan: ScanMesh, ground: GroundModel, opts: PickOpt
     // (seeds stand on cells the scan itself shows raised, never on canopy the mass encloses)
     const raised = Uint8Array.from(tall, (t, c) => (t && above[c] >= minH ? 1 : 0));
     let rawSeed = nearest(raised);
+    let seededOn: string | undefined;
+    if (opts.seedFromVector && opts.footprints) {
+        const vs = vectorSeed(opts.footprints, ground, raised, a, opts.seedSearchM ?? STRUCTURE_SEED_SEARCH_M);
+        if (vs.seed >= 0) { rawSeed = vs.seed; seededOn = `vector building ${vs.building} (${vs.distanceM.toFixed(0)} m from the place)`; }
+    }
     if (rawSeed < 0 && !opts.footprints?.choice) return undefined;
     // the building footprint from Google vector data, when it covers the place and agrees with the scan: it separates
     // touching buildings at their party walls; the scan decides the shape within it
@@ -676,6 +726,7 @@ export function pickStructure(scan: ScanMesh, ground: GroundModel, opts: PickOpt
         groundY: round3(hero.groundY),
         canopyCellsMasked: opts.canopyCellsMasked ?? 0,
         footprintMask,
+        ...(seededOn ? { seededOn } : {}),
         coreHeightM: round3(coreHeightM),
         footprintSource: fp?.used ? 'vector-footprint' : 'scan-geometry',
         ...(fp ? {
@@ -861,6 +912,8 @@ export interface SizingDeps<E extends SizingExtraction> {
     onProgress?(message: string): void;
     /** A Stop or a time limit: an extraction that fails because of it is never turned into a district fallback. */
     signal?: AbortSignal;
+    /** The pick seeded on the vector building nearest the place when one is raised in the window (PickOptions.seedFromVector; pipeline H). */
+    seedFromVector?: boolean;
 }
 
 export interface SizingNote {
@@ -941,7 +994,7 @@ export async function sizeExtraction<E extends SizingExtraction>(deps: SizingDep
         // default as before this widening existed).
         const seedSearchM = Math.max(STRUCTURE_SEED_SEARCH_M, radius);
         const choice = vector ? chooseFootprint({ buildings: vector.raster.buildings, pois: vector.pois, placeName: deps.placeName }) : undefined;
-        const structure = pickStructure(scan, ground, { seedSearchM, canopyCellsMasked: canopyCells, ...(vector ? { footprints: { buildingAt: vector.buildingAt, buildings: vector.raster.buildings, ...(choice ? { choice } : {}) }, roadAt: vector.roadAt, landuseAt: vector.landuseAt } : {}) });
+        const structure = pickStructure(scan, ground, { seedSearchM, canopyCellsMasked: canopyCells, ...(deps.seedFromVector ? { seedFromVector: true } : {}), ...(vector ? { footprints: { buildingAt: vector.buildingAt, buildings: vector.raster.buildings, ...(choice ? { choice } : {}) }, roadAt: vector.roadAt, landuseAt: vector.landuseAt } : {}) });
         return { structure, scan, ground, unmasked, mask, seedSearchM, choice };
     };
     for (let round = 1; ; round++) {
