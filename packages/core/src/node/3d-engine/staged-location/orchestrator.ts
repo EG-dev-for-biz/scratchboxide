@@ -247,8 +247,10 @@ export const STAGES = {
     // Street View survey (about 3 min, alongside the readings) and up to 8 redraws (about 2.5 min)
     // version F (on by default; SCRATCHBOX_STAGED_GEOMETRY=e reverts to E's own inference) reads, adjusts and redraws
     // in this slot: a longer limit
-    // pipeline G's tall walls read for up to READ_TIMEOUT_MAX_MS each (pipeline-g/read.ts), so its slot has the longer budget too
-    grammar: { order: 2, title: 'Facade grammar', budgetMs: 900_000 },
+    // pipeline G's tall walls read for up to READ_TIMEOUT_MAX_MS each (pipeline-g/read.ts), so its slot has the longer budget too;
+    // 5000 s (user decision 2026-10-24, was 900 s): pipeline H's own budget, derived from this, then leaves time for every
+    // re-read, facade texture and roof redraw instead of skipping them
+    grammar: { order: 2, title: 'Facade grammar', budgetMs: 5_000_000 },
     // pipeline E: measured relief on the clean massing (the scan averaged along what repeats), then the photo-match gate
     relief: { order: 2, title: 'Measured relief', budgetMs: 480_000 },
     fit: { order: 3, title: 'Scan-fitted rebuild', budgetMs: 30_000 },
