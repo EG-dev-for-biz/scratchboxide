@@ -4,7 +4,7 @@ import collections.abc
 import scratchbox_native.geometry
 import scratchbox_native.math
 
-__all__ = ['Agreement', 'LoftRun', 'Slice', 'TopGrid', 'agreement', 'choose', 'crop_to_plan', 'extrude_block', 'loft_runs', 'loft_solids', 'plan_outline', 'roof_objects', 'sample_surface', 'slices', 'snap_plan_to_scan']
+__all__ = ['Agreement', 'LoftRun', 'Slice', 'Tier', 'TopGrid', 'agreement', 'choose', 'crop_to_plan', 'extrude_block', 'loft_runs', 'loft_solids', 'plan_outline', 'plan_union', 'roof_objects', 'sample_surface', 'slices', 'snap_plan_to_scan', 'tier_solids', 'tiers']
 
 
 class Agreement:
@@ -69,6 +69,20 @@ class Slice:
     def cell_count(self) -> int: ...
 
 
+class Tier:
+    @property
+    def y0(self) -> float: ...
+
+    @property
+    def y1(self) -> float: ...
+
+    @property
+    def area(self) -> float: ...
+
+    @property
+    def outline(self) -> list[tuple[float, float]]: ...
+
+
 class TopGrid:
     """The scan's highest point per plan cell (for the hidden-wall test)"""
     def __init__(self) -> None: ...
@@ -106,6 +120,10 @@ def plan_outline(slices: collections.abc.Sequence[scratchbox_native.scan_massing
     """The outline (x, z) of the largest piece of all slices together: the scan's plan"""
 
 
+def plan_union(rings: collections.abc.Sequence[collections.abc.Sequence[tuple[float, float]]], cell: float = 0.5) -> list[tuple[float, float]]:
+    """One outline (x, z) for a footprint given in many rings: all filled, the largest connected piece outlined"""
+
+
 def roof_objects(samples: collections.abc.Sequence[scratchbox_native.math.Vec3], plan: collections.abc.Sequence[tuple[float, float]], roof_y: float, photo_rgba: bytes | None = None, photo_width: int = 0, photo_height: int = 0, photo_x0: float = 0.0, photo_z0: float = 0.0, photo_texel: float = 0.05, min_rise: float = 0.6, spot_lighter: float = 30.0, blob_k: float = 8.0) -> dict:
     """The objects standing on a roof: found where the scan stands above roof_y (edges sharpened by the photo straight down, when given) and each fitted by the simplest of its outline raised, a solid of revolution and its own lofted sections"""
 
@@ -120,3 +138,11 @@ def slices(samples: collections.abc.Sequence[scratchbox_native.math.Vec3], base_
 
 def snap_plan_to_scan(ring: collections.abc.Sequence[tuple[float, float]], samples: collections.abc.Sequence[scratchbox_native.math.Vec3], ground_y: float, top_y: float, search: float = 3.0) -> tuple[list[tuple[float, float]], list[tuple[float, int, bool]]]:
     """The footprint ring (x, z) with each edge moved along its normal onto the scan's wall; returns (ring, [(shift m, support, moved)] per edge)"""
+
+
+def tier_solids(tiers: collections.abc.Sequence[scratchbox_native.scan_massing.Tier]) -> scratchbox_native.geometry.Mesh:
+    """The tiers raised into one mesh"""
+
+
+def tiers(samples: collections.abc.Sequence[scratchbox_native.math.Vec3], base_y: float, change: float = 0.15, min_tier: float = 3.0) -> list[Tier]:
+    """The structure as a stack of tiers where the scan's plan area holds steady, each squared and snapped onto its own walls"""

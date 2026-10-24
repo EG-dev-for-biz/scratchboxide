@@ -13,7 +13,9 @@
  *      it once the hidden wall is known unseen, and is chosen over the loft;
  *  (b) a 6 m shaft 60 m tall under a 30 m deck: the block of the deck's plan fails, the loft is chosen, and its widest
  *      ring is the deck and its narrowest the shaft;
- *  (c) a leg leaning 10 m over 40 m beside a core: the loft keeps it as one run.
+ *  (c) a leg leaning 10 m over 40 m beside a core: the loft keeps it as one run;
+ *  (d) a stepped tower (30 m square to 20 m, 20 m square to 40 m, 10 m square to 60 m): three tiers of the right size
+ *      and heights, and the tiers explain it where one block does not.
  *
  *   clang++ -std=c++20 -O1 -I include test_scan_massing.cpp -o test_scan_massing && ./test_scan_massing
  */
@@ -111,10 +113,34 @@ static void testLeaningLeg() {
     CHECK(longest >= 35, "the leg broke into pieces (longest run %zu m)", longest);
 }
 
+
+static void testSteppedTower() {
+    std::printf("[scan_massing] (d) a stepped tower comes out as its three tiers\n");
+    Soup s;
+    box(s, -15, 15, 0, 20, -15, 15, true, false);
+    box(s, -10, 10, 20, 40, -10, 10, true, false);
+    box(s, -5, 5, 40, 60, -5, 5, true, false);
+    const auto scan = sampleSurface(s.pos, s.idx, 0.5);
+    const auto ts = tiers(scan, 0);
+    for (const auto& t : ts) std::printf("  tier %.1f..%.1f m, %.0f m2\n", t.y0, t.y1, t.areaM2);
+    CHECK(ts.size() == 3, "%zu tiers", ts.size());
+    if (ts.size() == 3) {
+        CHECK(std::abs(ts[0].areaM2 - 900) < 90 && std::abs(ts[1].areaM2 - 400) < 50 && std::abs(ts[2].areaM2 - 100) < 20, "tier areas %.0f %.0f %.0f", ts[0].areaM2, ts[1].areaM2, ts[2].areaM2);
+        CHECK(std::abs(ts[0].y1 - 20) <= 1.5 && std::abs(ts[1].y1 - 40) <= 1.5 && std::abs(ts[2].y1 - 60) <= 1.5, "tier tops %.1f %.1f %.1f", ts[0].y1, ts[1].y1, ts[2].y1);
+    }
+    AgreementOptions o; o.groundY = 0; o.coverageTauM = 2.5;
+    const Agreement ta = agreement(scan, sampleMesh(tierSolids(ts), 0.5), o);
+    const Agreement ba = agreement(scan, sampleMesh(extrudeBlock({{-15, -15}, {15, -15}, {15, 15}, {-15, 15}}, 0, 60), 0.5), o);
+    std::printf("  tiers cov %.3f prec %.3f; one block cov %.3f prec %.3f\n", ta.bandedCoverage, ta.bandedPrecision, ba.bandedCoverage, ba.bandedPrecision);
+    CHECK(ta.bandedCoverage > 0.95 && ta.bandedPrecision > 0.9, "the tiers do not explain the tower");
+    CHECK(ba.bandedPrecision < 0.7, "one block explains a stepped tower");
+}
+
 int main() {
     testPartyWallBlock();
     testShaftAndDeck();
     testLeaningLeg();
+    testSteppedTower();
     if (failures) { std::printf("[scan_massing] %d check(s) failed\n", failures); return 1; }
     std::printf("[scan_massing] all checks passed\n");
     return 0;

@@ -81,46 +81,7 @@ struct RoofParams {
     double spotLighterL = 30;  // kept for the binding's argument; the blob detector reads relative contrast
 };
 
-/**
- * The ring straightened toward two directions at right angles (axisRad and axisRad + 90 degrees): after a light
- * simplification, every edge within tolDeg of one of them is turned onto it about its midpoint, and consecutive edges
- * are re-intersected (an edge left off-axis keeps its own direction). Short edges that end up parallel to both
- * neighbours are dropped. A footprint traced from pixels or cells comes back with the building's own right angles.
- */
-inline std::vector<P2> squareToAxes(const std::vector<P2>& ringIn, double axisRad, double tolDeg, double simplifyTol) {
-    std::vector<P2> r = scan_massing::detail::simplify(ringIn, simplifyTol);
-    const size_t n = r.size();
-    if (n < 4) return r;
-    struct L { P2 p, d; };
-    std::vector<L> lines(n);
-    const double tol = tolDeg * M_PI / 180;
-    for (size_t i = 0; i < n; ++i) {
-        const P2 a = r[i], b = r[(i + 1) % n];
-        const P2 m{(a.x + b.x) / 2, (a.z + b.z) / 2};
-        double ang = std::atan2(b.z - a.z, b.x - a.x);
-        // nearest of the four axis directions
-        double best = ang, bd = 1e9;
-        for (int q = 0; q < 4; ++q) {
-            const double t = axisRad + q * M_PI / 2;
-            const double dd = std::abs(std::remainder(ang - t, 2 * M_PI));
-            if (dd < bd) { bd = dd; best = t; }
-        }
-        if (bd <= tol) ang = best;
-        lines[i] = {m, {std::cos(ang), std::sin(ang)}};
-    }
-    std::vector<P2> out;
-    for (size_t i = 0; i < n; ++i) {
-        const L& l0 = lines[(i + n - 1) % n];
-        const L& l1 = lines[i];
-        const double den = l0.d.x * l1.d.z - l0.d.z * l1.d.x;
-        if (std::abs(den) < 1e-6) continue;  // parallel neighbours: the corner between them is not a corner
-        const double t = ((l1.p.x - l0.p.x) * l1.d.z - (l1.p.z - l0.p.z) * l1.d.x) / den;
-        const P2 c{l0.p.x + t * l0.d.x, l0.p.z + t * l0.d.z};
-        // a re-intersection far from the original corner means the edges were nearly parallel: keep the original corner
-        out.push_back(std::hypot(c.x - r[i].x, c.z - r[i].z) > 4 * simplifyTol + 0.5 ? r[i] : c);
-    }
-    return out.size() >= 3 ? out : r;
-}
+using scan_massing::squareToAxes;
 
 struct RoofObject {
     std::vector<P2> outline;

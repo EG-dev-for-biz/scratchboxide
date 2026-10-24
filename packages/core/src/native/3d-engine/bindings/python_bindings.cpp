@@ -1135,6 +1135,22 @@ NB_MODULE(scratchbox_native, m) {
             return std::make_pair(out, edges);
         }, "ring"_a, "samples"_a, "ground_y"_a, "top_y"_a, "search"_a = 3.0,
            "The footprint ring (x, z) with each edge moved along its normal onto the scan's wall; returns (ring, [(shift m, support, moved)] per edge)");
+        m_sm.def("plan_union", [ringOf](const std::vector<std::vector<std::pair<double, double>>>& rings, double cellM) {
+            std::vector<std::vector<sm::P2>> rr;
+            for (const auto& r : rings) rr.push_back(ringOf(r));
+            std::vector<std::pair<double, double>> out;
+            for (const auto& p : sm::planUnion(rr, cellM)) out.push_back({p.x, p.z});
+            return out;
+        }, "rings"_a, "cell"_a = 0.5, "One outline (x, z) for a footprint given in many rings: all filled, the largest connected piece outlined");
+        nb::class_<sm::Tier>(m_sm, "Tier")
+            .def_ro("y0", &sm::Tier::y0).def_ro("y1", &sm::Tier::y1).def_ro("area", &sm::Tier::areaM2)
+            .def_prop_ro("outline", [](const sm::Tier& t) { std::vector<std::pair<double, double>> o; for (const auto& p : t.outline) o.push_back({p.x, p.z}); return o; });
+        m_sm.def("tiers", [](const std::vector<Vec3>& samples, double baseY, double changeShare, double minTier) {
+            sm::TierParams T; T.changeShare = changeShare; T.minTierM = minTier;
+            return sm::tiers(samples, baseY, T);
+        }, "samples"_a, "base_y"_a, "change"_a = 0.15, "min_tier"_a = 3.0,
+           "The structure as a stack of tiers where the scan's plan area holds steady, each squared and snapped onto its own walls");
+        m_sm.def("tier_solids", &sm::tierSolids, "tiers"_a, "The tiers raised into one mesh");
         m_sm.def("sample_surface", [](const ScratchboxMesh& mesh, double spacing) { return sm::sampleMesh(mesh, spacing); }, "mesh"_a, "spacing"_a = 0.5,
                  "Evenly spaced points on a mesh's surface (about one per spacing^2)");
         m_sm.def("agreement", [ringOf, inRings](const std::vector<Vec3>& scan, const std::vector<Vec3>& candidate, double tau, double bandM, std::optional<double> groundY,

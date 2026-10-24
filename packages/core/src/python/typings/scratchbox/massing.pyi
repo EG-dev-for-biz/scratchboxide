@@ -39,6 +39,7 @@ class Candidate:
     mesh: typing.Any
     agreement: typing.Any
     roof: typing.Any
+    tiers: typing.Any
 
 
 class Choice:
@@ -57,6 +58,7 @@ class Choice:
     why: typing.Any
     rows: typing.Any
     candidate: typing.Any
+    candidates: typing.Any
 
 List = typing.List
 Optional = typing.Optional
@@ -126,6 +128,12 @@ class Scan:
 
     def block_with_roof_objects(self, photo: typing.Optional[str] = None, photo_frame: typing.Optional[dict] = None) -> Candidate:
         """The block, and every object fitted on its roof, as one candidate (the roof objects in report `roof`)."""
+
+    def tiers(self, change: float = 0.15, min_tier: float = 3.0) -> Candidate:
+        """
+        The structure as a stack of clean blocks, one per setback: slices grouped where the plan area holds steady,
+        each tier squared to the walls and snapped onto its own scanned walls (the tiers in `.tiers`).
+        """
 
     def candidates(self) -> typing.List[Candidate]:
         """The built-in candidates, simplest first."""

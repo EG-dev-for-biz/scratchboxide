@@ -55,6 +55,8 @@ class Candidate:
         self.agreement = agreement
         # the roof report (Scan.roof_objects) of a candidate that carries its roof objects, else None
         self.roof: Optional[dict] = None
+        # the tiers (scan_massing.Tier) of the tiers candidate, else None
+        self.tiers: Optional[list] = None
 
     @property
     def triangles(self) -> int:
@@ -73,6 +75,8 @@ class Choice:
         self.why: str = result["why"]
         self.rows: List[dict] = list(result["candidates"])
         self.candidate: Optional[Candidate] = candidates[result["index"]] if result["index"] >= 0 else None
+        # every candidate scored, simplest first (each with its mesh and agreement)
+        self.candidates: List[Candidate] = list(candidates)
 
     @property
     def mesh(self):
@@ -88,7 +92,9 @@ class Scan:
     def __init__(self, mesh, plan: Optional[List[Ring]] = None, ground_y: Optional[float] = None, spacing: float = 0.5, district=None):
         _require()
         self.mesh = mesh
-        self.plan = [list(r) for r in plan] if plan else []
+        # a footprint in several rings (parts, or a modelled volume's triangles) is merged into one outline
+        rings = [list(r) for r in plan] if plan else []
+        self.plan = [list(_sm.plan_union(rings, 0.5))] if len(rings) > 1 else rings
         self.samples = _sm.sample_surface(mesh, spacing)
         if not self.samples:
             raise ValueError("the scan has no surface to sample")
@@ -240,9 +246,17 @@ class Scan:
         c.roof = roof
         return c
 
+    def tiers(self, change: float = 0.15, min_tier: float = 3.0) -> Candidate:
+        """The structure as a stack of clean blocks, one per setback: slices grouped where the plan area holds steady,
+        each tier squared to the walls and snapped onto its own scanned walls (the tiers in `.tiers`)."""
+        ts = _sm.tiers(self.samples, self.ground_y, change, min_tier)
+        c = Candidate("tiers", _sm.tier_solids(ts))
+        c.tiers = ts
+        return c
+
     def candidates(self) -> List[Candidate]:
         """The built-in candidates, simplest first."""
-        return [self.block(), self.block_with_roof_objects(), self.lofted_sections()]
+        return [self.block(), self.block_with_roof_objects(), self.tiers(), self.lofted_sections()]
 
 
 def choose(scan: Scan, candidates: Optional[List[Candidate]] = None, min_coverage: float = 0.9, min_precision: float = 0.85, relief: float = 2.5) -> Choice:

@@ -405,6 +405,25 @@ inline std::vector<P2> planOutline(const std::vector<Slice>& sl, double cellM) {
     return best;
 }
 
+/**
+ * One outline for a footprint given in many rings (a building's extruded parts, or the triangles of a modelled volume
+ * seen from above): every ring filled (even-odd each) onto cellM cells, and the outline of the largest connected piece.
+ */
+inline std::vector<P2> planUnion(const std::vector<std::vector<P2>>& rings, double cellM = 0.5) {
+    CellSet cells;
+    for (const auto& r : rings) {
+        if (r.size() < 3) continue;
+        double xa = 1e18, xb = -1e18, za = 1e18, zb = -1e18;
+        for (const auto& p : r) { xa = std::min(xa, p.x); xb = std::max(xb, p.x); za = std::min(za, p.z); zb = std::max(zb, p.z); }
+        const std::vector<std::vector<P2>> one{r};
+        for (int32_t k = static_cast<int32_t>(std::floor(za / cellM)); k <= static_cast<int32_t>(std::floor(zb / cellM)); ++k)
+            for (int32_t i = static_cast<int32_t>(std::floor(xa / cellM)); i <= static_cast<int32_t>(std::floor(xb / cellM)); ++i)
+                if (inRings(one, (i + 0.5) * cellM, (k + 0.5) * cellM)) cells.insert(ckey(i, k));
+    }
+    Slice all{0, 0, std::move(cells)};
+    return planOutline({all}, cellM);
+}
+
 inline std::vector<Piece> pieces(const Slice& s, int sliceIndex, double cellM, double minPieceM2) {
     std::vector<Piece> out;
     CellSet seen;
@@ -633,6 +652,47 @@ inline std::vector<P2> snapPlanToScan(const std::vector<P2>& ring, const std::ve
     return out;
 }
 
+/**
+ * The ring straightened toward two directions at right angles (axisRad and axisRad + 90 degrees): after a light
+ * simplification, every edge within tolDeg of one of them is turned onto it about its midpoint, and consecutive edges
+ * are re-intersected (an edge left off-axis keeps its own direction). Short edges that end up parallel to both
+ * neighbours are dropped. A footprint traced from pixels or cells comes back with the building's own right angles.
+ */
+inline std::vector<P2> squareToAxes(const std::vector<P2>& ringIn, double axisRad, double tolDeg, double simplifyTol) {
+    std::vector<P2> r = detail::simplify(ringIn, simplifyTol);
+    const size_t n = r.size();
+    if (n < 4) return r;
+    struct L { P2 p, d; };
+    std::vector<L> lines(n);
+    const double tol = tolDeg * M_PI / 180;
+    for (size_t i = 0; i < n; ++i) {
+        const P2 a = r[i], b = r[(i + 1) % n];
+        const P2 m{(a.x + b.x) / 2, (a.z + b.z) / 2};
+        double ang = std::atan2(b.z - a.z, b.x - a.x);
+        // nearest of the four axis directions
+        double best = ang, bd = 1e9;
+        for (int q = 0; q < 4; ++q) {
+            const double t = axisRad + q * M_PI / 2;
+            const double dd = std::abs(std::remainder(ang - t, 2 * M_PI));
+            if (dd < bd) { bd = dd; best = t; }
+        }
+        if (bd <= tol) ang = best;
+        lines[i] = {m, {std::cos(ang), std::sin(ang)}};
+    }
+    std::vector<P2> out;
+    for (size_t i = 0; i < n; ++i) {
+        const L& l0 = lines[(i + n - 1) % n];
+        const L& l1 = lines[i];
+        const double den = l0.d.x * l1.d.z - l0.d.z * l1.d.x;
+        if (std::abs(den) < 1e-6) continue;  // parallel neighbours: the corner between them is not a corner
+        const double t = ((l1.p.x - l0.p.x) * l1.d.z - (l1.p.z - l0.p.z) * l1.d.x) / den;
+        const P2 c{l0.p.x + t * l0.d.x, l0.p.z + t * l0.d.z};
+        // a re-intersection far from the original corner means the edges were nearly parallel: keep the original corner
+        out.push_back(std::hypot(c.x - r[i].x, c.z - r[i].z) > 4 * simplifyTol + 0.5 ? r[i] : c);
+    }
+    return out.size() >= 3 ? out : r;
+}
+
 /** A footprint ring (x, z) extruded from y0 to y1: walls and caps (the plainest candidate). */
 inline ScratchboxMesh extrudeBlock(const std::vector<P2>& ring, double y0, double y1) {
     std::vector<std::vector<Vec3>> rings(2);
@@ -640,6 +700,92 @@ inline ScratchboxMesh extrudeBlock(const std::vector<P2>& ring, double y0, doubl
     ScratchboxMesh m = shaper::Loft3D::skin(rings, true);
     m.name = "block";
     return m;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Tiers: a stack of clean blocks, one per setback
+// ---------------------------------------------------------------------------------------------------------------------
+
+struct TierParams {
+    /** A slice whose plan area differs from its tier's by more than this share starts a new tier. */
+    double changeShare = 0.15;
+    /** Tiers shorter than this are merged into the tier below (m). */
+    double minTierM = 3.0;
+    /** A cell belongs to a tier's outline when this share of the tier's slices holds it. */
+    double presence = 0.3;
+    double squareTolDeg = 15;
+};
+struct Tier { double y0, y1, areaM2; std::vector<P2> outline; };
+
+/**
+ * The structure as a stack of tiers: the scan's slices grouped where the plan area holds steady, each tier's outline
+ * the cells most of its slices share (presence), squared to the building's wall directions (the axis of the longest
+ * edge of the lowest tier) and its edges snapped onto that tier's own scanned walls, raised between its own heights.
+ */
+inline std::vector<Tier> tiers(const std::vector<Vec3>& samples, double baseY, const TierParams& T = {}, const SliceParams& S = {}) {
+    const auto sl = slices(samples, baseY, S);
+    std::vector<double> area(sl.size());
+    for (size_t i = 0; i < sl.size(); ++i) area[i] = sl[i].cells.size() * S.cellM * S.cellM;
+    // the area smoothed over three slices (one noisy slice does not start a tier)
+    std::vector<double> sm(area);
+    for (size_t i = 1; i + 1 < area.size(); ++i) { double a[3] = {area[i - 1], area[i], area[i + 1]}; std::sort(a, a + 3); sm[i] = a[1]; }
+    std::vector<std::pair<size_t, size_t>> runs;
+    size_t start = 0;
+    double ref = 0;
+    for (size_t i = 0; i < sm.size(); ++i) {
+        if (sm[i] < 1.0) { if (i > start) runs.push_back({start, i}); start = i + 1; ref = 0; continue; }
+        if (ref <= 0) { ref = sm[i]; continue; }
+        if (std::abs(sm[i] - ref) > T.changeShare * ref) { runs.push_back({start, i}); start = i; ref = sm[i]; }
+    }
+    if (start < sm.size()) runs.push_back({start, sm.size()});
+    // short tiers merged into the one below
+    std::vector<std::pair<size_t, size_t>> merged;
+    for (const auto& r : runs) {
+        if (!merged.empty() && (r.second - r.first) * S.sliceM < T.minTierM && merged.back().second == r.first) merged.back().second = r.second;
+        else merged.push_back(r);
+    }
+    std::vector<Tier> out;
+    double axis = 0;
+    bool haveAxis = false;
+    for (const auto& [a, b] : merged) {
+        if (b <= a) continue;
+        std::unordered_map<int64_t, int> votes;
+        for (size_t i = a; i < b; ++i) for (int64_t c : sl[i].cells) votes[c]++;
+        CellSet cells;
+        const int need = std::max(1, static_cast<int>(std::ceil(T.presence * (b - a))));
+        for (const auto& [c, v] : votes) if (v >= need) cells.insert(c);
+        if (cells.size() * S.cellM * S.cellM < 2.0) continue;
+        auto ring = planOutline({Slice{0, 0, std::move(cells)}}, S.cellM);
+        if (ring.size() < 3) continue;
+        if (!haveAxis) {
+            const auto simp = detail::simplify(ring, 0.5);
+            double longest = -1;
+            for (size_t i = 0; i < simp.size(); ++i) { const P2 p = simp[i], q = simp[(i + 1) % simp.size()]; const double L = std::hypot(q.x - p.x, q.z - p.z); if (L > longest) { longest = L; axis = std::atan2(q.z - p.z, q.x - p.x); } }
+            haveAxis = true;
+        }
+        ring = squareToAxes(ring, axis, T.squareTolDeg, 0.35);
+        const double y0 = sl[a].y0, y1 = sl[b - 1].y1;
+        std::vector<Vec3> own;
+        for (const auto& p : samples) if (p.y >= y0 && p.y <= y1) own.push_back(p);
+        ring = snapPlanToScan(ring, own, y0 - 1.0, y1, 2.0, 0.25, 0.15, S.cellM);
+        double a2 = 0;
+        for (size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++) a2 += ring[j].x * ring[i].z - ring[i].x * ring[j].z;
+        out.push_back({y0, y1, std::abs(a2) / 2, ring});
+    }
+    return out;
+}
+
+/** The tiers raised into one mesh. */
+inline ScratchboxMesh tierSolids(const std::vector<Tier>& ts) {
+    ScratchboxMesh all("tiers");
+    for (const auto& t : ts) {
+        const ScratchboxMesh m = extrudeBlock(t.outline, t.y0, t.y1);
+        const uint32_t base = static_cast<uint32_t>(all.vertices.size());
+        for (const auto& v : m.vertices) all.vertices.push_back(v);
+        for (uint32_t i : m.indices) all.indices.push_back(base + i);
+    }
+    all.recomputeBounds();
+    return all;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

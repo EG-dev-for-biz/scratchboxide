@@ -3,10 +3,10 @@
 // from a fresh generation.
 
 /** Hash of the generated stubs: the scratchbox API version a script was checked against. */
-export const SB_API_VERSION = '1b6f11722d84';
+export const SB_API_VERSION = '396d92338f22';
 
 /** The API reference (module -> class -> signatures, one-line docs), within the full token budget. */
-export const SB_API_SUMMARY = `scratchbox API (generated from the engine's stubs, version 1b6f11722d84; parameter names and defaults, -> return type, # first doc line). Scripts are type-checked against these stubs before they run: an attribute, function or keyword that is not in the API is rejected without running.
+export const SB_API_SUMMARY = `scratchbox API (generated from the engine's stubs, version 396d92338f22; parameter names and defaults, -> return type, # first doc line). Scripts are type-checked against these stubs before they run: an attribute, function or keyword that is not in the API is rejected without running.
 
 sb functions (import scratchbox as sb):
   sb.create_arched_blister(bounds=(0.35, 0.45, 0.9), arch_radius=0.4, swell=0.08, side=1.0, grid=(16, 8), color=None, material=None, **kwargs) -> Mesh
@@ -121,14 +121,14 @@ sb.SbVeggieTree:
   .scale(*args) -> SbVeggieTree  # Scales position and size about the origin: one factor, or (sx, sy, sz) (sizes take sy for height, sx/sz for r…
   .copy() -> SbVeggieTree
   .to_spec() -> dict
+sb.massing.Candidate:
+  attributes: triangles: int (read-only), label, mesh, agreement, roof, tiers
+  sb.massing.Candidate(label, mesh, agreement=None)
 sb.Human:
   attributes: mesh: Any (read-only), role, height, gender_beta, pose, position, facing_deg, surface, surface_y_offset
   sb.Human(role='scale_figure', height=1.76, gender_beta=0.0, pose='standing_survey', position=(0.0, 0.0, 0.0), facing_deg=0.0, surface=None, surface_y_offset=0.0)
   .stand_on(surface, offset=(0.0, 0.0), y_offset=0.0, facing_deg=None) -> Human
   .build_mesh() -> Any
-sb.massing.Candidate:
-  attributes: triangles: int (read-only), label, mesh, agreement, roof
-  sb.massing.Candidate(label, mesh, agreement=None)
 sb.ShapeKeyBlock:
   attributes: name, value
   sb.ShapeKeyBlock(name, value=0.0)
@@ -162,17 +162,17 @@ sb.Structure:
 sb.architecture:
   attributes: RomanOrder, BuildingConfig, RoofType
   (+3 more)
-Also in the API (not listed here): sb.Terrain; sb.constants; sb.geospatial; sb.human; sb.layout; sb.nature; sb.pbr; sb.scan_massing.Slice; sb.validation; sb.PoseBone; sb.hair.GaussianSplat; sb.hair.HairStrand; sb.rig.Result; sb.composer.ContactAuditViolation; …
+Also in the API (not listed here): sb.Terrain; sb.constants; sb.geospatial; sb.human; sb.layout; sb.nature; sb.pbr; sb.scan_massing.Slice; sb.validation; sb.PoseBone; sb.hair.GaussianSplat; sb.hair.HairStrand; sb.rig.Result; …
 `;
 
 /** The same reference within the small budget used in the execute_3d_python_script description. */
-export const SB_API_CORE_SUMMARY = `scratchbox API (generated from the engine's stubs, version 1b6f11722d84; parameter names and defaults, -> return type). Scripts are type-checked against these stubs before they run: an attribute, function or keyword that is not in the API is rejected without running.
+export const SB_API_CORE_SUMMARY = `scratchbox API (generated from the engine's stubs, version 396d92338f22; parameter names and defaults, -> return type). Scripts are type-checked against these stubs before they run: an attribute, function or keyword that is not in the API is rejected without running.
 
 sb functions (import scratchbox as sb): create_arched_blister(bounds=(0.35, 0.45, 0.9), arch_radius=0.4, swell=0.08, side=1.0, grid=(16, 8), …) -> Mesh; create_beveled_box(size=(1.0, 1.0, 1.0), bevel=0.02, color=None, material=None, **kwargs) -> Mesh; create_box(*args, **kwargs) -> Mesh; create_building(width=18.0, depth=14.0, floors=4, floor_height=3.4, ground_floor_height=4.2, …) -> Mesh; create_cambered_foil(span=1.8, chord=0.45, camber=0.04, thickness=0.05, angle_of_attack_deg=-4.0, …) -> Mesh; create_catenary_cable(start=(0, 0, 0), end=(10, 0, 0), sag=1.2, radius=0.03, segments=16, …) -> Mesh; create_character(name='Human', height=1.78, gender_beta=0.0, position=(0.0, 0.0, 0.0), **kwargs) -> StudioHuman; create_cone(radius=1.0, height=2.0, segments=24, color=None, material=None, …) -> Mesh; create_cube(*args, **kwargs) -> Mesh; create_curved_building(width=18.0, depth=18.0, floors=6, curvature=0.85, superellipse_exponent=2.4, …) -> Mesh; create_cylinder(radius_top=1.0, radius_bottom=1.0, height=2.0, segments=24, color=None, …) -> Mesh; create_envelope(bounds=(1.0, 0.3, 1.5), crown=0.25, slope=0.3, center_dip=0.0, grid=(16, 16), …) -> Mesh; create_form(bounds=(1.0, 1.0, 1.0), curvature=0.0, bevel=0.02, axis_of_revolution=None, crown=0.25, …) -> Mesh; create_human(role='scale_figure', height=1.76, gender_beta=0.0, pose='standing_survey', position=(0.0, 0.0, 0.0), …) -> Human; create_hydraulic_actuator(anchor_a, anchor_b, barrel_radius=0.035, rod_radius=0.02, rod_extension_ratio=0.45, …) -> Mesh; create_intake_strainer(center, normal=(0.0, 0.0, 1.0), radius=0.24, ring_count=3, spoke_count=4, …) -> Mesh; create_ivy(root=(0.0, 0.0, 0.0), obstacle_min=(-4.0, 0.0, -4.0), obstacle_max=(4.0, 6.0, 4.0), max_steps=60, cling_distance=None, …) -> Mesh; create_lathe(profile, segments=32, total_angle_rad=None, color=None, material=None, …) -> Mesh; create_loft(slices, close_ends=True, color=None, material=None, **kwargs) -> Mesh; create_lofted_hull(stations, profile='superellipse', m=2.8, close_ends=True, n_pts=32, …) -> Mesh; create_louver_bay(center, dimensions=(0.35, 0.25, 0.08), blade_count=6, blade_angle_deg=35.0, color=(0.55, 0.57, 0.6, 1.0)) -> Mesh; create_panelized_loft(stations, n_pts_per_slice=36, panel_seam_frequency=2.0, fastener_pitch_meters=0.15, color=(0.55, 0.57, 0.6, 1.0)) -> Mesh; create_plane(width=2.0, height=2.0, depth=None, seg_x=4, seg_y=4, …) -> Mesh; create_revolving_component(radius=0.5, length=1.0, axis='lateral', profile='cylinder', crown=0.0, …) -> Mesh; create_sphere(radius=1.0, rings=16, sectors=32, color=None, segments=None, …) -> Mesh; create_spline_conduit_harness(spline_pts, radius=0.016, n_pts=12, color=(0.42, 0.44, 0.47, 1.0), p_clamp_spacing=0.35) -> Mesh; create_structural_truss_member(pt_a, pt_b, thickness=(0.05, 0.05), lightening_pocket_ratio=0.35, has_gusset_plates=True, …) -> Mesh; create_studio_pedestal(radius=4.0, height=0.25, bevel=0.04, bevel_radius=None, segments=64, …) -> Mesh; create_subdivided_box(size=(1.0, 1.0, 1.0), subdivisions=4, color=None, material=None, **kwargs) -> Mesh; create_tower(width=16.0, depth=16.0, floors=14, twist_degrees=45.0, taper=0.7, …) -> Mesh; create_tree(position=None, height=None, crown_radius=None, crown_base_height=None, crown_widest_at=0.5, …) -> SbVeggieTree; create_vegetation(pos=(0.0, 0.0, 0.0), height=12.0, crown_radius=3.0, clear_trunk_height=None, **kwargs) -> SbVeggieTree; create_wheel(radius=0.35, width=0.3, rim_radius=None, rim_recess=0.04, tread_bevel=0.025, …) -> Mesh; create_wheel_assembly(track_width=1.6, wheelbase=3.2, wheel_radius=0.35, tire_width=0.3, ground_clearance=0.05, …) -> Mesh; export_glb(arg1, arg2=None) -> bytes; read_glb(path, max_triangles=None) -> list; replicate_metric_array(distribution_mode='CURVE_1D', guide_points=None, pitch_meters=0.1, seed_geometry=None, color=(0.55, 0.57, 0.6, 1.0)) -> 'Mesh'; revolve_harmonic_solid(anchor_point=(0.0, 0.0, 0.0), axis=(0.0, 1.0, 0.0), profile_curve=None, harmonic_lobe_count=0, harmonic_depth_ratio=0.2, …) -> 'Mesh'; superellipse_loop(z, cx, cy, rx, ry, …) -> List[Any]; superellipse_point(cx, cy, rx, ry, theta, …) -> Tuple[float, float]; sweep_curve_profile(path, profile='CIRCULAR', profile_dimensions=(0.04, 0.04), scale_taper=(1.0, 1.0), twist_deg=0.0, …) -> 'Mesh'; validate_scene(scene_or_mesh, auto_heal=True) -> Dict[str, Any]; write_glb(arg1, arg2=None) -> bool
 sb.geometry.Mesh: attributes: name: str, material: PbrMaterial, vertex_count: int (read-only), triangle_count: int (read-only), bounds: AABB (read-only), vertices: list[Vertex] (read-only), indices: list[int] (read-only); Mesh(); Mesh(name='mesh'); get_positions_flat() -> bytes; get_normals_flat() -> bytes; get_indices_bytes() -> bytes; add_vertex(pos: Vec3, norm: Vec3=..., uv: Vec2=..., color: Vec4=...); add_triangle(i0, i1, i2); append(other) -> Mesh; translate(*args) -> Mesh; scale(*args) -> Mesh; rotate_x(angle_deg) -> Mesh; rotate_y(angle_deg) -> Mesh; rotate_z(angle_deg) -> Mesh; set_color(color: Vec4) -> Mesh; multiply_vertex_colors(factor: Vec4) -> Mesh; set_material(mat) -> Mesh; apply_material(mat) -> Mesh; compute_curvature_ao(intensity=0.65) -> Mesh; apply_procedural_weathering(frequency=2.0, amplitude=0.15) -> Mesh; displace_along_normals(frequency=2.0, amplitude=0.05) -> Mesh; tessellate_and_displace(tessellation_factor=4, displacement_scale=0.06, noise_freq=32.0, noise_amp=0.015) -> Mesh; clear(); recompute_normals() -> Mesh; recompute_smooth_normals() -> Mesh; weld_vertices(epsilon=0.0001) -> Mesh; recompute_bounds() -> Mesh; subdivide(iterations=1) -> Mesh; taper(factor=0.5, axis=1) -> Mesh; twist(angle_deg=45.0, axis=1) -> Mesh (+24 more)
 sb.math.Vec3: attributes: x: float, y: float, z: float; Vec3(); Vec3(x, y, z); length() -> float; normalized() -> Vec3; dot(arg: Vec3) -> float; cross(arg: Vec3) -> Vec3
 sb.PbrMaterial: attributes: base_color: Vec4, clearcoat: float, clearcoat_roughness: float, color: Vec4, double_sided: bool, emissive: Vec3, emissive_intensity: float, ior: float, metallic: float, metalness: float, name: str, roughness: float, thickness: float, transmission: float; PbrMaterial(name='defaultMaterial', **kwargs) -> PbrMaterial; PbrMaterial.asphalt_street() -> PbrMaterial; PbrMaterial.basalt_rock() -> PbrMaterial; PbrMaterial.carbon_composite() -> PbrMaterial; PbrMaterial.chrome() -> PbrMaterial; PbrMaterial.concrete_brutalist() -> PbrMaterial; PbrMaterial.copper_bullet() -> PbrMaterial; PbrMaterial.emissive_glow(color: Vec3, intensity=1.0) -> PbrMaterial; PbrMaterial.glass_tinted(color: Vec4=..., roughness=0.08, ior=1.52) -> PbrMaterial; PbrMaterial.gold() -> PbrMaterial; PbrMaterial.metal_brushed_steel() -> PbrMaterial; PbrMaterial.metal_dark_anodized() -> PbrMaterial (+14 more)
-Also in the API (not listed here): sb.math.Vec4; sb.SbVeggieTree; sb.Human; sb.massing.Candidate; sb.ShapeKeyBlock; sb.StudioHuman; sb.math.Vec2; sb.Scene; sb.hair.HairGuide; …
+Also in the API (not listed here): sb.math.Vec4; sb.SbVeggieTree; sb.massing.Candidate; sb.Human; sb.ShapeKeyBlock; sb.StudioHuman; sb.math.Vec2; sb.Scene; sb.hair.HairGuide; …
 `;
 
 /** Names each module and class of the stubs defines (classes by their short name), for the type-check gate's
@@ -242,6 +242,7 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "label",
         "mesh",
         "roof",
+        "tiers",
         "triangles"
     ],
     "Chain": [
@@ -254,6 +255,7 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
     ],
     "Choice": [
         "candidate",
+        "candidates",
         "explains",
         "label",
         "mesh",
@@ -638,6 +640,7 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "slices",
         "snapped_plan",
         "spacing",
+        "tiers",
         "top"
     ],
     "Scene": [
@@ -823,6 +826,12 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "sample_height",
         "sample_normal",
         "sample_slope_degrees"
+    ],
+    "Tier": [
+        "area",
+        "outline",
+        "y0",
+        "y1"
     ],
     "TopGrid": [
         "add_mesh",
@@ -1326,6 +1335,7 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "Agreement",
         "LoftRun",
         "Slice",
+        "Tier",
         "TopGrid",
         "agreement",
         "choose",
@@ -1334,10 +1344,13 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "loft_runs",
         "loft_solids",
         "plan_outline",
+        "plan_union",
         "roof_objects",
         "sample_surface",
         "slices",
-        "snap_plan_to_scan"
+        "snap_plan_to_scan",
+        "tier_solids",
+        "tiers"
     ],
     "scratchbox_native.sdf": [
         "op_bend",
