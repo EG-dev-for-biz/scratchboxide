@@ -44,6 +44,7 @@ import { ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS } from './tools/adaptive-matchmove
 import { ATMOSPHERE_TOOL_DECLARATIONS } from './tools/atmosphere-tools';
 import { LIGHTING_TOOL_DECLARATIONS } from './tools/lighting-tools';
 import { LENS_TOOL_DECLARATIONS, BROWSER_TOOL_DECLARATIONS } from './tools/lens-browser-tools';
+import { BVH_QUERY_TOOL_DECLARATIONS } from './tools/bvh-query-tools';
 
 export type ToolPackName =
     | 'core_workspace'
@@ -119,14 +120,15 @@ export const GEOSPATIAL_3D_PACK: ToolPackDefinition = {
 export const MESH_SURFACE_PACK: ToolPackDefinition = {
     id: 'mesh_surface',
     displayName: 'Mesh Reshaping & Material Textures',
-    description: 'C++20 mesh shaping, SB-Rig auto-rigging (skeleton + skin weights for any mesh), algorithmic UV unwrap, MaxRects atlas binning, and analytical hair/groom forward splatting.',
+    description: 'C++20 mesh shaping, SB-Rig auto-rigging (skeleton + skin weights for any mesh), algorithmic UV unwrap, MaxRects atlas binning, analytical hair/groom forward splatting, and BVH spatial queries (raycast, closest-point, RTAO baking) on individual meshes and buildings.',
     declarations: [
         ...MESH_SHAPING_TOOL_DECLARATIONS,
         ...SB_RIG_TOOL_DECLARATIONS,
         ...ALGORITHMIC_UV_TOOL_DECLARATIONS,
         ...NANO_BANANA_TOOL_DECLARATIONS,
         ...TURNAROUND_TOOL_DECLARATIONS,
-        ...ANALYTICAL_GROOM_TOOL_DECLARATIONS
+        ...ANALYTICAL_GROOM_TOOL_DECLARATIONS,
+        ...BVH_QUERY_TOOL_DECLARATIONS
     ],
     toolNames: [
         ...MESH_SHAPING_TOOL_DECLARATIONS.map(d => d.name),
@@ -134,7 +136,8 @@ export const MESH_SURFACE_PACK: ToolPackDefinition = {
         ...ALGORITHMIC_UV_TOOL_DECLARATIONS.map(d => d.name),
         ...NANO_BANANA_TOOL_DECLARATIONS.map(d => d.name),
         ...TURNAROUND_TOOL_DECLARATIONS.map(d => d.name),
-        ...ANALYTICAL_GROOM_TOOL_DECLARATIONS.map(d => d.name)
+        ...ANALYTICAL_GROOM_TOOL_DECLARATIONS.map(d => d.name),
+        ...BVH_QUERY_TOOL_DECLARATIONS.map(d => d.name)
     ]
 };
 

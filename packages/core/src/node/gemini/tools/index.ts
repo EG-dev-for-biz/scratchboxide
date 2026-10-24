@@ -36,6 +36,7 @@ export * from './virtual-geometry-tools';
 export * from './location-evidence-tools';
 export * from './location-reference-tools';
 export * from './surface-material-tools';
+export * from './bvh-query-tools';
 
 
 import type { ToolDeclaration, ToolHandler } from './types';
@@ -109,6 +110,10 @@ import {
     UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS,
     universal3DStructureHandlers
 } from './universal-3d-structure-tools';
+import {
+    BVH_QUERY_TOOL_DECLARATIONS,
+    bvhQueryHandlers
+} from './bvh-query-tools';
 
 export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...CANVAS_TOOL_DECLARATIONS,
@@ -150,7 +155,8 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...LOCAL_SF3D_TOOL_DECLARATIONS,
     ...TURNAROUND_TOOL_DECLARATIONS,
     ...LENS_TOOL_DECLARATIONS,
-    ...BROWSER_TOOL_DECLARATIONS
+    ...BROWSER_TOOL_DECLARATIONS,
+    ...BVH_QUERY_TOOL_DECLARATIONS
 ];
 
 export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
@@ -193,7 +199,8 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...lensHandlers,
     ...browserHandlers,
     ...botanicalTreeHandlers,
-    ...sbRoadieHandlers
+    ...sbRoadieHandlers,
+    ...Object.fromEntries(bvhQueryHandlers.map(([decl, handler]) => [decl.name, handler]))
 };
 
 export {
