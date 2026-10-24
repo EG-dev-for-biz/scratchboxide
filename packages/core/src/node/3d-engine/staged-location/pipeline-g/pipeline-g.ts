@@ -68,7 +68,9 @@ import { BRIEF_NEARBY_POI_M } from './brief';
 import type { GroundedReferenceClient } from '../../../spatial/search-grounded-reference';
 import type { LedgerEntry } from '../pipeline-h/ledger';
 
-export const PIPELINE_G_VERSION = `pipeline-g/v4+${PIPELINE_G_READ_VERSION}`;  // v4: a roof object's fitted roof must stay within its own height
+export const PIPELINE_G_VERSION = `pipeline-g/v5+${PIPELINE_G_READ_VERSION}`;  // v5: roofs redrawn largest first, small tops painted, the budget checked per roof
+/** A roof face under this is an object's top: it keeps its painted colour rather than an image-model redraw of its own. */
+export const ROOF_REDRAW_MIN_M2 = 20;
 /** Native build parameters: the massing only, nothing baked from the tile, no scanned residual. */
 export const G_BUILD_PARAMS = { bake: 0, residual: 0, sections: 0, topdown: 0, snapMaxM: 0 } as const;
 /** Plates read at once. */
@@ -168,6 +170,12 @@ export interface PipelineGInput {
     policy?: RebuildPolicy;
     /** Ledger entries the orchestrator decided before the rebuild (structure, footprint, heights), kept ahead of the rebuild's own. */
     ledger?: LedgerEntry[];
+    /**
+     * The massing already carries what stands on its roof (the scan-led massing, scan-massing.ts: outlines from the photo
+     * straight down, heights from the scan): these notes describe it, and the scan-blob roof objects (roof-objects.ts) are
+     * not built over it.
+     */
+    roofObjectsGiven?: string[];
 }
 
 export interface PipelineGOutcome extends InferenceOutcome {
@@ -673,7 +681,9 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     // what stands on the roof, built from what the scan measures there (roof-objects.ts)
     let roofParts: Massing['parts'] = [];
     let roofObjectRecords: RoofObject[] = [];
-    try {
+    if (input.roofObjectsGiven) {
+        steps.push({ step: 'roof objects', proposed: input.roofObjectsGiven.length, accepted: input.roofObjectsGiven.length, rejected: 0, notes: ['part of the scan-led massing (outlines from the photo straight down, heights from the scan)', ...input.roofObjectsGiven], ms: 0 });
+    } else try {
         const ro = await roofObjects(input.run, input.massing.parts, { groundY: input.structure.groundY, dir: input.dir, ...(input.signal ? { signal: input.signal } : {}) });
         roofParts = ro.parts;
         roofObjectRecords = ro.objects;
@@ -801,7 +811,11 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
         t = Date.now();
         const e = input.enhance;
         const skippedRoofs: string[] = [];
-        for (const f of run.report.faces.filter(x => x.kind === 'roof' && x.normal[1] > 0.3)) {
+        // largest first; under a budget, no redraw starts without a texture's time left (the scan-led massing's roof objects
+        // are surveyed parts with plates of their own: redrawn one by one they overran the stage's limit)
+        for (const f of run.report.faces.filter(x => x.kind === 'roof' && x.normal[1] > 0.3).sort((a, b) => b.area - a.area)) {
+            if (f.area < ROOF_REDRAW_MIN_M2) { skippedRoofs.push(`${f.key}: under ${ROOF_REDRAW_MIN_M2} m2 (an object's top), keeps its painted colour`); continue; }
+            if (left() < BUDGET_RESERVE_MS + BUDGET_TEXTURE_MS) { budgetNotes.push(`roof textures stopped (${Math.round(Math.max(0, left()) / 1000)} s of the budget left)`); skippedRoofs.push(`${f.key}: ${budgetNotes[budgetNotes.length - 1]}`); break; }
             const pl = roofPlates.find(p => p.key === f.key || f.key.startsWith(p.key + ':'));
             // a roof object's own top has no plate (they are parts added after the survey): it keeps its paint, unsaid
             if (!pl) { if (!f.part.startsWith('roof-object-')) skippedRoofs.push(`${f.key}: no plate`); continue; }

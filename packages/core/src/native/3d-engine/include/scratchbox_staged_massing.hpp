@@ -894,10 +894,11 @@ private:
         if (L < 0.05) return;
         V2 n2 = outwardNormal(part, a, b);
         V2 d{(b.x - a.x) / L, (b.z - a.z) / L};
-        // split the edge where other parts' corners project onto it (their cover may change there)
+        // split the edge where other parts' corners project onto it (their cover may change there); only parts that can
+        // cover it, as below: one that starts higher (an object on the roof) cut a block's walls into slivers
         std::vector<double> cuts{0.0, L};
         for (size_t pj = 0; pj < spec_.parts.size(); ++pj) {
-            if (pj == pi) continue;
+            if (pj == pi || spec_.parts[pj].baseY > part.baseY + 0.05) continue;
             for (const auto& l2 : spec_.parts[pj].loops) for (const auto& q : l2) {
                 double s = (q.x - a.x) * d.x + (q.z - a.z) * d.z, h = (q.x - a.x) * n2.x + (q.z - a.z) * n2.z;
                 if (s > 0.05 && s < L - 0.05 && std::abs(h) < 0.5) cuts.push_back(s);

@@ -17,10 +17,9 @@
  * labelled generated. No structure type is consulted.
  */
 
-import * as fs from 'fs';
 import type { ToolDeclaration, ToolHandler, ToolHandlerOutcome, ToolResultPayload } from './types';
-import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
-import { publishToModels, roofPhotoFor, structureScanOf } from './python-3d-tools';
+import { candidateLine, runScanMassing, type ScanMassingResult } from '../../3d-engine/staged-location/scan-massing';
+import { publishToModels, structureScanOf } from './python-3d-tools';
 
 export const STRUCTURE_MASSING_TOOL_NAME = 'structure_massing';
 
@@ -38,38 +37,6 @@ export const STRUCTURE_MASSING_DECLARATION: ToolDeclaration = {
     }
 };
 
-/** The fixed script the tool runs: the choice, the chosen mesh written, the report as one JSON line. */
-const MASSING_SCRIPT = `
-import json, os
-import scratchbox as sb
-args = json.loads(os.environ["SB_MASSING_ARGS"])
-scan = sb.massing.Scan.from_scene()
-cands = scan.candidates()
-choice = sb.massing.choose(scan, cands, args["minCoverage"], args["minPrecision"], args["relief"])
-chosen = choice.candidate
-if args.get("candidate"):
-    forced = [c for c in cands if c.label == args["candidate"]]
-    if not forced:
-        raise SystemExit("no candidate named %r (candidates: %s)" % (args["candidate"], ", ".join(c.label for c in cands)))
-    chosen = forced[0]
-if chosen is None:
-    raise SystemExit("no candidate could be scored against the scan: " + choice.why)
-roof = next((c.roof for c in cands if c.roof), None)
-tiers = next((c.tiers for c in cands if c.tiers), None)
-scene = sb.Scene()
-scene.add_mesh(chosen.mesh)
-sb.io.write_glb(OUTPUT_GLB_PATH, scene)
-report = {
-    "chosen": chosen.label, "forced": bool(args.get("candidate")), "explains": choice.explains, "why": choice.why,
-    "candidates": choice.rows, "groundY": scan.ground_y, "roofY": scan.roof_y(), "top": scan.top(), "samples": len(scan.samples),
-    "roof": None if roof is None else {"photo": roof["photo"], "objects": [
-        {"chosen": o["chosen"], "rise": round(o["top_y"] - o["base_y"], 2), "area": round(o["area"], 2), "outline": o["outline_source"], "height": o["height_source"], "why": o["why"]}
-        for o in roof["objects"]]},
-    "tiers": None if tiers is None else [{"y0": round(t.y0, 2), "y1": round(t.y1, 2), "area": round(t.area, 1)} for t in tiers],
-}
-print("SB_MASSING_REPORT " + json.dumps(report))
-`;
-
 function fail(message: string): ToolHandlerOutcome {
     return { status: 'failed', summaryResult: `${STRUCTURE_MASSING_TOOL_NAME}: ${message}`, resultPayload: { success: false, error: message } as unknown as ToolResultPayload };
 }
@@ -83,25 +50,14 @@ export const structureMassingHandler: ToolHandler = async (args, ctx): Promise<T
         relief: num(args.relief, 2.5), minCoverage: num(args.minCoverage, 0.9), minPrecision: num(args.minPrecision, 0.85),
         candidate: typeof args.candidate === 'string' && args.candidate.trim() ? args.candidate.trim() : undefined
     };
-    const env: Record<string, string> = {
-        SCAN_GLB_PATH: scan.note.scanGlb, SCAN_GROUND_Y: String(scan.note.groundY), SCAN_PLAN: JSON.stringify(scan.note.plan),
-        SB_MASSING_ARGS: JSON.stringify(scriptArgs)
-    };
-    if (scan.note.districtGlb && fs.existsSync(scan.note.districtGlb)) env.SCAN_DISTRICT_GLB_PATH = scan.note.districtGlb;
-    ctx?.reportProgress?.('structure massing: the photo straight down over the roof');
-    try {
-        const roof = roofPhotoFor(scan.note);
-        if (roof) { env.SCAN_ROOF_PHOTO_PATH = roof.path; env.SCAN_ROOF_PHOTO_FRAME = JSON.stringify(roof.frame); }
-    } catch (err) {
-        console.warn(`[${STRUCTURE_MASSING_TOOL_NAME}] no roof photo: ${(err as Error).message}`);
-    }
     ctx?.reportProgress?.('structure massing: building and scoring the candidates');
-    const result = await NativePythonRunnerService.getInstance().runScript(MASSING_SCRIPT, { timeoutMs: 240_000, env: { ...process.env, ...env } as Record<string, string> });
-    const line = (result.stdout || '').split('\n').find(l => l.startsWith('SB_MASSING_REPORT '));
-    if (!result.success || !line || !result.glbPath || !fs.existsSync(result.glbPath)) {
-        return fail(`the massing could not be built: ${(result.errorDetails || result.stderr || 'no report').toString().slice(-1200)}`);
+    let report: ScanMassingResult;
+    try {
+        report = await runScanMassing(scan.note, { ...scriptArgs, ...(ctx?.signal ? { signal: ctx.signal } : {}) });
+    } catch (err) {
+        return fail((err as Error).message);
     }
-    const report = JSON.parse(line.slice('SB_MASSING_REPORT '.length));
+    const result = { glbPath: report.glbPath };
     const url = publishToModels(result.glbPath);
     const objectId = `structure-massing-${Date.now()}`;
     const object = {
@@ -118,14 +74,19 @@ export const structureMassingHandler: ToolHandler = async (args, ctx): Promise<T
         space: { spatial3d: { x: 0, y: 0, z: 0 } }, time: { startMs: 0, durationMs: 20000 }, lineage: { version: 1 }
     };
     const artifact = scene?.data ? { ...scene, version: (scene.version || 1) + 1, data: { ...scene.data, objects: [...(scene.data.objects ?? []), object] } } : undefined;
-    const rows = (report.candidates as Array<{ label: string; coverage: number; precision: number; accepted: boolean }>)
-        .map(r => `${r.label} ${r.coverage.toFixed(2)}/${r.precision.toFixed(2)}${r.label === report.chosen ? ' (chosen)' : ''}`).join('; ');
+    const rows = candidateLine(report);
     const roofLine = report.roof ? ` Roof: ${report.roof.objects.length} objects${report.roof.photo ? ' (outlines from the photo)' : ' (scan only)'}.` : '';
-    const tierLine = report.chosen === 'tiers' && report.tiers ? ` ${report.tiers.length} tiers.` : '';
+    const tierLine = report.chosen === 'tiers' ? ` ${report.tiers.length} tiers.` : '';
     return {
         status: 'completed',
         summaryResult: `Massing of the staged structure: ${report.chosen}${report.forced ? ' (asked for)' : report.explains ? '' : ' (no candidate explains the scan within tolerance; the best fit)'}. Coverage/precision per candidate: ${rows}.${roofLine}${tierLine} Joined the scene as ${objectId} (generated).`,
-        resultPayload: { success: true, ...report, glbPath: result.glbPath, url, objectId, ...(artifact ? { artifact } : {}) } as unknown as ToolResultPayload
+        resultPayload: {
+            success: true, chosen: report.chosen, forced: report.forced, explains: report.explains, why: report.why, candidates: report.candidates,
+            groundY: report.groundY, roofY: report.roofY, top: report.top, samples: report.samples,
+            roof: report.roof && { photo: report.roof.photo, objects: report.roof.objects.map(o => ({ chosen: o.chosen, rise: +(o.topY - o.baseY).toFixed(2), area: +o.areaM2.toFixed(2), outline: o.outlineSource, height: o.heightSource, why: o.why })) },
+            tiers: report.tiers.map(t => ({ y0: +t.y0.toFixed(2), y1: +t.y1.toFixed(2), area: +t.area.toFixed(1) })),
+            glbPath: result.glbPath, url, objectId, ...(artifact ? { artifact } : {})
+        } as unknown as ToolResultPayload
     };
 };
 

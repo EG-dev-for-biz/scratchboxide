@@ -20,33 +20,10 @@ import { formatSbApiErrors, sbTypeCheckMetadata, typeCheckSbScript } from '../..
 import { SB_API_CORE_SUMMARY, SB_API_VERSION } from '../../3d-engine/sb-api.generated';
 import { firstPassRenderMode } from '../scene3d-first-pass-baseline';
 import { StageCache, stagedWorkspaceRoot } from '../../3d-engine/staged-location/stage-cache';
-import { renderTopDownPhoto } from '../../3d-engine/staged-location/top-down-photo';
-import { readTileTriangles } from '../../3d-engine/staged-location/tile-texture-transfer';
+import { roofPhotoFor, type StructureScanNote } from '../../3d-engine/staged-location/scan-massing';
 import { encodePng } from '../../3d-engine/staged-location/png-encode';
 
-/**
- * The photo straight down over a structure's footprint (+5 m), rendered once from the district's photo tiles and kept
- * beside the scan, for sb.massing's roof objects (outlines from the photo, heights from the scan).
- */
-export function roofPhotoFor(note: StructureScanNote): { path: string; frame: { x0: number; z0: number; texel: number } } | undefined {
-    if (!note.districtGlb || !fs.existsSync(note.districtGlb) || !note.plan?.[0]?.length) return undefined;
-    const xs = note.plan.flat().map(p => p[0]), zs = note.plan.flat().map(p => p[1]);
-    const x0 = Math.floor(Math.min(...xs) - 5), z0 = Math.floor(Math.min(...zs) - 5);
-    const texel = 0.06;
-    const out = note.scanGlb.replace(/\.glb$/i, `_roof_photo_${x0}_${z0}.png`);
-    const frameFile = out.replace(/\.png$/, '.json');
-    if (!fs.existsSync(out) || !fs.existsSync(frameFile)) {
-        const frame = { x0, z0, widthM: Math.ceil(Math.max(...xs) + 5) - x0, heightM: Math.ceil(Math.max(...zs) + 5) - z0 };
-        const photo = renderTopDownPhoto(readTileTriangles(fs.readFileSync(note.districtGlb)), frame, { texelM: texel, maxPx: 2000 });
-        fs.writeFileSync(out, encodePng(photo.width, photo.height, photo.rgba, 4));
-        // the texel the renderer used (it grows past `texel` to stay under maxPx)
-        fs.writeFileSync(frameFile, JSON.stringify({ x0, z0, texel: photo.texelM }));
-    }
-    return { path: out, frame: JSON.parse(fs.readFileSync(frameFile, 'utf8')) };
-}
-
-/** The open staged scene's structure scan (orchestrator.ts writes it per run), as the script's SCAN_* variables. */
-export interface StructureScanNote { scanGlb: string; districtGlb?: string; groundY: number; plan: Array<Array<[number, number]>>; planSource?: string; place?: string }
+export { roofPhotoFor, type StructureScanNote } from '../../3d-engine/staged-location/scan-massing';
 
 /** The structure scan of the scene on the canvas when it is a staged build whose run recorded one and whose files still exist. */
 export function structureScanOf(activeArtifact: unknown, cache: Pick<StageCache, 'readRunNote'> = new StageCache({ workspaceRoot: stagedWorkspaceRoot() })): { runId: string; note: StructureScanNote } | undefined {
