@@ -41,6 +41,8 @@ struct RayHit {
     uint32_t triangleIndex{0};
     Vec3 position{0.0f, 0.0f, 0.0f};
     Vec3 normal{0.0f, 1.0f, 0.0f};
+    /** The mesh's own texture UV at the hit, barycentric-interpolated from the triangle's vertices (not u/v above, which are barycentric weights). */
+    Vec2 texCoord{0.0f, 0.0f};
     bool hit{false};
 };
 
@@ -372,6 +374,7 @@ public:
                             hit.triangleIndex = triIdx;
                             hit.position = ray.at(t);
                             hit.normal = (v0.normal * (1.0f - u - v) + v1.normal * u + v2.normal * v).normalized();
+                            hit.texCoord = v0.uv * (1.0f - u - v) + v1.uv * u + v2.uv * v;
                             hit.hit = true;
                             foundHit = true;
                         }

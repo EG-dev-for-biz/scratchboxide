@@ -63,7 +63,7 @@ function tempPath(prefix: string, ext: string): string {
 export const BVH_QUERY_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'mesh_bvh_raycast',
-        description: 'Cast rays through a 3D mesh (building, object, prop) using the native SAH-binned BVH (scratchbox_bvh.hpp). Detects intersections, surface normals, and triangle data. Useful for collision detection, line-of-sight/occlusion tests, gap detection, and surface point queries. Works on any GLB: geographic tiles, photogrammetry, procedural builds.',
+        description: 'Cast rays through a 3D mesh (building, object, prop) using the native SAH-binned BVH (scratchbox_bvh.hpp). Detects intersections, surface normals, triangle data, and the mesh\'s own texture UV at the hit (barycentric-interpolated from the hit triangle\'s vertices, not the barycentric u/v also returned). Useful for collision detection, line-of-sight/occlusion tests, gap detection, surface point queries, and projecting a 2D image or mask (any camera, posed or not) onto a mesh\'s texture space one ray per pixel. Works on any GLB: geographic tiles, photogrammetry, procedural builds.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -187,8 +187,8 @@ int main(int argc, char** argv) {
             bvh::RayHit hit;
             bool found = tree.raycast(ray, hit);
             if (found) {
-                std::printf("{\\"rayIndex\\":%d,\\"hit\\":true,\\"distance\\":%.6f,\\"position\\":[%.6f,%.6f,%.6f],\\"normal\\":[%.6f,%.6f,%.6f],\\"triangleIndex\\":%u,\\"u\\":%.6f,\\"v\\":%.6f}",
-                    i, hit.t, hit.position.x, hit.position.y, hit.position.z, hit.normal.x, hit.normal.y, hit.normal.z, hit.triangleIndex, hit.u, hit.v);
+                std::printf("{\\"rayIndex\\":%d,\\"hit\\":true,\\"distance\\":%.6f,\\"position\\":[%.6f,%.6f,%.6f],\\"normal\\":[%.6f,%.6f,%.6f],\\"triangleIndex\\":%u,\\"u\\":%.6f,\\"v\\":%.6f,\\"texCoord\\":[%.6f,%.6f]}",
+                    i, hit.t, hit.position.x, hit.position.y, hit.position.z, hit.normal.x, hit.normal.y, hit.normal.z, hit.triangleIndex, hit.u, hit.v, hit.texCoord.x, hit.texCoord.y);
             } else {
                 std::printf("{\\"rayIndex\\":%d,\\"hit\\":false}", i);
             }
