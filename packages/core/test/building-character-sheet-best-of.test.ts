@@ -100,6 +100,33 @@ describe('character sheet colour gate and best of N', () => {
         expect(res.tried!.map(t => t.score)).toEqual([0.2, undefined, 0.9]);
     });
 
+    it('scores a near-miss sheet (one failing panel) as usable, leaving its failing panel marked', async () => {
+        let n = 0;
+        // every sheet widens the building in quadrant 1 (one failing panel); with scoreMaxFailingPanels 1 they are usable
+        const gen: StationImageGenerator = {
+            name: 'near-miss',
+            async generate(args) {
+                n++; const s = decodePng(args.blockoutPng); const rgba = Buffer.from(s.rgba), W = s.width, H = s.height;
+                for (let y = 0; y < H / 4; y++) {
+                    let last = -1;
+                    for (let x = W / 2; x < W; x++) { const i = (y * W + x) * 4; if (!(rgba[i] === 255 && rgba[i + 1] === 255 && rgba[i + 2] === 255)) last = x; }
+                    if (last >= 0) for (let x = last + 1; x <= Math.min(W - 1, last + 40); x++) rgba.copy(rgba, (y * W + x) * 4, (y * W + last) * 4, (y * W + last) * 4 + 4);
+                }
+                return encodePng(W, H, rgba);
+            }
+        };
+        const res = await beautifyCharacterSheet(renderer, gen, stations(), 'Test Box', {
+            panelWidth: PW, renderMode: 'clay', maxRerolls: 2, candidates: 1, keepAccepted: 2, scoreMaxFailingPanels: 1,
+            score: async sheet => ({ value: sheet.panels.filter(p => p.qc.passed).length })
+        });
+        expect(n).toBe(2);                            // two usable sheets collected, then it stops
+        expect(res.accepted).toBe(false);             // honest: a panel failed
+        expect(res.usable).toBe(true);
+        expect(res.panels[1].qc.passed).toBe(false);  // the caller leaves this panel out
+        expect(res.panels.filter(p => p.qc.passed)).toHaveLength(3);
+        expect(res.score?.value).toBe(3);
+    });
+
     it('with no good candidate it spends every round and returns the best it saw', async () => {
         const gen: StationImageGenerator = {
             name: 'always-lined',

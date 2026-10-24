@@ -49,8 +49,15 @@ export interface CharacterSheetOptions {
      * explained across accepted sheets). Without it the first accepted sheet is kept.
      */
     score?: (sheet: CharacterSheetResult) => Promise<{ value: number; detail?: unknown }>;
-    /** With `score`: accepted sheets to collect (within the round budget) before choosing between them (default 2). */
+    /** With `score`: usable sheets to collect (within the round budget) before choosing between them (default 2). */
     keepAccepted?: number;
+    /**
+     * With `score`: a sheet with at most this many failing panels (and no dividing lines) is still usable and is scored
+     * (default 0: only fully accepted sheets). Its failing panels are marked (qc.passed false), so the caller lays only the
+     * passing ones. Few whole sheets pass (10-17 % on Haughwout, most of the rest on one drifting panel), so the score
+     * otherwise rarely has two sheets to choose between.
+     */
+    scoreMaxFailingPanels?: number;
     styleSuffix?: string;
     signal?: AbortSignal;
 }
@@ -196,8 +203,10 @@ export interface CharacterSheetResult {
     attempts: number;
     /** Every sheet generated, in order: whether it passed, its failing panels, colour shift and outline miss. */
     tried?: Array<{ attempt: number; accepted: boolean; failingPanels: number; bordersPassed: boolean; colourShift: number; outlineMiss: number; score?: number }>;
-    /** The `score` of this sheet, when one was given and the sheet passed every check. */
+    /** The `score` of this sheet, when one was given and the sheet was usable. */
     score?: { value: number; detail?: unknown };
+    /** Usable for the caller: accepted, or (scoreMaxFailingPanels) only a few panels failed, which the caller leaves out. */
+    usable?: boolean;
     modelUsed?: string;
     modelNote?: string;
 }
@@ -290,8 +299,10 @@ export async function beautifyCharacterSheet(
             tried.push({ attempt: attempts, accepted: res.accepted, failingPanels: res.panels.filter(p => !p.qc.passed).length, bordersPassed: res.borders.passed, colourShift: +colourShift(res.panels).toFixed(2), outlineMiss: +outlineMiss(res.panels).toFixed(4) });
             if (!best || better(res, best)) best = res;
         }
-        // only sheets that passed every check are scored (the score reads them; a failed one is not used anyway)
-        const passed = round_.filter(r => r.accepted);
+        // only usable sheets are scored: every check passed, or (scoreMaxFailingPanels) a few panels failed and are left out
+        const maxFail = options.score ? Math.max(0, Math.floor(options.scoreMaxFailingPanels ?? 0)) : 0;
+        const passed = round_.filter(r => r.borders.passed && r.panels.filter(p => !p.qc.passed).length <= maxFail);
+        passed.forEach(r => { r.usable = true; });
         if (options.score && passed.length) {
             const scores = await Promise.all(passed.map(r => options.score!(r)));
             passed.forEach((r, i) => { r.score = scores[i]; const t = tried[attempts - round_.length + round_.indexOf(r)]; if (t) t.score = +scores[i].value.toFixed(4); });
