@@ -37,6 +37,16 @@ export * from './location-evidence-tools';
 export * from './location-reference-tools';
 export * from './surface-material-tools';
 export * from './bvh-query-tools';
+export * from './chrono-shadow-tools';
+export * from './vanishing-point-tools';
+export * from './tile-elevation-tools';
+export * from './csg-aperture-tools';
+export * from './glass-fracture-tools';
+export * from './trajectory-collision-tools';
+export * from './bay-rhythm-tools';
+export * from './rigidbody-drop-tools';
+export * from './xpbd-cloth-tools';
+export * from './sh9-lighting-tools';
 
 
 import type { ToolDeclaration, ToolHandler } from './types';
@@ -114,6 +124,46 @@ import {
     BVH_QUERY_TOOL_DECLARATIONS,
     bvhQueryHandlers
 } from './bvh-query-tools';
+import {
+    CHRONO_SHADOW_TOOL_DECLARATIONS,
+    chronoShadowHandlers
+} from './chrono-shadow-tools';
+import {
+    VANISHING_POINT_TOOL_DECLARATIONS,
+    vanishingPointHandlers
+} from './vanishing-point-tools';
+import {
+    TILE_ELEVATION_TOOL_DECLARATIONS,
+    tileElevationHandlers
+} from './tile-elevation-tools';
+import {
+    CSG_APERTURE_TOOL_DECLARATIONS,
+    csgApertureHandlers
+} from './csg-aperture-tools';
+import {
+    GLASS_FRACTURE_TOOL_DECLARATIONS,
+    glassFractureHandlers
+} from './glass-fracture-tools';
+import {
+    TRAJECTORY_COLLISION_TOOL_DECLARATIONS,
+    trajectoryCollisionHandlers
+} from './trajectory-collision-tools';
+import {
+    BAY_RHYTHM_TOOL_DECLARATIONS,
+    bayRhythmHandlers
+} from './bay-rhythm-tools';
+import {
+    RIGIDBODY_DROP_TOOL_DECLARATIONS,
+    rigidbodyDropHandlers
+} from './rigidbody-drop-tools';
+import {
+    XPBD_CLOTH_TOOL_DECLARATIONS,
+    xpbdClothHandlers
+} from './xpbd-cloth-tools';
+import {
+    SH9_LIGHTING_TOOL_DECLARATIONS,
+    sh9LightingHandlers
+} from './sh9-lighting-tools';
 
 export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...CANVAS_TOOL_DECLARATIONS,
@@ -156,7 +206,17 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...TURNAROUND_TOOL_DECLARATIONS,
     ...LENS_TOOL_DECLARATIONS,
     ...BROWSER_TOOL_DECLARATIONS,
-    ...BVH_QUERY_TOOL_DECLARATIONS
+    ...BVH_QUERY_TOOL_DECLARATIONS,
+    ...CHRONO_SHADOW_TOOL_DECLARATIONS,
+    ...VANISHING_POINT_TOOL_DECLARATIONS,
+    ...TILE_ELEVATION_TOOL_DECLARATIONS,
+    ...CSG_APERTURE_TOOL_DECLARATIONS,
+    ...GLASS_FRACTURE_TOOL_DECLARATIONS,
+    ...TRAJECTORY_COLLISION_TOOL_DECLARATIONS,
+    ...BAY_RHYTHM_TOOL_DECLARATIONS,
+    ...RIGIDBODY_DROP_TOOL_DECLARATIONS,
+    ...XPBD_CLOTH_TOOL_DECLARATIONS,
+    ...SH9_LIGHTING_TOOL_DECLARATIONS
 ];
 
 export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
@@ -200,7 +260,19 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...browserHandlers,
     ...botanicalTreeHandlers,
     ...sbRoadieHandlers,
-    ...Object.fromEntries(bvhQueryHandlers.map(([decl, handler]) => [decl.name, handler]))
+    ...Object.fromEntries([
+        ...bvhQueryHandlers,
+        ...chronoShadowHandlers,
+        ...vanishingPointHandlers,
+        ...tileElevationHandlers,
+        ...csgApertureHandlers,
+        ...glassFractureHandlers,
+        ...trajectoryCollisionHandlers,
+        ...bayRhythmHandlers,
+        ...rigidbodyDropHandlers,
+        ...xpbdClothHandlers,
+        ...sh9LightingHandlers
+    ].map(([decl, handler]) => [decl.name, handler]))
 };
 
 export {

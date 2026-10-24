@@ -133,10 +133,9 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
             return 'ziggurat';
         }
 
-        // -0.96. High-Speed Ballistics, Voronoi Glass Fracture & Supersonic Impact
-        if (/\b(?:bullet|bully\s*going\s*through|plate\s*of\s*glass|glass\s*shatter|shatter(?:ed|ing)?|fracture|glass\s*shards?|high\s*speed\s*impact|projectile|ballistics?|penetrat(?:e|ion)|shattering\s*glass)\b/i.test(text)) {
-            return 'glass_shatter';
-        }
+        // Ballistic glass fracture is reachable via the explicit vfx_fracture_glass_pane tool
+        // (ADA rule 2: no keyword-noun-list routing); this theme/case stays for any caller that
+        // still names 'glass_shatter' directly.
 
         // -0.988. Historical Battlefield / Lexington 1776 / Castle Siege (checked before geospatial so Battle of Lexington 1776 is not treated as modern tile)
         if (/lexington|concord|1776|battle|revolution|redcoat|minuteman|militia|firing\s*line|bunker\s*hill|gettysburg|waterloo|siege|castle\s*siege|warfare|historical\s*scene/i.test(text)) {
