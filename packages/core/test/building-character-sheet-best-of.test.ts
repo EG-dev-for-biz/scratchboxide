@@ -76,6 +76,30 @@ describe('character sheet colour gate and best of N', () => {
         expect(res.borders.passed).toBe(true);
     });
 
+    it('with a score, keeps sampling until two sheets pass and keeps the higher-scoring one; failed sheets are never scored', async () => {
+        let n = 0;
+        // sheet 2 draws dividing lines (fails); sheets 1 and 3 are clean; the score prefers sheet 3
+        const gen: StationImageGenerator = {
+            name: 'scored',
+            async generate(args) {
+                const k = ++n; const s = decodePng(args.blockoutPng); const rgba = Buffer.from(s.rgba);
+                if (k === 2) for (let t = 0; t < 2; t++) for (let y = 0; y < s.height; y++) { const i = (y * s.width + s.width / 2 - 1 + t) * 4; rgba[i] = rgba[i + 1] = rgba[i + 2] = 20; }
+                rgba[0] = k;                           // a mark the score reads back: which draw this sheet was
+                return encodePng(s.width, s.height, rgba);
+            }
+        };
+        const scored: number[] = [];
+        const res = await beautifyCharacterSheet(renderer, gen, stations(), 'Test Box', {
+            panelWidth: PW, renderMode: 'clay', maxRerolls: 3, candidates: 1, keepAccepted: 2,
+            score: async sheet => { const k = decodePng(sheet.sheetPng).rgba[0]; scored.push(k); return { value: k === 3 ? 0.9 : 0.2, detail: { draw: k } }; }
+        });
+        expect(res.attempts).toBe(3);                // 1 (passes), 2 (fails), 3 (passes): two accepted, stop
+        expect(scored.sort()).toEqual([1, 3]);        // the failed sheet was not scored
+        expect(res.score?.value).toBe(0.9);
+        expect((res.score?.detail as any).draw).toBe(3);
+        expect(res.tried!.map(t => t.score)).toEqual([0.2, undefined, 0.9]);
+    });
+
     it('with no good candidate it spends every round and returns the best it saw', async () => {
         const gen: StationImageGenerator = {
             name: 'always-lined',

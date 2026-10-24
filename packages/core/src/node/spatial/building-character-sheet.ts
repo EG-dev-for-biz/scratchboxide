@@ -42,6 +42,15 @@ export interface CharacterSheetOptions {
      * Haughwout repeat repainted the grey cast iron red brick, 2026-10-24); several give the gate something to choose from.
      */
     candidates?: number;
+    /**
+     * Ranks the sheets that pass every check by what they are for: e.g. pipeline H lays the panels on its wall plates,
+     * reads them, and returns how much of each wall the reading explains times its edge precision. Higher is better.
+     * Sheet checks only say a sheet is usable; two usable sheets can read very differently (Haughwout, 2026-10-24: 13-28 %
+     * explained across accepted sheets). Without it the first accepted sheet is kept.
+     */
+    score?: (sheet: CharacterSheetResult) => Promise<{ value: number; detail?: unknown }>;
+    /** With `score`: accepted sheets to collect (within the round budget) before choosing between them (default 2). */
+    keepAccepted?: number;
     styleSuffix?: string;
     signal?: AbortSignal;
 }
@@ -186,7 +195,9 @@ export interface CharacterSheetResult {
     accepted: boolean;
     attempts: number;
     /** Every sheet generated, in order: whether it passed, its failing panels, colour shift and outline miss. */
-    tried?: Array<{ attempt: number; accepted: boolean; failingPanels: number; bordersPassed: boolean; colourShift: number; outlineMiss: number }>;
+    tried?: Array<{ attempt: number; accepted: boolean; failingPanels: number; bordersPassed: boolean; colourShift: number; outlineMiss: number; score?: number }>;
+    /** The `score` of this sheet, when one was given and the sheet passed every check. */
+    score?: { value: number; detail?: unknown };
     modelUsed?: string;
     modelNote?: string;
 }
@@ -263,20 +274,31 @@ export async function beautifyCharacterSheet(
     // fewest failing panels, then (gate on) the smallest colour shift, then the smallest outline miss
     const better = (a: CharacterSheetResult, b: CharacterSheetResult) => failing(a) !== failing(b) ? failing(a) < failing(b)
         : gate && colourShift(a.panels) !== colourShift(b.panels) ? colourShift(a.panels) < colourShift(b.panels) : outlineMiss(a.panels) < outlineMiss(b.panels);
-    // maxRerolls + 1 rounds, `candidates` sheets each; the first round with an accepted sheet ends it
-    for (let round = 0; round <= maxRerolls; round++) {
+    // maxRerolls + 1 rounds, `candidates` sheets each. Without `score` the first round with an accepted sheet ends it; with
+    // one, rounds go on until `keepAccepted` sheets passed (or the budget is spent) and the best-scoring accepted sheet wins.
+    const want = options.score ? Math.max(1, Math.floor(options.keepAccepted ?? 2)) : 1;
+    const accepted: CharacterSheetResult[] = [];
+    for (let round = 0; round <= maxRerolls && accepted.length < want; round++) {
         if (options.signal?.aborted) throw options.signal.reason instanceof Error ? options.signal.reason : Object.assign(new Error('Character sheet was stopped'), { name: 'AbortError' });
         const answers = await Promise.all(Array.from({ length: perRound }, () => generator.generate({ prompt, blockoutPng: inputPng, aspectRatio: aspectLabel, width: SW, height: SH, imageSize: '4K', signal: options.signal })));
-        let roundAccepted = false;
+        const round_: CharacterSheetResult[] = [];
         for (const a of answers) {
             attempts++;
             const { png, modelUsed, modelNote } = toStationImageAnswer(a);
             const res = evaluate(png, modelUsed, modelNote);
+            round_.push(res);
             tried.push({ attempt: attempts, accepted: res.accepted, failingPanels: res.panels.filter(p => !p.qc.passed).length, bordersPassed: res.borders.passed, colourShift: +colourShift(res.panels).toFixed(2), outlineMiss: +outlineMiss(res.panels).toFixed(4) });
             if (!best || better(res, best)) best = res;
-            roundAccepted = roundAccepted || res.accepted;
         }
-        if (roundAccepted) break;
+        // only sheets that passed every check are scored (the score reads them; a failed one is not used anyway)
+        const passed = round_.filter(r => r.accepted);
+        if (options.score && passed.length) {
+            const scores = await Promise.all(passed.map(r => options.score!(r)));
+            passed.forEach((r, i) => { r.score = scores[i]; const t = tried[attempts - round_.length + round_.indexOf(r)]; if (t) t.score = +scores[i].value.toFixed(4); });
+        }
+        accepted.push(...passed);
     }
+    if (options.score && accepted.length) best = accepted.reduce((a, b) => ((b.score?.value ?? -Infinity) > (a.score?.value ?? -Infinity) ? b : a));
+    else if (accepted.length) best = accepted.reduce((a, b) => (better(b, a) ? b : a));
     return { ...best!, attempts, tried };
 }
