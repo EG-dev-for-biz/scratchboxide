@@ -68,7 +68,7 @@ import { BRIEF_NEARBY_POI_M } from './brief';
 import type { GroundedReferenceClient } from '../../../spatial/search-grounded-reference';
 import type { LedgerEntry } from '../pipeline-h/ledger';
 
-export const PIPELINE_G_VERSION = `pipeline-g/v3+${PIPELINE_G_READ_VERSION}`;
+export const PIPELINE_G_VERSION = `pipeline-g/v4+${PIPELINE_G_READ_VERSION}`;  // v4: a roof object's fitted roof must stay within its own height
 /** Native build parameters: the massing only, nothing baked from the tile, no scanned residual. */
 export const G_BUILD_PARAMS = { bake: 0, residual: 0, sections: 0, topdown: 0, snapMaxM: 0 } as const;
 /** Plates read at once. */
