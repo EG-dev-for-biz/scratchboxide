@@ -40,6 +40,9 @@ import { ProjectContextGraphService } from './project-context-graph-service';
 import { UserMemoriesService } from './user-memories-service';
 import { WorkspaceConfigService } from './workspace-config-service';
 import type { SubagentRunResult } from './gemini/tools/types';
+import type { ToolNodeCatalogEntry, ToolNodeRunEvent, ToolNodeRunRequest, ToolNodeRunResponse } from '../common/tool-node-protocol';
+import type { StageEvent } from '../common/spatial/staged-location-contracts';
+import { buildToolNodeCatalog } from './gemini/tool-node-catalog';
 
 const SUBAGENT_BRIEF = `You are a research subagent working for another agent. You cannot see its conversation; everything you need is in the task below. Use read-only tools to investigate, then reply with a concise report: the answer first, then the evidence (file paths with line numbers, exact names and values). Say plainly what you could not find or verify. Do not ask questions; if the task is ambiguous, state your assumption and proceed.`;
 import { BrowserProxyService } from './browser-proxy-service';
@@ -296,6 +299,33 @@ export class GeminiService {
             executeSubagent: req => this.executeSubagentTask(req),
             runSubagent: (task, parent, signal) => this.runSubagent(task, parent, signal)
         };
+    }
+
+    /** Every tool the chat can call, for the canvas node library (tool nodes). */
+    listToolNodeCatalog(): ToolNodeCatalogEntry[] {
+        return buildToolNodeCatalog(this.toolRegistry);
+    }
+
+    /**
+     * Runs one tool outside a chat turn, for a canvas tool node: the same registry, argument coercion and handler the
+     * chat uses, with a context that carries no conversation (an empty prompt in `workspaceRoot`).
+     */
+    async runToolNode(request: ToolNodeRunRequest, signal?: AbortSignal, onEvent?: (event: ToolNodeRunEvent) => void): Promise<ToolNodeRunResponse> {
+        if (!this.toolRegistry.has(request.name)) throw new Error(`No tool named "${request.name}" is registered`);
+        const started = Date.now();
+        // the same hooks a chat turn gives a tool: progress, and each staged commit with its scene (the canvas applies it)
+        const ctx = {
+            ...this.createToolContext({ prompt: '', workspaceRoot: request.workspaceRoot, activeArtifact: request.activeArtifact }),
+            signal,
+            ...(onEvent ? {
+                reportProgress: (message: string, fraction?: number) => onEvent({ type: 'progress', message, fraction }),
+                emitStage: (stage: StageEvent, artifact?: CanvasArtifact) => onEvent({ type: 'stage', stage, artifact })
+            } : {})
+        };
+        const { exec, resultPayload } = await this.toolRegistry.dispatch(request.name, request.args, ctx);
+        const status = exec.status === 'failed' ? 'failed' : 'completed';
+        const error = status === 'failed' ? (typeof resultPayload.error === 'string' ? resultPayload.error : exec.summaryResult || `${request.name} failed`) : undefined;
+        return { success: status === 'completed', status, resultPayload, summary: exec.summaryResult, durationMs: Date.now() - started, error: error ? { message: error } : undefined };
     }
 
     /**

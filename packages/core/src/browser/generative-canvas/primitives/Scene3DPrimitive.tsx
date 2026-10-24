@@ -36,6 +36,7 @@ import type {
     SculptBrushOptions
 } from '../services/mesh-sculpting-engine';
 import { useViewportHistory } from './scene3d/useViewportHistory';
+import { applyDisplayFlag } from './scene3d/displayFlag';
 import { ViewportHistoryButtons } from './scene3d/ViewportHistoryButtons';
 import type { HistoryEditMeta } from './scene3d/useViewportHistory';
 import { ObjectEditCapture, createGeometrySwapEdit } from '../services/viewport-history-deltas';
@@ -2350,6 +2351,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             if (el.dataset.state !== state) el.dataset.state = state;
         };
 
+        let displayFlagWasOn = false;
+        let compiledRootCache: THREE.Object3D | undefined;
         const animate = () => {
             try {
                 const now = performance.now();
@@ -2492,6 +2495,13 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 });
 
                 // the frame timed on the GPU for the adaptive tree budget (only while there are trees to adapt)
+                // the node graph's display flag: only what the flagged node made is drawn (restored when cleared)
+                const flag = sceneDataRef.current?.displayFlag;
+                if (flag || displayFlagWasOn) {
+                    if (!compiledRootCache?.parent) compiledRootCache = stack.scene?.getObjectByName(GENERATED_ROOT_NAME) ?? undefined;
+                    applyDisplayFlag(flag, { objectRoots: externalObjectsMapRef.current, meshes: customMeshRegistryRef.current, compiledRoot: compiledRootCache });
+                    displayFlagWasOn = !!flag;
+                }
                 const timeFrame = !!gpuFrameTimer?.available && treeLodControllers().length > 0;
                 if (timeFrame) gpuFrameTimer!.begin();
                 renderFrame();
@@ -3441,7 +3451,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // ---- 5d. Staged location builds: each committed layer revealed in its real build order, overlay, provenance ----
     const staged = useStagedBuild({
         state: readStagedBuild(sceneData), overriddenIds: materialOverriddenIds, stackRef, objectRootsRef: externalObjectsMapRef, loadStatus: externalLoadStatus, mutateSceneData, onPromptAction,
-        sceneObjects: sceneData.objects, view: (sceneData as StagedSceneData).stagedBuildView, onEvictedChange: setEvictedLayerIds
+        sceneObjects: sceneData.objects, view: (sceneData as StagedSceneData).stagedBuildView, onEvictedChange: setEvictedLayerIds, displayObjectIds: sceneData.displayFlag?.objectIds
     });
 
     // ---- 6. Custom meshes from schema (id-diffed, updated in place) ---------------
@@ -4440,6 +4450,18 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
                     <span>3D Scene</span>
                 </div>
+                {sceneData.displayFlag && (
+                    <button
+                        type="button"
+                        data-testid="sb-display-flag-badge"
+                        className="sb-3d-minimal-badge flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#121216]/80 backdrop-blur-md border border-sky-400/40 text-[10px] font-mono text-sky-200 shadow-md cursor-pointer"
+                        title="The node graph's display flag: only this node's result is shown. Click to show the final scene."
+                        onClick={() => mutateSceneData(prev => { const { displayFlag: _, ...rest } = prev; return rest as Scene3DData; }, { operator: 'clear_display_flag' }, { history: false })}
+                    >
+                        <span>◉ Showing: {sceneData.displayFlag.label}</span>
+                        <span className="text-zinc-400">· show final</span>
+                    </button>
+                )}
                 {onMorphArtifact && activeArtifact && (
                     <ViewAsMenu
                         currentType="3d-scene"

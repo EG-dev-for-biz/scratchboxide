@@ -250,8 +250,12 @@ async function runContextualPrimitiveTests() {
     const opNodes = graphFrom3D.nodes.filter(n => n.id.startsWith('op-'));
     assert.strictEqual(opNodes.length, expectedOpCount,
         'Node graph should contain exactly one node per real operatorStack entry');
-    assert.strictEqual(graphFrom3D.nodes.length, expectedMeshCount + 3 + expectedOpCount,
-        'Node graph should be mesh nodes plus camera/environment/renderer scaffold plus real operator-history nodes only');
+    // and one node per scene object (placed models, tiles, splats), each feeding the Output
+    const expectedObjectCount = sceneData1.objects?.length ?? 0;
+    assert.strictEqual(graphFrom3D.nodes.filter(n => n.id.startsWith('obj-')).length, expectedObjectCount,
+        'Node graph should contain exactly one node per scene object');
+    assert.strictEqual(graphFrom3D.nodes.length, expectedMeshCount + 3 + expectedOpCount + expectedObjectCount,
+        'Node graph should be mesh and object nodes plus camera/environment/output scaffold plus real operator-history nodes only');
     const firstMesh = sceneData1.customMeshes![0];
     const firstMeshNode = graphFrom3D.nodes.find(n => n.id === `mesh-${firstMesh.id}`);
     assert.ok(firstMeshNode, 'Each scene mesh should produce a corresponding graph node by id');

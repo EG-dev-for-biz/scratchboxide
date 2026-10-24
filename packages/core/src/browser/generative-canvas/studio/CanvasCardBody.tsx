@@ -286,6 +286,7 @@ export const BoardGraphSpatialSurfaces: React.FC<ArtifactStageProps> = props => 
                     }}
                     onPromptAction={promptText => handleSurfaceAiPrompt(promptText)}
                     workspacePath={activeWorkspace.path}
+                    artifactId={activeArtifact?.type === 'node-graph' ? activeArtifact.id : undefined}
                 />
             </CanvasErrorBoundary>
         )}

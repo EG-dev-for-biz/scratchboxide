@@ -30,6 +30,8 @@ import {
     Scene3DData
 } from './canvas-types';
 import { stableProjectArtifactId } from '../../common/project-artifact-graph-protocol';
+import { stagedBuildToNodeGraph } from '../../common/staged-build-graph';
+import { sceneGraphKey } from './scene-graph-key';
 import { createOperatorEngine } from './services/direct-dispatch-operator-engine';
 import { synthesizeContextual3DScene } from './procedural-3d-synthesizer';
 import { slugify } from './services/text-utils';
@@ -1720,6 +1722,10 @@ function buildOperatorHistoryNodes(scene: Scene3DData, resolveMeshNodeId: (objec
 }
 
 export function morphScene3DToNodeGraph(scene: Scene3DData): NodeGraphData {
+    // a staged location build is its run: the build as one runnable tool node and its stages, read from the record
+    if (scene?.stagedBuild?.stages?.length) {
+        return { ...stagedBuildToNodeGraph(scene.stagedBuild), sourceArtifact: { type: '3d-scene', data: scene } };
+    }
     const title = scene?.title ? `${scene.title} — Scene Graph` : '3D Scene Graph';
     const meshes = Array.isArray(scene?.customMeshes) ? scene.customMeshes : [];
 
@@ -1727,7 +1733,7 @@ export function morphScene3DToNodeGraph(scene: Scene3DData): NodeGraphData {
         id: 'n-cam',
         label: 'Perspective Camera',
         subtitle: `FOV ${scene.camera?.fov ?? 45}° · mode ${scene.cameraMode ?? 'orbit'}`,
-        category: 'input',
+        category: 'camera',
         color: 'blue',
         status: 'completed',
         x: 60,
@@ -1738,23 +1744,24 @@ export function morphScene3DToNodeGraph(scene: Scene3DData): NodeGraphData {
         id: 'n-env',
         label: 'Environment',
         subtitle: scene.environment?.skybox ?? 'Skybox & Lighting',
-        category: 'transformation',
+        category: 'environment',
         color: 'amber',
         status: 'completed',
         x: 60,
         y: 420,
         parameters: { skybox: scene.environment?.skybox, lighting: scene.environment?.lighting, ground: scene.environment?.ground }
     };
+    // the graph's end: what the viewport shows (the whole scene, or what the display flag picks)
     const renderNode: GraphNode = {
         id: 'n-render',
-        label: 'WebGL Renderer',
-        subtitle: scene.renderMode ? `${scene.renderMode} render mode` : 'Renderer',
+        label: 'Output: viewport',
+        subtitle: scene.renderMode ? `${scene.renderMode} render mode` : 'The rendered scene',
         category: 'output',
         color: 'emerald',
         status: 'completed',
         x: 1040,
         y: 340,
-        parameters: { renderMode: scene.renderMode, animation: scene.animation }
+        parameters: { output: true, renderMode: scene.renderMode, animation: scene.animation, readOnly: true }
     };
 
     const tierCounts: Record<string, number> = {};
@@ -1799,31 +1806,50 @@ export function morphScene3DToNodeGraph(scene: Scene3DData): NodeGraphData {
         }
     }
 
+    // the scene's objects (placed models, tiles, splats, layers), each a node that feeds the Output like a mesh does
+    const objects = Array.isArray(scene?.objects) ? scene.objects : [];
+    const objectNodes: GraphNode[] = objects.map((o, row) => ({
+        id: `obj-${o.id}`,
+        label: (o.content?.metadata as { name?: string; title?: string } | undefined)?.name
+            || (o.content?.metadata as { title?: string } | undefined)?.title
+            || o.id,
+        subtitle: [o.content?.type, (o.content?.metadata as { source?: string } | undefined)?.source].filter(Boolean).join(' · ') || 'scene object',
+        category: 'object',
+        color: 'cyan',
+        status: 'completed',
+        x: 680,
+        y: 60 + row * 150,
+        parameters: { objectId: o.id, contentType: o.content?.type, uri: o.content?.durableUri }
+    }));
+    const objectEdges: GraphEdge[] = objects.map(o => ({ id: `e-obj-${o.id}-render`, source: `obj-${o.id}`, target: 'n-render', style: 'solid', color: 'cyan' }));
+    const envEdge: GraphEdge = { id: 'e-env-render', source: 'n-env', target: 'n-render', style: 'solid', color: 'amber' };
+    const objectsText = objects.length ? `, ${objects.length} object${objects.length === 1 ? '' : 's'}` : '';
+
     if (meshes.length === 0) {
         const glbMeshes = buildGlbMeshNodes(scene);
         if (glbMeshes) {
             const opHistory = buildOperatorHistoryNodes(scene, () => undefined);
-            const subtitle = `${glbMeshes.nodes.length} mesh node${glbMeshes.nodes.length === 1 ? '' : 's'} read from the compiled .glb (view-only — not backed by customMeshes)`
+            const subtitle = `${glbMeshes.nodes.length} mesh node${glbMeshes.nodes.length === 1 ? '' : 's'} read from the compiled .glb (view-only — not backed by customMeshes)${objectsText}`
                 + (opHistory ? `, ${opHistory.nodes.length} edit${opHistory.nodes.length === 1 ? '' : 's'} in history (view-only)` : '');
             return {
                 title,
                 subtitle,
-                nodes: [camNode, envNode, ...glbMeshes.nodes, renderNode, ...(opHistory?.nodes ?? [])],
-                edges: [edges[0], ...glbMeshes.edges, ...(opHistory?.edges ?? [])],
+                nodes: [camNode, envNode, ...glbMeshes.nodes, ...objectNodes, renderNode, ...(opHistory?.nodes ?? [])],
+                edges: [edges[0], envEdge, ...glbMeshes.edges, ...objectEdges, ...(opHistory?.edges ?? [])],
                 sourceArtifact: { type: '3d-scene', data: scene }
             };
         }
     }
 
     const opHistory = buildOperatorHistoryNodes(scene, objectId => meshIds.has(objectId) ? meshNodeId(objectId) : undefined);
-    const subtitle = `${meshes.length} mesh node${meshes.length === 1 ? '' : 's'} projected from the live scene`
+    const subtitle = `${meshes.length} mesh node${meshes.length === 1 ? '' : 's'} projected from the live scene${objectsText}`
         + (opHistory ? `, ${opHistory.nodes.length} edit${opHistory.nodes.length === 1 ? '' : 's'} in history (view-only)` : '');
 
     return {
         title,
         subtitle,
-        nodes: [camNode, envNode, ...meshNodes, renderNode, ...(opHistory?.nodes ?? [])],
-        edges: [...edges, ...(opHistory?.edges ?? [])],
+        nodes: [camNode, envNode, ...meshNodes, ...objectNodes, renderNode, ...(opHistory?.nodes ?? [])],
+        edges: [...edges, ...(meshes.length ? [] : [envEdge]), ...objectEdges, ...(opHistory?.edges ?? [])],
         sourceArtifact: { type: '3d-scene', data: scene }
     };
 }
@@ -2949,7 +2975,8 @@ export function morphArtifact(source: CanvasArtifact, targetType: PrimitiveType,
             return { id, title: kanbanData.title, summary: kanbanData.subtitle || 'Kanban Board morphed from 3D Scene', type: 'kanban-board', data: kanbanData, createdAt: new Date().toLocaleTimeString(), version: 1 };
         }
         if (targetType === 'node-graph') {
-            const graphData = morphScene3DToNodeGraph(sceneData);
+            // linked to its scene, so it follows it, carries the display flag and ends in its viewport (scene-node-graph.ts)
+            const graphData: NodeGraphData = { ...morphScene3DToNodeGraph(sceneData), stageViewOf: { artifactId: source.id, updatedAtMs: sceneData?.stagedBuild?.updatedAtMs ?? 0, key: sceneGraphKey(source) } };
             return { id, title: graphData.title, summary: graphData.subtitle || 'Node Graph morphed from 3D Scene', type: 'node-graph', data: graphData, createdAt: new Date().toLocaleTimeString(), version: 1 };
         }
         if (targetType === 'metric-dashboard') {

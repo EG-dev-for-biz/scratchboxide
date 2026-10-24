@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import * as React from 'react';
-import { CanvasArtifact, ChatMessage, PrimitiveType, StudioAppearanceConfig, StudioLayoutMode, StudioSettingsTab } from '../canvas-types';
+import { CanvasArtifact, ChatMessage, McpExecutionState, PrimitiveType, StudioAppearanceConfig, StudioLayoutMode, StudioSettingsTab } from '../canvas-types';
 import { ChatStore } from './chatStore';
 
 /**
@@ -23,6 +23,13 @@ export interface StudioActions {
     handleSelectVersion: (targetVersion: CanvasArtifact) => void;
     handleUpdateArtifact: (updatedArtifact: CanvasArtifact) => void;
     handleMorphArtifact: (morphedArtifact: CanvasArtifact) => void;
+    /**
+     * An artifact a canvas tool node's run produced or updated (a staged build's scene as its stages commit): kept in
+     * the session by id, and shown at once when it is the artifact on stage, without taking the stage from the graph.
+     */
+    applyStreamedArtifact: (artifact: CanvasArtifact) => void;
+    /** A canvas tool node's run, written into the chat as a tool card so the conversation and the model see it. */
+    recordToolNodeRun: (exec: McpExecutionState, note: string) => void;
     handleSurfaceAiPrompt: (promptText: string) => void;
     openSettingsToTab: (tab: StudioSettingsTab) => void;
     onExecuteCommand?: (commandId: string) => void;
@@ -96,6 +103,16 @@ export function useStudioActions(): StudioActions {
         throw new Error('useStudioActions must be used within a StudioProvider');
     }
     return ctx;
+}
+
+/** The studio actions, or undefined outside a StudioProvider (a primitive rendered on its own, as in tests). */
+export function useOptionalStudioActions(): StudioActions | undefined {
+    return React.useContext(StudioActionsContext);
+}
+
+/** The studio state, or undefined outside a StudioProvider. */
+export function useOptionalStudioState(): StudioStateSnapshot | undefined {
+    return React.useContext(StudioStateContext);
 }
 
 export function useStudioState(): StudioStateSnapshot {

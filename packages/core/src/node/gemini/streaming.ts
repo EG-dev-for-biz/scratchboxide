@@ -20,6 +20,7 @@ import type {
 } from '../../common/gemini-protocol';
 import type { CanvasArtifact, McpExecutionState } from '../../browser/generative-canvas/canvas-types';
 import type { StageEvent } from '../../common/spatial/staged-location-contracts';
+import { compactResultFields } from '../../common/tool-node-graph';
 import {
     DEFAULT_SUBAGENT_MODEL,
     GeminiClient,
@@ -1164,12 +1165,14 @@ export class StreamingEngine {
                     timestamp: new Date().toLocaleTimeString(),
                     steps: [{ id: 's1', title: `Run ${toolName}`, status: 'failed', durationMs: Date.now() - startedAt }],
                     summaryResult: message,
-                    durationMs: Date.now() - startedAt
+                    durationMs: Date.now() - startedAt,
+                    args: toolCall.args as Record<string, any> | undefined
                 };
                 return { exec, resultPayload: { success: false, error: message, timedOut: true } };
             }
-            // Same id as the running card, so the result replaces it; the real duration rather than a nominal one.
-            return { ...outcome, exec: { ...outcome.exec, id: execId, durationMs: Date.now() - startedAt } };
+            // Same id as the running card, so the result replaces it; the real duration rather than a nominal one. The call's
+            // arguments and its result's short fields stay with it, so the turn can be laid out as a tool node graph.
+            return { ...outcome, exec: { ...outcome.exec, id: execId, durationMs: Date.now() - startedAt, args: toolCall.args as Record<string, any> | undefined, resultFields: compactResultFields(outcome.resultPayload) } };
         } finally {
             settled = true;
             clearTimeout(maxTimer);

@@ -160,6 +160,7 @@ export const BentoStageLayout: React.FC<BentoStageLayoutProps> = ({
                         data={artifact.data as NodeGraphData}
                         onUpdate={updatedData => onUpdateArtifact?.({ ...artifact, data: updatedData })}
                         workspacePath={workspacePath}
+                        artifactId={artifact.id}
                     />
                 );
             default:
