@@ -188,7 +188,28 @@ int main(int argc, char** argv) {
     float midY = profile.groundElevation + profile.totalHeight * 0.45f;
     float sliceMinY = midY - 1.5f;
     float sliceMaxY = midY + 1.5f;
-    BayRhythmAnalysis bayRhythm = BayRhythmAutocorrelation::analyze(points, minX, maxX, sliceMinY, sliceMaxY, stepSize);
+
+    // BayRhythmAutocorrelation::analyze() builds its signal as a raw vertex COUNT per s-bucket
+    // (signal[idx] += 1.0f), not an occupancy or area measure. A window jamb/sill is tessellated
+    // with far more vertices per linear meter than a flat pier face of the same physical width, so
+    // the raw count is skewed toward geometric detail rather than true solid/void structure. Fix
+    // this at the input, not inside the shared header: keep at most one representative point per
+    // s-bucket within the elevation slice, so each bucket contributes at most 1.0 regardless of
+    // how densely that patch happens to be tessellated.
+    std::vector<Vec3> dedupPoints;
+    {
+        int numBuckets = std::max(8, static_cast<int>(std::ceil((maxX - minX) / stepSize)));
+        std::vector<bool> seen(static_cast<size_t>(numBuckets), false);
+        dedupPoints.reserve(static_cast<size_t>(numBuckets));
+        for (const auto& p : points) {
+            if (p.y < sliceMinY || p.y > sliceMaxY || p.x < minX || p.x > maxX) continue;
+            int idx = std::clamp(static_cast<int>((p.x - minX) / stepSize), 0, numBuckets - 1);
+            if (seen[static_cast<size_t>(idx)]) continue;
+            seen[static_cast<size_t>(idx)] = true;
+            dedupPoints.push_back(p);
+        }
+    }
+    BayRhythmAnalysis bayRhythm = BayRhythmAutocorrelation::analyze(dedupPoints, minX, maxX, sliceMinY, sliceMaxY, stepSize);
 
     std::printf(
         "{\\"elevationProfile\\":{\\"groundElevation\\":%.6f,\\"topElevation\\":%.6f,\\"totalHeight\\":%.6f,\\"storyElevations\\":[",
@@ -216,10 +237,10 @@ int main(int argc, char** argv) {
     std::printf(
         "]},\\"bayRhythm\\":{\\"fundamentalBayWidth\\":%.6f,\\"pierWidth\\":%.6f,\\"clearOpeningWidth\\":%.6f,"
         "\\"autocorrelationScore\\":%.6f,\\"estimatedBayCount\\":%d},"
-        "\\"scanBounds\\":{\\"minX\\":%.6f,\\"maxX\\":%.6f,\\"sliceMinY\\":%.6f,\\"sliceMaxY\\":%.6f,\\"stepSize\\":%.6f,\\"usedWallFrame\\":%s,\\"pointsInWall\\":%zu}}\\n",
+        "\\"scanBounds\\":{\\"minX\\":%.6f,\\"maxX\\":%.6f,\\"sliceMinY\\":%.6f,\\"sliceMaxY\\":%.6f,\\"stepSize\\":%.6f,\\"usedWallFrame\\":%s,\\"pointsInWall\\":%zu,\\"occupiedBuckets\\":%zu}}\\n",
         bayRhythm.fundamentalBayWidth, bayRhythm.pierWidth, bayRhythm.clearOpeningWidth,
         bayRhythm.autocorrelationScore, bayRhythm.estimatedBayCount,
-        minX, maxX, sliceMinY, sliceMaxY, stepSize, hasWallFrame ? "true" : "false", points.size());
+        minX, maxX, sliceMinY, sliceMaxY, stepSize, hasWallFrame ? "true" : "false", points.size(), dedupPoints.size());
     return 0;
 }
 `;
@@ -263,7 +284,7 @@ interface BayRhythmAnalysisResult {
 interface BayRhythmAnalyzeReport {
     elevationProfile: TectonicElevationProfileResult;
     bayRhythm: BayRhythmAnalysisResult;
-    scanBounds: { minX: number; maxX: number; sliceMinY: number; sliceMaxY: number; stepSize: number; usedWallFrame: boolean; pointsInWall: number };
+    scanBounds: { minX: number; maxX: number; sliceMinY: number; sliceMaxY: number; stepSize: number; usedWallFrame: boolean; pointsInWall: number; occupiedBuckets: number };
 }
 
 function hasWallFrameParams(r: BayRhythmAnalyzeRequest): boolean {
