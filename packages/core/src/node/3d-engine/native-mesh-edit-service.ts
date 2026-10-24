@@ -21,6 +21,7 @@ import * as path from 'path';
 import { NativeCppCompilerService } from './native-compiler-service';
 import { carryOverInputMaterial, ensurePipelineBinary, rawMeshReadIssues, runPipelineBinary } from './native-pipeline-binary';
 import { GeneratorFailedError, MissingInputError } from '../../common/errors/pipeline-errors';
+import { repoPath } from '../process/repo-python';
 
 type V3 = [number, number, number];
 
@@ -74,13 +75,13 @@ export class NativeMeshEditService {
     private readonly compiler = new NativeCppCompilerService();
 
     private binaryPath(): string {
-        return path.resolve(process.cwd(), 'build/3d-native/run_mesh_edit_pipeline');
+        return repoPath('build/3d-native/run_mesh_edit_pipeline');
     }
 
     async ensureBinary(): Promise<string> {
         return ensurePipelineBinary({
             binaryPath: this.binaryPath(),
-            sourcePath: path.resolve(process.cwd(), 'scripts/run_mesh_edit_pipeline.cpp'),
+            sourcePath: repoPath('scripts/run_mesh_edit_pipeline.cpp'),
             includeDir: this.compiler.getSdkIncludePath()
         });
     }
