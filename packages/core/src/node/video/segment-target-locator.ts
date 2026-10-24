@@ -61,6 +61,8 @@ export interface LocateRequest {
     /** A region the target is known to be in (the user's box, or the previous frame's mask box on a video re-check). */
     hintBox?: NormBox;
     hintKind?: 'user-box' | 'previous-frame';
+    /** A second image — a user photo or a generated reference — shown alongside the first as what the target should look like. Never the only evidence: the model is still told to mark only what the first image actually shows. */
+    hintImage?: { bytes: Buffer; mimeType: string };
     signal?: AbortSignal;
 }
 
@@ -70,15 +72,18 @@ function f3(v: number): string {
     return (Math.round(v * 1000)).toString();
 }
 
-export function segmentLocatorPrompt(target: string, hintBox?: NormBox, hintKind?: LocateRequest['hintKind']): string {
+export function segmentLocatorPrompt(target: string, hintBox?: NormBox, hintKind?: LocateRequest['hintKind'], hasHintImage?: boolean): string {
     const hint = hintBox
         ? `\n${hintKind === 'previous-frame'
             ? 'In the previous video frame the target was inside'
             : 'The user says the target is inside'} box_2d [${f3(hintBox[1])}, ${f3(hintBox[0])}, ${f3(hintBox[3])}, ${f3(hintBox[2])}]; use it as a hint, but answer with what this image shows.`
         : '';
+    const hintImageNote = hasHintImage
+        ? '\nA second image follows the first: a reference for what the target should look like. Use it only to judge appearance (material, colour, style); mark what the FIRST image actually shows, not the reference itself, and only if the first image really does show the target.'
+        : '';
     return [
         'Find the thing described below in the image and give prompts for an interactive segmenter that will cut it out.',
-        `Target: ${JSON.stringify(target)}${hint}`,
+        `Target: ${JSON.stringify(target)}${hint}${hintImageNote}`,
         '',
         'Answer with JSON only, in this shape:',
         '{"found": true, "label": "<a few words for what you found>", "box_2d": [ymin, xmin, ymax, xmax], "positive": [[y, x], ...], "negative": [[y, x], ...]}',
@@ -202,7 +207,11 @@ export class SegmentTargetLocator {
         const started = Date.now();
         const attemptsBefore = chain.attempts.length;
         const image = { inlineData: { mimeType: req.mimeType, data: req.imageBytes.toString('base64') } };
-        const contents: Content[] = [{ role: 'user', parts: [image, { text: segmentLocatorPrompt(req.target, req.hintBox, req.hintKind) }] }];
+        const prompt = segmentLocatorPrompt(req.target, req.hintBox, req.hintKind, !!req.hintImage);
+        const parts: unknown[] = req.hintImage
+            ? [image, { text: prompt }, { inlineData: { mimeType: req.hintImage.mimeType, data: req.hintImage.bytes.toString('base64') } }]
+            : [image, { text: prompt }];
+        const contents: Content[] = [{ role: 'user', parts: parts as Content['parts'] }];
         const config = { responseMimeType: 'application/json', temperature: 0.1, ...(req.signal ? { abortSignal: req.signal } : {}) };
         let calls = 0;
         let last: LocatorCheck | undefined;

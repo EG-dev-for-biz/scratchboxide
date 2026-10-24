@@ -133,6 +133,11 @@ describe('infer_specular_materials: the tool shell end to end, with a synthetic 
         expect(payload.baked).toBeUndefined();
     }, 120_000);
 
+    it('rejects a hintImagePath that does not exist, rather than silently segmenting without it', async () => {
+        const handler = createSpecularMaterialsHandler({ segment: centerSquareSegmenter(0.3) });
+        await expect(handler({ glbPath: blueBoxGlb, hintImagePath: path.join(SCRATCH_DIR, 'does_not_exist.png') }, fakeCtx)).rejects.toThrow();
+    });
+
     it('bake: false reports regions without writing a new GLB', async () => {
         const handler = createSpecularMaterialsHandler({ segment: centerSquareSegmenter(0.3) });
         const outcome = await handler({ glbPath: blueBoxGlb, selfRenderViews: 6, bake: false }, fakeCtx);

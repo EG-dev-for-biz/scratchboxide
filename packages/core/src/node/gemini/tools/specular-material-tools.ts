@@ -22,6 +22,11 @@
  *     without the two-views-agree floor. Lowest confidence, labelled generated, and the result says plainly that the
  *     floor was dropped.
  *
+ * hintImagePath (either tier): a user photo or a generated reference the vision model is shown alongside each view
+ * it segments, as what the target should look like (segment-target-locator.ts). It sharpens what counts as a yes or
+ * no vote; it never becomes a vote itself, and never raises confidence — the tier and the agreement floor decide that
+ * exactly as they would without it.
+ *
  * Accepted regions are, by default, baked into a new copy of the mesh (specular-material-bake.ts) as a real
  * metallicRoughness texture at the mesh's own UV layout; nothing outside them changes. A mesh with more than one
  * material cannot be baked (specular-material-bake.ts's own limit) and is reported as such, not silently dropped.
@@ -36,6 +41,11 @@ import type { RenderedView } from '../../spatial/specular-canonical-views';
 import { projectMaskedViewsToUv, type SpecularProjectionResult } from '../../spatial/specular-material-projection';
 import { bakeSpecularMaterials } from '../../spatial/specular-material-bake';
 import type { ToolDeclaration, ToolHandler } from './types';
+
+function mimeFromPath(p: string): string {
+    const ext = p.slice(p.lastIndexOf('.') + 1).toLowerCase();
+    return ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/png';
+}
 
 export const SPECULAR_MATERIALS_TOOL_NAME = 'infer_specular_materials';
 
@@ -77,6 +87,7 @@ export const SPECULAR_MATERIALS_TOOL_DECLARATION: ToolDeclaration = {
             selfRenderViews: { type: 'NUMBER', description: 'Canonical views to render when no referenceViews are given (default 6).' },
             minAgreeingViews: { type: 'NUMBER', description: 'Independent views that must agree before a region is accepted (default 2; the same floor facade-materials.ts holds Street View to).' },
             allowSingleViewFallback: { type: 'BOOLEAN', description: 'If the first pass accepts nothing, try again without the agreement floor (lowest confidence, stated as such). Default false.' },
+            hintImagePath: { type: 'STRING', description: 'A user photo or a generated reference image, shown to the vision model alongside every view it segments, as what the target should look like. Sharpens what counts as a match; never raises confidence or counts as a vote itself — the tier and minAgreeingViews decide that exactly as without it.' },
             bake: { type: 'BOOLEAN', description: 'Write a new textured copy of the mesh with the accepted regions as a real metallicRoughness texture (default true). False just reports the regions.' },
             outputGlbPath: { type: 'STRING', description: 'Where to write the new copy (default glbPath with "_specular" before the extension).' }
         },
@@ -128,7 +139,10 @@ export function createSpecularMaterialsHandler(deps: { segment?: SegmentImage } 
         if (!fs.existsSync(glbPath)) throw new MissingInputError(SPECULAR_MATERIALS_TOOL_NAME, 'an existing glbPath', `got ${glbPath}`);
         const target = str(args.target) || FACADE_GLASS_TARGET;
         const minAgreeingViews = Math.max(1, Math.round(num(args.minAgreeingViews, 2)));
-        const segment = deps.segment ?? segmenterTool();
+        const hintImagePath = str(args.hintImagePath);
+        if (hintImagePath && !fs.existsSync(hintImagePath)) throw new MissingInputError(SPECULAR_MATERIALS_TOOL_NAME, 'an existing hintImagePath', `got ${hintImagePath}`);
+        const hintImage = hintImagePath ? { bytes: fs.readFileSync(hintImagePath), mimeType: mimeFromPath(hintImagePath) } : undefined;
+        const segment = deps.segment ?? segmenterTool(hintImage);
 
         const referenceViewsArg = Array.isArray(args.referenceViews) ? args.referenceViews : undefined;
         let tier: 'posed' | 'self-render' | 'single-view-fallback';
