@@ -35,14 +35,15 @@ const SCRATCH_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-specular-'));
 let wallGlb: string;
 
 // A camera at (0, 2, 5) looking down -z at the wall (right = +x, up = +y): world x = D * (px - cx) / fx,
-// world y = eyeY + D * (py - cy) / fy, where D = eye.z - wall.z = 5. width = height = raysPerAxis so the mask
-// aligns 1:1 with the ray grid, and the window's pixels can be computed analytically rather than by eye.
+// world y = eyeY - D * (py - cy) / fy (row 0 is the image's top, so a smaller py is higher in world), where
+// D = eye.z - wall.z = 5. width = height = raysPerAxis so the mask aligns 1:1 with the ray grid, and the
+// window's pixels can be computed analytically rather than by eye.
 const D = 5, EYE_Y = 2, SIZE = 256, FX = 256, FY = 256, CX = 128, CY = 128;
 function windowMask(present: boolean): Uint8Array {
     const m = new Uint8Array(SIZE * SIZE).fill(MASK_NO);
     if (!present) return m;
     for (let py = 0; py < SIZE; py++) {
-        const wy = EYE_Y + D * (py - CY) / FY;
+        const wy = EYE_Y - D * (py - CY) / FY;
         for (let px = 0; px < SIZE; px++) {
             const wx = D * (px - CX) / FX;
             // the window: world x in [-0.5, 0.5], y in [1.5, 2.5] -> uv x in [0.375, 0.625], uv y in [0.375, 0.625]
@@ -54,6 +55,14 @@ function windowMask(present: boolean): Uint8Array {
 
 function view(mask: Uint8Array): PinholeView {
     return { eye: [0, EYE_Y, D], right: [1, 0, 0], up: [0, 1, 0], fwd: [0, 0, -1], fx: FX, fy: FY, cx: CX, cy: CY, width: SIZE, height: SIZE, mask };
+}
+
+/** A mask near the TOP of the image (small py): correct vertical convention must land it near the top of the wall
+ *  (high world y, uv v close to 1), not mirrored to the bottom. Marks only py < SIZE / 4 (the image's top quarter). */
+function topOfImageMask(): Uint8Array {
+    const m = new Uint8Array(SIZE * SIZE).fill(MASK_NO);
+    for (let py = 0; py < SIZE / 4; py++) for (let px = 0; px < SIZE; px++) m[py * SIZE + px] = MASK_YES;
+    return m;
 }
 
 describe('projectMaskedViewsToUv: the two-views-must-agree floor, generalized to any mesh via raycasting', () => {
@@ -80,6 +89,17 @@ describe('projectMaskedViewsToUv: the two-views-must-agree floor, generalized to
         const vLo = toUv(y0, r.uvMin[1], r.uvMax[1]), vHi = toUv(y1, r.uvMin[1], r.uvMax[1]);
         expect(uLo).toBeGreaterThan(0.3); expect(uHi).toBeLessThan(0.7);
         expect(vLo).toBeGreaterThan(0.3); expect(vHi).toBeLessThan(0.7);
+    }, 60_000);
+
+    it('a mask near the TOP of the image (small py) lands near the TOP of the wall (high UV v), not mirrored to the bottom', async () => {
+        const views = [view(topOfImageMask()), view(topOfImageMask()), view(topOfImageMask())];
+        const r = await projectMaskedViewsToUv(wallGlb, views, { raysPerAxis: 64, gridSize: 128 });
+        expect(r.cellsAccepted).toBeGreaterThan(0);
+        const toUv = (c: number, lo: number, hi: number) => lo + (c / r.gridSize) * (hi - lo);
+        for (const region of r.regions) {
+            const vLo = toUv(region.bounds[1], r.uvMin[1], r.uvMax[1]);
+            expect(vLo).toBeGreaterThan(0.7);
+        }
     }, 60_000);
 
     it('rejects the window when only 1 of 3 views marks it (below the agreement floor)', async () => {

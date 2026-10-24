@@ -81,11 +81,13 @@ function viewRays(view: PinholeView, raysPerAxis: number): { originX: number; or
         const py = ((gy + 0.5) / raysPerAxis) * view.height;
         for (let gx = 0; gx < raysPerAxis; gx++) {
             const px = ((gx + 0.5) / raysPerAxis) * view.width;
+            // pixel row 0 is the image's top (row-major, top row first): a smaller py is "more up", so the up
+            // contribution is -dy, not +dy, or a pixel below centre would tilt the ray toward "up" instead of "down".
             const dx = (px - view.cx) / view.fx, dy = (py - view.cy) / view.fy;
             const dir = normalize([
-                view.fwd[0] + dx * view.right[0] + dy * view.up[0],
-                view.fwd[1] + dx * view.right[1] + dy * view.up[1],
-                view.fwd[2] + dx * view.right[2] + dy * view.up[2]
+                view.fwd[0] + dx * view.right[0] - dy * view.up[0],
+                view.fwd[1] + dx * view.right[1] - dy * view.up[1],
+                view.fwd[2] + dx * view.right[2] - dy * view.up[2]
             ]);
             rays.push({ originX: view.eye[0], originY: view.eye[1], originZ: view.eye[2], dirX: dir[0], dirY: dir[1], dirZ: dir[2] });
         }
