@@ -205,10 +205,12 @@ export function useArtifactSync(deps: UseArtifactSyncDeps) {
                 });
             }
 
+            // single-file lenses write to the first path they are given (else one shared default such as
+            // workflow.json), so each artifact is handed its own bound file; a sandbox's binding is a folder
             const unprojected = controller.unprojectUiChanges(
                 canonicalArtifact.id,
                 canonicalArtifact.data,
-                {}
+                canonicalArtifact.type === 'live-code-sandbox' ? {} : { [binding.primaryFilePath]: '' }
             );
             if (unprojected && Object.keys(unprojected.files).length > 0) {
                 WorkspaceConfigClient.getInstance().writeLensFiles(unprojected.files, activeWorkspace.path).catch(e =>

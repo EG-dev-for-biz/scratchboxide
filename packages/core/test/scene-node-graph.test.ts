@@ -95,3 +95,27 @@ describe('a scene the chat is still streaming', () => {
         expect(planCompanionGraphs([settled, ...next.graphs], next.done).graphs).toEqual([]);
     });
 });
+
+describe('a redraw keeps what the user did on the graph', () => {
+    it('keeps an added tool node, a hand-drawn edge and an unlinked edge unlinked; wires only nodes new to the scene', () => {
+        const g = companionNodeGraph(studio('scene-1', ['a'])).data as any;
+        const unlinked = g.edges.find((e: any) => e.source === 'mesh-a');
+        const edited = {
+            ...g,
+            nodes: [...g.nodes, { id: 'node-tool-1', label: 'Mesh inspect', x: 1, y: 2, parameters: { toolName: 'mesh_inspect' } }],
+            edges: [...g.edges.filter((e: any) => e !== unlinked), { id: 'edge-user', source: 'n-cam', target: 'node-tool-1' }]
+        };
+        const next = refreshSceneNodeGraph(edited, studio('scene-1', ['a', 'c'], 2))!;
+        expect(next.nodes.find(n => n.id === 'node-tool-1')).toMatchObject({ x: 1, y: 2 });
+        expect(next.edges.some(e => e.id === 'edge-user')).toBe(true);
+        expect(next.edges.some(e => e.source === unlinked.source && e.target === unlinked.target)).toBe(false);
+        expect(next.edges.some(e => e.source === 'mesh-c' || e.target === 'mesh-c')).toBe(true);
+    });
+
+    it('drops a scene node the scene no longer has, with its edges', () => {
+        const g = companionNodeGraph(studio('scene-1', ['a', 'b'])).data as any;
+        const next = refreshSceneNodeGraph(g, studio('scene-1', ['a'], 2))!;
+        expect(next.nodes.some(n => n.id === 'mesh-b')).toBe(false);
+        expect(next.edges.some(e => e.source === 'mesh-b' || e.target === 'mesh-b')).toBe(false);
+    });
+});

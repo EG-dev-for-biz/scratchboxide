@@ -45,6 +45,7 @@ import {
 import { MediaGenerationClient } from '../media-generation-client';
 import { ToolNodeClient } from '../tool-node-client';
 import { patchGraphNode, sanitizeNodeGraph, toolNodeRuns } from '../tool-node-runs';
+import { graphHistories, recordGraphEdit, redoGraphEdit, undoGraphEdit } from '../graph-edit-history';
 import type { ToolNodeCatalogEntry } from '../../../common/tool-node-protocol';
 import { compactResultFields, isToolNode, resolveToolNodeArgs, toolNodeLabel, toolNodeParameters, toolRunOrder } from '../../../common/tool-node-graph';
 import { refreshSceneNodeGraph } from '../scene-node-graph';
@@ -432,6 +433,27 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
     const latestStudioState = React.useRef(studioState);
     latestStudioState.current = studioState;
     const graphKey = artifactId || graph.title;
+
+    // Undo / redo of the user's edits (graph-edit-history.ts); tool-run status updates are not steps
+    const [, setHistoryTick] = React.useState(0);
+    const recordEdit = (before: NodeGraphData, after: NodeGraphData, mergeKey?: string) => {
+        graphHistories.set(graphKey, recordGraphEdit(graphHistories.get(graphKey), before, after, mergeKey));
+        setHistoryTick(t => t + 1);
+    };
+    const stepHistory = (direction: 'undo' | 'redo') => {
+        const h = graphHistories.get(graphKey);
+        const step = direction === 'undo' ? undoGraphEdit(h, graphRef.current) : redoGraphEdit(h, graphRef.current);
+        if (!step) return false;
+        graphHistories.set(graphKey, step.history);
+        graphRef.current = step.graph;
+        setGraph(step.graph);
+        setSelectedNodeId(undefined);
+        setSelectedEdgeId(undefined);
+        setHistoryTick(t => t + 1);
+        onUpdate?.(step.graph);
+        return true;
+    };
+    const dragStartGraph = React.useRef<NodeGraphData | undefined>(undefined);
     const mountedRef = React.useRef(true);
     React.useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
     // progress lines while a tool works: shown on its card, never saved into the graph
@@ -531,6 +553,8 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
     const [jsonError, setJsonError] = React.useState<string | undefined>(undefined);
 
     // Bi-directional Interactive Drag-to-Connect state
+    /** True while a connection is being dragged from a port (rather than started by a click). */
+    const connectingDragged = React.useRef(false);
     const [connectingState, setConnectingState] = React.useState<{
         originNodeId: string;
         originPortType: 'input' | 'output';
@@ -706,9 +730,11 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
         setSelectedNodeId(node.id);
         setSelectedEdgeId(undefined);
         setDraggingNodeId(node.id);
+        dragStartGraph.current = graphRef.current;
+        const rect = viewportRef.current?.getBoundingClientRect();
         setDragOffset({
-            x: (e.clientX - panPosition.x) / zoomLevel - node.x,
-            y: (e.clientY - panPosition.y) / zoomLevel - node.y
+            x: (e.clientX - (rect?.left ?? 0) - panPosition.x) / zoomLevel - node.x,
+            y: (e.clientY - (rect?.top ?? 0) - panPosition.y) / zoomLevel - node.y
         });
     };
 
@@ -747,8 +773,10 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
     };
 
     const handleMouseMove = (e: React.MouseEvent) => {
-        const surfaceX = (e.clientX - panPosition.x) / zoomLevel;
-        const surfaceY = (e.clientY - panPosition.y) / zoomLevel;
+        // the draft connection is drawn in surface coordinates, measured from the viewport's own corner
+        const rect = viewportRef.current?.getBoundingClientRect();
+        const surfaceX = (e.clientX - (rect?.left ?? 0) - panPosition.x) / zoomLevel;
+        const surfaceY = (e.clientY - (rect?.top ?? 0) - panPosition.y) / zoomLevel;
 
         if (connectingState) {
             setConnectingState(prev => (prev ? { ...prev, mousePos: { x: surfaceX, y: surfaceY } } : undefined));
@@ -777,8 +805,13 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
     };
 
     const handleMouseUp = () => {
+        // a connection dragged out and let go over empty canvas is dropped (one let go over a card completes there)
+        if (connectingState && connectingDragged.current) setConnectingState(undefined);
+        connectingDragged.current = false;
         if (draggingNodeId) {
             setDraggingNodeId(undefined);
+            if (dragStartGraph.current) recordEdit(dragStartGraph.current, graph);
+            dragStartGraph.current = undefined;
             if (onUpdate) {
                 onUpdate(graph);
             }
@@ -894,6 +927,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                 edges: newEdges
             };
 
+            recordEdit(graph, updatedGraph);
             setGraph(updatedGraph);
             setSelectedNodeId(newNodeId);
 
@@ -914,6 +948,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
         if (!node) return;
 
         const portCoords = getNodePort(node)[portType];
+        connectingDragged.current = true;
         setConnectingState({
             originNodeId: nodeId,
             originPortType: portType,
@@ -923,6 +958,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
 
     const handleCompleteConnection = (targetNodeId: string, targetPortType: 'input' | 'output', e: React.MouseEvent) => {
         e.stopPropagation();
+        connectingDragged.current = false;
         if (!connectingState) return;
 
         const { originNodeId, originPortType } = connectingState;
@@ -972,6 +1008,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                     edges: [...graph.edges, newEdge]
                 };
 
+                recordEdit(graph, updatedGraph);
                 setGraph(updatedGraph);
                 if (onUpdate) {
                     onUpdate(updatedGraph);
@@ -1018,6 +1055,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
             edges: [...graph.edges, newEdge]
         };
 
+        recordEdit(graph, updatedGraph);
         setGraph(updatedGraph);
         setSelectedNodeId(newNodeId);
         if (onUpdate) {
@@ -1171,6 +1209,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
             nodes: [...graph.nodes, newNode]
         };
 
+        recordEdit(graph, updatedGraph);
         setGraph(updatedGraph);
         setSelectedNodeId(newNodeId);
         setShowAddMenu(false);
@@ -1238,6 +1277,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
             edges: newEdges
         };
 
+        recordEdit(graph, updatedGraph);
         setGraph(updatedGraph);
         setSelectedNodeId(newNodeId);
 
@@ -1246,16 +1286,21 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
         }
     };
 
-    const handleUpdateNode = (nodeId: string, updates: Partial<GraphNode>) => {
+    const handleUpdateNode = (nodeId: string, updates: Partial<GraphNode>, record = false) => {
         const latest = graphRef.current;
         const updatedNodes = latest.nodes.map(n => (n.id === nodeId ? { ...n, ...updates } : n));
         const updatedGraph = { ...latest, nodes: updatedNodes };
+        // the user's own field edits are undo steps (typing into one field is one step); run updates are not
+        if (record) recordEdit(latest, updatedGraph, `node:${nodeId}:${Object.keys(updates).sort().join(',')}`);
         graphRef.current = updatedGraph;
         setGraph(updatedGraph);
         if (onUpdate) {
             onUpdate(updatedGraph);
         }
     };
+
+    /** An edit the user makes in the inspector or editor: one undo step. */
+    const handleEditNode = (nodeId: string, updates: Partial<GraphNode>) => handleUpdateNode(nodeId, updates, true);
 
     const handleExecutePromptBox = async (node: GraphNode) => {
         const prompt = node.parameters?.prompt || '';
@@ -1389,6 +1434,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
         const updatedNodes = latest.nodes.filter(n => n.id !== nodeId);
         const updatedEdges = latest.edges.filter(e => e.source !== nodeId && e.target !== nodeId);
         const updatedGraph = { ...latest, nodes: updatedNodes, edges: updatedEdges };
+        recordEdit(latest, updatedGraph);
         graphRef.current = updatedGraph;
         setGraph(updatedGraph);
         setSelectedNodeId(undefined);
@@ -1404,6 +1450,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
         const latest = graphRef.current;
         const updatedEdges = latest.edges.filter(e => e.id !== edgeId);
         const updatedGraph = { ...latest, edges: updatedEdges };
+        recordEdit(latest, updatedGraph);
         graphRef.current = updatedGraph;
         setGraph(updatedGraph);
         setSelectedEdgeId(undefined);
@@ -1414,6 +1461,8 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
 
     // Delete / Backspace removes the selected node (or edge), except while typing in a field or with the editor open
     const deleteSelection = React.useRef<() => boolean>(() => false);
+    const historyStep = React.useRef<(d: 'undo' | 'redo') => boolean>(() => false);
+    historyStep.current = stepHistory;
     deleteSelection.current = () => {
         if (editingNodeModalId) return false;
         if (selectedNodeId && graphRef.current.nodes.some(n => n.id === selectedNodeId)) { handleDeleteNode(selectedNodeId); return true; }
@@ -1422,11 +1471,17 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
     };
     React.useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
-            if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+            const key = e.key.toLowerCase();
+            const mod = e.metaKey || e.ctrlKey;
+            const isUndo = mod && key === 'z' && !e.shiftKey;
+            const isRedo = mod && ((key === 'z' && e.shiftKey) || (key === 'y' && e.ctrlKey && !e.metaKey));
+            if (e.key !== 'Delete' && e.key !== 'Backspace' && !isUndo && !isRedo) return;
+            // a text field keeps its own typing and its own undo
             const t = e.target as HTMLElement | null;
             if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
-            // only when the pointer or focus is in this graph, so another surface's Backspace is left alone
+            // only when the pointer or focus is in this graph, so another surface's keys are left alone
             if (!viewportRef.current || !(viewportRef.current.matches(':hover') || viewportRef.current.contains(document.activeElement))) return;
+            if (isUndo || isRedo) { if (historyStep.current(isUndo ? 'undo' : 'redo')) e.preventDefault(); return; }
             if (deleteSelection.current()) e.preventDefault();
         };
         window.addEventListener('keydown', onKey);
@@ -1566,7 +1621,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                 setJsonError('JSON payload must be an object');
                 return;
             }
-            handleUpdateNode(nodeId, {
+            handleEditNode(nodeId, {
                 label: typeof parsed.label === 'string' ? parsed.label : undefined,
                 subtitle: typeof parsed.subtitle === 'string' ? parsed.subtitle : undefined,
                 category: parsed.category,
@@ -1639,6 +1694,8 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                 className={`sb-graph-edge-group ${isSimActive ? 'sb-edge-sim-active' : ''} ${
                     isSelected ? 'sb-edge-selected' : ''
                 }`}
+                // a press on an edge (or its Unlink pill) is not a canvas press, which would deselect it before the click
+                onMouseDown={e => e.stopPropagation()}
                 onClick={e => {
                     e.stopPropagation();
                     setSelectedEdgeId(edge.id);
@@ -2056,6 +2113,12 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                 style={{ left: `${node.x}px`, top: `${node.y}px`, height: cardHeight, ...(displayFlag?.nodeId === node.id ? { outline: '2px solid rgba(10,132,255,0.8)', outlineOffset: '2px' } : {}) }}
                                 onMouseDown={e => handleMouseDownNode(node, e)}
                                 onDoubleClick={e => handleDoubleClickNode(node, e)}
+                                onMouseUp={e => {
+                                    if (connectingState && connectingDragged.current && connectingState.originNodeId !== node.id) {
+                                        connectingDragged.current = false;
+                                        handleCompleteConnection(node.id, connectingState.originPortType === 'output' ? 'input' : 'output', e);
+                                    }
+                                }}
                                 onClick={e => {
                                     if (connectingState && connectingState.originNodeId !== node.id) {
                                         handleCompleteConnection(
@@ -2179,7 +2242,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                 value={node.parameters?.prompt || ''}
                                                 placeholder="Describe image scenery..."
                                                 onMouseDown={e => e.stopPropagation()}
-                                                onChange={e => handleUpdateNode(node.id, {
+                                                onChange={e => handleEditNode(node.id, {
                                                     parameters: { ...node.parameters, prompt: e.target.value }
                                                 })}
                                                 onKeyDown={e => {
@@ -2288,7 +2351,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                 value={node.parameters?.prompt || ''}
                                                 placeholder="Describe motion or camera..."
                                                 onMouseDown={e => e.stopPropagation()}
-                                                onChange={e => handleUpdateNode(node.id, {
+                                                onChange={e => handleEditNode(node.id, {
                                                     parameters: { ...node.parameters, prompt: e.target.value }
                                                 })}
                                                 onKeyDown={e => {
@@ -2446,7 +2509,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                 value={node.parameters?.prompt || ''}
                                                 placeholder="Describe voice script..."
                                                 onMouseDown={e => e.stopPropagation()}
-                                                onChange={e => handleUpdateNode(node.id, {
+                                                onChange={e => handleEditNode(node.id, {
                                                     parameters: { ...node.parameters, prompt: e.target.value }
                                                 })}
                                                 onKeyDown={e => {
@@ -2560,7 +2623,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                 value={node.parameters?.prompt || ''}
                                                 placeholder="Describe 3D geometry..."
                                                 onMouseDown={e => e.stopPropagation()}
-                                                onChange={e => handleUpdateNode(node.id, {
+                                                onChange={e => handleEditNode(node.id, {
                                                     parameters: { ...node.parameters, prompt: e.target.value }
                                                 })}
                                                 onKeyDown={e => {
@@ -2842,6 +2905,29 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                     <button
                         type="button"
                         className="sb-graph-dock-btn"
+                        onClick={() => stepHistory('undo')}
+                        disabled={graphHistories.get(graphKey).past.length === 0}
+                        title="Undo (⌘Z)"
+                        aria-label="Undo"
+                    >
+                        ↶
+                    </button>
+                    <button
+                        type="button"
+                        className="sb-graph-dock-btn"
+                        onClick={() => stepHistory('redo')}
+                        disabled={graphHistories.get(graphKey).future.length === 0}
+                        title="Redo (⇧⌘Z)"
+                        aria-label="Redo"
+                    >
+                        ↷
+                    </button>
+
+                    <div className="sb-graph-dock-divider" />
+
+                    <button
+                        type="button"
+                        className="sb-graph-dock-btn"
                         onClick={() => setZoomLevel(prev => Math.max(0.3, prev - 0.1))}
                         title="Zoom out"
                     >
@@ -2970,7 +3056,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                 type="text"
                                 className="sb-inspector-input"
                                 value={selectedNode.label}
-                                onChange={e => handleUpdateNode(selectedNode.id, { label: e.target.value })}
+                                onChange={e => handleEditNode(selectedNode.id, { label: e.target.value })}
                             />
                         </div>
 
@@ -2981,7 +3067,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                 className="sb-inspector-input"
                                 value={selectedNode.subtitle || ''}
                                 placeholder="Module description..."
-                                onChange={e => handleUpdateNode(selectedNode.id, { subtitle: e.target.value })}
+                                onChange={e => handleEditNode(selectedNode.id, { subtitle: e.target.value })}
                             />
                         </div>
 
@@ -3005,7 +3091,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                             <select
                                 className="sb-inspector-select"
                                 value={selectedNode.category || 'process'}
-                                onChange={e => handleUpdateNode(selectedNode.id, { category: e.target.value as any })}
+                                onChange={e => handleEditNode(selectedNode.id, { category: e.target.value as any })}
                             >
                                 <option value="input">Input Trigger</option>
                                 <option value="ai">AI Agent Processor</option>
@@ -3033,7 +3119,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                         type="button"
                                         className={`sb-btn sb-inspector-swatch ${(selectedNode.color || 'blue') === c.color ? 'sb-swatch-selected' : ''}`}
                                         style={{ backgroundColor: c.hex }}
-                                        onClick={() => handleUpdateNode(selectedNode.id, { color: c.color })}
+                                        onClick={() => handleEditNode(selectedNode.id, { color: c.color })}
                                         title={c.label}
                                     />
                                 ))}
@@ -3048,7 +3134,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                 rows={2}
                                 placeholder="Add notes, specifications, or memo..."
                                 value={selectedNode.notes || ''}
-                                onChange={e => handleUpdateNode(selectedNode.id, { notes: e.target.value })}
+                                onChange={e => handleEditNode(selectedNode.id, { notes: e.target.value })}
                             />
                         </div>
 
@@ -3172,7 +3258,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                     type="text"
                                                     className="sb-text-input"
                                                     value={editingNode.label}
-                                                    onChange={e => handleUpdateNode(editingNode.id, { label: e.target.value })}
+                                                    onChange={e => handleEditNode(editingNode.id, { label: e.target.value })}
                                                 />
                                             </div>
                                             <div className="sb-form-col">
@@ -3181,7 +3267,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                     type="text"
                                                     className="sb-text-input"
                                                     value={editingNode.subtitle || ''}
-                                                    onChange={e => handleUpdateNode(editingNode.id, { subtitle: e.target.value })}
+                                                    onChange={e => handleEditNode(editingNode.id, { subtitle: e.target.value })}
                                                 />
                                             </div>
                                         </div>
@@ -3197,7 +3283,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                             className="sb-select-input"
                                                             value={editingNode.parameters?.triggerType || 'webhook'}
                                                             onChange={e =>
-                                                                handleUpdateNode(editingNode.id, {
+                                                                handleEditNode(editingNode.id, {
                                                                     parameters: { ...editingNode.parameters, triggerType: e.target.value }
                                                                 })
                                                             }
@@ -3215,7 +3301,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                             className="sb-text-input"
                                                             value={editingNode.parameters?.endpoint || '/api/v1/webhook'}
                                                             onChange={e =>
-                                                                handleUpdateNode(editingNode.id, {
+                                                                handleEditNode(editingNode.id, {
                                                                     parameters: { ...editingNode.parameters, endpoint: e.target.value }
                                                                 })
                                                             }
@@ -3235,7 +3321,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                             className="sb-select-input"
                                                             value={editingNode.parameters?.model || 'gemini-3.8-flash'}
                                                             onChange={e =>
-                                                                handleUpdateNode(editingNode.id, {
+                                                                handleEditNode(editingNode.id, {
                                                                     parameters: { ...editingNode.parameters, model: e.target.value }
                                                                 })
                                                             }
@@ -3255,7 +3341,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                             className="sb-range-input"
                                                             value={editingNode.parameters?.temperature ?? 0.2}
                                                             onChange={e =>
-                                                                handleUpdateNode(editingNode.id, {
+                                                                handleEditNode(editingNode.id, {
                                                                     parameters: { ...editingNode.parameters, temperature: parseFloat(e.target.value) }
                                                                 })
                                                             }
@@ -3270,7 +3356,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                             rows={3}
                                                             value={editingNode.parameters?.systemPrompt || 'You are an autonomous workflow reasoner.'}
                                                             onChange={e =>
-                                                                handleUpdateNode(editingNode.id, {
+                                                                handleEditNode(editingNode.id, {
                                                                     parameters: { ...editingNode.parameters, systemPrompt: e.target.value }
                                                                 })
                                                             }
@@ -3290,7 +3376,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                             className="sb-select-input"
                                                             value={resolveImageModelId(editingNode.parameters?.model || IMAGE_MODEL_PRIORITY[0])}
                                                             onChange={e =>
-                                                                handleUpdateNode(editingNode.id, {
+                                                                handleEditNode(editingNode.id, {
                                                                     parameters: { ...editingNode.parameters, model: e.target.value }
                                                                 })
                                                             }
@@ -3306,7 +3392,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                             className="sb-select-input"
                                                             value={editingNode.parameters?.aspectRatio || '16:9'}
                                                             onChange={e =>
-                                                                handleUpdateNode(editingNode.id, {
+                                                                handleEditNode(editingNode.id, {
                                                                     parameters: { ...editingNode.parameters, aspectRatio: e.target.value }
                                                                 })
                                                             }
@@ -3332,7 +3418,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                             className="sb-select-input"
                                                             value={editingNode.parameters?.model || 'google/omni-1.1'}
                                                             onChange={e =>
-                                                                handleUpdateNode(editingNode.id, {
+                                                                handleEditNode(editingNode.id, {
                                                                     parameters: { ...editingNode.parameters, model: e.target.value }
                                                                 })
                                                             }
@@ -3348,7 +3434,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                             className="sb-select-input"
                                                             value={editingNode.parameters?.durationSeconds || 6}
                                                             onChange={e =>
-                                                                handleUpdateNode(editingNode.id, {
+                                                                handleEditNode(editingNode.id, {
                                                                     parameters: { ...editingNode.parameters, durationSeconds: parseInt(e.target.value) }
                                                                 })
                                                             }
@@ -3372,7 +3458,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                             className="sb-select-input"
                                                             value={editingNode.parameters?.audioKind || 'speech'}
                                                             onChange={e =>
-                                                                handleUpdateNode(editingNode.id, {
+                                                                handleEditNode(editingNode.id, {
                                                                     parameters: { ...editingNode.parameters, audioKind: e.target.value }
                                                                 })
                                                             }
@@ -3388,7 +3474,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                             className="sb-select-input"
                                                             value={editingNode.parameters?.voiceId || 'Chirp-1'}
                                                             onChange={e =>
-                                                                handleUpdateNode(editingNode.id, {
+                                                                handleEditNode(editingNode.id, {
                                                                     parameters: { ...editingNode.parameters, voiceId: e.target.value }
                                                                 })
                                                             }
@@ -3414,7 +3500,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                             className="sb-text-input"
                                                             value={editingNode.parameters?.rule || 'payload.confidence > 0.85'}
                                                             onChange={e =>
-                                                                handleUpdateNode(editingNode.id, {
+                                                                handleEditNode(editingNode.id, {
                                                                     parameters: { ...editingNode.parameters, rule: e.target.value }
                                                                 })
                                                             }
@@ -3435,7 +3521,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                 workspacePath={workspacePath}
                                                 node={editingNode}
                                                 entry={toolEntry(editingNode)}
-                                                onArgsChange={toolArgs => handleUpdateNode(editingNode.id, { parameters: { ...editingNode.parameters, toolArgs } })}
+                                                onArgsChange={toolArgs => handleEditNode(editingNode.id, { parameters: { ...editingNode.parameters, toolArgs } })}
                                             />
                                         )}
 
@@ -3449,7 +3535,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                             className="sb-select-input"
                                                             value={editingNode.parameters?.server || 'mcp-stripe'}
                                                             onChange={e =>
-                                                                handleUpdateNode(editingNode.id, {
+                                                                handleEditNode(editingNode.id, {
                                                                     parameters: { ...editingNode.parameters, server: e.target.value }
                                                                 })
                                                             }
@@ -3468,7 +3554,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                             className="sb-text-input"
                                                             value={editingNode.parameters?.tool || 'get_balance'}
                                                             onChange={e =>
-                                                                handleUpdateNode(editingNode.id, {
+                                                                handleEditNode(editingNode.id, {
                                                                     parameters: { ...editingNode.parameters, tool: e.target.value }
                                                                 })
                                                             }
@@ -3489,7 +3575,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                             className="sb-text-input"
                                                             value={editingNode.parameters?.command || 'yarn test'}
                                                             onChange={e =>
-                                                                handleUpdateNode(editingNode.id, {
+                                                                handleEditNode(editingNode.id, {
                                                                     parameters: { ...editingNode.parameters, command: e.target.value }
                                                                 })
                                                             }
@@ -3509,7 +3595,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                             className="sb-select-input"
                                                             value={editingNode.parameters?.database || 'postgresql'}
                                                             onChange={e =>
-                                                                handleUpdateNode(editingNode.id, {
+                                                                handleEditNode(editingNode.id, {
                                                                     parameters: { ...editingNode.parameters, database: e.target.value }
                                                                 })
                                                             }
@@ -3527,7 +3613,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                                             className="sb-text-input"
                                                             value={editingNode.parameters?.table || 'events'}
                                                             onChange={e =>
-                                                                handleUpdateNode(editingNode.id, {
+                                                                handleEditNode(editingNode.id, {
                                                                     parameters: { ...editingNode.parameters, table: e.target.value }
                                                                 })
                                                             }

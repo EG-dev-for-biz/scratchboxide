@@ -94,6 +94,23 @@ export function refreshSceneNodeGraph(current: NodeGraphData, scene: CanvasArtif
         next.nodes = out >= 0 ? [...next.nodes.slice(0, out), ...parts, ...next.nodes.slice(out)] : [...next.nodes, ...parts];
         next.edges = [...next.edges, ...current.edges.filter(e => isPart(e.source) || isPart(e.target))];
     }
+    // the redraw is a merge, not a reset: nodes the user added (tool nodes) and the user's wiring stay, scene nodes
+    // the scene no longer has go, and only nodes new to the scene are wired as drawn
     const old = new Map(current.nodes.map(n => [n.id, n]));
-    return { ...current, subtitle: next.subtitle, nodes: next.nodes.map(n => old.has(n.id) ? { ...n, x: old.get(n.id)!.x, y: old.get(n.id)!.y } : n), edges: next.edges, sourceArtifact: next.sourceArtifact, stageViewOf: next.stageViewOf };
+    const drawn = new Set(next.nodes.map(n => n.id));
+    const userNodes = current.nodes.filter(n => !drawn.has(n.id) && !isSceneDrawnNode(n));
+    const nodes = [...next.nodes.map(n => old.has(n.id) ? { ...n, x: old.get(n.id)!.x, y: old.get(n.id)!.y } : n), ...userNodes];
+    const kept = new Set(nodes.map(n => n.id));
+    const fresh = new Set(next.nodes.filter(n => !old.has(n.id)).map(n => n.id));
+    const edges = [
+        ...current.edges.filter(e => kept.has(e.source) && kept.has(e.target)),
+        ...next.edges.filter(e => (fresh.has(e.source) || fresh.has(e.target)) && !current.edges.some(c => c.source === e.source && c.target === e.target))
+    ];
+    return { ...current, subtitle: next.subtitle, nodes, edges, sourceArtifact: next.sourceArtifact, stageViewOf: next.stageViewOf };
+}
+
+/** Nodes a scene graph draws from the scene itself (as opposed to nodes the user placed on it). */
+function isSceneDrawnNode(n: GraphNode): boolean {
+    return n.id === 'n-cam' || n.id === 'n-env' || n.id === 'n-render' || !!n.parameters?.output
+        || n.id.startsWith('obj-') || n.id.startsWith('mesh-') || n.id.startsWith('glb-node-');
 }
