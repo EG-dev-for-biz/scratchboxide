@@ -27,14 +27,16 @@ import { cellsFootprint, type MassingMesh } from './massing-spec';
 import type { ScanSlice } from './scan-sections';
 
 export const SCAN_LOFT_PARAMS = {
-    /** Least overlap (IoU) of a piece with the one above it for the run to continue. */
+    /** Least overlap (IoU) of a piece with the one above it for the run to continue... */
     linkIoU: 0.35,
+    /** ...or, for pieces that barely overlap (a leaning leg), the most their centres may move per slice, as a share of the piece's own width (sqrt of its area), and at least linkMinStepM. */
+    linkStepShare: 0.6, linkMinStepM: 0.6,
     /** Points on every resampled ring. */
     ringPoints: 48,
     /** A slice is kept when the blend of its kept neighbours misses its ring by more than this (m). */
     keepTolM: 0.4,
     /** Least area of a piece followed (m2). */
-    minPieceM2: 4
+    minPieceM2: 0.5
 };
 
 interface Piece { slice: number; cells: Set<string>; ring: Vec2[]; centre: Vec2 }
@@ -101,13 +103,26 @@ export function loftRuns(slices: ScanSlice[], cellM: number, P = SCAN_LOFT_PARAM
     const minCells = Math.ceil(P.minPieceM2 / (cellM * cellM));
     const per = slices.map((s, i) => pieces(s, i, cellM, minCells));
     const next = new Map<Piece, Piece>(), hasPrev = new Set<Piece>();
-    for (let s = 0; s + 1 < per.length; s++) for (const a of per[s]) {
-        const ups = per[s + 1].filter(b => iou(a.cells, b.cells) >= P.linkIoU);
-        if (ups.length !== 1) continue;
-        const b = ups[0];
-        if (per[s].filter(o => iou(o.cells, b.cells) >= P.linkIoU).length !== 1) continue;
-        next.set(a, b);
-        hasPrev.add(b);
+    // how well a links to b above: overlap when they overlap enough, else nearness of their centres within the step
+    const affinity = (a: Piece, b: Piece): number => {
+        const o = iou(a.cells, b.cells);
+        if (o >= P.linkIoU) return 1 + o;
+        const step = Math.max(P.linkMinStepM, P.linkStepShare * Math.sqrt(Math.min(a.cells.size, b.cells.size) * cellM * cellM));
+        const d = Math.hypot(a.centre[0] - b.centre[0], a.centre[1] - b.centre[1]);
+        const sizeRatio = Math.min(a.cells.size, b.cells.size) / Math.max(a.cells.size, b.cells.size);
+        return d <= step && sizeRatio >= 0.35 ? 1 - d / step : 0;
+    };
+    // mutual best: a's best above is b and b's best below is a (a join or a split continues its best match; the rest start runs)
+    for (let s = 0; s + 1 < per.length; s++) {
+        const best = (p: Piece, cands: Piece[], up: boolean) => {
+            let bp: Piece | undefined, bv = 0;
+            for (const q of cands) { const v = up ? affinity(p, q) : affinity(q, p); if (v > bv) { bv = v; bp = q; } }
+            return bp;
+        };
+        for (const a of per[s]) {
+            const b = best(a, per[s + 1], true);
+            if (b && best(b, per[s], false) === a) { next.set(a, b); hasPrev.add(b); }
+        }
     }
     const runs: LoftRun[] = [];
     for (const layer of per) for (const head of layer) {

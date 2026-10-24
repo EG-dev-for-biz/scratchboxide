@@ -169,8 +169,10 @@ export function simplifyRing(ring: Vec2[], tol: number): Vec2[] {
 export function partsFromBands(bands: ScanBand[], idPrefix: string, P = SCAN_SECTION_PARAMS): MassingPart[] {
     const parts: MassingPart[] = [];
     bands.forEach((b, bi) => components(b.cells, Math.ceil(P.minComponentM2 / (P.cellM * P.cellM))).forEach((comp, ci) => {
-        const ring = cellsFootprint(new Set([...comp].map(c => { const [i, k] = c.split(',').map(Number); return key(i * P.cellM, k * P.cellM); })));
-        if (!ring) return;
+        // traced in cell units (cellsFootprint steps one cell at a time), then scaled to metres
+        const loop = cellsFootprint(comp);
+        if (!loop) return;
+        const ring = loop.map(([i, k]) => [i * P.cellM, k * P.cellM] as Vec2);
         parts.push({
             id: `${idPrefix}/s${bi}${ci ? `.${ci}` : ''}`, baseY: b.y0, topY: b.y1, loops: [simplifyRing(ring, P.simplifyM)], planes: [],
             heightSource: 'scan', heights: { scanY: b.y1 }, roof: { source: 'scan', note: `scan section band ${b.y0.toFixed(1)}-${b.y1.toFixed(1)} m (${b.slices} slices)` }
