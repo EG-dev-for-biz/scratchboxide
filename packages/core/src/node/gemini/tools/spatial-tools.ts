@@ -1627,7 +1627,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'survey_beautify_station',
-        description: 'AI Beautify one survey station: pose-exact render of the GLB -> buildBeautifyPrompt grounded in the station (coordinates, yaw, pitch, lens fov, standoff, horizon) -> Nano Banana image -> geometric QC by closed-loop edge alignment against the mesh (rejects recomposed frames) -> aligned pose. Lit evenly (bright overcast, no cast shadows) by default, because station images feed 3D. mode "building-survey" renders from the tile photos and also checks that the image stays inside the scan\'s outline from this camera (no widened facade, no extra bays, subject wholly in frame), rerolling until it does; place the station far enough out to frame the whole building, street to the top of its roof objects. With stationIds (four) it makes a building-survey character sheet instead: one 4K image of all four views, split and checked panel by panel. Returns the image path(s) and QC report (qc.outline in building-survey mode).',
+        description: 'Returns one styled 2D image of a survey station (or four, as a character sheet) — not a 3D splat tileset (survey_beautify_to_splats) or a baked texture atlas (survey_beautify_to_texture). AI Beautify one survey station: pose-exact render of the GLB -> buildBeautifyPrompt grounded in the station (coordinates, yaw, pitch, lens fov, standoff, horizon) -> Nano Banana image -> geometric QC by closed-loop edge alignment against the mesh (rejects recomposed frames) -> aligned pose. Lit evenly (bright overcast, no cast shadows) by default, because station images feed 3D. mode "building-survey" renders from the tile photos and also checks that the image stays inside the scan\'s outline from this camera (no widened facade, no extra bays, subject wholly in frame), rerolling until it does; place the station far enough out to frame the whole building, street to the top of its roof objects. With stationIds (four) it makes a building-survey character sheet instead: one 4K image of all four views, split and checked panel by panel. Returns the image path(s) and QC report (qc.outline in building-survey mode).',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1651,7 +1651,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'survey_beautify_to_splats',
-        description: 'Full Survey -> Beautify -> Gaussian splat 3D Tiles pipeline: ranks stations against the GLB, beautifies each (chained: every accepted image is warped into the next station as a consistency reference), bakes each accepted image onto the mesh depth as oriented splats (native C++20), fuses across stations, and emits a KHR_gaussian_splatting 3D Tiles tileset with a WGS-84 root transform plus tileset.meta.json (crop box, prompts, QC).',
+        description: 'Produces a KHR_gaussian_splatting 3D Tiles tileset (a splat point cloud, not a textured mesh — use survey_beautify_to_texture for that) from a stations JSON and GLB you already have (see survey_synthesize_stations); for one call from just a location name, use location_generate_3dgs instead. Full Survey -> Beautify -> Gaussian splat 3D Tiles pipeline: ranks stations against the GLB, beautifies each (chained: every accepted image is warped into the next station as a consistency reference), bakes each accepted image onto the mesh depth as oriented splats (native C++20), fuses across stations, and emits the tileset with a WGS-84 root transform plus tileset.meta.json (crop box, prompts, QC).',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1671,7 +1671,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'survey_beautify_to_texture',
-        description: 'Survey-to-Atlas Inverse Projection (SAIP): Back-projects generative AI Beautify camera station plates directly into the model\'s consolidated UV atlas with MaxRects packing, analytical metric-depth occlusion testing, orthogonal normal weighting, and PBR decomposition (Scharr normals, Toksvig AA roughness, HBAO, dielectric glass classification, and NOAA solar de-lighting when isoDate is given and the stations file has anchor coordinates). The result says whether de-lighting was applied.',
+        description: 'Produces the same input mesh with a baked PBR texture atlas (a textured GLB, not a splat tileset — use survey_beautify_to_splats for that). Survey-to-Atlas Inverse Projection (SAIP): Back-projects generative AI Beautify camera station plates directly into the model\'s consolidated UV atlas with MaxRects packing, analytical metric-depth occlusion testing, orthogonal normal weighting, and PBR decomposition (Scharr normals, Toksvig AA roughness, HBAO, dielectric glass classification, and NOAA solar de-lighting when isoDate is given and the stations file has anchor coordinates). The result says whether de-lighting was applied.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1691,7 +1691,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'location_generate_3dgs',
-        description: 'Generate a photorealistic 3D Gaussian Splatting (3DGS) radiance field and OGC 3D Tileset for any real-world location or landmark. Automatically orchestrates Google 3D Tiles blockout ingestion, multi-tier survey camera synthesis, Nano Banana multi-view restyling with closed-loop Sobel edge QC, and native C++20 metric depth unprojection and octree voxel fusion.',
+        description: 'One call from just a location name or coordinates — the whole pipeline runs automatically, with no stations JSON or GLB to prepare first. For a custom station pattern, a partial/debuggable run, or re-running one failed stage, use survey_synthesize_stations + survey_beautify_to_splats directly instead. Generates a photorealistic 3D Gaussian Splatting (3DGS) radiance field and OGC 3D Tileset for any real-world location or landmark: orchestrates Google 3D Tiles blockout ingestion, multi-tier survey camera synthesis, Nano Banana multi-view restyling with closed-loop Sobel edge QC, and native C++20 metric depth unprojection and octree voxel fusion.',
         parameters: {
             type: 'OBJECT',
             properties: {
