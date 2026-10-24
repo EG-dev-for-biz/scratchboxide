@@ -11,12 +11,14 @@
  * Pipeline I (the 3D Building default since 2026-10-24, user decision): the isolated structure's scan, rendered from its
  * tile photos at four planned stations (sheet-stations.ts), made into one building-survey character sheet (one 4K Nano
  * Banana 2 image, every panel checked against the scan: building-character-sheet.ts), its four panels sent together to
- * Trellis multi on Fal.ai (fal-trellis.ts) once per seed (TRELLIS_SEEDS, in parallel), every model fitted onto the scan's
- * footprint and height (register.ts) and scored against the sheet (seed-score.ts), and the best one's textures
- * colour-matched to the structure's swatch measured from the views (swatch.ts). The model is generated content: it is
- * labelled so, its fit to the scan is reported, and nothing of it is clipped (fit and report). Any failure throws, so the
- * stage degrades to the massing with the real reason. (User decisions 2026-10-24: Trellis like the Puck test "D", best of
- * six seeds by silhouette and plan fit, then the swatch colour match; Meshy dropped.)
+ * its `ModelClient` (input.model: Trellis multi by default, fal-trellis.ts; or Meshy 7.1 multi, fal-meshy.ts, when the
+ * caller asks for it) once per seed (TRELLIS_SEEDS, in parallel), every model fitted onto the scan's footprint and height
+ * (register.ts) and scored against the sheet (seed-score.ts), and the best one's textures colour-matched to the
+ * structure's swatch measured from the views (swatch.ts). The model is generated content: it is labelled so, its fit to
+ * the scan is reported, and nothing of it is clipped (fit and report). Any failure throws, so the stage degrades to the
+ * massing with the real reason. (User decisions 2026-10-24: Trellis like the Puck test "D", best of six seeds by
+ * silhouette and plan fit, then the swatch colour match, is the default; Meshy is kept as a selectable alternative
+ * generator over the same character sheet, not a second pipeline.)
  */
 
 import * as fs from 'fs';

@@ -42,6 +42,7 @@ import { getTileVegetationService } from '../tile-vegetation-service';
 import { loadScanFit } from '../scan-fit-loader';
 import { createDefaultStationImageGenerator } from '../../spatial/BeautifyStationService';
 import { createFalTrellisClient } from './pipeline-i/fal-trellis';
+import { createFalMeshyClient } from './pipeline-i/fal-meshy';
 import { StageCache, stagedWorkspaceRoot } from './stage-cache';
 import { genAiEnhanceClient } from './texture-enhance';
 import { lightingCorrectionEnabled, lightingModels } from './texture-lighting';
@@ -174,6 +175,8 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
             ...(args.isolate === true && args.procedural !== false ? { procedural: true } : {}),
             // which procedural pipeline ('g', 'h' or 'i'; pipeline-h/pipeline-h.ts stagedProcedural reads it, else the environment)
             ...(args.pipeline === 'g' || args.pipeline === 'h' || args.pipeline === 'i' ? { pipeline: args.pipeline } : {}),
+            // pipeline I's 3D model service ('trellis', the default, or 'meshy'); ignored by G and H
+            ...(args.pipelineIModel === 'trellis' || args.pipelineIModel === 'meshy' ? { pipelineIModel: args.pipelineIModel } : {}),
             ...(place ? { place } : {})
         },
         ...(retry ? { retry } : {}),
@@ -212,9 +215,10 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
     const elevationService = mapsKey ? new GoogleElevationService({ apiKey: mapsKey }) : undefined;
     return {
         cache,
-        // pipeline I (the 3D Building default): the image model draws the character sheet, Trellis on Fal.ai makes the model (best of six seeds);
-        // made on first use, so a build without FAL_KEY fails pipeline I with that reason
-        pipelineI: { generator: () => createDefaultStationImageGenerator({ workspaceRoot: cache.dir }), model: () => createFalTrellisClient() },
+        // pipeline I (the 3D Building default): the image model draws the character sheet, then Trellis (default) or Meshy
+        // (pipelineIModel: 'meshy') on Fal.ai makes the model (best of six seeds); made on first use, so a build without
+        // FAL_KEY fails pipeline I with that reason
+        pipelineI: { generator: () => createDefaultStationImageGenerator({ workspaceRoot: cache.dir }), model: (name?: string) => name === 'meshy' ? createFalMeshyClient() : createFalTrellisClient() },
         ...(elevationService ? {
             elevation: {
                 sample: async (points: Array<{ lat: number; lng: number }>) => {

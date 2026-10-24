@@ -388,6 +388,11 @@ export interface StagedLocationRequest {
      * ledger; the default otherwise) or 'g'. SCRATCHBOX_STAGED_PROCEDURAL changes the default.
      */
     pipeline?: 'g' | 'h' | 'i' | (string & {});
+    /**
+     * Pipeline I's 3D model service: 'trellis' (the default, fal-trellis.ts) or 'meshy' (Meshy 7.1 Ultra 2K multi on
+     * Fal.ai, fal-meshy.ts; same character sheet, same registration and swatch colour match). Ignored by G and H.
+     */
+    pipelineIModel?: 'trellis' | 'meshy' | (string & {});
 }
 
 export interface StagedExtraction {
@@ -458,10 +463,11 @@ export interface StagedLocationDeps {
     solarRoof?(lat: number, lng: number): Promise<SolarRoof>;
     /**
      * Pipeline I's paid services (the 3D Building default when present: pipeline-i/): the image model for the character
-     * sheet and the Fal.ai Trellis client, made on first use so a missing key fails that build with its reason. The app's deps
-     * (createStagedLocationDeps) provide them; stand-in deps leave them out and procedural builds default to pipeline H.
+     * sheet and a Fal.ai model client (Trellis by default, or Meshy when `pipelineIModel` asks for it), made on first use
+     * so a missing key fails that build with its reason. The app's deps (createStagedLocationDeps) provide them;
+     * stand-in deps leave them out and procedural builds default to pipeline H.
      */
-    pipelineI?: { generator: () => StationImageGenerator; model: () => ModelClient };
+    pipelineI?: { generator: () => StationImageGenerator; model: (name?: string) => ModelClient };
     /** Vector building footprints near a place (facade grammar's independent check); default: Google vector feature tiles. */
     footprints?: (place: { lat: number; lng: number }, radiusM: number) => Promise<FootprintSource>;
     /** Builds a figure spec natively and returns its GLB (metres, +Y up, front +Z, origin at the centre of its base); the reference object builder's native build by default. */
@@ -3644,9 +3650,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 id: 'grammar',
                 run: async io => {
                     const t0 = now();
-                    if (!deps.pipelineI) throw new Error('pipeline I needs its image model and Fal.ai Trellis services, which these deps do not provide');
+                    if (!deps.pipelineI) throw new Error('pipeline I needs its image model and a Fal.ai 3D model service, which these deps do not provide');
                     // the model client first: a missing FAL_KEY fails here, before the 4K sheet is drawn
-                    const model = deps.pipelineI.model();
+                    const model = deps.pipelineI.model(request.pipelineIModel);
                     const out = await runPipelineI({
                         texturedGlb: e.refined.texturedGlb, clayGlb: e.refined.rawClayGlb ?? e.refined.clayGlb,
                         footprint: { cells: structure!.cells, groundY: structure!.groundY, heightM: structure!.heightM },
