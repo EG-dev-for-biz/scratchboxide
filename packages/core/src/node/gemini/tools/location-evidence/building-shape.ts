@@ -15,9 +15,15 @@
  *   for a modeled 3D volume with no plan areas, the convex hull of the volume's base.
  * - Street level, main roof and peak: the Solar API DSM (dataLayers), measured inside each footprint and on nearby roads.
  * - Roof planes: Solar API buildingInsights roof segments (pitch, azimuth, plane height, area).
+ * - Context (2026-10-23): the tiles' points of interest name the building (building-name.ts: a named POI inside the
+ *   footprint), the land-use areas around it (parks, parking, forest, with Google's type codes as labels), the roads near
+ *   it with their type codes, and, for a modelled volume, its roof prior (pipeline-e/volume-roof-prior.ts: the top
+ *   surface as planes with pitch and fall, and its height tiers).
  * Each building's parts are fused with building-shape-fusion.ts (unchanged), and every source's value is reported beside
  * the others with the difference stated; nothing is averaged. A footprint is never made up: no vector building at the
- * place is a typed failure, not a guess.
+ * place is a typed failure, not a guess. When no footprint contains the place point or lies within maxSnapMeters, a
+ * footprint holding a POI named like the request within nameSearchMeters is taken instead (a landmark's address point is
+ * often its gate or the road: Fallingwater's lies 116 m from the house), and the report says so.
  */
 
 import * as path from 'path';
@@ -48,6 +54,9 @@ import {
 } from '../../../spatial/building-shape-fusion';
 import { GltfBinaryPacker } from '../../../3d-engine/gltf-binary-packer';
 import { checkDimensions, checkHeightForStoreys, plausibilitySummary, type PlausibilityFlag } from '../../../../common/spatial/plausibility';
+import { decideBuildingNames, type BuildingNames } from '../../../3d-engine/staged-location/building-name';
+import { placeWords } from '../../../3d-engine/staged-location/extraction-sizing';
+import { volumeRoofPrior } from '../../../3d-engine/staged-location/pipeline-e/volume-roof-prior';
 
 export const BUILDING_SHAPE_TOOL_NAME = 'location_building_shape';
 
@@ -71,6 +80,11 @@ export interface BuildingShapeRequest {
     neighbourRadiusMeters?: number;
     /** How far outside a footprint the place point may be and still pick that building (default 12 m). */
     maxSnapMeters?: number;
+    /**
+     * When no footprint contains the place point or lies within maxSnapMeters, a footprint holding a POI named like the
+     * request (word overlap with the query) within this distance is taken instead (default 150 m, max 300; 0 turns it off).
+     */
+    nameSearchMeters?: number;
     /** Write one extruded massing GLB of the buildings reported, from the vector data alone. */
     writeMassingGlb?: boolean;
     /** The target building's storey count when known (from the caller): its heights are checked against it. */
@@ -338,8 +352,28 @@ export interface BuildingShapeResult {
     sources: { vectorTiles: string; solarDsm: string; solarInsights: string };
     massingGlbPath?: string;
     massingNote?: string;
+    /** What the tiles say around the target: names, POIs, land use, roads, and the modelled volume's roof prior. */
+    context: BuildingShapeContext;
     summary: string;
 }
+
+/** The target's surroundings as Google's vector tiles carry them; type codes are labels (open vocabulary), never a switch. */
+export interface BuildingShapeContext {
+    names: BuildingNames;
+    /** Named or typed points of interest within CONTEXT_REACH_M of the target's footprint, nearest first. */
+    nearbyPois: Array<{ name?: string; types: string[]; distanceMeters: number; localMeters: XY }>;
+    /** Land-use areas within CONTEXT_REACH_M of the target's footprint (gap 0: touching or overlapping it). */
+    landuse: Array<{ types: string[]; areaM2: number; gapToTargetMeters: number }>;
+    roads: { withinReach: number; types: string[] };
+    /** The modelled volume's top surface, when Google modelled this building: planes and height tiers (metres above the volume's base). */
+    volumeRoofPrior?: { planes: Array<{ pitchDeg: number; azimuthDeg: number; planAreaM2: number; areaM2: number; heightMeters: number }>; tiers: Array<{ heightMeters: number; planAreaM2: number }>; notes: string[] };
+    note: string;
+}
+
+/** How far from the target's footprint the context (POIs, land use, roads) is reported (m). */
+export const CONTEXT_REACH_M = 60;
+/** A footprint holding a POI named like the request is taken from this far by default (m). */
+export const NAME_SEARCH_DEFAULT_M = 150;
 
 /** A building assembled from its vector features, with the footprint the tool chose. */
 interface Candidate {
@@ -778,18 +812,89 @@ function slug(text: string): string {
     return text.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48) || 'place';
 }
 
+/** The tiles' POIs in the local frame, with their names and type codes. */
+function tilePois(tiles: FetchedTile[], frame: LocalFrame): Array<{ local: XY; name?: string; types: string[] }> {
+    return tiles.flatMap(t => (t.data.pois ?? []).map(p => {
+        const name = typeof p.properties?.name === 'string' && p.properties.name.trim() ? p.properties.name.trim() : undefined;
+        const types = Array.isArray(p.properties?.types) ? (p.properties.types as unknown[]).filter((x): x is string => typeof x === 'string') : [];
+        return { local: frame.toLocal(p.point as LngLat), ...(name ? { name } : {}), types };
+    }));
+}
+
+/**
+ * The candidate footprint within `reachM` of the place that holds (or comes within 5 m of) a POI whose name shares the
+ * most words with the request; undefined when no named POI matches or none stands in a footprint.
+ */
+function namedFootprint(candidates: Candidate[], tiles: FetchedTile[], frame: LocalFrame, request: string, reachM: number): { candidate: Candidate; poiName: string; matched: string[] } | undefined {
+    const words = placeWords(request);
+    if (!words.length) return undefined;
+    let best: { candidate: Candidate; poiName: string; matched: string[] } | undefined;
+    for (const poi of tilePois(tiles, frame)) {
+        if (!poi.name) continue;
+        const matched = placeWords(poi.name).filter(w => words.includes(w));
+        if (!matched.length) continue;
+        for (const c of candidates) {
+            if (c.distance > reachM) continue;
+            const inside = c.partsLocal.some(ring => pointInRing(poi.local[0], poi.local[1], ring)) || c.partsLocal.some(ring => distanceToRing(poi.local[0], poi.local[1], ring) <= 5);
+            if (!inside) continue;
+            if (!best || matched.length > best.matched.length || (matched.length === best.matched.length && c.distance < best.candidate.distance)) best = { candidate: c, poiName: poi.name, matched };
+        }
+    }
+    return best;
+}
+
+/** The target's surroundings from the tiles: names, POIs, land use, roads, and the modelled volume's roof prior. */
+function buildContext(target: Candidate, tiles: FetchedTile[], frame: LocalFrame, query: string | undefined, address: string): BuildingShapeContext {
+    // building-name.ts speaks the scan frame (x east, z south): local [east, north] → [east, -north]
+    const toScan = ([e, n]: XY): [number, number] => [e, -n];
+    const parts = target.partsLocal.map(ring => [ring.map(toScan)]);
+    const pois = tilePois(tiles, frame);
+    const names = decideBuildingNames({ parts, pois: pois.map(p => ({ x: p.local[0], z: -p.local[1], types: p.types, ...(p.name ? { name: p.name } : {}) })), query, address });
+    const gapTo = (pt: XY) => Math.min(...target.partsLocal.map(ring => pointInRing(pt[0], pt[1], ring) ? 0 : distanceToRing(pt[0], pt[1], ring)));
+    const nearbyPois = pois
+        .map(p => ({ ...(p.name ? { name: p.name } : {}), types: p.types, distanceMeters: r1(gapTo(p.local)), localMeters: [r2(p.local[0]), r2(p.local[1])] as XY }))
+        .filter(p => p.distanceMeters <= CONTEXT_REACH_M)
+        .sort((a, b) => a.distanceMeters - b.distanceMeters);
+    const landuse = tiles.flatMap(t => t.data.landuse ?? []).map(a => {
+        const ring = (a.ring as LngLat[]).map(p => frame.toLocal(p));
+        const types = Array.isArray(a.properties?.types) ? (a.properties.types as unknown[]).filter((x): x is string => typeof x === 'string') : [];
+        return { types, areaM2: r1(ringArea(ring)), gapToTargetMeters: r1(footprintGap(target.partsLocal, [ring])) };
+    }).filter(a => a.gapToTargetMeters <= CONTEXT_REACH_M).sort((a, b) => a.gapToTargetMeters - b.gapToTargetMeters);
+    const roadLines = tiles.flatMap(t => t.data.roads.map(r => ({ pts: (r.points as LngLat[]).map(p => frame.toLocal(p)), types: Array.isArray(r.properties?.types) ? (r.properties.types as unknown[]).filter((x): x is string => typeof x === 'string') : [] })));
+    const nearRoads = roadLines.filter(r => r.pts.some(pt => gapTo(pt) <= CONTEXT_REACH_M));
+    const roads = { withinReach: nearRoads.length, types: [...new Set(nearRoads.flatMap(r => r.types))].sort() };
+    let prior: BuildingShapeContext['volumeRoofPrior'];
+    if (target.modeled.length) {
+        const volumes = target.modeled.map(m => ({
+            vertices: m.vertices.map(v => { const [e, n] = frame.toLocal([v[0], v[1]]); return [e, v[2] - target.modeledMin, -n] as [number, number, number]; }),
+            indices: m.indices.slice()
+        }));
+        const p = volumeRoofPrior(volumes, 0);
+        if (p) prior = {
+            planes: p.planes.map(pl => ({ pitchDeg: r1(pl.pitchDeg), azimuthDeg: r1(pl.azimuthDeg), planAreaM2: r1(pl.planAreaM2), areaM2: r1(pl.areaM2), heightMeters: r2(pl.centreY) })),
+            tiers: p.tiers.map(t => ({ heightMeters: r2(t.topY), planAreaM2: r1(t.planAreaM2) })),
+            notes: p.notes
+        };
+    }
+    const note = `${names.primary ? `Named '${names.primary}' (${names.names.find(n => n.name === names.primary)?.source === 'poi' ? 'a POI inside the footprint' : 'the request'}). ` : 'No POI inside the footprint names it. '}`
+        + `${nearbyPois.length} POI${nearbyPois.length === 1 ? '' : 's'}, ${landuse.length} land-use area${landuse.length === 1 ? '' : 's'} and ${roads.withinReach} road line${roads.withinReach === 1 ? '' : 's'} within ${CONTEXT_REACH_M} m of the footprint; type codes are Google's labels, carried as given.`
+        + (prior ? ` Modelled volume: ${prior.planes.length} roof plane${prior.planes.length === 1 ? '' : 's'}, ${prior.tiers.length} tier${prior.tiers.length === 1 ? '' : 's'}.` : '');
+    return { names, nearbyPois, landuse, roads, ...(prior ? { volumeRoofPrior: prior } : {}), note };
+}
+
 /** The whole pipeline; the tool handler is a thin wrapper around it. */
 export async function runBuildingShape(req: BuildingShapeRequest, deps: BuildingShapeDeps & { workspaceRoot: string }): Promise<BuildingShapeResult> {
     const progress = deps.progress ?? (() => undefined);
     const neighbourRadius = Math.max(0, Math.min(150, Number(req.neighbourRadiusMeters) || 0));
     const maxSnap = Math.max(0, Math.min(50, req.maxSnapMeters ?? 12));
+    const nameSearch = Math.max(0, Math.min(300, req.nameSearchMeters ?? NAME_SEARCH_DEFAULT_M));
     const maxNeighbours = Math.max(0, Math.min(400, Math.round(req.maxNeighbours ?? MAX_NEIGHBOURS)));
     progress('Resolving the place', 0.05);
     const place = await resolvePlace(req, deps);
     const frame = new LocalFrame(place.lat, place.lng);
 
     // Fetch wide enough that a building within reach of the place point is whole.
-    const searchRadius = maxSnap + 60;
+    const searchRadius = Math.max(maxSnap + 60, nameSearch);
     const held = new Map<string, FetchedTile>();
     progress('Fetching Google vector tiles', 0.15);
     let tiles = await fetchTiles(frame, [-searchRadius, -searchRadius, searchRadius, searchRadius], held, deps);
@@ -816,14 +921,23 @@ export async function runBuildingShape(req: BuildingShapeRequest, deps: Building
         targetWhy = `No footprint contains the place point; chose the nearest, ${r1(target.distance)} m away (within ${maxSnap} m).`
             + (next && next.distance - target.distance < 3 ? ` Ambiguous: ${next.id} is ${r1(next.distance)} m away, almost as close.` : '');
     } else {
-        const nearest = describeNearest(candidates);
-        throw new BuildingShapeError(
-            'no_footprint',
-            `No building footprint in Google's vector data contains ${place.resolvedAs} or lies within ${maxSnap} m of it`
-            + (nearest.length ? `; the nearest is ${nearest[0].distanceMeters} m away (${nearest[0].id}).` : '.')
-            + ' No footprint is invented for it.',
-            { place, nearestFootprints: nearest }
-        );
+        // a footprint holding a POI named like the request, within nameSearch: the place's own building when its address
+        // point lies off it (never a made-up footprint; without a name match the typed failure stands)
+        const named = nameSearch > 0 ? namedFootprint(candidates, tiles, frame, place.query ?? place.resolvedAs, nameSearch) : undefined;
+        if (named) {
+            target = named.candidate;
+            targetWhy = `No footprint contains the place point or lies within ${maxSnap} m of it; chose ${target.id}, ${r1(target.distance)} m away, because it holds the POI named '${named.poiName}' (${named.matched.join(', ')} match the request).`;
+        } else {
+            const nearest = describeNearest(candidates);
+            throw new BuildingShapeError(
+                'no_footprint',
+                `No building footprint in Google's vector data contains ${place.resolvedAs} or lies within ${maxSnap} m of it`
+                + (nearest.length ? `; the nearest is ${nearest[0].distanceMeters} m away (${nearest[0].id}).` : '.')
+                + (nameSearch > 0 ? ` No POI named like the request stands in a footprint within ${nameSearch} m.` : '')
+                + ' No footprint is invented for it.',
+                { place, nearestFootprints: nearest }
+            );
+        }
     }
     // Neighbours: buildings whose footprint comes within the radius of the target's footprint. Widen the tiles so the
     // whole band (and the buildings reaching into it) is read, then rebuild the candidates on the larger set.
@@ -922,10 +1036,12 @@ export async function runBuildingShape(req: BuildingShapeRequest, deps: Building
         + (neighbours.length ? ` ${neighbours.length} neighbour${neighbours.length === 1 ? '' : 's'} within ${neighbourRadius} m of its footprint reported.` : '')
         + (t.plausibility.length ? ` ${plausibilitySummary(t.plausibility)}.` : '')
         + (reports.slice(1).some(r => r.plausibility.length) ? ` ${reports.slice(1).filter(r => r.plausibility.length).length} neighbour(s) carry plausibility warnings.` : '');
+    const context = buildContext(target, tiles, frame, place.query, place.resolvedAs);
     progress('Done', 1);
     return {
         place,
         frame: 'Local metres are [east, north] from the place point; heights above street are DSM measurements minus the measured street level.',
+        context,
         target: { ...t, footprint: { ...t.footprint, why: `${targetWhy} ${t.footprint.why}` } },
         neighbours: reports.slice(1),
         neighbourRadiusMeters: neighbourRadius,
@@ -942,7 +1058,7 @@ export async function runBuildingShape(req: BuildingShapeRequest, deps: Building
 
 export const BUILDING_SHAPE_TOOL_DECLARATION: ToolDeclaration = {
     name: BUILDING_SHAPE_TOOL_NAME,
-    description: 'What Google\'s own data says about the shape of the building at a real place, source by source: its footprint polygon (WGS-84 and local metres) from Google vector tiles, the vector height (extruded or modeled) with the modeled volume as a GLB when there is one, street level and roof/peak heights measured by the Solar API DSM, and the Solar roof segments (pitch, azimuth, height, area). Every source\'s value is shown side by side with the disagreement stated, never averaged, and it says which footprint was chosen and why. Each building carries plausibility flags for heights outside their typical range (and against the storey count when given); flags only, no value is changed. Optionally reports neighbouring buildings and writes an extruded massing GLB from the vector data. When there is no building footprint at the place it fails with code no_footprint and lists the nearest ones; it never invents a footprint. Other failure codes: geocode_failed, missing_credentials, no_coverage, vector_unavailable.',
+    description: 'What Google\'s own data says about the shape of the building at a real place, source by source: its footprint polygon (WGS-84 and local metres) from Google vector tiles, the vector height (extruded or modeled) with the modeled volume as a GLB when there is one, street level and roof/peak heights measured by the Solar API DSM, and the Solar roof segments (pitch, azimuth, height, area). Every source\'s value is shown side by side with the disagreement stated, never averaged, and it says which footprint was chosen and why. Each building carries plausibility flags for heights outside their typical range (and against the storey count when given); flags only, no value is changed. Optionally reports neighbouring buildings and writes an extruded massing GLB from the vector data. When there is no building footprint at the place it fails with code no_footprint and lists the nearest ones; it never invents a footprint. Other failure codes: geocode_failed, missing_credentials, no_coverage, vector_unavailable. Also the context around it from the same tiles: the building\'s name from a POI inside its footprint, nearby POIs, land-use areas (parks, parking, forest; Google\'s type codes as labels), road lines with their types, and, for a modelled building, the volume\'s roof planes and height tiers. When no footprint contains the place point, one holding a POI named like the request within nameSearchMeters is taken and the report says so.',
     parameters: {
         type: 'OBJECT',
         properties: {
@@ -951,6 +1067,7 @@ export const BUILDING_SHAPE_TOOL_DECLARATION: ToolDeclaration = {
             longitude: { type: 'NUMBER', description: 'WGS-84 longitude of the place point.' },
             neighbourRadiusMeters: { type: 'NUMBER', description: 'Also report the buildings whose footprint comes within this many metres of the target building\'s footprint (default 0, max 150; at most 25 neighbours, nearest first).' },
             maxSnapMeters: { type: 'NUMBER', description: 'When no footprint contains the place point, the nearest within this distance is used (default 12 m, max 50).' },
+            nameSearchMeters: { type: 'NUMBER', description: 'When neither rule finds a footprint, one holding a POI named like the request within this distance is taken (default 150 m, max 300; 0 turns it off). The result says which POI matched.' },
             writeMassingGlb: { type: 'BOOLEAN', description: 'Also write a clean extruded massing GLB of the reported buildings from the vector data alone (flat base, provenance "from Google vector data").' },
             storeys: { type: 'NUMBER', description: 'The target building\'s storey count, when known: its vector and DSM heights are checked against it (plausibility flags only, nothing is changed).' }
         }
@@ -966,6 +1083,7 @@ export const buildingShapeHandler: ToolHandler = async (args, ctx): Promise<Tool
             longitude: num(args.longitude),
             neighbourRadiusMeters: num(args.neighbourRadiusMeters),
             maxSnapMeters: num(args.maxSnapMeters),
+            nameSearchMeters: num(args.nameSearchMeters),
             writeMassingGlb: args.writeMassingGlb === true,
             storeys: num(args.storeys)
         }, { workspaceRoot: ctx.workspaceRoot, progress: ctx.reportProgress });

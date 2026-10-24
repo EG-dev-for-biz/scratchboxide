@@ -267,3 +267,56 @@ test('missing vector credentials and a failed geocode are typed', async () => {
     const c = await run({ location: 'Puck Building' }, { tiles: {} });
     assert.strictEqual(c.payload.code, 'missing_credentials');
 });
+
+/** A POI as the feature tiles label it: a point position in the tile grid and a text label. */
+const poi = (east: number, north: number, name: string, types: string[]) => {
+    const t = tileXY(...at(east, north));
+    return { types: ['FEATURE_TYPE_POI', ...types], labels: [{ pointPosition: { point: { x: (t.x - HOME.x) * TILE_GRID + t.gx, y: (t.y - HOME.y) * TILE_GRID + t.gy } }, textComponents: [{ texts: [{ text: name }] }] }] };
+};
+const landuse = (loop: Array<[number, number]>, types: string[]) => ({ types, geometry: { areas: [{ type: 'INDEXED_TRIANGLES', vertexOffsets: offsets(loop) }] } });
+
+test('a place point 100 m off its building: the footprint holding the POI named like the request is taken, and the context names it, with land use and roads', async () => {
+    // the house 100 m east of the address point (Fallingwater: the geocode is the gate), a forest area over it, a road by the gate
+    const house = rect(90, -12, 110, 12);
+    const { payload, exec } = await run({ location: 'Fallingwater, Mill Run, Pennsylvania' }, {
+        places: { places: [{ id: 'p1', displayName: { text: 'Fallingwater' }, formattedAddress: '1491 Mill Run Rd, Mill Run, PA 15464, USA', location: { latitude: LAT0, longitude: LNG0 } }] },
+        tiles: { [`${HOME.x}/${HOME.y}`]: [
+            extruded(house, 7),
+            poi(100, 0, 'Fallingwater', ['FEATURE_TYPE_ENTERTAINMENT', 'FEATURE_TYPE_HISTORIC']),
+            poi(-30, 20, 'Visitor Center Shop', ['FEATURE_TYPE_RETAIL']),
+            landuse(rect(60, -60, 140, 60), ['FEATURE_TYPE_NATURAL', 'FEATURE_TYPE_LAND_COVER', 'FEATURE_TYPE_SOMETHING_NEW']),
+            road([[-60, -30], [20, -30]]), road([[80, -40], [80, 40]])  // the gate road ends 72 m from the house, past the reach
+        ] }
+    });
+    assert.strictEqual(exec.status, 'completed', JSON.stringify(payload).slice(0, 600));
+    const t = payload.target;
+    assert.strictEqual(t.containsPlacePoint, false);
+    assert.ok(Math.abs(t.distanceFromPlaceMeters - 90) < 0.5, `distance ${t.distanceFromPlaceMeters}`);
+    assert.match(t.footprint.why, /holds the POI named 'Fallingwater' \(fallingwater match the request\)/);
+    assert.match(payload.summary, /holds the POI named 'Fallingwater'/);
+    const c = payload.context;
+    assert.strictEqual(c.names.primary, 'Fallingwater');
+    assert.strictEqual(c.names.names[0].source, 'poi');
+    assert.deepStrictEqual(c.names.names[0].types, ['FEATURE_TYPE_POI', 'FEATURE_TYPE_ENTERTAINMENT', 'FEATURE_TYPE_HISTORIC']);
+    assert.strictEqual(c.nearbyPois.length, 1, 'the shop stands 120 m away, outside the reach');
+    assert.strictEqual(c.nearbyPois[0].name, 'Fallingwater');
+    assert.strictEqual(c.landuse.length, 1);
+    assert.strictEqual(c.landuse[0].gapToTargetMeters, 0, 'the forest area covers the house');
+    assert.ok(Math.abs(c.landuse[0].areaM2 - 9600) < 100);
+    assert.ok(c.landuse[0].types.includes('FEATURE_TYPE_SOMETHING_NEW'), 'an unknown code is carried as given');
+    assert.strictEqual(c.roads.withinReach, 1, 'the road by the house, not the one by the gate');
+    assert.deepStrictEqual(c.roads.types, ['FEATURE_TYPE_ROAD']);
+    assert.strictEqual(c.volumeRoofPrior, undefined, 'no modelled volume here');
+    assert.match(c.note, /Named 'Fallingwater' \(a POI inside the footprint\)/);
+});
+
+test('with no named POI the typed no_footprint failure stands, and says the name search found nothing', async () => {
+    const { payload, exec } = await run({ location: 'Some Place' }, {
+        places: { places: [{ id: 'p1', displayName: { text: 'Some Place' }, formattedAddress: 'Somewhere', location: { latitude: LAT0, longitude: LNG0 } }] },
+        tiles: { [`${HOME.x}/${HOME.y}`]: [extruded(rect(90, -12, 110, 12), 7), poi(100, 0, 'Another Thing', ['FEATURE_TYPE_RETAIL'])] }
+    });
+    assert.strictEqual(exec.status, 'failed');
+    assert.strictEqual(payload.code, 'no_footprint');
+    assert.match(payload.error, /No POI named like the request stands in a footprint within 150 m/);
+    assert.strictEqual(payload.nearestFootprints[0].distanceMeters, 90);
+});
