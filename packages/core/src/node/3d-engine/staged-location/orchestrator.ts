@@ -2990,6 +2990,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 if (!refined.rawClayGlb) return fallBack('pipeline_e_fallback', 'tile_refine wrote no isolated scan');
                 const chk = checkIsolate(refined.rawClayGlb, picked.pick, picked.ground);
                 if (!chk.ok) return fallBack('pipeline_e_fallback', `the isolated scan does not match the structure picked (IoU ${round(chk.iou, 2)}, agreement ${round(chk.agreement, 2)})`);
+                // the structure's isolated scan, for the in-app Python API (sb.massing via execute_3d_python_script on this scene):
+                // the scan, the street level it stands on, its footprint (Google's when used, else the scan's outline), and the
+                // district around it (for the hidden-wall test), all in the scene's frame
+                const planLoops = eBuildings.flatMap(b => (b.extruded?.length ? b.extruded.map(p => p.loops[0]) : b.parts.map(p => p[0]))).filter(l => l && l.length >= 3);
+                cache.writeRunNote(runId, 'structure_scan', { schema: 'scratchbox.structure-scan/1', scanGlb: refined.rawClayGlb, districtGlb: tilePath, groundY: picked.pick.groundY, plan: planLoops.length ? planLoops : [structure!.outline], planSource: planLoops.length ? (eBuildings.some(b => b.provenance === SCAN_FOOTPRINT_TOKEN) ? 'scan outline' : 'Google vector footprint') : 'scan outline', place: placeValue?.formattedAddress ?? request.query });
                 // Solar roof facets, in the tile frame
                 let solar: Array<{ pitchDeg: number; azimuthDeg: number; planeHeightMsl: number; center: { lat: number; lng: number }; areaM2: number; x: number; z: number; y: number }> = [];
                 let solarNote = 'no Solar roof facets (no API key)';

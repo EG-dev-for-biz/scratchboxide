@@ -19,6 +19,20 @@ import { callVisionModel, describeVisualProblems, reviewModelVisually, type Visu
 import { formatSbApiErrors, sbTypeCheckMetadata, typeCheckSbScript } from '../../3d-engine/sb-script-typecheck';
 import { SB_API_CORE_SUMMARY, SB_API_VERSION } from '../../3d-engine/sb-api.generated';
 import { firstPassRenderMode } from '../scene3d-first-pass-baseline';
+import { StageCache, stagedWorkspaceRoot } from '../../3d-engine/staged-location/stage-cache';
+
+/** The open staged scene's structure scan (orchestrator.ts writes it per run), as the script's SCAN_* variables. */
+export interface StructureScanNote { scanGlb: string; districtGlb?: string; groundY: number; plan: Array<Array<[number, number]>>; planSource?: string; place?: string }
+
+/** The structure scan of the scene on the canvas when it is a staged build whose run recorded one and whose files still exist. */
+export function structureScanOf(activeArtifact: unknown, cache: Pick<StageCache, 'readRunNote'> = new StageCache({ workspaceRoot: stagedWorkspaceRoot() })): { runId: string; note: StructureScanNote } | undefined {
+    const a = activeArtifact as { type?: string; data?: { stagedBuild?: { runId?: unknown } } } | undefined;
+    const runId = a?.type === '3d-scene' && typeof a.data?.stagedBuild?.runId === 'string' ? a.data.stagedBuild.runId : undefined;
+    if (!runId || !/^[A-Za-z0-9_-]+$/.test(runId)) return undefined;
+    const note = cache.readRunNote<StructureScanNote>(runId, 'structure_scan');
+    if (!note?.scanGlb || !fs.existsSync(note.scanGlb)) return undefined;
+    return { runId, note };
+}
 
 export interface GlbAabbBounds {
     min: [number, number, number];
@@ -189,7 +203,7 @@ Usage notes:
 export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'execute_3d_python_script',
-        description: 'Runs a procedural Python 3 script with the Scratchbox 3D Engine (import scratchbox as sb) and opens the GLB it writes as a new 3D scene in a studio void, shown with the materials the script assigns (textured by default; studio clay only when the user asks for clay). Choose the tool by what the user asked for: a real-world place goes to google_3d_tiles_get_clay; one specific object, or an abstract form, goes to build_3d_object_from_reference (with its location when it stands at a real place); an imagined environment or landscape, a scene made of several objects, or an explicit request for a script comes here. Every call starts a new scene: nothing is carried over from the scene already on the canvas. This tool does not stage anything on a real place: a call with a location or coordinates fails without running the script. If the script writes no GLB, or one with no geometry, the call fails.\n\n' + PYTHON_3D_API_REFERENCE,
+        description: 'Runs a procedural Python 3 script with the Scratchbox 3D Engine (import scratchbox as sb) and opens the GLB it writes as a new 3D scene in a studio void, shown with the materials the script assigns (textured by default; studio clay only when the user asks for clay). Choose the tool by what the user asked for: a real-world place goes to google_3d_tiles_get_clay; one specific object, or an abstract form, goes to build_3d_object_from_reference (with its location when it stands at a real place); an imagined environment or landscape, a scene made of several objects, or an explicit request for a script comes here. Every call starts a new scene: nothing is carried over from the scene already on the canvas. This tool does not stage anything on a real place: a call with a location or coordinates fails without running the script. If the script writes no GLB, or one with no geometry, the call fails. When the scene on the canvas is a staged 3D Building, the script can read that structure\'s isolated scan: scan = sb.massing.Scan.from_scene(); choice = sb.massing.choose(scan) builds candidate massings from the scan (a block whose walls sit on the scanned walls, lofted sections that follow tapers, legs and overhangs) and keeps the simplest that explains the scan height band by height band; print(choice.why) reports every candidate\'s coverage and precision, and choice.mesh is the result. The model it writes then joins that scene in the place\'s frame (labelled generated) instead of opening in a studio void.\n\n' + PYTHON_3D_API_REFERENCE,
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -295,9 +309,18 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
         // 3. Execute Python script
         const runner = NativePythonRunnerService.getInstance();
         const effectiveScript = script;
+        // the open staged scene's structure scan, when it has one: the script reads it (sb.massing.Scan.from_scene()) and
+        // its model joins that scene in the place's frame instead of opening in a studio void
+        const structureScan = structureScanOf(_ctx?.request?.activeArtifact);
+        const scanEnv: Record<string, string> = structureScan ? {
+            SCAN_GLB_PATH: structureScan.note.scanGlb,
+            ...(structureScan.note.districtGlb && fs.existsSync(structureScan.note.districtGlb) ? { SCAN_DISTRICT_GLB_PATH: structureScan.note.districtGlb } : {}),
+            SCAN_GROUND_Y: String(structureScan.note.groundY),
+            SCAN_PLAN: JSON.stringify(structureScan.note.plan)
+        } : {};
         const result = await runner.runScript(effectiveScript, {
             timeoutMs,
-            env: { ...process.env }
+            env: { ...process.env, ...scanEnv }
         });
 
         // Per User Directive: No silent fallbacks or synthetic substitutes.
@@ -446,10 +469,40 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
             }] : [])
         ];
 
+        // A model built from the open staged scene's structure scan joins that scene, in its frame (no studio void, no
+        // reframing): labelled generated (a script's output), with the scan and footprint it was built from.
+        const prevScene = _ctx?.request?.activeArtifact as { id?: string; title?: string; version?: number; data?: { objects?: unknown[] } & Record<string, unknown> } | undefined;
+        const joinsScene = !!(structureScan && durableHeroUri && prevScene?.data);
+        const scanObject = joinsScene ? {
+            id: `scan-massing-${Date.now()}`,
+            content: {
+                type: '3d-model',
+                durableUri: durableHeroUri,
+                mimeType: 'model/gltf-binary',
+                metadata: {
+                    role: 'structure',
+                    layer: 'massing',
+                    source: 'execute_3d_python_script',
+                    description: desc,
+                    builtFrom: { runId: structureScan!.runId, scanGlb: structureScan!.note.scanGlb, plan: structureScan!.note.planSource ?? 'scan outline' },
+                    provenance: { label: 'generated', method: 'a Python script built this from the structure\'s isolated scan (sb.massing); its fit is in the script output', measuredGeometry: false }
+                }
+            },
+            space: { spatial3d: { x: 0, y: 0, z: 0 } },
+            time: { startMs: 0, durationMs: 20000 },
+            lineage: { version: 1 }
+        } : undefined;
+        const joinedArtifact = joinsScene ? {
+            ...prevScene,
+            version: (prevScene!.version || 1) + 1,
+            data: { ...prevScene!.data, objects: [...(prevScene!.data!.objects ?? []), scanObject] }
+        } : undefined;
+
         return {
             status: 'completed',
             resultPayload: {
                 success: true,
+                ...(joinsScene ? { joinedScene: { artifactId: prevScene!.id, objectId: scanObject!.id, scan: structureScan!.note.scanGlb } } : {}),
                 glbPath: result.glbPath,
                 glbGenerated: true,
                 vertexCount: writtenGeometry.totalVertices,
@@ -473,7 +526,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                     groundDatumMeters: 0.0,
                     groundLogic: 'shared-metric-ground'
                 },
-                artifact: {
+                artifact: joinedArtifact ?? {
                     id: `artifact-3d-${Date.now()}`,
                     type: '3d-scene',
                     title: desc,

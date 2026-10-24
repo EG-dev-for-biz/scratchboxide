@@ -12,7 +12,8 @@ The scan leads. A script loads the scan of a place (a GLB in the scene's metric 
 the structure, builds candidate massings from it and lets the measurements decide::
 
     import scratchbox as sb
-    scan = sb.massing.Scan.load(SCAN_GLB_PATH, plan=[[(x, z), ...]])   # plan: the footprint ring(s), when known
+    scan = sb.massing.Scan.from_scene()        # the open staged scene's isolated structure scan (SCAN_* variables)
+    # or: sb.massing.Scan.load(path, plan=[[(x, z), ...]], ground_y=..., district=path) for any scan GLB
     choice = sb.massing.choose(scan)                                    # block, then lofted sections, simplest first
     print(choice.why)                                                   # each candidate's coverage and precision
     scene = sb.Scene(); scene.add_mesh(choice.mesh)
@@ -24,6 +25,8 @@ plain building stays a block and a tower with legs and a deck gets lofted sectio
 what kind of structure it is; ``Scan.candidates`` can be extended with a script's own meshes, scored the same way.
 """
 
+import json
+import os
 from typing import List, Optional, Sequence, Tuple
 
 from .glb_read import read_glb
@@ -95,23 +98,44 @@ class Scan:
             self.neighbours.add_mesh(district)
         self._slices = None
 
-    @classmethod
-    def load(cls, path: str, plan: Optional[List[Ring]] = None, margin: float = 3.0, ground_y: Optional[float] = None, spacing: float = 0.5) -> "Scan":
-        """The scan in `path` (a GLB), cut to within `margin` m of `plan` when a plan is given (its district kept for the hidden-wall test)."""
-        _require()
+    @staticmethod
+    def _merged(path: str):
         meshes = read_glb(path)
         if not meshes:
             raise ValueError(f"{path} holds no mesh")
-        district = meshes[0]
+        out = meshes[0]
         for m in meshes[1:]:
-            district.append(m)
-        if not plan:
-            return cls(district, None, ground_y, spacing)
-        lo = ground_y if ground_y is not None else -1e9
-        crop = _sm.crop_to_plan(district, [list(r) for r in plan], margin, lo + 1.0 if ground_y is not None else lo)
-        if not crop.indices:
-            raise ValueError("no part of the scan stands within the margin of the plan")
-        return cls(crop, plan, ground_y, spacing, district)
+            out.append(m)
+        return out
+
+    @classmethod
+    def load(cls, path: str, plan: Optional[List[Ring]] = None, ground_y: Optional[float] = None, district: Optional[str] = None,
+             crop_margin: Optional[float] = None, spacing: float = 0.5) -> "Scan":
+        """The scan in `path` (a GLB). It should be the structure alone (an isolated scan): every candidate is judged
+        against all of it. `district` (a GLB of the surroundings) lets walls pressed against a taller neighbour go
+        unjudged. `crop_margin`, for a scan of a whole area, keeps only what stands within that many metres of `plan`
+        (neighbours inside the margin then count against every candidate: prefer an isolated scan)."""
+        _require()
+        mesh = cls._merged(path)
+        if crop_margin is not None and plan:
+            lo = ground_y + 1.0 if ground_y is not None else -1e9
+            mesh = _sm.crop_to_plan(mesh, [list(r) for r in plan], crop_margin, lo)
+            if not mesh.indices:
+                raise ValueError("no part of the scan stands within the margin of the plan")
+        return cls(mesh, plan, ground_y, spacing, cls._merged(district) if district else None)
+
+    @classmethod
+    def from_scene(cls, spacing: float = 0.5) -> "Scan":
+        """The open staged scene's structure scan: SCAN_GLB_PATH (the isolated scan), SCAN_PLAN (its footprint rings,
+        JSON), SCAN_GROUND_Y (street level) and SCAN_DISTRICT_GLB_PATH (the surroundings), set by the tool when the scene
+        on the canvas is a staged build."""
+        path = os.environ.get("SCAN_GLB_PATH")
+        if not path:
+            raise RuntimeError("no structure scan: open a staged 3D Building scene first (SCAN_GLB_PATH is not set)")
+        plan = json.loads(os.environ.get("SCAN_PLAN", "[]")) or None
+        ground = os.environ.get("SCAN_GROUND_Y")
+        return cls.load(path, plan=[[tuple(p) for p in r] for r in plan] if plan else None, ground_y=float(ground) if ground else None,
+                        district=os.environ.get("SCAN_DISTRICT_GLB_PATH"), spacing=spacing)
 
     def slices(self, cell: float = 0.5, slice_height: float = 1.0):
         """The scan cut into horizontal slices, each slice's plan filled (cached for the default cell and height)."""
