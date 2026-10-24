@@ -7,15 +7,15 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import type { ToolDeclaration, ToolHandler, ToolResultPayload } from './types';
+import type { ToolDeclaration, ToolHandler, ToolHandlerOutcome, ToolResultPayload } from './types';
 import { WeatheringService } from '../../3d-engine/weathering-service';
 
 function asString(val: unknown): string | undefined {
   return typeof val === 'string' && val.trim().length > 0 ? val.trim() : undefined;
 }
 
-function asNumber(val: unknown, fallback?: number): number | undefined {
-  return typeof val === 'number' && !isNaN(val) ? val : fallback;
+function asNumber(val: unknown): number | undefined {
+  return typeof val === 'number' && !isNaN(val) ? val : undefined;
 }
 
 const weatheringService = new WeatheringService();
@@ -40,7 +40,7 @@ async function synthesizeWeatheringTextures(params: {
 
     // Parse inputs
     const material = asString(params.material) || 'cast_iron';
-    const ageYears = asNumber(params.ageYears, 60);
+    const ageYears = asNumber(params.ageYears) ?? 60;
     const climateZone = asString(params.climateZone) || 'urban';
     const exposureType = asString(params.exposureType) || 'exposed';
     const outputDir = asString(params.outputDir) || os.tmpdir();
@@ -205,7 +205,10 @@ export const WEATHERING_TOOL_DECLARATIONS: ToolDeclaration[] = [
   }
 ];
 
+const toOutcome = (resultPayload: ToolResultPayload): ToolHandlerOutcome =>
+  resultPayload.success === false ? { resultPayload, status: 'failed' } : { resultPayload };
+
 export const WEATHERING_TOOL_HANDLERS: Record<string, ToolHandler> = {
-  synthesize_weathering_textures: async (params) => synthesizeWeatheringTextures(params),
-  list_weathering_materials: async () => listWeatheringMaterials()
+  synthesize_weathering_textures: async (params) => toOutcome(await synthesizeWeatheringTextures(params)),
+  list_weathering_materials: async () => toOutcome(await listWeatheringMaterials())
 };

@@ -234,24 +234,41 @@ export function geminiJsonVision(client: { models: { generateContent(req: unknow
     };
 }
 
-/** Create an embeddings client using Vertex AI's multimodal embeddings (gemini-2.5-flash, 1408-dim). */
-export function vertexEmbeddingsClient(): EmbeddingClient {
+/**
+ * Create an embeddings client using Vertex AI's multimodal embeddings (multimodalembedding@001, 1408-dim).
+ * The model takes one instance per request and is served from regional endpoints only.
+ */
+export function vertexEmbeddingsClient(location = 'us-central1'): EmbeddingClient {
     return async (images: string[]) => {
         const { GoogleMediaCredentialsService } = await import('../google-media-credentials-service');
-        const client = new GoogleMediaCredentialsService().createVertexClient();
-        const batch = await client.batchEmbedContents({
-            model: 'models/gemini-2.5-flash-001',
-            requests: images.map(img => ({
-                content: {
-                    parts: [
-                        typeof img === 'string' && img.startsWith('data:')
-                            ? { inlineData: { mimeType: img.split(';')[0].split(':')[1], data: img.split(',')[1] } }
-                            : { text: img }
-                    ]
-                }
-            }))
-        });
-        return batch.embeddings || [];
+        const { GoogleAuth } = await import('google-auth-library');
+        const auth = await new GoogleMediaCredentialsService().getVertexAuth();
+        const token = await new GoogleAuth({
+            ...(auth.googleAuthOptions as Record<string, unknown> | undefined),
+            scopes: ['https://www.googleapis.com/auth/cloud-platform']
+        }).getAccessToken();
+        if (!token) throw new Error('Could not obtain a Google Cloud access token for multimodal embeddings.');
+        const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${auth.project}/locations/${location}/publishers/google/models/multimodalembedding@001:predict`;
+        const embedOne = async (img: string): Promise<{ embedding: number[] }> => {
+            const instance = img.startsWith('data:') ? { image: { bytesBase64Encoded: img.slice(img.indexOf(',') + 1) } } : { text: img };
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ instances: [instance] })
+            });
+            if (!res.ok) throw new Error(`multimodal embedding failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
+            const json = await res.json() as { predictions?: Array<{ imageEmbedding?: number[]; textEmbedding?: number[] }> };
+            const p = json.predictions?.[0];
+            const embedding = p?.imageEmbedding ?? p?.textEmbedding;
+            if (!embedding) throw new Error('multimodal embedding response had no embedding');
+            return { embedding };
+        };
+        const out: Array<{ embedding: number[] }> = new Array(images.length);
+        let next = 0;
+        await Promise.all(Array.from({ length: Math.min(8, images.length) }, async () => {
+            for (let i; (i = next++) < images.length;) out[i] = await embedOne(images[i]);
+        }));
+        return out;
     };
 }
 
