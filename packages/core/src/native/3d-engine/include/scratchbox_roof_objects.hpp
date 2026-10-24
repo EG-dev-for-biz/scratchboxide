@@ -66,6 +66,10 @@ struct RoofParams {
     double mergeRiseM = 0.4;
     /** Outline edges within this of the building's wall directions are snapped to them (degrees). */
     double squareTolDeg = 15;
+    /** A squared outline filling at least this share of its rectangle along the building's axis is built as that rectangle. */
+    double rectFill = 0.7;
+    /** Otherwise steps shorter than this are taken out of it (a photo region's pixel staircase). */
+    double minStepM = 0.4;
     /** Small spots (m2) that line up in rows of at least minPosts at a steady spacing are posts, repeated along the row. */
     double minPostAreaM2 = 0.02, maxPostAreaM2 = 0.6, rowTolM = 0.25, maxPostGapM = 4.0, maxGapCv = 0.35;
     int minPosts = 5;
@@ -82,6 +86,55 @@ struct RoofParams {
 };
 
 using scan_massing::squareToAxes;
+
+/**
+ * A squared outline made plain: its rectangle along `axisRad` when the outline fills at least `rectFill` of it (a box
+ * whose photo edge came out as a pixel staircase), else the outline redrawn on a `minStepM` grid along the building's
+ * axes (its largest connected piece), so every edge is on a wall direction and no step is shorter than a cell. The
+ * Haughwout roof's objects came out with 29-54 corners each, at fills of 0.12-0.6, and read as shredded shards.
+ */
+inline std::vector<P2> cleanOutline(const std::vector<P2>& ring, double axisRad, double rectFill, double minStepM) {
+    if (ring.size() < 4) return ring;
+    const double c = std::cos(axisRad), s = std::sin(axisRad);
+    double u0 = 1e18, u1 = -1e18, v0 = 1e18, v1 = -1e18, a2 = 0;
+    for (size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++) {
+        const double u = ring[i].x * c + ring[i].z * s, v = -ring[i].x * s + ring[i].z * c;
+        u0 = std::min(u0, u); u1 = std::max(u1, u); v0 = std::min(v0, v); v1 = std::max(v1, v);
+        a2 += ring[j].x * ring[i].z - ring[i].x * ring[j].z;
+    }
+    const double rect = (u1 - u0) * (v1 - v0);
+    if (rect > 1e-9 && std::abs(a2) / 2 >= rectFill * rect) {
+        auto at = [&](double u, double v) { return P2{u * c - v * s, u * s + v * c}; };
+        return {at(u0, v0), at(u1, v0), at(u1, v1), at(u0, v1)};
+    }
+    // the outline in the axis frame, rasterised at minStepM (a cell is in when its centre is), largest 4-connected piece
+    std::vector<P2> uv;
+    for (const auto& p : ring) uv.push_back({p.x * c + p.z * s, -p.x * s + p.z * c});
+    const std::vector<std::vector<P2>> one{uv};
+    scan_massing::CellSet cells;
+    for (int32_t k = static_cast<int32_t>(std::floor(v0 / minStepM)); k <= static_cast<int32_t>(std::floor(v1 / minStepM)); ++k)
+        for (int32_t i = static_cast<int32_t>(std::floor(u0 / minStepM)); i <= static_cast<int32_t>(std::floor(u1 / minStepM)); ++i)
+            if (scan_massing::inRings(one, (i + 0.5) * minStepM, (k + 0.5) * minStepM)) cells.insert(scan_massing::ckey(i, k));
+    scan_massing::CellSet best, seen;
+    for (int64_t start : cells) {
+        if (seen.count(start)) continue;
+        scan_massing::CellSet piece;
+        std::vector<int64_t> st{start};
+        seen.insert(start);
+        while (!st.empty()) {
+            const int64_t q = st.back(); st.pop_back();
+            piece.insert(q);
+            const int32_t x = scan_massing::ci(q), z = scan_massing::ck(q);
+            for (const int64_t nb : {scan_massing::ckey(x + 1, z), scan_massing::ckey(x - 1, z), scan_massing::ckey(x, z + 1), scan_massing::ckey(x, z - 1)})
+                if (cells.count(nb) && !seen.count(nb)) { seen.insert(nb); st.push_back(nb); }
+        }
+        if (piece.size() > best.size()) best = std::move(piece);
+    }
+    if (best.empty()) { auto out = scan_massing::detail::simplify(ring, minStepM / 2); return out.size() >= 3 ? out : ring; }
+    std::vector<P2> out;
+    for (const auto& q : scan_massing::detail::simplify(scan_massing::outline(best), 1e-6)) out.push_back({q.x * minStepM * c - q.z * minStepM * s, q.x * minStepM * s + q.z * minStepM * c});
+    return out.size() >= 3 ? out : ring;
+}
 
 struct RoofObject {
     std::vector<P2> outline;
@@ -511,7 +564,7 @@ inline RoofReport roofObjectsFromPhoto(const std::vector<Vec3>& samples, const s
             if (yr.size() >= 4) { o.mesh = revolveProfile(o.centre, yr); o.chosen = "solid of revolution"; o.why = "round outline in the photo (roundness " + scan_massing::fmt3(o.roundness) + ", radius " + scan_massing::fmt3(R) + " m), profile from the scan"; }
         }
         if (o.chosen.empty()) {
-            o.outline = squareToAxes(outlineIn, axis, P.squareTolDeg, outlineSource == "photo" ? 0.2 : 0.3);
+            o.outline = cleanOutline(squareToAxes(outlineIn, axis, P.squareTolDeg, outlineSource == "photo" ? 0.2 : 0.3), axis, P.rectFill, P.minStepM);
             o.mesh = scan_massing::extrudeBlock(o.outline, o.baseY, o.topY);
             o.chosen = "outline raised";
             o.why = "outline from the " + outlineSource + ", height " + (o.heightSource == "scan" ? "from the scan (" + scan_massing::fmt3(o.topY - o.baseY) + " m)" : "estimated (the scan does not see it stand)");

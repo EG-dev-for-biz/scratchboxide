@@ -67,6 +67,20 @@ int main() {
         CHECK(std::abs(rMax - 2.0) < 0.4 && std::abs(tank->topY - 25) < 0.4, "tank radius %.2f, top %.2f", rMax, tank->topY);
     }
     CHECK(boxo && boxo->chosen == "outline raised" && std::abs(boxo->topY - 23) < 0.4, "the box: %s, top %.2f", boxo ? boxo->chosen.c_str() : "not found", boxo ? boxo->topY : 0.0);
+    {
+        std::printf("[roof_objects] a box traced as a pixel staircase is built as its rectangle; an L keeps its shape\n");
+        // a 4 x 2 m box at 30 degrees, its edge stepped every 0.1 m as a photo region's outline comes out
+        const double a = M_PI / 6, c = std::cos(a), sn = std::sin(a);
+        std::vector<P2> stairs;
+        auto at = [&](double u, double v) { return P2{u * c - v * sn, u * sn + v * c}; };
+        for (int k = 0; k < 40; ++k) { stairs.push_back(at(k * 0.1, (k % 2) * 0.05)); }
+        stairs.push_back(at(4, 0)); stairs.push_back(at(4, 2)); stairs.push_back(at(0, 2));
+        const auto box = cleanOutline(stairs, a, 0.7, 0.4);
+        CHECK(box.size() == 4, "the box kept %zu corners", box.size());
+        const std::vector<P2> ell{at(0, 0), at(4, 0), at(4, 1), at(1, 1), at(1, 4), at(0, 4)};
+        const auto l = cleanOutline(ell, a, 0.7, 0.4);
+        CHECK(l.size() == 6, "the L came out with %zu corners", l.size());
+    }
     if (failures) { std::printf("[roof_objects] %d check(s) failed\n", failures); return 1; }
     std::printf("[roof_objects] all checks passed\n");
     return 0;

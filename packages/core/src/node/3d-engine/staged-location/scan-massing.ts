@@ -173,6 +173,26 @@ export function clampInto(outline: Array<[number, number]>, ring: Array<[number,
     return { outline: out, moved };
 }
 
+/** Corners sharper than this are spikes: an outline doubling back on itself (wall snapping turned the Haughwout plan's 0.5 m jog into a 2.1 m sliver). */
+export const SPIKE_DEG = 25;
+
+/** `ring` without its spikes: each vertex whose two edges meet at under `minDeg` is dropped, until none is left. */
+export function dropSpikes(ring: Array<[number, number]>, minDeg = SPIKE_DEG): { ring: Array<[number, number]>; dropped: number } {
+    const r = ring.map(p => [p[0], p[1]] as [number, number]);
+    let dropped = 0;
+    for (let changed = true; changed && r.length > 3;) {
+        changed = false;
+        for (let i = 0; i < r.length && r.length > 3; i++) {
+            const a = r[(i - 1 + r.length) % r.length], b = r[i], c = r[(i + 1) % r.length];
+            const ux = a[0] - b[0], uz = a[1] - b[1], vx = c[0] - b[0], vz = c[1] - b[1];
+            const lu = Math.hypot(ux, uz), lv = Math.hypot(vx, vz);
+            const deg = lu && lv ? (Math.acos(Math.max(-1, Math.min(1, (ux * vx + uz * vz) / (lu * lv)))) * 180) / Math.PI : 0;
+            if (deg < minDeg) { r.splice(i, 1); dropped++; changed = true; break; }
+        }
+    }
+    return { ring: r, dropped };
+}
+
 function ringArea(r: Array<[number, number]>): number {
     let a = 0;
     for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += r[j][0] * r[i][1] - r[i][0] * r[j][1];
@@ -190,10 +210,11 @@ export function asMassingParts(r: ScanMassingResult): { parts: MassingPart[]; me
     });
     if (r.chosen === 'block' || r.chosen === 'block + roof objects') {
         if (r.block.length < 3) return { reason: 'the block has no outline' };
-        const parts = [part('scan-block', r.block, r.groundY, r.roofY, `the roof at the median of the scan's cell tops (${r.roofY.toFixed(2)} m)`)];
+        const block = dropSpikes(r.block);
+        const parts = [part('scan-block', block.ring, r.groundY, r.roofY, `the roof at the median of the scan's cell tops (${r.roofY.toFixed(2)} m)`)];
         const meshes: MassingMesh[] = [];
-        const notes = [`block: walls snapped onto the scanned walls, roof at ${r.roofY.toFixed(2)} m`];
-        const clear = (insetRing(r.block, ROOF_WALL_CLEARANCE_M) as Array<[number, number]> | undefined) ?? r.block;
+        const notes = [`block: walls snapped onto the scanned walls, roof at ${r.roofY.toFixed(2)} m${block.dropped ? `; ${block.dropped} spike corner${block.dropped === 1 ? '' : 's'} (under ${SPIKE_DEG} degrees) taken out` : ''}`];
+        const clear = (insetRing(block.ring, ROOF_WALL_CLEARANCE_M) as Array<[number, number]> | undefined) ?? block.ring;
         if (r.chosen === 'block + roof objects') for (const [k, o] of (r.roof?.objects ?? []).entries()) {
             let kept = '';
             if (o.mesh) meshes.push({ id: `scan-roof-${k}`, vertices: o.mesh.v, indices: o.mesh.i, provenance: SCAN_MASSING_PROVENANCE });
@@ -210,7 +231,7 @@ export function asMassingParts(r: ScanMassingResult): { parts: MassingPart[]; me
     if (r.chosen === 'tiers') {
         const tiers = r.tiers.filter(t => t.outline.length >= 3 && t.y1 > t.y0);
         if (!tiers.length) return { reason: 'no tier has an outline' };
-        return { parts: tiers.map((t, k) => part(`scan-tier-${k}`, t.outline, t.y0, t.y1, `tier ${k}: ${t.y0.toFixed(1)}-${t.y1.toFixed(1)} m`)), meshes: [], notes: tiers.map((t, k) => `tier ${k}: ${t.y0.toFixed(1)}-${t.y1.toFixed(1)} m, ${t.area.toFixed(0)} m2`) };
+        return { parts: tiers.map((t, k) => part(`scan-tier-${k}`, dropSpikes(t.outline).ring, t.y0, t.y1, `tier ${k}: ${t.y0.toFixed(1)}-${t.y1.toFixed(1)} m`)), meshes: [], notes: tiers.map((t, k) => `tier ${k}: ${t.y0.toFixed(1)}-${t.y1.toFixed(1)} m, ${t.area.toFixed(0)} m2`) };
     }
     return { reason: `the scan chose ${r.chosen}, which has no flat walls for a facade to be read onto` };
 }

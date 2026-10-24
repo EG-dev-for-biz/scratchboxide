@@ -21,7 +21,7 @@ import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { massingSpecText } from '../src/node/3d-engine/staged-location/pipeline-e/massing-spec';
 import { runMassing } from '../src/node/3d-engine/staged-location/pipeline-e/native-massing';
-import { asMassingParts, clampInto, ROOF_WALL_CLEARANCE_M, type ScanMassingResult } from '../src/node/3d-engine/staged-location/scan-massing';
+import { asMassingParts, clampInto, dropSpikes, ROOF_WALL_CLEARANCE_M, type ScanMassingResult } from '../src/node/3d-engine/staged-location/scan-massing';
 
 const BLOCK: Array<[number, number]> = [[0, 0], [20, 0], [20, 12], [0, 12]];
 const box = (x0: number, z0: number, x1: number, z1: number): Array<[number, number]> => [[x0, z0], [x1, z0], [x1, z1], [x0, z1]];
@@ -67,6 +67,15 @@ describe('scan massing as parts', () => {
         let top = -Infinity;
         for (const n of run.nodes) for (let i = 1; i < n.positions.length; i += 3) top = Math.max(top, n.positions[i]);
         expect(top).toBeCloseTo(20, 1);
+    });
+
+    it('takes the spike out of a snapped plan and keeps its real corners', () => {
+        // the Haughwout snapped plan: its south corner doubles back 2.1 m (a 0.5 m vector jog the snap stretched)
+        const plan: Array<[number, number]> = [[12.1, 1.53], [17.65, 4.63], [11.6, 14.61], [-15.27, -0.29], [-4.97, -16.54], [-6.86, -17.48], [15.36, -3.44]];
+        const r = dropSpikes(plan);
+        expect(r.dropped).toBe(1);
+        expect(r.ring).not.toContainEqual([-6.86, -17.48]);
+        expect(dropSpikes(BLOCK)).toEqual({ ring: BLOCK, dropped: 0 });
     });
 
     it('refuses a lofted winner with its reason, and builds tiers as parts', () => {
