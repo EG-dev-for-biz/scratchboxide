@@ -176,6 +176,7 @@ import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSIO
 import { PIPELINE_G_VERSION, runPipelineG, stagedPipelineG } from './pipeline-g/pipeline-g';
 import { H_BUDGET_MARGIN_MS, H_POLICY, PIPELINE_H_VERSION, stagedProcedural } from './pipeline-h/pipeline-h';
 import { PIPELINE_I_VERSION, runPipelineI } from './pipeline-i/pipeline-i';
+import { captureBuildingTrainingInBackground, type BuildingTrainingCaptureInput } from '../../cloud-store/building-training-capture';
 import type { ModelClient } from './pipeline-i/fal-trellis';
 import type { StationImageGenerator } from '../../spatial/BeautifyStationService';
 import { ledgerFromMassingNote, type LedgerEntry } from './pipeline-h/ledger';
@@ -3547,6 +3548,23 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             return done;
         };
 
+        // every grammar-slot build, delivered or failed, kept as a training pair (melted scan -> finished building) where this
+        // instance has a training bucket (building-training-capture.ts); started and forgotten, never part of the build
+        const captureTraining = (e: NonNullable<typeof eState>, pair: { source: string; pipelineVersion: string; outcome: 'delivered' | 'failed'; reason?: string; files?: Record<string, string | undefined>; fit?: BuildingTrainingCaptureInput['fit']; provenanceLabels?: string[]; notes?: unknown }): void => {
+            if (!structure || !placeValue) return;
+            try {
+                captureBuildingTrainingInBackground({
+                    runId, place: placeValue.formattedAddress || request.query, anchor: { lat: placeValue.lat, lng: placeValue.lng },
+                    outcome: pair.outcome, ...(pair.reason ? { reason: pair.reason } : {}), source: pair.source, pipelineVersion: pair.pipelineVersion,
+                    files: { 'input.scan_textured': e.refined.texturedGlb, 'input.scan_clay': e.refined.rawClayGlb ?? e.refined.clayGlb, ...(pair.files ?? {}) },
+                    footprint: { cells: structure.cells, groundY: structure.groundY, heightM: structure.heightM },
+                    ...(pair.fit ? { fit: pair.fit } : {}), provenanceLabels: pair.provenanceLabels ?? [], ...(pair.notes !== undefined ? { notes: pair.notes } : {})
+                });
+            } catch (err) {
+                console.warn(`[training-capture] run ${runId}: ${errorMessage(err)}`);
+            }
+        };
+
         // ---------------- pipeline G (the grammar stage's slot, request.procedural): the facades rebuilt procedurally from a survey of the tile ----------------
         const gRun = async (e: NonNullable<typeof eState>): Promise<void> => {
             if (!visionAvailable) { runner.skip('grammar', 'pipeline G reads its survey with a vision model, and none is configured'); return; }
@@ -3598,9 +3616,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     };
                     run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, extra: { pipeline: procedural ?? 'g' } });
                     run.note(PROVENANCE.photoInferred, `pipeline ${(procedural ?? 'g').toUpperCase()}: ${describe}`);
+                    captureTraining(e, {
+                        source: `pipeline-${procedural ?? 'g'}`, pipelineVersion: procedural === 'h' ? PIPELINE_H_VERSION : PIPELINE_G_VERSION, outcome: 'delivered',
+                        files: { 'target.textured': out.files.texturedGlb, 'target.clay': out.files.clayGlb }, provenanceLabels: layer.provenanceLabels, notes: { steps: out.steps }
+                    });
                     return { status: 'committed', value: { steps: out.steps }, layers: [layer], source: `pipeline ${(procedural ?? 'g').toUpperCase()} in ${((now() - t0) / 1000).toFixed(0)} s: ${describe}${out.budgetNotes.length ? ` (budget: ${out.budgetNotes.join('; ')})` : ''}` };
                 },
-                degrade: async err => ({
+                degrade: async err => (captureTraining(e, { source: `pipeline-${procedural ?? 'g'}`, pipelineVersion: procedural === 'h' ? PIPELINE_H_VERSION : PIPELINE_G_VERSION, outcome: 'failed', reason: errorMessage(err) }), {
                     status: 'degraded', source: 'the clean massing stands without the procedural facades', reason: `pipeline ${(procedural ?? 'g').toUpperCase()} failed (${errorMessage(err)})`,
                     degradations: [run.degrade(record('grammar', 'pipeline_g_failed', {
                         part: { description: 'the procedural facades of the massing' }, intended: 'facades read from a survey of the tile and built procedurally (arches, bands, members)', fellTo: 'the clean massing with its tile ortho textures',
@@ -3649,9 +3671,18 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     };
                     run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, extra: { pipeline: 'i' } });
                     run.note('generated', `pipeline I: ${describe}`);
+                    captureTraining(e, {
+                        source: out.model.model, pipelineVersion: PIPELINE_I_VERSION, outcome: 'delivered',
+                        files: {
+                            ...Object.fromEntries(out.files.views.map((v, k) => [`input.view_${k + 1}`, v])), 'input.sheet': out.files.sheetPng, 'input.sheet_reference': out.files.sheetReferencePng,
+                            'target.textured': out.files.texturedGlb, 'target.clay': out.files.clayGlb, 'target.raw': out.files.modelGlb
+                        },
+                        fit: { planIoU: f.planIoU, coverage: f.coverage, overflowShare: f.overflowShare, heightRatio: f.heightRatio, yawDeg: f.yawDeg, scale: f.scale, mirrored: f.mirrored },
+                        provenanceLabels: layer.provenanceLabels, notes: { steps: out.steps, plan: out.plan, sheet: out.sheet, model: out.model, candidates: out.candidates, swatch: out.swatch }
+                    });
                     return { status: 'committed', value: { steps: out.steps }, layers: [layer], source: `pipeline I in ${((now() - t0) / 1000).toFixed(0)} s: ${describe}` };
                 },
-                degrade: async err => ({
+                degrade: async err => (captureTraining(e, { source: 'pipeline-i', pipelineVersion: PIPELINE_I_VERSION, outcome: 'failed', reason: errorMessage(err) }), {
                     status: 'degraded', source: 'the clean massing stands without the generated model', reason: `pipeline I failed (${errorMessage(err)})`,
                     degradations: [run.degrade(record('grammar', 'pipeline_i_failed', {
                         part: { description: 'the generated model of the structure' }, intended: 'a model made by Trellis from a character sheet of the scan, the best of several seeds, colour-matched and fitted to the scan', fellTo: 'the clean massing with its tile ortho textures',
