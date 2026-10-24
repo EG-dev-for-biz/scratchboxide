@@ -23,17 +23,16 @@
 
 import * as crypto from 'crypto';
 import * as fs from 'fs-extra';
-import * as os from 'os';
 import * as path from 'path';
 import { DurableAssetStore, defaultDurableAssetStore } from '../asset-store/durable-asset-store';
-import { scratchboxHome } from '../asset-store/scratchbox-home';
-import { GcsCloudBucket, type CloudBucket } from './cloud-bucket';
-import { GoogleMediaCredentialsService } from '../google-media-credentials-service';
+import type { CloudBucket } from './cloud-bucket';
+import { TRAINING_UPLOADED_EVENT, defaultTrainingBucket, pendingTrainingPairs, resolveTrainingBucketName, uploadTrainingRecord, uploadableTrainingPair } from './training-pair-capture';
+
+export { defaultTrainingBucket, resolveTrainingBucketName } from './training-pair-capture';
 
 export const BUILDING_TRAINING_SCHEMA = 'scratchbox.building-training/1';
 export const BUILDING_TRAINING_RECIPE_KIND = 'building-training-record';
 export const BUILDING_TRAINING_PREFIX = 'training/building/v1';
-const UPLOADED_EVENT = 'training.uploaded';
 
 /** Which builder made the target (an open label: pipeline names grow). */
 export type BuildingTrainingSource = 'fal-ai/trellis/multi' | 'pipeline-e' | 'pipeline-g' | 'pipeline-h' | 'pipeline-i' | (string & {});
@@ -56,6 +55,8 @@ export interface BuildingTrainingFile {
 export interface BuildingTrainingRecord {
     schema: typeof BUILDING_TRAINING_SCHEMA;
     id: string;
+    /** Always "building": the pair's category among every training pair (training-pair-capture.ts). */
+    category?: 'building';
     runId: string;
     createdAtMs: number;
     place: string;
@@ -77,6 +78,8 @@ export interface BuildingTrainingRecord {
     /** The target's fit to the scan (register.ts for pipeline I), when measured. */
     fit?: { planIoU: number; coverage: number; overflowShare: number; heightRatio?: number; yawDeg?: number; scale?: number; mirrored?: boolean };
     provenanceLabels: string[];
+    /** The target shows parts no scan saw (a model's invented sides and roof): trainers weigh these apart. */
+    targetBeyondScan?: { note: string };
     /** Builder-specific notes (steps, sheet QC, the model job), kept as they were reported. */
     notes?: unknown;
 }
@@ -94,33 +97,9 @@ export interface BuildingTrainingCaptureInput {
     footprint: { cells: Iterable<string>; groundY: number; heightM: number };
     fit?: BuildingTrainingRecord['fit'];
     provenanceLabels: string[];
+    targetBeyondScan?: { note: string };
     notes?: unknown;
     now?: number;
-}
-
-/** The training bucket's name, or undefined when this instance does not capture. */
-export function resolveTrainingBucketName(): string | undefined {
-    const fromEnv = process.env.SCRATCHBOX_TRAINING_BUCKET?.trim();
-    if (fromEnv) return fromEnv === 'off' ? undefined : fromEnv;
-    try {
-        const bucket = fs.readJsonSync(path.join(scratchboxHome(), 'cloud-store.json'))?.trainingBucket;
-        return typeof bucket === 'string' && bucket.trim() ? bucket.trim() : undefined;
-    } catch {
-        return undefined;
-    }
-}
-
-let shared: { name: string; bucket: CloudBucket } | undefined;
-
-/** The process-wide training bucket, or undefined when none is configured. */
-export function defaultTrainingBucket(): CloudBucket | undefined {
-    const name = resolveTrainingBucketName();
-    if (!name) return undefined;
-    if (shared?.name !== name) {
-        const storage = new GoogleMediaCredentialsService().createStorageClient();
-        shared = { name, bucket: new GcsCloudBucket(storage.bucket(name)) };
-    }
-    return shared.bucket;
 }
 
 function isMeshy(source: string, notes: unknown): boolean {
@@ -144,13 +123,13 @@ export function recordBuildingTraining(store: DurableAssetStore, input: Building
     }
     const delivered = input.outcome === 'delivered' && files.some(f => f.role.startsWith('target.'));
     const record: BuildingTrainingRecord = {
-        schema: BUILDING_TRAINING_SCHEMA, id, runId: input.runId, createdAtMs: input.now ?? Date.now(), place: input.place, anchor: input.anchor,
+        schema: BUILDING_TRAINING_SCHEMA, id, category: 'building', runId: input.runId, createdAtMs: input.now ?? Date.now(), place: input.place, anchor: input.anchor,
         outcome: delivered ? 'delivered' : 'failed',
         ...(input.reason ? { reason: input.reason } : !delivered && input.outcome === 'delivered' ? { reason: `the target files were missing: ${missing.join(', ')}` } : {}),
         source: input.source, targetKind: /^pipeline-/.test(input.source) ? 'pipeline-rebuild' : 'model-output', pipelineVersion: input.pipelineVersion,
         trainAllowed: delivered && !isMeshy(input.source, input.notes),
         files, footprint: { cells: [...input.footprint.cells].sort(), groundY: input.footprint.groundY, heightM: input.footprint.heightM },
-        ...(input.fit ? { fit: input.fit } : {}), provenanceLabels: [...new Set(input.provenanceLabels)],
+        ...(input.fit ? { fit: input.fit } : {}), provenanceLabels: [...new Set(input.provenanceLabels)], ...(input.targetBeyondScan ? { targetBeyondScan: input.targetBeyondScan } : {}),
         ...(input.notes !== undefined ? { notes: input.notes } : {})
     };
     store.putRecipe({ id, kind: BUILDING_TRAINING_RECIPE_KIND, body: record });
@@ -159,26 +138,21 @@ export function recordBuildingTraining(store: DurableAssetStore, input: Building
 
 /** Sends one record and its blobs to the bucket (blobs first, so a record in the bucket never names a missing blob). */
 export async function uploadBuildingTraining(store: DurableAssetStore, bucket: CloudBucket, record: BuildingTrainingRecord): Promise<void> {
-    for (const f of record.files) {
-        await bucket.putFile(`${BUILDING_TRAINING_PREFIX}/blobs/${f.sha256.slice(0, 2)}/${f.sha256}`, store.blobPath(f.sha256), { onlyIfAbsent: true, ...(f.mime ? { contentType: f.mime } : {}) });
-    }
-    const tmp = path.join(os.tmpdir(), `sb-training-${record.id}-${crypto.randomBytes(4).toString('hex')}.json`);
-    try {
-        await fs.writeJson(tmp, record);
-        await bucket.putFile(`${BUILDING_TRAINING_PREFIX}/records/${record.id}.json`, tmp, {
-            contentType: 'application/json',
-            metadata: { schema: record.schema, source: record.source, outcome: record.outcome, trainAllowed: String(record.trainAllowed) }
-        });
-    } finally {
-        await fs.remove(tmp);
-    }
-    store.db.addEvent(UPLOADED_EVENT, record.id, null, { bucket: bucket.label });
+    await uploadTrainingRecord(store, bucket, {
+        id: record.id, prefix: BUILDING_TRAINING_PREFIX, files: record.files, body: record,
+        metadata: { schema: record.schema, category: 'building', source: record.source, outcome: record.outcome, trainAllowed: String(record.trainAllowed) }
+    });
+}
+
+/** Uploads every building record still waiting (the other categories' captures sweep buildings through this). */
+export async function sweepPendingBuildingTraining(store: DurableAssetStore, bucket: CloudBucket): Promise<void> {
+    for (const pending of pendingBuildingTraining(store)) await uploadBuildingTraining(store, bucket, pending);
 }
 
 /** Records in the store whose upload has not been confirmed. */
 export function pendingBuildingTraining(store: DurableAssetStore): BuildingTrainingRecord[] {
     return store.db.recipesOfKind(BUILDING_TRAINING_RECIPE_KIND)
-        .filter(r => !store.events({ subject: r.id, limit: 50 }).some(e => e.kind === UPLOADED_EVENT))
+        .filter(r => !store.events({ subject: r.id, limit: 50 }).some(e => e.kind === TRAINING_UPLOADED_EVENT))
         .map(r => r.body as BuildingTrainingRecord);
 }
 
@@ -196,6 +170,8 @@ export async function captureBuildingTraining(input: BuildingTrainingCaptureInpu
     await new Promise(resolve => setImmediate(resolve));
     const { missing: _missing, ...record } = recordBuildingTraining(store, input);
     for (const pending of pendingBuildingTraining(store)) await uploadBuildingTraining(store, bucket, pending);
+    // and every other category's pairs still waiting (training-pair-capture.ts)
+    for (const pending of pendingTrainingPairs(store)) await uploadTrainingRecord(store, bucket, uploadableTrainingPair(pending));
     return record;
 }
 

@@ -176,7 +176,9 @@ import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSIO
 import { PIPELINE_G_VERSION, runPipelineG, stagedPipelineG } from './pipeline-g/pipeline-g';
 import { H_BUDGET_MARGIN_MS, H_POLICY, PIPELINE_H_VERSION, stagedProcedural } from './pipeline-h/pipeline-h';
 import { PIPELINE_I_VERSION, runPipelineI } from './pipeline-i/pipeline-i';
-import { captureBuildingTrainingInBackground, type BuildingTrainingCaptureInput } from '../../cloud-store/building-training-capture';
+import { captureBuildingTrainingInBackground, sweepPendingBuildingTraining, type BuildingTrainingCaptureInput } from '../../cloud-store/building-training-capture';
+import { captureTrainingPairsInBackground } from '../../cloud-store/training-pair-capture';
+import { sceneTrainingPairs } from './scene-training-pairs';
 import type { ModelClient } from './pipeline-i/fal-trellis';
 import type { StationImageGenerator } from '../../spatial/BeautifyStationService';
 import { ledgerFromMassingNote, type LedgerEntry } from './pipeline-h/ledger';
@@ -3534,6 +3536,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     };
                     run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, extra: { pipeline: 'e' } });
                     run.note(PROVENANCE.photoInferred, `pipeline E inference: ${describe}`);
+                    captureTraining(e, {
+                        source: 'pipeline-e', pipelineVersion: PIPELINE_E_VERSION, outcome: 'delivered',
+                        files: { 'target.textured': out.files.texturedGlb, 'target.clay': out.files.clayGlb }, provenanceLabels: layer.provenanceLabels, notes: { steps: out.steps }
+                    });
                     done = { out, layer };
                     return { status: kept.length ? 'committed' : 'degraded', value: { steps: out.steps }, layers: [layer], source: `pipeline E inference in ${((now() - t0) / 1000).toFixed(0)} s: ${describe}`, ...(kept.length ? {} : { reason: 'no inferred step was kept' }) };
                 },
@@ -3550,7 +3556,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
 
         // every grammar-slot build, delivered or failed, kept as a training pair (melted scan -> finished building) where this
         // instance has a training bucket (building-training-capture.ts); started and forgotten, never part of the build
-        const captureTraining = (e: NonNullable<typeof eState>, pair: { source: string; pipelineVersion: string; outcome: 'delivered' | 'failed'; reason?: string; files?: Record<string, string | undefined>; fit?: BuildingTrainingCaptureInput['fit']; provenanceLabels?: string[]; notes?: unknown }): void => {
+        const captureTraining = (e: NonNullable<typeof eState>, pair: { source: string; pipelineVersion: string; outcome: 'delivered' | 'failed'; reason?: string; files?: Record<string, string | undefined>; fit?: BuildingTrainingCaptureInput['fit']; provenanceLabels?: string[]; targetBeyondScan?: { note: string }; notes?: unknown }): void => {
             if (!structure || !placeValue) return;
             try {
                 captureBuildingTrainingInBackground({
@@ -3558,7 +3564,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     outcome: pair.outcome, ...(pair.reason ? { reason: pair.reason } : {}), source: pair.source, pipelineVersion: pair.pipelineVersion,
                     files: { 'input.scan_textured': e.refined.texturedGlb, 'input.scan_clay': e.refined.rawClayGlb ?? e.refined.clayGlb, ...(pair.files ?? {}) },
                     footprint: { cells: structure.cells, groundY: structure.groundY, heightM: structure.heightM },
-                    ...(pair.fit ? { fit: pair.fit } : {}), provenanceLabels: pair.provenanceLabels ?? [], ...(pair.notes !== undefined ? { notes: pair.notes } : {})
+                    ...(pair.fit ? { fit: pair.fit } : {}), provenanceLabels: pair.provenanceLabels ?? [], ...(pair.targetBeyondScan ? { targetBeyondScan: pair.targetBeyondScan } : {}), ...(pair.notes !== undefined ? { notes: pair.notes } : {})
                 });
             } catch (err) {
                 console.warn(`[training-capture] run ${runId}: ${errorMessage(err)}`);
@@ -3678,7 +3684,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             'target.textured': out.files.texturedGlb, 'target.clay': out.files.clayGlb, 'target.raw': out.files.modelGlb
                         },
                         fit: { planIoU: f.planIoU, coverage: f.coverage, overflowShare: f.overflowShare, heightRatio: f.heightRatio, yawDeg: f.yawDeg, scale: f.scale, mirrored: f.mirrored },
-                        provenanceLabels: layer.provenanceLabels, notes: { steps: out.steps, plan: out.plan, sheet: out.sheet, model: out.model, candidates: out.candidates, swatch: out.swatch }
+                        provenanceLabels: layer.provenanceLabels,
+                        // the model draws the sides and roof no scan saw: the pair says so, for whoever trains on it
+                        targetBeyondScan: { note: `${out.model.model} drew the whole structure from the character sheet's views; sides, backs and roof the scan did not see are generated` },
+                        notes: { steps: out.steps, plan: out.plan, sheet: out.sheet, model: out.model, candidates: out.candidates, swatch: out.swatch, fitMatrix: f.matrix }
                     });
                     return { status: 'committed', value: { steps: out.steps }, layers: [layer], source: `pipeline I in ${((now() - t0) / 1000).toFixed(0)} s: ${describe}` };
                 },
@@ -5076,7 +5085,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             request, place: placeValue, extraction, structure, sizedTo: t.sizedTo, remeshed: remeshedNow, groundFile: groundOverride?.groundFile ?? remesh.value?.groundFile, groundLayerId: groundOverride?.groundLayerId ?? remesh.value?.groundLayerId ?? currentL1()?.objectId,
             trees: treesOut.trees, putBack: treesOut.putBack, rebuild, strip, ...(textureValue ? { textures: textureValue } : {}), now, persist
         });
-        keepSceneObjects(run, cache, outcome, extraction, request.query);
+        keepSceneObjects(run, cache, outcome, extraction, request.query, { isolate: !!request.isolate, place: placeValue ? { name: placeValue.formattedAddress || request.query, lat: placeValue.lat, lng: placeValue.lng } : undefined });
         return outcome;
     } catch (err) {
         // the Street View fetch and the two branches are ended with the call: none is left running, or rejecting unseen, behind it
@@ -5105,7 +5114,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
  * versioned GLB, and the scene's data with the versions it used. Informative like the rest of the asset store: a failure
  * is written to the run's notes and never fails the build.
  */
-function keepSceneObjects(run: StagedRun, cache: StageCache, outcome: StagedLocationOutcome, extraction: StagedExtraction, query: string): void {
+function keepSceneObjects(run: StagedRun, cache: StageCache, outcome: StagedLocationOutcome, extraction: StagedExtraction, query: string, training: { isolate: boolean; place?: { name: string; lat: number; lng: number } }): void {
     if (!objectStoreEnabled()) return;
     const store = defaultDurableAssetStore();
     if (!store) return;
@@ -5116,6 +5125,20 @@ function keepSceneObjects(run: StagedRun, cache: StageCache, outcome: StagedLoca
     }).then(report => {
         cache.writeRunNote(run.runId, 'object_store', report);
         console.log(`[staged-location] scene objects: ${report.objects} (${report.stored} stored, ${report.reused} reused, ${report.failed.length} failed) in ${report.ms} ms; scene ${report.scenePath ?? 'not kept'}`);
+        // the district and object training pairs (scene-training-pairs.ts), where this instance has a training bucket;
+        // started and forgotten like the objects themselves
+        if (training.place) {
+            try {
+                const superseded = new Set(run.state.layers.filter(l => !l.retired).flatMap(l => l.supersedes));
+                captureTrainingPairsInBackground(sceneTrainingPairs({
+                    runId: run.runId, place: training.place.name, anchor: { lat: training.place.lat, lng: training.place.lng }, isolate: training.isolate,
+                    scanGlb: extraction.texturedGlb, report, store,
+                    liveLayers: run.state.layers.filter(l => !l.retired && !superseded.has(l.objectId)).map(l => ({ layer: l.layer, url: l.url, provenanceLabels: l.provenanceLabels }))
+                }), sweepPendingBuildingTraining);
+            } catch (err) {
+                console.warn(`[training-capture] run ${run.runId}: ${errorMessage(err)}`);
+            }
+        }
     }, err => {
         try { cache.writeRunNote(run.runId, 'object_store', { error: errorMessage(err) }); } catch { /* notes are diagnostics */ }
     }));

@@ -481,6 +481,8 @@ export interface StoreSceneReport {
     failed: Array<{ layer: string; object?: string; error: string }>;
     perLayer: Array<{ layer: string; objects: number; stored: number; reused: number; notes: string[] }>;
     scenePath?: string;
+    /** Every object kept (stored or reused), with what it is: what the training capture pairs with the scan. */
+    kept: Array<{ objectKey: string; version: number; kind: string; identity: string; layer: string; glbPath: string; sha256: string; catalogType?: string; centre?: [number, number, number]; wgs84?: { lat: number; lng: number; altM: number }; provenanceLabels: string[]; inputs?: Record<string, unknown> }>;
     ms: number;
 }
 
@@ -492,7 +494,7 @@ export interface StoreSceneReport {
 export async function storeSceneObjects(input: StoreSceneInput): Promise<StoreSceneReport> {
     const t0 = Date.now();
     const objectsStore = new SceneObjectStore(input.store);
-    const report: StoreSceneReport = { objects: 0, stored: 0, reused: 0, pointerMoved: 0, bytesWritten: 0, imageBytes: { uncut: 0, cut: 0 }, failed: [], perLayer: [], ms: 0 };
+    const report: StoreSceneReport = { objects: 0, stored: 0, reused: 0, pointerMoved: 0, bytesWritten: 0, imageBytes: { uncut: 0, cut: 0 }, failed: [], perLayer: [], kept: [], ms: 0 };
     const superseded = new Set(input.layers.flatMap(l => l.supersedes));
     const refs: SceneObjectRef[] = [];
     const layerRefs: SceneLayerRef[] = [];
@@ -566,6 +568,11 @@ export async function storeSceneObjects(input: StoreSceneInput): Promise<StoreSc
                     if (put.pointerMoved) report.pointerMoved++;
                     cutHere++;
                     refs.push({ objectKey: put.objectKey, version: put.version, kind: obj.kind, layer: layer.layer, glbPath: put.glbPath, sha256: put.sha256, reused: put.reused });
+                    report.kept.push({
+                        objectKey: put.objectKey, version: put.version, kind: obj.kind, identity, layer: layer.layer, glbPath: put.glbPath, sha256: put.sha256,
+                        ...(obj.catalogType ? { catalogType: obj.catalogType } : {}), ...(obj.centre ? { centre: obj.centre } : {}), ...(wgs ? { wgs84: { lat: wgs.lat, lng: wgs.lng, altM: wgs.alt } } : {}),
+                        provenanceLabels: obj.provenance.labels, ...(obj.inputs ? { inputs: obj.inputs } : {})
+                    });
                 } catch (err) {
                     report.failed.push({ layer: layer.layer, object: `${obj.kind}/${identity || '?'}`, error: (err as Error).message });
                 }
