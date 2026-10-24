@@ -190,7 +190,7 @@ def main():
     stages = stage_table(rows)
     finish = next((r for r in rows if r.get('stage') == 'finish'), None)
     pe = load_json(os.path.join(run_dir, 'pipeline_e.json'))
-    pg = load_json(os.path.join(run_dir, 'pipeline_g.json'))
+    pg = load_json(os.path.join(run_dir, 'pipeline_h.json')) or load_json(os.path.join(run_dir, 'pipeline_g.json'))
     st = load_json(os.path.join(run_dir, 'stages.json')) or {}
     steps = g_steps(pg)
     base = load_json(BASELINE) or {}

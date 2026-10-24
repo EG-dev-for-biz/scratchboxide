@@ -332,37 +332,84 @@ export function closeOutline(raw: Uint8Array, W: number, H: number): Uint8Array 
 }
 
 /**
- * Long thin dark lines crossing the structure's outline (poles, mast arms, wires), by columns and rows: a run of pixels
- * darker than both sides `halfWidthPx` away that covers LINE_MIN_INSIDE_SHARE of the outline's extent along it AND
- * continues LINE_MIN_OUTSIDE_SHARE of the view's side outside the outline. The structure's own pilasters, mullions and
- * cornices stop at its edge, so they are not taken. Returns the runs' pixels inside the outline.
+ * Long thin dark lines crossing the structure's outline at any angle (poles, mast arms, wires): pixels darker than both
+ * sides `halfWidthPx` away across some direction vote in a Hough transform (on the view scaled to at most 480 px); each
+ * strong line is traced into segments, and a segment is kept when it covers LINE_MIN_INSIDE_SHARE of the outline's extent
+ * along it AND either crosses LINE_MIN_OUTSIDE_SHARE of the view's side of open background outside the outline (the same
+ * plain tone on both sides, like sky) or runs from `seeds` (a pole or a mounted item already found) out of the frame. The
+ * structure's own pilasters, mullions and cornices stop at its edge, or continue over the neighbours' walls, so they are
+ * not taken. Returns the segments' pixels inside the outline, at the view's size.
  */
-export function crossingLines(image: { width: number; height: number; rgba: Uint8Array }, outline: Uint8Array, opts: { halfWidthPx?: number; contrast?: number } = {}): Uint8Array {
-    const W = image.width, H = image.height, w = opts.halfWidthPx ?? Math.max(3, Math.round(0.004 * Math.max(W, H))), k = opts.contrast ?? 18;
-    const L = new Float32Array(W * H);
-    for (let i = 0; i < W * H; i++) L[i] = 0.299 * image.rgba[i * 4] + 0.587 * image.rgba[i * 4 + 1] + 0.114 * image.rgba[i * 4 + 2];
-    let x0 = W, y0 = H, x1 = -1, y1 = -1;
-    for (let i = 0; i < W * H; i++) if (outline[i]) { const x = i % W, y = (i / W) | 0; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
-    const out = new Uint8Array(W * H);
+export function crossingLines(image: { width: number; height: number; rgba: Uint8Array }, outline: Uint8Array, opts: { halfWidthPx?: number; contrast?: number; seeds?: Uint8Array } = {}): Uint8Array {
+    const W = image.width, H = image.height, out = new Uint8Array(W * H);
+    const f = Math.max(1, Math.ceil(Math.max(W, H) / 480)), sw = Math.ceil(W / f), sh = Math.ceil(H / f);
+    const w = Math.max(1, Math.round((opts.halfWidthPx ?? Math.max(3, Math.round(0.004 * Math.max(W, H)))) / f)), k = opts.contrast ?? 18;
+    // the view scaled down: luma averaged, outline and seeds kept where any full-size pixel has them
+    const L = new Float32Array(sw * sh), n = new Float32Array(sw * sh), O = new Uint8Array(sw * sh), S = new Uint8Array(sw * sh);
+    let x0 = sw, y0 = sh, x1 = -1, y1 = -1;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const i = y * W + x, j = ((y / f) | 0) * sw + ((x / f) | 0);
+        L[j] += 0.299 * image.rgba[i * 4] + 0.587 * image.rgba[i * 4 + 1] + 0.114 * image.rgba[i * 4 + 2]; n[j]++;
+        if (outline[i]) O[j] = 1;
+        if (opts.seeds?.[i]) S[j] = 1;
+    }
+    for (let j = 0; j < L.length; j++) {
+        L[j] /= n[j] || 1;
+        if (O[j]) { const x = j % sw, y = (j / sw) | 0; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
     if (x1 < 0) return out;
-    // one scan direction: `n` lines of `len` pixels; at(line, t) is the pixel index, dark(line, t) the thin-line test across it
-    const scan = (n: number, len: number, at: (l: number, t: number) => number, dark: (l: number, t: number) => boolean, extent: number) => {
-        for (let l = 0; l < n; l++) {
-            let t = 0;
-            while (t < len) {
-                if (!dark(l, t)) { t++; continue; }
-                const run: number[] = [];
-                let gap = 0, u = t;
-                for (; u < len && gap <= 2; u++) { if (dark(l, u)) { run.push(at(l, u)); gap = 0; } else gap++; }
-                let inside = 0, outside = 0;
-                for (const i of run) { if (outline[i]) inside++; else outside++; }
-                if (inside >= LINE_MIN_INSIDE_SHARE * extent && outside >= LINE_MIN_OUTSIDE_SHARE * len) for (const i of run) if (outline[i]) out[i] = 1;
-                t = u;
+    const at = (x: number, y: number) => L[Math.min(sh - 1, Math.max(0, y)) * sw + Math.min(sw - 1, Math.max(0, x))];
+    const thin = new Uint8Array(sw * sh);
+    for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
+        const c = L[y * sw + x];
+        for (const [dx, dy] of [[w, 0], [0, w], [w, w], [w, -w]]) if (c < at(x - dx, y - dy) - k && c < at(x + dx, y + dy) - k) { thin[y * sw + x] = 1; break; }
+    }
+    // Hough: 180 angles, 1 px of rho
+    const T = 180, R = Math.ceil(Math.hypot(sw, sh)), cos = new Float32Array(T), sin = new Float32Array(T);
+    for (let t = 0; t < T; t++) { cos[t] = Math.cos((t * Math.PI) / T); sin[t] = Math.sin((t * Math.PI) / T); }
+    const acc = new Int32Array(T * (2 * R + 1));
+    for (let j = 0; j < thin.length; j++) if (thin[j]) { const x = j % sw, y = (j / sw) | 0; for (let t = 0; t < T; t++) acc[t * (2 * R + 1) + Math.round(x * cos[t] + y * sin[t]) + R]++; }
+    const minVotes = Math.max(8, Math.round(0.1 * Math.min(sw, sh))), outsideMin = LINE_MIN_OUTSIDE_SHARE * Math.max(sw, sh);
+    for (let line = 0; line < 60; line++) {
+        let best = -1, bv = minVotes - 1;
+        for (let q = 0; q < acc.length; q++) if (acc[q] > bv) { bv = acc[q]; best = q; }
+        if (best < 0) break;
+        const t = Math.floor(best / (2 * R + 1)), rho = (best % (2 * R + 1)) - R;
+        for (let dt = -4; dt <= 4; dt++) for (let dr = -4; dr <= 4; dr++) { const tt = (t + dt + T) % T, rr = rho + dr + R; if (rr >= 0 && rr <= 2 * R) acc[tt * (2 * R + 1) + rr] = 0; }
+        // trace the line: the foot of rho, then along the direction (-sin, cos), a step of one pixel
+        const px = rho * cos[t], py = rho * sin[t], ux = -sin[t], uy = cos[t];
+        const extent = Math.abs(ux) * (x1 - x0 + 1) + Math.abs(uy) * (y1 - y0 + 1);
+        let run: Array<[number, number]> = [], gap = 0;
+        const flush = () => {
+            if (run.length) {
+                // outside the outline, the line must cross open background (the same plain tone on both sides of it, like sky):
+                // a facade's own courses and sills line up with the neighbours' in perspective and continue over their walls
+                let inside = 0, open = 0;
+                const off = w + 2, nx = Math.round(cos[t] * off), ny = Math.round(sin[t] * off);
+                for (const [x, y] of run) {
+                    if (O[y * sw + x]) { inside++; continue; }
+                    const ax = x + nx, ay = y + ny, bx = x - nx, by = y - ny;
+                    if (ax < 0 || ay < 0 || bx < 0 || by < 0 || ax >= sw || bx >= sw || ay >= sh || by >= sh) continue;
+                    if (!O[ay * sw + ax] && !O[by * sw + bx] && Math.abs(L[ay * sw + ax] - L[by * sw + bx]) < 10) open++;
+                }
+                const near = (q: [number, number]) => { for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) { const x = q[0] + dx, y = q[1] + dy; if (x >= 0 && y >= 0 && x < sw && y < sh && S[y * sw + x]) return true; } return false; };
+                const border = (q: [number, number]) => q[0] <= 1 || q[1] <= 1 || q[0] >= sw - 2 || q[1] >= sh - 2;
+                const [a, b] = [run[0], run[run.length - 1]];
+                if (inside >= LINE_MIN_INSIDE_SHARE * extent && (open >= outsideMin || (near(a) && border(b)) || (near(b) && border(a))))
+                    for (const [x, y] of run) for (let yy = y * f; yy < Math.min(H, (y + 1) * f); yy++) for (let xx = x * f; xx < Math.min(W, (x + 1) * f); xx++) if (outline[yy * W + xx]) out[yy * W + xx] = 1;
             }
+            run = []; gap = 0;
+        };
+        for (let s = -R; s <= R; s++) {
+            const x = Math.round(px + s * ux), y = Math.round(py + s * uy);
+            if (x < 0 || y < 0 || x >= sw || y >= sh) { if (run.length) flush(); continue; }
+            // the line's own pixel or one beside it across the line
+            const bx = x + Math.round(cos[t]), by = y + Math.round(sin[t]);
+            const hit = thin[y * sw + x] === 1 || (bx >= 0 && by >= 0 && bx < sw && by < sh && thin[by * sw + bx] === 1);
+            if (hit) { run.push([x, y]); gap = 0; } else if (++gap > 3) flush();
         }
-    };
-    scan(W, H, (x, y) => y * W + x, (x, y) => x - w >= 0 && x + w < W && L[y * W + x] < L[y * W + x - w] - k && L[y * W + x] < L[y * W + x + w] - k, y1 - y0 + 1);
-    scan(H, W, (y, x) => y * W + x, (y, x) => y - w >= 0 && y + w < H && L[y * W + x] < L[(y - w) * W + x] - k && L[y * W + x] < L[(y + w) * W + x] - k, x1 - x0 + 1);
+        flush();
+    }
     return out;
 }
 
@@ -451,7 +498,7 @@ export async function detectOccluders(image: { width: number; height: number; rg
             instances.push({ label: c.label, pixels: c.inside, kept: true });
         }
         // long thin lines crossing the outline that no box caught (mast arms, wires, poles), under the same union cap
-        const lines = crossingLines(image, within);
+        const lines = crossingLines(image, within, { seeds: mask });
         let add = 0;
         for (let i = 0; i < lines.length; i++) if (lines[i] && !mask[i]) add++;
         if (add && segmentedPixels + thinPixels + add <= OCCLUDER_UNION_MAX_SHARE * outline) {

@@ -64,12 +64,44 @@ import { writeBuildingBrief, type BuildingBriefRecord } from './brief';
 import { closePlateGaps, redrawRoof, roofStations, ROOF_PLATE_PROMPT_ID, type RoofTextureRecord } from './roof-texture';
 import { weakWallReferences, type WeakWallReference } from './references';
 import type { GroundedReferenceClient } from '../../../spatial/search-grounded-reference';
+import type { LedgerEntry } from '../pipeline-h/ledger';
 
 export const PIPELINE_G_VERSION = `pipeline-g/v3+${PIPELINE_G_READ_VERSION}`;
 /** Native build parameters: the massing only, nothing baked from the tile, no scanned residual. */
 export const G_BUILD_PARAMS = { bake: 0, residual: 0, sections: 0, topdown: 0, snapMaxM: 0 } as const;
 /** Plates read at once. */
 export const READ_POOL = 4;
+
+/**
+ * The rules a procedural rebuild runs under. Pipeline G is the defaults (G_POLICY: no budget, every reading built, the
+ * native tool's rejections listed by id); pipeline H (pipeline-h/pipeline-h.ts) sets each of these. One implementation,
+ * two policies: the steps are the same, the decisions around them differ.
+ */
+export interface RebuildPolicy {
+    name: string;
+    /**
+     * Milliseconds from the start within which the layer must be written. A step that cannot fit what is left is skipped
+     * with a note (readings get a shorter deadline, textures and references are not started) and the build commits what
+     * it has, rather than the stage's own limit discarding a finished survey (run 5c3555af: 15 minutes lost at 900 s).
+     */
+    budgetMs?: number;
+    /** A reading still explaining under this share of its plate after its re-read, with a lift under gateLift, is dropped: its wall is painted generated, not built from a lattice nobody saw. */
+    gateExplained?: number;
+    gateLift?: number;
+    /** Continued (generated) openings that overlap another opening on their wall, or lie past its ends, are dropped before the native build. */
+    dedupeContinued?: boolean;
+    /** The native build's rejections grouped by the reason the tool gives, instead of listed by id. */
+    rejectionReasons?: boolean;
+    /** The evidence ledger (pipeline-h/ledger.ts) kept and written into the brief. */
+    ledger?: boolean;
+}
+export const G_POLICY: RebuildPolicy = { name: 'g' };
+/** Time the build, paint, layer write, brief and footprint lock need after the last reading or texture (measured: 40-60 s). */
+export const BUDGET_RESERVE_MS = 90_000;
+/** No reading is started with less than this left for it. */
+export const BUDGET_MIN_READ_MS = 60_000;
+/** A facade texture or a roof texture is not started with less than this left (measured: 20-75 s each). */
+export const BUDGET_TEXTURE_MS = 90_000;
 /**
  * The Street View survey (registration, cut-outs, obstruction-free copies) runs beside the stations and the reading from
  * the start; when the walls are drawn it is waited for at most this long, then the walls go without it (said so).
@@ -125,9 +157,17 @@ export interface PipelineGInput {
     references?: { client: GroundedReferenceClient; models?: string[]; outputDir: string };
     /** Where the building brief and its images are published, outside the chat tools' IGNORED_DIRS (brief.ts; absent: workspace_view_file cannot reach the brief). */
     publicDir?: string;
+    /** The rules (G_POLICY when absent). */
+    policy?: RebuildPolicy;
+    /** Ledger entries the orchestrator decided before the rebuild (structure, footprint, heights), kept ahead of the rebuild's own. */
+    ledger?: LedgerEntry[];
 }
 
 export interface PipelineGOutcome extends InferenceOutcome {
+    /** The evidence ledger (policy.ledger), the orchestrator's entries first. */
+    ledger: LedgerEntry[];
+    /** Steps the budget cut short or skipped, each with what was left and what it needed. */
+    budgetNotes: string[];
     plates: Array<{ face: string; coverage: number; read: boolean; model?: string; notes?: string; counts?: ProgramItems['counts']; check?: ReadingCheck; reread?: 'first' | 'second' }>;
     /** The building brief written beside the build (brief.ts), or why it was not. */
     brief?: BuildingBriefRecord | { error: string };
@@ -404,6 +444,43 @@ export function alignTextureToOpenings(texture: Uint8Array, W: number, H: number
 }
 
 /** Runs `fn` over `xs` with at most `n` in flight. */
+/**
+ * Drops, in place, the continued (generated) openings of one wall's items that lie past the wall's ends or overlap an
+ * opening kept before them (read openings first, then continued ones in order), with their sills and surrounds. Says
+ * which and why. A read opening is never dropped here: the native tool judges those and says why (rejectionsByReason).
+ */
+export function dedupeContinuedOpenings(it: ProgramItems, face: Pick<MassingFace, 'sMin' | 'sMax'> | undefined): { dropped: string[] } {
+    const dropped: string[] = [];
+    const keep: OpeningItem[] = [];
+    const ordered = [...it.openings.filter(o => o.provenance !== 'generated'), ...it.openings.filter(o => o.provenance === 'generated')];
+    for (const o of ordered) {
+        if (o.provenance !== 'generated') { keep.push(o); continue; }
+        const past = face ? o.s0 < face.sMin + 0.02 || o.s1 > face.sMax - 0.02 : false;
+        const over = keep.find(p => o.s0 < p.s1 && p.s0 < o.s1 && o.t0 < p.t1 && p.t0 < o.t1);
+        if (past || over) { dropped.push(`${o.id}: ${past ? 'past the wall\'s ends' : `overlaps ${over!.id}`}`); continue; }
+        keep.push(o);
+    }
+    if (dropped.length) {
+        const ids = new Set(dropped.map(d => d.split(':')[0]));
+        it.openings = it.openings.filter(o => !ids.has(o.id));
+        it.faceSweeps = it.faceSweeps.filter(s => !ids.has(s.id.replace(/:(sill|surround)$/, '')));
+    }
+    return { dropped };
+}
+
+/** Whether a (kept, possibly re-read) reading is dropped by the policy's gate: it explains under gateExplained of its plate and lifts under gateLift over its displaced copies. */
+export function readingGated(c: Pick<ReadingCheck, 'explained' | 'lift'>, policy: Pick<RebuildPolicy, 'gateExplained' | 'gateLift'>): boolean {
+    return policy.gateExplained !== undefined && c.explained < policy.gateExplained && c.lift < (policy.gateLift ?? Infinity);
+}
+
+/** The native tool's rejected openings counted by reason ('overlaps opening <id>' folded into one reason). */
+export function rejectionsByReason(report: Pick<MassingRun['report'], 'rejectedOpenings' | 'rejectedOpeningReasons'>): Map<string, number> {
+    const reasons = report.rejectedOpeningReasons ?? {};
+    const byReason = new Map<string, number>();
+    for (const id of report.rejectedOpenings) { const r = (reasons[id] ?? 'no reason given').replace(/ opening \S+$/, ' another opening'); byReason.set(r, (byReason.get(r) ?? 0) + 1); }
+    return byReason;
+}
+
 async function pool<T, R>(xs: T[], n: number, fn: (x: T) => Promise<R>): Promise<R[]> {
     const out: R[] = new Array(xs.length);
     let next = 0;
@@ -415,6 +492,13 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     const timingsMs: Record<string, number> = {};
     const steps: StepRecord[] = [];
     const progress = (m: string) => input.onProgress?.(m);
+    const policy = input.policy ?? G_POLICY;
+    const tStart = Date.now();
+    /** Milliseconds the budget still allows (Infinity without one). */
+    const left = () => policy.budgetMs === undefined ? Infinity : tStart + policy.budgetMs - Date.now();
+    const budgetNotes: string[] = [];
+    const ledger: LedgerEntry[] = policy.ledger ? [...(input.ledger ?? [])] : [];
+    const tag = `pipeline ${policy.name.toUpperCase()}`;
     fs.mkdirSync(path.join(input.dir, 'plates'), { recursive: true });
     const faces = input.run.report.faces;
     // the Street View survey, started now so it runs beside the stations and the reading (it takes minutes)
@@ -429,7 +513,7 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
 
     // 1. stations
     let t = Date.now();
-    progress('pipeline G: placing the survey stations on the street');
+    progress(`${tag}: placing the survey stations on the street`);
     const tileMesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(input.tilePath);
     const plan = planStations({ allFaces: surveyFaces, structure: input.structure, ground: input.ground, tileMesh, anchor: input.anchor });
     timingsMs.stations = Date.now() - t;
@@ -479,13 +563,16 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
 
     // 3. read (cached by the plate's pixels and the prompt version: a rerun on the same tile never bills twice)
     t = Date.now();
-    progress(`pipeline G: reading ${readable.length} wall${readable.length === 1 ? '' : 's'} as facade programs`);
+    progress(`${tag}: reading ${readable.length} wall${readable.length === 1 ? '' : 's'} as facade programs`);
     const readings = await pool(readable, READ_POOL, async (pl: Plate) => {
         const hash = crypto.createHash('sha256').update(PIPELINE_G_READ_VERSION).update(input.place).update(pl.rgb).update(Buffer.from(pl.relief.buffer)).digest('hex').slice(0, 24);
         const read = async (file: string, again?: string) => {
             const cached = path.join(input.dir, 'plates', file);
             if (fs.existsSync(cached)) return { ...(JSON.parse(fs.readFileSync(cached, 'utf8')) as { program: FacadeProgram; model: string; ms: number }), cached: true };
-            const r = await readPlate(input.chain, input.place, pl, input.signal, again);
+            // under a budget a reading gets what is left after the reserve, never more than the wall's own deadline
+            const room = left() - BUDGET_RESERVE_MS;
+            if (room < BUDGET_MIN_READ_MS) throw new Error(`not started: ${Math.round(Math.max(0, room) / 1000)} s of the budget left for it, at least ${BUDGET_MIN_READ_MS / 1000} s needed`);
+            const r = await readPlate(input.chain, input.place, pl, input.signal, again, Number.isFinite(room) ? room : undefined);
             fs.writeFileSync(cached, JSON.stringify(r, null, 1));
             return { ...r, cached: false };
         };
@@ -496,6 +583,7 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
             const first = await read(`reading_${hash}.json`);
             const c1 = checkReading(cp, first.program);
             if (!c1.weak) return { pl, ...first, check: c1 };
+            if (left() - BUDGET_RESERVE_MS < BUDGET_MIN_READ_MS) { budgetNotes.push(`${pl.key}: weak reading kept without a re-read (${Math.round(Math.max(0, left()) / 1000)} s of the budget left)`); return { pl, ...first, check: c1 }; }
             const again = `A first reading of this wall was checked against the image and did not fit it: drawn back onto Image 1, its openings and members account for ${Math.round(c1.explained * 100)}% of the wall's light and dark variation, about ${c1.lift}x what the same reading moved half a bay out of place does. Look again: measure each row's bottom and top and each opening's left and right edges off the tick marks, and list only what the image shows.`;
             try {
                 const second = await read(`reading_${hash}_again.json`, again);
@@ -512,15 +600,30 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     });
     timingsMs.read = Date.now() - t;
     const items = new Map<string, ProgramItems>();
-    for (const r of readings) if ('program' in r && r.program) items.set(r.pl.key, programItems(r.program, surveyFaces[r.pl.face], `g${r.pl.face}_`));
     const checkNote = (c: ReadingCheck) => `explains ${Math.round(c.explained * 100)}% of the plate (${c.lift}x its displaced copies), edges P ${c.precision} R ${c.recall}, opening contrast ${c.openingContrast}`;
+    /** Readings the gate dropped (policy.gateExplained): their walls are painted generated instead of built from them. */
+    const gated: string[] = [];
+    for (const r of readings) {
+        if (!('program' in r && r.program)) continue;
+        const c = 'check' in r ? r.check : undefined;
+        if (c && readingGated(c, policy)) {
+            gated.push(`${r.pl.key}: dropped by the gate (${checkNote(c)}; under ${Math.round((policy.gateExplained ?? 0) * 100)}% explained and ${policy.gateLift ?? '-'}x lift after its re-read): the wall keeps its measured colour, generated`);
+            if (policy.ledger) ledger.push({ decision: `reading:${r.pl.key}`, chosen: 'none (generated wall)', why: `the reading explained ${Math.round(c.explained * 100)}% of the plate after its re-read`, sources: [{ source: 'reading', value: checkNote(c), used: false }] });
+            continue;
+        }
+        items.set(r.pl.key, programItems(r.program, surveyFaces[r.pl.face], `g${r.pl.face}_`));
+        if (policy.ledger && c) ledger.push({ decision: `reading:${r.pl.key}`, chosen: `${'model' in r ? r.model : 'reading'}${'reread' in r && r.reread ? ` (${r.reread.kept} reading kept)` : ''}`, why: checkNote(c), sources: [{ source: 'reading', value: checkNote(c), used: true }, ...('reread' in r && r.reread && 'first' in r.reread && r.reread.first ? [{ source: 'first reading', value: checkNote(r.reread.first), used: false }] : []), ...('reread' in r && r.reread && 'second' in r.reread && r.reread.second ? [{ source: 're-reading', value: checkNote(r.reread.second), used: false }] : [])] });
+    }
     steps.push({ step: 'facade reading', proposed: readable.length, accepted: items.size, rejected: readable.length - items.size, notes: readings.map(r => ('error' in r && r.error) ? `${r.pl.key}: not read (${r.error})` : `${r.pl.key}: ${'model' in r ? r.model : ''}${'cached' in r && r.cached ? ' (cached)' : ''}${'check' in r && r.check ? `; ${checkNote(r.check)}` : ''}${'reread' in r && r.reread ? `; read again (${r.reread.kept} reading kept${'first' in r.reread && r.reread.first ? `, the first ${checkNote(r.reread.first)}` : ''}${'second' in r.reread && r.reread.second ? `, the second ${checkNote(r.reread.second)}` : ''}${'error' in r.reread && r.reread.error ? `, the second failed: ${r.reread.error}` : ''})` : ''}`), ms: timingsMs.read });
-    if (!items.size) throw new Error(`no wall could be read (${readings.map(r => ('error' in r && r.error) || '').filter(Boolean).join('; ')})`);
+    if (gated.length) steps[steps.length - 1].notes.push(...gated);
+    if (!items.size) throw new Error(`no wall could be read (${[...readings.map(r => ('error' in r && r.error) || ''), ...gated].filter(Boolean).join('; ')})`);
 
     // a search-grounded reference for every wall the check still marks weak (references.ts): started now, awaited just
     // before the brief is written, so it runs alongside the build rather than adding its own time to the total
     const tRef = Date.now();
-    const referencesPromise: Promise<WeakWallReference[]> = input.references
+    const referencesFit = left() >= BUDGET_RESERVE_MS + BUDGET_TEXTURE_MS;
+    if (input.references && !referencesFit) budgetNotes.push(`weak-wall references not fetched (${Math.round(Math.max(0, left()) / 1000)} s of the budget left)`);
+    const referencesPromise: Promise<WeakWallReference[]> = input.references && referencesFit
         ? weakWallReferences({
             client: input.references.client, place: input.place, models: input.references.models, outputDir: input.references.outputDir,
             signal: input.signal, plates: readable.map(pl => ({ face: surveyFaces[pl.face], check: (readings.find(r => r.pl.key === pl.key) as { check?: ReadingCheck } | undefined)?.check }))
@@ -537,10 +640,20 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
         for (const [k, v] of laid.byMember) built.set(k, v);
         dropped.push(...laid.droppedOpenings);
     }
+    // continued (generated) openings that overlap another opening on their wall, or lie past its ends, are not sent to
+    // the native tool (policy.dedupeContinued): on the Flatiron 583 of 678 openings were rejected there, unexplained
+    const deduped: string[] = [];
+    if (policy.dedupeContinued) {
+        for (const [key, it] of built) {
+            const d = dedupeContinuedOpenings(it, input.run.report.faces.find(f => f.key === key));
+            deduped.push(...d.dropped);
+            if (d.dropped.length && policy.ledger) ledger.push({ decision: `continuation:${key}`, chosen: `${it.openings.filter(o => o.provenance === 'generated').length} continued openings built`, why: `${d.dropped.length} dropped: past the wall's ends or over another opening`, sources: [{ source: 'continuation', value: `${it.counts.filledOpenings} continued`, used: true }] });
+        }
+    }
 
     // 4. build
     t = Date.now();
-    progress('pipeline G: building the facades natively on the massing');
+    progress(`${tag}: building the facades natively on the massing`);
     const openings = [...built.values()].flatMap(x => x.openings);
     const faceSweeps = [...built.values()].flatMap(x => x.faceSweeps);
     // what stands on the roof, built from what the scan measures there (roof-objects.ts)
@@ -559,7 +672,13 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     const run = await runMassing(massingSpecText({ ...input.massing, parts: [...input.massing.parts, ...roofParts] }, { outDir: buildDir, tile: input.tilePath, params: { ...G_BUILD_PARAMS }, openings, faceSweeps }), buildDir, { ...(input.signal ? { signal: input.signal } : {}) });
     timingsMs.build = Date.now() - t;
     const c = [...built.values()].reduce((a, x) => ({ o: a.o + x.counts.openings, fo: a.fo + x.counts.filledOpenings, h: a.h + x.counts.horizontal, v: a.v + x.counts.vertical, fv: a.fv + x.counts.filledVertical, pn: a.pn + x.counts.paned, sl: a.sl + x.counts.sills, sr: a.sr + x.counts.surrounds }), { o: 0, fo: 0, h: 0, v: 0, fv: 0, pn: 0, sl: 0, sr: 0 });
-    steps.push({ step: 'native build', proposed: openings.length + faceSweeps.length, accepted: openings.length + faceSweeps.length - run.report.rejectedOpenings.length - run.report.rejectedSweeps.length, rejected: run.report.rejectedOpenings.length + run.report.rejectedSweeps.length, notes: [`${c.o} openings (${c.fo} continued into unseen parts; ${c.pn} with divided glazing, ${c.sl} with sills, ${c.sr} with surrounds), ${c.h} horizontal profiles, ${c.v} vertical members (${c.fv} continued)`, ...run.report.rejectedOpenings.map(id => `opening ${id} rejected by the native tool`), ...(dropped.length ? [`${dropped.length} openings read on a grouped facade lay across walls and were not built (${dropped.slice(0, 8).join(', ')}${dropped.length > 8 ? ', ...' : ''})`] : [])], ms: timingsMs.build });
+    // the native tool's rejections: by reason (policy.rejectionReasons, from the tool's rejectedOpeningReasons) or by id
+    const byReason = rejectionsByReason(run.report);
+    const rejectionNotes = policy.rejectionReasons
+        ? [...byReason.entries()].sort((a, b) => b[1] - a[1]).map(([why, n]) => `${n} opening${n === 1 ? '' : 's'} rejected by the native tool: ${why}`)
+        : run.report.rejectedOpenings.map(id => `opening ${id} rejected by the native tool`);
+    if (policy.ledger && run.report.rejectedOpenings.length) ledger.push({ decision: 'rejections', chosen: `${openings.length - run.report.rejectedOpenings.length} of ${openings.length} openings built`, why: [...byReason.entries()].map(([w, n]) => `${n}: ${w}`).join('; '), sources: [...byReason.entries()].map(([w, n]) => ({ source: 'native', value: `${n} ${w}`, used: false })) });
+    steps.push({ step: 'native build', proposed: openings.length + faceSweeps.length, accepted: openings.length + faceSweeps.length - run.report.rejectedOpenings.length - run.report.rejectedSweeps.length, rejected: run.report.rejectedOpenings.length + run.report.rejectedSweeps.length, notes: [`${c.o} openings (${c.fo} continued into unseen parts; ${c.pn} with divided glazing, ${c.sl} with sills, ${c.sr} with surrounds), ${c.h} horizontal profiles, ${c.v} vertical members (${c.fv} continued)`, ...rejectionNotes, ...(deduped.length ? [`${deduped.length} continued openings not sent to the native tool: ${deduped.slice(0, 6).join('; ')}${deduped.length > 6 ? '; ...' : ''}`] : []), ...(dropped.length ? [`${dropped.length} openings read on a grouped facade lay across walls and were not built (${dropped.slice(0, 8).join(', ')}${dropped.length > 8 ? ', ...' : ''})`] : [])], ms: timingsMs.build });
 
     // 5. paint
     t = Date.now();
@@ -575,7 +694,12 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
 
     // 6. facade textures: each read wall's survey plate redrawn by the facade texture builder, over its paint where accepted
     const enhanced: EnhanceWallRecord[] = [];
-    if (input.enhance) {
+    const texturesFit = left() >= BUDGET_RESERVE_MS + BUDGET_TEXTURE_MS;
+    if (input.enhance && !texturesFit) {
+        budgetNotes.push(`facade and roof textures not drawn (${Math.round(Math.max(0, left()) / 1000)} s of the budget left, ${(BUDGET_RESERVE_MS + BUDGET_TEXTURE_MS) / 1000} s needed): the walls keep their painted colours`);
+        steps.push({ step: 'facade textures', proposed: 0, accepted: 0, rejected: 0, skipped: budgetNotes[budgetNotes.length - 1], notes: [], ms: 0 });
+    }
+    if (input.enhance && texturesFit) {
         t = Date.now();
         const e = input.enhance;
         const step: StepRecord = { step: 'facade textures', proposed: 0, accepted: 0, rejected: 0, notes: [], ms: 0 };
@@ -587,7 +711,7 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
         // the Street View photos of the structure, once: each wall's best is its street-level reference
         let guide: GuideView[] = [], noGuide: string | undefined = e.streetViews ? undefined : 'no Street View source';
         if (e.streetViews) {
-            progress('pipeline G: surveying the facades with Street View');
+            progress(`${tag}: surveying the facades with Street View`);
             try {
                 let timer: ReturnType<typeof setTimeout> | undefined;
                 const late = new Promise<'late'>(res => { timer = setTimeout(() => res('late'), G_STREET_VIEW_WAIT_MS); });
@@ -621,7 +745,7 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
                 if (best.view && best.rect) sv = { view: best.view, rect: best.rect, crop: wallReference(f, best.view, best.rect, on.tex.width, on.tex.height), why: `${best.why}; ${best.view.cleanImage ? 'its obstruction-free copy (occluders filled, labelled generated)' : 'as captured (no obstruction-free copy)'}` };
                 else noSv = best.why;
             }
-            progress(`pipeline G: drawing the facade texture of wall ${f.index} (${Math.round(f.area)} m2)${sv ? `, guided by Street View ${sv.view.panoId}${sv.view.cleanImage ? ' (obstruction-free copy)' : ''}` : ''}`);
+            progress(`${tag}: drawing the facade texture of wall ${f.index} (${Math.round(f.area)} m2)${sv ? `, guided by Street View ${sv.view.panoId}${sv.view.cleanImage ? ' (obstruction-free copy)' : ''}` : ''}`);
             const r = await buildFacadeTexture(f, on.tex, on.use, {
                 ...(sv ? { streetView: sv, streetViewGuide: true } : {}), ...(noSv ? { noStreetView: noSv } : {}),
                 client: e.client, models: e.models, locationName: input.place, source: G_SRC.enhanced,
@@ -645,8 +769,10 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
             else step.rejected++;
             step.notes.push(`wall ${f.index}: ${r.accepted ? 'textured' : 'keeps its painted colours'}: ${r.why}${r.model ? ` (${r.model})` : ''}${sv ? `; Street View reference: ${sv.why}` : noSv ? `; no Street View reference (${noSv})` : ''}`);
         };
-        // the largest wall alone, then ENHANCE_CONCURRENCY at a time, each referencing the first finished wall
+        // the largest wall alone, then ENHANCE_CONCURRENCY at a time, each referencing the first finished wall; under a
+        // budget, no further round starts with less than a texture's time left
         for (let k = 0; k < walls.length;) {
+            if (left() < BUDGET_RESERVE_MS + BUDGET_TEXTURE_MS) { budgetNotes.push(`${walls.length - k} facade texture(s) not drawn (${Math.round(Math.max(0, left()) / 1000)} s of the budget left)`); step.notes.push(budgetNotes[budgetNotes.length - 1]); break; }
             const round = walls.slice(k, k === 0 ? 1 : k + ENHANCE_CONCURRENCY);
             k += round.length;
             await Promise.all(round.map(one));
@@ -657,7 +783,7 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
 
     // 7. the roof's texture: each roof face of the massing redrawn from its plate (roof-texture.ts)
     const roofRecords: RoofTextureRecord[] = [];
-    if (input.enhance && roofPlates.length) {
+    if (input.enhance && roofPlates.length && left() >= BUDGET_RESERVE_MS + BUDGET_TEXTURE_MS) {
         t = Date.now();
         const e = input.enhance;
         const skippedRoofs: string[] = [];
@@ -669,7 +795,7 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
             if (pl.coverage <= 0) { skippedRoofs.push(`${f.key}: its plate saw none of it`); continue; }
             const on = plateOntoFace(f, textures.get(f.index)!, pl, surveyFaces[pl.face]);
             if (!on) { skippedRoofs.push(`${f.key}: none of its plate lands on the built roof (what the plate saw stands off it, or outside it)`); continue; }
-            progress(`pipeline G: drawing the roof texture (${Math.round(f.area)} m2)`);
+            progress(`${tag}: drawing the roof texture (${Math.round(f.area)} m2)`);
             try {
                 roofRecords.push(await redrawRoof(f, textures.get(f.index)!, on, { client: e.client, locationName: input.place, source: G_SRC.roof, ...(e.cacheDir ? { cacheDir: e.cacheDir } : {}), ...(input.signal ? { signal: input.signal } : {}) }));
             } catch (err) {
@@ -691,7 +817,7 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
             notes: references.length ? references.map(r => r.skipped ? `${r.face}: not fetched (${r.skipped})` : `${r.face}: ${r.references.length} reference${r.references.length === 1 ? '' : 's'} (${r.references.map(x => x.model).join(', ')})`) : ['no wall was still weak after its reading'],
             ms: Date.now() - tRef
         });
-        if (got) progress(`pipeline G: ${got} search-grounded reference${got === 1 ? '' : 's'} of ${references.filter(r => r.references.length).length} weak wall${references.filter(r => r.references.length).length === 1 ? '' : 's'}`);
+        if (got) progress(`${tag}: ${got} search-grounded reference${got === 1 ? '' : 's'} of ${references.filter(r => r.references.length).length} weak wall${references.filter(r => r.references.length).length === 1 ? '' : 's'}`);
     }
     const referencesByFace = new Map(references.map(r => [r.face, r.references]));
 
@@ -715,14 +841,15 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
                 };
             }),
             roofPlates: roofPlates.map(p => ({ key: p.key, coverage: p.coverage, colour: path.join(input.dir, 'plates', `roof_${p.face}_colour.png`) })),
-            files, steps
+            files, steps, ...(policy.ledger ? { ledger } : {})
         });
     } catch (err) {
         brief = { error: err instanceof Error ? err.message : String(err) };
     }
 
+    if (budgetNotes.length) steps.push({ step: 'budget', proposed: budgetNotes.length, accepted: 0, rejected: budgetNotes.length, notes: budgetNotes, ms: Date.now() - tStart });
     return {
-        files, run, steps, legend, grammars: [], timingsMs, enhanced, brief,
+        files, run, steps, legend, grammars: [], timingsMs, enhanced, brief, ledger, budgetNotes,
         build: { parts: [...input.massing.parts, ...roofParts], sweeps: [], openings },
         textures, occluderMasks: new Map(),
         plates: plates.map(p => {

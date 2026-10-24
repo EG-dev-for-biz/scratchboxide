@@ -865,7 +865,7 @@ private:
                 }
                 continue;
             }
-            if (!host) { rejectedOpenings_.push_back(spec_.openings[oi].id); continue; }
+            if (!host) { rejectOpening(spec_.openings[oi].id, "no wall of the massing hosts its face"); continue; }
             auto& o = spec_.openings[oi];
             o.s0 += shift; o.s1 += shift;
             if (spec_.clipOpenings && host->wall && !o.scanned && o.t0 <= host->tBottom + 0.02 && o.t1 > host->tBottom + 0.35) o.t0 = host->tBottom + 0.03;
@@ -1098,6 +1098,7 @@ private:
             return -1e300;
         };
         bool ok;
+        std::string why;
         if (!f.meshTris.empty()) {
             // a modelled volume's facet: the rectangle (inset 5 cm) inside the facet's own triangles at its corners, edge
             // midpoints and centre
@@ -1114,21 +1115,33 @@ private:
             };
             const double a0 = o.s0 + 0.05, a1 = o.s1 - 0.05, b0 = o.t0 + 0.05, b1 = o.t1 - 0.05;
             ok = o.s1 > o.s0 + 0.15 && o.t1 > o.t0 + 0.15;
-            for (double s : {a0, 0.5 * (a0 + a1), a1}) for (double t : {b0, 0.5 * (b0 + b1), b1}) if (ok && !inFacet(s, t)) ok = false;
+            if (!ok) why = "smaller than 0.15 m";
+            for (double s : {a0, 0.5 * (a0 + a1), a1}) for (double t : {b0, 0.5 * (b0 + b1), b1}) if (ok && !inFacet(s, t)) { ok = false; why = "off the facet of the modelled volume"; }
         } else {
             // a street-level opening (a door, a shop front) may reach the wall's bottom: within 5 cm of it, it starts there
             if (!o.scanned && o.t0 < f.tBottom + 0.05 && o.t0 > f.tBottom - 0.05) spec_.openings[static_cast<size_t>(oi)].t0 = f.tBottom;
-            ok = o.s1 > o.s0 + 0.05 && o.t1 > o.t0 + 0.05 && o.s0 > f.sMin + 0.02 && o.s1 < f.sMax - 0.02 && o.t0 >= f.tBottom - (o.scanned ? 1e9 : 1e-9) &&
-                 o.t1 < std::min(topAt(o.s0), topAt(o.s1)) - 0.05;
+            // each condition named, so a rejection says what was wrong with the reading (pipeline H reads these)
+            ok = true;
+            if (!(o.s1 > o.s0 + 0.05 && o.t1 > o.t0 + 0.05)) { ok = false; why = "smaller than 0.05 m"; }
+            else if (!(o.s0 > f.sMin + 0.02 && o.s1 < f.sMax - 0.02)) { ok = false; why = "outside the wall's ends"; }
+            else if (!(o.t0 >= f.tBottom - (o.scanned ? 1e9 : 1e-9))) { ok = false; why = "below the wall's bottom"; }
+            else if (!(o.t1 < std::min(topAt(o.s0), topAt(o.s1)) - 0.05)) { ok = false; why = "above the wall's top"; }
         }
         for (int other : f.openings) {
             const auto& p = spec_.openings[static_cast<size_t>(other)];
-            if (o.s0 < p.s1 && p.s0 < o.s1 && o.t0 < p.t1 && p.t0 < o.t1) ok = false;
+            if (o.s0 < p.s1 && p.s0 < o.s1 && o.t0 < p.t1 && p.t0 < o.t1) { if (ok) why = "overlaps opening " + p.id; ok = false; }
         }
-        if (!ok) { rejectedOpenings_.push_back(o.id); return; }
+        if (!ok) { rejectOpening(o.id, why); return; }
         f.openings.push_back(oi);
     }
+
+    /** A rejected opening and why: the ids alone (rejectedOpenings) hid 583 of 678 rejections on one building. */
+    void rejectOpening(const std::string& id, const std::string& why) {
+        rejectedOpenings_.push_back(id);
+        rejectedOpeningReasons_.emplace_back(id, why);
+    }
     std::vector<std::string> rejectedOpenings_;
+    std::vector<std::pair<std::string, std::string>> rejectedOpeningReasons_;
 
     /**
      * An opening's outline in its face's (s, t), counter-clockwise seen from outside: (s0, t0), (s1, t0), up the right jamb,
@@ -2245,7 +2258,9 @@ private:
         }
         js << "]},\"signedVolumeM3\":" << detail::fmt(volume_) << ",\"rejectedOpenings\":[";
         for (size_t i = 0; i < rejectedOpenings_.size(); ++i) js << (i ? "," : "") << detail::jstr(rejectedOpenings_[i]);
-        js << "],\"rejectedSweeps\":[";
+        js << "],\"rejectedOpeningReasons\":{";
+        for (size_t i = 0; i < rejectedOpeningReasons_.size(); ++i) js << (i ? "," : "") << detail::jstr(rejectedOpeningReasons_[i].first) << ":" << detail::jstr(rejectedOpeningReasons_[i].second);
+        js << "},\"rejectedSweeps\":[";
         for (size_t i = 0; i < rejectedSweeps_.size(); ++i) js << (i ? "," : "") << detail::jstr(rejectedSweeps_[i]);
         js << "],\"nodes\":" << (nodesJson_.empty() ? "[]" : nodesJson_) << ",\"images\":" << (imagesJson_.empty() ? "[]" : imagesJson_)
            << ",\"sections\":" << (sectionsJson_.empty() ? "[]" : sectionsJson_) << ",\"topdown\":" << (topdownJson_.empty() ? "null" : topdownJson_) << ",\"notes\":[";
