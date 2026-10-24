@@ -48,11 +48,17 @@
  * cut out of its library leaf set in the textured render. Their colour stays the GLB's (the library's colour and tints are
  * not drawn).
  *
+ * Orthographic views (`OrthoCamera`, texture-pass-contracts.ts; ortho-reference.ts builds one from a Static Maps satellite
+ * crop): renderTriangles takes a pinhole or an ortho camera. Under an ortho camera every pixel looks along `fwd`, a pixel is
+ * `pixelM` metres on the ground, depth is the distance along `fwd`, and the headlight is `fwd` itself; textures, clay, the
+ * context, cut-outs, lit and specular all render unchanged, so the judge can see the real satellite crop beside each arm's
+ * top-down render at the same scale. A satellite image is a second opinion and carries no capture date.
+ *
  * Nothing here knows a place or a pipeline; the arms are whatever GLBs the caller names. The photos must not have been used
  * to texture or register any arm: the caller holds them out (the bake-off driver checks the pano ids).
  */
 
-import type { DecodedImage, PinholeCamera } from '../../../common/spatial/texture-pass-contracts';
+import { isOrthoCamera, type DecodedImage, type OrthoCamera, type PinholeCamera, type RenderCamera } from '../../../common/spatial/texture-pass-contracts';
 import type { Vec3 } from '../../../common/spatial/staged-location-contracts';
 import { SRGB8_TO_LINEAR, linearToSrgb255 } from '../../../common/spatial/photogrammetric-delight';
 import { distanceTransform, gaussianBlur } from '../../spatial/StreetViewPoseRegistrar';
@@ -171,14 +177,14 @@ function cutoutUv(k: CutoutKind, u: number, v: number, out: Float64Array): boole
 }
 
 /**
- * Renders triangle soups (readTileTriangles: tile frame, linear textures) from a pinhole camera at the camera's own
- * resolution. `supersample` samples per pixel side (2 = 4 samples). Both faces of a triangle render (scan meshes have mixed
+ * Renders triangle soups (readTileTriangles: tile frame, linear textures) from a pinhole or an orthographic camera at the
+ * camera's own resolution. `supersample` samples per pixel side (2 = 4 samples). Both faces of a triangle render (scan meshes have mixed
  * winding); the nearest surface wins; `occluderDepth` hides what the real place hides. A soup's `cutout` (tree leaves and
  * crown cards) is alpha-tested per sample as the viewport's material does it, the clay or the textured cut-out by the
  * render: a sample whose alpha (mip-filtered at the triangle's footprint, raised per mip level, times the gain) is under 0.5
  * is not drawn and does not hide what is behind it.
  */
-export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, options: {
+export function renderTriangles(meshes: TileTriangles[], camera: RenderCamera, options: {
     supersample?: number; background?: Vec3; ambient?: number;
     /**
      * What stands in front in the real place (e.g. the full tile mesh: neighbours, trees, the street): its depth from the same
@@ -210,7 +216,9 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
     const t0 = Date.now();
     const ss = Math.max(1, Math.round(options.supersample ?? 2));
     const W = camera.width * ss, H = camera.height * ss;
-    const fx = camera.fx * ss, fy = camera.fy * ss, cx = camera.cx * ss, cy = camera.cy * ss;
+    // an ortho camera: fx, fy are samples per metre and the projection has no divide by depth
+    const ortho = isOrthoCamera(camera);
+    const fx = ortho ? ss / camera.pixelM : camera.fx * ss, fy = ortho ? ss / camera.pixelM : camera.fy * ss, cx = camera.cx * ss, cy = camera.cy * ss;
     const depth = new Float32Array(W * H).fill(Infinity);
     const mesh = new Int32Array(W * H).fill(-1), tri = new Int32Array(W * H).fill(-1);
     const bu = new Float32Array(W * H), bv = new Float32Array(W * H);
@@ -236,7 +244,8 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
             if (poly[0].z < PHOTO_MATCH_NEAR_M && poly[1].z < PHOTO_MATCH_NEAR_M && poly[2].z < PHOTO_MATCH_NEAR_M) continue;
             const clipped = poly[0].z < PHOTO_MATCH_NEAR_M || poly[1].z < PHOTO_MATCH_NEAR_M || poly[2].z < PHOTO_MATCH_NEAR_M ? clipNear(poly, PHOTO_MATCH_NEAR_M) : poly;
             if (clipped.length < 3) continue;
-            const sx = clipped.map(p => cx + (fx * p.x) / p.z), sy = clipped.map(p => cy - (fy * p.y) / p.z);
+            const sx = ortho ? clipped.map(p => cx + fx * p.x) : clipped.map(p => cx + (fx * p.x) / p.z);
+            const sy = ortho ? clipped.map(p => cy - fy * p.y) : clipped.map(p => cy - (fy * p.y) / p.z);
             let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
             for (let i = 0; i < sx.length; i++) { minX = Math.min(minX, sx[i]); maxX = Math.max(maxX, sx[i]); minY = Math.min(minY, sy[i]); maxY = Math.max(maxY, sy[i]); }
             if (maxX < 0 || maxY < 0 || minX >= W || minY >= H) continue;
@@ -292,12 +301,13 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
                         const w1 = ((X[2] - xc) * (Y[0] - yc) - (X[0] - xc) * (Y[2] - yc)) / area;
                         const w2 = 1 - w0 - w1;
                         if (w0 < 0 || w1 < 0 || w2 < 0) continue;
-                        const izp = w0 * iz[0] + w1 * iz[1] + w2 * iz[2];
-                        const z = 1 / izp;
+                        // perspective-correct interpolation (1/z weights); affine under an ortho camera
+                        const izp = ortho ? 1 : w0 * iz[0] + w1 * iz[1] + w2 * iz[2];
+                        const z = ortho ? w0 * Z[0].z + w1 * Z[1].z + w2 * Z[2].z : 1 / izp;
                         const i = py * W + px;
                         if (z >= depth[i]) continue;
-                        const pu = (w0 * Z[0].u * iz[0] + w1 * Z[1].u * iz[1] + w2 * Z[2].u * iz[2]) / izp;
-                        const pv = (w0 * Z[0].v * iz[0] + w1 * Z[1].v * iz[1] + w2 * Z[2].v * iz[2]) / izp;
+                        const pu = ortho ? w0 * Z[0].u + w1 * Z[1].u + w2 * Z[2].u : (w0 * Z[0].u * iz[0] + w1 * Z[1].u * iz[1] + w2 * Z[2].u * iz[2]) / izp;
+                        const pv = ortho ? w0 * Z[0].v + w1 * Z[1].v + w2 * Z[2].v : (w0 * Z[0].v * iz[0] + w1 * Z[1].v * iz[1] + w2 * Z[2].v * iz[2]) / izp;
                         if (cutK) {
                             // the alpha test: outside a leaf's cell, or under 0.5 after the lift, the sample is not drawn
                             if (!cutoutUv(cutK, pu, pv, cutUv)) continue;
@@ -335,7 +345,7 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
     if (lit) {
         const sl = Math.hypot(lit.sunDir[0], lit.sunDir[1], lit.sunDir[2]) || 1;
         lit.sunDir = [lit.sunDir[0] / sl, lit.sunDir[1] / sl, lit.sunDir[2] / sl];
-        const g: SampleBuffers = { W, H, fx, fy, cx, cy, camera, depth, mesh, tri, meshes };
+        const g: SampleBuffers = { W, H, fx, fy, cx, cy, ortho, camera, depth, mesh, tri, meshes };
         sunVis = lit.shadows ? sunVisibility(g, lit) : undefined;
         ao = lit.ao ? screenSpaceAo(g, lit) : undefined;
     }
@@ -368,8 +378,8 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
         } else {
             col[0] = m.flatLinear[t * 3]; col[1] = m.flatLinear[t * 3 + 1]; col[2] = m.flatLinear[t * 3 + 2];
         }
-        // the neutral light: ambient plus a headlight on the facet normal
-        const xc = (x + 0.5 - cx) / fx, yc = -(y + 0.5 - cy) / fy;
+        // the neutral light: ambient plus a headlight on the facet normal (the view ray; under an ortho camera, fwd itself)
+        const xc = ortho ? 0 : (x + 0.5 - cx) / fx, yc = ortho ? 0 : -(y + 0.5 - cy) / fy;
         const spec = options.specular && !clay;
         const dx = right[0] * xc + up[0] * yc + fwd[0], dy = right[1] * xc + up[1] * yc + fwd[1], dz = right[2] * xc + up[2] * yc + fwd[2];
         const dl = Math.hypot(dx, dy, dz);
@@ -469,7 +479,9 @@ export function defaultSunForLatitude(latDeg: number): { azimuthDeg: number; ele
 }
 
 interface SampleBuffers {
-    W: number; H: number; fx: number; fy: number; cx: number; cy: number; camera: PinholeCamera;
+    W: number; H: number; fx: number; fy: number; cx: number; cy: number;
+    /** An ortho camera: fx, fy are samples per metre, every ray is `fwd`. */
+    ortho: boolean; camera: RenderCamera;
     depth: Float32Array; mesh: Int32Array; tri: Int32Array; meshes: TileTriangles[];
 }
 
@@ -478,7 +490,8 @@ function sampleWorld(g: SampleBuffers, x: number, y: number, out: Float64Array):
     const z = g.depth[y * g.W + x];
     const xc = (x + 0.5 - g.cx) / g.fx, yc = -(y + 0.5 - g.cy) / g.fy;
     const { eye, right, up, fwd } = g.camera;
-    for (let a = 0; a < 3; a++) out[a] = eye[a] + z * (right[a] * xc + up[a] * yc + fwd[a]);
+    if (g.ortho) for (let a = 0; a < 3; a++) out[a] = eye[a] + right[a] * xc + up[a] * yc + z * fwd[a];
+    else for (let a = 0; a < 3; a++) out[a] = eye[a] + z * (right[a] * xc + up[a] * yc + fwd[a]);
 }
 
 interface ShadowCascade { a0: number; b0: number; texel: number; n: number; map: Float32Array }
@@ -596,7 +609,7 @@ function rasterizeCasters(m: TileTriangles, A: number[], B: number[], L: Vec3, c
  * holds something in front of it within the radius; then a 5 x 5 depth-aware blur removes the pattern.
  */
 function screenSpaceAo(g: SampleBuffers, lit: typeof PHOTO_MATCH_LIT & { sunDir: Vec3 }): Float32Array {
-    const { W, H, fx, fy, cx, cy, camera, depth, mesh, tri, meshes } = g;
+    const { W, H, fx, fy, cx, cy, ortho, camera, depth, mesh, tri, meshes } = g;
     const n = W * H, raw = new Float32Array(n).fill(1);
     const K = Math.max(4, Math.round(lit.aoSamples));
     // the kernel: a Fibonacci hemisphere (z up), lengths growing towards the radius
@@ -612,7 +625,8 @@ function screenSpaceAo(g: SampleBuffers, lit: typeof PHOTO_MATCH_LIT & { sunDir:
         const m = meshes[mi], t = tri[i];
         const z = depth[i];
         const xc = (x + 0.5 - cx) / fx, yc = -(y + 0.5 - cy) / fy;
-        const Px = xc * z, Py = yc * z, Pz = z;
+        // the sample in camera coordinates (x right, y up, z along the view; under an ortho camera x and y do not scale with z)
+        const Px = ortho ? xc : xc * z, Py = ortho ? yc : yc * z, Pz = z;
         // the facet normal in camera coordinates, turned towards the camera
         const wn = [m.normals[t * 3], m.normals[t * 3 + 1], m.normals[t * 3 + 2]];
         let Nx = wn[0] * camera.right[0] + wn[1] * camera.right[1] + wn[2] * camera.right[2];
@@ -633,7 +647,7 @@ function screenSpaceAo(g: SampleBuffers, lit: typeof PHOTO_MATCH_LIT & { sunDir:
         for (const [kx, ky, kz] of kern) {
             const Sx = Px + R * (Tx * kx + Bx * ky + Nx * kz), Sy = Py + R * (Ty * kx + By * ky + Ny * kz), Sz = Pz + R * (Tz * kx + Bz * ky + Nz * kz);
             if (Sz <= PHOTO_MATCH_NEAR_M) continue;
-            const qx = Math.floor(cx + (fx * Sx) / Sz), qy = Math.floor(cy - (fy * Sy) / Sz);
+            const qx = Math.floor(ortho ? cx + fx * Sx : cx + (fx * Sx) / Sz), qy = Math.floor(ortho ? cy - fy * Sy : cy - (fy * Sy) / Sz);
             if (qx < 0 || qy < 0 || qx >= W || qy >= H) continue;
             const qz = depth[qy * W + qx];
             if (!(qz < Sz - 0.02 * R)) continue;
@@ -740,14 +754,25 @@ export function armLayerTriangles(l: ArmLayer): number {
     return l.fixed ? l.fixed.texture.length : l.trees ? l.trees.all.texture.length : 0;
 }
 
-/** The meshes of an arm's layers as the viewport would draw them from `camera`, and what each trees layer chose. */
-export function armMeshesForView(layers: ArmLayer[], camera: PinholeCamera, view?: TreeLodViewInput | null): { meshes: TileTriangles[]; trees: TreesForView[] } {
+/**
+ * The meshes of an arm's layers as the viewport would draw them from `camera`, and what each trees layer chose. The tree
+ * level rule is written for a pinhole; an ortho camera is given to it as the pinhole at the same eye whose focal length
+ * puts one pixel at `pixelM` metres at the eye's height above the frame origin (the same on-screen tree size at the ground).
+ */
+export function armMeshesForView(layers: ArmLayer[], camera: RenderCamera, view?: TreeLodViewInput | null): { meshes: TileTriangles[]; trees: TreesForView[] } {
     const meshes: TileTriangles[] = [], trees: TreesForView[] = [];
+    const lodCamera: PinholeCamera = isOrthoCamera(camera) ? orthoLodPinhole(camera) : camera;
     for (const l of layers) {
         if (l.fixed) meshes.push(l.fixed);
-        else if (l.trees) { const t = treesForView(l.trees, camera, view); trees.push(t); meshes.push(t.triangles); }
+        else if (l.trees) { const t = treesForView(l.trees, lodCamera, view); trees.push(t); meshes.push(t.triangles); }
     }
     return { meshes, trees };
+}
+
+function orthoLodPinhole(c: OrthoCamera): PinholeCamera {
+    const h = Math.max(1, Math.abs(c.eye[0] * c.fwd[0] + c.eye[1] * c.fwd[1] + c.eye[2] * c.fwd[2]));
+    const f = h / c.pixelM;
+    return { eye: c.eye, right: c.right, up: c.up, fwd: c.fwd, fx: f, fy: f, cx: c.cx, cy: c.cy, width: c.width, height: c.height };
 }
 
 // =============================================================================

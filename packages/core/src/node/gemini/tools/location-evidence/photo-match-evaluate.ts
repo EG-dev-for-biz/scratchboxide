@@ -39,6 +39,7 @@ import {
     type ArmLayer, type ArmRender, type CriterionStat, type JudgeClient, type JudgeCriterion, type JudgeRun, type PerceptualScores
 } from '../../../3d-engine/staged-location/photo-match-eval';
 import { readTileTriangles, decodeImageInMemory, type TileTriangles } from '../../../3d-engine/staged-location/tile-texture-transfer';
+import { fetchOrthoReference, orthoReferenceCamera, type OrthoReference } from '../../../3d-engine/staged-location/ortho-reference';
 import { castCamera } from '../../../3d-engine/staged-location/survey-casting';
 import { isTreesLodJson } from '../../../3d-engine/staged-location/tree-lod-view';
 import { bearingDeg, discoverPanos, fetchViews, type PanoCandidate, type SelectedView, type StreetViewEvidenceDeps } from '../../../3d-engine/staged-location/streetview-evidence';
@@ -110,7 +111,8 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
             trees: { type: 'BOOLEAN', description: 'Draw a run\'s regrown trees as the viewport shows them from each pose (one level of detail per tree, leaves expanded) and cut the scanned trees they replace out of the street (default true). False leaves the trees layer out and the scanned trees in the street.' },
             baseline: { type: 'BOOLEAN', description: 'Also render the raw scan as downloaded (cut to the target) as a reference arm (default true when the tile is known).' },
             place: { type: 'STRING', description: 'The place as named to the judge (default: the run\'s resolved address).' },
-            excludePanoIds: { type: 'ARRAY', items: { type: 'STRING' }, description: 'Panos the build used that the records do not show (GLB builds made elsewhere): never held out.' }
+            excludePanoIds: { type: 'ARRAY', items: { type: 'STRING' }, description: 'Panos the build used that the records do not show (GLB builds made elsewhere): never held out.' },
+            includeSatelliteOrtho: { type: 'BOOLEAN', description: 'Also fetch a Google Static Maps satellite crop centred on the place (zoom 19, 2048 px, its ground sample distance computed) and show the judge each build rendered top-down at that scale beside it, as one extra view labelled "satellite (Google Static Maps, date unknown)". A second opinion: reported in satelliteOrtho with the GSD, not counted in scores (default false; one Static Maps request and one or two more judge calls).' }
         }
     }
 };
@@ -122,7 +124,7 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
 export type PhotoMatchErrorCode =
     | 'bad_arguments' | 'no_build' | 'run_not_found' | 'run_layers_unknown' | 'missing_glb' | 'missing_reference_tile' | 'frame_mismatch'
     | 'street_view_unavailable' | 'no_heldout_candidates' | 'no_heldout_fetched' | 'no_heldout_registered' | 'heldout_used_by_build'
-    | 'judge_unavailable' | 'judge_failed' | 'stopped' | (string & {});
+    | 'judge_unavailable' | 'judge_failed' | 'satellite_unavailable' | 'stopped' | (string & {});
 
 /** A failure with a code the model can act on; no scores are returned with it. */
 export class PhotoMatchError extends Error {
@@ -152,6 +154,11 @@ export interface PhotoMatchDeps {
     register(images: HeldImage[], meshFiles: string[], signal?: AbortSignal, log?: (m: string) => void): Promise<HeldOutRegistration[]>;
     /** The blind judge, `model` first. Throws judge_unavailable when no Gemini credentials are configured. */
     judge(model: string, signal?: AbortSignal): Promise<JudgeClient & { requested?: string; answeredModel?: string; skipped?: Array<{ model: string; reason: string }> }>;
+    /**
+     * The Static Maps satellite crop centred on the frame origin (includeSatelliteOrtho). Throws satellite_unavailable when
+     * no Maps API key is configured. Missing: the option fails with that code and the street views are still judged.
+     */
+    satelliteOrtho?(origin: GeodeticOrigin, signal?: AbortSignal): Promise<OrthoReference>;
     now?: () => number;
 }
 
@@ -183,6 +190,11 @@ export function defaultPhotoMatchDeps(): PhotoMatchDeps {
             const { VisionModelChain } = require('../../vision-model-chain') as typeof import('../../vision-model-chain');
             const chain = new VisionModelChain<string>({ client: client as never, candidates: [...new Set([model, ...FALLBACK_GEMINI_MODELS])], ...(signal ? { signal } : {}) });
             return chain as unknown as JudgeClient & { requested: string; answeredModel?: string; skipped: Array<{ model: string; reason: string }> };
+        },
+        satelliteOrtho: async (origin, signal) => {
+            const apiKey = maps().resolveMapsApiKey();
+            if (!apiKey) throw new PhotoMatchError('satellite_unavailable', 'the Static Maps satellite crop needs a Google Maps Platform API key (GOOGLE_MAPS_API_KEY or Settings), and none is configured.');
+            return fetchOrthoReference({ lat: origin.lat, lng: origin.lng, zoom: 19, sizePx: 1024, scale: 2, apiKey, ...(signal ? { signal } : {}) });
         }
     };
 }
@@ -721,7 +733,15 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     const maskArm = loaded.find(a => a.baseline)?.id ?? loaded[0].id;
 
     // ---------------- renders and pixel metrics ----------------
-    const prepared: Array<{ view: PhotoMatchViewResult; photoBytes: Buffer; mime: string; photo: { width: number; height: number; rgba: Uint8Array }; renders: Array<{ id: string; label: string; r: ArmRender }>; clayRenders: Array<{ id: string; label: string; r: ArmRender }> }> = [];
+    interface Prepared {
+        view: PhotoMatchViewResult; photoBytes: Buffer; mime: string; photo: { width: number; height: number; rgba: Uint8Array };
+        renders: Array<{ id: string; label: string; r: ArmRender }>; clayRenders: Array<{ id: string; label: string; r: ArmRender }>;
+        /** The grid's label of the reference image (default: the real photo and its distance). */
+        photoLabel?: string;
+        /** The satellite second opinion: judged and gridded like a view, kept out of the scores. */
+        satellite?: boolean;
+    }
+    const prepared: Prepared[] = [];
     for (let k = 0; k < chosen.length; k++) {
         stopIfAborted(signal);
         const { im, reg } = chosen[k];
@@ -779,11 +799,76 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         });
     }
 
+    // ---------------- the satellite second opinion (opt-in) ----------------
+    // A Google Static Maps satellite crop centred on the frame origin, and every arm rendered top-down at its ground sample
+    // distance (an orthographic camera, the same neutral light, the same street as context). Judged and gridded like a view,
+    // reported apart from the scores: Static Maps carries no capture date, and a roof seen from above is not a facade.
+    const wantSatellite = args.includeSatelliteOrtho === true;
+    let satellite: Record<string, unknown> = wantSatellite ? { used: false, requested: true } : { used: false, requested: false, note: 'not requested (includeSatelliteOrtho)' };
+    let satPrepared: Prepared | undefined;
+    if (wantSatellite) {
+        progress('fetching the Static Maps satellite crop of the place and rendering every arm top-down at its scale (second opinion, date unknown)', 0.47);
+        try {
+            if (!deps.satelliteOrtho) throw new PhotoMatchError('satellite_unavailable', 'no satellite source is configured for this evaluation.');
+            const sat = await deps.satelliteOrtho(ref.origin, signal);
+            stopIfAborted(signal);
+            const cam = orthoReferenceCamera(sat);
+            const forView = loaded.map(a => armMeshesForView(a.parts, cam));
+            const renders: Array<{ id: string; label: string; r: ArmRender }> = [];
+            for (let i = 0; i < loaded.length; i++) {
+                renders.push({ id: loaded[i].id, label: loaded[i].label, r: renderTriangles(forView[i].meshes, cam, context ? { context } : {}) });
+                await yieldLoop();
+            }
+            const clayRenders: Array<{ id: string; label: string; r: ArmRender }> = [];
+            if (wantClay) for (let i = 0; i < loaded.length; i++) {
+                clayRenders.push({ id: loaded[i].id, label: loaded[i].label, r: renderTriangles(forView[i].meshes, cam, { clay: true, ...(context ? { context } : {}) }) });
+                await yieldLoop();
+            }
+            const mask = coverageMask(renders.find(x => x.id === maskArm)!.r);
+            const viewId = 'sat_ortho';
+            const pixel: Record<string, PerceptualScores> = {};
+            const files: Record<string, string> = {}, clayFiles: Record<string, string> = {};
+            for (const x of renders) {
+                pixel[x.id] = perceptualScores(sat.image, x.r, mask);
+                files[x.id] = path.join(outDir, `${viewId}_${x.id}.png`);
+                fs.writeFileSync(files[x.id], renderPng(x.r));
+                await yieldLoop();
+            }
+            for (const x of clayRenders) {
+                clayFiles[x.id] = path.join(outDir, `${viewId}_${x.id}_clay.png`);
+                fs.writeFileSync(clayFiles[x.id], renderPng(x.r));
+            }
+            const imagePath = path.join(outDir, 'satellite_static_maps.png');
+            fs.writeFileSync(imagePath, sat.bytes);
+            satPrepared = {
+                view: {
+                    id: viewId, panoId: 'google-static-maps-satellite', distanceM: cam.eye[1], headingDeg: 0, pitchDeg: -90, fovDeg: 0,
+                    size: [sat.widthPx, sat.heightPx], edgeResidualPx: { prior: null, edge: null }, maskPixels: mask.reduce((s, m) => s + m, 0),
+                    grid: path.join(outDir, `grid_${viewId}.png`), renders: files, pixel,
+                    ...(wantClay ? { clayRenders: clayFiles, clayGrid: path.join(outDir, `grid_${viewId}_clay.png`) } : {})
+                },
+                photoBytes: sat.bytes, mime: 'image/png', photo: sat.image, renders, clayRenders,
+                photoLabel: 'SATELLITE (GOOGLE STATIC MAPS, DATE UNKNOWN)', satellite: true
+            };
+            satellite = {
+                used: true, requested: true, source: sat.source, mapType: sat.mapType, zoom: sat.zoom, scale: sat.scale, size: [sat.widthPx, sat.heightPx],
+                gsdMetresPerPixel: r3(sat.pixelM), widthM: r2(sat.widthM), heightM: r2(sat.heightM), centre: sat.centre,
+                capturedAt: null, captureDateNote: sat.captureDateNote, attribution: sat.attribution, image: imagePath,
+                camera: `orthographic, straight down from ${cam.eye[1]} m over the frame origin, image x east and y south, one pixel = ${sat.pixelM.toFixed(4)} m`,
+                note: 'A second opinion beside the held-out street views, not counted in scores or clayScores. Rendered in the same street context, with no occluder depth (nothing but trees stands above a roof). The tile photo\'s own roof ortho remains the first opinion on roofs.'
+            };
+        } catch (err) {
+            if (signal?.aborted) throw new PhotoMatchError('stopped', 'The evaluation was stopped.');
+            satellite = { used: false, requested: true, code: err instanceof PhotoMatchError ? err.code : 'failed', error: (err as Error).message };
+        }
+    }
+    const judgedList = satPrepared ? [...prepared, satPrepared] : prepared;
+
     // ---------------- blind judging ----------------
-    progress(`judging ${prepared.length} views blind, ${nRuns} reshuffled runs each${wantClay ? ', textured and in clay (shape only)' : ''}`, 0.5);
+    progress(`judging ${prepared.length} views blind${satPrepared ? ' plus the satellite view' : ''}, ${nRuns} reshuffled runs each${wantClay ? ', textured and in clay (shape only)' : ''}`, 0.5);
     const judge = await deps.judge(judgeModel, signal);
     let judged = 0;
-    await mapLimit(prepared, DEFAULT_RUN_CONCURRENCY, async p => {
+    await mapLimit(judgedList, DEFAULT_RUN_CONCURRENCY, async p => {
         stopIfAborted(signal);
         try {
             const runs: JudgeRun[] = await judgeView({
@@ -814,7 +899,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
             }
         }
         judged++;
-        progress(`judged ${judged} of ${prepared.length} views`, 0.5 + 0.45 * (judged / prepared.length));
+        progress(`judged ${judged} of ${judgedList.length} views`, 0.5 + 0.45 * (judged / judgedList.length));
     });
     const scored = prepared.filter(p => p.view.judge);
     if (!scored.length) {
@@ -822,8 +907,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     }
 
     // ---------------- grids ----------------
-    for (const p of prepared) {
-        const tiles = [{ image: p.photo, label: `REAL PHOTO ${Math.round(p.view.distanceM)} M`, sublabel: p.view.panoId.slice(0, 10) }, ...p.renders.map(x => {
+    for (const p of judgedList) {
+        const tiles = [{ image: p.photo, label: p.photoLabel ?? `REAL PHOTO ${Math.round(p.view.distanceM)} M`, sublabel: p.satellite ? `GSD ${(satellite.gsdMetresPerPixel as number).toFixed(3)} M/PX` : p.view.panoId.slice(0, 10) }, ...p.renders.map(x => {
             const s = p.view.judge?.stats[x.id]?.overall;
             const ssim = p.view.pixel[x.id].ssim;
             return { image: x.r, label: x.label, sublabel: s ? `JUDGE ${s.mean.toFixed(1)} +- ${s.sd.toFixed(1)}  SSIM ${ssim ?? '-'}` : `NOT JUDGED  SSIM ${ssim ?? '-'}` };
@@ -882,8 +967,20 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     }
 
     const judgeModelUse = { requested: judge.requested ?? judgeModel, answered: judge.answeredModel ?? scored[0].view.judge!.model, skipped: judge.skipped ?? [] };
+    // the satellite second opinion: its own judgement, apart from the scores
+    if (satPrepared) {
+        const v = satPrepared.view;
+        satellite = {
+            ...satellite,
+            grid: v.grid, renders: v.renders, pixel: v.pixel,
+            ...(v.judge ? { judge: v.judge } : {}), ...(v.judgeError ? { judgeError: v.judgeError } : {}),
+            ...(v.clayGrid ? { clayGrid: v.clayGrid, clayRenders: v.clayRenders } : {}),
+            ...(v.clayJudge ? { clayJudge: v.clayJudge } : {}), ...(v.clayJudgeError ? { clayJudgeError: v.clayJudgeError } : {})
+        };
+    }
     const summary = summarize({ ref, loaded, scores, views, scored: scored.length, nRuns, judgeModelUse, contextNote: context ? 'in context' : 'not in context', unregistered: unregistered.length, usedPanos: builds.used.size })
-        + (wantClay ? clayLine(loaded, clayScores, clayScored.length, prepared.length) : '');
+        + (wantClay ? clayLine(loaded, clayScores, clayScored.length, prepared.length) : '')
+        + satelliteLine(loaded, satellite, satPrepared?.view);
     const report = {
         status: 'success',
         evalId,
@@ -900,6 +997,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         scores,
         clay: wantClay,
         ...(wantClay ? { clayScores, clayJudged: clayScored.length, clayGrids: views.map(v => v.clayGrid).filter((g): g is string => !!g) } : {}),
+        satelliteOrtho: satellite,
         pixelMetrics: { note: 'Secondary: inside the target mask (the raw scan\'s coverage when the baseline is on). They do not rank builds the way the judge does.', mean: pixelMean },
         views: views.map(v => ({ ...v, renders: v.renders })),
         grids: views.map(v => v.grid),
@@ -920,6 +1018,16 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     fs.writeFileSync(path.join(outDir, 'report.json'), JSON.stringify(report, null, 1));
     progress('done', 1);
     return report;
+}
+
+/** The satellite second opinion's line of the summary: used (with its GSD and the judge's overall per arm), failed, or not asked for. */
+function satelliteLine(loaded: Array<{ id: string; label: string }>, sat: Record<string, unknown>, view?: PhotoMatchViewResult): string {
+    if (!sat.requested) return '';
+    if (!sat.used) return ` Satellite second opinion (includeSatelliteOrtho) was requested but not used: ${sat.error}.`;
+    const gsd = (sat.gsdMetresPerPixel as number).toFixed(3);
+    if (!view?.judge) return ` Satellite second opinion (Google Static Maps, top-down at ${gsd} m/px, capture date unknown): rendered and gridded, but the judge returned no usable scores for it${view?.judgeError ? ` (${view.judgeError})` : ''}; not counted in the scores.`;
+    const ranked = [...loaded].filter(a => view.judge!.stats[a.id]?.overall).sort((a, b) => view.judge!.stats[b.id].overall.mean - view.judge!.stats[a.id].overall.mean);
+    return ` Satellite second opinion (Google Static Maps, top-down at ${gsd} m/px, capture date unknown; not counted in the scores): ${ranked.map(a => `${a.label} [${a.id}] overall ${view.judge!.stats[a.id].overall.mean.toFixed(1)}`).join('; ')}.`;
 }
 
 /** The clay arm's line of the summary: shape only, untextured. */

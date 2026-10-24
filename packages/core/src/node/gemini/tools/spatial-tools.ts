@@ -1838,7 +1838,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'query_spatial_vector_data',
-        description: 'Query rich 2D vector roadmap and cadastral parcel data (kinematic road corridors with lane centerlines, building footprints with verified heights, bridge/tunnel vertical layers, landuse surface friction, POIs) co-registered with Google 3D Photorealistic Tiles via LocalTangentPlane. Enforces Universal Spatial Identifiers (urn:scratchbox:spatial:<layer>:<geohash>:<id>) and the Zero-Fake-Trees invariant.',
+        description: 'Query Google vector feature tiles (building footprints and modelled volumes, roads, water, land use, POIs) and cadastral parcel data (kinematic road corridors with lane centerlines, building footprints with verified heights, bridge/tunnel vertical layers, landuse surface friction, POIs) co-registered with Google 3D Photorealistic Tiles via LocalTangentPlane. Enforces Universal Spatial Identifiers (urn:scratchbox:spatial:<layer>:<geohash>:<id>) and the Zero-Fake-Trees invariant.',
         parameters: {
             type: 'OBJECT',
             properties: {
