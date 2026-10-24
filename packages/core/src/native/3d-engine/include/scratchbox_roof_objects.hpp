@@ -64,7 +64,57 @@ struct RoofParams {
     double blurM = 1.5;
     /** Neighbouring photo regions whose measured tops differ by at most this are one object (m). */
     double mergeRiseM = 0.4;
+    /** Outline edges within this of the building's wall directions are snapped to them (degrees). */
+    double squareTolDeg = 15;
+    /** Small spots (m2) that line up in rows of at least minPosts at a steady spacing are posts, repeated along the row. */
+    double minPostAreaM2 = 0.02, maxPostAreaM2 = 0.6, rowTolM = 0.25, maxPostGapM = 4.0, maxGapCv = 0.35;
+    int minPosts = 5;
+    /** Height of a post the scan is too coarse to see (m, labelled estimated: a guard rail's usual height). */
+    double postHeightM = 1.07;
+    /** A spot this much lighter than the bare roof (CIELAB L*) is a candidate post, whatever region it touches. */
+    double spotLighterL = 30;
 };
+
+/**
+ * The ring straightened toward two directions at right angles (axisRad and axisRad + 90 degrees): after a light
+ * simplification, every edge within tolDeg of one of them is turned onto it about its midpoint, and consecutive edges
+ * are re-intersected (an edge left off-axis keeps its own direction). Short edges that end up parallel to both
+ * neighbours are dropped. A footprint traced from pixels or cells comes back with the building's own right angles.
+ */
+inline std::vector<P2> squareToAxes(const std::vector<P2>& ringIn, double axisRad, double tolDeg, double simplifyTol) {
+    std::vector<P2> r = scan_massing::detail::simplify(ringIn, simplifyTol);
+    const size_t n = r.size();
+    if (n < 4) return r;
+    struct L { P2 p, d; };
+    std::vector<L> lines(n);
+    const double tol = tolDeg * M_PI / 180;
+    for (size_t i = 0; i < n; ++i) {
+        const P2 a = r[i], b = r[(i + 1) % n];
+        const P2 m{(a.x + b.x) / 2, (a.z + b.z) / 2};
+        double ang = std::atan2(b.z - a.z, b.x - a.x);
+        // nearest of the four axis directions
+        double best = ang, bd = 1e9;
+        for (int q = 0; q < 4; ++q) {
+            const double t = axisRad + q * M_PI / 2;
+            const double dd = std::abs(std::remainder(ang - t, 2 * M_PI));
+            if (dd < bd) { bd = dd; best = t; }
+        }
+        if (bd <= tol) ang = best;
+        lines[i] = {m, {std::cos(ang), std::sin(ang)}};
+    }
+    std::vector<P2> out;
+    for (size_t i = 0; i < n; ++i) {
+        const L& l0 = lines[(i + n - 1) % n];
+        const L& l1 = lines[i];
+        const double den = l0.d.x * l1.d.z - l0.d.z * l1.d.x;
+        if (std::abs(den) < 1e-6) continue;  // parallel neighbours: the corner between them is not a corner
+        const double t = ((l1.p.x - l0.p.x) * l1.d.z - (l1.p.z - l0.p.z) * l1.d.x) / den;
+        const P2 c{l0.p.x + t * l0.d.x, l0.p.z + t * l0.d.z};
+        // a re-intersection far from the original corner means the edges were nearly parallel: keep the original corner
+        out.push_back(std::hypot(c.x - r[i].x, c.z - r[i].z) > 4 * simplifyTol + 0.5 ? r[i] : c);
+    }
+    return out.size() >= 3 ? out : r;
+}
 
 struct RoofObject {
     std::vector<P2> outline;
@@ -331,6 +381,13 @@ inline RoofReport roofObjectsFromPhoto(const std::vector<Vec3>& samples, const s
     rep.roofY = roofY;
     rep.photo = true;
     const std::vector<std::vector<P2>> rings{plan};
+    // the building's wall direction: its footprint's longest edge
+    double axis = 0, longest = -1;
+    for (size_t i = 0; i < plan.size(); ++i) {
+        const P2 a = plan[i], b = plan[(i + 1) % plan.size()];
+        const double L = std::hypot(b.x - a.x, b.z - a.z);
+        if (L > longest) { longest = L; axis = std::atan2(b.z - a.z, b.x - a.x); }
+    }
     // the scan's height map (0.5 m cells), read by world position
     const double hc = P.cellM;
     std::unordered_map<int64_t, float> dsmMap;
@@ -479,6 +536,7 @@ inline RoofReport roofObjectsFromPhoto(const std::vector<Vec3>& samples, const s
             if (yr.size() >= 4) { o.mesh = revolveProfile(o.centre, yr); o.chosen = "solid of revolution"; o.why = "round outline in the photo (roundness " + scan_massing::fmt3(o.roundness) + ", radius " + scan_massing::fmt3(R) + " m), profile from the scan"; }
         }
         if (o.chosen.empty()) {
+            o.outline = squareToAxes(outlineIn, axis, P.squareTolDeg, outlineSource == "photo" ? 0.2 : 0.3);
             o.mesh = scan_massing::extrudeBlock(o.outline, o.baseY, o.topY);
             o.chosen = "outline raised";
             o.why = "outline from the " + outlineSource + ", height " + (o.heightSource == "scan" ? "from the scan (" + scan_massing::fmt3(o.topY - o.baseY) + " m)" : "estimated (the scan does not see it stand)");
@@ -521,14 +579,105 @@ inline RoofReport roofObjectsFromPhoto(const std::vector<Vec3>& samples, const s
         objs.push_back({t, std::move(cells)});
     }
     std::sort(objs.begin(), objs.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+    struct Spot { P2 c; double area; };
+    std::vector<Spot> spots;
     for (const auto& [top, r] : objs) {
-        if (r.size() * px * px < P.minAreaM2) continue;
+        const double area = r.size() * px * px;
+        if (area < P.minAreaM2) continue;
         scan_massing::CellSet cells;
         std::vector<HPt> pts;
         for (size_t c : r) { const int i = c % W, k = c / W; cells.insert(scan_massing::ckey(i, k)); pts.push_back({wx(i), wz(k), dsmAt(wx(i), wz(k))}); covered[c] = 1; }
         auto loop = scan_massing::outline(cells);
         for (auto& p : loop) { p.x = xa + p.x * px; p.z = za + p.z * px; }
         if (auto o = objectFrom(loop, pts, "photo")) { o->photoCells = r.size(); taller.push_back(*o); rep.objects.push_back(std::move(*o)); }
+    }
+    // candidate posts: small groups of pixels much lighter than the bare roof (read on their own, so a rail or band they
+    // touch does not hide them)
+    {
+        std::vector<uint8_t> bright(N, 0), seenB(N, 0);
+        for (size_t c = 0; c < N; ++c) bright[c] = in[c] && lab[c][0] > roofLab[0] + P.spotLighterL;
+        for (size_t s0 = 0; s0 < N; ++s0) {
+            if (!bright[s0] || seenB[s0]) continue;
+            std::vector<size_t> comp{s0}, st{s0}; seenB[s0] = 1;
+            while (!st.empty()) { const size_t c = st.back(); st.pop_back(); const int i = c % W, k = c / W;
+                for (const auto& d : {std::pair{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) { const int ii = i + d.first, kk = k + d.second; if (ii < 0 || kk < 0 || ii >= W || kk >= H) continue; const size_t q = static_cast<size_t>(kk) * W + ii;
+                    if (bright[q] && !seenB[q]) { seenB[q] = 1; comp.push_back(q); st.push_back(q); } } }
+            const double area = comp.size() * px * px;
+            if (area < P.minPostAreaM2 || area > P.maxPostAreaM2) continue;
+            double sx = 0, sz = 0;
+            for (size_t c : comp) { sx += wx(c % W); sz += wz(c / W); }
+            spots.push_back({{sx / comp.size(), sz / comp.size()}, area});
+        }
+    }
+    // rows of posts: small spots in a line at a steady spacing (a rail's posts, bollards, anything repeated), each row
+    // repeated along its fitted line at the measured spacing; the scan is too coarse to see them stand, so their height is
+    // estimated
+    {
+        std::vector<uint8_t> used(spots.size(), 0);
+        for (;;) {
+            size_t bestCount = 0; P2 bp{0, 0}, bd{1, 0};
+            for (size_t i = 0; i < spots.size(); ++i) for (size_t j = i + 1; j < spots.size(); ++j) {
+                if (used[i] || used[j]) continue;
+                const double dx = spots[j].c.x - spots[i].c.x, dz = spots[j].c.z - spots[i].c.z, L = std::hypot(dx, dz);
+                if (L < 0.3 || L > 3 * P.maxPostGapM) continue;
+                const P2 d{dx / L, dz / L};
+                size_t cnt = 0;
+                for (size_t k = 0; k < spots.size(); ++k) if (!used[k] && std::abs((spots[k].c.x - spots[i].c.x) * d.z - (spots[k].c.z - spots[i].c.z) * d.x) <= P.rowTolM) cnt++;
+                if (cnt > bestCount) { bestCount = cnt; bp = spots[i].c; bd = d; }
+            }
+            if (bestCount < static_cast<size_t>(P.minPosts)) break;
+            std::vector<std::pair<double, size_t>> along;
+            for (size_t k = 0; k < spots.size(); ++k) if (!used[k] && std::abs((spots[k].c.x - bp.x) * bd.z - (spots[k].c.z - bp.z) * bd.x) <= P.rowTolM) along.push_back({(spots[k].c.x - bp.x) * bd.x + (spots[k].c.z - bp.z) * bd.z, k});
+            std::sort(along.begin(), along.end());
+            for (const auto& a : along) used[a.second] = 1;
+            // split the line into runs where the gap jumps, keep steady runs
+            size_t start = 0;
+            for (size_t e = 1; e <= along.size(); ++e) {
+                if (e < along.size() && along[e].first - along[e - 1].first <= P.maxPostGapM) continue;
+                const size_t count = e - start;
+                if (count >= static_cast<size_t>(P.minPosts)) {
+                    std::vector<double> gaps;
+                    for (size_t g = start + 1; g < e; ++g) gaps.push_back(along[g].first - along[g - 1].first);
+                    double mean = 0, sd = 0;
+                    for (double g : gaps) mean += g;
+                    mean /= gaps.size();
+                    for (double g : gaps) sd += (g - mean) * (g - mean);
+                    sd = std::sqrt(sd / gaps.size());
+                    if (mean > 0 && sd / mean <= P.maxGapCv) {
+                        std::vector<double> areas;
+                        for (size_t g = start; g < e; ++g) areas.push_back(spots[along[g].second].area);
+                        const double side = std::sqrt(detail::median(areas));
+                        const double t0 = along[start].first, t1 = along[e - 1].first;
+                        const int k = static_cast<int>(std::lround((t1 - t0) / mean));
+                        const double pitch = k > 0 ? (t1 - t0) / k : mean;
+                        RoofObject o;
+                        o.outlineSource = "photo"; o.heightSource = "estimated";
+                        o.baseY = roofY; o.topY = roofY + P.postHeightM;
+                        o.mesh = ScratchboxMesh("posts");
+                        for (int q = 0; q <= k; ++q) {
+                            const P2 c{bp.x + bd.x * (t0 + q * pitch), bp.z + bd.z * (t0 + q * pitch)};
+                            const double h = side / 2;
+                            const std::vector<P2> sq{{c.x + bd.x * h - bd.z * h, c.z + bd.z * h + bd.x * h}, {c.x - bd.x * h - bd.z * h, c.z - bd.z * h + bd.x * h},
+                                                     {c.x - bd.x * h + bd.z * h, c.z - bd.z * h - bd.x * h}, {c.x + bd.x * h + bd.z * h, c.z + bd.z * h - bd.x * h}};
+                            const ScratchboxMesh post = scan_massing::extrudeBlock(sq, o.baseY, o.topY);
+                            const uint32_t base = static_cast<uint32_t>(o.mesh.vertices.size());
+                            for (const auto& v : post.vertices) o.mesh.vertices.push_back(v);
+                            for (uint32_t ix : post.indices) o.mesh.indices.push_back(base + ix);
+                        }
+                        const P2 a{bp.x + bd.x * t0, bp.z + bd.z * t0}, b{bp.x + bd.x * t1, bp.z + bd.z * t1};
+                        o.outline = {a, b, {b.x - bd.z * side, b.z + bd.x * side}, {a.x - bd.z * side, a.z + bd.x * side}};
+                        o.centre = {(a.x + b.x) / 2, (a.z + b.z) / 2};
+                        o.areaM2 = (k + 1) * side * side;
+                        o.photoCells = count;
+                        o.chosen = "posts repeated";
+                        o.why = std::to_string(k + 1) + " posts " + scan_massing::fmt3(side) + " m square at a " + scan_massing::fmt3(pitch) + " m pitch along " + scan_massing::fmt3(t1 - t0) +
+                                " m (" + std::to_string(count) + " seen in the photo; spacing varies " + scan_massing::fmt3(sd / mean) + "), height estimated " + scan_massing::fmt3(P.postHeightM) + " m";
+                        rep.objects.push_back(std::move(o));
+                    }
+                }
+                start = e;
+            }
+        }
     }
     // what stands up in the scan where the photo saw only roof colour (a parapet, a raised strip): from the scan
     scan_massing::CellSet raisedCells;

@@ -38,6 +38,7 @@ class Candidate:
     label: typing.Any
     mesh: typing.Any
     agreement: typing.Any
+    roof: typing.Any
 
 
 class Choice:

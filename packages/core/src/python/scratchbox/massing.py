@@ -53,6 +53,8 @@ class Candidate:
         self.label = label
         self.mesh = mesh
         self.agreement = agreement
+        # the roof report (Scan.roof_objects) of a candidate that carries its roof objects, else None
+        self.roof: Optional[dict] = None
 
     @property
     def triangles(self) -> int:
