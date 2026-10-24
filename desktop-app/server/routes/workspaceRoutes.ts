@@ -23,6 +23,7 @@ import {
 import { createEmptyProjectGraph } from '../../../packages/core/src/common';
 import { ContainerSandboxService } from '../../../packages/core/src/node/container-sandbox-service';
 import { DEFAULT_GEMINI_MODEL } from '../../../packages/core/src/node/gemini/gemini-client';
+import { defaultCloudBucket } from '../../../packages/core/src/node/cloud-store/cloud-bucket';
 import {
     WorkspaceConfigService,
     ChatSessionStore,
@@ -57,8 +58,8 @@ export function createWorkspaceRouter(services: WorkspaceRouterServices, ctx: Ro
         }
     });
 
-    // Chat sessions on disk (<workspace>/.scratchbox/sessions) and the recent-project list.
-    const sessionStore = new ChatSessionStore();
+    // Chat sessions on disk (<workspace>/.scratchbox/sessions, mirrored to the cloud bucket when one is configured) and the recent-project list.
+    const sessionStore = new ChatSessionStore(os.homedir(), defaultCloudBucket());
 
     router.get('/sessions', async (req: Request, res: Response) => {
         try {
