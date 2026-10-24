@@ -21,7 +21,7 @@ import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { massingSpecText } from '../src/node/3d-engine/staged-location/pipeline-e/massing-spec';
 import { runMassing } from '../src/node/3d-engine/staged-location/pipeline-e/native-massing';
-import { asMassingParts, clampInto, dropSpikes, ROOF_WALL_CLEARANCE_M, type ScanMassingResult } from '../src/node/3d-engine/staged-location/scan-massing';
+import { asMassingParts, clampInto, dropSpikes, mergeTiers, ROOF_WALL_CLEARANCE_M, type ScanMassingResult } from '../src/node/3d-engine/staged-location/scan-massing';
 
 const BLOCK: Array<[number, number]> = [[0, 0], [20, 0], [20, 12], [0, 12]];
 const box = (x0: number, z0: number, x1: number, z1: number): Array<[number, number]> => [[x0, z0], [x1, z0], [x1, z1], [x0, z1]];
@@ -76,6 +76,15 @@ describe('scan massing as parts', () => {
         expect(r.dropped).toBe(1);
         expect(r.ring).not.toContainEqual([-6.86, -17.48]);
         expect(dropSpikes(BLOCK)).toEqual({ ring: BLOCK, dropped: 0 });
+    });
+
+    it('makes like consecutive tiers one, absorbs a short pinch, keeps real setbacks', () => {
+        const t = (x0: number, z0: number, x1: number, z1: number, y0: number, y1: number) => ({ outline: box(x0, z0, x1, z1), y0, y1, area: (x1 - x0) * (z1 - z0) });
+        // a podium, a shaft read as alternating widths with a 9 m dip, a top stage and a sliver of mast
+        const merged = mergeTiers([t(0, 0, 80, 90, 0, 7), t(0, 0, 80, 90, 7, 24), t(20, 20, 64, 66, 24, 120), t(21, 21, 63, 64, 120, 160), t(25, 25, 58, 60, 160, 169),
+            t(20, 20, 64, 66, 169, 280), t(35, 35, 48, 48, 280, 320), t(41, 41, 41.5, 41.5, 320, 330)]);
+        expect(merged.map(m => [m.y0, m.y1])).toEqual([[0, 24], [24, 280], [280, 320]]);
+        expect(merged[1].area).toBe(44 * 46);
     });
 
     it('refuses a lofted winner with its reason, and builds tiers as parts', () => {

@@ -193,6 +193,53 @@ export function dropSpikes(ring: Array<[number, number]>, minDeg = SPIKE_DEG): {
     return { ring: r, dropped };
 }
 
+/** A tier whose plan area is within this share of its run's and whose centre lies within TIER_MERGE_SHIFT_M (or TIER_MERGE_SHIFT_SHARE of the run's width) of it joins the run; tiers under TIER_MIN_M2 are dropped. */
+export const TIER_MERGE_AREA = 0.3;
+export const TIER_MERGE_SHIFT_M = 3.0;
+export const TIER_MERGE_SHIFT_SHARE = 0.15;
+export const TIER_MIN_M2 = 1.0;
+/** A tier under this tall between two like tiers (the same test) is a dip in the scan, absorbed into them. */
+export const TIER_PINCH_M = 15;
+
+/**
+ * The tiers with each run of like consecutive tiers made one (its widest outline, from its base to its top), slivers dropped:
+ * the Empire State's scan came out as 48 tiers, the first three the same 7,486 m2 plan, and walls cut into bands a few
+ * metres tall that no survey station could frame.
+ */
+export function mergeTiers<T extends { outline: Array<[number, number]>; y0: number; y1: number; area: number }>(tiers: T[]): T[] {
+    // a pinch absorbed can leave two like runs side by side: again until nothing joins
+    let out = mergeOnce(tiers.filter(x => x.area >= TIER_MIN_M2));
+    for (let next = mergeOnce(out); next.length < out.length; next = mergeOnce(out)) out = next;
+    return out;
+}
+
+function mergeOnce<T extends { outline: Array<[number, number]>; y0: number; y1: number; area: number }>(tiers: T[]): T[] {
+    const centre = (r: Array<[number, number]>) => [r.reduce((a, p) => a + p[0], 0) / r.length, r.reduce((a, p) => a + p[1], 0) / r.length];
+    const like = (a: T, b: T) => {
+        const [ax, az] = centre(a.outline), [bx, bz] = centre(b.outline);
+        return Math.abs(a.area - b.area) <= TIER_MERGE_AREA * Math.max(a.area, b.area) && Math.hypot(ax - bx, az - bz) <= Math.max(TIER_MERGE_SHIFT_M, TIER_MERGE_SHIFT_SHARE * Math.sqrt(Math.max(a.area, b.area)));
+    };
+    const out: T[] = [];
+    for (const t of [...tiers].sort((a, b) => a.y0 - b.y0)) {
+        const last = out[out.length - 1];
+        if (last) {
+            if (like(last, t) && t.y0 <= last.y1 + 0.5) {
+                // the run keeps its widest outline (scan noise narrows a tier more often than it widens one)
+                out[out.length - 1] = t.area > last.area ? { ...t, y0: last.y0, y1: Math.max(last.y1, t.y1) } : { ...last, y1: Math.max(last.y1, t.y1) };
+                continue;
+            }
+        }
+        out.push({ ...t });
+    }
+    // a short pinch between two like tiers: one tier from the lower's base to the upper's top, the wider outline
+    for (let i = 1; i + 1 < out.length;) {
+        const [a, t, b] = [out[i - 1], out[i], out[i + 1]];
+        if (t.y1 - t.y0 < TIER_PINCH_M && like(a, b)) { out.splice(i - 1, 3, { ...(b.area > a.area ? b : a), y0: a.y0, y1: b.y1 }); i = Math.max(1, i - 1); }
+        else i++;
+    }
+    return out;
+}
+
 function ringArea(r: Array<[number, number]>): number {
     let a = 0;
     for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += r[j][0] * r[i][1] - r[i][0] * r[j][1];
@@ -229,9 +276,9 @@ export function asMassingParts(r: ScanMassingResult): { parts: MassingPart[]; me
         return { parts, meshes, notes };
     }
     if (r.chosen === 'tiers') {
-        const tiers = r.tiers.filter(t => t.outline.length >= 3 && t.y1 > t.y0);
+        const tiers = mergeTiers(r.tiers.filter(t => t.outline.length >= 3 && t.y1 > t.y0));
         if (!tiers.length) return { reason: 'no tier has an outline' };
-        return { parts: tiers.map((t, k) => part(`scan-tier-${k}`, dropSpikes(t.outline).ring, t.y0, t.y1, `tier ${k}: ${t.y0.toFixed(1)}-${t.y1.toFixed(1)} m`)), meshes: [], notes: tiers.map((t, k) => `tier ${k}: ${t.y0.toFixed(1)}-${t.y1.toFixed(1)} m, ${t.area.toFixed(0)} m2`) };
+        return { parts: tiers.map((t, k) => part(`scan-tier-${k}`, dropSpikes(t.outline).ring, t.y0, t.y1, `tier ${k}: ${t.y0.toFixed(1)}-${t.y1.toFixed(1)} m`)), meshes: [], notes: [`${r.tiers.length} scan tiers, ${tiers.length} after like consecutive tiers were merged`, ...tiers.map((t, k) => `tier ${k}: ${t.y0.toFixed(1)}-${t.y1.toFixed(1)} m, ${t.area.toFixed(0)} m2`)] };
     }
     return { reason: `the scan chose ${r.chosen}, which has no flat walls for a facade to be read onto` };
 }
