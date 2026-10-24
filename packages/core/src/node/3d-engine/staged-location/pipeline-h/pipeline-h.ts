@@ -27,8 +27,8 @@
  *     tool, and the tool's remaining rejections are reported by reason (583 of 678 Flatiron openings were rejected unsaid).
  *  5. The evidence ledger is written into the brief and returned with the outcome.
  *
- * The default for every procedural build (the 3D Building button; user decision 2026-10-23); SCRATCHBOX_STAGED_PROCEDURAL=g
- * or the tool's `pipeline: 'g'` runs G instead. Scored against the Haughwout baseline with .claude/skills/watch-staged-build.
+ * The default procedural build from 2026-10-23 until pipeline I took the 3D Building button on 2026-10-24; still the default
+ * where pipeline I's services are not wired. SCRATCHBOX_STAGED_PROCEDURAL or the tool's `pipeline` picks G, H or I. Scored against the Haughwout baseline with .claude/skills/watch-staged-build.
  * Nothing here names a kind of building.
  */
 
@@ -50,12 +50,16 @@ export type PipelineHInput = Omit<PipelineGInput, 'policy'> & {
 };
 
 /**
- * Which procedural pipeline a request runs: H by default (user decision 2026-10-23: the 3D Building button runs
- * pipeline H); 'g' when the tool's `pipeline` or SCRATCHBOX_STAGED_PROCEDURAL asks for G.
+ * Which procedural pipeline a request runs: I by default when its services are wired (user decision 2026-10-24: the 3D
+ * Building button runs pipeline I, the character sheet made into a model by Meshy and fitted to the scan), else H (the
+ * 2026-10-23 default; stand-in deps such as the tests' never reach the paid services); 'g', 'h' or 'i' when the tool's
+ * `pipeline` or SCRATCHBOX_STAGED_PROCEDURAL asks for one. An explicit 'i' without the services runs I, which then says why
+ * it cannot build.
  */
-export function stagedProcedural(request: { procedural?: boolean; pipeline?: string }, env: NodeJS.ProcessEnv = process.env): 'g' | 'h' {
+export function stagedProcedural(request: { procedural?: boolean; pipeline?: string }, env: NodeJS.ProcessEnv = process.env, pipelineIServices = false): 'g' | 'h' | 'i' {
     const asked = (request.pipeline ?? env.SCRATCHBOX_STAGED_PROCEDURAL ?? '').trim().toLowerCase();
-    return asked === 'g' ? 'g' : 'h';
+    if (asked === 'g' || asked === 'h' || asked === 'i') return asked;
+    return pipelineIServices ? 'i' : 'h';
 }
 
 export async function runPipelineH(input: PipelineHInput): Promise<PipelineGOutcome> {
