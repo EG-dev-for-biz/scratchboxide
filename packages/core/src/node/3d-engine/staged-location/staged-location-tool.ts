@@ -40,6 +40,8 @@ import { fetchVectorEvidence } from './vector-footprints';
 import { fetchElevations } from './vector-first-paint';
 import { getTileVegetationService } from '../tile-vegetation-service';
 import { loadScanFit } from '../scan-fit-loader';
+import { createDefaultStationImageGenerator } from '../../spatial/BeautifyStationService';
+import { createFalTrellisClient } from './pipeline-i/fal-trellis';
 import { StageCache, stagedWorkspaceRoot } from './stage-cache';
 import { genAiEnhanceClient } from './texture-enhance';
 import { lightingCorrectionEnabled, lightingModels } from './texture-lighting';
@@ -170,8 +172,8 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
             ...(typeof args.enhance === 'boolean' ? { enhance: args.enhance } : {}),
             // one building is rebuilt procedurally by pipeline G unless the caller asks for its scan detailed (user decision 2026-10-22)
             ...(args.isolate === true && args.procedural !== false ? { procedural: true } : {}),
-            // which procedural pipeline ('g' or 'h'; pipeline-h/pipeline-h.ts stagedProcedural reads it, else the environment)
-            ...(args.pipeline === 'g' || args.pipeline === 'h' ? { pipeline: args.pipeline } : {}),
+            // which procedural pipeline ('g', 'h' or 'i'; pipeline-h/pipeline-h.ts stagedProcedural reads it, else the environment)
+            ...(args.pipeline === 'g' || args.pipeline === 'h' || args.pipeline === 'i' ? { pipeline: args.pipeline } : {}),
             ...(place ? { place } : {})
         },
         ...(retry ? { retry } : {}),
@@ -210,6 +212,9 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
     const elevationService = mapsKey ? new GoogleElevationService({ apiKey: mapsKey }) : undefined;
     return {
         cache,
+        // pipeline I (the 3D Building default): the image model draws the character sheet, Trellis on Fal.ai makes the model (best of six seeds);
+        // made on first use, so a build without FAL_KEY fails pipeline I with that reason
+        pipelineI: { generator: () => createDefaultStationImageGenerator({ workspaceRoot: cache.dir }), model: () => createFalTrellisClient() },
         ...(elevationService ? {
             elevation: {
                 sample: async (points: Array<{ lat: number; lng: number }>) => {
