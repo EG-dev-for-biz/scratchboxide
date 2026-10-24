@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { isNetworkLoadFailure, networkRetryDelayMs, NETWORK_RETRY_DELAYS_MS } from '../src/browser/generative-canvas/primitives/scene3d/load-failure';
+import { isAppPageAnswer, isNetworkLoadFailure, networkRetryDelayMs, NETWORK_RETRY_DELAYS_MS } from '../src/browser/generative-canvas/primitives/scene3d/load-failure';
 import { resolveViewportNotice } from '../src/browser/generative-canvas/primitives/scene3d/ViewportNotice';
 
 describe('model loads that could not reach the server', () => {
@@ -48,5 +48,14 @@ describe('model loads that could not reach the server', () => {
         const both = resolveViewportNotice({ ...base, reconnecting: 2, objectLoadErrors: [{ id: 'hero', error: 'fetch for "/models/hero.glb" responded with 404: Not Found' }] });
         expect(both.map(n => n.kind)).toEqual(['object-load-error', 'reconnecting']);
         expect(resolveViewportNotice({ ...base, reconnecting: 0 })).toEqual([]);
+    });
+
+    it('tells the app page served in a model file\'s place from a broken file', () => {
+        expect(isAppPageAnswer(new SyntaxError('Unexpected token \'<\', "<!DOCTYPE "... is not valid JSON'))).toBe(true);
+        expect(isAppPageAnswer(new Error('Unexpected token < in JSON'))).toBe(true);
+        expect(isAppPageAnswer(new Error('<html><body>index</body></html>'))).toBe(true);
+        expect(isAppPageAnswer(new Error('THREE.GLTFLoader: Unsupported asset. glTF versions >=2.0 are supported.'))).toBe(false);
+        expect(isAppPageAnswer(new Error('fetch for "/models/x.glb" responded with 404: Not Found'))).toBe(false);
+        expect(isAppPageAnswer(undefined)).toBe(false);
     });
 });

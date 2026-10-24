@@ -14,6 +14,12 @@
  * server being away, most often the dev server restarting under the open page: the file is still there, recovery would
  * find it present and change nothing, and a red "5 models failed to load" over the viewport is wrong. Those loads are
  * tried again on their own, with these delays, and only reported when every try failed.
+ *
+ * A model URL answered with the app's own HTML page (the dev server's page fallback, while the backend that serves the
+ * file is away: the loader then fails with `Unexpected token '<', "<!DOCTYPE "... is not valid JSON`) is the same
+ * situation seen through a different error: it is retried with the same delays, and when the retries are spent the file
+ * goes to asset recovery (restored from the asset store, or rebuilt), since by then the server is answering and the
+ * file really is not there.
  */
 
 /** Delays before each retry of a load that failed to reach the server (about 30 s in all: a dev server restart takes 10-25 s). */
@@ -36,4 +42,13 @@ export function isNetworkLoadFailure(err: unknown): boolean {
     if (/responded with \d{3}/i.test(message)) return false;
     if (/abort/i.test(message) && (err as { name?: string } | undefined)?.name === 'AbortError') return false;
     return /failed to fetch|load failed|networkerror|network request failed|err_connection|err_network|err_internet_disconnected|fetch failed|ECONNREFUSED|ECONNRESET/i.test(message);
+}
+
+/**
+ * Whether a load error is the app's HTML page served where a model file was asked for (a page fallback): GLTFLoader
+ * parsing `<!DOCTYPE html>` as glTF JSON, or a loader quoting the page.
+ */
+export function isAppPageAnswer(err: unknown): boolean {
+    const message = String((err as { message?: unknown } | undefined)?.message ?? err ?? '');
+    return /<!doctype|<html|unexpected token '?<'?/i.test(message);
 }

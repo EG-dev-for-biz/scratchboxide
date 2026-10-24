@@ -143,7 +143,7 @@ import { PlaceReflections, placeReflectionsEnabled } from './scene3d/placeReflec
 import type { AtmosphereInput } from './scene3d/syncAtmosphere';
 import { classifySceneContent, drawableModelKind, hasNonFallbackObjectContent, syncSceneContent, syncWasmMesh, undrawableSceneObjects } from './scene3d/syncSceneContent';
 import { ViewportNotice, resolveViewportNotice } from './scene3d/ViewportNotice';
-import { isNetworkLoadFailure, networkRetryDelayMs, NETWORK_RETRY_DELAYS_MS } from './scene3d/load-failure';
+import { isAppPageAnswer, isNetworkLoadFailure, networkRetryDelayMs, NETWORK_RETRY_DELAYS_MS } from './scene3d/load-failure';
 import { fromInput, generatorErrorForScene, generatorRequestFailure, generatorRunFailure, type GeneratorRunError } from './scene3d/generatorRun';
 import type { SceneContentInput, SceneContentFactories } from './scene3d/syncSceneContent';
 import { syncCustomMeshes, disposeCustomMeshes } from './scene3d/syncCustomMeshes';
@@ -1198,6 +1198,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [externalLoadRetryNonce, setExternalLoadRetryNonce] = React.useState(0);
     // Pending retries of loads that could not reach the server (load-failure.ts), cleared when the loader is torn down.
     const networkRetryTimersRef = React.useRef(new Set<ReturnType<typeof setTimeout>>());
+    /** Failed tries per object id since its last successful load (read synchronously, so the retry delays grow). */
+    const loadAttemptsRef = React.useRef(new Map<string, number>());
     React.useEffect(() => () => { for (const t of networkRetryTimersRef.current) clearTimeout(t); networkRetryTimersRef.current.clear(); }, []);
     // Files that failed to load are recovered automatically (restored from the asset store or rebuilt from their
     // recipe, asset-recovery-client.ts); the job's progress shows over the viewport and the files load again when it ends.
@@ -3075,8 +3077,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             const key = variantSetKeyOf(obj);
             return !key || activeVariantIdsRef.current[key] === obj.id;
         };
-        const setStatus = (id: string, status: ExternalLoadStatus) =>
+        const setStatus = (id: string, status: ExternalLoadStatus) => {
+            if (status.phase === 'ready') loadAttemptsRef.current.delete(id);
             setExternalLoadStatus(prev => ({ ...prev, [id]: status }));
+        };
         /** A served file that failed to load is recovered once (restored from the asset store or rebuilt from its recipe). */
         const requestRecovery = (loadUri: string) => {
             const servedPath = recoverableAssetPath(loadUri);
@@ -3086,16 +3090,18 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
          * A load that failed: a file the server answered about (404, a parse error) is recorded and recovered; a load
          * that never reached the server (load-failure.ts: the dev server restarting under the page) is tried again on
          * its own after a growing delay, unreported until the retries are spent, and never sent to recovery (the file is
-         * there; recovery would only find it present).
+         * there; recovery would only find it present). The app's page answered in the file's place is retried the same
+         * way, then recovered.
          */
         const failLoad = (id: string, loadUri: string, err: unknown, label: string) => {
-            const network = isNetworkLoadFailure(err);
+            // the app's page served in the file's place (the backend away): retried like a lost connection, then recovered
+            const pageAnswer = isAppPageAnswer(err);
+            const network = isNetworkLoadFailure(err) || pageAnswer;
             const message = String((err as any)?.message ?? err);
-            let attempt = 1;
-            setExternalLoadStatus(prev => {
-                attempt = (prev[id]?.phase === 'error' ? prev[id]?.attempt ?? 0 : 0) + 1;
-                return { ...prev, [id]: { phase: 'error', loaded: 0, total: 0, error: message, ...(network ? { network: true } : {}), attempt } };
-            });
+            // counted in a ref: a state updater runs later, so a count read from it would stay at 1 and never run out
+            const attempt = (loadAttemptsRef.current.get(id) ?? 0) + 1;
+            loadAttemptsRef.current.set(id, attempt);
+            setExternalLoadStatus(prev => ({ ...prev, [id]: { phase: 'error', loaded: 0, total: 0, error: message, ...(network ? { network: true } : {}), attempt } }));
             const delay = network ? networkRetryDelayMs(attempt) : undefined;
             if (delay !== undefined) {
                 console.info(`[External Loader] ${loadUri} could not be reached (${message}); retry ${attempt} of ${NETWORK_RETRY_DELAYS_MS.length} in ${delay / 1000} s`);
@@ -3104,7 +3110,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 return;
             }
             console.warn(`[${label}] Failed to load ${loadUri}:`, err);
-            if (!network) requestRecovery(loadUri);
+            if (!network || pageAnswer) requestRecovery(loadUri);
         };
         const readyStatus = (loadUri: string): ExternalLoadStatus => {
             const servedPath = recoverableAssetPath(loadUri);
