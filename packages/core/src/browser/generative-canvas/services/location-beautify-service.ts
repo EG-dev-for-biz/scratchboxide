@@ -605,6 +605,36 @@ export const EVEN_LIGHT_SENTENCE = 'Light it evenly, as under a bright overcast 
 export const OUTLINE_LOCK_SENTENCE = 'The subject\'s outline is fixed: its left and right corners, its roofline and the top of every object on its roof stay exactly where the reference image has them. Do not widen, lengthen or raise it, and add no bays, windows or wall past the last bay the reference shows; where the reference image is empty there is only open sky and street.';
 
 /**
+ * Building-survey character sheet: what keeps a sheet's panels registered to their stations. Without it the image model
+ * treats the sheet as a presentation sheet and enlarges, centres or flattens views (Haughwout, 2026-10-23: the long face
+ * came back as a straight elevation, 127 % outside its outline); with it every panel stayed inside its outline.
+ */
+export const CHARACTER_SHEET_FRAMING_LOCK = 'FRAMING LOCK, non-negotiable: this is a registration sheet, not a presentation sheet. In every quadrant the building covers exactly the same pixels as in the reference, at the same size; keep each view\'s perspective exactly: do not enlarge, centre, re-pose, straighten or flatten any view into an elevation, and leave the white margins as wide as the reference has them.';
+
+const SHEET_QUADRANTS = ['top left', 'top right', 'bottom left', 'bottom right'] as const;
+
+/**
+ * The AI Beautify prompt for a building-survey character sheet: four station renders of one isolated structure, each in
+ * its own quadrant of a 2x2 sheet on white, made photorealistic in one image so every view shows the same building. Each
+ * view is described by its camera (heading, pitch, standoff), never by what the structure is.
+ */
+export function buildCharacterSheetPrompt(o: { locationName: string; stations: ColmapCameraPose[]; styleSuffix?: string }): string {
+    if (o.stations.length !== 4) throw new Error(`buildCharacterSheetPrompt: a character sheet has four views, got ${o.stations.length}`);
+    const views = o.stations.map((s, i) => {
+        const d = s.beautify?.standoffMeters;
+        return `${SHEET_QUADRANTS[i]}: camera facing ${Math.round(s.yawDegrees)}°, pitch ${s.pitchDegrees.toFixed(1)}°${d !== undefined ? `, about ${Math.round(d)} m from the structure` : ''}`;
+    }).join('; ');
+    return `Character sheet of a structure: ${o.locationName}. The reference image is a turnaround sheet of four views of this one structure, rendered from a malformed 3D photogrammetry scan (${TILES_RENDER_NOTE.replace(/^It is /, '').replace(/\.$/, '')}), each view in its own quadrant on a pure white background (${views}). `
+        + 'Transform it into a clean, photorealistic character sheet of the same structure at full resolution: the same four views in the same four quadrants, each view keeping exactly its quadrant\'s camera angle, framing, size and position, with the outline, corners, roofline and roof objects exactly where the reference has them. '
+        + `${CHARACTER_SHEET_FRAMING_LOCK} `
+        + 'It is one structure: every view shows the same materials, colours, window rhythm, storeys, ornament and roof, consistent across all four. '
+        + `${EVEN_LIGHT_SENTENCE} Pure white background around the structure in every quadrant: no sky, no street beyond its own sidewalk, no other buildings, no city. `
+        + 'Do not widen, raise or extend it and add no bays past those the reference shows. No text, labels, captions, arrows, dividing lines or borders. '
+        + obstructionFreeNote('the structure')
+        + (o.styleSuffix || '');
+}
+
+/**
  * The canonical AI Beautify prompt for a survey station: every camera fact (coordinates, yaw,
  * pitch, fov, lens, height, horizon, standoff, sun) is read from the station record so the prompt,
  * the blockout render and the depth-to-splat unprojection share one pose.

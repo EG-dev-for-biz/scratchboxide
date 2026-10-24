@@ -44,6 +44,8 @@ export interface StationImageGenerator {
         maskPng?: Buffer;          // white = disocclusion (fill), black = keep from reference
         aspectRatio: string;       // e.g. '16:9'
         width: number; height: number;
+        /** Output size the caller needs (a character sheet asks for '4K'); a generator without sizes ignores it. */
+        imageSize?: '1K' | '2K' | '4K';
         /** The caller's Stop: a generator should end its model call with an AbortError when it fires. */
         signal?: AbortSignal;
     }): Promise<Buffer | StationImageAnswer>;
@@ -641,7 +643,7 @@ export function createGoogleStationImageGenerator(deps: {
                 sourceAsset: refs[0],
                 referenceAssets: refs.slice(1),
                 aspectRatio: args.aspectRatio,
-                imageSize: deps.imageSize ?? (deps.fidelity === 'draft' ? '1K' : '2K'),
+                imageSize: args.imageSize ?? deps.imageSize ?? (deps.fidelity === 'draft' ? '1K' : '2K'),
                 modelPriority: deps.modelPriority,
                 fidelity: deps.fidelity
             }, { signal: args.signal });
