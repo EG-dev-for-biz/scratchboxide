@@ -51,14 +51,15 @@ export type PipelineHInput = Omit<PipelineGInput, 'policy'> & {
 
 /**
  * Which procedural pipeline a request runs: I by default when its services are wired (user decision 2026-10-24: the 3D
- * Building button runs pipeline I, the character sheet made into a model by Meshy and fitted to the scan), else H (the
- * 2026-10-23 default; stand-in deps such as the tests' never reach the paid services); 'g', 'h' or 'i' when the tool's
- * `pipeline` or SCRATCHBOX_STAGED_PROCEDURAL asks for one. An explicit 'i' without the services runs I, which then says why
- * it cannot build.
+ * Building button runs pipeline I, the character sheet made into a model by Trellis and fitted to the scan), else H (the
+ * 2026-10-23 default; stand-in deps such as the tests' never reach the paid services); 'g', 'h', 'i' or 'j' when the
+ * tool's `pipeline` or SCRATCHBOX_STAGED_PROCEDURAL asks for one. 'j' runs the same character sheet and scan fit as 'i',
+ * with Meshy in place of Trellis as the 3D model service (pipeline-i.ts, fal-meshy.ts). An explicit 'i' or 'j' without
+ * the services runs I, which then says why it cannot build.
  */
-export function stagedProcedural(request: { procedural?: boolean; pipeline?: string }, env: NodeJS.ProcessEnv = process.env, pipelineIServices = false): 'g' | 'h' | 'i' {
+export function stagedProcedural(request: { procedural?: boolean; pipeline?: string }, env: NodeJS.ProcessEnv = process.env, pipelineIServices = false): 'g' | 'h' | 'i' | 'j' {
     const asked = (request.pipeline ?? env.SCRATCHBOX_STAGED_PROCEDURAL ?? '').trim().toLowerCase();
-    if (asked === 'g' || asked === 'h' || asked === 'i') return asked;
+    if (asked === 'g' || asked === 'h' || asked === 'i' || asked === 'j') return asked;
     return pipelineIServices ? 'i' : 'h';
 }
 

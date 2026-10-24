@@ -387,12 +387,7 @@ export interface StagedLocationRequest {
      * commits what its budget allows, weak readings gated, continued openings deduped, rejections by reason, an evidence
      * ledger; the default otherwise) or 'g'. SCRATCHBOX_STAGED_PROCEDURAL changes the default.
      */
-    pipeline?: 'g' | 'h' | 'i' | (string & {});
-    /**
-     * Pipeline I's 3D model service: 'trellis' (the default, fal-trellis.ts) or 'meshy' (Meshy 7.1 Ultra 2K multi on
-     * Fal.ai, fal-meshy.ts; same character sheet, same registration and swatch colour match). Ignored by G and H.
-     */
-    pipelineIModel?: 'trellis' | 'meshy' | (string & {});
+    pipeline?: 'g' | 'h' | 'i' | 'j' | (string & {});
 }
 
 export interface StagedExtraction {
@@ -462,10 +457,10 @@ export interface StagedLocationDeps {
     /** Google Solar API roof facets of the building closest to (lat, lng) (pipeline E's massing); absent without a key. */
     solarRoof?(lat: number, lng: number): Promise<SolarRoof>;
     /**
-     * Pipeline I's paid services (the 3D Building default when present: pipeline-i/): the image model for the character
-     * sheet and a Fal.ai model client (Trellis by default, or Meshy when `pipelineIModel` asks for it), made on first use
-     * so a missing key fails that build with its reason. The app's deps (createStagedLocationDeps) provide them;
-     * stand-in deps leave them out and procedural builds default to pipeline H.
+     * Pipeline I and J's paid services (the 3D Building default when present: pipeline-i/): the image model for the
+     * character sheet and a Fal.ai model client (Trellis for pipeline I, Meshy for pipeline J), made on first use so a
+     * missing key fails that build with its reason. The app's deps (createStagedLocationDeps) provide them; stand-in
+     * deps leave them out and procedural builds default to pipeline H.
      */
     pipelineI?: { generator: () => StationImageGenerator; model: (name?: string) => ModelClient };
     /** Vector building footprints near a place (facade grammar's independent check); default: Google vector feature tiles. */
@@ -1741,9 +1736,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // the remesh pipeline runs and the reason is recorded
         const pipelineE = stagedPipelineE() && request.isolate;
         /** The procedural pipeline of this request ('g', 'h' or 'i'), undefined when none is asked for. */
-        const procedural: 'g' | 'h' | 'i' | undefined = stagedPipelineG(request) ? stagedProcedural(request, process.env, !!deps.pipelineI) : undefined;
+        const procedural: 'g' | 'h' | 'i' | 'j' | undefined = stagedPipelineG(request) ? stagedProcedural(request, process.env, !!deps.pipelineI) : undefined;
         /** H's scan-led structure and massing rules: pipeline I builds on the same isolate and massing as H. */
-        const scanLed = procedural === 'h' || procedural === 'i';
+        const scanLed = procedural === 'h' || procedural === 'i' || procedural === 'j';
         // no usable vector footprint at the place (eg. the Great Pyramid of Giza): pipeline E still runs, on the
         // structure's own convex outline on the scan instead of leaving it to the unstructured remeshed-scan fallback.
         // structure.vectorFootprint is only present when a vector-evidence lookup actually ran (extraction-sizing.ts);
@@ -3644,15 +3639,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             });
         };
 
-        // ---------------- pipeline I (the grammar stage's slot, the 3D Building default): character sheet -> Trellis (best of six seeds) -> colour-matched, fitted to the scan ----------------
+        // ---------------- pipeline I/J (the grammar stage's slot, I the 3D Building default): character sheet -> Trellis (I) or Meshy (J), best of six seeds -> colour-matched, fitted to the scan ----------------
         const iRun = async (e: NonNullable<typeof eState>): Promise<void> => {
             await runner.stage<{ steps: Array<{ step: string; accepted: number; proposed: number }> }>({
                 id: 'grammar',
                 run: async io => {
                     const t0 = now();
-                    if (!deps.pipelineI) throw new Error('pipeline I needs its image model and a Fal.ai 3D model service, which these deps do not provide');
+                    if (!deps.pipelineI) throw new Error(`pipeline ${(procedural ?? 'i').toUpperCase()} needs its image model and a Fal.ai 3D model service, which these deps do not provide`);
                     // the model client first: a missing FAL_KEY fails here, before the 4K sheet is drawn
-                    const model = deps.pipelineI.model(request.pipelineIModel);
+                    const model = deps.pipelineI.model(procedural === 'j' ? 'meshy' : 'trellis');
                     const out = await runPipelineI({
                         texturedGlb: e.refined.texturedGlb, clayGlb: e.refined.rawClayGlb ?? e.refined.clayGlb,
                         footprint: { cells: structure!.cells, groundY: structure!.groundY, heightM: structure!.heightM },
@@ -3815,9 +3810,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const grammarRun = async (): Promise<void> => {
             const remeshed = remeshedNow;
             if (eState && stagedPipelineG(request)) {
-                if (procedural === 'i') {
+                if (procedural === 'i' || procedural === 'j') {
                     await iRun(eState);
-                    runner.skip('relief', 'pipeline I places a generated model of the structure; the measured relief would put scan detail on the massing it replaces');
+                    runner.skip('relief', `pipeline ${procedural.toUpperCase()} places a generated model of the structure; the measured relief would put scan detail on the massing it replaces`);
                     return;
                 }
                 await gRun(eState);
