@@ -1,0 +1,93 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
+ *
+ * This software and associated documentation files are proprietary and confidential
+ * to Scratchbox LLC. Unauthorized copying, modification, distribution, or use
+ * of this file, via any medium, is strictly prohibited without explicit written
+ * permission from Scratchbox LLC.
+ ********************************************************************************/
+
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import * as fs from 'fs-extra';
+import * as os from 'os';
+import * as path from 'path';
+import { stationFromLookAt } from '../src/common/spatial/SurveySynthesisEngine';
+import { SurveyStationRenderService, type StationBlockoutRender } from '../src/node/spatial/SurveyStationRenderService';
+import { beautifyCharacterSheet, checkPanelColour, MAX_PANEL_COLOUR_SHIFT } from '../src/node/spatial/building-character-sheet';
+import type { StationImageGenerator } from '../src/node/spatial/BeautifyStationService';
+import { decodePng, encodePng } from '../src/node/texture-processing';
+import type { GeodeticAnchor } from '../src/common/spatial/colmap-vector-reference-types';
+import { writeBoxGroundGlb } from './helpers/box-ground-glb';
+
+const ANCHOR: GeodeticAnchor = { lat: 40.7218, lng: -73.9995, elevationMeters: 10, headingDeg: 0, formattedAddress: 'test' };
+const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-sheet-best-of-'));
+const GLB = path.join(WORK, 'box.glb');
+const PW = 320;
+
+/** A reference render: a W x H frame, the structure (silhouette) in its middle, painted `rgb`. */
+function reference(W: number, H: number, rgb: [number, number, number]): StationBlockoutRender {
+    const rgba = Buffer.alloc(W * H * 4), silhouette = new Uint8Array(W * H);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const i = y * W + x, inside = x > W / 4 && x < 3 * W / 4 && y > H / 4 && y < 3 * H / 4;
+        silhouette[i] = inside ? 255 : 0;
+        rgba.set(inside ? [...rgb, 255] : [0, 0, 0, 255], i * 4);
+    }
+    return { width: W, height: H, rgba, silhouette } as unknown as StationBlockoutRender;
+}
+const paint = (W: number, H: number, rgb: [number, number, number]) => { const b = Buffer.alloc(W * H * 4); for (let i = 0; i < W * H; i++) b.set([...rgb, 255], i * 4); return b; };
+
+describe('character sheet colour gate and best of N', () => {
+    let renderer: SurveyStationRenderService;
+    const stations = () => renderer.enrichStations(
+        [[0, 10, 45], [45, 10, 0], [0, 10, -45], [-45, 10, 0]].map((eye, i) => stationFromLookAt(i + 1, eye as [number, number, number], [0, 10, 0], { focalLengthMm: 28, sensorWidthMm: 36 }, ANCHOR)));
+    beforeAll(async () => { writeBoxGroundGlb(GLB, [-5, 0, -5], [5, 20, 5], 100); renderer = new SurveyStationRenderService(); await renderer.loadMesh(GLB); });
+    afterAll(() => fs.removeSync(WORK));
+
+    it('the colour gate lets lightness change but fails a repainted material', () => {
+        const ref = reference(200, 120, [110, 112, 122]);                                   // the tiles' blue-grey cast iron
+        const lighter = checkPanelColour(ref, paint(200, 120, [190, 190, 192]), 200, 120);   // de-lit, neutral grey
+        expect(lighter.passed).toBe(true);
+        expect(lighter.shift).toBeLessThan(MAX_PANEL_COLOUR_SHIFT);
+        const brick = checkPanelColour(ref, paint(200, 120, [150, 62, 48]), 200, 120);       // repainted red brick
+        expect(brick.passed).toBe(false);
+        expect(brick.shift).toBeGreaterThan(30);
+        expect(brick.reason).toContain('repainted');
+    });
+
+    it('generates the candidates of a round in parallel, records every one, and keeps the best', async () => {
+        let n = 0;
+        const calls: number[] = [];
+        // candidate 1 and 2 draw dividing lines between the quadrants; candidate 3 is clean
+        const gen: StationImageGenerator = {
+            name: 'three-candidates',
+            async generate(args) {
+                const k = ++n; calls.push(k);
+                const s = decodePng(args.blockoutPng); const rgba = Buffer.from(s.rgba);
+                if (k < 3) for (let t = 0; t < 2; t++) for (let y = 0; y < s.height; y++) { const i = (y * s.width + s.width / 2 - 1 + t) * 4; rgba[i] = rgba[i + 1] = rgba[i + 2] = 20; }
+                return encodePng(s.width, s.height, rgba);
+            }
+        };
+        const res = await beautifyCharacterSheet(renderer, gen, stations(), 'Test Box', { panelWidth: PW, renderMode: 'clay', maxRerolls: 1, candidates: 3 });
+        expect(calls).toHaveLength(3);                // one round of three: the third passed, so no second round
+        expect(res.attempts).toBe(3);
+        expect(res.tried).toHaveLength(3);
+        expect(res.tried!.map(t => t.bordersPassed)).toEqual([false, false, true]);
+        expect(res.accepted).toBe(true);
+        expect(res.borders.passed).toBe(true);
+    });
+
+    it('with no good candidate it spends every round and returns the best it saw', async () => {
+        const gen: StationImageGenerator = {
+            name: 'always-lined',
+            async generate(args) {
+                const s = decodePng(args.blockoutPng); const rgba = Buffer.from(s.rgba);
+                for (let t = 0; t < 2; t++) for (let y = 0; y < s.height; y++) { const i = (y * s.width + s.width / 2 - 1 + t) * 4; rgba[i] = rgba[i + 1] = rgba[i + 2] = 20; }
+                return encodePng(s.width, s.height, rgba);
+            }
+        };
+        const res = await beautifyCharacterSheet(renderer, gen, stations(), 'Test Box', { panelWidth: PW, renderMode: 'clay', maxRerolls: 1, candidates: 2 });
+        expect(res.attempts).toBe(4);                 // 2 rounds x 2 candidates
+        expect(res.tried).toHaveLength(4);
+        expect(res.accepted).toBe(false);
+    });
+});
