@@ -143,6 +143,7 @@ import { PlaceReflections, placeReflectionsEnabled } from './scene3d/placeReflec
 import type { AtmosphereInput } from './scene3d/syncAtmosphere';
 import { classifySceneContent, drawableModelKind, hasNonFallbackObjectContent, syncSceneContent, syncWasmMesh, undrawableSceneObjects } from './scene3d/syncSceneContent';
 import { ViewportNotice, resolveViewportNotice } from './scene3d/ViewportNotice';
+import { isNetworkLoadFailure, networkRetryDelayMs, NETWORK_RETRY_DELAYS_MS } from './scene3d/load-failure';
 import { fromInput, generatorErrorForScene, generatorRequestFailure, generatorRunFailure, type GeneratorRunError } from './scene3d/generatorRun';
 import type { SceneContentInput, SceneContentFactories } from './scene3d/syncSceneContent';
 import { syncCustomMeshes, disposeCustomMeshes } from './scene3d/syncCustomMeshes';
@@ -951,6 +952,10 @@ interface ExternalLoadStatus {
     /** 0 when the server sends no Content-Length. */
     total: number;
     error?: string;
+    /** The error was the server being unreachable (load-failure.ts), not an answer about the file: retried on its own. */
+    network?: boolean;
+    /** How many times this file's load has failed in a row (a success resets it). */
+    attempt?: number;
     /** The file was rebuilt from its recipe after the original was lost (asset recovery). */
     rebuilt?: boolean;
 }
@@ -1191,6 +1196,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [externalLoadStatus, setExternalLoadStatus] = React.useState<Record<string, ExternalLoadStatus>>({});
     // Bumped to re-run the loader for objects whose last load failed (nothing else changes then).
     const [externalLoadRetryNonce, setExternalLoadRetryNonce] = React.useState(0);
+    // Pending retries of loads that could not reach the server (load-failure.ts), cleared when the loader is torn down.
+    const networkRetryTimersRef = React.useRef(new Set<ReturnType<typeof setTimeout>>());
+    React.useEffect(() => () => { for (const t of networkRetryTimersRef.current) clearTimeout(t); networkRetryTimersRef.current.clear(); }, []);
     // Files that failed to load are recovered automatically (restored from the asset store or rebuilt from their
     // recipe, asset-recovery-client.ts); the job's progress shows over the viewport and the files load again when it ends.
     const [assetRecovery, setAssetRecovery] = React.useState<AssetRecoveryState>(() => assetRecoveryClient.getState());
@@ -3074,6 +3082,30 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             const servedPath = recoverableAssetPath(loadUri);
             if (servedPath && !assetRecoveryClient.outcomeOf(servedPath)) assetRecoveryClient.request([servedPath]);
         };
+        /**
+         * A load that failed: a file the server answered about (404, a parse error) is recorded and recovered; a load
+         * that never reached the server (load-failure.ts: the dev server restarting under the page) is tried again on
+         * its own after a growing delay, unreported until the retries are spent, and never sent to recovery (the file is
+         * there; recovery would only find it present).
+         */
+        const failLoad = (id: string, loadUri: string, err: unknown, label: string) => {
+            const network = isNetworkLoadFailure(err);
+            const message = String((err as any)?.message ?? err);
+            let attempt = 1;
+            setExternalLoadStatus(prev => {
+                attempt = (prev[id]?.phase === 'error' ? prev[id]?.attempt ?? 0 : 0) + 1;
+                return { ...prev, [id]: { phase: 'error', loaded: 0, total: 0, error: message, ...(network ? { network: true } : {}), attempt } };
+            });
+            const delay = network ? networkRetryDelayMs(attempt) : undefined;
+            if (delay !== undefined) {
+                console.info(`[External Loader] ${loadUri} could not be reached (${message}); retry ${attempt} of ${NETWORK_RETRY_DELAYS_MS.length} in ${delay / 1000} s`);
+                const timer = setTimeout(() => { networkRetryTimersRef.current.delete(timer); setExternalLoadRetryNonce(n => n + 1); }, delay);
+                networkRetryTimersRef.current.add(timer);
+                return;
+            }
+            console.warn(`[${label}] Failed to load ${loadUri}:`, err);
+            if (!network) requestRecovery(loadUri);
+        };
         const readyStatus = (loadUri: string): ExternalLoadStatus => {
             const servedPath = recoverableAssetPath(loadUri);
             return { phase: 'ready', loaded: 0, total: 0, ...(servedPath && rebuiltAssetPathsRef.current.has(servedPath) ? { rebuilt: true } : {}) };
@@ -3209,9 +3241,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     refreshEntities();
                     if (splatMesh.parent) autoFrameIfNeeded();
                 }).catch(err => {
-                    if (settlePending()) setStatus(obj.id, { phase: 'error', loaded: 0, total: 0, error: String(err?.message ?? err) });
-                    console.warn(`[External Splat Loader Error] Failed to load ${uri}:`, err);
-                    requestRecovery(uri);
+                    if (settlePending()) failLoad(obj.id, uri, err, 'External Splat Loader Error');
                 });
                 return;
             }
@@ -3335,9 +3365,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     setStatus(obj.id, { phase: downloaded ? 'parse' : 'download', loaded: evt.loaded, total });
                 },
                 (err) => {
-                    if (settlePending()) setStatus(obj.id, { phase: 'error', loaded: 0, total: 0, error: String((err as any)?.message ?? err) });
-                    console.warn(`[External Model Loader Error] Failed to load ${uri}:`, err);
-                    requestRecovery(uri);
+                    if (settlePending()) failLoad(obj.id, uri, err, 'External Model Loader Error');
                 }
             );
         });
@@ -3974,10 +4002,16 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             const raw = (sceneData.objects || []).find(o => o.id === id)?.content?.durableUri ?? (id === 'primary-location-splat' ? sceneData.splatUrl : undefined);
             return raw ? recoverableAssetPath(resolveExternalModelUri(raw)) : undefined;
         };
+        // a load that could not reach the server and still has retries left is not a failure yet (load-failure.ts)
         return Object.entries(externalLoadStatus)
-            .filter(([id, st]) => st.phase === 'error' && declared.has(id) && !recovering.has(servedPathOf(id) ?? ''))
+            .filter(([id, st]) => st.phase === 'error' && declared.has(id) && !recovering.has(servedPathOf(id) ?? '') && !(st.network && networkRetryDelayMs(st.attempt ?? 1) !== undefined))
             .map(([id, st]) => ({ id, error: st.error || 'the file could not be loaded' }));
     }, [externalLoadStatus, sceneData.objects, sceneData.splatUrl, assetRecovery]);
+    /** Declared model files whose load could not reach the server and is being tried again. */
+    const reconnectingFiles = React.useMemo(() => {
+        const declared = new Set((sceneData.objects || []).map(o => o.id));
+        return Object.entries(externalLoadStatus).filter(([id, st]) => st.phase === 'error' && declared.has(id) && !!st.network && networkRetryDelayMs(st.attempt ?? 1) !== undefined).length;
+    }, [externalLoadStatus, sceneData.objects]);
     const drawsBiomeTerrain = drawsProceduralBiomeTerrain({ renderMode, terrainBiomes: sceneData.features?.terrainBiomes, hasGeoCoordinates, has3DTiles });
     // Lost staged files with no recipe (made before the store) can still be rebuilt from the scene's own place.
     const recoveryRebuild = React.useMemo(() => {
@@ -4004,6 +4038,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         contentKind: sceneContentKind,
         hasAuxiliaryContent: !!sceneData.vectorRoadmap?.groundBlueprint || wantsWasmMesh || drawsBiomeTerrain,
         objectLoadErrors,
+        reconnecting: reconnectingFiles,
         undrawableObjects,
         opticsIssues,
         assetRecovery: assetRecovery.job && assetRecovery.job.id === recoveryNoticeJobId ? {
