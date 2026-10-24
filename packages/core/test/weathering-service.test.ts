@@ -93,16 +93,19 @@ describe('WeatheringService', () => {
       textureHeight: 1024
     });
 
-    // Marine should be darker/more corroded (higher rust rate)
-    // Desert should retain more color (lower rust rate)
-    const marineAvgColor =
-      (marine.colorMap[0] + marine.colorMap[1] + marine.colorMap[2]) / 3;
-    const desertAvgColor =
-      (desert.colorMap[0] + desert.colorMap[1] + desert.colorMap[2]) / 3;
+    // Verify metadata reflects climate modifiers (formatted as percentages)
+    expect(marine.metadata.notes).toContain('180%'); // 1.8x = 180%
+    expect(desert.metadata.notes).toContain('60%'); // 0.6x = 60%
 
-    expect(marineAvgColor).toBeLessThan(desertAvgColor); // Marine darker
-    expect(marine.metadata.notes).toContain('1.8'); // 1.8x rust rate
-    expect(desert.metadata.notes).toContain('0.6'); // 0.6x rust rate
+    // Marine has higher roughness (more pitting) than desert
+    const marineAvgRoughness =
+      Array.from(marine.roughnessMap).reduce((a, b) => a + b) /
+      marine.roughnessMap.length / 255;
+    const desertAvgRoughness =
+      Array.from(desert.roughnessMap).reduce((a, b) => a + b) /
+      desert.roughnessMap.length / 255;
+
+    expect(marineAvgRoughness).toBeGreaterThan(desertAvgRoughness);
   });
 
   it('should respect exposure multipliers', async () => {

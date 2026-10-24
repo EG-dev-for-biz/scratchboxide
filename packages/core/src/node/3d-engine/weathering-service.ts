@@ -336,23 +336,24 @@ export class WeatheringService {
         const roughIdx = y * width + x;
 
         // Simulate multi-scale noise for weathering variation
-        const noise = this.simplexNoise(x, y, width, height);
-        const rustiness = noise * climateModifier.rustRate * exposureMult;
+        // Normalize noise to [0, 1]
+        const noise = (this.simplexNoise(x, y, width, height) + 1) * 0.5;
+        const weatheringIntensity = noise * climateModifier.rustRate * exposureMult;
 
         // Color variation based on rust/patina
-        const darkenFactor = Math.min(1.0, rustiness);
+        const darkenFactor = Math.min(1.0, weatheringIntensity);
         const colorVar = this.generateColorVariation(baseAlbedo, climateModifier, darkenFactor);
 
         colorMap[idx] = Math.round(colorVar[0] * 255);
         colorMap[idx + 1] = Math.round(colorVar[1] * 255);
         colorMap[idx + 2] = Math.round(colorVar[2] * 255);
 
-        // Roughness: increases with weathering
-        const roughVar = Math.min(1.0, baseRoughness + rustiness * 0.15);
+        // Roughness: increases significantly with weathering (aggressive scaling)
+        const roughVar = Math.min(1.0, baseRoughness + weatheringIntensity * 0.25);
         roughnessMap[roughIdx] = Math.round(roughVar * 255);
 
         // Metallic: decreases with oxidation
-        const metalVar = Math.max(0.0, baseMetallic - rustiness * 0.3);
+        const metalVar = Math.max(0.0, baseMetallic - weatheringIntensity * 0.5);
         metallicMap[roughIdx] = Math.round(metalVar * 255);
 
         // Normal map: add subtle micro-relief from pitting
@@ -373,33 +374,44 @@ export class WeatheringService {
     darkenFactor: number
   ): [number, number, number] {
     // Simulate rust bloom and patina
-    const rustColor: [number, number, number] = [0.55, 0.35, 0.22]; // Rust brown
+    const rustColor: [number, number, number] = [0.45, 0.28, 0.20]; // Dark rust brown
     const bloomColor: [number, number, number] = [0.70, 0.65, 0.60]; // Light bloom
 
     let color: [number, number, number] = [...baseAlbedo] as [number, number, number];
 
-    // Add rust coloration
+    // Add rust coloration (apply rust rate as multiplier)
     if (climateModifier.rustRate > 0) {
-      const rustFactor = Math.min(1.0, darkenFactor);
+      // Rust factor is scaled by rust rate: higher rate = more rust effect
+      const rustFactor = Math.min(1.0, darkenFactor * climateModifier.rustRate / 2);
       color[0] = color[0] * (1 - rustFactor) + rustColor[0] * rustFactor;
       color[1] = color[1] * (1 - rustFactor) + rustColor[1] * rustFactor;
       color[2] = color[2] * (1 - rustFactor) + rustColor[2] * rustFactor;
     }
 
-    // Add salt bloom if coastal
+    // Add salt bloom if coastal (marine environments)
     if (climateModifier.saltBloom && climateModifier.saltBloom > 0) {
-      const bloomFactor = Math.min(1.0, climateModifier.saltBloom);
+      const bloomFactor = Math.min(1.0, darkenFactor * climateModifier.saltBloom);
       color[0] = color[0] * (1 - bloomFactor) + bloomColor[0] * bloomFactor;
       color[1] = color[1] * (1 - bloomFactor) + bloomColor[1] * bloomFactor;
       color[2] = color[2] * (1 - bloomFactor) + bloomColor[2] * bloomFactor;
     }
 
+    // Add pollution stain (urban environments)
+    if (climateModifier.pollutionStain && climateModifier.pollutionStain > 0) {
+      const stainColor: [number, number, number] = [0.35, 0.35, 0.35]; // Dark grey
+      const stainFactor = Math.min(1.0, darkenFactor * climateModifier.pollutionStain);
+      color[0] = color[0] * (1 - stainFactor) + stainColor[0] * stainFactor;
+      color[1] = color[1] * (1 - stainFactor) + stainColor[1] * stainFactor;
+      color[2] = color[2] * (1 - stainFactor) + stainColor[2] * stainFactor;
+    }
+
     // Add UV fading (desaturation)
     if (climateModifier.uvFading && climateModifier.uvFading > 0) {
       const grey = (color[0] + color[1] + color[2]) / 3;
-      color[0] = color[0] * (1 - climateModifier.uvFading) + grey * climateModifier.uvFading;
-      color[1] = color[1] * (1 - climateModifier.uvFading) + grey * climateModifier.uvFading;
-      color[2] = color[2] * (1 - climateModifier.uvFading) + grey * climateModifier.uvFading;
+      const fadeFactor = darkenFactor * climateModifier.uvFading;
+      color[0] = color[0] * (1 - fadeFactor) + grey * fadeFactor;
+      color[1] = color[1] * (1 - fadeFactor) + grey * fadeFactor;
+      color[2] = color[2] * (1 - fadeFactor) + grey * fadeFactor;
     }
 
     return color;
