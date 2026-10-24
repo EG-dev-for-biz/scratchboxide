@@ -180,10 +180,14 @@ class Scan:
         v = sorted(tops.values())
         return v[len(v) // 2]
 
-    def score(self, candidate: Candidate, tau: float = 1.0) -> Candidate:
-        """Measure a candidate against the scan (height-balanced coverage and precision); returns the candidate."""
+    def score(self, candidate: Candidate, tau: float = 1.0, relief: float = 2.5) -> Candidate:
+        """Measure a candidate against the scan (height-balanced coverage and precision); returns the candidate.
+        `relief`: scan surface within this of the candidate counts as explained (a cornice, a column, a recessed
+        window is the facade's detail, not missed shape: "clean shape + detail", 2026-10-23); precision keeps `tau`,
+        so a shape standing in empty air still fails."""
         cand = _sm.sample_surface(candidate.mesh, self.spacing)
-        candidate.agreement = _sm.agreement(self.samples, cand, tau, 2.0, self.ground_y, self.neighbours, self.plan if self.neighbours is not None else [])
+        candidate.agreement = _sm.agreement(self.samples, cand, tau, 2.0, self.ground_y, self.neighbours, self.plan if self.neighbours is not None else [],
+                                            coverage_tau=max(tau, relief))
         return candidate
 
     def block(self) -> Candidate:
@@ -241,12 +245,13 @@ class Scan:
         return [self.block(), self.block_with_roof_objects(), self.lofted_sections()]
 
 
-def choose(scan: Scan, candidates: Optional[List[Candidate]] = None, min_coverage: float = 0.9, min_precision: float = 0.85) -> Choice:
-    """Score `candidates` (default: scan.candidates(), simplest first) and take the first that explains the scan."""
+def choose(scan: Scan, candidates: Optional[List[Candidate]] = None, min_coverage: float = 0.9, min_precision: float = 0.85, relief: float = 2.5) -> Choice:
+    """Score `candidates` (default: scan.candidates(), simplest first) and take the first that explains the scan
+    (coverage with the `relief` allowance, precision at 1 m)."""
     _require()
     cands = candidates if candidates is not None else scan.candidates()
     for c in cands:
         if c.agreement is None:
-            scan.score(c)
+            scan.score(c, relief=relief)
     result = _sm.choose([(c.label, c.triangles, c.agreement) for c in cands], min_coverage, min_precision)
     return Choice(result, cands)

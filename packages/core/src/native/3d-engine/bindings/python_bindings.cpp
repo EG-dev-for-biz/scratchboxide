@@ -1138,15 +1138,16 @@ NB_MODULE(scratchbox_native, m) {
         m_sm.def("sample_surface", [](const ScratchboxMesh& mesh, double spacing) { return sm::sampleMesh(mesh, spacing); }, "mesh"_a, "spacing"_a = 0.5,
                  "Evenly spaced points on a mesh's surface (about one per spacing^2)");
         m_sm.def("agreement", [ringOf, inRings](const std::vector<Vec3>& scan, const std::vector<Vec3>& candidate, double tau, double bandM, std::optional<double> groundY,
-                                                 const sm::TopGrid* neighbours, const std::vector<std::vector<std::pair<double, double>>>& ownPlan) {
+                                                 const sm::TopGrid* neighbours, const std::vector<std::vector<std::pair<double, double>>>& ownPlan, std::optional<double> coverageTau) {
             sm::AgreementOptions o;
             o.tauM = tau; o.bandM = bandM;
+            if (coverageTau) o.coverageTauM = *coverageTau;
             if (groundY) o.groundY = *groundY;
             std::vector<std::vector<sm::P2>> rings;
             for (const auto& r : ownPlan) rings.push_back(ringOf(r));
             if (neighbours && !rings.empty()) { o.neighbours = neighbours; o.ownPlan = [rings, inRings](double x, double z) { return inRings(rings, x, z); }; }
             return sm::agreement(scan, candidate, o);
-        }, "scan"_a, "candidate"_a, "tau"_a = 1.0, "band"_a = 2.0, "ground_y"_a = nb::none(), "neighbours"_a = nb::none(), "own_plan"_a = std::vector<std::vector<std::pair<double, double>>>{},
+        }, "scan"_a, "candidate"_a, "tau"_a = 1.0, "band"_a = 2.0, "ground_y"_a = nb::none(), "neighbours"_a = nb::none(), "own_plan"_a = std::vector<std::vector<std::pair<double, double>>>{}, "coverage_tau"_a = nb::none(),
            "How well candidate samples explain scan samples: coverage, precision and F, overall and height-balanced; surface at street level (ground_y) or beside a taller neighbour (neighbours, off own_plan) is left out of precision");
         m_sm.def("slices", [](const std::vector<Vec3>& samples, double baseY, double sliceM, double cellM, double closeM) {
             return sm::slices(samples, baseY, sm::SliceParams{sliceM, cellM, closeM});

@@ -78,7 +78,7 @@ class TopGrid:
     def at(self, x: float, z: float) -> float: ...
 
 
-def agreement(scan: collections.abc.Sequence[scratchbox_native.math.Vec3], candidate: collections.abc.Sequence[scratchbox_native.math.Vec3], tau: float = 1.0, band: float = 2.0, ground_y: float | None = None, neighbours: scratchbox_native.scan_massing.TopGrid | None = None, own_plan: collections.abc.Sequence[collections.abc.Sequence[tuple[float, float]]] = ...) -> Agreement:
+def agreement(scan: collections.abc.Sequence[scratchbox_native.math.Vec3], candidate: collections.abc.Sequence[scratchbox_native.math.Vec3], tau: float = 1.0, band: float = 2.0, ground_y: float | None = None, neighbours: scratchbox_native.scan_massing.TopGrid | None = None, own_plan: collections.abc.Sequence[collections.abc.Sequence[tuple[float, float]]] = ..., coverage_tau: float | None = None) -> Agreement:
     """How well candidate samples explain scan samples: coverage, precision and F, overall and height-balanced; surface at street level (ground_y) or beside a taller neighbour (neighbours, off own_plan) is left out of precision"""
 
 

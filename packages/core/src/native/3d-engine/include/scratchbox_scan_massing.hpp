@@ -151,6 +151,10 @@ struct TopGrid {
 
 struct AgreementOptions {
     double tauM = 1.0;
+    /** Coverage's own tolerance, when wider than tauM (NaN: tauM): scan surface within this of the candidate counts as
+     *  explained. A relief allowance - a cornice, a column, a recessed window within it is the facade's detail, not
+     *  missed shape - while precision keeps tauM, so a shape standing in empty air still fails. */
+    double coverageTauM = std::numeric_limits<double>::quiet_NaN();
     double bandM = 2.0;
     size_t minBandSamples = 30;
     /** Candidate surface below groundY + 0.5 is left out of precision (NaN: not used). */
@@ -211,12 +215,12 @@ inline Agreement agreement(const std::vector<Vec3>& scan, const std::vector<Vec3
         if (hidden) { a.unseenSamples++; continue; }
         seen.push_back(p);
     }
-    const double cap = 4 * o.tauM;
-    const auto s2c = detail::nearest(scan, candidate, cap), c2s = detail::nearest(seen, scan, cap);
+    const double covTau = std::isnan(o.coverageTauM) ? o.tauM : std::max(o.tauM, o.coverageTauM);
+    const auto s2c = detail::nearest(scan, candidate, 4 * covTau), c2s = detail::nearest(seen, scan, 4 * o.tauM);
     a.scanSamples = scan.size();
     a.candidateSamples = candidate.size();
     size_t hit = 0;
-    for (float d : s2c) if (d <= o.tauM) hit++;
+    for (float d : s2c) if (d <= covTau) hit++;
     a.coverage = scan.empty() ? 0 : static_cast<double>(hit) / scan.size();
     hit = 0;
     for (float d : c2s) if (d <= o.tauM) hit++;
@@ -226,7 +230,7 @@ inline Agreement agreement(const std::vector<Vec3>& scan, const std::vector<Vec3
     for (const auto& p : scan) yMin = std::min<double>(yMin, p.y);
     auto band = [&](double y) { return static_cast<int>(std::floor((y - yMin) / o.bandM)); };
     std::map<int, std::pair<size_t, size_t>> sb, cb;
-    for (size_t i = 0; i < scan.size(); ++i) { auto& e = sb[band(scan[i].y)]; e.first++; if (s2c[i] <= o.tauM) e.second++; }
+    for (size_t i = 0; i < scan.size(); ++i) { auto& e = sb[band(scan[i].y)]; e.first++; if (s2c[i] <= covTau) e.second++; }
     for (size_t i = 0; i < seen.size(); ++i) { auto& e = cb[band(seen[i].y)]; e.first++; if (c2s[i] <= o.tauM) e.second++; }
     std::vector<double> covs, precs;
     for (const auto& [b, e] : sb) {

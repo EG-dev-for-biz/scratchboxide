@@ -95,8 +95,13 @@ class Scan:
         sample. Parapets, cornices and rooftop plant do not lift it the way the highest point does.
         """
 
-    def score(self, candidate: Candidate, tau: float = 1.0) -> Candidate:
-        """Measure a candidate against the scan (height-balanced coverage and precision); returns the candidate."""
+    def score(self, candidate: Candidate, tau: float = 1.0, relief: float = 2.5) -> Candidate:
+        """
+        Measure a candidate against the scan (height-balanced coverage and precision); returns the candidate.
+        `relief`: scan surface within this of the candidate counts as explained (a cornice, a column, a recessed
+        window is the facade's detail, not missed shape: "clean shape + detail", 2026-10-23); precision keeps `tau`,
+        so a shape standing in empty air still fails.
+        """
 
     def block(self) -> Candidate:
         """
@@ -138,8 +143,11 @@ class Scan:
 Sequence = typing.Sequence
 Tuple = typing.Tuple
 
-def choose(scan: Scan, candidates: typing.Optional[typing.List[Candidate]] = None, min_coverage: float = 0.9, min_precision: float = 0.85) -> Choice:
-    """Score `candidates` (default: scan.candidates(), simplest first) and take the first that explains the scan."""
+def choose(scan: Scan, candidates: typing.Optional[typing.List[Candidate]] = None, min_coverage: float = 0.9, min_precision: float = 0.85, relief: float = 2.5) -> Choice:
+    """
+    Score `candidates` (default: scan.candidates(), simplest first) and take the first that explains the scan
+    (coverage with the `relief` allowance, precision at 1 m).
+    """
 
 import json
 import os
