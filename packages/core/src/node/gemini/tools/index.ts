@@ -37,6 +37,7 @@ export * from './location-evidence-tools';
 export * from './location-reference-tools';
 export * from './surface-material-tools';
 export * from './bvh-query-tools';
+export * from './specular-material-tools';
 export * from './chrono-shadow-tools';
 export * from './vanishing-point-tools';
 export * from './tile-elevation-tools';
@@ -126,6 +127,10 @@ import {
     bvhQueryHandlers
 } from './bvh-query-tools';
 import {
+    SPECULAR_MATERIALS_TOOL_DECLARATIONS,
+    specularMaterialHandlers
+} from './specular-material-tools';
+import {
     CHRONO_SHADOW_TOOL_DECLARATIONS,
     chronoShadowHandlers
 } from './chrono-shadow-tools';
@@ -212,6 +217,7 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...LENS_TOOL_DECLARATIONS,
     ...BROWSER_TOOL_DECLARATIONS,
     ...BVH_QUERY_TOOL_DECLARATIONS,
+    ...SPECULAR_MATERIALS_TOOL_DECLARATIONS,
     ...CHRONO_SHADOW_TOOL_DECLARATIONS,
     ...VANISHING_POINT_TOOL_DECLARATIONS,
     ...TILE_ELEVATION_TOOL_DECLARATIONS,
@@ -268,6 +274,7 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...sbRoadieHandlers,
     ...Object.fromEntries([
         ...bvhQueryHandlers,
+        ...specularMaterialHandlers,
         ...chronoShadowHandlers,
         ...vanishingPointHandlers,
         ...tileElevationHandlers,

@@ -45,6 +45,7 @@ import { ATMOSPHERE_TOOL_DECLARATIONS } from './tools/atmosphere-tools';
 import { LIGHTING_TOOL_DECLARATIONS } from './tools/lighting-tools';
 import { LENS_TOOL_DECLARATIONS, BROWSER_TOOL_DECLARATIONS } from './tools/lens-browser-tools';
 import { BVH_QUERY_TOOL_DECLARATIONS } from './tools/bvh-query-tools';
+import { SPECULAR_MATERIALS_TOOL_DECLARATIONS } from './tools/specular-material-tools';
 import { CHRONO_SHADOW_TOOL_DECLARATIONS } from './tools/chrono-shadow-tools';
 import { VANISHING_POINT_TOOL_DECLARATIONS } from './tools/vanishing-point-tools';
 import { TILE_ELEVATION_TOOL_DECLARATIONS } from './tools/tile-elevation-tools';
@@ -140,7 +141,7 @@ export const GEOSPATIAL_3D_PACK: ToolPackDefinition = {
 export const MESH_SURFACE_PACK: ToolPackDefinition = {
     id: 'mesh_surface',
     displayName: 'Mesh Reshaping & Material Textures',
-    description: 'C++20 mesh shaping, SB-Rig auto-rigging (skeleton + skin weights for any mesh), algorithmic UV unwrap, MaxRects atlas binning, analytical hair/groom forward splatting, BVH spatial queries (raycast, closest-point, RTAO baking), analytical facade aperture (window/door) generation, ballistic glass fracture, rigid-body drop/settle simulation, and XPBD cloth draping — on individual meshes and buildings.',
+    description: 'C++20 mesh shaping, SB-Rig auto-rigging (skeleton + skin weights for any mesh), algorithmic UV unwrap, MaxRects atlas binning, analytical hair/groom forward splatting, BVH spatial queries (raycast, closest-point, RTAO baking), reflective/dielectric material detection on any mesh (self-rendered or posed evidence, baked into a new metallicRoughness texture), analytical facade aperture (window/door) generation, ballistic glass fracture, rigid-body drop/settle simulation, and XPBD cloth draping — on individual meshes and buildings.',
     declarations: [
         ...MESH_SHAPING_TOOL_DECLARATIONS,
         ...SB_RIG_TOOL_DECLARATIONS,
@@ -149,6 +150,7 @@ export const MESH_SURFACE_PACK: ToolPackDefinition = {
         ...TURNAROUND_TOOL_DECLARATIONS,
         ...ANALYTICAL_GROOM_TOOL_DECLARATIONS,
         ...BVH_QUERY_TOOL_DECLARATIONS,
+        ...SPECULAR_MATERIALS_TOOL_DECLARATIONS,
         ...CSG_APERTURE_TOOL_DECLARATIONS,
         ...GLASS_FRACTURE_TOOL_DECLARATIONS,
         ...RIGIDBODY_DROP_TOOL_DECLARATIONS,
@@ -162,6 +164,7 @@ export const MESH_SURFACE_PACK: ToolPackDefinition = {
         ...TURNAROUND_TOOL_DECLARATIONS.map(d => d.name),
         ...ANALYTICAL_GROOM_TOOL_DECLARATIONS.map(d => d.name),
         ...BVH_QUERY_TOOL_DECLARATIONS.map(d => d.name),
+        ...SPECULAR_MATERIALS_TOOL_DECLARATIONS.map(d => d.name),
         ...CSG_APERTURE_TOOL_DECLARATIONS.map(d => d.name),
         ...GLASS_FRACTURE_TOOL_DECLARATIONS.map(d => d.name),
         ...RIGIDBODY_DROP_TOOL_DECLARATIONS.map(d => d.name),

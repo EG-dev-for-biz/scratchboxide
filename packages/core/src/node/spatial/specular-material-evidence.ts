@@ -38,3 +38,14 @@ export async function gatherSelfRenderEvidence(glbPath: string, segment: Segment
     for (const v of views) out.push(await segmentRenderedView(v, target, segment, opts.signal));
     return out;
 }
+
+/**
+ * Segments views the caller already has a camera and image for — real photos with a known pose, pipeline I/J's own
+ * sheet-station cameras — the same way gatherSelfRenderEvidence segments its own self-rendered ones. Nothing here
+ * cares where the view came from; a RenderedView is just a camera and a PNG either way.
+ */
+export async function segmentPosedViews(views: RenderedView[], target: string, segment: SegmentImage, signal?: AbortSignal): Promise<PinholeView[]> {
+    const out: PinholeView[] = [];
+    for (const v of views) out.push(await segmentRenderedView(v, target, segment, signal));
+    return out;
+}
