@@ -47,6 +47,7 @@ export * from './bay-rhythm-tools';
 export * from './rigidbody-drop-tools';
 export * from './xpbd-cloth-tools';
 export * from './sh9-lighting-tools';
+export * from './hydraulic-erosion-tools';
 
 
 import type { ToolDeclaration, ToolHandler } from './types';
@@ -164,6 +165,10 @@ import {
     SH9_LIGHTING_TOOL_DECLARATIONS,
     sh9LightingHandlers
 } from './sh9-lighting-tools';
+import {
+    HYDRAULIC_EROSION_TOOL_DECLARATIONS,
+    HYDRAULIC_EROSION_TOOL_HANDLERS
+} from './hydraulic-erosion-tools';
 
 export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...CANVAS_TOOL_DECLARATIONS,
@@ -216,7 +221,8 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...BAY_RHYTHM_TOOL_DECLARATIONS,
     ...RIGIDBODY_DROP_TOOL_DECLARATIONS,
     ...XPBD_CLOTH_TOOL_DECLARATIONS,
-    ...SH9_LIGHTING_TOOL_DECLARATIONS
+    ...SH9_LIGHTING_TOOL_DECLARATIONS,
+    ...HYDRAULIC_EROSION_TOOL_DECLARATIONS
 ];
 
 export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
@@ -272,7 +278,8 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
         ...rigidbodyDropHandlers,
         ...xpbdClothHandlers,
         ...sh9LightingHandlers
-    ].map(([decl, handler]) => [decl.name, handler]))
+    ].map(([decl, handler]) => [decl.name, handler])),
+    ...HYDRAULIC_EROSION_TOOL_HANDLERS
 };
 
 export {

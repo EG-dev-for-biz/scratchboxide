@@ -117,7 +117,11 @@ import {
     OBJECT_REFERENCE_TOOL_DECLARATIONS,
     objectReferenceHandlers,
     SB_SCRIPT_GUIDE_TOOL_DECLARATIONS,
-    sbScriptGuideHandlers
+    sbScriptGuideHandlers,
+    WEATHERING_TOOL_DECLARATIONS,
+    WEATHERING_TOOL_HANDLERS,
+    HYDRAULIC_EROSION_TOOL_DECLARATIONS,
+    HYDRAULIC_EROSION_TOOL_HANDLERS
 } from './tools';
 
 interface ToolRegistration {
@@ -740,6 +744,12 @@ export function createDefaultToolRegistry(): ToolRegistry {
     }
     for (const decl of BROWSER_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, browserHandlers[decl.name], 'browser');
+    }
+    for (const decl of WEATHERING_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, WEATHERING_TOOL_HANDLERS[decl.name], 'workspace');
+    }
+    for (const decl of HYDRAULIC_EROSION_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, HYDRAULIC_EROSION_TOOL_HANDLERS[decl.name], 'workspace');
     }
     // Not offered as itself: buildToolDeclarations builds its declaration (the catalog) per request.
     registry.register(LOAD_TOOLS_NAME, loadToolsDeclaration([]), createLoadToolsHandler(name => registry.has(name) && name !== LOAD_TOOLS_NAME), 'workspace', { offeredByDefault: false });
