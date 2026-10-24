@@ -470,6 +470,30 @@ inline double iou(const CellSet& a, const CellSet& b) {
     const size_t uni = a.size() + b.size() - inter;
     return uni ? static_cast<double>(inter) / uni : 0;
 }
+/** Douglas-Peucker on a closed ring (split at its two farthest points). */
+inline std::vector<P2> simplify(const std::vector<P2>& ring, double tol) {
+    if (ring.size() <= 4) return ring;
+    std::function<void(const std::vector<P2>&, size_t, size_t, std::vector<uint8_t>&)> dp = [&](const std::vector<P2>& r, size_t a, size_t b, std::vector<uint8_t>& keep) {
+        if (b <= a + 1) return;
+        const double L = std::max(1e-9, std::hypot(r[b].x - r[a].x, r[b].z - r[a].z));
+        double best = -1; size_t bi = a;
+        for (size_t i = a + 1; i < b; ++i) {
+            const double d = std::abs((r[b].x - r[a].x) * (r[a].z - r[i].z) - (r[a].x - r[i].x) * (r[b].z - r[a].z)) / L;
+            if (d > best) { best = d; bi = i; }
+        }
+        if (best > tol) { keep[bi] = 1; dp(r, a, bi, keep); dp(r, bi, b, keep); }
+    };
+    size_t far = 0; double fd = -1;
+    for (size_t i = 1; i < ring.size(); ++i) { const double d = std::hypot(ring[i].x - ring[0].x, ring[i].z - ring[0].z); if (d > fd) { fd = d; far = i; } }
+    std::vector<P2> closed(ring); closed.push_back(ring[0]);
+    std::vector<uint8_t> keep(closed.size(), 0);
+    keep[0] = keep[far] = keep[closed.size() - 1] = 1;
+    dp(closed, 0, far, keep);
+    dp(closed, far, closed.size() - 1, keep);
+    std::vector<P2> out;
+    for (size_t i = 0; i + 1 < closed.size(); ++i) if (keep[i]) out.push_back(closed[i]);
+    return out.size() >= 3 ? out : ring;
+}
 inline std::vector<Ring> thin(const std::vector<Ring>& rings, double tol) {
     if (rings.size() <= 2) return rings;
     std::vector<Ring> kept{rings.front()};

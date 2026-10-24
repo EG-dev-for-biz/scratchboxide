@@ -4,7 +4,7 @@ import collections.abc
 import scratchbox_native.geometry
 import scratchbox_native.math
 
-__all__ = ['Agreement', 'LoftRun', 'Slice', 'TopGrid', 'agreement', 'choose', 'crop_to_plan', 'extrude_block', 'loft_runs', 'loft_solids', 'plan_outline', 'sample_surface', 'slices', 'snap_plan_to_scan']
+__all__ = ['Agreement', 'LoftRun', 'Slice', 'TopGrid', 'agreement', 'choose', 'crop_to_plan', 'extrude_block', 'loft_runs', 'loft_solids', 'plan_outline', 'roof_objects', 'sample_surface', 'slices', 'snap_plan_to_scan']
 
 
 class Agreement:
@@ -104,6 +104,10 @@ def loft_solids(runs: collections.abc.Sequence[scratchbox_native.scan_massing.Lo
 
 def plan_outline(slices: collections.abc.Sequence[scratchbox_native.scan_massing.Slice], cell: float = 0.5) -> list[tuple[float, float]]:
     """The outline (x, z) of the largest piece of all slices together: the scan's plan"""
+
+
+def roof_objects(samples: collections.abc.Sequence[scratchbox_native.math.Vec3], plan: collections.abc.Sequence[tuple[float, float]], roof_y: float, photo_rgba: bytes | None = None, photo_width: int = 0, photo_height: int = 0, photo_x0: float = 0.0, photo_z0: float = 0.0, photo_texel: float = 0.05, min_rise: float = 0.6) -> dict:
+    """The objects standing on a roof: found where the scan stands above roof_y (edges sharpened by the photo straight down, when given) and each fitted by the simplest of its outline raised, a solid of revolution and its own lofted sections"""
 
 
 def sample_surface(mesh: scratchbox_native.geometry.Mesh, spacing: float = 0.5) -> list[scratchbox_native.math.Vec3]:

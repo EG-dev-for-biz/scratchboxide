@@ -199,9 +199,44 @@ class Scan:
         runs = _sm.loft_runs(self.slices(), 0.5, link_iou, 48, keep_tol, min_piece)
         return Candidate("lofted sections", _sm.loft_solids(runs))
 
+    def roof_objects(self, photo: Optional[str] = None, photo_frame: Optional[dict] = None, min_rise: float = 0.6) -> dict:
+        """The objects standing on the roof (tanks, bulkheads, plant, anything): found where the scan stands above the roof
+        plane, their edges sharpened by the photo straight down when there is one, each fitted by the simplest of its
+        outline raised, a solid of revolution and its own lofted sections. `photo` is a PNG straight down and
+        `photo_frame` its {"x0", "z0", "texel"} in the scan's frame; by default the scene's (SCAN_ROOF_PHOTO_PATH,
+        SCAN_ROOF_PHOTO_FRAME). Returns {"roof_y", "objects": [{"outline", "top_y", "chosen", "why", "mesh", ...}], ...}."""
+        photo = photo or os.environ.get("SCAN_ROOF_PHOTO_PATH")
+        frame = photo_frame or (json.loads(os.environ["SCAN_ROOF_PHOTO_FRAME"]) if os.environ.get("SCAN_ROOF_PHOTO_FRAME") else None)
+        ring = self.snapped_plan()
+        kwargs = {}
+        if photo and frame:
+            from PIL import Image
+            im = Image.open(photo).convert("RGBA")
+            kwargs = dict(photo_rgba=im.tobytes(), photo_width=im.width, photo_height=im.height, photo_x0=float(frame["x0"]), photo_z0=float(frame["z0"]), photo_texel=float(frame["texel"]))
+        return _sm.roof_objects(self.samples, list(ring), self.roof_y(), min_rise=min_rise, **kwargs)
+
+    def snapped_plan(self) -> List[Tuple[float, float]]:
+        """The footprint with each edge moved onto the scan's wall (the scan's own plan without a footprint)."""
+        if not self.plan:
+            return _sm.plan_outline(self.slices(), 0.5)
+        ring, _ = _sm.snap_plan_to_scan(list(self.plan[0]), self.samples, self.ground_y, self.roof_y(), 3.0)
+        return ring
+
+    def block_with_roof_objects(self, photo: Optional[str] = None, photo_frame: Optional[dict] = None) -> Candidate:
+        """The block, and every object fitted on its roof, as one candidate (the roof objects in report `roof`)."""
+        block = self.block()
+        roof = self.roof_objects(photo, photo_frame)
+        mesh = block.mesh
+        for o in roof["objects"]:
+            if o["mesh"] is not None and o["mesh"].indices:
+                mesh.append(o["mesh"])
+        c = Candidate("block + roof objects", mesh)
+        c.roof = roof
+        return c
+
     def candidates(self) -> List[Candidate]:
         """The built-in candidates, simplest first."""
-        return [self.block(), self.lofted_sections()]
+        return [self.block(), self.block_with_roof_objects(), self.lofted_sections()]
 
 
 def choose(scan: Scan, candidates: Optional[List[Candidate]] = None, min_coverage: float = 0.9, min_precision: float = 0.85) -> Choice:

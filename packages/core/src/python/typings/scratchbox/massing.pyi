@@ -106,6 +106,21 @@ class Scan:
     def lofted_sections(self, link_iou: float = 0.35, keep_tol: float = 0.4, min_piece: float = 0.5) -> Candidate:
         """Each slice's pieces followed upward and skinned: tapers, legs and overhangs as the scan has them."""
 
+    def roof_objects(self, photo: typing.Optional[str] = None, photo_frame: typing.Optional[dict] = None, min_rise: float = 0.6) -> dict:
+        """
+        The objects standing on the roof (tanks, bulkheads, plant, anything): found where the scan stands above the roof
+        plane, their edges sharpened by the photo straight down when there is one, each fitted by the simplest of its
+        outline raised, a solid of revolution and its own lofted sections. `photo` is a PNG straight down and
+        `photo_frame` its {"x0", "z0", "texel"} in the scan's frame; by default the scene's (SCAN_ROOF_PHOTO_PATH,
+        SCAN_ROOF_PHOTO_FRAME). Returns {"roof_y", "objects": [{"outline", "top_y", "chosen", "why", "mesh", ...}], ...}.
+        """
+
+    def snapped_plan(self) -> typing.List[typing.Tuple[float, float]]:
+        """The footprint with each edge moved onto the scan's wall (the scan's own plan without a footprint)."""
+
+    def block_with_roof_objects(self, photo: typing.Optional[str] = None, photo_frame: typing.Optional[dict] = None) -> Candidate:
+        """The block, and every object fitted on its roof, as one candidate (the roof objects in report `roof`)."""
+
     def candidates(self) -> typing.List[Candidate]:
         """The built-in candidates, simplest first."""
 

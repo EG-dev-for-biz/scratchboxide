@@ -28,6 +28,7 @@
 #include "scratchbox_sb_veggie_grove.hpp"
 #include "scratchbox_mesh_edit.hpp"
 #include "scratchbox_scan_massing.hpp"
+#include "scratchbox_roof_objects.hpp"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -1158,6 +1159,39 @@ NB_MODULE(scratchbox_native, m) {
         m_sm.def("loft_solids", &sm::loftSolids, "runs"_a, "The runs skinned into closed solids (Loft3D), one mesh");
         m_sm.def("extrude_block", [ringOf](const std::vector<std::pair<double, double>>& ring, double y0, double y1) { return sm::extrudeBlock(ringOf(ring), y0, y1); },
                  "ring"_a, "y0"_a, "y1"_a, "A footprint ring (x, z) extruded from y0 to y1");
+        m_sm.def("roof_objects", [ringOf](const std::vector<Vec3>& samples, const std::vector<std::pair<double, double>>& plan, double roofY,
+                                          std::optional<nb::bytes> photoRgba, int photoWidth, int photoHeight, double photoX0, double photoZ0, double photoTexel, double minRise) {
+            namespace ro = scratchbox::roof_objects;
+            ro::TopPhoto photo;
+            std::string buf;
+            if (photoRgba) {
+                buf.assign(photoRgba->c_str(), photoRgba->size());
+                if (buf.size() != static_cast<size_t>(photoWidth) * photoHeight * 4) throw std::invalid_argument("photo_rgba must hold photo_width x photo_height RGBA pixels");
+                photo = {reinterpret_cast<const uint8_t*>(buf.data()), photoWidth, photoHeight, photoX0, photoZ0, photoTexel};
+            }
+            ro::RoofParams P; P.minRiseM = minRise;
+            const ro::RoofReport rep = photoRgba ? ro::roofObjectsFromPhoto(samples, ringOf(plan), roofY, photo, P) : ro::roofObjects(samples, ringOf(plan), roofY, nullptr, P);
+            nb::dict d;
+            d["roof_y"] = rep.roofY; d["photo"] = rep.photo; d["photo_only_areas"] = rep.photoOnlyAreas;
+            d["roof_delta_e_median"] = rep.roofDeltaEMedian; d["roof_delta_e_mad"] = rep.roofDeltaEMad;
+            nb::list objs;
+            for (const auto& o : rep.objects) {
+                nb::dict od;
+                std::vector<std::pair<double, double>> outline;
+                for (const auto& p : o.outline) outline.push_back({p.x, p.z});
+                od["outline"] = outline; od["centre"] = std::make_pair(o.centre.x, o.centre.z);
+                od["base_y"] = o.baseY; od["top_y"] = o.topY; od["area"] = o.areaM2;
+                od["photo_cells"] = o.photoCells; od["scan_cells"] = o.scanCells;
+                od["chosen"] = o.chosen; od["why"] = o.why; od["outline_source"] = o.outlineSource; od["height_source"] = o.heightSource; od["roundness"] = o.roundness; od["agreement"] = o.agreement; od["mesh"] = o.mesh;
+                nb::list rows;
+                for (const auto& r : o.candidates) { nb::dict row; row["label"] = r.label; row["triangles"] = r.triangles; row["coverage"] = r.agreement.bandedCoverage; row["precision"] = r.agreement.bandedPrecision; row["accepted"] = r.accepted; row["reason"] = r.reason; rows.append(row); }
+                od["candidates"] = rows;
+                objs.append(od);
+            }
+            d["objects"] = objs;
+            return d;
+        }, "samples"_a, "plan"_a, "roof_y"_a, "photo_rgba"_a = nb::none(), "photo_width"_a = 0, "photo_height"_a = 0, "photo_x0"_a = 0.0, "photo_z0"_a = 0.0, "photo_texel"_a = 0.05, "min_rise"_a = 0.6,
+           "The objects standing on a roof: found where the scan stands above roof_y (edges sharpened by the photo straight down, when given) and each fitted by the simplest of its outline raised, a solid of revolution and its own lofted sections");
         m_sm.def("choose", [](const std::vector<std::tuple<std::string, size_t, sm::Agreement>>& ordered, double minCoverage, double minPrecision) {
             std::vector<std::pair<std::string, std::pair<size_t, sm::Agreement>>> in;
             for (const auto& [l, t, a] : ordered) in.push_back({l, {t, a}});
