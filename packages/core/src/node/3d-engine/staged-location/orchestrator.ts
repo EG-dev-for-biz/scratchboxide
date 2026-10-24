@@ -159,6 +159,9 @@ import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../commo
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
 import { palettesFromSurvey, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
 import { facadeMaterialsEnabled, gatherMaterialEvidence, scanFacePlanes, segmenterTool, type MaterialEvidence, type SegmentImage } from './facade-material-evidence';
+import { gatherSelfRenderEvidence } from '../../spatial/specular-material-evidence';
+import { projectMaskedViewsToUv } from '../../spatial/specular-material-projection';
+import { bakeSpecularMaterials } from '../../spatial/specular-material-bake';
 import { prepareTextureSources, type TextureSources, type TextureSourcesInput } from './texture-sources';
 import { ownershipChange, OWNERSHIP_MATERIAL_SHARE } from './ownership-change';
 import { tileRefineTwin, TILE_REFINE_TWIN_VERSION, type TileRefineTwin } from './tile-refine-twin';
@@ -3702,6 +3705,31 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             });
         };
 
+        // pipeline I/J's generated model checked for glass the same way G/H's photo-read facades are (facade-material-evidence.ts's
+        // floor, generalized to any mesh: specular-material-projection.ts): self-rendered, since there is no photo evidence of a model
+        // nobody has seen built; accepted regions are baked straight into the already-published textured GLB, in place, so nothing
+        // downstream needs to know this ran. Best-effort: any failure is recorded and never fails the build.
+        const iSpecularPass = async (e: NonNullable<typeof eState>): Promise<void> => {
+            if (!facadeMaterialsEnabled()) return;
+            const committed = run.state.layers.find(l => l.objectId === layerObjectId(e.key, 'l2i'));
+            const texUrl = committed?.textured?.url;
+            if (!texUrl) return;
+            const texPath = path.join(cache.modelsDir, path.basename(texUrl));
+            if (!fs.existsSync(texPath)) return;
+            try {
+                const views = await gatherSelfRenderEvidence(texPath, segmenterTool());
+                const projection = await projectMaskedViewsToUv(texPath, views);
+                if (projection.cellsAccepted > 0) {
+                    await bakeSpecularMaterials(texPath, projection, texPath);
+                    cache.writeRunNote(runId, 'pipeline_i_specular', { cellsAccepted: projection.cellsAccepted, cellsSampled: projection.cellsSampled, regions: projection.regions.length });
+                } else {
+                    cache.writeRunNote(runId, 'pipeline_i_specular', { cellsAccepted: 0, cellsSampled: projection.cellsSampled });
+                }
+            } catch (err) {
+                cache.writeRunNote(runId, 'pipeline_i_specular', { error: errorMessage(err) });
+            }
+        };
+
         // ---------------- pipeline E relief: measured detail by averaging the scan along repeats, after the clean (and inferred) layer ----------------
         const eReliefRun = async (e: NonNullable<typeof eState>, inf: { out: InferenceOutcome; layer: StagedLayer } | undefined): Promise<void> => {
             if (!pipelineERelief()) { runner.skip('relief', 'the measured relief is off (SCRATCHBOX_STAGED_PIPELINE_E_RELIEF=0)'); return; }
@@ -3812,6 +3840,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             if (eState && stagedPipelineG(request)) {
                 if (procedural === 'i' || procedural === 'j') {
                     await iRun(eState);
+                    await iSpecularPass(eState);
                     runner.skip('relief', `pipeline ${procedural.toUpperCase()} places a generated model of the structure; the measured relief would put scan detail on the massing it replaces`);
                     return;
                 }
