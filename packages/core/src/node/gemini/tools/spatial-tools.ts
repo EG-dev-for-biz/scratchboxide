@@ -1627,20 +1627,26 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'survey_beautify_station',
-        description: 'AI Beautify one survey station: pose-exact clay blockout of the GLB -> buildBeautifyPrompt grounded in the station (coordinates, yaw, pitch, lens fov, standoff, horizon, sun) -> Nano Banana image -> geometric QC by closed-loop edge alignment against the mesh (rejects recomposed frames) -> aligned pose. Returns the image path and QC report.',
+        description: 'AI Beautify one survey station: pose-exact render of the GLB -> buildBeautifyPrompt grounded in the station (coordinates, yaw, pitch, lens fov, standoff, horizon) -> Nano Banana image -> geometric QC by closed-loop edge alignment against the mesh (rejects recomposed frames) -> aligned pose. Lit evenly (bright overcast, no cast shadows) by default, because station images feed 3D. mode "building-survey" renders from the tile photos and also checks that the image stays inside the scan\'s outline from this camera (no widened facade, no extra bays, subject wholly in frame), rerolling until it does; place the station far enough out to frame the whole building, street to the top of its roof objects. With stationIds (four) it makes a building-survey character sheet instead: one 4K image of all four views, split and checked panel by panel. Returns the image path(s) and QC report (qc.outline in building-survey mode).',
         parameters: {
             type: 'OBJECT',
             properties: {
-                glbPath: { type: 'STRING', description: 'Anchored GLB (e.g. Google 3D Tiles clay).' },
+                glbPath: { type: 'STRING', description: 'Anchored GLB (e.g. Google 3D Tiles clay, or the isolated structure\'s textured GLB for building-survey mode).' },
                 stationsJsonPath: { type: 'STRING', description: 'Stations JSON from survey_synthesize_stations.' },
-                stationId: { type: 'NUMBER', description: 'Station to beautify.' },
+                stationId: { type: 'NUMBER', description: 'Station to beautify (or stationIds for a character sheet).' },
                 locationName: { type: 'STRING', description: 'Location name for the prompt.' },
-                moodPromptContext: { type: 'STRING', description: 'Optional mood/lighting sentence(s) for the prompt.' },
+                mode: { type: 'STRING', description: '"building-survey": render from the tile photos, lock the subject\'s outline in the prompt and reject images that leave the scan outline or crop the subject (overflow/underfill above the horizon under 3 %). Omit for a plain station beautify.' },
+                lighting: { type: 'STRING', description: '"even" (default): bright overcast, no cast shadows, no sun clause. "scene": the station\'s sun and the mood sentence, only when this image is itself the final picture.' },
+                renderMode: { type: 'STRING', description: '"clay" (default) or "textured" (the GLB\'s tile photos) for the reference render; building-survey mode defaults to "textured".' },
+                isoDate: { type: 'STRING', description: 'ISO-8601 instant for the sun (lighting "scene" only); default the instant the stations were synthesized for.' },
+                stationIds: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Building-survey character sheet: exactly four station ids (in quadrant order: top left, top right, bottom left, bottom right). The four views go into one 2 x 2 sheet on white and are made photorealistic by one 4K Nano Banana 2 image, so every view shows the same building in the same colours; each panel is then checked like a station (edge alignment and scan outline) and the whole sheet is generated again unless all four pass. Use instead of stationId; pick views that see the structure from different sides, e.g. the street faces, a corner and an aerial for the roof.' },
+                maxRerolls: { type: 'NUMBER', description: 'Further attempts after a rejected image (default 2).' },
+                moodPromptContext: { type: 'STRING', description: 'Optional extra sentence(s) for the prompt (mood light only with lighting "scene").' },
                 styleSuffix: { type: 'STRING', description: 'Optional style suffix appended verbatim.' },
                 width: { type: 'NUMBER', description: 'Render/generation width (default 1920).' },
                 outDir: { type: 'STRING', description: 'Output directory for blockout + beautified PNGs.' }
             },
-            required: ['glbPath', 'stationsJsonPath', 'stationId', 'locationName']
+            required: ['glbPath', 'stationsJsonPath', 'locationName']
         }
     },
     {
@@ -2853,6 +2859,21 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
     survey_beautify_station: async (args, ctx) => {
         const fsMod = await import('fs-extra');
         const data = await fsMod.readJson(asString(args.stationsJsonPath));
+        if (Array.isArray(args.stationIds)) {
+            const ids = (args.stationIds as unknown[]).map(Number);
+            if (ids.length !== 4) throw new MissingInputError('survey_beautify_station', 'stationIds', `a character sheet takes exactly four station ids, got ${ids.length}`);
+            const stations = ids.map(id => { const st = (data.poses as any[]).find(p => p.id === id); if (!st) throw new Error(`survey_beautify_station: station ${id} not found`); return st; });
+            const generator = await resolveStationImageGenerator(ctx);
+            const { registerBeautifyHandlers } = await import('../../spatial/survey-router');
+            const deps = registerBeautifyHandlers({}, generator, process.cwd());
+            const res = await deps.beautifySheet!({ ...args, stations, anchor: data.anchor, glbPath: asString(args.glbPath), signal: ctx.signal }, chatProgress(ctx));
+            const failed = res.panels.filter((p: any) => !p.accepted);
+            return {
+                resultPayload: { success: true, ...res } as unknown as ToolResultPayload,
+                summaryResult: `Character sheet ${res.accepted ? 'accepted' : `rejected (${[...failed.map((p: any) => `station ${p.stationId}: ${p.qc.reason}`), res.borders?.reason].filter(Boolean).join('; ')})`} after ${res.attempts} attempt(s) -> ${res.sheetPath}. ${res.imageSource}`
+            };
+        }
+        if (args.stationId === undefined) throw new MissingInputError('survey_beautify_station', 'stationId', 'or stationIds (four) for a character sheet');
         const station = (data.poses as any[]).find(p => p.id === args.stationId);
         if (!station) throw new Error(`survey_beautify_station: station ${args.stationId} not found`);
         const generator = await resolveStationImageGenerator(ctx);

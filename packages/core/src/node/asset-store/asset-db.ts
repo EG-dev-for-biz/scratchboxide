@@ -36,11 +36,16 @@ type StatementSync = SqliteStatement;
  * node:sqlite is loaded at runtime, not imported: the bundlers in front of this code (Vite in tests, the renderer
  * build's dependency scan) do not know it as a built-in module yet. Node 22.13+ ships it without a flag.
  */
-function loadSqlite(): { DatabaseSync: new (file: string) => DatabaseSync } {
+interface SqliteModule {
+    DatabaseSync: new (file: string) => DatabaseSync;
+    backup?: (source: DatabaseSync, destination: string) => Promise<number>;
+}
+
+function loadSqlite(): SqliteModule {
     const getBuiltin = (process as { getBuiltinModule?: (id: string) => unknown }).getBuiltinModule;
     const mod = typeof getBuiltin === 'function' ? getBuiltin.call(process, 'node:sqlite') : undefined;
     if (!mod) throw new Error(`node:sqlite is not available in this Node (${process.version}); the asset database needs Node 22.13 or newer`);
-    return mod as { DatabaseSync: new (file: string) => DatabaseSync };
+    return mod as SqliteModule;
 }
 
 export const ASSET_DB_SCHEMA_VERSION = 2;
@@ -263,6 +268,13 @@ export class AssetDb {
         // additive schema: a newer version only adds tables, so the recorded version only moves up
         this.db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = MAX(CAST(meta.value AS INTEGER), CAST(excluded.value AS INTEGER))')
             .run('schema_version', String(ASSET_DB_SCHEMA_VERSION));
+    }
+
+    /** A consistent copy of the live database at `file` (SQLite's online backup; writers are not blocked). */
+    async backupTo(file: string): Promise<void> {
+        const { backup } = loadSqlite();
+        if (typeof backup !== 'function') throw new Error(`node:sqlite in Node ${process.version} has no backup(); database snapshots need Node 23.8 or newer`);
+        await backup(this.db, path.resolve(file));
     }
 
     private stmt(sql: string): StatementSync {

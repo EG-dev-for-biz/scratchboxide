@@ -112,6 +112,7 @@ export class DurableAssetStore {
     readonly home: string;
     readonly root: string;
     readonly db: AssetDb;
+    private readonly blobKeptListeners = new Set<(sha256: string) => void>();
 
     constructor(home: string = scratchboxHome()) {
         this.home = path.resolve(home);
@@ -140,7 +141,7 @@ export class DurableAssetStore {
     private putHashed(source: string, sha256: string, bytes: number, opts: PutFileOptions): StoredAsset {
         const servedPath = normalizeServedPath(opts.servedPath);
         const stat = { size: bytes };
-        this.keepBytes(source, sha256, stat.size);
+        const copied = this.keepBytes(source, sha256, stat.size);
         const mime = opts.mime ?? mimeForFile(source) ?? null;
         const previous = this.db.served(servedPath);
         this.db.transaction(() => {
@@ -151,7 +152,24 @@ export class DurableAssetStore {
                     { origin: opts.origin, bytes: stat.size, ...(opts.recipeId ? { recipeId: opts.recipeId } : {}), ...(previous ? { previousSha256: previous.sha256 } : {}) });
             }
         });
+        if (copied) this.notifyBlobKept(sha256);
         return this.lookupRequired(servedPath);
+    }
+
+    /** Calls `listener` with each content hash whose bytes newly enter the store (the cloud mirror uploads them). */
+    onBlobKept(listener: (sha256: string) => void): () => void {
+        this.blobKeptListeners.add(listener);
+        return () => this.blobKeptListeners.delete(listener);
+    }
+
+    private notifyBlobKept(sha256: string): void {
+        for (const listener of this.blobKeptListeners) {
+            try {
+                listener(sha256);
+            } catch (err) {
+                console.warn(`[asset-store] blob listener failed for ${sha256}: ${(err as Error).message}`);
+            }
+        }
     }
 
     /** Points `servedPath` at the content another served path already has (a rebuilt layer under the old name). */
@@ -310,10 +328,10 @@ export class DurableAssetStore {
         return report;
     }
 
-    /** Copies the bytes into the store when that content is not there yet (atomic: a temp file, then a rename). */
-    private keepBytes(source: string, sha256: string, bytes: number): void {
+    /** Copies the bytes into the store when that content is not there yet (atomic: a temp file, then a rename); true when it copied. */
+    private keepBytes(source: string, sha256: string, bytes: number): boolean {
         const target = this.blobPath(sha256);
-        if (fs.existsSync(target) && fs.statSync(target).size === bytes) return;
+        if (fs.existsSync(target) && fs.statSync(target).size === bytes) return false;
         fs.mkdirSync(path.dirname(target), { recursive: true });
         const tmp = `${target}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
         try {
@@ -321,9 +339,10 @@ export class DurableAssetStore {
             fs.renameSync(tmp, target);
         } catch (err) {
             fs.rmSync(tmp, { force: true });
-            if (fs.existsSync(target) && fs.statSync(target).size === bytes) return; // another process won the race
+            if (fs.existsSync(target) && fs.statSync(target).size === bytes) return false; // another process won the race
             throw err;
         }
+        return true;
     }
 
     close(): void {

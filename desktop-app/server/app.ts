@@ -19,6 +19,9 @@ import { AssetRecoveryService } from '../../packages/core/src/node/asset-store/a
 import { rebuildStagedForRecovery } from '../../packages/core/src/node/3d-engine/staged-location/staged-rebuild';
 import { stagedWorkspaceRoot } from '../../packages/core/src/node/3d-engine/staged-location/stage-cache';
 import { createAssetRouter } from './routes/assetRoutes';
+import { defaultCloudBucket } from '../../packages/core/src/node/cloud-store/cloud-bucket';
+import { AssetCloudMirror } from '../../packages/core/src/node/cloud-store/asset-cloud-mirror';
+import { scheduleAssetDbSnapshots } from '../../packages/core/src/node/cloud-store/asset-db-snapshot';
 import { FileKeyStore } from '../../packages/core/src/node/key-store';
 import { KEY_STORE_SERVICE, KEY_STORE_GEMINI_ACCOUNT } from '../../packages/core/src/node/gemini/gemini-client';
 import { preferSavedMapsKey } from '../../packages/core/src/node/spatial/maps-key-settings';
@@ -478,13 +481,29 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     // kept there by content hash. After the static mounts, so a file present in this checkout is served from disk and a
     // missing one (another checkout's build, a deleted worktree, a cleaned build directory) is served from the store.
     const assetStore = defaultDurableAssetStore();
+    const cloudBucket = defaultCloudBucket();
+    // With a cloud bucket, the store's bytes are uploaded as they arrive and restored from the bucket when lost.
+    const assetMirror = assetStore && cloudBucket ? new AssetCloudMirror(assetStore, cloudBucket) : undefined;
+    console.log(cloudBucket
+        ? `[cloud-store] chats and assets are kept in ${cloudBucket.label}`
+        : '[cloud-store] off: no bucket configured (SCRATCHBOX_STORE_BUCKET or ~/.scratchbox/cloud-store.json); chats and assets stay on this machine');
     if (assetStore) {
-        app.use((req: Request, res: Response, next: NextFunction) => {
+        app.use(async (req: Request, res: Response, next: NextFunction) => {
             if ((req.method !== 'GET' && req.method !== 'HEAD') || !ASSET_STORE_SERVED_PREFIXES.some(p => req.path.startsWith(p))) {
                 next();
                 return;
             }
-            const found = assetStore.lookup(req.path);
+            let found = assetStore.lookup(req.path);
+            if (!found && assetMirror) {
+                const row = assetStore.record(req.path);
+                if (row) {
+                    try {
+                        if (await assetMirror.restore(row.sha256)) found = assetStore.lookup(req.path);
+                    } catch (err) {
+                        console.warn(`[cloud-store] could not restore ${req.path} from ${assetMirror.bucket.label}: ${(err as Error).message}`);
+                    }
+                }
+            }
             if (!found) {
                 next();
                 return;
@@ -516,6 +535,21 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
                     }
                 }
             }, 5000).unref();
+        }
+        if (assetMirror && process.env.SCRATCHBOX_TEST !== '1') {
+            assetMirror.attach();
+            const sweepToBucket = (): void => {
+                assetMirror.sweep()
+                    .then(async r => {
+                        if (r.queued) console.log(`[cloud-store] uploading ${r.queued} asset file(s) to ${assetMirror.bucket.label} (${r.alreadyInBucket} of ${r.local} already there)`);
+                        await assetMirror.idle();
+                        if (r.queued) console.log(`[cloud-store] asset upload finished: ${assetMirror.uploaded} uploaded so far, ${assetMirror.failures.length} failed`);
+                    })
+                    .catch(err => console.warn(`[cloud-store] asset sweep to ${assetMirror.bucket.label} failed (retried in 6 h): ${(err as Error).message}`));
+            };
+            setTimeout(sweepToBucket, 60 * 1000).unref();
+            setInterval(sweepToBucket, 6 * 60 * 60 * 1000).unref();
+            scheduleAssetDbSnapshots(assetStore, assetMirror.bucket);
         }
     }
 

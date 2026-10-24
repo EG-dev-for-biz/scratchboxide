@@ -163,17 +163,16 @@ export function createSurveySwatchesHandler(deps: {
                     const fetchMaps = args.fetchMaps === true;
 
                     // Try to load the index to check for embeddings
-                    let index: PbrLibraryIndexFile | undefined;
-                    let fastMatcher: typeof match | undefined;
+                    let fastMatcher: NonNullable<typeof deps.match> | undefined;
                     try {
                         if (where.startsWith('gs://')) {
                             const indexStore = await (await import('../../spatial/pbr-library-match')).cloudStore(`${where}_index`);
                             const indexJson = await indexStore.read('index.json');
-                            index = JSON.parse(indexJson.toString('utf8'));
+                            const index: PbrLibraryIndexFile = JSON.parse(indexJson.toString('utf8'));
                             if (index.embedDim) {
                                 const embedClient = vertexEmbeddingsClient();
                                 ctx?.reportProgress?.(`using fast embedding-based matching (${index.materials.filter(m => m.embed).length} materials have embeddings)`);
-                                fastMatcher = (s, workDir) => fastMatchSwatchToLibrary({ photo: s.files.photoSwatch, description: s.description, sizeMeters: s.sizeMeters }, library, index!, embedClient, jv, workDir, { fetchMaps });
+                                fastMatcher = (s, workDir) => fastMatchSwatchToLibrary({ photo: s.files.photoSwatch, description: s.description, sizeMeters: s.sizeMeters }, library, index, embedClient, jv, workDir, { fetchMaps });
                             }
                         }
                     } catch {

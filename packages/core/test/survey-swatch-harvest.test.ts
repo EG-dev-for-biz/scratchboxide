@@ -19,7 +19,7 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { describe, expect, it } from 'vitest';
 import { onSubject, planTextureStations, TEXTURE_AERIALS, TEXTURE_STATION_STANDOFF_M } from '../src/node/spatial/survey-swatch-harvest';
-import { mapFilesOf, matchSwatchToLibrary, openPbrLibrary, publishPbrLibraryIndex } from '../src/node/spatial/pbr-library-match';
+import { cosineSimilarity, encodeEmbedding, fastMatchSwatchToLibrary, mapFilesOf, matchSwatchToLibrary, openPbrLibrary, publishPbrLibraryIndex } from '../src/node/spatial/pbr-library-match';
 import { createSurveySwatchesHandler, SURFACE_MATERIALS_TOOL_DECLARATIONS, SURVEY_SWATCHES_TOOL_NAME } from '../src/node/gemini/tools/surface-material-tools';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'swatch-'));
@@ -61,7 +61,6 @@ describe('PBR library', () => {
     make('slate_roof', 'gray', ['slate_roof_diff_1k.jpg', 'slate_roof_nor_gl_1k.jpg']);
     fs.mkdirSync(path.join(lib, 'no_maps'));
 
-    const { encodeEmbedding, cosineSimilarity } = require('../src/node/spatial/pbr-library-match');
 
     /** An object store in memory, as Cloud Storage would hold the library and its index. */
     const memoryStore = (seed: Record<string, Buffer> = {}) => {
@@ -124,7 +123,6 @@ describe('PBR library', () => {
     });
 
     it('computes embeddings and uses fast cosine similarity search', async () => {
-        const { fastMatchSwatchToLibrary } = require('../src/node/spatial/pbr-library-match');
         const l = await openPbrLibrary(lib, { cacheDir: tmp() });
         const swatch = path.join(tmp(), 'swatch.png');
         execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=gray:s=32x32', '-frames:v', '1', swatch]);

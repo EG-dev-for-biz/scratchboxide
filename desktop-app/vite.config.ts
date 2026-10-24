@@ -102,6 +102,7 @@ export default defineConfig(({ mode }) => {
     server: {
       port: parseInt(process.env.SCRATCHBOX_WEB_PORT || '3030', 10),
       host: '127.0.0.1',
+      allowedHosts: ['.trycloudflare.com'],
       watch: {
         ignored: ['**/public/**', '**/public/s4d_tile_blockout_runner*', '**/dist/**', '**/node_modules/**']
       },
@@ -133,6 +134,9 @@ export default defineConfig(({ mode }) => {
         '/libs': apiProxy(),
         '/build': apiProxy(),
         '/cpp': apiProxy(),
+        '/git': apiProxy(),
+        '/memories': apiProxy(),
+        '/compiler': apiProxy(),
         '^/(?!index\\.html$).*\\.html$': {
           target: API_TARGET,
           changeOrigin: true
