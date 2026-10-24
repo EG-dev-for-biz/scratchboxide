@@ -15,6 +15,7 @@ import { GeneratorFailedError, MediaModelUnavailableError, MissingInputError } f
 import { GoogleMediaCredentialsService } from '../google-media-credentials-service';
 import { generateImageWithModels, mediaRequestAborted, withMediaFailureContext } from '../google-media-generation-service';
 import { FalTrellisService, type FalTrellisMultiInput, type FalTrellisResult } from './FalTrellisService';
+import { FalMeshyService, type FalMeshyMultiInput, type FalMeshyResult } from './FalMeshyService';
 
 /** Image models a turnaround tries when none is named: Nano Banana Lite first, then the standard image list. */
 export const TURNAROUND_DEFAULT_MODELS = [resolveImageModelId('nano-banana-lite'), ...IMAGE_MODEL_PRIORITY];
@@ -59,8 +60,8 @@ export interface MultiAngleCaptureOptions {
     isolation?: IsolationOptions;
     /** Output directory for reference image artifacts. */
     outputDir?: string;
-    /** Downstream reconstruction pipeline target (default 'none'; Trellis runs only when asked for). */
-    downstreamTarget?: 'trellis-fal' | 'trellis' | 'none';
+    /** Downstream reconstruction pipeline target (default 'none'; Trellis and Meshy run only when asked for). */
+    downstreamTarget?: 'trellis-fal' | 'meshy-7.1-fal' | 'trellis' | 'none';
     /**
      * The subject's real-world size, returned with the result as the target size for scaling the GLB in the
      * scene. The GLB itself is not rescaled; its measured bounds are reported separately.
@@ -96,6 +97,8 @@ export interface MultiAngleTurnaroundDependencies {
     createClient?: () => Promise<any>;
     /** Runs the downstream Trellis reconstruction. */
     trellis?: { generate3DFromImages(input: FalTrellisMultiInput): Promise<FalTrellisResult> };
+    /** Runs the downstream Meshy 7.1 reconstruction. */
+    meshy?: { generate3DFromImages(input: FalMeshyMultiInput): Promise<FalMeshyResult> };
 }
 
 export interface CapturedView {
@@ -126,6 +129,8 @@ export interface MultiAngleCaptureResult {
     skippedModels: SkippedMediaModel[];
     /** Which model produced the views and, when it was not the requested one, why. */
     modelNote: string;
+    /** The downstream 3D model service used (if any). */
+    downstreamTarget?: 'trellis-fal' | 'meshy-7.1-fal' | 'trellis' | 'none';
     downstreamGlb?: {
         path: string;
         vertexCount: number;
@@ -437,6 +442,36 @@ export class MultiAngleTurnaroundService {
             };
         }
 
+        // Downstream Meshy 7.1 Execution (Fal.ai), only when asked for
+        if (options.downstreamTarget === 'meshy-7.1-fal') {
+            stopIfAborted();
+            const glbPath = path.join(outputDir, `meshy_${path.basename(outputDir)}_${Date.now()}.glb`);
+            const meshy = this.deps.meshy || new FalMeshyService();
+            const falResult = await meshy.generate3DFromImages({
+                imagePaths: capturedViews.map(v => v.imagePath),
+                destinationGlbPath: glbPath,
+                enableRemesher: true,
+                remeshingThreshold: 0.1,
+                textureResolution: 2048,
+                signal: options.signal
+            });
+            if (!falResult.localGlbPath || !fs.existsSync(falResult.localGlbPath)) {
+                throw new GeneratorFailedError('fal-meshy', `Meshy returned no GLB at ${glbPath}`);
+            }
+            const glb = await fs.promises.readFile(falResult.localGlbPath);
+            if (!falResult.stats || falResult.stats.totalVertices <= 0) {
+                throw new GeneratorFailedError('fal-meshy', `Meshy returned a GLB with no vertices (${falResult.localGlbPath})`);
+            }
+            downstreamGlb = {
+                path: falResult.localGlbPath,
+                vertexCount: falResult.stats.totalVertices,
+                triangleCount: falResult.stats.totalTriangles,
+                byteLength: glb.length,
+                measuredExtent: measureGlbExtent(glb),
+                requestedDimensionsMeters: options.metricDimensions
+            };
+        }
+
         const used = modelUsed || models[0];
         return {
             success: true,
@@ -448,6 +483,7 @@ export class MultiAngleTurnaroundService {
             modelUsed: used,
             skippedModels,
             modelNote: describeModelUsed(used, skippedModels),
+            downstreamTarget: options.downstreamTarget,
             downstreamGlb,
             totalDurationMs: Date.now() - startTime
         };
