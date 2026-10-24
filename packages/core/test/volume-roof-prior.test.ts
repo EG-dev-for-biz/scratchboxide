@@ -36,7 +36,7 @@ function box(x0: number, x1: number, z0: number, z1: number, y0: number, h: numb
 
 /** A 20 x 12 m gabled volume, 8 m to the eaves, ridge along z (north-south) at x = 10, slopes 30 deg. */
 function gabledVolume(): { vertices: V3[]; indices: number[] } {
-    const rise = 6 * Math.tan(Math.PI / 6);  // half-width 6 m at 30 deg
+    const rise = 10 * Math.tan(Math.PI / 6);  // half-width 10 m (ridge at x = 10 of 20 m) at 30 deg
     const V: V3[] = [[0, 0, 0], [20, 0, 0], [20, 0, 12], [0, 0, 12], [0, 8, 0], [20, 8, 0], [20, 8, 12], [0, 8, 12]];
     const I: number[] = [];
     // the walls and the floor
@@ -61,7 +61,7 @@ function steppedVolume(): { vertices: V3[]; indices: number[] } {
 const RECT: Array<[number, number]> = [[0, 0], [20, 0], [20, 12], [0, 12]];
 const BASE: Array<[number, number]> = [[0, 0], [40, 0], [40, 40], [0, 40]];
 const cellsOf = (x0: number, x1: number, z0: number, z1: number) => { const c = new Set<string>(); for (let x = x0; x < x1; x++) for (let z = z0; z < z1; z++) c.add(`${x},${z}`); return c; };
-const gableTop = (x: number, z: number) => (x < 0 || x > 20 || z < 0 || z > 12 ? NaN : 8 + (6 - Math.abs(x - 10)) * Math.tan(Math.PI / 6));
+const gableTop = (x: number, z: number) => (x < 0 || x > 20 || z < 0 || z > 12 ? NaN : 8 + (10 - Math.abs(x - 10)) * Math.tan(Math.PI / 6));
 const flatReading: RoofReading = { pitchDeg: 0, ridgeAzimuthDeg: 0, hipped: false, parapetM: 0, blocks: [], conf: 70 };
 
 describe('volumeRoofPrior', () => {
@@ -76,7 +76,7 @@ describe('volumeRoofPrior', () => {
             expect(p.planAreaM2).toBeCloseTo(120, 1);  // 10 x 12 m each
             expect(p.loops[0]).toHaveLength(4);
             // the plane through the eave at 8 m and the ridge at 8 + 6 tan 30
-            expect(p.a + p.b * 10 + p.c * 6).toBeCloseTo(8 + 6 * Math.tan(Math.PI / 6), 3);
+            expect(p.a + p.b * 10 + p.c * 6).toBeCloseTo(8 + 10 * Math.tan(Math.PI / 6), 3);
         }
         const az = pitched.map(p => p.azimuthDeg).sort((u, v) => u - v);
         expect(az[0]).toBeCloseTo(90, 1);   // falls east
@@ -132,10 +132,11 @@ describe('decideRoof with the volume prior', () => {
         expect(d.pitch.planes).toHaveLength(2);
         expect(d.pitch.planes!.every(p => p.tag.startsWith('volume:30.0deg'))).toBe(true);
         expect(d.pitch.residualM).toBeLessThan(0.05);
-        expect(d.pitch.topY).toBeCloseTo(8 + 6 * Math.tan(Math.PI / 6), 1);
+        // topY is the roof's highest sampled cell, a fraction of a cell below the ridge line itself
+        expect(d.pitch.topY).toBeCloseTo(8 + 10 * Math.tan(Math.PI / 6), 0);
         // the roof the planes shape is the gable itself
         const shaped = { ...part, planes: d.pitch.planes!, topY: d.pitch.topY! };
-        expect(roofAt(shaped, 10, 6)).toBeCloseTo(gableTop(10, 6), 1);
+        expect(roofAt(shaped, 9, 6)).toBeCloseTo(gableTop(9, 6), 1);  // on the slope (the ridge line itself is capped at topY)
         expect(roofAt(shaped, 1, 6)).toBeCloseTo(gableTop(1, 6), 1);
         // without the prior the same flat reading proposes nothing
         const bare = decideRoof(part, flatReading, gableTop, [], toPlan);
