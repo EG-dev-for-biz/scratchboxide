@@ -70,6 +70,14 @@ export interface CapabilityOptions {
     hasInputVideo?: boolean;
     hasCameraTrack?: boolean;
     activeArtifact?: any;
+    /** The self-hosted Trellis services' gateway (default SCRATCHBOX_TRELLIS_SERVICE_URL); unset while they are not deployed. */
+    trellisServiceUrl?: string;
+}
+
+/** The self-hosted Trellis gateway (docs/research/2026-10-24-trellis-self-hosted-services-plan.md), when this instance has one. */
+export function resolveTrellisServiceUrl(opts: Pick<CapabilityOptions, 'trellisServiceUrl'> = {}): string | undefined {
+    const url = (opts.trellisServiceUrl ?? process.env.SCRATCHBOX_TRELLIS_SERVICE_URL)?.trim();
+    return url ? url : undefined;
 }
 
 export class TaskCapabilityResolver {
@@ -376,10 +384,15 @@ export class TaskCapabilityResolver {
                     targetService: 'LocalSf3DService',
                     details: 'Invoke generate_local_sf3d_organic_prop with imagePath, noPbr=true, and targetScaleMeters to synthesize a local organic 3D prop and mount it into the 3d-scene stage.'
                 };
+            } else if (isNeuralImageTo3D && resolveTrellisServiceUrl(opts)) {
+                canSolveNatively = true;
+                primaryNativeEngine = 'trellis-services';
+                nativeCapabilities.push('Self-hosted Trellis services (Cloud Run GPU / Vertex): trellis1-multi, trellis2-generate, trellis2-retexture, trellis2-lora-train');
+                rationale = 'Image-to-3D runs on the self-hosted Trellis services: TRELLIS v1 multi-image and TRELLIS.2 generation, TRELLIS.2 retexturing of an existing mesh, and TRELLIS.2 LoRA training, chained through one job API. The model is generated content and is labelled so. 3D scenes, environments, and architecture are still generated natively by the C++20 / Python engines.';
             } else if (isNeuralImageTo3D) {
                 canSolveNatively = false;
                 primaryNativeEngine = 'none';
-                rationale = 'Not natively supported: single-image to 3D mesh reconstruction needs a neural diffusion model (e.g. Trellis / TripoSR). 3D scenes, environments, and architecture are generated natively by the C++20 / Python engines.';
+                rationale = 'Not natively supported: the self-hosted Trellis services are not configured on this instance (SCRATCHBOX_TRELLIS_SERVICE_URL). Trellis multi still runs on Fal.ai inside pipeline I and the turnaround path. 3D scenes, environments, and architecture are generated natively by the C++20 / Python engines.';
             } else if (/universal\s*3d\s*structure|canonical\s*3d\s*(?:anchor|foundation)|single\s*source\s*of\s*truth\s*3d|multi-?format\s*(?:3d|projection)|collision\s*(?:envelope|hull)|convex\s*bumper\s*hull|universal\s*animation|continuous\s*(?:time\s*)?animation|keyframe\s*diamonds?|animation[\s\w-]{0,30}(?:timeline|nle)|(?:export|project)\s*(?:to\s*)?(?:colmap|nerfstudio|3dgs)/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
@@ -689,6 +702,11 @@ export class TaskCapabilityResolver {
                     targetService: 'PanoramaDepthService',
                     details: 'Call single_image_to_3dgs for a photo (pass medianDepthMeters for metres) or panorama_to_3dgs for a 360 panorama (eyeHeight required).'
                 };
+            } else if (isNeuralImageTo3D && !isNeuralVideoRestyle && !isLatentDiffusionInpaint && resolveTrellisServiceUrl(opts)) {
+                canSolveNatively = true;
+                primaryNativeEngine = 'trellis-services';
+                nativeCapabilities.push('Self-hosted Trellis services (Cloud Run GPU / Vertex): trellis1-multi, trellis2-generate, trellis2-retexture, trellis2-lora-train');
+                rationale = 'Image-to-3D runs on the self-hosted Trellis services: TRELLIS v1 multi-image and TRELLIS.2 generation, TRELLIS.2 retexturing of an existing mesh, and TRELLIS.2 LoRA training, chained through one job API. The model is generated content and is labelled so.';
             } else if (isNeuralImageTo3D || isNeuralVideoRestyle || isLatentDiffusionInpaint) {
                 canSolveNatively = false;
                 primaryNativeEngine = 'none';
