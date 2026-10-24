@@ -12,7 +12,8 @@
  * on white, made photorealistic by ONE image-model call at 4K (Nano Banana 2) so every view shows the same building in
  * the same colours, then split back into the four station frames. Each panel is checked like a beautified station: the
  * edge-alignment QC (the camera did not move) and the scan-outline check (nothing drawn outside the scan, nothing cut
- * short, subject wholly in frame), and the sheet itself must carry no dividing lines or borders (checkSheetBorders). The
+ * short, subject wholly in frame) and the colour gate (checkPanelColour: the material keeps the tile photos' hue and
+ * chroma), and the sheet itself must carry no dividing lines or borders (checkSheetBorders). The
  * sheet is accepted only when all of that passes; otherwise it is generated again.
  */
 
@@ -20,7 +21,7 @@ import type { ColmapCameraPose } from '../../common/spatial/colmap-vector-refere
 import { buildCharacterSheetPrompt } from '../../browser/generative-canvas/services/location-beautify-service';
 import { decodePng, encodePng } from '../texture-processing';
 import { SurveyStationRenderService, type StationBlockoutRender } from './SurveyStationRenderService';
-import { BeautifyStationService, checkStationOutline, toStationImageAnswer, type BeautifyQc, type OutlineLimits, type StationImageGenerator } from './BeautifyStationService';
+import { BeautifyStationService, checkStationOutline, srgbToLab, toStationImageAnswer, type BeautifyQc, type OutlineLimits, type StationImageGenerator } from './BeautifyStationService';
 
 export interface CharacterSheetOptions {
     /** Width of one panel (default 1920); the panel height follows the stations' aspect, the sheet is 2 x 2 panels. */
@@ -31,6 +32,8 @@ export interface CharacterSheetOptions {
     /** Further sheets after a rejected one (default 2). */
     maxRerolls?: number;
     outline?: OutlineLimits;
+    /** Colour gate threshold (MAX_PANEL_COLOUR_SHIFT by default). */
+    maxColourShift?: number;
     styleSuffix?: string;
     signal?: AbortSignal;
 }
@@ -42,6 +45,54 @@ export interface CharacterSheetPanel {
     /** The panel cut from the sheet, resampled to the station frame. */
     imagePng: Buffer;
     qc: BeautifyQc;
+    /** The colour gate (checkPanelColour); absent for a clay reference, which carries no colour to hold it to. */
+    colour?: PanelColourCheck;
+}
+
+export interface PanelColourCheck {
+    /** Median CIELAB of the structure in the tile-photo reference and in the generated panel. */
+    referenceLab: [number, number, number];
+    panelLab: [number, number, number];
+    /** Hue/chroma shift: the distance between the two medians in the a/b plane (lightness is free to change). */
+    shift: number;
+    passed: boolean;
+    reason?: string;
+}
+
+/**
+ * Largest hue/chroma shift (CIELAB a/b distance) a panel may make from the tile photos' own colour. Even overcast light
+ * neutralises the tiles' blue-purple cast by up to about 9 (Haughwout sheets that kept the grey cast iron: 0-8.9); the
+ * sheet that repainted it red brick shifted its facades 14.9-16.8 (2026-10-24).
+ */
+export const MAX_PANEL_COLOUR_SHIFT = 10;
+
+/**
+ * The colour gate: the structure's median colour in a generated panel against its median colour in the tile-photo
+ * reference render, over the reference's silhouette shrunk away from its edges. Lightness may change (de-lighting), hue
+ * and chroma may not swing: a panel that repaints the material (grey cast iron as red brick) fails.
+ */
+export function checkPanelColour(reference: StationBlockoutRender, rgba: Buffer, width: number, height: number, maxShift = MAX_PANEL_COLOUR_SHIFT): PanelColourCheck {
+    const W = reference.width, H = reference.height, r = Math.max(2, Math.round(W / 200)), step = Math.max(1, Math.round(W / 480));
+    const inside = (x: number, y: number) => {
+        for (const [dx, dy] of [[-r, 0], [r, 0], [0, -r], [0, r], [0, 0]]) {
+            const xx = x + dx, yy = y + dy;
+            if (xx < 0 || yy < 0 || xx >= W || yy >= H || !reference.silhouette[yy * W + xx]) return false;
+        }
+        return true;
+    };
+    const ref: number[][] = [[], [], []], gen: number[][] = [[], [], []];
+    for (let y = 0; y < H; y += step) for (let x = 0; x < W; x += step) {
+        if (!inside(x, y)) continue;
+        const i = (y * W + x) * 4, gx = Math.min(width - 1, Math.floor((x + 0.5) * width / W)), gy = Math.min(height - 1, Math.floor((y + 0.5) * height / H)), j = (gy * width + gx) * 4;
+        const a = srgbToLab(reference.rgba[i], reference.rgba[i + 1], reference.rgba[i + 2]), b = srgbToLab(rgba[j], rgba[j + 1], rgba[j + 2]);
+        for (let c = 0; c < 3; c++) { ref[c].push(a[c]); gen[c].push(b[c]); }
+    }
+    const median = (v: number[]) => { if (!v.length) return NaN; const s = [...v].sort((p, q) => p - q); return s[s.length >> 1]; };
+    const referenceLab = ref.map(median) as [number, number, number], panelLab = gen.map(median) as [number, number, number];
+    const shift = Math.hypot(panelLab[1] - referenceLab[1], panelLab[2] - referenceLab[2]);
+    if (!Number.isFinite(shift)) return { referenceLab, panelLab, shift: 0, passed: true, reason: 'no structure in the reference to compare colours over' };
+    const passed = shift <= maxShift;
+    return { referenceLab, panelLab, shift, passed, reason: passed ? undefined : `the colour swings ${shift.toFixed(1)} in hue/chroma from the tile photos (> ${maxShift}): the material was repainted` };
 }
 
 /** A line the model drew along a quadrant divider or the sheet's outer edge, though the prompt asks for none. */
@@ -187,7 +238,10 @@ export async function beautifyCharacterSheet(
             const fit = checkStationOutline(blockouts[q], station, rgba, PW, PH, options.outline);
             qc.outline = fit;
             if (!fit.passed) { qc.passed = false; qc.reason = [qc.reason, fit.reason].filter(Boolean).join('; '); }
-            return { station, alignedStation: aligned, blockout: blockouts[q], imagePng: encodePng(PW, PH, rgba), qc };
+            // the colour gate needs the tile photos' colour: only a textured reference has it
+            const colour = textured ? checkPanelColour(blockouts[q], rgba, PW, PH, options.maxColourShift) : undefined;
+            if (colour && !colour.passed) { qc.passed = false; qc.reason = [qc.reason, colour.reason].filter(Boolean).join('; '); }
+            return { station, alignedStation: aligned, blockout: blockouts[q], imagePng: encodePng(PW, PH, rgba), qc, ...(colour ? { colour } : {}) };
         });
         const borders = checkSheetBorders(out.rgba, out.width, out.height, blockouts);
         const res: CharacterSheetResult = { prompt, inputPng, sheetPng: png, panels, borders, accepted: false, attempts, modelUsed, modelNote };

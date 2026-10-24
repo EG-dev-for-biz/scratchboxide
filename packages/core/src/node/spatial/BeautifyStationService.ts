@@ -128,7 +128,7 @@ export const OUTLINE_TOLERANCE = 0.012;
 export const OUTLINE_SKY_DISTANCE = 30;
 const OUTLINE_LIGHTNESS_WEIGHT = 2.55;
 
-function srgbToLab(r: number, g: number, b: number): [number, number, number] {
+export function srgbToLab(r: number, g: number, b: number): [number, number, number] {
     const lin = (c: number) => { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
     const R = lin(r), G = lin(g), B = lin(b);
     const f = (t: number) => t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116;
