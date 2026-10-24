@@ -201,6 +201,13 @@ export function rasterizeEvidence(ev: VectorEvidence, g: EvidenceGrid): Evidence
     return { building, water, road, landuse, buildings: ev.buildings, roads: ev.roads, landuseAreas: ev.landuse ?? [] };
 }
 
+/** 1 per cell inside any of the evidence's land-use areas whose types include `type` exactly (e.g. 'FEATURE_TYPE_PARK'). */
+export function rasterizeAreas(ev: VectorEvidence, g: EvidenceGrid, type: string): Uint8Array {
+    const out = new Uint8Array(g.nx * g.nz);
+    for (const a of ev.landuse ?? []) if (a.types.includes(type)) fillLoops(a.loops, g, out, 1);
+    return out;
+}
+
 /** Point lookups over the evidence, rasterised at `cellMeters` over the square `radiusM` around the origin. */
 export interface EvidenceLookup {
     raster: EvidenceRaster;

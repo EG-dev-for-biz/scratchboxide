@@ -19,6 +19,7 @@ import { PHOTO_MATCH_EVALUATE_DECLARATION, runPhotoMatchEvaluate } from './locat
 import { STREETVIEW_SURVEY_DECLARATION, streetviewSurveyHandler } from './location-evidence/streetview-survey';
 import { SPLIT_BLOCK_TOOL_DECLARATION, splitBlockHandler } from './location-evidence/split-block';
 import { RESIDUAL_AUDIT_TOOL_DECLARATION, residualAuditHandler } from './location-evidence/residual-audit';
+import { GRASS_MAP_TOOL_DECLARATION, grassMapHandler } from './location-evidence/grass-map';
 
 export const LOCATION_EVIDENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     BUILDING_SHAPE_TOOL_DECLARATION,
@@ -26,7 +27,8 @@ export const LOCATION_EVIDENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     STREETVIEW_SURVEY_DECLARATION,
     ISOLATE_STRUCTURE_TOOL_DECLARATION,
     SPLIT_BLOCK_TOOL_DECLARATION,
-    RESIDUAL_AUDIT_TOOL_DECLARATION
+    RESIDUAL_AUDIT_TOOL_DECLARATION,
+    GRASS_MAP_TOOL_DECLARATION
 ];
 
 export const locationEvidenceHandlers: Record<string, ToolHandler> = {
@@ -35,5 +37,6 @@ export const locationEvidenceHandlers: Record<string, ToolHandler> = {
     [STREETVIEW_SURVEY_DECLARATION.name]: streetviewSurveyHandler,
     [ISOLATE_STRUCTURE_TOOL_DECLARATION.name]: isolateStructureHandler,
     [SPLIT_BLOCK_TOOL_DECLARATION.name]: splitBlockHandler,
-    [RESIDUAL_AUDIT_TOOL_DECLARATION.name]: residualAuditHandler
+    [RESIDUAL_AUDIT_TOOL_DECLARATION.name]: residualAuditHandler,
+    [GRASS_MAP_TOOL_DECLARATION.name]: grassMapHandler
 };

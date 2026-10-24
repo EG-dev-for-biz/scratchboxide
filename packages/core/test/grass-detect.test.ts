@@ -76,6 +76,38 @@ describe('grass detection', () => {
         expect(blind.patches).toHaveLength(2);
     });
 
+    it('fills a park lawn hidden under a crown as generated grass, continues a path, and never fills a street tree', () => {
+        // a 30 x 10 park: lawn seen at its west end, a grey path seen at its east end, a crown hiding the middle;
+        // outside the park, a crown over plain ground (a street tree)
+        const W = 40, top = new Float32Array(W * W).fill(10.05), gh = new Float32Array(W * W).fill(10), park = new Uint8Array(W * W);
+        const px = W / TEXEL, rgba = new Uint8Array(px * px * 4);
+        for (let k = 0; k < W; k++) for (let i = 0; i < W; i++) {
+            if (k >= 5 && k < 15 && i >= 5 && i < 35) park[k * W + i] = 1;
+            if (k >= 5 && k < 15 && i >= 12 && i < 28) top[k * W + i] = 16;   // the park crown
+            if (k >= 25 && k < 33 && i >= 10 && i < 18) top[k * W + i] = 15;  // the street tree
+        }
+        for (let y = 0; y < px; y++) for (let x = 0; x < px; x++) {
+            const wx = (x + 0.5) * TEXEL, wz = (y + 0.5) * TEXEL, n = ((x * 7 + y * 13) % 9) - 4;
+            const lawnSeen = wx >= 5 && wx < 12 && wz >= 5 && wz < 15, crown = (wx >= 12 && wx < 28 && wz >= 5 && wz < 15) || (wx >= 10 && wx < 18 && wz >= 25 && wz < 33);
+            const c = lawnSeen || crown ? [70 + n, 130 + n, 45 + n] : [150 + n, 148 + n, 142 + n];
+            rgba.set([c[0], c[1], c[2], 255], (y * px + x) * 4);
+        }
+        const gm = { cellMeters: 1, x0: 0, z0: 0, nx: W, nz: W, top, ground: gh } as unknown as GroundModel;
+        const ph = { width: px, height: px, rgba, texelM: TEXEL, triangles: 0 } as TopDownPhoto;
+        const r = detectGrass(ph, { x0: 0, z0: 0, widthM: W, heightM: W }, gm, undefined, { park });
+        const m = (x: number, z: number) => r.mask[z * W + x];
+        expect(m(8, 10)).toBe(1);              // seen lawn
+        expect(m(14, 10)).toBe(2);             // under the crown, next to the lawn: filled
+        expect(m(26, 10)).toBe(0);             // under the crown, next to the path: the path continues...
+        expect(m(21, 10)).toBe(2);             // ...for a few metres, then lawn
+        expect(m(13, 28)).toBe(0);             // street tree outside the park: never filled
+        expect(r.underCrown.cells).toBeGreaterThan(50);
+        expect(r.underCrown.cells).toBeLessThan(16 * 10 - 3 * 10);
+        expect(r.confidence[10 * W + 14]).toBeCloseTo(0.35);
+        expect(r.provenance.underCrown?.label).toBe('generated');
+        expect(detectGrass(ph, { x0: 0, z0: 0, widthM: W, heightM: W }, gm).underCrown.cells).toBe(0);
+    });
+
     it('draws an overlay of the photo size that tints only the grass', () => {
         const ov = grassOverlay(photo, frame, g);
         expect(ov.length).toBe(photo.rgba.length);

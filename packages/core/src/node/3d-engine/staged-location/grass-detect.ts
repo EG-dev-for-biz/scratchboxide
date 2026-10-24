@@ -17,7 +17,13 @@
  * from how green it is and how close to the terrain it lies; the mask is photo-inferred (read off photographs), never
  * measured. Water is never grass: a green pond or fountain pool passes both tests, so cells inside Google's vector water
  * areas (rasterizeEvidence's `water`, on the ground grid), grown by `waterMarginM`, are left out when the caller has them.
- * Known gap: grass under a tree crown is hidden from above and is not found here.
+ * Under a tree crown the ground is hidden from above. Inside a park outline (Google's FEATURE_TYPE_PARK areas, when the
+ * caller passes them), each hidden cell takes the surface of the nearest ground the survey did see in the same park:
+ * grass continues as grass, and a path continues as path for `pathReachM` (a path runs on under the canopy; it does not
+ * pave the whole wood). Hidden park ground beyond that is lawn, the usual floor of a park's planted areas. Cells inside
+ * a vector building (a pavilion, an arch) are never filled. Those cells are mask value 2, generated (a plausible fill, not
+ * a reading), with a lower confidence. Outside parks nothing under a crown is filled, so street trees and courtyards
+ * never sprout lawns.
  */
 
 import type { GroundModel } from '../../spatial/StreetViewSurveyPlanner';
@@ -38,26 +44,35 @@ export const GRASS_DETECT_PARAMS = {
     majorityPasses: 2,
     minPatchM2: 4,
     /** How far past a vector water area's edge a cell is still water (m): the polygon and the scan disagree by about a metre. */
-    waterMarginM: 1.5
+    waterMarginM: 1.5,
+    /** Confidence of a grass cell filled in under a park's tree crowns. */
+    underCrownConfidence: 0.35,
+    /** How far a path seen at a crown's edge runs on under it before the hidden ground counts as lawn (m). */
+    pathReachM: 4
 };
 
 export interface GrassMask {
     version: string;
     x0: number; z0: number; nx: number; nz: number; cellM: number;
-    /** 1 where the cell is grass. */
+    /** 1 where the cell is grass seen from above, 2 where it is grass filled in under a park's tree crowns. */
     mask: Uint8Array;
     /** 0..1 per grass cell (0 elsewhere). */
     confidence: Float32Array;
     cells: number;
     areaM2: number;
+    /** The filled-in part (mask value 2): cells and area, included in `cells` and `areaM2`. */
+    underCrown: { cells: number; areaM2: number };
     patches: Array<{ cells: number; areaM2: number; centre: [number, number]; meanConfidence: number }>;
     /** Cells looked at, and why the rest were not grass. */
     stats: { measured: number; tooHigh: number; water: number; notGreen: number; noColour: number; speckle: number };
-    provenance: { label: 'photo-inferred'; method: string };
+    provenance: { label: 'photo-inferred'; method: string; underCrown?: { label: 'generated'; method: string } };
 }
 
-/** `water`, when given, is 1 per ground-grid cell inside a vector water area (rasterizeEvidence over the ground model's grid). */
-export function detectGrass(photo: TopDownPhoto, frame: TopDownFrame, ground: GroundModel, P = GRASS_DETECT_PARAMS, evidence?: { water?: Uint8Array }): GrassMask {
+/**
+ * `water`, `park` and `building`, when given, are non-zero per ground-grid cell inside a vector water area, a park
+ * outline and a building footprint (rasterizeEvidence / rasterizeAreas over the ground model's grid).
+ */
+export function detectGrass(photo: TopDownPhoto, frame: TopDownFrame, ground: GroundModel, P = GRASS_DETECT_PARAMS, evidence?: { water?: Uint8Array; park?: Uint8Array; building?: Uint8Array | Int32Array }): GrassMask {
     const { nx, nz, cellMeters: cellM, x0, z0 } = ground;
     const N = nx * nz;
     const raw = new Uint8Array(N), score = new Float32Array(N);
@@ -107,6 +122,7 @@ export function detectGrass(photo: TopDownPhoto, frame: TopDownFrame, ground: Gr
         }
         mask = next;
     }
+    const filled = evidence?.park ? fillUnderCrowns(mask, ground, evidence.park, water, evidence.building, P.maxAboveGroundM, Math.round(P.pathReachM / cellM)) : 0;
     // patches: 4-connected; the small ones dropped
     const label = new Int32Array(N).fill(-1);
     const patches: GrassMask['patches'] = [];
@@ -129,19 +145,60 @@ export function detectGrass(photo: TopDownPhoto, frame: TopDownFrame, ground: Gr
         if (members.length < minCells) { for (const c of members) mask[c] = 0; stats.speckle += members.length; label[s] = -2; continue; }
         let sx = 0, sz = 0, sc = 0;
         for (const c of members) {
-            const conf = score[c] || 0.3; // a cell the filter filled in from its neighbours: lower confidence
+            // a cell the filter filled in from its neighbours: lower confidence; under a crown: lower still
+            const conf = mask[c] === 2 ? P.underCrownConfidence : score[c] || 0.3;
             confidence[c] = conf; sc += conf;
             sx += x0 + ((c % nx) + 0.5) * cellM; sz += z0 + (((c / nx) | 0) + 0.5) * cellM;
         }
         patches.push({ cells: members.length, areaM2: members.length * cellM * cellM, centre: [sx / members.length, sz / members.length], meanConfidence: sc / members.length });
     }
-    let cells = 0;
-    for (let c = 0; c < N; c++) cells += mask[c];
+    let cells = 0, under = 0;
+    for (let c = 0; c < N; c++) { if (mask[c]) cells++; if (mask[c] === 2) under++; }
     patches.sort((p, q) => q.areaM2 - p.areaM2);
     return {
-        version: GRASS_DETECT_VERSION, x0, z0, nx, nz, cellM, mask, confidence, cells, areaM2: cells * cellM * cellM, patches, stats,
-        provenance: { label: 'photo-inferred', method: `ground-level cells (within ${P.maxAboveGroundM} m of the terrain) whose lit top-down colour is vegetation green (CIELAB a* <= ${P.greenA}), majority-filtered, patches >= ${P.minPatchM2} m2${water ? `, outside vector water areas (+${P.waterMarginM} m)` : ', no vector water areas given'}` }
+        version: GRASS_DETECT_VERSION, x0, z0, nx, nz, cellM, mask, confidence, cells, areaM2: cells * cellM * cellM,
+        underCrown: { cells: under, areaM2: under * cellM * cellM }, patches, stats,
+        provenance: { label: 'photo-inferred', method: `ground-level cells (within ${P.maxAboveGroundM} m of the terrain) whose lit top-down colour is vegetation green (CIELAB a* <= ${P.greenA}), majority-filtered, patches >= ${P.minPatchM2} m2${water ? `, outside vector water areas (+${P.waterMarginM} m)` : ', no vector water areas given'}`,
+            ...(evidence?.park ? { underCrown: { label: 'generated' as const, method: `inside park outlines, ground hidden by crowns (${filled} cells) continues the nearest surface seen in the same park (grass; a path for ${P.pathReachM} m), lawn beyond` } } : {}) }
     };
+}
+
+/**
+ * Fills the park cells hidden under crowns (top more than `maxAboveM` above the terrain, outside buildings and water) from
+ * the seen, dry ground of the same park: a breadth-first wave from every seen park cell carries grass or path outward
+ * through hidden cells; the path wave stops after `pathReach` cells. A hidden cell the grass wave reaches, or that no wave
+ * reaches, becomes 2. Returns the number of cells filled.
+ */
+function fillUnderCrowns(mask: Uint8Array, ground: GroundModel, park: Uint8Array, water: Uint8Array | undefined, building: Uint8Array | Int32Array | undefined,
+    maxAboveM: number, pathReach: number): number {
+    const { nx, nz } = ground, N = nx * nz;
+    const hidden = (c: number) => park[c] && !water?.[c] && !building?.[c] && ground.top[c] - ground.ground[c] > maxAboveM;
+    const from = new Int8Array(N).fill(-1), dist = new Int32Array(N);
+    let queue: number[] = [];
+    for (let c = 0; c < N; c++) {
+        if (!park[c] || water?.[c] || building?.[c] || !Number.isFinite(ground.top[c]) || !Number.isFinite(ground.ground[c]) || hidden(c)) continue;
+        from[c] = mask[c] ? 1 : 0;
+        queue.push(c);
+    }
+    let filled = 0;
+    while (queue.length) {
+        const next: number[] = [];
+        for (const c of queue) {
+            if (from[c] === 0 && dist[c] >= pathReach) continue;
+            const i = c % nx, k = (c / nx) | 0;
+            for (const [di, dk] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+                const ii = i + di, kk = k + dk;
+                if (ii < 0 || kk < 0 || ii >= nx || kk >= nz) continue;
+                const n = kk * nx + ii;
+                if (from[n] >= 0 || !hidden(n)) continue;
+                from[n] = from[c]; dist[n] = dist[c] + 1;
+                next.push(n);
+            }
+        }
+        queue = next;
+    }
+    for (let c = 0; c < N; c++) if (hidden(c) && from[c] !== 0) { mask[c] = 2; filled++; }
+    return filled;
 }
 
 /** `m` grown by `r` cells (a square neighbourhood). */
@@ -155,7 +212,7 @@ function grow(m: Uint8Array, nx: number, nz: number, r: number): Uint8Array {
     return out;
 }
 
-/** The top-down photo with the grass mask laid over it (green tint by confidence, outlines bright), RGBA. */
+/** The top-down photo with the grass mask laid over it (seen grass green, filled-in grass cyan, tint by confidence; outlines bright), RGBA. */
 export function grassOverlay(photo: TopDownPhoto, frame: TopDownFrame, g: GrassMask): Uint8Array {
     const out = Uint8Array.from(photo.rgba);
     const at = (x: number, z: number) => {
@@ -171,7 +228,9 @@ export function grassOverlay(photo: TopDownPhoto, frame: TopDownFrame, g: GrassM
         const edge = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([di, dk]) => { const ii = i + di, kk = k + dk; return ii < 0 || kk < 0 || ii >= g.nx || kk >= g.nz || !g.mask[kk * g.nx + ii]; });
         const t = 0.35 + 0.35 * g.confidence[c];
         if (edge) { out[o] = 255; out[o + 1] = 230; out[o + 2] = 0; continue; }
-        out[o] = out[o] * (1 - t); out[o + 1] = out[o + 1] * (1 - t) + 255 * t; out[o + 2] = out[o + 2] * (1 - t) + 60 * t;
+        // seen grass green; grass filled in under crowns cyan
+        const [r, gr, b] = g.mask[c] === 2 ? [0, 200, 255] : [0, 255, 60];
+        out[o] = out[o] * (1 - t) + r * t; out[o + 1] = out[o + 1] * (1 - t) + gr * t; out[o + 2] = out[o + 2] * (1 - t) + b * t;
     }
     return out;
 }
