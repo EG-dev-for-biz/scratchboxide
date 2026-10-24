@@ -29,6 +29,7 @@
  * A Stop marks the run stopped and ends at once (tile_refine has no signal and runs on to its own cache).
  */
 
+import { createDefaultStationImageGenerator } from '../../spatial/BeautifyStationService';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import { footprintConformance, FOOTPRINT_MAX_PROJECTION_M } from './footprint-lock';
@@ -3601,6 +3602,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         // less the margin for committing; the massing's ledger entries ahead of the rebuild's own
                         // what names the building (building-name.ts): the evidence's POIs, the request's words and the address
                         naming: { ...(t.vector ? { pois: t.vector.pois } : {}), query: request.query, address: placeValue!.formattedAddress },
+                        // pipeline H-S (opt-in, SCRATCHBOX_H_SHEET_PLATES=1): the wall plates take their colour from a character sheet
+                        // of the isolated structure, best of three sheets ranked by H's own facade reading (sheet-plates.ts)
+                        ...(procedural === 'h' && process.env.SCRATCHBOX_H_SHEET_PLATES === '1' && e.refined?.texturedGlb
+                            ? { sheetPlates: { structureGlb: e.refined.texturedGlb, generator: createDefaultStationImageGenerator({ workspaceRoot: cache.dir }), readScore: true } } : {}),
                         ...(procedural === 'h' ? { policy: { ...H_POLICY, budgetMs: Math.max(0, STAGES.grammar.budgetMs - (now() - t0) - H_BUDGET_MARGIN_MS) }, ledger: e.ledger ?? [] } : {})
                     });
                     cache.writeRunNote(runId, procedural === 'h' ? 'pipeline_h' : 'pipeline_g', { steps: out.steps, timingsMs: out.timingsMs, plates: out.plates, stations: out.stations, names: out.names, ...(out.brief ? { brief: out.brief } : {}), ...(procedural === 'h' ? { ledger: out.ledger, budgetNotes: out.budgetNotes } : {}) });
