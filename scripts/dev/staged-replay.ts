@@ -66,6 +66,14 @@ function normalise(v: Json): Json {
 const textsOf = (contents: Json): string[] => (Array.isArray(contents) ? contents : [contents]).flatMap((c: Json) =>
     (c?.parts ?? []).filter((p: Json) => typeof p.text === 'string').map((p: Json) => p.text as string));
 
+/** The SDK response's `text` getter (its non-thought text parts joined), which a JSON copy of the response loses. */
+function withText(response: Json): Json {
+    if (response && typeof response === 'object' && !Object.getOwnPropertyDescriptor(response, 'text')) {
+        Object.defineProperty(response, 'text', { get: () => (response.candidates?.[0]?.content?.parts ?? []).filter((p: Json) => typeof p.text === 'string' && !p.thought).map((p: Json) => p.text).join('') || undefined, enumerable: false });
+    }
+    return response;
+}
+
 export interface ReplayStats { visionHit: number; visionMiss: number; visionBridged: number; groundingHit: number; groundingMiss: number }
 
 export interface ReplayOptions { dir: string; mode?: 'record' | 'strict'; delayMs?: number }
@@ -128,16 +136,16 @@ export class StagedReplay {
             if (fs.existsSync(file)) {
                 this.stats.visionHit++;
                 if (this.opts.delayMs) await new Promise(r => setTimeout(r, this.opts.delayMs));
-                return JSON.parse(fs.readFileSync(file, 'utf8')).response;
+                return withText(JSON.parse(fs.readFileSync(file, 'utf8')).response);
             }
             const bridged = this.bridgeSurvey(params);
-            if (bridged) { this.stats.visionBridged++; return bridged; }
+            if (bridged) { this.stats.visionBridged++; return withText(bridged); }
             this.stats.visionMiss++;
             if (this.mode === 'strict') throw new Error(`staged replay: no recording for a ${params.model} call (strict)`);
             const response = await live(params, stream);
             const fr = response.candidates?.[0]?.finishReason;
             if (!fr || fr === 'STOP') fs.writeFileSync(file, JSON.stringify({ model: params.model, texts: textsOf(params.contents), response }));
-            return response;
+            return withText(response);
         };
         const wrappedModels = new Proxy(models, {
             get: (t, p) => {
