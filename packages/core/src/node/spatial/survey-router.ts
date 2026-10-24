@@ -208,7 +208,7 @@ export function registerBeautifyHandlers(deps: SurveyApiDeps, generator: Station
         for (const p of res.panels) {
             const imagePath = path.join(outDir, `station_${p.station.id}_beautified.png`), blockoutPath = path.join(outDir, `station_${p.station.id}_blockout.png`);
             await fs.outputFile(imagePath, p.imagePng); await fs.outputFile(blockoutPath, p.blockout.png);
-            panels.push({ stationId: p.station.id, accepted: p.qc.passed, qc: p.qc, imagePath, blockoutPath, alignedStation: p.alignedStation });
+            panels.push({ stationId: p.station.id, accepted: p.qc.passed, qc: p.qc, colour: p.colour, imagePath, blockoutPath, alignedStation: p.alignedStation });
         }
         const rejected = panels.filter(p => !p.accepted).length;
         report(1, res.accepted ? 'Accepted' : `Rejected: ${[rejected ? `${rejected} of 4 panels failed` : '', res.borders.reason || ''].filter(Boolean).join('; ')}`);

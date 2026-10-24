@@ -13,7 +13,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { stationFromLookAt } from '../src/common/spatial/SurveySynthesisEngine';
 import { SurveyStationRenderService } from '../src/node/spatial/SurveyStationRenderService';
-import { beautifyCharacterSheet, checkSheetBorders } from '../src/node/spatial/building-character-sheet';
+import { beautifyCharacterSheet, checkPanelColour, checkSheetBorders, MAX_PANEL_COLOUR_SHIFT } from '../src/node/spatial/building-character-sheet';
 import { registerBeautifyHandlers } from '../src/node/spatial/survey-router';
 import type { StationImageGenerator } from '../src/node/spatial/BeautifyStationService';
 import { CHARACTER_SHEET_FRAMING_LOCK, EVEN_LIGHT_SENTENCE, buildCharacterSheetPrompt } from '../src/browser/generative-canvas/services/location-beautify-service';
@@ -148,6 +148,33 @@ describe('building-survey character sheet', () => {
         expect(hit.lines.map(l => l.band)).toEqual(['vertical divider']);
         // without the panels' silhouettes, the ground reaching the borders would itself read as lines
         expect(checkSheetBorders(sheet.rgba, sheet.width, sheet.height, []).passed).toBe(false);
+    });
+
+    it('colour gate: lightness may change, a repainted material (hue/chroma swing) fails', () => {
+        // a 40 x 20 reference: a cool grey structure (the tile photos' blue-purple cast) in the middle, nothing around it
+        const W = 40, H = 20, rgba = Buffer.alloc(W * H * 4, 255), silhouette = new Uint8Array(W * H);
+        for (let y = 4; y < 16; y++) for (let x = 8; x < 32; x++) { const i = (y * W + x) * 4; rgba[i] = 92; rgba[i + 1] = 92; rgba[i + 2] = 112; silhouette[y * W + x] = 255; }
+        const ref = { width: W, height: H, rgba, silhouette } as any;
+        const paint = (r: number, g: number, b: number) => { const out = Buffer.alloc(W * H * 4, 255); for (let i = 0; i < W * H; i++) if (silhouette[i]) { out[i * 4] = r; out[i * 4 + 1] = g; out[i * 4 + 2] = b; } return out; };
+        // de-lit to a lighter neutral grey: kept
+        const neutral = checkPanelColour(ref, paint(128, 128, 132), W, H);
+        expect(neutral.passed).toBe(true);
+        expect(neutral.shift).toBeLessThan(MAX_PANEL_COLOUR_SHIFT);
+        expect(neutral.panelLab[0]).toBeGreaterThan(neutral.referenceLab[0]);
+        // repainted as red brick: rejected, and said why
+        const brick = checkPanelColour(ref, paint(150, 70, 55), W, H);
+        expect(brick.passed).toBe(false);
+        expect(brick.shift).toBeGreaterThan(MAX_PANEL_COLOUR_SHIFT);
+        expect(brick.reason).toContain('repainted');
+        // the image may come back at another size: it is sampled onto the reference's frame
+        const big = Buffer.alloc(W * 2 * H * 2 * 4, 255);
+        for (let y = 0; y < H * 2; y++) for (let x = 0; x < W * 2; x++) if (silhouette[Math.floor(y / 2) * W + Math.floor(x / 2)]) { const i = (y * W * 2 + x) * 4; big[i] = 150; big[i + 1] = 70; big[i + 2] = 55; }
+        expect(checkPanelColour(ref, big, W * 2, H * 2).passed).toBe(false);
+    });
+
+    it('a clay reference carries no colour, so its panels are not colour-gated', async () => {
+        const res = await beautifyCharacterSheet(renderer, sheetGenerator([]), stations(), 'Test Box', { panelWidth: PW, renderMode: 'clay', maxRerolls: 0 });
+        expect(res.panels.every(p => p.colour === undefined)).toBe(true);
     });
 
     it('takes exactly four stations of one aspect ratio', async () => {
