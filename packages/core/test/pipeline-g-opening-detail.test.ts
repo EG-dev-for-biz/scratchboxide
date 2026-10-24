@@ -153,4 +153,23 @@ describe('openings across a split wall', () => {
         const [a0, a1] = xs('opening:across:0'), [b0, b1] = xs('opening:across:1');
         expect(a0).toBeLessThan(3.1); expect(a1).toBeLessThanOrEqual(4.0); expect(b0).toBeGreaterThanOrEqual(4.0); expect(b1).toBeGreaterThan(4.9);
     });
+
+    it('clipOpenings keeps sill sweeps placed above a neighbour part, clamping each placement on its own height', async () => {
+        const dir = tmp();
+        const m: Pick<Massing, 'parts' | 'meshes'> = { parts: [
+            { id: 'a', baseY: 0, topY: 10, loops: [[[0, 0], [10, 0], [10, -6], [0, -6]]], planes: [], heightSource: 'vector', heights: {} },
+            { id: 'b', baseY: 0, topY: 4, loops: [[[4, 2], [6, 2], [6, 0], [4, 0]]], planes: [], heightSource: 'vector', heights: {} }], meshes: [] };
+        // a 12 cm sill profile (cross values relative to each placement's height): one at 6 m across the cut, one at 2 m
+        // straddling the part b (which covers piece :1 below 4 m), one at 3 m on piece :0 alone
+        const sill = { id: 'sill', confidence: 0.5, provenance: 'photo-inferred', face: 'w:a:0:0', axis: 0 as const,
+            profile: [[0, 0], [0.08, 0], [0.08, 0.12], [0, 0.12]] as Array<[number, number]>, placements: [[3, 5, 6], [1, 3, 3]] as Array<[number, number, number]> };
+        const r = await runMassing(massingSpecText(m, { outDir: dir, params: { ...PARAMS, clipOpenings: 1 }, faceSweeps: [sill] }), dir);
+        expect(r.report.rejectedSweeps).toEqual([]);
+        const nodes = r.nodes.filter(n => n.name.startsWith('facesweep:sill'));
+        const ys = nodes.flatMap(n => Array.from(n.positions).filter((_, i) => i % 3 === 1));
+        // the sills stand at their own heights: 3-3.12 m and 6-6.12 m, none clamped up to the raised bottom (4 m)
+        expect(Math.min(...ys)).toBeCloseTo(3, 3);
+        expect(Math.max(...ys)).toBeCloseTo(6.12, 3);
+        expect(ys.every(y => (y > 2.999 && y < 3.121) || (y > 5.999 && y < 6.121))).toBe(true);
+    });
 });

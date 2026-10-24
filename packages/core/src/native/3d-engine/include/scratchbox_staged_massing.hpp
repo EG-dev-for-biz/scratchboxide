@@ -1583,15 +1583,11 @@ private:
     /** Emits the sweep on face `fi`; false (nothing emitted) when it does not fit there. */
     bool emitFaceSweepOn(const FaceSweepSpec& in, size_t fi) {
         const Face& f = faces_[fi];
-        // a wall a neighbour part covers below: the profile (along s) never reaches below the wall's raised bottom
-        FaceSweepSpec clipped = in;
-        if (spec_.clipOpenings && f.wall && in.axis == 0) for (auto& q : clipped.profile) q.second = std::max(q.second, f.tBottom);
-        const FaceSweepSpec& fs = clipped;
-        if (spec_.clipOpenings && fs.axis == 0) {
-            double c0 = 1e300, c1 = -1e300;
-            for (const auto& q : fs.profile) { c0 = std::min(c0, q.second); c1 = std::max(c1, q.second); }
-            if (c1 - c0 < 0.3) return false;
-        }
+        const FaceSweepSpec& fs = in;
+        // a wall a neighbour part covers below: a placement's profile (along s) never reaches below the wall's raised bottom.
+        // The profile's cross values are relative to the placement's own offset (pl[2]), so the clamp is per placement, on
+        // the absolute height; a placement the clamp flattens (under 2 cm left of its height) is dropped
+        const bool clipBottom = spec_.clipOpenings && f.wall && fs.axis == 0;
         OutNode node;
         node.name = "facesweep:" + fs.id;
         node.kind = "sweep";
@@ -1614,10 +1610,15 @@ private:
             put(a, n); put(flip ? c : b, n); put(flip ? b : c, n);
         };
         const V3 A = fs.axis == 0 ? f.axisS : f.axisT, C = fs.axis == 0 ? f.axisT : f.axisS;
-        const auto& pr = fs.profile;
         for (const auto& pl : fs.placements) {
             const double a0 = std::min(pl[0], pl[1]), a1 = std::max(pl[0], pl[1]), dc = pl[2];
             if (a1 - a0 < 1e-3) continue;
+            std::vector<std::pair<double, double>> pr = fs.profile;
+            if (clipBottom) {
+                double c0 = 1e300, c1 = -1e300;
+                for (auto& q : pr) { q.second = std::max(q.second + dc, f.tBottom) - dc; c0 = std::min(c0, q.second); c1 = std::max(c1, q.second); }
+                if (c1 - c0 < 0.02) continue;
+            }
             for (size_t k = 0; k + 1 < pr.size(); ++k) {
                 const double c0 = pr[k].second + dc, o0 = std::max(0.0, pr[k].first), c1 = pr[k + 1].second + dc, o1 = std::max(0.0, pr[k + 1].first);
                 if (o0 <= 1e-6 && o1 <= 1e-6) continue;
