@@ -71,8 +71,14 @@ struct RoofParams {
     int minPosts = 5;
     /** Height of a post the scan is too coarse to see (m, labelled estimated: a guard rail's usual height). */
     double postHeightM = 1.07;
-    /** A spot this much lighter than the bare roof (CIELAB L*) is a candidate post, whatever region it touches. */
-    double spotLighterL = 30;
+    /** How far past the footprint the photo is read for posts and rails at the roof's edge (m). */
+    double edgeM = 1.0;
+    /** Posts are found as blobs of about this size in the photo (m), whose difference-of-Gaussians response stands blobK
+     *  robust deviations above the roof's. */
+    double postSizeM = 0.3, blobK = 8;
+    /** Further post sizes searched (m): posts are not all one size. */
+    std::vector<double> morePostSizesM{0.5};
+    double spotLighterL = 30;  // kept for the binding's argument; the blob detector reads relative contrast
 };
 
 /**
@@ -407,16 +413,23 @@ inline RoofReport roofObjectsFromPhoto(const std::vector<Vec3>& samples, const s
     // the photo read at pixelM over the plan's box
     double xa = 1e18, xb = -1e18, za = 1e18, zb = -1e18;
     for (const auto& p : plan) { xa = std::min(xa, p.x); xb = std::max(xb, p.x); za = std::min(za, p.z); zb = std::max(zb, p.z); }
+    // read edgeM past the footprint too: posts and rails stand at the roof's very edge, where the footprint (on the scan's
+    // wall) may fall just inside them
+    xa -= P.edgeM; za -= P.edgeM; xb += P.edgeM; zb += P.edgeM;
     const double px = std::max(P.pixelM, photo.texelM);
     const int W = static_cast<int>(std::ceil((xb - xa) / px)) + 1, H = static_cast<int>(std::ceil((zb - za) / px)) + 1;
     const size_t N = static_cast<size_t>(W) * H;
     auto wx = [&](int i) { return xa + (i + 0.5) * px; };
     auto wz = [&](int k) { return za + (k + 0.5) * px; };
     std::vector<std::array<double, 3>> lab(N);
-    std::vector<uint8_t> in(N, 0);
+    std::vector<uint8_t> in(N, 0), nearEdge(N, 0);
     for (int k = 0; k < H; ++k) for (int i = 0; i < W; ++i) {
         const size_t c = static_cast<size_t>(k) * W + i;
-        if (!scan_massing::inRings(rings, wx(i), wz(k))) continue;
+        const bool inside = scan_massing::inRings(rings, wx(i), wz(k));
+        bool near = inside;
+        for (int q = 0; q < 8 && !near; ++q) near = scan_massing::inRings(rings, wx(i) + P.edgeM * std::cos(q * M_PI / 4), wz(k) + P.edgeM * std::sin(q * M_PI / 4));
+        if (!near) continue;
+        nearEdge[c] = 1;
         const int per = std::max(1, static_cast<int>(std::lround(px / photo.texelM)));
         const int p0 = static_cast<int>((wx(i) - px / 2 - photo.x0) / photo.texelM), q0 = static_cast<int>((wz(k) - px / 2 - photo.z0) / photo.texelM);
         double sr = 0, sg = 0, sb = 0; int n = 0;
@@ -429,7 +442,8 @@ inline RoofReport roofObjectsFromPhoto(const std::vector<Vec3>& samples, const s
         }
         if (!n) continue;
         detail::srgbToLab(sr / n, sg / n, sb / n, lab[c][0], lab[c][1], lab[c][2]);
-        in[c] = 1;
+        in[c] = inside ? 1 : 0;
+        if (!inside) nearEdge[c] = 2;  // read, outside the footprint: for posts only
     }
     auto dE = [](const std::array<double, 3>& a, const std::array<double, 3>& b) { return std::sqrt(std::pow(a[0] - b[0], 2) + std::pow(a[1] - b[1], 2) + std::pow(a[2] - b[2], 2)); };
     // the bare roof's colour: pixels whose scan height is on the roof plane
@@ -591,22 +605,56 @@ inline RoofReport roofObjectsFromPhoto(const std::vector<Vec3>& samples, const s
         for (auto& p : loop) { p.x = xa + p.x * px; p.z = za + p.z * px; }
         if (auto o = objectFrom(loop, pts, "photo")) { o->photoCells = r.size(); taller.push_back(*o); rep.objects.push_back(std::move(*o)); }
     }
-    // candidate posts: small groups of pixels much lighter than the bare roof (read on their own, so a rail or band they
-    // touch does not hide them)
+    // candidate posts: blobs at a post's scale in the photo's lightness, found by a difference of Gaussians (a compact spot
+    // answers strongly, a thin rail line weakly, a broad band not at all), each a local peak well above the response's own
+    // spread; read on their own, so a rail or band a post touches does not hide it
     {
-        std::vector<uint8_t> bright(N, 0), seenB(N, 0);
-        for (size_t c = 0; c < N; ++c) bright[c] = in[c] && lab[c][0] > roofLab[0] + P.spotLighterL;
-        for (size_t s0 = 0; s0 < N; ++s0) {
-            if (!bright[s0] || seenB[s0]) continue;
-            std::vector<size_t> comp{s0}, st{s0}; seenB[s0] = 1;
-            while (!st.empty()) { const size_t c = st.back(); st.pop_back(); const int i = c % W, k = c / W;
-                for (const auto& d : {std::pair{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) { const int ii = i + d.first, kk = k + d.second; if (ii < 0 || kk < 0 || ii >= W || kk >= H) continue; const size_t q = static_cast<size_t>(kk) * W + ii;
-                    if (bright[q] && !seenB[q]) { seenB[q] = 1; comp.push_back(q); st.push_back(q); } } }
-            const double area = comp.size() * px * px;
-            if (area < P.minPostAreaM2 || area > P.maxPostAreaM2) continue;
-            double sx = 0, sz = 0;
-            for (size_t c : comp) { sx += wx(c % W); sz += wz(c / W); }
-            spots.push_back({{sx / comp.size(), sz / comp.size()}, area});
+        std::vector<double> L(N, 0);
+        for (size_t c = 0; c < N; ++c) L[c] = (in[c] || nearEdge[c] == 2) ? lab[c][0] : roofLab[0];
+        auto blur = [&](const std::vector<double>& src, double sigmaPx) {
+            const int r = std::max(1, static_cast<int>(std::ceil(3 * sigmaPx)));
+            std::vector<double> k(2 * r + 1);
+            double ks = 0;
+            for (int i = -r; i <= r; ++i) { k[i + r] = std::exp(-0.5 * i * i / (sigmaPx * sigmaPx)); ks += k[i + r]; }
+            for (auto& v : k) v /= ks;
+            std::vector<double> tmp(N, 0), out(N, 0);
+            for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) { double acc = 0; for (int i = -r; i <= r; ++i) acc += k[i + r] * src[static_cast<size_t>(y) * W + std::clamp(x + i, 0, W - 1)]; tmp[static_cast<size_t>(y) * W + x] = acc; }
+            for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) { double acc = 0; for (int i = -r; i <= r; ++i) acc += k[i + r] * tmp[static_cast<size_t>(std::clamp(y + i, 0, H - 1)) * W + x]; out[static_cast<size_t>(y) * W + x] = acc; }
+            return out;
+        };
+        std::vector<double> sizes{P.postSizeM};
+        sizes.insert(sizes.end(), P.morePostSizesM.begin(), P.morePostSizesM.end());
+        for (const double size : sizes) {
+        const double s1 = std::max(0.6, size / (2 * std::sqrt(2.0)) / px);
+        const auto g1 = blur(L, s1), g2 = blur(L, 1.6 * s1);
+        std::vector<double> dog(N), vals;
+        for (size_t c = 0; c < N; ++c) { dog[c] = g1[c] - g2[c]; if (in[c]) vals.push_back(dog[c]); }
+        auto searched = [&](size_t c) { return in[c] || nearEdge[c] == 2; };
+        const double med = detail::median(vals);
+        std::vector<double> dev;
+        for (double v : vals) dev.push_back(std::abs(v - med));
+        const double spread = 1.4826 * detail::median(dev);
+        const double thr = med + P.blobK * std::max(spread, 0.25);
+        const int rr = std::max(2, static_cast<int>(std::lround(size / px)));
+        for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) {
+            const size_t c = static_cast<size_t>(y) * W + x;
+            if (!searched(c) || dog[c] < thr) continue;
+            bool peak = true;
+            for (int dy = -rr; dy <= rr && peak; ++dy) for (int dx = -rr; dx <= rr; ++dx) {
+                if (!dx && !dy) continue;
+                const int xx = x + dx, yy = y + dy;
+                if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+                if (dog[static_cast<size_t>(yy) * W + xx] > dog[c]) { peak = false; break; }
+            }
+            if (!peak) continue;
+            // one spot per post: a peak within 0.3 m of one already found (at another size) is the same post
+            const P2 at{wx(x), wz(y)};
+            if (std::any_of(spots.begin(), spots.end(), [&](const Spot& q) { return std::hypot(q.c.x - at.x, q.c.z - at.z) < 0.3; })) continue;
+            // it stands on this roof: the scan there is near the roof plane (a neighbour's parapet past the edge is not)
+            const float hAt = dsmAt(at.x, at.z);
+            if (!std::isfinite(hAt) || hAt < roofY - 1.0 || hAt > roofY + 2.5) continue;
+            spots.push_back({at, size * size});
+        }
         }
     }
     // rows of posts: small spots in a line at a steady spacing (a rail's posts, bollards, anything repeated), each row
@@ -630,6 +678,16 @@ inline RoofReport roofObjectsFromPhoto(const std::vector<Vec3>& samples, const s
             for (size_t k = 0; k < spots.size(); ++k) if (!used[k] && std::abs((spots[k].c.x - bp.x) * bd.z - (spots[k].c.z - bp.z) * bd.x) <= P.rowTolM) along.push_back({(spots[k].c.x - bp.x) * bd.x + (spots[k].c.z - bp.z) * bd.z, k});
             std::sort(along.begin(), along.end());
             for (const auto& a : along) used[a.second] = 1;
+            // spots between the posts (a bracket, a fleck) would break the steady spacing: one closer than 0.6 of the
+            // median gap to the post kept before it is left out
+            if (along.size() >= 3) {
+                std::vector<double> g0;
+                for (size_t g = 1; g < along.size(); ++g) if (along[g].first - along[g - 1].first <= P.maxPostGapM) g0.push_back(along[g].first - along[g - 1].first);
+                const double medGap = g0.empty() ? 0 : detail::median(g0);
+                std::vector<std::pair<double, size_t>> kept{along.front()};
+                for (size_t g = 1; g < along.size(); ++g) if (along[g].first - kept.back().first >= 0.6 * medGap) kept.push_back(along[g]);
+                along.swap(kept);
+            }
             // split the line into runs where the gap jumps, keep steady runs
             size_t start = 0;
             for (size_t e = 1; e <= along.size(); ++e) {

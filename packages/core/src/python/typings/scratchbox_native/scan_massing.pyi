@@ -106,7 +106,7 @@ def plan_outline(slices: collections.abc.Sequence[scratchbox_native.scan_massing
     """The outline (x, z) of the largest piece of all slices together: the scan's plan"""
 
 
-def roof_objects(samples: collections.abc.Sequence[scratchbox_native.math.Vec3], plan: collections.abc.Sequence[tuple[float, float]], roof_y: float, photo_rgba: bytes | None = None, photo_width: int = 0, photo_height: int = 0, photo_x0: float = 0.0, photo_z0: float = 0.0, photo_texel: float = 0.05, min_rise: float = 0.6, spot_lighter: float = 30.0) -> dict:
+def roof_objects(samples: collections.abc.Sequence[scratchbox_native.math.Vec3], plan: collections.abc.Sequence[tuple[float, float]], roof_y: float, photo_rgba: bytes | None = None, photo_width: int = 0, photo_height: int = 0, photo_x0: float = 0.0, photo_z0: float = 0.0, photo_texel: float = 0.05, min_rise: float = 0.6, spot_lighter: float = 30.0, blob_k: float = 8.0) -> dict:
     """The objects standing on a roof: found where the scan stands above roof_y (edges sharpened by the photo straight down, when given) and each fitted by the simplest of its outline raised, a solid of revolution and its own lofted sections"""
 
 
