@@ -839,6 +839,7 @@ private:
             Face* host = nullptr;
             double shift = 0;
             std::vector<std::pair<Face*, double>> pieces;
+            bool whole = false;
             for (auto& f : faces_) {
                 const auto& o = spec_.openings[oi];
                 // an extruded wall, or a vertical facet of a modelled volume (its own triangles, cut round the openings)
@@ -849,9 +850,12 @@ private:
                 if (std::isnan(d)) continue;
                 const double sc = 0.5 * (o.s0 + o.s1) + d;
                 if (sc >= f.sMin && sc <= f.sMax) { host = &f; shift = d; }
-                if (spec_.clipOpenings && std::min(o.s1 + d, f.sMax - 0.03) - std::max(o.s0 + d, f.sMin + 0.03) >= 0.3) pieces.push_back({&f, d});
+                if (o.s0 + d > f.sMin + 0.02 && o.s1 + d < f.sMax - 0.02) whole = true;
+                if (std::min(o.s1 + d, f.sMax - 0.03) - std::max(o.s0 + d, f.sMin + 0.03) >= 0.3) pieces.push_back({&f, d});
             }
-            if (spec_.clipOpenings && pieces.size() > 1) {
+            // an opening straddling the cut of a split edge lies outside every piece's ends: a copy on each piece it overlaps
+            // by 0.3 m or more, clipped to it (clipOpenings always splits; otherwise only when no piece takes it whole)
+            if (!pieces.empty() && (spec_.clipOpenings ? pieces.size() > 1 : !whole)) {
                 // one copy per piece it overlaps, in that piece's frame (attached when the loop reaches it)
                 const OpeningSpec o = spec_.openings[oi];
                 int k = 0;

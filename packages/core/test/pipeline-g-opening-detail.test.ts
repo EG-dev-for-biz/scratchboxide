@@ -134,3 +134,23 @@ describe('opening detail from a reading', () => {
         expect(shapes.filter(s => s.kind === 'member').map(s => [s.u0, s.u1, s.h0, s.h1])).toEqual([[0.95, 2.05, 0.9, 1], [0.8, 1, 1, 3], [2, 2.2, 1, 3]]);
     });
 });
+
+describe('openings across a split wall', () => {
+    it('splits an opening straddling the cut of a split edge onto each piece instead of rejecting it', async () => {
+        const dir = tmp();
+        // a low part against the front edge splits it in pieces w:a:0:0:0 (0-4 m), :1 (4-6 m, above the low part), :2 (6-10 m)
+        const m: Pick<Massing, 'parts' | 'meshes'> = { parts: [
+            { id: 'a', baseY: 0, topY: 10, loops: [[[0, 0], [10, 0], [10, -6], [0, -6]]], planes: [], heightSource: 'vector', heights: {} },
+            { id: 'b', baseY: 0, topY: 4, loops: [[[4, 2], [6, 2], [6, 0], [4, 0]]], planes: [], heightSource: 'vector', heights: {} }], meshes: [] };
+        const opening = (id: string, s0: number, s1: number): OpeningItem => ({ id, face: 'w:a:0:0', s0, s1, t0: 6, t1: 8, depth: 0.3, scanned: false, confidence: 0.5, provenance: 'photo-inferred' });
+        const r = await runMassing(massingSpecText(m, { outDir: dir, params: PARAMS, openings: [opening('across', 3, 5), opening('inside', 1, 2)] }), dir);
+        expect(r.report.faces.filter(f => f.key.startsWith('w:a:0:0:'))).toHaveLength(3);
+        expect(r.report.rejectedOpenings).toEqual([]);
+        const names = r.nodes.filter(n => n.name.startsWith('opening:')).map(n => n.name).sort();
+        expect(names).toEqual(['opening:across:0', 'opening:across:1', 'opening:inside']);
+        // each copy stays on its own piece: the halves span x 3-4 and 4-5 (less the 3 cm margin at the cut)
+        const xs = (name: string) => { const n = r.nodes.find(q => q.name === name)!; const x = n.positions.filter((_, i) => i % 3 === 0); return [Math.min(...x), Math.max(...x)]; };
+        const [a0, a1] = xs('opening:across:0'), [b0, b1] = xs('opening:across:1');
+        expect(a0).toBeLessThan(3.1); expect(a1).toBeLessThanOrEqual(4.0); expect(b0).toBeGreaterThanOrEqual(4.0); expect(b1).toBeGreaterThan(4.9);
+    });
+});
