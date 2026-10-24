@@ -584,7 +584,25 @@ export interface StationBeautifyContext {
     aspectRatio?: string;
     viewportCropLock?: boolean;
     imageRef?: string;
+    /**
+     * 'even' (default): the station's images feed 3D (splats, textures, survey evidence), so they are lit evenly
+     * (EVEN_LIGHT_SENTENCE) and the prompt carries no sun clause. 'scene': the image is itself the deliverable and keeps
+     * the station's sun and the caller's mood light.
+     */
+    lighting?: 'even' | 'scene';
+    /** Building-survey mode: the subject's outline is fixed to the reference (OUTLINE_LOCK_SENTENCE). */
+    outlineLock?: boolean;
 }
+
+/**
+ * Light for every AI Beautify whose images feed 3D (user decision, 2026-10-23): the facade texture plates' even
+ * overcast light, so no sun direction or cast shadow is baked into what is measured or projected. Mood and sun light
+ * stay for renders whose final output is a 2D image or video.
+ */
+export const EVEN_LIGHT_SENTENCE = 'Light it evenly, as under a bright overcast sky: diffuse light, no cast shadows, no sun hot spots, neutral white balance.';
+
+/** Building-survey mode: the generated subject stays inside the scan's outline from this camera (checked by the station QC). */
+export const OUTLINE_LOCK_SENTENCE = 'The subject\'s outline is fixed: its left and right corners, its roofline and the top of every object on its roof stay exactly where the reference image has them. Do not widen, lengthen or raise it, and add no bays, windows or wall past the last bay the reference shows; where the reference image is empty there is only open sky and street.';
 
 /**
  * The canonical AI Beautify prompt for a survey station: every camera fact (coordinates, yaw,
@@ -646,13 +664,15 @@ export function buildStreetViewSeedBeautifyPrompt(station: ColmapCameraPose, ctx
 export function buildStationBeautifyPrompt(station: ColmapCameraPose, ctx: StationBeautifyContext): string {
     const m = station.beautify;
     const aspect = station.aspectRatio ? aspectRatioLabel(station.aspectRatio) : '16:9';
+    const even = ctx.lighting !== 'scene';
+    const mood = [even ? EVEN_LIGHT_SENTENCE : '', ctx.moodPromptContext?.trim() || '', ctx.outlineLock ? OUTLINE_LOCK_SENTENCE : ''].filter(Boolean).join(' ');
     return buildBeautifyPrompt({
         locationName: ctx.locationName,
         coordinates: { lat: station.coordinatesWGS84.lat, lng: station.coordinatesWGS84.lng },
         heading: station.yawDegrees,
         pitch: station.pitchDegrees,
         aspectRatio: ctx.aspectRatio || aspect,
-        moodPromptContext: ctx.moodPromptContext,
+        moodPromptContext: mood || undefined,
         distance: m?.standoffMeters,
         styleSuffix: ctx.styleSuffix,
         format: ctx.format,
@@ -662,7 +682,7 @@ export function buildStationBeautifyPrompt(station: ColmapCameraPose, ctx: Stati
         focalLengthMm: station.focalLengthMm,
         cameraHeightMeters: station.cameraHeightAboveGround,
         horizonRowFraction: m?.horizonRowFraction,
-        solar: m?.solar ? { azimuthDegrees: m.solar.azimuthDegrees, elevationDegrees: m.solar.elevationDegrees } : undefined
+        solar: !even && m?.solar ? { azimuthDegrees: m.solar.azimuthDegrees, elevationDegrees: m.solar.elevationDegrees } : undefined
     });
 }
 

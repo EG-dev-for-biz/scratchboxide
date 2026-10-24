@@ -79,6 +79,30 @@ export interface BeautifyStationOptions {
     stoneType?: StoneAlbedoPreset;
     /** The chat's Stop or time limit: checked before each generation attempt and passed to the generator's model call. */
     signal?: AbortSignal;
+    /**
+     * Building-survey mode: the image must stay inside the mesh's outline from this camera (checkStationOutline) and the
+     * prompt says so (OUTLINE_LOCK_SENTENCE). A failing image counts as a rejected attempt and is rerolled.
+     */
+    outline?: boolean | OutlineLimits;
+}
+
+export interface OutlineLimits {
+    /** Largest share (of the mesh's area above the horizon) drawn as subject outside the outline. Default 0.03. */
+    maxOverflow?: number;
+    /** Largest share drawn as sky inside the outline. Default 0.03. */
+    maxUnderfill?: number;
+}
+
+/** How a station image fits the mesh's outline from the same camera (building-survey mode). */
+export interface OutlineFit {
+    /** False when the frame shows no sky above the horizon to tell subject from background (e.g. a steep aerial). */
+    checked: boolean;
+    overflow: number;
+    underfill: number;
+    /** Frame borders the mesh touches above the horizon: the subject is not wholly in frame. */
+    cropped: Array<'top' | 'left' | 'right'>;
+    passed: boolean;
+    reason?: string;
 }
 
 export interface BeautifyQc {
@@ -89,6 +113,107 @@ export interface BeautifyQc {
     deltaPositionM: number;
     passed: boolean;
     reason?: string;
+    /** Building-survey mode only. */
+    outline?: OutlineFit;
+}
+
+/** Outline tolerance as a share of the frame width: registration slack between the image and the mesh. */
+export const OUTLINE_TOLERANCE = 0.012;
+/**
+ * Colour distance from a row's sky colour beyond which a pixel is not sky, in 8-bit Lab units (lightness weighted by
+ * 255/100 against a and b): a grey facade under a grey overcast sky differs mostly in lightness.
+ */
+export const OUTLINE_SKY_DISTANCE = 30;
+const OUTLINE_LIGHTNESS_WEIGHT = 2.55;
+
+function srgbToLab(r: number, g: number, b: number): [number, number, number] {
+    const lin = (c: number) => { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+    const R = lin(r), G = lin(g), B = lin(b);
+    const f = (t: number) => t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116;
+    const fx = f((0.4124 * R + 0.3576 * G + 0.1805 * B) / 0.95047), fy = f(0.2126 * R + 0.7152 * G + 0.0722 * B), fz = f((0.0193 * R + 0.1192 * G + 0.9505 * B) / 1.08883);
+    return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)];
+}
+
+/** Square max (dilate) or min (erode) filter of a 0/1 mask, separable. */
+function morph(m: Uint8Array, w: number, h: number, r: number, dilate: boolean): Uint8Array {
+    const tmp = new Uint8Array(w * h), out = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        let v = dilate ? 0 : 1;
+        for (let k = Math.max(0, x - r); k <= Math.min(w - 1, x + r); k++) { const s = m[y * w + k]; v = dilate ? (v | s) : (v & s); }
+        tmp[y * w + x] = v;
+    }
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        let v = dilate ? 0 : 1;
+        for (let k = Math.max(0, y - r); k <= Math.min(h - 1, y + r); k++) { const s = tmp[k * w + x]; v = dilate ? (v | s) : (v & s); }
+        out[y * w + x] = v;
+    }
+    return out;
+}
+
+/**
+ * Does a station image stay inside the mesh's outline from the same camera? Above the horizon everything the mesh
+ * covers is subject and everything else is background, so there: overflow = non-sky pixels outside the outline (grown by
+ * OUTLINE_TOLERANCE) and underfill = sky pixels inside it (shrunk by the same), both as shares of the mesh's area above
+ * the horizon. The sky colour is measured per row from pixels well away from the outline. The subject must also be
+ * wholly in frame: above the horizon the mesh may not touch the top or a side border.
+ */
+export function checkStationOutline(blockout: StationBlockoutRender, station: ColmapCameraPose, rgba: Buffer, width: number, height: number, limits: OutlineLimits = {}): OutlineFit {
+    const maxOver = limits.maxOverflow ?? 0.03, maxUnder = limits.maxUnderfill ?? 0.03;
+    const s = Math.max(1, Math.round(blockout.width / 480));
+    const w = Math.floor(blockout.width / s), h = Math.floor(blockout.height / s);
+    const { cy, fy } = blockout.intrinsics;
+    const hz = Math.min(h, Math.max(0, Math.floor((cy + fy * Math.tan((station.pitchDegrees || 0) * Math.PI / 180)) / s)));
+    const sil = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) sil[y * w + x] = blockout.silhouette[(y * s) * blockout.width + x * s] ? 1 : 0;
+    const cropped: OutlineFit['cropped'] = [];
+    // only above the horizon: below it the mesh is the ground plane, which reaches the borders of any frame
+    if (hz > 0) for (let x = 0; x < w; x++) if (sil[x]) { cropped.push('top'); break; }
+    for (let y = 0; y < hz; y++) if (sil[y * w]) { cropped.push('left'); break; }
+    for (let y = 0; y < hz; y++) if (sil[y * w + w - 1]) { cropped.push('right'); break; }
+    const notChecked = (reason: string): OutlineFit => ({ checked: false, overflow: 0, underfill: 0, cropped, passed: cropped.length === 0, reason: cropped.length ? `the subject runs off the ${cropped.join(', ')} of the frame` : reason });
+    if (hz < Math.max(4, h * 0.05)) return notChecked('no sky above the horizon in this frame to tell the subject from the background');
+    const r = Math.max(1, Math.round(OUTLINE_TOLERANCE * w));
+    const grown = morph(sil, w, h, r, true), shrunk = morph(sil, w, h, r, false), far = morph(sil, w, h, 3 * r, true);
+    // the image in the outline's frame, as CIELAB
+    const lab = new Float32Array(w * hz * 3);
+    for (let y = 0; y < hz; y++) for (let x = 0; x < w; x++) {
+        const ix = Math.min(width - 1, Math.floor((x + 0.5) * s * width / blockout.width)), iy = Math.min(height - 1, Math.floor((y + 0.5) * s * height / blockout.height));
+        const i = (iy * width + ix) * 4, L = srgbToLab(rgba[i], rgba[i + 1], rgba[i + 2]);
+        lab.set(L, (y * w + x) * 3);
+    }
+    const sky = new Float32Array(hz * 3); const have: number[] = [];
+    for (let y = 0; y < hz; y++) {
+        const ch: number[][] = [[], [], []];
+        for (let x = 0; x < w; x++) if (!far[y * w + x]) for (let c = 0; c < 3; c++) ch[c].push(lab[(y * w + x) * 3 + c]);
+        if (ch[0].length < 20) continue;
+        for (let c = 0; c < 3; c++) { ch[c].sort((a, b) => a - b); sky[y * 3 + c] = ch[c][ch[c].length >> 1]; }
+        have.push(y);
+    }
+    if (have.length === 0) return notChecked('no background visible beside the subject to measure the sky from');
+    for (let y = 0; y < hz; y++) {      // rows with no clear background take the nearest measured row's sky
+        if (have.includes(y)) continue;
+        let near = have[0]; for (const k of have) if (Math.abs(k - y) < Math.abs(near - y)) near = k;
+        for (let c = 0; c < 3; c++) sky[y * 3 + c] = sky[near * 3 + c];
+    }
+    let nonsky: Uint8Array = new Uint8Array(w * h);
+    for (let y = 0; y < hz; y++) for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 3;
+        nonsky[y * w + x] = Math.hypot(OUTLINE_LIGHTNESS_WEIGHT * (lab[i] - sky[y * 3]), lab[i + 1] - sky[y * 3 + 1], lab[i + 2] - sky[y * 3 + 2]) > OUTLINE_SKY_DISTANCE ? 1 : 0;
+    }
+    nonsky = morph(morph(nonsky, w, h, 2, false), w, h, 2, true);    // opening: specks of noise are not subject
+    let base = 0, over = 0, under = 0;
+    for (let y = 0; y < hz; y++) for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        if (sil[i]) base++;
+        if (nonsky[i] && !grown[i]) over++;
+        if (!nonsky[i] && shrunk[i]) under++;
+    }
+    const overflow = over / Math.max(base, 1), underfill = under / Math.max(base, 1);
+    const reasons: string[] = [];
+    if (overflow >= maxOver) reasons.push(`${(overflow * 100).toFixed(1)}% of the subject is drawn outside the scan outline (> ${(maxOver * 100).toFixed(0)}%)`);
+    if (underfill >= maxUnder) reasons.push(`${(underfill * 100).toFixed(1)}% of the scan outline is drawn as sky (> ${(maxUnder * 100).toFixed(0)}%)`);
+    if (cropped.length) reasons.push(`the subject runs off the ${cropped.join(', ')} of the frame`);
+    return { checked: true, overflow, underfill, cropped, passed: reasons.length === 0, reason: reasons.join('; ') || undefined };
 }
 
 export interface StationWarp {
@@ -225,7 +350,8 @@ export class BeautifyStationService {
             : (ctx.aspectRatio && ctx.aspectRatio !== 'auto' ? ctx.aspectRatio : autoAspectLabel);
 
         let warp: StationWarp | undefined;
-        let prompt = buildStationBeautifyPrompt(station, { ...ctx, aspectRatio: resolvedAspectRatio });
+        const outlineLimits: OutlineLimits | null = options.outline ? (options.outline === true ? {} : options.outline) : null;
+        let prompt = buildStationBeautifyPrompt(station, { ...ctx, aspectRatio: resolvedAspectRatio, outlineLock: ctx.outlineLock || !!outlineLimits });
         if (options.reference) {
             const ref = options.reference;
             warp = warpStationImage(
@@ -258,7 +384,14 @@ export class BeautifyStationService {
                 decoded.height,
                 isDraft ? { ...options.qc, maxIterations: 0, minOverlapPercent: options.qc?.minOverlapPercent ?? 85.0 } : options.qc
             );
-            if (!best || (qc.passed && !best.qc.passed) || (!best.qc.passed && qc.overlapPercent > best.qc.overlapPercent)) {
+            if (outlineLimits) {
+                const fit = checkStationOutline(blockout, station, decoded.rgba, decoded.width, decoded.height, outlineLimits);
+                qc.outline = fit;
+                if (!fit.passed) { qc.passed = false; qc.reason = [qc.reason, fit.reason].filter(Boolean).join('; '); }
+            }
+            const outlineMiss = (q: BeautifyQc) => q.outline ? q.outline.overflow + q.outline.underfill : 0;
+            if (!best || (qc.passed && !best.qc.passed)
+                || (!best.qc.passed && !qc.passed && (outlineLimits ? outlineMiss(qc) < outlineMiss(best.qc) : qc.overlapPercent > best.qc.overlapPercent))) {
                 best = { png, qc, aligned, rgba: decoded.rgba, modelUsed, modelNote };
             }
             if (qc.passed) break;

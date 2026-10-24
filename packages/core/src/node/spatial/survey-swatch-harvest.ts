@@ -133,7 +133,7 @@ export async function harvestSurveySwatches(input: {
         let rgba = Buffer.from(render.rgba), pose = station, beautified = false;
         if (input.beautifier) {
             try {
-                const b = await input.beautifier.beautify(station, { locationName: input.place, moodPromptContext: 'Overcast daylight, soft even light, no hard shadows. ' }, { blockoutOverride: render, width: w, height: h, maxRerolls: 0 });
+                const b = await input.beautifier.beautify(station, { locationName: input.place }, { blockoutOverride: render, width: w, height: h, maxRerolls: 0 });
                 const img = decodePng(b.imagePng);
                 rgba = Buffer.from(img.width === w && img.height === h ? img.rgba : resizeNearest(img, w, h));
                 pose = b.alignedStation ?? station;

@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';
-import { buildBeautifyPrompt, buildHybridPromptPayload, buildStationBeautifyPrompt, buildStreetViewSeedBeautifyPrompt, streetViewObstructionsNote, TILES_RENDER_NOTE, OBSTRUCTION_FREE_NOTE } from '../src/browser/generative-canvas/services/location-beautify-service';
+import { buildBeautifyPrompt, buildHybridPromptPayload, buildStationBeautifyPrompt, buildStreetViewSeedBeautifyPrompt, streetViewObstructionsNote, TILES_RENDER_NOTE, OBSTRUCTION_FREE_NOTE, EVEN_LIGHT_SENTENCE, OUTLINE_LOCK_SENTENCE } from '../src/browser/generative-canvas/services/location-beautify-service';
 import { buildBlockoutNanoBananaPrompt } from '../src/browser/generative-canvas/services/video/omniVideoPromptService';
 import { stationFromLookAt } from '../src/common/spatial/SurveySynthesisEngine';
 import type { GeodeticAnchor } from '../src/common/spatial/colmap-vector-reference-types';
@@ -24,7 +24,7 @@ describe('Station-grounded AI Beautify prompt', () => {
     };
 
     it('keeps the verbatim template body and the exact distance clause, and adds a camera lock clause from the station', () => {
-        const prompt = buildStationBeautifyPrompt(station, { locationName: 'Sydney Opera House', moodPromptContext: 'Clear winter noon. ', styleSuffix: ' Editorial architectural photograph.' });
+        const prompt = buildStationBeautifyPrompt(station, { locationName: 'Sydney Opera House', moodPromptContext: 'Clear winter noon. ', styleSuffix: ' Editorial architectural photograph.', lighting: 'scene' });
         expect(prompt).toContain(TEMPLATE_BODY);
         expect(prompt).toContain(`(camera at coordinates ${station.coordinatesWGS84.lat.toFixed(6)}, ${station.coordinatesWGS84.lng.toFixed(6)}, facing ${Math.round(station.yawDegrees)}°)`);
         expect(prompt).toContain(' Subject distance: approximately 43 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze).');
@@ -36,6 +36,20 @@ describe('Station-grounded AI Beautify prompt', () => {
         expect(i('Subject distance')).toBeLessThan(i('Camera lock'));
         expect(i('Camera lock')).toBeLessThan(i('Sun:'));
         expect(i('Sun:')).toBeLessThan(i('Editorial'));
+    });
+
+    it('lights station images evenly by default: the facade plates\' overcast sentence, then the caller\'s sentence, and no sun clause', () => {
+        const prompt = buildStationBeautifyPrompt(station, { locationName: 'Sydney Opera House', moodPromptContext: 'Wet pavement. ' });
+        expect(prompt).toContain(`${EVEN_LIGHT_SENTENCE} Wet pavement. This is a real location`);
+        expect(prompt).not.toContain('Sun:');
+        expect(prompt).not.toContain('cast shadows accordingly');
+        expect(prompt).toContain('Camera lock: 28mm lens');
+        expect(prompt).not.toContain(OUTLINE_LOCK_SENTENCE);
+    });
+
+    it('building-survey outline lock fixes the subject\'s outline to the reference', () => {
+        const prompt = buildStationBeautifyPrompt(station, { locationName: 'Sydney Opera House', outlineLock: true });
+        expect(prompt).toContain(`${EVEN_LIGHT_SENTENCE} ${OUTLINE_LOCK_SENTENCE} This is a real location`);
     });
 
     it('a Street View seed says it is a photograph, clears obstructions, and keeps every camera fact of its own station', () => {
@@ -86,7 +100,7 @@ describe('Station-grounded AI Beautify prompt', () => {
 
     it('strictly leaves {styleSuffix} and {moodPromptContext} empty unless the user explicitly prompts a style', () => {
         // 1. buildStationBeautifyPrompt with no stylePrompt: must NOT inject unprompted styles or moods
-        const cleanStationPrompt = buildStationBeautifyPrompt(station, { locationName: 'Colosseum, Rome' });
+        const cleanStationPrompt = buildStationBeautifyPrompt(station, { locationName: 'Colosseum, Rome', lighting: 'scene' });
         expect(cleanStationPrompt).not.toContain('Golden hour');
         expect(cleanStationPrompt).not.toContain('Cinematic');
         expect(cleanStationPrompt).not.toContain('Editorial');
@@ -97,7 +111,8 @@ describe('Station-grounded AI Beautify prompt', () => {
         // 2. buildStationBeautifyPrompt WITH user prompted style: must place it strictly at the end in styleSuffix
         const styledStationPrompt = buildStationBeautifyPrompt(station, {
             locationName: 'Colosseum, Rome',
-            styleSuffix: ' Ancient Roman travertine stonework, dusk torchlight.'
+            styleSuffix: ' Ancient Roman travertine stonework, dusk torchlight.',
+            lighting: 'scene'
         });
         expect(styledStationPrompt.endsWith('cast shadows accordingly. Ancient Roman travertine stonework, dusk torchlight.')).toBe(true);
 

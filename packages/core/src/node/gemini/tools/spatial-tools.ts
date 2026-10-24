@@ -1627,15 +1627,20 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'survey_beautify_station',
-        description: 'AI Beautify one survey station: pose-exact clay blockout of the GLB -> buildBeautifyPrompt grounded in the station (coordinates, yaw, pitch, lens fov, standoff, horizon, sun) -> Nano Banana image -> geometric QC by closed-loop edge alignment against the mesh (rejects recomposed frames) -> aligned pose. Returns the image path and QC report.',
+        description: 'AI Beautify one survey station: pose-exact render of the GLB -> buildBeautifyPrompt grounded in the station (coordinates, yaw, pitch, lens fov, standoff, horizon) -> Nano Banana image -> geometric QC by closed-loop edge alignment against the mesh (rejects recomposed frames) -> aligned pose. Lit evenly (bright overcast, no cast shadows) by default, because station images feed 3D. mode "building-survey" renders from the tile photos and also checks that the image stays inside the scan\'s outline from this camera (no widened facade, no extra bays, subject wholly in frame), rerolling until it does; place the station far enough out to frame the whole building, street to the top of its roof objects. Returns the image path and QC report (qc.outline in building-survey mode).',
         parameters: {
             type: 'OBJECT',
             properties: {
-                glbPath: { type: 'STRING', description: 'Anchored GLB (e.g. Google 3D Tiles clay).' },
+                glbPath: { type: 'STRING', description: 'Anchored GLB (e.g. Google 3D Tiles clay, or the isolated structure\'s textured GLB for building-survey mode).' },
                 stationsJsonPath: { type: 'STRING', description: 'Stations JSON from survey_synthesize_stations.' },
                 stationId: { type: 'NUMBER', description: 'Station to beautify.' },
                 locationName: { type: 'STRING', description: 'Location name for the prompt.' },
-                moodPromptContext: { type: 'STRING', description: 'Optional mood/lighting sentence(s) for the prompt.' },
+                mode: { type: 'STRING', description: '"building-survey": render from the tile photos, lock the subject\'s outline in the prompt and reject images that leave the scan outline or crop the subject (overflow/underfill above the horizon under 3 %). Omit for a plain station beautify.' },
+                lighting: { type: 'STRING', description: '"even" (default): bright overcast, no cast shadows, no sun clause. "scene": the station\'s sun and the mood sentence, only when this image is itself the final picture.' },
+                renderMode: { type: 'STRING', description: '"clay" (default) or "textured" (the GLB\'s tile photos) for the reference render; building-survey mode defaults to "textured".' },
+                isoDate: { type: 'STRING', description: 'ISO-8601 instant for the sun (lighting "scene" only); default the instant the stations were synthesized for.' },
+                maxRerolls: { type: 'NUMBER', description: 'Further attempts after a rejected image (default 2).' },
+                moodPromptContext: { type: 'STRING', description: 'Optional extra sentence(s) for the prompt (mood light only with lighting "scene").' },
                 styleSuffix: { type: 'STRING', description: 'Optional style suffix appended verbatim.' },
                 width: { type: 'NUMBER', description: 'Render/generation width (default 1920).' },
                 outDir: { type: 'STRING', description: 'Output directory for blockout + beautified PNGs.' }
