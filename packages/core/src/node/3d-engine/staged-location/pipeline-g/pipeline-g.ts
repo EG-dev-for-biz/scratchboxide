@@ -68,7 +68,7 @@ import { BRIEF_NEARBY_POI_M } from './brief';
 import type { GroundedReferenceClient } from '../../../spatial/search-grounded-reference';
 import type { LedgerEntry } from '../pipeline-h/ledger';
 
-export const PIPELINE_G_VERSION = `pipeline-g/v5+${PIPELINE_G_READ_VERSION}`;  // v5: roofs redrawn largest first, small tops painted, the budget checked per roof
+export const PIPELINE_G_VERSION = `pipeline-g/v6+${PIPELINE_G_READ_VERSION}`;  // v6: band stations up tall walls (v5: roofs redrawn largest first, small tops painted, the budget checked per roof)
 /** A roof face under this is an object's top: it keeps its painted colour rather than an image-model redraw of its own. */
 export const ROOF_REDRAW_MIN_M2 = 20;
 /** Native build parameters: the massing only, nothing baked from the tile, no scanned residual. */
