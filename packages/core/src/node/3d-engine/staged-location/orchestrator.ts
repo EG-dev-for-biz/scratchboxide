@@ -57,6 +57,8 @@ import {
     type ScanFitFitRequest,
     type ScanFitFitResult,
     type ScanFitFlattenRequest,
+    MAX_STREET_VIEW_IMAGES_PER_BUILDING,
+    MAX_SURVEY_FACES,
     type ScanFitFlattenResult,
     type ScanFitOrnamentRequest,
     type ScanFitOrnamentResult,
@@ -178,7 +180,8 @@ import { fetchFootprints, type FootprintSource } from './facade-footprints';
 import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, SCAN_FOOTPRINT_TOKEN, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
 import { PIPELINE_G_VERSION, runPipelineG, stagedPipelineG } from './pipeline-g/pipeline-g';
 import { H_BUDGET_MARGIN_MS, H_POLICY, PIPELINE_H_VERSION, stagedProcedural } from './pipeline-h/pipeline-h';
-import { PIPELINE_I_VERSION, runPipelineI } from './pipeline-i/pipeline-i';
+import { PIPELINE_I_VERSION, TRELLIS_SEEDS, runPipelineI } from './pipeline-i/pipeline-i';
+import { PROJECT_MAX_RELIEF_M, pipelineIRefineEnabled, refinePipelineI, type RefineOutcome } from './pipeline-i/refine';
 import { captureBuildingTrainingInBackground, sweepPendingBuildingTraining, type BuildingTrainingCaptureInput } from '../../cloud-store/building-training-capture';
 import { captureTrainingPairsInBackground } from '../../cloud-store/training-pair-capture';
 import { sceneTrainingPairs } from './scene-training-pairs';
@@ -275,18 +278,31 @@ export const STAGES = {
     /**
      * Background: the real-world texture pass (textured twins of the staged layers); clay is the first result and the viewport crossfades to each twin as it commits (unless the user chose clay). The
      * limit covers the first layers (about 2 to 3 min live) plus the wait for the photo-read detail the rebuild commits
-     * later (about 4 min after the Street View close-ups live), whose layers are textured once it settles.
+     * later (about 4 min after the Street View close-ups live), whose layers are textured once it settles. Raised 10x
+     * (2026-10-24, user decision) after the Empire State Building's atlas-growth fix (texture-uv.ts hardMaxSide) made a
+     * single layer's bake genuinely slower than 600 s on a supertall's much larger atlas, where it used to fail fast
+     * instead; 600 s stays the right budget for an ordinary building, so this is headroom, not a new expected duration.
      */
-    textures: { order: -1, title: 'Real textures', budgetMs: 600_000 },
-    /** Background: the twins of the layers committed after the remesh (fit, detail, grammar, figures), as each lands; it waits for the rebuild and the grammar to settle. */
-    'textures-late': { order: -1, title: 'Real textures of later layers', budgetMs: 1_200_000 }
+    textures: { order: -1, title: 'Real textures', budgetMs: 6_000_000 },
+    /**
+     * Background: the twins of the layers committed after the remesh (fit, detail, grammar, figures), as each lands; it
+     * waits for the rebuild and the grammar to settle. Raised 10x alongside `textures` (2026-10-24, user decision,
+     * same cause): a live Empire State Building run hit "Real textures of later layers took longer than its 1200 s
+     * limit" after the atlas-growth fix, the same bigger-atlas-takes-longer tradeoff as the main textures stage, just
+     * on whichever later layer the rebuild/grammar/fit/figures passes actually commit. Kept at 2x the main stage's
+     * budget, the same ratio as before the raise (this stage waits on top of the main pass, and may texture more than
+     * one later layer).
+     */
+    'textures-late': { order: -1, title: 'Real textures of later layers', budgetMs: 12_000_000 }
 } as const;
 export type StageId = keyof typeof STAGES;
 
 /**
  * A district's tile-refine twin (tile-refine-twin.ts) can carry hundreds of leaf-tile photos; this caps how long its
- * model recreate pass runs within the textures stage's own 600 s budget, leaving room for everything else the stage
- * does. Past it, images still queued keep their de-lit (not recreated) version - never the raw, un-de-lit one.
+ * model recreate pass runs within the textures stage's own budget (STAGES.textures.budgetMs), leaving room for
+ * everything else the stage does. Past it, images still queued keep their de-lit (not recreated) version - never the
+ * raw, un-de-lit one. Left at its original value (not raised with the textures budget): a district's hundreds of
+ * leaf tiles are a different cost shape from one supertall's atlas, and this was never what timed out.
  */
 const TILE_REFINE_RECREATE_BUDGET_MS = 420_000;
 
@@ -1779,11 +1795,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     io.progress('finding Google Street View panoramas around the structure');
                     const found = await discoverOnce();
                     const faces = surveyFaceTargets(structure!);
+                    // a tall structure's faces carry several height bands each (footprintSurveyFaces): raise the image
+                    // budget to cover them, bounded by the build's shared real-image budget, rather than let the
+                    // ordinary one-per-heading default silently starve every band past the first
+                    const bandedCeiling = faces.length > MAX_SURVEY_FACES ? Math.min(MAX_STREET_VIEW_IMAGES_PER_BUILDING, faces.length) : undefined;
                     let result: SurveyResult;
                     const chain = new VisionModelChain<string>({ client: visionForSurvey.client, candidates: visionForSurvey.candidates, signal: ctx.signal, ...chainExtras('survey'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
                     try {
                         result = await runFaceSurvey({
-                            faces, panos: found.panos, structure: structure!, ground: t.ground!, top: t.unmaskedTop ?? t.ground!.top, deps: sv, chain, signal: io.signal, onProgress: m => io.progress(m), now,
+                            faces, panos: found.panos, structure: structure!, ground: t.ground!, top: t.unmaskedTop ?? t.ground!.top, deps: sv, chain, signal: io.signal, onProgress: m => io.progress(m), now, ...(bandedCeiling ? { bandedCeiling } : {}),
                             // while the faces are read, the ring views the matching will want are fetched (for every face with an image: a superset)
                             onFetched: read => {
                                 if (!visionAvailable || !rebuildPossible) return;
@@ -2925,6 +2945,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const grammarOn = facadeGrammarEnabled() && !!visionAvailable && (request.relief ?? TILE_REFINE_RELIEF_DEFAULT) !== false;
         let remeshRequest: TileRefineRequest | undefined;
         type RemeshValue = { refined?: TileRefineResult; flattened?: ScanFitFlattenResult; groundLayerId: string; groundFile: string; committed: boolean };
+        /**
+         * What pipeline I/J (iRun) and its specular pass actually need: the isolated scan, a layer id to supersede, and a
+         * cache key. `stage` (pipeline E's vector massing) is optional: iRun only reads it for its own optional refine
+         * step (pipelineIRefineEnabled), so pipeline I/J can run on the plain remeshed scan too, when pipeline E's massing
+         * did not pass the scan-agreement gate (user decision, 2026-10-24: default to generative facades there rather
+         * than none at all — see grammarRun's `!eState` branch).
+         */
+        type IRunState = { refined: TileRefineResult; layer: { objectId: string }; key: string; stage?: MassingStageResult };
         let eState: { stage: MassingStageResult; refined: TileRefineResult; layer: StagedLayer; key: string; ms: number; ledger?: LedgerEntry[] } | undefined;
         /** The ownership vote to run after the first isolate commits: what it needs to remesh the same structure again. */
         let voteLater: { tilePath: string; isolatePick?: string; pick?: { pick: StructurePickResult; ground: GroundModel }; request: TileRefineRequest; orthos: { reliefOrthos?: boolean } } | undefined;
@@ -3584,7 +3612,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
 
         // every grammar-slot build, delivered or failed, kept as a training pair (melted scan -> finished building) where this
         // instance has a training bucket (building-training-capture.ts); started and forgotten, never part of the build
-        const captureTraining = (e: NonNullable<typeof eState>, pair: { source: string; pipelineVersion: string; outcome: 'delivered' | 'failed'; reason?: string; files?: Record<string, string | undefined>; fit?: BuildingTrainingCaptureInput['fit']; provenanceLabels?: string[]; targetBeyondScan?: { note: string }; notes?: unknown }): void => {
+        const captureTraining = (e: Pick<IRunState, 'refined'>, pair: { source: string; pipelineVersion: string; outcome: 'delivered' | 'failed'; reason?: string; files?: Record<string, string | undefined>; fit?: BuildingTrainingCaptureInput['fit']; provenanceLabels?: string[]; targetBeyondScan?: { note: string }; notes?: unknown }): void => {
             if (!structure || !placeValue) return;
             try {
                 captureBuildingTrainingInBackground({
@@ -3667,40 +3695,68 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         };
 
         // ---------------- pipeline I/J (the grammar stage's slot, I the 3D Building default): character sheet -> Trellis (I) or Meshy (J), best of six seeds -> colour-matched, fitted to the scan ----------------
-        const iRun = async (e: NonNullable<typeof eState>): Promise<void> => {
+        const iRun = async (e: IRunState): Promise<void> => {
             await runner.stage<{ steps: Array<{ step: string; accepted: number; proposed: number }> }>({
                 id: 'grammar',
                 run: async io => {
                     const t0 = now();
                     if (!deps.pipelineI) throw new Error(`pipeline ${(procedural ?? 'i').toUpperCase()} needs its image model and a Fal.ai 3D model service, which these deps do not provide`);
                     // the model client first: a missing FAL_KEY fails here, before the 4K sheet is drawn
-                    const model = deps.pipelineI.model(procedural === 'j' ? 'meshy' : 'trellis');
+                    const isMeshy = procedural === 'j';
+                    const model = deps.pipelineI.model(isMeshy ? 'meshy' : 'trellis');
+                    // pipeline J: Meshy's single output is already texture-complete, so skip Trellis's best-of-six
+                    // seed selection and its swatch colour match (tuned for Trellis's own colour drift)
                     const out = await runPipelineI({
                         texturedGlb: e.refined.texturedGlb, clayGlb: e.refined.rawClayGlb ?? e.refined.clayGlb,
                         footprint: { cells: structure!.cells, groundY: structure!.groundY, heightM: structure!.heightM },
                         anchor: { lat: placeValue!.lat, lng: placeValue!.lng, elevationMeters: 0 }, place: placeValue!.formattedAddress || request.query,
                         dir: path.join(cache.dir, 'pipeline_i', stageKey(PIPELINE_I_VERSION, e.key).slice(0, 24)),
                         generator: deps.pipelineI.generator(), model, budgetMs: Math.max(0, STAGES.grammar.budgetMs - (now() - t0) - 20_000),
+                        ...(isMeshy ? { seeds: [TRELLIS_SEEDS[0]], skipColourMatch: true } : {}),
                         ...(visionAvailable ? { infill: { client: genAiEnhanceClient(visionAvailable.client), models: [LIGHTING_MODEL_FULL] } } : {}),
                         signal: io.signal, onProgress: m => io.progress(m), now
                     });
                     cache.writeRunNote(runId, 'pipeline_i', { steps: out.steps, timingsMs: out.timingsMs, plan: out.plan, sheet: out.sheet, model: out.model, candidates: out.candidates, swatch: out.swatch, fit: out.fit, ...(out.holes ? { holes: out.holes } : {}), files: out.files });
+                    // the prototype refinement with pipeline H's evidence (refine.ts, SCRATCHBOX_PIPELINE_I_REFINE=1): the massing's footprint as
+                    // the fit target, the tile's wall plates scored against the model's and projected where its walls lie on the planes.
+                    // Any failure leaves pipeline I's own model standing, with the reason in the run note.
+                    let refined: RefineOutcome | undefined;
+                    if (pipelineIRefineEnabled() && e.stage?.run && t.ground) {
+                        try {
+                            refined = await refinePipelineI({
+                                rawModelGlb: out.files.modelGlb, swatch: out.swatch, scanFit: out.fit,
+                                scanFootprint: { cells: structure!.cells, groundY: structure!.groundY, heightM: structure!.heightM },
+                                massing: e.stage.run.report, tileGlb: strip ? strip.devegetatedGlb : extraction.texturedGlb, structure: structure!, ground: t.ground,
+                                anchor: { lat: placeValue!.lat, lng: placeValue!.lng, elevationMeters: 0 }, dir: path.join(cache.dir, 'pipeline_i', stageKey(PIPELINE_I_VERSION, e.key).slice(0, 24), 'refine'),
+                                ...(visionAvailable ? { infill: { client: genAiEnhanceClient(visionAvailable.client), models: [LIGHTING_MODEL_FULL] } } : {}),
+                                signal: io.signal, onProgress: m => io.progress(m)
+                            });
+                            cache.writeRunNote(runId, 'pipeline_i_refine', refined);
+                        } catch (err) {
+                            if (isAbort(err) || io.signal.aborted) throw err;
+                            cache.writeRunNote(runId, 'pipeline_i_refine', { error: errorMessage(err) });
+                        }
+                    }
                     const key8 = e.key.slice(0, 8);
-                    const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_pipelinei.glb`);
-                    const pubTex = cache.publishFile(out.files.texturedGlb, `${base}_massing_${key8}_pipelinei_tex.glb`);
+                    const pubClay = cache.publishFile(refined?.files.clayGlb ?? out.files.clayGlb, `${base}_massing_${key8}_pipelinei.glb`);
+                    const pubTex = cache.publishFile(refined?.files.texturedGlb ?? out.files.texturedGlb, `${base}_massing_${key8}_pipelinei_tex.glb`);
                     const f = out.fit;
-                    const describe = `${out.steps.map(s => `${s.step}: ${s.accepted} of ${s.proposed}`).join('; ')}; fit to the scan: plan IoU ${f.planIoU.toFixed(2)}, ${(f.overflowShare * 100).toFixed(0)}% of the model outside the footprint (reported, not clipped), ${(f.coverage * 100).toFixed(0)}% of the footprint covered`;
+                    const projectedFaces = refined?.facades.filter(x => x.projected) ?? [];
+                    const describe = `${out.steps.map(s => `${s.step}: ${s.accepted} of ${s.proposed}`).join('; ')}; fit to the scan: plan IoU ${f.planIoU.toFixed(2)}, ${(f.overflowShare * 100).toFixed(0)}% of the model outside the footprint (reported, not clipped), ${(f.coverage * 100).toFixed(0)}% of the footprint covered` +
+                        (refined ? `; refined with pipeline H: fitted to the massing footprint (plan IoU with the scan ${refined.fit.scanIoUOfMassingFit.toFixed(2)}, shifted ${refined.fit.shift.map(v => v.toFixed(2)).join(', ')} m), ${refined.facades.length} facades scored, the tile's plates projected onto ${projectedFaces.length} (${refined.projected.texels.toLocaleString('en-US')} texels, photo-inferred)` : '') +
+                        (refined?.holes?.holePixels ? `; ${refined.holes.holePixels} texels of the model's own texture it never covered: ${refined.holes.decision === 'accepted' ? `${refined.holes.filledPixels} filled by ${refined.holes.modelUsed} (generated)` : `left as the model built them (${refined.holes.reason ?? refined.holes.decision})`}` : '');
                     const method = `pipeline I: the isolated scan rendered from its tile photos at four planned stations, made into one building-survey character sheet (one 4K image, every panel checked against the scan), the four views sent together to ${out.model.model} on Fal.ai once per seed, the best of ${out.candidates.length} (seed ${out.model.seed}, job ${out.model.requestId}) by its silhouette against the sheet and its plan fit, its textures colour-matched to the structure's swatch, fitted onto the scan's footprint and height (yaw ${f.yawDeg.toFixed(1)} deg${f.mirrored ? ', mirrored' : ''}, scale ${f.scale.toFixed(2)})`;
                     const generated = TEXTURE_LADDER_RUNGS.indexOf('generated tileable PBR');
                     const layer: StagedLayer = {
                         objectId: layerObjectId(e.key, 'l2i'), stage: 'grammar', layer: 'l2i', order: STAGES.grammar.order, url: pubClay.url, bytes: pubClay.bytes,
                         // a generated model: its confidence is the fit to the scan, never more than a generated source
                         provenance: { label: 'generated', measuredGeometry: false, confidence: Math.round(Math.min(0.5, f.planIoU * 0.5) * 100) / 100, method, sources: [{ kind: 'stage-output', id: `pipeline-i:${key8}` }], note: describe },
-                        provenanceLabels: ['generated'], supersedes: [e.layer.objectId], revealAfter: [e.layer.objectId],
-                        reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [e.layer.objectId] }, cached: false, builtAtMs: now(), counts: layerCounts(out.files.clayGlb),
+                        provenanceLabels: projectedFaces.length ? ['generated', PROVENANCE.photoInferred] : ['generated'], supersedes: [e.layer.objectId], revealAfter: [e.layer.objectId],
+                        reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [e.layer.objectId] }, cached: false, builtAtMs: now(), counts: layerCounts(refined?.files.clayGlb ?? out.files.clayGlb),
                         textured: {
                             url: pubTex.url, bytes: pubTex.bytes, ladderRung: generated, rungShares: TEXTURE_LADDER_RUNGS.map((_, k) => (k === generated ? 1 : 0)),
-                            provenance: [{ source: 'pipeline-i-trellis', label: 'generated', method: `${out.model.model}'s textures (seed ${out.model.seed}), made from the character sheet's four views and colour-matched to the structure's swatch measured from them`, coverage: 1 }],
+                            provenance: [{ source: 'pipeline-i-trellis', label: 'generated', method: `${out.model.model}'s textures (seed ${out.model.seed}), made from the character sheet's four views and colour-matched to the structure's swatch measured from them`, coverage: 1 },
+                                ...(projectedFaces.length ? [{ source: 'pipeline-i-refine-plates', label: PROVENANCE.photoInferred, method: `the tile's wall plates (pipeline G's survey stations) projected onto the model where its wall lies within ${PROJECT_MAX_RELIEF_M} m of the massing's plane: ${projectedFaces.map(x => x.key).join(', ')}`, coverage: 0 }] : [])],
                             confidenceChannels: 'none: the model carries its own textures', builtAtMs: now(), cached: false
                         }
                     };
@@ -3734,7 +3790,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // floor, generalized to any mesh: specular-material-projection.ts): self-rendered, since there is no photo evidence of a model
         // nobody has seen built; accepted regions are baked straight into the already-published textured GLB, in place, so nothing
         // downstream needs to know this ran. Best-effort: any failure is recorded and never fails the build.
-        const iSpecularPass = async (e: NonNullable<typeof eState>): Promise<void> => {
+        const iSpecularPass = async (e: Pick<IRunState, 'key'>): Promise<void> => {
             if (!facadeMaterialsEnabled()) return;
             const committed = run.state.layers.find(l => l.objectId === layerObjectId(e.key, 'l2i'));
             const texUrl = committed?.textured?.url;
@@ -3874,6 +3930,22 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 return;
             }
             if (eState) { const inf = await eInferenceRun(eState); await eReliefRun(eState, inf); return; }
+            if (!eState && remeshed && stagedPipelineG(request) && (procedural === 'i' || procedural === 'j')) {
+                // The vector-massing gate rejected (eWhyNot) — but pipeline I/J does not actually need pipeline E's clean
+                // massing: it generates its own model from a character sheet of the scan and fits that to the scan's own
+                // footprint and height afterward (out.fit, reported). Default to generative here too (user decision,
+                // 2026-10-24): try it directly on the plain remeshed scan. There is no fit-quality gate yet deciding
+                // whether to keep it over the textured remesh when it comes out implausible (a photo-match judge like
+                // pipeline E relief's, comparing both against real Street View photos, is the natural next step — see
+                // the pipeline-i findings doc) — for now the generated model always supersedes once it commits.
+                const groundLayerId = remesh.value?.groundLayerId;
+                if (groundLayerId) {
+                    await iRun({ refined: remeshed, layer: { objectId: groundLayerId }, key: remeshed.cacheKey });
+                    await iSpecularPass({ key: remeshed.cacheKey });
+                    runner.skip('relief', `pipeline ${procedural.toUpperCase()} places a generated model of the structure on the remeshed scan (its vector massing did not pass agreement with the scan: ${eWhyNot ?? 'see the pipeline E fallback'}); the measured relief would put scan detail on the massing it replaces`);
+                    return;
+                }
+            }
             if (stagedPipelineG(request)) {
                 // asked for a procedural rebuild, but G builds on E's vector massing and there is none: say so, never silently
                 run.degrade(record('grammar', 'pipeline_g_unavailable', {
