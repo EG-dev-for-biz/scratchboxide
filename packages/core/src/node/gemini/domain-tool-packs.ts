@@ -53,6 +53,7 @@ import { CSG_APERTURE_TOOL_DECLARATIONS } from './tools/csg-aperture-tools';
 import { GLASS_FRACTURE_TOOL_DECLARATIONS } from './tools/glass-fracture-tools';
 import { TRAJECTORY_COLLISION_TOOL_DECLARATIONS } from './tools/trajectory-collision-tools';
 import { BAY_RHYTHM_TOOL_DECLARATIONS } from './tools/bay-rhythm-tools';
+import { WALL_PLANE_SEGMENT_TOOL_DECLARATIONS } from './tools/wall-plane-segment-tools';
 import { RIGIDBODY_DROP_TOOL_DECLARATIONS } from './tools/rigidbody-drop-tools';
 import { XPBD_CLOTH_TOOL_DECLARATIONS } from './tools/xpbd-cloth-tools';
 import { SH9_LIGHTING_TOOL_DECLARATIONS } from './tools/sh9-lighting-tools';
@@ -101,7 +102,7 @@ export const CORE_WORKSPACE_PACK: ToolPackDefinition = {
 export const GEOSPATIAL_3D_PACK: ToolPackDefinition = {
     id: 'geospatial_3d',
     displayName: 'Geospatial 3D Tiles & Metrology Foundation',
-    description: 'Google Maps 3D Tiles ingestion, UTDRA macro-decomposition, Universal 3D Structure Foundation, WebXR anchoring, Geobox precision bounding, reverse shadow-geolocation, single-photo camera calibration, tile sea-level elevation queries, camera-trajectory collision auditing, and facade bay-rhythm/elevation analysis.',
+    description: 'Google Maps 3D Tiles ingestion, UTDRA macro-decomposition, Universal 3D Structure Foundation, WebXR anchoring, Geobox precision bounding, reverse shadow-geolocation, single-photo camera calibration, tile sea-level elevation queries, camera-trajectory collision auditing, blind wall-plane segmentation, and facade bay-rhythm/elevation analysis.',
     declarations: [
         ...GOOGLE_3D_TILES_TOOL_DECLARATIONS,
         ...PANORAMA_TOOL_DECLARATIONS,
@@ -117,6 +118,7 @@ export const GEOSPATIAL_3D_PACK: ToolPackDefinition = {
         ...VANISHING_POINT_TOOL_DECLARATIONS,
         ...TILE_ELEVATION_TOOL_DECLARATIONS,
         ...TRAJECTORY_COLLISION_TOOL_DECLARATIONS,
+        ...WALL_PLANE_SEGMENT_TOOL_DECLARATIONS,
         ...BAY_RHYTHM_TOOL_DECLARATIONS
     ],
     toolNames: [
@@ -134,6 +136,7 @@ export const GEOSPATIAL_3D_PACK: ToolPackDefinition = {
         ...VANISHING_POINT_TOOL_DECLARATIONS.map(d => d.name),
         ...TILE_ELEVATION_TOOL_DECLARATIONS.map(d => d.name),
         ...TRAJECTORY_COLLISION_TOOL_DECLARATIONS.map(d => d.name),
+        ...WALL_PLANE_SEGMENT_TOOL_DECLARATIONS.map(d => d.name),
         ...BAY_RHYTHM_TOOL_DECLARATIONS.map(d => d.name)
     ]
 };

@@ -62,11 +62,12 @@ export const BAY_RHYTHM_TOOL_DECLARATIONS: ToolDeclaration[] = [
             'a small building whose footprint happens to align with X). For a building with multiple walls at ' +
             'different orientations (an angled facade, a non-rectangular footprint, a full building rather than one ' +
             'isolated wall), pass wallOrigin/wallNormal/wallAxisS — a point on the wall\'s plane, its outward normal, ' +
-            'and its horizontal in-plane direction (e.g. from a massing/facade-decomposition step that already ' +
-            'identified this wall) — to restrict the scan to points near that one plane and measure periodicity ' +
-            'along the wall\'s own direction instead of raw global X. Omitting them analyzes the whole mesh\'s global-X ' +
-            'extent, which silently produces a meaningless "bay width" (often tens of meters) on anything but a ' +
-            'single axis-aligned wall.',
+            'and its horizontal in-plane direction — to restrict the scan to points near that one plane and measure ' +
+            'periodicity along the wall\'s own direction instead of raw global X. Call mesh_segment_wall_planes first ' +
+            'to find these automatically (it has no prior knowledge of the building\'s footprint): pass one of its ' +
+            'results\' origin/normal/axisS/sMin/sMax straight into this tool\'s wallOrigin*/wallNormal*/wallAxisS*/wallSMin/wallSMax. ' +
+            'Omitting them analyzes the whole mesh\'s global-X extent, which silently produces a meaningless "bay width" ' +
+            '(often tens of meters) on anything but a single axis-aligned wall.',
         parameters: {
             type: 'OBJECT',
             properties: {

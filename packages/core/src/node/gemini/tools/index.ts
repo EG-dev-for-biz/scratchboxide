@@ -49,6 +49,7 @@ export * from './rigidbody-drop-tools';
 export * from './xpbd-cloth-tools';
 export * from './sh9-lighting-tools';
 export * from './hydraulic-erosion-tools';
+export * from './wall-plane-segment-tools';
 
 
 import type { ToolDeclaration, ToolHandler } from './types';
@@ -174,6 +175,10 @@ import {
     HYDRAULIC_EROSION_TOOL_DECLARATIONS,
     HYDRAULIC_EROSION_TOOL_HANDLERS
 } from './hydraulic-erosion-tools';
+import {
+    WALL_PLANE_SEGMENT_TOOL_DECLARATIONS,
+    wallPlaneSegmentHandlers
+} from './wall-plane-segment-tools';
 
 export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...CANVAS_TOOL_DECLARATIONS,
@@ -228,7 +233,8 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...RIGIDBODY_DROP_TOOL_DECLARATIONS,
     ...XPBD_CLOTH_TOOL_DECLARATIONS,
     ...SH9_LIGHTING_TOOL_DECLARATIONS,
-    ...HYDRAULIC_EROSION_TOOL_DECLARATIONS
+    ...HYDRAULIC_EROSION_TOOL_DECLARATIONS,
+    ...WALL_PLANE_SEGMENT_TOOL_DECLARATIONS
 ];
 
 export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
@@ -284,7 +290,8 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
         ...bayRhythmHandlers,
         ...rigidbodyDropHandlers,
         ...xpbdClothHandlers,
-        ...sh9LightingHandlers
+        ...sh9LightingHandlers,
+        ...wallPlaneSegmentHandlers
     ].map(([decl, handler]) => [decl.name, handler])),
     ...HYDRAULIC_EROSION_TOOL_HANDLERS
 };
