@@ -1313,6 +1313,14 @@ export interface SurveyedFace {
     palette?: FacePalette;
     elements: SurveyElement[];
     materials: SurveyMaterial[];
+    /**
+     * The surveyed slice's own vertical middle and height (world Y, tile frame), when the structure's faces were split
+     * into height bands (a tall structure's footprintSurveyFaces) rather than one shot per heading. Absent for an
+     * ordinary, unbanded survey. Lets a texel-fill step (texture-pass.ts's paletteFill) tell which band's palette
+     * actually belongs at a given height, instead of picking whichever same-heading band happens to match first.
+     */
+    centreY?: number;
+    heightM?: number;
 }
 
 /**
@@ -1921,7 +1929,8 @@ const DEFINITIONS = {
     }),
     surveyedFace: obj(['faceId', 'headingDeg', 'source', 'elements', 'materials'], {
         faceId: STR, headingDeg: NUM, source: { enum: ['fit', 'footprint'] }, panoId: STR, captureDate: STR, skipped: STR,
-        palette: ref('facePalette'), elements: arr(ref('surveyElement')), materials: arr(ref('surveyMaterial'))
+        palette: ref('facePalette'), elements: arr(ref('surveyElement')), materials: arr(ref('surveyMaterial')),
+        centreY: NUM, heightM: ref('nonneg')
     }),
     materialHints: obj(['schema', 'label', 'palette', 'textureUse', 'faces', 'model', 'cost'], {
         schema: { const: 'scratchbox.material-hints/1' }, label: { const: 'photo-inferred' }, palette: { const: 'measured-from-photo' },
