@@ -60,8 +60,17 @@ export const MAX_PERIOD_M = 8;
 export const NCC_GATE = 0.55;
 /** A filled texel needs at least this many real donor samples at its phase to be written at all. */
 export const MIN_DONORS = 2;
-/** How many pitch periods out from a texel donors are searched for, each axis. */
+/**
+ * How many pitch periods out from a texel donors are searched for, each axis: the starting radius, fast for the
+ * common case (real evidence fairly evenly spread). When that radius does not find MIN_DONORS, the search doubles
+ * (findDonors) up to MAX_DONOR_SEARCH_PERIODS rather than giving up — a plane whose real evidence is unevenly spread
+ * (dense near a supertall's base and street-level facades, sparse toward its crown, say) still gets a repeat fill in
+ * its sparser regions instead of silently falling through to the flat palette rung at a radius sized for an ordinary
+ * building's more even coverage.
+ */
 export const DONOR_SEARCH_PERIODS = 8;
+/** The ceiling the search doubles toward; bounds the cost for a texel whose plane has no nearby real evidence at all. */
+export const MAX_DONOR_SEARCH_PERIODS = 64;
 
 export interface AxisPitch {
     axis: 'row' | 'col';
@@ -231,12 +240,33 @@ function trimmedLinearRgb(albedo: Uint8Array, samples: number[]): Vec3 {
 }
 
 /**
+ * Donor texels for texel (x, y) on plane `d`'s matching phase, searched at DONOR_SEARCH_PERIODS periods either way
+ * first (fast, the common case); when that radius does not find MIN_DONORS, the radius doubles up to
+ * MAX_DONOR_SEARCH_PERIODS before giving up. Keeps the fast path fast while still reaching across a plane whose real
+ * evidence is unevenly spread (see DONOR_SEARCH_PERIODS's comment).
+ */
+function findDonors(atlas: UvAtlas, base: BakedTexturePlanes, d: PlaneRepeatDetection, x: number, y: number, rowPitch: AxisPitch | undefined, colPitch: AxisPitch | undefined): number[] {
+    const { x0, y0, x1, y1 } = d.bbox;
+    for (let periods = DONOR_SEARCH_PERIODS; ; periods = Math.min(MAX_DONOR_SEARCH_PERIODS, periods * 2)) {
+        const xRange = colPitch ? Array.from({ length: 2 * periods + 1 }, (_, k) => x + (k - periods) * colPitch.pitchPx).filter(v => v >= x0 && v <= x1) : [x];
+        const yRange = rowPitch ? Array.from({ length: 2 * periods + 1 }, (_, k) => y + (k - periods) * rowPitch.pitchPx).filter(v => v >= y0 && v <= y1) : [y];
+        const donors: number[] = [];
+        for (const yy of yRange) for (const xx of xRange) {
+            if (xx === x && yy === y) continue;
+            const j = yy * atlas.width + xx;
+            if (atlas.texels.mapIndex[j] === d.mapIndex && isReal(atlas, base, j)) donors.push(j);
+        }
+        if (donors.length >= MIN_DONORS || periods >= MAX_DONOR_SEARCH_PERIODS) return donors;
+    }
+}
+
+/**
  * Fills same-plane texels the real rungs left uncovered, by resampling real texels at the detected pitch(es): a
  * trimmed average of every real texel at the same phase (same `(x - x0) mod pitchPx`, and/or `(y - y0) mod pitchPx`),
- * searched up to DONOR_SEARCH_PERIODS periods either way. Chosen over a single nearest-phase sample so one occluded or
- * noisy repeat cannot dominate the fill; chosen over averaging every phase (which would blur the pattern away) because
- * only the matching phase is averaged. A texel with fewer than MIN_DONORS real samples at its phase is left uncovered,
- * same as before (it falls through to the palette rung).
+ * found by findDonors. Chosen over a single nearest-phase sample so one occluded or noisy repeat cannot dominate the
+ * fill; chosen over averaging every phase (which would blur the pattern away) because only the matching phase is
+ * averaged. A texel with fewer than MIN_DONORS real samples at its phase even at the widest search radius is left
+ * uncovered, same as before (it falls through to the palette rung).
  */
 export function repeatFill(atlas: UvAtlas, base: BakedTexturePlanes, detections: PlaneRepeatDetection[], rungIndex: number): { planes: BakedTexturePlanes; degradations: TexturePassDegradation[] } {
     const n = atlas.width * atlas.height;
@@ -264,14 +294,7 @@ export function repeatFill(atlas: UvAtlas, base: BakedTexturePlanes, detections:
                 if (atlas.texels.mapIndex[i] !== d.mapIndex || !atlas.texels.covered[i] || atlas.texels.gutter[i]) continue;
                 if (base.albedo[i * 4 + 3]) continue; // already covered by a real or better rung
                 considered++;
-                const donors: number[] = [];
-                const xRange = colPitch ? Array.from({ length: 2 * DONOR_SEARCH_PERIODS + 1 }, (_, k) => x + (k - DONOR_SEARCH_PERIODS) * colPitch.pitchPx).filter(v => v >= x0 && v <= x1) : [x];
-                const yRange = rowPitch ? Array.from({ length: 2 * DONOR_SEARCH_PERIODS + 1 }, (_, k) => y + (k - DONOR_SEARCH_PERIODS) * rowPitch.pitchPx).filter(v => v >= y0 && v <= y1) : [y];
-                for (const yy of yRange) for (const xx of xRange) {
-                    if (xx === x && yy === y) continue;
-                    const j = yy * atlas.width + xx;
-                    if (atlas.texels.mapIndex[j] === d.mapIndex && isReal(atlas, base, j)) donors.push(j);
-                }
+                const donors = findDonors(atlas, base, d, x, y, rowPitch, colPitch);
                 if (donors.length < MIN_DONORS) continue;
                 const rgbLinear = trimmedLinearRgb(base.albedo, donors);
                 const srgb = rgbLinear.map(v => Math.round(linearToSrgb255(v)));

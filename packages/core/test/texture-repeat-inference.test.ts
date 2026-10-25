@@ -10,7 +10,8 @@ import {
 } from '../src/common/spatial/texture-pass-contracts';
 import { SRGB8_TO_LINEAR, linearToSrgb255 } from '../src/common/spatial/photogrammetric-delight';
 import {
-    detectPlaneRepeats, repeatFill, K_SIGMA, MIN_REPEATS, NCC_GATE, MIN_BIN_SAMPLES, MIN_DONORS, MAX_DONOR_RUNG
+    detectPlaneRepeats, repeatFill, K_SIGMA, MIN_REPEATS, NCC_GATE, MIN_BIN_SAMPLES, MIN_DONORS, MAX_DONOR_RUNG,
+    DONOR_SEARCH_PERIODS, MAX_DONOR_SEARCH_PERIODS
 } from '../src/node/3d-engine/staged-location/texture-repeat';
 
 const RUNG_REPEATED = TEXTURE_LADDER_RUNGS.indexOf('repeated same-plane fill');
@@ -124,6 +125,46 @@ describe('texture-repeat.ts: a genuinely periodic, well-sampled plane', () => {
         // the fill must not have treated texel i (rung 3, not <= MAX_DONOR_RUNG) as a donor for its neighbours
         const donorRung = unpackConfidenceTexel(planes.confidence, i).rung;
         expect(donorRung).toBeGreaterThan(MAX_DONOR_RUNG);
+    });
+});
+
+describe('texture-repeat.ts: a plane whose real evidence is unevenly spread (a supertall with coverage dense near the base, sparse toward the crown)', () => {
+    // 1000 rows (100 m at 10 texels/m) x 24 columns, same 1 m vertical pitch; real data only in two dense bands at the
+    // very top and bottom, with an 801-row (80.1 m) gap between them — far wider than the old fixed DONOR_SEARCH_PERIODS
+    // (8 periods = 8 m) but within the new ceiling (MAX_DONOR_SEARCH_PERIODS = 64 periods = 64 m from either edge of
+    // the gap, so a texel up to ~64 m into the gap from the nearest real band is still reachable).
+    const width = 24, height = 1000, pitchRows = 10;
+    const bandL = (row: number) => (Math.floor(row / (pitchRows / 2)) % 2 === 0 ? 40 : 200);
+
+    function buildAtlasWithWideGap(): { atlas: UvAtlas; planes: BakedTexturePlanes } {
+        const atlas = flatAtlas(width, height);
+        const planes = emptyPlanes(atlas);
+        for (let y = 0; y < height; y++) {
+            if (y >= 100 && y < 901) continue; // the gap: rows [100, 900] uncovered
+            const grey = bandL(y);
+            for (let x = 0; x < width; x++) writeReal(planes, y * width + x, grey);
+        }
+        return { atlas, planes };
+    }
+
+    it('reaches across the gap by growing the donor search radius, where the old fixed radius would have failed', () => {
+        const { atlas, planes } = buildAtlasWithWideGap();
+        const detections = detectPlaneRepeats(atlas, planes);
+        expect(detections).toHaveLength(1);
+        const row = detections[0].accepted.find(a => a.axis === 'row');
+        expect(row, `row axis refused: ${JSON.stringify(detections[0].refused)}`).toBeDefined();
+        expect(row!.pitchPx).toBe(pitchRows);
+
+        // the gap's middle, row 500: 400 rows (40 m) from the nearest real row at 99 or 901 — more than
+        // DONOR_SEARCH_PERIODS (80 rows) but less than MAX_DONOR_SEARCH_PERIODS (640 rows)
+        const midGapRow = 500;
+        expect(Math.min(midGapRow - 99, 901 - midGapRow)).toBeGreaterThan(DONOR_SEARCH_PERIODS * pitchRows);
+        expect(Math.min(midGapRow - 99, 901 - midGapRow)).toBeLessThan(MAX_DONOR_SEARCH_PERIODS * pitchRows);
+
+        const { planes: filled } = repeatFill(atlas, planes, detections, RUNG_REPEATED);
+        const i = midGapRow * width;
+        expect(filled.albedo[i * 4 + 3], 'the mid-gap texel was not filled: the donor search did not reach far enough').toBe(255);
+        expect(Math.abs(filled.albedo[i * 4] - bandL(midGapRow))).toBeLessThanOrEqual(2);
     });
 });
 
