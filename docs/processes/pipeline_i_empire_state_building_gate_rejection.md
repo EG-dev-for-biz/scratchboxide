@@ -134,6 +134,14 @@ Implemented a version of §8's recommendation in `registerToFootprint`: height s
 
 Divergence from §8's exact field proposal: kept `RegistrationFit.scale` as the *horizontal* scale (it's what orchestrator.ts's log string actually describes — "how big did we make the footprint"), and `heightRatio` now reports the height fit, which is ~1.0 by construction since height is no longer re-searched. No new field added; this was simpler and all three existing consumers (`pipeline-i.ts`'s log line, and the two test files) read cleanly either way.
 
+## 10. Concurrent work on `main` (2026-10-25, reported by the peer session, not independently verified here)
+
+Three more commits landed on `main` around the same time, in adjacent Pipeline I/massing territory — reported for context, not verified by this doc's own live testing:
+
+* `201a5a93` — `footprint_breach` re-fit: a massing layer could bulge past its locked footprint and get committed "as built" anyway; fixed with a clamp-to-footprint pass in `footprint-lock.ts`. Unrelated to this doc's plan-scale story.
+* `5636b839` — Pipeline I's own texture holes: Trellis bakes roughly 8% of its texture as literal black for surfaces its four input views never saw (measured on a live Haughwout run, 48/100 on the visual check before the fix). Fixed in `pipeline-i.ts` (default path only — `pipeline-i/refine.ts` needs the same wiring but was someone else's uncommitted WIP at the time, left as a follow-up by that session). Live-verified: 244,284 texels filled. Directly relevant to Pipeline I output quality, worth knowing about for anyone picking this doc back up.
+* `64a7ff57` — new tool `location_fit_object`: classifies a `location_residual_audit` cluster as a sweepable member or radial bundle from its measured shape and returns a ready `execute_3d_python_script`. Unrelated to this doc.
+
 **Verified before committing:**
 - Added `packages/core/test/pipeline-i.test.ts`'s "recovers coverage when the model's footprint-to-height proportion is far off" case: a synthetic L-shaped model generated at half its height-implied plan size (the same failure shape as the ESB's 16%-coverage report — correct height, undersized plan).
 - Confirmed the test fails against the pre-fix code (`git stash` round-trip): coverage `0.385`, well under the `0.8` bar.
