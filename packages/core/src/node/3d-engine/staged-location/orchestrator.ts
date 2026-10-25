@@ -31,7 +31,7 @@
 
 import * as crypto from 'crypto';
 import * as fs from 'fs';
-import { footprintConformance, FOOTPRINT_MAX_PROJECTION_M } from './footprint-lock';
+import { clampToFootprint, footprintConformance, FOOTPRINT_MAX_PROJECTION_M } from './footprint-lock';
 import { readTileTriangles } from './tile-texture-transfer';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import * as path from 'path';
@@ -2929,25 +2929,47 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         /** The ownership vote to run after the first isolate commits: what it needs to remesh the same structure again. */
         let voteLater: { tilePath: string; isolatePick?: string; pick?: { pick: StructurePickResult; ground: GroundModel }; request: TileRefineRequest; orthos: { reliefOrthos?: boolean } } | undefined;
         /** The residual audit of one pipeline E native run, into the build notes (and a degradation when it failed or left clusters unsure). */
-        /** The footprint lock's check of a built layer against the footprint its massing stood on: recorded, and a breach degraded. */
-        const checkFootprintLock = (stage: StageId, layerName: string, glb: string, parts: Array<{ loops: Array<Array<[number, number]>>; provenance?: string }>): string => {
+        /** The footprint lock's check of a built layer against the footprint its massing stood on: recorded, and a breach
+         * degraded -- unless `opts.clamp`, where a breach is first re-fit (pulled back onto the footprint, same vertices
+         * pulled in its textured twin) and only still degraded if vertices remain beyond the limit after that. */
+        const checkFootprintLock = (stage: StageId, layerName: string, files: { clayGlb: string; texturedGlb?: string }, parts: Array<{ loops: Array<Array<[number, number]>>; provenance?: string }>, opts: { clamp?: boolean } = {}): { say: string; files: { clayGlb: string; texturedGlb?: string } } => {
             const loops = parts.flatMap(p => p.loops);
-            if (!loops.length) return 'footprint lock: no footprint to check against';
-            const c = footprintConformance(readTileTriangles(fs.readFileSync(glb)).positions, loops);
+            if (!loops.length) return { say: 'footprint lock: no footprint to check against', files };
+            let c = footprintConformance(readTileTriangles(fs.readFileSync(files.clayGlb)).positions, loops);
             // a footprint that is the scan's own plan (no Google footprint: scanDerivedFootprint, a simplified outline of the
             // structure) is coarser than the walls built on it: the Flatiron's rounded prow stood 5 m past its 11-corner plan.
             // Its breach is recorded, not degraded (pipeline H; the lock proper needs a footprint that is not the scan itself)
             const scanPlan = parts.length > 0 && parts.every(p => p.provenance === SCAN_FOOTPRINT_TOKEN);
+            let outFiles = files, fitNote = '';
+            if (!c.ok && !scanPlan && opts.clamp) {
+                const clayBytes = fs.readFileSync(files.clayGlb);
+                const texBytes = files.texturedGlb ? fs.readFileSync(files.texturedGlb) : undefined;
+                const clamped = clampToFootprint(clayBytes, texBytes ? [texBytes] : [], loops);
+                if (clamped.pulled > 0) {
+                    const fitDir = path.join(path.dirname(files.clayGlb), 'footprint_fit');
+                    fs.mkdirSync(fitDir, { recursive: true });
+                    const clayPath = path.join(fitDir, path.basename(files.clayGlb));
+                    fs.writeFileSync(clayPath, clamped.clay);
+                    outFiles = { clayGlb: clayPath };
+                    if (files.texturedGlb && clamped.others[0]) {
+                        const texPath = path.join(fitDir, path.basename(files.texturedGlb));
+                        fs.writeFileSync(texPath, clamped.others[0]);
+                        outFiles.texturedGlb = texPath;
+                    } else if (files.texturedGlb) outFiles.texturedGlb = files.texturedGlb;
+                    c = footprintConformance(readTileTriangles(fs.readFileSync(clayPath)).positions, loops);
+                    fitNote = ` ${clamped.pulled} vertices pulled back onto it (were up to ${clamped.maxOutBeforeM} m out)`;
+                }
+            }
             // a run note's name is lowercase letters, '_' and '-' only (stage-cache.ts): "pipeline G layer" once became
             // "footprint_lock_pipeline_G_layer", the write threw, and a finished G build was lost to it (run 92f97642)
             cache.writeRunNote(runId, `footprint_lock_${layerName.toLowerCase().replace(/[^a-z]+/g, '_').replace(/^_+|_+$/g, '')}`, c);
-            const say = `footprint lock (${layerName}): ${Math.round(c.outsideShare * 1000) / 10}% of the vertices stand outside the footprint, at most ${c.maxOutsideM} m (projections may reach ${FOOTPRINT_MAX_PROJECTION_M} m)${scanPlan ? '; the footprint is the scan\'s own simplified plan, so a breach is recorded, not degraded' : ''}`;
+            const say = `footprint lock (${layerName}): ${Math.round(c.outsideShare * 1000) / 10}% of the vertices stand outside the footprint, at most ${c.maxOutsideM} m (projections may reach ${FOOTPRINT_MAX_PROJECTION_M} m)${fitNote}${scanPlan ? '; the footprint is the scan\'s own simplified plan, so a breach is recorded, not degraded' : ''}`;
             run.note(PROVENANCE.photoInferred, say);
             if (!c.ok && !scanPlan) run.degrade(record(stage, 'footprint_breach', {
-                part: { description: `the ${layerName}` }, intended: `every wall on the footprint, projections within ${FOOTPRINT_MAX_PROJECTION_M} m of it`, fellTo: 'the layer as built, its breach recorded',
+                part: { description: `the ${layerName}` }, intended: `every wall on the footprint, projections within ${FOOTPRINT_MAX_PROJECTION_M} m of it`, fellTo: fitNote ? 'the layer pulled back onto the footprint, still short of it' : 'the layer as built, its breach recorded',
                 provenanceAfter: PROVENANCE.photoInferred, reason: `${c.beyondLimit} vertices stand more than ${FOOTPRINT_MAX_PROJECTION_M} m outside the footprint (at most ${c.maxOutsideM} m)`, transient: false, runId, now: now(), suffix: layerName.replace(/\W+/g, '_')
             }));
-            return say;
+            return { say, files: outFiles };
         };
         const recordResidualAudit = (stage: StageId, massingRun: MassingRun, layerName: string): string => {
             const a = massingRun.audit;
@@ -3061,7 +3083,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 if (!c.ok || !r.run || !r.files) return fallBack('pipeline_e_fallback', `${c.reason ?? 'the massing could not be built'} (plan IoU ${c.iou}, roof ${c.heightErrMedianM} m off the scan, median; ${c.heightErrP90M} m at the 90th percentile)`);
                 run.keys.remesh = key;
                 run.cacheStatus.remesh = 'miss';
-                checkFootprintLock('remesh', 'massing layer', r.files.clayGlb, r.massing.parts);
+                const lock = checkFootprintLock('remesh', 'massing layer', { clayGlb: r.files.clayGlb, texturedGlb: r.files.texturedGlb }, r.massing.parts, { clamp: true });
+                r.files.clayGlb = lock.files.clayGlb;
+                if (lock.files.texturedGlb) r.files.texturedGlb = lock.files.texturedGlb;
                 const key8 = key.slice(0, 8);
                 const pubClay = cache.publishFile(r.files.clayGlb, `${base}_massing_${key8}.glb`);
                 const pubTex = cache.publishFile(r.files.texturedGlb, `${base}_massing_${key8}_tex.glb`);
@@ -3608,7 +3632,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     });
                     cache.writeRunNote(runId, procedural === 'h' ? 'pipeline_h' : 'pipeline_g', { steps: out.steps, timingsMs: out.timingsMs, plates: out.plates, stations: out.stations, names: out.names, ...(out.brief ? { brief: out.brief } : {}), ...(procedural === 'h' ? { ledger: out.ledger, budgetNotes: out.budgetNotes } : {}) });
                     if (out.brief && 'path' in out.brief) BUILDING_BRIEFS.set(run, out.brief);
-                    checkFootprintLock('grammar', 'pipeline G layer', out.files.clayGlb, r.massing.parts);
+                    checkFootprintLock('grammar', 'pipeline G layer', { clayGlb: out.files.clayGlb, texturedGlb: out.files.texturedGlb }, r.massing.parts);
                     const key8 = e.key.slice(0, 8);
                     const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_pipelineg.glb`);
                     const pubTex = cache.publishFile(out.files.texturedGlb, `${base}_massing_${key8}_pipelineg_tex.glb`);

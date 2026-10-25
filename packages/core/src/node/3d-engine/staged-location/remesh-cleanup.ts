@@ -189,8 +189,10 @@ export function cleanupEdits(mesh: { positions: Float64Array; triangles: Uint32A
     };
 }
 
-/** Applies the edits to a GLB of the same remesh (positions and normals rewritten in place, removed triangles degenerate). */
-export function applyRemeshEdits(bytes: Uint8Array, edits: RemeshEdits, q = REMESH_CLEANUP_PARAMS.weldM): { glb: Buffer; moved: number; degenerated: number } {
+/** Applies the edits to a GLB of the same remesh (positions and normals rewritten in place, removed triangles degenerate).
+ * `extras` overrides the default `asset.extras.sbRemeshCleanup` stamp -- another pass (e.g. footprint-lock's clamp) that
+ * reuses this same parse/patch/reserialize path stamps its own key instead, so the extras honestly name what ran. */
+export function applyRemeshEdits(bytes: Uint8Array, edits: RemeshEdits, q = REMESH_CLEANUP_PARAMS.weldM, extras?: { key: string; value: unknown }): { glb: Buffer; moved: number; degenerated: number } {
     const glb = parseGlbBytes(bytes);
     const bin = new Uint8Array(glb.bin);
     const dv = new DataView(bin.buffer, bin.byteOffset, bin.byteLength);
@@ -244,7 +246,9 @@ export function applyRemeshEdits(bytes: Uint8Array, edits: RemeshEdits, q = REME
         const acc = glb.json.accessors[p.pos];
         if (acc.min && acc.max) for (let k = 0; k < 3; k++) { let lo = Infinity, hi = -Infinity; for (let v = 0; v < n; v++) { lo = Math.min(lo, NP[v * 3 + k]); hi = Math.max(hi, NP[v * 3 + k]); } acc.min[k] = lo; acc.max[k] = hi; }
     }
-    glb.json.asset = { ...(glb.json.asset ?? {}), extras: { ...(glb.json.asset?.extras ?? {}), sbRemeshCleanup: { version: REMESH_CLEANUP_VERSION, stats: edits.stats } } };
+    const stampKey = extras?.key ?? 'sbRemeshCleanup';
+    const stampValue = extras?.value ?? { version: REMESH_CLEANUP_VERSION, stats: edits.stats };
+    glb.json.asset = { ...(glb.json.asset ?? {}), extras: { ...(glb.json.asset?.extras ?? {}), [stampKey]: stampValue } };
     return { glb: assembleGlb(glb.json, bin), moved, degenerated };
 }
 

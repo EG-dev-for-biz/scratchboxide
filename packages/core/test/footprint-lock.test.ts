@@ -10,10 +10,15 @@
 /** The footprint lock: the massing stands on the footprint (Google's, else the tiles' plan), height from Solar first. */
 
 import { describe, expect, it } from 'vitest';
-import { footprintConformance, FOOTPRINT_MAX_PROJECTION_M } from '../src/node/3d-engine/staged-location/footprint-lock';
+import { clampToFootprint, footprintClampEdits, footprintConformance, FOOTPRINT_MAX_PROJECTION_M } from '../src/node/3d-engine/staged-location/footprint-lock';
 import { buildMassing } from '../src/node/3d-engine/staged-location/pipeline-e/massing-spec';
 import { MASSING_PARAMS } from '../src/node/3d-engine/staged-location/pipeline-e/pipeline-e';
 import { G_BUILD_PARAMS } from '../src/node/3d-engine/staged-location/pipeline-g/pipeline-g';
+import { readGlbTriangles } from './helpers/clay-glb-render';
+import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 const square: Array<[number, number]> = [[0, 0], [20, 0], [20, -10], [0, -10]];
 const cells = new Set<string>();
@@ -71,5 +76,45 @@ describe('the footprint lock', () => {
         const c = buildMassing({ buildings: [building], groundY: 0, scanTop: () => 14, cells, solar: [flat, steep], preferExtrusion: true });
         expect(c.parts[0].planes.length).toBe(0);
         expect(c.solar.pitchedRejected).toBe(1);
+    });
+
+    it('a breach is re-fit, not just recorded: vertices past the limit are pulled to just inside it (a margin for float32 rounding), those within it untouched', () => {
+        // on the footprint: untouched. a 0.8 m cornice: within the limit, untouched. 3 m past the z = 0 wall: pulled back in.
+        const onWall = { positions: Float64Array.from([10, 0, 0]), keys: ['on'] };
+        expect(footprintClampEdits(onWall, [square]).shift.size).toBe(0);
+        const cornice = { positions: Float64Array.from([10, 12, 0.8]), keys: ['cornice'] };
+        expect(footprintClampEdits(cornice, [square]).shift.size).toBe(0);
+        const breach = { positions: Float64Array.from([10, 0, 3]), keys: ['breach'] };
+        const edits = footprintClampEdits(breach, [square]);
+        expect(edits.pulled).toBe(1);
+        expect(edits.maxOutBeforeM).toBe(3);
+        const [sx, sy, sz] = edits.shift.get('breach')!;
+        const pulledZ = 3 + sz;
+        // strictly inside the limit (not exactly on it, so float32 storage can't round it back over) and y untouched
+        expect(pulledZ).toBeLessThan(FOOTPRINT_MAX_PROJECTION_M);
+        expect(pulledZ).toBeGreaterThan(FOOTPRINT_MAX_PROJECTION_M - 0.02);
+        expect([10 + sx, 0 + sy]).toEqual([10, 0]);
+    });
+
+    it('clampToFootprint re-fits a breached GLB (and its textured twin) in place, so the committed layer is no longer in breach', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'footprint-clamp-'));
+        // one triangle entirely on the footprint, one triangle with a vertex bulging 3 m past the z = 0 wall (like the
+        // Haughwout remesh's proud scan-residual cluster)
+        const positions = [0, 0, 0, 20, 0, 0, 20, 8, 0, 8, 0, 0, 12, 0, 0, 10, 4, 3];
+        const indices = [0, 1, 2, 3, 4, 5];
+        const clay = (() => { writeStagedGlbFile(path.join(dir, 'clay.glb'), [{ name: 'scan', positions: Float32Array.from(positions), indices: Uint32Array.from(indices) }], {}); return fs.readFileSync(path.join(dir, 'clay.glb')); })();
+        const twin = (() => { writeStagedGlbFile(path.join(dir, 'twin.glb'), [{ name: 'scan', positions: Float32Array.from(positions), indices: Uint32Array.from(indices) }], {}); return fs.readFileSync(path.join(dir, 'twin.glb')); })();
+        const before = footprintConformance(readGlbTriangles(clay).positions, [square]);
+        expect(before.ok).toBe(false);
+        const clamped = clampToFootprint(clay, [twin], [square]);
+        expect(clamped.pulled).toBe(1);
+        expect(clamped.maxOutBeforeM).toBe(3);
+        const after = footprintConformance(readGlbTriangles(clamped.clay).positions, [square]);
+        expect(after.ok).toBe(true);
+        // the textured twin got the exact same vertex edit
+        const twinAfter = footprintConformance(readGlbTriangles(clamped.others[0]).positions, [square]);
+        expect(twinAfter.ok).toBe(true);
+        // a mesh with nothing to pull is returned unchanged (not re-serialized)
+        expect(clampToFootprint(clamped.clay, [], [square]).pulled).toBe(0);
     });
 });
