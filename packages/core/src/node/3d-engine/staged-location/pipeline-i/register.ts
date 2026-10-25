@@ -9,11 +9,16 @@
 
 /**
  * Pipeline I: a generated model (arbitrary scale, orientation and handedness) fitted onto the scan of the structure it
- * was made from. Its height is scaled to the scan's height, then the plan is searched over mirror and yaw (2 deg), then
- * refined over yaw, uniform scale (within 10 % of the height's) and a plan shift, scoring the 1 m plan occupancy of the model's raised part against the
- * scan's footprint cells (IoU). The fit is reported, never enforced: how much of the model's plan falls outside the
- * footprint (overflow) and how much of the footprint it covers travel with the layer (user decision 2026-10-24: fit and
- * report, nothing clipped). The fit is applied as one root-node matrix, so the model's mesh and textures are untouched.
+ * was made from. Its height is scaled to the scan's height and kept there: height is a reliable measurement, so it is
+ * never re-searched. The plan is searched over mirror and yaw (2 deg) at that height's implied scale, then, per seed,
+ * over a wide horizontal-scale range before a local refinement (yaw, horizontal scale within 15 % of the coarse pick,
+ * plan shift) scores the 1 m plan occupancy of the model's raised part against the scan's footprint cells (IoU). The
+ * wide coarse scale search exists because a generated model's footprint-to-height proportion is not guaranteed to match
+ * the real building's (Empire State Building, 2026-10-25: a +-10 % search around the height-derived scale alone left a
+ * Trellis model whose footprint was far slimmer than the real stepped base stuck at 16 % footprint coverage). The fit is
+ * reported, never enforced: how much of the model's plan falls outside the footprint (overflow) and how much of the
+ * footprint it covers travel with the layer (user decision 2026-10-24: fit and report, nothing clipped). The fit is
+ * applied as one root-node matrix, so the model's mesh and textures are untouched.
  */
 
 import { assembleGlb, parseGlbBytes } from '../glb-bytes';
@@ -111,23 +116,35 @@ export function registerToFootprint(positions: ArrayLike<number>, target: Footpr
         if (seeds.filter(x => x.m === m).length >= 3) break;
         if (seeds.every(x => x.m !== m || Math.abs(((c.yaw - x.yaw + 540) % 360) - 180) >= 10)) seeds.push(c);
     }
-    let best = { m: 1, yaw: 0, s: s0, sx: 0, sz: 0, iou: -1 };
-    for (const seed of seeds) for (let yaw = seed.yaw - 2; yaw <= seed.yaw + 2; yaw += 0.5) for (let f = 0.9; f <= 1.1001; f += 0.025) {
-        const { cells } = place(seed.m, yaw, s0 * f);
-        for (let sx = -3; sx <= 3; sx++) for (let sz = -3; sz <= 3; sz++) {
-            const { inter, union } = score(cells, target.cells, sx, sz);
-            if (inter / union > best.iou) best = { m: seed.m, yaw, s: s0 * f, sx, sz, iou: inter / union };
+    // horizontal scale is searched independently of the height-derived s0: a generated model's footprint-to-height
+    // proportion need not match the real building's, so each seed first gets a wide coarse scale pass before the
+    // narrow local refinement around whatever that pass finds
+    const SCALE_FACTORS = [0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.4, 1.6, 1.8, 2, 2.5, 3];
+    let best = { m: 1, yaw: 0, sh: s0, sx: 0, sz: 0, iou: -1 };
+    for (const seed of seeds) {
+        let coarse2 = { f: 1, iou: -1 };
+        for (const f of SCALE_FACTORS) {
+            const { inter, union } = score(place(seed.m, seed.yaw, s0 * f).cells, target.cells);
+            if (inter / union > coarse2.iou) coarse2 = { f, iou: inter / union };
+        }
+        const fStep = coarse2.f * 0.025;
+        for (let yaw = seed.yaw - 2; yaw <= seed.yaw + 2; yaw += 0.5) for (let f = coarse2.f * 0.85; f <= coarse2.f * 1.1501; f += fStep) {
+            const { cells } = place(seed.m, yaw, s0 * f);
+            for (let sx = -3; sx <= 3; sx++) for (let sz = -3; sz <= 3; sz++) {
+                const { inter, union } = score(cells, target.cells, sx, sz);
+                if (inter / union > best.iou) best = { m: seed.m, yaw, sh: s0 * f, sx, sz, iou: inter / union };
+            }
         }
     }
-    const fin = place(best.m, best.yaw, best.s);
+    const fin = place(best.m, best.yaw, best.sh);
     const { inter } = score(fin.cells, target.cells, best.sx, best.sz);
-    const a = best.yaw * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), s = best.s, m = best.m;
-    // world = R(yaw) * diag(m s, s, s) * p + t
-    const tx = fin.tx + best.sx, tz = fin.tz + best.sz, ty = target.groundY - s * minY;
-    const matrix = [c * m * s, 0, sn * m * s, 0, 0, s, 0, 0, -sn * s, 0, c * s, 0, tx, ty, tz, 1];
+    const a = best.yaw * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), sh = best.sh, sy = s0, m = best.m;
+    // world = R(yaw) * diag(m sh, sy, sh) * p + t -- horizontal scale and the height-anchored vertical scale are independent
+    const tx = fin.tx + best.sx, tz = fin.tz + best.sz, ty = target.groundY - sy * minY;
+    const matrix = [c * m * sh, 0, sn * m * sh, 0, 0, sy, 0, 0, -sn * sh, 0, c * sh, 0, tx, ty, tz, 1];
     return {
-        matrix, yawDeg: ((best.yaw % 360) + 360) % 360, mirrored: m < 0, scale: s,
-        planIoU: best.iou, overflowShare: 1 - inter / fin.cells.size, coverage: inter / target.cells.size, heightRatio: (s * h) / target.heightM
+        matrix, yawDeg: ((best.yaw % 360) + 360) % 360, mirrored: m < 0, scale: sh,
+        planIoU: best.iou, overflowShare: 1 - inter / fin.cells.size, coverage: inter / target.cells.size, heightRatio: (sy * h) / target.heightM
     };
 }
 

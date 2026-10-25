@@ -83,12 +83,13 @@ function generatedL(yawDeg: number, mirror: boolean): { pos: number[]; idx: numb
     return { pos, idx: local.idx };
 }
 
-describe('pipeline I: the default procedural pipeline when its services are wired', () => {
-    it('defaults to I only with its services; G, H and I can be asked for', () => {
-        expect(stagedProcedural({ procedural: true }, {}, true)).toBe('i');
+describe('pipeline J: the default procedural pipeline when its services are wired', () => {
+    it('defaults to J only with its services; G, H, I and J can be asked for', () => {
+        expect(stagedProcedural({ procedural: true }, {}, true)).toBe('j');
         expect(stagedProcedural({ procedural: true }, {}, false)).toBe('h');
         expect(stagedProcedural({ procedural: true, pipeline: 'g' }, {}, true)).toBe('g');
         expect(stagedProcedural({ procedural: true, pipeline: 'h' }, {}, true)).toBe('h');
+        expect(stagedProcedural({ procedural: true, pipeline: 'i' }, {}, true)).toBe('i');
         expect(stagedProcedural({ procedural: true, pipeline: 'i' }, {}, false)).toBe('i');
         expect(stagedProcedural({ procedural: true }, { SCRATCHBOX_STAGED_PROCEDURAL: 'h' }, true)).toBe('h');
     });
@@ -133,6 +134,23 @@ describe('pipeline I: fitting a generated model onto the scan', () => {
         const w = nodeWorldMatrices(b.json)[0];
         const p = transformPoint(w, g.pos[0], g.pos[1], g.pos[2]), m = fit.matrix;
         expect(p[0]).toBeCloseTo(m[0] * g.pos[0] + m[4] * g.pos[1] + m[8] * g.pos[2] + m[12], 4);
+    });
+
+    it('recovers coverage when the model\'s footprint-to-height proportion is far off (Empire State Building, 2026-10-25: a +-10% scale search around the height-derived scale alone left a slimmer-than-real Trellis model stuck at 16% footprint coverage)', () => {
+        // the same L, but generated at half the plan size its height implies: a +-10% scale search around the
+        // height-derived scale could never reach it, since the true horizontal scale is ~2x that guess
+        const yawDeg = 37, k = 1 / 25;
+        const local = boxesSurface([...L_BOXES.map(b => ({ min: [b.min[0] - 20, 0, b.min[2] - 6] as V3, max: [b.max[0] - 20, 24, b.max[2] - 6] as V3 })), { min: [-14, -1, -15], max: [14, 0, 15] }]);
+        const a = yawDeg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+        const pos: number[] = [];
+        for (let i = 0; i < local.pos.length; i += 3) {
+            const x = local.pos[i] * 0.5, y = local.pos[i + 1], z = local.pos[i + 2] * 0.5; // plan halved, height untouched
+            pos.push(k * (c * x + s * z), k * y, k * (-s * x + c * z));
+        }
+        const fit = registerToFootprint(pos, { cells: L_CELLS, groundY: 0, heightM: 24 });
+        expect(fit.coverage).toBeGreaterThan(0.8);
+        expect(fit.planIoU).toBeGreaterThan(0.8);
+        expect(fit.heightRatio).toBeCloseTo(1, 1);
     });
 });
 
