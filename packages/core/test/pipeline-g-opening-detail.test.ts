@@ -172,4 +172,20 @@ describe('openings across a split wall', () => {
         expect(Math.max(...ys)).toBeCloseTo(6.12, 3);
         expect(ys.every(y => (y > 2.999 && y < 3.121) || (y > 5.999 && y < 6.121))).toBe(true);
     });
+
+    it('clipOpenings drops a profile the raised bottom hides but for a sliver, and clamps one it only cuts into', async () => {
+        const dir = tmp();
+        const m: Pick<Massing, 'parts' | 'meshes'> = { parts: [
+            { id: 'a', baseY: 0, topY: 10, loops: [[[0, 0], [10, 0], [10, -6], [0, -6]]], planes: [], heightSource: 'vector', heights: {} },
+            { id: 'b', baseY: 0, topY: 4, loops: [[[4, 2], [6, 2], [6, 0], [4, 0]]], planes: [], heightSource: 'vector', heights: {} }], meshes: [] };
+        // piece w:a:0:0:1 (x 4-6) stands above the low part: its bottom is 4 m
+        const band = (id: string, t0: number, t1: number) => ({ id, confidence: 0.5, provenance: 'photo-inferred', face: 'w:a:0:0:1', axis: 0 as const,
+            profile: [[0, t0], [0.2, t0], [0.2, t1], [0, t1]] as Array<[number, number]>, placements: [[0.3, 1.7, 0]] as Array<[number, number, number]> });
+        const r = await runMassing(massingSpecText(m, { outDir: dir, params: { ...PARAMS, clipOpenings: 1 }, faceSweeps: [band('hidden', 2.2, 4.2), band('half', 3, 5)] }), dir);
+        expect(r.report.rejectedSweeps).toEqual(['hidden']);      // 0.2 m of 2 m left: a sliver, dropped
+        const ys = r.nodes.filter(n => n.name.startsWith('facesweep:half')).flatMap(n => Array.from(n.positions).filter((_, i) => i % 3 === 1));
+        expect(Math.min(...ys)).toBeCloseTo(4, 3);                 // clamped to the raised bottom
+        expect(Math.max(...ys)).toBeCloseTo(5, 3);
+    });
 });
+
