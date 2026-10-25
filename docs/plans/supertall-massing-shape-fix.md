@@ -65,6 +65,30 @@ real shape only exists in a photo — keep it scoped and ready, but sequence it 
 4. **Either way:** update §10 of the ESB doc with whichever path was taken and its result, keeping the
    investigation trail in one place rather than forking it across docs.
 
+## 3a. Step 1 already answered (2026-10-25, same session): yes, and it's already fused
+
+Checked the `massing-choice` worktree directly (read-only) rather than waiting on a reply, since the data was
+already sitting there. It already has a cached scan-led massing run for the Empire State Building
+(address 350 Fifth Avenue — same building; cache key `207e7401b51a60d7343ef3ff_scanmassing`): **12 stacked
+tiers, IoU 0.92 against the scan, height error median 2.01 m / p90 34.7 m, `ok: true`.** That is the real,
+measured wedding-cake shape — plotted directly from the tier polygons in
+`esb_stacked_massing.svg` (sent to the user), it shows the actual stepped setbacks, not a box.
+
+Better still: the fusion this plan's §2 recommends has **already been built and is sitting in the same
+worktree**, not hypothetical — `empire_state_building_350_fifth_avenue_n_iso_massing_207e7401_pipelineg_tex.glb`
+(11.4 MB, built 2026-10-24 00:27, with a full evidence trail in `public/briefs/207e7401/`: 30 survey stations,
+per-face colour/relief maps, roof textures). Loaded and screenshotted it directly (a standalone three.js
+viewer, `python -m http.server` on the worktree's `public/models/`, since this worktree isn't wired to any
+running app instance) — **it is recognizably, correctly the Empire State Building**: wedding-cake setbacks at
+the right heights, correct tower taper, the mast on top, textured facades from Pipeline G's survey/grammar
+stage. Bounding box 143 x 406 x 117 m, consistent with the massing tiers' own 406 m top.
+
+This is not Pipeline I/J's Trellis-generated geometry at all — it's `massing-choice`'s scan-led massing (shape)
+run through Pipeline G's existing facade-grammar/texture stage (detail), exactly the role-split this plan's
+§2 recommended, already working on the hardest benchmark case. **Conclusion: direction C is validated for the
+ESB specifically, by evidence that already existed before this plan was written — it mostly needed finding,
+not building.** What's left is coordination (merging `massing-choice` to `main`, confirmed owner), not research.
+
 ## 4. Decisions needed before implementation
 
 - Who owns `massing-choice`'s merge to `main` — coordinate with that session rather than taking it over.
