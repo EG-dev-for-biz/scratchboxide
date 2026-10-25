@@ -8,17 +8,22 @@
  ********************************************************************************/
 
 /**
- * Pipeline I (the 3D Building default since 2026-10-24, user decision): the isolated structure's scan, rendered from its
- * tile photos at four planned stations (sheet-stations.ts), made into one building-survey character sheet (one 4K Nano
- * Banana 2 image, every panel checked against the scan: building-character-sheet.ts), its four panels sent together to
- * its `ModelClient` (input.model: Trellis multi by default, fal-trellis.ts; or Meshy 7.1 multi, fal-meshy.ts, when the
- * caller asks for it) once per seed (TRELLIS_SEEDS, in parallel), every model fitted onto the scan's footprint and height
- * (register.ts) and scored against the sheet (seed-score.ts), and the best one's textures colour-matched to the
- * structure's swatch measured from the views (swatch.ts). The model is generated content: it is labelled so, its fit to
- * the scan is reported, and nothing of it is clipped (fit and report). Any failure throws, so the stage degrades to the
- * massing with the real reason. (User decisions 2026-10-24: Trellis like the Puck test "D", best of six seeds by
- * silhouette and plan fit, then the swatch colour match, is the default; Meshy is kept as a selectable alternative
- * generator over the same character sheet, not a second pipeline.)
+ * Pipeline I/J: the isolated structure's scan, rendered from its tile photos at four planned stations
+ * (sheet-stations.ts), made into one building-survey character sheet (one 4K Nano Banana 2 image, every panel checked
+ * against the scan: building-character-sheet.ts), its four panels sent together to its `ModelClient` (input.model:
+ * Meshy 7.1 multi by default, fal-meshy.ts; or Trellis multi, fal-trellis.ts, when the caller asks for it) once per
+ * seed, every model fitted onto the scan's footprint and height (register.ts) and scored against the sheet
+ * (seed-score.ts), and the best one's textures colour-matched to the structure's swatch measured from the views
+ * (swatch.ts). The model is generated content: it is labelled so, its fit to the scan is reported, and nothing of it
+ * is clipped (fit and report). Any failure throws, so the stage degrades to the massing with the real reason.
+ *
+ * Pipeline J (Meshy, the 3D Building default since 2026-10-25, user decision; `input.seeds`/`input.skipColourMatch`
+ * trimmed by the orchestrator): Meshy's own output is already texture-complete, so it runs with one seed instead of
+ * six (no best-of-N selection) and skips the swatch colour match that was tuned for Trellis's colour drift.
+ *
+ * Pipeline I (Trellis like the Puck test "D", user decision 2026-10-24; the 3D Building default from 2026-10-24 until
+ * pipeline J superseded it on 2026-10-25): best of six seeds by silhouette and plan fit, then the swatch colour match.
+ * Kept selectable as an alternative generator over the same character sheet, not a second pipeline.
  */
 
 import * as fs from 'fs';
@@ -44,6 +49,17 @@ export const MODEL_VIEW_PX = 1024;
 export const TRELLIS_SEEDS = [7, 11, 23, 41, 59, 73];
 /** A sheet may go on to the model with at most this many panels failing their checks (the failure is reported). */
 export const MAX_FAILED_PANELS = 1;
+/**
+ * Share of the scan's footprint the fitted model must cover before it is allowed to supersede (hide) the measured
+ * remeshed scan in the viewport. Interim safeguard until a real photo-match judge exists (the natural replacement,
+ * comparing both against real photos the way pipeline E relief's does) -- until then this is the only thing stopping
+ * a poorly-fit generated model from silently hiding a much better measured layer. Found on the Empire State Building
+ * (2026-10-25): even after register.ts's scale-search fix, a correctly-proportioned-everywhere-else Trellis model
+ * covered only 19% of the real footprint (its mesh was too simple to carry the setbacks) and still unconditionally
+ * superseded the textured remesh for display. Below this bar the grammar stage degrades instead of committing, the
+ * same way a real pipeline-i failure does.
+ */
+export const MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE = 0.5;
 
 export interface PipelineIStep { step: string; proposed: number; accepted: number; rejected: number; notes: string[]; ms: number }
 
@@ -59,6 +75,8 @@ export interface PipelineIInput {
     model: ModelClient;
     /** Seeds to run (default TRELLIS_SEEDS). */
     seeds?: number[];
+    /** Skip the Trellis-tuned CIELAB colour match to the swatch (pipeline J: Meshy's own texture colour is kept). */
+    skipColourMatch?: boolean;
     /** Time left for the whole pipeline; the model gets what the sheet leaves. */
     budgetMs: number;
     /** Width of one sheet panel (default 1920, the station renders' width). */
@@ -185,14 +203,15 @@ export async function runPipelineI(input: PipelineIInput): Promise<PipelineIOutc
         notes: [`${input.model.model}; kept seed ${best.seed} (score ${best.score.score.toFixed(3)}: silhouette ${best.score.meanSilhouetteIoU.toFixed(3)} against the sheet, plan IoU ${best.score.planIoU.toFixed(3)})`,
             ...candidates.map(c => (c.ok ? `seed ${c.seed}: ${c.score.score.toFixed(3)}` : `seed ${c.seed} failed: ${c.error}`))] });
 
-    // 4. the kept model's textures colour-matched to the structure's swatch, then placed on the scan
+    // 4. the kept model's textures colour-matched to the structure's swatch (skippable: pipeline J keeps Meshy's own colour), then placed on the scan
     t = now();
     const swatch = measureSwatch(viewPngs);
-    const matched = colourMatchGlb(best.result.glb, swatch);
+    const matched = input.skipColourMatch ? { glb: best.result.glb, before: [] as Swatch[] } : colourMatchGlb(best.result.glb, swatch);
     timingsMs.fit = now() - t;
     const fit = best.fit;
     steps.push({ step: 'colour and fit', proposed: 1, accepted: 1, rejected: 0, ms: timingsMs.fit,
-        notes: [`textures moved onto the swatch (Lab ${swatch.mean.map(x => x.toFixed(1)).join(' / ')}) from ${matched.before.map(b => b.mean.map(x => x.toFixed(1)).join(' / ')).join(', ') || 'no texture'}`,
+        notes: [input.skipColourMatch ? 'colour match skipped; the model keeps its own generated texture colour' :
+            `textures moved onto the swatch (Lab ${swatch.mean.map(x => x.toFixed(1)).join(' / ')}) from ${matched.before.map(b => b.mean.map(x => x.toFixed(1)).join(' / ')).join(', ') || 'no texture'}`,
             `plan IoU ${fit.planIoU.toFixed(2)} with the scan footprint; ${(fit.overflowShare * 100).toFixed(0)}% of the model's plan outside it (reported, not clipped); covers ${(fit.coverage * 100).toFixed(0)}% of the footprint; yaw ${fit.yawDeg.toFixed(1)} deg${fit.mirrored ? ', mirrored' : ''}, scale ${fit.scale.toFixed(2)}`] });
 
     // 5. the model's own texture holes filled (surfaces its four input views never saw, baked flat black by the model

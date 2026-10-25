@@ -180,7 +180,7 @@ import { fetchFootprints, type FootprintSource } from './facade-footprints';
 import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, SCAN_FOOTPRINT_TOKEN, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
 import { PIPELINE_G_VERSION, runPipelineG, stagedPipelineG } from './pipeline-g/pipeline-g';
 import { H_BUDGET_MARGIN_MS, H_POLICY, PIPELINE_H_VERSION, stagedProcedural } from './pipeline-h/pipeline-h';
-import { PIPELINE_I_VERSION, TRELLIS_SEEDS, runPipelineI } from './pipeline-i/pipeline-i';
+import { MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE, PIPELINE_I_VERSION, TRELLIS_SEEDS, runPipelineI } from './pipeline-i/pipeline-i';
 import { PROJECT_MAX_RELIEF_M, pipelineIRefineEnabled, refinePipelineI, type RefineOutcome } from './pipeline-i/refine';
 import { captureBuildingTrainingInBackground, sweepPendingBuildingTraining, type BuildingTrainingCaptureInput } from '../../cloud-store/building-training-capture';
 import { captureTrainingPairsInBackground } from '../../cloud-store/training-pair-capture';
@@ -197,6 +197,7 @@ import { runVersionF3, versionFRound } from './version-f/f3';
 import { gateDecision, photoMatchGate, pipelineERelief, runReliefStage, GENERATED_LABEL, MEASURED_AVERAGED_LABEL, RELIEF_GATE_JUDGE, RELIEF_PARAMS, RELIEF_VERSION, type PhotoGateResult, type ReliefOutcome } from './pipeline-e/relief';
 import { crownsFromStrip } from './pipeline-e/occluders';
 import { enhanceGuards, enhanceModels, genAiPlateClient, stagedEnhance, ENHANCE_STREET_VIEWS } from './pipeline-e/enhance';
+import { visionFacadeCounter } from './pipeline-e/plate-identity';
 import { stagedShapeProgram } from './pipeline-e/shape-program';
 import { runShapeStage, SHAPE_STAGE_VERSION } from './pipeline-e/shape-stage';
 import { projectionViewsFromEvidence } from './texture-pass';
@@ -401,10 +402,11 @@ export interface StagedLocationRequest {
      */
     procedural?: boolean;
     /**
-     * Which procedural pipeline: 'i' (pipeline-i/: a character sheet of the scan made into a model by Trellis on Fal.ai and
-     * fitted to the scan; the default when the deps provide its services), 'h' (pipeline-h/: the scan leads, the build
+     * Which procedural pipeline: 'j' (pipeline-i/: a character sheet of the scan made into a model by Meshy on Fal.ai,
+     * one seed, and fitted to the scan; the default when the deps provide its services), 'i' (the same pipeline with
+     * Trellis instead: best of six seeds, then a swatch colour match), 'h' (pipeline-h/: the scan leads, the build
      * commits what its budget allows, weak readings gated, continued openings deduped, rejections by reason, an evidence
-     * ledger; the default otherwise) or 'g'. SCRATCHBOX_STAGED_PROCEDURAL changes the default.
+     * ledger; the default when no model services are wired) or 'g'. SCRATCHBOX_STAGED_PROCEDURAL changes the default.
      */
     pipeline?: 'g' | 'h' | 'i' | 'j' | (string & {});
 }
@@ -3694,7 +3696,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             });
         };
 
-        // ---------------- pipeline I/J (the grammar stage's slot, I the 3D Building default): character sheet -> Trellis (I) or Meshy (J), best of six seeds -> colour-matched, fitted to the scan ----------------
+        // ---------------- pipeline I/J (the grammar stage's slot, J the 3D Building default): character sheet -> Meshy (J, one seed) or Trellis (I, best of six), fitted to the scan ----------------
         const iRun = async (e: IRunState): Promise<void> => {
             await runner.stage<{ steps: Array<{ step: string; accepted: number; proposed: number }> }>({
                 id: 'grammar',
@@ -3729,6 +3731,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 massing: e.stage.run.report, tileGlb: strip ? strip.devegetatedGlb : extraction.texturedGlb, structure: structure!, ground: t.ground,
                                 anchor: { lat: placeValue!.lat, lng: placeValue!.lng, elevationMeters: 0 }, dir: path.join(cache.dir, 'pipeline_i', stageKey(PIPELINE_I_VERSION, e.key).slice(0, 24), 'refine'),
                                 ...(visionAvailable ? { infill: { client: genAiEnhanceClient(visionAvailable.client), models: [LIGHTING_MODEL_FULL] } } : {}),
+                                // the facade texture builder cleans each plate before it is projected (generated help: off in the real-data view)
+                                ...((request.enhance ?? stagedEnhance()) && visionAvailable ? { clean: {
+                                    client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), locationName: placeValue!.formattedAddress || request.query,
+                                    infill: { client: genAiEnhanceClient(visionAvailable.client), models: [LIGHTING_MODEL_FULL] }, unseenModels: [LIGHTING_MODEL_FULL],
+                                    counter: visionFacadeCounter(new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, ...(ctx.signal ? { signal: ctx.signal } : {}) })),
+                                    cacheDir: path.join(cache.dir, 'enhance_plates')
+                                } } : {}),
                                 signal: io.signal, onProgress: m => io.progress(m)
                             });
                             cache.writeRunNote(runId, 'pipeline_i_refine', refined);
@@ -3737,10 +3746,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             cache.writeRunNote(runId, 'pipeline_i_refine', { error: errorMessage(err) });
                         }
                     }
+                    const f = out.fit;
+                    if (f.coverage < MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE) {
+                        throw new Error(`the fitted model covers only ${(f.coverage * 100).toFixed(0)}% of the scan's footprint (plan IoU ${f.planIoU.toFixed(2)}; needs at least ${(MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE * 100).toFixed(0)}% to stand in for the measured scan) — ${out.model.model}'s shape is too far from the real building's at the scale register.ts could reach`);
+                    }
                     const key8 = e.key.slice(0, 8);
                     const pubClay = cache.publishFile(refined?.files.clayGlb ?? out.files.clayGlb, `${base}_massing_${key8}_pipelinei.glb`);
                     const pubTex = cache.publishFile(refined?.files.texturedGlb ?? out.files.texturedGlb, `${base}_massing_${key8}_pipelinei_tex.glb`);
-                    const f = out.fit;
                     const projectedFaces = refined?.facades.filter(x => x.projected) ?? [];
                     const describe = `${out.steps.map(s => `${s.step}: ${s.accepted} of ${s.proposed}`).join('; ')}; fit to the scan: plan IoU ${f.planIoU.toFixed(2)}, ${(f.overflowShare * 100).toFixed(0)}% of the model outside the footprint (reported, not clipped), ${(f.coverage * 100).toFixed(0)}% of the footprint covered` +
                         (refined ? `; refined with pipeline H: fitted to the massing footprint (plan IoU with the scan ${refined.fit.scanIoUOfMassingFit.toFixed(2)}, shifted ${refined.fit.shift.map(v => v.toFixed(2)).join(', ')} m), ${refined.facades.length} facades scored, the tile's plates projected onto ${projectedFaces.length} (${refined.projected.texels.toLocaleString('en-US')} texels, photo-inferred)` : '') +
@@ -3756,7 +3768,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         textured: {
                             url: pubTex.url, bytes: pubTex.bytes, ladderRung: generated, rungShares: TEXTURE_LADDER_RUNGS.map((_, k) => (k === generated ? 1 : 0)),
                             provenance: [{ source: 'pipeline-i-trellis', label: 'generated', method: `${out.model.model}'s textures (seed ${out.model.seed}), made from the character sheet's four views and colour-matched to the structure's swatch measured from them`, coverage: 1 },
-                                ...(projectedFaces.length ? [{ source: 'pipeline-i-refine-plates', label: PROVENANCE.photoInferred, method: `the tile's wall plates (pipeline G's survey stations) projected onto the model where its wall lies within ${PROJECT_MAX_RELIEF_M} m of the massing's plane: ${projectedFaces.map(x => x.key).join(', ')}`, coverage: 0 }] : [])],
+                                ...(projectedFaces.length ? [{ source: 'pipeline-i-refine-plates', label: refined?.cleaned ? 'generated' : PROVENANCE.photoInferred, method: `the tile's wall plates (pipeline G's survey stations)${refined?.cleaned ? ', redrawn by the facade texture builder and kept through its identity gate,' : ''} projected onto the model where its wall lies within ${PROJECT_MAX_RELIEF_M} m of the massing's plane: ${projectedFaces.map(x => x.key).join(', ')}`, coverage: 0 }] : [])],
                             confidenceChannels: 'none: the model carries its own textures', builtAtMs: now(), cached: false
                         }
                     };
