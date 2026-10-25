@@ -19,7 +19,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { applyFacadeLattices, facadeSamples, latticeFacade, photoLattice, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
-import { parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
+import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 import { readGlbTriangles } from './helpers/clay-glb-render';
 
@@ -92,3 +92,32 @@ describe('facades on their photo lattice', () => {
         expect(tj.nodes.at(-1).extras.sbFacadeLattice.provenance.lines).toBe('photo-inferred');
     });
 });
+
+describe('facade lattices on a district-sized remesh', () => {
+    it('edits a GLB whose binary chunk is larger than a plain JS array can hold (~134 M elements)', () => {
+        // one triangle, then 140 MB of other data in the same buffer (a district remesh's positions, normals and textures)
+        const N = 140 * 1024 * 1024;
+        const bin = new Uint8Array(N);
+        const pos = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+        bin.set(new Uint8Array(pos.buffer), 0);
+        bin.set(new Uint8Array(new Uint32Array([0, 1, 2]).buffer), 36);
+        bin[N - 1] = 7;
+        const json = {
+            asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }],
+            meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1, mode: 4 }] }],
+            buffers: [{ byteLength: N }],
+            bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 36 }, { buffer: 0, byteOffset: 36, byteLength: 12 }, { buffer: 0, byteOffset: 48, byteLength: N - 48 }],
+            accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] }, { bufferView: 1, componentType: 5125, count: 3, type: 'SCALAR' }]
+        };
+        const r = { s: [0, 0.5], t: [0, 0.5], positions: new Float32Array([0, 0, 0.01, 0.5, 0, 0.01, 0, 0.5, 0.01]), normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]), uv: new Float32Array(6), indices: new Uint32Array([0, 1, 2]), cells: 1, measuredShare: 1 };
+        const out = applyFacadeLattices(assembleGlb(json as never, bin), [{ f, r: r as never }], false);
+        expect(out.removed).toBe(1);                                   // the scan's triangle in the facade, made degenerate
+        const back = parseGlbBytes(out.glb);
+        expect(back.bin.length).toBeGreaterThanOrEqual(N + 36 + 36 + 12);
+        expect(back.bin[N - 1]).toBe(7);                                // the original bytes kept, the rebuilt facade after them
+        expect(back.json.meshes).toHaveLength(2);
+        const idx = new Uint32Array(back.bin.buffer.slice(back.bin.byteOffset + 36, back.bin.byteOffset + 48));
+        expect(Array.from(idx)).toEqual([0, 0, 0]);
+    });
+});
+
