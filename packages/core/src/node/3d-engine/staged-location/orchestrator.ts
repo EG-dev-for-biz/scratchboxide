@@ -3681,9 +3681,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         anchor: { lat: placeValue!.lat, lng: placeValue!.lng, elevationMeters: 0 }, place: placeValue!.formattedAddress || request.query,
                         dir: path.join(cache.dir, 'pipeline_i', stageKey(PIPELINE_I_VERSION, e.key).slice(0, 24)),
                         generator: deps.pipelineI.generator(), model, budgetMs: Math.max(0, STAGES.grammar.budgetMs - (now() - t0) - 20_000),
+                        ...(visionAvailable ? { infill: { client: genAiEnhanceClient(visionAvailable.client), models: [LIGHTING_MODEL_FULL] } } : {}),
                         signal: io.signal, onProgress: m => io.progress(m), now
                     });
-                    cache.writeRunNote(runId, 'pipeline_i', { steps: out.steps, timingsMs: out.timingsMs, plan: out.plan, sheet: out.sheet, model: out.model, candidates: out.candidates, swatch: out.swatch, fit: out.fit, files: out.files });
+                    cache.writeRunNote(runId, 'pipeline_i', { steps: out.steps, timingsMs: out.timingsMs, plan: out.plan, sheet: out.sheet, model: out.model, candidates: out.candidates, swatch: out.swatch, fit: out.fit, ...(out.holes ? { holes: out.holes } : {}), files: out.files });
                     const key8 = e.key.slice(0, 8);
                     const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_pipelinei.glb`);
                     const pubTex = cache.publishFile(out.files.texturedGlb, `${base}_massing_${key8}_pipelinei_tex.glb`);

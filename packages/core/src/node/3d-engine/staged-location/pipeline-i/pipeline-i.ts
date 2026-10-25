@@ -34,6 +34,8 @@ import { applyRootTransform, registerToFootprint, stripMaterials, type Footprint
 import type { ModelClient, ModelResult } from './fal-trellis';
 import { scoreCandidate, panelMask, type CandidateScore } from './seed-score';
 import { colourMatchGlb, measureSwatch, type Swatch } from './swatch';
+import { infillModelTextureHoles, type ModelTextureInfillResult } from './texture-holes';
+import type { EnhanceModelClient } from '../texture-enhance';
 
 export const PIPELINE_I_VERSION = 'pipeline-i/2';
 /** Square size of each view sent to the model. */
@@ -63,6 +65,8 @@ export interface PipelineIInput {
     panelWidth?: number;
     /** Reference renders from the tile photos (default) or clay. */
     renderMode?: 'textured' | 'clay';
+    /** Fills the kept model's own black texture holes (texture-holes.ts) before it is written; skipped without a client. */
+    infill?: { client: EnhanceModelClient; models: string[] };
     signal?: AbortSignal;
     onProgress?: (msg: string) => void;
     now?: () => number;
@@ -77,6 +81,8 @@ export interface PipelineIOutcome {
     candidates: Array<{ seed?: number; requestId?: string; score?: CandidateScore; fit?: Pick<RegistrationFit, 'planIoU' | 'overflowShare' | 'coverage'>; error?: string }>;
     swatch: Swatch & { before: Swatch[] };
     fit: RegistrationFit;
+    /** The kept model's own texture holes (texture-holes.ts), when `input.infill` was given. */
+    holes?: ModelTextureInfillResult;
     steps: PipelineIStep[];
     timingsMs: Record<string, number>;
 }
@@ -183,20 +189,41 @@ export async function runPipelineI(input: PipelineIInput): Promise<PipelineIOutc
     t = now();
     const swatch = measureSwatch(viewPngs);
     const matched = colourMatchGlb(best.result.glb, swatch);
-    const fitted = applyRootTransform(matched.glb, best.fit.matrix);
-    const texturedGlb = path.join(input.dir, 'pipeline_i_textured.glb'), clayGlb = path.join(input.dir, 'pipeline_i_clay.glb');
-    fs.writeFileSync(texturedGlb, fitted); fs.writeFileSync(clayGlb, stripMaterials(fitted));
     timingsMs.fit = now() - t;
     const fit = best.fit;
     steps.push({ step: 'colour and fit', proposed: 1, accepted: 1, rejected: 0, ms: timingsMs.fit,
         notes: [`textures moved onto the swatch (Lab ${swatch.mean.map(x => x.toFixed(1)).join(' / ')}) from ${matched.before.map(b => b.mean.map(x => x.toFixed(1)).join(' / ')).join(', ') || 'no texture'}`,
             `plan IoU ${fit.planIoU.toFixed(2)} with the scan footprint; ${(fit.overflowShare * 100).toFixed(0)}% of the model's plan outside it (reported, not clipped); covers ${(fit.coverage * 100).toFixed(0)}% of the footprint; yaw ${fit.yawDeg.toFixed(1)} deg${fit.mirrored ? ', mirrored' : ''}, scale ${fit.scale.toFixed(2)}`] });
+
+    // 5. the model's own texture holes filled (surfaces its four input views never saw, baked flat black by the model
+    //    itself): believability-first, so a hole is a plausible generated fill, never a black gap left in the build
+    t = now();
+    let holes: ModelTextureInfillResult | undefined;
+    let painted = matched.glb;
+    if (input.infill) {
+        const filled = await infillModelTextureHoles(matched.glb, { ...input.infill, ...(input.signal ? { signal: input.signal } : {}) });
+        holes = filled.result;
+        painted = filled.glb;
+    }
+    timingsMs.holes = now() - t;
+    if (holes) steps.push({
+        step: 'texture holes', proposed: holes.images, accepted: holes.decision === 'accepted' ? 1 : 0,
+        rejected: holes.decision === 'accepted' || holes.decision === 'no_holes' || holes.decision === 'no_images' ? 0 : 1, ms: timingsMs.holes,
+        notes: [holes.holePixels
+            ? `${holes.holePixels} black texel${holes.holePixels === 1 ? '' : 's'} the model's own generation never covered: ${holes.decision === 'accepted' ? `${holes.filledPixels} filled by ${holes.modelUsed} (generated)` : `left as the model built them (${holes.reason ?? holes.decision})`}`
+            : 'no black holes in the model\'s own texture']
+    });
+
+    const fitted = applyRootTransform(painted, best.fit.matrix);
+    const texturedGlb = path.join(input.dir, 'pipeline_i_textured.glb'), clayGlb = path.join(input.dir, 'pipeline_i_clay.glb');
+    fs.writeFileSync(texturedGlb, fitted); fs.writeFileSync(clayGlb, stripMaterials(fitted));
     timingsMs.total = now() - t0;
     return {
         files: { texturedGlb, clayGlb, modelGlb: best.raw, sheetPng, sheetReferencePng, views },
         plan: { axisDeg: plan.axisDeg, wallAreaM2: plan.wallAreaM2, pair: plan.pair, heightM: plan.heightM },
         sheet: { accepted: sheet.accepted, attempts: sheet.attempts, modelUsed: sheet.modelUsed, panels: sheet.panels.map(p => ({ stationId: p.station.id, passed: p.qc.passed, reason: p.qc.reason, overflow: p.qc.outline?.overflow, underfill: p.qc.outline?.underfill })) },
         model: { model: best.result.model, requestId: best.result.requestId, seconds: best.result.seconds, seed: best.seed },
+        ...(holes ? { holes } : {}),
         candidates: candidates.map(c => (c.ok ? { seed: c.seed, requestId: c.result.requestId, score: c.score, fit: { planIoU: c.fit.planIoU, overflowShare: c.fit.overflowShare, coverage: c.fit.coverage } } : { seed: c.seed, error: c.error })),
         swatch: { ...swatch, before: matched.before },
         fit, steps, timingsMs
