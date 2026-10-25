@@ -116,7 +116,7 @@ struct BuildingConfig {
 
     // Continuous Curvilinear & Parametric Manifold (ADA Continuous Invariant)
     float curvature{0.0f};              // 0.0 = rectangular, 1.0 = superellipse/elliptical
-    float superellipseExponent{2.4f};   // Lamé exponent m (2.0 = ellipse, 2.4 = squircle, 10.0 = box)
+    float superellipseExponent{10.0f};  // Lamé exponent m (2.0 = ellipse, 2.4 = squircle, 10.0 = box); a box by default so curvature 0 stays rectangular
     float twistDegrees{0.0f};           // Helical rotation across height (degrees)
     float taper{1.0f};                  // Crown scale ratio relative to base
     float bulge{0.0f};                  // Mid-height barrel swelling / entasis ratio
@@ -501,8 +501,14 @@ private:
         mesh.addVertex(Vertex(p2, normal, uv2, color, tangent));
         mesh.addVertex(Vertex(p3, normal, uv3, color, tangent));
 
-        mesh.addTriangle(base, base + 1, base + 2);
-        mesh.addTriangle(base, base + 2, base + 3);
+        // Callers give corners in either order; wind front faces towards the stated normal.
+        if ((p1 - p0).cross(p2 - p0).dot(normal) >= 0.0f) {
+            mesh.addTriangle(base, base + 1, base + 2);
+            mesh.addTriangle(base, base + 2, base + 3);
+        } else {
+            mesh.addTriangle(base, base + 2, base + 1);
+            mesh.addTriangle(base, base + 3, base + 2);
+        }
     }
 
     static void addBox(
