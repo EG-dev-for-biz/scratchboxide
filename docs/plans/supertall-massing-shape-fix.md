@@ -89,6 +89,29 @@ run through Pipeline G's existing facade-grammar/texture stage (detail), exactly
 ESB specifically, by evidence that already existed before this plan was written — it mostly needed finding,
 not building.** What's left is coordination (merging `massing-choice` to `main`, confirmed owner), not research.
 
+## 3b. Footprint outline quality: `footprint-regularize.ts` found, tested, and fixed (2026-10-25)
+
+Looking closer at the stacked-tier massing's raw outline (user feedback: "the massing is clearly not as good as
+it could be") surfaced a real, separate quality gap: tier-0's footprint ring is 341 vertices with 24% of edges
+under 0.5 m — raw scan stairstep noise, not architectural detail (p90 edge-angle deviation from a right angle:
+26.6°). `footprint-regularize.ts` (snaps a noisy ring's edges to its dominant direction) already existed,
+untracked, zero git history, unused anywhere. Tested it directly against the ESB's real tier-0 ring:
+
+- It does fix the noise it targets — angle deviation dropped to ~0° — but does **not** reduce stairstep vertex
+  density (that needs a separate simplification/merge pass, still a known gap).
+- It had a real bug: a near-parallel edge pair misclassified as perpendicular produced a poorly-conditioned
+  line intersection landing ~57 m from the real corner, slicing a stray diagonal across the building. A peer
+  session ("Massing capability review") read the algorithm cold and correctly predicted the exact failure mode
+  before any fix was written.
+- **Fixed and committed** (`c583f866`): bounds how far a perpendicular-corner intersection may land from the
+  original corner, relative to local edge scale; falls back to a safe bridge point past that bound. Regression
+  test reproduces the exact ESB failure (fails at 57.36 m pre-fix, fixture is the real tier-0 outline); confirmed
+  via manual revert/restore since the file has no git history to `git stash` against.
+
+Net effect: the massing's overall shape fidelity is better understood now (orientation-clean, but still
+stairstep-noisy at the vertex level) — worth folding into whoever picks up `massing-choice`'s merge, since this
+output feeds directly into it.
+
 ## 4. Decisions needed before implementation
 
 - Who owns `massing-choice`'s merge to `main` — coordinate with that session rather than taking it over.
