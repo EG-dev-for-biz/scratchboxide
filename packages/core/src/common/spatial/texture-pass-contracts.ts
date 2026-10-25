@@ -424,8 +424,15 @@ export interface UvAtlasInput {
     clayGlb: Uint8Array;
     /** Target density in texels per metre. */
     densityTexelsPerMeter: number;
-    /** Largest atlas side, texels. */
+    /** Preferred atlas side, texels: tried first, at the requested density. */
     maxSide: number;
+    /**
+     * Absolute ceiling the atlas may grow past maxSide to (texels) before density is reduced. A structure whose charts
+     * and islands do not fit maxSide at a sane density (a supertall's full facade area against a district-sized atlas,
+     * say) gets a bigger atlas instead of a blurrier one: growing preserves texel density, shrinking density does not.
+     * Default: max(maxSide, 8192). Still bounded, so a malformed layer cannot ask for an unbounded texture.
+     */
+    hardMaxSide?: number;
     /** Angular tolerance (degrees) when clustering scan triangles into islands. */
     islandNormalToleranceDeg: number;
 }

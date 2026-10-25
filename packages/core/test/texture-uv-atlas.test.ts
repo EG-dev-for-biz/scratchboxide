@@ -297,11 +297,27 @@ describe('texture pass B: UV atlas', () => {
         expect(worst).toBeLessThan(1 / Math.sqrt(Math.cos((40 * Math.PI) / 180)));
     });
 
-    it('lowers the density for every chart and island when the layer does not fit in maxSide, and reports the measured density', async () => {
-        const atlas = await buildUvAtlas({ layerKey: 'fit', clayGlb: scene.glb, densityTexelsPerMeter: 200, maxSide: 256, islandNormalToleranceDeg: 30, surfaces: scene.surfaces });
+    it('lowers the density for every chart and island when the layer does not fit in maxSide (and hardMaxSide forbids growing past it), and reports the measured density', async () => {
+        const atlas = await buildUvAtlas({ layerKey: 'fit', clayGlb: scene.glb, densityTexelsPerMeter: 200, maxSide: 256, hardMaxSide: 256, islandNormalToleranceDeg: 30, surfaces: scene.surfaces });
         expect(Math.max(atlas.width, atlas.height)).toBeLessThanOrEqual(256);
         expect(atlas.layout.stats.texelsPerMeter).toBeLessThan(200);
         for (const m of atlas.maps) expect(m.texelsPerMeter).toBe(atlas.layout.stats.texelsPerMeter);
+        expectValid(audit(atlas, scene.glb));
+    });
+
+    it('grows the atlas past maxSide (up to hardMaxSide) instead of lowering density, when it does not fit at the requested density', async () => {
+        const atlas = await buildUvAtlas({ layerKey: 'fit', clayGlb: scene.glb, densityTexelsPerMeter: 200, maxSide: 256, hardMaxSide: 4096, islandNormalToleranceDeg: 30, surfaces: scene.surfaces });
+        expect(Math.max(atlas.width, atlas.height)).toBeGreaterThan(256);
+        expect(Math.max(atlas.width, atlas.height)).toBeLessThanOrEqual(4096);
+        expect(atlas.layout.stats.texelsPerMeter).toBe(200);
+        for (const m of atlas.maps) expect(m.texelsPerMeter).toBe(200);
+        expectValid(audit(atlas, scene.glb));
+    });
+
+    it('defaults hardMaxSide to at least 8192 so a caller need not opt in to get a larger atlas instead of a blurrier one', async () => {
+        const atlas = await buildUvAtlas({ layerKey: 'fit', clayGlb: scene.glb, densityTexelsPerMeter: 200, maxSide: 256, islandNormalToleranceDeg: 30, surfaces: scene.surfaces });
+        expect(Math.max(atlas.width, atlas.height)).toBeGreaterThan(256);
+        expect(atlas.layout.stats.texelsPerMeter).toBe(200);
         expectValid(audit(atlas, scene.glb));
     });
 });

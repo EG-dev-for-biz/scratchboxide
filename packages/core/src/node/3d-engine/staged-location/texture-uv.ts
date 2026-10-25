@@ -481,7 +481,10 @@ export async function buildUvAtlas(input: BuildUvAtlasOptions): Promise<LaidOutU
     }
     if (!items.length) throw new Error('the clay GLB has no triangle primitives to lay out');
 
-    // density and atlas size: shrink the density until everything fits in maxSide
+    // density and atlas size: grow the atlas past maxSide (up to hardMaxSide) before shrinking density — a bigger atlas
+    // keeps the requested texel density, a smaller one at lower density does not. Only once hardMaxSide itself cannot
+    // hold the layer does density start shrinking.
+    const sideCeiling = Math.max(input.maxSide, input.hardMaxSide ?? 8192);
     let d = input.densityTexelsPerMeter;
     let W = 0, H = 0;
     for (let attempt = 0; ; attempt++) {
@@ -493,13 +496,13 @@ export async function buildUvAtlas(input: BuildUvAtlasOptions): Promise<LaidOutU
         }
         // power-of-two sizes (mipmaps); try each width from the narrowest that can hold the widest rect and keep the smallest atlas
         let best: { w: number; h: number } | undefined;
-        for (let w = Math.max(16, nextPow2(widest)); w <= input.maxSide; w *= 2) {
+        for (let w = Math.max(16, nextPow2(widest)); w <= sideCeiling; w *= 2) {
             const h = Math.max(16, nextPow2(shelfPack(items.map(i => i.pack), w)));
-            if (h <= input.maxSide && (!best || w * h < best.w * best.h || (w * h === best.w * best.h && Math.abs(w - h) < Math.abs(best.w - best.h)))) best = { w, h };
+            if (h <= sideCeiling && (!best || w * h < best.w * best.h || (w * h === best.w * best.h && Math.abs(w - h) < Math.abs(best.w - best.h)))) best = { w, h };
         }
         if (best) { W = best.w; H = best.h; shelfPack(items.map(i => i.pack), W); break; }
-        if (attempt > 60 || d < 1e-3) throw new Error(`the layer does not fit in ${input.maxSide}x${input.maxSide} texels even at ${d.toFixed(4)} texels/m`);
-        d *= Math.min(0.95, Math.sqrt((input.maxSide * input.maxSide * 0.8) / area));
+        if (attempt > 60 || d < 1e-3) throw new Error(`the layer does not fit in ${sideCeiling}x${sideCeiling} texels even at ${d.toFixed(4)} texels/m`);
+        d *= Math.min(0.95, Math.sqrt((sideCeiling * sideCeiling * 0.8) / area));
     }
 
     // per-vertex UVs and the per-primitive layout (clay triangle order kept)
