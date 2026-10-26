@@ -21,7 +21,7 @@ class Structure:
         firm grounding without subterranean burial or floating artifacts.
         """
 
-    def translate(self, dx: typing.Any, dy: typing.Optional[float] = None, dz: typing.Optional[float] = None) -> Structure:
+    def translate(self, dx: typing.Any, dy: float | None = None, dz: float | None = None) -> Structure:
         """Translate the structure by (dx, dy, dz) meters or by a Vec3 / tuple."""
 
     def apply_material(self, mat: typing.Any) -> Structure:
@@ -49,7 +49,7 @@ class Structure:
         for an exterior façade mount plane (e.g. for fire escapes, signs, awnings).
         """
 
-    def solve_mount_clearance(self, target_width: float, target_height: float, face: str = 'front', obstacles: typing.Optional[list] = None, safety_margin: float = 0.25) -> dict:
+    def solve_mount_clearance(self, target_width: float, target_height: float, face: str = 'front', obstacles: list | None = None, safety_margin: float = 0.25) -> dict:
         """
         Analytical 2D clearance interval solver.
         Finds a collision-free mounting interval on the building façade avoiding apertures.

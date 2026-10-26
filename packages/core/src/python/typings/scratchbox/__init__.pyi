@@ -17,10 +17,11 @@ import scratchbox_native.math
 import scratchbox_native.nature
 import typing
 
-__all__ = ['Any', 'Armature', 'Flora', 'Human', 'List', 'Optional', 'PbrMaterial', 'PbrMaterialWrapper', 'PlantPreset', 'PoseBone', 'PrincipledBsdfMaterial', 'RomanOrder', 'Scene', 'ShapeKeyBlock', 'ShapeKeys', 'Structure', 'StudioHuman', 'Terrain', 'Tuple', 'Union', 'World', 'adaptive_object', 'architecture', 'composer', 'constants', 'core', 'create_arched_blister', 'create_beveled_box', 'create_box', 'create_building', 'create_cambered_foil', 'create_catenary_cable', 'create_character', 'create_cone', 'create_cube', 'create_curved_building', 'create_cylinder', 'create_envelope', 'create_form', 'create_human', 'create_hydraulic_actuator', 'create_intake_strainer', 'create_ivy', 'create_lathe', 'create_loft', 'create_lofted_hull', 'create_louver_bay', 'create_panelized_loft', 'create_plane', 'create_revolving_component', 'create_sphere', 'create_spline_conduit_harness', 'create_structural_truss_member', 'create_studio_pedestal', 'create_subdivided_box', 'create_tower', 'create_tree', 'create_vegetation', 'create_wheel', 'create_wheel_assembly', 'export_glb', 'geometry', 'geospatial', 'hair', 'human', 'io', 'k', 'layout', 'math', 'nature', 'object_spec', 'os', 'pbr', 'plant', 'processing', 'py_math', 'random', 'replicate_metric_array', 'revolve_harmonic_solid', 'rig', 'sdf', 'shaper', 'structure', 'superellipse_loop', 'superellipse_point', 'sweep_curve_profile', 'sys', 'terrain', 'topology', 'validate_scene', 'validation', 'world', 'write_glb']
+__all__ = ['Any', 'Armature', 'Dict', 'Flora', 'Human', 'List', 'Optional', 'PbrMaterial', 'PbrMaterialWrapper', 'PlantPreset', 'PoseBone', 'PrincipledBsdfMaterial', 'RomanOrder', 'Scene', 'ShapeKeyBlock', 'ShapeKeys', 'Structure', 'StudioHuman', 'Terrain', 'Tuple', 'Union', 'World', 'adaptive_object', 'architecture', 'composer', 'constants', 'core', 'create_arched_blister', 'create_beveled_box', 'create_box', 'create_building', 'create_building_parts', 'create_cambered_foil', 'create_catenary_cable', 'create_character', 'create_cone', 'create_cube', 'create_curved_building', 'create_cylinder', 'create_envelope', 'create_form', 'create_human', 'create_hydraulic_actuator', 'create_intake_strainer', 'create_ivy', 'create_lathe', 'create_loft', 'create_lofted_hull', 'create_louver_bay', 'create_panelized_loft', 'create_plane', 'create_revolving_component', 'create_sphere', 'create_spline_conduit_harness', 'create_structural_truss_member', 'create_studio_pedestal', 'create_subdivided_box', 'create_tower', 'create_tree', 'create_vegetation', 'create_wheel', 'create_wheel_assembly', 'export_glb', 'geometry', 'geospatial', 'hair', 'human', 'io', 'k', 'layout', 'math', 'moulding_profile', 'nature', 'object_spec', 'os', 'pbr', 'plant', 'processing', 'py_math', 'random', 'replicate_metric_array', 'revolve_harmonic_solid', 'rig', 'sdf', 'shaper', 'structure', 'superellipse_loop', 'superellipse_point', 'sweep_curve_profile', 'sys', 'terrain', 'topology', 'validate_scene', 'validation', 'world', 'write_glb', 'write_textured_building']
 
 Any = typing.Any
 Armature = scratchbox.human.Armature
+Dict = typing.Dict
 Flora = scratchbox.plant.PlantPreset
 Human = scratchbox.human.Human
 List = typing.List
@@ -341,14 +342,21 @@ def create_beveled_box(size=(1.0, 1.0, 1.0), bevel=0.02, color=None, material=No
 def create_box(*args, **kwargs) -> scratchbox_native.geometry.Mesh: ...
 
 
-def create_building(width: float = 18.0, depth: float = 14.0, floors: int = 4, floor_height: float = 3.4, ground_floor_height: float = 4.2, plinth_height: float = 0.8, bay_width: float = 3.2, window_width: float = 1.8, window_height: float = 2.0, window_recess_depth: float = 0.25, roof: typing.Any = 'mansard', roof_height: float = 3.5, roof_overhang: float = 0.4, roof_pitch_degrees: float = 55.0, parapet_height: float = 0.8, curvature: float = 0.0, superellipse_exponent: typing.Optional[float] = None, twist_degrees: float = 0.0, taper: float = 1.0, bulge: float = 0.0, bay_count: typing.Optional[int] = None, bake_curvature_ao: bool = True, name: str = 'ProceduralBuilding', **kwargs) -> scratchbox_native.geometry.Mesh:
+def create_building(width: float = 18.0, depth: float = 14.0, floors: int = 4, floor_height: float = 3.4, ground_floor_height: float = 4.2, plinth_height: float = 0.8, bay_width: float = 3.2, window_width: float = 1.8, window_height: float = 2.0, window_recess_depth: float = 0.25, roof: typing.Any = 'mansard', roof_height: float = 3.5, roof_overhang: float = 0.4, roof_pitch_degrees: float = 55.0, parapet_height: float = 0.8, curvature: float = 0.0, superellipse_exponent: float | None = None, twist_degrees: float = 0.0, taper: float = 1.0, bulge: float = 0.0, bay_count: int | None = None, bake_curvature_ao: bool = True, details: typing.Dict[str, typing.Any] | None = None, name: str = 'ProceduralBuilding', **kwargs) -> scratchbox_native.geometry.Mesh:
     """
     Constructs multi-story procedural architecture with rhythmic fenestration,
     recessed reveals, continuous compound curvature manifolds, and modeled roofs.
     """
 
 
-def create_cambered_foil(span: float = 1.8, chord: float = 0.45, camber: float = 0.04, thickness: float = 0.05, angle_of_attack_deg: float = -4.0, axis: str = 'x', endplates: bool = True, endplate_height: float = 0.25, endplate_thickness: float = 0.015, color: typing.Optional[typing.Tuple[float, float, float, float]] = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
+def create_building_parts(width: float = 18.0, depth: float = 14.0, floors: int = 4, floor_height: float = 3.4, ground_floor_height: float = 4.2, plinth_height: float = 0.8, bay_width: float = 3.2, window_width: float = 1.8, window_height: float = 2.0, window_recess_depth: float = 0.25, roof: typing.Any = 'mansard', roof_height: float = 3.5, roof_overhang: float = 0.4, roof_pitch_degrees: float = 55.0, parapet_height: float = 0.8, curvature: float = 0.0, superellipse_exponent: float | None = None, twist_degrees: float = 0.0, taper: float = 1.0, bulge: float = 0.0, bay_count: int | None = None, bake_curvature_ao: bool = True, details: typing.Dict[str, typing.Any] | None = None, name: str = 'ProceduralBuilding', **kwargs) -> _BuildingParts:
+    """
+    The building create_building makes, as one mesh per material slot (<name>_wall, _glass,
+    _frame, _roof, _foundation) with world-metre UVs, ready for write_textured_building.
+    """
+
+
+def create_cambered_foil(span: float = 1.8, chord: float = 0.45, camber: float = 0.04, thickness: float = 0.05, angle_of_attack_deg: float = -4.0, axis: str = 'x', endplates: bool = True, endplate_height: float = 0.25, endplate_thickness: float = 0.015, color: typing.Tuple[float, float, float, float] | None = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
     """
     Cambered Aerodynamic Foil / Wing Generator.
     Synthesizes downforce wings, airplane wings, hydrofoil rudders, or turbine blades
@@ -390,7 +398,7 @@ def create_form(bounds=(1.0, 1.0, 1.0), curvature=0.0, bevel=0.02, axis_of_revol
     """Universal ADA Form Generator: Maps physical continuous parameters to the optimal 3D geometry engine."""
 
 
-def create_human(role: str = 'scale_figure', height: float = 1.76, gender_beta: float = 0.0, pose: str = 'standing_survey', position: typing.Tuple[float, float, float] = (0.0, 0.0, 0.0), facing_deg: float = 0.0, surface: typing.Optional[typing.Any] = None, surface_y_offset: float = 0.0, **kwargs) -> scratchbox.human.Human:
+def create_human(role: str = 'scale_figure', height: float = 1.76, gender_beta: float = 0.0, pose: str = 'standing_survey', position: typing.Tuple[float, float, float] = (0.0, 0.0, 0.0), facing_deg: float = 0.0, surface: typing.Any | None = None, surface_y_offset: float = 0.0, **kwargs) -> scratchbox.human.Human:
     """Factory function for synthesizing an architectural scale entourage human."""
 
 
@@ -405,7 +413,7 @@ def create_intake_strainer(center: typing.Tuple[float, float, float], normal: ty
     """Operator 3: Concentric and radial debris strainer screen for fluid intake/exhaust."""
 
 
-def create_ivy(root: typing.Any = (0.0, 0.0, 0.0), obstacle_min: typing.Any = (-4.0, 0.0, -4.0), obstacle_max: typing.Any = (4.0, 6.0, 4.0), max_steps: int = 60, cling_distance: typing.Optional[float] = None, material: typing.Any = None, name: str = 'IvyGrowth', **kwargs) -> scratchbox_native.geometry.Mesh:
+def create_ivy(root: typing.Any = (0.0, 0.0, 0.0), obstacle_min: typing.Any = (-4.0, 0.0, -4.0), obstacle_max: typing.Any = (4.0, 6.0, 4.0), max_steps: int = 60, cling_distance: float | None = None, material: typing.Any = None, name: str = 'IvyGrowth', **kwargs) -> scratchbox_native.geometry.Mesh:
     """Grows obstacle-clinging ivy vines from root across the obstacle AABB [obstacle_min, obstacle_max]."""
 
 
@@ -415,7 +423,7 @@ def create_lathe(profile, segments=32, total_angle_rad=None, color=None, materia
 def create_loft(slices, close_ends=True, color=None, material=None, **kwargs) -> scratchbox_native.geometry.Mesh: ...
 
 
-def create_lofted_hull(stations, profile: str = 'superellipse', m: float = 2.8, close_ends: bool = True, n_pts: int = 32, color: typing.Optional[typing.Tuple[float, float, float, float]] = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
+def create_lofted_hull(stations, profile: str = 'superellipse', m: float = 2.8, close_ends: bool = True, n_pts: int = 32, color: typing.Tuple[float, float, float, float] | None = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
     """
     Continuous Compound-Curvature Hull Generator (ADA Invariant 1 & 6).
     Synthesizes continuous streamlined bodies (monocoques, fuselages, hulls, organ bodies)
@@ -441,7 +449,7 @@ def create_panelized_loft(stations: typing.List[typing.Dict[str, typing.Any]], n
 def create_plane(width=2.0, height=2.0, depth=None, seg_x=4, seg_y=4, segments=None, width_segments=None, depth_segments=None, size=None, color=None, material=None, **kwargs) -> scratchbox_native.geometry.Mesh: ...
 
 
-def create_revolving_component(radius: float = 0.5, length: float = 1.0, axis='lateral', profile: str = 'cylinder', crown: float = 0.0, recess: float = 0.0, segments: int = 32, color: typing.Optional[typing.Tuple[float, float, float, float]] = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
+def create_revolving_component(radius: float = 0.5, length: float = 1.0, axis='lateral', profile: str = 'cylinder', crown: float = 0.0, recess: float = 0.0, segments: int = 32, color: typing.Tuple[float, float, float, float] | None = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
     """
     Universal Kinematic Revolving Component Operator (ADA Invariant 6).
     Synthesizes revolving solids (wheels, drums, rollers, pulleys, turbine rotors,
@@ -485,11 +493,11 @@ def create_tower(width: float = 16.0, depth: float = 16.0, floors: int = 14, twi
     """
 
 
-def create_tree(attractor_count: int = 120, crown_center: typing.Any = (0.0, 5.0, 0.0), crown_extents: typing.Any = (2.5, 3.5, 2.5), root_anchor: typing.Any = (0.0, 0.0, 0.0), perception_radius: float = 2.0, kill_radius: float = 0.5, branch_step_length: float = 0.25, clear_trunk_height: float = 1.5, base_radius: float = 0.25, tip_radius: float = 0.03, generate_leaves: bool = True, use_detailed_leaves: bool = True, leaf_density: typing.Optional[float] = None, season: typing.Optional[float] = None, material: typing.Any = None, name: str = 'SpaceColonizationTree', **kwargs) -> scratchbox_native.geometry.Mesh:
+def create_tree(attractor_count: int = 120, crown_center: typing.Any = (0.0, 5.0, 0.0), crown_extents: typing.Any = (2.5, 3.5, 2.5), root_anchor: typing.Any = (0.0, 0.0, 0.0), perception_radius: float = 2.0, kill_radius: float = 0.5, branch_step_length: float = 0.25, clear_trunk_height: float = 1.5, base_radius: float = 0.25, tip_radius: float = 0.03, generate_leaves: bool = True, use_detailed_leaves: bool = True, leaf_density: float | None = None, season: float | None = None, material: typing.Any = None, name: str = 'SpaceColonizationTree', **kwargs) -> scratchbox_native.geometry.Mesh:
     """Synthesizes botanical trees and vegetation adhering to Runions space colonization."""
 
 
-def create_vegetation(pos: typing.Tuple[float, float, float] = (0.0, 0.0, 0.0), height: float = 12.0, attractor_count: int = 120, crown_radius: float = 3.0, branch_step_length: float = 0.25, clear_trunk_height: float = 2.0, base_radius: float = 0.25, tip_radius: float = 0.03, perception_radius: float = 2.0, kill_radius: float = 0.5, generate_leaves: bool = True, use_detailed_leaves: bool = True, leaf_density: typing.Optional[float] = None, name: str = 'AdaptiveVegetation', **kwargs) -> typing.Any:
+def create_vegetation(pos: typing.Tuple[float, float, float] = (0.0, 0.0, 0.0), height: float = 12.0, attractor_count: int = 120, crown_radius: float = 3.0, branch_step_length: float = 0.25, clear_trunk_height: float = 2.0, base_radius: float = 0.25, tip_radius: float = 0.03, perception_radius: float = 2.0, kill_radius: float = 0.5, generate_leaves: bool = True, use_detailed_leaves: bool = True, leaf_density: float | None = None, name: str = 'AdaptiveVegetation', **kwargs) -> typing.Any:
     """
     Creates open-domain continuous botanical flora or extraterrestrial vegetation
     adhering to Runions space colonization and Da Vinci pipe conservation.
@@ -497,7 +505,7 @@ def create_vegetation(pos: typing.Tuple[float, float, float] = (0.0, 0.0, 0.0), 
     """
 
 
-def create_wheel(radius: float = 0.35, width: float = 0.3, rim_radius: typing.Optional[float] = None, rim_recess: float = 0.04, tread_bevel: float = 0.025, axis: str = 'lateral', ground: bool = True, color: typing.Optional[typing.Tuple[float, float, float, float]] = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
+def create_wheel(radius: float = 0.35, width: float = 0.3, rim_radius: float | None = None, rim_recess: float = 0.04, tread_bevel: float = 0.025, axis: str = 'lateral', ground: bool = True, color: typing.Tuple[float, float, float, float] | None = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
     """
     Universal Rolling Wheel / Tire Operator.
     Synthesizes an authentic multi-element wheel:
@@ -508,7 +516,7 @@ def create_wheel(radius: float = 0.35, width: float = 0.3, rim_radius: typing.Op
     """
 
 
-def create_wheel_assembly(track_width: float = 1.6, wheelbase: float = 3.2, wheel_radius: float = 0.35, tire_width: float = 0.3, ground_clearance: float = 0.05, axle_pairs: int = 2, camber_deg: float = 0.0, toe_deg: float = 0.0, suspension: str = 'double_wishbone', color: typing.Optional[typing.Tuple[float, float, float, float]] = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
+def create_wheel_assembly(track_width: float = 1.6, wheelbase: float = 3.2, wheel_radius: float = 0.35, tire_width: float = 0.3, ground_clearance: float = 0.05, axle_pairs: int = 2, camber_deg: float = 0.0, toe_deg: float = 0.0, suspension: str = 'double_wishbone', color: typing.Tuple[float, float, float, float] | None = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
     """
     Universal Ground Vehicle Wheel & Suspension Assembly.
     Spawns N axle pairs of upright, grounded rolling wheels spaced at track_width and wheelbase,
@@ -526,6 +534,15 @@ import scratchbox_native.io as io
 k: str
 layout: _LayoutModule
 import scratchbox_native.math as math
+
+def moulding_profile(height: float, projection: float, tiers: int = 3, curvature: float = 0.6, invert: bool = False, samples: int = 4) -> typing.List[typing.Tuple[float, float]]:
+    """
+    A closed (outward, up) moulding section in metres for FacadeDetails profiles, hanging below
+    its anchor line (y from -height to 0). Each of `tiers` steps rises and projects further; the
+    step faces bow by `curvature` (0 = square fillets, 1 = full quarter rounds). invert=True puts
+    the largest projection at the bottom (bases, plinth caps). The wall side is embedded 2 cm.
+    """
+
 nature: _NatureModule
 import scratchbox.object_spec as object_spec
 import os
@@ -535,7 +552,7 @@ import scratchbox_native.processing as processing
 import math as py_math
 import random
 
-def replicate_metric_array(distribution_mode: str = 'CURVE_1D', guide_points: typing.Optional[typing.List[typing.Tuple[float, float, float]]] = None, pitch_meters: float = 0.1, seed_geometry: typing.Any = None, color: typing.Tuple[float, float, float, float] = (0.55, 0.57, 0.6, 1.0)) -> 'scratchbox_native.geometry.Mesh':
+def replicate_metric_array(distribution_mode: str = 'CURVE_1D', guide_points: typing.List[typing.Tuple[float, float, float]] | None = None, pitch_meters: float = 0.1, seed_geometry: typing.Any = None, color: typing.Tuple[float, float, float, float] = (0.55, 0.57, 0.6, 1.0)) -> 'scratchbox_native.geometry.Mesh':
     """
     Operator 3: Affine Metric Replicator (Pillar 11).
     Copies seed_geometry, any mesh built around the origin, to points at metric pitch p:
@@ -546,7 +563,7 @@ def replicate_metric_array(distribution_mode: str = 'CURVE_1D', guide_points: ty
     """
 
 
-def revolve_harmonic_solid(anchor_point: typing.Tuple[float, float, float] = (0.0, 0.0, 0.0), axis: typing.Tuple[float, float, float] = (0.0, 1.0, 0.0), profile_curve: typing.Optional[typing.List[typing.Tuple[float, float]]] = None, harmonic_lobe_count: int = 0, harmonic_depth_ratio: float = 0.2, helix_pitch_meters: float = 0.0, color: typing.Tuple[float, float, float, float] = (0.55, 0.57, 0.6, 1.0)) -> 'scratchbox_native.geometry.Mesh':
+def revolve_harmonic_solid(anchor_point: typing.Tuple[float, float, float] = (0.0, 0.0, 0.0), axis: typing.Tuple[float, float, float] = (0.0, 1.0, 0.0), profile_curve: typing.List[typing.Tuple[float, float]] | None = None, harmonic_lobe_count: int = 0, harmonic_depth_ratio: float = 0.2, helix_pitch_meters: float = 0.0, color: typing.Tuple[float, float, float, float] = (0.55, 0.57, 0.6, 1.0)) -> 'scratchbox_native.geometry.Mesh':
     """
     Operator 2: Harmonic Solid of Revolution (Pillar 11).
     Revolves a 2D meridian curve r(z) around a 3D axis with continuous radial harmonic lobes
@@ -567,7 +584,7 @@ def superellipse_point(cx: float, cy: float, rx: float, ry: float, theta: float,
     """Evaluates a 2D super-ellipse at parameter angle theta."""
 
 
-def sweep_curve_profile(path: typing.List[typing.Tuple[float, float, float]], profile: str = 'CIRCULAR', profile_dimensions: typing.Tuple[float, float] = (0.04, 0.04), scale_taper: typing.Tuple[float, float] = (1.0, 1.0), twist_deg: float = 0.0, radial_modulation: typing.Optional[typing.Dict[str, float]] = None, color: typing.Tuple[float, float, float, float] = (0.55, 0.57, 0.6, 1.0)) -> 'scratchbox_native.geometry.Mesh':
+def sweep_curve_profile(path: typing.List[typing.Tuple[float, float, float]], profile: str = 'CIRCULAR', profile_dimensions: typing.Tuple[float, float] = (0.04, 0.04), scale_taper: typing.Tuple[float, float] = (1.0, 1.0), twist_deg: float = 0.0, radial_modulation: typing.Dict[str, float] | None = None, color: typing.Tuple[float, float, float, float] = (0.55, 0.57, 0.6, 1.0)) -> 'scratchbox_native.geometry.Mesh':
     """
     Operator 1: SE(3) Lie Group Curve Sweep (Pillar 11).
     Sweeps a 2D cross-section P(u, v) along 3D carrier curve C(t) using Rotation-Minimizing Frames (RMF).
@@ -596,6 +613,37 @@ def write_glb(arg1, arg2=None) -> bool:
     """Save a ScratchboxMesh directly to a standard binary glTF 2.0 (.glb) file"""
 
 
+def write_textured_building(path: str, parts, surfaces: typing.Dict[str, typing.Any] | None = None, weathering: typing.Dict[str, typing.Any] | None = None, decals: typing.List[typing.Dict[str, typing.Any]] | None = None) -> typing.Dict[str, typing.Any]:
+    """
+    Write building parts to a GLB with real-scale PBR textures per part.
+
+    surfaces maps a part slot ("wall", "roof", "foundation", "frame", "glass") to either
+      {"coursed": {<CoursedSurfaceParams fields>}}            procedural, synthesized natively
+      {"albedo": file, "normal": file?, "orm": file?,          image maps from a material library or
+       "tile_m": (w, h), "tint": (r, g, b)?, "source": str}   an image model, laid at tile_m metres
+    Optional per-part "roughness" / "metallic" set the material factors. Parts without an
+    entry keep their flat slot material.
+
+    weathering, when given, bakes marks from the built geometry (run-off streaks under ledges,
+    rain exposure wash, shelter and cavity grime, rising damp, soot around the chimney tops) into
+    a unique atlas on an alpha-blended overlay shell over the "receivers" parts (default wall,
+    foundation, roof). Its keys are WeatheringParams fields plus "receivers"; strengths are
+    continuous and 0 turns a layer off.
+
+    decals places images on the building. Each is a dict with
+      placement: "facade" ("south" = +Z entrance side, "north", "east", "west") with "u" metres
+                 along it from its start corner and "v" metres above the ground, or "center" and
+                 "normal" (and optional "up") in world metres;
+      "size": (width_m, height_m); "image": a PNG/JPEG path or {"blot": {<BlotParams fields>}};
+      "mode": "paint" (default: painted into the weathering atlas, follows the surface and ages
+              under decal_aging; PNG only) or "panel" (its own quad standing "standoff_m" off the
+              wall, with "thickness_m" for boards and plaques, full image resolution);
+      optional "opacity", "depth_m" (paint projection depth) and "source" (provenance label).
+    Returns {"path", "parts": {...}, "decals": [...]} so the caller can label provenance
+    honestly; weathering and procedural marks are reported as generated.
+    """
+
+
 class _PbrMeta(type):
     def __getattr__(cls, name): ...
 
@@ -603,7 +651,7 @@ class _PbrMeta(type):
 class _ArchitectureModule:
     RomanOrder = scratchbox_native.RomanOrder
     @staticmethod
-    def create_building(width: float = 18.0, depth: float = 14.0, floors: int = 4, floor_height: float = 3.4, ground_floor_height: float = 4.2, plinth_height: float = 0.8, bay_width: float = 3.2, window_width: float = 1.8, window_height: float = 2.0, window_recess_depth: float = 0.25, roof: typing.Any = 'mansard', roof_height: float = 3.5, roof_overhang: float = 0.4, roof_pitch_degrees: float = 55.0, parapet_height: float = 0.8, curvature: float = 0.0, superellipse_exponent: typing.Optional[float] = None, twist_degrees: float = 0.0, taper: float = 1.0, bulge: float = 0.0, bay_count: typing.Optional[int] = None, bake_curvature_ao: bool = True, name: str = 'ProceduralBuilding', **kwargs) -> scratchbox_native.geometry.Mesh:
+    def create_building(width: float = 18.0, depth: float = 14.0, floors: int = 4, floor_height: float = 3.4, ground_floor_height: float = 4.2, plinth_height: float = 0.8, bay_width: float = 3.2, window_width: float = 1.8, window_height: float = 2.0, window_recess_depth: float = 0.25, roof: typing.Any = 'mansard', roof_height: float = 3.5, roof_overhang: float = 0.4, roof_pitch_degrees: float = 55.0, parapet_height: float = 0.8, curvature: float = 0.0, superellipse_exponent: float | None = None, twist_degrees: float = 0.0, taper: float = 1.0, bulge: float = 0.0, bay_count: int | None = None, bake_curvature_ao: bool = True, details: typing.Dict[str, typing.Any] | None = None, name: str = 'ProceduralBuilding', **kwargs) -> scratchbox_native.geometry.Mesh:
         """
         Constructs multi-story procedural architecture with rhythmic fenestration,
         recessed reveals, continuous compound curvature manifolds, and modeled roofs.
@@ -630,7 +678,7 @@ class _ConstantsModule:
 
 class _GeospatialModule:
     @staticmethod
-    def load_location(query: typing.Optional[str] = None):
+    def load_location(query: str | None = None):
         """
         Scripts are not staged on real places, so there is no place to load. A place comes from the
         google_3d_tiles_get_clay tool, and one object standing at a place from build_3d_object_from_reference.
@@ -674,11 +722,11 @@ class _NatureModule:
     PlantPreset = scratchbox.plant.PlantPreset
     Flora = scratchbox.plant.PlantPreset
     @staticmethod
-    def create_tree(attractor_count: int = 120, crown_center: typing.Any = (0.0, 5.0, 0.0), crown_extents: typing.Any = (2.5, 3.5, 2.5), root_anchor: typing.Any = (0.0, 0.0, 0.0), perception_radius: float = 2.0, kill_radius: float = 0.5, branch_step_length: float = 0.25, clear_trunk_height: float = 1.5, base_radius: float = 0.25, tip_radius: float = 0.03, generate_leaves: bool = True, use_detailed_leaves: bool = True, leaf_density: typing.Optional[float] = None, season: typing.Optional[float] = None, material: typing.Any = None, name: str = 'SpaceColonizationTree', **kwargs) -> scratchbox_native.geometry.Mesh:
+    def create_tree(attractor_count: int = 120, crown_center: typing.Any = (0.0, 5.0, 0.0), crown_extents: typing.Any = (2.5, 3.5, 2.5), root_anchor: typing.Any = (0.0, 0.0, 0.0), perception_radius: float = 2.0, kill_radius: float = 0.5, branch_step_length: float = 0.25, clear_trunk_height: float = 1.5, base_radius: float = 0.25, tip_radius: float = 0.03, generate_leaves: bool = True, use_detailed_leaves: bool = True, leaf_density: float | None = None, season: float | None = None, material: typing.Any = None, name: str = 'SpaceColonizationTree', **kwargs) -> scratchbox_native.geometry.Mesh:
         """Synthesizes botanical trees and vegetation adhering to Runions space colonization."""
 
     @staticmethod
-    def create_ivy(root: typing.Any = (0.0, 0.0, 0.0), obstacle_min: typing.Any = (-4.0, 0.0, -4.0), obstacle_max: typing.Any = (4.0, 6.0, 4.0), max_steps: int = 60, cling_distance: typing.Optional[float] = None, material: typing.Any = None, name: str = 'IvyGrowth', **kwargs) -> scratchbox_native.geometry.Mesh:
+    def create_ivy(root: typing.Any = (0.0, 0.0, 0.0), obstacle_min: typing.Any = (-4.0, 0.0, -4.0), obstacle_max: typing.Any = (4.0, 6.0, 4.0), max_steps: int = 60, cling_distance: float | None = None, material: typing.Any = None, name: str = 'IvyGrowth', **kwargs) -> scratchbox_native.geometry.Mesh:
         """Grows obstacle-clinging ivy vines from root across the obstacle AABB [obstacle_min, obstacle_max]."""
 
     SpaceColonizationConfig = scratchbox_native.nature.SpaceColonizationConfig
@@ -732,6 +780,7 @@ class _human_namespace:
     ShapeKeys = scratchbox.human.ShapeKeys
     Skeleton = scratchbox_native.human.Skeleton
     StudioHuman = scratchbox.human.StudioHuman
+    Union = typing.Union
     @staticmethod
     def create(name: str = 'Human', height: float = 1.78, gender_beta: float = 0.0, position: typing.Tuple[float, float, float] = (0.0, 0.0, 0.0), **kwargs) -> scratchbox.human.StudioHuman:
         """
@@ -744,5 +793,5 @@ class _human_namespace:
         """Procedurally synthesizes and grounds an architectural scale entourage figure conforming to the 18% Studio Grey Clay Invariant"""
 
     @staticmethod
-    def create_human(role: str = 'scale_figure', height: float = 1.76, gender_beta: float = 0.0, pose: str = 'standing_survey', position: typing.Tuple[float, float, float] = (0.0, 0.0, 0.0), facing_deg: float = 0.0, surface: typing.Optional[typing.Any] = None, surface_y_offset: float = 0.0, **kwargs) -> scratchbox.human.Human:
+    def create_human(role: str = 'scale_figure', height: float = 1.76, gender_beta: float = 0.0, pose: str = 'standing_survey', position: typing.Tuple[float, float, float] = (0.0, 0.0, 0.0), facing_deg: float = 0.0, surface: typing.Any | None = None, surface_y_offset: float = 0.0, **kwargs) -> scratchbox.human.Human:
         """Factory function for synthesizing an architectural scale entourage human."""

@@ -47,20 +47,20 @@ class World:
         stepped stylobate podium, entablature, pediment, and terracotta gable roof).
         """
 
-    def add_human(self, role: str = 'scale_figure', height: float = 1.76, gender_beta: float = 0.0, pose: str = 'standing_survey', position: typing.Tuple[float, float, float] = (0.0, 0.0, 0.0), facing_deg: float = 0.0, surface: typing.Optional[typing.Any] = None, surface_y_offset: float = 0.0, **kwargs) -> typing.Any:
+    def add_human(self, role: str = 'scale_figure', height: float = 1.76, gender_beta: float = 0.0, pose: str = 'standing_survey', position: typing.Tuple[float, float, float] = (0.0, 0.0, 0.0), facing_deg: float = 0.0, surface: typing.Any | None = None, surface_y_offset: float = 0.0, **kwargs) -> typing.Any:
         """
         Synthesizes and adds an architectural scale entourage figure to the world.
         Conforms strictly to 18% Studio Grey Clay Invariant and analytical 2-bone IK foot grounding.
         """
 
-    def scatter(self, asset: typing.Any, surface: typing.Optional[scratchbox.terrain.Terrain] = None, count: int = 60, cluster_radius: float = 12.0, slope_limit_degrees: float = 28.0, avoid_structures: typing.Optional[typing.List[scratchbox.structure.Structure]] = None, min_scale: float = 0.85, max_scale: float = 1.15) -> typing.List[typing.Any]:
+    def scatter(self, asset: typing.Any, surface: scratchbox.terrain.Terrain | None = None, count: int = 60, cluster_radius: float = 12.0, slope_limit_degrees: float = 28.0, avoid_structures: typing.List[scratchbox.structure.Structure] | None = None, min_scale: float = 0.85, max_scale: float = 1.15) -> typing.List[typing.Any]:
         """
         Clustered botanical scattering with Da Vinci pipe conservation.
         Ensures plants are placed on stable slopes, avoid architectural edifices,
         and follow natural ecological clustering.
         """
 
-    def compile_to_glb(self, path: typing.Optional[str] = None, pbr_quality: str = 'high') -> bytes:
+    def compile_to_glb(self, path: str | None = None, pbr_quality: str = 'high') -> bytes:
         """
         Compiles the entire procedural world directly to glTF 2.0 binary (.glb) in RAM.
         Zero disk churn; nanosecond streaming.
@@ -72,14 +72,14 @@ class World:
         and Surface Normal Pass) for headless multimodal verification loop.
         """
 
-    def stage_vector_tiles(self, lat: float, lng: float, radius: int = 1, style: str = 'studio_clay', zoom: int = 16, out_glb: typing.Optional[str] = None) -> typing.Dict[str, typing.Any]:
+    def stage_vector_tiles(self, lat: float, lng: float, radius: int = 1, style: str = 'studio_clay', zoom: int = 16, out_glb: str | None = None) -> typing.Dict[str, typing.Any]:
         """
         Stages Google 2D roadmap vector tiles (zoom 16) around (lat, lng),
         triangulates footprints into 18% Studio Grey Clay volumetric prisms, road ribbons, and water,
         and saves into standard binary glTF 2.0 (.glb) for CAD/VFX staging.
         """
 
-    def populate_vector_world(self, lat: float, lng: float, radius: int = 1, style: str = 'studio_clay', zoom: int = 16, traffic: bool = True, trees: bool = True, streetlamps: bool = True, sidewalks: bool = True, hero_lane: typing.Optional[int] = None, hero_dist: typing.Optional[float] = None, hero_type: str = 'lane', out_glb: typing.Optional[str] = None) -> typing.Dict[str, typing.Any]:
+    def populate_vector_world(self, lat: float, lng: float, radius: int = 1, style: str = 'studio_clay', zoom: int = 16, traffic: bool = True, trees: bool = True, streetlamps: bool = True, sidewalks: bool = True, hero_lane: int | None = None, hero_dist: float | None = None, hero_type: str = 'lane', out_glb: str | None = None) -> typing.Dict[str, typing.Any]:
         """
         Synthesizes a populated 3D world from Google 2D roadmap vector tiles (zoom 16) around (lat, lng).
         Extracts topological road networks with 5-tier cross-sections (asphalt carriageway, lane markings,
@@ -98,7 +98,7 @@ class World:
         """Applies solved vector lane placement (position, heading rotation) to any native mesh or asset."""
 
     @staticmethod
-    def ground_streetview_pano(prompt: typing.Optional[str] = None, pano_id: typing.Optional[str] = None, lat: typing.Optional[float] = None, lng: typing.Optional[float] = None, out_png: typing.Optional[str] = None) -> typing.Dict[str, typing.Any]:
+    def ground_streetview_pano(prompt: str | None = None, pano_id: str | None = None, lat: float | None = None, lng: float | None = None, out_png: str | None = None) -> typing.Dict[str, typing.Any]:
         """
         Grounds a landmark prompt or direct Google Street View panoId via Vertex AI Maps Imagery Grounding (MIG),
         downloads cubic faces, and projects them into a 2:1 ERP equirectangular panorama.

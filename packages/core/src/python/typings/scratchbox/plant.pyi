@@ -31,7 +31,7 @@ class PlantPreset:
         """Create decaying nurse log with polypore shelves."""
 
     @classmethod
-    def create_vegetation(cls, pos: typing.Tuple[float, float, float] = (0.0, 0.0, 0.0), height: float = 12.0, attractor_count: int = 120, crown_radius: float = 3.0, branch_step_length: float = 0.25, clear_trunk_height: float = 2.0, base_radius: float = 0.25, tip_radius: float = 0.03, perception_radius: float = 2.0, kill_radius: float = 0.5, generate_leaves: bool = True, use_detailed_leaves: bool = True, leaf_density: typing.Optional[float] = None, name: str = 'AdaptiveVegetation', **kwargs) -> typing.Any:
+    def create_vegetation(cls, pos: typing.Tuple[float, float, float] = (0.0, 0.0, 0.0), height: float = 12.0, attractor_count: int = 120, crown_radius: float = 3.0, branch_step_length: float = 0.25, clear_trunk_height: float = 2.0, base_radius: float = 0.25, tip_radius: float = 0.03, perception_radius: float = 2.0, kill_radius: float = 0.5, generate_leaves: bool = True, use_detailed_leaves: bool = True, leaf_density: float | None = None, name: str = 'AdaptiveVegetation', **kwargs) -> typing.Any:
         """
         Creates open-domain continuous botanical flora or extraterrestrial vegetation
         adhering to Runions space colonization and Da Vinci pipe conservation.
@@ -42,7 +42,7 @@ class PlantPreset:
 
 Tuple = typing.Tuple
 
-def create_vegetation(pos: typing.Tuple[float, float, float] = (0.0, 0.0, 0.0), height: float = 12.0, attractor_count: int = 120, crown_radius: float = 3.0, branch_step_length: float = 0.25, clear_trunk_height: float = 2.0, base_radius: float = 0.25, tip_radius: float = 0.03, perception_radius: float = 2.0, kill_radius: float = 0.5, generate_leaves: bool = True, use_detailed_leaves: bool = True, leaf_density: typing.Optional[float] = None, name: str = 'AdaptiveVegetation', **kwargs) -> typing.Any:
+def create_vegetation(pos: typing.Tuple[float, float, float] = (0.0, 0.0, 0.0), height: float = 12.0, attractor_count: int = 120, crown_radius: float = 3.0, branch_step_length: float = 0.25, clear_trunk_height: float = 2.0, base_radius: float = 0.25, tip_radius: float = 0.03, perception_radius: float = 2.0, kill_radius: float = 0.5, generate_leaves: bool = True, use_detailed_leaves: bool = True, leaf_density: float | None = None, name: str = 'AdaptiveVegetation', **kwargs) -> typing.Any:
     """
     Creates open-domain continuous botanical flora or extraterrestrial vegetation
     adhering to Runions space colonization and Da Vinci pipe conservation.

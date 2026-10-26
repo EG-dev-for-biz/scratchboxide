@@ -7,7 +7,7 @@ import scratchbox_native.geometry
 import scratchbox_native.math
 import typing
 
-__all__ = ['RomanOrder', 'architecture', 'composer', 'core', 'export_glb_bytes', 'geometry', 'hair', 'human', 'io', 'math', 'nature', 'plant', 'processing', 'render_sensor_passes', 'rig', 'sdf', 'shaper', 'topology']
+__all__ = ['RomanOrder', 'architecture', 'composer', 'core', 'export_glb_bytes', 'geometry', 'hair', 'human', 'io', 'math', 'nature', 'plant', 'processing', 'render_sensor_passes', 'rig', 'sdf', 'shaper', 'surface', 'topology', 'weathering']
 
 
 class RomanOrder(enum.Enum):
@@ -45,4 +45,6 @@ def render_sensor_passes(mesh: scratchbox_native.geometry.Mesh, width: int = 512
 import scratchbox_native.rig as rig
 import scratchbox_native.sdf as sdf
 import scratchbox_native.shaper as shaper
+import scratchbox_native.surface as surface
 import scratchbox_native.topology as topology
+import scratchbox_native.weathering as weathering

@@ -1184,6 +1184,16 @@ def moulding_profile(height: float, projection: float, tiers: int = 3, curvature
     return pts
 
 
+class _BuildingParts(list):
+    """
+    The parts list create_building_parts returns (one Mesh per material slot), carrying the
+    building's chimney tops (soot sources) and its facade frames (south = +Z entrance side,
+    north, east, west) for decals.
+    """
+    soot_sources: List[Tuple[float, float, float]] = []
+    facades: Dict[str, Dict[str, Any]] = {}
+
+
 def create_building_parts(
     width: float = 18.0,
     depth: float = 14.0,
@@ -1210,7 +1220,7 @@ def create_building_parts(
     details: Optional[Dict[str, Any]] = None,
     name: str = "ProceduralBuilding",
     **kwargs
-) -> "List[scratchbox_native.geometry.Mesh]":
+) -> _BuildingParts:
     """
     The building create_building makes, as one mesh per material slot (<name>_wall, _glass,
     _frame, _roof, _foundation) with world-metre UVs, ready for write_textured_building.
@@ -1224,15 +1234,6 @@ def create_building_parts(
                                  "length": f["length"]}
                      for f in _native.architecture.facade_frames(cfg)}
     return parts
-
-
-class _BuildingParts(list):
-    """
-    The parts list create_building_parts returns, carrying the building's chimney tops (soot
-    sources) and its facade frames (south = +Z entrance side, north, east, west) for decals.
-    """
-    soot_sources: List[Tuple[float, float, float]] = []
-    facades: Dict[str, Dict[str, Any]] = {}
 
 
 def _decal_image(spec_image) -> Tuple[bytes, str, str]:

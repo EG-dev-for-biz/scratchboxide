@@ -3,16 +3,17 @@
 // from a fresh generation.
 
 /** Hash of the generated stubs: the scratchbox API version a script was checked against. */
-export const SB_API_VERSION = '440926b717ff';
+export const SB_API_VERSION = 'f19c99322212';
 
 /** The API reference (module -> class -> signatures, one-line docs), within the full token budget. */
-export const SB_API_SUMMARY = `scratchbox API (generated from the engine's stubs, version 440926b717ff; parameter names and defaults, -> return type, # first doc line). Scripts are type-checked against these stubs before they run: an attribute, function or keyword that is not in the API is rejected without running.
+export const SB_API_SUMMARY = `scratchbox API (generated from the engine's stubs, version f19c99322212; parameter names and defaults, -> return type, # first doc line). Scripts are type-checked against these stubs before they run: an attribute, function or keyword that is not in the API is rejected without running.
 
 sb functions (import scratchbox as sb):
   sb.create_arched_blister(bounds=(0.35, 0.45, 0.9), arch_radius=0.4, swell=0.08, side=1.0, grid=(16, 8), color=None, material=None, **kwargs) -> Mesh
   sb.create_beveled_box(size=(1.0, 1.0, 1.0), bevel=0.02, color=None, material=None, **kwargs) -> Mesh
   sb.create_box(*args, **kwargs) -> Mesh
   sb.create_building(width=18.0, depth=14.0, floors=4, floor_height=3.4, ground_floor_height=4.2, plinth_height=0.8, bay_width=3.2, window_width=1.8, …) -> Mesh  # Constructs multi-story procedural architecture with rhythmic fenestration,
+  sb.create_building_parts(width=18.0, depth=14.0, floors=4, floor_height=3.4, ground_floor_height=4.2, plinth_height=0.8, bay_width=3.2, window_width=1.8, …) -> _BuildingParts  # The building create_building makes, as one mesh per material slot (<name>_wall, _glass,
   sb.create_cambered_foil(span=1.8, chord=0.45, camber=0.04, thickness=0.05, angle_of_attack_deg=-4.0, axis='x', endplates=True, endplate_height=0.25, …) -> Mesh  # Cambered Aerodynamic Foil / Wing Generator.
   sb.create_catenary_cable(start=(0, 0, 0), end=(10, 0, 0), sag=1.2, radius=0.03, segments=16, color=None, **kwargs) -> Mesh  # Constructs a catenary hanging curve cable between two 3D anchor points.
   sb.create_character(name='Human', height=1.78, gender_beta=0.0, position=(0.0, 0.0, 0.0), **kwargs) -> StudioHuman  # Primary DCC factory function for creating a high-fidelity Studio Human.
@@ -44,6 +45,7 @@ sb functions (import scratchbox as sb):
   sb.create_wheel(radius=0.35, width=0.3, rim_radius=None, rim_recess=0.04, tread_bevel=0.025, axis='lateral', ground=True, color=None, …) -> Mesh  # Universal Rolling Wheel / Tire Operator.
   sb.create_wheel_assembly(track_width=1.6, wheelbase=3.2, wheel_radius=0.35, tire_width=0.3, ground_clearance=0.05, axle_pairs=2, camber_deg=0.0, toe_deg=0.0, …) -> Mesh  # Universal Ground Vehicle Wheel & Suspension Assembly.
   sb.export_glb(arg1, arg2=None) -> bytes
+  sb.moulding_profile(height, projection, tiers=3, curvature=0.6, invert=False, samples=4) -> List[Tuple[float, float]]  # A closed (outward, up) moulding section in metres for FacadeDetails profiles, hanging below
   sb.replicate_metric_array(distribution_mode='CURVE_1D', guide_points=None, pitch_meters=0.1, seed_geometry=None, color=(0.55, 0.57, 0.6, 1.0)) -> 'Mesh'  # Operator 3: Affine Metric Replicator (Pillar 11).
   sb.revolve_harmonic_solid(anchor_point=(0.0, 0.0, 0.0), axis=(0.0, 1.0, 0.0), profile_curve=None, harmonic_lobe_count=0, harmonic_depth_ratio=0.2, helix_pitch_meters=0.0, color=(0.55, 0.57, 0.6, 1.0)) -> 'Mesh'  # Operator 2: Harmonic Solid of Revolution (Pillar 11).
   sb.superellipse_loop(z, cx, cy, rx, ry, m=2.4, n_pts=24, roll_deg=0.0) -> List[Any]  # Generates a closed 3D polygonal loop of a super-ellipse at coordinate z.
@@ -51,6 +53,7 @@ sb functions (import scratchbox as sb):
   sb.sweep_curve_profile(path, profile='CIRCULAR', profile_dimensions=(0.04, 0.04), scale_taper=(1.0, 1.0), twist_deg=0.0, radial_modulation=None, color=(0.55, 0.57, 0.6, 1.0)) -> 'Mesh'  # Operator 1: SE(3) Lie Group Curve Sweep (Pillar 11).
   sb.validate_scene(scene_or_mesh, auto_heal=True) -> Dict[str, Any]  # In-Engine Kinematic & Geometric Invariant Validator.
   sb.write_glb(arg1, arg2=None) -> bool  # Save a ScratchboxMesh directly to a standard binary glTF 2.0 (.glb) file
+  sb.write_textured_building(path, parts, surfaces=None, weathering=None, decals=None) -> Dict[str, Any]  # Write building parts to a GLB with real-scale PBR textures per part.
 sb.geometry.Mesh:
   attributes: name: str, material: PbrMaterial, vertex_count: int (read-only), triangle_count: int (read-only), bounds: AABB (read-only), vertices: list[Vertex] (read-only), indices: list[int] (read-only)
   sb.geometry.Mesh()
@@ -146,29 +149,20 @@ sb.Flora:
   PlantPreset.create_understory_dogwood(height=5.5, pos=(0.0, 0.0, 0.0)) -> Any  # Create subcanopy understory dogwood tree.
   PlantPreset.create_sword_fern_colony(radius=1.6, fronds=26, pos=(0.0, 0.0, 0.0)) -> Any  # Create arching sword fern colony.
   PlantPreset.create_wood_sorrel_cushion(radius=0.95, pos=(0.0, 0.0, 0.0)) -> Any  # Create trifoliate wood sorrel ground cushion.
-  PlantPreset.create_decaying_nurse_log(start=(-2.0, 0.0, 0.0), end=(2.0, 0.0, 0.0), radius=0.5) -> Any  # Create decaying nurse log with polypore shelves.
-  (+1 more)
-sb.RomanOrder:
-  values: Tuscan, Doric, Ionic, Corinthian, Composite, AtticPilaster
-sb.Structure:
-  attributes: material: Any, mesh, archetype, footprint_length, footprint_width, order, position
-  sb.Structure(mesh, archetype, footprint_length, footprint_width, order=None, position=(0.0, 0.0, 0.0))
-  .align_to_terrain(terrain, offset_z=0.2) -> Structure  # Aligns the structure vertically to the terrain surface.
-  .translate(dx, dy=None, dz=None) -> Structure  # Translate the structure by (dx, dy, dz) meters or by a Vec3 / tuple.
-  (+8 more)
-sb.Armature:
-  attributes: bones, pose
   (+2 more)
-Also in the API (not listed here): sb.Terrain; sb.architecture; sb.constants; sb.geospatial; sb.human; sb.layout; sb.nature; sb.pbr; sb.validation; sb.PoseBone; sb.hair.GaussianSplat; sb.hair.HairStrand; sb.math.Vec2; …
+sb.architecture:
+  attributes: RomanOrder, BuildingConfig, RoofType
+  (+3 more)
+Also in the API (not listed here): sb.RomanOrder; sb.Structure; sb.Terrain; sb.architecture.BuildingConfig; sb.constants; sb.geospatial; sb.human; sb.layout; sb.nature; sb.pbr; sb.validation; sb.PoseBone; sb.hair.GaussianSplat; …
 `;
 
 /** The same reference within the small budget used in the execute_3d_python_script description. */
-export const SB_API_CORE_SUMMARY = `scratchbox API (generated from the engine's stubs, version 440926b717ff; parameter names and defaults, -> return type). Scripts are type-checked against these stubs before they run: an attribute, function or keyword that is not in the API is rejected without running.
+export const SB_API_CORE_SUMMARY = `scratchbox API (generated from the engine's stubs, version f19c99322212; parameter names and defaults, -> return type). Scripts are type-checked against these stubs before they run: an attribute, function or keyword that is not in the API is rejected without running.
 
-sb functions (import scratchbox as sb): create_arched_blister(bounds=(0.35, 0.45, 0.9), arch_radius=0.4, swell=0.08, side=1.0, grid=(16, 8), …) -> Mesh; create_beveled_box(size=(1.0, 1.0, 1.0), bevel=0.02, color=None, material=None, **kwargs) -> Mesh; create_box(*args, **kwargs) -> Mesh; create_building(width=18.0, depth=14.0, floors=4, floor_height=3.4, ground_floor_height=4.2, …) -> Mesh; create_cambered_foil(span=1.8, chord=0.45, camber=0.04, thickness=0.05, angle_of_attack_deg=-4.0, …) -> Mesh; create_catenary_cable(start=(0, 0, 0), end=(10, 0, 0), sag=1.2, radius=0.03, segments=16, …) -> Mesh; create_character(name='Human', height=1.78, gender_beta=0.0, position=(0.0, 0.0, 0.0), **kwargs) -> StudioHuman; create_cone(radius=1.0, height=2.0, segments=24, color=None, material=None, …) -> Mesh; create_cube(*args, **kwargs) -> Mesh; create_curved_building(width=18.0, depth=18.0, floors=6, curvature=0.85, superellipse_exponent=2.4, …) -> Mesh; create_cylinder(radius_top=1.0, radius_bottom=1.0, height=2.0, segments=24, color=None, …) -> Mesh; create_envelope(bounds=(1.0, 0.3, 1.5), crown=0.25, slope=0.3, center_dip=0.0, grid=(16, 16), …) -> Mesh; create_form(bounds=(1.0, 1.0, 1.0), curvature=0.0, bevel=0.02, axis_of_revolution=None, crown=0.25, …) -> Mesh; create_human(role='scale_figure', height=1.76, gender_beta=0.0, pose='standing_survey', position=(0.0, 0.0, 0.0), …) -> Human; create_hydraulic_actuator(anchor_a, anchor_b, barrel_radius=0.035, rod_radius=0.02, rod_extension_ratio=0.45, …) -> Mesh; create_intake_strainer(center, normal=(0.0, 0.0, 1.0), radius=0.24, ring_count=3, spoke_count=4, …) -> Mesh; create_ivy(root=(0.0, 0.0, 0.0), obstacle_min=(-4.0, 0.0, -4.0), obstacle_max=(4.0, 6.0, 4.0), max_steps=60, cling_distance=None, …) -> Mesh; create_lathe(profile, segments=32, total_angle_rad=None, color=None, material=None, …) -> Mesh; create_loft(slices, close_ends=True, color=None, material=None, **kwargs) -> Mesh; create_lofted_hull(stations, profile='superellipse', m=2.8, close_ends=True, n_pts=32, …) -> Mesh; create_louver_bay(center, dimensions=(0.35, 0.25, 0.08), blade_count=6, blade_angle_deg=35.0, color=(0.55, 0.57, 0.6, 1.0)) -> Mesh; create_panelized_loft(stations, n_pts_per_slice=36, panel_seam_frequency=2.0, fastener_pitch_meters=0.15, color=(0.55, 0.57, 0.6, 1.0)) -> Mesh; create_plane(width=2.0, height=2.0, depth=None, seg_x=4, seg_y=4, …) -> Mesh; create_revolving_component(radius=0.5, length=1.0, axis='lateral', profile='cylinder', crown=0.0, …) -> Mesh; create_sphere(radius=1.0, rings=16, sectors=32, color=None, segments=None, …) -> Mesh; create_spline_conduit_harness(spline_pts, radius=0.016, n_pts=12, color=(0.42, 0.44, 0.47, 1.0), p_clamp_spacing=0.35) -> Mesh; create_structural_truss_member(pt_a, pt_b, thickness=(0.05, 0.05), lightening_pocket_ratio=0.35, has_gusset_plates=True, …) -> Mesh; create_studio_pedestal(radius=4.0, height=0.25, bevel=0.04, bevel_radius=None, segments=64, …) -> Mesh; create_subdivided_box(size=(1.0, 1.0, 1.0), subdivisions=4, color=None, material=None, **kwargs) -> Mesh; create_tower(width=16.0, depth=16.0, floors=14, twist_degrees=45.0, taper=0.7, …) -> Mesh; create_tree(attractor_count=120, crown_center=(0.0, 5.0, 0.0), crown_extents=(2.5, 3.5, 2.5), root_anchor=(0.0, 0.0, 0.0), perception_radius=2.0, …) -> Mesh; create_vegetation(pos=(0.0, 0.0, 0.0), height=12.0, attractor_count=120, crown_radius=3.0, branch_step_length=0.25, …) -> Any; create_wheel(radius=0.35, width=0.3, rim_radius=None, rim_recess=0.04, tread_bevel=0.025, …) -> Mesh; create_wheel_assembly(track_width=1.6, wheelbase=3.2, wheel_radius=0.35, tire_width=0.3, ground_clearance=0.05, …) -> Mesh; export_glb(arg1, arg2=None) -> bytes; replicate_metric_array(distribution_mode='CURVE_1D', guide_points=None, pitch_meters=0.1, seed_geometry=None, color=(0.55, 0.57, 0.6, 1.0)) -> 'Mesh'; revolve_harmonic_solid(anchor_point=(0.0, 0.0, 0.0), axis=(0.0, 1.0, 0.0), profile_curve=None, harmonic_lobe_count=0, harmonic_depth_ratio=0.2, …) -> 'Mesh'; superellipse_loop(z, cx, cy, rx, ry, …) -> List[Any]; superellipse_point(cx, cy, rx, ry, theta, …) -> Tuple[float, float]; sweep_curve_profile(path, profile='CIRCULAR', profile_dimensions=(0.04, 0.04), scale_taper=(1.0, 1.0), twist_deg=0.0, …) -> 'Mesh'; validate_scene(scene_or_mesh, auto_heal=True) -> Dict[str, Any]; write_glb(arg1, arg2=None) -> bool
+sb functions (import scratchbox as sb): create_arched_blister(bounds=(0.35, 0.45, 0.9), arch_radius=0.4, swell=0.08, side=1.0, grid=(16, 8), …) -> Mesh; create_beveled_box(size=(1.0, 1.0, 1.0), bevel=0.02, color=None, material=None, **kwargs) -> Mesh; create_box(*args, **kwargs) -> Mesh; create_building(width=18.0, depth=14.0, floors=4, floor_height=3.4, ground_floor_height=4.2, …) -> Mesh; create_building_parts(width=18.0, depth=14.0, floors=4, floor_height=3.4, ground_floor_height=4.2, …) -> _BuildingParts; create_cambered_foil(span=1.8, chord=0.45, camber=0.04, thickness=0.05, angle_of_attack_deg=-4.0, …) -> Mesh; create_catenary_cable(start=(0, 0, 0), end=(10, 0, 0), sag=1.2, radius=0.03, segments=16, …) -> Mesh; create_character(name='Human', height=1.78, gender_beta=0.0, position=(0.0, 0.0, 0.0), **kwargs) -> StudioHuman; create_cone(radius=1.0, height=2.0, segments=24, color=None, material=None, …) -> Mesh; create_cube(*args, **kwargs) -> Mesh; create_curved_building(width=18.0, depth=18.0, floors=6, curvature=0.85, superellipse_exponent=2.4, …) -> Mesh; create_cylinder(radius_top=1.0, radius_bottom=1.0, height=2.0, segments=24, color=None, …) -> Mesh; create_envelope(bounds=(1.0, 0.3, 1.5), crown=0.25, slope=0.3, center_dip=0.0, grid=(16, 16), …) -> Mesh; create_form(bounds=(1.0, 1.0, 1.0), curvature=0.0, bevel=0.02, axis_of_revolution=None, crown=0.25, …) -> Mesh; create_human(role='scale_figure', height=1.76, gender_beta=0.0, pose='standing_survey', position=(0.0, 0.0, 0.0), …) -> Human; create_hydraulic_actuator(anchor_a, anchor_b, barrel_radius=0.035, rod_radius=0.02, rod_extension_ratio=0.45, …) -> Mesh; create_intake_strainer(center, normal=(0.0, 0.0, 1.0), radius=0.24, ring_count=3, spoke_count=4, …) -> Mesh; create_ivy(root=(0.0, 0.0, 0.0), obstacle_min=(-4.0, 0.0, -4.0), obstacle_max=(4.0, 6.0, 4.0), max_steps=60, cling_distance=None, …) -> Mesh; create_lathe(profile, segments=32, total_angle_rad=None, color=None, material=None, …) -> Mesh; create_loft(slices, close_ends=True, color=None, material=None, **kwargs) -> Mesh; create_lofted_hull(stations, profile='superellipse', m=2.8, close_ends=True, n_pts=32, …) -> Mesh; create_louver_bay(center, dimensions=(0.35, 0.25, 0.08), blade_count=6, blade_angle_deg=35.0, color=(0.55, 0.57, 0.6, 1.0)) -> Mesh; create_panelized_loft(stations, n_pts_per_slice=36, panel_seam_frequency=2.0, fastener_pitch_meters=0.15, color=(0.55, 0.57, 0.6, 1.0)) -> Mesh; create_plane(width=2.0, height=2.0, depth=None, seg_x=4, seg_y=4, …) -> Mesh; create_revolving_component(radius=0.5, length=1.0, axis='lateral', profile='cylinder', crown=0.0, …) -> Mesh; create_sphere(radius=1.0, rings=16, sectors=32, color=None, segments=None, …) -> Mesh; create_spline_conduit_harness(spline_pts, radius=0.016, n_pts=12, color=(0.42, 0.44, 0.47, 1.0), p_clamp_spacing=0.35) -> Mesh; create_structural_truss_member(pt_a, pt_b, thickness=(0.05, 0.05), lightening_pocket_ratio=0.35, has_gusset_plates=True, …) -> Mesh; create_studio_pedestal(radius=4.0, height=0.25, bevel=0.04, bevel_radius=None, segments=64, …) -> Mesh; create_subdivided_box(size=(1.0, 1.0, 1.0), subdivisions=4, color=None, material=None, **kwargs) -> Mesh; create_tower(width=16.0, depth=16.0, floors=14, twist_degrees=45.0, taper=0.7, …) -> Mesh; create_tree(attractor_count=120, crown_center=(0.0, 5.0, 0.0), crown_extents=(2.5, 3.5, 2.5), root_anchor=(0.0, 0.0, 0.0), perception_radius=2.0, …) -> Mesh; create_vegetation(pos=(0.0, 0.0, 0.0), height=12.0, attractor_count=120, crown_radius=3.0, branch_step_length=0.25, …) -> Any; create_wheel(radius=0.35, width=0.3, rim_radius=None, rim_recess=0.04, tread_bevel=0.025, …) -> Mesh; create_wheel_assembly(track_width=1.6, wheelbase=3.2, wheel_radius=0.35, tire_width=0.3, ground_clearance=0.05, …) -> Mesh; export_glb(arg1, arg2=None) -> bytes; moulding_profile(height, projection, tiers=3, curvature=0.6, invert=False, …) -> List[Tuple[float, float]]; replicate_metric_array(distribution_mode='CURVE_1D', guide_points=None, pitch_meters=0.1, seed_geometry=None, color=(0.55, 0.57, 0.6, 1.0)) -> 'Mesh'; revolve_harmonic_solid(anchor_point=(0.0, 0.0, 0.0), axis=(0.0, 1.0, 0.0), profile_curve=None, harmonic_lobe_count=0, harmonic_depth_ratio=0.2, …) -> 'Mesh'; superellipse_loop(z, cx, cy, rx, ry, …) -> List[Any]; superellipse_point(cx, cy, rx, ry, theta, …) -> Tuple[float, float]; sweep_curve_profile(path, profile='CIRCULAR', profile_dimensions=(0.04, 0.04), scale_taper=(1.0, 1.0), twist_deg=0.0, …) -> 'Mesh'; validate_scene(scene_or_mesh, auto_heal=True) -> Dict[str, Any]; write_glb(arg1, arg2=None) -> bool; write_textured_building(path, parts, surfaces=None, weathering=None, decals=None) -> Dict[str, Any]
 sb.geometry.Mesh: attributes: name: str, material: PbrMaterial, vertex_count: int (read-only), triangle_count: int (read-only), bounds: AABB (read-only), vertices: list[Vertex] (read-only), indices: list[int] (read-only); Mesh(); Mesh(name='mesh'); get_positions_flat() -> bytes; get_normals_flat() -> bytes; get_indices_bytes() -> bytes; add_vertex(pos: Vec3, norm: Vec3=..., uv: Vec2=..., color: Vec4=...); add_triangle(i0, i1, i2); append(other) -> Mesh; translate(*args) -> Mesh; scale(*args) -> Mesh; rotate_x(angle_deg) -> Mesh; rotate_y(angle_deg) -> Mesh; rotate_z(angle_deg) -> Mesh; set_color(color: Vec4) -> Mesh; multiply_vertex_colors(factor: Vec4) -> Mesh; set_material(mat) -> Mesh; apply_material(mat) -> Mesh; compute_curvature_ao(intensity=0.65) -> Mesh; apply_procedural_weathering(frequency=2.0, amplitude=0.15) -> Mesh; displace_along_normals(frequency=2.0, amplitude=0.05) -> Mesh; tessellate_and_displace(tessellation_factor=4, displacement_scale=0.06, noise_freq=32.0, noise_amp=0.015) -> Mesh; clear(); recompute_normals() -> Mesh; recompute_smooth_normals() -> Mesh; weld_vertices(epsilon=0.0001) -> Mesh; recompute_bounds() -> Mesh; subdivide(iterations=1) -> Mesh; taper(factor=0.5, axis=1) -> Mesh; twist(angle_deg=45.0, axis=1) -> Mesh (+22 more)
 sb.math.Vec3: attributes: x: float, y: float, z: float; Vec3(); Vec3(x, y, z); length() -> float; normalized() -> Vec3; dot(arg: Vec3) -> float; cross(arg: Vec3) -> Vec3
-sb.PbrMaterial: attributes: base_color: Vec4, clearcoat: float, clearcoat_roughness: float, color: Vec4, double_sided: bool, emissive: Vec3, emissive_intensity: float, ior: float, metallic: float, metalness: float, name: str, roughness: float, thickness: float, transmission: float; PbrMaterial(name='defaultMaterial', **kwargs) -> PbrMaterial; PbrMaterial.asphalt_street() -> PbrMaterial; PbrMaterial.basalt_rock() -> PbrMaterial; PbrMaterial.carbon_composite() -> PbrMaterial; PbrMaterial.chrome() -> PbrMaterial; PbrMaterial.concrete_brutalist() -> PbrMaterial; PbrMaterial.copper_bullet() -> PbrMaterial; PbrMaterial.emissive_glow(color: Vec3, intensity=1.0) -> PbrMaterial; PbrMaterial.glass_tinted(color: Vec4=..., roughness=0.08, ior=1.52) -> PbrMaterial; PbrMaterial.gold() -> PbrMaterial; PbrMaterial.metal_brushed_steel() -> PbrMaterial; PbrMaterial.metal_dark_anodized() -> PbrMaterial (+14 more)
+sb.PbrMaterial: attributes: base_color: Vec4, clearcoat: float, clearcoat_roughness: float, color: Vec4, double_sided: bool, emissive: Vec3, emissive_intensity: float, ior: float, metallic: float, metalness: float, name: str, roughness: float, thickness: float, transmission: float; PbrMaterial(name='defaultMaterial', **kwargs) -> PbrMaterial; PbrMaterial.asphalt_street() -> PbrMaterial; PbrMaterial.basalt_rock() -> PbrMaterial; PbrMaterial.carbon_composite() -> PbrMaterial; PbrMaterial.chrome() -> PbrMaterial; PbrMaterial.concrete_brutalist() -> PbrMaterial (+20 more)
 Also in the API (not listed here): sb.math.Vec4; sb.Human; sb.plant.PlantBuildResult; sb.ShapeKeyBlock; sb.StudioHuman; sb.Scene; sb.hair.HairGuide; sb.Flora; sb.RomanOrder; sb.Structure; …
 `;
 
@@ -191,6 +185,17 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "get_bone",
         "pose"
     ],
+    "BlotParams": [
+        "color",
+        "drip_length",
+        "drips",
+        "edge_noise",
+        "mottling",
+        "opacity",
+        "seed",
+        "size_px",
+        "softness"
+    ],
     "BoundingVolume": [
         "center",
         "extents",
@@ -203,6 +208,7 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "bulge",
         "curvature",
         "depth",
+        "details",
         "floor_count",
         "floor_height",
         "ground_floor_height",
@@ -235,6 +241,30 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "target",
         "type"
     ],
+    "CoursedSurfaceParams": [
+        "bond_offset",
+        "edge_wear",
+        "face_relief_m",
+        "grain",
+        "grime",
+        "joint_color",
+        "joint_depth_m",
+        "joint_roughness",
+        "joint_width_m",
+        "max_resolution",
+        "metallic",
+        "pixels_per_metre",
+        "roughness_variance",
+        "seed",
+        "streaking",
+        "target_tile_m",
+        "unit_color",
+        "unit_color_variance",
+        "unit_height_m",
+        "unit_hue_variance",
+        "unit_roughness",
+        "unit_width_m"
+    ],
     "CurvatureAnalysisResult": [
         "cavity_occlusion",
         "curvedness",
@@ -243,6 +273,49 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "principal_k1",
         "principal_k2",
         "shape_index"
+    ],
+    "FacadeDetails": [
+        "balcony_bay_stride",
+        "balcony_depth_m",
+        "balcony_extra_width_m",
+        "balcony_floors",
+        "balcony_rail_height_m",
+        "balcony_slab_m",
+        "baluster_bulge",
+        "baluster_pitch_m",
+        "baluster_radius_m",
+        "chimney_cap_m",
+        "chimney_count",
+        "chimney_depth_m",
+        "chimney_pot_count",
+        "chimney_pot_height_m",
+        "chimney_pot_radius_m",
+        "chimney_rise_m",
+        "chimney_width_m",
+        "cornice_profile",
+        "dormer_bay_stride",
+        "dormer_depth_m",
+        "dormer_height_m",
+        "dormer_roof_pitch_deg",
+        "dormer_setback_m",
+        "dormer_width_m",
+        "hood_extension_m",
+        "hood_pitch_deg",
+        "hood_profile",
+        "pilaster_bay_stride",
+        "pilaster_capital_m",
+        "pilaster_flare",
+        "pilaster_projection_m",
+        "pilaster_width_m",
+        "quoin_course_m",
+        "quoin_joint_m",
+        "quoin_long_m",
+        "quoin_projection_m",
+        "quoin_short_m",
+        "sill_horn_m",
+        "sill_profile",
+        "string_course_floors",
+        "string_course_profile"
     ],
     "Flora": [
         "create_decaying_nurse_log",
@@ -835,6 +908,35 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "tangent",
         "uv"
     ],
+    "WeatheringParams": [
+        "cavity_grime",
+        "cavity_radius_m",
+        "damp_color",
+        "damp_height_m",
+        "damp_strength",
+        "decal_aging",
+        "exposure_wash",
+        "grime_color",
+        "ground_y",
+        "hemisphere_samples",
+        "max_atlas_width",
+        "overlay_offset_m",
+        "seed",
+        "shelter_grime",
+        "sky_distance_m",
+        "soot_color",
+        "soot_radius_m",
+        "soot_sources",
+        "soot_strength",
+        "streak_color",
+        "streak_column_m",
+        "streak_end_boost",
+        "streak_reach_m",
+        "streak_strength",
+        "texel_m",
+        "variation",
+        "wash_color"
+    ],
     "World": [
         "add",
         "add_asset",
@@ -908,6 +1010,7 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "ShapeKeys",
         "Skeleton",
         "StudioHuman",
+        "Union",
         "create",
         "create_grounded_character",
         "create_human"
@@ -915,6 +1018,7 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
     "scratchbox": [
         "Any",
         "Armature",
+        "Dict",
         "Flora",
         "Human",
         "List",
@@ -943,6 +1047,7 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "create_beveled_box",
         "create_box",
         "create_building",
+        "create_building_parts",
         "create_cambered_foil",
         "create_catenary_cable",
         "create_character",
@@ -982,6 +1087,7 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "k",
         "layout",
         "math",
+        "moulding_profile",
         "nature",
         "object_spec",
         "os",
@@ -1005,7 +1111,8 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "validate_scene",
         "validation",
         "world",
-        "write_glb"
+        "write_glb",
+        "write_textured_building"
     ],
     "scratchbox.adaptive_object": [
         "Any",
@@ -1127,13 +1234,19 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "rig",
         "sdf",
         "shaper",
-        "topology"
+        "surface",
+        "topology",
+        "weathering"
     ],
     "scratchbox_native.architecture": [
         "BuildingConfig",
+        "FacadeDetails",
         "RomanOrder",
         "RoofType",
+        "chimney_tops",
+        "facade_frames",
         "generate_building",
+        "generate_building_parts",
         "generate_curved_building",
         "generate_peripteral_temple"
     ],
@@ -1212,7 +1325,8 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "export_glb",
         "export_glb_bytes",
         "write_botanical_glb",
-        "write_glb"
+        "write_glb",
+        "write_glb_textured"
     ],
     "scratchbox_native.math": [
         "AABB",
@@ -1289,7 +1403,18 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "taper",
         "twist"
     ],
-    "scratchbox_native.topology": []
+    "scratchbox_native.surface": [
+        "CoursedSurfaceParams",
+        "synthesize_coursed_surface"
+    ],
+    "scratchbox_native.topology": [],
+    "scratchbox_native.weathering": [
+        "BlotParams",
+        "WeatheringParams",
+        "bake_weathering",
+        "make_decal_panel",
+        "synthesize_blot"
+    ]
 };
 
 /** Where a script reaches each public class (short name -> sb.<path>), for fix hints such as "construct a sb.math.Vec4". */
