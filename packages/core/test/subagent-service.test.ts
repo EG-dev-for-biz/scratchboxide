@@ -110,13 +110,12 @@ async function runTests() {
         attachedMcpTools: [dummyMcpTool]
     });
     assert.ok(Array.isArray(toolsAll), 'Should return an array');
-    assert.strictEqual(toolsAll.length, 3);
+    // Attached MCP tools are not offered as functions: no MCP server is connected, so a call could only fail.
+    assert.strictEqual(toolsAll.length, 2);
     assert.deepStrictEqual(toolsAll[0], { googleSearch: {} });
     assert.deepStrictEqual(toolsAll[1], { codeExecution: {} });
-    assert.ok(toolsAll[2].functionDeclarations, 'Third item should contain functionDeclarations');
-    assert.strictEqual(toolsAll[2].functionDeclarations[0].name, 'test_tool_name'); // replacing invalid char '-' with '_'
-    
-    console.log('  ✓ Test 6 Passed: Gemini built-in tools and MCP tools correctly configured/appended');
+
+    console.log('  ✓ Test 6 Passed: Gemini built-in tools configured; attached MCP tools not offered as functions');
 
     console.log('\n🎉 ALL SUBAGENT & MODEL TESTS PASSED SUCCESSFULLY!');
 }

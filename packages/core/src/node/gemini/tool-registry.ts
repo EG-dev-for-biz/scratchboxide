@@ -46,8 +46,6 @@ import {
     VFX_VIDEO_TOOL_DECLARATIONS,
     vfxVideoHandlers,
     PROMPT_TEMPLATE_TOOL_NAMES,
-    AI_BEAUTIFY_TOOL_DECLARATIONS,
-    aiBeautifyHandlers,
     ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS,
     adaptiveMatchmoveHandlers,
     NANO_BANANA_TOOL_DECLARATIONS,
@@ -557,7 +555,12 @@ export function buildToolDeclarations(
     // Tools the switches allow, in registration order.
     let allowed: ToolDeclaration[] = registry.declarations(groups);
     if (Array.isArray(request.toolPacks) && request.toolPacks.length > 0) {
-        allowed = registry.declarationsForPacks(request.toolPacks);
+        // Named packs narrow the allowed tools; they never bring back a group the request switched off.
+        const groupOn = new Set(groups);
+        allowed = registry.declarationsForPacks(request.toolPacks).filter(d => {
+            const group = registry.get(d.name)?.group;
+            return !!group && groupOn.has(group);
+        });
     }
     // Plan and Ask may only use tools that cannot change anything (enforced again at execution).
     // A subagent reports back to its parent agent, so it gets no user-facing or delegation tools.
@@ -612,125 +615,69 @@ export function buildToolDeclarations(
     return tools.length > 0 ? tools : undefined;
 }
 
+/**
+ * Registers each declaration of one tool pack with its handler. Building the default registry must never register a
+ * name twice (Map.set would silently replace the earlier tool) or a declaration with no handler (the model would be
+ * offered a tool it cannot run), so both throw, naming the tool.
+ */
+export function registerTools(
+    registry: ToolRegistry,
+    declarations: ToolDeclaration[],
+    handlers: Record<string, ToolHandler | undefined>,
+    group: ToolGroup,
+    optionsFor: (name: string) => ToolRegistrationOptions = () => ({})
+): void {
+    for (const decl of declarations) {
+        if (registry.has(decl.name)) throw new Error(`Tool "${decl.name}" is registered twice (already in the ${registry.get(decl.name)!.group} group)`);
+        const handler = handlers[decl.name];
+        if (typeof handler !== 'function') throw new Error(`Tool "${decl.name}" has a declaration but no handler`);
+        registry.register(decl.name, decl, handler, group, optionsFor(decl.name));
+    }
+}
+
 /** Registry pre-loaded with the workspace, lens, browser, google 3d tiles, utdra, ai beautify, atmosphere, webxr geospatial, geobox, optics and canvas tool suites. */
 export function createDefaultToolRegistry(): ToolRegistry {
     const registry = new ToolRegistry();
-    for (const decl of CANVAS_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, canvasHandlers[decl.name], 'workspace');
-    }
-    for (const decl of WORKSPACE_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, workspaceHandlers[decl.name], 'workspace');
-    }
-    for (const decl of GOOGLE_3D_TILES_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, google3DTilesHandlers[decl.name], 'workspace');
-    }
-    for (const decl of PANORAMA_TOOL_DECLARATIONS) {
-        // Some panorama-pack tools (Street View grounding, vector staging) keep their handlers in analyticalGroomHandlers.
-        registry.register(decl.name, decl, panoramaHandlers[decl.name] ?? analyticalGroomHandlers[decl.name], 'workspace');
-    }
-    for (const decl of UTDRA_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, utdraHandlers[decl.name], 'workspace');
-    }
-    for (const decl of TILE_REFINE_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, tileRefineHandlers[decl.name], 'workspace');
-    }
-    for (const decl of VIRTUAL_GEOMETRY_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, virtualGeometryHandlers[decl.name], 'workspace');
-    }
-    for (const decl of LOCATION_EVIDENCE_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, locationEvidenceHandlers[decl.name], 'workspace');
-    }
-    for (const decl of ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, adaptiveMatchmoveHandlers[decl.name], 'workspace');
-    }
-    for (const decl of VFX_VIDEO_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, vfxVideoHandlers[decl.name], 'workspace', offeredUnlessDeprecated(decl.name));
-    }
-    for (const decl of NANO_BANANA_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, nanoBananaHandlers[decl.name], 'workspace');
-    }
-    for (const decl of IMAGE_GENERATION_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, imageGenerationHandlers[decl.name], 'workspace');
-    }
-    for (const decl of ALGORITHMIC_UV_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, algorithmicUvHandlers[decl.name], 'workspace');
-    }
-    for (const decl of ATMOSPHERE_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, atmosphereHandlers[decl.name], 'workspace');
-    }
-    for (const decl of MESH_SHAPING_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, meshShapingHandlers[decl.name], 'workspace');
-    }
-    for (const decl of SB_RIG_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, sbRigHandlers[decl.name], 'workspace');
-    }
-    for (const decl of WEBXR_GEOSPATIAL_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, webxrGeospatialHandlers[decl.name], 'workspace');
-    }
-    for (const decl of GEOBOX_PRECISION_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, geoboxPrecisionHandlers[decl.name], 'workspace', offeredUnlessDeprecated(decl.name));
-    }
-    for (const decl of OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, opticsLensDistortionHandlers[decl.name], 'workspace');
-    }
-    for (const decl of BOTANICAL_TREE_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, botanicalTreeHandlers[decl.name], 'workspace');
-    }
-    for (const decl of SB_ROADIE_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, sbRoadieHandlers[decl.name], 'workspace');
-    }
-    for (const decl of LIGHTING_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, lightingHandlers[decl.name], 'workspace');
-    }
-    for (const decl of POSE_DEPTH_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, poseDepthHandlers[decl.name], 'workspace');
-    }
-    for (const decl of PHYSICAL_CAMERA_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, physicalCameraHandlers[decl.name], 'workspace');
-    }
-    for (const decl of TAPIR_4DGS_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, tapir4dgsHandlers[decl.name], 'workspace');
-    }
-    for (const decl of AVATAR_4DGS_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, avatar4dgsHandlers[decl.name], 'workspace');
-    }
-    for (const decl of HUMANOID_AVATAR_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, humanoidAvatarHandlers[decl.name], 'workspace');
-    }
-    for (const decl of ANALYTICAL_GROOM_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, analyticalGroomHandlers[decl.name], 'workspace');
-    }
-    for (const decl of UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, universal3DStructureHandlers[decl.name], 'workspace');
-    }
-    for (const decl of PYTHON_3D_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, python3DHandlers[decl.name], 'workspace');
-    }
-    for (const decl of OBJECT_REFERENCE_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, objectReferenceHandlers[decl.name], 'workspace');
-    }
-    for (const decl of SB_SCRIPT_GUIDE_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, sbScriptGuideHandlers[decl.name], 'workspace');
-    }
+    registerTools(registry, CANVAS_TOOL_DECLARATIONS, canvasHandlers, 'workspace');
+    registerTools(registry, WORKSPACE_TOOL_DECLARATIONS, workspaceHandlers, 'workspace');
+    registerTools(registry, GOOGLE_3D_TILES_TOOL_DECLARATIONS, google3DTilesHandlers, 'workspace');
+    // Some panorama-pack tools (Street View grounding, vector staging) keep their handlers in analyticalGroomHandlers.
+    registerTools(registry, PANORAMA_TOOL_DECLARATIONS, { ...analyticalGroomHandlers, ...panoramaHandlers }, 'workspace');
+    registerTools(registry, UTDRA_TOOL_DECLARATIONS, utdraHandlers, 'workspace');
+    registerTools(registry, TILE_REFINE_TOOL_DECLARATIONS, tileRefineHandlers, 'workspace');
+    registerTools(registry, VIRTUAL_GEOMETRY_TOOL_DECLARATIONS, virtualGeometryHandlers, 'workspace');
+    registerTools(registry, LOCATION_EVIDENCE_TOOL_DECLARATIONS, locationEvidenceHandlers, 'workspace');
+    registerTools(registry, ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS, adaptiveMatchmoveHandlers, 'workspace');
+    registerTools(registry, VFX_VIDEO_TOOL_DECLARATIONS, vfxVideoHandlers, 'workspace', offeredUnlessDeprecated);
+    registerTools(registry, NANO_BANANA_TOOL_DECLARATIONS, nanoBananaHandlers, 'workspace');
+    registerTools(registry, IMAGE_GENERATION_TOOL_DECLARATIONS, imageGenerationHandlers, 'workspace');
+    registerTools(registry, ALGORITHMIC_UV_TOOL_DECLARATIONS, algorithmicUvHandlers, 'workspace');
+    registerTools(registry, ATMOSPHERE_TOOL_DECLARATIONS, atmosphereHandlers, 'workspace');
+    registerTools(registry, MESH_SHAPING_TOOL_DECLARATIONS, meshShapingHandlers, 'workspace');
+    registerTools(registry, SB_RIG_TOOL_DECLARATIONS, sbRigHandlers, 'workspace');
+    registerTools(registry, WEBXR_GEOSPATIAL_TOOL_DECLARATIONS, webxrGeospatialHandlers, 'workspace');
+    registerTools(registry, GEOBOX_PRECISION_TOOL_DECLARATIONS, geoboxPrecisionHandlers, 'workspace', offeredUnlessDeprecated);
+    registerTools(registry, OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS, opticsLensDistortionHandlers, 'workspace');
+    registerTools(registry, BOTANICAL_TREE_TOOL_DECLARATIONS, botanicalTreeHandlers, 'workspace');
+    registerTools(registry, SB_ROADIE_TOOL_DECLARATIONS, sbRoadieHandlers, 'workspace');
+    registerTools(registry, LIGHTING_TOOL_DECLARATIONS, lightingHandlers, 'workspace');
+    registerTools(registry, POSE_DEPTH_TOOL_DECLARATIONS, poseDepthHandlers, 'workspace');
+    registerTools(registry, PHYSICAL_CAMERA_TOOL_DECLARATIONS, physicalCameraHandlers, 'workspace');
+    registerTools(registry, TAPIR_4DGS_TOOL_DECLARATIONS, tapir4dgsHandlers, 'workspace');
+    registerTools(registry, AVATAR_4DGS_TOOL_DECLARATIONS, avatar4dgsHandlers, 'workspace');
+    registerTools(registry, HUMANOID_AVATAR_TOOL_DECLARATIONS, humanoidAvatarHandlers, 'workspace');
+    registerTools(registry, ANALYTICAL_GROOM_TOOL_DECLARATIONS, analyticalGroomHandlers, 'workspace');
+    registerTools(registry, UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS, universal3DStructureHandlers, 'workspace');
+    registerTools(registry, PYTHON_3D_TOOL_DECLARATIONS, python3DHandlers, 'workspace');
+    registerTools(registry, OBJECT_REFERENCE_TOOL_DECLARATIONS, objectReferenceHandlers, 'workspace');
+    registerTools(registry, SB_SCRIPT_GUIDE_TOOL_DECLARATIONS, sbScriptGuideHandlers, 'workspace');
     // Declared in DEFAULT_TOOL_DECLARATIONS; without these the agent is offered tools it cannot dispatch.
-    for (const decl of IMAGE_TO_PBR_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, imageToPbrHandlers[decl.name], 'workspace');
-    }
-    for (const decl of PBR_MATERIAL_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, pbrMaterialHandlers[decl.name], 'workspace');
-    }
-    for (const decl of LOCAL_SF3D_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, localSf3DHandlers[decl.name], 'workspace', { offeredByDefault: LOCAL_SF3D_OFFERED_BY_DEFAULT, loadableWhenNamed: true });
-    }
-    for (const decl of TURNAROUND_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, turnaroundHandlers[decl.name], 'workspace');
-    }
-    for (const decl of LENS_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, lensHandlers[decl.name], 'lens');
-    }
-    for (const decl of BROWSER_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, browserHandlers[decl.name], 'browser');
-    }
+    registerTools(registry, IMAGE_TO_PBR_TOOL_DECLARATIONS, imageToPbrHandlers, 'workspace');
+    registerTools(registry, PBR_MATERIAL_TOOL_DECLARATIONS, pbrMaterialHandlers, 'workspace');
+    registerTools(registry, LOCAL_SF3D_TOOL_DECLARATIONS, localSf3DHandlers, 'workspace', () => ({ offeredByDefault: LOCAL_SF3D_OFFERED_BY_DEFAULT, loadableWhenNamed: true }));
+    registerTools(registry, TURNAROUND_TOOL_DECLARATIONS, turnaroundHandlers, 'workspace');
+    registerTools(registry, LENS_TOOL_DECLARATIONS, lensHandlers, 'lens');
+    registerTools(registry, BROWSER_TOOL_DECLARATIONS, browserHandlers, 'browser');
     // Not offered as itself: buildToolDeclarations builds its declaration (the catalog) per request.
     registry.register(LOAD_TOOLS_NAME, loadToolsDeclaration([]), createLoadToolsHandler(name => registry.has(name) && name !== LOAD_TOOLS_NAME), 'workspace', { offeredByDefault: false });
     return registry;

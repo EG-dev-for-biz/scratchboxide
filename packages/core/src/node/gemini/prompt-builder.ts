@@ -744,9 +744,9 @@ ${CANVAS_PRIMITIVES_SPECIFICATION}
 
     let mcpSection = '';
     if (request.attachedMcpTools && request.attachedMcpTools.length > 0) {
-        mcpSection = '\n\n### ATTACHED MCP LIVE TOOLS:\n';
+        mcpSection = '\n\n### MCP TOOLS ATTACHED IN THE UI (NOT CONNECTED):\nThe user attached these MCP tools, but no MCP server is connected to this chat, so they cannot be called. If the request needs one, say it is not connected here instead of describing a result.\n';
         for (const tool of request.attachedMcpTools) {
-            mcpSection += `- Tool: \`${tool.name}\` (${tool.serverName}): ${tool.description}\n`;
+            mcpSection += `- \`${tool.name}\` (${tool.serverName}): ${tool.description}\n`;
         }
     }
 
