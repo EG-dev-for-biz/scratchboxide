@@ -15,7 +15,8 @@
 
 import { describe, expect, it } from 'vitest';
 import { facadeQuality, openingsKept } from '../src/node/3d-engine/staged-location/facade-texture/quality';
-import { featheredFill, repeatFill } from '../src/node/3d-engine/staged-location/facade-texture/facade-texture';
+import { bayStack, BAY_SPREAD_ZERO_CONFIDENCE, featheredFill, repeatFill, stackedWall } from '../src/node/3d-engine/staged-location/facade-texture/facade-texture';
+import { buildTexturePlatePrompt } from '../src/browser/generative-canvas/services/location-beautify-service';
 
 const PX = 0.05, W = 200, H = 160;
 
@@ -158,5 +159,40 @@ describe('facade texture quality', () => {
         expect(at(140, 94)).toEqual(Array.from(truth.subarray((94 * W + 140) * 4, (94 * W + 140) * 4 + 3)));
         // the unseen top strip: no bay of its rows was seen, and no storey is copied up: the base
         expect(at(50, 10)).toEqual([10, 10, 10]);
+    });
+
+    it('stacks every bay onto one: a car in one bay is voted out, and the bays\' disagreement there is the confidence', () => {
+        const truth = facade(), rgba = truth.slice(), use = new Uint8Array(W * H).fill(1);
+        // a red car across one bay's lowest metre (x 2.4-3.6 m), seen: a stack of five bays outvotes it
+        const car = (x: number, y: number) => x >= 48 && x < 72 && y >= H - 20;
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (car(x, y)) rgba.set([220, 20, 20, 255], (y * W + x) * 4);
+        const st = bayStack(rgba, use, W, H, PX);
+        expect(st.bayM).toBeCloseTo(2, 1);
+        expect(st.bays).toBe(5);
+        expect(st.votedShare).toBe(1);
+        // the stack under the car is wall, not red: a car is never in the stacked wall
+        const wall = stackedWall(st, W, H, new Uint8Array(W * H * 4));
+        const k = ((H - 10) * W + 60) * 4;
+        expect(wall[k]).toBeLessThan(200);
+        expect(wall[k + 1]).toBeGreaterThan(40);
+        // a clean bay agrees with its siblings almost exactly; one bay in five a car still leaves the median's MAD small
+        expect(st.meanConfidence).toBeGreaterThan(0.8);
+        // a row where every bay differs wildly has low confidence
+        const noisy = truth.slice();
+        for (let x = 0; x < W; x++) { const v = Math.floor(x / st.bay) * 60; noisy.set([v, v, v, 255], (50 * W + x) * 4); }
+        const sn = bayStack(noisy, use, W, H, PX, undefined);
+        const row = Array.from(sn.confidence.subarray(50 * sn.bay, 51 * sn.bay));
+        expect(Math.max(...row)).toBeLessThan(1 - 30 / BAY_SPREAD_ZERO_CONFIDENCE);
+        // unseen bays do not vote: with only two bays of a row seen there is no stack there
+        const few = new Uint8Array(W * H).fill(1);
+        for (let x = 80; x < W; x++) few[30 * W + x] = 0;
+        expect(bayStack(truth, few, W, H, PX).votes[30 * 40 + 10]).toBeLessThan(3);
+    });
+
+    it('describes a bay-stack reference as this wall, not the adjacent one', () => {
+        const base = { locationName: 'X', widthM: 10, heightM: 8, widthPx: 512, heightPx: 400, preserveClause: '', withReference: true };
+        expect(buildTexturePlatePrompt({ ...base, referenceIsBayStack: true })).toContain('median of all its bays');
+        expect(buildTexturePlatePrompt(base)).toContain('adjacent wall');
+        expect(buildTexturePlatePrompt(base)).not.toContain('median of all its bays');
     });
 });

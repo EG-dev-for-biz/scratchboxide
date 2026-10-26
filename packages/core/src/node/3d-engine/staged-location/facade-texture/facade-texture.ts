@@ -75,35 +75,97 @@ function repeatLag(p: Float64Array, lo: number, hi: number, fallback: number): n
 /** A fill texel needs at least this many bays of its storey row seen at its place in the bay (so a one-off is outvoted). */
 export const MIN_FILL_BAYS = 3;
 
+/** A stacked texel whose bays differ by this much luminance (median absolute deviation, 0-255) has confidence 0. */
+export const BAY_SPREAD_ZERO_CONFIDENCE = 64;
+
 /**
- * A fill for a wall's unseen texels from the wall itself, along its own storey only: each takes, per channel, the median of
- * the texels at the same place in the bay (x mod bay) on the same row, over the bays `source` marks (default: the seen ones).
- * Never a storey up or down (that added a storey above the Haughwout's cornice), and a one-off feature in one bay (its clock)
- * is outvoted by the bays without it, so it is never repeated. The bay is the seen texels' own repeat (1-6 m). A texel with
- * fewer than MIN_FILL_BAYS bays to vote takes `base` (e.g. the painted reading).
+ * The wall's irreducible bay (Müller et al. 2007, "Image-based Procedural Modeling of Facades", section 2.3): every bay of
+ * the wall stacked onto one, each texel (place in the bay, row) the per-channel median of the bays `source` marks there
+ * (default: the seen ones), so a car, a shadow or a one-off in one bay is outvoted by the bays without it. Rows stay rows:
+ * a storey is never stacked onto another. `spread` is how much the bays disagree there (the median absolute deviation of
+ * their luminance) and `confidence` maps it to 0..1 (0 too where fewer than MIN_FILL_BAYS bays vote): a measurement of how
+ * well the wall repeats, not a guess.
  */
-export function repeatFill(rgba: Uint8Array, use: Uint8Array, W: number, H: number, pixelM: number, base: Uint8Array, source?: Uint8Array): Uint8Array {
+export interface BayStack {
+    /** The bay, texels; the tile is bay x H. */
+    bay: number;
+    bayM: number;
+    /** The bays the wall spans (W / bay, rounded up). */
+    bays: number;
+    /** bay x H RGBA: the median bay (alpha 0 where fewer than MIN_FILL_BAYS bays vote). */
+    tile: Uint8Array;
+    /** bay x H: the bays that voted at each texel. */
+    votes: Uint8Array;
+    /** bay x H: the luminance MAD across the voting bays. */
+    spread: Float32Array;
+    /** bay x H: 1 - spread / BAY_SPREAD_ZERO_CONFIDENCE, clamped; 0 under MIN_FILL_BAYS votes. */
+    confidence: Float32Array;
+    /** The share of the tile's texels with at least MIN_FILL_BAYS votes. */
+    votedShare: number;
+    /** The mean confidence over the voted texels (0 when none voted). */
+    meanConfidence: number;
+}
+
+export function bayStack(rgba: Uint8Array, use: Uint8Array, W: number, H: number, pixelM: number, source?: Uint8Array): BayStack {
     const src = source ?? use;
     const N = W * H, L = new Float32Array(N);
     for (let i = 0; i < N; i++) L[i] = 0.299 * rgba[i * 4] + 0.587 * rgba[i * 4 + 1] + 0.114 * rgba[i * 4 + 2];
     const col = new Float64Array(W);
     for (let y = 0; y < H; y++) for (let x = 0; x + 1 < W; x++) { const i = y * W + x; if (use[i] && use[i + 1]) col[x] += Math.abs(L[i + 1] - L[i]); }
-    const bay = repeatLag(col, Math.round(1 / pixelM), Math.round(6 / pixelM), Math.round(2 / pixelM));
-    const out = Uint8Array.from(base);
-    const vals: number[][] = [[], [], []];
+    const bay = Math.max(1, Math.min(W, repeatLag(col, Math.round(1 / pixelM), Math.round(6 / pixelM), Math.round(2 / pixelM))));
+    const tile = new Uint8Array(bay * H * 4), votes = new Uint8Array(bay * H), spread = new Float32Array(bay * H), confidence = new Float32Array(bay * H);
+    const vals: number[][] = [[], [], [], []];
     const med = (v: number[]) => { v.sort((p, q) => p - q); return v[Math.floor(v.length / 2)]; };
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-        const i = y * W + x;
-        if (use[i]) continue;
-        vals[0].length = vals[1].length = vals[2].length = 0;
-        for (let xx = x % bay; xx < W; xx += bay) {
-            const j = y * W + xx;
-            if (!src[j] || (xx === x && !use[j])) continue;
-            vals[0].push(rgba[j * 4]); vals[1].push(rgba[j * 4 + 1]); vals[2].push(rgba[j * 4 + 2]);
+    let voted = 0, confSum = 0;
+    for (let y = 0; y < H; y++) for (let b = 0; b < bay; b++) {
+        vals[0].length = vals[1].length = vals[2].length = vals[3].length = 0;
+        for (let x = b; x < W; x += bay) {
+            const j = y * W + x;
+            if (!src[j]) continue;
+            vals[0].push(rgba[j * 4]); vals[1].push(rgba[j * 4 + 1]); vals[2].push(rgba[j * 4 + 2]); vals[3].push(L[j]);
         }
-        if (vals[0].length < MIN_FILL_BAYS) continue;
-        out[i * 4] = med(vals[0]); out[i * 4 + 1] = med(vals[1]); out[i * 4 + 2] = med(vals[2]); out[i * 4 + 3] = 255;
+        const k = y * bay + b, n = vals[0].length;
+        votes[k] = Math.min(255, n);
+        if (n < MIN_FILL_BAYS) continue;
+        tile[k * 4] = med(vals[0]); tile[k * 4 + 1] = med(vals[1]); tile[k * 4 + 2] = med(vals[2]); tile[k * 4 + 3] = 255;
+        const ml = med(vals[3]);
+        spread[k] = med(vals[3].map(v => Math.abs(v - ml)));
+        confidence[k] = Math.max(0, Math.min(1, 1 - spread[k] / BAY_SPREAD_ZERO_CONFIDENCE));
+        voted++; confSum += confidence[k];
     }
+    return { bay, bayM: bay * pixelM, bays: Math.ceil(W / bay), tile, votes, spread, confidence, votedShare: voted / Math.max(1, bay * H), meanConfidence: voted ? confSum / voted : 0 };
+}
+
+/** The stack laid back across the wall (W x H RGBA): each texel its bay's median, `base` where too few bays voted. */
+export function stackedWall(st: BayStack, W: number, H: number, base: Uint8Array): Uint8Array {
+    const out = Uint8Array.from(base);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const k = y * st.bay + (x % st.bay);
+        if (!st.tile[k * 4 + 3]) continue;
+        out.set(st.tile.subarray(k * 4, k * 4 + 3), (y * W + x) * 4);
+        out[(y * W + x) * 4 + 3] = 255;
+    }
+    return out;
+}
+
+/** A bay stack is sent as the wall's reference only when at least this share of its texels had MIN_FILL_BAYS bays voting. */
+export const BAY_STACK_MIN_REFERENCE_SHARE = 0.5;
+
+/** What a bay stack measured, for a wall's record. */
+export function bayStackRecord(st: BayStack): NonNullable<EnhanceWallRecord['bayStack']> {
+    return { bayM: Math.round(st.bayM * 100) / 100, bays: st.bays, votedShare: Math.round(st.votedShare * 1000) / 1000, meanConfidence: Math.round(st.meanConfidence * 1000) / 1000 };
+}
+
+/**
+ * A fill for a wall's unseen texels from the wall itself, along its own storey only: the wall's bay stack (bayStack) at the
+ * texel's place in the bay. Never a storey up or down (that added a storey above the Haughwout's cornice), and a one-off
+ * feature in one bay (its clock) is outvoted by the bays without it, so it is never repeated. A texel with fewer than
+ * MIN_FILL_BAYS bays to vote takes `base` (e.g. the painted reading). Pass `stack` when it is already measured.
+ */
+export function repeatFill(rgba: Uint8Array, use: Uint8Array, W: number, H: number, pixelM: number, base: Uint8Array, source?: Uint8Array, stack?: BayStack): Uint8Array {
+    const st = stack ?? bayStack(rgba, use, W, H, pixelM, source);
+    const all = stackedWall(st, W, H, base), out = Uint8Array.from(base);
+    for (let i = 0; i < W * H; i++) if (!use[i]) out.set(all.subarray(i * 4, i * 4 + 4), i * 4);
     return out;
 }
 
@@ -150,6 +212,8 @@ export interface PreparedFacade {
 /** The plate as sent to the model: at most ENHANCE_MAX_SIDE long, padded to a model aspect, an unseen wall's gaps mid-grey. */
 export function prepareFacadeRequest(f: MassingFace, t: FaceTexture, use: Uint8Array, opts: {
     locationName: string; models: string[]; reference?: FaceTexture; signal?: AbortSignal;
+    /** What `reference` is: the adjacent finished wall (default) or this wall's own bays stacked (stackedWall). */
+    referenceKind?: 'adjacent' | 'bayStack';
     /** The Street View photo sent to the model with the plate (absent: none sent). */
     streetView?: WallStreetView;
     unseen?: UnseenWall;
@@ -171,7 +235,7 @@ export function prepareFacadeRequest(f: MassingFace, t: FaceTexture, use: Uint8A
     const { padded, offset } = padToModelAspect(small);
     const r = opts.reference;
     const ref = r ? (() => { const rs = Math.min(1, 768 / Math.max(r.width, r.height)); const s = resizeRgba({ width: r.width, height: r.height, rgba: r.rgba }, Math.max(8, Math.round(r.width * rs)), Math.max(8, Math.round(r.height * rs))); return new Uint8Array(encodePng(s.width, s.height, Buffer.from(s.rgba), 4)); })() : undefined;
-    const prompt = buildTexturePlatePrompt({ locationName: opts.locationName, widthM: t.width * f.pixel, heightM: t.height * f.pixel, widthPx: padded.width, heightPx: padded.height, preserveClause: preserveClause(padded.width, padded.height), withReference: !!ref, ...(opts.streetView ? { withStreetView: true } : {}), ...(opts.unseen && !opts.unseen.fill ? { unseen: true } : {}),
+    const prompt = buildTexturePlatePrompt({ locationName: opts.locationName, widthM: t.width * f.pixel, heightM: t.height * f.pixel, widthPx: padded.width, heightPx: padded.height, preserveClause: preserveClause(padded.width, padded.height), withReference: !!ref, ...(ref && opts.referenceKind === 'bayStack' ? { referenceIsBayStack: true } : {}), ...(opts.streetView ? { withStreetView: true } : {}), ...(opts.unseen && !opts.unseen.fill ? { unseen: true } : {}),
         ...(opts.streetBandM ? { streetBand: { bandM: opts.streetBandM, bandPx: Math.round((opts.streetBandM / (t.height * f.pixel)) * sh) + (padded.height - sh) - offset[1] } } : {}) });
     const image = new Uint8Array(encodePng(padded.width, padded.height, Buffer.from(padded.rgba), 4));
     const request: PlateRequest = { prompt, image, width: padded.width, height: padded.height, ...(ref ? { reference: ref } : {}), ...(opts.streetView ? { streetView: opts.streetView.crop } : {}), models: opts.models, ...(opts.signal ? { signal: opts.signal } : {}) };
@@ -248,6 +312,11 @@ export interface BuildFacadeTextureOptions {
     /** Reads storey and bay counts of the tile and of the plate (plate-identity.ts); without it the counts are not checked. */
     counter?: FacadeCounter;
     /**
+     * This wall's bays stacked onto one (bayStack): recorded on the wall, and sent as the model's reference (stackedWall) when
+     * no `reference` is given and at least BAY_STACK_MIN_REFERENCE_SHARE of the bay was voted on.
+     */
+    bayStack?: BayStack;
+    /**
      * A wall the tile hardly sees: its uncovered texels are sent mid-grey with the unseen prompt (drawn as the wall continues)
      * and labelled `source` when accepted; `familyLab` is the building's median facade colour (CIELAB), the colour family
      * checked when the tile covers too little of the wall to have one.
@@ -302,9 +371,14 @@ export async function buildFacadeTexture(f: MassingFace, t: FaceTexture, use: Ui
     let uncovered = 0;
     for (let i = 0; i < use.length; i++) if (!use[i]) uncovered++;
     const models = unseen && opts.unseenModels?.length && uncovered > UNSEEN_MODEL_SHARE * use.length ? opts.unseenModels : opts.models;
-    const prep = prepareFacadeRequest(f, t, use, { locationName: opts.locationName, models, ...(opts.reference ? { reference: opts.reference } : {}), ...(opts.signal ? { signal: opts.signal } : {}), ...(guide ? { streetView: sv } : {}), ...(unseen ? { unseen } : {}), ...(opts.streetBandM ? { streetBandM: opts.streetBandM } : {}) });
+    // with no finished neighbour, the wall's own bays stacked are its reference when enough of the bay was voted on
+    const st = opts.bayStack;
+    const stackRef: FaceTexture | undefined = !opts.reference && st && st.votedShare >= BAY_STACK_MIN_REFERENCE_SHARE
+        ? { width: t.width, height: t.height, rgba: stackedWall(st, t.width, t.height, t.rgba), source: new Uint8Array(t.width * t.height) } : undefined;
+    const reference = opts.reference ?? stackRef;
+    const prep = prepareFacadeRequest(f, t, use, { locationName: opts.locationName, models, ...(reference ? { reference } : {}), ...(stackRef ? { referenceKind: 'bayStack' as const } : {}), ...(opts.signal ? { signal: opts.signal } : {}), ...(guide ? { streetView: sv } : {}), ...(unseen ? { unseen } : {}), ...(opts.streetBandM ? { streetBandM: opts.streetBandM } : {}) });
     const svRec: EnhanceStreetViewRecord | undefined = sv ? { ...(guide ? {} : { checkOnly: true }), panoId: sv.view.panoId, method: sv.view.registration?.method ?? 'nominal', bandCover: Math.round(sv.rect.bandCover * 1000) / 1000, pxPerM: Math.round(sv.rect.pxPerM * 10) / 10 } : undefined;
-    const base = { face: f.index, key: f.key, ...(svRec ? { streetView: svRec } : {}), ...(guards && !sv && opts.noStreetView ? { noStreetView: opts.noStreetView } : {}) };
+    const base = { face: f.index, key: f.key, ...(st ? { bayStack: bayStackRecord(st) } : {}), ...(svRec ? { streetView: svRec } : {}), ...(guards && !sv && opts.noStreetView ? { noStreetView: opts.noStreetView } : {}) };
     let answer: PlateAnswer;
     try {
         answer = await cachedPlate(opts.cacheDir, prep.request, opts.client);
