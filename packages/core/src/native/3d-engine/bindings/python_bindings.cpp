@@ -794,6 +794,10 @@ NB_MODULE(scratchbox_native, m) {
         return ProceduralBuildingGenerator::chimneyTops(config);
     }, "config"_a, "Where smoke leaves each chimney of this building (weathering soot sources)");
 
+    m_arch.def("project_world_uvs", &architecture::projectWorldUvs, "mesh"_a,
+        "A copy of the mesh with world-metre UVs per triangle (u along the face horizontally, v up it), the frame the "
+        "building parts use, so an add-on takes a building surface's tiled texture at real-world scale");
+
     m_arch.def("generate_building_parts", [](const BuildingConfig& config, const std::string& name) {
         return ProceduralBuildingGenerator::generateBuildingParts(config, name);
     }, "config"_a, "name"_a = "ProceduralBuilding",

@@ -217,6 +217,54 @@ struct BuildingConfig {
 // 2. PROCEDURAL BUILDING GENERATOR ENGINE
 // ============================================================================
 
+/**
+ * The world-metre texture frame of a face with unit normal `faceN`: u runs horizontally along the face, v up it (image
+ * top = up), so a texture whose KHR_texture_transform scale is 1 / tile size in metres lays at real-world scale. Flat
+ * (horizontal) faces take u along +X. Shared by the building parts and add-ons, so both tile the same way.
+ */
+inline void worldUvFrame(const Vec3& faceN, Vec3& tangent, Vec3& bitangent) {
+    tangent = Vec3(0, 1, 0).cross(faceN);
+    if (tangent.length() < 1e-4f) tangent = Vec3(1, 0, 0);
+    tangent = tangent.normalized();
+    bitangent = faceN.cross(tangent);
+}
+
+/**
+ * A copy of `mesh` with world-metre UVs and matching tangents, for add-ons built by other operators (SDF fields, mesh
+ * ops, relief) that should take the building's tiled materials. Each triangle is projected along the world axis its
+ * face points most along (box projection), so neighbouring triangles of a curved or finely subdivided surface share one
+ * continuous mapping and a texture changes only where the facing crosses between axes; a per-face frame would make
+ * every small triangle sample an unrelated spot. Within each axis u runs horizontally and v up (or along -Z on tops), in
+ * the same sense as worldUvFrame for flat faces. Positions, normals and colours are copied unchanged.
+ */
+inline ScratchboxMesh projectWorldUvs(const ScratchboxMesh& mesh) {
+    ScratchboxMesh out(mesh.name);
+    out.material = mesh.material;
+    for (size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
+        const Vertex* tri[3] = { &mesh.vertices[mesh.indices[t]], &mesh.vertices[mesh.indices[t + 1]], &mesh.vertices[mesh.indices[t + 2]] };
+        Vec3 faceN = (tri[1]->position - tri[0]->position).cross(tri[2]->position - tri[0]->position);
+        float len = faceN.length();
+        if (len < 1e-12f) continue;
+        const Vec3 n = faceN / len;
+        // the dominant axis's own frame: the face frame of the axis-aligned plane it projects onto
+        const float ax = std::abs(n.x), ay = std::abs(n.y), az = std::abs(n.z);
+        const Vec3 axisN = (ay >= ax && ay >= az) ? Vec3(0, n.y >= 0 ? 1.0f : -1.0f, 0)
+                         : (ax >= az) ? Vec3(n.x >= 0 ? 1.0f : -1.0f, 0, 0) : Vec3(0, 0, n.z >= 0 ? 1.0f : -1.0f);
+        Vec3 tangent, bitangent;
+        worldUvFrame(axisN, tangent, bitangent);
+        uint32_t base = static_cast<uint32_t>(out.vertices.size());
+        for (const Vertex* v : tri) {
+            Vertex o = *v;
+            o.uv = Vec2(v->position.dot(tangent), -v->position.dot(bitangent));
+            o.tangent = Vec4(tangent.x, tangent.y, tangent.z, 1.0f);
+            out.addVertex(o);
+        }
+        out.addTriangle(base, base + 1, base + 2);
+    }
+    out.recomputeBounds();
+    return out;
+}
+
 class ProceduralBuildingGenerator {
 public:
     /**
@@ -746,7 +794,6 @@ public:
             parts.push_back(std::move(part));
         }
 
-        const Vec3 up(0, 1, 0);
         for (size_t t = 0; t + 2 < codedMesh.indices.size(); t += 3) {
             const Vertex* tri[3] = { &codedMesh.vertices[codedMesh.indices[t]],
                                      &codedMesh.vertices[codedMesh.indices[t + 1]],
@@ -766,10 +813,8 @@ public:
             float faceLen = faceN.length();
             if (faceLen < 1e-12f) continue;
             faceN = faceN / faceLen;
-            Vec3 tangent = up.cross(faceN);
-            if (tangent.length() < 1e-4f) tangent = Vec3(1, 0, 0);
-            tangent = tangent.normalized();
-            Vec3 bitangent = faceN.cross(tangent);
+            Vec3 tangent, bitangent;
+            worldUvFrame(faceN, tangent, bitangent);
 
             ScratchboxMesh& part = parts[best];
             uint32_t base = static_cast<uint32_t>(part.vertices.size());
