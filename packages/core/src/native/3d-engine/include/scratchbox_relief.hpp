@@ -129,6 +129,21 @@ inline float ridgeWave(float s, float pitch, float sharpness, float duty) {
     return profileShape(d, half, sharpness, 0.0f);
 }
 
+// The part of a layer's mask that depends on the surface direction: its facing mask, and for an
+// image the decal rule (it lands on surfaces facing its normal and fades out by 90 degrees, so a
+// face the projection slab merely passes through, the side of a block next to the embossed front,
+// is never embossed).
+inline float facingWeight(const Layer& L, const Vec3& n) {
+    float w = 1.0f;
+    if (L.hasFacing) {
+        float cosA = n.dot(L.facing.normalized());
+        float ang = std::acos(std::clamp(cosA, -1.0f, 1.0f)) * (180.0f / math::PI);
+        w *= 1.0f - smoothstep(L.facingMaxDeg - L.facingSoftDeg, L.facingMaxDeg, ang);
+    }
+    if (!L.image.empty()) w *= smoothstep(0.0f, 0.5f, n.dot(L.imageNormal.normalized()));
+    return w;
+}
+
 inline float maskWeight(const Layer& L, const Vec3& p, const Vec3& n) {
     float w = 1.0f;
     if (L.hasBox) {
@@ -141,12 +156,7 @@ inline float maskWeight(const Layer& L, const Vec3& p, const Vec3& n) {
         }
         w *= inside;
     }
-    if (L.hasFacing) {
-        float cosA = n.dot(L.facing.normalized());
-        float ang = std::acos(std::clamp(cosA, -1.0f, 1.0f)) * (180.0f / math::PI);
-        w *= 1.0f - smoothstep(L.facingMaxDeg - L.facingSoftDeg, L.facingMaxDeg, ang);
-    }
-    return w * L.strength;
+    return w * facingWeight(L, n) * L.strength;
 }
 
 // Height of one layer at p (before masks). footprintM is the local mesh spacing: an image is averaged
@@ -234,6 +244,7 @@ inline bool layerReaches(const Layer& L, const Vec3& p, float margin, const Vec3
     if (L.ridges) return true;
     if (!L.image.empty()) {
         Vec3 N = L.imageNormal.normalized();
+        if (n.length() > 0.5f && n.dot(N) < 0.1f) return false;   // faces the image cannot land on
         Vec3 R = L.imageUp.cross(N).normalized();
         Vec3 U = N.cross(R);
         Vec3 rel = p - L.imageCentre;
@@ -264,10 +275,49 @@ inline float layerDetail(const Layer& L) {
  * detail or `targetEdgeM`, whichever is larger, up to maxSubdivisions rounds; then every vertex
  * moves along its smooth normal by the summed, masked height.
  */
+// Why a layer's parameters cannot produce a relief, or "" when they can. Zero widths, pitches and image
+// sizes divide the height field by zero; a box with min above max and a zero facing direction mask
+// everything out; none of these is a usable relief, so they are refused with the reason.
+inline std::string layerProblem(const Layer& L) {
+    auto finite = [](float v) { return std::isfinite(v); };
+    auto positive = [&](float v) { return finite(v) && v > 0.0f; };
+    if (!L.carriers.empty()) {
+        if (!positive(L.widthM)) return "profile width_m must be positive, got " + std::to_string(L.widthM);
+        if (!finite(L.depthM)) return "profile depth_m must be finite";
+        for (const auto& c : L.carriers) if (c.empty()) return "profile carriers must each hold at least one point";
+    } else if (L.ridges) {
+        if (!positive(L.pitchM)) return "ridge pitch_m must be positive, got " + std::to_string(L.pitchM);
+        if (!finite(L.ridgeDepthM)) return "ridge depth_m must be finite";
+        if (!(L.ridgeDir.length() > 1e-9f)) return "ridge direction / axis must not be the zero vector";
+        if (L.ridgeAroundAxis && !positive(L.ridgeRadiusM)) return "helix radius_m must be positive, got " + std::to_string(L.ridgeRadiusM);
+    } else if (!L.image.empty()) {
+        if (!positive(L.imageWidthM) || !positive(L.imageHeightM)) return "image width_m and height_m must be positive";
+        if (!finite(L.imageDepthM)) return "image depth_m must be finite";
+        if (!positive(L.imageTilesU) || !positive(L.imageTilesV)) return "image tiles_u and tiles_v must be positive";
+        if (!finite(L.imageProjectionDepthM) || L.imageProjectionDepthM < 0.0f) return "image projection_depth_m must not be negative";
+        if (!(L.imageNormal.length() > 1e-9f) || !(L.imageUp.length() > 1e-9f)) return "image normal and up must not be zero vectors";
+        if (L.imageUp.cross(L.imageNormal).length() < 1e-9f) return "image up must not be parallel to its normal";
+    } else {
+        return "layer has no shape (no carriers, ridges or image)";
+    }
+    if (L.hasBox && (L.boxMin.x > L.boxMax.x || L.boxMin.y > L.boxMax.y || L.boxMin.z > L.boxMax.z)) {
+        return "limit_box has box_min above box_max on some axis, which masks everything out";
+    }
+    if (L.hasBox && (!finite(L.featherM) || L.featherM < 0.0f)) return "limit_box feather_m must not be negative";
+    if (L.hasFacing && !(L.facing.length() > 1e-9f)) return "facing direction must not be the zero vector";
+    if (L.hasFacing && (!(L.facingMaxDeg > 0.0f) || L.facingSoftDeg < 0.0f)) return "facing max_angle_deg must be positive and soft_deg not negative";
+    if (!finite(L.strength)) return "strength must be finite";
+    return "";
+}
+
 inline ScratchboxMesh apply(const ScratchboxMesh& input, const std::vector<Layer>& layers, float targetEdgeM = 0.0f,
                             int maxSubdivisions = 6, float samplesPerDetail = 3.0f, float smoothAngleDeg = 30.0f,
-                            const std::string& name = "Relief") {
+                            const std::string& name = "Relief", std::vector<std::string>* warnings = nullptr) {
     using namespace detail;
+    for (size_t i = 0; i < layers.size(); ++i) {
+        if (std::string why = layerProblem(layers[i]); !why.empty()) throw std::invalid_argument("relief layer " + std::to_string(i) + ": " + why);
+    }
+    if (!std::isfinite(targetEdgeM) || targetEdgeM < 0.0f) throw std::invalid_argument("relief target_edge_m must not be negative");
     meshops::IndexedMesh m = meshops::weldForOps(input);
     if (layers.empty() || m.t.empty()) return meshops::finish(m, input, name, smoothAngleDeg);
 
@@ -522,30 +572,51 @@ inline ScratchboxMesh apply(const ScratchboxMesh& input, const std::vector<Layer
         }
     }
 
-    // Smooth normals and local spacing, then displacement.
-    std::vector<Vec3> vn(m.p.size(), Vec3(0, 0, 0));
+    // Displacement direction per layer and vertex: the area-weighted normal of the incident faces the
+    // layer lands on (its facing weight). A vertex on a crease between an embossed face and one the
+    // layer does not reach then moves along the embossed face's normal only, so the neighbouring face
+    // keeps its plane; a layer with no facing rule uses the plain smooth normal.
+    std::vector<std::vector<Vec3>> vnL(layers.size(), std::vector<Vec3>(m.p.size(), Vec3(0, 0, 0)));
     std::vector<float> edgeSum(m.p.size(), 0.0f);
     std::vector<int> edgeCnt(m.p.size(), 0);
     for (const auto& t : m.t) {
         Vec3 n = (m.p[t[1]] - m.p[t[0]]).cross(m.p[t[2]] - m.p[t[0]]);
+        Vec3 nUnit = n.length() > 1e-20f ? n.normalized() : Vec3(0, 0, 0);
+        for (size_t i = 0; i < layers.size(); ++i) {
+            float fw = facingWeight(layers[i], nUnit);
+            if (fw > 0.0f) for (int k = 0; k < 3; ++k) vnL[i][t[k]] += n * fw;
+        }
         for (int k = 0; k < 3; ++k) {
-            vn[t[k]] += n;
             float l = (m.p[t[k]] - m.p[t[(k + 1) % 3]]).length();
             edgeSum[t[k]] += l; ++edgeCnt[t[k]]; edgeSum[t[(k + 1) % 3]] += l; ++edgeCnt[t[(k + 1) % 3]];
         }
     }
+    std::vector<char> moved(layers.size(), 0);
     for (size_t v = 0; v < m.p.size(); ++v) {
-        Vec3 n = vn[v].length() > 1e-20f ? vn[v].normalized() : Vec3(0, 1, 0);
         // Two local edge lengths: a hard image edge then ramps over two rows of triangles, which shade as a
         // smooth wall; one row would put every wall vertex at an arbitrary ramp height and look serrated.
         float footprint = edgeCnt[v] ? 2.0f * edgeSum[v] / edgeCnt[v] : 0.0f;
-        float h = 0.0f;
-        for (const auto& L : layers) {
+        Vec3 shift(0, 0, 0);
+        for (size_t i = 0; i < layers.size(); ++i) {
+            const Layer& L = layers[i];
+            if (!(vnL[i][v].length() > 1e-20f)) continue;
+            Vec3 n = vnL[i][v].normalized();
             float w = maskWeight(L, m.p[v], n);
             if (w <= 0.0f) continue;
-            h += w * layerHeight(L, m.p[v], footprint);
+            float hl = w * layerHeight(L, m.p[v], footprint);
+            if (hl != 0.0f) moved[i] = 1;
+            shift += n * hl;
         }
-        if (h != 0.0f) m.p[v] = m.p[v] + n * h;
+        if (shift.length() > 0.0f) m.p[v] = m.p[v] + shift;
+    }
+    if (warnings) {
+        for (size_t i = 0; i < layers.size(); ++i) {
+            if (moved[i]) continue;
+            const Layer& L = layers[i];
+            std::string kind = !L.carriers.empty() ? "profile" : L.ridges ? "ridges" : "image";
+            warnings->push_back("relief layer " + std::to_string(i) + " (" + kind + ") moved no vertex: nothing it reaches lies on "
+                                "the mesh, or its limit_box / facing mask excludes every face");
+        }
     }
     return meshops::finish(m, input, name, smoothAngleDeg);
 }

@@ -127,15 +127,20 @@ inline void collapseShortEdges(IndexedMesh& m, float minLen, float sharpAngleDeg
 
 // Welding for the modelling operations: exact positions first (results of these operations share
 // vertices bit for bit, and a tolerance weld could merge distinct close vertices); the relative weld
-// only when it leaves fewer open or over-shared edges (noisy seams on authored meshes).
-inline IndexedMesh weldForOps(const ScratchboxMesh& m) {
-    IndexedMesh exactW = weldExact(m);
+// only when it leaves fewer open or over-shared edges (seam copies differing by rounding noise) and
+// merges no feature: a tolerance weld that collapses a triangle has merged two distinct vertices of
+// a feature finer than its tolerance, so it is refused and the exact weld kept (the operation then
+// reports the open seams itself instead of quietly flattening the feature).
+inline IndexedMesh tolerantWeldOrExact(const ScratchboxMesh& m, const IndexedMesh& exactW) {
     size_t bad = badEdges(exactW);
-    IndexedMesh chosen = exactW;
-    if (bad != 0) {
-        IndexedMesh tolW = weld(m);
-        if (badEdges(tolW) < bad) chosen = tolW;
-    }
+    if (bad == 0) return exactW;
+    IndexedMesh tolW = weld(m);
+    if (badEdges(tolW) < bad && tolW.t.size() == exactW.t.size()) return tolW;
+    return exactW;
+}
+
+inline IndexedMesh weldForOps(const ScratchboxMesh& m) {
+    IndexedMesh chosen = tolerantWeldOrExact(m, weldExact(m));
     removeCaps(chosen);
     return chosen;
 }
@@ -1090,9 +1095,11 @@ inline std::vector<exact::Polygon> snapToExact(const ScratchboxMesh& mesh) {
     // Exact-position weld first (shared vertices are bit-for-bit equal, as in chained results); the usual
     // relative weld only for inputs that are not closed that way (seam copies differing by rounding noise).
     auto closedMesh = [](const IndexedMesh& m) { for (const auto& [k, fs] : edgeFaces(m)) if (fs.size() != 2) return false; return true; };
-    IndexedMesh w = weldExact(mesh);
-    if (!closedMesh(w)) w = weld(mesh);
-    if (!closedMesh(w)) throw std::invalid_argument("mesh boolean needs closed inputs: '" + mesh.name + "' has open or over-shared edges");
+    IndexedMesh w = tolerantWeldOrExact(mesh, weldExact(mesh));
+    if (!closedMesh(w)) {
+        throw std::invalid_argument("mesh boolean needs closed inputs: '" + mesh.name + "' has open or over-shared edges (a seam that only a "
+            "tolerance weld would close is not welded when that weld would also flatten a feature finer than the tolerance)");
+    }
     if (std::string why = orientationProblem(w); !why.empty()) {
         throw std::invalid_argument("mesh boolean needs consistently outward-wound inputs: '" + mesh.name + "': " + why);
     }
@@ -1153,22 +1160,34 @@ inline std::vector<exact::Polygon> booleanPolygons(const ScratchboxMesh& a, cons
 }
 
 inline ScratchboxMesh booleanOp(const ScratchboxMesh& a, const ScratchboxMesh& b, BooleanKind kind,
-                                float smoothAngleDeg = 30.0f, const std::string& name = "Boolean", bool requireClosed = true) {
+                                float smoothAngleDeg = 30.0f, const std::string& name = "Boolean", bool requireClosed = true,
+                                std::vector<std::string>* warnings = nullptr) {
     auto polys = booleanPolygons(a, b, kind);
     IndexedMesh out = assembleExact(polys, Vec3(0, 0, 0), kExactQuantum);
+    if (out.t.empty() && requireClosed) {
+        static const char* kinds[] = {"union", "subtraction", "intersection"};
+        throw std::runtime_error(std::string("boolean ") + kinds[static_cast<int>(kind)] + " of '" + a.name + "' and '" + b.name +
+            "' is empty: the solids do not overlap (intersection) or the second contains the first (subtraction); "
+            "pass require_closed=False to get the empty mesh");
+    }
     auto closed = [](const IndexedMesh& m) { for (const auto& [k, fs] : edgeFaces(m)) if (fs.size() != 2) return false; return true; };
     if (closed(out)) {
-        // The tidy-up is kept only when it keeps the result closed (it judges flatness in floats).
+        // Each tidy-up is kept only when it keeps the result closed (it judges flatness in floats); a
+        // discarded one is reported, since the result then still holds what it would have removed.
+        auto discarded = [&](const char* step) {
+            if (warnings) warnings->push_back(std::string("boolean tidy-up '") + step + "' was discarded because it opened the result; "
+                                              "the result keeps the slivers it would have removed");
+        };
         IndexedMesh tidy = out;
         regularizeFlatRegions(tidy, static_cast<float>(kExactQuantum * 4.0));
-        if (closed(tidy)) out.t.swap(tidy.t);
+        if (closed(tidy)) out.t.swap(tidy.t); else discarded("regularize flat regions");
         IndexedMesh capped = out;
         removeCaps(capped);
-        if (closed(capped)) out.t.swap(capped.t);
+        if (closed(capped)) out.t.swap(capped.t); else discarded("remove caps");
         // Needles: exact points a few grid steps apart are distinct floats but meaningless geometry.
         IndexedMesh needled = out;
         collapseShortEdges(needled, 1e-6f, 30.0f);
-        if (closed(needled)) out = std::move(needled);
+        if (closed(needled)) out = std::move(needled); else discarded("collapse needles");
     }
     size_t open = 0, overShared = 0;
     for (const auto& [k, fs] : edgeFaces(out)) {
@@ -1483,7 +1502,9 @@ inline ScratchboxMesh bevel(const ScratchboxMesh& input, float width, int segmen
 // --------------------------------------------------------------------------
 inline ScratchboxMesh insetExtrude(const ScratchboxMesh& input, const Vec3& facing, float maxAngleDeg, float inset, float depth,
                                    const Vec3& boxMin, const Vec3& boxMax, bool useBox, float smoothAngleDeg = 30.0f,
-                                   const std::string& name = "InsetExtruded") {
+                                   const std::string& name = "InsetExtruded", std::vector<std::string>* warnings = nullptr) {
+    if (!std::isfinite(inset) || !std::isfinite(depth)) throw std::invalid_argument("inset_extrude inset and depth must be finite");
+    if (!(facing.length() > 1e-9f)) throw std::invalid_argument("inset_extrude facing must not be the zero vector");
     std::set<uint64_t> creases;   // the wall's top and bottom rings: a wall is a hard edge however shallow its slope
     IndexedMesh m = weldForOps(input);
     const size_t F = m.t.size();
@@ -1537,8 +1558,8 @@ inline ScratchboxMesh insetExtrude(const ScratchboxMesh& input, const Vec3& faci
             Vec3 in = nR.cross(d).normalized();  // left of a->b in a CCW face: towards the region
             inwardAt[a].push_back(in); inwardAt[b].push_back(in);
         }
-        // Ring copies: border vertices inset within the region plane; then everything moved by depth.
-        std::map<uint32_t, uint32_t> ring;
+        // Inset directions of the border vertices (the mitre of the two border edges' inward normals).
+        std::map<uint32_t, Vec3> dAt;
         for (auto& [v, ins] : inwardAt) {
             Vec3 d(0, 0, 0);
             if (ins.size() >= 2) {
@@ -1547,8 +1568,47 @@ inline ScratchboxMesh insetExtrude(const ScratchboxMesh& input, const Vec3& faci
             } else if (!ins.empty()) {
                 d = ins[0];
             }
+            dAt[v] = d;
+        }
+        // An inset past the region's middle would push the ring through itself: it is capped where the
+        // first inset vertex would reach 45% of the way to the border opposite it (two rings moving
+        // towards each other meet halfway) or a border edge would shrink to 10% of its length.
+        float regionInset = inset;
+        if (inset > 0.0f) {
+            Vec3 ax = std::abs(nR.y) < 0.9f ? Vec3(0, 1, 0).cross(nR).normalized() : Vec3(1, 0, 0).cross(nR).normalized();
+            Vec3 ay = nR.cross(ax);
+            auto to2 = [&](const Vec3& q) { return std::pair<float, float>(q.dot(ax), q.dot(ay)); };
+            for (auto& [v, d] : dAt) {
+                auto [px, py] = to2(m.p[v]);
+                auto [dx, dy] = to2(d);
+                for (auto [a, b] : border) {
+                    if (a == v || b == v) continue;
+                    auto [qx, qy] = to2(m.p[a]);
+                    auto [sx, sy] = to2(m.p[b]);
+                    float ex = sx - qx, ey = sy - qy, rx = qx - px, ry = qy - py;
+                    float det = -dx * ey + ex * dy;
+                    if (std::abs(det) < 1e-12f) continue;
+                    float s = (-rx * ey + ex * ry) / det, u = (dx * ry - dy * rx) / det;
+                    if (s > 0.0f && u >= 0.0f && u <= 1.0f) regionInset = std::min(regionInset, 0.45f * s);
+                }
+            }
+            for (auto [a, b] : border) {
+                Vec3 e = m.p[b] - m.p[a];
+                float len = e.length();
+                if (len < 1e-12f) continue;
+                float rate = (dAt[a] - dAt[b]).dot(e / len);   // how fast the edge shortens per metre of inset
+                if (rate > 1e-9f) regionInset = std::min(regionInset, 0.9f * len / rate);
+            }
+            if (regionInset < inset && warnings) {
+                warnings->push_back("inset_extrude: inset " + std::to_string(inset) + " m would push region " + std::to_string(r) +
+                                    "'s ring through itself; capped at " + std::to_string(regionInset) + " m");
+            }
+        }
+        // Ring copies: border vertices inset within the region plane; then everything moved by depth.
+        std::map<uint32_t, uint32_t> ring;
+        for (auto& [v, d] : dAt) {
             ring[v] = static_cast<uint32_t>(out.p.size());
-            out.p.push_back(m.p[v] + d * inset + nR * depth);
+            out.p.push_back(m.p[v] + d * regionInset + nR * depth);
         }
         std::map<uint32_t, uint32_t> moved;
         auto top = [&](uint32_t v) -> uint32_t {
@@ -1577,7 +1637,9 @@ inline ScratchboxMesh insetExtrude(const ScratchboxMesh& input, const Vec3& faci
 // --------------------------------------------------------------------------
 // Solidify
 // --------------------------------------------------------------------------
-inline ScratchboxMesh solidify(const ScratchboxMesh& input, float thickness, float smoothAngleDeg = 30.0f, const std::string& name = "Solidified") {
+inline ScratchboxMesh solidify(const ScratchboxMesh& input, float thickness, float smoothAngleDeg = 30.0f, const std::string& name = "Solidified",
+                               std::vector<std::string>* warnings = nullptr) {
+    if (!std::isfinite(thickness) || thickness == 0.0f) throw std::invalid_argument("solidify thickness must be a non-zero finite length");
     IndexedMesh m = weldForOps(input);
     const size_t V = m.p.size();
     std::vector<Vec3> vn(V, Vec3(0, 0, 0));
@@ -1589,12 +1651,46 @@ inline ScratchboxMesh solidify(const ScratchboxMesh& input, float thickness, flo
             vn[t[k]] += faceNormal(m, f) * ang;
         }
     }
+    std::vector<Vec3> dir(V);
+    for (size_t v = 0; v < V; ++v) dir[v] = vn[v].length() > 1e-12f ? vn[v].normalized() : Vec3(0, 1, 0);
+    // Where the surface curves tighter than the thickness, a full offset folds the inner shell through
+    // itself (a tube thicker than its radius). Along an edge a-b the inner copy flips once the offset
+    // reaches |e| / ((n_b - n_a) . e^), the local radius of curvature, so each vertex is capped at 90% of
+    // that over its edges (the inner shell then hugs the axis instead of crossing it); any inner face
+    // that still comes out inverted has its vertices halved until every one faces the way its outer does.
+    std::vector<float> tv(V, thickness);
+    size_t reduced = 0;
+    for (const auto& t : m.t) for (int k = 0; k < 3; ++k) {
+        uint32_t a = t[k], b = t[(k + 1) % 3];
+        Vec3 e = m.p[b] - m.p[a];
+        float len = e.length();
+        if (len < 1e-12f) continue;
+        float rate = (dir[b] - dir[a]).dot(e / len) * (thickness > 0.0f ? 1.0f : -1.0f);
+        if (rate <= 1e-9f) continue;
+        float limit = 0.9f * len / rate;
+        for (uint32_t v : {a, b}) if (std::abs(tv[v]) > limit) { if (tv[v] == thickness) ++reduced; tv[v] = thickness > 0.0f ? limit : -limit; }
+    }
+    for (int iter = 0; iter < 16; ++iter) {
+        bool any = false;
+        for (size_t f = 0; f < m.t.size(); ++f) {
+            const auto& t = m.t[f];
+            Vec3 q0 = m.p[t[0]] - dir[t[0]] * tv[t[0]], q1 = m.p[t[1]] - dir[t[1]] * tv[t[1]], q2 = m.p[t[2]] - dir[t[2]] * tv[t[2]];
+            if ((q1 - q0).cross(q2 - q0).dot(faceNormal(m, f)) > 0.0f) continue;
+            for (int k = 0; k < 3; ++k) { if (tv[t[k]] == thickness) ++reduced; tv[t[k]] *= 0.5f; }
+            any = true;
+        }
+        if (!any) break;
+    }
+    if (reduced && warnings) {
+        float minT = thickness;
+        for (float t : tv) minT = std::abs(t) < std::abs(minT) ? t : minT;
+        warnings->push_back("solidify: thickness " + std::to_string(thickness) + " m folds the inner shell where the surface curves tighter "
+                            "than that; reduced at " + std::to_string(reduced) + " of " + std::to_string(V) + " vertices (down to " +
+                            std::to_string(minT) + " m)");
+    }
     IndexedMesh out;
     out.p = m.p;
-    for (size_t v = 0; v < V; ++v) {
-        Vec3 n = vn[v].length() > 1e-12f ? vn[v].normalized() : Vec3(0, 1, 0);
-        out.p.push_back(m.p[v] - n * thickness);
-    }
+    for (size_t v = 0; v < V; ++v) out.p.push_back(m.p[v] - dir[v] * tv[v]);
     for (const auto& t : m.t) {
         out.t.push_back(t);
         out.t.push_back({t[0] + static_cast<uint32_t>(V), t[2] + static_cast<uint32_t>(V), t[1] + static_cast<uint32_t>(V)});

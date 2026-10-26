@@ -290,6 +290,124 @@ print("corner", corner)
         expect(result.stdout).toContain('corner [(0.0, 0.0, 1.0), (0.0, 0.447, 0.894), (0.447, 0.0, 0.894)]');
     }, 600000);
 
+    it('refuses an empty boolean result and an empty GLB instead of writing nothing', async () => {
+        const runner = NativePythonRunnerService.getInstance();
+        const result = await runner.runScript(`
+import scratchbox as sb
+${CUBE}
+far = cube(5, 0, 0, 1)
+try:
+    sb.meshops.intersect(cube(0, 0, 0, 1), far); print("NO ERROR intersect")
+except RuntimeError as e:
+    print("RAISED intersect", "is empty" in str(e))
+print("open-result", len(sb.meshops.intersect(cube(0, 0, 0, 1), far, require_closed=False).indices))
+try:
+    sb.io.write_glb(sb.constants.OUTPUT_GLB_PATH, [sb.geometry.Mesh("empty")]); print("NO ERROR glb")
+except ValueError as e:
+    print("RAISED glb", "empty" in str(e))
+`);
+        expect(result.success, result.stderr).toBe(true);
+        expect(result.stdout).toContain('RAISED intersect True');
+        expect(result.stdout).toContain('open-result 0');
+        expect(result.stdout).toContain('RAISED glb True');
+        expect(result.stdout).not.toContain('NO ERROR');
+    }, 600000);
+
+    it('caps an inset past the middle of its region, with a warning, instead of turning the panel inside out', async () => {
+        const runner = NativePythonRunnerService.getInstance();
+        const result = await runner.runScript(`
+import scratchbox as sb, warnings
+with warnings.catch_warnings(record=True) as ws:
+    warnings.simplefilter("always")
+    out = sb.meshops.inset_extrude(sb.create_box(width=1, height=1, depth=1), (0, 0, 1), inset=0.8, depth=-0.1)
+print("warned", any("capped" in str(w.message) for w in ws))
+P = [(v.position.x, v.position.y, v.position.z) for v in out.vertices]; I = list(out.indices)
+panel = [I[t:t + 3] for t in range(0, len(I), 3) if all(abs(P[i][2] - 0.4) < 1e-4 for i in I[t:t + 3])]
+inverted = 0
+for a, b, c in panel:
+    A, B, C = P[a], P[b], P[c]
+    if (B[0] - A[0]) * (C[1] - A[1]) - (B[1] - A[1]) * (C[0] - A[0]) <= 0: inverted += 1
+print("panel", len(panel), "inverted", inverted)
+sb.io.write_glb(sb.constants.OUTPUT_GLB_PATH, [out])
+`);
+        expect(result.success, result.stderr).toBe(true);
+        expect(result.stdout).toContain('warned True');
+        expect(result.stdout).toMatch(/panel [1-9]\d* inverted 0/);
+        const p = readPrimitives(result.glbPath!)[0];
+        expect(badEdgeCount(p)).toBe(0);
+        expect(signedVolume(p)).toBeGreaterThan(0.9);
+        expect(signedVolume(p)).toBeLessThan(1.0);
+    }, 600000);
+
+    it('reduces a solidify offset where the surface curves tighter than the thickness, instead of folding', async () => {
+        const runner = NativePythonRunnerService.getInstance();
+        const result = await runner.runScript(`
+import scratchbox as sb, warnings, math
+cyl = sb.create_cylinder(radius=0.1, height=0.5, segments=32)
+P = [(v.position.x, v.position.y, v.position.z) for v in cyl.vertices]; I = list(cyl.indices)
+tube = sb.geometry.Mesh("tube")
+for p in P: tube.add_vertex(sb.math.Vec3(*p))
+for t in range(0, len(I), 3):
+    a, b, c = I[t:t + 3]
+    if not (abs(P[a][1] - P[b][1]) < 1e-6 and abs(P[a][1] - P[c][1]) < 1e-6): tube.add_triangle(a, b, c)
+with warnings.catch_warnings(record=True) as ws:
+    warnings.simplefilter("always")
+    out = sb.meshops.solidify(tube, 0.2)
+print("warned", any("folds" in str(w.message) for w in ws))
+Q = [(v.position.x, v.position.y, v.position.z) for v in out.vertices]; J = list(out.indices)
+print("radii", sorted({round(math.hypot(q[0], q[2]), 3) for q in Q}))
+wrong = 0
+for t in range(0, len(J), 3):
+    A, B, C = (Q[i] for i in J[t:t + 3])
+    n = ((B[1]-A[1])*(C[2]-A[2])-(B[2]-A[2])*(C[1]-A[1]), (B[2]-A[2])*(C[0]-A[0])-(B[0]-A[0])*(C[2]-A[2]), (B[0]-A[0])*(C[1]-A[1])-(B[1]-A[1])*(C[0]-A[0]))
+    cx, cz = (A[0]+B[0]+C[0])/3, (A[2]+B[2]+C[2])/3
+    r, ln = math.hypot(cx, cz), math.sqrt(n[0]**2 + n[1]**2 + n[2]**2)
+    if r < 1e-6 or ln < 1e-12 or abs(n[1]) > 0.9 * ln: continue
+    rad = (n[0]*cx/r + n[2]*cz/r) / ln
+    if (r > 0.05 and rad <= 0) or (r < 0.05 and rad >= 0): wrong += 1   # outer wall faces out, inner wall faces in
+print("wrong", wrong)
+sb.io.write_glb(sb.constants.OUTPUT_GLB_PATH, [out])
+`);
+        expect(result.success, result.stderr).toBe(true);
+        expect(result.stdout).toContain('warned True');
+        expect(result.stdout).toContain('radii [0.01, 0.1]');   // the inner shell hugs the axis instead of crossing it
+        expect(result.stdout).toContain('wrong 0');
+        const p = readPrimitives(result.glbPath!)[0];
+        expect(badEdgeCount(p)).toBe(0);
+        expect(signedVolume(p)).toBeGreaterThan(0);
+    }, 600000);
+
+    it('welds rounding-noise seams but never a feature finer than the weld tolerance', async () => {
+        const runner = NativePythonRunnerService.getInstance();
+        const result = await runner.runScript(`
+import scratchbox as sb, random
+def jittered(bump):
+    random.seed(1)
+    src = sb.create_box(width=100, height=100, depth=100)
+    P = [(v.position.x, v.position.y, v.position.z) for v in src.vertices]; I = list(src.indices)
+    m = sb.geometry.Mesh("jit")
+    def av(x, y, z):
+        m.add_vertex(sb.math.Vec3(x, y, z)); return len(m.vertices) - 1
+    for t in range(0, len(I), 3):   # every face gets its own vertices, each off by up to 1e-5 m
+        m.add_triangle(*[av(*[P[i][k] + random.uniform(-1e-5, 1e-5) for k in range(3)]) for i in I[t:t + 3]])
+    if bump:   # a 5e-5 m tetrahedron: finer than the weld tolerance of a 100 m mesh
+        s = 5e-5
+        o, b1, b2, b3 = av(50, 0, 0), av(50 + s, s, 0), av(50 + s, -s, s), av(50 + s, -s, -s)
+        m.add_triangle(o, b2, b1); m.add_triangle(o, b3, b2); m.add_triangle(o, b1, b3); m.add_triangle(b1, b2, b3)
+    return m
+other = sb.create_box(width=50, height=50, depth=50).translate(sb.math.Vec3(50, 0, 0))
+print("plain", len(sb.meshops.union(jittered(False), other).indices) > 0)
+try:
+    sb.meshops.union(jittered(True), other); print("NO ERROR")
+except ValueError as e:
+    print("RAISED", "closed inputs" in str(e))
+`);
+        expect(result.success, result.stderr).toBe(true);
+        expect(result.stdout).toContain('plain True');
+        expect(result.stdout).toContain('RAISED True');
+        expect(result.stdout).not.toContain('NO ERROR');
+    }, 600000);
+
     it('solidifies an open plane into a closed slab', async () => {
         const p = await run(`
 plane = sb.geometry.Mesh("plane")

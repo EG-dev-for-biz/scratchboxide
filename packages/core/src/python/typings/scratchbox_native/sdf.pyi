@@ -46,7 +46,7 @@ class Field:
         """Mirror the half-space the normal points into across the plane through the origin"""
 
     def to_mesh(self, bounds_min: collections.abc.Sequence[float], bounds_max: collections.abc.Sequence[float], resolution: int = 128, projection_steps: int = 2, name: str = 'SdfMesh') -> scratchbox_native.geometry.Mesh:
-        """Closed mesh of the surface inside the bounds (cubic cells, `resolution` along the longest side)"""
+        """Closed mesh of the surface inside the bounds (cubic cells, `resolution` along the longest side), capped on the bounds; warns when features thinner than a cell were dropped, raises when nothing is inside"""
 
 
 def box(size: collections.abc.Sequence[float]) -> Field:

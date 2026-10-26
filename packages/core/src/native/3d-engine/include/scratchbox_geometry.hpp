@@ -16,6 +16,7 @@
 #include <functional>
 #include <algorithm>
 #include <thread>
+#include <atomic>
 #include <cstdint>
 #include <cmath>
 #include <unordered_map>
@@ -1073,7 +1074,8 @@ public:
         int projectionSteps = 2,
         bool closeAtBounds = true,
         const Vec4& color = {0.8f, 0.8f, 0.8f, 1.0f},
-        const std::string& name = "isosurface"
+        const std::string& name = "isosurface",
+        int* droppedCells = nullptr
     ) {
         ScratchboxMesh mesh(name);
         nx = std::max(1, nx); ny = std::max(1, ny); nz = std::max(1, nz);
@@ -1106,6 +1108,35 @@ public:
             for (auto& th : pool) th.join();
         }
         auto inside = [](float v) { return v < 0.0f; };
+
+        // Cells whose eight corners are all outside but whose centre is inside hold a feature thinner
+        // than a cell; the mesher cannot see it, so it is counted and reported rather than lost quietly.
+        if (droppedCells) {
+            std::atomic<int> dropped{0};
+            int threads = std::max(1, std::min(nz, static_cast<int>(std::thread::hardware_concurrency())));
+            std::vector<std::thread> pool;
+            for (int t = 0; t < threads; ++t) {
+                pool.emplace_back([&, t] {
+                    int local = 0;
+                    for (int k = t; k < nz; k += threads) {
+                        for (int j = 0; j < ny; ++j) {
+                            for (int i = 0; i < nx; ++i) {
+                                if (closeAtBounds && (i == 0 || j == 0 || k == 0 || i == nx - 1 || j == ny - 1 || k == nz - 1)) continue;
+                                bool anyInside = false;
+                                for (int c = 0; c < 8 && !anyInside; ++c)
+                                    anyInside = inside(value[pointIndex(i + (c & 1), j + ((c >> 1) & 1), k + ((c >> 2) & 1))]);
+                                if (anyInside) continue;
+                                Vec3 centre = gridPoint(i, j, k) + cell * 0.5f;
+                                if (field(centre) - isoLevel < 0.0f) ++local;
+                            }
+                        }
+                    }
+                    dropped += local;
+                });
+            }
+            for (auto& th : pool) th.join();
+            *droppedCells = dropped.load();
+        }
 
         auto gradient = [&](const Vec3& p) {
             Vec3 e(cell.x * 0.25f, cell.y * 0.25f, cell.z * 0.25f);

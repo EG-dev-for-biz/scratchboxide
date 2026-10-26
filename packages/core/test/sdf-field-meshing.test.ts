@@ -139,6 +139,45 @@ describe('SDF field meshing (sb.sdf ... .to_mesh)', () => {
         }
     }, 600000);
 
+    it('caps a cut shape exactly on the bounds and reports features thinner than a cell', async () => {
+        const runner = NativePythonRunnerService.getInstance();
+        const result = await runner.runScript(`
+import scratchbox as sb, warnings, math
+half = sb.sdf.sphere(1.0).to_mesh((-1, -1, 0), (1, 1, 1), resolution=64)
+zs = [v.position.z for v in half.vertices]
+P = [(v.position.x, v.position.y, v.position.z) for v in half.vertices]; I = list(half.indices)
+vol = 0.0
+for t in range(0, len(I), 3):
+    a, b, c = (P[i] for i in I[t:t + 3])
+    vol += (a[0]*(b[1]*c[2]-b[2]*c[1]) - a[1]*(b[0]*c[2]-b[2]*c[0]) + a[2]*(b[0]*c[1]-b[1]*c[0])) / 6
+print("minz", round(min(zs), 4), "volerr", round(abs(vol - 2/3*math.pi) / (2/3*math.pi), 4))
+with warnings.catch_warnings(record=True) as ws:
+    warnings.simplefilter("always")
+    fin = (sb.sdf.sphere(0.5) | sb.sdf.box((1.6, 0.01, 0.1)).translate((0, 0.015, 0))).to_mesh((-1, -1, -1), (1, 1, 1), resolution=64)
+print("fin-warned", any("thinner than a cell" in str(w.message) for w in ws))
+try:
+    sb.sdf.box((1.0, 0.01, 1.0)).translate((0, 0.015, 0)).to_mesh((-1, -1, -1), (1, 1, 1), resolution=64); print("NO ERROR thin")
+except RuntimeError as e:
+    print("RAISED thin", "no surface" in str(e))
+try:
+    sb.sdf.sphere(1.0).scale(0.0); print("NO ERROR scale")
+except ValueError as e:
+    print("RAISED scale", "positive" in str(e))
+try:
+    sb.sdf.sphere(1.0).to_mesh((1, 1, 1), (-1, -1, -1)); print("NO ERROR bounds")
+except ValueError as e:
+    print("RAISED bounds", "bounds_min < bounds_max" in str(e))
+`);
+        expect(result.success, result.stderr).toBe(true);
+        expect(result.stdout).toMatch(/minz -?0\.0 /);          // the cap sits on z = 0, not 2.5 cells below it
+        expect(result.stdout).toMatch(/volerr 0\.00\d/);        // within 1% of a half sphere
+        expect(result.stdout).toContain('fin-warned True');
+        expect(result.stdout).toContain('RAISED thin True');
+        expect(result.stdout).toContain('RAISED scale True');
+        expect(result.stdout).toContain('RAISED bounds True');
+        expect(result.stdout).not.toContain('NO ERROR');
+    }, 600000);
+
     it('caps a shape the bounds cut, so the result is still closed', async () => {
         const p = await meshField('sb.sdf.sphere(1.0)', '(-1, -1, 0)', '(1, 1, 1)', 64);
         expect(badEdgeCount(p)).toBe(0);

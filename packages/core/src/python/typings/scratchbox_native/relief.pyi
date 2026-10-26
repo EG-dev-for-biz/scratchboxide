@@ -18,7 +18,7 @@ class Layer:
 
 
 def apply(mesh: scratchbox_native.geometry.Mesh, layers: collections.abc.Sequence[scratchbox_native.relief.Layer], target_edge_m: float = 0.0, max_subdivisions: int = 6, samples_per_detail: float = 3.0, smooth_angle_deg: float = 30.0, name: str = 'Relief') -> scratchbox_native.geometry.Mesh:
-    """Subdivide where the layers reach (conformally, until edges resolve the finest detail) and displace along smooth normals"""
+    """Subdivide where the layers reach (conformally, until edges resolve the finest detail) and displace along smooth normals; a layer that moves no vertex raises a warning"""
 
 
 def helix_ridges(origin: collections.abc.Sequence[float], axis: collections.abc.Sequence[float], radius_m: float, pitch_m: float, depth_m: float, helix_deg: float = 30.0, sharpness: float = 0.6, duty: float = 0.5) -> Layer:

@@ -48,6 +48,32 @@ using namespace scratchbox::parametric;
 using namespace scratchbox::kinematics;
 using namespace scratchbox::skinning;
 
+// Engine warnings (a capped inset, a reduced solidify thickness, a relief layer that moved nothing)
+// reach the script as Python UserWarnings, so a script sees them without the operation failing.
+static void emitPythonWarnings(const std::vector<std::string>& warnings) {
+    for (const auto& w : warnings) {
+        if (PyErr_WarnEx(PyExc_UserWarning, w.c_str(), 1) < 0) throw nb::python_error();
+    }
+}
+
+// Nothing to serialize is an error at the writer, not a 0-byte or geometry-less file discovered later.
+static void requireGeometry(const std::vector<const ScratchboxMesh*>& meshes, const char* what) {
+    size_t tris = 0;
+    for (const auto* m : meshes) tris += m->indices.size() / 3;
+    if (tris == 0) throw std::invalid_argument(std::string(what) + ": every mesh is empty (no triangles); nothing to write");
+}
+
+static ScratchboxMesh sdfToMeshReporting(const sdf::Field& f, const Vec3& lo, const Vec3& hi, int resolution, int steps, const std::string& name) {
+    int dropped = 0;
+    float cell = 0.0f;
+    ScratchboxMesh out = f.toMesh(lo, hi, resolution, steps, name, &dropped, &cell);
+    if (dropped > 0) {
+        emitPythonWarnings({"to_mesh dropped features thinner than a cell (" + std::to_string(cell) + " m) in " + std::to_string(dropped) +
+                            " cells; raise resolution or thicken them"});
+    }
+    return out;
+}
+
 NB_MODULE(scratchbox_native, m) {
     nb::set_leak_warnings(false);
     m.doc() = "Scratchbox Native C++20 3D Engine Python Bindings (powered by nanobind)";
@@ -1051,6 +1077,7 @@ NB_MODULE(scratchbox_native, m) {
     auto m_io = m.def_submodule("io", "glTF 2.0 binary (.glb) packing and file serialization");
 
     m_io.def("write_glb", [](const std::string& path, const ScratchboxMesh& mesh) {
+        requireGeometry({&mesh}, "write_glb");
         auto glb = GlbWriter::writeGlb(mesh);
         std::ofstream out(path, std::ios::binary);
         if (!out.is_open()) {
@@ -1062,6 +1089,9 @@ NB_MODULE(scratchbox_native, m) {
     }, "path"_a, "mesh"_a, "Save a ScratchboxMesh directly to a standard binary glTF 2.0 (.glb) file");
 
     m_io.def("write_glb", [](const std::string& path, const std::vector<ScratchboxMesh>& meshes) {
+        std::vector<const ScratchboxMesh*> ptrs;
+        for (const auto& mm : meshes) ptrs.push_back(&mm);
+        requireGeometry(ptrs, "write_glb");
         auto glb = GlbWriter::serializeMultiMeshToGlb(meshes);
         std::ofstream out(path, std::ios::binary);
         if (!out.is_open()) {
@@ -1601,9 +1631,10 @@ NB_MODULE(scratchbox_native, m) {
         .def("mirror", [v3](const sdf::Field& f, const V3& n) { return f.mirror(v3(n)); }, "normal"_a,
              "Mirror the half-space the normal points into across the plane through the origin")
         .def("to_mesh", [v3](const sdf::Field& f, const V3& lo, const V3& hi, int resolution, int steps, const std::string& name) {
-            return f.toMesh(v3(lo), v3(hi), resolution, steps, name);
+            return sdfToMeshReporting(f, v3(lo), v3(hi), resolution, steps, name);
         }, "bounds_min"_a, "bounds_max"_a, "resolution"_a = 128, "projection_steps"_a = 2, "name"_a = "SdfMesh",
-           "Closed mesh of the surface inside the bounds (cubic cells, `resolution` along the longest side)");
+           "Closed mesh of the surface inside the bounds (cubic cells, `resolution` along the longest side), capped on the bounds; "
+           "warns when features thinner than a cell were dropped, raises when nothing is inside");
 
     m_sdf.def("sphere", &sdf::Field::sphere, "radius"_a);
     m_sdf.def("box", [v3](const V3& size) { return sdf::Field::box(v3(size)); }, "size"_a, "A box of full size (w, h, d)");
@@ -1616,7 +1647,7 @@ NB_MODULE(scratchbox_native, m) {
               "Half-space below the plane dot(p, normal) = offset");
     m_sdf.def("gyroid", &sdf::Field::gyroid, "scale"_a = 1.0f, "thickness"_a = 0.1f);
     m_sdf.def("to_mesh", [v3](const sdf::Field& f, const V3& lo, const V3& hi, int resolution, int steps, const std::string& name) {
-        return f.toMesh(v3(lo), v3(hi), resolution, steps, name);
+        return sdfToMeshReporting(f, v3(lo), v3(hi), resolution, steps, name);
     }, "field"_a, "bounds_min"_a, "bounds_max"_a, "resolution"_a = 128, "projection_steps"_a = 2, "name"_a = "SdfMesh");
 
     // ========================================================================
@@ -1626,14 +1657,20 @@ NB_MODULE(scratchbox_native, m) {
     {
         using V3 = std::array<float, 3>;
         auto v3 = [](const V3& a) { return Vec3(a[0], a[1], a[2]); };
-        m_ops.def("union", [](const ScratchboxMesh& a, const ScratchboxMesh& b, float smooth, const std::string& name, bool requireClosed) {
-            return meshops::booleanOp(a, b, meshops::BooleanKind::Union, smooth, name, requireClosed);
+        auto boolean = [](const ScratchboxMesh& a, const ScratchboxMesh& b, meshops::BooleanKind kind, float smooth, const std::string& name, bool requireClosed) {
+            std::vector<std::string> warnings;
+            ScratchboxMesh out = meshops::booleanOp(a, b, kind, smooth, name, requireClosed, &warnings);
+            emitPythonWarnings(warnings);
+            return out;
+        };
+        m_ops.def("union", [boolean](const ScratchboxMesh& a, const ScratchboxMesh& b, float smooth, const std::string& name, bool requireClosed) {
+            return boolean(a, b, meshops::BooleanKind::Union, smooth, name, requireClosed);
         }, "a"_a, "b"_a, "smooth_angle_deg"_a = 30.0f, "name"_a = "Union", "require_closed"_a = true, "Exact union of two closed meshes; result is closed and keeps a's material");
-        m_ops.def("subtract", [](const ScratchboxMesh& a, const ScratchboxMesh& b, float smooth, const std::string& name, bool requireClosed) {
-            return meshops::booleanOp(a, b, meshops::BooleanKind::Subtract, smooth, name, requireClosed);
+        m_ops.def("subtract", [boolean](const ScratchboxMesh& a, const ScratchboxMesh& b, float smooth, const std::string& name, bool requireClosed) {
+            return boolean(a, b, meshops::BooleanKind::Subtract, smooth, name, requireClosed);
         }, "a"_a, "b"_a, "smooth_angle_deg"_a = 30.0f, "name"_a = "Subtract", "require_closed"_a = true, "Exact a minus b (cut openings, bores, recesses); result is closed");
-        m_ops.def("intersect", [](const ScratchboxMesh& a, const ScratchboxMesh& b, float smooth, const std::string& name, bool requireClosed) {
-            return meshops::booleanOp(a, b, meshops::BooleanKind::Intersect, smooth, name, requireClosed);
+        m_ops.def("intersect", [boolean](const ScratchboxMesh& a, const ScratchboxMesh& b, float smooth, const std::string& name, bool requireClosed) {
+            return boolean(a, b, meshops::BooleanKind::Intersect, smooth, name, requireClosed);
         }, "a"_a, "b"_a, "smooth_angle_deg"_a = 30.0f, "name"_a = "Intersect", "require_closed"_a = true, "Exact overlap of two closed meshes; result is closed");
         m_ops.def("bevel", [](const ScratchboxMesh& mesh, float width, int segments, float sharp, float smooth, const std::string& name) {
             return meshops::bevel(mesh, width, std::max(1, segments), sharp, smooth, name);
@@ -1643,15 +1680,24 @@ NB_MODULE(scratchbox_native, m) {
         m_ops.def("inset_extrude", [v3](const ScratchboxMesh& mesh, const V3& facing, float maxAngle, float inset, float depth,
                                        std::optional<V3> boxMin, std::optional<V3> boxMax, float smooth, const std::string& name) {
             bool useBox = boxMin.has_value() && boxMax.has_value();
-            return meshops::insetExtrude(mesh, v3(facing), maxAngle, inset, depth,
-                                         useBox ? v3(*boxMin) : Vec3(0, 0, 0), useBox ? v3(*boxMax) : Vec3(0, 0, 0), useBox, smooth, name);
+            std::vector<std::string> warnings;
+            ScratchboxMesh out = meshops::insetExtrude(mesh, v3(facing), maxAngle, inset, depth,
+                                         useBox ? v3(*boxMin) : Vec3(0, 0, 0), useBox ? v3(*boxMax) : Vec3(0, 0, 0), useBox, smooth, name, &warnings);
+            emitPythonWarnings(warnings);
+            return out;
         }, "mesh"_a, "facing"_a, "max_angle_deg"_a = 10.0f, "inset"_a = 0.0f, "depth"_a = 0.0f, "box_min"_a = nb::none(), "box_max"_a = nb::none(),
            "smooth_angle_deg"_a = 30.0f, "name"_a = "InsetExtruded",
            "Faces within max_angle_deg of `facing` (and with centroids inside box_min..box_max when given) form regions; "
            "each region's border is inset by `inset` within its plane and the region moved by `depth` along its normal "
            "(negative depth recesses it: panels, pockets, plinths, raised bosses)");
-        m_ops.def("solidify", &meshops::solidify, "mesh"_a, "thickness"_a, "smooth_angle_deg"_a = 30.0f, "name"_a = "Solidified",
-           "Give a surface thickness: an inner copy offset by `thickness` against its normals, joined along open edges");
+        m_ops.def("solidify", [](const ScratchboxMesh& mesh, float thickness, float smooth, const std::string& name) {
+            std::vector<std::string> warnings;
+            ScratchboxMesh out = meshops::solidify(mesh, thickness, smooth, name, &warnings);
+            emitPythonWarnings(warnings);
+            return out;
+        }, "mesh"_a, "thickness"_a, "smooth_angle_deg"_a = 30.0f, "name"_a = "Solidified",
+           "Give a surface thickness: an inner copy offset by `thickness` against its normals, joined along open edges; "
+           "the offset is reduced (with a warning) where the surface curves tighter than the thickness");
     }
 
     auto m_relief = m.def_submodule("relief", "Isoparametric normal relief: designed height fields (profiles along curves, periodic ridges, projected images) displaced along normals after adaptive subdivision");
@@ -1700,9 +1746,16 @@ NB_MODULE(scratchbox_native, m) {
             return L;
         }, "png"_a, "centre"_a, "normal"_a, "up"_a, "width_m"_a, "height_m"_a, "depth_m"_a, "tiles_u"_a = 1.0f, "tiles_v"_a = 1.0f, "projection_depth_m"_a = 0.02f,
            "A height image (luminance x alpha, white = full depth_m) projected onto the surface like a decal, tiled tiles_u x tiles_v times");
-        m_relief.def("apply", &relief::apply, "mesh"_a, "layers"_a, "target_edge_m"_a = 0.0f, "max_subdivisions"_a = 6, "samples_per_detail"_a = 3.0f,
-                     "smooth_angle_deg"_a = 30.0f, "name"_a = "Relief",
-                     "Subdivide where the layers reach (conformally, until edges resolve the finest detail) and displace along smooth normals");
+        m_relief.def("apply", [](const ScratchboxMesh& mesh, const std::vector<relief::Layer>& layers, float targetEdge, int maxSub, float samples,
+                                 float smooth, const std::string& name) {
+            std::vector<std::string> warnings;
+            ScratchboxMesh out = relief::apply(mesh, layers, targetEdge, maxSub, samples, smooth, name, &warnings);
+            emitPythonWarnings(warnings);
+            return out;
+        }, "mesh"_a, "layers"_a, "target_edge_m"_a = 0.0f, "max_subdivisions"_a = 6, "samples_per_detail"_a = 3.0f,
+           "smooth_angle_deg"_a = 30.0f, "name"_a = "Relief",
+           "Subdivide where the layers reach (conformally, until edges resolve the finest detail) and displace along smooth normals; "
+           "a layer that moves no vertex raises a warning");
     }
 
     auto m_hair = m.def_submodule("hair", "Analytical forward hair grooming, Marschner reflectance, and Gaussian splat synthesis");

@@ -144,6 +144,58 @@ out = sb.relief.apply(cyl, [groove], max_subdivisions=6)`);
         expect(minAngles[Math.floor(minAngles.length / 2)]).toBeGreaterThan(40);
     }, 600000);
 
+    it('refuses parameters that make no relief and warns about a layer that moves nothing', async () => {
+        const runner = NativePythonRunnerService.getInstance();
+        const result = await runner.runScript(`
+import scratchbox as sb, warnings
+box = sb.create_box(width=1, height=1, depth=1)
+cases = {
+    "width": lambda: sb.relief.profile([[(-0.4, 0.5, 0), (0.4, 0.5, 0)]], width_m=0.0, depth_m=-0.01),
+    "pitch": lambda: sb.relief.ridges((0, 0.5, 0), (1, 0, 0), pitch_m=0.0, depth_m=0.01),
+    "image": lambda: sb.relief.ridges((0, 0.5, 0), (1, 0, 0), pitch_m=0.1, depth_m=0.01).limit_box((1, 1, 1), (0, 0, 0)),
+    "facing": lambda: sb.relief.ridges((0, 0.5, 0), (1, 0, 0), pitch_m=0.1, depth_m=0.01).facing((0, 0, 0)),
+}
+for label, make in cases.items():
+    try:
+        sb.relief.apply(box, [make()]); print("NO ERROR", label)
+    except ValueError as e:
+        print("RAISED", label, str(e).split(": ", 1)[1][:40])
+with warnings.catch_warnings(record=True) as ws:
+    warnings.simplefilter("always")
+    out = sb.relief.apply(box, [sb.relief.profile([[(-0.4, 5.0, 0), (0.4, 5.0, 0)]], width_m=0.05, depth_m=-0.01)])
+print("noop-warned", any("moved no vertex" in str(w.message) for w in ws), len(out.indices))
+`);
+        expect(result.success, result.stderr).toBe(true);
+        expect(result.stdout).toContain('RAISED width profile width_m must be positive');
+        expect(result.stdout).toContain('RAISED pitch ridge pitch_m must be positive');
+        expect(result.stdout).toContain('RAISED image limit_box has box_min above box_max');
+        expect(result.stdout).toContain('RAISED facing facing direction must not be the zero');
+        expect(result.stdout).toContain('noop-warned True 36');
+        expect(result.stdout).not.toContain('NO ERROR');
+    }, 600000);
+
+    it('embosses only the faces an image lands on: the side next to an embossed front keeps its plane', async () => {
+        const { p } = await run(`
+import struct, zlib
+w = h = 16
+rows = b"".join(b"\\x00" + bytes([255] * w) for _ in range(h))   # an all-white image
+def chunk(t, d): return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+png = b"\\x89PNG\\r\\n\\x1a\\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+# Centred 0.2 m from the cube's +x edge, so the projection slab passes through the +x side face.
+emboss = sb.relief.image(png, (0.8, 0, 1.0), (0, 0, 1), (0, 1, 0), width_m=0.64, height_m=0.64, depth_m=0.03)
+out = sb.relief.apply(sb.create_box(width=2.0, height=2.0, depth=2.0), [emboss], target_edge_m=0.02)`);
+        expect(badEdgeCount(p)).toBe(0);
+        const n = p.positions.length / 3;
+        let maxX = -Infinity, raised = 0;
+        for (let i = 0; i < n; i++) {
+            const x = p.positions[i * 3], y = p.positions[i * 3 + 1], z = p.positions[i * 3 + 2];
+            maxX = Math.max(maxX, x);
+            if (Math.abs(y) < 0.2 && x > 0.5 && x < 0.9 && z > 1.0) { expect(z).toBeCloseTo(1.03, 3); raised++; }
+        }
+        expect(maxX).toBeLessThanOrEqual(1.0 + 1e-6);   // the +x side was not pushed outward anywhere
+        expect(raised).toBeGreaterThan(100);
+    }, 600000);
+
     it('embosses a projected height image: white raises by depth, black and outside do not move', async () => {
         const { p } = await run(`
 import struct, zlib

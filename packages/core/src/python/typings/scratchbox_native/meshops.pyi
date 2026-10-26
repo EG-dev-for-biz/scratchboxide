@@ -19,7 +19,7 @@ def intersect(a: scratchbox_native.geometry.Mesh, b: scratchbox_native.geometry.
 
 
 def solidify(mesh: scratchbox_native.geometry.Mesh, thickness: float, smooth_angle_deg: float = 30.0, name: str = 'Solidified') -> scratchbox_native.geometry.Mesh:
-    """Give a surface thickness: an inner copy offset by `thickness` against its normals, joined along open edges"""
+    """Give a surface thickness: an inner copy offset by `thickness` against its normals, joined along open edges; the offset is reduced (with a warning) where the surface curves tighter than the thickness"""
 
 
 def subtract(a: scratchbox_native.geometry.Mesh, b: scratchbox_native.geometry.Mesh, smooth_angle_deg: float = 30.0, name: str = 'Subtract', require_closed: bool = True) -> scratchbox_native.geometry.Mesh:

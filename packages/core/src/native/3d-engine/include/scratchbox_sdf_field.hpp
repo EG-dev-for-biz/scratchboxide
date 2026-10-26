@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <stdexcept>
 
 namespace scratchbox {
 namespace sdf {
@@ -93,6 +94,7 @@ public:
         return Field([a, inv](const Vec3& p) { return a(inv.rotate(p)); });
     }
     Field scale(float s) const {
+        if (!(s > 0.0f) || !std::isfinite(s)) throw std::invalid_argument("sdf scale factor must be a positive number, got " + std::to_string(s));
         Field a = *this;
         return Field([a, s](const Vec3& p) { return a(p / s) * s; });
     }
@@ -142,13 +144,17 @@ public:
 
     /**
      * Mesh the surface inside [boundsMin, boundsMax] with cubic cells: `resolution` cells along the
-     * longest side. The bounds are padded by two cells and their outer layer treated as outside, so
-     * the result is closed even where the bounds cut the shape. Hard booleans make mathematically
-     * sharp creases, which any grid mesher can only staircase; blend them (k > 0) for clean edges.
+     * longest side. The field is intersected with the bounds box, so a shape the bounds cut is capped
+     * exactly on the bounds (the grid is padded by two cells so the cap is inside the sampled volume).
+     * Hard booleans make mathematically sharp creases, which any grid mesher can only staircase; blend
+     * them (k > 0) for clean edges. Features thinner than a cell cannot be meshed: `droppedCells`
+     * receives how many cells held one, and an empty result throws.
      */
     geometry::ScratchboxMesh toMesh(const Vec3& boundsMin, const Vec3& boundsMax, int resolution = 128,
-                                    int projectionSteps = 2, const std::string& name = "SdfMesh") const {
+                                    int projectionSteps = 2, const std::string& name = "SdfMesh",
+                                    int* droppedCells = nullptr, float* cellSize = nullptr) const {
         Vec3 size = boundsMax - boundsMin;
+        if (!(size.x > 0.0f) || !(size.y > 0.0f) || !(size.z > 0.0f)) throw std::invalid_argument("to_mesh bounds must have bounds_min < bounds_max on every axis");
         float longest = std::max({size.x, size.y, size.z, 1e-6f});
         int res = std::clamp(resolution, 8, 1024);
         float cell = longest / res;
@@ -158,9 +164,18 @@ public:
         int ny = std::max(1, static_cast<int>(std::ceil(padded.y / cell)));
         int nz = std::max(1, static_cast<int>(std::ceil(padded.z / cell)));
         hi = lo + Vec3(nx * cell, ny * cell, nz * cell);
+        if (cellSize) *cellSize = cell;
         Field f = *this;
-        return geometry::IsosurfaceExtractor::extract([f](const Vec3& p) { return f(p); }, math::AABB(lo, hi), nx, ny, nz,
-                                              0.0f, projectionSteps, true, math::Vec4(0.8f, 0.8f, 0.8f, 1.0f), name);
+        const Vec3 centre = (boundsMin + boundsMax) * 0.5f, half = size * 0.5f;
+        auto clipped = [f, centre, half](const Vec3& p) { return std::max(f(p), sdBox(p - centre, half)); };
+        geometry::ScratchboxMesh mesh = geometry::IsosurfaceExtractor::extract(clipped, math::AABB(lo, hi), nx, ny, nz,
+                                              0.0f, projectionSteps, true, math::Vec4(0.8f, 0.8f, 0.8f, 1.0f), name, droppedCells);
+        if (mesh.indices.empty()) {
+            throw std::runtime_error("to_mesh produced no surface: no grid point of the " + std::to_string(nx) + " x " + std::to_string(ny) + " x " +
+                std::to_string(nz) + " grid (cell " + std::to_string(cell) + " m) is inside the field within the bounds; the shape is outside "
+                "the bounds or thinner than a cell (raise resolution)");
+        }
+        return mesh;
     }
 
 private:
