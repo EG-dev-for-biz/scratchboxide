@@ -17,7 +17,7 @@ import scratchbox_native.math
 import scratchbox_native.nature
 import typing
 
-__all__ = ['Any', 'Armature', 'Dict', 'Flora', 'Human', 'List', 'Optional', 'PbrMaterial', 'PbrMaterialWrapper', 'PlantPreset', 'PoseBone', 'PrincipledBsdfMaterial', 'RomanOrder', 'Scene', 'ShapeKeyBlock', 'ShapeKeys', 'Structure', 'StudioHuman', 'Terrain', 'Tuple', 'Union', 'World', 'adaptive_object', 'architecture', 'composer', 'constants', 'core', 'create_arched_blister', 'create_beveled_box', 'create_box', 'create_building', 'create_building_parts', 'create_cambered_foil', 'create_catenary_cable', 'create_character', 'create_cone', 'create_cube', 'create_curved_building', 'create_cylinder', 'create_envelope', 'create_form', 'create_human', 'create_hydraulic_actuator', 'create_intake_strainer', 'create_ivy', 'create_lathe', 'create_loft', 'create_lofted_hull', 'create_louver_bay', 'create_panelized_loft', 'create_plane', 'create_revolving_component', 'create_sphere', 'create_spline_conduit_harness', 'create_structural_truss_member', 'create_studio_pedestal', 'create_subdivided_box', 'create_tower', 'create_tree', 'create_vegetation', 'create_wheel', 'create_wheel_assembly', 'export_glb', 'geometry', 'geospatial', 'hair', 'human', 'io', 'k', 'layout', 'math', 'meshops', 'moulding_profile', 'nature', 'object_spec', 'os', 'pbr', 'plant', 'processing', 'py_math', 'random', 'relief', 'replicate_metric_array', 'revolve_harmonic_solid', 'rig', 'sdf', 'shaper', 'stack_buildings', 'structure', 'superellipse_loop', 'superellipse_point', 'sweep_curve_profile', 'sys', 'terrain', 'topology', 'validate_scene', 'validation', 'world', 'write_glb', 'write_textured_building']
+__all__ = ['Any', 'Armature', 'Dict', 'Flora', 'Human', 'List', 'Optional', 'PbrMaterial', 'PbrMaterialWrapper', 'PlantPreset', 'PoseBone', 'PrincipledBsdfMaterial', 'RomanOrder', 'Scene', 'ShapeKeyBlock', 'ShapeKeys', 'Structure', 'StudioHuman', 'Terrain', 'Tuple', 'Union', 'World', 'adaptive_object', 'architecture', 'composer', 'constants', 'core', 'create_arched_blister', 'create_beveled_box', 'create_box', 'create_building', 'create_building_parts', 'create_cambered_foil', 'create_catenary_cable', 'create_character', 'create_cone', 'create_cube', 'create_curved_building', 'create_cylinder', 'create_envelope', 'create_form', 'create_human', 'create_hydraulic_actuator', 'create_intake_strainer', 'create_ivy', 'create_lathe', 'create_loft', 'create_lofted_hull', 'create_louver_bay', 'create_panelized_loft', 'create_plane', 'create_revolving_component', 'create_sphere', 'create_spline_conduit_harness', 'create_structural_truss_member', 'create_studio_pedestal', 'create_subdivided_box', 'create_tower', 'create_tree', 'create_vegetation', 'create_wheel', 'create_wheel_assembly', 'export_glb', 'geometry', 'geospatial', 'hair', 'human', 'io', 'k', 'layout', 'math', 'meshops', 'moulding_profile', 'nature', 'object_spec', 'os', 'pbr', 'plant', 'processing', 'py_math', 'random', 'relief', 'replicate_metric_array', 'revolve_harmonic_solid', 'rig', 'sdf', 'shaper', 'site', 'site_tiers', 'stack_buildings', 'structure', 'superellipse_loop', 'superellipse_point', 'sweep_curve_profile', 'sys', 'terrain', 'topology', 'validate_scene', 'validation', 'world', 'write_glb', 'write_textured_building']
 
 Any = typing.Any
 Armature = scratchbox.human.Armature
@@ -608,6 +608,32 @@ def revolve_harmonic_solid(anchor_point: typing.Tuple[float, float, float] = (0.
 import scratchbox_native.rig as rig
 import scratchbox_native.sdf as sdf
 import scratchbox_native.shaper as shaper
+
+def site() -> typing.Dict[str, typing.Any]:
+    """
+    The measured massing of the real building passed as execute_3d_python_script's site: place, frame (x east,
+    z south, metres from the place point, y up from the building's lowest point), "tiers" (each base_m, top_m,
+    area_m2, plan "loops", provenance, source, confidence), "top_m" (the highest point the vector data reaches),
+    "wall_direction_deg" and notes. Raises when the call gave no site.
+    """
+
+
+def site_tiers(massing: typing.Dict[str, typing.Any] | None = None, name: str = 'Site', floor_height: float = 3.7, ground_floor_height: float = 4.5, plinth_height: float = 0.6, min_tier_m: float = 2.4, spire_area_m2: float = 200.0, **common) -> typing.Dict[str, typing.Any]:
+    """
+    Turns measured massing (sb.site() by default) into create_building_parts arguments, one tier per level of the
+    setback stack, sized to the measurement: each tier's outline is its measured plan, base_y its measured base, and
+    its storeys fill exactly from base to measured top. Storey heights are not measured: the ground floor takes
+    ground_floor_height and the rest floor_height (norms), all scaled together so they land on the measured top, and
+    the report says so ("generated"). A tier thinner than min_tier_m joins the tier above; one under spire_area_m2
+    (a mast or spire) is returned under "spires" for the script to build as an add-on, not as storeys. Every tier
+    above the ground one gets entrance=False. **common (bay_width, window sizes, details, facade_rules, roof...) is
+    passed to every tier.
+
+    Returns {"tiers": [kwargs...], "spires": [...], "above_top_m": metres the vector top rises above the last tier
+    (an antenna), "report": [...]}; build with
+        parts = sb.stack_buildings(*[sb.create_building_parts(**t) for t in plan["tiers"]]).
+    """
+
 
 def stack_buildings(*tiers) -> _BuildingParts:
     """

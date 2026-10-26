@@ -1376,6 +1376,92 @@ def create_building_parts(
     return parts
 
 
+def site() -> Dict[str, Any]:
+    """
+    The measured massing of the real building passed as execute_3d_python_script's site: place, frame (x east,
+    z south, metres from the place point, y up from the building's lowest point), "tiers" (each base_m, top_m,
+    area_m2, plan "loops", provenance, source, confidence), "top_m" (the highest point the vector data reaches),
+    "wall_direction_deg" and notes. Raises when the call gave no site.
+    """
+    path = os.environ.get("SCRATCHBOX_SITE_JSON")
+    if not path or not os.path.exists(path):
+        raise RuntimeError("no site was measured for this run: pass site=<building or address> to execute_3d_python_script")
+    with open(path, "r", encoding="utf-8") as fh:
+        raw = _json.load(fh)
+    snake = lambda k: _re.sub(r"(?<!^)(?=[A-Z])", "_", k).lower().replace("_m2", "_m2")
+    def conv(o):
+        if isinstance(o, dict):
+            return {snake(k): conv(v) for k, v in o.items()}
+        if isinstance(o, list):
+            return [conv(v) for v in o]
+        return o
+    return conv(raw)
+
+
+def site_tiers(massing: Optional[Dict[str, Any]] = None, name: str = "Site", floor_height: float = 3.7,
+               ground_floor_height: float = 4.5, plinth_height: float = 0.6, min_tier_m: float = 2.4,
+               spire_area_m2: float = 200.0, **common) -> Dict[str, Any]:
+    """
+    Turns measured massing (sb.site() by default) into create_building_parts arguments, one tier per level of the
+    setback stack, sized to the measurement: each tier's outline is its measured plan, base_y its measured base, and
+    its storeys fill exactly from base to measured top. Storey heights are not measured: the ground floor takes
+    ground_floor_height and the rest floor_height (norms), all scaled together so they land on the measured top, and
+    the report says so ("generated"). A tier thinner than min_tier_m joins the tier above; one under spire_area_m2
+    (a mast or spire) is returned under "spires" for the script to build as an add-on, not as storeys. Every tier
+    above the ground one gets entrance=False. **common (bay_width, window sizes, details, facade_rules, roof...) is
+    passed to every tier.
+
+    Returns {"tiers": [kwargs...], "spires": [...], "above_top_m": metres the vector top rises above the last tier
+    (an antenna), "report": [...]}; build with
+        parts = sb.stack_buildings(*[sb.create_building_parts(**t) for t in plan["tiers"]]).
+    """
+    m = massing if massing is not None else site()
+    raw = sorted(m.get("tiers", []), key=lambda t: (t["base_m"], -t["area_m2"]))
+    if not raw:
+        raise ValueError("the site has no measured tiers: " + "; ".join(m.get("notes", [])))
+    tiers, spires, report = [], [], []
+    carry_base = None
+    for t in raw:
+        base = t["base_m"] if carry_base is None else carry_base
+        top = t["top_m"]
+        if t["area_m2"] < spire_area_m2:
+            spires.append({"base_m": base, "top_m": top, "area_m2": t["area_m2"], "loops": t["loops"],
+                           "provenance": t["provenance"]})
+            carry_base = None
+            continue
+        if top - base < min_tier_m:
+            carry_base = base      # too thin for a storey: the next tier starts here instead
+            continue
+        carry_base = None
+        loops = t["loops"]
+        ground = not tiers and base < 0.5
+        h = top - base
+        if ground:
+            usable = h - plinth_height
+            n = max(1, int(round((usable - ground_floor_height) / floor_height)) + 1)
+            nominal = [ground_floor_height] + [floor_height] * (n - 1)
+        else:
+            n = max(1, int(round(h / floor_height)))
+            nominal = [floor_height] * n
+            usable = h
+        k = usable / sum(nominal)
+        heights = [round(x * k, 4) for x in nominal]
+        kw = dict(common)
+        kw.update(footprint=[tuple(p) for p in loops[0]], courtyards=[[tuple(p) for p in l] for l in loops[1:]] or None,
+                  base_y=base, floors=n, floor_heights=heights, ground_floor_height=heights[0], floor_height=heights[-1],
+                  plinth_height=plinth_height if ground else 0.0, name=f"{name}T{len(tiers)}")
+        kw.setdefault("roof", "flat")
+        if not ground:
+            kw["entrance"] = False
+        tiers.append(kw)
+        report.append({"name": kw["name"], "base_m": round(base, 2), "top_m": round(top, 2), "floors": n,
+                       "storey_m": round(sum(heights) / n, 2), "size": f"{t['provenance']} ({t.get('source', '')})",
+                       "storeys": "generated: norms scaled to the measured height"})
+    tops = [t["top_m"] for t in raw]
+    above = (m.get("top_m") or 0.0) - max(tops)
+    return {"tiers": tiers, "spires": spires, "above_top_m": round(above, 2) if above > 0.5 else 0.0, "report": report}
+
+
 def stack_buildings(*tiers) -> _BuildingParts:
     """
     Combine buildings made by create_building_parts (each with its own name, placed with base_y and

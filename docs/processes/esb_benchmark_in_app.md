@@ -74,3 +74,39 @@
 * **Still open:**
   - The agent needs several runs to recover from invented setting names. The hints now name the right key; whether the agent uses a hint on its first retry is not yet confirmed.
   - The 96 MB / 1 M-vertex limit is set from one crash at 107 MB / 1.2 M vertices and one success at 33 MB / 0.43 M. The real limit lies somewhere between, and depends on the machine.
+
+---
+
+## 7. Sized from measured massing (step 1 of the massing and detail plan)
+
+* **What was added:**
+  - `execute_3d_python_script` takes `site` (a building name, address or "lat, lng"). Before the script runs, `measureSiteMassing` (`packages/core/src/node/3d-engine/site-massing.ts`) measures the building. A building Google models as a 3D volume is sliced by the native scan analysis (`shape_program mode scan`) into its flat levels. Otherwise there is one tier per vector part, from its min to max height, and the fused (Solar DSM) height fills any missing height.
+  - The script reads the measurement with `sb.site()`. `sb.site_tiers()` turns it into `create_building_parts` arguments: measured outline and base per tier; storeys from norms, scaled to land exactly on the measured top and labelled generated; `entrance=False` above the ground tier. Masts and spires (under 200 m²) and the antenna height above the last tier are returned separately for add-ons.
+* **What Google's data holds for the Empire State Building:** one modeled volume, 441.09 m high, with an 11-point base hull, 28.4° off north (the Manhattan grid). The Solar DSM roof figure, 77.5 m above the street, is wrong for a tower and is flagged low confidence. The slicing finds the setback stack in 0.4 s:
+
+  | Tier | Base → top (m) | Area (m²) |
+  |---|---|---|
+  | 0 | 0 → 22.6 | 7,728 |
+  | 1 | 22.6 → 25.3 | 5,001 |
+  | 2 | 25.3 → 77.6 | 4,190 |
+  | 3 | 77.6 → 90.7 | 3,200 |
+  | 4 | 90.7 → 110.6 | 2,707 |
+  | 5 | 110.6 → 319.9 | 2,079 |
+  | 6 | 319.9 → 329.4 | 656 |
+  | mast | 329.4 → 380.1 | 106 |
+
+  The antenna reaches 441.1 m. `site_tiers` gives 87 storeys to the 320 m deck; the real building has 86 there.
+* **In the app** (web 3070 / API 3071 / tools 3072, a fresh chat). The prompt asked for the building "sized from the real building's measured massing (its actual setbacks and heights, not estimates)" and named no API. The agent:
+  - called `location_building_shape`;
+  - wrote a script using `sb.site()` and `sb.site_tiers(massing=...)`, building `plan["spires"]` as the mooring mast (329.35–380.10 m) and `above_top_m` as the antenna to 441.09 m.
+
+  Five runs:
+  1. Invented `parts.wall` (AttributeError).
+  2. `color_variation`. The hint named `unit_color_variance`, and the next run no longer used the invented key: **the hint works**.
+  3. Failed in the app after 8.8 s. The same script runs locally, so it most likely hit the viewport size gate (not confirmed).
+  4. and 5. Succeeded. The final model is 37 MB, 511,243 vertices.
+* **Viewport:** the stepped massing at the measured proportions, the shaft, mast and antenna. No console errors. The reply reports each tier's measured base and top labelled vector-modelled, with the storey split labelled generated, and sets the Solar DSM disagreement side by side rather than averaging it.
+* **Still open:**
+  - The model stays in the studio, not placed at the address, and the real building is not cut from the tiles (Stage 2).
+  - Courtyard holes from extruded vector parts are not passed on yet (stated in the notes).
+  - Storey heights are norms. Facade-grammar storey lines (step 2) would replace them where read.

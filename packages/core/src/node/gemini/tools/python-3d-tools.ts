@@ -19,6 +19,8 @@ import { callVisionModel, describeVisualProblems, reviewModelVisually, type Visu
 import { formatSbApiErrors, sbTypeCheckMetadata, typeCheckSbScript } from '../../3d-engine/sb-script-typecheck';
 import { SB_API_CORE_SUMMARY, SB_API_VERSION } from '../../3d-engine/sb-api.generated';
 import { firstPassRenderMode } from '../scene3d-first-pass-baseline';
+import { measureSiteMassing, type SiteMassing } from '../../3d-engine/site-massing';
+import * as os from 'os';
 
 export interface GlbAabbBounds {
     min: [number, number, number];
@@ -188,7 +190,7 @@ export function viewportSceneLimits(env: NodeJS.ProcessEnv = process.env): { ver
 export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'execute_3d_python_script',
-        description: 'Runs a procedural Python 3 script with the Scratchbox 3D Engine (import scratchbox as sb) and opens the GLB it writes as a new 3D scene in a studio void, shown with the materials the script assigns (textured by default; studio clay only when the user asks for clay). Choose the tool by what the user asked for: a real-world place goes to google_3d_tiles_get_clay; one specific object, or an abstract form, goes to build_3d_object_from_reference (with its location when it stands at a real place); an imagined environment or landscape, a scene made of several objects, or an explicit request for a script comes here. Every call starts a new scene: nothing is carried over from the scene already on the canvas. This tool does not stage anything on a real place: a call with a location or coordinates fails without running the script. If the script writes no GLB, or one with no geometry, the call fails.\n\n' + PYTHON_3D_API_REFERENCE,
+        description: 'Runs a procedural Python 3 script with the Scratchbox 3D Engine (import scratchbox as sb) and opens the GLB it writes as a new 3D scene in a studio void, shown with the materials the script assigns (textured by default; studio clay only when the user asks for clay). Choose the tool by what the user asked for: a real-world place goes to google_3d_tiles_get_clay; one specific object, or an abstract form, goes to build_3d_object_from_reference (with its location when it stands at a real place); an imagined environment or landscape, a scene made of several objects, or an explicit request for a script comes here. Every call starts a new scene: nothing is carried over from the scene already on the canvas. This tool does not stage anything on a real place: a call with a location or coordinates fails without running the script. To size a building on a real one, pass site (the place): its measured massing reaches the script as sb.site(), and sb.site_tiers() turns it into create_building_parts tiers; the model still opens in the studio. If the script writes no GLB, or one with no geometry, the call fails.\n\n' + PYTHON_3D_API_REFERENCE,
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -203,6 +205,10 @@ export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 timeoutMs: {
                     type: 'NUMBER',
                     description: 'Execution timeout in milliseconds (default 45000).'
+                },
+                site: {
+                    type: 'STRING',
+                    description: 'Optional: a real building (name, address or "lat, lng") whose measured massing the script should be sized from. Its footprint, setback tiers and heights (Google vector data; a modeled volume is sliced at its flat levels) are measured before the script runs and read in it with sb.site(); sb.site_tiers() turns them into create_building_parts arguments. Sizing only: the scene still opens in the studio, not at the place.'
                 },
                 renderMode: {
                     type: 'STRING',
@@ -291,12 +297,27 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
             console.warn(`[execute_3d_python_script] scratchbox type check ${typeCheck.status} after ${typeCheck.durationMs}ms; running unchecked: ${typeCheck.note}`);
         }
 
+        // 2b. A site to size the building on: measured before the script runs, handed over as a JSON file. A site that
+        // cannot be measured fails the call with the reason (no invented massing).
+        let site: SiteMassing | undefined;
+        const siteEnv: Record<string, string> = {};
+        if (typeof args.site === 'string' && args.site.trim()) {
+            try {
+                site = await measureSiteMassing(args.site.trim(), { workspaceRoot: _ctx?.workspaceRoot ?? process.cwd(), ...(_ctx?.signal ? { signal: _ctx.signal } : {}) });
+            } catch (err) {
+                return failedOutcome(err, `Could not measure the site "${args.site.trim()}"; the script did not run`);
+            }
+            const siteFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-site-json-')), 'site.json');
+            fs.writeFileSync(siteFile, JSON.stringify(site));
+            siteEnv.SCRATCHBOX_SITE_JSON = siteFile;
+        }
+
         // 3. Execute Python script
         const runner = NativePythonRunnerService.getInstance();
         const effectiveScript = script;
         const result = await runner.runScript(effectiveScript, {
             timeoutMs,
-            env: { ...process.env }
+            env: { ...process.env, ...siteEnv }
         });
 
         // Per User Directive: No silent fallbacks or synthetic substitutes.
@@ -473,6 +494,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 success: true,
                 glbPath: result.glbPath,
                 glbGenerated: true,
+                ...(site ? { site: { resolvedAs: site.place.resolvedAs, topM: site.topM, tiers: site.tiers.map(t => ({ baseM: +t.baseM.toFixed(1), topM: +t.topM.toFixed(1), areaM2: Math.round(t.areaM2), provenance: t.provenance })), notes: site.notes } } : {}),
                 vertexCount: writtenGeometry.totalVertices,
                 triangleCount: writtenGeometry.totalTriangles,
                 executionTimeMs: result.executionTimeMs,
