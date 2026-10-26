@@ -7,7 +7,7 @@ import scratchbox_native.geometry
 import scratchbox_native.math
 import typing
 
-__all__ = ['RomanOrder', 'architecture', 'composer', 'core', 'export_glb_bytes', 'geometry', 'hair', 'human', 'io', 'math', 'meshops', 'nature', 'plant', 'processing', 'render_sensor_passes', 'rig', 'sdf', 'shaper', 'surface', 'topology', 'weathering']
+__all__ = ['RomanOrder', 'architecture', 'composer', 'core', 'export_glb_bytes', 'geometry', 'hair', 'human', 'io', 'math', 'meshops', 'nature', 'plant', 'processing', 'relief', 'render_sensor_passes', 'rig', 'sdf', 'shaper', 'surface', 'topology', 'weathering']
 
 
 class RomanOrder(enum.Enum):
@@ -39,6 +39,7 @@ import scratchbox_native.meshops as meshops
 import scratchbox_native.nature as nature
 import scratchbox_native.plant as plant
 import scratchbox_native.processing as processing
+import scratchbox_native.relief as relief
 
 def render_sensor_passes(mesh: scratchbox_native.geometry.Mesh, width: int = 512, height: int = 512, camera_position: scratchbox_native.math.Vec3 = ..., camera_target: scratchbox_native.math.Vec3 = ..., fov_degrees: float = 45.0, samples_per_pixel: int = 1, seed: int = 42) -> scratchbox_native.core.SensorPassesResult:
     """Render RGB beauty, metric linear depth, and surface normal validation passes"""

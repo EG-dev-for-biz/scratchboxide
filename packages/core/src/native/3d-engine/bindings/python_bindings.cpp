@@ -24,6 +24,7 @@
 #include "scratchbox_sdf.hpp"
 #include "scratchbox_sdf_field.hpp"
 #include "scratchbox_mesh_ops.hpp"
+#include "scratchbox_relief.hpp"
 #include "scratchbox_hair.hpp"
 #include "scratchbox_spz.hpp"
 #include "scratchbox_parametric_human.hpp"
@@ -1651,6 +1652,57 @@ NB_MODULE(scratchbox_native, m) {
            "(negative depth recesses it: panels, pockets, plinths, raised bosses)");
         m_ops.def("solidify", &meshops::solidify, "mesh"_a, "thickness"_a, "smooth_angle_deg"_a = 30.0f, "name"_a = "Solidified",
            "Give a surface thickness: an inner copy offset by `thickness` against its normals, joined along open edges");
+    }
+
+    auto m_relief = m.def_submodule("relief", "Isoparametric normal relief: designed height fields (profiles along curves, periodic ridges, projected images) displaced along normals after adaptive subdivision");
+    {
+        using V3 = std::array<float, 3>;
+        auto v3 = [](const V3& a) { return Vec3(a[0], a[1], a[2]); };
+        nb::class_<relief::Layer>(m_relief, "Layer", "One relief layer; chain .limit_box / .facing / .strength to mask it")
+            .def("limit_box", [v3](relief::Layer& L, const V3& lo, const V3& hi, float feather) { L.hasBox = true; L.boxMin = v3(lo); L.boxMax = v3(hi); L.featherM = feather; return L; },
+                 "box_min"_a, "box_max"_a, "feather_m"_a = 0.0f, "Only inside this box, fading over feather_m at its faces")
+            .def("facing", [v3](relief::Layer& L, const V3& dir, float maxDeg, float softDeg) { L.hasFacing = true; L.facing = v3(dir); L.facingMaxDeg = maxDeg; L.facingSoftDeg = softDeg; return L; },
+                 "direction"_a, "max_angle_deg"_a = 45.0f, "soft_deg"_a = 15.0f, "Only on surfaces within max_angle_deg of direction, fading over soft_deg")
+            .def("strength", [](relief::Layer& L, float s) { L.strength = s; return L; }, "factor"_a);
+
+        m_relief.def("profile", [v3](const std::vector<std::vector<V3>>& carriers, float width, float depth, float sharpness, float flatTop) {
+            relief::Layer L;
+            for (const auto& c : carriers) { std::vector<Vec3> pts; for (const auto& q : c) pts.push_back(v3(q)); L.carriers.push_back(std::move(pts)); }
+            L.widthM = width; L.depthM = depth; L.sharpness = sharpness; L.flatTop = flatTop;
+            return L;
+        }, "carriers"_a, "width_m"_a, "depth_m"_a, "sharpness"_a = 0.3f, "flat_top"_a = 0.0f,
+           "A cross-section swept along polylines (lists of points): depth_m < 0 cuts a groove or shut line, > 0 raises a bead or rib; "
+           "width_m is the half-width, sharpness 0 round .. 1 V, flat_top the fraction of the width at full height");
+        m_relief.def("ridges", [v3](const V3& origin, const V3& direction, float pitch, float depth, float sharpness, float duty, std::optional<V3> second) {
+            relief::Layer L;
+            L.ridges = true; L.ridgeOrigin = v3(origin); L.ridgeDir = v3(direction); L.pitchM = pitch; L.ridgeDepthM = depth;
+            L.ridgeSharpness = sharpness; L.duty = duty;
+            if (second) L.ridgeDir2 = v3(*second);
+            return L;
+        }, "origin"_a, "direction"_a, "pitch_m"_a, "depth_m"_a, "sharpness"_a = 0.6f, "duty"_a = 0.5f, "second_direction"_a = nb::none(),
+           "Periodic ridges of pitch_m along direction (depth_m < 0 for grooves); a second_direction multiplies in a crossing set (knurling, waffle)");
+        m_relief.def("helix_ridges", [v3](const V3& origin, const V3& axis, float radius, float pitch, float depth, float helixDeg, float sharpness, float duty) {
+            relief::Layer L;
+            L.ridges = true; L.ridgeAroundAxis = true; L.ridgeOrigin = v3(origin); L.ridgeDir = v3(axis); L.ridgeRadiusM = radius;
+            L.pitchM = pitch; L.ridgeDepthM = depth; L.helixDeg = helixDeg; L.ridgeSharpness = sharpness; L.duty = duty;
+            return L;
+        }, "origin"_a, "axis"_a, "radius_m"_a, "pitch_m"_a, "depth_m"_a, "helix_deg"_a = 30.0f, "sharpness"_a = 0.6f, "duty"_a = 0.5f,
+           "Ridges around an axis (a whole number per turn at radius_m, pitch_m rounded to fit): straight flutes at helix_deg 0, "
+           "a crossing knurl at helix_deg > 0 (depth_m < 0 for grooves)");
+        m_relief.def("image", [v3](nb::bytes png, const V3& centre, const V3& normal, const V3& up, float width, float height, float depth,
+                                  float tilesU, float tilesV, float projectionDepth) {
+            auto decoded = png::decode(reinterpret_cast<const uint8_t*>(png.c_str()), png.size(), png::OutputFormat::Rgba);
+            if (!decoded.ok) throw std::invalid_argument("relief image is not a readable PNG: " + decoded.error);
+            relief::Layer L;
+            L.image = std::move(decoded.image); L.imageCentre = v3(centre); L.imageNormal = v3(normal); L.imageUp = v3(up);
+            L.imageWidthM = width; L.imageHeightM = height; L.imageDepthM = depth; L.imageTilesU = tilesU; L.imageTilesV = tilesV;
+            L.imageProjectionDepthM = projectionDepth;
+            return L;
+        }, "png"_a, "centre"_a, "normal"_a, "up"_a, "width_m"_a, "height_m"_a, "depth_m"_a, "tiles_u"_a = 1.0f, "tiles_v"_a = 1.0f, "projection_depth_m"_a = 0.5f,
+           "A height image (luminance x alpha, white = full depth_m) projected onto the surface like a decal, tiled tiles_u x tiles_v times");
+        m_relief.def("apply", &relief::apply, "mesh"_a, "layers"_a, "target_edge_m"_a = 0.0f, "max_subdivisions"_a = 6, "samples_per_detail"_a = 3.0f,
+                     "smooth_angle_deg"_a = 30.0f, "name"_a = "Relief",
+                     "Subdivide where the layers reach (conformally, until edges resolve the finest detail) and displace along smooth normals");
     }
 
     auto m_hair = m.def_submodule("hair", "Analytical forward hair grooming, Marschner reflectance, and Gaussian splat synthesis");

@@ -181,12 +181,19 @@ inline ScratchboxMesh finish(const IndexedMesh& m, const ScratchboxMesh& style, 
         uint32_t idx[3];
         for (int k = 0; k < 3; ++k) {
             uint32_t v = m.t[f][k];
-            // Weighted normals: a face at least half as large as the biggest face it smooths with keeps its own
-            // normal (flat faces shade flat); smaller faces (bevel strips, fillets) blend towards their group.
+            // Weighted normals: when the faces coplanar with this one (within 1 degree) clearly dominate the
+            // smoothing group's area around the vertex, the corner keeps the flat normal (flat faces shade flat
+            // beside bevel strips); otherwise it takes the area-weighted average (curved surfaces blend; on a
+            // polygonal cylinder each facet holds at most half the area, so the bar sits above a half).
             Vec3 n(0, 0, 0);
-            float biggest = 0.0f;
-            for (uint32_t g : vf[v]) if (fn[g].dot(fn[f]) >= cosLimit) { n += fa[g]; biggest = std::max(biggest, fa[g].length()); }
-            if (fa[f].length() >= 0.5f * biggest) n = fn[f];
+            float groupArea = 0.0f, coplanarArea = 0.0f;
+            for (uint32_t g : vf[v]) if (fn[g].dot(fn[f]) >= cosLimit) {
+                n += fa[g];
+                float area = fa[g].length();
+                groupArea += area;
+                if (fn[g].dot(fn[f]) >= 0.99985f) coplanarArea += area;
+            }
+            if (coplanarArea > 0.65f * groupArea) n = fn[f];
             n = n.length() > 1e-20f ? n.normalized() : fn[f];
             std::array<int32_t, 3> nk = { static_cast<int32_t>(std::lround(n.x * 1e4)), static_cast<int32_t>(std::lround(n.y * 1e4)), static_cast<int32_t>(std::lround(n.z * 1e4)) };
             auto key = std::make_pair(v, nk);
