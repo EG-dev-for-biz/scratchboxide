@@ -1082,7 +1082,8 @@ def _building_config(
     window_width, window_height, window_recess_depth, roof, roof_height, roof_overhang,
     roof_pitch_degrees, parapet_height, curvature, superellipse_exponent, twist_degrees,
     taper, bulge, bay_count, bake_curvature_ao, details=None, floor_heights=None,
-    centre_bay_scale=1.0, end_bay_scale=1.0, facade_rules=None, **kwargs
+    centre_bay_scale=1.0, end_bay_scale=1.0, facade_rules=None, footprint=None, courtyards=None,
+    entrance_edge=None, entrance=True, **kwargs
 ):
     if _native is None or not hasattr(_native, "architecture"):
         raise RuntimeError("Native 3D architecture module scratchbox_native.architecture is required")
@@ -1167,6 +1168,27 @@ def _building_config(
         cfg.floor_heights = [float(h) for h in floor_heights]
     cfg.centre_bay_scale = float(centre_bay_scale)
     cfg.end_bay_scale = float(end_bay_scale)
+    def _loop(points, what):
+        try:
+            loop = [_native.math.Vec2(float(x), float(z)) for x, z in points]
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{what} must be a list of (x, z) points in metres") from exc
+        if len(loop) < 3:
+            raise ValueError(f"{what} needs at least 3 points, got {len(loop)}")
+        return loop
+    if footprint is not None:
+        cfg.footprint = _loop(footprint, "footprint")
+        cfg.footprint_holes = [_loop(h, f"courtyard {i}") for i, h in enumerate(courtyards or [])]
+    elif courtyards:
+        raise ValueError("courtyards need a footprint outline around them")
+    if entrance_edge is not None:
+        if footprint is None:
+            raise ValueError("entrance_edge applies to a footprint outline; the rectangle's entrance is on its south side")
+        cfg.entrance_edge = int(entrance_edge)
+    if not entrance:
+        if entrance_edge is not None:
+            raise ValueError("entrance=False leaves the building without a door; drop entrance_edge")
+        cfg.entrance_edge = -2
     if facade_rules:
         side_index = {"south": 0, "north": 1, "east": 2, "west": 3}
         balcony_modes = {"none": 0, "bay": 1, "continuous": 2}
@@ -1195,6 +1217,11 @@ def _building_config(
                         raise ValueError(f"{where}: 'sides' must be a list of side names or indices, got {value!r}")
                     sides = []
                     for v in value:
+                        if footprint is not None:
+                            if not (isinstance(v, int) and not isinstance(v, bool) and v >= 0):
+                                raise ValueError(f"{where}: on a footprint outline, sides are edge indices (0 = edge0, as in facades), got {v!r}")
+                            sides.append(v)
+                            continue
                         if isinstance(v, str):
                             if v not in side_index:
                                 raise ValueError(f"{where}: unknown side '{v}' (south, north, east, west)")
@@ -1286,6 +1313,10 @@ def create_building_parts(
     centre_bay_scale: float = 1.0,
     end_bay_scale: float = 1.0,
     facade_rules: Optional[List[Dict[str, Any]]] = None,
+    footprint: Optional[List[Tuple[float, float]]] = None,
+    courtyards: Optional[List[List[Tuple[float, float]]]] = None,
+    entrance_edge: Optional[int] = None,
+    entrance: bool = True,
     base_y: float = 0.0,
     offset: Tuple[float, float] = (0.0, 0.0),
     name: str = "ProceduralBuilding",
@@ -1307,6 +1338,15 @@ def create_building_parts(
 
     base_y and offset (x, z) place the building: a tier of a set-back tower stands at the height of
     the tier below (see stack_buildings), a wing beside it at an offset.
+
+    footprint [(x, z), ...] (x east, z south, metres) builds any plan outline instead of the width x
+    depth rectangle, with courtyards as holes inside it: one facade per edge (facades "edge0", ... outer
+    edges first, each with its compass "heading_deg"), quoins and corner pilasters on outside corners,
+    plain returns at inside ones, edges too short for a window left blank. Points under 5 cm apart and
+    bends under 10 degrees are merged. The entrance goes on the longest outer edge unless entrance_edge
+    picks one; facade rule "sides" are edge indices. Outlines take roof="flat" for now.
+    entrance=False gives no door at all: an upper tier of a set-back tower opens onto its terrace
+    through windows, not a front door.
     """
     cfg = _building_config(**{k: v for k, v in locals().items() if k not in ("name", "kwargs", "base_y", "offset")}, **kwargs)
     parts = _BuildingParts(_native.architecture.generate_building_parts(cfg, name))
@@ -1319,7 +1359,9 @@ def create_building_parts(
     parts.facades = {f["name"]: {"start": shift((f["start"].x, f["start"].y, f["start"].z)),
                                  "right": (f["right"].x, f["right"].y, f["right"].z),
                                  "normal": (f["normal"].x, f["normal"].y, f["normal"].z),
-                                 "length": f["length"]}
+                                 "length": f["length"],
+                                 # compass bearing the facade faces (x east, z south: north is -z)
+                                 "heading_deg": round(_py_math.degrees(_py_math.atan2(f["normal"].x, -f["normal"].z)) % 360.0, 3)}
                      for f in _native.architecture.facade_frames(cfg)}
     return parts
 

@@ -766,7 +766,10 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("floor_heights", &BuildingConfig::floorHeights)
         .def_rw("centre_bay_scale", &BuildingConfig::centreBayScale)
         .def_rw("end_bay_scale", &BuildingConfig::endBayScale)
-        .def_rw("rules", &BuildingConfig::rules);
+        .def_rw("rules", &BuildingConfig::rules)
+        .def_rw("footprint", &BuildingConfig::footprint, "Plan outline (x east, z south, metres); empty = the width x depth rectangle")
+        .def_rw("footprint_holes", &BuildingConfig::footprintHoles, "Courtyard loops inside the footprint")
+        .def_rw("entrance_edge", &BuildingConfig::entranceEdge, "Edge carrying the entrance (outline edge index); -1 = default (longest outer edge, or the rectangle's south side), -2 = no entrance");
 
     m_arch.def("generate_building", [](const BuildingConfig& config, const std::string& name) {
         return ProceduralBuildingGenerator::generateBuilding(config, name);
@@ -788,7 +791,8 @@ NB_MODULE(scratchbox_native, m) {
             out.append(f);
         }
         return out;
-    }, "config"_a, "The four facade planes at ground level: name (south = +Z entrance side, north, east, west), start corner, right and outward normal directions, length");
+    }, "config"_a, "The facade planes at ground level: name (on the rectangle south = +Z entrance side, north, east, west; on a footprint outline "
+       "edge0, edge1, ... outer edges first, then each courtyard's), start corner, right and outward normal directions, length");
 
     m_arch.def("chimney_tops", [](const BuildingConfig& config) {
         return ProceduralBuildingGenerator::chimneyTops(config);

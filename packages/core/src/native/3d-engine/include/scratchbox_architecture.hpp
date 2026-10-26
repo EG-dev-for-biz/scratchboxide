@@ -210,6 +210,12 @@ struct BuildingConfig {
     float endBayScale{1.0f};            // width of the outermost bays relative to the others
     std::vector<FacadeRule> rules;      // per-floor / per-bay overrides, applied in order
 
+    // Plan outline (x east, z south, metres) of any shape; empty = the width x depth rectangle. Holes are courtyards.
+    // An outline gets one facade per edge (outer edges first, then each hole's), corners treated by their angle.
+    std::vector<Vec2> footprint;
+    std::vector<std::vector<Vec2>> footprintHoles;
+    int entranceEdge{-1};               // edge (outline) carrying the entrance; -1 = default (longest outer edge / south), -2 = none
+
     BuildingMaterials materials{BuildingMaterials::createArchitecturalPalette()};
 };
 
@@ -590,6 +596,10 @@ public:
             std::abs(config.taper - 1.0f) > 0.001f || std::abs(config.bulge) > 0.001f ||
             config.superellipseExponent < 8.0f ||
             config.roofType == RoofType::Dome || config.roofType == RoofType::BarrelVault) {
+            if (hasOutline(config)) {
+                throw std::invalid_argument("a footprint outline is built with straight walls: drop curvature, twist, taper, bulge, "
+                    "superellipse_exponent < 8 and dome or barrel-vault roofs, or drop the footprint");
+            }
             // The curved builder lofts its own bays and has no opening resolver: facade rules and bay
             // scales would be dropped on the floor, so they are refused rather than silently ignored.
             if (!config.rules.empty() || std::abs(config.centreBayScale - 1.0f) > 1e-4f || std::abs(config.endBayScale - 1.0f) > 1e-4f) {
@@ -599,6 +609,7 @@ public:
             }
             return generateCurvedBuilding(config, name);
         }
+        if (hasOutline(config)) return generateOutlineBuilding(normalizedOutline(config), name);
 
         ScratchboxMesh mesh(name);
         mesh.material = config.materials.wall;
@@ -673,7 +684,7 @@ public:
     static OpeningSpec resolveOpening(const BuildingConfig& cfg, int side, int floor, int bay, int bayCount, float bayW) {
         const FacadeDetails& d = cfg.details;
         OpeningSpec o;
-        o.entrance = floor == 0 && side == 0 && bay == bayCount / 2;
+        o.entrance = floor == 0 && cfg.entranceEdge != -2 && side == (hasOutline(cfg) ? cfg.entranceEdge : 0) && bay == bayCount / 2;
         o.width = o.entrance ? cfg.doorWidth : cfg.windowWidth;
         o.height = o.entrance ? cfg.doorHeight : cfg.windowHeight;
         o.sill = o.entrance ? 0.0f : cfg.sillHeight;
@@ -710,6 +721,8 @@ public:
         o.sill = std::clamp(o.sill, 0.0f, std::max(0.0f, floorH - 0.7f));
         o.height = std::max(0.3f, std::min(o.height, floorH - o.sill - 0.4f));
         if (o.sill <= 0.001f) o.hasSill = false;
+        // On an outline, an edge too short for a window between two piers is a blank return.
+        if (hasOutline(cfg) && !o.entrance && bayW < 1.2f) o.open = false;
         if (o.entrance || !o.open) o.balcony = 0;
         return o;
     }
@@ -736,15 +749,17 @@ public:
     static std::vector<std::tuple<std::string, Vec3, Vec3, Vec3, float>> facadeFrames(const BuildingConfig& cfg) {
         static const char* names[4] = { "south", "north", "east", "west" };
         std::vector<std::tuple<std::string, Vec3, Vec3, Vec3, float>> out;
-        auto sides = facadeSideFrames(cfg, 0.0f);
+        const bool outline = hasOutline(cfg);
+        auto sides = facadeSideFrames(outline ? normalizedOutline(cfg) : cfg, 0.0f);
         for (size_t i = 0; i < sides.size(); ++i) {
-            out.emplace_back(names[i], sides[i].start, sides[i].rightDir, sides[i].normal, sides[i].length);
+            out.emplace_back(outline ? "edge" + std::to_string(i) : std::string(names[i]), sides[i].start, sides[i].rightDir, sides[i].normal, sides[i].length);
         }
         return out;
     }
 
     /** Where smoke leaves each chimney (above its cap and pots), for weathering soot sources. */
     static std::vector<Vec3> chimneyTops(const BuildingConfig& cfg) {
+        if (hasOutline(cfg)) return {};   // an outline building has no chimneys yet (they come with its roofs)
         std::vector<Vec3> tops = chimneyStackTops(cfg);
         for (Vec3& t : tops) t.y += cfg.details.chimneyCapM + cfg.details.chimneyPotHeightM;
         return tops;
@@ -910,6 +925,10 @@ private:
     }
 
     static void generatePlinth(const BuildingConfig& cfg, ScratchboxMesh& mesh) {
+        if (hasOutline(cfg)) {
+            addPrismLoops(mesh, offsetLoops(outlineLoops(cfg), cfg.plinthOffset), 0.0f, cfg.plinthHeight, cfg.materials.foundation.baseColorFactor);
+            return;
+        }
         float hx = cfg.width * 0.5f + cfg.plinthOffset;
         float hz = cfg.depth * 0.5f + cfg.plinthOffset;
         Vec3 minP(-hx, 0.0f, -hz);
@@ -918,26 +937,11 @@ private:
     }
 
     static void generateFacades(const BuildingConfig& cfg, ScratchboxMesh& mesh) {
-        float hx = cfg.width * 0.5f;
-        float hz = cfg.depth * 0.5f;
         float yBase = cfg.plinthHeight;
 
-        // Build each facade side:
-        // 0: South (+Z), 1: North (-Z), 2: East (+X), 3: West (-X)
-        struct SideInfo {
-            Vec3 start;
-            Vec3 rightDir;
-            Vec3 normal;
-            float length;
-            bool hasEntrance;
-        };
-
-        std::vector<SideInfo> sides = {
-            { Vec3(-hx, yBase,  hz), Vec3(1, 0, 0), Vec3(0, 0,  1), cfg.width, true  }, // South (front entrance)
-            { Vec3( hx, yBase, -hz), Vec3(-1, 0, 0), Vec3(0, 0, -1), cfg.width, false }, // North
-            { Vec3( hx, yBase,  hz), Vec3(0, 0, -1), Vec3(1, 0,  0), cfg.depth, false }, // East
-            { Vec3(-hx, yBase, -hz), Vec3(0, 0,  1), Vec3(-1, 0,  0), cfg.depth, false }  // West
-        };
+        // One facade per side: on the rectangle 0 South (+Z, entrance), 1 North (-Z), 2 East (+X), 3 West (-X);
+        // on an outline, one per edge.
+        const std::vector<FacadeSideFrame> sides = facadeSideFrames(cfg, yBase);
 
         for (size_t sideIdx = 0; sideIdx < sides.size(); ++sideIdx) {
             const auto& side = sides[sideIdx];
@@ -1272,7 +1276,10 @@ private:
                 bool empty = true;
                 for (size_t j : idx) {
                     if (j == ia || j == ib || j == ic) continue;
-                    if (inside(poly[j], poly[ia], poly[ib], poly[ic])) { empty = false; break; }
+                    // a bridged hole repeats points: a copy of the ear's own corner does not block it
+                    const Vec2& q = poly[j];
+                    if ((q - poly[ia]).lengthSq() < 1e-12f || (q - poly[ib]).lengthSq() < 1e-12f || (q - poly[ic]).lengthSq() < 1e-12f) continue;
+                    if (inside(q, poly[ia], poly[ib], poly[ic])) { empty = false; break; }
                 }
                 if (!empty) continue;
                 out.push_back({ia, ib, ic});
@@ -1289,9 +1296,274 @@ private:
         return out;
     }
 
-    struct FacadeSideFrame { Vec3 start; Vec3 rightDir; Vec3 normal; float length; bool hasEntrance; };
+    // ---- Outline plans: a footprint polygon (x east, z south) with optional courtyard holes ----
+
+    static bool hasOutline(const BuildingConfig& cfg) { return cfg.footprint.size() >= 3; }
+    static float dot2(const Vec2& a, const Vec2& b) { return a.x * b.x + a.y * b.y; }
+    static float cross2d(const Vec2& a, const Vec2& b) { return a.x * b.y - a.y * b.x; }
+    static float loopArea2(const std::vector<Vec2>& l) {
+        float a = 0.0f;
+        for (size_t i = 0; i < l.size(); ++i) a += cross2d(l[i], l[(i + 1) % l.size()]);
+        return a;
+    }
+    /** Outward normal of an edge running along unit `r` (loops are wound so it points away from the building). */
+    static Vec2 edgeNormal2(const Vec2& r) { return Vec2(-r.y, r.x); }
+    static Vec3 edgeNormal3(const Vec2& r) { return Vec3(-r.y, 0.0f, r.x); }
+    /** Whether the corner from an edge along rIn to one along rOut turns inward (an inside corner). */
+    static bool cornerConcave(const Vec2& rIn, const Vec2& rOut) {
+        return dot2(rIn, edgeNormal2(rOut)) < -0.17f;   // more than ~10 degrees inward
+    }
+    static bool segmentsCross(const Vec2& a, const Vec2& b, const Vec2& c, const Vec2& d) {
+        auto o = [](const Vec2& p, const Vec2& q, const Vec2& r) { return (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x); };
+        const float d1 = o(c, d, a), d2 = o(c, d, b), d3 = o(a, b, c), d4 = o(a, b, d);
+        const float eps = 1e-7f;
+        return ((d1 > eps && d2 < -eps) || (d1 < -eps && d2 > eps)) && ((d3 > eps && d4 < -eps) || (d3 < -eps && d4 > eps));
+    }
+    static bool pointInLoop(const Vec2& p, const std::vector<Vec2>& l) {
+        bool in = false;
+        for (size_t i = 0, j = l.size() - 1; i < l.size(); j = i++) {
+            if ((l[i].y > p.y) != (l[j].y > p.y) && p.x < (l[j].x - l[i].x) * (p.y - l[i].y) / (l[j].y - l[i].y) + l[i].x) in = !in;
+        }
+        return in;
+    }
+
+    /**
+     * One loop cleaned for building: points closer than 5 cm merged, vertices turning less than 10 degrees
+     * (survey noise along a straight wall) and spikes dropped, wound so edge normals point away from the
+     * building: clockwise seen from above for the outer loop (as the rectangle's sides run), the reverse for holes.
+     */
+    static std::vector<Vec2> cleanLoop(std::vector<Vec2> l, bool hole, const char* what) {
+        bool changed = true;
+        while (changed && l.size() >= 3) {
+            changed = false;
+            for (size_t i = 0; i < l.size() && l.size() >= 3; ++i) {
+                const size_t n = l.size();
+                const Vec2 a = l[(i + n - 1) % n], b = l[i], c = l[(i + 1) % n];
+                const Vec2 ab = b - a, bc = c - b;
+                bool drop = ab.length() < 0.05f;
+                if (!drop && bc.length() >= 0.05f) {
+                    const Vec2 u = ab.normalized(), v = bc.normalized();
+                    drop = (std::abs(cross2d(u, v)) < 0.1736f && dot2(u, v) > 0.0f) || dot2(u, v) < -0.985f;
+                }
+                if (drop) { l.erase(l.begin() + static_cast<long>(i)); changed = true; break; }
+            }
+        }
+        for (size_t i = 0; i < l.size(); ++i) {
+            for (size_t j = i + 2; j < l.size(); ++j) {
+                if (i == 0 && j + 1 == l.size()) continue;
+                if (segmentsCross(l[i], l[(i + 1) % l.size()], l[j], l[(j + 1) % l.size()])) {
+                    throw std::invalid_argument(std::string(what) + " crosses itself (edges " + std::to_string(i) + " and " + std::to_string(j) + ")");
+                }
+            }
+        }
+        if (l.size() < 3 || std::abs(loopArea2(l)) < 2.0f) {
+            throw std::invalid_argument(std::string(what) + " has fewer than 3 distinct corners or under 1 m2 of area after merging near-duplicate and straight-through points");
+        }
+        const bool clockwise = loopArea2(l) < 0.0f;   // in (x, z) with z south: negative = the rectangle's winding
+        if (clockwise == hole) std::reverse(l.begin(), l.end());
+        return l;
+    }
+
+    /** The config with its outline cleaned and wound, the entrance edge chosen and width / depth set to its extent. */
+    static BuildingConfig normalizedOutline(const BuildingConfig& cfg) {
+        BuildingConfig c = cfg;
+        c.footprint = cleanLoop(cfg.footprint, false, "footprint");
+        c.footprintHoles.clear();
+        for (size_t h = 0; h < cfg.footprintHoles.size(); ++h) {
+            const std::string what = "courtyard " + std::to_string(h);
+            auto hole = cleanLoop(cfg.footprintHoles[h], true, what.c_str());
+            for (const Vec2& p : hole) {
+                if (!pointInLoop(p, c.footprint)) throw std::invalid_argument(what + " reaches outside the footprint");
+            }
+            c.footprintHoles.push_back(std::move(hole));
+        }
+        const size_t outerEdges = c.footprint.size();
+        if (c.entranceEdge < 0) {
+            float best = -1.0f;
+            for (size_t i = 0; i < outerEdges; ++i) {
+                float len = (c.footprint[(i + 1) % outerEdges] - c.footprint[i]).length();
+                if (len > best + 1e-4f) { best = len; c.entranceEdge = static_cast<int>(i); }
+            }
+        }
+        float x0 = 1e30f, x1 = -1e30f, z0 = 1e30f, z1 = -1e30f;
+        for (const Vec2& p : c.footprint) { x0 = std::min(x0, p.x); x1 = std::max(x1, p.x); z0 = std::min(z0, p.y); z1 = std::max(z1, p.y); }
+        c.width = x1 - x0;
+        c.depth = z1 - z0;
+        return c;
+    }
+
+    /** Outer loop then holes, as stored (normalizedOutline has already cleaned and wound them). */
+    static std::vector<std::vector<Vec2>> outlineLoops(const BuildingConfig& cfg) {
+        std::vector<std::vector<Vec2>> loops{ cfg.footprint };
+        for (const auto& h : cfg.footprintHoles) loops.push_back(h);
+        return loops;
+    }
+
+    /** Every loop moved `d` metres along its outward normals (negative = into the building), mitred at corners. */
+    static std::vector<std::vector<Vec2>> offsetLoops(const std::vector<std::vector<Vec2>>& loops, float d) {
+        std::vector<std::vector<Vec2>> out;
+        for (const auto& l : loops) {
+            std::vector<Vec2> o;
+            const size_t n = l.size();
+            for (size_t i = 0; i < n; ++i) {
+                const Vec2 nIn = edgeNormal2((l[i] - l[(i + n - 1) % n]).normalized());
+                const Vec2 nOut = edgeNormal2((l[(i + 1) % n] - l[i]).normalized());
+                const float k = 1.0f / std::max(0.25f, 1.0f + dot2(nIn, nOut));   // miter length, capped at 4x
+                o.push_back(l[i] + (nIn + nOut) * (d * k));
+            }
+            out.push_back(std::move(o));
+        }
+        return out;
+    }
+
+    /** The loops (outer, then holes) joined into one simple polygon by bridges from each hole, for ear clipping. */
+    static std::vector<Vec2> bridgeHoles(const std::vector<std::vector<Vec2>>& loops) {
+        std::vector<Vec2> merged = loops[0];
+        std::vector<size_t> order;
+        for (size_t h = 1; h < loops.size(); ++h) order.push_back(h);
+        auto maxX = [&](size_t h) { float m = -1e30f; for (const Vec2& p : loops[h]) m = std::max(m, p.x); return m; };
+        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return maxX(a) > maxX(b); });
+        for (size_t oi = 0; oi < order.size(); ++oi) {
+            const auto& hole = loops[order[oi]];
+            size_t hv = 0;
+            for (size_t i = 1; i < hole.size(); ++i) if (hole[i].x > hole[hv].x) hv = i;
+            const Vec2 hp = hole[hv];
+            auto blocked = [&](const Vec2& a, const Vec2& b) {
+                auto hits = [&](const std::vector<Vec2>& l) {
+                    for (size_t i = 0; i < l.size(); ++i) if (segmentsCross(a, b, l[i], l[(i + 1) % l.size()])) return true;
+                    return false;
+                };
+                if (hits(merged)) return true;
+                for (size_t oj = oi; oj < order.size(); ++oj) if (hits(loops[order[oj]])) return true;
+                return false;
+            };
+            size_t best = SIZE_MAX;
+            float bestD = 1e30f;
+            for (size_t i = 0; i < merged.size(); ++i) {
+                const float dd = (merged[i] - hp).lengthSq();
+                if (dd < bestD && !blocked(hp, merged[i])) { bestD = dd; best = i; }
+            }
+            if (best == SIZE_MAX) throw std::invalid_argument("a courtyard could not be joined to the footprint for triangulation");
+            std::vector<Vec2> next(merged.begin(), merged.begin() + static_cast<long>(best) + 1);
+            for (size_t k = 0; k <= hole.size(); ++k) next.push_back(hole[(hv + k) % hole.size()]);
+            next.insert(next.end(), merged.begin() + static_cast<long>(best), merged.end());
+            merged = std::move(next);
+        }
+        return merged;
+    }
+
+    /** A horizontal cap over the loops (holes left open) at height y, facing up or down. */
+    static void addCapLoops(ScratchboxMesh& mesh, const std::vector<std::vector<Vec2>>& loops, float y, bool upward, const Vec4& color) {
+        const std::vector<Vec2> poly = bridgeHoles(loops);
+        const Vec3 nrm(0, upward ? 1.0f : -1.0f, 0);
+        for (const auto& t : triangulatePolygon(poly)) {
+            addTri(mesh, Vec3(poly[t[0]].x, y, poly[t[0]].y), Vec3(poly[t[1]].x, y, poly[t[1]].y), Vec3(poly[t[2]].x, y, poly[t[2]].y), nrm, color);
+        }
+    }
+
+    /** A vertical prism over the loops from y0 to y1: walls along every edge, capped top and bottom. */
+    static void addPrismLoops(ScratchboxMesh& mesh, const std::vector<std::vector<Vec2>>& loops, float y0, float y1, const Vec4& color) {
+        for (const auto& l : loops) {
+            for (size_t i = 0; i < l.size(); ++i) {
+                const Vec2 a = l[i], b = l[(i + 1) % l.size()];
+                addQuad(mesh, Vec3(a.x, y0, a.y), Vec3(b.x, y0, b.y), Vec3(b.x, y1, b.y), Vec3(a.x, y1, a.y), edgeNormal3((b - a).normalized()), color);
+            }
+        }
+        addCapLoops(mesh, loops, y1, true, color);
+        addCapLoops(mesh, loops, y0, false, color);
+    }
+
+    struct OutlineCorner { Vec2 p; Vec2 rIn; Vec2 rOut; float lenIn; float lenOut; bool convex; };
+
+    /** Every corner of the outline turning more than 20 degrees, outside (convex) or inside. */
+    static std::vector<OutlineCorner> outlineCorners(const BuildingConfig& cfg) {
+        std::vector<OutlineCorner> out;
+        for (const auto& l : outlineLoops(cfg)) {
+            const size_t n = l.size();
+            for (size_t i = 0; i < n; ++i) {
+                const Vec2 a = l[(i + n - 1) % n], p = l[i], b = l[(i + 1) % n];
+                const Vec2 rIn = (p - a).normalized(), rOut = (b - p).normalized();
+                if (dot2(rIn, rOut) > 0.94f) continue;
+                out.push_back({ p, rIn, rOut, (p - a).length(), (b - p).length(), dot2(rIn, edgeNormal2(rOut)) > 0.0f });
+            }
+        }
+        return out;
+    }
+
+    /**
+     * A block wrapping an outside corner from y0 to y1, at any corner angle: `alongIn` back along the incoming
+     * wall and `alongOut` along the outgoing one, standing `proj` proud of both, mitred at the arris.
+     */
+    static void addCornerPrism(ScratchboxMesh& mesh, const OutlineCorner& c, float alongIn, float alongOut, float proj,
+                               float y0, float y1, const Vec4& color) {
+        const Vec2 nIn = edgeNormal2(c.rIn), nOut = edgeNormal2(c.rOut);
+        const float denom = 1.0f + dot2(nIn, nOut);
+        if (denom < 0.3f || alongIn <= 0.0f || alongOut <= 0.0f) return;   // a corner too sharp for a block
+        const Vec2 q0 = c.p - c.rIn * alongIn;
+        const std::vector<Vec2> poly = { q0, q0 + nIn * proj, c.p + (nIn + nOut) * (proj / denom),
+                                         c.p + c.rOut * alongOut + nOut * proj, c.p + c.rOut * alongOut, c.p };
+        // Faces on the wall planes (q4 -> p -> q0) are hidden against the wall and left out.
+        for (size_t i = 0; i < 4; ++i) {
+            const Vec2 a = poly[i], b = poly[i + 1];
+            addQuad(mesh, Vec3(a.x, y0, a.y), Vec3(b.x, y0, b.y), Vec3(b.x, y1, b.y), Vec3(a.x, y1, a.y), edgeNormal3((b - a).normalized()), color);
+        }
+        for (const auto& t : triangulatePolygon(poly)) {
+            addTri(mesh, Vec3(poly[t[0]].x, y1, poly[t[0]].y), Vec3(poly[t[1]].x, y1, poly[t[1]].y), Vec3(poly[t[2]].x, y1, poly[t[2]].y), Vec3(0, 1, 0), color);
+            addTri(mesh, Vec3(poly[t[0]].x, y0, poly[t[0]].y), Vec3(poly[t[1]].x, y0, poly[t[1]].y), Vec3(poly[t[2]].x, y0, poly[t[2]].y), Vec3(0, -1, 0), color);
+        }
+    }
+
+    /** generateBuilding for an outline plan (cfg already normalised): flat parapet roofs only for now. */
+    static ScratchboxMesh generateOutlineBuilding(const BuildingConfig& cfg, const std::string& name) {
+        if (cfg.roofType != RoofType::FlatParapet) {
+            throw std::invalid_argument("a footprint outline takes roof=\"flat\" for now: pitched roofs over any outline "
+                "(hip, gable, mansard) need the straight-skeleton roof, which is not built yet");
+        }
+        if (cfg.details.chimneyCount > 0 || cfg.details.dormerWidthM > 0.0f) {
+            throw std::invalid_argument("chimneys and dormers are not placed on a footprint outline yet: set chimney_count and "
+                "dormer_width_m to 0, or attach them as add-ons (write_textured_building extras)");
+        }
+        if (cfg.entranceEdge >= static_cast<int>(cfg.footprint.size()) || cfg.entranceEdge < -2) {
+            throw std::invalid_argument("entrance_edge " + std::to_string(cfg.entranceEdge) + " is not an outer edge (the cleaned footprint has " +
+                std::to_string(cfg.footprint.size()) + ")");
+        }
+        ScratchboxMesh mesh(name);
+        mesh.material = cfg.materials.wall;
+        generatePlinth(cfg, mesh);
+        generateFacades(cfg, mesh);
+        generateFloorSlabs(cfg, mesh);
+        generateRoof(cfg, mesh);
+        generateFacadeDetails(cfg, mesh);
+        if (cfg.bakeCurvatureAO) mesh.computeCurvatureAO(0.65f);
+        mesh.material.baseColorFactor = Vec4(1.0f, 1.0f, 1.0f, mesh.material.baseColorFactor.w);
+        mesh.recomputeBounds();
+        return mesh;
+    }
+
+    struct FacadeSideFrame {
+        Vec3 start; Vec3 rightDir; Vec3 normal; float length; bool hasEntrance;
+        bool concaveStart{false}, concaveEnd{false};   // an inside corner at this end (outline plans)
+    };
 
     static std::vector<FacadeSideFrame> facadeSideFrames(const BuildingConfig& cfg, float y) {
+        if (hasOutline(cfg)) {
+            std::vector<FacadeSideFrame> out;
+            const auto loops = outlineLoops(cfg);
+            for (const auto& loop : loops) {
+                const size_t n = loop.size();
+                for (size_t i = 0; i < n; ++i) {
+                    const Vec2 a = loop[i], b = loop[(i + 1) % n];
+                    const Vec2 r = (b - a).normalized();
+                    FacadeSideFrame f{ Vec3(a.x, y, a.y), Vec3(r.x, 0, r.y), edgeNormal3(r), (b - a).length(),
+                                       static_cast<int>(out.size()) == cfg.entranceEdge };
+                    const Vec2 rPrev = (a - loop[(i + n - 1) % n]).normalized(), rNext = (loop[(i + 2) % n] - b).normalized();
+                    f.concaveStart = cornerConcave(rPrev, r);
+                    f.concaveEnd = cornerConcave(r, rNext);
+                    out.push_back(f);
+                }
+            }
+            return out;
+        }
         float hx = cfg.width * 0.5f, hz = cfg.depth * 0.5f;
         return {
             { Vec3(-hx, y,  hz), Vec3( 1, 0,  0), Vec3( 0, 0,  1), cfg.width, true  },
@@ -1303,6 +1575,19 @@ private:
 
     static void addHorizontalLoop(ScratchboxMesh& mesh, const BuildingConfig& cfg, float y,
                                   const std::vector<Vec2>& profile, const Vec4& color) {
+        if (hasOutline(cfg)) {
+            for (const auto& loop : outlineLoops(cfg)) {
+                std::vector<Vec3> path, outs, ups;
+                for (size_t i = 0; i < loop.size(); ++i) {
+                    const Vec2 r = (loop[(i + 1) % loop.size()] - loop[i]).normalized();
+                    path.emplace_back(loop[i].x, y, loop[i].y);
+                    outs.push_back(edgeNormal3(r));
+                    ups.emplace_back(0, 1, 0);
+                }
+                sweepProfileMitred(mesh, path, outs, ups, profile, true, color);
+            }
+            return;
+        }
         float hx = cfg.width * 0.5f, hz = cfg.depth * 0.5f;
         std::vector<Vec3> path = { Vec3(-hx, y, hz), Vec3(hx, y, hz), Vec3(hx, y, -hz), Vec3(-hx, y, -hz) };
         std::vector<Vec3> outs = { Vec3(0, 0, 1), Vec3(1, 0, 0), Vec3(0, 0, -1), Vec3(-1, 0, 0) };
@@ -1320,6 +1605,7 @@ private:
         const float totalH = floorBaseY(cfg, cfg.floorCount);
         const float hx = cfg.width * 0.5f, hz = cfg.depth * 0.5f;
         const Vec3 up(0, 1, 0);
+        const bool outline = hasOutline(cfg);
 
         // Cornice and string courses.
         if (d.corniceProfile.size() >= 3) addHorizontalLoop(mesh, cfg, totalH, d.corniceProfile, trim);
@@ -1343,8 +1629,9 @@ private:
             auto emitBalcony = [&](float u0, float u1, float y) {
                 // Never past the building's corners (end bays can be narrower than the slab overhang).
                 const float corner = 0.12f + (d.quoinCourseM > 0.0f ? d.quoinProjectionM : 0.0f);
-                u0 = std::max(u0, corner);
-                u1 = std::min(u1, side.length - corner);
+                // ...nor into the wall across an inside corner.
+                u0 = std::max(u0, corner + (side.concaveStart ? d.balconyDepthM : 0.0f));
+                u1 = std::min(u1, side.length - corner - (side.concaveEnd ? d.balconyDepthM : 0.0f));
                 if (u1 - u0 < 0.3f) return;
                 Vec3 n = side.normal, r = side.rightDir;
                 Vec3 c0 = at((u0 + u1) * 0.5f, y);
@@ -1449,6 +1736,7 @@ private:
                 float yTop = totalH - (d.corniceProfile.size() >= 3 ? 0.05f : 0.0f);
                 for (int b = 0; b <= bayCount; b += std::max(1, d.pilasterBayStride)) {
                     if (d.quoinCourseM > 0.0f && (b == 0 || b == bayCount)) continue;
+                    if (outline && (b == 0 || b == bayCount)) continue;   // outline corners: one corner block each, below
                     Vec3 foot = Vec3(side.start.x, 0, side.start.z) + side.rightDir * edges[b];
                     // A corner pilaster never hangs past the corner over nothing: on the long sides it
                     // turns the corner by its own projection (a solid corner block), on the short sides it
@@ -1507,8 +1795,32 @@ private:
             }
         }
 
+        // Outline corners: quoins and corner pilasters wrap each outside corner whatever its angle; an inside
+        // corner gets neither (the two walls meet in a plain return).
+        if (outline) {
+            const float yTop = totalH - (d.corniceProfile.size() >= 3 ? 0.05f : 0.0f);
+            for (const OutlineCorner& c : outlineCorners(cfg)) {
+                if (!c.convex) continue;
+                if (d.quoinCourseM > 0.0f) {
+                    int courses = std::max(1, static_cast<int>((totalH - cfg.plinthHeight) / d.quoinCourseM));
+                    float pitch = (totalH - cfg.plinthHeight) / courses;
+                    for (int k = 0; k < courses; ++k) {
+                        float y0 = cfg.plinthHeight + k * pitch, y1 = y0 + pitch - d.quoinJointM;
+                        float a = (k % 2 == 0) ? d.quoinLongM : d.quoinShortM, b = (k % 2 == 0) ? d.quoinShortM : d.quoinLongM;
+                        addCornerPrism(mesh, c, std::min(a, c.lenIn * 0.45f), std::min(b, c.lenOut * 0.45f), d.quoinProjectionM, y0, y1, trim);
+                    }
+                } else if (d.pilasterWidthM > 0.0f) {
+                    float hw = std::min(d.pilasterWidthM * 0.5f, 0.45f * std::min(c.lenIn, c.lenOut));
+                    float cap = d.pilasterCapitalM, f = d.pilasterFlare, pr = d.pilasterProjectionM;
+                    addCornerPrism(mesh, c, hw, hw, pr, cfg.plinthHeight, yTop, trim);
+                    addCornerPrism(mesh, c, hw * f, hw * f, pr * f, cfg.plinthHeight, cfg.plinthHeight + cap, trim);
+                    addCornerPrism(mesh, c, hw * f, hw * f, pr * f, yTop - cap, yTop, trim);
+                }
+            }
+        }
+
         // Quoins: corner blocks at a course pitch, alternating long and short on the two faces.
-        if (d.quoinCourseM > 0.0f) {
+        if (d.quoinCourseM > 0.0f && !outline) {
             const float sx[4] = { 1, 1, -1, -1 }, sz[4] = { 1, -1, -1, 1 };
             int courses = std::max(1, static_cast<int>((totalH - cfg.plinthHeight) / d.quoinCourseM));
             float pitch = (totalH - cfg.plinthHeight) / courses;
@@ -1526,7 +1838,7 @@ private:
         }
 
         // Chimneys rising through the roof, with a flared cap and lathed pots.
-        if (d.chimneyCount > 0) {
+        if (d.chimneyCount > 0 && !outline) {
             for (const Vec3& stackTop : chimneyStackTops(cfg)) {
                 float x = stackTop.x, z = stackTop.z, top = stackTop.y;
                 float hw = d.chimneyWidthM * 0.5f, hd = d.chimneyDepthM * 0.5f;
@@ -1545,6 +1857,24 @@ private:
     }
 
     static void generateFloorSlabs(const BuildingConfig& cfg, ScratchboxMesh& mesh) {
+        if (hasOutline(cfg)) {
+            const auto loops = outlineLoops(cfg);
+            const Vec4 trim = cfg.materials.foundation.baseColorFactor;
+            const auto& scf = cfg.details.stringCourseFloors;
+            for (int floor = 0; floor <= cfg.floorCount; ++floor) {
+                const float y = floorBaseY(cfg, floor);
+                addCapLoops(mesh, loops, y, true, trim * 0.8f);
+                bool profiledBand = floor == cfg.floorCount
+                    ? cfg.details.corniceProfile.size() >= 3
+                    : cfg.details.stringCourseProfile.size() >= 3 && (scf.empty() || std::find(scf.begin(), scf.end(), floor) != scf.end());
+                if (floor == 0 || profiledBand) continue;
+                // The box belt course of the rectangle, as a section swept round every loop: drip face, front, wash.
+                const bool cornice = floor == cfg.floorCount;
+                const float proj = cornice ? 0.32f : 0.16f, h = cornice ? 0.28f : 0.16f;
+                addHorizontalLoop(mesh, cfg, y, { Vec2(0.0f, -h), Vec2(proj, -h), Vec2(proj, 0.0f), Vec2(0.0f, 0.04f) }, trim);
+            }
+            return;
+        }
         float hx = cfg.width * 0.5f;
         float hz = cfg.depth * 0.5f;
         float currY = cfg.plinthHeight;
@@ -1630,6 +1960,26 @@ private:
     }
 
     static void generateFlatParapetRoof(const BuildingConfig& cfg, float totalH, ScratchboxMesh& mesh) {
+        if (hasOutline(cfg)) {
+            const auto loops = outlineLoops(cfg);
+            const auto inner = offsetLoops(loops, -cfg.parapetThickness);
+            const float ph = cfg.parapetHeight, top = totalH + ph, deck = totalH + 0.1f;
+            const Vec4 wall = cfg.materials.wall.baseColorFactor, roof = cfg.materials.roof.baseColorFactor;
+            for (size_t l = 0; l < loops.size(); ++l) {
+                const auto& o = loops[l];
+                const auto& in = inner[l];
+                const size_t n = o.size();
+                for (size_t i = 0; i < n; ++i) {
+                    const size_t j = (i + 1) % n;
+                    const Vec3 nrm = edgeNormal3((o[j] - o[i]).normalized());
+                    addQuad(mesh, Vec3(o[i].x, totalH, o[i].y), Vec3(o[j].x, totalH, o[j].y), Vec3(o[j].x, top, o[j].y), Vec3(o[i].x, top, o[i].y), nrm, wall);
+                    addQuad(mesh, Vec3(o[i].x, top, o[i].y), Vec3(o[j].x, top, o[j].y), Vec3(in[j].x, top, in[j].y), Vec3(in[i].x, top, in[i].y), Vec3(0, 1, 0), roof);
+                    addQuad(mesh, Vec3(in[i].x, deck, in[i].y), Vec3(in[j].x, deck, in[j].y), Vec3(in[j].x, top, in[j].y), Vec3(in[i].x, top, in[i].y), -nrm, wall * 0.9f);
+                }
+            }
+            addCapLoops(mesh, inner, deck, true, roof * 0.75f);
+            return;
+        }
         float hx = cfg.width * 0.5f;
         float hz = cfg.depth * 0.5f;
         float ph = cfg.parapetHeight;
