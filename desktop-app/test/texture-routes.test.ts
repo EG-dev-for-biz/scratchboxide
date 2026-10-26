@@ -10,7 +10,7 @@
 import * as assert from 'assert';
 import { test } from 'vitest';
 import { Router } from 'express';
-import { createTextureRouter } from '../server/routes/textureRoutes';
+import { createTextureRouter, textureObjectKey } from '../server/routes/textureRoutes';
 import { GoogleMediaCredentialsService } from '../../packages/core/src/node';
 
 function invokeRouter(
@@ -51,6 +51,18 @@ test('texture routes: rejects path traversal and non-library roots', async () =>
 
     const missing = await get('');
     assert.strictEqual(missing.status, 400);
+});
+
+test('texture routes: maps each library root to its bucket key', () => {
+    // material sets live at the bucket's root
+    assert.strictEqual(textureObjectKey('/texture-library/Bricks001/Bricks001_8K-JPG_Color.jpg'), 'Bricks001/Bricks001_8K-JPG_Color.jpg');
+    assert.strictEqual(textureObjectKey('texture-library/granite_wall/granite_wall_diff_8k.png'), 'granite_wall/granite_wall_diff_8k.png');
+    // the paths once served from public/ keep their key
+    assert.strictEqual(textureObjectKey('/textures/pbr50/indiana_limestone_albedo.png'), 'textures/pbr50/indiana_limestone_albedo.png');
+    assert.strictEqual(textureObjectKey('extracted_textures/a/b.png'), 'extracted_textures/a/b.png');
+    // a root alone names no object, and traversal out of a root is refused
+    assert.throws(() => textureObjectKey('texture-library/'));
+    assert.throws(() => textureObjectKey('texture-library/../service-account.json'));
 });
 
 test('texture routes: accepts a well-formed library path, never crashes regardless of credential availability', async () => {

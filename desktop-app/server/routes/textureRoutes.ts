@@ -12,11 +12,17 @@ import * as path from 'path';
 import { GoogleMediaCredentialsService } from '../../../packages/core/src/node';
 
 /**
- * Root-relative prefixes that still identify a texture-library asset. Anything else is rejected —
- * this is a validity check on the request, not a routing taxonomy: any object under either root may
- * be requested, however it is named.
+ * Root-relative prefixes that identify a texture-library asset, and where each sits in the bucket. Anything else is
+ * rejected; this is a validity check on the request, not a routing taxonomy: any object under a root may be requested,
+ * however it is named.
+ *   - `texture-library/<set>/<file>`: the material sets stored at the bucket's root (`Bricks001/…`, `granite_wall/…`);
+ *   - `textures/…`, `extracted_textures/…`: the paths that used to be served from `public/`, kept under the same key.
  */
-const ALLOWED_TEXTURE_ROOTS = ['textures', 'extracted_textures'];
+const TEXTURE_ROOTS: ReadonlyArray<{ root: string; keyPrefix: string }> = [
+    { root: 'texture-library', keyPrefix: '' },
+    { root: 'textures', keyPrefix: 'textures/' },
+    { root: 'extracted_textures', keyPrefix: 'extracted_textures/' }
+];
 
 /** How long a signed URL (and our in-memory cache of it) stays valid for. */
 const SIGNED_URL_TTL_MS = 15 * 60 * 1000;
@@ -32,11 +38,10 @@ class TextureSignError extends Error {
 }
 
 /**
- * Normalizes and validates a client-supplied texture path into a safe GCS object key.
- * Rejects absolute filesystem paths, `..` traversal, and anything outside the known
- * texture-library roots that used to be served from `public/`.
+ * Normalizes and validates a client-supplied texture path and returns the bucket object it names. Rejects absolute
+ * filesystem paths, `..` traversal, and anything outside the texture-library roots.
  */
-function sanitizeTextureObjectKey(raw: unknown): string {
+export function textureObjectKey(raw: unknown): string {
     if (typeof raw !== 'string' || !raw.trim()) {
         throw new TextureSignError('Missing required "path" query parameter', 400);
     }
@@ -48,11 +53,12 @@ function sanitizeTextureObjectKey(raw: unknown): string {
     if (normalized === '.' || normalized.startsWith('..') || normalized.includes('/../') || path.posix.isAbsolute(normalized)) {
         throw new TextureSignError('Invalid texture path', 400);
     }
-    const [root] = normalized.split('/');
-    if (!ALLOWED_TEXTURE_ROOTS.includes(root)) {
-        throw new TextureSignError(`Texture path must start with one of: ${ALLOWED_TEXTURE_ROOTS.join(', ')}`, 400);
+    const [root, ...rest] = normalized.split('/');
+    const entry = TEXTURE_ROOTS.find(r => r.root === root);
+    if (!entry || !rest.length || !rest.join('/')) {
+        throw new TextureSignError(`Texture path must start with one of: ${TEXTURE_ROOTS.map(r => `${r.root}/`).join(', ')}`, 400);
     }
-    return normalized;
+    return entry.keyPrefix + rest.join('/');
 }
 
 interface CachedSignedUrl {
@@ -71,7 +77,7 @@ export function createTextureRouter(mediaCredentials: GoogleMediaCredentialsServ
 
     router.get('/sign', async (req: Request, res: Response) => {
         try {
-            const objectKey = sanitizeTextureObjectKey(req.query.path);
+            const objectKey = textureObjectKey(req.query.path);
 
             const cached = cache.get(objectKey);
             const now = Date.now();
@@ -81,8 +87,24 @@ export function createTextureRouter(mediaCredentials: GoogleMediaCredentialsServ
             }
 
             const storage = mediaCredentials.createStorageClient();
+            const file = storage.bucket(bucketName).file(objectKey);
+            // A signature is minted locally whatever the signer may read, so a URL for a missing object, or one the
+            // service account cannot read, would only fail later in the browser. Read the object's metadata first.
+            try {
+                await file.getMetadata();
+            } catch (err) {
+                const code = (err as { code?: number }).code;
+                if (code === 404) {
+                    throw new TextureSignError(`No texture "${objectKey}" in gs://${bucketName}`, 404);
+                }
+                if (code === 403) {
+                    const who = await storage.authClient.getCredentials().then(c => c.client_email, () => undefined);
+                    throw new TextureSignError(`${who ?? 'The server\'s Google credentials'} cannot read gs://${bucketName}: grant it roles/storage.objectViewer on the bucket`, 403);
+                }
+                throw err;
+            }
             const expiresAt = now + SIGNED_URL_TTL_MS;
-            const [url] = await storage.bucket(bucketName).file(objectKey).getSignedUrl({
+            const [url] = await file.getSignedUrl({
                 version: 'v4',
                 action: 'read',
                 expires: expiresAt
@@ -96,8 +118,7 @@ export function createTextureRouter(mediaCredentials: GoogleMediaCredentialsServ
                 return;
             }
             const message = err instanceof Error ? err.message : String(err);
-            const notFound = /no such object/i.test(message);
-            res.status(notFound ? 404 : 500).json({ success: false, error: message });
+            res.status(500).json({ success: false, error: message });
         }
     });
 
