@@ -82,7 +82,36 @@ struct WeatheringParams {
     Vec3 dampColor{0.17f, 0.19f, 0.14f};
     Vec3 sootColor{0.04f, 0.04f, 0.04f};
     Vec3 washColor{0.93f, 0.91f, 0.87f};
+    float decalAging{0.6f};             // how much of a texel's weathering is laid back over its painted decals
     uint32_t seed{5};
+};
+
+// An RGBA image projected onto the surfaces inside a box: centred at `center`, facing out along
+// `normal` (surfaces facing away are skipped), `up` giving the image's up direction, widthM x heightM
+// across and +/- depthM along the normal. Painted into the weathering atlas, so it follows the surface.
+struct Decal {
+    Vec3 center{0, 0, 0};
+    Vec3 normal{0, 0, 1};
+    Vec3 up{0, 1, 0};
+    float widthM{1.0f};
+    float heightM{1.0f};
+    float depthM{0.35f};
+    float opacity{1.0f};
+    ImageBuffer image;
+};
+
+// A procedural mark (stain, water mark, patch, moss) as an RGBA decal image: a soft irregular blot
+// with optional downward runs, all continuous.
+struct BlotParams {
+    int sizePx{256};
+    Vec3 color{0.25f, 0.22f, 0.18f};
+    float opacity{0.65f};
+    float edgeNoise{0.45f};             // raggedness of the outline, 0..1
+    float softness{0.45f};              // width of the fade at the outline, 0..1
+    float mottling{0.35f};              // variation inside the blot, 0..1
+    float drips{0.0f};                  // density of downward runs, 0..1
+    float dripLength{0.45f};            // run length as a fraction of the image height
+    uint32_t seed{9};
 };
 
 struct WeatheringResult {
@@ -164,10 +193,105 @@ struct Over {
 
 } // namespace detail
 
+inline Vec4 sampleRgba(const ImageBuffer& img, float u, float v) {
+    if (img.empty() || img.channels < 4) return Vec4(0, 0, 0, 0);
+    float x = std::clamp(u, 0.0f, 1.0f) * (img.width - 1), y = std::clamp(v, 0.0f, 1.0f) * (img.height - 1);
+    int x0 = static_cast<int>(x), y0 = static_cast<int>(y);
+    int x1 = std::min(x0 + 1, img.width - 1), y1 = std::min(y0 + 1, img.height - 1);
+    float fx = x - x0, fy = y - y0;
+    auto px = [&](int xx, int yy) {
+        size_t o = (static_cast<size_t>(yy) * img.width + xx) * 4;
+        return Vec4(img.data[o] / 255.0f, img.data[o + 1] / 255.0f, img.data[o + 2] / 255.0f, img.data[o + 3] / 255.0f);
+    };
+    Vec4 a = px(x0, y0) * (1 - fx) + px(x1, y0) * fx;
+    Vec4 b = px(x0, y1) * (1 - fx) + px(x1, y1) * fx;
+    return a * (1 - fy) + b * fy;
+}
+
+inline ImageBuffer synthesizeBlot(const BlotParams& bp) {
+    using namespace detail;
+    const int n = std::clamp(bp.sizePx, 16, 2048);
+    ImageBuffer img(n, n, 4);
+    // Columns where runs leave the blot.
+    std::vector<std::pair<float, float>> runs;
+    int runCount = static_cast<int>(std::round(bp.drips * 14.0f));
+    for (int r = 0; r < runCount; ++r) {
+        runs.emplace_back(0.25f + 0.5f * hash3f(r, 1, 2, bp.seed), 0.006f + 0.018f * hash3f(r, 3, 4, bp.seed));
+    }
+    for (int y = 0; y < n; ++y) {
+        for (int x = 0; x < n; ++x) {
+            float u = (x + 0.5f) / n - 0.5f, v = (y + 0.5f) / n - 0.5f;
+            float r = std::sqrt(u * u + v * v);
+            float ang = std::atan2(v, u);
+            Vec3 ring(std::cos(ang) * 1.5f, std::sin(ang) * 1.5f, 0.0f);
+            float edge = 0.40f * (1.0f + bp.edgeNoise * 0.55f * noise3(ring, 0.45f, bp.seed) + bp.edgeNoise * 0.2f * noise3(ring, 0.15f, bp.seed + 1));
+            float fade = std::max(0.01f, edge * bp.softness);
+            float a = 1.0f - smoothstep(edge - fade, edge, r);
+            for (const auto& run : runs) {
+                float du = std::abs(u + 0.5f - run.first) - run.second;
+                if (du < 0.0f && v > 0.0f && v < bp.dripLength) a = std::max(a, (1.0f - v / bp.dripLength) * 0.85f);
+            }
+            float mott = 1.0f + bp.mottling * 0.6f * noise3(Vec3(u * 9.0f, v * 9.0f, 0.5f), 1.0f, bp.seed + 2);
+            a = std::clamp(a * bp.opacity * mott, 0.0f, 1.0f);
+            Vec3 c = bp.color * (1.0f + bp.mottling * 0.25f * noise3(Vec3(u * 5.0f, v * 5.0f, 2.0f), 1.0f, bp.seed + 3));
+            size_t o = (static_cast<size_t>(y) * n + x) * 4;
+            img.data[o] = static_cast<uint8_t>(std::clamp(c.x, 0.0f, 1.0f) * 255.0f + 0.5f);
+            img.data[o + 1] = static_cast<uint8_t>(std::clamp(c.y, 0.0f, 1.0f) * 255.0f + 0.5f);
+            img.data[o + 2] = static_cast<uint8_t>(std::clamp(c.z, 0.0f, 1.0f) * 255.0f + 0.5f);
+            img.data[o + 3] = static_cast<uint8_t>(a * 255.0f + 0.5f);
+        }
+    }
+    return img;
+}
+
+/**
+ * A panel decal: a widthM x heightM quad standing standoffM off the surface along `normal`
+ * (image top towards `up`, UV (0,0) at the top-left), plus edge faces when thicknessM > 0
+ * (sign boards, plaques). The caller attaches the image as the material's base colour.
+ */
+inline ScratchboxMesh makeDecalPanel(const Vec3& center, const Vec3& normal, const Vec3& up, float widthM, float heightM,
+                                     float thicknessM, float standoffM, const std::string& name) {
+    ScratchboxMesh mesh(name);
+    Vec3 N = normal.normalized();
+    Vec3 R = up.cross(N).normalized();
+    Vec3 U = N.cross(R);
+    Vec3 back = center + N * standoffM, front = back + N * std::max(0.0f, thicknessM);
+    Vec3 hr = R * (widthM * 0.5f), hu = U * (heightM * 0.5f);
+    auto quad = [&](const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d, const Vec3& nrm,
+                    Vec2 ua, Vec2 ub, Vec2 uc, Vec2 ud) {
+        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+        Vec4 tangent(R.x, R.y, R.z, 1.0f);
+        mesh.addVertex(Vertex(a, nrm, ua, Vec4(1, 1, 1, 1), tangent));
+        mesh.addVertex(Vertex(b, nrm, ub, Vec4(1, 1, 1, 1), tangent));
+        mesh.addVertex(Vertex(c, nrm, uc, Vec4(1, 1, 1, 1), tangent));
+        mesh.addVertex(Vertex(d, nrm, ud, Vec4(1, 1, 1, 1), tangent));
+        bool ccw = (b - a).cross(c - a).dot(nrm) >= 0.0f;
+        if (ccw) { mesh.addTriangle(base, base + 1, base + 2); mesh.addTriangle(base, base + 2, base + 3); }
+        else { mesh.addTriangle(base, base + 2, base + 1); mesh.addTriangle(base, base + 3, base + 2); }
+    };
+    quad(front - hr - hu, front + hr - hu, front + hr + hu, front - hr + hu, N,
+         Vec2(0, 1), Vec2(1, 1), Vec2(1, 0), Vec2(0, 0));
+    if (thicknessM > 0.0f) {
+        quad(back - hr + hu, back + hr + hu, front + hr + hu, front - hr + hu, U, Vec2(0, 0.01f), Vec2(1, 0.01f), Vec2(1, 0.01f), Vec2(0, 0.01f));
+        quad(back + hr - hu, back - hr - hu, front - hr - hu, front + hr - hu, -U, Vec2(1, 0.99f), Vec2(0, 0.99f), Vec2(0, 0.99f), Vec2(1, 0.99f));
+        quad(back + hr + hu, back + hr - hu, front + hr - hu, front + hr + hu, R, Vec2(0.99f, 0), Vec2(0.99f, 1), Vec2(0.99f, 1), Vec2(0.99f, 0));
+        quad(back - hr - hu, back - hr + hu, front - hr + hu, front - hr - hu, -R, Vec2(0.01f, 1), Vec2(0.01f, 0), Vec2(0.01f, 0), Vec2(0.01f, 1));
+    }
+    mesh.material.name = name;
+    mesh.material.baseColorFactor = Vec4(1, 1, 1, 1);
+    mesh.material.roughnessFactor = 0.7f;
+    mesh.material.metallicFactor = 0.0f;
+    mesh.material.alphaMode = "MASK";
+    mesh.material.alphaCutoff = 0.5f;
+    mesh.recomputeBounds();
+    return mesh;
+}
+
 inline WeatheringResult bakeWeathering(const std::vector<ScratchboxMesh>& receivers,
                                        const std::vector<ScratchboxMesh>& occluders,
                                        const WeatheringParams& prm,
-                                       const std::string& name = "Weathering") {
+                                       const std::string& name = "Weathering",
+                                       const std::vector<Decal>& decals = {}) {
     using namespace detail;
     WeatheringResult result;
     result.overlay = ScratchboxMesh(name);
@@ -355,6 +479,26 @@ inline WeatheringResult bakeWeathering(const std::vector<ScratchboxMesh>& receiv
                     float dist = d.length();
                     float facing = 0.75f + 0.25f * std::max(0.0f, n.dot(d * (1.0f / std::max(1e-4f, dist))));
                     o.layer(prm.sootColor, prm.sootStrength * std::exp(-dist / std::max(0.1f, prm.sootRadiusM)) * facing);
+                }
+
+                // Painted decals over the weathering, then part of the weathering laid back on top.
+                bool painted = false;
+                Over withDecals = o;
+                for (const Decal& dc : decals) {
+                    Vec3 dN = dc.normal.normalized();
+                    Vec3 rel = texPos[i] - dc.center;
+                    if (std::abs(rel.dot(dN)) > dc.depthM || n.dot(dN) < 0.3f) continue;
+                    Vec3 dR = dc.up.cross(dN).normalized();
+                    Vec3 dU = dN.cross(dR);
+                    float lu = rel.dot(dR) / dc.widthM + 0.5f, lv = rel.dot(dU) / dc.heightM + 0.5f;
+                    if (lu < 0 || lu > 1 || lv < 0 || lv > 1) continue;
+                    Vec4 sample = sampleRgba(dc.image, lu, 1.0f - lv);
+                    withDecals.layer(Vec3(sample.x, sample.y, sample.z), sample.w * dc.opacity);
+                    painted = true;
+                }
+                if (painted) {
+                    withDecals.layer(o.c, o.a * prm.decalAging);
+                    o = withDecals;
                 }
 
                 shaded[i] = Vec4(o.c.x, o.c.y, o.c.z, o.a);

@@ -722,6 +722,20 @@ NB_MODULE(scratchbox_native, m) {
         return ProceduralBuildingGenerator::generateCurvedBuilding(config, name);
     }, "config"_a, "name"_a = "CurvedBuilding");
 
+    m_arch.def("facade_frames", [](const BuildingConfig& config) {
+        nb::list out;
+        for (const auto& [name, start, right, normal, length] : ProceduralBuildingGenerator::facadeFrames(config)) {
+            nb::dict f;
+            f["name"] = name;
+            f["start"] = start;
+            f["right"] = right;
+            f["normal"] = normal;
+            f["length"] = length;
+            out.append(f);
+        }
+        return out;
+    }, "config"_a, "The four facade planes at ground level: name (south = +Z entrance side, north, east, west), start corner, right and outward normal directions, length");
+
     m_arch.def("chimney_tops", [](const BuildingConfig& config) {
         return ProceduralBuildingGenerator::chimneyTops(config);
     }, "config"_a, "Where smoke leaves each chimney of this building (weathering soot sources)");
@@ -1166,11 +1180,23 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("damp_color", &weathering::WeatheringParams::dampColor)
         .def_rw("soot_color", &weathering::WeatheringParams::sootColor)
         .def_rw("wash_color", &weathering::WeatheringParams::washColor)
+        .def_rw("decal_aging", &weathering::WeatheringParams::decalAging)
         .def_rw("seed", &weathering::WeatheringParams::seed);
 
     m_weather.def("bake_weathering", [](const std::vector<ScratchboxMesh>& receivers, const std::vector<ScratchboxMesh>& occluders,
-                                        const weathering::WeatheringParams& params, const std::string& name) {
-        auto baked = weathering::bakeWeathering(receivers, occluders, params, name);
+                                        const weathering::WeatheringParams& params, const std::string& name,
+                                        const std::vector<std::tuple<Vec3, Vec3, Vec3, float, float, float, float, nb::bytes>>& decals) {
+        std::vector<weathering::Decal> painted;
+        for (const auto& [center, normal, up, width, height, depth, opacity, image] : decals) {
+            auto decoded = png::decode(reinterpret_cast<const uint8_t*>(image.c_str()), image.size(), png::OutputFormat::Rgba);
+            if (!decoded.ok) throw std::invalid_argument("Decal image is not a readable PNG: " + decoded.error);
+            weathering::Decal d;
+            d.center = center; d.normal = normal; d.up = up;
+            d.widthM = width; d.heightM = height; d.depthM = depth; d.opacity = opacity;
+            d.image = std::move(decoded.image);
+            painted.push_back(std::move(d));
+        }
+        auto baked = weathering::bakeWeathering(receivers, occluders, params, name, painted);
         auto png = png::encode(baked.atlas, 6);
         if (!baked.overlay.vertices.empty() && png.empty()) throw std::runtime_error("PNG compression failed for the weathering atlas");
         nb::dict out;
@@ -1181,9 +1207,32 @@ NB_MODULE(scratchbox_native, m) {
         out["charts"] = baked.chartCount;
         out["baked_texels"] = baked.bakedTexels;
         return out;
-    }, "receivers"_a, "occluders"_a, "params"_a, "name"_a = "Weathering",
+    }, "receivers"_a, "occluders"_a, "params"_a, "name"_a = "Weathering", "decals"_a = std::vector<std::tuple<Vec3, Vec3, Vec3, float, float, float, float, nb::bytes>>{},
        "Bake streaks, exposure wash, shelter and cavity grime, rising damp and soot from the geometry into an RGBA atlas; "
-       "returns an alpha-blended overlay shell of the receivers mapped into it");
+       "returns an alpha-blended overlay shell of the receivers mapped into it. Each decal (center, normal, up, width_m, "
+       "height_m, depth_m, opacity, png_bytes) is painted into the atlas over the weathering");
+
+    m_weather.def("make_decal_panel", &weathering::makeDecalPanel,
+        "center"_a, "normal"_a, "up"_a, "width_m"_a, "height_m"_a, "thickness_m"_a = 0.0f, "standoff_m"_a = 0.004f, "name"_a = "Decal",
+        "A panel decal quad standing off a surface (plus edges when thickness_m > 0), UV (0,0) at the image top-left, alpha MASK");
+
+    nb::class_<weathering::BlotParams>(m_weather, "BlotParams")
+        .def(nb::init<>())
+        .def_rw("size_px", &weathering::BlotParams::sizePx)
+        .def_rw("color", &weathering::BlotParams::color)
+        .def_rw("opacity", &weathering::BlotParams::opacity)
+        .def_rw("edge_noise", &weathering::BlotParams::edgeNoise)
+        .def_rw("softness", &weathering::BlotParams::softness)
+        .def_rw("mottling", &weathering::BlotParams::mottling)
+        .def_rw("drips", &weathering::BlotParams::drips)
+        .def_rw("drip_length", &weathering::BlotParams::dripLength)
+        .def_rw("seed", &weathering::BlotParams::seed);
+
+    m_weather.def("synthesize_blot", [](const weathering::BlotParams& params) {
+        auto bytes = png::encode(weathering::synthesizeBlot(params), 6);
+        if (bytes.empty()) throw std::runtime_error("PNG compression failed for a blot decal");
+        return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    }, "params"_a, "A procedural stain / water mark / patch as RGBA PNG bytes for a decal");
 
     auto m_plant = m.def_submodule("plant", "Procedural botanical plant presets and heroic biome assets");
 

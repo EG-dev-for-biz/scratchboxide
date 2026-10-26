@@ -1218,19 +1218,61 @@ def create_building_parts(
     cfg = _building_config(**{k: v for k, v in locals().items() if k not in ("name", "kwargs")}, **kwargs)
     parts = _BuildingParts(_native.architecture.generate_building_parts(cfg, name))
     parts.soot_sources = [(t.x, t.y, t.z) for t in _native.architecture.chimney_tops(cfg)]
+    parts.facades = {f["name"]: {"start": (f["start"].x, f["start"].y, f["start"].z),
+                                 "right": (f["right"].x, f["right"].y, f["right"].z),
+                                 "normal": (f["normal"].x, f["normal"].y, f["normal"].z),
+                                 "length": f["length"]}
+                     for f in _native.architecture.facade_frames(cfg)}
     return parts
 
 
 class _BuildingParts(list):
-    """The parts list create_building_parts returns, carrying the building's chimney tops as soot sources."""
+    """
+    The parts list create_building_parts returns, carrying the building's chimney tops (soot
+    sources) and its facade frames (south = +Z entrance side, north, east, west) for decals.
+    """
     soot_sources: List[Tuple[float, float, float]] = []
+    facades: Dict[str, Dict[str, Any]] = {}
+
+
+def _decal_image(spec_image) -> Tuple[bytes, str, str]:
+    """(image bytes, mime type, source label) for a decal's "image": a file path or {"blot": {...}}."""
+    if isinstance(spec_image, dict) and "blot" in spec_image:
+        bp = _native.weathering.BlotParams()
+        for key, value in spec_image["blot"].items():
+            if not hasattr(bp, key):
+                raise ValueError(f"Unknown blot parameter '{key}'")
+            setattr(bp, key, _native.math.Vec3(*value) if key == "color" else value)
+        return _native.weathering.synthesize_blot(bp), "image/png", "procedural blot"
+    file_path = str(spec_image)
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext not in _IMAGE_MIME:
+        raise ValueError(f"Unsupported decal image type '{ext}' for {file_path}")
+    with open(file_path, "rb") as fh:
+        return fh.read(), _IMAGE_MIME[ext], "image file"
+
+
+def _decal_frame(parts, spec) -> Tuple[Tuple[float, float, float], Tuple[float, float, float], Tuple[float, float, float]]:
+    """(center, normal, up) for a decal placed by facade + u/v metres, or given directly."""
+    if "facade" in spec:
+        facades = getattr(parts, "facades", {})
+        if spec["facade"] not in facades:
+            raise ValueError(f"Unknown facade '{spec['facade']}' (have {sorted(facades)})")
+        f = facades[spec["facade"]]
+        u, v = float(spec.get("u", f["length"] * 0.5)), float(spec.get("v", 2.0))
+        c = tuple(f["start"][i] + f["right"][i] * u for i in range(3))
+        return (c[0], c[1] + v, c[2]), f["normal"], (0.0, 1.0, 0.0)
+    if "center" not in spec or "normal" not in spec:
+        raise ValueError("A decal needs 'facade' with 'u'/'v', or 'center' and 'normal'")
+    return tuple(spec["center"]), tuple(spec["normal"]), tuple(spec.get("up", (0.0, 1.0, 0.0)))
 
 
 _IMAGE_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
 
 
 def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]] = None,
-                            weathering: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                            weathering: Optional[Dict[str, Any]] = None,
+                            decals: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """
     Write building parts to a GLB with real-scale PBR textures per part.
 
@@ -1245,8 +1287,19 @@ def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]]
     rain exposure wash, shelter and cavity grime, rising damp, soot around the chimney tops) into
     a unique atlas on an alpha-blended overlay shell over the "receivers" parts (default wall,
     foundation, roof). Its keys are WeatheringParams fields plus "receivers"; strengths are
-    continuous and 0 turns a layer off. Returns {"path", "parts": {slot: {"source", ...}}} so the
-    caller can label provenance honestly; the weathering is reported as generated.
+    continuous and 0 turns a layer off.
+
+    decals places images on the building. Each is a dict with
+      placement: "facade" ("south" = +Z entrance side, "north", "east", "west") with "u" metres
+                 along it from its start corner and "v" metres above the ground, or "center" and
+                 "normal" (and optional "up") in world metres;
+      "size": (width_m, height_m); "image": a PNG/JPEG path or {"blot": {<BlotParams fields>}};
+      "mode": "paint" (default: painted into the weathering atlas, follows the surface and ages
+              under decal_aging; PNG only) or "panel" (its own quad standing "standoff_m" off the
+              wall, with "thickness_m" for boards and plaques, full image resolution);
+      optional "opacity", "depth_m" (paint projection depth) and "source" (provenance label).
+    Returns {"path", "parts": {...}, "decals": [...]} so the caller can label provenance
+    honestly; weathering and procedural marks are reported as generated.
     """
     surfaces = surfaces or {}
     textures, report = [], {}
@@ -1302,6 +1355,32 @@ def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]]
 
     meshes = list(parts)
     base_name = meshes[0].name.rsplit("_", 1)[0] if meshes else "Building"
+    painted, decal_report = [], []
+    for i, spec in enumerate(decals or []):
+        center, normal, up = _decal_frame(parts, spec)
+        width, height = (float(x) for x in spec["size"])
+        data, mime, kind = _decal_image(spec["image"])
+        mode = spec.get("mode", "paint")
+        source = spec.get("source", "generated (procedural blot)" if kind == "procedural blot" else kind)
+        if mode == "paint":
+            if mime != "image/png":
+                raise ValueError("Painted decals need a PNG image")
+            painted.append((_native.math.Vec3(*center), _native.math.Vec3(*normal), _native.math.Vec3(*up),
+                            width, height, float(spec.get("depth_m", 0.35)), float(spec.get("opacity", 1.0)), data))
+        elif mode == "panel":
+            panel = _native.weathering.make_decal_panel(
+                _native.math.Vec3(*center), _native.math.Vec3(*normal), _native.math.Vec3(*up), width, height,
+                float(spec.get("thickness_m", 0.0)), float(spec.get("standoff_m", 0.004)), f"{base_name}_decal[{i:03d}]")
+            meshes.append(panel)
+            textures.append((panel.name, "base_color", data, mime, 1.0, 1.0))
+        else:
+            raise ValueError(f"Unknown decal mode '{mode}' (paint, panel)")
+        decal_report.append({"mode": mode, "source": source, "size_m": (width, height),
+                             "center": tuple(round(c, 3) for c in center)})
+
+    if weathering is None and painted:
+        weathering = {k: 0.0 for k in ("streak_strength", "exposure_wash", "shelter_grime", "cavity_grime",
+                                       "damp_strength", "soot_strength")}
     if weathering is not None:
         options = dict(weathering)
         wanted = set(options.pop("receivers", ["wall", "foundation", "roof"]))
@@ -1316,7 +1395,7 @@ def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]]
                 value = _native.math.Vec3(*value)
             setattr(params, key, value)
         receivers = [p for p in parts if p.name.rsplit("_", 1)[-1] in wanted]
-        baked = _native.weathering.bake_weathering(receivers, list(parts), params, f"{base_name}_weathering")
+        baked = _native.weathering.bake_weathering(receivers, list(parts), params, f"{base_name}_weathering", painted)
         overlay = baked["overlay"]
         if len(overlay.vertices):
             meshes.append(overlay)
@@ -1326,7 +1405,7 @@ def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]]
                                 "charts": baked["charts"], "baked_texels": baked["baked_texels"]}
 
     _native.io.write_glb_textured(path, meshes, textures)
-    return {"path": path, "parts": report}
+    return {"path": path, "parts": report, "decals": decal_report}
 
 def create_curved_building(
     width: float = 18.0,

@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <memory>
 #include <cstdint>
+#include <tuple>
 
 namespace scratchbox {
 namespace architecture {
@@ -554,6 +555,21 @@ public:
                               (i % 2 == 0 ? 0.25f : -0.25f) * cfg.depth * 0.5f);
         }
         return tops;
+    }
+
+    /**
+     * The four facade planes at ground level, in the order and orientation the facade generator lays
+     * bays: (name, start corner, right direction, outward normal, length). Names follow the
+     * generator's convention: south = +Z (the entrance side), north = -Z, east = +X, west = -X.
+     */
+    static std::vector<std::tuple<std::string, Vec3, Vec3, Vec3, float>> facadeFrames(const BuildingConfig& cfg) {
+        static const char* names[4] = { "south", "north", "east", "west" };
+        std::vector<std::tuple<std::string, Vec3, Vec3, Vec3, float>> out;
+        auto sides = facadeSideFrames(cfg, 0.0f);
+        for (size_t i = 0; i < sides.size(); ++i) {
+            out.emplace_back(names[i], sides[i].start, sides[i].rightDir, sides[i].normal, sides[i].length);
+        }
+        return out;
     }
 
     /** Where smoke leaves each chimney (above its cap and pots), for weathering soot sources. */
