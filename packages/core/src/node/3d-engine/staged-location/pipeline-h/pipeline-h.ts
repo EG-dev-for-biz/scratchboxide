@@ -60,7 +60,8 @@ export type PipelineHInput = Omit<PipelineGInput, 'policy'> & {
 export function stagedProcedural(request: { procedural?: boolean; pipeline?: string }, env: NodeJS.ProcessEnv = process.env, pipelineIServices = false): 'g' | 'h' | 'i' | 'j' {
     const asked = (request.pipeline ?? env.SCRATCHBOX_STAGED_PROCEDURAL ?? '').trim().toLowerCase();
     if (asked === 'g' || asked === 'h' || asked === 'i' || asked === 'j') return asked;
-    return pipelineIServices ? 'i' : 'h';
+    // pipeline J (Meshy, one seed, no colour match) is the 3D Building default (user decision 2026-10-25); I (Trellis) stays selectable
+    return pipelineIServices ? 'j' : 'h';
 }
 
 export async function runPipelineH(input: PipelineHInput): Promise<PipelineGOutcome> {

@@ -278,6 +278,11 @@ export interface EnhanceWallRecord {
      * them.
      */
     geometryAlign?: { dx: number; dy: number; chamferPx: number; coveredOpenings: number; why: string };
+    /**
+     * The wall's bays stacked onto one (facade-texture.ts bayStack): the bay, how many it spans, the share of the bay's
+     * texels enough bays voted on, and how well they agree there (1 = every bay alike). Measured from the plate.
+     */
+    bayStack?: { bayM: number; bays: number; votedShare: number; meanConfidence: number };
 }
 
 /**

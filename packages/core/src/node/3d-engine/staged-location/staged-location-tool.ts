@@ -213,9 +213,9 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
     const elevationService = mapsKey ? new GoogleElevationService({ apiKey: mapsKey }) : undefined;
     return {
         cache,
-        // pipeline I (the 3D Building default): the image model draws the character sheet, then Trellis (default) or Meshy
-        // (pipelineIModel: 'meshy') on Fal.ai makes the model (best of six seeds); made on first use, so a build without
-        // FAL_KEY fails pipeline I with that reason
+        // pipeline I/J (J the 3D Building default): the image model draws the character sheet, then Meshy (J, default, one
+        // seed) or Trellis (I, best of six seeds) on Fal.ai makes the model; made on first use, so a build without FAL_KEY
+        // fails pipeline I/J with that reason
         pipelineI: { generator: () => createDefaultStationImageGenerator({ workspaceRoot: cache.dir }), model: (name?: string) => name === 'meshy' ? createFalMeshyClient() : createFalTrellisClient() },
         ...(elevationService ? {
             elevation: {

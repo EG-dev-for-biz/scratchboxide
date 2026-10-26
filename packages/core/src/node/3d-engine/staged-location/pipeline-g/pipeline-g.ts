@@ -52,7 +52,7 @@ import { bestStreetViewForWall, wallReference, type GuideView } from '../pipelin
 import { exactDistanceTransform } from '../../../spatial/StreetViewStage3Metrics';
 import { resizeRgba } from '../texture-enhance';
 import { visionFacadeCounter } from '../pipeline-e/plate-identity';
-import { buildFacadeTexture, repeatFill } from '../facade-texture/facade-texture';
+import { bayStack, buildFacadeTexture, repeatFill } from '../facade-texture/facade-texture';
 import type { EnhanceModelClient } from '../texture-enhance';
 import { planStations } from './stations';
 import { platePng, reliefPng, surveyPlates, type Plate } from './plates';
@@ -760,6 +760,8 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
                 else noSv = best.why;
             }
             progress(`${tag}: drawing the facade texture of wall ${f.index} (${Math.round(f.area)} m2)${sv ? `, guided by Street View ${sv.view.panoId}${sv.view.cleanImage ? ' (obstruction-free copy)' : ''}` : ''}`);
+            // the wall's bays stacked onto one: the fill of what no station saw, and the reference when no wall is finished yet
+            const stack = bayStack(on.tex.rgba, on.use, on.tex.width, on.tex.height, f.pixel);
             const r = await buildFacadeTexture(f, on.tex, on.use, {
                 ...(sv ? { streetView: sv, streetViewGuide: true } : {}), ...(noSv ? { noStreetView: noSv } : {}),
                 client: e.client, models: e.models, locationName: input.place, source: G_SRC.enhanced,
@@ -774,7 +776,8 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
                 // the median of the storey row's bays at the same place in the bay, the painted reading where too few bays vote;
                 // the street band is the painted reading (its read shopfront openings), described to the model as the street
                 // level to draw (the median of its melted clutter came back as rows of odd panels)
-                unseen: { source: G_SRC.enhanced, fill: repeatFill(on.tex.rgba, on.use, on.tex.width, on.tex.height, f.pixel, textures.get(f.index)!.rgba) }, openings: on.openings,
+                unseen: { source: G_SRC.enhanced, fill: repeatFill(on.tex.rgba, on.use, on.tex.width, on.tex.height, f.pixel, textures.get(f.index)!.rgba, undefined, stack) }, openings: on.openings,
+                bayStack: stack,
                 streetBandM: STREET_CLUTTER_M
             });
             step.proposed++;
