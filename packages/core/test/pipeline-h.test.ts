@@ -46,7 +46,7 @@ describe('pipeline H', () => {
     it('is pipeline G with every rule set; G stays the defaults', () => {
         expect(H_POLICY).toMatchObject({ name: 'h', gateExplained: GATE_EXPLAINED, gateLift: GATE_LIFT, dedupeContinued: true, rejectionReasons: true, ledger: true });
         expect(G_POLICY).toEqual({ name: 'g' });
-        expect(PIPELINE_H_VERSION).toMatch(/^pipeline-h\/v1\+pipeline-g\//);
+        expect(PIPELINE_H_VERSION).toMatch(/^pipeline-h\/v2\+pipeline-g\//);
     });
 
     it('is the default; G only when the request or the environment asks for it', () => {

@@ -26,6 +26,11 @@
  *  4. Continued openings that overlap another opening on their wall, or lie past its ends, are not sent to the native
  *     tool, and the tool's remaining rejections are reported by reason (583 of 678 Flatiron openings were rejected unsaid).
  *  5. The evidence ledger is written into the brief and returned with the outcome.
+ *  6. The facades are built on the scan-led massing (the orchestrator, scan-massing.ts): the simplest of block, block with
+ *     its roof objects (outlines from the photo straight down, heights from the scan) and tiers that explains the
+ *     structure's scan is built natively first and its walls are the ones surveyed; its roof objects replace the scan-blob
+ *     ones (roof-objects.ts). E's vector massing stays, with the reason in the ledger, when the scan's winner is lofted
+ *     sections (no flat walls to read) or the scan massing fails.
  *
  * The default procedural build from 2026-10-23 until pipeline I took the 3D Building button on 2026-10-24; still the default
  * where pipeline I's services are not wired. SCRATCHBOX_STAGED_PROCEDURAL or the tool's `pipeline` picks G, H or I. Scored against the Haughwout baseline with .claude/skills/watch-staged-build.
@@ -34,7 +39,7 @@
 
 import { PIPELINE_G_VERSION, runPipelineG, type PipelineGInput, type PipelineGOutcome, type RebuildPolicy } from '../pipeline-g/pipeline-g';
 
-export const PIPELINE_H_VERSION = `pipeline-h/v1+${PIPELINE_G_VERSION}`;
+export const PIPELINE_H_VERSION = `pipeline-h/v2+${PIPELINE_G_VERSION}`;  // v2: the facades are built on the scan-led massing (scan-massing.ts)
 
 /** A reading explaining under this share of its plate, with under this lift over its displaced copies, is dropped (check.ts: a blank-box wall read 0.001-0.04). */
 export const GATE_EXPLAINED = 0.05;

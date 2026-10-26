@@ -342,6 +342,13 @@ export class StageCache {
         fs.writeFileSync(file, JSON.stringify(data));
     }
 
+    /** A side file of a run written by writeRunNote, or undefined when the run has none by that name. */
+    readRunNote<T>(runId: string, name: string): T | undefined {
+        if (!/^[a-z_-]+$/.test(name)) throw new Error(`stage cache: bad run note name "${name}"`);
+        const file = path.join(path.dirname(this.runRecordPath(runId)), `${name}.json`);
+        return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) as T : undefined;
+    }
+
     readRunRecord<T>(runId: string): T | undefined {
         const file = this.runRecordPath(runId);
         if (!fs.existsSync(file)) return undefined;
