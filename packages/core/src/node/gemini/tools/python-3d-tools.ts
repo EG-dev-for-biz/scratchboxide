@@ -176,6 +176,15 @@ Usage notes:
 - Materials: sb.PbrMaterial(base_color=(r, g, b, a), roughness=, metallic=) or a preset such as sb.PbrMaterial.clay(). There is no separate materials module.
 - Scene and export: scene = sb.Scene(); scene.add_mesh(mesh); finish with sb.io.write_glb(OUTPUT_GLB_PATH, scene). A single Mesh can be written directly too.`;
 
+/**
+ * The largest model execute_3d_python_script mounts in the viewport. Beyond it the browser tab runs out of memory
+ * and crashes; set SCRATCHBOX_MAX_SCENE_VERTICES / SCRATCHBOX_MAX_SCENE_MB to move it on a bigger machine.
+ */
+export function viewportSceneLimits(env: NodeJS.ProcessEnv = process.env): { vertices: number; bytes: number } {
+    const num = (v: string | undefined, fallback: number) => (v && Number(v) > 0 ? Number(v) : fallback);
+    return { vertices: num(env.SCRATCHBOX_MAX_SCENE_VERTICES, 1_000_000), bytes: num(env.SCRATCHBOX_MAX_SCENE_MB, 96) * 1e6 };
+}
+
 export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'execute_3d_python_script',
@@ -343,6 +352,33 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                     executionTimeMs: result.executionTimeMs
                 },
                 summaryResult: `Python 3D execution produced no model: ${what}. Nothing was added to the canvas.`
+            };
+        }
+
+        // A model past what the viewport can hold crashes the browser tab when mounted (a 107 MB, 1.2 M-vertex
+        // Empire State Building did), losing the chat turn with it; refuse it with the numbers and how to cut them.
+        const limits = viewportSceneLimits();
+        if (writtenGeometry.totalVertices > limits.vertices || glbBuf.length > limits.bytes) {
+            const mb = (glbBuf.length / 1e6).toFixed(0);
+            const heaviest = [...writtenGeometry.submeshes].sort((a, b) => b.vertexCount - a.vertexCount).slice(0, 4)
+                .map(m => `${m.name} ${m.vertexCount.toLocaleString('en-US')}`).join(', ');
+            const what = `the model is ${writtenGeometry.totalVertices.toLocaleString('en-US')} vertices and ${mb} MB, past what the viewport `
+                + `can load (${limits.vertices.toLocaleString('en-US')} vertices, ${(limits.bytes / 1e6).toFixed(0)} MB); heaviest meshes: ${heaviest}`;
+            return {
+                status: 'failed',
+                resultPayload: {
+                    success: false,
+                    error: what,
+                    glbGenerated: true,
+                    totalVertices: writtenGeometry.totalVertices,
+                    glbBytes: glbBuf.length,
+                    stdout: result.stdout,
+                    stderr: result.stderr,
+                    executionTimeMs: result.executionTimeMs
+                },
+                summaryResult: `Python 3D model not mounted: ${what}. Nothing was added to the canvas. Make it lighter and run again: `
+                    + `trim on tall tiers is the usual bulk (pilaster_bay_stride 2-3, sills and hoods off above the first few floors, `
+                    + `string courses only where they read), weather fewer receivers (weathering receivers=["wall"]), and lower SDF or lathe resolution.`
             };
         }
 

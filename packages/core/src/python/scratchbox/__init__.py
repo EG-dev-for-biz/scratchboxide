@@ -8,6 +8,7 @@ import sys
 import os
 import json as _json
 import math as _py_math
+import re as _re
 import random as _random
 from typing import Any, Dict, Tuple, Optional, Union, List
 
@@ -1159,7 +1160,7 @@ def _building_config(
         fd = _native.architecture.FacadeDetails()
         for key, value in details.items():
             if not hasattr(fd, key):
-                raise ValueError(f"Unknown facade detail '{key}'")
+                raise ValueError(_unknown_key("facade detail", key, fd))
             if key.endswith("_profile"):
                 value = [_native.math.Vec2(float(x), float(y)) for x, y in value]
             setattr(fd, key, value)
@@ -1211,7 +1212,7 @@ def _building_config(
                     rule.floor_min, rule.floor_max = lo, hi
                     continue
                 if not hasattr(rule, key):
-                    raise ValueError(f"Unknown facade rule field '{key}'")
+                    raise ValueError(_unknown_key("facade rule field", key, rule))
                 if key == "sides":
                     if isinstance(value, str) or not isinstance(value, (list, tuple)):
                         raise ValueError(f"{where}: 'sides' must be a list of side names or indices, got {value!r}")
@@ -1247,6 +1248,15 @@ def _building_config(
             rules.append(rule)
         cfg.rules = rules
     return cfg
+
+
+def _unknown_key(what: str, key: str, params) -> str:
+    """The error for a settings key a native params object does not have, naming the closest valid ones."""
+    import difflib
+    valid = sorted(n for n in dir(params) if not n.startswith("_") and not callable(getattr(params, n)))
+    close = difflib.get_close_matches(key, valid, n=3, cutoff=0.5)
+    hint = f"; did you mean {', '.join(close)}?" if close else ""
+    return f"Unknown {what} '{key}'{hint} (valid: {', '.join(valid)})"
 
 
 def moulding_profile(height: float, projection: float, tiers: int = 3, curvature: float = 0.6,
@@ -1558,7 +1568,7 @@ def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]]
             params = _native.surface.CoursedSurfaceParams()
             for key, value in spec["coursed"].items():
                 if not hasattr(params, key):
-                    raise ValueError(f"Unknown coursed surface parameter '{key}'")
+                    raise ValueError(_unknown_key("coursed surface parameter", key, params))
                 setattr(params, key, _native.math.Vec3(*value) if key.endswith("_color") else value)
             tex = _native.surface.synthesize_coursed_surface(params)
             tile = (tex["tile_width_m"], tex["tile_height_m"])
@@ -1647,7 +1657,7 @@ def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]]
         options.setdefault("soot_sources", getattr(parts_in, "soot_sources", []))
         for key, value in options.items():
             if not hasattr(params, key):
-                raise ValueError(f"Unknown weathering parameter '{key}'")
+                raise ValueError(_unknown_key("weathering parameter", key, params))
             if key == "soot_sources":
                 value = [_native.math.Vec3(*pt) for pt in value]
             elif key.endswith("_color"):
@@ -1657,7 +1667,22 @@ def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]]
         if not receivers:
             have = sorted({p.name.rsplit("_", 1)[-1] for p in parts})
             raise ValueError(f"weathering receivers {sorted(wanted)} match no building part (have {have})")
-        baked = _native.weathering.bake_weathering(receivers, list(parts), params, f"{base_name}_weathering", painted)
+        # Unless the script chose texel_m, a building too big for the atlas at the default texel (a skyscraper)
+        # is baked at the finest texel that fits rather than refused; the report says which texel was used and why.
+        fitted = None
+        for _attempt in range(6):
+            try:
+                baked = _native.weathering.bake_weathering(receivers, list(parts), params, f"{base_name}_weathering", painted)
+                break
+            except RuntimeError as exc:
+                m = _re.search(r"atlas would be (\d+) x (\d+)", str(exc))
+                if "texel_m" in options or not m:
+                    raise
+                over = int(m.group(2)) / float(m.group(1))
+                fitted = params.texel_m * max(1.1, _py_math.sqrt(over) * 1.05)
+                params.texel_m = fitted
+        else:
+            raise RuntimeError("weathering atlas does not fit even at a texel of %.2f m; pass texel_m or fewer receivers" % params.texel_m)
         overlay = baked["overlay"]
         if len(overlay.vertices):
             overlay.material = _with_provenance(overlay.material, "generated", 1.0, "geometry-driven weathering bake")
@@ -1665,8 +1690,17 @@ def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]]
             textures.append((overlay.name, "base_color", baked["atlas_png"], "image/png", 1.0, 1.0))
         report["weathering"] = {"source": "generated (geometry-driven bake)", "receivers": sorted(wanted),
                                 "atlas_px": (baked["atlas_width"], baked["atlas_height"]),
-                                "charts": baked["charts"], "baked_texels": baked["baked_texels"]}
+                                "charts": baked["charts"], "baked_texels": baked["baked_texels"],
+                                "texel_m": round(params.texel_m, 4),
+                                "clear_triangles": baked.get("clear_triangles", 0)}
+        if fitted is not None:
+            report["weathering"]["texel_note"] = ("coarsened from the default so the atlas fits this building's area; "
+                                                  "pass texel_m to choose it")
 
+    # Parts are generated as triangle soup (each face its own corners, for per-face UVs); merging the corners
+    # that are identical in every attribute is lossless and keeps a skyscraper loadable in the viewport.
+    for m in meshes:
+        m.weld_identical_vertices()
     _native.io.write_glb_textured(path, meshes, textures)
     return {"path": path, "parts": report, "decals": decal_report, "extras": extra_report}
 

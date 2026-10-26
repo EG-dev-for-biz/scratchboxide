@@ -489,6 +489,8 @@ NB_MODULE(scratchbox_native, m) {
             self.recomputeSmoothNormals();
             return self;
         })
+        .def("weld_identical_vertices", &ScratchboxMesh::weldIdenticalVertices,
+            "Merge vertices identical in position, normal, UV, colour and tangent (lossless); returns how many were removed")
         .def("weld_vertices", [](ScratchboxMesh& self, float epsilon) -> ScratchboxMesh& {
             self.weldVertices(epsilon);
             return self;
@@ -1285,6 +1287,7 @@ NB_MODULE(scratchbox_native, m) {
         out["atlas_height"] = baked.atlas.height;
         out["charts"] = baked.chartCount;
         out["baked_texels"] = baked.bakedTexels;
+        out["clear_triangles"] = baked.clearTriangles;
         return out;
     }, "receivers"_a, "occluders"_a, "params"_a, "name"_a = "Weathering", "decals"_a = std::vector<std::tuple<Vec3, Vec3, Vec3, float, float, float, float, nb::bytes>>{},
        "Bake streaks, exposure wash, shelter and cavity grime, rising damp and soot from the geometry into an RGBA atlas; "

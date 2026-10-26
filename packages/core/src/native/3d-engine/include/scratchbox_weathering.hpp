@@ -116,6 +116,7 @@ struct BlotParams {
 
 struct WeatheringResult {
     ScratchboxMesh overlay;
+    size_t clearTriangles{0};           // receiver triangles left out of the overlay: no visible weathering on them
     ImageBuffer atlas;                  // RGBA weathering map
     int chartCount{0};
     int bakedTexels{0};
@@ -584,9 +585,27 @@ inline WeatheringResult bakeWeathering(const std::vector<ScratchboxMesh>& receiv
 
     // 6. Overlay shell: receivers offset along their face normals, UVs into the atlas
     //    (glTF UV origin top-left, so v runs down the image).
+    //    A triangle whose texels are all clear (alpha under 2/255) would add nothing visible, so it is left out:
+    //    on a large building most surfaces carry no streak, grime or damp, and copying them doubled the file.
     ScratchboxMesh& shell = result.overlay;
     for (const Tri& t : tris) {
         const Chart& ch = charts[t.chart];
+        {
+            float fx0 = 1e30f, fx1 = -1e30f, fy0 = 1e30f, fy1 = -1e30f;
+            for (int k = 0; k < 3; ++k) {
+                const float px = ch.x + (t.q[k].x - ch.lo.x) / texel, py = ch.y + (t.q[k].y - ch.lo.y) / texel;
+                fx0 = std::min(fx0, px); fx1 = std::max(fx1, px); fy0 = std::min(fy0, py); fy1 = std::max(fy1, py);
+            }
+            const int x0 = std::clamp(static_cast<int>(std::floor(fx0)) - 1, 0, atlasW - 1), x1 = std::clamp(static_cast<int>(std::ceil(fx1)) + 1, 0, atlasW - 1);
+            const int y0 = std::clamp(static_cast<int>(std::floor(fy0)) - 1, 0, atlasH - 1), y1 = std::clamp(static_cast<int>(std::ceil(fy1)) + 1, 0, atlasH - 1);
+            bool visible = false;
+            for (int y = y0; y <= y1 && !visible; ++y) {
+                for (int x = x0; x <= x1; ++x) {
+                    if (result.atlas.data[(static_cast<size_t>(y) * atlasW + x) * 4 + 3] >= 2) { visible = true; break; }
+                }
+            }
+            if (!visible) { ++result.clearTriangles; continue; }
+        }
         uint32_t base = static_cast<uint32_t>(shell.vertices.size());
         for (int k = 0; k < 3; ++k) {
             float ux = (ch.x + (t.q[k].x - ch.lo.x) / texel) / atlasW;

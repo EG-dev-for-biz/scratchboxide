@@ -12,6 +12,7 @@
 
 #include "scratchbox_math.hpp"
 #include <vector>
+#include <cstring>
 #include <string>
 #include <functional>
 #include <algorithm>
@@ -382,6 +383,45 @@ public:
             if (l > 1e-6f) v.normal = v.normal / l;
             else v.normal = Vec3(0, 1, 0);
         }
+    }
+
+    /**
+     * Merges vertices whose position, normal, UV, colour and tangent are all bit-identical, re-indexing the
+     * triangles. Nothing a renderer can see changes (unlike weldVertices, which merges by position alone and so
+     * smooths hard edges and UV seams); a triangle-soup mesh, where each quad repeats its two shared corners,
+     * shrinks by a third or more. Returns the number of vertices removed.
+     */
+    size_t weldIdenticalVertices() {
+        if (vertices.empty()) return 0;
+        struct Key {
+            float f[16];
+            bool operator==(const Key& o) const { return std::memcmp(f, o.f, sizeof(f)) == 0; }
+        };
+        struct KeyHash {
+            size_t operator()(const Key& k) const {
+                uint64_t h = 1469598103934665603ull;
+                const auto* b = reinterpret_cast<const unsigned char*>(k.f);
+                for (size_t i = 0; i < sizeof(k.f); ++i) { h ^= b[i]; h *= 1099511628211ull; }
+                return static_cast<size_t>(h);
+            }
+        };
+        std::unordered_map<Key, uint32_t, KeyHash> seen;
+        seen.reserve(vertices.size());
+        std::vector<Vertex> kept;
+        kept.reserve(vertices.size());
+        std::vector<uint32_t> remap(vertices.size());
+        for (size_t i = 0; i < vertices.size(); ++i) {
+            const Vertex& v = vertices[i];
+            const Key k{{ v.position.x, v.position.y, v.position.z, v.normal.x, v.normal.y, v.normal.z, v.uv.x, v.uv.y,
+                          v.color.x, v.color.y, v.color.z, v.color.w, v.tangent.x, v.tangent.y, v.tangent.z, v.tangent.w }};
+            auto [it, inserted] = seen.emplace(k, static_cast<uint32_t>(kept.size()));
+            if (inserted) kept.push_back(v);
+            remap[i] = it->second;
+        }
+        const size_t removed = vertices.size() - kept.size();
+        for (auto& idx : indices) idx = remap[idx];
+        vertices.swap(kept);
+        return removed;
     }
 
     void weldVertices(float epsilon = 1e-4f) {
