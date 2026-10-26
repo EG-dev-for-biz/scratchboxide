@@ -1059,6 +1059,10 @@ def create_building(
     bay_count: Optional[int] = None,
     bake_curvature_ao: bool = True,
     details: Optional[Dict[str, Any]] = None,
+    floor_heights: Optional[List[float]] = None,
+    centre_bay_scale: float = 1.0,
+    end_bay_scale: float = 1.0,
+    facade_rules: Optional[List[Dict[str, Any]]] = None,
     name: str = "ProceduralBuilding",
     **kwargs
 ) -> "scratchbox_native.geometry.Mesh":
@@ -1074,7 +1078,8 @@ def _building_config(
     width, depth, floors, floor_height, ground_floor_height, plinth_height, bay_width,
     window_width, window_height, window_recess_depth, roof, roof_height, roof_overhang,
     roof_pitch_degrees, parapet_height, curvature, superellipse_exponent, twist_degrees,
-    taper, bulge, bay_count, bake_curvature_ao, details=None, **kwargs
+    taper, bulge, bay_count, bake_curvature_ao, details=None, floor_heights=None,
+    centre_bay_scale=1.0, end_bay_scale=1.0, facade_rules=None, **kwargs
 ):
     if _native is None or not hasattr(_native, "architecture"):
         raise RuntimeError("Native 3D architecture module scratchbox_native.architecture is required")
@@ -1155,6 +1160,33 @@ def _building_config(
                 value = [_native.math.Vec2(float(x), float(y)) for x, y in value]
             setattr(fd, key, value)
         cfg.details = fd
+    if floor_heights:
+        cfg.floor_heights = [float(h) for h in floor_heights]
+    cfg.centre_bay_scale = float(centre_bay_scale)
+    cfg.end_bay_scale = float(end_bay_scale)
+    if facade_rules:
+        side_index = {"south": 0, "north": 1, "east": 2, "west": 3}
+        rules = []
+        for spec in facade_rules:
+            rule = _native.architecture.FacadeRule()
+            for key, value in spec.items():
+                if key == "floors":
+                    lo, hi = value if isinstance(value, (list, tuple)) else (value, value)
+                    rule.floor_min, rule.floor_max = int(lo), int(hi)
+                    continue
+                if not hasattr(rule, key):
+                    raise ValueError(f"Unknown facade rule field '{key}'")
+                if key == "sides":
+                    value = [side_index[v] if isinstance(v, str) else int(v) for v in value]
+                elif key.endswith("_profile"):
+                    value = [_native.math.Vec2(float(x), float(y)) for x, y in value]
+                elif key in ("opening", "sill", "hood"):
+                    value = int(bool(value))
+                elif key == "balcony":
+                    value = {"none": 0, "bay": 1, "continuous": 2}.get(value, value)
+                setattr(rule, key, value)
+            rules.append(rule)
+        cfg.rules = rules
     return cfg
 
 
@@ -1218,12 +1250,26 @@ def create_building_parts(
     bay_count: Optional[int] = None,
     bake_curvature_ao: bool = True,
     details: Optional[Dict[str, Any]] = None,
+    floor_heights: Optional[List[float]] = None,
+    centre_bay_scale: float = 1.0,
+    end_bay_scale: float = 1.0,
+    facade_rules: Optional[List[Dict[str, Any]]] = None,
     name: str = "ProceduralBuilding",
     **kwargs
 ) -> _BuildingParts:
     """
     The building create_building makes, as one mesh per material slot (<name>_wall, _glass,
     _frame, _roof, _foundation) with world-metre UVs, ready for write_textured_building.
+
+    Both builders take the same layout controls:
+      floor_heights: storey heights from the ground floor up (entries override the defaults);
+      centre_bay_scale / end_bay_scale: width of the middle and outermost bays relative to the rest;
+      facade_rules: dicts applied in order (later wins). Selectors: "floors" (n or (lo, hi), 0 =
+        ground), "sides" ("south" = +Z entrance side, "north", "east", "west" or 0..3),
+        "bay_stride"/"bay_offset", "centre_span" / "end_span" (bays within n of the middle / an
+        end). Overrides: window_width_m, window_height_m, sill_height_m, opening (False = blank
+        wall), sill, hood (False removes), sill_profile, hood_profile, hood_pitch_deg, balcony
+        ("none", "bay", "continuous" along adjacent bays). The entrance bay keeps its door.
     """
     cfg = _building_config(**{k: v for k, v in locals().items() if k not in ("name", "kwargs")}, **kwargs)
     parts = _BuildingParts(_native.architecture.generate_building_parts(cfg, name))

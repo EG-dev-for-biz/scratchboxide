@@ -688,6 +688,26 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("chimney_pot_radius_m", &FacadeDetails::chimneyPotRadiusM)
         .def_rw("chimney_pot_height_m", &FacadeDetails::chimneyPotHeightM);
 
+    nb::class_<FacadeRule>(m_arch, "FacadeRule")
+        .def(nb::init<>())
+        .def_rw("floor_min", &FacadeRule::floorMin)
+        .def_rw("floor_max", &FacadeRule::floorMax)
+        .def_rw("sides", &FacadeRule::sides)
+        .def_rw("bay_stride", &FacadeRule::bayStride)
+        .def_rw("bay_offset", &FacadeRule::bayOffset)
+        .def_rw("centre_span", &FacadeRule::centreSpan)
+        .def_rw("end_span", &FacadeRule::endSpan)
+        .def_rw("window_width_m", &FacadeRule::windowWidthM)
+        .def_rw("window_height_m", &FacadeRule::windowHeightM)
+        .def_rw("sill_height_m", &FacadeRule::sillHeightM)
+        .def_rw("opening", &FacadeRule::opening)
+        .def_rw("sill", &FacadeRule::sill)
+        .def_rw("hood", &FacadeRule::hood)
+        .def_rw("sill_profile", &FacadeRule::sillProfile)
+        .def_rw("hood_profile", &FacadeRule::hoodProfile)
+        .def_rw("hood_pitch_deg", &FacadeRule::hoodPitchDeg)
+        .def_rw("balcony", &FacadeRule::balcony);
+
     nb::class_<BuildingConfig>(m_arch, "BuildingConfig")
         .def(nb::init<>())
         .def_rw("width", &BuildingConfig::width)
@@ -712,7 +732,11 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("bulge", &BuildingConfig::bulge)
         .def_rw("bay_count", &BuildingConfig::bayCount)
         .def_rw("bake_curvature_ao", &BuildingConfig::bakeCurvatureAO)
-        .def_rw("details", &BuildingConfig::details);
+        .def_rw("details", &BuildingConfig::details)
+        .def_rw("floor_heights", &BuildingConfig::floorHeights)
+        .def_rw("centre_bay_scale", &BuildingConfig::centreBayScale)
+        .def_rw("end_bay_scale", &BuildingConfig::endBayScale)
+        .def_rw("rules", &BuildingConfig::rules);
 
     m_arch.def("generate_building", [](const BuildingConfig& config, const std::string& name) {
         return ProceduralBuildingGenerator::generateBuilding(config, name);

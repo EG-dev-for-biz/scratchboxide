@@ -141,6 +141,31 @@ struct FacadeDetails {
     float chimneyPotHeightM{0.45f};
 };
 
+// A facade override rule. Selectors pick floors, sides and bays (all must match; defaults match
+// everything); overrides change what those openings get (negative / empty = keep). Rules apply in
+// order, so later rules win. Indices, not style names: floor 0 is the ground floor, sides are
+// 0 south (+Z, entrance), 1 north, 2 east, 3 west.
+struct FacadeRule {
+    int floorMin{0};
+    int floorMax{1 << 20};
+    std::vector<int> sides;             // empty = all sides
+    int bayStride{1};                   // bays where (bay - bayOffset) % bayStride == 0
+    int bayOffset{0};
+    int centreSpan{-1};                 // >= 0: only bays within this many bays of the middle
+    int endSpan{-1};                    // >= 0: only bays within this many bays of either end
+
+    float windowWidthM{-1.0f};
+    float windowHeightM{-1.0f};
+    float sillHeightM{-1.0f};
+    int opening{-1};                    // 0 = blank wall, 1 = opening
+    int sill{-1};                       // 0 = no sill, 1 = sill
+    int hood{-1};                       // 0 = no hood, 1 = hood
+    std::vector<Vec2> sillProfile;      // replaces the details' sill profile here
+    std::vector<Vec2> hoodProfile;      // replaces the details' hood profile here
+    float hoodPitchDeg{-1.0f};
+    int balcony{-1};                    // 0 = none, 1 = one per opening, 2 = continuous along adjacent bays
+};
+
 struct BuildingConfig {
     float width{16.0f};                 // Building width along X-axis (meters)
     float depth{12.0f};                 // Building depth along Z-axis (meters)
@@ -179,6 +204,11 @@ struct BuildingConfig {
     bool bakeCurvatureAO{true};         // Automatic Laplace-Beltrami vertex baking
 
     FacadeDetails details;
+
+    std::vector<float> floorHeights;    // per storey from the ground floor; entries > 0 override the heights above
+    float centreBayScale{1.0f};         // width of the middle bay(s) relative to the others
+    float endBayScale{1.0f};            // width of the outermost bays relative to the others
+    std::vector<FacadeRule> rules;      // per-floor / per-bay overrides, applied in order
 
     BuildingMaterials materials{BuildingMaterials::createArchitecturalPalette()};
 };
@@ -543,11 +573,93 @@ public:
         return mesh;
     }
 
+    /** Storey height of `floor` (0 = ground), from floorHeights where given. */
+    static float floorHeightOf(const BuildingConfig& cfg, int floor) {
+        if (floor >= 0 && floor < static_cast<int>(cfg.floorHeights.size()) && cfg.floorHeights[floor] > 0.0f) return cfg.floorHeights[floor];
+        return floor == 0 ? cfg.groundFloorHeight : cfg.floorHeight;
+    }
+
+    /** Height of the floor line under `floor` (floorCount gives the eave line). */
+    static float floorBaseY(const BuildingConfig& cfg, int floor) {
+        float y = cfg.plinthHeight;
+        for (int f = 0; f < std::min(floor, cfg.floorCount); ++f) y += floorHeightOf(cfg, f);
+        return y;
+    }
+
+    /** Bay boundaries (metres from the side's start) for a side of `length`, weighted by the bay scales. */
+    static std::vector<float> bayEdges(const BuildingConfig& cfg, float length) {
+        int count = std::max(1, static_cast<int>(length / cfg.bayWidth));
+        std::vector<float> weights(count, 1.0f);
+        float mid = (count - 1) * 0.5f;
+        for (int b = 0; b < count; ++b) {
+            if (count >= 3 && std::abs(b - mid) <= 0.5f) weights[b] = std::max(0.2f, cfg.centreBayScale);
+            if (count >= 3 && (b == 0 || b == count - 1)) weights[b] = std::max(0.2f, cfg.endBayScale);
+        }
+        float total = 0.0f;
+        for (float w : weights) total += w;
+        std::vector<float> edges(count + 1, 0.0f);
+        for (int b = 0; b < count; ++b) edges[b + 1] = edges[b] + length * weights[b] / total;
+        return edges;
+    }
+
+    struct OpeningSpec {
+        bool open{true};
+        bool entrance{false};
+        float width{0}, height{0}, sill{0};
+        bool hasSill{true}, hasHood{true};
+        const std::vector<Vec2>* sillProfile{nullptr};
+        const std::vector<Vec2>* hoodProfile{nullptr};
+        float hoodPitchDeg{0};
+        int balcony{0};                 // 0 none, 1 per opening, 2 continuous
+    };
+
+    /** What the opening in bay `bay` of floor `floor` on side `side` is, after every matching rule. */
+    static OpeningSpec resolveOpening(const BuildingConfig& cfg, int side, int floor, int bay, int bayCount, float bayW) {
+        const FacadeDetails& d = cfg.details;
+        OpeningSpec o;
+        o.entrance = floor == 0 && side == 0 && bay == bayCount / 2;
+        o.width = o.entrance ? cfg.doorWidth : cfg.windowWidth;
+        o.height = o.entrance ? cfg.doorHeight : cfg.windowHeight;
+        o.sill = o.entrance ? 0.0f : cfg.sillHeight;
+        o.sillProfile = &d.sillProfile;
+        o.hoodProfile = &d.hoodProfile;
+        o.hoodPitchDeg = d.hoodPitchDeg;
+        bool balconyFloor = std::find(d.balconyFloors.begin(), d.balconyFloors.end(), floor) != d.balconyFloors.end();
+        o.balcony = balconyFloor && floor > 0 && bay % std::max(1, d.balconyBayStride) == 0 ? 1 : 0;
+
+        float mid = (bayCount - 1) * 0.5f;
+        for (const FacadeRule& r : cfg.rules) {
+            if (floor < r.floorMin || floor > r.floorMax) continue;
+            if (!r.sides.empty() && std::find(r.sides.begin(), r.sides.end(), side) == r.sides.end()) continue;
+            int stride = std::max(1, r.bayStride);
+            if (((bay - r.bayOffset) % stride + stride) % stride != 0) continue;
+            if (r.centreSpan >= 0 && std::abs(bay - mid) > r.centreSpan + 0.5f) continue;
+            if (r.endSpan >= 0 && std::min(bay, bayCount - 1 - bay) > r.endSpan) continue;
+            if (o.entrance) continue;   // the entrance keeps its door
+            if (r.windowWidthM > 0) o.width = r.windowWidthM;
+            if (r.windowHeightM > 0) o.height = r.windowHeightM;
+            if (r.sillHeightM >= 0) o.sill = r.sillHeightM;
+            if (r.opening >= 0) o.open = r.opening != 0;
+            if (r.sill >= 0) o.hasSill = r.sill != 0;
+            if (r.hood >= 0) o.hasHood = r.hood != 0;
+            if (r.sillProfile.size() >= 3) o.sillProfile = &r.sillProfile;
+            if (r.hoodProfile.size() >= 3) o.hoodProfile = &r.hoodProfile;
+            if (r.hoodPitchDeg >= 0) o.hoodPitchDeg = r.hoodPitchDeg;
+            if (r.balcony >= 0) o.balcony = r.balcony;
+        }
+        float floorH = floorHeightOf(cfg, floor);
+        o.width = std::min(o.width, bayW * 0.85f);
+        o.height = std::max(0.3f, std::min(o.height, floorH - o.sill - 0.4f));
+        if (o.sill <= 0.001f) o.hasSill = false;
+        if (o.entrance || !o.open) o.balcony = 0;
+        return o;
+    }
+
     /** Top centre of each chimney stack's masonry (below its cap), shared by the geometry and soot sources. */
     static std::vector<Vec3> chimneyStackTops(const BuildingConfig& cfg) {
         const FacadeDetails& d = cfg.details;
         std::vector<Vec3> tops;
-        float totalH = cfg.plinthHeight + cfg.groundFloorHeight + cfg.floorHeight * static_cast<float>(std::max(0, cfg.floorCount - 1));
+        float totalH = floorBaseY(cfg, cfg.floorCount);
         float roofTop = totalH + std::max(cfg.roofHeight, 0.5f);
         for (int i = 0; i < d.chimneyCount; ++i) {
             float t = d.chimneyCount == 1 ? 0.5f : static_cast<float>(i) / (d.chimneyCount - 1);
@@ -761,32 +873,26 @@ private:
             { Vec3(-hx, yBase, -hz), Vec3(0, 0,  1), Vec3(-1, 0,  0), cfg.depth, false }  // West
         };
 
-        for (const auto& side : sides) {
+        for (size_t sideIdx = 0; sideIdx < sides.size(); ++sideIdx) {
+            const auto& side = sides[sideIdx];
             float currY = yBase;
+            const std::vector<float> edges = bayEdges(cfg, side.length);
+            const int bayCount = static_cast<int>(edges.size()) - 1;
 
             for (int floor = 0; floor < cfg.floorCount; ++floor) {
-                float curFloorH = (floor == 0) ? cfg.groundFloorHeight : cfg.floorHeight;
+                float curFloorH = floorHeightOf(cfg, floor);
                 float yNext = currY + curFloorH;
 
-                // Calculate rhythmic window bays
-                int bayCount = std::max(1, static_cast<int>(side.length / cfg.bayWidth));
-                float actualBayW = side.length / static_cast<float>(bayCount);
-
                 for (int b = 0; b < bayCount; ++b) {
-                    float u0 = static_cast<float>(b) * actualBayW;
-                    float u1 = u0 + actualBayW;
+                    float u0 = edges[b];
+                    float u1 = edges[b + 1];
                     float bayCenterU = (u0 + u1) * 0.5f;
 
-                    // Check if this bay has the ground floor entrance
-                    bool isEntranceBay = (floor == 0 && side.hasEntrance && b == bayCount / 2);
-
-                    float openW = isEntranceBay ? cfg.doorWidth : cfg.windowWidth;
-                    float openH = isEntranceBay ? cfg.doorHeight : cfg.windowHeight;
-                    float openSill = isEntranceBay ? 0.0f : cfg.sillHeight;
-
-                    // Ensure opening fits inside bay
-                    openW = std::min(openW, actualBayW * 0.85f);
-                    openH = std::min(openH, curFloorH - openSill - 0.4f);
+                    const OpeningSpec spec = resolveOpening(cfg, static_cast<int>(sideIdx), floor, b, bayCount, u1 - u0);
+                    bool isEntranceBay = spec.entrance;
+                    float openW = spec.open ? spec.width : 0.0f;
+                    float openH = spec.height;
+                    float openSill = spec.sill;
 
                     float openLeft = bayCenterU - openW * 0.5f;
                     float openRight = bayCenterU + openW * 0.5f;
@@ -837,6 +943,7 @@ private:
                         addQuad(mesh, lp0, lp1, lp2, lp3, side.normal, cfg.materials.wall.baseColorFactor);
                         addQuad(mesh, rp0, rp1, rp2, rp3, side.normal, cfg.materials.wall.baseColorFactor);
                     }
+                    if (!spec.open) continue;   // blank bay: the two piers already cover it
 
                     // 3. Spandrel below opening (if sill > 0)
                     if (openSill > 0.001f) {
@@ -875,7 +982,7 @@ private:
                     }
 
                     // 5b. Projecting Architectural Window Sill with Drop-Edge Overhang
-                    if (!isEntranceBay && openSill > 0.001f && cfg.details.sillProfile.size() < 3) {
+                    if (!isEntranceBay && spec.hasSill && spec.sillProfile->size() < 3) {
                         float hornExt = 0.08f;
                         float sillProj = 0.12f;
                         float sillThick = 0.10f;
@@ -906,7 +1013,7 @@ private:
                     }
 
                     // 5c. Projecting Window Lintel / Head Cap
-                    if (!isEntranceBay && cfg.details.hoodProfile.size() < 3) {
+                    if (!isEntranceBay && spec.hasHood && spec.hoodProfile->size() < 3) {
                         float lintelExt = 0.06f;
                         float lintelProj = 0.08f;
                         float lintelH = 0.14f;
@@ -1081,10 +1188,6 @@ private:
         };
     }
 
-    static float floorBaseY(const BuildingConfig& cfg, int floor) {
-        return cfg.plinthHeight + (floor <= 0 ? 0.0f : cfg.groundFloorHeight + cfg.floorHeight * static_cast<float>(floor - 1));
-    }
-
     static void addHorizontalLoop(ScratchboxMesh& mesh, const BuildingConfig& cfg, float y,
                                   const std::vector<Vec2>& profile, const Vec4& color) {
         float hx = cfg.width * 0.5f, hz = cfg.depth * 0.5f;
@@ -1115,32 +1218,87 @@ private:
             }
         }
 
-        // Per-opening sills, hoods and balconies, on the same bay grid as generateFacades.
-        for (const auto& side : facadeSideFrames(cfg, cfg.plinthHeight)) {
-            int bayCount = std::max(1, static_cast<int>(side.length / cfg.bayWidth));
-            float bayW = side.length / static_cast<float>(bayCount);
+        // Per-opening sills, hoods and balconies, on the same bay grid and rules as generateFacades.
+        const auto sideFrames = facadeSideFrames(cfg, cfg.plinthHeight);
+        for (size_t sideIdx = 0; sideIdx < sideFrames.size(); ++sideIdx) {
+            const auto& side = sideFrames[sideIdx];
+            const std::vector<float> edges = bayEdges(cfg, side.length);
+            const int bayCount = static_cast<int>(edges.size()) - 1;
+            auto at = [&](float u, float y) { return Vec3(side.start.x, 0, side.start.z) + side.rightDir * u + Vec3(0, y, 0); };
+
+            // A balcony from u0 to u1 along the wall at floor line y: slab, lathed balusters, swept rail.
+            auto emitBalcony = [&](float u0, float u1, float y) {
+                // Never past the building's corners (end bays can be narrower than the slab overhang).
+                const float corner = 0.12f + (d.quoinCourseM > 0.0f ? d.quoinProjectionM : 0.0f);
+                u0 = std::max(u0, corner);
+                u1 = std::min(u1, side.length - corner);
+                if (u1 - u0 < 0.3f) return;
+                Vec3 n = side.normal, r = side.rightDir;
+                Vec3 c0 = at((u0 + u1) * 0.5f, y);
+                float half = (u1 - u0) * 0.5f;
+                Vec3 a = c0 - r * half - Vec3(0, d.balconySlabM, 0), bb = c0 + r * half + n * d.balconyDepthM;
+                addBox(mesh, Vec3(std::min(a.x, bb.x), a.y, std::min(a.z, bb.z)),
+                       Vec3(std::max(a.x, bb.x), c0.y, std::max(a.z, bb.z)), trim);
+                Vec3 corners[4] = { c0 - r * (half - 0.06f), c0 - r * (half - 0.06f) + n * (d.balconyDepthM - 0.06f),
+                                    c0 + r * (half - 0.06f) + n * (d.balconyDepthM - 0.06f), c0 + r * (half - 0.06f) };
+                float railBottom = 0.05f, railTop = d.balconyRailHeightM - 0.06f;
+                for (int e = 0; e < 3; ++e) {
+                    float len = (corners[e + 1] - corners[e]).length();
+                    int count = std::max(1, static_cast<int>(std::lround(len / std::max(0.05f, d.balusterPitchM))));
+                    for (int k = 0; k <= count; ++k) {
+                        if (e > 0 && k == 0) continue;
+                        Vec3 pBase = corners[e] + (corners[e + 1] - corners[e]) * (static_cast<float>(k) / count) + Vec3(0, railBottom, 0);
+                        float R = d.balusterRadiusM, bulge = d.balusterBulge;
+                        addLathe(mesh, pBase, railTop - railBottom, [R, bulge](float t) {
+                            float sn = std::sin(PI * std::clamp((t - 0.1f) / 0.75f, 0.0f, 1.0f));
+                            return R * (0.75f + bulge * sn * sn * (1.0f - 0.35f * t));
+                        }, 5, 6, metal);
+                    }
+                }
+                std::vector<Vec3> railPath;
+                for (const Vec3& c : corners) railPath.push_back(c + Vec3(0, d.balconyRailHeightM - 0.03f, 0));
+                std::vector<Vec3> railOut, railUp;
+                for (int k = 0; k < 3; ++k) {
+                    Vec3 t = (railPath[k + 1] - railPath[k]).normalized();
+                    railOut.push_back(up.cross(t).normalized());
+                    railUp.push_back(up);
+                }
+                float rw = std::max(0.03f, d.balusterRadiusM * 1.6f);
+                sweepProfileMitred(mesh, railPath, railOut, railUp,
+                                   { Vec2(-rw, -0.03f), Vec2(rw, -0.03f), Vec2(rw, 0.04f), Vec2(-rw, 0.04f) }, false, metal);
+            };
+
             for (int floor = 0; floor < cfg.floorCount; ++floor) {
                 float baseY = floorBaseY(cfg, floor);
-                float floorH = floor == 0 ? cfg.groundFloorHeight : cfg.floorHeight;
-                for (int b = 0; b < bayCount; ++b) {
-                    bool entrance = floor == 0 && side.hasEntrance && b == bayCount / 2;
-                    if (entrance) continue;
-                    float center = (b + 0.5f) * bayW;
-                    float openW = std::min(cfg.windowWidth, bayW * 0.85f);
-                    float openH = std::min(cfg.windowHeight, floorH - cfg.sillHeight - 0.4f);
-                    float openBottom = baseY + cfg.sillHeight;
-                    float openTop = openBottom + openH;
-                    auto at = [&](float u, float y) { return Vec3(side.start.x, 0, side.start.z) + side.rightDir * u + Vec3(0, y, 0); };
+                int runStart = -1;      // first bay of the current continuous-balcony run
+                float runU0 = 0.0f, runU1 = 0.0f;
+                for (int b = 0; b <= bayCount; ++b) {
+                    OpeningSpec spec;
+                    float center = 0.0f, openW = 0.0f;
+                    if (b < bayCount) {
+                        spec = resolveOpening(cfg, static_cast<int>(sideIdx), floor, b, bayCount, edges[b + 1] - edges[b]);
+                        center = (edges[b] + edges[b + 1]) * 0.5f;
+                        openW = spec.width;
+                    }
+                    // Close a continuous run when this bay does not continue it.
+                    if (runStart >= 0 && (b == bayCount || spec.balcony != 2)) {
+                        emitBalcony(runU0, runU1, baseY);
+                        runStart = -1;
+                    }
+                    if (b == bayCount) break;
+                    if (spec.entrance || !spec.open) continue;
 
-                    if (d.sillProfile.size() >= 3) {
+                    float openBottom = baseY + spec.sill;
+                    float openTop = openBottom + spec.height;
+                    if (spec.hasSill && spec.sillProfile->size() >= 3) {
                         std::vector<Vec3> path = { at(center - openW * 0.5f - d.sillHornM, openBottom),
                                                    at(center + openW * 0.5f + d.sillHornM, openBottom) };
-                        sweepProfileMitred(mesh, path, { side.normal }, { up }, d.sillProfile, false, trim);
+                        sweepProfileMitred(mesh, path, { side.normal }, { up }, *spec.sillProfile, false, trim);
                     }
-                    if (d.hoodProfile.size() >= 3) {
+                    if (spec.hasHood && spec.hoodProfile->size() >= 3) {
                         float half = openW * 0.5f + d.hoodExtensionM;
                         std::vector<Vec3> path = { at(center - half, openTop) };
-                        if (d.hoodPitchDeg > 0.01f) path.push_back(at(center, openTop + std::tan(d.hoodPitchDeg * DEG_TO_RAD) * half));
+                        if (spec.hoodPitchDeg > 0.01f) path.push_back(at(center, openTop + std::tan(spec.hoodPitchDeg * DEG_TO_RAD) * half));
                         path.push_back(at(center + half, openTop));
                         std::vector<Vec3> outs, ups;
                         for (size_t k = 0; k + 1 < path.size(); ++k) {
@@ -1148,58 +1306,31 @@ private:
                             outs.push_back(side.normal);
                             ups.push_back((up - t * up.dot(t)).normalized());
                         }
-                        sweepProfileMitred(mesh, path, outs, ups, d.hoodProfile, false, trim);
+                        sweepProfileMitred(mesh, path, outs, ups, *spec.hoodProfile, false, trim);
                     }
 
-                    bool balconyFloor = std::find(d.balconyFloors.begin(), d.balconyFloors.end(), floor) != d.balconyFloors.end();
-                    if (balconyFloor && floor > 0 && b % std::max(1, d.balconyBayStride) == 0) {
-                        float half = openW * 0.5f + d.balconyExtraWidthM * 0.5f;
-                        Vec3 n = side.normal, r = side.rightDir;
-                        Vec3 c0 = at(center, baseY);
-                        // Slab: a box from the wall face out to the balcony depth.
-                        Vec3 a = c0 - r * half - Vec3(0, d.balconySlabM, 0), bb = c0 + r * half + n * d.balconyDepthM;
-                        addBox(mesh, Vec3(std::min(a.x, bb.x), a.y, std::min(a.z, bb.z)),
-                               Vec3(std::max(a.x, bb.x), c0.y, std::max(a.z, bb.z)), trim);
-                        // Balusters: radial solids replicated at a pitch along the three open edges.
-                        Vec3 corners[4] = { c0 - r * (half - 0.06f), c0 - r * (half - 0.06f) + n * (d.balconyDepthM - 0.06f),
-                                            c0 + r * (half - 0.06f) + n * (d.balconyDepthM - 0.06f), c0 + r * (half - 0.06f) };
-                        float railBottom = 0.05f, railTop = d.balconyRailHeightM - 0.06f;
-                        for (int e = 0; e < 3; ++e) {
-                            float len = (corners[e + 1] - corners[e]).length();
-                            int count = std::max(1, static_cast<int>(std::lround(len / std::max(0.05f, d.balusterPitchM))));
-                            for (int i = 0; i <= count; ++i) {
-                                if (e > 0 && i == 0) continue;
-                                Vec3 pBase = corners[e] + (corners[e + 1] - corners[e]) * (static_cast<float>(i) / count) + Vec3(0, railBottom, 0);
-                                float R = d.balusterRadiusM, bulge = d.balusterBulge;
-                                addLathe(mesh, pBase, railTop - railBottom, [R, bulge](float t) {
-                                    float s = std::sin(PI * std::clamp((t - 0.1f) / 0.75f, 0.0f, 1.0f));
-                                    return R * (0.75f + bulge * s * s * (1.0f - 0.35f * t));
-                                }, 5, 6, metal);
-                            }
-                        }
-                        std::vector<Vec3> railPath = { corners[0] + Vec3(0, d.balconyRailHeightM - 0.03f, 0), corners[1] + Vec3(0, d.balconyRailHeightM - 0.03f, 0),
-                                                       corners[2] + Vec3(0, d.balconyRailHeightM - 0.03f, 0), corners[3] + Vec3(0, d.balconyRailHeightM - 0.03f, 0) };
-                        std::vector<Vec3> railOut, railUp;
-                        for (int k = 0; k < 3; ++k) {
-                            Vec3 t = (railPath[k + 1] - railPath[k]).normalized();
-                            railOut.push_back(up.cross(t).normalized());
-                            railUp.push_back(up);
-                        }
-                        float rw = std::max(0.03f, d.balusterRadiusM * 1.6f);
-                        sweepProfileMitred(mesh, railPath, railOut, railUp,
-                                           { Vec2(-rw, -0.03f), Vec2(rw, -0.03f), Vec2(rw, 0.04f), Vec2(-rw, 0.04f) }, false, metal);
+                    float half = openW * 0.5f + d.balconyExtraWidthM * 0.5f;
+                    if (spec.balcony == 1) {
+                        emitBalcony(center - half, center + half, baseY);
+                    } else if (spec.balcony == 2) {
+                        if (runStart < 0) { runStart = b; runU0 = center - half; }
+                        runU1 = center + half;
                     }
                 }
             }
 
             // Pilasters at bay boundaries: shaft plus flared base and capital, each a vertical sweep.
             if (d.pilasterWidthM > 0.0f) {
-                float gap = bayW - std::min(cfg.windowWidth, bayW * 0.85f);
+                float gap = 1e9f;
+                for (int b = 0; b < bayCount; ++b) {
+                    float bw = edges[b + 1] - edges[b];
+                    gap = std::min(gap, bw - std::min(cfg.windowWidth, bw * 0.85f));
+                }
                 float w = std::min(d.pilasterWidthM, gap * 0.9f);
                 float yTop = totalH - (d.corniceProfile.size() >= 3 ? 0.05f : 0.0f);
                 for (int b = 0; b <= bayCount; b += std::max(1, d.pilasterBayStride)) {
                     if (d.quoinCourseM > 0.0f && (b == 0 || b == bayCount)) continue;
-                    Vec3 foot = Vec3(side.start.x, 0, side.start.z) + side.rightDir * (b * bayW);
+                    Vec3 foot = Vec3(side.start.x, 0, side.start.z) + side.rightDir * edges[b];
                     auto block = [&](float y0, float y1, float halfW, float proj) {
                         std::vector<Vec3> path = { foot + Vec3(0, y0, 0), foot + Vec3(0, y1, 0) };
                         sweepProfileMitred(mesh, path, { side.normal }, { side.rightDir },
@@ -1216,7 +1347,7 @@ private:
             if (d.dormerWidthM > 0.0f) {
                 for (int b = 0; b < bayCount; b += std::max(1, d.dormerBayStride)) {
                     Vec3 n = side.normal, r = side.rightDir;
-                    Vec3 face = Vec3(side.start.x, totalH, side.start.z) + r * ((b + 0.5f) * bayW) + n * (cfg.roofOverhang - d.dormerSetbackM);
+                    Vec3 face = Vec3(side.start.x, totalH, side.start.z) + r * ((edges[b] + edges[b + 1]) * 0.5f) + n * (cfg.roofOverhang - d.dormerSetbackM);
                     float hw = d.dormerWidthM * 0.5f, h = d.dormerHeightM, depth = d.dormerDepthM;
                     float ridge = std::tan(d.dormerRoofPitchDeg * DEG_TO_RAD) * hw;
                     Vec3 fl = face - r * hw, fr = face + r * hw;
@@ -1335,14 +1466,13 @@ private:
             }
 
             if (floor < cfg.floorCount) {
-                float curFloorH = (floor == 0) ? cfg.groundFloorHeight : cfg.floorHeight;
-                currY += curFloorH;
+                currY += floorHeightOf(cfg, floor);
             }
         }
     }
 
     static void generateRoof(const BuildingConfig& cfg, ScratchboxMesh& mesh) {
-        float totalH = cfg.plinthHeight + cfg.groundFloorHeight + cfg.floorHeight * static_cast<float>(cfg.floorCount - 1);
+        float totalH = floorBaseY(cfg, cfg.floorCount);
 
         switch (cfg.roofType) {
             case RoofType::FlatParapet:
