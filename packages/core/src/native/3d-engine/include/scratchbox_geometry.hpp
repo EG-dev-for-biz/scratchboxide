@@ -14,6 +14,8 @@
 #include <vector>
 #include <string>
 #include <functional>
+#include <algorithm>
+#include <thread>
 #include <cstdint>
 #include <cmath>
 #include <unordered_map>
@@ -1048,8 +1050,146 @@ public:
 };
 
 // ============================================================================
-// Marching Cubes Isosurface Geometry Extractor
+// Isosurface Extraction (Marching Tetrahedra)
 // ============================================================================
+/**
+ * Marching tetrahedra over a regular grid. Every cell is split into the same six tetrahedra around
+ * its main diagonal, so neighbouring cells triangulate their shared faces identically and a
+ * tetrahedron has no ambiguous cases: the surface comes out as a closed 2-manifold wherever it stays
+ * inside the sampled volume (closeAtBounds treats the volume's outer layer as outside, capping
+ * anything the volume cuts). Vertices lie on grid edges, shared through an edge key, and are then
+ * nudged onto the isosurface along the field gradient (at most half a cell). Faces wind so their
+ * normals point from inside (field < iso) to outside; vertex normals are the field gradient.
+ */
+class IsosurfaceExtractor {
+public:
+    using ScalarField3D = std::function<float(const Vec3&)>;
+
+    static ScratchboxMesh extract(
+        const ScalarField3D& field,
+        const AABB& bounds,
+        int nx, int ny, int nz,
+        float isoLevel = 0.0f,
+        int projectionSteps = 2,
+        bool closeAtBounds = true,
+        const Vec4& color = {0.8f, 0.8f, 0.8f, 1.0f},
+        const std::string& name = "isosurface"
+    ) {
+        ScratchboxMesh mesh(name);
+        nx = std::max(1, nx); ny = std::max(1, ny); nz = std::max(1, nz);
+        const Vec3 size = bounds.max - bounds.min;
+        const Vec3 cell(size.x / nx, size.y / ny, size.z / nz);
+        const int px = nx + 1, py = ny + 1, pz = nz + 1;
+        auto pointIndex = [&](int i, int j, int k) { return (static_cast<uint64_t>(k) * py + j) * px + i; };
+        auto gridPoint = [&](int i, int j, int k) { return bounds.min + Vec3(i * cell.x, j * cell.y, k * cell.z); };
+
+        // 1. Sample the field at every grid point, in parallel z-slices.
+        std::vector<float> value(static_cast<size_t>(px) * py * pz);
+        const float outside = std::max({cell.x, cell.y, cell.z}) * 0.5f;
+        {
+            int threads = std::max(1, std::min(pz, static_cast<int>(std::thread::hardware_concurrency())));
+            std::vector<std::thread> pool;
+            for (int t = 0; t < threads; ++t) {
+                pool.emplace_back([&, t] {
+                    for (int k = t; k < pz; k += threads) {
+                        for (int j = 0; j < py; ++j) {
+                            for (int i = 0; i < px; ++i) {
+                                float v = field(gridPoint(i, j, k)) - isoLevel;
+                                bool boundary = i == 0 || j == 0 || k == 0 || i == nx || j == ny || k == nz;
+                                if (closeAtBounds && boundary) v = std::max(v, outside);
+                                value[pointIndex(i, j, k)] = v;
+                            }
+                        }
+                    }
+                });
+            }
+            for (auto& th : pool) th.join();
+        }
+        auto inside = [](float v) { return v < 0.0f; };
+
+        auto gradient = [&](const Vec3& p) {
+            Vec3 e(cell.x * 0.25f, cell.y * 0.25f, cell.z * 0.25f);
+            return Vec3((field(p + Vec3(e.x, 0, 0)) - field(p - Vec3(e.x, 0, 0))) / (2.0f * e.x),
+                        (field(p + Vec3(0, e.y, 0)) - field(p - Vec3(0, e.y, 0))) / (2.0f * e.y),
+                        (field(p + Vec3(0, 0, e.z)) - field(p - Vec3(0, 0, e.z))) / (2.0f * e.z));
+        };
+
+        // 2. Six tetrahedra per cell (Kuhn split along the 0-7 diagonal); corner bit 1 = +x, 2 = +y, 4 = +z.
+        static const int tets[6][4] = { {0,1,3,7},{0,1,5,7},{0,2,3,7},{0,2,6,7},{0,4,5,7},{0,4,6,7} };
+        std::unordered_map<uint64_t, uint32_t> edgeVertex;
+        const float maxShift = std::min({cell.x, cell.y, cell.z}) * 0.5f;
+        auto vertexOnEdge = [&](uint64_t ia, uint64_t ib, const Vec3& pa, const Vec3& pb, float va, float vb) {
+            uint64_t lo = std::min(ia, ib), hi = std::max(ia, ib);
+            uint64_t key = lo * 8 + (hi - lo == 1 ? 0 : hi - lo == static_cast<uint64_t>(px) ? 1
+                         : hi - lo == static_cast<uint64_t>(px) * py ? 2 : hi - lo == static_cast<uint64_t>(px) + 1 ? 3
+                         : hi - lo == static_cast<uint64_t>(px) * py + 1 ? 4 : hi - lo == static_cast<uint64_t>(px) * py + px ? 5 : 6);
+            auto it = edgeVertex.find(key);
+            if (it != edgeVertex.end()) return it->second;
+            // Kept off the grid points, where several edges' crossings would otherwise coincide.
+            float t = std::clamp(va / (va - vb), 0.02f, 0.98f);
+            Vec3 p = pa + (pb - pa) * t, start = p;
+            for (int s = 0; s < projectionSteps; ++s) {
+                Vec3 g = gradient(p);
+                float g2 = g.dot(g);
+                if (g2 < 1e-12f) break;
+                Vec3 next = p - g * ((field(p) - isoLevel) / g2);
+                Vec3 shift = next - start;
+                float len = shift.length();
+                p = len > maxShift ? start + shift * (maxShift / len) : next;
+            }
+            uint32_t idx = static_cast<uint32_t>(mesh.vertices.size());
+            mesh.addVertex(Vertex(p, gradient(p).normalized(), Vec2(0, 0), color));
+            edgeVertex.emplace(key, idx);
+            return idx;
+        };
+
+        for (int k = 0; k < nz; ++k) {
+            for (int j = 0; j < ny; ++j) {
+                for (int i = 0; i < nx; ++i) {
+                    uint64_t ci[8]; Vec3 cp[8]; float cv[8];
+                    int insideCount = 0;
+                    for (int c = 0; c < 8; ++c) {
+                        int di = c & 1, dj = (c >> 1) & 1, dk = (c >> 2) & 1;
+                        ci[c] = pointIndex(i + di, j + dj, k + dk);
+                        cp[c] = gridPoint(i + di, j + dj, k + dk);
+                        cv[c] = value[ci[c]];
+                        if (inside(cv[c])) ++insideCount;
+                    }
+                    if (insideCount == 0 || insideCount == 8) continue;
+                    for (const auto& tet : tets) {
+                        int in[4], out[4], nIn = 0, nOut = 0;
+                        for (int c : tet) (inside(cv[c]) ? in[nIn++] : out[nOut++]) = c;
+                        if (nIn == 0 || nOut == 0) continue;
+                        Vec3 cIn(0, 0, 0), cOut(0, 0, 0);
+                        for (int a = 0; a < nIn; ++a) cIn += cp[in[a]];
+                        for (int a = 0; a < nOut; ++a) cOut += cp[out[a]];
+                        Vec3 outward = cOut / static_cast<float>(nOut) - cIn / static_cast<float>(nIn);
+                        auto v = [&](int a, int b) { return vertexOnEdge(ci[a], ci[b], cp[a], cp[b], cv[a], cv[b]); };
+                        auto tri = [&](uint32_t x, uint32_t y, uint32_t z) {
+                            Vec3 n = (mesh.vertices[y].position - mesh.vertices[x].position).cross(mesh.vertices[z].position - mesh.vertices[x].position);
+                            if (n.dot(outward) >= 0.0f) mesh.addTriangle(x, y, z);
+                            else mesh.addTriangle(x, z, y);
+                        };
+                        if (nIn == 1) {
+                            tri(v(in[0], out[0]), v(in[0], out[1]), v(in[0], out[2]));
+                        } else if (nOut == 1) {
+                            tri(v(out[0], in[0]), v(out[0], in[1]), v(out[0], in[2]));
+                        } else {
+                            // Two in, two out: the four crossings form a quad around the tetrahedron.
+                            uint32_t a = v(in[0], out[0]), b = v(in[0], out[1]), c = v(in[1], out[1]), d = v(in[1], out[0]);
+                            tri(a, b, c);
+                            tri(a, c, d);
+                        }
+                    }
+                }
+            }
+        }
+        mesh.recomputeBounds();
+        return mesh;
+    }
+};
+
+// Kept for existing callers: extracts the isosurface at `resolution` cells along every axis.
 class MarchingCubes {
 public:
     using ScalarField3D = std::function<float(const Vec3&)>;
@@ -1071,76 +1211,7 @@ public:
         float isoLevel = 0.0f,
         const Vec4& color = {0.7f, 0.8f, 0.9f, 1.0f}
     ) {
-        ScratchboxMesh mesh("marching_cubes_mesh");
-        Vec3 step = volumeBounds.size() / static_cast<float>(resolution);
-
-        for (int z = 0; z < resolution; ++z) {
-            for (int y = 0; y < resolution; ++y) {
-                for (int x = 0; x < resolution; ++x) {
-                    Vec3 p0(volumeBounds.min.x + x * step.x,
-                             volumeBounds.min.y + y * step.y,
-                             volumeBounds.min.z + z * step.z);
-
-                    // Sample 8 corners of the voxel
-                    Vec3 corners[8] = {
-                        p0,
-                        p0 + Vec3(step.x, 0, 0),
-                        p0 + Vec3(step.x, step.y, 0),
-                        p0 + Vec3(0, step.y, 0),
-                        p0 + Vec3(0, 0, step.z),
-                        p0 + Vec3(step.x, 0, step.z),
-                        p0 + Vec3(step.x, step.y, step.z),
-                        p0 + Vec3(0, step.y, step.z)
-                    };
-
-                    float val[8];
-                    int cubeIndex = 0;
-                    for (int i = 0; i < 8; ++i) {
-                        val[i] = field(corners[i]);
-                        if (val[i] < isoLevel) {
-                            cubeIndex |= (1 << i);
-                        }
-                    }
-
-                    // Simple tetrahedron subdivision for robust zero-dependency isosurface
-                    if (cubeIndex == 0 || cubeIndex == 255) continue;
-
-                    // Approximate surface midpoint
-                    Vec3 center(0, 0, 0);
-                    int count = 0;
-                    for (int i = 0; i < 8; ++i) {
-                        if (val[i] < isoLevel) {
-                            center += corners[i];
-                            count++;
-                        }
-                    }
-                    if (count > 0) {
-                        center /= static_cast<float>(count);
-                        uint32_t vIdx = static_cast<uint32_t>(mesh.vertices.size());
-                        
-                        // Normal via central finite differences of the scalar field
-                        float eps = step.x * 0.25f;
-                        Vec3 normal(
-                            field(center + Vec3(eps, 0, 0)) - field(center - Vec3(eps, 0, 0)),
-                            field(center + Vec3(0, eps, 0)) - field(center - Vec3(0, eps, 0)),
-                            field(center + Vec3(0, 0, eps)) - field(center - Vec3(0, 0, eps))
-                        );
-                        normal = normal.normalized();
-
-                        mesh.addVertex({center, normal, {0.5f, 0.5f}, color});
-                    }
-                }
-            }
-        }
-
-        // Generate triangular connectivity across adjacent surface vertices
-        for (size_t i = 0; i + 2 < mesh.vertices.size(); i += 3) {
-            mesh.addTriangle(static_cast<uint32_t>(i), static_cast<uint32_t>(i + 1), static_cast<uint32_t>(i + 2));
-        }
-
-        mesh.recomputeNormals();
-        mesh.recomputeBounds();
-        return mesh;
+        return IsosurfaceExtractor::extract(field, volumeBounds, resolution, resolution, resolution, isoLevel, 2, true, color, "isosurface_mesh");
     }
 };
 

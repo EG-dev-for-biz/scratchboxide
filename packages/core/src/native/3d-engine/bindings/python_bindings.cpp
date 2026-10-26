@@ -22,6 +22,7 @@
 #include "scratchbox_png.hpp"
 #include "scratchbox_core.hpp"
 #include "scratchbox_sdf.hpp"
+#include "scratchbox_sdf_field.hpp"
 #include "scratchbox_hair.hpp"
 #include "scratchbox_spz.hpp"
 #include "scratchbox_parametric_human.hpp"
@@ -1571,6 +1572,50 @@ NB_MODULE(scratchbox_native, m) {
     m_sdf.def("op_repeat", &sdf::opRepeat, "p"_a, "c"_a);
     m_sdf.def("op_twist", &sdf::opTwist, "p"_a, "k"_a);
     m_sdf.def("op_bend", &sdf::opBend, "p"_a, "k"_a);
+
+    // Field graphs: describe a shape once, evaluate it natively, mesh it at any resolution.
+    using V3 = std::array<float, 3>;
+    auto v3 = [](const V3& a) { return Vec3(a[0], a[1], a[2]); };
+    nb::class_<sdf::Field>(m_sdf, "Field",
+        "A signed distance field graph (negative inside). Combine with | (union), & (intersect) and - "
+        "(subtract), or the methods with a blend radius k; mesh with to_mesh.")
+        .def("__call__", [v3](const sdf::Field& f, const V3& p) { return f(v3(p)); }, "p"_a)
+        .def("union", &sdf::Field::unite, "other"_a, "k"_a = 0.0f)
+        .def("subtract", &sdf::Field::subtract, "other"_a, "k"_a = 0.0f)
+        .def("intersect", &sdf::Field::intersect, "other"_a, "k"_a = 0.0f)
+        .def("__or__", [](const sdf::Field& a, const sdf::Field& b) { return a.unite(b); })
+        .def("__and__", [](const sdf::Field& a, const sdf::Field& b) { return a.intersect(b); })
+        .def("__sub__", [](const sdf::Field& a, const sdf::Field& b) { return a.subtract(b); })
+        .def("translate", [v3](const sdf::Field& f, const V3& t) { return f.translate(v3(t)); }, "offset"_a)
+        .def("rotate", [v3](const sdf::Field& f, const V3& axis, float deg) { return f.rotate(v3(axis), deg); }, "axis"_a, "degrees"_a)
+        .def("scale", &sdf::Field::scale, "factor"_a)
+        .def("round", &sdf::Field::round, "radius"_a)
+        .def("shell", &sdf::Field::shell, "thickness"_a)
+        .def("displace", &sdf::Field::displace, "amplitude"_a, "frequency"_a, "seed"_a = 7u)
+        .def("twist", &sdf::Field::twist, "radians_per_unit"_a)
+        .def("bend", &sdf::Field::bend, "radians_per_unit"_a)
+        .def("repeat", [v3](const sdf::Field& f, const V3& period) { return f.repeat(v3(period)); }, "period"_a,
+             "Repeat along each axis with a positive period (0 leaves that axis alone)")
+        .def("mirror", [v3](const sdf::Field& f, const V3& n) { return f.mirror(v3(n)); }, "normal"_a,
+             "Mirror the half-space the normal points into across the plane through the origin")
+        .def("to_mesh", [v3](const sdf::Field& f, const V3& lo, const V3& hi, int resolution, int steps, const std::string& name) {
+            return f.toMesh(v3(lo), v3(hi), resolution, steps, name);
+        }, "bounds_min"_a, "bounds_max"_a, "resolution"_a = 128, "projection_steps"_a = 2, "name"_a = "SdfMesh",
+           "Closed mesh of the surface inside the bounds (cubic cells, `resolution` along the longest side)");
+
+    m_sdf.def("sphere", &sdf::Field::sphere, "radius"_a);
+    m_sdf.def("box", [v3](const V3& size) { return sdf::Field::box(v3(size)); }, "size"_a, "A box of full size (w, h, d)");
+    m_sdf.def("round_box", [v3](const V3& size, float r) { return sdf::Field::roundBox(v3(size), r); }, "size"_a, "radius"_a);
+    m_sdf.def("torus", &sdf::Field::torus, "major_radius"_a, "minor_radius"_a, "A torus around +Y");
+    m_sdf.def("cylinder", &sdf::Field::cylinder, "radius"_a, "height"_a, "A capped cylinder along +Y of full height");
+    m_sdf.def("capsule", [v3](const V3& a, const V3& b, float r) { return sdf::Field::capsule(v3(a), v3(b), r); }, "a"_a, "b"_a, "radius"_a);
+    m_sdf.def("ellipsoid", [v3](const V3& radii) { return sdf::Field::ellipsoid(v3(radii)); }, "radii"_a);
+    m_sdf.def("plane", [v3](const V3& n, float offset) { return sdf::Field::plane(v3(n), offset); }, "normal"_a, "offset"_a = 0.0f,
+              "Half-space below the plane dot(p, normal) = offset");
+    m_sdf.def("gyroid", &sdf::Field::gyroid, "scale"_a = 1.0f, "thickness"_a = 0.1f);
+    m_sdf.def("to_mesh", [v3](const sdf::Field& f, const V3& lo, const V3& hi, int resolution, int steps, const std::string& name) {
+        return f.toMesh(v3(lo), v3(hi), resolution, steps, name);
+    }, "field"_a, "bounds_min"_a, "bounds_max"_a, "resolution"_a = 128, "projection_steps"_a = 2, "name"_a = "SdfMesh");
 
     // ========================================================================
     // 10. HAIR & SPLATS SUBMODULE (Analytical Forward Grooming & Gaussians)
