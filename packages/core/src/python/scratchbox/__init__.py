@@ -6,9 +6,11 @@ Autonomous, headless, real-time procedural creation with cinematic DCC fidelity.
 
 import sys
 import os
+import json as _json
 import math as _py_math
+import re as _re
 import random as _random
-from typing import Any, Tuple, Optional, Union, List
+from typing import Any, Dict, Tuple, Optional, Union, List
 
 # Ensure native module is discoverable from both package installations and local build dirs
 try:
@@ -63,6 +65,8 @@ composer = getattr(_native, "composer", None) if _native else None
 processing = getattr(_native, "processing", None) if _native else None
 topology = getattr(_native, "topology", None) if _native else None
 sdf = getattr(_native, "sdf", None) if _native else None
+meshops = getattr(_native, "meshops", None) if _native else None
+relief = getattr(_native, "relief", None) if _native else None
 hair = getattr(_native, "hair", None) if _native else None
 rig = getattr(_native, "rig", None) if _native else None
 
@@ -1100,6 +1104,11 @@ def create_building(
     bulge: float = 0.0,
     bay_count: Optional[int] = None,
     bake_curvature_ao: bool = True,
+    details: Optional[Dict[str, Any]] = None,
+    floor_heights: Optional[List[float]] = None,
+    centre_bay_scale: float = 1.0,
+    end_bay_scale: float = 1.0,
+    facade_rules: Optional[List[Dict[str, Any]]] = None,
     name: str = "ProceduralBuilding",
     **kwargs
 ) -> "scratchbox_native.geometry.Mesh":
@@ -1107,6 +1116,18 @@ def create_building(
     Constructs multi-story procedural architecture with rhythmic fenestration,
     recessed reveals, continuous compound curvature manifolds, and modeled roofs.
     """
+    cfg = _building_config(**{k: v for k, v in locals().items() if k not in ("name", "kwargs")}, **kwargs)
+    return _native.architecture.generate_building(cfg, name)
+
+
+def _building_config(
+    width, depth, floors, floor_height, ground_floor_height, plinth_height, bay_width,
+    window_width, window_height, window_recess_depth, roof, roof_height, roof_overhang,
+    roof_pitch_degrees, parapet_height, curvature, superellipse_exponent, twist_degrees,
+    taper, bulge, bay_count, bake_curvature_ao, details=None, floor_heights=None,
+    centre_bay_scale=1.0, end_bay_scale=1.0, facade_rules=None, footprint=None, courtyards=None,
+    entrance_edge=None, entrance=True, **kwargs
+):
     if _native is None or not hasattr(_native, "architecture"):
         raise RuntimeError("Native 3D architecture module scratchbox_native.architecture is required")
 
@@ -1177,7 +1198,639 @@ def create_building(
     else:
         cfg.roof_type = RoofType.Mansard
 
-    return _native.architecture.generate_building(cfg, name)
+    if details:
+        fd = _native.architecture.FacadeDetails()
+        for key, value in details.items():
+            if not hasattr(fd, key):
+                raise ValueError(_unknown_key("facade detail", key, fd))
+            if key.endswith("_profile"):
+                value = [_native.math.Vec2(float(x), float(y)) for x, y in value]
+            setattr(fd, key, value)
+        cfg.details = fd
+    if floor_heights:
+        cfg.floor_heights = [float(h) for h in floor_heights]
+    cfg.centre_bay_scale = float(centre_bay_scale)
+    cfg.end_bay_scale = float(end_bay_scale)
+    def _loop(points, what):
+        try:
+            loop = [_native.math.Vec2(float(x), float(z)) for x, z in points]
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{what} must be a list of (x, z) points in metres") from exc
+        if len(loop) < 3:
+            raise ValueError(f"{what} needs at least 3 points, got {len(loop)}")
+        return loop
+    if footprint is not None:
+        cfg.footprint = _loop(footprint, "footprint")
+        cfg.footprint_holes = [_loop(h, f"courtyard {i}") for i, h in enumerate(courtyards or [])]
+    elif courtyards:
+        raise ValueError("courtyards need a footprint outline around them")
+    if entrance_edge is not None:
+        if footprint is None:
+            raise ValueError("entrance_edge applies to a footprint outline; the rectangle's entrance is on its south side")
+        cfg.entrance_edge = int(entrance_edge)
+    if not entrance:
+        if entrance_edge is not None:
+            raise ValueError("entrance=False leaves the building without a door; drop entrance_edge")
+        cfg.entrance_edge = -2
+    if facade_rules:
+        side_index = {"south": 0, "north": 1, "east": 2, "west": 3}
+        balcony_modes = {"none": 0, "bay": 1, "continuous": 2}
+        rules = []
+        for n, spec in enumerate(facade_rules):
+            rule = _native.architecture.FacadeRule()
+            where = f"facade rule {n}"
+            for key, value in spec.items():
+                if key == "floors":
+                    if isinstance(value, (list, tuple)):
+                        if len(value) != 2 or not all(isinstance(v, int) and not isinstance(v, bool) for v in value):
+                            raise ValueError(f"{where}: 'floors' must be an int or an (lowest, highest) pair of ints, got {value!r}")
+                        lo, hi = value
+                        if lo > hi:
+                            raise ValueError(f"{where}: 'floors' range ({lo}, {hi}) has its lowest floor above its highest")
+                    elif isinstance(value, int) and not isinstance(value, bool):
+                        lo = hi = value
+                    else:
+                        raise ValueError(f"{where}: 'floors' must be an int or an (lowest, highest) pair of ints, got {value!r}")
+                    rule.floor_min, rule.floor_max = lo, hi
+                    continue
+                if not hasattr(rule, key):
+                    raise ValueError(_unknown_key("facade rule field", key, rule))
+                if key == "sides":
+                    if isinstance(value, str) or not isinstance(value, (list, tuple)):
+                        raise ValueError(f"{where}: 'sides' must be a list of side names or indices, got {value!r}")
+                    sides = []
+                    for v in value:
+                        if footprint is not None:
+                            if not (isinstance(v, int) and not isinstance(v, bool) and v >= 0):
+                                raise ValueError(f"{where}: on a footprint outline, sides are edge indices (0 = edge0, as in facades), got {v!r}")
+                            sides.append(v)
+                            continue
+                        if isinstance(v, str):
+                            if v not in side_index:
+                                raise ValueError(f"{where}: unknown side '{v}' (south, north, east, west)")
+                            sides.append(side_index[v])
+                        elif isinstance(v, int) and 0 <= v <= 3:
+                            sides.append(v)
+                        else:
+                            raise ValueError(f"{where}: side must be a name or an index 0..3, got {v!r}")
+                    value = sides
+                elif key.endswith("_profile"):
+                    value = [_native.math.Vec2(float(x), float(y)) for x, y in value]
+                elif key in ("opening", "sill", "hood"):
+                    value = int(bool(value))
+                elif key == "balcony":
+                    if isinstance(value, str):
+                        if value not in balcony_modes:
+                            raise ValueError(f"{where}: unknown balcony mode '{value}' (none, bay, continuous)")
+                        value = balcony_modes[value]
+                try:
+                    setattr(rule, key, value)
+                except TypeError as exc:
+                    raise ValueError(f"{where}: '{key}' does not accept {value!r}") from exc
+            rules.append(rule)
+        cfg.rules = rules
+    return cfg
+
+
+def _unknown_key(what: str, key: str, params) -> str:
+    """The error for a settings key a native params object does not have, naming the closest valid ones."""
+    import difflib
+    valid = sorted(n for n in dir(params) if not n.startswith("_") and not callable(getattr(params, n)))
+    close = difflib.get_close_matches(key, valid, n=3, cutoff=0.5)
+    hint = f"; did you mean {', '.join(close)}?" if close else ""
+    return f"Unknown {what} '{key}'{hint} (valid: {', '.join(valid)})"
+
+
+def moulding_profile(height: float, projection: float, tiers: int = 3, curvature: float = 0.6,
+                     invert: bool = False, samples: int = 4) -> List[Tuple[float, float]]:
+    """
+    A closed (outward, up) moulding section in metres for FacadeDetails profiles, hanging below
+    its anchor line (y from -height to 0). Each of `tiers` steps rises and projects further; the
+    step faces bow by `curvature` (0 = square fillets, 1 = full quarter rounds). invert=True puts
+    the largest projection at the bottom (bases, plinth caps). The wall side is embedded 2 cm.
+    """
+    tiers = max(1, int(tiers))
+    pts = [(-0.02, -height), (0.0, -height)]
+    dh = height / tiers
+    for i in range(tiers):
+        x0 = projection * i / tiers
+        x1 = projection * (i + 1) / tiers
+        y0 = -height + i * dh
+        for k in range(1, samples + 1):
+            t = k / samples
+            bow = (1.0 - (1.0 - t) ** 2) * curvature + t * (1.0 - curvature)
+            pts.append((x0 + (x1 - x0) * bow, y0 + dh * 0.7 * t))
+        pts.append((x1, y0 + dh))
+    pts.append((-0.02, 0.0))
+    if invert:
+        pts = [(x, -height - y) for x, y in reversed(pts)]
+    return pts
+
+
+class _BuildingParts(list):
+    """
+    The parts list create_building_parts returns (one Mesh per material slot), carrying the
+    building's chimney tops (soot sources) and its facade frames (south = +Z entrance side,
+    north, east, west) for decals.
+    """
+    soot_sources: List[Tuple[float, float, float]] = []
+    facades: Dict[str, Dict[str, Any]] = {}
+
+
+def create_building_parts(
+    width: float = 18.0,
+    depth: float = 14.0,
+    floors: int = 4,
+    floor_height: float = 3.4,
+    ground_floor_height: float = 4.2,
+    plinth_height: float = 0.8,
+    bay_width: float = 3.2,
+    window_width: float = 1.8,
+    window_height: float = 2.0,
+    window_recess_depth: float = 0.25,
+    roof: Any = "mansard",
+    roof_height: float = 3.5,
+    roof_overhang: float = 0.4,
+    roof_pitch_degrees: float = 55.0,
+    parapet_height: float = 0.8,
+    curvature: float = 0.0,
+    superellipse_exponent: Optional[float] = None,
+    twist_degrees: float = 0.0,
+    taper: float = 1.0,
+    bulge: float = 0.0,
+    bay_count: Optional[int] = None,
+    bake_curvature_ao: bool = True,
+    details: Optional[Dict[str, Any]] = None,
+    floor_heights: Optional[List[float]] = None,
+    centre_bay_scale: float = 1.0,
+    end_bay_scale: float = 1.0,
+    facade_rules: Optional[List[Dict[str, Any]]] = None,
+    footprint: Optional[List[Tuple[float, float]]] = None,
+    courtyards: Optional[List[List[Tuple[float, float]]]] = None,
+    entrance_edge: Optional[int] = None,
+    entrance: bool = True,
+    base_y: float = 0.0,
+    offset: Tuple[float, float] = (0.0, 0.0),
+    name: str = "ProceduralBuilding",
+    **kwargs
+) -> _BuildingParts:
+    """
+    The building create_building makes, as one mesh per material slot (<name>_wall, _glass,
+    _frame, _roof, _foundation) with world-metre UVs, ready for write_textured_building.
+
+    Both builders take the same layout controls:
+      floor_heights: storey heights from the ground floor up (entries override the defaults);
+      centre_bay_scale / end_bay_scale: width of the middle and outermost bays relative to the rest;
+      facade_rules: dicts applied in order (later wins). Selectors: "floors" (n or (lo, hi), 0 =
+        ground), "sides" ("south" = +Z entrance side, "north", "east", "west" or 0..3),
+        "bay_stride"/"bay_offset", "centre_span" / "end_span" (bays within n of the middle / an
+        end). Overrides: window_width_m, window_height_m, sill_height_m, opening (False = blank
+        wall), sill, hood (False removes), sill_profile, hood_profile, hood_pitch_deg, balcony
+        ("none", "bay", "continuous" along adjacent bays). The entrance bay keeps its door.
+
+    base_y and offset (x, z) place the building: a tier of a set-back tower stands at the height of
+    the tier below (see stack_buildings), a wing beside it at an offset.
+
+    footprint [(x, z), ...] (x east, z south, metres) builds any plan outline instead of the width x
+    depth rectangle, with courtyards as holes inside it: one facade per edge (facades "edge0", ... outer
+    edges first, each with its compass "heading_deg"), quoins and corner pilasters on outside corners,
+    plain returns at inside ones, edges too short for a window left blank. Points under 5 cm apart and
+    bends under 10 degrees are merged. The entrance goes on the longest outer edge unless entrance_edge
+    picks one; facade rule "sides" are edge indices. Outlines take roof="flat" for now.
+    entrance=False gives no door at all: an upper tier of a set-back tower opens onto its terrace
+    through windows, not a front door.
+    """
+    cfg = _building_config(**{k: v for k, v in locals().items() if k not in ("name", "kwargs", "base_y", "offset")}, **kwargs)
+    parts = _BuildingParts(_native.architecture.generate_building_parts(cfg, name))
+    dx, dz = float(offset[0]), float(offset[1]); dy = float(base_y)
+    shift = lambda p: (p[0] + dx, p[1] + dy, p[2] + dz)
+    if dx or dy or dz:
+        for part in parts:
+            part.translate(_native.math.Vec3(dx, dy, dz))
+    parts.soot_sources = [shift((t.x, t.y, t.z)) for t in _native.architecture.chimney_tops(cfg)]
+    parts.facades = {f["name"]: {"start": shift((f["start"].x, f["start"].y, f["start"].z)),
+                                 "right": (f["right"].x, f["right"].y, f["right"].z),
+                                 "normal": (f["normal"].x, f["normal"].y, f["normal"].z),
+                                 "length": f["length"],
+                                 # compass bearing the facade faces (x east, z south: north is -z)
+                                 "heading_deg": round(_py_math.degrees(_py_math.atan2(f["normal"].x, -f["normal"].z)) % 360.0, 3)}
+                     for f in _native.architecture.facade_frames(cfg)}
+    return parts
+
+
+def site() -> Dict[str, Any]:
+    """
+    The measured massing of the real building passed as execute_3d_python_script's site: place, frame (x east,
+    z south, metres from the place point, y up from the building's lowest point), "tiers" (each base_m, top_m,
+    area_m2, plan "loops", provenance, source, confidence), "top_m" (the highest point the vector data reaches),
+    "wall_direction_deg" and notes. Raises when the call gave no site.
+    """
+    path = os.environ.get("SCRATCHBOX_SITE_JSON")
+    if not path or not os.path.exists(path):
+        raise RuntimeError("no site was measured for this run: pass site=<building or address> to execute_3d_python_script")
+    with open(path, "r", encoding="utf-8") as fh:
+        raw = _json.load(fh)
+    snake = lambda k: _re.sub(r"(?<!^)(?=[A-Z])", "_", k).lower().replace("_m2", "_m2")
+    def conv(o):
+        if isinstance(o, dict):
+            return {snake(k): conv(v) for k, v in o.items()}
+        if isinstance(o, list):
+            return [conv(v) for v in o]
+        return o
+    return conv(raw)
+
+
+def site_tiers(massing: Optional[Dict[str, Any]] = None, name: str = "Site", floor_height: float = 3.7,
+               ground_floor_height: float = 4.5, plinth_height: float = 0.6, min_tier_m: float = 2.4,
+               spire_area_m2: float = 200.0, **common) -> Dict[str, Any]:
+    """
+    Turns measured massing (sb.site() by default) into create_building_parts arguments, one tier per level of the
+    setback stack, sized to the measurement: each tier's outline is its measured plan, base_y its measured base, and
+    its storeys fill exactly from base to measured top. Storey heights are not measured: the ground floor takes
+    ground_floor_height and the rest floor_height (norms), all scaled together so they land on the measured top, and
+    the report says so ("generated"). A tier thinner than min_tier_m joins the tier above; one under spire_area_m2
+    (a mast or spire) is returned under "spires" for the script to build as an add-on, not as storeys. Every tier
+    above the ground one gets entrance=False. **common (bay_width, window sizes, details, facade_rules, roof...) is
+    passed to every tier.
+
+    Returns {"tiers": [kwargs...], "spires": [...], "above_top_m": metres the vector top rises above the last tier
+    (an antenna), "report": [...]}; build with
+        parts = sb.stack_buildings(*[sb.create_building_parts(**t) for t in plan["tiers"]]).
+    """
+    m = massing if massing is not None else site()
+    raw = sorted(m.get("tiers", []), key=lambda t: (t["base_m"], -t["area_m2"]))
+    if not raw:
+        raise ValueError("the site has no measured tiers: " + "; ".join(m.get("notes", [])))
+    tiers, spires, report = [], [], []
+    carry_base = None
+    for t in raw:
+        base = t["base_m"] if carry_base is None else carry_base
+        top = t["top_m"]
+        if t["area_m2"] < spire_area_m2:
+            spires.append({"base_m": base, "top_m": top, "area_m2": t["area_m2"], "loops": t["loops"],
+                           "provenance": t["provenance"]})
+            carry_base = None
+            continue
+        if top - base < min_tier_m:
+            carry_base = base      # too thin for a storey: the next tier starts here instead
+            continue
+        carry_base = None
+        loops = t["loops"]
+        ground = not tiers and base < 0.5
+        h = top - base
+        if ground:
+            usable = h - plinth_height
+            n = max(1, int(round((usable - ground_floor_height) / floor_height)) + 1)
+            nominal = [ground_floor_height] + [floor_height] * (n - 1)
+        else:
+            n = max(1, int(round(h / floor_height)))
+            nominal = [floor_height] * n
+            usable = h
+        k = usable / sum(nominal)
+        heights = [round(x * k, 4) for x in nominal]
+        kw = dict(common)
+        kw.update(footprint=[tuple(p) for p in loops[0]], courtyards=[[tuple(p) for p in l] for l in loops[1:]] or None,
+                  base_y=base, floors=n, floor_heights=heights, ground_floor_height=heights[0], floor_height=heights[-1],
+                  plinth_height=plinth_height if ground else 0.0, name=f"{name}T{len(tiers)}")
+        kw.setdefault("roof", "flat")
+        if not ground:
+            kw["entrance"] = False
+        tiers.append(kw)
+        report.append({"name": kw["name"], "base_m": round(base, 2), "top_m": round(top, 2), "floors": n,
+                       "storey_m": round(sum(heights) / n, 2), "size": f"{t['provenance']} ({t.get('source', '')})",
+                       "storeys": "generated: norms scaled to the measured height"})
+    tops = [t["top_m"] for t in raw]
+    above = (m.get("top_m") or 0.0) - max(tops)
+    return {"tiers": tiers, "spires": spires, "above_top_m": round(above, 2) if above > 0.5 else 0.0, "report": report}
+
+
+def stack_buildings(*tiers) -> _BuildingParts:
+    """
+    Combine buildings made by create_building_parts (each with its own name, placed with base_y and
+    offset) into one parts list for write_textured_building: set-back towers as tiers standing on each
+    other, wings beside a block. Surfaces and weathering apply to every tier's parts by slot; soot
+    sources are merged; facades are addressed as "<tier name>/south" etc., and the first tier's also
+    as plain "south". The tier below a set-back usually takes roof="flat" (its parapet edges the
+    terrace); only the top tier carries the pitched roof.
+    """
+    if not tiers:
+        raise ValueError("stack_buildings needs at least one building")
+    combined = _BuildingParts()
+    combined.soot_sources = []
+    combined.facades = {}
+    seen = set()
+    for i, tier in enumerate(tiers):
+        names = [p.name for p in tier]
+        clash = sorted(seen.intersection(names))
+        if clash:
+            raise ValueError(f"stack_buildings: part names {clash} repeat; give each tier its own name=")
+        seen.update(names)
+        combined.extend(tier)
+        combined.soot_sources.extend(getattr(tier, "soot_sources", []))
+        tier_name = tier[0].name.rsplit("_", 1)[0] if len(tier) else f"tier{i}"
+        for side, frame in getattr(tier, "facades", {}).items():
+            combined.facades[f"{tier_name}/{side}"] = frame
+            if i == 0:
+                combined.facades[side] = frame
+    return combined
+
+
+_PROVENANCE_LABELS = ("measured", "vector-modelled", "photo-inferred", "generated")
+
+
+def _confidence(value, where) -> float:
+    try:
+        c = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{where}: confidence must be a number in 0..1, got {value!r}") from None
+    if not 0.0 <= c <= 1.0:
+        raise ValueError(f"{where}: confidence must be in 0..1, got {c}")
+    return c
+
+
+def _with_provenance(material, provenance: str, confidence: float, source: str):
+    """The material with its provenance label, confidence and source description in its glTF extras."""
+    if provenance not in _PROVENANCE_LABELS:
+        raise ValueError(f"provenance must be one of {_PROVENANCE_LABELS}, got {provenance!r}")
+    material.extras_json = _json.dumps({"scratchbox": {"provenance": provenance, "confidence": confidence, "source": str(source)}})
+    return material
+
+
+def _decal_image(spec_image) -> Tuple[bytes, str, str]:
+    """(image bytes, mime type, source label) for a decal's "image": a file path or {"blot": {...}}."""
+    if isinstance(spec_image, dict) and "blot" in spec_image:
+        bp = _native.weathering.BlotParams()
+        for key, value in spec_image["blot"].items():
+            if not hasattr(bp, key):
+                raise ValueError(f"Unknown blot parameter '{key}'")
+            setattr(bp, key, _native.math.Vec3(*value) if key == "color" else value)
+        return _native.weathering.synthesize_blot(bp), "image/png", "procedural blot"
+    file_path = str(spec_image)
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext not in _IMAGE_MIME:
+        raise ValueError(f"Unsupported decal image type '{ext}' for {file_path}")
+    with open(file_path, "rb") as fh:
+        return fh.read(), _IMAGE_MIME[ext], "image file"
+
+
+def _decal_frame(parts, spec) -> Tuple[Tuple[float, float, float], Tuple[float, float, float], Tuple[float, float, float]]:
+    """(center, normal, up) for a decal placed by facade + u/v metres, or given directly."""
+    if "facade" in spec:
+        facades = getattr(parts, "facades", {})
+        if spec["facade"] not in facades:
+            raise ValueError(f"Unknown facade '{spec['facade']}' (have {sorted(facades)})")
+        f = facades[spec["facade"]]
+        u, v = float(spec.get("u", f["length"] * 0.5)), float(spec.get("v", 2.0))
+        c = tuple(f["start"][i] + f["right"][i] * u for i in range(3))
+        return (c[0], c[1] + v, c[2]), f["normal"], (0.0, 1.0, 0.0)
+    if "center" not in spec or "normal" not in spec:
+        raise ValueError("A decal needs 'facade' with 'u'/'v', or 'center' and 'normal'")
+    return tuple(spec["center"]), tuple(spec["normal"]), tuple(spec.get("up", (0.0, 1.0, 0.0)))
+
+
+_IMAGE_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+
+
+# An add-on denser than this is not weathered unless asked: the bake's overlay copies every receiving triangle.
+_EXTRA_WEATHER_MAX_TRIANGLES = 20000
+
+
+def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]] = None,
+                            weathering: Optional[Dict[str, Any]] = None,
+                            decals: Optional[List[Dict[str, Any]]] = None,
+                            extras: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """
+    Write building parts to a GLB with real-scale PBR textures per part.
+
+    surfaces maps a part slot ("wall", "roof", "foundation", "frame", "glass") to either
+      {"coursed": {<CoursedSurfaceParams fields>}}            procedural, synthesized natively
+      {"albedo": file, "normal": file?, "orm": file?,          image maps from a material library or
+       "tile_m": (w, h), "tint": (r, g, b)?, "source": str}   an image model, laid at tile_m metres
+    Optional per-part "roughness" / "metallic" set the material factors. Parts without an
+    entry keep their flat slot material.
+
+    weathering, when given, bakes marks from the built geometry (run-off streaks under ledges,
+    rain exposure wash, shelter and cavity grime, rising damp, soot around the chimney tops) into
+    a unique atlas on an alpha-blended overlay shell over the "receivers" parts (default wall,
+    foundation, roof). Its keys are WeatheringParams fields plus "receivers"; strengths are
+    continuous and 0 turns a layer off.
+
+    decals places images on the building. Each is a dict with
+      placement: "facade" ("south" = +Z entrance side, "north", "east", "west") with "u" metres
+                 along it from its start corner and "v" metres above the ground, or "center" and
+                 "normal" (and optional "up") in world metres;
+      "size": (width_m, height_m); "image": a PNG/JPEG path or {"blot": {<BlotParams fields>}};
+      "mode": "paint" (default: painted into the weathering atlas, follows the surface and ages
+              under decal_aging; PNG only) or "panel" (its own quad standing "standoff_m" off the
+              wall, with "thickness_m" for boards and plaques, full image resolution);
+      optional "opacity", "depth_m" (paint projection depth) and "source" (provenance label).
+
+    extras attaches closed add-ons built with sb.sdf, sb.meshops or sb.relief (ornaments, dormer and
+    chimney bodies, fluted pilasters) to the building. Each is a dict with "mesh" and "slot" (which
+    surface it takes: "wall", "foundation", "roof", "frame", "glass", or a new slot name given its own
+    surfaces entry), optional "color" (r, g, b) for an untextured slot, "provenance" (default
+    "generated"), "confidence" (default 1.0), "source" (what made it) and "weather" (receives the
+    weathering bake; default True up to 20,000 triangles, False above, since the bake's overlay copies
+    every receiving triangle; every add-on blocks it either way). Each gets world-metre UVs, so tiled
+    surfaces lie at the same scale as the building's; add-ons of one slot share one set of maps.
+    Returns {"path", "parts": {...}, "decals": [...], "extras": [...]} so the caller can label
+    provenance honestly; weathering and procedural marks are reported as generated.
+    """
+    surfaces = surfaces or {}
+    textures, report = [], {}
+    base_name = parts[0].name.rsplit("_", 1)[0] if len(parts) else "Building"
+    extra_parts, extra_report, no_weather = [], [], set()
+    for i, spec in enumerate(extras or []):
+        if "mesh" not in spec or "slot" not in spec:
+            raise ValueError(f"extra {i} needs 'mesh' and 'slot'")
+        slot = str(spec["slot"])
+        if not slot or "_" in slot:
+            raise ValueError(f"extra {i}: slot must be a word without underscores, got {slot!r}")
+        mesh = _native.architecture.project_world_uvs(spec["mesh"])
+        if not len(mesh.vertices):
+            raise ValueError(f"extra {i} ({slot}) has no triangles")
+        # One texture target ("<base>_extras-<slot>-") then matches every add-on of the slot and nothing else.
+        mesh.name = f"{base_name}_extras-{slot}-{i:03d}_{slot}"
+        if "color" in spec:
+            mat = mesh.material
+            r, g, b = (float(c) for c in spec["color"])
+            mat.base_color = _native.math.Vec4(r, g, b, 1.0)
+            mesh.material = mat
+        extra_parts.append(mesh)
+        triangles = len(mesh.indices) // 3
+        weather = bool(spec.get("weather", triangles <= _EXTRA_WEATHER_MAX_TRIANGLES))
+        if not weather:
+            no_weather.add(mesh.name)
+        extra_report.append({"name": mesh.name, "slot": slot, "triangles": triangles, "weathered": weather,
+                             "provenance": spec.get("provenance", "generated"),
+                             "confidence": _confidence(spec.get("confidence", 1.0), f"extra {i}"),
+                             "source": spec.get("source", "add-on")})
+    extra_info = {e["name"]: e for e in extra_report}
+    parts_in = parts
+    parts = list(parts) + extra_parts
+    slots = [p.name.rsplit("_", 1)[-1] for p in parts]
+    unknown = sorted(set(surfaces) - set(slots))
+    if unknown:
+        raise ValueError(f"Unknown surface slot(s) {unknown} (have {sorted(set(slots))})")
+    synthesized = {}   # one texture synthesis per slot, reused by every tier and add-on that takes it
+    shared_targets = set()
+    for part in parts:
+        slot = part.name.rsplit("_", 1)[-1]
+        spec = surfaces.get(slot)
+        extra = extra_info.get(part.name)
+        if not spec:
+            if extra:
+                part.material = _with_provenance(part.material, extra["provenance"], extra["confidence"], extra["source"])
+            else:
+                part.material = _with_provenance(part.material, "generated", 1.0, "procedural building")
+                report[slot] = {"source": "flat material", "provenance": "generated", "confidence": 1.0}
+            continue
+        mat = part.material
+        if "coursed" in spec and slot in synthesized:
+            tile, maps = synthesized[slot]
+            mat.base_color = _native.math.Vec4(1.0, 1.0, 1.0, mat.base_color.w)
+            mat.roughness = 1.0
+            mat.metallic = 1.0
+            source = "procedural coursed surface"
+        elif "coursed" in spec:
+            params = _native.surface.CoursedSurfaceParams()
+            for key, value in spec["coursed"].items():
+                if not hasattr(params, key):
+                    raise ValueError(_unknown_key("coursed surface parameter", key, params))
+                setattr(params, key, _native.math.Vec3(*value) if key.endswith("_color") else value)
+            tex = _native.surface.synthesize_coursed_surface(params)
+            tile = (tex["tile_width_m"], tex["tile_height_m"])
+            maps = {"base_color": (tex["albedo_png"], "image/png"),
+                    "normal": (tex["normal_png"], "image/png"),
+                    "orm": (tex["orm_png"], "image/png")}
+            synthesized[slot] = (tile, maps)
+            mat.base_color = _native.math.Vec4(1.0, 1.0, 1.0, mat.base_color.w)
+            mat.roughness = 1.0
+            mat.metallic = 1.0
+            source = "procedural coursed surface"
+        else:
+            if "albedo" not in spec or "tile_m" not in spec:
+                raise ValueError(f"Surface '{slot}' needs 'coursed' parameters or an 'albedo' file and 'tile_m'")
+            tile = tuple(spec["tile_m"])
+            maps = {}
+            for usage, key in (("base_color", "albedo"), ("normal", "normal"), ("orm", "orm")):
+                if spec.get(key):
+                    file_path = str(spec[key])
+                    ext = os.path.splitext(file_path)[1].lower()
+                    if ext not in _IMAGE_MIME:
+                        raise ValueError(f"Unsupported texture file type '{ext}' for {file_path}")
+                    with open(file_path, "rb") as fh:
+                        maps[usage] = (fh.read(), _IMAGE_MIME[ext])
+            tint = spec.get("tint", (1.0, 1.0, 1.0))
+            mat.base_color = _native.math.Vec4(tint[0], tint[1], tint[2], mat.base_color.w)
+            if "orm" in maps:
+                mat.roughness = 1.0
+                mat.metallic = 1.0
+            source = spec.get("source", "image maps")
+        if "roughness" in spec:
+            mat.roughness = float(spec["roughness"])
+        if "metallic" in spec:
+            mat.metallic = float(spec["metallic"])
+        # Provenance is one of the four honest labels with a confidence, written into the GLB; a free
+        # "source" string describes where the maps came from but never upgrades the label.
+        provenance = spec.get("provenance", "generated")
+        confidence = _confidence(spec.get("confidence", 1.0 if "coursed" in spec else 0.5), slot)
+        if extra:   # an add-on keeps its own label: its shape was made by the script, not measured
+            part.material = _with_provenance(mat, extra["provenance"], extra["confidence"], f"{extra['source']}; surface: {source}")
+        else:
+            part.material = _with_provenance(mat, provenance, confidence, source)
+            report[slot] = {"source": source, "tile_m": tile, "provenance": provenance, "confidence": confidence}
+        target = part.name
+        if extra:
+            target = f"{base_name}_extras-{slot}-"
+            if target in shared_targets:
+                continue
+            shared_targets.add(target)
+        for usage, (data, mime) in maps.items():
+            textures.append((target, usage, data, mime, 1.0 / tile[0], 1.0 / tile[1]))
+
+    meshes = list(parts)
+    painted, decal_report = [], []
+    for i, spec in enumerate(decals or []):
+        center, normal, up = _decal_frame(parts_in, spec)
+        width, height = (float(x) for x in spec["size"])
+        data, mime, kind = _decal_image(spec["image"])
+        mode = spec.get("mode", "paint")
+        source = spec.get("source", "generated (procedural blot)" if kind == "procedural blot" else kind)
+        if mode == "paint":
+            if mime != "image/png":
+                raise ValueError("Painted decals need a PNG image")
+            painted.append((_native.math.Vec3(*center), _native.math.Vec3(*normal), _native.math.Vec3(*up),
+                            width, height, float(spec.get("depth_m", 0.35)), float(spec.get("opacity", 1.0)), data))
+        elif mode == "panel":
+            panel = _native.weathering.make_decal_panel(
+                _native.math.Vec3(*center), _native.math.Vec3(*normal), _native.math.Vec3(*up), width, height,
+                float(spec.get("thickness_m", 0.0)), float(spec.get("standoff_m", 0.004)), f"{base_name}_decal[{i:03d}]")
+            panel.material = _with_provenance(panel.material, spec.get("provenance", "generated"),
+                                              _confidence(spec.get("confidence", 0.5), f"decal {i}"), source)
+            meshes.append(panel)
+            textures.append((panel.name, "base_color", data, mime, 1.0, 1.0))
+        else:
+            raise ValueError(f"Unknown decal mode '{mode}' (paint, panel)")
+        decal_report.append({"mode": mode, "source": source, "size_m": (width, height),
+                             "center": tuple(round(c, 3) for c in center)})
+
+    if weathering is None and painted:
+        weathering = {k: 0.0 for k in ("streak_strength", "exposure_wash", "shelter_grime", "cavity_grime",
+                                       "damp_strength", "soot_strength")}
+    if weathering is not None:
+        options = dict(weathering)
+        wanted = set(options.pop("receivers", ["wall", "foundation", "roof"]))
+        params = _native.weathering.WeatheringParams()
+        options.setdefault("soot_sources", getattr(parts_in, "soot_sources", []))
+        for key, value in options.items():
+            if not hasattr(params, key):
+                raise ValueError(_unknown_key("weathering parameter", key, params))
+            if key == "soot_sources":
+                value = [_native.math.Vec3(*pt) for pt in value]
+            elif key.endswith("_color"):
+                value = _native.math.Vec3(*value)
+            setattr(params, key, value)
+        receivers = [p for p in parts if p.name.rsplit("_", 1)[-1] in wanted and p.name not in no_weather]
+        if not receivers:
+            have = sorted({p.name.rsplit("_", 1)[-1] for p in parts})
+            raise ValueError(f"weathering receivers {sorted(wanted)} match no building part (have {have})")
+        # Unless the script chose texel_m, a building too big for the atlas at the default texel (a skyscraper)
+        # is baked at the finest texel that fits rather than refused; the report says which texel was used and why.
+        fitted = None
+        for _attempt in range(6):
+            try:
+                baked = _native.weathering.bake_weathering(receivers, list(parts), params, f"{base_name}_weathering", painted)
+                break
+            except RuntimeError as exc:
+                m = _re.search(r"atlas would be (\d+) x (\d+)", str(exc))
+                if "texel_m" in options or not m:
+                    raise
+                over = int(m.group(2)) / float(m.group(1))
+                fitted = params.texel_m * max(1.1, _py_math.sqrt(over) * 1.05)
+                params.texel_m = fitted
+        else:
+            raise RuntimeError("weathering atlas does not fit even at a texel of %.2f m; pass texel_m or fewer receivers" % params.texel_m)
+        overlay = baked["overlay"]
+        if len(overlay.vertices):
+            overlay.material = _with_provenance(overlay.material, "generated", 1.0, "geometry-driven weathering bake")
+            meshes.append(overlay)
+            textures.append((overlay.name, "base_color", baked["atlas_png"], "image/png", 1.0, 1.0))
+        report["weathering"] = {"source": "generated (geometry-driven bake)", "receivers": sorted(wanted),
+                                "atlas_px": (baked["atlas_width"], baked["atlas_height"]),
+                                "charts": baked["charts"], "baked_texels": baked["baked_texels"],
+                                "texel_m": round(params.texel_m, 4),
+                                "clear_triangles": baked.get("clear_triangles", 0)}
+        if fitted is not None:
+            report["weathering"]["texel_note"] = ("coarsened from the default so the atlas fits this building's area; "
+                                                  "pass texel_m to choose it")
+
+    # Parts are generated as triangle soup (each face its own corners, for per-face UVs); merging the corners
+    # that are identical in every attribute is lossless and keeps a skyscraper loadable in the viewport.
+    for m in meshes:
+        m.weld_identical_vertices()
+    _native.io.write_glb_textured(path, meshes, textures)
+    return {"path": path, "parts": report, "decals": decal_report, "extras": extra_report}
 
 def create_curved_building(
     width: float = 18.0,
@@ -1343,6 +1996,11 @@ if _native is not None and hasattr(_native, "io"):
             return _orig_write_glb(out_path, target_mesh)
         raise RuntimeError("Native io.write_glb not available")
 
+    def _has_triangles(target):
+        sub_parts = getattr(target, "_sub_parts", None)
+        parts = target if isinstance(target, (list, tuple)) else (sub_parts if sub_parts and len(sub_parts) > 1 else [target])
+        return any(len(getattr(getattr(m, "mesh", m), "indices", ())) > 0 for m in parts if m is not None)
+
     def write_glb(arg1, arg2=None):
         if arg2 is not None:
             out_path = str(arg1)
@@ -1366,7 +2024,8 @@ if _native is not None and hasattr(_native, "io"):
             return _write_glb_geometry(out_path, target)
         os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
         base = b""
-        if geometry:
+        # the native writer refuses an all-empty GLB; a container that only holds trees has no base geometry to write
+        if geometry and _has_triangles(geometry):
             _write_glb_geometry(out_path, geometry)
             with open(out_path, "rb") as f:
                 base = f.read()

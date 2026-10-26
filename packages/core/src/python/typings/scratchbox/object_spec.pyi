@@ -31,9 +31,14 @@ or substituted. Labels and material descriptions are never read.
 import scratchbox.world
 import typing
 
-__all__ = ['CREASE_DEGREES', 'MAX_TRIANGLES', 'PART_VERTEX_CAP', 'SpecError', 'TARGET_VERTICES', 'build', 'build_meshes', 'crown_trees', 'math', 'part_material', 'validate']
+__all__ = ['AO_INTENSITY', 'AO_REACH_SHARE', 'AO_SAMPLES', 'CREASE_DEGREES', 'EDGE_ROUND_FRACTION', 'EDGE_ROUND_MAX_SHARE', 'MAX_TRIANGLES', 'PART_VERTEX_CAP', 'SpecError', 'TARGET_VERTICES', 'build', 'build_meshes', 'crown_trees', 'math', 'part_material', 'validate']
 
+AO_INTENSITY: float
+AO_REACH_SHARE: float
+AO_SAMPLES: int
 CREASE_DEGREES: float
+EDGE_ROUND_FRACTION: float
+EDGE_ROUND_MAX_SHARE: float
 MAX_TRIANGLES: int
 PART_VERTEX_CAP: int
 

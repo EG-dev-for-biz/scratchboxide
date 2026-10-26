@@ -19,6 +19,8 @@ import { callVisionModel, describeVisualProblems, reviewModelVisually, type Visu
 import { formatSbApiErrors, sbTypeCheckMetadata, typeCheckSbScript } from '../../3d-engine/sb-script-typecheck';
 import { SB_API_CORE_SUMMARY, SB_API_VERSION } from '../../3d-engine/sb-api.generated';
 import { firstPassRenderMode } from '../scene3d-first-pass-baseline';
+import { measureSiteMassing, type SiteMassing } from '../../3d-engine/site-massing';
+import * as os from 'os';
 
 export interface GlbAabbBounds {
     min: [number, number, number];
@@ -186,10 +188,19 @@ Usage notes:
 - Scene and export: scene = sb.Scene(); scene.add_mesh(mesh); finish with sb.io.write_glb(OUTPUT_GLB_PATH, scene). A single Mesh can be written directly too.
 - Trees, shrubs and any plant with a crown: sb.create_tree(position=(x, y, z), height=, crown_radius= (or (along x, along z)), crown_base_height=, crown_widest_at= (0 cone .. 0.5 round .. 0.8 umbrella), crown_top_exponent= (1 cone, 2 dome, 4 flat), trunk_radius=, leaf_color='#rrggbb', label=) returns an SB-Veggie tree described by those measurements; add it with scene.merge(tree) or world.add(tree) (world.scatter(tree, ...) plants copies) and it is grown natively when the scene is written (space colonisation, SB-Veggie leaf clusters, species and leaf textures, levels of detail). It is not a mesh: move it with translate / rotate_y / scale only. This is the only way to make vegetation: never build trees or foliage from cones, spheres, boxes, sweeps or lathes.`;
 
+/**
+ * The largest model execute_3d_python_script mounts in the viewport. Beyond it the browser tab runs out of memory
+ * and crashes; set SCRATCHBOX_MAX_SCENE_VERTICES / SCRATCHBOX_MAX_SCENE_MB to move it on a bigger machine.
+ */
+export function viewportSceneLimits(env: NodeJS.ProcessEnv = process.env): { vertices: number; bytes: number } {
+    const num = (v: string | undefined, fallback: number) => (v && Number(v) > 0 ? Number(v) : fallback);
+    return { vertices: num(env.SCRATCHBOX_MAX_SCENE_VERTICES, 1_000_000), bytes: num(env.SCRATCHBOX_MAX_SCENE_MB, 96) * 1e6 };
+}
+
 export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'execute_3d_python_script',
-        description: 'Runs a procedural Python 3 script with the Scratchbox 3D Engine (import scratchbox as sb) and opens the GLB it writes as a new 3D scene in a studio void, shown with the materials the script assigns (textured by default; studio clay only when the user asks for clay). Choose the tool by what the user asked for: a real-world place goes to google_3d_tiles_get_clay; one specific object, or an abstract form, goes to build_3d_object_from_reference (with its location when it stands at a real place); an imagined environment or landscape, a scene made of several objects, or an explicit request for a script comes here. Every call starts a new scene: nothing is carried over from the scene already on the canvas. This tool does not stage anything on a real place: a call with a location or coordinates fails without running the script. If the script writes no GLB, or one with no geometry, the call fails.\n\n' + PYTHON_3D_API_REFERENCE,
+        description: 'Runs a procedural Python 3 script with the Scratchbox 3D Engine (import scratchbox as sb) and opens the GLB it writes as a new 3D scene in a studio void, shown with the materials the script assigns (textured by default; studio clay only when the user asks for clay). Choose the tool by what the user asked for: a real-world place goes to google_3d_tiles_get_clay; one specific object, or an abstract form, goes to build_3d_object_from_reference (with its location when it stands at a real place); an imagined environment or landscape, a scene made of several objects, or an explicit request for a script comes here. Every call starts a new scene: nothing is carried over from the scene already on the canvas. This tool does not stage anything on a real place: a call with a location or coordinates fails without running the script. To size a building on a real one, pass site (the place): its measured massing reaches the script as sb.site(), and sb.site_tiers() turns it into create_building_parts tiers; the model still opens in the studio. If the script writes no GLB, or one with no geometry, the call fails.\n\n' + PYTHON_3D_API_REFERENCE,
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -204,6 +215,10 @@ export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 timeoutMs: {
                     type: 'NUMBER',
                     description: 'Execution timeout in milliseconds (default 45000).'
+                },
+                site: {
+                    type: 'STRING',
+                    description: 'Optional: a real building (name, address or "lat, lng") whose measured massing the script should be sized from. Its footprint, setback tiers and heights (Google vector data; a modeled volume is sliced at its flat levels) are measured before the script runs and read in it with sb.site(); sb.site_tiers() turns them into create_building_parts arguments. Sizing only: the scene still opens in the studio, not at the place.'
                 },
                 renderMode: {
                     type: 'STRING',
@@ -292,12 +307,27 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
             console.warn(`[execute_3d_python_script] scratchbox type check ${typeCheck.status} after ${typeCheck.durationMs}ms; running unchecked: ${typeCheck.note}`);
         }
 
+        // 2b. A site to size the building on: measured before the script runs, handed over as a JSON file. A site that
+        // cannot be measured fails the call with the reason (no invented massing).
+        let site: SiteMassing | undefined;
+        const siteEnv: Record<string, string> = {};
+        if (typeof args.site === 'string' && args.site.trim()) {
+            try {
+                site = await measureSiteMassing(args.site.trim(), { workspaceRoot: _ctx?.workspaceRoot ?? process.cwd(), ...(_ctx?.signal ? { signal: _ctx.signal } : {}) });
+            } catch (err) {
+                return failedOutcome(err, `Could not measure the site "${args.site.trim()}"; the script did not run`);
+            }
+            const siteFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-site-json-')), 'site.json');
+            fs.writeFileSync(siteFile, JSON.stringify(site));
+            siteEnv.SCRATCHBOX_SITE_JSON = siteFile;
+        }
+
         // 3. Execute Python script
         const runner = NativePythonRunnerService.getInstance();
         const effectiveScript = script;
         const result = await runner.runScript(effectiveScript, {
             timeoutMs,
-            env: { ...process.env }
+            env: { ...process.env, ...siteEnv }
         });
 
         // Per User Directive: No silent fallbacks or synthetic substitutes.
@@ -353,6 +383,33 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                     executionTimeMs: result.executionTimeMs
                 },
                 summaryResult: `Python 3D execution produced no model: ${what}. Nothing was added to the canvas.`
+            };
+        }
+
+        // A model past what the viewport can hold crashes the browser tab when mounted (a 107 MB, 1.2 M-vertex
+        // Empire State Building did), losing the chat turn with it; refuse it with the numbers and how to cut them.
+        const limits = viewportSceneLimits();
+        if (writtenGeometry.totalVertices > limits.vertices || glbBuf.length > limits.bytes) {
+            const mb = (glbBuf.length / 1e6).toFixed(0);
+            const heaviest = [...writtenGeometry.submeshes].sort((a, b) => b.vertexCount - a.vertexCount).slice(0, 4)
+                .map(m => `${m.name} ${m.vertexCount.toLocaleString('en-US')}`).join(', ');
+            const what = `the model is ${writtenGeometry.totalVertices.toLocaleString('en-US')} vertices and ${mb} MB, past what the viewport `
+                + `can load (${limits.vertices.toLocaleString('en-US')} vertices, ${(limits.bytes / 1e6).toFixed(0)} MB); heaviest meshes: ${heaviest}`;
+            return {
+                status: 'failed',
+                resultPayload: {
+                    success: false,
+                    error: what,
+                    glbGenerated: true,
+                    totalVertices: writtenGeometry.totalVertices,
+                    glbBytes: glbBuf.length,
+                    stdout: result.stdout,
+                    stderr: result.stderr,
+                    executionTimeMs: result.executionTimeMs
+                },
+                summaryResult: `Python 3D model not mounted: ${what}. Nothing was added to the canvas. Make it lighter and run again: `
+                    + `trim on tall tiers is the usual bulk (pilaster_bay_stride 2-3, sills and hoods off above the first few floors, `
+                    + `string courses only where they read), weather fewer receivers (weathering receivers=["wall"]), and lower SDF or lathe resolution.`
             };
         }
 
@@ -452,6 +509,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 success: true,
                 glbPath: result.glbPath,
                 glbGenerated: true,
+                ...(site ? { site: { resolvedAs: site.place.resolvedAs, topM: site.topM, tiers: site.tiers.map(t => ({ baseM: +t.baseM.toFixed(1), topM: +t.topM.toFixed(1), areaM2: Math.round(t.areaM2), provenance: t.provenance })), notes: site.notes } } : {}),
                 vertexCount: writtenGeometry.totalVertices,
                 triangleCount: writtenGeometry.totalTriangles,
                 // the scene's trees: SB-Veggie, grown natively from sb.create_tree descriptions (absent: none)

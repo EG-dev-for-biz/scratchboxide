@@ -282,9 +282,12 @@ export class StreamingEngine {
         return { apiBase: `https://${vertexHost(location)}/v1/projects/${auth.projectId}/locations/${location}`, projectId: auth.projectId, location, token: auth.token };
     }
 
-    /** Vertex `tools` payload for a request (built-in suites, attached MCP tools, search, code execution). */
+    /**
+     * Vertex `tools` payload for a request (built-in suites, search, code execution). Attached MCP tools are not
+     * offered as functions: no MCP server is connected to this chat, so a call could only fail (executeToolCall).
+     */
     buildToolDeclarations(request: GeminiGenerateRequest): GeminiToolConfig[] | undefined {
-        return buildToolDeclarations(request, this.registry, this.mcp.buildFunctionDeclarations(request.attachedMcpTools));
+        return buildToolDeclarations(request, this.registry);
     }
 
     /**
@@ -1194,7 +1197,10 @@ export class StreamingEngine {
             return failedToolResult(toolName, blocked, 'scratchbox-permissions');
         }
         const ctx: ToolContext = { ...this.toolContext(request), ...extras };
-        if (this.registry.has(toolName) || inferToolGroup(toolName) !== 'mcp') {
+        // A tool attached from an MCP server is never connected here, whatever its name looks like (a `generate_` or
+        // `build_` prefix would otherwise read as an unknown workspace tool); a registered tool of that name still runs.
+        const attachedMcp = (request.attachedMcpTools || []).some(t => t.name === toolName || t.name.replace(/[^a-zA-Z0-9_-]/g, '_') === toolName);
+        if (this.registry.has(toolName) || (!attachedMcp && inferToolGroup(toolName) !== 'mcp')) {
             return this.registry.dispatch(toolName, toolCall.args, ctx);
         }
         return failedToolResult(
