@@ -29,9 +29,12 @@ export interface FalMeshyMultiInput {
     imageUrls?: string[];
     imagePaths?: string[];
     imageBuffers?: Array<{ name: string; buffer: Buffer; contentType?: string }>;
-    enableRemesher?: boolean;
-    remeshingThreshold?: number;
-    textureResolution?: 1024 | 2048;
+    /** Default true. */
+    shouldRemesh?: boolean;
+    /** Default 'standard'; '2k' for the higher-detail mesh (no 4k on this multi-view endpoint). */
+    geometryResolution?: 'standard' | '2k';
+    /** Default true: Meshy textures the model. */
+    shouldTexture?: boolean;
     outputFormat?: string;
     destinationGlbPath?: string;
     /** Stops the run between uploads and aborts the request in flight: a stopped request starts no further Fal work. */
@@ -61,8 +64,8 @@ const FAL_MESHY = 'fal-meshy';
 
 /**
  * First-class Fal.ai Meshy Service for Scratchbox IDE.
- * Dispatches multi-view reference images directly to Meshy (v7.1 Ultra 2K)
- * running on Fal.ai GPU infrastructure (fal-ai/meshy/multi).
+ * Dispatches multi-view reference images directly to Meshy 7.1 multi-image-to-3D on Fal.ai GPU infrastructure
+ * (meshy/v7.1/multi-image-to-3d, Meshy's own partner namespace, not fal-ai/...).
  * Without a FAL_KEY it throws MissingInputError; a failed inference throws GeneratorFailedError. It never
  * returns a stand-in mesh.
  */
@@ -72,7 +75,7 @@ export class FalMeshyService {
 
     constructor(config: FalMeshyConfig = {}) {
         this.falKey = config.falKey || this.resolveFalKey();
-        this.multiImageModel = config.multiImageModel || 'fal-ai/meshy/multi';
+        this.multiImageModel = config.multiImageModel || 'meshy/v7.1/multi-image-to-3d';
     }
 
     private resolveFalKey(): string {
@@ -192,9 +195,9 @@ export class FalMeshyService {
 
         const payload = JSON.stringify({
             image_urls: urls,
-            enable_remesher: input.enableRemesher ?? true,
-            remeshing_threshold: input.remeshingThreshold ?? 0.1,
-            texture_resolution: input.textureResolution ?? 2048
+            should_remesh: input.shouldRemesh ?? true,
+            geometry_resolution: input.geometryResolution ?? 'standard',
+            should_texture: input.shouldTexture ?? true
         });
 
         throwIfStopped(input.signal);
@@ -227,7 +230,7 @@ export class FalMeshyService {
                 req.end();
             });
 
-            const glbRemoteUrl = responseData.model_url || responseData.mesh_url || responseData.model_mesh?.url;
+            const glbRemoteUrl = responseData.model_glb?.url || responseData.model_urls?.glb?.url;
             if (!glbRemoteUrl) {
                 throw new Error(`Fal Meshy returned no GLB model URL: ${JSON.stringify(responseData).slice(0, 500)}`);
             }

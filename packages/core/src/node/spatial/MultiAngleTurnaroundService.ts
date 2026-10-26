@@ -450,9 +450,9 @@ export class MultiAngleTurnaroundService {
             const falResult = await meshy.generate3DFromImages({
                 imagePaths: capturedViews.map(v => v.imagePath),
                 destinationGlbPath: glbPath,
-                enableRemesher: true,
-                remeshingThreshold: 0.1,
-                textureResolution: 2048,
+                shouldRemesh: true,
+                geometryResolution: '2k',
+                shouldTexture: true,
                 signal: options.signal
             });
             if (!falResult.localGlbPath || !fs.existsSync(falResult.localGlbPath)) {

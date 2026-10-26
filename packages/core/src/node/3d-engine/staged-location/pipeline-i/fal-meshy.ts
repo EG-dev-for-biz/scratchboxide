@@ -8,18 +8,17 @@
  ********************************************************************************/
 
 /**
- * Pipeline I alternative: Meshy 7.1 multi on Fal.ai (fal-ai/meshy/multi), given 1-4 views of one
- * structure in one request (Ultra 2K mode): remesher enabled, 2048 texture resolution, one seed per call
- * (pipeline I can run several and keep the best). About $0.02 a call. Without a FAL_KEY it throws
- * MissingInputError; a failed or timed-out job throws GeneratorFailedError. It never returns a
- * stand-in model.
+ * Pipeline I/J's Meshy alternative: Meshy 7.1 multi-image-to-3D on Fal.ai (meshy/v7.1/multi-image-to-3d, Meshy's own
+ * partner namespace, not fal-ai/...), given 1-4 views of one structure in one request: remeshed, 2k geometry, textured.
+ * This endpoint takes no seed (its own `seed` is output-only, not settable), unlike Trellis. Without a FAL_KEY it
+ * throws MissingInputError; a failed or timed-out job throws GeneratorFailedError. It never returns a stand-in model.
  */
 
 import { MissingInputError } from '../../../../common/errors/pipeline-errors';
 import { createFalQueue, type FetchFn } from './fal-queue';
 export { resolveFalKey } from './fal-queue';
 
-export const MESHY_MODEL = 'fal-ai/meshy/multi';
+export const MESHY_MODEL = 'meshy/v7.1/multi-image-to-3d';
 
 export interface ModelResult {
     glb: Buffer;
@@ -44,8 +43,8 @@ async function uploadAll(q: ReturnType<typeof createFalQueue>, images: Buffer[],
     return urls;
 }
 
-/** Meshy 7.1 Ultra 2K multi-view: remesher enabled, 2048 texture; the seed is the caller's. */
-export const MESHY_SETTINGS = { enable_remesher: true, remeshing_threshold: 0.1, texture_resolution: 2048 } as const;
+/** Meshy 7.1 multi-image-to-3d: remeshed, 2k geometry, textured (its real input fields; no texture-resolution knob). */
+export const MESHY_SETTINGS = { should_remesh: true, geometry_resolution: '2k', should_texture: true } as const;
 
 export function createFalMeshyClient(opts: ClientOpts = {}): ModelClient {
     const q = createFalQueue('pipeline-i-meshy', opts);
@@ -55,8 +54,9 @@ export function createFalMeshyClient(opts: ClientOpts = {}): ModelClient {
         async generate(images, { signal, timeoutMs, seed, onProgress }) {
             // the seeds of one build share the same views: upload them once
             if (!uploaded || uploaded.images.length !== images.length || uploaded.images.some((b, i) => b !== images[i])) uploaded = { images, urls: uploadAll(q, images, 'pipeline-i-meshy', signal) };
-            const body = { image_urls: await uploaded.urls, ...MESHY_SETTINGS, ...(seed !== undefined ? { seed } : {}) };
-            const r = await q.run(MESHY_MODEL, body, res => res?.model_url || res?.mesh_url || res?.model_mesh?.url, { signal, timeoutMs, onProgress });
+            // this endpoint has no seed input (its own `seed` is output-only): the caller's seed is kept only for bookkeeping
+            const body = { image_urls: await uploaded.urls, ...MESHY_SETTINGS };
+            const r = await q.run(MESHY_MODEL, body, res => res?.model_glb?.url || res?.model_urls?.glb?.url, { signal, timeoutMs, onProgress });
             return { ...r, model: MESHY_MODEL, ...(seed !== undefined ? { seed } : {}) };
         }
     };
