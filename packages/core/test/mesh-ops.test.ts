@@ -58,6 +58,40 @@ function badEdgeCount(p: Primitive): number {
     return [...edges.values()].filter(c => c !== 2).length;
 }
 
+/** Directed edges not traversed exactly once each way (inconsistent winding), welding by exact position. */
+function directedInconsistencies(p: Primitive): number {
+    const key = (i: number) => [0, 1, 2].map(k => p.positions[i * 3 + k]).join(',');
+    const count = new Map<string, number>();
+    for (let t = 0; t < p.indices.length; t += 3) {
+        for (let e = 0; e < 3; e++) {
+            const a = key(p.indices[t + e]), b = key(p.indices[t + ((e + 1) % 3)]);
+            if (a !== b) count.set(`${a}>${b}`, (count.get(`${a}>${b}`) || 0) + 1);
+        }
+    }
+    let bad = 0;
+    for (const [k, n] of count) {
+        const [a, b] = k.split('>');
+        if (n !== 1 || (count.get(`${b}>${a}`) || 0) !== 1) bad++;
+    }
+    return bad;
+}
+
+/** Triangles with a corner within 0.36 degrees of 180 (cap slivers). */
+function capCount(p: Primitive): number {
+    let caps = 0;
+    const P = (i: number) => [p.positions[i * 3], p.positions[i * 3 + 1], p.positions[i * 3 + 2]];
+    for (let t = 0; t < p.indices.length; t += 3) {
+        const pts = [P(p.indices[t]), P(p.indices[t + 1]), P(p.indices[t + 2])];
+        for (let k = 0; k < 3; k++) {
+            const o = pts[k], u = pts[(k + 1) % 3], v = pts[(k + 2) % 3];
+            const a = [u[0] - o[0], u[1] - o[1], u[2] - o[2]], b = [v[0] - o[0], v[1] - o[1], v[2] - o[2]];
+            const la = Math.hypot(...a), lb = Math.hypot(...b);
+            if (la > 1e-20 && lb > 1e-20 && (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (la * lb) < -0.99998) { caps++; break; }
+        }
+    }
+    return caps;
+}
+
 function signedVolume(p: Primitive): number {
     let v = 0;
     const P = (i: number) => [p.positions[i * 3], p.positions[i * 3 + 1], p.positions[i * 3 + 2]];
@@ -188,6 +222,72 @@ out = sb.meshops.bevel(cut, 0.04, segments=2)`);
         const recessed = await run('out = sb.meshops.inset_extrude(cube(0, 0, 0, 1), (0, 0, 1), inset=0.3, depth=-0.1)');
         expect(badEdgeCount(recessed)).toBe(0);
         expect(signedVolume(recessed)).toBeCloseTo(8 - (0.1 / 3) * (4 + 1.96 + 2.8), 4);
+    }, 600000);
+
+    it('refuses an inward-wound operand instead of returning a wrong closed solid', async () => {
+        const runner = NativePythonRunnerService.getInstance();
+        const result = await runner.runScript(`
+import scratchbox as sb
+${CUBE}
+def inverted(cx, cy, cz, h):
+    m = cube(cx, cy, cz, h)
+    out = sb.geometry.Mesh("inv")
+    for v in m.vertices: out.add_vertex(v.position)
+    idx = list(m.indices)
+    for t in range(0, len(idx), 3): out.add_triangle(idx[t], idx[t + 2], idx[t + 1])
+    return out
+for label, a, b in (("a", inverted(0, 0, 0, 1), cube(1, 1, 1, 1)), ("b", cube(0, 0, 0, 1), inverted(1, 1, 1, 1))):
+    try:
+        sb.meshops.subtract(a, b)
+        print("NO ERROR", label)
+    except ValueError as e:
+        print("RAISED", label, "inward" in str(e))
+`);
+        expect(result.success, result.stderr).toBe(true);
+        expect(result.stdout).toContain('RAISED a True');
+        expect(result.stdout).toContain('RAISED b True');
+        expect(result.stdout).not.toContain('NO ERROR');
+    }, 600000);
+
+    it('leaves no cap slivers in a boolean result and winds it consistently', async () => {
+        const p = await run('out = sb.meshops.subtract(cube(0, 0, 0, 1), sb.create_cylinder(radius=0.5, height=3.0, segments=64))');
+        expect(badEdgeCount(p)).toBe(0);
+        expect(directedInconsistencies(p)).toBe(0);
+        expect(capCount(p)).toBe(0);
+    }, 600000);
+
+    it('caps an oversized bevel width instead of collapsing the mesh', async () => {
+        const capped = await run('out = sb.meshops.bevel(cube(0, 0, 0, 1), 7.9, segments=1)');
+        const oversized = await run('out = sb.meshops.bevel(cube(0, 0, 0, 1), 10.0, segments=1)');
+        expect(badEdgeCount(oversized)).toBe(0);
+        expect(oversized.indices.length).toBe(capped.indices.length);
+        expect(signedVolume(oversized)).toBeCloseTo(signedVolume(capped), 4);
+        expect(signedVolume(oversized)).toBeGreaterThan(1);
+    }, 600000);
+
+    it('shades polygonal cylinders smooth and inset walls as creases', async () => {
+        const runner = NativePythonRunnerService.getInstance();
+        const result = await runner.runScript(`
+import scratchbox as sb
+from collections import defaultdict
+def side_normals_per_position(m):
+    byp = defaultdict(set)
+    for v in m.vertices:
+        if abs(abs(v.normal.y) - 1.0) < 1e-3: continue
+        byp[(v.position.x, v.position.y, v.position.z)].add((round(v.normal.x, 4), round(v.normal.y, 4), round(v.normal.z, 4)))
+    return sorted({len(s) for s in byp.values()})
+for segs in (24, 96):
+    print("cyl", segs, side_normals_per_position(sb.meshops.bevel(sb.create_cylinder(radius=0.5, height=1.0, segments=segs), 0.0)))
+rec = sb.meshops.inset_extrude(sb.create_box(width=1, height=1, depth=1), (0, 0, 1), inset=0.2, depth=-0.1)
+corner = sorted({(round(abs(v.normal.x), 3), round(abs(v.normal.y), 3), round(v.normal.z, 3)) for v in rec.vertices
+                 if abs(v.position.z - 0.4) < 1e-4 and abs(v.position.x - 0.3) < 1e-4 and abs(v.position.y - 0.3) < 1e-4})
+print("corner", corner)
+`);
+        expect(result.success, result.stderr).toBe(true);
+        expect(result.stdout).toContain('cyl 24 [1]');
+        expect(result.stdout).toContain('cyl 96 [1]');
+        // The recess corner carries the panel normal and the two (inward-facing) wall normals, nothing blended.
+        expect(result.stdout).toContain('corner [(0.0, 0.0, 1.0), (0.0, 0.447, 0.894), (0.447, 0.0, 0.894)]');
     }, 600000);
 
     it('solidifies an open plane into a closed slab', async () => {

@@ -113,6 +113,37 @@ out = sb.relief.apply(sb.create_box(width=2.0, height=2.0, depth=2.0), [knurl], 
         }
     }, 600000);
 
+    it('remeshes a fan cap under a groove into well-shaped triangles with no coincident vertices', async () => {
+        const { p } = await run(`
+cyl = sb.create_cylinder(radius=0.25, height=0.3, segments=96)
+groove = sb.relief.profile([[(-0.3, 0.15, 0.08), (0.3, 0.15, 0.08)]], width_m=0.01, depth_m=-0.003).facing((0, 1, 0))
+out = sb.relief.apply(cyl, [groove], max_subdivisions=6)`);
+        expect(badEdgeCount(p)).toBe(0);
+        const P = (i: number) => [p.positions[i * 3], p.positions[i * 3 + 1], p.positions[i * 3 + 2]];
+        const minAngles: number[] = [];
+        let coincident = 0;
+        for (let t = 0; t < p.indices.length; t += 3) {
+            const pts = [P(p.indices[t]), P(p.indices[t + 1]), P(p.indices[t + 2])];
+            const cen = [0, 1, 2].map(k => (pts[0][k] + pts[1][k] + pts[2][k]) / 3);
+            if (cen[1] < 0.146 || Math.abs(cen[2] - 0.08) > 0.012) continue;   // the groove band on the cap
+            if (new Set(pts.map(q => q.join(','))).size < 3) { coincident++; continue; }
+            let mn = Infinity;
+            for (let k = 0; k < 3; k++) {
+                const o = pts[k], u = pts[(k + 1) % 3], v = pts[(k + 2) % 3];
+                const a = [u[0] - o[0], u[1] - o[1], u[2] - o[2]], b = [v[0] - o[0], v[1] - o[1], v[2] - o[2]];
+                const c = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (Math.hypot(...a) * Math.hypot(...b));
+                mn = Math.min(mn, (Math.acos(Math.max(-1, Math.min(1, c))) * 180) / Math.PI);
+            }
+            minAngles.push(mn);
+        }
+        minAngles.sort((x, y) => x - y);
+        expect(coincident).toBe(0);
+        expect(minAngles.length).toBeGreaterThan(1000);
+        // The untouched fan has every triangle at 3.75 degrees; collapses alone reach about 7.5 / 30.
+        expect(minAngles[Math.floor(minAngles.length / 10)]).toBeGreaterThan(15);
+        expect(minAngles[Math.floor(minAngles.length / 2)]).toBeGreaterThan(40);
+    }, 600000);
+
     it('embosses a projected height image: white raises by depth, black and outside do not move', async () => {
         const { p } = await run(`
 import struct, zlib

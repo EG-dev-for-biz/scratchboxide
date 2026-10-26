@@ -1117,6 +1117,7 @@ public:
         // 2. Six tetrahedra per cell (Kuhn split along the 0-7 diagonal); corner bit 1 = +x, 2 = +y, 4 = +z.
         static const int tets[6][4] = { {0,1,3,7},{0,1,5,7},{0,2,3,7},{0,2,6,7},{0,4,5,7},{0,4,6,7} };
         std::unordered_map<uint64_t, uint32_t> edgeVertex;
+        std::vector<Vec3> rawPos;   // crossing points before projection: orientation is decided on these
         const float maxShift = std::min({cell.x, cell.y, cell.z}) * 0.5f;
         auto vertexOnEdge = [&](uint64_t ia, uint64_t ib, const Vec3& pa, const Vec3& pb, float va, float vb) {
             uint64_t lo = std::min(ia, ib), hi = std::max(ia, ib);
@@ -1128,6 +1129,7 @@ public:
             // Kept off the grid points, where several edges' crossings would otherwise coincide.
             float t = std::clamp(va / (va - vb), 0.02f, 0.98f);
             Vec3 p = pa + (pb - pa) * t, start = p;
+            rawPos.push_back(start);
             for (int s = 0; s < projectionSteps; ++s) {
                 Vec3 g = gradient(p);
                 float g2 = g.dot(g);
@@ -1165,8 +1167,10 @@ public:
                         for (int a = 0; a < nOut; ++a) cOut += cp[out[a]];
                         Vec3 outward = cOut / static_cast<float>(nOut) - cIn / static_cast<float>(nIn);
                         auto v = [&](int a, int b) { return vertexOnEdge(ci[a], ci[b], cp[a], cp[b], cv[a], cv[b]); };
+                        // Wound on the unprojected crossings: those lie on the grid edges, so neighbouring
+                        // tetrahedra agree on every shared edge; projection moves vertices afterwards.
                         auto tri = [&](uint32_t x, uint32_t y, uint32_t z) {
-                            Vec3 n = (mesh.vertices[y].position - mesh.vertices[x].position).cross(mesh.vertices[z].position - mesh.vertices[x].position);
+                            Vec3 n = (rawPos[y] - rawPos[x]).cross(rawPos[z] - rawPos[x]);
                             if (n.dot(outward) >= 0.0f) mesh.addTriangle(x, y, z);
                             else mesh.addTriangle(x, z, y);
                         };

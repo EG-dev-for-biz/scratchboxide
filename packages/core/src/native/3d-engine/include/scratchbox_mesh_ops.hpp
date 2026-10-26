@@ -120,6 +120,7 @@ inline IndexedMesh weldExact(const ScratchboxMesh& m) {
 }
 
 inline size_t badEdges(const IndexedMesh& m);
+inline std::unordered_map<uint64_t, std::vector<uint32_t>> edgeFaces(const IndexedMesh& m);
 inline void removeCaps(IndexedMesh& m, float cosLimit = -0.99998f);
 inline void collapseShortEdges(IndexedMesh& m, float minLen, float sharpAngleDeg);
 
@@ -165,6 +166,35 @@ inline size_t badEdges(const IndexedMesh& m) {
     return n;
 }
 
+// Why a mesh is not a consistently outward-wound closed solid, or "" when it is: every edge must be
+// traversed once in each direction (closed and consistently wound) and the signed volume must be
+// positive (wound outward, not inward).
+inline std::string orientationProblem(const IndexedMesh& m) {
+    std::unordered_map<uint64_t, int> directed;
+    for (const auto& t : m.t) for (int k = 0; k < 3; ++k) {
+        uint64_t a = t[k], b = t[(k + 1) % 3];
+        directed[(a << 32) | b] += 1;
+    }
+    size_t unmatched = 0, doubled = 0;
+    for (const auto& [k, n] : directed) {
+        if (n > 1) ++doubled;
+        uint64_t rev = (k << 32) | (k >> 32);
+        auto it = directed.find(rev);
+        if (it == directed.end()) ++unmatched;
+    }
+    if (doubled || unmatched) {
+        return std::to_string(unmatched) + " edges have no reverse traversal and " + std::to_string(doubled) +
+               " are traversed twice the same way (open, over-shared or inconsistently wound)";
+    }
+    double volume = 0.0;
+    for (const auto& t : m.t) {
+        const Vec3& a = m.p[t[0]]; const Vec3& b = m.p[t[1]]; const Vec3& c = m.p[t[2]];
+        volume += static_cast<double>(a.dot(b.cross(c))) / 6.0;
+    }
+    if (volume <= 0.0) return "its faces wind inward (signed volume " + std::to_string(volume) + ")";
+    return "";
+}
+
 // Removes cap slivers (a corner within a fraction of a degree of 180, so the apex all but lies on the
 // opposite edge) by flipping that edge with the neighbour across it when the four points are coplanar:
 // the apex gains a real connection and the sliver's area goes to the two new triangles. Exact booleans
@@ -193,8 +223,8 @@ inline void removeCaps(IndexedMesh& m, float cosLimit) {
             const auto tg = m.t[g];
             uint32_t d = tg[0] != a && tg[0] != b ? tg[0] : (tg[1] != a && tg[1] != b ? tg[1] : tg[2]);
             if (d == c || ef.count(edgeKey(c, d))) continue;
-            // Coplanar: c lies on the plane of (a, b, d) within a tiny fraction of the edge length.
-            Vec3 ng = (m.p[b] - m.p[a]).cross(m.p[d] - m.p[a]);
+            // Coplanar: c lies on g's plane within a tiny fraction of the edge length; ng is g's own normal.
+            Vec3 ng = (m.p[tg[1]] - m.p[tg[0]]).cross(m.p[tg[2]] - m.p[tg[0]]);
             float lg = ng.length();
             if (lg < 1e-20f) continue;
             float off = std::abs((m.p[c] - m.p[a]).dot(ng / lg));
@@ -208,6 +238,7 @@ inline void removeCaps(IndexedMesh& m, float cosLimit) {
             Vec3 nb = (m.p[n1[1]] - m.p[n1[0]]).cross(m.p[n1[2]] - m.p[n1[0]]);
             if (na.dot(ng) <= 0.0f || nb.dot(ng) <= 0.0f) continue;
             m.t[f] = n0; m.t[g] = n1;
+            ef[edgeKey(c, d)] = {f, g};          // so no second flip in this pass can create the same edge
             touched[f] = touched[g] = 1;
             changed = true;
         }
@@ -217,10 +248,13 @@ inline void removeCaps(IndexedMesh& m, float cosLimit) {
 
 /**
  * Output with auto-smooth normals: each face corner takes the area-weighted normal of the faces
- * around its vertex that meet it at less than smoothAngleDeg, and corners sharing a vertex and a
- * normal share an output vertex.
+ * reachable around its vertex through edges that are neither sharper than smoothAngleDeg nor
+ * listed in `creases` (edge keys an operation marks as hard, e.g. the rings of an inset wall).
+ * Corners sharing a vertex and a normal share an output vertex. Area weighting lets large flat
+ * faces dominate small fillet strips, and polygonal cylinders blend whatever their diagonals.
  */
-inline ScratchboxMesh finish(const IndexedMesh& m, const ScratchboxMesh& style, const std::string& name, float smoothAngleDeg = 30.0f) {
+inline ScratchboxMesh finish(const IndexedMesh& m, const ScratchboxMesh& style, const std::string& name, float smoothAngleDeg = 30.0f,
+                             const std::set<uint64_t>* creases = nullptr) {
     ScratchboxMesh out(name);
     out.material = style.material;
     const float cosLimit = std::cos(smoothAngleDeg * math::DEG_TO_RAD);
@@ -232,33 +266,41 @@ inline ScratchboxMesh finish(const IndexedMesh& m, const ScratchboxMesh& style, 
         fn[f] = faceNormal(m, f);
         for (uint32_t v : t) vf[v].push_back(static_cast<uint32_t>(f));
     }
+    auto ef = edgeFaces(m);
+    // The face across edge (v, o) from f, or UINT32_MAX when the edge is not a smooth, uncreased, two-face edge.
+    auto across = [&](uint32_t f, uint32_t v, uint32_t o) -> uint32_t {
+        uint64_t key = edgeKey(v, o);
+        if (creases && creases->count(key)) return UINT32_MAX;
+        const auto& fs = ef.at(key);
+        if (fs.size() != 2) return UINT32_MAX;
+        uint32_t g = fs[0] == f ? fs[1] : fs[0];
+        return fn[g].dot(fn[f]) >= cosLimit ? g : UINT32_MAX;
+    };
     std::map<std::pair<uint32_t, std::array<int32_t, 3>>, uint32_t> shared;
     Vec4 color = style.vertices.empty() ? Vec4(1, 1, 1, 1) : style.vertices[0].color;
+    std::vector<uint32_t> stack, group;
+    std::vector<char> seen(m.t.size(), 0);
     for (size_t f = 0; f < m.t.size(); ++f) {
         uint32_t idx[3];
         for (int k = 0; k < 3; ++k) {
             uint32_t v = m.t[f][k];
-            // Weighted normals. The faces around the vertex within the smoothing angle of this one form its
-            // group; the group splits into coplanar clusters (within 1 degree). This corner keeps its flat
-            // normal when its cluster holds over half the group's area, or when two substantial clusters
-            // (over a quarter each) meet here: two real planes meeting below the smoothing angle are a
-            // visible crease, not a fillet. Otherwise it takes the area-weighted average, so bevel strips
-            // and polygonal cylinders (each facet at most exactly half) blend.
+            // Walk the fan around v from f across smooth, uncreased edges; sum the area vectors reached.
             Vec3 n(0, 0, 0);
-            float groupArea = 0.0f, ownCluster = 0.0f, otherClusterMax = 0.0f;
-            std::vector<std::pair<Vec3, float>> clusters;
-            for (uint32_t g : vf[v]) {
-                if (fn[g].dot(fn[f]) < cosLimit) continue;
+            group.clear(); stack.clear();
+            stack.push_back(static_cast<uint32_t>(f)); seen[f] = 1; group.push_back(static_cast<uint32_t>(f));
+            while (!stack.empty()) {
+                uint32_t g = stack.back(); stack.pop_back();
                 n += fa[g];
-                float area = fa[g].length();
-                groupArea += area;
-                if (fn[g].dot(fn[f]) >= 0.99985f) { ownCluster += area; continue; }
-                bool placed = false;
-                for (auto& c : clusters) if (c.first.dot(fn[g]) >= 0.99985f) { c.second += area; placed = true; break; }
-                if (!placed) clusters.emplace_back(fn[g], area);
+                const auto& tg = m.t[g];
+                for (int q = 0; q < 3; ++q) {
+                    if (tg[q] != v) continue;
+                    for (uint32_t o : {tg[(q + 1) % 3], tg[(q + 2) % 3]}) {
+                        uint32_t h = across(g, v, o);
+                        if (h != UINT32_MAX && !seen[h]) { seen[h] = 1; group.push_back(h); stack.push_back(h); }
+                    }
+                }
             }
-            for (const auto& c : clusters) otherClusterMax = std::max(otherClusterMax, c.second);
-            if (ownCluster > 0.5f * groupArea || (ownCluster > 0.25f * groupArea && otherClusterMax > 0.25f * groupArea)) n = fn[f];
+            for (uint32_t g : group) seen[g] = 0;
             n = n.length() > 1e-20f ? n.normalized() : fn[f];
             std::array<int32_t, 3> nk = { static_cast<int32_t>(std::lround(n.x * 1e4)), static_cast<int32_t>(std::lround(n.y * 1e4)), static_cast<int32_t>(std::lround(n.z * 1e4)) };
             auto key = std::make_pair(v, nk);
@@ -1051,6 +1093,9 @@ inline std::vector<exact::Polygon> snapToExact(const ScratchboxMesh& mesh) {
     IndexedMesh w = weldExact(mesh);
     if (!closedMesh(w)) w = weld(mesh);
     if (!closedMesh(w)) throw std::invalid_argument("mesh boolean needs closed inputs: '" + mesh.name + "' has open or over-shared edges");
+    if (std::string why = orientationProblem(w); !why.empty()) {
+        throw std::invalid_argument("mesh boolean needs consistently outward-wound inputs: '" + mesh.name + "': " + why);
+    }
     auto snap = [&](const Vec3& q) {
         std::array<int64_t, 3> r = { std::llround(q.x / kExactQuantum), std::llround(q.y / kExactQuantum), std::llround(q.z / kExactQuantum) };
         for (int64_t c : r) if (c >= kExactLimit || c <= -kExactLimit) throw std::invalid_argument("mesh boolean: coordinates beyond +-65 km from the origin");
@@ -1132,8 +1177,10 @@ inline ScratchboxMesh booleanOp(const ScratchboxMesh& a, const ScratchboxMesh& b
     }
     if (requireClosed && (open || overShared)) {
         throw std::runtime_error("boolean result is not closed (" + std::to_string(open) + " open and " + std::to_string(overShared) +
-            " over-shared edges). Booleans are exact on closed inputs; check both inputs are closed solids with consistent "
-            "outward winding, or pass require_closed=False to inspect the result");
+            " over-shared edges); pass require_closed=False to inspect the result");
+    }
+    if (requireClosed && !out.t.empty()) {
+        if (std::string why = orientationProblem(out); !why.empty()) throw std::runtime_error("boolean result is not consistently wound: " + why);
     }
     ScratchboxMesh result = finish(out, a, name, smoothAngleDeg);
     rememberExact(result, std::move(polys));
@@ -1216,7 +1263,13 @@ inline ScratchboxMesh bevel(const ScratchboxMesh& input, float width, int segmen
                             float smoothAngleDeg = 30.0f, const std::string& name = "Beveled") {
     IndexedMesh m = weldForOps(input);
     if (m.t.empty() || width <= 0.0f) return finish(m, input, name, smoothAngleDeg);
-    if (badEdges(m) == 0) collapseShortEdges(m, width * 0.25f, sharpAngleDeg);
+    if (badEdges(m) == 0) {
+        // Needles only: well under the mesh's own edge scale, never a quarter of a width larger than the mesh.
+        std::vector<float> lengths;
+        for (const auto& t : m.t) for (int k = 0; k < 3; ++k) lengths.push_back((m.p[t[k]] - m.p[t[(k + 1) % 3]]).length());
+        std::nth_element(lengths.begin(), lengths.begin() + lengths.size() / 2, lengths.end());
+        collapseShortEdges(m, std::min(width * 0.25f, lengths[lengths.size() / 2] * 0.1f), sharpAngleDeg);
+    }
     const size_t F = m.t.size();
     std::vector<Vec3> fn(F);
     for (size_t f = 0; f < F; ++f) fn[f] = faceNormal(m, f);
@@ -1431,6 +1484,7 @@ inline ScratchboxMesh bevel(const ScratchboxMesh& input, float width, int segmen
 inline ScratchboxMesh insetExtrude(const ScratchboxMesh& input, const Vec3& facing, float maxAngleDeg, float inset, float depth,
                                    const Vec3& boxMin, const Vec3& boxMax, bool useBox, float smoothAngleDeg = 30.0f,
                                    const std::string& name = "InsetExtruded") {
+    std::set<uint64_t> creases;   // the wall's top and bottom rings: a wall is a hard edge however shallow its slope
     IndexedMesh m = weldForOps(input);
     const size_t F = m.t.size();
     std::vector<Vec3> fn(F);
@@ -1511,11 +1565,13 @@ inline ScratchboxMesh insetExtrude(const ScratchboxMesh& input, const Vec3& faci
         // Wall around the ring: original border edge (a->b) to its raised / inset copy.
         for (auto [a, b] : border) {
             uint32_t ta = ring[a], tb = ring[b];
+            creases.insert(edgeKey(a, b));
+            creases.insert(edgeKey(ta, tb));
             out.t.push_back({a, b, tb});
             out.t.push_back({a, tb, ta});
         }
     }
-    return finish(out, input, name, smoothAngleDeg);
+    return finish(out, input, name, smoothAngleDeg, &creases);
 }
 
 // --------------------------------------------------------------------------

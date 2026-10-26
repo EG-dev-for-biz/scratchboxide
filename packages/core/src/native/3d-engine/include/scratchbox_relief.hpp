@@ -279,7 +279,6 @@ inline ScratchboxMesh apply(const ScratchboxMesh& input, const std::vector<Layer
     // Red-green subdivision rounds.
     for (int round = 0; round < maxSubdivisions; ++round) {
         std::unordered_map<uint64_t, uint32_t> mid;
-        std::vector<char> splitEdge;  // per directed slot below
         // Mark edges of triangles that are too long and reached by a layer.
         std::vector<uint64_t> toSplit;
         for (const auto& t : m.t) {
@@ -354,22 +353,49 @@ inline ScratchboxMesh apply(const ScratchboxMesh& input, const std::vector<Layer
             for (const auto& L : layers) if (layerReaches(L, c, longest, fnorm)) return true;
             return false;
         };
-        for (int iter = 0; iter < 10; ++iter) {
-            // Active faces and planar-interior vertices (every incident face flat with the others and active).
-            std::vector<char> active(m.t.size(), 0);
-            std::vector<Vec3> fn(m.t.size());
+        std::vector<char> active, interior;
+        std::vector<Vec3> fn;
+        std::unordered_map<uint64_t, std::vector<uint32_t>> ef;
+        std::vector<std::vector<uint32_t>> vf;
+        auto flatPair = [&](uint32_t f, uint32_t g) { return active[f] && active[g] && fn[f].dot(fn[g]) >= cosFlat && fn[f].length() > 0.5f; };
+        // Active faces, adjacency and planar-interior vertices (every incident face flat with the others and
+        // active); rebuilt after every phase that changes topology, so every phase runs every iteration.
+        auto refresh = [&]() {
+            active.assign(m.t.size(), 0);
+            fn.assign(m.t.size(), Vec3(0, 0, 0));
             for (size_t f = 0; f < m.t.size(); ++f) { fn[f] = faceN(m.t[f]); active[f] = reachedFace(m.t[f]); }
-            auto ef = meshops::edgeFaces(m);
-            auto flatPair = [&](uint32_t f, uint32_t g) { return active[f] && active[g] && fn[f].dot(fn[g]) >= cosFlat && fn[f].length() > 0.5f; };
-            std::vector<std::vector<uint32_t>> vf(m.p.size());
+            ef = meshops::edgeFaces(m);
+            vf.assign(m.p.size(), {});
             for (uint32_t f = 0; f < m.t.size(); ++f) for (uint32_t v : m.t[f]) vf[v].push_back(f);
-            std::vector<char> interior(m.p.size(), 0);
+            interior.assign(m.p.size(), 0);
             for (uint32_t v = 0; v < m.p.size(); ++v) {
                 if (vf[v].size() < 3) continue;
                 bool ok = true;
                 for (uint32_t f : vf[v]) if (!active[f] || fn[vf[v][0]].dot(fn[f]) < cosFlat) { ok = false; break; }
                 interior[v] = ok;
             }
+        };
+        // Vertices that have come to share one exact position (a collapse to a midpoint later split again)
+        // are merged and the zero-area triangles between them dropped.
+        auto dedupe = [&]() {
+            std::map<std::array<float, 3>, uint32_t> first;
+            std::vector<uint32_t> remap(m.p.size());
+            bool any = false;
+            for (uint32_t v = 0; v < m.p.size(); ++v) {
+                auto it = first.emplace(std::array<float, 3>{m.p[v].x, m.p[v].y, m.p[v].z}, v);
+                remap[v] = it.first->second;
+                if (!it.second) any = true;
+            }
+            if (!any) return;
+            std::vector<std::array<uint32_t, 3>> kept;
+            for (auto t : m.t) {
+                for (auto& v : t) v = remap[v];
+                if (t[0] != t[1] && t[1] != t[2] && t[0] != t[2]) kept.push_back(t);
+            }
+            m.t.swap(kept);
+        };
+        for (int iter = 0; iter < 10; ++iter) {
+            refresh();
             // 1. Splits of long interior flat edges (both faces split along it: conformal).
             {
                 std::unordered_map<uint64_t, uint32_t> mid;
@@ -395,7 +421,7 @@ inline ScratchboxMesh apply(const ScratchboxMesh& input, const std::vector<Layer
                         else { next.push_back({v0, m0, m2}); next.push_back({m0, v1, m2}); next.push_back({m2, v1, v2}); }
                     }
                     m.t.swap(next);
-                    continue;   // topology changed: recompute everything next iteration
+                    refresh();
                 }
             }
             // 2. Collapses of short interior flat edges (survivor: a boundary vertex if one end is, else the midpoint).
@@ -435,7 +461,8 @@ inline ScratchboxMesh apply(const ScratchboxMesh& input, const std::vector<Layer
                     std::vector<std::array<uint32_t, 3>> kept;
                     for (size_t f = 0; f < m.t.size(); ++f) if (!deadF[f]) kept.push_back(m.t[f]);
                     m.t.swap(kept);
-                    continue;
+                    dedupe();
+                    refresh();
                 }
             }
             // 3. Delaunay flips on flat pairs (opposite angles sum over 180 degrees), new edge not yet present.
@@ -468,6 +495,7 @@ inline ScratchboxMesh apply(const ScratchboxMesh& input, const std::vector<Layer
                     touched[fs[0]] = touched[fs[1]] = 1;
                 }
             }
+            refresh();
             // 4. Laplacian smoothing of planar-interior vertices (stays in the plane: all neighbours are in it).
             {
                 std::vector<Vec3> np = m.p;

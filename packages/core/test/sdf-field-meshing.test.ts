@@ -53,6 +53,24 @@ function badEdgeCount(p: Primitive): number {
     return [...edges.values()].filter(c => c !== 2).length;
 }
 
+/** Directed edges not traversed exactly once each way: a closed mesh wound inconsistently fails this, not badEdgeCount. */
+function directedInconsistencies(p: Primitive): number {
+    const key = (i: number) => [0, 1, 2].map(k => p.positions[i * 3 + k]).join(',');
+    const count = new Map<string, number>();
+    for (let t = 0; t < p.indices.length; t += 3) {
+        for (let e = 0; e < 3; e++) {
+            const a = key(p.indices[t + e]), b = key(p.indices[t + ((e + 1) % 3)]);
+            if (a !== b) count.set(`${a}>${b}`, (count.get(`${a}>${b}`) || 0) + 1);
+        }
+    }
+    let bad = 0;
+    for (const [k, n] of count) {
+        const [a, b] = k.split('>');
+        if (n !== 1 || (count.get(`${b}>${a}`) || 0) !== 1) bad++;
+    }
+    return bad;
+}
+
 /** Signed volume by the divergence theorem: positive when faces wind outward. */
 function signedVolume(p: Primitive): number {
     let v = 0;
@@ -108,6 +126,17 @@ describe('SDF field meshing (sb.sdf ... .to_mesh)', () => {
             '(-1.2, -0.7, -0.8)', '(1.7, 0.7, 0.8)', 160);
         expect(badEdgeCount(p)).toBe(0);
         expect(signedVolume(p)).toBeGreaterThan(1.5);
+    }, 600000);
+
+    it('winds every triangle consistently, even where projection moves vertices', async () => {
+        for (const [label, expr, lo, hi, res] of [
+            ['displaced sphere', 'sb.sdf.sphere(1.0).displace(0.3, 3.0)', '(-1.4, -1.4, -1.4)', '(1.4, 1.4, 1.4)', 48],
+            ['gyroid lattice', 'sb.sdf.gyroid(6.0, 0.15) & sb.sdf.sphere(1.0)', '(-1, -1, -1)', '(1, 1, 1)', 64],
+        ] as const) {
+            const p = await meshField(expr, lo, hi, res);
+            expect(badEdgeCount(p), label).toBe(0);
+            expect(directedInconsistencies(p), label).toBe(0);
+        }
     }, 600000);
 
     it('caps a shape the bounds cut, so the result is still closed', async () => {
