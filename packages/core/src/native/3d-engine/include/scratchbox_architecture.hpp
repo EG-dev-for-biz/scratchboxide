@@ -556,6 +556,13 @@ public:
         return tops;
     }
 
+    /** Where smoke leaves each chimney (above its cap and pots), for weathering soot sources. */
+    static std::vector<Vec3> chimneyTops(const BuildingConfig& cfg) {
+        std::vector<Vec3> tops = chimneyStackTops(cfg);
+        for (Vec3& t : tops) t.y += cfg.details.chimneyCapM + cfg.details.chimneyPotHeightM;
+        return tops;
+    }
+
     /**
      * Generates the same building as generateBuilding, split into one sub-mesh per material slot
      * (wall, glass, frame, roof, foundation) so each can carry its own material and texture maps.

@@ -1216,14 +1216,21 @@ def create_building_parts(
     _frame, _roof, _foundation) with world-metre UVs, ready for write_textured_building.
     """
     cfg = _building_config(**{k: v for k, v in locals().items() if k not in ("name", "kwargs")}, **kwargs)
-    return list(_native.architecture.generate_building_parts(cfg, name))
+    parts = _BuildingParts(_native.architecture.generate_building_parts(cfg, name))
+    parts.soot_sources = [(t.x, t.y, t.z) for t in _native.architecture.chimney_tops(cfg)]
+    return parts
 
+
+class _BuildingParts(list):
+    """The parts list create_building_parts returns, carrying the building's chimney tops as soot sources."""
+    soot_sources: List[Tuple[float, float, float]] = []
 
 
 _IMAGE_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
 
 
-def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]] = None,
+                            weathering: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Write building parts to a GLB with real-scale PBR textures per part.
 
@@ -1232,8 +1239,14 @@ def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]]
       {"albedo": file, "normal": file?, "orm": file?,          image maps from a material library or
        "tile_m": (w, h), "tint": (r, g, b)?, "source": str}   an image model, laid at tile_m metres
     Optional per-part "roughness" / "metallic" set the material factors. Parts without an
-    entry keep their flat slot material. Returns {"path", "parts": {slot: {"source", "tile_m"}}}
-    so the caller can label provenance honestly.
+    entry keep their flat slot material.
+
+    weathering, when given, bakes marks from the built geometry (run-off streaks under ledges,
+    rain exposure wash, shelter and cavity grime, rising damp, soot around the chimney tops) into
+    a unique atlas on an alpha-blended overlay shell over the "receivers" parts (default wall,
+    foundation, roof). Its keys are WeatheringParams fields plus "receivers"; strengths are
+    continuous and 0 turns a layer off. Returns {"path", "parts": {slot: {"source", ...}}} so the
+    caller can label provenance honestly; the weathering is reported as generated.
     """
     surfaces = surfaces or {}
     textures, report = [], {}
@@ -1287,7 +1300,32 @@ def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]]
             textures.append((part.name, usage, data, mime, 1.0 / tile[0], 1.0 / tile[1]))
         report[slot] = {"source": source, "tile_m": tile}
 
-    _native.io.write_glb_textured(path, list(parts), textures)
+    meshes = list(parts)
+    base_name = meshes[0].name.rsplit("_", 1)[0] if meshes else "Building"
+    if weathering is not None:
+        options = dict(weathering)
+        wanted = set(options.pop("receivers", ["wall", "foundation", "roof"]))
+        params = _native.weathering.WeatheringParams()
+        options.setdefault("soot_sources", getattr(parts, "soot_sources", []))
+        for key, value in options.items():
+            if not hasattr(params, key):
+                raise ValueError(f"Unknown weathering parameter '{key}'")
+            if key == "soot_sources":
+                value = [_native.math.Vec3(*pt) for pt in value]
+            elif key.endswith("_color"):
+                value = _native.math.Vec3(*value)
+            setattr(params, key, value)
+        receivers = [p for p in parts if p.name.rsplit("_", 1)[-1] in wanted]
+        baked = _native.weathering.bake_weathering(receivers, list(parts), params, f"{base_name}_weathering")
+        overlay = baked["overlay"]
+        if len(overlay.vertices):
+            meshes.append(overlay)
+            textures.append((overlay.name, "base_color", baked["atlas_png"], "image/png", 1.0, 1.0))
+        report["weathering"] = {"source": "generated (geometry-driven bake)", "receivers": sorted(wanted),
+                                "atlas_px": (baked["atlas_width"], baked["atlas_height"]),
+                                "charts": baked["charts"], "baked_texels": baked["baked_texels"]}
+
+    _native.io.write_glb_textured(path, meshes, textures)
     return {"path": path, "parts": report}
 
 def create_curved_building(

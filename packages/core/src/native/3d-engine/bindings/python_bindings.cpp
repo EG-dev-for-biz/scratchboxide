@@ -18,6 +18,7 @@
 
 #include "scratchbox_engine.hpp"
 #include "scratchbox_coursed_surface.hpp"
+#include "scratchbox_weathering.hpp"
 #include "scratchbox_png.hpp"
 #include "scratchbox_core.hpp"
 #include "scratchbox_sdf.hpp"
@@ -721,6 +722,10 @@ NB_MODULE(scratchbox_native, m) {
         return ProceduralBuildingGenerator::generateCurvedBuilding(config, name);
     }, "config"_a, "name"_a = "CurvedBuilding");
 
+    m_arch.def("chimney_tops", [](const BuildingConfig& config) {
+        return ProceduralBuildingGenerator::chimneyTops(config);
+    }, "config"_a, "Where smoke leaves each chimney of this building (weathering soot sources)");
+
     m_arch.def("generate_building_parts", [](const BuildingConfig& config, const std::string& name) {
         return ProceduralBuildingGenerator::generateBuildingParts(config, name);
     }, "config"_a, "name"_a = "ProceduralBuilding",
@@ -1131,6 +1136,54 @@ NB_MODULE(scratchbox_native, m) {
         return out;
     }, "params"_a,
        "Synthesize a seamless coursed-surface PBR set (albedo, normal, ORM as PNG bytes) and its tile size in metres");
+
+    auto m_weather = m.def_submodule("weathering", "Geometry-driven weathering bakes into a unique atlas on an overlay shell");
+
+    nb::class_<weathering::WeatheringParams>(m_weather, "WeatheringParams")
+        .def(nb::init<>())
+        .def_rw("texel_m", &weathering::WeatheringParams::texelM)
+        .def_rw("max_atlas_width", &weathering::WeatheringParams::maxAtlasWidth)
+        .def_rw("overlay_offset_m", &weathering::WeatheringParams::overlayOffsetM)
+        .def_rw("streak_strength", &weathering::WeatheringParams::streakStrength)
+        .def_rw("streak_reach_m", &weathering::WeatheringParams::streakReachM)
+        .def_rw("streak_column_m", &weathering::WeatheringParams::streakColumnM)
+        .def_rw("streak_end_boost", &weathering::WeatheringParams::streakEndBoost)
+        .def_rw("exposure_wash", &weathering::WeatheringParams::exposureWash)
+        .def_rw("shelter_grime", &weathering::WeatheringParams::shelterGrime)
+        .def_rw("cavity_grime", &weathering::WeatheringParams::cavityGrime)
+        .def_rw("cavity_radius_m", &weathering::WeatheringParams::cavityRadiusM)
+        .def_rw("hemisphere_samples", &weathering::WeatheringParams::hemisphereSamples)
+        .def_rw("sky_distance_m", &weathering::WeatheringParams::skyDistanceM)
+        .def_rw("ground_y", &weathering::WeatheringParams::groundY)
+        .def_rw("damp_height_m", &weathering::WeatheringParams::dampHeightM)
+        .def_rw("damp_strength", &weathering::WeatheringParams::dampStrength)
+        .def_rw("soot_sources", &weathering::WeatheringParams::sootSources)
+        .def_rw("soot_strength", &weathering::WeatheringParams::sootStrength)
+        .def_rw("soot_radius_m", &weathering::WeatheringParams::sootRadiusM)
+        .def_rw("variation", &weathering::WeatheringParams::variation)
+        .def_rw("grime_color", &weathering::WeatheringParams::grimeColor)
+        .def_rw("streak_color", &weathering::WeatheringParams::streakColor)
+        .def_rw("damp_color", &weathering::WeatheringParams::dampColor)
+        .def_rw("soot_color", &weathering::WeatheringParams::sootColor)
+        .def_rw("wash_color", &weathering::WeatheringParams::washColor)
+        .def_rw("seed", &weathering::WeatheringParams::seed);
+
+    m_weather.def("bake_weathering", [](const std::vector<ScratchboxMesh>& receivers, const std::vector<ScratchboxMesh>& occluders,
+                                        const weathering::WeatheringParams& params, const std::string& name) {
+        auto baked = weathering::bakeWeathering(receivers, occluders, params, name);
+        auto png = png::encode(baked.atlas, 6);
+        if (!baked.overlay.vertices.empty() && png.empty()) throw std::runtime_error("PNG compression failed for the weathering atlas");
+        nb::dict out;
+        out["overlay"] = baked.overlay;
+        out["atlas_png"] = nb::bytes(reinterpret_cast<const char*>(png.data()), png.size());
+        out["atlas_width"] = baked.atlas.width;
+        out["atlas_height"] = baked.atlas.height;
+        out["charts"] = baked.chartCount;
+        out["baked_texels"] = baked.bakedTexels;
+        return out;
+    }, "receivers"_a, "occluders"_a, "params"_a, "name"_a = "Weathering",
+       "Bake streaks, exposure wash, shelter and cavity grime, rising damp and soot from the geometry into an RGBA atlas; "
+       "returns an alpha-blended overlay shell of the receivers mapped into it");
 
     auto m_plant = m.def_submodule("plant", "Procedural botanical plant presets and heroic biome assets");
 
