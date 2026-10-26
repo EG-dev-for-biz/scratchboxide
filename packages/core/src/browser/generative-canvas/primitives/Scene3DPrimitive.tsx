@@ -959,6 +959,8 @@ interface ExternalLoadStatus {
     attempt?: number;
     /** The file was rebuilt from its recipe after the original was lost (asset recovery). */
     rebuilt?: boolean;
+    /** The served path of the file that failed (staged layers are not in the scene's objects, so it is kept here). */
+    servedPath?: string;
 }
 
 /** Request URL for an objects[] durableUri: bare '/<file>.glb' paths are served from /models/. */
@@ -1208,6 +1210,24 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     React.useEffect(() => assetRecoveryClient.subscribe(setAssetRecovery), []);
     const rebuiltAssetPathsRef = React.useRef(new Set<string>());
     const handledRecoveryJobRef = React.useRef<string | undefined>(undefined);
+    /**
+     * Scene + lost file pairs already rebuilt on their own (a rebuild is started once each, never in a loop). Kept in
+     * local storage for an hour as well, so a page reload or hot update during or after a rebuild does not start it again.
+     */
+    const autoRebuiltRef = React.useRef((() => {
+        const seen = new Set<string>();
+        return {
+            has: (k: string) => {
+                if (seen.has(k)) return true;
+                try { const t = Number(window.localStorage.getItem(`sb.autoRebuilt:${k}`)); return t > 0 && Date.now() - t < 3_600_000; } catch { return false; }
+            },
+            add: (k: string) => {
+                seen.add(k);
+                try { window.localStorage.setItem(`sb.autoRebuilt:${k}`, String(Date.now())); } catch { /* storage unavailable: once per page */ }
+            }
+        };
+    })());
+    const rebuildKeyOf = (servedPath: string) => `${activeArtifact?.id ?? ''}|${servedPath}`;
     const [recoveryNoticeJobId, setRecoveryNoticeJobId] = React.useState<string | undefined>(undefined);
     React.useEffect(() => {
         const job = assetRecovery.job;
@@ -3111,7 +3131,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             // counted in a ref: a state updater runs later, so a count read from it would stay at 1 and never run out
             const attempt = (loadAttemptsRef.current.get(id) ?? 0) + 1;
             loadAttemptsRef.current.set(id, attempt);
-            setExternalLoadStatus(prev => ({ ...prev, [id]: { phase: 'error', loaded: 0, total: 0, error: message, ...(network ? { network: true } : {}), attempt } }));
+            setExternalLoadStatus(prev => ({ ...prev, [id]: { phase: 'error', loaded: 0, total: 0, error: message, ...(network ? { network: true } : {}), attempt, ...(recoverableAssetPath(loadUri) ? { servedPath: recoverableAssetPath(loadUri) } : {}) } }));
             const delay = network ? networkRetryDelayMs(attempt) : undefined;
             if (delay !== undefined) {
                 console.info(`[External Loader] ${loadUri} could not be reached (${message}); retry ${attempt} of ${NETWORK_RETRY_DELAYS_MS.length} in ${delay / 1000} s`);
@@ -4014,13 +4034,20 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         // a file whose recovery is running is not reported as failed while it may still come back
         const job = assetRecovery.job;
         const recovering = new Set(job && job.status === 'running' ? job.items.filter(i => i.outcome === 'pending').map(i => i.path) : []);
+        // a lost staged file that is rebuilt from the scene's place is said by the recovery notice, not as a failure too:
+        // before its rebuild starts, and while the rebuild runs (one job for the whole place, so it may list one item)
+        if (job && job.status !== 'running' && readStagedBuild(sceneData)?.place?.query) {
+            for (const i of job.items) if ((i.outcome === 'unrecoverable' || i.outcome === 'failed') && i.path.startsWith('/models/') && !autoRebuiltRef.current.has(rebuildKeyOf(i.path))) recovering.add(i.path);
+        }
+        const rebuilding = job?.status === 'running' && !!readStagedBuild(sceneData)?.place?.query;
         const servedPathOf = (id: string): string | undefined => {
             const raw = (sceneData.objects || []).find(o => o.id === id)?.content?.durableUri ?? (id === 'primary-location-splat' ? sceneData.splatUrl : undefined);
             return raw ? recoverableAssetPath(resolveExternalModelUri(raw)) : undefined;
         };
         // a load that could not reach the server and still has retries left is not a failure yet (load-failure.ts)
         return Object.entries(externalLoadStatus)
-            .filter(([id, st]) => st.phase === 'error' && declared.has(id) && !recovering.has(servedPathOf(id) ?? '') && !(st.network && networkRetryDelayMs(st.attempt ?? 1) !== undefined))
+            .filter(([id, st]) => st.phase === 'error' && declared.has(id) && !recovering.has(st.servedPath ?? servedPathOf(id) ?? '')
+                && !(rebuilding && (st.servedPath ?? servedPathOf(id) ?? '').startsWith('/models/')) && !(st.network && networkRetryDelayMs(st.attempt ?? 1) !== undefined))
             .map(([id, st]) => ({ id, error: st.error || 'the file could not be loaded' }));
     }, [externalLoadStatus, sceneData.objects, sceneData.splatUrl, assetRecovery]);
     /** Declared model files whose load could not reach the server and is being tried again. */
@@ -4047,6 +4074,17 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 ? { place: { lat: place.lat, lng: place.lng, formattedAddress: place.resolvedAddress } } : {})
         }, scene);
     }, [assetRecovery, sceneData, activeArtifact?.id]);
+    // Lost files are rebuilt on their own (user decision, 2026-10-23): once per scene and file, so a rebuild that fails
+    // is reported, not started again.
+    React.useEffect(() => {
+        const job = assetRecovery.job;
+        if (!recoveryRebuild || !job) return;
+        const lost = job.items.filter(i => i.outcome === 'unrecoverable' || i.outcome === 'failed').map(i => rebuildKeyOf(i.path));
+        if (lost.every(k => autoRebuiltRef.current.has(k))) return;
+        for (const k of lost) autoRebuiltRef.current.add(k);
+        console.info(`[Asset Recovery] rebuilding ${lost.length} lost file(s) from the scene's place on its own`);
+        recoveryRebuild();
+    }, [recoveryRebuild, assetRecovery]);
     const viewportNotices = React.useMemo(() => resolveViewportNotice({
         webglError,
         generatorError: currentGeneratorError,
