@@ -6,6 +6,7 @@
       "runtimeExecutable": "env",
       "runtimeArgs": [
         "SCRATCHBOX_NO_ELECTRON=true",
+        "SCRATCHBOX_DEV_FOLLOW_MAIN=1",
         "PORT=3013",
         "SCRATCHBOX_WEB_PORT=3032",
         "SCRATCHBOX_TOOLS_PORT=3014",
@@ -44,6 +45,95 @@
         "5180"
       ],
       "port": 5180
+    },
+    {
+      "name": "scratchbox-grass",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SCRATCHBOX_NO_ELECTRON=true",
+        "PORT=3301",
+        "SCRATCHBOX_WEB_PORT=3300",
+        "SCRATCHBOX_TOOLS_PORT=3302",
+        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3300,http://localhost:3300",
+        "npm",
+        "--prefix",
+        "/Users/eligreen/Dev/scratchbox-ide-master/.claude/worktrees/massing-choice",
+        "run",
+        "dev"
+      ],
+      "port": 3300,
+      "autoPort": false
+    },
+    {
+      "name": "scratchbox-cloud-store",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SCRATCHBOX_NO_ELECTRON=true",
+        "PORT=3081",
+        "SCRATCHBOX_WEB_PORT=3080",
+        "SCRATCHBOX_TOOLS_PORT=3082",
+        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3080,http://localhost:3080",
+        "npm",
+        "run",
+        "dev"
+      ],
+      "port": 3080,
+      "autoPort": false
+    },
+    {
+      "name": "scratchbox-training-capture",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SCRATCHBOX_NO_ELECTRON=true",
+        "SCRATCHBOX_PIPELINE_I_REFINE=1",
+        "PORT=3141",
+        "SCRATCHBOX_WEB_PORT=3140",
+        "SCRATCHBOX_TOOLS_PORT=3142",
+        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3140,http://localhost:3140",
+        "npm",
+        "--prefix",
+        "/Users/eligreen/Dev/scratchbox-ide-master",
+        "run",
+        "dev"
+      ],
+      "port": 3140,
+      "autoPort": false
+    },
+    {
+      "name": "scratchbox-massing-choice-newbuilding",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SCRATCHBOX_NO_ELECTRON=true",
+        "PORT=3701",
+        "SCRATCHBOX_WEB_PORT=3700",
+        "SCRATCHBOX_TOOLS_PORT=3702",
+        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3700,http://localhost:3700",
+        "npm",
+        "--prefix",
+        "/Users/eligreen/Dev/scratchbox-ide-master/.claude/worktrees/massing-choice",
+        "run",
+        "dev"
+      ],
+      "port": 3700,
+      "autoPort": false
+    },
+    {
+      "name": "scratchbox-main-esb-demo",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SCRATCHBOX_NO_ELECTRON=true",
+        "PORT=3201",
+        "SCRATCHBOX_WEB_PORT=3200",
+        "SCRATCHBOX_TOOLS_PORT=3202",
+        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3200,http://localhost:3200",
+        "npm",
+        "--prefix",
+        "/Users/eligreen/Dev/scratchbox-ide-master",
+        "run",
+        "dev"
+      ],
+      "port": 3200,
+      "autoPort": false
     }
   ]
 }

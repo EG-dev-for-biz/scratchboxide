@@ -17,6 +17,7 @@
 import * as THREE from 'three';
 import { CONFIDENCE_MAP_KEY } from './revealMaterial';
 import { prepareFacadeMaterials } from './facadeMaterialLook';
+import { applyStochasticTiling } from './stochasticTiling';
 
 /** Mirrors the flag applyClayRenderMode (clayRenderMode.ts) skips: the surface keeps its authored material. */
 export const KEEP_AUTHORED_MATERIAL_KEY = 'sbKeepAuthoredMaterial';
@@ -56,6 +57,8 @@ export function prepareTexturedTwinModel(gltf: GltfLike, opts: { twin?: boolean 
         // texture) keeps its photo materials under the clay pass as much as a texture-pass twin does
         if (textured || (opts.twin && mats.some(m => !!(m as THREE.MeshStandardMaterial | null)?.map))) mesh.userData[KEEP_AUTHORED_MATERIAL_KEY] = true;
     });
+    // library materials (procedural surfaces) flagged for hex-tiling: their repeat broken up in the shader
+    applyStochasticTiling(gltf.scene);
     const parser = gltf.parser;
     // the facade material reading (glass, coursing) on the same surfaces, when the twin carries it
     const facade = prepareFacadeMaterials(gltf).catch(() => 0);

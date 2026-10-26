@@ -23,6 +23,7 @@
 #include <set>
 #include <cstdint>
 #include <limits>
+#include <numeric>
 
 namespace scratchbox {
 namespace shaper {
@@ -494,6 +495,101 @@ public:
     }
 };
 
+namespace detail {
+
+/**
+ * Ear-clipping triangulation for a simple (possibly concave) 2D polygon, for Loft3D's end caps. A byte-for-byte
+ * port of footprints::PolygonTriangulator::triangulate (scratchbox_footprints.hpp): that header can't be included
+ * here directly, since scratchbox_io.hpp (which it pulls in) already depends on this file's own `shaper` namespace
+ * being fully defined first in the engine's normal include order (scratchbox_engine.hpp includes shaper.hpp before
+ * io.hpp/footprints.hpp) -- including footprints.hpp from here would include io.hpp too early and break that.
+ */
+inline float loftCapSignedArea(const std::vector<Vec2>& poly) {
+    if (poly.size() < 3) return 0.0f;
+    float area = 0.0f;
+    for (size_t i = 0; i < poly.size(); ++i) {
+        size_t j = (i + 1) % poly.size();
+        area += poly[i].x * poly[j].y - poly[j].x * poly[i].y;
+    }
+    return area * 0.5f;
+}
+
+inline bool loftCapPointInTriangle(const Vec2& p, const Vec2& a, const Vec2& b, const Vec2& c) {
+    auto cross2d = [](const Vec2& v1, const Vec2& v2) { return v1.x * v2.y - v1.y * v2.x; };
+    float c1 = cross2d(b - a, p - a);
+    float c2 = cross2d(c - b, p - b);
+    float c3 = cross2d(a - c, p - c);
+    bool hasNeg = (c1 < 0) || (c2 < 0) || (c3 < 0);
+    bool hasPos = (c1 > 0) || (c2 > 0) || (c3 > 0);
+    return !(hasNeg && hasPos);
+}
+
+inline std::vector<uint32_t> loftCapTriangulate(const std::vector<Vec2>& rawPoly) {
+    std::vector<uint32_t> indices;
+    if (rawPoly.size() < 3) return indices;
+
+    std::vector<Vec2> poly = rawPoly;
+    std::vector<uint32_t> V(poly.size());
+    std::iota(V.begin(), V.end(), 0);
+
+    if (loftCapSignedArea(poly) < 0.0f) {
+        std::reverse(V.begin(), V.end());
+        std::reverse(poly.begin(), poly.end());
+    }
+
+    int n = static_cast<int>(poly.size());
+    int count = 2 * n;
+
+    for (int v = n - 1; n > 2;) {
+        if ((count--) <= 0) {
+            for (int i = 1; i < n - 1; ++i) {
+                indices.push_back(V[0]);
+                indices.push_back(V[i]);
+                indices.push_back(V[i + 1]);
+            }
+            break;
+        }
+
+        int u = v;
+        if (n <= u) u = 0;
+        v = u + 1;
+        if (n <= v) v = 0;
+        int w = v + 1;
+        if (n <= w) w = 0;
+
+        const Vec2& A = poly[u];
+        const Vec2& B = poly[v];
+        const Vec2& C = poly[w];
+
+        float cross = (B.x - A.x) * (C.y - A.y) - (B.y - A.y) * (C.x - A.x);
+        if (cross <= 1e-6f) continue;
+
+        bool isEar = true;
+        for (int p = 0; p < n; ++p) {
+            if (p == u || p == v || p == w) continue;
+            if (loftCapPointInTriangle(poly[p], A, B, C)) {
+                isEar = false;
+                break;
+            }
+        }
+
+        if (isEar) {
+            indices.push_back(V[u]);
+            indices.push_back(V[v]);
+            indices.push_back(V[w]);
+
+            poly.erase(poly.begin() + v);
+            V.erase(V.begin() + v);
+            n--;
+            count = 2 * n;
+        }
+    }
+
+    return indices;
+}
+
+} // namespace detail
+
 // ============================================================================
 // 4. Parametric Sweeps: Loft3D, Lathe3D, Sweep3D
 // ============================================================================
@@ -540,30 +636,41 @@ public:
             }
         }
 
-        // Optional end capping
+        // Optional end capping: a proper polygon triangulation (PolygonTriangulator, the same ear-clipping-style
+        // triangulator extrude_polygon caps with), not a centroid fan. A fan's single center vertex is a plain
+        // average of the loop, which for a non-convex cross-section (an arch haunch, an L/U footprint, a sawtooth
+        // facade) can sit outside the polygon entirely, or send a fan triangle straight across a concavity -- real,
+        // self-intersecting garbage, not just an approximation. Each cap is projected to its own XZ (u, v) = (x, z)
+        // plane for triangulation (consistent with this engine's existing cap-normal convention below, which already
+        // assumes a roughly Y-aligned sweep), triangulated in that 2D polygon, then emitted at the slice's own 3D
+        // positions. Winding: PolygonTriangulator's raw order is correct for the bottom cap's -Y-facing normal, and
+        // must be reversed for the top cap's +Y-facing one -- verified against a BSP boolean operand the same way
+        // extrude_polygon's own winding was fixed earlier, not assumed from either function's doc comment.
         if (closeEnds) {
-            // Bottom cap (fan)
-            uint32_t botCenterIdx = static_cast<uint32_t>(mesh.vertices.size());
-            Vec3 botCenter(0, 0, 0);
-            for (size_t p = 0; p < ptsPerSlice; ++p) botCenter += slices[0][p];
-            botCenter = botCenter * (1.0f / ptsPerSlice);
-            mesh.addVertex({botCenter, Vec3(0, -1, 0), Vec2(0.5f, 0.5f), color});
-            for (size_t p = 0; p < ptsPerSlice; ++p) {
-                size_t nextP = (p + 1) % ptsPerSlice;
-                mesh.addTriangle(botCenterIdx, static_cast<uint32_t>(nextP), static_cast<uint32_t>(p));
+            auto capFlat = [](const std::vector<Vec3>& slice) {
+                std::vector<Vec2> flat;
+                flat.reserve(slice.size());
+                for (const auto& p : slice) flat.push_back(Vec2(p.x, p.z));
+                return flat;
+            };
+
+            // Bottom cap: raw triangulator order is already correct for a -Y-facing normal.
+            {
+                const std::vector<uint32_t> capTris = detail::loftCapTriangulate(capFlat(slices[0]));
+                const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+                for (const auto& p : slices[0]) mesh.addVertex({p, Vec3(0, -1, 0), Vec2(p.x, p.z), color});
+                for (uint32_t idx : capTris) mesh.indices.push_back(base + idx);
             }
 
-            // Top cap (fan)
-            uint32_t topCenterIdx = static_cast<uint32_t>(mesh.vertices.size());
-            Vec3 topCenter(0, 0, 0);
-            size_t lastS = slices.size() - 1;
-            for (size_t p = 0; p < ptsPerSlice; ++p) topCenter += slices[lastS][p];
-            topCenter = topCenter * (1.0f / ptsPerSlice);
-            mesh.addVertex({topCenter, Vec3(0, 1, 0), Vec2(0.5f, 0.5f), color});
-            uint32_t topOffset = static_cast<uint32_t>(lastS * ptsPerSlice);
-            for (size_t p = 0; p < ptsPerSlice; ++p) {
-                size_t nextP = (p + 1) % ptsPerSlice;
-                mesh.addTriangle(topCenterIdx, topOffset + static_cast<uint32_t>(p), topOffset + static_cast<uint32_t>(nextP));
+            // Top cap: reversed, for a +Y-facing normal.
+            {
+                const size_t lastS = slices.size() - 1;
+                const std::vector<uint32_t> capTris = detail::loftCapTriangulate(capFlat(slices[lastS]));
+                const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+                for (const auto& p : slices[lastS]) mesh.addVertex({p, Vec3(0, 1, 0), Vec2(p.x, p.z), color});
+                for (size_t i = 0; i + 2 < capTris.size(); i += 3) {
+                    mesh.indices.push_back(base + capTris[i]); mesh.indices.push_back(base + capTris[i + 2]); mesh.indices.push_back(base + capTris[i + 1]);
+                }
             }
         }
 
@@ -885,12 +992,21 @@ public:
      * blend across it instead of leaving a visible shading seam. A partial
      * sweep instead caps both open ends with a fan of the profile polyline, so
      * "watertight" holds for any totalAngleRad, not just the full circle.
+     *
+     * A full sweep is watertight only when the profile's own ends already sit on the axis (radius 0); a profile
+     * that doesn't (a dome/spire/finial's drum, or any tube-like cross-section) leaves the top and/or bottom ring
+     * open. capEnds (default false, so every existing caller's output is unchanged) closes whichever end(s) of a
+     * full sweep have radius > 0 with a flat disk fanned from the axis — distinct from the partial-sweep end caps
+     * above, which close the two flat radial cut faces of a wedge, not a sweep's own axial hole. Left false by
+     * default because an open-ended tube/pipe/duct profile is sometimes deliberately left open, to be closed later
+     * by a boolean union with whatever it connects to.
      */
     static ScratchboxMesh revolve(
         const std::vector<Vec2>& profilePoints,
         int radialSegments = 32,
         float totalAngleRad = TWO_PI,
-        const Vec4& color = {0.8f, 0.85f, 0.9f, 1.0f}
+        const Vec4& color = {0.8f, 0.85f, 0.9f, 1.0f},
+        bool capEnds = false
     ) {
         ScratchboxMesh mesh("lathed_mesh");
         if (profilePoints.size() < 2 || radialSegments < 3) return mesh;
@@ -943,6 +1059,29 @@ public:
             };
             capFan(0, true);
             capFan(ringCount - 1, false);
+        } else if (capEnds) {
+            // Close an open axial hole at a profile end whose radius isn't already 0: a flat disk fanned from a
+            // new axis-center vertex across that end's ring (fixed profile index, varying azimuthal ring s) — not
+            // capFan above, which fans across profile points at one fixed azimuthal ring instead.
+            auto capAxisDisk = [&](size_t profileIdx, bool normalDown) {
+                float y = profilePoints[profileIdx].y;
+                uint32_t centerIdx = static_cast<uint32_t>(mesh.vertices.size());
+                mesh.addVertex({Vec3(0.0f, y, 0.0f), Vec3(0, normalDown ? -1.0f : 1.0f, 0), Vec2(0.5f, 0.5f), color});
+                for (int s = 0; s < radialSegments; ++s) {
+                    uint32_t i0 = static_cast<uint32_t>(s * pts + profileIdx);
+                    uint32_t i1 = static_cast<uint32_t>(((s + 1) % radialSegments) * pts + profileIdx);
+                    if (normalDown) mesh.addTriangle(centerIdx, i1, i0);
+                    else mesh.addTriangle(centerIdx, i0, i1);
+                }
+            };
+            // Winding points the cap away from the rest of the profile (outward), whichever end is "up": compare
+            // against the neighbouring profile point's y rather than assuming point 0 is the bottom.
+            if (profilePoints.front().x > 1e-5f) {
+                capAxisDisk(0, pts > 1 ? profilePoints[1].y >= profilePoints[0].y : true);
+            }
+            if (profilePoints.back().x > 1e-5f) {
+                capAxisDisk(pts - 1, pts > 1 ? profilePoints[pts - 2].y >= profilePoints[pts - 1].y : false);
+            }
         }
 
         mesh.recomputeSmoothNormals();

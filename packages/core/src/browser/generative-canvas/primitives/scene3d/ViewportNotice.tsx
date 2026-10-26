@@ -12,7 +12,7 @@ import type { SceneContentKind } from './types';
 import type { GeneratorRunError } from './generatorRun';
 
 export interface ViewportNoticeEntry {
-    kind: 'webgl-error' | 'generator-error' | 'tiles-error' | 'object-load-error' | 'undrawable-objects' | 'optics' | 'focus' | 'empty' | 'asset-recovery';
+    kind: 'webgl-error' | 'generator-error' | 'tiles-error' | 'object-load-error' | 'reconnecting' | 'undrawable-objects' | 'optics' | 'focus' | 'empty' | 'asset-recovery';
     title: string;
     detail?: string;
     /** 0..1 of a running step, when known. */
@@ -46,6 +46,8 @@ export interface ViewportNoticeInput {
     hasAuxiliaryContent?: boolean;
     /** Declared objects whose model or splat file failed to download or parse. */
     objectLoadErrors?: Array<{ id: string; error: string }>;
+    /** Model files whose load could not reach the server and is being retried (Scene3DPrimitive, load-failure.ts). */
+    reconnecting?: number;
     /** Declared objects the loader skips (not a model or splat file); see undrawableSceneObjects. */
     undrawableObjects?: Array<{ id: string; reason: string }>;
     /** Lens values in camera.lens the viewport does not draw, and why (ViewportOpticsChain status). */
@@ -91,6 +93,14 @@ export function resolveViewportNotice(input: ViewportNoticeInput): ViewportNotic
             kind: 'object-load-error',
             title: loadErrors.length === 1 ? 'A model failed to load' : `${loadErrors.length} models failed to load`,
             detail: listOf(loadErrors.map(e => `${e.id}: ${e.error}`))
+        });
+    }
+    // loads that could not reach the server are being tried again (load-failure.ts): a quiet status, not an alert
+    if (input.reconnecting) {
+        notices.push({
+            kind: 'reconnecting',
+            title: 'Waiting for the server',
+            detail: `${input.reconnecting === 1 ? 'A model file' : `${input.reconnecting} model files`} could not be fetched; trying again (the server may be restarting).`
         });
     }
     const undrawable = input.undrawableObjects || [];
@@ -145,8 +155,8 @@ export const ViewportNotice: React.FC<{ notices: ViewportNoticeEntry[] }> = ({ n
                     key={n.kind}
                     data-testid="sb-3d-viewport-notice"
                     data-kind={n.kind}
-                    role={n.kind === 'empty' || n.kind === 'focus' || n.kind === 'asset-recovery' ? 'status' : 'alert'}
-                    style={{ ...PANEL_STYLE, ...(n.kind === 'empty' || n.kind === 'focus' || n.kind === 'asset-recovery' ? EMPTY_STYLE : ERROR_STYLE) }}
+                    role={n.kind === 'empty' || n.kind === 'focus' || n.kind === 'asset-recovery' || n.kind === 'reconnecting' ? 'status' : 'alert'}
+                    style={{ ...PANEL_STYLE, ...(n.kind === 'empty' || n.kind === 'focus' || n.kind === 'asset-recovery' || n.kind === 'reconnecting' ? EMPTY_STYLE : ERROR_STYLE) }}
                 >
                     <div style={{ fontWeight: 600 }}>{n.title}</div>
                     {n.fraction !== undefined && (
@@ -157,7 +167,7 @@ export const ViewportNotice: React.FC<{ notices: ViewportNoticeEntry[] }> = ({ n
                     {n.detail && (
                         <div style={{
                             // Error details are tool output (stderr, compiler messages): keep their layout.
-                            ...(n.kind === 'empty' || n.kind === 'focus' ? {} : { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', whiteSpace: 'pre-wrap' as const }),
+                            ...(n.kind === 'empty' || n.kind === 'focus' || n.kind === 'reconnecting' ? {} : { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', whiteSpace: 'pre-wrap' as const }),
                             wordBreak: 'break-word', marginTop: 4, opacity: 0.9
                         }}>{n.detail}</div>
                     )}

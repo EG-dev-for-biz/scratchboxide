@@ -73,6 +73,25 @@ static bool readFacadeGrammars(const std::string& file, std::vector<scratchbox::
     return true;
 }
 
+/** Building footprints, one closed ring per line: x z x z ... in the tile frame ('#' starts a comment line). */
+static bool readFootprintRings(const std::string& file, std::vector<std::vector<std::pair<double, double>>>& out, std::string& err) {
+    std::ifstream in(file);
+    if (!in) { err = "cannot read " + file; return false; }
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream ls(line);
+        std::vector<double> v;
+        double d;
+        while (ls >> d) v.push_back(d);
+        if (v.size() < 6 || v.size() % 2) continue;
+        std::vector<std::pair<double, double>> ring;
+        for (size_t k = 0; k + 1 < v.size(); k += 2) ring.emplace_back(v[k], v[k + 1]);
+        out.push_back(std::move(ring));
+    }
+    return true;
+}
+
 static void usage() {
     std::cerr <<
         "usage: tile_refine --input <tile.glb> --out-textured <A.glb> --out-clay <B.glb> --stats <S.json> [options]\n"
@@ -128,6 +147,8 @@ static void usage() {
         "  --max-rms M             rectifier: a region whose plane fit RMS exceeds M is not snapped (default 0.35)\n"
         "  --foreign-snap          rectifier: also pull vertices of no region onto a nearby plane\n"
         "  --denoise               rectifier: crease-preserving denoise of unclassified steep surfaces\n"
+        "  --wall-footprints FILE  rectifier: building footprint rings (one per line: x z x z ...) whose edges are wall-plane\n"
+        "                          candidates, taken where the scan's wall regions agree (direction only; offsets measured)\n"
         "  --no-proud-blocks       rectifier and flatten: also snap blocks standing off a wall on their own risers (keystones,\n"
         "                          medallions, deep reveals) instead of keeping their offset\n"
         "  --occluder-tol M        visibility: a surface hides a point only when at least M in front (default 0.02)\n"
@@ -212,6 +233,16 @@ int main(int argc, char** argv) {
         else if (a == "--max-rms") p.rect.maxRegionRms = num();
         else if (a == "--foreign-snap") p.rect.foreignPlaneSnap = true;
         else if (a == "--denoise") p.rect.denoise = true;
+        else if (a == "--footprint-match-dist") p.rect.footprintMatchDist = num();
+        else if (a == "--footprint-match-deg") p.rect.footprintMatchDeg = num();
+        else if (a == "--footprint-merge-offset") p.rect.footprintMergeOffset = num();
+        else if (a == "--footprint-claim-tau") p.rect.footprintClaimTau = num();
+        else if (a == "--footprint-claim-deg") p.rect.footprintClaimDeg = num();
+        else if (a == "--max-snap-induced") p.rect.maxSnapInducedDisplacement = num();
+        else if (a == "--wall-footprints") {
+            std::string err;
+            if (!readFootprintRings(next(), p.rect.wallFootprintsXZ, err)) { std::cerr << "--wall-footprints: " << err << "\n"; return 2; }
+        }
         else if (a == "--occluder-tol") p.vis.occluderTolerance = num();
         else if (a == "--street-sites") p.vis.streetSites = static_cast<int>(num());
         else if (a == "--roof-sites") p.vis.roofSites = static_cast<int>(num());

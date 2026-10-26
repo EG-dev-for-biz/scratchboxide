@@ -19,6 +19,7 @@ import {
 } from '../ChatMarkdownRenderer';
 import { resolveModeForArtifact } from '../guardrails-service';
 import { useStudioActions } from '../state/StudioContext';
+import { buildToolCallGraphArtifact, hasGraphableToolCalls } from '../tool-call-graph-artifact';
 import { getPrimitiveIcon, getPrimitiveLabel } from '../studio/canvas-labels';
 import { AudioNarratedCard, CinematicVideoCard, GoogleMapsCard, ImageGeneratedCard, TextureMatrixCard } from './MediaCards';
 import { QuestionCard } from './QuestionCard';
@@ -218,8 +219,29 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
         onExecuteCommand,
         showToast,
         handleSelectVersion,
+        handleMorphArtifact,
         sendMessage
     } = useStudioActions();
+
+    // the reply's tool calls laid out as runnable tool nodes on the canvas
+    const [openingToolGraph, setOpeningToolGraph] = React.useState(false);
+    const openToolCallGraph = async () => {
+        if (!msg.mcpExecutions || openingToolGraph) return;
+        setOpeningToolGraph(true);
+        try {
+            const { artifact, graph } = await buildToolCallGraphArtifact(msg.mcpExecutions, msg.artifacts?.[0]?.title || 'Chat build');
+            if (graph.nodes.length === 0) {
+                showToast(`No runnable tool calls in this reply${graph.skipped.length ? ` (${graph.skipped.map(s => `${s.toolName}: ${s.reason}`).join('; ')})` : ''}`, '⚠️');
+                return;
+            }
+            handleMorphArtifact(artifact);
+            showToast(`Opened ${graph.nodes.length} tool call${graph.nodes.length === 1 ? '' : 's'} as nodes${graph.skipped.length ? `; ${graph.skipped.length} left out` : ''}`, '🧩');
+        } catch (err) {
+            showToast(`Could not open the tool calls as nodes: ${err instanceof Error ? err.message : String(err)}`, '⚠️');
+        } finally {
+            setOpeningToolGraph(false);
+        }
+    };
 
     const isUser = msg.sender === 'user';
     const cleanText = isUser ? msg.text : cleanMessageTextSmart(msg.text, msg.artifacts?.[0]);
@@ -638,6 +660,18 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                 {/* Inline MCP & CLI Tool Execution Cards with Structured Outputs */}
                 {msg.mcpExecutions && msg.mcpExecutions.length > 0 && (
                     <GroupedMcpExecutions executions={msg.mcpExecutions} />
+                )}
+                {!isUser && !msg.isStreaming && hasGraphableToolCalls(msg.mcpExecutions) && (
+                    <button
+                        type="button"
+                        className="sb-btn sb-btn-secondary"
+                        style={{ fontSize: '11px', padding: '2px 8px', marginTop: '4px', alignSelf: 'flex-start' }}
+                        onClick={() => { void openToolCallGraph(); }}
+                        disabled={openingToolGraph}
+                        title="Lay out this reply's tool calls as runnable nodes on the canvas"
+                    >
+                        {openingToolGraph ? 'Opening…' : 'Open tool calls as nodes'}
+                    </button>
                 )}
 
                 {/* Inline Google Search Grounding & Citations Card */}

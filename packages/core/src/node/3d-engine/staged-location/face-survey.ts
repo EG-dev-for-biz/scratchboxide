@@ -75,21 +75,44 @@ export interface SurveyFaceTarget {
     /** Outward direction, degrees clockwise from north. */
     headingDeg: number;
     source: 'fit' | 'footprint';
-    /** The middle of the face (mid-height), tile frame. */
+    /** The middle of the face (mid-height of the band it stands for), tile frame. */
     centre: Vec3;
     outward: Vec3;
     widthM: number;
     heightM: number;
 }
 
-/** The compass faces of the footprint: one per facade heading the structure pick found, at most four. */
+/**
+ * A face taller than this is split into several vertical bands, each its own survey target pitched at its own middle,
+ * instead of one shot aimed at the structure's overall mid-height. A single wide-FOV shot can resolve a face up to a
+ * few dozen metres tall; above that it reads only the band it happens to be aimed at and calls the whole face
+ * "surveyed", leaving the rest with no photo evidence at all (a supertall's base and crown, say). No new Street View
+ * sources are needed: a band only changes the look angle (pitch), still from the same ground-level panoramas.
+ */
+export const SURVEY_BAND_HEIGHT_M = 40;
+/** At most this many bands per face: the per-building image budget (MAX_STREET_VIEW_IMAGES_PER_BUILDING) is shared
+ *  across every face and band, so a very tall building still gets height coverage on every heading rather than
+ *  exhausting the budget on one. */
+export const MAX_SURVEY_BANDS_PER_FACE = 4;
+
+/** The vertical bands a face of `heightM` splits into: 1 for an ordinary building, up to MAX_SURVEY_BANDS_PER_FACE for a supertall. */
+export function surveyBandsFor(heightM: number): number {
+    return Math.max(1, Math.min(MAX_SURVEY_BANDS_PER_FACE, Math.ceil(heightM / SURVEY_BAND_HEIGHT_M)));
+}
+
+/** The compass faces of the footprint: one per facade heading the structure pick found (at most four), each split into
+ *  height bands when the structure is tall enough that one shot could not resolve it top to bottom. */
 export function footprintSurveyFaces(structure: Pick<StructurePickResult, 'outline' | 'centroid' | 'facadeHeadingsDeg' | 'groundY' | 'heightM'>): SurveyFaceTarget[] {
-    return facadeGeometry(structure).slice(0, MAX_SURVEY_FACES).map(f => {
+    const bands = surveyBandsFor(structure.heightM);
+    const bandHeightM = structure.heightM / bands;
+    return facadeGeometry(structure).slice(0, MAX_SURVEY_FACES).flatMap(f => {
         const dir: Vec3 = [Math.sin(f.headingDeg * DEG), 0, -Math.cos(f.headingDeg * DEG)];
-        return {
-            faceId: `h${Math.round(f.headingDeg)}`, headingDeg: f.headingDeg, source: 'footprint' as const,
-            centre: [f.centre[0], structure.groundY + structure.heightM / 2, f.centre[1]] as Vec3, outward: dir, widthM: f.widthM, heightM: structure.heightM
-        };
+        return Array.from({ length: bands }, (_, b) => ({
+            faceId: bands > 1 ? `h${Math.round(f.headingDeg)}_b${b}` : `h${Math.round(f.headingDeg)}`,
+            headingDeg: f.headingDeg, source: 'footprint' as const,
+            centre: [f.centre[0], structure.groundY + bandHeightM * (b + 0.5), f.centre[1]] as Vec3,
+            outward: dir, widthM: f.widthM, heightM: bandHeightM
+        }));
     });
 }
 
@@ -150,8 +173,13 @@ export function surveyAim(eye: Vec3, face: SurveyFaceTarget): { headingDeg: numb
     const d = Math.hypot(face.centre[0] - eye[0], face.centre[2] - eye[2]);
     const headingDeg = bearingDeg(eye[0], eye[2], face.centre[0], face.centre[2]);
     const elevationDeg = Math.max(-20, Math.min(55, Math.atan2(face.centre[1] - eye[1], Math.max(0.1, d)) / DEG));
-    // the survey asks for 4:3 crops of the 1920 px grounding frame: the fov to request so that the crop itself spans the face
-    const need = groundingRequestFovDeg(2 * Math.atan((face.widthM / 2) * 1.12 / Math.max(1, d)) / DEG, 4 / 3);
+    // the survey asks for 4:3 crops of the 1920 px grounding frame: the fov to request so that the crop itself spans the face,
+    // in both width and height (a band's heightM is its own slice now, not the whole structure: a tall, narrow band needs its
+    // height considered too, not just its width)
+    const dist = Math.max(1, d);
+    const needW = groundingRequestFovDeg(2 * Math.atan((face.widthM / 2) * 1.12 / dist) / DEG, 4 / 3);
+    const needH = groundingRequestFovDeg(2 * Math.atan((face.heightM / 2) * 1.12 / dist) / DEG, 4 / 3);
+    const need = Math.max(needW, needH);
     return {
         headingDeg: Math.round(headingDeg * 10) / 10, elevationDeg: Math.round(elevationDeg * 10) / 10,
         fovDeg: Math.round(Math.max(SURVEY_FOV_MIN_DEG, Math.min(SURVEY_FOV_MAX_DEG, need)) * 10) / 10,
@@ -207,7 +235,12 @@ export function surveyViewFor(face: SurveyFaceTarget, pick: SurveyCandidate): Su
 /**
  * One pano per face, each looking at its face from the outward side, all different, at different bearings from the
  * structure where the candidates allow. A face no pano sees is skipped, with the reason. The faces with the fewest
- * candidates choose first, so a face with one possible pano gets it.
+ * candidates choose first, so a face with one possible pano gets it. MAX_SURVEY_FACES caps the faces because each Street
+ * View image costs a call; `rendered` lifts that cap for cameras that are free renders of the tile (pipeline G's
+ * stations), leaving only `max`. `opts.bandedCeiling` is the other deliberate way to spend more real Street View calls:
+ * a supertall's faces come back from footprintSurveyFaces split into several height bands each (still real, costed
+ * images, just more of them so every band gets a look), and the caller passes its own considered ceiling here rather
+ * than the ordinary per-building default.
  */
 export function selectSurveyViews(
     panos: PanoCandidate[],
@@ -215,9 +248,10 @@ export function selectSurveyViews(
     structure: Pick<StructurePickResult, 'cells' | 'groundY' | 'centroid'>,
     ground: Pick<GroundModel, 'cellIndex' | 'groundAt'>,
     top: Float32Array,
-    max = MAX_SURVEY_FACES
+    max = MAX_SURVEY_FACES,
+    opts: { rendered?: boolean; bandedCeiling?: number } = {}
 ): SurveyPlan {
-    const limit = Math.max(0, Math.min(MAX_SURVEY_FACES, max));
+    const limit = Math.max(0, opts.rendered ? max : Math.min(opts.bandedCeiling ?? MAX_SURVEY_FACES, max));
     const candidates = surveyCandidates(panos, faces, structure, ground, top);
     const order = [...faces].sort((a, b) => candidates.get(a.faceId)!.length - candidates.get(b.faceId)!.length || a.headingDeg - b.headingDeg);
     const used = new Set<string>();
@@ -356,6 +390,14 @@ export interface RunSurveyInput {
     now?: () => number;
     /** Called once the survey images are in hand, before they are read (the caller may fetch what it will want next). */
     onFetched?: (read: SurveyResult['read']) => void;
+    /**
+     * The image budget selectSurveyViews works to when the faces carry more than one band per heading (a tall
+     * structure's footprintSurveyFaces splits each heading into several, so one shot per heading would silently
+     * starve a supertall's bands of everything past the first). Bounded by the caller to MAX_STREET_VIEW_IMAGES_PER_BUILDING,
+     * the whole build's shared real-image budget. Left unset, an ordinary one-band-per-heading survey behaves exactly
+     * as before (selectSurveyViews' own MAX_SURVEY_FACES default).
+     */
+    bandedCeiling?: number;
 }
 
 /** Fetch the faces in parallel, read each in its own call (in parallel), measure their colours. A face whose call fails is left out with why; throws VisionStageError when no call gives anything usable. */
@@ -365,11 +407,14 @@ export async function runFaceSurvey(input: RunSurveyInput): Promise<SurveyResult
     // panos the grounding API already refused (this run or recently) are never asked for
     const refusedBefore = knownRefusals(input.deps);
     const panos = input.panos.filter(p => !refusedBefore.has(p.panoId));
-    const plan = selectSurveyViews(panos, input.faces, input.structure, input.ground, input.top);
+    const plan = selectSurveyViews(panos, input.faces, input.structure, input.ground, input.top, input.bandedCeiling ?? MAX_SURVEY_FACES, input.bandedCeiling ? { bandedCeiling: input.bandedCeiling } : {});
     const faceOf = new Map(input.faces.map(f => [f.faceId, f]));
     const faceRecords = (): SurveyedFace[] => input.faces.map(f => {
         const skip = plan.skipped.find(s => s.faceId === f.faceId);
-        return { faceId: f.faceId, headingDeg: f.headingDeg, source: f.source, elements: [], materials: [], ...(skip ? { skipped: skip.reason } : {}) };
+        return {
+            faceId: f.faceId, headingDeg: f.headingDeg, source: f.source, elements: [], materials: [],
+            centreY: f.centre[1], heightM: f.heightM, ...(skip ? { skipped: skip.reason } : {})
+        };
     });
     const emptyModel = (error: string): VisionModelUse => visionUse(input.chain, 'failed', { error }, STAGED_VISION_MODEL_DEFAULT.selection);
     if (!plan.views.length) {

@@ -18,6 +18,9 @@
  *   revolve    a meridian revolved about an axis, with radial harmonic lobes and an optional helix
  *   replicate  copies of another part (with what is attached to it) around a ring or along a path
  *   relief     grooves or beads along curves on another part's surface
+ *   crown      a branching crown grown, not modelled: an SB-Veggie tree (space colonisation inside the described crown
+ *              envelope, SB-Veggie leaf clusters, levels of detail; scratchbox_sb_veggie_grove.hpp), for every tree,
+ *              shrub or other branching living crown. Branches and foliage are never swept or revolved.
  * Labels are diagnostic text and nothing branches on them. A child part attaches by parameter on its
  * parent's evaluated surface, so connections hold by construction instead of by guessed coordinates.
  *
@@ -136,6 +139,22 @@ export const MATERIAL_LIMITS = {
     maxEmissiveStrength: 100
 } as const;
 
+/**
+ * A branching crown, grown as an SB-Veggie tree from its envelope (metres): the trunk base, the height to the crown
+ * top, the crown's half spreads, and optionally where the crown begins, where it is widest (0 its base .. 1 its top),
+ * the top's profile exponent (1 a cone, 2 a dome, more a flat top) and the trunk radius. A crown part is a root part
+ * (no parent, no mirror, not a replicate seed); its material's baseColor, when given, is the foliage colour.
+ */
+export interface CrownOperator {
+    trunkBaseMeters: Vec3;
+    heightMeters: number;
+    crownRadiiMeters: [number, number];
+    crownBaseHeightMeters?: number;
+    crownWidestAt?: number;
+    crownTopExponent?: number;
+    trunkRadiusMeters?: number;
+}
+
 export interface ObjectPartSpec {
     id: string;
     label: string;
@@ -149,13 +168,14 @@ export interface ObjectPartSpec {
     revolve?: RevolveOperator;
     replicate?: ReplicateOperator;
     relief?: ReliefOperator;
+    crown?: CrownOperator;
 }
 
 export interface ObjectBuildSpec {
     subject: string;
     /** Overall width (X), height (Y) and depth (Z) of the object in metres. */
     boundingMeters: Vec3;
-    /** How many separate pieces the object is meant to be (1 when everything is joined). */
+    /** How many separate pieces the object is meant to be (1 when everything is joined); each crown part is one piece. */
     expectedBodies: number;
     observations: string[];
     parts: ObjectPartSpec[];
@@ -176,7 +196,7 @@ export interface BuiltObjectRecord {
     placement?: { eastMeters: number; northMeters: number; headingDeg: number; surfaceYMeters: number };
 }
 
-export const OPERATOR_KEYS = ['sweep', 'revolve', 'replicate', 'relief'] as const;
+export const OPERATOR_KEYS = ['sweep', 'revolve', 'replicate', 'relief', 'crown'] as const;
 export type OperatorKey = typeof OPERATOR_KEYS[number];
 
 /** Limits that keep a build inside the interpreter's and the connectivity check's budgets. */
@@ -272,7 +292,7 @@ export const OBJECT_BUILD_SPEC_JSON_SCHEMA: Record<string, unknown> = {
             description: 'Short notes on what the reference shows: proportions, counts, how parts join, what is inferred for hidden sides.'
         },
         boundingMeters: vec3('Overall [width X, height Y, depth Z] of the object in metres at real-world scale.'),
-        expectedBodies: { type: 'integer', minimum: 1, description: 'How many separate pieces the object is meant to be; 1 when everything is joined.' },
+        expectedBodies: { type: 'integer', minimum: 1, description: 'How many separate pieces the object is meant to be; 1 when everything is joined; each crown part counts as one piece.' },
         parts: {
             type: 'array',
             minItems: 1,
@@ -388,10 +408,24 @@ export const OBJECT_BUILD_SPEC_JSON_SCHEMA: Record<string, unknown> = {
                             sharpness: num('0 rounded, toward 0.95 crisp and flat-bottomed.', 0, 0.95)
                         },
                         required: ['targetPartId', 'curves', 'widthMeters', 'depthMeters', 'sharpness']
+                    },
+                    crown: {
+                        type: 'object',
+                        description: 'A tree, shrub or any branching living crown: grown as an SB-Veggie tree (branching and foliage grown inside this envelope), never modelled with sweep or revolve. A root part only.',
+                        properties: {
+                            trunkBaseMeters: vec3('[x, y, z] where the trunk meets the ground, absolute metres.'),
+                            heightMeters: num('Trunk base to the top of the crown.', 0),
+                            crownRadiiMeters: tuple(2, '[half spread along X, half spread along Z] of the crown in metres.'),
+                            crownBaseHeightMeters: num('Height of the lowest crown branches above the trunk base; omit when it cannot be seen.', 0),
+                            crownWidestAt: num('Share of the crown depth where it is widest: 0 a cone widest at its base, 0.5 round, 0.8 an umbrella.', 0, 0.9),
+                            crownTopExponent: num('Shape of the crown top: 1 a cone, 2 a dome, 4 flat.', 0.5, 8),
+                            trunkRadiusMeters: num('Trunk radius above the root flare; omit when it cannot be seen.', 0)
+                        },
+                        required: ['trunkBaseMeters', 'heightMeters', 'crownRadiiMeters']
                     }
                 },
                 required: ['id', 'label'],
-                propertyOrdering: ['id', 'label', 'parentId', 'attach', 'mirrorPlaneNormal', 'sweep', 'revolve', 'replicate', 'relief']
+                propertyOrdering: ['id', 'label', 'parentId', 'attach', 'mirrorPlaneNormal', 'sweep', 'revolve', 'replicate', 'relief', 'crown']
             }
         }
     },
@@ -480,8 +514,9 @@ export function validateObjectBuildSpec(input: unknown, options: { requireMateri
             errors.push(`${where}: mirrorPlaneNormal must be a non-zero [x, y, z] vector`);
         }
         const geometric = present.length === 1 && (present[0] === 'sweep' || present[0] === 'revolve');
+        const crown = present.length === 1 && present[0] === 'crown';
         if (given(raw.material)) {
-            if (present.length === 1 && !geometric) {
+            if (present.length === 1 && !geometric && !crown) {
                 errors.push(`${where}: a ${present[0]} part has no surface of its own, so it cannot have a material; give the material to the part it ${present[0] === 'replicate' ? 'copies' : 'cuts into'}`);
             } else {
                 validatePartMaterial(raw.material, where, errors);
@@ -503,6 +538,13 @@ export function validateObjectBuildSpec(input: unknown, options: { requireMateri
         const geometric = op === 'sweep' || op === 'revolve';
 
         // Attachment
+        if (op === 'crown') {
+            // a crown is grown where its trunk stands: never attached, mirrored or copied
+            if (given(part.parentId) || given(part.attach)) errors.push(`${where}: a crown part is a root part; give its trunkBaseMeters instead of parentId and attach`);
+            if (given(part.mirrorPlaneNormal)) errors.push(`${where}: a crown part cannot be mirrored; give each crown its own part`);
+            validateCrown(part.crown, where, errors, pointInReach);
+            continue;
+        }
         if (given(part.parentId)) {
             if (op && !geometric) {
                 errors.push(`${where}: a ${op} part has no geometry of its own, so it cannot attach to a parent; remove parentId and attach`);
@@ -595,6 +637,37 @@ function isNonZeroVec3(v: unknown): v is Vec3 {
 
 function isPair(v: unknown): v is [number, number] {
     return Array.isArray(v) && v.length === 2 && v.every(isFiniteNumber);
+}
+
+function validateCrown(
+    crown: unknown,
+    where: string,
+    errors: string[],
+    pointInReach: (p: number[], where: string, field: string) => void
+): void {
+    if (!isRecord(crown)) {
+        errors.push(`${where}: crown must be an object`);
+        return;
+    }
+    if (!isVec3(crown.trunkBaseMeters)) errors.push(`${where}: crown.trunkBaseMeters must be [x, y, z] in metres`);
+    else pointInReach(crown.trunkBaseMeters as number[], where, 'crown.trunkBaseMeters');
+    const height = crown.heightMeters;
+    if (!isFiniteNumber(height) || height <= 0.3) errors.push(`${where}: crown.heightMeters must be more than 0.3 m`);
+    if (!isPair(crown.crownRadiiMeters) || (crown.crownRadiiMeters as number[]).some(r => r <= 0.1)) {
+        errors.push(`${where}: crown.crownRadiiMeters must be [along X, along Z], each more than 0.1 m`);
+    }
+    if (given(crown.crownBaseHeightMeters) && (!isFiniteNumber(crown.crownBaseHeightMeters) || crown.crownBaseHeightMeters < 0 || (isFiniteNumber(height) && crown.crownBaseHeightMeters >= 0.95 * height))) {
+        errors.push(`${where}: crown.crownBaseHeightMeters must be at least 0 and below 0.95 of heightMeters`);
+    }
+    if (given(crown.crownWidestAt) && (!isFiniteNumber(crown.crownWidestAt) || crown.crownWidestAt < 0 || crown.crownWidestAt > 0.9)) {
+        errors.push(`${where}: crown.crownWidestAt must be between 0 and 0.9`);
+    }
+    if (given(crown.crownTopExponent) && (!isFiniteNumber(crown.crownTopExponent) || crown.crownTopExponent < 0.5 || crown.crownTopExponent > 8)) {
+        errors.push(`${where}: crown.crownTopExponent must be between 0.5 and 8`);
+    }
+    if (given(crown.trunkRadiusMeters) && (!isFiniteNumber(crown.trunkRadiusMeters) || crown.trunkRadiusMeters <= 0 || (isFiniteNumber(height) && crown.trunkRadiusMeters >= 0.2 * height))) {
+        errors.push(`${where}: crown.trunkRadiusMeters must be more than 0 and under 0.2 of heightMeters`);
+    }
 }
 
 /** Checks one material block against the factor ranges; every problem is named. */
@@ -809,6 +882,8 @@ function validateReplicate(
         errors.push(`${where}: a replicate cannot copy itself`);
     } else if (operatorOf.get(seed) === 'relief') {
         errors.push(`${where}: replicate.seedPartId "${seed}" is a relief part, which has no geometry to copy`);
+    } else if (operatorOf.get(seed) === 'crown') {
+        errors.push(`${where}: replicate.seedPartId "${seed}" is a crown part; each tree is grown on its own: give every crown its own part`);
     }
     const hasRing = given(replicate.ring);
     const hasPath = given(replicate.path);

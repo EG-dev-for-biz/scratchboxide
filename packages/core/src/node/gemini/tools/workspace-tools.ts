@@ -12,6 +12,7 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import type { SymbolKind } from '../../../common/context-graph-protocol';
 import { resolveWithinRoot, PathTraversalError } from '../../security/path-guard';
+import { stagedWorkspaceRoot } from '../../3d-engine/staged-location/stage-cache';
 import type { ToolDeclaration, ToolHandler, ToolContext, ToolHandlerOutcome } from './types';
 
 export const IGNORED_DIRS = [
@@ -132,9 +133,33 @@ function resolveInRoot(root: string, rel: string): string {
     }
 }
 
+/**
+ * A staged build's own published files (public/models, public/briefs: massing-glb.ts, pipeline-g/brief.ts) live under
+ * stagedWorkspaceRoot() — a fixed location tied to the repo checkout, not to whichever project folder the current chat
+ * happens to have open (ctx.workspaceRoot: the IDE's "workspace", set per chat, often a subfolder such as desktop-app).
+ * A read-only tool resolves an absolute path there directly, so the chat model can open a building brief or a published
+ * GLB regardless of the open workspace; falls back to the ordinary ctx.workspaceRoot confinement for everything else,
+ * and a write operation never takes this path (staged-location-tool.ts callers still write it relative to their own
+ * workspaceRoot, through the ordinary resolveInRoot).
+ */
+function resolveReadPath(ctx: Pick<ToolContext, 'workspaceRoot'>, rel: string): string {
+    if (path.isAbsolute(rel)) {
+        try {
+            return resolveWithinRoot(path.join(stagedWorkspaceRoot(), 'public'), rel);
+        } catch (err) {
+            if (!(err instanceof PathTraversalError)) throw err;
+            // not under the staged build's own public/ root: fall through to the open workspace
+        }
+    }
+    return resolveInRoot(ctx.workspaceRoot, rel);
+}
+
 // ============================================================================
 // Workspace Declarations & Handlers
 // ============================================================================
+
+const IMAGE_MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
+const MAX_VIEW_IMAGE_BYTES = 8_000_000;
 
 export const WORKSPACE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
@@ -160,6 +185,18 @@ export const WORKSPACE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 startLine: { type: 'NUMBER', description: 'Optional 1-based start line (inclusive)' },
                 endLine: { type: 'NUMBER', description: 'Optional 1-based end line (inclusive)' },
                 contentOffset: { type: 'NUMBER', description: 'Optional byte offset for viewing large files' }
+            },
+            required: ['filePath']
+        }
+    },
+    {
+        name: 'workspace_view_image',
+        description: 'Look at an image file in the workspace (PNG, JPEG or WebP): it is shown to you after this call, so you can judge it yourself, e.g. a survey photograph, a wall plate or a render of your own build to compare with them. Paths come from a tool result or the user. Up to 8 images per turn are shown.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                filePath: { type: 'STRING', description: 'Relative or absolute path of the image inside the workspace' },
+                label: { type: 'STRING', description: 'Optional: what the image is, said with it (e.g. "station 3, north wall from the street")' }
             },
             required: ['filePath']
         }
@@ -347,10 +384,26 @@ export const workspaceHandlers: Record<string, ToolHandler> = {
         };
     },
 
+    async workspace_view_image(args, ctx) {
+        const relPath = asString(args.filePath);
+        assertSafeWorkspacePath(relPath, 'view');
+        const fullPath = resolveReadPath(ctx, relPath);
+        const mimeType = IMAGE_MIME[path.extname(fullPath).toLowerCase()];
+        if (!mimeType) throw new Error(`Not an image this tool shows (PNG, JPEG or WebP): ${relPath}`);
+        if (!await fs.pathExists(fullPath)) throw new Error(`File not found: ${relPath}`);
+        const bytes = (await fs.stat(fullPath)).size;
+        if (bytes > MAX_VIEW_IMAGE_BYTES) throw new Error(`The image is ${(bytes / 1e6).toFixed(1)} MB, over ${MAX_VIEW_IMAGE_BYTES / 1e6} MB: view a smaller copy`);
+        const label = asString(args.label) || relPath;
+        return {
+            resultPayload: { status: 'success', filePath: relPath, bytes, shown: true, modelImages: [{ path: fullPath, mimeType, label }] },
+            summaryResult: `Looked at ${relPath}.`
+        };
+    },
+
     async workspace_view_file(args, ctx) {
         const relPath = asString(args.filePath);
         assertSafeWorkspacePath(relPath, 'view');
-        const fullPath = resolveInRoot(ctx.workspaceRoot, relPath);
+        const fullPath = resolveReadPath(ctx, relPath);
         if (!await fs.pathExists(fullPath)) {
             throw new Error(`File not found: ${relPath}`);
         }

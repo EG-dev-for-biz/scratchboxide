@@ -123,12 +123,14 @@ export const PROVENANCE = {
     /** A scanned lump smoothed (Taubin) with no vertex moved further than the scan's own tolerance: the rung under a figure read from a photo. Nothing added. */
     smoothedScan: 'smoothed-scan',
     /** SB-Veggie trees: stem, crown extent and height measured from the tiles, branching grown inside that crown. */
-    grownToMeasuredCrown: 'grown to the measured crown'
+    grownToMeasuredCrown: 'grown to the measured crown',
+    /** A plausible estimate or fill with no measurement behind it: e.g. an SB-Veggie tree grown into a crown a request described (scratchbox_sb_veggie_grove.hpp). measuredGeometry false, with a confidence. */
+    generated: 'generated'
 } as const;
 
 /** Labels whose geometry is not scan measurement: their ProvenanceRecord must say measuredGeometry false, with a confidence. */
 export const NON_MEASURED_PROVENANCE_LABELS: readonly ProvenanceLabel[] = [
-    PROVENANCE.photoInferred, PROVENANCE.photoCorrected, PROVENANCE.fittedUnobserved
+    PROVENANCE.photoInferred, PROVENANCE.photoCorrected, PROVENANCE.fittedUnobserved, PROVENANCE.generated
 ];
 
 export interface SourceRef {
@@ -191,6 +193,7 @@ export const DEFAULT_PROVENANCE_LEGEND: ReadonlyArray<Omit<ProvenanceLegendEntry
     { label: PROVENANCE.photoInferred, color: '#CC79A7', pattern: 'dots' },
     { label: PROVENANCE.smoothedScan, color: '#E69F00', pattern: 'dots' },
     { label: PROVENANCE.grownToMeasuredCrown, color: '#009E73', pattern: 'solid' },
+    { label: PROVENANCE.generated, color: '#009E73', pattern: 'dots' },
     /** Google's vector buildings (footprints and heights, modelled volumes) carried unchanged: the first paint and past the tiles. */
     { label: 'vector-modelled', color: '#9933FF', pattern: 'stripes' }
 ];
@@ -956,6 +959,8 @@ export interface StageSummary {
     status: StageStatus;
     /** skipped / failed / degraded, one sentence. */
     reason?: string;
+    /** Skipped as outside this kind of build (StageEvent.outOfScope): the progress view leaves it out. */
+    outOfScope?: boolean;
     layerIds: string[];
     timings: StageTimings;
     degradationIds: string[];
@@ -1042,6 +1047,8 @@ export interface StageEvent {
     degradations: DegradationRecord[];
     timings: StageTimings;
     model?: VisionModelUse;
+    /** A skip that is not part of this kind of build (a procedural-only build): the progress view leaves the stage out. */
+    outOfScope?: boolean;
 }
 
 // =============================================================================
@@ -1098,6 +1105,7 @@ export const STAGED_DEGRADE_LADDER: readonly DegradeRung[] = [
     { stage: 'tiles', failure: 'no structure of 3 m or more stands within 30 m of the anchor', fellTo: 'the remeshed area around the anchor, without a rebuild', provenanceAfter: PROVENANCE.remeshed, reasonCode: 'no_structure_at_anchor' },
     { stage: 'tiles', failure: 'the canopy mask fails', fellTo: 'the structure picked on the unmasked surface model', provenanceAfter: PROVENANCE.asScanned, reasonCode: 'canopy_not_masked' },
     { stage: 'tiles', failure: 'the structure still touches the extraction edge after 3 rounds or at 150 m', fellTo: 'the remeshed district around it, without a rebuild', provenanceAfter: PROVENANCE.remeshed, reasonCode: 'containment_failed' },
+    { stage: 'vehicles', failure: 'the vehicles cannot be read or patched (no vision model, a failed call)', fellTo: 'the scan with its vehicles', provenanceAfter: PROVENANCE.asScanned, reasonCode: 'vehicles_not_removed' },
     { stage: 'trees-measure', failure: 'strip fails', fellTo: "the scan's own trees, left in the remeshed scan", provenanceAfter: PROVENANCE.remeshed, reasonCode: 'trees_not_measured' },
     { stage: 'remesh', failure: 'tile_refine fails or times out', fellTo: 'the raw scan with its facades flattened, its scanned trees kept in it', provenanceAfter: PROVENANCE.scanFlattened, reasonCode: 'remesh_failed' },
     { stage: 'remesh', failure: 'flattening the raw scan fails too', fellTo: 'the raw scan as downloaded', provenanceAfter: PROVENANCE.asScanned, reasonCode: 'flatten_failed' },
@@ -1152,7 +1160,7 @@ export interface StagedLocationResult {
     structure?: StructurePick;
     extraction: {
         requestedRadiusM?: number; radiusM: number;
-        sizedTo: 'structure' | 'request' | 'district-fallback';
+        sizedTo: 'structure' | 'request' | 'district-fallback' | 'district-containment';
         leafTiles: number; cached: boolean; ageDays?: number;
         geometricErrorM: number; texelM: number; attribution: string[];
     };
@@ -1195,6 +1203,11 @@ export interface StagedLocationResult {
     /** The draft survey's materials and measured colours. */
     /** The background texture pass (textured twins of the staged layers), when it ran. */
     texturePass?: TexturePassRecord;
+    /**
+     * Pipeline G's building brief (pipeline-g/brief.ts): a JSON of the massing, roof objects, faces, facades, survey stations
+     * with their renders, wall plates with their readings, and the build's GLBs, with the images beside it.
+     */
+    buildingBrief?: { path: string; images: number };
     /**
      * When the build was staged into the active scene: what of that scene it kept and what it took out, by object id, so
      * nothing is said to have been kept that was not. A structure rebuild an earlier build made is kept (the district goes
@@ -1300,6 +1313,14 @@ export interface SurveyedFace {
     palette?: FacePalette;
     elements: SurveyElement[];
     materials: SurveyMaterial[];
+    /**
+     * The surveyed slice's own vertical middle and height (world Y, tile frame), when the structure's faces were split
+     * into height bands (a tall structure's footprintSurveyFaces) rather than one shot per heading. Absent for an
+     * ordinary, unbanded survey. Lets a texel-fill step (texture-pass.ts's paletteFill) tell which band's palette
+     * actually belongs at a given height, instead of picking whichever same-heading band happens to match first.
+     */
+    centreY?: number;
+    heightM?: number;
 }
 
 /**
@@ -1908,7 +1929,8 @@ const DEFINITIONS = {
     }),
     surveyedFace: obj(['faceId', 'headingDeg', 'source', 'elements', 'materials'], {
         faceId: STR, headingDeg: NUM, source: { enum: ['fit', 'footprint'] }, panoId: STR, captureDate: STR, skipped: STR,
-        palette: ref('facePalette'), elements: arr(ref('surveyElement')), materials: arr(ref('surveyMaterial'))
+        palette: ref('facePalette'), elements: arr(ref('surveyElement')), materials: arr(ref('surveyMaterial')),
+        centreY: NUM, heightM: ref('nonneg')
     }),
     materialHints: obj(['schema', 'label', 'palette', 'textureUse', 'faces', 'model', 'cost'], {
         schema: { const: 'scratchbox.material-hints/1' }, label: { const: 'photo-inferred' }, palette: { const: 'measured-from-photo' },
@@ -1936,7 +1958,7 @@ const DEFINITIONS = {
         keptFrom: obj(['runId', 'place'], { runId: STR, place: STR })
     }),
     stageSummary: obj(['stage', 'order', 'title', 'source', 'status', 'layerIds', 'timings', 'degradationIds'], {
-        stage: STR, order: INT, title: STR, source: STR, status: ref('stageStatus'), reason: STR,
+        stage: STR, order: INT, title: STR, source: STR, status: ref('stageStatus'), reason: STR, outOfScope: BOOL,
         layerIds: arr(STR), timings: ref('stageTimings'), degradationIds: arr(STR), cost: ref('stageCost')
     }),
     structurePick: obj(['seed', 'geocodeToStructureM', 'footprintAreaM2', 'extractionRadiusM', 'containmentRounds'], {
@@ -2069,14 +2091,14 @@ const DEFINITIONS = {
             supersede: arr(obj(['objectId', 'by'], { objectId: STR, by: STR }))
         }),
         layers: arr(ref('stagedLayer')), degradations: arr(ref('DegradationRecord')),
-        timings: ref('stageTimings'), model: ref('visionModelUse')
+        timings: ref('stageTimings'), model: ref('visionModelUse'), outOfScope: BOOL
     }),
     StagedLocationResult: obj(['success', 'status', 'place', 'extraction', 'stages', 'degradations', 'provenance', 'complexityGate', 'sourceLimits', 'timingsMs', 'cache', 'artifact', 'digest', 'summary'], {
         success: { const: true }, status: { enum: ['complete', 'degraded', 'stopped'] },
         place: obj(['query', 'resolvedAddress', 'lat', 'lng'], { query: STR, resolvedAddress: STR, lat: NUM, lng: NUM, elevationM: NUM, alternatives: arr(obj(['formattedAddress', 'lat', 'lng'], { name: STR, formattedAddress: STR, lat: NUM, lng: NUM, placeId: STR, userRatingCount: NUM })) }),
         structure: ref('structurePick'),
         extraction: obj(['radiusM', 'sizedTo', 'leafTiles', 'cached', 'geometricErrorM', 'texelM', 'attribution'], {
-            requestedRadiusM: ref('nonneg'), radiusM: ref('nonneg'), sizedTo: { enum: ['structure', 'request', 'district-fallback'] },
+            requestedRadiusM: ref('nonneg'), radiusM: ref('nonneg'), sizedTo: { enum: ['structure', 'request', 'district-fallback', 'district-containment'] },
             leafTiles: NONNEG_INT, cached: BOOL, ageDays: ref('nonneg'), geometricErrorM: ref('nonneg'), texelM: ref('nonneg'), attribution: arr(STR)
         }),
         stages: arr(ref('stageSummary')), degradations: arr(ref('DegradationRecord')),
@@ -2112,6 +2134,7 @@ const DEFINITIONS = {
             note: STR
         }),
         materialHints: ref('materialHints'), texturePass: ref('TexturePassRecord'), figures: arr(ref('figureRecord')),
+        buildingBrief: obj(['path', 'images'], { path: STR, images: NONNEG_INT }),
         photoCost: obj(['total', 'byStage'], { total: ref('stageCost'), byStage: { type: 'object', additionalProperties: ref('stageCost') } }),
         // trees-fix's LocationClayTrees (node/3d-engine/location-clay-pipeline.ts) owns its own shape
         trees: { type: 'object' },

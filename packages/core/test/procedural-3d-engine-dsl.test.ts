@@ -33,7 +33,7 @@ temple = world.add_structure(
     column_count_x=8,
     column_count_y=14
 ).align_to_terrain(terrain, offset_z=0.2)
-redwoods = sb.nature.PlantPreset.create_hero_redwood(height=28.0)
+redwoods = sb.create_tree(height=28.0, crown_radius=3.2, crown_widest_at=0.1, crown_top_exponent=1.2, label="redwood")
 world.scatter(
     asset=redwoods,
     surface=terrain,
@@ -126,7 +126,7 @@ temple = world.add_structure(
     column_count_y=10
 ).align_to_terrain(terrain, offset_z=0.2)
 
-redwoods = sb.nature.PlantPreset.create_hero_redwood(height=24.0)
+redwoods = sb.create_tree(height=24.0, crown_radius=3.0, crown_widest_at=0.1, crown_top_exponent=1.2, label="redwood")
 world.scatter(
     asset=redwoods,
     surface=terrain,

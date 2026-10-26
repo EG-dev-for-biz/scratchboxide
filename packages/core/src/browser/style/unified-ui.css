@@ -13363,9 +13363,6 @@ body.sb-light .sb-picker-card:focus-visible {
    Hit-Target Expansions for Micro-Actions (Apple HIG >=44pt effective target)
    ========================================================================== */
 
-.sb-node-port {
-    position: relative;
-}
 .sb-node-port::after {
     content: '';
     position: absolute;

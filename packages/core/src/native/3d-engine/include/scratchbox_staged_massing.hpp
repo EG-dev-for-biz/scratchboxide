@@ -98,7 +98,16 @@ struct MeshSolid { std::string id, provenance; std::vector<V3> v; std::vector<ui
 /** A profile (outward offset, height: absolute y, or above each wall's own top with relativeToTop) swept along walls (wall keys, any order; split walls resolve to their pieces). */
 struct SweepSpec { std::string id, provenance; double confidence{0}; std::vector<std::pair<double, double>> profile; std::vector<std::string> faces; bool relativeToTop{false}; };
 
-struct OpeningSpec { std::string id, face, provenance; double s0{0}, s1{0}, t0{0}, t1{0}, depth{0}, confidence{0}; bool scanned{false}; };
+/**
+ * An opening in a wall's (s, t): a rectangle [s0, s1] x [t0, t1], or, with `archRise` > 0, a rectangle up to t1 - archRise
+ * crowned by a circular arc from (s0, t1 - archRise) through (mid, t1) to (s1, t1 - archRise) (a semicircle at half the width,
+ * a segmental arch below that; clamped to half the width). Arches are cut on extruded walls; a modelled volume's facet keeps
+ * the rectangle.
+ * With `panes`, the glazing is divided: a frame `frame` wide around the outline and `paneCols` - 1 mullions and `paneRows` - 1
+ * transoms `bar` wide, evenly spaced, each standing `barDepth` proud of the glass at the back of the recess.
+ */
+struct OpeningSpec { std::string id, face, provenance; double s0{0}, s1{0}, t0{0}, t1{0}, depth{0}, confidence{0}, archRise{0}; bool scanned{false};
+    int paneCols{0}, paneRows{0}; double bar{0}, frame{0}, barDepth{0}; };
 
 /**
  * A profile swept along one axis of a face's own frame (a curve sweep on the face plane): `axis` 0 sweeps along s with the
@@ -112,6 +121,14 @@ struct Spec {
     std::string tile, isolate, outDir;
     double pixel{0.05}, slabBack{1.5}, slabFront{0.8}, protrusionReach{2.5};
     double snapMaxM{2.0}, snapMinSupport{0.15};
+    /** Walls snapped here (off when the caller placed them on fitted planes already; modelled volumes still snap). */
+    bool snapWalls{true};
+    /**
+     * Openings and face sweeps on an edge this solid split in pieces are clipped to every piece they overlap (each piece
+     * its own copy, id <id>:<k>), and to the part of a wall a neighbour part does not cover, instead of rejected when they
+     * cross a piece's end or reach below its raised bottom. Off by default (callers placing openings on a known piece).
+     */
+    bool clipOpenings{false};
     double residualProud{0.6}, residualCut{0.6}, residualClear{1.5}, residualOpen{2.0}, residualMinArea{2.0}, apronHeight{0.8}, attachReach{1.5};
     double maxFaceSide{3000};
     /**
@@ -553,7 +570,7 @@ public:
         if (haveTile_ && !spec_.isolate.empty()) matchIsolate();
         timings_.push_back({"match_isolate", detail::nowMs() - t});
         t = detail::nowMs();
-        if (haveTile_ && !isoTris_.empty() && spec_.snapMaxM > 0) { snapWalls(); snapMeshes(); }
+        if (haveTile_ && !isoTris_.empty() && spec_.snapMaxM > 0) { if (spec_.snapWalls) snapWalls(); snapMeshes(); }
         timings_.push_back({"snap", detail::nowMs() - t});
         t = detail::nowMs();
         buildFaces();
@@ -819,27 +836,55 @@ private:
         // frame (the whole edge's frame has its origin at the edge's start, a piece's at its own); an opening with no such wall
         // is reported, never dropped silently
         for (size_t oi = 0; oi < spec_.openings.size(); ++oi) {
-            auto& o = spec_.openings[oi];
             Face* host = nullptr;
             double shift = 0;
+            std::vector<std::pair<Face*, double>> pieces;
+            bool whole = false;
             for (auto& f : faces_) {
+                const auto& o = spec_.openings[oi];
                 // an extruded wall, or a vertical facet of a modelled volume (its own triangles, cut round the openings)
                 if (!f.wall && !(f.kind == "wall" && !f.meshTris.empty())) continue;
-                if (f.key == o.face) { host = &f; shift = 0; break; }
+                if (f.key == o.face) { host = &f; shift = 0; pieces.clear(); break; }
                 if (!f.wall) continue;
-                if (f.key.size() <= o.face.size() || f.key.compare(0, o.face.size(), o.face) != 0 || f.key[o.face.size()] != ':') continue;
-                const Part* part = nullptr;
-                for (const auto& pp : spec_.parts) if (pp.id == f.part) part = &pp;
-                if (!part || f.loop < 0 || static_cast<size_t>(f.loop) >= part->loops.size() || f.edge < 0 || static_cast<size_t>(f.edge) >= part->loops[static_cast<size_t>(f.loop)].size()) continue;
-                const V2 a = part->loops[static_cast<size_t>(f.loop)][static_cast<size_t>(f.edge)];
-                const double d = (V3{a.x, 0, a.z} - f.origin).dot(f.axisS);
+                const double d = pieceShift(f, o.face);
+                if (std::isnan(d)) continue;
                 const double sc = 0.5 * (o.s0 + o.s1) + d;
                 if (sc >= f.sMin && sc <= f.sMax) { host = &f; shift = d; }
+                if (o.s0 + d > f.sMin + 0.02 && o.s1 + d < f.sMax - 0.02) whole = true;
+                if (std::min(o.s1 + d, f.sMax - 0.03) - std::max(o.s0 + d, f.sMin + 0.03) >= 0.3) pieces.push_back({&f, d});
             }
-            if (!host) { rejectedOpenings_.push_back(o.id); continue; }
+            // an opening straddling the cut of a split edge lies outside every piece's ends: a copy on each piece it overlaps
+            // by 0.3 m or more, clipped to it (clipOpenings always splits; otherwise only when no piece takes it whole)
+            if (!pieces.empty() && (spec_.clipOpenings ? pieces.size() > 1 : !whole)) {
+                // one copy per piece it overlaps, in that piece's frame (attached when the loop reaches it)
+                const OpeningSpec o = spec_.openings[oi];
+                int k = 0;
+                for (const auto& [f, d] : pieces) {
+                    OpeningSpec c = o;
+                    c.id = o.id + ":" + std::to_string(k++);
+                    c.face = f->key;
+                    c.s0 = std::max(o.s0 + d, f->sMin + 0.03);
+                    c.s1 = std::min(o.s1 + d, f->sMax - 0.03);
+                    spec_.openings.push_back(c);
+                }
+                continue;
+            }
+            if (!host) { rejectOpening(spec_.openings[oi].id, "no wall of the massing hosts its face"); continue; }
+            auto& o = spec_.openings[oi];
             o.s0 += shift; o.s1 += shift;
+            if (spec_.clipOpenings && host->wall && !o.scanned && o.t0 <= host->tBottom + 0.02 && o.t1 > host->tBottom + 0.35) o.t0 = host->tBottom + 0.03;
             attachOpening(*host, static_cast<int>(oi));
         }
+    }
+
+    /** For a piece of a split edge (<key>:<k>), the shift from the whole edge's frame (origin at its start) into the piece's; NaN when `f` is not a piece of `key`. */
+    double pieceShift(const Face& f, const std::string& key) const {
+        if (!f.wall || f.key.size() <= key.size() || f.key.compare(0, key.size(), key) != 0 || f.key[key.size()] != ':') return std::nan("");
+        const Part* part = nullptr;
+        for (const auto& pp : spec_.parts) if (pp.id == f.part) part = &pp;
+        if (!part || f.loop < 0 || static_cast<size_t>(f.loop) >= part->loops.size() || f.edge < 0 || static_cast<size_t>(f.edge) >= part->loops[static_cast<size_t>(f.loop)].size()) return std::nan("");
+        const V2 a = part->loops[static_cast<size_t>(f.loop)][static_cast<size_t>(f.edge)];
+        return (V3{a.x, 0, a.z} - f.origin).dot(f.axisS);
     }
 
     double wallTopAt(const Part& part, const V3& p) const { return part.roofAt(p.x, p.z); }
@@ -853,10 +898,11 @@ private:
         if (L < 0.05) return;
         V2 n2 = outwardNormal(part, a, b);
         V2 d{(b.x - a.x) / L, (b.z - a.z) / L};
-        // split the edge where other parts' corners project onto it (their cover may change there)
+        // split the edge where other parts' corners project onto it (their cover may change there); only parts that can
+        // cover it, as below: one that starts higher (an object on the roof) cut a block's walls into slivers
         std::vector<double> cuts{0.0, L};
         for (size_t pj = 0; pj < spec_.parts.size(); ++pj) {
-            if (pj == pi) continue;
+            if (pj == pi || spec_.parts[pj].baseY > part.baseY + 0.05) continue;
             for (const auto& l2 : spec_.parts[pj].loops) for (const auto& q : l2) {
                 double s = (q.x - a.x) * d.x + (q.z - a.z) * d.z, h = (q.x - a.x) * n2.x + (q.z - a.z) * n2.z;
                 if (s > 0.05 && s < L - 0.05 && std::abs(h) < 0.5) cuts.push_back(s);
@@ -867,13 +913,16 @@ private:
         for (size_t k = 0; k + 1 < cuts.size(); ++k) {
             double sa = cuts[k], sb = cuts[k + 1];
             V3 pa{a.x + d.x * sa, 0, a.z + d.z * sa}, pb{a.x + d.x * sb, 0, a.z + d.z * sb};
-            // what covers the outside of this run: the highest other part there (its roof)
+            // what covers the outside of this run: the highest other part there (its roof) that stands from this part's base
+            // or below it. A part that starts higher (an upper tier, an overhang) covers nothing from the bottom of this run up:
+            // counting its roof dropped whole street walls under a stacked tier whose plan the snapped walls fell inside.
             V3 mid = (pa + pb) * 0.5;
             V3 outside{mid.x + n2.x * 0.1, 0, mid.z + n2.z * 0.1};
             double cover = -1e300;
             for (size_t pj = 0; pj < spec_.parts.size(); ++pj) {
                 if (pj == pi) continue;
                 const Part& o = spec_.parts[pj];
+                if (o.baseY > part.baseY + 0.05) continue;
                 if (detail::inPart(o, outside.x, outside.z)) cover = std::max(cover, std::min(o.roofAt(outside.x, outside.z), o.topY));
             }
             Face f;
@@ -1054,6 +1103,7 @@ private:
             return -1e300;
         };
         bool ok;
+        std::string why;
         if (!f.meshTris.empty()) {
             // a modelled volume's facet: the rectangle (inset 5 cm) inside the facet's own triangles at its corners, edge
             // midpoints and centre
@@ -1070,19 +1120,61 @@ private:
             };
             const double a0 = o.s0 + 0.05, a1 = o.s1 - 0.05, b0 = o.t0 + 0.05, b1 = o.t1 - 0.05;
             ok = o.s1 > o.s0 + 0.15 && o.t1 > o.t0 + 0.15;
-            for (double s : {a0, 0.5 * (a0 + a1), a1}) for (double t : {b0, 0.5 * (b0 + b1), b1}) if (ok && !inFacet(s, t)) ok = false;
+            if (!ok) why = "smaller than 0.15 m";
+            for (double s : {a0, 0.5 * (a0 + a1), a1}) for (double t : {b0, 0.5 * (b0 + b1), b1}) if (ok && !inFacet(s, t)) { ok = false; why = "off the facet of the modelled volume"; }
         } else {
-            ok = o.s1 > o.s0 + 0.05 && o.t1 > o.t0 + 0.05 && o.s0 > f.sMin + 0.02 && o.s1 < f.sMax - 0.02 && o.t0 > f.tBottom + (o.scanned ? -1e9 : 0.02) &&
-                 o.t1 < std::min(topAt(o.s0), topAt(o.s1)) - 0.05;
+            // a street-level opening (a door, a shop front) may reach the wall's bottom: within 5 cm of it, it starts there
+            if (!o.scanned && o.t0 < f.tBottom + 0.05 && o.t0 > f.tBottom - 0.05) spec_.openings[static_cast<size_t>(oi)].t0 = f.tBottom;
+            // each condition named, so a rejection says what was wrong with the reading (pipeline H reads these)
+            ok = true;
+            if (!(o.s1 > o.s0 + 0.05 && o.t1 > o.t0 + 0.05)) { ok = false; why = "smaller than 0.05 m"; }
+            else if (!(o.s0 > f.sMin + 0.02 && o.s1 < f.sMax - 0.02)) { ok = false; why = "outside the wall's ends"; }
+            else if (!(o.t0 >= f.tBottom - (o.scanned ? 1e9 : 1e-9))) { ok = false; why = "below the wall's bottom"; }
+            else if (!(o.t1 < std::min(topAt(o.s0), topAt(o.s1)) - 0.05)) { ok = false; why = "above the wall's top"; }
         }
         for (int other : f.openings) {
             const auto& p = spec_.openings[static_cast<size_t>(other)];
-            if (o.s0 < p.s1 && p.s0 < o.s1 && o.t0 < p.t1 && p.t0 < o.t1) ok = false;
+            if (o.s0 < p.s1 && p.s0 < o.s1 && o.t0 < p.t1 && p.t0 < o.t1) { if (ok) why = "overlaps opening " + p.id; ok = false; }
         }
-        if (!ok) { rejectedOpenings_.push_back(o.id); return; }
+        if (!ok) { rejectOpening(o.id, why); return; }
         f.openings.push_back(oi);
     }
+
+    /** A rejected opening and why: the ids alone (rejectedOpenings) hid 583 of 678 rejections on one building. */
+    void rejectOpening(const std::string& id, const std::string& why) {
+        rejectedOpenings_.push_back(id);
+        rejectedOpeningReasons_.emplace_back(id, why);
+    }
     std::vector<std::string> rejectedOpenings_;
+    std::vector<std::pair<std::string, std::string>> rejectedOpeningReasons_;
+
+    /**
+     * An opening's outline in its face's (s, t), counter-clockwise seen from outside: (s0, t0), (s1, t0), up the right jamb,
+     * the head from right to left (the line t1, or the arch sampled about every 11 degrees), down the left jamb. Convex.
+     */
+    static std::vector<std::pair<double, double>> openingOutline(const Face& f, const OpeningSpec& o) {
+        const double half = 0.5 * (o.s1 - o.s0), mid = 0.5 * (o.s0 + o.s1);
+        const double rise = (f.wall && f.meshTris.empty()) ? std::min({o.archRise, half, 0.95 * (o.t1 - o.t0)}) : 0.0;
+        if (rise < 0.01) return {{o.s0, o.t0}, {o.s1, o.t0}, {o.s1, o.t1}, {o.s0, o.t1}};
+        constexpr double kPi = 3.14159265358979323846;
+        const double spring = o.t1 - rise;
+        const double r = (half * half + rise * rise) / (2 * rise), cy = o.t1 - r;
+        const double a0 = std::atan2(spring - cy, half), a1 = kPi - a0;
+        const int n = std::max(4, static_cast<int>(std::ceil((a1 - a0) / (kPi / 16))));
+        std::vector<std::pair<double, double>> out{{o.s0, o.t0}, {o.s1, o.t0}, {o.s1, spring}};
+        for (int k = 1; k < n; ++k) { double a = a0 + (a1 - a0) * k / n; out.push_back({mid + r * std::cos(a), cy + r * std::sin(a)}); }
+        out.push_back({o.s0, spring});
+        return out;
+    }
+    /** The top of an opening's outline at s (the head polyline: from index 2 on, s descending). */
+    static double outlineTopAt(const std::vector<std::pair<double, double>>& ol, double s) {
+        for (size_t i = 2; i + 1 < ol.size(); ++i) {
+            const auto& a = ol[i];
+            const auto& b = ol[i + 1];
+            if (s <= a.first + 1e-9 && s >= b.first - 1e-9) return a.first - b.first > 1e-12 ? b.second + (a.second - b.second) * (s - b.first) / (a.first - b.first) : std::max(a.second, b.second);
+        }
+        return ol[2].second;
+    }
 
     // ------------------------------------------------------------------------------------------------
     // geometry
@@ -1137,11 +1229,16 @@ private:
             return;
         }
         if (f.wall) {
-            // vertical slabs between every top-polyline vertex and opening edge; each slab is the bottom-to-top column minus the
-            // openings spanning it (rectangles), the last piece a trapezoid under the top line
+            // vertical slabs between every top-polyline vertex and opening outline vertex; each slab is the bottom-to-top column
+            // minus the openings spanning it (their heads straight across the slab: an arch's samples are slab edges), the
+            // last piece a trapezoid under the top line
             std::vector<double> xs;
+            std::vector<std::vector<std::pair<double, double>>> outlines;
             for (const auto& q : f.top) xs.push_back(q.first);
-            for (int oi : f.openings) { xs.push_back(spec_.openings[static_cast<size_t>(oi)].s0); xs.push_back(spec_.openings[static_cast<size_t>(oi)].s1); }
+            for (int oi : f.openings) {
+                outlines.push_back(openingOutline(f, spec_.openings[static_cast<size_t>(oi)]));
+                for (const auto& p : outlines.back()) xs.push_back(p.first);
+            }
             std::sort(xs.begin(), xs.end());
             xs.erase(std::unique(xs.begin(), xs.end(), [](double a, double b) { return std::abs(a - b) < 1e-6; }), xs.end());
             auto topAt = [&](double s) {
@@ -1156,19 +1253,20 @@ private:
                 double sa = xs[i], sb = xs[i + 1];
                 if (sb - sa < 1e-6) continue;
                 double sm = 0.5 * (sa + sb);
-                std::vector<std::pair<double, double>> cut;
-                for (int oi : f.openings) {
-                    const auto& o = spec_.openings[static_cast<size_t>(oi)];
-                    if (o.s0 <= sm && sm <= o.s1) cut.push_back({o.t0, o.t1});
+                std::vector<std::array<double, 3>> cut;  // bottom, head at sa, head at sb
+                for (size_t k = 0; k < f.openings.size(); ++k) {
+                    const auto& o = spec_.openings[static_cast<size_t>(f.openings[k])];
+                    if (o.s0 <= sm && sm <= o.s1) cut.push_back({o.t0, outlineTopAt(outlines[k], sa), outlineTopAt(outlines[k], sb)});
                 }
                 std::sort(cut.begin(), cut.end());
-                double cur = f.tBottom;
+                double curA = f.tBottom, curB = f.tBottom;
                 for (const auto& c : cut) {
-                    if (c.first > cur + 1e-6) { put(sa, cur); put(sb, cur); put(sb, c.first); put(sa, cur); put(sb, c.first); put(sa, c.first); }
-                    cur = std::max(cur, c.second);
+                    if (c[0] > curA + 1e-6 || c[0] > curB + 1e-6) { put(sa, curA); put(sb, curB); put(sb, c[0]); put(sa, curA); put(sb, c[0]); put(sa, c[0]); }
+                    curA = std::max(curA, c[1]);
+                    curB = std::max(curB, c[2]);
                 }
                 double ta = topAt(sa), tb = topAt(sb);
-                if (ta > cur + 1e-6 || tb > cur + 1e-6) { put(sa, cur); put(sb, cur); put(sb, tb); put(sa, cur); put(sb, tb); put(sa, ta); }
+                if (ta > curA + 1e-6 || tb > curB + 1e-6) { put(sa, curA); put(sb, curB); put(sb, tb); put(sa, curA); put(sb, tb); put(sa, ta); }
             }
             return;
         }
@@ -1221,14 +1319,88 @@ private:
                 }
             };
             V3 back = f.n * (-o.depth);
-            V3 a = f.at(o.s0, o.t0), b = f.at(o.s1, o.t0), c = f.at(o.s1, o.t1), d = f.at(o.s0, o.t1);
-            std::array<std::pair<double, double>, 4> st{{{o.s0, o.t0}, {o.s1, o.t0}, {o.s1, o.t1}, {o.s0, o.t1}}};
-            quad(a + back, b + back, c + back, d + back, f.n, st);
-            quad(a, b, b + back, a + back, f.axisT, {{{o.s0, o.t0}, {o.s1, o.t0}, {o.s1, o.t0}, {o.s0, o.t0}}});       // sill (faces up)
-            quad(d, c, c + back, d + back, f.axisT * -1, {{{o.s0, o.t1}, {o.s1, o.t1}, {o.s1, o.t1}, {o.s0, o.t1}}});  // head (faces down)
-            quad(a, d, d + back, a + back, f.axisS, {{{o.s0, o.t0}, {o.s0, o.t1}, {o.s0, o.t1}, {o.s0, o.t0}}});       // jamb (faces +s)
-            quad(b, c, c + back, b + back, f.axisS * -1, {{{o.s1, o.t0}, {o.s1, o.t1}, {o.s1, o.t1}, {o.s1, o.t0}}});
+            const auto ol = openingOutline(f, o);
+            // the back panel (the outline is convex: a fan), facing out
+            for (size_t k = 1; k + 1 < ol.size(); ++k) {
+                V3 ps[3] = {f.at(ol[0].first, ol[0].second) + back, f.at(ol[k].first, ol[k].second) + back, f.at(ol[k + 1].first, ol[k + 1].second) + back};
+                const std::pair<double, double> st[3] = {ol[0], ol[k], ol[k + 1]};
+                bool flip = (ps[1] - ps[0]).cross(ps[2] - ps[0]).dot(f.n) < 0;
+                for (int j = 0; j < 3; ++j) {
+                    int q = flip ? (j == 0 ? 0 : 3 - j) : j;
+                    OutVertex v;
+                    v.p = ps[q]; v.n = f.n; v.face = static_cast<int>(fi); v.s = st[q].first; v.t = st[q].second;
+                    r.idx.push_back(static_cast<uint32_t>(r.v.size()));
+                    r.v.push_back(v);
+                }
+            }
+            // a reveal along every outline edge, facing into the opening (sill up, jambs across, head or arch soffit down)
+            for (size_t k = 0; k < ol.size(); ++k) {
+                const auto& p = ol[k];
+                const auto& q = ol[(k + 1) % ol.size()];
+                double ds = q.first - p.first, dt = q.second - p.second, len = std::hypot(ds, dt);
+                if (len < 1e-9) continue;
+                V3 n = f.axisS * (-dt / len) + f.axisT * (ds / len);
+                V3 a = f.at(p.first, p.second), b = f.at(q.first, q.second);
+                quad(a, b, b + back, a + back, n, {{p, q, q, p}});
+            }
+            emitPanes(f, o, ol, quad);
             nodes_.push_back(std::move(r));
+        }
+    }
+
+    /**
+     * The divided glazing of an opening (OpeningSpec panes): prisms standing barDepth proud of the glass at the back of the
+     * recess, each a quadrilateral in the face's (s, t) given counter-clockwise: the frame along every outline edge (inset
+     * `frame`), then the mullions and transoms evenly spaced inside it, clipped to the outline's head.
+     */
+    template <class Quad>
+    void emitPanes(const Face& f, const OpeningSpec& o, const std::vector<std::pair<double, double>>& ol, Quad& quad) const {
+        if (o.paneCols < 1 || o.paneRows < 1 || o.barDepth <= 0 || (o.frame <= 0 && o.bar <= 0) || (o.paneCols == 1 && o.paneRows == 1 && o.frame <= 0)) return;
+        const double barDepth = std::min(o.barDepth, 0.9 * o.depth);
+        const V3 glass = f.n * (-o.depth), front = f.n * (-o.depth + barDepth);
+        using ST = std::pair<double, double>;
+        auto prism = [&](const std::array<ST, 4>& q) {
+            auto P = [&](const ST& p, const V3& off) { return f.at(p.first, p.second) + off; };
+            quad(P(q[0], front), P(q[1], front), P(q[2], front), P(q[3], front), f.n, q);
+            for (int k = 0; k < 4; ++k) {
+                const ST& a = q[static_cast<size_t>(k)];
+                const ST& b = q[static_cast<size_t>((k + 1) % 4)];
+                double ds = b.first - a.first, dt = b.second - a.second, len = std::hypot(ds, dt);
+                if (len < 1e-9) continue;
+                V3 n = f.axisS * (dt / len) + f.axisT * (-ds / len);
+                quad(P(a, glass), P(b, glass), P(b, front), P(a, front), n, {a, b, b, a});
+            }
+        };
+        const double fw = std::max(0.0, o.frame), bw = std::max(0.0, o.bar);
+        // the frame: each outline edge's band inset by fw (the outline runs counter-clockwise in (s, t): inward is its left)
+        if (fw > 0) {
+            for (size_t k = 0; k < ol.size(); ++k) {
+                const ST& p = ol[k];
+                const ST& q = ol[(k + 1) % ol.size()];
+                double ds = q.first - p.first, dt = q.second - p.second, len = std::hypot(ds, dt);
+                if (len < 1e-9) continue;
+                const double is = -dt / len * fw, it = ds / len * fw;
+                prism({p, q, ST{q.first + is, q.second + it}, ST{p.first + is, p.second + it}});
+            }
+        }
+        if (bw <= 0) return;
+        const double sa = o.s0 + fw, sb = o.s1 - fw, ta = o.t0 + fw;
+        // mullions, each up to the head above it
+        for (int k = 1; k < o.paneCols; ++k) {
+            const double sc = o.s0 + (o.s1 - o.s0) * k / o.paneCols, s0 = sc - bw / 2, s1 = sc + bw / 2;
+            const double top = std::min(outlineTopAt(ol, s0), outlineTopAt(ol, s1)) - fw;
+            if (top > ta + 1e-3) prism({ST{s0, ta}, ST{s1, ta}, ST{s1, top}, ST{s0, top}});
+        }
+        // transoms, each across the width the head leaves at its height
+        for (int k = 1; k < o.paneRows; ++k) {
+            const double tc = o.t0 + (o.t1 - o.t0) * k / o.paneRows, t0 = tc - bw / 2, t1 = tc + bw / 2;
+            double l = sb, rgt = sa;
+            const int steps = 96;
+            for (int j = 0; j <= steps; ++j) {
+                const double s = sa + (sb - sa) * j / steps;
+                if (outlineTopAt(ol, s) - fw >= t1) { l = std::min(l, s); rgt = std::max(rgt, s); }
+            }
+            if (rgt > l + 1e-3) prism({ST{l, t0}, ST{rgt, t0}, ST{rgt, t1}, ST{l, t1}});
         }
     }
 
@@ -1383,8 +1555,41 @@ private:
     void emitFaceSweep(const FaceSweepSpec& fs) {
         size_t fi = faces_.size();
         for (size_t i = 0; i < faces_.size(); ++i) if (faces_[i].key == fs.face) { fi = i; break; }
-        if (fi == faces_.size() || fs.profile.size() < 2 || fs.placements.empty()) { rejectedSweeps_.push_back(fs.id); return; }
+        if (fi == faces_.size() && fs.axis == 0 && !fs.placements.empty() && fs.profile.size() >= 2) {
+            // an edge this solid split in pieces (<key>:0, <key>:1, ...): each piece the placements overlap (clipOpenings),
+            // or the piece under their centre, the placements moved into that piece's frame (as openings are); along s only
+            double lo = 1e300, hi = -1e300;
+            for (const auto& pl : fs.placements) { lo = std::min({lo, pl[0], pl[1]}); hi = std::max({hi, pl[0], pl[1]}); }
+            bool any = false;
+            for (size_t i = 0; i < faces_.size(); ++i) {
+                const Face& f = faces_[i];
+                const double d = pieceShift(f, fs.face);
+                if (std::isnan(d)) continue;
+                const bool overlaps = std::min(hi + d, f.sMax) - std::max(lo + d, f.sMin) >= 0.3;
+                const double sc = 0.5 * (lo + hi) + d;
+                if (!(spec_.clipOpenings ? overlaps : (sc >= f.sMin && sc <= f.sMax))) continue;
+                FaceSweepSpec moved = fs;
+                moved.face = f.key;
+                moved.id = fs.id + ":" + std::to_string(i);
+                for (auto& pl : moved.placements) { pl[0] = std::clamp(pl[0] + d, f.sMin, f.sMax); pl[1] = std::clamp(pl[1] + d, f.sMin, f.sMax); }
+                any = emitFaceSweepOn(moved, i) || any;
+                if (!spec_.clipOpenings) break;
+            }
+            if (!any) rejectedSweeps_.push_back(fs.id);
+            return;
+        }
+        if (fi == faces_.size() || fs.profile.size() < 2 || fs.placements.empty() || !emitFaceSweepOn(fs, fi)) rejectedSweeps_.push_back(fs.id);
+    }
+
+    /** Emits the sweep on face `fi`; false (nothing emitted) when it does not fit there. */
+    bool emitFaceSweepOn(const FaceSweepSpec& in, size_t fi) {
         const Face& f = faces_[fi];
+        const FaceSweepSpec& fs = in;
+        // a wall a neighbour part covers below: a placement's profile (along s) never reaches below the wall's raised bottom.
+        // The profile's cross values are relative to the placement's own offset (pl[2]), so the clamp is per placement, on
+        // the absolute height. A placement the clamp cut into is dropped when what is left is under 0.3 m or under half its
+        // height (a sliver of a profile the neighbour hides); one the clamp does not reach is kept whatever its height (a sill)
+        const bool clipBottom = spec_.clipOpenings && f.wall && fs.axis == 0;
         OutNode node;
         node.name = "facesweep:" + fs.id;
         node.kind = "sweep";
@@ -1407,10 +1612,21 @@ private:
             put(a, n); put(flip ? c : b, n); put(flip ? b : c, n);
         };
         const V3 A = fs.axis == 0 ? f.axisS : f.axisT, C = fs.axis == 0 ? f.axisT : f.axisS;
-        const auto& pr = fs.profile;
         for (const auto& pl : fs.placements) {
             const double a0 = std::min(pl[0], pl[1]), a1 = std::max(pl[0], pl[1]), dc = pl[2];
             if (a1 - a0 < 1e-3) continue;
+            std::vector<std::pair<double, double>> pr = fs.profile;
+            if (clipBottom) {
+                double c0 = 1e300, c1 = -1e300, o0 = 1e300, o1 = -1e300;
+                bool cut = false;
+                for (auto& q : pr) {
+                    o0 = std::min(o0, q.second); o1 = std::max(o1, q.second);
+                    const double c = std::max(q.second + dc, f.tBottom) - dc;
+                    cut = cut || c != q.second;
+                    q.second = c; c0 = std::min(c0, c); c1 = std::max(c1, c);
+                }
+                if (cut && c1 - c0 < std::min(0.3, 0.5 * (o1 - o0))) continue;
+            }
             for (size_t k = 0; k + 1 < pr.size(); ++k) {
                 const double c0 = pr[k].second + dc, o0 = std::max(0.0, pr[k].first), c1 = pr[k + 1].second + dc, o1 = std::max(0.0, pr[k + 1].first);
                 if (o0 <= 1e-6 && o1 <= 1e-6) continue;
@@ -1438,8 +1654,9 @@ private:
                 tri(b0, b1, b2, cn); tri(b0, b2, b3, cn);
             }
         }
-        if (node.v.empty()) { rejectedSweeps_.push_back(fs.id); return; }
+        if (node.v.empty()) return false;
         nodes_.push_back(std::move(node));
+        return true;
     }
 
     void emitGeometry() {
@@ -2054,7 +2271,9 @@ private:
         }
         js << "]},\"signedVolumeM3\":" << detail::fmt(volume_) << ",\"rejectedOpenings\":[";
         for (size_t i = 0; i < rejectedOpenings_.size(); ++i) js << (i ? "," : "") << detail::jstr(rejectedOpenings_[i]);
-        js << "],\"rejectedSweeps\":[";
+        js << "],\"rejectedOpeningReasons\":{";
+        for (size_t i = 0; i < rejectedOpeningReasons_.size(); ++i) js << (i ? "," : "") << detail::jstr(rejectedOpeningReasons_[i].first) << ":" << detail::jstr(rejectedOpeningReasons_[i].second);
+        js << "},\"rejectedSweeps\":[";
         for (size_t i = 0; i < rejectedSweeps_.size(); ++i) js << (i ? "," : "") << detail::jstr(rejectedSweeps_[i]);
         js << "],\"nodes\":" << (nodesJson_.empty() ? "[]" : nodesJson_) << ",\"images\":" << (imagesJson_.empty() ? "[]" : imagesJson_)
            << ",\"sections\":" << (sectionsJson_.empty() ? "[]" : sectionsJson_) << ",\"topdown\":" << (topdownJson_.empty() ? "null" : topdownJson_) << ",\"notes\":[";
@@ -2073,7 +2292,7 @@ private:
  *   part <id> <baseY> <topY> <provenance>          then: loop <n> x z ... (first outer), plane <a> <b> <c> <tag>
  *   mesh <id> <nv> <nt> <provenance>               then: v x y z (nv lines), t i j k (nt lines)
  *   sweep <id> <confidence> <provenance> <np> o y ... <nf> <face> ... [top]   (top: y is above each wall's own top)
- *   opening <id> <face> <s0> <s1> <t0> <t1> <depth> <scanned 0|1> <confidence> <provenance>
+ *   opening <id> <face> <s0> <s1> <t0> <t1> <depth> <scanned 0|1> <confidence> <provenance> [arch <rise>]
  *   facesweep <id> <confidence> <provenance> <face> <axis 0|1> <np> o c ... <nplace> a0 a1 dc ...
  */
 inline Spec readSpec(std::istream& in) {
@@ -2101,6 +2320,8 @@ inline Spec readSpec(std::istream& in) {
             else if (name == "protrusionReach") s.protrusionReach = v;
             else if (name == "snapMaxM") s.snapMaxM = v;
             else if (name == "snapMinSupport") s.snapMinSupport = v;
+            else if (name == "snapWalls") s.snapWalls = v != 0;
+            else if (name == "clipOpenings") s.clipOpenings = v != 0;
             else if (name == "residualProud") s.residualProud = v;
             else if (name == "residualCut") s.residualCut = v;
             else if (name == "residualMinArea") s.residualMinArea = v;
@@ -2179,8 +2400,19 @@ inline Spec readSpec(std::istream& in) {
             OpeningSpec o;
             int sc;
             ls >> o.id >> o.face >> o.s0 >> o.s1 >> o.t0 >> o.t1 >> o.depth >> sc >> o.confidence >> o.provenance;
-            if (!ls) fail("opening needs id face s0 s1 t0 t1 depth scanned confidence provenance");
+            if (!ls) fail("opening needs id face s0 s1 t0 t1 depth scanned confidence provenance [arch rise]");
             o.scanned = sc != 0;
+            std::string flag;
+            while (ls >> flag) {
+                if (flag == "arch") {
+                    if (!(ls >> o.archRise) || o.archRise < 0) fail("opening: arch needs a rise >= 0");
+                } else if (flag == "panes") {
+                    if (!(ls >> o.paneCols >> o.paneRows >> o.bar >> o.frame >> o.barDepth) || o.paneCols < 1 || o.paneRows < 1 || o.bar < 0 || o.frame < 0 || o.barDepth < 0)
+                        fail("opening: panes needs cols >= 1, rows >= 1, bar, frame and barDepth >= 0");
+                } else {
+                    fail("opening: unknown trailing token " + flag + " (\"arch <rise>\" or \"panes <cols> <rows> <bar> <frame> <barDepth>\")");
+                }
+            }
             s.openings.push_back(o);
         } else if (k == "facesweep") {
             FaceSweepSpec w;

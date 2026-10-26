@@ -7,7 +7,7 @@ import scratchbox_native.geometry
 import scratchbox_native.math
 import typing
 
-__all__ = ['RomanOrder', 'architecture', 'composer', 'core', 'export_glb_bytes', 'geometry', 'hair', 'human', 'io', 'math', 'meshops', 'nature', 'plant', 'processing', 'relief', 'render_sensor_passes', 'rig', 'sdf', 'shaper', 'surface', 'topology', 'weathering']
+__all__ = ['RomanOrder', 'architecture', 'composer', 'core', 'export_glb_bytes', 'geometry', 'hair', 'human', 'io', 'math', 'meshops', 'nature', 'processing', 'relief', 'render_sensor_passes', 'rig', 'scan_massing', 'sdf', 'shaper', 'surface', 'topology', 'vegetation', 'weathering']
 
 
 class RomanOrder(enum.Enum):
@@ -37,7 +37,6 @@ import scratchbox_native.io as io
 import scratchbox_native.math as math
 import scratchbox_native.meshops as meshops
 import scratchbox_native.nature as nature
-import scratchbox_native.plant as plant
 import scratchbox_native.processing as processing
 import scratchbox_native.relief as relief
 
@@ -45,8 +44,10 @@ def render_sensor_passes(mesh: scratchbox_native.geometry.Mesh, width: int = 512
     """Render RGB beauty, metric linear depth, and surface normal validation passes"""
 
 import scratchbox_native.rig as rig
+import scratchbox_native.scan_massing as scan_massing
 import scratchbox_native.sdf as sdf
 import scratchbox_native.shaper as shaper
 import scratchbox_native.surface as surface
 import scratchbox_native.topology as topology
+import scratchbox_native.vegetation as vegetation
 import scratchbox_native.weathering as weathering

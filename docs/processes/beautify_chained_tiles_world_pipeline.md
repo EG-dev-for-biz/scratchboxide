@@ -12,6 +12,10 @@ An explorable world a user can walk, run, or fly through continuously, built by 
 
 `docs/processes/streetview_create_a_world_plan.md` is a different pipeline, for a different experience: real Street View photos → measured depth → metric Gaussian splats. That world is "the real place" — walkable because it's physically measured. This pipeline produces a different thing: a styled, generated rendering of real geometry — walkable because it's geometrically QC'd against real geometry, not because it's photographed. They happen to share some tools (`BeautifyStationService`, Google 3D Tiles fetch, the Beautify Chain Service once it exists), but they are two separate pipelines with two separate outputs. Do not merge them or treat one as a fallback tier of the other.
 
+## Not the character-sheet approach either
+
+`building-character-sheet.ts` (2026-10-24, `docs/processes/beautify_consistency_and_character_sheet_2026-10-24.md`) gets strong cross-view consistency for a small *fixed* set of views of one bounded subject in a single 4K call, with no chaining at all. It does not apply here: this pipeline's station count is open-ended (a walk, run or flight has no fixed number of stops decided up front), so there is no fixed sheet to compose. The two are complementary tools for different shapes of problem, not alternatives for the same one.
+
 ## Core technique
 
 For every pose along the user's path (walking, running, or flying — direction and speed only change lookahead distance, not the technique):
@@ -24,6 +28,8 @@ For every pose along the user's path (walking, running, or flying — direction 
 ## Why textured, not clay
 
 `BeautifyStationService` already supports this — `renderMode: 'textured'`/`'albedo'` runs a full C++20 BVH path tracer with real PBR texture decoding against the actual tile mesh (`SurveyStationRenderService.ts`, `renderStation`, around line 189-194), not grey clay. Anchoring every generated station to real texture (not an untextured blockout) does two things at once: it gives the generator real material/color to match instead of inventing it from nothing, and it re-anchors every link in the chain to ground truth — fixing the drift problem a pure neighbor-to-neighbor generated chain would otherwise accumulate over a long walk or flight, since every station checks against something real, not just against whatever the previous station happened to generate.
+
+This is not just theoretical: `docs/processes/beautify_consistency_and_character_sheet_2026-10-24.md` measured the same neighbour-warp chaining mechanism (via `BeautifyStationService`'s `options.reference`) holding colour within ΔE 2.6 across 3 Haughwout views against ΔE 9.7–16.4 unchained, with only 10–14 % of each next frame covered by the warped reference. That is real evidence the chaining half of this pipeline's consistency strategy works even with partial coverage — it does not by itself validate the always-anchor-to-real-texture half, which this pipeline adds on top and that work did not test.
 
 ## Why JavaScript capture, not the native path tracer, for this pipeline specifically
 
@@ -38,6 +44,8 @@ This codebase already has the faster path, proven and in production use: `Google
 ## Beautify prompt reliability
 
 The existing `buildBeautifyPrompt`/`buildStationBeautifyPrompt` template is treated as a solid, already-proven foundation for this pipeline — not an open risk to re-litigate. The remaining risk in this pipeline is upstream of the prompt: the *input* texture quality, not the prompt that describes it.
+
+One specific, recent change does need acting on, not just noting: `buildStationBeautifyPrompt` now defaults to even, shadowless lighting (no sun clause) for 3D-feeding callers — splat/texture bakes, surveys — because a baked-in sun does not transform away cleanly downstream (`docs/processes/beautify_consistency_and_character_sheet_2026-10-24.md`, 2026-10-24). This pipeline's stations are not 3D-feeding — the styled image *is* the deliverable the user walks through — so it must pass `lighting: 'scene'` explicitly to keep sun and mood; relying on the new default would silently flatten every station to bright-overcast lighting regardless of the requested style.
 
 ## Known upstream risk: raw tile texture isn't pristine
 

@@ -27,6 +27,16 @@ import { generateImageWithModels } from '../../google-media-generation-service';
 import { readImageDimensions, sniffImageFormat } from '../../image-codec-ffmpeg';
 import { defaultDurableAssetStore } from '../../asset-store/durable-asset-store';
 import type { ToolDeclaration, ToolHandler } from './types';
+import { infillImageHoles } from '../../image-hole-infill';
+import { bakeDecal, decalAsset, generateDecalImage, DECAL_DEFAULT_STRENGTH } from '../../3d-engine/asset-decal';
+import { genAiEnhanceClient } from '../../3d-engine/staged-location/texture-enhance';
+import { decodeImageInMemory } from '../../3d-engine/staged-location/tile-texture-transfer';
+import { encodePng } from '../../texture-processing';
+import { buildFacadeTextureFromImage } from '../../3d-engine/staged-location/facade-texture/facade-texture';
+import { genAiPlateClient } from '../../3d-engine/staged-location/pipeline-e/enhance';
+import { visionFacadeCounter } from '../../3d-engine/staged-location/pipeline-e/plate-identity';
+import { VisionModelChain } from '../vision-model-chain';
+import { FALLBACK_GEMINI_MODELS } from '../gemini-client';
 
 const TOOL = 'nano_banana_apply_color_palette';
 
@@ -339,10 +349,304 @@ export const IMAGE_GENERATION_TOOL_DECLARATIONS: ToolDeclaration[] = [
             },
             required: ['prompt']
         }
+    },
+    {
+        name: 'image_infill_holes',
+        description: 'Fills the holes in an image generatively: the pixels a mask marks, or the flat regions of one colour (by default white, as a re-projected view leaves where nothing was seen) at least minHolePixels large. The holes and the pixels around them go to an image model with the holes in magenta; the answer is kept only when it reproduces the real pixels around the holes and joins them at the rim, and only hole pixels are replaced. The fill is labelled generated. When the answer is rejected the image is left as it was and the result says why. Writes a PNG and returns its path.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                imagePath: { type: 'STRING', description: 'URL, base64 data URI, or local filepath of the PNG or JPEG image with holes.' },
+                maskPath: { type: 'STRING', description: 'Optional mask image of the same size: pixels brighter than mid-grey are holes. When given, holeColour is ignored.' },
+                holeColour: { type: 'STRING', description: 'Optional "#RRGGBB" colour of the holes when there is no mask (default "#ffffff").' },
+                minHolePixels: { type: 'NUMBER', description: 'Optional smallest flat region that counts as a hole (default 64 pixels).' },
+                model: { type: 'STRING', description: 'Optional image model id. When given, only that model is used; otherwise the default image models are tried in order.' },
+                outputPath: { type: 'STRING', description: 'Optional output PNG path (relative paths resolve against the workspace). Default: next to a local input as <name>_infilled.png, else infilled_<timestamp>.png in the workspace.' }
+            },
+            required: ['imagePath']
+        }
+    },
+    {
+        name: 'asset_decal',
+        description: 'Lays a decal on a 3D asset (a GLB): any image over the asset\'s own materials, baked into the GLB as a decal node a few millimetres off the faces it covers, so any glTF viewer and the app show it. What it shows is up to you: your own image (a logo, a sign, a poster, a photo, a texture with transparency), or an image painted by an image model from your description (grime and weathering, graffiti, a mural, ivy, rust streaks, lettering, damage, wet patches...), optionally read from a reference photo of the real thing. Where it goes is numbers you choose: the faces (by slope, by part name, by the compass direction they face), and the mapping (once across them, repeated every N metres, or one patch of a given size at a given place). Opacity comes from the image\'s own transparency, else from how far each pixel is from the white it was painted on; colour is the image\'s own unless you give one colour. A generated decal is labelled generated, your own image photo-inferred. Writes a new GLB and returns its path.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                glbPath: { type: 'STRING', description: 'Local path of the asset GLB (relative paths resolve against the workspace).' },
+                imageUrl: { type: 'STRING', description: 'Optional: the decal image itself (URL, data URI or file path), used as given; e.g. a decal asset made by decal_generate. When absent the image is painted from `description`.' },
+                description: { type: 'STRING', description: 'Optional: what to paint, in your own words (e.g. "a century of city soot and rain streaks", "faded red graffiti tags along the bottom metre", "a hand-painted Victorian shop sign reading ROOKERY in gold", "ivy climbing from the base"). Default: city weathering.' },
+                referenceImageUrl: { type: 'STRING', description: 'Optional photo the painted decal should be read from or look like (a Street View frame, a survey station, a photo).' },
+                colour: { type: 'STRING', description: 'Optional "#RRGGBB": a one-colour decal (the image gives only its opacity), e.g. black soot, rust orange, moss green.' },
+                strength: { type: 'NUMBER', description: 'Optional overall opacity, 0 to 1 (default 0.8).' },
+                headingDeg: { type: 'NUMBER', description: 'Optional: only faces facing this compass heading (0 north, 90 east, 180 south, 270 west), within headingToleranceDeg.' },
+                headingToleranceDeg: { type: 'NUMBER', description: 'Optional tolerance for headingDeg (default 45).' },
+                patchCentre: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Optional [across, up]: place ONE patch, its centre as fractions of the covered faces (across 0 = left, 1 = right, seen from outside; up 0 = bottom, 1 = top). Needs patchSizeM.' },
+                patchSizeM: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Optional [width, height] of the patch in metres.' },
+                tileM: { type: 'NUMBER', description: 'Optional: repeat the image every this many metres instead of stretching it once.' },
+                includeParts: { type: 'STRING', description: 'Optional: only nodes whose name contains this text (case-insensitive).' },
+                excludeParts: { type: 'STRING', description: 'Optional: nodes whose name contains this text are left clear (default: openings and glass).' },
+                maxNormalY: { type: 'NUMBER', description: 'Optional: faces whose normal points up or down by more than this get none (0 = only vertical faces, 1 = every face). Default 0.3.' },
+                offsetM: { type: 'NUMBER', description: 'Optional distance off the surface in metres (default 0.01).' },
+                name: { type: 'STRING', description: 'Optional name of the decal node (default "decal").' },
+                model: { type: 'STRING', description: 'Optional image model id for a painted decal.' },
+                outputPath: { type: 'STRING', description: 'Optional output GLB path. Default: next to the input as <name>_decal.glb.' }
+            },
+            required: ['glbPath']
+        }
+    },
+    {
+        name: 'decal_generate',
+        description: 'Makes decal assets: transparent PNG images of anything you describe (a sign, a logo, graffiti, a mural, a poster, ivy, rust streaks, stains, cracks, soot, road markings, numbers, a texture that tiles...), painted by an image model on white and cut out (the opacity is each pixel\'s distance from the white), optionally modelled on a reference photo. Each comes with a JSON sidecar recording its real-world size, whether it tiles, what it shows and its provenance (generated). They are files you keep and reuse: lay one on a model with asset_decal (its imageUrl), show it, or put it in a document. Each image is a separate billed call: make only the decals asked for.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                description: { type: 'STRING', description: 'What the decal shows, in your own words. Required unless referenceImageUrl alone says it.' },
+                referenceImageUrl: { type: 'STRING', description: 'Optional photo it should be read from or look like (URL, data URI or file path).' },
+                sizeM: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Optional [width, height] in metres the decal spans in the world (default [2, 2]); sets its aspect and is recorded for placing it.' },
+                tiles: { type: 'BOOLEAN', description: 'Optional: paint it to tile seamlessly (default false).' },
+                colour: { type: 'STRING', description: 'Optional "#RRGGBB": a one-colour decal (the painting gives only its shape and opacity).' },
+                count: { type: 'NUMBER', description: 'Optional number of variants (default 1, at most 4).' },
+                name: { type: 'STRING', description: 'Optional short name for the files.' },
+                model: { type: 'STRING', description: 'Optional image model id.' },
+                outputDir: { type: 'STRING', description: 'Optional folder. Default: the app-served build/generated-images/decals.' }
+            }
+        }
+    },
+    {
+        name: 'facade_texture_build',
+        description: 'Builds a realistic texture of one building wall from a straight-on (rectified) picture of it: a survey plate, a 3D-tiles ortho, a rectified photo. The facade texture builder redraws the wall with an image model, keeping its framing, then keeps the redraw only when it is the same wall (identity gate: storeys and bays counted on both, colour family, framing, edge alignment) and a good texture (quality score: no seam, no smeared strip, little left empty); what the score faults is redrawn by generative infill. Flat mid-grey texels of the input (or a given mask) are drawn as the wall continues. Every texel written is labelled generated. Writes a PNG and a JSON record of every check, and says why when the wall is refused.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                imagePath: { type: 'STRING', description: 'URL, base64 data URI, or local filepath of the straight-on PNG or JPEG wall picture.' },
+                widthM: { type: 'NUMBER', description: 'The wall\'s width in metres (the picture\'s full width).' },
+                heightM: { type: 'NUMBER', description: 'Optional wall height in metres (default: from the picture\'s aspect).' },
+                locationName: { type: 'STRING', description: 'Optional name or address of the building, for the prompt (default "the building").' },
+                referencePath: { type: 'STRING', description: 'Optional finished texture of a neighbouring wall of the same building, the reference for materials and colour.' },
+                unseenMaskPath: { type: 'STRING', description: 'Optional mask of the same size: pixels brighter than mid-grey are drawn as the wall continues (unseen, occluded). Default: the picture\'s flat mid-grey pixels.' },
+                audit: { type: 'BOOLEAN', description: 'Optional region audit against the input (default false): use it when the input is a sharp, trustworthy picture; leave it off for melted or partial inputs.' },
+                countStoreysAndBays: { type: 'BOOLEAN', description: 'Optional (default true): count storeys and bays on the input and the redraw with a vision model, and refuse a redraw that changes them.' },
+                model: { type: 'STRING', description: 'Optional image model id; otherwise the default image models are tried in order.' },
+                outputPath: { type: 'STRING', description: 'Optional output PNG path (relative paths resolve against the workspace). Default: next to a local input as <name>_facade.png, else facade_<timestamp>.png in the workspace. The record is written beside it as .json.' }
+            },
+            required: ['imagePath', 'widthM']
+        }
     }
 ];
 
 export const imageGenerationHandlers: Record<string, ToolHandler> = {
+    decal_generate: async (args, ctx) => {
+        const TOOL_ID = 'decal_generate';
+        const description = asString(args.description).trim();
+        const refArg = asString(args.referenceImageUrl);
+        if (!description && !refArg) throw new MissingInputError(TOOL_ID, 'description', 'describe the decal, or give a reference photo of it');
+        const sz = Array.isArray(args.sizeM) && args.sizeM.length === 2 && args.sizeM.every((x: unknown) => typeof x === 'number' && x > 0) ? [args.sizeM[0], args.sizeM[1]] as [number, number] : [2, 2] as [number, number];
+        const tiles = asBoolean(args.tiles, false);
+        const count = Math.max(1, Math.min(GENERATE_IMAGE_MAX_COUNT, Math.round(typeof args.count === 'number' ? args.count : 1)));
+        const cv = asString(args.colour), cm = cv ? /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(cv) : null;
+        if (cv && !cm) throw new InvalidInputError(TOOL_ID, 'colour', `"${cv}" is not a #RRGGBB colour`);
+        const colour = cm ? [parseInt(cm[1], 16), parseInt(cm[2], 16), parseInt(cm[3], 16)] as [number, number, number] : undefined;
+        const ref = refArg ? await loadInputImage(refArg, ctx?.workspaceRoot, ctx?.signal, TOOL_ID, 'referenceImageUrl') : undefined;
+        const models = resolveRequestedModels(asString(args.model) || undefined, IMAGE_MODEL_PRIORITY);
+        let genai: unknown;
+        try {
+            genai = await new GoogleMediaCredentialsService().createClient();
+        } catch (err) {
+            throw new MediaModelUnavailableError(models[0], `Google media credentials are not available (${(err as Error)?.message || err})`);
+        }
+        const repoRoot = resolveRepoRoot();
+        const outArg = asString(args.outputDir);
+        const dir = outArg ? (path.isAbsolute(outArg) ? outArg : path.resolve(ctx?.workspaceRoot || process.cwd(), outArg)) : path.join(repoRoot, GENERATED_IMAGES_DIR, 'decals');
+        await fs.ensureDir(dir);
+        const stem = `${imageFileStem(asString(args.name) || undefined, description || 'decal')}_${Date.now().toString(36)}`;
+        const decals = [];
+        for (let k = 0; k < count; k++) {
+            const painted = await generateDecalImage({ client: genai, models, ...(description ? { description } : {}), ...(ref ? { reference: { bytes: new Uint8Array(ref.data), mimeType: ref.mimeType } } : {}), widthM: sz[0], heightM: sz[1], tiles, ...(ctx?.signal ? { signal: ctx.signal } : {}) });
+            const asset = decalAsset(painted.image, { description: description || `read from ${refArg}`, sizeM: sz, tiles, label: 'generated', method: `painted by ${painted.modelUsed} on white and cut out by distance from white`, model: painted.modelUsed, ...(refArg ? { reference: refArg } : {}) }, colour);
+            const file = path.join(dir, `${stem}${count > 1 ? `_${k + 1}` : ''}.png`);
+            await fs.writeFile(file, asset.png);
+            await fs.writeFile(file.replace(/\.png$/, '.json'), JSON.stringify(asset.meta, null, 1));
+            const url = servedGeneratedImageUrl(file, repoRoot);
+            decals.push({ path: file, sidecar: file.replace(/\.png$/, '.json'), ...(url ? { url } : {}), sizeM: sz, pixels: asset.meta.pixels, modelUsed: painted.modelUsed });
+        }
+        return {
+            resultPayload: { success: true, decals, provenance: { label: 'generated' } },
+            summaryResult: `Made ${decals.length} decal${decals.length === 1 ? '' : 's'} (${sz[0]} x ${sz[1]} m${tiles ? ', tiling' : ''}): ${decals.map(d => d.path).join(', ')}. Lay one on a model with asset_decal (imageUrl).`
+        };
+    },
+    asset_decal: async (args, ctx) => {
+        const TOOL_ID = 'asset_decal';
+        const glbArg = asString(args.glbPath);
+        if (!glbArg) throw new MissingInputError(TOOL_ID, 'glbPath', 'give the asset GLB');
+        const glbPath = path.isAbsolute(glbArg) ? glbArg : path.resolve(ctx?.workspaceRoot || process.cwd(), glbArg);
+        if (!(await fs.pathExists(glbPath))) throw new MissingInputError(TOOL_ID, 'glbPath', `no file at ${glbPath}`);
+        const glb = new Uint8Array(await fs.readFile(glbPath));
+        const hex = (arg: string) => {
+            const v = asString(args[arg]);
+            if (!v) return undefined;
+            const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(v);
+            if (!m) throw new InvalidInputError(TOOL_ID, arg, `"${v}" is not a #RRGGBB colour`);
+            return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] as [number, number, number];
+        };
+        const num = (arg: string) => (typeof args[arg] === 'number' && Number.isFinite(args[arg]) ? args[arg] as number : undefined);
+        const pair = (arg: string) => { const v = args[arg]; return Array.isArray(v) && v.length === 2 && v.every(x => typeof x === 'number' && Number.isFinite(x)) ? [v[0], v[1]] as [number, number] : undefined; };
+        const centre = pair('patchCentre'), size = pair('patchSizeM');
+        if ((centre && !size) || (size && !centre)) throw new InvalidInputError(TOOL_ID, centre ? 'patchSizeM' : 'patchCentre', 'a patch needs both patchCentre and patchSizeM');
+        const include = asString(args.includeParts).toLowerCase(), exclude = asString(args.excludeParts).toLowerCase();
+        const keep = (n: string) => { const l = n.toLowerCase(); return (!include || l.includes(include)) && (exclude ? !l.includes(exclude) : !/opening|glass/.test(l)); };
+        const placement = {
+            ...(num('maxNormalY') !== undefined ? { maxNormalY: num('maxNormalY') } : {}), ...(num('headingDeg') !== undefined ? { headingDeg: num('headingDeg') } : {}),
+            ...(num('headingToleranceDeg') !== undefined ? { headingToleranceDeg: num('headingToleranceDeg') } : {}), ...(num('tileM') !== undefined ? { tileM: num('tileM') } : {}),
+            ...(centre && size ? { patch: { centre, sizeM: size } } : {}), ...(num('offsetM') !== undefined ? { offsetM: num('offsetM') } : {})
+        };
+        // the decal image: given, or painted at the size it will cover
+        const imageArg = asString(args.imageUrl), description = asString(args.description) || undefined;
+        let image, label: 'generated' | 'photo-inferred', modelUsed: string | undefined, method: string;
+        if (imageArg) {
+            const img = await loadInputImage(imageArg, ctx?.workspaceRoot, ctx?.signal, TOOL_ID, 'imageUrl');
+            try { image = decodeImageInMemory(new Uint8Array(img.data)); } catch (err) { throw new InvalidInputError(TOOL_ID, 'imageUrl', `the image is not a PNG or JPEG (${(err as Error).message})`); }
+            label = 'photo-inferred';
+            method = `the given image ${imageArg}`;
+        } else {
+            // the size it will cover: the patch, a tile, or the covered faces (a dry bake measures them)
+            const probe = bakeDecal(glb, { width: 4, height: 4, rgba: new Uint8Array(64).fill(255) }, { ...placement, keep });
+            if (!probe.decalTriangles) throw new InvalidInputError(TOOL_ID, 'glbPath', 'no face of the asset matches the placement asked for');
+            const [wM, hM] = size ?? (placement.tileM ? [placement.tileM, placement.tileM] : [probe.widthM, probe.heightM]);
+            const refArg = asString(args.referenceImageUrl);
+            const ref = refArg ? await loadInputImage(refArg, ctx?.workspaceRoot, ctx?.signal, TOOL_ID, 'referenceImageUrl') : undefined;
+            const models = resolveRequestedModels(asString(args.model) || undefined, IMAGE_MODEL_PRIORITY);
+            let genai: unknown;
+            try {
+                genai = await new GoogleMediaCredentialsService().createClient();
+            } catch (err) {
+                throw new MediaModelUnavailableError(models[0], `Google media credentials are not available (${(err as Error)?.message || err})`);
+            }
+            const painted = await generateDecalImage({ client: genai, models, ...(description ? { description } : {}), ...(ref ? { reference: { bytes: new Uint8Array(ref.data), mimeType: ref.mimeType } } : {}), widthM: wM, heightM: hM, tiles: !!placement.tileM, ...(ctx?.signal ? { signal: ctx.signal } : {}) });
+            image = painted.image; modelUsed = painted.modelUsed; label = 'generated';
+            method = `${description ?? 'city weathering'}${refArg ? `, read from ${refArg}` : ''}, painted by ${painted.modelUsed}`;
+        }
+        const strength = num('strength') ?? DECAL_DEFAULT_STRENGTH, colour = hex('colour');
+        const baked = bakeDecal(glb, image, { ...placement, keep, strength, label, method, ...(colour ? { colour } : {}), ...(asString(args.name) ? { name: asString(args.name) } : {}) });
+        if (!baked.decalTriangles) throw new InvalidInputError(TOOL_ID, 'glbPath', 'no face of the asset matches the placement asked for');
+        const requestedOut = asString(args.outputPath);
+        const outputPath = requestedOut
+            ? (path.isAbsolute(requestedOut) ? requestedOut : path.resolve(ctx?.workspaceRoot || process.cwd(), requestedOut))
+            : path.join(path.dirname(glbPath), `${path.basename(glbPath, path.extname(glbPath))}_decal.glb`);
+        await fs.ensureDir(path.dirname(outputPath));
+        await fs.writeFile(outputPath, baked.glb);
+        return {
+            resultPayload: { success: true, glbPath, outputPath, decalTriangles: baked.decalTriangles, coveredWidthM: Math.round(baked.widthM * 10) / 10, coveredHeightM: Math.round(baked.heightM * 10) / 10, strength, ...(modelUsed ? { modelUsed } : {}), provenance: { label, method } },
+            summaryResult: `Baked a decal (${baked.decalTriangles} triangles, ${label}: ${method}) into ${outputPath}.`
+        };
+    },
+    image_infill_holes: async (args, ctx) => {
+        const INFILL = 'image_infill_holes';
+        const imagePath = asString(args.imagePath);
+        if (!imagePath) throw new MissingInputError(INFILL, 'imagePath', 'give the image with holes');
+        const src = await loadInputImage(imagePath, ctx?.workspaceRoot, ctx?.signal, INFILL, 'imagePath');
+        let image;
+        try { image = decodeImageInMemory(new Uint8Array(src.data)); } catch (err) { throw new InvalidInputError(INFILL, 'imagePath', `the image is not a PNG or JPEG (${(err as Error).message})`); }
+        let mask: Uint8Array | undefined;
+        const maskPath = asString(args.maskPath);
+        if (maskPath) {
+            const m = decodeImageInMemory(new Uint8Array((await loadInputImage(maskPath, ctx?.workspaceRoot, ctx?.signal, INFILL, 'maskPath')).data));
+            if (m.width !== image.width || m.height !== image.height) throw new InvalidInputError(INFILL, 'maskPath', `the mask is ${m.width} x ${m.height}, the image ${image.width} x ${image.height}`);
+            mask = new Uint8Array(m.width * m.height);
+            for (let i = 0; i < mask.length; i++) mask[i] = m.rgba[i * 4] + m.rgba[i * 4 + 1] + m.rgba[i * 4 + 2] > 3 * 128 ? 1 : 0;
+        }
+        const hex = asString(args.holeColour);
+        const hm = hex ? /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex) : null;
+        if (hex && !hm) throw new InvalidInputError(INFILL, 'holeColour', `"${hex}" is not a #RRGGBB colour`);
+        const colour = hm ? [parseInt(hm[1], 16), parseInt(hm[2], 16), parseInt(hm[3], 16)] as [number, number, number] : undefined;
+        const minPixels = typeof args.minHolePixels === 'number' && args.minHolePixels > 0 ? Math.round(args.minHolePixels) : undefined;
+        const models = resolveRequestedModels(asString(args.model) || undefined, IMAGE_MODEL_PRIORITY);
+        let genai: unknown;
+        try {
+            genai = await new GoogleMediaCredentialsService().createClient();
+        } catch (err) {
+            throw new MediaModelUnavailableError(models[0], `Google media credentials are not available (${(err as Error)?.message || err})`);
+        }
+        const res = await infillImageHoles({ image, client: genAiEnhanceClient(genai), models, ...(mask ? { mask } : {}), ...(colour ? { colour } : {}), ...(minPixels ? { minPixels } : {}), ...(ctx?.signal ? { signal: ctx.signal } : {}) });
+        const requestedOut = asString(args.outputPath);
+        const outputPath = requestedOut
+            ? (path.isAbsolute(requestedOut) ? requestedOut : path.resolve(ctx?.workspaceRoot || process.cwd(), requestedOut))
+            : src.localPath
+                ? path.join(path.dirname(src.localPath), `${path.basename(src.localPath, path.extname(src.localPath))}_infilled.png`)
+                : path.join(ctx?.workspaceRoot || process.cwd(), `infilled_${Date.now()}.png`);
+        const accepted = res.decision === 'accepted';
+        if (accepted) {
+            await fs.ensureDir(path.dirname(outputPath));
+            await fs.writeFile(outputPath, encodePng(res.image.width, res.image.height, Buffer.from(res.image.rgba)));
+        }
+        return {
+            resultPayload: {
+                success: accepted, imagePath, ...(accepted ? { outputPath } : {}), decision: res.decision, ...(res.reason ? { reason: res.reason } : {}),
+                holePixels: res.holePixels, filledPixels: res.filledPixels, width: image.width, height: image.height,
+                ...(res.modelUsed ? { modelUsed: res.modelUsed } : {}), ...(res.metrics ? { metrics: res.metrics } : {}), ...(res.provenance ? { provenance: res.provenance } : {})
+            },
+            summaryResult: accepted
+                ? `Filled ${res.filledPixels} hole pixels of ${imagePath} with ${res.modelUsed} (labelled generated) -> ${outputPath}.`
+                : res.decision === 'no_holes' ? `No holes found in ${imagePath}${mask ? ' (the mask is empty)' : ''}; nothing written.`
+                : `The holes of ${imagePath} were not filled: ${res.reason ?? res.decision}. The image is unchanged; nothing written.`
+        };
+    },
+    facade_texture_build: async (args, ctx) => {
+        const FACADE = 'facade_texture_build';
+        const imagePath = asString(args.imagePath);
+        if (!imagePath) throw new MissingInputError(FACADE, 'imagePath', 'give the straight-on picture of the wall');
+        const widthM = Number(args.widthM);
+        if (!(widthM > 0)) throw new MissingInputError(FACADE, 'widthM', 'give the wall\'s width in metres');
+        const src = await loadInputImage(imagePath, ctx?.workspaceRoot, ctx?.signal, FACADE, 'imagePath');
+        let image;
+        try { image = decodeImageInMemory(new Uint8Array(src.data)); } catch (err) { throw new InvalidInputError(FACADE, 'imagePath', `the image is not a PNG or JPEG (${(err as Error).message})`); }
+        const heightM = Number(args.heightM) > 0 ? Number(args.heightM) : widthM * image.height / image.width;
+        const load = async (p: string, field: string) => { try { return decodeImageInMemory(new Uint8Array((await loadInputImage(p, ctx?.workspaceRoot, ctx?.signal, FACADE, field)).data)); } catch (err) { if (err instanceof InvalidInputError || err instanceof MissingInputError) throw err; throw new InvalidInputError(FACADE, field, `the image is not a PNG or JPEG (${(err as Error).message})`); } };
+        const referencePath = asString(args.referencePath);
+        const reference = referencePath ? await load(referencePath, 'referencePath') : undefined;
+        let unseenMask: Uint8Array | undefined;
+        const maskPath = asString(args.unseenMaskPath);
+        if (maskPath) {
+            const m = await load(maskPath, 'unseenMaskPath');
+            if (m.width !== image.width || m.height !== image.height) throw new InvalidInputError(FACADE, 'unseenMaskPath', `the mask is ${m.width} x ${m.height}, the image ${image.width} x ${image.height}`);
+            unseenMask = new Uint8Array(m.width * m.height);
+            for (let i = 0; i < unseenMask.length; i++) unseenMask[i] = m.rgba[i * 4] + m.rgba[i * 4 + 1] + m.rgba[i * 4 + 2] > 3 * 128 ? 1 : 0;
+        }
+        const models = resolveRequestedModels(asString(args.model) || undefined, IMAGE_MODEL_PRIORITY);
+        let genai: unknown;
+        try {
+            genai = await new GoogleMediaCredentialsService().createClient();
+        } catch (err) {
+            throw new MediaModelUnavailableError(models[0], `Google media credentials are not available (${(err as Error)?.message || err})`);
+        }
+        const counter = args.countStoreysAndBays === false ? undefined : visionFacadeCounter(new VisionModelChain<string>({ client: genai as never, candidates: FALLBACK_GEMINI_MODELS, ...(ctx?.signal ? { signal: ctx.signal } : {}) } as never));
+        const res = await buildFacadeTextureFromImage({
+            image, widthM, heightM, locationName: asString(args.locationName) || 'the building', client: genAiPlateClient(genai), models,
+            infill: { client: genAiEnhanceClient(genai), models }, ...(reference ? { reference } : {}), ...(unseenMask ? { unseenMask } : {}),
+            ...(counter ? { counter } : {}), audit: args.audit === true, ...(ctx?.signal ? { signal: ctx.signal } : {})
+        });
+        const requestedOut = asString(args.outputPath);
+        const outputPath = requestedOut
+            ? (path.isAbsolute(requestedOut) ? requestedOut : path.resolve(ctx?.workspaceRoot || process.cwd(), requestedOut))
+            : src.localPath
+                ? path.join(path.dirname(src.localPath), `${path.basename(src.localPath, path.extname(src.localPath))}_facade.png`)
+                : path.join(ctx?.workspaceRoot || process.cwd(), `facade_${Date.now()}.png`);
+        const record = {
+            accepted: res.accepted, why: res.why, ...(res.model ? { modelUsed: res.model } : {}), widthM, heightM: Math.round(heightM * 100) / 100, coveredShare: Math.round(res.coveredShare * 1000) / 1000,
+            ...(res.chamferPx !== undefined ? { chamferPx: res.chamferPx, lostShare: res.lostShare } : {}), ...(res.identity ? { identity: res.identity } : {}),
+            ...(res.quality ? { quality: res.quality } : {}), ...(res.infill ? { infill: res.infill } : {}), ...(res.audit ? { audit: { flaggedShare: res.audit.flaggedShare, regions: res.audit.regions.length } } : {}),
+            provenance: { label: 'generated', method: 'facade texture builder: redrawn from the input picture by an image model, kept through the identity gate and the quality score' }
+        };
+        await fs.ensureDir(path.dirname(outputPath));
+        const recordPath = outputPath.replace(/\.png$/i, '') + '.json';
+        await fs.writeFile(recordPath, JSON.stringify(record, null, 1));
+        if (res.accepted && res.texture) await fs.writeFile(outputPath, encodePng(res.texture.width, res.texture.height, Buffer.from(res.texture.rgba)));
+        return {
+            resultPayload: { success: res.accepted, imagePath, ...(res.accepted ? { outputPath } : {}), recordPath, ...record },
+            summaryResult: res.accepted
+                ? `Built the facade texture of ${imagePath} (${widthM} x ${heightM.toFixed(1)} m) with ${res.model} (labelled generated) -> ${outputPath}; record ${recordPath}.`
+                : `The facade texture of ${imagePath} was refused: ${res.why}. Nothing written but the record ${recordPath}.`
+        };
+    },
     [GENERATE_IMAGE]: async (args, ctx) => {
         const prompt = asString(args.prompt).trim();
         if (!prompt) throw new MissingInputError(GENERATE_IMAGE, 'prompt', 'describe the picture to make');

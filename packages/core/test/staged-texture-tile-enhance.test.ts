@@ -22,7 +22,8 @@ import { MediaModelUnavailableError } from '../src/common/errors/pipeline-errors
 import { decodePng, encodePng } from '../src/node/texture-processing';
 import { decodeImageInMemory, transferTilePhotoFromGlb, type RgbaImage8 } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 import {
-    enhancementGate, enhanceTransferredAtlas, resizeRgba, type EnhanceModelAnswer, type EnhanceModelClient, type EnhanceModelRequest
+    enhancementGate, enhanceTransferredAtlas, RECREATE_GATE, resizeRgba,
+    type EnhanceModelAnswer, type EnhanceModelClient, type EnhanceModelRequest, type EnhanceReferenceView
 } from '../src/node/3d-engine/staged-location/texture-enhance';
 import { facadeAlbedo, facadeAtlas, facadeViews } from './helpers/texture-pass-fixtures';
 import { buildTileGlb, facadeTileSheet } from './helpers/tile-photo-glb';
@@ -85,6 +86,16 @@ function addStructure(img: RgbaImage8): RgbaImage8 {
 function tint(img: RgbaImage8, k: Vec3): RgbaImage8 {
     const out = Uint8Array.from(img.rgba);
     for (let i = 0; i < out.length; i += 4) for (let c = 0; c < 3; c++) out[i + c] = Math.min(255, Math.round(out[i + c] * k[c]));
+    return { width: img.width, height: img.height, rgba: out };
+}
+/** A uniform brightness lift done in linear light (gamma 2.2 approximation), not on the sRGB-encoded bytes directly:
+ *  the same material, genuinely just brighter - a rough stand-in for a baked shadow lifted by a de-shadow model. */
+function brightenLinear(img: RgbaImage8, gain: number): RgbaImage8 {
+    const out = Uint8Array.from(img.rgba);
+    for (let i = 0; i < out.length; i += 4) for (let c = 0; c < 3; c++) {
+        const lin = Math.pow(out[i + c] / 255, 2.2) * gain;
+        out[i + c] = Math.max(0, Math.min(255, Math.round(255 * Math.pow(Math.min(1, lin), 1 / 2.2))));
+    }
     return { width: img.width, height: img.height, rgba: out };
 }
 const toPng = (img: RgbaImage8) => new Uint8Array(encodePng(img.width, img.height, Buffer.from(img.rgba)));
@@ -293,5 +304,48 @@ describe('tile photo enhancement (tile-photo-enhanced)', () => {
         const a = await enhanceTransferredAtlas({ atlas, transfer, views: views(), client: replayClient(rec), concurrency: 2 });
         const b = await enhanceTransferredAtlas({ atlas, transfer, views: views(), client: replayClient(rec), concurrency: 1 });
         expect(hash(a)).toBe(hash(b));
+    });
+});
+
+describe('tile photo recreation (tile-photo-recreated, mode: recreate)', () => {
+    it('gate: a uniform brighten (removing a baked shadow) passes - the same material, just relit; a hue tint still fails', async () => {
+        const atlas = facadeAtlas(SIDE);
+        const planes = await transferred(atlas);
+        const original: RgbaImage8 = { width: SIDE, height: SIDE, rgba: planes.albedo };
+        const mask = new Uint8Array(SIDE * SIDE).fill(1);
+        const relit = enhancementGate(original, unsharp(brightenLinear(original, 2.2), 1.2), mask, RECREATE_GATE);
+        expect(relit.pass, JSON.stringify(relit)).toBe(true);
+        expect(relit.metrics.lowBandChromaDeltaE).toBeLessThan(3);
+        // the same brighten fails the sharpen-only gate: lifting a shadow is exactly the lighting/colour change it forbids
+        const underSharpenGate = enhancementGate(original, unsharp(brightenLinear(original, 2.2), 1.2), mask);
+        expect(underSharpenGate.pass).toBe(false);
+        expect(['enhance_colour_drift', 'enhance_layout_changed']).toContain(underSharpenGate.reasonCode);
+        const recoloured = enhancementGate(original, unsharp(tint(original, [1.25, 0.95, 0.7]), 1.2), mask, RECREATE_GATE);
+        expect(recoloured).toMatchObject({ pass: false, reasonCode: 'enhance_material_drift' });
+    });
+
+    it('runs with no registered Street View view at all - district-mode builds register none ("not an isolated structure") - unlike sharpen mode, which has nothing to do without one', async () => {
+        const atlas = facadeAtlas(SIDE);
+        const transfer = await transferred(atlas);
+        const client = replayClient({ 'facade/s00': answerWith(img => unsharp(brightenLinear(img, 2.2), 1.2)) });
+        const noViews: EnhanceReferenceView[] = [];
+        const sharpenRes = await enhanceTransferredAtlas({ atlas, transfer, views: noViews, client, mode: 'sharpen' });
+        expect(sharpenRes.charts[0]).toMatchObject({ decision: 'skipped', reasonCode: 'enhance_no_reference' });
+        const recreateRes = await enhanceTransferredAtlas({ atlas, transfer, views: noViews, client, mode: 'recreate' });
+        expect(recreateRes.charts[0].decision).toBe('accepted');
+        expect(recreateRes.charts[0].referencePanoIds).toEqual([]);
+        expect(recreateRes.planes.provenance.map(p => p.source)).toEqual(['tile-photo-transfer', 'tile-photo-recreated']);
+    });
+
+    it('enhanceTransferredAtlas mode "recreate": accepts a relit chart, labels it tile-photo-recreated, names the lighting change honestly', async () => {
+        const atlas = facadeAtlas(SIDE);
+        const transfer = await transferred(atlas);
+        const client = replayClient({ 'facade/s00': answerWith(img => unsharp(brightenLinear(img, 2.2), 1.2)) });
+        const res = await enhanceTransferredAtlas({ atlas, transfer, views: views(), client, mode: 'recreate' });
+        expect(res.charts[0].decision).toBe('accepted');
+        expect(res.planes.provenance.map(p => p.source)).toEqual(['tile-photo-transfer', 'tile-photo-recreated']);
+        expect(res.planes.provenance[1].label).toBe('photo-inferred');
+        expect(res.planes.provenance[1].method).toMatch(/relit \(its own baked shadow and highlight removed\)/);
+        expect(res.planes.provenance[1].method).toMatch(/material hue\/chroma CIEDE2000/);
     });
 });

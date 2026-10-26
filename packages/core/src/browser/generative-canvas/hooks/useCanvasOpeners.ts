@@ -21,6 +21,7 @@ import { CanvasArtifact, ChatSession, InteractiveBrowserData, LiveCodeSandboxDat
 import { resolveModeForArtifact } from '../guardrails-service';
 import { ChatState, ChatStore } from '../state/chatStore';
 import { WorkspaceGraphCoordinator } from '../studio/useWorkspaceGraphCoordinator';
+import { artifactOnStage, upsertArtifact } from '../tool-node-runs';
 
 export interface UseCanvasOpenersDeps {
     activeArtifact: ChatState['activeArtifact'];
@@ -241,5 +242,20 @@ ${content}
         showToast(`Morphed to ${canonicalArtifact.title}`);
     }, [activeArtifact, currentSessionId, persistSessionsImmediately]);
 
-    return { handleMorphArtifact, handleOpenInAppBrowser, handlePreviewCodeInCanvas };
+    const applyStreamedArtifact = React.useCallback((art: CanvasArtifact) => {
+        // replaced in place (a canvas tab keeps its position), added when new; the stage changes only if it shows this artifact
+        const upsert = (list?: CanvasArtifact[]) => upsertArtifact(list, art);
+        setArtifactHistory(prev => upsert(prev));
+        if (artifactOnStage(activeArtifact, art) !== activeArtifact) setActiveArtifact(art);
+        if (currentSessionId) {
+            setSessions(prev => prev.map(s => s.id !== currentSessionId ? s : {
+                ...s,
+                artifactHistory: upsert(s.artifactHistory),
+                ...(s.activeArtifact?.id === art.id ? { activeArtifact: art } : {}),
+                updatedAt: 'Just now'
+            }));
+        }
+    }, [activeArtifact, currentSessionId]);
+
+    return { handleMorphArtifact, handleOpenInAppBrowser, handlePreviewCodeInCanvas, applyStreamedArtifact };
 }

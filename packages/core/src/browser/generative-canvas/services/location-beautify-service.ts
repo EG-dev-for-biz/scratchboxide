@@ -105,6 +105,14 @@ export const TILE_DRAIN_FRAME_MS = 50;
 export const CAMERA_ALTITUDE_M = 250;
 export const CAMERA_TILT_DEG = 45;
 
+/**
+ * What a 3D tiles render is, said plainly in every Beautify prompt: the image model was told it was a "photorealistic"
+ * rendering and kept its melted shapes, or drew the place from memory instead. Calling it malformed photogrammetry asks it
+ * to repair the surfaces it is given.
+ */
+export const TILES_RENDER_SUBJECT = 'malformed 3D photogrammetry render';
+export const TILES_RENDER_NOTE = 'It is a mesh rebuilt automatically from aerial photographs: the shapes are roughly right but melted, warped and smeared, edges are rounded off, small parts are fused into blobs, and the texture is blurred and stretched.';
+
 export type LocationMood = 'dawn' | 'golden-hour' | 'midday' | 'overcast' | 'dusk' | 'night';
 
 export interface LocationCoordinates {
@@ -280,15 +288,15 @@ export function buildHybridPromptPayload(options: BuildHybridPromptOptions): Hyb
     }
 
     const renderingInstruction =
-        `Transform this photorealistic 3D tiles rendering of ${options.locationName} ` +
-        `(camera at coordinates ${coordsStr}, facing ${heading}°) into a photorealistic photograph. ` +
+        `Transform this ${TILES_RENDER_SUBJECT} of ${options.locationName} ` +
+        `(camera at coordinates ${coordsStr}, facing ${heading}°) into a photorealistic photograph. ${TILES_RENDER_NOTE} ` +
         `Map reference: ${earthUrl}. ${atmosphere}` +
         `This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. ` +
         `CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly ${aspectRatio} aspect ratio, matching the reference image canvas. ` +
         `(2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. ` +
         `(3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. ` +
         `(4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. ` +
-        `Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.` +
+        `Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. ${OBSTRUCTION_FREE_NOTE}` +
         `${distanceHint}${stationLockHint}${styleSuffix}`;
 
     const cameraPose: CameraPoseLock = {
@@ -381,10 +389,10 @@ export interface BeautifyPromptOptions extends StationLockOptions {
 }
 
 /**
- * Builds the exact AI Beautify prompt template transforming a 3D tiles rendering into a photorealistic photograph.
+ * Builds the exact AI Beautify prompt template transforming a 3D tiles render (malformed photogrammetry) into a photorealistic photograph.
  *
  * Exact template:
- * Transform this photorealistic 3D tiles rendering of {locationName} (camera at coordinates {coords}, facing {heading}°) into a photorealistic photograph. Map reference: {earthUrl}. {moodPromptContext}This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly {aspectRatio} aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.{subjectDistanceHint}{styleSuffix}
+ * Transform this malformed 3D photogrammetry render of {locationName} (camera at coordinates {coords}, facing {heading}°) into a photorealistic photograph. {TILES_RENDER_NOTE} Map reference: {earthUrl}. {moodPromptContext}This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly {aspectRatio} aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.{subjectDistanceHint}{styleSuffix}
  *
  * When subject distance is available, {subjectDistanceHint} becomes:
  * " Subject distance: approximately {distance} meters from camera (use this for depth-of-field, focus, and aerial-perspective haze)."
@@ -512,18 +520,18 @@ export function buildBeautifyPrompt(options: BeautifyPromptOptions): string {
         cameraHeightMeters: options.cameraHeightMeters, horizonRowFraction: options.horizonRowFraction, solar: options.solar
     });
 
-    return `Transform this photorealistic 3D tiles rendering of ${options.locationName} (camera at coordinates ${coordsStr}, facing ${heading}°) into a photorealistic photograph. Map reference: ${earthUrl}. ${moodPromptContext}This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly ${aspectRatio} aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.${subjectDistanceHint}${stationLockHint}${styleSuffix}`;
+    return `Transform this ${TILES_RENDER_SUBJECT} of ${options.locationName} (camera at coordinates ${coordsStr}, facing ${heading}°) into a photorealistic photograph. ${TILES_RENDER_NOTE} Map reference: ${earthUrl}. ${moodPromptContext}This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly ${aspectRatio} aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. ${OBSTRUCTION_FREE_NOTE}${subjectDistanceHint}${stationLockHint}${styleSuffix}`;
 }
 
 /** Identifies the texture-plate prompt wording (recorded with every texel it produced). */
-export const TEXTURE_PLATE_PROMPT_ID = 'texture-plate/v1';
+export const TEXTURE_PLATE_PROMPT_ID = 'texture-plate/v2';
 /** The same prompt with a street-level photograph of the wall as an extra reference (TexturePlatePromptOptions.withStreetView). */
-export const TEXTURE_PLATE_STREET_VIEW_PROMPT_ID = 'texture-plate/v1+street-view';
+export const TEXTURE_PLATE_STREET_VIEW_PROMPT_ID = 'texture-plate/v2+street-view';
 /**
  * The variant for a wall the scan hardly sees (TexturePlatePromptOptions.unseen): its flat mid-grey areas are this same wall
  * hidden from the scan (behind trees, against a neighbour), drawn as the wall continues instead of kept grey.
  */
-export const TEXTURE_PLATE_UNSEEN_PROMPT_ID = 'texture-plate/v1+unseen';
+export const TEXTURE_PLATE_UNSEEN_PROMPT_ID = 'texture-plate/v2+unseen';
 
 export interface TexturePlatePromptOptions {
     locationName: string;
@@ -540,6 +548,13 @@ export interface TexturePlatePromptOptions {
     preserveClause: string;
     /** True when a second image (the adjacent wall, already finished) is sent as the reference. */
     withReference?: boolean;
+    /** The reference is this same wall with every bay replaced by the median of all its bays, not the adjacent wall. */
+    referenceIsBayStack?: boolean;
+    /**
+     * The street level the survey could not see clearly (vehicles, people and street furniture melted into the scan): the
+     * plate's bottom `bandPx` pixels ({bandM} metres), drawn as this building's ground floor continues.
+     */
+    streetBand?: { bandPx: number; bandM: number };
     /**
      * True when a street-level photograph of the same wall follows (after the reference, when there is one), resampled onto
      * the plate's frame: it shows what the lower part of the facade actually looks like; the model follows it for real
@@ -560,7 +575,7 @@ export interface TexturePlatePromptOptions {
  * no photographic effects. buildBeautifyPrompt's own template is unchanged.
  */
 export function buildTexturePlatePrompt(o: TexturePlatePromptOptions): string {
-    return `Transform this orthographic texture plate of one wall of ${o.locationName} (a flat, straight-on elevation of the facade, ${o.widthM.toFixed(1)} m wide and ${o.heightM.toFixed(1)} m tall, resampled from a photorealistic 3D tiles scan) into a clean, photorealistic texture plate of the same facade. CRITICAL RULES — non-negotiable: (1) It stays a flat orthographic elevation: no perspective change, no camera tilt, no depth of field, no haze. (2) Keep every window, door, edge and opening exactly where it is, at the same size. ${o.preserveClause} ${o.unseen ? '(3) The flat mid-grey areas are parts of this same wall that the scan could not see (hidden behind trees or against a neighbour): fill every one of them as this wall continues, with the same materials, colours, storey lines and window rhythm as the visible parts of the plate and the reference image; keep what the plate does show where it is; do not add signs, lettering, ornament or any feature that no image shows, and leave nothing mid-grey.' : '(3) Do not invent or add windows, doors, signs, ornament or features that are not visible in the plate; flat mid-grey areas are outside the scan and stay flat mid-grey.'} (4) Give it crisp, realistic materials and architectural detail: the brick, stone, mortar joints, cornices, window frames and glazing that the plate shows, sharp and free of scan blur and smears. (5) Light it evenly, as under a bright overcast sky: diffuse light, no cast shadows, no sun hot spots. Answer with the full plate at ${o.widthPx} x ${o.heightPx} px.${o.withReference ? ' The second image is the adjacent wall of the same building, already finished: match its materials, colours and level of detail across the corner, but take every window, edge and opening from the first image only.' : ''}${o.withStreetView ? ` The ${o.withReference ? 'third' : 'second'} image is a street-level photograph of this same wall, resampled onto the first image's frame (same size and position; grey where the photograph does not show the wall): it shows what the lower part of this facade actually looks like. Follow it for the real details there (materials, openings, what is and is not at street level), and do not draw anything at street level that the photograph does not show; keep the geometry of the first image: every window, edge and opening stays where the first image has it, at the same size.` : ''}`;
+    return `Transform this orthographic texture plate of one wall of ${o.locationName} (a flat, straight-on elevation of the facade, ${o.widthM.toFixed(1)} m wide and ${o.heightM.toFixed(1)} m tall, resampled from a photorealistic 3D tiles scan) into a clean, photorealistic texture plate of the same facade. CRITICAL RULES — non-negotiable: (1) It stays a flat orthographic elevation: no perspective change, no camera tilt, no depth of field, no haze. (2) Keep every window, door, edge and opening exactly where it is, at the same size. ${o.preserveClause} ${o.unseen ? '(3) The flat mid-grey areas are parts of this same wall that the scan could not see (hidden behind trees or against a neighbour): fill every one of them as this wall continues, with the same materials, colours, storey lines and window rhythm as the visible parts of the plate and the reference image; keep what the plate does show where it is; do not add signs, lettering, ornament or any feature that no image shows, and leave nothing mid-grey.' : '(3) Do not invent or add windows, doors, signs, ornament or features that are not visible in the plate; flat mid-grey areas are outside the scan and stay flat mid-grey.'} (4) Give it crisp, realistic materials and architectural detail: the brick, stone, mortar joints, cornices, window frames and glazing that the plate shows, sharp and free of scan blur and smears. (5) Light it evenly, as under a bright overcast sky: diffuse light, no cast shadows, no sun hot spots. Answer with the full plate at ${o.widthPx} x ${o.heightPx} px.${' ' + obstructionFreeNote('this wall')}${o.streetBand ? ` The bottom ${o.streetBand.bandPx} px of the plate (the lowest ${o.streetBand.bandM.toFixed(1)} m of the wall) is street level, which the scan saw only through parked vehicles, people and street furniture: draw it as this building's ground floor, with shopfront glazing, doors and the piers between them where the plate's dark openings are, continuing the ground floor above it; draw no vehicles, people, poles or street furniture there.` : ''}${o.withReference && o.referenceIsBayStack ? ' The second image is this same wall with every bay replaced by the median of all its bays, so cars, shadows and one-off blemishes are voted out: follow it for the wall\'s true materials and colours, but take every window, edge and opening from the first image only, and keep any one-off feature the first image shows.' : o.withReference ? ' The second image is the adjacent wall of the same building, already finished: match its materials, colours and level of detail across the corner, but take every window, edge and opening from the first image only.' : ''}${o.withStreetView ? ` The ${o.withReference ? 'third' : 'second'} image is a street-level photograph of this same wall, resampled onto the first image's frame (same size and position; grey where the photograph does not show the wall): it shows what the lower part of this facade actually looks like. Follow it for the real details there (materials, openings, what is and is not at street level), and do not draw anything at street level that the photograph does not show; keep the geometry of the first image: every window, edge and opening stays where the first image has it, at the same size.` : ''}`;
 }
 
 export interface StationBeautifyContext {
@@ -571,6 +586,54 @@ export interface StationBeautifyContext {
     aspectRatio?: string;
     viewportCropLock?: boolean;
     imageRef?: string;
+    /**
+     * 'even' (default): the station's images feed 3D (splats, textures, survey evidence), so they are lit evenly
+     * (EVEN_LIGHT_SENTENCE) and the prompt carries no sun clause. 'scene': the image is itself the deliverable and keeps
+     * the station's sun and the caller's mood light.
+     */
+    lighting?: 'even' | 'scene';
+    /** Building-survey mode: the subject's outline is fixed to the reference (OUTLINE_LOCK_SENTENCE). */
+    outlineLock?: boolean;
+}
+
+/**
+ * Light for every AI Beautify whose images feed 3D (user decision, 2026-10-23): the facade texture plates' even
+ * overcast light, so no sun direction or cast shadow is baked into what is measured or projected. Mood and sun light
+ * stay for renders whose final output is a 2D image or video.
+ */
+export const EVEN_LIGHT_SENTENCE = 'Light it evenly, as under a bright overcast sky: diffuse light, no cast shadows, no sun hot spots, neutral white balance.';
+
+/** Building-survey mode: the generated subject stays inside the scan's outline from this camera (checked by the station QC). */
+export const OUTLINE_LOCK_SENTENCE = 'The subject\'s outline is fixed: its left and right corners, its roofline and the top of every object on its roof stay exactly where the reference image has them. Do not widen, lengthen or raise it, and add no bays, windows or wall past the last bay the reference shows; where the reference image is empty there is only open sky and street.';
+
+/**
+ * Building-survey character sheet: what keeps a sheet's panels registered to their stations. Without it the image model
+ * treats the sheet as a presentation sheet and enlarges, centres or flattens views (Haughwout, 2026-10-23: the long face
+ * came back as a straight elevation, 127 % outside its outline); with it every panel stayed inside its outline.
+ */
+export const CHARACTER_SHEET_FRAMING_LOCK = 'FRAMING LOCK, non-negotiable: this is a registration sheet, not a presentation sheet. In every quadrant the building covers exactly the same pixels as in the reference, at the same size; keep each view\'s perspective exactly: do not enlarge, centre, re-pose, straighten or flatten any view into an elevation, and leave the white margins as wide as the reference has them.';
+
+const SHEET_QUADRANTS = ['top left', 'top right', 'bottom left', 'bottom right'] as const;
+
+/**
+ * The AI Beautify prompt for a building-survey character sheet: four station renders of one isolated structure, each in
+ * its own quadrant of a 2x2 sheet on white, made photorealistic in one image so every view shows the same building. Each
+ * view is described by its camera (heading, pitch, standoff), never by what the structure is.
+ */
+export function buildCharacterSheetPrompt(o: { locationName: string; stations: ColmapCameraPose[]; styleSuffix?: string }): string {
+    if (o.stations.length !== 4) throw new Error(`buildCharacterSheetPrompt: a character sheet has four views, got ${o.stations.length}`);
+    const views = o.stations.map((s, i) => {
+        const d = s.beautify?.standoffMeters;
+        return `${SHEET_QUADRANTS[i]}: camera facing ${Math.round(s.yawDegrees)}°, pitch ${s.pitchDegrees.toFixed(1)}°${d !== undefined ? `, about ${Math.round(d)} m from the structure` : ''}`;
+    }).join('; ');
+    return `Character sheet of a structure: ${o.locationName}. The reference image is a turnaround sheet of four views of this one structure, rendered from a malformed 3D photogrammetry scan (${TILES_RENDER_NOTE.replace(/^It is /, '').replace(/\.$/, '')}), each view in its own quadrant on a pure white background (${views}). `
+        + 'Transform it into a clean, photorealistic character sheet of the same structure at full resolution: the same four views in the same four quadrants, each view keeping exactly its quadrant\'s camera angle, framing, size and position, with the outline, corners, roofline and roof objects exactly where the reference has them. '
+        + `${CHARACTER_SHEET_FRAMING_LOCK} `
+        + 'It is one structure: every view shows the same materials, colours, window rhythm, storeys, ornament and roof, consistent across all four. '
+        + `${EVEN_LIGHT_SENTENCE} Pure white background around the structure in every quadrant: no sky, no street beyond its own sidewalk, no other buildings, no city. `
+        + 'Do not widen, raise or extend it and add no bays past those the reference shows. No text, labels, captions, arrows, dividing lines or borders. '
+        + obstructionFreeNote('the structure')
+        + (o.styleSuffix || '');
 }
 
 /**
@@ -578,16 +641,70 @@ export interface StationBeautifyContext {
  * pitch, fov, lens, height, horizon, standoff, sun) is read from the station record so the prompt,
  * the blockout render and the depth-to-splat unprojection share one pose.
  */
+/** The station template's closing detail ask: on a chained station it is replaced by CHAINED_STATION_STYLE_LOCK. */
+export const STATION_DETAIL_SENTENCE = 'Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.';
+
+/**
+ * A chained station's look comes from the previous accepted photograph (the second image, re-projected into this view),
+ * not from new detail of the model's own: said in place of STATION_DETAIL_SENTENCE.
+ */
+export const CHAINED_STATION_STYLE_LOCK = 'Style and subject lock: the second image is the previous photograph of this same place, taken from a neighbouring vantage point and re-projected into this view. Take every texture, material, colour, weathering detail, light and the look of the subject from it, and add no texture or detail of your own: where the second image covers the frame, show exactly what it shows, in the first image\'s geometry; only the regions marked white in the third image (mask) are new, and they continue the second image\'s style, as another frame of the same photograph.';
+
+/**
+ * The obstruction-free default for every generated reference or plate of a real place (standing rule, 2026-10-23): trees,
+ * vehicles, people and street furniture in front of the subject are not drawn, and the surface behind them is shown. Trees
+ * are regrown separately (SB-Veggie, from measured crowns), so a tree in a generated image only gets in the way. The
+ * subject's own fixtures stay, and the camera framing rules it follows are unchanged.
+ */
+export function obstructionFreeNote(subject = 'the subject'): string {
+    return `Obstruction-free: draw no trees or foliage, vehicles, people, street lamps, poles, signs on posts, wires, scaffolding or street furniture standing in front of ${subject}; where the reference shows one, show ${subject}'s own surface continuing behind it instead (trees are added to the scene separately). Keep ${subject}'s own fixtures, shop fronts, awnings and lettering, and keep the exact framing.`;
+}
+export const OBSTRUCTION_FREE_NOTE = obstructionFreeNote();
+
+/**
+ * What a Street View seed prompt clears from the photograph (said right after "with no obstructions"): street furniture
+ * whole, from foot to lamp head, and every other building nearer the camera than the subject, so the one building left in
+ * front of the camera is the subject the chain is about. The subject's own fixtures stay.
+ */
+export function streetViewObstructionsNote(subject: string): string {
+    return `The subject is ${subject}. Obstructions are everything standing between the camera and the subject: street lamps whole (the pole, the arm and the lamp head, wherever the head hangs), traffic lights, signs on posts, wires, trees, vehicles, people, scaffolding and sidewalk sheds, and every other building nearer the camera than the subject, including a building at the edge of the frame. Remove them all: where a nearer building stood, show the open street, sidewalk and sky beyond it and the subject continuing behind it. Keep the subject's own fire escapes, shop fronts, awnings and lettering. Each facade continues as it does where nothing covers it.`;
+}
+
+/**
+ * The AI Beautify prompt for the first image of a chain when that image is a real Street View photograph, not a tile
+ * render: the station prompt (buildStationBeautifyPrompt) with the subject said as what it is, obstructions cleared, and
+ * the reference described as the Street View capture. Every camera fact (coordinates, heading, pitch, field of view, eye
+ * height, aspect) comes from the station the photograph was registered to, so it holds for whatever angle Street View caught.
+ */
+export function buildStreetViewSeedBeautifyPrompt(station: ColmapCameraPose, ctx: StationBeautifyContext): string {
+    const base = buildStationBeautifyPrompt(station, { ...ctx, format: 'prose' });
+    const swaps: Array<[string, string]> = [
+        [`Transform this ${TILES_RENDER_SUBJECT} of`, 'Transform this Street View photograph of'],
+        [`into a photorealistic photograph. ${TILES_RENDER_NOTE}`, `into a photorealistic photograph WITH NO OBSTRUCTIONS. ${streetViewObstructionsNote(ctx.locationName)}`],
+        ['the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates.', 'the reference image shows the actual buildings, streets, and terrain at these exact coordinates as Street View captured them.'],
+        // the template's "every building stays" would forbid clearing a nearer building, so only the kept ones stay put
+        ['(3) Every building, street, and rooftop must stay in the same on-image position', '(3) The subject, the streets and every building you keep must stay in the same on-image position']
+    ];
+    let out = base;
+    for (const [from, to] of swaps) {
+        if (!out.includes(from)) throw new Error(`buildStreetViewSeedBeautifyPrompt: the station template no longer contains "${from.slice(0, 60)}"`);
+        out = out.replace(from, to);
+    }
+    return out;
+}
+
 export function buildStationBeautifyPrompt(station: ColmapCameraPose, ctx: StationBeautifyContext): string {
     const m = station.beautify;
     const aspect = station.aspectRatio ? aspectRatioLabel(station.aspectRatio) : '16:9';
+    const even = ctx.lighting !== 'scene';
+    const mood = [even ? EVEN_LIGHT_SENTENCE : '', ctx.moodPromptContext?.trim() || '', ctx.outlineLock ? OUTLINE_LOCK_SENTENCE : ''].filter(Boolean).join(' ');
     return buildBeautifyPrompt({
         locationName: ctx.locationName,
         coordinates: { lat: station.coordinatesWGS84.lat, lng: station.coordinatesWGS84.lng },
         heading: station.yawDegrees,
         pitch: station.pitchDegrees,
         aspectRatio: ctx.aspectRatio || aspect,
-        moodPromptContext: ctx.moodPromptContext,
+        moodPromptContext: mood || undefined,
         distance: m?.standoffMeters,
         styleSuffix: ctx.styleSuffix,
         format: ctx.format,
@@ -597,7 +714,7 @@ export function buildStationBeautifyPrompt(station: ColmapCameraPose, ctx: Stati
         focalLengthMm: station.focalLengthMm,
         cameraHeightMeters: station.cameraHeightAboveGround,
         horizonRowFraction: m?.horizonRowFraction,
-        solar: m?.solar ? { azimuthDegrees: m.solar.azimuthDegrees, elevationDegrees: m.solar.elevationDegrees } : undefined
+        solar: !even && m?.solar ? { azimuthDegrees: m.solar.azimuthDegrees, elevationDegrees: m.solar.elevationDegrees } : undefined
     });
 }
 
@@ -628,7 +745,7 @@ export function buildLocationBeautifyPrompt(ctx: LocationBeautifyContext): strin
 
     const eraDirective = ctx.eraContext ? ` Era and period styling: ${ctx.eraContext}.` : '';
 
-    return `Transform this photorealistic 3D tiles rendering of ${ctx.locationName} (camera at coordinates ${coordsStr}, facing ${heading}°) into a photorealistic photograph. Map reference: ${earthUrl}. ${moodDirective}. ${styleDirective}.${eraDirective} This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly ${aspectRatio} aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.${subjectDistanceHint} No map insets, compass overlays, mini-maps, navigation UI, coordinate labels, or any graphical overlays — clean photograph only.`;
+    return `Transform this ${TILES_RENDER_SUBJECT} of ${ctx.locationName} (camera at coordinates ${coordsStr}, facing ${heading}°) into a photorealistic photograph. ${TILES_RENDER_NOTE} Map reference: ${earthUrl}. ${moodDirective}. ${styleDirective}.${eraDirective} This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly ${aspectRatio} aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. ${OBSTRUCTION_FREE_NOTE}${subjectDistanceHint} No map insets, compass overlays, mini-maps, navigation UI, coordinate labels, or any graphical overlays — clean photograph only.`;
 }
 
 export interface BeautifySectionOptions {

@@ -55,7 +55,8 @@ describe('Universal Nature, Atmosphere, SSS & Triplanar 3D Systems', () => {
         expect(cppCode).toContain('using namespace scratchbox::nature;');
         expect(cppCode).toContain('generateBiomeTerrain');
         expect(cppCode).toContain('applyTriplanarToMesh');
-        expect(cppCode).toContain('generateProceduralTree');
+        // trees are SB-Veggie trees (sb.create_tree), never grown in a C++ generator (sb-veggie-lockdown.ts)
+        expect(cppCode).not.toContain('generateProceduralTree');
         expect(cppCode).toContain('getSkyGoldenHourSH');
         expect(cppCode).toContain('scene.streamSceneGlb');
     });

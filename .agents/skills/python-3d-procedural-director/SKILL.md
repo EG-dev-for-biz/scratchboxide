@@ -32,8 +32,8 @@ Procedural scripts execute inside a sandboxed Python sub-process communicating d
  [Python Runtime: import scratchbox as sb]
   - sb.core      (Scenes, submeshes, transforms)
   - sb.shaper    (Taper, twist, bend, bulge, FFD lattices)
-  - sb.nature    (Botany, space colonization, foliage)
-  - sb.plant     (SMPL tree architecture)
+  - sb.create_tree / sb.vegetation (SB-Veggie trees from measurements; the only vegetation generator)
+  - sb.nature    (ivy; trees are sb.create_tree)
   - sb.terrain   (Multi-fractal noise, elevation profiles)
   - sb.geospatial(Leaf-LOD 3D tile shape extraction)
   - sb.rig       (SB-Rig: skeleton + skin weights for any mesh)

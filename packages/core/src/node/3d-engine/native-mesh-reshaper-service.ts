@@ -13,6 +13,7 @@ import * as path from 'path';
 import { NativeCppCompilerService } from './native-compiler-service';
 import { carryOverInputMaterial, ensurePipelineBinary, parseTelemetryLine, rawMeshReadIssues, runPipelineBinary } from './native-pipeline-binary';
 import { GeneratorFailedError, MissingInputError } from '../../common/errors/pipeline-errors';
+import { repoPath } from '../process/repo-python';
 
 export type MeshDeformationAxis = 'X' | 'Y' | 'Z';
 export type SculptBrushType = 'grab' | 'clay' | 'inflate' | 'flatten' | 'pinch' | 'crease' | 'smooth';
@@ -144,6 +145,7 @@ export class NativeMeshReshaperService {
     constructor(compiler?: NativeCppCompilerService) {
         this.compiler = compiler || new NativeCppCompilerService();
         const candidateBinaries = [
+            repoPath('build/3d-native/run_mesh_reshaping_pipeline'),
             path.resolve(process.cwd(), 'build/3d-native/run_mesh_reshaping_pipeline'),
             path.resolve(process.cwd(), 'build/run_mesh_reshaping_pipeline'),
             path.resolve(__dirname, '../../../../build/3d-native/run_mesh_reshaping_pipeline')
@@ -155,7 +157,7 @@ export class NativeMeshReshaperService {
     async ensureBinary(): Promise<string> {
         return ensurePipelineBinary({
             binaryPath: this.binaryPath,
-            sourcePath: path.resolve(process.cwd(), 'scripts/run_mesh_reshaping_pipeline.cpp'),
+            sourcePath: repoPath('scripts/run_mesh_reshaping_pipeline.cpp'),
             includeDir: this.compiler.getSdkIncludePath()
         });
     }

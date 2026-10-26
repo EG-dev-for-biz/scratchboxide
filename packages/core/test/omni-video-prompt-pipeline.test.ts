@@ -294,7 +294,7 @@ async function runOmniVideoPromptPipelineTests() {
 
     // Stage 2 Verification: Standard Nano Banana Prompt Design
     const nbPrompt = pipelinePlan.stage2NanoBananaPrompt;
-    assert.ok(nbPrompt.includes('Transform this photorealistic 3D tiles rendering of Manhattan Skyscraper Canyon along 5th Avenue and 34th Street'));
+    assert.ok(nbPrompt.includes('Transform this malformed 3D photogrammetry render of Manhattan Skyscraper Canyon along 5th Avenue and 34th Street'));
     assert.ok(nbPrompt.includes('camera at coordinates 40.748817, -73.985428, facing 0°'));
     assert.ok(nbPrompt.includes('Map reference: https://earth.google.com/web/@40.748817,-73.985428'));
     assert.ok(nbPrompt.includes('CRITICAL FRAMING RULES — non-negotiable:'));
@@ -379,7 +379,7 @@ async function runOmniVideoPromptPipelineTests() {
 
     // Verification 2: Stage 2 restyles Frame 1 with Nano Banana using strict framing prompt
     const blockoutNbPrompt = blockoutPlan.nanoBananaPrompt;
-    assert.ok(blockoutNbPrompt.includes('Transform this photorealistic 3D tiles rendering of Manhattan 5th Avenue Skyscraper Canyon (camera at coordinates 40.748817, -73.985428, facing 0°) into a photorealistic photograph.'));
+    assert.ok(blockoutNbPrompt.includes('Transform this malformed 3D photogrammetry render of Manhattan 5th Avenue Skyscraper Canyon (camera at coordinates 40.748817, -73.985428, facing 0°) into a photorealistic photograph.'));
     assert.ok(blockoutNbPrompt.includes('Map reference: https://earth.google.com/web/@40.748817,-73.985428'));
     assert.ok(blockoutNbPrompt.includes('This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates.'));
     assert.ok(blockoutNbPrompt.includes('CRITICAL FRAMING RULES — non-negotiable:'));

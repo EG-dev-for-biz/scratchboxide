@@ -35,11 +35,35 @@ import { renderFrameDepth } from '../../spatial/StreetViewPoseRegistrar';
 import type { RenderMesh3D } from '../../spatial/HeadlessMeshSilhouetteRenderer';
 import { encodePng } from './png-encode';
 import { decodeImageInMemory } from './tile-texture-transfer';
+import { parseStreetReply } from './street-identify';
+import { capImageSide } from './ornament-batches';
+import { ORNAMENT_THINKING_BUDGET } from './ornament-vision';
+import type { VisionModelChain } from '../../gemini/vision-model-chain';
 
 /** Part of the texture cache key: a change to the ownership step is a new version. */
-export const OWNERSHIP_VERSION = 2;
-/** Below this agreement between the cut-out and the structure's projection, the view vouches for no pixel. */
+export const OWNERSHIP_VERSION = 6;
+/**
+ * Agreement between the cut-out and the structure's projection at which the pose is trusted. With geometry prompts (no
+ * description) the outline depends on the pose, and below this the view vouches for no pixel; with the description the
+ * outline is the segmenter's own and this is only a flag on the pose (ViewOwnershipRecord.poseAgrees).
+ */
 export const OWNERSHIP_MIN_IOU = 0.3;
+/** A described cut-out sharing less than this with the projection is somewhere else entirely: the view is refused. */
+export const OWNERSHIP_SANITY_IOU = 0.05;
+/** The outline obstructions are looked for in: the described cut-out grown by this share of the view's longer side (an occluder leaves a gap in it). */
+export const OCCLUDER_OUTLINE_GROW_SHARE = 0.03;
+/** One obstruction instance may cover at most this share of the outline (larger is the building itself or a neighbour). */
+export const OCCLUDER_INSTANCE_MAX_SHARE = 0.25;
+/** All obstruction instances together may cover at most this share of the outline (the smallest are kept first). */
+export const OCCLUDER_UNION_MAX_SHARE = 0.4;
+/** An instance counts when at least this share of it lies inside the outline. */
+export const OCCLUDER_MIN_INSIDE_SHARE = 0.5;
+/** Holes in the described cut-out fully enclosed by it and at most this share of the view are closed (a window it missed). */
+export const OUTLINE_HOLE_MAX_SHARE = 0.01;
+/** A crossing line runs over at least this share of the outline's extent along it... */
+export const LINE_MIN_INSIDE_SHARE = 0.2;
+/** ...and continues at least this share of the view's side outside the outline (a facade's own pilasters and cornices stop at its edge). */
+export const LINE_MIN_OUTSIDE_SHARE = 0.03;
 /** The structure needs this share of the view's pixels for a cut-out to be asked for. */
 export const OWNERSHIP_MIN_TARGET_SHARE = 0.01;
 /** Pixels the mask is grown by (the segmenter's edge and the texel footprint's own blur). */
@@ -169,7 +193,7 @@ export function maskIou(a: Uint8Array, b: Uint8Array): number {
  * `target` description it finds the structure by what it is (a vision model, the geometry's box as a hint) and throws
  * OwnershipTargetNotFound when the photo does not show it; without one it cuts out what the geometry's points lie on.
  */
-export type OwnershipSegmenter = (image: { width: number; height: number; rgba: Uint8Array }, prompts: { box: NormBox; positive: NormPoint[]; negative: NormPoint[]; target?: string }, signal?: AbortSignal) => Promise<Uint8Array>;
+export type OwnershipSegmenter = (image: { width: number; height: number; rgba: Uint8Array }, prompts: { box?: NormBox; positive: NormPoint[]; negative: NormPoint[]; target?: string }, signal?: AbortSignal) => Promise<Uint8Array>;
 
 /** The segmenter's vision model did not find the described structure in the photo. */
 export class OwnershipTargetNotFound extends Error {
@@ -184,18 +208,20 @@ export interface ViewOwnershipRecord {
      * How the segmenter was prompted: the description with the geometry's box as a hint, the geometry alone (no description
      * given), or the geometry alone because the view's registered pose holds (`describe` said so: no vision call spent).
      */
-    prompts: 'description+geometry' | 'geometry' | 'geometry (registered pose)';
+    prompts: 'description' | 'geometry' | 'geometry (registered pose)';
     reason?: string;
     targetPixels: number;
     maskPixels: number;
     /** Agreement of the cut-out with where the geometry puts the structure. */
     iou?: number;
+    /** Whether that agreement reaches OWNERSHIP_MIN_IOU (the pose puts the structure where the photo shows it). */
+    poseAgrees?: boolean;
     /**
      * What stands in front of the structure, taken out of the cut-out: pixels by the depth test (the tile mesh nearer), by
      * the segmenter's occluder cut-out, grown along thin vertical structures, and in all after the dilation (each a count of
      * pixels inside the structure's cut-out). `segmenter` says what the segmenter answered.
      */
-    occluders?: { depthPixels: number; segmentedPixels: number; grownPixels: number; removedPixels: number; segmenter: string };
+    occluders?: { depthPixels: number; segmentedPixels: number; thinPixels?: number; grownPixels: number; removedPixels: number; segmenter: string; instances?: Array<{ label: string; pixels: number; kept: boolean; why?: string }> };
     ms: number;
 }
 
@@ -203,6 +229,17 @@ export interface ViewOwnershipRecord {
 export function occluderDescription(target: string): string {
     return `anything standing in front of the facade of ${target}, between the camera and the building's own surface`;
 }
+
+/**
+ * The second, open-vocabulary occluder prompt for what the first one misses: long thin things crossing in front of the facade.
+ * A prompt, not a class list: nothing is gated on these words.
+ */
+export function thinOccluderDescription(target: string): string {
+    return `long thin structures crossing in front of the facade of ${target}: poles, overhead signal arms, wires, lamp posts, banner poles, sign posts`;
+}
+
+/** The structure's silhouette is grown by this share of the image's longest side before it bounds the occluders (overhanging crowns, arms). */
+export const OCCLUDER_SILHOUETTE_GROW_SHARE = 0.012;
 
 /** Pixels the occluder mask is grown by (as a share of the image's longest side): thin poles and railings are a weak case. */
 export const OCCLUDER_DILATE_SHARE = 0.005;
@@ -237,6 +274,269 @@ export function growThinVertical(seed: Uint8Array, image: { width: number; heigh
 }
 
 /**
+ * The horizontal twin of growThinVertical: a mast arm or a wire the segmenter caught part of is grown left and right along
+ * its row while the photo there is a thin line (luma contrast against the pixels `halfWidthPx` above and below).
+ */
+export function growThinHorizontal(seed: Uint8Array, image: { width: number; height: number; rgba: Uint8Array }, within: Uint8Array, opts: { halfWidthPx?: number; contrast?: number } = {}): Uint8Array {
+    const W = image.width, H = image.height, w = opts.halfWidthPx ?? Math.max(3, Math.round(0.004 * H)), k = opts.contrast ?? 18;
+    const L = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) L[i] = 0.299 * image.rgba[i * 4] + 0.587 * image.rgba[i * 4 + 1] + 0.114 * image.rgba[i * 4 + 2];
+    const line = (x: number, y: number): boolean => {
+        if (y - w < 0 || y + w >= H) return false;
+        const c = L[y * W + x], a = L[(y - w) * W + x], b = L[(y + w) * W + x];
+        return (c - a > k && c - b > k) || (a - c > k && b - c > k);
+    };
+    const out = seed.slice();
+    for (let y = 0; y < H; y++) {
+        for (const dir of [1, -1]) {
+            let gap = 0, growing = false;
+            for (let x = dir > 0 ? 0 : W - 1; x >= 0 && x < W; x += dir) {
+                const i = y * W + x;
+                if (seed[i]) { growing = true; gap = 0; continue; }
+                if (!growing) continue;
+                if (within[i] && line(x, y)) { out[i] = 1; gap = 0; } else if (++gap > 2) growing = false;
+            }
+        }
+    }
+    return out;
+}
+
+/** The structure's whole projected silhouette in a view (where it is nearest or hidden behind something), grown a little. */
+export function structureSilhouette(p: Pick<OwnershipPrompts, 'target' | 'hidden'>, W: number, H: number): Uint8Array {
+    const s = new Uint8Array(W * H);
+    for (let i = 0; i < s.length; i++) if (p.target[i] || p.hidden[i]) s[i] = 1;
+    return dilateMask(s, W, H, Math.max(2, Math.round(OCCLUDER_SILHOUETTE_GROW_SHARE * Math.max(W, H))));
+}
+
+/**
+ * The described cut-out with its small holes closed: a morphological close (a few pixels), then every hole fully enclosed
+ * by the cut-out and at most OUTLINE_HOLE_MAX_SHARE of the view filled (a window or shadow the segmenter left out).
+ */
+export function closeOutline(raw: Uint8Array, W: number, H: number): Uint8Array {
+    const r = Math.max(1, Math.round(0.004 * Math.max(W, H)));
+    const closed = erode(dilateMask(raw, W, H, r), W, H, r);
+    for (let i = 0; i < closed.length; i++) if (raw[i]) closed[i] = 1;
+    const seen = new Uint8Array(W * H), stack: number[] = [], comp: number[] = [], max = OUTLINE_HOLE_MAX_SHARE * W * H;
+    for (let s0 = 0; s0 < W * H; s0++) {
+        if (closed[s0] || seen[s0]) continue;
+        let border = false; comp.length = 0; stack.push(s0); seen[s0] = 1;
+        while (stack.length) {
+            const i = stack.pop()!, x = i % W, y = (i / W) | 0;
+            comp.push(i);
+            if (x === 0 || y === 0 || x === W - 1 || y === H - 1) border = true;
+            for (const j of [x > 0 ? i - 1 : -1, x < W - 1 ? i + 1 : -1, y > 0 ? i - W : -1, y < H - 1 ? i + W : -1]) if (j >= 0 && !closed[j] && !seen[j]) { seen[j] = 1; stack.push(j); }
+        }
+        if (!border && comp.length <= max) for (const i of comp) closed[i] = 1;
+    }
+    return closed;
+}
+
+/**
+ * Long thin dark lines crossing the structure's outline at any angle (poles, mast arms, wires): pixels darker than both
+ * sides `halfWidthPx` away across some direction vote in a Hough transform (on the view scaled to at most 480 px); each
+ * strong line is traced into segments, and a segment is kept when it covers LINE_MIN_INSIDE_SHARE of the outline's extent
+ * along it AND either crosses LINE_MIN_OUTSIDE_SHARE of the view's side of open background outside the outline (the same
+ * plain tone on both sides, like sky) or runs from `seeds` (a pole or a mounted item already found) out of the frame. The
+ * structure's own pilasters, mullions and cornices stop at its edge, or continue over the neighbours' walls, so they are
+ * not taken. Returns the segments' pixels inside the outline, at the view's size.
+ */
+export function crossingLines(image: { width: number; height: number; rgba: Uint8Array }, outline: Uint8Array, opts: { halfWidthPx?: number; contrast?: number; seeds?: Uint8Array } = {}): Uint8Array {
+    const W = image.width, H = image.height, out = new Uint8Array(W * H);
+    const f = Math.max(1, Math.ceil(Math.max(W, H) / 480)), sw = Math.ceil(W / f), sh = Math.ceil(H / f);
+    const w = Math.max(1, Math.round((opts.halfWidthPx ?? Math.max(3, Math.round(0.004 * Math.max(W, H)))) / f)), k = opts.contrast ?? 18;
+    // the view scaled down: luma averaged, outline and seeds kept where any full-size pixel has them
+    const L = new Float32Array(sw * sh), n = new Float32Array(sw * sh), O = new Uint8Array(sw * sh), S = new Uint8Array(sw * sh);
+    let x0 = sw, y0 = sh, x1 = -1, y1 = -1;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const i = y * W + x, j = ((y / f) | 0) * sw + ((x / f) | 0);
+        L[j] += 0.299 * image.rgba[i * 4] + 0.587 * image.rgba[i * 4 + 1] + 0.114 * image.rgba[i * 4 + 2]; n[j]++;
+        if (outline[i]) O[j] = 1;
+        if (opts.seeds?.[i]) S[j] = 1;
+    }
+    for (let j = 0; j < L.length; j++) {
+        L[j] /= n[j] || 1;
+        if (O[j]) { const x = j % sw, y = (j / sw) | 0; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
+    if (x1 < 0) return out;
+    const at = (x: number, y: number) => L[Math.min(sh - 1, Math.max(0, y)) * sw + Math.min(sw - 1, Math.max(0, x))];
+    const thin = new Uint8Array(sw * sh);
+    for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
+        const c = L[y * sw + x];
+        for (const [dx, dy] of [[w, 0], [0, w], [w, w], [w, -w]]) if (c < at(x - dx, y - dy) - k && c < at(x + dx, y + dy) - k) { thin[y * sw + x] = 1; break; }
+    }
+    // Hough: 180 angles, 1 px of rho
+    const T = 180, R = Math.ceil(Math.hypot(sw, sh)), cos = new Float32Array(T), sin = new Float32Array(T);
+    for (let t = 0; t < T; t++) { cos[t] = Math.cos((t * Math.PI) / T); sin[t] = Math.sin((t * Math.PI) / T); }
+    const acc = new Int32Array(T * (2 * R + 1));
+    for (let j = 0; j < thin.length; j++) if (thin[j]) { const x = j % sw, y = (j / sw) | 0; for (let t = 0; t < T; t++) acc[t * (2 * R + 1) + Math.round(x * cos[t] + y * sin[t]) + R]++; }
+    const minVotes = Math.max(8, Math.round(0.1 * Math.min(sw, sh))), outsideMin = LINE_MIN_OUTSIDE_SHARE * Math.max(sw, sh);
+    for (let line = 0; line < 60; line++) {
+        let best = -1, bv = minVotes - 1;
+        for (let q = 0; q < acc.length; q++) if (acc[q] > bv) { bv = acc[q]; best = q; }
+        if (best < 0) break;
+        const t = Math.floor(best / (2 * R + 1)), rho = (best % (2 * R + 1)) - R;
+        for (let dt = -4; dt <= 4; dt++) for (let dr = -4; dr <= 4; dr++) { const tt = (t + dt + T) % T, rr = rho + dr + R; if (rr >= 0 && rr <= 2 * R) acc[tt * (2 * R + 1) + rr] = 0; }
+        // trace the line: the foot of rho, then along the direction (-sin, cos), a step of one pixel
+        const px = rho * cos[t], py = rho * sin[t], ux = -sin[t], uy = cos[t];
+        const extent = Math.abs(ux) * (x1 - x0 + 1) + Math.abs(uy) * (y1 - y0 + 1);
+        let run: Array<[number, number]> = [], gap = 0;
+        const flush = () => {
+            if (run.length) {
+                // outside the outline, the line must cross open background (the same plain tone on both sides of it, like sky):
+                // a facade's own courses and sills line up with the neighbours' in perspective and continue over their walls
+                let inside = 0, open = 0;
+                const off = w + 2, nx = Math.round(cos[t] * off), ny = Math.round(sin[t] * off);
+                for (const [x, y] of run) {
+                    if (O[y * sw + x]) { inside++; continue; }
+                    const ax = x + nx, ay = y + ny, bx = x - nx, by = y - ny;
+                    if (ax < 0 || ay < 0 || bx < 0 || by < 0 || ax >= sw || bx >= sw || ay >= sh || by >= sh) continue;
+                    if (!O[ay * sw + ax] && !O[by * sw + bx] && Math.abs(L[ay * sw + ax] - L[by * sw + bx]) < 10) open++;
+                }
+                const near = (q: [number, number]) => { for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) { const x = q[0] + dx, y = q[1] + dy; if (x >= 0 && y >= 0 && x < sw && y < sh && S[y * sw + x]) return true; } return false; };
+                const border = (q: [number, number]) => q[0] <= 1 || q[1] <= 1 || q[0] >= sw - 2 || q[1] >= sh - 2;
+                const [a, b] = [run[0], run[run.length - 1]];
+                if (inside >= LINE_MIN_INSIDE_SHARE * extent && (open >= outsideMin || (near(a) && border(b)) || (near(b) && border(a))))
+                    for (const [x, y] of run) for (let yy = y * f; yy < Math.min(H, (y + 1) * f); yy++) for (let xx = x * f; xx < Math.min(W, (x + 1) * f); xx++) if (outline[yy * W + xx]) out[yy * W + xx] = 1;
+            }
+            run = []; gap = 0;
+        };
+        for (let s = -R; s <= R; s++) {
+            const x = Math.round(px + s * ux), y = Math.round(py + s * uy);
+            if (x < 0 || y < 0 || x >= sw || y >= sh) { if (run.length) flush(); continue; }
+            // the line's own pixel or one beside it across the line
+            const bx = x + Math.round(cos[t]), by = y + Math.round(sin[t]);
+            const hit = thin[y * sw + x] === 1 || (bx >= 0 && by >= 0 && bx < sw && by < sh && thin[by * sw + bx] === 1);
+            if (hit) { run.push([x, y]); gap = 0; } else if (++gap > 3) flush();
+        }
+        flush();
+    }
+    return out;
+}
+
+/** One obstruction a vision model listed in a photo: what it is, and its box, normalised [x0, y0, x1, y1]. */
+export interface ObstructionBox { label: string; box: NormBox }
+/** Lists what stands in front of the structure in a photo (one box per thing). */
+export type ObstructionLister = (image: { width: number; height: number; rgba: Uint8Array }, target: string, signal?: AbortSignal) => Promise<ObstructionBox[]>;
+
+/** The vision question behind visionObstructionLister: every separate thing in front of the structure's facade, one box each (street-identify's box_2d pattern). */
+export function obstructionPrompt(target: string): string {
+    return [
+        `This is a street photo of ${target}. List every separate thing that stands between the camera and the facade of ${target} and hides part of it:`,
+        'poles and what they carry, traffic signal heads and their arms, signs, banners, lamps, wires, trees and other plants, vehicles, people, scaffolding, kiosks, or anything else standing in front of it.',
+        'Leave out the building itself, its own windows, cornices, fire escapes and shopfronts, and the buildings beside it.',
+        'For each thing give "label" (what it is, in a few plain words) and "box_2d": [ymin, xmin, ymax, xmax] on a 0-1000 scale, the whole thing (a pole from its foot to its top, with what it carries).',
+        'List each thing once, the nearest first, at most 30.',
+        'Reply with JSON only: {"objects": [ ... ]}'
+    ].join('\n');
+}
+
+/** The reply's boxes (street-identify's parser), as normalised [x0, y0, x1, y1]. */
+export function parseObstructionReply(text: string): ObstructionBox[] {
+    return parseStreetReply(text).map(r => ({ label: r.label, box: [r.box[1] / 1000, r.box[0] / 1000, r.box[3] / 1000, r.box[2] / 1000] as NormBox }));
+}
+
+/** An ObstructionLister on a vision model chain (one call per photo). */
+export function visionObstructionLister(chain: VisionModelChain<string>): ObstructionLister {
+    return async (image, target, signal) => {
+        const rgb = new Uint8Array(image.width * image.height * 3);
+        for (let i = 0; i < image.width * image.height; i++) { rgb[i * 3] = image.rgba[i * 4]; rgb[i * 3 + 1] = image.rgba[i * 4 + 1]; rgb[i * 3 + 2] = image.rgba[i * 4 + 2]; }
+        const sent = await capImageSide(Buffer.from(encodePng(image.width, image.height, rgb, 3)), 'image/png', image.width, image.height, 1280);
+        const r = await chain.generate({
+            contents: [{ role: 'user', parts: [{ inlineData: { mimeType: sent.mimeType, data: sent.bytes.toString('base64') } }, { text: obstructionPrompt(target) }] }],
+            config: { responseMimeType: 'application/json', temperature: 0, ...(signal ? { abortSignal: signal } : {}) }
+        }, { stage: 'obstructions', thinkingBudget: ORNAMENT_THINKING_BUDGET });
+        const text = (r.response.candidates?.[0]?.content?.parts ?? []).filter(p => !(p as { thought?: boolean }).thought).map(p => p.text ?? '').join('');
+        const boxes = parseObstructionReply(text);
+        r.remember();
+        return boxes;
+    };
+}
+
+/**
+ * What stands in front of the structure in a photo, kept only inside `within` (the structure's outline) and grown along
+ * thin vertical and horizontal lines. With `list`: a vision model lists each obstruction with a box, the segmenter cuts
+ * each out from its box, and an instance is kept when it lies mostly inside the outline and is small beside it (each
+ * instance, and all of them together, capped against `outlinePixels`). Without: the open-vocabulary "anything in front"
+ * and thin-structure cut-outs. Used by ownViews and to check a cleaned photo (nothing may be left standing in what was filled).
+ */
+export async function detectOccluders(image: { width: number; height: number; rgba: Uint8Array }, segment: OwnershipSegmenter, target: string, box: NormBox | undefined, within: Uint8Array, signal?: AbortSignal, opts: { list?: ObstructionLister; outlinePixels?: number } = {}): Promise<{ mask: Uint8Array; segmentedPixels: number; thinPixels: number; grownPixels: number; notes: string[]; instances?: Array<{ label: string; pixels: number; kept: boolean; why?: string }> }> {
+    const W = image.width, H = image.height, mask = new Uint8Array(W * H), notes: string[] = [];
+    let segmentedPixels = 0, thinPixels = 0, grownPixels = 0;
+    let instances: Array<{ label: string; pixels: number; kept: boolean; why?: string }> | undefined;
+    if (opts.list) {
+        let outline = opts.outlinePixels ?? 0;
+        if (!outline) for (let i = 0; i < within.length; i++) outline += within[i];
+        let boxes: ObstructionBox[] = [];
+        try { boxes = await opts.list(image, target, signal); notes.push(`listed ${boxes.length} obstruction(s)`); } catch (err) {
+            if (signal?.aborted) throw err;
+            notes.push(`the obstruction list failed (${err instanceof Error ? err.message : String(err)})`);
+        }
+        const cut: Array<{ label: string; m: Uint8Array; inside: number; pixels: number }> = [];
+        instances = [];
+        for (const b of boxes) {
+            try {
+                const o = await segment(image, { box: b.box, positive: [], negative: [] }, signal);
+                if (o.length !== W * H) throw new Error(`the segmenter returned ${o.length} pixels for a ${W}x${H} view`);
+                let pixels = 0, inside = 0;
+                for (let i = 0; i < o.length; i++) if (o[i]) { pixels++; if (within[i]) inside++; }
+                if (!pixels || inside < OCCLUDER_MIN_INSIDE_SHARE * pixels) { instances.push({ label: b.label, pixels: inside, kept: false, why: 'mostly outside the structure' }); continue; }
+                if (inside > OCCLUDER_INSTANCE_MAX_SHARE * outline) { instances.push({ label: b.label, pixels: inside, kept: false, why: `covers ${(100 * inside / outline).toFixed(0)} percent of the structure` }); continue; }
+                cut.push({ label: b.label, m: o, inside, pixels });
+            } catch (err) {
+                if (signal?.aborted) throw err;
+                instances.push({ label: b.label, pixels: 0, kept: false, why: `the segmenter failed (${err instanceof Error ? err.message : String(err)})` });
+            }
+        }
+        // the smallest first, while the union stays under its cap
+        cut.sort((a, b) => a.inside - b.inside);
+        for (const c of cut) {
+            let add = 0;
+            for (let i = 0; i < c.m.length; i++) if (c.m[i] && within[i] && !mask[i]) add++;
+            if (segmentedPixels + add > OCCLUDER_UNION_MAX_SHARE * outline) { instances.push({ label: c.label, pixels: c.inside, kept: false, why: 'over the cap for all obstructions together' }); continue; }
+            for (let i = 0; i < c.m.length; i++) if (c.m[i] && within[i]) mask[i] = 1;
+            segmentedPixels += add;
+            instances.push({ label: c.label, pixels: c.inside, kept: true });
+        }
+        // long thin lines crossing the outline that no box caught (mast arms, wires, poles), under the same union cap
+        const lines = crossingLines(image, within, { seeds: mask });
+        let add = 0;
+        for (let i = 0; i < lines.length; i++) if (lines[i] && !mask[i]) add++;
+        if (add && segmentedPixels + thinPixels + add <= OCCLUDER_UNION_MAX_SHARE * outline) {
+            for (let i = 0; i < lines.length; i++) if (lines[i]) mask[i] = 1;
+            thinPixels += add;
+            notes.push(`${add} px of thin lines crossing the outline`);
+        } else if (add) notes.push(`${add} px of thin lines crossing the outline not taken (over the cap for all obstructions together)`);
+    } else {
+        for (const [desc, which] of [[occluderDescription(target), 'front'], [thinOccluderDescription(target), 'thin']] as const) {
+            try {
+                const o = await segment(image, { ...(box ? { box } : {}), positive: [], negative: [], target: desc }, signal);
+                if (o.length !== W * H) throw new Error(`the segmenter returned ${o.length} pixels for a ${W}x${H} view`);
+                for (let i = 0; i < o.length; i++) if (o[i] && within[i] && !mask[i]) { mask[i] = 1; if (which === 'front') segmentedPixels++; else thinPixels++; }
+                notes.push(`${which}: cut out`);
+            } catch (err) {
+                if (signal?.aborted) throw err;
+                notes.push(`${which}: ${err instanceof OwnershipTargetNotFound ? `nothing found (${err.reason.slice(0, 120)})` : `failed (${err instanceof Error ? err.message : String(err)})`}`);
+            }
+        }
+    }
+    const gv = growThinVertical(mask, image, within), gh = growThinHorizontal(gv, image, within);
+    for (let i = 0; i < mask.length; i++) if (gh[i] && !mask[i]) { mask[i] = 1; grownPixels++; }
+    return { mask, segmentedPixels, thinPixels, grownPixels, notes, ...(instances ? { instances } : {}) };
+}
+
+/** The check streetview-clean.ts runs after a fill: detectOccluders on the cleaned copy, inside the filled pixels (grown a little). */
+export function occluderVerifier(segment: OwnershipSegmenter, target: string, signal?: AbortSignal, list?: ObstructionLister) {
+    return async (cleaned: { width: number; height: number; rgba: Uint8Array }, filled: Uint8Array): Promise<Uint8Array> => {
+        const W = cleaned.width, H = cleaned.height;
+        let x0 = W, y0 = H, x1 = -1, y1 = -1;
+        for (let i = 0; i < filled.length; i++) if (filled[i]) { const x = i % W, y = (i / W) | 0; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+        if (x1 < 0) return new Uint8Array(W * H);
+        const within = dilateMask(filled, W, H, 2);
+        return (await detectOccluders(cleaned, segment, target, [x0 / W, y0 / H, (x1 + 1) / W, (y1 + 1) / H], within, signal, list ? { list } : {})).mask;
+    };
+}
+
+/**
  * Cuts the structure out of every view (`concurrency` at a time) and returns the views with `ownerMask` set, and a record
  * per view. A view that cannot be vouched for gets an all-zero mask (none of its pixels textures the structure).
  */
@@ -264,6 +564,8 @@ export async function ownViews(input: {
      * of it as standing in front of the structure (`occluders`, dilated), both 1 per pixel at the image's size. Read only.
      */
     onMasks?: (index: number, masks: { owner: Uint8Array; occluders: Uint8Array }) => void;
+    /** Lists the obstructions in a photo (a vision model): the occluders are then cut out one instance per box. Absent: the open-vocabulary cut-outs. */
+    listObstructions?: ObstructionLister;
 }): Promise<{ views: ProjectionView[]; records: ViewOwnershipRecord[] }> {
     const out: ProjectionView[] = input.views.slice();
     const records: ViewOwnershipRecord[] = new Array(input.views.length);
@@ -274,7 +576,7 @@ export async function ownViews(input: {
             const t0 = Date.now();
             const W = v.camera.width, H = v.camera.height;
             const described = !!input.target && (input.describe ? input.describe(v, k) : true);
-            const prompts: ViewOwnershipRecord['prompts'] = described ? 'description+geometry' : input.target ? 'geometry (registered pose)' : 'geometry';
+            const prompts: ViewOwnershipRecord['prompts'] = described ? 'description' : input.target ? 'geometry (registered pose)' : 'geometry';
             const refuse = (reason: string, targetPixels: number, extra: Partial<ViewOwnershipRecord> = {}) => {
                 out[k] = { ...v, ownerMask: new Uint8Array(W * H) };
                 records[k] = { panoId: v.panoId, status: 'refused', prompts, reason, targetPixels, maskPixels: 0, ms: Date.now() - t0, ...extra };
@@ -286,9 +588,11 @@ export async function ownViews(input: {
                     refuse(`the structure covers ${(100 * p.targetPixels / (W * H)).toFixed(1)} percent of the view, too little to cut out`, p.targetPixels);
                     continue;
                 }
+                // with the description the outline is the segmenter's own, found pose-free (the vision model locates the structure
+                // in the photo with no hint from the geometry, which a weak pose puts on a neighbour); the projection only checks it
                 let raw: Uint8Array;
                 try {
-                    raw = await input.segment(v.image, { box: p.box, positive: p.positive, negative: p.negative, ...(described ? { target: input.target } : {}) }, input.signal);
+                    raw = await input.segment(v.image, described ? { positive: [], negative: [], target: input.target } : { box: p.box, positive: p.positive, negative: p.negative }, input.signal);
                 } catch (err) {
                     if (!(err instanceof OwnershipTargetNotFound)) throw err;
                     refuse(`the structure is not in this photo (${err.reason})`, p.targetPixels);
@@ -297,39 +601,39 @@ export async function ownViews(input: {
                 if (raw.length !== W * H) throw new Error(`the segmenter returned ${raw.length} pixels for a ${W}x${H} view`);
                 const iou = maskIou(raw, p.target);
                 if (input.debugDir) writeOverlay(path.join(input.debugDir, `${String(k).padStart(2, '0')}_${v.panoId}_iou${Math.round(iou * 100)}.png`), v.image, raw, p);
-                if (iou < OWNERSHIP_MIN_IOU) {
-                    refuse(`the cut-out agrees with the structure's projection on ${(100 * iou).toFixed(0)} percent (intersection over union, at least ${100 * OWNERSHIP_MIN_IOU} needed): the photo there shows something else, or the pose is far off`, p.targetPixels, { iou: Math.round(iou * 1000) / 1000 });
+                if (iou < (described ? OWNERSHIP_SANITY_IOU : OWNERSHIP_MIN_IOU)) {
+                    refuse(`the cut-out agrees with the structure's projection on ${(100 * iou).toFixed(0)} percent (intersection over union, at least ${100 * (described ? OWNERSHIP_SANITY_IOU : OWNERSHIP_MIN_IOU)} needed): the photo there shows something else, or the pose is far off`, p.targetPixels, { iou: Math.round(iou * 1000) / 1000 });
                     continue;
                 }
+                // a described cut-out is the outline itself: its small enclosed holes (a window it left out) are closed
+                if (described) raw = closeOutline(raw, W, H);
                 const mask = dilateMask(raw, W, H, OWNERSHIP_DILATE_PX);
-                // what stands in front of the structure: the depth test's occluders, the segmenter's cut-out of "anything in
-                // front" (open vocabulary, the structure's box as the hint), grown along thin vertical structures, then dilated
+                // what stands in front of the structure: an occluder is something BETWEEN the camera and the structure's own surface,
+                // so only pixels inside the structure's outline count, and a neighbour beside it is never one. The outline is the
+                // described cut-out grown a little (an occluder leaves a gap in it), or, with geometry prompts, the projected
+                // silhouette. Within it, the segmenter's obstruction instances (or its open-vocabulary cut-outs), grown along thin
+                // lines. Depth alone never makes an occluder; depthPixels counts the occluders the depth test agrees are in front.
+                const sil = described ? dilateMask(raw, W, H, Math.max(2, Math.round(OCCLUDER_OUTLINE_GROW_SHARE * Math.max(W, H)))) : structureSilhouette(p, W, H);
                 const occ = new Uint8Array(W * H);
-                let depthPx = 0, segPx = 0, grownPx = 0, removed = 0;
-                for (let i = 0; i < occ.length; i++) if (p.hidden[i]) { occ[i] = 1; if (mask[i]) depthPx++; }
+                let depthPx = 0, segPx = 0, grownPx = 0, removed = 0, thinPx = 0, outlinePx = 0;
+                for (let i = 0; i < sil.length; i++) outlinePx += sil[i];
                 let segNote = 'not asked (no description of the structure)';
+                let instances: NonNullable<ViewOwnershipRecord['occluders']>['instances'];
                 if (input.target) {
-                    try {
-                        const o = await input.segment(v.image, { box: p.box, positive: [], negative: [], target: occluderDescription(input.target) }, input.signal);
-                        if (o.length !== W * H) throw new Error(`the segmenter returned ${o.length} pixels for a ${W}x${H} view`);
-                        const bx0 = Math.floor(p.box[0] * W), by0 = Math.floor(p.box[1] * H), bx1 = Math.ceil(p.box[2] * W), by1 = Math.ceil(p.box[3] * H);
-                        for (let y = by0; y < by1; y++) for (let x = bx0; x < bx1; x++) { const i = y * W + x; if (o[i]) { if (!occ[i] && mask[i]) segPx++; occ[i] = 1; } }
-                        segNote = 'cut out';
-                    } catch (err) {
-                        if (input.signal?.aborted) throw err;
-                        segNote = err instanceof OwnershipTargetNotFound ? `nothing found in front (${err.reason.slice(0, 160)})` : `failed (${err instanceof Error ? err.message : String(err)})`;
-                    }
+                    const d = await detectOccluders(v.image, input.segment, input.target, described ? undefined : p.box, sil, input.signal, { ...(input.listObstructions ? { list: input.listObstructions } : {}), outlinePixels: outlinePx });
+                    for (let i = 0; i < occ.length; i++) if (d.mask[i]) { occ[i] = 1; if (mask[i]) segPx++; if (p.hidden[i]) depthPx++; }
+                    thinPx = d.thinPixels; grownPx = d.grownPixels; instances = d.instances;
+                    segNote = d.notes.join('; ');
                 }
-                const grown = growThinVertical(occ, v.image, mask);
-                for (let i = 0; i < occ.length; i++) if (grown[i] && !occ[i]) { grownPx++; occ[i] = 1; }
                 const occD = dilateMask(occ, W, H, Math.max(2, Math.round(OCCLUDER_DILATE_SHARE * Math.max(W, H))));
+                for (let i = 0; i < occD.length; i++) if (!sil[i]) occD[i] = 0;
                 let m = 0;
                 for (let i = 0; i < mask.length; i++) { if (mask[i] && occD[i]) { mask[i] = 0; removed++; } m += mask[i]; }
                 if (input.debugDir) writeOverlay(path.join(input.debugDir, `${String(k).padStart(2, '0')}_${v.panoId}_owned.png`), v.image, mask, p, occD);
                 out[k] = { ...v, ownerMask: mask };
                 input.onMasks?.(k, { owner: mask, occluders: occD });
-                records[k] = { panoId: v.panoId, status: 'segmented', prompts, targetPixels: p.targetPixels, maskPixels: m, iou: Math.round(iou * 1000) / 1000,
-                    occluders: { depthPixels: depthPx, segmentedPixels: segPx, grownPixels: grownPx, removedPixels: removed, segmenter: segNote }, ms: Date.now() - t0 };
+                records[k] = { panoId: v.panoId, status: 'segmented', prompts, targetPixels: p.targetPixels, maskPixels: m, iou: Math.round(iou * 1000) / 1000, poseAgrees: iou >= OWNERSHIP_MIN_IOU,
+                    occluders: { depthPixels: depthPx, segmentedPixels: segPx, thinPixels: thinPx, grownPixels: grownPx, removedPixels: removed, segmenter: segNote, ...(instances ? { instances } : {}) }, ms: Date.now() - t0 };
             } catch (err) {
                 if (input.signal?.aborted) throw err;
                 refuse(`the segmenter failed (${err instanceof Error ? err.message : String(err)})`, 0);

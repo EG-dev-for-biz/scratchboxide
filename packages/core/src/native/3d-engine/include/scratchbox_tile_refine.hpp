@@ -3380,6 +3380,13 @@ private:
         js << "  \"rectify\": {\"displacementAll_m\": " << dist(Distribution::of(disp)) << ", \"displacementMoved_m\": " << dist(Distribution::of(moved))
            << ", \"flips\": " << flips << ", \"collapsedToZeroArea\": " << collapsed << ", \"movedGroups\": " << S.movedGroups
            << ", \"wallRegions\": " << S.wallRegions << ", \"roofRegions\": " << S.roofRegions
+           << ", \"footprintWalls\": {\"rings\": " << P.rect.wallFootprintsXZ.size() << ", \"edges\": " << S.footprintEdges
+           << ", \"edgesAccepted\": " << S.footprintEdgesAccepted << ", \"edgesLowSupport\": " << S.footprintEdgesLowSupport
+           << ", \"edgesOffAngle\": " << S.footprintEdgesOffAngle << ", \"wallsMatched\": " << S.footprintWallsMatched
+           << ", \"wallsSnapped\": " << S.footprintWallsSnapped << ", \"wallsMerged\": " << S.footprintWallsMerged
+           << ", \"snapRejected\": " << S.footprintSnapRejected << ", \"snappedArea_m2\": " << num(S.footprintSnappedArea)
+           << ", \"claimSides\": " << S.footprintClaimSides << ", \"claimedTriangles\": " << S.footprintClaimedTriangles
+           << ", \"claimedArea_m2\": " << num(S.footprintClaimedArea) << "}"
            << ", \"proudBlocks\": {\"blocks\": " << S.proudBlocks << ", \"levelled\": " << S.proudBlocksLevelled << ", \"area_m2\": " << num(S.proudBlockArea)
            << ", \"groups\": " << S.proudBlockGroups << ", \"keptAsScannedGroups\": " << S.proudBlockFrozenGroups << "}"
            << ", \"snapped\": {\"plane\": " << S.snappedGroups1

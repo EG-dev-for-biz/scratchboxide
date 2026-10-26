@@ -10,7 +10,7 @@
 /**
  * Version F round 3: the redraw of one wall, best of n.
  *
- * Pipeline E's enhanceWall (enhance.ts) draws a wall once, counts its storeys and bays with a vision call, audits it, and on
+ * The facade texture builder's buildFacadeTexture (facade-texture.ts) draws a wall once, counts its storeys and bays with a vision call, audits it, and on
  * a rejection redraws it once more without the photo, in series. Here each wall is drawn SAMPLES times at once (the same
  * request, its own cache slot per sample), every answer is gated by the local checks (local-gate.ts: F's lattice on a
  * strong-fit wall, the must-keep features, the region audit and the Street View check of enhance.ts), the weak-fit walls'
@@ -22,14 +22,12 @@
  */
 
 import * as path from 'path';
-import { buildTexturePlatePrompt, TEXTURE_PLATE_UNSEEN_PROMPT_ID } from '../../../../browser/generative-canvas/services/location-beautify-service';
-import { decodeImageInMemory, type RgbaImage8 } from '../tile-texture-transfer';
-import { padToModelAspect, resizeRgba } from '../texture-enhance';
-import { encodePng } from '../png-encode';
+import { TEXTURE_PLATE_UNSEEN_PROMPT_ID } from '../../../../browser/generative-canvas/services/location-beautify-service';
 import type { FaceTexture } from '../pipeline-e/massing-glb';
 import type { MassingFace } from '../pipeline-e/native-massing';
-import { alignPlate, cachedPlate, guardPlate, identityRecord, preserveClause, unseenGreyShare, ENHANCE_MAX_SIDE, UNSEEN_MAX_GREY_SHARE, UNSEEN_MIN_ALIGN_SHARE, UNSEEN_MIN_COLOUR_SHARE, UNSEEN_MIN_COUNT_SHARE, type AlignResult, type EnhanceAuditRecord, type EnhanceIdentityRecord, type EnhanceStreetViewRecord, type PlateAnswer, type PlateModelClient, type PlateRequest, type WallStreetView } from '../pipeline-e/enhance';
-import { identityGate, type FacadeCounter, type FacadeCounts } from '../pipeline-e/plate-identity';
+import { cachedPlate, guardPlate, identityRecord, type EnhanceAuditRecord, type EnhanceIdentityRecord, type EnhanceStreetViewRecord, type PlateAnswer, type PlateModelClient, type WallStreetView } from '../pipeline-e/enhance';
+import type { FacadeCounter, FacadeCounts } from '../pipeline-e/plate-identity';
+import { alignAndIdentify, plateFromAnswer, prepareFacadeRequest, writeFacadeTexture, type FacadeCountsRead } from '../facade-texture/facade-texture';
 import { streetBandTop } from '../pipeline-e/plate-streetview';
 import { featureGuard, latticeIdentity, pickCandidate, STRONG_FIT_NCC, type CandidateScore, type FeatureRegionPx, type FeatureVerdict, type LatticeCheck } from './local-gate';
 
@@ -159,23 +157,11 @@ export async function redrawWallBestOf(f: MassingFace, t: FaceTexture, use: Uint
     const t0 = Date.now();
     const guards = opts.guards ?? true;
     const sv = guards ? opts.streetView : undefined;
-    const scale = Math.min(1, ENHANCE_MAX_SIDE / Math.max(t.width, t.height));
-    const sw = Math.max(16, Math.round(t.width * scale)), sh = Math.max(16, Math.round(t.height * scale));
-    const N = t.width * t.height;
-    let coveredN = 0;
-    for (let i = 0; i < N; i++) if (use[i]) coveredN++;
-    const coveredShare = N ? coveredN / N : 0;
     const unseen = opts.unseen;
-    const sent = unseen ? (() => { const g = t.rgba.slice(); for (let i = 0; i < N; i++) if (!use[i]) { g[i * 4] = 128; g[i * 4 + 1] = 128; g[i * 4 + 2] = 128; g[i * 4 + 3] = 255; } return g; })() : t.rgba;
-    const small: RgbaImage8 = resizeRgba({ width: t.width, height: t.height, rgba: sent }, sw, sh);
-    const { padded, offset } = padToModelAspect(small);
-    const ref = opts.reference ? (() => { const rs = Math.min(1, 768 / Math.max(opts.reference.width, opts.reference.height)); const r = resizeRgba({ width: opts.reference.width, height: opts.reference.height, rgba: opts.reference.rgba }, Math.max(8, Math.round(opts.reference.width * rs)), Math.max(8, Math.round(opts.reference.height * rs))); return new Uint8Array(encodePng(r.width, r.height, Buffer.from(r.rgba), 4)); })() : undefined;
-    const prompt = buildTexturePlatePrompt({ locationName: opts.locationName, widthM: t.width * f.pixel, heightM: t.height * f.pixel, widthPx: padded.width, heightPx: padded.height, preserveClause: preserveClause(padded.width, padded.height), withReference: !!ref, ...(sv ? { withStreetView: true } : {}), ...(unseen ? { unseen: true } : {}) });
+    const prep = prepareFacadeRequest(f, t, use, { locationName: opts.locationName, models: opts.models, ...(opts.reference ? { reference: opts.reference } : {}), ...(opts.signal ? { signal: opts.signal } : {}), ...(sv ? { streetView: sv } : {}), ...(unseen ? { unseen } : {}) });
+    const { request, coveredShare } = prep;
     const svRec: EnhanceStreetViewRecord | undefined = sv ? { panoId: sv.view.panoId, method: sv.view.registration?.method ?? 'nominal', bandCover: Math.round(sv.rect.bandCover * 1000) / 1000, pxPerM: Math.round(sv.rect.pxPerM * 10) / 10 } : undefined;
     const base = { face: f.index, key: f.key, ...(svRec ? { streetView: svRec } : {}), ...(guards && !sv && opts.noStreetView ? { noStreetView: opts.noStreetView } : {}) };
-    const image = new Uint8Array(encodePng(padded.width, padded.height, Buffer.from(padded.rgba), 4));
-    const widthM = t.width * f.pixel, heightM = t.height * f.pixel;
-    const request: PlateRequest = { prompt, image, width: padded.width, height: padded.height, ...(ref ? { reference: ref } : {}), ...(sv ? { streetView: sv.crop } : {}), models: opts.models, ...(opts.signal ? { signal: opts.signal } : {}) };
     const strong = !!opts.fit && opts.fit.tileNcc >= STRONG_FIT_NCC && !unseen;
     const countGate: RedrawWallRecord['countGate'] = strong ? 'lattice' : opts.counter ? 'vision' : 'none';
     const samples = Math.max(1, opts.samples ?? SAMPLES);
@@ -192,33 +178,15 @@ export async function redrawWallBestOf(f: MassingFace, t: FaceTexture, use: Uint
             if (opts.signal?.aborted) throw err;
             return { sample: k, rejected: `the model did not answer (${(err as Error).message.slice(0, 160)})`, ms: Date.now() - ts };
         }
-        let dec: RgbaImage8;
-        try { dec = decodeImageInMemory(answer.bytes); } catch (err) { return { sample: k, model: answer.modelUsed, rejected: `the answer cannot be decoded (${(err as Error).message})`, ms: Date.now() - ts }; }
-        const full = resizeRgba(dec, padded.width, padded.height);
-        const inner = new Uint8Array(sw * sh * 4);
-        for (let y = 0; y < sh; y++) inner.set(full.rgba.subarray(((offset[1] + y) * full.width + offset[0]) * 4, ((offset[1] + y) * full.width + offset[0] + sw) * 4), y * sw * 4);
-        const back = resizeRgba({ width: sw, height: sh, rgba: inner }, t.width, t.height).rgba;
-        const alignable = !unseen || coveredShare >= UNSEEN_MIN_ALIGN_SHARE;
-        const g: AlignResult = alignable ? alignPlate(t.rgba, back, t.width, t.height, use, f.pixel) : { dx: 0, dy: 0, scale: 1, chamferPx: 0, lostShare: 0, accepted: true, why: 'not aligned', aligned: back };
-        const grossNotMeasured = alignable ? undefined : `the tile covers ${(100 * coveredShare).toFixed(0)}% of the wall, under ${100 * UNSEEN_MIN_ALIGN_SHARE}%: too little to align on`;
+        let read: ReturnType<typeof plateFromAnswer>;
+        try { read = plateFromAnswer(answer.bytes, prep, t); } catch (err) { return { sample: k, model: answer.modelUsed, rejected: `the answer cannot be decoded (${(err as Error).message})`, ms: Date.now() - ts }; }
         // storeys and bays: F's lattice on a strong-fit wall; the vision count (run now, alongside the other samples') on a weak one
-        let counts: { tile?: FacadeCounts; plate?: FacadeCounts; unread?: string } | undefined;
         let lattice: LatticeCheck | undefined;
-        if (strong) { lattice = latticeIdentity(g.aligned, f, use, opts.fit!.planned, opts.fit!.tileNcc, opts.fit!.tileEdgeDistM); counts = { unread: `read locally against F's lattice (${lattice.why})` }; }
-        else if (unseen && coveredShare < UNSEEN_MIN_COUNT_SHARE) counts = { unread: `the tile covers ${(100 * coveredShare).toFixed(0)}% of the wall: its storeys and bays cannot be counted on it` };
-        else if (opts.counter) {
-            const plateSmall = resizeRgba({ width: t.width, height: t.height, rgba: g.aligned }, sw, sh);
-            try { counts = await opts.counter(new Uint8Array(encodePng(sw, sh, Buffer.from(small.rgba), 4)), new Uint8Array(encodePng(sw, sh, Buffer.from(plateSmall.rgba), 4)), widthM, heightM); }
-            catch (err) { if (opts.signal?.aborted) throw err; counts = { unread: `the count could not be read: ${(err as Error).message.slice(0, 120)}` }; }
-        } else counts = { unread: 'no vision model to count with' };
-        const colourAgainst = unseen?.familyLab && coveredShare < UNSEEN_MIN_COLOUR_SHARE ? unseen.familyLab : undefined;
-        const idg = identityGate(t.rgba, g.aligned, t.width, t.height, use, { askedAspect: padded.width / padded.height, answeredAspect: dec.width / dec.height, chamferPx: g.chamferPx, lostShare: g.lostShare, counts, ...(grossNotMeasured ? { grossNotMeasured } : {}), ...(colourAgainst ? { colourAgainst } : {}) });
-        if (lattice && !lattice.passed) { idg.passed = false; idg.why = `${idg.why}; ${lattice.why}`; }
-        if (unseen) {
-            const grey = unseenGreyShare(g.aligned, use, N, unseen.inside);
-            if (grey > UNSEEN_MAX_GREY_SHARE) { idg.passed = false; idg.why = `${idg.why}; ${(100 * grey).toFixed(0)}% of the unseen part left flat mid-grey (more than ${100 * UNSEEN_MAX_GREY_SHARE}%)`; }
-        }
-        const rec: SampleRecord & { aligned?: Uint8Array } = { sample: k, model: answer.modelUsed, ...(answer.cached ? { cached: true } : {}), chamferPx: g.chamferPx, lostShare: g.lostShare, identity: identityRecord(idg), ...(lattice ? { lattice } : {}), counts, ms: 0, aligned: g.aligned };
+        const count = strong ? (aligned: Uint8Array): FacadeCountsRead => { lattice = latticeIdentity(aligned, f, use, opts.fit!.planned, opts.fit!.tileNcc, opts.fit!.tileEdgeDistM); return { unread: `read locally against F's lattice (${lattice.why})` }; } : undefined;
+        const { g, idg, counts } = await alignAndIdentify(f, t, use, prep, read.back, read.answered, { ...(unseen ? { unseen } : {}), ...(opts.counter ? { counter: opts.counter } : {}), ...(opts.signal ? { signal: opts.signal } : {}), ...(count ? { count } : {}) });
+        const lat = lattice as LatticeCheck | undefined;
+        if (lat && !lat.passed) { idg.passed = false; idg.why = `${idg.why}; ${lat.why}`; }
+        const rec: SampleRecord & { aligned?: Uint8Array } = { sample: k, model: answer.modelUsed, ...(answer.cached ? { cached: true } : {}), chamferPx: g.chamferPx, lostShare: g.lostShare, identity: identityRecord(idg), ...(lat ? { lattice: lat } : {}), counts, ms: 0, aligned: g.aligned };
         if (!idg.passed) return { ...rec, rejected: `not the same wall: ${idg.why}`, ms: Date.now() - ts };
         if (!guards) return { ...rec, ms: Date.now() - ts };
         const gp = guardPlate(t.rgba, g.aligned, t.width, t.height, use, f.pixel, sv ? { rect: sv.rect, bandTop: streetBandTop(f) } : undefined);
@@ -240,11 +208,7 @@ export async function redrawWallBestOf(f: MassingFace, t: FaceTexture, use: Uint
     if (svRec && best.svNumbers) Object.assign(svRec, best.svNumbers);
     const outRgba = guards && best.guarded ? best.guarded : best.aligned!;
     const weight = guards ? best.weight : undefined;
-    const src = sv && opts.streetViewSource !== undefined ? opts.streetViewSource : opts.source;
-    for (let i = 0; i < N; i++) {
-        t.rgba[i * 4] = outRgba[i * 4]; t.rgba[i * 4 + 1] = outRgba[i * 4 + 1]; t.rgba[i * 4 + 2] = outRgba[i * 4 + 2]; t.rgba[i * 4 + 3] = 255;
-        if (!weight || weight[i] < 0.5) t.source[i] = unseen && !use[i] ? unseen.source : src;
-    }
+    writeFacadeTexture(t, outRgba, weight, use, sv && opts.streetViewSource !== undefined ? opts.streetViewSource : opts.source, unseen);
     const why = `${unseen ? `a wall the tile hardly sees (${(100 * coveredShare).toFixed(0)}% covered), drawn as it continues (${TEXTURE_PLATE_UNSEEN_PROMPT_ID}); ` : ''}sample ${best.sample} of ${samples} chosen by the local numbers (${describe})`;
     return {
         ...base, accepted: true, why, model: best.model, chosen: best.sample, samples: records, countGate, chamferPx: best.chamferPx, lostShare: best.lostShare, identity: best.identity, ...(best.audit ? { audit: best.audit } : {}),

@@ -13,7 +13,8 @@ import type { GeodeticAnchor } from '../src/common/spatial/colmap-vector-referen
 import {
     buildBeautifyPrompt,
     buildClayRenderBeautifyPrompt,
-    buildStationBeautifyPrompt
+    buildStationBeautifyPrompt,
+    EVEN_LIGHT_SENTENCE
 } from '../src/browser/generative-canvas/services/location-beautify-service';
 import { buildBlockoutNanoBananaPrompt } from '../src/browser/generative-canvas/services/video/omniVideoPromptService';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
@@ -131,11 +132,12 @@ describe('the AI Beautify template is applied inside generation', () => {
             aspectRatio: '16:9',
             distance: station.beautify?.standoffMeters,
             styleSuffix: ctx.styleSuffix,
+            // station images feed 3D, so they are lit evenly and carry no sun clause
+            moodPromptContext: EVEN_LIGHT_SENTENCE,
             fovDegrees: station.fovDegrees,
             focalLengthMm: station.focalLengthMm,
             cameraHeightMeters: station.cameraHeightAboveGround,
-            horizonRowFraction: station.beautify?.horizonRowFraction,
-            solar: station.beautify?.solar ? { azimuthDegrees: station.beautify.solar.azimuthDegrees, elevationDegrees: station.beautify.solar.elevationDegrees } : undefined
+            horizonRowFraction: station.beautify?.horizonRowFraction
         })).toBe(expected);
     });
 

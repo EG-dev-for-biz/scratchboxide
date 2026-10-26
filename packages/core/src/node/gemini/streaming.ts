@@ -6,6 +6,8 @@
  * of this file, via any medium, is strictly prohibited without explicit written
  * permission from Scratchbox LLC.
  ********************************************************************************/
+import * as fs from 'fs';
+import { modelImage } from './model-image';
 import type { FunctionCall, Part } from '@google/genai';
 import type {
     GeminiGenerateRequest,
@@ -18,6 +20,7 @@ import type {
 } from '../../common/gemini-protocol';
 import type { CanvasArtifact, McpExecutionState } from '../../browser/generative-canvas/canvas-types';
 import type { StageEvent } from '../../common/spatial/staged-location-contracts';
+import { compactResultFields } from '../../common/tool-node-graph';
 import {
     DEFAULT_SUBAGENT_MODEL,
     GeminiClient,
@@ -680,6 +683,8 @@ export class StreamingEngine {
             throwIfAborted(signal);
             currentTurn++;
             const turnDetectedToolCalls: FunctionCall[] = [];
+            /** What is left of the turn's image allowance (modelImageParts). */
+            const imageBudget = { left: MAX_MODEL_IMAGES_PER_TURN, bytesLeft: MAX_MODEL_IMAGE_TURN_BYTES };
             let turnText = '';
 
             if (auth.type === 'vertex' && currentTurn > 1) {
@@ -708,20 +713,25 @@ export class StreamingEngine {
             });
 
             // One tool call: run it under its deadline, show its result, and return the parts for the next call.
-            const runToolCall = async (toolCall: FunctionCall, callModel: string): Promise<{ modelPart: Part; responsePart: Part }> => {
+            const runToolCall = async (toolCall: FunctionCall, callModel: string): Promise<{ modelPart: Part; responsePart: Part; imageParts?: Part[] }> => {
                 throwIfAborted(signal);
                 const toolName = toolCall.name || '';
                 const rawToolCall = toolCall as any;
                 // A thought signature belongs to the model that wrote it; a call the router wrote is sent to the chat
-                // model without one.
-                const sig = (callModel === model && (rawToolCall.thought_signature || rawToolCall.thoughtSignature)) ||
-                            'skip_thought_signature_validator';
+                // model without one (the explicit skip sentinel). Within one model turn, only the first of several
+                // function calls carries its own signature (Gemini signs the turn's thought once, not every call) —
+                // the rest genuinely have none, so the field is left off rather than filled with the skip sentinel:
+                // mixing a real signature and the skip sentinel across calls in the same turn is what Vertex rejected
+                // as "Requests ending with a model turn are not supported" (its content-validator discards the whole
+                // malformed turn, which from the outside looks like the conversation ending on a model turn).
+                const realSig = callModel === model && (rawToolCall.thought_signature || rawToolCall.thoughtSignature);
+                const sig = realSig || (callModel !== model ? 'skip_thought_signature_validator' : undefined);
                 const modelPart = {
                     functionCall: {
                         name: toolName,
                         args: toolCall.args || {}
                     },
-                    thought_signature: sig
+                    ...(sig ? { thought_signature: sig } : {})
                 } as any as Part;
 
                 if (toolName === 'workspace_write_file' || toolName === 'workspace_apply_diff') {
@@ -786,6 +796,8 @@ export class StreamingEngine {
                     built.shape.toolBytes = payload.tools ? JSON.stringify(payload.tools).length : 0;
                 }
 
+                // images a tool shows the model (resultPayload.modelImages): sent as images after the tool responses, not as JSON
+                const shown = modelImageParts(toolName, resultPayload, imageBudget);
                 return {
                     modelPart,
                     responsePart: {
@@ -793,16 +805,17 @@ export class StreamingEngine {
                             name: toolName,
                             response: {
                                 name: toolName,
-                                content: toolResultForModel(toolName, exec, resultPayload)
+                                content: toolResultForModel(toolName, exec, shown.payload)
                             }
                         }
-                    } as Part
+                    } as Part,
+                    ...(shown.parts.length ? { imageParts: shown.parts } : {})
                 };
             };
 
             // Tools start as soon as their functionCall part arrives, one after another in the order the model wrote
             // them; the rest of the stream (usage, closing text) does not hold them up.
-            const toolRuns: Array<Promise<{ modelPart: Part; responsePart: Part }>> = [];
+            const toolRuns: Array<Promise<{ modelPart: Part; responsePart: Part; imageParts?: Part[] }>> = [];
             let toolChain: Promise<unknown> = Promise.resolve();
             const startTool = (toolCall: FunctionCall, callModel: string) => {
                 const run = toolChain.then(() => {
@@ -969,10 +982,18 @@ export class StreamingEngine {
             }
             modelParts.push(...results.map(r => r.modelPart));
             const toolResponseParts: Part[] = results.map(r => r.responsePart);
+            const imageParts: Part[] = results.flatMap(r => r.imageParts ?? []);
 
-            // Append assistant model turn with functionCalls and user turn with functionResponses
+            // Append assistant model turn with functionCalls and user turn with functionResponses. A tool's own
+            // images (modelImageParts) go in a separate user turn right after: mixed into the same content as the
+            // functionResponse parts, Vertex rejected the whole request as "Requests ending with a model turn are
+            // not supported" even though the array's last role genuinely was 'user' — its function-response turn
+            // parser seems to expect that content to hold only functionResponse parts.
             payload.contents.push({ role: 'model', parts: modelParts });
             payload.contents.push({ role: 'user', parts: toolResponseParts });
+            if (imageParts.length) {
+                payload.contents.push({ role: 'user', parts: imageParts });
+            }
 
             // A question or plan card is a request for the user's decision: stop and wait for it.
             if (awaitingUser) {
@@ -1147,12 +1168,14 @@ export class StreamingEngine {
                     timestamp: new Date().toLocaleTimeString(),
                     steps: [{ id: 's1', title: `Run ${toolName}`, status: 'failed', durationMs: Date.now() - startedAt }],
                     summaryResult: message,
-                    durationMs: Date.now() - startedAt
+                    durationMs: Date.now() - startedAt,
+                    args: toolCall.args as Record<string, any> | undefined
                 };
                 return { exec, resultPayload: { success: false, error: message, timedOut: true } };
             }
-            // Same id as the running card, so the result replaces it; the real duration rather than a nominal one.
-            return { ...outcome, exec: { ...outcome.exec, id: execId, durationMs: Date.now() - startedAt } };
+            // Same id as the running card, so the result replaces it; the real duration rather than a nominal one. The call's
+            // arguments and its result's short fields stay with it, so the turn can be laid out as a tool node graph.
+            return { ...outcome, exec: { ...outcome.exec, id: execId, durationMs: Date.now() - startedAt, args: toolCall.args as Record<string, any> | undefined, resultFields: compactResultFields(outcome.resultPayload) } };
         } finally {
             settled = true;
             clearTimeout(maxTimer);
@@ -1228,6 +1251,13 @@ export class StreamingEngine {
                     onEvent({ type: 'thought', thought: part.text || '', modelUsed: model });
                 } else if (part.functionCall) {
                     const rawPart = part as any;
+                    // Gemini signs a turn's thought once, not every call in it: only the first of several function
+                    // calls in one candidate turn carries a real signature. Defaulting every signature-less call to
+                    // the skip sentinel (as this used to) made runToolCall's own real-vs-skip check always see a
+                    // truthy value and never the genuine fallback, so a turn with one real signature and several
+                    // sentinel ones went out as sent — which Vertex rejects ("Requests ending with a model turn are
+                    // not supported"). Leaving the field off when there is no real signature lets runToolCall decide
+                    // whether this call's call model warrants the explicit skip sentinel.
                     const sig = rawPart.thought_signature ||
                                 rawPart.thoughtSignature ||
                                 rawPart.functionCall?.thought_signature ||
@@ -1235,11 +1265,10 @@ export class StreamingEngine {
                                 (cand as any)?.thought_signature ||
                                 (cand as any)?.thoughtSignature ||
                                 (chunk as any)?.thought_signature ||
-                                (chunk as any)?.thoughtSignature ||
-                                'skip_thought_signature_validator';
+                                (chunk as any)?.thoughtSignature;
                     detectedToolCalls.push({
                         ...part.functionCall,
-                        thought_signature: sig
+                        ...(sig ? { thought_signature: sig } : {})
                     } as any);
                     const callObj = {
                         id: part.functionCall.id || `call-${Date.now()}`,
@@ -1386,6 +1415,52 @@ export const TOOL_FAILURE_INSTRUCTION = 'This tool call failed. If the error is 
  * workspace_* tools (the model is editing code and fixes what fails) and timed-out calls, whose payload already says
  * not to call the tool again.
  */
+/** Images a tool shows the model per turn, and the bytes they may add to the request together (after model-image.ts). */
+export const MAX_MODEL_IMAGES_PER_TURN = 8;
+export const MAX_MODEL_IMAGE_BYTES = 8_000_000;
+export const MAX_MODEL_IMAGE_TURN_BYTES = 3_000_000;
+
+/**
+ * The images a tool's result asks to show the model (resultPayload.modelImages: { path | data, mimeType, label }), as
+ * parts that follow the turn's tool responses: a label, then the image, scaled to at most 1024 px and sent as a JPEG
+ * (model-image.ts). Only a tool's own code puts them there (a path
+ * the model asked for went through that tool's checks). The payload sent as JSON lists them by label instead. `budget`
+ * counts what the turn has left; an image past it, unreadable or too large, is listed with why it was not shown.
+ */
+export function modelImageParts(toolName: string, resultPayload: any, budget: { left: number; bytesLeft?: number }): { payload: any; parts: Part[] } {
+    const list = Array.isArray(resultPayload?.modelImages) ? resultPayload.modelImages as Array<{ path?: string; data?: string; mimeType?: string; label?: string }> : undefined;
+    if (!list) return { payload: resultPayload, parts: [] };
+    const parts: Part[] = [], listed: Array<{ label: string; shown: boolean; why?: string }> = [];
+    for (const img of list) {
+        const label = img.label || img.path || 'image';
+        if (budget.left <= 0) { listed.push({ label, shown: false, why: `over ${MAX_MODEL_IMAGES_PER_TURN} images this turn` }); continue; }
+        let bytes: Uint8Array | undefined;
+        try {
+            if (img.data) bytes = Buffer.from(img.data, 'base64');
+            else if (img.path) {
+                const st = fs.statSync(img.path);
+                if (st.size > MAX_MODEL_IMAGE_BYTES) { listed.push({ label, shown: false, why: `${(st.size / 1e6).toFixed(1)} MB, too large` }); continue; }
+                bytes = fs.readFileSync(img.path);
+            }
+        } catch (err) {
+            listed.push({ label, shown: false, why: `could not be read (${err instanceof Error ? err.message : String(err)})` });
+            continue;
+        }
+        if (!bytes) { listed.push({ label, shown: false, why: 'no image' }); continue; }
+        // made small enough to send (model-image.ts); an image that does not decode goes as it is
+        const small = modelImage(bytes);
+        const data = small ? small.data.toString('base64') : Buffer.from(bytes).toString('base64');
+        const mimeType = small ? 'image/jpeg' : img.mimeType || 'image/png';
+        if (budget.bytesLeft !== undefined && data.length > budget.bytesLeft) { listed.push({ label, shown: false, why: 'over this turn\'s image size allowance' }); continue; }
+        budget.left--;
+        if (budget.bytesLeft !== undefined) budget.bytesLeft -= data.length;
+        parts.push({ text: `Image from ${toolName}: ${label}${small ? ` (${small.width} x ${small.height} px)` : ''}` } as Part, { inlineData: { mimeType, data } } as Part);
+        listed.push({ label, shown: true });
+    }
+    const { modelImages: _omit, ...rest } = resultPayload;
+    return { payload: { ...rest, images: listed }, parts };
+}
+
 export function toolResultForModel(toolName: string, exec: Pick<McpExecutionState, 'status'> | undefined, resultPayload: any): any {
     const prepared = prepareToolResultForModel(toolName, resultPayload);
     const failed = exec?.status === 'failed' || resultPayload?.success === false || resultPayload?.status === 'error' || resultPayload?.status === 'failed';

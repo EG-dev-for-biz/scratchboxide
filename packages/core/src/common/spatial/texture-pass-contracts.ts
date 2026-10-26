@@ -312,6 +312,25 @@ export interface PinholeCamera {
 }
 
 /**
+ * Orthographic camera in the same frame: pixel (px, py) sees the world line eye + right * (px + 0.5 - cx) * pixelM
+ * - up * (py + 0.5 - cy) * pixelM + t * fwd; depth is t, the distance along `fwd`. `pixelM` is the ground sample distance
+ * (metres per pixel). A north-up satellite crop and the top-down render that reproduces it are both such views.
+ */
+export interface OrthoCamera {
+    projection: 'ortho';
+    eye: Vec3; right: Vec3; up: Vec3; fwd: Vec3;
+    pixelM: number; cx: number; cy: number;
+    width: number; height: number;
+}
+
+/** A camera the software rasterizer renders from: a pinhole (registered photos) or an orthographic view. */
+export type RenderCamera = PinholeCamera | OrthoCamera;
+
+export function isOrthoCamera(c: RenderCamera): c is OrthoCamera {
+    return (c as OrthoCamera).projection === 'ortho';
+}
+
+/**
  * B output. One RGBA atlas per layer. The per-texel arrays (length width * height) invert the UV map so the projector never
  * searches: for a texel the world point and normal come straight from the chart (fitted) or the island (scan).
  */
@@ -405,8 +424,15 @@ export interface UvAtlasInput {
     clayGlb: Uint8Array;
     /** Target density in texels per metre. */
     densityTexelsPerMeter: number;
-    /** Largest atlas side, texels. */
+    /** Preferred atlas side, texels: tried first, at the requested density. */
     maxSide: number;
+    /**
+     * Absolute ceiling the atlas may grow past maxSide to (texels) before density is reduced. A structure whose charts
+     * and islands do not fit maxSide at a sane density (a supertall's full facade area against a district-sized atlas,
+     * say) gets a bigger atlas instead of a blurrier one: growing preserves texel density, shrinking density does not.
+     * Default: max(maxSide, 8192). Still bounded, so a malformed layer cannot ask for an unbounded texture.
+     */
+    hardMaxSide?: number;
     /** Angular tolerance (degrees) when clustering scan triangles into islands. */
     islandNormalToleranceDeg: number;
 }

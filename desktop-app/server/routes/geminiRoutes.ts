@@ -701,5 +701,58 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
     router.post('/capability/resolve', resolveCapability);
     router.post('/resolve-capability', resolveCapability);
 
+    // Canvas tool nodes: the chat's tools, listed and run one at a time from the node graph
+    router.get('/tools/catalog', (_req: Request, res: Response) => {
+        try {
+            res.json({ success: true, tools: geminiService.listToolNodeCatalog() });
+        } catch (err: any) {
+            res.status(500).json({ success: false, tools: [], error: { message: err?.message || 'Failed to list tools' } });
+        }
+    });
+    router.post('/tools/run', async (req: Request, res: Response) => {
+        const { name, args, workspaceRoot } = req.body || {};
+        if (typeof name !== 'string' || !name) {
+            res.status(400).json({ success: false, status: 'failed', resultPayload: {}, durationMs: 0, error: { message: 'name (the tool to run) is required' } });
+            return;
+        }
+        // a closed request (the node was stopped or the canvas closed) aborts the tool
+        const abort = new AbortController();
+        res.on('close', () => { if (!res.writableEnded) abort.abort(clientDisconnectedError()); });
+        try {
+            const safeRoot = requireWorkspaceRoot(workspaceRoot);
+            const result = await geminiService.runToolNode({ name, args: args && typeof args === 'object' ? args : {}, workspaceRoot: safeRoot }, abort.signal);
+            res.json(result);
+        } catch (err: any) {
+            const status = isPathError(err) ? 400 : 500;
+            res.status(status).json({ success: false, status: 'failed', resultPayload: {}, durationMs: 0, error: { message: err?.message || `Tool ${name} failed` } });
+        }
+    });
+    // the same run, streamed as newline-delimited JSON: progress, each staged commit with its scene, then the result
+    router.post('/tools/run-stream', async (req: Request, res: Response) => {
+        const { name, args, workspaceRoot, activeArtifact } = req.body || {};
+        const send = (event: unknown) => { if (!res.writableEnded) res.write(`${JSON.stringify(event)}\n`); };
+        const fail = (message: string) => send({ type: 'done', result: { success: false, status: 'failed', resultPayload: {}, durationMs: 0, error: { message } } });
+        res.setHeader('Content-Type', 'application/x-ndjson');
+        res.setHeader('Cache-Control', 'no-cache');
+        if (typeof name !== 'string' || !name) {
+            fail('name (the tool to run) is required');
+            res.end();
+            return;
+        }
+        const abort = new AbortController();
+        res.on('close', () => { if (!res.writableEnded) abort.abort(clientDisconnectedError()); });
+        try {
+            const safeRoot = requireWorkspaceRoot(workspaceRoot);
+            const result = await geminiService.runToolNode({
+                name, args: args && typeof args === 'object' ? args : {}, workspaceRoot: safeRoot,
+                activeArtifact: activeArtifact && typeof activeArtifact === 'object' ? activeArtifact : undefined
+            }, abort.signal, send);
+            send({ type: 'done', result });
+        } catch (err: any) {
+            fail(err?.message || `Tool ${name} failed`);
+        }
+        res.end();
+    });
+
     return router;
 }

@@ -1493,6 +1493,11 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
         const int cls = std::clamp(static_cast<int>(std::floor((1.0 - w) * classes)), 0, classes - 1);
         const int attach = hashUnit(in.seed, i, 14) < 0.5 ? 0 : 1;
         const size_t k = static_cast<size_t>(cls * 2 + attach);
+        // a species' cluster library can hold fewer variants than densityClasses*2 expects (a sparse or malformed
+        // species index entry); indexing past it used to read garbage memory and crash the whole tool, taking every
+        // tree in the scene down with it, not just this one station - this station is treated the same as "no
+        // variant fits" instead, the same escape path a too-tight crown already uses below.
+        if (k >= lib.variants.size()) { isStation[i] = 1; ++T.unfit; return -1; }
         const auto& v = lib.variants[k];
         float sc = static_cast<float>(baseScale * (1.0 - 0.5 * P.sizeJitter + P.sizeJitter * hashUnit(in.seed, i, 13)));
         // the whole cluster inside the crown: never above the apex, never past the (interpolated) footprint
@@ -1632,7 +1637,10 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
     auto leafTop = [&]() { return static_cast<double>(soup0.topY); };
     for (int pass = 0; repairable && pass < 4; ++pass) {
         const bool shortFill = static_cast<double>(reached) < P.minFill * static_cast<double>(surface.size());
-        const bool shortTop = leafTop() + repairReach < static_cast<double>(in.apex.y);
+        // a crown with zero measured canopy samples (surface.empty()) has nothing for either branch to aim at; shortTop
+        // used to push index 0 regardless, reading surface[0] on an empty vector further down - a null-pointer crash
+        // that took the whole native tool down with it, not just this one crown.
+        const bool shortTop = !surface.empty() && leafTop() + repairReach < static_cast<double>(in.apex.y);
         if (!shortFill && !shortTop) break;
         std::vector<size_t> targets;
         if (shortFill) for (size_t s2 = 0; s2 < surface.size(); ++s2) if (!flags[s2]) targets.push_back(s2);

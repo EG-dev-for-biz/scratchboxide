@@ -40,6 +40,8 @@ export interface TreeSpeciesEntry {
     leafAspect: number;
     /** [centre, spread] of the foliage's hue in the chromaticity plane (0 red, 60 yellow, 120 green). */
     hueDeg: [number, number];
+    /** [min, max] absolute latitude (deg) this form grows outdoors; optional, default [0, 90] (no climate constraint). */
+    latAbsRangeDeg?: [number, number];
 }
 
 export interface TreeSpeciesIndex {
@@ -78,6 +80,9 @@ export function validateTreeSpeciesIndex(doc: unknown): string[] {
         inRange(e, 'leafLengthM', 0.005, 6);
         inRange(e, 'leafAspect', 0.02, 2);
         if (!Array.isArray(e.hueDeg) || e.hueDeg.length !== 2 || !(e.hueDeg[1] >= 0) || e.hueDeg[1] > 180) out.push(`${e.id}.hueDeg must be [centre, spread]`);
+        if (e.latAbsRangeDeg !== undefined && (!Array.isArray(e.latAbsRangeDeg) || e.latAbsRangeDeg.length !== 2 || !(e.latAbsRangeDeg[0] >= 0) || !(e.latAbsRangeDeg[1] >= e.latAbsRangeDeg[0]) || e.latAbsRangeDeg[1] > 90)) {
+            out.push(`${e.id}.latAbsRangeDeg must be [min, max] within [0, 90]`);
+        }
     }
     return out;
 }

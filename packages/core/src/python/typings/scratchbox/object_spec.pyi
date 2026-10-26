@@ -15,6 +15,9 @@ Units are metres, +Y up, +X right, +Z toward the front. Each part uses one of fo
   replicate  copies of a seed part and everything attached to it, rotated around a ring or spaced along a path
   relief     grooves or beads applied as an offset field in the target's (u, v) parametrisation while its
              surface is generated
+  crown      a branching crown grown, not modelled: an SB-Veggie tree (sb.create_tree, vegetation.py) from the
+             crown's envelope (trunk base, height, crown radii, crown base, where it is widest, the top's profile,
+             trunk radius); its material's baseColor is the foliage colour. A root part; it is never mirrored or copied
 
 A child part attaches by parameter (u along, angle around, offset along the normal) on its parent's evaluated
 surface, and its own coordinates are offsets in object axes from that point, so parts join by construction.
@@ -28,9 +31,14 @@ or substituted. Labels and material descriptions are never read.
 import scratchbox.world
 import typing
 
-__all__ = ['CREASE_DEGREES', 'MAX_TRIANGLES', 'PART_VERTEX_CAP', 'SpecError', 'TARGET_VERTICES', 'build', 'build_meshes', 'math', 'part_material', 'validate']
+__all__ = ['AO_INTENSITY', 'AO_REACH_SHARE', 'AO_SAMPLES', 'CREASE_DEGREES', 'EDGE_ROUND_FRACTION', 'EDGE_ROUND_MAX_SHARE', 'MAX_TRIANGLES', 'PART_VERTEX_CAP', 'SpecError', 'TARGET_VERTICES', 'build', 'build_meshes', 'crown_trees', 'math', 'part_material', 'validate']
 
+AO_INTENSITY: float
+AO_REACH_SHARE: float
+AO_SAMPLES: int
 CREASE_DEGREES: float
+EDGE_ROUND_FRACTION: float
+EDGE_ROUND_MAX_SHARE: float
 MAX_TRIANGLES: int
 PART_VERTEX_CAP: int
 
@@ -56,6 +64,10 @@ def build(spec, clay=False) -> scratchbox.world.World:
 
 def build_meshes(spec):
     """Validates and builds the spec; returns [(part id, positions, normals, triangles)] in spec order."""
+
+
+def crown_trees(spec, shift_y=0.0):
+    """The spec's crown parts as SB-Veggie trees (vegetation.SbVeggieTree), lifted by shift_y like the meshes."""
 
 import math
 

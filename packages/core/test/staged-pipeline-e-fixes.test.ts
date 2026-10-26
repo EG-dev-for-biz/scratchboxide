@@ -22,7 +22,8 @@ import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { massingSpecText, orientOutward, singleSided, type MassingMesh } from '../src/node/3d-engine/staged-location/pipeline-e/massing-spec';
 import { readFaceOrtho, runMassing, type MassingFace, type MassingNode } from '../src/node/3d-engine/staged-location/pipeline-e/native-massing';
 import { writeMassingTexturedGlb } from '../src/node/3d-engine/staged-location/pipeline-e/massing-glb';
-import { enhanceWall, unseenGreyShare, type PlateRequest } from '../src/node/3d-engine/staged-location/pipeline-e/enhance';
+import { unseenGreyShare, type PlateRequest } from '../src/node/3d-engine/staged-location/pipeline-e/enhance';
+import { buildFacadeTexture } from '../src/node/3d-engine/staged-location/facade-texture/facade-texture';
 import { exposedShare, solidGrid } from '../src/node/3d-engine/staged-location/pipeline-e/exposure';
 import { plateLatticeOpenings } from '../src/node/3d-engine/staged-location/pipeline-e/plate-lattice';
 import { identityGate } from '../src/node/3d-engine/staged-location/pipeline-e/plate-identity';
@@ -304,7 +305,7 @@ describe('walls the tile hardly sees, drawn in enhanced mode', () => {
         let sent: PlateRequest | undefined;
         const client = async (r: PlateRequest) => { sent = r; return { bytes: answer(plate(), r), modelUsed: 'fake-lite' }; };
         const f = faceOf(9, W, H, PX, { coverage: 0.03 });
-        const r = await enhanceWall(f, t, use, { client, models: ['fake-lite'], locationName: 'X', source: 3, unseen: { source: 11, familyLab } });
+        const r = await buildFacadeTexture(f, t, use, { client, models: ['fake-lite'], locationName: 'X', source: 3, unseen: { source: 11, familyLab } });
         expect(sent!.prompt).toMatch(/parts of this same wall that the scan could not see/);
         expect(sent!.prompt).not.toMatch(/stay flat mid-grey/);
         expect(r.accepted).toBe(true);
@@ -335,7 +336,7 @@ describe('walls the tile hardly sees, drawn in enhanced mode', () => {
         expect(unseenGreyShare(half, use, W * H)).toBeGreaterThan(0.7);
         expect(unseenGreyShare(half, use, W * H, inside)).toBe(0);
         const before = t.source.slice();
-        const r = await enhanceWall(faceOf(9, W, H, PX, { coverage: 0.03 }), t, use, { client: async q => ({ bytes: answer(grey, q), modelUsed: 'fake-lite' }), models: ['fake-lite'], locationName: 'X', source: 3, unseen: { source: 11, familyLab } });
+        const r = await buildFacadeTexture(faceOf(9, W, H, PX, { coverage: 0.03 }), t, use, { client: async q => ({ bytes: answer(grey, q), modelUsed: 'fake-lite' }), models: ['fake-lite'], locationName: 'X', source: 3, unseen: { source: 11, familyLab } });
         expect(r.accepted).toBe(false);
         expect(r.why).toMatch(/left flat mid-grey/);
         expect(Array.from(t.source)).toEqual(Array.from(before));

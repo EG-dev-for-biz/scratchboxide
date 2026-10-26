@@ -238,14 +238,51 @@ describe('the containment loop', () => {
         })).rejects.toThrow('aborted');
     });
 
-    it('with no structure at the place and the 60 m district failing to extract, the area already extracted stands', async () => {
+    it('with no structure at the place and the wider 60 m look failing to extract, the area already extracted stands', async () => {
+        // no structure at 25 m now retries the SAME search at 60 m through the loop's own top (not a bespoke extra
+        // call), so a failure extracting that wider look is the ordinary containment-failure path, not a separate one:
+        // 'containment_failed' at the held 25 m extraction, same as any other round that fails to come back
         const ex = worldExtractor([...groundGrid(100), ...crown(0, 0, 3, 0.4)], 'park-fail');
         const r = await sizeExtraction({ extract: async (radius, round) => { if (round >= 2) throw new Error('socket hang up'); return ex.extract(radius); } });
         expect(r.sizedTo).toBe('district-fallback');
         expect(r.radiusM).toBe(25);
         expect(r.extraction.radiusM).toBe(25);
-        expect(r.notes.map(n => n.reasonCode)).toEqual(['canopy_not_masked', 'no_structure_at_anchor', 'district_extract_failed']);
-        expect(r.notes[2]).toMatchObject({ error: 'socket hang up', reason: 'extracting the 60 m district failed (socket hang up); showing the 25 m already extracted around the place' });
+        expect(r.notes.map(n => n.reasonCode)).toEqual(['canopy_not_masked', 'containment_failed']);
+        expect(r.notes[1]).toMatchObject({ error: 'socket hang up', reason: 'extracting 60 m to contain the structure failed (socket hang up); showing the district at 25 m around it without a rebuild' });
+    });
+
+    it('finds a structure the first 25 m probe missed by widening the search to 60 m, not just showing a flat district', async () => {
+        // a landmark-scale place name often geocodes to a point well clear of the structure itself: nothing stands
+        // within the first probe's reach (35 m), but the real structure is 45-55 m out, inside the 60 m fallback's
+        // reach (70 m) — this should now be picked and rebuilt, not shown as an unstructured flat area
+        const world = [...groundGrid(100), ...building(45, 55, -10, 10, 20)];
+        const ex = worldExtractor(world, 'far-landmark');
+        const r = await sizeExtraction({ extract: ex.extract });
+        expect(r.sizedTo).toBe('structure');
+        expect(r.structure).toBeDefined();
+        expect(r.structure!.bounds.minX).toBeGreaterThanOrEqual(44);
+        expect(ex.calls).toEqual([25, 60]);
+        expect(r.notes.map(n => n.reasonCode)).toEqual(['canopy_not_masked']);
+    });
+
+    it('still gives up and reports no_structure_at_anchor when nothing stands even at the widened 60 m radius', async () => {
+        const ex = worldExtractor([...groundGrid(100), ...crown(0, 0, 3, 0.4)], 'far-park');
+        const r = await sizeExtraction({ extract: ex.extract });
+        expect(r.sizedTo).toBe('district-fallback');
+        expect(r.radiusM).toBe(NO_STRUCTURE_DISTRICT_RADIUS_M);
+        expect(ex.calls).toEqual([25, 60]);
+        // no canopy function was passed in (same as every other test here that omits it): canopy_not_masked notes this,
+        // same as the containment loop's own first test above
+        expect(r.notes.map(n => n.reasonCode)).toEqual(['canopy_not_masked', 'no_structure_at_anchor']);
+        expect(r.notes[1].reason).toBe(`no structure 3 m or taller stands within ${NO_STRUCTURE_DISTRICT_RADIUS_M} m of the place; showing the area around it`);
+    });
+
+    it('does not widen when a structure already stands within the first 25 m probe (no behaviour change)', async () => {
+        const world = [...groundGrid(60), ...building(-10, 10, -10, 10, 15)];
+        const ex = worldExtractor(world, 'near-structure');
+        const r = await sizeExtraction({ extract: ex.extract });
+        expect(r.sizedTo).toBe('structure');
+        expect(ex.calls).toEqual([25]);
     });
 
     it('sizes the next radius from the footprint and grows the outline for the strip ROI', () => {

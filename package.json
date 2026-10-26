@@ -12,7 +12,7 @@
   "scripts": {
     "hydrate": "node scripts/hydrate_demo_assets.cjs",
     "hydrate:check": "node scripts/hydrate_demo_assets.cjs --check",
-    "predev": "node scripts/hydrate_demo_assets.cjs --quiet",
+    "predev": "node scripts/dev/follow-main.cjs && node scripts/hydrate_demo_assets.cjs --quiet",
     "preserve": "node scripts/hydrate_demo_assets.cjs --quiet",
     "prestart": "node scripts/hydrate_demo_assets.cjs --quiet",
     "dev": "npm --prefix desktop-app run dev",

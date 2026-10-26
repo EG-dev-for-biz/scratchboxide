@@ -32,7 +32,8 @@ from .world import World
 Scene = World
 from .terrain import Terrain
 from .structure import Structure
-from .plant import PlantPreset, Flora, create_vegetation
+from . import vegetation
+from .vegetation import SbVeggieTree, create_vegetation
 from . import human as _py_human
 from .human import (
     Human,
@@ -61,7 +62,6 @@ io = getattr(_native, "io", None) if _native else None
 core = getattr(_native, "core", None) if _native else None
 shaper = getattr(_native, "shaper", None) if _native else None
 composer = getattr(_native, "composer", None) if _native else None
-plant = getattr(_native, "plant", None) if _native else None
 processing = getattr(_native, "processing", None) if _native else None
 topology = getattr(_native, "topology", None) if _native else None
 sdf = getattr(_native, "sdf", None) if _native else None
@@ -128,6 +128,8 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
                 _orig_translate(self, a)
         else:
             raise TypeError(f"translate() takes 1 or 3 arguments ({len(args)} given)")
+        for t in (getattr(self, "_sb_veggie_trees", None) or []):
+            t.translate(*args) if len(args) == 3 else t.translate(_to_point3(args[0]))
         return self
 
     def _mesh_scale(self, *args):
@@ -144,6 +146,8 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
                 _orig_scale(self, a)
         else:
             raise TypeError(f"scale() takes 1 or 3 arguments ({len(args)} given)")
+        for t in (getattr(self, "_sb_veggie_trees", None) or []):
+            t.scale(*args) if len(args) == 3 or isinstance(args[0], (int, float)) else t.scale(_to_point3(args[0]))
         return self
 
     def _rebase_factor(part_mat, container_mat):
@@ -162,6 +166,25 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
         return math.Vec4(*f)
 
     def _mesh_append(self, other):
+        # An SB-Veggie tree is not geometry yet: the mesh holds it, and the GLB writer grows it natively with its levels of
+        # detail (vegetation.py). A mesh that holds trees passes them on when it is merged into another.
+        if isinstance(other, SbVeggieTree):
+            held = getattr(self, "_sb_veggie_trees", None)
+            if held is None:
+                held = []
+                self._sb_veggie_trees = held
+            if all(t is not other for t in held):
+                held.append(other)
+            return self
+        inner = getattr(other, "_sb_veggie_trees", None)
+        if inner:
+            held = getattr(self, "_sb_veggie_trees", None)
+            if held is None:
+                held = []
+                self._sb_veggie_trees = held
+            for t in inner:
+                if all(h is not t for h in held):
+                    held.append(t)
         # Track sub-meshes per-instance directly on the C++ Mesh via dynamic_attr
         if not hasattr(self, "_sub_parts"):
             self._sub_parts = []
@@ -199,6 +222,8 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
     def _mesh_rotate_y(self, angle_deg):
         if _orig_rotate_y:
             _orig_rotate_y(self, float(angle_deg))
+        for t in (getattr(self, "_sb_veggie_trees", None) or []):
+            t.rotate_y(angle_deg)
         return self
 
     def _mesh_rotate_z(self, angle_deg):
@@ -525,8 +550,10 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
             r = float(kwargs.get("target_ratio", ratio))
             max_err = float(kwargs.get("max_error", 1e9))
             pres_b = bool(kwargs.get("preserve_boundary", True))
+            pres_c = bool(kwargs.get("preserve_creases", False))
+            crease_deg = float(kwargs.get("crease_angle_deg", 45.0))
             if _orig_decimate_qem:
-                _orig_decimate_qem(self, t_tri, r, max_err, pres_b)
+                _orig_decimate_qem(self, t_tri, r, max_err, pres_b, pres_c, crease_deg)
             return self
 
         def _mesh_poisson_sample(self, count=100, min_distance=0.0, seed=42):
@@ -548,6 +575,19 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
             if _orig_bake_cavity_ao:
                 _orig_bake_cavity_ao(self, float(intensity))
             return self
+
+        _orig_bake_rtao = getattr(_NativeMesh, "bake_rtao", None)
+        _orig_compute_rtao = getattr(_NativeMesh, "compute_rtao", None)
+
+        def _mesh_bake_rtao(self, samples_per_vertex=16, max_distance=1.5, intensity=1.0, seed=42):
+            if _orig_bake_rtao:
+                _orig_bake_rtao(self, int(samples_per_vertex), float(max_distance), float(intensity), int(seed))
+            return self
+
+        def _mesh_compute_rtao(self, samples_per_vertex=16, max_distance=1.5, seed=42):
+            if _orig_compute_rtao:
+                return list(_orig_compute_rtao(self, int(samples_per_vertex), float(max_distance), int(seed)))
+            return [1.0] * len(self.vertices)
 
         _orig_compute_curvature_ao = getattr(_NativeMesh, "compute_curvature_ao", None)
         def _mesh_compute_curvature_ao(self, intensity=0.65):
@@ -609,6 +649,8 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
         _NativeMesh.fill_holes = _mesh_fill_holes
         _NativeMesh.isotropic_remesh = _mesh_isotropic_remesh
         _NativeMesh.bake_cavity_ao = _mesh_bake_cavity_ao
+        _NativeMesh.bake_rtao = _mesh_bake_rtao
+        _NativeMesh.compute_rtao = _mesh_compute_rtao
         _NativeMesh.compute_curvature_ao = _mesh_compute_curvature_ao
         _NativeMesh.bake_curvature_ao = _mesh_compute_curvature_ao
         _NativeMesh.slice_by_plane = _mesh_slice_by_plane
@@ -1975,63 +2017,9 @@ def create_tower(
         **kwargs
     )
 
-def create_tree(
-    attractor_count: int = 120,
-    crown_center: Any = (0.0, 5.0, 0.0),
-    crown_extents: Any = (2.5, 3.5, 2.5),
-    root_anchor: Any = (0.0, 0.0, 0.0),
-    perception_radius: float = 2.0,
-    kill_radius: float = 0.5,
-    branch_step_length: float = 0.25,
-    clear_trunk_height: float = 1.5,
-    base_radius: float = 0.25,
-    tip_radius: float = 0.03,
-    generate_leaves: bool = True,
-    use_detailed_leaves: bool = True,
-    leaf_density: Optional[float] = None,
-    season: Optional[float] = None,
-    material: Any = None,
-    name: str = "SpaceColonizationTree",
-    **kwargs
-) -> "scratchbox_native.geometry.Mesh":
-    """
-    Synthesizes botanical trees and vegetation adhering to Runions space colonization.
-    """
-    if _native is None or not hasattr(_native, "nature"):
-        raise RuntimeError("Native 3D nature module scratchbox_native.nature is required")
+# Trees: every tree is an SB-Veggie tree (vegetation.py), grown natively when the scene that holds it is written.
+create_tree = vegetation.create_tree
 
-    cfg = _native.nature.SpaceColonizationConfig()
-    cfg.attractor_count = int(attractor_count)
-
-    def _to_vec3(v):
-        if hasattr(v, "x") and hasattr(v, "y") and hasattr(v, "z"):
-            return math.Vec3(float(v.x), float(v.y), float(v.z))
-        if isinstance(v, (tuple, list)) and len(v) >= 3:
-            return math.Vec3(float(v[0]), float(v[1]), float(v[2]))
-        return math.Vec3(0, 0, 0)
-
-    cfg.crown_center = _to_vec3(crown_center)
-    cfg.crown_extents = _to_vec3(crown_extents)
-    cfg.root_anchor = _to_vec3(root_anchor)
-    cfg.perception_radius = float(perception_radius)
-    cfg.kill_radius = float(kill_radius)
-    cfg.branch_step_length = float(branch_step_length)
-    cfg.clear_trunk_height = float(clear_trunk_height)
-    cfg.base_radius = float(base_radius)
-    cfg.tip_radius = float(tip_radius)
-    cfg.generate_leaves = bool(generate_leaves)
-    cfg.use_detailed_leaves = bool(use_detailed_leaves)
-
-    if leaf_density is not None:
-        cfg.volumetric_density = float(leaf_density)
-    if "volumetric_density" in kwargs:
-        cfg.volumetric_density = float(kwargs["volumetric_density"])
-
-    mesh = _native.nature.generate_tree(cfg)
-    mesh.name = name
-    if material is not None:
-        mesh.material = material
-    return mesh
 
 def create_ivy(
     root: Any = (0.0, 0.0, 0.0),
@@ -2080,14 +2068,11 @@ class _GeospatialModule:
 geospatial = _GeospatialModule()
 
 class _NatureModule:
-    PlantPreset = PlantPreset
-    Flora = Flora
-    create_tree = staticmethod(create_tree)
+    """Trees are SB-Veggie trees (sb.create_tree, sb.vegetation); ivy is grown on an obstacle box."""
+    SbVeggieTree = SbVeggieTree
+    create_tree = staticmethod(vegetation.create_tree)
+    create_vegetation = staticmethod(create_vegetation)
     create_ivy = staticmethod(create_ivy)
-    if _native and hasattr(_native, "nature"):
-        SpaceColonizationConfig = getattr(_native.nature, "SpaceColonizationConfig", None)
-        SpaceColonizationTree = getattr(_native.nature, "SpaceColonizationTree", None)
-        generate_tree = getattr(_native.nature, "generate_tree", None)
 
 nature = _NatureModule()
 
@@ -2112,6 +2097,28 @@ constants = _ConstantsModule()
 if _native is not None and hasattr(_native, "io"):
     _orig_write_glb = getattr(_native.io, "write_glb", None)
 
+    def _write_glb_geometry(out_path, target):
+        if isinstance(target, (list, tuple)):
+            mesh_list = [getattr(m, "mesh", m) for m in target if m is not None and not vegetation.is_tree(m)]
+            if _orig_write_glb:
+                return _orig_write_glb(out_path, mesh_list)
+        else:
+            sub_parts = getattr(target, "_sub_parts", None)
+            if sub_parts and len(sub_parts) > 1:
+                mesh_list = [getattr(m, "mesh", m) for m in sub_parts if m is not None]
+                if _orig_write_glb:
+                    return _orig_write_glb(out_path, mesh_list)
+
+        target_mesh = target.mesh if hasattr(target, "mesh") else target
+        if _orig_write_glb:
+            return _orig_write_glb(out_path, target_mesh)
+        raise RuntimeError("Native io.write_glb not available")
+
+    def _has_triangles(target):
+        sub_parts = getattr(target, "_sub_parts", None)
+        parts = target if isinstance(target, (list, tuple)) else (sub_parts if sub_parts and len(sub_parts) > 1 else [target])
+        return any(len(getattr(getattr(m, "mesh", m), "indices", ())) > 0 for m in parts if m is not None)
+
     def write_glb(arg1, arg2=None):
         if arg2 is not None:
             out_path = str(arg1)
@@ -2128,27 +2135,40 @@ if _native is not None and hasattr(_native, "io"):
                 f.write(target)
             return out_path
 
-        if isinstance(target, (list, tuple)):
-            mesh_list = [getattr(m, "mesh", m) for m in target if m is not None]
-            if _orig_write_glb:
-                return _orig_write_glb(out_path, mesh_list)
-        else:
-            sub_parts = getattr(target, "_sub_parts", None)
-            if sub_parts and len(sub_parts) > 1:
-                mesh_list = [getattr(m, "mesh", m) for m in sub_parts if m is not None]
-                if _orig_write_glb:
-                    return _orig_write_glb(out_path, mesh_list)
-
-        target_mesh = target.mesh if hasattr(target, "mesh") else target
-        if _orig_write_glb:
-            return _orig_write_glb(out_path, target_mesh)
-        raise RuntimeError("Native io.write_glb not available")
+        # The scene's SB-Veggie trees are grown natively and written into the same GLB (vegetation.py).
+        trees = vegetation.trees_of(target)
+        geometry = [m for m in target if not vegetation.is_tree(m)] if isinstance(target, (list, tuple)) else (None if vegetation.is_tree(target) else target)
+        if not trees:
+            return _write_glb_geometry(out_path, target)
+        os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+        base = b""
+        # the native writer refuses an all-empty GLB; a container that only holds trees has no base geometry to write
+        if geometry and _has_triangles(geometry):
+            _write_glb_geometry(out_path, geometry)
+            with open(out_path, "rb") as f:
+                base = f.read()
+        merged = vegetation.attach_trees(base, trees)
+        with open(out_path, "wb") as f:
+            f.write(merged)
+        return True
 
     _orig_export_glb_bytes = getattr(_native.io, "export_glb_bytes", None) if _native and hasattr(_native, "io") else None
 
     def export_glb(arg1, arg2=None) -> bytes:
         if arg2 is None and not isinstance(arg1, str):
             target = arg1
+            trees = vegetation.trees_of(target)
+            if trees:
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix=".glb", delete=False) as tf:
+                    tmp_path = tf.name
+                try:
+                    write_glb(tmp_path, target)
+                    with open(tmp_path, "rb") as f:
+                        return f.read()
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
             if isinstance(target, (list, tuple)):
                 mesh_list = [getattr(m, "mesh", m) for m in target if m is not None]
                 if _orig_export_glb_bytes:
@@ -2181,6 +2201,15 @@ if _native is not None and hasattr(_native, "io"):
     if io is not None:
         io.write_glb = write_glb
         io.export_glb = export_glb
+
+# Reading a GLB back into meshes (glb_read.py): a script can start from an existing model and sculpt it.
+from .glb_read import read_glb  # noqa: E402
+# Massing read from a scan and chosen by how well it explains it (massing.py): sb.massing.Scan, sb.massing.choose.
+from . import massing  # noqa: E402
+if _native is not None and hasattr(_native, "io"):
+    _native.io.read_glb = read_glb
+if io is not None:
+    io.read_glb = read_glb
 
 from .adaptive_object import (
     create_panelized_loft,
@@ -2220,6 +2249,7 @@ validation = _ValidationModule()
 from . import object_spec
 
 __all__ = [
+    "read_glb",
     "create_panelized_loft",
     "create_hydraulic_actuator",
     "create_louver_bay",
@@ -2243,8 +2273,9 @@ __all__ = [
     "Terrain",
     "Structure",
     "RomanOrder",
-    "PlantPreset",
-    "Flora",
+    "SbVeggieTree",
+    "vegetation",
+    "massing",
     "create_vegetation",
     "create_building",
     "create_curved_building",
@@ -2278,7 +2309,6 @@ __all__ = [
     "core",
     "shaper",
     "composer",
-    "plant",
     "processing",
     "topology",
     "sdf",

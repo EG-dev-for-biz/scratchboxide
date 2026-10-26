@@ -24,7 +24,7 @@ import type { Vec3 } from '../src/common/spatial/staged-location-contracts';
 import type { DepthMap, PinholeCamera, ProjectionView } from '../src/common/spatial/texture-pass-contracts';
 import { bakeStreetViewProjection, type ProjectionBakeResult } from '../src/node/3d-engine/staged-location/texture-projection';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { dilateMask, growThinVertical, maskIou, occluderDescription, ownershipPrompts, OwnershipTargetNotFound, ownViews, OWNERSHIP_MIN_IOU, type OwnershipSegmenter } from '../src/node/3d-engine/staged-location/streetview-ownership';
+import { dilateMask, growThinVertical, thinOccluderDescription, maskIou, occluderDescription, ownershipPrompts, OwnershipTargetNotFound, ownViews, OWNERSHIP_MIN_IOU, parseObstructionReply, closeOutline, crossingLines, type ObstructionLister, type OwnershipSegmenter } from '../src/node/3d-engine/staged-location/streetview-ownership';
 import { renderFrameDepth } from '../src/node/spatial/StreetViewPoseRegistrar';
 import { FACADE, facadeAtlas, lookAtCamera } from './helpers/texture-pass-fixtures';
 
@@ -142,7 +142,7 @@ describe('Street View projection: pixel ownership', () => {
         const seen: Array<string | undefined> = [];
         const segment: OwnershipSegmenter = async (image, prompts) => {
             seen.push(prompts.target);
-            if (prompts.target === occluderDescription('the test facade')) return new Uint8Array(image.width * image.height); // nothing in front
+            if (prompts.target === occluderDescription('the test facade') || prompts.target === thinOccluderDescription('the test facade')) return new Uint8Array(image.width * image.height); // nothing in front
             const k = views.findIndex(v => v.image === image);
             if (views[k].panoId === 'left') throw new OwnershipTargetNotFound('the photo shows a green neighbour, not the structure');
             if (views[k].panoId === 'right') return new Uint8Array(image.width * image.height).map((_, i) => (i % image.width < 30 ? 1 : 0)); // a strip at the edge
@@ -152,7 +152,7 @@ describe('Street View projection: pixel ownership', () => {
         const by = Object.fromEntries(own.records.map(x => [x.panoId, x]));
         expect(seen.filter(t => t === 'the test facade').length).toBe(3);
         expect(seen.filter(t => t === occluderDescription('the test facade')).length).toBe(1); // only the kept view is asked what stands in front
-        expect(by.front).toMatchObject({ status: 'segmented', prompts: 'description+geometry' });
+        expect(by.front).toMatchObject({ status: 'segmented', prompts: 'description', poseAgrees: true });
         expect(by.front.iou!).toBeGreaterThan(OWNERSHIP_MIN_IOU);
         expect(by.left).toMatchObject({ status: 'refused', maskPixels: 0 });
         expect(by.left.reason).toMatch(/not in this photo \(the photo shows a green neighbour/);
@@ -188,10 +188,11 @@ describe('Street View projection: pixel ownership', () => {
                 for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (sign(x, y)) m[y * W + x] = 1;
                 return m;
             }
+            if (prompts.target === thinOccluderDescription('the test facade')) return new Uint8Array(W * H); // misses the pole too
             return structure;
         };
         const own = await ownViews({ views: [view], structure: facadeMesh(), segment, target: 'the test facade' });
-        expect(asked).toEqual(['the test facade', occluderDescription('the test facade')]);
+        expect(asked).toEqual(['the test facade', occluderDescription('the test facade'), thinOccluderDescription('the test facade')]);
         const rec = own.records[0];
         expect(rec.status).toBe('segmented');
         expect(rec.occluders!.segmentedPixels).toBeGreaterThan(500);
@@ -209,6 +210,130 @@ describe('Street View projection: pixel ownership', () => {
         expect(occluded).toBeGreaterThan(20);
         expect(wrong(res).baked).toBeLessThan(atlas.width * atlas.height);
         for (let t = 0; t < atlas.width * atlas.height; t++) if (res.albedo[t * 4 + 3] === 255) expect(res.albedo[t * 4]).toBeGreaterThan(100); // no dark sign or pole
+    });
+
+    it('counts as occluders only pixels inside the structure silhouette, and adds thin crossings the second query finds', async () => {
+        // a camera wide enough to see sky beside the facade
+        const cam = lookAtCamera([5, 1.7, -9], [5, 3, 0], 240, 144, 90);
+        const shot = shoot(cam, () => undefined);
+        const W = cam.width, H = cam.height;
+        const structure = new Uint8Array(W * H);
+        for (let i = 0; i < W * H; i++) structure[i] = Number.isFinite(shot.depth.depthM[i]) ? 1 : 0;
+        let left = W; for (let i = 0; i < W * H; i++) if (structure[i]) left = Math.min(left, i % W);
+        expect(left).toBeGreaterThan(30);
+        // the occluder query returns a neighbour building beside the facade (outside its silhouette);
+        // the thin query returns a 2 px pole crossing the facade at x = 120
+        const neighbour = (x: number) => x < left - 8;
+        const pole = (x: number, y: number) => x >= 120 && x < 122 && structure[y * W + x] === 1;
+        const segment: OwnershipSegmenter = async (_image, prompts) => {
+            const m = new Uint8Array(W * H);
+            if (prompts.target === occluderDescription('the test facade')) { for (let i = 0; i < W * H; i++) if (neighbour(i % W)) m[i] = 1; return m; }
+            if (prompts.target === thinOccluderDescription('the test facade')) { for (let i = 0; i < W * H; i++) if (pole(i % W, Math.floor(i / W))) m[i] = 1; return m; }
+            return structure;
+        };
+        let occ = new Uint8Array(0);
+        const own = await ownViews({ views: [{ panoId: 'p', camera: cam, image: shot.image, poseQuality: 1, poseSigmaPx: 0 }], structure: facadeMesh(), segment, target: 'the test facade', onMasks: (_k, m) => { occ = m.occluders; } });
+        const rec = own.records[0], mask = own.views[0].ownerMask!;
+        expect(rec.status).toBe('segmented');
+        let neighbourOcc = 0, poleOcc = 0;
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { if (neighbour(x) && occ[y * W + x]) neighbourOcc++; if (pole(x, y) && occ[y * W + x]) poleOcc++; }
+        expect(neighbourOcc).toBe(0);
+        expect(poleOcc).toBeGreaterThan(50);
+        expect(rec.occluders!.thinPixels).toBeGreaterThan(50);
+        expect(mask[(H >> 1) * W + 121]).toBe(0);
+        expect(mask[(H >> 1) * W + 80]).toBe(1);
+    });
+
+    it('takes the outline from the described cut-out, not the pose, and keeps only small obstruction instances inside it', async () => {
+        // the pose is off: the facade projects 90 px left of where the photo shows it
+        const cam = lookAtCamera(EYES.front, [5, 3, 0], 240, 144, 70);
+        const shot = shoot(cam, () => undefined);
+        const W = cam.width, H = cam.height;
+        const projected = new Uint8Array(W * H);
+        for (let i = 0; i < W * H; i++) projected[i] = Number.isFinite(shot.depth.depthM[i]) ? 1 : 0;
+        const inPhoto = (x: number, y: number) => x >= 90 && projected[y * W + x - 90] === 1; // where the photo shows the facade
+        const pole = (x: number, y: number) => x >= 150 && x < 153 && y >= 20 && inPhoto(x, y);
+        const neighbourVan = (x: number, y: number) => x < 30 && y > 80; // beside the facade, not in front of it
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (pole(x, y) || neighbourVan(x, y)) shot.image.rgba.set([25, 25, 30, 255], (y * W + x) * 4);
+        const boxed: Array<[number, number, number, number] | undefined> = [];
+        const segment: OwnershipSegmenter = async (_image, prompts) => {
+            const m = new Uint8Array(W * H);
+            if (prompts.target === 'the test facade') {
+                boxed.push(prompts.box);
+                for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (inPhoto(x, y) && !pole(x, y)) m[y * W + x] = 1;
+                return m;
+            }
+            // a box prompt: the dark pixels in the box (or, for the whole-facade box, everything in it)
+            const [x0, y0, x1, y1] = prompts.box!;
+            for (let y = Math.floor(y0 * H); y < Math.ceil(y1 * H); y++) for (let x = Math.floor(x0 * W); x < Math.ceil(x1 * W); x++)
+                if (x1 - x0 > 0.5 || shot.image.rgba[(y * W + x) * 4] < 60) m[y * W + x] = 1;
+            return m;
+        };
+        let fy0 = H, fy1 = 0;
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (inPhoto(x, y)) { fy0 = Math.min(fy0, y); fy1 = Math.max(fy1, y); }
+        const reply = JSON.stringify({ objects: [
+            { label: 'a signal pole', box_2d: [Math.round(1000 * 20 / H), Math.round(1000 * 149 / W), 1000, Math.round(1000 * 154 / W)] },
+            { label: 'a van', box_2d: [Math.round(1000 * 80 / H), 0, 1000, Math.round(1000 * 30 / W)] },
+            { label: 'scaffolding', box_2d: [Math.round(1000 * fy0 / H), Math.round(1000 * 90 / W), Math.round(1000 * (fy1 + 1) / H), 1000] }
+        ] });
+        const list: ObstructionLister = async () => parseObstructionReply(reply);
+        let occ = new Uint8Array(0);
+        const own = await ownViews({ views: [{ panoId: 'p', camera: cam, image: shot.image, poseQuality: 1, poseSigmaPx: 0 }], structure: facadeMesh(), segment, target: 'the test facade', listObstructions: list, onMasks: (_k, m) => { occ = m.occluders; } });
+        const rec = own.records[0];
+        expect(boxed).toEqual([undefined]); // located with no hint from the pose
+        expect(rec.status).toBe('segmented');
+        expect(rec.poseAgrees).toBe(false);
+        expect(rec.iou!).toBeLessThan(OWNERSHIP_MIN_IOU);
+        const kept = rec.occluders!.instances!.filter(i => i.kept).map(i => i.label);
+        expect(kept).toEqual(['a signal pole']);
+        expect(rec.occluders!.instances!.find(i => i.label === 'a van')!.why).toMatch(/outside/);
+        expect(rec.occluders!.instances!.find(i => i.label === 'scaffolding')!.why).toMatch(/percent of the structure/);
+        let poleOcc = 0, vanOcc = 0;
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { if (pole(x, y) && occ[y * W + x]) poleOcc++; if (neighbourVan(x, y) && occ[y * W + x]) vanOcc++; }
+        expect(poleOcc).toBeGreaterThan(100);
+        expect(vanOcc).toBe(0);
+        // the owner mask follows the photo, not the projection
+        const mask = own.views[0].ownerMask!;
+        expect(mask[(H >> 1) * W + 200]).toBe(1);
+        expect(mask[(H >> 1) * W + 60]).toBe(0); // where the pose put the facade
+        expect(mask[(H >> 1) * W + 151]).toBe(0);
+    });
+
+    it('takes lines crossing the outline at any angle (a pole into the sky, a slanting mast arm) and leaves the facade\'s own pilasters and cornice', () => {
+        const W = 200, H = 160, rgba = new Uint8Array(W * H * 4);
+        const outline = new Uint8Array(W * H);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const i = y * W + x, facade = x >= 40 && x < 160 && y >= 30;
+            outline[i] = facade ? 1 : 0;
+            const v = facade ? 190 : 230; // stone, sky
+            rgba.set([v, v, v, 255], i * 4);
+            if (facade && (x % 20 === 0 || x % 20 === 1)) rgba.set([90, 90, 90, 255], i * 4); // pilasters, stopping at the facade's edge
+            if (facade && (y === 60 || y === 61)) rgba.set([90, 90, 90, 255], i * 4); // a cornice's shadow, edge to edge
+            if (x >= 107 && x < 110 && y >= 5) rgba.set([30, 30, 35, 255], i * 4); // a pole from the street up into the sky
+            if (Math.abs(y - (12 + 0.45 * (x - 10))) < 1.6 && x < 150) rgba.set([30, 30, 35, 255], i * 4); // a mast arm, slanting down across it from the sky
+        }
+        const lines = crossingLines({ width: W, height: H, rgba }, outline, { halfWidthPx: 4 });
+        let pole = 0, arm = 0, pilaster = 0, cornice = 0;
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            if (!lines[y * W + x]) continue;
+            if (x >= 106 && x < 112) pole++; else if (Math.abs(y - (12 + 0.45 * (x - 10))) < 3) arm++; else if (y === 60 || y === 61) cornice++; else pilaster++;
+        }
+        expect(pole).toBeGreaterThan(200);
+        expect(arm).toBeGreaterThan(60);
+        expect(pilaster).toBe(0);
+        expect(cornice).toBe(0);
+    });
+
+    it('closes small holes enclosed by the cut-out, not notches at its edge or large openings', () => {
+        const W = 100, H = 80, raw = new Uint8Array(W * H);
+        for (let y = 10; y < 70; y++) for (let x = 10; x < 90; x++) raw[y * W + x] = 1;
+        for (let y = 30; y < 34; y++) for (let x = 30; x < 34; x++) raw[y * W + x] = 0; // a missed window
+        for (let y = 10; y < 25; y++) for (let x = 60; x < 75; x++) raw[y * W + x] = 0; // a notch open to the sky
+        for (let y = 40; y < 65; y++) for (let x = 40; x < 80; x++) raw[y * W + x] = 0; // a large opening (12 % of the view)
+        const c = closeOutline(raw, W, H);
+        expect(c[31 * W + 31]).toBe(1);
+        expect(c[12 * W + 67]).toBe(0);
+        expect(c[50 * W + 60]).toBe(0);
     });
 
     it('grows only along thin lines and dilates without touching the image border', () => {

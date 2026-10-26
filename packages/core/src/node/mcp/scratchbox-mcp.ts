@@ -26,7 +26,7 @@
  */
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { VFX_VIDEO_TOOL_DECLARATIONS, vfxVideoHandlers } from '../gemini/tools/vfx-video-tools';
+import { mergeStandalonePacks } from './standalone-packs';
 import { ScratchboxMcpServer } from './ScratchboxMcpServer';
 
 // ============================================================================
@@ -55,11 +55,10 @@ function parseArgs(argv: string[]): { workspaceRoot: string; allowedTools: strin
 async function main(): Promise<void> {
     const { workspaceRoot, allowedTools } = parseArgs(process.argv);
 
-    const mcpServer = new ScratchboxMcpServer(
-        VFX_VIDEO_TOOL_DECLARATIONS,
-        vfxVideoHandlers,
-        { workspaceRoot, allowedTools }
-    );
+    // every standalone pack the in-app chat has (standalone-packs.ts), not one pack: the MCP is the app's toolbox
+    const { declarations, handlers, unhandled } = mergeStandalonePacks();
+    if (unhandled.length) process.stderr.write(`[scratchbox-mcp] declared without a handler, not served: ${unhandled.join(', ')}\n`);
+    const mcpServer = new ScratchboxMcpServer(declarations, handlers, { workspaceRoot, allowedTools });
 
     const transport = new StdioServerTransport();
 

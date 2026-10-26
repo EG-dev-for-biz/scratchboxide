@@ -97,7 +97,13 @@ async function build(input: VersionFInput, parts: MassingPart[], prog: Partial<P
         outDir: dir, tile: input.tilePath, isolate: input.isolateGlb, params: { ...VERSION_F_NATIVE_PARAMS, ...extra },
         openings: prog.openings ?? [], sweeps: prog.sweeps ?? [], faceSweeps: prog.faceSweeps ?? [], provenance: LABEL.vector
     });
-    return runMassing(text, dir);
+    // runMassing's own default (180 s) was sized for pipeline E's plain use (one call); version F calls it several
+    // times a round (native_before, native_parapet_N trials, native, native0, native_sv) and the grammar stage's own
+    // budget already gives the whole thing up to 900 s for exactly that - a single call needs more room than 180 s on
+    // a building with an unusually large or complex massing spec (measured live: the Flatiron's spec alone is 397 KB,
+    // and its native massing call outran 180 s without erroring, just still working). The orchestrator's stage-level
+    // deadline is still the real outer bound against a runaway; this only stops one call starving itself early.
+    return runMassing(text, dir, { timeoutMs: 300_000 });
 }
 
 /** The full tile's top (max y) on a 0.5 m grid round the building: what stands just outside each wall. */

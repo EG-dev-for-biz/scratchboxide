@@ -12,7 +12,7 @@
  * plate (a sharpened redraw passes; an added block, a painted-over dark bay and a large retoned area are flagged, reverted
  * with a feather, or reject the wall), and the Street View photo (a photo rendered through a pinhole camera rectified back
  * onto the wall, the best registered view chosen, the plate checked against it, the photo keeping what it shows), the
- * prompt's Street View wording, and enhanceWall sending the photo and labelling the texels with it.
+ * prompt's Street View wording, and buildFacadeTexture sending the photo and labelling the texels with it.
  * Screenshots under test-results/screenshots/version_e/guards/.
  */
 
@@ -22,7 +22,10 @@ import { describe, expect, it } from 'vitest';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { auditPlate, cellMaskToPixels, revertRegions, MAX_FLAGGED_SHARE } from '../src/node/3d-engine/staged-location/pipeline-e/plate-audit';
 import { bestStreetViewForWall, rectifyViewOntoWall, streetBandTop, verifyAgainstPhoto, type GuideView } from '../src/node/3d-engine/staged-location/pipeline-e/plate-streetview';
-import { enhanceWall, guardPlate, type PlateRequest } from '../src/node/3d-engine/staged-location/pipeline-e/enhance';
+import { guardPlate, type PlateRequest } from '../src/node/3d-engine/staged-location/pipeline-e/enhance';
+import { buildFacadeTexture } from '../src/node/3d-engine/staged-location/facade-texture/facade-texture';
+import { decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
+import type { EnhanceModelRequest } from '../src/node/3d-engine/staged-location/texture-enhance';
 import { buildTexturePlatePrompt } from '../src/browser/generative-canvas/services/location-beautify-service';
 import type { MassingFace } from '../src/node/3d-engine/staged-location/pipeline-e/native-massing';
 import type { PinholeCamera } from '../src/common/spatial/texture-pass-contracts';
@@ -189,16 +192,48 @@ describe('enhanced mode: the invention and erasure check', () => {
         const g = guardPlate(input, plate, W, H, all(), PX);
         expect(g.audit.flaggedShare).toBeGreaterThan(MAX_FLAGGED_SHARE);
         expect(g.reject).toBe(true);
-        // enhanceWall: the same answer through a model client is accepted by the identity gate alone, and rejected with the guards
+        // buildFacadeTexture: the same answer through a model client is accepted by the identity gate alone, and rejected with the guards
         const client = async (r: PlateRequest) => ({ bytes: new Uint8Array(encodePng(r.width, r.height, Buffer.from(padTo(plate, r.width, r.height)), 4)), modelUsed: 'fake' });
         const mk = () => ({ width: W, height: H, rgba: input.slice(), source: new Uint8Array(W * H) });
-        const off = await enhanceWall(face(), mk(), all(), { client, models: ['fake'], locationName: 'X', source: 3, guards: false });
+        const off = await buildFacadeTexture(face(), mk(), all(), { client, models: ['fake'], locationName: 'X', source: 3, guards: false });
         expect(off.accepted).toBe(true);
         const t = mk();
-        const on = await enhanceWall(face(), t, all(), { client, models: ['fake'], locationName: 'X', source: 3 });
+        const on = await buildFacadeTexture(face(), t, all(), { client, models: ['fake'], locationName: 'X', source: 3 });
         expect(on.accepted).toBe(false);
         expect(on.audit!.flaggedShare).toBeGreaterThan(MAX_FLAGGED_SHARE);
         expect(Array.from(t.source).every(v => v === 0)).toBe(true);
+    });
+
+    it('redraws the flagged regions by generative infill instead of rejecting the wall, when an infill model is given', async () => {
+        const input = soften(wall());
+        const plate = wall((xm, ym) => (xm < 16 && !(ym > 3.5 && ((xm % 3) / 3) > 0.3 && ((xm % 3) / 3) < 0.7 && (((ym - 3.5) % 3.5) / 3.5) > 0.2 && (((ym - 3.5) % 3.5) / 3.5) < 0.8) ? [92, 58, 44] : undefined));
+        const client = async (r: PlateRequest) => ({ bytes: new Uint8Array(encodePng(r.width, r.height, Buffer.from(padTo(plate, r.width, r.height)), 4)), modelUsed: 'fake' });
+        // the infill model: each magenta texel takes the nearest real texel on its row (a continuation from around the hole)
+        const infillCalls: string[] = [];
+        const infill = async (q: EnhanceModelRequest) => {
+            infillCalls.push(q.label);
+            const img = decodeImageInMemory(q.image.bytes), { width: w, height: h } = img, px = Uint8Array.from(img.rgba);
+            const magenta = (i: number) => px[i * 4] > 200 && px[i * 4 + 1] < 90 && px[i * 4 + 2] > 200;
+            for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+                const i = y * w + x;
+                if (!magenta(i)) continue;
+                for (let d = 1; d < w; d++) {
+                    const l = x - d >= 0 && !magenta(i - d) ? i - d : -1, r = x + d < w && !magenta(i + d) ? i + d : -1, k = l >= 0 ? l : r;
+                    if (k >= 0) { px.copyWithin(i * 4, k * 4, k * 4 + 4); break; }
+                }
+            }
+            return { bytes: new Uint8Array(encodePng(w, h, Buffer.from(px), 4)), modelUsed: 'fake-infill' };
+        };
+        const t = { width: W, height: H, rgba: input.slice(), source: new Uint8Array(W * H) };
+        const r = await buildFacadeTexture(face(), t, all(), { client, models: ['fake'], locationName: 'X', source: 3, infill: { client: infill as never, models: ['fake-infill'] } });
+        expect(infillCalls.length).toBe(1);
+        expect(r.infill?.decision).toBe('accepted');
+        expect(r.infill!.filledPixels).toBeGreaterThan(0);
+        // accepted although the flagged share is over the limit: nothing reverts to the input, every texel is the redraw's
+        expect(r.audit!.flaggedShare).toBeGreaterThan(MAX_FLAGGED_SHARE);
+        expect(r.accepted).toBe(true);
+        expect(Array.from(t.source).every(v => v === 3)).toBe(true);
+        expect(r.why).toMatch(/redrawn by generative infill/);
     });
 });
 
@@ -268,7 +303,7 @@ describe('enhanced mode: the Street View photo', () => {
         const client = async (r: PlateRequest) => { seen = r; return { bytes: new Uint8Array(encodePng(r.width, r.height, Buffer.from(padTo(truth, r.width, r.height)), 4)), modelUsed: 'fake' }; };
         const t = { width: W, height: H, rgba: input.slice(), source: new Uint8Array(W * H) };
         const crop = new Uint8Array([1, 2, 3]);
-        const r = await enhanceWall(f, t, all(), { client, models: ['fake'], locationName: 'X', source: 3, streetView: { view, rect, crop, why: 'test' }, streetViewSource: 9 });
+        const r = await buildFacadeTexture(f, t, all(), { client, models: ['fake'], locationName: 'X', source: 3, streetView: { view, rect, crop, why: 'test' }, streetViewSource: 9 });
         expect(r.accepted).toBe(true);
         expect(seen?.streetView).toBe(crop);
         expect(seen?.prompt).toMatch(/street-level photograph of this same wall/);
@@ -288,7 +323,7 @@ describe('enhanced mode: the Street View photo', () => {
         const asked: boolean[] = [];
         const client = async (r: PlateRequest) => { asked.push(!!r.streetView); return { bytes: new Uint8Array(encodePng(r.width, r.height, Buffer.from(padTo(r.streetView ? moved : truth, r.width, r.height)), 4)), modelUsed: 'fake' }; };
         const t = { width: W, height: H, rgba: input.slice(), source: new Uint8Array(W * H) };
-        const r = await enhanceWall(f, t, all(), { client, models: ['fake'], locationName: 'X', source: 3, streetView: { view, rect, crop: new Uint8Array(1), why: 'test' }, streetViewSource: 9 });
+        const r = await buildFacadeTexture(f, t, all(), { client, models: ['fake'], locationName: 'X', source: 3, streetView: { view, rect, crop: new Uint8Array(1), why: 'test' }, streetViewSource: 9 });
         expect(asked).toEqual([true, false]);
         expect(r.accepted).toBe(true);
         expect(r.streetView?.guidedRejected).toMatch(/edge chamfer/);

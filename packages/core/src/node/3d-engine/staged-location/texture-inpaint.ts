@@ -112,6 +112,91 @@ function gradNcc(a: Uint8Array, b: Uint8Array, w: number, h: number, use: Uint8A
     return sab / Math.sqrt(saa * sbb + 1e-9);
 }
 
+export interface InpaintImageOutcome {
+    decision: 'accepted' | 'rejected' | 'model_failed';
+    reason?: string;
+    modelUsed?: string;
+    metrics?: InpaintRectRecord['metrics'];
+    ms: number;
+    /** The answer at the crop's size (w x h RGBA), when accepted: only its hole pixels are new. */
+    rgba?: Uint8Array;
+}
+
+/**
+ * One image through the inpaint lock: `crop` (w x h RGBA) with its `isHole` pixels painted flat magenta here, sent (scaled to
+ * INPAINT_MIN_SIDE..INPAINT_MAX_SIDE, padded to a model aspect) with `prompt`, and the answer kept only when, over the
+ * `useKeep` pixels, it reproduces the crop (median CIEDE2000 and gradient NCC), its hole joins the kept pixels at the rim
+ * and no magenta is left. Used per atlas rect by inpaintMaskedTexels and on whole images by image-hole-infill.ts.
+ */
+export async function inpaintImage(input: {
+    crop: Uint8Array; w: number; h: number; isHole: Uint8Array; useKeep: Uint8Array; client: EnhanceModelClient; models: string[]; label: string;
+    prompt?: (w: number, h: number) => string; signal?: AbortSignal;
+}): Promise<InpaintImageOutcome> {
+    const { w, isHole, useKeep } = input, hh = input.h;
+    const crop = Uint8Array.from(input.crop);
+    let holeCount = 0;
+    for (let o = 0; o < w * hh; o++) if (isHole[o]) { crop[o * 4] = MAGENTA[0]; crop[o * 4 + 1] = MAGENTA[1]; crop[o * 4 + 2] = MAGENTA[2]; crop[o * 4 + 3] = 255; holeCount++; }
+    const scale = Math.min(INPAINT_MAX_SIDE / Math.max(w, hh), Math.max(1, INPAINT_MIN_SIDE / Math.max(w, hh)));
+    const sw = Math.max(1, Math.round(w * scale)), sh = Math.max(1, Math.round(hh * scale));
+    // nearest-neighbour up keeps the hole's edge a clean magenta edge by construction; the resizer down blends it
+    // into a purple fringe against the real texels, which the model then (reasonably) reads as real and leaves in
+    // place, so restamp a crisp nearest-neighbour hole over that fringe before it ever reaches the model
+    const scaledCrop = scale > 1 ? nearestUp({ width: w, height: hh, rgba: crop }, sw, sh) : resizeRgba({ width: w, height: hh, rgba: crop }, sw, sh);
+    if (scale <= 1) {
+        const holeDown = nearestMask(isHole, w, hh, sw, sh);
+        for (let i = 0; i < sw * sh; i++) if (holeDown[i]) { const o = i * 4; scaledCrop.rgba[o] = 255; scaledCrop.rgba[o + 1] = 0; scaledCrop.rgba[o + 2] = 255; scaledCrop.rgba[o + 3] = 255; }
+    }
+    const { padded, offset } = padToModelAspect(scaledCrop);
+    const t0 = Date.now();
+    let answer;
+    try {
+        answer = await input.client({ label: input.label, models: input.models, prompt: (input.prompt ?? inpaintPrompt)(padded.width, padded.height),
+            image: { mimeType: 'image/png', bytes: new Uint8Array(encodePng(padded.width, padded.height, Buffer.from(padded.rgba))), width: padded.width, height: padded.height }, references: [], ...(input.signal ? { signal: input.signal } : {}) });
+    } catch (err) {
+        const modelFailure = err instanceof MediaModelUnavailableError || (err as { code?: string })?.code === 'media_model_unavailable';
+        if (input.signal?.aborted || !modelFailure) throw err;
+        return { decision: 'model_failed', reason: (err as Error).message, ms: Date.now() - t0 };
+    }
+    const ms = Date.now() - t0;
+    let decoded: RgbaImage8;
+    try { decoded = decodeImageInMemory(answer.bytes); } catch (err) { return { decision: 'model_failed', reason: `the answer cannot be decoded (${(err as Error).message})`, modelUsed: answer.modelUsed, ms }; }
+    const full = resizeRgba(decoded, padded.width, padded.height);
+    const inner = new Uint8Array(sw * sh * 4);
+    for (let y = 0; y < sh; y++) inner.set(full.rgba.subarray(((offset[1] + y) * full.width + offset[0]) * 4, ((offset[1] + y) * full.width + offset[0] + sw) * 4), y * sw * 4);
+    const ans = resizeRgba({ width: sw, height: sh, rgba: inner }, w, hh).rgba;
+    // the lock: outside the hole the answer is the real texture; inside it joins the rim and holds no magenta
+    const keep: number[] = [];
+    for (let o = 0; o < w * hh; o += 3) if (useKeep[o]) keep.push(deltaE00(lab255(crop[o * 4], crop[o * 4 + 1], crop[o * 4 + 2]), lab255(ans[o * 4], ans[o * 4 + 1], ans[o * 4 + 2])));
+    const keepMedian = median(keep) ?? Infinity;
+    const ncc = gradNcc(crop, ans, w, hh, useKeep);
+    let mag = 0;
+    const rim: number[] = [];
+    for (let y = 0; y < hh; y++) for (let x = 0; x < w; x++) {
+        const o = y * w + x;
+        if (!isHole[o]) continue;
+        if (ans[o * 4] > 200 && ans[o * 4 + 2] > 200 && ans[o * 4 + 1] < 90) mag++;
+        // the rim: a hole texel within 2 texels of real ones, against their mean
+        let s0 = 0, s1 = 0, s2 = 0, c = 0;
+        for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+            const xx = x + dx, yy = y + dy;
+            if (xx < 0 || yy < 0 || xx >= w || yy >= hh || !useKeep[yy * w + xx]) continue;
+            const q = (yy * w + xx) * 4;
+            s0 += SRGB8_TO_LINEAR[crop[q]]; s1 += SRGB8_TO_LINEAR[crop[q + 1]]; s2 += SRGB8_TO_LINEAR[crop[q + 2]]; c++;
+        }
+        if (c >= 3) rim.push(deltaE00(linearToLab(s0 / c, s1 / c, s2 / c), lab255(ans[o * 4], ans[o * 4 + 1], ans[o * 4 + 2])));
+    }
+    const rimMedian = median(rim);
+    const magShare = mag / Math.max(1, holeCount);
+    const metrics = { keepMedianDeltaE: Math.round(keepMedian * 10) / 10, keepGradNcc: ncc === null ? null : Math.round(ncc * 1000) / 1000, rimMedianDeltaE: rimMedian === null ? null : Math.round(rimMedian * 10) / 10, magentaShare: Math.round(magShare * 1000) / 1000 };
+    const why = keepMedian > INPAINT_MAX_KEEP_DELTA_E ? `it changed the real texels around the hole (median CIEDE2000 ${keepMedian.toFixed(1)} > ${INPAINT_MAX_KEEP_DELTA_E})`
+        : ncc !== null && ncc < INPAINT_MIN_KEEP_GRAD_NCC ? `it did not keep the real texels' detail (gradient NCC ${ncc.toFixed(2)} < ${INPAINT_MIN_KEEP_GRAD_NCC})`
+        : magShare > 0.02 ? `it left ${(100 * magShare).toFixed(1)} percent of the hole magenta`
+        : rimMedian !== null && rimMedian > INPAINT_MAX_RIM_DELTA_E ? `the fill does not join its neighbours (rim median CIEDE2000 ${rimMedian.toFixed(1)} > ${INPAINT_MAX_RIM_DELTA_E})`
+        : undefined;
+    if (why) return { decision: 'rejected', reason: why, modelUsed: answer.modelUsed, metrics, ms };
+    return { decision: 'accepted', modelUsed: answer.modelUsed, metrics, ms, rgba: ans };
+}
+
 /**
  * Inpaints the masked texels nothing real reached. `masked`: per texel, some view saw it occluded (the projection report's
  * maskedTexels). `planes`: the ladder so far (Street View and the tile photo).
@@ -167,67 +252,14 @@ export async function inpaintMaskedTexels(input: {
                 else crop.set([128, 128, 128], o * 4);
                 crop[o * 4 + 3] = 255;
             }
-            const scale = Math.min(INPAINT_MAX_SIDE / Math.max(w, hh), Math.max(1, INPAINT_MIN_SIDE / Math.max(w, hh)));
-            const sw = Math.max(1, Math.round(w * scale)), sh = Math.max(1, Math.round(hh * scale));
-            // nearest-neighbour up keeps the hole's edge a clean magenta edge by construction; the resizer down blends it
-            // into a purple fringe against the real texels, which the model then (reasonably) reads as real and leaves in
-            // place, so restamp a crisp nearest-neighbour hole over that fringe before it ever reaches the model
-            const scaledCrop = scale > 1 ? nearestUp({ width: w, height: hh, rgba: crop }, sw, sh) : resizeRgba({ width: w, height: hh, rgba: crop }, sw, sh);
-            if (scale <= 1) {
-                const holeDown = nearestMask(isHole, w, hh, sw, sh);
-                for (let i = 0; i < sw * sh; i++) if (holeDown[i]) { const o = i * 4; scaledCrop.rgba[o] = 255; scaledCrop.rgba[o + 1] = 0; scaledCrop.rgba[o + 2] = 255; scaledCrop.rgba[o + 3] = 255; }
-            }
-            const { padded, offset } = padToModelAspect(scaledCrop);
-            const t0 = Date.now();
-            let answer;
-            try {
-                answer = await input.client({ label: `inpaint ${atlas.layerKey} rect ${r.x},${r.y}`, models: input.models, prompt: inpaintPrompt(padded.width, padded.height),
-                    image: { mimeType: 'image/png', bytes: new Uint8Array(encodePng(padded.width, padded.height, Buffer.from(padded.rgba))), width: padded.width, height: padded.height }, references: [], ...(input.signal ? { signal: input.signal } : {}) });
-            } catch (err) {
-                const modelFailure = err instanceof MediaModelUnavailableError || (err as { code?: string })?.code === 'media_model_unavailable';
-                if (input.signal?.aborted || !modelFailure) throw err;
-                rec.decision = 'model_failed'; rec.reason = (err as Error).message; rec.ms = Date.now() - t0;
-                continue;
-            }
-            rec.ms = Date.now() - t0; rec.modelUsed = answer.modelUsed;
-            let decoded: RgbaImage8;
-            try { decoded = decodeImageInMemory(answer.bytes); } catch (err) { rec.decision = 'model_failed'; rec.reason = `the answer cannot be decoded (${(err as Error).message})`; continue; }
-            const full = resizeRgba(decoded, padded.width, padded.height);
-            const inner = new Uint8Array(sw * sh * 4);
-            for (let y = 0; y < sh; y++) inner.set(full.rgba.subarray(((offset[1] + y) * full.width + offset[0]) * 4, ((offset[1] + y) * full.width + offset[0] + sw) * 4), y * sw * 4);
-            const ans = resizeRgba({ width: sw, height: sh, rgba: inner }, w, hh).rgba;
-            // the lock: outside the hole the answer is the real texture; inside it joins the rim and holds no magenta
-            const keep: number[] = [];
-            for (let o = 0; o < w * hh; o += 3) if (useKeep[o]) keep.push(deltaE00(lab255(crop[o * 4], crop[o * 4 + 1], crop[o * 4 + 2]), lab255(ans[o * 4], ans[o * 4 + 1], ans[o * 4 + 2])));
-            const keepMedian = median(keep) ?? Infinity;
-            const ncc = gradNcc(crop, ans, w, hh, useKeep);
-            let mag = 0;
-            const rim: number[] = [];
-            for (let y = 0; y < hh; y++) for (let x = 0; x < w; x++) {
-                const o = y * w + x;
-                if (!isHole[o]) continue;
-                if (ans[o * 4] > 200 && ans[o * 4 + 2] > 200 && ans[o * 4 + 1] < 90) mag++;
-                // the rim: a hole texel within 2 texels of real ones, against their mean
-                let s0 = 0, s1 = 0, s2 = 0, c = 0;
-                for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
-                    const xx = x + dx, yy = y + dy;
-                    if (xx < 0 || yy < 0 || xx >= w || yy >= hh || !useKeep[yy * w + xx]) continue;
-                    const q = (yy * w + xx) * 4;
-                    s0 += SRGB8_TO_LINEAR[crop[q]]; s1 += SRGB8_TO_LINEAR[crop[q + 1]]; s2 += SRGB8_TO_LINEAR[crop[q + 2]]; c++;
-                }
-                if (c >= 3) rim.push(deltaE00(linearToLab(s0 / c, s1 / c, s2 / c), lab255(ans[o * 4], ans[o * 4 + 1], ans[o * 4 + 2])));
-            }
-            const rimMedian = median(rim);
-            const magShare = mag / h;
-            rec.metrics = { keepMedianDeltaE: Math.round(keepMedian * 10) / 10, keepGradNcc: ncc === null ? null : Math.round(ncc * 1000) / 1000, rimMedianDeltaE: rimMedian === null ? null : Math.round(rimMedian * 10) / 10, magentaShare: Math.round(magShare * 1000) / 1000 };
-            const why = keepMedian > INPAINT_MAX_KEEP_DELTA_E ? `it changed the real texels around the hole (median CIEDE2000 ${keepMedian.toFixed(1)} > ${INPAINT_MAX_KEEP_DELTA_E})`
-                : ncc !== null && ncc < INPAINT_MIN_KEEP_GRAD_NCC ? `it did not keep the real texels' detail (gradient NCC ${ncc.toFixed(2)} < ${INPAINT_MIN_KEEP_GRAD_NCC})`
-                : magShare > 0.02 ? `it left ${(100 * magShare).toFixed(1)} percent of the hole magenta`
-                : rimMedian !== null && rimMedian > INPAINT_MAX_RIM_DELTA_E ? `the fill does not join its neighbours (rim median CIEDE2000 ${rimMedian.toFixed(1)} > ${INPAINT_MAX_RIM_DELTA_E})`
-                : undefined;
-            if (why) { rec.decision = 'rejected'; rec.reason = why; continue; }
+            const out = await inpaintImage({ crop, w, h: hh, isHole, useKeep, client: input.client, models: input.models, label: `inpaint ${atlas.layerKey} rect ${r.x},${r.y}`, ...(input.signal ? { signal: input.signal } : {}) });
+            rec.ms = out.ms;
+            if (out.modelUsed) rec.modelUsed = out.modelUsed;
+            if (out.metrics) rec.metrics = out.metrics;
+            if (out.decision !== 'accepted' || !out.rgba) { rec.decision = out.decision; rec.reason = out.reason; continue; }
+            const ans = out.rgba;
             rec.decision = 'accepted';
-            models.add(answer.modelUsed);
+            models.add(out.modelUsed!);
             for (let y = 0; y < hh; y++) for (let x = 0; x < w; x++) {
                 const o = y * w + x;
                 if (!isHole[o]) continue;

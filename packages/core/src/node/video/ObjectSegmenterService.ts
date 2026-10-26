@@ -64,6 +64,8 @@ export interface ObjectSegmentOptions {
     jumpCentroidFraction?: number;
     /** The chat's requested model, if any. */
     requestedModel?: string;
+    /** A second image — a user photo or a generated reference — shown to the vision model alongside the frame, as what `target` should look like. Only used when the vision model is doing the finding (a description, no positive points given); it never replaces the frame as the thing actually marked. */
+    hintImage?: { bytes: Buffer; mimeType: string };
     signal?: AbortSignal;
     reportProgress?: (message: string, fraction?: number) => void;
 }
@@ -252,7 +254,7 @@ export class ObjectSegmenterService {
             if (locator) {
                 progress(`Finding ${JSON.stringify(target)} with the vision model`, 0.02);
                 const t = Date.now();
-                const found = await locator.locate({ imageBytes: await fs.readFile(framePaths[0]), mimeType: mimeFor(framePaths[0]), target: target!, hintBox: options.box, hintKind: options.box ? 'user-box' : undefined, signal: options.signal });
+                const found = await locator.locate({ imageBytes: await fs.readFile(framePaths[0]), mimeType: mimeFor(framePaths[0]), target: target!, hintBox: options.box, hintKind: options.box ? 'user-box' : undefined, ...(options.hintImage ? { hintImage: options.hintImage } : {}), signal: options.signal });
                 visionMs += Date.now() - t;
                 firstPrompts = { positive: found.positive, negative: [...found.negative, ...negative], box: found.box };
                 promptSource = negative.length || options.box ? 'user+vision-model' : 'vision-model';

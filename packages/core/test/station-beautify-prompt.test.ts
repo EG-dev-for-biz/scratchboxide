@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';
-import { buildBeautifyPrompt, buildHybridPromptPayload, buildStationBeautifyPrompt } from '../src/browser/generative-canvas/services/location-beautify-service';
+import { buildBeautifyPrompt, buildHybridPromptPayload, buildStationBeautifyPrompt, buildStreetViewSeedBeautifyPrompt, streetViewObstructionsNote, TILES_RENDER_NOTE, OBSTRUCTION_FREE_NOTE, EVEN_LIGHT_SENTENCE, OUTLINE_LOCK_SENTENCE } from '../src/browser/generative-canvas/services/location-beautify-service';
 import { buildBlockoutNanoBananaPrompt } from '../src/browser/generative-canvas/services/video/omniVideoPromptService';
 import { stationFromLookAt } from '../src/common/spatial/SurveySynthesisEngine';
 import type { GeodeticAnchor } from '../src/common/spatial/colmap-vector-reference-types';
@@ -24,7 +24,7 @@ describe('Station-grounded AI Beautify prompt', () => {
     };
 
     it('keeps the verbatim template body and the exact distance clause, and adds a camera lock clause from the station', () => {
-        const prompt = buildStationBeautifyPrompt(station, { locationName: 'Sydney Opera House', moodPromptContext: 'Clear winter noon. ', styleSuffix: ' Editorial architectural photograph.' });
+        const prompt = buildStationBeautifyPrompt(station, { locationName: 'Sydney Opera House', moodPromptContext: 'Clear winter noon. ', styleSuffix: ' Editorial architectural photograph.', lighting: 'scene' });
         expect(prompt).toContain(TEMPLATE_BODY);
         expect(prompt).toContain(`(camera at coordinates ${station.coordinatesWGS84.lat.toFixed(6)}, ${station.coordinatesWGS84.lng.toFixed(6)}, facing ${Math.round(station.yawDegrees)}°)`);
         expect(prompt).toContain(' Subject distance: approximately 43 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze).');
@@ -36,6 +36,32 @@ describe('Station-grounded AI Beautify prompt', () => {
         expect(i('Subject distance')).toBeLessThan(i('Camera lock'));
         expect(i('Camera lock')).toBeLessThan(i('Sun:'));
         expect(i('Sun:')).toBeLessThan(i('Editorial'));
+    });
+
+    it('lights station images evenly by default: the facade plates\' overcast sentence, then the caller\'s sentence, and no sun clause', () => {
+        const prompt = buildStationBeautifyPrompt(station, { locationName: 'Sydney Opera House', moodPromptContext: 'Wet pavement. ' });
+        expect(prompt).toContain(`${EVEN_LIGHT_SENTENCE} Wet pavement. This is a real location`);
+        expect(prompt).not.toContain('Sun:');
+        expect(prompt).not.toContain('cast shadows accordingly');
+        expect(prompt).toContain('Camera lock: 28mm lens');
+        expect(prompt).not.toContain(OUTLINE_LOCK_SENTENCE);
+    });
+
+    it('building-survey outline lock fixes the subject\'s outline to the reference', () => {
+        const prompt = buildStationBeautifyPrompt(station, { locationName: 'Sydney Opera House', outlineLock: true });
+        expect(prompt).toContain(`${EVEN_LIGHT_SENTENCE} ${OUTLINE_LOCK_SENTENCE} This is a real location`);
+    });
+
+    it('a Street View seed says it is a photograph, clears obstructions, and keeps every camera fact of its own station', () => {
+        const sv = stationFromLookAt(9, [-42.6, 2.0, 18.9], [-30, 6, 21], { focalLengthMm: 36 / (2 * Math.tan(25 * Math.PI / 180)), sensorWidthMm: 36, aspectRatio: 4 / 3 }, ANCHOR);
+        const p = buildStreetViewSeedBeautifyPrompt(sv, { locationName: 'E.V. Haughwout Building, 488 Broadway, New York', moodPromptContext: 'Overcast daylight, soft even light, no hard shadows. ' });
+        expect(p.startsWith('Transform this Street View photograph of E.V. Haughwout Building, 488 Broadway, New York (camera at coordinates')).toBe(true);
+        expect(p).toContain(`facing ${Math.round(sv.yawDegrees)}°) into a photorealistic photograph WITH NO OBSTRUCTIONS. ${streetViewObstructionsNote('E.V. Haughwout Building, 488 Broadway, New York')}`);
+        expect(p).toContain('the reference image shows the actual buildings, streets, and terrain at these exact coordinates as Street View captured them.');
+        expect(p).toContain('Output MUST use exactly 4:3 aspect ratio');
+        expect(p).toContain('Camera lock: 38.6mm lens, 50.0° horizontal field of view, pitch 17.4°, 2 m above ground.');
+        expect(p).not.toContain(TILES_RENDER_NOTE);
+        expect(p).not.toContain('3D-rendered');
     });
 
     it('without station facts the prompt is unchanged (no camera lock slot emitted)', () => {
@@ -74,7 +100,7 @@ describe('Station-grounded AI Beautify prompt', () => {
 
     it('strictly leaves {styleSuffix} and {moodPromptContext} empty unless the user explicitly prompts a style', () => {
         // 1. buildStationBeautifyPrompt with no stylePrompt: must NOT inject unprompted styles or moods
-        const cleanStationPrompt = buildStationBeautifyPrompt(station, { locationName: 'Colosseum, Rome' });
+        const cleanStationPrompt = buildStationBeautifyPrompt(station, { locationName: 'Colosseum, Rome', lighting: 'scene' });
         expect(cleanStationPrompt).not.toContain('Golden hour');
         expect(cleanStationPrompt).not.toContain('Cinematic');
         expect(cleanStationPrompt).not.toContain('Editorial');
@@ -85,7 +111,8 @@ describe('Station-grounded AI Beautify prompt', () => {
         // 2. buildStationBeautifyPrompt WITH user prompted style: must place it strictly at the end in styleSuffix
         const styledStationPrompt = buildStationBeautifyPrompt(station, {
             locationName: 'Colosseum, Rome',
-            styleSuffix: ' Ancient Roman travertine stonework, dusk torchlight.'
+            styleSuffix: ' Ancient Roman travertine stonework, dusk torchlight.',
+            lighting: 'scene'
         });
         expect(styledStationPrompt.endsWith('cast shadows accordingly. Ancient Roman travertine stonework, dusk torchlight.')).toBe(true);
 
@@ -98,7 +125,7 @@ describe('Station-grounded AI Beautify prompt', () => {
         expect(cleanNanoBananaPrompt).not.toContain('Cinematic 35mm');
         expect(cleanNanoBananaPrompt).not.toContain('Subject distance: approximately 250 meters');
         // Ends strictly with the canonical framing template
-        expect(cleanNanoBananaPrompt.endsWith('taken from this exact vantage point.')).toBe(true);
+        expect(cleanNanoBananaPrompt.endsWith('taken from this exact vantage point. ' + OBSTRUCTION_FREE_NOTE)).toBe(true);
 
         // 4. buildBlockoutNanoBananaPrompt WITH user prompted style: injected strictly in styleSuffix
         const styledNanoBananaPrompt = buildBlockoutNanoBananaPrompt({
@@ -106,6 +133,6 @@ describe('Station-grounded AI Beautify prompt', () => {
             coordinates: { lat: 41.8902, lng: 12.4922 },
             styleSuffix: ' High contrast chiaroscuro oil painting.'
         });
-        expect(styledNanoBananaPrompt.endsWith('taken from this exact vantage point. High contrast chiaroscuro oil painting.')).toBe(true);
+        expect(styledNanoBananaPrompt.endsWith('taken from this exact vantage point. ' + OBSTRUCTION_FREE_NOTE + ' High contrast chiaroscuro oil painting.')).toBe(true);
     });
 });

@@ -377,7 +377,7 @@ export async function auditResidual(input: { solid: Float32Array; sources: Audit
         const typeLabels = clusterTypeLabels(c, j);
         const feature: SbFeature = {
             schema: 'sb-feature/1', id: `${input.idPrefix ?? 'residual'}/${c.id}`, types: typesFromLabels(typeLabels), typeLabels,
-            description: j.reason, geometry: {},
+            description: j.reason, geometry: { boundingBox: { lo: c.lo, hi: c.hi, frame: 'tile (x east, y up, z south), metres' } },
             measurements: {
                 areaM2: c.areaM2, lengthM: c.frame.extentsM[0], heightM: c.frame.extentsM[1], widthM: c.frame.extentsM[2], principalExtentsM: c.principal.extentsM, envelopeVolumeM3: c.volume.envelopeM3,
                 baseAboveSupportM: c.attachment.baseAboveSupportM, topAboveSupportM: c.attachment.topAboveSupportM, radialSymmetry: c.symmetry.radialSymmetry, radiusMedianM: c.symmetry.radiusMedianM,

@@ -172,6 +172,17 @@ describe('TaskCapabilityResolver', () => {
             expect(res.rationale).toMatch(/not natively supported/i);
         });
 
+        it('solves Trellis image-to-3D on the self-hosted Trellis services once their gateway is configured', () => {
+            const res = TaskCapabilityResolver.resolveTaskCapability(
+                'Reconstruct 3D mesh from single photo using Trellis image-to-3d diffusion model',
+                { hasInputImage: true, trellisServiceUrl: 'https://trellis-gateway.example.run.app' }
+            );
+
+            expect(res.canSolveNatively).toBe(true);
+            expect(res.tier1Assessment.primaryNativeEngine).toBe('trellis-services');
+            expect(res.rationale).toMatch(/self-hosted Trellis services/);
+        });
+
         it('reports neural video-to-video restyling (AnimateDiff) as not natively solvable', () => {
             const res = TaskCapabilityResolver.resolveTaskCapability(
                 'Restyle real drone video footage into a cyberpunk anime sequence using animatediff and controlnet',

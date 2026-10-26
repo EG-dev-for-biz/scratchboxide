@@ -3774,6 +3774,29 @@ body.theia-light .sb-graph-node-floating-inspector {
     box-shadow: 0 2px 8px rgba(16, 185, 129, 0.35);
 }
 
+.sb-node-port {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: var(--sb-surface-elevated);
+    border: 2px solid var(--sb-surface-border);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: crosshair;
+    z-index: 10;
+    transition: var(--sb-quick-transition);
+}
+
+.sb-node-port:hover {
+    border-color: var(--sb-system-blue);
+    transform: translateY(-50%) scale(1.25);
+    box-shadow: 0 0 8px var(--sb-system-blue-glow);
+}
+
 .sb-node-port-in {
     left: -7px;
 }

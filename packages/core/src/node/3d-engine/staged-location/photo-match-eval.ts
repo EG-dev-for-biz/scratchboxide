@@ -27,6 +27,11 @@
  * its street in a lighter clay, under a raised key light behind the camera, and the judge scores shape only (massing,
  * openings, surface relief): geometry changes that the photo texture hides (measured relief, reveals) can be scored there.
  *
+ * Lit (`lit` in renderTriangles, PHOTO_MATCH_LIT, off by default): every arm under one sun with cast shadows (a two-cascade
+ * shadow map of all arm and context triangles) and a sky term darkened by screen-space ambient occlusion, in place of the
+ * headlight (and the clay key light). Under the headlight a proud pilaster, a reveal or a cornice the wall's own colour is
+ * invisible; lit, it casts a shadow, so a judge can score relief. The headlight stays the default so older reports compare.
+ *
  * Specular (`specular` in renderTriangles, the manifest's `"specular": true`, off by default): the neutral light above stays
  * the diffuse term, and every surface also reflects one fixed environment (a street canyon: dark street below the horizon,
  * facades of the far side up to ~14 degrees, a sky gradient above) through a Schlick Fresnel term with F0 = 0.04 for a
@@ -43,11 +48,17 @@
  * cut out of its library leaf set in the textured render. Their colour stays the GLB's (the library's colour and tints are
  * not drawn).
  *
+ * Orthographic views (`OrthoCamera`, texture-pass-contracts.ts; ortho-reference.ts builds one from a Static Maps satellite
+ * crop): renderTriangles takes a pinhole or an ortho camera. Under an ortho camera every pixel looks along `fwd`, a pixel is
+ * `pixelM` metres on the ground, depth is the distance along `fwd`, and the headlight is `fwd` itself; textures, clay, the
+ * context, cut-outs, lit and specular all render unchanged, so the judge can see the real satellite crop beside each arm's
+ * top-down render at the same scale. A satellite image is a second opinion and carries no capture date.
+ *
  * Nothing here knows a place or a pipeline; the arms are whatever GLBs the caller names. The photos must not have been used
  * to texture or register any arm: the caller holds them out (the bake-off driver checks the pano ids).
  */
 
-import type { DecodedImage, PinholeCamera } from '../../../common/spatial/texture-pass-contracts';
+import { isOrthoCamera, type DecodedImage, type OrthoCamera, type PinholeCamera, type RenderCamera } from '../../../common/spatial/texture-pass-contracts';
 import type { Vec3 } from '../../../common/spatial/staged-location-contracts';
 import { SRGB8_TO_LINEAR, linearToSrgb255 } from '../../../common/spatial/photogrammetric-delight';
 import { distanceTransform, gaussianBlur } from '../../spatial/StreetViewPoseRegistrar';
@@ -166,14 +177,14 @@ function cutoutUv(k: CutoutKind, u: number, v: number, out: Float64Array): boole
 }
 
 /**
- * Renders triangle soups (readTileTriangles: tile frame, linear textures) from a pinhole camera at the camera's own
- * resolution. `supersample` samples per pixel side (2 = 4 samples). Both faces of a triangle render (scan meshes have mixed
+ * Renders triangle soups (readTileTriangles: tile frame, linear textures) from a pinhole or an orthographic camera at the
+ * camera's own resolution. `supersample` samples per pixel side (2 = 4 samples). Both faces of a triangle render (scan meshes have mixed
  * winding); the nearest surface wins; `occluderDepth` hides what the real place hides. A soup's `cutout` (tree leaves and
  * crown cards) is alpha-tested per sample as the viewport's material does it, the clay or the textured cut-out by the
  * render: a sample whose alpha (mip-filtered at the triangle's footprint, raised per mip level, times the gain) is under 0.5
  * is not drawn and does not hide what is behind it.
  */
-export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, options: {
+export function renderTriangles(meshes: TileTriangles[], camera: RenderCamera, options: {
     supersample?: number; background?: Vec3; ambient?: number;
     /**
      * What stands in front in the real place (e.g. the full tile mesh: neighbours, trees, the street): its depth from the same
@@ -195,11 +206,19 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
     clay?: boolean | { albedo?: Vec3; contextAlbedo?: Vec3 };
     /** Add the fixed environment's specular reflection (see the file comment); ignored with `clay`. */
     specular?: boolean;
+    /**
+     * The lit mode (see PHOTO_MATCH_LIT): a sun with cast shadows (a two-cascade shadow map of every arm and context
+     * triangle) over a sky term darkened by screen-space ambient occlusion, in place of the headlight (and of the clay key
+     * light: a clay render is lit by the same sun). Relief that matches the wall's colour shows as shadow and occlusion.
+     */
+    lit?: LitOptions;
 } = {}): ArmRender {
     const t0 = Date.now();
     const ss = Math.max(1, Math.round(options.supersample ?? 2));
     const W = camera.width * ss, H = camera.height * ss;
-    const fx = camera.fx * ss, fy = camera.fy * ss, cx = camera.cx * ss, cy = camera.cy * ss;
+    // an ortho camera: fx, fy are samples per metre and the projection has no divide by depth
+    const ortho = isOrthoCamera(camera);
+    const fx = ortho ? ss / camera.pixelM : camera.fx * ss, fy = ortho ? ss / camera.pixelM : camera.fy * ss, cx = camera.cx * ss, cy = camera.cy * ss;
     const depth = new Float32Array(W * H).fill(Infinity);
     const mesh = new Int32Array(W * H).fill(-1), tri = new Int32Array(W * H).fill(-1);
     const bu = new Float32Array(W * H), bv = new Float32Array(W * H);
@@ -225,7 +244,8 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
             if (poly[0].z < PHOTO_MATCH_NEAR_M && poly[1].z < PHOTO_MATCH_NEAR_M && poly[2].z < PHOTO_MATCH_NEAR_M) continue;
             const clipped = poly[0].z < PHOTO_MATCH_NEAR_M || poly[1].z < PHOTO_MATCH_NEAR_M || poly[2].z < PHOTO_MATCH_NEAR_M ? clipNear(poly, PHOTO_MATCH_NEAR_M) : poly;
             if (clipped.length < 3) continue;
-            const sx = clipped.map(p => cx + (fx * p.x) / p.z), sy = clipped.map(p => cy - (fy * p.y) / p.z);
+            const sx = ortho ? clipped.map(p => cx + fx * p.x) : clipped.map(p => cx + (fx * p.x) / p.z);
+            const sy = ortho ? clipped.map(p => cy - fy * p.y) : clipped.map(p => cy - (fy * p.y) / p.z);
             let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
             for (let i = 0; i < sx.length; i++) { minX = Math.min(minX, sx[i]); maxX = Math.max(maxX, sx[i]); minY = Math.min(minY, sy[i]); maxY = Math.max(maxY, sy[i]); }
             if (maxX < 0 || maxY < 0 || minX >= W || minY >= H) continue;
@@ -281,12 +301,13 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
                         const w1 = ((X[2] - xc) * (Y[0] - yc) - (X[0] - xc) * (Y[2] - yc)) / area;
                         const w2 = 1 - w0 - w1;
                         if (w0 < 0 || w1 < 0 || w2 < 0) continue;
-                        const izp = w0 * iz[0] + w1 * iz[1] + w2 * iz[2];
-                        const z = 1 / izp;
+                        // perspective-correct interpolation (1/z weights); affine under an ortho camera
+                        const izp = ortho ? 1 : w0 * iz[0] + w1 * iz[1] + w2 * iz[2];
+                        const z = ortho ? w0 * Z[0].z + w1 * Z[1].z + w2 * Z[2].z : 1 / izp;
                         const i = py * W + px;
                         if (z >= depth[i]) continue;
-                        const pu = (w0 * Z[0].u * iz[0] + w1 * Z[1].u * iz[1] + w2 * Z[2].u * iz[2]) / izp;
-                        const pv = (w0 * Z[0].v * iz[0] + w1 * Z[1].v * iz[1] + w2 * Z[2].v * iz[2]) / izp;
+                        const pu = ortho ? w0 * Z[0].u + w1 * Z[1].u + w2 * Z[2].u : (w0 * Z[0].u * iz[0] + w1 * Z[1].u * iz[1] + w2 * Z[2].u * iz[2]) / izp;
+                        const pv = ortho ? w0 * Z[0].v + w1 * Z[1].v + w2 * Z[2].v : (w0 * Z[0].v * iz[0] + w1 * Z[1].v * iz[1] + w2 * Z[2].v * iz[2]) / izp;
                         if (cutK) {
                             // the alpha test: outside a leaf's cell, or under 0.5 after the lift, the sample is not drawn
                             if (!cutoutUv(cutK, pu, pv, cutUv)) continue;
@@ -319,6 +340,15 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
         key = [k[0] / kl, k[1] / kl, k[2] / kl];
     }
     const bgLin = bg.map(c => SRGB8_TO_LINEAR[c]);
+    const lit = options.lit ? { ...PHOTO_MATCH_LIT, ...options.lit } : undefined;
+    let sunVis: Float32Array | undefined, ao: Float32Array | undefined;
+    if (lit) {
+        const sl = Math.hypot(lit.sunDir[0], lit.sunDir[1], lit.sunDir[2]) || 1;
+        lit.sunDir = [lit.sunDir[0] / sl, lit.sunDir[1] / sl, lit.sunDir[2] / sl];
+        const g: SampleBuffers = { W, H, fx, fy, cx, cy, ortho, camera, depth, mesh, tri, meshes };
+        sunVis = lit.shadows ? sunVisibility(g, lit) : undefined;
+        ao = lit.ao ? screenSpaceAo(g, lit) : undefined;
+    }
     const outW = camera.width, outH = camera.height;
     const acc = new Float64Array(outW * outH * 3), cov = new Float32Array(outW * outH);
     const col = new Float64Array(3), envSample = new Float64Array(3);
@@ -348,15 +378,21 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
         } else {
             col[0] = m.flatLinear[t * 3]; col[1] = m.flatLinear[t * 3 + 1]; col[2] = m.flatLinear[t * 3 + 2];
         }
-        // the neutral light: ambient plus a headlight on the facet normal
-        const xc = (x + 0.5 - cx) / fx, yc = -(y + 0.5 - cy) / fy;
+        // the neutral light: ambient plus a headlight on the facet normal (the view ray; under an ortho camera, fwd itself)
+        const xc = ortho ? 0 : (x + 0.5 - cx) / fx, yc = ortho ? 0 : -(y + 0.5 - cy) / fy;
         const spec = options.specular && !clay;
         const dx = right[0] * xc + up[0] * yc + fwd[0], dy = right[1] * xc + up[1] * yc + fwd[1], dz = right[2] * xc + up[2] * yc + fwd[2];
         const dl = Math.hypot(dx, dy, dz);
         const n = t * 3;
         const nv = (m.normals[n] * dx + m.normals[n + 1] * dy + m.normals[n + 2] * dz) / dl;
         let shade: number;
-        if (clay) {
+        if (lit) {
+            // the sun (shadowed) over the sky (occluded), on the facet's normal turned towards the camera
+            const sgn = nv > 0 ? -1 : 1;
+            const nl = sgn * (m.normals[n] * lit.sunDir[0] + m.normals[n + 1] * lit.sunDir[1] + m.normals[n + 2] * lit.sunDir[2]);
+            const nUp = sgn * m.normals[n + 1];
+            shade = lit.sun * Math.max(0, nl) * (sunVis ? sunVis[i] : 1) + lit.sky * (ao ? ao[i] : 1) * (1 - lit.skyUpShare * (0.5 - 0.5 * nUp));
+        } else if (clay) {
             // the facet's normal turned towards the camera (scan normals are not reliably outward), then the key light
             const sgn = nv > 0 ? -1 : 1;
             const nl = sgn * (m.normals[n] * key[0] + m.normals[n + 1] * key[1] + m.normals[n + 2] * key[2]);
@@ -391,6 +427,257 @@ export function renderTriangles(meshes: TileTriangles[], camera: PinholeCamera, 
         cov[o] /= k;
     }
     return { width: outW, height: outH, rgba, coverage: cov, triangles: drawn, ms: Date.now() - t0 };
+}
+
+// =============================================================================
+// The lit mode: sun, cast shadows, sky occlusion
+// =============================================================================
+
+/**
+ * The lit mode's light. Every arm of a view gets the same sun and sky, so light still never separates two arms; but relief
+ * now shows: a proud pilaster casts a shadow on its wall, a reveal shades its window, a cornice its frieze, whatever their
+ * colour. Linear multipliers of the albedo: a facet facing the sun at angle a gets `sun` x cos a where the shadow map sees
+ * the sun, and every facet the sky's `sky`, darkened by screen-space ambient occlusion and by `skyUpShare` towards facets
+ * that face down (an up-facing facet sees the whole sky, a wall about 1 - skyUpShare / 2 of it).
+ */
+export const PHOTO_MATCH_LIT = {
+    sun: 1.0,
+    sky: 0.42,
+    skyUpShare: 0.4,
+    shadows: true,
+    /** Shadow-map side (texels) of each of the two cascades: the near half of the visible samples, then all of them. */
+    shadowMapPx: 3072,
+    /** Depth bias in shadow-map texels, plus the slope term (2 texels x tan of the sun's incidence, the tan at most 8). */
+    shadowBiasTexels: 1.5,
+    ao: true,
+    /** Occlusion radius: the larger of this (m) and `aoRadiusPerM` x the sample's distance. */
+    aoRadiusM: 1.0,
+    aoRadiusPerM: 0.004,
+    aoSamples: 12,
+    /** How much of the sky the occlusion may take away (1 = all of it where fully occluded). */
+    aoStrength: 0.85
+};
+
+export interface LitOptions extends Partial<Omit<typeof PHOTO_MATCH_LIT, 'sunDir'>> {
+    /** Unit vector towards the sun, tile frame (x east, y up, z south); see sunDirection. */
+    sunDir: Vec3;
+}
+
+/** The direction towards the sun (tile frame: x east, y up, z south) from its azimuth (degrees clockwise from north) and elevation. */
+export function sunDirection(azimuthDeg: number, elevationDeg: number): Vec3 {
+    const a = (azimuthDeg * Math.PI) / 180, e = (elevationDeg * Math.PI) / 180;
+    return [Math.sin(a) * Math.cos(e), Math.sin(e), -Math.cos(a) * Math.cos(e)];
+}
+
+/**
+ * A default sun for a place at `latDeg`: 55 degrees up, 35 degrees round from the equator-facing direction (north in the
+ * southern hemisphere, south in the northern): a late-morning sun that rakes the facades facing it and still reaches most
+ * street floors (at 40 degrees a CBD street of 25-45 m buildings lies wholly in shadow, which hides its relief again).
+ */
+export function defaultSunForLatitude(latDeg: number): { azimuthDeg: number; elevationDeg: number } {
+    return { azimuthDeg: latDeg < 0 ? 35 : 215, elevationDeg: 55 };
+}
+
+interface SampleBuffers {
+    W: number; H: number; fx: number; fy: number; cx: number; cy: number;
+    /** An ortho camera: fx, fy are samples per metre, every ray is `fwd`. */
+    ortho: boolean; camera: RenderCamera;
+    depth: Float32Array; mesh: Int32Array; tri: Int32Array; meshes: TileTriangles[];
+}
+
+/** World position of a sample (its camera depth along the ray through the sample's centre). */
+function sampleWorld(g: SampleBuffers, x: number, y: number, out: Float64Array): void {
+    const z = g.depth[y * g.W + x];
+    const xc = (x + 0.5 - g.cx) / g.fx, yc = -(y + 0.5 - g.cy) / g.fy;
+    const { eye, right, up, fwd } = g.camera;
+    if (g.ortho) for (let a = 0; a < 3; a++) out[a] = eye[a] + right[a] * xc + up[a] * yc + z * fwd[a];
+    else for (let a = 0; a < 3; a++) out[a] = eye[a] + z * (right[a] * xc + up[a] * yc + fwd[a]);
+}
+
+interface ShadowCascade { a0: number; b0: number; texel: number; n: number; map: Float32Array }
+
+/**
+ * Per sample, the share of the sun it sees (0..1): two orthographic shadow maps along the sun (the nearer half of the visible
+ * samples, then all of them), each storing the highest sun-ward depth of any arm or context triangle (both faces; alpha-tested
+ * leaves do not cast), read with a slope-scaled bias and 3 x 3 percentage-closer filtering.
+ */
+function sunVisibility(g: SampleBuffers, lit: typeof PHOTO_MATCH_LIT & { sunDir: Vec3 }): Float32Array {
+    const L = lit.sunDir;
+    // the sun frame: A and B across the sun, d towards it
+    const ref = Math.abs(L[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+    let A = [L[1] * ref[2] - L[2] * ref[1], L[2] * ref[0] - L[0] * ref[2], L[0] * ref[1] - L[1] * ref[0]];
+    const al = Math.hypot(A[0], A[1], A[2]); A = A.map(v => v / al);
+    const B = [L[1] * A[2] - L[2] * A[1], L[2] * A[0] - L[0] * A[2], L[0] * A[1] - L[1] * A[0]];
+    const n = g.W * g.H;
+    const sa = new Float32Array(n), sb = new Float32Array(n), sd = new Float32Array(n);
+    const zs: number[] = [];
+    const p = new Float64Array(3);
+    for (let y = 0; y < g.H; y++) for (let x = 0; x < g.W; x++) {
+        const i = y * g.W + x;
+        if (g.mesh[i] < 0) continue;
+        sampleWorld(g, x, y, p);
+        sa[i] = p[0] * A[0] + p[1] * A[1] + p[2] * A[2]; sb[i] = p[0] * B[0] + p[1] * B[1] + p[2] * B[2]; sd[i] = p[0] * L[0] + p[1] * L[1] + p[2] * L[2];
+        if ((i & 7) === 0) zs.push(g.depth[i]);
+    }
+    const vis = new Float32Array(n).fill(1);
+    if (!zs.length) return vis;
+    zs.sort((u, v) => u - v);
+    const zNear = zs[Math.floor(zs.length * 0.5)];
+    const cascade = (zMax: number): ShadowCascade | undefined => {
+        let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+        for (let i = 0; i < n; i++) {
+            if (g.mesh[i] < 0 || g.depth[i] > zMax) continue;
+            a0 = Math.min(a0, sa[i]); a1 = Math.max(a1, sa[i]); b0 = Math.min(b0, sb[i]); b1 = Math.max(b1, sb[i]);
+        }
+        if (!(a1 >= a0)) return undefined;
+        const size = lit.shadowMapPx;
+        const texel = Math.max(1e-3, Math.max(a1 - a0, b1 - b0) / (size - 4));
+        const c: ShadowCascade = { a0: a0 - 2 * texel, b0: b0 - 2 * texel, texel, n: size, map: new Float32Array(size * size).fill(-Infinity) };
+        for (const m of g.meshes) rasterizeCasters(m, A, B, L, c);
+        return c;
+    };
+    const cascades = [cascade(zNear), cascade(Infinity)].filter((c): c is ShadowCascade => !!c);
+    for (let i = 0; i < n; i++) {
+        const mi = g.mesh[i];
+        if (mi < 0) continue;
+        const m = g.meshes[mi], t = g.tri[i];
+        const cosI = Math.abs(m.normals[t * 3] * L[0] + m.normals[t * 3 + 1] * L[1] + m.normals[t * 3 + 2] * L[2]);
+        const tanI = Math.min(8, Math.sqrt(Math.max(0, 1 - cosI * cosI)) / Math.max(1e-3, cosI));
+        for (const c of cascades) {
+            const fu = (sa[i] - c.a0) / c.texel, fv = (sb[i] - c.b0) / c.texel;
+            if (fu < 1 || fv < 1 || fu > c.n - 2 || fv > c.n - 2) continue;
+            // the filter reads up to 1.5 texels away, where the surface itself is tanI per texel nearer the sun
+            const bias = c.texel * (lit.shadowBiasTexels + 2 * tanI);
+            const iu = Math.floor(fu), iv = Math.floor(fv);
+            let lightTaps = 0;
+            for (let dv = -1; dv <= 1; dv++) for (let du = -1; du <= 1; du++) if (c.map[(iv + dv) * c.n + iu + du] <= sd[i] + bias) lightTaps++;
+            vis[i] = lightTaps / 9;
+            break;
+        }
+    }
+    return vis;
+}
+
+/** Writes the highest sun-ward depth of every triangle of `m` (both faces) into the cascade's texels it covers. */
+function rasterizeCasters(m: TileTriangles, A: number[], B: number[], L: Vec3, c: ShadowCascade): void {
+    const P = m.positions, nt = m.texture.length;
+    const leafT = m.cutout?.textured, leafC = m.cutout?.clay;
+    const u = [0, 0, 0], v = [0, 0, 0], d = [0, 0, 0];
+    for (let t = 0; t < nt; t++) {
+        if ((leafT && leafT[t] >= 0) || (leafC && leafC[t] >= 0)) continue;
+        for (let k = 0; k < 3; k++) {
+            const o = t * 9 + k * 3;
+            u[k] = (P[o] * A[0] + P[o + 1] * A[1] + P[o + 2] * A[2] - c.a0) / c.texel;
+            v[k] = (P[o] * B[0] + P[o + 1] * B[1] + P[o + 2] * B[2] - c.b0) / c.texel;
+            d[k] = P[o] * L[0] + P[o + 1] * L[1] + P[o + 2] * L[2];
+        }
+        const x0 = Math.max(0, Math.floor(Math.min(u[0], u[1], u[2]))), x1 = Math.min(c.n - 1, Math.ceil(Math.max(u[0], u[1], u[2])));
+        const y0 = Math.max(0, Math.floor(Math.min(v[0], v[1], v[2]))), y1 = Math.min(c.n - 1, Math.ceil(Math.max(v[0], v[1], v[2])));
+        if (x0 > x1 || y0 > y1) continue;
+        const area = (u[1] - u[0]) * (v[2] - v[0]) - (u[2] - u[0]) * (v[1] - v[0]);
+        if (Math.abs(area) < 1e-9) {
+            // edge-on to the sun (a wall under a sun in its plane) or sub-texel: its corners still cast
+            for (let k = 0; k < 3; k++) {
+                const xi = Math.round(u[k]), yi = Math.round(v[k]);
+                if (xi >= 0 && yi >= 0 && xi < c.n && yi < c.n && d[k] > c.map[yi * c.n + xi]) c.map[yi * c.n + xi] = d[k];
+            }
+            continue;
+        }
+        for (let py = y0; py <= y1; py++) {
+            const yc = py + 0.5;
+            for (let px = x0; px <= x1; px++) {
+                const xc = px + 0.5;
+                // conservative: a texel the triangle touches anywhere (half-texel slack) is covered
+                let w0 = ((u[1] - xc) * (v[2] - yc) - (u[2] - xc) * (v[1] - yc)) / area;
+                let w1 = ((u[2] - xc) * (v[0] - yc) - (u[0] - xc) * (v[2] - yc)) / area;
+                let w2 = 1 - w0 - w1;
+                const slack = -0.5 / Math.sqrt(Math.abs(area));
+                if (w0 < slack || w1 < slack || w2 < slack) continue;
+                w0 = Math.max(0, w0); w1 = Math.max(0, w1); w2 = Math.max(0, w2);
+                const s = w0 + w1 + w2;
+                const dz = (w0 * d[0] + w1 * d[1] + w2 * d[2]) / s;
+                const i = py * c.n + px;
+                if (dz > c.map[i]) c.map[i] = dz;
+            }
+        }
+    }
+}
+
+/**
+ * Per sample, the sky's share after ambient occlusion (1 = open): a normal-oriented hemisphere of `aoSamples` points within
+ * the radius around the sample's surface point (rotated per pixel in a 4 x 4 pattern), each occluded when the depth buffer
+ * holds something in front of it within the radius; then a 5 x 5 depth-aware blur removes the pattern.
+ */
+function screenSpaceAo(g: SampleBuffers, lit: typeof PHOTO_MATCH_LIT & { sunDir: Vec3 }): Float32Array {
+    const { W, H, fx, fy, cx, cy, ortho, camera, depth, mesh, tri, meshes } = g;
+    const n = W * H, raw = new Float32Array(n).fill(1);
+    const K = Math.max(4, Math.round(lit.aoSamples));
+    // the kernel: a Fibonacci hemisphere (z up), lengths growing towards the radius
+    const kern: number[][] = [];
+    for (let k = 0; k < K; k++) {
+        const zc = 1 - (k + 0.5) / K, r = Math.sqrt(1 - zc * zc), ph = k * 2.399963229728653;
+        const s = 0.15 + 0.85 * ((k + 1) / K) ** 2;
+        kern.push([r * Math.cos(ph) * s, r * Math.sin(ph) * s, Math.max(0.1, zc) * s]);
+    }
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const i = y * W + x, mi = mesh[i];
+        if (mi < 0) continue;
+        const m = meshes[mi], t = tri[i];
+        const z = depth[i];
+        const xc = (x + 0.5 - cx) / fx, yc = -(y + 0.5 - cy) / fy;
+        // the sample in camera coordinates (x right, y up, z along the view; under an ortho camera x and y do not scale with z)
+        const Px = ortho ? xc : xc * z, Py = ortho ? yc : yc * z, Pz = z;
+        // the facet normal in camera coordinates, turned towards the camera
+        const wn = [m.normals[t * 3], m.normals[t * 3 + 1], m.normals[t * 3 + 2]];
+        let Nx = wn[0] * camera.right[0] + wn[1] * camera.right[1] + wn[2] * camera.right[2];
+        let Ny = wn[0] * camera.up[0] + wn[1] * camera.up[1] + wn[2] * camera.up[2];
+        let Nz = wn[0] * camera.fwd[0] + wn[1] * camera.fwd[1] + wn[2] * camera.fwd[2];
+        if (Nx * Px + Ny * Py + Nz * Pz > 0) { Nx = -Nx; Ny = -Ny; Nz = -Nz; }
+        const R = Math.max(lit.aoRadiusM, lit.aoRadiusPerM * z);
+        // tangent frame rotated per pixel (4 x 4 pattern)
+        const ang = (((x & 3) * 4 + (y & 3)) * 2.399963229728653);
+        let Tx = Math.cos(ang), Ty = Math.sin(ang), Tz = 0.3;
+        const dn = Tx * Nx + Ty * Ny + Tz * Nz;
+        Tx -= dn * Nx; Ty -= dn * Ny; Tz -= dn * Nz;
+        let tl = Math.hypot(Tx, Ty, Tz);
+        if (tl < 1e-6) { Tx = 1; Ty = 0; Tz = 0; const d2 = Nx; Tx -= d2 * Nx; Ty -= d2 * Ny; Tz -= d2 * Nz; tl = Math.hypot(Tx, Ty, Tz) || 1; }
+        Tx /= tl; Ty /= tl; Tz /= tl;
+        const Bx = Ny * Tz - Nz * Ty, By = Nz * Tx - Nx * Tz, Bz = Nx * Ty - Ny * Tx;
+        let occ = 0;
+        for (const [kx, ky, kz] of kern) {
+            const Sx = Px + R * (Tx * kx + Bx * ky + Nx * kz), Sy = Py + R * (Ty * kx + By * ky + Ny * kz), Sz = Pz + R * (Tz * kx + Bz * ky + Nz * kz);
+            if (Sz <= PHOTO_MATCH_NEAR_M) continue;
+            const qx = Math.floor(ortho ? cx + fx * Sx : cx + (fx * Sx) / Sz), qy = Math.floor(ortho ? cy - fy * Sy : cy - (fy * Sy) / Sz);
+            if (qx < 0 || qy < 0 || qx >= W || qy >= H) continue;
+            const qz = depth[qy * W + qx];
+            if (!(qz < Sz - 0.02 * R)) continue;
+            // range check: an occluder far in front of the sample (a different surface) counts less
+            const gap = Sz - qz;
+            occ += gap < R ? 1 : Math.max(0, 1 - (gap - R) / R);
+        }
+        raw[i] = 1 - lit.aoStrength * (occ / K);
+    }
+    // depth-aware 5 x 5 blur
+    const out = new Float32Array(n).fill(1);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        if (mesh[i] < 0) continue;
+        const z = depth[i], tol = 0.05 * z + 0.1;
+        let s = 0, w = 0;
+        for (let dy = -2; dy <= 2; dy++) {
+            const yy = y + dy;
+            if (yy < 0 || yy >= H) continue;
+            for (let dx = -2; dx <= 2; dx++) {
+                const xx = x + dx;
+                if (xx < 0 || xx >= W) continue;
+                const j = yy * W + xx;
+                if (mesh[j] < 0 || Math.abs(depth[j] - z) > tol) continue;
+                s += raw[j]; w++;
+            }
+        }
+        out[i] = w ? s / w : raw[i];
+    }
+    return out;
 }
 
 /** The fixed environment of the specular term (linear RGB): the street below the horizon, the far side's facades, the sky. */
@@ -467,14 +754,25 @@ export function armLayerTriangles(l: ArmLayer): number {
     return l.fixed ? l.fixed.texture.length : l.trees ? l.trees.all.texture.length : 0;
 }
 
-/** The meshes of an arm's layers as the viewport would draw them from `camera`, and what each trees layer chose. */
-export function armMeshesForView(layers: ArmLayer[], camera: PinholeCamera, view?: TreeLodViewInput | null): { meshes: TileTriangles[]; trees: TreesForView[] } {
+/**
+ * The meshes of an arm's layers as the viewport would draw them from `camera`, and what each trees layer chose. The tree
+ * level rule is written for a pinhole; an ortho camera is given to it as the pinhole at the same eye whose focal length
+ * puts one pixel at `pixelM` metres at the eye's height above the frame origin (the same on-screen tree size at the ground).
+ */
+export function armMeshesForView(layers: ArmLayer[], camera: RenderCamera, view?: TreeLodViewInput | null): { meshes: TileTriangles[]; trees: TreesForView[] } {
     const meshes: TileTriangles[] = [], trees: TreesForView[] = [];
+    const lodCamera: PinholeCamera = isOrthoCamera(camera) ? orthoLodPinhole(camera) : camera;
     for (const l of layers) {
         if (l.fixed) meshes.push(l.fixed);
-        else if (l.trees) { const t = treesForView(l.trees, camera, view); trees.push(t); meshes.push(t.triangles); }
+        else if (l.trees) { const t = treesForView(l.trees, lodCamera, view); trees.push(t); meshes.push(t.triangles); }
     }
     return { meshes, trees };
+}
+
+function orthoLodPinhole(c: OrthoCamera): PinholeCamera {
+    const h = Math.max(1, Math.abs(c.eye[0] * c.fwd[0] + c.eye[1] * c.fwd[1] + c.eye[2] * c.fwd[2]));
+    const f = h / c.pixelM;
+    return { eye: c.eye, right: c.right, up: c.up, fwd: c.fwd, fx: f, fy: f, cx: c.cx, cy: c.cy, width: c.width, height: c.height };
 }
 
 // =============================================================================

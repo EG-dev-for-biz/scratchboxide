@@ -460,6 +460,8 @@ export interface GraphEdge {
     color?: AccentColor;
     sourceHandle?: 'output' | 'true' | 'false' | 'default';
     targetHandle?: 'input' | 'default';
+    /** Tool nodes: which of the target's inputs take which of the source's output fields ({ inputGlbPath: 'glbPath' }). */
+    fieldMap?: Record<string, string>;
     status?: 'idle' | 'running' | 'completed' | 'error';
 }
 
@@ -478,6 +480,11 @@ export interface NodeGraphData {
      * the graph's source, not just 3D scenes.
      */
     sourceArtifact?: { type: PrimitiveType | (string & {}); data: unknown };
+    /**
+     * The scene this graph shows (a staged build's stage view, or a scene's node graph): the run record time it was
+     * drawn from, or for a scene with no staged run the scene state `key` (sceneGraphKey); redrawn when either changes.
+     */
+    stageViewOf?: { artifactId: string; updatedAtMs: number; key?: string };
 }
 
 // ==========================================
@@ -584,6 +591,12 @@ export interface McpExecutionState {
     rawPayload?: string;
     durationMs?: number;
     args?: Record<string, any>;
+    /**
+     * The result's short fields (numbers, booleans, strings up to a few hundred characters, short lists of them; from
+     * the payload and its `data` object), kept so the call can be laid out again as a tool node graph and linked to the
+     * calls that used them (compactResultFields in common/tool-node-graph.ts).
+     */
+    resultFields?: Record<string, unknown>;
 }
 
 export interface McpHubData {
@@ -911,6 +924,20 @@ export interface SceneCameraLens {
     depthOfField?: boolean;
 }
 
+/** What the viewport shows while a graph node holds the display flag; every list is optional, one is enough. */
+export interface SceneDisplayFlag {
+    /** The graph node holding the flag. */
+    nodeId: string;
+    /** What it shows, for the viewport badge and the Output node ("Google 3D Tiles", "seat"). */
+    label: string;
+    /** Scene objects to show (staged layers, placed models), by objects[].id. */
+    objectIds?: string[];
+    /** customMeshes to show, by id. */
+    meshIds?: string[];
+    /** Named nodes of the compiled model to show (and what they contain). */
+    partNames?: string[];
+}
+
 export interface Scene3DData {
     title: string;
     subtitle?: string;
@@ -921,6 +948,12 @@ export interface Scene3DData {
      * order, the degraded parts and the provenance legend. The viewport reveals, labels and shades from it.
      */
     stagedBuild?: StagedBuildState;
+    /**
+     * The node graph's display flag (as in Houdini): the viewport shows only what one graph node made (a stage's layers,
+     * a mesh, a part of the compiled model) instead of the final scene, until the flag is cleared on the Output node.
+     * A flagged layer a later stage replaced is drawn as a replaced layer (a ghost).
+     */
+    displayFlag?: SceneDisplayFlag;
     /**
      * Optional semantic domain or classification token.
      * 
@@ -1683,6 +1716,8 @@ export interface ChatSession {
     messages: ChatMessage[];
     activeArtifact?: CanvasArtifact;
     artifactHistory: CanvasArtifact[];
+    /** 3D scenes this session has made a node graph for (or that were here before it did): never made twice. */
+    nodeGraphsFor?: string[];
     layoutMode?: StudioLayoutMode;
     fileType?: WorkspaceFileType;
     workspaceId?: string;

@@ -37,6 +37,8 @@ export const ENTRY_TOOL_NAMES: readonly string[] = [
     'google_3d_tiles_get_clay',
     'google_3d_tiles_get_full_texture',
     'build_3d_object_from_reference',
+    // vegetation for any scene is SB-Veggie: offered from the first call, like the place and object builders
+    'botanical_synthesize_tree',
     'scene_3d_dispatch_operators',
     'staged_location_material_mode',
     'atmosphere_configure_scene',

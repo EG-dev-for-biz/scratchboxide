@@ -23,7 +23,11 @@
 import { TEXTURE_LADDER_RUNGS } from '../../../../common/spatial/texture-pass-contracts';
 import type { ProvenanceRecord, StagedNodeExtras } from '../../../../common/spatial/staged-location-contracts';
 import { assembleGlb } from '../glb-bytes';
+import * as jpegJs from 'jpeg-js';
 import { encodePng } from '../png-encode';
+
+/** JPEG quality of photographic textures written as JPEG. */
+export const PHOTO_JPEG_QUALITY = 88;
 import { CONFIDENCE_CHANNELS, writeStagedGlb, type StagedGlbNode } from '../staged-glb-writer';
 import { facadeMaterialsEnabled } from '../facade-material-evidence';
 import type { MassingFace, MassingNode } from './native-massing';
@@ -119,6 +123,11 @@ export interface MassingGlbInput {
     tileLegendIndex: number;
     /** Write the material channels (massing-materials.ts); default facadeMaterialsEnabled(). */
     materials?: boolean;
+    /**
+     * The face atlas's albedo pages as JPEG (photographic content: a fraction of PNG's size); the confidence and material
+     * channels stay PNG (their exact values matter). Default off.
+     */
+    albedoJpeg?: boolean;
 }
 
 function nodeExtras(input: MassingGlbInput, node: MassingNode, order: number, count: number): StagedNodeExtras {
@@ -164,7 +173,9 @@ export function writeMassingTexturedGlb(input: MassingGlbInput): { glb: Buffer; 
         return textures.length - 1;
     };
     const pageMaterial: number[] = packing.pages.map((p, k) => {
-        const albedo = addTexture(new Uint8Array(encodePng(p.width, p.height, Buffer.from(p.rgba), 4)), 'image/png', `page_${k}_albedo`);
+        const albedo = input.albedoJpeg
+            ? addTexture(new Uint8Array(jpegJs.encode({ data: Buffer.from(p.rgba), width: p.width, height: p.height }, PHOTO_JPEG_QUALITY).data), 'image/jpeg', `page_${k}_albedo`)
+            : addTexture(new Uint8Array(encodePng(p.width, p.height, Buffer.from(p.rgba), 4)), 'image/png', `page_${k}_albedo`);
         const conf = addTexture(new Uint8Array(encodePng(p.width, p.height, Buffer.from(p.conf), 4)), 'image/png', `page_${k}_confidence`);
         if (p.params && mat) {
             // glTF metallicRoughness: G roughness, B metalness (texture times factor 1)

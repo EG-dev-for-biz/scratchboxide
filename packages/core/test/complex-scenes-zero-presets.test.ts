@@ -137,20 +137,8 @@ plume_mat.roughness = 0.55
 tubeworm_plume_mesh.material = plume_mat
 meshes.append(tubeworm_plume_mesh)
 
-# 5. Glowing Bioluminescent Siphonophore Organism (Space Colonization Tree)
-tree_cfg = sb.nature.SpaceColonizationConfig()
-tree_cfg.attractor_count = 110
-tree_cfg.crown_center = sb.math.Vec3(1.6, 2.6, -1.1)
-tree_cfg.crown_extents = sb.math.Vec3(1.4, 1.6, 1.4)
-tree_cfg.base_radius = 0.06
-tree_cfg.tip_radius = 0.02
-siphonophore = sb.nature.generate_tree(tree_cfg)
-siph_mat = sb.geometry.PbrMaterial()
-siph_mat.name = "bioluminescent_siphonophore"
-siph_mat.base_color = sb.math.Vec4(0.10, 0.85, 0.95, 1.0)
-siph_mat.emissive = sb.math.Vec3(0.3, 2.8, 3.2)
-siph_mat.roughness = 0.25
-siphonophore.material = siph_mat
+# 5. Glowing Bioluminescent Siphonophore Organism: a branching crown, so an SB-Veggie tree described by measurements
+siphonophore = sb.create_tree(position=(1.6, 0.0, -1.1), height=4.2, crown_radius=1.4, crown_base_height=1.0, leaf_color=(0.10, 0.85, 0.95), label="bioluminescent siphonophore")
 meshes.append(siphonophore)
 
 # 6. Golden Pyrite & Sulfide Mineral Crystal Formations (High-Reflectance Metallic Gold)
@@ -168,8 +156,8 @@ for c_i in range(18):
 pyrite_mesh.material = sb.geometry.PbrMaterial.gold()
 meshes.append(pyrite_mesh)
 
-total_verts = sum(m.vertex_count for m in meshes)
-total_tris = sum(m.triangle_count for m in meshes)
+total_verts = sum(m.vertex_count for m in meshes if not sb.vegetation.is_tree(m))
+total_tris = sum(m.triangle_count for m in meshes if not sb.vegetation.is_tree(m))
 print(f"[Scene 1] Submeshes: {len(meshes)}, Vertices: {total_verts}, Triangles: {total_tris}")
 sb.io.write_glb(OUTPUT_GLB_PATH, meshes)
 `;

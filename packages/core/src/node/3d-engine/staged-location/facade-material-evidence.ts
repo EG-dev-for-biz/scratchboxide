@@ -90,8 +90,10 @@ export interface MaterialEvidence {
 /** What a segmentation call needs: one image (PNG bytes) and the description; returns a mask the image's size (0/255) or null when not found. */
 export type SegmentImage = (png: Buffer, width: number, height: number, target: string, signal?: AbortSignal) => Promise<{ mask: Uint8Array | null; model?: string }>;
 
-/** The segmenter tool (ObjectSegmenterService) as a SegmentImage: the image is written to a temp dir for the call. */
-export function segmenterTool(): SegmentImage {
+/** The segmenter tool (ObjectSegmenterService) as a SegmentImage: the image is written to a temp dir for the call.
+ *  `hintImage`, when given, is shown to the vision model alongside every image segmented, as a reference for what
+ *  the target should look like (a user photo or a generated image) — it never replaces the image actually marked. */
+export function segmenterTool(hintImage?: { bytes: Buffer; mimeType: string }): SegmentImage {
     const { ObjectSegmenterService } = require('../../video/ObjectSegmenterService') as typeof import('../../video/ObjectSegmenterService');
     const { getPythonWorkerPool } = require('../../process/persistent-python-worker') as typeof import('../../process/persistent-python-worker');
     const { repoPath, resolveRepoPython } = require('../../process/repo-python') as typeof import('../../process/repo-python');
@@ -105,7 +107,7 @@ export function segmenterTool(): SegmentImage {
             const img = path.join(dir, 'in.png');
             fs.writeFileSync(img, png);
             try {
-                const r = await svc.segment({ imagePath: img, outputDir: path.join(dir, 'out'), target, refine: false, ...(signal ? { signal } : {}) });
+                const r = await svc.segment({ imagePath: img, outputDir: path.join(dir, 'out'), target, refine: false, ...(hintImage ? { hintImage } : {}), ...(signal ? { signal } : {}) });
                 const dec = decodeImageInMemory(fs.readFileSync(r.maskPaths[0]));
                 if (dec.width !== width || dec.height !== height) throw new Error(`the mask is ${dec.width}x${dec.height}, the image ${width}x${height}`);
                 const m = new Uint8Array(width * height);

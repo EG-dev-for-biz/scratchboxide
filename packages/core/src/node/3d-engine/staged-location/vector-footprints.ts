@@ -28,6 +28,9 @@ export interface VectorBuilding {
     id: string; parts: Vec2[][][]; heightM?: number;
     extruded?: Array<{ loops: Vec2[][]; heightM?: number; minHeightM?: number; planOnly?: boolean }>;
     volumes?: Array<{ vertices: Array<[number, number, number]>; indices: number[]; heightM?: number }>;
+    /** Overrides buildMassing's part/mesh provenance token for this building (default: unset, the spec's own token) —
+     *  for a building not actually from Google's vector data (e.g. orchestrator.ts's scanDerivedFootprint). */
+    provenance?: string;
 }
 
 export interface VectorEvidence {
@@ -36,6 +39,18 @@ export interface VectorEvidence {
     water: Vec2[][][];
     /** Road centrelines. */
     roads: Vec2[][];
+    /** Rail centrelines (Google FEATURE_TYPE_RAIL lines), when the tiles carried any. */
+    rails?: Vec2[][];
+    /** Google's type codes per road centreline (same order as `roads`; labels only, never a geometry switch). */
+    roadTypes?: string[][];
+    /**
+     * Land-cover and land-use areas (Google: parks, parking lots, forest, urban area, crops): boundary loops per area
+     * (even-odd) with the type codes as received. The codes are labels for the ground program and the brief; what is
+     * built there comes from the area's measurements (its extent, the scan's surface, the canopy) and never from the code.
+     */
+    landuse?: Array<{ loops: Vec2[][]; types: string[] }>;
+    /** Points of interest in the tiles with Google's name label and type codes, in the scan frame. */
+    pois?: Array<{ x: number; z: number; types: string[]; name?: string }>;
     tiles: number;
     zoom: number;
 }
@@ -45,7 +60,10 @@ interface TileFeatures {
     buildings: Array<{ id: string; ring: Array<[number, number]>; innerRings?: Array<Array<[number, number]>>; properties?: Record<string, unknown> }>;
     buildingFootprints2D?: Array<{ id: string; ring: Array<[number, number]>; innerRings?: Array<Array<[number, number]>> }>;
     water: Array<{ ring: Array<[number, number]>; innerRings?: Array<Array<[number, number]>> }>;
-    roads: Array<{ points: Array<[number, number]> }>;
+    roads: Array<{ points: Array<[number, number]>; properties?: Record<string, unknown> }>;
+    rails?: Array<{ points: Array<[number, number]> }>;
+    landuse?: Array<{ ring: Array<[number, number]>; innerRings?: Array<Array<[number, number]>>; properties?: Record<string, unknown> }>;
+    pois?: Array<{ point: [number, number]; properties?: Record<string, unknown> }>;
     /** Modeled 3D buildings: [lng, lat, height] vertices and triangle indices. */
     modeledVolumes?: Array<{ id: string; vertices: Array<[number, number, number]>; indices: number[]; heightMeters?: number }>;
 }
@@ -77,6 +95,11 @@ export async function fetchVectorEvidence(opts: {
     const featureOf = (id: string) => id.split('/').slice(0, 4).join('/');  // z/x/y/f<i>: one feature, all its parts
     const water: Vec2[][][] = [];
     const roads: Vec2[][] = [];
+    const roadTypes: string[][] = [];
+    const rails: Vec2[][] = [];
+    const landuse: NonNullable<VectorEvidence['landuse']> = [];
+    const pois: NonNullable<VectorEvidence['pois']> = [];
+    const typesOf = (props: Record<string, unknown> | undefined): string[] => Array.isArray(props?.types) ? (props!.types as unknown[]).filter((t): t is string => typeof t === 'string') : [];
     for (const t of tiles) {
         const planOnly = new Set(t.buildingFootprints2D ?? []);
         for (const p of [...t.buildings, ...(t.buildingFootprints2D ?? [])]) {
@@ -105,9 +128,16 @@ export async function fetchVectorEvidence(opts: {
             byFeature.set(key, b);
         }
         for (const w of t.water) water.push([w.ring, ...(w.innerRings ?? [])].map(r => r.map(toScan)));
-        for (const r of t.roads) roads.push(r.points.map(toScan));
+        for (const r of t.roads) { roads.push(r.points.map(toScan)); roadTypes.push(typesOf(r.properties)); }
+        for (const r of t.rails ?? []) rails.push(r.points.map(toScan));
+        for (const a of t.landuse ?? []) landuse.push({ loops: [a.ring, ...(a.innerRings ?? [])].map(r => r.map(toScan)), types: typesOf(a.properties) });
+        for (const p of t.pois ?? []) {
+            const [x, z] = toScan(p.point);
+            const name = typeof p.properties?.name === 'string' && p.properties.name.trim() ? p.properties.name.trim() : undefined;
+            pois.push({ x, z, types: typesOf(p.properties), ...(name ? { name } : {}) });
+        }
     }
-    return { buildings: [...byFeature.values()], water, roads, tiles: tiles.length, zoom: z };
+    return { buildings: [...byFeature.values()], water, roads, roadTypes, rails, landuse, pois, tiles: tiles.length, zoom: z };
 }
 
 export interface EvidenceGrid { x0: number; z0: number; nx: number; nz: number; cellMeters: number }
@@ -142,6 +172,9 @@ export interface EvidenceRaster {
     buildings: VectorBuilding[];
     /** The road centrelines themselves (scan frame), for the stages that measure the streets. */
     roads: Vec2[][];
+    /** Land-use area index + 1 per cell (0: none); the last area drawn wins where areas overlap. */
+    landuse: Int32Array;
+    landuseAreas: NonNullable<VectorEvidence['landuse']>;
 }
 
 /** Half the width of the carriageway a centreline stands for (m): what the terrain may count as street. */
@@ -149,9 +182,10 @@ export const ROAD_HALF_WIDTH_M = 3;
 
 export function rasterizeEvidence(ev: VectorEvidence, g: EvidenceGrid): EvidenceRaster {
     const N = g.nx * g.nz;
-    const building = new Int32Array(N), water = new Uint8Array(N), road = new Uint8Array(N);
+    const building = new Int32Array(N), water = new Uint8Array(N), road = new Uint8Array(N), landuse = new Int32Array(N);
     ev.buildings.forEach((b, bi) => { for (const part of b.parts) fillLoops(part, g, building, bi + 1); });
     for (const w of ev.water) fillLoops(w, g, water, 1);
+    (ev.landuse ?? []).forEach((a, ai) => fillLoops(a.loops, g, landuse, ai + 1));
     const r = Math.ceil(ROAD_HALF_WIDTH_M / g.cellMeters);
     for (const line of ev.roads) for (let s = 0; s + 1 < line.length; s++) {
         const [ax, az] = line[s], [bx, bz] = line[s + 1];
@@ -164,7 +198,14 @@ export function rasterizeEvidence(ev: VectorEvidence, g: EvidenceGrid): Evidence
             }
         }
     }
-    return { building, water, road, buildings: ev.buildings, roads: ev.roads };
+    return { building, water, road, landuse, buildings: ev.buildings, roads: ev.roads, landuseAreas: ev.landuse ?? [] };
+}
+
+/** 1 per cell inside any of the evidence's land-use areas whose types include `type` exactly (e.g. 'FEATURE_TYPE_PARK'). */
+export function rasterizeAreas(ev: VectorEvidence, g: EvidenceGrid, type: string): Uint8Array {
+    const out = new Uint8Array(g.nx * g.nz);
+    for (const a of ev.landuse ?? []) if (a.types.includes(type)) fillLoops(a.loops, g, out, 1);
+    return out;
 }
 
 /** Point lookups over the evidence, rasterised at `cellMeters` over the square `radiusM` around the origin. */
@@ -174,6 +215,10 @@ export interface EvidenceLookup {
     buildingAt(x: number, z: number): number;
     waterAt(x: number, z: number): boolean;
     roadAt(x: number, z: number): boolean;
+    /** The type codes of the land-use area at (x, z), undefined off every area. Labels: never branch geometry on them. */
+    landuseAt(x: number, z: number): string[] | undefined;
+    /** The named points of interest the tiles carried (scan frame): the pick matches a place's words against their names; building-name.ts names the building from them. Labels only. */
+    pois: NonNullable<VectorEvidence['pois']>;
 }
 
 export function evidenceLookup(ev: VectorEvidence, radiusM: number, cellMeters = 1): EvidenceLookup {
@@ -185,10 +230,11 @@ export function evidenceLookup(ev: VectorEvidence, radiusM: number, cellMeters =
         return i < 0 || k < 0 || i >= grid.nx || k >= grid.nz ? -1 : k * grid.nx + i;
     };
     return {
-        raster, grid,
+        raster, grid, pois: ev.pois ?? [],
         buildingAt: (x, z) => { const c = at(x, z); return c < 0 ? 0 : raster.building[c]; },
         waterAt: (x, z) => { const c = at(x, z); return c >= 0 && raster.water[c] === 1; },
-        roadAt: (x, z) => { const c = at(x, z); return c >= 0 && raster.road[c] === 1; }
+        roadAt: (x, z) => { const c = at(x, z); return c >= 0 && raster.road[c] === 1; },
+        landuseAt: (x, z) => { const c = at(x, z); const i = c < 0 ? 0 : raster.landuse[c]; return i > 0 ? raster.landuseAreas[i - 1]?.types : undefined; }
     };
 }
 

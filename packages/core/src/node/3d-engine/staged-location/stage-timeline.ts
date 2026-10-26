@@ -63,7 +63,8 @@ export function recordStageTimeline(file: string, runId: string, startedAt: numb
             if (entry.status !== 'running' || entry.stage === 'finish') {
                 const layers = entry.layers?.map(l => `${l.layer}${l.textured ? '(textured)' : ''} ${l.triangles} tris`).join(', ');
                 console.log(`[staged-timeline] ${runId} +${(entry.tMs / 1000).toFixed(1)} s ${entry.stage} ${entry.status}`
-                    + `${entry.ms !== undefined ? ` in ${(entry.ms / 1000).toFixed(1)} s` : ''}${entry.cached ? ' (cached)' : ''}${layers ? `: ${layers}` : ''}`);
+                    + `${entry.ms !== undefined ? ` in ${(entry.ms / 1000).toFixed(1)} s` : ''}${entry.cached ? ' (cached)' : ''}${layers ? `: ${layers}` : ''}`
+                    + `${entry.status === 'degraded' && event.degradations?.length ? ` - ${event.degradations.map(d => d.reason).join('; ').slice(0, 600)}` : ''}`);
             }
         } catch {
             // the timeline is a record of the run, never a part of it

@@ -45,7 +45,12 @@ void testSweep3DFrames() {
 
     std::vector<Vec2> profile = { {0.1f, 0.0f}, {0.0f, 0.1f}, {-0.1f, 0.0f}, {0.0f, -0.1f} };
     auto swept = Sweep3D::sweep(helix, profile, PI, 1.0f, 0.5f, true);
-    assert(swept.vertices.size() == helix.size() * profile.size() + 2);
+    // Sweep3D caps through Loft3D::skin, whose end caps now triangulate the boundary loop directly (ear-clipping,
+    // correct on a concave cross-section) instead of fanning from one added center vertex per cap (the old "+2").
+    // Each cap still duplicates its own boundary ring as new vertices (profile.size() each) rather than reusing the
+    // strip's, so the cap can carry its own flat along-axis normal instead of sharing the strip's radial one --
+    // the same separate-vertices-per-face convention extrude_polygon uses for its own caps: +2*profile.size(), not +2.
+    assert(swept.vertices.size() == helix.size() * profile.size() + 2 * profile.size());
     assert(swept.indices.size() / 3 > 0);
 
     std::cout << "  - OK (" << swept.vertices.size() << " verts, no frame flips)\n";
@@ -69,7 +74,27 @@ void testLathe3DWatertight() {
     // triangles per open end (pts=4 profile -> 2 cap triangles x 2 ends = 4 extra).
     assert(half.indices.size() / 3 == full.indices.size() / 3 + 4);
 
-    std::cout << "  - OK (full: " << full.vertices.size() << " verts, 0 seam duplicates; "
+    // `tube`'s first and last points both sit off-axis (radius 0.5, not 0), so a full sweep
+    // (capEnds's default, false) leaves the top and bottom rings open: 24 boundary edges each.
+    assert(countBoundaryEdges(full) == 24 * 2);
+
+    // capEnds=true closes both: watertight, like the partial sweep's own end caps.
+    auto fullCapped = Lathe3D::revolve(tube, 24, TWO_PI, {0.8f, 0.85f, 0.9f, 1.0f}, true);
+    assert(countBoundaryEdges(fullCapped) == 0);
+    assert(fullCapped.vertices.size() == full.vertices.size() + 2); // one axis-center vertex per capped end
+
+    // A profile whose ends already touch the axis needs no cap; capEnds must be a no-op (same topology) —
+    // regardless of whatever boundary-edge count that profile's pole already has on its own.
+    std::vector<Vec2> dome = { {0.0f, 0.0f}, {1.0f, 0.3f}, {0.6f, 1.0f}, {0.0f, 1.2f} };
+    auto domeUncapped = Lathe3D::revolve(dome, 16, TWO_PI);
+    auto domeCapped = Lathe3D::revolve(dome, 16, TWO_PI, {0.8f, 0.85f, 0.9f, 1.0f}, true);
+    assert(domeCapped.vertices.size() == domeUncapped.vertices.size());
+    assert(domeCapped.indices.size() == domeUncapped.indices.size());
+    assert(countBoundaryEdges(domeCapped) == countBoundaryEdges(domeUncapped));
+
+    std::cout << "  - OK (full: " << full.vertices.size() << " verts, 0 seam duplicates, "
+              << countBoundaryEdges(full) << " open boundary edges; "
+              << "full+capEnds: " << countBoundaryEdges(fullCapped) << " open boundary edges; "
               << "half: " << half.indices.size() / 3 << " tris incl. end caps)\n";
 }
 

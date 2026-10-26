@@ -378,7 +378,7 @@ describe('user decisions', () => {
         expect([...labels].sort()).toEqual([...Object.values(PROVENANCE), 'vector-modelled'].sort());
         // AGENTS.md: only geometry fitted to a scan, or measured from calibrated photos, may be labelled measured
         expect(labels).not.toContain('measured');
-        expect(NON_MEASURED_PROVENANCE_LABELS).toEqual(['photo-inferred', 'photo-corrected', 'fitted-unobserved']);
+        expect(NON_MEASURED_PROVENANCE_LABELS).toEqual(['photo-inferred', 'photo-corrected', 'fitted-unobserved', 'generated']);
         for (const e of DEFAULT_PROVENANCE_LEGEND) expect(e.color).toMatch(/^#[0-9a-fA-F]{6}$/);
         expect(validateContract('StagedNodeExtras', fx.treeNodeExtras())).toEqual([]);
     });

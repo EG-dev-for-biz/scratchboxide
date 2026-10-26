@@ -70,6 +70,14 @@ export interface CapabilityOptions {
     hasInputVideo?: boolean;
     hasCameraTrack?: boolean;
     activeArtifact?: any;
+    /** The self-hosted Trellis services' gateway (default SCRATCHBOX_TRELLIS_SERVICE_URL); unset while they are not deployed. */
+    trellisServiceUrl?: string;
+}
+
+/** The self-hosted Trellis gateway (docs/research/2026-10-24-trellis-self-hosted-services-plan.md), when this instance has one. */
+export function resolveTrellisServiceUrl(opts: Pick<CapabilityOptions, 'trellisServiceUrl'> = {}): string | undefined {
+    const url = (opts.trellisServiceUrl ?? process.env.SCRATCHBOX_TRELLIS_SERVICE_URL)?.trim();
+    return url ? url : undefined;
 }
 
 export class TaskCapabilityResolver {
@@ -376,10 +384,15 @@ export class TaskCapabilityResolver {
                     targetService: 'LocalSf3DService',
                     details: 'Invoke generate_local_sf3d_organic_prop with imagePath, noPbr=true, and targetScaleMeters to synthesize a local organic 3D prop and mount it into the 3d-scene stage.'
                 };
+            } else if (isNeuralImageTo3D && resolveTrellisServiceUrl(opts)) {
+                canSolveNatively = true;
+                primaryNativeEngine = 'trellis-services';
+                nativeCapabilities.push('Self-hosted Trellis services (Cloud Run GPU / Vertex): trellis1-multi, trellis2-generate, trellis2-retexture, trellis2-lora-train');
+                rationale = 'Image-to-3D runs on the self-hosted Trellis services: TRELLIS v1 multi-image and TRELLIS.2 generation, TRELLIS.2 retexturing of an existing mesh, and TRELLIS.2 LoRA training, chained through one job API. The model is generated content and is labelled so. 3D scenes, environments, and architecture are still generated natively by the C++20 / Python engines.';
             } else if (isNeuralImageTo3D) {
                 canSolveNatively = false;
                 primaryNativeEngine = 'none';
-                rationale = 'Not natively supported: single-image to 3D mesh reconstruction needs a neural diffusion model (e.g. Trellis / TripoSR). 3D scenes, environments, and architecture are generated natively by the C++20 / Python engines.';
+                rationale = 'Not natively supported: the self-hosted Trellis services are not configured on this instance (SCRATCHBOX_TRELLIS_SERVICE_URL). Trellis multi still runs on Fal.ai inside pipeline I and the turnaround path. 3D scenes, environments, and architecture are generated natively by the C++20 / Python engines.';
             } else if (/universal\s*3d\s*structure|canonical\s*3d\s*(?:anchor|foundation)|single\s*source\s*of\s*truth\s*3d|multi-?format\s*(?:3d|projection)|collision\s*(?:envelope|hull)|convex\s*bumper\s*hull|universal\s*animation|continuous\s*(?:time\s*)?animation|keyframe\s*diamonds?|animation[\s\w-]{0,30}(?:timeline|nle)|(?:export|project)\s*(?:to\s*)?(?:colmap|nerfstudio|3dgs)/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
@@ -411,6 +424,19 @@ export class TaskCapabilityResolver {
                     targetTool: 'adaptive_matchmove_calibrate_sequence',
                     targetService: 'AdaptiveMatchmoveCalibrationService',
                     details: 'Calibrate sequence milestones, optimize Brown-Conrady lens breathing, and synthesize continuous C2 Hermite camera trajectory.'
+                };
+            } else if (/\bboolean|\b(union|subtract|intersect)\b[\s\w-]{0,30}(mesh|solid|glb)|\b(drill|bore|punch)\b|\bhole\b[\s\w-]{0,20}\b(in|through)\b|\b(extrude|inset|bevel|chamfer|fillet|hollow|solidify|fracture|shatter|decimate|subdivide)\b|\b(mirror|array)\b[\s\w-]{0,30}(mesh|model|copies)|\bshell\b[\s\w-]{0,20}(mesh|thick)|\b(sweep|knurl|groove)\b|\b(slice|cut)\b[\s\w-]{0,30}\b(plane|in half|off)\b/i.test(lower)) {
+                canSolveNatively = true;
+                primaryNativeEngine = 'cpp-3d-engine';
+                nativeCapabilities.push('Native C++20 mesh edits (scratchbox_mesh_edit.hpp): BSP booleans, capped plane cuts, region inset/extrude, edge bevels, shell, mirror/array, sweep, clean/decimate, fracture, subdivide/smooth/relief; mesh_inspect measures first');
+                nativeCapabilities.push('In-App Agent Tool: mesh_edit (explicit edits on a given GLB; reports openEdges)');
+                rationale = 'The native engine models a given mesh directly: union/subtract/intersect with another closed GLB or a measured box, cylinder or sphere, plane cuts with a capped section, and inset/extrude of faces selected by direction and region.';
+                suggestedNativeAction = {
+                    primitiveType: '3d-scene',
+                    serviceOrTool: 'mesh_edit or NativeMeshEditService',
+                    targetTool: 'mesh_edit',
+                    targetService: 'NativeMeshEditService',
+                    details: 'Turn the request into explicit edits in metres in the mesh\'s own space (selection regions as fractions of its bounds) and call mesh_edit on the given GLB; check openEdges in the result.'
                 };
             } else if (/reshape|deform|taper|twist|bend|bulge|squash|shear|sculpt[\s\w-]{0,30}mesh|mesh[\s\w-]{0,30}shaping|lattice[\s\w-]{0,30}deform/i.test(lower)) {
                 canSolveNatively = true;
@@ -676,6 +702,11 @@ export class TaskCapabilityResolver {
                     targetService: 'PanoramaDepthService',
                     details: 'Call single_image_to_3dgs for a photo (pass medianDepthMeters for metres) or panorama_to_3dgs for a 360 panorama (eyeHeight required).'
                 };
+            } else if (isNeuralImageTo3D && !isNeuralVideoRestyle && !isLatentDiffusionInpaint && resolveTrellisServiceUrl(opts)) {
+                canSolveNatively = true;
+                primaryNativeEngine = 'trellis-services';
+                nativeCapabilities.push('Self-hosted Trellis services (Cloud Run GPU / Vertex): trellis1-multi, trellis2-generate, trellis2-retexture, trellis2-lora-train');
+                rationale = 'Image-to-3D runs on the self-hosted Trellis services: TRELLIS v1 multi-image and TRELLIS.2 generation, TRELLIS.2 retexturing of an existing mesh, and TRELLIS.2 LoRA training, chained through one job API. The model is generated content and is labelled so.';
             } else if (isNeuralImageTo3D || isNeuralVideoRestyle || isLatentDiffusionInpaint) {
                 canSolveNatively = false;
                 primaryNativeEngine = 'none';

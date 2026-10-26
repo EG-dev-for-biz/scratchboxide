@@ -89,6 +89,8 @@ import {
     universal3DStructureHandlers,
     PYTHON_3D_TOOL_DECLARATIONS,
     python3DHandlers,
+    MASSING_TOOL_DECLARATIONS,
+    massingHandlers,
     LENS_TOOL_DECLARATIONS,
     lensHandlers,
     BROWSER_TOOL_DECLARATIONS,
@@ -99,6 +101,10 @@ import {
     virtualGeometryHandlers,
     LOCATION_EVIDENCE_TOOL_DECLARATIONS,
     locationEvidenceHandlers,
+    LOCATION_REFERENCE_TOOL_DECLARATIONS,
+    locationReferenceHandlers,
+    SURFACE_MATERIALS_TOOL_DECLARATIONS,
+    surfaceMaterialsHandlers,
     IMAGE_TO_PBR_TOOL_DECLARATIONS,
     imageToPbrHandlers,
     PBR_MATERIAL_TOOL_DECLARATIONS,
@@ -111,7 +117,11 @@ import {
     OBJECT_REFERENCE_TOOL_DECLARATIONS,
     objectReferenceHandlers,
     SB_SCRIPT_GUIDE_TOOL_DECLARATIONS,
-    sbScriptGuideHandlers
+    sbScriptGuideHandlers,
+    WEATHERING_TOOL_DECLARATIONS,
+    WEATHERING_TOOL_HANDLERS,
+    HYDRAULIC_EROSION_TOOL_DECLARATIONS,
+    HYDRAULIC_EROSION_TOOL_HANDLERS
 } from './tools';
 
 interface ToolRegistration {
@@ -647,6 +657,8 @@ export function createDefaultToolRegistry(): ToolRegistry {
     registerTools(registry, TILE_REFINE_TOOL_DECLARATIONS, tileRefineHandlers, 'workspace');
     registerTools(registry, VIRTUAL_GEOMETRY_TOOL_DECLARATIONS, virtualGeometryHandlers, 'workspace');
     registerTools(registry, LOCATION_EVIDENCE_TOOL_DECLARATIONS, locationEvidenceHandlers, 'workspace');
+    registerTools(registry, LOCATION_REFERENCE_TOOL_DECLARATIONS, locationReferenceHandlers, 'workspace');
+    registerTools(registry, SURFACE_MATERIALS_TOOL_DECLARATIONS, surfaceMaterialsHandlers, 'workspace');
     registerTools(registry, ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS, adaptiveMatchmoveHandlers, 'workspace');
     registerTools(registry, VFX_VIDEO_TOOL_DECLARATIONS, vfxVideoHandlers, 'workspace', offeredUnlessDeprecated);
     registerTools(registry, NANO_BANANA_TOOL_DECLARATIONS, nanoBananaHandlers, 'workspace');
@@ -669,6 +681,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
     registerTools(registry, ANALYTICAL_GROOM_TOOL_DECLARATIONS, analyticalGroomHandlers, 'workspace');
     registerTools(registry, UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS, universal3DStructureHandlers, 'workspace');
     registerTools(registry, PYTHON_3D_TOOL_DECLARATIONS, python3DHandlers, 'workspace');
+    registerTools(registry, MASSING_TOOL_DECLARATIONS, massingHandlers, 'workspace');
     registerTools(registry, OBJECT_REFERENCE_TOOL_DECLARATIONS, objectReferenceHandlers, 'workspace');
     registerTools(registry, SB_SCRIPT_GUIDE_TOOL_DECLARATIONS, sbScriptGuideHandlers, 'workspace');
     // Declared in DEFAULT_TOOL_DECLARATIONS; without these the agent is offered tools it cannot dispatch.
@@ -678,6 +691,8 @@ export function createDefaultToolRegistry(): ToolRegistry {
     registerTools(registry, TURNAROUND_TOOL_DECLARATIONS, turnaroundHandlers, 'workspace');
     registerTools(registry, LENS_TOOL_DECLARATIONS, lensHandlers, 'lens');
     registerTools(registry, BROWSER_TOOL_DECLARATIONS, browserHandlers, 'browser');
+    registerTools(registry, WEATHERING_TOOL_DECLARATIONS, WEATHERING_TOOL_HANDLERS, 'workspace');
+    registerTools(registry, HYDRAULIC_EROSION_TOOL_DECLARATIONS, HYDRAULIC_EROSION_TOOL_HANDLERS, 'workspace');
     // Not offered as itself: buildToolDeclarations builds its declaration (the catalog) per request.
     registry.register(LOAD_TOOLS_NAME, loadToolsDeclaration([]), createLoadToolsHandler(name => registry.has(name) && name !== LOAD_TOOLS_NAME), 'workspace', { offeredByDefault: false });
     return registry;

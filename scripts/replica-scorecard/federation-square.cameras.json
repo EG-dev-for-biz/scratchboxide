@@ -1,0 +1,152 @@
+{
+ "schema": "scratchbox.replica-cameras/1",
+ "place": "Federation Square, Flinders St and Princes Bridge, Melbourne",
+ "frame": {
+  "description": "the staged-location tile frame: x east, y up, z south (metres), origin at the geo anchor on the WGS-84 ellipsoid height below",
+  "geoAnchor": {
+   "lat": -37.817979,
+   "lng": 144.969058
+  },
+  "originEllipsoidalHeightM": 7.388894939070644
+ },
+ "width": 1024,
+ "height": 640,
+ "views": [
+  {
+   "id": "street_flinders",
+   "kind": "street",
+   "label": "Flinders St, looking WSW along it to Flinders Street Station",
+   "eye": [
+    -20,
+    8.82,
+    -106
+   ],
+   "target": [
+    -120,
+    9.41,
+    -74
+   ],
+   "hfovDeg": 75,
+   "note": "street level, 1.6 m eye, carriageway east of Swanston St"
+  },
+  {
+   "id": "street_swanston",
+   "kind": "street",
+   "label": "Swanston St, looking NNW past the station to St Pauls",
+   "eye": [
+    -99,
+    9.23,
+    32
+   ],
+   "target": [
+    -140,
+    11.55,
+    -100
+   ],
+   "hfovDeg": 75,
+   "note": "street level, 1.6 m eye, between Flinders Street Station and Federation Square"
+  },
+  {
+   "id": "street_plaza",
+   "kind": "street",
+   "label": "Federation Square plaza, looking NE at the shard-clad buildings",
+   "eye": [
+    -45,
+    11.53,
+    15
+   ],
+   "target": [
+    15,
+    19.15,
+    -25
+   ],
+   "hfovDeg": 75,
+   "note": "street level, 1.6 m eye, on the plaza"
+  },
+  {
+   "id": "street_riverbank",
+   "kind": "street",
+   "label": "River bank under Princes Bridge, looking W at its arches",
+   "eye": [
+    -20,
+    1,
+    106
+   ],
+   "target": [
+    -95,
+    4,
+    122
+   ],
+   "hfovDeg": 75,
+   "note": "wharf level (about 4 m over the water, 1 m in the tile frame), the north bank east of the bridge"
+  },
+  {
+   "id": "aerial_river_se",
+   "kind": "aerial",
+   "label": "Oblique aerial from over the river, looking NW at the bridge, wharf and plaza",
+   "eye": [
+    10,
+    57.04,
+    125
+   ],
+   "target": [
+    -40,
+    6.57,
+    70
+   ],
+   "hfovDeg": 65,
+   "note": "about 60 m over the ground, 35-45 degrees down"
+  },
+  {
+   "id": "aerial_cbd_nw",
+   "kind": "aerial",
+   "label": "Oblique aerial from over the CBD, looking SE at St Pauls and the Flinders/Swanston corner",
+   "eye": [
+    -185,
+    63.76,
+    -135
+   ],
+   "target": [
+    -140,
+    5.19,
+    -90
+   ],
+   "hfovDeg": 65,
+   "note": "about 60 m over the ground, 43 degrees down"
+  },
+  {
+   "id": "facade_heritage",
+   "kind": "facade",
+   "label": "Heritage facade: Flinders Street Station main entrance",
+   "eye": [
+    -160,
+    6.45,
+    -45
+   ],
+   "target": [
+    -180,
+    14.44,
+    -25
+   ],
+   "hfovDeg": 70,
+   "note": "close-up, about 15-25 m from the facade, 1.6 m eye"
+  },
+  {
+   "id": "facade_modern",
+   "kind": "facade",
+   "label": "Modern facade: Federation Square shard cladding on Flinders St",
+   "eye": [
+    -45,
+    8.41,
+    -100
+   ],
+   "target": [
+    -40,
+    14.97,
+    -82
+   ],
+   "hfovDeg": 70,
+   "note": "close-up, about 15-20 m from the facade, 1.6 m eye"
+  }
+ ]
+}

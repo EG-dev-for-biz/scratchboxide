@@ -311,7 +311,7 @@ describe('districts are textured by default', () => {
         expect(validateContract('StagedLocationResult', result)).toEqual([]);
         const tex = result.stages.find(x => x.stage === 'textures')!;
         expect(tex.status).toBe('committed');
-        expect(tex.source).toMatch(/with the tile photo tile_refine carries onto its remesh \(as captured, not de-lit\)/);
+        expect(tex.source).toMatch(/with the tile photo tile_refine carries onto its remesh, de-lit/);
         // clay first: the remesh commits without a twin, the twin follows in a later event
         const remeshCommit = s.events.find(x => x.e.stage === 'remesh' && x.e.status === 'committed')!;
         expect(remeshCommit.e.layers!.every(l => !l.textured)).toBe(true);
@@ -347,11 +347,11 @@ describe('districts are textured by default', () => {
         expect(textured.twins.map(l => l.layer)).toEqual(['l2']);
     });
 
-    it('the tile_refine twin labels the triangles without a photo as clay, by area', () => {
+    it('the tile_refine twin labels the triangles without a photo as clay, by area', async () => {
         const dir = path.join(TMP, 'twin');
         fs.mkdirSync(dir, { recursive: true });
         const file = writeTris(path.join(dir, 'tex.glb'), building(0, 10, 0, 10, 10));
-        const bare = tileRefineTwin(fs.readFileSync(file), 'l2');
+        const bare = await tileRefineTwin(fs.readFileSync(file), 'l2');
         expect(bare.rungShares[5]).toBeCloseTo(1, 6);
         expect(bare.provenance).toEqual([expect.objectContaining({ source: 'clay', coverage: 1 })]);
     });

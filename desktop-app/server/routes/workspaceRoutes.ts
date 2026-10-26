@@ -23,6 +23,7 @@ import {
 import { createEmptyProjectGraph } from '../../../packages/core/src/common';
 import { ContainerSandboxService } from '../../../packages/core/src/node/container-sandbox-service';
 import { DEFAULT_GEMINI_MODEL } from '../../../packages/core/src/node/gemini/gemini-client';
+import { defaultCloudBucket } from '../../../packages/core/src/node/cloud-store/cloud-bucket';
 import {
     WorkspaceConfigService,
     ChatSessionStore,
@@ -57,8 +58,8 @@ export function createWorkspaceRouter(services: WorkspaceRouterServices, ctx: Ro
         }
     });
 
-    // Chat sessions on disk (<workspace>/.scratchbox/sessions) and the recent-project list.
-    const sessionStore = new ChatSessionStore();
+    // Chat sessions on disk (<workspace>/.scratchbox/sessions, mirrored to the cloud bucket when one is configured) and the recent-project list.
+    const sessionStore = new ChatSessionStore(os.homedir(), defaultCloudBucket());
 
     router.get('/sessions', async (req: Request, res: Response) => {
         try {
@@ -340,6 +341,40 @@ export function createWorkspaceRouter(services: WorkspaceRouterServices, ctx: Ro
                 .json({ success: false, command, error: err?.message || String(err), code: err?.code });
         } finally {
             await commandSandbox.destroyEnvironment(envId).catch(() => false);
+        }
+    });
+
+    // Files of given types for a picker (a node's .glb input): breadth-first, shallow folders first, bounded in depth and
+    // count, skipping dependency, build, cache and hidden folders, so it answers in a moment on a large workspace
+    router.get('/find-files', async (req: Request, res: Response) => {
+        try {
+            const workspaceRoot = resolveWorkspaceRoot(req);
+            const root = workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : allowedWorkspaceRoots[0];
+            const exts = String(req.query.ext || '').split(',').map(e => e.trim().toLowerCase()).filter(e => /^\.[a-z0-9]{1,6}$/.test(e));
+            if (exts.length === 0) { res.status(400).json({ success: false, error: 'ext (comma-separated, e.g. .glb,.gltf) is required' }); return; }
+            const limit = Math.min(Math.max(parseInt(req.query.limit as string, 10) || 300, 1), 1000);
+            const maxDepth = Math.min(Math.max(parseInt(req.query.maxDepth as string, 10) || 6, 1), 10);
+            const SKIP = new Set(['node_modules', 'dist', 'build', 'dist-electron', 'coverage', 'test-results', '__pycache__', 'venv', '.venv']);
+            const files: string[] = [];
+            let frontier = [''];
+            for (let depth = 0; depth <= maxDepth && frontier.length && files.length < limit; depth++) {
+                const next: string[] = [];
+                for (const rel of frontier) {
+                    let entries: fs.Dirent[];
+                    try { entries = await fs.promises.readdir(path.join(root, rel), { withFileTypes: true }); } catch { continue; }
+                    for (const e of entries) {
+                        if (e.name.startsWith('.') || SKIP.has(e.name)) continue;
+                        const p = rel ? `${rel}/${e.name}` : e.name;
+                        if (e.isDirectory()) next.push(p);
+                        else if (exts.some(x => e.name.toLowerCase().endsWith(x)) && files.length < limit) files.push(p);
+                    }
+                    if (files.length >= limit) break;
+                }
+                frontier = next;
+            }
+            res.json({ success: true, root, files, truncated: files.length >= limit });
+        } catch (err: any) {
+            sendError(res, err);
         }
     });
 

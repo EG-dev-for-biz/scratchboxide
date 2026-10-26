@@ -53,6 +53,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -62,6 +63,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -164,6 +166,18 @@ struct Cluster {
 };
 
 namespace detail {
+/** f(i) for i in [0, n) over the machine's cores; each i writes only its own slot, everything shared is read-only. */
+template <class F>
+inline void parallelFor(size_t n, F&& f) {
+    const unsigned workers = static_cast<unsigned>(std::min<size_t>(n, std::max(1u, std::min(std::thread::hardware_concurrency(), 32u))));
+    if (workers <= 1) { for (size_t i = 0; i < n; ++i) f(i); return; }
+    std::atomic<size_t> next{0};
+    std::vector<std::thread> pool;
+    pool.reserve(workers);
+    for (unsigned w = 0; w < workers; ++w) pool.emplace_back([&] { for (size_t i; (i = next.fetch_add(1)) < n;) f(i); });
+    for (auto& t : pool) t.join();
+}
+
 
 inline double triArea(const D3& a, const D3& b, const D3& c) { return 0.5 * (b - a).cross(c - a).len(); }
 
@@ -276,7 +290,7 @@ public:
         classifyCopies();
         cluster();
         buildIndexes();
-        for (size_t k = 0; k < clusters_.size(); ++k) measure(k);
+        detail::parallelFor(clusters_.size(), [&](size_t k) { measure(k); });
     }
 
     const std::vector<Cluster>& clusters() const { return clusters_; }
@@ -353,18 +367,18 @@ private:
         const size_t M = in_.cand.size() / 3;
         copy_.assign(M, 0);
         if (solidMesh_.indices.empty()) return;
-        for (size_t t = 0; t < M; ++t) {
+        detail::parallelFor(M, [&](size_t t) {
             D3 a = cv(t, 0), b = cv(t, 1), d = cv(t, 2);
             D3 cr = (b - a).cross(d - a);
-            if (cr.len() <= 0) continue;
+            if (cr.len() <= 0) return;
             D3 q = (a + b + d) * (1.0 / 3.0);
             float d2;
             math::Vec3 cp = solidBvh_.closestPoint(math::Vec3(static_cast<float>(q.x), static_cast<float>(q.y), static_cast<float>(q.z)), d2);
             double dist = std::sqrt(static_cast<double>(d2));
-            if (dist > p_.copyReachM) continue;
+            if (dist > p_.copyReachM) return;
             D3 g{q.x - cp.x, q.y - cp.y, q.z - cp.z};
             copy_[t] = dist < 0.05 || std::abs(cr.unit().dot(g.unit())) >= p_.copyParallel;
-        }
+        });
     }
 
     D3 cv(size_t t, int k) const { return in_.cand[3 * t + static_cast<size_t>(k)]; }

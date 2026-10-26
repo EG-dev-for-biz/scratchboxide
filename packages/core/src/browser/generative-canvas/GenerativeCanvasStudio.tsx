@@ -59,7 +59,7 @@ import { BentoStageLayout } from './BentoStageLayout';
 import { RelatedArtifactsRail } from './RelatedArtifactsRail';
 import { ProjectArtifactController } from './project-artifact-controller';
 import { UnifiedProjectCoordinator } from './unified-project-coordinator';
-import { stableProjectArtifactId } from '../../common/project-artifact-graph-protocol';
+import { isTimestampArtifactId, stableProjectArtifactId } from '../../common/project-artifact-graph-protocol';
 import { SettingsModal } from './SettingsModal';
 import { ShowcaseDemoItem } from './demos/preloadedDemos';
 import { DEFAULT_RECENT_PROJECTS, ProjectItem } from './ProjectsModal';
@@ -157,6 +157,7 @@ export {
 };
 import { useChatStore, selectActiveSession } from './state/chatStore';
 import { StudioProvider, useStableStudioActions } from './state/StudioContext';
+import { planCompanionGraphs } from './scene-node-graph';
 import { Composer, ComposerProps } from './chat/Composer';
 import { MessageList } from './chat/MessageList';
 import { WorkspaceSidebar, WorkspaceSidebarProps } from './studio/WorkspaceSidebar';
@@ -558,7 +559,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const { handleUpdateArtifact } = useArtifactSync({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, isGenerating, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions });
 
 
-    const { handleMorphArtifact, handleOpenInAppBrowser, handlePreviewCodeInCanvas } = useCanvasOpeners({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, layoutMode, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setLayoutMode, setSessions, showToast, stageLayoutMode });
+    const { handleMorphArtifact, handleOpenInAppBrowser, handlePreviewCodeInCanvas, applyStreamedArtifact } = useCanvasOpeners({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, layoutMode, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setLayoutMode, setSessions, showToast, stageLayoutMode });
     const { syncSandboxSaveToMarkdown, triggerGoogleDocsExport, triggerGoogleDriveSave, triggerMarkdownExport } = useArtifactExports({ activeArtifact, artifactHistory, handleOpenInAppBrowser, handleUpdateArtifact, openModal, showToast });
 
     // Cross-Primitive Event Listeners (Media cards -> 3D scene / Sandbox / Timeline / Composer)
@@ -1333,8 +1334,43 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         showToast
     };
 
+    const scenesAtLoad = React.useRef(new Map<string, string[]>());
+    // every new 3D scene gets its node graph as a tab beside it (once per scene; scenes from before the session loaded get none)
+    React.useEffect(() => {
+        if (!currentSessionId) return;
+        const session = sessions.find(s => s.id === currentSessionId);
+        if (!session) return;
+        // scenes already there when this page first shows the session are not new (an older session's scenes get no
+        // graph); kept in memory, since a session written back from an older snapshot can lose its saved record
+        if (!scenesAtLoad.current.has(currentSessionId)) {
+            scenesAtLoad.current.set(currentSessionId, artifactHistory.filter(a => a.type === '3d-scene' && !isTimestampArtifactId(a.id)).map(a => a.id));
+        }
+        const plan = planCompanionGraphs(artifactHistory, [...new Set([...(session.nodeGraphsFor || []), ...scenesAtLoad.current.get(currentSessionId)!])]);
+        const known = session.nodeGraphsFor || [];
+        if (plan.graphs.length === 0 && plan.done.every(id => known.includes(id))) return;
+        if (plan.graphs.length) setArtifactHistory(prev => [...prev, ...plan.graphs.filter(g => !prev.some(a => a.id === g.id))]);
+        setSessions(prev => prev.map(s => s.id !== currentSessionId ? s : {
+            ...s,
+            nodeGraphsFor: plan.done,
+            artifactHistory: [...(s.artifactHistory || []), ...plan.graphs.filter(g => !(s.artifactHistory || []).some(a => a.id === g.id))]
+        }));
+    }, [artifactHistory, currentSessionId]);
+
+    // a canvas tool node's run, as a reply in the chat: its card, and a line the model reads on the next turn
+    const recordToolNodeRun = React.useCallback((exec: McpExecutionState, note: string) => {
+        setMessages(prev => [...prev, {
+            id: `msg-toolnode-${exec.id}`,
+            sender: 'assistant',
+            text: note,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            mcpExecutions: [exec]
+        }]);
+    }, [setMessages]);
+
     const studioActions = useStableStudioActions({
         showToast,
+        applyStreamedArtifact,
+        recordToolNodeRun,
         sendMessage: handleSendMessage,
         handleOpenInAppBrowser,
         handlePreviewCodeInCanvas,

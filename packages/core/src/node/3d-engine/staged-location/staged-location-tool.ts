@@ -30,6 +30,8 @@ import type { ToolContext, ToolHandlerOutcome, ToolResultPayload } from '../../g
 import { MissingInputError } from '../../../common/errors/pipeline-errors';
 import { STAGED_VISION_MODEL_DEFAULT } from '../../../common/spatial/staged-location-contracts';
 import { GeminiClient } from '../../gemini/gemini-client';
+import { GoogleMediaCredentialsService } from '../../google-media-credentials-service';
+import type { GroundedReferenceClient } from '../../spatial/search-grounded-reference';
 import { createStreetViewGroundingImageService } from '../../spatial/StreetViewGroundingImageService';
 import { Google3DTileBlockoutPipelineService, getGoogle3DTilesFullTexture } from '../../spatial/Google3DTileBlockoutPipelineService';
 import { resolveMapsApiKey } from '../../../browser/generative-canvas/services/google-maps-service';
@@ -40,6 +42,9 @@ import { fetchVectorEvidence } from './vector-footprints';
 import { fetchElevations } from './vector-first-paint';
 import { getTileVegetationService } from '../tile-vegetation-service';
 import { loadScanFit } from '../scan-fit-loader';
+import { createDefaultStationImageGenerator } from '../../spatial/BeautifyStationService';
+import { createFalTrellisClient } from './pipeline-i/fal-trellis';
+import { createFalMeshyClient } from './pipeline-i/fal-meshy';
 import { StageCache, stagedWorkspaceRoot } from './stage-cache';
 import { genAiEnhanceClient } from './texture-enhance';
 import { lightingCorrectionEnabled, lightingModels } from './texture-lighting';
@@ -67,9 +72,9 @@ export const STAGED_CLAY_TOOL_DESCRIPTION =
 
 export const STAGED_ISOLATE_DESCRIPTION =
     'Return only the structure at the anchor (its whole connected footprint and everything above it, never cut, with a small ground apron) instead of the ' +
-    'whole district, and rebuild it: a fitted architectural model of the scan with continuous measured residuals, then facade detail read from tile photos and ' +
-    'Street View images (up to 4 per building, Google captures only), labelled photo-inferred. The extraction is sized to the structure, so radiusMeters is ' +
-    'ignored. Use it when the user asks for one building or object rather than an area.';
+    'whole district, and rebuild it: procedurally by default (pipeline G, see procedural), or with procedural false a model of the scan on the vector ' +
+    'massing with facade detail read from tile photos and Street View images (up to 4 per building, Google captures only), labelled photo-inferred. The ' +
+    'extraction is sized to the structure, so radiusMeters is ignored. Use it when the user asks for one building or object rather than an area.';
 
 export const STAGED_RADIUS_DESCRIPTION =
     'Extraction radius in metres around the anchor for a district (default 250). The nearest 524 leaf tiles are kept; when the radius holds more, the result ' +
@@ -168,6 +173,10 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
             ...(treeTriangleBudget !== undefined ? { treeTriangleBudget } : {}),
             stageIntoActiveScene: args.stageIntoActiveScene === true,
             ...(typeof args.enhance === 'boolean' ? { enhance: args.enhance } : {}),
+            // one building is rebuilt procedurally by pipeline G unless the caller asks for its scan detailed (user decision 2026-10-22)
+            ...(args.isolate === true && args.procedural !== false ? { procedural: true } : {}),
+            // which procedural pipeline ('g', 'h', 'i' or 'j'; pipeline-h/pipeline-h.ts stagedProcedural reads it, else the environment)
+            ...(args.pipeline === 'g' || args.pipeline === 'h' || args.pipeline === 'i' || args.pipeline === 'j' ? { pipeline: args.pipeline } : {}),
             ...(place ? { place } : {})
         },
         ...(retry ? { retry } : {}),
@@ -206,6 +215,10 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
     const elevationService = mapsKey ? new GoogleElevationService({ apiKey: mapsKey }) : undefined;
     return {
         cache,
+        // pipeline I/J (J the 3D Building default): the image model draws the character sheet, then Meshy (J, default, one
+        // seed) or Trellis (I, best of six seeds) on Fal.ai makes the model; made on first use, so a build without FAL_KEY
+        // fails pipeline I/J with that reason
+        pipelineI: { generator: () => createDefaultStationImageGenerator({ workspaceRoot: cache.dir }), model: (name?: string) => name === 'meshy' ? createFalMeshyClient() : createFalTrellisClient() },
         ...(elevationService ? {
             elevation: {
                 sample: async (points: Array<{ lat: number; lng: number }>) => {
@@ -269,11 +282,21 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
             metadataCachePath: path.join(cache.dir, 'streetview', 'metadata.json')
         },
         vision,
-        // the texture pass's optional enhancement rung: the image model edits the tile transfer, kept only past its edge
-        // gate (SCRATCHBOX_TEXTURE_ENHANCE=0 turns the rung off); and the model lighting correction of the photos, detail-locked
-        // (texture-lighting.ts; SCRATCHBOX_TEXTURE_LIGHTING=1 turns it on, SCRATCHBOX_TEXTURE_LIGHTING_MODELS picks the model)
+        // search-grounded reference images (the bridges' detail the scan cannot resolve): the Vertex client with the image models
+        groundedReferences: async () => (await new GoogleMediaCredentialsService().createVertexClient()) as unknown as GroundedReferenceClient,
+        vehicleRemoval: true,
+        // the texture pass's model texture rung: the image model redraws the tile transfer, kept only past its gate
+        // (SCRATCHBOX_TEXTURE_ENHANCE=0 turns the rung off); default mode 'recreate' (user decision, 2026-10-21) removes
+        // the scan's own baked shadow/highlight and recovers the material's true colour, gated on structure and
+        // hue/chroma, not on lighting (texture-enhance.ts RECREATE_GATE; SCRATCHBOX_TEXTURE_ENHANCE_MODE=sharpen reverts
+        // to the earlier, lighting-locked sharpen-only mode). The detail-locked model lighting correction of the photos
+        // (texture-lighting.ts; on by default, SCRATCHBOX_TEXTURE_LIGHTING=0 turns it off) runs alongside it, wherever a
+        // registered Street View view agrees - a second, independent de-light pass, not a duplicate of the one above.
         textures: 'client' in vision ? {
-            ...(process.env.SCRATCHBOX_TEXTURE_ENHANCE !== '0' ? { enhance: genAiEnhanceClient(vision.client) } : {}),
+            ...(process.env.SCRATCHBOX_TEXTURE_ENHANCE !== '0' ? {
+                enhance: genAiEnhanceClient(vision.client),
+                enhanceMode: process.env.SCRATCHBOX_TEXTURE_ENHANCE_MODE === 'sharpen' ? 'sharpen' as const : 'recreate' as const
+            } : {}),
             ...(lightingCorrectionEnabled() ? { lighting: genAiEnhanceClient(vision.client), lightingModels: lightingModels() } : {})
         } : {}
     };

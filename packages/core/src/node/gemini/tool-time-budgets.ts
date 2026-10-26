@@ -31,10 +31,14 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     // Flatiron run took ~11 min. Reports progress per station, so a stalled model is caught by idleMs.
     survey_beautify_to_texture: { maxMs: 90 * MIN, idleMs: 10 * MIN },
     survey_beautify_to_splats: { maxMs: 90 * MIN, idleMs: 10 * MIN },
+    // one AI Beautify image call per texture station (28), then the harvest and the library match
+    survey_harvest_swatches: { maxMs: 90 * MIN, idleMs: 10 * MIN },
     location_generate_3dgs: { maxMs: 60 * MIN, idleMs: 10 * MIN },
     // The headless-Chrome tile runner allows itself up to ~38 min for a 72-frame orbit and has its own startup
     // and inactivity watchdogs; the blockout runner adds ffmpeg encodes (10 min cap each).
-    google_3d_tiles_get_clay: { maxMs: 40 * MIN },
+    // A district (no isolate) rebuilds every building the scan confirms: its massing alone may take 125 min
+    // (orchestrator.ts DISTRICT_RUN_BUDGET_MS, 140 min, plus the run's 2 min margin).
+    google_3d_tiles_get_clay: args => ({ maxMs: args.isolate === true ? 40 * MIN : 142 * MIN }),
     google_3d_tiles_get_full_texture: { maxMs: 40 * MIN },
     google_3d_tiles_clay_blockout_runner: { maxMs: 60 * MIN },
     // With a location it ingests 3D Tiles (above) before running the script.

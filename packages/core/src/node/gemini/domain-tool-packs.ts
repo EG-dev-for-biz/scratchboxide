@@ -12,6 +12,7 @@ import type { TaskDomain } from '../agent/task-capability-resolver';
 import { CANVAS_TOOL_DECLARATIONS } from './tools/canvas-tools';
 import { WORKSPACE_TOOL_DECLARATIONS } from './tools/workspace-tools';
 import { PYTHON_3D_TOOL_DECLARATIONS } from './tools/python-3d-tools';
+import { MASSING_TOOL_DECLARATIONS } from './tools/massing-tools';
 import { OBJECT_REFERENCE_TOOL_DECLARATIONS } from './tools/object-reference-tools';
 import { SB_SCRIPT_GUIDE_TOOL_DECLARATIONS } from './tools/sb-script-guide-tools';
 import {
@@ -31,6 +32,8 @@ import {
 import { UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS } from './tools/universal-3d-structure-tools';
 import { TILE_REFINE_TOOL_DECLARATIONS } from './tools/tile-refine-tools';
 import { LOCATION_EVIDENCE_TOOL_DECLARATIONS } from './tools/location-evidence-tools';
+import { LOCATION_REFERENCE_TOOL_DECLARATIONS } from './tools/location-reference-tools';
+import { SURFACE_MATERIALS_TOOL_DECLARATIONS } from './tools/surface-material-tools';
 import { MESH_SHAPING_TOOL_DECLARATIONS } from './tools/mesh-shaping-tools';
 import { SB_RIG_TOOL_DECLARATIONS } from './tools/sb-rig-tools';
 import { ALGORITHMIC_UV_TOOL_DECLARATIONS } from './tools/algorithmic-uv-tools';
@@ -42,6 +45,19 @@ import { ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS } from './tools/adaptive-matchmove
 import { ATMOSPHERE_TOOL_DECLARATIONS } from './tools/atmosphere-tools';
 import { LIGHTING_TOOL_DECLARATIONS } from './tools/lighting-tools';
 import { LENS_TOOL_DECLARATIONS, BROWSER_TOOL_DECLARATIONS } from './tools/lens-browser-tools';
+import { BVH_QUERY_TOOL_DECLARATIONS } from './tools/bvh-query-tools';
+import { SPECULAR_MATERIALS_TOOL_DECLARATIONS } from './tools/specular-material-tools';
+import { CHRONO_SHADOW_TOOL_DECLARATIONS } from './tools/chrono-shadow-tools';
+import { VANISHING_POINT_TOOL_DECLARATIONS } from './tools/vanishing-point-tools';
+import { TILE_ELEVATION_TOOL_DECLARATIONS } from './tools/tile-elevation-tools';
+import { CSG_APERTURE_TOOL_DECLARATIONS } from './tools/csg-aperture-tools';
+import { GLASS_FRACTURE_TOOL_DECLARATIONS } from './tools/glass-fracture-tools';
+import { TRAJECTORY_COLLISION_TOOL_DECLARATIONS } from './tools/trajectory-collision-tools';
+import { BAY_RHYTHM_TOOL_DECLARATIONS } from './tools/bay-rhythm-tools';
+import { WALL_PLANE_SEGMENT_TOOL_DECLARATIONS } from './tools/wall-plane-segment-tools';
+import { RIGIDBODY_DROP_TOOL_DECLARATIONS } from './tools/rigidbody-drop-tools';
+import { XPBD_CLOTH_TOOL_DECLARATIONS } from './tools/xpbd-cloth-tools';
+import { SH9_LIGHTING_TOOL_DECLARATIONS } from './tools/sh9-lighting-tools';
 
 export type ToolPackName =
     | 'core_workspace'
@@ -62,13 +78,15 @@ export interface ToolPackDefinition {
 export const CORE_WORKSPACE_PACK: ToolPackDefinition = {
     id: 'core_workspace',
     displayName: 'Core Workspace & Canvas Studio',
-    description: 'File reading/writing, diagnostics, diffs, canvas primitive mounting, native 3D scripts and reference-built objects, image generation, user dialogue, and subagent delegation.',
+    description: 'File reading/writing, diagnostics, diffs, canvas primitive mounting, native 3D scripts, reference-built objects and SB-Veggie vegetation, image generation, user dialogue, and subagent delegation.',
     declarations: [
         ...CANVAS_TOOL_DECLARATIONS,
         ...WORKSPACE_TOOL_DECLARATIONS,
         ...PYTHON_3D_TOOL_DECLARATIONS,
         ...SB_SCRIPT_GUIDE_TOOL_DECLARATIONS,
         ...OBJECT_REFERENCE_TOOL_DECLARATIONS,
+        // the vegetation generator of every 3D path (SB-Veggie): offered wherever 3D scenes are
+        ...BOTANICAL_TREE_TOOL_DECLARATIONS,
         ...IMAGE_GENERATION_TOOL_DECLARATIONS
     ],
     toolNames: [
@@ -77,6 +95,7 @@ export const CORE_WORKSPACE_PACK: ToolPackDefinition = {
         ...PYTHON_3D_TOOL_DECLARATIONS.map(d => d.name),
         ...SB_SCRIPT_GUIDE_TOOL_DECLARATIONS.map(d => d.name),
         ...OBJECT_REFERENCE_TOOL_DECLARATIONS.map(d => d.name),
+        ...BOTANICAL_TREE_TOOL_DECLARATIONS.map(d => d.name),
         ...IMAGE_GENERATION_TOOL_DECLARATIONS.map(d => d.name)
     ]
 };
@@ -84,16 +103,25 @@ export const CORE_WORKSPACE_PACK: ToolPackDefinition = {
 export const GEOSPATIAL_3D_PACK: ToolPackDefinition = {
     id: 'geospatial_3d',
     displayName: 'Geospatial 3D Tiles & Metrology Foundation',
-    description: 'Google Maps 3D Tiles ingestion, UTDRA macro-decomposition, Universal 3D Structure Foundation, WebXR anchoring, and Geobox precision bounding.',
+    description: 'Google Maps 3D Tiles ingestion, UTDRA macro-decomposition, Universal 3D Structure Foundation, WebXR anchoring, Geobox precision bounding, reverse shadow-geolocation, single-photo camera calibration, tile sea-level elevation queries, camera-trajectory collision auditing, blind wall-plane segmentation, and facade bay-rhythm/elevation analysis.',
     declarations: [
         ...GOOGLE_3D_TILES_TOOL_DECLARATIONS,
         ...PANORAMA_TOOL_DECLARATIONS,
         ...UTDRA_TOOL_DECLARATIONS,
         ...TILE_REFINE_TOOL_DECLARATIONS,
         ...LOCATION_EVIDENCE_TOOL_DECLARATIONS,
+        ...LOCATION_REFERENCE_TOOL_DECLARATIONS,
+        ...SURFACE_MATERIALS_TOOL_DECLARATIONS,
         ...UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS,
         ...WEBXR_GEOSPATIAL_TOOL_DECLARATIONS,
-        ...GEOBOX_PRECISION_TOOL_DECLARATIONS
+        ...GEOBOX_PRECISION_TOOL_DECLARATIONS,
+        ...CHRONO_SHADOW_TOOL_DECLARATIONS,
+        ...VANISHING_POINT_TOOL_DECLARATIONS,
+        ...TILE_ELEVATION_TOOL_DECLARATIONS,
+        ...TRAJECTORY_COLLISION_TOOL_DECLARATIONS,
+        ...WALL_PLANE_SEGMENT_TOOL_DECLARATIONS,
+        ...BAY_RHYTHM_TOOL_DECLARATIONS,
+        ...MASSING_TOOL_DECLARATIONS
     ],
     toolNames: [
         ...GOOGLE_3D_TILES_TOOL_DECLARATIONS.map(d => d.name),
@@ -101,46 +129,66 @@ export const GEOSPATIAL_3D_PACK: ToolPackDefinition = {
         ...UTDRA_TOOL_DECLARATIONS.map(d => d.name),
         ...TILE_REFINE_TOOL_DECLARATIONS.map(d => d.name),
         ...LOCATION_EVIDENCE_TOOL_DECLARATIONS.map(d => d.name),
+        ...LOCATION_REFERENCE_TOOL_DECLARATIONS.map(d => d.name),
+        ...SURFACE_MATERIALS_TOOL_DECLARATIONS.map(d => d.name),
         ...UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS.map(d => d.name),
         ...WEBXR_GEOSPATIAL_TOOL_DECLARATIONS.map(d => d.name),
-        ...GEOBOX_PRECISION_TOOL_DECLARATIONS.map(d => d.name)
+        ...GEOBOX_PRECISION_TOOL_DECLARATIONS.map(d => d.name),
+        ...CHRONO_SHADOW_TOOL_DECLARATIONS.map(d => d.name),
+        ...VANISHING_POINT_TOOL_DECLARATIONS.map(d => d.name),
+        ...TILE_ELEVATION_TOOL_DECLARATIONS.map(d => d.name),
+        ...TRAJECTORY_COLLISION_TOOL_DECLARATIONS.map(d => d.name),
+        ...WALL_PLANE_SEGMENT_TOOL_DECLARATIONS.map(d => d.name),
+        ...BAY_RHYTHM_TOOL_DECLARATIONS.map(d => d.name),
+        ...MASSING_TOOL_DECLARATIONS.map(d => d.name)
     ]
 };
 
 export const MESH_SURFACE_PACK: ToolPackDefinition = {
     id: 'mesh_surface',
-    displayName: 'Mesh Reshaping, Botanicals & Material Textures',
-    description: 'C++20 mesh shaping, SB-Rig auto-rigging (skeleton + skin weights for any mesh), botanical trees, algorithmic UV unwrap, MaxRects atlas binning, and analytical hair/groom forward splatting.',
+    displayName: 'Mesh Reshaping & Material Textures',
+    description: 'C++20 mesh shaping, SB-Rig auto-rigging (skeleton + skin weights for any mesh), algorithmic UV unwrap, MaxRects atlas binning, analytical hair/groom forward splatting, BVH spatial queries (raycast, closest-point, RTAO baking), reflective/dielectric material detection on any mesh (self-rendered or posed evidence, baked into a new metallicRoughness texture), analytical facade aperture (window/door) generation, ballistic glass fracture, rigid-body drop/settle simulation, and XPBD cloth draping — on individual meshes and buildings.',
     declarations: [
         ...MESH_SHAPING_TOOL_DECLARATIONS,
         ...SB_RIG_TOOL_DECLARATIONS,
         ...ALGORITHMIC_UV_TOOL_DECLARATIONS,
-        ...BOTANICAL_TREE_TOOL_DECLARATIONS,
         ...NANO_BANANA_TOOL_DECLARATIONS,
         ...TURNAROUND_TOOL_DECLARATIONS,
-        ...ANALYTICAL_GROOM_TOOL_DECLARATIONS
+        ...ANALYTICAL_GROOM_TOOL_DECLARATIONS,
+        ...BVH_QUERY_TOOL_DECLARATIONS,
+        ...SPECULAR_MATERIALS_TOOL_DECLARATIONS,
+        ...CSG_APERTURE_TOOL_DECLARATIONS,
+        ...GLASS_FRACTURE_TOOL_DECLARATIONS,
+        ...RIGIDBODY_DROP_TOOL_DECLARATIONS,
+        ...XPBD_CLOTH_TOOL_DECLARATIONS
     ],
     toolNames: [
         ...MESH_SHAPING_TOOL_DECLARATIONS.map(d => d.name),
         ...SB_RIG_TOOL_DECLARATIONS.map(d => d.name),
         ...ALGORITHMIC_UV_TOOL_DECLARATIONS.map(d => d.name),
-        ...BOTANICAL_TREE_TOOL_DECLARATIONS.map(d => d.name),
         ...NANO_BANANA_TOOL_DECLARATIONS.map(d => d.name),
         ...TURNAROUND_TOOL_DECLARATIONS.map(d => d.name),
-        ...ANALYTICAL_GROOM_TOOL_DECLARATIONS.map(d => d.name)
+        ...ANALYTICAL_GROOM_TOOL_DECLARATIONS.map(d => d.name),
+        ...BVH_QUERY_TOOL_DECLARATIONS.map(d => d.name),
+        ...SPECULAR_MATERIALS_TOOL_DECLARATIONS.map(d => d.name),
+        ...CSG_APERTURE_TOOL_DECLARATIONS.map(d => d.name),
+        ...GLASS_FRACTURE_TOOL_DECLARATIONS.map(d => d.name),
+        ...RIGIDBODY_DROP_TOOL_DECLARATIONS.map(d => d.name),
+        ...XPBD_CLOTH_TOOL_DECLARATIONS.map(d => d.name)
     ]
 };
 
 export const VFX_VIDEO_PACK: ToolPackDefinition = {
     id: 'vfx_video',
     displayName: 'VFX Video Timeline, Matchmove & Lighting',
-    description: 'Video timeline NLE, AI beautify prompt synthesis, matchmove camera resection, Brown-Conrady optics, atmospheric scattering, lighting, and 4DGS dynamic avatars.',
+    description: 'Video timeline NLE, AI beautify prompt synthesis, matchmove camera resection, Brown-Conrady optics, atmospheric scattering, lighting (including SH9 ambient-light estimation from a real panorama), and 4DGS dynamic avatars.',
     declarations: [
         ...VFX_VIDEO_TOOL_DECLARATIONS,
         ...AI_BEAUTIFY_TOOL_DECLARATIONS,
         ...ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS,
         ...ATMOSPHERE_TOOL_DECLARATIONS,
         ...LIGHTING_TOOL_DECLARATIONS,
+        ...SH9_LIGHTING_TOOL_DECLARATIONS,
         ...OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS,
         ...PHYSICAL_CAMERA_TOOL_DECLARATIONS,
         ...POSE_DEPTH_TOOL_DECLARATIONS,
@@ -154,6 +202,7 @@ export const VFX_VIDEO_PACK: ToolPackDefinition = {
         ...ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS.map(d => d.name),
         ...ATMOSPHERE_TOOL_DECLARATIONS.map(d => d.name),
         ...LIGHTING_TOOL_DECLARATIONS.map(d => d.name),
+        ...SH9_LIGHTING_TOOL_DECLARATIONS.map(d => d.name),
         ...OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS.map(d => d.name),
         ...PHYSICAL_CAMERA_TOOL_DECLARATIONS.map(d => d.name),
         ...POSE_DEPTH_TOOL_DECLARATIONS.map(d => d.name),

@@ -59,6 +59,12 @@ struct Entry {
     double branchAngleRad{0.80795};        // the laterals' angle from the leader
     double leafLengthM{0.12}, leafAspect{0.7};  // the leaf (or frond) the leaf set is chosen by
     double hueDeg{110}, hueSpreadDeg{20};  // the foliage's usual hue in the chromaticity plane (0 red, 120 green) and its range
+    // Where this form grows outdoors, as absolute latitude (0 the equator, 90 a pole): optional, default [0, 90] (no
+    // constraint - most of the library's forms, temperate street and park trees, grow across a wide latitude band and
+    // are not costed by it). A form with a real climate limit (a palm) gives its own range; a crown whose own build is
+    // measured outside an entry's range costs by how far past it, the same soft, continuous shape every other
+    // dimension here already costs by - never a hard species-list exclusion.
+    double latAbsMinDeg{0}, latAbsMaxDeg{90};
 };
 
 struct Library {
@@ -81,6 +87,7 @@ struct CrownDescriptors {
     size_t samples{0};
     bool colourKnown{false};
     double hueDeg{0}, saturation{0};  // of the measured crown colour (tree_textures::hueSaturation)
+    double latAbsDeg{std::numeric_limits<double>::quiet_NaN()};  // the build's own |latitude|; NaN (unknown) costs nothing
 };
 
 struct ChoiceParams {
@@ -89,6 +96,7 @@ struct ChoiceParams {
     double aspectSigmaLog{0.35};     // |ln(aspect / entry aspect)| that costs 1 (squared)
     double topShareSigma{0.2};       // |topShare - entry topShare| that costs 1 (squared)
     double hueSigmaDeg{10.0};        // hue past the entry's spread that costs 1 (squared); inside the spread costs 0
+    double latSigmaDeg{4.0};         // absolute latitude past an entry's range that costs 1 (squared); inside it costs 0
     double greySaturation{0.06};     // below this measured saturation the hue counts for proportionally less
     double margin{0.5};              // entries within this cost of the best may be picked (a seeded pick among them)
     double maxCost{6.0};             // past this the crown matches nothing: grown from its measurements alone
@@ -147,6 +155,11 @@ inline Library parseIndex(const std::string& text) {
         if (hue.type != io::GlbJsonValue::Array || hue.arr.size() != 2) throw SpeciesIndexError(E.id + ".hueDeg must be [centre, spread]");
         E.hueDeg = detail::number(hue[0], E.id + ".hueDeg[0]", -180, 360);
         E.hueSpreadDeg = detail::number(hue[1], E.id + ".hueDeg[1]", 0, 180);
+        const auto& lat = e["latAbsRangeDeg"];
+        if (lat.type == io::GlbJsonValue::Array && lat.arr.size() == 2) {
+            E.latAbsMinDeg = detail::number(lat[0], E.id + ".latAbsRangeDeg[0]", 0, 90);
+            E.latAbsMaxDeg = detail::number(lat[1], E.id + ".latAbsRangeDeg[1]", E.latAbsMinDeg, 90);
+        }
         lib.entries.push_back(E);
     }
     if (lib.entries.empty()) throw SpeciesIndexError("the species index has no entries");
@@ -198,6 +211,11 @@ inline double entryCost(const Entry& e, const CrownDescriptors& d, const ChoiceP
         if (dhue > 180.0) dhue = 360.0 - dhue;
         const double past = std::max(0.0, dhue - e.hueSpreadDeg) / C.hueSigmaDeg;
         cost += std::min(1.0, d.saturation / C.greySaturation) * past * past;
+    }
+    if (std::isfinite(d.latAbsDeg)) {
+        const double past = d.latAbsDeg < e.latAbsMinDeg ? e.latAbsMinDeg - d.latAbsDeg : std::max(0.0, d.latAbsDeg - e.latAbsMaxDeg);
+        const double dl = past / C.latSigmaDeg;
+        cost += dl * dl;
     }
     return cost;
 }

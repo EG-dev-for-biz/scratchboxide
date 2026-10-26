@@ -44,6 +44,7 @@ import * as jpegJs from 'jpeg-js';
 import { blur1, ciede2000, edgeMap, exactDistanceTransform, laplacianVariance, linearRgbToLab, maskedNcc } from '../../spatial/StreetViewStage3Metrics';
 import { SRGB8_TO_LINEAR } from '../../../common/spatial/photogrammetric-delight';
 import { decodeImageInMemory, TILE_TRANSFER_RUNG, type RgbaImage8 } from './tile-texture-transfer';
+import { obstructionFreeNote } from '../../../browser/generative-canvas/services/location-beautify-service';
 
 // =============================================================================
 // Model client (injected)
@@ -114,6 +115,13 @@ export interface EnhanceGateThresholds {
     edgeScaleSigmaPx: number;
     /** Blur (px) of the low band for SSIM and colour. */
     lowBandSigmaPx: number;
+    /**
+     * When set, the colour check stops judging the full low-band CIEDE2000 (which a baked shadow's own lightness
+     * dominates) and judges hue/chroma alone instead (both sides' L* forced equal before CIEDE2000): a material can
+     * get brighter or darker - the very thing de-shadowing has to do - without it reading as a colour change, while
+     * recolouring the material itself (a different stone, a different paint) still fails. Used by RECREATE_GATE.
+     */
+    maxLowBandChromaDeltaE?: number;
 }
 
 /**
@@ -126,11 +134,25 @@ export const DEFAULT_ENHANCE_GATE: EnhanceGateThresholds = {
     edgeScaleSigmaPx: 1.5, lowBandSigmaPx: 2
 };
 
+/**
+ * Same structural guards as DEFAULT_ENHANCE_GATE (edges stay put, no new structure, still sharper), but the layout and
+ * colour checks are loosened for a deliberate relight: SSIM judges the low band more loosely (removing a cast shadow
+ * changes local luma correlation on its own, not just the model's own noise), and the colour check switches to
+ * maxLowBandChromaDeltaE (user decision, 2026-10-21: the photo-tile scan should inform shape, not be presented
+ * as-is; the same now applies to its baked lighting - the real material and structure still have to survive, the
+ * baked shadow does not).
+ */
+export const RECREATE_GATE: EnhanceGateThresholds = {
+    ...DEFAULT_ENHANCE_GATE, minLowBandSsim: 0.75, maxLowBandDeltaE: Infinity, maxLowBandChromaDeltaE: 12
+};
+
 export interface EnhanceGateMetrics {
     edgeNcc: number | null;
     newEdgeShare: number;
     lowBandSsim: number;
     lowBandDeltaE: number;
+    /** Only computed/judged when the gate sets maxLowBandChromaDeltaE (RECREATE_GATE): lowBandDeltaE with both sides' L* forced equal, so it reads hue/chroma drift without the lighting change a deliberate relight makes on purpose. */
+    lowBandChromaDeltaE?: number;
     sharpnessGain: number;
     texels: number;
 }
@@ -199,21 +221,26 @@ export function enhancementGate(original: RgbaImage8, candidate: RgbaImage8, mas
 
     const chan = (img: RgbaImage8, k: number) => { const c = new Float32Array(W * H); for (let i = 0; i < W * H; i++) c[i] = SRGB8_TO_LINEAR[img.rgba[i * 4 + k]]; return blur1(c, W, H, t.lowBandSigmaPx); };
     const oR = chan(original, 0), oG = chan(original, 1), oB = chan(original, 2), cR = chan(candidate, 0), cG = chan(candidate, 1), cB = chan(candidate, 2);
-    let dE = 0, nE = 0;
+    let dE = 0, dEChroma = 0, nE = 0;
     for (let i = 0; i < W * H; i++) {
         if (!inner[i]) continue;
-        dE += ciede2000(linearRgbToLab(oR[i], oG[i], oB[i]), linearRgbToLab(cR[i], cG[i], cB[i])); nE++;
+        const labO = linearRgbToLab(oR[i], oG[i], oB[i]), labC = linearRgbToLab(cR[i], cG[i], cB[i]);
+        dE += ciede2000(labO, labC);
+        dEChroma += ciede2000([50, labO[1], labO[2]], [50, labC[1], labC[2]]);  // lightness forced equal: hue/chroma only
+        nE++;
     }
-    const lowBandDeltaE = nE ? dE / nE : 0;
+    const lowBandDeltaE = nE ? dE / nE : 0, lowBandChromaDeltaE = nE ? dEChroma / nE : 0;
     const vo = laplacianVariance(Lo, W, H, inner).variance, vc = laplacianVariance(Lc, W, H, inner).variance;
     const sharpnessGain = vo > 0 ? vc / vo : (vc > 0 ? Infinity : 1);
 
-    const metrics: EnhanceGateMetrics = { edgeNcc, newEdgeShare, lowBandSsim, lowBandDeltaE, sharpnessGain, texels };
+    const metrics: EnhanceGateMetrics = { edgeNcc, newEdgeShare, lowBandSsim, lowBandDeltaE, sharpnessGain, texels, ...(t.maxLowBandChromaDeltaE !== undefined ? { lowBandChromaDeltaE } : {}) };
     const f = (x: number | null, d = 3) => (x === null ? 'n/a' : x.toFixed(d));
     if (edgeNcc === null || edgeNcc < t.minEdgeNcc) return { pass: false, metrics, reasonCode: 'enhance_edges_moved', reason: `the enhanced crop's edges do not line up with the transferred texture (Sobel NCC ${f(edgeNcc)} < ${t.minEdgeNcc})` };
     if (newEdgeShare > t.maxNewEdgeShare) return { pass: false, metrics, reasonCode: 'enhance_new_structure', reason: `the enhanced crop adds structure: ${(100 * newEdgeShare).toFixed(1)} percent of its strong edges are more than ${t.maxNewEdgeDistPx} px from any edge of the transferred texture (limit ${(100 * t.maxNewEdgeShare).toFixed(1)})` };
     if (lowBandSsim < t.minLowBandSsim) return { pass: false, metrics, reasonCode: 'enhance_layout_changed', reason: `the enhanced crop's low-frequency layout differs from the transferred texture (SSIM ${f(lowBandSsim)} < ${t.minLowBandSsim})` };
-    if (lowBandDeltaE > t.maxLowBandDeltaE) return { pass: false, metrics, reasonCode: 'enhance_colour_drift', reason: `the enhanced crop changed colour (mean low-band CIEDE2000 ${f(lowBandDeltaE, 2)} > ${t.maxLowBandDeltaE})` };
+    if (t.maxLowBandChromaDeltaE !== undefined) {
+        if (lowBandChromaDeltaE > t.maxLowBandChromaDeltaE) return { pass: false, metrics, reasonCode: 'enhance_material_drift', reason: `the enhanced crop changed the material's hue, not just its lighting (mean low-band hue/chroma CIEDE2000 ${f(lowBandChromaDeltaE, 2)} > ${t.maxLowBandChromaDeltaE})` };
+    } else if (lowBandDeltaE > t.maxLowBandDeltaE) return { pass: false, metrics, reasonCode: 'enhance_colour_drift', reason: `the enhanced crop changed colour (mean low-band CIEDE2000 ${f(lowBandDeltaE, 2)} > ${t.maxLowBandDeltaE})` };
     if (sharpnessGain < t.minSharpnessGain) return { pass: false, metrics, reasonCode: 'enhance_no_gain', reason: `the enhanced crop is not sharper than the transferred texture (Laplacian variance ratio ${f(sharpnessGain, 2)} < ${t.minSharpnessGain})` };
     return { pass: true, metrics };
 }
@@ -291,8 +318,23 @@ export function enhancePrompt(width: number, height: number, referenceCount: num
         `Return the same texture, ${width} x ${height} px, enhanced only: restore the sharpness and fine surface detail of features that are already visible, at low strength.`,
         'Keep every feature exactly where it is, at the same size and shape. Do not add, remove, move, straighten, repeat or restyle anything. Keep the colours and the overall brightness.',
         'Do not add lighting, shadows, reflections, people, vehicles, signs or text. Keep the framing: no crop, zoom, rotation or border.',
+        `The one exception to changing nothing: trees, foliage, vehicles, people and street furniture baked into the texture in front of the surface are not part of it. ${obstructionFreeNote('this surface')}`,
         referenceCount
             ? `The ${referenceCount === 1 ? 'next image is a real street-level photo' : `next ${referenceCount} images are real street-level photos`} of the same surface: use them only to recover the true detail of features the texture already shows.`
+            : ''
+    ].filter(Boolean).join(' ');
+}
+
+/** The instruction sent with each crop in 'recreate' mode: the same real material and structure, lit evenly instead of as scanned. */
+export function recreatePrompt(width: number, height: number, referenceCount: number): string {
+    return [
+        `The first image is a ${width} x ${height} px albedo texture of one building surface, transferred from photogrammetry: soft, slightly smeared, and still carrying the baked-in shadow and highlight of whatever sun angle the source photos were taken under.`,
+        `Return the same surface, ${width} x ${height} px, repainted as a clean, evenly lit albedo map: remove every baked cast shadow, ambient-occlusion dark patch and sun-glare highlight, and restore the material's true, consistent colour and fine detail underneath, as if lit by flat, shadowless overcast daylight from every direction.`,
+        'Keep every feature exactly where it is, at the same size, shape and count: every window, ledge, pilaster, joint and sign stays put. Do not add, remove, move, straighten, repeat or invent any feature, and keep the real material (the same stone, brick, glass or metal) - only its lighting changes, never what it is made of.',
+        'Do not add new reflections, people, vehicles, signs or text. Keep the framing: no crop, zoom, rotation or border.',
+        `The one exception to keeping every feature: trees, foliage, vehicles, people and street furniture baked into the texture in front of the surface are not part of it. ${obstructionFreeNote('this surface')}`,
+        referenceCount
+            ? `The ${referenceCount === 1 ? 'next image is a real street-level photo' : `next ${referenceCount} images are real street-level photos`} of the same surface: use them to recover the material's true colour and detail where the first image's shadow hides it.`
             : ''
     ].filter(Boolean).join(' ');
 }
@@ -308,6 +350,13 @@ export interface EnhanceTransferInput {
     /** Registered real views (Street View), for grounding references. */
     views: EnhanceReferenceView[];
     client: EnhanceModelClient;
+    /**
+     * 'sharpen' (default): restore detail that's already visible, at low strength, forbidding any lighting or colour
+     * change (DEFAULT_ENHANCE_GATE, enhancePrompt). 'recreate': a deliberate relight - remove the tile scan's own
+     * baked shadow and highlight and recover the material's true colour underneath (RECREATE_GATE, recreatePrompt),
+     * still gated against moving, adding or recolouring anything real. `gate` overrides either mode's own defaults.
+     */
+    mode?: 'sharpen' | 'recreate';
     /** Models to try in order; default IMAGE_MODEL_PRIORITY. */
     models?: string[];
     gate?: Partial<EnhanceGateThresholds>;
@@ -419,13 +468,13 @@ export function padToModelAspect(img: RgbaImage8): { padded: RgbaImage8; offset:
     return { padded: { width: W, height: H, rgba: out }, offset: [ox, oy] };
 }
 
-function cropImage(img: RgbaImage8, x0: number, y0: number, w: number, h: number): RgbaImage8 {
+export function cropImage(img: RgbaImage8, x0: number, y0: number, w: number, h: number): RgbaImage8 {
     const out = new Uint8Array(w * h * 4);
     for (let y = 0; y < h; y++) out.set(img.rgba.subarray(((y0 + y) * img.width + x0) * 4, ((y0 + y) * img.width + x0 + w) * 4), y * w * 4);
     return { width: w, height: h, rgba: out };
 }
 
-function boxDownsample(img: RgbaImage8, maxSide: number): RgbaImage8 {
+export function boxDownsample(img: RgbaImage8, maxSide: number): RgbaImage8 {
     const s = Math.max(img.width, img.height) / maxSide;
     if (s <= 1) return img;
     return resizeRgba(img, Math.max(1, Math.round(img.width / s)), Math.max(1, Math.round(img.height / s)));
@@ -437,7 +486,9 @@ export async function enhanceTransferredAtlas(input: EnhanceTransferInput): Prom
     const outer = input.signal;
     // what a model request listens to: the stage's stop and the budget
     const signal = outer && budgetSignal ? AbortSignal.any([outer, budgetSignal]) : (outer ?? budgetSignal);
-    const gate = { ...DEFAULT_ENHANCE_GATE, ...(input.gate || {}) };
+    const mode = input.mode ?? 'sharpen';
+    const gate = { ...(mode === 'recreate' ? RECREATE_GATE : DEFAULT_ENHANCE_GATE), ...(input.gate || {}) };
+    const promptFn = mode === 'recreate' ? recreatePrompt : enhancePrompt;
     const models = input.models?.length ? input.models : [...IMAGE_MODEL_PRIORITY];
     const maxSide = input.maxModelSide ?? 2048;
     const jobs = chartJobs(atlas, transfer, input.minChartTexels ?? 64);
@@ -454,7 +505,11 @@ export async function enhanceTransferredAtlas(input: EnhanceTransferInput): Prom
         }
         const refs = pickReferenceViews(pts, nrm, views, input.maxReferences ?? 3);
         base.referencePanoIds = refs.map(r => r.view.panoId);
-        if (!refs.length) {
+        // 'sharpen' only ever recovers detail a real photo actually shows, so it has nothing to do without one. 'recreate'
+        // relights what the tile transfer already has (district-mode builds, most of the time, register no Street View
+        // view at all - "not an isolated structure" - so requiring one here made the whole rung dead weight for them);
+        // a reference is still used to ground the material's true colour when one is available, just not required.
+        if (!refs.length && mode === 'sharpen') {
             return { record: { ...base, reasonCode: 'enhance_no_reference', reason: `no registered Street View view sees ${job.label}, so there is nothing real to ground an enhancement; the transferred texture is kept` } };
         }
         if (job.gateable < MIN_GATEABLE_TEXELS || job.fill < MIN_CHART_FILL) {
@@ -465,7 +520,7 @@ export async function enhanceTransferredAtlas(input: EnhanceTransferInput): Prom
         const { padded, offset } = padToModelAspect(job.crop);
         const sent = boxDownsample(padded, maxSide);
         const request: EnhanceModelRequest = {
-            label: job.label, models, prompt: enhancePrompt(sent.width, sent.height, refs.length),
+            label: job.label, models, prompt: promptFn(sent.width, sent.height, refs.length),
             image: { mimeType: 'image/png', bytes: png(sent), width: sent.width, height: sent.height },
             // the references only ground the model in what the surface looks like: JPEG at ENHANCE_REFERENCE_MAX_SIDE is plenty, and
             // much less to send than a lossless crop of up to maxSide (the crop being enhanced stays lossless at maxSide)
@@ -588,10 +643,11 @@ export async function enhanceTransferredAtlas(input: EnhanceTransferInput): Prom
         });
         replaced.forEach((n, idx) => { if (provenance[idx]) provenance[idx].coverage = Math.max(0, provenance[idx].coverage - (atlasTexels ? n / atlasTexels : 0)); });
         const notes = Array.from(new Set(accepted.map(r => r.modelNote).filter(Boolean)));
+        const verb = mode === 'recreate' ? 'relit (its own baked shadow and highlight removed)' : 'sharpened';
         provenance.push({
-            source: 'tile-photo-enhanced', label: 'photo-inferred',
-            method: `tile photo transfer sharpened by ${modelsUsed.join(', ')} (Gemini image edit, enhance only, grounded by ${new Set(accepted.flatMap(r => r.referencePanoIds)).size} real Street View views), `
-                + `edge gate Sobel NCC >= ${gate.minEdgeNcc}, new structure <= ${gate.maxNewEdgeDistPx} px; ${accepted.length} of ${jobs.length} charts accepted. ${notes.join(' ')}`.trim(),
+            source: mode === 'recreate' ? 'tile-photo-recreated' : 'tile-photo-enhanced', label: 'photo-inferred',
+            method: `tile photo transfer ${verb} by ${modelsUsed.join(', ')} (Gemini image edit, grounded by ${new Set(accepted.flatMap(r => r.referencePanoIds)).size} real Street View views), `
+                + `edge gate Sobel NCC >= ${gate.minEdgeNcc}, new structure <= ${gate.maxNewEdgeDistPx} px${mode === 'recreate' ? `, material hue/chroma CIEDE2000 <= ${gate.maxLowBandChromaDeltaE}` : ''}; ${accepted.length} of ${jobs.length} charts accepted. ${notes.join(' ')}`.trim(),
             panoIds: Array.from(new Set(accepted.flatMap(r => r.referencePanoIds))).sort(),
             coverage: share
         });

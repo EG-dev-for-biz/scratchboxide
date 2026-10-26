@@ -397,6 +397,18 @@ export class WorkspaceConfigClient {
         }
     }
 
+    /** Workspace files of the given types (".glb"), shallow folders first, bounded; paths relative to the workspace. */
+    async findFiles(extensions: string[], workspaceRoot?: string, limit = 300): Promise<{ success: boolean; files?: string[]; truncated?: boolean; error?: string }> {
+        try {
+            const q = new URLSearchParams({ ext: extensions.join(','), limit: String(limit), ...(workspaceRoot ? { root: workspaceRoot } : {}) });
+            const res = await fetch(`${this.endpoint()}/find-files?${q}`);
+            const body = await res.json();
+            return res.ok ? body : { success: false, error: body?.error || `HTTP ${res.status}` };
+        } catch (e: any) {
+            return { success: false, error: e.message };
+        }
+    }
+
     /**
      * Fetch workspace directory tree.
      */

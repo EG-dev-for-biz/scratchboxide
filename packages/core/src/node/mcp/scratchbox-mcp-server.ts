@@ -40,77 +40,14 @@ import {
 import * as path from 'path';
 
 // ---------------------------------------------------------------------------
-// Standalone-safe tool packs (no IDE canvas / lens / browser proxy required)
+// The tool packs: the shared standalone list (standalone-packs.ts), the same one
+// scratchbox-mcp.ts serves, so the two entry points cannot drift apart
 // ---------------------------------------------------------------------------
-import {
-    WORKSPACE_TOOL_DECLARATIONS, workspaceHandlers,
-    VFX_VIDEO_TOOL_DECLARATIONS, vfxVideoHandlers,
-    ATMOSPHERE_TOOL_DECLARATIONS, atmosphereHandlers,
-    MESH_SHAPING_TOOL_DECLARATIONS, meshShapingHandlers,
-    UTDRA_TOOL_DECLARATIONS, utdraHandlers,
-    TILE_REFINE_TOOL_DECLARATIONS, tileRefineHandlers,
-    ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS, adaptiveMatchmoveHandlers,
-    GEOBOX_PRECISION_TOOL_DECLARATIONS, geoboxPrecisionHandlers,
-    BOTANICAL_TREE_TOOL_DECLARATIONS, botanicalTreeHandlers,
-    LIGHTING_TOOL_DECLARATIONS, lightingHandlers,
-    POSE_DEPTH_TOOL_DECLARATIONS, poseDepthHandlers,
-    PHYSICAL_CAMERA_TOOL_DECLARATIONS, physicalCameraHandlers,
+import { mergeStandalonePacks } from './standalone-packs';
+import type { ToolContext, ToolDeclaration, ToolParameterSchema } from '../gemini/tools/index.js';
 
-    UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS, universal3DStructureHandlers,
-    PYTHON_3D_TOOL_DECLARATIONS, python3DHandlers,
-    IMAGE_TO_PBR_TOOL_DECLARATIONS, imageToPbrHandlers,
-    PBR_MATERIAL_TOOL_DECLARATIONS, pbrMaterialHandlers,
-    LOCAL_SF3D_TOOL_DECLARATIONS, localSf3DHandlers,
-    TURNAROUND_TOOL_DECLARATIONS, turnaroundHandlers,
-    NANO_BANANA_TOOL_DECLARATIONS, nanoBananaHandlers,
-    IMAGE_GENERATION_TOOL_DECLARATIONS, imageGenerationHandlers,
-    type ToolDeclaration,
-    type ToolHandler,
-    type ToolContext,
-    type ToolParameterSchema,
-} from '../gemini/tools/index.js';
-
-// ---------------------------------------------------------------------------
-// Build the combined registry
-// ---------------------------------------------------------------------------
-
-const STANDALONE_PACKS: Array<[ToolDeclaration[], Record<string, ToolHandler>]> = [
-    [WORKSPACE_TOOL_DECLARATIONS, workspaceHandlers],
-    [VFX_VIDEO_TOOL_DECLARATIONS, vfxVideoHandlers],
-    [ATMOSPHERE_TOOL_DECLARATIONS, atmosphereHandlers],
-    [MESH_SHAPING_TOOL_DECLARATIONS, meshShapingHandlers],
-    [UTDRA_TOOL_DECLARATIONS, utdraHandlers],
-    [TILE_REFINE_TOOL_DECLARATIONS, tileRefineHandlers],
-    [ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS, adaptiveMatchmoveHandlers],
-    [GEOBOX_PRECISION_TOOL_DECLARATIONS, geoboxPrecisionHandlers],
-    [BOTANICAL_TREE_TOOL_DECLARATIONS, botanicalTreeHandlers],
-    [LIGHTING_TOOL_DECLARATIONS, lightingHandlers],
-    [POSE_DEPTH_TOOL_DECLARATIONS, poseDepthHandlers],
-    [PHYSICAL_CAMERA_TOOL_DECLARATIONS, physicalCameraHandlers],
-
-    [UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS, universal3DStructureHandlers],
-    [PYTHON_3D_TOOL_DECLARATIONS, python3DHandlers],
-    [IMAGE_TO_PBR_TOOL_DECLARATIONS, imageToPbrHandlers],
-    [PBR_MATERIAL_TOOL_DECLARATIONS, pbrMaterialHandlers],
-    [LOCAL_SF3D_TOOL_DECLARATIONS, localSf3DHandlers],
-    [TURNAROUND_TOOL_DECLARATIONS, turnaroundHandlers],
-    [NANO_BANANA_TOOL_DECLARATIONS, nanoBananaHandlers],
-    [IMAGE_GENERATION_TOOL_DECLARATIONS, imageGenerationHandlers],
-];
-
-const allDeclarations: ToolDeclaration[] = [];
-const allHandlers: Record<string, ToolHandler> = {};
-
-for (const [decls, handlers] of STANDALONE_PACKS) {
-    for (const decl of decls) {
-        if (!allHandlers[decl.name]) {
-            allDeclarations.push(decl);
-            if (handlers[decl.name]) {
-                allHandlers[decl.name] = handlers[decl.name];
-            }
-        }
-    }
-}
+const { declarations: allDeclarations, handlers: allHandlers, unhandled } = mergeStandalonePacks();
+if (unhandled.length) process.stderr.write(`[scratchbox-mcp-server] declared without a handler, not served: ${unhandled.join(', ')}\n`);
 
 // ---------------------------------------------------------------------------
 // Type adapter: ToolParameterSchema (uppercase) → MCP JSON Schema (lowercase)

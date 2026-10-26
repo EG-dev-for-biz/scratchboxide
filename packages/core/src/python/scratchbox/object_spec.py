@@ -15,6 +15,9 @@ Units are metres, +Y up, +X right, +Z toward the front. Each part uses one of fo
   replicate  copies of a seed part and everything attached to it, rotated around a ring or spaced along a path
   relief     grooves or beads applied as an offset field in the target's (u, v) parametrisation while its
              surface is generated
+  crown      a branching crown grown, not modelled: an SB-Veggie tree (sb.create_tree, vegetation.py) from the
+             crown's envelope (trunk base, height, crown radii, crown base, where it is widest, the top's profile,
+             trunk radius); its material's baseColor is the foliage colour. A root part; it is never mirrored or copied
 
 A child part attaches by parameter (u along, angle around, offset along the normal) on its parent's evaluated
 surface, and its own coordinates are offsets in object axes from that point, so parts join by construction.
@@ -33,9 +36,14 @@ TARGET_VERTICES = 40000
 MAX_TRIANGLES = 450000
 PART_VERTEX_CAP = 160000
 CREASE_DEGREES = 30.0
+# Fillets on sharp revolve corners: a razor edge catches no highlight and reads as CG. Each corner sharper than
+# CREASE_DEGREES is replaced by a curve this share of the part's own extent, never more than EDGE_ROUND_MAX_SHARE of
+# either edge it joins (so neighbouring fillets never overlap).
+EDGE_ROUND_FRACTION = 0.02
+EDGE_ROUND_MAX_SHARE = 0.3
 _DENSE_PER_SEGMENT = 48
 _EPS = 1e-9
-_OPERATORS = ("sweep", "revolve", "replicate", "relief")
+_OPERATORS = ("sweep", "revolve", "replicate", "relief", "crown")
 
 
 class SpecError(ValueError):
@@ -196,7 +204,7 @@ def validate(spec):
         by_id[pid] = part
         present = [k for k in _OPERATORS if _given(part, k)]
         if len(present) != 1:
-            errors.append("%s: must have exactly one of sweep, revolve, replicate, relief" % where)
+            errors.append("%s: must have exactly one of sweep, revolve, replicate, relief, crown" % where)
         else:
             op_of[pid] = present[0]
         if _given(part, "mirrorPlaneNormal") and (not _is_vec(part["mirrorPlaneNormal"], 3) or _length(part["mirrorPlaneNormal"]) < _EPS):
@@ -215,6 +223,13 @@ def validate(spec):
         where = 'part "%s"' % pid
         op = op_of.get(pid)
         is_child = _given(part, "parentId")
+        if op == "crown":
+            if is_child or _given(part, "attach"):
+                errors.append("%s: a crown part is a root part; give its trunkBaseMeters instead of parentId and attach" % where)
+            if _given(part, "mirrorPlaneNormal"):
+                errors.append("%s: a crown part cannot be mirrored; give each crown its own part" % where)
+            _validate_crown(part["crown"], where, errors, in_reach)
+            continue
         if is_child:
             parent = part.get("parentId")
             if op in ("replicate", "relief"):
@@ -275,6 +290,35 @@ def validate(spec):
             seen.append(cur)
             cur = by_id[cur]["replicate"].get("seedPartId")
     return errors
+
+
+def _validate_crown(crown, where, errors, in_reach):
+    if not isinstance(crown, dict):
+        errors.append("%s: crown must be an object" % where)
+        return
+    if not _is_vec(crown.get("trunkBaseMeters"), 3):
+        errors.append("%s: crown.trunkBaseMeters must be [x, y, z] in metres" % where)
+    else:
+        in_reach(crown["trunkBaseMeters"], where, "crown.trunkBaseMeters")
+    height = crown.get("heightMeters")
+    if not _is_num(height) or height <= 0.3:
+        errors.append("%s: crown.heightMeters must be more than 0.3 m" % where)
+        height = None
+    radii = crown.get("crownRadiiMeters")
+    if not _is_vec(radii, 2) or any(r <= 0.1 for r in radii):
+        errors.append("%s: crown.crownRadiiMeters must be [along X, along Z], each more than 0.1 m" % where)
+    if _given(crown, "crownBaseHeightMeters"):
+        b = crown["crownBaseHeightMeters"]
+        if not _is_num(b) or b < 0 or (height is not None and b >= 0.95 * height):
+            errors.append("%s: crown.crownBaseHeightMeters must be at least 0 and below 0.95 of heightMeters" % where)
+    if _given(crown, "crownWidestAt") and (not _is_num(crown["crownWidestAt"]) or not 0 <= crown["crownWidestAt"] <= 0.9):
+        errors.append("%s: crown.crownWidestAt must be between 0 and 0.9" % where)
+    if _given(crown, "crownTopExponent") and (not _is_num(crown["crownTopExponent"]) or not 0.5 <= crown["crownTopExponent"] <= 8):
+        errors.append("%s: crown.crownTopExponent must be between 0.5 and 8" % where)
+    if _given(crown, "trunkRadiusMeters"):
+        t = crown["trunkRadiusMeters"]
+        if not _is_num(t) or t <= 0 or (height is not None and t >= 0.2 * height):
+            errors.append("%s: crown.trunkRadiusMeters must be more than 0 and under 0.2 of heightMeters" % where)
 
 
 def _validate_sweep(sweep, where, is_child, errors, in_reach):
@@ -385,6 +429,8 @@ def _validate_replicate(rep, pid, where, by_id, op_of, errors, in_reach):
         errors.append("%s: a replicate cannot copy itself" % where)
     elif op_of.get(seed) == "relief":
         errors.append("%s: replicate.seedPartId names a relief part, which has no geometry to copy" % where)
+    elif op_of.get(seed) == "crown":
+        errors.append("%s: replicate.seedPartId names a crown part; give every crown its own part" % where)
     has_ring = rep.get("ring") is not None
     has_path = rep.get("path") is not None
     if has_ring == has_path:
@@ -783,6 +829,44 @@ def _meridian_orientation(meridian):
     return 1 if area > 0 else -1
 
 
+
+def _round_meridian(meridian):
+    """
+    The meridian with every corner sharper than CREASE_DEGREES replaced by a quadratic fillet, and an end that stops
+    off the axis first closed to it (so the cap's rim is a corner that is rounded too). Radii stay 0 or more: a fillet
+    is a convex blend of points that are.
+    """
+    pts = list(meridian)
+    if pts[0][1] > 1e-7:
+        pts.insert(0, (pts[0][0], 0.0))
+    if pts[-1][1] > 1e-7:
+        pts.append((pts[-1][0], 0.0))
+    zs = [z for z, _ in pts]
+    scale = max(max(zs) - min(zs), max(r for _, r in pts))
+    out = [pts[0]]
+    for k in range(1, len(pts) - 1):
+        a, b, c = pts[k - 1], pts[k], pts[k + 1]
+        d1 = (b[0] - a[0], b[1] - a[1])
+        d2 = (c[0] - b[0], c[1] - b[1])
+        l1, l2 = math.hypot(*d1), math.hypot(*d2)
+        if l1 < 1e-9 or l2 < 1e-9:
+            out.append(b)
+            continue
+        turn = math.degrees(math.acos(max(-1.0, min(1.0, (d1[0] * d2[0] + d1[1] * d2[1]) / (l1 * l2)))))
+        size = min(EDGE_ROUND_MAX_SHARE * min(l1, l2), EDGE_ROUND_FRACTION * scale)
+        if turn <= CREASE_DEGREES or size < 1e-5:
+            out.append(b)
+            continue
+        p0 = (b[0] - d1[0] / l1 * size, b[1] - d1[1] / l1 * size)
+        p2 = (b[0] + d2[0] / l2 * size, b[1] + d2[1] / l2 * size)
+        segs = max(2, int(math.ceil(turn / 15.0)))
+        for i in range(segs + 1):
+            t = i / float(segs)
+            w0, w1, w2 = (1 - t) ** 2, 2 * t * (1 - t), t * t
+            out.append((w0 * p0[0] + w1 * b[0] + w2 * p2[0], max(0.0, w0 * p0[1] + w1 * b[1] + w2 * p2[1])))
+    out.append(pts[-1])
+    return out
+
 def _build_revolve(part, origin, edge, relief_ops):
     rv = part["revolve"]
     pid = part["id"]
@@ -796,21 +880,31 @@ def _build_revolve(part, origin, edge, relief_ops):
         raise SpecError('part "%s" revolve.meridian: the outline encloses no area with the axis, so it revolves into nothing; '
                         'trace the full outline from the axis and back, e.g. [[0, 0], [0, r], [h, r], [h, 0]] for a disc of radius r '
                         'and thickness h' % pid)
-    dense, knots = _dense_curve(meridian, False, float(rv["smoothing"]))
-    dense = [(z, max(0.0, r)) for z, r in dense]
-    acc = _arc_lengths(dense)
-    total = acc[-1]
     lobes = int(rv["lobeCount"])
     depth = float(rv["lobeDepthRatio"])
     pitch = float(rv["helixPitchMeters"])
-    r_max = max(r for _, r in dense)
-    max_perimeter = 2 * math.pi * r_max
 
-    around = min(512, max(12, int(math.ceil(max_perimeter / edge)), 8 * lobes))
-    around += (-around) % 4
-    extra_u, extra_v = _relief_refinement(relief_ops, total, max_perimeter)
-    us = _u_samples(acc, knots, edge, extra_u)
-    vs = sorted(set([j / float(around) for j in range(around)] + list(extra_v)))
+    def sample(mer):
+        dense, knots = _dense_curve(mer, False, float(rv["smoothing"]))
+        dense = [(z, max(0.0, r)) for z, r in dense]
+        acc = _arc_lengths(dense)
+        r_max = max(r for _, r in dense)
+        max_perimeter = 2 * math.pi * r_max
+        around = min(512, max(12, int(math.ceil(max_perimeter / edge)), 8 * lobes))
+        around += (-around) % 4
+        extra_u, extra_v = _relief_refinement(relief_ops, acc[-1], max_perimeter)
+        us = _u_samples(acc, knots, edge, extra_u)
+        vs = sorted(set([j / float(around) for j in range(around)] + list(extra_v)))
+        return dense, knots, acc, us, vs
+
+    # rounded corners unless the extra rows would put the part over its sample budget (then it keeps its sharp edges)
+    rounded = _round_meridian(meridian)
+    dense, knots, acc, us, vs = sample(rounded)
+    if len(us) * len(vs) > PART_VERTEX_CAP:
+        dense, knots, acc, us, vs = sample(meridian)
+    else:
+        meridian = rounded
+    total = acc[-1]
     _check_grid_budget(pid, len(us), len(vs))
 
     surface = _Surface("revolve", pid)
@@ -1163,7 +1257,7 @@ def _multiplicities(spec, by_id, children, seeds):
     def walk(pid, factor):
         part = by_id[pid]
         f = factor * (2 if part.get("mirrorPlaneNormal") else 1)
-        if part.get("relief"):
+        if part.get("relief") or part.get("crown"):
             return
         if part.get("replicate"):
             rep = part["replicate"]
@@ -1186,8 +1280,38 @@ def _naming_part(pid, err):
     return SpecError([p if p.startswith("part ") else 'part "%s": %s' % (pid, p) for p in err.problems])
 
 
+def crown_trees(spec, shift_y=0.0):
+    """The spec's crown parts as SB-Veggie trees (vegetation.SbVeggieTree), lifted by shift_y like the meshes."""
+    from . import vegetation
+    trees = []
+    for p in spec["parts"]:
+        c = p.get("crown")
+        if not c:
+            continue
+        x, y, z = (float(v) for v in c["trunkBaseMeters"])
+        tree = vegetation.SbVeggieTree(
+            position=(x, y + shift_y, z), height=float(c["heightMeters"]),
+            crown_radius=(float(c["crownRadiiMeters"][0]), float(c["crownRadiiMeters"][1])),
+            crown_base_height=float(c["crownBaseHeightMeters"]) if _given(c, "crownBaseHeightMeters") else None,
+            crown_widest_at=float(c["crownWidestAt"]) if _given(c, "crownWidestAt") else 0.5,
+            crown_top_exponent=float(c["crownTopExponent"]) if _given(c, "crownTopExponent") else 2.0,
+            trunk_radius=float(c["trunkRadiusMeters"]) if _given(c, "trunkRadiusMeters") else None,
+            label=str(p.get("label") or p["id"]), name=p["id"])
+        material = p.get("material")
+        if isinstance(material, dict) and _is_vec(material.get("baseColor"), 3):
+            # the part's material is linear RGB already: the foliage colour the species and leaf textures are chosen by
+            tree.leaf_linear_rgb = [min(1.0, max(0.0, float(v))) for v in material["baseColor"]]
+        trees.append(tree)
+    return trees
+
+
 def build_meshes(spec):
     """Validates and builds the spec; returns [(part id, positions, normals, triangles)] in spec order."""
+    return _build_meshes(spec)[0]
+
+
+def _build_meshes(spec):
+    """build_meshes, and the lift every part (and every crown's trunk base) was given so the lowest point rests on y = 0."""
     problems = validate(spec)
     if problems:
         raise SpecError(problems)
@@ -1293,7 +1417,7 @@ def build_meshes(spec):
     def emit(pid):
         """[(owner id, _MeshData)] for a part and everything attached to it, after replicate and mirror."""
         part = by_id[pid]
-        if part.get("relief"):
+        if part.get("relief") or part.get("crown"):
             return []
         if part.get("replicate"):
             rep = part["replicate"]
@@ -1329,7 +1453,10 @@ def build_meshes(spec):
         if not part.get("parentId") and part["id"] not in seeds:
             pieces.extend(emit(part["id"]))
 
-    min_y = min(p[1] for _, mesh in pieces for p in mesh.positions)
+    # the lowest point rests on y = 0; a crown's trunk base counts (crown parts are grown, not meshed here)
+    lows = [p[1] for _, mesh in pieces for p in mesh.positions]
+    lows.extend(float(p["crown"]["trunkBaseMeters"][1]) for p in parts if p.get("crown"))
+    min_y = min(lows)
     merged = []
     order = [p["id"] for p in parts]
     by_owner = {}
@@ -1348,7 +1475,7 @@ def build_meshes(spec):
             triangles.extend((a + base, b + base, c + base) for a, b, c in mesh.triangles)
         combined = _MeshData(positions, triangles)
         merged.append((owner, positions, _vertex_normals(combined), triangles))
-    return merged
+    return merged, -min_y
 
 
 def _path_copies(path, base):
@@ -1409,6 +1536,40 @@ def part_material(sb, pid, material):
     return mat
 
 
+
+# Ambient occlusion baked into vertex colour: rays per vertex, and how far a ray looks as a share of the object's diagonal
+AO_SAMPLES = 32
+AO_REACH_SHARE = 0.12
+AO_INTENSITY = 0.85
+
+
+def _occlusion(sb, built):
+    """
+    Per part, per vertex, the grey multiplier lerp(1, ao, AO_INTENSITY), with ao ray-traced over every part at once (a
+    bonnet shades the body under it, a chain the boss it hangs from), not part by part.
+    """
+    combined = sb.geometry.Mesh("occlusion")
+    lo, hi = [float("inf")] * 3, [float("-inf")] * 3
+    start = 0
+    for _owner, positions, normals, triangles in built:
+        for p, n in zip(positions, normals):
+            combined.add_vertex(sb.math.Vec3(p[0], p[1], p[2]), sb.math.Vec3(n[0], n[1], n[2]))
+            for k in range(3):
+                lo[k] = min(lo[k], p[k])
+                hi[k] = max(hi[k], p[k])
+        for a, b, c in triangles:
+            combined.add_triangle(a + start, b + start, c + start)
+        start += len(positions)
+    if start == 0:
+        return [[] for _ in built]
+    diagonal = math.sqrt(sum((hi[k] - lo[k]) ** 2 for k in range(3)))
+    ao = list(combined.compute_rtao(AO_SAMPLES, max(0.01, AO_REACH_SHARE * diagonal), 42))
+    out, i = [], 0
+    for _owner, positions, _n, _t in built:
+        out.append([1.0 + (ao[i + j] - 1.0) * AO_INTENSITY for j in range(len(positions))])
+        i += len(positions)
+    return out
+
 def build(spec, clay=False):
     """
     Builds the spec into an sb.Scene: one mesh per part, the lowest point resting on y = 0. Each part's mesh (with
@@ -1418,17 +1579,24 @@ def build(spec, clay=False):
     import scratchbox as sb
     vec3 = sb.math.Vec3
     scene = sb.Scene()
-    built = build_meshes(spec)   # validates first
+    built, shift_y = _build_meshes(spec)   # validates first
+    # crown parts are SB-Veggie trees, grown natively when the scene is written (studio clay or not: a tree's
+    # leaves and bark come from the tree texture library by its foliage colour)
+    for tree in crown_trees(spec, shift_y):
+        scene.add(tree)
     materials = {} if clay else dict((p["id"], p.get("material")) for p in spec["parts"])
-    for owner, positions, normals, triangles in built:
+    occlusion = _occlusion(sb, built)
+    for (owner, positions, normals, triangles), occ in zip(built, occlusion):
         mesh = sb.geometry.Mesh(owner)
-        for p, n in zip(positions, normals):
-            mesh.add_vertex(vec3(p[0], p[1], p[2]), vec3(n[0], n[1], n[2]))
+        uv0 = sb.math.Vec2(0.0, 0.0)
+        for p, n, o in zip(positions, normals, occ):
+            mesh.add_vertex(vec3(p[0], p[1], p[2]), vec3(n[0], n[1], n[2]), uv0, sb.math.Vec4(o, o, o, 1.0))
         for a, b, c in triangles:
             mesh.add_triangle(a, b, c)
         mesh.recompute_bounds()
         # Assigned directly, not through apply_material, which also paints the base colour into the vertex colours:
-        # glTF viewers multiply COLOR_0 by baseColorFactor, which would square every colour. Vertices stay white.
+        # glTF viewers multiply COLOR_0 by baseColorFactor, which would square every colour. The vertex colour carries
+        # only the grey ambient occlusion, which darkens creases without changing the part's colour.
         mesh.material = part_material(sb, owner, materials.get(owner))
         scene.add_mesh(mesh)
     return scene

@@ -107,6 +107,11 @@ export interface UseStagedBuildOptions {
      * leaves these unloaded until they leave the set (an opt-in view needs them again), then loads them from their URL.
      */
     onEvictedChange?: (objectIds: ReadonlySet<string>) => void;
+    /**
+     * Layers the node graph's display flag shows (Scene3DData.displayFlag): a flagged layer a later stage replaced is
+     * loaded again and drawn as a replaced layer (a ghost), as under "Show replaced layers".
+     */
+    displayObjectIds?: readonly string[];
 }
 
 export interface StagedBuildHandle {
@@ -297,6 +302,8 @@ function retiredObject(layer: StagedLayer): Media4DObject {
 
 interface LookContext {
     ghost: boolean;
+    /** Under the node graph's display flag: drawn solid even when hidden or replaced. */
+    displayed?: boolean;
     only?: Set<string>;
     replaced?: number;
     highlightOn?: string;
@@ -330,13 +337,14 @@ export function ghostOf(f: Pick<LayerRevealFrame, 'objectId' | 'hidden' | 'phase
 export function lookFor(f: LayerRevealFrame, n: NodeInfo, ctx: LookContext): MeshStagedLook | 'hide' | 'conceal' | null {
     // Attached but not ready yet (its download-order sidecar is still loading): hidden, never drawn unpatched.
     if (f.phase === 'loading') return 'hide';
-    if ((f.hidden || f.phase === 'retired') && !ctx.ghost) return 'conceal';
+    // a layer under the display flag is drawn as itself, solid, even when a later layer replaced it
+    if ((f.hidden || f.phase === 'retired') && !ctx.ghost && !ctx.displayed) return 'conceal';
     if (f.phase === 'held' || f.phase === 'queued') return 'hide';
-    if (ctx.replaced !== undefined && ctx.replaced <= 0 && !ctx.ghost) return 'conceal';
+    if (ctx.replaced !== undefined && ctx.replaced <= 0 && !ctx.ghost && !ctx.displayed) return 'conceal';
     let reveal: MeshStagedLook['reveal'];
     const stagger = f.layer.reveal.stagger;
-    let presence = ctx.ghost ? GHOST_PRESENCE : f.presence;
-    if (ctx.replaced !== undefined) presence = Math.min(presence, Math.max(0, ctx.replaced));
+    let presence = ctx.displayed ? 1 : ctx.ghost ? GHOST_PRESENCE : f.presence;
+    if (ctx.replaced !== undefined && !ctx.displayed) presence = Math.min(presence, Math.max(0, ctx.replaced));
     if (f.phase === 'revealing') {
         const inOnly = !ctx.only || (n.ids.primitiveId !== undefined && ctx.only.has(n.ids.primitiveId));
         const p = inOnly ? nodeProgress(f.progress, n.window) : 1;
@@ -412,7 +420,9 @@ const OverlayHost: React.FC<{ store: OverlayStore; render: (frame: RevealFrame |
 };
 
 export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
-    const { state, stackRef, objectRootsRef, loadStatus, mutateSceneData, onPromptAction, overriddenIds, sceneObjects, view, onEvictedChange } = opts;
+    const { state, stackRef, objectRootsRef, loadStatus, mutateSceneData, onPromptAction, overriddenIds, sceneObjects, view, onEvictedChange, displayObjectIds } = opts;
+    const displayKey = (displayObjectIds || []).join('|');
+    const displayIds = React.useMemo(() => displayObjectIds?.length ? new Set(displayObjectIds) : undefined, [displayKey]);
     const runId = state?.runId;
     const pageLoadedAtMs = React.useRef(typeof performance !== 'undefined' ? performance.timeOrigin : 0).current;
 
@@ -520,7 +530,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
 
     // Retired layers re-added for "Show replaced layers" or "Replay build", removed again when neither needs them.
     const readded = React.useRef(new Set<string>());
-    const wantRetired = showReplaced || replaying;
+    const wantRetired = showReplaced || replaying || !!effective?.layers.some(l => l.retired && displayIds?.has(l.objectId));
     React.useEffect(() => {
         if (!effective) return;
         const retired = effective.layers.filter(l => l.retired);
@@ -560,8 +570,8 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
     }, []);
 
     // Everything the per-frame guard reads, kept current without re-installing it.
-    const live = React.useRef({ overriddenIds, state: stagedState, owner: derived?.owner, settled, reducedMotion, provenanceOn, showReplaced, replayEpoch, highlight, loadStatus, replaying, progress });
-    live.current = { overriddenIds, state: stagedState, owner: derived?.owner, settled, reducedMotion, provenanceOn, showReplaced, replayEpoch, highlight, loadStatus, replaying, progress };
+    const live = React.useRef({ overriddenIds, state: stagedState, owner: derived?.owner, settled, reducedMotion, provenanceOn, showReplaced, replayEpoch, highlight, loadStatus, replaying, progress, displayIds });
+    live.current = { overriddenIds, state: stagedState, owner: derived?.owner, settled, reducedMotion, provenanceOn, showReplaced, replayEpoch, highlight, loadStatus, replaying, progress, displayIds };
 
     // The twins the switch needs are scene objects (loaded by the viewport like any layer); twins no longer needed go.
     React.useEffect(() => {
@@ -772,7 +782,8 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         // the sweep fills the waits: while a layer reveals or crossfades, that motion is the progress shown
         const work = frame.animating ? undefined : workSweepFor(st, L.progress, infos.filter(([f]) => !f.hidden && f.phase !== 'retired').map(([, i]) => i.bounds), t0, L.reducedMotion, pageLoadedAtMs);
         for (const [f, info] of infos) {
-            const ghost = ghostOf(f, L.showReplaced, twinRef.current.engaged);
+            const displayed = !!L.displayIds?.has(f.objectId);
+            const ghost = !displayed && ghostOf(f, L.showReplaced, twinRef.current.engaged);
             if (ghost) stats.ghosts++;
             const only = f.layer.reveal.only ? new Set(f.layer.reveal.only.primitiveIds) : undefined;
             const swap = parseSwapId(f.objectId);
@@ -780,7 +791,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             const partLooks = new Map<THREE.Mesh, PartLook[]>();
             for (const n of info.nodes) {
                 const replaced = n.ids.surfaceId !== undefined && n.replaces.length === 0 ? replacedPresence.get(n.ids.surfaceId) : undefined;
-                const look = lookFor(f, n, { ghost, only, replaced, highlightOn, provenanceOn: L.provenanceOn, lg, overridden, swap: !!swap, ...(swap?.kind === 'tex' ? { rungs: RUNG_LOOK } : {}), ...(work ? { work } : {}) });
+                const look = lookFor(f, n, { ghost, displayed, only, replaced, highlightOn, provenanceOn: L.provenanceOn, lg, overridden, swap: !!swap, ...(swap?.kind === 'tex' ? { rungs: RUNG_LOOK } : {}), ...(work ? { work } : {}) });
                 if (n.part) {
                     const list = partLooks.get(n.part.mesh) ?? partLooks.set(n.part.mesh, []).get(n.part.mesh)!;
                     list[n.part.index] = look;
@@ -838,7 +849,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             const f = frameRef.current;
             const L = live.current;
             const highlightOn = !!L.highlight && L.highlight.untilMs > Date.now();
-            const ghosts = !!f?.layers.some(x => ghostOf(x, L.showReplaced, twinRef.current.engaged));
+            const ghosts = !!f?.layers.some(x => ghostOf(x, L.showReplaced, twinRef.current.engaged) || !!L.displayIds?.has(x.objectId));
             const stale = !!f && !!L.state && (f.layers.length !== L.state.layers.length || f.layers.some(x => !L.state!.layers.some(l => l.objectId === x.objectId)));
             // "Replay build" is consumed by the next scheduled frame, so it needs the guard even when everything is revealed.
             const replayPending = !!scheduleRef.current && scheduleRef.current.epoch !== L.replayEpoch;
@@ -873,7 +884,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
             }
             // Superseded layers: released once hidden for a while, loaded again as soon as an opt-in view needs them.
             if (f && L.state) {
-                const candidates = evictionEnabled() ? evictionCandidates({ state: L.state, frame: f, engaged: twinRef.current.engaged, showReplaced: L.showReplaced, replaying: L.replaying }) : new Set<string>();
+                const candidates = evictionEnabled() ? evictionCandidates({ state: L.state, frame: f, engaged: twinRef.current.engaged, showReplaced: L.showReplaced || !!L.displayIds, replaying: L.replaying }) : new Set<string>();
                 const { evict, nextCheckMs } = stepEviction(candidates, evictSinceRef.current, now, EVICT_AFTER_MS);
                 // a layer leaves the evicted set as soon as it stops being a candidate; one joins only after its delay
                 const next = new Set([...evictedRef.current].filter(id => candidates.has(id)));
@@ -889,7 +900,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         // Synchronously: a layer the loader attaches before the next animation frame must already meet the guard.
         tick();
         return () => { cancelAnimationFrame(raf); if (evictTimer !== undefined) clearTimeout(evictTimer); };
-    }, [stagedState, provenanceOn, showReplaced, replaying, replayEpoch, highlight, onFrame, stackRef, store, pageLoadedAtMs, setEvicted]);
+    }, [stagedState, provenanceOn, showReplaced, replaying, replayEpoch, highlight, onFrame, stackRef, store, pageLoadedAtMs, setEvicted, displayIds]);
 
     // Off for good on unmount: the guard, the staged materials, the background.
     React.useEffect(() => () => {

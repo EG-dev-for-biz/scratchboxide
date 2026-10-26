@@ -15,6 +15,7 @@ import { AdaptiveSurveyRigService } from './AdaptiveSurveyRigService';
 import { SurveyStationRenderService } from './SurveyStationRenderService';
 import { BeautifyStationService, describeStationImageSource, type StationImageGenerator } from './BeautifyStationService';
 import { SurveySplatPipelineService } from './SurveySplatPipelineService';
+import { beautifyCharacterSheet } from './building-character-sheet';
 import { GoogleMapsService } from '../../browser/generative-canvas/services/google-maps-service';
 import { geocode3DTilesAddress, type GeoAnchor } from './Google3DTileBlockoutPipelineService';
 import { MissingInputError } from '../../common/errors/pipeline-errors';
@@ -49,6 +50,8 @@ export interface SurveyApiDeps {
     workspaceRoot?: string;
     /** Registered by later phases: beautify one station / whole batch to splat tiles. */
     beautifyStation?: (args: any, report: (p: number, msg?: string) => void) => Promise<any>;
+    /** Building-survey character sheet: four stations in one 2 x 2 sheet, one 4K image (building-character-sheet.ts). */
+    beautifySheet?: (args: any, report: (p: number, msg?: string) => void) => Promise<any>;
     beautifyToSplats?: (args: any, report: (p: number, msg?: string) => void) => Promise<any>;
     rerunPipeline?: (args: any, report: (p: number, msg?: string) => void) => Promise<any>;
 }
@@ -172,15 +175,44 @@ export function registerBeautifyHandlers(deps: SurveyApiDeps, generator: Station
         report(0.05, 'Rendering blockout');
         const renderer = new SurveyStationRenderService();
         await renderer.loadMesh(resolveGlb(args.glbPath));
-        const [station] = renderer.enrichStations([args.station], { isoDate: args.isoDate });
+        // The sun at the instant the stations were planned for (survey_synthesize_stations' isoDate), not at the time of this call.
+        const [station] = renderer.enrichStations([args.station], { isoDate: args.isoDate ?? args.station?.beautify?.solar?.isoDate });
         const svc = new BeautifyStationService(renderer, generator);
         report(0.2, `Generating with ${generator.name}`);
-        const res = await svc.beautify(station, { locationName: args.locationName || args.anchor?.formattedAddress || 'the location', moodPromptContext: args.moodPromptContext, styleSuffix: args.styleSuffix }, { width: args.width ?? 1920, maxRerolls: args.maxRerolls, signal: args.signal });
+        // Building-survey mode: rendered from the tile photos, outline-locked and checked against the scan outline.
+        const survey = args.mode === 'building-survey';
+        const res = await svc.beautify(station,
+            { locationName: args.locationName || args.anchor?.formattedAddress || 'the location', moodPromptContext: args.moodPromptContext, styleSuffix: args.styleSuffix, lighting: args.lighting === 'scene' ? 'scene' : 'even' },
+            { width: args.width ?? 1920, maxRerolls: args.maxRerolls ?? (survey ? 2 : undefined), signal: args.signal, renderMode: args.renderMode ?? (survey ? 'textured' : undefined), glbPath: resolveGlb(args.glbPath), outline: survey });
         const outDir = path.resolve(workspaceRoot, args.outDir || `build/beautify_stations/${Date.now()}`);
         await fs.outputFile(path.join(outDir, `station_${station.id}_blockout.png`), res.blockout.png);
         await fs.outputFile(path.join(outDir, `station_${station.id}_beautified.png`), res.imagePng);
         report(1, res.accepted ? 'Accepted' : `Rejected: ${res.qc.reason}`);
         return { stationId: station.id, accepted: res.accepted, attempts: res.attempts, qc: res.qc, prompt: res.prompt, imageBase64: res.imagePng.toString('base64'), imagePath: path.join(outDir, `station_${station.id}_beautified.png`), blockoutPath: path.join(outDir, `station_${station.id}_blockout.png`), alignedStation: res.alignedStation, modelUsed: res.modelUsed, imageSource: describeStationImageSource(res) };
+    };
+
+    deps.beautifySheet = async (args, report) => {
+        if (!args?.glbPath || !Array.isArray(args?.stations) || args.stations.length !== 4) throw new Error('glbPath and four stations are required for a character sheet');
+        report(0.05, 'Rendering the four views');
+        const renderer = new SurveyStationRenderService();
+        const glbPath = resolveGlb(args.glbPath);
+        await renderer.loadMesh(glbPath);
+        const stations = renderer.enrichStations(args.stations, { isoDate: args.isoDate });
+        report(0.2, `Generating the character sheet with ${generator.name}`);
+        const res = await beautifyCharacterSheet(renderer, generator, stations, args.locationName || args.anchor?.formattedAddress || 'the location',
+            { glbPath, renderMode: args.renderMode === 'clay' ? 'clay' : 'textured', maxRerolls: args.maxRerolls, styleSuffix: args.styleSuffix, signal: args.signal });
+        const outDir = path.resolve(workspaceRoot, args.outDir || `build/beautify_sheets/${Date.now()}`);
+        await fs.outputFile(path.join(outDir, 'sheet_reference.png'), res.inputPng);
+        await fs.outputFile(path.join(outDir, 'sheet_beautified.png'), res.sheetPng);
+        const panels = [];
+        for (const p of res.panels) {
+            const imagePath = path.join(outDir, `station_${p.station.id}_beautified.png`), blockoutPath = path.join(outDir, `station_${p.station.id}_blockout.png`);
+            await fs.outputFile(imagePath, p.imagePng); await fs.outputFile(blockoutPath, p.blockout.png);
+            panels.push({ stationId: p.station.id, accepted: p.qc.passed, qc: p.qc, colour: p.colour, imagePath, blockoutPath, alignedStation: p.alignedStation });
+        }
+        const rejected = panels.filter(p => !p.accepted).length;
+        report(1, res.accepted ? 'Accepted' : `Rejected: ${[rejected ? `${rejected} of 4 panels failed` : '', res.borders.reason || ''].filter(Boolean).join('; ')}`);
+        return { accepted: res.accepted, attempts: res.attempts, borders: res.borders, prompt: res.prompt, sheetPath: path.join(outDir, 'sheet_beautified.png'), referencePath: path.join(outDir, 'sheet_reference.png'), panels, modelUsed: res.modelUsed, imageSource: describeStationImageSource({ ...res, generator: generator.name }) };
     };
 
     const runSurveyPipeline = async (args: any, report: (p: number, msg?: string) => void) => {

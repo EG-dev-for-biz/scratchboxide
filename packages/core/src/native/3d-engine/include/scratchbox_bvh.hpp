@@ -41,6 +41,8 @@ struct RayHit {
     uint32_t triangleIndex{0};
     Vec3 position{0.0f, 0.0f, 0.0f};
     Vec3 normal{0.0f, 1.0f, 0.0f};
+    /** The mesh's own texture UV at the hit, barycentric-interpolated from the triangle's vertices (not u/v above, which are barycentric weights). */
+    Vec2 texCoord{0.0f, 0.0f};
     bool hit{false};
 };
 
@@ -372,6 +374,7 @@ public:
                             hit.triangleIndex = triIdx;
                             hit.position = ray.at(t);
                             hit.normal = (v0.normal * (1.0f - u - v) + v1.normal * u + v2.normal * v).normalized();
+                            hit.texCoord = v0.uv * (1.0f - u - v) + v1.uv * u + v2.uv * v;
                             hit.hit = true;
                             foundHit = true;
                         }
@@ -470,8 +473,16 @@ public:
                     }
                 }
             } else {
-                stack[stackPtr++] = node.offsetOrSecondChild;
-                stack[stackPtr++] = nodeIdx + 1;
+                // nearer box last (popped first): the best distance shrinks sooner, so more of the far subtree is pruned
+                auto boxSq = [&](uint32_t i) {
+                    const auto& b = nodes[i].bounds;
+                    Vec3 c(std::clamp(p.x, b.min.x, b.max.x), std::clamp(p.y, b.min.y, b.max.y), std::clamp(p.z, b.min.z, b.max.z));
+                    return (p - c).lengthSquared();
+                };
+                uint32_t a = nodeIdx + 1, b = node.offsetOrSecondChild;
+                if (boxSq(a) > boxSq(b)) std::swap(a, b);
+                stack[stackPtr++] = b;
+                stack[stackPtr++] = a;
             }
         }
 
@@ -538,6 +549,27 @@ inline std::vector<float> computeMeshRTAO(
     }
 
     return ao;
+}
+
+/**
+ * Bakes computeMeshRTAO's per-vertex occlusion into vertex colour, at `intensity` strength — the same
+ * lerp(1, ao, intensity) * colour.rgb convention processing::DifferentialGeometryEngine::bakeCavityAO uses for
+ * its (curvature-based, not ray-traced) cavity AO, so a script can swap one bake for the other freely.
+ */
+inline void bakeMeshRTAO(
+    ScratchboxMesh& mesh,
+    int samplesPerVertex = 16,
+    float maxDistance = 1.5f,
+    float intensity = 1.0f,
+    uint32_t seed = 42
+) {
+    std::vector<float> ao = computeMeshRTAO(mesh, samplesPerVertex, maxDistance, seed);
+    for (size_t i = 0; i < mesh.vertices.size(); ++i) {
+        float occ = 1.0f + (ao[i] - 1.0f) * intensity; // lerp(1, ao[i], intensity)
+        mesh.vertices[i].color.x *= occ;
+        mesh.vertices[i].color.y *= occ;
+        mesh.vertices[i].color.z *= occ;
+    }
 }
 
 } // namespace bvh

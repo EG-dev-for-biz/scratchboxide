@@ -31,6 +31,10 @@
 #include "scratchbox_kinematics.hpp"
 #include "scratchbox_skinning.hpp"
 #include "scratchbox_sb_rig.hpp"
+#include "scratchbox_sb_veggie_grove.hpp"
+#include "scratchbox_mesh_edit.hpp"
+#include "scratchbox_scan_massing.hpp"
+#include "scratchbox_roof_objects.hpp"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -545,6 +549,13 @@ NB_MODULE(scratchbox_native, m) {
             processing::DifferentialGeometryEngine::bakeCavityAO(self, intensity);
             return self;
         }, "intensity"_a = 0.65f)
+        .def("bake_rtao", [](ScratchboxMesh& self, int samplesPerVertex, float maxDistance, float intensity, uint32_t seed) -> ScratchboxMesh& {
+            bvh::bakeMeshRTAO(self, samplesPerVertex, maxDistance, intensity, seed);
+            return self;
+        }, "samples_per_vertex"_a = 16, "max_distance"_a = 1.5f, "intensity"_a = 1.0f, "seed"_a = 42)
+        .def("compute_rtao", [](const ScratchboxMesh& self, int samplesPerVertex, float maxDistance, uint32_t seed) {
+            return bvh::computeMeshRTAO(self, samplesPerVertex, maxDistance, seed);
+        }, "samples_per_vertex"_a = 16, "max_distance"_a = 1.5f, "seed"_a = 42)
         .def("slice_by_plane", [](ScratchboxMesh& self, const Vec3& planePoint, const Vec3& planeNormal, bool keepPositive, bool capCut) -> ScratchboxMesh& {
             ScratchboxMesh res = processing::PlanarSlicer::slice(self, planePoint, planeNormal, keepPositive, capCut);
             self.vertices = std::move(res.vertices);
@@ -563,18 +574,21 @@ NB_MODULE(scratchbox_native, m) {
             self.bounds = res.bounds;
             return self;
         }, "target_edge_length"_a = 0.25f, "iterations"_a = 4, "crease_angle_deg"_a = 45.0f)
-        .def("decimate_qem", [](ScratchboxMesh& self, size_t targetTriangles, float targetRatio, float maxError, bool preserveBoundary) -> ScratchboxMesh& {
+        .def("decimate_qem", [](ScratchboxMesh& self, size_t targetTriangles, float targetRatio, float maxError, bool preserveBoundary, bool preserveCreases, float creaseAngleDeg) -> ScratchboxMesh& {
             processing::DecimateOptions opt;
             opt.targetTriangles = targetTriangles;
             opt.targetRatio = targetRatio;
             opt.maxError = maxError;
             opt.preserveBoundary = preserveBoundary;
+            opt.preserveCreases = preserveCreases;
+            opt.creaseAngleDeg = creaseAngleDeg;
             ScratchboxMesh res = processing::QuadricDecimator::decimate(self, opt);
             self.vertices = std::move(res.vertices);
             self.indices = std::move(res.indices);
             self.bounds = res.bounds;
             return self;
-        }, "target_triangles"_a = 0, "target_ratio"_a = 0.5f, "max_error"_a = 1e9f, "preserve_boundary"_a = true)
+        }, "target_triangles"_a = 0, "target_ratio"_a = 0.5f, "max_error"_a = 1e9f, "preserve_boundary"_a = true,
+           "preserve_creases"_a = false, "crease_angle_deg"_a = 45.0f)
         .def("decimate", [](ScratchboxMesh& self, float ratio, size_t targetTriangles) -> ScratchboxMesh& {
             processing::DecimateOptions opt;
             opt.targetTriangles = targetTriangles;
@@ -655,13 +669,66 @@ NB_MODULE(scratchbox_native, m) {
         return ScratchboxMesh::createArchedBlister(bounds, archRadius, swell, gridPhi, gridW, sideSign, color);
     }, "bounds"_a = Vec3(0.35f, 0.45f, 0.9f), "arch_radius"_a = 0.40f, "swell"_a = 0.08f, "grid_phi"_a = 16, "grid_w"_a = 8, "side_sign"_a = 1.0f, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f));
 
-    m_geom.def("create_lathe", [](const std::vector<Vec2>& profile, int radialSegments, float totalAngleRad, const Vec4& color) {
-        return shaper::Lathe3D::revolve(profile, radialSegments, totalAngleRad, color);
-    }, "profile"_a, "radial_segments"_a = 32, "total_angle_rad"_a = math::TWO_PI, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f));
+    m_geom.def("create_lathe", [](const std::vector<Vec2>& profile, int radialSegments, float totalAngleRad, const Vec4& color, bool capEnds) {
+        return shaper::Lathe3D::revolve(profile, radialSegments, totalAngleRad, color, capEnds);
+    }, "profile"_a, "radial_segments"_a = 32, "total_angle_rad"_a = math::TWO_PI, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f), "cap_ends"_a = false);
 
     m_geom.def("create_loft", [](const std::vector<std::vector<Vec3>>& slices, bool closeEnds, const Vec4& color) {
         return shaper::Loft3D::skin(slices, closeEnds, color);
     }, "slices"_a, "close_ends"_a = true, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f));
+
+    m_geom.def("create_sweep", [](const std::vector<Vec3>& curve, const std::vector<Vec2>& profile, float totalTwistRad, float startScale, float endScale, bool closeEnds, const Vec4& color) {
+        return shaper::Sweep3D::sweep(curve, profile, totalTwistRad, startScale, endScale, closeEnds, color);
+    }, "curve"_a, "profile"_a, "total_twist_rad"_a = 0.0f, "start_scale"_a = 1.0f, "end_scale"_a = 1.0f, "close_ends"_a = true, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f));
+
+    // Named for what each actually does rather than the caller's shape: onGrid is a 2D countU x countV grid (not
+    // strictly "linear"), alongCurve follows an arbitrary polyline (not strictly "circular" — closing the curve
+    // on itself is what makes a circular array, the function itself doesn't require it).
+    m_geom.def("replicate_on_grid", [](const ScratchboxMesh& seed, int countU, int countV, float pitchU, float pitchV, float rowOffsetU, bool alternateRows, float mergeDistance, const Vec3& origin, const Vec3& axisU, const Vec3& axisV) {
+        return shaper::Replicator3D::onGrid(seed, countU, countV, pitchU, pitchV, rowOffsetU, alternateRows, mergeDistance, origin, axisU, axisV);
+    }, "seed"_a, "count_u"_a, "count_v"_a, "pitch_u"_a, "pitch_v"_a, "row_offset_u"_a = 0.0f, "alternate_rows"_a = false, "merge_distance"_a = 0.0f,
+       "origin"_a = Vec3(0, 0, 0), "axis_u"_a = Vec3(1, 0, 0), "axis_v"_a = Vec3(0, 0, 1));
+
+    m_geom.def("replicate_along_curve", [](const ScratchboxMesh& seed, const std::vector<Vec3>& curve, float pitch, float mergeDistance, bool fitToLength) {
+        return shaper::Replicator3D::alongCurve(seed, curve, pitch, mergeDistance, fitToLength);
+    }, "seed"_a, "curve"_a, "pitch"_a, "merge_distance"_a = 0.0f, "fit_to_length"_a = true,
+       "Repeat seed at a continuous pitch along curve (close the curve on itself for a circular array)");
+
+    m_geom.def("extrude_polygon", [](const std::vector<Vec2>& footprint, float baseY, float height, const Vec4& color) {
+        return footprints::extrudePolygon(footprint, baseY, height, color);
+    }, "footprint"_a, "base_y"_a = 0.0f, "height"_a = 1.0f, "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f),
+       "Extrude a 2D XZ polygon along +Y into a closed, capped solid (walls + top + bottom)");
+
+    m_geom.def("merge_meshes", [](const std::vector<ScratchboxMesh>& meshes) {
+        ScratchboxMesh out("merged_mesh");
+        for (const auto& mesh : meshes) out.append(mesh);
+        out.recomputeBounds();
+        return out;
+    }, "meshes"_a, "Merge a list of meshes into one (vertices and triangles concatenated)");
+
+    // BSP mesh CSG (scratchbox_mesh_edit.hpp), the same booleanPolygons the mesh_edit tool and scripts/run_mesh_edit_pipeline.cpp
+    // already drive on an existing glb: here on two meshes directly, so an arch, a vault or a staircase composes from the
+    // universal operators (extrude/lathe/sweep a solid, then subtract/union/intersect it) instead of needing its own named
+    // primitive. eps and the T-junction weld after the boolean follow the same derivation as that pipeline: eps from the
+    // larger operand's own diagonal, not a fixed constant, since a boolean on a tiny or a huge pair of solids needs a
+    // different tolerance.
+    m_geom.def("boolean_mesh", [](const ScratchboxMesh& a, const ScratchboxMesh& b, const std::string& op) {
+        mesh_edit::BooleanOp bop;
+        if (op == "union") bop = mesh_edit::BooleanOp::Union;
+        else if (op == "subtract") bop = mesh_edit::BooleanOp::Subtract;
+        else if (op == "intersect") bop = mesh_edit::BooleanOp::Intersect;
+        else throw std::invalid_argument("boolean_mesh op must be \"union\", \"subtract\" or \"intersect\"");
+        std::vector<mesh_edit::CsgPolygon> pa = mesh_edit::meshToPolygons(a), pb = mesh_edit::meshToPolygons(b);
+        const mesh_edit::DBox ba = mesh_edit::boxOf(pa), bb = mesh_edit::boxOf(pb);
+        const double extent = std::max((ba.hi - ba.lo).length(), (bb.hi - bb.lo).length());
+        const double eps = std::max(1e-9, 1e-7 * std::max(extent, 1e-3));
+        std::vector<mesh_edit::CsgPolygon> result = mesh_edit::booleanPolygons(std::move(pa), std::move(pb), bop, eps);
+        mesh_edit::closeTJunctions(result, eps * 10);
+        ScratchboxMesh out = mesh_edit::polygonsToMesh(result, "boolean_mesh");
+        out.material = a.material;
+        out.recomputeBounds();
+        return out;
+    }, "a"_a, "b"_a, "op"_a, "Boolean a and b by BSP mesh CSG: op is \"union\", \"subtract\" or \"intersect\"");
 
     // ========================================================================
     // 3. ARCHITECTURE SUBMODULE (Building Tools / OSM)
@@ -753,6 +820,7 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("window_height", &BuildingConfig::windowHeight)
         .def_rw("window_recess_depth", &BuildingConfig::windowRecessDepth)
         .def_rw("roof_type", &BuildingConfig::roofType)
+        .def_rw("vault_profile_exponent", &BuildingConfig::vaultProfileExponent)
         .def_rw("roof_pitch_degrees", &BuildingConfig::roofPitchDegrees)
         .def_rw("roof_height", &BuildingConfig::roofHeight)
         .def_rw("roof_overhang", &BuildingConfig::roofOverhang)
@@ -848,71 +916,11 @@ NB_MODULE(scratchbox_native, m) {
     // ========================================================================
     // 4. NATURE & BOTANICAL SUBMODULE (Mtree & IvyGen)
     // ========================================================================
-    auto m_nat = m.def_submodule("nature", "Procedural botanical growth, trees and ivy");
+    auto m_nat = m.def_submodule("nature", "Ivy growth (trees: the vegetation submodule, SB-Veggie)");
 
-    nb::class_<SpaceColonizationConfig>(m_nat, "SpaceColonizationConfig")
-        .def(nb::init<>())
-        .def_rw("attractor_count", &SpaceColonizationConfig::attractorCount)
-        .def_rw("crown_center", &SpaceColonizationConfig::crownCenter)
-        .def_rw("crown_extents", &SpaceColonizationConfig::crownExtents)
-        .def_rw("root_anchor", &SpaceColonizationConfig::rootAnchor)
-        .def_rw("perception_radius", &SpaceColonizationConfig::perceptionRadius)
-        .def_rw("kill_radius", &SpaceColonizationConfig::killRadius)
-        .def_rw("branch_step_length", &SpaceColonizationConfig::branchStepLength)
-        .def_rw("clear_trunk_height", &SpaceColonizationConfig::clearTrunkHeight)
-        .def_rw("base_radius", &SpaceColonizationConfig::baseRadius)
-        .def_rw("tip_radius", &SpaceColonizationConfig::tipRadius)
-        .def_rw("da_vinci_exponent", &SpaceColonizationConfig::daVinciExponent)
-        .def_rw("generate_leaves", &SpaceColonizationConfig::generateLeaves)
-        .def_rw("use_detailed_leaves", &SpaceColonizationConfig::useDetailedLeaves)
-        .def_rw("spawn_lateral_twigs", &SpaceColonizationConfig::spawnLateralTwigs)
-        .def_rw("leaf_size", &SpaceColonizationConfig::leafSize)
-        .def_rw("leaves_per_tip", &SpaceColonizationConfig::leavesPerTip)
-        .def_rw("wood_color", &SpaceColonizationConfig::woodColor)
-        .def_rw("leaf_color", &SpaceColonizationConfig::leafColor)
-        .def_rw("use_twig_sprays", &SpaceColonizationConfig::useTwigSprays)
-        .def_rw("root_flare_multiplier", &SpaceColonizationConfig::rootFlareMultiplier)
-        .def_rw("root_flare_height", &SpaceColonizationConfig::rootFlareHeight)
-        .def_rw("volumetric_density", &SpaceColonizationConfig::volumetricDensity)
-        .def_rw("foliage_branch_radius_threshold", &SpaceColonizationConfig::foliageBranchRadiusThreshold)
-        .def_rw("lateral_twig_probability", &SpaceColonizationConfig::lateralTwigProbability)
-        .def_rw("outward_arch_factor", &SpaceColonizationConfig::outwardArchFactor)
-        .def_rw("growth_momentum_factor", &SpaceColonizationConfig::growthMomentumFactor)
-        .def_rw("cantilever_droop", &SpaceColonizationConfig::cantileverDroop)
-        .def_rw("is_shrub", &SpaceColonizationConfig::isShrub)
-        .def_rw("seed", &SpaceColonizationConfig::seed);
-
-    m_nat.def("generate_tree", [](const SpaceColonizationConfig& config) {
-        geometry::Mesh legacy = SpaceColonizationTreeGenerator::generateTree(config);
-        return legacy.toScratchboxMesh();
-    }, "config"_a, "Generate a realistic botanical tree using Runions space colonization");
-
-    m_nat.def("generate_tree_components", [](const SpaceColonizationConfig& config) {
-        auto [wood, foliage] = SpaceColonizationTreeGenerator::generateTreeComponents(config);
-        return std::make_pair(wood.toScratchboxMesh(), foliage.toScratchboxMesh());
-    }, "config"_a, "Generate separate wood and foliage components with proper material tagging and cylindrical UVs");
-
-    nb::class_<LSystemTreeParams>(m_nat, "LSystemTreeParams")
-        .def(nb::init<>())
-        .def_rw("max_depth", &LSystemTreeParams::maxDepth)
-        .def_rw("initial_length", &LSystemTreeParams::initialLength)
-        .def_rw("initial_radius", &LSystemTreeParams::initialRadius)
-        .def_rw("branch_angle_min", &LSystemTreeParams::branchAngleMin)
-        .def_rw("branch_angle_max", &LSystemTreeParams::branchAngleMax)
-        .def_rw("length_decay", &LSystemTreeParams::lengthDecay)
-        .def_rw("gravity_droop", &LSystemTreeParams::gravityDroop)
-        .def_rw("children_per_node", &LSystemTreeParams::childrenPerNode)
-        .def_rw("generate_leaves", &LSystemTreeParams::generateLeaves)
-        .def_rw("use_detailed_foliage_cards", &LSystemTreeParams::useDetailedFoliageCards)
-        .def_rw("transfer_smooth_normals", &LSystemTreeParams::transferSmoothNormals)
-        .def_rw("normal_transfer_mix_factor", &LSystemTreeParams::normalTransferMixFactor)
-        .def_rw("leaf_size", &LSystemTreeParams::leafSize)
-        .def_rw("seed", &LSystemTreeParams::seed);
-
-    m_nat.def("generate_lsystem_tree", [](const Vec3& root_pos, const LSystemTreeParams& params) {
-        geometry::Mesh legacy = generateProceduralTree(root_pos, params);
-        return legacy.toScratchboxMesh();
-    }, "root_pos"_a = Vec3(0, 0, 0), "params"_a = LSystemTreeParams(), "Generate an L-system tree with transferred envelope normals");
+    // Trees are not grown here: every tree in a scene is an SB-Veggie tree (the vegetation submodule below,
+    // scratchbox_sb_veggie_grove.hpp). The bare space-colonisation and L-system generators of scratchbox_nature.hpp
+    // are engine internals, not reachable from scripts.
 
     nb::class_<IvyConfig>(m_nat, "IvyConfig")
         .def(nb::init<>())
@@ -1078,9 +1086,49 @@ NB_MODULE(scratchbox_native, m) {
         return shaper::Loft3D::skin(slices, closeEnds, color);
     }, "slices"_a, "close_ends"_a = true, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f), "Loft skin between 3D station slices");
 
-    m_shaper.def("lathe", [](const std::vector<Vec2>& profile, int radialSegments, float totalAngleRad, const Vec4& color) {
-        return shaper::Lathe3D::revolve(profile, radialSegments, totalAngleRad, color);
-    }, "profile"_a, "radial_segments"_a = 32, "total_angle_rad"_a = math::TWO_PI, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f), "Revolve 2D profile into rotational solid");
+    m_shaper.def("lathe", [](const std::vector<Vec2>& profile, int radialSegments, float totalAngleRad, const Vec4& color, bool capEnds) {
+        return shaper::Lathe3D::revolve(profile, radialSegments, totalAngleRad, color, capEnds);
+    }, "profile"_a, "radial_segments"_a = 32, "total_angle_rad"_a = math::TWO_PI, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f), "cap_ends"_a = false, "Revolve 2D profile into rotational solid; cap_ends closes an open axial hole on a full sweep");
+
+    m_shaper.def("sweep", [](const std::vector<Vec3>& curve, const std::vector<Vec2>& profile, float totalTwistRad, float startScale, float endScale, bool closeEnds, const Vec4& color) {
+        return shaper::Sweep3D::sweep(curve, profile, totalTwistRad, startScale, endScale, closeEnds, color);
+    }, "curve"_a, "profile"_a, "total_twist_rad"_a = 0.0f, "start_scale"_a = 1.0f, "end_scale"_a = 1.0f, "close_ends"_a = true, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f),
+       "Sweep 2D profile along a 3D carrier curve with rotation-minimizing frames (limbs, hoses, struts, coils)");
+
+    m_shaper.def("replicate_on_grid", [](const ScratchboxMesh& seed, int countU, int countV, float pitchU, float pitchV, float rowOffsetU, bool alternateRows, float mergeDistance, const Vec3& origin, const Vec3& axisU, const Vec3& axisV) {
+        return shaper::Replicator3D::onGrid(seed, countU, countV, pitchU, pitchV, rowOffsetU, alternateRows, mergeDistance, origin, axisU, axisV);
+    }, "seed"_a, "count_u"_a, "count_v"_a, "pitch_u"_a, "pitch_v"_a, "row_offset_u"_a = 0.0f, "alternate_rows"_a = false, "merge_distance"_a = 0.0f,
+       "origin"_a = Vec3(0, 0, 0), "axis_u"_a = Vec3(1, 0, 0), "axis_v"_a = Vec3(0, 0, 1),
+       "Repeat seed over a flat U x V lattice (bolt patterns, tile fields, brick-bonded rows)");
+
+    m_shaper.def("replicate_along_curve", [](const ScratchboxMesh& seed, const std::vector<Vec3>& curve, float pitch, float mergeDistance, bool fitToLength) {
+        return shaper::Replicator3D::alongCurve(seed, curve, pitch, mergeDistance, fitToLength);
+    }, "seed"_a, "curve"_a, "pitch"_a, "merge_distance"_a = 0.0f, "fit_to_length"_a = true,
+       "Repeat seed at a continuous pitch along curve, oriented by rotation-minimizing frames (bolt circles, louvres, teeth, treads)");
+
+    m_shaper.def("extrude_polygon", [](const std::vector<Vec2>& footprint, float baseY, float height, const Vec4& color) {
+        return footprints::extrudePolygon(footprint, baseY, height, color);
+    }, "footprint"_a, "base_y"_a = 0.0f, "height"_a = 1.0f, "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f),
+       "Extrude a 2D XZ polygon along +Y into a closed, capped solid (walls + top + bottom)");
+
+    m_shaper.def("boolean_mesh", [](const ScratchboxMesh& a, const ScratchboxMesh& b, const std::string& op) {
+        mesh_edit::BooleanOp bop;
+        if (op == "union") bop = mesh_edit::BooleanOp::Union;
+        else if (op == "subtract") bop = mesh_edit::BooleanOp::Subtract;
+        else if (op == "intersect") bop = mesh_edit::BooleanOp::Intersect;
+        else throw std::invalid_argument("boolean_mesh op must be \"union\", \"subtract\" or \"intersect\"");
+        std::vector<mesh_edit::CsgPolygon> pa = mesh_edit::meshToPolygons(a), pb = mesh_edit::meshToPolygons(b);
+        const mesh_edit::DBox ba = mesh_edit::boxOf(pa), bb = mesh_edit::boxOf(pb);
+        const double extent = std::max((ba.hi - ba.lo).length(), (bb.hi - bb.lo).length());
+        const double eps = std::max(1e-9, 1e-7 * std::max(extent, 1e-3));
+        std::vector<mesh_edit::CsgPolygon> result = mesh_edit::booleanPolygons(std::move(pa), std::move(pb), bop, eps);
+        mesh_edit::closeTJunctions(result, eps * 10);
+        ScratchboxMesh out = mesh_edit::polygonsToMesh(result, "boolean_mesh");
+        out.material = a.material;
+        out.recomputeBounds();
+        return out;
+    }, "a"_a, "b"_a, "op"_a, "Boolean a and b by BSP mesh CSG: op is \"union\", \"subtract\" or \"intersect\" "
+       "(an arch, a vault or a staircase composes from this plus extrude/lathe/sweep, instead of its own named primitive)");
 
     // ========================================================================
     // 7. IO & STREAMING SUBMODULE
@@ -1169,21 +1217,51 @@ NB_MODULE(scratchbox_native, m) {
         return nb::bytes(reinterpret_cast<const char*>(glb.data()), glb.size());
     }, "meshes"_a, "Export multiple ScratchboxMeshes directly as a Python bytes object containing .glb data");
 
-    m_io.def("write_botanical_glb", [](const std::string& path, const std::vector<ScratchboxMesh>& meshes, int texture_res, float season, uint32_t seed) {
-        auto textures = botanical::BotanicalPbrTextureSynthesizer::createBotanicalEmbeddedTextures(texture_res, texture_res, season, seed, false);
-        auto glb = GlbWriter::serializeMultiMeshToGlb(meshes, textures);
-        std::ofstream out(path, std::ios::binary);
-        if (!out.is_open()) {
-            throw std::runtime_error("Failed to open file for writing: " + path);
-        }
-        out.write(reinterpret_cast<const char*>(glb.data()), static_cast<std::streamsize>(glb.size()));
-        out.close();
-        return true;
-    }, "path"_a, "meshes"_a, "texture_res"_a = 512, "season"_a = 1.0f, "seed"_a = 42,
-       "Save botanical tree meshes to GLB embedding procedural Worley bark and botanical foliage PBR texture maps (Albedo, Normal, ORM)");
 
     // ========================================================================
-    // 8. PLANT SUBMODULE (scratchbox_plant_builder.hpp)
+    // 8. VEGETATION SUBMODULE (SB-Veggie: scratchbox_sb_veggie_grove.hpp)
+    // ========================================================================
+    auto m_veg = m.def_submodule("vegetation", "SB-Veggie trees (the one vegetation generator): space colonisation inside described crowns, SB-Veggie leaf clusters, species and texture libraries, viewport levels of detail");
+
+    m_veg.def("grow_described_trees", [](const std::string& treesJson, const std::string& optionsJson) {
+        using namespace scratchbox::tile_vegetation;
+        try {
+            const io::GlbJsonValue doc = json::parse(treesJson);
+            const auto trees = parseDescribedTrees(doc);
+            const io::GlbJsonValue opt = json::parse(optionsJson.empty() ? std::string("{}") : optionsJson);
+            GroveOptions o;
+            auto num = [&](const char* k, double def) { return opt[k].type == io::GlbJsonValue::Number ? opt[k].num : def; };
+            auto str = [&](const char* k) { return opt[k].type == io::GlbJsonValue::String ? opt[k].str : std::string(); };
+            auto flag = [&](const char* k, bool def) { return opt[k].type == io::GlbJsonValue::Bool ? opt[k].b : def; };
+            o.triangleBudget = num("triangleBudget", 0);
+            o.sceneTriangleCap = num("sceneTriangleCap", o.sceneTriangleCap);
+            const std::string seed = str("seed");
+            if (!seed.empty()) {
+                if (seed.size() > 16 || seed.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos) throw VegetationError("bad_request", "seed must be 1-16 hex digits");
+                o.seed = std::stoull(seed, nullptr, 16);
+            }
+            o.speciesIndexPath = str("speciesIndexPath");
+            o.speciesIndexLabel = str("speciesIndexLabel");
+            o.textureIndexPath = str("textureIndexPath");
+            o.textureIndexLabel = str("textureIndexLabel");
+            o.lod = flag("lod", o.lod);
+            o.quantize = flag("quantize", o.quantize);
+            o.reveal = flag("reveal", o.reveal);
+            o.psiSeason = num("psiSeason", o.psiSeason);
+            o.latAbsDeg = num("latAbsDeg", o.latAbsDeg);
+            o.minSurfaceReached = num("minSurfaceReached", o.minSurfaceReached);
+            o.stageKey = str("stageKey");
+            if (doc["label"].type == io::GlbJsonValue::String) o.label = doc["label"].str.substr(0, 200);
+            const GroveResult r = growDescribedTrees(trees, o);
+            return nb::make_tuple(nb::bytes(reinterpret_cast<const char*>(r.glb.data()), r.glb.size()), r.statsJson, r.crownsJson);
+        } catch (const VegetationError& e) {
+            throw std::runtime_error("SB-Veggie " + e.code() + ": " + e.what());
+        }
+    }, "trees_json"_a, "options_json"_a = "{}",
+       "Grow described trees (scratchbox.sb-veggie-trees/1 JSON) as SB-Veggie trees; returns (trees GLB bytes, stats JSON, crowns JSON)");
+
+    // ========================================================================
+    // 8b. SURFACE AND WEATHERING SUBMODULES (scratchbox_coursed_surface.hpp, scratchbox_weathering.hpp)
     // ========================================================================
     auto m_surface = m.def_submodule("surface", "Real-scale tileable PBR surface texture synthesis");
 
@@ -1316,39 +1394,156 @@ NB_MODULE(scratchbox_native, m) {
         return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     }, "params"_a, "A procedural stain / water mark / patch as RGBA PNG bytes for a decal");
 
-    auto m_plant = m.def_submodule("plant", "Procedural botanical plant presets and heroic biome assets");
-
-    nb::class_<plant::PlantBuildResult>(m_plant, "PlantBuildResult")
-        .def_rw("wood_mesh", &plant::PlantBuildResult::woodMesh)
-        .def_rw("foliage_mesh", &plant::PlantBuildResult::foliageMesh)
-        .def_rw("ground_clutter_mesh", &plant::PlantBuildResult::groundClutterMesh)
-        .def_rw("total_vertices", &plant::PlantBuildResult::totalVertices)
-        .def_rw("total_triangles", &plant::PlantBuildResult::totalTriangles)
-        .def("get_combined", &plant::PlantBuildResult::getCombined, "name"_a = "CombinedPlant");
-
-    m_plant.def("create_hero_redwood", [](const Vec3& pos, float height) {
-        return plant::PlantPresets::createHeroAncientRedwood(pos, height);
-    }, "pos"_a = Vec3(0, 0, 0), "height"_a = 28.0f, "Create hero ancient redwood with 8 buttress flutes and multi-tier conifer boughs");
-
-    m_plant.def("create_understory_dogwood", [](const Vec3& pos, float height) {
-        return plant::PlantPresets::createUnderstoryDogwood(pos, height);
-    }, "pos"_a = Vec3(0, 0, 0), "height"_a = 5.5f, "Create subcanopy understory dogwood tree");
-
-    m_plant.def("create_sword_fern_colony", [](const Vec3& pos, float radius, int fronds) {
-        return plant::PlantPresets::createSwordFernColony(pos, radius, fronds);
-    }, "pos"_a = Vec3(0, 0, 0), "radius"_a = 1.6f, "fronds"_a = 26, "Create arching sword fern colony");
-
-    m_plant.def("create_wood_sorrel_cushion", [](const Vec3& pos, float radius) {
-        return plant::PlantPresets::createWoodSorrelCushion(pos, radius);
-    }, "pos"_a = Vec3(0, 0, 0), "radius"_a = 0.95f, "Create trifoliate wood sorrel ground cushion");
-
-    m_plant.def("create_decaying_nurse_log", [](const Vec3& start, const Vec3& end, float radius) {
-        return plant::PlantPresets::createDecayingNurseLog(start, end, radius);
-    }, "start"_a = Vec3(-2, 0, 0), "end"_a = Vec3(2, 0, 0), "radius"_a = 0.5f, "Create decaying nurse log with polypore shelves");
-
     // ========================================================================
     // 9. CORE INVARIANT KERNEL (GeoMorph, ArchiMorph, Sensor Passes)
     // ========================================================================
+    // ========================================================================
+    // SCAN MASSING: massing read from a scan, and the choice between candidates by measured fit
+    // ========================================================================
+    {
+        namespace sm = scratchbox::scan_massing;
+        auto m_sm = m.def_submodule("scan_massing", "Massing read from a scan (sections, lofts, an extruded block) and the choice between candidates by how well each explains the scan, height by height");
+        auto ringOf = [](const std::vector<std::pair<double, double>>& xz) { std::vector<sm::P2> r; for (const auto& [x, z] : xz) r.push_back({x, z}); return r; };
+        auto inRings = [](const std::vector<std::vector<sm::P2>>& rings, double x, double z) {
+            for (const auto& ring : rings) {
+                bool c = false;
+                for (size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++)
+                    if ((ring[i].z > z) != (ring[j].z > z) && x < (ring[j].x - ring[i].x) * (z - ring[i].z) / (ring[j].z - ring[i].z) + ring[i].x) c = !c;
+                if (c) return true;
+            }
+            return false;
+        };
+        nb::class_<sm::Agreement>(m_sm, "Agreement")
+            .def_ro("coverage", &sm::Agreement::coverage).def_ro("precision", &sm::Agreement::precision).def_ro("f", &sm::Agreement::f)
+            .def_ro("banded_coverage", &sm::Agreement::bandedCoverage).def_ro("banded_precision", &sm::Agreement::bandedPrecision)
+            .def_ro("banded_f", &sm::Agreement::bandedF).def_ro("worst_band_coverage", &sm::Agreement::worstBandCoverage)
+            .def_ro("bands", &sm::Agreement::bands).def_ro("scan_samples", &sm::Agreement::scanSamples)
+            .def_ro("candidate_samples", &sm::Agreement::candidateSamples).def_ro("unseen_samples", &sm::Agreement::unseenSamples)
+            .def("__repr__", [](const sm::Agreement& a) { return "Agreement(coverage=" + sm::fmt3(a.bandedCoverage) + ", precision=" + sm::fmt3(a.bandedPrecision) + ", f=" + sm::fmt3(a.bandedF) + ")"; });
+        nb::class_<sm::Slice>(m_sm, "Slice")
+            .def_ro("y0", &sm::Slice::y0).def_ro("y1", &sm::Slice::y1)
+            .def_prop_ro("cell_count", [](const sm::Slice& s) { return s.cells.size(); });
+        nb::class_<sm::LoftRun>(m_sm, "LoftRun")
+            .def_ro("y0", &sm::LoftRun::y0).def_ro("y1", &sm::LoftRun::y1)
+            .def_prop_ro("ring_count", [](const sm::LoftRun& r) { return r.rings.size(); })
+            .def_prop_ro("rings", [](const sm::LoftRun& r) {
+                std::vector<std::pair<double, std::vector<std::pair<double, double>>>> out;
+                for (const auto& ring : r.rings) { std::vector<std::pair<double, double>> pts; for (const auto& p : ring.pts) pts.push_back({p.x, p.z}); out.push_back({ring.y, pts}); }
+                return out;
+            });
+        nb::class_<sm::TopGrid>(m_sm, "TopGrid", "The scan's highest point per plan cell (for the hidden-wall test)")
+            .def(nb::init<>())
+            .def("add_mesh", [](sm::TopGrid& g, const ScratchboxMesh& mesh) { for (const auto& v : mesh.vertices) g.add(v.position); }, "mesh"_a)
+            .def("at", &sm::TopGrid::at, "x"_a, "z"_a);
+        m_sm.def("crop_to_plan", [ringOf](const ScratchboxMesh& mesh, const std::vector<std::vector<std::pair<double, double>>>& plan, double margin, double minY) {
+            std::vector<std::vector<sm::P2>> rings;
+            for (const auto& r : plan) rings.push_back(ringOf(r));
+            return sm::cropToPlan(mesh, rings, margin, minY);
+        }, "mesh"_a, "plan"_a, "margin"_a = 3.0, "min_y"_a = -1e9, "The triangles of a scan above min_y and within margin of the plan rings (x, z)");
+        m_sm.def("plan_outline", [](const std::vector<sm::Slice>& sl, double cellM) {
+            std::vector<std::pair<double, double>> out;
+            for (const auto& p : sm::planOutline(sl, cellM)) out.push_back({p.x, p.z});
+            return out;
+        }, "slices"_a, "cell"_a = 0.5, "The outline (x, z) of the largest piece of all slices together: the scan's plan");
+        m_sm.def("snap_plan_to_scan", [ringOf](const std::vector<std::pair<double, double>>& ring, const std::vector<Vec3>& samples, double groundY, double topY, double search) {
+            std::vector<sm::SnapEdge> rep;
+            const auto r = sm::snapPlanToScan(ringOf(ring), samples, groundY, topY, search, 0.25, 0.15, 0.5, &rep);
+            std::vector<std::pair<double, double>> out;
+            for (const auto& p : r) out.push_back({p.x, p.z});
+            std::vector<std::tuple<double, size_t, bool>> edges;
+            for (const auto& e : rep) edges.push_back({e.shiftM, e.support, e.moved});
+            return std::make_pair(out, edges);
+        }, "ring"_a, "samples"_a, "ground_y"_a, "top_y"_a, "search"_a = 3.0,
+           "The footprint ring (x, z) with each edge moved along its normal onto the scan's wall; returns (ring, [(shift m, support, moved)] per edge)");
+        m_sm.def("plan_union", [ringOf](const std::vector<std::vector<std::pair<double, double>>>& rings, double cellM) {
+            std::vector<std::vector<sm::P2>> rr;
+            for (const auto& r : rings) rr.push_back(ringOf(r));
+            std::vector<std::pair<double, double>> out;
+            for (const auto& p : sm::planUnion(rr, cellM)) out.push_back({p.x, p.z});
+            return out;
+        }, "rings"_a, "cell"_a = 0.5, "One outline (x, z) for a footprint given in many rings: all filled, the largest connected piece outlined");
+        nb::class_<sm::Tier>(m_sm, "Tier")
+            .def_ro("y0", &sm::Tier::y0).def_ro("y1", &sm::Tier::y1).def_ro("area", &sm::Tier::areaM2)
+            .def_prop_ro("outline", [](const sm::Tier& t) { std::vector<std::pair<double, double>> o; for (const auto& p : t.outline) o.push_back({p.x, p.z}); return o; });
+        m_sm.def("tiers", [](const std::vector<Vec3>& samples, double baseY, double changeShare, double minTier) {
+            sm::TierParams T; T.changeShare = changeShare; T.minTierM = minTier;
+            return sm::tiers(samples, baseY, T);
+        }, "samples"_a, "base_y"_a, "change"_a = 0.15, "min_tier"_a = 3.0,
+           "The structure as a stack of tiers where the scan's plan area holds steady, each squared and snapped onto its own walls");
+        m_sm.def("tier_solids", &sm::tierSolids, "tiers"_a, "The tiers raised into one mesh");
+        m_sm.def("sample_surface", [](const ScratchboxMesh& mesh, double spacing) { return sm::sampleMesh(mesh, spacing); }, "mesh"_a, "spacing"_a = 0.5,
+                 "Evenly spaced points on a mesh's surface (about one per spacing^2)");
+        m_sm.def("agreement", [ringOf, inRings](const std::vector<Vec3>& scan, const std::vector<Vec3>& candidate, double tau, double bandM, std::optional<double> groundY,
+                                                 const sm::TopGrid* neighbours, const std::vector<std::vector<std::pair<double, double>>>& ownPlan, std::optional<double> coverageTau) {
+            sm::AgreementOptions o;
+            o.tauM = tau; o.bandM = bandM;
+            if (coverageTau) o.coverageTauM = *coverageTau;
+            if (groundY) o.groundY = *groundY;
+            std::vector<std::vector<sm::P2>> rings;
+            for (const auto& r : ownPlan) rings.push_back(ringOf(r));
+            if (neighbours && !rings.empty()) { o.neighbours = neighbours; o.ownPlan = [rings, inRings](double x, double z) { return inRings(rings, x, z); }; }
+            return sm::agreement(scan, candidate, o);
+        }, "scan"_a, "candidate"_a, "tau"_a = 1.0, "band"_a = 2.0, "ground_y"_a = nb::none(), "neighbours"_a = nb::none(), "own_plan"_a = std::vector<std::vector<std::pair<double, double>>>{}, "coverage_tau"_a = nb::none(),
+           "How well candidate samples explain scan samples: coverage, precision and F, overall and height-balanced; surface at street level (ground_y) or beside a taller neighbour (neighbours, off own_plan) is left out of precision");
+        m_sm.def("slices", [](const std::vector<Vec3>& samples, double baseY, double sliceM, double cellM, double closeM) {
+            return sm::slices(samples, baseY, sm::SliceParams{sliceM, cellM, closeM});
+        }, "samples"_a, "base_y"_a, "slice"_a = 1.0, "cell"_a = 0.5, "close"_a = 1.0, "The scan cut into horizontal slices, each slice's plan filled");
+        m_sm.def("loft_runs", [](const std::vector<sm::Slice>& sl, double cellM, double linkIoU, int ringPoints, double keepTol, double minPiece) {
+            sm::LoftParams p; p.linkIoU = linkIoU; p.ringPoints = ringPoints; p.keepTolM = keepTol; p.minPieceM2 = minPiece;
+            return sm::loftRuns(sl, cellM, p);
+        }, "slices"_a, "cell"_a = 0.5, "link_iou"_a = 0.35, "ring_points"_a = 48, "keep_tol"_a = 0.4, "min_piece"_a = 0.5,
+           "Each slice's pieces followed upward (overlap or nearness, mutual best), their outlines resampled and thinned");
+        m_sm.def("loft_solids", &sm::loftSolids, "runs"_a, "The runs skinned into closed solids (Loft3D), one mesh");
+        m_sm.def("extrude_block", [ringOf](const std::vector<std::pair<double, double>>& ring, double y0, double y1) { return sm::extrudeBlock(ringOf(ring), y0, y1); },
+                 "ring"_a, "y0"_a, "y1"_a, "A footprint ring (x, z) extruded from y0 to y1");
+        m_sm.def("roof_objects", [ringOf](const std::vector<Vec3>& samples, const std::vector<std::pair<double, double>>& plan, double roofY,
+                                          std::optional<nb::bytes> photoRgba, int photoWidth, int photoHeight, double photoX0, double photoZ0, double photoTexel, double minRise, double spotLighter, double blobK) {
+            namespace ro = scratchbox::roof_objects;
+            ro::TopPhoto photo;
+            std::string buf;
+            if (photoRgba) {
+                buf.assign(photoRgba->c_str(), photoRgba->size());
+                if (buf.size() != static_cast<size_t>(photoWidth) * photoHeight * 4) throw std::invalid_argument("photo_rgba must hold photo_width x photo_height RGBA pixels");
+                photo = {reinterpret_cast<const uint8_t*>(buf.data()), photoWidth, photoHeight, photoX0, photoZ0, photoTexel};
+            }
+            ro::RoofParams P; P.minRiseM = minRise; P.spotLighterL = spotLighter; P.blobK = blobK;
+            const ro::RoofReport rep = photoRgba ? ro::roofObjectsFromPhoto(samples, ringOf(plan), roofY, photo, P) : ro::roofObjects(samples, ringOf(plan), roofY, nullptr, P);
+            nb::dict d;
+            d["roof_y"] = rep.roofY; d["photo"] = rep.photo; d["photo_only_areas"] = rep.photoOnlyAreas;
+            d["roof_delta_e_median"] = rep.roofDeltaEMedian; d["roof_delta_e_mad"] = rep.roofDeltaEMad;
+            nb::list objs;
+            for (const auto& o : rep.objects) {
+                nb::dict od;
+                std::vector<std::pair<double, double>> outline;
+                for (const auto& p : o.outline) outline.push_back({p.x, p.z});
+                od["outline"] = outline; od["centre"] = std::make_pair(o.centre.x, o.centre.z);
+                od["base_y"] = o.baseY; od["top_y"] = o.topY; od["area"] = o.areaM2;
+                od["photo_cells"] = o.photoCells; od["scan_cells"] = o.scanCells;
+                od["chosen"] = o.chosen; od["why"] = o.why; od["outline_source"] = o.outlineSource; od["height_source"] = o.heightSource; od["roundness"] = o.roundness; od["agreement"] = o.agreement; od["mesh"] = o.mesh;
+                nb::list rows;
+                for (const auto& r : o.candidates) { nb::dict row; row["label"] = r.label; row["triangles"] = r.triangles; row["coverage"] = r.agreement.bandedCoverage; row["precision"] = r.agreement.bandedPrecision; row["accepted"] = r.accepted; row["reason"] = r.reason; rows.append(row); }
+                od["candidates"] = rows;
+                objs.append(od);
+            }
+            d["objects"] = objs;
+            return d;
+        }, "samples"_a, "plan"_a, "roof_y"_a, "photo_rgba"_a = nb::none(), "photo_width"_a = 0, "photo_height"_a = 0, "photo_x0"_a = 0.0, "photo_z0"_a = 0.0, "photo_texel"_a = 0.05, "min_rise"_a = 0.6, "spot_lighter"_a = 30.0, "blob_k"_a = 8.0,
+           "The objects standing on a roof: found where the scan stands above roof_y (edges sharpened by the photo straight down, when given) and each fitted by the simplest of its outline raised, a solid of revolution and its own lofted sections");
+        m_sm.def("choose", [](const std::vector<std::tuple<std::string, size_t, sm::Agreement>>& ordered, double minCoverage, double minPrecision) {
+            std::vector<std::pair<std::string, std::pair<size_t, sm::Agreement>>> in;
+            for (const auto& [l, t, a] : ordered) in.push_back({l, {t, a}});
+            const sm::Choice c = sm::choose(in, sm::ChoiceParams{minCoverage, minPrecision});
+            nb::dict d;
+            d["chosen"] = c.chosen >= 0 ? nb::cast(c.rows[c.chosen].label) : nb::none();
+            d["index"] = c.chosen; d["explains"] = c.explains; d["why"] = c.why;
+            nb::list rows;
+            for (const auto& r : c.rows) { nb::dict row; row["label"] = r.label; row["triangles"] = r.triangles; row["coverage"] = r.agreement.bandedCoverage; row["precision"] = r.agreement.bandedPrecision; row["f"] = r.agreement.bandedF; row["accepted"] = r.accepted; row["reason"] = r.reason; rows.append(row); }
+            d["candidates"] = rows;
+            return d;
+        }, "ordered"_a, "min_coverage"_a = 0.9, "min_precision"_a = 0.85,
+           "Candidates (label, triangles, Agreement) simplest first: the first explaining the scan wins, else the best height-balanced F");
+    }
+
     auto m_core = m.def_submodule("core", "Pre-compiled C++20 invariant kernel (GeoMorph, ArchiMorph, Sensors)");
 
     nb::class_<core::TerrainOptions>(m_core, "TerrainOptions")
@@ -1531,15 +1726,19 @@ NB_MODULE(scratchbox_native, m) {
     }, "mesh"_a, "iterations"_a = 10, "lambda_val"_a = 0.5f, "mu_val"_a = -0.53f, "preserve_boundaries"_a = true,
        "Apply volume-preserving, non-shrinking Taubin low-pass smoothing filter");
 
-    m_proc.def("decimate_qem", [](const ScratchboxMesh& mesh, size_t targetTriangles, float targetRatio, float maxError, bool preserveBoundary) {
+    m_proc.def("decimate_qem", [](const ScratchboxMesh& mesh, size_t targetTriangles, float targetRatio, float maxError, bool preserveBoundary, bool preserveCreases, float creaseAngleDeg) {
         processing::DecimateOptions opt;
         opt.targetTriangles = targetTriangles;
         opt.targetRatio = targetRatio;
         opt.maxError = maxError;
         opt.preserveBoundary = preserveBoundary;
+        opt.preserveCreases = preserveCreases;
+        opt.creaseAngleDeg = creaseAngleDeg;
         return processing::QuadricDecimator::decimate(mesh, opt);
     }, "mesh"_a, "target_triangles"_a = 0, "target_ratio"_a = 0.5f, "max_error"_a = 1e9f, "preserve_boundary"_a = true,
-       "Garland-Heckbert Quadric Error Metrics (QEM) decimation preserving surface silhouettes and curvature");
+       "preserve_creases"_a = false, "crease_angle_deg"_a = 45.0f,
+       "Garland-Heckbert Quadric Error Metrics (QEM) decimation preserving surface silhouettes and curvature; "
+       "preserve_creases locks sharp edges (dihedral angle >= crease_angle_deg) with an extra constraint quadric");
 
     m_proc.def("poisson_sample", [](const ScratchboxMesh& mesh, size_t count, float minDistance, uint32_t seed) {
         processing::PoissonSampleOptions opt;
@@ -1564,6 +1763,16 @@ NB_MODULE(scratchbox_native, m) {
     m_proc.def("bake_cavity_ao", [](ScratchboxMesh& mesh, float intensity) {
         processing::DifferentialGeometryEngine::bakeCavityAO(mesh, intensity);
     }, "mesh"_a, "intensity"_a = 0.65f, "Bake geometric cavity ambient occlusion into vertex colors");
+
+    m_proc.def("compute_rtao", [](const ScratchboxMesh& mesh, int samplesPerVertex, float maxDistance, uint32_t seed) {
+        return bvh::computeMeshRTAO(mesh, samplesPerVertex, maxDistance, seed);
+    }, "mesh"_a, "samples_per_vertex"_a = 16, "max_distance"_a = 1.5f, "seed"_a = 42,
+       "Per-vertex ambient occlusion in [0, 1] from BVH cosine-weighted hemisphere ray casts (1 = fully open, 0 = fully occluded)");
+
+    m_proc.def("bake_rtao", [](ScratchboxMesh& mesh, int samplesPerVertex, float maxDistance, float intensity, uint32_t seed) {
+        bvh::bakeMeshRTAO(mesh, samplesPerVertex, maxDistance, intensity, seed);
+    }, "mesh"_a, "samples_per_vertex"_a = 16, "max_distance"_a = 1.5f, "intensity"_a = 1.0f, "seed"_a = 42,
+       "Bake BVH ray-traced ambient occlusion (compute_rtao) into vertex colors");
 
     m_proc.def("clean_mesh", [](const ScratchboxMesh& mesh, float weldEpsilon) {
         processing::CleanMeshOptions opt;

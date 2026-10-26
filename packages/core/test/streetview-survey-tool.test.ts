@@ -31,6 +31,7 @@ import { renderFrameDepth, readGlbScene, sceneToRenderMesh, ZERO_CORRECTION, typ
 import { runPanoRegistration } from '../src/node/3d-engine/staged-location/pano-registration-run';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { decodeJpegInMemory } from '../src/node/3d-engine/staged-location/photo-palette';
+import { decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 import { imageContentSha256 } from '../src/node/image-codec-ffmpeg';
 import {
     prepareSurveySite, runStreetViewSurvey, structureFaces, StreetViewSurveyCredentialsError, StreetViewSurveyNoCoverageError, cameraAngles, facesToCover,
@@ -164,8 +165,14 @@ describe('streetview_survey (synthetic street, recorded-style inputs, no network
         // inline (no worker thread), with budgets a test can afford
         register: async (job, o) => runPanoRegistration({ ...job, edgeBudgetMs: 40_000, jointBudgetMs: 40_000 }, o.log),
         // the segmenter: the photo's own pixels of the building's stone and windows (what a cut-out of this photo shows)
-        segmenter: async image => {
+        // asked what stands in front, it finds the green kiosk; asked for thin structures, nothing
+        segmenter: async (image, prompts) => {
             const m = new Uint8Array(image.width * image.height);
+            if (prompts.target?.startsWith('long thin structures')) return m;
+            if (prompts.target?.startsWith('anything standing in front')) {
+                for (let i = 0; i < m.length; i++) m[i] = image.rgba[i * 4 + 1] > 130 && image.rgba[i * 4] < 70 ? 1 : 0;
+                return m;
+            }
             for (let i = 0; i < m.length; i++) {
                 const r = image.rgba[i * 4], g = image.rgba[i * 4 + 1], b = image.rgba[i * 4 + 2];
                 const stone = r > 150 && r - b > 50, glass = r < 70 && g < 75 && b < 85 && b > 35;
@@ -209,7 +216,7 @@ describe('streetview_survey (synthetic street, recorded-style inputs, no network
 
     it('surveys every face: refusals replaced and reported, bytes as returned, poses registered nearer the truth, masks, coverage', async () => {
         const outDir = path.join(root, 'build', 'streetview-grounding');
-        const res = await runStreetViewSurvey(site, { maxViews: 6, ownershipMasks: true, outDir, workspaceRoot: root }, surveyDeps());
+        const res = await runStreetViewSurvey(site, { maxViews: 6, ownershipMasks: true, target: 'the test building', outDir, workspaceRoot: root }, surveyDeps());
 
         expect(res.views.length).toBe(6);
         expect(res.discovery.panosFound).toBeGreaterThanOrEqual(10);
@@ -288,6 +295,31 @@ describe('streetview_survey (synthetic street, recorded-style inputs, no network
             return outlined(fs.readFileSync(path.join(root, v.imagePath)), site.structureMesh as { vertices: Float32Array; indices: Uint32Array }, cam);
         });
         fs.writeFileSync(path.join(SHOTS, 'synthetic_contact_sheet.png'), contactSheet(tiles, W, H, 3).png);
+    }, 300_000);
+
+    it('with a clean client, writes the obstruction-free copy beside the raw capture and never changes the raw bytes', async () => {
+        // a local image model: each magenta pixel takes the nearest real pixel to its left (nothing bills)
+        const rowFill = async (req: { image: { bytes: Uint8Array } }) => {
+            const img = decodeImageInMemory(req.image.bytes); const p = Uint8Array.from(img.rgba);
+            for (let y = 0; y < img.height; y++) { let last: number[] | undefined; for (let x = 0; x < img.width; x++) { const o = (y * img.width + x) * 4; if (p[o] > 200 && p[o + 2] > 200 && p[o + 1] < 90) { if (last) p.set(last, o); } else last = [p[o], p[o + 1], p[o + 2]]; } }
+            return { bytes: new Uint8Array(encodePng(img.width, img.height, p, 4)), mimeType: 'image/png', modelUsed: 'local-row-fill', requestedModels: ['local-row-fill'], skippedModels: [], modelNote: 'local' };
+        };
+        const outDir = path.join(root, 'out-clean');
+        const res = await runStreetViewSurvey(site, { maxViews: 2, ownershipMasks: true, outDir, workspaceRoot: root }, surveyDeps({ clean: { client: rowFill, models: ['local-row-fill'] } }));
+        let withClean = 0;
+        for (const v of res.views) {
+            expect(fs.readFileSync(path.join(root, v.imagePath)).equals(served.get(v.panoId)!)).toBe(true);
+            const c = v.ownership?.clean;
+            if (!c) continue;
+            withClean++;
+            if (c.filledPixels) {
+                expect(c.imagePath).toBeTruthy();
+                expect(fs.existsSync(path.join(root, c.imagePath!))).toBe(true);
+                expect(c.imagePath).not.toBe(v.imagePath);
+                expect(c.provenance).toMatch(/generated/);
+            } else expect(c.reason ?? c.decision).toBeTruthy();
+        }
+        expect(withClean).toBeGreaterThan(0);
     }, 300_000);
 
     it('covers only the faces asked for, and says which headings are no facade', async () => {

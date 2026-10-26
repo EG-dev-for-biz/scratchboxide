@@ -23,6 +23,7 @@ import type {
     GroundTileMode
 } from '../canvas-types';
 import { VideoTimelineTracks } from './video/VideoTimelineTracks';
+import { scriptVegetationViolations, vegetationViolationMessage } from '../../../common/spatial/sb-veggie-lockdown';
 import type { TimelineTrack, VideoTimelineData, NleTool } from '../services/video/videoTypes';
 import {
     evaluateFalloff,
@@ -35,6 +36,7 @@ import type {
     SculptBrushOptions
 } from '../services/mesh-sculpting-engine';
 import { useViewportHistory } from './scene3d/useViewportHistory';
+import { applyDisplayFlag } from './scene3d/displayFlag';
 import { ViewportHistoryButtons } from './scene3d/ViewportHistoryButtons';
 import type { HistoryEditMeta } from './scene3d/useViewportHistory';
 import { ObjectEditCapture, createGeometrySwapEdit } from '../services/viewport-history-deltas';
@@ -142,6 +144,7 @@ import { PlaceReflections, placeReflectionsEnabled } from './scene3d/placeReflec
 import type { AtmosphereInput } from './scene3d/syncAtmosphere';
 import { classifySceneContent, drawableModelKind, hasNonFallbackObjectContent, syncSceneContent, syncWasmMesh, undrawableSceneObjects } from './scene3d/syncSceneContent';
 import { ViewportNotice, resolveViewportNotice } from './scene3d/ViewportNotice';
+import { isAppPageAnswer, isNetworkLoadFailure, networkRetryDelayMs, NETWORK_RETRY_DELAYS_MS } from './scene3d/load-failure';
 import { fromInput, generatorErrorForScene, generatorRequestFailure, generatorRunFailure, type GeneratorRunError } from './scene3d/generatorRun';
 import type { SceneContentInput, SceneContentFactories } from './scene3d/syncSceneContent';
 import { syncCustomMeshes, disposeCustomMeshes } from './scene3d/syncCustomMeshes';
@@ -369,7 +372,6 @@ export interface DynamicScriptContext {
     createWorldBuilderScene?: typeof createWorldBuilderScene;
     generateNativeBuildingMeshBuffer?: typeof generateNativeBuildingMeshBuffer;
     buildNativeThreeGeometry?: typeof buildNativeThreeGeometry;
-    generateProceduralThreeMeshFromPrompt?: typeof generateProceduralThreeMeshFromPrompt;
     sculptBuildingFrom3DTiles?: typeof sculptBuildingFrom3DTiles;
     snapFootprintsToTerrain?: typeof snapFootprintsToTerrain;
     inspectSceneMeshTopology?: typeof inspectSceneMeshTopology;
@@ -605,6 +607,9 @@ export const executeDynamicThreeScript = (
     scriptCode: string,
     context: DynamicScriptContext
 ): { update?: (time: number, delta: number) => void; dispose?: () => void; error?: string | null } => {
+    // SB-Veggie is the one vegetation generator: a script that builds trees from primitives is not run (sb-veggie-lockdown.ts)
+    const vegetation = scriptVegetationViolations(scriptCode);
+    if (vegetation.length) return { error: vegetationViolationMessage('viewport script', vegetation) };
     try {
         // Strip ES module import/export keywords for execution in Function constructor
         let sanitized = scriptCode
@@ -948,8 +953,14 @@ interface ExternalLoadStatus {
     /** 0 when the server sends no Content-Length. */
     total: number;
     error?: string;
+    /** The error was the server being unreachable (load-failure.ts), not an answer about the file: retried on its own. */
+    network?: boolean;
+    /** How many times this file's load has failed in a row (a success resets it). */
+    attempt?: number;
     /** The file was rebuilt from its recipe after the original was lost (asset recovery). */
     rebuilt?: boolean;
+    /** The served path of the file that failed (staged layers are not in the scene's objects, so it is kept here). */
+    servedPath?: string;
 }
 
 /** Request URL for an objects[] durableUri: bare '/<file>.glb' paths are served from /models/. */
@@ -1188,12 +1199,35 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [externalLoadStatus, setExternalLoadStatus] = React.useState<Record<string, ExternalLoadStatus>>({});
     // Bumped to re-run the loader for objects whose last load failed (nothing else changes then).
     const [externalLoadRetryNonce, setExternalLoadRetryNonce] = React.useState(0);
+    // Pending retries of loads that could not reach the server (load-failure.ts), cleared when the loader is torn down.
+    const networkRetryTimersRef = React.useRef(new Set<ReturnType<typeof setTimeout>>());
+    /** Failed tries per object id since its last successful load (read synchronously, so the retry delays grow). */
+    const loadAttemptsRef = React.useRef(new Map<string, number>());
+    React.useEffect(() => () => { for (const t of networkRetryTimersRef.current) clearTimeout(t); networkRetryTimersRef.current.clear(); }, []);
     // Files that failed to load are recovered automatically (restored from the asset store or rebuilt from their
     // recipe, asset-recovery-client.ts); the job's progress shows over the viewport and the files load again when it ends.
     const [assetRecovery, setAssetRecovery] = React.useState<AssetRecoveryState>(() => assetRecoveryClient.getState());
     React.useEffect(() => assetRecoveryClient.subscribe(setAssetRecovery), []);
     const rebuiltAssetPathsRef = React.useRef(new Set<string>());
     const handledRecoveryJobRef = React.useRef<string | undefined>(undefined);
+    /**
+     * Scene + lost file pairs already rebuilt on their own (a rebuild is started once each, never in a loop). Kept in
+     * local storage for an hour as well, so a page reload or hot update during or after a rebuild does not start it again.
+     */
+    const autoRebuiltRef = React.useRef((() => {
+        const seen = new Set<string>();
+        return {
+            has: (k: string) => {
+                if (seen.has(k)) return true;
+                try { const t = Number(window.localStorage.getItem(`sb.autoRebuilt:${k}`)); return t > 0 && Date.now() - t < 3_600_000; } catch { return false; }
+            },
+            add: (k: string) => {
+                seen.add(k);
+                try { window.localStorage.setItem(`sb.autoRebuilt:${k}`, String(Date.now())); } catch { /* storage unavailable: once per page */ }
+            }
+        };
+    })());
+    const rebuildKeyOf = (servedPath: string) => `${activeArtifact?.id ?? ''}|${servedPath}`;
     const [recoveryNoticeJobId, setRecoveryNoticeJobId] = React.useState<string | undefined>(undefined);
     React.useEffect(() => {
         const job = assetRecovery.job;
@@ -2184,6 +2218,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 const lod = model.parent ? (model.userData.sbTreeLod as TreeLodController | undefined) : undefined;
                 if (lod) out.push(lod);
             });
+            // a generated model's SB-Veggie trees (sb.create_tree in a Python scene, written into its GLB)
+            const generated = stack.scene?.getObjectByName('scratchbox-cpp-generated-root');
+            const generatedLod = generated?.parent ? (generated.userData.sbTreeLod as TreeLodController | undefined) : undefined;
+            if (generatedLod) out.push(generatedLod);
             return out;
         };
         const updateTreeLods = (now: number): void => {
@@ -2333,6 +2371,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             if (el.dataset.state !== state) el.dataset.state = state;
         };
 
+        let displayFlagWasOn = false;
+        let compiledRootCache: THREE.Object3D | undefined;
         const animate = () => {
             try {
                 const now = performance.now();
@@ -2475,6 +2515,13 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 });
 
                 // the frame timed on the GPU for the adaptive tree budget (only while there are trees to adapt)
+                // the node graph's display flag: only what the flagged node made is drawn (restored when cleared)
+                const flag = sceneDataRef.current?.displayFlag;
+                if (flag || displayFlagWasOn) {
+                    if (!compiledRootCache?.parent) compiledRootCache = stack.scene?.getObjectByName(GENERATED_ROOT_NAME) ?? undefined;
+                    applyDisplayFlag(flag, { objectRoots: externalObjectsMapRef.current, meshes: customMeshRegistryRef.current, compiledRoot: compiledRootCache });
+                    displayFlagWasOn = !!flag;
+                }
                 const timeFrame = !!gpuFrameTimer?.available && treeLodControllers().length > 0;
                 if (timeFrame) gpuFrameTimer!.begin();
                 renderFrame();
@@ -2752,7 +2799,6 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 createWorldBuilderScene,
                 generateNativeBuildingMeshBuffer,
                 buildNativeThreeGeometry,
-                generateProceduralThreeMeshFromPrompt,
                 sculptBuildingFrom3DTiles,
                 snapFootprintsToTerrain,
                 inspectSceneMeshTopology
@@ -2942,6 +2988,16 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 }
                 gltf.scene.name = 'scratchbox-cpp-generated-root';
                 scene.add(gltf.scene);
+                gltf.scene.updateMatrixWorld(true);
+                // SB-Veggie trees in the generated GLB (scene extras sbTrees, nodes with sbTree): the same level-of-detail
+                // controller and tree textures a staged place's trees get, attached before the clay pass
+                const treeLod = new TreeLodController(gltf.scene, { crownShading: sceneDataRef.current?.treeCrownShading, view: sceneDataRef.current?.treeLod });
+                if (treeLod.hasTrees) {
+                    gltf.scene.userData.sbTreeLod = treeLod;
+                    loadTreeTextureLibrary()
+                        .then(lib => { gltf.scene.userData.sbTreeTextures = applyTreeTextures(gltf.scene, lib); })
+                        .catch(err => console.warn('[Scene3D] tree textures not applied:', (err as Error).message));
+                }
                 gltf.scene.traverse((child) => {
                     if ((child as any).isMesh) {
                         const m = child as THREE.Mesh;
@@ -2960,7 +3016,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                         }
                     }
                 });
-                applyClayRenderMode([gltf.scene], renderModeRef.current === 'clay');
+                applyClayRenderMode([gltf.scene], renderModeRef.current === 'clay', { trees: treesClayRef.current });
                 // Shared metric ground logic: snap procedural geometry to terrain or 3D tile surface
                 if (terrainManagerRef.current) {
                     terrainManagerRef.current.snapObjectToGround(gltf.scene, 0);
@@ -3051,12 +3107,40 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             const key = variantSetKeyOf(obj);
             return !key || activeVariantIdsRef.current[key] === obj.id;
         };
-        const setStatus = (id: string, status: ExternalLoadStatus) =>
+        const setStatus = (id: string, status: ExternalLoadStatus) => {
+            if (status.phase === 'ready') loadAttemptsRef.current.delete(id);
             setExternalLoadStatus(prev => ({ ...prev, [id]: status }));
+        };
         /** A served file that failed to load is recovered once (restored from the asset store or rebuilt from its recipe). */
         const requestRecovery = (loadUri: string) => {
             const servedPath = recoverableAssetPath(loadUri);
             if (servedPath && !assetRecoveryClient.outcomeOf(servedPath)) assetRecoveryClient.request([servedPath]);
+        };
+        /**
+         * A load that failed: a file the server answered about (404, a parse error) is recorded and recovered; a load
+         * that never reached the server (load-failure.ts: the dev server restarting under the page) is tried again on
+         * its own after a growing delay, unreported until the retries are spent, and never sent to recovery (the file is
+         * there; recovery would only find it present). The app's page answered in the file's place is retried the same
+         * way, then recovered.
+         */
+        const failLoad = (id: string, loadUri: string, err: unknown, label: string) => {
+            // the app's page served in the file's place (the backend away): retried like a lost connection, then recovered
+            const pageAnswer = isAppPageAnswer(err);
+            const network = isNetworkLoadFailure(err) || pageAnswer;
+            const message = String((err as any)?.message ?? err);
+            // counted in a ref: a state updater runs later, so a count read from it would stay at 1 and never run out
+            const attempt = (loadAttemptsRef.current.get(id) ?? 0) + 1;
+            loadAttemptsRef.current.set(id, attempt);
+            setExternalLoadStatus(prev => ({ ...prev, [id]: { phase: 'error', loaded: 0, total: 0, error: message, ...(network ? { network: true } : {}), attempt, ...(recoverableAssetPath(loadUri) ? { servedPath: recoverableAssetPath(loadUri) } : {}) } }));
+            const delay = network ? networkRetryDelayMs(attempt) : undefined;
+            if (delay !== undefined) {
+                console.info(`[External Loader] ${loadUri} could not be reached (${message}); retry ${attempt} of ${NETWORK_RETRY_DELAYS_MS.length} in ${delay / 1000} s`);
+                const timer = setTimeout(() => { networkRetryTimersRef.current.delete(timer); setExternalLoadRetryNonce(n => n + 1); }, delay);
+                networkRetryTimersRef.current.add(timer);
+                return;
+            }
+            console.warn(`[${label}] Failed to load ${loadUri}:`, err);
+            if (!network || pageAnswer) requestRecovery(loadUri);
         };
         const readyStatus = (loadUri: string): ExternalLoadStatus => {
             const servedPath = recoverableAssetPath(loadUri);
@@ -3193,9 +3277,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     refreshEntities();
                     if (splatMesh.parent) autoFrameIfNeeded();
                 }).catch(err => {
-                    if (settlePending()) setStatus(obj.id, { phase: 'error', loaded: 0, total: 0, error: String(err?.message ?? err) });
-                    console.warn(`[External Splat Loader Error] Failed to load ${uri}:`, err);
-                    requestRecovery(uri);
+                    if (settlePending()) failLoad(obj.id, uri, err, 'External Splat Loader Error');
                 });
                 return;
             }
@@ -3319,9 +3401,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     setStatus(obj.id, { phase: downloaded ? 'parse' : 'download', loaded: evt.loaded, total });
                 },
                 (err) => {
-                    if (settlePending()) setStatus(obj.id, { phase: 'error', loaded: 0, total: 0, error: String((err as any)?.message ?? err) });
-                    console.warn(`[External Model Loader Error] Failed to load ${uri}:`, err);
-                    requestRecovery(uri);
+                    if (settlePending()) failLoad(obj.id, uri, err, 'External Model Loader Error');
                 }
             );
         });
@@ -3391,7 +3471,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // ---- 5d. Staged location builds: each committed layer revealed in its real build order, overlay, provenance ----
     const staged = useStagedBuild({
         state: readStagedBuild(sceneData), overriddenIds: materialOverriddenIds, stackRef, objectRootsRef: externalObjectsMapRef, loadStatus: externalLoadStatus, mutateSceneData, onPromptAction,
-        sceneObjects: sceneData.objects, view: (sceneData as StagedSceneData).stagedBuildView, onEvictedChange: setEvictedLayerIds
+        sceneObjects: sceneData.objects, view: (sceneData as StagedSceneData).stagedBuildView, onEvictedChange: setEvictedLayerIds, displayObjectIds: sceneData.displayFlag?.objectIds
     });
 
     // ---- 6. Custom meshes from schema (id-diffed, updated in place) ---------------
@@ -3954,14 +4034,27 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         // a file whose recovery is running is not reported as failed while it may still come back
         const job = assetRecovery.job;
         const recovering = new Set(job && job.status === 'running' ? job.items.filter(i => i.outcome === 'pending').map(i => i.path) : []);
+        // a lost staged file that is rebuilt from the scene's place is said by the recovery notice, not as a failure too:
+        // before its rebuild starts, and while the rebuild runs (one job for the whole place, so it may list one item)
+        if (job && job.status !== 'running' && readStagedBuild(sceneData)?.place?.query) {
+            for (const i of job.items) if ((i.outcome === 'unrecoverable' || i.outcome === 'failed') && i.path.startsWith('/models/') && !autoRebuiltRef.current.has(rebuildKeyOf(i.path))) recovering.add(i.path);
+        }
+        const rebuilding = job?.status === 'running' && !!readStagedBuild(sceneData)?.place?.query;
         const servedPathOf = (id: string): string | undefined => {
             const raw = (sceneData.objects || []).find(o => o.id === id)?.content?.durableUri ?? (id === 'primary-location-splat' ? sceneData.splatUrl : undefined);
             return raw ? recoverableAssetPath(resolveExternalModelUri(raw)) : undefined;
         };
+        // a load that could not reach the server and still has retries left is not a failure yet (load-failure.ts)
         return Object.entries(externalLoadStatus)
-            .filter(([id, st]) => st.phase === 'error' && declared.has(id) && !recovering.has(servedPathOf(id) ?? ''))
+            .filter(([id, st]) => st.phase === 'error' && declared.has(id) && !recovering.has(st.servedPath ?? servedPathOf(id) ?? '')
+                && !(rebuilding && (st.servedPath ?? servedPathOf(id) ?? '').startsWith('/models/')) && !(st.network && networkRetryDelayMs(st.attempt ?? 1) !== undefined))
             .map(([id, st]) => ({ id, error: st.error || 'the file could not be loaded' }));
     }, [externalLoadStatus, sceneData.objects, sceneData.splatUrl, assetRecovery]);
+    /** Declared model files whose load could not reach the server and is being tried again. */
+    const reconnectingFiles = React.useMemo(() => {
+        const declared = new Set((sceneData.objects || []).map(o => o.id));
+        return Object.entries(externalLoadStatus).filter(([id, st]) => st.phase === 'error' && declared.has(id) && !!st.network && networkRetryDelayMs(st.attempt ?? 1) !== undefined).length;
+    }, [externalLoadStatus, sceneData.objects]);
     const drawsBiomeTerrain = drawsProceduralBiomeTerrain({ renderMode, terrainBiomes: sceneData.features?.terrainBiomes, hasGeoCoordinates, has3DTiles });
     // Lost staged files with no recipe (made before the store) can still be rebuilt from the scene's own place.
     const recoveryRebuild = React.useMemo(() => {
@@ -3981,6 +4074,17 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 ? { place: { lat: place.lat, lng: place.lng, formattedAddress: place.resolvedAddress } } : {})
         }, scene);
     }, [assetRecovery, sceneData, activeArtifact?.id]);
+    // Lost files are rebuilt on their own (user decision, 2026-10-23): once per scene and file, so a rebuild that fails
+    // is reported, not started again.
+    React.useEffect(() => {
+        const job = assetRecovery.job;
+        if (!recoveryRebuild || !job) return;
+        const lost = job.items.filter(i => i.outcome === 'unrecoverable' || i.outcome === 'failed').map(i => rebuildKeyOf(i.path));
+        if (lost.every(k => autoRebuiltRef.current.has(k))) return;
+        for (const k of lost) autoRebuiltRef.current.add(k);
+        console.info(`[Asset Recovery] rebuilding ${lost.length} lost file(s) from the scene's place on its own`);
+        recoveryRebuild();
+    }, [recoveryRebuild, assetRecovery]);
     const viewportNotices = React.useMemo(() => resolveViewportNotice({
         webglError,
         generatorError: currentGeneratorError,
@@ -3988,6 +4092,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         contentKind: sceneContentKind,
         hasAuxiliaryContent: !!sceneData.vectorRoadmap?.groundBlueprint || wantsWasmMesh || drawsBiomeTerrain,
         objectLoadErrors,
+        reconnecting: reconnectingFiles,
         undrawableObjects,
         opticsIssues,
         assetRecovery: assetRecovery.job && assetRecovery.job.id === recoveryNoticeJobId ? {
@@ -4383,6 +4488,18 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
                     <span>3D Scene</span>
                 </div>
+                {sceneData.displayFlag && (
+                    <button
+                        type="button"
+                        data-testid="sb-display-flag-badge"
+                        className="sb-3d-minimal-badge flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#121216]/80 backdrop-blur-md border border-sky-400/40 text-[10px] font-mono text-sky-200 shadow-md cursor-pointer"
+                        title="The node graph's display flag: only this node's result is shown. Click to show the final scene."
+                        onClick={() => mutateSceneData(prev => { const { displayFlag: _, ...rest } = prev; return rest as Scene3DData; }, { operator: 'clear_display_flag' }, { history: false })}
+                    >
+                        <span>◉ Showing: {sceneData.displayFlag.label}</span>
+                        <span className="text-zinc-400">· show final</span>
+                    </button>
+                )}
                 {onMorphArtifact && activeArtifact && (
                     <ViewAsMenu
                         currentType="3d-scene"

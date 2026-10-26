@@ -44,7 +44,7 @@ import { plainTextures, writeMassingLayer, LOW_COVERAGE, type MassingLayerFiles 
 import { enhanceOrder, MAX_UNSEEN_WALLS, MIN_ENHANCE_AREA_M2, MIN_UNSEEN_EXPOSED_SHARE, TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID, TEXTURE_PLATE_UNSEEN_PROMPT_ID, type WallStreetView } from '../pipeline-e/enhance';
 import { exposedShare, solidGrid } from '../pipeline-e/exposure';
 import { labPlanes } from '../pipeline-e/plate-audit';
-import { bestStreetViewForWall, rectifiedReference, type GuideView } from '../pipeline-e/plate-streetview';
+import { bestStreetViewForWall, rectifiedReference, wallReference, type GuideView } from '../pipeline-e/plate-streetview';
 import { visionFacadeCounter } from '../pipeline-e/plate-identity';
 import { parentFace, reframe, writeEnhanceDiagnostic, type InferenceOutcome, type StepRecord } from '../pipeline-e/inference';
 import type { F2Input, PlateAgreement } from './f2';
@@ -233,7 +233,7 @@ export async function runVersionF3(input: F3Input): Promise<F3Outcome> {
             let sv: WallStreetView | undefined, noSv = noGuide;
             if (guards && guide.length) {
                 const best = bestStreetViewForWall(f, guide);
-                if (best.view && best.rect) sv = { view: best.view, rect: best.rect, crop: rectifiedReference(best.rect, tex.width, tex.height), why: best.why };
+                if (best.view && best.rect) sv = { view: best.view, rect: best.rect, crop: wallReference(f, best.view, best.rect, tex.width, tex.height), why: best.why };
                 else noSv = best.why;
             }
             const structure = guideOf(f);

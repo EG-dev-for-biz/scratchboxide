@@ -1936,9 +1936,11 @@ export async function createGeminiContentClient(): Promise<GeminiContentClient |
     const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_GENAI_API_KEY || process.env.GOOGLE_AI_API_KEY;
     try {
         const { GoogleGenAI } = await import('@google/genai');
-        if (key) return new GoogleGenAI({ apiKey: key }) as unknown as GeminiContentClient;
+        // Vertex first, like the app's media client (GoogleMediaCredentialsService.createClient); a key only without it
         const { GoogleMediaCredentialsService } = await import('../google-media-credentials-service');
-        return (await new GoogleMediaCredentialsService().createVertexClient()) as unknown as GeminiContentClient;
+        const creds = new GoogleMediaCredentialsService();
+        if (creds.hasVertexCredentials() || !key) return (await creds.createVertexClient()) as unknown as GeminiContentClient;
+        return new GoogleGenAI({ apiKey: key }) as unknown as GeminiContentClient;
     } catch {
         return null;
     }

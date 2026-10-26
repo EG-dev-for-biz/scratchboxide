@@ -352,6 +352,26 @@ struct ScanRectifierParams {
     // the stitch holds it, so a T-junction tie to a flattened wall base cannot drag the street sideways.
     std::vector<std::vector<std::pair<double, double>>> buildingFootprintsXZ;
     double footprintGroundMargin{0.5};
+    // Footprint wall planes: closed x/z rings in the mesh frame (e.g. Google Vector Tiles footprints) whose edges are
+    // offered as vertical wall-plane candidates. A wall region matches the edge it runs along (direction and distance);
+    // an edge is taken only where the scan agrees with it: enough matched wall area whose mean direction is the edge's.
+    // A matched region then takes the edge's direction (the footprint gives the direction, never the position: the
+    // offset is measured on the scan), and regions of one edge whose offsets agree share one plane. Every snap still
+    // passes maxSnapInducedDisplacement and maxRegionRms; a region that fails keeps the scan-derived orientation path.
+    std::vector<std::vector<std::pair<double, double>>> wallFootprintsXZ;
+    double footprintEdgeMinLength{4.0};      // shorter edges are not candidates (m)
+    double footprintMatchDeg{10.0};          // a region's horizontal normal within this of the edge's normal
+    double footprintMatchDist{5.0};          // the region's centroid within this of the edge's line (m)
+    double footprintMatchOverlap{0.5};       // share of the region's length that lies along the edge
+    double footprintEdgeMinSupport{15.0};    // matched wall area an edge needs (m^2)
+    double footprintEdgeMaxMeanDevDeg{3.0};  // the matched regions' area-weighted mean direction within this of the edge
+    double footprintMergeOffset{0.3};        // regions of one edge side whose offsets agree within this share a plane (m)
+    double footprintPlumbDeg{5.0};           // a region tilted more than this from vertical keeps its own path
+    // Claim: triangles no region took (crinkled facade facets) beside an accepted edge join the edge side's shared plane
+    // when all three vertices lie within footprintClaimTau of it and the face is within footprintClaimDeg of facing
+    // along it. Deeper relief (balconies, reveals, pilasters) stands outside the tolerance and is left as scanned.
+    double footprintClaimTau{0.2};           // (m; 0 = no claim)
+    double footprintClaimDeg{35.0};
 
     // --- D9 guards
     double guardMinNormalDot{0.2};
@@ -459,6 +479,11 @@ struct ScanRectifierStats {
     double proudBlockArea{0};
     double sheetArea{0};
     double localOrientationMaxRotationDeg{0};
+    size_t footprintEdges{0}, footprintEdgesAccepted{0}, footprintEdgesLowSupport{0}, footprintEdgesOffAngle{0};
+    size_t footprintWallsMatched{0}, footprintWallsSnapped{0}, footprintWallsMerged{0}, footprintSnapRejected{0};
+    double footprintSnappedArea{0};
+    size_t footprintClaimSides{0}, footprintClaimedTriangles{0};
+    double footprintClaimedArea{0};
     double regionArea{0};
     // D6/D7
     size_t tierAlignedRoofs{0}, parapetGroups{0}, tierRejectedUnsupported{0};
@@ -1391,6 +1416,12 @@ public:
           << ", \"levelSplits\": " << s.levelSplits << ", \"localOrientationSnapped\": " << s.localOrientationSnapped
           << ", \"familyLocked\": " << s.familyLocked << ", \"localOrientationMaxRotationDeg\": " << s.localOrientationMaxRotationDeg
           << ", \"reliefSheets\": " << s.sheets << ", \"reliefSheetArea\": " << s.sheetArea << ", \"rejectedUnlevelableRoofs\": " << s.rejectedUnlevelable << ", \"orientationOffFamily\": " << s.orientationOffFamily << ", \"reliefPanelFaces\": " << s.reliefPanelFaces << ", \"reliefPanelArea\": " << s.reliefPanelArea << ", \"reliefPanelVertices\": " << s.reliefProtectedVertices
+          << ", \"footprintEdges\": " << s.footprintEdges << ", \"footprintEdgesAccepted\": " << s.footprintEdgesAccepted
+          << ", \"footprintEdgesLowSupport\": " << s.footprintEdgesLowSupport << ", \"footprintEdgesOffAngle\": " << s.footprintEdgesOffAngle
+          << ", \"footprintWallsMatched\": " << s.footprintWallsMatched << ", \"footprintWallsSnapped\": " << s.footprintWallsSnapped
+          << ", \"footprintWallsMerged\": " << s.footprintWallsMerged << ", \"footprintSnapRejected\": " << s.footprintSnapRejected
+          << ", \"footprintSnappedArea\": " << s.footprintSnappedArea << ", \"footprintClaimSides\": " << s.footprintClaimSides
+          << ", \"footprintClaimedTriangles\": " << s.footprintClaimedTriangles << ", \"footprintClaimedArea\": " << s.footprintClaimedArea
           << ", \"proudBlocks\": " << s.proudBlocks << ", \"proudBlocksLevelled\": " << s.proudBlocksLevelled << ", \"proudBlockFaces\": " << s.proudBlockFaces
           << ", \"proudBlockArea\": " << s.proudBlockArea << ", \"proudBlockGroups\": " << s.proudBlockGroups << ", \"proudBlockFrozenGroups\": " << s.proudBlockFrozenGroups
           << ", \"area\": " << s.regionArea << "},\n";
@@ -1669,6 +1700,8 @@ private:
         std::vector<OrientationFamily> families;
         std::vector<PlaneRegion> regions;
         std::vector<int32_t> triRegion;
+        struct FootprintEdge { double ax, az, ux, uz, len; V3 n; };
+        std::vector<FootprintEdge> fpEdges;  // wallFootprintsXZ edges at least footprintEdgeMinLength long
         std::unordered_map<int32_t, std::vector<TierPeakInfo>> tierPeaks;  // footprint -> peaks
 
         std::vector<V3> delta;  // per weld group displacement (final)
@@ -2812,8 +2845,9 @@ private:
                     fits.push_back(std::move(cand[i]));
                 }
             }
-            // phase 2: orientation consensus of nearby walls
+            // phase 2: orientation consensus of nearby walls, and the footprint edges the scan agrees with
             computeLocalOrientations(fits);
+            if (!P.wallFootprintsXZ.empty()) matchFootprintEdges(fits);
             // phase 3: orientation snapping (bounded by the induced displacement), residual check. Walls and level
             // regions first; inclined regions are then admitted only where those planes do not already explain them,
             // and take their direction and pitch consensus among the admitted ones.
@@ -2843,6 +2877,8 @@ private:
                     S.regionArea += f.area;
                 }
             }
+            // phase 3b: crinkled facade facets beside an accepted footprint edge join the edge side's shared plane
+            if (!fpEdges.empty() && P.footprintClaimTau > 0) claimFootprintFacades(fits, regionOfKey);
             // phase 4: each relief sheet takes its parent's snapped orientation, offset by its relief
             for (auto& ps : pendingSheets) {
                 auto it = regionOfKey.find(ps.first);
@@ -3139,6 +3175,10 @@ private:
             V3 t1;                  // horizontal in-plane axis (walls)
             double lo1{0}, hi1{0};
             int32_t footprint{-1};
+            int32_t edge{-1};       // accepted footprint edge this wall runs along (wallFootprintsXZ), else -1
+            V3 edgeN;               // the edge's horizontal normal, signed to face the way the wall faces
+            double edgeD{0};        // the shared plane offset of the edge side's agreeing regions (along edgeN)
+            bool hasEdgeD{false};
         };
 
         bool fitPlaneIrls(RegionFit& f) {
@@ -3349,6 +3389,186 @@ private:
             }
         }
 
+        /**
+         * Footprint edges as wall-plane candidates (wallFootprintsXZ). Each wall region is matched to the edge it runs
+         * along: horizontal normal within footprintMatchDeg of the edge's, centroid within footprintMatchDist of its line,
+         * and at least footprintMatchOverlap of the region's length beside the edge; the closest such edge wins. An edge is
+         * accepted when its matched area reaches footprintEdgeMinSupport and the area-weighted mean direction of its
+         * matched regions lies within footprintEdgeMaxMeanDevDeg of the edge (a footprint drawn rotated against the scan is
+         * refused whole). Per accepted edge and side, the matched regions' offsets along the edge normal (each measured on
+         * its own scan points) are grouped at gaps wider than footprintMergeOffset; the group holding the most area gives
+         * the side's shared offset. Only direction comes from the footprint; every offset is the scan's.
+         */
+        void matchFootprintEdges(std::vector<RegionFit>& fits) {
+            using Edge = FootprintEdge;
+            std::vector<Edge>& edges = fpEdges;
+            edges.clear();
+            for (const auto& ring : P.wallFootprintsXZ) {
+                const size_t m = ring.size();
+                for (size_t i = 0; i < m; ++i) {
+                    const auto& a = ring[i];
+                    const auto& b = ring[(i + 1) % m];
+                    const double dx = b.first - a.first, dz = b.second - a.second, len = std::sqrt(dx * dx + dz * dz);
+                    if (!(len >= P.footprintEdgeMinLength)) continue;
+                    const double ux = dx / len, uz = dz / len;
+                    edges.push_back({a.first, a.second, ux, uz, len, V3{-uz, 0, ux}});
+                }
+            }
+            S.footprintEdges = edges.size();
+            if (edges.empty()) return;
+            // edges by grid cell of their bounding box, grown by the match distance
+            const double cell = 16.0;
+            auto ci = [&](double v) { return static_cast<int64_t>(std::floor(v / cell)); };
+            std::unordered_map<int64_t, std::vector<uint32_t>, detail::CellKeyHash> egrid;
+            for (uint32_t e = 0; e < edges.size(); ++e) {
+                const Edge& E = edges[e];
+                const double bx = E.ax + E.ux * E.len, bz = E.az + E.uz * E.len, g = P.footprintMatchDist;
+                for (int64_t x = ci(std::min(E.ax, bx) - g); x <= ci(std::max(E.ax, bx) + g); ++x)
+                    for (int64_t z = ci(std::min(E.az, bz) - g); z <= ci(std::max(E.az, bz) + g); ++z) egrid[detail::cellKey(x, 0, z)].push_back(e);
+            }
+            const double cosMatch = std::cos(detail::degToRad(P.footprintMatchDeg));
+            std::vector<int32_t> edgeOf(fits.size(), -1);
+            std::vector<double> sideOf(fits.size(), 1.0);
+            for (size_t i = 0; i < fits.size(); ++i) {
+                const RegionFit& f = fits[i];
+                if (f.cls != 0) continue;
+                const V3 h = V3{f.n.x, 0, f.n.z}.normalized();
+                if (h.norm() < 0.5) continue;
+                const V3 p0 = f.centroid + f.t1 * (f.lo1 - f.t1.dot(f.centroid));
+                const V3 p1 = f.centroid + f.t1 * (f.hi1 - f.t1.dot(f.centroid));
+                const double regionLen = std::max(0.5, f.hi1 - f.lo1);
+                auto it = egrid.find(detail::cellKey(ci(f.centroid.x), 0, ci(f.centroid.z)));
+                if (it == egrid.end()) continue;
+                double best = 1e300;
+                for (uint32_t e : it->second) {
+                    const Edge& E = edges[e];
+                    const double c = h.dot(E.n);
+                    if (std::abs(c) < cosMatch) continue;
+                    const double dist = std::abs(E.n.x * (f.centroid.x - E.ax) + E.n.z * (f.centroid.z - E.az));
+                    if (dist > P.footprintMatchDist) continue;
+                    double s0 = E.ux * (p0.x - E.ax) + E.uz * (p0.z - E.az), s1 = E.ux * (p1.x - E.ax) + E.uz * (p1.z - E.az);
+                    if (s0 > s1) std::swap(s0, s1);
+                    const double overlap = std::min(s1, E.len) - std::max(s0, 0.0);
+                    if (overlap < P.footprintMatchOverlap * regionLen) continue;
+                    const double dev = detail::radToDeg(std::acos(std::min(1.0, std::abs(c))));
+                    const double score = dist / P.footprintMatchDist + dev / P.footprintMatchDeg;
+                    if (score < best) { best = score; edgeOf[i] = static_cast<int32_t>(e); sideOf[i] = c >= 0 ? 1.0 : -1.0; }
+                }
+            }
+            // per edge: support and mean direction (signed in-plane rotation of the region normal from the edge normal)
+            std::vector<double> support(edges.size(), 0.0), devSum(edges.size(), 0.0);
+            for (size_t i = 0; i < fits.size(); ++i) {
+                if (edgeOf[i] < 0) continue;
+                const Edge& E = edges[static_cast<size_t>(edgeOf[i])];
+                const V3 h = V3{fits[i].n.x, 0, fits[i].n.z}.normalized() * sideOf[i];
+                const double dev = std::atan2(E.n.x * h.z - E.n.z * h.x, E.n.dot(h));
+                support[static_cast<size_t>(edgeOf[i])] += fits[i].area;
+                devSum[static_cast<size_t>(edgeOf[i])] += fits[i].area * dev;
+            }
+            std::vector<uint8_t> accepted(edges.size(), 0);
+            for (size_t e = 0; e < edges.size(); ++e) {
+                if (support[e] <= 0) continue;
+                if (support[e] < P.footprintEdgeMinSupport) { ++S.footprintEdgesLowSupport; continue; }
+                if (std::abs(detail::radToDeg(devSum[e] / support[e])) > P.footprintEdgeMaxMeanDevDeg) { ++S.footprintEdgesOffAngle; continue; }
+                accepted[e] = 1;
+                ++S.footprintEdgesAccepted;
+            }
+            // per accepted edge side: each region's own offset along the signed edge normal, grouped; the largest group
+            // gives the side's shared offset
+            std::map<std::pair<int32_t, int>, std::vector<std::pair<double, size_t>>> sides;  // ordered: deterministic
+            std::vector<double> ownD(fits.size(), 0.0);
+            for (size_t i = 0; i < fits.size(); ++i) {
+                if (edgeOf[i] < 0 || !accepted[static_cast<size_t>(edgeOf[i])]) continue;
+                RegionFit& f = fits[i];
+                const V3 n = edges[static_cast<size_t>(edgeOf[i])].n * sideOf[i];
+                std::vector<double> vals, w;
+                vals.reserve(f.tris.size() * 3);
+                w.reserve(f.tris.size() * 3);
+                for (uint32_t t : f.tris) for (int k = 0; k < 3; ++k) { vals.push_back(n.dot(P0[tri[t][k]])); w.push_back(triA0[t] / 3.0); }
+                ownD[i] = detail::huberLocation(vals, w, P.planeHuber);
+                f.edge = edgeOf[i];
+                f.edgeN = n;
+                ++S.footprintWallsMatched;
+                sides[{edgeOf[i], sideOf[i] > 0 ? 1 : -1}].push_back({ownD[i], i});
+            }
+            for (auto& kv : sides) {
+                auto& v = kv.second;
+                std::sort(v.begin(), v.end());
+                size_t bestB = 0, bestE = 0;
+                double bestArea = -1;
+                for (size_t b = 0; b < v.size();) {
+                    size_t e = b + 1;
+                    while (e < v.size() && v[e].first - v[e - 1].first <= P.footprintMergeOffset) ++e;
+                    double area = 0;
+                    for (size_t k = b; k < e; ++k) area += fits[v[k].second].area;
+                    if (area > bestArea) { bestArea = area; bestB = b; bestE = e; }
+                    b = e;
+                }
+                double sw = 0, sd = 0;
+                for (size_t k = bestB; k < bestE; ++k) { sw += fits[v[k].second].area; sd += fits[v[k].second].area * v[k].first; }
+                const double shared = sd / sw;
+                for (size_t k = bestB; k < bestE; ++k) { fits[v[k].second].edgeD = shared; fits[v[k].second].hasEdgeD = true; }
+            }
+        }
+
+        /**
+         * Per accepted edge side whose regions snapped onto the shared plane, the largest of them claims the triangles no
+         * region took beside the edge: centroid along the edge, all three vertices within footprintClaimTau of the plane,
+         * and the face within footprintClaimDeg of facing along it. The claiming region's support box grows over them, so
+         * the snap moves their vertices onto the plane like any of its own (at most footprintClaimTau).
+         */
+        void claimFootprintFacades(const std::vector<RegionFit>& fits, const std::unordered_map<uint32_t, int32_t>& regionOfKey) {
+            std::map<std::pair<int32_t, int>, int32_t> rep;  // (edge, side) -> region; ordered: deterministic
+            for (const auto& f : fits) {
+                if (f.cls != 0 || f.edge < 0 || !f.hasEdgeD) continue;
+                auto it = regionOfKey.find(f.key);
+                if (it == regionOfKey.end()) continue;
+                const PlaneRegion& R = regions[static_cast<size_t>(it->second)];
+                if (R.n.dot(f.edgeN) < 1.0 - 1e-9 || std::abs(R.d - f.edgeD) > 1e-9) continue;  // not snapped onto the shared plane
+                const std::pair<int32_t, int> key{f.edge, f.edgeN.dot(fpEdges[static_cast<size_t>(f.edge)].n) > 0 ? 1 : -1};
+                auto r = rep.find(key);
+                if (r == rep.end() || regions[static_cast<size_t>(r->second)].area < R.area) rep[key] = it->second;
+            }
+            S.footprintClaimSides = rep.size();
+            if (rep.empty()) return;
+            const double cell = 8.0, tau = P.footprintClaimTau, cosClaim = std::cos(detail::degToRad(P.footprintClaimDeg));
+            auto ci = [&](double v) { return static_cast<int64_t>(std::floor(v / cell)); };
+            std::unordered_map<int64_t, std::vector<uint32_t>, detail::CellKeyHash> ugrid;
+            for (size_t t = 0; t < F; ++t)
+                if (visible[t] && triRegion[t] < 0 && triA0[t] > 1e-8 && std::abs(triN0[t].y) < 0.8)
+                    ugrid[detail::cellKey(ci(triC0[t].x), 0, ci(triC0[t].z))].push_back(static_cast<uint32_t>(t));
+            for (const auto& kv : rep) {
+                const FootprintEdge& E = fpEdges[static_cast<size_t>(kv.first.first)];
+                PlaneRegion& R = regions[static_cast<size_t>(kv.second)];
+                const double bx = E.ax + E.ux * E.len, bz = E.az + E.uz * E.len, g = tau + 1.0;
+                for (int64_t x = ci(std::min(E.ax, bx) - g); x <= ci(std::max(E.ax, bx) + g); ++x)
+                    for (int64_t z = ci(std::min(E.az, bz) - g); z <= ci(std::max(E.az, bz) + g); ++z) {
+                        auto it = ugrid.find(detail::cellKey(x, 0, z));
+                        if (it == ugrid.end()) continue;
+                        for (uint32_t t : it->second) {
+                            if (triRegion[t] >= 0 || triN0[t].dot(R.n) < cosClaim) continue;
+                            const V3& c = triC0[t];
+                            const double s = E.ux * (c.x - E.ax) + E.uz * (c.z - E.az);
+                            if (s < 0 || s > E.len) continue;
+                            bool near = true;
+                            for (int k = 0; k < 3 && near; ++k) near = std::abs(R.n.dot(P0[tri[t][k]]) - R.d) <= tau;
+                            if (!near) continue;
+                            triRegion[t] = kv.second;
+                            for (int k = 0; k < 3; ++k) {
+                                const V3& q = P0[tri[t][k]];
+                                const double a1 = R.t1.dot(q), a2 = R.t2.dot(q);
+                                R.lo1 = std::min(R.lo1, a1); R.hi1 = std::max(R.hi1, a1);
+                                R.lo2 = std::min(R.lo2, a2); R.hi2 = std::max(R.hi2, a2);
+                            }
+                            R.area += triA0[t];
+                            ++R.triangleCount;
+                            ++S.footprintClaimedTriangles;
+                            S.footprintClaimedArea += triA0[t];
+                        }
+                    }
+            }
+        }
+
         bool snapRegion(const RegionFit& f, PlaneRegion& R) {
             std::vector<V3> pts;
             std::vector<double> w;
@@ -3375,7 +3595,30 @@ private:
             bool plumb = false, fam = false, level = false;
             bool incAz = false, incPitch = false;
             double incPitchChange = 0;
-            if (c == 0) {
+            // a wall along an accepted footprint edge: the edge's direction, at the side's shared offset when this region's
+            // own offset agrees with it, else at its own; the same induced-displacement and rms bounds as any snap
+            bool edgeUsed = false;
+            if (c == 0 && f.edge >= 0 && f.tiltDeg <= P.footprintPlumbDeg) {
+                const V3 nE = f.edgeN;
+                const double dOwn = locate(nE);
+                double tries[2];
+                int nt = 0;
+                const bool merge = f.hasEdgeD && std::abs(f.edgeD - dOwn) <= P.footprintMergeOffset;
+                if (merge) tries[nt++] = f.edgeD;
+                tries[nt++] = dOwn;
+                for (int k = 0; k < nt && !edgeUsed; ++k) {
+                    if (induced(nE, tries[k], nFit, dFit) > P.maxSnapInducedDisplacement) continue;
+                    double sw = 0, sr = 0;
+                    for (size_t q = 0; q < pts.size(); ++q) { const double r = nE.dot(pts[q]) - tries[k]; sw += w[q]; sr += w[q] * r * r; }
+                    if (std::sqrt(sr / std::max(sw, 1e-300)) > P.maxRegionRms) continue;
+                    n = nE; d = tries[k]; edgeUsed = true;
+                    ++S.footprintWallsSnapped;
+                    S.footprintSnappedArea += f.area;
+                    if (merge && k == 0) ++S.footprintWallsMerged;
+                }
+                if (!edgeUsed) ++S.footprintSnapRejected;
+            }
+            if (c == 0 && !edgeUsed) {
                 double tilt = f.tiltDeg;
                 V3 nPlumb = n;
                 if (tilt <= P.plumbSnapDeg) { nPlumb = V3{n.x, 0, n.z}.normalized(); plumb = true; }
@@ -3442,7 +3685,7 @@ private:
                     break;
                 }
                 if (!used && !tries.empty()) ++S.inclinedSnapRejectedInduced;
-            } else {
+            } else if (c == 1) {
                 double tiltDeg = detail::radToDeg(std::acos(std::clamp(n.y, -1.0, 1.0)));
                 if (tiltDeg <= P.plumbSnapDeg) {
                     V3 up{0, 1, 0};

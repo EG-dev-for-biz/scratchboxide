@@ -133,10 +133,9 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
             return 'ziggurat';
         }
 
-        // -0.96. High-Speed Ballistics, Voronoi Glass Fracture & Supersonic Impact
-        if (/\b(?:bullet|bully\s*going\s*through|plate\s*of\s*glass|glass\s*shatter|shatter(?:ed|ing)?|fracture|glass\s*shards?|high\s*speed\s*impact|projectile|ballistics?|penetrat(?:e|ion)|shattering\s*glass)\b/i.test(text)) {
-            return 'glass_shatter';
-        }
+        // Ballistic glass fracture is reachable via the explicit vfx_fracture_glass_pane tool
+        // (ADA rule 2: no keyword-noun-list routing); this theme/case stays for any caller that
+        // still names 'glass_shatter' directly.
 
         // -0.988. Historical Battlefield / Lexington 1776 / Castle Siege (checked before geospatial so Battle of Lexington 1776 is not treated as modern tile)
         if (/lexington|concord|1776|battle|revolution|redcoat|minuteman|militia|firing\s*line|bunker\s*hill|gettysburg|waterloo|siege|castle\s*siege|warfare|historical\s*scene/i.test(text)) {
@@ -1040,6 +1039,39 @@ animateVehicle();
  * Generates modern, fully compilable C++20 procedural source code for the Scratchbox 3D Engine.
  * Enforces the "C/C++ First" architecture directive.
  */
+/**
+ * The nature scene as an sb Python script: a native terrain plateau, a monolith on it and SB-Veggie trees standing on
+ * the terrain (sb.create_tree descriptions, grown natively with their levels of detail when the scene is written).
+ */
+export function natureWorldPythonSource(title: string): string {
+    const name = (title || 'ProceduralWorld').replace(/[^a-zA-Z0-9 _-]/g, '').slice(0, 60) || 'ProceduralWorld';
+    return `import scratchbox as sb
+
+world = sb.World(seed=777)
+terrain = world.add_terrain(extents=(24.0, 24.0), archetype="stratified plateau", resolution=96)
+terrain.set_material(sb.PbrMaterial.basalt_rock())
+
+monolith = sb.create_box(size=(1.2, 4.8, 1.2))
+monolith.material = sb.PbrMaterial.basalt_rock()
+monolith.translate(0.0, terrain.sample_height(0.0, 0.0) + 2.4, 0.0)
+world.add(monolith)
+
+# SB-Veggie trees described by measurements: (x, z, height, crown radius, crown widest at, crown top exponent, leaf colour)
+trees = [
+    (-4.5, -3.0, 7.5, 3.0, 0.5, 2.0, "#4c6b2e"),
+    (4.2, -2.5, 6.8, 2.7, 0.55, 2.2, "#55702f"),
+    (-4.2, 3.6, 9.5, 1.8, 0.05, 1.0, "#2f4a2b"),
+    (4.6, 3.0, 8.2, 1.6, 0.05, 1.0, "#334f2c"),
+    (-8.0, 0.5, 3.0, 1.4, 0.4, 2.0, "#5c7536"),
+]
+for x, z, h, r, widest, top, leaf in trees:
+    world.add(sb.create_tree(position=(x, terrain.sample_height(x, z), z), height=h, crown_radius=r,
+                             crown_widest_at=widest, crown_top_exponent=top, leaf_color=leaf, label="${name} tree"))
+
+sb.io.write_glb(OUTPUT_GLB_PATH, world)
+`;
+}
+
 export function generateDefaultCpp3DSource(theme: Procedural3DTheme, title: string = 'Procedural Asset'): string {
     const sanitizedTitle = title.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase().slice(0, 40) || 'procedural_asset';
 
@@ -1366,27 +1398,8 @@ int main() {
     applyTriplanarToMesh(monolith, TriplanarMaterialType::MOSS_OVERGROWTH, 1.2f);
     scene.addNode("ancient_monolith", monolith, FormTier::Primary, Vec3(0, 2.4f, 0), Vec3(0, 0.35f, 0));
 
-    // 3. Stochastic L-System Trees (Leonardo da Vinci Branching & Foliage SSS)
-    LSystemTreeParams treeParams;
-    treeParams.maxDepth = 4;
-    treeParams.initialLength = 3.6f;
-    treeParams.initialRadius = 0.36f;
-    treeParams.generateLeaves = true;
-    treeParams.useDetailedFoliageCards = true;
-    treeParams.transferSmoothNormals = true;
-    treeParams.leafSize = 0.42f;
-
-    geometry::Mesh tree1 = generateProceduralTree(Vec3(-4.5f, 1.2f, -3.0f), treeParams);
-    tree1.name = "LSystem_Oak_A";
-    tree1.material = PbrMaterial::roughWood();
-    scene.addNode("tree_oak_left", tree1, FormTier::Secondary, Vec3(0, 0, 0));
-
-    treeParams.seed = 999;
-    treeParams.initialLength = 3.2f;
-    geometry::Mesh tree2 = generateProceduralTree(Vec3(4.2f, 1.4f, -2.5f), treeParams);
-    tree2.name = "LSystem_Oak_B";
-    tree2.material = PbrMaterial::roughWood();
-    scene.addNode("tree_oak_right", tree2, FormTier::Secondary, Vec3(0, 0, 0));
+    // 3. Trees are not grown here: every tree is an SB-Veggie tree (sb.create_tree in a Python scene,
+    //    botanical_synthesize_tree on its own; common/spatial/sb-veggie-lockdown.ts).
 
     // 4. Volumetric Participating Media & Golden Hour Atmosphere
     VolumetricMedium atmosphere;
@@ -1396,7 +1409,7 @@ int main() {
     auto goldenHourSH = getSkyGoldenHourSH();
 
     std::cout << "[Scratchbox Nature Engine] Synthesized Biome Terrain ("
-              << terrainMesh.vertices.size() << " verts), Trees, and Volumetric Fog (g="
+              << terrainMesh.vertices.size() << " verts), Monolith, and Volumetric Fog (g="
               << atmosphere.anisotropy << ")" << std::endl;
 
     // 5. Stream glTF 2.0 Binary Container (.glb)
@@ -2264,25 +2277,7 @@ onFrame((time, delta) => {
                     tier: 'tertiary',
                     material: { color: 0x64748b, roughness: 0.40, metalness: 0.85 }
                 },
-                // 6. Grounded Local Conifers & Terrain Boulders
-                {
-                    id: 'env-conifer-1',
-                    name: 'Subalpine Conifer Stand',
-                    type: 'cylinder',
-                    position: [-4.5, 1.2, 3.2],
-                    scale: [1.2, 2.4, 1.2],
-                    tier: 'secondary',
-                    material: { color: 0x1e3f20, roughness: 0.70, metalness: 0.05 }
-                },
-                {
-                    id: 'env-conifer-2',
-                    name: 'Perimeter Pine Cluster',
-                    type: 'cylinder',
-                    position: [4.8, 1.0, -2.8],
-                    scale: [1.0, 2.0, 1.0],
-                    tier: 'secondary',
-                    material: { color: 0x234d20, roughness: 0.70, metalness: 0.05 }
-                },
+                // 6. Terrain boulders (trees are SB-Veggie trees, never primitive stand-ins)
                 {
                     id: 'env-boulder-1',
                     name: 'Basaltic Ground Boulder',
@@ -2303,24 +2298,6 @@ onFrame((time, delta) => {
                     scale: [3.2, 4.8, 3.2],
                     tier: 'primary',
                     material: { color: 0x57534e, roughness: 0.88, metalness: 0.05, preset: 'granite' }
-                },
-                {
-                    id: 'nature-conifer-left',
-                    name: 'Subalpine Conifer Stand A',
-                    type: 'cylinder',
-                    position: [-4.2, 1.8, -2.5],
-                    scale: [1.4, 3.6, 1.4],
-                    tier: 'secondary',
-                    material: { color: 0x1e3f20, roughness: 0.70, metalness: 0.05 }
-                },
-                {
-                    id: 'nature-conifer-right',
-                    name: 'Subalpine Conifer Stand B',
-                    type: 'cylinder',
-                    position: [4.0, 1.6, 2.2],
-                    scale: [1.2, 3.2, 1.2],
-                    tier: 'secondary',
-                    material: { color: 0x234d20, roughness: 0.70, metalness: 0.05 }
                 },
                 {
                     id: 'nature-boulder-1',
@@ -2387,12 +2364,11 @@ onFrame((time, delta) => {
             customMeshes,
             customScript,
             code: customScript,
-            cppGenerator: {
-                filename: 'world_generator.cpp',
+            // terrain, monolith and SB-Veggie trees from the native engine (the trees grown natively when the scene is written)
+            pythonGenerator: {
+                filename: 'procedural_scene.py',
                 enabled: true,
-                sourceCode: generateDefaultCpp3DSource('nature_atmosphere', spec.name || 'Procedural World'),
-                vertexCount: 38000,
-                triangleCount: 24000
+                sourceCode: natureWorldPythonSource(spec.name || 'Procedural World')
             }
         };
     }
@@ -2926,12 +2902,10 @@ tower_gamma = sb.create_building(
 tower_gamma.translate(16.0, 0.5, 6.0)
 scene.merge(tower_gamma)
 
-# 5. Avenue shade trees along promenade
+# 5. Avenue shade trees along promenade (SB-Veggie trees, grown natively when the scene is written)
 avenue_trees = [(-8.0, 0.5, 12.0), (8.0, 0.5, 12.0), (-16.0, 0.5, 14.0), (16.0, 0.5, 14.0)]
 for tx, ty, tz in avenue_trees:
-    tree = sb.create_tree(attractor_count=110, crown_center=(0, 4.8, 0), crown_extents=(2.4, 3.4, 2.4))
-    tree.translate(tx, ty, tz)
-    scene.merge(tree)
+    scene.merge(sb.create_tree(position=(tx, ty, tz), height=8.2, crown_radius=2.4, crown_base_height=1.4, label="avenue shade tree"))
 
 # 6. Stream binary glTF 2.0
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)
@@ -3297,12 +3271,10 @@ west_wing = sb.create_building(
 west_wing.translate(16.0, 0.7, 0.0)
 scene.merge(west_wing)
 
-# 4. Botanical Space-Colonization Shade Trees
+# 4. Shade trees (SB-Veggie trees, grown natively when the scene is written)
 tree_coords = [(-8.0, 0.7, 9.0), (8.0, 0.7, 9.0), (-15.0, 0.7, 12.0), (15.0, 0.7, 12.0)]
 for tx, ty, tz in tree_coords:
-    tree = sb.create_tree(attractor_count=130, crown_center=(0, 5, 0), crown_extents=(2.6, 3.8, 2.6))
-    tree.translate(tx, ty, tz)
-    scene.merge(tree)
+    scene.merge(sb.create_tree(position=(tx, ty, tz), height=8.8, crown_radius=2.6, crown_base_height=1.2, label="promenade shade tree"))
 
 # 5. Clinging Ivy on East wing foundation
 ivy = sb.create_ivy(root=(-10.0, 0.7, 3.0), obstacle_min=(-16, 0.7, -5), obstacle_max=(-10, 6, 5), max_steps=80)
@@ -3369,16 +3341,7 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                 tier: 'tertiary',
                 material: { color: 0x64748b, roughness: 0.40, metalness: 0.85 }
             },
-            // 6. Grounded Local Conifers & Natural Elements
-            {
-                id: 'arch-conifer-stand',
-                name: 'Subalpine Conifer Stand',
-                type: 'cylinder',
-                position: [-4.5, 1.2, 3.2],
-                scale: [1.2, 2.4, 1.2],
-                tier: 'secondary',
-                material: { color: 0x1e3f20, roughness: 0.70, metalness: 0.05 }
-            },
+            // 6. Ground boulder (trees are SB-Veggie trees, never primitive stand-ins)
             {
                 id: 'arch-ground-boulder',
                 name: 'Basaltic Ground Boulder',
@@ -3449,25 +3412,7 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                 tier: 'tertiary',
                 material: { color: 0xf8fafc, roughness: 0.5, metalness: 0.15 }
             },
-            // 7. Botanical Shade Trees
-            {
-                id: 'arch-tree-east',
-                name: 'Botanical Promenade Shade Tree',
-                type: 'sphere',
-                position: [-8.0, 4.5, 9.0],
-                scale: [3.2, 4.0, 3.2],
-                tier: 'tertiary',
-                material: { color: 0x1e3f20, roughness: 0.8, metalness: 0.0 }
-            },
-            {
-                id: 'arch-tree-west',
-                name: 'Botanical Promenade Shade Tree',
-                type: 'sphere',
-                position: [8.0, 4.5, 9.0],
-                scale: [3.2, 4.0, 3.2],
-                tier: 'tertiary',
-                material: { color: 0x1e3f20, roughness: 0.8, metalness: 0.0 }
-            }
+            // 7. The promenade's shade trees are SB-Veggie trees in the scene's Python generator
         ];
 
         return {
@@ -3637,10 +3582,8 @@ core.translate(0, 0.35, 0)
 core.tessellate_and_displace(tessellation_factor=1, displacement_scale=0.02, noise_freq=32.0, noise_amp=0.008)
 scene.merge(core)
 
-# 3. Flanking botanical organic accents
-accent_tree = sb.create_tree(attractor_count=90, crown_center=(0, 3.2, 0), crown_extents=(1.6, 2.2, 1.6))
-accent_tree.translate(4.2, 0.35, -2.5)
-scene.merge(accent_tree)
+# 3. Flanking accent tree (an SB-Veggie tree, grown natively when the scene is written)
+scene.merge(sb.create_tree(position=(4.2, 0.35, -2.5), height=5.4, crown_radius=1.6, crown_base_height=1.0, label="accent tree"))
 
 # 4. Stream binary glTF 2.0
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)

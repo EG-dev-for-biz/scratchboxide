@@ -246,7 +246,7 @@ describe('streetview_survey checkTemporary (synthetic street, synthetic vision r
             // its occluder question ("anything standing in front of ...") finds nothing, as a segmenter that misses the netting would
             segmenter: async (image, prompts) => {
                 const m = new Uint8Array(image.width * image.height);
-                if (prompts.target?.startsWith('anything standing in front')) return m;
+                if (prompts.target?.startsWith('anything standing in front') || prompts.target?.startsWith('long thin structures')) return m;
                 for (let i = 0; i < m.length; i++) { const r = image.rgba[i * 4], g = image.rgba[i * 4 + 1], b = image.rgba[i * 4 + 2]; m[i] = (r > 150 && r - b > 30) || (r < 70 && g < 75 && b < 85 && b > 35) || isNetting(r, g, b) ? 1 : 0; }
                 return m;
             }

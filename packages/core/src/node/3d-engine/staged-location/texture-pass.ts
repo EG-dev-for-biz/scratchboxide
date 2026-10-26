@@ -60,6 +60,7 @@ import { materialParamsImage, readFacadeMaterials, type FacadeMaterialRecord, ty
 import { bakeCourseProfile, courseProfilesImage } from './masonry-relief-native';
 import type { DepthMap } from '../../../common/spatial/texture-pass-contracts';
 import { detectPlaneRepeats, repeatFill } from './texture-repeat';
+import { libraryFill, type LibraryFillSpec } from './texture-library-fill';
 
 /** Part of every texture cache key: a change to the pass's maths is a new version. */
 /**
@@ -68,7 +69,7 @@ import { detectPlaneRepeats, repeatFill } from './texture-repeat';
  * from tier A over it, which still stands - this is a deliberate override, not a reversal of that finding).
  */
 export const photoTierEnabled = (): boolean => process.env.SCRATCHBOX_PHOTO_TIER !== '0';
-export const TEXTURE_PASS_VERSION = `texture-pass/14${photoTierEnabled() ? '+tier' : ''}${lightingCorrectionEnabled() ? `+light:${lightingModels().join(',')}:${lightingPromptVariant()}` : ''}${facadeMaterialsEnabled() ? '+mat2' : ''}`;
+export const TEXTURE_PASS_VERSION = `texture-pass/17${photoTierEnabled() ? '+tier' : ''}${lightingCorrectionEnabled() ? `+light:${lightingModels().join(',')}:${lightingPromptVariant()}` : ''}${facadeMaterialsEnabled() ? '+mat2' : ''}`;
 export const RUNG_REPEATED = TEXTURE_LADDER_RUNGS.indexOf('repeated same-plane fill');
 export const RUNG_PALETTE = TEXTURE_LADDER_RUNGS.indexOf('measured palette colour');
 export const RUNG_GENERATED_PBR = TEXTURE_LADDER_RUNGS.indexOf('generated tileable PBR');
@@ -81,8 +82,13 @@ export const VIEW_OUTLIER_DELTA_E = 14;
 /** 18% studio grey clay (sb.PbrMaterial.clay()), linear. */
 const CLAY_LINEAR: Vec3 = [0.55, 0.57, 0.60];
 
-/** One face's measured palette (the survey's FacePalette, top colours first). */
-export interface PaletteFace { headingDeg: number; colours: Array<{ srgb: Vec3; share: number }> }
+/**
+ * One face's measured palette (the survey's FacePalette, top colours first). `centreY`/`heightM`, when given, are the
+ * surveyed slice's own vertical middle and height (a tall structure's survey splits one heading into several bands,
+ * each its own palette) — paletteFill prefers a candidate whose band contains the texel's height over one that merely
+ * shares its heading.
+ */
+export interface PaletteFace { headingDeg: number; colours: Array<{ srgb: Vec3; share: number }>; centreY?: number; heightM?: number }
 
 export interface TextureLayerInput {
     layerKey: string;
@@ -114,7 +120,7 @@ export interface TexturePassSources {
     /** Registration residual (m) for D's distance gate max(0.25, 2 * residual). */
     registrationResidualM?: number;
     /** Optional model enhancement of D's texels; absent = the rung is not attempted, with the reason. */
-    enhance?: { client: EnhanceModelClient; models?: string[]; budgetMs?: number };
+    enhance?: { client: EnhanceModelClient; models?: string[]; budgetMs?: number; mode?: 'sharpen' | 'recreate' };
     enhanceUnavailable?: string;
     /**
      * Photo tier A (photo-tier-rectify.ts): rectified Street View pixels on the fitted planar faces, above the projection.
@@ -134,6 +140,18 @@ export interface TexturePassSources {
     lighting?: { client: EnhanceModelClient; models: string[] };
     /** Why the lighting correction did not run, when it was asked for. */
     lightingUnavailable?: string;
+    /**
+     * Apply the tile's lighting correction without the Street View agreement gate (every detail-locked answer stands):
+     * for a rebuilt surface no Street View reaches (a procedural district), where a baked shadow would otherwise stay.
+     */
+    lightingUngated?: boolean;
+    /**
+     * D's distance gate (m) between a texel and the tile surface it takes its colour from; default max(0.25, 2 x the
+     * registration residual). A rebuilt surface (a procedural district) stands off the scan by its fitting error: wider.
+     */
+    transferMaxDistanceM?: number;
+    /** The generated-PBR rung (rung 5) from the surface library, for texels no photo reaches (texture-library-fill.ts). */
+    generatedFill?: LibraryFillSpec;
     /** More registered views for photo tier A only (whole-face survey and ring views: its outline anchors). */
     photoTierViews?: ProjectionView[];
     /**
@@ -236,7 +254,13 @@ export function paletteLab(faces: PaletteFace[]): Array<{ lab: Vec3; share: numb
 
 /**
  * Rung 3: the flat top colour of the measured palette of the face the texel faces (nearest face heading within 60
- * degrees for a wall-like normal), else the palette's overall dominant colour. Only texels `base` leaves uncovered.
+ * degrees for a wall-like normal), else the palette's overall dominant colour. A tall structure's survey can carry
+ * several palettes at the same heading, one per height band (footprintSurveyFaces); among same-heading candidates,
+ * the one whose band actually contains the texel's height (atlas.texels.position's Y) wins over one that merely ties
+ * on heading — without this, every texel at a given heading picks whichever band's palette happens to iterate last,
+ * regardless of height, which is what produced visibly wrong-coloured patches on the Empire State Building's shaft
+ * (2026-10-24: granite-base and steel-crown palettes bleeding onto mid-shaft limestone texels). Only texels `base`
+ * leaves uncovered.
  */
 export function paletteFill(atlas: LaidOutUvAtlas, base: BakedTexturePlanes, faces: PaletteFace[]): BakedTexturePlanes {
     const out = emptyPlanes(atlas);
@@ -245,16 +269,21 @@ export function paletteFill(atlas: LaidOutUvAtlas, base: BakedTexturePlanes, fac
     const top = (f: PaletteFace) => [...f.colours].sort((a, b) => b.share - a.share)[0].srgb;
     // the overall dominant colour: weight each face's top colour by its share
     const overall = usable.map(f => ({ c: top(f), s: [...f.colours].sort((a, b) => b.share - a.share)[0].share })).sort((a, b) => b.s - a.s)[0].c;
-    const N = atlas.texels.normal;
+    const N = atlas.texels.normal, P = atlas.texels.position;
     let filled = 0, byFace = 0;
     for (const i of targets(atlas)) {
         if (base.albedo[i * 4 + 3]) continue;
         const nx = N[i * 3], ny = N[i * 3 + 1], nz = N[i * 3 + 2];
         let colour = overall;
         if (Math.abs(ny) < 0.7) {
-            const h = headingOf(nx, nz);
-            let best: PaletteFace | undefined, bestD = 60;
-            for (const f of usable) { const d = angleBetween(h, f.headingDeg); if (d <= bestD) { bestD = d; best = f; } }
+            const h = headingOf(nx, nz), y = P[i * 3 + 1];
+            let best: PaletteFace | undefined, bestD = Infinity, bestInBand = false;
+            for (const f of usable) {
+                const d = angleBetween(h, f.headingDeg);
+                if (d > 60) continue;
+                const inBand = f.centreY !== undefined && f.heightM !== undefined && Math.abs(y - f.centreY) <= f.heightM / 2;
+                if (!best || (inBand && !bestInBand) || (inBand === bestInBand && d < bestD)) { best = f; bestD = d; bestInBand = inBand; }
+            }
             if (best) { colour = top(best); byFace++; }
         }
         out.albedo.set([Math.round(colour[0]), Math.round(colour[1]), Math.round(colour[2]), 255], i * 4);
@@ -439,13 +468,13 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     if (src.tile) {
         progress('transferring the tile photo');
         try {
-            const maxDistanceM = Math.max(0.25, 2 * (src.registrationResidualM ?? 0));
+            const maxDistanceM = src.transferMaxDistanceM ?? Math.max(0.25, 2 * (src.registrationResidualM ?? 0));
             const lighting = src.lighting;
             const existing = planes;
             const correctCandidates = lighting ? async (plane: { rgb: Float32Array; has: Uint8Array; width: number; height: number; existing?: BakedTexturePlanes }) => {
                 const tl = Date.now();
                 progress('correcting the tile photo\'s lighting chart by chart with an image model (detail-locked)');
-                const r = await correctTilePlaneLighting({ atlas, plane, unpackRung: i => { const c = unpackConfidenceTexel(existing.confidence, i); return { covered: c.covered, rung: c.rung }; }, client: lighting.client, models: lighting.models, ...(src.signal ? { signal: src.signal } : {}) });
+                const r = await correctTilePlaneLighting({ atlas, plane, ...(src.lightingUngated ? { ungated: true } : {}), unpackRung: i => { const c = unpackConfidenceTexel(existing.confidence, i); return { covered: c.covered, rung: c.rung }; }, client: lighting.client, models: lighting.models, ...(src.signal ? { signal: src.signal } : {}) });
                 lightingTile = r.report;
                 timingsMs.tileLighting = Date.now() - tl;
                 if (r.report.applied) modelsUsed.push(...(r.provenance?.lightingCorrection?.models ?? []));
@@ -467,7 +496,7 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
                 const timer = setTimeout(() => budget.abort(Object.assign(new Error(`the enhancement passed its ${Math.round(budgetMs / 1000)} s budget`), { name: 'TimeoutError' })), budgetMs);
                 try {
                     const refs: EnhanceReferenceView[] = src.views.map(v => ({ panoId: v.panoId, camera: v.camera, image: v.image }));
-                    const res = await enhanceTransferredAtlas({ atlas, transfer, views: refs, client: src.enhance.client, ...(src.enhance.models ? { models: src.enhance.models } : {}), signal: src.signal, budgetSignal: budget.signal });
+                    const res = await enhanceTransferredAtlas({ atlas, transfer, views: refs, client: src.enhance.client, ...(src.enhance.models ? { models: src.enhance.models } : {}), ...(src.enhance.mode ? { mode: src.enhance.mode } : {}), signal: src.signal, budgetSignal: budget.signal });
                     const before = new Set(transfer.degradations);
                     degradations.push(...res.planes.degradations.filter(d => !before.has(d)));
                     transfer = res.planes;
@@ -637,8 +666,15 @@ export async function textureLayer(layer: TextureLayerInput, src: TexturePassSou
     timingsMs.repeatFill = Date.now() - t;
     aborted(src.signal);
 
-    // rung 4: measured palette; rung 5 (generated PBR) is not available; rung 6: clay
+    // rung 5: the surface library where the layer has one (a rebuilt surface), else rung 4: measured palette; rung 6: clay
     t = Date.now();
+    if (src.generatedFill) {
+        const lib = libraryFill(atlas, planes, src.generatedFill);
+        if (lib.filled) {
+            planes = mergeBakedPlanes(planes, lib);
+            progress(`${lib.filled} texels no photo reaches filled from the surface library (${lib.provenance.length} surfaces)`);
+        }
+    }
     const pal = paletteFill(atlas, planes, src.palette);
     const palTexels = countAlpha(pal);
     if (palTexels) {
@@ -821,8 +857,11 @@ export function projectionViewsFromEvidence(images: EvidenceImage[], registratio
 }
 
 /** The survey's face palettes (MaterialHints.faces) in the pass's shape. */
-export function palettesFromSurvey(faces: Array<{ headingDeg: number; palette?: { colours: Array<{ srgb: [number, number, number]; share: number }> } }> | undefined): PaletteFace[] {
-    return (faces ?? []).filter(f => f.palette?.colours.length).map(f => ({ headingDeg: f.headingDeg, colours: f.palette!.colours.map(c => ({ srgb: [c.srgb[0], c.srgb[1], c.srgb[2]] as Vec3, share: c.share })) }));
+export function palettesFromSurvey(faces: Array<{ headingDeg: number; palette?: { colours: Array<{ srgb: [number, number, number]; share: number }> }; centreY?: number; heightM?: number }> | undefined): PaletteFace[] {
+    return (faces ?? []).filter(f => f.palette?.colours.length).map(f => ({
+        headingDeg: f.headingDeg, colours: f.palette!.colours.map(c => ({ srgb: [c.srgb[0], c.srgb[1], c.srgb[2]] as Vec3, share: c.share })),
+        ...(f.centreY !== undefined ? { centreY: f.centreY } : {}), ...(f.heightM !== undefined ? { heightM: f.heightM } : {})
+    }));
 }
 
 export { CONFIDENCE_CHANNELS };

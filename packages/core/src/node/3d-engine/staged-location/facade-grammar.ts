@@ -48,12 +48,20 @@ import { checkDimensions, plausibilitySummary, type PlausibilityFlag } from '../
 
 export const FACADE_GRAMMAR_PROMPT_VERSION = 'facade-grammar/v1';
 /** The fit and the gates (part of the stage's cache key with the prompt version). */
-export const FACADE_GRAMMAR_GATE_VERSION = 'grammar-gates/v9';
+export const FACADE_GRAMMAR_GATE_VERSION = 'grammar-gates/v10';
 /** Openings read off the measured facade (beyond the tolerance) are dropped; more than this share of them and the grammar is not taken. */
 export const MAX_OFF_FACADE_SHARE = 0.1;
-/** The held-out folds: the covered width in at most this many alternating stripes, the covered height in at most this many bands, each about HELD_OUT_SPAN_M. */
-export const HELD_OUT_STRIPES = 6;
-export const HELD_OUT_BANDS = 4;
+/**
+ * The held-out folds: the covered width cut into alternating stripes, the covered height into alternating bands, each
+ * about HELD_OUT_SPAN_M (so every fold hides several bays or storeys, never the whole facade in one piece). The stripe/
+ * band count follows the facade's own covered extent (extent / HELD_OUT_SPAN_M); these are only the sanity ceiling —
+ * high enough that a supertall's held-out bands stay close to HELD_OUT_SPAN_M instead of silently widening past it (a
+ * facade merged across dozens of storeys, e.g. a stepped-setback shaft, otherwise gets only a handful of bands spanning
+ * tens of metres each, which the cross-validation was never tuned to score). Raising this costs nothing extra: each
+ * fold is still exactly one vision call (heldOutFolds always returns 4), only its mask gets finer-grained.
+ */
+export const HELD_OUT_STRIPES = 128;
+export const HELD_OUT_BANDS = 128;
 export const HELD_OUT_SPAN_M = 8;
 /**
  * On: it passed on real data (Haughwout Building and Puck Building, 2026-10-18: the accepted grammars beat the relief's
@@ -771,7 +779,8 @@ export function shownUp(f: ReliefOrthoFacade, h: Hidden | undefined): ShownAlong
 export function heldOutFolds(o: OrthoRaster, f: Pick<ReliefOrthoFacade, 'pixel'>): Array<{ fold: string; hidden: Hidden }> {
     const [ca, cb] = coveredColumns(o), [ra, rb] = coveredRows(o);
     const cut = (a: number, b: number, k: number) => Array.from({ length: k }, (_, i) => [Math.round(a + ((b - a) * i) / k), Math.round(a + ((b - a) * (i + 1)) / k)] as [number, number]);
-    // stripes and bands about HELD_OUT_SPAN_M wide (each shows several bays or storeys), two to six of them
+    // stripes and bands about HELD_OUT_SPAN_M wide (each shows several bays or storeys); at least 2, scaled to the
+    // facade's own covered extent up to the sanity ceiling (HELD_OUT_STRIPES / HELD_OUT_BANDS)
     const k = (px: number, most: number) => Math.max(2, Math.min(most, Math.round((px * f.pixel) / HELD_OUT_SPAN_M)));
     const stripes = cut(ca, cb, k(cb - ca, HELD_OUT_STRIPES)), bands = cut(ra, rb, k(rb - ra, HELD_OUT_BANDS));
     const pick = <T,>(v: T[], odd: number) => v.filter((_, i) => i % 2 === odd);

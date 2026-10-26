@@ -47,6 +47,7 @@ interface HostGlobal {
     location?: { href: string; origin: string };
     history?: { replaceState(data: unknown, unused: string, url?: string): void };
     sessionStorage?: { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem?(key: string): void };
+    localStorage?: { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem?(key: string): void };
     fetch?: (...args: any[]) => Promise<any>;
     EventSource?: any;
     Headers?: any;
@@ -222,11 +223,34 @@ async function retryWithoutStaleToken(
     }
     cachedToken = undefined;
     try { win.sessionStorage?.removeItem?.(SESSION_TOKEN_KEY); } catch { /* storage blocked */ }
+    try { win.localStorage?.removeItem?.(KEPT_TOKEN_KEY); } catch { /* storage blocked */ }
     return send(url, init);
 }
 
 const LAUNCH_URL_TOKEN_PARAM = 'token';
 const SESSION_TOKEN_KEY = 'scratchbox.launchToken';
+/**
+ * The token kept beyond the tab for KEPT_TOKEN_MAX_AGE_MS (user decision 2026-10-23: 30 days, matching the dev
+ * launcher's own token, desktop-app/scripts/launch-token.js): a new tab, a closed and reopened tab, or a tab after a
+ * dev-server restart signs in without the ?token= URL. A token the server no longer accepts is dropped on its first 401.
+ */
+const KEPT_TOKEN_KEY = 'scratchbox.launchToken.kept';
+export const KEPT_TOKEN_MAX_AGE_MS = 30 * 24 * 3600 * 1000;
+
+function keepToken(win: HostGlobal, token: string): void {
+    try { win.localStorage?.setItem(KEPT_TOKEN_KEY, JSON.stringify({ token, savedAtMs: Date.now() })); } catch { /* storage blocked */ }
+}
+
+function keptToken(win: HostGlobal): string | undefined {
+    try {
+        const raw = win.localStorage?.getItem(KEPT_TOKEN_KEY);
+        if (!raw) return undefined;
+        const kept = JSON.parse(raw) as { token?: unknown; savedAtMs?: unknown };
+        if (typeof kept.token === 'string' && kept.token && typeof kept.savedAtMs === 'number' && Date.now() - kept.savedAtMs < KEPT_TOKEN_MAX_AGE_MS) return kept.token;
+        win.localStorage?.removeItem?.(KEPT_TOKEN_KEY);
+    } catch { /* storage blocked or unreadable */ }
+    return undefined;
+}
 
 /**
  * Browser mode receives the token the way Jupyter does: the server/dev
@@ -243,10 +267,11 @@ function takeLaunchUrlToken(win: HostGlobal): string | undefined {
                 url.searchParams.delete(LAUNCH_URL_TOKEN_PARAM);
                 win.history?.replaceState(null, '', url.toString());
                 win.sessionStorage?.setItem(SESSION_TOKEN_KEY, fromUrl);
+                keepToken(win, fromUrl);
                 return fromUrl;
             }
         }
-        return win.sessionStorage?.getItem(SESSION_TOKEN_KEY) || undefined;
+        return win.sessionStorage?.getItem(SESSION_TOKEN_KEY) || keptToken(win) || undefined;
     } catch {
         // Storage can be blocked; the token then lasts until reload.
         return undefined;

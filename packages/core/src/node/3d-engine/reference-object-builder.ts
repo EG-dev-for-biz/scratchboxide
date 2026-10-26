@@ -9,8 +9,10 @@
 
 /**
  * Object or abstract-form request -> native geometry with per-part PBR materials (or all clay on request), in four stages:
- *   1. Reference: Nano Banana Lite (gemini-3.1-flash-lite-image, exactly that model) draws one isolated object in its
- *      real colours and materials under neutral studio light (a clay build asks for a uniform grey clay object).
+ *   1. Reference: a build in materials is drawn in the workspace's Style DNA on the hosted Scratchbox Studio
+ *      (styleDnaReferenceSource: evenly lit, diffused, deep focus, the object whole, with its real wear) when the Studio
+ *      connection is configured; otherwise, for clay, or when Studio fails (said so in imageModel.fallbackReason), Nano
+ *      Banana Lite (gemini-3.1-flash-lite-image) draws one isolated object under neutral studio light.
  *      The image stays a Buffer in this process: it is never written to disk, the media store, public/ or the chat.
  *   2. Build spec: the model chat runs on (the request's model, else the chat's default, walking the chat's own
  *      fallback list on "model not found" and saying so) reads the reference into an ObjectBuildSpec, on the chat's
@@ -41,9 +43,10 @@
  * buildObjectFromSpec builds a given spec (an edit of an earlier one) through stages 3 and 4 only, with no model call:
  * it fails with every problem listed instead of revising. A stop kills the Python process and ends the build at the
  * stage it reached. Nothing here reads part labels or ids for meaning: ids only pair spec parts with their meshes.
- * There is no other image model, template, neural reconstruction or text-only path to fall back to.
+ * There is no other image source, template, neural reconstruction or text-only path to fall back to.
  */
 
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import type { Content, GenerateContentParameters, GenerateContentResponse, Part } from '@google/genai';
 import {
@@ -66,7 +69,10 @@ import { NativePythonRunnerService, type PythonExecutionOptions, type PythonExec
 import {
     analyzePartConnectivityAsync,
     glbToNamedTriangleSoupsAsync,
+    isSbVeggieNearLevel,
+    isSbVeggieNode,
     mergeTriangleSoups,
+    sbVeggieCrownId,
     type ContactGraph,
     type FloatingPart,
     type PartConnectivityReport,
@@ -75,8 +81,9 @@ import {
 import { renderReviewViews } from './visual-review';
 import { materialPreviewMeshes, renderMaterialPreview } from './material-preview-render';
 import { downscaleForVision } from '../vision-image-downscale';
+import { generateStyleDnaImage, studioMcpConfigFromEnv, type StudioImagePresets } from '../scratchbox-studio/studio-mcp-client';
 
-/** Nano Banana Lite. The only model the reference image is ever requested from. */
+/** Nano Banana Lite: the reference model for clay builds, and when the Style DNA source is not configured or fails. */
 export const REFERENCE_IMAGE_MODEL = 'gemini-3.1-flash-lite-image';
 /** Revision passes after the first build. */
 export const MAX_REVISION_PASSES = 2;
@@ -166,6 +173,42 @@ export interface ReferenceObjectBuilderDeps {
      * rate, so a patch of a few parts comes back several times faster than the whole spec.
      */
     patchReplies?: boolean;
+    /**
+     * Where a build that is not clay gets its reference: the workspace's Style DNA on the hosted Scratchbox Studio
+     * (styleDnaReferenceSource) by default when SCRATCHBOX_MCP_* is configured. null always uses REFERENCE_IMAGE_MODEL.
+     * A source that fails falls back to REFERENCE_IMAGE_MODEL, and the result says why (imageModel.fallbackReason).
+     */
+    styleReference?: StyleReferenceSource | null;
+}
+
+/** Draws the reference for a request in a house style; `answered` names what drew it (shown in provenance). */
+export type StyleReferenceSource = (request: string, signal?: AbortSignal) => Promise<{ data: Buffer; mimeType: string; answered: string }>;
+
+/** Presets laid over the workspace's Style DNA for a reference: even, diffused light and everything in focus, so shape and finish read. */
+export const STYLE_DNA_REFERENCE_PRESETS: StudioImagePresets = { lighting: 'overcast soft', depthOfField: 'deep focus', framing: 'entire body' };
+
+/** The reference request in the workspace's Style DNA, for a build that is not clay. */
+export function buildStyleDnaReferencePrompt(request: string): string {
+    return [
+        `Reference picture for building a 3D model of: ${request}.`,
+        'Exactly one complete object, whole and uncropped, centred, in a three-quarter view from slightly above.',
+        'Its real colours and materials, with the real wear, weathering, grime and markings such an object has in use.',
+        'Evenly lit, diffused lighting; everything in sharp focus, deep depth of field, no bokeh or blur.',
+        'Plain seamless neutral backdrop; no props, people or hands.'
+    ].join(' ');
+}
+
+/** The Studio Style DNA reference source, when the Studio connection is configured (SCRATCHBOX_MCP_*). */
+export function styleDnaReferenceSource(env: Record<string, string | undefined> = process.env): StyleReferenceSource | undefined {
+    const config = studioMcpConfigFromEnv(env);
+    if (!config) return undefined;
+    return async (request, signal) => {
+        const prompt = buildStyleDnaReferencePrompt(request);
+        const key = `sbx-objref-${crypto.createHash('sha256').update(prompt).update(String(Date.now())).digest('hex').slice(0, 32)}`;
+        const image = await generateStyleDnaImage(config, { prompt, idempotencyKey: key, aspectRatio: '1:1', presets: STYLE_DNA_REFERENCE_PRESETS }, signal ? { signal } : {});
+        const look = Object.entries(image.effectivePresets).filter(([k]) => k !== 'aspectRatio').map(([, v]) => v).join(', ');
+        return { data: image.data, mimeType: image.mimeType, answered: `Scratchbox Studio Style DNA${look ? ` (${look})` : ''}` };
+    };
 }
 
 export interface ReferenceDifference {
@@ -288,6 +331,8 @@ export interface ModelUse {
     requested: string;
     /** The model version the API reports for the answer (the requested id when the API reports none). */
     answered: string;
+    /** Why something other than `requested` answered (the Style DNA source failed). */
+    fallbackReason?: string;
 }
 
 export interface VisionModelUse extends ModelUse {
@@ -482,7 +527,7 @@ export function buildReferenceImagePrompt(request: string, options: { clay?: boo
 /** How materials are read, added to the conventions of a build that is not clay. */
 export function materialConventions(): string {
     return [
-        '- material: every sweep and revolve part has one, read from the picture (replicate copies and mirrored parts use their source part\'s; replicate and relief parts have none). Describe the surface itself, not the studio light: ignore highlights, reflections and shading when reading colour.',
+        '- material: every sweep and revolve part has one, read from the picture (replicate copies and mirrored parts use their source part\'s; replicate and relief parts have none; a crown part may give its foliage colour as baseColor). Describe the surface itself, not the studio light: ignore highlights, reflections and shading when reading colour.',
         '  baseColor is LINEAR RGB 0..1, not sRGB: convert each sRGB channel v/255 to about (v/255)^2.2 (sRGB 128 is 0.22, sRGB 200 is 0.6, sRGB 240 is 0.87). For a metal it is the metal\'s tint (steel about [0.56, 0.57, 0.58], brass [0.91, 0.78, 0.42], copper [0.95, 0.64, 0.54]).',
         '  roughness 0 mirror-smooth .. 1 chalky; metalness 1 only for bare metal, 0 for paint (even metallic paint), plastic, glass, stone, wood and organic matter; transmission 0 opaque, about 0.9-1 for clear glass, clear plastic or liquid (baseColor then tints what is seen through it); ior only for see-through parts (glass about 1.5, water 1.33); clearcoat for glossy lacquer, car paint or varnish; emissive (linear RGB) with emissiveStrength only for parts that glow.',
         '  A part takes the surface that covers most of it; where the finish changes, split the shape into parts so each has one surface.'
@@ -503,6 +548,7 @@ export function specConventions(dimensionsHintMeters?: Vec3, options: { material
         '  revolve: a meridian of [distance along the axis, radius] points revolved about axisDirection through axisOrigin. Trace the full outline: start and end at radius 0 to close the ends at the axis (a disc of radius r and thickness h is [[0, 0], [0, r], [h, r], [h, 0]]); a non-zero end radius is capped flat. Trace a hollow vessel by going up the outside and back down the inside. lobeCount and lobeDepthRatio add radial lobes (flutes, teeth, petals); helixPitchMeters twists them along the axis (0 = straight).',
         '  replicate: copies of seedPartId together with everything attached to it; the seed as built is copy 0 and is emitted only through the replicate. ring: each copy turned a further spanDeg / count degrees about the axis through centerMeters (spanDeg 360 = evenly round a full circle, more for a helix) and raised risePerCopyMeters. path: copies spaced evenly from the first to the last point, optionally turned with the path.',
         '  relief: grooves (negative depthMeters) or beads (positive) of widthMeters along curves on targetPartId. Curves are polylines of [u, v]: u from 0 to 1 along the part (along the carrier of a sweep, along the meridian of a revolve), v = angle / 360 around it; [[u, 0], [u, 1]] is a full ring and v past 1 wraps for spirals.',
+        '  crown: a tree, shrub or any other branching living crown is grown, never modelled: give it a crown block (trunkBaseMeters where its trunk meets the ground, heightMeters to the crown top, crownRadiiMeters its half spreads along X and Z, and when the picture shows them crownBaseHeightMeters, crownWidestAt (0 a cone widest at its base, 0.5 round, 0.8 an umbrella), crownTopExponent (1 cone, 2 dome, 4 flat) and trunkRadiusMeters) and it is grown as an SB-Veggie tree (branching and leaves inside that crown). Never build trunks, branches or foliage with sweep or revolve. A crown part is a root part (no parentId, no mirror, never a replicate seed) and counts as one piece in expectedBodies; its material baseColor, when there is one, is the foliage colour.',
         '- Attachment: every part except root parts has parentId (a sweep or revolve part) and attach {u, angleDeg, normalOffsetMeters}. The attach point is on the parent surface at u along it and angleDeg around it; u = 0 or 1 is the centre of that end. normalOffsetMeters moves the point along the surface normal: use a small negative value, about a quarter of the child\'s thickness, so the child sinks into its parent. A child\'s own coordinates are offsets in object axes from its attach point: a child sweep\'s first control point is [0, 0, 0], and a child revolve has axisOrigin [0, 0, 0] with a meridian whose axial distances span 0.',
         '- Angle 0 around a revolve points toward +Z (or +X when the axis is along Z) and angle 90 toward axisDirection x (angle-0 direction): for an upright axis 0 is front, 90 right, 180 back, 270 left. Angle 0 around a sweep is the section\'s up direction (toward +Y, or +Z for a vertical carrier) and 90 is the carrier direction x up.',
         '- Root parts (no parentId) use absolute coordinates. Use one root unless the object really is several separate pieces; expectedBodies is how many separate pieces you intend (usually 1). Every child must touch its parent.',
@@ -1266,17 +1312,25 @@ export async function measureBuild(
     throwIfAborted(options.signal, 'checks');
     let named: Map<string, TriangleSoup> | null;
     try {
-        named = await glbToNamedTriangleSoupsAsync(glb, { signal: options.signal });
+        // SB-Veggie trees (crown parts) are read at their far level only: their near levels instance up to a million leaf
+        // triangles each, and the far level is the tree's shape
+        named = await glbToNamedTriangleSoupsAsync(glb, { signal: options.signal, exclude: isSbVeggieNearLevel });
     } catch (err) {
         throwIfAborted(options.signal, 'checks');
         throw err;
     }
-    const meshes = named ? [...named].filter(([, s]) => s.indices.length > 0) : [];
-    if (meshes.length === 0) {
+    const read = named ? [...named].filter(([, s]) => s.indices.length > 0) : [];
+    // crown parts are grown by SB-Veggie (scratchbox_sb_veggie_grove.hpp), which checks each tree against its crown: the
+    // contact analysis measures the modelled parts, and each grown tree is one piece of its own
+    const treeMeshes = read.filter(([name]) => isSbVeggieNode(name));
+    const meshes = read.filter(([name]) => !isSbVeggieNode(name));
+    const grownTrees = new Set(treeMeshes.map(([name]) => sbVeggieCrownId(name)).filter((id): id is number => id !== undefined));
+    if (meshes.length === 0 && treeMeshes.length === 0) {
         throw new ReferenceObjectBuildError('checks', 'The built GLB could not be read back for checking.');
     }
-    // The whole build as one soup, each mesh's triangles a known range of it.
-    const soup = mergeTriangleSoups(meshes.map(([, s]) => s));
+    // The whole build as one soup, each mesh's triangles a known range of it; the renders see the trees too.
+    const modelled = mergeTriangleSoups(meshes.map(([, s]) => s));
+    const soup = treeMeshes.length ? mergeTriangleSoups([modelled, ...treeMeshes.map(([, s]) => s)]) : modelled;
     const triangleRange = new Map<string, [number, number]>();
     let first = 0;
     for (const [id, s] of meshes) {
@@ -1287,13 +1341,19 @@ export async function measureBuild(
     options.onSoup?.(soup, meshMap);
     await yieldToEventLoop();
     let whole: PartConnectivityReport;
-    try {
-        whole = await analyzePartConnectivityAsync(soup, { withGraph: true, signal: options.signal });
-    } catch (err) {
-        throwIfAborted(options.signal, 'checks');
-        throw err;
+    if (meshes.length === 0) {
+        // nothing modelled: the build is its grown trees
+        whole = { structureCount: 0, floatingParts: [], toleranceMeters: 0 } as unknown as PartConnectivityReport;
+    } else {
+        try {
+            whole = await analyzePartConnectivityAsync(modelled, { withGraph: true, signal: options.signal });
+        } catch (err) {
+            throwIfAborted(options.signal, 'checks');
+            throw err;
+        }
     }
     const { min, max } = soupBounds(soup);
+    const crownParts = spec.parts.filter(p => p.crown);
 
     const parts: PartBuildCheck[] = spec.parts.filter(p => p.sweep || p.revolve).map(p => {
         const own = named!.get(p.id);
@@ -1320,6 +1380,15 @@ export async function measureBuild(
         }
     }
 
+    // a crown part is built when its SB-Veggie tree is in the GLB (the grower numbers the trees in crown part order)
+    crownParts.forEach((p, i) => {
+        const tree = treeMeshes.filter(([name]) => sbVeggieCrownId(name) === i).map(([, s]) => s);
+        const b = tree.length ? soupBounds(mergeTriangleSoups(tree)) : undefined;
+        const sizeMeters: Vec3 = b ? [round3(b.max[0] - b.min[0]), round3(b.max[1] - b.min[1]), round3(b.max[2] - b.min[2])] : [0, 0, 0];
+        parts.push({ id: p.id, triangles: tree.reduce((n, s) => n + s.indices.length / 3, 0), sizeMeters, built: grownTrees.has(i) });
+    });
+    const bodies = whole.structureCount + grownTrees.size;
+
     const partBounds: PartBounds = new Map(meshes.map(([id, s]) => [id, soupBounds(s)]));
     return {
         soup,
@@ -1332,8 +1401,8 @@ export async function measureBuild(
         detachedParts: parts.filter(p => p.touchesParent === false).map(p => ({ id: p.id, parentId: p.parentId! })),
         connectivity: {
             // A check that could not run is not a pass.
-            passed: !whole.skippedReason && whole.structureCount === spec.expectedBodies,
-            bodies: whole.structureCount,
+            passed: !whole.skippedReason && bodies === spec.expectedBodies,
+            bodies,
             expectedBodies: spec.expectedBodies,
             floatingParts: whole.floatingParts,
             toleranceMeters: whole.toleranceMeters,
@@ -1723,16 +1792,30 @@ export async function buildObjectFromReference(
     const clock = new BuildStageClock();
     const vision = new VisionModel(client, candidates, requestedModel ? 'request' : 'chat-default', deps, input.signal, clock);
 
-    progress(`Drawing an internal reference with ${REFERENCE_IMAGE_MODEL}`, 0.05);
     const clay = input.clay === true;
-    let generated: { image: ReferenceImage; answered: string } | undefined = await clock.time('reference-image',
-        () => generateReferenceImage(client, input.request, deps, input.signal, clay), g => ({ model: g.answered }));
+    // a build in materials draws its reference in the workspace's Style DNA when Scratchbox Studio is configured; clay keeps the plain model
+    const styleSource = clay ? undefined : deps.styleReference === null ? undefined : (deps.styleReference ?? styleDnaReferenceSource());
+    let imageModel: ModelUse = { requested: styleSource ? 'scratchbox-studio/style-dna' : REFERENCE_IMAGE_MODEL, answered: '' };
+    progress(styleSource ? 'Drawing an internal reference in the Scratchbox Studio Style DNA' : `Drawing an internal reference with ${REFERENCE_IMAGE_MODEL}`, 0.05);
+    let generated: { image: ReferenceImage; answered: string } | undefined = await clock.time('reference-image', async () => {
+        if (styleSource) {
+            try {
+                const s = await styleSource(input.request, input.signal);
+                return { image: { data: s.data, mimeType: s.mimeType }, answered: s.answered };
+            } catch (err) {
+                if (input.signal?.aborted) throw err;
+                imageModel = { ...imageModel, fallbackReason: `the Style DNA reference could not be had (${errorMessage(err)}); drawn by ${REFERENCE_IMAGE_MODEL} instead` };
+                progress(`Style DNA reference unavailable; drawing it with ${REFERENCE_IMAGE_MODEL}`, 0.06);
+            }
+        }
+        return generateReferenceImage(client, input.request, deps, input.signal, clay);
+    }, g => ({ model: g.answered }));
     let uploadedName: string | undefined;
     try {
         const prepared = await clock.time('reference-prep', () => prepareReferenceForReading(client as FilesCapableClient, generated!.image, input.signal));
         uploadedName = prepared.uploadedName;
         const reference = prepared.reference;
-        const imageModel: ModelUse = { requested: REFERENCE_IMAGE_MODEL, answered: generated.answered };
+        imageModel = { ...imageModel, answered: generated.answered };
 
         progress(`Reading the reference into a build spec with ${vision.current}`, 0.2);
         const firstSpec = await requestBuildableSpec(vision, [{

@@ -14,7 +14,7 @@ import type { ToolDeclaration, ToolHandlerOutcome } from './types';
 import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
 import { PipelineError } from '../../../common/errors/pipeline-errors';
 import { GeometricComplexityGate, GeometricSceneMetrics, GeometricMeshSummary, ComplexityGateReport } from '../../../common/spatial/GeometricComplexityGate';
-import { analyzePartConnectivityAsync, ConnectivityAnalysisAbortedError, describeFloatingParts, glbToTriangleSoup, type PartConnectivityReport, type TriangleSoup } from '../../3d-engine/part-connectivity';
+import { analyzePartConnectivityAsync, ConnectivityAnalysisAbortedError, describeFloatingParts, glbToTriangleSoup, glbWorldBounds, isSbVeggieNearLevel, isSbVeggieNode, type PartConnectivityReport, type TriangleSoup } from '../../3d-engine/part-connectivity';
 import { callVisionModel, describeVisualProblems, reviewModelVisually, type VisualReviewResult } from '../../3d-engine/visual-review';
 import { formatSbApiErrors, sbTypeCheckMetadata, typeCheckSbScript } from '../../3d-engine/sb-script-typecheck';
 import { SB_API_CORE_SUMMARY, SB_API_VERSION } from '../../3d-engine/sb-api.generated';
@@ -23,6 +23,21 @@ import { measureSiteMassing, type SiteMassing } from '../../3d-engine/site-massi
 import { readSiteFacade, type SiteFacade } from '../../3d-engine/site-facade';
 import { fitSiteCrown, type SiteCrown } from '../../3d-engine/site-crown';
 import * as os from 'os';
+import { StageCache, stagedWorkspaceRoot } from '../../3d-engine/staged-location/stage-cache';
+import { roofPhotoFor, type StructureScanNote } from '../../3d-engine/staged-location/scan-massing';
+import { encodePng } from '../../3d-engine/staged-location/png-encode';
+
+export { roofPhotoFor, type StructureScanNote } from '../../3d-engine/staged-location/scan-massing';
+
+/** The structure scan of the scene on the canvas when it is a staged build whose run recorded one and whose files still exist. */
+export function structureScanOf(activeArtifact: unknown, cache: Pick<StageCache, 'readRunNote'> = new StageCache({ workspaceRoot: stagedWorkspaceRoot() })): { runId: string; note: StructureScanNote } | undefined {
+    const a = activeArtifact as { type?: string; data?: { stagedBuild?: { runId?: unknown } } } | undefined;
+    const runId = a?.type === '3d-scene' && typeof a.data?.stagedBuild?.runId === 'string' ? a.data.stagedBuild.runId : undefined;
+    if (!runId || !/^[A-Za-z0-9_-]+$/.test(runId)) return undefined;
+    const note = cache.readRunNote<StructureScanNote>(runId, 'structure_scan');
+    if (!note?.scanGlb || !fs.existsSync(note.scanGlb)) return undefined;
+    return { runId, note };
+}
 
 export interface GlbAabbBounds {
     min: [number, number, number];
@@ -68,6 +83,15 @@ export function extractGlbAnalysis(glbBuffer: Buffer): GlbAnalysisResult {
             }
         }
 
+        // World bounds through the node tree (node transforms, KHR_mesh_quantization dequantisation, GPU instances): an
+        // SB-Veggie trees layer stores quantised positions under node transforms, which accessor min/max alone misreads.
+        let world: ReturnType<typeof glbWorldBounds> = null;
+        try { world = glbWorldBounds(glbBuffer); } catch { world = null; }
+        if (world && world.min.every(Number.isFinite) && world.max.every(Number.isFinite)) {
+            [minX, minY, minZ] = world.min;
+            [maxX, maxY, maxZ] = world.max;
+            found = true;
+        }
         let bounds: GlbAabbBounds | null = null;
         if (found && isFinite(minX)) {
             const center: [number, number, number] = [
@@ -178,7 +202,8 @@ Usage notes:
 - Assemblies (legs, rungs, frames, struts, rails): compute the joint points first, then build each member between two joints with sb.sweep_curve_profile(path=[start, end], profile_dimensions=(r, r)). Take a connecting member's ends from points on the members it joins (a rung from lerp(top_a, foot_a, t) to lerp(top_b, foot_b, t)) so it attaches by construction; run member ends slightly into what they join. Do not place parts by rotating them about the origin and guessing offsets. Every result is checked: parts that touch nothing are listed in structuralIssues, and you must fix them.
 - Meshes have no clone(), copy() or transform. To duplicate: dup = sb.geometry.Mesh(); dup.append(mesh), then position it with translate, rotate_x/y/z (degrees) and scale.
 - Materials: sb.PbrMaterial(base_color=(r, g, b, a), roughness=, metallic=) or a preset such as sb.PbrMaterial.clay(). There is no separate materials module.
-- Scene and export: scene = sb.Scene(); scene.add_mesh(mesh); finish with sb.io.write_glb(OUTPUT_GLB_PATH, scene). A single Mesh can be written directly too.`;
+- Scene and export: scene = sb.Scene(); scene.add_mesh(mesh); finish with sb.io.write_glb(OUTPUT_GLB_PATH, scene). A single Mesh can be written directly too.
+- Trees, shrubs and any plant with a crown: sb.create_tree(position=(x, y, z), height=, crown_radius= (or (along x, along z)), crown_base_height=, crown_widest_at= (0 cone .. 0.5 round .. 0.8 umbrella), crown_top_exponent= (1 cone, 2 dome, 4 flat), trunk_radius=, leaf_color='#rrggbb', label=) returns an SB-Veggie tree described by those measurements; add it with scene.merge(tree) or world.add(tree) (world.scatter(tree, ...) plants copies) and it is grown natively when the scene is written (space colonisation, SB-Veggie leaf clusters, species and leaf textures, levels of detail). It is not a mesh: move it with translate / rotate_y / scale only. This is the only way to make vegetation: never build trees or foliage from cones, spheres, boxes, sweeps or lathes.`;
 
 /**
  * The largest model execute_3d_python_script mounts in the viewport. Beyond it the browser tab runs out of memory
@@ -192,7 +217,7 @@ export function viewportSceneLimits(env: NodeJS.ProcessEnv = process.env): { ver
 export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'execute_3d_python_script',
-        description: 'Runs a procedural Python 3 script with the Scratchbox 3D Engine (import scratchbox as sb) and opens the GLB it writes as a new 3D scene in a studio void, shown with the materials the script assigns (textured by default; studio clay only when the user asks for clay). Choose the tool by what the user asked for: a real-world place goes to google_3d_tiles_get_clay; one specific object, or an abstract form, goes to build_3d_object_from_reference (with its location when it stands at a real place); an imagined environment or landscape, a scene made of several objects, or an explicit request for a script comes here. Every call starts a new scene: nothing is carried over from the scene already on the canvas. This tool does not stage anything on a real place: a call with a location or coordinates fails without running the script. To size a building on a real one, pass site (the place): its measured massing reaches the script as sb.site(), and sb.site_tiers() turns it into create_building_parts tiers; the model still opens in the studio. If the script writes no GLB, or one with no geometry, the call fails.\n\n' + PYTHON_3D_API_REFERENCE,
+        description: 'Runs a procedural Python 3 script with the Scratchbox 3D Engine (import scratchbox as sb) and opens the GLB it writes as a new 3D scene in a studio void, shown with the materials the script assigns (textured by default; studio clay only when the user asks for clay). Choose the tool by what the user asked for: a real-world place goes to google_3d_tiles_get_clay; one specific object, or an abstract form, goes to build_3d_object_from_reference (with its location when it stands at a real place); an imagined environment or landscape, a scene made of several objects, or an explicit request for a script comes here. Every call starts a new scene: nothing is carried over from the scene already on the canvas. This tool does not stage anything on a real place: a call with a location or coordinates fails without running the script. To size a building on a real one, pass site (the place): its measured massing reaches the script as sb.site(), and sb.site_tiers() turns it into create_building_parts tiers; the model still opens in the studio. If the script writes no GLB, or one with no geometry, the call fails. When the scene on the canvas is a staged 3D Building, the script can read that structure\'s isolated scan: scan = sb.massing.Scan.from_scene(); choice = sb.massing.choose(scan) builds candidate massings from the scan (a block whose walls sit on the scanned walls, lofted sections that follow tapers, legs and overhangs) and keeps the simplest that explains the scan height band by height band; print(choice.why) reports every candidate\'s coverage and precision, and choice.mesh is the result. The model it writes then joins that scene in the place\'s frame (labelled generated) instead of opening in a studio void.\n\n' + PYTHON_3D_API_REFERENCE,
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -342,9 +367,26 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
         // 3. Execute Python script
         const runner = NativePythonRunnerService.getInstance();
         const effectiveScript = script;
+        // the open staged scene's structure scan, when it has one: the script reads it (sb.massing.Scan.from_scene()) and
+        // its model joins that scene in the place's frame instead of opening in a studio void
+        const structureScan = structureScanOf(_ctx?.request?.activeArtifact);
+        const scanEnv: Record<string, string> = structureScan ? {
+            SCAN_GLB_PATH: structureScan.note.scanGlb,
+            ...(structureScan.note.districtGlb && fs.existsSync(structureScan.note.districtGlb) ? { SCAN_DISTRICT_GLB_PATH: structureScan.note.districtGlb } : {}),
+            SCAN_GROUND_Y: String(structureScan.note.groundY),
+            SCAN_PLAN: JSON.stringify(structureScan.note.plan)
+        } : {};
+        if (structureScan) {
+            try {
+                const roof = roofPhotoFor(structureScan.note);
+                if (roof) { scanEnv.SCAN_ROOF_PHOTO_PATH = roof.path; scanEnv.SCAN_ROOF_PHOTO_FRAME = JSON.stringify(roof.frame); }
+            } catch (err) {
+                console.warn(`[execute_3d_python_script] no roof photo for the structure scan: ${(err as Error).message}`);
+            }
+        }
         const result = await runner.runScript(effectiveScript, {
             timeoutMs,
-            env: { ...process.env, ...siteEnv }
+            env: { ...process.env, ...siteEnv, ...scanEnv }
         });
 
         // Per User Directive: No silent fallbacks or synthetic substitutes.
@@ -430,14 +472,19 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
             };
         }
 
+        const vegetation = sbVeggieOf(glbBuf);
         let structureReport: PartConnectivityReport | null = null;
         let visualReview: (VisualReviewResult & { imagePaths?: string[] }) | undefined;
         if (glbBuf) {
             let soup: TriangleSoup | null = null;
             try {
-                soup = glbToTriangleSoup(glbBuf);
+                // SB-Veggie trees (sb.create_tree) are grown natively and checked against their described crowns by the
+                // grower; their leaf clusters are separate parts by design, so the structure check reads everything else.
+                const structureSoup = vegetation ? glbToTriangleSoup(glbBuf, { exclude: isSbVeggieNode }) : glbToTriangleSoup(glbBuf);
+                // the visual review sees the trees at their far level (one level, not all four stacked)
+                soup = vegetation ? glbToTriangleSoup(glbBuf, { exclude: isSbVeggieNearLevel }) : structureSoup;
                 // Sliced so a large model never blocks the event loop; the turn's signal stops it.
-                if (soup) structureReport = await analyzePartConnectivityAsync(soup, { signal: _ctx?.signal });
+                if (structureSoup && structureSoup.indices.length > 0) structureReport = await analyzePartConnectivityAsync(structureSoup, { signal: _ctx?.signal });
             } catch (err: any) {
                 if (err instanceof ConnectivityAnalysisAbortedError) throw err;
                 console.warn('[execute_3d_python_script] Structural check skipped:', err?.message || err);
@@ -515,10 +562,43 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
             }] : [])
         ];
 
+        // A model built from the open staged scene's structure scan joins that scene, in its frame (no studio void, no
+        // reframing): labelled generated (a script's output), with the scan and footprint it was built from.
+        const prevScene = _ctx?.request?.activeArtifact as { id?: string; title?: string; version?: number; data?: { objects?: unknown[] } & Record<string, unknown> } | undefined;
+        const joinsScene = !!(structureScan && durableHeroUri && prevScene?.data);
+        const scanObject = joinsScene ? {
+            id: `scan-massing-${Date.now()}`,
+            content: {
+                type: '3d-model',
+                durableUri: durableHeroUri,
+                mimeType: 'model/gltf-binary',
+                metadata: {
+                    // placed like the staged build's own layers: in the tile frame as written, never seated on the ground
+                    // the way a hero is (that moves it off the scan it was built from)
+                    role: 'environment',
+                    isGround: false,
+                    layer: 'massing',
+                    source: 'execute_3d_python_script',
+                    description: desc,
+                    builtFrom: { runId: structureScan!.runId, scanGlb: structureScan!.note.scanGlb, plan: structureScan!.note.planSource ?? 'scan outline' },
+                    provenance: { label: 'generated', method: 'a Python script built this from the structure\'s isolated scan (sb.massing); its fit is in the script output', measuredGeometry: false }
+                }
+            },
+            space: { spatial3d: { x: 0, y: 0, z: 0 } },
+            time: { startMs: 0, durationMs: 20000 },
+            lineage: { version: 1 }
+        } : undefined;
+        const joinedArtifact = joinsScene ? {
+            ...prevScene,
+            version: (prevScene!.version || 1) + 1,
+            data: { ...prevScene!.data, objects: [...(prevScene!.data!.objects ?? []), scanObject] }
+        } : undefined;
+
         return {
             status: 'completed',
             resultPayload: {
                 success: true,
+                ...(joinsScene ? { joinedScene: { artifactId: prevScene!.id, objectId: scanObject!.id, scan: structureScan!.note.scanGlb } } : {}),
                 glbPath: result.glbPath,
                 glbGenerated: true,
                 ...(site ? { site: { resolvedAs: site.place.resolvedAs, topM: site.topM, tiers: site.tiers.map(t => ({ baseM: +t.baseM.toFixed(1), topM: +t.topM.toFixed(1), areaM2: Math.round(t.areaM2), provenance: t.provenance })), notes: site.notes,
@@ -526,6 +606,8 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                     ...(crown ? { crown: { fromM: crown.fromM, toM: crown.toM, silhouetteDisagreement: crown.silhouette, silhouetteBefore: crown.silhouetteBefore, matched: crown.matched, pieces: crown.pieces.map(p => ({ id: p.id, operator: p.operator, label: p.label, provenance: p.provenance, measured: p.measured, generated: p.generated })), notes: crown.notes } } : {}) } } : {}),
                 vertexCount: writtenGeometry.totalVertices,
                 triangleCount: writtenGeometry.totalTriangles,
+                // the scene's trees: SB-Veggie, grown natively from sb.create_tree descriptions (absent: none)
+                vegetation,
                 executionTimeMs: result.executionTimeMs,
                 typeCheck: typeCheckMeta,
                 stdout: result.stdout,
@@ -543,7 +625,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                     groundDatumMeters: 0.0,
                     groundLogic: 'shared-metric-ground'
                 },
-                artifact: {
+                artifact: joinedArtifact ?? {
                     id: `artifact-3d-${Date.now()}`,
                     type: '3d-scene',
                     title: desc,
@@ -593,8 +675,22 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
     }
 };
 
+/** The SB-Veggie trees a GLB carries (its scene extras sbVeggie, written by the grower), or undefined. */
+export function sbVeggieOf(glb: Buffer): { generator: 'SB-Veggie'; trees: number; triangles?: number; levelsOfDetail: boolean } | undefined {
+    try {
+        if (glb.length < 20 || glb.toString('utf8', 0, 4) !== 'glTF') return undefined;
+        const json = JSON.parse(glb.toString('utf8', 20, 20 + glb.readUInt32LE(12)));
+        const scene = json.scenes?.[json.scene ?? 0];
+        const v = scene?.extras?.sbVeggie ?? json.extras?.sbVeggie;
+        if (!v || typeof v.trees !== 'number') return undefined;
+        return { generator: 'SB-Veggie', trees: v.trees, triangles: v.triangles, levelsOfDetail: !!(scene?.extras?.sbTrees ?? json.extras?.sbTrees) };
+    } catch {
+        return undefined;
+    }
+}
+
 /** Copies a GLB into public/models (when it is not already there) and returns its /models URL; errors propagate. */
-function publishToModels(glbPath: string): string {
+export function publishToModels(glbPath: string): string {
     const repoRoot = process.env.SCRATCHBOX_ROOT || (fs.existsSync(path.resolve(process.cwd(), 'packages')) ? process.cwd() : path.resolve(process.cwd(), '..'));
     const canonicalModelsDir = path.resolve(repoRoot, 'public/models');
     const fileName = path.basename(glbPath);

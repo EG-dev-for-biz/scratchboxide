@@ -20,6 +20,10 @@
  *          measured against its crown; one that does not fill it within its budget is reported (shortOfCrown), and with
  *          --ground-mesh every trunk base is measured against the model the trees are mounted on (offGround).
  *
+ *   grow   described trees (scratchbox.sb-veggie-trees/1: position, height, crown radii, crown base, crown profile, trunk
+ *          radius, leaf colour) -> the same SB-Veggie trees GLB plant writes, from crowns built from the descriptions
+ *          (scratchbox_sb_veggie_grove.hpp; every tree labelled generated): imagined scenes and single trees.
+ *
  *   canopy photo-textured tile GLB -> the cells strip's own classifier calls canopy (scratchbox.canopy-mask/1 JSON), with
  *          no regrowth or removal: the same classifier, so a probe's idea of "tree" matches what strip later removes.
  *
@@ -31,6 +35,7 @@
  */
 
 #include "scratchbox_tile_vegetation.hpp"
+#include "scratchbox_sb_veggie_grove.hpp"
 
 #include <array>
 #include <cstdlib>
@@ -111,7 +116,13 @@ static void usage() {
         "                              quality at any realistic distance instead of its own height-scaled bands\n"
         "                              (--hero-full-quality-m, default 3000); the GPU-adaptive viewport budget still applies\n"
         "    --hero-full-quality-m M (3000)\n"
-        "    --threads N\n";
+        "    --threads N\n"
+        "  tile_vegetation grow --trees <trees.json> --out <trees.glb> --stats <stats.json> [--crowns-out <crowns.json>] [options]\n"
+        "    trees.json: scratchbox.sb-veggie-trees/1 {trees: [{position, heightM, crownRadiusM | crownRadiiM, crownBaseHeightM?,\n"
+        "    crownWidestAt?, crownTopExponent?, trunkRadiusM?, leafLinearRgb?, label?}], label?}\n"
+        "    --triangle-budget N | --scene-triangle-cap N (1500000) --seed HEX --species-index PATH --species-index-label S\n"
+        "    --texture-index PATH --texture-index-label S --lod 0|1 (1) --quantize 0|1 (1) --reveal 0|1 (1) --psi-season V (1)\n"
+        "    --lat-abs-deg V --min-surface-reached V (0.75) --stage-key KEY\n";
 }
 
 static int fail(const std::string& code, const std::string& message) {
@@ -166,6 +177,8 @@ static void readGrowthFlags(const Args& a, GrowthParams& G) {
     // the caller asked for this ratio itself: a species match (scratchbox_tree_species.hpp) does not override it
     if (a.has("crown-base-ratio")) { G.crownBaseRatio = a.num("crown-base-ratio", G.crownBaseRatio); G.crownBaseRatioExplicit = true; }
     if (a.has("trunk-radius-per-height")) { G.trunkRadiusPerHeight = a.num("trunk-radius-per-height", G.trunkRadiusPerHeight); G.trunkRadiusPerHeightExplicit = true; }
+    // the build's own |latitude|, for the species choice's climate cost (scratchbox_tree_species.hpp); absent: uncosted
+    G.latAbsDeg = a.num("lat-abs-deg", G.latAbsDeg);
     G.shellDepth = a.num("shell-depth", G.shellDepth);
     G.wallClearance = a.num("wall-clearance", G.wallClearance);
     if (G.wallClearance < 0) throw VegetationError("bad_request", "--wall-clearance must be >= 0");
@@ -687,6 +700,49 @@ static int runPlant(const Args& a) {
     return 0;
 }
 
+static int runGrow(const Args& a) {
+    for (const char* req : {"trees", "out", "stats"}) {
+        if (!a.has(req)) throw VegetationError("bad_request", std::string("grow needs --") + req);
+    }
+    const auto bytes = readFileBytes(a.str("trees"));
+    const io::GlbJsonValue doc = json::parse(std::string(bytes.begin(), bytes.end()));
+    const std::vector<DescribedTree> trees = parseDescribedTrees(doc);
+    GroveOptions o;
+    if (a.has("triangle-budget") && a.has("scene-triangle-cap")) throw VegetationError("bad_request", "grow takes at most one of --triangle-budget and --scene-triangle-cap");
+    if (a.has("triangle-budget")) {
+        o.triangleBudget = a.num("triangle-budget", 0);
+        if (!(o.triangleBudget > 0)) throw VegetationError("bad_request", "--triangle-budget must be > 0");
+    }
+    o.sceneTriangleCap = a.num("scene-triangle-cap", o.sceneTriangleCap);
+    if (!(o.sceneTriangleCap > 0)) throw VegetationError("bad_request", "--scene-triangle-cap must be > 0");
+    o.seed = parseSeed(a);
+    o.speciesIndexPath = a.str("species-index");
+    o.speciesIndexLabel = a.str("species-index-label");
+    o.textureIndexPath = a.str("texture-index");
+    o.textureIndexLabel = a.str("texture-index-label");
+    auto flag01 = [&](const char* name, bool def) {
+        if (!a.has(name)) return def;
+        const std::string v = a.str(name);
+        if (v != "0" && v != "1") throw VegetationError("bad_request", std::string("--") + name + " must be 0 or 1");
+        return v == "1";
+    };
+    o.lod = flag01("lod", o.lod);
+    o.quantize = flag01("quantize", o.quantize);
+    o.reveal = flag01("reveal", o.reveal);
+    o.psiSeason = a.num("psi-season", o.psiSeason);
+    if (o.psiSeason < 0 || o.psiSeason > 1) throw VegetationError("bad_request", "--psi-season must be in [0, 1]");
+    o.latAbsDeg = a.num("lat-abs-deg", o.latAbsDeg);
+    o.minSurfaceReached = a.num("min-surface-reached", o.minSurfaceReached);
+    o.stageKey = a.str("stage-key");
+    if (doc["label"].type == io::GlbJsonValue::String) o.label = doc["label"].str.substr(0, 200);
+    const GroveResult r = growDescribedTrees(trees, o);
+    if (!writeFile(a.str("out"), r.glb.data(), r.glb.size())) throw VegetationError("io", "cannot write " + a.str("out"));
+    if (!writeFile(a.str("stats"), r.statsJson.data(), r.statsJson.size())) throw VegetationError("io", "cannot write " + a.str("stats"));
+    if (a.has("crowns-out") && !writeFile(a.str("crowns-out"), r.crownsJson.data(), r.crownsJson.size())) throw VegetationError("io", "cannot write " + a.str("crowns-out"));
+    std::cout << r.statsJson << "\n";
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc < 2 || std::strcmp(argv[1], "--help") == 0 || std::strcmp(argv[1], "-h") == 0) {
         usage();
@@ -698,6 +754,7 @@ int main(int argc, char** argv) {
         if (cmd == "strip") return runStrip(a);
         if (cmd == "plant") return runPlant(a);
         if (cmd == "canopy") return runCanopy(a);
+        if (cmd == "grow") return runGrow(a);
         usage();
         return fail("bad_request", "unknown subcommand '" + cmd + "'");
     } catch (const VegetationError& e) {

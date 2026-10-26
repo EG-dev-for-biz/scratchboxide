@@ -671,7 +671,7 @@ describe('a location request returns remeshed geometry', () => {
     });
 
     it('google_3d_tiles_get_clay with isolate shows the district, and says so, when no structure stands at the anchor', async () => {
-        serveTiles(); // a flat ground leaf and a roof 200 m away: nothing 3 m tall within 30 m of the anchor
+        serveTiles(); // a flat ground leaf and a roof 200 m away: nothing 3 m tall within the widened 60 m search either
         const refine = fakeRefine();
         fakeVegetation({ trees: 2 });
         const outcome = await ask('google_3d_tiles_get_clay', { isolate: true }, 'clay_iso.glb');
@@ -682,7 +682,7 @@ describe('a location request returns remeshed geometry', () => {
         expect(refine.mock.calls[0][0].isolate).toBeUndefined();
         const d = payload.degradations.find((x: any) => x.reasonCode === 'no_structure_at_anchor');
         expect(d).toMatchObject({ stage: 'tiles', reasonCode: 'no_structure_at_anchor', fellTo: 'the remeshed area around the place, without a rebuild', provenanceAfter: 'remeshed' });
-        expect(payload.summary).toContain('no structure 3 m or taller stands within 30 m of the place; showing the area around it');
+        expect(payload.summary).toContain('no structure 3 m or taller stands within 60 m of the place; showing the area around it');
         // the rebuild stages are skipped, not failed, and the rest of the build stands
         for (const stage of ['fit', 'vision', 'detail']) expect(payload.stages.find((x: any) => x.stage === stage).status).toBe('skipped');
         expect(Object.keys(layersOf(payload))).toEqual(['l1', 'l2', 'l5']);

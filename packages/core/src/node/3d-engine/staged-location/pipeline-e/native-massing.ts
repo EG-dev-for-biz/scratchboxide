@@ -67,6 +67,8 @@ export interface MassingReport {
     residual: { isolateTriangles: number; surface: number; proud: number; cut: number; apron: number; droppedSmall: number; clusters: Array<{ kind: string; areaM2: number; extremeM: number; triangles: number; lo: V3; hi: V3; opensFace: boolean; face: string; rect: [number, number, number, number] }> };
     signedVolumeM3: number;
     rejectedOpenings: string[];
+    /** Why each rejected opening was (by id): outside the wall's ends, above its top, overlaps another, no host wall, ... */
+    rejectedOpeningReasons?: Record<string, string>;
     rejectedSweeps: string[];
     nodes: Array<{ name: string; kind: string; provenance: string; confidence: number | null; offset: number; vertices: number; indices: number }>;
     images: Array<{ image: number; file: string; mimeType: string }>;

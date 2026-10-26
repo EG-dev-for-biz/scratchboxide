@@ -40,10 +40,11 @@ import type { FaceTexture, TexelSource } from '../pipeline-e/massing-glb';
 import { readFaceOrtho, runMassing, type MassingFace, type MassingNode, type MassingRun } from '../pipeline-e/native-massing';
 import { massingSpecText } from '../pipeline-e/massing-spec';
 import { plainTextures, writeMassingLayer, LOW_COVERAGE } from '../pipeline-e/pipeline-e';
-import { enhanceOrder, enhanceWall, ENHANCE_CONCURRENCY, MAX_UNSEEN_WALLS, MIN_ENHANCE_AREA_M2, MIN_UNSEEN_EXPOSED_SHARE, TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID, TEXTURE_PLATE_UNSEEN_PROMPT_ID, type EnhanceWallRecord, type PlateModelClient, type WallStreetView } from '../pipeline-e/enhance';
+import { enhanceOrder, ENHANCE_CONCURRENCY, MAX_UNSEEN_WALLS, MIN_ENHANCE_AREA_M2, MIN_UNSEEN_EXPOSED_SHARE, TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID, TEXTURE_PLATE_UNSEEN_PROMPT_ID, type EnhanceWallRecord, type PlateModelClient, type WallStreetView } from '../pipeline-e/enhance';
+import { buildFacadeTexture } from '../facade-texture/facade-texture';
 import { exposedShare, solidGrid } from '../pipeline-e/exposure';
 import { labPlanes } from '../pipeline-e/plate-audit';
-import { bestStreetViewForWall, rectifiedReference, type GuideView } from '../pipeline-e/plate-streetview';
+import { bestStreetViewForWall, rectifiedReference, wallReference, type GuideView } from '../pipeline-e/plate-streetview';
 import { visionFacadeCounter } from '../pipeline-e/plate-identity';
 import { parentFace, reframe, writeEnhanceDiagnostic, type InferenceInput, type InferenceOutcome, type StepRecord } from '../pipeline-e/inference';
 import { evaluate } from './adjust';
@@ -172,7 +173,7 @@ export async function runVersionFEnhanced(input: F2Input): Promise<F2Outcome> {
             let sv: WallStreetView | undefined, noSv = noGuide;
             if (guards && guide.length) {
                 const best = bestStreetViewForWall(f, guide);
-                if (best.view && best.rect) sv = { view: best.view, rect: best.rect, crop: rectifiedReference(best.rect, tex.width, tex.height), why: best.why };
+                if (best.view && best.rect) sv = { view: best.view, rect: best.rect, crop: wallReference(f, best.view, best.rect, tex.width, tex.height), why: best.why };
                 else noSv = best.why;
             }
             const structure = structureGuidePng(plan, f);
@@ -181,7 +182,7 @@ export async function runVersionFEnhanced(input: F2Input): Promise<F2Outcome> {
             const sh = crypto.createHash('sha256').update(structure.png).update(STRUCTURE_GUIDE_SENTENCE).digest('hex').slice(0, 16);
             progress(`${unseen ? 'drawing the unseen wall' : 'redrawing wall'} ${f.index} (${Math.round(f.area)} m2) with its procedural structure${sv ? `, guided by Street View ${sv.view.panoId}` : ''}`);
             const before = tex.rgba.slice();
-            const r = await enhanceWall(f, tex, use, {
+            const r = await buildFacadeTexture(f, tex, use, {
                 client: structureGuidedPlateClient(input.genai, structure.png), models: enh.models, locationName: enh.locationName, ...(refTex ? { reference: refTex } : {}), source: ENH,
                 guards, ...(enh.cacheDir ? { cacheDir: path.join(enh.cacheDir, `version-f-${sh}`) } : {}), ...(sv ? { streetView: sv, streetViewSource: sourceForPano(sv.view.panoId) } : {}), ...(noSv ? { noStreetView: noSv } : {}),
                 ...(chain ? { counter: visionFacadeCounter(chain) } : {}), ...(input.signal ? { signal: input.signal } : {}),

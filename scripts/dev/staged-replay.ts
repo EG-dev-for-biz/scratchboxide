@@ -18,7 +18,7 @@
  *    when SCRATCHBOX_HEAP_SNAPSHOT_DIR is set.
  * 2. Run builds headless through the tool entry the server uses (fresh dependencies per build, as in the server):
  *      SCRATCHBOX_REPLAY_DIR=<rec> SCRATCHBOX_ROOT=<worktree> node --expose-gc -r ts-node/register \
- *        scripts/dev/staged-replay.ts --runs 3 --query "Washington Square Arch" [--isolate false]
+ *        scripts/dev/staged-replay.ts --runs 3 --query "Washington Square Arch" [--isolate false] [--procedural true]
  *    The run-variant stage caches (survey .. textures) are cleared before each build after the first; the tiles and
  *    the geocode stay cached. Prints the heap after a forced GC after each build and the peak heap.
  *
@@ -65,6 +65,14 @@ function normalise(v: Json): Json {
 
 const textsOf = (contents: Json): string[] => (Array.isArray(contents) ? contents : [contents]).flatMap((c: Json) =>
     (c?.parts ?? []).filter((p: Json) => typeof p.text === 'string').map((p: Json) => p.text as string));
+
+/** The SDK response's `text` getter (its non-thought text parts joined), which a JSON copy of the response loses. */
+function withText(response: Json): Json {
+    if (response && typeof response === 'object' && !Object.getOwnPropertyDescriptor(response, 'text')) {
+        Object.defineProperty(response, 'text', { get: () => (response.candidates?.[0]?.content?.parts ?? []).filter((p: Json) => typeof p.text === 'string' && !p.thought).map((p: Json) => p.text).join('') || undefined, enumerable: false });
+    }
+    return response;
+}
 
 export interface ReplayStats { visionHit: number; visionMiss: number; visionBridged: number; groundingHit: number; groundingMiss: number }
 
@@ -128,16 +136,16 @@ export class StagedReplay {
             if (fs.existsSync(file)) {
                 this.stats.visionHit++;
                 if (this.opts.delayMs) await new Promise(r => setTimeout(r, this.opts.delayMs));
-                return JSON.parse(fs.readFileSync(file, 'utf8')).response;
+                return withText(JSON.parse(fs.readFileSync(file, 'utf8')).response);
             }
             const bridged = this.bridgeSurvey(params);
-            if (bridged) { this.stats.visionBridged++; return bridged; }
+            if (bridged) { this.stats.visionBridged++; return withText(bridged); }
             this.stats.visionMiss++;
             if (this.mode === 'strict') throw new Error(`staged replay: no recording for a ${params.model} call (strict)`);
             const response = await live(params, stream);
             const fr = response.candidates?.[0]?.finishReason;
             if (!fr || fr === 'STOP') fs.writeFileSync(file, JSON.stringify({ model: params.model, texts: textsOf(params.contents), response }));
-            return response;
+            return withText(response);
         };
         const wrappedModels = new Proxy(models, {
             get: (t, p) => {
@@ -243,7 +251,8 @@ async function runHeadless(argv: string[]): Promise<void> {
     for (let k = 0; k < runs; k++) {
         if (k) for (const d of RUN_VARIANT_STAGES) fs.rmSync(path.join(root, '.scratchbox/cache/staged_location', d), { recursive: true, force: true });
         const t0 = Date.now();
-        const out = await runStagedLocationTool('google_3d_tiles_get_clay', { query, isolate: arg('isolate', 'true') !== 'false', trees: true }, {
+        // --procedural true: the 3D Building button's request (isolate + pipeline G), so a benchmark build runs headless
+        const out = await runStagedLocationTool('google_3d_tiles_get_clay', { query, isolate: arg('isolate', 'true') !== 'false', trees: true, ...(arg('procedural', 'false') === 'true' ? { procedural: true } : {}) }, {
             reportProgress: () => undefined, emitStage: () => undefined
         });
         heaps.push(heapAfterGcMB());

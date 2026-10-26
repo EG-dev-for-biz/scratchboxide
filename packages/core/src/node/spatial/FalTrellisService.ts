@@ -33,7 +33,8 @@ export interface FalTrellisMultiInput {
     ssSamplingSteps?: number;
     slatSamplingSteps?: number;
     meshSimplify?: number;
-    textureSize?: string;
+    /** 512, 1024 or 2048 (a numeric string is accepted and sent as a number). */
+    textureSize?: string | number;
     outputFormat?: string;
     destinationGlbPath?: string;
     /** Stops the run between uploads and aborts the request in flight: a stopped request starts no further Fal work. */
@@ -199,7 +200,8 @@ export class FalTrellisService {
             ss_sampling_steps: input.ssSamplingSteps ?? 12,
             slat_sampling_steps: input.slatSamplingSteps ?? 12,
             mesh_simplify: input.meshSimplify ?? 0.95,
-            texture_size: input.textureSize || '1024'
+            // fal takes 512, 1024 or 2048 as a number and rejects the string with a 422
+            texture_size: Number(input.textureSize || 1024)
         });
 
         throwIfStopped(input.signal);

@@ -70,12 +70,22 @@ export class GoogleMediaCredentialsService {
         this.keyStore = keyStore || new FileKeyStore();
     }
 
+    /**
+     * Vertex AI first (user decision, 2026-10-22: the app's Google calls run on Vertex), whenever service-account or
+     * project credentials are configured; a Gemini API key only where there are none.
+     */
     async createClient(): Promise<GoogleGenAI> {
+        if (this.hasVertexCredentials()) return this.createVertexClient();
         const apiKey = await this.getApiKey();
         if (apiKey) {
             return new GoogleGenAI({ apiKey });
         }
         return this.createVertexClient();
+    }
+
+    /** Whether Vertex AI credentials are configured: a service-account file, GOOGLE_SERVICE_ACCOUNT_JSON, or a project for ADC. */
+    hasVertexCredentials(): boolean {
+        return !!(this.findServiceAccountPath() || process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT);
     }
 
     /**

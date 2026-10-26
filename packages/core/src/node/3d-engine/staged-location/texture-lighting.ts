@@ -47,8 +47,13 @@ import { decodeImageInMemory, type RgbaImage8 } from './tile-texture-transfer';
 export const LIGHTING_MODEL_LITE = 'gemini-3.1-flash-lite-image';
 export const LIGHTING_MODEL_FULL = 'gemini-3.1-flash-image';
 
-/** SCRATCHBOX_TEXTURE_LIGHTING=1 turns the correction on for a server (off by default). */
-export const lightingCorrectionEnabled = (): boolean => process.env.SCRATCHBOX_TEXTURE_LIGHTING === '1';
+/**
+ * On by default (user decision, 2026-10-21: the photo-tile scan should inform texture, not be presented as-is - the
+ * same now applies to its baked lighting, which this is the detail-locked way to remove: the model's own pixels are
+ * never used, only a smoothed lighting-ratio field measured against the real photo). SCRATCHBOX_TEXTURE_LIGHTING=0
+ * turns it back off.
+ */
+export const lightingCorrectionEnabled = (): boolean => process.env.SCRATCHBOX_TEXTURE_LIGHTING !== '0';
 
 /**
  * Experiment arm (photo-match bake-off): the tile correction forced on. Every map of the layer's atlas is sent (a scan's island
@@ -557,13 +562,14 @@ export const PLANE_COMPARE_RADIUS = 4;
 
 interface TileChartJob { mapIndex: number; label: string; x0: number; y0: number; w: number; h: number; mask: Uint8Array; texelIndex: Int32Array; crop: RgbaImage8; count: number; gateable: number; fill: number }
 
-function tileChartJobs(atlas: { width: number; height: number; maps: Array<{ nodeName: string; chartId?: string; atlasRect: [number, number, number, number] }>; texels: { mapIndex: Uint16Array; gutter: Uint8Array } }, rgb: Float32Array, has: Uint8Array): TileChartJob[] {
+function tileChartJobs(atlas: { width: number; height: number; maps: Array<{ nodeName: string; chartId?: string; atlasRect: [number, number, number, number] }>; texels: { mapIndex: Uint16Array; gutter: Uint8Array } }, rgb: Float32Array, has: Uint8Array, islands = false): TileChartJob[] {
     const W = atlas.width, H = atlas.height;
     const jobs: TileChartJob[] = [];
     atlas.maps.forEach((m, mapIndex) => {
         // only fitted faces (a chart: its crop is a frontal render of the face); a scan island atlas is fragments of many
         // surfaces at once, which no image model can relight as one photo
-        if (m.chartId === undefined && !lightingTileForced()) return;
+        // (a rebuilt layer's islands are whole planar faces or the ground from above: each relights as one photo)
+        if (m.chartId === undefined && !lightingTileForced() && !islands) return;
         const [u0, v0, u1, v1] = m.atlasRect;
         const X0 = Math.max(0, Math.floor(u0 * W)), Y0 = Math.max(0, Math.floor(v0 * H)), X1 = Math.min(W, Math.ceil(u1 * W)), Y1 = Math.min(H, Math.ceil(v1 * H));
         let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
@@ -652,11 +658,17 @@ export async function correctTilePlaneLighting(input: {
     plane: { rgb: Float32Array; has: Uint8Array; width: number; height: number; existing?: { albedo: Uint8Array; confidence: { data: Uint8Array } } };
     unpackRung: (i: number) => { covered: boolean; rung: number };
     client: EnhanceModelClient; models: string[]; signal?: AbortSignal; concurrency?: number; minGateable?: number; minFill?: number;
+    /**
+     * A rebuilt surface no Street View reaches: every detail-locked answer stands, with no Street View agreement gate, and
+     * the atlas's islands are relit as well as fitted charts (a rebuilt layer's islands are whole planar faces); labelled so.
+     */
+    ungated?: boolean;
 }): Promise<{ texels?: Uint8Array; provenance?: Omit<TexelProvenance, 'coverage'>; report: TileLightingReport }> {
     const { atlas, plane } = input;
     const W = plane.width, H = plane.height;
-    const all = tileChartJobs(atlas, plane.rgb, plane.has);
-    const jobs = all.filter(j => j.gateable >= (input.minGateable ?? 256) && j.fill >= (input.minFill ?? (lightingTileForced() ? 0 : 0.3)));
+    const all = tileChartJobs(atlas, plane.rgb, plane.has, !!input.ungated);
+    const forced = lightingTileForced() || !!input.ungated;
+    const jobs = all.filter(j => j.gateable >= (input.minGateable ?? 256) && j.fill >= (input.minFill ?? (forced ? 0 : 0.3)));
     const report: TileLightingReport = { charts: all.length, sent: jobs.length, accepted: 0, rejected: 0, failed: 0, reverted: 0, unmeasured: 0, applied: false, records: [] };
     const results = await mapConcurrent(jobs, input.concurrency ?? LIGHTING_CONCURRENCY, job => lightingCorrectImage({ label: `tile ${job.label}`, image: job.crop, mask: job.mask, client: input.client, models: input.models, ...(input.signal ? { signal: input.signal } : {}) }), input.signal);
     report.records = results.map(r => r.record);
@@ -668,16 +680,16 @@ export async function correctTilePlaneLighting(input: {
     const after = Float32Array.from(plane.rgb);
     for (const { r, job } of accepted) applyLightingFieldSrgbFloat(after, job.w, job.h, r.field!, (x, y) => job.texelIndex[y * job.w + x]);
     const ex = plane.existing;
-    if (lightingTileForced()) {
-        // the experiment arm: every answer the detail lock passed is applied, with no Street View agreement gate
+    if (forced) {
+        // the experiment arm, or a surface no Street View reaches: every answer the detail lock passed is applied, with no Street View agreement gate
         plane.rgb.set(after);
         report.applied = true;
-        report.reason = 'forced on (experiment arm): applied without the Street View agreement gate';
+        report.reason = input.ungated && !lightingTileForced() ? 'ungated (no Street View reaches the surface): every detail-locked answer applied' : 'forced on (experiment arm): applied without the Street View agreement gate';
         const texels = new Uint8Array(W * H);
         for (const { job } of accepted) for (let j = 0; j < job.texelIndex.length; j++) if (job.texelIndex[j] >= 0) texels[job.texelIndex[j]] = 1;
         const models = [...new Set(accepted.map(k => k.r.record.modelUsed!).filter(Boolean))];
         const conf = accepted.reduce((s, k) => s + (k.r.record.confidence ?? 0) * k.job.count, 0) / Math.max(1, accepted.reduce((s, k) => s + k.job.count, 0));
-        const note = `photo, lighting corrected by ${models.join(', ')} (forced, ungated experiment)`;
+        const note = `photo, lighting corrected by ${models.join(', ')} (${input.ungated && !lightingTileForced() ? 'ungated: no Street View reaches the surface to judge it' : 'forced, ungated experiment'})`;
         return {
             texels, report,
             provenance: {

@@ -189,4 +189,31 @@ print(f"{res.max_distance:.4f},{res.mean_distance:.4f}")
         expect(parseFloat(maxDist)).toBeLessThan(0.6); // Error is small
         expect(parseFloat(meanDist)).toBeLessThan(0.15);
     });
+
+    it('8. Crease-Preserving QEM Decimation: a locked box keeps its true shape where plain QEM distorts or stalls', () => {
+        const script = `
+def make_box():
+    return sb.create_subdivided_box(size=(4.0, 4.0, 4.0), subdivisions=8)
+
+reference = make_box()
+
+no_crease = make_box()
+no_crease.decimate_qem(target_triangles=48, preserve_creases=False)
+
+with_crease = make_box()
+with_crease.decimate_qem(target_triangles=48, preserve_creases=True, crease_angle_deg=45.0)
+
+h_nc = reference.hausdorff_distance(no_crease, samples=4000)
+h_wc = reference.hausdorff_distance(with_crease, samples=4000)
+
+print(f"{len(no_crease.indices)//3},{len(with_crease.indices)//3},{h_nc.max_distance:.4f},{h_wc.max_distance:.4f}")
+`;
+        const output = runPythonScript(script);
+        const [, withCreaseTris, maxDistNoCrease, maxDistWithCrease] = output.split(',');
+        // crease preservation reaches the requested triangle budget with the box's true shape intact
+        expect(parseInt(withCreaseTris)).toBe(48);
+        expect(parseFloat(maxDistWithCrease)).toBeLessThan(0.01);
+        // plain QEM on the same mesh and target measurably distorts the shape more
+        expect(parseFloat(maxDistNoCrease)).toBeGreaterThan(parseFloat(maxDistWithCrease) * 10);
+    });
 });

@@ -221,6 +221,15 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'BOOLEAN',
                     description: 'Enhanced appearance (default true with the vector-massing pipeline, SCRATCHBOX_STAGED_PIPELINE=e): each large wall is redrawn once by an image model from its tile photo, guided by a registered Street View photo of the wall where one shows it, kept only where its windows and edges stay in place and nothing distinct (a fire escape, a storefront, signage, the colour) is erased or contradicted, and labelled generated ("AI-enhanced from tile"); the result says how many walls were enhanced or rejected. Pass false for the real-data view (tile photo and real sources only), e.g. when the user asks for the real data.'
                 },
+                pipeline: {
+                    type: 'STRING',
+                    enum: ['g', 'h', 'i', 'j'],
+                    description: 'Which procedural pipeline rebuilds the structure (with isolate and procedural). "j" (the default, the 3D Building button): the isolated scan is rendered at four planned views, made into one photoreal character sheet of the building (one 4K image, every view checked against the scan), the four views are sent together once to Meshy 7.1 multi-image-to-3D on Fal.ai, the model is fitted onto the scan\'s footprint and height and labelled generated, with its fit (plan IoU, share outside the footprint) reported; needs FAL_KEY. "i": the same character sheet, fitting and labelling as "j", but with Trellis multi in place of Meshy as the 3D model service, run six times (one per seed, about $0.12 a building), the candidate whose silhouette and plan best match the sheet and the scan kept, its textures colour-matched to the building\'s swatch; needs FAL_KEY. "h": the scan leads and vector/Solar data only agree with it, the structure is seeded on the vector building nearest the place, the build commits what its time budget allows instead of being discarded at the limit, readings that explain almost none of their wall are dropped, continued openings are checked before the native build, rejections are reported by reason, and an evidence ledger of every decision is written into the brief. "g": the earlier rules. Default "j" (SCRATCHBOX_STAGED_PROCEDURAL=g, h or i changes it).'
+                },
+                procedural: {
+                    type: 'BOOLEAN',
+                    description: 'With isolate: rebuild the structure procedurally (pipeline G) instead of detailing its scan. Survey cameras on the street around it are rendered from the photo tiles onto measured wall elevations, each wall is read as a facade program in metres (rows of openings with their arched heads, cornices and bands, piers and colonnettes, shop fronts, colours) and built natively on the vector massing, every face painted from its reading: a clean, procedural building, nothing of the scan in it. What was read is labelled photo-inferred, what was continued into unseen parts generated. Default true with isolate (one building is built procedurally, from the chat and from the 3D Building button alike); pass false only when the user asks for the scan itself detailed rather than a procedural building.'
+                },
                 atomicBuildingIntegrity: {
                     type: 'BOOLEAN',
                     description: 'Enforce Atomic Building Integrity rule: guarantees zero horizontal roof slicing, zero bisected building envelopes, and multi-tier zenith camera settle (defaults to true)'
@@ -1618,25 +1627,31 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'survey_beautify_station',
-        description: 'AI Beautify one survey station: pose-exact clay blockout of the GLB -> buildBeautifyPrompt grounded in the station (coordinates, yaw, pitch, lens fov, standoff, horizon, sun) -> Nano Banana image -> geometric QC by closed-loop edge alignment against the mesh (rejects recomposed frames) -> aligned pose. Returns the image path and QC report.',
+        description: 'Returns one styled 2D image of a survey station (or four, as a character sheet) — not a 3D splat tileset (survey_beautify_to_splats) or a baked texture atlas (survey_beautify_to_texture). AI Beautify one survey station: pose-exact render of the GLB -> buildBeautifyPrompt grounded in the station (coordinates, yaw, pitch, lens fov, standoff, horizon) -> Nano Banana image -> geometric QC by closed-loop edge alignment against the mesh (rejects recomposed frames) -> aligned pose. Lit evenly (bright overcast, no cast shadows) by default, because station images feed 3D. mode "building-survey" renders from the tile photos and also checks that the image stays inside the scan\'s outline from this camera (no widened facade, no extra bays, subject wholly in frame), rerolling until it does; place the station far enough out to frame the whole building, street to the top of its roof objects. With stationIds (four) it makes a building-survey character sheet instead: one 4K image of all four views, split and checked panel by panel. Returns the image path(s) and QC report (qc.outline in building-survey mode).',
         parameters: {
             type: 'OBJECT',
             properties: {
-                glbPath: { type: 'STRING', description: 'Anchored GLB (e.g. Google 3D Tiles clay).' },
+                glbPath: { type: 'STRING', description: 'Anchored GLB (e.g. Google 3D Tiles clay, or the isolated structure\'s textured GLB for building-survey mode).' },
                 stationsJsonPath: { type: 'STRING', description: 'Stations JSON from survey_synthesize_stations.' },
-                stationId: { type: 'NUMBER', description: 'Station to beautify.' },
+                stationId: { type: 'NUMBER', description: 'Station to beautify (or stationIds for a character sheet).' },
                 locationName: { type: 'STRING', description: 'Location name for the prompt.' },
-                moodPromptContext: { type: 'STRING', description: 'Optional mood/lighting sentence(s) for the prompt.' },
+                mode: { type: 'STRING', description: '"building-survey": render from the tile photos, lock the subject\'s outline in the prompt and reject images that leave the scan outline or crop the subject (overflow/underfill above the horizon under 3 %). Omit for a plain station beautify.' },
+                lighting: { type: 'STRING', description: '"even" (default): bright overcast, no cast shadows, no sun clause. "scene": the station\'s sun and the mood sentence, only when this image is itself the final picture.' },
+                renderMode: { type: 'STRING', description: '"clay" (default) or "textured" (the GLB\'s tile photos) for the reference render; building-survey mode defaults to "textured".' },
+                isoDate: { type: 'STRING', description: 'ISO-8601 instant for the sun (lighting "scene" only); default the instant the stations were synthesized for.' },
+                stationIds: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Building-survey character sheet: exactly four station ids (in quadrant order: top left, top right, bottom left, bottom right). The four views go into one 2 x 2 sheet on white and are made photorealistic by one 4K Nano Banana 2 image, so every view shows the same building in the same colours; each panel is then checked like a station (edge alignment and scan outline) and the whole sheet is generated again unless all four pass. Use instead of stationId; pick views that see the structure from different sides, e.g. the street faces, a corner and an aerial for the roof.' },
+                maxRerolls: { type: 'NUMBER', description: 'Further attempts after a rejected image (default 2).' },
+                moodPromptContext: { type: 'STRING', description: 'Optional extra sentence(s) for the prompt (mood light only with lighting "scene").' },
                 styleSuffix: { type: 'STRING', description: 'Optional style suffix appended verbatim.' },
                 width: { type: 'NUMBER', description: 'Render/generation width (default 1920).' },
                 outDir: { type: 'STRING', description: 'Output directory for blockout + beautified PNGs.' }
             },
-            required: ['glbPath', 'stationsJsonPath', 'stationId', 'locationName']
+            required: ['glbPath', 'stationsJsonPath', 'locationName']
         }
     },
     {
         name: 'survey_beautify_to_splats',
-        description: 'Full Survey -> Beautify -> Gaussian splat 3D Tiles pipeline: ranks stations against the GLB, beautifies each (chained: every accepted image is warped into the next station as a consistency reference), bakes each accepted image onto the mesh depth as oriented splats (native C++20), fuses across stations, and emits a KHR_gaussian_splatting 3D Tiles tileset with a WGS-84 root transform plus tileset.meta.json (crop box, prompts, QC).',
+        description: 'Produces a KHR_gaussian_splatting 3D Tiles tileset (a splat point cloud, not a textured mesh — use survey_beautify_to_texture for that) from a stations JSON and GLB you already have (see survey_synthesize_stations); for one call from just a location name, use location_generate_3dgs instead. Full Survey -> Beautify -> Gaussian splat 3D Tiles pipeline: ranks stations against the GLB, beautifies each (chained: every accepted image is warped into the next station as a consistency reference), bakes each accepted image onto the mesh depth as oriented splats (native C++20), fuses across stations, and emits the tileset with a WGS-84 root transform plus tileset.meta.json (crop box, prompts, QC).',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1656,7 +1671,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'survey_beautify_to_texture',
-        description: 'Survey-to-Atlas Inverse Projection (SAIP): Back-projects generative AI Beautify camera station plates directly into the model\'s consolidated UV atlas with MaxRects packing, analytical metric-depth occlusion testing, orthogonal normal weighting, and PBR decomposition (Scharr normals, Toksvig AA roughness, HBAO, dielectric glass classification, and NOAA solar de-lighting when isoDate is given and the stations file has anchor coordinates). The result says whether de-lighting was applied.',
+        description: 'Produces the same input mesh with a baked PBR texture atlas (a textured GLB, not a splat tileset — use survey_beautify_to_splats for that). Survey-to-Atlas Inverse Projection (SAIP): Back-projects generative AI Beautify camera station plates directly into the model\'s consolidated UV atlas with MaxRects packing, analytical metric-depth occlusion testing, orthogonal normal weighting, and PBR decomposition (Scharr normals, Toksvig AA roughness, HBAO, dielectric glass classification, and NOAA solar de-lighting when isoDate is given and the stations file has anchor coordinates). The result says whether de-lighting was applied.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1676,7 +1691,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'location_generate_3dgs',
-        description: 'Generate a photorealistic 3D Gaussian Splatting (3DGS) radiance field and OGC 3D Tileset for any real-world location or landmark. Automatically orchestrates Google 3D Tiles blockout ingestion, multi-tier survey camera synthesis, Nano Banana multi-view restyling with closed-loop Sobel edge QC, and native C++20 metric depth unprojection and octree voxel fusion.',
+        description: 'One call from just a location name or coordinates — the whole pipeline runs automatically, with no stations JSON or GLB to prepare first. For a custom station pattern, a partial/debuggable run, or re-running one failed stage, use survey_synthesize_stations + survey_beautify_to_splats directly instead. Generates a photorealistic 3D Gaussian Splatting (3DGS) radiance field and OGC 3D Tileset for any real-world location or landmark: orchestrates Google 3D Tiles blockout ingestion, multi-tier survey camera synthesis, Nano Banana multi-view restyling with closed-loop Sobel edge QC, and native C++20 metric depth unprojection and octree voxel fusion.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -1829,7 +1844,7 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'query_spatial_vector_data',
-        description: 'Query rich 2D vector roadmap and cadastral parcel data (kinematic road corridors with lane centerlines, building footprints with verified heights, bridge/tunnel vertical layers, landuse surface friction, POIs) co-registered with Google 3D Photorealistic Tiles via LocalTangentPlane. Enforces Universal Spatial Identifiers (urn:scratchbox:spatial:<layer>:<geohash>:<id>) and the Zero-Fake-Trees invariant.',
+        description: 'Query Google vector feature tiles (building footprints and modelled volumes, roads, water, land use, POIs) and cadastral parcel data (kinematic road corridors with lane centerlines, building footprints with verified heights, bridge/tunnel vertical layers, landuse surface friction, POIs) co-registered with Google 3D Photorealistic Tiles via LocalTangentPlane. Enforces Universal Spatial Identifiers (urn:scratchbox:spatial:<layer>:<geohash>:<id>) and the Zero-Fake-Trees invariant.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -2844,6 +2859,21 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
     survey_beautify_station: async (args, ctx) => {
         const fsMod = await import('fs-extra');
         const data = await fsMod.readJson(asString(args.stationsJsonPath));
+        if (Array.isArray(args.stationIds)) {
+            const ids = (args.stationIds as unknown[]).map(Number);
+            if (ids.length !== 4) throw new MissingInputError('survey_beautify_station', 'stationIds', `a character sheet takes exactly four station ids, got ${ids.length}`);
+            const stations = ids.map(id => { const st = (data.poses as any[]).find(p => p.id === id); if (!st) throw new Error(`survey_beautify_station: station ${id} not found`); return st; });
+            const generator = await resolveStationImageGenerator(ctx);
+            const { registerBeautifyHandlers } = await import('../../spatial/survey-router');
+            const deps = registerBeautifyHandlers({}, generator, process.cwd());
+            const res = await deps.beautifySheet!({ ...args, stations, anchor: data.anchor, glbPath: asString(args.glbPath), signal: ctx.signal }, chatProgress(ctx));
+            const failed = res.panels.filter((p: any) => !p.accepted);
+            return {
+                resultPayload: { success: true, ...res } as unknown as ToolResultPayload,
+                summaryResult: `Character sheet ${res.accepted ? 'accepted' : `rejected (${[...failed.map((p: any) => `station ${p.stationId}: ${p.qc.reason}`), res.borders?.reason].filter(Boolean).join('; ')})`} after ${res.attempts} attempt(s) -> ${res.sheetPath}. ${res.imageSource}`
+            };
+        }
+        if (args.stationId === undefined) throw new MissingInputError('survey_beautify_station', 'stationId', 'or stationIds (four) for a character sheet');
         const station = (data.poses as any[]).find(p => p.id === args.stationId);
         if (!station) throw new Error(`survey_beautify_station: station ${args.stationId} not found`);
         const generator = await resolveStationImageGenerator(ctx);

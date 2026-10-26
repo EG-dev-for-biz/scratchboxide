@@ -27,7 +27,7 @@ import type { Vec2 } from '../../../../common/spatial/staged-location-contracts'
 import type { VisionModelChain } from '../../../gemini/vision-model-chain';
 import { renderFrameDepth } from '../../../spatial/StreetViewPoseRegistrar';
 import type { RenderMesh3D } from '../../../spatial/HeadlessMeshSilhouetteRenderer';
-import { grammarCells, runFacadeGrammarPass, type FacadeGrammar, type GrammarFacadeOutcome } from '../facade-grammar';
+import { grammarCells, MIN_PHOTO_COVERAGE, runFacadeGrammarPass, type FacadeGrammar, type GrammarFacadeOutcome } from '../facade-grammar';
 import { encodePng } from '../png-encode';
 import { averageBays, bayGroups } from './bay-average';
 import { bandProfile, bandPrompt, decideBands, parapetProfile, parseBandReply, type BandDecision } from './band-infer';
@@ -43,11 +43,12 @@ import { decideRoof, parseRoofReply, roofPrompt, PARAPET_THICKNESS_M, type RoofD
 import { straighten, type StraightenResult } from './straighten';
 import type { EnhanceModelClient } from '../texture-enhance';
 import { decodeOrtho, checkAgainstScan, readReliefOrthos, readGrammar, fitGrammar, onFacade } from '../facade-grammar';
-import { enhanceOrder, enhanceWall, ENHANCE_CONCURRENCY, MAX_UNSEEN_WALLS, MIN_ENHANCE_AREA_M2, MIN_UNSEEN_EXPOSED_SHARE, TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID, TEXTURE_PLATE_UNSEEN_PROMPT_ID, type EnhanceWallRecord, type PlateModelClient, type WallStreetView } from './enhance';
+import { enhanceOrder, ENHANCE_CONCURRENCY, MAX_UNSEEN_WALLS, MIN_ENHANCE_AREA_M2, MIN_UNSEEN_EXPOSED_SHARE, TEXTURE_PLATE_PROMPT_ID, TEXTURE_PLATE_STREET_VIEW_PROMPT_ID, TEXTURE_PLATE_UNSEEN_PROMPT_ID, type EnhanceWallRecord, type PlateModelClient, type WallStreetView } from './enhance';
+import { buildFacadeTexture } from '../facade-texture/facade-texture';
 import { exposedShare, solidGrid } from './exposure';
 import { labPlanes } from './plate-audit';
 import { medianColour } from './face-textures';
-import { bestStreetViewForWall, rectifiedReference, streetBandTop, type GuideView } from './plate-streetview';
+import { bestStreetViewForWall, rectifiedReference, wallReference, streetBandTop, type GuideView } from './plate-streetview';
 import { applyStreetViewTexels, type StreetViewTexelRecord } from './street-view-texels';
 import { visionFacadeCounter } from './plate-identity';
 import { refitLatticeToPlate, plateLatticeOpenings } from './plate-lattice';
@@ -83,6 +84,8 @@ export interface InferenceInput {
         /** Where the model's answers are cached per wall (enhance.ts cachedPlate). */
         cacheDir?: string;
     };
+    /** The most walls the facade grammar reads (default MAX_GRAMMAR_FACADES, sized for one building; a district reads more). */
+    maxFacades?: number;
     signal?: AbortSignal;
     onProgress?: (m: string) => void;
 }
@@ -128,8 +131,9 @@ async function askJson<T>(chain: VisionModelChain<string>, png: Buffer, prompt: 
 }
 
 /** Writes the walls' orthos as a relief-orthos index (facade-grammar.ts reads it). */
-export function writeWallOrthoIndex(run: MassingRun, minAreaM2 = 80): string {
-    const facades = run.report.faces.filter(f => f.kind === 'wall' && f.width > 0 && f.area >= minAreaM2 && fs.existsSync(path.join(run.dir, `ortho_${f.index}.png`))).map(f => ({
+export function writeWallOrthoIndex(run: MassingRun, minAreaM2 = 80, minCoverage = MIN_PHOTO_COVERAGE): string {
+    // walls the photo hardly covers (party walls, the inside of a block) are not offered: they would take a grammar reading's place
+    const facades = run.report.faces.filter(f => f.kind === 'wall' && f.width > 0 && f.area >= minAreaM2 && (f.coverage ?? 0) >= minCoverage && fs.existsSync(path.join(run.dir, `ortho_${f.index}.png`))).map(f => ({
         facadeId: f.index, planeIndex: f.index, image: `ortho_${f.index}.png`, area_m2: f.area,
         centroid: [f.origin[0] + f.axisS[0] * (f.sMin + f.sMax) / 2, (f.tMin + f.tMax) / 2, f.origin[2] + f.axisS[2] * (f.sMin + f.sMax) / 2],
         normal: f.normal, axisS: f.axisS, axisT: f.axisT, sMin: f.sMin, sMax: f.sMax, tMin: f.tMin, tMax: f.tMax,
@@ -259,7 +263,7 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
     const bandReads = chain ? run.report.sections.map(sec => askJson(chain, fs.readFileSync(path.join(run.dir, sec.image)), bandPrompt(sec), parseBandReply).catch(e => e as Error)) : [];
     const wallFaces = faces.filter(f => f.kind === 'wall' && f.width > 0 && f.area >= 80 && f.coverage >= LOW_COVERAGE);
     const occReads = chain ? wallFaces.map(f => askJson(chain, fs.readFileSync(path.join(run.dir, `ortho_${f.index}.png`)), occluderPrompt(f.width * f.pixel, f.height * f.pixel), parseOccluderReply).catch(e => e as Error)) : [];
-    const grammarRead = chain ? runFacadeGrammarPass({ orthosDir: writeWallOrthoIndex(run), chain, ...(input.anchor ? { anchor: input.anchor } : {}), ...(input.signal ? { signal: input.signal } : {}), onProgress: m => progress(m), overlayDir: path.join(input.dir, 'grammar_overlays') }).catch(e => e as Error) : undefined;
+    const grammarRead = chain ? runFacadeGrammarPass({ orthosDir: writeWallOrthoIndex(run), chain, ...(input.maxFacades ? { maxFacades: input.maxFacades } : {}), ...(input.anchor ? { anchor: input.anchor } : {}), ...(input.signal ? { signal: input.signal } : {}), onProgress: m => progress(m), overlayDir: path.join(input.dir, 'grammar_overlays') }).catch(e => e as Error) : undefined;
     const svRead = input.streetViews && input.structureMesh ? input.streetViews(input.structureMesh).catch(e => e as Error) : undefined;
     const guideRead = input.enhance && input.enhance.guards !== false && input.enhance.streetViews ? input.enhance.streetViews().catch(e => e as Error) : undefined;
 
@@ -285,10 +289,21 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             roofStep.notes.push(`read: pitch ${rr.value.pitchDeg} deg, ridge ${rr.value.ridgeAzimuthDeg} deg, ${rr.value.hipped ? 'hipped' : 'gabled or flat'}, parapet ${rr.value.parapetM} m, ${rr.value.blocks.length} raised blocks (conf ${rr.value.conf}, ${rr.value.notes ?? ''})`);
             for (const p of parts) {
                 const inside = (input.solar ?? []).filter(s => s.pitchDeg >= 10 && p.loops.length && p.loops[0].length && inLoopsLocal(s.x, s.z, p.loops));
-                const d = decideRoof(p, rr.value, top, inside, toPlan);
+                const d = decideRoof(p, rr.value, top, inside, toPlan, massing.roofPrior);
                 roofDecisions.push(d);
                 const conf = Math.max(0.05, Math.min(1, rr.value.conf / 100));
-                if (d.pitch.proposed) { roofStep.proposed++; if (d.pitch.accepted) { roofStep.accepted++; p.planes = d.pitch.planes!; p.topY = d.pitch.topY!; p.provenance = 'massing-roof-photo-inferred'; } else roofStep.rejected++; roofStep.notes.push(`part ${p.id} pitch: ${d.pitch.accepted ? 'kept' : 'not kept'}: ${d.pitch.why}`); }
+                if (d.pitch.proposed) {
+                    roofStep.proposed++;
+                    if (d.pitch.accepted) {
+                        roofStep.accepted++;
+                        p.planes = d.pitch.planes!; p.topY = d.pitch.topY!;
+                        // the roof's provenance: the reading's planes are photo-inferred (the volume agreeing is said); the
+                        // volume's own planes, corroborated by the scan, are vector-modelled with the fit's residual
+                        p.provenance = d.pitch.source === 'vector-modelled' ? roofVectorModelledToken(d.pitch.residualM ?? NaN) : 'massing-roof-photo-inferred';
+                        p.roof = { source: d.pitch.source ?? 'photo-inferred', note: `${d.pitch.corroborated ? `the reading, corroborated by the modelled volume (${d.pitch.corroborated.planes} planes at ${d.pitch.corroborated.pitchDeg.toFixed(1)} deg)` : d.pitch.source === 'vector-modelled' ? 'the modelled volume\'s planes, checked against the scan' : 'the reading, checked against the scan'}; ${d.pitch.why}` };
+                    } else roofStep.rejected++;
+                    roofStep.notes.push(`part ${p.id} pitch: ${d.pitch.accepted ? `kept (${d.pitch.source}${d.pitch.corroborated ? ', corroborated by the modelled volume' : ''})` : 'not kept'}: ${d.pitch.why}`);
+                }
                 if (d.parapet.proposed) {
                     roofStep.proposed++;
                     if (d.parapet.accepted) {
@@ -632,12 +647,12 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
             let sv: WallStreetView | undefined, noSv = noGuide;
             if (guards && guide.length) {
                 const best = bestStreetViewForWall(f, guide);
-                if (best.view && best.rect) sv = { view: best.view, rect: best.rect, crop: rectifiedReference(best.rect, tex.width, tex.height), why: best.why };
+                if (best.view && best.rect) sv = { view: best.view, rect: best.rect, crop: wallReference(f, best.view, best.rect, tex.width, tex.height), why: best.why };
                 else noSv = best.why;
             }
             progress(`enhanced mode: ${unseen ? 'drawing the unseen wall' : 'redrawing wall'} ${f.index} (${Math.round(f.area)} m2)${sv ? `, guided by Street View ${sv.view.panoId}` : ''}`);
             const before = { width: tex.width, height: tex.height, rgba: tex.rgba.slice() };
-            const r = await enhanceWall(f, tex, use, {
+            const r = await buildFacadeTexture(f, tex, use, {
                 client: input.enhance!.client, models: input.enhance!.models, locationName: input.enhance!.locationName, ...(refTex ? { reference: refTex } : {}), source: ENH,
                 guards, ...(input.enhance!.cacheDir ? { cacheDir: input.enhance!.cacheDir } : {}), ...(sv ? { streetView: sv, streetViewSource: sourceForPano(sv.view.panoId) } : {}), ...(noSv ? { noStreetView: noSv } : {}),
                 ...(chain ? { counter: visionFacadeCounter(chain) } : {}), ...(input.signal ? { signal: input.signal } : {}),
@@ -801,16 +816,16 @@ export async function runInferenceE(input: InferenceInput): Promise<InferenceOut
     // ------------------------------------------------------------------ (h) real Street View texels on the walls
     // (street-view-texels.ts): once the plates are decided, each wall takes the registered, owned photo where it sees the wall
     // sharper than the tile ortho; labelled photo-inferred. Before this step no Street View pixel reached a texel in pipeline E.
-    // On by default (user decision, 2026-10-21: err toward clean geometry and complex textures wherever they come
-    // from); SCRATCHBOX_STREETVIEW_TEXELS=0 reverts to not baking them. On the one held-out bake-off run so far
-    // (Haughwout), baking real, correctly gated texels lowered the overall and realism judge scores against not
-    // baking them at all (see docs/processes/streetview_value.md) even though the gates themselves worked as
-    // designed - that measured finding still stands, this is a deliberate override of it, not a reversal of it.
+    // Off by default (user decision, 2026-10-21, reaffirmed): texturing infers from the 3D photo tiles themselves
+    // (tile-ortho projection + the photo-tier texture pass, texture-pass.ts) rather than pulling in a second,
+    // separately-registered photo source. This also matches the one held-out bake-off run so far (Haughwout),
+    // where baking real, correctly gated Street View texels lowered the overall and realism judge scores against
+    // not baking them at all (see docs/processes/streetview_value.md). SCRATCHBOX_STREETVIEW_TEXELS=1 opts back in.
     t = now();
     const svtStep = rec('street-view-texels');
     const streetViewTexels: StreetViewTexelRecord[] = [];
-    if (process.env.SCRATCHBOX_STREETVIEW_TEXELS === '0') {
-        svtStep.skipped = 'disabled (SCRATCHBOX_STREETVIEW_TEXELS=0): not requested';
+    if (process.env.SCRATCHBOX_STREETVIEW_TEXELS !== '1') {
+        svtStep.skipped = 'disabled by default (SCRATCHBOX_STREETVIEW_TEXELS=1 opts in): texturing infers from the 3D photo tiles instead';
     } else {
         const pool = new Map<string, GuideView>();
         const add = (v: ProjectionView & { registration?: GuideView['registration']; depth?: Float32Array }) => {
@@ -910,6 +925,14 @@ export function openingsFromGrammar(run: MassingRun, f: MassingFace, g: FacadeGr
         openings.push({ id: `${idPrefix}_${k}`, face: f.key, s0: c.s0, s1: c.s1, t0: c.t0, t1: c.t1, depth: ok ? Math.min(0.6, Math.max(0.08, depth)) : 0.12, scanned: false, confidence: g.confidence, provenance });
     });
     return { openings, measured, assumed };
+}
+
+/**
+ * The provenance token of a roof shaped from the modelled volume's planes where the scan agreed: `massing-roof-vector-modelled-r<residual m>`
+ * (pipeline-e.ts massingProvenance reads the residual back as the confidence).
+ */
+export function roofVectorModelledToken(residualM: number): string {
+    return `massing-roof-vector-modelled-r${Number.isFinite(residualM) ? residualM.toFixed(2) : 'nan'}`;
 }
 
 function inLoopsLocal(x: number, z: number, loops: Vec2[][]): boolean {

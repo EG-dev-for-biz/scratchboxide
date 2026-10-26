@@ -217,6 +217,8 @@ export function yawForHeading(headingDeg: number): number {
 
 /** The model that answered; when the API names a different version than the one requested, both are given. */
 function describeImageModel(use: ModelUse): string {
+    if (use.fallbackReason) return `${use.answered} (${use.fallbackReason})`;
+    if (use.requested === 'scratchbox-studio/style-dna') return use.answered;
     return use.answered === use.requested ? use.requested : `${use.requested} (the API reports ${use.answered} answered)`;
 }
 

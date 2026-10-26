@@ -137,6 +137,10 @@ export interface ClayView {
     /** aerial: compass bearing of the camera from the region centre (deg, 0 = from the south) and elevation (deg). */
     bearingDeg?: number;
     elevationDeg?: number;
+    /** aerial: the height aimed at (default: a low percentile of the framed heights), so two renders share one camera. */
+    aimY?: number;
+    /** aerial: camera distance from the aim point, metres (default 1.45 times the framed span). */
+    distM?: number;
 }
 
 /** Lambert clay (key light + sky fill) with a z-buffer; returns PNG bytes. */
@@ -167,7 +171,7 @@ export function renderClayPng(layers: ClayLayer[], view: ClayView): Buffer {
         }
     }
     inside.sort((a, b) => a - b);
-    const cy = inside.length ? inside[Math.floor(inside.length * 0.2)] : (minY + maxY) / 2;
+    const cy = view.aimY ?? (inside.length ? inside[Math.floor(inside.length * 0.2)] : (minY + maxY) / 2);
     const span = Math.max(maxX - minX, maxZ - minZ, 1);
     // camera basis
     let project: (x: number, y: number, z: number) => [number, number, number];
@@ -176,7 +180,7 @@ export function renderClayPng(layers: ClayLayer[], view: ClayView): Buffer {
         project = (x, y, z) => [W / 2 + (x - cx) * s, H / 2 + (z - cz) * s, -y];
     } else {
         const b = ((view.bearingDeg ?? 210) * Math.PI) / 180, e = ((view.elevationDeg ?? 35) * Math.PI) / 180;
-        const dist = span * 1.45;
+        const dist = view.distM ?? span * 1.45;
         const dir = [Math.sin(b) * Math.cos(e), Math.sin(e), Math.cos(b) * Math.cos(e)]; // from target to eye (z = south)
         const eye = [cx + dir[0] * dist, cy + dir[1] * dist, cz + dir[2] * dist];
         const fwd = [-dir[0], -dir[1], -dir[2]];
