@@ -34,6 +34,30 @@ export interface CharacterSheetOptions {
     outline?: OutlineLimits;
     /** Colour gate threshold (MAX_PANEL_COLOUR_SHIFT by default). */
     maxColourShift?: number;
+    /** The colour gate fails panels (default true). Off, the colour is still measured and reported, but neither fails a panel nor ranks sheets. */
+    colourGate?: boolean;
+    /**
+     * Sheets generated per round, in parallel (default 1). The best of them is kept: fewest failing panels, then the
+     * smallest colour shift from the tile photos, then the smallest outline miss. One sheet is a high-variance draw (a
+     * Haughwout repeat repainted the grey cast iron red brick, 2026-10-24); several give the gate something to choose from.
+     */
+    candidates?: number;
+    /**
+     * Ranks the sheets that pass every check by what they are for: e.g. pipeline H lays the panels on its wall plates,
+     * reads them, and returns how much of each wall the reading explains times its edge precision. Higher is better.
+     * Sheet checks only say a sheet is usable; two usable sheets can read very differently (Haughwout, 2026-10-24: 13-28 %
+     * explained across accepted sheets). Without it the first accepted sheet is kept.
+     */
+    score?: (sheet: CharacterSheetResult) => Promise<{ value: number; detail?: unknown }>;
+    /** With `score`: usable sheets to collect (within the round budget) before choosing between them (default 2). */
+    keepAccepted?: number;
+    /**
+     * With `score`: a sheet with at most this many failing panels (and no dividing lines) is still usable and is scored
+     * (default 0: only fully accepted sheets). Its failing panels are marked (qc.passed false), so the caller lays only the
+     * passing ones. Few whole sheets pass (10-17 % on Haughwout, most of the rest on one drifting panel), so the score
+     * otherwise rarely has two sheets to choose between.
+     */
+    scoreMaxFailingPanels?: number;
     styleSuffix?: string;
     signal?: AbortSignal;
 }
@@ -177,11 +201,19 @@ export interface CharacterSheetResult {
     borders: SheetBorderCheck;
     accepted: boolean;
     attempts: number;
+    /** Every sheet generated, in order: whether it passed, its failing panels, colour shift and outline miss. */
+    tried?: Array<{ attempt: number; accepted: boolean; failingPanels: number; bordersPassed: boolean; colourShift: number; outlineMiss: number; score?: number }>;
+    /** The `score` of this sheet, when one was given and the sheet was usable. */
+    score?: { value: number; detail?: unknown };
+    /** Usable for the caller: accepted, or (scoreMaxFailingPanels) only a few panels failed, which the caller leaves out. */
+    usable?: boolean;
     modelUsed?: string;
     modelNote?: string;
 }
 
 const failing = (r: { panels: Array<{ qc: BeautifyQc }>; borders: SheetBorderCheck }) => r.panels.filter(p => !p.qc.passed).length + (r.borders.passed ? 0 : 1);
+/** Sum of the panels' hue/chroma shifts from the tile photos (0 where a panel has no colour check). */
+const colourShift = (panels: Array<{ colour?: PanelColourCheck }>) => panels.reduce((a, p) => a + (p.colour?.shift ?? 0), 0);
 const outlineMiss = (panels: Array<{ qc: BeautifyQc }>) => panels.reduce((a, p) => a + (p.qc.outline ? p.qc.outline.overflow + p.qc.outline.underfill : 0), 0);
 
 export async function beautifyCharacterSheet(
@@ -219,12 +251,12 @@ export async function beautifyCharacterSheet(
     const prompt = buildCharacterSheetPrompt({ locationName, stations, styleSuffix: options.styleSuffix });
 
     const maxRerolls = options.maxRerolls ?? 2;
+    const perRound = Math.max(1, Math.floor(options.candidates ?? 1));
+    const gate = options.colourGate !== false;
     let best: CharacterSheetResult | null = null;
     let attempts = 0;
-    while (attempts <= maxRerolls) {
-        if (options.signal?.aborted) throw options.signal.reason instanceof Error ? options.signal.reason : Object.assign(new Error('Character sheet was stopped'), { name: 'AbortError' });
-        attempts++;
-        const { png, modelUsed, modelNote } = toStationImageAnswer(await generator.generate({ prompt, blockoutPng: inputPng, aspectRatio: aspectLabel, width: SW, height: SH, imageSize: '4K', signal: options.signal }));
+    const tried: CharacterSheetResult['tried'] = [];
+    const evaluate = (png: Buffer, modelUsed: string | undefined, modelNote: string | undefined): CharacterSheetResult => {
         const out = decodePng(png);
         const panels: CharacterSheetPanel[] = stations.map((station, q) => {
             // the quadrant, resampled to the station frame (the model answers at its own resolution)
@@ -240,14 +272,44 @@ export async function beautifyCharacterSheet(
             if (!fit.passed) { qc.passed = false; qc.reason = [qc.reason, fit.reason].filter(Boolean).join('; '); }
             // the colour gate needs the tile photos' colour: only a textured reference has it
             const colour = textured ? checkPanelColour(blockouts[q], rgba, PW, PH, options.maxColourShift) : undefined;
-            if (colour && !colour.passed) { qc.passed = false; qc.reason = [qc.reason, colour.reason].filter(Boolean).join('; '); }
+            if (gate && colour && !colour.passed) { qc.passed = false; qc.reason = [qc.reason, colour.reason].filter(Boolean).join('; '); }
             return { station, alignedStation: aligned, blockout: blockouts[q], imagePng: encodePng(PW, PH, rgba), qc, ...(colour ? { colour } : {}) };
         });
         const borders = checkSheetBorders(out.rgba, out.width, out.height, blockouts);
         const res: CharacterSheetResult = { prompt, inputPng, sheetPng: png, panels, borders, accepted: false, attempts, modelUsed, modelNote };
         res.accepted = failing(res) === 0;
-        if (!best || failing(res) < failing(best) || (failing(res) === failing(best) && outlineMiss(panels) < outlineMiss(best.panels))) best = res;
-        if (res.accepted) break;
+        return res;
+    };
+    // fewest failing panels, then (gate on) the smallest colour shift, then the smallest outline miss
+    const better = (a: CharacterSheetResult, b: CharacterSheetResult) => failing(a) !== failing(b) ? failing(a) < failing(b)
+        : gate && colourShift(a.panels) !== colourShift(b.panels) ? colourShift(a.panels) < colourShift(b.panels) : outlineMiss(a.panels) < outlineMiss(b.panels);
+    // maxRerolls + 1 rounds, `candidates` sheets each. Without `score` the first round with an accepted sheet ends it; with
+    // one, rounds go on until `keepAccepted` sheets passed (or the budget is spent) and the best-scoring accepted sheet wins.
+    const want = options.score ? Math.max(1, Math.floor(options.keepAccepted ?? 2)) : 1;
+    const accepted: CharacterSheetResult[] = [];
+    for (let round = 0; round <= maxRerolls && accepted.length < want; round++) {
+        if (options.signal?.aborted) throw options.signal.reason instanceof Error ? options.signal.reason : Object.assign(new Error('Character sheet was stopped'), { name: 'AbortError' });
+        const answers = await Promise.all(Array.from({ length: perRound }, () => generator.generate({ prompt, blockoutPng: inputPng, aspectRatio: aspectLabel, width: SW, height: SH, imageSize: '4K', signal: options.signal })));
+        const round_: CharacterSheetResult[] = [];
+        for (const a of answers) {
+            attempts++;
+            const { png, modelUsed, modelNote } = toStationImageAnswer(a);
+            const res = evaluate(png, modelUsed, modelNote);
+            round_.push(res);
+            tried.push({ attempt: attempts, accepted: res.accepted, failingPanels: res.panels.filter(p => !p.qc.passed).length, bordersPassed: res.borders.passed, colourShift: +colourShift(res.panels).toFixed(2), outlineMiss: +outlineMiss(res.panels).toFixed(4) });
+            if (!best || better(res, best)) best = res;
+        }
+        // only usable sheets are scored: every check passed, or (scoreMaxFailingPanels) a few panels failed and are left out
+        const maxFail = options.score ? Math.max(0, Math.floor(options.scoreMaxFailingPanels ?? 0)) : 0;
+        const passed = round_.filter(r => r.borders.passed && r.panels.filter(p => !p.qc.passed).length <= maxFail);
+        passed.forEach(r => { r.usable = true; });
+        if (options.score && passed.length) {
+            const scores = await Promise.all(passed.map(r => options.score!(r)));
+            passed.forEach((r, i) => { r.score = scores[i]; const t = tried[attempts - round_.length + round_.indexOf(r)]; if (t) t.score = +scores[i].value.toFixed(4); });
+        }
+        accepted.push(...passed);
     }
-    return { ...best!, attempts };
+    if (options.score && accepted.length) best = accepted.reduce((a, b) => ((b.score?.value ?? -Infinity) > (a.score?.value ?? -Infinity) ? b : a));
+    else if (accepted.length) best = accepted.reduce((a, b) => (better(b, a) ? b : a));
+    return { ...best!, attempts, tried };
 }

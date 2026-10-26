@@ -19,7 +19,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
-import { cutRevolutionsFromGlb, revolutionColourAtlas, revolutionCutMask, runRevolutionFit, writeRevolutionsGlb, type RevolutionFitRun } from '../src/node/3d-engine/staged-location/revolution-fit';
+import { buildRevolutionLayer, cutRevolutionsFromGlb, revolutionColourAtlas, revolutionCutMask, runRevolutionFit, writeRevolutionsGlb, type RevolutionFitRun } from '../src/node/3d-engine/staged-location/revolution-fit';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 import { askRevolutionReference, referenceConsensus, referenceDetailLine, type ReferenceClient } from '../src/node/3d-engine/staged-location/revolution-reference';
 import { readGlbTriangles } from './helpers/clay-glb-render';
@@ -272,3 +272,34 @@ describe('revolution fit (synthetic dome with a lantern and 12 ribs)', () => {
         expect(r[0].stacks[0].bandModulation.K).toBe(0);
     }, 180_000);
 });
+
+describe('revolution fit over a district: the model calls', () => {
+    it('asks the plan view for several domes at once, and applies each verdict to its own dome', async () => {
+        // three copies of the dome scan, 60 m apart along x
+        const one = syntheticScan({ ribs: false, lantern: false, seed: 7 });
+        const n = one.positions.length / 3;
+        const positions = new Float32Array(one.positions.length * 3), indices = new Uint32Array(one.indices.length * 3);
+        for (let k = 0; k < 3; k++) {
+            for (let v = 0; v < n; v++) { positions[(k * n + v) * 3] = one.positions[v * 3] + 60 * k; positions[(k * n + v) * 3 + 1] = one.positions[v * 3 + 1]; positions[(k * n + v) * 3 + 2] = one.positions[v * 3 + 2]; }
+            for (let i = 0; i < one.indices.length; i++) indices[k * one.indices.length + i] = one.indices[i] + k * n;
+        }
+        const dir = tmp(), scanGlb = path.join(dir, 'scan.glb');
+        writeStagedGlbFile(scanGlb, [{ name: 'scan', positions, indices }]);
+        let inFlight = 0, most = 0, calls = 0;
+        const judged: number[] = [];
+        const res = await buildRevolutionLayer({ scanGlb, outDir: dir, judgePlan: async (_image, prompt) => {
+            const k = ++calls; inFlight++; most = Math.max(most, inFlight);
+            await new Promise(r => setTimeout(r, 50));
+            inFlight--;
+            judged.push(k);
+            // the dome whose plan the prompt is asked about first is called square; the others round
+            return k === 1 ? JSON.stringify({ plan: 'polygon', sides: 4, confidence: 0.95, what: 'a square tower' }) : JSON.stringify({ plan: 'circle', confidence: 0.95, what: 'a dome' });
+        } });
+        const found = res.run.report.revolutions;
+        expect(found.length).toBeGreaterThanOrEqual(3);
+        expect(calls).toBe(3);                                 // one call per axis position
+        expect(most).toBe(3);                                  // all three in flight together, not one after another
+        expect(found.filter(r => r.accepted)).toHaveLength(2); // the one judged square vetoed, the two round kept
+    }, 120_000);
+});
+

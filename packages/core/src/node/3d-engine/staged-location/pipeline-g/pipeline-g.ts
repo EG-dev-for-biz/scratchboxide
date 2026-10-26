@@ -58,6 +58,7 @@ import { planStations } from './stations';
 import { platePng, reliefPng, surveyPlates, type Plate } from './plates';
 import { MIN_READ_COVERAGE, PIPELINE_G_READ_VERSION, programItems, readPlate, type FacadeProgram, type ProgramItems } from './read';
 import { checkPlate, checkReading, type ReadingCheck } from './check';
+import { sheetPlates, type SheetPlatesOptions } from './sheet-plates';
 import { groupFacades, layBack } from './facades';
 import { roofObjects, type RoofObject } from './roof-objects';
 import { writeBuildingBrief, type BuildingBriefRecord } from './brief';
@@ -136,6 +137,12 @@ export interface PipelineGInput {
     run: MassingRun;
     /** The photo tile the stations are rendered from (devegetated where the strip ran). */
     tilePath: string;
+    /**
+     * Sheet plates (pipeline H-S, sheet-plates.ts): the wall plates take their colour from a building-survey character sheet
+     * of the isolated structure where its panels see the walls. Opt-in; any failure keeps the survey's own plates (the
+     * reason is a step note). readScore ranks the usable sheets by this pipeline's own facade reading of the overlaid plates.
+     */
+    sheetPlates?: Pick<SheetPlatesOptions, 'structureGlb' | 'generator' | 'candidates' | 'maxRerolls'> & { readScore?: boolean };
     dir: string;
     stage: string;
     stageKey: string;
@@ -544,7 +551,40 @@ export async function runPipelineG(input: PipelineGInput): Promise<PipelineGOutc
     // every surveyed wall gets a plate: an aerial lays onto walls no street station reached
     const faceIdx = [...new Set([...plan.stations.map(s => s.face), ...(plan.stations.some(s => s.row === 'aerial') ? plan.faces : [])])];
     const briefDir = path.join(input.dir, 'brief');
-    const { plates, renders: wallRenders } = await surveyPlates({ keepRendersDir: path.join(briefDir, 'survey'), stations: plan.stations, faces: surveyFaces, faceIdx, tileGlb: input.tilePath, ...(input.signal ? { signal: input.signal } : {}), onProgress: progress });
+    let { plates, renders: wallRenders } = await surveyPlates({ keepRendersDir: path.join(briefDir, 'survey'), stations: plan.stations, faces: surveyFaces, faceIdx, tileGlb: input.tilePath, ...(input.signal ? { signal: input.signal } : {}), onProgress: progress });
+    if (input.sheetPlates) {
+        // the sheet's panels laid over the survey's plates (sheet-plates.ts); never fails the build
+        const ts = Date.now();
+        try {
+            // the reading score: this pipeline's own reader on the two largest readable walls, explained x edge precision
+            const score = input.sheetPlates.readScore ? async (over: Plate[]) => {
+                const walls = over.filter(p => p.coverage >= MIN_READ_COVERAGE).sort((a, b) => b.w * b.h - a.w * a.h).slice(0, 2);
+                const per = await Promise.all(walls.map(async pl => {
+                    try {
+                        const r = await readPlate(input.chain, input.place, pl, input.signal);
+                        const c = checkReading(checkPlate(pl), r.program);
+                        return { face: pl.key, explained: c.explained, precision: c.precision };
+                    } catch (err) {
+                        if (input.signal?.aborted) throw err;
+                        return { face: pl.key, explained: 0, precision: 0, error: err instanceof Error ? err.message : String(err) };   // a timed-out reading scores nothing
+                    }
+                }));
+                return { value: per.length ? per.reduce((a, w) => a + w.explained * w.precision, 0) / per.length : 0, detail: per };
+            } : undefined;
+            const sp = await sheetPlates(plates, surveyFaces, { ...input.sheetPlates, anchor: input.anchor, place: input.place, ...(score ? { score } : {}), ...(input.signal ? { signal: input.signal } : {}) });
+            plates = sp.plates;
+            fs.writeFileSync(path.join(briefDir, 'sheet_beautified.png'), sp.sheet.sheetPng);
+            fs.writeFileSync(path.join(briefDir, 'sheet_reference.png'), sp.sheet.inputPng);
+            const usable = sp.sheet.accepted || !!sp.sheet.usable;
+            steps.push({ step: 'sheet plates', proposed: sp.sheet.attempts, accepted: usable ? 1 : 0, rejected: usable ? sp.sheet.attempts - 1 : sp.sheet.attempts, ms: Date.now() - ts,
+                notes: [`${sp.sheet.attempts} sheet${sp.sheet.attempts === 1 ? '' : 's'} generated; ${usable ? `kept one (${sp.sheet.accepted ? 'every check passed' : 'usable, failing panels left out'}${sp.sheet.score ? `, reading score ${sp.sheet.score.value.toFixed(3)}` : ''})` : 'none usable: the survey plates are kept'}`,
+                    ...sp.sheet.panels.map(p => `panel ${p.station.name ?? p.station.id}: ${p.qc.passed ? 'laid' : `left out (${p.qc.reason})`}${p.colour ? `, colour shift ${p.colour.shift.toFixed(1)}` : ''}`),
+                    ...plates.map((p, k) => `${p.key}: ${sp.fromSheet[k]} texels from the sheet (generated)`)] });
+        } catch (err) {
+            if (input.signal?.aborted) throw err;
+            steps.push({ step: 'sheet plates', proposed: 0, accepted: 0, rejected: 0, skipped: `the character sheet failed (${err instanceof Error ? err.message : String(err)}); the survey plates are kept`, notes: [], ms: Date.now() - ts });
+        }
+    }
     for (const pl of plates) {
         fs.writeFileSync(path.join(input.dir, 'plates', `face_${pl.face}_colour.png`), platePng(pl, false));
         fs.writeFileSync(path.join(input.dir, 'plates', `face_${pl.face}_relief.png`), reliefPng(pl));

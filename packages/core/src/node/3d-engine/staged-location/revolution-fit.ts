@@ -30,6 +30,7 @@ import { writeStagedGlbFile, type StagedGlbNode } from './staged-glb-writer';
 import { buildTileSurface, readTileTriangles, selectTriangles, type TileTextureSurface } from './tile-texture-transfer';
 import { renderTopDownPhoto, topDownJpeg } from './top-down-photo';
 import { referenceDetailLine, type RevolutionReference } from './revolution-reference';
+import { mapLimit } from '../../../common/map-limit';
 
 export const REVOLUTION_FIT_VERSION = 'revolution-fit/2';
 
@@ -567,6 +568,9 @@ export function planVetoReason(reply: ReturnType<typeof parseRevolutionPlan>): s
 /** A vision call: an image and a prompt in, the reply's text out. */
 export type PlanJudge = (image: { bytes: Uint8Array; mimeType: string }, prompt: string) => Promise<string>;
 
+/** Model calls (plan views, search-grounded references) the revolution fit has in flight at once. */
+export const REVOLUTION_MODEL_CONCURRENCY = 8;
+
 /**
  * The district's revolution parts rebuilt: the fit on the (tree-stripped, photo-textured) scan, the rebuilt parts
  * coloured from the same scan's photo and written to `<outDir>/revolutions.glb`. Returns the run (for cutting the parts
@@ -584,28 +588,31 @@ export async function buildRevolutionLayer(input: { scanGlb: string; outDir: str
     const fit = (detailLines?: string[]) => runRevolutionFit({ positions: tris.positions }, path.join(input.outDir, 'revolution_fit'), input.params ?? {}, { ...(input.signal ? { signal: input.signal } : {}), ...(detailLines ? { detailLines } : {}) });
     // the plan-view verdict per part, by axis position, so a re-fit does not ask the model twice
     const planVerdicts = new Map<string, string | undefined>();
-    // planes first: a part whose sections are clearly a few-sided polygon is not a revolution
+    // planes first: a part whose sections are clearly a few-sided polygon is not a revolution. The scan and vector vetoes
+    // first; the plan-view calls for the rest at once (REVOLUTION_MODEL_CONCURRENCY), one per axis position: a district
+    // has hundreds of candidates, and one call after another ran past the massing's whole budget (Haughwout's block, 184)
     const veto = async (run: RevolutionFitRun) => {
-        for (const r of run.report.revolutions.filter(x => x.accepted)) {
-            let why = (input.outlines ? vectorOutlineVeto(r, input.outlines) : undefined) ?? polygonalSections(r, tris.positions).reason;
-            if (!why && input.judgePlan) {
-                const at = `${r.axis.x.toFixed(1)},${r.axis.z.toFixed(1)}`;
-                if (planVerdicts.has(at)) why = planVerdicts.get(at);
-                else {
-                    // straight down on the tile photo, three radii each way
-                    const span = Math.max(12, r.plan.r * 6);
-                    try {
-                        const photo = renderTopDownPhoto(tris, { x0: r.axis.x - span / 2, z0: r.axis.z - span / 2, widthM: span, heightM: span }, { texelM: Math.max(0.05, span / 768), maxPx: 1024 });
-                        why = planVetoReason(parseRevolutionPlan(await input.judgePlan({ bytes: topDownJpeg(photo), mimeType: 'image/jpeg' }, revolutionPlanPrompt(r.plan.r, span))));
-                        planVerdicts.set(at, why);
-                    } catch (err) {
-                        if (input.signal?.aborted) throw err;
-                        // no answer: the part keeps its fit (the scan and vector checks passed)
-                    }
+        const acc = run.report.revolutions.filter(x => x.accepted);
+        const why = new Map<RevolutionRecord, string | undefined>(acc.map(r => [r, (input.outlines ? vectorOutlineVeto(r, input.outlines) : undefined) ?? polygonalSections(r, tris.positions).reason]));
+        const judgePlan = input.judgePlan;
+        if (judgePlan) {
+            const at = (r: RevolutionRecord) => `${r.axis.x.toFixed(1)},${r.axis.z.toFixed(1)}`;
+            const ask = new Map<string, RevolutionRecord>();
+            for (const r of acc) if (!why.get(r) && !planVerdicts.has(at(r)) && !ask.has(at(r))) ask.set(at(r), r);
+            await mapLimit([...ask], REVOLUTION_MODEL_CONCURRENCY, async ([key, r]) => {
+                // straight down on the tile photo, three radii each way
+                const span = Math.max(12, r.plan.r * 6);
+                try {
+                    const photo = renderTopDownPhoto(tris, { x0: r.axis.x - span / 2, z0: r.axis.z - span / 2, widthM: span, heightM: span }, { texelM: Math.max(0.05, span / 768), maxPx: 1024 });
+                    planVerdicts.set(key, planVetoReason(parseRevolutionPlan(await judgePlan({ bytes: topDownJpeg(photo), mimeType: 'image/jpeg' }, revolutionPlanPrompt(r.plan.r, span)))));
+                } catch (err) {
+                    if (input.signal?.aborted) throw err;
+                    // no answer: the part keeps its fit (the scan and vector checks passed)
                 }
-            }
-            if (why) { r.accepted = false; r.reason = why; }
+            });
+            for (const r of acc) if (!why.get(r) && planVerdicts.has(at(r))) why.set(r, planVerdicts.get(at(r)));
         }
+        for (const r of acc) { const w = why.get(r); if (w) { r.accepted = false; r.reason = w; } }
         run.meshes = run.meshes.filter(m => run.report.revolutions.some(r => r.id === m.id && r.accepted));
         return run;
     };
@@ -615,13 +622,16 @@ export async function buildRevolutionLayer(input: { scanGlb: string; outDir: str
     const references = new Map<number, RevolutionReference>();
     if (input.reference) {
         const lines: string[] = [];
-        for (const r of run.report.revolutions.filter(x => x.accepted)) {
-            const ref = await input.reference(r).catch(() => undefined);
-            if (!ref) continue;
+        const reference = input.reference;
+        const kept = run.report.revolutions.filter(x => x.accepted);
+        const refs = await mapLimit(kept, REVOLUTION_MODEL_CONCURRENCY, r => reference(r).catch(() => undefined));
+        kept.forEach((r, k) => {
+            const ref = refs[k];
+            if (!ref) return;
             references.set(r.id, ref);
             const line = referenceDetailLine(r, ref);
             if (line) lines.push(line);
-        }
+        });
         if (lines.length) run = await veto(await fit(lines));
     }
     const acc = run.report.revolutions.filter(r => r.accepted);

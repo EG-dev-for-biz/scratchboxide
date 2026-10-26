@@ -182,3 +182,13 @@ describe('tool time budgets', () => {
         expect(unknown).toEqual([]);
     });
 });
+
+describe('chat tool time: staged location builds', () => {
+    it('gives a district build (no isolate) 142 min and an isolated build 40 min', async () => {
+        const { DISTRICT_RUN_BUDGET_MS, RUN_BUDGET_MS, RUN_DEADLINE_MARGIN_MS } = await import('../src/node/3d-engine/staged-location/orchestrator');
+        expect(resolveToolTimeBudget('google_3d_tiles_get_clay', { query: 'x' }, 5 * 60_000).maxMs).toBe(DISTRICT_RUN_BUDGET_MS + RUN_DEADLINE_MARGIN_MS);
+        expect(resolveToolTimeBudget('google_3d_tiles_get_clay', { query: 'x', isolate: false }, 5 * 60_000).maxMs).toBe(142 * 60_000);
+        expect(resolveToolTimeBudget('google_3d_tiles_get_clay', { query: 'x', isolate: true }, 5 * 60_000).maxMs).toBe(RUN_BUDGET_MS + RUN_DEADLINE_MARGIN_MS);
+    });
+});
+

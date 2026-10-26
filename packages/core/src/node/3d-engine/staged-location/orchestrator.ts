@@ -29,6 +29,7 @@
  * A Stop marks the run stopped and ends at once (tile_refine has no signal and runs on to its own cache).
  */
 
+import { createDefaultStationImageGenerator } from '../../spatial/BeautifyStationService';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import { clampToFootprint, footprintConformance, FOOTPRINT_MAX_PROJECTION_M } from './footprint-lock';
@@ -257,7 +258,8 @@ export const STAGES = {
     remesh: { order: 2, title: 'Remeshed scan', budgetMs: 300_000 },
     // a district's rebuilt buildings: pipeline E's massing for every building that passes its own check, and the remesh carved
     // where they stand (district-massing.ts); off unless SCRATCHBOX_STAGED_DISTRICT_MASSING=1
-    massing: { order: 2, title: 'Rebuilt buildings', budgetMs: 1_500_000 },
+    // 5x the earlier 25 min (user decision, 2026-10-25): Haughwout's block took 38 min once its remesh committed
+    massing: { order: 2, title: 'Rebuilt buildings', budgetMs: 7_500_000 },
     // the facades' grammars read from the tile photo (three readings per facade, concurrently), gated, and the relief run
     // again with the accepted ones; pipeline E's inference runs here too, and in its enhanced mode (the default within E) also a registered
     // Street View survey (about 3 min, alongside the readings) and up to 8 redraws (about 2.5 min)
@@ -358,6 +360,11 @@ export const STAGE_IDS = Object.keys(STAGES) as StageId[];
 
 /** The tool's budget is 40 minutes; the run stops starting stages 2 minutes before it. */
 export const RUN_BUDGET_MS = 38 * 60_000;
+/**
+ * A district's (no isolate): the tiles, trees and remesh before the massing (about 15 min uncached) plus the massing's
+ * own 125 min; the chat tool's limit for a district call (tool-time-budgets.ts) is this plus the margin.
+ */
+export const DISTRICT_RUN_BUDGET_MS = 140 * 60_000;
 export const RUN_DEADLINE_MARGIN_MS = 120_000;
 /** Layers the texture pass works on at once. */
 export /** The no-fit rung's Street View is kept only on at least this many held-out views (fewer cannot tell it from the clay). */
@@ -813,8 +820,8 @@ interface StageResult<T> {
 
 class Runner {
     private readonly deadlineAt: number;
-    constructor(private readonly run: StagedRun, private readonly ctx: StagedLocationContext, private readonly now: () => number) {
-        const left = ctx.remainingMs?.() ?? RUN_BUDGET_MS + RUN_DEADLINE_MARGIN_MS;
+    constructor(private readonly run: StagedRun, private readonly ctx: StagedLocationContext, private readonly now: () => number, budgetMs = RUN_BUDGET_MS) {
+        const left = ctx.remainingMs?.() ?? budgetMs + RUN_DEADLINE_MARGIN_MS;
         this.deadlineAt = now() + Math.max(0, left - RUN_DEADLINE_MARGIN_MS);
     }
 
@@ -1279,7 +1286,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     const artifactId = stagedArtifactId(runId, intoActive?.id);
     const run = new StagedRun(runId, request, ctx, now, artifactId, intoActive);
     runningStages = () => STAGE_IDS.filter(id => run.summary(id).status === 'running');
-    const runner = new Runner(run, ctx, now);
+    const runner = new Runner(run, ctx, now, request.isolate ? RUN_BUDGET_MS : DISTRICT_RUN_BUDGET_MS);
     runner.proceduralOnly = request.procedural === true;
     // a procedural-only build never lists the other stages, not even as pending before they are skipped
     if (runner.proceduralOnly) for (const s of run.state.stages) if (!PROCEDURAL_STAGES.has(s.stage)) s.outOfScope = true;
@@ -3729,6 +3736,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         // less the margin for committing; the massing's ledger entries ahead of the rebuild's own
                         // what names the building (building-name.ts): the evidence's POIs, the request's words and the address
                         naming: { ...(t.vector ? { pois: t.vector.pois } : {}), query: request.query, address: placeValue!.formattedAddress },
+                        // pipeline H-S (opt-in, SCRATCHBOX_H_SHEET_PLATES=1): the wall plates take their colour from a character sheet
+                        // of the isolated structure, best of three sheets ranked by H's own facade reading (sheet-plates.ts)
+                        ...(procedural === 'h' && process.env.SCRATCHBOX_H_SHEET_PLATES === '1' && e.refined?.texturedGlb
+                            ? { sheetPlates: { structureGlb: e.refined.texturedGlb, generator: createDefaultStationImageGenerator({ workspaceRoot: cache.dir }), readScore: true } } : {}),
                         ...(procedural === 'h' ? { policy: { ...H_POLICY, budgetMs: Math.max(0, STAGES.grammar.budgetMs - (now() - t0) - H_BUDGET_MARGIN_MS) }, ledger: hLedger } : {})
                     });
                     cache.writeRunNote(runId, procedural === 'h' ? 'pipeline_h' : 'pipeline_g', { steps: out.steps, timingsMs: out.timingsMs, plates: out.plates, stations: out.stations, names: out.names, ...(out.brief ? { brief: out.brief } : {}), ...(procedural === 'h' ? { ledger: out.ledger, budgetNotes: out.budgetNotes } : {}) });

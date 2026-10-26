@@ -119,6 +119,20 @@ export function parseOccluderReply(text: string): Array<{ box: [number, number, 
 
 export interface OtherFacadeFill { filled: number; sources: Array<{ face: number; texels: number; how: 'bay-shift' | 'other-facade' }> }
 
+/**
+ * Row bands of each clean mask, by band height: the fill reads only clean texels and writes only masked ones, so a wall's
+ * bands stay valid across every wall filled from it (a district has hundreds of walls; recomputing them per fill was
+ * quadratic: 620 s on Haughwout's block).
+ */
+const bandCache = new WeakMap<Uint8Array, Map<number, Float32Array[]>>();
+function cachedRowBands(t: FaceTexture, clean: Uint8Array, bandPx: number): Float32Array[] {
+    let byBand = bandCache.get(clean);
+    if (!byBand) bandCache.set(clean, byBand = new Map());
+    let bands = byBand.get(bandPx);
+    if (!bands) byBand.set(bandPx, bands = rowBands(t, clean, bandPx));
+    return bands;
+}
+
 /** Mean colour of the clean texels in each row band of `bandPx` rows (NaN where none). */
 function rowBands(t: FaceTexture, clean: Uint8Array, bandPx: number): Float32Array[] {
     const n = Math.ceil(t.height / bandPx);
@@ -179,12 +193,12 @@ export function fillFromOtherFacades(fi: number, faces: MassingFace[], textures:
     }
     if (!left) return res;
     const band = Math.max(4, Math.round(1 / f.pixel));
-    const mine = rowBands(t, clean, band);
+    const mine = cachedRowBands(t, clean, band);
     const others = faces.filter(o => o.index !== fi && o.wall && textures.has(o.index) && cleanOf.has(o.index) && Math.abs(o.pixel - f.pixel) < 1e-6)
         .sort((a, b) => (a.normal[0] * f.normal[0] + a.normal[2] * f.normal[2]) - (b.normal[0] * f.normal[0] + b.normal[2] * f.normal[2]) || b.coverage - a.coverage);
     for (const o of others) {
         const ot = textures.get(o.index)!, oc = cleanOf.get(o.index)!;
-        const theirs = rowBands(ot, oc, band);
+        const theirs = cachedRowBands(ot, oc, band);
         let diff = 0, shared = 0;
         for (let b = 0; b < mine[0].length; b++) {
             const t0 = f.orthoTMax - b * band * f.pixel;
