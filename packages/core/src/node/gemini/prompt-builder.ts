@@ -458,6 +458,11 @@ When you write a procedural script yourself (import scratchbox as sb, ending wit
    - **Weathering**: \`weathering={}\` bakes marks from the geometry itself (run-off streaks under ledges, rain-exposure wash, shelter and cavity grime, rising damp, soot around chimney tops) onto an overlay layer; tune continuous strengths such as streak_strength, shelter_grime, cavity_grime, damp_strength, soot_strength (0 turns one off).
    - **Decals**: each entry in \`decals\` is \`{"facade": "south"|"north"|"east"|"west", "u": metres along, "v": metres up, "size": (w, h), "image": file or {"blot": {color, opacity, edge_noise, drips, ...}}, "mode": "paint"|"panel"}\` (south is the +Z entrance side). "paint" (soft marks: stains, water marks, faded paint) is painted into the weathering layer and ages with it; "panel" (signs, posters, plaques, anything with text) is its own quad at full image resolution, with optional "thickness_m".
    - **Provenance**: the call returns a report with each part's surface source, the weathering and every decal; say in the reply that facade details, weathering and procedural decals are generated, never measured.
+6. **SDF FIELDS FOR BLENDED, CARVED AND ORGANIC FORMS**:
+   - Use \`sb.sdf\` fields when parts should flow into each other (fillets, cast or sculpted forms, organic bodies), when material is carved away (bores, grooves, pockets), or for lattices and shells; keep sweeps, lathes and lofts for long thin profiles, which they describe more cheaply.
+   - Build the shape, then mesh it once: shapes \`sb.sdf.sphere(r)\`, \`box((w, h, d))\`, \`round_box((w, h, d), r)\`, \`torus(R, r)\`, \`cylinder(r, h)\` (along +Y), \`capsule(a, b, r)\`, \`ellipsoid((rx, ry, rz))\`, \`plane(normal, offset)\`, \`gyroid(scale, thickness)\`; combine with \`a.union(b, k=)\`, \`a.subtract(b, k=)\`, \`a.intersect(b, k=)\` (or \`|\`, \`-\`, \`&\`); change with \`.translate((x, y, z))\`, \`.rotate(axis, degrees)\`, \`.scale(s)\`, \`.round(r)\`, \`.shell(t)\`, \`.displace(amplitude, frequency)\`, \`.twist(rad_per_m)\`, \`.bend(rad_per_m)\`, \`.repeat((px, py, pz))\`, \`.mirror(normal)\`. Then \`mesh = shape.to_mesh(bounds_min, bounds_max, resolution=160)\` returns a closed mesh to merge or write like any other.
+   - **Blend every boolean with a small k** (a few millimetres to centimetres, at the scale of a real fillet): a hard k=0 crease is mathematically sharp and comes out stair-stepped at any resolution.
+   - **Resolution** is cells along the longest side of the bounds: set the bounds just around the shape and pick the resolution from the smallest feature, at least 3 to 4 cells across it (a 2 m object with 1 cm ribs needs about 600). Meshing is dense (around a million triangles at 260), so for a scene thin it with \`mesh = sb.processing.decimate_qem(mesh, target_ratio=0.3)\`.
 
 Exemplar Patterns (Dense, Multi-Part Geometry):
 
@@ -1015,9 +1020,17 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
         }
     }
 
+    // Images the user attached: shown to the model inline, and named by where they were saved so tools
+    // that take an image path (reference reads, depth, lighting, style) can be given the same image.
+    const images = (request.images || []).filter(img => img && typeof img.data === 'string' && img.data.length > 0);
+    if (images.length > 0) {
+        const lines = images.map((img, i) => `${i + 1}. ${img.name || `image ${i + 1}`}${img.path ? ` (saved at ${img.path})` : ''}`);
+        userPrompt += `\n\n[The user attached ${images.length} image${images.length > 1 ? 's' : ''} to this message, shown below in order:\n${lines.join('\n')}\nUse these paths for tools that take an image path.]`;
+    }
+
     contents.push({
         role: 'user',
-        parts: [{ text: userPrompt }]
+        parts: [{ text: userPrompt }, ...images.map(img => ({ inlineData: { mimeType: img.mimeType, data: img.data } }))]
     });
 
     return contents;

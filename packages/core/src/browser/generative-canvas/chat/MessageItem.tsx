@@ -461,11 +461,16 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                         background: '#090d16',
                         maxWidth: '340px'
                     }}>
-                        <img
-                            src={msg.imageContent || msg.imagesContent?.[0]}
-                            alt="Supplied reference plate"
-                            style={{ width: '100%', maxHeight: '180px', objectFit: 'cover', display: 'block' }}
-                        />
+                        <div style={{ display: 'flex', gap: '2px' }}>
+                            {(msg.imagesContent && msg.imagesContent.length > 0 ? msg.imagesContent : [msg.imageContent!]).map((src, i) => (
+                                <img
+                                    key={i}
+                                    src={src}
+                                    alt={`Supplied reference image ${i + 1}`}
+                                    style={{ flex: 1, minWidth: 0, width: '100%', maxHeight: '180px', objectFit: 'cover', display: 'block' }}
+                                />
+                            ))}
+                        </div>
                         <div style={{
                             padding: '6px 10px',
                             fontSize: '11px',

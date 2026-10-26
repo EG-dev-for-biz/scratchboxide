@@ -13,6 +13,7 @@ import type { ContextMentionCategory, ContextMentionItem } from '../context-ment
 import { ContextMentionAutocompletePopover } from '../ContextMentionAutocompletePopover';
 import { IconClose, IconMic, IconPlus } from '../canvas-icons';
 import type { AttachedDataFile } from '../hooks/useSendMessage';
+import { isImageFile, type ComposerImage } from '../hooks/useImageAttachments';
 import type { WorkspaceGitStatusSnapshot } from '../state/studio-defaults';
 
 export function getComposerPlaceholder(
@@ -54,6 +55,10 @@ export interface ComposerProps {
     setAttachedDataFile: React.Dispatch<React.SetStateAction<AttachedDataFile | undefined>>;
     attachedContextMentions: ContextMentionItem[];
     setAttachedContextMentions: React.Dispatch<React.SetStateAction<ContextMentionItem[]>>;
+    /** Images attached to the next message (drop, paste or the + picker). */
+    attachedImages: ComposerImage[];
+    addImageFiles: (files: File[]) => void;
+    removeAttachedImage: (id: string) => void;
     skills: SkillItem[];
     mcpServers: McpServerItem[];
     selectedSkillIds: string[];
@@ -72,7 +77,6 @@ export interface ComposerProps {
     inputRef: React.RefObject<HTMLTextAreaElement>;
     fileInputRef: React.RefObject<HTMLInputElement>;
     handleFileDrop: (file: File) => void;
-    handleFileInputChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
     handleInputChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
     handleKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
     handleVoiceToggle: () => void;
@@ -88,6 +92,15 @@ export interface ComposerProps {
      * pipeline) also sets `isGenerating` but cannot be stopped, so it keeps the busy send button.
      */
     canStop: boolean;
+}
+
+/** Images go to the image attachments; the first other file to the data-file handler (CSV / JSON). */
+function routeComposerFiles(files: FileList | null | undefined, addImageFiles: (files: File[]) => void, handleFileDrop: (file: File) => void): void {
+    const list = Array.from(files || []);
+    const images = list.filter(isImageFile);
+    if (images.length > 0) addImageFiles(images);
+    const other = list.find(f => !isImageFile(f));
+    if (other) handleFileDrop(other);
 }
 
 /**
@@ -108,6 +121,9 @@ export const Composer: React.FC<ComposerProps> = ({
     setAttachedDataFile,
     attachedContextMentions,
     setAttachedContextMentions,
+    attachedImages,
+    addImageFiles,
+    removeAttachedImage,
     skills,
     mcpServers,
     selectedSkillIds,
@@ -126,7 +142,6 @@ export const Composer: React.FC<ComposerProps> = ({
     inputRef,
     fileInputRef,
     handleFileDrop,
-    handleFileInputChange,
     handleInputChange,
     handleKeyDown,
     handleVoiceToggle,
@@ -151,9 +166,7 @@ export const Composer: React.FC<ComposerProps> = ({
         onDrop={e => {
             e.preventDefault();
             setIsDraggingDataFile(false);
-            if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
-                handleFileDrop(e.dataTransfer.files[0]);
-            }
+            routeComposerFiles(e.dataTransfer?.files, addImageFiles, handleFileDrop);
         }}
     >
         {/* Hidden file picker input */}
@@ -161,22 +174,42 @@ export const Composer: React.FC<ComposerProps> = ({
             ref={fileInputRef}
             type="file"
             style={{ display: 'none' }}
-            accept=".csv,.tsv,.txt,.json"
-            onChange={handleFileInputChange}
+            accept=".csv,.tsv,.txt,.json,image/png,image/jpeg,image/webp,image/gif"
+            multiple
+            onChange={e => {
+                routeComposerFiles(e.target.files, addImageFiles, handleFileDrop);
+                e.target.value = '';
+            }}
         />
 
         {/* Drag & Drop Highlight Overlay */}
         {isDraggingDataFile && (
             <div className="sb-composer-drag-hint-overlay animate-fadeIn">
-                <span className="sb-drag-hint-icon">📊</span>
-                <span className="sb-drag-hint-text">Drop CSV or data file to generate instant KPI Metric Dashboard &amp; Table</span>
+                <span className="sb-drag-hint-icon">🖼️</span>
+                <span className="sb-drag-hint-text">Drop an image to show the agent, or a CSV / data file for a KPI dashboard &amp; table</span>
             </div>
         )}
 
         {/* Active Capabilities & Attached Data File Pills Bar */}
-        {(selectedSkillIds.length > 0 || selectedMcpIds.length > 0 || attachedDataFile !== undefined || attachedContextMentions.length > 0) && (
+        {(selectedSkillIds.length > 0 || selectedMcpIds.length > 0 || attachedDataFile !== undefined || attachedContextMentions.length > 0 || attachedImages.length > 0) && (
             <div className="sb-composer-active-pills-row sb-cursor-attached-context-row">
                 <span className="sb-composer-pills-label">Assisting:</span>
+
+                {/* Attached image pills, each with a thumbnail */}
+                {attachedImages.map(img => (
+                    <span key={img.id} className="sb-composer-pill" title={img.name}>
+                        <img src={img.previewUrl} alt={img.name} style={{ width: 18, height: 18, objectFit: 'cover', borderRadius: 3, marginRight: 4 }} />
+                        <span className="sb-composer-pill-text max-w-[140px] truncate">{img.name}</span>
+                        <button
+                            type="button"
+                            className="sb-composer-pill-remove"
+                            onClick={() => removeAttachedImage(img.id)}
+                            title={`Remove ${img.name}`}
+                        >
+                            <IconClose size={9} strokeWidth={2.5} />
+                        </button>
+                    </span>
+                ))}
 
                 {/* Attached CSV / Data File Pill */}
                 {attachedDataFile && (
@@ -369,6 +402,13 @@ export const Composer: React.FC<ComposerProps> = ({
                     disabled={isGenerating}
                     onChange={handleInputChange}
                     onKeyDown={handleKeyDown}
+                    onPaste={e => {
+                        const images = Array.from(e.clipboardData?.files || []).filter(isImageFile);
+                        if (images.length > 0) {
+                            e.preventDefault();
+                            addImageFiles(images);
+                        }
+                    }}
                     autoFocus
                 />
             </div>
