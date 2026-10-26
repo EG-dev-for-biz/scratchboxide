@@ -24,7 +24,7 @@ import { massingSpecText, type Massing } from '../src/node/3d-engine/staged-loca
 import { runMassing, type MassingFace, type MassingNode, type MassingRun } from '../src/node/3d-engine/staged-location/pipeline-e/native-massing';
 import { writeMassingTexturedGlb } from '../src/node/3d-engine/staged-location/pipeline-e/massing-glb';
 import { plainTextures, MASSING_PARAMS } from '../src/node/3d-engine/staged-location/pipeline-e/pipeline-e';
-import { reliefGeometry, reliefMap, retargetGeometry, runReliefAverage, GENERATED_LABEL, TYPICAL_BAND_DEPTH_M, TYPICAL_REVEAL_DEPTH_M, runReliefStage, K_SIGMA, MIN_BLOCKS, MIN_OPENINGS, MEASURED_AVERAGED_LABEL, type LineFeature, type ReliefOutcome, type ReliefReport, type UnitSide } from '../src/node/3d-engine/staged-location/pipeline-e/relief';
+import { matchingFaces, reframeTexture, reliefGeometry, reliefMap, retargetGeometry, runReliefAverage, GENERATED_LABEL, TYPICAL_BAND_DEPTH_M, TYPICAL_REVEAL_DEPTH_M, runReliefStage, K_SIGMA, MIN_BLOCKS, MIN_OPENINGS, MEASURED_AVERAGED_LABEL, type LineFeature, type ReliefOutcome, type ReliefReport, type UnitSide } from '../src/node/3d-engine/staged-location/pipeline-e/relief';
 import { grammarCells, type FacadeGrammar } from '../src/node/3d-engine/staged-location/facade-grammar';
 import { renderFrameDepth, type FrameCamera } from '../src/node/spatial/StreetViewPoseRegistrar';
 
@@ -392,5 +392,45 @@ describe('pipeline E relief: generated profiles where the averages are too weak'
         for (const fs_ of geo.faceSweeps) rect(fs_.placements[0][0], fs_.placements[0][1], fs_.profile[0][1], fs_.profile[fs_.profile.length - 1][1], [230, 140, 40]);
         for (const o of geo.openings) rect(o.s0, o.s1, o.t0, o.t1, o.provenance === 'generated' ? [60, 60, 70] : [140, 140, 150]);
         shot('generated_band_and_reveal.png', W, H, rgb);
+    });
+
+    it('carries each face\'s texture to the face in the same place, not the face with the same key (found on The Plaza)', () => {
+        // The native tool numbers a solid's faces in output order, so the relief's cuts renumber them: the same key can
+        // name another wall. Matching by key copied a 51 m wall's texture onto a different wall (flat where the frames
+        // did not overlap). Two walls swap keys here, and the east wall's frame also moves along its plane.
+        const wall = (index: number, key: string, origin: [number, number, number], normal: [number, number, number], axisS: [number, number, number], widthM: number): MassingFace => ({
+            index, key, kind: 'wall', part: 'p', loop: 0, edge: index, wall: true, normal, axisS, axisT: [0, 1, 0], origin,
+            sMin: 0, sMax: widthM, tMin: 0, tMax: 10, tBottom: 0, area: widthM * 10, pixel: 0.5,
+            orthoSMin: -0.5, orthoTMax: 10.5, width: Math.ceil(widthM / 0.5) + 2, height: 22, coverage: 1, openings: [], top: []
+        });
+        const solid = (f: MassingFace, rgb: [number, number, number]) => {
+            const t = { width: f.width, height: f.height, rgba: new Uint8Array(f.width * f.height * 4), source: new Uint8Array(f.width * f.height).fill(0) };
+            for (let i = 0; i < f.width * f.height; i++) t.rgba.set([...rgb, 255], i * 4);
+            return t;
+        };
+        // version F: south wall (red) is key :0, east wall (blue) is key :1
+        const southA = wall(0, 'p:0', [0, 0, 0], [0, 0, 1], [1, 0, 0], 20);
+        const eastA = wall(1, 'p:1', [20, 0, 0], [1, 0, 0], [0, 0, -1], 12);
+        // relief run: the keys swap, and the east wall's origin moves 2 m along it (a cut)
+        const eastB = { ...wall(0, 'p:0', [20, 0, -2], [1, 0, 0], [0, 0, -1], 10) };
+        const southB = wall(1, 'p:1', [0, 0, 0], [0, 0, 1], [1, 0, 0], 20);
+        const base = [southA, eastA];
+        const textures = new Map([[0, solid(southA, [200, 30, 30])], [1, solid(eastA, [30, 30, 200])]]);
+
+        expect(matchingFaces(eastB, base).map(f => f.key)).toEqual(['p:1']);
+        expect(matchingFaces(southB, base).map(f => f.key)).toEqual(['p:0']);
+        const colourOf = (b: MassingFace) => {
+            const t = reframeTexture(matchingFaces(b, base).map(face => ({ face, texture: textures.get(face.index)! })), b);
+            const c = b.height / 2 * b.width + Math.floor(b.width / 2);
+            return Array.from(t.rgba.subarray(c * 4, c * 4 + 3));
+        };
+        expect(colourOf(eastB)).toEqual([30, 30, 200]);   // blue, though its key :0 was the red wall's
+        expect(colourOf(southB)).toEqual([200, 30, 30]);
+
+        // a texel no source covers takes the fallback's
+        const lone = wall(0, 'p:9', [0, 0, 50], [0, 0, 1], [1, 0, 0], 4);
+        const fallback = solid(lone, [90, 90, 90]);
+        const t = reframeTexture(matchingFaces(lone, base).map(face => ({ face, texture: textures.get(face.index)! })), lone, fallback);
+        expect(Array.from(t.rgba.subarray(0, 3))).toEqual([90, 90, 90]);
     });
 });
