@@ -23,6 +23,7 @@
 #include "scratchbox_core.hpp"
 #include "scratchbox_sdf.hpp"
 #include "scratchbox_sdf_field.hpp"
+#include "scratchbox_mesh_ops.hpp"
 #include "scratchbox_hair.hpp"
 #include "scratchbox_spz.hpp"
 #include "scratchbox_parametric_human.hpp"
@@ -1620,6 +1621,38 @@ NB_MODULE(scratchbox_native, m) {
     // ========================================================================
     // 10. HAIR & SPLATS SUBMODULE (Analytical Forward Grooming & Gaussians)
     // ========================================================================
+    auto m_ops = m.def_submodule("meshops", "Hard-surface mesh operations: booleans, bevel, inset/extrude, solidify (closed in, closed out)");
+    {
+        using V3 = std::array<float, 3>;
+        auto v3 = [](const V3& a) { return Vec3(a[0], a[1], a[2]); };
+        m_ops.def("union", [](const ScratchboxMesh& a, const ScratchboxMesh& b, float smooth, const std::string& name, bool requireClosed) {
+            return meshops::booleanOp(a, b, meshops::BooleanKind::Union, smooth, name, requireClosed);
+        }, "a"_a, "b"_a, "smooth_angle_deg"_a = 30.0f, "name"_a = "Union", "require_closed"_a = true, "Exact union of two closed meshes; result is closed and keeps a's material");
+        m_ops.def("subtract", [](const ScratchboxMesh& a, const ScratchboxMesh& b, float smooth, const std::string& name, bool requireClosed) {
+            return meshops::booleanOp(a, b, meshops::BooleanKind::Subtract, smooth, name, requireClosed);
+        }, "a"_a, "b"_a, "smooth_angle_deg"_a = 30.0f, "name"_a = "Subtract", "require_closed"_a = true, "Exact a minus b (cut openings, bores, recesses); result is closed");
+        m_ops.def("intersect", [](const ScratchboxMesh& a, const ScratchboxMesh& b, float smooth, const std::string& name, bool requireClosed) {
+            return meshops::booleanOp(a, b, meshops::BooleanKind::Intersect, smooth, name, requireClosed);
+        }, "a"_a, "b"_a, "smooth_angle_deg"_a = 30.0f, "name"_a = "Intersect", "require_closed"_a = true, "Exact overlap of two closed meshes; result is closed");
+        m_ops.def("bevel", [](const ScratchboxMesh& mesh, float width, int segments, float sharp, float smooth, const std::string& name) {
+            return meshops::bevel(mesh, width, std::max(1, segments), sharp, smooth, name);
+        }, "mesh"_a, "width"_a, "segments"_a = 1, "sharp_angle_deg"_a = 30.0f, "smooth_angle_deg"_a = 30.0f, "name"_a = "Beveled",
+           "Bevel edges sharper than sharp_angle_deg on a closed mesh: segments 1 = chamfer, more = rounded. "
+           "Width is capped per vertex at 45% of its shortest edge so faces never invert");
+        m_ops.def("inset_extrude", [v3](const ScratchboxMesh& mesh, const V3& facing, float maxAngle, float inset, float depth,
+                                       std::optional<V3> boxMin, std::optional<V3> boxMax, float smooth, const std::string& name) {
+            bool useBox = boxMin.has_value() && boxMax.has_value();
+            return meshops::insetExtrude(mesh, v3(facing), maxAngle, inset, depth,
+                                         useBox ? v3(*boxMin) : Vec3(0, 0, 0), useBox ? v3(*boxMax) : Vec3(0, 0, 0), useBox, smooth, name);
+        }, "mesh"_a, "facing"_a, "max_angle_deg"_a = 10.0f, "inset"_a = 0.0f, "depth"_a = 0.0f, "box_min"_a = nb::none(), "box_max"_a = nb::none(),
+           "smooth_angle_deg"_a = 30.0f, "name"_a = "InsetExtruded",
+           "Faces within max_angle_deg of `facing` (and with centroids inside box_min..box_max when given) form regions; "
+           "each region's border is inset by `inset` within its plane and the region moved by `depth` along its normal "
+           "(negative depth recesses it: panels, pockets, plinths, raised bosses)");
+        m_ops.def("solidify", &meshops::solidify, "mesh"_a, "thickness"_a, "smooth_angle_deg"_a = 30.0f, "name"_a = "Solidified",
+           "Give a surface thickness: an inner copy offset by `thickness` against its normals, joined along open edges");
+    }
+
     auto m_hair = m.def_submodule("hair", "Analytical forward hair grooming, Marschner reflectance, and Gaussian splat synthesis");
 
     nb::class_<spz::GaussianSplat>(m_hair, "GaussianSplat")

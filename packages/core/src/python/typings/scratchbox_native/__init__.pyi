@@ -7,7 +7,7 @@ import scratchbox_native.geometry
 import scratchbox_native.math
 import typing
 
-__all__ = ['RomanOrder', 'architecture', 'composer', 'core', 'export_glb_bytes', 'geometry', 'hair', 'human', 'io', 'math', 'nature', 'plant', 'processing', 'render_sensor_passes', 'rig', 'sdf', 'shaper', 'surface', 'topology', 'weathering']
+__all__ = ['RomanOrder', 'architecture', 'composer', 'core', 'export_glb_bytes', 'geometry', 'hair', 'human', 'io', 'math', 'meshops', 'nature', 'plant', 'processing', 'render_sensor_passes', 'rig', 'sdf', 'shaper', 'surface', 'topology', 'weathering']
 
 
 class RomanOrder(enum.Enum):
@@ -35,6 +35,7 @@ import scratchbox_native.hair as hair
 import scratchbox_native.human as human
 import scratchbox_native.io as io
 import scratchbox_native.math as math
+import scratchbox_native.meshops as meshops
 import scratchbox_native.nature as nature
 import scratchbox_native.plant as plant
 import scratchbox_native.processing as processing

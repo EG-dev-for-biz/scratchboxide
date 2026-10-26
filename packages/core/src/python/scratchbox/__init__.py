@@ -63,6 +63,7 @@ plant = getattr(_native, "plant", None) if _native else None
 processing = getattr(_native, "processing", None) if _native else None
 topology = getattr(_native, "topology", None) if _native else None
 sdf = getattr(_native, "sdf", None) if _native else None
+meshops = getattr(_native, "meshops", None) if _native else None
 hair = getattr(_native, "hair", None) if _native else None
 rig = getattr(_native, "rig", None) if _native else None
 
