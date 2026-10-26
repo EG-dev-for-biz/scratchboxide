@@ -55,8 +55,9 @@ overlap = sum(1 for g in glass for a, b in zip(shafts[::2], shafts[1::2]) if a <
 print("glass", glass); print("shafts", shafts); print("overlap", overlap)
 `);
         expect(out).toContain('glass [-9.65, -6.35, -5.65, -2.35, -1.65, 1.65, 2.35, 5.65, 6.35, 9.65]');
-        // Pier between 3.3 m windows in 4 m bays is 0.7 m; the shaft takes 90% of it, centred on the bay line.
-        expect(out).toContain('shafts [-10.315, -9.685, -6.315, -5.685, -2.315, -1.685, 1.685, 2.315, 5.685, 6.315, 9.685, 10.315]');
+        // Pier between 3.3 m windows in 4 m bays is 0.7 m; the shaft takes 90% of it, centred on the bay line
+        // (the corner pilasters turn the corner by their 0.2 m projection instead of overhanging it).
+        expect(out).toContain('shafts [-10.2, -9.685, -6.315, -5.685, -2.315, -1.685, 1.685, 2.315, 5.685, 6.315, 9.685, 10.2]');
         expect(out).toContain('overlap 0');
     }, 600000);
 

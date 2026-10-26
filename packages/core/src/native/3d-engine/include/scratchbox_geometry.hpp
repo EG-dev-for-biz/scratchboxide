@@ -57,6 +57,7 @@ struct PbrMaterial {
     bool doubleSided{false};
     std::string alphaMode{"OPAQUE"};
     float alphaCutoff{0.5f};
+    std::string extrasJson;   // written as the material's glTF "extras" (a JSON object, e.g. provenance)
 
     static PbrMaterial titanium() {
         PbrMaterial m;

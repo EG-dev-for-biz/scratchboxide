@@ -338,6 +338,7 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("transmission", &PbrMaterial::transmissionFactor)
         .def_rw("thickness", &PbrMaterial::thicknessFactor)
         .def_rw("double_sided", &PbrMaterial::doubleSided)
+        .def_rw("extras_json", &PbrMaterial::extrasJson)
         .def_rw("ior", &PbrMaterial::ior)
         .def("set_base_color", [](PbrMaterial& self, const Vec4& c) { self.baseColorFactor = c; }, "color"_a)
         .def("set_color", [](PbrMaterial& self, const Vec4& c) { self.baseColorFactor = c; }, "color"_a)
@@ -1122,6 +1123,18 @@ NB_MODULE(scratchbox_native, m) {
             t.scaleV = scaleV;
             t.materialIndex = -1;
             embedded.push_back(std::move(t));
+        }
+        std::vector<const ScratchboxMesh*> ptrs;
+        for (const auto& mm : meshes) ptrs.push_back(&mm);
+        requireGeometry(ptrs, "write_glb_textured");
+        auto lower = [](std::string s) { for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return s; };
+        for (const auto& t : embedded) {
+            bool matched = false;
+            for (const auto& mm : meshes) {
+                if (lower(mm.name).find(lower(t.targetMaterialName)) != std::string::npos ||
+                    lower(mm.material.name).find(lower(t.targetMaterialName)) != std::string::npos) { matched = true; break; }
+            }
+            if (!matched) throw std::invalid_argument("write_glb_textured: texture target '" + t.targetMaterialName + "' matches no mesh or material name");
         }
         auto glb = GlbWriter::serializeMultiMeshToGlb(meshes, embedded);
         std::ofstream out(path, std::ios::binary);

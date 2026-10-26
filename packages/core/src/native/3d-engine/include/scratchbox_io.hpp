@@ -880,6 +880,7 @@ public:
                 for (size_t i = 0; i < matExt.size(); ++i) ms << (i ? "," : "") << matExt[i];
                 ms << "}";
             }
+            if (!mat.extrasJson.empty()) ms << ",\"extras\":" << mat.extrasJson;
             ms << "}";
             const std::string json = ms.str();
             auto found = std::find(uniqueMaterialJson.begin(), uniqueMaterialJson.end(), json);

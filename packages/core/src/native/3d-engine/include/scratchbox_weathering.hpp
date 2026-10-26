@@ -387,6 +387,10 @@ inline WeatheringResult bakeWeathering(const std::vector<ScratchboxMesh>& receiv
         shelfH = std::max(shelfH, ch.h + 2 * pad);
     }
     const int atlasH = penY + shelfH;
+    if (static_cast<double>(atlasW) * atlasH > 64.0 * 1024 * 1024) {
+        throw std::runtime_error("weathering atlas would be " + std::to_string(atlasW) + " x " + std::to_string(atlasH) +
+            " texels; raise texel_m or weather fewer receivers");
+    }
     result.chartCount = static_cast<int>(charts.size());
 
     // 3. Rasterise: each texel takes the frontmost surface along its chart's axis.
@@ -447,12 +451,15 @@ inline WeatheringResult bakeWeathering(const std::vector<ScratchboxMesh>& receiv
                     Vec3 dir = (tan * (r * std::cos(phi)) + bit * (r * std::sin(phi)) + n * std::sqrt(1.0f - u1)).normalized();
                     bvh::RayHit hit;
                     bool blocked = tree.raycast(Ray(p, dir), hit) && hit.t < prm.skyDistanceM;
-                    float rainW = std::max(0.0f, dir.y) + 0.15f;
+                    // Only rays that rise carry rain: an underside sees no sky at all. Cavity hits are
+                    // the short side and downward ones; a ledge overhead is the streak and shelter terms'
+                    // business, so it is not counted a third time here.
+                    float rainW = std::max(0.0f, dir.y);
                     rainTotal += rainW;
                     if (!blocked) rainOpen += rainW;
-                    if (blocked && hit.t < prm.cavityRadiusM) close += 1.0f;
+                    if (blocked && hit.t < prm.cavityRadiusM && dir.y < 0.5f) close += 1.0f;
                 }
-                float exposure = rainTotal > 0 ? rainOpen / rainTotal : 0.0f;
+                float exposure = rainTotal > 1e-6f ? rainOpen / rainTotal : 0.0f;
                 float cavity = close / samples;
 
                 float patch = 1.0f + prm.variation * noise3(texPos[i], 2.5f, prm.seed + 11);
@@ -476,12 +483,20 @@ inline WeatheringResult bakeWeathering(const std::vector<ScratchboxMesh>& receiv
                     };
                     float drop = overhead(p);
                     if (drop > 0) {
+                        // How far the ledge reaches out from the wall sets how much run-off it sheds: a
+                        // 16 cm band gives a third of what a deep balcony slab does.
+                        float reach = 0.0f;
+                        for (float off : {0.15f, 0.35f, 0.7f}) {
+                            float t = overhead(p + n * off);   // the same ledge, not the eave far above it
+                            if (t > 0 && std::abs(t - drop) < 0.35f) reach += 1.0f / 3.0f;
+                        }
                         float side = std::max(0.05f, prm.streakColumnM * 2.5f);
                         bool endL = overhead(p - tan * side) < 0, endR = overhead(p + tan * side) < 0;
                         float lateral = texPos[i].dot(tan);
                         float columns = 0.5f + 0.5f * noise3(Vec3(lateral, texPos[i].y * 0.08f, 0), prm.streakColumnM, prm.seed + 5);
                         float fade = std::exp(-drop / std::max(0.05f, prm.streakReachM * 0.45f));
-                        float amount = prm.streakStrength * fade * (0.35f + 0.65f * columns) * (1.0f + prm.streakEndBoost * ((endL || endR) ? 1.0f : 0.0f));
+                        float amount = prm.streakStrength * fade * (0.35f + 0.65f * columns) * (0.35f + 0.65f * reach) *
+                                       (1.0f + prm.streakEndBoost * ((endL || endR) ? 1.0f : 0.0f));
                         o.layer(prm.streakColor, amount * patch);
                     }
                 }
@@ -491,6 +506,9 @@ inline WeatheringResult bakeWeathering(const std::vector<ScratchboxMesh>& receiv
                     Vec3 d = srcPt - texPos[i];
                     float dist = d.length();
                     float facing = 0.75f + 0.25f * std::max(0.0f, n.dot(d * (1.0f / std::max(1e-4f, dist))));
+                    // Soot drifts around corners but mostly settles where the source is in view.
+                    bvh::RayHit toSrc;
+                    if (dist > 1e-3f && tree.raycast(Ray(p, d * (1.0f / dist)), toSrc) && toSrc.t < dist - 0.05f) facing *= 0.3f;
                     o.layer(prm.sootColor, prm.sootStrength * std::exp(-dist / std::max(0.1f, prm.sootRadiusM)) * facing);
                 }
 

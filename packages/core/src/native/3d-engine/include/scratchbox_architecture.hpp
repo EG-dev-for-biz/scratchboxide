@@ -732,6 +732,11 @@ public:
             codedSlots[i]->baseColorFactor = Vec4(slots[i].code.x, slots[i].code.y, slots[i].code.z, 1.0f);
         }
         ScratchboxMesh codedMesh = generateBuilding(coded, name);
+        // On a curved plan a per-facet planar u breaks at every facet; u then runs around the building
+        // (angle times radius about the plan centre), continuous everywhere but one seam.
+        const bool curvedPlan = config.curvature > 0.001f || std::abs(config.twistDegrees) > 0.001f ||
+            std::abs(config.taper - 1.0f) > 0.001f || std::abs(config.bulge) > 0.001f || config.superellipseExponent < 8.0f ||
+            config.roofType == RoofType::Dome || config.roofType == RoofType::BarrelVault;
 
         std::vector<ScratchboxMesh> parts;
         for (int i = 0; i < slotCount; ++i) {
@@ -770,10 +775,15 @@ public:
             uint32_t base = static_cast<uint32_t>(part.vertices.size());
             for (const Vertex* v : tri) {
                 Vec3 col(v->color.x, v->color.y, v->color.z);
-                float shade = std::clamp(col.dot(slots[best].code), 0.0f, 1.0f);
+                // The generator's brightening (sill tops, ridge caps at 1.05 / 1.15) survives the split.
+                float shade = std::clamp(col.dot(slots[best].code), 0.0f, 2.0f);
                 Vertex out = *v;
                 out.color = Vec4(shade, shade, shade, 1.0f);
-                out.uv = Vec2(v->position.dot(tangent), -v->position.dot(bitangent));
+                float u = v->position.dot(tangent);
+                if (curvedPlan && std::abs(faceN.y) < 0.9f) {
+                    u = std::atan2(v->position.x, v->position.z) * std::hypot(v->position.x, v->position.z);
+                }
+                out.uv = Vec2(u, -v->position.dot(bitangent));
                 out.tangent = Vec4(tangent.x, tangent.y, tangent.z, 1.0f);
                 part.addVertex(out);
             }
@@ -1139,24 +1149,14 @@ private:
         }
 
         if (!closed) {
-            float midY = 0.0f;
-            for (const Vec2& q : profile) midY += q.y;
-            midY /= static_cast<float>(profile.size());
-            size_t hub = 0;
-            float best = 1e30f;
-            for (size_t k = 0; k < profile.size(); ++k) {
-                float d = profile[k].x * profile[k].x + (profile[k].y - midY) * (profile[k].y - midY);
-                if (d < best) { best = d; hub = k; }
-            }
+            // End caps: the profile polygon triangulated by ear clipping, so a concave (multi-tier)
+            // section is covered exactly, with no fan triangle outside it and no degenerate triangle.
+            const auto ears = triangulatePolygon(profile);
             const size_t ends[2] = { 0, n - 1 };
             for (int e = 0; e < 2; ++e) {
                 const auto& ring = rings[ends[e]];
                 Vec3 nrm = e == 0 ? -tangents.front() : tangents.back();
-                for (size_t k = 0; k < profile.size(); ++k) {
-                    size_t k1 = (k + 1) % profile.size();
-                    if (k == hub || k1 == hub) continue;
-                    addQuad(mesh, ring[hub], ring[k], ring[k1], ring[k1], nrm, color);
-                }
+                for (const auto& t : ears) addTri(mesh, ring[t[0]], ring[t[1]], ring[t[2]], nrm, color);
             }
         }
     }
@@ -1165,12 +1165,15 @@ private:
     template <typename RadiusFn>
     static void addLathe(ScratchboxMesh& mesh, const Vec3& base, float height, RadiusFn radius,
                          int rings, int facets, const Vec4& color) {
+        // One direction per facet, reused for facet f + 1, so the seam closes bit for bit.
+        std::vector<Vec3> dirs(facets);
+        for (int f = 0; f < facets; ++f) dirs[f] = Vec3(std::cos(TWO_PI * f / facets), 0, std::sin(TWO_PI * f / facets));
         for (int r = 0; r < rings; ++r) {
             float t0 = static_cast<float>(r) / rings, t1 = static_cast<float>(r + 1) / rings;
             float r0 = radius(t0), r1 = radius(t1);
             for (int f = 0; f < facets; ++f) {
-                float a0 = TWO_PI * f / facets, a1 = TWO_PI * (f + 1) / facets;
-                Vec3 d0(std::cos(a0), 0, std::sin(a0)), d1(std::cos(a1), 0, std::sin(a1));
+                const Vec3& d0 = dirs[f];
+                const Vec3& d1 = dirs[(f + 1) % facets];
                 Vec3 p00 = base + d0 * r0 + Vec3(0, t0 * height, 0), p10 = base + d1 * r0 + Vec3(0, t0 * height, 0);
                 Vec3 p11 = base + d1 * r1 + Vec3(0, t1 * height, 0), p01 = base + d0 * r1 + Vec3(0, t1 * height, 0);
                 Vec3 mid = (d0 + d1).normalized();
@@ -1178,13 +1181,67 @@ private:
                 addQuad(mesh, p00, p10, p11, p01, nrm, color);
             }
         }
-        float rTop = radius(1.0f);
+        float rTop = radius(1.0f), rBottom = radius(0.0f);
         Vec3 top = base + Vec3(0, height, 0);
         for (int f = 0; f < facets; ++f) {
-            float a0 = TWO_PI * f / facets, a1 = TWO_PI * (f + 1) / facets;
-            addQuad(mesh, top, top + Vec3(std::cos(a0), 0, std::sin(a0)) * rTop,
-                    top + Vec3(std::cos(a1), 0, std::sin(a1)) * rTop, top, Vec3(0, 1, 0), color);
+            const Vec3& d0 = dirs[f];
+            const Vec3& d1 = dirs[(f + 1) % facets];
+            addTri(mesh, top, top + d0 * rTop, top + d1 * rTop, Vec3(0, 1, 0), color);
+            addTri(mesh, base, base + d1 * rBottom, base + d0 * rBottom, Vec3(0, -1, 0), color);
         }
+    }
+
+    /** One triangle wound towards the stated normal. */
+    static void addTri(ScratchboxMesh& mesh, const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& normal, const Vec4& color) {
+        if ((b - a).cross(c - a).length() < 1e-14f) return;
+        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+        Vec4 tangent(1, 0, 0, 1);
+        if (std::abs(normal.x) > 0.8f) tangent = Vec4(0, 0, 1, 1);
+        mesh.addVertex(Vertex(a, normal, Vec2(0, 0), color, tangent));
+        mesh.addVertex(Vertex(b, normal, Vec2(1, 0), color, tangent));
+        mesh.addVertex(Vertex(c, normal, Vec2(1, 1), color, tangent));
+        if ((b - a).cross(c - a).dot(normal) >= 0.0f) mesh.addTriangle(base, base + 1, base + 2);
+        else mesh.addTriangle(base, base + 2, base + 1);
+    }
+
+    /** Ear-clipping triangulation of a simple polygon (either orientation): index triples into `poly`. */
+    static std::vector<std::array<size_t, 3>> triangulatePolygon(const std::vector<Vec2>& poly) {
+        std::vector<std::array<size_t, 3>> out;
+        std::vector<size_t> idx(poly.size());
+        for (size_t i = 0; i < idx.size(); ++i) idx[i] = i;
+        float area2 = 0.0f;
+        for (size_t k = 0; k < poly.size(); ++k) {
+            const Vec2& a = poly[k]; const Vec2& b = poly[(k + 1) % poly.size()];
+            area2 += a.x * b.y - b.x * a.y;
+        }
+        const float sgn = area2 >= 0.0f ? 1.0f : -1.0f;
+        auto cross2 = [](const Vec2& a, const Vec2& b, const Vec2& c) { return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x); };
+        auto inside = [&](const Vec2& p, const Vec2& a, const Vec2& b, const Vec2& c) {
+            return cross2(a, b, p) * sgn >= -1e-9f && cross2(b, c, p) * sgn >= -1e-9f && cross2(c, a, p) * sgn >= -1e-9f;
+        };
+        while (idx.size() > 3) {
+            bool clipped = false;
+            for (size_t i = 0; i < idx.size() && !clipped; ++i) {
+                size_t ia = idx[(i + idx.size() - 1) % idx.size()], ib = idx[i], ic = idx[(i + 1) % idx.size()];
+                if (cross2(poly[ia], poly[ib], poly[ic]) * sgn <= 1e-12f) continue;   // reflex or flat corner
+                bool empty = true;
+                for (size_t j : idx) {
+                    if (j == ia || j == ib || j == ic) continue;
+                    if (inside(poly[j], poly[ia], poly[ib], poly[ic])) { empty = false; break; }
+                }
+                if (!empty) continue;
+                out.push_back({ia, ib, ic});
+                idx.erase(idx.begin() + static_cast<long>(i));
+                clipped = true;
+            }
+            if (!clipped) {   // no ear (degenerate input): drop a vertex rather than loop forever
+                size_t ia = idx[idx.size() - 1], ib = idx[0], ic = idx[1];
+                if (std::abs(cross2(poly[ia], poly[ib], poly[ic])) > 1e-12f) out.push_back({ia, ib, ic});
+                idx.erase(idx.begin());
+            }
+        }
+        if (idx.size() == 3 && std::abs(cross2(poly[idx[0]], poly[idx[1]], poly[idx[2]])) > 1e-12f) out.push_back({idx[0], idx[1], idx[2]});
+        return out;
     }
 
     struct FacadeSideFrame { Vec3 start; Vec3 rightDir; Vec3 normal; float length; bool hasEntrance; };
@@ -1252,7 +1309,7 @@ private:
                        Vec3(std::max(a.x, bb.x), c0.y, std::max(a.z, bb.z)), trim);
                 Vec3 corners[4] = { c0 - r * (half - 0.06f), c0 - r * (half - 0.06f) + n * (d.balconyDepthM - 0.06f),
                                     c0 + r * (half - 0.06f) + n * (d.balconyDepthM - 0.06f), c0 + r * (half - 0.06f) };
-                float railBottom = 0.05f, railTop = d.balconyRailHeightM - 0.06f;
+                float railBottom = 0.0f, railTop = d.balconyRailHeightM - 0.06f;   // balusters stand on the slab
                 for (int e = 0; e < 3; ++e) {
                     float len = (corners[e + 1] - corners[e]).length();
                     int count = std::max(1, static_cast<int>(std::lround(len / std::max(0.05f, d.balusterPitchM))));
@@ -1348,10 +1405,17 @@ private:
                 for (int b = 0; b <= bayCount; b += std::max(1, d.pilasterBayStride)) {
                     if (d.quoinCourseM > 0.0f && (b == 0 || b == bayCount)) continue;
                     Vec3 foot = Vec3(side.start.x, 0, side.start.z) + side.rightDir * edges[b];
+                    // A corner pilaster never hangs past the corner over nothing: on the long sides it
+                    // turns the corner by its own projection (a solid corner block), on the short sides it
+                    // stops at the wall plane and meets that block.
+                    const bool atStart = b == 0, atEnd = b == bayCount, longSide = sideIdx < 2;
                     auto block = [&](float y0, float y1, float halfW, float proj) {
+                        float lo = -halfW, hi = halfW;
+                        if (atStart) lo = longSide ? -proj : 0.02f;
+                        if (atEnd) hi = longSide ? proj : -0.02f;
                         std::vector<Vec3> path = { foot + Vec3(0, y0, 0), foot + Vec3(0, y1, 0) };
                         sweepProfileMitred(mesh, path, { side.normal }, { side.rightDir },
-                                           { Vec2(-0.02f, -halfW), Vec2(proj, -halfW), Vec2(proj, halfW), Vec2(-0.02f, halfW) }, false, trim);
+                                           { Vec2(-0.02f, lo), Vec2(proj, lo), Vec2(proj, hi), Vec2(-0.02f, hi) }, false, trim);
                     };
                     float cap = d.pilasterCapitalM;
                     block(cfg.plinthHeight, yTop, w * 0.5f, d.pilasterProjectionM);
@@ -1360,16 +1424,21 @@ private:
                 }
             }
 
-            // Dormers above the eave on every Nth bay.
+            // Dormers above the eave on every Nth bay: only where a roof slope rises behind the eave
+            // (a flat, dome or vault roof has no slope to sit in; a gable's end walls have none either).
             if (d.dormerWidthM > 0.0f) {
-                for (int b = 0; b < bayCount; b += std::max(1, d.dormerBayStride)) {
+                const bool pitched = cfg.roofType == RoofType::Gable || cfg.roofType == RoofType::Hip || cfg.roofType == RoofType::Mansard;
+                if (!pitched) throw std::invalid_argument("dormers need a pitched roof (gable, hip or mansard); this roof has no slope for them to sit in");
+                const bool slopeHere = cfg.roofType != RoofType::Gable || sideIdx < 2;
+                for (int b = 0; slopeHere && b < bayCount; b += std::max(1, d.dormerBayStride)) {
                     Vec3 n = side.normal, r = side.rightDir;
                     Vec3 face = Vec3(side.start.x, totalH, side.start.z) + r * ((edges[b] + edges[b + 1]) * 0.5f) + n * (cfg.roofOverhang - d.dormerSetbackM);
                     float hw = d.dormerWidthM * 0.5f, h = d.dormerHeightM, depth = d.dormerDepthM;
                     float ridge = std::tan(d.dormerRoofPitchDeg * DEG_TO_RAD) * hw;
                     Vec3 fl = face - r * hw, fr = face + r * hw;
                     Vec3 bl = fl - n * depth, br = fr - n * depth;
-                    // Front wall and gable, cheeks, pitched roof.
+                    // Floor, front wall and gable, cheeks, pitched roof.
+                    addQuad(mesh, bl, br, fr, fl, -up, wall);
                     addQuad(mesh, fl, fr, fr + up * h, fl + up * h, n, wall);
                     addQuad(mesh, fl + up * h, fr + up * h, face + up * (h + ridge), face + up * (h + ridge), n, wall);
                     addQuad(mesh, bl, fl, fl + up * h, bl + up * h, -r, roof);
@@ -1446,9 +1515,12 @@ private:
             addQuad(mesh, p0, p1, p2, p3, Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 0.8f);
 
             // Exterior projecting belt course / stringcourse moulding wrapping the perimeter
+            // A profile replaces the box belt only on the floor lines it is swept on (generateFacadeDetails
+            // sweeps the listed string_course_floors, or every line when none are listed).
+            const auto& scf = cfg.details.stringCourseFloors;
             bool profiledBand = floor == cfg.floorCount
                 ? cfg.details.corniceProfile.size() >= 3
-                : cfg.details.stringCourseProfile.size() >= 3;
+                : cfg.details.stringCourseProfile.size() >= 3 && (scf.empty() || std::find(scf.begin(), scf.end(), floor) != scf.end());
             if (floor > 0 && !profiledBand) {
                 bool isRoofCornice = (floor == cfg.floorCount);
                 float beltProj = isRoofCornice ? 0.32f : 0.16f;

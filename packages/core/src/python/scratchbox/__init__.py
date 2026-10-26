@@ -6,6 +6,7 @@ Autonomous, headless, real-time procedural creation with cinematic DCC fidelity.
 
 import sys
 import os
+import json as _json
 import math as _py_math
 import random as _random
 from typing import Any, Dict, Tuple, Optional, Union, List
@@ -1313,6 +1314,27 @@ def create_building_parts(
     return parts
 
 
+_PROVENANCE_LABELS = ("measured", "vector-modelled", "photo-inferred", "generated")
+
+
+def _confidence(value, where) -> float:
+    try:
+        c = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{where}: confidence must be a number in 0..1, got {value!r}") from None
+    if not 0.0 <= c <= 1.0:
+        raise ValueError(f"{where}: confidence must be in 0..1, got {c}")
+    return c
+
+
+def _with_provenance(material, provenance: str, confidence: float, source: str):
+    """The material with its provenance label, confidence and source description in its glTF extras."""
+    if provenance not in _PROVENANCE_LABELS:
+        raise ValueError(f"provenance must be one of {_PROVENANCE_LABELS}, got {provenance!r}")
+    material.extras_json = _json.dumps({"scratchbox": {"provenance": provenance, "confidence": confidence, "source": str(source)}})
+    return material
+
+
 def _decal_image(spec_image) -> Tuple[bytes, str, str]:
     """(image bytes, mime type, source label) for a decal's "image": a file path or {"blot": {...}}."""
     if isinstance(spec_image, dict) and "blot" in spec_image:
@@ -1381,11 +1403,16 @@ def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]]
     """
     surfaces = surfaces or {}
     textures, report = [], {}
+    slots = [p.name.rsplit("_", 1)[-1] for p in parts]
+    unknown = sorted(set(surfaces) - set(slots))
+    if unknown:
+        raise ValueError(f"Unknown surface slot(s) {unknown} (have {sorted(set(slots))})")
     for part in parts:
         slot = part.name.rsplit("_", 1)[-1]
         spec = surfaces.get(slot)
         if not spec:
-            report[slot] = {"source": "flat material"}
+            part.material = _with_provenance(part.material, "generated", 1.0, "procedural building")
+            report[slot] = {"source": "flat material", "provenance": "generated", "confidence": 1.0}
             continue
         mat = part.material
         if "coursed" in spec:
@@ -1426,10 +1453,14 @@ def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]]
             mat.roughness = float(spec["roughness"])
         if "metallic" in spec:
             mat.metallic = float(spec["metallic"])
-        part.material = mat
+        # Provenance is one of the four honest labels with a confidence, written into the GLB; a free
+        # "source" string describes where the maps came from but never upgrades the label.
+        provenance = spec.get("provenance", "generated")
+        confidence = _confidence(spec.get("confidence", 1.0 if "coursed" in spec else 0.5), slot)
+        part.material = _with_provenance(mat, provenance, confidence, source)
         for usage, (data, mime) in maps.items():
             textures.append((part.name, usage, data, mime, 1.0 / tile[0], 1.0 / tile[1]))
-        report[slot] = {"source": source, "tile_m": tile}
+        report[slot] = {"source": source, "tile_m": tile, "provenance": provenance, "confidence": confidence}
 
     meshes = list(parts)
     base_name = meshes[0].name.rsplit("_", 1)[0] if meshes else "Building"
@@ -1449,6 +1480,8 @@ def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]]
             panel = _native.weathering.make_decal_panel(
                 _native.math.Vec3(*center), _native.math.Vec3(*normal), _native.math.Vec3(*up), width, height,
                 float(spec.get("thickness_m", 0.0)), float(spec.get("standoff_m", 0.004)), f"{base_name}_decal[{i:03d}]")
+            panel.material = _with_provenance(panel.material, spec.get("provenance", "generated"),
+                                              _confidence(spec.get("confidence", 0.5), f"decal {i}"), source)
             meshes.append(panel)
             textures.append((panel.name, "base_color", data, mime, 1.0, 1.0))
         else:
@@ -1479,6 +1512,7 @@ def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]]
         baked = _native.weathering.bake_weathering(receivers, list(parts), params, f"{base_name}_weathering", painted)
         overlay = baked["overlay"]
         if len(overlay.vertices):
+            overlay.material = _with_provenance(overlay.material, "generated", 1.0, "geometry-driven weathering bake")
             meshes.append(overlay)
             textures.append((overlay.name, "base_color", baked["atlas_png"], "image/png", 1.0, 1.0))
         report["weathering"] = {"source": "generated (geometry-driven bake)", "receivers": sorted(wanted),
