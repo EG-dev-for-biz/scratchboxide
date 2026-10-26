@@ -20,6 +20,7 @@ import { formatSbApiErrors, sbTypeCheckMetadata, typeCheckSbScript } from '../..
 import { SB_API_CORE_SUMMARY, SB_API_VERSION } from '../../3d-engine/sb-api.generated';
 import { firstPassRenderMode } from '../scene3d-first-pass-baseline';
 import { measureSiteMassing, type SiteMassing } from '../../3d-engine/site-massing';
+import { readSiteFacade, type SiteFacade } from '../../3d-engine/site-facade';
 import * as os from 'os';
 
 export interface GlbAabbBounds {
@@ -210,6 +211,10 @@ export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'STRING',
                     description: 'Optional: a real building (name, address or "lat, lng") whose measured massing the script should be sized from. Its footprint, setback tiers and heights (Google vector data; a modeled volume is sliced at its flat levels) are measured before the script runs and read in it with sb.site(); sb.site_tiers() turns them into create_building_parts arguments. Sizing only: the scene still opens in the studio, not at the place.'
                 },
+                siteFacade: {
+                    type: 'BOOLEAN',
+                    description: 'Optional, with site: also read the building\'s facade (storey heights, bay width, window sizes, plinth, cornice, piers, colours) so sb.site_tiers() applies it. Lower floors are read from Google Street View (photo-inferred); floors above what the street sees from AI-Beautified renders of the 3D tiles, cross-checked against the raw render (generated). Takes a few minutes the first time (tile download, image and vision calls).'
+                },
                 renderMode: {
                     type: 'STRING',
                     enum: ['pbr', 'clay'],
@@ -300,6 +305,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
         // 2b. A site to size the building on: measured before the script runs, handed over as a JSON file. A site that
         // cannot be measured fails the call with the reason (no invented massing).
         let site: SiteMassing | undefined;
+        let facade: SiteFacade | undefined;
         const siteEnv: Record<string, string> = {};
         if (typeof args.site === 'string' && args.site.trim()) {
             try {
@@ -307,8 +313,16 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
             } catch (err) {
                 return failedOutcome(err, `Could not measure the site "${args.site.trim()}"; the script did not run`);
             }
+            if (args.siteFacade === true) {
+                try {
+                    facade = await readSiteFacade(site, { workspaceRoot: _ctx?.workspaceRoot ?? process.cwd(), ...(_ctx?.signal ? { signal: _ctx.signal } : {}), ...(_ctx?.reportProgress ? { progress: _ctx.reportProgress } : {}) });
+                } catch (err) {
+                    // the massing still sizes the building; the facade stays on the script's own values, said in the notes
+                    site.notes.push(`facade not read: ${err instanceof Error ? err.message : String(err)}`);
+                }
+            }
             const siteFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-site-json-')), 'site.json');
-            fs.writeFileSync(siteFile, JSON.stringify(site));
+            fs.writeFileSync(siteFile, JSON.stringify(facade ? { ...site, facade } : site));
             siteEnv.SCRATCHBOX_SITE_JSON = siteFile;
         }
 
@@ -494,7 +508,8 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 success: true,
                 glbPath: result.glbPath,
                 glbGenerated: true,
-                ...(site ? { site: { resolvedAs: site.place.resolvedAs, topM: site.topM, tiers: site.tiers.map(t => ({ baseM: +t.baseM.toFixed(1), topM: +t.topM.toFixed(1), areaM2: Math.round(t.areaM2), provenance: t.provenance })), notes: site.notes } } : {}),
+                ...(site ? { site: { resolvedAs: site.place.resolvedAs, topM: site.topM, tiers: site.tiers.map(t => ({ baseM: +t.baseM.toFixed(1), topM: +t.topM.toFixed(1), areaM2: Math.round(t.areaM2), provenance: t.provenance })), notes: site.notes,
+                    ...(facade ? { facade: { readings: facade.readings.map(r => ({ scope: r.scope, appliesM: [Math.round(r.appliesFromM), Math.round(r.appliesToM)], provenance: r.provenance, confidence: r.confidence, values: r.values, rejected: r.rejected, source: r.source })), notes: facade.notes } } : {}) } } : {}),
                 vertexCount: writtenGeometry.totalVertices,
                 triangleCount: writtenGeometry.totalTriangles,
                 executionTimeMs: result.executionTimeMs,

@@ -629,8 +629,15 @@ def site_tiers(massing: typing.Dict[str, typing.Any] | None = None, name: str = 
     above the ground one gets entrance=False. **common (bay_width, window sizes, details, facade_rules, roof...) is
     passed to every tier.
 
+    When the site was measured with siteFacade, its facade readings are applied per tier (the reading covering the
+    tier's height; tiers above every reading repeat the highest one, labelled so): storey heights, bay width, window
+    size, sill and recess, ground-floor openings, plinth, parapet, piers (as pilasters) and cornice (as a moulding).
+    A read value replaces the same setting in **common, and the report lists each replacement; values a reading
+    dropped (out of range, not fitting the measured tiers, failing the cross-check) are not used.
+
     Returns {"tiers": [kwargs...], "spires": [...], "above_top_m": metres the vector top rises above the last tier
-    (an antenna), "report": [...]}; build with
+    (an antenna), "colors": the read wall / trim / glass colours (sRGB) with their provenance, or None,
+    "report": [...]}; build with
         parts = sb.stack_buildings(*[sb.create_building_parts(**t) for t in plan["tiers"]]).
     """
 

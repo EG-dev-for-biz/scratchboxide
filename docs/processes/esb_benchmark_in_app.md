@@ -110,3 +110,30 @@
   - The model stays in the studio, not placed at the address, and the real building is not cut from the tiles (Stage 2).
   - Courtyard holes from extruded vector parts are not passed on yet (stated in the notes).
   - Storey heights are norms. Facade-grammar storey lines (step 2) would replace them where read.
+
+---
+
+## 8. Facade read from the real building (step 2: survey plus AI Beautify)
+
+* **What was added:** `execute_3d_python_script` takes `siteFacade: true` with `site`. `readSiteFacade` (`packages/core/src/node/3d-engine/site-facade.ts`) produces two readings:
+  - **Lower floors:** the existing Street View survey (`prepareSurveySite` + `runStreetViewSurvey`, four views), read once with the version-F facade-parameters prompt. Labelled **photo-inferred** and applied up to the height the photos legibly show: their frame top, but no steeper than 55° up.
+  - **Upper floors:** the place's 3D tiles rendered square-on to the two longest walls, AI-Beautified (`buildBeautifyPrompt` + `genAiEnhanceClient`, with the Street View views as references), and read with the same prompt. Labelled **generated**, and cross-checked against a reading of the raw render: values more than 30% apart are dropped.
+  - **Checks against the measured massing:** storey height must lie in 2.6–6 m, and most short tiers (from 1.5 storeys up, under 25 m) must take a whole number of storeys within 15%. Bay width must fit the longest measured wall at least twice, and the window must fit its bay.
+  - **Cache:** readings are kept for 7 days per site, stored before the checks so improved checks still apply. `sb.site_tiers()` applies the readings per tier (storeys, bays, window, sill, recess, ground openings, plinth, parapet, piers as pilasters, cornice as a moulding), lists every value it replaced in the script's settings, and returns `plan["colors"]`.
+* **In the app** (web 3070 / API 3071 / tools 3072, fresh chat). The prompt asked for the building "sized from the real building's measured massing and with its facade read from the real building", without naming API functions. The agent passed `site` and `siteFacade: true` itself.
+  - **First run of the feature:**
+    - **Lower reading, photo-inferred, 0–78 m, confidence 0.78:** ground storey 5.2 m, bays 2.8 m, window 1.4 × 2.2 m (sill 0.9 m), ground openings 2.4 × 3.8 m, plinth 1.2 m, piers and cornice, colours.
+    - **Upper reading, generated, 78–380 m:** the cross-check dropped bay width (redraw 2.1 m vs raw 3.8 m), window and piers.
+    - **Storey heights wrongly rejected:** 3.70 m failed on the 2.7 m one-storey step, and 3.75 m on the 9.5 m top block. Fixed: tiers under 1.5 storeys no longer vote, and a majority of the rest must fit. The model rendered (772k vertices).
+  - **After the fix**, with the app restarted (the backend runs ts-node without a watcher, so TypeScript edits need a restart; Python edits apply live):
+    - Lower: storey 3.7 m and bays 2.8 m accepted. Upper (a fresh redraw): storey 3.6 m and bays 2.8 m accepted, now agreeing with the raw render; window dropped by the cross-check.
+    - Runs: the first was a script error at 76 s, including the facade reading. The retry took **11 s, reusing the cached reading**. The final model has 822,369 vertices, 0 floating parts, and the GLB loaded (200).
+    - The agent's reply lists each tier's measured size, then each facade value with its source, label and confidence, and states the dropped window reading and why.
+* **Pictures:** `desktop-app/build/site-facade/<lat_lng>/` (gitignored).
+  - The raw tile render of the upper floors is better than expected: the continuous vertical piers and the crown are clear.
+  - The redraw keeps the framing and the building, but invents the surrounding city and sky. That is harmless for reading, and confirms the fine detail is the image model's.
+* **Still open:**
+  - The facade is read for the whole building, not per wall.
+  - Vertical strips with recessed spandrels (the look the raw render shows) can't be expressed by the generator yet (plan step 3).
+  - The post-turn visual check fails with 413 (payload too large), already noted before.
+  - The first facade reading costs about 70–80 s.

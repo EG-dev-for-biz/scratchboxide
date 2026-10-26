@@ -1411,14 +1411,42 @@ def site_tiers(massing: Optional[Dict[str, Any]] = None, name: str = "Site", flo
     above the ground one gets entrance=False. **common (bay_width, window sizes, details, facade_rules, roof...) is
     passed to every tier.
 
+    When the site was measured with siteFacade, its facade readings are applied per tier (the reading covering the
+    tier's height; tiers above every reading repeat the highest one, labelled so): storey heights, bay width, window
+    size, sill and recess, ground-floor openings, plinth, parapet, piers (as pilasters) and cornice (as a moulding).
+    A read value replaces the same setting in **common, and the report lists each replacement; values a reading
+    dropped (out of range, not fitting the measured tiers, failing the cross-check) are not used.
+
     Returns {"tiers": [kwargs...], "spires": [...], "above_top_m": metres the vector top rises above the last tier
-    (an antenna), "report": [...]}; build with
+    (an antenna), "colors": the read wall / trim / glass colours (sRGB) with their provenance, or None,
+    "report": [...]}; build with
         parts = sb.stack_buildings(*[sb.create_building_parts(**t) for t in plan["tiers"]]).
     """
     m = massing if massing is not None else site()
     raw = sorted(m.get("tiers", []), key=lambda t: (t["base_m"], -t["area_m2"]))
     if not raw:
         raise ValueError("the site has no measured tiers: " + "; ".join(m.get("notes", [])))
+    readings = sorted((m.get("facade") or {}).get("readings", []), key=lambda r: r["applies_from_m"])
+
+    def reading_for(mid):
+        for r in readings:
+            if r["applies_from_m"] <= mid <= r["applies_to_m"]:
+                return r, False
+        below = [r for r in readings if r["applies_to_m"] < mid]
+        return (below[-1], True) if below else (None, False)
+
+    def srgb(c):
+        return tuple(round(1.055 * max(0.0, x) ** (1 / 2.4) - 0.055 if x > 0.0031308 else 12.92 * x, 4) for x in c)
+
+    colors = None
+    for r in readings:
+        v = r.get("values", {})
+        if "wall_rgb" in v:
+            colors = {"wall": srgb(v["wall_rgb"]), "trim": srgb(v.get("trim_rgb", v["wall_rgb"])),
+                      "glass": srgb(v.get("glass_rgb", (0.05, 0.07, 0.09))), "provenance": r["provenance"],
+                      "source": r["source"]}
+            break
+
     tiers, spires, report = [], [], []
     carry_base = None
     for t in raw:
@@ -1436,30 +1464,78 @@ def site_tiers(massing: Optional[Dict[str, Any]] = None, name: str = "Site", flo
         loops = t["loops"]
         ground = not tiers and base < 0.5
         h = top - base
+        reading, repeated = reading_for((base + top) / 2)
+        v = reading["values"] if reading else {}
+        fh = v.get("upper_storey_m", floor_height)
+        gh = v.get("ground_storey_m", ground_floor_height)
+        ph = v.get("plinth", {}).get("height_m", plinth_height) if ground else plinth_height
         if ground:
-            usable = h - plinth_height
-            n = max(1, int(round((usable - ground_floor_height) / floor_height)) + 1)
-            nominal = [ground_floor_height] + [floor_height] * (n - 1)
+            usable = h - ph
+            n = max(1, int(round((usable - gh) / fh)) + 1)
+            nominal = [gh] + [fh] * (n - 1)
         else:
-            n = max(1, int(round(h / floor_height)))
-            nominal = [floor_height] * n
+            n = max(1, int(round(h / fh)))
+            nominal = [fh] * n
             usable = h
         k = usable / sum(nominal)
         heights = [round(x * k, 4) for x in nominal]
         kw = dict(common)
         kw.update(footprint=[tuple(p) for p in loops[0]], courtyards=[[tuple(p) for p in l] for l in loops[1:]] or None,
                   base_y=base, floors=n, floor_heights=heights, ground_floor_height=heights[0], floor_height=heights[-1],
-                  plinth_height=plinth_height if ground else 0.0, name=f"{name}T{len(tiers)}")
+                  plinth_height=ph if ground else 0.0, name=f"{name}T{len(tiers)}")
         kw.setdefault("roof", "flat")
+        applied, replaced = [], []
+
+        def put(key, value, label):
+            if key in common and common[key] != value:
+                replaced.append(f"{key} {common[key]!r} -> {value!r}")
+            kw[key] = value
+            applied.append(label)
+        if v:
+            if "bay_width_m" in v:
+                put("bay_width", v["bay_width_m"], "bay width")
+            win = v.get("window")
+            if win:
+                put("window_width", win["width_m"], "window size")
+                kw["window_height"] = win["height_m"]
+                kw["window_recess_depth"] = win["recess_m"]
+            if "parapet_m" in v:
+                put("parapet_height", v["parapet_m"], "parapet")
+            details = dict(kw.get("details") or {})
+            piers = v.get("piers")
+            if piers and piers["width_m"] >= 0.1:
+                details.update(pilaster_width_m=piers["width_m"], pilaster_projection_m=max(0.03, piers["projection_m"]))
+                applied.append("piers")
+            cornice = v.get("cornice")
+            if cornice and cornice["thickness_m"] >= 0.1 and cornice["projection_m"] >= 0.05:
+                details["cornice_profile"] = moulding_profile(cornice["thickness_m"], cornice["projection_m"])
+                applied.append("cornice")
+            if details:
+                kw["details"] = details
+            rules = list(kw.get("facade_rules") or [])
+            if win:
+                rules.append({"floors": (1, 10000), "sill_height_m": win["sill_m"]})
+            go = v.get("ground_opening")
+            if ground and go:
+                rules.append({"floors": 0, "window_width_m": go["width_m"], "window_height_m": go["height_m"], "sill_height_m": go["sill_m"]})
+                applied.append("ground openings")
+            if rules:
+                kw["facade_rules"] = rules
         if not ground:
             kw["entrance"] = False
         tiers.append(kw)
         report.append({"name": kw["name"], "base_m": round(base, 2), "top_m": round(top, 2), "floors": n,
                        "storey_m": round(sum(heights) / n, 2), "size": f"{t['provenance']} ({t.get('source', '')})",
-                       "storeys": "generated: norms scaled to the measured height"})
+                       "storeys": ("generated: norms scaled to the measured height" if "upper_storey_m" not in v else
+                                   f"{reading['provenance']} storey height {fh:.2f} m, scaled to the measured height"),
+                       "facade": ({"source": reading["source"], "provenance": "generated" if repeated else reading["provenance"],
+                                   "confidence": reading["confidence"], "applied": applied, "replaced": replaced,
+                                   "note": "repeated upward from the highest reading" if repeated else "",
+                                   "dropped": reading.get("rejected", {})} if reading else None)})
     tops = [t["top_m"] for t in raw]
     above = (m.get("top_m") or 0.0) - max(tops)
-    return {"tiers": tiers, "spires": spires, "above_top_m": round(above, 2) if above > 0.5 else 0.0, "report": report}
+    return {"tiers": tiers, "spires": spires, "above_top_m": round(above, 2) if above > 0.5 else 0.0, "colors": colors,
+            "report": report}
 
 
 def stack_buildings(*tiers) -> _BuildingParts:
