@@ -342,17 +342,27 @@ def create_beveled_box(size=(1.0, 1.0, 1.0), bevel=0.02, color=None, material=No
 def create_box(*args, **kwargs) -> scratchbox_native.geometry.Mesh: ...
 
 
-def create_building(width: float = 18.0, depth: float = 14.0, floors: int = 4, floor_height: float = 3.4, ground_floor_height: float = 4.2, plinth_height: float = 0.8, bay_width: float = 3.2, window_width: float = 1.8, window_height: float = 2.0, window_recess_depth: float = 0.25, roof: typing.Any = 'mansard', roof_height: float = 3.5, roof_overhang: float = 0.4, roof_pitch_degrees: float = 55.0, parapet_height: float = 0.8, curvature: float = 0.0, superellipse_exponent: float | None = None, twist_degrees: float = 0.0, taper: float = 1.0, bulge: float = 0.0, bay_count: int | None = None, bake_curvature_ao: bool = True, details: typing.Dict[str, typing.Any] | None = None, name: str = 'ProceduralBuilding', **kwargs) -> scratchbox_native.geometry.Mesh:
+def create_building(width: float = 18.0, depth: float = 14.0, floors: int = 4, floor_height: float = 3.4, ground_floor_height: float = 4.2, plinth_height: float = 0.8, bay_width: float = 3.2, window_width: float = 1.8, window_height: float = 2.0, window_recess_depth: float = 0.25, roof: typing.Any = 'mansard', roof_height: float = 3.5, roof_overhang: float = 0.4, roof_pitch_degrees: float = 55.0, parapet_height: float = 0.8, curvature: float = 0.0, superellipse_exponent: float | None = None, twist_degrees: float = 0.0, taper: float = 1.0, bulge: float = 0.0, bay_count: int | None = None, bake_curvature_ao: bool = True, details: typing.Dict[str, typing.Any] | None = None, floor_heights: typing.List[float] | None = None, centre_bay_scale: float = 1.0, end_bay_scale: float = 1.0, facade_rules: typing.List[typing.Dict[str, typing.Any]] | None = None, name: str = 'ProceduralBuilding', **kwargs) -> scratchbox_native.geometry.Mesh:
     """
     Constructs multi-story procedural architecture with rhythmic fenestration,
     recessed reveals, continuous compound curvature manifolds, and modeled roofs.
     """
 
 
-def create_building_parts(width: float = 18.0, depth: float = 14.0, floors: int = 4, floor_height: float = 3.4, ground_floor_height: float = 4.2, plinth_height: float = 0.8, bay_width: float = 3.2, window_width: float = 1.8, window_height: float = 2.0, window_recess_depth: float = 0.25, roof: typing.Any = 'mansard', roof_height: float = 3.5, roof_overhang: float = 0.4, roof_pitch_degrees: float = 55.0, parapet_height: float = 0.8, curvature: float = 0.0, superellipse_exponent: float | None = None, twist_degrees: float = 0.0, taper: float = 1.0, bulge: float = 0.0, bay_count: int | None = None, bake_curvature_ao: bool = True, details: typing.Dict[str, typing.Any] | None = None, name: str = 'ProceduralBuilding', **kwargs) -> _BuildingParts:
+def create_building_parts(width: float = 18.0, depth: float = 14.0, floors: int = 4, floor_height: float = 3.4, ground_floor_height: float = 4.2, plinth_height: float = 0.8, bay_width: float = 3.2, window_width: float = 1.8, window_height: float = 2.0, window_recess_depth: float = 0.25, roof: typing.Any = 'mansard', roof_height: float = 3.5, roof_overhang: float = 0.4, roof_pitch_degrees: float = 55.0, parapet_height: float = 0.8, curvature: float = 0.0, superellipse_exponent: float | None = None, twist_degrees: float = 0.0, taper: float = 1.0, bulge: float = 0.0, bay_count: int | None = None, bake_curvature_ao: bool = True, details: typing.Dict[str, typing.Any] | None = None, floor_heights: typing.List[float] | None = None, centre_bay_scale: float = 1.0, end_bay_scale: float = 1.0, facade_rules: typing.List[typing.Dict[str, typing.Any]] | None = None, name: str = 'ProceduralBuilding', **kwargs) -> _BuildingParts:
     """
     The building create_building makes, as one mesh per material slot (<name>_wall, _glass,
     _frame, _roof, _foundation) with world-metre UVs, ready for write_textured_building.
+
+    Both builders take the same layout controls:
+      floor_heights: storey heights from the ground floor up (entries override the defaults);
+      centre_bay_scale / end_bay_scale: width of the middle and outermost bays relative to the rest;
+      facade_rules: dicts applied in order (later wins). Selectors: "floors" (n or (lo, hi), 0 =
+        ground), "sides" ("south" = +Z entrance side, "north", "east", "west" or 0..3),
+        "bay_stride"/"bay_offset", "centre_span" / "end_span" (bays within n of the middle / an
+        end). Overrides: window_width_m, window_height_m, sill_height_m, opening (False = blank
+        wall), sill, hood (False removes), sill_profile, hood_profile, hood_pitch_deg, balcony
+        ("none", "bay", "continuous" along adjacent bays). The entrance bay keeps its door.
     """
 
 
@@ -651,7 +661,7 @@ class _PbrMeta(type):
 class _ArchitectureModule:
     RomanOrder = scratchbox_native.RomanOrder
     @staticmethod
-    def create_building(width: float = 18.0, depth: float = 14.0, floors: int = 4, floor_height: float = 3.4, ground_floor_height: float = 4.2, plinth_height: float = 0.8, bay_width: float = 3.2, window_width: float = 1.8, window_height: float = 2.0, window_recess_depth: float = 0.25, roof: typing.Any = 'mansard', roof_height: float = 3.5, roof_overhang: float = 0.4, roof_pitch_degrees: float = 55.0, parapet_height: float = 0.8, curvature: float = 0.0, superellipse_exponent: float | None = None, twist_degrees: float = 0.0, taper: float = 1.0, bulge: float = 0.0, bay_count: int | None = None, bake_curvature_ao: bool = True, details: typing.Dict[str, typing.Any] | None = None, name: str = 'ProceduralBuilding', **kwargs) -> scratchbox_native.geometry.Mesh:
+    def create_building(width: float = 18.0, depth: float = 14.0, floors: int = 4, floor_height: float = 3.4, ground_floor_height: float = 4.2, plinth_height: float = 0.8, bay_width: float = 3.2, window_width: float = 1.8, window_height: float = 2.0, window_recess_depth: float = 0.25, roof: typing.Any = 'mansard', roof_height: float = 3.5, roof_overhang: float = 0.4, roof_pitch_degrees: float = 55.0, parapet_height: float = 0.8, curvature: float = 0.0, superellipse_exponent: float | None = None, twist_degrees: float = 0.0, taper: float = 1.0, bulge: float = 0.0, bay_count: int | None = None, bake_curvature_ao: bool = True, details: typing.Dict[str, typing.Any] | None = None, floor_heights: typing.List[float] | None = None, centre_bay_scale: float = 1.0, end_bay_scale: float = 1.0, facade_rules: typing.List[typing.Dict[str, typing.Any]] | None = None, name: str = 'ProceduralBuilding', **kwargs) -> scratchbox_native.geometry.Mesh:
         """
         Constructs multi-story procedural architecture with rhythmic fenestration,
         recessed reveals, continuous compound curvature manifolds, and modeled roofs.
