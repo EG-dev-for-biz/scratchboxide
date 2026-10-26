@@ -32,6 +32,7 @@ import {
 import { AttachedMcpToolContext, AttachedSkillContext, type ModelAnswerProvenance } from '../../../common/gemini-protocol';
 import { ChatRequestError, GeminiClient, type ChatFailureKind } from '../gemini-client';
 import { describeChatFailure } from './chatFailureMessage';
+import type { ComposerImage } from './useImageAttachments';
 import {
     buildFailedReply,
     buildStoppedReply,
@@ -119,6 +120,9 @@ export interface SendMessageDeps {
     recordArtifactVersion: (artifact: CanvasArtifact) => void;
     attachedDataFile: AttachedDataFile | undefined;
     setAttachedDataFile: Setter<AttachedDataFile | undefined>;
+    /** Images attached in the composer: sent inline with this turn, previews kept on the message. */
+    attachedImages?: ComposerImage[];
+    setAttachedImages?: Setter<ComposerImage[]>;
     attachedContextMentions?: ContextMentionItem[];
     setAttachedContextMentions?: Setter<ContextMentionItem[]>;
     showToast: (text: string, icon?: string) => void;
@@ -347,7 +351,8 @@ function beginGeneration(d: SendMessageDeps, text: string, textToSend: string | 
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         attachedSkills: attachedSkillObjects.map(s => s.name),
         attachedMcpTools: attachedMcpObjects.map(m => m.name),
-        attachedContextMentions: d.attachedContextMentions && d.attachedContextMentions.length > 0 ? [...d.attachedContextMentions] : undefined
+        attachedContextMentions: d.attachedContextMentions && d.attachedContextMentions.length > 0 ? [...d.attachedContextMentions] : undefined,
+        imagesContent: d.attachedImages && d.attachedImages.length > 0 ? d.attachedImages.map(img => img.previewUrl) : undefined
     };
 
     const updatedMessages = [...messages, userMsg];
@@ -486,6 +491,9 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
         await GeminiClient.getInstance().streamGenerate(
             {
                 prompt: effectivePrompt,
+                images: d.attachedImages && d.attachedImages.length > 0
+                    ? d.attachedImages.map(img => ({ mimeType: img.mimeType, data: img.data, name: img.name }))
+                    : undefined,
                 model: savedSettings?.defaultModel || undefined,
                 thinkingBudget: savedSettings?.thinkingBudget,
                 // @web requires a Google Search for this turn, whatever the grounding setting.
@@ -762,8 +770,9 @@ function finalizeBackendMessage(d: SendMessageDeps, ctx: GenerationContext, back
 function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, finalAssistantMsg: ChatMessage, generatedArtifact: CanvasArtifact | undefined): void {
     const { sessions, setSessions, messages, setMessages, setIsGenerating, setLiveThinkingText, setLiveThinkingSeconds, setLiveSteps, setLiveStreamedText, setActiveStreamingSectionId, activeSessionRef, activeArtifact, setActiveArtifact, artifactHistory, setArtifactHistory, layoutMode, setLayoutMode, recordArtifactVersion, setAttachedDataFile, graphControllerRef, setGraphEpoch, activeWorkspace, persistSessionsImmediately } = d;
     const { text, targetSessionId, updatedMessages, thinkingTimer } = ctx;
-    // Clear attached data file after generation
+    // Clear attached data file and images after generation
     setAttachedDataFile(undefined);
+    d.setAttachedImages?.([]);
 
     const newlyGeneratedArtifact = generatedArtifact;
     const finalArtifact = newlyGeneratedArtifact

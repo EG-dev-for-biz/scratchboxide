@@ -175,6 +175,7 @@ import { useComposerInput } from './hooks/useComposerInput';
 import { useComposerAutocomplete } from './hooks/useComposerAutocomplete';
 import { useSessionHandlers } from './hooks/useSessionHandlers';
 import { useDataFileAttachments } from './hooks/useDataFileAttachments';
+import { useImageAttachments } from './hooks/useImageAttachments';
 import { AgentDashboard } from './studio/AgentDashboard';
 import { useDeepWritePipeline } from './hooks/useDeepWritePipeline';
 import { useLongRunningAgent } from './hooks/useLongRunningAgent';
@@ -517,7 +518,8 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
     const { agentEvents, agentSession, handleCancelAgent, handlePauseAgent, handleResumeAgent, handleStartAgent } = useLongRunningAgent();
 
-    const { attachedDataFile, handleFileDrop, handleFileInputChange, isDraggingDataFile, setAttachedDataFile, setIsDraggingDataFile } = useDataFileAttachments({ inputRef, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setInputValue, showToast });
+    const { attachedDataFile, handleFileDrop, isDraggingDataFile, setAttachedDataFile, setIsDraggingDataFile } = useDataFileAttachments({ inputRef, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setInputValue, showToast });
+    const { attachedImages, setAttachedImages, addImageFiles, removeAttachedImage } = useImageAttachments(showToast);
 
     // Auto-expand chat textarea height up to 220px as content is typed/pasted
     React.useEffect(() => {
@@ -1163,6 +1165,8 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         recordArtifactVersion,
         attachedDataFile,
         setAttachedDataFile,
+        attachedImages,
+        setAttachedImages,
         attachedContextMentions,
         setAttachedContextMentions,
         showToast,
@@ -1215,6 +1219,9 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         setAttachedDataFile,
         attachedContextMentions,
         setAttachedContextMentions,
+        attachedImages,
+        addImageFiles,
+        removeAttachedImage,
         skills,
         mcpServers,
         selectedSkillIds,
@@ -1232,7 +1239,6 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         inputRef,
         fileInputRef,
         handleFileDrop,
-        handleFileInputChange,
         handleInputChange,
         handleKeyDown,
         handleVoiceToggle,

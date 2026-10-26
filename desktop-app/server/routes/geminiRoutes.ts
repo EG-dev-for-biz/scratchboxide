@@ -8,6 +8,9 @@
  ********************************************************************************/
 
 import { Request, Response, Router } from 'express';
+import * as os from 'os';
+import * as path from 'path';
+import { persistChatImages } from '../../../packages/core/src/node/gemini/chat-image-attachments';
 import { clientDisconnectedError, stagedRunRegistry } from '../../../packages/core/src/node/3d-engine/staged-location/staged-run-registry';
 import {
     GeminiService,
@@ -161,7 +164,15 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
         const controller = openSse(req, res);
 
         try {
-            await geminiService.streamGenerate(req.body, event => {
+            const body = req.body || {};
+            if (Array.isArray(body.images) && body.images.length > 0) {
+                // Saved where tools can read them: under the (allow-listed) workspace, else ~/.scratchbox.
+                const base = typeof body.workspaceRoot === 'string' && body.workspaceRoot.trim()
+                    ? path.join(ctx.requireWorkspaceRoot(body.workspaceRoot), '.scratchbox')
+                    : path.join(os.homedir(), '.scratchbox');
+                body.images = persistChatImages(body.images, path.join(base, 'attachments'));
+            }
+            await geminiService.streamGenerate(body, event => {
                 safeWriteSse(res, `data: ${JSON.stringify(event)}\n\n`, controller.signal);
             }, controller.signal);
             safeWriteSse(res, 'data: [DONE]\n\n', controller.signal);

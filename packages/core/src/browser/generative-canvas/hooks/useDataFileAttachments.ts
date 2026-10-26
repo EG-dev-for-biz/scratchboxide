@@ -191,11 +191,5 @@ export function useDataFileAttachments(deps: UseDataFileAttachmentsDeps) {
         reader.readAsText(file);
     };
 
-    const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files.length > 0) {
-            handleFileDrop(e.target.files[0]);
-            e.target.value = '';
-        }
-    };
-    return { attachedDataFile, handleFileDrop, handleFileInputChange, isDraggingDataFile, setAttachedDataFile, setIsDraggingDataFile };
+    return { attachedDataFile, handleFileDrop, isDraggingDataFile, setAttachedDataFile, setIsDraggingDataFile };
 }

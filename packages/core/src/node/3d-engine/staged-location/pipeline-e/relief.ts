@@ -48,7 +48,8 @@ import type { FaceTexture, TexelSource } from './massing-glb';
 import { type MassingFace, type MassingNode, type MassingRun } from './native-massing';
 import { plainTextures, runNativeMassing, writeMassingLayer, LOW_COVERAGE, type MassingLayerFiles } from './pipeline-e';
 
-export const RELIEF_VERSION = 'pipeline-e-relief/v1';
+// v2: textures carried onto the relief's faces by plane and overlap, not by key (v1 layers carry other faces' textures)
+export const RELIEF_VERSION = 'pipeline-e-relief/v2';
 /** The label of what this stage measures (AGENTS.md: `measured`, here averaged from the scan along repeats). */
 export const MEASURED_AVERAGED_LABEL = 'measured';
 /** The label of a typical profile added where the facade clearly has a feature the averages cannot resolve. */
@@ -695,16 +696,73 @@ export interface ReliefOutcome {
     generated?: { files: MassingLayerFiles; run: MassingRun; geometry: ReliefGeometry; counts: { bands: ReliefCounts; reveals: ReliefCounts } };
 }
 
-/** Reframes a texture from face `a`'s ortho frame to face `b`'s (same key), nearest by (s, t). */
-function reframeTexture(t: FaceTexture, a: MassingFace, b: MassingFace): FaceTexture {
-    if (a.width === b.width && a.height === b.height && Math.abs(a.orthoSMin - b.orthoSMin) < 1e-6 && Math.abs(a.orthoTMax - b.orthoTMax) < 1e-6 && a.pixel === b.pixel) return t;
+const dot3 = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+/** Same plane: normals within ~5.7 degrees and `b`'s origin within 5 cm of `a`'s plane. */
+function samePlane(a: MassingFace, b: MassingFace): boolean {
+    return dot3(a.normal, b.normal) > 0.995 && Math.abs(dot3([b.origin[0] - a.origin[0], b.origin[1] - a.origin[1], b.origin[2] - a.origin[2]], a.normal)) < 0.05;
+}
+
+/** Area of `b`'s (s, t) rectangle that falls inside `a`'s, measured in `a`'s frame (both faces on one plane). */
+function overlapArea(a: MassingFace, b: MassingFace): number {
+    const d = [b.origin[0] - a.origin[0], b.origin[1] - a.origin[1], b.origin[2] - a.origin[2]];
+    const ss: number[] = [], ts: number[] = [];
+    for (const s of [b.sMin, b.sMax]) for (const t of [b.tMin, b.tMax]) {
+        const p = [d[0] + s * b.axisS[0] + t * b.axisT[0], d[1] + s * b.axisS[1] + t * b.axisT[1], d[2] + s * b.axisS[2] + t * b.axisT[2]];
+        ss.push(dot3(p, a.axisS)); ts.push(dot3(p, a.axisT));
+    }
+    const w = Math.min(a.sMax, Math.max(...ss)) - Math.max(a.sMin, Math.min(...ss));
+    const h = Math.min(a.tMax, Math.max(...ts)) - Math.max(a.tMin, Math.min(...ts));
+    return w > 0 && h > 0 ? w * h : 0;
+}
+
+/**
+ * The faces of `from` that `b` takes its texture from: those on `b`'s plane that overlap it, most overlap first.
+ * Face keys are not identities across runs (the native tool numbers a solid's faces in output order, and the relief's
+ * cuts renumber them), so faces are matched by where they are, not by key.
+ */
+export function matchingFaces(b: MassingFace, from: MassingFace[]): MassingFace[] {
+    return from.filter(a => a.width > 0 && samePlane(a, b))
+        .map(a => ({ a, o: overlapArea(a, b) }))
+        .filter(m => m.o > 1e-4)
+        .sort((x, y) => y.o - x.o)
+        .map(m => m.a);
+}
+
+/**
+ * Builds face `b`'s texture from the textures of the faces it overlaps on the same plane: each texel's world point is
+ * found in the first source face whose texture covers it (nearest texel). Texels no source covers take `fallback`'s.
+ */
+export function reframeTexture(sources: Array<{ face: MassingFace; texture: FaceTexture }>, b: MassingFace, fallback?: FaceTexture): FaceTexture {
+    const one = sources.length === 1 ? sources[0] : undefined;
+    if (one && one.face.width === b.width && one.face.height === b.height && one.face.pixel === b.pixel
+        && Math.abs(one.face.orthoSMin - b.orthoSMin) < 1e-6 && Math.abs(one.face.orthoTMax - b.orthoTMax) < 1e-6
+        && dot3(one.face.axisS, b.axisS) > 0.999999 && dot3(one.face.axisT, b.axisT) > 0.999999
+        && Math.hypot(one.face.origin[0] - b.origin[0], one.face.origin[1] - b.origin[1], one.face.origin[2] - b.origin[2]) < 1e-6) return one.texture;
     const out: FaceTexture = { width: b.width, height: b.height, rgba: new Uint8Array(b.width * b.height * 4), source: new Uint8Array(b.width * b.height).fill(255) };
-    for (let y = 0; y < b.height; y++) for (let x = 0; x < b.width; x++) {
-        const xa = Math.min(a.width - 1, Math.max(0, Math.floor((b.orthoSMin + (x + 0.5) * b.pixel - a.orthoSMin) / a.pixel)));
-        const ya = Math.min(a.height - 1, Math.max(0, Math.floor((a.orthoTMax - (b.orthoTMax - (y + 0.5) * b.pixel)) / a.pixel)));
-        const i = y * b.width + x, j = ya * a.width + xa;
-        out.rgba.set(t.rgba.subarray(j * 4, j * 4 + 4), i * 4);
-        out.source[i] = t.source[j];
+    for (let y = 0; y < b.height; y++) {
+        const tb = b.orthoTMax - (y + 0.5) * b.pixel;
+        for (let x = 0; x < b.width; x++) {
+            const sb = b.orthoSMin + (x + 0.5) * b.pixel;
+            const p = [b.origin[0] + sb * b.axisS[0] + tb * b.axisT[0], b.origin[1] + sb * b.axisS[1] + tb * b.axisT[1], b.origin[2] + sb * b.axisS[2] + tb * b.axisT[2]];
+            const i = y * b.width + x;
+            let filled = false;
+            for (const { face: a, texture: t } of sources) {
+                const d = [p[0] - a.origin[0], p[1] - a.origin[1], p[2] - a.origin[2]];
+                const xa = Math.floor((dot3(d, a.axisS) - a.orthoSMin) / a.pixel);
+                const ya = Math.floor((a.orthoTMax - dot3(d, a.axisT)) / a.pixel);
+                if (xa < 0 || ya < 0 || xa >= a.width || ya >= a.height) continue;
+                const j = ya * a.width + xa;
+                out.rgba.set(t.rgba.subarray(j * 4, j * 4 + 4), i * 4);
+                out.source[i] = t.source[j];
+                filled = true;
+                break;
+            }
+            if (!filled && fallback && fallback.width === b.width && fallback.height === b.height) {
+                out.rgba.set(fallback.rgba.subarray(i * 4, i * 4 + 4), i * 4);
+                out.source[i] = fallback.source[i];
+            }
+        }
     }
     return out;
 }
@@ -794,14 +852,15 @@ export async function runReliefStage(input: ReliefStageInput): Promise<ReliefOut
             const own = geom.openings.filter(o => o.provenance === token && (o.face === f.faceKey || o.face.startsWith(`${f.faceKey}:`)));
             if (own.length && own.every(o => dropped.has(o.id))) { f.built = false; f.why += '; none of its openings fits its wall in this solid'; }
         }
-        // textures: the refined layer's, onto the new faces
+        // textures: the refined layer's, onto the new faces, matched by plane and overlap (not by key: the cuts renumber faces)
         t2 = Date.now();
         const textures = new Map<number, FaceTexture>();
         const plain = plainTextures(run2).textures;
+        const baseFaces = input.base.run.report.faces.filter(f => input.base.textures.has(f.index));
         for (const f2 of run2.report.faces) {
-            const f1 = input.base.run.report.faces.find(f => f.key === f2.key);
-            const t1 = f1 ? input.base.textures.get(f1.index) : undefined;
-            if (t1 && f1 && f2.width) textures.set(f2.index, reframeTexture(t1, f1, f2));
+            if (!f2.width) continue;
+            const sources = matchingFaces(f2, baseFaces).map(face => ({ face, texture: input.base.textures.get(face.index)! }));
+            if (sources.length) textures.set(f2.index, reframeTexture(sources, f2, plain.get(f2.index)));
             else if (plain.has(f2.index)) textures.set(f2.index, plain.get(f2.index)!);
         }
         const files = writeMassingLayer(run2, input.massing, textures, input.base.legend, input.dir, input.stage, input.stageKey, name, (n: MassingNode) => geom.provenance.get(n.name));

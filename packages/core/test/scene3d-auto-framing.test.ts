@@ -87,6 +87,40 @@ describe('Scene 3D Auto-Framing & Standoff Camera', () => {
         expect(bounds.sphere.center.y).toBeCloseTo(30.45);
     });
 
+    it('waits for the structure when the staged terrain loads first, then keeps the run camera (found live: Empire State Building)', () => {
+        // The staged terrain often reaches the viewport before the structure. Framing that terrain alone sent the
+        // camera kilometres out, and judged the run's own camera "inside" the terrain's box; later loads kept it.
+        const scene = new THREE.Scene();
+        const terrain = new THREE.Group();
+        terrain.name = 'external-object-staged-terrain-l0';
+        terrain.userData.sbEnvironment = true;
+        terrain.userData.sbFramingBackground = true;
+        const disc = new THREE.Mesh(new THREE.CircleGeometry(4000, 32), new THREE.MeshStandardMaterial());
+        disc.rotation.x = -Math.PI / 2;
+        terrain.add(disc);
+        scene.add(terrain);
+
+        // A ~440 m tower with the run's camera ~640 m out (stagedCamera's stand-off for it), well inside the terrain disc.
+        const runCamera = { position: [324, 420, 324] as [number, number, number], target: [0, 221, 0] as [number, number, number], fov: 60 };
+
+        // Terrain only: nothing to frame yet, so no re-frame happens.
+        const terrainOnly = computeSceneGeometryBounds(scene);
+        expect(terrainOnly.hasGeometry).toBe(false);
+        expect(calculateStandoffCamera(terrainOnly, runCamera)).toBeNull();
+
+        const tower = new THREE.Mesh(new THREE.BoxGeometry(60, 442, 60), new THREE.MeshStandardMaterial());
+        tower.position.set(0, 221, 0);
+        scene.add(tower);
+
+        // Structure loaded: the run camera is outside the tower's bounds and is kept as placed.
+        const withTower = computeSceneGeometryBounds(scene);
+        expect(withTower.sphere.radius).toBeLessThan(250);
+        const framed = calculateStandoffCamera(withTower, runCamera);
+        expect(framed!.autoFramed).toBe(false);
+        expect(framed!.position).toEqual(runCamera.position);
+        expect(framed!.distance).toBeLessThan(700);
+    });
+
     it('frames the staged building itself, not just a terrain disc, when there is no separate hero (the vector-first-paint/terrain bug)', () => {
         // Both carry sbEnvironment=true (every staged layer does, for ground-snapping — see isEnvironmentDef in
         // Scene3DPrimitive.tsx), but only terrain carries the narrower sbFramingBackground. Before this fix, the

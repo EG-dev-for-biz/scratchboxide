@@ -617,9 +617,26 @@ public:
             size_t length;
         };
         std::vector<TexBv> texBvs;
-        for (const auto& tex : textures) {
+        // Byte-identical images (the same tiled surface on several sub-meshes, e.g. every tier of a stacked
+        // building) are stored and decoded once: each texture points at its first copy's image.
+        std::vector<size_t> imageOf(textures.size());
+        std::vector<size_t> imageTex;   // per image, the texture whose buffer view holds its bytes
+        for (size_t i = 0; i < textures.size(); ++i) {
+            const auto& tex = textures[i];
+            size_t same = SIZE_MAX;
+            for (size_t k = 0; k < imageTex.size() && same == SIZE_MAX; ++k) {
+                const auto& o = textures[imageTex[k]];
+                if (!tex.data.empty() && o.mimeType == tex.mimeType && o.data == tex.data) same = k;
+            }
+            if (same != SIZE_MAX) {
+                imageOf[i] = same;
+                texBvs.push_back(texBvs[imageTex[same]]);
+                continue;
+            }
             size_t pad = (4 - (currentOffset % 4)) % 4;
             currentOffset += pad;
+            imageOf[i] = imageTex.size();
+            imageTex.push_back(i);
             texBvs.push_back({currentOffset, tex.data.size()});
             currentOffset += tex.data.size();
         }
@@ -880,6 +897,7 @@ public:
                 for (size_t i = 0; i < matExt.size(); ++i) ms << (i ? "," : "") << matExt[i];
                 ms << "}";
             }
+            if (!mat.extrasJson.empty()) ms << ",\"extras\":" << mat.extrasJson;
             ms << "}";
             const std::string json = ms.str();
             auto found = std::find(uniqueMaterialJson.begin(), uniqueMaterialJson.end(), json);
@@ -948,15 +966,15 @@ public:
         if (!textures.empty()) {
             ss << ",\"samplers\":[{\"magFilter\":9729,\"minFilter\":9987,\"wrapS\":10497,\"wrapT\":10497}]";
             ss << ",\"images\":[";
-            for (size_t i = 0; i < textures.size(); ++i) {
-                if (i > 0) ss << ",";
-                ss << "{\"bufferView\":" << (numMeshes * 6 + i) << ",\"mimeType\":\"" << textures[i].mimeType << "\"}";
+            for (size_t k = 0; k < imageTex.size(); ++k) {
+                if (k > 0) ss << ",";
+                ss << "{\"bufferView\":" << (numMeshes * 6 + imageTex[k]) << ",\"mimeType\":\"" << textures[imageTex[k]].mimeType << "\"}";
             }
             ss << "]";
             ss << ",\"textures\":[";
             for (size_t i = 0; i < textures.size(); ++i) {
                 if (i > 0) ss << ",";
-                ss << "{\"sampler\":0,\"source\":" << i << "}";
+                ss << "{\"sampler\":0,\"source\":" << imageOf[i] << "}";
             }
             ss << "]";
         }

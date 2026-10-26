@@ -85,8 +85,23 @@ export interface SubagentResponse {
 
 export type InteractionMode = 'agent' | 'plan' | 'ask' | 'studio';
 
+/**
+ * An image the user attached to a chat turn. It goes to the model as an inline image part with the
+ * turn's text; `path` is where the server saved it so tools that take an image path can use it.
+ */
+export interface ChatImageAttachment {
+    mimeType: string;
+    /** Base64 image bytes, no data: prefix. */
+    data: string;
+    name?: string;
+    /** Set by the server once the image is saved. */
+    path?: string;
+}
+
 export interface GeminiGenerateRequest {
     prompt: string;
+    /** Images attached to this turn (chat composer drop, paste or upload). */
+    images?: ChatImageAttachment[];
     model?: string;
     agent?: string;
     environment?: 'remote' | string;

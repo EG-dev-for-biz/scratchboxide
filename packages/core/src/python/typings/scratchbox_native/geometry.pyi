@@ -6,7 +6,7 @@ import scratchbox_native.math
 import scratchbox_native.processing
 import typing
 
-__all__ = ['Mesh', 'PbrMaterial', 'Vertex', 'create_arched_blister', 'create_beveled_box', 'create_box', 'create_cambered_foil', 'create_catenary_cable', 'create_cone', 'create_cube', 'create_cylinder', 'create_envelope', 'create_fluted_column', 'create_form', 'create_lathe', 'create_loft', 'create_lofted_hull', 'create_plane', 'create_revolving_component', 'create_sphere', 'create_studio_pedestal', 'create_subdivided_box', 'create_torus', 'create_wheel', 'create_wheel_assembly']
+__all__ = ['Mesh', 'PbrMaterial', 'Vertex', 'boolean_mesh', 'create_arched_blister', 'create_beveled_box', 'create_box', 'create_cambered_foil', 'create_catenary_cable', 'create_cone', 'create_cube', 'create_cylinder', 'create_envelope', 'create_fluted_column', 'create_form', 'create_lathe', 'create_loft', 'create_lofted_hull', 'create_plane', 'create_revolving_component', 'create_sphere', 'create_studio_pedestal', 'create_subdivided_box', 'create_sweep', 'create_torus', 'create_wheel', 'create_wheel_assembly', 'extrude_polygon', 'merge_meshes', 'replicate_along_curve', 'replicate_on_grid']
 
 
 class Mesh:
@@ -86,6 +86,9 @@ class Mesh:
     def recompute_normals(self) -> Mesh: ...
 
     def recompute_smooth_normals(self) -> Mesh: ...
+
+    def weld_identical_vertices(self) -> int:
+        """Merge vertices identical in position, normal, UV, colour and tangent (lossless); returns how many were removed"""
 
     def weld_vertices(self, epsilon: float = 0.0001) -> Mesh: ...
 
@@ -184,6 +187,10 @@ class Vertex:
     def tangent(self, value: scratchbox_native.math.Vec4) -> None: ...
 
 
+def boolean_mesh(a: scratchbox_native.geometry.Mesh, b: scratchbox_native.geometry.Mesh, op: str) -> Mesh:
+    """Boolean a and b by BSP mesh CSG: op is "union", "subtract" or "intersect""""
+
+
 def create_arched_blister(bounds=(0.35, 0.45, 0.9), arch_radius=0.4, swell=0.08, side=1.0, grid=(16, 8), color=None, material=None, **kwargs) -> Mesh: ...
 
 
@@ -268,6 +275,9 @@ def create_studio_pedestal(radius=4.0, height=0.25, bevel=0.04, bevel_radius=Non
 def create_subdivided_box(size=(1.0, 1.0, 1.0), subdivisions=4, color=None, material=None, **kwargs) -> Mesh: ...
 
 
+def create_sweep(curve: collections.abc.Sequence[scratchbox_native.math.Vec3], profile: collections.abc.Sequence[scratchbox_native.math.Vec2], total_twist_rad: float = 0.0, start_scale: float = 1.0, end_scale: float = 1.0, close_ends: bool = True, color: scratchbox_native.math.Vec4 = ...) -> Mesh: ...
+
+
 def create_torus(main_radius: float = 1.0, tube_radius: float = 0.25, radial_segments: int = 24, tubular_segments: int = 36, color: scratchbox_native.math.Vec4 = ...) -> Mesh: ...
 
 
@@ -288,3 +298,18 @@ def create_wheel_assembly(track_width: float = 1.6, wheelbase: float = 3.2, whee
     Spawns N axle pairs of upright, grounded rolling wheels spaced at track_width and wheelbase,
     with double-wishbone suspension linkages connecting to inner chassis pick-up points.
     """
+
+
+def extrude_polygon(footprint: collections.abc.Sequence[scratchbox_native.math.Vec2], base_y: float = 0.0, height: float = 1.0, color: scratchbox_native.math.Vec4 = ...) -> Mesh:
+    """Extrude a 2D XZ polygon along +Y into a closed, capped solid (walls + top + bottom)"""
+
+
+def merge_meshes(meshes: collections.abc.Sequence[scratchbox_native.geometry.Mesh]) -> Mesh:
+    """Merge a list of meshes into one (vertices and triangles concatenated)"""
+
+
+def replicate_along_curve(seed: scratchbox_native.geometry.Mesh, curve: collections.abc.Sequence[scratchbox_native.math.Vec3], pitch: float, merge_distance: float = 0.0, fit_to_length: bool = True) -> Mesh:
+    """Repeat seed at a continuous pitch along curve (close the curve on itself for a circular array)"""
+
+
+def replicate_on_grid(seed: scratchbox_native.geometry.Mesh, count_u: int, count_v: int, pitch_u: float, pitch_v: float, row_offset_u: float = 0.0, alternate_rows: bool = False, merge_distance: float = 0.0, origin: scratchbox_native.math.Vec3 = ..., axis_u: scratchbox_native.math.Vec3 = ..., axis_v: scratchbox_native.math.Vec3 = ...) -> Mesh: ...

@@ -17,8 +17,14 @@
 #include <nanobind/stl/unordered_map.h>
 
 #include "scratchbox_engine.hpp"
+#include "scratchbox_coursed_surface.hpp"
+#include "scratchbox_weathering.hpp"
+#include "scratchbox_png.hpp"
 #include "scratchbox_core.hpp"
 #include "scratchbox_sdf.hpp"
+#include "scratchbox_sdf_field.hpp"
+#include "scratchbox_mesh_ops.hpp"
+#include "scratchbox_relief.hpp"
 #include "scratchbox_hair.hpp"
 #include "scratchbox_spz.hpp"
 #include "scratchbox_parametric_human.hpp"
@@ -43,6 +49,32 @@ using namespace scratchbox::core;
 using namespace scratchbox::parametric;
 using namespace scratchbox::kinematics;
 using namespace scratchbox::skinning;
+
+// Engine warnings (a capped inset, a reduced solidify thickness, a relief layer that moved nothing)
+// reach the script as Python UserWarnings, so a script sees them without the operation failing.
+static void emitPythonWarnings(const std::vector<std::string>& warnings) {
+    for (const auto& w : warnings) {
+        if (PyErr_WarnEx(PyExc_UserWarning, w.c_str(), 1) < 0) throw nb::python_error();
+    }
+}
+
+// Nothing to serialize is an error at the writer, not a 0-byte or geometry-less file discovered later.
+static void requireGeometry(const std::vector<const ScratchboxMesh*>& meshes, const char* what) {
+    size_t tris = 0;
+    for (const auto* m : meshes) tris += m->indices.size() / 3;
+    if (tris == 0) throw std::invalid_argument(std::string(what) + ": every mesh is empty (no triangles); nothing to write");
+}
+
+static ScratchboxMesh sdfToMeshReporting(const sdf::Field& f, const Vec3& lo, const Vec3& hi, int resolution, int steps, const std::string& name) {
+    int dropped = 0;
+    float cell = 0.0f;
+    ScratchboxMesh out = f.toMesh(lo, hi, resolution, steps, name, &dropped, &cell);
+    if (dropped > 0) {
+        emitPythonWarnings({"to_mesh dropped features thinner than a cell (" + std::to_string(cell) + " m) in " + std::to_string(dropped) +
+                            " cells; raise resolution or thicken them"});
+    }
+    return out;
+}
 
 NB_MODULE(scratchbox_native, m) {
     nb::set_leak_warnings(false);
@@ -308,6 +340,7 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("transmission", &PbrMaterial::transmissionFactor)
         .def_rw("thickness", &PbrMaterial::thicknessFactor)
         .def_rw("double_sided", &PbrMaterial::doubleSided)
+        .def_rw("extras_json", &PbrMaterial::extrasJson)
         .def_rw("ior", &PbrMaterial::ior)
         .def("set_base_color", [](PbrMaterial& self, const Vec4& c) { self.baseColorFactor = c; }, "color"_a)
         .def("set_color", [](PbrMaterial& self, const Vec4& c) { self.baseColorFactor = c; }, "color"_a)
@@ -458,6 +491,8 @@ NB_MODULE(scratchbox_native, m) {
             self.recomputeSmoothNormals();
             return self;
         })
+        .def("weld_identical_vertices", &ScratchboxMesh::weldIdenticalVertices,
+            "Merge vertices identical in position, normal, UV, colour and tangent (lossless); returns how many were removed")
         .def("weld_vertices", [](ScratchboxMesh& self, float epsilon) -> ScratchboxMesh& {
             self.weldVertices(epsilon);
             return self;
@@ -706,6 +741,70 @@ NB_MODULE(scratchbox_native, m) {
         .value("Dome", RoofType::Dome)
         .value("BarrelVault", RoofType::BarrelVault);
 
+    nb::class_<FacadeDetails>(m_arch, "FacadeDetails")
+        .def(nb::init<>())
+        .def_rw("cornice_profile", &FacadeDetails::corniceProfile)
+        .def_rw("string_course_profile", &FacadeDetails::stringCourseProfile)
+        .def_rw("string_course_floors", &FacadeDetails::stringCourseFloors)
+        .def_rw("sill_profile", &FacadeDetails::sillProfile)
+        .def_rw("hood_profile", &FacadeDetails::hoodProfile)
+        .def_rw("balcony_floors", &FacadeDetails::balconyFloors)
+        .def_rw("sill_horn_m", &FacadeDetails::sillHornM)
+        .def_rw("hood_pitch_deg", &FacadeDetails::hoodPitchDeg)
+        .def_rw("hood_extension_m", &FacadeDetails::hoodExtensionM)
+        .def_rw("pilaster_width_m", &FacadeDetails::pilasterWidthM)
+        .def_rw("pilaster_projection_m", &FacadeDetails::pilasterProjectionM)
+        .def_rw("pilaster_bay_stride", &FacadeDetails::pilasterBayStride)
+        .def_rw("pilaster_capital_m", &FacadeDetails::pilasterCapitalM)
+        .def_rw("pilaster_flare", &FacadeDetails::pilasterFlare)
+        .def_rw("quoin_course_m", &FacadeDetails::quoinCourseM)
+        .def_rw("quoin_long_m", &FacadeDetails::quoinLongM)
+        .def_rw("quoin_short_m", &FacadeDetails::quoinShortM)
+        .def_rw("quoin_projection_m", &FacadeDetails::quoinProjectionM)
+        .def_rw("quoin_joint_m", &FacadeDetails::quoinJointM)
+        .def_rw("balcony_bay_stride", &FacadeDetails::balconyBayStride)
+        .def_rw("balcony_depth_m", &FacadeDetails::balconyDepthM)
+        .def_rw("balcony_extra_width_m", &FacadeDetails::balconyExtraWidthM)
+        .def_rw("balcony_slab_m", &FacadeDetails::balconySlabM)
+        .def_rw("balcony_rail_height_m", &FacadeDetails::balconyRailHeightM)
+        .def_rw("baluster_pitch_m", &FacadeDetails::balusterPitchM)
+        .def_rw("baluster_radius_m", &FacadeDetails::balusterRadiusM)
+        .def_rw("baluster_bulge", &FacadeDetails::balusterBulge)
+        .def_rw("dormer_width_m", &FacadeDetails::dormerWidthM)
+        .def_rw("dormer_height_m", &FacadeDetails::dormerHeightM)
+        .def_rw("dormer_depth_m", &FacadeDetails::dormerDepthM)
+        .def_rw("dormer_roof_pitch_deg", &FacadeDetails::dormerRoofPitchDeg)
+        .def_rw("dormer_setback_m", &FacadeDetails::dormerSetbackM)
+        .def_rw("dormer_bay_stride", &FacadeDetails::dormerBayStride)
+        .def_rw("chimney_count", &FacadeDetails::chimneyCount)
+        .def_rw("chimney_width_m", &FacadeDetails::chimneyWidthM)
+        .def_rw("chimney_depth_m", &FacadeDetails::chimneyDepthM)
+        .def_rw("chimney_rise_m", &FacadeDetails::chimneyRiseM)
+        .def_rw("chimney_cap_m", &FacadeDetails::chimneyCapM)
+        .def_rw("chimney_pot_count", &FacadeDetails::chimneyPotCount)
+        .def_rw("chimney_pot_radius_m", &FacadeDetails::chimneyPotRadiusM)
+        .def_rw("chimney_pot_height_m", &FacadeDetails::chimneyPotHeightM);
+
+    nb::class_<FacadeRule>(m_arch, "FacadeRule")
+        .def(nb::init<>())
+        .def_rw("floor_min", &FacadeRule::floorMin)
+        .def_rw("floor_max", &FacadeRule::floorMax)
+        .def_rw("sides", &FacadeRule::sides)
+        .def_rw("bay_stride", &FacadeRule::bayStride)
+        .def_rw("bay_offset", &FacadeRule::bayOffset)
+        .def_rw("centre_span", &FacadeRule::centreSpan)
+        .def_rw("end_span", &FacadeRule::endSpan)
+        .def_rw("window_width_m", &FacadeRule::windowWidthM)
+        .def_rw("window_height_m", &FacadeRule::windowHeightM)
+        .def_rw("sill_height_m", &FacadeRule::sillHeightM)
+        .def_rw("opening", &FacadeRule::opening)
+        .def_rw("sill", &FacadeRule::sill)
+        .def_rw("hood", &FacadeRule::hood)
+        .def_rw("sill_profile", &FacadeRule::sillProfile)
+        .def_rw("hood_profile", &FacadeRule::hoodProfile)
+        .def_rw("hood_pitch_deg", &FacadeRule::hoodPitchDeg)
+        .def_rw("balcony", &FacadeRule::balcony);
+
     nb::class_<BuildingConfig>(m_arch, "BuildingConfig")
         .def(nb::init<>())
         .def_rw("width", &BuildingConfig::width)
@@ -730,7 +829,15 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("taper", &BuildingConfig::taper)
         .def_rw("bulge", &BuildingConfig::bulge)
         .def_rw("bay_count", &BuildingConfig::bayCount)
-        .def_rw("bake_curvature_ao", &BuildingConfig::bakeCurvatureAO);
+        .def_rw("bake_curvature_ao", &BuildingConfig::bakeCurvatureAO)
+        .def_rw("details", &BuildingConfig::details)
+        .def_rw("floor_heights", &BuildingConfig::floorHeights)
+        .def_rw("centre_bay_scale", &BuildingConfig::centreBayScale)
+        .def_rw("end_bay_scale", &BuildingConfig::endBayScale)
+        .def_rw("rules", &BuildingConfig::rules)
+        .def_rw("footprint", &BuildingConfig::footprint, "Plan outline (x east, z south, metres); empty = the width x depth rectangle")
+        .def_rw("footprint_holes", &BuildingConfig::footprintHoles, "Courtyard loops inside the footprint")
+        .def_rw("entrance_edge", &BuildingConfig::entranceEdge, "Edge carrying the entrance (outline edge index); -1 = default (longest outer edge, or the rectangle's south side), -2 = no entrance");
 
     m_arch.def("generate_building", [](const BuildingConfig& config, const std::string& name) {
         return ProceduralBuildingGenerator::generateBuilding(config, name);
@@ -739,6 +846,35 @@ NB_MODULE(scratchbox_native, m) {
     m_arch.def("generate_curved_building", [](const BuildingConfig& config, const std::string& name) {
         return ProceduralBuildingGenerator::generateCurvedBuilding(config, name);
     }, "config"_a, "name"_a = "CurvedBuilding");
+
+    m_arch.def("facade_frames", [](const BuildingConfig& config) {
+        nb::list out;
+        for (const auto& [name, start, right, normal, length] : ProceduralBuildingGenerator::facadeFrames(config)) {
+            nb::dict f;
+            f["name"] = name;
+            f["start"] = start;
+            f["right"] = right;
+            f["normal"] = normal;
+            f["length"] = length;
+            out.append(f);
+        }
+        return out;
+    }, "config"_a, "The facade planes at ground level: name (on the rectangle south = +Z entrance side, north, east, west; on a footprint outline "
+       "edge0, edge1, ... outer edges first, then each courtyard's), start corner, right and outward normal directions, length");
+
+    m_arch.def("chimney_tops", [](const BuildingConfig& config) {
+        return ProceduralBuildingGenerator::chimneyTops(config);
+    }, "config"_a, "Where smoke leaves each chimney of this building (weathering soot sources)");
+
+    m_arch.def("project_world_uvs", &architecture::projectWorldUvs, "mesh"_a,
+        "A copy of the mesh with world-metre UVs per triangle (u along the face horizontally, v up it), the frame the "
+        "building parts use, so an add-on takes a building surface's tiled texture at real-world scale");
+
+    m_arch.def("generate_building_parts", [](const BuildingConfig& config, const std::string& name) {
+        return ProceduralBuildingGenerator::generateBuildingParts(config, name);
+    }, "config"_a, "name"_a = "ProceduralBuilding",
+       "The building as one sub-mesh per material slot (<name>_wall, _glass, _frame, _roof, _foundation), "
+       "each with its slot material, a grey vertex shade and world-metre UVs for real-scale textures");
 
     m_arch.attr("RomanOrder") = m.attr("RomanOrder");
 
@@ -998,6 +1134,7 @@ NB_MODULE(scratchbox_native, m) {
     auto m_io = m.def_submodule("io", "glTF 2.0 binary (.glb) packing and file serialization");
 
     m_io.def("write_glb", [](const std::string& path, const ScratchboxMesh& mesh) {
+        requireGeometry({&mesh}, "write_glb");
         auto glb = GlbWriter::writeGlb(mesh);
         std::ofstream out(path, std::ios::binary);
         if (!out.is_open()) {
@@ -1009,6 +1146,9 @@ NB_MODULE(scratchbox_native, m) {
     }, "path"_a, "mesh"_a, "Save a ScratchboxMesh directly to a standard binary glTF 2.0 (.glb) file");
 
     m_io.def("write_glb", [](const std::string& path, const std::vector<ScratchboxMesh>& meshes) {
+        std::vector<const ScratchboxMesh*> ptrs;
+        for (const auto& mm : meshes) ptrs.push_back(&mm);
+        requireGeometry(ptrs, "write_glb");
         auto glb = GlbWriter::serializeMultiMeshToGlb(meshes);
         std::ofstream out(path, std::ios::binary);
         if (!out.is_open()) {
@@ -1018,6 +1158,52 @@ NB_MODULE(scratchbox_native, m) {
         out.close();
         return true;
     }, "path"_a, "meshes"_a, "Save multiple ScratchboxMeshes with distinct PBR materials to a multi-mesh glTF 2.0 (.glb) file");
+
+    m_io.def("write_glb_textured", [](const std::string& path, const std::vector<ScratchboxMesh>& meshes,
+                                      const std::vector<std::tuple<std::string, std::string, nb::bytes, std::string, float, float>>& textures) {
+        std::vector<EmbeddedTexture> embedded;
+        for (const auto& [material, usage, data, mime, scaleU, scaleV] : textures) {
+            EmbeddedTexture t;
+            t.targetMaterialName = material;
+            if (usage == "base_color") t.usage = TextureUsage::BASE_COLOR;
+            else if (usage == "normal") t.usage = TextureUsage::NORMAL;
+            else if (usage == "orm") t.usage = TextureUsage::ORM;
+            else if (usage == "metallic_roughness") t.usage = TextureUsage::METALLIC_ROUGHNESS;
+            else if (usage == "occlusion") t.usage = TextureUsage::OCCLUSION;
+            else if (usage == "emissive") t.usage = TextureUsage::EMISSIVE;
+            else throw std::invalid_argument("Unknown texture usage '" + usage + "' (base_color, normal, orm, metallic_roughness, occlusion, emissive)");
+            const auto* bytes = reinterpret_cast<const uint8_t*>(data.c_str());
+            t.data.assign(bytes, bytes + data.size());
+            t.mimeType = mime;
+            t.scaleU = scaleU;
+            t.scaleV = scaleV;
+            t.materialIndex = -1;
+            embedded.push_back(std::move(t));
+        }
+        std::vector<const ScratchboxMesh*> ptrs;
+        for (const auto& mm : meshes) ptrs.push_back(&mm);
+        requireGeometry(ptrs, "write_glb_textured");
+        auto lower = [](std::string s) { for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return s; };
+        for (const auto& t : embedded) {
+            bool matched = false;
+            for (const auto& mm : meshes) {
+                if (lower(mm.name).find(lower(t.targetMaterialName)) != std::string::npos ||
+                    lower(mm.material.name).find(lower(t.targetMaterialName)) != std::string::npos) { matched = true; break; }
+            }
+            if (!matched) throw std::invalid_argument("write_glb_textured: texture target '" + t.targetMaterialName + "' matches no mesh or material name");
+        }
+        auto glb = GlbWriter::serializeMultiMeshToGlb(meshes, embedded);
+        std::ofstream out(path, std::ios::binary);
+        if (!out.is_open()) {
+            throw std::runtime_error("Failed to open file for writing: " + path);
+        }
+        out.write(reinterpret_cast<const char*>(glb.data()), static_cast<std::streamsize>(glb.size()));
+        out.close();
+        return true;
+    }, "path"_a, "meshes"_a, "textures"_a,
+       "Save meshes to a GLB embedding image textures. Each texture is (material_name, usage, image_bytes, mime_type, "
+       "scale_u, scale_v); it attaches to the sub-mesh whose material or mesh name contains material_name, and the "
+       "scale is written as KHR_texture_transform (use 1 / tile size in metres with world-metre UVs)");
 
     m_io.def("export_glb_bytes", [](const ScratchboxMesh& mesh) {
         auto glb = GlbWriter::writeGlb(mesh);
@@ -1071,6 +1257,140 @@ NB_MODULE(scratchbox_native, m) {
         }
     }, "trees_json"_a, "options_json"_a = "{}",
        "Grow described trees (scratchbox.sb-veggie-trees/1 JSON) as SB-Veggie trees; returns (trees GLB bytes, stats JSON, crowns JSON)");
+
+    // ========================================================================
+    // 8b. SURFACE AND WEATHERING SUBMODULES (scratchbox_coursed_surface.hpp, scratchbox_weathering.hpp)
+    // ========================================================================
+    auto m_surface = m.def_submodule("surface", "Real-scale tileable PBR surface texture synthesis");
+
+    nb::class_<pbr_texture::CoursedSurfaceParams>(m_surface, "CoursedSurfaceParams")
+        .def(nb::init<>())
+        .def_rw("unit_width_m", &pbr_texture::CoursedSurfaceParams::unitWidthM)
+        .def_rw("unit_height_m", &pbr_texture::CoursedSurfaceParams::unitHeightM)
+        .def_rw("joint_width_m", &pbr_texture::CoursedSurfaceParams::jointWidthM)
+        .def_rw("joint_depth_m", &pbr_texture::CoursedSurfaceParams::jointDepthM)
+        .def_rw("bond_offset", &pbr_texture::CoursedSurfaceParams::bondOffset)
+        .def_rw("target_tile_m", &pbr_texture::CoursedSurfaceParams::targetTileM)
+        .def_rw("unit_color", &pbr_texture::CoursedSurfaceParams::unitColor)
+        .def_rw("unit_color_variance", &pbr_texture::CoursedSurfaceParams::unitColorVariance)
+        .def_rw("unit_hue_variance", &pbr_texture::CoursedSurfaceParams::unitHueVariance)
+        .def_rw("joint_color", &pbr_texture::CoursedSurfaceParams::jointColor)
+        .def_rw("unit_roughness", &pbr_texture::CoursedSurfaceParams::unitRoughness)
+        .def_rw("joint_roughness", &pbr_texture::CoursedSurfaceParams::jointRoughness)
+        .def_rw("roughness_variance", &pbr_texture::CoursedSurfaceParams::roughnessVariance)
+        .def_rw("metallic", &pbr_texture::CoursedSurfaceParams::metallic)
+        .def_rw("face_relief_m", &pbr_texture::CoursedSurfaceParams::faceReliefM)
+        .def_rw("grain", &pbr_texture::CoursedSurfaceParams::grain)
+        .def_rw("edge_wear", &pbr_texture::CoursedSurfaceParams::edgeWear)
+        .def_rw("grime", &pbr_texture::CoursedSurfaceParams::grime)
+        .def_rw("streaking", &pbr_texture::CoursedSurfaceParams::streaking)
+        .def_rw("pixels_per_metre", &pbr_texture::CoursedSurfaceParams::pixelsPerMetre)
+        .def_rw("max_resolution", &pbr_texture::CoursedSurfaceParams::maxResolution)
+        .def_rw("seed", &pbr_texture::CoursedSurfaceParams::seed);
+
+    m_surface.def("synthesize_coursed_surface", [](const pbr_texture::CoursedSurfaceParams& params) {
+        auto tex = pbr_texture::synthesizeCoursedSurface(params);
+        auto png = [](const texture::ImageBuffer& img) {
+            auto bytes = png::encode(img, 6);
+            if (bytes.empty()) throw std::runtime_error("PNG compression failed for a coursed surface map");
+            return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        };
+        nb::dict out;
+        out["albedo_png"] = png(tex.albedo);
+        out["normal_png"] = png(tex.normal);
+        out["orm_png"] = png(tex.orm);
+        out["tile_width_m"] = tex.tileWidthM;
+        out["tile_height_m"] = tex.tileHeightM;
+        out["width_px"] = tex.albedo.width;
+        out["height_px"] = tex.albedo.height;
+        return out;
+    }, "params"_a,
+       "Synthesize a seamless coursed-surface PBR set (albedo, normal, ORM as PNG bytes) and its tile size in metres");
+
+    auto m_weather = m.def_submodule("weathering", "Geometry-driven weathering bakes into a unique atlas on an overlay shell");
+
+    nb::class_<weathering::WeatheringParams>(m_weather, "WeatheringParams")
+        .def(nb::init<>())
+        .def_rw("texel_m", &weathering::WeatheringParams::texelM)
+        .def_rw("max_atlas_width", &weathering::WeatheringParams::maxAtlasWidth)
+        .def_rw("overlay_offset_m", &weathering::WeatheringParams::overlayOffsetM)
+        .def_rw("streak_strength", &weathering::WeatheringParams::streakStrength)
+        .def_rw("streak_reach_m", &weathering::WeatheringParams::streakReachM)
+        .def_rw("streak_column_m", &weathering::WeatheringParams::streakColumnM)
+        .def_rw("streak_end_boost", &weathering::WeatheringParams::streakEndBoost)
+        .def_rw("exposure_wash", &weathering::WeatheringParams::exposureWash)
+        .def_rw("shelter_grime", &weathering::WeatheringParams::shelterGrime)
+        .def_rw("cavity_grime", &weathering::WeatheringParams::cavityGrime)
+        .def_rw("cavity_radius_m", &weathering::WeatheringParams::cavityRadiusM)
+        .def_rw("hemisphere_samples", &weathering::WeatheringParams::hemisphereSamples)
+        .def_rw("sky_distance_m", &weathering::WeatheringParams::skyDistanceM)
+        .def_rw("ground_y", &weathering::WeatheringParams::groundY)
+        .def_rw("damp_height_m", &weathering::WeatheringParams::dampHeightM)
+        .def_rw("damp_strength", &weathering::WeatheringParams::dampStrength)
+        .def_rw("soot_sources", &weathering::WeatheringParams::sootSources)
+        .def_rw("soot_strength", &weathering::WeatheringParams::sootStrength)
+        .def_rw("soot_radius_m", &weathering::WeatheringParams::sootRadiusM)
+        .def_rw("variation", &weathering::WeatheringParams::variation)
+        .def_rw("grime_color", &weathering::WeatheringParams::grimeColor)
+        .def_rw("streak_color", &weathering::WeatheringParams::streakColor)
+        .def_rw("damp_color", &weathering::WeatheringParams::dampColor)
+        .def_rw("soot_color", &weathering::WeatheringParams::sootColor)
+        .def_rw("wash_color", &weathering::WeatheringParams::washColor)
+        .def_rw("decal_aging", &weathering::WeatheringParams::decalAging)
+        .def_rw("seed", &weathering::WeatheringParams::seed);
+
+    m_weather.def("bake_weathering", [](const std::vector<ScratchboxMesh>& receivers, const std::vector<ScratchboxMesh>& occluders,
+                                        const weathering::WeatheringParams& params, const std::string& name,
+                                        const std::vector<std::tuple<Vec3, Vec3, Vec3, float, float, float, float, nb::bytes>>& decals) {
+        if (receivers.empty()) throw std::invalid_argument("bake_weathering: no receiver meshes; nothing would be weathered");
+        std::vector<weathering::Decal> painted;
+        for (const auto& [center, normal, up, width, height, depth, opacity, image] : decals) {
+            auto decoded = png::decode(reinterpret_cast<const uint8_t*>(image.c_str()), image.size(), png::OutputFormat::Rgba);
+            if (!decoded.ok) throw std::invalid_argument("Decal image is not a readable PNG: " + decoded.error);
+            weathering::Decal d;
+            d.center = center; d.normal = normal; d.up = up;
+            d.widthM = width; d.heightM = height; d.depthM = depth; d.opacity = opacity;
+            d.image = std::move(decoded.image);
+            painted.push_back(std::move(d));
+        }
+        auto baked = weathering::bakeWeathering(receivers, occluders, params, name, painted);
+        auto png = png::encode(baked.atlas, 6);
+        if (!baked.overlay.vertices.empty() && png.empty()) throw std::runtime_error("PNG compression failed for the weathering atlas");
+        nb::dict out;
+        out["overlay"] = baked.overlay;
+        out["atlas_png"] = nb::bytes(reinterpret_cast<const char*>(png.data()), png.size());
+        out["atlas_width"] = baked.atlas.width;
+        out["atlas_height"] = baked.atlas.height;
+        out["charts"] = baked.chartCount;
+        out["baked_texels"] = baked.bakedTexels;
+        out["clear_triangles"] = baked.clearTriangles;
+        return out;
+    }, "receivers"_a, "occluders"_a, "params"_a, "name"_a = "Weathering", "decals"_a = std::vector<std::tuple<Vec3, Vec3, Vec3, float, float, float, float, nb::bytes>>{},
+       "Bake streaks, exposure wash, shelter and cavity grime, rising damp and soot from the geometry into an RGBA atlas; "
+       "returns an alpha-blended overlay shell of the receivers mapped into it. Each decal (center, normal, up, width_m, "
+       "height_m, depth_m, opacity, png_bytes) is painted into the atlas over the weathering");
+
+    m_weather.def("make_decal_panel", &weathering::makeDecalPanel,
+        "center"_a, "normal"_a, "up"_a, "width_m"_a, "height_m"_a, "thickness_m"_a = 0.0f, "standoff_m"_a = 0.004f, "name"_a = "Decal",
+        "A panel decal quad standing off a surface (plus edges when thickness_m > 0), UV (0,0) at the image top-left, alpha MASK");
+
+    nb::class_<weathering::BlotParams>(m_weather, "BlotParams")
+        .def(nb::init<>())
+        .def_rw("size_px", &weathering::BlotParams::sizePx)
+        .def_rw("color", &weathering::BlotParams::color)
+        .def_rw("opacity", &weathering::BlotParams::opacity)
+        .def_rw("edge_noise", &weathering::BlotParams::edgeNoise)
+        .def_rw("softness", &weathering::BlotParams::softness)
+        .def_rw("mottling", &weathering::BlotParams::mottling)
+        .def_rw("drips", &weathering::BlotParams::drips)
+        .def_rw("drip_length", &weathering::BlotParams::dripLength)
+        .def_rw("seed", &weathering::BlotParams::seed);
+
+    m_weather.def("synthesize_blot", [](const weathering::BlotParams& params) {
+        auto bytes = png::encode(weathering::synthesizeBlot(params), 6);
+        if (bytes.empty()) throw std::runtime_error("PNG compression failed for a blot decal");
+        return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    }, "params"_a, "A procedural stain / water mark / patch as RGBA PNG bytes for a decal");
 
     // ========================================================================
     // 9. CORE INVARIANT KERNEL (GeoMorph, ArchiMorph, Sensor Passes)
@@ -1370,9 +1690,159 @@ NB_MODULE(scratchbox_native, m) {
     m_sdf.def("op_twist", &sdf::opTwist, "p"_a, "k"_a);
     m_sdf.def("op_bend", &sdf::opBend, "p"_a, "k"_a);
 
+    // Field graphs: describe a shape once, evaluate it natively, mesh it at any resolution.
+    using V3 = std::array<float, 3>;
+    auto v3 = [](const V3& a) { return Vec3(a[0], a[1], a[2]); };
+    nb::class_<sdf::Field>(m_sdf, "Field",
+        "A signed distance field graph (negative inside). Combine with | (union), & (intersect) and - "
+        "(subtract), or the methods with a blend radius k; mesh with to_mesh.")
+        .def("__call__", [v3](const sdf::Field& f, const V3& p) { return f(v3(p)); }, "p"_a)
+        .def("union", &sdf::Field::unite, "other"_a, "k"_a = 0.0f)
+        .def("subtract", &sdf::Field::subtract, "other"_a, "k"_a = 0.0f)
+        .def("intersect", &sdf::Field::intersect, "other"_a, "k"_a = 0.0f)
+        .def("__or__", [](const sdf::Field& a, const sdf::Field& b) { return a.unite(b); })
+        .def("__and__", [](const sdf::Field& a, const sdf::Field& b) { return a.intersect(b); })
+        .def("__sub__", [](const sdf::Field& a, const sdf::Field& b) { return a.subtract(b); })
+        .def("translate", [v3](const sdf::Field& f, const V3& t) { return f.translate(v3(t)); }, "offset"_a)
+        .def("rotate", [v3](const sdf::Field& f, const V3& axis, float deg) { return f.rotate(v3(axis), deg); }, "axis"_a, "degrees"_a)
+        .def("scale", &sdf::Field::scale, "factor"_a)
+        .def("round", &sdf::Field::round, "radius"_a)
+        .def("shell", &sdf::Field::shell, "thickness"_a)
+        .def("displace", &sdf::Field::displace, "amplitude"_a, "frequency"_a, "seed"_a = 7u)
+        .def("twist", &sdf::Field::twist, "radians_per_unit"_a)
+        .def("bend", &sdf::Field::bend, "radians_per_unit"_a)
+        .def("repeat", [v3](const sdf::Field& f, const V3& period) { return f.repeat(v3(period)); }, "period"_a,
+             "Repeat along each axis with a positive period (0 leaves that axis alone)")
+        .def("mirror", [v3](const sdf::Field& f, const V3& n) { return f.mirror(v3(n)); }, "normal"_a,
+             "Mirror the half-space the normal points into across the plane through the origin")
+        .def("to_mesh", [v3](const sdf::Field& f, const V3& lo, const V3& hi, int resolution, int steps, const std::string& name) {
+            return sdfToMeshReporting(f, v3(lo), v3(hi), resolution, steps, name);
+        }, "bounds_min"_a, "bounds_max"_a, "resolution"_a = 128, "projection_steps"_a = 2, "name"_a = "SdfMesh",
+           "Closed mesh of the surface inside the bounds (cubic cells, `resolution` along the longest side), capped on the bounds; "
+           "warns when features thinner than a cell were dropped, raises when nothing is inside");
+
+    m_sdf.def("sphere", &sdf::Field::sphere, "radius"_a);
+    m_sdf.def("box", [v3](const V3& size) { return sdf::Field::box(v3(size)); }, "size"_a, "A box of full size (w, h, d)");
+    m_sdf.def("round_box", [v3](const V3& size, float r) { return sdf::Field::roundBox(v3(size), r); }, "size"_a, "radius"_a);
+    m_sdf.def("torus", &sdf::Field::torus, "major_radius"_a, "minor_radius"_a, "A torus around +Y");
+    m_sdf.def("cylinder", &sdf::Field::cylinder, "radius"_a, "height"_a, "A capped cylinder along +Y of full height");
+    m_sdf.def("capsule", [v3](const V3& a, const V3& b, float r) { return sdf::Field::capsule(v3(a), v3(b), r); }, "a"_a, "b"_a, "radius"_a);
+    m_sdf.def("ellipsoid", [v3](const V3& radii) { return sdf::Field::ellipsoid(v3(radii)); }, "radii"_a);
+    m_sdf.def("plane", [v3](const V3& n, float offset) { return sdf::Field::plane(v3(n), offset); }, "normal"_a, "offset"_a = 0.0f,
+              "Half-space below the plane dot(p, normal) = offset");
+    m_sdf.def("gyroid", &sdf::Field::gyroid, "scale"_a = 1.0f, "thickness"_a = 0.1f);
+    m_sdf.def("to_mesh", [v3](const sdf::Field& f, const V3& lo, const V3& hi, int resolution, int steps, const std::string& name) {
+        return sdfToMeshReporting(f, v3(lo), v3(hi), resolution, steps, name);
+    }, "field"_a, "bounds_min"_a, "bounds_max"_a, "resolution"_a = 128, "projection_steps"_a = 2, "name"_a = "SdfMesh");
+
     // ========================================================================
     // 10. HAIR & SPLATS SUBMODULE (Analytical Forward Grooming & Gaussians)
     // ========================================================================
+    auto m_ops = m.def_submodule("meshops", "Hard-surface mesh operations: booleans, bevel, inset/extrude, solidify (closed in, closed out)");
+    {
+        using V3 = std::array<float, 3>;
+        auto v3 = [](const V3& a) { return Vec3(a[0], a[1], a[2]); };
+        auto boolean = [](const ScratchboxMesh& a, const ScratchboxMesh& b, meshops::BooleanKind kind, float smooth, const std::string& name, bool requireClosed) {
+            std::vector<std::string> warnings;
+            ScratchboxMesh out = meshops::booleanOp(a, b, kind, smooth, name, requireClosed, &warnings);
+            emitPythonWarnings(warnings);
+            return out;
+        };
+        m_ops.def("union", [boolean](const ScratchboxMesh& a, const ScratchboxMesh& b, float smooth, const std::string& name, bool requireClosed) {
+            return boolean(a, b, meshops::BooleanKind::Union, smooth, name, requireClosed);
+        }, "a"_a, "b"_a, "smooth_angle_deg"_a = 30.0f, "name"_a = "Union", "require_closed"_a = true, "Exact union of two closed meshes; result is closed and keeps a's material");
+        m_ops.def("subtract", [boolean](const ScratchboxMesh& a, const ScratchboxMesh& b, float smooth, const std::string& name, bool requireClosed) {
+            return boolean(a, b, meshops::BooleanKind::Subtract, smooth, name, requireClosed);
+        }, "a"_a, "b"_a, "smooth_angle_deg"_a = 30.0f, "name"_a = "Subtract", "require_closed"_a = true, "Exact a minus b (cut openings, bores, recesses); result is closed");
+        m_ops.def("intersect", [boolean](const ScratchboxMesh& a, const ScratchboxMesh& b, float smooth, const std::string& name, bool requireClosed) {
+            return boolean(a, b, meshops::BooleanKind::Intersect, smooth, name, requireClosed);
+        }, "a"_a, "b"_a, "smooth_angle_deg"_a = 30.0f, "name"_a = "Intersect", "require_closed"_a = true, "Exact overlap of two closed meshes; result is closed");
+        m_ops.def("bevel", [](const ScratchboxMesh& mesh, float width, int segments, float sharp, float smooth, const std::string& name) {
+            return meshops::bevel(mesh, width, std::max(1, segments), sharp, smooth, name);
+        }, "mesh"_a, "width"_a, "segments"_a = 1, "sharp_angle_deg"_a = 30.0f, "smooth_angle_deg"_a = 30.0f, "name"_a = "Beveled",
+           "Bevel edges sharper than sharp_angle_deg on a closed mesh: segments 1 = chamfer, more = rounded. "
+           "Width is capped per vertex at 45% of its shortest edge so faces never invert");
+        m_ops.def("inset_extrude", [v3](const ScratchboxMesh& mesh, const V3& facing, float maxAngle, float inset, float depth,
+                                       std::optional<V3> boxMin, std::optional<V3> boxMax, float smooth, const std::string& name) {
+            bool useBox = boxMin.has_value() && boxMax.has_value();
+            std::vector<std::string> warnings;
+            ScratchboxMesh out = meshops::insetExtrude(mesh, v3(facing), maxAngle, inset, depth,
+                                         useBox ? v3(*boxMin) : Vec3(0, 0, 0), useBox ? v3(*boxMax) : Vec3(0, 0, 0), useBox, smooth, name, &warnings);
+            emitPythonWarnings(warnings);
+            return out;
+        }, "mesh"_a, "facing"_a, "max_angle_deg"_a = 10.0f, "inset"_a = 0.0f, "depth"_a = 0.0f, "box_min"_a = nb::none(), "box_max"_a = nb::none(),
+           "smooth_angle_deg"_a = 30.0f, "name"_a = "InsetExtruded",
+           "Faces within max_angle_deg of `facing` (and with centroids inside box_min..box_max when given) form regions; "
+           "each region's border is inset by `inset` within its plane and the region moved by `depth` along its normal "
+           "(negative depth recesses it: panels, pockets, plinths, raised bosses)");
+        m_ops.def("solidify", [](const ScratchboxMesh& mesh, float thickness, float smooth, const std::string& name) {
+            std::vector<std::string> warnings;
+            ScratchboxMesh out = meshops::solidify(mesh, thickness, smooth, name, &warnings);
+            emitPythonWarnings(warnings);
+            return out;
+        }, "mesh"_a, "thickness"_a, "smooth_angle_deg"_a = 30.0f, "name"_a = "Solidified",
+           "Give a surface thickness: an inner copy offset by `thickness` against its normals, joined along open edges; "
+           "the offset is reduced (with a warning) where the surface curves tighter than the thickness");
+    }
+
+    auto m_relief = m.def_submodule("relief", "Isoparametric normal relief: designed height fields (profiles along curves, periodic ridges, projected images) displaced along normals after adaptive subdivision");
+    {
+        using V3 = std::array<float, 3>;
+        auto v3 = [](const V3& a) { return Vec3(a[0], a[1], a[2]); };
+        nb::class_<relief::Layer>(m_relief, "Layer", "One relief layer; chain .limit_box / .facing / .strength to mask it")
+            .def("limit_box", [v3](relief::Layer& L, const V3& lo, const V3& hi, float feather) { L.hasBox = true; L.boxMin = v3(lo); L.boxMax = v3(hi); L.featherM = feather; return L; },
+                 "box_min"_a, "box_max"_a, "feather_m"_a = 0.0f, "Only inside this box, fading over feather_m at its faces")
+            .def("facing", [v3](relief::Layer& L, const V3& dir, float maxDeg, float softDeg) { L.hasFacing = true; L.facing = v3(dir); L.facingMaxDeg = maxDeg; L.facingSoftDeg = softDeg; return L; },
+                 "direction"_a, "max_angle_deg"_a = 45.0f, "soft_deg"_a = 15.0f, "Only on surfaces within max_angle_deg of direction, fading over soft_deg")
+            .def("strength", [](relief::Layer& L, float s) { L.strength = s; return L; }, "factor"_a);
+
+        m_relief.def("profile", [v3](const std::vector<std::vector<V3>>& carriers, float width, float depth, float sharpness, float flatTop) {
+            relief::Layer L;
+            for (const auto& c : carriers) { std::vector<Vec3> pts; for (const auto& q : c) pts.push_back(v3(q)); L.carriers.push_back(std::move(pts)); }
+            L.widthM = width; L.depthM = depth; L.sharpness = sharpness; L.flatTop = flatTop;
+            return L;
+        }, "carriers"_a, "width_m"_a, "depth_m"_a, "sharpness"_a = 0.3f, "flat_top"_a = 0.0f,
+           "A cross-section swept along polylines (lists of points): depth_m < 0 cuts a groove or shut line, > 0 raises a bead or rib; "
+           "width_m is the half-width, sharpness 0 round .. 1 V, flat_top the fraction of the width at full height");
+        m_relief.def("ridges", [v3](const V3& origin, const V3& direction, float pitch, float depth, float sharpness, float duty, std::optional<V3> second) {
+            relief::Layer L;
+            L.ridges = true; L.ridgeOrigin = v3(origin); L.ridgeDir = v3(direction); L.pitchM = pitch; L.ridgeDepthM = depth;
+            L.ridgeSharpness = sharpness; L.duty = duty;
+            if (second) L.ridgeDir2 = v3(*second);
+            return L;
+        }, "origin"_a, "direction"_a, "pitch_m"_a, "depth_m"_a, "sharpness"_a = 0.6f, "duty"_a = 0.5f, "second_direction"_a = nb::none(),
+           "Periodic ridges of pitch_m along direction (depth_m < 0 for grooves); a second_direction multiplies in a crossing set (knurling, waffle)");
+        m_relief.def("helix_ridges", [v3](const V3& origin, const V3& axis, float radius, float pitch, float depth, float helixDeg, float sharpness, float duty) {
+            relief::Layer L;
+            L.ridges = true; L.ridgeAroundAxis = true; L.ridgeOrigin = v3(origin); L.ridgeDir = v3(axis); L.ridgeRadiusM = radius;
+            L.pitchM = pitch; L.ridgeDepthM = depth; L.helixDeg = helixDeg; L.ridgeSharpness = sharpness; L.duty = duty;
+            return L;
+        }, "origin"_a, "axis"_a, "radius_m"_a, "pitch_m"_a, "depth_m"_a, "helix_deg"_a = 30.0f, "sharpness"_a = 0.6f, "duty"_a = 0.5f,
+           "Ridges around an axis (a whole number per turn at radius_m, pitch_m rounded to fit): straight flutes at helix_deg 0, "
+           "a crossing knurl at helix_deg > 0 (depth_m < 0 for grooves)");
+        m_relief.def("image", [v3](nb::bytes png, const V3& centre, const V3& normal, const V3& up, float width, float height, float depth,
+                                  float tilesU, float tilesV, float projectionDepth) {
+            auto decoded = png::decode(reinterpret_cast<const uint8_t*>(png.c_str()), png.size(), png::OutputFormat::Rgba);
+            if (!decoded.ok) throw std::invalid_argument("relief image is not a readable PNG: " + decoded.error);
+            relief::Layer L;
+            L.image = std::move(decoded.image); L.imageCentre = v3(centre); L.imageNormal = v3(normal); L.imageUp = v3(up);
+            L.imageWidthM = width; L.imageHeightM = height; L.imageDepthM = depth; L.imageTilesU = tilesU; L.imageTilesV = tilesV;
+            L.imageProjectionDepthM = projectionDepth;
+            return L;
+        }, "png"_a, "centre"_a, "normal"_a, "up"_a, "width_m"_a, "height_m"_a, "depth_m"_a, "tiles_u"_a = 1.0f, "tiles_v"_a = 1.0f, "projection_depth_m"_a = 0.02f,
+           "A height image (luminance x alpha, white = full depth_m) projected onto the surface like a decal, tiled tiles_u x tiles_v times");
+        m_relief.def("apply", [](const ScratchboxMesh& mesh, const std::vector<relief::Layer>& layers, float targetEdge, int maxSub, float samples,
+                                 float smooth, const std::string& name) {
+            std::vector<std::string> warnings;
+            ScratchboxMesh out = relief::apply(mesh, layers, targetEdge, maxSub, samples, smooth, name, &warnings);
+            emitPythonWarnings(warnings);
+            return out;
+        }, "mesh"_a, "layers"_a, "target_edge_m"_a = 0.0f, "max_subdivisions"_a = 6, "samples_per_detail"_a = 3.0f,
+           "smooth_angle_deg"_a = 30.0f, "name"_a = "Relief",
+           "Subdivide where the layers reach (conformally, until edges resolve the finest detail) and displace along smooth normals; "
+           "a layer that moves no vertex raises a warning");
+    }
+
     auto m_hair = m.def_submodule("hair", "Analytical forward hair grooming, Marschner reflectance, and Gaussian splat synthesis");
 
     nb::class_<spz::GaussianSplat>(m_hair, "GaussianSplat")

@@ -94,6 +94,11 @@ export function computeSceneGeometryBounds(scene: THREE.Scene): SceneBoundsResul
         }
 
         if ((child as any).isMesh || (child as any).isPoints || (child as any).isInstancedMesh) {
+            // Framing-background terrain is never framed on, even as a fallback: a staged location's terrain often
+            // reaches the viewport before its structure, and framing that alone sent the camera kilometres out (and
+            // judged the run's own camera "inside" the terrain's box); later loads then keep that camera. With only
+            // terrain loaded there is nothing to frame yet, so framing waits for the structure.
+            if (hasEnvironmentAncestor(child)) return;
             box.expandByObject(child);
             hasGeometry = true;
 
