@@ -87,6 +87,9 @@ class Mesh:
 
     def recompute_smooth_normals(self) -> Mesh: ...
 
+    def weld_identical_vertices(self) -> int:
+        """Merge vertices identical in position, normal, UV, colour and tangent (lossless); returns how many were removed"""
+
     def weld_vertices(self, epsilon: float = 0.0001) -> Mesh: ...
 
     def recompute_bounds(self) -> Mesh: ...

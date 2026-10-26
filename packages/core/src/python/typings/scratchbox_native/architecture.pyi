@@ -5,7 +5,7 @@ import scratchbox_native
 import scratchbox_native.geometry
 import scratchbox_native.math
 
-__all__ = ['BuildingConfig', 'FacadeDetails', 'FacadeRule', 'RomanOrder', 'RoofType', 'chimney_tops', 'facade_frames', 'generate_building', 'generate_building_parts', 'generate_curved_building', 'generate_peripteral_temple']
+__all__ = ['BuildingConfig', 'FacadeDetails', 'FacadeRule', 'RomanOrder', 'RoofType', 'chimney_tops', 'facade_frames', 'generate_building', 'generate_building_parts', 'generate_curved_building', 'generate_peripteral_temple', 'project_world_uvs']
 
 
 class BuildingConfig:
@@ -145,6 +145,24 @@ class BuildingConfig:
     def rules(self) -> list[FacadeRule]: ...
     @rules.setter
     def rules(self, value: list[FacadeRule]) -> None: ...
+
+    @property
+    def footprint(self) -> list[scratchbox_native.math.Vec2]:
+        """Plan outline (x east, z south, metres); empty = the width x depth rectangle"""
+    @footprint.setter
+    def footprint(self, value: list[scratchbox_native.math.Vec2]) -> None: ...
+
+    @property
+    def footprint_holes(self) -> list[list[scratchbox_native.math.Vec2]]:
+        """Courtyard loops inside the footprint"""
+    @footprint_holes.setter
+    def footprint_holes(self, value: list[list[scratchbox_native.math.Vec2]]) -> None: ...
+
+    @property
+    def entrance_edge(self) -> int:
+        """Edge carrying the entrance (outline edge index); -1 = default (longest outer edge, or the rectangle's south side), -2 = no entrance"""
+    @entrance_edge.setter
+    def entrance_edge(self, value: int) -> None: ...
 
 
 class FacadeDetails:
@@ -460,7 +478,7 @@ def chimney_tops(config: scratchbox_native.architecture.BuildingConfig) -> list[
 
 
 def facade_frames(config: scratchbox_native.architecture.BuildingConfig) -> list:
-    """The four facade planes at ground level: name (south = +Z entrance side, north, east, west), start corner, right and outward normal directions, length"""
+    """The facade planes at ground level: name (on the rectangle south = +Z entrance side, north, east, west; on a footprint outline edge0, edge1, ... outer edges first, then each courtyard's), start corner, right and outward normal directions, length"""
 
 
 def generate_building(config: scratchbox_native.architecture.BuildingConfig, name: str = 'ProceduralBuilding') -> scratchbox_native.geometry.Mesh: ...
@@ -475,3 +493,7 @@ def generate_curved_building(config: scratchbox_native.architecture.BuildingConf
 
 def generate_peripteral_temple(archetype: str = 'roman_peripteral', order: scratchbox_native.RomanOrder = ..., footprint_length: float = 42.0, footprint_width: float = 24.0, column_count_x: int = 8, column_count_y: int = 14, column_height: float = 7.5, plinth_height: float = 1.4, seed: int = 1337) -> scratchbox_native.geometry.Mesh:
     """Construct an authentic Vitruvian classical temple with peripteral colonnade and gable roof"""
+
+
+def project_world_uvs(mesh: scratchbox_native.geometry.Mesh) -> scratchbox_native.geometry.Mesh:
+    """A copy of the mesh with world-metre UVs per triangle (u along the face horizontally, v up it), the frame the building parts use, so an add-on takes a building surface's tiled texture at real-world scale"""

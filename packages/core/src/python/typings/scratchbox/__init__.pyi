@@ -17,7 +17,7 @@ import scratchbox_native.math
 import scratchbox_native.nature
 import typing
 
-__all__ = ['Any', 'Armature', 'Dict', 'Flora', 'Human', 'List', 'Optional', 'PbrMaterial', 'PbrMaterialWrapper', 'PlantPreset', 'PoseBone', 'PrincipledBsdfMaterial', 'RomanOrder', 'Scene', 'ShapeKeyBlock', 'ShapeKeys', 'Structure', 'StudioHuman', 'Terrain', 'Tuple', 'Union', 'World', 'adaptive_object', 'architecture', 'composer', 'constants', 'core', 'create_arched_blister', 'create_beveled_box', 'create_box', 'create_building', 'create_building_parts', 'create_cambered_foil', 'create_catenary_cable', 'create_character', 'create_cone', 'create_cube', 'create_curved_building', 'create_cylinder', 'create_envelope', 'create_form', 'create_human', 'create_hydraulic_actuator', 'create_intake_strainer', 'create_ivy', 'create_lathe', 'create_loft', 'create_lofted_hull', 'create_louver_bay', 'create_panelized_loft', 'create_plane', 'create_revolving_component', 'create_sphere', 'create_spline_conduit_harness', 'create_structural_truss_member', 'create_studio_pedestal', 'create_subdivided_box', 'create_tower', 'create_tree', 'create_vegetation', 'create_wheel', 'create_wheel_assembly', 'export_glb', 'geometry', 'geospatial', 'hair', 'human', 'io', 'k', 'layout', 'math', 'meshops', 'moulding_profile', 'nature', 'object_spec', 'os', 'pbr', 'plant', 'processing', 'py_math', 'random', 'relief', 'replicate_metric_array', 'revolve_harmonic_solid', 'rig', 'sdf', 'shaper', 'structure', 'superellipse_loop', 'superellipse_point', 'sweep_curve_profile', 'sys', 'terrain', 'topology', 'validate_scene', 'validation', 'world', 'write_glb', 'write_textured_building']
+__all__ = ['Any', 'Armature', 'Dict', 'Flora', 'Human', 'List', 'Optional', 'PbrMaterial', 'PbrMaterialWrapper', 'PlantPreset', 'PoseBone', 'PrincipledBsdfMaterial', 'RomanOrder', 'Scene', 'ShapeKeyBlock', 'ShapeKeys', 'Structure', 'StudioHuman', 'Terrain', 'Tuple', 'Union', 'World', 'adaptive_object', 'architecture', 'composer', 'constants', 'core', 'create_arched_blister', 'create_beveled_box', 'create_box', 'create_building', 'create_building_parts', 'create_cambered_foil', 'create_catenary_cable', 'create_character', 'create_cone', 'create_cube', 'create_curved_building', 'create_cylinder', 'create_envelope', 'create_form', 'create_human', 'create_hydraulic_actuator', 'create_intake_strainer', 'create_ivy', 'create_lathe', 'create_loft', 'create_lofted_hull', 'create_louver_bay', 'create_panelized_loft', 'create_plane', 'create_revolving_component', 'create_sphere', 'create_spline_conduit_harness', 'create_structural_truss_member', 'create_studio_pedestal', 'create_subdivided_box', 'create_tower', 'create_tree', 'create_vegetation', 'create_wheel', 'create_wheel_assembly', 'export_glb', 'geometry', 'geospatial', 'hair', 'human', 'io', 'k', 'layout', 'math', 'meshops', 'moulding_profile', 'nature', 'object_spec', 'os', 'pbr', 'plant', 'processing', 'py_math', 'random', 'relief', 'replicate_metric_array', 'revolve_harmonic_solid', 'rig', 'sdf', 'shaper', 'stack_buildings', 'structure', 'superellipse_loop', 'superellipse_point', 'sweep_curve_profile', 'sys', 'terrain', 'topology', 'validate_scene', 'validation', 'world', 'write_glb', 'write_textured_building']
 
 Any = typing.Any
 Armature = scratchbox.human.Armature
@@ -359,7 +359,7 @@ def create_building(width: float = 18.0, depth: float = 14.0, floors: int = 4, f
     """
 
 
-def create_building_parts(width: float = 18.0, depth: float = 14.0, floors: int = 4, floor_height: float = 3.4, ground_floor_height: float = 4.2, plinth_height: float = 0.8, bay_width: float = 3.2, window_width: float = 1.8, window_height: float = 2.0, window_recess_depth: float = 0.25, roof: typing.Any = 'mansard', roof_height: float = 3.5, roof_overhang: float = 0.4, roof_pitch_degrees: float = 55.0, parapet_height: float = 0.8, curvature: float = 0.0, superellipse_exponent: float | None = None, twist_degrees: float = 0.0, taper: float = 1.0, bulge: float = 0.0, bay_count: int | None = None, bake_curvature_ao: bool = True, details: typing.Dict[str, typing.Any] | None = None, floor_heights: typing.List[float] | None = None, centre_bay_scale: float = 1.0, end_bay_scale: float = 1.0, facade_rules: typing.List[typing.Dict[str, typing.Any]] | None = None, name: str = 'ProceduralBuilding', **kwargs) -> _BuildingParts:
+def create_building_parts(width: float = 18.0, depth: float = 14.0, floors: int = 4, floor_height: float = 3.4, ground_floor_height: float = 4.2, plinth_height: float = 0.8, bay_width: float = 3.2, window_width: float = 1.8, window_height: float = 2.0, window_recess_depth: float = 0.25, roof: typing.Any = 'mansard', roof_height: float = 3.5, roof_overhang: float = 0.4, roof_pitch_degrees: float = 55.0, parapet_height: float = 0.8, curvature: float = 0.0, superellipse_exponent: float | None = None, twist_degrees: float = 0.0, taper: float = 1.0, bulge: float = 0.0, bay_count: int | None = None, bake_curvature_ao: bool = True, details: typing.Dict[str, typing.Any] | None = None, floor_heights: typing.List[float] | None = None, centre_bay_scale: float = 1.0, end_bay_scale: float = 1.0, facade_rules: typing.List[typing.Dict[str, typing.Any]] | None = None, footprint: typing.List[typing.Tuple[float, float]] | None = None, courtyards: typing.List[typing.List[typing.Tuple[float, float]]] | None = None, entrance_edge: int | None = None, entrance: bool = True, base_y: float = 0.0, offset: typing.Tuple[float, float] = (0.0, 0.0), name: str = 'ProceduralBuilding', **kwargs) -> _BuildingParts:
     """
     The building create_building makes, as one mesh per material slot (<name>_wall, _glass,
     _frame, _roof, _foundation) with world-metre UVs, ready for write_textured_building.
@@ -373,6 +373,18 @@ def create_building_parts(width: float = 18.0, depth: float = 14.0, floors: int 
         end). Overrides: window_width_m, window_height_m, sill_height_m, opening (False = blank
         wall), sill, hood (False removes), sill_profile, hood_profile, hood_pitch_deg, balcony
         ("none", "bay", "continuous" along adjacent bays). The entrance bay keeps its door.
+
+    base_y and offset (x, z) place the building: a tier of a set-back tower stands at the height of
+    the tier below (see stack_buildings), a wing beside it at an offset.
+
+    footprint [(x, z), ...] (x east, z south, metres) builds any plan outline instead of the width x
+    depth rectangle, with courtyards as holes inside it: one facade per edge (facades "edge0", ... outer
+    edges first, each with its compass "heading_deg"), quoins and corner pilasters on outside corners,
+    plain returns at inside ones, edges too short for a window left blank. Points under 5 cm apart and
+    bends under 10 degrees are merged. The entrance goes on the longest outer edge unless entrance_edge
+    picks one; facade rule "sides" are edge indices. Outlines take roof="flat" for now.
+    entrance=False gives no door at all: an upper tier of a set-back tower opens onto its terrace
+    through windows, not a front door.
     """
 
 
@@ -596,6 +608,17 @@ def revolve_harmonic_solid(anchor_point: typing.Tuple[float, float, float] = (0.
 import scratchbox_native.rig as rig
 import scratchbox_native.sdf as sdf
 import scratchbox_native.shaper as shaper
+
+def stack_buildings(*tiers) -> _BuildingParts:
+    """
+    Combine buildings made by create_building_parts (each with its own name, placed with base_y and
+    offset) into one parts list for write_textured_building: set-back towers as tiers standing on each
+    other, wings beside a block. Surfaces and weathering apply to every tier's parts by slot; soot
+    sources are merged; facades are addressed as "<tier name>/south" etc., and the first tier's also
+    as plain "south". The tier below a set-back usually takes roof="flat" (its parapet edges the
+    terrace); only the top tier carries the pitched roof.
+    """
+
 import scratchbox.structure as structure
 
 def superellipse_loop(z: float, cx: float, cy: float, rx: float, ry: float, m: float = 2.4, n_pts: int = 24, roll_deg: float = 0.0) -> typing.List[typing.Any]:
@@ -635,7 +658,7 @@ def write_glb(arg1, arg2=None) -> bool:
     """Save a ScratchboxMesh directly to a standard binary glTF 2.0 (.glb) file"""
 
 
-def write_textured_building(path: str, parts, surfaces: typing.Dict[str, typing.Any] | None = None, weathering: typing.Dict[str, typing.Any] | None = None, decals: typing.List[typing.Dict[str, typing.Any]] | None = None) -> typing.Dict[str, typing.Any]:
+def write_textured_building(path: str, parts, surfaces: typing.Dict[str, typing.Any] | None = None, weathering: typing.Dict[str, typing.Any] | None = None, decals: typing.List[typing.Dict[str, typing.Any]] | None = None, extras: typing.List[typing.Dict[str, typing.Any]] | None = None) -> typing.Dict[str, typing.Any]:
     """
     Write building parts to a GLB with real-scale PBR textures per part.
 
@@ -661,8 +684,17 @@ def write_textured_building(path: str, parts, surfaces: typing.Dict[str, typing.
               under decal_aging; PNG only) or "panel" (its own quad standing "standoff_m" off the
               wall, with "thickness_m" for boards and plaques, full image resolution);
       optional "opacity", "depth_m" (paint projection depth) and "source" (provenance label).
-    Returns {"path", "parts": {...}, "decals": [...]} so the caller can label provenance
-    honestly; weathering and procedural marks are reported as generated.
+
+    extras attaches closed add-ons built with sb.sdf, sb.meshops or sb.relief (ornaments, dormer and
+    chimney bodies, fluted pilasters) to the building. Each is a dict with "mesh" and "slot" (which
+    surface it takes: "wall", "foundation", "roof", "frame", "glass", or a new slot name given its own
+    surfaces entry), optional "color" (r, g, b) for an untextured slot, "provenance" (default
+    "generated"), "confidence" (default 1.0), "source" (what made it) and "weather" (receives the
+    weathering bake; default True up to 20,000 triangles, False above, since the bake's overlay copies
+    every receiving triangle; every add-on blocks it either way). Each gets world-metre UVs, so tiled
+    surfaces lie at the same scale as the building's; add-ons of one slot share one set of maps.
+    Returns {"path", "parts": {...}, "decals": [...], "extras": [...]} so the caller can label
+    provenance honestly; weathering and procedural marks are reported as generated.
     """
 
 
