@@ -1168,25 +1168,54 @@ def _building_config(
     cfg.end_bay_scale = float(end_bay_scale)
     if facade_rules:
         side_index = {"south": 0, "north": 1, "east": 2, "west": 3}
+        balcony_modes = {"none": 0, "bay": 1, "continuous": 2}
         rules = []
-        for spec in facade_rules:
+        for n, spec in enumerate(facade_rules):
             rule = _native.architecture.FacadeRule()
+            where = f"facade rule {n}"
             for key, value in spec.items():
                 if key == "floors":
-                    lo, hi = value if isinstance(value, (list, tuple)) else (value, value)
-                    rule.floor_min, rule.floor_max = int(lo), int(hi)
+                    if isinstance(value, (list, tuple)):
+                        if len(value) != 2 or not all(isinstance(v, int) and not isinstance(v, bool) for v in value):
+                            raise ValueError(f"{where}: 'floors' must be an int or an (lowest, highest) pair of ints, got {value!r}")
+                        lo, hi = value
+                        if lo > hi:
+                            raise ValueError(f"{where}: 'floors' range ({lo}, {hi}) has its lowest floor above its highest")
+                    elif isinstance(value, int) and not isinstance(value, bool):
+                        lo = hi = value
+                    else:
+                        raise ValueError(f"{where}: 'floors' must be an int or an (lowest, highest) pair of ints, got {value!r}")
+                    rule.floor_min, rule.floor_max = lo, hi
                     continue
                 if not hasattr(rule, key):
                     raise ValueError(f"Unknown facade rule field '{key}'")
                 if key == "sides":
-                    value = [side_index[v] if isinstance(v, str) else int(v) for v in value]
+                    if isinstance(value, str) or not isinstance(value, (list, tuple)):
+                        raise ValueError(f"{where}: 'sides' must be a list of side names or indices, got {value!r}")
+                    sides = []
+                    for v in value:
+                        if isinstance(v, str):
+                            if v not in side_index:
+                                raise ValueError(f"{where}: unknown side '{v}' (south, north, east, west)")
+                            sides.append(side_index[v])
+                        elif isinstance(v, int) and 0 <= v <= 3:
+                            sides.append(v)
+                        else:
+                            raise ValueError(f"{where}: side must be a name or an index 0..3, got {v!r}")
+                    value = sides
                 elif key.endswith("_profile"):
                     value = [_native.math.Vec2(float(x), float(y)) for x, y in value]
                 elif key in ("opening", "sill", "hood"):
                     value = int(bool(value))
                 elif key == "balcony":
-                    value = {"none": 0, "bay": 1, "continuous": 2}.get(value, value)
-                setattr(rule, key, value)
+                    if isinstance(value, str):
+                        if value not in balcony_modes:
+                            raise ValueError(f"{where}: unknown balcony mode '{value}' (none, bay, continuous)")
+                        value = balcony_modes[value]
+                try:
+                    setattr(rule, key, value)
+                except TypeError as exc:
+                    raise ValueError(f"{where}: '{key}' does not accept {value!r}") from exc
             rules.append(rule)
         cfg.rules = rules
     return cfg
@@ -1444,6 +1473,9 @@ def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]]
                 value = _native.math.Vec3(*value)
             setattr(params, key, value)
         receivers = [p for p in parts if p.name.rsplit("_", 1)[-1] in wanted]
+        if not receivers:
+            have = sorted({p.name.rsplit("_", 1)[-1] for p in parts})
+            raise ValueError(f"weathering receivers {sorted(wanted)} match no building part (have {have})")
         baked = _native.weathering.bake_weathering(receivers, list(parts), params, f"{base_name}_weathering", painted)
         overlay = baked["overlay"]
         if len(overlay.vertices):

@@ -228,7 +228,8 @@ public:
         ScratchboxMesh mesh(name);
         mesh.material = cfg.materials.wall;
 
-        float totalH = cfg.plinthHeight + cfg.groundFloorHeight + cfg.floorHeight * static_cast<float>(std::max(1, cfg.floorCount - 1));
+        // Per-floor heights (floorHeights, else ground / typical) apply here as on the flat builder.
+        float totalH = floorBaseY(cfg, std::max(1, cfg.floorCount));
         float halfW = cfg.width * 0.5f;
         float halfD = cfg.depth * 0.5f;
         float avgR = std::sqrt(0.5f * (halfW * halfW + halfD * halfD));
@@ -314,7 +315,7 @@ public:
         // 2. Stories & Facades
         float yCur = cfg.plinthHeight;
         for (int floor = 0; floor < cfg.floorCount; ++floor) {
-            float fHeight = (floor == 0 ? cfg.groundFloorHeight : cfg.floorHeight);
+            float fHeight = floorHeightOf(cfg, floor);
             float yNext = yCur + fHeight;
             float t0 = yCur / totalH;
             float t1 = yNext / totalH;
@@ -541,6 +542,13 @@ public:
             std::abs(config.taper - 1.0f) > 0.001f || std::abs(config.bulge) > 0.001f ||
             config.superellipseExponent < 8.0f ||
             config.roofType == RoofType::Dome || config.roofType == RoofType::BarrelVault) {
+            // The curved builder lofts its own bays and has no opening resolver: facade rules and bay
+            // scales would be dropped on the floor, so they are refused rather than silently ignored.
+            if (!config.rules.empty() || std::abs(config.centreBayScale - 1.0f) > 1e-4f || std::abs(config.endBayScale - 1.0f) > 1e-4f) {
+                throw std::invalid_argument("facade_rules, centre_bay_scale and end_bay_scale are not applied by the curved builder "
+                    "(curvature, twist, taper, bulge, superellipse_exponent < 8, dome or barrel-vault roof route to it); "
+                    "floor_heights are. Build a flat plan for per-bay rules, or drop them");
+            }
             return generateCurvedBuilding(config, name);
         }
 
@@ -649,6 +657,9 @@ public:
         }
         float floorH = floorHeightOf(cfg, floor);
         o.width = std::min(o.width, bayW * 0.85f);
+        // The sill stays low enough for a 0.3 m opening under the 0.4 m lintel band, so a rule-set
+        // sill can never push the opening through the floor above.
+        o.sill = std::clamp(o.sill, 0.0f, std::max(0.0f, floorH - 0.7f));
         o.height = std::max(0.3f, std::min(o.height, floorH - o.sill - 0.4f));
         if (o.sill <= 0.001f) o.hasSill = false;
         if (o.entrance || !o.open) o.balcony = 0;
@@ -1321,10 +1332,16 @@ private:
 
             // Pilasters at bay boundaries: shaft plus flared base and capital, each a vertical sweep.
             if (d.pilasterWidthM > 0.0f) {
+                // The pier between openings, from the resolved openings (rules can widen a window).
                 float gap = 1e9f;
                 for (int b = 0; b < bayCount; ++b) {
                     float bw = edges[b + 1] - edges[b];
-                    gap = std::min(gap, bw - std::min(cfg.windowWidth, bw * 0.85f));
+                    float widest = 0.0f;
+                    for (int f = 0; f < cfg.floorCount; ++f) {
+                        const OpeningSpec o = resolveOpening(cfg, static_cast<int>(sideIdx), f, b, bayCount, bw);
+                        if (o.open) widest = std::max(widest, o.width);
+                    }
+                    gap = std::min(gap, bw - widest);
                 }
                 float w = std::min(d.pilasterWidthM, gap * 0.9f);
                 float yTop = totalH - (d.corniceProfile.size() >= 3 ? 0.05f : 0.0f);

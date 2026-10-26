@@ -1243,6 +1243,7 @@ NB_MODULE(scratchbox_native, m) {
     m_weather.def("bake_weathering", [](const std::vector<ScratchboxMesh>& receivers, const std::vector<ScratchboxMesh>& occluders,
                                         const weathering::WeatheringParams& params, const std::string& name,
                                         const std::vector<std::tuple<Vec3, Vec3, Vec3, float, float, float, float, nb::bytes>>& decals) {
+        if (receivers.empty()) throw std::invalid_argument("bake_weathering: no receiver meshes; nothing would be weathered");
         std::vector<weathering::Decal> painted;
         for (const auto& [center, normal, up, width, height, depth, opacity, image] : decals) {
             auto decoded = png::decode(reinterpret_cast<const uint8_t*>(image.c_str()), image.size(), png::OutputFormat::Rgba);

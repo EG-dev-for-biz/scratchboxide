@@ -249,12 +249,22 @@ inline ImageBuffer synthesizeBlot(const BlotParams& bp) {
  * (image top towards `up`, UV (0,0) at the top-left), plus edge faces when thicknessM > 0
  * (sign boards, plaques). The caller attaches the image as the material's base colour.
  */
+// Image frame of a decal: N out of the surface, R along the image's rows, U up its columns. An `up`
+// parallel to the normal (a roof decal with the default +Y up) cannot define the frame, so the frame
+// then takes world -Z as up on horizontal surfaces and +Y elsewhere instead of degenerating to a point.
+inline void decalFrame(const Vec3& normal, const Vec3& up, Vec3& N, Vec3& R, Vec3& U) {
+    N = normal.normalized();
+    Vec3 u = up;
+    if (u.cross(N).length() < 1e-4f * std::max(1e-6f, u.length())) u = std::abs(N.y) > 0.9f ? Vec3(0, 0, -1) : Vec3(0, 1, 0);
+    R = u.cross(N).normalized();
+    U = N.cross(R);
+}
+
 inline ScratchboxMesh makeDecalPanel(const Vec3& center, const Vec3& normal, const Vec3& up, float widthM, float heightM,
                                      float thicknessM, float standoffM, const std::string& name) {
     ScratchboxMesh mesh(name);
-    Vec3 N = normal.normalized();
-    Vec3 R = up.cross(N).normalized();
-    Vec3 U = N.cross(R);
+    Vec3 N, R, U;
+    decalFrame(normal, up, N, R, U);
     Vec3 back = center + N * standoffM, front = back + N * std::max(0.0f, thicknessM);
     Vec3 hr = R * (widthM * 0.5f), hu = U * (heightM * 0.5f);
     auto quad = [&](const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d, const Vec3& nrm,
@@ -272,6 +282,9 @@ inline ScratchboxMesh makeDecalPanel(const Vec3& center, const Vec3& normal, con
     quad(front - hr - hu, front + hr - hu, front + hr + hu, front - hr + hu, N,
          Vec2(0, 1), Vec2(1, 1), Vec2(1, 0), Vec2(0, 0));
     if (thicknessM > 0.0f) {
+        // The back of a thick panel, seen from the sides it stands off from (mirrored image).
+        quad(back - hr - hu, back - hr + hu, back + hr + hu, back + hr - hu, N * -1.0f,
+             Vec2(1, 1), Vec2(1, 0), Vec2(0, 0), Vec2(0, 1));
         quad(back - hr + hu, back + hr + hu, front + hr + hu, front - hr + hu, U, Vec2(0, 0.01f), Vec2(1, 0.01f), Vec2(1, 0.01f), Vec2(0, 0.01f));
         quad(back + hr - hu, back - hr - hu, front - hr - hu, front + hr - hu, -U, Vec2(1, 0.99f), Vec2(0, 0.99f), Vec2(0, 0.99f), Vec2(1, 0.99f));
         quad(back + hr + hu, back + hr - hu, front + hr - hu, front + hr + hu, R, Vec2(0.99f, 0), Vec2(0.99f, 1), Vec2(0.99f, 1), Vec2(0.99f, 0));
@@ -481,23 +494,26 @@ inline WeatheringResult bakeWeathering(const std::vector<ScratchboxMesh>& receiv
                     o.layer(prm.sootColor, prm.sootStrength * std::exp(-dist / std::max(0.1f, prm.sootRadiusM)) * facing);
                 }
 
-                // Painted decals over the weathering, then part of the weathering laid back on top.
-                bool painted = false;
+                // Painted decals over the weathering, then part of the weathering laid back on top, in
+                // proportion to how much decal actually covers the texel: a transparent pixel inside a
+                // decal's rectangle is left exactly as weathered, so no decal ships with a faint box.
+                float coverage = 0.0f;
                 Over withDecals = o;
                 for (const Decal& dc : decals) {
-                    Vec3 dN = dc.normal.normalized();
+                    Vec3 dN, dR, dU;
+                    decalFrame(dc.normal, dc.up, dN, dR, dU);
                     Vec3 rel = texPos[i] - dc.center;
                     if (std::abs(rel.dot(dN)) > dc.depthM || n.dot(dN) < 0.3f) continue;
-                    Vec3 dR = dc.up.cross(dN).normalized();
-                    Vec3 dU = dN.cross(dR);
                     float lu = rel.dot(dR) / dc.widthM + 0.5f, lv = rel.dot(dU) / dc.heightM + 0.5f;
                     if (lu < 0 || lu > 1 || lv < 0 || lv > 1) continue;
                     Vec4 sample = sampleRgba(dc.image, lu, 1.0f - lv);
-                    withDecals.layer(Vec3(sample.x, sample.y, sample.z), sample.w * dc.opacity);
-                    painted = true;
+                    float alpha = sample.w * dc.opacity;
+                    if (alpha <= 0.0f) continue;
+                    withDecals.layer(Vec3(sample.x, sample.y, sample.z), alpha);
+                    coverage = std::max(coverage, std::min(1.0f, alpha));
                 }
-                if (painted) {
-                    withDecals.layer(o.c, o.a * prm.decalAging);
+                if (coverage > 0.0f) {
+                    withDecals.layer(o.c, o.a * prm.decalAging * coverage);
                     o = withDecals;
                 }
 
