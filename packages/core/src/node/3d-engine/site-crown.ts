@@ -75,7 +75,7 @@ export interface SiteCrown {
 }
 
 /** A position-only GLB of triangles (the shape program's scan reads geometry only). */
-function writeTrianglesGlb(file: string, positions: Float32Array, indices: Uint32Array): void {
+export function writeTrianglesGlb(file: string, positions: Float32Array, indices: Uint32Array): void {
     let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     for (let i = 0; i < positions.length; i += 3) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], positions[i + k]); hi[k] = Math.max(hi[k], positions[i + k]); }
     const pb = Buffer.from(positions.buffer, positions.byteOffset, positions.byteLength), ib = Buffer.from(indices.buffer, indices.byteOffset, indices.byteLength);

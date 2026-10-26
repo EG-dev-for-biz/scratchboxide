@@ -166,3 +166,120 @@
   - Prism roof planes are dropped (flat tops).
   - The crown's surface takes the wall's texture, not its own (metal, glass).
   - Zooming the app viewport onto the crown was not practical with the mouse; the close comparison is the development render above.
+
+---
+
+## 10. Scan-led tiers and a measured score (after merging main's sb.massing)
+
+* **Context:**
+  - Merged `origin/main` (329 commits) into the branch. It brings main's scan-led massing: `sb.massing`, `scratchbox_scan_massing.hpp` and `massing-choice`, already merged to main though the supertall plan (`docs/plans/supertall-massing-shape-fix.md`) still calls it unmerged.
+  - Conflicts: the README rows (both kept) and the generated stubs (regenerated).
+* **What was added:**
+  - **Scan for scripts:** `site-scan.ts` writes the site's isolated 3D-tiles structure (the cached staged extraction) with the street at y = 0, and the tool hands it to scripts as `site()["scan"]`.
+  - **`sb.site_tiers(source=...)`:** `"auto"` takes Google's modeled volume when there is one, else the scan's tiers via `sb.massing.Scan.tiers()` (labelled measured), else the vector extrusions.
+    - Scan tiers are cleaned before use. A new tier starts only where the plan area drops more than 15% below the run's smallest area, or grows 30% above its largest: a scan melts a facade's recesses unevenly, so a shaft's area flickers by about 21% while a real setback steps down and stays down.
+    - Each outline's cell-grid stair-steps are simplified by Douglas-Peucker, the tolerance rising until the ring no longer crosses itself (raw scan tiers had 92–346-point rings that crossed themselves).
+  - **`sb.site_score(..., plan=plan)`:** measures any built meshes against the scan with `sb.massing`'s height-balanced coverage and precision (main's thresholds 0.9 / 0.85). With `plan`, surface more than 2 m inside a tier's outline is left out.
+    - Without it, the floor slabs (one per storey, ~160,000 samples here) **inflate coverage from ~0.69 to 0.99**: any scan surface inside the volume lies within the 2.5 m relief of some slab.
+    - A first 0.6 m margin wrongly dropped real wall samples (the generator's cleaned outlines and window recesses sit over 0.6 m inside the raw ring in places).
+* **Development scores** (same Empire State Building scan, with the fitted crown, interior left out):
+
+  | Tier source | Tiers | Banded coverage | Banded precision | Worst band |
+  |---|---|---|---|---|
+  | modeled volume | 7 | 0.688 | 0.639 | 0.17 |
+  | scan, first merge rule (area within 30%) | 5 | 0.709 | 0.598 | 0.10 |
+  | scan, setback rule | 6 | 0.723 | 0.618 | 0.17 |
+
+  Without the crown, the top bands score 0 coverage: the crown fit is what covers the top of the building.
+* **In the app** (web 3070 / API 3071 / tools 3072, fresh chats; prompt: tiers "read from the 3D tiles scan (not the vector model)" and "measure how well the result matches the real building's scan and report the coverage and precision honestly"):
+  - **First run:** the agent used `source="scan"` and `sb.site_score(..., plan=plan)` unprompted and scored 0.710 / 0.610, `explains: False`. Its own explanation found the merge rule's flaw: it "smooths over intermediate setbacks (25–78 m and 78–111 m)". The real 78 m setback is a 22% drop, the same size as the shaft's noise.
+  - **After the setback rule:** 6 tiers (0–23, 23–78, 78–112, 112–296, 296–320, 320–335 m), **banded coverage 0.725, precision 0.632**, worst band 0.169, `explains: False`, 782,538 vertices. The model rendered.
+  - **The agent's reading of the remaining gap:** the tiers' simplified outlines do not follow the tower's deep vertical window-court notches.
+* **Still open:**
+  - Neither tier source meets main's thresholds (0.9 / 0.85). The walls sit more than 2.5 m off the scan in places, likely the notches and light courts, which per-band analysis would confirm.
+  - The building's facade details (piers, cornices, balconies) also cost precision.
+  - Merging the regularizer from main (`footprint-regularize.ts`) into the scan outlines is not done (it is TypeScript; the Python path uses Douglas-Peucker).
+
+---
+
+## 11. A documented benchmark, robust scan setbacks and square outlines
+
+* **Benchmark file:** `docs/benchmarks/empire_state_building.json` (schema `scratchbox.massing-benchmark/1`; evaluation only, nothing builds from it).
+  - **Documented, each with its source** (Wikipedia, Structurae, the NRHP nomination drawn from LPC report LP-2000):
+    - footprint 424 × 187 ft (129.2 × 57.0 m); a 5-storey base, then a 60 ft setback on all sides;
+    - setbacks at floors 21, 25, 30, 72, 81 and 85;
+    - 102 storeys; roof 1,250 ft (381 m); top floor 1,224 ft; antenna tip 1,454 ft (443.2 m); mast 158 ft above the 86th floor.
+  - **Estimated, and said so:** storey height = roof ÷ storeys (3.735 m, since no floor-to-floor height is documented); setback heights = floor × storey; tolerance = 2 storeys.
+* **`sb.benchmark_massing(plan, path, crown=None)`:** generic, reads any benchmark file. It scores documented setbacks found within tolerance and their errors, extra levels, the base footprint (measured along its minimum-area rectangle) and the heights.
+* **Robust scan setbacks:**
+  - The scan's fine levels flicker in the shaft (area 1,212 / 1,650 / 2,080 m²; even the convex hull flickers 1,400 / 1,870 / 2,390), because slices lose whole wings, not just notch depth.
+  - A new tier now starts where the **largest hull in the next 45 m** falls more than 12% below the current tier's largest. A scan loses parts but rarely adds them. Each tier takes its fullest slice.
+* **Square outlines:** the earlier "squaring" did almost nothing (35 → 32 corners). The scan's stair-steps run along its north/east grid, about 28° off the walls, so they read as diagonals.
+  - Each outline is now filled on a 1 m grid turned to the walls' direction (the base's minimum-area rectangle, 27.7°), noise up to 2 m is opened and closed away, and the edge is traced back.
+  - Short steps between parallel wall runs are folded by moving the shorter run onto the other's line.
+  - Result: 8–20 corners per tier (base 122 → 8), every tier squared, all build. Before/after plan: `docs/screenshots/esb_scan_tiers_before_after_square.png`.
+* **Development scores** (Empire State Building, scan tiers + fitted crown):
+
+  | Stage | Documented setbacks found | Mean error | Banded coverage | Banded precision | Base footprint |
+  |---|---|---|---|---|---|
+  | modeled volume | 5 / 7 (misses 72, 81) | 2.2 m | 0.688 | 0.639 | 129.5 × 62.3 |
+  | scan, area-merge rule | 5 / 7 | — | 0.709 | 0.598 | — |
+  | scan, hull look-ahead, simplified outlines | 7 / 7 | 2.9 m | 0.729 | 0.801 | 131.0 × 65.3 |
+  | scan, hull look-ahead, square outlines | **7 / 7** | 2.9 m | **0.734** | **0.818** | **129.0 × 62.0** |
+
+* **In the app** (fresh chat; prompt asked for scan tiers, facade, fitted spire, then a score "against the real building's scan, and against the documented benchmark in docs/benchmarks/empire_state_building.json"):
+  - The agent used `source="scan"`, `sb.site_score(..., plan=plan)` and `sb.benchmark_massing(...)` and reported: **7 / 7 documented setbacks, mean error 2.86 m**; **banded coverage 0.733, precision 0.838** (precision 1.2 points under the 0.85 bar), `explains: False`; tier footprints of 8–20 vertices.
+  - Its workspace tools could not read `docs/` (the workspace is `desktop-app/`); `sb.benchmark_massing` resolves the path from the repo root itself.
+  - **Viewport:** straight setback edges and square terraces, no spikes (the user's screenshot of the previous build showed jagged teeth along every setback).
+* **Still open:**
+  - Coverage 0.73: the worst band 0.22, the tower's light courts.
+  - The base footprint is 62.0 m deep against a documented 57.0 m. The lot is 200 ft (61 m) deep; canopies or sidewalk structures likely sit in the base slices.
+  - The setback heights' benchmark values are estimates (floor × average storey); the base estimate runs low because its storeys are tall.
+
+## 12. Where the gaps are, scored shell to shell (step 1 of the generalized massing plan)
+
+* **Asked:** a per-band "where is the gap" report, consensus outlines, walls snapped onto the scan, and outline candidates scored per height band, tested at the ESB in the app.
+* **Per-band gap report** (`site_score(...)["gaps"]`): per 10 m band, the share of scan surface the build misses, split into inside and outside the tier's walls (with `plan=`), the share of built surface the scan does not support, and misses by compass side, worst places first.
+* **Outline candidates per tier** (`site_tiers(source="scan")`, reported in `report[i]["outline_choice"]`). Each tier tries four outlines and keeps the best F against the scan in its own height band:
+  - the weighted consensus of the tier's slices, square to the walls;
+  - that consensus with its walls snapped onto the scan;
+  - the fullest slice, squared and snapped;
+  - Google's modeled volume at that height.
+
+  At the ESB, snapped consensus won 4 tiers, the snapped fullest slice 3, plain consensus 3 and the modeled volume 1. A candidate the generator would refuse (it emulates the generator's tidying, then the crossing check) is never chosen. The generator's own crossing test now uses double precision with a relative tolerance, so walls that are nearly collinear no longer fail it as false crossings.
+* **What the gap report found:** the misses were nearly all "inside walls" (48% at 50–60 m). Plots of the scan showed why: the ESB's structure in the tiles is built from **overlapping boxes**, and every box keeps its own walls and floors inside the union (vertical sections show nested shells to 110 m). No exterior massing can lie on those, so they capped coverage whatever was built.
+* **Fix, general to any building: score outer shell against outer shell** (`_outer_shell_interior`, used for both sides).
+  - Per 1 m slice, air is outside when a flood from the border, or from open sky, reaches it. A sample is on the shell when outside air lies within 2 m, or when it is the highest surface in its column (roofs and setback terraces).
+  - Courts open to the sky stay on the shell. The scan's result is cached beside its GLB.
+  - Two slips found by plotting and fixed:
+    - **False sky:** a 1 m column the roof sampling skipped looked open, so the flood leaked inside. Column tops now take the highest sample within a cell (courts 3 m or wider still read as open).
+    - **Hidden terraces:** a terrace filling its whole slice read as interior; the highest-in-column rule restores it.
+  - The build side replaces the old plan-based slab filter. That filter missed the roof under the next tier and the next tier's floor slab, which inflated "extra" surface in every setback band.
+  - `site_score` now takes building parts directly (it used to need `list(parts)`); `interior_margin` is gone.
+* **Development scores** (scan tiers + fitted crown):
+
+  | Stage | Banded coverage | Banded precision | Explains (0.9 / 0.85) |
+  |---|---|---|---|
+  | before (all scan surface, plan slab filter) | 0.729 | 0.852 | no |
+  | scan shell v2 (leaky sky test) | 0.831 | 0.817 | no |
+  | scan shell v3/v4 | 0.995 | 0.811 | no |
+  | **shell against shell** | **0.990** | **0.905** | **yes** |
+
+  Benchmark unchanged: 7 / 7 documented setbacks, mean error 2.86 m, base 128.8 × 59.3 m (documented 129.2 × 57.0).
+* **Negative controls** (the score must still fail wrong massings):
+
+  | Massing | Banded coverage | Banded precision |
+  |---|---|---|
+  | base outline extruded to the roof | 0.07 | 0.05 |
+  | right setbacks, but stops at 113 m | 0.27 | 0.24 |
+  | every tier 15% too wide | 0.63 | 0.24 |
+
+* **In the app** (ports 3070 / 3071 / 3072; fresh chat, the same prompt as section 11 plus "including where its gaps are"):
+  - The agent used `source="scan"`, `siteFacade`, `siteCrown`, `sb.site_score(parts, extras, plan=plan)` and `sb.benchmark_massing(...)`. It reported **banded coverage 0.990, banded precision 0.913, `explains: true`** (162,250 scan shell samples; 237,749 scan and 243,164 build interior samples set aside), and **7 / 7 setbacks, mean error 2.86 m**, base 128.8 × 59.3 m, antenna tip 441.1 m (documented 443.2).
+  - It read the gap report correctly: 39 of 45 bands miss nothing; the largest miss is 8% below street datum (sloping grade), then 1.2% at the 113 m step. It also reported each tier's winning outline candidate.
+  - Its first script failed and the second, with weathering dropped, succeeded (819,792 vertices). This is the viewport size limit from section 6, not this change.
+  - The post-build visual check failed with HTTP 413 (`PayloadTooLargeError` in `desktop-app/server/app.ts`): the check's upload is over the JSON body limit. Not caused by this change; logged as a candidate fix.
+  - **Viewport:** the textured model renders, with square setbacks and the fitted crown.
+* **Open:**
+  - `worst_band_coverage` stays 0.51. That is a thin band at the ground or the antenna; no 10 m band misses more than 10%.
+  - Narrow notches under about 2 m wide can be set aside with the interior. Where the filter slips, it keeps some interior, which lowers the score and never flatters it.

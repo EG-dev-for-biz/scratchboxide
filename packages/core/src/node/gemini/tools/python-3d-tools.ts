@@ -22,6 +22,7 @@ import { firstPassRenderMode } from '../scene3d-first-pass-baseline';
 import { measureSiteMassing, type SiteMassing } from '../../3d-engine/site-massing';
 import { readSiteFacade, type SiteFacade } from '../../3d-engine/site-facade';
 import { fitSiteCrown, type SiteCrown } from '../../3d-engine/site-crown';
+import { measureSiteScan, type SiteScan } from '../../3d-engine/site-scan';
 import * as os from 'os';
 import { StageCache, stagedWorkspaceRoot } from '../../3d-engine/staged-location/stage-cache';
 import { roofPhotoFor, type StructureScanNote } from '../../3d-engine/staged-location/scan-massing';
@@ -337,12 +338,19 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
         let site: SiteMassing | undefined;
         let facade: SiteFacade | undefined;
         let crown: SiteCrown | undefined;
+        let scan: SiteScan | undefined;
         const siteEnv: Record<string, string> = {};
         if (typeof args.site === 'string' && args.site.trim()) {
             try {
                 site = await measureSiteMassing(args.site.trim(), { workspaceRoot: _ctx?.workspaceRoot ?? process.cwd(), ...(_ctx?.signal ? { signal: _ctx.signal } : {}) });
             } catch (err) {
                 return failedOutcome(err, `Could not measure the site "${args.site.trim()}"; the script did not run`);
+            }
+            // the building's tile scan: sb.site_tiers' source without a modeled volume, and sb.site_score's reference
+            try {
+                scan = await measureSiteScan(site, { workspaceRoot: _ctx?.workspaceRoot ?? process.cwd(), ...(_ctx?.signal ? { signal: _ctx.signal } : {}), ...(_ctx?.reportProgress ? { progress: _ctx.reportProgress } : {}) });
+            } catch (err) {
+                site.notes.push(`no tile scan of the building (sb.site_score and scan tiers unavailable): ${err instanceof Error ? err.message : String(err)}`);
             }
             if (args.siteFacade === true) {
                 try {
@@ -360,7 +368,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 }
             }
             const siteFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-site-json-')), 'site.json');
-            fs.writeFileSync(siteFile, JSON.stringify({ ...site, ...(facade ? { facade } : {}), ...(crown ? { crown } : {}) }));
+            fs.writeFileSync(siteFile, JSON.stringify({ ...site, ...(scan ? { scan } : {}), ...(facade ? { facade } : {}), ...(crown ? { crown } : {}) }));
             siteEnv.SCRATCHBOX_SITE_JSON = siteFile;
         }
 

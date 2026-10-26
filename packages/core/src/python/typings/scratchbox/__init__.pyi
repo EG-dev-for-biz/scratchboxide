@@ -16,7 +16,7 @@ import scratchbox_native.human
 import scratchbox_native.math
 import typing
 
-__all__ = ['Any', 'Armature', 'Dict', 'Human', 'List', 'Optional', 'PbrMaterial', 'PbrMaterialWrapper', 'PoseBone', 'PrincipledBsdfMaterial', 'RomanOrder', 'SbVeggieTree', 'Scene', 'ShapeKeyBlock', 'ShapeKeys', 'Structure', 'StudioHuman', 'Terrain', 'Tuple', 'Union', 'World', 'adaptive_object', 'architecture', 'composer', 'constants', 'core', 'create_arched_blister', 'create_beveled_box', 'create_box', 'create_building', 'create_building_parts', 'create_cambered_foil', 'create_catenary_cable', 'create_character', 'create_cone', 'create_cube', 'create_curved_building', 'create_cylinder', 'create_envelope', 'create_form', 'create_human', 'create_hydraulic_actuator', 'create_intake_strainer', 'create_ivy', 'create_lathe', 'create_loft', 'create_lofted_hull', 'create_louver_bay', 'create_panelized_loft', 'create_plane', 'create_revolving_component', 'create_sphere', 'create_spline_conduit_harness', 'create_structural_truss_member', 'create_studio_pedestal', 'create_subdivided_box', 'create_tower', 'create_tree', 'create_vegetation', 'create_wheel', 'create_wheel_assembly', 'export_glb', 'geometry', 'geospatial', 'glb_read', 'hair', 'human', 'io', 'k', 'layout', 'massing', 'math', 'meshops', 'moulding_profile', 'nature', 'object_spec', 'os', 'pbr', 'processing', 'py_math', 'random', 'read_glb', 'relief', 'replicate_metric_array', 'revolve_harmonic_solid', 'rig', 'sdf', 'shaper', 'site', 'site_crown', 'site_tiers', 'stack_buildings', 'structure', 'superellipse_loop', 'superellipse_point', 'sweep_curve_profile', 'sys', 'terrain', 'topology', 'validate_scene', 'validation', 'vegetation', 'world', 'write_glb', 'write_textured_building']
+__all__ = ['Any', 'Armature', 'Dict', 'Human', 'List', 'Optional', 'PbrMaterial', 'PbrMaterialWrapper', 'PoseBone', 'PrincipledBsdfMaterial', 'RomanOrder', 'SbVeggieTree', 'Scene', 'ShapeKeyBlock', 'ShapeKeys', 'Structure', 'StudioHuman', 'Terrain', 'Tuple', 'Union', 'World', 'adaptive_object', 'architecture', 'benchmark_massing', 'composer', 'constants', 'core', 'create_arched_blister', 'create_beveled_box', 'create_box', 'create_building', 'create_building_parts', 'create_cambered_foil', 'create_catenary_cable', 'create_character', 'create_cone', 'create_cube', 'create_curved_building', 'create_cylinder', 'create_envelope', 'create_form', 'create_human', 'create_hydraulic_actuator', 'create_intake_strainer', 'create_ivy', 'create_lathe', 'create_loft', 'create_lofted_hull', 'create_louver_bay', 'create_panelized_loft', 'create_plane', 'create_revolving_component', 'create_sphere', 'create_spline_conduit_harness', 'create_structural_truss_member', 'create_studio_pedestal', 'create_subdivided_box', 'create_tower', 'create_tree', 'create_vegetation', 'create_wheel', 'create_wheel_assembly', 'export_glb', 'geometry', 'geospatial', 'glb_read', 'hair', 'human', 'io', 'k', 'layout', 'massing', 'massing_module', 'math', 'meshops', 'moulding_profile', 'nature', 'object_spec', 'os', 'pbr', 'processing', 'py_math', 'random', 'read_glb', 'relief', 'replicate_metric_array', 'revolve_harmonic_solid', 'rig', 'sdf', 'shaper', 'site', 'site_crown', 'site_score', 'site_tiers', 'stack_buildings', 'structure', 'superellipse_loop', 'superellipse_point', 'sweep_curve_profile', 'sys', 'terrain', 'topology', 'validate_scene', 'validation', 'vegetation', 'world', 'write_glb', 'write_textured_building']
 
 Any = typing.Any
 Armature = scratchbox.human.Armature
@@ -337,6 +337,19 @@ Union = typing.Union
 World = scratchbox.world.World
 import scratchbox.adaptive_object as adaptive_object
 architecture: _ArchitectureModule
+
+def benchmark_massing(plan: typing.Dict[str, typing.Any], benchmark: str, crown: typing.Dict[str, typing.Any] | None = None) -> typing.Dict[str, typing.Any]:
+    """
+    Scores a massing (sb.site_tiers' plan, and optionally sb.site_crown's result) against a building's documented form:
+    a benchmark JSON (schema scratchbox.massing-benchmark/1, e.g. docs/benchmarks/<building>.json) giving documented
+    setback floors, base footprint, roof and antenna heights with their sources, and the estimates used to turn floors
+    into heights. Evaluation only: nothing here changes the plan.
+
+    Returns {"setbacks": [{"floor", "expected_m", "nearest_m", "error_m", "found"}...], "found", "documented",
+    "extra_levels": tier boundaries matching no documented setback, "mean_abs_error_m", "footprint": {"documented_m",
+    "measured_m", "error_share"}, "heights": {...}, "tolerance_m", "notes"}.
+    """
+
 import scratchbox_native.composer as composer
 constants: _ConstantsModule
 import scratchbox_native.core as core
@@ -568,6 +581,7 @@ import scratchbox_native.io as io
 k: str
 layout: _LayoutModule
 import scratchbox.massing as massing
+import scratchbox.massing as massing_module
 import scratchbox_native.math as math
 import scratchbox_native.meshops as meshops
 
@@ -640,7 +654,24 @@ def site_crown(massing: typing.Dict[str, typing.Any] | None = None, slot: str = 
     """
 
 
-def site_tiers(massing: typing.Dict[str, typing.Any] | None = None, name: str = 'Site', floor_height: float = 3.7, ground_floor_height: float = 4.5, plinth_height: float = 0.6, min_tier_m: float = 2.4, spire_area_m2: float = 200.0, **common) -> typing.Dict[str, typing.Any]:
+def site_score(*built, massing: typing.Dict[str, typing.Any] | None = None, plan: typing.Dict[str, typing.Any] | None = None, min_coverage: float = 0.9, min_precision: float = 0.85, relief: float = 2.5, band_m: float = 10.0) -> typing.Dict[str, typing.Any]:
+    """
+    How well what the script built explains the real building: every mesh given (building parts, stacked tiers, crown
+    or other add-on meshes, in sb.site_tiers' frame) is measured against the site's 3D-tiles scan with sb.massing's
+    height-balanced coverage (share of the scan the build lies on, within `relief` metres: a cornice or a recessed window
+    is detail, not missed shape) and precision (share of the build's visible surface the scan supports). It explains the
+    scan when banded coverage >= min_coverage and banded precision >= min_precision (sb.massing.choose's thresholds).
+    Both sides are compared by their outer shells (_outer_shell_interior): the build's floor slabs and the roofs hidden
+    under the tier above, and the scan's inner surfaces (tile seams, nested detail levels, the walls of overlapping
+    parts), are set aside and counted, since nothing outside can see them.
+    Returns {"coverage", "precision", "f", "banded_coverage", "banded_precision", "banded_f", "worst_band_coverage",
+    "explains", "thresholds", "scan", "build_interior_samples_set_aside", "scan_interior_samples_set_aside",
+    "scan_shell_samples", "gaps"}. "gaps" says where the build and the scan disagree, band_m by band_m in height and by
+    compass side (see _gap_report; with `plan`, split into inside and outside the tier's walls), worst places first.
+    """
+
+
+def site_tiers(massing: typing.Dict[str, typing.Any] | None = None, name: str = 'Site', floor_height: float = 3.7, ground_floor_height: float = 4.5, plinth_height: float = 0.6, min_tier_m: float = 2.4, spire_area_m2: float = 200.0, source: str = 'auto', scan_setback: float = 0.12, scan_window_m: float = 45.0, scan_outline_tol: float = 0.6, **common) -> typing.Dict[str, typing.Any]:
     """
     Turns measured massing (sb.site() by default) into create_building_parts arguments, one tier per level of the
     setback stack, sized to the measurement: each tier's outline is its measured plan, base_y its measured base, and
@@ -656,6 +687,17 @@ def site_tiers(massing: typing.Dict[str, typing.Any] | None = None, name: str = 
     size, sill and recess, ground-floor openings, plinth, parapet, piers (as pilasters) and cornice (as a moulding).
     A read value replaces the same setting in **common, and the report lists each replacement; values a reading
     dropped (out of range, not fitting the measured tiers, failing the cross-check) are not used.
+
+    source picks the setback stack: "auto" (default) takes Google's modeled volume when there is one, else the
+    building's 3D-tiles scan read into tiers by sb.massing (labelled measured), else the vector extrusions; "modeled",
+    "scan" or "vector" force one. plan["source"] says which was used. Scan tiers are read from the scan's fine levels: a
+    scan loses parts of a slice (a wing, a notch's walls) far more often than it adds any, so a straight shaft's plan
+    flickers while its largest extent holds. A new tier starts where the largest convex extent in the next scan_window_m
+    metres falls more than scan_setback below the current tier's largest (or rises 30% above it); each tier takes its
+    fullest slice's outline. Each outline is rebuilt square to the walls: filled on a 1 m
+    grid turned to the walls' direction (the base's minimum-area enclosing rectangle), single-cell noise removed, and its
+    edge traced back as straight wall runs; a plan that loses over a fifth of its area that way (curved, mostly
+    diagonal) is instead simplified as read (Douglas-Peucker from scan_outline_tol metres) and checked not to cross.
 
     Returns {"tiers": [kwargs...], "spires": [...], "above_top_m": metres the vector top rises above the last tier
     (an antenna), "colors": the read wall / trim / glass colours (sRGB) with their provenance, or None,

@@ -1361,9 +1361,15 @@ private:
         return dot2(rIn, edgeNormal2(rOut)) < -0.17f;   // more than ~10 degrees inward
     }
     static bool segmentsCross(const Vec2& a, const Vec2& b, const Vec2& c, const Vec2& d) {
-        auto o = [](const Vec2& p, const Vec2& q, const Vec2& r) { return (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x); };
-        const float d1 = o(c, d, a), d2 = o(c, d, b), d3 = o(a, b, c), d4 = o(a, b, d);
-        const float eps = 1e-7f;
+        // In double, with a tolerance scaled to the edges: points are stored as floats, so two edges on one wall line (a
+        // wall running straight past a notch) give orientations of float noise around zero, which a fixed tolerance
+        // read as a crossing. Within the tolerance a point counts as on the line, and touching or collinear is no cross.
+        auto o = [](const Vec2& p, const Vec2& q, const Vec2& r) {
+            return (double(q.x) - p.x) * (double(r.y) - p.y) - (double(q.y) - p.y) * (double(r.x) - p.x);
+        };
+        const double d1 = o(c, d, a), d2 = o(c, d, b), d3 = o(a, b, c), d4 = o(a, b, d);
+        const double L = std::max(double((b - a).length()), double((d - c).length()));
+        const double eps = 1e-6 * L * L + 1e-9;
         return ((d1 > eps && d2 < -eps) || (d1 < -eps && d2 > eps)) && ((d3 > eps && d4 < -eps) || (d3 < -eps && d4 > eps));
     }
     static bool pointInLoop(const Vec2& p, const std::vector<Vec2>& l) {

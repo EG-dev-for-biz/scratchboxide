@@ -1440,9 +1440,302 @@ def site() -> Dict[str, Any]:
     return conv(raw)
 
 
+def _choose_tier_outline(t, sc, shell, axis: float, modeled, tol: float) -> Dict[str, Any]:
+    """The outline a scan tier gets: candidates scored against the scan within the tier's own height band (coverage and
+    precision as sb.massing measures them, F decides): the slices' consensus (square to the walls), the same snapped onto
+    the scan's walls, the fullest slice squared and snapped, and Google's modeled outline at this height when there is
+    one. Returns {"ring", "label", "provenance", "scores": [{"label", "coverage", "precision", "f"}...]}."""
+    base, top = t["base_m"], t["top_m"]
+    band = [p for p in shell if base - 0.5 <= p.y <= top + 0.5]
+    cands = []
+    rings, weights = [r for r, _ in t["slices"]], [w for _, w in t["slices"]]
+    consensus = _rectilinear_consensus(rings, weights, axis, 0.5) if len(rings) > 1 else _rectilinear_ring(t["fullest"], axis)
+    fullest = _rectilinear_ring(t["fullest"], axis) or _simplify_ring(t["fullest"], tol)[0]
+    def snap(ring):
+        out, _edges = massing_module._sm.snap_plan_to_scan(list(ring), sc.samples, base, top, 3.0)
+        out = [tuple(q) for q in out]
+        return None if len(out) < 3 or _ring_crosses(out) else out
+    if consensus:
+        cands.append(("consensus of the tier's slices, square to the walls", consensus, "measured"))
+        sn = snap(consensus)
+        if sn:
+            cands.append(("consensus, walls snapped onto the scan", sn, "measured"))
+    sn = snap(fullest)
+    cands.append(("fullest slice, square, walls snapped onto the scan" if sn else "fullest slice, square to the walls", sn or fullest, "measured"))
+    mid = (base + top) / 2
+    for mt in modeled:
+        if mt["base_m"] <= mid <= mt["top_m"]:
+            cands.append(("Google's modeled volume at this height", [tuple(q) for q in mt["loops"][0]], "vector-modelled"))
+            break
+    scores, best = [], None
+    for label, ring, prov in cands:
+        if not _generator_safe(ring):
+            scores.append({"label": label, "rejected": "crosses itself once tidied as the building generator tidies outlines"})
+            continue
+        mesh = massing_module._sm.extrude_block(list(ring), base, top)
+        cs = massing_module._sm.sample_surface(mesh, sc.spacing)
+        a = massing_module._sm.agreement(band, cs, 1.0, 2.0, sc.ground_y, None, [], coverage_tau=2.5)
+        sc_ = {"label": label, "coverage": round(a.coverage, 3), "precision": round(a.precision, 3), "f": round(a.f, 3)}
+        scores.append(sc_)
+        if best is None or a.f > best[0]:
+            best = (a.f, label, ring, prov)
+    if best is None:
+        safe = _simplify_ring(t["fullest"], tol)[0]
+        return {"ring": safe, "label": "fullest slice, simplified (every squared candidate crossed itself)", "provenance": "measured", "scores": scores}
+    return {"ring": best[2], "label": best[1], "provenance": best[3], "scores": scores}
+
+
+def _generator_safe(ring) -> bool:
+    """Whether the building generator can take this outline: tidied as it tidies one (points under 5 cm merged, bends
+    under 10 degrees and spikes dropped), it still has 3 corners and does not cross itself."""
+    pts = [tuple(p) for p in ring]
+    changed = True
+    while changed and len(pts) >= 3:
+        changed = False
+        for i in range(len(pts)):
+            a, b, c = pts[i - 1], pts[i], pts[(i + 1) % len(pts)]
+            ab = (b[0] - a[0], b[1] - a[1]); bc = (c[0] - b[0], c[1] - b[1])
+            lab, lbc = _py_math.hypot(*ab), _py_math.hypot(*bc)
+            drop = lab < 0.05
+            if not drop and lbc >= 0.05:
+                u = (ab[0] / lab, ab[1] / lab); v = (bc[0] / lbc, bc[1] / lbc)
+                cr, dt = u[0] * v[1] - u[1] * v[0], u[0] * v[0] + u[1] * v[1]
+                drop = (abs(cr) < 0.1736 and dt > 0) or dt < -0.985
+            if drop:
+                pts.pop(i)
+                changed = True
+                break
+    return len(pts) >= 3 and not _ring_crosses(pts)
+
+
+def _hull_area(pts) -> float:
+    """Area of the convex hull of (x, z) points."""
+    pts = sorted(set(pts))
+    if len(pts) < 3:
+        return 0.0
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    lo, up = [], []
+    for p in pts:
+        while len(lo) >= 2 and cross(lo[-2], lo[-1], p) <= 0:
+            lo.pop()
+        lo.append(p)
+    for p in reversed(pts):
+        while len(up) >= 2 and cross(up[-2], up[-1], p) <= 0:
+            up.pop()
+        up.append(p)
+    h = lo[:-1] + up[:-1]
+    return abs(sum(h[i][0] * h[(i + 1) % len(h)][1] - h[(i + 1) % len(h)][0] * h[i][1] for i in range(len(h)))) / 2.0
+
+
+def _min_rect_axis_deg(ring) -> float:
+    """The direction (degrees, 0..90) of the minimum-area rectangle enclosing a ring: its walls' direction."""
+    pts = sorted(set(tuple(p) for p in ring))
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    lo, up = [], []
+    for q in pts:
+        while len(lo) >= 2 and cross(lo[-2], lo[-1], q) <= 0:
+            lo.pop()
+        lo.append(q)
+    for q in reversed(pts):
+        while len(up) >= 2 and cross(up[-2], up[-1], q) <= 0:
+            up.pop()
+        up.append(q)
+    h = lo[:-1] + up[:-1]
+    best, best_a = 0.0, float("inf")
+    for i in range(len(h)):
+        (ax, az), (bx, bz) = h[i], h[(i + 1) % len(h)]
+        t = _py_math.atan2(bz - az, bx - ax)
+        c, s_ = _py_math.cos(t), _py_math.sin(t)
+        us = [x * c + z * s_ for x, z in h]; vs = [-x * s_ + z * c for x, z in h]
+        area = (max(us) - min(us)) * (max(vs) - min(vs))
+        if area < best_a:
+            best_a, best = area, _py_math.degrees(t) % 90.0
+    return best
+
+
+def _rectilinear_ring(ring, axis_deg: float, cell: float = 1.0, min_run: float = 3.0, noise_cells: int = 2):
+    """The ring rebuilt square to the walls (see _rectilinear_consensus, with one ring)."""
+    return _rectilinear_consensus([ring], [1.0], axis_deg, 0.5, cell, min_run, noise_cells, ring)
+
+
+def _rectilinear_consensus(rings, weights, axis_deg: float, quorum: float = 0.5, cell: float = 1.0, min_run: float = 3.0,
+                           noise_cells: int = 2, reference=None):
+    """One plan square to the walls from several slices of it: each ring is filled on a `cell` grid turned to axis_deg
+    with its weight (its slice's height), and a cell belongs to the plan when it is filled in at least `quorum` of the
+    total weight (a light court present in most slices stays; a wing one slice lost, or a canopy one slice caught, does
+    not decide). Noise up to noise_cells is opened and closed away and the edge traced back as straight wall runs (steps
+    under min_run folded). None when the result crosses itself or its area differs from `reference`'s (default: the
+    weighted mean of the rings') by more than a fifth."""
+    a = _py_math.radians(axis_deg)
+    c, s_ = _py_math.cos(a), _py_math.sin(a)
+    Ps = [[(x * c + z * s_, -x * s_ + z * c) for x, z in r] for r in rings if len(r) >= 3]
+    if not Ps:
+        return None
+    allp = [p for P in Ps for p in P]
+    u0, v0 = min(p[0] for p in allp) - 2 * cell, min(p[1] for p in allp) - 2 * cell
+    nu = int((max(p[0] for p in allp) - u0) / cell) + 3
+    nv = int((max(p[1] for p in allp) - v0) / cell) + 3
+    if nu * nv > 4_000_000:
+        return None
+    acc = [[0.0] * nu for _ in range(nv)]
+    total = 0.0
+    for P, w in zip(Ps, weights):
+        total += w
+        n = len(P)
+        for j in range(nv):
+            vc = v0 + (j + 0.5) * cell
+            xs = []
+            for i in range(n):
+                (ua, va), (ub, vb) = P[i], P[(i + 1) % n]
+                if (va > vc) != (vb > vc):
+                    xs.append(ua + (vc - va) * (ub - ua) / (vb - va))
+            xs.sort()
+            for k in range(0, len(xs) - 1, 2):
+                i0 = max(0, int(_py_math.ceil((xs[k] - u0) / cell - 0.5)))
+                i1 = min(nu - 1, int(_py_math.floor((xs[k + 1] - u0) / cell - 0.5)))
+                for i in range(i0, i1 + 1):
+                    acc[j][i] += w
+    need = quorum * total
+    grid = [[v >= need - 1e-9 for v in row] for row in acc]
+    def morph(g, keep):   # keep=True: dilate; False: erode (4-neighbourhood)
+        out = [row[:] for row in g]
+        for j in range(1, nv - 1):
+            for i in range(1, nu - 1):
+                nb = (g[j][i], g[j - 1][i], g[j + 1][i], g[j][i - 1], g[j][i + 1])
+                out[j][i] = any(nb) if keep else all(nb)
+        return out
+    for _ in range(noise_cells):
+        grid = morph(grid, False)
+    for _ in range(noise_cells):
+        grid = morph(grid, True)                # open: spikes and slivers up to noise_cells wide gone
+    for _ in range(noise_cells):
+        grid = morph(grid, True)
+    for _ in range(noise_cells):
+        grid = morph(grid, False)               # close: notches up to noise_cells wide filled
+    # boundary edges with the filled side on the left, chained into loops (corner points on the cell lattice)
+    nxt = {}
+    for j in range(nv):
+        for i in range(nu):
+            if not grid[j][i]:
+                continue
+            if j == 0 or not grid[j - 1][i]:
+                nxt[(i, j)] = (i + 1, j)
+            if i == nu - 1 or not grid[j][i + 1]:
+                nxt[(i + 1, j)] = (i + 1, j + 1)
+            if j == nv - 1 or not grid[j + 1][i]:
+                nxt[(i + 1, j + 1)] = (i, j + 1)
+            if i == 0 or not grid[j][i - 1]:
+                nxt[(i, j + 1)] = (i, j)
+    if not nxt:
+        return None
+    loops, seen = [], set()
+    for start in list(nxt):
+        if start in seen:
+            continue
+        loop, q = [], start
+        while q not in seen and q in nxt:
+            seen.add(q); loop.append(q); q = nxt[q]
+        if len(loop) >= 4:
+            loops.append(loop)
+    def la(l):
+        return abs(sum(l[i][0] * l[(i + 1) % len(l)][1] - l[(i + 1) % len(l)][0] * l[i][1] for i in range(len(l)))) / 2.0
+    loop = max(loops, key=la)
+    # corners only
+    pts = [loop[i] for i in range(len(loop)) if (loop[i - 1][0] - loop[i][0]) * (loop[(i + 1) % len(loop)][1] - loop[i][1]) != (loop[i - 1][1] - loop[i][1]) * (loop[(i + 1) % len(loop)][0] - loop[i][0])]
+    pts = [[u0 + i * cell, v0 + j * cell] for i, j in pts]
+
+    def collinear_clean(q):
+        out_ = []
+        for i in range(len(q)):
+            p0, p1, p2 = q[i - 1], q[i], q[(i + 1) % len(q)]
+            if abs((p1[0] - p0[0]) * (p2[1] - p0[1]) - (p1[1] - p0[1]) * (p2[0] - p0[0])) > 1e-6:
+                out_.append(p1)
+        return out_
+    # a short step between two parallel wall runs is folded away: the shorter of the two runs is moved onto the other's
+    # line, so the wall stays one straight run and every corner stays square
+    for _ in range(4 * len(pts)):
+        pts = collinear_clean(pts)
+        m_ = len(pts)
+        if m_ <= 4:
+            break
+        lens = [abs(pts[(i + 1) % m_][0] - pts[i][0]) + abs(pts[(i + 1) % m_][1] - pts[i][1]) for i in range(m_)]
+        i = min(range(m_), key=lambda k: lens[k])
+        if lens[i] >= min_run:
+            break
+        a_, b_ = pts[i], pts[(i + 1) % m_]
+        axis_k = 0 if abs(a_[0] - b_[0]) > 1e-9 else 1     # the step runs along u (0) or v (1)
+        prev_len, next_len = lens[i - 1], lens[(i + 1) % m_]
+        d = b_[axis_k] - a_[axis_k]
+        if next_len <= prev_len:     # move the run after the step back onto the run before it
+            pts[(i + 1) % m_][axis_k] -= d
+            pts[(i + 2) % m_][axis_k] -= d
+        else:                        # move the run before the step onto the run after it
+            pts[i][axis_k] += d
+            pts[i - 1][axis_k] += d
+    out = collinear_clean(pts)
+    out = [tuple(q) for q in out]
+    back = [(x * c - z * s_, x * s_ + z * c) for x, z in out]
+    area = lambda r: abs(sum(r[i][0] * r[(i + 1) % len(r)][1] - r[(i + 1) % len(r)][0] * r[i][1] for i in range(len(r)))) / 2.0
+    ref = area(reference) if reference is not None else sum(area(r) * w for r, w in zip(rings, weights)) / max(1e-9, total)
+    if len(back) < 4 or _ring_crosses(back) or abs(area(back) - ref) > 0.2 * ref:
+        return None
+    return back
+
+
+def _ring_crosses(r) -> bool:
+    """Whether a closed ring's non-adjacent edges cross."""
+    n = len(r)
+    def o(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    for i in range(n):
+        a, b = r[i], r[(i + 1) % n]
+        for j in range(i + 2, n):
+            if i == 0 and j == n - 1:
+                continue
+            c, d = r[j], r[(j + 1) % n]
+            d1, d2, d3, d4 = o(c, d, a), o(c, d, b), o(a, b, c), o(a, b, d)
+            e = 1e-6 * max(_py_math.dist(a, b), _py_math.dist(c, d)) ** 2 + 1e-9   # as the generator's test: collinear is no cross
+            if ((d1 > e and d2 < -e) or (d1 < -e and d2 > e)) and ((d3 > e and d4 < -e) or (d3 < -e and d4 > e)):
+                return True
+    return False
+
+
+def _simplify_ring(ring, tol: float):
+    """Douglas-Peucker on a closed ring (split at its two farthest points), the tolerance raised until the ring no longer
+    crosses itself; returns (ring, tolerance used)."""
+    def dp(pts, t):
+        if len(pts) < 3:
+            return list(pts)
+        (ax, az), (bx, bz) = pts[0], pts[-1]
+        L = _py_math.hypot(bx - ax, bz - az) or 1e-9
+        k, dmax = 0, -1.0
+        for i in range(1, len(pts) - 1):
+            d = abs((bx - ax) * (az - pts[i][1]) - (ax - pts[i][0]) * (bz - az)) / L
+            if d > dmax:
+                k, dmax = i, d
+        if dmax <= t:
+            return [pts[0], pts[-1]]
+        return dp(pts[:k + 1], t)[:-1] + dp(pts[k:], t)
+    pts = [tuple(p) for p in ring]
+    if len(pts) < 4:
+        return pts, 0.0
+    far = max(range(len(pts)), key=lambda i: (pts[i][0] - pts[0][0]) ** 2 + (pts[i][1] - pts[0][1]) ** 2)
+    t = tol
+    for _ in range(8):
+        out = dp(pts[:far + 1], t)[:-1] + dp(pts[far:] + [pts[0]], t)[:-1]
+        if len(out) >= 3 and not _ring_crosses(out):
+            return out, t
+        t *= 1.6
+    return out, t
+
+
 def site_tiers(massing: Optional[Dict[str, Any]] = None, name: str = "Site", floor_height: float = 3.7,
                ground_floor_height: float = 4.5, plinth_height: float = 0.6, min_tier_m: float = 2.4,
-               spire_area_m2: float = 200.0, **common) -> Dict[str, Any]:
+               spire_area_m2: float = 200.0, source: str = "auto", scan_setback: float = 0.12, scan_window_m: float = 45.0,
+               scan_outline_tol: float = 0.6,
+               **common) -> Dict[str, Any]:
     """
     Turns measured massing (sb.site() by default) into create_building_parts arguments, one tier per level of the
     setback stack, sized to the measurement: each tier's outline is its measured plan, base_y its measured base, and
@@ -1459,13 +1752,61 @@ def site_tiers(massing: Optional[Dict[str, Any]] = None, name: str = "Site", flo
     A read value replaces the same setting in **common, and the report lists each replacement; values a reading
     dropped (out of range, not fitting the measured tiers, failing the cross-check) are not used.
 
+    source picks the setback stack: "auto" (default) takes Google's modeled volume when there is one, else the
+    building's 3D-tiles scan read into tiers by sb.massing (labelled measured), else the vector extrusions; "modeled",
+    "scan" or "vector" force one. plan["source"] says which was used. Scan tiers are read from the scan's fine levels: a
+    scan loses parts of a slice (a wing, a notch's walls) far more often than it adds any, so a straight shaft's plan
+    flickers while its largest extent holds. A new tier starts where the largest convex extent in the next scan_window_m
+    metres falls more than scan_setback below the current tier's largest (or rises 30% above it); each tier takes its
+    fullest slice's outline. Each outline is rebuilt square to the walls: filled on a 1 m
+    grid turned to the walls' direction (the base's minimum-area enclosing rectangle), single-cell noise removed, and its
+    edge traced back as straight wall runs; a plan that loses over a fifth of its area that way (curved, mostly
+    diagonal) is instead simplified as read (Douglas-Peucker from scan_outline_tol metres) and checked not to cross.
+
     Returns {"tiers": [kwargs...], "spires": [...], "above_top_m": metres the vector top rises above the last tier
     (an antenna), "colors": the read wall / trim / glass colours (sRGB) with their provenance, or None,
     "report": [...]}; build with
         parts = sb.stack_buildings(*[sb.create_building_parts(**t) for t in plan["tiers"]]).
     """
     m = massing if massing is not None else site()
-    raw = sorted(m.get("tiers", []), key=lambda t: (t["base_m"], -t["area_m2"]))
+    vector_tiers = m.get("tiers", [])
+    scan = m.get("scan")
+    if source not in ("auto", "modeled", "scan", "vector"):
+        raise ValueError(f"source must be auto, modeled, scan or vector, got {source!r}")
+    use_scan = source == "scan" or (source == "auto" and m.get("source") != "modeled" and scan is not None)
+    if source == "modeled" and m.get("source") != "modeled":
+        raise ValueError("the site has no modeled volume (Google gives this building as extrusions or not at all); use source='scan' or 'vector'")
+    if use_scan:
+        if scan is None:
+            raise ValueError("the site has no 3D-tiles scan: " + "; ".join(n for n in m.get("notes", []) if "scan" in n))
+        sc = massing_module.Scan.load(scan["glb_path"], plan=scan.get("plan") or None, ground_y=scan.get("ground_y", 0.0))
+        fine = [t for t in sc.tiers(change=0.08, min_tier=2.0).tiers if t.area > 1.0]
+        hulls = [_hull_area([tuple(p) for p in t.outline]) for t in fine]
+        merged = []
+        for i, t in enumerate(fine):
+            ahead = max(h for k, h in enumerate(hulls) if k >= i and fine[k].y0 < t.y0 + scan_window_m)
+            if merged and (1.0 - scan_setback) * merged[-1]["run_max"] <= ahead <= 1.3 * merged[-1]["run_max"]:
+                last = merged[-1]
+                if hulls[i] > last["run_max"]:      # the fullest slice's outline is one of the candidates
+                    last.update(fullest=[tuple(p) for p in t.outline], area_m2=t.area, run_max=hulls[i])
+                last["top_m"] = t.y1
+                last["slices"].append(([tuple(p) for p in t.outline], t.y1 - t.y0))
+                continue
+            merged.append({"base_m": t.y0, "top_m": t.y1, "area_m2": t.area, "fullest": [tuple(p) for p in t.outline], "run_max": hulls[i],
+                           "slices": [([tuple(p) for p in t.outline], t.y1 - t.y0)]})
+        axis = _min_rect_axis_deg(merged[0]["fullest"]) if merged else 0.0
+        modeled = [t for t in m.get("tiers", []) if m.get("source") == "modeled"]
+        shell, _interior = _scan_shell(sc, scan)
+        vector_tiers = []
+        for t in merged:
+            choice = _choose_tier_outline(t, sc, shell, axis, modeled, scan_outline_tol)
+            vector_tiers.append({"base_m": t["base_m"], "top_m": t["top_m"], "area_m2": t["area_m2"], "loops": [choice["ring"]],
+                                 "provenance": choice["provenance"], "source": f"setback tier from the 3D-tiles scan (sb.massing); outline: {choice['label']}",
+                                 "confidence": 0.8, "outline_choice": choice["scores"]})
+        used = "scan"
+    else:
+        used = m.get("source", "vector") if source == "auto" else source
+    raw = sorted(vector_tiers, key=lambda t: (t["base_m"], -t["area_m2"]))
     if not raw:
         raise ValueError("the site has no measured tiers: " + "; ".join(m.get("notes", [])))
     readings = sorted((m.get("facade") or {}).get("readings", []), key=lambda r: r["applies_from_m"])
@@ -1567,6 +1908,7 @@ def site_tiers(massing: Optional[Dict[str, Any]] = None, name: str = "Site", flo
             kw["entrance"] = False
         tiers.append(kw)
         report.append({"name": kw["name"], "base_m": round(base, 2), "top_m": round(top, 2), "floors": n,
+                       **({"outline_choice": t["outline_choice"]} if "outline_choice" in t else {}),
                        "storey_m": round(sum(heights) / n, 2), "size": f"{t['provenance']} ({t.get('source', '')})",
                        "storeys": ("generated: norms scaled to the measured height" if "upper_storey_m" not in v else
                                    f"{reading['provenance']} storey height {fh:.2f} m, scaled to the measured height"),
@@ -1577,7 +1919,276 @@ def site_tiers(massing: Optional[Dict[str, Any]] = None, name: str = "Site", flo
     tops = [t["top_m"] for t in raw]
     above = (m.get("top_m") or 0.0) - max(tops)
     return {"tiers": tiers, "spires": spires, "above_top_m": round(above, 2) if above > 0.5 else 0.0, "colors": colors,
-            "report": report}
+            "source": used, "report": report}
+
+
+def benchmark_massing(plan: Dict[str, Any], benchmark: str, crown: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Scores a massing (sb.site_tiers' plan, and optionally sb.site_crown's result) against a building's documented form:
+    a benchmark JSON (schema scratchbox.massing-benchmark/1, e.g. docs/benchmarks/<building>.json) giving documented
+    setback floors, base footprint, roof and antenna heights with their sources, and the estimates used to turn floors
+    into heights. Evaluation only: nothing here changes the plan.
+
+    Returns {"setbacks": [{"floor", "expected_m", "nearest_m", "error_m", "found"}...], "found", "documented",
+    "extra_levels": tier boundaries matching no documented setback, "mean_abs_error_m", "footprint": {"documented_m",
+    "measured_m", "error_share"}, "heights": {...}, "tolerance_m", "notes"}.
+    """
+    path = benchmark
+    if not os.path.isabs(path) and not os.path.exists(path):
+        d = os.path.dirname(os.path.abspath(__file__))
+        while d != os.path.dirname(d) and not os.path.exists(os.path.join(d, path)):
+            d = os.path.dirname(d)
+        path = os.path.join(d, path)
+    with open(path, "r", encoding="utf-8") as fh:
+        bm = _json.load(fh)
+    doc, est = bm["documented"], bm["estimated"]
+    storey = est["storey_m"]["value"]
+    tol = est["tolerance_m"]["value"]
+    tops = sorted({round(r["top_m"], 2) for r in plan["report"]})
+    boundaries = tops[:-1] if len(tops) > 1 else tops       # the last tier's top is the building's, not a setback
+    setbacks, used = [], set()
+    for floor in doc["setback_floors"]["value"]:
+        expected = floor * storey
+        nearest = min(boundaries + tops[-1:], key=lambda h: abs(h - expected)) if tops else None
+        err = None if nearest is None else nearest - expected
+        found = err is not None and abs(err) <= tol
+        if found:
+            used.add(nearest)
+        setbacks.append({"floor": floor, "expected_m": round(expected, 1), "nearest_m": nearest, "error_m": None if err is None else round(err, 1), "found": found})
+    extra = [h for h in boundaries if h not in used]
+    errs = [abs(x["error_m"]) for x in setbacks if x["found"]]
+    out: Dict[str, Any] = {"benchmark": bm["name"], "setbacks": setbacks, "found": sum(x["found"] for x in setbacks),
+                           "documented": len(setbacks), "extra_levels": extra,
+                           "mean_abs_error_m": round(sum(errs) / len(errs), 2) if errs else None, "tolerance_m": tol,
+                           "source": plan.get("source"),
+                           "notes": [est["setback_heights_m"]["method"], est["tolerance_m"]["method"]]}
+    if "base_footprint_m" in doc and plan["tiers"]:
+        ring = list(plan["tiers"][0]["footprint"])
+        axis = _py_math.radians(_min_rect_axis_deg(ring))
+        c, s_ = _py_math.cos(axis), _py_math.sin(axis)
+        us = [x * c + z * s_ for x, z in ring]; vs = [-x * s_ + z * c for x, z in ring]
+        measured = sorted([max(us) - min(us), max(vs) - min(vs)], reverse=True)
+        documented = sorted(doc["base_footprint_m"]["value"], reverse=True)
+        out["footprint"] = {"documented_m": documented, "measured_m": [round(v, 1) for v in measured],
+                            "error_share": [round(abs(m - d) / d, 3) for m, d in zip(measured, documented)]}
+    heights = {}
+    if crown and "antenna_tip_m" in doc:
+        heights["antenna_tip"] = {"documented_m": doc["antenna_tip_m"]["value"], "measured_m": round(crown["to_m"], 1),
+                                  "error_m": round(crown["to_m"] - doc["antenna_tip_m"]["value"], 1)}
+    if "storeys" in doc:
+        heights["storeys"] = {"documented": doc["storeys"]["value"], "built": sum(t["floors"] for t in plan["tiers"])}
+    out["heights"] = heights
+    return out
+
+
+def site_score(*built, massing: Optional[Dict[str, Any]] = None, plan: Optional[Dict[str, Any]] = None, min_coverage: float = 0.9,
+               min_precision: float = 0.85, relief: float = 2.5, band_m: float = 10.0) -> Dict[str, Any]:
+    """
+    How well what the script built explains the real building: every mesh given (building parts, stacked tiers, crown
+    or other add-on meshes, in sb.site_tiers' frame) is measured against the site's 3D-tiles scan with sb.massing's
+    height-balanced coverage (share of the scan the build lies on, within `relief` metres: a cornice or a recessed window
+    is detail, not missed shape) and precision (share of the build's visible surface the scan supports). It explains the
+    scan when banded coverage >= min_coverage and banded precision >= min_precision (sb.massing.choose's thresholds).
+    Both sides are compared by their outer shells (_outer_shell_interior): the build's floor slabs and the roofs hidden
+    under the tier above, and the scan's inner surfaces (tile seams, nested detail levels, the walls of overlapping
+    parts), are set aside and counted, since nothing outside can see them.
+    Returns {"coverage", "precision", "f", "banded_coverage", "banded_precision", "banded_f", "worst_band_coverage",
+    "explains", "thresholds", "scan", "build_interior_samples_set_aside", "scan_interior_samples_set_aside",
+    "scan_shell_samples", "gaps"}. "gaps" says where the build and the scan disagree, band_m by band_m in height and by
+    compass side (see _gap_report; with `plan`, split into inside and outside the tier's walls), worst places first.
+    """
+    m = massing if massing is not None else site()
+    scan = m.get("scan")
+    if scan is None:
+        raise RuntimeError("no 3D-tiles scan of the site to score against: " + "; ".join(n for n in m.get("notes", []) if "scan" in n))
+    meshes = []
+
+    def gather(b):
+        if isinstance(b, _native.geometry.Mesh):
+            meshes.append(b)
+        elif isinstance(b, dict) and "mesh" in b:
+            meshes.append(b["mesh"])
+        else:  # building parts, a list of tiers or add-ons
+            for x in b:
+                gather(x)
+    for b in built:
+        gather(b)
+    if not meshes:
+        raise ValueError("site_score needs at least one mesh (building parts, tiers, add-ons)")
+    whole = _native.geometry.Mesh("site-build")
+    for mesh in meshes:
+        whole.append(mesh)
+    sc = massing_module.Scan.load(scan["glb_path"], plan=scan.get("plan") or None, ground_y=scan.get("ground_y", 0.0))
+    samples = massing_module._sm.sample_surface(whole, sc.spacing)
+    shell, interior_scan = _scan_shell(sc, scan)
+    inside = set(_outer_shell_interior(samples))
+    samples = [p for i, p in enumerate(samples) if i not in inside]
+    a = massing_module._sm.agreement(shell, samples, 1.0, 2.0, sc.ground_y, sc.neighbours, sc.plan if sc.neighbours is not None else [],
+                                     coverage_tau=max(1.0, relief))
+    out = {k: round(float(getattr(a, k)), 4) for k in ("coverage", "precision", "f", "banded_coverage", "banded_precision", "banded_f", "worst_band_coverage")}
+    out["explains"] = out["banded_coverage"] >= min_coverage and out["banded_precision"] >= min_precision
+    out["thresholds"] = {"banded_coverage": min_coverage, "banded_precision": min_precision, "relief_m": relief}
+    out["scan"] = scan.get("source", "")
+    out["build_interior_samples_set_aside"] = len(inside)
+    out["scan_interior_samples_set_aside"] = interior_scan
+    out["scan_shell_samples"] = len(shell)
+    out["gaps"] = _gap_report(shell, samples, plan, relief, band_m)
+    return out
+
+
+def _scan_shell(sc, scan: Dict[str, Any], cell: float = 1.0):
+    """The scan's outer shell (_outer_shell_interior), cached beside the scan GLB. Returns (shell samples, interior
+    sample count)."""
+    import hashlib
+    path = scan["glb_path"]
+    cache = path + f".shell_{cell:g}.json"
+    key = hashlib.sha1(f"v4:{os.path.getsize(path)}:{os.path.getmtime(path)}:{len(sc.samples)}".encode()).hexdigest()
+    interior = None
+    try:
+        with open(cache, "r", encoding="utf-8") as fh:
+            c = _json.load(fh)
+        if c.get("key") == key:
+            interior = c["interior"]
+    except Exception:
+        pass
+    if interior is None:
+        interior = _outer_shell_interior(sc.samples, cell)
+        try:
+            with open(cache, "w", encoding="utf-8") as fh:
+                _json.dump({"key": key, "interior": interior}, fh)
+        except Exception:
+            pass
+    inside = set(interior)
+    return [p for i, p in enumerate(sc.samples) if i not in inside], len(inside)
+
+
+def _outer_shell_interior(S, cell: float = 1.0) -> List[int]:
+    """Which surface samples lie inside a solid, out of sight from the street and the sky: a scan's inner surfaces
+    (tile seams, nested detail levels, the walls of overlapping parts) or a build's floor slabs and the roofs under the
+    tier above. Per `cell`-high slice, empty cells are outside when a flood from the slice's border or from open sky (a
+    column with no sample above that height, within a cell) reaches them. The slice's walls are the samples within 1.5
+    cells above and below, thickened by a cell, so a wall's gaps (common in any one thin slice) do not let the flood
+    leak inside. A sample is on the shell when outside air lies within two cells of it, or when it is the highest
+    surface in its column (a roof or terrace); courts open to the sky stay on the shell. Returns the indices of the
+    samples that are not."""
+    if not S:
+        return []
+    ix = [int(_py_math.floor(p.x / cell)) for p in S]
+    iy = [int(_py_math.floor(p.y / cell)) for p in S]
+    iz = [int(_py_math.floor(p.z / cell)) for p in S]
+    i0, i1, k0, k1 = min(ix) - 2, max(ix) + 2, min(iz) - 2, max(iz) + 2
+    top = {}
+    occ = {}
+    for n in range(len(S)):
+        occ.setdefault(iy[n], set()).add((ix[n], iz[n]))
+        # a roof's samples do not land in every cell: a column's top is the highest scan within a cell of it, so a
+        # roofed cell the sampling skipped is not mistaken for open sky (courts 3 cells wide or more stay open)
+        for di in (-1, 0, 1):
+            for dk in (-1, 0, 1):
+                c = (ix[n] + di, iz[n] + dk)
+                top[c] = max(top.get(c, -10 ** 9), iy[n])
+    outside_by_y = {}
+    for y in occ:
+        cells_ = set()
+        for yy in (y - 1, y, y + 1):
+            for (i, k) in occ.get(yy, ()):
+                cells_.update(((i, k), (i + 1, k), (i - 1, k), (i, k + 1), (i, k - 1)))
+        seen = set()
+        stack = [(i, k0) for i in range(i0, i1 + 1)] + [(i, k1) for i in range(i0, i1 + 1)] + [(i0, k) for k in range(k0, k1 + 1)] + [(i1, k) for k in range(k0, k1 + 1)]
+        # open sky: an empty cell with no scan above this height in its column
+        stack += [(i, k) for (i, k), t in top.items() if t < y - 1 and (i, k) not in cells_]
+        while stack:
+            c = stack.pop()
+            if c in seen or c in cells_ or not (i0 <= c[0] <= i1 and k0 <= c[1] <= k1):
+                continue
+            seen.add(c)
+            i, k = c
+            stack.extend(((i + 1, k), (i - 1, k), (i, k + 1), (i, k - 1)))
+        outside_by_y[y] = seen
+    interior = []
+    for n in range(len(S)):
+        if iy[n] >= top[(ix[n], iz[n])] - 1:
+            continue  # the highest surface in its column faces the sky: a roof or setback terrace
+        out = outside_by_y.get(iy[n], set())
+        if not any((ix[n] + di, iz[n] + dk) in out for di in (-2, -1, 0, 1, 2) for dk in (-2, -1, 0, 1, 2)):
+            interior.append(n)
+    return interior
+
+
+def _gap_report(scan_samples, built_samples, plan: Optional[Dict[str, Any]], reach: float, band_m: float) -> Dict[str, Any]:
+    """Where a build and its scan disagree, height band by height band and side by side: the share of scan surface no
+    built surface comes within `reach` of (missed), split into what lies inside the build's walls at that height (a
+    recess, notch or court the build filled) and outside them (a wing or projection it left out), and the share of
+    built surface no scan comes within `reach` of (extra). A coarse grid test (cells of reach / 2), for finding gaps, not
+    for scoring them. Sides are compass octants of the outward direction from the scan's centre."""
+    cell = reach / 2.0
+    def cells(pts):
+        return {(int(_py_math.floor(p.x / cell)), int(_py_math.floor(p.y / cell)), int(_py_math.floor(p.z / cell))) for p in pts}
+    def dilate(cs):
+        out = set()
+        for (i, j, k) in cs:
+            for di in (-2, -1, 0, 1, 2):
+                for dj in (-2, -1, 0, 1, 2):
+                    for dk in (-2, -1, 0, 1, 2):
+                        out.add((i + di, j + dj, k + dk))
+        return out
+    near_built = dilate(cells(built_samples))
+    near_scan = dilate(cells(scan_samples))
+    key = lambda p: (int(_py_math.floor(p.x / cell)), int(_py_math.floor(p.y / cell)), int(_py_math.floor(p.z / cell)))
+    cx = sum(p.x for p in scan_samples) / len(scan_samples)
+    cz = sum(p.z for p in scan_samples) / len(scan_samples)
+    sides = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+    side = lambda p: sides[int(((_py_math.degrees(_py_math.atan2(p.x - cx, -(p.z - cz))) % 360.0) + 22.5) // 45.0) % 8]
+    tiers = []
+    if plan:
+        for t in plan["tiers"]:
+            y0 = t.get("base_y", 0.0)
+            tiers.append((y0, y0 + t.get("plinth_height", 0.0) + sum(t["floor_heights"]), list(t["footprint"])))
+    def inside(p):
+        for y0, y1, ring in tiers:
+            if y0 <= p.y <= y1:
+                c, j = False, len(ring) - 1
+                for i in range(len(ring)):
+                    (xi, zi), (xj, zj) = ring[i], ring[j]
+                    if (zi > p.z) != (zj > p.z) and p.x < (xj - xi) * (p.z - zi) / (zj - zi) + xi:
+                        c = not c
+                    j = i
+                return c
+        return None
+    rows = {}
+    for p in scan_samples:
+        b = int(p.y // band_m)
+        r = rows.setdefault(b, {"scan": 0, "missed": 0, "inside": 0, "outside": 0, "built": 0, "extra": 0, "sides": {}})
+        r["scan"] += 1
+        if key(p) not in near_built:
+            r["missed"] += 1
+            sd = side(p)
+            r["sides"][sd] = r["sides"].get(sd, 0) + 1
+            w = inside(p)
+            if w is True:
+                r["inside"] += 1
+            elif w is False:
+                r["outside"] += 1
+    for p in built_samples:
+        b = int(p.y // band_m)
+        r = rows.setdefault(b, {"scan": 0, "missed": 0, "inside": 0, "outside": 0, "built": 0, "extra": 0, "sides": {}})
+        r["built"] += 1
+        if key(p) not in near_scan:
+            r["extra"] += 1
+    table, worst = [], []
+    for b in sorted(rows):
+        r = rows[b]
+        row = {"from_m": b * band_m, "to_m": (b + 1) * band_m, "scan_samples": r["scan"],
+               "missed_share": round(r["missed"] / r["scan"], 3) if r["scan"] else None,
+               "missed_inside_walls": r["inside"], "missed_outside_walls": r["outside"],
+               "extra_share": round(r["extra"] / r["built"], 3) if r["built"] else None,
+               "missed_by_side": dict(sorted(r["sides"].items(), key=lambda kv: -kv[1]))}
+        table.append(row)
+        for sd, n in r["sides"].items():
+            worst.append({"from_m": b * band_m, "to_m": (b + 1) * band_m, "side": sd, "missed_samples": n})
+    worst.sort(key=lambda w: -w["missed_samples"])
+    return {"band_m": band_m, "reach_m": reach, "bands": table, "worst": worst[:8],
+            "note": "missed inside walls = the build fills a recess, notch or court the scan shows open; outside = a wing or projection the build lacks"}
 
 
 def site_crown(massing: Optional[Dict[str, Any]] = None, slot: str = "wall", min_confidence: float = 0.0) -> Dict[str, Any]:
@@ -2206,6 +2817,7 @@ if _native is not None and hasattr(_native, "io"):
 from .glb_read import read_glb  # noqa: E402
 # Massing read from a scan and chosen by how well it explains it (massing.py): sb.massing.Scan, sb.massing.choose.
 from . import massing  # noqa: E402
+massing_module = massing  # site_tiers / site_score take a `massing` argument, which shadows the module inside them
 if _native is not None and hasattr(_native, "io"):
     _native.io.read_glb = read_glb
 if io is not None:
