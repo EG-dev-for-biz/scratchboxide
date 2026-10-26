@@ -21,6 +21,7 @@ import { SB_API_CORE_SUMMARY, SB_API_VERSION } from '../../3d-engine/sb-api.gene
 import { firstPassRenderMode } from '../scene3d-first-pass-baseline';
 import { measureSiteMassing, type SiteMassing } from '../../3d-engine/site-massing';
 import { readSiteFacade, type SiteFacade } from '../../3d-engine/site-facade';
+import { fitSiteCrown, type SiteCrown } from '../../3d-engine/site-crown';
 import * as os from 'os';
 
 export interface GlbAabbBounds {
@@ -215,6 +216,10 @@ export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'BOOLEAN',
                     description: 'Optional, with site: also read the building\'s facade (storey heights, bay width, window sizes, plinth, cornice, piers, colours) so sb.site_tiers() applies it. Lower floors are read from Google Street View (photo-inferred); floors above what the street sees from AI-Beautified renders of the 3D tiles, cross-checked against the raw render (generated). Takes a few minutes the first time (tile download, image and vision calls).'
                 },
+                siteCrown: {
+                    type: 'BOOLEAN',
+                    description: 'Optional, with site: also fit the building\'s crown (whatever stands above its last full tier: a spire, mast, lantern, drums, fins) from the 3D tiles, so sb.site_crown() returns it as add-ons. The shape program writes the crown as prisms, faceted revolves, sweeps and repeats; their sizes are fitted to the tiles (measured), counts of finer detail come from an AI-Beautified close-up (generated), and the fit\'s silhouette disagreement with the tiles is reported. Takes a minute or two the first time.'
+                },
                 renderMode: {
                     type: 'STRING',
                     enum: ['pbr', 'clay'],
@@ -306,6 +311,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
         // cannot be measured fails the call with the reason (no invented massing).
         let site: SiteMassing | undefined;
         let facade: SiteFacade | undefined;
+        let crown: SiteCrown | undefined;
         const siteEnv: Record<string, string> = {};
         if (typeof args.site === 'string' && args.site.trim()) {
             try {
@@ -321,8 +327,15 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                     site.notes.push(`facade not read: ${err instanceof Error ? err.message : String(err)}`);
                 }
             }
+            if (args.siteCrown === true) {
+                try {
+                    crown = await fitSiteCrown(site, { workspaceRoot: _ctx?.workspaceRoot ?? process.cwd(), ...(_ctx?.signal ? { signal: _ctx.signal } : {}), ...(_ctx?.reportProgress ? { progress: _ctx.reportProgress } : {}) });
+                } catch (err) {
+                    site.notes.push(`crown not fitted: ${err instanceof Error ? err.message : String(err)}`);
+                }
+            }
             const siteFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-site-json-')), 'site.json');
-            fs.writeFileSync(siteFile, JSON.stringify(facade ? { ...site, facade } : site));
+            fs.writeFileSync(siteFile, JSON.stringify({ ...site, ...(facade ? { facade } : {}), ...(crown ? { crown } : {}) }));
             siteEnv.SCRATCHBOX_SITE_JSON = siteFile;
         }
 
@@ -509,7 +522,8 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 glbPath: result.glbPath,
                 glbGenerated: true,
                 ...(site ? { site: { resolvedAs: site.place.resolvedAs, topM: site.topM, tiers: site.tiers.map(t => ({ baseM: +t.baseM.toFixed(1), topM: +t.topM.toFixed(1), areaM2: Math.round(t.areaM2), provenance: t.provenance })), notes: site.notes,
-                    ...(facade ? { facade: { readings: facade.readings.map(r => ({ scope: r.scope, appliesM: [Math.round(r.appliesFromM), Math.round(r.appliesToM)], provenance: r.provenance, confidence: r.confidence, values: r.values, rejected: r.rejected, source: r.source })), notes: facade.notes } } : {}) } } : {}),
+                    ...(facade ? { facade: { readings: facade.readings.map(r => ({ scope: r.scope, appliesM: [Math.round(r.appliesFromM), Math.round(r.appliesToM)], provenance: r.provenance, confidence: r.confidence, values: r.values, rejected: r.rejected, source: r.source })), notes: facade.notes } } : {}),
+                    ...(crown ? { crown: { fromM: crown.fromM, toM: crown.toM, silhouetteDisagreement: crown.silhouette, silhouetteBefore: crown.silhouetteBefore, matched: crown.matched, pieces: crown.pieces.map(p => ({ id: p.id, operator: p.operator, label: p.label, provenance: p.provenance, measured: p.measured, generated: p.generated })), notes: crown.notes } } : {}) } } : {}),
                 vertexCount: writtenGeometry.totalVertices,
                 triangleCount: writtenGeometry.totalTriangles,
                 executionTimeMs: result.executionTimeMs,

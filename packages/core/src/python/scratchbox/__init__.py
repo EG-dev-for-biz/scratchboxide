@@ -1538,6 +1538,48 @@ def site_tiers(massing: Optional[Dict[str, Any]] = None, name: str = "Site", flo
             "report": report}
 
 
+def site_crown(massing: Optional[Dict[str, Any]] = None, slot: str = "wall", min_confidence: float = 0.0) -> Dict[str, Any]:
+    """
+    The crown of the site's building (whatever stands above its last full tier: spire, mast, lantern, drums, fins), fitted
+    from the 3D tiles when execute_3d_python_script ran with siteFacade's sibling siteCrown=True. Each fitted piece is
+    built as a closed mesh with flat faces (hard edges stay hard), in the same frame as sb.site_tiers (x east, z south,
+    y above the street), ready for write_textured_building(extras=...).
+
+    Returns {"extras": [{"mesh", "slot", "provenance", "confidence", "source"}...], "pieces": [{"id", "operator",
+    "label", "provenance", "measured", "generated"}...], "silhouette": the fit's outline disagreement with the tiles
+    (0 = identical), "matched", "from_m", "to_m", "notes"}. Raises when the site has no fitted crown.
+    """
+    m = massing if massing is not None else site()
+    crown = m.get("crown")
+    if not crown:
+        raise RuntimeError("no crown was fitted for this site: pass siteCrown=True with site to execute_3d_python_script"
+                           + (f" ({'; '.join(n for n in m.get('notes', []) if 'crown' in n)})" if m.get("notes") else ""))
+    extras, pieces = [], []
+    for p in crown["pieces"]:
+        if p["confidence"] < min_confidence:
+            continue
+        mesh = _native.geometry.Mesh(f"crown-{p['id'].replace('/', '-')}")
+        P, I = p["positions"], p["indices"]
+        for t in range(0, len(I) - 2, 3):
+            a, b, c = (_native.math.Vec3(P[3 * k], P[3 * k + 1], P[3 * k + 2]) for k in (I[t], I[t + 1], I[t + 2]))
+            n = (b - a).cross(c - a)
+            if n.length() < 1e-12:
+                continue
+            n = n.normalized()
+            base = len(mesh.vertices)
+            for v in (a, b, c):
+                mesh.add_vertex(v, n, _native.math.Vec2(0.0, 0.0), _native.math.Vec4(1.0, 1.0, 1.0, 1.0))
+            mesh.add_triangle(base, base + 1, base + 2)
+        if not len(mesh.vertices):
+            continue
+        source = (f"crown {p['operator']} fitted to the 3D tiles (shape program; measured: {', '.join(p['measured']) or 'none'};"
+                  f" generated: {', '.join(p['generated']) or 'none'})")
+        extras.append({"mesh": mesh, "slot": slot, "provenance": p["provenance"], "confidence": p["confidence"], "source": source})
+        pieces.append({k: p[k] for k in ("id", "operator", "label", "provenance", "measured", "generated")})
+    return {"extras": extras, "pieces": pieces, "silhouette": crown["silhouette"], "matched": crown["matched"],
+            "from_m": crown["from_m"], "to_m": crown["to_m"], "notes": crown.get("notes", [])}
+
+
 def stack_buildings(*tiers) -> _BuildingParts:
     """
     Combine buildings made by create_building_parts (each with its own name, placed with base_y and

@@ -137,3 +137,32 @@
   - Vertical strips with recessed spandrels (the look the raw render shows) can't be expressed by the generator yet (plan step 3).
   - The post-turn visual check fails with 413 (payload too large), already noted before.
   - The first facade reading costs about 70–80 s.
+
+---
+
+## 9. The crown fitted to the 3D tiles (spire, fins, drums, antenna)
+
+* **Why:** the agent's spire was a smooth 16-lobe revolve. Google's tiles show a hard-edged stack: stepped deck tiers, four stepped corner wings, a glazed shaft, a drum ring, a narrower drum and a lattice antenna.
+* **What was added:** `execute_3d_python_script` takes `siteCrown: true` with `site`. `fitSiteCrown` (`packages/core/src/node/3d-engine/site-crown.ts`) works in four steps:
+  1. Crops the structure's tile triangles above the crown's base, the top of the last tier holding 20% of the footprint (319.85 m here; 16,508 triangles).
+  2. AI-Beautifies a render of that crop as a reference picture for counts.
+  3. Runs the existing shape program (`pipeline-e/shape-stage`, mode program, with a new `referenceImages` input) on the crop. The crown's base stands in for the street, so the height grid and the fit's views frame the crown alone: from the street up, a 120 m crown is a sliver and the silhouette check sees no detail (first try: 17.7% → 11.0% at that framing; reframed: 14.5% → 7.8%).
+  4. Returns the native fit's geometry (tile frame, y above the street). Pieces whose sizes the fit moved are labelled **measured**; side counts, repeat counts and unmoved values are **generated**, and the reported silhouette disagreement is the check. Cached 7 days.
+  
+  `sb.site_crown()` builds the pieces as closed, flat-faced meshes ready for `write_textured_building(extras=...)`.
+* **Fit on the Empire State Building** (development run, 82 s; cached afterwards). The model wrote the crown as:
+  - prisms for the observation deck and three stepped setback tiers;
+  - two pairs of stepped corner wings (prisms);
+  - a 16-sided mast revolve, a 32-sided drum and dome, an 8-sided antenna pylon, and a 16-sided antenna.
+  
+  72 of 88 sizes were fitted to the tiles. Silhouette disagreement went 14.5% → 7.8% (a refit gave 17 pieces at 8.6%: the program varies run to run, the cache holds it).
+* **In the app** (web 3070 / API 3071 / tools 3072, fresh chat; prompt asked for the spire "fitted to Google's 3D tiles rather than invented", naming no API):
+  - The agent called the tool with `site`, `siteFacade` and `siteCrown`, and used `sb.site_tiers()`, `sb.stack_buildings` and `sb.site_crown()`.
+  - The first attempt failed in `sb.site_crown()`: my bug, the native tool writes vertices as `[x, y, z]` triples, not a flat list. Fixed and the cache version bumped.
+  - After the fix: one quick script error, then success: 822,941 vertices, 52 submeshes. The model loaded in the viewport, and the agent's own `audit_3d_scene_viewport` ran.
+* **Comparison render** (development, clay, same cameras; `docs/screenshots/esb_crown_tiles_vs_fitted.png`, gitignored): the fitted crown matches the tile crown's silhouette (stepped base, tapering shaft with wings, drum, mast, antenna height), with hard edges where the tiles melt. Not captured: the antenna lattice, the shaft's vertical strips, and the wings' finer steps. Those are below the fit's ~0.5 m detail, so they stay with the generator's facade work and generated add-ons.
+* **Still open:**
+  - The prism caps are fans (fine for the convex plans written here).
+  - Prism roof planes are dropped (flat tops).
+  - The crown's surface takes the wall's texture, not its own (metal, glass).
+  - Zooming the app viewport onto the crown was not practical with the mouse; the close comparison is the development render above.

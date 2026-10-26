@@ -83,7 +83,7 @@ export interface SiteFacade { readings: FacadeReading[]; notes: string[]; cached
 export const SITE_FACADE_VERSION = 'site-facade/v1';
 const SITE_FACADE_TTL_MS = 7 * 24 * 3600 * 1000;
 
-function lookAt(eye: [number, number, number], target: [number, number, number], width: number, height: number, hfovDeg: number): PinholeCamera {
+export function lookAt(eye: [number, number, number], target: [number, number, number], width: number, height: number, hfovDeg: number): PinholeCamera {
     const f = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
     const fl = Math.hypot(f[0], f[1], f[2]);
     const fwd: [number, number, number] = [f[0] / fl, f[1] / fl, f[2] / fl];

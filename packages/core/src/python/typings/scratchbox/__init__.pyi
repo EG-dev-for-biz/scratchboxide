@@ -17,7 +17,7 @@ import scratchbox_native.math
 import scratchbox_native.nature
 import typing
 
-__all__ = ['Any', 'Armature', 'Dict', 'Flora', 'Human', 'List', 'Optional', 'PbrMaterial', 'PbrMaterialWrapper', 'PlantPreset', 'PoseBone', 'PrincipledBsdfMaterial', 'RomanOrder', 'Scene', 'ShapeKeyBlock', 'ShapeKeys', 'Structure', 'StudioHuman', 'Terrain', 'Tuple', 'Union', 'World', 'adaptive_object', 'architecture', 'composer', 'constants', 'core', 'create_arched_blister', 'create_beveled_box', 'create_box', 'create_building', 'create_building_parts', 'create_cambered_foil', 'create_catenary_cable', 'create_character', 'create_cone', 'create_cube', 'create_curved_building', 'create_cylinder', 'create_envelope', 'create_form', 'create_human', 'create_hydraulic_actuator', 'create_intake_strainer', 'create_ivy', 'create_lathe', 'create_loft', 'create_lofted_hull', 'create_louver_bay', 'create_panelized_loft', 'create_plane', 'create_revolving_component', 'create_sphere', 'create_spline_conduit_harness', 'create_structural_truss_member', 'create_studio_pedestal', 'create_subdivided_box', 'create_tower', 'create_tree', 'create_vegetation', 'create_wheel', 'create_wheel_assembly', 'export_glb', 'geometry', 'geospatial', 'hair', 'human', 'io', 'k', 'layout', 'math', 'meshops', 'moulding_profile', 'nature', 'object_spec', 'os', 'pbr', 'plant', 'processing', 'py_math', 'random', 'relief', 'replicate_metric_array', 'revolve_harmonic_solid', 'rig', 'sdf', 'shaper', 'site', 'site_tiers', 'stack_buildings', 'structure', 'superellipse_loop', 'superellipse_point', 'sweep_curve_profile', 'sys', 'terrain', 'topology', 'validate_scene', 'validation', 'world', 'write_glb', 'write_textured_building']
+__all__ = ['Any', 'Armature', 'Dict', 'Flora', 'Human', 'List', 'Optional', 'PbrMaterial', 'PbrMaterialWrapper', 'PlantPreset', 'PoseBone', 'PrincipledBsdfMaterial', 'RomanOrder', 'Scene', 'ShapeKeyBlock', 'ShapeKeys', 'Structure', 'StudioHuman', 'Terrain', 'Tuple', 'Union', 'World', 'adaptive_object', 'architecture', 'composer', 'constants', 'core', 'create_arched_blister', 'create_beveled_box', 'create_box', 'create_building', 'create_building_parts', 'create_cambered_foil', 'create_catenary_cable', 'create_character', 'create_cone', 'create_cube', 'create_curved_building', 'create_cylinder', 'create_envelope', 'create_form', 'create_human', 'create_hydraulic_actuator', 'create_intake_strainer', 'create_ivy', 'create_lathe', 'create_loft', 'create_lofted_hull', 'create_louver_bay', 'create_panelized_loft', 'create_plane', 'create_revolving_component', 'create_sphere', 'create_spline_conduit_harness', 'create_structural_truss_member', 'create_studio_pedestal', 'create_subdivided_box', 'create_tower', 'create_tree', 'create_vegetation', 'create_wheel', 'create_wheel_assembly', 'export_glb', 'geometry', 'geospatial', 'hair', 'human', 'io', 'k', 'layout', 'math', 'meshops', 'moulding_profile', 'nature', 'object_spec', 'os', 'pbr', 'plant', 'processing', 'py_math', 'random', 'relief', 'replicate_metric_array', 'revolve_harmonic_solid', 'rig', 'sdf', 'shaper', 'site', 'site_crown', 'site_tiers', 'stack_buildings', 'structure', 'superellipse_loop', 'superellipse_point', 'sweep_curve_profile', 'sys', 'terrain', 'topology', 'validate_scene', 'validation', 'world', 'write_glb', 'write_textured_building']
 
 Any = typing.Any
 Armature = scratchbox.human.Armature
@@ -615,6 +615,19 @@ def site() -> typing.Dict[str, typing.Any]:
     z south, metres from the place point, y up from the building's lowest point), "tiers" (each base_m, top_m,
     area_m2, plan "loops", provenance, source, confidence), "top_m" (the highest point the vector data reaches),
     "wall_direction_deg" and notes. Raises when the call gave no site.
+    """
+
+
+def site_crown(massing: typing.Dict[str, typing.Any] | None = None, slot: str = 'wall', min_confidence: float = 0.0) -> typing.Dict[str, typing.Any]:
+    """
+    The crown of the site's building (whatever stands above its last full tier: spire, mast, lantern, drums, fins), fitted
+    from the 3D tiles when execute_3d_python_script ran with siteFacade's sibling siteCrown=True. Each fitted piece is
+    built as a closed mesh with flat faces (hard edges stay hard), in the same frame as sb.site_tiers (x east, z south,
+    y above the street), ready for write_textured_building(extras=...).
+
+    Returns {"extras": [{"mesh", "slot", "provenance", "confidence", "source"}...], "pieces": [{"id", "operator",
+    "label", "provenance", "measured", "generated"}...], "silhouette": the fit's outline disagreement with the tiles
+    (0 = identical), "matched", "from_m", "to_m", "notes"}. Raises when the site has no fitted crown.
     """
 
 
