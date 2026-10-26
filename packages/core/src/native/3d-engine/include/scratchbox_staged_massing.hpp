@@ -839,6 +839,7 @@ private:
             Face* host = nullptr;
             double shift = 0;
             std::vector<std::pair<Face*, double>> pieces;
+            bool whole = false;
             for (auto& f : faces_) {
                 const auto& o = spec_.openings[oi];
                 // an extruded wall, or a vertical facet of a modelled volume (its own triangles, cut round the openings)
@@ -849,9 +850,12 @@ private:
                 if (std::isnan(d)) continue;
                 const double sc = 0.5 * (o.s0 + o.s1) + d;
                 if (sc >= f.sMin && sc <= f.sMax) { host = &f; shift = d; }
-                if (spec_.clipOpenings && std::min(o.s1 + d, f.sMax - 0.03) - std::max(o.s0 + d, f.sMin + 0.03) >= 0.3) pieces.push_back({&f, d});
+                if (o.s0 + d > f.sMin + 0.02 && o.s1 + d < f.sMax - 0.02) whole = true;
+                if (std::min(o.s1 + d, f.sMax - 0.03) - std::max(o.s0 + d, f.sMin + 0.03) >= 0.3) pieces.push_back({&f, d});
             }
-            if (spec_.clipOpenings && pieces.size() > 1) {
+            // an opening straddling the cut of a split edge lies outside every piece's ends: a copy on each piece it overlaps
+            // by 0.3 m or more, clipped to it (clipOpenings always splits; otherwise only when no piece takes it whole)
+            if (!pieces.empty() && (spec_.clipOpenings ? pieces.size() > 1 : !whole)) {
                 // one copy per piece it overlaps, in that piece's frame (attached when the loop reaches it)
                 const OpeningSpec o = spec_.openings[oi];
                 int k = 0;
@@ -1580,15 +1584,12 @@ private:
     /** Emits the sweep on face `fi`; false (nothing emitted) when it does not fit there. */
     bool emitFaceSweepOn(const FaceSweepSpec& in, size_t fi) {
         const Face& f = faces_[fi];
-        // a wall a neighbour part covers below: the profile (along s) never reaches below the wall's raised bottom
-        FaceSweepSpec clipped = in;
-        if (spec_.clipOpenings && f.wall && in.axis == 0) for (auto& q : clipped.profile) q.second = std::max(q.second, f.tBottom);
-        const FaceSweepSpec& fs = clipped;
-        if (spec_.clipOpenings && fs.axis == 0) {
-            double c0 = 1e300, c1 = -1e300;
-            for (const auto& q : fs.profile) { c0 = std::min(c0, q.second); c1 = std::max(c1, q.second); }
-            if (c1 - c0 < 0.3) return false;
-        }
+        const FaceSweepSpec& fs = in;
+        // a wall a neighbour part covers below: a placement's profile (along s) never reaches below the wall's raised bottom.
+        // The profile's cross values are relative to the placement's own offset (pl[2]), so the clamp is per placement, on
+        // the absolute height. A placement the clamp cut into is dropped when what is left is under 0.3 m or under half its
+        // height (a sliver of a profile the neighbour hides); one the clamp does not reach is kept whatever its height (a sill)
+        const bool clipBottom = spec_.clipOpenings && f.wall && fs.axis == 0;
         OutNode node;
         node.name = "facesweep:" + fs.id;
         node.kind = "sweep";
@@ -1611,10 +1612,21 @@ private:
             put(a, n); put(flip ? c : b, n); put(flip ? b : c, n);
         };
         const V3 A = fs.axis == 0 ? f.axisS : f.axisT, C = fs.axis == 0 ? f.axisT : f.axisS;
-        const auto& pr = fs.profile;
         for (const auto& pl : fs.placements) {
             const double a0 = std::min(pl[0], pl[1]), a1 = std::max(pl[0], pl[1]), dc = pl[2];
             if (a1 - a0 < 1e-3) continue;
+            std::vector<std::pair<double, double>> pr = fs.profile;
+            if (clipBottom) {
+                double c0 = 1e300, c1 = -1e300, o0 = 1e300, o1 = -1e300;
+                bool cut = false;
+                for (auto& q : pr) {
+                    o0 = std::min(o0, q.second); o1 = std::max(o1, q.second);
+                    const double c = std::max(q.second + dc, f.tBottom) - dc;
+                    cut = cut || c != q.second;
+                    q.second = c; c0 = std::min(c0, c); c1 = std::max(c1, c);
+                }
+                if (cut && c1 - c0 < std::min(0.3, 0.5 * (o1 - o0))) continue;
+            }
             for (size_t k = 0; k + 1 < pr.size(); ++k) {
                 const double c0 = pr[k].second + dc, o0 = std::max(0.0, pr[k].first), c1 = pr[k + 1].second + dc, o1 = std::max(0.0, pr[k + 1].first);
                 if (o0 <= 1e-6 && o1 <= 1e-6) continue;

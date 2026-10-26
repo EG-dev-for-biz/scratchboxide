@@ -173,13 +173,17 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
 
 /** Triangle soup (world) of every triangle primitive of a GLB without node transforms (tile_refine writes none). */
 export function glbSoup(glb: ParsedGlb): Float32Array {
-    const out: number[] = [];
+    const prims: Array<{ P: ArrayLike<number>; I: ArrayLike<number> | undefined; n: number }> = [];
     for (const m of glb.json.meshes ?? []) for (const p of m.primitives ?? []) {
         if ((p.mode ?? 4) !== 4 || p.attributes?.POSITION === undefined) continue;
-        const P = readAccessor(glb, p.attributes.POSITION).data, I = p.indices !== undefined ? readAccessor(glb, p.indices).data : Float64Array.from({ length: P.length / 3 }, (_, i) => i);
-        for (let t = 0; t + 2 < I.length; t += 3) for (let k = 0; k < 3; k++) out.push(P[I[t + k] * 3], P[I[t + k] * 3 + 1], P[I[t + k] * 3 + 2]);
+        const P = readAccessor(glb, p.attributes.POSITION).data, I = p.indices !== undefined ? readAccessor(glb, p.indices).data : undefined;
+        prims.push({ P, I, n: Math.floor((I ? I.length : P.length / 3) / 3) * 3 });
     }
-    return Float32Array.from(out);
+    // sized up front: a district's soup outgrows a plain array
+    const out = new Float32Array(prims.reduce((a, q) => a + q.n * 3, 0));
+    let o = 0;
+    for (const { P, I, n } of prims) for (let j = 0; j < n; j++) { const v = I ? I[j] : j; out[o++] = P[v * 3]; out[o++] = P[v * 3 + 1]; out[o++] = P[v * 3 + 2]; }
+    return out;
 }
 
 /** Is a triangle (world corners) part of facade f's rebuilt region: facing it, within its depth band, inside a measured lattice. */
@@ -193,7 +197,14 @@ function inFacade(a: number[], b: number[], c: number[], f: ReliefFacade, r: Fac
     return !(nl > 0) || Math.abs(dot([nx / nl, ny / nl, nz / nl], f.normal)) >= 0.3;
 }
 
-function align4(bin: number[]): void { while (bin.length % 4) bin.push(0); }
+/** The GLB's binary chunk grown by appending chunks: byte for byte in a plain array, a district's remesh outgrows V8's array limit (~134 M elements). */
+class BinBuilder {
+    readonly chunks: Uint8Array[] = [];
+    length = 0;
+    push(bytes: Uint8Array): number { const off = this.length; this.chunks.push(bytes); this.length += bytes.length; return off; }
+    align4(): void { if (this.length % 4) this.push(new Uint8Array(4 - (this.length % 4))); }
+    bytes(): Uint8Array { const out = new Uint8Array(this.length); let o = 0; for (const c of this.chunks) { out.set(c, o); o += c.length; } return out; }
+}
 
 /**
  * Edits a GLB of the remesh: the facades' scan triangles degenerate, each rebuilt facade appended as a node (`textured`:
@@ -202,7 +213,6 @@ function align4(bin: number[]): void { while (bin.length % 4) bin.push(0); }
 export function applyFacadeLattices(bytes: Uint8Array, facades: Array<{ f: ReliefFacade; r: FacadeLatticeResult; png?: Uint8Array }>, textured: boolean): { glb: Buffer; removed: number } {
     const glb = parseGlbBytes(bytes);
     const json = glb.json;
-    const bin = Array.from(glb.bin);
     const dv = new DataView(glb.bin.buffer, glb.bin.byteOffset, glb.bin.byteLength);
     let removed = 0;
     for (const m of json.meshes ?? []) for (const p of m.primitives ?? []) {
@@ -217,15 +227,17 @@ export function applyFacadeLattices(bytes: Uint8Array, facades: Array<{ f: Relie
             removed++;
         }
     }
-    // the edited bytes back into the array we append to
-    for (let i = 0; i < glb.bin.length; i++) bin[i] = glb.bin[i];
+    // the edited bytes (edited in place through dv) first, the rebuilt facades appended after them
+    const bin = new BinBuilder();
+    bin.push(glb.bin);
     json.bufferViews ??= []; json.accessors ??= []; json.meshes ??= []; json.nodes ??= []; json.materials ??= [];
-    const view = (bytesArr: ArrayLike<number>, target?: number) => { align4(bin); const off = bin.length; for (let i = 0; i < bytesArr.length; i++) bin.push(bytesArr[i]); json.bufferViews.push({ buffer: 0, byteOffset: off, byteLength: bytesArr.length, ...(target ? { target } : {}) }); return json.bufferViews.length - 1; };
+    const view = (bytesArr: Uint8Array, target?: number) => { bin.align4(); const off = bin.push(Uint8Array.from(bytesArr)); json.bufferViews.push({ buffer: 0, byteOffset: off, byteLength: bytesArr.length, ...(target ? { target } : {}) }); return json.bufferViews.length - 1; };
     const f32 = (a: Float32Array) => new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
     const scene = json.scenes?.[json.scene ?? 0];
     for (const { f, r, png } of facades) {
         const acc = (bv: number, count: number, type: string, componentType: number, minmax?: { min: number[]; max: number[] }) => { json.accessors.push({ bufferView: bv, componentType, count, type, ...(minmax ?? {}) }); return json.accessors.length - 1; };
-        const min = [0, 1, 2].map(k => Math.min(...Array.from({ length: r.positions.length / 3 }, (_, v) => r.positions[v * 3 + k]))), max = [0, 1, 2].map(k => Math.max(...Array.from({ length: r.positions.length / 3 }, (_, v) => r.positions[v * 3 + k])));
+        const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+        for (let v = 0; v < r.positions.length; v += 3) for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], r.positions[v + k]); max[k] = Math.max(max[k], r.positions[v + k]); }
         const attributes: Record<string, number> = {
             POSITION: acc(view(f32(r.positions), 34962), r.positions.length / 3, 'VEC3', 5126, { min, max }),
             NORMAL: acc(view(f32(r.normals), 34962), r.normals.length / 3, 'VEC3', 5126)
@@ -246,9 +258,9 @@ export function applyFacadeLattices(bytes: Uint8Array, facades: Array<{ f: Relie
         json.nodes.push({ name: `FacadeLattice_${f.facadeId}`, mesh: json.meshes.length - 1, extras: { sbFacadeLattice: { version: FACADE_LATTICE_VERSION, facadeId: f.facadeId, provenance: { lines: 'photo-inferred', depth: 'measured (median per cell, averaged along the row\'s repeats)' }, cells: r.cells, measuredShare: r.measuredShare, sLines: r.s.length, tLines: r.t.length } } });
         scene?.nodes?.push(json.nodes.length - 1);
     }
-    align4(bin);
+    bin.align4();
     json.buffers = [{ ...(json.buffers?.[0] ?? {}), byteLength: bin.length }];
-    return { glb: assembleGlb(json, Uint8Array.from(bin)), removed };
+    return { glb: assembleGlb(json, bin.bytes()), removed };
 }
 
 /** Rebuilds a remesh's rectified facades on their photo lattices: the clay and (when given) its textured twin. */
