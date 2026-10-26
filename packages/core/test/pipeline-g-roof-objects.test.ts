@@ -79,6 +79,22 @@ describe('pipeline G roof objects', () => {
         expect(bx.outlineM2).toBeCloseTo(12, 6);
     });
 
+    it('drops a plane fitted to a blob that, carried to its outline, sinks into the building (the Haughwout water tower)', () => {
+        // a 2 m pyramid, 1.5 m tall, whose cluster also holds vertical slivers 3 m out on two sides (a blob's spill):
+        // the outline grows to the slivers, and the steep faces carried out to it reach far below the roof
+        const steep = pyramid(9, -9, 2, 12, 1.5);
+        const sliver = (x: number, z: number): P3[][] => [[[x, 12, z], [x + 0.2, 12, z], [x + 0.2, 13, z]], [[x, 12, z], [x + 0.2, 13, z], [x, 13, z]]];
+        const blob = roofObjectPart(cluster(3, 12), [...steep, ...sliver(5, -10), ...sliver(14, -6), ...sliver(9.5, -14)], 'roof-object-3', 0, [MAIN]);
+        if (!('part' in blob)) throw new Error(blob.skipped);
+        expect(blob.planes).toBe(0);
+        expect(blob.reason, blob.reason).toMatch(/dropped: outside its own height/);
+        for (const [x, z] of blob.part.loops[0]) expect(roofAt(blob.part, x, z)).toBeGreaterThanOrEqual(12);
+        // the same pyramid on its own keeps its four planes
+        const alone = roofObjectPart(cluster(4, 12), steep, 'roof-object-4', 0, [MAIN]);
+        if (!('part' in alone)) throw new Error(alone.skipped);
+        expect(alone.planes).toBe(4);
+    });
+
     it('does not build a cluster hanging on a wall, one standing on the street, or an artefact', () => {
         // a balcony-hung box outside the plan (beyond z = 0), standing on something 6 m up
         const hung = roofObjectPart(cluster(3, 6), box(5, 8, 2, 0.5, 6, 8), 'x', 0, [MAIN]);

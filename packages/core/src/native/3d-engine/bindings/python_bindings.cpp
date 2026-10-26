@@ -33,6 +33,8 @@
 #include "scratchbox_sb_rig.hpp"
 #include "scratchbox_sb_veggie_grove.hpp"
 #include "scratchbox_mesh_edit.hpp"
+#include "scratchbox_scan_massing.hpp"
+#include "scratchbox_roof_objects.hpp"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -1395,6 +1397,153 @@ NB_MODULE(scratchbox_native, m) {
     // ========================================================================
     // 9. CORE INVARIANT KERNEL (GeoMorph, ArchiMorph, Sensor Passes)
     // ========================================================================
+    // ========================================================================
+    // SCAN MASSING: massing read from a scan, and the choice between candidates by measured fit
+    // ========================================================================
+    {
+        namespace sm = scratchbox::scan_massing;
+        auto m_sm = m.def_submodule("scan_massing", "Massing read from a scan (sections, lofts, an extruded block) and the choice between candidates by how well each explains the scan, height by height");
+        auto ringOf = [](const std::vector<std::pair<double, double>>& xz) { std::vector<sm::P2> r; for (const auto& [x, z] : xz) r.push_back({x, z}); return r; };
+        auto inRings = [](const std::vector<std::vector<sm::P2>>& rings, double x, double z) {
+            for (const auto& ring : rings) {
+                bool c = false;
+                for (size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++)
+                    if ((ring[i].z > z) != (ring[j].z > z) && x < (ring[j].x - ring[i].x) * (z - ring[i].z) / (ring[j].z - ring[i].z) + ring[i].x) c = !c;
+                if (c) return true;
+            }
+            return false;
+        };
+        nb::class_<sm::Agreement>(m_sm, "Agreement")
+            .def_ro("coverage", &sm::Agreement::coverage).def_ro("precision", &sm::Agreement::precision).def_ro("f", &sm::Agreement::f)
+            .def_ro("banded_coverage", &sm::Agreement::bandedCoverage).def_ro("banded_precision", &sm::Agreement::bandedPrecision)
+            .def_ro("banded_f", &sm::Agreement::bandedF).def_ro("worst_band_coverage", &sm::Agreement::worstBandCoverage)
+            .def_ro("bands", &sm::Agreement::bands).def_ro("scan_samples", &sm::Agreement::scanSamples)
+            .def_ro("candidate_samples", &sm::Agreement::candidateSamples).def_ro("unseen_samples", &sm::Agreement::unseenSamples)
+            .def("__repr__", [](const sm::Agreement& a) { return "Agreement(coverage=" + sm::fmt3(a.bandedCoverage) + ", precision=" + sm::fmt3(a.bandedPrecision) + ", f=" + sm::fmt3(a.bandedF) + ")"; });
+        nb::class_<sm::Slice>(m_sm, "Slice")
+            .def_ro("y0", &sm::Slice::y0).def_ro("y1", &sm::Slice::y1)
+            .def_prop_ro("cell_count", [](const sm::Slice& s) { return s.cells.size(); });
+        nb::class_<sm::LoftRun>(m_sm, "LoftRun")
+            .def_ro("y0", &sm::LoftRun::y0).def_ro("y1", &sm::LoftRun::y1)
+            .def_prop_ro("ring_count", [](const sm::LoftRun& r) { return r.rings.size(); })
+            .def_prop_ro("rings", [](const sm::LoftRun& r) {
+                std::vector<std::pair<double, std::vector<std::pair<double, double>>>> out;
+                for (const auto& ring : r.rings) { std::vector<std::pair<double, double>> pts; for (const auto& p : ring.pts) pts.push_back({p.x, p.z}); out.push_back({ring.y, pts}); }
+                return out;
+            });
+        nb::class_<sm::TopGrid>(m_sm, "TopGrid", "The scan's highest point per plan cell (for the hidden-wall test)")
+            .def(nb::init<>())
+            .def("add_mesh", [](sm::TopGrid& g, const ScratchboxMesh& mesh) { for (const auto& v : mesh.vertices) g.add(v.position); }, "mesh"_a)
+            .def("at", &sm::TopGrid::at, "x"_a, "z"_a);
+        m_sm.def("crop_to_plan", [ringOf](const ScratchboxMesh& mesh, const std::vector<std::vector<std::pair<double, double>>>& plan, double margin, double minY) {
+            std::vector<std::vector<sm::P2>> rings;
+            for (const auto& r : plan) rings.push_back(ringOf(r));
+            return sm::cropToPlan(mesh, rings, margin, minY);
+        }, "mesh"_a, "plan"_a, "margin"_a = 3.0, "min_y"_a = -1e9, "The triangles of a scan above min_y and within margin of the plan rings (x, z)");
+        m_sm.def("plan_outline", [](const std::vector<sm::Slice>& sl, double cellM) {
+            std::vector<std::pair<double, double>> out;
+            for (const auto& p : sm::planOutline(sl, cellM)) out.push_back({p.x, p.z});
+            return out;
+        }, "slices"_a, "cell"_a = 0.5, "The outline (x, z) of the largest piece of all slices together: the scan's plan");
+        m_sm.def("snap_plan_to_scan", [ringOf](const std::vector<std::pair<double, double>>& ring, const std::vector<Vec3>& samples, double groundY, double topY, double search) {
+            std::vector<sm::SnapEdge> rep;
+            const auto r = sm::snapPlanToScan(ringOf(ring), samples, groundY, topY, search, 0.25, 0.15, 0.5, &rep);
+            std::vector<std::pair<double, double>> out;
+            for (const auto& p : r) out.push_back({p.x, p.z});
+            std::vector<std::tuple<double, size_t, bool>> edges;
+            for (const auto& e : rep) edges.push_back({e.shiftM, e.support, e.moved});
+            return std::make_pair(out, edges);
+        }, "ring"_a, "samples"_a, "ground_y"_a, "top_y"_a, "search"_a = 3.0,
+           "The footprint ring (x, z) with each edge moved along its normal onto the scan's wall; returns (ring, [(shift m, support, moved)] per edge)");
+        m_sm.def("plan_union", [ringOf](const std::vector<std::vector<std::pair<double, double>>>& rings, double cellM) {
+            std::vector<std::vector<sm::P2>> rr;
+            for (const auto& r : rings) rr.push_back(ringOf(r));
+            std::vector<std::pair<double, double>> out;
+            for (const auto& p : sm::planUnion(rr, cellM)) out.push_back({p.x, p.z});
+            return out;
+        }, "rings"_a, "cell"_a = 0.5, "One outline (x, z) for a footprint given in many rings: all filled, the largest connected piece outlined");
+        nb::class_<sm::Tier>(m_sm, "Tier")
+            .def_ro("y0", &sm::Tier::y0).def_ro("y1", &sm::Tier::y1).def_ro("area", &sm::Tier::areaM2)
+            .def_prop_ro("outline", [](const sm::Tier& t) { std::vector<std::pair<double, double>> o; for (const auto& p : t.outline) o.push_back({p.x, p.z}); return o; });
+        m_sm.def("tiers", [](const std::vector<Vec3>& samples, double baseY, double changeShare, double minTier) {
+            sm::TierParams T; T.changeShare = changeShare; T.minTierM = minTier;
+            return sm::tiers(samples, baseY, T);
+        }, "samples"_a, "base_y"_a, "change"_a = 0.15, "min_tier"_a = 3.0,
+           "The structure as a stack of tiers where the scan's plan area holds steady, each squared and snapped onto its own walls");
+        m_sm.def("tier_solids", &sm::tierSolids, "tiers"_a, "The tiers raised into one mesh");
+        m_sm.def("sample_surface", [](const ScratchboxMesh& mesh, double spacing) { return sm::sampleMesh(mesh, spacing); }, "mesh"_a, "spacing"_a = 0.5,
+                 "Evenly spaced points on a mesh's surface (about one per spacing^2)");
+        m_sm.def("agreement", [ringOf, inRings](const std::vector<Vec3>& scan, const std::vector<Vec3>& candidate, double tau, double bandM, std::optional<double> groundY,
+                                                 const sm::TopGrid* neighbours, const std::vector<std::vector<std::pair<double, double>>>& ownPlan, std::optional<double> coverageTau) {
+            sm::AgreementOptions o;
+            o.tauM = tau; o.bandM = bandM;
+            if (coverageTau) o.coverageTauM = *coverageTau;
+            if (groundY) o.groundY = *groundY;
+            std::vector<std::vector<sm::P2>> rings;
+            for (const auto& r : ownPlan) rings.push_back(ringOf(r));
+            if (neighbours && !rings.empty()) { o.neighbours = neighbours; o.ownPlan = [rings, inRings](double x, double z) { return inRings(rings, x, z); }; }
+            return sm::agreement(scan, candidate, o);
+        }, "scan"_a, "candidate"_a, "tau"_a = 1.0, "band"_a = 2.0, "ground_y"_a = nb::none(), "neighbours"_a = nb::none(), "own_plan"_a = std::vector<std::vector<std::pair<double, double>>>{}, "coverage_tau"_a = nb::none(),
+           "How well candidate samples explain scan samples: coverage, precision and F, overall and height-balanced; surface at street level (ground_y) or beside a taller neighbour (neighbours, off own_plan) is left out of precision");
+        m_sm.def("slices", [](const std::vector<Vec3>& samples, double baseY, double sliceM, double cellM, double closeM) {
+            return sm::slices(samples, baseY, sm::SliceParams{sliceM, cellM, closeM});
+        }, "samples"_a, "base_y"_a, "slice"_a = 1.0, "cell"_a = 0.5, "close"_a = 1.0, "The scan cut into horizontal slices, each slice's plan filled");
+        m_sm.def("loft_runs", [](const std::vector<sm::Slice>& sl, double cellM, double linkIoU, int ringPoints, double keepTol, double minPiece) {
+            sm::LoftParams p; p.linkIoU = linkIoU; p.ringPoints = ringPoints; p.keepTolM = keepTol; p.minPieceM2 = minPiece;
+            return sm::loftRuns(sl, cellM, p);
+        }, "slices"_a, "cell"_a = 0.5, "link_iou"_a = 0.35, "ring_points"_a = 48, "keep_tol"_a = 0.4, "min_piece"_a = 0.5,
+           "Each slice's pieces followed upward (overlap or nearness, mutual best), their outlines resampled and thinned");
+        m_sm.def("loft_solids", &sm::loftSolids, "runs"_a, "The runs skinned into closed solids (Loft3D), one mesh");
+        m_sm.def("extrude_block", [ringOf](const std::vector<std::pair<double, double>>& ring, double y0, double y1) { return sm::extrudeBlock(ringOf(ring), y0, y1); },
+                 "ring"_a, "y0"_a, "y1"_a, "A footprint ring (x, z) extruded from y0 to y1");
+        m_sm.def("roof_objects", [ringOf](const std::vector<Vec3>& samples, const std::vector<std::pair<double, double>>& plan, double roofY,
+                                          std::optional<nb::bytes> photoRgba, int photoWidth, int photoHeight, double photoX0, double photoZ0, double photoTexel, double minRise, double spotLighter, double blobK) {
+            namespace ro = scratchbox::roof_objects;
+            ro::TopPhoto photo;
+            std::string buf;
+            if (photoRgba) {
+                buf.assign(photoRgba->c_str(), photoRgba->size());
+                if (buf.size() != static_cast<size_t>(photoWidth) * photoHeight * 4) throw std::invalid_argument("photo_rgba must hold photo_width x photo_height RGBA pixels");
+                photo = {reinterpret_cast<const uint8_t*>(buf.data()), photoWidth, photoHeight, photoX0, photoZ0, photoTexel};
+            }
+            ro::RoofParams P; P.minRiseM = minRise; P.spotLighterL = spotLighter; P.blobK = blobK;
+            const ro::RoofReport rep = photoRgba ? ro::roofObjectsFromPhoto(samples, ringOf(plan), roofY, photo, P) : ro::roofObjects(samples, ringOf(plan), roofY, nullptr, P);
+            nb::dict d;
+            d["roof_y"] = rep.roofY; d["photo"] = rep.photo; d["photo_only_areas"] = rep.photoOnlyAreas;
+            d["roof_delta_e_median"] = rep.roofDeltaEMedian; d["roof_delta_e_mad"] = rep.roofDeltaEMad;
+            nb::list objs;
+            for (const auto& o : rep.objects) {
+                nb::dict od;
+                std::vector<std::pair<double, double>> outline;
+                for (const auto& p : o.outline) outline.push_back({p.x, p.z});
+                od["outline"] = outline; od["centre"] = std::make_pair(o.centre.x, o.centre.z);
+                od["base_y"] = o.baseY; od["top_y"] = o.topY; od["area"] = o.areaM2;
+                od["photo_cells"] = o.photoCells; od["scan_cells"] = o.scanCells;
+                od["chosen"] = o.chosen; od["why"] = o.why; od["outline_source"] = o.outlineSource; od["height_source"] = o.heightSource; od["roundness"] = o.roundness; od["agreement"] = o.agreement; od["mesh"] = o.mesh;
+                nb::list rows;
+                for (const auto& r : o.candidates) { nb::dict row; row["label"] = r.label; row["triangles"] = r.triangles; row["coverage"] = r.agreement.bandedCoverage; row["precision"] = r.agreement.bandedPrecision; row["accepted"] = r.accepted; row["reason"] = r.reason; rows.append(row); }
+                od["candidates"] = rows;
+                objs.append(od);
+            }
+            d["objects"] = objs;
+            return d;
+        }, "samples"_a, "plan"_a, "roof_y"_a, "photo_rgba"_a = nb::none(), "photo_width"_a = 0, "photo_height"_a = 0, "photo_x0"_a = 0.0, "photo_z0"_a = 0.0, "photo_texel"_a = 0.05, "min_rise"_a = 0.6, "spot_lighter"_a = 30.0, "blob_k"_a = 8.0,
+           "The objects standing on a roof: found where the scan stands above roof_y (edges sharpened by the photo straight down, when given) and each fitted by the simplest of its outline raised, a solid of revolution and its own lofted sections");
+        m_sm.def("choose", [](const std::vector<std::tuple<std::string, size_t, sm::Agreement>>& ordered, double minCoverage, double minPrecision) {
+            std::vector<std::pair<std::string, std::pair<size_t, sm::Agreement>>> in;
+            for (const auto& [l, t, a] : ordered) in.push_back({l, {t, a}});
+            const sm::Choice c = sm::choose(in, sm::ChoiceParams{minCoverage, minPrecision});
+            nb::dict d;
+            d["chosen"] = c.chosen >= 0 ? nb::cast(c.rows[c.chosen].label) : nb::none();
+            d["index"] = c.chosen; d["explains"] = c.explains; d["why"] = c.why;
+            nb::list rows;
+            for (const auto& r : c.rows) { nb::dict row; row["label"] = r.label; row["triangles"] = r.triangles; row["coverage"] = r.agreement.bandedCoverage; row["precision"] = r.agreement.bandedPrecision; row["f"] = r.agreement.bandedF; row["accepted"] = r.accepted; row["reason"] = r.reason; rows.append(row); }
+            d["candidates"] = rows;
+            return d;
+        }, "ordered"_a, "min_coverage"_a = 0.9, "min_precision"_a = 0.85,
+           "Candidates (label, triangles, Agreement) simplest first: the first explaining the scan wins, else the best height-balanced F");
+    }
+
     auto m_core = m.def_submodule("core", "Pre-compiled C++20 invariant kernel (GeoMorph, ArchiMorph, Sensors)");
 
     nb::class_<core::TerrainOptions>(m_core, "TerrainOptions")

@@ -24,6 +24,7 @@ export * from './sb-roadie-tools';
 export * from './lighting-tools';
 export * from './universal-3d-structure-tools';
 export * from './python-3d-tools';
+export * from './massing-tools';
 export * from './image-to-pbr-tools';
 export * from './turnaround-tools';
 export * from './pbr-material-tools';
@@ -64,6 +65,7 @@ import { WEATHERING_TOOL_DECLARATIONS, WEATHERING_TOOL_HANDLERS } from './weathe
 import { TURNAROUND_TOOL_DECLARATIONS, turnaroundHandlers } from './turnaround-tools';
 import { IMAGE_TO_PBR_TOOL_DECLARATIONS, imageToPbrHandlers } from './image-to-pbr-tools';
 import { PYTHON_3D_TOOL_DECLARATIONS, python3DHandlers } from './python-3d-tools';
+import { MASSING_TOOL_DECLARATIONS, massingHandlers } from './massing-tools';
 import { OBJECT_REFERENCE_TOOL_DECLARATIONS, objectReferenceHandlers } from './object-reference-tools';
 import { SB_SCRIPT_GUIDE_TOOL_DECLARATIONS, sbScriptGuideHandlers } from './sb-script-guide-tools';
 import { MESH_SHAPING_TOOL_DECLARATIONS, meshShapingHandlers } from './mesh-shaping-tools';
@@ -184,6 +186,7 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...CANVAS_TOOL_DECLARATIONS,
     ...WORKSPACE_TOOL_DECLARATIONS,
     ...PYTHON_3D_TOOL_DECLARATIONS,
+    ...MASSING_TOOL_DECLARATIONS,
     ...OBJECT_REFERENCE_TOOL_DECLARATIONS,
     ...SB_SCRIPT_GUIDE_TOOL_DECLARATIONS,
     ...GOOGLE_3D_TILES_TOOL_DECLARATIONS,
@@ -241,6 +244,7 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...canvasHandlers,
     ...workspaceHandlers,
     ...python3DHandlers,
+    ...massingHandlers,
     ...objectReferenceHandlers,
     ...sbScriptGuideHandlers,
     ...google3DTilesHandlers,

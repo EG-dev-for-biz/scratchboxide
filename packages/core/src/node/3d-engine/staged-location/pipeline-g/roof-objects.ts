@@ -35,6 +35,9 @@ export const OUTLINE_TOLERANCE_M = 0.25;
 /** A cluster is built when its outline covers at least this and it stands at least MIN_HEIGHT_M above its support. */
 export const MIN_OUTLINE_M2 = 1.0;
 export const MIN_HEIGHT_M = 0.6;
+/** How far a fitted roof plane may rise over the object's measured top (and half this, sink under its base: a pyramid's
+ *  faces reach the base at its corners) at an outline corner before it is dropped (m). */
+const PLANE_OVERSHOOT_M = 1.0;
 /** On the roof: what it stands on (the audit's support) at least this far above the ground (not the street, not a wall's foot)... */
 export const MIN_SUPPORT_ABOVE_GROUND_M = 3;
 /** ...and its plan centre inside a massing part whose roof there is within this of that support (not a balcony or a stair on a wall). */
@@ -188,12 +191,19 @@ export function roofObjectPart(c: AuditedCluster, tris: P3[][], id: string, grou
             if (pl) planes.push({ ...pl, tag: `scan-fit:${k}` });
         }
     }
+    // a fitted plane must stay within the object's own height over its whole outline: one that, extended to an outline
+    // corner, sinks under its base or rises well over its top is fitted to a blob, not a roof (Haughwout 2026-10-23: a
+    // plane fitted to the water tower's blob ran 11 m down into the building). Such planes are dropped; the object keeps
+    // a flat top at its measured height.
+    // (the roof the planes make is their lowest at each point, as roofAt reads it, judged at the outline's corners)
+    const roofMade = (x: number, z: number) => Math.min(...planes.map(pl => pl.a + pl.b * x + pl.c * z));
+    const dropped = planes.length && outline.some(([x, z]) => { const y = roofMade(x, z); return y < base - PLANE_OVERSHOOT_M / 2 || y > top + PLANE_OVERSHOOT_M; }) ? planes.splice(0, planes.length) : [];
     const part: MassingPart = {
         id, baseY: base, topY, loops: [outline], planes, heightSource: 'scan', heights: { scanY: topY }, provenance: ROOF_OBJECT_PROVENANCE
     };
     return {
         clusterId: c.id, verdict: c.verdict, part, outlineM2: +outlineM2.toFixed(2), heightM: +(topY - base).toFixed(2), planes: planes.length,
-        reason: `cluster ${c.id} (${c.verdict}${c.verdict === 'unsure' ? ', kept as built: neither artefact nor sure' : ''}): ${outline.length}-sided outline ${outlineM2.toFixed(1)} m2, ${(topY - base).toFixed(1)} m above its support, ${planes.length ? `${planes.length} roof planes fitted to its sloping faces` : 'a flat top'}`
+        reason: `cluster ${c.id} (${c.verdict}${c.verdict === 'unsure' ? ', kept as built: neither artefact nor sure' : ''}): ${outline.length}-sided outline ${outlineM2.toFixed(1)} m2, ${(topY - base).toFixed(1)} m above its support, ${planes.length ? `${planes.length} roof planes fitted to its sloping faces` : 'a flat top'}${dropped.length ? ` (${dropped.length} fitted plane${dropped.length > 1 ? 's' : ''} dropped: outside its own height over its outline)` : ''}`
     };
 }
 

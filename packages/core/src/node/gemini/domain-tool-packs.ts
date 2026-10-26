@@ -12,6 +12,7 @@ import type { TaskDomain } from '../agent/task-capability-resolver';
 import { CANVAS_TOOL_DECLARATIONS } from './tools/canvas-tools';
 import { WORKSPACE_TOOL_DECLARATIONS } from './tools/workspace-tools';
 import { PYTHON_3D_TOOL_DECLARATIONS } from './tools/python-3d-tools';
+import { MASSING_TOOL_DECLARATIONS } from './tools/massing-tools';
 import { OBJECT_REFERENCE_TOOL_DECLARATIONS } from './tools/object-reference-tools';
 import { SB_SCRIPT_GUIDE_TOOL_DECLARATIONS } from './tools/sb-script-guide-tools';
 import {
@@ -119,7 +120,8 @@ export const GEOSPATIAL_3D_PACK: ToolPackDefinition = {
         ...TILE_ELEVATION_TOOL_DECLARATIONS,
         ...TRAJECTORY_COLLISION_TOOL_DECLARATIONS,
         ...WALL_PLANE_SEGMENT_TOOL_DECLARATIONS,
-        ...BAY_RHYTHM_TOOL_DECLARATIONS
+        ...BAY_RHYTHM_TOOL_DECLARATIONS,
+        ...MASSING_TOOL_DECLARATIONS
     ],
     toolNames: [
         ...GOOGLE_3D_TILES_TOOL_DECLARATIONS.map(d => d.name),
@@ -137,7 +139,8 @@ export const GEOSPATIAL_3D_PACK: ToolPackDefinition = {
         ...TILE_ELEVATION_TOOL_DECLARATIONS.map(d => d.name),
         ...TRAJECTORY_COLLISION_TOOL_DECLARATIONS.map(d => d.name),
         ...WALL_PLANE_SEGMENT_TOOL_DECLARATIONS.map(d => d.name),
-        ...BAY_RHYTHM_TOOL_DECLARATIONS.map(d => d.name)
+        ...BAY_RHYTHM_TOOL_DECLARATIONS.map(d => d.name),
+        ...MASSING_TOOL_DECLARATIONS.map(d => d.name)
     ]
 };
 

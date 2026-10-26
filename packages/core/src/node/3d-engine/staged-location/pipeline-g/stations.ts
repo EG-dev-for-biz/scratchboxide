@@ -15,8 +15,8 @@
  * each street eye gets a twin at the face's mid-height on the same spot. Every station is then measured from its own depth
  * (a clay render of the tile): kept only when at least MIN_ON_FACE of its frame lies on its face and under MAX_BLOCKED is
  * closer than BLOCKED_M (a camera inside or against a neighbour). Before them, AERIAL_VIEWS aerials frame the whole
- * structure from above (aerialStations), so the upper floors and the roof edge are surveyed too. Nothing here knows what
- * the structure is.
+ * structure from above (aerialStations), so the upper floors and the roof edge are surveyed too, and every wall taller
+ * than BAND_MIN_H_M gets band stations up its own normal. Nothing here knows what the structure is.
  */
 
 import { stationFromLookAt } from '../../../../common/spatial/SurveySynthesisEngine';
@@ -49,6 +49,16 @@ export const AERIAL_ELEVATION_DEG = 35;
 export const AERIAL_MIN_ON_WALLS = 0.01;
 /** Margin around the structure's bounding sphere in an aerial frame. */
 export const AERIAL_MARGIN = 1.15;
+/**
+ * Band stations for a wall taller than BAND_MIN_H_M: synthetic cameras on the wall's own normal, square on, every
+ * BAND_STEP_M up the wall, each far enough back to frame BAND_FRAME_M of it, moved in to BAND_CLOSER of that distance
+ * when a neighbour blocks the view. Street eyes cannot see a tower's upper walls over the towers around it (the Empire
+ * State's best plate from the street was 16% seen).
+ */
+export const BAND_MIN_H_M = 40;
+export const BAND_STEP_M = 30;
+export const BAND_FRAME_M = 40;
+export const BAND_CLOSER = [1, 0.6, 0.35];
 /** Station optics: a 24 mm lens on full frame, 16:9. */
 export const STATION_OPTICS = { focalLengthMm: 24, sensorWidthMm: 36, aspectRatio: 16 / 9 };
 
@@ -85,7 +95,7 @@ export function onFace(f: Pick<MassingFace, 'origin' | 'axisS' | 'axisT' | 'norm
     return s < f.sMin || s >= f.sMax || t < f.tMin || t >= f.tMax ? undefined : { s, t, off };
 }
 
-export interface GStation { station: ColmapCameraPose; face: number; row: 'aerial' | 'street' | 'mid'; distanceM: number; onFace: number }
+export interface GStation { station: ColmapCameraPose; face: number; row: 'aerial' | 'street' | 'mid' | 'band'; distanceM: number; onFace: number }
 export interface StationPlan { stations: GStation[]; faces: number[]; candidates: number; skipped: Array<{ face: string; reason: string }>; dropped: Array<{ name: string; onFace: number; blocked: number }> }
 
 /**
@@ -137,6 +147,25 @@ export function planStations(opts: {
             if (seen.onFace < MIN_ON_FACE || seen.blocked > MAX_BLOCKED) { dropped.push({ name: st.name, onFace: +seen.onFace.toFixed(3), blocked: +seen.blocked.toFixed(3) }); continue; }
             stations.push({ station: st, face: w.i, row, distanceM: v.distanceM, onFace: +seen.onFace.toFixed(3) });
             id++;
+        }
+    }
+    // band stations up every tall wall, square on (a synthetic camera need not stand on the street)
+    const vfov = 2 * Math.atan(Math.tan(Math.atan(STATION_OPTICS.sensorWidthMm / (2 * STATION_OPTICS.focalLengthMm))) / STATION_OPTICS.aspectRatio);
+    for (const w of walls) {
+        const f = w.f, h = f.tMax - f.tMin;
+        if (h <= BAND_MIN_H_M) continue;
+        const sMid = (f.sMin + f.sMax) / 2, back = (BAND_FRAME_M / 2) / Math.tan(vfov / 2);
+        for (let t = f.tMin + BAND_FRAME_M / 2; t < f.tMax - BAND_FRAME_M / 4 + BAND_STEP_M; t += BAND_STEP_M) {
+            const tt = Math.min(t, f.tMax - BAND_FRAME_M / 2), at = faceAt(f, sMid, tt);
+            let kept = false;
+            for (const k of BAND_CLOSER) {
+                const eye: V3 = [at[0] + f.normal[0] * back * k, at[1], at[2] + f.normal[2] * back * k];
+                const st = stationFromLookAt(id, eye, at, STATION_OPTICS, opts.anchor, { name: `G_${w.i}_band_${Math.round(tt)}m_${Math.round(back * k)}m` });
+                const seen = probe(opts.tileMesh, st, f);
+                if (seen.onFace >= MIN_ON_FACE && seen.blocked <= MAX_BLOCKED) { stations.push({ station: st, face: w.i, row: 'band', distanceM: +(back * k).toFixed(1), onFace: +seen.onFace.toFixed(3) }); id++; kept = true; break; }
+                if (k === BAND_CLOSER[BAND_CLOSER.length - 1]) dropped.push({ name: st.name, onFace: +seen.onFace.toFixed(3), blocked: +seen.blocked.toFixed(3) });
+            }
+            if (tt >= f.tMax - BAND_FRAME_M / 2) break;
         }
     }
     return { stations, faces: walls.map(x => x.i), candidates: panos.length, skipped: plan.skipped.map(s => ({ face: s.faceId, reason: s.reason })), dropped };

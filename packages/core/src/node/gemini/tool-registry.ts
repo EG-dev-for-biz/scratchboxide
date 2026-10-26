@@ -89,6 +89,8 @@ import {
     universal3DStructureHandlers,
     PYTHON_3D_TOOL_DECLARATIONS,
     python3DHandlers,
+    MASSING_TOOL_DECLARATIONS,
+    massingHandlers,
     LENS_TOOL_DECLARATIONS,
     lensHandlers,
     BROWSER_TOOL_DECLARATIONS,
@@ -679,6 +681,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
     registerTools(registry, ANALYTICAL_GROOM_TOOL_DECLARATIONS, analyticalGroomHandlers, 'workspace');
     registerTools(registry, UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS, universal3DStructureHandlers, 'workspace');
     registerTools(registry, PYTHON_3D_TOOL_DECLARATIONS, python3DHandlers, 'workspace');
+    registerTools(registry, MASSING_TOOL_DECLARATIONS, massingHandlers, 'workspace');
     registerTools(registry, OBJECT_REFERENCE_TOOL_DECLARATIONS, objectReferenceHandlers, 'workspace');
     registerTools(registry, SB_SCRIPT_GUIDE_TOOL_DECLARATIONS, sbScriptGuideHandlers, 'workspace');
     // Declared in DEFAULT_TOOL_DECLARATIONS; without these the agent is offered tools it cannot dispatch.

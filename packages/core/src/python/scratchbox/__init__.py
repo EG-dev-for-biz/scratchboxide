@@ -2086,6 +2086,8 @@ if _native is not None and hasattr(_native, "io"):
 
 # Reading a GLB back into meshes (glb_read.py): a script can start from an existing model and sculpt it.
 from .glb_read import read_glb  # noqa: E402
+# Massing read from a scan and chosen by how well it explains it (massing.py): sb.massing.Scan, sb.massing.choose.
+from . import massing  # noqa: E402
 if _native is not None and hasattr(_native, "io"):
     _native.io.read_glb = read_glb
 if io is not None:
@@ -2155,6 +2157,7 @@ __all__ = [
     "RomanOrder",
     "SbVeggieTree",
     "vegetation",
+    "massing",
     "create_vegetation",
     "create_building",
     "create_curved_building",

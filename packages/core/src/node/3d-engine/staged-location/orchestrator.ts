@@ -179,7 +179,7 @@ import { recordDiscoveredObjects } from '../../asset-store/object-catalog';
 import { genAiEnhanceClient, type EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { fetchFootprints, type FootprintSource } from './facade-footprints';
-import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, SCAN_FOOTPRINT_TOKEN, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
+import { runMassingStage, runNativeMassing, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, SCAN_FOOTPRINT_TOKEN, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
 import { PIPELINE_G_VERSION, runPipelineG, stagedPipelineG } from './pipeline-g/pipeline-g';
 import { H_BUDGET_MARGIN_MS, H_POLICY, PIPELINE_H_VERSION, stagedProcedural } from './pipeline-h/pipeline-h';
 import { MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE, PIPELINE_I_VERSION, TRELLIS_SEEDS, runPipelineI } from './pipeline-i/pipeline-i';
@@ -190,6 +190,8 @@ import { sceneTrainingPairs } from './scene-training-pairs';
 import type { ModelClient } from './pipeline-i/fal-trellis';
 import type { StationImageGenerator } from '../../spatial/BeautifyStationService';
 import { ledgerFromMassingNote, type LedgerEntry } from './pipeline-h/ledger';
+import { asMassingParts, candidateLine, runScanMassing, SCAN_MASSING_PROVENANCE, type StructureScanNote } from './scan-massing';
+import { checkMassing } from './pipeline-e/massing-spec';
 import type { GroundedReferenceClient } from '../../spatial/search-grounded-reference';
 import type { MassingRun } from './pipeline-e/native-massing';
 import { mslToTileY, type SolarRoof } from './pipeline-e/solar-roof';
@@ -261,8 +263,10 @@ export const STAGES = {
     // Street View survey (about 3 min, alongside the readings) and up to 8 redraws (about 2.5 min)
     // version F (on by default; SCRATCHBOX_STAGED_GEOMETRY=e reverts to E's own inference) reads, adjusts and redraws
     // in this slot: a longer limit
-    // pipeline G's tall walls read for up to READ_TIMEOUT_MAX_MS each (pipeline-g/read.ts), so its slot has the longer budget too
-    grammar: { order: 2, title: 'Facade grammar', budgetMs: 900_000 },
+    // pipeline G's tall walls read for up to READ_TIMEOUT_MAX_MS each (pipeline-g/read.ts), so its slot has the longer budget too;
+    // 5000 s (user decision 2026-10-24, was 900 s): pipeline H's own budget, derived from this, then leaves time for every
+    // re-read, facade texture and roof redraw instead of skipping them
+    grammar: { order: 2, title: 'Facade grammar', budgetMs: 5_000_000 },
     // pipeline E: measured relief on the clean massing (the scan averaged along what repeats), then the photo-match gate
     relief: { order: 2, title: 'Measured relief', budgetMs: 480_000 },
     fit: { order: 3, title: 'Scan-fitted rebuild', budgetMs: 30_000 },
@@ -3066,6 +3070,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 if (!refined.rawClayGlb) return fallBack('pipeline_e_fallback', 'tile_refine wrote no isolated scan');
                 const chk = checkIsolate(refined.rawClayGlb, picked.pick, picked.ground);
                 if (!chk.ok) return fallBack('pipeline_e_fallback', `the isolated scan does not match the structure picked (IoU ${round(chk.iou, 2)}, agreement ${round(chk.agreement, 2)})`);
+                // the structure's isolated scan, for the in-app Python API (sb.massing via execute_3d_python_script on this scene):
+                // the scan, the street level it stands on, its footprint (Google's when used, else the scan's outline), and the
+                // district around it (for the hidden-wall test), all in the scene's frame
+                // footprint loops from extruded parts only: a modelled volume's parts are its triangles seen from above, not
+                // an outline, so without extruded parts the structure's own outline (the pick's) stands in
+                const planLoops = eBuildings.flatMap(b => (b.extruded?.length ? b.extruded.filter(p => !p.planOnly).map(p => p.loops[0]) : [])).filter(l => l && l.length >= 3);
+                cache.writeRunNote(runId, 'structure_scan', { schema: 'scratchbox.structure-scan/1', scanGlb: refined.rawClayGlb, districtGlb: tilePath, groundY: picked.pick.groundY, plan: planLoops.length ? planLoops : [structure!.outline], planSource: planLoops.length ? (eBuildings.some(b => b.provenance === SCAN_FOOTPRINT_TOKEN) ? 'scan outline' : 'Google vector footprint') : 'scan outline', place: placeValue?.formattedAddress ?? request.query });
                 // Solar roof facets, in the tile frame
                 let solar: Array<{ pitchDeg: number; azimuthDeg: number; planeHeightMsl: number; center: { lat: number; lng: number }; areaM2: number; x: number; z: number; y: number }> = [];
                 let solarNote = 'no Solar roof facets (no API key)';
@@ -3111,6 +3122,29 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (r2.massing.check.ok) { r = r2; c = r2.massing.check; }
                 } else if (scanLed) {
                     massingLedger.push({ decision: 'footprint', chosen: eBuildings.some(b => b.provenance === SCAN_FOOTPRINT_TOKEN) ? "the scan's own plan (no Google footprint)" : `Google vector footprint${eBuildings.length > 1 ? 's' : ''} ${eBuildings.map(b => b.id).join(', ')}`, why: c.ok ? `plan IoU ${c.iou}, roof ${c.heightErrMedianM} m off the scan` : c.reason ?? 'the massing could not be built', sources: [{ source: eBuildings.some(b => b.provenance === SCAN_FOOTPRINT_TOKEN) ? 'scan' : 'vector', value: `IoU ${c.iou}`, used: c.ok }] });
+                }
+                // pipeline H: the scan leads, so when neither the vector massing nor the scan's own plan passes the check (one
+                // height on a stepped tower: the Empire State's roof came out 34 m off), the scan-led massing is the third
+                // attempt (scan-massing.ts: block, roof objects, tiers, judged by the same check)
+                const scanNoteE = procedural === 'h' && !c.ok ? cache.readRunNote<StructureScanNote>(runId, 'structure_scan') : undefined;
+                if (scanNoteE) {
+                    try {
+                        io.progress(`pipeline H: the massing ${c.reason ?? 'could not be built'}; the scan-led massing instead`);
+                        const sm = await runScanMassing(scanNoteE, { signal: io.signal });
+                        const built = asMassingParts(sm);
+                        const sources = sm.candidates.map(x => ({ source: 'scan', value: `${x.label}: coverage ${x.coverage.toFixed(2)}, precision ${x.precision.toFixed(2)}`, used: x.label === sm.chosen && !('reason' in built) }));
+                        if ('reason' in built) massingLedger.push({ decision: 'massing', chosen: 'none', why: `the vector massing ${c.reason ?? 'could not be built'}; ${built.reason}`, sources });
+                        else {
+                            const check = checkMassing(built.parts, built.meshes, { groundY: picked.pick.groundY, scanTop, cells: picked.pick.cells });
+                            const r3 = await runMassingStage({ tilePath, isolateGlb: refined.rawClayGlb, buildings: eBuildings, groundY: picked.pick.groundY, scanTop, cells: picked.pick.cells, solar, outDir: `${dir}_scanmassing`, signal: io.signal, massing: { ...r.massing, parts: built.parts, meshes: built.meshes, check, notes: built.notes }, preferExtrusion: true, ...(request.procedural === true ? { audit: false } : {}) }, 'remesh', `${key}_scanmassing`);
+                            massingLedger.push({ decision: 'massing', chosen: check.ok ? `the scan-led massing: ${sm.chosen} (${built.parts.length} parts, ${built.meshes.length} solids)` : 'none', why: `the vector massing ${c.reason ?? 'could not be built'}; the scan-led massing ${check.ok ? `passed (IoU ${check.iou}, roof ${check.heightErrMedianM} m off)` : `failed too (${check.reason ?? 'could not be built'})`}: ${sm.why}`, sources });
+                            cache.writeRunNote(runId, 'scan_massing', { stage: 'remesh', chosen: sm.chosen, explains: sm.explains, why: sm.why, candidates: sm.candidates, roofY: sm.roofY, groundY: sm.groundY, used: check.ok, check, notes: built.notes });
+                            if (check.ok && r3.run && r3.files) { r = r3; c = check; }
+                        }
+                    } catch (err) {
+                        if (io.signal.aborted) throw err;
+                        massingLedger.push({ decision: 'massing', chosen: 'none', why: `the scan-led massing failed (${errorMessage(err)})`, sources: [] });
+                    }
                 }
                 if (scanLed) for (const n of r.massing.notes) { const e = ledgerFromMassingNote(n); if (e) massingLedger.push(e); }
                 cache.writeRunNote(runId, 'pipeline_e', { check: r.massing.check, solar: r.massing.solar, solarNote, notes: r.massing.notes, timingsMs: r.timingsMs, native: r.run ? { timingsMs: r.run.report.timingsMs, snap: r.run.report.snap, residual: r.run.report.residual, faces: r.run.report.faces.length } : undefined, ...(massingLedger.length ? { ledger: massingLedger } : {}) });
@@ -3644,8 +3678,41 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...chainExtras('grammar'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
                     // the walls' street-level references: the registered Street View views with their obstruction-free copies
                     const gSurvey = (request.enhance ?? stagedEnhance()) ? streetSurveyFor(e, io, sceneToRenderMesh(readGlbScene(r.files!.clayGlb)), G_STREET_VIEWS) : undefined;
+                    const gTile = strip ? strip.devegetatedGlb : extraction.texturedGlb;
+                    // pipeline H builds its facades on the scan-led massing (scan-massing.ts): the simplest candidate that explains
+                    // the structure's scan (block, block + roof objects, tiers) is natively built first, and its walls are the ones
+                    // surveyed and read; E's vector massing stays when the scan has no such candidate or the massing fails
+                    let gMassing = r.massing, gNative = r.run!, roofObjectsGiven: string[] | undefined;
+                    const hLedger: LedgerEntry[] = [...(e.ledger ?? [])];
+                    // the massing stage already fell to the scan-led massing (the vector one failed its check): built on as it is
+                    const eScanLed = r.massing.parts.some(p => p.provenance === SCAN_MASSING_PROVENANCE);
+                    if (eScanLed) roofObjectsGiven = r.massing.notes.filter(n => n.startsWith('roof object'));
+                    const scanNote = procedural === 'h' && !eScanLed ? cache.readRunNote<StructureScanNote>(runId, 'structure_scan') : undefined;
+                    if (scanNote?.scanGlb && fs.existsSync(scanNote.scanGlb)) {
+                        const tm = now();
+                        try {
+                            io.progress('pipeline H: the scan-led massing (block, roof objects, tiers and lofts scored against the scan)');
+                            const sm = await runScanMassing(scanNote, { signal: io.signal });
+                            const sources = sm.candidates.map(c => ({ source: 'scan', value: `${c.label}: coverage ${c.coverage.toFixed(2)}, precision ${c.precision.toFixed(2)}`, used: c.label === sm.chosen }));
+                            const built = asMassingParts(sm);
+                            if ('reason' in built) {
+                                hLedger.push({ decision: 'massing', chosen: 'the vector massing', why: `${built.reason}; the facades are built on the vector massing (${candidateLine(sm)})`, sources });
+                            } else {
+                                const scanMassing = { ...r.massing, parts: built.parts, meshes: built.meshes };
+                                gNative = await runNativeMassing(scanMassing, { tilePath: gTile, isolateGlb: e.refined.rawClayGlb!, dir: path.join(cache.dir, 'pipeline_h', 'scan_massing', stageKey(PIPELINE_H_VERSION, e.key).slice(0, 24)), groundY: structure!.groundY, audit: false, params: { residual: 0, sections: 0, topdown: 0, snapMaxM: 0 }, signal: io.signal });
+                                gMassing = scanMassing;
+                                roofObjectsGiven = built.notes.slice(1);
+                                hLedger.push({ decision: 'massing', chosen: `${sm.chosen} (${built.parts.length} parts, ${built.meshes.length} solids)`, why: `${sm.why}${sm.explains ? '' : ' (no candidate explains the scan within tolerance; the best fit)'}`, sources });
+                            }
+                            cache.writeRunNote(runId, 'scan_massing', { chosen: sm.chosen, explains: sm.explains, why: sm.why, candidates: sm.candidates, roofY: sm.roofY, groundY: sm.groundY, used: !('reason' in built), ...('reason' in built ? { reason: built.reason } : { notes: built.notes }), ms: now() - tm });
+                        } catch (err) {
+                            if (io.signal.aborted) throw err;
+                            hLedger.push({ decision: 'massing', chosen: 'the vector massing', why: `the scan-led massing failed (${errorMessage(err)})`, sources: [] });
+                            cache.writeRunNote(runId, 'scan_massing', { used: false, error: errorMessage(err), ms: now() - tm });
+                        }
+                    }
                     const out = await runPipelineG({
-                        massing: r.massing, run: r.run!, tilePath: strip ? strip.devegetatedGlb : extraction.texturedGlb,
+                        massing: gMassing, run: gNative, tilePath: gTile, ...(roofObjectsGiven ? { roofObjectsGiven } : {}),
                         dir: path.join(cache.dir, procedural === 'h' ? 'pipeline_h' : 'pipeline_g', stageKey(procedural === 'h' ? PIPELINE_H_VERSION : PIPELINE_G_VERSION, e.key).slice(0, 24)), stage: 'grammar', stageKey: e.key,
                         chain, place: placeValue!.formattedAddress || request.query, structure: structure!, ground: t.ground!,
                         anchor: { lat: placeValue!.lat, lng: placeValue!.lng, elevationMeters: 0 }, signal: io.signal, onProgress: m => io.progress(m),
@@ -3662,7 +3729,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         // less the margin for committing; the massing's ledger entries ahead of the rebuild's own
                         // what names the building (building-name.ts): the evidence's POIs, the request's words and the address
                         naming: { ...(t.vector ? { pois: t.vector.pois } : {}), query: request.query, address: placeValue!.formattedAddress },
-                        ...(procedural === 'h' ? { policy: { ...H_POLICY, budgetMs: Math.max(0, STAGES.grammar.budgetMs - (now() - t0) - H_BUDGET_MARGIN_MS) }, ledger: e.ledger ?? [] } : {})
+                        ...(procedural === 'h' ? { policy: { ...H_POLICY, budgetMs: Math.max(0, STAGES.grammar.budgetMs - (now() - t0) - H_BUDGET_MARGIN_MS) }, ledger: hLedger } : {})
                     });
                     cache.writeRunNote(runId, procedural === 'h' ? 'pipeline_h' : 'pipeline_g', { steps: out.steps, timingsMs: out.timingsMs, plates: out.plates, stations: out.stations, names: out.names, ...(out.brief ? { brief: out.brief } : {}), ...(procedural === 'h' ? { ledger: out.ledger, budgetNotes: out.budgetNotes } : {}) });
                     if (out.brief && 'path' in out.brief) BUILDING_BRIEFS.set(run, out.brief);
