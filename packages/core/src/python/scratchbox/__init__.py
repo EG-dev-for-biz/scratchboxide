@@ -1058,6 +1058,7 @@ def create_building(
     bulge: float = 0.0,
     bay_count: Optional[int] = None,
     bake_curvature_ao: bool = True,
+    details: Optional[Dict[str, Any]] = None,
     name: str = "ProceduralBuilding",
     **kwargs
 ) -> "scratchbox_native.geometry.Mesh":
@@ -1073,7 +1074,7 @@ def _building_config(
     width, depth, floors, floor_height, ground_floor_height, plinth_height, bay_width,
     window_width, window_height, window_recess_depth, roof, roof_height, roof_overhang,
     roof_pitch_degrees, parapet_height, curvature, superellipse_exponent, twist_degrees,
-    taper, bulge, bay_count, bake_curvature_ao, **kwargs
+    taper, bulge, bay_count, bake_curvature_ao, details=None, **kwargs
 ):
     if _native is None or not hasattr(_native, "architecture"):
         raise RuntimeError("Native 3D architecture module scratchbox_native.architecture is required")
@@ -1145,8 +1146,42 @@ def _building_config(
     else:
         cfg.roof_type = RoofType.Mansard
 
+    if details:
+        fd = _native.architecture.FacadeDetails()
+        for key, value in details.items():
+            if not hasattr(fd, key):
+                raise ValueError(f"Unknown facade detail '{key}'")
+            if key.endswith("_profile"):
+                value = [_native.math.Vec2(float(x), float(y)) for x, y in value]
+            setattr(fd, key, value)
+        cfg.details = fd
     return cfg
 
+
+def moulding_profile(height: float, projection: float, tiers: int = 3, curvature: float = 0.6,
+                     invert: bool = False, samples: int = 4) -> List[Tuple[float, float]]:
+    """
+    A closed (outward, up) moulding section in metres for FacadeDetails profiles, hanging below
+    its anchor line (y from -height to 0). Each of `tiers` steps rises and projects further; the
+    step faces bow by `curvature` (0 = square fillets, 1 = full quarter rounds). invert=True puts
+    the largest projection at the bottom (bases, plinth caps). The wall side is embedded 2 cm.
+    """
+    tiers = max(1, int(tiers))
+    pts = [(-0.02, -height), (0.0, -height)]
+    dh = height / tiers
+    for i in range(tiers):
+        x0 = projection * i / tiers
+        x1 = projection * (i + 1) / tiers
+        y0 = -height + i * dh
+        for k in range(1, samples + 1):
+            t = k / samples
+            bow = (1.0 - (1.0 - t) ** 2) * curvature + t * (1.0 - curvature)
+            pts.append((x0 + (x1 - x0) * bow, y0 + dh * 0.7 * t))
+        pts.append((x1, y0 + dh))
+    pts.append((-0.02, 0.0))
+    if invert:
+        pts = [(x, -height - y) for x, y in reversed(pts)]
+    return pts
 
 
 def create_building_parts(
@@ -1172,6 +1207,7 @@ def create_building_parts(
     bulge: float = 0.0,
     bay_count: Optional[int] = None,
     bake_curvature_ao: bool = True,
+    details: Optional[Dict[str, Any]] = None,
     name: str = "ProceduralBuilding",
     **kwargs
 ) -> "List[scratchbox_native.geometry.Mesh]":

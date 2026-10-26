@@ -28,6 +28,7 @@ using math::Vec2;
 using math::Vec3;
 using math::Vec4;
 using math::PI;
+using math::TWO_PI;
 using math::DEG_TO_RAD;
 using geometry::Vertex;
 using geometry::ScratchboxMesh;
@@ -86,6 +87,59 @@ struct BuildingMaterials {
     }
 };
 
+// Facade detail elements for the rectangular generator. Every element is off at its zero / empty
+// value. Profiles are closed (outward, up) point lists in metres measured from the element's anchor
+// line on the wall face; they are swept along the element's path with mitred corners, so any
+// moulding section can be described without a closed list of moulding kinds.
+struct FacadeDetails {
+    std::vector<Vec2> corniceProfile;       // swept around the eave line (replaces the box cornice)
+    std::vector<Vec2> stringCourseProfile;  // swept around floor lines (replaces the box belt courses)
+    std::vector<int> stringCourseFloors;    // floor lines to band (1 = top of ground floor); empty = all
+    std::vector<Vec2> sillProfile;          // swept under each window (replaces the box sill)
+    float sillHornM{0.08f};                 // sill extension past each jamb
+    std::vector<Vec2> hoodProfile;          // swept over each window (replaces the box lintel)
+    float hoodPitchDeg{0.0f};               // 0 = straight hood; above 0 the hood rises to a pediment apex
+    float hoodExtensionM{0.08f};            // hood extension past each jamb
+
+    float pilasterWidthM{0.0f};             // > 0 adds pilasters at bay boundaries
+    float pilasterProjectionM{0.08f};
+    int pilasterBayStride{1};               // every Nth bay boundary
+    float pilasterCapitalM{0.30f};          // height of the flared base and capital blocks
+    float pilasterFlare{1.35f};             // base / capital width relative to the shaft
+
+    float quoinCourseM{0.0f};               // > 0 adds corner quoins with this course height
+    float quoinLongM{0.90f};
+    float quoinShortM{0.50f};
+    float quoinProjectionM{0.03f};
+    float quoinJointM{0.02f};
+
+    std::vector<int> balconyFloors;         // floors (1 = first above ground) with balconies
+    int balconyBayStride{1};
+    float balconyDepthM{0.85f};
+    float balconyExtraWidthM{0.50f};        // slab width beyond the opening
+    float balconySlabM{0.16f};
+    float balconyRailHeightM{1.0f};
+    float balusterPitchM{0.15f};
+    float balusterRadiusM{0.035f};
+    float balusterBulge{0.6f};              // swelling of the baluster's radial profile
+
+    float dormerWidthM{0.0f};               // > 0 adds dormers above the eave
+    float dormerHeightM{1.9f};
+    float dormerDepthM{2.4f};
+    float dormerRoofPitchDeg{35.0f};
+    float dormerSetbackM{0.10f};            // front face distance behind the eave edge (wall face + roof overhang)
+    int dormerBayStride{2};
+
+    int chimneyCount{0};
+    float chimneyWidthM{0.9f};
+    float chimneyDepthM{0.6f};
+    float chimneyRiseM{1.5f};               // height above the roof top
+    float chimneyCapM{0.14f};
+    int chimneyPotCount{2};
+    float chimneyPotRadiusM{0.11f};
+    float chimneyPotHeightM{0.45f};
+};
+
 struct BuildingConfig {
     float width{16.0f};                 // Building width along X-axis (meters)
     float depth{12.0f};                 // Building depth along Z-axis (meters)
@@ -122,6 +176,8 @@ struct BuildingConfig {
     float bulge{0.0f};                  // Mid-height barrel swelling / entasis ratio
     int bayCount{0};                    // Radial window bays along curved perimeter (0 = auto)
     bool bakeCurvatureAO{true};         // Automatic Laplace-Beltrami vertex baking
+
+    FacadeDetails details;
 
     BuildingMaterials materials{BuildingMaterials::createArchitecturalPalette()};
 };
@@ -472,6 +528,8 @@ public:
         // 4. Procedural Roof System
         generateRoof(config, mesh);
 
+        // 5. Facade detail elements (mouldings, pilasters, quoins, balconies, dormers, chimneys)
+        generateFacadeDetails(config, mesh);
 
         if (config.bakeCurvatureAO) {
             mesh.computeCurvatureAO(0.65f);
@@ -482,6 +540,20 @@ public:
         mesh.material.baseColorFactor = Vec4(1.0f, 1.0f, 1.0f, mesh.material.baseColorFactor.w);
         mesh.recomputeBounds();
         return mesh;
+    }
+
+    /** Top centre of each chimney stack's masonry (below its cap), shared by the geometry and soot sources. */
+    static std::vector<Vec3> chimneyStackTops(const BuildingConfig& cfg) {
+        const FacadeDetails& d = cfg.details;
+        std::vector<Vec3> tops;
+        float totalH = cfg.plinthHeight + cfg.groundFloorHeight + cfg.floorHeight * static_cast<float>(std::max(0, cfg.floorCount - 1));
+        float roofTop = totalH + std::max(cfg.roofHeight, 0.5f);
+        for (int i = 0; i < d.chimneyCount; ++i) {
+            float t = d.chimneyCount == 1 ? 0.5f : static_cast<float>(i) / (d.chimneyCount - 1);
+            tops.emplace_back((-0.6f + 1.2f * t) * cfg.width * 0.5f, roofTop + d.chimneyRiseM,
+                              (i % 2 == 0 ? 0.25f : -0.25f) * cfg.depth * 0.5f);
+        }
+        return tops;
     }
 
     /**
@@ -780,7 +852,7 @@ private:
                     }
 
                     // 5b. Projecting Architectural Window Sill with Drop-Edge Overhang
-                    if (!isEntranceBay && openSill > 0.001f) {
+                    if (!isEntranceBay && openSill > 0.001f && cfg.details.sillProfile.size() < 3) {
                         float hornExt = 0.08f;
                         float sillProj = 0.12f;
                         float sillThick = 0.10f;
@@ -811,7 +883,7 @@ private:
                     }
 
                     // 5c. Projecting Window Lintel / Head Cap
-                    if (!isEntranceBay) {
+                    if (!isEntranceBay && cfg.details.hoodProfile.size() < 3) {
                         float lintelExt = 0.06f;
                         float lintelProj = 0.08f;
                         float lintelH = 0.14f;
@@ -867,6 +939,326 @@ private:
         }
     }
 
+    /**
+     * Sweeps a closed 2D profile (x along outDir, y along upDir) along a polyline, one frame per
+     * segment, with mitred joints: each joint's ring lies on the plane bisecting its two segments,
+     * so horizontal loops turn sharp building corners and pitched paths meet cleanly at an apex.
+     * Open paths are capped by a fan from the profile point nearest (0, mid-height).
+     */
+    static void sweepProfileMitred(ScratchboxMesh& mesh, const std::vector<Vec3>& path,
+                                   const std::vector<Vec3>& outDirs, const std::vector<Vec3>& upDirs,
+                                   const std::vector<Vec2>& profile, bool closed, const Vec4& color) {
+        const size_t n = path.size();
+        const size_t segCount = closed ? n : n - 1;
+        if (n < 2 || profile.size() < 3 || outDirs.size() < segCount || upDirs.size() < segCount) return;
+
+        std::vector<Vec3> tangents(segCount);
+        for (size_t sIdx = 0; sIdx < segCount; ++sIdx) {
+            tangents[sIdx] = (path[(sIdx + 1) % n] - path[sIdx]).normalized();
+        }
+
+        auto ringAt = [&](size_t i) {
+            bool hasIn = closed || i > 0;
+            bool hasOut = closed || i + 1 < n;
+            size_t segIn = (i + segCount - 1) % segCount;
+            size_t seg = hasOut ? i % segCount : segIn;
+            Vec3 planeN = hasIn && hasOut ? (tangents[segIn] + tangents[i % segCount]).normalized() : tangents[seg];
+            std::vector<Vec3> ring;
+            ring.reserve(profile.size());
+            for (const Vec2& q : profile) {
+                Vec3 offset = outDirs[seg] * q.x + upDirs[seg] * q.y;
+                float denom = tangents[seg].dot(planeN);
+                float t = std::abs(denom) > 1e-5f ? -offset.dot(planeN) / denom : 0.0f;
+                ring.push_back(path[i] + offset + tangents[seg] * t);
+            }
+            return ring;
+        };
+
+        float area = 0.0f;
+        for (size_t k = 0; k < profile.size(); ++k) {
+            const Vec2& a = profile[k];
+            const Vec2& b = profile[(k + 1) % profile.size()];
+            area += a.x * b.y - b.x * a.y;
+        }
+        const float orient = area >= 0.0f ? 1.0f : -1.0f;
+
+        std::vector<std::vector<Vec3>> rings(n);
+        for (size_t i = 0; i < n; ++i) rings[i] = ringAt(i);
+
+        for (size_t sIdx = 0; sIdx < segCount; ++sIdx) {
+            const auto& r0 = rings[sIdx];
+            const auto& r1 = rings[(sIdx + 1) % n];
+            for (size_t k = 0; k < profile.size(); ++k) {
+                size_t k1 = (k + 1) % profile.size();
+                Vec2 e = profile[k1] - profile[k];
+                Vec2 n2(e.y * orient, -e.x * orient);
+                Vec3 nrm = (outDirs[sIdx] * n2.x + upDirs[sIdx] * n2.y).normalized();
+                addQuad(mesh, r0[k], r1[k], r1[k1], r0[k1], nrm, color);
+            }
+        }
+
+        if (!closed) {
+            float midY = 0.0f;
+            for (const Vec2& q : profile) midY += q.y;
+            midY /= static_cast<float>(profile.size());
+            size_t hub = 0;
+            float best = 1e30f;
+            for (size_t k = 0; k < profile.size(); ++k) {
+                float d = profile[k].x * profile[k].x + (profile[k].y - midY) * (profile[k].y - midY);
+                if (d < best) { best = d; hub = k; }
+            }
+            const size_t ends[2] = { 0, n - 1 };
+            for (int e = 0; e < 2; ++e) {
+                const auto& ring = rings[ends[e]];
+                Vec3 nrm = e == 0 ? -tangents.front() : tangents.back();
+                for (size_t k = 0; k < profile.size(); ++k) {
+                    size_t k1 = (k + 1) % profile.size();
+                    if (k == hub || k1 == hub) continue;
+                    addQuad(mesh, ring[hub], ring[k], ring[k1], ring[k1], nrm, color);
+                }
+            }
+        }
+    }
+
+    /** Harmonic solid of revolution about +Y: radius(t) for t in [0,1] over height, K radial facets. */
+    template <typename RadiusFn>
+    static void addLathe(ScratchboxMesh& mesh, const Vec3& base, float height, RadiusFn radius,
+                         int rings, int facets, const Vec4& color) {
+        for (int r = 0; r < rings; ++r) {
+            float t0 = static_cast<float>(r) / rings, t1 = static_cast<float>(r + 1) / rings;
+            float r0 = radius(t0), r1 = radius(t1);
+            for (int f = 0; f < facets; ++f) {
+                float a0 = TWO_PI * f / facets, a1 = TWO_PI * (f + 1) / facets;
+                Vec3 d0(std::cos(a0), 0, std::sin(a0)), d1(std::cos(a1), 0, std::sin(a1));
+                Vec3 p00 = base + d0 * r0 + Vec3(0, t0 * height, 0), p10 = base + d1 * r0 + Vec3(0, t0 * height, 0);
+                Vec3 p11 = base + d1 * r1 + Vec3(0, t1 * height, 0), p01 = base + d0 * r1 + Vec3(0, t1 * height, 0);
+                Vec3 mid = (d0 + d1).normalized();
+                Vec3 nrm = (mid * height / rings + Vec3(0, r0 - r1, 0)).normalized();
+                addQuad(mesh, p00, p10, p11, p01, nrm, color);
+            }
+        }
+        float rTop = radius(1.0f);
+        Vec3 top = base + Vec3(0, height, 0);
+        for (int f = 0; f < facets; ++f) {
+            float a0 = TWO_PI * f / facets, a1 = TWO_PI * (f + 1) / facets;
+            addQuad(mesh, top, top + Vec3(std::cos(a0), 0, std::sin(a0)) * rTop,
+                    top + Vec3(std::cos(a1), 0, std::sin(a1)) * rTop, top, Vec3(0, 1, 0), color);
+        }
+    }
+
+    struct FacadeSideFrame { Vec3 start; Vec3 rightDir; Vec3 normal; float length; bool hasEntrance; };
+
+    static std::vector<FacadeSideFrame> facadeSideFrames(const BuildingConfig& cfg, float y) {
+        float hx = cfg.width * 0.5f, hz = cfg.depth * 0.5f;
+        return {
+            { Vec3(-hx, y,  hz), Vec3( 1, 0,  0), Vec3( 0, 0,  1), cfg.width, true  },
+            { Vec3( hx, y, -hz), Vec3(-1, 0,  0), Vec3( 0, 0, -1), cfg.width, false },
+            { Vec3( hx, y,  hz), Vec3( 0, 0, -1), Vec3( 1, 0,  0), cfg.depth, false },
+            { Vec3(-hx, y, -hz), Vec3( 0, 0,  1), Vec3(-1, 0,  0), cfg.depth, false },
+        };
+    }
+
+    static float floorBaseY(const BuildingConfig& cfg, int floor) {
+        return cfg.plinthHeight + (floor <= 0 ? 0.0f : cfg.groundFloorHeight + cfg.floorHeight * static_cast<float>(floor - 1));
+    }
+
+    static void addHorizontalLoop(ScratchboxMesh& mesh, const BuildingConfig& cfg, float y,
+                                  const std::vector<Vec2>& profile, const Vec4& color) {
+        float hx = cfg.width * 0.5f, hz = cfg.depth * 0.5f;
+        std::vector<Vec3> path = { Vec3(-hx, y, hz), Vec3(hx, y, hz), Vec3(hx, y, -hz), Vec3(-hx, y, -hz) };
+        std::vector<Vec3> outs = { Vec3(0, 0, 1), Vec3(1, 0, 0), Vec3(0, 0, -1), Vec3(-1, 0, 0) };
+        std::vector<Vec3> ups(4, Vec3(0, 1, 0));
+        sweepProfileMitred(mesh, path, outs, ups, profile, true, color);
+    }
+
+    static void generateFacadeDetails(const BuildingConfig& cfg, ScratchboxMesh& mesh) {
+        const FacadeDetails& d = cfg.details;
+        const Vec4 trim = cfg.materials.foundation.baseColorFactor;
+        const Vec4 wall = cfg.materials.wall.baseColorFactor;
+        const Vec4 metal = cfg.materials.frame.baseColorFactor;
+        const Vec4 roof = cfg.materials.roof.baseColorFactor;
+        const Vec4 glass = cfg.materials.glass.baseColorFactor;
+        const float totalH = floorBaseY(cfg, cfg.floorCount);
+        const float hx = cfg.width * 0.5f, hz = cfg.depth * 0.5f;
+        const Vec3 up(0, 1, 0);
+
+        // Cornice and string courses.
+        if (d.corniceProfile.size() >= 3) addHorizontalLoop(mesh, cfg, totalH, d.corniceProfile, trim);
+        if (d.stringCourseProfile.size() >= 3) {
+            for (int f = 1; f < cfg.floorCount; ++f) {
+                bool wanted = d.stringCourseFloors.empty() ||
+                    std::find(d.stringCourseFloors.begin(), d.stringCourseFloors.end(), f) != d.stringCourseFloors.end();
+                if (wanted) addHorizontalLoop(mesh, cfg, floorBaseY(cfg, f), d.stringCourseProfile, trim);
+            }
+        }
+
+        // Per-opening sills, hoods and balconies, on the same bay grid as generateFacades.
+        for (const auto& side : facadeSideFrames(cfg, cfg.plinthHeight)) {
+            int bayCount = std::max(1, static_cast<int>(side.length / cfg.bayWidth));
+            float bayW = side.length / static_cast<float>(bayCount);
+            for (int floor = 0; floor < cfg.floorCount; ++floor) {
+                float baseY = floorBaseY(cfg, floor);
+                float floorH = floor == 0 ? cfg.groundFloorHeight : cfg.floorHeight;
+                for (int b = 0; b < bayCount; ++b) {
+                    bool entrance = floor == 0 && side.hasEntrance && b == bayCount / 2;
+                    if (entrance) continue;
+                    float center = (b + 0.5f) * bayW;
+                    float openW = std::min(cfg.windowWidth, bayW * 0.85f);
+                    float openH = std::min(cfg.windowHeight, floorH - cfg.sillHeight - 0.4f);
+                    float openBottom = baseY + cfg.sillHeight;
+                    float openTop = openBottom + openH;
+                    auto at = [&](float u, float y) { return Vec3(side.start.x, 0, side.start.z) + side.rightDir * u + Vec3(0, y, 0); };
+
+                    if (d.sillProfile.size() >= 3) {
+                        std::vector<Vec3> path = { at(center - openW * 0.5f - d.sillHornM, openBottom),
+                                                   at(center + openW * 0.5f + d.sillHornM, openBottom) };
+                        sweepProfileMitred(mesh, path, { side.normal }, { up }, d.sillProfile, false, trim);
+                    }
+                    if (d.hoodProfile.size() >= 3) {
+                        float half = openW * 0.5f + d.hoodExtensionM;
+                        std::vector<Vec3> path = { at(center - half, openTop) };
+                        if (d.hoodPitchDeg > 0.01f) path.push_back(at(center, openTop + std::tan(d.hoodPitchDeg * DEG_TO_RAD) * half));
+                        path.push_back(at(center + half, openTop));
+                        std::vector<Vec3> outs, ups;
+                        for (size_t k = 0; k + 1 < path.size(); ++k) {
+                            Vec3 t = (path[k + 1] - path[k]).normalized();
+                            outs.push_back(side.normal);
+                            ups.push_back((up - t * up.dot(t)).normalized());
+                        }
+                        sweepProfileMitred(mesh, path, outs, ups, d.hoodProfile, false, trim);
+                    }
+
+                    bool balconyFloor = std::find(d.balconyFloors.begin(), d.balconyFloors.end(), floor) != d.balconyFloors.end();
+                    if (balconyFloor && floor > 0 && b % std::max(1, d.balconyBayStride) == 0) {
+                        float half = openW * 0.5f + d.balconyExtraWidthM * 0.5f;
+                        Vec3 n = side.normal, r = side.rightDir;
+                        Vec3 c0 = at(center, baseY);
+                        // Slab: a box from the wall face out to the balcony depth.
+                        Vec3 a = c0 - r * half - Vec3(0, d.balconySlabM, 0), bb = c0 + r * half + n * d.balconyDepthM;
+                        addBox(mesh, Vec3(std::min(a.x, bb.x), a.y, std::min(a.z, bb.z)),
+                               Vec3(std::max(a.x, bb.x), c0.y, std::max(a.z, bb.z)), trim);
+                        // Balusters: radial solids replicated at a pitch along the three open edges.
+                        Vec3 corners[4] = { c0 - r * (half - 0.06f), c0 - r * (half - 0.06f) + n * (d.balconyDepthM - 0.06f),
+                                            c0 + r * (half - 0.06f) + n * (d.balconyDepthM - 0.06f), c0 + r * (half - 0.06f) };
+                        float railBottom = 0.05f, railTop = d.balconyRailHeightM - 0.06f;
+                        for (int e = 0; e < 3; ++e) {
+                            float len = (corners[e + 1] - corners[e]).length();
+                            int count = std::max(1, static_cast<int>(std::lround(len / std::max(0.05f, d.balusterPitchM))));
+                            for (int i = 0; i <= count; ++i) {
+                                if (e > 0 && i == 0) continue;
+                                Vec3 pBase = corners[e] + (corners[e + 1] - corners[e]) * (static_cast<float>(i) / count) + Vec3(0, railBottom, 0);
+                                float R = d.balusterRadiusM, bulge = d.balusterBulge;
+                                addLathe(mesh, pBase, railTop - railBottom, [R, bulge](float t) {
+                                    float s = std::sin(PI * std::clamp((t - 0.1f) / 0.75f, 0.0f, 1.0f));
+                                    return R * (0.75f + bulge * s * s * (1.0f - 0.35f * t));
+                                }, 5, 6, metal);
+                            }
+                        }
+                        std::vector<Vec3> railPath = { corners[0] + Vec3(0, d.balconyRailHeightM - 0.03f, 0), corners[1] + Vec3(0, d.balconyRailHeightM - 0.03f, 0),
+                                                       corners[2] + Vec3(0, d.balconyRailHeightM - 0.03f, 0), corners[3] + Vec3(0, d.balconyRailHeightM - 0.03f, 0) };
+                        std::vector<Vec3> railOut, railUp;
+                        for (int k = 0; k < 3; ++k) {
+                            Vec3 t = (railPath[k + 1] - railPath[k]).normalized();
+                            railOut.push_back(up.cross(t).normalized());
+                            railUp.push_back(up);
+                        }
+                        float rw = std::max(0.03f, d.balusterRadiusM * 1.6f);
+                        sweepProfileMitred(mesh, railPath, railOut, railUp,
+                                           { Vec2(-rw, -0.03f), Vec2(rw, -0.03f), Vec2(rw, 0.04f), Vec2(-rw, 0.04f) }, false, metal);
+                    }
+                }
+            }
+
+            // Pilasters at bay boundaries: shaft plus flared base and capital, each a vertical sweep.
+            if (d.pilasterWidthM > 0.0f) {
+                float gap = bayW - std::min(cfg.windowWidth, bayW * 0.85f);
+                float w = std::min(d.pilasterWidthM, gap * 0.9f);
+                float yTop = totalH - (d.corniceProfile.size() >= 3 ? 0.05f : 0.0f);
+                for (int b = 0; b <= bayCount; b += std::max(1, d.pilasterBayStride)) {
+                    if (d.quoinCourseM > 0.0f && (b == 0 || b == bayCount)) continue;
+                    Vec3 foot = Vec3(side.start.x, 0, side.start.z) + side.rightDir * (b * bayW);
+                    auto block = [&](float y0, float y1, float halfW, float proj) {
+                        std::vector<Vec3> path = { foot + Vec3(0, y0, 0), foot + Vec3(0, y1, 0) };
+                        sweepProfileMitred(mesh, path, { side.normal }, { side.rightDir },
+                                           { Vec2(-0.02f, -halfW), Vec2(proj, -halfW), Vec2(proj, halfW), Vec2(-0.02f, halfW) }, false, trim);
+                    };
+                    float cap = d.pilasterCapitalM;
+                    block(cfg.plinthHeight, yTop, w * 0.5f, d.pilasterProjectionM);
+                    block(cfg.plinthHeight, cfg.plinthHeight + cap, w * 0.5f * d.pilasterFlare, d.pilasterProjectionM * d.pilasterFlare);
+                    block(yTop - cap, yTop, w * 0.5f * d.pilasterFlare, d.pilasterProjectionM * d.pilasterFlare);
+                }
+            }
+
+            // Dormers above the eave on every Nth bay.
+            if (d.dormerWidthM > 0.0f) {
+                for (int b = 0; b < bayCount; b += std::max(1, d.dormerBayStride)) {
+                    Vec3 n = side.normal, r = side.rightDir;
+                    Vec3 face = Vec3(side.start.x, totalH, side.start.z) + r * ((b + 0.5f) * bayW) + n * (cfg.roofOverhang - d.dormerSetbackM);
+                    float hw = d.dormerWidthM * 0.5f, h = d.dormerHeightM, depth = d.dormerDepthM;
+                    float ridge = std::tan(d.dormerRoofPitchDeg * DEG_TO_RAD) * hw;
+                    Vec3 fl = face - r * hw, fr = face + r * hw;
+                    Vec3 bl = fl - n * depth, br = fr - n * depth;
+                    // Front wall and gable, cheeks, pitched roof.
+                    addQuad(mesh, fl, fr, fr + up * h, fl + up * h, n, wall);
+                    addQuad(mesh, fl + up * h, fr + up * h, face + up * (h + ridge), face + up * (h + ridge), n, wall);
+                    addQuad(mesh, bl, fl, fl + up * h, bl + up * h, -r, roof);
+                    addQuad(mesh, fr, br, br + up * h, fr + up * h, r, roof);
+                    Vec3 eaveL = fl + up * h - r * 0.12f + n * 0.15f, eaveR = fr + up * h + r * 0.12f + n * 0.15f;
+                    Vec3 ridgeF = face + up * (h + ridge) + n * 0.15f, ridgeB = face - n * depth + up * (h + ridge);
+                    addQuad(mesh, eaveL, ridgeF, ridgeB, bl + up * h - r * 0.12f, (-r * std::sin(d.dormerRoofPitchDeg * DEG_TO_RAD) + up * std::cos(d.dormerRoofPitchDeg * DEG_TO_RAD)).normalized(), roof);
+                    addQuad(mesh, ridgeF, eaveR, br + up * h + r * 0.12f, ridgeB, (r * std::sin(d.dormerRoofPitchDeg * DEG_TO_RAD) + up * std::cos(d.dormerRoofPitchDeg * DEG_TO_RAD)).normalized(), roof);
+                    // Window: glazing proud of the face, framed by four bars.
+                    float ww = d.dormerWidthM * 0.62f, wh = h * 0.68f, wy = h * 0.16f;
+                    Vec3 g0 = face - r * (ww * 0.5f) + up * wy + n * 0.01f;
+                    addQuad(mesh, g0, g0 + r * ww, g0 + r * ww + up * wh, g0 + up * wh, n, glass);
+                    float fw = 0.06f;
+                    Vec3 o = n * 0.05f;
+                    addQuad(mesh, g0 + o - r * fw, g0 + o, g0 + o + up * wh, g0 + o - r * fw + up * wh, n, metal);
+                    addQuad(mesh, g0 + o + r * ww, g0 + o + r * (ww + fw), g0 + o + r * (ww + fw) + up * wh, g0 + o + r * ww + up * wh, n, metal);
+                    addQuad(mesh, g0 + o - r * fw - up * fw, g0 + o + r * (ww + fw) - up * fw, g0 + o + r * (ww + fw), g0 + o - r * fw, n, metal);
+                    addQuad(mesh, g0 + o - r * fw + up * wh, g0 + o + r * (ww + fw) + up * wh, g0 + o + r * (ww + fw) + up * (wh + fw), g0 + o - r * fw + up * (wh + fw), n, metal);
+                    addQuad(mesh, g0 + o + r * (ww * 0.5f - fw * 0.5f), g0 + o + r * (ww * 0.5f + fw * 0.5f), g0 + o + r * (ww * 0.5f + fw * 0.5f) + up * wh, g0 + o + r * (ww * 0.5f - fw * 0.5f) + up * wh, n, metal);
+                }
+            }
+        }
+
+        // Quoins: corner blocks at a course pitch, alternating long and short on the two faces.
+        if (d.quoinCourseM > 0.0f) {
+            const float sx[4] = { 1, 1, -1, -1 }, sz[4] = { 1, -1, -1, 1 };
+            int courses = std::max(1, static_cast<int>((totalH - cfg.plinthHeight) / d.quoinCourseM));
+            float pitch = (totalH - cfg.plinthHeight) / courses;
+            for (int c = 0; c < 4; ++c) {
+                for (int k = 0; k < courses; ++k) {
+                    float y0 = cfg.plinthHeight + k * pitch, y1 = y0 + pitch - d.quoinJointM;
+                    float alongX = (k % 2 == 0) ? d.quoinLongM : d.quoinShortM;
+                    float alongZ = (k % 2 == 0) ? d.quoinShortM : d.quoinLongM;
+                    float xIn = sx[c] * (hx - alongX), xOut = sx[c] * (hx + d.quoinProjectionM);
+                    float zIn = sz[c] * (hz - alongZ), zOut = sz[c] * (hz + d.quoinProjectionM);
+                    addBox(mesh, Vec3(std::min(xIn, xOut), y0, std::min(zIn, zOut)),
+                           Vec3(std::max(xIn, xOut), y1, std::max(zIn, zOut)), trim);
+                }
+            }
+        }
+
+        // Chimneys rising through the roof, with a flared cap and lathed pots.
+        if (d.chimneyCount > 0) {
+            for (const Vec3& stackTop : chimneyStackTops(cfg)) {
+                float x = stackTop.x, z = stackTop.z, top = stackTop.y;
+                float hw = d.chimneyWidthM * 0.5f, hd = d.chimneyDepthM * 0.5f;
+                addBox(mesh, Vec3(x - hw, totalH, z - hd), Vec3(x + hw, top, z + hd), wall);
+                addBox(mesh, Vec3(x - hw - 0.06f, top, z - hd - 0.06f), Vec3(x + hw + 0.06f, top + d.chimneyCapM, z + hd + 0.06f), trim);
+                for (int p = 0; p < d.chimneyPotCount; ++p) {
+                    float pt = d.chimneyPotCount == 1 ? 0.5f : static_cast<float>(p) / (d.chimneyPotCount - 1);
+                    Vec3 pBase(x - hw * 0.55f + hw * 1.1f * pt, top + d.chimneyCapM, z);
+                    float R = d.chimneyPotRadiusM;
+                    addLathe(mesh, pBase, d.chimneyPotHeightM, [R](float u) {
+                        return R * (1.0f - 0.25f * u + (u > 0.85f ? 0.2f : 0.0f));
+                    }, 6, 12, roof);
+                }
+            }
+        }
+    }
+
     static void generateFloorSlabs(const BuildingConfig& cfg, ScratchboxMesh& mesh) {
         float hx = cfg.width * 0.5f;
         float hz = cfg.depth * 0.5f;
@@ -883,7 +1275,10 @@ private:
             addQuad(mesh, p0, p1, p2, p3, Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 0.8f);
 
             // Exterior projecting belt course / stringcourse moulding wrapping the perimeter
-            if (floor > 0) {
+            bool profiledBand = floor == cfg.floorCount
+                ? cfg.details.corniceProfile.size() >= 3
+                : cfg.details.stringCourseProfile.size() >= 3;
+            if (floor > 0 && !profiledBand) {
                 bool isRoofCornice = (floor == cfg.floorCount);
                 float beltProj = isRoofCornice ? 0.32f : 0.16f;
                 float beltH = isRoofCornice ? 0.28f : 0.16f;
