@@ -93,7 +93,7 @@ struct Layer {
     float imageDepthM{0.002f};
     float imageTilesU{1.0f};
     float imageTilesV{1.0f};
-    float imageProjectionDepthM{0.5f};        // how far from the image plane the projection reaches
+    float imageProjectionDepthM{0.02f};       // how far from the image plane the projection reaches
 
     // Masks.
     bool hasBox{false};
@@ -215,8 +215,13 @@ inline float layerHeight(const Layer& L, const Vec3& p, float footprintM = 0.0f)
     return 0.0f;
 }
 
-// Whether a layer can be non-zero within `margin` of p (for deciding where to subdivide).
-inline bool layerReaches(const Layer& L, const Vec3& p, float margin) {
+// Whether a layer can be non-zero within `margin` of p on a face with normal n (for deciding where to
+// subdivide): outside the box, or facing away from a facing mask, it cannot.
+inline bool layerReaches(const Layer& L, const Vec3& p, float margin, const Vec3& n = Vec3(0, 0, 0)) {
+    if (L.hasFacing && n.length() > 0.5f) {
+        float ang = std::acos(std::clamp(n.dot(L.facing.normalized()), -1.0f, 1.0f)) * (180.0f / math::PI);
+        if (ang > L.facingMaxDeg + 15.0f) return false;   // slack for the smooth normals used at displacement
+    }
     if (L.hasBox) {
         float f = std::max(L.featherM, 0.0f) + margin;
         if (p.x < L.boxMin.x - f || p.y < L.boxMin.y - f || p.z < L.boxMin.z - f ||
@@ -282,8 +287,10 @@ inline ScratchboxMesh apply(const ScratchboxMesh& input, const std::vector<Layer
             float longest = 0.0f;
             for (int k = 0; k < 3; ++k) longest = std::max(longest, (m.p[t[k]] - m.p[t[(k + 1) % 3]]).length());
             if (longest <= target) continue;
+            Vec3 fnorm = (m.p[t[1]] - m.p[t[0]]).cross(m.p[t[2]] - m.p[t[0]]);
+            fnorm = fnorm.length() > 1e-20f ? fnorm.normalized() : Vec3(0, 0, 0);
             bool reached = false;
-            for (const auto& L : layers) if (layerReaches(L, c, longest)) { reached = true; break; }
+            for (const auto& L : layers) if (layerReaches(L, c, longest, fnorm)) { reached = true; break; }
             if (!reached) continue;
             for (int k = 0; k < 3; ++k) {
                 if ((m.p[t[k]] - m.p[t[(k + 1) % 3]]).length() > target) toSplit.push_back(meshops::edgeKey(t[k], t[(k + 1) % 3]));
@@ -343,7 +350,8 @@ inline ScratchboxMesh apply(const ScratchboxMesh& input, const std::vector<Layer
             Vec3 c = (m.p[t[0]] + m.p[t[1]] + m.p[t[2]]) * (1.0f / 3.0f);
             float longest = 0.0f;
             for (int k = 0; k < 3; ++k) longest = std::max(longest, (m.p[t[k]] - m.p[t[(k + 1) % 3]]).length());
-            for (const auto& L : layers) if (layerReaches(L, c, longest)) return true;
+            Vec3 fnorm = faceN(t);
+            for (const auto& L : layers) if (layerReaches(L, c, longest, fnorm)) return true;
             return false;
         };
         for (int iter = 0; iter < 10; ++iter) {
@@ -445,12 +453,18 @@ inline ScratchboxMesh apply(const ScratchboxMesh& input, const std::vector<Layer
                         return std::acos(std::clamp(x.dot(y) / std::max(1e-20f, x.length() * y.length()), -1.0f, 1.0f));
                     };
                     if (angleAt(c, a, b) + angleAt(d, a, b) <= math::PI + 1e-4f) continue;
-                    Vec3 n0 = fn[fs[0]];
-                    Vec3 nc = (m.p[c] - m.p[d]).cross(m.p[a] - m.p[d]), nd = (m.p[b] - m.p[d]).cross(m.p[c] - m.p[d]);
-                    if (nc.dot(n0) <= 0.0f || nd.dot(n0) <= 0.0f) continue;
+                    // The new triangles keep t0's winding; both must face the way the pair faces (the quad is
+                    // convex) with a real area, or the flip would fold the surface over itself or leave a sliver.
                     bool ab = false;
                     for (int i = 0; i < 3; ++i) if (t0[i] == a && t0[(i + 1) % 3] == b) ab = true;
-                    if (ab) { t0 = {a, d, c}; t1 = {b, c, d}; } else { t0 = {a, c, d}; t1 = {b, d, c}; }
+                    std::array<uint32_t, 3> n0t = ab ? std::array<uint32_t, 3>{a, d, c} : std::array<uint32_t, 3>{a, c, d};
+                    std::array<uint32_t, 3> n1t = ab ? std::array<uint32_t, 3>{b, c, d} : std::array<uint32_t, 3>{b, d, c};
+                    Vec3 n0 = fn[fs[0]];
+                    Vec3 na = (m.p[n0t[1]] - m.p[n0t[0]]).cross(m.p[n0t[2]] - m.p[n0t[0]]);
+                    Vec3 nb = (m.p[n1t[1]] - m.p[n1t[0]]).cross(m.p[n1t[2]] - m.p[n1t[0]]);
+                    const float minArea2 = 1e-4f * target * target;
+                    if (na.dot(n0) <= minArea2 || nb.dot(n0) <= minArea2) continue;
+                    t0 = n0t; t1 = n1t;
                     touched[fs[0]] = touched[fs[1]] = 1;
                 }
             }

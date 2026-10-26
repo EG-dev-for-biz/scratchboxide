@@ -120,6 +120,9 @@ inline IndexedMesh weldExact(const ScratchboxMesh& m) {
 }
 
 inline size_t badEdges(const IndexedMesh& m);
+inline void removeCaps(IndexedMesh& m, float cosLimit = -0.99998f);
+inline void collapseShortEdges(IndexedMesh& m, float minLen, float sharpAngleDeg);
+
 
 // Welding for the modelling operations: exact positions first (results of these operations share
 // vertices bit for bit, and a tolerance weld could merge distinct close vertices); the relative weld
@@ -127,9 +130,13 @@ inline size_t badEdges(const IndexedMesh& m);
 inline IndexedMesh weldForOps(const ScratchboxMesh& m) {
     IndexedMesh exactW = weldExact(m);
     size_t bad = badEdges(exactW);
-    if (bad == 0) return exactW;
-    IndexedMesh tolW = weld(m);
-    return badEdges(tolW) < bad ? tolW : exactW;
+    IndexedMesh chosen = exactW;
+    if (bad != 0) {
+        IndexedMesh tolW = weld(m);
+        if (badEdges(tolW) < bad) chosen = tolW;
+    }
+    removeCaps(chosen);
+    return chosen;
 }
 
 inline Vec3 faceNormal(const IndexedMesh& m, size_t f) {
@@ -158,6 +165,56 @@ inline size_t badEdges(const IndexedMesh& m) {
     return n;
 }
 
+// Removes cap slivers (a corner within a fraction of a degree of 180, so the apex all but lies on the
+// opposite edge) by flipping that edge with the neighbour across it when the four points are coplanar:
+// the apex gains a real connection and the sliver's area goes to the two new triangles. Exact booleans
+// leave such caps where features nearly coincide; offset operations would inflate them into folds.
+inline void removeCaps(IndexedMesh& m, float cosLimit) {
+    for (int pass = 0; pass < 6; ++pass) {
+        auto ef = edgeFaces(m);
+        std::vector<char> touched(m.t.size(), 0);
+        bool changed = false;
+        for (uint32_t f = 0; f < m.t.size(); ++f) {
+            if (touched[f]) continue;
+            const auto t = m.t[f];
+            int apex = -1;
+            for (int k = 0; k < 3; ++k) {
+                Vec3 u = m.p[t[(k + 1) % 3]] - m.p[t[k]], w = m.p[t[(k + 2) % 3]] - m.p[t[k]];
+                float lu = u.length(), lw = w.length();
+                if (lu < 1e-20f || lw < 1e-20f) continue;
+                if (u.dot(w) / (lu * lw) < cosLimit) { apex = k; break; }
+            }
+            if (apex < 0) continue;
+            uint32_t c = t[apex], a = t[(apex + 1) % 3], b = t[(apex + 2) % 3];
+            const auto& fs = ef.at(edgeKey(a, b));
+            if (fs.size() != 2) continue;
+            uint32_t g = fs[0] == f ? fs[1] : fs[0];
+            if (touched[g]) continue;
+            const auto tg = m.t[g];
+            uint32_t d = tg[0] != a && tg[0] != b ? tg[0] : (tg[1] != a && tg[1] != b ? tg[1] : tg[2]);
+            if (d == c || ef.count(edgeKey(c, d))) continue;
+            // Coplanar: c lies on the plane of (a, b, d) within a tiny fraction of the edge length.
+            Vec3 ng = (m.p[b] - m.p[a]).cross(m.p[d] - m.p[a]);
+            float lg = ng.length();
+            if (lg < 1e-20f) continue;
+            float off = std::abs((m.p[c] - m.p[a]).dot(ng / lg));
+            if (off > 1e-5f * (m.p[b] - m.p[a]).length()) continue;
+            // New triangles (a, c, d) and (c, b, d) wound like g: keep g's winding of a->b or b->a.
+            bool gAB = false;
+            for (int i = 0; i < 3; ++i) if (tg[i] == a && tg[(i + 1) % 3] == b) gAB = true;
+            std::array<uint32_t, 3> n0 = gAB ? std::array<uint32_t, 3>{a, c, d} : std::array<uint32_t, 3>{a, d, c};
+            std::array<uint32_t, 3> n1 = gAB ? std::array<uint32_t, 3>{c, b, d} : std::array<uint32_t, 3>{c, d, b};
+            Vec3 na = (m.p[n0[1]] - m.p[n0[0]]).cross(m.p[n0[2]] - m.p[n0[0]]);
+            Vec3 nb = (m.p[n1[1]] - m.p[n1[0]]).cross(m.p[n1[2]] - m.p[n1[0]]);
+            if (na.dot(ng) <= 0.0f || nb.dot(ng) <= 0.0f) continue;
+            m.t[f] = n0; m.t[g] = n1;
+            touched[f] = touched[g] = 1;
+            changed = true;
+        }
+        if (!changed) return;
+    }
+}
+
 /**
  * Output with auto-smooth normals: each face corner takes the area-weighted normal of the faces
  * around its vertex that meet it at less than smoothAngleDeg, and corners sharing a vertex and a
@@ -181,19 +238,27 @@ inline ScratchboxMesh finish(const IndexedMesh& m, const ScratchboxMesh& style, 
         uint32_t idx[3];
         for (int k = 0; k < 3; ++k) {
             uint32_t v = m.t[f][k];
-            // Weighted normals: when the faces coplanar with this one (within 1 degree) clearly dominate the
-            // smoothing group's area around the vertex, the corner keeps the flat normal (flat faces shade flat
-            // beside bevel strips); otherwise it takes the area-weighted average (curved surfaces blend; on a
-            // polygonal cylinder each facet holds at most half the area, so the bar sits above a half).
+            // Weighted normals. The faces around the vertex within the smoothing angle of this one form its
+            // group; the group splits into coplanar clusters (within 1 degree). This corner keeps its flat
+            // normal when its cluster holds over half the group's area, or when two substantial clusters
+            // (over a quarter each) meet here: two real planes meeting below the smoothing angle are a
+            // visible crease, not a fillet. Otherwise it takes the area-weighted average, so bevel strips
+            // and polygonal cylinders (each facet at most exactly half) blend.
             Vec3 n(0, 0, 0);
-            float groupArea = 0.0f, coplanarArea = 0.0f;
-            for (uint32_t g : vf[v]) if (fn[g].dot(fn[f]) >= cosLimit) {
+            float groupArea = 0.0f, ownCluster = 0.0f, otherClusterMax = 0.0f;
+            std::vector<std::pair<Vec3, float>> clusters;
+            for (uint32_t g : vf[v]) {
+                if (fn[g].dot(fn[f]) < cosLimit) continue;
                 n += fa[g];
                 float area = fa[g].length();
                 groupArea += area;
-                if (fn[g].dot(fn[f]) >= 0.99985f) coplanarArea += area;
+                if (fn[g].dot(fn[f]) >= 0.99985f) { ownCluster += area; continue; }
+                bool placed = false;
+                for (auto& c : clusters) if (c.first.dot(fn[g]) >= 0.99985f) { c.second += area; placed = true; break; }
+                if (!placed) clusters.emplace_back(fn[g], area);
             }
-            if (coplanarArea > 0.65f * groupArea) n = fn[f];
+            for (const auto& c : clusters) otherClusterMax = std::max(otherClusterMax, c.second);
+            if (ownCluster > 0.5f * groupArea || (ownCluster > 0.25f * groupArea && otherClusterMax > 0.25f * groupArea)) n = fn[f];
             n = n.length() > 1e-20f ? n.normalized() : fn[f];
             std::array<int32_t, 3> nk = { static_cast<int32_t>(std::lround(n.x * 1e4)), static_cast<int32_t>(std::lround(n.y * 1e4)), static_cast<int32_t>(std::lround(n.z * 1e4)) };
             auto key = std::make_pair(v, nk);
@@ -1052,6 +1117,13 @@ inline ScratchboxMesh booleanOp(const ScratchboxMesh& a, const ScratchboxMesh& b
         IndexedMesh tidy = out;
         regularizeFlatRegions(tidy, static_cast<float>(kExactQuantum * 4.0));
         if (closed(tidy)) out.t.swap(tidy.t);
+        IndexedMesh capped = out;
+        removeCaps(capped);
+        if (closed(capped)) out.t.swap(capped.t);
+        // Needles: exact points a few grid steps apart are distinct floats but meaningless geometry.
+        IndexedMesh needled = out;
+        collapseShortEdges(needled, 1e-6f, 30.0f);
+        if (closed(needled)) out = std::move(needled);
     }
     size_t open = 0, overShared = 0;
     for (const auto& [k, fs] : edgeFaces(out)) {

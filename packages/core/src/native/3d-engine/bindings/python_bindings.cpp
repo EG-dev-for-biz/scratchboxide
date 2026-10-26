@@ -1698,7 +1698,7 @@ NB_MODULE(scratchbox_native, m) {
             L.imageWidthM = width; L.imageHeightM = height; L.imageDepthM = depth; L.imageTilesU = tilesU; L.imageTilesV = tilesV;
             L.imageProjectionDepthM = projectionDepth;
             return L;
-        }, "png"_a, "centre"_a, "normal"_a, "up"_a, "width_m"_a, "height_m"_a, "depth_m"_a, "tiles_u"_a = 1.0f, "tiles_v"_a = 1.0f, "projection_depth_m"_a = 0.5f,
+        }, "png"_a, "centre"_a, "normal"_a, "up"_a, "width_m"_a, "height_m"_a, "depth_m"_a, "tiles_u"_a = 1.0f, "tiles_v"_a = 1.0f, "projection_depth_m"_a = 0.02f,
            "A height image (luminance x alpha, white = full depth_m) projected onto the surface like a decal, tiled tiles_u x tiles_v times");
         m_relief.def("apply", &relief::apply, "mesh"_a, "layers"_a, "target_edge_m"_a = 0.0f, "max_subdivisions"_a = 6, "samples_per_detail"_a = 3.0f,
                      "smooth_angle_deg"_a = 30.0f, "name"_a = "Relief",

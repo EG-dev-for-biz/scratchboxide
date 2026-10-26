@@ -25,7 +25,7 @@ def helix_ridges(origin: collections.abc.Sequence[float], axis: collections.abc.
     """Ridges around an axis (a whole number per turn at radius_m, pitch_m rounded to fit): straight flutes at helix_deg 0, a crossing knurl at helix_deg > 0 (depth_m < 0 for grooves)"""
 
 
-def image(png: bytes, centre: collections.abc.Sequence[float], normal: collections.abc.Sequence[float], up: collections.abc.Sequence[float], width_m: float, height_m: float, depth_m: float, tiles_u: float = 1.0, tiles_v: float = 1.0, projection_depth_m: float = 0.5) -> Layer:
+def image(png: bytes, centre: collections.abc.Sequence[float], normal: collections.abc.Sequence[float], up: collections.abc.Sequence[float], width_m: float, height_m: float, depth_m: float, tiles_u: float = 1.0, tiles_v: float = 1.0, projection_depth_m: float = 0.02) -> Layer:
     """A height image (luminance x alpha, white = full depth_m) projected onto the surface like a decal, tiled tiles_u x tiles_v times"""
 
 
