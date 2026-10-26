@@ -1,7 +1,7 @@
 # Process: Reading the GCS texture library from the app (signing route, bucket access, CORS)
 
 > **Recorded:** 2026-10-26
-> **Status:** Verified at `http://localhost:3000` (a library texture signed, read and rendered in a 3D material); Needs Fix for every other app origin (bucket CORS)
+> **Status:** Verified (a library texture signed, read and rendered in a 3D material at `http://localhost:3000` and, after the CORS update, at `http://127.0.0.1:3030`); legacy `textures/` files still missing from the bucket
 > **Tags:** `operate-scratchbox` `textures` `gcs` `signed-urls` `iam` `cors`
 > **Target Domain:** Desktop app backend (`/api/textures/sign`) / texture-library loading in the viewport
 
@@ -10,7 +10,7 @@
 ## 1. Session Context
 
 * **What prompted this session:** the user asked to use the Google Cloud texture library for building surfaces. Listing it showed the app could not read it at all: the signing route only accepted `textures/` and `extracted_textures/` paths, the bucket's sets sit at its root, and the app's service account had no read access.
-* **Instances used:** web port `3400`, API port `3401`, tools port `3402` for the route checks; then web port `3000`, API `3501`, tools `3502` for the 3D material check, since `http://localhost:3000` is an origin the bucket's CORS already allows (own `scratchbox-texture-access` entry in `.claude/launch.json`, removed afterwards).
+* **Instances used:** web port `3400`, API port `3401`, tools port `3402` for the route checks; then web port `3000`, API `3501`, tools `3502` for the 3D material check, since `http://localhost:3000` is an origin the bucket's CORS already allowed; then web port `3030` (the app's default) after the CORS update (own `scratchbox-texture-access` entry in `.claude/launch.json`, removed afterwards).
 * **Scope tested:** `GET /api/textures/sign` for library, legacy, missing and out-of-root paths, before and after the bucket grant; loading the signed URL as an image, in CORS mode and plain; loading a library texture into a three.js `MeshPhysicalMaterial` and rendering it.
 
 ### The bucket (`gs://scratchbox-library-training-textures`, project `scratchbox-library-training`)
@@ -33,16 +33,18 @@
 * **The file is served:** the signed URL loads as a 512×512 image with no `crossOrigin`; opened in a tab it shows ambientCG's `Facade001` preview sphere (glass curtain wall).
 * **Into a 3D material** (page at `http://localhost:3000`) — in the running page, the app's own `resolveTextureUrl` (`packages/core/src/common/texture-url-resolver.ts`, loaded through Vite) resolved `texture-library/Facade001/Facade001_4K-PNG_Color.png`, the app's three.js r186 `TextureLoader` (CORS mode) loaded it, and it was set as the `map` of a `MeshPhysicalMaterial` on a plane and rendered by a `WebGLRenderer`. Evidence: image 4096×4096, `material.map` set, `readPixels` 35,344 lit pixels in 48 distinct colours (mean RGB 81, 87, 92); the screenshot shows the curtain-wall grid on the plane. This is the chain `loadPbrTexture` in `syncCustomMeshes.ts` runs; no scene node was used, because the agent's canvas tools refuse `customMeshes` (`canvas-tools.ts:306`), so no live session reaches that loader with a library texture.
 * **Control:** the same load from `http://127.0.0.1:3000` fails, console: `Access to image at 'https://storage.googleapis.com/scratchbox-library-training-textures/Facade001/Facade001_4K-PNG_Color.png?…' from origin 'http://127.0.0.1:3000' has been blocked by CORS policy: The 'Access-Control-Allow-Origin' header has a value 'http://localhost:3000' that is not equal to the supplied origin.`
+* **Bucket CORS updated** (run by the user): the bucket's CORS now allows `http://127.0.0.1:3030` and `http://localhost:3030` beside `http://localhost:3000`, `https://app.scratchbox.com` and `http://localhost:5173` (GET/HEAD), seen in `gcloud storage buckets describe … --format="json(cors_config)"`. Two earlier attempts did not land: the first never ran on this machine, and the second, `--cors-file=<(echo …)`, failed with `Unable to read file [/dev/fd/11]: [Errno 9] Bad file descriptor`, because gcloud reads the file from a worker after the shell has closed the descriptor. A real file worked.
+* **Into a 3D material at `http://127.0.0.1:3030`** (after the CORS update) — the same check as at `localhost:3000`: image 4096×4096, `material.map` set, 35,344 lit pixels in 48 distinct colours (mean RGB 81, 87, 92), the curtain-wall grid in the screenshot, no CORS error in the console, and a CORS-mode `fetch` of the signed URL returns 200. The same origin was blocked before the update.
 * **Tests:** `desktop-app/test/texture-routes.test.ts`, 4/4 passing with credentials unreachable (new: each root's mapping, a bare root and traversal refused). Typecheck: no errors in the changed files (the one remaining error, `treeCrownShading.ts:763` `ShaderChunk`, predates this work).
 
 ---
 
 ## 3. What Broke / Didn't Work
 
-* **Textures cannot reach WebGL from the usual app origins** — from `http://127.0.0.1:3400` the same signed URL with `img.crossOrigin = 'anonymous'` (what `THREE.TextureLoader` sets) → `failed to load`; `fetch(url)` → `Failed to fetch`. A CORS update to add the dev origins was attempted after this, but the bucket still showed the original three origins when re-read.
+* **Fixed later in this session: textures could not reach WebGL from the usual app origins** — from `http://127.0.0.1:3400` the same signed URL with `img.crossOrigin = 'anonymous'` (what `THREE.TextureLoader` sets) → `failed to load`; `fetch(url)` → `Failed to fetch`. Resolved for `127.0.0.1:3030` and `localhost:3030` by the CORS update in section 2. Any other origin (another dev port, the packaged app if it serves from elsewhere) still needs adding to the bucket's CORS.
   - Console evidence: none from the image itself (load error only); `fetch` rejects with `TypeError: Failed to fetch`.
   - Network evidence: the bucket's CORS config allows only `http://localhost:3000`, `https://app.scratchbox.com`, `http://localhost:5173` (GET/HEAD, header `Content-Type`). The app runs at `http://127.0.0.1:<web-port>` (Electron's `DEV_RENDERER_URL` defaults to `http://<host>:3030`), so no request from it gets `Access-Control-Allow-Origin`.
-  - Suspected cause: bucket CORS config. Fix: add the app's origins (`http://127.0.0.1:3030`, `http://localhost:3030`, and any other port in use) to the bucket's CORS, or serve the bytes through the backend instead of a redirect to GCS. Not changed in this session (a bucket setting, the owner's call).
+  - Cause: bucket CORS config. Fixed by the user adding `http://127.0.0.1:3030` and `http://localhost:3030` to the bucket's CORS (section 2).
 * **Legacy `textures/…` paths 404** — not changed: the objects are not in the bucket, and the server no longer serves `public/textures/`. Either upload them under `textures/` or serve them locally again.
 
 ---
