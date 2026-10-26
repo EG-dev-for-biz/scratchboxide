@@ -8,7 +8,7 @@ import sys
 import os
 import math as _py_math
 import random as _random
-from typing import Any, Tuple, Optional, Union, List
+from typing import Any, Dict, Tuple, Optional, Union, List
 
 # Ensure native module is discoverable from both package installations and local build dirs
 try:
@@ -1065,6 +1065,16 @@ def create_building(
     Constructs multi-story procedural architecture with rhythmic fenestration,
     recessed reveals, continuous compound curvature manifolds, and modeled roofs.
     """
+    cfg = _building_config(**{k: v for k, v in locals().items() if k not in ("name", "kwargs")}, **kwargs)
+    return _native.architecture.generate_building(cfg, name)
+
+
+def _building_config(
+    width, depth, floors, floor_height, ground_floor_height, plinth_height, bay_width,
+    window_width, window_height, window_recess_depth, roof, roof_height, roof_overhang,
+    roof_pitch_degrees, parapet_height, curvature, superellipse_exponent, twist_degrees,
+    taper, bulge, bay_count, bake_curvature_ao, **kwargs
+):
     if _native is None or not hasattr(_native, "architecture"):
         raise RuntimeError("Native 3D architecture module scratchbox_native.architecture is required")
 
@@ -1135,7 +1145,114 @@ def create_building(
     else:
         cfg.roof_type = RoofType.Mansard
 
-    return _native.architecture.generate_building(cfg, name)
+    return cfg
+
+
+
+def create_building_parts(
+    width: float = 18.0,
+    depth: float = 14.0,
+    floors: int = 4,
+    floor_height: float = 3.4,
+    ground_floor_height: float = 4.2,
+    plinth_height: float = 0.8,
+    bay_width: float = 3.2,
+    window_width: float = 1.8,
+    window_height: float = 2.0,
+    window_recess_depth: float = 0.25,
+    roof: Any = "mansard",
+    roof_height: float = 3.5,
+    roof_overhang: float = 0.4,
+    roof_pitch_degrees: float = 55.0,
+    parapet_height: float = 0.8,
+    curvature: float = 0.0,
+    superellipse_exponent: Optional[float] = None,
+    twist_degrees: float = 0.0,
+    taper: float = 1.0,
+    bulge: float = 0.0,
+    bay_count: Optional[int] = None,
+    bake_curvature_ao: bool = True,
+    name: str = "ProceduralBuilding",
+    **kwargs
+) -> "List[scratchbox_native.geometry.Mesh]":
+    """
+    The building create_building makes, as one mesh per material slot (<name>_wall, _glass,
+    _frame, _roof, _foundation) with world-metre UVs, ready for write_textured_building.
+    """
+    cfg = _building_config(**{k: v for k, v in locals().items() if k not in ("name", "kwargs")}, **kwargs)
+    return list(_native.architecture.generate_building_parts(cfg, name))
+
+
+
+_IMAGE_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+
+
+def write_textured_building(path: str, parts, surfaces: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Write building parts to a GLB with real-scale PBR textures per part.
+
+    surfaces maps a part slot ("wall", "roof", "foundation", "frame", "glass") to either
+      {"coursed": {<CoursedSurfaceParams fields>}}            procedural, synthesized natively
+      {"albedo": file, "normal": file?, "orm": file?,          image maps from a material library or
+       "tile_m": (w, h), "tint": (r, g, b)?, "source": str}   an image model, laid at tile_m metres
+    Optional per-part "roughness" / "metallic" set the material factors. Parts without an
+    entry keep their flat slot material. Returns {"path", "parts": {slot: {"source", "tile_m"}}}
+    so the caller can label provenance honestly.
+    """
+    surfaces = surfaces or {}
+    textures, report = [], {}
+    for part in parts:
+        slot = part.name.rsplit("_", 1)[-1]
+        spec = surfaces.get(slot)
+        if not spec:
+            report[slot] = {"source": "flat material"}
+            continue
+        mat = part.material
+        if "coursed" in spec:
+            params = _native.surface.CoursedSurfaceParams()
+            for key, value in spec["coursed"].items():
+                if not hasattr(params, key):
+                    raise ValueError(f"Unknown coursed surface parameter '{key}'")
+                setattr(params, key, _native.math.Vec3(*value) if key.endswith("_color") else value)
+            tex = _native.surface.synthesize_coursed_surface(params)
+            tile = (tex["tile_width_m"], tex["tile_height_m"])
+            maps = {"base_color": (tex["albedo_png"], "image/png"),
+                    "normal": (tex["normal_png"], "image/png"),
+                    "orm": (tex["orm_png"], "image/png")}
+            mat.base_color = _native.math.Vec4(1.0, 1.0, 1.0, mat.base_color.w)
+            mat.roughness = 1.0
+            mat.metallic = 1.0
+            source = "procedural coursed surface"
+        else:
+            if "albedo" not in spec or "tile_m" not in spec:
+                raise ValueError(f"Surface '{slot}' needs 'coursed' parameters or an 'albedo' file and 'tile_m'")
+            tile = tuple(spec["tile_m"])
+            maps = {}
+            for usage, key in (("base_color", "albedo"), ("normal", "normal"), ("orm", "orm")):
+                if spec.get(key):
+                    file_path = str(spec[key])
+                    ext = os.path.splitext(file_path)[1].lower()
+                    if ext not in _IMAGE_MIME:
+                        raise ValueError(f"Unsupported texture file type '{ext}' for {file_path}")
+                    with open(file_path, "rb") as fh:
+                        maps[usage] = (fh.read(), _IMAGE_MIME[ext])
+            tint = spec.get("tint", (1.0, 1.0, 1.0))
+            mat.base_color = _native.math.Vec4(tint[0], tint[1], tint[2], mat.base_color.w)
+            if "orm" in maps:
+                mat.roughness = 1.0
+                mat.metallic = 1.0
+            source = spec.get("source", "image maps")
+        if "roughness" in spec:
+            mat.roughness = float(spec["roughness"])
+        if "metallic" in spec:
+            mat.metallic = float(spec["metallic"])
+        part.material = mat
+        for usage, (data, mime) in maps.items():
+            textures.append((part.name, usage, data, mime, 1.0 / tile[0], 1.0 / tile[1]))
+        report[slot] = {"source": source, "tile_m": tile}
+
+    _native.io.write_glb_textured(path, list(parts), textures)
+    return {"path": path, "parts": report}
 
 def create_curved_building(
     width: float = 18.0,

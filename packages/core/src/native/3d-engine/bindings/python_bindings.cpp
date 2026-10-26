@@ -17,6 +17,8 @@
 #include <nanobind/stl/unordered_map.h>
 
 #include "scratchbox_engine.hpp"
+#include "scratchbox_coursed_surface.hpp"
+#include "scratchbox_png.hpp"
 #include "scratchbox_core.hpp"
 #include "scratchbox_sdf.hpp"
 #include "scratchbox_hair.hpp"
@@ -674,6 +676,12 @@ NB_MODULE(scratchbox_native, m) {
         return ProceduralBuildingGenerator::generateCurvedBuilding(config, name);
     }, "config"_a, "name"_a = "CurvedBuilding");
 
+    m_arch.def("generate_building_parts", [](const BuildingConfig& config, const std::string& name) {
+        return ProceduralBuildingGenerator::generateBuildingParts(config, name);
+    }, "config"_a, "name"_a = "ProceduralBuilding",
+       "The building as one sub-mesh per material slot (<name>_wall, _glass, _frame, _roof, _foundation), "
+       "each with its slot material, a grey vertex shade and world-metre UVs for real-scale textures");
+
     m_arch.attr("RomanOrder") = m.attr("RomanOrder");
 
     m_arch.def("generate_peripteral_temple", [](
@@ -973,6 +981,40 @@ NB_MODULE(scratchbox_native, m) {
         return true;
     }, "path"_a, "meshes"_a, "Save multiple ScratchboxMeshes with distinct PBR materials to a multi-mesh glTF 2.0 (.glb) file");
 
+    m_io.def("write_glb_textured", [](const std::string& path, const std::vector<ScratchboxMesh>& meshes,
+                                      const std::vector<std::tuple<std::string, std::string, nb::bytes, std::string, float, float>>& textures) {
+        std::vector<EmbeddedTexture> embedded;
+        for (const auto& [material, usage, data, mime, scaleU, scaleV] : textures) {
+            EmbeddedTexture t;
+            t.targetMaterialName = material;
+            if (usage == "base_color") t.usage = TextureUsage::BASE_COLOR;
+            else if (usage == "normal") t.usage = TextureUsage::NORMAL;
+            else if (usage == "orm") t.usage = TextureUsage::ORM;
+            else if (usage == "metallic_roughness") t.usage = TextureUsage::METALLIC_ROUGHNESS;
+            else if (usage == "occlusion") t.usage = TextureUsage::OCCLUSION;
+            else if (usage == "emissive") t.usage = TextureUsage::EMISSIVE;
+            else throw std::invalid_argument("Unknown texture usage '" + usage + "' (base_color, normal, orm, metallic_roughness, occlusion, emissive)");
+            const auto* bytes = reinterpret_cast<const uint8_t*>(data.c_str());
+            t.data.assign(bytes, bytes + data.size());
+            t.mimeType = mime;
+            t.scaleU = scaleU;
+            t.scaleV = scaleV;
+            t.materialIndex = -1;
+            embedded.push_back(std::move(t));
+        }
+        auto glb = GlbWriter::serializeMultiMeshToGlb(meshes, embedded);
+        std::ofstream out(path, std::ios::binary);
+        if (!out.is_open()) {
+            throw std::runtime_error("Failed to open file for writing: " + path);
+        }
+        out.write(reinterpret_cast<const char*>(glb.data()), static_cast<std::streamsize>(glb.size()));
+        out.close();
+        return true;
+    }, "path"_a, "meshes"_a, "textures"_a,
+       "Save meshes to a GLB embedding image textures. Each texture is (material_name, usage, image_bytes, mime_type, "
+       "scale_u, scale_v); it attaches to the sub-mesh whose material or mesh name contains material_name, and the "
+       "scale is written as KHR_texture_transform (use 1 / tile size in metres with world-metre UVs)");
+
     m_io.def("export_glb_bytes", [](const ScratchboxMesh& mesh) {
         auto glb = GlbWriter::writeGlb(mesh);
         return nb::bytes(reinterpret_cast<const char*>(glb.data()), glb.size());
@@ -999,6 +1041,52 @@ NB_MODULE(scratchbox_native, m) {
     // ========================================================================
     // 8. PLANT SUBMODULE (scratchbox_plant_builder.hpp)
     // ========================================================================
+    auto m_surface = m.def_submodule("surface", "Real-scale tileable PBR surface texture synthesis");
+
+    nb::class_<pbr_texture::CoursedSurfaceParams>(m_surface, "CoursedSurfaceParams")
+        .def(nb::init<>())
+        .def_rw("unit_width_m", &pbr_texture::CoursedSurfaceParams::unitWidthM)
+        .def_rw("unit_height_m", &pbr_texture::CoursedSurfaceParams::unitHeightM)
+        .def_rw("joint_width_m", &pbr_texture::CoursedSurfaceParams::jointWidthM)
+        .def_rw("joint_depth_m", &pbr_texture::CoursedSurfaceParams::jointDepthM)
+        .def_rw("bond_offset", &pbr_texture::CoursedSurfaceParams::bondOffset)
+        .def_rw("target_tile_m", &pbr_texture::CoursedSurfaceParams::targetTileM)
+        .def_rw("unit_color", &pbr_texture::CoursedSurfaceParams::unitColor)
+        .def_rw("unit_color_variance", &pbr_texture::CoursedSurfaceParams::unitColorVariance)
+        .def_rw("unit_hue_variance", &pbr_texture::CoursedSurfaceParams::unitHueVariance)
+        .def_rw("joint_color", &pbr_texture::CoursedSurfaceParams::jointColor)
+        .def_rw("unit_roughness", &pbr_texture::CoursedSurfaceParams::unitRoughness)
+        .def_rw("joint_roughness", &pbr_texture::CoursedSurfaceParams::jointRoughness)
+        .def_rw("roughness_variance", &pbr_texture::CoursedSurfaceParams::roughnessVariance)
+        .def_rw("metallic", &pbr_texture::CoursedSurfaceParams::metallic)
+        .def_rw("face_relief_m", &pbr_texture::CoursedSurfaceParams::faceReliefM)
+        .def_rw("grain", &pbr_texture::CoursedSurfaceParams::grain)
+        .def_rw("edge_wear", &pbr_texture::CoursedSurfaceParams::edgeWear)
+        .def_rw("grime", &pbr_texture::CoursedSurfaceParams::grime)
+        .def_rw("streaking", &pbr_texture::CoursedSurfaceParams::streaking)
+        .def_rw("pixels_per_metre", &pbr_texture::CoursedSurfaceParams::pixelsPerMetre)
+        .def_rw("max_resolution", &pbr_texture::CoursedSurfaceParams::maxResolution)
+        .def_rw("seed", &pbr_texture::CoursedSurfaceParams::seed);
+
+    m_surface.def("synthesize_coursed_surface", [](const pbr_texture::CoursedSurfaceParams& params) {
+        auto tex = pbr_texture::synthesizeCoursedSurface(params);
+        auto png = [](const texture::ImageBuffer& img) {
+            auto bytes = png::encode(img, 6);
+            if (bytes.empty()) throw std::runtime_error("PNG compression failed for a coursed surface map");
+            return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        };
+        nb::dict out;
+        out["albedo_png"] = png(tex.albedo);
+        out["normal_png"] = png(tex.normal);
+        out["orm_png"] = png(tex.orm);
+        out["tile_width_m"] = tex.tileWidthM;
+        out["tile_height_m"] = tex.tileHeightM;
+        out["width_px"] = tex.albedo.width;
+        out["height_px"] = tex.albedo.height;
+        return out;
+    }, "params"_a,
+       "Synthesize a seamless coursed-surface PBR set (albedo, normal, ORM as PNG bytes) and its tile size in metres");
+
     auto m_plant = m.def_submodule("plant", "Procedural botanical plant presets and heroic biome assets");
 
     nb::class_<plant::PlantBuildResult>(m_plant, "PlantBuildResult")

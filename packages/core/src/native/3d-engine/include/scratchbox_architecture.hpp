@@ -472,6 +472,7 @@ public:
         // 4. Procedural Roof System
         generateRoof(config, mesh);
 
+
         if (config.bakeCurvatureAO) {
             mesh.computeCurvatureAO(0.65f);
         }
@@ -481,6 +482,93 @@ public:
         mesh.material.baseColorFactor = Vec4(1.0f, 1.0f, 1.0f, mesh.material.baseColorFactor.w);
         mesh.recomputeBounds();
         return mesh;
+    }
+
+    /**
+     * Generates the same building as generateBuilding, split into one sub-mesh per material slot
+     * (wall, glass, frame, roof, foundation) so each can carry its own material and texture maps.
+     *
+     * Every surface the generator emits is coloured slot.baseColorFactor times a scalar shade, so the
+     * building is generated once with each slot painted a distinct code direction and each triangle is
+     * assigned to the slot whose direction its colour has; the scalar becomes a grey vertex shade that
+     * multiplies the part's material (and its texture). Parts get world-metre UVs projected along each
+     * face (u horizontal, v up the face, image top = up), so a texture's KHR_texture_transform scale of
+     * 1 / tile size in metres lays it at real-world scale. Empty slots are omitted.
+     */
+    static std::vector<ScratchboxMesh> generateBuildingParts(const BuildingConfig& config, const std::string& name = "ProceduralBuilding") {
+        struct Slot { const char* suffix; const PbrMaterial* material; Vec3 code; };
+        const float s = 0.70710678f;
+        const Slot slots[] = {
+            { "wall",       &config.materials.wall,       Vec3(1, 0, 0) },
+            { "glass",      &config.materials.glass,      Vec3(0, 1, 0) },
+            { "frame",      &config.materials.frame,      Vec3(0, 0, 1) },
+            { "roof",       &config.materials.roof,       Vec3(s, s, 0) },
+            { "foundation", &config.materials.foundation, Vec3(0, s, s) },
+        };
+        constexpr int slotCount = 5;
+
+        BuildingConfig coded = config;
+        PbrMaterial* codedSlots[slotCount] = { &coded.materials.wall, &coded.materials.glass, &coded.materials.frame,
+                                               &coded.materials.roof, &coded.materials.foundation };
+        for (int i = 0; i < slotCount; ++i) {
+            codedSlots[i]->baseColorFactor = Vec4(slots[i].code.x, slots[i].code.y, slots[i].code.z, 1.0f);
+        }
+        ScratchboxMesh codedMesh = generateBuilding(coded, name);
+
+        std::vector<ScratchboxMesh> parts;
+        for (int i = 0; i < slotCount; ++i) {
+            ScratchboxMesh part(name + "_" + slots[i].suffix);
+            part.material = *slots[i].material;
+            part.material.name = name + "_" + slots[i].suffix;
+            parts.push_back(std::move(part));
+        }
+
+        const Vec3 up(0, 1, 0);
+        for (size_t t = 0; t + 2 < codedMesh.indices.size(); t += 3) {
+            const Vertex* tri[3] = { &codedMesh.vertices[codedMesh.indices[t]],
+                                     &codedMesh.vertices[codedMesh.indices[t + 1]],
+                                     &codedMesh.vertices[codedMesh.indices[t + 2]] };
+            Vec3 c = (Vec3(tri[0]->color.x, tri[0]->color.y, tri[0]->color.z) +
+                      Vec3(tri[1]->color.x, tri[1]->color.y, tri[1]->color.z) +
+                      Vec3(tri[2]->color.x, tri[2]->color.y, tri[2]->color.z)) * (1.0f / 3.0f);
+            int best = 0;
+            float bestCos = -2.0f;
+            float cLen = c.length();
+            for (int i = 0; i < slotCount; ++i) {
+                float cs = cLen > 1e-6f ? c.dot(slots[i].code) / cLen : -1.0f;
+                if (cs > bestCos) { bestCos = cs; best = i; }
+            }
+
+            Vec3 faceN = (tri[1]->position - tri[0]->position).cross(tri[2]->position - tri[0]->position);
+            float faceLen = faceN.length();
+            if (faceLen < 1e-12f) continue;
+            faceN = faceN / faceLen;
+            Vec3 tangent = up.cross(faceN);
+            if (tangent.length() < 1e-4f) tangent = Vec3(1, 0, 0);
+            tangent = tangent.normalized();
+            Vec3 bitangent = faceN.cross(tangent);
+
+            ScratchboxMesh& part = parts[best];
+            uint32_t base = static_cast<uint32_t>(part.vertices.size());
+            for (const Vertex* v : tri) {
+                Vec3 col(v->color.x, v->color.y, v->color.z);
+                float shade = std::clamp(col.dot(slots[best].code), 0.0f, 1.0f);
+                Vertex out = *v;
+                out.color = Vec4(shade, shade, shade, 1.0f);
+                out.uv = Vec2(v->position.dot(tangent), -v->position.dot(bitangent));
+                out.tangent = Vec4(tangent.x, tangent.y, tangent.z, 1.0f);
+                part.addVertex(out);
+            }
+            part.addTriangle(base, base + 1, base + 2);
+        }
+
+        std::vector<ScratchboxMesh> nonEmpty;
+        for (auto& part : parts) {
+            if (part.vertices.empty()) continue;
+            part.recomputeBounds();
+            nonEmpty.push_back(std::move(part));
+        }
+        return nonEmpty;
     }
 
 private:
