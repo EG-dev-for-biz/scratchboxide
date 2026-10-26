@@ -29,6 +29,7 @@ import { readFaceOrtho } from './pipeline-e/native-massing';
 import { decodeImageInMemory } from './tile-texture-transfer';
 import { isIdentity, nodeWorldMatrices, parseGlbBytes, readAccessor, transformPoint } from './glb-bytes';
 import { renderTopDownPhoto } from './top-down-photo';
+import { linearToLab } from './texel-exposure';
 import type { VisionModelChain } from '../../gemini/vision-model-chain';
 import type { LibraryFillSpec } from './texture-library-fill';
 import { planarFrameUv, uniqueSurfaceMaterial, type UniqueSurfaceTexture } from './surface-overrides';
@@ -701,6 +702,8 @@ export interface StoredFillSpec {
 export function proceduralFillSpec(input: {
     library: SurfaceLibrary; choices: Map<string, SurfaceChoice>; fallback: { walls: SurfaceChoice; roofs: SurfaceChoice };
     massing?: { names: string[]; buildingOf: Array<string | undefined> }; ground?: GroundRegions; roads?: boolean;
+    /** The bridges' nodes (bridge-build.ts): the structure's chosen material on every face, the district's walls where none was chosen. */
+    bridges?: { names: string[] };
 }): StoredFillSpec {
     const entries: string[] = [], uses: StoredFillSpec['uses'] = [], useOf = new Map<string, number>();
     const use = (key: string, c: SurfaceChoice): number => {
@@ -723,6 +726,11 @@ export function proceduralFillSpec(input: {
     if (input.roads && cw) {
         byNode.carriageway = { wall: use('roads:kerbs', kb!), level: use('roads:carriageway', cw) };
         byNode.kerbs = { wall: use('roads:kerbs', kb!), level: use('roads:kerbs', kb!) };
+    }
+    const bs = input.choices.get('bridges:structure');
+    for (const name of input.bridges?.names ?? []) {
+        const u = bs ? use('bridges:structure', bs) : fw;
+        byNode[name] = { wall: u, level: u };
     }
     let grids: StoredFillSpec['grids'];
     if (input.ground) {
@@ -910,7 +918,7 @@ function metrePart(nodes: Array<{ positions: Float32Array; indices: Uint32Array 
  * one taken from the store the district's own pooled choice.
  */
 export async function prepareProceduralTexturing(input: {
-    dir: string; tileBytes: Uint8Array; files: { ground: string; roads?: string; massing: string };
+    dir: string; tileBytes: Uint8Array; files: { ground: string; roads?: string; massing: string; bridges?: string };
     buildingIds: string[]; run?: Pick<MassingRun, 'dir' | 'report' | 'nodes'>;
     include: (x: number, z: number) => boolean; library: SurfaceLibrary;
     chain?: Pick<VisionModelChain<string>, 'generate'>; unavailable?: string; signal?: AbortSignal; onProgress?: (m: string) => void;
@@ -944,6 +952,24 @@ export async function prepareProceduralTexturing(input: {
         const image = { bytes: m.bytes, mimeType: 'image/jpeg' as const, widthM: picks.length > 1 ? 32 : 16, heightM: picks.length > 2 ? 32 : 16 };
         subjects.push({ key: 'roads:carriageway', measured: cwColour, image, view: `the driven surface of the streets seen straight down (${picks.length} patches of 16 x 16 m centred on streets; the material between the kerbs, ignoring cars, shadows and painted lines)` });
         if (kbColour) subjects.push({ key: 'roads:kerbs', measured: kbColour, image, view: 'the kerbs: the edge stones along both sides of the streets, between the driven surface and the footpath (the same patches seen straight down)' });
+    }
+    // the bridges (bridge-build.ts): the structure's colour as the elevation reading measured it, the elevation as the image
+    const bridgeNodes = input.files.bridges && fs.existsSync(input.files.bridges) ? readGlbNodes(fs.readFileSync(input.files.bridges)) : [];
+    if (bridgeNodes.length) {
+        const bj = parseGlbBytes(fs.readFileSync(input.files.bridges!)).json;
+        const sb = (bj.nodes?.find((n: any) => n.extras?.sbBridges)?.extras?.sbBridges ?? {}) as { bridges?: Array<{ colourSrgb?: [number, number, number]; elevationPng?: string; widthM?: number; deckAboveWaterM?: number }> };
+        const withColour = (sb.bridges ?? []).find(b => b.colourSrgb);
+        const elevation = (sb.bridges ?? []).map(b => b.elevationPng && path.join(input.dir, b.elevationPng)).find(p => p && fs.existsSync(p));
+        if (withColour?.colourSrgb && elevation) {
+            const lin = withColour.colourSrgb.map(v => { const s = v / 255; return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); }) as [number, number, number];
+            const img = decodeImageInMemory(fs.readFileSync(elevation));
+            const texelM = 0.04;
+            subjects.push({
+                key: 'bridges:structure', measured: { linearRgb: lin, lab: linearToLab(...lin) as [number, number, number], texels: 1, of: 1, shadowSplit: false, method: 'the structure colour the vision model read off the bridge\'s tile photo elevation' },
+                image: { bytes: jpegJs.encode({ data: Buffer.from(img.rgba.buffer, img.rgba.byteOffset, img.rgba.byteLength), width: img.width, height: img.height }, 85).data, mimeType: 'image/jpeg', widthM: Math.round(img.width * texelM), heightM: Math.round(img.height * texelM) },
+                view: `the side of a bridge over the river seen straight on (an orthographic render of the tile photo, ${(1 / texelM).toFixed(0)} px/m): the material of its faces, supports and parapet, ignoring the water and sky`
+            });
+        }
     }
     // the buildings massed now: walls and roofs on their tile orthos
     let borrowed: string[] = [];
@@ -1007,7 +1033,8 @@ export async function prepareProceduralTexturing(input: {
         const blocks = carriage.flatMap(n => splitByBlocks('carriageway', n.positions, n.indices));
         writeClayNodes(path.join(input.dir, 'roads_clay.glb'), [...blocks, ...kerbs.map(k => ({ name: 'kerbs', positions: k.positions, indices: k.indices }))], { sbRoads: { from: path.basename(input.files.roads!) } });
     }
-    const spec = proceduralFillSpec({ library: input.library, choices, fallback, massing: { names, buildingOf: names.map(nm => byRunName.get(nm) ?? buildingOfNodeName(nm, input.buildingIds)) }, ground: regions, roads: carriage.length > 0 });
+    if (bridgeNodes.length) writeClayNodes(path.join(input.dir, 'bridges_clay.glb'), bridgeNodes.map(n => ({ name: n.name, positions: n.positions, indices: n.indices, extras: n.extras })), { sbBridges: { from: path.basename(input.files.bridges!) } });
+    const spec = proceduralFillSpec({ library: input.library, choices, fallback, massing: { names, buildingOf: names.map(nm => byRunName.get(nm) ?? buildingOfNodeName(nm, input.buildingIds)) }, ground: regions, roads: carriage.length > 0, ...(bridgeNodes.length ? { bridges: { names: bridgeNodes.map(n => n.name) } } : {}) });
     fs.writeFileSync(path.join(input.dir, 'fill-spec.json'), JSON.stringify(spec));
     return summary;
 }

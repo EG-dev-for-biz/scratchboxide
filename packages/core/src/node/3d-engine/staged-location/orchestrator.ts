@@ -92,6 +92,8 @@ import { parseGlbBytes } from './glb-bytes';
 import { defaultDurableAssetStore } from '../../asset-store/durable-asset-store';
 import { REVOLUTION_REFERENCE_VERSION, revolutionReferenceEnabled, revolutionReferenceFor } from './revolution-reference';
 import { buildGroundProgram, buildGroundSurface, crownCanopyAt, groundCoverRegions, groundHeightAt, groundProgramNotes, landuseAreaAt, PROCEDURAL_GROUND_VERSION, settleRoadsOnGround, type GroundProgram } from './procedural-ground';
+import { BRIDGE_BUILD_VERSION, buildBridgesLayer, measureWaterColour, proceduralBridgesEnabled, writeWaterGlb, WATER_VERSION, type BridgeBuildResult } from './bridge-build';
+import { fetchGroundedReferences } from '../../spatial/search-grounded-reference';
 import {
     coveredShare, frameToLatLng, paintGeneratedHeightProvenance, paintProvenance, selectPaintBuildings, tilePlanCoverage, writePaintGlb,
     GENERATED_HEIGHT_LABEL, PLAUSIBLE_DEFAULT_HEIGHT_M, VECTOR_ISOLATE_RADIUS_M, VECTOR_MASSING_VERSION,
@@ -492,6 +494,8 @@ export interface StagedLocationDeps {
      * The texture pass's optional model enhancement of the tile transfer (an image model, edge-gated); absent = that
      * rung is not attempted (tests, or no client). `densityTexelsPerMeter` caps the atlas density (default 20, 5 cm).
      */
+    /** Search-grounded reference images (search-grounded-reference.ts; the bridges' detail): a client with the image models; absent = none. */
+    groundedReferences?: () => Promise<GroundedReferenceClient>;
     textures?: {
         enhance?: EnhanceModelClient; enhanceModels?: string[]; maxDensityTexelsPerMeter?: number; maxSide?: number; disabled?: string;
         /** 'recreate' (default) removes the tile transfer's own baked shadow/highlight and recovers the material's true colour, gated on structure and hue/chroma; 'sharpen' is the earlier, lighting-locked mode. See texture-enhance.ts. */
@@ -4107,6 +4111,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     ground: { vertices: number; triangles: number; openVertices: number; terrainVertices: number; program?: Omit<GroundProgram, 'vertexRegion'> }; roads?: { roads: number; stations: number; measuredKerbs: number; defaultKerbs: number; triangles: number };
                     /** Prepared for the texture pass (procedural-materials.ts): the clays and the library fill; absent with the reason when it could not be. */
                     texturePass?: ProceduralTexturingSummary; texturePassUnavailable?: string;
+                    /** The bridges (bridge-build.ts) and the water: absent when off or when nothing crossed the water. */
+                    bridges?: BridgeBuildResult['stats'] & { notes: string[]; perBridge: Array<{ id: string; openings: number; supports: number; posts: number; read: boolean; references: number; detailAgreed: string[]; detailRejected: string[] }> };
+                    water?: { levelY: number; cells: number; triangles: number; colourSrgb: [number, number, number]; colourMeasured: boolean };
                 };
             };
             const massingPromise = runner.stage<DistrictMassingValue>({
@@ -4120,7 +4127,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     // detail the scan cannot resolve (ribs) from search-grounded references, when a model client is configured
                     const referenceClient = revolutionsOn && revolutionReferenceEnabled() && deps.vision && 'client' in deps.vision ? deps.vision.client : undefined;
                     const surfaceMode = proceduralSurfaceMode();
-                    const key = stageKey(DISTRICT_MASSING_VERSION, districtEDetailEnabled() ? DISTRICT_E_DETAIL_VERSION : 'no-detail', stripped.cacheKey, vectorKey, refined.cacheKey, covered.toFixed(1), String(DISTRICT_TEXEL_M), procedural ? `${PROCEDURAL_GROUND_VERSION}+${PROCEDURAL_ROADS_VERSION}${deps.textures?.disabled && surfaceMode === 'photo' ? '' : `+${PROCEDURAL_MATERIALS_VERSION}+${surfaceMode}`}` : 'carve', ...(revolutionsOn ? [REVOLUTION_FIT_VERSION] : []), ...(referenceClient ? [REVOLUTION_REFERENCE_VERSION] : []));
+                    const bridgesOn = procedural && proceduralBridgesEnabled();
+                    const key = stageKey(DISTRICT_MASSING_VERSION, districtEDetailEnabled() ? DISTRICT_E_DETAIL_VERSION : 'no-detail', stripped.cacheKey, vectorKey, refined.cacheKey, covered.toFixed(1), String(DISTRICT_TEXEL_M), procedural ? `${PROCEDURAL_GROUND_VERSION}+${PROCEDURAL_ROADS_VERSION}${deps.textures?.disabled && surfaceMode === 'photo' ? '' : `+${PROCEDURAL_MATERIALS_VERSION}+${surfaceMode}`}${bridgesOn ? `+${BRIDGE_BUILD_VERSION}+${WATER_VERSION}` : ''}` : 'carve', ...(revolutionsOn ? [REVOLUTION_FIT_VERSION] : []), ...(referenceClient ? [REVOLUTION_REFERENCE_VERSION] : []));
                     run.keys.massing = key;
                     const key8 = key.slice(0, 8);
                     // the scene object store: each rebuilt building, the ground and the streets kept as their own versioned
@@ -4129,7 +4137,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const objectStore = objectStoreEnabled() ? defaultDurableAssetStore() : undefined;
                     const reuseObjects = objectReuseEnabled();
                     const objectVersions = { massing: DISTRICT_MASSING_VERSION, texelM: DISTRICT_TEXEL_M, params: DISTRICT_MASSING_PARAMS, revolutions: revolutionsOn ? REVOLUTION_FIT_VERSION : 'off' };
-                    const groundHash = objectInputHash('ground', PROCEDURAL_GROUND_VERSION, stripped.cacheKey, covered.toFixed(1), ev.water, ev.roads, ev.landuse ?? []);
+                    const groundHash = objectInputHash('ground', PROCEDURAL_GROUND_VERSION, stripped.cacheKey, covered.toFixed(1), ev.water, ev.roads, ev.landuse ?? [], bridgesOn ? BRIDGE_BUILD_VERSION : 'no-bridges');
                     const roadsHash = objectInputHash('road', PROCEDURAL_ROADS_VERSION, stripped.cacheKey, covered.toFixed(1), vectorKey, ROAD_SURFACE_PARAMS);
                     const massProducer = { stage: 'massing', stageKey: key, layer: 'l2m', version: DISTRICT_MASSING_VERSION };
                     const massRows = () => {
@@ -4225,11 +4233,67 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             }
                         };
                         if (procedural) {
+                            const tileBytes = fs.readFileSync(stripped.devegetatedGlb);
+                            const bounds = { x0: -covered, z0: -covered, x1: covered, z1: covered };
+                            // the bridges and the water (bridge-build.ts): every crossing of a road or rail line over the water,
+                            // measured on the scan, its elevation read from a focused leaf-LOD extraction, its detail from
+                            // search-grounded references; the ground is not drawn under a deck or over the water
+                            let bridgeBuild: BridgeBuildResult | undefined;
+                            const bridgeNotes: string[] = [];
+                            if (bridgesOn) {
+                                const tb = Date.now();
+                                io.progress('measuring the bridges where the streets cross the water');
+                                const visionSrc = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
+                                const chain = visionSrc ? new VisionModelChain<string>({ client: visionSrc.client, candidates: visionSrc.candidates, signal: io.signal, ...chainExtras('massing'), ...(deps.sleep ? { sleep: deps.sleep } : {}) }) : undefined;
+                                const geoOrigin: GeodeticOrigin = { lat: extraction.geoAnchor.lat, lng: extraction.geoAnchor.lng, heightMeters: extraction.originEllipsoidalHeightM };
+                                try {
+                                    bridgeBuild = await buildBridgesLayer({
+                                        scan, ground, waterAt: look.waterAt, lines: [...ev.roads, ...(ev.rails ?? [])], within, bounds, tile: () => readTileTriangles(tileBytes), dir,
+                                        toGeodetic: (x, z) => { const g = scanToGeodetic(geoOrigin, x, 0, z); return { lat: g.lat, lng: g.lng }; },
+                                        focus: async (b, i) => {
+                                            const mid = b.stations[b.stations.length >> 1];
+                                            const g = scanToGeodetic(geoOrigin, mid.x, 0, mid.z);
+                                            const x = await deps.extract({ lat: g.lat, lng: g.lng, radiusM: b.lengthM / 2 + 15, outDir: path.join(dir, 'bridges', String(i), 'focus'), place: placeValue!, signal: io.signal, onProgress: m => io.progress(`bridge ${i + 1}: ${m}`) });
+                                            const tile = readTileTriangles(fs.readFileSync(x.texturedGlb));
+                                            const off = anchorOffset({ lat: x.geoAnchor.lat, lng: x.geoAnchor.lng, elevation: x.originEllipsoidalHeightM }, { lat: extraction.geoAnchor.lat, lng: extraction.geoAnchor.lng, elevation: extraction.originEllipsoidalHeightM });
+                                            for (let k = 0; k < tile.positions.length; k += 3) { tile.positions[k] += off[0]; tile.positions[k + 1] += off[1]; tile.positions[k + 2] += off[2]; }
+                                            return tile;
+                                        },
+                                        ...(chain ? {
+                                            read: async (image, mimeType, prompt) => {
+                                                const r = await chain.generate({ contents: [{ role: 'user', parts: [{ inlineData: { mimeType, data: image.toString('base64') } }, { text: prompt }] }], config: { responseMimeType: 'application/json', temperature: 0 } }, { stage: 'massing', thinkingBudget: 2048 });
+                                                const text = (r.response.candidates?.[0]?.content?.parts ?? []).filter((q: { thought?: boolean }) => !q.thought).map((q: { text?: string }) => q.text ?? '').join('').trim();
+                                                if (text) r.remember();
+                                                return text || undefined;
+                                            }
+                                        } : {}),
+                                        ...(deps.groundedReferences ? {
+                                            references: async req => {
+                                                const client = await deps.groundedReferences!();
+                                                const res = await fetchGroundedReferences(client, {
+                                                    place: placeValue!.formattedAddress, subject: req.subject, view: 'from the river bank, the whole side of the bridge straight on, in even daylight', aspectRatio: '16:9',
+                                                    questions: ['what stands on the parapet (lamp standards, columns, statues) and where', 'how the parapet is made (a solid wall, balusters, a railing)', 'the shape of the supports where they meet the water and what caps them', 'how the arches are edged']
+                                                }, { signal: io.signal });
+                                                return res.references.filter(r => r.image).map(r => ({ image: r.image!.data, mimeType: r.image!.mimeType, model: r.model, account: r.account }));
+                                            }
+                                        } : {}),
+                                        signal: io.signal, onProgress: m => io.progress(m)
+                                    });
+                                    bridgeNotes.push(...bridgeBuild.notes);
+                                } catch (err) {
+                                    if (isAbort(err)) throw err;
+                                    bridgeNotes.push(`the bridges could not be built (${errorMessage(err)}); the ground drapes over the water as before`);
+                                    cache.writeRunNote(runId, 'bridges', { error: errorMessage(err) });
+                                }
+                                timingsMs.bridges = Date.now() - tb;
+                                cache.writeRunNote(runId, 'bridges', { ...(bridgeBuild ? { stats: bridgeBuild.stats, bridges: bridgeBuild.bridges.map(b => b.record) } : {}), notes: bridgeNotes });
+                            }
+                            const underDeck = bridgeBuild?.underDeck ?? (() => false);
+                            const waterCut = bridgeBuild?.waterY !== undefined;
                             // the ground: one measured surface over the extraction, the photo's colour from above
                             const groundFile = path.join(dir, 'ground.glb');
                             const storedGround = findStoredLayer(objectStore, reuseObjects, 'ground', 'surface', frame, groundHash);
                             let groundStats: { vertices: number; triangles: number; openVertices: number; terrainVertices: number; program?: Omit<GroundProgram, 'vertexRegion'> };
-                            const tileBytes = fs.readFileSync(stripped.devegetatedGlb);
                             if (storedGround) {
                                 // the ground stored for these very inputs: its bytes as they were written
                                 io.progress('the ground is unchanged since it was stored: reusing it');
@@ -4241,8 +4305,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             } else {
                                 io.progress('building the ground from the measured street surface');
                                 const tg = Date.now();
-                                const bounds = { x0: -covered, z0: -covered, x1: covered, z1: covered };
-                                const surf = buildGroundSurface({ ground, within, bounds });
+                                const surf = buildGroundSurface({ ground, within, bounds, skip: (x, z) => underDeck(x, z) || (waterCut && look.waterAt(x, z)) });
                                 const groundPhoto = renderTopDownPhoto(tileBytes, surf.uvFrame, { texelM: 0.1, maxPx: 8192 });
                                 // the ground program: each land-use area of the vector evidence read as a region, its material decided from
                                 // the scan's roughness, the measured crowns, the carriageways and the photo's colour (the type codes ride along as labels)
@@ -4256,7 +4319,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 });
                                 const groundJpeg = jpegJs.encode({ data: Buffer.from(groundPhoto.rgba.buffer, groundPhoto.rgba.byteOffset, groundPhoto.rgba.byteLength), width: groundPhoto.width, height: groundPhoto.height }, 88).data;
                                 const groundExtras = {
-                                    version: PROCEDURAL_GROUND_VERSION, uvFrame: surf.uvFrame, stats: surf.stats, method: "the scan's open surface (within 1.5 m of the measured terrain, its local median) and the terrain where something stands on it; coloured from a top-down render of the tile photo",
+                                    version: PROCEDURAL_GROUND_VERSION, uvFrame: surf.uvFrame, stats: surf.stats, method: `the scan's open surface (within 1.5 m of the measured terrain, its local median) and the terrain where something stands on it${waterCut ? '; not drawn over the water areas' : ''}${bridgeBuild?.bridges.length ? ' nor under the rebuilt bridge decks' : ''}; coloured from a top-down render of the tile photo`,
                                     program, provenance: { heights: 'measured', material: 'generated: decided from the measurements per region (program.regions[].material.why)' },
                                     groundCover: { regions: groundCoverRegions(program, landuseAreas).map(({ loops, ...r }) => r), status: 'not planted: SB-Veggie (scripts/tile_vegetation.cpp) grows measured crowns only and has no low-vegetation input yet' }
                                 };
@@ -4287,7 +4350,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                     .map(c => ({ x: Number(c.stem[0]), z: Number(c.stem[1]), radiusM: (c.sectorRadii as number[]).reduce((a, b) => a + b, 0) / 16 }));
                                 const measured = measureRoadSurfaces({ roads: centrelines, grid, within, buildingAt: look.buildingAt, groundAt: ground.groundAt, avoid }, P);
                                 // where the streets run and how wide they are come from the scan; their levels from the measured ground
-                                const roads = settleRoadsOnGround(measured, (x, z) => groundHeightAt(ground, x, z).y, { liftM: P.liftM, defaultHalfWidthM: P.defaultHalfWidthM });
+                                // a street crossing a rebuilt bridge rides its deck
+                                const roads = settleRoadsOnGround(measured, (x, z) => bridgeBuild?.deckYAt(x, z) ?? groundHeightAt(ground, x, z).y, { liftM: P.liftM, defaultHalfWidthM: P.defaultHalfWidthM });
                                 if (roads.length) {
                                     const planar = buildRoadMesh(roads, P);
                                     const photo = renderTopDownPhoto(tileBytes, planar.uvFrame, { texelM: 0.1, maxPx: 4096 });
@@ -4299,9 +4363,26 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 }
                                 timingsMs.roads = Date.now() - tr;
                             }
+                            // the water: one sheet at its measured level, the tile photo's colour over it
+                            let waterStats: NonNullable<DistrictMassingValue['procedural']>['water'];
+                            const waterFile = path.join(dir, 'water.glb');
+                            if (bridgeBuild?.waterY !== undefined) {
+                                const tw = Date.now();
+                                const colour = measureWaterColour(tileBytes, look.waterAt, within, bounds);
+                                const w = writeWaterGlb(waterFile, { waterAt: look.waterAt, within, bounds, levelY: bridgeBuild.waterY, ...(colour ? { colourSrgb: colour.colourSrgb, colourTexels: colour.texels } : {}) });
+                                waterStats = { levelY: round(bridgeBuild.waterY, 2), cells: w.cells, triangles: w.triangles, colourSrgb: colour?.colourSrgb ?? [58, 68, 74], colourMeasured: !!colour };
+                                timingsMs.water = Date.now() - tw;
+                            }
+                            const bridgesFile = bridgeBuild?.file;
+                            const bridgesStats: NonNullable<DistrictMassingValue['procedural']>['bridges'] = bridgeBuild ? {
+                                ...bridgeBuild.stats, notes: bridgeNotes,
+                                perBridge: bridgeBuild.bridges.map(b => ({ id: b.record.id, openings: b.record.openings, supports: b.record.supports, posts: b.record.posts, read: !!b.record.reading, references: b.record.referenceImages, detailAgreed: Object.keys(b.record.detail ?? {}).filter(k => ['posts', 'rail', 'supports', 'arches'].includes(k)), detailRejected: (b.record.detail?.rejected ?? []).map(r => `${r.item}: ${r.reason}`) }))
+                            } : undefined;
                             const revolutions = await reviseRevolutions(['district_massing_textured.glb', 'district_massing_clay.glb']);
                             listBuildings();
                             if (plan && roadsStats && fs.existsSync(roadsFile)) manifests['roads.glb'] = wholeManifest('road', 'network', roadsHash, roadsFile, 'l2r', PROCEDURAL_ROADS_VERSION, ['measured', VECTOR_MODELLED_LABEL]);
+                            if (plan && bridgesFile) manifests['bridges.glb'] = wholeManifest('bridge', 'network', objectInputHash('bridge', BRIDGE_BUILD_VERSION, stripped.cacheKey, covered.toFixed(1), vectorKey), bridgesFile, 'l2b', BRIDGE_BUILD_VERSION, ['photo-inferred', 'generated']);
+                            if (plan && waterStats) manifests['water.glb'] = wholeManifest('water', 'surface', objectInputHash('water', WATER_VERSION, stripped.cacheKey, covered.toFixed(1), ev.water), waterFile, 'l1w', WATER_VERSION, ['generated']);
                             if (plan) writeLayerManifests(dir, manifests);
                             // the texture pass's inputs (user decision 2026-10-22: the staged texture pass on the rebuilt geometry, the
                             // surface library where no photo reaches; no baked shadows): clays and the library fill, read from the files
@@ -4312,7 +4393,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 try {
                                     const visionSrc = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
                                     texturePass = await prepareProceduralTexturing({
-                                        dir, tileBytes, files: { ground: groundFile, ...(fs.existsSync(roadsFile) ? { roads: roadsFile } : {}), massing: texturedFile },
+                                        dir, tileBytes, files: { ground: groundFile, ...(fs.existsSync(roadsFile) ? { roads: roadsFile } : {}), massing: texturedFile, ...(bridgesFile ? { bridges: bridgesFile } : {}) },
                                         buildingIds: okRows.map(r => r.id), ...(layer?.run ? { run: layer.run } : {}),
                                         include: (x, z) => within(x, z) && look.buildingAt(x, z) === 0 && !look.waterAt(x, z), library: loadSurfaceLibrary(),
                                         ...(visionSrc ? { chain: new VisionModelChain<string>({ client: visionSrc.client, candidates: visionSrc.candidates, signal: io.signal, ...chainExtras('massing'), ...(deps.sleep ? { sleep: deps.sleep } : {}) }) } : {}),
@@ -4326,7 +4407,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 }
                                 timingsMs.texturePrep = Date.now() - tp;
                             }
-                            return { value: { rebuilt: okRows.length, ...summary, caveats, ...(planeFirst ? { planeFirst } : {}), removedTriangles: 0, residualOffFootprint, timingsMs, ...(revolutions ? { revolutions } : {}), ...(objects ? { objects: { ...objects, groundReused: !!storedGround, roadsReused: !!storedRoads } } : {}), procedural: { ground: { vertices: groundStats.vertices, triangles: groundStats.triangles, openVertices: groundStats.openVertices, terrainVertices: groundStats.terrainVertices, ...(groundStats.program ? { program: groundStats.program } : {}) }, ...(roadsStats ? { roads: roadsStats } : {}), ...(texturePass ? { texturePass } : {}), ...(texturePassUnavailable ? { texturePassUnavailable } : {}) } } };
+                            return { value: { rebuilt: okRows.length, ...summary, caveats, ...(planeFirst ? { planeFirst } : {}), removedTriangles: 0, residualOffFootprint, timingsMs, ...(revolutions ? { revolutions } : {}), ...(objects ? { objects: { ...objects, groundReused: !!storedGround, roadsReused: !!storedRoads } } : {}), procedural: { ground: { vertices: groundStats.vertices, triangles: groundStats.triangles, openVertices: groundStats.openVertices, terrainVertices: groundStats.terrainVertices, ...(groundStats.program ? { program: groundStats.program } : {}) }, ...(roadsStats ? { roads: roadsStats } : {}), ...(texturePass ? { texturePass } : {}), ...(texturePassUnavailable ? { texturePassUnavailable } : {}), ...(bridgesStats ? { bridges: bridgesStats } : {}), ...(waterStats ? { water: waterStats } : {}) } } };
                         }
                         // the scan's own buildings out where the rebuilt ones stand: the clay remesh and tile_refine's textured twin alike
                         const clay = hideFootprintInGlb(fs.readFileSync(refined.clayGlb), footprint);
@@ -4346,9 +4427,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             : v.procedural?.texturePass ? [
                                 // clay, for the texture pass to texture (the tile photo transferred and relit, the library where it does not reach)
                                 { from: 'massing_clay.glb', as: `${base}_massing_${key8}.glb` }, { from: 'ground_clay.glb', as: `${base}_ground_${key8}.glb` },
-                                ...(fs.existsSync(path.join(dir, 'roads_clay.glb')) ? [{ from: 'roads_clay.glb', as: `${base}_proc_roads_${key8}.glb` }] : []), ...(v.revolutions?.accepted ? [{ from: 'revolutions.glb', as: `${base}_revolutions_${key8}.glb` }] : [])
+                                ...(fs.existsSync(path.join(dir, 'roads_clay.glb')) ? [{ from: 'roads_clay.glb', as: `${base}_proc_roads_${key8}.glb` }] : []), ...(v.revolutions?.accepted ? [{ from: 'revolutions.glb', as: `${base}_revolutions_${key8}.glb` }] : []),
+                                ...(fs.existsSync(path.join(dir, 'bridges_clay.glb')) ? [{ from: 'bridges_clay.glb', as: `${base}_bridges_${key8}.glb` }] : fs.existsSync(path.join(dir, 'bridges.glb')) ? [{ from: 'bridges.glb', as: `${base}_bridges_${key8}.glb` }] : []),
+                                ...(fs.existsSync(path.join(dir, 'water.glb')) ? [{ from: 'water.glb', as: `${base}_water_${key8}.glb` }] : [])
                             ]
-                            : v.procedural ? [{ from: 'district_massing_textured.glb', as: `${base}_massing_${key8}.glb` }, { from: 'ground.glb', as: `${base}_ground_${key8}.glb` }, ...(fs.existsSync(path.join(dir, 'roads.glb')) ? [{ from: 'roads.glb', as: `${base}_proc_roads_${key8}.glb` }] : []), ...(v.revolutions?.accepted ? [{ from: 'revolutions.glb', as: `${base}_revolutions_${key8}.glb` }] : [])]
+                            : v.procedural ? [{ from: 'district_massing_textured.glb', as: `${base}_massing_${key8}.glb` }, { from: 'ground.glb', as: `${base}_ground_${key8}.glb` }, ...(fs.existsSync(path.join(dir, 'roads.glb')) ? [{ from: 'roads.glb', as: `${base}_proc_roads_${key8}.glb` }] : []), ...(v.revolutions?.accepted ? [{ from: 'revolutions.glb', as: `${base}_revolutions_${key8}.glb` }] : []),
+                                ...(fs.existsSync(path.join(dir, 'bridges.glb')) ? [{ from: 'bridges.glb', as: `${base}_bridges_${key8}.glb` }] : []), ...(fs.existsSync(path.join(dir, 'water.glb')) ? [{ from: 'water.glb', as: `${base}_water_${key8}.glb` }] : [])]
                             : [{ from: 'district_massing_textured.glb', as: `${base}_massing_${key8}.glb` }, { from: 'remesh_carved.glb', as: `${base}_remesh_carved_${key8}.glb` }, ...(v.revolutions?.accepted ? [{ from: 'revolutions.glb', as: `${base}_revolutions_${key8}.glb` }] : [])],
                         bypass: bypass('massing')
                     });
@@ -4453,6 +4537,43 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         if (manifests['district_massing_textured.glb']) run.objectManifests.set(layers[0].objectId, { ...manifests['district_massing_textured.glb'], sourceFile: path.join(entry.dir, 'district_massing_textured.glb') });
                         if (manifests['ground.glb']) run.objectManifests.set(groundLayer.objectId, { ...manifests['ground.glb'], sourceFile: path.join(entry.dir, 'ground.glb') });
                         run.setGround(groundLayer.objectId);
+                        // the bridges (bridge-build.ts) and the water
+                        const pubBridges = entry.published.find(p => p.url.includes(`_bridges_${key8}`)), pubWater = entry.published.find(p => p.url.includes(`_water_${key8}`));
+                        const bst = v.procedural.bridges;
+                        if (pubBridges && bst?.bridges) {
+                            const agreed = bst.perBridge.flatMap(b => b.detailAgreed), rejected = bst.perBridge.flatMap(b => b.detailRejected);
+                            const bridgeLayer: StagedLayer = {
+                                objectId: layerObjectId(key, 'l2b'), stage: 'massing', layer: 'l2b', order: STAGES.massing.order, url: pubBridges.url, bytes: pubBridges.bytes,
+                                provenance: {
+                                    label: 'photo-inferred', measuredGeometry: false, confidence: bst.read ? 0.7 : 0.5,
+                                    method: `${BRIDGE_BUILD_VERSION}: each crossing of a street or rail line over the water measured on the scan (deck level, width, elevation probed on both faces), its openings (springing and crown), fascia and parapet read by the vision model off a tile photo elevation rendered from a focused leaf-LOD extraction (photo-inferred); the parapet's make, the supports' noses and caps, the arch rings and the posts read from search-grounded reference images where independent references agree and the scan does not contradict them (generated, never measured); built natively as sweeps, solids of revolution and replicators`,
+                                    sources, note: `${bst.bridges} bridge${bst.bridges === 1 ? '' : 's'}, ${bst.openings} openings; ${bst.read} elevation${bst.read === 1 ? '' : 's'} read, ${bst.focused} from a focused extraction; ${bst.referenced} reference reading${bst.referenced === 1 ? '' : 's'}${agreed.length ? `; detail agreed: ${[...new Set(agreed)].join(', ')}` : ''}${rejected.length ? `; left out: ${rejected.join('; ')}` : ''}${bst.notes.length ? `; ${bst.notes.join('; ')}` : ''}${texNote}`
+                                },
+                                provenanceLabels: ['photo-inferred', 'generated'], supersedes: [], revealAfter: [], reveal: { durationMs: 1200, stagger: 0.3, crossfadeFrom: [] },
+                                cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pubBridges.path),
+                                ...twinOr(pubBridges, 'the measured structure colour on every face (vertex colours; the texture pass could not be prepared)')
+                            };
+                            run.commit(bridgeLayer, { source: 'ProceduralBridges', resolvedAddress: placeValue!.formattedAddress, extra: texExtra({ bridges: bst.bridges }) });
+                            if (manifests['bridges.glb']) run.objectManifests.set(bridgeLayer.objectId, { ...manifests['bridges.glb'], sourceFile: path.join(entry.dir, 'bridges.glb') });
+                            layers.push(bridgeLayer);
+                        }
+                        if (pubWater && v.procedural.water) {
+                            const w = v.procedural.water;
+                            const waterLayer: StagedLayer = {
+                                objectId: layerObjectId(key, 'l1w'), stage: 'massing', layer: 'l1w', order: STAGES.remesh.order, url: pubWater.url, bytes: pubWater.bytes,
+                                provenance: {
+                                    label: 'generated', measuredGeometry: false, confidence: 0.6,
+                                    method: `${WATER_VERSION}: one flat sheet over Google's water areas at the level the scan measures (a low percentile of its surface over the water), in the median colour of the tile photo over the water, with generated ripples`,
+                                    sources, note: `level ${w.levelY} m, ${w.cells} cells; colour ${w.colourMeasured ? 'measured on the tile photo' : 'a default (too little water in the photo)'}; photogrammetry holds no water surface: the sheet is drawn, its level and colour measured`
+                                },
+                                provenanceLabels: ['generated'], supersedes: [], revealAfter: [], reveal: { durationMs: 1000, stagger: 0, crossfadeFrom: [] },
+                                cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pubWater.path),
+                                textured: ownTwin(pubWater, 'the tile photo\'s measured water colour with generated ripples')
+                            };
+                            run.commit(waterLayer, { source: 'ProceduralWater', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true } });
+                            if (manifests['water.glb']) run.objectManifests.set(waterLayer.objectId, { ...manifests['water.glb'], sourceFile: path.join(entry.dir, 'water.glb') });
+                            layers.push(waterLayer);
+                        }
                         if (pubRoads && v.procedural.roads) {
                             const r = v.procedural.roads;
                             const roadLayer: StagedLayer = {
@@ -4471,7 +4592,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             if (manifests['roads.glb']) run.objectManifests.set(roadLayer.objectId, { ...manifests['roads.glb'], sourceFile: path.join(entry.dir, 'roads.glb') });
                             layers.push(roadLayer);
                         }
-                        return { status: 'committed', value: v, layers, source: `procedural district: ${v.rebuilt} of ${v.buildings} buildings rebuilt, the ground measured${v.procedural.roads ? `, ${v.procedural.roads.roads} streets` : ''}; the scan superseded (kept as the reference)`, cached: entry.cached, builtAtMs: entry.builtAtMs };
+                        return { status: 'committed', value: v, layers, source: `procedural district: ${v.rebuilt} of ${v.buildings} buildings rebuilt, the ground measured${v.procedural.roads ? `, ${v.procedural.roads.roads} streets` : ''}${v.procedural.bridges?.bridges ? `, ${v.procedural.bridges.bridges} bridge${v.procedural.bridges.bridges === 1 ? '' : 's'} over the water` : ''}; the scan superseded (kept as the reference)`, cached: entry.cached, builtAtMs: entry.builtAtMs };
                     }
                     run.commit(massLayer, { source: 'DistrictMassing', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true, rebuilt: v.rebuilt } });
                     if (manifests['district_massing_textured.glb']) run.objectManifests.set(massLayer.objectId, { ...manifests['district_massing_textured.glb'], sourceFile: path.join(entry.dir, 'district_massing_textured.glb') });
