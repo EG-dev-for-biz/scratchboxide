@@ -127,22 +127,23 @@ sb.SbVeggieTree:
   .scale(*args) -> SbVeggieTree  # Scales position and size about the origin: one factor, or (sx, sy, sz) (sizes take sy for height, sx/sz for r…
   .copy() -> SbVeggieTree
   .to_spec() -> dict
-sb.sdf.Field:
-  .union(other: Field, k=0.0) -> Field
-  .subtract(other: Field, k=0.0) -> Field
-  .intersect(other: Field, k=0.0) -> Field
-  .translate(offset) -> Field
-  .rotate(axis, degrees) -> Field
-  .scale(factor) -> Field
-  .round(radius) -> Field
-  .shell(thickness) -> Field
-  (+6 more)
 sb.Human:
   attributes: mesh: Any (read-only), role, height, gender_beta, pose, position, facing_deg, surface, surface_y_offset
   sb.Human(role='scale_figure', height=1.76, gender_beta=0.0, pose='standing_survey', position=(0.0, 0.0, 0.0), facing_deg=0.0, surface=None, surface_y_offset=0.0)
   .stand_on(surface, offset=(0.0, 0.0), y_offset=0.0, facing_deg=None) -> Human
-  (+1 more)
-Also in the API (not listed here): sb.ShapeKeyBlock; sb.StudioHuman; sb.math.Vec2; sb.relief.Layer; sb.Scene; sb.hair.HairGuide; sb.RomanOrder; sb.Structure; sb.Terrain; sb.architecture; sb.architecture.BuildingConfig; sb.constants; sb.geospatial; sb.human; …
+  .build_mesh() -> Any
+sb.math.Vec2:
+  attributes: x: float, y: float
+  sb.math.Vec2()
+  sb.math.Vec2(x, y)
+sb.Scene:
+  attributes: units, terrains, structures, standalone_meshes, scattered_meshes, trees, seed
+  sb.Scene(seed=1337, units='meters')
+  (+15 more)
+sb.nature:
+  attributes: SbVeggieTree
+  (+3 more)
+Also in the API (not listed here): sb.StudioHuman; sb.RomanOrder; sb.Structure; sb.Terrain; sb.architecture; sb.constants; sb.geospatial; sb.human; sb.layout; sb.pbr; sb.validation; sb.composer.StudioLight; sb.Armature; sb.PbrMaterialWrapper; …
 `;
 
 /** The same reference within the small budget used in the execute_3d_python_script description. */
@@ -152,7 +153,7 @@ sb functions (import scratchbox as sb): create_arched_blister(bounds=(0.35, 0.45
 sb.geometry.Mesh: attributes: name: str, material: PbrMaterial, vertex_count: int (read-only), triangle_count: int (read-only), bounds: AABB (read-only), vertices: list[Vertex] (read-only), indices: list[int] (read-only); Mesh(); Mesh(name='mesh'); get_positions_flat() -> bytes; get_normals_flat() -> bytes; get_indices_bytes() -> bytes; add_vertex(pos: Vec3, norm: Vec3=..., uv: Vec2=..., color: Vec4=...); add_triangle(i0, i1, i2); append(other) -> Mesh; translate(*args) -> Mesh; scale(*args) -> Mesh; rotate_x(angle_deg) -> Mesh; rotate_y(angle_deg) -> Mesh; rotate_z(angle_deg) -> Mesh; set_color(color: Vec4) -> Mesh; multiply_vertex_colors(factor: Vec4) -> Mesh; set_material(mat) -> Mesh; apply_material(mat) -> Mesh; compute_curvature_ao(intensity=0.65) -> Mesh; apply_procedural_weathering(frequency=2.0, amplitude=0.15) -> Mesh; displace_along_normals(frequency=2.0, amplitude=0.05) -> Mesh; tessellate_and_displace(tessellation_factor=4, displacement_scale=0.06, noise_freq=32.0, noise_amp=0.015) -> Mesh; clear(); recompute_normals() -> Mesh; recompute_smooth_normals() -> Mesh; weld_identical_vertices() -> int; weld_vertices(epsilon=0.0001) -> Mesh; recompute_bounds() -> Mesh; subdivide(iterations=1) -> Mesh; taper(factor=0.5, axis=1) -> Mesh (+25 more)
 sb.math.Vec3: attributes: x: float, y: float, z: float; Vec3(); Vec3(x, y, z); length() -> float; normalized() -> Vec3; dot(arg: Vec3) -> float; cross(arg: Vec3) -> Vec3
 sb.PbrMaterial: attributes: base_color: Vec4, clearcoat: float, clearcoat_roughness: float, color: Vec4, double_sided: bool, emissive: Vec3, emissive_intensity: float, extras_json: str, ior: float, metallic: float, metalness: float, name: str, roughness: float, thickness: float, transmission: float; PbrMaterial(name='defaultMaterial', **kwargs) -> PbrMaterial (+25 more)
-Also in the API (not listed here): sb.math.Vec4; sb.SbVeggieTree; sb.sdf.Field; sb.Human; sb.ShapeKeyBlock; sb.StudioHuman; sb.math.Vec2; sb.relief.Layer; sb.Scene; sb.hair.HairGuide; sb.RomanOrder; …
+Also in the API (not listed here): sb.math.Vec4; sb.SbVeggieTree; sb.Human; sb.math.Vec2; sb.Scene; sb.StudioHuman; sb.RomanOrder; sb.Structure; sb.Terrain; sb.architecture; sb.constants; sb.geospatial; …
 `;
 
 /** Names each module and class of the stubs defines (classes by their short name), for the type-check gate's

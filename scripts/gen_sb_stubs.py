@@ -1059,7 +1059,8 @@ def summary_entries(models: dict[str, ModuleModel], max_params: int = MAX_SUMMAR
                 for text, weight in ((s.returns or "", 2), (s.params, 1)):
                     for nm in set(re.findall(r"[A-Za-z_][\w.]*", text)):
                         c = resolve_class(nm, mod)
-                        if c and c != owner:  # a class's own methods returning it say nothing about its reach
+                        # a class's own methods, or its own submodule's functions (sb.sdf.* -> sdf.Field), say nothing about its reach
+                        if c and c != owner and not (mod != ROOT_PACKAGE and c.startswith(f"{mod}.")):
                             refs[c] = refs.get(c, 0) + weight
             if m.kind == "property":
                 c = resolve_class(m.value_type, mod)
