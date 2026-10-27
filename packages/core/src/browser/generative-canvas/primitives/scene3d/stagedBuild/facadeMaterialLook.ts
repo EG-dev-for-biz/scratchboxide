@@ -15,7 +15,8 @@
  *    interior as base colour; their reflection is the scene's own environment: a cube render of the scene from the layer's
  *    centre with the layer's own extent clipped away by the near plane (so the probe sees the street, the neighbours and
  *    the sky, not the building's inside), prefiltered (PMREM) and set as the material's environment. It moves with the
- *    camera like a reflection, never painted on.
+ *    camera like a reflection, never painted on. Metal texels (parameters B > 0: pipeline K's material regions) see the
+ *    same environment; every other texel the scene's direct light only.
  *  - Measured coursing: the kernel's course profile (a tangent-space normal over one pitch) is applied by world height at
  *    each reading's pitch and phase, where the parameters texture (G = reading + 1) says so; the relief fades out where a
  *    course is smaller than a pixel. Albedo is untouched.
@@ -99,9 +100,11 @@ const FRAGMENT_ENV_GATE = `
 #include <lights_fragment_maps>
 #if defined( USE_MAP ) && defined( USE_ENVMAP )
     {
-        float sbGlass = texture2D( uSbMatParams, vMapUv ).r > 0.0 ? 1.0 : 0.0;
-        iblIrradiance *= sbGlass;
-        radiance *= sbGlass;
+        // glass and metal see the environment (a metal's look is its reflection); other texels the scene's direct light only
+        vec4 sbP = texture2D( uSbMatParams, vMapUv );
+        float sbEnv = sbP.r > 0.0 || sbP.b > 0.0 ? 1.0 : 0.0;
+        iblIrradiance *= sbEnv;
+        radiance *= sbEnv;
     }
 #endif
 `;

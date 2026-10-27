@@ -43,6 +43,7 @@ import { encodePng } from './png-encode';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { decodeImageInMemory, type RgbaImage8 } from './tile-texture-transfer';
 import { harmonizeTextures, surfaceClassMasks, TEXEL_ROOF, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
+import { describeMaterialRegions, planMaterialRegions, readRegionClasses, writeMaterialRegions, type MaterialRegionsPlan, type MaterialRegionsReport, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import {
     boxDownsample, cropImage, enhancementGate, padToModelAspect, RECREATE_GATE, recreatePrompt,
     type EnhanceModelClient, type EnhanceModelRequest
@@ -79,6 +80,8 @@ export interface TileRefineTwin {
     triangles: number;
     recreate?: TileRefineRecreateReport;
     harmonize?: TextureHarmonizeReport;
+    /** Pipeline K's material regions (pipeline-k/material-regions.ts), or why they were not drawn. */
+    materialRegions?: MaterialRegionsReport | { skipped: string };
 }
 
 function triArea(p: Float64Array, a: number, b: number, c: number): number {
@@ -157,7 +160,7 @@ function resizeToExact(img: RgbaImage8, width: number, height: number): RgbaImag
 }
 
 /** The twin of tile_refine's photo-textured output `texturedGlb` (its bytes) for the layer `layerKey`. */
-export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, opts?: { recreate?: TileRefineRecreateOptions; /** Pipeline K: the de-lit photos colour-matched per side and height band and their seams levelled (pipeline-k/texture-harmonize.ts), measured from this ground. */ harmonize?: { groundY: number } }): Promise<TileRefineTwin> {
+export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, opts?: { recreate?: TileRefineRecreateOptions; /** Pipeline K: the de-lit photos colour-matched per side and height band and their seams levelled (pipeline-k/texture-harmonize.ts), measured from this ground. */ harmonize?: { groundY: number }; /** Pipeline K: roughness, metalness and normal under the photos by appearance region (pipeline-k/material-regions.ts), one library set per class. */ materialRegions?: { sets: (classes: RegionClass[]) => Promise<RegionSet[]> } }): Promise<TileRefineTwin> {
     const g = parseGlbBytes(texturedGlb);
     const json = JSON.parse(JSON.stringify(g.json));
     const materials: any[] = json.materials ?? (json.materials = []);
@@ -233,6 +236,16 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     let harmonize: TextureHarmonizeReport | undefined;
     if (opts?.harmonize && finalImage.size) harmonize = harmonizeTextures(g, json, finalImage, opts.harmonize.groundY, undefined, surfaces);
 
+    // pipeline K: material regions on the harmonised photos (accepted glass edits them before they are encoded)
+    let regionsPlan: MaterialRegionsPlan | undefined, regionsSkipped: string | undefined;
+    if (opts?.materialRegions && finalImage.size) {
+        const classes = readRegionClasses(json, finalImage);
+        if (!classes) regionsSkipped = 'no rebuilt facade photo to read appearance classes from';
+        else {
+            try { regionsPlan = planMaterialRegions(g, json, finalImage, classes, await opts.materialRegions.sets(classes)); } catch (err) { regionsSkipped = `the library sets could not be resolved: ${err instanceof Error ? err.message : String(err)}`; }
+        }
+    }
+
     // the binary chunk: appended to below, both for the final (de-lit or recreated) photos and the confidence texels
     const bin: Uint8Array[] = [g.bin];
     let binLength = g.bin.byteLength;
@@ -279,6 +292,27 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     };
     const photoConf = photoArea > 0 ? confTexture(indexOf('tile-photo'), RUNG_TILE_PHOTO) : -1;
     const bareConf = bareArea > 0 ? confTexture(indexOf('clay'), TEXTURE_RUNG_CLAY) : -1;
+    if (regionsPlan) {
+        const r = regionsPlan.report;
+        provenance.push({ source: 'material-regions', label: 'generated', method: describeMaterialRegions(r), coverage: photoArea / total });
+        const regionProvenance = [provenance.length - 1];
+        if (r.texels.glass) {
+            provenance.push({ source: 'facade-material-reading', label: 'photo-inferred', method: "glass by the facade material reading's tile-only test (a regular lattice of regions darker than the wall, within the bays of facades with a pier rhythm): base colour the region's measured interior, roughness of float glass, dielectric", coverage: (photoArea / total) * (r.texels.glass / Math.max(1, r.texels.total)) });
+            regionProvenance.push(provenance.length - 1);
+        }
+        json.samplers.push({ magFilter: 9729, minFilter: 9729, wrapS: 10497, wrapT: 10497 });
+        const linear = json.samplers.length - 1;
+        writeMaterialRegions(json, regionsPlan, (img, mimeType, name) => {
+            const bytes = encodeAs(img, mimeType);
+            pad();
+            json.bufferViews.push({ buffer: 0, byteOffset: binLength, byteLength: bytes.length });
+            bin.push(bytes);
+            binLength += bytes.length;
+            json.images.push({ name, mimeType, bufferView: json.bufferViews.length - 1 });
+            json.textures.push({ sampler: linear, source: json.images.length - 1, name });
+            return json.textures.length - 1;
+        }, regionProvenance);
+    }
     materials.forEach((m, mi) => {
         const conf = photo(mi) ? photoConf : bareConf;
         if (conf < 0) return;
@@ -299,5 +333,5 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     let o = 0;
     for (const b of bin) { out.set(b, o); o += b.byteLength; }
     const ladderRung = rungShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1);
-    return { glb: assembleGlb(json, out), rungShares, provenance, ladderRung, triangles, ...(recreate ? { recreate } : {}), ...(harmonize ? { harmonize } : {}) };
+    return { glb: assembleGlb(json, out), rungShares, provenance, ladderRung, triangles, ...(recreate ? { recreate } : {}), ...(harmonize ? { harmonize } : {}), ...(regionsPlan ? { materialRegions: regionsPlan.report } : regionsSkipped ? { materialRegions: { skipped: regionsSkipped } } : {}) };
 }

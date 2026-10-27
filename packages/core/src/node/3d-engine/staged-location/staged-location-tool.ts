@@ -45,6 +45,7 @@ import { loadScanFit } from '../scan-fit-loader';
 import { createDefaultStationImageGenerator } from '../../spatial/BeautifyStationService';
 import { createFalTrellisClient } from './pipeline-i/fal-trellis';
 import { createFalMeshyClient } from './pipeline-i/fal-meshy';
+import { resolveRegionSets } from './pipeline-k/material-sets';
 import { StageCache, stagedWorkspaceRoot } from './stage-cache';
 import { genAiEnhanceClient } from './texture-enhance';
 import { lightingCorrectionEnabled, lightingModels } from './texture-lighting';
@@ -227,6 +228,8 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
         // seed) or Trellis (I, best of six seeds) on Fal.ai makes the model; made on first use, so a build without FAL_KEY
         // fails pipeline I/J with that reason
         pipelineI: { generator: () => createDefaultStationImageGenerator({ workspaceRoot: cache.dir }), model: (name?: string) => name === 'meshy' ? createFalMeshyClient() : createFalTrellisClient() },
+        // pipeline K's material regions: a texture library set per appearance class, fetched from the library bucket
+        pipelineK: { materialSets: (classes, o) => resolveRegionSets(classes, o) },
         ...(elevationService ? {
             elevation: {
                 sample: async (points: Array<{ lat: number; lng: number }>) => {

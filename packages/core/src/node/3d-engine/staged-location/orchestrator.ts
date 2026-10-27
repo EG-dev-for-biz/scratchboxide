@@ -185,6 +185,7 @@ import { PIPELINE_G_VERSION, runPipelineG, stagedPipelineG } from './pipeline-g/
 import { H_BUDGET_MARGIN_MS, H_POLICY, PIPELINE_H_VERSION, stagedProcedural } from './pipeline-h/pipeline-h';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK } from './pipeline-k/pipeline-k';
 import { TEXTURE_HARMONIZE_VERSION, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
+import { describeMaterialRegions, MATERIAL_REGIONS_VERSION, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE, PIPELINE_I_VERSION, TRELLIS_SEEDS, runPipelineI } from './pipeline-i/pipeline-i';
 import { PROJECT_MAX_RELIEF_M, pipelineIRefineEnabled, refinePipelineI, type RefineOutcome } from './pipeline-i/refine';
 import { captureBuildingTrainingInBackground, sweepPendingBuildingTraining, type BuildingTrainingCaptureInput } from '../../cloud-store/building-training-capture';
@@ -511,6 +512,8 @@ export interface StagedLocationDeps {
      */
     /** Search-grounded reference images (search-grounded-reference.ts; the bridges' detail): a client with the image models; absent = none. */
     groundedReferences?: () => Promise<GroundedReferenceClient>;
+    /** Pipeline K's material regions: one texture library set per appearance class (pipeline-k/material-sets.ts); absent = the stage is not run (tests, stand-in deps). */
+    pipelineK?: { materialSets?: (classes: RegionClass[], opts: { signal?: AbortSignal; progress?: (m: string) => void }) => Promise<RegionSet[]> };
     textures?: {
         enhance?: EnhanceModelClient; enhanceModels?: string[]; maxDensityTexelsPerMeter?: number; maxSide?: number; disabled?: string;
         /** 'recreate' (default) removes the tile transfer's own baked shadow/highlight and recovers the material's true colour, gated on structure and hue/chroma; 'sharpen' is the earlier, lighting-locked mode. See texture-enhance.ts. */
@@ -2525,7 +2528,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 return 'committed';
             };
             /** A district's twin: tile_refine's own photo-textured remesh (tile-refine-twin.ts). */
-            const textureFromRefine = async (target: TexTarget, stage: StageId) => {
+            const textureFromRefine = async (target: TexTarget, stage: StageId, io: StageIO) => {
                 const src = refineTextured.get(target.layer.objectId)!;
                 let bytes: Uint8Array = fs.readFileSync(src);
                 // a district staged around a kept structure: its twin loses the structure's footprint as its clay layer did
@@ -2534,15 +2537,22 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // pipeline K: no per-photo model recreate (it treats neighbouring photos differently); the de-lit photos are
                 // harmonised instead, one colour per side and height band with their seams levelled
                 const harmonizeOn = pipelineK && isolateOk;
-                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '');
+                // pipeline K's material regions: only with the app's texture library (deps.pipelineK), SCRATCHBOX_K_MATERIAL_REGIONS=0 off
+                const materialSets = harmonizeOn && process.env.SCRATCHBOX_K_MATERIAL_REGIONS?.trim() !== '0' ? deps.pipelineK?.materialSets : undefined;
+                if (harmonizeOn && !materialSets) cache.writeRunNote(runId, 'pipeline_k_materials', { skipped: deps.pipelineK?.materialSets ? 'SCRATCHBOX_K_MATERIAL_REGIONS=0' : 'no texture library in this build\'s services' });
+                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? MATERIAL_REGIONS_VERSION : '');
                 const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport }>('textures', key, async dir => {
-                    const twin = await tileRefineTwin(bytes, target.layer.layer, harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0 } } : enhance ? {
+                    const twin = await tileRefineTwin(bytes, target.layer.layer, harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0 }, ...(materialSets ? { materialRegions: { sets: (classes: RegionClass[]) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m) }) } } : {}) } : enhance ? {
                         recreate: {
                             client: enhance, ...(deps.textures?.enhanceModels ? { models: deps.textures.enhanceModels } : {}),
                             budgetMs: TILE_REFINE_RECREATE_BUDGET_MS
                         }
                     } : undefined);
                     if (twin.harmonize) cache.writeRunNote(runId, 'pipeline_k_texture', { version: TEXTURE_HARMONIZE_VERSION, layer: target.layer.layer, ...twin.harmonize });
+                    if (twin.materialRegions) {
+                        cache.writeRunNote(runId, 'pipeline_k_materials', { layer: target.layer.layer, ...twin.materialRegions });
+                        io.progress('skipped' in twin.materialRegions ? `material regions not drawn: ${twin.materialRegions.skipped}` : describeMaterialRegions(twin.materialRegions));
+                    }
                     fs.writeFileSync(path.join(dir, 'twin.glb'), twin.glb);
                     return { value: { rungShares: twin.rungShares, provenance: twin.provenance, ladderRung: twin.ladderRung, triangles: twin.triangles, ...(twin.harmonize ? { harmonize: twin.harmonize } : {}) } };
                 }, { publish: () => [{ from: 'twin.glb', as: `${base}_${target.layer.layer}_tex_${key.slice(0, 8)}.glb` }], bypass: bypass('textures') });
@@ -2626,7 +2636,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (!targets.length) return { status: 'skipped', source: '', reason: 'no committed mesh layer to texture' };
                     for (const t of targets) handled.add(t.layer.objectId);
                     if (mode === 'tile-refine') {
-                        await step('tileRefineTwins', () => Promise.all(targets.map(async t => proceduralFillOf(t.layer) ? withSlot(async () => { await textureWith({ ...t, surfaces: [] }, await getTileSrc(io.signal), io, 'textures'); }) : withSlot(() => textureFromRefine(t, 'textures')))));
+                        await step('tileRefineTwins', () => Promise.all(targets.map(async t => proceduralFillOf(t.layer) ? withSlot(async () => { await textureWith({ ...t, surfaces: [] }, await getTileSrc(io.signal), io, 'textures'); }) : withSlot(() => textureFromRefine(t, 'textures', io)))));
                         textureValue = value('running');
                         return { status: 'committed', value: textureValue, layers: outcomes.map(o => run.state.layers.find(l => l.objectId === o.layer.objectId)!).filter(Boolean), source: `${describeTextures(textureValue)}; the twins of later layers follow as they land`, cached: outcomes.every(o => o.cached), breakdownMs: { ...mainMs, total: now() - started } };
                     }
@@ -2689,7 +2699,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             await withSlot(() => textureWith({ ...t, surfaces: [] }, src, io, 'textures-late'));
                             return;
                         }
-                        if (mode === 'tile-refine') { await withSlot(() => textureFromRefine(t, 'textures-late')); return; }
+                        if (mode === 'tile-refine') { await withSlot(() => textureFromRefine(t, 'textures-late', io)); return; }
                         // a fitted layer is textured with the fit's charts: they are known once the fit stage has returned (it commits its
                         // layers just before), so the layer is not textured twice
                         await fitDecided.promise;
