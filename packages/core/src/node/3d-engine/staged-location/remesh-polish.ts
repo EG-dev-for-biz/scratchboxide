@@ -19,7 +19,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { cleanRemesh, remeshCleanupEnabled, REMESH_CLEANUP_VERSION, type RemeshCleanupStats } from './remesh-cleanup';
-import { FACADE_LATTICE_PARAMS, FACADE_LATTICE_VERSION, rebuildFacadesOnLattice } from './facade-lattice';
+import { FACADE_LATTICE_PARAMS, FACADE_LATTICE_VERSION, rebuildFacadesOnLattice, type TearReport } from './facade-lattice';
 
 export const REMESH_POLISH_VERSION = `remesh-polish/1(${REMESH_CLEANUP_VERSION},${FACADE_LATTICE_VERSION})`;
 
@@ -30,7 +30,7 @@ export function facadeLatticeEnabled(env: NodeJS.ProcessEnv = process.env): bool
 
 export interface RemeshPolishStats {
     cleanup?: RemeshCleanupStats;
-    lattice?: { facades: number; rebuilt: number; cells: number; removedTriangles: number; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number] }> };
+    lattice?: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears?: TearReport; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number] }> };
 }
 
 export interface PolishedRemesh { clayGlb: string; texturedGlb?: string; cacheKey: string; stats: RemeshPolishStats }
@@ -66,6 +66,10 @@ export function polishRemesh(input: { clayGlb: string; texturedGlb?: string; cac
 export function describePolish(s: RemeshPolishStats): string {
     const parts: string[] = [];
     if (s.cleanup) parts.push(`${s.cleanup.piecesRemoved} loose scan pieces removed (${s.cleanup.areaRemovedM2} m²), the surface smoothed with its edges kept (mean shift ${s.cleanup.meanShiftM} m, at most 0.3 m)`);
-    if (s.lattice) parts.push(`${s.lattice.rebuilt} of ${s.lattice.facades} rectified facades rebuilt on the lines their photo shows (${s.lattice.cells} cells; lines photo-inferred, depths measured and averaged along each storey's repeats)`);
+    if (s.lattice) {
+        const t = s.lattice.tears;
+        parts.push(`${s.lattice.rebuilt} of ${s.lattice.facades} rectified facades rebuilt on the lines their photo shows (${s.lattice.cells} cells; lines photo-inferred, depths measured and averaged along each storey's repeats)` +
+            (t ? `; tear audit: ${t.found ? `${t.found} torn pixels found, ${t.restoredTriangles} scan triangles put back${t.droppedFacades.length ? `, ${t.droppedFacades.length} facades left as scanned because a tear stayed` : ''}` : 'no tear'}${t.left ? `, ${t.left} torn pixels left` : ''}` : ''));
+    }
     return parts.join('; ');
 }

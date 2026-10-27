@@ -18,7 +18,7 @@ const button = (label: string) => STARTER_BUTTONS.find(b => b.label === label)!;
 
 describe('new-chat starter buttons pick a varied example', () => {
     it('3D Scene, System Spec and KPI Dashboard each have many distinct examples', () => {
-        for (const label of ['3D Scene', '3D Building', 'System Spec', 'KPI Dashboard']) {
+        for (const label of ['3D Scene', 'System Spec', 'KPI Dashboard']) {
             const prompts = button(label).prompts;
             expect(prompts.length, label).toBeGreaterThanOrEqual(8);
             expect(new Set(prompts).size, `${label} has duplicates`).toBe(prompts.length);
@@ -42,11 +42,13 @@ describe('new-chat starter buttons pick a varied example', () => {
         expect(seen.size).toBe(b.prompts.length);
     });
 
-    it('3D Building asks for one isolated building rebuilt by the procedural pipeline', () => {
-        for (const p of button('3D Building').prompts) {
-            expect(p).toMatch(/^Build a procedural 3D building of /);
-            expect(p).toMatch(/isolate it and rebuild it from scratch with the procedural pipeline/);
-        }
+    it('3D Building always sends the Empire State Building, straightened from Google Maps (pipeline K), never a procedural rebuild', () => {
+        const b = button('3D Building');
+        expect(b.prompts).toHaveLength(1);
+        const p = pickStarterPrompt(b, () => 0.99, memoryStorage());
+        expect(p).toBe(b.prompts[0]);
+        expect(p).toMatch(/^Build a 3D building of the Empire State Building at 350 Fifth Avenue, New York: isolate it and straighten it from Google Maps/);
+        expect(p).not.toMatch(/procedural/);
     });
 
     it('a single-example button always sends it, and storage that throws still works', () => {

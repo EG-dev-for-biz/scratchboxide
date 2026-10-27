@@ -72,7 +72,8 @@ export const STAGED_CLAY_TOOL_DESCRIPTION =
 
 export const STAGED_ISOLATE_DESCRIPTION =
     'Return only the structure at the anchor (its whole connected footprint and everything above it, never cut, with a small ground apron) instead of the ' +
-    'whole district, and rebuild it: procedurally by default (pipeline G, see procedural), or with procedural false a model of the scan on the vector ' +
+    'whole district, and rebuild it: by default the real scan straightened with its own photo (pipeline K, see pipeline), with procedural true a procedural ' +
+    'rebuild (see procedural and pipeline), or with procedural false a model of the scan on the vector ' +
     'massing with facade detail read from tile photos and Street View images (up to 4 per building, Google captures only), labelled photo-inferred. The ' +
     'extraction is sized to the structure, so radiusMeters is ignored. Use it when the user asks for one building or object rather than an area.';
 
@@ -163,6 +164,12 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
         }
     }
     const place = parsePlaceArg(toolName, args.place);
+    const asked = args.pipeline === 'g' || args.pipeline === 'h' || args.pipeline === 'i' || args.pipeline === 'j' || args.pipeline === 'k' ? args.pipeline : undefined;
+    // one building is pipeline K's, the scan straightened with its own photo, from the chat and the 3D Building button alike
+    // (user decision 2026-10-26), unless the caller asks for a procedural rebuild (procedural true, or a procedural pipeline by
+    // name or by SCRATCHBOX_STAGED_PROCEDURAL) or for the scan detailed (procedural false)
+    const envProcedural = (process.env.SCRATCHBOX_STAGED_PROCEDURAL ?? '').trim().toLowerCase();
+    const pipeline = asked ?? (args.isolate === true && args.procedural === undefined && !['g', 'h', 'i', 'j'].includes(envProcedural) ? 'k' : undefined);
     const radiusM = typeof args.radiusMeters === 'number' && args.radiusMeters > 0 ? args.radiusMeters : undefined;
     return {
         request: {
@@ -173,12 +180,11 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
             ...(treeTriangleBudget !== undefined ? { treeTriangleBudget } : {}),
             stageIntoActiveScene: args.stageIntoActiveScene === true,
             ...(typeof args.enhance === 'boolean' ? { enhance: args.enhance } : {}),
-            // one building is rebuilt procedurally by pipeline G unless the caller asks for its scan detailed (user decision 2026-10-22)
-            // or for pipeline K (the scan itself, straightened)
-            ...(args.isolate === true && args.procedural !== false && args.pipeline !== 'k' ? { procedural: true } : {}),
+            // a procedural rebuild when asked for (above); never for pipeline K or a scan asked to be detailed
+            ...(args.isolate === true && args.procedural !== false && pipeline !== 'k' ? { procedural: true } : {}),
             // which pipeline ('g', 'h', 'i' or 'j' procedural, pipeline-h/pipeline-h.ts stagedProcedural reads it, else the environment;
             // 'k' the straightened scan, pipeline-k/pipeline-k.ts)
-            ...(args.pipeline === 'g' || args.pipeline === 'h' || args.pipeline === 'i' || args.pipeline === 'j' || args.pipeline === 'k' ? { pipeline: args.pipeline } : {}),
+            ...(pipeline ? { pipeline } : {}),
             ...(place ? { place } : {})
         },
         ...(retry ? { retry } : {}),

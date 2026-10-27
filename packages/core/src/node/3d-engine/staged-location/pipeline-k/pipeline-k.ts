@@ -26,7 +26,7 @@ import * as path from 'path';
 import { Worker } from 'worker_threads';
 import { workerTsRegisterSource } from '../../../worker-ts-register';
 import { FACADE_LATTICE_PARAMS, type ReliefFacade } from '../facade-lattice';
-import { ORTHO_RECTIFY_PARAMS, ORTHO_RECTIFY_VERSION, type OrthoRectifyParams, type OrthoRectifyReport } from './ortho-rectify';
+import { ORTHO_RECTIFY_PARAMS, ORTHO_RECTIFY_VERSION, uncoveredMaskName, type OrthoRectifyParams, type OrthoRectifyReport } from './ortho-rectify';
 import type { RectifyJob, RectifyMessage } from './ortho-rectify-worker';
 
 export const PIPELINE_K_VERSION = `pipeline-k/1(${ORTHO_RECTIFY_VERSION})`;
@@ -116,6 +116,14 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
         // a facade that failed keeps its original ortho
         for (const m of msgs) if (m.error) { const f = todo.find(x => x.facadeId === m.facadeId)!; fs.copyFileSync(path.join(srcDir, f.image), path.join(tmp, f.image)); }
         const reports = todo.map(f => msgs.find(m => m.facadeId === f.facadeId) ?? { facadeId: f.facadeId, error: 'no report came back' });
+        // a rectified facade names its uncovered mask (the rebuild reads coverage from it, its ortho's holes being filled) and its fill
+        for (const f of facadesJson.facades) {
+            const rep = reports.find(x => x.facadeId === f.facadeId)?.report;
+            if (!rep || !fs.existsSync(path.join(tmp, uncoveredMaskName(f.image)))) continue;
+            f.uncoveredMask = uncoveredMaskName(f.image);
+            const filled = rep.holes.fromRepeats + rep.holes.fromStoreys + rep.holes.fromNearest;
+            if (filled) f.textureFill = { label: 'generated', texels: filled, share: Math.round((filled / (rep.width * rep.height)) * 10000) / 10000, method: `holes filled from the facade's own real texels: ${rep.holes.fromRepeats} at its bay pitch, ${rep.holes.fromStoreys} at its storey pitch, ${rep.holes.fromNearest} from the nearest real texel` };
+        }
         fs.writeFileSync(path.join(tmp, 'facades.json'), JSON.stringify(facadesJson));
         fs.writeFileSync(path.join(tmp, 'rectify.json'), JSON.stringify({ version: PIPELINE_K_VERSION, params, minCoverage, reports }, null, 1));
         if (fs.existsSync(outDir)) fs.rmSync(outDir, { recursive: true, force: true });
@@ -133,6 +141,8 @@ export function describeRectified(r: RectifiedOrthos): string {
     const kept = ok.filter(x => x.report!.warp.kept);
     const gains = kept.map(x => x.report!.straightnessPx.gain);
     const smeared = ok.reduce((a, x) => a + x.report!.smear.texels, 0);
+    const filled = ok.reduce((a, x) => a + x.report!.holes.fromRepeats + x.report!.holes.fromStoreys + x.report!.holes.fromNearest, 0);
+    const fromRepeats = ok.reduce((a, x) => a + x.report!.holes.fromRepeats + x.report!.holes.fromStoreys, 0);
     const failed = r.reports.filter(x => x.error);
-    return `${ok.length} facade orthos rectified: ${kept.length} straightened (lines ${gains.length ? Math.round(100 * gains.reduce((a, b) => a + b, 0) / gains.length) : 0}% closer to straight on average)${ok.length > kept.length ? `, ${ok.length - kept.length} left as they were (${[...new Set(ok.filter(x => !x.report!.warp.kept).map(x => x.report!.warp.why))].slice(0, 2).join('; ')})` : ''}; ${smeared.toLocaleString('en-US')} smeared texels levelled against their repeats${failed.length ? `; ${failed.length} failed and kept their original ortho (${failed[0].error})` : ''}`;
+    return `${ok.length} facade orthos rectified: ${kept.length} straightened (lines ${gains.length ? Math.round(100 * gains.reduce((a, b) => a + b, 0) / gains.length) : 0}% closer to straight on average)${ok.length > kept.length ? `, ${ok.length - kept.length} left as they were (${[...new Set(ok.filter(x => !x.report!.warp.kept).map(x => x.report!.warp.why))].slice(0, 2).join('; ')})` : ''}; ${smeared.toLocaleString('en-US')} smeared texels levelled against their repeats; ${filled.toLocaleString('en-US')} texels the photo did not reach filled (generated: ${filled ? Math.round((100 * fromRepeats) / filled) : 0}% from the facade's own repeats, the rest from the nearest real texel)${failed.length ? `; ${failed.length} failed and kept their original ortho (${failed[0].error})` : ''}`;
 }

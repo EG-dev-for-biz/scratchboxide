@@ -60,35 +60,13 @@ export const STARTER_BUTTONS: readonly StarterButton[] = [
     {
         icon: '🏛️',
         label: '3D Building',
-        // One real building rebuilt procedurally by pipeline H (google_3d_tiles_get_clay with isolate and procedural; pipeline-h/,
-        // the default since 2026-10-23, on pipeline G's steps): survey
-        // cameras on the street (and one looking straight down for the roof), metric wall plates from the photo tiles, a
-        // facade program read per wall, built natively on the vector massing. 2026-10-23 (user ask): narrowed from the ~160
-        // world landmarks this button briefly carried down to this North America set, chosen specifically because each one
-        // is known to have both Google 3D Tiles coverage and vector building data - the two sources this pipeline actually
-        // needs. Standing rule going forward (2026-10-23, user decision): a place with neither source stages a flat,
-        // undetailed fallback today; the fix is to build it from scratch procedurally instead (not yet implemented - the
-        // next queued step, not done here) rather than leave it degraded or keep hand-curating lists like this one around
-        // known-good coverage.
+        // The Empire State Building, the building-generator benchmark (2026-10-26), straightened by pipeline K
+        // (google_3d_tiles_get_clay with isolate; pipeline-k/, the default for one building since 2026-10-26, user decision):
+        // the remeshed scan's walls flat on their fitted planes, each facade photo's pier and storey lines traced and warped
+        // straight, its holes and smears filled and levelled from the facade's own repeats, the facades rebuilt on those
+        // photos with no tear left. One prompt, so the button always sends it (user decision 2026-10-26: no randomizer).
         prompts: [
-            'Build a procedural 3D building of the Empire State Building at 350 Fifth Avenue, New York: isolate it and rebuild it from scratch with the procedural pipeline, its window bays, setbacks and facade massing read from a survey of the photo tiles',
-            'Build a procedural 3D building of the Chrysler Building at 405 Lexington Avenue, New York: isolate it and rebuild it from scratch with the procedural pipeline, its window bays, setbacks and facade massing read from a survey of the photo tiles',
-            'Build a procedural 3D building of the Flatiron Building at 175 Fifth Avenue, New York: isolate it and rebuild it from scratch with the procedural pipeline, its windows, bands, cornices and shop fronts read from a survey of the photo tiles',
-            'Build a procedural 3D building of One World Trade Center at 285 Fulton Street, New York: isolate it and rebuild it from scratch with the procedural pipeline, its window bays, setbacks and facade massing read from a survey of the photo tiles',
-            'Build a procedural 3D building of Rockefeller Center at 45 Rockefeller Plaza, New York: isolate it and rebuild it from scratch with the procedural pipeline, its window bays, setbacks and facade massing read from a survey of the photo tiles',
-            'Build a procedural 3D building of the Guggenheim Museum at 1071 Fifth Avenue, New York: isolate it and rebuild it from scratch with the procedural pipeline, its windows, cornices, columns and facade detail read from a survey of the photo tiles',
-            'Build a procedural 3D building of the Statue of Liberty in Liberty Island, New York: isolate it and rebuild it from scratch with the procedural pipeline, its sculptural form and base read from a survey of the photo tiles',
-            'Build a procedural 3D building of Brooklyn Bridge in New York: isolate it and rebuild it from scratch with the procedural pipeline, its towers, cables and deck read from a survey of the photo tiles',
-            'Build a procedural 3D building of the Manhattan Bridge in New York: isolate it and rebuild it from scratch with the procedural pipeline, its towers, cables and deck read from a survey of the photo tiles',
-            'Build a procedural 3D building of the White House at 1600 Pennsylvania Avenue NW, Washington, D.C.: isolate it and rebuild it from scratch with the procedural pipeline, its windows, balconies, cornices and facade ornament read from a survey of the photo tiles',
-            'Build a procedural 3D building of the United States Capitol in First Street SE, Washington, D.C.: isolate it and rebuild it from scratch with the procedural pipeline, its dome, columns and portico read from a survey of the photo tiles',
-            'Build a procedural 3D building of the Lincoln Memorial in Washington, D.C.: isolate it and rebuild it from scratch with the procedural pipeline, its columns, pediment and portico read from a survey of the photo tiles',
-            'Build a procedural 3D building of the Washington Monument in Washington, D.C.: isolate it and rebuild it from scratch with the procedural pipeline, its form and surface detail read from a survey of the photo tiles',
-            'Build a procedural 3D building of the Golden Gate Bridge in San Francisco: isolate it and rebuild it from scratch with the procedural pipeline, its towers, cables and deck read from a survey of the photo tiles',
-            'Build a procedural 3D building of the Space Needle in Seattle: isolate it and rebuild it from scratch with the procedural pipeline, its lattice ironwork, structural framing and observation levels read from a survey of the photo tiles',
-            'Build a procedural 3D building of Willis Tower at 233 South Wacker Drive, Chicago: isolate it and rebuild it from scratch with the procedural pipeline, its window bays, setbacks and facade massing read from a survey of the photo tiles',
-            'Build a procedural 3D building of the Gateway Arch in St. Louis: isolate it and rebuild it from scratch with the procedural pipeline, its arch, piers and relief carving read from a survey of the photo tiles',
-            'Build a procedural 3D building of Fallingwater in Mill Run, Pennsylvania: isolate it and rebuild it from scratch with the procedural pipeline, its windows, cornices, columns and facade detail read from a survey of the photo tiles',
+            'Build a 3D building of the Empire State Building at 350 Fifth Avenue, New York: isolate it and straighten it from Google Maps, its walls flat and its own photo texture straightened',
         ],
     },
     { icon: '🎬', label: 'Video NLE', prompts: ['Assemble a multi-track video timeline with color grading and title graphics'] },

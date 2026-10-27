@@ -44,6 +44,13 @@
   - The orbit camera zooms toward the scene target, not the cursor, so close framings take several tries.
   - Two ortho planes (`facade_0`, `facade_1`) are podium roof planes stretched as facades by tile_refine; they are below the straightening gate and were left as they were.
 
+## 4b. Follow-up the same day: the 3D Building button, holes and tears
+
+* **3D Building runs K on the ESB.** The button now sends one prompt (the Empire State Building, straightened from Google Maps); `parseStagedLocationArgs` makes pipeline K the default for one building (`procedural: true` or a procedural `pipeline` still selects J/I/H/G). In the app the button's run (`cf78b518`) carried `{"isolate":true,"pipeline":"k"}`.
+* **Holes in the original texturing** (grey wedges, the ortho's uncovered texels, on rebuilt walls): the rectifier now fills them last, from the facade's own repeats at its bay pitch, then its storey pitch, then the nearest real texel (never a fill from a fill), and writes the uncovered mask beside the ortho; the rebuild reads coverage from that mask (a filled cell the photo never reached is not built) and labels the fill `generated` in the facade's GLB extras. ESB: 1,653,225 uncovered texels filled, 79% from repeats.
+* **Tears** (see-through slits around the base entrance and at corners): a scan triangle is now removed only when every rebuilt facade it faces covers it in its own rectangle; a tear audit renders each facade straight on (scan against result, 0.2 m) and puts the scan back over any torn pixel, up to three rounds, then leaves a still-torn facade as scanned. The first in-app version dropped 12 facades and left 39,375 torn pixels (a coverage rule that let a parallel tier vouch for another's triangles, and an audit that counted walls far in front as the facade's own); fixed and checked offline on the same ESB remesh: 353 torn pixels found, 989 triangles put back, 0 facades dropped, 0 left, 53 facades rebuilt, 9.4 s.
+* **Open:** stray scan pieces around the base (the apron and street furniture the isolate keeps) are not yet cleaned up.
+
 ## 5. Candidate Tool/Service Ideas
 
 * **A camera preset tool for staged builds** (oblique / front / close on a tier, by height): this session framed the result by trial-and-error scrolls and drags.

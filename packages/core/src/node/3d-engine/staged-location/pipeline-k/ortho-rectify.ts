@@ -74,6 +74,8 @@ export const ORTHO_RECTIFY_PARAMS = {
     minJacobian: 0.35,
     /** The warp is kept when the lines' distance from straight falls by at least this share. */
     minGain: 0.2,
+    /** The hole fill: repeats each side looked at, how many real ones a fill needs, and the storey repeat's search range (m). */
+    fillRepeats: 4, minFillRepeats: 2, storeyMinM: 2.5, storeyMaxM: 7,
     /** Horizontal repeat search range (m), and the autocorrelation its peak must reach. */
     periodMinM: 1.2, periodMaxM: 10, minPeriodNcc: 0.35,
     /** Repeats each side of a pixel used for its median, and how many must be covered (lattice homogeneity). */
@@ -111,12 +113,21 @@ export interface OrthoRectifyReport {
     periodM?: number; periodNcc?: number;
     warp: { kept: boolean; why: string; maxShiftPx: number; meanShiftPx: number; foldScale: number; cgIterations: number };
     smear: { applied: boolean; why: string; texels: number; share: number; meanAbsLog: number };
+    /** The ortho's holes filled last (generated: copied from the facade's own real texels); `uncovered` of the result marks them. */
+    holes: HoleFill;
     ms: number;
 }
 
-export interface OrthoRectifyResult { image: Rgba; report: OrthoRectifyReport }
+export interface OrthoRectifyResult {
+    image: Rgba; report: OrthoRectifyReport;
+    /** 1 where the photo did not cover the (straightened) ortho, before its holes were filled: what the facade rebuild reads as uncovered. */
+    uncovered: Uint8Array;
+}
 
 const UNCOVERED = 128;
+
+/** The file beside a rectified ortho that marks where its photo did not reach (one channel, 255 = uncovered). */
+export const uncoveredMaskName = (image: string) => image.replace(/\.png$/i, '') + '_uncovered.png';
 const isUncovered = (rgba: Uint8Array, i: number) => rgba[i * 4] === UNCOVERED && rgba[i * 4 + 1] === UNCOVERED && rgba[i * 4 + 2] === UNCOVERED;
 
 /** Covered mask and luma of an ortho. */
@@ -432,12 +443,18 @@ export function applyWarp(img: Rgba, w: MeshWarp, scale = 1): Rgba {
 
 /** The horizontal repeat (px) of an ortho: the first strong peak of its column luma profile's autocorrelation. */
 export function horizontalPeriod(img: Rgba, pixelM: number, P: OrthoRectifyParams = ORTHO_RECTIFY_PARAMS): { periodPx: number; ncc: number } | undefined {
-    const { valid, L } = planes(img), W = img.width, H = img.height;
+    return axisPeriod(img, pixelM, 'x', P.periodMinM, P.periodMaxM, P);
+}
+
+/** The repeat (px) along an axis: the first strong peak of the autocorrelation of the luma profile along it (x: the column means, y: the row means). */
+export function axisPeriod(img: Rgba, pixelM: number, axis: 'x' | 'y', minM: number, maxM: number, P: OrthoRectifyParams = ORTHO_RECTIFY_PARAMS): { periodPx: number; ncc: number } | undefined {
+    const { valid, L } = planes(img), W0 = img.width, H0 = img.height;
+    const W = axis === 'x' ? W0 : H0, H = axis === 'x' ? H0 : W0;
     const prof = new Float64Array(W), cnt = new Float64Array(W);
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const i = y * W + x; if (valid[i]) { prof[x] += L[i]; cnt[x]++; } }
+    for (let y = 0; y < H0; y++) for (let x = 0; x < W0; x++) { const i = y * W0 + x; if (valid[i]) { const k = axis === 'x' ? x : y; prof[k] += L[i]; cnt[k]++; } }
     const used = Array.from(cnt).map(c => c > 0.1 * H);
     for (let x = 0; x < W; x++) prof[x] = used[x] ? prof[x] / cnt[x] : NaN;
-    const lo = Math.max(2, Math.round(P.periodMinM / pixelM)), hi = Math.min(Math.floor(W / 2), Math.round(P.periodMaxM / pixelM));
+    const lo = Math.max(2, Math.round(minM / pixelM)), hi = Math.min(Math.floor(W / 2), Math.round(maxM / pixelM));
     const nccAt = (lag: number) => {
         let n = 0, sa = 0, sb = 0, ab = 0, aa = 0, bb = 0;
         for (let x = 0; x + lag < W; x++) { const a = prof[x], b = prof[x + lag]; if (Number.isFinite(a) && Number.isFinite(b)) { n++; sa += a; sb += b; ab += a * b; aa += a * a; bb += b * b; } }
@@ -455,6 +472,63 @@ export function horizontalPeriod(img: Rgba, pixelM: number, P: OrthoRectifyParam
         return { periodPx: lag + (d < 0 ? 0.5 * (c[k - 1] - c[k + 1]) / d : 0), ncc: c[k] };
     }
     return undefined;
+}
+
+/** What the hole fill did: uncovered texels found, and filled from horizontal repeats, vertical repeats, or the nearest real texel. */
+export interface HoleFill { uncovered: number; fromRepeats: number; fromStoreys: number; fromNearest: number; periodPx?: number; storeyPx?: number }
+
+/**
+ * The ortho's holes (uncovered texels, exact grey 128) filled from real texels only, never from another fill: first the
+ * facade's own repeats at its bay pitch (the per-channel median of the covered texels at +-k pitches, chosen by luma), then
+ * its repeats at its storey pitch, then the nearest real texel. A believable fill, reported for labelling (generated).
+ */
+export function fillHoles(img: Rgba, pixelM: number, P: OrthoRectifyParams = ORTHO_RECTIFY_PARAMS): { image: Rgba; fill: HoleFill } {
+    const { valid, L } = planes(img), W = img.width, H = img.height, N = W * H;
+    const out = new Uint8Array(img.rgba);
+    const known = new Uint8Array(valid);
+    const fill: HoleFill = { uncovered: 0, fromRepeats: 0, fromStoreys: 0, fromNearest: 0 };
+    for (let i = 0; i < N; i++) if (!valid[i] && img.rgba[i * 4 + 3]) fill.uncovered++;
+    if (!fill.uncovered || fill.uncovered === N) return { image: { width: W, height: H, rgba: out }, fill };
+    const write = (i: number, j: number) => { for (let c = 0; c < 3; c++) out[i * 4 + c] = img.rgba[j * 4 + c]; out[i * 4 + 3] = 255; if (out[i * 4] === 128 && out[i * 4 + 1] === 128 && out[i * 4 + 2] === 128) out[i * 4 + 2] = 129; known[i] = 1; };
+    // one pass along an axis at a period: the real texel whose luma is the median of the real repeats
+    const pass = (period: number, axis: 'x' | 'y'): number => {
+        let n = 0;
+        const cand: Array<{ j: number; l: number }> = [];
+        for (let i = 0; i < N; i++) {
+            if (known[i] || !img.rgba[i * 4 + 3]) continue;
+            const x = i % W, y = Math.floor(i / W);
+            cand.length = 0;
+            for (let k = -P.fillRepeats; k <= P.fillRepeats; k++) {
+                if (!k) continue;
+                const xx = axis === 'x' ? Math.round(x + k * period) : x, yy = axis === 'y' ? Math.round(y + k * period) : y;
+                if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+                const j = yy * W + xx;
+                if (valid[j]) cand.push({ j, l: L[j] });
+            }
+            if (cand.length < P.minFillRepeats) continue;
+            cand.sort((a, b) => a.l - b.l);
+            write(i, cand[cand.length >> 1].j);
+            n++;
+        }
+        return n;
+    };
+    const ph = horizontalPeriod(img, pixelM, P);
+    if (ph) { fill.periodPx = Math.round(ph.periodPx * 100) / 100; fill.fromRepeats = pass(ph.periodPx, 'x'); }
+    const pv = axisPeriod(img, pixelM, 'y', P.storeyMinM, P.storeyMaxM, P);
+    if (pv) { fill.storeyPx = Math.round(pv.periodPx * 100) / 100; fill.fromStoreys = pass(pv.periodPx, 'y'); }
+    // the rest: the nearest real texel (breadth-first from every real texel, so a fill never copies a fill)
+    const src = new Int32Array(N).fill(-1), queue = new Int32Array(N);
+    let head = 0, tail = 0;
+    for (let i = 0; i < N; i++) if (valid[i]) { src[i] = i; queue[tail++] = i; }
+    while (head < tail) {
+        const i = queue[head++], x = i % W;
+        for (const j of [x > 0 ? i - 1 : -1, x < W - 1 ? i + 1 : -1, i - W, i + W]) {
+            if (j < 0 || j >= N || src[j] >= 0) continue;
+            src[j] = src[i]; queue[tail++] = j;
+        }
+    }
+    for (let i = 0; i < N; i++) if (!known[i] && img.rgba[i * 4 + 3] && src[i] >= 0) { write(i, src[i]); fill.fromNearest++; }
+    return { image: { width: W, height: H, rgba: out }, fill };
 }
 
 /** Per pixel: the luma of its covered horizontal repeats at +-k*period (k = 1..repeats), in a flat array of `repeats * 2` slots (NaN when not covered). */
@@ -611,6 +685,7 @@ export function rectifyOrtho(img: Rgba, pixelM: number, P: OrthoRectifyParams = 
         ...(period ? { periodM: round(period.periodPx * pixelM, 3), periodNcc: round(period.ncc, 3) } : {}),
         warp: { kept: false, why: '', maxShiftPx: 0, meanShiftPx: 0, foldScale: 1, cgIterations: 0 },
         smear: { applied: false, why: '', texels: 0, share: 0, meanAbsLog: 0 },
+        holes: { uncovered: 0, fromRepeats: 0, fromStoreys: 0, fromNearest: 0 },
         ms: 0
     };
     let image = img;
@@ -643,8 +718,14 @@ export function rectifyOrtho(img: Rgba, pixelM: number, P: OrthoRectifyParams = 
         image = s.image;
         report.smear = { applied: s.texels > 0, why: s.texels ? `${s.texels} texels levelled against their repeats at a ${round(period.periodPx * pixelM, 2)} m pitch` : 'no smear stood out from the repeats', texels: s.texels, share: round(s.covered ? s.texels / s.covered : 0, 4), meanAbsLog: round(s.meanAbsLog, 3) };
     }
+    // the holes last (tracing and the smear step read only covered texels): the mask keeps where they were
+    const uncovered = new Uint8Array(W * H);
+    for (let k = 0; k < W * H; k++) if (image.rgba[k * 4 + 3] && isUncovered(image.rgba, k)) uncovered[k] = 1;
+    const holes = fillHoles(image, pixelM, P);
+    image = holes.image;
+    report.holes = holes.fill;
     report.ms = Date.now() - t0;
-    return { image, report };
+    return { image, report, uncovered };
 }
 
 /** The given lines traced again on another image, each sample searched about its straight position (for the after measure). */

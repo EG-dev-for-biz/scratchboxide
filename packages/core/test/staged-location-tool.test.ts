@@ -64,10 +64,17 @@ const clayArgs = { query: 'Central Park', radiusMeters: 60 };
 describe('parseStagedLocationArgs', () => {
     it('reads a place request: isolate, radius, trees (on by default), budget, staging', () => {
         expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: ' Washington Square Arch ', isolate: true, radiusMeters: 90, treeTriangleBudget: 50_000, stageIntoActiveScene: true }).request)
-            .toEqual({ query: 'Washington Square Arch', isolate: true, radiusM: 90, trees: true, treeTriangleBudget: 50_000, stageIntoActiveScene: true, procedural: true });
+            .toEqual({ query: 'Washington Square Arch', isolate: true, radiusM: 90, trees: true, treeTriangleBudget: 50_000, stageIntoActiveScene: true, pipeline: 'k' });
         expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', trees: false }).request).toMatchObject({ trees: false, isolate: false });
-        // one building is pipeline G's unless procedural false asks for the scan detailed; a district is never procedural
+        // one building is pipeline K's (the scan straightened); a procedural rebuild when asked for, by procedural true or a
+        // procedural pipeline; procedural false asks for the scan detailed; a district is never procedural nor K
+        expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', isolate: true, procedural: true }).request).toMatchObject({ procedural: true });
+        expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', isolate: true, procedural: true }).request).not.toHaveProperty('pipeline');
+        expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', isolate: true, pipeline: 'j' }).request).toMatchObject({ procedural: true, pipeline: 'j' });
+        expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', isolate: true, pipeline: 'k' }).request).not.toHaveProperty('procedural');
+        expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q' }).request).not.toHaveProperty('pipeline');
         expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', isolate: true, procedural: false }).request).not.toHaveProperty('procedural');
+        expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', isolate: true, procedural: false }).request).not.toHaveProperty('pipeline');
         expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', procedural: true }).request).not.toHaveProperty('procedural');
     });
 

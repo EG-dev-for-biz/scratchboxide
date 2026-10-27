@@ -20,7 +20,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { horizontalPeriod, levelSmears, ORTHO_RECTIFY_PARAMS, rectifyOrtho, traceLines, type Rgba } from '../src/node/3d-engine/staged-location/pipeline-k/ortho-rectify';
+import { fillHoles, horizontalPeriod, levelSmears, ORTHO_RECTIFY_PARAMS, rectifyOrtho, traceLines, type Rgba } from '../src/node/3d-engine/staged-location/pipeline-k/ortho-rectify';
 import { rectifyReliefOrthos } from '../src/node/3d-engine/staged-location/pipeline-k/pipeline-k';
 
 const PX = 0.075, W = 240, H = 480;
@@ -96,12 +96,27 @@ describe('pipeline K ortho rectifier', () => {
         const before = edgeError(bent, truth, 20, 280), after = edgeError(r.image, truth, 20, 280);
         expect(before).toBeGreaterThan(1.2);
         expect(after).toBeLessThan(0.45 * before);
-        // the hole: still exact grey in its middle, and no covered pixel turned into the uncovered grey
-        const mid = (320 * W + 40) * 4;
-        expect([r.image.rgba[mid], r.image.rgba[mid + 1], r.image.rgba[mid + 2]]).toEqual([128, 128, 128]);
-        let greyOutside = 0;
-        for (let y = 0; y < 280; y++) for (let x = 0; x < W; x++) { const i = (y * W + x) * 4; if (r.image.rgba[i] === 128 && r.image.rgba[i + 1] === 128 && r.image.rgba[i + 2] === 128) greyOutside++; }
-        expect(greyOutside).toBe(0);
+        // the hole: marked uncovered in the mask (its middle), and filled in the image: no exact grey anywhere
+        expect(r.uncovered[320 * W + 40]).toBe(1);
+        expect(r.uncovered[100 * W + 100]).toBe(0);
+        let grey = 0;
+        for (let i = 0; i < W * H; i++) if (r.image.rgba[i * 4] === 128 && r.image.rgba[i * 4 + 1] === 128 && r.image.rgba[i * 4 + 2] === 128) grey++;
+        expect(grey).toBe(0);
+        expect(r.report.holes.uncovered).toBeGreaterThan(1000);
+        expect(r.report.holes.fromRepeats).toBeGreaterThan(0.8 * r.report.holes.uncovered);
+    });
+
+    it('fills holes from the facade\'s own repeats, close to what the photo would have shown', () => {
+        const img = { ...truth, rgba: new Uint8Array(truth.rgba) };
+        // a wedge-shaped hole across two bays, exact grey
+        for (let y = 120; y < 260; y++) for (let x = 60; x < 60 + Math.round((y - 120) * 0.7); x++) { const i = (y * W + x) * 4; img.rgba[i] = img.rgba[i + 1] = img.rgba[i + 2] = 128; }
+        const r = fillHoles(img, PX);
+        expect(r.fill.uncovered).toBeGreaterThan(5000);
+        expect(r.fill.fromRepeats).toBe(r.fill.uncovered);
+        // the filled wedge reads like the facade: within a few levels of the truth on average (the pitch is 40 px exactly here)
+        expect(lumaDiff(r.image, truth, 60, 158, 120, 260)).toBeLessThan(6);
+        // and the real texels are untouched
+        expect(lumaDiff(r.image, truth, 170, W, 0, H)).toBe(0);
     });
 
     it('leaves a straight facade alone', () => {
@@ -135,7 +150,12 @@ describe('pipeline K ortho rectifier', () => {
         expect(r.cached).toBe(false);
         expect(r.reports.map(x => x.facadeId)).toEqual([0]);
         expect(r.reports[0].report?.warp.kept).toBe(true);
-        // the low-coverage facade is copied as it was; the rectified one differs; facades.json travels with them
+        // the rectified facade names its uncovered mask (one channel PNG) in facades.json
+        const written = JSON.parse(fs.readFileSync(path.join(r.orthosDir, 'facades.json'), 'utf8')).facades;
+        expect(written[0].uncoveredMask).toBe('facade_0_uncovered.png');
+        expect(fs.existsSync(path.join(r.orthosDir, 'facade_0_uncovered.png'))).toBe(true);
+        expect(written[1].uncoveredMask).toBeUndefined();
+        // the low-coverage facade is copied as it was; the rectified one differs
         expect(fs.readFileSync(path.join(r.orthosDir, 'facade_1.png')).equals(fs.readFileSync(path.join(src, 'facade_1.png')))).toBe(true);
         expect(fs.readFileSync(path.join(r.orthosDir, 'facade_0.png')).subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
         expect(fs.readFileSync(path.join(r.orthosDir, 'facade_0.png')).equals(fs.readFileSync(path.join(src, 'facade_0.png')))).toBe(false);

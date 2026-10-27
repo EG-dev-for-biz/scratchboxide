@@ -118,6 +118,46 @@ describe('facades on their photo lattice', () => {
         }
         expect(liveUncovered).toBeGreaterThan(0);
         expect(liveCovered).toBe(0);
+        expect(out.tears.left).toBe(0);
+        expect(out.tears.droppedFacades).toEqual([]);
+    });
+
+    it('reads coverage from the uncovered mask when the image\'s holes were filled (pipeline K): a filled cell the photo never reached is not rebuilt', () => {
+        const mask = new Uint8Array(W * H);
+        for (let y = 0; y < H; y++) for (let x = 80; x < W; x++) mask[y * W + x] = 1;
+        const r = latticeFacade(f, photo(), facadeSamples(scan(), f), undefined, mask)!;
+        let maxS = -Infinity;
+        for (let v = 0; v < r.positions.length; v += 3) maxS = Math.max(maxS, r.positions[v]);
+        expect(maxS).toBeLessThanOrEqual(8.5);
+        // without the mask the same filled image builds the whole facade
+        const all = latticeFacade(f, photo(), facadeSamples(scan(), f))!;
+        expect(all.built.every(v => v === 1)).toBe(true);
+    });
+
+    it('never leaves a tear: what the rebuild claims but does not build is found by the audit, and the scan is put back', () => {
+        const soup = scan();
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-'));
+        const file = path.join(dir, 'clay.glb');
+        writeStagedGlbFile(file, [{ name: 'scan', positions: soup, indices: Uint32Array.from({ length: soup.length / 3 }, (_, i) => i) }], {});
+        const good = latticeFacade(f, photo(), facadeSamples(soup, f))!;
+        // a rebuild that says every cell is built but carries the faces of only the left half (a hole where its right half should be)
+        const keep: number[] = [];
+        for (let q = 0; q < good.indices.length; q += 3) {
+            const xs = [0, 1, 2].map(j => good.positions[good.indices[q + j] * 3]);
+            if (Math.max(...xs) <= 6) keep.push(good.indices[q], good.indices[q + 1], good.indices[q + 2]);
+        }
+        const torn = { ...good, built: new Uint8Array(good.built.length).fill(1), indices: Uint32Array.from(keep) };
+        const out = applyFacadeLattices(fs.readFileSync(file), [{ f, r: torn }], false);
+        expect(out.tears.found).toBeGreaterThan(0);
+        // the scan's triangles are back over the missing half and nothing stays torn
+        expect(out.tears.left).toBe(0);
+        const t = readGlbTriangles(out.glb);
+        let liveRight = 0;
+        for (let i = 0; i < soup.length / 3; i += 3) {
+            if (t.indices[i] === t.indices[i + 1] && t.indices[i + 1] === t.indices[i + 2]) continue;
+            if ((soup[i * 3] + soup[i * 3 + 3] + soup[i * 3 + 6]) / 3 > 6.5) liveRight++;
+        }
+        expect(liveRight).toBeGreaterThan(0);
     });
 });
 
@@ -137,7 +177,7 @@ describe('facade lattices on a district-sized remesh', () => {
             bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 36 }, { buffer: 0, byteOffset: 36, byteLength: 12 }, { buffer: 0, byteOffset: 48, byteLength: N - 48 }],
             accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] }, { bufferView: 1, componentType: 5125, count: 3, type: 'SCALAR' }]
         };
-        const r = { s: [0, 0.5], t: [0, 0.5], positions: new Float32Array([0, 0, 0.01, 0.5, 0, 0.01, 0, 0.5, 0.01]), normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]), uv: new Float32Array(6), indices: new Uint32Array([0, 1, 2]), cells: 1, measuredShare: 1, built: new Uint8Array([1]) };
+        const r = { s: [0, 1], t: [0, 1], positions: new Float32Array([0, 0, 0.01, 1, 0, 0.01, 1, 1, 0.01, 0, 1, 0.01]), normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]), uv: new Float32Array(8), indices: new Uint32Array([0, 1, 2, 0, 2, 3]), cells: 1, measuredShare: 1, built: new Uint8Array([1]) };
         const out = applyFacadeLattices(assembleGlb(json as never, bin), [{ f, r: r as never }], false);
         expect(out.removed).toBe(1);                                   // the scan's triangle in the facade, made degenerate
         const back = parseGlbBytes(out.glb);
