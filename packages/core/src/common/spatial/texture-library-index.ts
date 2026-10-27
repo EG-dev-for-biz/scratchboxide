@@ -17,7 +17,7 @@
  * `tags` are the publisher's free text for a model or a text search to read; nothing branches on them.
  *
  * The index file holds only the publishers' metadata (sizes, text, preview links), so building it downloads no images.
- * Colour, roughness and metalness are measured on demand, for the sets a search is about to rank, from their publishers'
+ * Colour, roughness, metalness and normal relief are measured on demand, for the sets a search is about to rank, from their publishers'
  * small preview maps, and cached per set (build/texture-library/stats/); a set nobody searched for stays unmeasured.
  * Quantities not measured or not published are left out rather than guessed, and the entry says why.
  */
@@ -46,13 +46,23 @@ export interface TextureLibraryEntry {
     /** The publisher's width alone, when it gives no height: the height follows from the preview's aspect once measured. */
     widthOnlyM?: number;
     /** The publisher's small preview maps by role (ambientCG lists them; Poly Haven's are looked up when measured). */
-    previews?: { color?: string; roughness?: string; metalness?: string; arm?: string };
+    previews?: { color?: string; normal?: string; roughness?: string; metalness?: string; arm?: string };
     sizeSource: string;
     colour?: TextureLibraryColour;
-    /** Roughness map mean and spread, and the metalness map's mean, 0..1. */
+    /** Roughness map mean and spread, and the metalness map's mean, 0..1. `metallic` is 0 for a set the bucket holds no
+     * metalness map for (glTF's default: its publisher left it dielectric); hasMetalnessMap tells the two apart. */
     roughnessMean?: number;
     roughnessSpread?: number;
     metallic?: number;
+    /** Whether the bucket holds a metalness map for the set (its own or a packed ARM map's blue channel). */
+    hasMetalnessMap?: boolean;
+    /** Measured on the metalness preview only (absent when no metalness map was measured): the share of pixels with
+     * metalness at least 0.5, and the 95th percentile of metalness, 0..1. */
+    metalShare?: number;
+    metalnessP95?: number;
+    /** RMS angle, degrees, between the normal map's normals and the flat normal, measured on the preview resampled to at
+     * most 256 px a side (so relief finer than a preview pixel is not counted). Absent when no normal preview was measured. */
+    normalTiltRmsDeg?: number;
     /** Where the colour and roughness statistics were measured (the publisher's preview maps). */
     statsSource?: string;
     appearance: string;
@@ -80,6 +90,12 @@ export interface TextureLibraryQuery {
     roughness?: number;
     /** Wanted metalness, 0 dielectric .. 1 metal. */
     metallic?: number;
+    /** Wanted share of the surface that is metal (metalness at least 0.5), 0..1. */
+    metalShare?: number;
+    /** Wanted normal relief as an RMS tilt in degrees (about 2 smooth render or sheet, 10-25 rough masonry). */
+    normalTiltDeg?: number;
+    /** true keeps only sets with a metalness map in the bucket; false only sets without one. */
+    hasMetalnessMap?: boolean;
     /** Wanted real size of one tile, metres (the longer side); compared as a ratio. */
     tileSizeM?: number;
     /** Words of which at least one must appear in the set's name, tags or appearance text (alternatives, case-insensitive). */
@@ -104,19 +120,22 @@ export function linearRgbToLab([r, g, b]: [number, number, number]): [number, nu
     return [116 * f(Y) - 16, 500 * (f(X) - f(Y)), 200 * (f(Y) - f(Z))];
 }
 
+/** Whether the bucket holds a metalness map for the set: known from its maps without measuring. */
+export const entryHasMetalnessMap = (e: TextureLibraryEntry) => e.hasMetalnessMap ?? !!(e.maps.metalness || e.maps.arm);
+
 /** The sets a search ranks: those with a colour map in the bucket (a set without one cannot be a surface), narrowed by
- * the text words when any set matches one of them. */
-export function textureLibraryPool(index: TextureLibraryIndex, q: Pick<TextureLibraryQuery, 'text'>): { pool: TextureLibraryEntry[]; textMatched: boolean } {
+ * the text words when any set matches one of them, and kept to sets with (or without) a metalness map when asked. */
+export function textureLibraryPool(index: TextureLibraryIndex, q: Pick<TextureLibraryQuery, 'text' | 'hasMetalnessMap'>): { pool: TextureLibraryEntry[]; textMatched: boolean } {
     const words = (q.text ?? '').toLowerCase().split(/[\s,]+/).filter(Boolean);
-    const usable = index.sets.filter(e => !!e.maps.color);
+    const usable = index.sets.filter(e => !!e.maps.color && (q.hasMetalnessMap === undefined || entryHasMetalnessMap(e) === q.hasMetalnessMap));
     const pool = words.length ? usable.filter(e => { const hay = `${e.id} ${e.tags.join(' ')} ${e.appearance}`.toLowerCase(); return words.some(w => hay.includes(w)); }) : usable;
     return pool.length || !words.length ? { pool, textMatched: true } : { pool: usable, textMatched: false };
 }
 
 /**
  * Sets ranked by how near they lie to what is wanted. Each quantity is scaled so one unit is a clearly visible
- * difference: CIELAB chroma and hue (10), lightness (25: a chosen set is tinted), roughness (0.15), metalness (0.3) and
- * the log ratio of tile sizes; with a wanted spread, its lightness (10) and hue (6) parts, weighed lightly since a
+ * difference: CIELAB chroma and hue (10), lightness (25: a chosen set is tinted), roughness (0.15), metalness (0.3),
+ * metal share (0.25), normal tilt (a 30% ratio, on tilt + 1 degree) and the log ratio of tile sizes; with a wanted spread, its lightness (10) and hue (6) parts, weighed lightly since a
  * spread measured on photo texels also holds what the texels mix (windows into stone). A set with no hue variation
  * of its own also pays a coloured target's chroma, since tinting it gives one flat hue. A quantity an entry lacks counts as one unit, so measured entries come first without
  * dropping the rest. Text words filter (a set matching any of them stays); when none matches, the ranking runs without the
@@ -149,6 +168,8 @@ export function searchTextureLibrary(index: TextureLibraryIndex, q: TextureLibra
         }
         if (q.roughness !== undefined) term('roughness', entry.roughnessMean !== undefined, () => Math.abs(entry.roughnessMean! - q.roughness!) / 0.15);
         if (q.metallic !== undefined) term('metallic', entry.metallic !== undefined, () => Math.abs(entry.metallic! - q.metallic!) / 0.3);
+        if (q.metalShare !== undefined) term('metal share', entry.metalShare !== undefined || !entryHasMetalnessMap(entry), () => Math.abs((entry.metalShare ?? 0) - q.metalShare!) / 0.25);
+        if (q.normalTiltDeg !== undefined) term('normal tilt', entry.normalTiltRmsDeg !== undefined, () => Math.abs(Math.log((entry.normalTiltRmsDeg! + 1) / (Math.max(0, q.normalTiltDeg!) + 1))) / Math.log(1.3));
         if (q.tileSizeM !== undefined) term('tile size', !!entry.realSizeM, () => Math.abs(Math.log(Math.max(...entry.realSizeM!) / Math.max(1e-3, q.tileSizeM!))));
         return { entry, distance: d, compared, unmeasured };
     });

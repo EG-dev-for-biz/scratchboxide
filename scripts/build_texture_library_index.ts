@@ -57,7 +57,7 @@ async function ambientCG(): Promise<Map<string, Meta>> {
             const param = (k: string) => { const m = new RegExp(`${k}_url=([^&]+)`).exec(link); return m ? m[1].replace(/\?.*$/, '') : undefined; };
             const x = Number(a.dimensionX), y = Number(a.dimensionY);
             const previews: Meta['previews'] = {};
-            for (const role of ['color', 'roughness', 'metalness'] as const) { const u = param(role); if (u) previews[role] = u; }
+            for (const role of ['color', 'normal', 'roughness', 'metalness'] as const) { const u = param(role); if (u) previews[role] = u; }
             out.set(a.assetId, {
                 publisher: 'ambientCG',
                 ...(x > 0 && y > 0 ? { realSizeM: [x / 100, y / 100] as [number, number] } : x > 0 ? { widthOnlyM: x / 100 } : {}),

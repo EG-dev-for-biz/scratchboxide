@@ -121,7 +121,7 @@ class CoursedSurfaceParams:
 
 
 def prepare_material_maps(color: str, normal: str = '', roughness: str = '', ao: str = '', metalness: str = '', arm: str = '', max_size: int = 2048) -> dict:
-    """Decode a surface library's maps (PNG 8/16-bit or baseline JPEG), area-resample them to at most max_size pixels a side and pack them as albedo, normal and ORM PNG bytes, with per-pixel statistics (colour mean and spread in linear sRGB and CIELAB, roughness mean and spread, mean metalness)"""
+    """Decode a surface library's maps (PNG 8/16-bit or baseline JPEG), area-resample them to at most max_size pixels a side and pack them as albedo, normal and ORM PNG bytes, with per-pixel statistics (colour mean and spread in linear sRGB and CIELAB, roughness mean and spread, metalness mean, share at least 0.5 and 95th percentile, normal tilt RMS in degrees)"""
 
 
 def remap_png_channels(png_bytes: bytes, scale: collections.abc.Sequence[float], offset: collections.abc.Sequence[float] = ..., srgb: bool = False) -> bytes:

@@ -45,6 +45,10 @@ struct Prepared {
     /** Per-pixel statistics of the resampled maps: colour in linear sRGB and CIELAB (D65), mean and standard deviation. */
     std::array<double, 3> meanLinear{0, 0, 0}, spreadLinear{0, 0, 0}, meanLab{0, 0, 0}, spreadLab{0, 0, 0};
     double meanRoughness{1.0}, spreadRoughness{0.0}, meanMetalness{0.0};
+    /** Share of pixels with metalness at least 0.5, and the 95th percentile of metalness (0 without a metalness map). */
+    double metalShare{0.0}, metalnessP95{0.0};
+    /** RMS angle in degrees between the normal map's normals and the flat normal, at the output size (0 without a normal map). */
+    double normalTiltRmsDeg{0.0};
     int sourceWidth{0}, sourceHeight{0};
 };
 
@@ -168,6 +172,12 @@ inline Prepared prepare(const Sources& in, int maxSize) {
             if (len > 1e-6f) { x /= len; y /= len; z /= len; } else { x = 0; y = 0; z = 1; }
             n[i] = x * 0.5f + 0.5f; n[i + 1] = y * 0.5f + 0.5f; n[i + 2] = z * 0.5f + 0.5f;
         }
+        double tilt2 = 0;
+        for (size_t i = 0; i + 2 < n.size(); i += 3) {
+            const double a = std::acos(std::clamp(double(n[i + 2]) * 2 - 1, -1.0, 1.0)) * 180.0 / 3.14159265358979323846;
+            tilt2 += a * a;
+        }
+        out.normalTiltRmsDeg = px ? std::sqrt(tilt2 / double(px)) : 0.0;
         out.normal = detail::toImage(n, w, h, 3, false);
     } else {
         out.normal = texture::ImageBuffer(w, h, 3);
@@ -189,6 +199,15 @@ inline Prepared prepare(const Sources& in, int maxSize) {
     channel(in.metalness, 2);
     std::tie(out.meanRoughness, out.spreadRoughness) = detail::meanSpread(px, [&](size_t i) { return double(orm[i * 3 + 1]); });
     out.meanMetalness = detail::meanSpread(px, [&](size_t i) { return double(orm[i * 3 + 2]); }).first;
+    if (px) {
+        std::vector<float> metal(px);
+        size_t metallic = 0;
+        for (size_t i = 0; i < px; ++i) { metal[i] = orm[i * 3 + 2]; metallic += metal[i] >= 0.5f; }
+        const size_t k = std::min(px - 1, size_t(std::floor(0.95 * double(px - 1))));
+        std::nth_element(metal.begin(), metal.begin() + std::ptrdiff_t(k), metal.end());
+        out.metalShare = double(metallic) / double(px);
+        out.metalnessP95 = metal[k];
+    }
     out.orm = detail::toImage(orm, w, h, 3, false);
     return out;
 }

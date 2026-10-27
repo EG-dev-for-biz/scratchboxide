@@ -74,10 +74,20 @@ interface MeasuredStats {
     roughnessMean?: number;
     roughnessSpread?: number;
     metallic?: number;
+    /** Whether a metalness (or packed ARM) preview was measured, and what it showed. */
+    metalnessMeasured?: boolean;
+    metalShare?: number;
+    metalnessP95?: number;
+    normalTiltRmsDeg?: number;
     statsSource?: string;
     sourceSize?: [number, number];
+    /** STATS_VERSION when measured; older files are measured again when a search reaches them. */
+    version?: number;
     error?: string;
 }
+
+/** 2: metal share and 95th percentile, normal tilt, and whether metalness was measured. */
+const STATS_VERSION = 2;
 
 const statsDir = (repoRoot: string) => path.join(repoRoot, 'build', 'texture-library', 'stats');
 const statsFile = (repoRoot: string, id: string) => path.join(statsDir(repoRoot), `${id}.json`);
@@ -90,6 +100,14 @@ function withStats(e: TextureLibraryEntry, st: MeasuredStats | undefined): Textu
     const out: TextureLibraryEntry = { ...e, ...(st.colour ? { colour: st.colour } : {}), ...(st.statsSource ? { statsSource: st.statsSource } : {}) };
     if (st.roughnessMean !== undefined) { out.roughnessMean = st.roughnessMean; out.roughnessSpread = st.roughnessSpread; }
     if (st.metallic !== undefined) out.metallic = st.metallic;
+    out.hasMetalnessMap = !!(e.maps.metalness || e.maps.arm);
+    if (st.metalnessMeasured) { out.metalShare = st.metalShare; out.metalnessP95 = st.metalnessP95; }
+    else if (st.version !== undefined && out.hasMetalnessMap) {
+        // the bucket holds a metalness map its publisher has no preview of: its metalness is unknown, not 0
+        delete out.metallic;
+        out.notes = [...(out.notes ?? []), 'its metalness map has no preview to measure: metalness unmeasured'];
+    }
+    if (st.normalTiltRmsDeg !== undefined) out.normalTiltRmsDeg = st.normalTiltRmsDeg;
     const aspect = st.sourceSize ? st.sourceSize[1] / st.sourceSize[0] : undefined;
     if (aspect && e.pixels && e.pixels[0] === e.pixels[1] && aspect !== 1) {
         const long = e.pixels[0];
@@ -132,7 +150,7 @@ async function fetchRetry(url: string, signal?: AbortSignal, tries = 3): Promise
     }
 }
 
-/** A Poly Haven set's 1K JPEG colour and roughness (or packed ARM) maps, from its file listing. */
+/** A Poly Haven set's 1K JPEG colour, normal, roughness (or packed ARM) and metalness maps, from its file listing. */
 async function polyHavenPreviews(id: string, signal?: AbortSignal): Promise<NonNullable<TextureLibraryEntry['previews']>> {
     const r = await fetchRetry(`https://api.polyhaven.com/files/${encodeURIComponent(id)}`, signal);
     if (!r.ok) throw new Error(`Poly Haven lists no files for ${id} (HTTP ${r.status})`);
@@ -140,22 +158,30 @@ async function polyHavenPreviews(id: string, signal?: AbortSignal): Promise<NonN
     const jpg = (k: string) => files[k]?.['1k']?.jpg?.url;
     return {
         ...(jpg('Diffuse') ? { color: jpg('Diffuse') } : {}),
-        ...(jpg('Rough') ? { roughness: jpg('Rough') } : jpg('arm') ? { arm: jpg('arm') } : {}),
+        ...(jpg('nor_gl') ? { normal: jpg('nor_gl') } : {}),
+        // the packed map carries the metalness (its blue channel); a separate roughness map, when listed, overrides its green
+        ...(jpg('arm') ? { arm: jpg('arm') } : {}),
+        ...(jpg('Rough') ? { roughness: jpg('Rough') } : {}),
         ...(jpg('Metal') ? { metalness: jpg('Metal') } : {})
     };
 }
 
+/** Whether a set has been measured at the current STATS_VERSION, or failed to be (a failure is not retried). */
+export function libraryEntryMeasured(repoRoot: string, id: string): boolean {
+    try { const st = JSON.parse(fs.readFileSync(statsFile(repoRoot, id), 'utf8')) as MeasuredStats; return !!st.error || st.version === STATS_VERSION; } catch { return false; }
+}
+
 /**
- * Measures the given sets' colour, roughness and metalness with the engine (sb._native.surface.prepare_material_maps) on
+ * Measures the given sets' colour, roughness, metalness and normal relief with the engine (sb._native.surface.prepare_material_maps) on
  * their publishers' small preview maps, and caches the statistics per set; the previews are deleted once measured. Sets
- * measured before are skipped. Only what a search is about to rank is measured, never the whole library.
+ * measured before (at the current STATS_VERSION, or that failed) are skipped. Only what a search is about to rank is measured, never the whole library.
  */
 export async function measureLibraryEntries(entries: TextureLibraryEntry[], opts: { repoRoot: string; signal?: AbortSignal; concurrency?: number }): Promise<{ measured: string[]; failed: Array<{ id: string; reason: string }> }> {
-    const todo = entries.filter(e => !fs.existsSync(statsFile(opts.repoRoot, e.id)));
+    const todo = entries.filter(e => !libraryEntryMeasured(opts.repoRoot, e.id));
     const failed: Array<{ id: string; reason: string }> = [];
     if (!todo.length) return { measured: [], failed };
     const work = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-library-previews-'));
-    const jobs: Array<{ id: string; publisher: string; color: string; roughness?: string; metalness?: string; arm?: string }> = [];
+    const jobs: Array<{ id: string; publisher: string; color: string; normal?: string; roughness?: string; metalness?: string; arm?: string }> = [];
     let next = 0;
     await Promise.all(Array.from({ length: Math.min(opts.concurrency ?? 8, todo.length) }, async () => {
         while (next < todo.length) {
@@ -188,9 +214,11 @@ jobs = json.load(open(${JSON.stringify(path.join(work, 'jobs.json'))}))
 out = {}
 for j in jobs:
     try:
-        r = n.surface.prepare_material_maps(j["color"], roughness=j.get("roughness", ""), metalness=j.get("metalness", ""), arm=j.get("arm", ""), max_size=256)
+        r = n.surface.prepare_material_maps(j["color"], normal=j.get("normal", ""), roughness=j.get("roughness", ""), metalness=j.get("metalness", ""), arm=j.get("arm", ""), max_size=256)
         out[j["id"]] = {k: (list(v) if isinstance(v, tuple) else v) for k, v in r.items() if not k.endswith("_png")}
         out[j["id"]]["has_roughness"] = bool(j.get("roughness") or j.get("arm"))
+        out[j["id"]]["has_metalness"] = bool(j.get("metalness") or j.get("arm"))
+        out[j["id"]]["has_normal"] = bool(j.get("normal"))
     except Exception as e:
         out[j["id"]] = {"error": str(e)}
 json.dump(out, open(${JSON.stringify(out)}, "w"))
@@ -210,6 +238,10 @@ json.dump(out, open(${JSON.stringify(out)}, "w"))
                     },
                     ...(st.has_roughness ? { roughnessMean: r4(st.mean_roughness), roughnessSpread: r4(st.spread_roughness) } : {}),
                     metallic: r4(st.mean_metalness),
+                    metalnessMeasured: !!st.has_metalness,
+                    ...(st.has_metalness ? { metalShare: r4(st.metal_share), metalnessP95: r4(st.metalness_p95) } : {}),
+                    ...(st.has_normal ? { normalTiltRmsDeg: r2(st.normal_tilt_rms_deg) } : {}),
+                    version: STATS_VERSION,
                     statsSource: `${j.publisher} preview maps (${st.source_size.join('x')}), measured by the engine`,
                     sourceSize: st.source_size
                 };

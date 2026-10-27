@@ -1341,13 +1341,16 @@ NB_MODULE(scratchbox_native, m) {
         out["mean_roughness"] = prep.meanRoughness;
         out["spread_roughness"] = prep.spreadRoughness;
         out["mean_metalness"] = prep.meanMetalness;
+        out["metal_share"] = prep.metalShare;
+        out["metalness_p95"] = prep.metalnessP95;
+        out["normal_tilt_rms_deg"] = prep.normalTiltRmsDeg;
         out["source_size"] = nb::make_tuple(prep.sourceWidth, prep.sourceHeight);
         out["size"] = nb::make_tuple(prep.albedo.width, prep.albedo.height);
         return out;
     }, "color"_a, "normal"_a = "", "roughness"_a = "", "ao"_a = "", "metalness"_a = "", "arm"_a = "", "max_size"_a = 2048,
        "Decode a surface library's maps (PNG 8/16-bit or baseline JPEG), area-resample them to at most max_size pixels a side and "
        "pack them as albedo, normal and ORM PNG bytes, with per-pixel statistics (colour mean and spread in linear sRGB and "
-       "CIELAB, roughness mean and spread, mean metalness)");
+       "CIELAB, roughness mean and spread, metalness mean, share at least 0.5 and 95th percentile, normal tilt RMS in degrees)");
 
     m_surface.def("remap_png_channels", [](nb::bytes png_bytes, std::array<double, 3> scale, std::array<double, 3> offset, bool srgb) {
         std::vector<uint8_t> in(reinterpret_cast<const uint8_t*>(png_bytes.c_str()), reinterpret_cast<const uint8_t*>(png_bytes.c_str()) + png_bytes.size());
