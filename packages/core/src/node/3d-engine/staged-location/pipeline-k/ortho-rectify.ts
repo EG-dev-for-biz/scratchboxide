@@ -274,7 +274,7 @@ export function straightness(lines: TracedLine[]): number {
 }
 
 /** Sparse rows of a linear least-squares system: each row is sqrt(weight) * (sum c_k u_{i_k} - b). */
-class Rows {
+export class Rows {
     idx: number[] = []; val: number[] = []; start: number[] = [0]; rhs: number[] = [];
     add(cols: number[], coefs: number[], b: number, w: number): void {
         const s = Math.sqrt(w);
@@ -285,7 +285,7 @@ class Rows {
 }
 
 /** Solves min |A u - b|^2 by Jacobi-preconditioned conjugate gradients on A^T A u = A^T b, from u0. */
-function solveLeastSquares(rows: Rows, n: number, u0: Float64Array, iterations: number, tol: number): { u: Float64Array; iterations: number } {
+export function solveLeastSquares(rows: Rows, n: number, u0: Float64Array, iterations: number, tol: number): { u: Float64Array; iterations: number } {
     const nr = rows.rhs.length, idx = Int32Array.from(rows.idx), val = Float64Array.from(rows.val), start = Int32Array.from(rows.start), rhs = Float64Array.from(rows.rhs);
     const tmp = new Float64Array(nr);
     const AtA = (x: Float64Array, out: Float64Array) => {

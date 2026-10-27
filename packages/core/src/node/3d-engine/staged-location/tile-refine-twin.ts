@@ -42,6 +42,7 @@ import { assembleGlb, parseGlbBytes, readAccessor } from './glb-bytes';
 import { encodePng } from './png-encode';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { decodeImageInMemory, type RgbaImage8 } from './tile-texture-transfer';
+import { harmonizeTextures, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
 import {
     boxDownsample, cropImage, enhancementGate, padToModelAspect, RECREATE_GATE, recreatePrompt,
     type EnhanceModelClient, type EnhanceModelRequest
@@ -77,6 +78,7 @@ export interface TileRefineTwin {
     ladderRung: number;
     triangles: number;
     recreate?: TileRefineRecreateReport;
+    harmonize?: TextureHarmonizeReport;
 }
 
 function triArea(p: Float64Array, a: number, b: number, c: number): number {
@@ -151,7 +153,7 @@ function resizeToExact(img: RgbaImage8, width: number, height: number): RgbaImag
 }
 
 /** The twin of tile_refine's photo-textured output `texturedGlb` (its bytes) for the layer `layerKey`. */
-export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, opts?: { recreate?: TileRefineRecreateOptions }): Promise<TileRefineTwin> {
+export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, opts?: { recreate?: TileRefineRecreateOptions; /** Pipeline K: the de-lit photos colour-matched per side and height band and their seams levelled (pipeline-k/texture-harmonize.ts), measured from this ground. */ harmonize?: { groundY: number } }): Promise<TileRefineTwin> {
     const g = parseGlbBytes(texturedGlb);
     const json = JSON.parse(JSON.stringify(g.json));
     const materials: any[] = json.materials ?? (json.materials = []);
@@ -220,6 +222,10 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
         recreate = { attempted, accepted, rejected, failed, timedOut, modelsUsed: Array.from(modelsUsed) };
     }
 
+    // pipeline K: one colour across the photos (after the de-light, on the pixels that will be shown)
+    let harmonize: TextureHarmonizeReport | undefined;
+    if (opts?.harmonize && finalImage.size) harmonize = harmonizeTextures(g, json, finalImage, opts.harmonize.groundY);
+
     // the binary chunk: appended to below, both for the final (de-lit or recreated) photos and the confidence texels
     const bin: Uint8Array[] = [g.bin];
     let binLength = g.bin.byteLength;
@@ -240,8 +246,9 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     const delit = jobs.length;
     const method = () => {
         const base = `tile_refine's remesh carries the leaf tiles' own photos (UVs into each leaf's image), de-lit (shadowLift ${PHOTOGRAMMETRIC_DELIGHT.defaults.shadowLift}, highlightCompress ${PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress}; ${delit} of ${delit} photos)`;
-        if (!recreate) return base;
-        return `${base}, further recreated by ${recreate.modelsUsed.join(', ') || 'an image model'} removing the scan's own baked shadow/highlight and recovering the material's true colour (gated on structure and hue/chroma): ${recreate.accepted} of ${recreate.attempted} accepted (${recreate.rejected} rejected, ${recreate.failed} model failures${recreate.timedOut ? `, ${recreate.timedOut} ran out of time` : ''})`;
+        const h = harmonize?.kept ? `; then harmonised (pipeline K): ${harmonize.why}` : harmonize ? `; harmonising left them as they were (${harmonize.why})` : '';
+        if (!recreate) return base + h;
+        return `${base}${h}, further recreated by ${recreate.modelsUsed.join(', ') || 'an image model'} removing the scan's own baked shadow/highlight and recovering the material's true colour (gated on structure and hue/chroma): ${recreate.accepted} of ${recreate.attempted} accepted (${recreate.rejected} rejected, ${recreate.failed} model failures${recreate.timedOut ? `, ${recreate.timedOut} ran out of time` : ''})`;
     };
     const provenance = [
         { source: 'tile-photo', label: 'photo-inferred', method: delit ? method() : "tile_refine's remesh carries the leaf tiles' own photos (UVs into each leaf's image), as captured: not de-lit", coverage: photoArea / total },
@@ -284,5 +291,5 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     let o = 0;
     for (const b of bin) { out.set(b, o); o += b.byteLength; }
     const ladderRung = rungShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1);
-    return { glb: assembleGlb(json, out), rungShares, provenance, ladderRung, triangles, ...(recreate ? { recreate } : {}) };
+    return { glb: assembleGlb(json, out), rungShares, provenance, ladderRung, triangles, ...(recreate ? { recreate } : {}), ...(harmonize ? { harmonize } : {}) };
 }
