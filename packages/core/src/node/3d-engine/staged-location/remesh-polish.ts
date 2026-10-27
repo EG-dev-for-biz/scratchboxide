@@ -61,7 +61,7 @@ export function polishRemesh(input: { clayGlb: string; texturedGlb?: string; cac
             clay = b.clay; tex = tex ? b.others[0] : undefined; stats.base = b.report;
         }
         if (input.seal) {
-            const sl = fillOpenLoops(clay, tex ? [tex] : []);
+            const sl = fillOpenLoops(clay, tex ? [tex] : [], input.base ? { footprint: input.base.loops } : {});
             clay = sl.clay; tex = tex ? sl.others[0] : undefined; stats.seal = sl.report;
         }
         fs.mkdirSync(dir, { recursive: true });
@@ -90,7 +90,7 @@ export function describePolish(s: RemeshPolishStats): string {
     }
     if (s.seal) {
         const q = s.seal;
-        parts.push(`shell closed: ${q.filled + q.clipped3d} holes filled (the bottom capped; ${q.addedAreaM2} m² generated)${q.openAfter ? `; ${q.openAfter} open edges left (${q.skippedWallOnly} wall outlines not filled)` : '; watertight: no open edge left'}`);
+        parts.push(`shell closed: ${q.filled + q.clipped3d} holes filled (the bottom capped; ${q.addedAreaM2} m² generated)${q.openAfter ? `; ${q.openAfter} open edges left (${q.skippedWallOnly} wall outlines not filled, ${q.unclosedLoops} loops with no fill inside the building)` : '; watertight: no open edge left'}`);
     }
     return parts.join('; ');
 }
