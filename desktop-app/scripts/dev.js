@@ -20,9 +20,13 @@ const webPort = process.env.SCRATCHBOX_WEB_PORT || '3030';
 const apiPort = process.env.PORT || process.env.SCRATCHBOX_API_PORT || '3001';
 const host = '127.0.0.1';
 
+// No token in the browser by default (the server honours it on loopback only); SCRATCHBOX_NO_LAUNCH_TOKEN=0 turns it back on.
+const noLaunchToken = process.env.SCRATCHBOX_NO_LAUNCH_TOKEN !== '0';
+
 const env = {
     ...process.env,
     SCRATCHBOX_LAUNCH_TOKEN: token,
+    SCRATCHBOX_NO_LAUNCH_TOKEN: noLaunchToken ? '1' : '0',
     NODE_ENV: 'development',
     SCRATCHBOX_ALLOW_LOCAL_IP: 'true'
 };
@@ -80,7 +84,9 @@ function waitForHttp(url, timeoutMs = 30000) {
 // Browser access (outside Electron) needs the token in the URL once; the
 // renderer strips it from the address bar. The API never hands it out.
 waitForHttp(`http://${host}:${webPort}/`, 90000).then(() => {
-    console.log(`\n🔑 Open in a browser: http://${host}:${webPort}/?token=${token}\n`);
+    console.log(noLaunchToken
+        ? `\n🔓 Open in a browser: http://${host}:${webPort}/\n`
+        : `\n🔑 Open in a browser: http://${host}:${webPort}/?token=${token}\n`);
 }).catch(() => undefined);
 
 const shouldLaunchElectron = process.env.SCRATCHBOX_NO_ELECTRON !== 'true' &&

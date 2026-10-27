@@ -306,6 +306,25 @@ export function resolveLaunchToken(): string {
     return fromEnv || crypto.randomBytes(32).toString('hex');
 }
 
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
+
+/**
+ * Browser use without a token (SCRATCHBOX_NO_LAUNCH_TOKEN=1, the dev launcher's default): the API gate is off, but
+ * only while the server listens on loopback. On any other HOST the token is still required, whatever the flag says.
+ * The CORS allowlist stays on either way, so another site's page still cannot call the API.
+ */
+export function launchTokenDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
+    if (env.SCRATCHBOX_NO_LAUNCH_TOKEN !== '1') {
+        return false;
+    }
+    const host = (env.HOST || '127.0.0.1').trim();
+    if (!LOOPBACK_HOSTS.has(host)) {
+        console.warn(`[Scratchbox API] SCRATCHBOX_NO_LAUNCH_TOKEN ignored: HOST=${host} is not loopback, so the launch token stays required.`);
+        return false;
+    }
+    return true;
+}
+
 function createCorsMiddleware(allowedOrigins: Set<string>) {
     return (req: Request, res: Response, next: NextFunction): void => {
         const origin = req.headers.origin;
@@ -564,7 +583,10 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
         } catch {}
     }
 
-    app.use(createLaunchTokenMiddleware(launchToken));
+    app.locals.launchTokenRequired = !launchTokenDisabled();
+    if (app.locals.launchTokenRequired) {
+        app.use(createLaunchTokenMiddleware(launchToken));
+    }
     app.use(bodyParser.json({ limit: '50mb' }));
     app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 

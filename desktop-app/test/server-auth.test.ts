@@ -153,6 +153,42 @@ test('server-auth: SCRATCHBOX_LAUNCH_TOKEN and SCRATCHBOX_ALLOWED_ORIGINS are ho
     }
 });
 
+test('server-auth: SCRATCHBOX_NO_LAUNCH_TOKEN opens the API on loopback only, CORS still applies', async () => {
+    delete process.env.SCRATCHBOX_LAUNCH_TOKEN;
+    process.env.SCRATCHBOX_NO_LAUNCH_TOKEN = '1';
+    const savedHost = process.env.HOST;
+    try {
+        delete process.env.HOST;
+        const app = createStandaloneServer({ port: 0 });
+        assert.strictEqual(app.locals.launchTokenRequired, false);
+        const { server, baseUrl } = await listen(app);
+        try {
+            const noToken = await fetch(`${baseUrl}/gemini/models`);
+            assert.strictEqual(noToken.status, 200, 'no token needed when the gate is off');
+            // a stale token from an earlier launch is ignored, not rejected
+            const stale = await fetch(`${baseUrl}/gemini/models`, { headers: { 'X-Scratchbox-Token': 'stale' } });
+            assert.strictEqual(stale.status, 200);
+            const foreign = await fetch(`${baseUrl}/gemini/models`, { headers: { Origin: 'https://evil.example' } });
+            assert.strictEqual(foreign.status, 403, 'a foreign Origin is still refused');
+        } finally {
+            close(server);
+        }
+
+        process.env.HOST = '0.0.0.0';
+        const exposed = createStandaloneServer({ port: 0 });
+        assert.strictEqual(exposed.locals.launchTokenRequired, true, 'a non-loopback HOST keeps the token');
+        const { server: exposedServer, baseUrl: exposedUrl } = await listen(exposed);
+        try {
+            assert.strictEqual((await fetch(`${exposedUrl}/gemini/models`)).status, 401);
+        } finally {
+            close(exposedServer);
+        }
+    } finally {
+        delete process.env.SCRATCHBOX_NO_LAUNCH_TOKEN;
+        if (savedHost === undefined) delete process.env.HOST; else process.env.HOST = savedHost;
+    }
+});
+
 test('server-auth: workspace roots outside the allowlist are rejected', async () => {
     delete process.env.SCRATCHBOX_LAUNCH_TOKEN;
     const app = createStandaloneServer({ port: 0 });
