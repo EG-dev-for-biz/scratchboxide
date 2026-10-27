@@ -85,6 +85,25 @@ describe('a procedural-only build (the 3D Building button)', () => {
     });
 });
 
+describe('a pipeline K isolate (the 3D Building default)', () => {
+    it('never loads the surroundings: no vector massing, terrain, vehicle removal or roads, none of them listed', async () => {
+        const asked: number[] = [];
+        const elevation = { sample: async (points: Array<{ lat: number; lng: number }>) => { asked.push(points.length); return points.map(() => 20); } };
+        const s = setup(ARCH, {}, { elevation });
+        const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false, pipeline: 'k' }, s.deps, s.ctx);
+        const surroundings = ['vector', 'vehicles', 'terrain', 'roads'];
+        for (const st of surroundings) expect(statusOf(s.events, st)).toEqual(['skipped']);
+        expect(s.events.filter(x => surroundings.includes(x.e.stage)).every(x => x.e.outOfScope === true)).toBe(true);
+        expect(asked).toEqual([]);
+        const listed = new Set<string>();
+        for (const { artifact } of s.events) for (const st of ((artifact as any)?.data?.stagedBuild?.stages ?? [])) listed.add(st.stage);
+        expect([...listed].filter(id => surroundings.includes(id))).toEqual([]);
+        expect((result.artifact as any).data.stagedBuild.layers.filter((l: any) => surroundings.includes(l.stage))).toEqual([]);
+        // the building itself is still staged from the tiles
+        expect((result.artifact as any).data.stagedBuild.layers.some((l: any) => l.stage === 'tiles' || l.stage === 'remesh')).toBe(true);
+    });
+});
+
 describe('a district', () => {
     it('with an elevation sampler, the ground around the place is a measured terrain layer under everything; without one the stage is skipped', async () => {
         const asked: number[] = [];

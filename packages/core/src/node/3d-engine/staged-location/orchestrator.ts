@@ -184,6 +184,7 @@ import { runMassingStage, runNativeMassing, stagedPipelineE, pipelineEInference,
 import { PIPELINE_G_VERSION, runPipelineG, stagedPipelineG } from './pipeline-g/pipeline-g';
 import { H_BUDGET_MARGIN_MS, H_POLICY, PIPELINE_H_VERSION, stagedProcedural } from './pipeline-h/pipeline-h';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK } from './pipeline-k/pipeline-k';
+import { measureVisibleDefects } from './pipeline-k/visible-defects';
 import { TEXTURE_HARMONIZE_VERSION, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
 import { describeMaterialRegions, MATERIAL_REGIONS_VERSION, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE, PIPELINE_I_VERSION, TRELLIS_SEEDS, runPipelineI } from './pipeline-i/pipeline-i';
@@ -241,6 +242,9 @@ export const FOOTPRINT_LOCK_VERSION = 'footprint-lock/v1';
 const PROCEDURAL_ONLY = 'procedural build only: the 3D Building build runs only the steps its procedural pipeline needs';
 /** The stages a procedural-only build runs: the place, the tiles, the vector data, the massing it builds on (remesh) and the procedural pipeline (grammar). */
 const PROCEDURAL_STAGES: ReadonlySet<string> = new Set(['resolve', 'tiles', 'vector', 'remesh', 'grammar', 'finish']);
+const PIPELINE_K_ISOLATE = 'pipeline K builds the one building: the surroundings (vector massing, terrain, street cleanup) are not loaded';
+/** The surroundings a pipeline K isolate leaves out: it keeps and straightens the one building's scan, on the scene's own ground. */
+const PIPELINE_K_ISOLATE_SKIPPED: ReadonlySet<StageId> = new Set<StageId>(['vector', 'vehicles', 'terrain', 'roads']);
 
 export const STAGES = {
     resolve: { order: -1, title: 'Place', budgetMs: 10_000 },
@@ -838,11 +842,13 @@ class Runner {
 
     /** A procedural-only build (the 3D Building button): every skip is a step outside that build, left out of the progress view. */
     proceduralOnly = false;
+    /** Stages outside this kind of build on their own (a pipeline K isolate's surroundings), also left out of the progress view. */
+    outOfScope: ReadonlySet<StageId> = new Set();
 
     skip(id: StageId, reason: string, degradations: DegradationRecord[] = []): void {
         const s = this.run.summary(id);
         if (s.status !== 'pending') return;
-        this.run.emit(id, 'skipped', { reason, degradations, ...(this.proceduralOnly ? { outOfScope: true } : {}) });
+        this.run.emit(id, 'skipped', { reason, degradations, ...(this.proceduralOnly || this.outOfScope.has(id) ? { outOfScope: true } : {}) });
     }
 
     /**
@@ -1297,6 +1303,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     runner.proceduralOnly = request.procedural === true;
     // a procedural-only build never lists the other stages, not even as pending before they are skipped
     if (runner.proceduralOnly) for (const s of run.state.stages) if (!PROCEDURAL_STAGES.has(s.stage)) s.outOfScope = true;
+    // a pipeline K isolate (the 3D Building default) never loads the place around the building
+    const kIsolate = request.isolate === true && request.procedural !== true && stagedPipelineK(request);
+    if (kIsolate) {
+        runner.outOfScope = PIPELINE_K_ISOLATE_SKIPPED;
+        for (const s of run.state.stages) if (PIPELINE_K_ISOLATE_SKIPPED.has(s.stage as StageId)) s.outOfScope = true;
+    }
     const base = `${slug(request.query)}${request.isolate ? '_iso' : ''}`;
     const persist = () => {
         const rec: RunRecord = {
@@ -1353,7 +1365,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- vector (the first paint: Google's vector buildings, extruded natively, beside the tile download) ----------------
         // it commits l0 as soon as it is built, unless the tiles were first; once the tiles commit, the buildings they do not cover
         // (a district past the leaf-tile cap) are kept as l0o, on bases measured against the tiles' own frame
-        const vectorPromise = runner.stage<{ buildings: number; outer: number }>({
+        if (kIsolate) runner.skip('vector', PIPELINE_K_ISOLATE);
+        const vectorPromise = kIsolate ? Promise.resolve(undefined) : runner.stage<{ buildings: number; outer: number }>({
             id: 'vector',
             run: async io => {
                 if (!deps.vectorEvidence) return { status: 'skipped', source: '', reason: 'no Google vector data: no service account is configured for vectortiles.featuretiles' };
@@ -1631,6 +1644,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- vehicles (vehicle-removal.ts): every later stage builds on the scan without them ----------------
         const devehicled = await (async (): Promise<typeof t.extraction | undefined> => {
             if (request.procedural === true) { runner.skip('vehicles', PROCEDURAL_ONLY); return undefined; }
+            if (kIsolate) { runner.skip('vehicles', PIPELINE_K_ISOLATE); return undefined; }
             if (!vehicleRemovalEnabled() || !deps.vehicleRemoval) { runner.skip('vehicles', 'vehicle removal is off (SCRATCHBOX_STAGED_VEHICLES=0, or not in these deps)'); return undefined; }
             const vis = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
             const notRemoved = (reason: string, cause?: unknown, transient = false) => run.degrade(record('vehicles', 'vehicles_not_removed', {
@@ -1713,6 +1727,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- terrain (starts now and runs beside everything else; needs only the extraction's frame) ----------------
         if (request.procedural === true) {
             runner.skip('terrain', PROCEDURAL_ONLY);
+        } else if (kIsolate) {
+            runner.skip('terrain', PIPELINE_K_ISOLATE);
         } else if (!deps.elevation) {
             runner.skip('terrain', 'no Google Maps API key for the Elevation API, so the ground around the place is not measured');
         } else {
@@ -2845,6 +2861,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         type RoadStageValue = { stats: RoadMesh['stats']; measuredKerbShare: number; photo: { width: number; height: number; texelM: number; ms: number }; markings?: { runs: number; markings: number; dashed: number; solid: number } } | undefined;
         const roadsPromise: Promise<unknown> = (async () => {
             if (request.procedural === true) { runner.skip('roads', PROCEDURAL_ONLY); return; }
+            if (kIsolate) { runner.skip('roads', PIPELINE_K_ISOLATE); return; }
             if (!sbRoadieEnabled()) { runner.skip('roads', 'SB-Roadie is shelved for now (SCRATCHBOX_STAGED_ROADS=1 to try it)'); return; }
             const covered = extraction.coveredRadiusM;
             // the vector evidence the sizing fetched (an isolate), else fetched now for the extraction's cover (a district)
@@ -3341,6 +3358,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (pol.clayGlb !== r.clayGlb) {
                         run.note(PROVENANCE.remeshed, `remesh polish (${REMESH_POLISH_VERSION}): ${describePolish(pol.stats)}`);
                         r = { ...r, cacheKey: pol.cacheKey, clayGlb: pol.clayGlb, ...(pol.texturedGlb ? { texturedGlb: pol.texturedGlb } : {}) };
+                    }
+                    // the textured build looked at from outside: untextured surface (the seal's caps, the stitch's strips) or holes seen on it are flagged
+                    if (pipelineK && isolateMode && pol.texturedGlb) {
+                        const seen = await timed('visibleDefects', async () => measureVisibleDefects(fs.readFileSync(pol.texturedGlb!)));
+                        cache.writeRunNote(runId, 'pipeline_k_visible_defects', { ...seen, views: seen.views.map(({ mask: _m, ...v }) => v) });
+                        if (seen.flagged) isolateDegradations.push(run.degrade(record('remesh', 'visible_defects', {
+                            part: { description: 'untextured surface or holes seen on the outside of the building' }, intended: 'every surface seen from outside closed and textured from the photos',
+                            fellTo: 'grey clay or a hole where it shows', provenanceAfter: PROVENANCE.generated, reason: seen.why, transient: false, runId, now: now()
+                        })));
                     }
                 }
                 run.keys.remesh = r.cacheKey;
