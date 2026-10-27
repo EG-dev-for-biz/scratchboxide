@@ -3316,7 +3316,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 }
                 // the scan cleaned and its rectified facades rebuilt on their photo's lines before it is textured (remesh-polish.ts)
                 {
-                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: true } : {}) }));
+                    // pipeline K: the base cleaned by the structure's footprint (Google's vector footprint, else the scan's own outline)
+                    const kLoops = pipelineK && isolateMode && structure ? (() => {
+                        const vec = eBuildings.flatMap(b => (b.extruded?.length ? b.extruded.filter(p => !p.planOnly).map(p => p.loops[0]) : [])).filter(l => l && l.length >= 3);
+                        return vec.length ? vec : [structure.outline];
+                    })() : undefined;
+                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: true } : {}), ...(kLoops ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}) }));
+                    if (kLoops) cache.writeRunNote(runId, 'pipeline_k_base', { loops: kLoops, groundY: structure!.groundY, footprint: eBuildings.length ? 'Google vector footprint' : 'scan outline', report: pol.stats.base ?? null });
                     if (pol.clayGlb !== r.clayGlb) {
                         run.note(PROVENANCE.remeshed, `remesh polish (${REMESH_POLISH_VERSION}): ${describePolish(pol.stats)}`);
                         r = { ...r, cacheKey: pol.cacheKey, clayGlb: pol.clayGlb, ...(pol.texturedGlb ? { texturedGlb: pol.texturedGlb } : {}) };
