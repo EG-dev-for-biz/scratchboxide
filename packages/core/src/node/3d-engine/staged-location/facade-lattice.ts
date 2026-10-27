@@ -31,7 +31,7 @@ import { cutScanToLattice, stitchLattice, watertightLatticeMesh, type CutReport,
 import * as fs from 'fs';
 import * as path from 'path';
 
-export const FACADE_LATTICE_VERSION = 'facade-lattice/4';
+export const FACADE_LATTICE_VERSION = 'facade-lattice/5';
 
 export const FACADE_LATTICE_PARAMS = {
     /** Facades tile_refine rectified with at least this share of their ortho covered. */
@@ -183,7 +183,9 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
     if (measured / (ns * nt) < P.minMeasuredShare) return undefined;
     // repeats averaged: per row, the darker and lighter class each take their median depth
     const depth: number[][] = [];
+    const rowMeds: number[] = [];
     let photoRecessCells = 0;
+    const clamp = (v: number) => Math.min(P.maxDepthM, Math.max(P.minDepthM, v));
     for (let b = 0; b < nt; b++) {
         const cells = Array.from({ length: ns }, (_, a) => b * ns + a);
         const ls = cells.map(k => lum[k]).filter(Number.isFinite);
@@ -192,6 +194,7 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
         let dm = median(dark.map(k => raw[k]).filter(Number.isFinite));
         const lm = median(light.map(k => raw[k]).filter(Number.isFinite));
         const rowMed = median(cells.map(k => raw[k]).filter(Number.isFinite));
+        rowMeds.push(rowMed);
         // pipeline K: the row's repeated openings recessed as the photo shows them, unless the scan measures them deeper
         let recessed = false;
         if (photoRecess && dark.length >= PHOTO_RECESS.minRepeats) {
@@ -199,7 +202,6 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
             const r = wallLum > 0 && Number.isFinite(wall) ? photoRecessDepth(1 - median(dark.map(k => lum[k])) / wallLum) : undefined;
             if (r !== undefined && !(dm <= wall - r)) { dm = wall - r; recessed = true; }
         }
-        const clamp = (v: number) => Math.min(P.maxDepthM, Math.max(P.minDepthM, v));
         depth.push(cells.map(k => clamp(Number.isFinite(lum[k] < split ? dm : lm) ? (lum[k] < split ? dm : lm) : Number.isFinite(rowMed) ? rowMed : 0)));
         if (recessed) photoRecessCells += dark.filter(k => built[k]).length;
     }
@@ -213,14 +215,34 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
         idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
     };
     const N = f.normal, S = f.axisS, T = f.axisT, neg = (v: number[]) => v.map(x => -x);
+    // a side face on line s = sv between depth L (the smaller-s side) and R, wound to face the side it shows to (S x T = N)
+    const sideS = (sv: number, t0: number, t1: number, L: number, R: number) => {
+        if (!(Math.abs(L - R) > P.stepM)) return;
+        if (L > R) quad([[sv, t0, R], [sv, t1, R], [sv, t1, L], [sv, t0, L]], S);
+        else quad([[sv, t0, L], [sv, t0, R], [sv, t1, R], [sv, t1, L]], neg(S));
+    };
+    // on line t = tv between depth B (the smaller-t side, below) and A
+    const sideT = (tv: number, s0: number, s1: number, B: number, A: number) => {
+        if (!(Math.abs(B - A) > P.stepM)) return;
+        if (B > A) quad([[s0, tv, A], [s0, tv, B], [s1, tv, B], [s1, tv, A]], T);
+        else quad([[s0, tv, B], [s1, tv, B], [s1, tv, A], [s0, tv, A]], neg(T));
+    };
+    // where the scan stands beside a rebuilt cell: a neighbour left as scan, or past the lattice's edge (the scan's own depth in
+    // the cell, uncarved): its measured depth, else its row's; NaN when the scan measures nothing there (no face is drawn)
+    const scanDepthAt = (a: number, b: number) => { const v = raw[b * ns + a]; return Number.isFinite(v) ? clamp(v) : Number.isFinite(rowMeds[b]) ? clamp(rowMeds[b]) : NaN; };
+    const isBuilt = (a: number, b: number) => a >= 0 && b >= 0 && a < ns && b < nt && !!built[b * ns + a];
+    const beside = (a: number, b: number, na: number, nb: number) => isBuilt(na, nb) ? depth[nb][na] : na >= 0 && nb >= 0 && na < ns && nb < nt ? scanDepthAt(na, nb) : scanDepthAt(a, b);
     for (let b = 0; b < nt; b++) for (let a = 0; a < ns; a++) {
-        // a cell the photo does not cover keeps the scan; no step face is drawn against it
+        // a cell the photo does not cover keeps the scan
         if (!built[b * ns + a]) continue;
         const d = depth[b][a];
         // counter-clockwise seen from outside (along +normal): s right, t up
         quad([[s[a], t[b], d], [s[a + 1], t[b], d], [s[a + 1], t[b + 1], d], [s[a], t[b + 1], d]], N);
-        if (a + 1 < ns && built[b * ns + a + 1]) { const e = depth[b][a + 1]; if (Math.abs(e - d) > P.stepM) quad(d > e ? [[s[a + 1], t[b], e], [s[a + 1], t[b], d], [s[a + 1], t[b + 1], d], [s[a + 1], t[b + 1], e]] : [[s[a + 1], t[b], d], [s[a + 1], t[b + 1], d], [s[a + 1], t[b + 1], e], [s[a + 1], t[b], e]], d > e ? S : neg(S)); }
-        if (b + 1 < nt && built[(b + 1) * ns + a]) { const e = depth[b + 1][a]; if (Math.abs(e - d) > P.stepM) quad(d > e ? [[s[a], t[b + 1], e], [s[a], t[b + 1], d], [s[a + 1], t[b + 1], d], [s[a + 1], t[b + 1], e]].reverse() as Array<[number, number, number]> : [[s[a], t[b + 1], d], [s[a], t[b + 1], e], [s[a + 1], t[b + 1], e], [s[a + 1], t[b + 1], d]].reverse() as Array<[number, number, number]>, d > e ? T : neg(T)); }
+        // reveals: to every side, toward a rebuilt cell (drawn once, from its smaller-s or smaller-t side) or toward the scan
+        sideS(s[a + 1], t[b], t[b + 1], d, beside(a, b, a + 1, b));
+        if (!isBuilt(a - 1, b)) sideS(s[a], t[b], t[b + 1], beside(a, b, a - 1, b), d);
+        sideT(t[b + 1], s[a], s[a + 1], d, beside(a, b, a, b + 1));
+        if (!isBuilt(a, b - 1)) sideT(t[b], s[a], s[a + 1], beside(a, b, a, b - 1), d);
     }
     if (!built.some(v => v)) return undefined;
     return { facadeId: f.facadeId, s, t, cells: built.reduce((x, v) => x + v, 0), measuredShare: Math.round((measured / (ns * nt)) * 1000) / 1000, depth, ...(photoRecess ? { photoRecessCells } : {}), built, positions: Float32Array.from(pos), normals: Float32Array.from(nrm), uv: Float32Array.from(uv), indices: Uint32Array.from(idx) };

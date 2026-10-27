@@ -72,6 +72,49 @@ describe('facades on their photo lattice', () => {
         expect(r.indices.length).toBeGreaterThan(0);
     });
 
+    it('winds every face, the cells and their reveals, to face the way its normal says', () => {
+        const r = latticeFacade(f, photo(), facadeSamples(scan(), f))!;
+        let reveals = 0;
+        for (let i = 0; i < r.indices.length; i += 3) {
+            const [a, b, c] = [r.indices[i], r.indices[i + 1], r.indices[i + 2]];
+            const u = [0, 1, 2].map(k => r.positions[b * 3 + k] - r.positions[a * 3 + k]), v = [0, 1, 2].map(k => r.positions[c * 3 + k] - r.positions[a * 3 + k]);
+            const g = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+            const n = [r.normals[a * 3], r.normals[a * 3 + 1], r.normals[a * 3 + 2]];
+            expect(g[0] * n[0] + g[1] * n[1] + g[2] * n[2]).toBeGreaterThan(0);
+            if (Math.abs(n[2]) < 0.5) reveals++;
+        }
+        expect(reveals).toBeGreaterThan(0);
+    });
+
+    it('closes a photo-recessed cell toward the scan: at the lattice\'s edge and beside a cell left as scan, a reveal back to the scan\'s depth', () => {
+        // pipeline K: the scan is uncarved (flat), the windows recessed from the photo; the facade starts inside a window (s 1.5)
+        const flat = scan().map((v, i) => (i % 3 === 2 ? 0 : v));
+        const g: ReliefFacade = { ...f, sMin: 1.5 };
+        const mask = new Uint8Array(W * H);
+        // the photo never reached the wall between the second and third window columns (s 5.1..6.9): those cells stay as scan
+        for (let y = 0; y < H; y++) for (let x = 51; x < 69; x++) mask[y * W + x] = 1;
+        const r = latticeFacade(g, photo(), facadeSamples(flat, g), undefined, mask, true)!;
+        expect(r.photoRecessCells).toBeGreaterThan(0);
+        // a recess's reveals face into its opening: at its left side +s, at its right side -s
+        const revealAt = (sv: number, dir: number) => {
+            for (let i = 0; i < r.indices.length; i += 3) {
+                const ids = [r.indices[i], r.indices[i + 1], r.indices[i + 2]];
+                if (r.normals[ids[0] * 3] * dir < 0.99) continue;
+                if (ids.every(k => Math.abs(r.positions[k * 3] - sv) < 0.15) && ids.some(k => r.positions[k * 3 + 2] < -0.1) && ids.some(k => Math.abs(r.positions[k * 3 + 2]) < 0.03)) return true;
+            }
+            return false;
+        };
+        // the window cut by the lattice's edge at s 1.5
+        expect(revealAt(1.5, 1)).toBe(true);
+        // the window at s 3.9..5.1 beside the wall cells left as scan
+        const edge = r.s.find(v => Math.abs(v - 5.1) <= 0.15)!;
+        expect(edge).toBeDefined();
+        const ns = r.s.length - 1, right = r.s.indexOf(edge);
+        expect(r.built.some((v, k) => k % ns === right && !v)).toBe(true);
+        expect(revealAt(edge, -1)).toBe(true);
+        // without the reveals toward the scan (the old rule) neither would be drawn: no rebuilt neighbour stands there
+    });
+
     it('replaces the scan facade in the clay and the twin, the twin textured with the facade photo', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-'));
         const soup = scan();

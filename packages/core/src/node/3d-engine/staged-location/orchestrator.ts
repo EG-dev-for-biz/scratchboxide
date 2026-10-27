@@ -185,7 +185,7 @@ import { PIPELINE_G_VERSION, runPipelineG, stagedPipelineG } from './pipeline-g/
 import { H_BUDGET_MARGIN_MS, H_POLICY, PIPELINE_H_VERSION, stagedProcedural } from './pipeline-h/pipeline-h';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK } from './pipeline-k/pipeline-k';
 import { PARTY_WALL_TEXTURE_VERSION, texturePartyWall } from './pipeline-k/party-wall-texture';
-import { measureVisibleDefects } from './pipeline-k/visible-defects';
+import { measureVisibleDefects, VISIBLE_DEFECTS_PARAMS } from './pipeline-k/visible-defects';
 import { TEXTURE_HARMONIZE_VERSION, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
 import { describeMaterialRegions, MATERIAL_REGIONS_VERSION, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE, PIPELINE_I_VERSION, TRELLIS_SEEDS, runPipelineI } from './pipeline-i/pipeline-i';
@@ -244,8 +244,11 @@ const PROCEDURAL_ONLY = 'procedural build only: the 3D Building build runs only 
 /** The stages a procedural-only build runs: the place, the tiles, the vector data, the massing it builds on (remesh) and the procedural pipeline (grammar). */
 const PROCEDURAL_STAGES: ReadonlySet<string> = new Set(['resolve', 'tiles', 'vector', 'remesh', 'grammar', 'finish']);
 const PIPELINE_K_ISOLATE = 'pipeline K builds the one building: the surroundings (vector massing, terrain, street cleanup) are not loaded';
-/** The surroundings a pipeline K isolate leaves out: it keeps and straightens the one building's scan, on the scene's own ground. */
-const PIPELINE_K_ISOLATE_SKIPPED: ReadonlySet<StageId> = new Set<StageId>(['vector', 'vehicles', 'terrain', 'roads']);
+const PIPELINE_K_KEEPS_SCAN = 'pipeline K keeps the building\'s own scan, straightened: a scan-fitted rebuild, and the detail placed on it, would replace it';
+/** The rebuild stages a pipeline K isolate leaves out, as it keeps the straightened scan as the structure. */
+const PIPELINE_K_FIT_SKIPPED: StageId[] = ['fit', 'project', 'vision', 'correct', 'detail', 'figures'];
+/** What a pipeline K isolate leaves out: the surroundings (it keeps the one building's scan, on the scene's own ground) and the fit. */
+const PIPELINE_K_ISOLATE_SKIPPED: ReadonlySet<StageId> = new Set<StageId>(['vector', 'vehicles', 'terrain', 'roads', ...PIPELINE_K_FIT_SKIPPED]);
 
 export const STAGES = {
     resolve: { order: -1, title: 'Place', budgetMs: 10_000 },
@@ -2589,6 +2592,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 }
                 // pipeline K's finished model, for scripts that rebuild the building from it (site-guides.ts)
                 if (harmonizeOn) cache.writeRunNote(runId, 'pipeline_k_model', { model: path.join(entry.dir, 'twin.glb'), url: pub.url, layer: target.layer.layer });
+                // the finished model looked at from outside, for what is still untextured once everything is painted
+                if (harmonizeOn && isolateMode) {
+                    const seen = measureVisibleDefects(fs.readFileSync(path.join(entry.dir, 'twin.glb')));
+                    cache.writeRunNote(runId, 'pipeline_k_visible_defects_textured', { ...seen, views: seen.views.map(({ mask: _m, ...v }) => v), layer: target.layer.layer, cached: entry.cached });
+                    io.progress(`${target.layer.layer} seen from outside: ${seen.why}`);
+                    if (seen.clayShare > VISIBLE_DEFECTS_PARAMS.maxClayShare || seen.maxViewClayShare > VISIBLE_DEFECTS_PARAMS.maxViewClayShare) extraDegradations.push({ stage: 'textures', reasonCode: 'visible_clay', reason: `untextured surface seen on the finished building: ${seen.why}`, layerKey: target.layer.layer });
+                }
                 const out = {
                     layerKey: target.layer.layer, rungShares: entry.value.rungShares, atlasTexels: entry.value.triangles, atlas: { width: 0, height: 0, texelsPerMeter: 0 } as unknown as TextureLayerOutcome['atlas'],
                     // no atlas: the twin keeps each primitive's own UVs into its leaf image
@@ -3371,13 +3381,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         run.note(PROVENANCE.remeshed, `remesh polish (${REMESH_POLISH_VERSION}): ${describePolish(pol.stats)}`);
                         r = { ...r, cacheKey: pol.cacheKey, clayGlb: pol.clayGlb, ...(pol.texturedGlb ? { texturedGlb: pol.texturedGlb } : {}) };
                     }
-                    // the textured build looked at from outside: untextured surface (the seal's caps, the stitch's strips) or holes seen on it are flagged
+                    // the build looked at from outside: holes seen on it are flagged here, where its geometry is final; untextured surface
+                    // is judged on the finished model in the texture stage, which still paints some of it (the party wall)
                     if (pipelineK && isolateMode && pol.texturedGlb) {
                         const seen = await timed('visibleDefects', async () => measureVisibleDefects(fs.readFileSync(pol.texturedGlb!)));
-                        cache.writeRunNote(runId, 'pipeline_k_visible_defects', { ...seen, views: seen.views.map(({ mask: _m, ...v }) => v) });
-                        if (seen.flagged) isolateDegradations.push(run.degrade(record('remesh', 'visible_defects', {
-                            part: { description: 'untextured surface or holes seen on the outside of the building' }, intended: 'every surface seen from outside closed and textured from the photos',
-                            fellTo: 'grey clay or a hole where it shows', provenanceAfter: PROVENANCE.generated, reason: seen.why, transient: false, runId, now: now()
+                        cache.writeRunNote(runId, 'pipeline_k_visible_defects', { ...seen, views: seen.views.map(({ mask: _m, ...v }) => v), judged: 'holes (untextured surface is judged on the finished model: pipeline_k_visible_defects_textured)' });
+                        if (seen.holeShare > VISIBLE_DEFECTS_PARAMS.maxHoleShare || seen.maxViewHoleShare > VISIBLE_DEFECTS_PARAMS.maxViewHoleShare) isolateDegradations.push(run.degrade(record('remesh', 'visible_defects', {
+                            part: { description: 'holes seen on the outside of the building' }, intended: 'every surface seen from outside closed',
+                            fellTo: 'a hole where it shows', provenanceAfter: PROVENANCE.generated, reason: seen.why, transient: false, runId, now: now()
                         })));
                     }
                 }
@@ -5005,6 +5016,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             if (!remeshed) { skipRest('the remesh failed, so there is no isolated scan to fit'); return out; }
             if (!isolateOk) { skipRest('tile_refine isolated a different structure than the one picked'); return out; }
             out.sourceLimits = measureSourceLimits(t.scan ?? loadScanMesh(extraction.texturedGlb), extraction.leafGeometricErrorM, structure!.cells);
+            if (kIsolate) {
+                skipRest(PIPELINE_K_KEEPS_SCAN, PIPELINE_K_FIT_SKIPPED);
+                // the remeshed scan is textured as when no fit is accepted
+                startEvidence(undefined);
+                return out;
+            }
             if (!deps.scanFit) {
                 const reason = deps.scanFitUnavailable ?? 'the scan fitter (scan_fit) is not in this build';
                 const rec = run.degrade(record('fit', 'scan_fit_unavailable', {
