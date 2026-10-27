@@ -27,6 +27,7 @@
 
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor, type ParsedGlb } from './glb-bytes';
 import { decodePng } from '../../texture-processing';
+import { cutScanToLattice, stitchLattice, type CutReport, type StitchReport } from './pipeline-k/lattice-stitch';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -319,7 +320,7 @@ class BinBuilder {
  * Edits a GLB of the remesh: the facades' scan triangles degenerate, each rebuilt facade appended as a node (`textured`:
  * an unlit material with the facade's orthophoto, as tile_refine's twin is; otherwise the GLB's first material, its clay).
  */
-export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: ReliefFacade; r: FacadeLatticeResult; png?: Uint8Array }>, textured: boolean, P = FACADE_LATTICE_PARAMS): { glb: Buffer; removed: number; tears: TearReport } {
+export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: ReliefFacade; r: FacadeLatticeResult; png?: Uint8Array }>, textured: boolean, P = FACADE_LATTICE_PARAMS, opts: { /** false: the scan was already cut to the lattice (pipeline-k/lattice-stitch.ts); only append the rebuilt facades. */ removeScan?: boolean } = {}): { glb: Buffer; removed: number; tears: TearReport } {
     const glb = parseGlbBytes(bytes);
     const json = glb.json;
     const dv = new DataView(glb.bin.buffer, glb.bin.byteOffset, glb.bin.byteLength);
@@ -353,7 +354,8 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
             if (ok && first >= 0) claim[k] = first;
         }
     };
-    decide();
+    const keepScan = opts.removeScan === false;
+    if (!keepScan) decide();
     // 2. the tear audit, per facade: the scan seen straight on against the result; a tear restores the removed triangles over it
     // (at that facade's depth), and a facade still torn after that is not rebuilt at all (its scan stays whole, the removals are
     // decided again without it), until nothing is torn
@@ -378,7 +380,7 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
         });
         return torn;
     };
-    let torn = audit(true);
+    let torn = keepScan ? [] : audit(true);
     // restore: every removed triangle whose footprint (seen straight on, at that facade's depth) touches a torn pixel or its
     // neighbours, up to three rounds; then a facade whose own frame is still torn by its own removals is not rebuilt
     const restore = (list: typeof torn): number => {
@@ -462,7 +464,7 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
 }
 
 /** Rebuilds a remesh's rectified facades on their photo lattices: the clay and (when given) its textured twin. */
-export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Uint8Array | undefined, orthosDir: string, P: typeof FACADE_LATTICE_PARAMS = FACADE_LATTICE_PARAMS, skip: Set<number> = new Set()): { clay: Buffer; textured?: Buffer; stats: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears: TearReport; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number] }> } } {
+export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Uint8Array | undefined, orthosDir: string, P: typeof FACADE_LATTICE_PARAMS = FACADE_LATTICE_PARAMS, skip: Set<number> = new Set(), opts: { /** Pipeline K: the scan cut exactly to the rebuilt cells and stitched to them (pipeline-k/lattice-stitch.ts), instead of whole triangles removed. */ stitch?: boolean } = {}): { clay: Buffer; textured?: Buffer; stats: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears: TearReport; stitch?: { cut: CutReport; strips: StitchReport }; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number] }> } } {
     const facades = JSON.parse(fs.readFileSync(path.join(orthosDir, 'facades.json'), 'utf8')).facades as ReliefFacade[];
     const soup = glbSoup(parseGlbBytes(clayBytes));
     const done: Array<{ f: ReliefFacade; r: FacadeLatticeResult; png: Uint8Array }> = [];
@@ -476,6 +478,16 @@ export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Ui
         const mask = maskFile && fs.existsSync(maskFile) ? (() => { const m = decodePng(fs.readFileSync(maskFile)); return Uint8Array.from({ length: m.width * m.height }, (_, k) => (m.rgba[k * 4] > 127 ? 1 : 0)); })() : undefined;
         const r = latticeFacade(f, { rgba: new Uint8Array(img.rgba), width: img.width, height: img.height }, facadeSamples(soup, f, P), P, mask);
         if (r) done.push({ f, r, png });
+    }
+    if (opts.stitch && done.length) {
+        // the scan cut to the rebuilt cells (the same cut on the twin: the same triangles), the walls appended, the seams stitched
+        const cutClay = cutScanToLattice(clayBytes, done), cutTex = texturedBytes ? cutScanToLattice(texturedBytes, done) : undefined;
+        const wClay = applyFacadeLattices(cutClay.glb, done, false, P, { removeScan: false }), wTex = cutTex ? applyFacadeLattices(cutTex.glb, done, true, P, { removeScan: false }) : undefined;
+        const st = stitchLattice(wClay.glb, wTex ? [wTex.glb] : [], done);
+        return {
+            clay: st.clay, ...(wTex ? { textured: st.others[0] } : {}),
+            stats: { facades: facades.length, rebuilt: done.length, cells: done.reduce((a, d) => a + d.r.cells, 0), removedTriangles: cutClay.report.cutTriangles, tears: { found: 0, restoredTriangles: 0, droppedFacades: [], left: 0 }, stitch: { cut: cutClay.report, strips: st.report }, perFacade: done.map(d => ({ id: d.f.facadeId, cells: d.r.cells, measuredShare: d.r.measuredShare, lines: [d.r.s.length, d.r.t.length] as [number, number] })) }
+        };
     }
     const clay = applyFacadeLattices(clayBytes, done, false, P);
     const kept = done.filter(d => !clay.tears.droppedFacades.includes(d.f.facadeId));
