@@ -17,7 +17,7 @@ import { describe, expect, it } from 'vitest';
 import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { GLASS_ROUGHNESS } from '../src/node/3d-engine/staged-location/facade-materials';
-import { pierRhythm, planMaterialRegions, readRegionClasses, type RegionClass, type RegionSet } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
+import { MATERIAL_REGIONS_PARAMS, pierRhythm, planMaterialRegions, readRegionClasses, type RegionClass, type RegionSet } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
 import { tileRefineTwin } from '../src/node/3d-engine/staged-location/tile-refine-twin';
 import { decodeImageInMemory, type RgbaImage8 } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 
@@ -86,15 +86,16 @@ function scene(quads: Quad[], photos: RgbaImage8[]): Uint8Array {
     return assembleGlb(json as never, bin);
 }
 
-/** A wall quad facing +z from (x0, 0) to (x0 + w, h), UVs (0,0) at its top left. */
-const wall = (x0: number, w: number, h: number) => [x0, h, 0, x0, 0, 0, x0 + w, 0, 0, x0 + w, h, 0];
+/** A wall quad facing +z from (x0, 0) to (x0 + w, h) in the plane z, UVs (0,0) at its top left. */
+const wall = (x0: number, w: number, h: number, z = 0) => [x0, h, z, x0, 0, z, x0 + w, 0, z, x0 + w, h, z];
 const FULL_UV = [0, 0, 0, 1, 1, 1, 1, 0];
 
 function building(): { glb: Uint8Array; photos: RgbaImage8[] } {
     const photos = [piered(), weathered(), brown()];
     const quads: Quad[] = [
         { mesh: 'facade_lattice_1', corners: wall(0, 20, 30), uv: FULL_UV, material: 0 },
-        { mesh: 'facade_lattice_2', corners: wall(30, 10, 15), uv: FULL_UV, material: 1 },
+        // a wall face of its own, 5 m behind
+        { mesh: 'facade_lattice_2', corners: wall(30, 10, 15, -5), uv: FULL_UV, material: 1 },
         // a scan piece: its left half on a relief recess, its right half flush
         { mesh: 'relief_m0', corners: wall(50, 5, 5), uv: [0, 0, 0, 1, 0.5, 1, 0.5, 0], relief: -0.25, material: 2 },
         { mesh: 'relief_m1', corners: wall(55, 5, 5), uv: [0.5, 0, 0.5, 1, 1, 1, 1, 0], relief: 0, material: 2 }
@@ -117,9 +118,10 @@ describe('pipeline K material regions', () => {
     it("finds the piered facade's rhythm at its pitch and none on the weathered wall", () => {
         const piers = pierRhythm(piered(), PX), plain = pierRhythm(weathered(), PX);
         expect(piers.bays).toBeDefined();
+        expect(piers.weight).toBe(1);
         expect(piers.pitchM).toBeCloseTo(5, 0);
         expect(piers.ncc).toBeGreaterThan(0.6);
-        expect(plain.bays).toBeUndefined();
+        expect(plain.weight).toBe(0);
     });
 
     it('puts metal and glass only in openings, the wall finish everywhere else', () => {
@@ -165,8 +167,98 @@ describe('pipeline K material regions', () => {
         expect(at(s.orm, 10, 16)[2]).toBeGreaterThan(200);
         expect(at(s.orm, 54, 16)[2]).toBe(0);
         expect(s.normal).toBeUndefined();
-        expect(plan.report.scanPieces.recessShare).toBeGreaterThan(0.4);
-        expect(plan.report.scanPieces.recessShare).toBeLessThan(0.6);
+        expect(plan.report.scanPieces.fromRelief).toBeGreaterThan(0.4);
+        expect(plan.report.scanPieces.fromRelief).toBeLessThan(0.6);
+        expect(plan.report.scanPieces.fromFaces).toBe(0);
+        expect(plan.report.faces).toHaveLength(2);
+    });
+
+    it("decides the bays per wall face: coplanar facades share one rhythm, and a scan piece on the face takes its bay columns", () => {
+        // two piered facades side by side in one plane, a scan piece on the same wall over a bay (s 2.5-3.5) and one over a pier (s 20.2-21.2)
+        const photos = [piered(), piered(), brown()];
+        const quads: Quad[] = [
+            { mesh: 'facade_lattice_1', corners: wall(0, 20, 30), uv: FULL_UV, material: 0 },
+            { mesh: 'facade_lattice_2', corners: wall(20, 20, 30), uv: FULL_UV, material: 1 },
+            { mesh: 'relief_m0', corners: wall(2.5, 1, 5, 0.1), uv: [0, 0, 0, 1, 0.5, 1, 0.5, 0], material: 2 },
+            { mesh: 'relief_m1', corners: wall(20.2, 1, 5, 0.1), uv: [0.5, 0, 0.5, 1, 1, 1, 1, 0], material: 2 }
+        ];
+        const g = parseGlbBytes(scene(quads, photos));
+        const images = imagesOf(photos);
+        const classes = readRegionClasses(g.json, images)!;
+        const plan = planMaterialRegions(g, g.json, images, classes, sets(classes));
+        expect(plan.report.faces).toHaveLength(1);
+        expect(plan.report.faces[0].facades.sort()).toEqual(['facade_lattice_1', 'facade_lattice_2']);
+        expect(plan.report.faces[0].pitchM).toBeCloseTo(5, 0);
+        expect(plan.report.faces[0].weight).toBe(1);
+        const pf = plan.report.facades.perFacade;
+        expect(new Set(pf.map(f => f.face)).size).toBe(1);
+        expect(pf.every(f => f.weight === 1)).toBe(true);
+        const s = plan.materials.find(m => m.material === 2)!;
+        const metal = (x: number, y: number) => s.orm.rgba[(y * s.orm.width + x) * 4 + 2];
+        // over the bay: the face's metal; over the pier: wall finish
+        expect(metal(16, 16)).toBeGreaterThan(200);
+        expect(metal(48, 16)).toBe(0);
+        expect(plan.report.scanPieces.fromFaces).toBeGreaterThan(0.4);
+    });
+
+    it('shares a rhythm within a height band of a face: a facade too narrow to read one borrows it, a band above keeps its own', () => {
+        // the piered tower 0-30 m high; beside it in the same band a 6 m strip (one pitch: too narrow alone); above, a weathered crown
+        const strip = piered(); const narrow = { width: 60, height: 300, rgba: new Uint8Array(60 * 300 * 4) };
+        for (let y = 0; y < 300; y++) narrow.rgba.set(strip.rgba.subarray(y * 200 * 4, (y * 200 + 60) * 4), y * 60 * 4);
+        const photos = [piered(), narrow, weathered()];
+        const quads: Quad[] = [
+            { mesh: 'facade_lattice_1', corners: wall(0, 20, 30), uv: FULL_UV, material: 0 },
+            { mesh: 'facade_lattice_2', corners: wall(20, 6, 30), uv: FULL_UV, material: 1 },
+            { mesh: 'facade_lattice_3', corners: wall(0, 10, 15).map((v, i) => (i % 3 === 1 ? v + 40 : v)), uv: FULL_UV, material: 2 }
+        ];
+        const g = parseGlbBytes(scene(quads, photos));
+        const images = imagesOf(photos);
+        const classes = readRegionClasses(g.json, images)!;
+        expect(pierRhythm(narrow, PX).weight).toBe(0);
+        const plan = planMaterialRegions(g, g.json, images, classes, sets(classes));
+        const pf = new Map(plan.report.facades.perFacade.map(f => [f.mesh, f]));
+        expect(plan.report.faces).toHaveLength(1);
+        expect(pf.get('facade_lattice_1')!.weight).toBe(1);
+        expect(pf.get('facade_lattice_2')!.rhythmFrom).toBe('band');
+        expect(pf.get('facade_lattice_2')!.weight).toBeGreaterThan(0.5);
+        expect(pf.get('facade_lattice_3')!.weight).toBe(0);
+    });
+
+    it('reads a scan-only wall\'s rhythm from its own texels: no rebuilt facade, bays all the same', () => {
+        // the piered photo on two scan triangles of one 20 x 30 m wall, a weathered scan wall facing the other way
+        const photos = [piered(), weathered()];
+        const quads: Quad[] = [
+            { mesh: 'relief_m0', corners: wall(0, 20, 30), uv: FULL_UV, material: 0 },
+            { mesh: 'relief_m1', corners: [10, 15, -8, 10, 0, -8, 0, 0, -8, 0, 15, -8], uv: FULL_UV, material: 1 }
+        ];
+        const g = parseGlbBytes(scene(quads, photos));
+        const images = imagesOf(photos);
+        // the classes come from rebuilt facades' photos: read them from the building fixture (the same colours)
+        const b = building(), bg = parseGlbBytes(b.glb);
+        const classes = readRegionClasses(bg.json, imagesOf(b.photos))!;
+        const plan = planMaterialRegions(g, g.json, images, classes, sets(classes));
+        expect(plan.report.scanPieces.walls).toBe(2);
+        expect(plan.report.scanPieces.wallsWithBays).toBe(1);
+        const s0 = plan.materials.find(m => m.material === 0)!, s1 = plan.materials.find(m => m.material === 1)!;
+        const metal = (img: RgbaImage8, x: number, y: number) => img.rgba[(y * img.width + x) * 4 + 2];
+        // a spandrel (s 1.7, between the piers) metal, a pier (s 0.7) stone; the weathered wall stone throughout
+        expect(metal(s0.orm, 17, 75)).toBeGreaterThan(200);
+        expect(metal(s0.orm, 7, 100)).toBe(0);
+        let m1 = 0;
+        for (let k = 0; k < s1.orm.width * s1.orm.height; k++) if (s1.orm.rgba[k * 4 + 2]) m1++;
+        expect(m1).toBe(0);
+    });
+
+    it('scales the bays by a soft gate between nccLo and minNcc, not a hard cut', () => {
+        const strong = pierRhythm(piered(), PX);
+        expect(strong.weight).toBe(1);
+        // the same rhythm read with the gate raised past it: a partial weight, then none
+        const partial = pierRhythm(piered(), PX, { ...MATERIAL_REGIONS_PARAMS, nccLo: strong.ncc - 0.2, minNcc: strong.ncc + 0.2 });
+        expect(partial.weight).toBeGreaterThan(0.2);
+        expect(partial.weight).toBeLessThan(0.8);
+        expect(partial.bays).toBeDefined();
+        const none = pierRhythm(piered(), PX, { ...MATERIAL_REGIONS_PARAMS, nccLo: strong.ncc + 0.05, minNcc: strong.ncc + 0.3 });
+        expect(none.weight).toBe(0);
     });
 
     it("keeps the photo as the base colour outside glass, scales the bays' metalness, and reports an estimated tile size with its reason", () => {

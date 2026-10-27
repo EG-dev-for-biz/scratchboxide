@@ -14,14 +14,20 @@
  *
  *  1. Appearance classes: k-means in CIELAB on texels sampled from the rebuilt facades' photos, one set of classes for the
  *     whole building. The lightest class is the wall; the darker ones may only appear in openings.
- *  2. Openings, where metal and glass may go:
- *     - a rebuilt facade (a metric photo of one plane) has openings only when its photo shows a pier rhythm: the column
- *       lightness against a running mean repeats at a bay pitch with an NCC of at least minNcc, the piers are at least
- *       minContrast lighter than the bays, and the facade spans at least minBays pitches. The openings are then the
- *       columns darker than their local mean, less the rows that are wall most of the way across (photo-inferred);
- *     - a scan piece (atlas UVs, no frame) has openings only on the photometric relief's recessed cells (_RELIEF_HEIGHT
- *       below recessM: tile_refine's dark-cell lattice, confirmed where it repeats; its depth is photo-inferred, not
- *       measured);
+ *  2. Openings, where metal and glass may go, decided per wall face, not per piece (a face's pieces drawn alike):
+ *     - the rebuilt facades (metric photos of one plane each) are grouped into wall faces: facing the same way within
+ *       faceCos, their planes within faceBandM. A pier rhythm is the column lightness against a running mean repeating at
+ *       a bay pitch (NCC), the piers lighter than the bays (contrast), over at least minBays pitches; its weight rises
+ *       smoothly from nccLo to minNcc and from contrastLo to minContrast (a soft gate: the bays' metal scaled by it, not cut
+ *       at a threshold). Each facade reads it twice: from its own photo, and from its height band on its face (the
+ *       coplanar facades overlapping its height by half that show a rhythm of their own, their photos' columns normalised
+ *       and laid out along the wall: piers run up a wall, a crown or a ground floor has its own), and takes the surer. The openings are the columns
+ *       darker than their local mean, less a facade's rows that are wall most of the way across (photo-inferred);
+ *     - the scan pieces are walls too: their vertical triangles clustered by plane the same way (scanWalls), each wall's
+ *       columns read from its own texels laid out along it, joined to the faces and height bands of the rebuilt facades
+ *       beside it and deciding the same way (its own rhythm, or its band's); a smaller scan piece on a face takes the
+ *       decision of the face's facade nearest it; elsewhere on a scan piece, only the photometric relief's recessed
+ *       cells (_RELIEF_HEIGHT below recessM, photo-inferred) are openings;
  *     - elsewhere every texel is wall, whatever its colour (weathered or shaded stone falls in the darker classes).
  *  3. A library set per class (resolved by the caller: the texture library ranked by the class colour), its roughness,
  *     metalness and normal drawn at the set's real size over each rebuilt facade (box-filtered to the facade's texel, so
@@ -44,13 +50,17 @@ import type { RgbaImage8 } from '../tile-texture-transfer';
 import { GLASS_ROUGHNESS, MIN_REGION_M2, latticeGlassAgreement } from '../facade-materials';
 import { MATERIAL_PARAMS_CHANNELS } from '../staged-glb-writer';
 
-export const MATERIAL_REGIONS_VERSION = 'material-regions/8';
+export const MATERIAL_REGIONS_VERSION = 'material-regions/12';
 
 export const MATERIAL_REGIONS_PARAMS = {
     /** Appearance classes, texels sampled per facade photo, k-means iterations, sampling seed. */
     classes: 4, samplesPerPhoto: 40000, iterations: 40, seed: 7,
-    /** The pier rhythm a facade's photo must show before it has openings. */
-    minNcc: 0.6, minContrast: 30, minBays: 2, pitchM: [2.5, 9] as [number, number], meanWindowM: 12,
+    /** The pier rhythm a face's photos show: its weight is 0 below nccLo or contrastLo, 1 from minNcc and minContrast. */
+    nccLo: 0.35, minNcc: 0.6, contrastLo: 15, minContrast: 30, minBays: 2, pitchM: [2.5, 9] as [number, number], meanWindowM: 12,
+    /** Rebuilt facades and scan pieces are one wall face when they face the same way within this cosine and their planes lie within this (m). */
+    faceCos: 0.95, faceBandM: 2.0,
+    /** A scan wall (scan triangles of one plane) reads its own rhythm from at least this area (m2); smaller pieces only take a face's. */
+    minScanWallM2: 25,
     /** A row is wall when this share of it is wall texels. */
     wallRowShare: 0.6,
     /** A scan triangle is an opening when its mean _RELIEF_HEIGHT is below this (m). */
@@ -93,8 +103,11 @@ export interface RegionSet {
 export interface MaterialRegionsReport {
     version: string;
     classes: Array<Pick<RegionClass, 'index' | 'meanLab' | 'share' | 'wall'> & { set: string; distance: number; metalnessScale?: number; sizeEstimate?: string }>;
-    facades: { total: number; withOpenings: number; perFacade: Array<{ mesh: string; texelM: number; rhythmNcc: number; pitchM: number; pierContrast: number; openings: string; openingShare: number; glassRegions: number; glassRejected: number }> };
-    scanPieces: { total: number; recessShare: number };
+    /** The wall faces, each one rhythm decision for its rebuilt facades and the scan pieces on it. */
+    faces: Array<{ facades: string[]; lengthM: number; rhythmNcc: number; pitchM: number; pierContrast: number; weight: number }>;
+    facades: { total: number; withOpenings: number; perFacade: Array<{ mesh: string; face: number; /** Whose rhythm decided its bays: its own photo, or its height band on its face. */ rhythmFrom: string; texelM: number; rhythmNcc: number; pitchM: number; pierContrast: number; weight: number; openings: string; openingShare: number; glassRegions: number; glassRejected: number }> };
+    /** Scan pieces: the share of their texels that are openings, from a face's bays or from the relief's recesses. */
+    scanPieces: { total: number; openingShare: number; fromFaces: number; fromRelief: number; walls: number; wallsWithBays: number; wallAreaWithBaysM2: number };
     texels: { total: number; metal: number; glass: number };
     ms: number;
 }
@@ -184,20 +197,39 @@ function runningMean(v: ArrayLike<number>, size: number): Float64Array {
 }
 function median(v: number[]): number { const s = [...v].sort((a, b) => a - b); return s.length ? s[s.length >> 1] : 0; }
 
-/** The pier rhythm of a facade's photo (see the file comment) and, when confirmed, the bay columns. */
-export function pierRhythm(img: RgbaImage8, texelM: number, P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS): { ncc: number; pitchM: number; contrast: number; bays?: Uint8Array } {
-    const { width: W, height: H, rgba } = img;
-    const col = new Float64Array(W), cnt = new Float64Array(W);
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-        const p = (y * W + x) * 4;
-        if (!rgba[p + 3]) continue;
-        col[x] += (rgba[p] + rgba[p + 1] + rgba[p + 2]) / 3; cnt[x]++;
-    }
+/** A rhythm reading: NCC at the best bay pitch, the piers' contrast, the soft gate's weight, and the bay columns when a pitch was found (drawn only where weight > 0). */
+export interface Rhythm { ncc: number; pitchM: number; contrast: number; weight: number; bays?: Uint8Array }
+
+const smoothstep = (lo: number, hi: number, v: number) => { const t = Math.min(1, Math.max(0, (v - lo) / (hi - lo))); return t * t * (3 - 2 * t); };
+
+/** The soft gate: 0 below nccLo or contrastLo, 1 from minNcc and minContrast; 0 without a pitch or minBays pitches of profile. */
+function gateWeight(ncc: number, contrast: number, lag: number, W: number, P: MaterialRegionsParams): number {
+    return lag > 0 && W >= P.minBays * lag ? smoothstep(P.nccLo, P.minNcc, ncc) * smoothstep(P.contrastLo, P.minContrast, contrast) : 0;
+}
+
+/** A column profile less its running mean, over its standard deviation (NaN kept where nothing was seen): photos of one wall made comparable. */
+function normalisedColumns(col: Float64Array, stepM: number, P: MaterialRegionsParams): Float64Array {
+    const W = col.length, filled = Float64Array.from(col);
     let all = 0, n = 0;
-    for (let x = 0; x < W; x++) if (cnt[x]) { col[x] /= cnt[x]; all += col[x]; n++; }
+    for (let x = 0; x < W; x++) if (Number.isFinite(col[x])) { all += col[x]; n++; }
+    for (let x = 0; x < W; x++) if (!Number.isFinite(col[x])) filled[x] = n ? all / n : 0;
+    const local = runningMean(filled, Math.max(3, Math.floor(P.meanWindowM / stepM)));
+    let m = 0, s = 0;
+    for (let x = 0; x < W; x++) if (Number.isFinite(col[x])) m += (col[x] - local[x]) / n;
+    for (let x = 0; x < W; x++) if (Number.isFinite(col[x])) s += (col[x] - local[x] - m) ** 2 / n;
+    const sd = Math.sqrt(s) + 1e-6, out = new Float64Array(W);
+    for (let x = 0; x < W; x++) out[x] = Number.isFinite(col[x]) ? (col[x] - local[x] - m) / sd : NaN;
+    return out;
+}
+
+/** The pier rhythm of a column lightness profile at stepM a column (NaN where nothing was seen; see the file comment). */
+export function profileRhythm(colIn: ArrayLike<number>, stepM: number, P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS): Rhythm {
+    const W = colIn.length, col = Float64Array.from(colIn);
+    let all = 0, n = 0;
+    for (let x = 0; x < W; x++) if (Number.isFinite(col[x])) { all += col[x]; n++; }
     const fill = n ? all / n : 0;
-    for (let x = 0; x < W; x++) if (!cnt[x]) col[x] = fill;
-    const local = runningMean(col, Math.max(3, Math.floor(P.meanWindowM / texelM)));
+    for (let x = 0; x < W; x++) if (!Number.isFinite(col[x])) col[x] = fill;
+    const local = runningMean(col, Math.max(3, Math.floor(P.meanWindowM / stepM)));
     const pr = new Float64Array(W);
     let m = 0, s = 0;
     for (let x = 0; x < W; x++) { pr[x] = col[x] - local[x]; m += pr[x] / W; }
@@ -205,7 +237,7 @@ export function pierRhythm(img: RgbaImage8, texelM: number, P: MaterialRegionsPa
     const sd = Math.sqrt(s) + 1e-6;
     for (let x = 0; x < W; x++) pr[x] = (pr[x] - m) / sd;
     let ncc = 0, lag = 0;
-    for (let k = Math.max(2, Math.floor(P.pitchM[0] / texelM)); k <= Math.min(Math.floor(W / 2), Math.floor(P.pitchM[1] / texelM)); k++) {
+    for (let k = Math.max(2, Math.floor(P.pitchM[0] / stepM)); k <= Math.min(Math.floor(W / 2), Math.floor(P.pitchM[1] / stepM)); k++) {
         let c = 0;
         for (let x = 0; x + k < W; x++) c += pr[x] * pr[x + k];
         c /= W - k;
@@ -214,14 +246,215 @@ export function pierRhythm(img: RgbaImage8, texelM: number, P: MaterialRegionsPa
     const light: number[] = [], dark: number[] = [];
     for (let x = 0; x < W; x++) { if (pr[x] > 0.5) light.push(col[x]); else if (pr[x] < -0.5) dark.push(col[x]); }
     const contrast = light.length && dark.length ? median(light) - median(dark) : 0;
-    const out = { ncc, pitchM: lag * texelM, contrast };
-    if (!(ncc >= P.minNcc && contrast >= P.minContrast && lag > 0 && W >= P.minBays * lag)) return out;
+    const weight = gateWeight(ncc, contrast, lag, W, P);
+    const out: Rhythm = { ncc, pitchM: lag * stepM, contrast, weight };
+    // the columns darker than their surroundings at whatever weight (a band may lend them its own); none without a pitch
+    if (!(lag > 0)) return out;
     const smooth = runningMean(pr, 3), bays = new Uint8Array(W);
     for (let x = 0; x < W; x++) bays[x] = smooth[x] < 0 ? 1 : 0;
     return { ...out, bays };
 }
 
-/** Deterministic sampling (a 32-bit LCG). */
+/** One photo's column lightness (mean of its seen texels per column, NaN where none). */
+function photoColumns(img: RgbaImage8): Float64Array {
+    const { width: W, height: H, rgba } = img;
+    const col = new Float64Array(W), cnt = new Float64Array(W);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const p = (y * W + x) * 4;
+        if (!rgba[p + 3]) continue;
+        col[x] += (rgba[p] + rgba[p + 1] + rgba[p + 2]) / 3; cnt[x]++;
+    }
+    for (let x = 0; x < W; x++) col[x] = cnt[x] ? col[x] / cnt[x] : NaN;
+    return col;
+}
+
+/** The pier rhythm of one facade's photo on its own (see the file comment) and, when weight > 0, the bay columns. */
+export function pierRhythm(img: RgbaImage8, texelM: number, P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS): Rhythm {
+    return profileRhythm(photoColumns(img), texelM, P);
+}
+
+/** A rebuilt facade's frame: its plane (normal, offset), the horizontal along the wall, and its photo's column x -> s map. */
+interface FacadeFrame { material: number; mesh: string; cols: Float64Array; texelM: number; n: number[]; offset: number; axis: number[]; a: number; b: number; sMin: number; sMax: number; yMin: number; yMax: number; area: number }
+
+const dot3 = (a: ArrayLike<number>, b: ArrayLike<number>) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+/** The horizontal along a wall facing n (up x n), undefined for a surface facing mostly up or down. */
+const alongWall = (n: number[]) => { const x = n[2], z = -n[0], l = Math.hypot(x, z); return Math.abs(n[1]) < 0.7 && l > 0 ? [x / l, 0, z / l] : undefined; };
+
+function facadeFrame(g: ParsedGlb, json: any, material: number, mesh: string, img: RgbaImage8, texelM: number): FacadeFrame | undefined {
+    // the cells' normal: the area-weighted normal of the triangles facing within 25 deg of the commonest
+    const tris: Array<{ c: number[]; n: number[]; a: number; p: number[]; u: number[] }> = [];
+    forEachTriangleOf(g, json, material, (p, uv) => {
+        const ux = p[3] - p[0], uy = p[4] - p[1], uz = p[5] - p[2], vx = p[6] - p[0], vy = p[7] - p[1], vz = p[8] - p[2];
+        const n = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx], l = Math.hypot(n[0], n[1], n[2]);
+        if (!(l > 0)) return;
+        tris.push({ c: [(p[0] + p[3] + p[6]) / 3, (p[1] + p[4] + p[7]) / 3, (p[2] + p[5] + p[8]) / 3], n: n.map(v => v / l), a: l / 2, p: Array.from(p), u: [uv[0], uv[2], uv[4]] });
+    });
+    if (!tris.length) return undefined;
+    const bins = new Map<string, { n: number[]; a: number }>();
+    for (const t of tris) { const k = t.n.map(v => Math.round(v * 3)).join(','); const b = bins.get(k) ?? { n: [0, 0, 0], a: 0 }; b.n = b.n.map((v, i) => v + t.n[i] * t.a); b.a += t.a; bins.set(k, b); }
+    const top = [...bins.values()].sort((x, y) => y.a - x.a)[0], tl = Math.hypot(top.n[0], top.n[1], top.n[2]);
+    const n = top.n.map(v => v / tl), axis = alongWall(n);
+    if (!axis) return undefined;
+    let off = 0, area = 0, sx = 0, ss = 0, sxx = 0, sxs = 0, cnt = 0, sMin = Infinity, sMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+    for (const t of tris) {
+        if (dot3(t.n, n) > 0.9) { off += dot3(t.c, n) * t.a; area += t.a; }
+        for (let k = 0; k < 3; k++) {
+            const pk = [t.p[k * 3], t.p[k * 3 + 1], t.p[k * 3 + 2]], sv = dot3(pk, axis), xv = t.u[k] * img.width;
+            sx += xv; ss += sv; sxx += xv * xv; sxs += xv * sv; cnt++;
+            sMin = Math.min(sMin, sv); sMax = Math.max(sMax, sv); yMin = Math.min(yMin, pk[1]); yMax = Math.max(yMax, pk[1]);
+        }
+    }
+    const den = cnt * sxx - sx * sx;
+    if (!(area > 0) || !(Math.abs(den) > 1e-9)) return undefined;
+    // the photo's planar UVs: s = a x + b (least squares over the facade's corners)
+    const a = (cnt * sxs - sx * ss) / den, b = (ss - a * sx) / cnt;
+    return { material, mesh, cols: photoColumns(img), texelM, n, offset: off / area, axis, a, b, sMin, sMax, yMin, yMax, area };
+}
+
+/**
+ * The scan pieces' walls: their vertical triangles clustered by plane (facing the same way within faceCos, within faceBandM
+ * of the plane), each wall at least minScanWallM2, a frame like a rebuilt facade's whose columns are read from the texels
+ * laid out along the wall (x the column at texelM along it, from sMin). `cluster` gives each triangle's wall (in
+ * forEachTriangleOf order per material, -1 for none). A wall's frame key is -1 - its index.
+ */
+function scanWalls(g: ParsedGlb, json: any, materials: number[], images: Map<number, RgbaImage8>, P: MaterialRegionsParams): { frames: FacadeFrame[]; cluster: Map<number, Int32Array> } {
+    const walls: Array<{ nSum: number[]; offSum: number; area: number; n: number[]; offset: number }> = [];
+    const cluster = new Map<number, Int32Array>(), texel = new Map<number, number>();
+    for (const mi of materials) {
+        const img = images.get(photoOf(json, mi)!.image);
+        if (!img) continue;
+        texel.set(mi, texelMetres(g, json, mi, img));
+        const ids: number[] = [];
+        forEachTriangleOf(g, json, mi, p => {
+            const ux = p[3] - p[0], uy = p[4] - p[1], uz = p[5] - p[2], vx = p[6] - p[0], vy = p[7] - p[1], vz = p[8] - p[2];
+            const nn = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx], l = Math.hypot(nn[0], nn[1], nn[2]);
+            if (!(l > 0) || Math.abs(nn[1] / l) >= 0.7) { ids.push(-1); return; }
+            const n = nn.map(v => v / l), c = [(p[0] + p[3] + p[6]) / 3, (p[1] + p[4] + p[7]) / 3, (p[2] + p[5] + p[8]) / 3], a = l / 2;
+            let id = walls.findIndex(w => dot3(w.n, n) >= P.faceCos && Math.abs(dot3(c, w.n) - w.offset) <= P.faceBandM);
+            if (id < 0) { id = walls.length; walls.push({ nSum: [0, 0, 0], offSum: 0, area: 0, n, offset: dot3(c, n) }); }
+            const w = walls[id];
+            w.nSum = w.nSum.map((v, i) => v + n[i] * a); w.area += a;
+            const nl = Math.hypot(w.nSum[0], w.nSum[1], w.nSum[2]); w.n = w.nSum.map(v => v / nl);
+            w.offSum += dot3(c, n) * a; w.offset = w.offSum / w.area;
+            ids.push(id);
+        });
+        cluster.set(mi, Int32Array.from(ids));
+    }
+    // each wall's extent, and its column profile from its texels along the wall
+    const ext = walls.map(w => ({ axis: alongWall(w.n), sMin: Infinity, sMax: -Infinity, yMin: Infinity, yMax: -Infinity, step: Infinity }));
+    for (const mi of materials) {
+        const ids = cluster.get(mi);
+        if (!ids) continue;
+        let t = 0;
+        forEachTriangleOf(g, json, mi, p => {
+            const id = ids[t++];
+            if (id < 0 || walls[id].area < P.minScanWallM2 || !ext[id].axis) return;
+            const e = ext[id], axis = e.axis!;
+            for (let k = 0; k < 3; k++) { const sv = dot3([p[k * 3], p[k * 3 + 1], p[k * 3 + 2]], axis); e.sMin = Math.min(e.sMin, sv); e.sMax = Math.max(e.sMax, sv); e.yMin = Math.min(e.yMin, p[k * 3 + 1]); e.yMax = Math.max(e.yMax, p[k * 3 + 1]); }
+            e.step = Math.min(e.step, Math.max(0.05, texel.get(mi) ?? Infinity));
+        });
+    }
+    const sums = ext.map(e => (Number.isFinite(e.step) ? { sum: new Float64Array(Math.ceil((e.sMax - e.sMin) / e.step) + 1), cnt: new Float64Array(Math.ceil((e.sMax - e.sMin) / e.step) + 1) } : undefined));
+    for (const mi of materials) {
+        const ids = cluster.get(mi), img = images.get(photoOf(json, mi)!.image);
+        if (!ids || !img) continue;
+        const { width: W, height: H, rgba } = img;
+        let t = 0;
+        forEachTriangleOf(g, json, mi, (p, uv) => {
+            const id = ids[t++], acc = id >= 0 ? sums[id] : undefined;
+            if (!acc || walls[id].area < P.minScanWallM2 || !ext[id].axis) return;
+            const e = ext[id], axis = e.axis!;
+            const sa = dot3([p[0], p[1], p[2]], axis), sb = dot3([p[3], p[4], p[5]], axis), sc = dot3([p[6], p[7], p[8]], axis);
+            forTexelsOf(uv, W, H, (k, wa, wb, wc) => {
+                if (!rgba[k * 4 + 3]) return;
+                const bin = Math.floor((wa * sa + wb * sb + wc * sc - e.sMin) / e.step);
+                if (bin >= 0 && bin < acc.sum.length) { acc.sum[bin] += (rgba[k * 4] + rgba[k * 4 + 1] + rgba[k * 4 + 2]) / 3; acc.cnt[bin]++; }
+            });
+        });
+    }
+    const frames: FacadeFrame[] = [];
+    walls.forEach((w, id) => {
+        const e = ext[id], acc = sums[id];
+        if (!acc || w.area < P.minScanWallM2 || !e.axis) return;
+        frames.push({
+            material: -1 - id, mesh: `scan_wall_${id}`, cols: Float64Array.from(acc.sum, (v, i) => (acc.cnt[i] ? v / acc.cnt[i] : NaN)), texelM: e.step,
+            n: w.n, offset: w.offset, axis: e.axis, a: e.step, b: e.sMin, sMin: e.sMin, sMax: e.sMax, yMin: e.yMin, yMax: e.yMax, area: w.area
+        });
+    });
+    return { frames, cluster };
+}
+
+/** Visits a triangle's texels (UVs 0..1 on a W x H image) with each texel's barycentric weights. */
+function forTexelsOf(uv: ArrayLike<number>, W: number, H: number, visit: (k: number, wa: number, wb: number, wc: number) => void): void {
+    const ax = uv[0] * W, ay = uv[1] * H, bx = uv[2] * W, by = uv[3] * H, cx = uv[4] * W, cy = uv[5] * H;
+    const den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+    if (Math.abs(den) < 1e-12) return;
+    const x0 = Math.max(0, Math.floor(Math.min(ax, bx, cx))), x1 = Math.min(W - 1, Math.ceil(Math.max(ax, bx, cx)));
+    const y0 = Math.max(0, Math.floor(Math.min(ay, by, cy))), y1 = Math.min(H - 1, Math.ceil(Math.max(ay, by, cy)));
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+        const px = x + 0.5, py = y + 0.5;
+        const wa = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / den, wb = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / den, wc = 1 - wa - wb;
+        if (wa >= 0 && wb >= 0 && wc >= 0) visit(y * W + x, wa, wb, wc);
+    }
+}
+
+/** One facade's bay decision: its rhythm (its own, or its height band's on its face, whichever is surer) and its bay columns along the wall. */
+interface BayDecision { from: 'own' | 'band'; rhythm: Rhythm; bayAt: (s: number) => boolean }
+
+/** A wall face: its rebuilt facades' frames (one plane) and each frame's bay decision. */
+interface WallFace { frames: FacadeFrame[]; n: number[]; offset: number; axis: number[]; sMin: number; sMax: number; yMin: number; yMax: number; decisions: Map<number, BayDecision> }
+
+/** Two height ranges overlap by at least half the shorter. */
+const sameBand = (a: FacadeFrame, b: FacadeFrame) => Math.min(a.yMax, b.yMax) - Math.max(a.yMin, b.yMin) >= 0.5 * Math.min(a.yMax - a.yMin, b.yMax - b.yMin);
+
+function wallFaces(frames: FacadeFrame[], P: MaterialRegionsParams): WallFace[] {
+    const groups: FacadeFrame[][] = [];
+    for (const f of [...frames].sort((x, y) => y.area - x.area)) {
+        const g = groups.find(q => dot3(q[0].n, f.n) >= P.faceCos && Math.abs(f.offset - q[0].offset) <= P.faceBandM);
+        if (g) g.push(f); else groups.push([f]);
+    }
+    const own = new Map<FacadeFrame, { rhythm: Rhythm; norm: Float64Array }>();
+    for (const f of frames) own.set(f, { rhythm: profileRhythm(f.cols, f.texelM, P), norm: normalisedColumns(f.cols, f.texelM, P) });
+    return groups.map(fr => {
+        const lead = fr[0], decisions = new Map<number, BayDecision>();
+        for (const f of fr) {
+            // its height band on this face: the coplanar facades its height range overlaps (piers run up a wall, not across its
+            // bands). Only those with a rhythm of their own vote: one without (a weathered or unstraightened scan wall) only borrows
+            const band = fr.filter(o => (o === f || sameBand(f, o)) && own.get(o)!.rhythm.weight > 0);
+            if (!band.length) { const mine = own.get(f)!.rhythm; decisions.set(f.material, { from: 'own', rhythm: mine, bayAt: () => false }); continue; }
+            const stepM = Math.min(...band.map(o => o.texelM)), s0 = Math.min(...band.map(o => o.sMin)), s1 = Math.max(...band.map(o => o.sMax));
+            const nBins = Math.max(1, Math.ceil((s1 - s0) / stepM) + 1), sum = new Float64Array(nBins), cnt = new Float64Array(nBins);
+            for (const o of band) {
+                const norm = own.get(o)!.norm;
+                for (let x = 0; x < norm.length; x++) {
+                    if (!Number.isFinite(norm[x])) continue;
+                    const bin = Math.floor((o.a * (x + 0.5) + o.b - s0) / stepM);
+                    if (bin >= 0 && bin < nBins) { sum[bin] += norm[x]; cnt[bin]++; }
+                }
+            }
+            const shared = profileRhythm(Array.from(sum, (v, i) => (cnt[i] ? v / cnt[i] : NaN)), stepM, P);
+            // the band's contrast: its photos' own, by area (the shared profile is normalised, so it has no lightness units)
+            const area = band.reduce((t, o) => t + o.area, 0), contrast = band.reduce((t, o) => t + own.get(o)!.rhythm.contrast * o.area, 0) / area;
+            const bandWeight = gateWeight(shared.ncc, contrast, Math.round(shared.pitchM / stepM), nBins, P);
+            const mine = own.get(f)!.rhythm;
+            if (mine.weight >= bandWeight) {
+                const bays = mine.bays, w = f.cols.length;
+                decisions.set(f.material, { from: 'own', rhythm: mine, bayAt: sv => { const x = Math.floor((sv - f.b) / f.a); return !!bays && x >= 0 && x < w && bays[x] === 1; } });
+            } else {
+                const bays = shared.bays;
+                decisions.set(f.material, { from: 'band', rhythm: { ...shared, contrast, weight: bandWeight }, bayAt: sv => { const bin = Math.floor((sv - s0) / stepM); return !!bays && bin >= 0 && bin < nBins && bays[bin] === 1; } });
+            }
+        }
+        return { frames: fr, n: lead.n, offset: lead.offset, axis: lead.axis, sMin: Math.min(...fr.map(f => f.sMin)), sMax: Math.max(...fr.map(f => f.sMax)), yMin: Math.min(...fr.map(f => f.yMin)), yMax: Math.max(...fr.map(f => f.yMax)), decisions };
+    });
+}
+
+/** The facade of a face nearest a point on it (by height, then along the wall): whose bay decision a scan piece there takes. */
+function frameAt(face: WallFace, sv: number, y: number): FacadeFrame {
+    const d = (f: FacadeFrame) => Math.max(0, f.yMin - y, y - f.yMax) * 10 + Math.max(0, f.sMin - sv, sv - f.sMax);
+    return face.frames.reduce((best, f) => (d(f) < d(best) ? f : best), face.frames[0]);
+}
+
 function sampler(seed: number): () => number { let s = seed >>> 0; return () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296); }
 
 /** The rebuilt facades' materials of a GLB (see REBUILT_FACADE) and every other photo-textured material. */
@@ -348,7 +581,7 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
     const report: MaterialRegionsReport = {
         version: MATERIAL_REGIONS_VERSION,
         classes: classes.map((c, k) => ({ index: c.index, meanLab: c.meanLab, share: c.share, wall: c.wall, set: sets[k].name, distance: Math.round(sets[k].distance * 100) / 100, ...(sets[k].metalnessScale !== undefined ? { metalnessScale: Math.round(sets[k].metalnessScale! * 1000) / 1000 } : {}), ...(sets[k].realSizeEstimate ? { sizeEstimate: sets[k].realSizeEstimate } : {}) })),
-        facades: { total: rebuilt.size, withOpenings: 0, perFacade: [] }, scanPieces: { total: other.size, recessShare: 0 }, texels: { total: 0, metal: 0, glass: 0 }, ms: 0
+        faces: [], facades: { total: rebuilt.size, withOpenings: 0, perFacade: [] }, scanPieces: { total: other.size, openingShare: 0, fromFaces: 0, fromRelief: 0, walls: 0, wallsWithBays: 0, wallAreaWithBaysM2: 0 }, texels: { total: 0, metal: 0, glass: 0 }, ms: 0
     };
     const setMeans = sets.map(s => meanOf(s.orm));
     const metalScale = sets.map(s => s.metalnessScale ?? 1);
@@ -360,23 +593,54 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
         if (glassWeight) report.texels.glass++; else if (m >= P.metalCountAt) report.texels.metal++;
     };
 
+    // ---- wall faces: the rebuilt facades grouped by plane, one rhythm each ----
+    const frames: FacadeFrame[] = [];
+    for (const [mi, mesh] of rebuilt) {
+        const photo = photoOf(json, mi)!, img = images.get(photo.image);
+        if (!img || frames.some(f => photoOf(json, f.material)?.image === photo.image)) continue;
+        const texelM = texelMetres(g, json, mi, img);
+        const fr = texelM > 0 ? facadeFrame(g, json, mi, mesh, img, texelM) : undefined;
+        if (fr) frames.push(fr);
+    }
+    const scan = scanWalls(g, json, [...other], images, P);
+    const faces = wallFaces([...frames, ...scan.frames], P);
+    const faceOf = new Map<number, number>();
+    faces.forEach((f, i) => { for (const fr of f.frames) faceOf.set(fr.material, i); });
+    report.scanPieces.walls = scan.frames.length;
+    for (const fr of scan.frames) {
+        const d = faces[faceOf.get(fr.material)!].decisions.get(fr.material)!;
+        if (d.rhythm.weight > 0) { report.scanPieces.wallsWithBays++; report.scanPieces.wallAreaWithBaysM2 += Math.round(fr.area); }
+    }
+    const r2 = (v: number) => Math.round(v * 100) / 100;
+    report.faces = faces.map(f => {
+        // the face's surest decision
+        const best = [...f.decisions.values()].reduce((x, y) => (y.rhythm.weight > x.rhythm.weight ? y : x));
+        return { facades: f.frames.map(fr => fr.mesh), lengthM: Math.round(f.sMax - f.sMin), rhythmNcc: r2(best.rhythm.ncc), pitchM: r2(best.rhythm.pitchM), pierContrast: Math.round(best.rhythm.contrast * 10) / 10, weight: r2(best.rhythm.weight) };
+    });
+
     // ---- rebuilt facades ----
     for (const [mi, mesh] of rebuilt) {
         const photo = photoOf(json, mi)!, img = images.get(photo.image);
         if (!img || done.has(photo.image)) continue;
         done.add(photo.image);
         const { width: W, height: H } = img, N = W * H;
-        const texelM = texelMetres(g, json, mi, img);
+        const fi = faceOf.get(mi), face = fi !== undefined ? faces[fi] : undefined, frame = face?.frames.find(f => f.material === mi);
+        const texelM = frame?.texelM ?? texelMetres(g, json, mi, img);
         if (!(texelM > 0)) continue;
         const cls = classify(img, classes);
-        const rhythm = pierRhythm(img, texelM, P);
+        // the face's rhythm, its bay columns where this photo lies along the wall
+        const decision = face?.decisions.get(mi);
+        const rhythm: Rhythm = decision ? decision.rhythm : { ncc: 0, pitchM: 0, contrast: 0, weight: 0 };
+        const bayCol = new Uint8Array(W);
+        if (decision && frame) for (let x = 0; x < W; x++) bayCol[x] = decision.bayAt(frame.a * (x + 0.5) + frame.b) ? 1 : 0;
+        const w = rhythm.weight;
         const opening = new Uint8Array(N);
-        if (rhythm.bays) {
+        if (w > 0) {
             for (let y = 0; y < H; y++) {
                 let wall = 0;
                 for (let x = 0; x < W; x++) if (cls[y * W + x] === WALL) wall++;
                 if (wall / W > P.wallRowShare) continue;
-                for (let x = 0; x < W; x++) if (rhythm.bays[x]) opening[y * W + x] = 1;
+                for (let x = 0; x < W; x++) if (bayCol[x]) opening[y * W + x] = 1;
             }
         }
         // the finish of each texel: wall outside the openings, its class inside
@@ -445,43 +709,88 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
                 continue;
             }
             const t = tiles[finish[k]], j = ((y % t.th) * t.tw + (x % t.tw)) * 3;
-            write(orm, params, k, t.o[j + 1], Math.min(1, t.o[j + 2] * metalScale[finish[k]]), 0);
+            write(orm, params, k, t.o[j + 1], Math.min(1, t.o[j + 2] * metalScale[finish[k]]) * w, 0);
             nrm.rgba.set([Math.round(t.n[j] * 255), Math.round(t.n[j + 1] * 255), Math.round(t.n[j + 2] * 255), 255], k * 4);
         }
         let openN = 0;
         for (let k = 0; k < N; k++) openN += opening[k];
-        if (rhythm.bays) report.facades.withOpenings++;
-        const r2 = (v: number) => Math.round(v * 100) / 100;
+        if (w > 0) report.facades.withOpenings++;
         report.facades.perFacade.push({
-            mesh, texelM: Math.round(texelM * 1e4) / 1e4, rhythmNcc: r2(rhythm.ncc), pitchM: r2(rhythm.pitchM), pierContrast: Math.round(rhythm.contrast * 10) / 10,
-            openings: rhythm.bays ? "bays between the photo's piers" : 'none: no confirmed pier rhythm', openingShare: Math.round((openN / N) * 1000) / 1000, glassRegions: accepted, glassRejected: rejected
+            mesh, face: fi ?? -1, rhythmFrom: decision?.from ?? 'none', texelM: Math.round(texelM * 1e4) / 1e4, rhythmNcc: r2(rhythm.ncc), pitchM: r2(rhythm.pitchM), pierContrast: Math.round(rhythm.contrast * 10) / 10, weight: r2(w),
+            openings: w > 0 ? `bays between the piers of its wall face (weight ${r2(w)})` : 'none: no confirmed pier rhythm on its wall face', openingShare: Math.round((openN / N) * 1000) / 1000, glassRegions: accepted, glassRejected: rejected
         });
         planned.push({ material: mi, orm, normal: nrm, params, ...(accepted ? { photoFallback: fallback } : {}), rebuilt: true, glass: accepted > 0 });
     }
 
-    // ---- scan pieces: wall finish, the class's finish only on the relief's recessed cells ----
-    let recess = 0, scanTexels = 0;
+    // ---- scan pieces: wall finish, a face's bays where the piece lies on that face, else the relief's recessed cells ----
+    let fromFaces = 0, fromRelief = 0, scanTexels = 0;
     for (const mi of other) {
         const photo = photoOf(json, mi)!, img = images.get(photo.image);
         if (!img || done.has(photo.image)) continue;
         done.add(photo.image);
         const { width: W, height: H } = img, N = W * H;
-        const opening = new Uint8Array(N);
-        forEachTriangleOf(g, json, mi, (_p, uv, relief) => {
-            if (relief === undefined || !(relief < P.recessM)) return;
-            rasterTriangle(uv[0] * W, uv[1] * H, uv[2] * W, uv[3] * H, uv[4] * W, uv[5] * H, W, H, k => { opening[k] = 1; });
+        // per texel: the opening's weight (the face's, or 1 on a relief recess), 0 for wall
+        const opening = new Float32Array(N), byFace = new Uint8Array(N);
+        const ids = scan.cluster.get(mi);
+        let tri = 0;
+        forEachTriangleOf(g, json, mi, (p, uv, relief) => {
+            const wall = ids ? ids[tri++] : -1;
+            if (relief !== undefined && relief < P.recessM) {
+                rasterTriangle(uv[0] * W, uv[1] * H, uv[2] * W, uv[3] * H, uv[4] * W, uv[5] * H, W, H, k => { opening[k] = 1; byFace[k] = 0; });
+                return;
+            }
+            const ux = p[3] - p[0], uy = p[4] - p[1], uz = p[5] - p[2], vx = p[6] - p[0], vy = p[7] - p[1], vz = p[8] - p[2];
+            const nn = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx], nl = Math.hypot(nn[0], nn[1], nn[2]);
+            if (!(nl > 0)) return;
+            const n = nn.map(v => v / nl), c = [(p[0] + p[3] + p[6]) / 3, (p[1] + p[4] + p[7]) / 3, (p[2] + p[5] + p[8]) / 3];
+            // a triangle of a scan wall: that wall's own decision (its rhythm, or its height band's on its face)
+            const own = wall >= 0 ? faceOf.get(-1 - wall) : undefined;
+            if (own !== undefined) {
+                const decision = faces[own].decisions.get(-1 - wall)!, frame = faces[own].frames.find(f => f.material === -1 - wall)!;
+                if (!(decision.rhythm.weight > 0)) return;
+                const sa = dot3([p[0], p[1], p[2]], frame.axis), sb = dot3([p[3], p[4], p[5]], frame.axis), sc = dot3([p[6], p[7], p[8]], frame.axis);
+                forTexelsOf(uv, W, H, (k, wa, wb, wc) => {
+                    if (opening[k] === 1 && !byFace[k]) return;
+                    if (decision.bayAt(wa * sa + wb * sb + wc * sc)) { opening[k] = decision.rhythm.weight; byFace[k] = 1; }
+                });
+                return;
+            }
+            const face = faces.find(f => dot3(n, f.n) >= P.faceCos && Math.abs(dot3(c, f.n) - f.offset) <= P.faceBandM &&
+                dot3(c, f.axis) >= f.sMin && dot3(c, f.axis) <= f.sMax && c[1] >= f.yMin - P.faceBandM && c[1] <= f.yMax + P.faceBandM);
+            if (!face) return;
+            // the decision of the face's facade at this height and place along the wall
+            const decision = face.decisions.get(frameAt(face, dot3(c, face.axis), c[1]).material)!;
+            if (!(decision.rhythm.weight > 0)) return;
+            // each texel's place along the wall, from its barycentric position in the triangle
+            const sa = dot3([p[0], p[1], p[2]], face.axis), sb = dot3([p[3], p[4], p[5]], face.axis), sc = dot3([p[6], p[7], p[8]], face.axis);
+            const ax = uv[0] * W, ay = uv[1] * H, bx = uv[2] * W, by = uv[3] * H, cx = uv[4] * W, cy = uv[5] * H;
+            const den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+            if (Math.abs(den) < 1e-12) return;
+            const x0 = Math.max(0, Math.floor(Math.min(ax, bx, cx))), x1 = Math.min(W - 1, Math.ceil(Math.max(ax, bx, cx)));
+            const y0 = Math.max(0, Math.floor(Math.min(ay, by, cy))), y1 = Math.min(H - 1, Math.ceil(Math.max(ay, by, cy)));
+            for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+                const px = x + 0.5, py = y + 0.5;
+                const wa = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / den, wb = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / den, wc = 1 - wa - wb;
+                if (wa < 0 || wb < 0 || wc < 0) continue;
+                const k = y * W + x;
+                if (opening[k] === 1 && !byFace[k]) continue;
+                if (decision.bayAt(wa * sa + wb * sb + wc * sc)) { opening[k] = decision.rhythm.weight; byFace[k] = 1; }
+            }
         });
-        const cls = classify(img, classes, opening);
+        const mask = new Uint8Array(N);
+        for (let k = 0; k < N; k++) mask[k] = opening[k] > 0 ? 1 : 0;
+        const cls = classify(img, classes, mask);
         const orm = blank(W, H), params = blank(W, H);
         for (let k = 0; k < N; k++) {
-            const c = opening[k] ? cls[k] : WALL;
-            write(orm, params, k, setMeans[c][1], Math.min(1, setMeans[c][2] * metalScale[c]), 0);
-            recess += opening[k];
+            const c = mask[k] ? cls[k] : WALL;
+            write(orm, params, k, setMeans[c][1], Math.min(1, setMeans[c][2] * metalScale[c]) * (mask[k] ? opening[k] : 1), 0);
+            if (mask[k]) { if (byFace[k]) fromFaces++; else fromRelief++; }
         }
         scanTexels += N;
         planned.push({ material: mi, orm, params, rebuilt: false, glass: false });
     }
-    report.scanPieces.recessShare = scanTexels ? Math.round((recess / scanTexels) * 1e4) / 1e4 : 0;
+    const share = (v: number) => (scanTexels ? Math.round((v / scanTexels) * 1e4) / 1e4 : 0);
+    report.scanPieces.openingShare = share(fromFaces + fromRelief); report.scanPieces.fromFaces = share(fromFaces); report.scanPieces.fromRelief = share(fromRelief);
     report.ms = Date.now() - t0;
     return { materials: planned, sets, report };
 }
@@ -510,7 +819,7 @@ export function writeMaterialRegions(json: any, plan: MaterialRegionsPlan, addTe
             sbMaterialRegions: {
                 version: MATERIAL_REGIONS_VERSION,
                 baseColor: { label: 'photo-inferred', source: "pipeline K's harmonised photo" + (pm.glass ? '; glass regions drawn with their measured interior' : '') },
-                roughnessMetalness: { label: 'generated', source: `texture library sets per appearance class (${plan.sets.map(s => s.metalnessScale !== undefined ? `${s.name}, metalness x ${Math.round(s.metalnessScale * 100) / 100}` : s.name).join('; ')}); metal only in ${pm.rebuilt ? "the bays between the photo's piers" : "the photometric relief's recessed cells (photo-inferred)"}` },
+                roughnessMetalness: { label: 'generated', source: `texture library sets per appearance class (${plan.sets.map(s => s.metalnessScale !== undefined ? `${s.name}, metalness x ${Math.round(s.metalnessScale * 100) / 100}` : s.name).join('; ')}); metal only in ${pm.rebuilt ? "the bays between the piers of its wall face, scaled by the face's rhythm weight" : "its wall face's bays where it lies on one, else the photometric relief's recessed cells (photo-inferred)"}` },
                 ...(pm.normal ? { normal: { label: 'generated', source: 'the same sets tiled at their real size' } } : {}),
                 ...(plan.sets.some(s => s.realSizeEstimate) ? { tileSize: { label: 'generated', source: plan.sets.filter(s => s.realSizeEstimate).map(s => `${s.name}: ${s.realSizeEstimate}`).join('; ') } } : {}),
                 ...(pm.glass ? { glass: { label: 'photo-inferred', source: "the facade material reading's tile-only test (a regular lattice of regions darker than the wall)" } } : {})
@@ -527,8 +836,8 @@ export function writeMaterialRegions(json: any, plan: MaterialRegionsPlan, addTe
 export function describeMaterialRegions(r: MaterialRegionsReport): string {
     const pct = (a: number) => r.texels.total ? `${Math.round((100 * a) / r.texels.total)}%` : '0%';
     return `material regions: ${r.classes.length} appearance classes (${r.classes.map(c => `${c.wall ? 'wall' : 'L ' + Math.round(c.meanLab[0])} -> ${c.set}`).join(', ')}); ` +
-        `${r.facades.withOpenings} of ${r.facades.total} rebuilt facades show a pier rhythm and got openings, the rest wall finish only; ` +
-        `scan pieces: openings only on the photometric relief's recessed cells (${Math.round(r.scanPieces.recessShare * 1000) / 10}% of their texels); ` +
+        `${r.faces.length} wall faces, ${r.faces.filter(f => f.weight > 0).length} with a pier rhythm (${r.facades.withOpenings} of ${r.facades.total} rebuilt facades got bays, the metal scaled by their face's weight); ` +
+        `scan pieces: ${r.scanPieces.wallsWithBays} of ${r.scanPieces.walls} scan walls with bays (${r.scanPieces.wallAreaWithBaysM2} m²), ${Math.round(r.scanPieces.fromFaces * 1000) / 10}% of their texels in bays, ${Math.round(r.scanPieces.fromRelief * 1000) / 10}% on the relief's recessed cells; ` +
         `${pct(r.texels.metal)} of texels metal (metalness at least ${MATERIAL_REGIONS_PARAMS.metalCountAt}), ${pct(r.texels.glass)} glass (${r.facades.perFacade.reduce((a, f) => a + f.glassRegions, 0)} regions accepted by the lattice test, ${r.facades.perFacade.reduce((a, f) => a + f.glassRejected, 0)} rejected); ` +
         `roughness, metalness and normal generated from the library, colour the photo (${r.ms} ms)`;
 }
