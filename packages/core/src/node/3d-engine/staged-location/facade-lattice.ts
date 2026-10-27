@@ -490,7 +490,10 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
 }
 
 /** Rebuilds a remesh's rectified facades on their photo lattices: the clay and (when given) its textured twin. */
-export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Uint8Array | undefined, orthosDir: string, P: typeof FACADE_LATTICE_PARAMS = FACADE_LATTICE_PARAMS, skip: Set<number> = new Set(), opts: { /** Pipeline K: the scan cut exactly to the rebuilt cells and stitched to them (pipeline-k/lattice-stitch.ts), instead of whole triangles removed. */ stitch?: boolean; /** Pipeline K: window recesses read from the straightened photo (PHOTO_RECESS), the scan being uncarved. */ photoRecess?: boolean } = {}): { clay: Buffer; textured?: Buffer; stats: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears: TearReport; stitch?: { cut: CutReport; strips: StitchReport }; photoRecessCells?: number; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number]; photoRecessCells?: number }> } } {
+/** Cut-and-stitch rounds at most: each leaves as scan the rebuilt cells beside outline edges the stitch could join to nothing. */
+const STITCH_ROUNDS = 4;
+
+export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Uint8Array | undefined, orthosDir: string, P: typeof FACADE_LATTICE_PARAMS = FACADE_LATTICE_PARAMS, skip: Set<number> = new Set(), opts: { /** Pipeline K: the scan cut exactly to the rebuilt cells and stitched to them (pipeline-k/lattice-stitch.ts), instead of whole triangles removed. */ stitch?: boolean; /** Pipeline K: window recesses read from the straightened photo (PHOTO_RECESS), the scan being uncarved. */ photoRecess?: boolean } = {}): { clay: Buffer; textured?: Buffer; stats: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears: TearReport; stitch?: { cut: CutReport; strips: StitchReport; /** Per round: outline edges joined to nothing, and the cells beside them left as scan for the next round. */ rounds?: Array<{ unjoined: number; cellsLeftAsScan: number }> }; photoRecessCells?: number; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number]; photoRecessCells?: number }> } } {
     const facades = JSON.parse(fs.readFileSync(path.join(orthosDir, 'facades.json'), 'utf8')).facades as ReliefFacade[];
     const soup = glbSoup(parseGlbBytes(clayBytes));
     const done: Array<{ f: ReliefFacade; r: FacadeLatticeResult; png: Uint8Array }> = [];
@@ -506,16 +509,37 @@ export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Ui
         if (r) done.push({ f, r, png });
     }
     if (opts.stitch && done.length) {
-        // the scan cut to the rebuilt cells (the same cut on the twin: the same triangles), the walls appended, the seams stitched
-        // each rebuilt facade watertight inside itself (every step, corners shared), only its outline left for the stitch
-        const sealed = done.map(d => ({ ...d, r: { ...d.r, ...watertightLatticeMesh(d.f, d.r) } }));
-        const cutClay = cutScanToLattice(clayBytes, sealed), cutTex = texturedBytes ? cutScanToLattice(texturedBytes, sealed) : undefined;
-        const wClay = applyFacadeLattices(cutClay.glb, sealed, false, P, { removeScan: false }), wTex = cutTex ? applyFacadeLattices(cutTex.glb, sealed, true, P, { removeScan: false }) : undefined;
-        const st = stitchLattice(wClay.glb, wTex ? [wTex.glb] : [], sealed);
-        return {
-            clay: st.clay, ...(wTex ? { textured: st.others[0] } : {}),
-            stats: { facades: facades.length, rebuilt: done.length, cells: done.reduce((a, d) => a + d.r.cells, 0), removedTriangles: cutClay.report.cutTriangles, tears: { found: 0, restoredTriangles: 0, droppedFacades: [], left: 0 }, stitch: { cut: cutClay.report, strips: st.report }, ...(opts.photoRecess ? { photoRecessCells: done.reduce((a, d) => a + (d.r.photoRecessCells ?? 0), 0) } : {}), perFacade: done.map(d => ({ id: d.f.facadeId, cells: d.r.cells, measuredShare: d.r.measuredShare, lines: [d.r.s.length, d.r.t.length] as [number, number], ...(d.r.photoRecessCells !== undefined ? { photoRecessCells: d.r.photoRecessCells } : {}) })) }
-        };
+        // the scan cut to the rebuilt cells (the same cut on the twin: the same triangles), the walls appended, the seams stitched.
+        // Cut and stitch hold together: a rebuilt cell whose outline edge the stitch joins to nothing (no scan cut along it, no
+        // corner) would leave a hole only a cap could close, so that cell is left as scan and the cut and stitch run again
+        let live = done.map(d => ({ ...d, r: { ...d.r, built: Uint8Array.from(d.r.built) } }));
+        const rounds: Array<{ unjoined: number; cellsLeftAsScan: number }> = [];
+        for (let round = 1; ; round++) {
+            // each rebuilt facade watertight inside itself (every step, corners shared), only its outline left for the stitch
+            const sealed = live.map(d => ({ ...d, r: { ...d.r, ...watertightLatticeMesh(d.f, d.r) } }));
+            // the cut edits the bytes it is given (removed triangles made degenerate in place): each round cuts a fresh copy
+            const cutClay = cutScanToLattice(Uint8Array.from(clayBytes), sealed), cutTex = texturedBytes ? cutScanToLattice(Uint8Array.from(texturedBytes), sealed) : undefined;
+            const wClay = applyFacadeLattices(cutClay.glb, sealed, false, P, { removeScan: false }), wTex = cutTex ? applyFacadeLattices(cutTex.glb, sealed, true, P, { removeScan: false }) : undefined;
+            const st = stitchLattice(wClay.glb, wTex ? [wTex.glb] : [], sealed);
+            let unbuilt = 0;
+            if (st.report.unjoined && round < STITCH_ROUNDS) {
+                for (const d of live) {
+                    const ns = d.r.s.length - 1;
+                    for (const [a, b] of st.unjoinedCells.get(d.f.facadeId) ?? []) if (d.r.built[b * ns + a]) { d.r.built[b * ns + a] = 0; d.r.cells--; unbuilt++; }
+                }
+            }
+            rounds.push({ unjoined: st.report.unjoined, cellsLeftAsScan: unbuilt });
+            if (unbuilt) {
+                live = live.filter(d => d.r.cells > 0);
+                if (live.length) continue;
+                // no facade left to rebuild: the scan stands as it came
+                return { clay: Buffer.from(clayBytes), ...(texturedBytes ? { textured: Buffer.from(texturedBytes) } : {}), stats: { facades: facades.length, rebuilt: 0, cells: 0, removedTriangles: 0, tears: { found: 0, restoredTriangles: 0, droppedFacades: [], left: 0 }, stitch: { cut: { cutTriangles: 0, removedPieces: 0, keptPieces: 0 }, strips: st.report, rounds }, perFacade: [] } };
+            }
+            return {
+                clay: st.clay, ...(wTex ? { textured: st.others[0] } : {}),
+                stats: { facades: facades.length, rebuilt: live.length, cells: live.reduce((a, d) => a + d.r.cells, 0), removedTriangles: cutClay.report.cutTriangles, tears: { found: 0, restoredTriangles: 0, droppedFacades: [], left: 0 }, stitch: { cut: cutClay.report, strips: st.report, rounds }, ...(opts.photoRecess ? { photoRecessCells: live.reduce((a, d) => a + (d.r.photoRecessCells ?? 0), 0) } : {}), perFacade: live.map(d => ({ id: d.f.facadeId, cells: d.r.cells, measuredShare: d.r.measuredShare, lines: [d.r.s.length, d.r.t.length] as [number, number], ...(d.r.photoRecessCells !== undefined ? { photoRecessCells: d.r.photoRecessCells } : {}) })) }
+            };
+        }
     }
     const clay = applyFacadeLattices(clayBytes, done, false, P);
     const kept = done.filter(d => !clay.tears.droppedFacades.includes(d.f.facadeId));

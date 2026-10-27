@@ -111,6 +111,35 @@ describe('pipeline K base cleanup', () => {
         expect(worst).toBeLessThan(0.7);
     });
 
+    it('closes a side the scan has no wall on (a party wall) with a generated wall facing out, and leaves the scanned sides', () => {
+        // the tower from the ground up, its x = 10 side missing: from that side the inside of the other walls shows
+        const walls = box(0, 10, 0, 20, 0, 10);
+        const missing = (i: number) => { const xs = [walls[i * 9], walls[i * 9 + 3], walls[i * 9 + 6]]; return xs.every(x => x === 10); };
+        const kept: number[] = [];
+        // box() winds its faces inward; a scan's face out, so each kept triangle is turned over
+        for (let i = 0; i < walls.length / 9; i++) if (!missing(i)) kept.push(...walls.slice(i * 9, i * 9 + 3), ...walls.slice(i * 9 + 6, i * 9 + 9), ...walls.slice(i * 9 + 3, i * 9 + 6));
+        const soup = Float32Array.from(kept);
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'base-'));
+        const file = path.join(dir, 'clay.glb');
+        writeStagedGlbFile(file, [{ name: 'scan', positions: soup, indices: Uint32Array.from({ length: soup.length / 3 }, (_, i) => i) }], {});
+        const r = cleanBase(fs.readFileSync(file), [], footprint, 0);
+        expect(r.report.partyWall.edges).toBe(1);
+        expect(r.report.partyWall.areaM2).toBeGreaterThan(180);
+        expect(r.report.partyWall.areaM2).toBeLessThanOrEqual(200);
+        const g = parseGlbBytes(r.clay);
+        const node = g.json.nodes.find((n: any) => n.name === 'PartyWall');
+        expect(node.extras.sbBaseSkirt.provenance.label).toBe('generated');
+        const pr = g.json.meshes[node.mesh].primitives[0];
+        const P = readAccessor(g, pr.attributes.POSITION).data, I = readAccessor(g, pr.indices).data;
+        for (let v = 0; v < P.length; v += 3) expect(P[v]).toBeCloseTo(10, 6);
+        // every quad faces out of the building (+x)
+        for (let t = 0; t < I.length; t += 3) {
+            const a = [P[I[t] * 3], P[I[t] * 3 + 1], P[I[t] * 3 + 2]], b = [P[I[t + 1] * 3], P[I[t + 1] * 3 + 1], P[I[t + 1] * 3 + 2]], c = [P[I[t + 2] * 3], P[I[t + 2] * 3 + 1], P[I[t + 2] * 3 + 2]];
+            const nx = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]);
+            expect(nx).toBeGreaterThan(0);
+        }
+    });
+
     it('cleans nothing when the footprint does not fit the building', () => {
         const { file } = scene();
         // a footprint 30 m away

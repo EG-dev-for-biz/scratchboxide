@@ -184,6 +184,7 @@ import { runMassingStage, runNativeMassing, stagedPipelineE, pipelineEInference,
 import { PIPELINE_G_VERSION, runPipelineG, stagedPipelineG } from './pipeline-g/pipeline-g';
 import { H_BUDGET_MARGIN_MS, H_POLICY, PIPELINE_H_VERSION, stagedProcedural } from './pipeline-h/pipeline-h';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK } from './pipeline-k/pipeline-k';
+import { PARTY_WALL_TEXTURE_VERSION, texturePartyWall } from './pipeline-k/party-wall-texture';
 import { measureVisibleDefects } from './pipeline-k/visible-defects';
 import { TEXTURE_HARMONIZE_VERSION, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
 import { describeMaterialRegions, MATERIAL_REGIONS_VERSION, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
@@ -2556,7 +2557,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // pipeline K's material regions: only with the app's texture library (deps.pipelineK), SCRATCHBOX_K_MATERIAL_REGIONS=0 off
                 const materialSets = harmonizeOn && process.env.SCRATCHBOX_K_MATERIAL_REGIONS?.trim() !== '0' ? deps.pipelineK?.materialSets : undefined;
                 if (harmonizeOn && !materialSets) cache.writeRunNote(runId, 'pipeline_k_materials', { skipped: deps.pipelineK?.materialSets ? 'SCRATCHBOX_K_MATERIAL_REGIONS=0' : 'no texture library in this build\'s services' });
-                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? MATERIAL_REGIONS_VERSION : '');
+                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? MATERIAL_REGIONS_VERSION : '', harmonizeOn ? PARTY_WALL_TEXTURE_VERSION : '', harmonizeOn && visionAvailable ? 'party-wall-image' : '');
                 const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport; materialRegions?: TileRefineTwin['materialRegions'] }>('textures', key, async dir => {
                     const twin = await tileRefineTwin(bytes, target.layer.layer, harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0 }, ...(materialSets ? { materialRegions: { sets: (classes: RegionClass[]) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m) }) } } : {}) } : enhance ? {
                         recreate: {
@@ -2565,7 +2566,18 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         }
                     } : undefined);
                     if (twin.harmonize) cache.writeRunNote(runId, 'pipeline_k_texture', { version: TEXTURE_HARMONIZE_VERSION, layer: target.layer.layer, ...twin.harmonize });
-                    fs.writeFileSync(path.join(dir, 'twin.glb'), twin.glb);
+                    // pipeline K: the party wall (a wall the scan lacks, base-cleanup.ts) drawn as the building's masonry continued, by the image model
+                    let twinGlb: Uint8Array = twin.glb;
+                    if (harmonizeOn) {
+                        const orthosDir = cache.readRunNote<{ orthosDir?: string }>(runId, 'pipeline_k')?.orthosDir;
+                        const pw = await texturePartyWall(twin.glb, { ...(visionAvailable ? { client: genAiEnhanceClient(visionAvailable.client) } : {}), models: [LIGHTING_MODEL_FULL], ...(orthosDir ? { orthosDir } : {}), signal: io.signal, progress: (m: string) => io.progress(m) }).catch((err: unknown) => {
+                            if (isAbort(err) || io.signal.aborted) throw err;
+                            return { glb: Buffer.from(twin.glb), report: { walls: -1, skipped: `texturing the party wall failed: ${errorMessage(err)}` } };
+                        });
+                        twinGlb = pw.glb;
+                        cache.writeRunNote(runId, 'pipeline_k_party_wall', { version: PARTY_WALL_TEXTURE_VERSION, layer: target.layer.layer, ...pw.report });
+                    }
+                    fs.writeFileSync(path.join(dir, 'twin.glb'), twinGlb);
                     return { value: { rungShares: twin.rungShares, provenance: twin.provenance, ladderRung: twin.ladderRung, triangles: twin.triangles, ...(twin.harmonize ? { harmonize: twin.harmonize } : {}), ...(twin.materialRegions ? { materialRegions: twin.materialRegions } : {}) } };
                 }, { publish: () => [{ from: 'twin.glb', as: `${base}_${target.layer.layer}_tex_${key.slice(0, 8)}.glb` }], bypass: bypass('textures') });
                 const pub = entry.published[0];
@@ -3353,7 +3365,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const vec = eBuildings.flatMap(b => (b.extruded?.length ? b.extruded.filter(p => !p.planOnly).map(p => p.loops[0]) : [])).filter(l => l && l.length >= 3);
                         return vec.length ? vec : [structure.outline];
                     })() : undefined;
-                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: true, photoRecess: true } : {}), ...(kLoops ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}) }));
+                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: true, photoRecess: true } : {}), ...(kLoops ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}), ...(pipelineK && process.env.SCRATCHBOX_K_SEAL?.trim() === '1' ? { seal: true } : {}) }));
                     if (kLoops) cache.writeRunNote(runId, 'pipeline_k_base', { loops: kLoops, groundY: structure!.groundY, footprint: eBuildings.length ? 'Google vector footprint' : 'scan outline', report: pol.stats.base ?? null });
                     if (pol.clayGlb !== r.clayGlb) {
                         run.note(PROVENANCE.remeshed, `remesh polish (${REMESH_POLISH_VERSION}): ${describePolish(pol.stats)}`);
