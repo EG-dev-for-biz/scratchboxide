@@ -32,8 +32,9 @@
  *     base colour the region's 10th-percentile texel, roughness of float glass, dielectric, the photo kept as fallback,
  *     and the parameters texture (R glass weight, B metalness) the viewer reads for the scene's reflection.
  *
- * Labels: base colour photo-inferred (the photo); roughness, metalness and normal generated (library sets); glass
- * photo-inferred at the reading's tile-only confidence. Nothing is drawn where no photo is.
+ * Labels: base colour photo-inferred (the photo, never relit or lifted: it is the evidence of how the building looks);
+ * roughness, metalness and normal
+ * generated (library sets); glass photo-inferred at the reading's tile-only confidence. Nothing is drawn where no photo is.
  */
 
 import { readAccessor, type ParsedGlb } from '../glb-bytes';
@@ -43,7 +44,7 @@ import type { RgbaImage8 } from '../tile-texture-transfer';
 import { GLASS_ROUGHNESS, MIN_REGION_M2, latticeGlassAgreement } from '../facade-materials';
 import { MATERIAL_PARAMS_CHANNELS } from '../staged-glb-writer';
 
-export const MATERIAL_REGIONS_VERSION = 'material-regions/1';
+export const MATERIAL_REGIONS_VERSION = 'material-regions/8';
 
 export const MATERIAL_REGIONS_PARAMS = {
     /** Appearance classes, texels sampled per facade photo, k-means iterations, sampling seed. */
@@ -55,7 +56,9 @@ export const MATERIAL_REGIONS_PARAMS = {
     /** A scan triangle is an opening when its mean _RELIEF_HEIGHT is below this (m). */
     recessM: -0.1,
     /** Glass candidates in line within this (m), as the facade material reading's tile-only test. */
-    glassLineM: 0.3
+    glassLineM: 0.3,
+    /** A texel counts as metal in the report from this metalness (the bays are drawn part-metal). */
+    metalCountAt: 0.2
 };
 export type MaterialRegionsParams = typeof MATERIAL_REGIONS_PARAMS;
 
@@ -81,11 +84,15 @@ export interface RegionSet {
     normal: RgbaImage8; orm: RgbaImage8;
     /** How near the set lies to the class (the library search's distance). */
     distance: number;
+    /** The set's metalness is drawn multiplied by this (a bare metal drawn part metal); 1 when absent. */
+    metalnessScale?: number;
+    /** Why realSizeM is an estimate, when the set's publisher gives none (labelled generated). */
+    realSizeEstimate?: string;
 }
 
 export interface MaterialRegionsReport {
     version: string;
-    classes: Array<Pick<RegionClass, 'index' | 'meanLab' | 'share' | 'wall'> & { set: string; distance: number }>;
+    classes: Array<Pick<RegionClass, 'index' | 'meanLab' | 'share' | 'wall'> & { set: string; distance: number; metalnessScale?: number; sizeEstimate?: string }>;
     facades: { total: number; withOpenings: number; perFacade: Array<{ mesh: string; texelM: number; rhythmNcc: number; pitchM: number; pierContrast: number; openings: string; openingShare: number; glassRegions: number; glassRejected: number }> };
     scanPieces: { total: number; recessShare: number };
     texels: { total: number; metal: number; glass: number };
@@ -340,16 +347,17 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
     const planned: PlannedMaterial[] = [];
     const report: MaterialRegionsReport = {
         version: MATERIAL_REGIONS_VERSION,
-        classes: classes.map((c, k) => ({ index: c.index, meanLab: c.meanLab, share: c.share, wall: c.wall, set: sets[k].name, distance: Math.round(sets[k].distance * 100) / 100 })),
+        classes: classes.map((c, k) => ({ index: c.index, meanLab: c.meanLab, share: c.share, wall: c.wall, set: sets[k].name, distance: Math.round(sets[k].distance * 100) / 100, ...(sets[k].metalnessScale !== undefined ? { metalnessScale: Math.round(sets[k].metalnessScale! * 1000) / 1000 } : {}), ...(sets[k].realSizeEstimate ? { sizeEstimate: sets[k].realSizeEstimate } : {}) })),
         facades: { total: rebuilt.size, withOpenings: 0, perFacade: [] }, scanPieces: { total: other.size, recessShare: 0 }, texels: { total: 0, metal: 0, glass: 0 }, ms: 0
     };
     const setMeans = sets.map(s => meanOf(s.orm));
+    const metalScale = sets.map(s => s.metalnessScale ?? 1);
     const done = new Set<number>();
     const write = (orm: RgbaImage8, params: RgbaImage8, k: number, r: number, m: number, glassWeight: number) => {
         orm.rgba[k * 4] = 255; orm.rgba[k * 4 + 1] = Math.round(r * 255); orm.rgba[k * 4 + 2] = Math.round(m * 255); orm.rgba[k * 4 + 3] = 255;
         params.rgba[k * 4] = glassWeight; params.rgba[k * 4 + 2] = Math.round(m * 255); params.rgba[k * 4 + 3] = 255;
         report.texels.total++;
-        if (glassWeight) report.texels.glass++; else if (m >= 0.5) report.texels.metal++;
+        if (glassWeight) report.texels.glass++; else if (m >= P.metalCountAt) report.texels.metal++;
     };
 
     // ---- rebuilt facades ----
@@ -437,7 +445,7 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
                 continue;
             }
             const t = tiles[finish[k]], j = ((y % t.th) * t.tw + (x % t.tw)) * 3;
-            write(orm, params, k, t.o[j + 1], t.o[j + 2], 0);
+            write(orm, params, k, t.o[j + 1], Math.min(1, t.o[j + 2] * metalScale[finish[k]]), 0);
             nrm.rgba.set([Math.round(t.n[j] * 255), Math.round(t.n[j + 1] * 255), Math.round(t.n[j + 2] * 255), 255], k * 4);
         }
         let openN = 0;
@@ -467,7 +475,7 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
         const orm = blank(W, H), params = blank(W, H);
         for (let k = 0; k < N; k++) {
             const c = opening[k] ? cls[k] : WALL;
-            write(orm, params, k, setMeans[c][1], setMeans[c][2], 0);
+            write(orm, params, k, setMeans[c][1], Math.min(1, setMeans[c][2] * metalScale[c]), 0);
             recess += opening[k];
         }
         scanTexels += N;
@@ -502,8 +510,9 @@ export function writeMaterialRegions(json: any, plan: MaterialRegionsPlan, addTe
             sbMaterialRegions: {
                 version: MATERIAL_REGIONS_VERSION,
                 baseColor: { label: 'photo-inferred', source: "pipeline K's harmonised photo" + (pm.glass ? '; glass regions drawn with their measured interior' : '') },
-                roughnessMetalness: { label: 'generated', source: `texture library sets per appearance class (${plan.sets.map(s => s.name).join(', ')}); metal only in ${pm.rebuilt ? "the bays between the photo's piers" : "the photometric relief's recessed cells (photo-inferred)"}` },
+                roughnessMetalness: { label: 'generated', source: `texture library sets per appearance class (${plan.sets.map(s => s.metalnessScale !== undefined ? `${s.name}, metalness x ${Math.round(s.metalnessScale * 100) / 100}` : s.name).join('; ')}); metal only in ${pm.rebuilt ? "the bays between the photo's piers" : "the photometric relief's recessed cells (photo-inferred)"}` },
                 ...(pm.normal ? { normal: { label: 'generated', source: 'the same sets tiled at their real size' } } : {}),
+                ...(plan.sets.some(s => s.realSizeEstimate) ? { tileSize: { label: 'generated', source: plan.sets.filter(s => s.realSizeEstimate).map(s => `${s.name}: ${s.realSizeEstimate}`).join('; ') } } : {}),
                 ...(pm.glass ? { glass: { label: 'photo-inferred', source: "the facade material reading's tile-only test (a regular lattice of regions darker than the wall)" } } : {})
             }
         };
@@ -520,6 +529,6 @@ export function describeMaterialRegions(r: MaterialRegionsReport): string {
     return `material regions: ${r.classes.length} appearance classes (${r.classes.map(c => `${c.wall ? 'wall' : 'L ' + Math.round(c.meanLab[0])} -> ${c.set}`).join(', ')}); ` +
         `${r.facades.withOpenings} of ${r.facades.total} rebuilt facades show a pier rhythm and got openings, the rest wall finish only; ` +
         `scan pieces: openings only on the photometric relief's recessed cells (${Math.round(r.scanPieces.recessShare * 1000) / 10}% of their texels); ` +
-        `${pct(r.texels.metal)} of texels metal, ${pct(r.texels.glass)} glass (${r.facades.perFacade.reduce((a, f) => a + f.glassRegions, 0)} regions accepted by the lattice test, ${r.facades.perFacade.reduce((a, f) => a + f.glassRejected, 0)} rejected); ` +
+        `${pct(r.texels.metal)} of texels metal (metalness at least ${MATERIAL_REGIONS_PARAMS.metalCountAt}), ${pct(r.texels.glass)} glass (${r.facades.perFacade.reduce((a, f) => a + f.glassRegions, 0)} regions accepted by the lattice test, ${r.facades.perFacade.reduce((a, f) => a + f.glassRejected, 0)} rejected); ` +
         `roughness, metalness and normal generated from the library, colour the photo (${r.ms} ms)`;
 }

@@ -169,6 +169,26 @@ describe('pipeline K material regions', () => {
         expect(plan.report.scanPieces.recessShare).toBeLessThan(0.6);
     });
 
+    it("keeps the photo as the base colour outside glass, scales the bays' metalness, and reports an estimated tile size with its reason", () => {
+        const { glb, photos } = building();
+        const g = parseGlbBytes(glb);
+        const images = imagesOf(photos), before = imagesOf(photos);
+        const classes = readRegionClasses(g.json, images)!;
+        const estimated = sets(classes).map(s => s.name === 'TestStone' ? s : { ...s, metalnessScale: 0.4, realSizeEstimate: 'its publisher gives no real size; tiled at 1 x 1 m' });
+        const plan = planMaterialRegions(g, g.json, images, classes, estimated);
+        const f1 = plan.materials.find(m => m.material === 0)!;
+        const px = (img: RgbaImage8, x: number, y: number) => Array.from(img.rgba.subarray((y * img.width + x) * 4, (y * img.width + x) * 4 + 3));
+        // a spandrel is drawn part metal (the set's 230/255 scaled by 0.4), its colour still the photo's; a pier and the weathered facade untouched
+        expect(f1.orm.rgba[(75 * 200 + 17) * 4 + 2]).toBe(Math.round((230 / 255) * 0.4 * 255));
+        expect(f1.params.rgba[(75 * 200 + 17) * 4 + 2]).toBe(Math.round((230 / 255) * 0.4 * 255));
+        expect(plan.report.classes.filter(c => !c.wall).every(c => c.metalnessScale === 0.4)).toBe(true);
+        expect(px(images.get(0)!, 17, 75)).toEqual(px(before.get(0)!, 17, 75));
+        expect(px(images.get(0)!, 7, 100)).toEqual(px(before.get(0)!, 7, 100));
+        expect(Buffer.from(images.get(1)!.rgba).equals(Buffer.from(before.get(1)!.rgba))).toBe(true);
+        expect(plan.report.classes.filter(c => !c.wall).every(c => /no real size/.test(c.sizeEstimate ?? ''))).toBe(true);
+        expect(plan.report.classes.find(c => c.wall)!.sizeEstimate).toBeUndefined();
+    });
+
     it('writes the twin lit, with the maps, the reading extras and the labels', async () => {
         const { glb } = building();
         const twin = await tileRefineTwin(glb, 'esb', { harmonize: { groundY: 0 }, materialRegions: { sets: async classes => sets(classes) } });
