@@ -2995,7 +2995,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         type IRunState = { refined: TileRefineResult; layer: { objectId: string }; key: string; stage?: MassingStageResult };
         let eState: { stage: MassingStageResult; refined: TileRefineResult; layer: StagedLayer; key: string; ms: number; ledger?: LedgerEntry[] } | undefined;
         /** The ownership vote to run after the first isolate commits: what it needs to remesh the same structure again. */
-        let voteLater: { tilePath: string; isolatePick?: string; pick?: { pick: StructurePickResult; ground: GroundModel }; request: TileRefineRequest; orthos: { reliefOrthos?: boolean } } | undefined;
+        let voteLater: { tilePath: string; isolatePick?: string; pick?: { pick: StructurePickResult; ground: GroundModel }; request: TileRefineRequest; orthos: { reliefOrthos?: boolean; reliefCarve?: boolean } } | undefined;
         /** The residual audit of one pipeline E native run, into the build notes (and a degradation when it failed or left clusters unsure). */
         /** The footprint lock's check of a built layer against the footprint its massing stood on: recorded, and a breach
          * degraded -- unless `opts.clamp`, where a breach is first re-fit (pulled back onto the footprint, same vertices
@@ -3263,8 +3263,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     ...(isolateMode ? { isolate: true, anchor: { x: structure!.seed.x, z: structure!.seed.z }, ...(isolatePick ? { isolatePick } : {}) } : {}),
                     ...reliefOpt
                 };
-                // the facades' orthophotos for the grammar reading (facade-grammar.ts), only when it will run
-                const orthos = grammarOn || pipelineK ? { reliefOrthos: true } : {};
+                // the facades' orthophotos for the grammar reading (facade-grammar.ts), only when it will run; pipeline K: the relief
+                // carves nothing in the scan (its window recesses are carved on the rebuilt facades, from the straightened photos)
+                const orthos = grammarOn || pipelineK ? { reliefOrthos: true, ...(pipelineK ? { reliefCarve: false } : {}) } : {};
                 if (isolateMode && request.procedural !== true && deps.refine.renderOwnershipViews && visionAvailable) voteLater = { tilePath, ...(isolatePick ? { isolatePick } : {}), ...(remeshPick ? { pick: remeshPick } : {}), request: remeshRequest, orthos };
                 let r = await timed('tileRefine', () => deps.refine.refine({ ...remeshRequest!, ...orthos }));
                 // the isolated structure must be the one picked; when it is not (or tile_refine wrote no isolated scan to
@@ -3333,7 +3334,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const vec = eBuildings.flatMap(b => (b.extruded?.length ? b.extruded.filter(p => !p.planOnly).map(p => p.loops[0]) : [])).filter(l => l && l.length >= 3);
                         return vec.length ? vec : [structure.outline];
                     })() : undefined;
-                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: true } : {}), ...(kLoops ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}) }));
+                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: true, photoRecess: true } : {}), ...(kLoops ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}) }));
                     if (kLoops) cache.writeRunNote(runId, 'pipeline_k_base', { loops: kLoops, groundY: structure!.groundY, footprint: eBuildings.length ? 'Google vector footprint' : 'scan outline', report: pol.stats.base ?? null });
                     if (pol.clayGlb !== r.clayGlb) {
                         run.note(PROVENANCE.remeshed, `remesh polish (${REMESH_POLISH_VERSION}): ${describePolish(pol.stats)}`);

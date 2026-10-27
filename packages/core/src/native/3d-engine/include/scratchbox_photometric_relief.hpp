@@ -184,6 +184,9 @@ struct ReliefParams {
     // When set, every analysed facade's orthophoto (facade_<id>.png, plain RGB, uncovered pixels mid grey) and its metric
     // frame and cells (facades.json) are written here: the image a grammar is read from, in the frame it is fitted to.
     std::string orthoExportDir;
+    // false: analyse (and export the orthophotos) but carve nothing: the scene is written as it came. Pipeline K carves its
+    // window recesses later, on the facades it rebuilds from the straightened photos (facade-lattice.ts).
+    bool carve{true};
     double minProminence{0.08};      // peak height above the preceding dip
     double minTemplateContrast{0.015};
     double darkRunMinDepth{0.15};    // a dark band of the folded profile dips at least this share of its contrast below mid level
@@ -3288,7 +3291,7 @@ private:
         std::vector<uint8_t> treated(regions_.size(), 0);
         for (auto& R : regions_) {
             auto it = repOf.find(R.id);
-            if (it == repOf.end() || R.features.empty()) continue;
+            if (!p_.carve || it == repOf.end() || R.features.empty()) continue;
             tessellateRegion(R, result_.facades[it->second]);
             if (result_.facades[it->second].treated) treated[static_cast<size_t>(R.id)] = 1;
         }

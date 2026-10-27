@@ -43,6 +43,8 @@ export interface TileRefineRequest {
      * depths are inferred, not measured; the outputs label them (_RELIEF_HEIGHT per vertex, asset.extras).
      */
     relief?: boolean;
+    /** false: the relief analyses (and writes reliefOrthos) but carves nothing (pipeline K carves on its rebuilt facades). */
+    reliefCarve?: boolean;
     /**
      * Facade flatten: vertices within `band` metres of a detected wall plane move onto it (default on, band 0.10).
      * `false` turns it off; `{ band }` sets the band (0..0.5 m).
@@ -302,6 +304,9 @@ export class TileRefineService {
         if (req.relief === false) {
             cliArgs.push('--no-relief');
             keyParams.relief = false;
+        } else if (req.reliefCarve === false) {
+            cliArgs.push('--relief-no-carve');
+            keyParams.reliefCarve = false;
         }
         if (req.facadeFlatten === false) {
             cliArgs.push('--no-flatten');

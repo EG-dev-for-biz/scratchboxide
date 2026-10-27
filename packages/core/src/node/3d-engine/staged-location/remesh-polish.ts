@@ -19,7 +19,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { cleanRemesh, remeshCleanupEnabled, REMESH_CLEANUP_VERSION, type RemeshCleanupStats } from './remesh-cleanup';
-import { FACADE_LATTICE_PARAMS, FACADE_LATTICE_VERSION, rebuildFacadesOnLattice, type TearReport } from './facade-lattice';
+import { FACADE_LATTICE_PARAMS, FACADE_LATTICE_VERSION, PHOTO_RECESS, rebuildFacadesOnLattice, type TearReport } from './facade-lattice';
 import { BASE_CLEANUP_VERSION, cleanBase, type BaseCleanupReport } from './pipeline-k/base-cleanup';
 import { fillOpenLoops, LATTICE_STITCH_VERSION, type FillReport } from './pipeline-k/lattice-stitch';
 import type { Vec2 } from '../../../common/spatial/staged-location-contracts';
@@ -40,10 +40,10 @@ export interface RemeshPolishStats {
 
 export interface PolishedRemesh { clayGlb: string; texturedGlb?: string; cacheKey: string; stats: RemeshPolishStats }
 
-export function polishRemesh(input: { clayGlb: string; texturedGlb?: string; cacheKey: string; orthosDir?: string; /** Names the orthos when they are not tile_refine's own (pipeline K's rectified set), so the cache tells them apart. */ orthosKey?: string; skipFacades?: number[]; cleanup?: boolean; lattice?: boolean; /** Pipeline K: the base cleaned by the structure's footprint (pipeline-k/base-cleanup.ts), last. */ base?: { loops: Vec2[][]; groundY: number }; /** Pipeline K: the facades cut and stitched watertight, and the shell's open loops closed last (pipeline-k/lattice-stitch.ts). */ seal?: boolean }): PolishedRemesh {
+export function polishRemesh(input: { clayGlb: string; texturedGlb?: string; cacheKey: string; orthosDir?: string; /** Names the orthos when they are not tile_refine's own (pipeline K's rectified set), so the cache tells them apart. */ orthosKey?: string; skipFacades?: number[]; cleanup?: boolean; lattice?: boolean; /** Pipeline K: the base cleaned by the structure's footprint (pipeline-k/base-cleanup.ts), last. */ base?: { loops: Vec2[][]; groundY: number }; /** Pipeline K: the facades cut and stitched watertight, and the shell's open loops closed last (pipeline-k/lattice-stitch.ts). */ seal?: boolean; /** Pipeline K: the lattice recesses its windows as the straightened photo shows them (facade-lattice.ts PHOTO_RECESS), tile_refine having carved nothing. */ photoRecess?: boolean }): PolishedRemesh {
     const cleanup = input.cleanup ?? remeshCleanupEnabled(), lattice = (input.lattice ?? facadeLatticeEnabled()) && !!input.orthosDir && fs.existsSync(path.join(input.orthosDir, 'facades.json'));
     if (!cleanup && !lattice && !input.base && !input.seal) return { clayGlb: input.clayGlb, ...(input.texturedGlb ? { texturedGlb: input.texturedGlb } : {}), cacheKey: input.cacheKey, stats: {} };
-    const opts = JSON.stringify({ v: REMESH_POLISH_VERSION, cleanup, lattice, skip: [...(input.skipFacades ?? [])].sort((a, b) => a - b), ...(input.orthosKey ? { orthos: input.orthosKey } : {}), ...(input.base ? { base: BASE_CLEANUP_VERSION, loops: input.base.loops, groundY: input.base.groundY } : {}), ...(input.seal ? { seal: LATTICE_STITCH_VERSION } : {}) });
+    const opts = JSON.stringify({ v: REMESH_POLISH_VERSION, cleanup, lattice, skip: [...(input.skipFacades ?? [])].sort((a, b) => a - b), ...(input.orthosKey ? { orthos: input.orthosKey } : {}), ...(input.base ? { base: BASE_CLEANUP_VERSION, loops: input.base.loops, groundY: input.base.groundY } : {}), ...(input.seal ? { seal: LATTICE_STITCH_VERSION } : {}), ...(input.photoRecess ? { photoRecess: PHOTO_RECESS } : {}) });
     const tag = crypto.createHash('sha256').update(opts).digest('hex').slice(0, 16);
     const dir = path.join(path.dirname(input.clayGlb), 'polish', tag);
     const clayOut = path.join(dir, 'clay.glb'), texOut = input.texturedGlb ? path.join(dir, 'textured.glb') : undefined, statsFile = path.join(dir, 'stats.json');
@@ -53,7 +53,7 @@ export function polishRemesh(input: { clayGlb: string; texturedGlb?: string; cac
         if (cleanup) { const c = cleanRemesh(clay, tex ? [tex] : []); clay = c.clay; tex = tex ? c.others[0] : undefined; stats.cleanup = c.stats; }
         if (lattice) {
             const skip = new Set(input.skipFacades ?? []);
-            const l = rebuildFacadesOnLattice(clay, tex, input.orthosDir!, FACADE_LATTICE_PARAMS, skip, { stitch: input.seal === true });
+            const l = rebuildFacadesOnLattice(clay, tex, input.orthosDir!, FACADE_LATTICE_PARAMS, skip, { stitch: input.seal === true, photoRecess: input.photoRecess === true });
             clay = l.clay; tex = l.textured ?? tex; stats.lattice = l.stats;
         }
         if (input.base) {
