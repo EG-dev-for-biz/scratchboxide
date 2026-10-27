@@ -2541,7 +2541,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const materialSets = harmonizeOn && process.env.SCRATCHBOX_K_MATERIAL_REGIONS?.trim() !== '0' ? deps.pipelineK?.materialSets : undefined;
                 if (harmonizeOn && !materialSets) cache.writeRunNote(runId, 'pipeline_k_materials', { skipped: deps.pipelineK?.materialSets ? 'SCRATCHBOX_K_MATERIAL_REGIONS=0' : 'no texture library in this build\'s services' });
                 const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? MATERIAL_REGIONS_VERSION : '');
-                const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport }>('textures', key, async dir => {
+                const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport; materialRegions?: TileRefineTwin['materialRegions'] }>('textures', key, async dir => {
                     const twin = await tileRefineTwin(bytes, target.layer.layer, harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0 }, ...(materialSets ? { materialRegions: { sets: (classes: RegionClass[]) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m) }) } } : {}) } : enhance ? {
                         recreate: {
                             client: enhance, ...(deps.textures?.enhanceModels ? { models: deps.textures.enhanceModels } : {}),
@@ -2549,14 +2549,16 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         }
                     } : undefined);
                     if (twin.harmonize) cache.writeRunNote(runId, 'pipeline_k_texture', { version: TEXTURE_HARMONIZE_VERSION, layer: target.layer.layer, ...twin.harmonize });
-                    if (twin.materialRegions) {
-                        cache.writeRunNote(runId, 'pipeline_k_materials', { layer: target.layer.layer, ...twin.materialRegions });
-                        io.progress('skipped' in twin.materialRegions ? `material regions not drawn: ${twin.materialRegions.skipped}` : describeMaterialRegions(twin.materialRegions));
-                    }
                     fs.writeFileSync(path.join(dir, 'twin.glb'), twin.glb);
-                    return { value: { rungShares: twin.rungShares, provenance: twin.provenance, ladderRung: twin.ladderRung, triangles: twin.triangles, ...(twin.harmonize ? { harmonize: twin.harmonize } : {}) } };
+                    return { value: { rungShares: twin.rungShares, provenance: twin.provenance, ladderRung: twin.ladderRung, triangles: twin.triangles, ...(twin.harmonize ? { harmonize: twin.harmonize } : {}), ...(twin.materialRegions ? { materialRegions: twin.materialRegions } : {}) } };
                 }, { publish: () => [{ from: 'twin.glb', as: `${base}_${target.layer.layer}_tex_${key.slice(0, 8)}.glb` }], bypass: bypass('textures') });
                 const pub = entry.published[0];
+                // the material regions' report, whether the stage ran now or its result came from the cache
+                if (materialSets) {
+                    const mr = entry.value.materialRegions;
+                    cache.writeRunNote(runId, 'pipeline_k_materials', { layer: target.layer.layer, cached: entry.cached, ...(mr ?? { skipped: 'the cached textures were written before their result carried the material regions\' report; nothing was recorded for them' }) });
+                    if (mr) io.progress('skipped' in mr ? `material regions not drawn: ${mr.skipped}` : `${describeMaterialRegions(mr)}${entry.cached ? ' (cached)' : ''}`);
+                }
                 // pipeline K's finished model, for scripts that rebuild the building from it (site-guides.ts)
                 if (harmonizeOn) cache.writeRunNote(runId, 'pipeline_k_model', { model: path.join(entry.dir, 'twin.glb'), url: pub.url, layer: target.layer.layer });
                 const out = {
