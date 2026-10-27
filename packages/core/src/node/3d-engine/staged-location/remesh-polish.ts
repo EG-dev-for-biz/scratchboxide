@@ -90,7 +90,7 @@ export function describePolish(s: RemeshPolishStats): string {
     }
     if (s.seal) {
         const q = s.seal;
-        parts.push(`shell closed: ${q.filled + q.fanned} holes filled (the bottom capped; ${q.addedAreaM2} m² generated)${q.openAfter ? `; ${q.openAfter} open edges left (${q.skippedWallOnly} wall-only and ${q.skippedLarge} large tangled loops not filled, ${q.openPathEdges} edges on open paths)` : '; watertight: no open edge left'}`);
+        parts.push(`shell closed: ${q.filled + q.clipped3d} holes filled (the bottom capped; ${q.addedAreaM2} m² generated)${q.openAfter ? `; ${q.openAfter} open edges left (${q.skippedWallOnly} wall outlines not filled)` : '; watertight: no open edge left'}`);
     }
     return parts.join('; ');
 }

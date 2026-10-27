@@ -27,7 +27,7 @@
 
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor, type ParsedGlb } from './glb-bytes';
 import { decodePng } from '../../texture-processing';
-import { cutScanToLattice, stitchLattice, type CutReport, type StitchReport } from './pipeline-k/lattice-stitch';
+import { cutScanToLattice, stitchLattice, watertightLatticeMesh, type CutReport, type StitchReport } from './pipeline-k/lattice-stitch';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -481,9 +481,11 @@ export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Ui
     }
     if (opts.stitch && done.length) {
         // the scan cut to the rebuilt cells (the same cut on the twin: the same triangles), the walls appended, the seams stitched
-        const cutClay = cutScanToLattice(clayBytes, done), cutTex = texturedBytes ? cutScanToLattice(texturedBytes, done) : undefined;
-        const wClay = applyFacadeLattices(cutClay.glb, done, false, P, { removeScan: false }), wTex = cutTex ? applyFacadeLattices(cutTex.glb, done, true, P, { removeScan: false }) : undefined;
-        const st = stitchLattice(wClay.glb, wTex ? [wTex.glb] : [], done);
+        // each rebuilt facade watertight inside itself (every step, corners shared), only its outline left for the stitch
+        const sealed = done.map(d => ({ ...d, r: { ...d.r, ...watertightLatticeMesh(d.f, d.r) } }));
+        const cutClay = cutScanToLattice(clayBytes, sealed), cutTex = texturedBytes ? cutScanToLattice(texturedBytes, sealed) : undefined;
+        const wClay = applyFacadeLattices(cutClay.glb, sealed, false, P, { removeScan: false }), wTex = cutTex ? applyFacadeLattices(cutTex.glb, sealed, true, P, { removeScan: false }) : undefined;
+        const st = stitchLattice(wClay.glb, wTex ? [wTex.glb] : [], sealed);
         return {
             clay: st.clay, ...(wTex ? { textured: st.others[0] } : {}),
             stats: { facades: facades.length, rebuilt: done.length, cells: done.reduce((a, d) => a + d.r.cells, 0), removedTriangles: cutClay.report.cutTriangles, tears: { found: 0, restoredTriangles: 0, droppedFacades: [], left: 0 }, stitch: { cut: cutClay.report, strips: st.report }, perFacade: done.map(d => ({ id: d.f.facadeId, cells: d.r.cells, measuredShare: d.r.measuredShare, lines: [d.r.s.length, d.r.t.length] as [number, number] })) }

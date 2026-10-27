@@ -21,9 +21,9 @@
  *     like the step faces between cells.
  *  3. Fill (fillOpenLoops, last, after the base cleanup): every loop of open edges left (the scan's own holes, the corners
  *     where strips and steps meet, the cut at the slab's depth planes behind the wall, and the base, which caps the bottom)
- *     is triangulated in its best-fitting plane; a small loop that does not project cleanly is fanned from its centre. A
- *     loop of rebuilt-wall vertices only is never filled (that would double the wall), nor is a large tangled one; both are
- *     counted.
+ *     is triangulated in its best-fitting plane, or, when it does not lie flat, in 3D by cutting off the ear with the shortest
+ *     closing edge again and again (greedy Liepa). A rebuilt wall's own outer outline is never filled (that would double the
+ *     wall). Open means an edge of an odd number of triangles: such edges always form closed loops, so every one is closed.
  *
  * Every added triangle uses existing vertices exactly (plus a fan's centre), so the result welds shut. The open edges
  * left are counted on the welded result and reported.
@@ -42,8 +42,8 @@ export const LATTICE_STITCH_PARAMS = {
     weldM: 0.001,
     /** A point lies on a lattice line within this (m). */
     onLineM: 0.002,
-    /** Fill: a loop that does not triangulate cleanly is fanned only below this perimeter (m). */
-    maxFanPerimeterM: 20
+    /** Two facades' open outline edges this close side by side (m) are zipped together: walls meeting at a corner. */
+    cornerGapM: 2.5
 };
 export type LatticeStitchParams = typeof LATTICE_STITCH_PARAMS;
 
@@ -109,6 +109,54 @@ function split(poly: Vx[], g: (v: Vx) => number, plane: string, pr: PrimRead, ca
 }
 
 const cellIndex = (v: number, edges: number[]) => { let lo = 0, hi = edges.length - 1; while (hi - lo > 1) { const k = (lo + hi) >> 1; if (edges[k] <= v) lo = k; else hi = k; } return lo; };
+
+/**
+ * A rebuilt facade's surface made watertight inside itself: one face per rebuilt cell at its depth, and a step face between
+ * every two neighbouring rebuilt cells whose depths differ at all (the plain rebuild skips steps under a few centimetres,
+ * leaving slits). Each step's two end edges are split at every other depth meeting at that corner, so the steps around a
+ * corner share their edges exactly (no pinhole where four cells of different depths meet). Same frame, UVs and normals as
+ * the plain rebuild (facade-lattice.ts latticeFacade); only the outline is left open, for the stitch.
+ */
+export function watertightLatticeMesh(f: ReliefFacade, r: FacadeLatticeResult): Pick<FacadeLatticeResult, 'positions' | 'normals' | 'uv' | 'indices'> {
+    const ns = r.s.length - 1, nt = r.t.length - 1, W = f.width * f.pixel, H = f.height * f.pixel;
+    const built = (a: number, b: number) => a >= 0 && b >= 0 && a < ns && b < nt && !!r.built[b * ns + a];
+    const depthAt = (a: number, b: number) => r.depth[b][a];
+    const pos: number[] = [], nrm: number[] = [], uv: number[] = [], idx: number[] = [];
+    const vert = (sv: number, tv: number, d: number, n: ArrayLike<number>) => {
+        for (let k = 0; k < 3; k++) pos.push(f.centroid[k] + sv * f.axisS[k] + tv * f.axisT[k] + d * f.normal[k]);
+        nrm.push(n[0], n[1], n[2]); uv.push((sv - f.orthoSMin) / W, (f.orthoTMax - tv) / H);
+        return pos.length / 3 - 1;
+    };
+    // the depths of the rebuilt cells touching grid corner (a, b) (corner a in 0..ns, b in 0..nt)
+    const cornerDepths = (a: number, b: number) => [[a - 1, b - 1], [a, b - 1], [a - 1, b], [a, b]].filter(([x, y]) => built(x, y)).map(([x, y]) => depthAt(x, y));
+    const neg = (v: number[]) => v.map(x => -x);
+    for (let b = 0; b < nt; b++) for (let a = 0; a < ns; a++) {
+        if (!built(a, b)) continue;
+        const d = depthAt(a, b);
+        const q = [vert(r.s[a], r.t[b], d, f.normal), vert(r.s[a + 1], r.t[b], d, f.normal), vert(r.s[a + 1], r.t[b + 1], d, f.normal), vert(r.s[a], r.t[b + 1], d, f.normal)];
+        idx.push(q[0], q[1], q[2], q[0], q[2], q[3]);
+    }
+    // a step between two cells along one grid line: corners P (pa, pb) and Q (qa, qb), depths lo..hi, every corner depth between kept
+    const step = (P: [number, number], Q: [number, number], d: number, e: number, n: number[]) => {
+        const lo = Math.min(d, e), hi = Math.max(d, e);
+        const chain = (c: [number, number]) => [lo, ...cornerDepths(c[0], c[1]).filter(x => x > lo && x < hi).sort((x, y) => x - y), hi].filter((x, i, arr) => i === 0 || x !== arr[i - 1]);
+        const cp = chain(P), cq = chain(Q);
+        const vp = cp.map(x => vert(r.s[P[0]], r.t[P[1]], x, n)), vq = cq.map(x => vert(r.s[Q[0]], r.t[Q[1]], x, n));
+        // zip the two chains by depth
+        let i = 0, j = 0;
+        while (i < vp.length - 1 || j < vq.length - 1) {
+            if (j >= vq.length - 1 || (i < vp.length - 1 && cp[i + 1] <= cq[j + 1])) { idx.push(vp[i], vq[j], vp[i + 1]); i++; }
+            else { idx.push(vp[i], vq[j], vq[j + 1]); j++; }
+        }
+    };
+    for (let b = 0; b < nt; b++) for (let a = 0; a < ns; a++) {
+        if (!built(a, b)) continue;
+        const d = depthAt(a, b);
+        if (built(a + 1, b) && depthAt(a + 1, b) !== d) { const e = depthAt(a + 1, b); step([a + 1, b], [a + 1, b + 1], d, e, d > e ? [...f.axisS] : neg([...f.axisS])); }
+        if (built(a, b + 1) && depthAt(a, b + 1) !== d) { const e = depthAt(a, b + 1); step([a, b + 1], [a + 1, b + 1], d, e, d > e ? [...f.axisT] : neg([...f.axisT])); }
+    }
+    return { positions: Float32Array.from(pos), normals: Float32Array.from(nrm), uv: Float32Array.from(uv), indices: Uint32Array.from(idx) };
+}
 
 export interface CutReport { cutTriangles: number; removedPieces: number; keptPieces: number }
 
@@ -219,11 +267,16 @@ function welded(bytes: Uint8Array, P: LatticeStitchParams): { pos: number[][]; t
 }
 
 const ekey = (a: number, b: number) => (a < b ? `${a},${b}` : `${b},${a}`);
-function openEdges(tris: number[][], owner?: Map<string, number>): Array<[number, number]> {
+/**
+ * The open edges: those of an odd number of triangles. Around any vertex the triangle counts of its edges sum to twice its
+ * faces, so a vertex always has an even number of odd edges: they always walk into closed loops, and filling each loop once
+ * makes every count even (closed, even where the scan is not manifold). `once` keeps only edges of exactly one triangle.
+ */
+function openEdges(tris: number[][], owner?: Map<string, number>, once = false): Array<[number, number]> {
     const c = new Map<string, number>();
     tris.forEach((f, t) => { for (let k = 0; k < 3; k++) { const e = ekey(f[k], f[(k + 1) % 3]); c.set(e, (c.get(e) ?? 0) + 1); owner?.set(e, t); } });
     const out: Array<[number, number]> = [];
-    for (const [k, n] of c) if (n === 1) { const [a, b] = k.split(',').map(Number); out.push([a, b]); }
+    for (const [k, n] of c) if (once ? n === 1 : n % 2 === 1) { const [a, b] = k.split(',').map(Number); out.push([a, b]); }
     return out;
 }
 
@@ -268,14 +321,14 @@ function appendTriangles(bytes: Uint8Array, tris: number[][][], name: string, me
     return assembleGlb(json, bin);
 }
 
-export interface StitchReport { segments: number; stitched: number; stripTriangles: number; why: Record<string, number> }
+export interface StitchReport { segments: number; stitched: number; stripTriangles: number; cornersZipped: number; why: Record<string, number> }
 
 /** The rebuilt walls' outlines stitched to the scan's cut, segment by segment, in each segment's vertical plane. */
 export function stitchLattice(clay: Uint8Array, others: Uint8Array[], facades: Facade[], P: LatticeStitchParams = LATTICE_STITCH_PARAMS): { clay: Buffer; others: Buffer[]; report: StitchReport } {
     const w = welded(clay, P);
-    const open = openEdges(w.tris);
+    const open = openEdges(w.tris, undefined, true);
     const openVerts = new Set(open.flat());
-    const report: StitchReport = { segments: 0, stitched: 0, stripTriangles: 0, why: {} };
+    const report: StitchReport = { segments: 0, stitched: 0, stripTriangles: 0, cornersZipped: 0, why: {} };
     const miss = (k: string) => { report.why[k] = (report.why[k] ?? 0) + 1; };
     const out: number[][][] = [];
     // open scan vertices per facade frame, for the lookup along each outline segment
@@ -327,12 +380,58 @@ export function stitchLattice(clay: Uint8Array, others: Uint8Array[], facades: F
             if (b === nt - 1 || !r.built[(b + 1) * ns + a]) segment(r.s[a], r.t[b + 1], r.s[a + 1], r.t[b + 1], d);
         }
     }
+    // walls meeting at a building corner: the open edges of each facade's outline that found no scan (their vertices are that
+    // wall's only), walked into chains, zipped by height to another facade's chain running beside them within cornerGapM
+    const usedEdge = new Set<string>();
+    for (const t of out) { const ids = t.map(p => w.idOf(Float32Array.from(p))!); for (let k = 0; k < 3; k++) usedEdge.add(ekey(ids[k], ids[(k + 1) % 3])); }
+    const wallOf = new Map<number, number>();
+    w.tris.forEach((f, i) => { if (w.wall[i] >= 0) for (const v of f) wallOf.set(v, w.wall[i]); });
+    const free = open.filter(([a, b]) => !usedEdge.has(ekey(a, b)) && wallOf.has(a) && wallOf.get(a) === wallOf.get(b) && Math.abs(w.pos[a][1] - w.pos[b][1]) > 1e-6);
+    // chains: per facade, the near-vertical open wall edges joined end to end, ordered by height
+    const byFacade = new Map<number, Array<[number, number]>>();
+    for (const e of free) { const k = wallOf.get(e[0])!; (byFacade.get(k) ?? byFacade.set(k, []).get(k)!).push(e); }
+    const chains: Array<{ facade: number; vs: number[] }> = [];
+    for (const [facade, es] of byFacade) {
+        const adj = new Map<number, number[]>();
+        for (const [a, b] of es) { (adj.get(a) ?? adj.set(a, []).get(a)!).push(b); (adj.get(b) ?? adj.set(b, []).get(b)!).push(a); }
+        const seen = new Set<number>();
+        for (const start of adj.keys()) {
+            if (seen.has(start) || adj.get(start)!.length !== 1) continue;
+            const vs = [start]; seen.add(start);
+            let prev = -1, cur = start;
+            for (;;) { const nx = adj.get(cur)!.find(x => x !== prev && !seen.has(x)); if (nx === undefined) break; vs.push(nx); seen.add(nx); prev = cur; cur = nx; }
+            if (vs.length >= 2) chains.push({ facade, vs: w.pos[vs[0]][1] <= w.pos[vs[vs.length - 1]][1] ? vs : vs.reverse() });
+        }
+    }
+    const horiz = (a: number, b: number) => Math.hypot(w.pos[a][0] - w.pos[b][0], w.pos[a][2] - w.pos[b][2]);
+    const taken = new Set<number>();
+    chains.forEach((c1, i) => {
+        if (taken.has(i)) return;
+        let best = -1, bestGap = Infinity;
+        chains.forEach((c2, j) => {
+            if (j === i || taken.has(j) || c2.facade === c1.facade) return;
+            const lo = Math.max(w.pos[c1.vs[0]][1], w.pos[c2.vs[0]][1]), hi = Math.min(w.pos[c1.vs[c1.vs.length - 1]][1], w.pos[c2.vs[c2.vs.length - 1]][1]);
+            if (!(hi - lo > 0.5)) return;
+            const gap = horiz(c1.vs[0], c2.vs[0]) + horiz(c1.vs[c1.vs.length - 1], c2.vs[c2.vs.length - 1]);
+            if (gap / 2 <= P.cornerGapM && gap < bestGap) { bestGap = gap; best = j; }
+        });
+        if (best < 0) return;
+        taken.add(i); taken.add(best);
+        const a = c1.vs, b = chains[best].vs, y = (v: number) => w.pos[v][1];
+        let x = 0, z = 0;
+        while (x < a.length - 1 || z < b.length - 1) {
+            if (z >= b.length - 1 || (x < a.length - 1 && y(a[x + 1]) <= y(b[z + 1]))) { out.push([w.pos[a[x]], w.pos[b[z]], w.pos[a[x + 1]]]); x++; }
+            else { out.push([w.pos[a[x]], w.pos[b[z]], w.pos[b[z + 1]]]); z++; }
+        }
+        report.cornersZipped++;
+    });
     report.stripTriangles = out.length;
-    const method = 'the rebuilt walls stitched to the scan cut to them: a strip along each edge of a rebuilt outline, in its vertical plane';
+    const method = 'the rebuilt walls stitched to the scan cut to them (a strip along each edge of a rebuilt outline, in its vertical plane) and to each other at the building\'s corners';
     return { clay: appendTriangles(clay, out, 'LatticeStitch', method, false), others: others.map(o => appendTriangles(o, out, 'LatticeStitch', method, true)), report };
 }
 
-export interface FillReport { openBefore: number; loops: number; filled: number; fanned: number; skippedWallOnly: number; skippedLarge: number; openPathEdges: number; openAfter: number; nonManifoldAfter: number; addedAreaM2: number }
+/** openBefore / openAfter: edges of an odd number of triangles (open); nonManifoldAfter: closed edges of four or more. */
+export interface FillReport { openBefore: number; kinds: Record<string, number>; loops: number; filled: number; clipped3d: number; skippedWallOnly: number; openPathEdges: number; openAfter: number; nonManifoldAfter: number; addedAreaM2: number }
 
 /** The open loops left closed (the scan's holes, corners, the base: the bottom capped), counted again after. */
 export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], P: LatticeStitchParams = LATTICE_STITCH_PARAMS): { clay: Buffer; others: Buffer[]; report: FillReport } {
@@ -372,9 +471,14 @@ export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], P: Lattice
         }
         openPathEdges += Math.max(0, path.length - 1);
     }
-    const report: FillReport = { openBefore: open.length, loops: loops.length, filled: 0, fanned: 0, skippedWallOnly: 0, skippedLarge: 0, openPathEdges, openAfter: 0, nonManifoldAfter: 0, addedAreaM2: 0 };
+    const kinds: Record<string, number> = {};
+    for (const [a, b] of open) {
+        const fa = wallFacade.get(a), fb = wallFacade.get(b);
+        const k = fa !== undefined && fb !== undefined ? (fa === fb ? 'inside one wall' : 'between two walls') : fa !== undefined || fb !== undefined ? 'wall to scan' : 'scan';
+        kinds[k] = (kinds[k] ?? 0) + 1;
+    }
+    const report: FillReport = { openBefore: open.length, kinds, loops: loops.length, filled: 0, clipped3d: 0, skippedWallOnly: 0, openPathEdges, openAfter: 0, nonManifoldAfter: 0, addedAreaM2: 0 };
     const out: number[][][] = [], addedFaces: number[][] = [];
-    const extra: number[][] = [];
     for (const l of loops) {
         // a loop of one rebuilt wall's vertices only is either a hole the wall surrounds (filled) or the wall's own outer
         // outline (filling it would double the wall): seen in the loop's plane, the wall lies outside a hole and inside an outline
@@ -399,18 +503,22 @@ export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], P: Lattice
             tri = triangulate(l, [], v => xy(w.pos[v]));
         } else if (wallOnly) { report.skippedWallOnly++; continue; }
         if (tri) { report.filled++; for (const t of tri) { addedFaces.push(t); out.push(t.map(v => w.pos[v])); } continue; }
-        let perim = 0;
-        for (let i = 0; i < l.length; i++) perim += Math.sqrt(d2(l[i], l[(i + 1) % l.length]));
-        if (perim > P.maxFanPerimeterM) { report.skippedLarge++; continue; }
-        const c = [0, 1, 2].map(k => l.reduce((s, v) => s + w.pos[v][k], 0) / l.length);
-        const cv = w.pos.length + extra.length;
-        extra.push(c);
-        for (let i = 0; i < l.length; i++) { addedFaces.push([l[i], l[(i + 1) % l.length], cv]); out.push([w.pos[l[i]], w.pos[l[(i + 1) % l.length]], c]); }
-        report.fanned++;
+        // a loop that does not lie flat: closed in 3D by cutting off, again and again, the ear whose closing edge is shortest
+        // (greedy Liepa): every loop edge used once, the triangles kept local, no fan from a far centre
+        const ring = [...l];
+        while (ring.length > 3) {
+            let bi = 0, bd = Infinity;
+            for (let k = 0; k < ring.length; k++) { const d = d2(ring[(k - 1 + ring.length) % ring.length], ring[(k + 1) % ring.length]); if (d < bd) { bd = d; bi = k; } }
+            const t = [ring[(bi - 1 + ring.length) % ring.length], ring[bi], ring[(bi + 1) % ring.length]];
+            addedFaces.push(t); out.push(t.map(v => w.pos[v]));
+            ring.splice(bi, 1);
+        }
+        addedFaces.push(ring); out.push(ring.map(v => w.pos[v]));
+        report.clipped3d++;
     }
     const counts = new Map<string, number>();
     for (const f of [...w.tris, ...addedFaces]) for (let k = 0; k < 3; k++) { const e = ekey(f[k], f[(k + 1) % 3]); counts.set(e, (counts.get(e) ?? 0) + 1); }
-    for (const c of counts.values()) { if (c === 1) report.openAfter++; else if (c > 2) report.nonManifoldAfter++; }
+    for (const c of counts.values()) { if (c % 2 === 1) report.openAfter++; else if (c > 2) report.nonManifoldAfter++; }
     for (const t of out) { const a = t[0], b = t[1], c = t[2]; const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2]; report.addedAreaM2 += 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx); }
     report.addedAreaM2 = Math.round(report.addedAreaM2);
     const method = 'the shell closed: every open loop left (the scan\'s own holes, corners, the base, which caps the bottom) triangulated in its best-fitting plane';
