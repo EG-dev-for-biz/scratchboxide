@@ -35,10 +35,10 @@ export interface RemeshPolishStats {
 
 export interface PolishedRemesh { clayGlb: string; texturedGlb?: string; cacheKey: string; stats: RemeshPolishStats }
 
-export function polishRemesh(input: { clayGlb: string; texturedGlb?: string; cacheKey: string; orthosDir?: string; skipFacades?: number[]; cleanup?: boolean; lattice?: boolean }): PolishedRemesh {
+export function polishRemesh(input: { clayGlb: string; texturedGlb?: string; cacheKey: string; orthosDir?: string; /** Names the orthos when they are not tile_refine's own (pipeline K's rectified set), so the cache tells them apart. */ orthosKey?: string; skipFacades?: number[]; cleanup?: boolean; lattice?: boolean }): PolishedRemesh {
     const cleanup = input.cleanup ?? remeshCleanupEnabled(), lattice = (input.lattice ?? facadeLatticeEnabled()) && !!input.orthosDir && fs.existsSync(path.join(input.orthosDir, 'facades.json'));
     if (!cleanup && !lattice) return { clayGlb: input.clayGlb, ...(input.texturedGlb ? { texturedGlb: input.texturedGlb } : {}), cacheKey: input.cacheKey, stats: {} };
-    const opts = JSON.stringify({ v: REMESH_POLISH_VERSION, cleanup, lattice, skip: [...(input.skipFacades ?? [])].sort((a, b) => a - b) });
+    const opts = JSON.stringify({ v: REMESH_POLISH_VERSION, cleanup, lattice, skip: [...(input.skipFacades ?? [])].sort((a, b) => a - b), ...(input.orthosKey ? { orthos: input.orthosKey } : {}) });
     const tag = crypto.createHash('sha256').update(opts).digest('hex').slice(0, 16);
     const dir = path.join(path.dirname(input.clayGlb), 'polish', tag);
     const clayOut = path.join(dir, 'clay.glb'), texOut = input.texturedGlb ? path.join(dir, 'textured.glb') : undefined, statsFile = path.join(dir, 'stats.json');

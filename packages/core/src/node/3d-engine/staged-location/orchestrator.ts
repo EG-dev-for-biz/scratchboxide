@@ -183,6 +183,7 @@ import { fetchFootprints, type FootprintSource } from './facade-footprints';
 import { runMassingStage, runNativeMassing, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, SCAN_FOOTPRINT_TOKEN, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
 import { PIPELINE_G_VERSION, runPipelineG, stagedPipelineG } from './pipeline-g/pipeline-g';
 import { H_BUDGET_MARGIN_MS, H_POLICY, PIPELINE_H_VERSION, stagedProcedural } from './pipeline-h/pipeline-h';
+import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK } from './pipeline-k/pipeline-k';
 import { MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE, PIPELINE_I_VERSION, TRELLIS_SEEDS, runPipelineI } from './pipeline-i/pipeline-i';
 import { PROJECT_MAX_RELIEF_M, pipelineIRefineEnabled, refinePipelineI, type RefineOutcome } from './pipeline-i/refine';
 import { captureBuildingTrainingInBackground, sweepPendingBuildingTraining, type BuildingTrainingCaptureInput } from '../../cloud-store/building-training-capture';
@@ -420,8 +421,10 @@ export interface StagedLocationRequest {
      * Trellis instead: best of six seeds, then a swatch colour match), 'h' (pipeline-h/: the scan leads, the build
      * commits what its budget allows, weak readings gated, continued openings deduped, rejections by reason, an evidence
      * ledger; the default when no model services are wired) or 'g'. SCRATCHBOX_STAGED_PROCEDURAL changes the default.
+     * 'k' (pipeline-k/) is not procedural: the remeshed scan, its facade orthos straightened and levelled, its facades
+     * rebuilt on them; it replaces pipeline E and the facade grammar for the build.
      */
-    pipeline?: 'g' | 'h' | 'i' | 'j' | (string & {});
+    pipeline?: 'g' | 'h' | 'i' | 'j' | 'k' | (string & {});
 }
 
 export interface StagedExtraction {
@@ -1770,9 +1773,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // pipeline E, the default for an isolated building (SCRATCHBOX_STAGED_PIPELINE=d or 0 turns it off; user decision
         // 2026-10-22 confirms it): the structure from the vector massing; it needs the building's vector footprint, else
         // the remesh pipeline runs and the reason is recorded
-        const pipelineE = stagedPipelineE() && request.isolate;
+        /** Pipeline K (pipeline-k/): the remeshed scan with straightened facade photos, in place of E and the grammar. */
+        const pipelineK = stagedPipelineK(request);
+        const pipelineE = stagedPipelineE() && request.isolate && !pipelineK;
         /** The procedural pipeline of this request ('g', 'h' or 'i'), undefined when none is asked for. */
-        const procedural: 'g' | 'h' | 'i' | 'j' | undefined = stagedPipelineG(request) ? stagedProcedural(request, process.env, !!deps.pipelineI) : undefined;
+        const procedural: 'g' | 'h' | 'i' | 'j' | undefined = stagedPipelineG(request) && !pipelineK ? stagedProcedural(request, process.env, !!deps.pipelineI) : undefined;
         /** H's scan-led structure and massing rules: pipeline I builds on the same isolate and massing as H. */
         const scanLed = procedural === 'h' || procedural === 'i' || procedural === 'j';
         // no usable vector footprint at the place (eg. the Great Pyramid of Giza): pipeline E still runs, on the
@@ -2248,8 +2253,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const startTextures = (): void => {
             if (texturesPromise) return;
             if (deps.textures?.disabled) { runner.skip('textures', deps.textures.disabled); runner.skip('textures-late', deps.textures.disabled); return; }
-            // a district (or a structure tile_refine could not isolate) is textured with tile_refine's own photo
-            const mode: 'texture-pass' | 'tile-refine' = isolateOk ? 'texture-pass' : 'tile-refine';
+            // a district (or a structure tile_refine could not isolate) is textured with tile_refine's own photo, and so is
+            // pipeline K's structure: its facades carry their straightened photos, which a re-bake from the tile would undo
+            const mode: 'texture-pass' | 'tile-refine' = isolateOk && !pipelineK ? 'texture-pass' : 'tile-refine';
             const texStarted = now();
             const pass = { rebuild: rebuildPromise, grammar: grammarGate.settled, massing: massingGate.settled };
             const outcomes: TexOutcome[] = [];
@@ -3241,7 +3247,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     ...reliefOpt
                 };
                 // the facades' orthophotos for the grammar reading (facade-grammar.ts), only when it will run
-                const orthos = grammarOn ? { reliefOrthos: true } : {};
+                const orthos = grammarOn || pipelineK ? { reliefOrthos: true } : {};
                 if (isolateMode && request.procedural !== true && deps.refine.renderOwnershipViews && visionAvailable) voteLater = { tilePath, ...(isolatePick ? { isolatePick } : {}), ...(remeshPick ? { pick: remeshPick } : {}), request: remeshRequest, orthos };
                 let r = await timed('tileRefine', () => deps.refine.refine({ ...remeshRequest!, ...orthos }));
                 // the isolated structure must be the one picked; when it is not (or tile_refine wrote no isolated scan to
@@ -3284,9 +3290,28 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         if (district) r = district;
                     }
                 }
+                // pipeline K: the facade orthos straightened and their smears levelled before the facades are rebuilt on them
+                let orthosKey: string | undefined;
+                if (pipelineK) {
+                    if (!r.reliefOrthosDir) run.note(PROVENANCE.remeshed, 'pipeline K: tile_refine wrote no facade orthophotos, so no facade could be straightened; the remesh stands as cleaned');
+                    else {
+                        try {
+                            io.progress('pipeline K: straightening the facade photos');
+                            const k = await timed('pipelineK', () => rectifyReliefOrthos(r.reliefOrthosDir!, { signal: io.signal }));
+                            orthosKey = `${PIPELINE_K_VERSION}:${k.key}`;
+                            r = { ...r, reliefOrthosDir: k.orthosDir };
+                            cache.writeRunNote(runId, 'pipeline_k', { version: PIPELINE_K_VERSION, orthosDir: k.orthosDir, cached: k.cached, ms: k.ms, reports: k.reports });
+                            run.note(PROVENANCE.photoInferred, `pipeline K (${PIPELINE_K_VERSION}): ${describeRectified(k)}`);
+                        } catch (err) {
+                            if (isAbort(err) || io.signal.aborted) throw err;
+                            cache.writeRunNote(runId, 'pipeline_k', { version: PIPELINE_K_VERSION, failed: true, reason: errorMessage(err) });
+                            run.note(PROVENANCE.remeshed, `pipeline K: straightening the facade photos failed (${errorMessage(err)}); the facades are rebuilt on their photos as extracted`);
+                        }
+                    }
+                }
                 // the scan cleaned and its rectified facades rebuilt on their photo's lines before it is textured (remesh-polish.ts)
                 {
-                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}) }));
+                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: true } : {}) }));
                     if (pol.clayGlb !== r.clayGlb) {
                         run.note(PROVENANCE.remeshed, `remesh polish (${REMESH_POLISH_VERSION}): ${describePolish(pol.stats)}`);
                         r = { ...r, cacheKey: pol.cacheKey, clayGlb: pol.clayGlb, ...(pol.texturedGlb ? { texturedGlb: pol.texturedGlb } : {}) };
@@ -4050,6 +4075,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 }));
             }
             runner.skip('relief', 'the measured relief runs on pipeline E\'s clean massing (SCRATCHBOX_STAGED_PIPELINE=e)');
+            if (pipelineK) {
+                runner.skip('grammar', 'pipeline K rebuilds the facades on their straightened photos instead of reading them as a grammar');
+                return;
+            }
             if (!grammarOn) {
                 runner.skip('grammar', !facadeGrammarEnabled() ? 'facade grammar is off (SCRATCHBOX_FACADE_GRAMMAR=0)' : !visionAvailable ? 'no vision model is configured' : 'the photometric relief is off');
                 return;

@@ -20,7 +20,8 @@
  * 3. repeats averaged: in each row the cells split into the photo's darker and lighter class (openings and wall), and
  *    each class takes its median depth, so repeated windows get one recess measured from all of them;
  * 4. the facade rebuilt: one face per cell at its depth, step faces between cells (reveals, sills, cornices), replacing the
- *    scan's facade triangles; textured with the facade's own orthophoto (planar UVs in the plane's frame).
+ *    scan's facade triangles; textured with the facade's own orthophoto (planar UVs in the plane's frame). Only cells the
+ *    photo covers are rebuilt: an uncovered cell keeps its scan triangles, never a face painted the uncovered grey.
  * Lines are photo-inferred; depths are measured (averaged); the rebuilt faces are labelled so in the GLB extras.
  */
 
@@ -29,7 +30,7 @@ import { decodePng } from '../../texture-processing';
 import * as fs from 'fs';
 import * as path from 'path';
 
-export const FACADE_LATTICE_VERSION = 'facade-lattice/1';
+export const FACADE_LATTICE_VERSION = 'facade-lattice/2';
 
 export const FACADE_LATTICE_PARAMS = {
     /** Facades tile_refine rectified with at least this share of their ortho covered. */
@@ -49,7 +50,12 @@ export const FACADE_LATTICE_PARAMS = {
     /** A step face is drawn where neighbouring cells differ by more than this (m). */
     stepM: 0.03,
     /** A facade is rebuilt only when its cells cover at least this share of its lattice with measurements. */
-    minMeasuredShare: 0.5
+    minMeasuredShare: 0.5,
+    /**
+     * A cell is rebuilt only when at least this share of its ortho is covered by the photo (uncovered is exact grey 128 or
+     * transparent): elsewhere the scan's own triangles stay, rather than a face textured with the uncovered grey.
+     */
+    minCellPhotoShare: 0.5
 };
 
 export interface ReliefFacade {
@@ -59,7 +65,9 @@ export interface ReliefFacade {
 
 export interface FacadeLatticeResult {
     facadeId: number; s: number[]; t: number[]; cells: number; measuredShare: number;
-    depth: number[][]; positions: Float32Array; normals: Float32Array; uv: Float32Array; indices: Uint32Array;
+    depth: number[][];
+    /** Per cell (row-major, t then s): 1 when it was rebuilt, 0 when the photo does not cover it and the scan stays. */
+    built: Uint8Array; positions: Float32Array; normals: Float32Array; uv: Float32Array; indices: Uint32Array;
 }
 
 const dot = (a: ArrayLike<number>, b: ArrayLike<number>) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -125,12 +133,18 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
     for (let i = 0; i < samples.length; i += 3) { const a = cellOf(samples[i], s), b = cellOf(samples[i + 1], t); if (a >= 0 && b >= 0) bucket[b * ns + a].push(samples[i + 2]); }
     // the photo's mean luminance per cell (openings read darker than wall)
     const lum = new Float64Array(ns * nt).fill(NaN);
+    const built = new Uint8Array(ns * nt);
     for (let b = 0; b < nt; b++) for (let a = 0; a < ns; a++) {
-        let sum = 0, n = 0;
+        let sum = 0, n = 0, all = 0;
         const x0 = Math.max(0, Math.floor((s[a] - f.orthoSMin) / f.pixel)), x1 = Math.min(img.width, Math.ceil((s[a + 1] - f.orthoSMin) / f.pixel));
         const y0 = Math.max(0, Math.floor((f.orthoTMax - t[b + 1]) / f.pixel)), y1 = Math.min(img.height, Math.ceil((f.orthoTMax - t[b]) / f.pixel));
-        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const i = (y * img.width + x) * 4; if (img.rgba[i + 3]) { sum += 0.3 * img.rgba[i] + 0.59 * img.rgba[i + 1] + 0.11 * img.rgba[i + 2]; n++; } }
+        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+            const i = (y * img.width + x) * 4;
+            all++;
+            if (img.rgba[i + 3] && !(img.rgba[i] === 128 && img.rgba[i + 1] === 128 && img.rgba[i + 2] === 128)) { sum += 0.3 * img.rgba[i] + 0.59 * img.rgba[i + 1] + 0.11 * img.rgba[i + 2]; n++; }
+        }
         if (n) lum[b * ns + a] = sum / n;
+        if (all && n >= P.minCellPhotoShare * all) built[b * ns + a] = 1;
     }
     const raw = bucket.map(b => (b.length >= P.minSamples ? median(b) : NaN));
     const measured = raw.filter(Number.isFinite).length;
@@ -158,13 +172,16 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
     };
     const N = f.normal, S = f.axisS, T = f.axisT, neg = (v: number[]) => v.map(x => -x);
     for (let b = 0; b < nt; b++) for (let a = 0; a < ns; a++) {
+        // a cell the photo does not cover keeps the scan; no step face is drawn against it
+        if (!built[b * ns + a]) continue;
         const d = depth[b][a];
         // counter-clockwise seen from outside (along +normal): s right, t up
         quad([[s[a], t[b], d], [s[a + 1], t[b], d], [s[a + 1], t[b + 1], d], [s[a], t[b + 1], d]], N);
-        if (a + 1 < ns) { const e = depth[b][a + 1]; if (Math.abs(e - d) > P.stepM) quad(d > e ? [[s[a + 1], t[b], e], [s[a + 1], t[b], d], [s[a + 1], t[b + 1], d], [s[a + 1], t[b + 1], e]] : [[s[a + 1], t[b], d], [s[a + 1], t[b + 1], d], [s[a + 1], t[b + 1], e], [s[a + 1], t[b], e]], d > e ? S : neg(S)); }
-        if (b + 1 < nt) { const e = depth[b + 1][a]; if (Math.abs(e - d) > P.stepM) quad(d > e ? [[s[a], t[b + 1], e], [s[a], t[b + 1], d], [s[a + 1], t[b + 1], d], [s[a + 1], t[b + 1], e]].reverse() as Array<[number, number, number]> : [[s[a], t[b + 1], d], [s[a], t[b + 1], e], [s[a + 1], t[b + 1], e], [s[a + 1], t[b + 1], d]].reverse() as Array<[number, number, number]>, d > e ? T : neg(T)); }
+        if (a + 1 < ns && built[b * ns + a + 1]) { const e = depth[b][a + 1]; if (Math.abs(e - d) > P.stepM) quad(d > e ? [[s[a + 1], t[b], e], [s[a + 1], t[b], d], [s[a + 1], t[b + 1], d], [s[a + 1], t[b + 1], e]] : [[s[a + 1], t[b], d], [s[a + 1], t[b + 1], d], [s[a + 1], t[b + 1], e], [s[a + 1], t[b], e]], d > e ? S : neg(S)); }
+        if (b + 1 < nt && built[(b + 1) * ns + a]) { const e = depth[b + 1][a]; if (Math.abs(e - d) > P.stepM) quad(d > e ? [[s[a], t[b + 1], e], [s[a], t[b + 1], d], [s[a + 1], t[b + 1], d], [s[a + 1], t[b + 1], e]].reverse() as Array<[number, number, number]> : [[s[a], t[b + 1], d], [s[a], t[b + 1], e], [s[a + 1], t[b + 1], e], [s[a + 1], t[b + 1], d]].reverse() as Array<[number, number, number]>, d > e ? T : neg(T)); }
     }
-    return { facadeId: f.facadeId, s, t, cells: ns * nt, measuredShare: Math.round((measured / (ns * nt)) * 1000) / 1000, depth, positions: Float32Array.from(pos), normals: Float32Array.from(nrm), uv: Float32Array.from(uv), indices: Uint32Array.from(idx) };
+    if (!built.some(v => v)) return undefined;
+    return { facadeId: f.facadeId, s, t, cells: built.reduce((x, v) => x + v, 0), measuredShare: Math.round((measured / (ns * nt)) * 1000) / 1000, depth, built, positions: Float32Array.from(pos), normals: Float32Array.from(nrm), uv: Float32Array.from(uv), indices: Uint32Array.from(idx) };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -193,6 +210,9 @@ function inFacade(a: number[], b: number[], c: number[], f: ReliefFacade, r: Fac
     const m = [(a[0] + b[0] + c[0]) / 3 - f.centroid[0], (a[1] + b[1] + c[1]) / 3 - f.centroid[1], (a[2] + b[2] + c[2]) / 3 - f.centroid[2]];
     const d = dot(m, f.normal), sv = dot(m, f.axisS), tv = dot(m, f.axisT);
     if (Math.abs(d) > P.depthBandM || sv < r.s[0] || sv > r.s[r.s.length - 1] || tv < r.t[0] || tv > r.t[r.t.length - 1]) return false;
+    // only the cells that were rebuilt replace the scan
+    const cellOf = (v: number, edges: number[]) => { let lo = 0, hi = edges.length - 1; while (hi - lo > 1) { const k = (lo + hi) >> 1; if (edges[k] <= v) lo = k; else hi = k; } return lo; };
+    if (!r.built[cellOf(tv, r.t) * (r.s.length - 1) + cellOf(sv, r.s)]) return false;
     // a facing triangle, or a sliver (the reveals of the scan's lumps): both are the facade's
     return !(nl > 0) || Math.abs(dot([nx / nl, ny / nl, nz / nl], f.normal)) >= 0.3;
 }

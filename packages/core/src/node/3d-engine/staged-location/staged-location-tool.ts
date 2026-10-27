@@ -174,9 +174,11 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
             stageIntoActiveScene: args.stageIntoActiveScene === true,
             ...(typeof args.enhance === 'boolean' ? { enhance: args.enhance } : {}),
             // one building is rebuilt procedurally by pipeline G unless the caller asks for its scan detailed (user decision 2026-10-22)
-            ...(args.isolate === true && args.procedural !== false ? { procedural: true } : {}),
-            // which procedural pipeline ('g', 'h', 'i' or 'j'; pipeline-h/pipeline-h.ts stagedProcedural reads it, else the environment)
-            ...(args.pipeline === 'g' || args.pipeline === 'h' || args.pipeline === 'i' || args.pipeline === 'j' ? { pipeline: args.pipeline } : {}),
+            // or for pipeline K (the scan itself, straightened)
+            ...(args.isolate === true && args.procedural !== false && args.pipeline !== 'k' ? { procedural: true } : {}),
+            // which pipeline ('g', 'h', 'i' or 'j' procedural, pipeline-h/pipeline-h.ts stagedProcedural reads it, else the environment;
+            // 'k' the straightened scan, pipeline-k/pipeline-k.ts)
+            ...(args.pipeline === 'g' || args.pipeline === 'h' || args.pipeline === 'i' || args.pipeline === 'j' || args.pipeline === 'k' ? { pipeline: args.pipeline } : {}),
             ...(place ? { place } : {})
         },
         ...(retry ? { retry } : {}),

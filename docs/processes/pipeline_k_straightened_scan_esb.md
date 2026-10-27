@@ -1,0 +1,57 @@
+# Process: Pipeline K, the Empire State Building straightened from Google 3D Tiles with its own photo
+
+> **Recorded:** 2026-10-26
+> **Status:** Verified (in the live app: ESB staged with `pipeline: 'k'`, 52 facade photos rectified on worker threads, 39 straightened, 52 facades rebuilt flat on them, textured layer committed; one defect found and fixed on the way)
+> **Tags:** `operate-scratchbox` `staged-location` `pipeline-k` `facade-lattice` `texture` `empire-state`
+> **Target Domain:** Gemini Agent Chat / staged locations (`google_3d_tiles_get_clay`) / 3D Viewport
+
+---
+
+## 1. Session Context
+
+* **What prompted this session:** the user sent a screenshot of the ESB from Google 3D Tiles (wavy pier edges, melted corners, a dark vertical smear on the tower) and asked for a method that straightens the building and corrects its texture, built from what the app has plus published methods, shown in the app.
+* **Instance used:** web port `3370`, API port `3371`, tools port `3372` (own `scratchbox-pipeline-k` entry in `.claude/launch.json`, main checkout, branch `feat/cartesian-normal-snapping`).
+* **Scope tested:** one chat prompt, sent three times as fixes landed: *"Stage the Empire State Building in New York as an isolated building, straightened from Google Maps with its own texture corrected (pipeline k)."*
+
+## 2. The method (what pipeline K is)
+
+`packages/core/src/node/3d-engine/staged-location/pipeline-k/`. On the remeshed scan (tile_refine: facades snapped to fitted planes; remesh polish cleanup), per rectified facade ortho (`relief_orthos/`):
+
+1. **Lines**: column and row edge-energy peaks (as `facade-lattice.ts`), each with its edge polarity.
+2. **Curves**: each line traced along its length by Viterbi over offsets within 0.35 m (reward: the signed gradient of its own polarity; cost per pixel of bend), sub-pixel by a parabola through the reward; split where the edge is lost for more than 4 m, each segment straightened to its own weighted median (a real offset between tiers is never forced into one line).
+3. **Warp**: a content-preserving mesh warp, the line-collinearity and triangle-similarity terms of Li et al. 2017 ("Image stitching by line-guided local warping with global similarity constraint", eqs. 10 and 12; the same three terms TwinTex uses for facade photos), plus a weak anchor and a pinned border. Jacobi-PCG on the normal equations; scaled back toward the identity if any triangle would fold.
+4. **Smears**: the facade's bay pitch from the column profile's autocorrelation (as Liu, Psarakis and Stamos 2013 estimate facade periods); each pixel's repeats at +-1 and +-2 pitches, each phase-searched +-2 px and kept only where the local NCC (gain-invariant) is at least 0.75 (the PatchMatch lattice paper's NCC gate); the low-passed, vertically elongated log ratio to their median is levelled where it is beyond 3 robust sd, gain only, bounded.
+5. **Verified per facade**: kept only when the traced lines get at least 20% closer to straight and the lattice homogeneity (median per-pixel spread across repeats, Liu et al. 2015) does not get worse by more than 2%.
+6. The rectified orthos (cached beside the originals, keyed by version and parameters) go to the remesh polish, which rebuilds each facade on the lines its photo shows (`facade-lattice.ts`) and textures it with that photo. For K the texture stage uses tile_refine's own twin of that GLB (a texture-pass re-bake would undo the straightening). Pipeline E and the facade grammar are skipped for K.
+
+## 3. What Was Tested & What Worked (Verified)
+
+* **Tool call**: the agent called `google_3d_tiles_get_clay` with `isolate: true, pipeline: 'k'` unprompted by name (run `4effa49e`, request `{"pipeline":"k"}`, no `procedural`). Pipeline E's vector massing shows `skipped`.
+* **Rectifier in the build**: run note `pipeline_k.json`: 52 facade orthos rectified in 46.7 s on worker threads; 39 straightened, mean distance of the traced lines from straight 0.87 -> 0.57 px (34% closer); 13 left as they were with the reason (e.g. "the warp straightened the lines by only 8%", "the warp made the lattice less regular"); 459,684 smeared texels levelled. Repeat builds read it from cache (run `e7644435`: `cached: true`).
+* **Facades rebuilt**: polish stats: 52 of 83 rectified facades rebuilt on their straightened photos, 19,081 cells, 175,217 scan triangles replaced.
+* **Viewport** (`test-results/screenshots/pipeline_k/`): `esb_k_overview.jpg`, `esb_k_oblique.jpg`, `esb_k_setbacks_close.jpg`: piers straight through every tier, cornice steps crisp, the dark tower smear of the user's screenshot gone. Ortho before/after/gain maps: `cmp2_facade_2.png`, `cmp_facade_14.png`.
+* **Tests**: `packages/core/test/pipeline-k-ortho-rectify.test.ts` (bent piers traced r > 0.8 and warped back under 0.45x their edge error; uncovered grey kept; a straight facade untouched; a smeared bay levelled under 0.5x with the bays two pitches away unchanged; the cached folder), `facade-lattice.test.ts` (new: uncovered cells keep the scan), plus pipeline H/I and instruction-drift suites: 181 passed with credentials unreachable.
+
+## 4. What Broke / Didn't Work
+
+* **Run 1: textures would have been re-baked from the tile.** For an isolated structure the texture stage runs the texture pass, which re-projects the tile photo and undoes the straightened facades. Fixed: K uses tile_refine's twin (`orchestrator.ts`, texture `mode`).
+* **Run 2: flat grey faces in recessed bays** (`esb_k_run2_grey_recess_defect.jpg`). `facade-lattice.ts` rebuilt every cell of a facade's lattice, including cells where the ortho is uncovered (exact grey 128: a recess deeper than the ortho slab), and painted them grey. This affects the default lattice path too; it had never run on the ESB. Fixed (`facade-lattice/2`): a cell is rebuilt only when at least half its ortho is covered; elsewhere the scan's triangles stay and no step face is drawn against it (1,389 ESB cells now keep their scan).
+* **First smear version damaged non-repeating structure** (setback walls, terraces darkened in pier-wide blocks). Fixed by NCC-gated, phase-searched repeats; after the fix the gain map shows only isolated corrections.
+* **Not fixed / open:**
+  - The ESB orthos themselves were already within about 1 px (6-7 cm) of straight; most of the visible straightening comes from rebuilding the facades flat on the photo (the scan's wobbly triangles replaced), not from the warp.
+  - 31 of 83 facades are below the lattice's 0.6 coverage and keep their remeshed scan.
+  - The tile_refine twin de-lights and (with a model client) recreates the photo, so colours read lighter and greyer than the raw tile.
+  - The orbit camera zooms toward the scene target, not the cursor, so close framings take several tries.
+  - Two ortho planes (`facade_0`, `facade_1`) are podium roof planes stretched as facades by tile_refine; they are below the straightening gate and were left as they were.
+
+## 5. Candidate Tool/Service Ideas
+
+* **A camera preset tool for staged builds** (oblique / front / close on a tier, by height): this session framed the result by trial-and-error scrolls and drags.
+* **A before/after slider for staged layers** in the viewport (remesh vs polished): the comparison had to be made from separate runs and offline ortho diffs.
+* **Ortho coverage per facade in the build summary**: which facades were too uncovered to rebuild, so a user sees why some walls stay as scanned.
+
+## 6. Reproduction Steps
+
+1. Start an isolated instance (operate-scratchbox skill) on this branch.
+2. New Chat -> send the prompt in section 1 (or call `google_3d_tiles_get_clay` with `isolate: true, pipeline: 'k'`).
+3. Read `.scratchbox/cache/staged_location/runs/<run>/pipeline_k.json` and the polish `stats.json` beside the remesh; orbit to an oblique view of the setbacks.

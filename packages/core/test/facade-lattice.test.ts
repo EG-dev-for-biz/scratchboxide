@@ -91,6 +91,34 @@ describe('facades on their photo lattice', () => {
         expect(tj.images.at(-1).mimeType).toBe('image/png');
         expect(tj.nodes.at(-1).extras.sbFacadeLattice.provenance.lines).toBe('photo-inferred');
     });
+
+    it('keeps the scan where the photo does not cover the facade, instead of a face painted uncovered grey', () => {
+        // the right third of the photo uncovered (exact grey 128, as tile_refine writes it)
+        const img = photo();
+        for (let y = 0; y < H; y++) for (let x = 80; x < W; x++) img.rgba.set([128, 128, 128, 255], (y * W + x) * 4);
+        const soup = scan();
+        const r = latticeFacade(f, img, facadeSamples(soup, f))!;
+        expect(r).toBeDefined();
+        // no rebuilt vertex stands in the uncovered third (s beyond 8 m, a lattice line's width of slack)
+        let maxS = -Infinity;
+        for (let v = 0; v < r.positions.length; v += 3) maxS = Math.max(maxS, r.positions[v]);
+        expect(maxS).toBeLessThanOrEqual(8.5);
+        expect(r.built.some(v => !v)).toBe(true);
+        // the scan's triangles there stay live; the covered ones are replaced
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-'));
+        const file = path.join(dir, 'clay.glb');
+        writeStagedGlbFile(file, [{ name: 'scan', positions: soup, indices: Uint32Array.from({ length: soup.length / 3 }, (_, i) => i) }], {});
+        const out = applyFacadeLattices(fs.readFileSync(file), [{ f, r }], false);
+        const t = readGlbTriangles(out.glb);
+        let liveUncovered = 0, liveCovered = 0;
+        for (let i = 0; i < soup.length / 3; i += 3) {
+            if (t.indices[i] === t.indices[i + 1] && t.indices[i + 1] === t.indices[i + 2]) continue;
+            const cs = (soup[i * 3] + soup[i * 3 + 3] + soup[i * 3 + 6]) / 3;
+            if (cs > 8.5) liveUncovered++; else if (cs < 7.5) liveCovered++;
+        }
+        expect(liveUncovered).toBeGreaterThan(0);
+        expect(liveCovered).toBe(0);
+    });
 });
 
 describe('facade lattices on a district-sized remesh', () => {
@@ -109,7 +137,7 @@ describe('facade lattices on a district-sized remesh', () => {
             bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 36 }, { buffer: 0, byteOffset: 36, byteLength: 12 }, { buffer: 0, byteOffset: 48, byteLength: N - 48 }],
             accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] }, { bufferView: 1, componentType: 5125, count: 3, type: 'SCALAR' }]
         };
-        const r = { s: [0, 0.5], t: [0, 0.5], positions: new Float32Array([0, 0, 0.01, 0.5, 0, 0.01, 0, 0.5, 0.01]), normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]), uv: new Float32Array(6), indices: new Uint32Array([0, 1, 2]), cells: 1, measuredShare: 1 };
+        const r = { s: [0, 0.5], t: [0, 0.5], positions: new Float32Array([0, 0, 0.01, 0.5, 0, 0.01, 0, 0.5, 0.01]), normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]), uv: new Float32Array(6), indices: new Uint32Array([0, 1, 2]), cells: 1, measuredShare: 1, built: new Uint8Array([1]) };
         const out = applyFacadeLattices(assembleGlb(json as never, bin), [{ f, r: r as never }], false);
         expect(out.removed).toBe(1);                                   // the scan's triangle in the facade, made degenerate
         const back = parseGlbBytes(out.glb);
