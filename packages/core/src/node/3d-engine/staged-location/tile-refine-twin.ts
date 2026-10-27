@@ -42,7 +42,7 @@ import { assembleGlb, parseGlbBytes, readAccessor } from './glb-bytes';
 import { encodePng } from './png-encode';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { decodeImageInMemory, type RgbaImage8 } from './tile-texture-transfer';
-import { harmonizeTextures, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
+import { harmonizeTextures, surfaceClassMasks, TEXEL_ROOF, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
 import {
     boxDownsample, cropImage, enhancementGate, padToModelAspect, RECREATE_GATE, recreatePrompt,
     type EnhanceModelClient, type EnhanceModelRequest
@@ -92,10 +92,14 @@ const png = (img: RgbaImage8): Uint8Array => encodePng(img.width, img.height, Bu
 /** One embedded photo, decoded and de-lit, ready to encode or to try recreating. */
 interface ImageJob { originalIndex: number; name: string; mimeType: string; delit: RgbaImage8; }
 
-function delightImage(decoded: RgbaImage8): RgbaImage8 {
+/** Roof texels (pipeline K): highlights compressed, no shadow lift (a roof photographed from the air is lit; a dark one is a dark material). */
+const ROOF_DELIGHT = { shadowLift: 0, highlightCompress: PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress };
+
+function delightImage(decoded: RgbaImage8, surface?: Uint8Array): RgbaImage8 {
     const out = new Uint8Array(decoded.rgba.length);
     for (let p = 0; p < decoded.rgba.length; p += 4) {
-        const [lr, lg, lb] = delightLinearRgb(SRGB8_TO_LINEAR[decoded.rgba[p]], SRGB8_TO_LINEAR[decoded.rgba[p + 1]], SRGB8_TO_LINEAR[decoded.rgba[p + 2]]);
+        const params = surface?.[p >> 2] === TEXEL_ROOF ? ROOF_DELIGHT : PHOTOGRAMMETRIC_DELIGHT.defaults;
+        const [lr, lg, lb] = delightLinearRgb(SRGB8_TO_LINEAR[decoded.rgba[p]], SRGB8_TO_LINEAR[decoded.rgba[p + 1]], SRGB8_TO_LINEAR[decoded.rgba[p + 2]], params);
         out[p] = Math.round(linearToSrgb255(lr)); out[p + 1] = Math.round(linearToSrgb255(lg)); out[p + 2] = Math.round(linearToSrgb255(lb)); out[p + 3] = decoded.rgba[p + 3];
     }
     return { width: decoded.width, height: decoded.height, rgba: out };
@@ -186,15 +190,18 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
 
     // Stage 1 (always): decode and de-light every embedded photo. Stage 2 (opts.recreate given): try an image-model
     // recreate on top of the de-lit baseline, gated, concurrency-bounded and time-budgeted.
-    const jobs: ImageJob[] = [];
+    const decodedImages: Array<{ i: number; im: any; decoded: RgbaImage8 }> = [];
     json.images.forEach((im: any, i: number) => {
         if (im.bufferView === undefined || (im.mimeType !== 'image/jpeg' && im.mimeType !== 'image/png')) return;
         const view = json.bufferViews[im.bufferView];
         const raw = g.bin.subarray(view.byteOffset ?? 0, (view.byteOffset ?? 0) + view.byteLength);
-        let decoded: RgbaImage8;
-        try { decoded = decodeImageInMemory(raw); } catch { return; }
-        jobs.push({ originalIndex: i, name: im.name ?? `image_${i}`, mimeType: im.mimeType, delit: delightImage(decoded) });
+        try { decodedImages.push({ i, im, decoded: decodeImageInMemory(raw) }); } catch { /* not decodable: left as it is */ }
     });
+    // pipeline K: which texels are roof, seen from above (their de-light and colour match differ from the walls')
+    const surfaces = opts?.harmonize ? surfaceClassMasks(g, json, new Map(decodedImages.map(d => [d.i, d.decoded]))) : undefined;
+    let roofTexels = 0;
+    if (surfaces) for (const m of surfaces.values()) for (let k = 0; k < m.length; k++) if (m[k] === TEXEL_ROOF) roofTexels++;
+    const jobs: ImageJob[] = decodedImages.map(({ i, im, decoded }) => ({ originalIndex: i, name: im.name ?? `image_${i}`, mimeType: im.mimeType, delit: delightImage(decoded, surfaces?.get(i)) }));
 
     const finalImage = new Map<number, RgbaImage8>();
     for (const job of jobs) finalImage.set(job.originalIndex, job.delit);
@@ -224,7 +231,7 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
 
     // pipeline K: one colour across the photos (after the de-light, on the pixels that will be shown)
     let harmonize: TextureHarmonizeReport | undefined;
-    if (opts?.harmonize && finalImage.size) harmonize = harmonizeTextures(g, json, finalImage, opts.harmonize.groundY);
+    if (opts?.harmonize && finalImage.size) harmonize = harmonizeTextures(g, json, finalImage, opts.harmonize.groundY, undefined, surfaces);
 
     // the binary chunk: appended to below, both for the final (de-lit or recreated) photos and the confidence texels
     const bin: Uint8Array[] = [g.bin];
@@ -245,7 +252,8 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
 
     const delit = jobs.length;
     const method = () => {
-        const base = `tile_refine's remesh carries the leaf tiles' own photos (UVs into each leaf's image), de-lit (shadowLift ${PHOTOGRAMMETRIC_DELIGHT.defaults.shadowLift}, highlightCompress ${PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress}; ${delit} of ${delit} photos)`;
+        const roofs = roofTexels ? `; roofs seen from above (${roofTexels} texels) highlights only, no shadow lift` : '';
+        const base = `tile_refine's remesh carries the leaf tiles' own photos (UVs into each leaf's image), de-lit (shadowLift ${PHOTOGRAMMETRIC_DELIGHT.defaults.shadowLift}, highlightCompress ${PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress}${roofs}; ${delit} of ${delit} photos)`;
         const h = harmonize?.kept ? `; then harmonised (pipeline K): ${harmonize.why}` : harmonize ? `; harmonising left them as they were (${harmonize.why})` : '';
         if (!recreate) return base + h;
         return `${base}${h}, further recreated by ${recreate.modelsUsed.join(', ') || 'an image model'} removing the scan's own baked shadow/highlight and recovering the material's true colour (gated on structure and hue/chroma): ${recreate.accepted} of ${recreate.attempted} accepted (${recreate.rejected} rejected, ${recreate.failed} model failures${recreate.timedOut ? `, ${recreate.timedOut} ran out of time` : ''})`;
