@@ -1,0 +1,2114 @@
+{
+  "title": "Empire State Building standalone procedural model with setback tiers from 3D tiles scan, real facade reading, fitted spire, and library textures for limestone walls, granite base, and metal frames/spandrels. — node graph",
+  "subtitle": "72 mesh nodes read from the compiled .glb (view-only — not backed by customMeshes), 1 object",
+  "nodes": [
+    {
+      "id": "n-cam",
+      "label": "Perspective Camera",
+      "subtitle": "FOV 50° · mode orbit",
+      "category": "camera",
+      "color": "blue",
+      "status": "completed",
+      "x": 60,
+      "y": 260,
+      "parameters": {
+        "position": [
+          438.03780917345705,
+          522.6294596838438,
+          572.7573425925135
+        ],
+        "target": [
+          -0.13724899291992188,
+          219.27749633789062,
+          -0.24081039428710938
+        ],
+        "fov": 50
+      }
+    },
+    {
+      "id": "n-env",
+      "label": "Environment",
+      "subtitle": "studio",
+      "category": "environment",
+      "color": "amber",
+      "status": "completed",
+      "x": 60,
+      "y": 420,
+      "parameters": {
+        "skybox": "studio",
+        "lighting": "studio",
+        "ground": false
+      }
+    },
+    {
+      "id": "glb-node-0",
+      "label": "EmpireStateT0_wall",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 60,
+      "parameters": {
+        "glbNodeIndex": 0,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-1",
+      "label": "EmpireStateT0_glass",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 210,
+      "parameters": {
+        "glbNodeIndex": 1,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-2",
+      "label": "EmpireStateT0_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 360,
+      "parameters": {
+        "glbNodeIndex": 2,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-3",
+      "label": "EmpireStateT0_roof",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 510,
+      "parameters": {
+        "glbNodeIndex": 3,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-4",
+      "label": "EmpireStateT0_foundation",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 660,
+      "parameters": {
+        "glbNodeIndex": 4,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-5",
+      "label": "EmpireStateT1_wall",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 810,
+      "parameters": {
+        "glbNodeIndex": 5,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-6",
+      "label": "EmpireStateT1_glass",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 960,
+      "parameters": {
+        "glbNodeIndex": 6,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-7",
+      "label": "EmpireStateT1_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 1110,
+      "parameters": {
+        "glbNodeIndex": 7,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-8",
+      "label": "EmpireStateT1_roof",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 1260,
+      "parameters": {
+        "glbNodeIndex": 8,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-9",
+      "label": "EmpireStateT1_foundation",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 1410,
+      "parameters": {
+        "glbNodeIndex": 9,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-10",
+      "label": "EmpireStateT2_wall",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 1560,
+      "parameters": {
+        "glbNodeIndex": 10,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-11",
+      "label": "EmpireStateT2_glass",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 1710,
+      "parameters": {
+        "glbNodeIndex": 11,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-12",
+      "label": "EmpireStateT2_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 1860,
+      "parameters": {
+        "glbNodeIndex": 12,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-13",
+      "label": "EmpireStateT2_roof",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 2010,
+      "parameters": {
+        "glbNodeIndex": 13,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-14",
+      "label": "EmpireStateT2_foundation",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 2160,
+      "parameters": {
+        "glbNodeIndex": 14,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-15",
+      "label": "EmpireStateT3_wall",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 2310,
+      "parameters": {
+        "glbNodeIndex": 15,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-16",
+      "label": "EmpireStateT3_glass",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 2460,
+      "parameters": {
+        "glbNodeIndex": 16,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-17",
+      "label": "EmpireStateT3_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 2610,
+      "parameters": {
+        "glbNodeIndex": 17,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-18",
+      "label": "EmpireStateT3_roof",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 2760,
+      "parameters": {
+        "glbNodeIndex": 18,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-19",
+      "label": "EmpireStateT3_foundation",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 2910,
+      "parameters": {
+        "glbNodeIndex": 19,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-20",
+      "label": "EmpireStateT4_wall",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 3060,
+      "parameters": {
+        "glbNodeIndex": 20,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-21",
+      "label": "EmpireStateT4_glass",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 3210,
+      "parameters": {
+        "glbNodeIndex": 21,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-22",
+      "label": "EmpireStateT4_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 3360,
+      "parameters": {
+        "glbNodeIndex": 22,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-23",
+      "label": "EmpireStateT4_roof",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 3510,
+      "parameters": {
+        "glbNodeIndex": 23,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-24",
+      "label": "EmpireStateT4_foundation",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 3660,
+      "parameters": {
+        "glbNodeIndex": 24,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-25",
+      "label": "EmpireStateT5_wall",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 3810,
+      "parameters": {
+        "glbNodeIndex": 25,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-26",
+      "label": "EmpireStateT5_glass",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 3960,
+      "parameters": {
+        "glbNodeIndex": 26,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-27",
+      "label": "EmpireStateT5_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 4110,
+      "parameters": {
+        "glbNodeIndex": 27,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-28",
+      "label": "EmpireStateT5_roof",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 4260,
+      "parameters": {
+        "glbNodeIndex": 28,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-29",
+      "label": "EmpireStateT5_foundation",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 4410,
+      "parameters": {
+        "glbNodeIndex": 29,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-30",
+      "label": "EmpireStateT6_wall",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 4560,
+      "parameters": {
+        "glbNodeIndex": 30,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-31",
+      "label": "EmpireStateT6_glass",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 4710,
+      "parameters": {
+        "glbNodeIndex": 31,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-32",
+      "label": "EmpireStateT6_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 4860,
+      "parameters": {
+        "glbNodeIndex": 32,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-33",
+      "label": "EmpireStateT6_roof",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 5010,
+      "parameters": {
+        "glbNodeIndex": 33,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-34",
+      "label": "EmpireStateT6_foundation",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 5160,
+      "parameters": {
+        "glbNodeIndex": 34,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-35",
+      "label": "EmpireStateT7_wall",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 5310,
+      "parameters": {
+        "glbNodeIndex": 35,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-36",
+      "label": "EmpireStateT7_glass",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 5460,
+      "parameters": {
+        "glbNodeIndex": 36,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-37",
+      "label": "EmpireStateT7_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 5610,
+      "parameters": {
+        "glbNodeIndex": 37,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-38",
+      "label": "EmpireStateT7_roof",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 5760,
+      "parameters": {
+        "glbNodeIndex": 38,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-39",
+      "label": "EmpireStateT7_foundation",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 5910,
+      "parameters": {
+        "glbNodeIndex": 39,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-40",
+      "label": "EmpireStateT8_wall",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 6060,
+      "parameters": {
+        "glbNodeIndex": 40,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-41",
+      "label": "EmpireStateT8_glass",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 6210,
+      "parameters": {
+        "glbNodeIndex": 41,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-42",
+      "label": "EmpireStateT8_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 6360,
+      "parameters": {
+        "glbNodeIndex": 42,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-43",
+      "label": "EmpireStateT8_roof",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 6510,
+      "parameters": {
+        "glbNodeIndex": 43,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-44",
+      "label": "EmpireStateT8_foundation",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 6660,
+      "parameters": {
+        "glbNodeIndex": 44,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-45",
+      "label": "EmpireStateT9_wall",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 6810,
+      "parameters": {
+        "glbNodeIndex": 45,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-46",
+      "label": "EmpireStateT9_glass",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 6960,
+      "parameters": {
+        "glbNodeIndex": 46,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-47",
+      "label": "EmpireStateT9_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 7110,
+      "parameters": {
+        "glbNodeIndex": 47,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-48",
+      "label": "EmpireStateT9_roof",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 7260,
+      "parameters": {
+        "glbNodeIndex": 48,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-49",
+      "label": "EmpireStateT9_foundation",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 7410,
+      "parameters": {
+        "glbNodeIndex": 49,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-50",
+      "label": "EmpireStateT10_wall",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 7560,
+      "parameters": {
+        "glbNodeIndex": 50,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-51",
+      "label": "EmpireStateT10_glass",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 7710,
+      "parameters": {
+        "glbNodeIndex": 51,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-52",
+      "label": "EmpireStateT10_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 7860,
+      "parameters": {
+        "glbNodeIndex": 52,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-53",
+      "label": "EmpireStateT10_roof",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 8010,
+      "parameters": {
+        "glbNodeIndex": 53,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-54",
+      "label": "EmpireStateT10_foundation",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 8160,
+      "parameters": {
+        "glbNodeIndex": 54,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-55",
+      "label": "EmpireStateT0_extras-frame-000_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 8310,
+      "parameters": {
+        "glbNodeIndex": 55,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-56",
+      "label": "EmpireStateT0_extras-frame-001_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 8460,
+      "parameters": {
+        "glbNodeIndex": 56,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-57",
+      "label": "EmpireStateT0_extras-frame-002_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 8610,
+      "parameters": {
+        "glbNodeIndex": 57,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-58",
+      "label": "EmpireStateT0_extras-frame-003_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 8760,
+      "parameters": {
+        "glbNodeIndex": 58,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-59",
+      "label": "EmpireStateT0_extras-frame-004_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 8910,
+      "parameters": {
+        "glbNodeIndex": 59,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-60",
+      "label": "EmpireStateT0_extras-frame-005_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 9060,
+      "parameters": {
+        "glbNodeIndex": 60,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-61",
+      "label": "EmpireStateT0_extras-frame-006_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 9210,
+      "parameters": {
+        "glbNodeIndex": 61,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-62",
+      "label": "EmpireStateT0_extras-frame-007_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 9360,
+      "parameters": {
+        "glbNodeIndex": 62,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-63",
+      "label": "EmpireStateT0_extras-frame-008_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 9510,
+      "parameters": {
+        "glbNodeIndex": 63,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-64",
+      "label": "EmpireStateT0_extras-frame-009_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 9660,
+      "parameters": {
+        "glbNodeIndex": 64,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-65",
+      "label": "EmpireStateT0_extras-frame-010_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 9810,
+      "parameters": {
+        "glbNodeIndex": 65,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-66",
+      "label": "EmpireStateT0_extras-frame-011_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 9960,
+      "parameters": {
+        "glbNodeIndex": 66,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-67",
+      "label": "EmpireStateT0_extras-frame-012_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 10110,
+      "parameters": {
+        "glbNodeIndex": 67,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-68",
+      "label": "EmpireStateT0_extras-frame-013_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 10260,
+      "parameters": {
+        "glbNodeIndex": 68,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-69",
+      "label": "EmpireStateT0_extras-frame-014_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 10410,
+      "parameters": {
+        "glbNodeIndex": 69,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-70",
+      "label": "EmpireStateT0_extras-frame-015_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 10560,
+      "parameters": {
+        "glbNodeIndex": 70,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "glb-node-71",
+      "label": "EmpireStateT0_extras-frame-016_frame",
+      "subtitle": ".glb node (view-only — geometry is compiled binary)",
+      "category": "process",
+      "color": "indigo",
+      "status": "completed",
+      "x": 320,
+      "y": 10710,
+      "parameters": {
+        "glbNodeIndex": 71,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "obj-hero-1793050363908",
+      "label": "hero-1793050363908",
+      "subtitle": "3d-model",
+      "category": "object",
+      "color": "cyan",
+      "status": "completed",
+      "x": 680,
+      "y": 60,
+      "parameters": {
+        "objectId": "hero-1793050363908",
+        "contentType": "3d-model",
+        "uri": "/models/scene_1793050295123_sc4q22.glb"
+      }
+    },
+    {
+      "id": "n-render",
+      "label": "Output: viewport",
+      "subtitle": "pbr render mode",
+      "category": "output",
+      "color": "emerald",
+      "status": "completed",
+      "x": 1292,
+      "y": 260,
+      "parameters": {
+        "output": true,
+        "renderMode": "pbr",
+        "animation": "orbit",
+        "readOnly": true
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-cam-render",
+      "source": "n-cam",
+      "target": "n-render",
+      "style": "solid",
+      "color": "blue"
+    },
+    {
+      "id": "e-env-render",
+      "source": "n-env",
+      "target": "n-render",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-env-glb-0",
+      "source": "n-env",
+      "target": "glb-node-0",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-0-render",
+      "source": "glb-node-0",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-1",
+      "source": "n-env",
+      "target": "glb-node-1",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-1-render",
+      "source": "glb-node-1",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-2",
+      "source": "n-env",
+      "target": "glb-node-2",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-2-render",
+      "source": "glb-node-2",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-3",
+      "source": "n-env",
+      "target": "glb-node-3",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-3-render",
+      "source": "glb-node-3",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-4",
+      "source": "n-env",
+      "target": "glb-node-4",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-4-render",
+      "source": "glb-node-4",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-5",
+      "source": "n-env",
+      "target": "glb-node-5",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-5-render",
+      "source": "glb-node-5",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-6",
+      "source": "n-env",
+      "target": "glb-node-6",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-6-render",
+      "source": "glb-node-6",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-7",
+      "source": "n-env",
+      "target": "glb-node-7",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-7-render",
+      "source": "glb-node-7",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-8",
+      "source": "n-env",
+      "target": "glb-node-8",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-8-render",
+      "source": "glb-node-8",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-9",
+      "source": "n-env",
+      "target": "glb-node-9",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-9-render",
+      "source": "glb-node-9",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-10",
+      "source": "n-env",
+      "target": "glb-node-10",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-10-render",
+      "source": "glb-node-10",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-11",
+      "source": "n-env",
+      "target": "glb-node-11",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-11-render",
+      "source": "glb-node-11",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-12",
+      "source": "n-env",
+      "target": "glb-node-12",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-12-render",
+      "source": "glb-node-12",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-13",
+      "source": "n-env",
+      "target": "glb-node-13",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-13-render",
+      "source": "glb-node-13",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-14",
+      "source": "n-env",
+      "target": "glb-node-14",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-14-render",
+      "source": "glb-node-14",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-15",
+      "source": "n-env",
+      "target": "glb-node-15",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-15-render",
+      "source": "glb-node-15",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-16",
+      "source": "n-env",
+      "target": "glb-node-16",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-16-render",
+      "source": "glb-node-16",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-17",
+      "source": "n-env",
+      "target": "glb-node-17",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-17-render",
+      "source": "glb-node-17",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-18",
+      "source": "n-env",
+      "target": "glb-node-18",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-18-render",
+      "source": "glb-node-18",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-19",
+      "source": "n-env",
+      "target": "glb-node-19",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-19-render",
+      "source": "glb-node-19",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-20",
+      "source": "n-env",
+      "target": "glb-node-20",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-20-render",
+      "source": "glb-node-20",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-21",
+      "source": "n-env",
+      "target": "glb-node-21",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-21-render",
+      "source": "glb-node-21",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-22",
+      "source": "n-env",
+      "target": "glb-node-22",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-22-render",
+      "source": "glb-node-22",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-23",
+      "source": "n-env",
+      "target": "glb-node-23",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-23-render",
+      "source": "glb-node-23",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-24",
+      "source": "n-env",
+      "target": "glb-node-24",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-24-render",
+      "source": "glb-node-24",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-25",
+      "source": "n-env",
+      "target": "glb-node-25",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-25-render",
+      "source": "glb-node-25",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-26",
+      "source": "n-env",
+      "target": "glb-node-26",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-26-render",
+      "source": "glb-node-26",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-27",
+      "source": "n-env",
+      "target": "glb-node-27",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-27-render",
+      "source": "glb-node-27",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-28",
+      "source": "n-env",
+      "target": "glb-node-28",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-28-render",
+      "source": "glb-node-28",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-29",
+      "source": "n-env",
+      "target": "glb-node-29",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-29-render",
+      "source": "glb-node-29",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-30",
+      "source": "n-env",
+      "target": "glb-node-30",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-30-render",
+      "source": "glb-node-30",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-31",
+      "source": "n-env",
+      "target": "glb-node-31",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-31-render",
+      "source": "glb-node-31",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-32",
+      "source": "n-env",
+      "target": "glb-node-32",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-32-render",
+      "source": "glb-node-32",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-33",
+      "source": "n-env",
+      "target": "glb-node-33",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-33-render",
+      "source": "glb-node-33",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-34",
+      "source": "n-env",
+      "target": "glb-node-34",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-34-render",
+      "source": "glb-node-34",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-35",
+      "source": "n-env",
+      "target": "glb-node-35",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-35-render",
+      "source": "glb-node-35",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-36",
+      "source": "n-env",
+      "target": "glb-node-36",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-36-render",
+      "source": "glb-node-36",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-37",
+      "source": "n-env",
+      "target": "glb-node-37",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-37-render",
+      "source": "glb-node-37",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-38",
+      "source": "n-env",
+      "target": "glb-node-38",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-38-render",
+      "source": "glb-node-38",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-39",
+      "source": "n-env",
+      "target": "glb-node-39",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-39-render",
+      "source": "glb-node-39",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-40",
+      "source": "n-env",
+      "target": "glb-node-40",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-40-render",
+      "source": "glb-node-40",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-41",
+      "source": "n-env",
+      "target": "glb-node-41",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-41-render",
+      "source": "glb-node-41",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-42",
+      "source": "n-env",
+      "target": "glb-node-42",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-42-render",
+      "source": "glb-node-42",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-43",
+      "source": "n-env",
+      "target": "glb-node-43",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-43-render",
+      "source": "glb-node-43",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-44",
+      "source": "n-env",
+      "target": "glb-node-44",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-44-render",
+      "source": "glb-node-44",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-45",
+      "source": "n-env",
+      "target": "glb-node-45",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-45-render",
+      "source": "glb-node-45",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-46",
+      "source": "n-env",
+      "target": "glb-node-46",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-46-render",
+      "source": "glb-node-46",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-47",
+      "source": "n-env",
+      "target": "glb-node-47",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-47-render",
+      "source": "glb-node-47",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-48",
+      "source": "n-env",
+      "target": "glb-node-48",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-48-render",
+      "source": "glb-node-48",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-49",
+      "source": "n-env",
+      "target": "glb-node-49",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-49-render",
+      "source": "glb-node-49",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-50",
+      "source": "n-env",
+      "target": "glb-node-50",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-50-render",
+      "source": "glb-node-50",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-51",
+      "source": "n-env",
+      "target": "glb-node-51",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-51-render",
+      "source": "glb-node-51",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-52",
+      "source": "n-env",
+      "target": "glb-node-52",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-52-render",
+      "source": "glb-node-52",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-53",
+      "source": "n-env",
+      "target": "glb-node-53",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-53-render",
+      "source": "glb-node-53",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-54",
+      "source": "n-env",
+      "target": "glb-node-54",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-54-render",
+      "source": "glb-node-54",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-55",
+      "source": "n-env",
+      "target": "glb-node-55",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-55-render",
+      "source": "glb-node-55",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-56",
+      "source": "n-env",
+      "target": "glb-node-56",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-56-render",
+      "source": "glb-node-56",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-57",
+      "source": "n-env",
+      "target": "glb-node-57",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-57-render",
+      "source": "glb-node-57",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-58",
+      "source": "n-env",
+      "target": "glb-node-58",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-58-render",
+      "source": "glb-node-58",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-59",
+      "source": "n-env",
+      "target": "glb-node-59",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-59-render",
+      "source": "glb-node-59",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-60",
+      "source": "n-env",
+      "target": "glb-node-60",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-60-render",
+      "source": "glb-node-60",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-61",
+      "source": "n-env",
+      "target": "glb-node-61",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-61-render",
+      "source": "glb-node-61",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-62",
+      "source": "n-env",
+      "target": "glb-node-62",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-62-render",
+      "source": "glb-node-62",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-63",
+      "source": "n-env",
+      "target": "glb-node-63",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-63-render",
+      "source": "glb-node-63",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-64",
+      "source": "n-env",
+      "target": "glb-node-64",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-64-render",
+      "source": "glb-node-64",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-65",
+      "source": "n-env",
+      "target": "glb-node-65",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-65-render",
+      "source": "glb-node-65",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-66",
+      "source": "n-env",
+      "target": "glb-node-66",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-66-render",
+      "source": "glb-node-66",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-67",
+      "source": "n-env",
+      "target": "glb-node-67",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-67-render",
+      "source": "glb-node-67",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-68",
+      "source": "n-env",
+      "target": "glb-node-68",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-68-render",
+      "source": "glb-node-68",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-69",
+      "source": "n-env",
+      "target": "glb-node-69",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-69-render",
+      "source": "glb-node-69",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-70",
+      "source": "n-env",
+      "target": "glb-node-70",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-70-render",
+      "source": "glb-node-70",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-env-glb-71",
+      "source": "n-env",
+      "target": "glb-node-71",
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "e-glb-71-render",
+      "source": "glb-node-71",
+      "target": "n-render",
+      "style": "animated",
+      "color": "emerald"
+    },
+    {
+      "id": "e-obj-hero-1793050363908-render",
+      "source": "obj-hero-1793050363908",
+      "target": "n-render",
+      "style": "solid",
+      "color": "cyan"
+    }
+  ]
+}
