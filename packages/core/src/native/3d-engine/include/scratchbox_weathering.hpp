@@ -1,11 +1,13 @@
 /********************************************************************************
  * Scratchbox Geometry-Driven Weathering Bake
  *
- * Bakes where weather marks a built mesh into a unique texture atlas and returns an
- * overlay shell that carries it: a copy of the receiving surfaces offset a few millimetres
- * along their normals, UV-mapped into the atlas, with an alpha-blended RGBA weathering map.
- * The shell layers over the surfaces' own (tiled) materials, since one glTF material cannot
- * blend two base-colour textures.
+ * Bakes where weather marks a built mesh into a unique texture atlas, carried one of two ways:
+ *   overlay - a shell over the receiving surfaces (a copy offset a few millimetres along their
+ *             normals, UV-mapped into the atlas, alpha-blended), which any glTF viewer shows but
+ *             which doubles the receivers' triangles;
+ *   layer   - the receivers themselves with a second UV set (uv1, glTF TEXCOORD_1) into the atlas,
+ *             blended over their own tiled materials by the viewer (SB_material_weathering): no
+ *             triangle is added, so even a skyscraper fits the viewport.
  *
  * Atlas: every receiving triangle is charted by the axis its face points along, a depth slab
  * along that axis and a coarse cell in the chart plane, projected orthographically in metres,
@@ -30,6 +32,11 @@
 #include "scratchbox_geometry.hpp"
 #include "scratchbox_bvh.hpp"
 #include "scratchbox_texture.hpp"
+#include "scratchbox_photo_stain.hpp"
+#include "scratchbox_facade_guide.hpp"
+#include <array>
+#include <numeric>
+#include <functional>
 #include <vector>
 #include <string>
 #include <cmath>
@@ -54,6 +61,7 @@ struct WeatheringParams {
     float texelM{0.05f};                // atlas texel size (metres)
     int maxAtlasWidth{4096};
     float overlayOffsetM{0.004f};       // shell offset along each face normal
+    bool layer{false};                  // carry the atlas on the receivers' uv1 instead of an overlay shell
 
     float streakStrength{0.55f};
     float streakReachM{3.0f};           // how far below a ledge run-off reaches
@@ -84,6 +92,13 @@ struct WeatheringParams {
     Vec3 washColor{0.93f, 0.91f, 0.87f};
     float decalAging{0.6f};             // how much of a texel's weathering is laid back over its painted decals
     uint32_t seed{5};
+
+    // Measured staining (a photo_stain::Field passed to the bake): read per height band and facing against the
+    // band's clean photo brightness; where the photos cover a texel well enough it is the stain there, elsewhere the
+    // procedural layers fill in, scaled per band so their average matches the measured one.
+    float photoStrength{1.0f};          // scales the measured stain, 0 turns it off
+    float photoBandM{12.0f};            // height of the bands the clean and grime references are taken over
+    float photoMinSupport{0.5f};        // share of the filter window the photos must cover for a texel to be measured
 };
 
 // An RGBA image projected onto the surfaces inside a box: centred at `center`, facing out along
@@ -116,10 +131,15 @@ struct BlotParams {
 
 struct WeatheringResult {
     ScratchboxMesh overlay;
+    std::vector<ScratchboxMesh> layered;  // layer mode: the receivers, in order, with uv1 into the atlas
     size_t clearTriangles{0};           // receiver triangles left out of the overlay: no visible weathering on them
     ImageBuffer atlas;                  // RGBA weathering map
     int chartCount{0};
     int bakedTexels{0};
+    int photoTexels{0};                 // texels whose stain was measured from the photos
+    int filledTexels{0};                // texels the procedural layers filled, scaled to the measured bands
+    int guideTexels{0};                 // of the measured texels, those read from the facade guides (pipeline K's photos)
+    std::vector<float> bandScale;       // the fill's per-band scale (measured / procedural mean), lowest band first
 };
 
 namespace detail {
@@ -305,7 +325,9 @@ inline WeatheringResult bakeWeathering(const std::vector<ScratchboxMesh>& receiv
                                        const std::vector<ScratchboxMesh>& occluders,
                                        const WeatheringParams& prm,
                                        const std::string& name = "Weathering",
-                                       const std::vector<Decal>& decals = {}) {
+                                       const std::vector<Decal>& decals = {},
+                                       const photo_stain::Field* photo = nullptr,
+                                       const facade_guide::GuideSet* guides = nullptr) {
     using namespace detail;
     WeatheringResult result;
     result.overlay = ScratchboxMesh(name);
@@ -322,16 +344,20 @@ inline WeatheringResult bakeWeathering(const std::vector<ScratchboxMesh>& receiv
     bvh::BvhTree tree;
     if (scene.indices.empty() || !tree.build(scene)) return result;
 
-    // 1. Chart every receiving triangle.
-    struct Tri { Vec3 p[3]; Vec3 n[3]; Vec3 faceN; int axis; Vec2 q[3]; int chart; };
+    // 1. Chart the receiving triangles: a chart is a connected surface facing one axis (triangles sharing an edge,
+    //    with the same dominant axis and within a slab of each other), so a window reveal or a pier face gets a tight
+    //    chart of its own instead of sharing a mostly empty grid cell; one too big for half the atlas is cut by a grid.
+    struct Tri { Vec3 p[3]; Vec3 n[3]; Vec3 faceN; int axis; Vec2 q[3]; int chart; size_t recv; size_t tri; float depth; };
     std::vector<Tri> tris;
-    std::map<std::tuple<int, int, int, int>, int> chartIndex;
     struct Chart { Vec2 lo{1e30f, 1e30f}; Vec2 hi{-1e30f, -1e30f}; int axis{0}; int x{0}, y{0}, w{0}, h{0}; };
     std::vector<Chart> charts;
-    const float slab = 0.75f, cell = 4.0f;
-    for (const auto& m : receivers) {
+    const float slab = 0.75f;
+    for (size_t r = 0; r < receivers.size(); ++r) {
+        const auto& m = receivers[r];
         for (size_t i = 0; i + 2 < m.indices.size(); i += 3) {
             Tri t;
+            t.recv = r;
+            t.tri = i / 3;
             for (int k = 0; k < 3; ++k) {
                 const Vertex& v = m.vertices[m.indices[i + k]];
                 t.p[k] = v.position; t.n[k] = v.normal;
@@ -341,27 +367,52 @@ inline WeatheringResult bakeWeathering(const std::vector<ScratchboxMesh>& receiv
             if (len < 1e-10f) continue;
             t.faceN = fn / len;
             t.axis = dominantAxis(t.faceN);
-            Vec3 c = (t.p[0] + t.p[1] + t.p[2]) * (1.0f / 3.0f);
-            Vec2 cq = planeCoords(t.axis, c);
-            auto key = std::make_tuple(t.axis, static_cast<int>(std::floor(axisDepth(t.axis, c) / slab)),
-                                       static_cast<int>(std::floor(cq.x / cell)), static_cast<int>(std::floor(cq.y / cell)));
+            t.depth = axisDepth(t.axis, (t.p[0] + t.p[1] + t.p[2]) * (1.0f / 3.0f));
+            for (int k = 0; k < 3; ++k) t.q[k] = planeCoords(t.axis, t.p[k]);
+            t.chart = -1;
+            tris.push_back(t);
+        }
+    }
+    if (tris.empty()) return result;
+    {
+        // union-find over shared edges (positions to the millimetre: parts are triangle soup)
+        std::vector<int> parent(tris.size());
+        std::iota(parent.begin(), parent.end(), 0);
+        std::function<int(int)> find = [&](int x) { while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+        auto vkey = [](const Vec3& p) {
+            return std::array<int64_t, 3>{ int64_t(std::llround(p.x * 1000.0)), int64_t(std::llround(p.y * 1000.0)), int64_t(std::llround(p.z * 1000.0)) };
+        };
+        std::map<std::pair<std::array<int64_t, 3>, std::array<int64_t, 3>>, int> edgeOwner;
+        for (size_t i = 0; i < tris.size(); ++i) {
+            for (int k = 0; k < 3; ++k) {
+                auto a0 = vkey(tris[i].p[k]), a1 = vkey(tris[i].p[(k + 1) % 3]);
+                if (a1 < a0) std::swap(a0, a1);
+                auto [it, fresh] = edgeOwner.emplace(std::make_pair(a0, a1), int(i));
+                if (fresh) continue;
+                const Tri& o = tris[it->second];
+                if (o.axis == tris[i].axis && std::abs(o.depth - tris[i].depth) <= slab) parent[find(int(i))] = find(it->second);
+            }
+        }
+        const float bigCell = std::max(4.0f, 0.5f * prm.maxAtlasWidth * std::max(0.005f, prm.texelM));
+        std::map<std::tuple<int, int, int>, int> chartIndex;
+        for (auto& t : tris) {
+            const Vec2 cq = (t.q[0] + t.q[1] + t.q[2]) * (1.0f / 3.0f);
+            auto key = std::make_tuple(find(int(&t - tris.data())), int(std::floor(cq.x / bigCell)), int(std::floor(cq.y / bigCell)));
             auto it = chartIndex.find(key);
             if (it == chartIndex.end()) {
-                it = chartIndex.emplace(key, static_cast<int>(charts.size())).first;
+                it = chartIndex.emplace(key, int(charts.size())).first;
                 charts.push_back(Chart{});
                 charts.back().axis = t.axis;
             }
             t.chart = it->second;
             Chart& ch = charts[t.chart];
             for (int k = 0; k < 3; ++k) {
-                t.q[k] = planeCoords(t.axis, t.p[k]);
                 ch.lo = Vec2(std::min(ch.lo.x, t.q[k].x), std::min(ch.lo.y, t.q[k].y));
                 ch.hi = Vec2(std::max(ch.hi.x, t.q[k].x), std::max(ch.hi.y, t.q[k].y));
             }
-            tris.push_back(t);
         }
     }
-    if (tris.empty()) return result;
+
 
     // 2. Shelf-pack charts (tallest first) with a 2-texel gutter.
     const float texel = std::max(0.005f, prm.texelM);
@@ -428,6 +479,13 @@ inline WeatheringResult bakeWeathering(const std::vector<ScratchboxMesh>& receiv
 
     // 4. Shade every valid texel from ray queries, in parallel rows.
     std::vector<Vec4> shaded(texCount, Vec4(0, 0, 0, 0));
+    const bool useGuides = guides && !guides->facades.empty() && prm.photoStrength > 0.0f;
+    const bool usePhoto = ((photo && photo->samples > 0) || useGuides) && prm.photoStrength > 0.0f;
+    std::vector<float> guideA(useGuides ? texCount : 0, -1.0f);
+    std::vector<Vec3> guideC(useGuides ? texCount : 0, Vec3(0, 0, 0));
+    std::vector<Vec3> photoColour(usePhoto ? texCount : 0, Vec3(0, 0, 0));
+    std::vector<float> photoSupport(usePhoto ? texCount : 0, 0.0f);
+    std::vector<uint8_t> decalCovered(texCount, 0);
     const Vec3 up(0, 1, 0);
     const int samples = std::max(4, prm.hemisphereSamples);
     auto shadeRows = [&](int rowBegin, int rowEnd) {
@@ -534,6 +592,15 @@ inline WeatheringResult bakeWeathering(const std::vector<ScratchboxMesh>& receiv
                 if (coverage > 0.0f) {
                     withDecals.layer(o.c, o.a * prm.decalAging * coverage);
                     o = withDecals;
+                    decalCovered[i] = 1;
+                }
+                if (useGuides) {
+                    float a; Vec3 gc;
+                    if (guides->stainAt(texPos[i], n, a, gc)) { guideA[i] = a; guideC[i] = gc; }
+                }
+                if (photo && photo->samples > 0) {
+                    Vec3 pc; float sup;
+                    if (photo->sample(texPos[i], n, pc, sup)) { photoColour[i] = pc; photoSupport[i] = sup; }
                 }
 
                 shaded[i] = Vec4(o.c.x, o.c.y, o.c.z, o.a);
@@ -547,6 +614,81 @@ inline WeatheringResult bakeWeathering(const std::vector<ScratchboxMesh>& receiv
         pool.emplace_back(shadeRows, r0, r1);
     }
     for (auto& th : pool) th.join();
+
+    // 4b. Measured staining: per height band and facing, the clean brightness (80th percentile of the filtered photo)
+    //     and the grime colour (mean of its darkest fifth); a measured texel's stain is how far it falls from clean
+    //     towards grime. The procedural layers fill the texels the photos cannot speak for, scaled per band.
+    if (usePhoto) {
+        auto lum = [](const Vec3& c) { return 0.2126f * c.x + 0.7152f * c.y + 0.0722f * c.z; };
+        auto toSrgb = [](float c) { c = std::clamp(c, 0.0f, 1.0f); return c <= 0.0031308f ? 12.92f * c : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f; };
+        const float bandM = std::max(1.0f, prm.photoBandM);
+        auto bandOf = [&](size_t i) { return std::max(0, int(std::floor((texPos[i].y - prm.groundY) / bandM))); };
+        int bands = 1;
+        for (size_t i = 0; i < texCount; ++i) if (valid[i]) bands = std::max(bands, bandOf(i) + 1);
+        struct Ref { std::vector<float> L; std::vector<size_t> idx; float clean{0}, grimeL{0}; Vec3 grime{0, 0, 0}; bool ok{false}; };
+        std::vector<Ref> refs(size_t(bands) * 10);
+        auto regionOf = [&](size_t i) { const int f = photo_stain::Field::facingOf(texNrm[i]); return size_t(bandOf(i)) * 10 + size_t(f < 0 ? 9 : f); };
+        std::vector<float> stainA(texCount, -1.0f);
+        std::vector<double> sumA(bands, 0.0), sumP(bands, 0.0);
+        // the facade guides first: the photo's own residual against its repeats, where a guide photo covers the texel
+        if (useGuides) {
+            for (size_t i = 0; i < texCount; ++i) {
+                if (!valid[i] || guideA[i] < 0.0f || decalCovered[i]) continue;
+                const float a = std::clamp(guideA[i] * prm.photoStrength, 0.0f, 1.0f);
+                // the guide replaces the texel only where it sees a stain: where the photo is no darker than its repeats it
+                // says nothing about the weathering the repeats share, and a clear texel would punch a hole in the layer
+                if (a < 0.05f) continue;
+                const Vec3 g = guideC[i] * 0.35f;   // the stain's own hue, darkened
+                stainA[i] = a;
+                sumA[bandOf(i)] += a; sumP[bandOf(i)] += shaded[i].w;
+                shaded[i] = Vec4(toSrgb(g.x), toSrgb(g.y), toSrgb(g.z), a);
+                ++result.photoTexels;
+                ++result.guideTexels;
+            }
+        }
+        for (size_t i = 0; i < texCount; ++i) {
+            if (photoSupport.empty() || !valid[i] || stainA[i] >= 0.0f || photoSupport[i] < prm.photoMinSupport || decalCovered[i]) continue;
+            Ref& r = refs[regionOf(i)];
+            r.L.push_back(lum(photoColour[i])); r.idx.push_back(i);
+        }
+        for (Ref& r : refs) {
+            if (r.L.size() < 32) continue;
+            std::vector<float> sorted = r.L;
+            std::sort(sorted.begin(), sorted.end());
+            r.clean = sorted[size_t(sorted.size() * 0.8)];
+            const float cut = sorted[size_t(sorted.size() * 0.2)];
+            int n = 0;
+            for (size_t k = 0; k < r.idx.size(); ++k) if (r.L[k] <= cut) { r.grime = r.grime + photoColour[r.idx[k]]; ++n; }
+            if (n == 0) continue;
+            r.grime = r.grime * (1.0f / n);
+            r.grimeL = lum(r.grime);
+            r.ok = r.clean - r.grimeL > 1e-3f;
+        }
+        for (const Ref& r : refs) {
+            if (!r.ok) continue;
+            for (size_t k = 0; k < r.idx.size(); ++k) {
+                const size_t i = r.idx[k];
+                const float a = std::clamp((r.clean - r.L[k]) / (r.clean - r.grimeL), 0.0f, 1.0f) * prm.photoStrength;
+                // as with the guides: a texel the photo shows clean (often a window's glint) leaves the fill in place
+                // rather than clearing the layer to a hole
+                if (a < 0.05f) continue;
+                stainA[i] = a;
+                sumA[bandOf(i)] += a; sumP[bandOf(i)] += shaded[i].w;
+                shaded[i] = Vec4(toSrgb(r.grime.x), toSrgb(r.grime.y), toSrgb(r.grime.z), a);
+                ++result.photoTexels;
+            }
+        }
+        result.bandScale.assign(bands, 1.0f);
+        for (int b = 0; b < bands; ++b) if (sumP[b] > 1e-6) result.bandScale[b] = float(std::clamp(sumA[b] / sumP[b], 0.0, 3.0));
+        for (size_t i = 0; i < texCount; ++i) {
+            if (!valid[i] || stainA[i] >= 0.0f || decalCovered[i]) continue;
+            // the photos measure staining, which darkens: a texel the fill lightens (the exposure wash) keeps its own
+            // strength, since scaling it up by a darkening measure only multiplies its speckle
+            const float l = 0.2126f * shaded[i].x + 0.7152f * shaded[i].y + 0.0722f * shaded[i].z;
+            if (l < 0.5f) shaded[i].w = std::min(1.0f, shaded[i].w * result.bandScale[bandOf(i)]);
+            ++result.filledTexels;
+        }
+    }
 
     // 5. Write the atlas, bleeding baked texels into the gutters so filtering never reads blank.
     result.atlas = ImageBuffer(atlasW, atlasH, 4);
@@ -583,7 +725,40 @@ inline WeatheringResult bakeWeathering(const std::vector<ScratchboxMesh>& receiv
         }
     }
 
-    // 6. Overlay shell: receivers offset along their face normals, UVs into the atlas
+    // 6a. Layer: each receiver keeps its own triangles and gains uv1 into the atlas (glTF UV origin top-left, v down).
+    //     A triangle the bake skipped (degenerate) points outside the atlas, which the viewer reads as unweathered.
+    if (prm.layer) {
+        std::vector<std::vector<std::array<Vec2, 3>>> uv1Of(receivers.size());
+        for (size_t r = 0; r < receivers.size(); ++r) {
+            uv1Of[r].assign(receivers[r].indices.size() / 3, {Vec2(-1.0f, -1.0f), Vec2(-1.0f, -1.0f), Vec2(-1.0f, -1.0f)});
+        }
+        for (const Tri& t : tris) {
+            const Chart& ch = charts[t.chart];
+            for (int k = 0; k < 3; ++k) {
+                uv1Of[t.recv][t.tri][k] = Vec2((ch.x + (t.q[k].x - ch.lo.x) / texel) / atlasW, (ch.y + (t.q[k].y - ch.lo.y) / texel) / atlasH);
+            }
+        }
+        for (size_t r = 0; r < receivers.size(); ++r) {
+            const ScratchboxMesh& src = receivers[r];
+            ScratchboxMesh m(src.name);
+            m.material = src.material;
+            m.hasUv1 = true;
+            m.vertices.reserve(src.indices.size());
+            for (size_t i = 0; i + 2 < src.indices.size(); i += 3) {
+                const uint32_t base = static_cast<uint32_t>(m.vertices.size());
+                for (int k = 0; k < 3; ++k) {
+                    Vertex v = src.vertices[src.indices[i + k]];
+                    v.uv1 = uv1Of[r][i / 3][k];
+                    m.addVertex(v);
+                }
+                m.addTriangle(base, base + 1, base + 2);
+            }
+            result.layered.push_back(std::move(m));
+        }
+        return result;
+    }
+
+    // 6b. Overlay shell: receivers offset along their face normals, UVs into the atlas
     //    (glTF UV origin top-left, so v runs down the image).
     //    A triangle whose texels are all clear (alpha under 2/255) would add nothing visible, so it is left out:
     //    on a large building most surfaces carry no streak, grime or damp, and copying them doubled the file.

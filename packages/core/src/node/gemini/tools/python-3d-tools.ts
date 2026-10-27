@@ -23,6 +23,8 @@ import { measureSiteMassing, type SiteMassing } from '../../3d-engine/site-massi
 import { readSiteFacade, type SiteFacade } from '../../3d-engine/site-facade';
 import { fitSiteCrown, type SiteCrown } from '../../3d-engine/site-crown';
 import { measureSiteScan, type SiteScan } from '../../3d-engine/site-scan';
+import { fetchLibrarySets } from '../../3d-engine/texture-library';
+import { findSiteGuides } from '../../3d-engine/site-guides';
 import * as os from 'os';
 import { StageCache, stagedWorkspaceRoot } from '../../3d-engine/staged-location/stage-cache';
 import { roofPhotoFor, type StructureScanNote } from '../../3d-engine/staged-location/scan-massing';
@@ -246,6 +248,11 @@ export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'BOOLEAN',
                     description: 'Optional, with site: also fit the building\'s crown (whatever stands above its last full tier: a spire, mast, lantern, drums, fins) from the 3D tiles, so sb.site_crown() returns it as add-ons. The shape program writes the crown as prisms, faceted revolves, sweeps and repeats; their sizes are fitted to the tiles (measured), counts of finer detail come from an AI-Beautified close-up (generated), and the fit\'s silhouette disagreement with the tiles is reported. Takes a minute or two the first time.'
                 },
+                librarySets: {
+                    type: 'ARRAY',
+                    items: { type: 'STRING' },
+                    description: 'Optional: surface material sets from the texture library (photographed and scanned ambientCG and Poly Haven PBR sets) to fetch before the script runs, by set name. Take the names from texture_library_search (search once per surface with its read colour, finish and tile size); never name a set from memory. Pass the top few results per surface: sb.library_surface() picks the one nearest a measured colour and finish, remaps it there and sizes its tile from the set\'s measured real size. Names the library lacks are reported with the closest ones it has. A set is a few hundred MB the first time (cached after).'
+                },
                 renderMode: {
                     type: 'STRING',
                     enum: ['pbr', 'clay'],
@@ -368,8 +375,36 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 }
             }
             const siteFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-site-json-')), 'site.json');
-            fs.writeFileSync(siteFile, JSON.stringify({ ...site, ...(scan ? { scan } : {}), ...(facade ? { facade } : {}), ...(crown ? { crown } : {}) }));
+            // pipeline K's straightened facade photos of the building, when a 3D Building run made them: registration,
+            // colours per part and the stain the weathering bake reads (sb.site_guides)
+            let guides: unknown, guidesReason: string | undefined;
+            if (scan?.photoGlbPath && scan.photoGroundY !== undefined) {
+                try {
+                    const g = findSiteGuides(site.place, scan.photoGlbPath, scan.photoGroundY);
+                    if ('reason' in g) guidesReason = g.reason; else guides = g;
+                } catch (err) {
+                    guidesReason = `facade guides not read: ${err instanceof Error ? err.message : String(err)}`;
+                }
+            }
+            fs.writeFileSync(siteFile, JSON.stringify({ ...site, ...(scan ? { scan } : {}), ...(facade ? { facade } : {}), ...(crown ? { crown } : {}),
+                ...(guides ? { guides } : {}), ...(guidesReason ? { guidesReason } : {}) }));
             siteEnv.SCRATCHBOX_SITE_JSON = siteFile;
+        }
+
+        // 2c. Texture library sets the script names, fetched into the cache and handed over as a manifest. A name the
+        // library lacks is reported in the manifest (with the closest names), not a failed call; no credentials fail it.
+        const libraryEnv: Record<string, string> = {};
+        const librarySets = Array.isArray(args.librarySets) ? (args.librarySets as unknown[]).filter((n): n is string => typeof n === 'string' && !!n.trim()) : [];
+        if (librarySets.length) {
+            try {
+                const repoRoot = process.env.SCRATCHBOX_ROOT || (fs.existsSync(path.resolve(process.cwd(), 'packages')) ? process.cwd() : path.resolve(process.cwd(), '..'));
+                const fetched = await fetchLibrarySets(librarySets, { repoRoot, ...(_ctx?.signal ? { signal: _ctx.signal } : {}), ...(_ctx?.reportProgress ? { progress: _ctx.reportProgress } : {}) });
+                const manifest = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-library-json-')), 'library.json');
+                fs.writeFileSync(manifest, JSON.stringify(fetched));
+                libraryEnv.SCRATCHBOX_LIBRARY_JSON = manifest;
+            } catch (err) {
+                return failedOutcome(err, `Could not fetch the texture library sets ${librarySets.join(', ')}; the script did not run`);
+            }
         }
 
         // 3. Execute Python script
@@ -394,7 +429,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
         }
         const result = await runner.runScript(effectiveScript, {
             timeoutMs,
-            env: { ...process.env, ...siteEnv, ...scanEnv }
+            env: { ...process.env, ...siteEnv, ...scanEnv, ...libraryEnv }
         });
 
         // Per User Directive: No silent fallbacks or synthetic substitutes.

@@ -59,11 +59,14 @@ inline uint8_t paethPredictor(int a, int b, int c) {
 /**
  * High-performance, RFC-compliant PNG decoder powered by zlib inflate.
  * Supports Color Types:
- *   0: Grayscale (8-bit)
- *   2: Truecolor RGB (8-bit)
- *   3: Indexed / Palette (8-bit)
- *   4: Grayscale + Alpha (8-bit)
- *   6: Truecolor RGBA (8-bit)
+ *   0: Grayscale (1, 2, 4, 8 or 16-bit)
+ *   2: Truecolor RGB (8- or 16-bit)
+ *   3: Indexed / Palette (1, 2, 4 or 8-bit)
+ *   4: Grayscale + Alpha (8- or 16-bit)
+ *   6: Truecolor RGBA (8- or 16-bit)
+ * 16-bit samples are reduced to 8 bits (their high byte) and sub-byte grays scaled to 0..255: material maps are often
+ * stored at 16 bits (normals, displacement) or packed under 8 (flat metalness masks), and every consumer here works
+ * in 8.
  */
 inline DecodeResult decode(const uint8_t* data, size_t size, OutputFormat format = OutputFormat::Rgb) {
     DecodeResult res;
@@ -118,8 +121,9 @@ inline DecodeResult decode(const uint8_t* data, size_t size, OutputFormat format
                 res.error = "unsupported image dimensions";
                 return res;
             }
-            if (bitDepth != 8) {
-                res.error = "only 8-bit PNGs are supported";
+            const bool subByte = bitDepth == 1 || bitDepth == 2 || bitDepth == 4;
+            if (!(bitDepth == 8 || (bitDepth == 16 && colorType != 3) || (subByte && (colorType == 0 || colorType == 3)))) {
+                res.error = "unsupported PNG bit depth " + std::to_string(bitDepth) + " for color type " + std::to_string(colorType);
                 return res;
             }
             if (compression != 0 || filter != 0) {
@@ -159,7 +163,10 @@ inline DecodeResult decode(const uint8_t* data, size_t size, OutputFormat format
             return res;
     }
 
-    size_t scanlineBytes = static_cast<size_t>(width * srcChannels);
+    const size_t sampleBytes = bitDepth == 16 ? 2 : 1;
+    const size_t bitsPerPixel = static_cast<size_t>(srcChannels) * bitDepth;
+    const size_t pixelBytes = std::max<size_t>(1, bitsPerPixel / 8);  // the filters' byte stride
+    size_t scanlineBytes = (static_cast<size_t>(width) * bitsPerPixel + 7) / 8;
     size_t expectedUncompressedLen = static_cast<size_t>(height) * (1 + scanlineBytes);
     std::vector<uint8_t> uncompressed(expectedUncompressedLen);
 
@@ -195,9 +202,9 @@ inline DecodeResult decode(const uint8_t* data, size_t size, OutputFormat format
 
         for (size_t x = 0; x < scanlineBytes; ++x) {
             uint8_t raw = *srcPtr++;
-            uint8_t a = (x >= static_cast<size_t>(srcChannels)) ? currentScanline[x - srcChannels] : 0;
+            uint8_t a = (x >= pixelBytes) ? currentScanline[x - pixelBytes] : 0;
             uint8_t b = priorScanline[x];
-            uint8_t c = (x >= static_cast<size_t>(srcChannels)) ? priorScanline[x - srcChannels] : 0;
+            uint8_t c = (x >= pixelBytes) ? priorScanline[x - pixelBytes] : 0;
 
             uint8_t filtered = 0;
             switch (filterType) {
@@ -227,30 +234,40 @@ inline DecodeResult decode(const uint8_t* data, size_t size, OutputFormat format
         size_t rowDstOffset = static_cast<size_t>(y * width * outChannels);
         uint8_t* dstRow = outPixels + rowDstOffset;
 
+        // sample `ch` of pixel x; a 16-bit sample is big-endian, so its high byte comes first
+        // a sub-byte pixel is packed from the byte's high bits: its raw value (a palette index or a gray level)
+        auto packed = [&](int x) {
+            const size_t bit = static_cast<size_t>(x) * bitDepth;
+            return (currentScanline[bit / 8] >> (8 - bitDepth - bit % 8)) & ((1 << bitDepth) - 1);
+        };
+        auto s = [&](int x, int ch) -> uint8_t {
+            if (bitDepth < 8) return static_cast<uint8_t>(packed(x) * 255 / ((1 << bitDepth) - 1));
+            return currentScanline[(static_cast<size_t>(x) * srcChannels + ch) * sampleBytes];
+        };
         for (int x = 0; x < width; ++x) {
             uint8_t r = 0, g = 0, b = 0, a = 255;
 
             if (colorType == 0) { // Grayscale
-                r = g = b = currentScanline[x];
+                r = g = b = s(x, 0);
             } else if (colorType == 2) { // RGB
-                r = currentScanline[x * 3];
-                g = currentScanline[x * 3 + 1];
-                b = currentScanline[x * 3 + 2];
+                r = s(x, 0);
+                g = s(x, 1);
+                b = s(x, 2);
             } else if (colorType == 3) { // Palette
-                size_t palIdx = static_cast<size_t>(currentScanline[x]) * 3;
+                size_t palIdx = static_cast<size_t>(bitDepth < 8 ? packed(x) : currentScanline[x]) * 3;
                 if (palIdx + 2 < palette.size()) {
                     r = palette[palIdx];
                     g = palette[palIdx + 1];
                     b = palette[palIdx + 2];
                 }
             } else if (colorType == 4) { // Grayscale + Alpha
-                r = g = b = currentScanline[x * 2];
-                a = currentScanline[x * 2 + 1];
+                r = g = b = s(x, 0);
+                a = s(x, 1);
             } else if (colorType == 6) { // RGBA
-                r = currentScanline[x * 4];
-                g = currentScanline[x * 4 + 1];
-                b = currentScanline[x * 4 + 2];
-                a = currentScanline[x * 4 + 3];
+                r = s(x, 0);
+                g = s(x, 1);
+                b = s(x, 2);
+                a = s(x, 3);
             }
 
             if (outChannels == 3) {

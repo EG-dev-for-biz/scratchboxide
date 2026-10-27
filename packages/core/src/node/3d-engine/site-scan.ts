@@ -32,6 +32,10 @@ export interface SiteScan {
     triangles: number;
     heightM: number;
     source: string;
+    /** The extraction's photo-textured tiles (unlit, sun and shade baked in), in the tiles' own frame: sb.site_colors
+     * measures the building's colours on them. Its street lies at photoGroundY. */
+    photoGlbPath?: string;
+    photoGroundY?: number;
 }
 
 export async function measureSiteScan(massing: SiteMassing, opts: { workspaceRoot: string; signal?: AbortSignal; progress?: (m: string) => void }): Promise<SiteScan> {
@@ -49,6 +53,7 @@ export async function measureSiteScan(massing: SiteMassing, opts: { workspaceRoo
     writeTrianglesGlb(glbPath, pos, Uint32Array.from(ix as ArrayLike<number>));
     return {
         glbPath, groundY: 0, plan: [site.structure.outline.map(p => [p[0], p[1]] as [number, number])], triangles: ix.length / 3, heightM: top,
-        source: `Google 3D Tiles, the structure the staged extraction isolates (${site.structureMeshSource})`
+        source: `Google 3D Tiles, the structure the staged extraction isolates (${site.structureMeshSource})`,
+        ...(fs.existsSync(site.extraction.texturedGlb) ? { photoGlbPath: site.extraction.texturedGlb, photoGroundY: g } : {})
     };
 }

@@ -4,7 +4,7 @@ import collections.abc
 import scratchbox_native.geometry
 import scratchbox_native.math
 
-__all__ = ['Agreement', 'LoftRun', 'Slice', 'Tier', 'TopGrid', 'agreement', 'choose', 'crop_to_plan', 'extrude_block', 'loft_runs', 'loft_solids', 'plan_outline', 'plan_union', 'roof_objects', 'sample_surface', 'slices', 'snap_plan_to_scan', 'tier_solids', 'tiers']
+__all__ = ['Agreement', 'LoftRun', 'Slice', 'Tier', 'TopGrid', 'agreement', 'choose', 'crop_to_plan', 'extrude_block', 'loft_runs', 'loft_solids', 'plan_outline', 'plan_union', 'roof_objects', 'sample_surface', 'scan_colours', 'slices', 'snap_plan_to_scan', 'tier_solids', 'tiers']
 
 
 class Agreement:
@@ -130,6 +130,10 @@ def roof_objects(samples: collections.abc.Sequence[scratchbox_native.math.Vec3],
 
 def sample_surface(mesh: scratchbox_native.geometry.Mesh, spacing: float = 0.5) -> list[scratchbox_native.math.Vec3]:
     """Evenly spaced points on a mesh's surface (about one per spacing^2)"""
+
+
+def scan_colours(textured_glb: str, ground_y: float, plan: collections.abc.Sequence[collections.abc.Sequence[tuple[float, float]]], bands: collections.abc.Sequence[tuple[float, float]], spacing_m: float = 0.5, margin_m: float = 2.0) -> dict:
+    """The colours of a textured scan (3D tiles photos, unlit) per height band and facing (0..7 walls N..NW, 8 up, 9 down), inside the plan outline plus margin_m: lit colour, and the light / dark populations of an Otsu split, in linear sRGB"""
 
 
 def slices(samples: collections.abc.Sequence[scratchbox_native.math.Vec3], base_y: float, slice: float = 1.0, cell: float = 0.5, close: float = 1.0) -> list[Slice]:

@@ -118,6 +118,8 @@ import {
     objectReferenceHandlers,
     SB_SCRIPT_GUIDE_TOOL_DECLARATIONS,
     sbScriptGuideHandlers,
+    TEXTURE_LIBRARY_TOOL_DECLARATIONS,
+    textureLibraryHandlers,
     WEATHERING_TOOL_DECLARATIONS,
     WEATHERING_TOOL_HANDLERS,
     HYDRAULIC_EROSION_TOOL_DECLARATIONS,
@@ -684,6 +686,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
     registerTools(registry, MASSING_TOOL_DECLARATIONS, massingHandlers, 'workspace');
     registerTools(registry, OBJECT_REFERENCE_TOOL_DECLARATIONS, objectReferenceHandlers, 'workspace');
     registerTools(registry, SB_SCRIPT_GUIDE_TOOL_DECLARATIONS, sbScriptGuideHandlers, 'workspace');
+    registerTools(registry, TEXTURE_LIBRARY_TOOL_DECLARATIONS, textureLibraryHandlers, 'workspace');
     // Declared in DEFAULT_TOOL_DECLARATIONS; without these the agent is offered tools it cannot dispatch.
     registerTools(registry, IMAGE_TO_PBR_TOOL_DECLARATIONS, imageToPbrHandlers, 'workspace');
     registerTools(registry, PBR_MATERIAL_TOOL_DECLARATIONS, pbrMaterialHandlers, 'workspace');

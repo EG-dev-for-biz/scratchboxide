@@ -184,6 +184,7 @@ import {
 import { groupVariantSets, resolveActiveVariants, variantSetKeyOf } from './scene3d/variantSets';
 import type { VectorRoadmapConfig } from '../canvas-types';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { applyWeatheringLayer } from './scene3d/weatheringLayer';
 import { CINEMATIC_RIGS, computeSceneBudgetTelemetry } from './scene3d/lightingRigs';
 import type { SceneBudgetTelemetry } from './scene3d/lightingRigs';
 import { useStagedBuild } from './scene3d/stagedBuild/useStagedBuild';
@@ -2989,6 +2990,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 gltf.scene.name = 'scratchbox-cpp-generated-root';
                 scene.add(gltf.scene);
                 gltf.scene.updateMatrixWorld(true);
+                // a built model's weathering layer (SB_material_weathering): its atlas blended over the surfaces
+                void applyWeatheringLayer(gltf)
+                    .then(n => { if (n) console.info(`[Scene3D] weathering layer blended on ${n} material(s)`); })
+                    .catch(err => console.warn('[Scene3D] weathering layer not applied:', err));
                 // SB-Veggie trees in the generated GLB (scene extras sbTrees, nodes with sbTree): the same level-of-detail
                 // controller and tree textures a staged place's trees get, attached before the clay pass
                 const treeLod = new TreeLodController(gltf.scene, { crownShading: sceneDataRef.current?.treeCrownShading, view: sceneDataRef.current?.treeLod });
@@ -3325,6 +3330,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                             }
                         }
                     });
+
+                    // a built model's weathering layer (SB_material_weathering): its atlas blended over the surfaces
+                    void applyWeatheringLayer(gltf)
+                        .then(n => { if (n) console.info(`[Scene3D] weathering layer blended on ${n} material(s)`); })
+                        .catch(err => console.warn('[Scene3D] weathering layer not applied:', err));
 
                     const ground = groundTileModeRef.current;
                     model.visible = isVisibleForGroundMode(def, ground.effectiveGroundTileMode, ground.hasExplicit3DTileObject);

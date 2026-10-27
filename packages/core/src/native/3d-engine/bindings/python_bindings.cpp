@@ -35,6 +35,8 @@
 #include "scratchbox_mesh_edit.hpp"
 #include "scratchbox_scan_massing.hpp"
 #include "scratchbox_roof_objects.hpp"
+#include "scratchbox_material_maps.hpp"
+#include "scratchbox_scan_colour.hpp"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -269,7 +271,8 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("normal", &Vertex::normal)
         .def_rw("uv", &Vertex::uv)
         .def_rw("color", &Vertex::color)
-        .def_rw("tangent", &Vertex::tangent);
+        .def_rw("tangent", &Vertex::tangent)
+        .def_rw("uv1", &Vertex::uv1, "Second UV set (glTF TEXCOORD_1), written when the mesh's has_uv1 is set");
 
     nb::class_<PbrMaterial>(m_geom, "PbrMaterial")
         .def(nb::init<std::string>(), "name"_a = "defaultMaterial")
@@ -376,6 +379,7 @@ NB_MODULE(scratchbox_native, m) {
         .def(nb::init<std::string>(), "name"_a = "mesh")
         .def_rw("name", &ScratchboxMesh::name)
         .def_rw("material", &ScratchboxMesh::material)
+        .def_rw("has_uv1", &ScratchboxMesh::hasUv1, "Whether the vertices' uv1 is a second UV set to write (TEXCOORD_1)")
         .def_prop_ro("vertex_count", [](const ScratchboxMesh& self) { return self.vertices.size(); })
         .def_prop_ro("triangle_count", [](const ScratchboxMesh& self) { return self.indices.size() / 3; })
         .def_prop_ro("bounds", [](const ScratchboxMesh& self) { return self.bounds; })
@@ -757,6 +761,7 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("pilaster_width_m", &FacadeDetails::pilasterWidthM)
         .def_rw("pilaster_projection_m", &FacadeDetails::pilasterProjectionM)
         .def_rw("pilaster_bay_stride", &FacadeDetails::pilasterBayStride)
+        .def_rw("belt_projection_m", &FacadeDetails::beltProjectionM)
         .def_rw("pilaster_capital_m", &FacadeDetails::pilasterCapitalM)
         .def_rw("pilaster_flare", &FacadeDetails::pilasterFlare)
         .def_rw("quoin_course_m", &FacadeDetails::quoinCourseM)
@@ -817,6 +822,8 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("plinth_height", &BuildingConfig::plinthHeight)
         .def_rw("bay_width", &BuildingConfig::bayWidth)
         .def_rw("window_width", &BuildingConfig::windowWidth)
+        .def_rw("windows_per_bay", &BuildingConfig::windowsPerBay)
+        .def_rw("window_gap_m", &BuildingConfig::windowGapM)
         .def_rw("window_height", &BuildingConfig::windowHeight)
         .def_rw("window_recess_depth", &BuildingConfig::windowRecessDepth)
         .def_rw("roof_type", &BuildingConfig::roofType)
@@ -875,7 +882,7 @@ NB_MODULE(scratchbox_native, m) {
     m_arch.def("generate_building_parts", [](const BuildingConfig& config, const std::string& name) {
         return ProceduralBuildingGenerator::generateBuildingParts(config, name);
     }, "config"_a, "name"_a = "ProceduralBuilding",
-       "The building as one sub-mesh per material slot (<name>_wall, _glass, _frame, _roof, _foundation), "
+       "The building as one sub-mesh per material slot (<name>_wall, _glass, _frame, _roof, _foundation, _trim), "
        "each with its slot material, a grey vertex shade and world-metre UVs for real-scale textures");
 
     m_arch.attr("RomanOrder") = m.attr("RomanOrder");
@@ -1173,7 +1180,8 @@ NB_MODULE(scratchbox_native, m) {
             else if (usage == "metallic_roughness") t.usage = TextureUsage::METALLIC_ROUGHNESS;
             else if (usage == "occlusion") t.usage = TextureUsage::OCCLUSION;
             else if (usage == "emissive") t.usage = TextureUsage::EMISSIVE;
-            else throw std::invalid_argument("Unknown texture usage '" + usage + "' (base_color, normal, orm, metallic_roughness, occlusion, emissive)");
+            else if (usage == "weathering") t.usage = TextureUsage::WEATHERING;
+            else throw std::invalid_argument("Unknown texture usage '" + usage + "' (base_color, normal, orm, metallic_roughness, occlusion, emissive, weathering)");
             const auto* bytes = reinterpret_cast<const uint8_t*>(data.c_str());
             t.data.assign(bytes, bytes + data.size());
             t.mimeType = mime;
@@ -1309,6 +1317,66 @@ NB_MODULE(scratchbox_native, m) {
     }, "params"_a,
        "Synthesize a seamless coursed-surface PBR set (albedo, normal, ORM as PNG bytes) and its tile size in metres");
 
+    m_surface.def("prepare_material_maps", [](const std::string& color, const std::string& normal, const std::string& roughness,
+                                              const std::string& ao, const std::string& metalness, const std::string& arm, int max_size) {
+        material_maps::Sources src{color, normal, roughness, ao, metalness, arm};
+        material_maps::Prepared prep;
+        {
+            nb::gil_scoped_release release;
+            prep = material_maps::prepare(src, max_size);
+        }
+        auto png = [](const texture::ImageBuffer& img) {
+            auto bytes = png::encode(img, 6);
+            if (bytes.empty()) throw std::runtime_error("PNG compression failed for a library material map");
+            return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        };
+        nb::dict out;
+        out["albedo_png"] = png(prep.albedo);
+        out["normal_png"] = png(prep.normal);
+        out["orm_png"] = png(prep.orm);
+        out["mean_albedo_linear"] = nb::make_tuple(prep.meanLinear[0], prep.meanLinear[1], prep.meanLinear[2]);
+        out["spread_albedo_linear"] = nb::make_tuple(prep.spreadLinear[0], prep.spreadLinear[1], prep.spreadLinear[2]);
+        out["mean_lab"] = nb::make_tuple(prep.meanLab[0], prep.meanLab[1], prep.meanLab[2]);
+        out["spread_lab"] = nb::make_tuple(prep.spreadLab[0], prep.spreadLab[1], prep.spreadLab[2]);
+        out["mean_roughness"] = prep.meanRoughness;
+        out["spread_roughness"] = prep.spreadRoughness;
+        out["mean_metalness"] = prep.meanMetalness;
+        out["source_size"] = nb::make_tuple(prep.sourceWidth, prep.sourceHeight);
+        out["size"] = nb::make_tuple(prep.albedo.width, prep.albedo.height);
+        return out;
+    }, "color"_a, "normal"_a = "", "roughness"_a = "", "ao"_a = "", "metalness"_a = "", "arm"_a = "", "max_size"_a = 2048,
+       "Decode a surface library's maps (PNG 8/16-bit or baseline JPEG), area-resample them to at most max_size pixels a side and "
+       "pack them as albedo, normal and ORM PNG bytes, with per-pixel statistics (colour mean and spread in linear sRGB and "
+       "CIELAB, roughness mean and spread, mean metalness)");
+
+    m_surface.def("remap_png_channels", [](nb::bytes png_bytes, std::array<double, 3> scale, std::array<double, 3> offset, bool srgb) {
+        std::vector<uint8_t> in(reinterpret_cast<const uint8_t*>(png_bytes.c_str()), reinterpret_cast<const uint8_t*>(png_bytes.c_str()) + png_bytes.size());
+        auto img = material_maps::remapChannels(in, scale, offset, srgb);
+        auto bytes = png::encode(img, 6);
+        if (bytes.empty()) throw std::runtime_error("PNG compression failed for a remapped map");
+        return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    }, "png_bytes"_a, "scale"_a, "offset"_a = std::array<double, 3>{0, 0, 0}, "srgb"_a = false,
+       "Remap a map's channels as v * scale + offset (in linear light when srgb: a colour map), baking a measured colour or "
+       "roughness into a library map; returns PNG bytes");
+
+    m_surface.def("transfer_lab_png", [](nb::bytes png_bytes, std::array<double, 3> mean_lab, std::array<double, 3> spread_lab) {
+        std::vector<uint8_t> in(reinterpret_cast<const uint8_t*>(png_bytes.c_str()), reinterpret_cast<const uint8_t*>(png_bytes.c_str()) + png_bytes.size());
+        auto t = material_maps::transferLab(in, mean_lab, spread_lab);
+        auto bytes = png::encode(t.image, 6);
+        if (bytes.empty()) throw std::runtime_error("PNG compression failed for a transferred colour map");
+        nb::dict out;
+        out["png"] = nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        out["mean_lab"] = nb::make_tuple(t.meanLab[0], t.meanLab[1], t.meanLab[2]);
+        out["spread_lab"] = nb::make_tuple(t.spreadLab[0], t.spreadLab[1], t.spreadLab[2]);
+        out["mean_linear"] = nb::make_tuple(t.meanLinear[0], t.meanLinear[1], t.meanLinear[2]);
+        out["from_mean_lab"] = nb::make_tuple(t.fromMeanLab[0], t.fromMeanLab[1], t.fromMeanLab[2]);
+        out["from_spread_lab"] = nb::make_tuple(t.fromSpreadLab[0], t.fromSpreadLab[1], t.fromSpreadLab[2]);
+        return out;
+    }, "png_bytes"_a, "mean_lab"_a, "spread_lab"_a,
+       "Move a colour map's CIELAB distribution to mean_lab / spread_lab (per channel: (v - mean) * spread_lab / spread + mean_lab; "
+       "a channel without spread of its own, or given a negative spread, is only shifted), keeping its grain and variation. Returns {png, mean_lab, "
+       "spread_lab, mean_linear} measured on the result, and the source's from_mean_lab / from_spread_lab");
+
     auto m_weather = m.def_submodule("weathering", "Geometry-driven weathering bakes into a unique atlas on an overlay shell");
 
     nb::class_<weathering::WeatheringParams>(m_weather, "WeatheringParams")
@@ -1316,6 +1384,10 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("texel_m", &weathering::WeatheringParams::texelM)
         .def_rw("max_atlas_width", &weathering::WeatheringParams::maxAtlasWidth)
         .def_rw("overlay_offset_m", &weathering::WeatheringParams::overlayOffsetM)
+        .def_rw("layer", &weathering::WeatheringParams::layer)
+        .def_rw("photo_strength", &weathering::WeatheringParams::photoStrength)
+        .def_rw("photo_band_m", &weathering::WeatheringParams::photoBandM)
+        .def_rw("photo_min_support", &weathering::WeatheringParams::photoMinSupport)
         .def_rw("streak_strength", &weathering::WeatheringParams::streakStrength)
         .def_rw("streak_reach_m", &weathering::WeatheringParams::streakReachM)
         .def_rw("streak_column_m", &weathering::WeatheringParams::streakColumnM)
@@ -1341,9 +1413,150 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("decal_aging", &weathering::WeatheringParams::decalAging)
         .def_rw("seed", &weathering::WeatheringParams::seed);
 
+    nb::class_<photo_stain::Field>(m_weather, "PhotoStainField",
+        "A building's staining read from its photographic scan, flattened per facing and filtered a bay wide and a storey tall")
+        .def_ro("samples", &photo_stain::Field::samples)
+        .def("sample", [](const photo_stain::Field& f, Vec3 p, Vec3 n) -> nb::object {
+            Vec3 c; float sup;
+            if (!f.sample(p, n, c, sup)) return nb::none();
+            return nb::make_tuple(nb::make_tuple(c.x, c.y, c.z), sup);
+        }, "point"_a, "normal"_a, "The filtered linear photo colour and its support at a surface point, or None");
+
+    nb::class_<facade_guide::GuideSet>(m_weather, "FacadeGuides",
+        "A building's straightened facade photos (pipeline K) on their planes in the build's frame: registration, colours "
+        "per part and the repeat-residual stain for the weathering bake")
+        .def_prop_ro("facade_count", [](const facade_guide::GuideSet& g) { return g.facades.size(); })
+        .def_ro("notes", &facade_guide::GuideSet::notes)
+        .def("register_and_colour", [](facade_guide::GuideSet& g, const std::vector<std::tuple<std::string, int, const ScratchboxMesh*>>& parts, float spacing_m) {
+            std::vector<facade_guide::PartIn> in;
+            for (const auto& [name, role, mesh] : parts) in.push_back({name, role, mesh});
+            std::vector<facade_guide::PartColour> cols;
+            {
+                nb::gil_scoped_release release;
+                cols = facade_guide::registerAndColour(g, in, spacing_m);
+            }
+            nb::dict out, partsOut;
+            for (const auto& c : cols) {
+                nb::dict d;
+                d["linear"] = nb::make_tuple(c.linear.x, c.linear.y, c.linear.z);
+                d["samples"] = c.samples;
+                partsOut[c.name.c_str()] = d;
+            }
+            nb::list fac;
+            for (const auto& f : g.facades) {
+                nb::dict d;
+                d["id"] = f.id; d["shift_s"] = f.shiftS; d["shift_t"] = f.shiftT;
+                d["score"] = f.regScore; d["score_at_zero"] = f.regScoreAtZero;
+                d["glass_points"] = f.regGlass; d["wall_points"] = f.regWall;
+                d["has_stain"] = !f.stainLog.empty();
+                fac.append(d);
+            }
+            out["parts"] = partsOut;
+            out["facades"] = fac;
+            return out;
+        }, "parts"_a, "spacing_m"_a = 0.25f,
+           "Register each facade photo to the built parts (name, role: 1 glass, 0 wall, -1 neither, mesh) and read each "
+           "part's photo colour where it lands (linear)")
+        .def("facade_png", [](const facade_guide::GuideSet& g, int id) -> nb::object {
+            for (const auto& f : g.facades) {
+                if (f.id != id) continue;
+                const auto b = png::encode(f.rect);
+                return nb::bytes(reinterpret_cast<const char*>(b.data()), b.size());
+            }
+            return nb::none();
+        }, "id"_a, "The photo a facade reads (the finished model seen straight on, or the ortho), as PNG bytes")
+        .def("element_textures", [](const facade_guide::GuideSet& g, float y0, float y1, float out_px, float course_m, float head_m) {
+            const auto t = facade_guide::elementTextures(g, y0, y1, out_px, course_m, head_m);
+            nb::dict d;
+            d["ok"] = t.ok; d["reason"] = t.reason;
+            d["facades"] = t.facades;
+            if (!t.ok) return d;
+            auto png = [](const texture::ImageBuffer& img) { const auto b = png::encode(img); return nb::bytes(reinterpret_cast<const char*>(b.data()), b.size()); };
+            d["pier_png"] = png(t.pier); d["pier_normal_png"] = png(t.pierNormal);
+            d["spandrel_png"] = png(t.spandrel); d["spandrel_normal_png"] = png(t.spandrelNormal);
+            d["cell_png"] = png(t.cell);
+            d["pier_width_m"] = t.pierWidthM; d["storey_m"] = t.storeyM; d["pitch_m"] = t.pitchM;
+            d["infill_width_m"] = t.infillWidthM; d["spandrel_height_m"] = t.spandrelHeightM;
+            d["glass_linear"] = nb::make_tuple(t.glass.x, t.glass.y, t.glass.z);
+            d["pier_samples"] = t.pierSamples; d["cell_samples"] = t.cellSamples;
+            d["windows_per_bay"] = t.windowsPerBay; d["window_width_m"] = t.windowWidthM; d["window_gap_m"] = t.windowGapM;
+            d["light_band"] = t.lightBand;
+            return d;
+        }, "y0"_a, "y1"_a, "out_px"_a = 40.0f, "course_m"_a = 0.6f, "head_m"_a = 1.2f,
+           "A height band's own textures from the photos: the median pier and spandrel over every repeat, with stone joints drawn on")
+        .def("lattices", [](const facade_guide::GuideSet& g) {
+            nb::list out;
+            auto t3 = [](const Vec3& v) { return nb::make_tuple(v.x, v.y, v.z); };
+            for (const auto& f : g.facades) {
+                nb::dict d;
+                d["id"] = f.id; d["ok"] = f.lattice.ok;
+                d["centroid"] = t3(f.c); d["normal"] = t3(f.n); d["axis_t"] = t3(f.t); d["t_min"] = f.tMin; d["t_max"] = f.tMax;
+                d["width_m"] = f.sMax - f.sMin;
+                d["pitch_m"] = f.lattice.pitchM; d["pier_width_m"] = f.lattice.pierWidthM; d["piers"] = f.lattice.piers;
+                d["light_share"] = f.lattice.lightShare; d["contrast"] = f.lattice.contrast;
+                d["pier_linear"] = t3(f.lattice.pier); d["infill_linear"] = t3(f.lattice.infill); d["glass_linear"] = t3(f.lattice.glass);
+                out.append(d);
+            }
+            return out;
+        }, "Each facade photo's lattice: pier pitch and width, and pier, infill and glass colours (linear)")
+        .def("stain_at", [](const facade_guide::GuideSet& g, Vec3 p, Vec3 n) -> nb::object {
+            float a; Vec3 c;
+            if (!g.stainAt(p, n, a, c)) return nb::none();
+            return nb::make_tuple(a, nb::make_tuple(c.x, c.y, c.z));
+        }, "point"_a, "normal"_a, "The repeat-residual stain (0..1) and photo colour at a surface point, or None");
+
+    m_weather.def("load_facade_guides", [](const std::vector<nb::dict>& facades, const std::string& model, const std::vector<float>& model_matrix) {
+        std::vector<facade_guide::FacadeIn> in;
+        auto v3 = [](nb::handle h) { auto t = nb::cast<std::vector<float>>(h); return Vec3(t[0], t[1], t[2]); };
+        for (const auto& d : facades) {
+            facade_guide::FacadeIn f;
+            f.id = nb::cast<int>(d["id"]);
+            f.image = nb::cast<std::string>(d["image"]);
+            if (d.contains("original")) f.original = nb::cast<std::string>(d["original"]);
+            if (d.contains("uncovered")) f.uncovered = nb::cast<std::string>(d["uncovered"]);
+            f.c = v3(d["centroid"]); f.n = v3(d["normal"]); f.s = v3(d["axis_s"]); f.t = v3(d["axis_t"]);
+            f.sMin = nb::cast<float>(d["s_min"]); f.sMax = nb::cast<float>(d["s_max"]); f.tMin = nb::cast<float>(d["t_min"]); f.tMax = nb::cast<float>(d["t_max"]);
+            f.pixel = nb::cast<float>(d["pixel"]); f.oSMin = nb::cast<float>(d["ortho_s_min"]); f.oTMax = nb::cast<float>(d["ortho_t_max"]);
+            if (d.contains("period_m")) f.periodM = nb::cast<float>(d["period_m"]);
+            if (d.contains("storey_m")) f.storeyM = nb::cast<float>(d["storey_m"]);
+            in.push_back(f);
+        }
+        facade_guide::GuideSet g;
+        {
+            nb::gil_scoped_release release;
+            g = facade_guide::load(in);
+        }
+        if (!model.empty()) {
+            if (model_matrix.size() != 16) throw std::invalid_argument("model_matrix must be 16 numbers (column-major)");
+            std::array<float, 16> m{};
+            for (int i = 0; i < 16; ++i) m[i] = model_matrix[i];
+            nb::gil_scoped_release release;
+            facade_guide::renderFromModel(g, model, m);
+        }
+        return g;
+    }, "facades"_a, "model"_a = "", "model_matrix"_a = std::vector<float>{},
+       "Load the facade guides (sb.site()['guides']['facades']): photos, masks and each facade's repeat-residual stain; "
+       "with model (pipeline K's finished GLB) the photos are that model seen straight on");
+
+    m_weather.def("build_photo_stain", [](const std::string& textured_glb, float ground_y, const std::vector<std::vector<std::pair<double, double>>>& plan,
+                                          float bay_m, float storey_m, float cell_m, float margin_m) {
+        std::vector<std::vector<math::Vec2>> rings;
+        for (const auto& r : plan) { std::vector<math::Vec2> v; for (const auto& [x, z] : r) v.push_back(math::Vec2(float(x), float(z))); rings.push_back(v); }
+        photo_stain::Field f;
+        {
+            nb::gil_scoped_release release;
+            f = photo_stain::build(textured_glb, ground_y, rings, bay_m, storey_m, cell_m, margin_m);
+        }
+        if (!f.error.empty()) throw std::runtime_error("build_photo_stain: " + f.error);
+        return f;
+    }, "textured_glb"_a, "ground_y"_a, "plan"_a, "bay_m"_a = 2.8f, "storey_m"_a = 3.7f, "cell_m"_a = 0.25f, "margin_m"_a = 2.0f,
+       "Read a building's staining from its textured scan (tile photos, unlit) inside the plan outline: per facing, a grid of "
+       "the facade's plane at cell_m, filtered bay_m wide and storey_m tall, for bake_weathering(photo=...)");
+
     m_weather.def("bake_weathering", [](const std::vector<ScratchboxMesh>& receivers, const std::vector<ScratchboxMesh>& occluders,
                                         const weathering::WeatheringParams& params, const std::string& name,
-                                        const std::vector<std::tuple<Vec3, Vec3, Vec3, float, float, float, float, nb::bytes>>& decals) {
+                                        const std::vector<std::tuple<Vec3, Vec3, Vec3, float, float, float, float, nb::bytes>>& decals,
+                                        const photo_stain::Field* photo, const facade_guide::GuideSet* guides) {
         if (receivers.empty()) throw std::invalid_argument("bake_weathering: no receiver meshes; nothing would be weathered");
         std::vector<weathering::Decal> painted;
         for (const auto& [center, normal, up, width, height, depth, opacity, image] : decals) {
@@ -1355,21 +1568,28 @@ NB_MODULE(scratchbox_native, m) {
             d.image = std::move(decoded.image);
             painted.push_back(std::move(d));
         }
-        auto baked = weathering::bakeWeathering(receivers, occluders, params, name, painted);
+        auto baked = weathering::bakeWeathering(receivers, occluders, params, name, painted, photo, guides);
         auto png = png::encode(baked.atlas, 6);
-        if (!baked.overlay.vertices.empty() && png.empty()) throw std::runtime_error("PNG compression failed for the weathering atlas");
+        if ((!baked.overlay.vertices.empty() || !baked.layered.empty()) && png.empty()) throw std::runtime_error("PNG compression failed for the weathering atlas");
         nb::dict out;
         out["overlay"] = baked.overlay;
+        out["layered"] = baked.layered;
         out["atlas_png"] = nb::bytes(reinterpret_cast<const char*>(png.data()), png.size());
         out["atlas_width"] = baked.atlas.width;
         out["atlas_height"] = baked.atlas.height;
         out["charts"] = baked.chartCount;
         out["baked_texels"] = baked.bakedTexels;
         out["clear_triangles"] = baked.clearTriangles;
+        out["photo_texels"] = baked.photoTexels;
+        out["filled_texels"] = baked.filledTexels;
+        out["guide_texels"] = baked.guideTexels;
+        out["band_scale"] = baked.bandScale;
         return out;
     }, "receivers"_a, "occluders"_a, "params"_a, "name"_a = "Weathering", "decals"_a = std::vector<std::tuple<Vec3, Vec3, Vec3, float, float, float, float, nb::bytes>>{},
+       "photo"_a.none() = nb::none(), "guides"_a.none() = nb::none(),
        "Bake streaks, exposure wash, shelter and cavity grime, rising damp and soot from the geometry into an RGBA atlas; "
-       "returns an alpha-blended overlay shell of the receivers mapped into it. Each decal (center, normal, up, width_m, "
+       "returns an alpha-blended overlay shell of the receivers mapped into it, or with params.layer the receivers themselves "
+       "(\"layered\", in order) with uv1 into it. Each decal (center, normal, up, width_m, "
        "height_m, depth_m, opacity, png_bytes) is painted into the atlas over the weathering");
 
     m_weather.def("make_decal_panel", &weathering::makeDecalPanel,
@@ -1542,6 +1762,36 @@ NB_MODULE(scratchbox_native, m) {
             return d;
         }, "ordered"_a, "min_coverage"_a = 0.9, "min_precision"_a = 0.85,
            "Candidates (label, triangles, Agreement) simplest first: the first explaining the scan wins, else the best height-balanced F");
+
+        m_sm.def("scan_colours", [](const std::string& textured_glb, float ground_y, const std::vector<std::vector<std::pair<double, double>>>& plan,
+                                    const std::vector<std::pair<float, float>>& bands, float spacing_m, float margin_m) {
+            std::vector<std::vector<math::Vec2>> rings;
+            for (const auto& r : plan) { std::vector<math::Vec2> v; for (const auto& [x, z] : r) v.push_back(math::Vec2(float(x), float(z))); rings.push_back(v); }
+            std::vector<scan_colour::Band> b;
+            for (const auto& [y0, y1] : bands) b.push_back({y0, y1});
+            scan_colour::Result res;
+            {
+                nb::gil_scoped_release release;
+                res = scan_colour::measure(textured_glb, ground_y, rings, b, spacing_m, margin_m);
+            }
+            if (!res.error.empty()) throw std::runtime_error("scan_colours: " + res.error);
+            auto t3 = [](const std::array<double, 3>& c) { return nb::make_tuple(c[0], c[1], c[2]); };
+            nb::list regions;
+            for (const auto& r : res.regions) {
+                nb::dict d;
+                d["band"] = r.band; d["facing"] = r.facing; d["samples"] = r.samples;
+                d["lit_linear"] = t3(r.litLinear); d["shadow_split"] = r.shadowSplit;
+                d["lit_spread_lab"] = t3(r.litSpreadLab);
+                d["light_linear"] = t3(r.lightLinear); d["dark_linear"] = t3(r.darkLinear);
+                d["dark_share"] = r.darkShare; d["light_to_dark"] = r.lightToDarkLuminance;
+                regions.append(d);
+            }
+            nb::dict out;
+            out["regions"] = regions; out["sampled"] = res.sampled; out["kept"] = res.kept; out["triangles"] = res.triangles;
+            return out;
+        }, "textured_glb"_a, "ground_y"_a, "plan"_a, "bands"_a, "spacing_m"_a = 0.5f, "margin_m"_a = 2.0f,
+           "The colours of a textured scan (3D tiles photos, unlit) per height band and facing (0..7 walls N..NW, 8 up, 9 down), "
+           "inside the plan outline plus margin_m: lit colour, and the light / dark populations of an Otsu split, in linear sRGB");
     }
 
     auto m_core = m.def_submodule("core", "Pre-compiled C++20 invariant kernel (GeoMorph, ArchiMorph, Sensors)");

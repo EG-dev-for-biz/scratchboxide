@@ -76,7 +76,10 @@ enum class TextureUsage {
     NORMAL,
     OCCLUSION,
     EMISSIVE,
-    ORM
+    ORM,
+    /** A unique RGBA atlas on TEXCOORD_1, alpha-blended over the base colour (SB_material_weathering); attaches only to
+     * meshes with a second UV set (hasUv1). */
+    WEATHERING
 };
 
 struct EmbeddedTexture {
@@ -641,10 +644,31 @@ public:
             currentOffset += tex.data.size();
         }
 
+        // Second UV sets (TEXCOORD_1), for the meshes that carry one, after the images: their buffer views and accessors
+        // come after every other, so the fixed six-per-mesh numbering above is unchanged.
+        struct Uv1Block { size_t mesh, offset, bytes; };
+        std::vector<Uv1Block> uv1Blocks;
+        std::vector<int> uv1Of(numMeshes, -1);
+        for (size_t m = 0; m < numMeshes; ++m) {
+            if (!subMeshes[m].hasUv1) continue;
+            size_t pad = (4 - (currentOffset % 4)) % 4;
+            currentOffset += pad;
+            uv1Of[m] = static_cast<int>(uv1Blocks.size());
+            uv1Blocks.push_back({m, currentOffset, subMeshes[m].vertices.size() * 2 * sizeof(float)});
+            currentOffset += uv1Blocks.back().bytes;
+        }
+
         size_t binPadding = (4 - (currentOffset % 4)) % 4;
         size_t binChunkLength = currentOffset + binPadding;
 
         std::vector<uint8_t> binData(binChunkLength, 0);
+
+        for (const auto& b : uv1Blocks) {
+            std::vector<float> buf;
+            buf.reserve(subMeshes[b.mesh].vertices.size() * 2);
+            for (const auto& v : subMeshes[b.mesh].vertices) { buf.push_back(v.uv1.x); buf.push_back(v.uv1.y); }
+            std::memcpy(binData.data() + b.offset, buf.data(), b.bytes);
+        }
 
         for (size_t m = 0; m < numMeshes; ++m) {
             const auto& mesh = subMeshes[m];
@@ -736,6 +760,9 @@ public:
         if (hasVolume) extensionsUsed.push_back("KHR_materials_volume");
 
         if (!lights.empty()) extensionsUsed.push_back("KHR_lights_punctual");
+        bool hasWeatheringLayer = false;
+        for (const auto& t : textures) hasWeatheringLayer = hasWeatheringLayer || t.usage == TextureUsage::WEATHERING;
+        if (hasWeatheringLayer && !uv1Blocks.empty()) extensionsUsed.push_back("SB_material_weathering");
 
         auto appendTexInfo = [&](int texIdx) {
             std::stringstream ts;
@@ -804,6 +831,7 @@ public:
             int normalTexIdx = -1;
             int occTexIdx = -1;
             int emissiveTexIdx = -1;
+            int weatheringTexIdx = -1;
 
             for (size_t i = 0; i < textures.size(); ++i) {
                 bool matchesMaterial = (textures[i].materialIndex == static_cast<int>(m));
@@ -833,6 +861,7 @@ public:
                     else if (textures[i].usage == TextureUsage::NORMAL && normalTexIdx == -1) normalTexIdx = static_cast<int>(i);
                     else if (textures[i].usage == TextureUsage::OCCLUSION && occTexIdx == -1) occTexIdx = static_cast<int>(i);
                     else if (textures[i].usage == TextureUsage::EMISSIVE && emissiveTexIdx == -1) emissiveTexIdx = static_cast<int>(i);
+                    else if (textures[i].usage == TextureUsage::WEATHERING && subMeshes[m].hasUv1 && weatheringTexIdx == -1) weatheringTexIdx = static_cast<int>(i);
 
                     if (textures[i].usage == TextureUsage::ORM && occTexIdx == -1) occTexIdx = static_cast<int>(i);
                 }
@@ -869,6 +898,10 @@ public:
             }
             // Factor-only PBR extensions, written exactly when the extension discovery above lists them.
             std::vector<std::string> matExt;
+            if (weatheringTexIdx >= 0) {
+                std::stringstream e; e << "\"SB_material_weathering\":{\"texture\":{\"index\":" << weatheringTexIdx << ",\"texCoord\":1}}";
+                matExt.push_back(e.str());
+            }
             if (mat.emissiveStrength > 1.001f) {
                 std::stringstream e; e << "\"KHR_materials_emissive_strength\":{\"emissiveStrength\":" << mat.emissiveStrength << "}";
                 matExt.push_back(e.str());
@@ -915,8 +948,9 @@ public:
                << "\"NORMAL\":" << (accBase + 2) << ","
                << "\"TEXCOORD_0\":" << (accBase + 3) << ","
                << "\"COLOR_0\":" << (accBase + 4) << ","
-               << "\"TANGENT\":" << (accBase + 5)
-               << "},"
+               << "\"TANGENT\":" << (accBase + 5);
+            if (uv1Of[m] >= 0) ss << ",\"TEXCOORD_1\":" << (numMeshes * 6 + uv1Of[m]);
+            ss << "},"
                << "\"indices\":" << (accBase + 0) << ","
                << "\"material\":" << meshMaterialIndex[m]
                << "}]}";
@@ -943,6 +977,10 @@ public:
                << "{\"bufferView\":" << (bvBase + 4) << ",\"byteOffset\":0,\"componentType\":5126,\"count\":" << mo.vertCount << ",\"type\":\"VEC4\"},"
                << "{\"bufferView\":" << (bvBase + 5) << ",\"byteOffset\":0,\"componentType\":5126,\"count\":" << mo.vertCount << ",\"type\":\"VEC4\"}";
         }
+        for (size_t j = 0; j < uv1Blocks.size(); ++j) {
+            ss << ",{\"bufferView\":" << (numMeshes * 6 + textures.size() + j) << ",\"byteOffset\":0,\"componentType\":5126,\"count\":"
+               << subMeshes[uv1Blocks[j].mesh].vertices.size() << ",\"type\":\"VEC2\"}";
+        }
         ss << "],";
 
         // BufferViews
@@ -959,6 +997,9 @@ public:
         }
         for (size_t i = 0; i < textures.size(); ++i) {
             ss << ",{\"buffer\":0,\"byteOffset\":" << texBvs[i].offset << ",\"byteLength\":" << texBvs[i].length << "}";
+        }
+        for (const auto& b : uv1Blocks) {
+            ss << ",{\"buffer\":0,\"byteOffset\":" << b.offset << ",\"byteLength\":" << b.bytes << ",\"target\":34962}";
         }
         ss << "]";
 

@@ -2547,6 +2547,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     return { value: { rungShares: twin.rungShares, provenance: twin.provenance, ladderRung: twin.ladderRung, triangles: twin.triangles, ...(twin.harmonize ? { harmonize: twin.harmonize } : {}) } };
                 }, { publish: () => [{ from: 'twin.glb', as: `${base}_${target.layer.layer}_tex_${key.slice(0, 8)}.glb` }], bypass: bypass('textures') });
                 const pub = entry.published[0];
+                // pipeline K's finished model, for scripts that rebuild the building from it (site-guides.ts)
+                if (harmonizeOn) cache.writeRunNote(runId, 'pipeline_k_model', { model: path.join(entry.dir, 'twin.glb'), url: pub.url, layer: target.layer.layer });
                 const out = {
                     layerKey: target.layer.layer, rungShares: entry.value.rungShares, atlasTexels: entry.value.triangles, atlas: { width: 0, height: 0, texelsPerMeter: 0 } as unknown as TextureLayerOutcome['atlas'],
                     // no atlas: the twin keeps each primitive's own UVs into its leaf image

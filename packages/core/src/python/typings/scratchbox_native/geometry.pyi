@@ -27,6 +27,12 @@ class Mesh:
     def material(self, value: PbrMaterial) -> None: ...
 
     @property
+    def has_uv1(self) -> bool:
+        """Whether the vertices' uv1 is a second UV set to write (TEXCOORD_1)"""
+    @has_uv1.setter
+    def has_uv1(self, value: bool) -> None: ...
+
+    @property
     def vertex_count(self) -> int: ...
 
     @property
@@ -185,6 +191,12 @@ class Vertex:
     def tangent(self) -> scratchbox_native.math.Vec4: ...
     @tangent.setter
     def tangent(self, value: scratchbox_native.math.Vec4) -> None: ...
+
+    @property
+    def uv1(self) -> scratchbox_native.math.Vec2:
+        """Second UV set (glTF TEXCOORD_1), written when the mesh's has_uv1 is set"""
+    @uv1.setter
+    def uv1(self, value: scratchbox_native.math.Vec2) -> None: ...
 
 
 def boolean_mesh(a: scratchbox_native.geometry.Mesh, b: scratchbox_native.geometry.Mesh, op: str) -> Mesh:

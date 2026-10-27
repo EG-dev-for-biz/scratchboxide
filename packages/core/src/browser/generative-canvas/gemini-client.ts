@@ -34,6 +34,19 @@ import { VisualVerificationRequest, VisualVerificationOutcome } from '../../comm
 /** Where a chat request failed: the local server was unreachable, it returned an error, or the AI request itself failed. */
 export type ChatFailureKind = 'unreachable' | 'server' | 'ai';
 
+/**
+ * A request body for the chat and visual-check routes, with any large generated-model bytes (a scene's
+ * pythonGenerator / cppGenerator glbBase64) replaced by a short note: the server reads models from their glbPath, and a
+ * built skyscraper's base64 alone outgrew the server's 50 MB body limit, so every later turn in that chat failed (413).
+ * The note keeps the field present, so nothing takes the scene for an uncompiled script.
+ */
+export function chatRequestBody(request: unknown): string {
+    return JSON.stringify(request, (key, value) =>
+        key === 'glbBase64' && typeof value === 'string' && value.length > 1_000_000
+            ? `[omitted from the chat request: ${value.length} base64 characters; the model is at glbPath]`
+            : value);
+}
+
 export class ChatRequestError extends Error {
     constructor(
         message: string,
@@ -162,7 +175,7 @@ export class GeminiClient {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json'
             },
-            body: JSON.stringify(request)
+            body: chatRequestBody(request)
         });
 
         if (!res.ok) {
@@ -267,7 +280,7 @@ export class GeminiClient {
                         'Content-Type': 'application/json',
                         'Accept': 'text/event-stream'
                     },
-                    body: JSON.stringify(request),
+                    body: chatRequestBody(request),
                     signal: timeoutController.signal
                 });
                 if (res.status === 404) {
@@ -277,7 +290,7 @@ export class GeminiClient {
                             'Content-Type': 'application/json',
                             'Accept': 'text/event-stream'
                         },
-                        body: JSON.stringify(request),
+                        body: chatRequestBody(request),
                         signal: timeoutController.signal
                     });
                 }
@@ -290,7 +303,7 @@ export class GeminiClient {
                             'Content-Type': 'application/json',
                             'Accept': 'text/event-stream'
                         },
-                        body: JSON.stringify(request),
+                        body: chatRequestBody(request),
                         signal: timeoutController.signal
                     });
                 } catch (retryErr: any) {

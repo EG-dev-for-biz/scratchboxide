@@ -33,6 +33,7 @@ export * from './local-sf3d-tools';
 export * from './tile-refine-tools';
 export * from './object-reference-tools';
 export * from './sb-script-guide-tools';
+export * from './texture-library-tools';
 export * from './virtual-geometry-tools';
 export * from './location-evidence-tools';
 export * from './location-reference-tools';
@@ -68,6 +69,7 @@ import { PYTHON_3D_TOOL_DECLARATIONS, python3DHandlers } from './python-3d-tools
 import { MASSING_TOOL_DECLARATIONS, massingHandlers } from './massing-tools';
 import { OBJECT_REFERENCE_TOOL_DECLARATIONS, objectReferenceHandlers } from './object-reference-tools';
 import { SB_SCRIPT_GUIDE_TOOL_DECLARATIONS, sbScriptGuideHandlers } from './sb-script-guide-tools';
+import { TEXTURE_LIBRARY_TOOL_DECLARATIONS, textureLibraryHandlers } from './texture-library-tools';
 import { MESH_SHAPING_TOOL_DECLARATIONS, meshShapingHandlers } from './mesh-shaping-tools';
 import { SB_RIG_TOOL_DECLARATIONS, sbRigHandlers } from './sb-rig-tools';
 import { NANO_BANANA_TOOL_DECLARATIONS, nanoBananaHandlers, IMAGE_GENERATION_TOOL_DECLARATIONS, imageGenerationHandlers } from './nano-banana-tools';
@@ -189,6 +191,7 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...MASSING_TOOL_DECLARATIONS,
     ...OBJECT_REFERENCE_TOOL_DECLARATIONS,
     ...SB_SCRIPT_GUIDE_TOOL_DECLARATIONS,
+    ...TEXTURE_LIBRARY_TOOL_DECLARATIONS,
     ...GOOGLE_3D_TILES_TOOL_DECLARATIONS,
     ...TILE_REFINE_TOOL_DECLARATIONS,
     ...VIRTUAL_GEOMETRY_TOOL_DECLARATIONS,
@@ -247,6 +250,7 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...massingHandlers,
     ...objectReferenceHandlers,
     ...sbScriptGuideHandlers,
+    ...textureLibraryHandlers,
     ...google3DTilesHandlers,
     ...tileRefineHandlers,
     ...virtualGeometryHandlers,
