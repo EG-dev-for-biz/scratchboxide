@@ -11,7 +11,9 @@
  * One pass over a tile_refine remesh before it is shown or textured (the default staged path): the cleanup
  * (remesh-cleanup.ts: scraps out, the surface smoothed with its edges kept), then the rectified facades rebuilt on the
  * lines their photo shows (facade-lattice.ts). Applied to the remesh (l2) and to the facade grammar's remesh (l2g), whose
- * accepted grammar facades keep the grammar's windows. The clay and tile_refine's textured twin get the same edits.
+ * accepted grammar facades keep the grammar's windows. Last, the result turned to face outward (remesh-orient.ts: pieces
+ * seen only from behind from outside, and facing into the building, have their winding reversed), after the base cleanup has
+ * read the shell's open sides. The clay and tile_refine's textured twin get the same edits.
  * Results are kept beside the remesh, keyed by the pass's version and options, so a repeat build does not redo them.
  */
 
@@ -19,12 +21,13 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { cleanRemesh, remeshCleanupEnabled, REMESH_CLEANUP_VERSION, type RemeshCleanupStats } from './remesh-cleanup';
+import { orientRemesh, remeshOrientEnabled, REMESH_ORIENT_VERSION, type RemeshOrientStats } from './remesh-orient';
 import { FACADE_LATTICE_PARAMS, FACADE_LATTICE_VERSION, PHOTO_RECESS, rebuildFacadesOnLattice, type TearReport } from './facade-lattice';
 import { BASE_CLEANUP_VERSION, cleanBase, type BaseCleanupReport } from './pipeline-k/base-cleanup';
 import { fillOpenLoops, LATTICE_STITCH_VERSION, type FillReport } from './pipeline-k/lattice-stitch';
 import type { Vec2 } from '../../../common/spatial/staged-location-contracts';
 
-export const REMESH_POLISH_VERSION = `remesh-polish/1(${REMESH_CLEANUP_VERSION},${FACADE_LATTICE_VERSION})`;
+export const REMESH_POLISH_VERSION = `remesh-polish/1(${REMESH_CLEANUP_VERSION},${REMESH_ORIENT_VERSION},${FACADE_LATTICE_VERSION})`;
 
 /** On unless SCRATCHBOX_STAGED_FACADE_LATTICE=0. */
 export function facadeLatticeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -33,6 +36,7 @@ export function facadeLatticeEnabled(env: NodeJS.ProcessEnv = process.env): bool
 
 export interface RemeshPolishStats {
     cleanup?: RemeshCleanupStats;
+    orient?: RemeshOrientStats;
     base?: BaseCleanupReport;
     seal?: FillReport;
     lattice?: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears?: TearReport; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number] }> };
@@ -40,10 +44,10 @@ export interface RemeshPolishStats {
 
 export interface PolishedRemesh { clayGlb: string; texturedGlb?: string; cacheKey: string; stats: RemeshPolishStats }
 
-export function polishRemesh(input: { clayGlb: string; texturedGlb?: string; cacheKey: string; orthosDir?: string; /** Names the orthos when they are not tile_refine's own (pipeline K's rectified set), so the cache tells them apart. */ orthosKey?: string; skipFacades?: number[]; cleanup?: boolean; lattice?: boolean; /** Pipeline K: the base cleaned by the structure's footprint (pipeline-k/base-cleanup.ts), last. */ base?: { loops: Vec2[][]; groundY: number }; /** Pipeline K: the facades cut and stitched watertight, and the shell's open loops closed last (pipeline-k/lattice-stitch.ts). */ seal?: boolean; /** Pipeline K: the lattice recesses its windows as the straightened photo shows them (facade-lattice.ts PHOTO_RECESS), tile_refine having carved nothing. */ photoRecess?: boolean }): PolishedRemesh {
-    const cleanup = input.cleanup ?? remeshCleanupEnabled(), lattice = (input.lattice ?? facadeLatticeEnabled()) && !!input.orthosDir && fs.existsSync(path.join(input.orthosDir, 'facades.json'));
-    if (!cleanup && !lattice && !input.base && !input.seal) return { clayGlb: input.clayGlb, ...(input.texturedGlb ? { texturedGlb: input.texturedGlb } : {}), cacheKey: input.cacheKey, stats: {} };
-    const opts = JSON.stringify({ v: REMESH_POLISH_VERSION, cleanup, lattice, skip: [...(input.skipFacades ?? [])].sort((a, b) => a - b), ...(input.orthosKey ? { orthos: input.orthosKey } : {}), ...(input.base ? { base: BASE_CLEANUP_VERSION, loops: input.base.loops, groundY: input.base.groundY } : {}), ...(input.seal ? { seal: LATTICE_STITCH_VERSION } : {}), ...(input.photoRecess ? { photoRecess: PHOTO_RECESS } : {}) });
+export function polishRemesh(input: { clayGlb: string; texturedGlb?: string; cacheKey: string; orthosDir?: string; /** Names the orthos when they are not tile_refine's own (pipeline K's rectified set), so the cache tells them apart. */ orthosKey?: string; skipFacades?: number[]; cleanup?: boolean; /** The scan's inward-facing pieces turned outward (remesh-orient.ts); on unless SCRATCHBOX_STAGED_REMESH_ORIENT=0. */ orient?: boolean; lattice?: boolean; /** Pipeline K: the base cleaned by the structure's footprint (pipeline-k/base-cleanup.ts), last. */ base?: { loops: Vec2[][]; groundY: number }; /** Pipeline K: the facades cut and stitched watertight, and the shell's open loops closed last (pipeline-k/lattice-stitch.ts). */ seal?: boolean; /** Pipeline K: the lattice recesses its windows as the straightened photo shows them (facade-lattice.ts PHOTO_RECESS), tile_refine having carved nothing. */ photoRecess?: boolean }): PolishedRemesh {
+    const cleanup = input.cleanup ?? remeshCleanupEnabled(), orient = input.orient ?? remeshOrientEnabled(), lattice = (input.lattice ?? facadeLatticeEnabled()) && !!input.orthosDir && fs.existsSync(path.join(input.orthosDir, 'facades.json'));
+    if (!cleanup && !orient && !lattice && !input.base && !input.seal) return { clayGlb: input.clayGlb, ...(input.texturedGlb ? { texturedGlb: input.texturedGlb } : {}), cacheKey: input.cacheKey, stats: {} };
+    const opts = JSON.stringify({ v: REMESH_POLISH_VERSION, cleanup, orient, lattice, skip: [...(input.skipFacades ?? [])].sort((a, b) => a - b), ...(input.orthosKey ? { orthos: input.orthosKey } : {}), ...(input.base ? { base: BASE_CLEANUP_VERSION, loops: input.base.loops, groundY: input.base.groundY } : {}), ...(input.seal ? { seal: LATTICE_STITCH_VERSION } : {}), ...(input.photoRecess ? { photoRecess: PHOTO_RECESS } : {}) });
     const tag = crypto.createHash('sha256').update(opts).digest('hex').slice(0, 16);
     const dir = path.join(path.dirname(input.clayGlb), 'polish', tag);
     const clayOut = path.join(dir, 'clay.glb'), texOut = input.texturedGlb ? path.join(dir, 'textured.glb') : undefined, statsFile = path.join(dir, 'stats.json');
@@ -64,6 +68,9 @@ export function polishRemesh(input: { clayGlb: string; texturedGlb?: string; cac
             const sl = fillOpenLoops(clay, tex ? [tex] : [], input.base ? { footprint: input.base.loops } : {});
             clay = sl.clay; tex = tex ? sl.others[0] : undefined; stats.seal = sl.report;
         }
+        // last: the base cleanup reads the shell's inside seen along the footprint line as an open party wall, so the scan is
+        // turned to face outward only once that wall is closed (and the rebuilt facades are in place)
+        if (orient) { const o = orientRemesh(clay, tex ? [tex] : []); clay = o.clay; tex = tex ? o.others[0] : undefined; stats.orient = o.stats; }
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(clayOut, clay);
         if (texOut && tex) fs.writeFileSync(texOut, tex);
@@ -79,6 +86,7 @@ export function polishRemesh(input: { clayGlb: string; texturedGlb?: string; cac
 export function describePolish(s: RemeshPolishStats): string {
     const parts: string[] = [];
     if (s.cleanup) parts.push(`${s.cleanup.piecesRemoved} loose scan pieces removed (${s.cleanup.areaRemovedM2} m²), the surface smoothed with its edges kept (mean shift ${s.cleanup.meanShiftM} m, at most 0.3 m)`);
+    if (s.orient?.turned) parts.push(`${s.orient.turned} scan triangles seen only from behind turned to face outward (${s.orient.turnedAreaM2} m²)`);
     if (s.lattice) {
         const t = s.lattice.tears;
         parts.push(`${s.lattice.rebuilt} of ${s.lattice.facades} rectified facades rebuilt on the lines their photo shows (${s.lattice.cells} cells; lines photo-inferred, depths measured and averaged along each storey's repeats)` +
