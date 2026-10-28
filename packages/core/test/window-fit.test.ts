@@ -19,7 +19,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { ensureReliefBandBinary, fitFacadeWindows, fittedPlanesOf, fittedWindowUvs, nativeRelief, panesOfStrip, WINDOW_FIT_PARAMS, type FitFrame, type ReliefGrid, type ReliefRunner, type WindowFitFile } from '../src/node/3d-engine/staged-location/window-fit';
+import { completeLattice, ensureReliefBandBinary, fitFacadeWindows, fittedPlanesOf, panesOfUnitCell, panesUnlikeWall, fittedWindowUvs, nativeRelief, panesOfStrip, WINDOW_FIT_PARAMS, type FitFrame, type ReliefGrid, type ReliefRunner, type WindowFitFile } from '../src/node/3d-engine/staged-location/window-fit';
 
 const PX = 0.1, W = 300, H = 240; // a 30 x 24 m facade
 const frame: FitFrame = { pixel: PX, orthoSMin: 0, orthoTMax: 24, texel: 0.05 };
@@ -142,5 +142,69 @@ describe('the window fit', () => {
         expect(planes[0].panes).toEqual([[10, 10, 20, 18]]);
         expect(planes[0].orthoTMax).toBe(10);
         expect(fittedPlanesOf(path.join(os.tmpdir(), 'no-such-orthos'))).toEqual([]);
+    });
+
+    it('completes the lattice from its repeats: a lit pane on the grid becomes a window, a site showing the wall stays wall', () => {
+        // 4 columns x 4 rows of dark windows (12 x 20 px) on a light stone wall, every 30 px across and 40 px up; one site holds a
+        // pane mirroring the sky (light, cool, with a dark frame), one is plain stone
+        const W = 130, H = 170, rgba = new Uint8Array(W * H * 4), valid = new Uint8Array(W * H).fill(1);
+        for (let k = 0; k < W * H; k++) rgba.set([200, 192, 178, 255], k * 4);
+        const rects: Array<[number, number, number, number]> = [];
+        const site = (c: number, r: number): [number, number, number, number] => [10 + c * 30, 10 + r * 40, 22 + c * 30, 30 + r * 40];
+        for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) {
+            const q = site(c, r);
+            if (c === 1 && r === 1) {
+                // lit glass: a dark frame round a light cool pane
+                for (let y = q[1]; y < q[3]; y++) for (let x = q[0]; x < q[2]; x++) rgba.set(x - q[0] < 2 || q[2] - x <= 2 || y - q[1] < 2 || q[3] - y <= 2 ? [40, 38, 40, 255] : [170, 190, 205, 255], (y * W + x) * 4);
+                continue;
+            }
+            if (c === 2 && r === 2) continue; // plain stone
+            for (let y = q[1]; y < q[3]; y++) for (let x = q[0]; x < q[2]; x++) rgba.set([45, 42, 44, 255], (y * W + x) * 4);
+            rects.push(q);
+        }
+        const done = completeLattice({ rgba, width: W, height: H }, valid, rects, [0, W, 0, H]);
+        expect(done.added).toBe(1);
+        expect(done.stone).toBe(1);
+        expect(done.rects).toContainEqual(site(1, 1));
+        expect(done.rects).not.toContainEqual(site(2, 2));
+        // a site outside the band is left to its own band
+        expect(completeLattice({ rgba, width: W, height: H }, valid, rects, [0, W, 100, H]).added).toBe(0);
+    });
+
+    it("places a band's strip panes from their folded unit cell: glass rows at the storey pitch, split at the mullion", () => {
+        // two strips 20 px wide, each two window columns (8 px glass, 4 px dark mullion between); storeys 30 px: 12 px glass, 18 px spandrel
+        const W = 80, H = 120, rgba = new Uint8Array(W * H * 4), valid = new Uint8Array(W * H).fill(1);
+        for (let k = 0; k < W * H; k++) rgba.set([200, 192, 178, 255], k * 4);
+        const strips: Array<[number, number, number, number]> = [[10, 0, 30, 120], [50, 0, 70, 120]];
+        for (const [xa] of strips) for (let y = 0; y < H; y++) for (let x = xa; x < xa + 20; x++) {
+            const u = x - xa, glassRow = y % 30 < 12, mullion = u >= 8 && u < 12;
+            rgba.set(mullion ? [50, 45, 45, 255] : glassRow ? [120, 150, 175, 255] : [70, 52, 50, 255], (y * W + x) * 4);
+        }
+        const r = panesOfUnitCell({ rgba, width: W, height: H }, valid, strips, [0, W, 0, H], 30);
+        expect(r.groups).toBe(1);
+        for (const ps of r.perStrip) {
+            expect(ps).toBeDefined();
+            // two panes a storey, none across the mullion, each within the glass rows
+            for (const [x0, y0, x1, y1] of ps!) {
+                const u0 = x0 - (x0 >= 50 ? 50 : 10), u1 = x1 - (x0 >= 50 ? 50 : 10);
+                expect(u1 <= 9 || u0 >= 11).toBe(true);
+                expect(y0 % 30).toBeLessThanOrEqual(1);
+                expect(y1 - y0).toBeGreaterThanOrEqual(10);
+                expect(y1 - y0).toBeLessThanOrEqual(14);
+            }
+            expect(ps!.length).toBe(8);
+        }
+    });
+
+    it('keeps a pane only where it reads unlike the stone beside its window: a carved stone panel is no glass', () => {
+        // limestone wall; window A holds cool grey glass, window B a panel of the same stone, a little shaded
+        const W = 60, H = 30, rgba = new Uint8Array(W * H * 4), valid = new Uint8Array(W * H).fill(1);
+        for (let k = 0; k < W * H; k++) rgba.set([200, 190, 172, 255], k * 4);
+        const a: [number, number, number, number] = [5, 5, 20, 25], b: [number, number, number, number] = [35, 5, 50, 25];
+        for (let y = a[1]; y < a[3]; y++) for (let x = a[0]; x < a[2]; x++) rgba.set([130, 145, 160, 255], (y * W + x) * 4);
+        for (let y = b[1]; y < b[3]; y++) for (let x = b[0]; x < b[2]; x++) rgba.set([188, 179, 162, 255], (y * W + x) * 4);
+        const r = panesUnlikeWall({ rgba, width: W, height: H }, valid, [a, b], [a, b], [0, W, 0, H]);
+        expect(r.panes).toEqual([a]);
+        expect(r.dropped).toBe(1);
     });
 });

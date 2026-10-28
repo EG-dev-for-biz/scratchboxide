@@ -20,7 +20,12 @@
  *    it reads clearly better; the reading with the best evidence (darker than the wall beside it along its row) chosen;
  * 4. the gate: a band of one storey gets nothing; the chosen reading must beat itself shifted half a pitch on the folds'
  *    hidden parts, summed;
- * 5. strip bays split at the window-column rhythm inside them, when most of the band's bays find it.
+ * 5. strip bays split at the window-column rhythm inside them, when most of the band's bays find it;
+ * 6. the band's lattice completed from its own repeats (completeLattice): a site of its windows' grid inside the lattice is a
+ *    window unless the photo there is the piers' stone, so a lit or dark pane on the grid is not dropped;
+ * 7. a strip's panes from the band's folded unit cell (panesOfUnitCell: its strips of one width folded up the wall at the
+ *    storey pitch and across their width; glass rows by colour, glass columns between the mullions), none where it cannot
+ *    read them; every pane kept only where it reads unlike the stone beside its window (panesUnlikeWall).
  * The windows are photo-inferred. Facades are fitted in parallel, before the lattice reads them (window_fit.json beside the
  * orthos).
  */
@@ -34,7 +39,7 @@ import { compileNativeCached, defaultNativeFlags, NativeBuildError, placeCachedB
 import { findTileRefineRepoRoot } from '../tile-refine-service';
 import { encodePng } from './png-encode';
 
-export const WINDOW_FIT_VERSION = 'window-fit/4';
+export const WINDOW_FIT_VERSION = 'window-fit/6';
 
 export const WINDOW_FIT_PARAMS = {
     /** A cell's darkness above its surround's: the cell is present. */
@@ -75,6 +80,16 @@ export const WINDOW_FIT_PARAMS = {
     minScore: 0.12,
     /** A strip splits into panes when its storey's two colour runs differ by at least this (RGB distance, 0-255) and the glass run is this share of the storey. */
     paneContrast: 18, paneShare: [0.2, 0.8] as [number, number],
+    /**
+     * Lattice completion: the accepted bands' windows grouped into columns and rows (spans overlapping by `overlap` of the
+     * wider); a site of that grid with no window, flanked on one axis (on an axis with at least minAxis groups) and with
+     * a window beside it on the other, is a window unless its look (mean CIELAB and the spread of its lightness) is nearer
+     * the wall just beside it than its column's and row's windows (stone), less than minValid of it has photo, or more than clearShare of it is already a
+     * window.
+     */
+    complete: { overlap: 0.5, minAxis: 3, minValid: 0.5, clearShare: 0.2 },
+    /** A pane is glass only when its mean colour lies at least this far (CIELAB) from the wall beside its window (panesUnlikeWall). */
+    glassDeltaE: 12,
     /** Column pitch search range for the band split's smoothing (m), and the running-mean window it detrends with (m). */
     pitchS: [1.5, 9.0] as [number, number], meanWindowM: 12.0
 };
@@ -98,6 +113,10 @@ export type WindowRect = [number, number, number, number];
 export interface WindowFitBand {
     band: [number, number, number, number]; accepted: boolean; why?: string; grid?: 'facade' | 'band'; kind?: Kind;
     scores?: Record<string, number>; droppedRows?: number; heldOut?: string; margin?: number; subPitch?: string; panes?: string;
+    /** Windows added by the lattice completion (completeLattice), and sites it left as stone. */
+    completed?: number; stone?: number;
+    /** Panes dropped because they read like the stone beside their window (panesUnlikeWall). */
+    panesDropped?: number;
 }
 /**
  * `rects` are the openings (a punched window, or a strip of windows and spandrels storey on storey); `panes` the glass in
@@ -661,6 +680,235 @@ export function panesOfStrip(img: { rgba: ArrayLike<number>; width: number; heig
     return out.length ? out : undefined;
 }
 
+/** sRGB 8-bit to CIELAB (D65). */
+function labOf8(r: number, g: number, b: number): [number, number, number] {
+    const lin = (v: number) => { const c = v / 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+    const R = lin(r), G = lin(g), B = lin(b);
+    const f = (t: number) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+    const x = f((0.4124 * R + 0.3576 * G + 0.1805 * B) / 0.95047), y = f(0.2126 * R + 0.7152 * G + 0.0722 * B), z = f((0.0193 * R + 0.1192 * G + 0.9505 * B) / 1.08883);
+    return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
+}
+
+/**
+ * Spans grouped where they overlap by `overlap` of the wider (so a bay-wide strip never joins the window columns inside it):
+ * each group's median span and its members' indices.
+ */
+function spanGroups(spans: Array<[number, number]>, overlap: number): Array<{ lo: number; hi: number; members: number[] }> {
+    const order = spans.map((_, i) => i).sort((a, b) => spans[a][0] - spans[b][0]);
+    const groups: Array<{ lo: number; hi: number; members: number[] }> = [];
+    for (const i of order) {
+        const [a, b] = spans[i];
+        const g = groups.find(x => Math.min(b, x.hi) - Math.max(a, x.lo) >= overlap * Math.max(b - a, x.hi - x.lo));
+        if (g) g.members.push(i); else groups.push({ lo: a, hi: b, members: [i] });
+        const h = g ?? groups[groups.length - 1];
+        h.lo = median(h.members.map(k => spans[k][0])); h.hi = median(h.members.map(k => spans[k][1]));
+    }
+    return groups.sort((x, y) => x.lo - y.lo);
+}
+
+/**
+ * A region's look over its valid texels, leaving out `skip`'s: its mean colour (CIELAB) and the spread of its lightness (a
+ * window's frame against its glass varies where plain stone stays even), as [L, a, b, sdL]; and its valid share.
+ */
+function regionLook(img: { rgba: ArrayLike<number>; width: number; height: number }, valid: Uint8Array, r: WindowRect, skip?: WindowRect[]): { lab?: number[]; validShare: number } {
+    const W = img.width, m = [0, 0, 0];
+    let n = 0, all = 0, l2 = 0;
+    for (let y = Math.max(0, r[1]); y < Math.min(img.height, r[3]); y++) for (let x = Math.max(0, r[0]); x < Math.min(W, r[2]); x++) {
+        if (skip?.some(q => x >= q[0] && x < q[2] && y >= q[1] && y < q[3])) continue;
+        all++;
+        const k = y * W + x;
+        if (!valid[k]) continue;
+        const l = labOf8(img.rgba[k * 4], img.rgba[k * 4 + 1], img.rgba[k * 4 + 2]);
+        m[0] += l[0]; m[1] += l[1]; m[2] += l[2]; l2 += l[0] * l[0]; n++;
+    }
+    return { lab: n ? [...m.map(v => v / n), Math.sqrt(Math.max(0, l2 / n - (m[0] / n) ** 2))] : undefined, validShare: all ? n / all : 0 };
+}
+
+/**
+ * The panes that read as glass: each pane against the wall just beside its window (left and right of the window, over the
+ * pane's rows, outside every window; else the band's wall outside every window), kept only when its mean colour lies at
+ * least glassDeltaE (CIELAB) from that wall's. A "pane" the colour of the stone around it (a carved panel, a pier the fit
+ * reached across, a smear) is dropped: no glass is better than glass on stone.
+ */
+export function panesUnlikeWall(img: { rgba: ArrayLike<number>; width: number; height: number }, valid: Uint8Array, panes: WindowRect[], windows: WindowRect[], band: Band, P: WindowFitParams = WINDOW_FIT_PARAMS): { panes: WindowRect[]; dropped: number } {
+    if (!panes.length) return { panes, dropped: 0 };
+    const bandWall = regionLook(img, valid, [band[0], band[2], band[1], band[3]], windows).lab;
+    const keep: WindowRect[] = [];
+    for (const p of panes) {
+        const w = windows.find(q => p[0] >= q[0] - 1 && p[2] <= q[2] + 1 && p[1] >= q[1] - 1 && p[3] <= q[3] + 1) ?? p;
+        const sw = Math.max(2, Math.round((w[2] - w[0]) * 0.3));
+        const sides = [regionLook(img, valid, [w[0] - sw, p[1], w[0], p[3]], windows), regionLook(img, valid, [w[2], p[1], w[2] + sw, p[3]], windows)].filter(x => x.lab && x.validShare > 0.3).map(x => x.lab!);
+        const wall = sides.length ? [0, 1, 2].map(j => sides.reduce((t, l) => t + l[j], 0) / sides.length) : bandWall;
+        const look = regionLook(img, valid, p).lab;
+        if (!look || !wall) continue;
+        if (Math.hypot(look[0] - wall[0], look[1] - wall[1], look[2] - wall[2]) >= P.glassDeltaE) keep.push(p);
+    }
+    return { panes: keep, dropped: panes.length - keep.length };
+}
+
+/**
+ * An accepted band's window lattice completed from the facade's repeats (WINDOW_FIT_PARAMS.complete): the columns and rows
+ * of `grid` (every accepted band's windows, so a column runs on across the bands' edges) are the lattice; a site of this
+ * band with no window, flanked on one axis (windows on both sides of it, on an axis with at least minAxis of them) and with
+ * a window beside it on the other, becomes a window unless its colour is nearer the wall beside it than its column's and
+ * row's windows (the photo shows stone there). A window
+ * that reads lighter than its piers (glass mirroring the sky) or dark at random (blinds, an open sash) still sits on the
+ * grid. Photo-inferred.
+ */
+export function completeLattice(img: { rgba: ArrayLike<number>; width: number; height: number }, valid: Uint8Array, rects: WindowRect[], band: Band, P: WindowFitParams = WINDOW_FIT_PARAMS, grid: WindowRect[] = rects): { rects: WindowRect[]; added: number; stone: number } {
+    const C = P.complete;
+    if (grid.length < 4) return { rects, added: 0, stone: 0 };
+    const cols = spanGroups(grid.map(r => [r[0], r[2]]), C.overlap), rows = spanGroups(grid.map(r => [r[1], r[3]]), C.overlap);
+    if (cols.length < C.minAxis && rows.length < C.minAxis) return { rects, added: 0, stone: 0 };
+    const colOf = new Int32Array(grid.length), rowOf = new Int32Array(grid.length);
+    cols.forEach((g, ci) => g.members.forEach(k => { colOf[k] = ci; }));
+    rows.forEach((g, ri) => g.members.forEach(k => { rowOf[k] = ri; }));
+    const has = new Uint8Array(cols.length * rows.length);
+    grid.forEach((_, k) => { has[rowOf[k] * cols.length + colOf[k]] = 1; });
+    const meanLab = (r: WindowRect, skip?: WindowRect[]) => regionLook(img, valid, r, skip);
+    const dist = (p: number[], q: number[]) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2], p[3] - q[3]);
+    // each grid window's colour, for the windows of a site's column and row
+    const winLab = grid.map(r => meanLab(r).lab);
+    const out = [...rects];
+    let added = 0, stone = 0;
+    for (let ri = 0; ri < rows.length; ri++) for (let ci = 0; ci < cols.length; ci++) {
+        if (has[ri * cols.length + ci]) continue;
+        const r: WindowRect = [Math.round(cols[ci].lo), Math.round(rows[ri].lo), Math.round(cols[ci].hi), Math.round(rows[ri].hi)];
+        // only this band's sites, and only where no window already stands (a strip's column and the window columns inside it
+        // are groups of their own)
+        const cx = (r[0] + r[2]) / 2, cy = (r[1] + r[3]) / 2;
+        if (cx < band[0] || cx >= band[1] || cy < band[2] || cy >= band[3]) continue;
+        const area = (r[2] - r[0]) * (r[3] - r[1]);
+        const covered = (q: WindowRect) => Math.max(0, Math.min(q[2], r[2]) - Math.max(q[0], r[0])) * Math.max(0, Math.min(q[3], r[3]) - Math.max(q[1], r[1]));
+        if (!(area > 0) || grid.some(q => covered(q) > C.clearShare * area) || out.some(q => covered(q) > C.clearShare * area)) continue;
+        let left = false, right = false, above = false, below = false;
+        for (let c2 = 0; c2 < cols.length; c2++) if (has[ri * cols.length + c2]) { if (c2 < ci) left = true; else right = true; }
+        for (let r2 = 0; r2 < rows.length; r2++) if (has[r2 * cols.length + ci]) { if (r2 < ri) above = true; else below = true; }
+        // flanked on one axis (on an axis with enough of them), and a window beside it on the other
+        const flankedRow = cols.length >= C.minAxis && left && right, flankedCol = rows.length >= C.minAxis && above && below;
+        if (!((flankedRow && (above || below || rows.length < C.minAxis)) || (flankedCol && (left || right || cols.length < C.minAxis)))) continue;
+        // the site against its column's and row's windows and the wall just beside it (left and right, outside every window):
+        // a window when it reads nearer the windows, stone when nearer the wall
+        const site = meanLab(r);
+        if (!site.lab || site.validShare < C.minValid) continue;
+        const peers = grid.map((_, k) => k).filter(k => (colOf[k] === ci || rowOf[k] === ri) && winLab[k]).map(k => winLab[k]!);
+        if (!peers.length) continue;
+        const peer = [0, 1, 2, 3].map(j => peers.reduce((t, l) => t + l[j], 0) / peers.length);
+        const sw = Math.max(2, Math.round((r[2] - r[0]) * 0.4));
+        const side = meanLab([r[0] - sw, r[1], r[0], r[3]], grid).lab, side2 = meanLab([r[2], r[1], r[2] + sw, r[3]], grid).lab;
+        const walls = [side, side2].filter((v): v is number[] => !!v);
+        const wall = walls.length ? [0, 1, 2, 3].map(j => walls.reduce((t, l) => t + l[j], 0) / walls.length) : undefined;
+        if (wall && dist(site.lab, wall) <= dist(site.lab, peer)) { stone++; continue; }
+        out.push(r); added++;
+    }
+    return { rects: out.sort(cmpRect), added, stone };
+}
+
+/** The fold's two colours (2-means from its darkest and lightest bins) and the glass side: the bluer, the lighter on a tie. */
+function glassSplit(fold: number[][], P: WindowFitParams): { side: number[]; glass: number[]; other: number[] } | undefined {
+    const lum = (c: number[]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    let A = fold.reduce((m, c) => (lum(c) < lum(m) ? c : m)), B = fold.reduce((m, c) => (lum(c) > lum(m) ? c : m));
+    let side = fold.map(() => 0);
+    for (let it = 0; it < 10; it++) {
+        side = fold.map(c => (Math.hypot(c[0] - A[0], c[1] - A[1], c[2] - A[2]) <= Math.hypot(c[0] - B[0], c[1] - B[1], c[2] - B[2]) ? 0 : 1));
+        const mean = (sd: number) => { const m = [0, 0, 0]; let n = 0; fold.forEach((c, i) => { if (side[i] === sd) { for (let k = 0; k < 3; k++) m[k] += c[k]; n++; } }); return n ? m.map(v => v / n) : undefined; };
+        const a = mean(0), b = mean(1);
+        if (!a || !b) return undefined;
+        A = a; B = b;
+    }
+    if (Math.hypot(A[0] - B[0], A[1] - B[1], A[2] - B[2]) < P.paneContrast) return undefined;
+    const blue = (c: number[]) => c[2] / Math.max(1, c[0] + c[1] + c[2]);
+    const g = Math.abs(blue(A) - blue(B)) > 0.01 ? (blue(A) > blue(B) ? 0 : 1) : lum(A) > lum(B) ? 0 : 1;
+    return { side: side.map(v => (v === g ? 1 : 0)), glass: g === 0 ? A : B, other: g === 0 ? B : A };
+}
+
+/**
+ * A band's strips' panes from their folded unit cell: the strips of one width (within 15%) folded together, up the wall at
+ * the storey pitch (phase from the band's top, so every bay's storeys line up) and across at their width (each column a
+ * share of its strip). The glass rows: the fold's rows split in two by colour (glassSplit), the one run of glass round the
+ * storey (two or more runs, glass and a panel of a like colour, cannot be told apart: that group gets no panes). Across those rows the glass columns: the bins nearer the glass colour than the other, in runs (a mullion or a
+ * jamb between them is frame). Every strip of the group takes those panes, storey by storey; a group the fold cannot read
+ * leaves its strips undefined. Photo-inferred.
+ */
+export function panesOfUnitCell(img: { rgba: ArrayLike<number>; width: number; height: number }, valid: Uint8Array, strips: WindowRect[], band: Band, pitchPx: number, P: WindowFitParams = WINDOW_FIT_PARAMS): { perStrip: Array<WindowRect[] | undefined>; groups: number } {
+    const perStrip: Array<WindowRect[] | undefined> = strips.map(() => undefined);
+    if (!(pitchPx >= 6)) return { perStrip, groups: 0 };
+    const W = img.width, nT = Math.max(6, Math.round(pitchPx)), y0 = band[2];
+    // strips of one width
+    const groups: number[][] = [];
+    strips.map((r, i) => i).sort((a, b) => (strips[a][2] - strips[a][0]) - (strips[b][2] - strips[b][0])).forEach(i => {
+        const w = strips[i][2] - strips[i][0], g = groups.find(x => Math.abs(w / (strips[x[0]][2] - strips[x[0]][0]) - 1) <= 0.15);
+        if (g) g.push(i); else groups.push([i]);
+    });
+    let read = 0;
+    for (const g of groups) {
+        const nS = Math.min(64, Math.max(6, Math.round(median(g.map(i => strips[i][2] - strips[i][0])))));
+        const sum = Array.from({ length: nT * nS }, () => [0, 0, 0, 0]);
+        for (const i of g) {
+            const [xa, ya, xb, yb] = strips[i];
+            if (yb - ya < 1.6 * pitchPx || xb - xa < 3) continue;
+            for (let y = ya; y < yb; y++) {
+                const bt = Math.min(nT - 1, Math.floor(((((y - y0) % pitchPx) + pitchPx) % pitchPx) / pitchPx * nT));
+                for (let x = xa; x < xb; x++) {
+                    const k = y * W + x;
+                    if (!valid[k]) continue;
+                    const bs = Math.min(nS - 1, Math.floor(((x - xa) / (xb - xa)) * nS)), cell = sum[bt * nS + bs];
+                    for (let c = 0; c < 3; c++) cell[c] += img.rgba[k * 4 + c];
+                    cell[3]++;
+                }
+            }
+        }
+        // the rows over the middle 60% of the width
+        const rowsFold: number[][] = [];
+        for (let t = 0; t < nT; t++) {
+            const m = [0, 0, 0, 0];
+            for (let b = Math.floor(nS * 0.2); b < Math.ceil(nS * 0.8); b++) for (let c = 0; c < 4; c++) m[c] += sum[t * nS + b][c];
+            if (!m[3]) break;
+            rowsFold.push([m[0] / m[3], m[1] / m[3], m[2] / m[3]]);
+        }
+        if (rowsFold.length < nT) continue;
+        const split = glassSplit(rowsFold, P);
+        if (!split) continue;
+        const share = split.side.reduce((a, b) => a + b, 0) / nT;
+        if (share < P.paneShare[0] || share > P.paneShare[1]) continue;
+        // the glass run round the storey; two or more (glass and a panel of a like colour) cannot be told apart: no panes
+        let best: [number, number] = [0, 0], runs = 0;
+        for (let i = 0; i < nT; i++) {
+            if (!split.side[i] || split.side[(i - 1 + nT) % nT]) continue;
+            let n = 0; while (n < nT && split.side[(i + n) % nT]) n++;
+            if (n >= 2) runs++;
+            if (n > best[1]) best = [i, n];
+        }
+        if (!best[1] || runs > 1) continue;
+        // across the glass rows: each bin nearer the glass colour than the other is glass
+        const glassCols: Array<[number, number]> = [];
+        let run = -1;
+        for (let b = 0; b <= nS; b++) {
+            let isGlass = false;
+            if (b < nS) {
+                const m = [0, 0, 0, 0];
+                for (let t = 0; t < best[1]; t++) for (let c = 0; c < 4; c++) m[c] += sum[((best[0] + t) % nT) * nS + b][c];
+                if (m[3]) { const col = [m[0] / m[3], m[1] / m[3], m[2] / m[3]], d = (q: number[]) => Math.hypot(col[0] - q[0], col[1] - q[1], col[2] - q[2]); isGlass = d(split.glass) <= d(split.other); }
+            }
+            if (isGlass && run < 0) run = b;
+            if (!isGlass && run >= 0) { if (b - run >= 2) glassCols.push([run, b]); run = -1; }
+        }
+        if (!glassCols.length) continue;
+        read++;
+        for (const i of g) {
+            const [xa, ya, xb, yb] = strips[i], out: WindowRect[] = [];
+            const kFirst = Math.floor((ya - y0) / pitchPx) - 1;
+            for (let k = kFirst; y0 + k * pitchPx < yb; k++) {
+                const ty0 = Math.max(ya, Math.round(y0 + k * pitchPx + (best[0] / nT) * pitchPx)), ty1 = Math.min(yb, Math.round(y0 + k * pitchPx + ((best[0] + best[1]) / nT) * pitchPx));
+                if (ty1 - ty0 < 2) continue;
+                for (const [a, b] of glassCols) out.push([Math.round(xa + (a / nS) * (xb - xa)), ty0, Math.round(xa + (b / nS) * (xb - xa)), ty1]);
+            }
+            if (out.length) perStrip[i] = out;
+        }
+    }
+    return { perStrip, groups: read };
+}
+
 // ------------------------------------------------------------------------------------------------ the fit
 
 /** IoU of a rect set's mask (all inside `band`) against `ref`, counted where `where` holds within the band (`shift` rolls the set). */
@@ -722,6 +970,7 @@ export async function fitFacadeWindows(img: { rgba: ArrayLike<number>; width: nu
         return refineStrips(c, rephaseColumns(c, stripsLayout(c, g, band, kind.startsWith('nested')), band), band, ptPx);
     };
     const rects: WindowRect[] = [], panes: WindowRect[] = [], report: WindowFitBand[] = [];
+    const accepted: Array<{ band: Band; kind: Kind; chosen: WindowRect[]; g: ReliefGrid; info: WindowFitBand }> = [];
     for (let bi = 0; bi < bands.length; bi++) {
         const band = bands[bi], own = grids[bi];
         const inBand = (k: number) => !!valid[k];
@@ -774,15 +1023,32 @@ export async function fitFacadeWindows(img: { rgba: ArrayLike<number>; width: nu
         info.accepted = Math.max(...Object.values(sc)) > P.minScore && judged >= 2 && margin > 0;
         if (!info.accepted) { info.why = 'held-out folds'; continue; }
         if (kind.endsWith('strips')) { const s = splitBays(c, chosen); chosen = s.rects; info.subPitch = `${s.found}/${s.bays}`; }
+        accepted.push({ band, kind, chosen, g, info });
+    }
+    // the lattice completed from the facade's repeats (every accepted band's windows the grid): a site inside it is a window
+    // unless the photo shows stone
+    const grid = accepted.flatMap(a => a.chosen);
+    for (const { band, kind, g, info, chosen: own } of accepted) {
+        const done = completeLattice(img, valid, own, band, P, grid);
+        const chosen = done.rects;
+        info.completed = done.added; info.stone = done.stone;
         rects.push(...chosen);
-        // the glass in them: a punched window is its own pane; a strip (window over spandrel, storey on storey) is split at its
-        // storey pitch into its panes and spandrels by their colours
-        if (!kind.endsWith('strips')) panes.push(...chosen);
+        // the glass in them: a punched window is its own pane; a band's strips (window over spandrel, storey on storey) take
+        // their panes from their folded unit cell, a strip the fold could not read from its own colours
+        // the glass in them, kept only where it reads unlike the stone beside it (no glass is better than glass on stone): a
+        // punched window is its own pane; a band's strips (window over spandrel, storey on storey) take their panes from
+        // their folded unit cell, a strip it cannot read none (its colours alone drew panes across the mullions)
+        let cand: WindowRect[] = [];
+        if (!kind.endsWith('strips')) cand = chosen;
         else {
-            let split = 0;
-            for (const r of chosen) { const ps = panesOfStrip(img, valid, r, g.periodT.found ? g.periodT.pitch / px : 0, P); if (ps) { panes.push(...ps); split++; } }
-            info.panes = `${split}/${chosen.length}`;
+            const pitchPx = g.periodT.found ? g.periodT.pitch / px : 0;
+            const unit = panesOfUnitCell(img, valid, chosen, band, pitchPx, P);
+            cand = unit.perStrip.flatMap(ps => ps ?? []);
+            info.panes = `${unit.perStrip.filter(Boolean).length}/${chosen.length} strips (${unit.groups} unit cells)`;
         }
+        const glass = panesUnlikeWall(img, valid, cand, [...grid, ...chosen], band, P);
+        panes.push(...glass.panes);
+        info.panesDropped = glass.dropped;
     }
     return { rects: joinAcrossBands(rects, bands), panes, bands: report };
 }
