@@ -237,6 +237,13 @@ describe('pipeline K material regions', () => {
         expect(at(m.orm, 24, 15)[1]).toBe(Math.round(GLASS_ROUGHNESS * 255));
         expect(at(m.orm, 24, 35)[1]).toBe(roughnessOf(frame));
         expect(f.bays).toBe(4);
+        // the glass fades in from the bay's edge (x 15): weaker at its first texel than inside, never zero
+        const gEdge = at(m.params, 15, 120)[0], gIn = at(m.params, 20, 120)[0];
+        expect(gEdge).toBeGreaterThan(0);
+        expect(gEdge).toBeLessThan(gIn);
+        expect(at(m.orm, 15, 120)[1]).toBeGreaterThan(at(m.orm, 20, 120)[1]);
+        // each storey of a bay its own tilt seed (the facade's storey pitch from its windows: here one window, so one seed per bay)
+        expect(at(m.params, 20, 120)[3]).toBeLessThan(255);
         expect(plan.report.baysOnStone).toBe(0);
         // a "bay" drawn over a pier (mostly the wall's class) is no glass bay: only its window's panes would be
         const gp = parseGlbBytes(scene([{ ...quads[0], extras: { sbFacadeLattice: { facadeId: 1, structure: { uv: runs, bays: [1 / W, 1 / 6, 14 / W, 1], reliefM: 0.18, reliefFrom: 'measured', reason: 'test', chamferM: 0.05, label: 'photo-inferred' } } } }], [photo]));
@@ -259,6 +266,23 @@ describe('pipeline K material regions', () => {
         expect(at(m.params, 24, 15)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
         expect(at(m.params, 7, 55)[0]).toBe(0);
         expect(plan.report.panesOnStone).toBe(1);
+    });
+
+    it("tilts a glass bay storey by storey, at the storey pitch of the facade's own windows", () => {
+        // a bay x 15-50 with four fitted windows one above another every 35 texels (3.5 m)
+        const photo = piered(), W = photo.width, H = photo.height;
+        const win = [8, 43, 78, 113].flatMap(y => [19 / W, y / H, 29 / W, (y + 18) / H]);
+        const runs = [0, 50, 100, 150].flatMap(x => [x / W, 0, (x + 15) / W, 1]);
+        const quads: Quad[] = [{ mesh: 'facade_lattice_1', corners: wall(0, 20, 30), uv: FULL_UV, material: 0, extras: { sbFacadeLattice: { facadeId: 1, windows: { uv: win, label: 'photo-inferred', source: 'test' }, structure: { uv: runs, bays: [15 / W, 0, 50 / W, 1], reliefM: 0.18, reliefFrom: 'measured', reason: 'test', chamferM: 0.05, label: 'photo-inferred' } } } }];
+        const g = parseGlbBytes(scene(quads, [photo]));
+        const b = building(), bg = parseGlbBytes(b.glb);
+        const classes = readRegionClasses(bg.json, imagesOf(b.photos))!;
+        const m = planMaterialRegions(g, g.json, imagesOf([photo]), classes, sets(classes)).materials[0];
+        const seed = (y: number) => at(m.params, 32, y)[3];
+        // within a storey one seed; the next storey another
+        expect(seed(12)).toBe(seed(20));
+        expect(seed(50)).not.toBe(seed(15));
+        expect(seed(85)).not.toBe(seed(50));
     });
 
     it('keeps the photo as the base colour everywhere, panes included', () => {
