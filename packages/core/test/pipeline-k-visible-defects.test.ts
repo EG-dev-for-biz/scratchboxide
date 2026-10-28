@@ -18,8 +18,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { DEFECT, measureVisibleDefects, VISIBLE_DEFECTS_PARAMS } from '../src/node/3d-engine/staged-location/pipeline-k/visible-defects';
-import { assembleGlb } from '../src/node/3d-engine/staged-location/glb-bytes';
+import { DEFECT, embeddedImageSize, measureVisibleDefects, smearedMapping, VISIBLE_DEFECTS_PARAMS } from '../src/node/3d-engine/staged-location/pipeline-k/visible-defects';
+import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
+import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 
 type V = [number, number, number];
 
@@ -45,8 +46,11 @@ const cube = (hole?: (i: number, j: number) => boolean): V[] => [
     ...grid([0, 0, 0], [1, 0, 0], [0, 0, 1])           // bottom, -y
 ];
 
+/** Texture coordinates with width on every face of the cube (no face edge-on to the map). */
+const planarUv = (pts: V[]) => Float32Array.from(pts.flatMap(([x, y, z]) => [x + z, y + 0.5 * z]));
+
 /** "Building" (textured, single-sided), "Seal" (untextured, double-sided like the seal's fill) and "Inner" (textured, double-sided). */
-function glb(building: V[], seal: V[], inner: V[] = []): Buffer {
+function glb(building: V[], seal: V[], inner: V[] = [], smearBuilding = false): Buffer {
     const chunks: Buffer[] = [], views: any[] = [], accessors: any[] = [];
     let len = 0;
     const add = (data: Float32Array, type: 'VEC3' | 'VEC2', n: number) => {
@@ -55,10 +59,10 @@ function glb(building: V[], seal: V[], inner: V[] = []): Buffer {
         accessors.push({ bufferView: views.length - 1, componentType: 5126, count: n, type });
         return accessors.length - 1;
     };
-    const meshes: any[] = [{ primitives: [{ attributes: { POSITION: add(Float32Array.from(building.flat()), 'VEC3', building.length), TEXCOORD_0: add(new Float32Array(building.length * 2), 'VEC2', building.length) }, material: 0 }] }];
+    const meshes: any[] = [{ primitives: [{ attributes: { POSITION: add(Float32Array.from(building.flat()), 'VEC3', building.length), TEXCOORD_0: add(smearBuilding ? Float32Array.from(building.flatMap(([, y]) => [0.5, y])) : planarUv(building), 'VEC2', building.length) }, material: 0 }] }];
     const nodes: any[] = [{ name: 'Building', mesh: 0 }];
     if (seal.length) { meshes.push({ primitives: [{ attributes: { POSITION: add(Float32Array.from(seal.flat()), 'VEC3', seal.length) }, material: 1 }] }); nodes.push({ name: 'Seal', mesh: 1 }); }
-    if (inner.length) { meshes.push({ primitives: [{ attributes: { POSITION: add(Float32Array.from(inner.flat()), 'VEC3', inner.length), TEXCOORD_0: add(new Float32Array(inner.length * 2), 'VEC2', inner.length) }, material: 2 }] }); nodes.push({ name: 'Inner', mesh: meshes.length - 1 }); }
+    if (inner.length) { meshes.push({ primitives: [{ attributes: { POSITION: add(Float32Array.from(inner.flat()), 'VEC3', inner.length), TEXCOORD_0: add(planarUv(inner), 'VEC2', inner.length) }, material: 2 }] }); nodes.push({ name: 'Inner', mesh: meshes.length - 1 }); }
     const json = {
         asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: nodes.map((_, i) => i) }], nodes, meshes,
         materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }, { name: 'Seal', doubleSided: true, pbrMetallicRoughness: { baseColorFactor: [0.55, 0.53, 0.5, 1] } }, { doubleSided: true, pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }],
@@ -149,5 +153,27 @@ describe('pipeline K outside check: holes', () => {
         const r = measureVisibleDefects(glb(cube(), []), P);
         expect(r.clay + r.inside + r.seeThrough).toBe(0);
         expect(r.flagged).toBe(false);
+    });
+
+    it('a textured face mapped from one column of texels (its texture edge-on) counts as smeared clay; a mapped one does not', () => {
+        expect(smearedMapping([0, 0, 0, 1, 0, 0, 0, 1, 0], [0.5, 0, 0.5, 0, 0.5, 1], 0.05)).toBe(true);
+        expect(smearedMapping([0, 0, 0, 1, 0, 0, 0, 1, 0], [0, 0, 1, 0, 0, 1], 0.05)).toBe(false);
+        const r = measureVisibleDefects(glb(cube(), [], [], true), P);
+        // every drawn pixel (the outline's few back-face ties aside)
+        expect(r.smearShare).toBeGreaterThan(0.99);
+        expect(r.clay).toBeGreaterThanOrEqual(r.smear);
+        expect(r.byNode.smear.Building).toBe(r.smear);
+        expect(r.flagged).toBe(true);
+        expect(measureVisibleDefects(glb(cube(), []), P).smear).toBe(0);
+    });
+
+    it("judges the mapping in texels: a long thin facade on a long thin photo (76 x 3.5 m on 988 x 45 px) is not a smear", () => {
+        // the ESB's ground band: u per metre 1/76, v per metre 1/3.5; in uv units that is 20:1, in texels 13 px/m both ways
+        const p = [0, 0, 0, 76, 0, 0, 0, 3.5, 0], uv = [0, 0, 1, 0, 0, 1];
+        expect(smearedMapping(p, uv, 0.05)).toBe(true);
+        expect(smearedMapping(p, [0, 0, 988, 0, 0, 45], 0.05)).toBe(false);
+        const png = encodePng(988, 45, new Uint8Array(988 * 45 * 4), 4);
+        const glbBytes = assembleGlb({ asset: { version: '2.0' }, images: [{ bufferView: 0, mimeType: 'image/png' }], bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: png.length }], buffers: [{ byteLength: png.length }] }, png);
+        expect(embeddedImageSize(parseGlbBytes(glbBytes), 0)).toEqual({ width: 988, height: 45 });
     });
 });
