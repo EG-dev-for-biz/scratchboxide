@@ -74,4 +74,23 @@ describe('the wall grammar', () => {
         expect(Math.abs(cell(5.5, 4))).toBeLessThan(0.01);
         expect(r.structure!.reliefFrom).toBe('generated');
     });
+
+    it("splits a run of bay columns at a pier the window fit read across, and not at a light patch inside one bay", () => {
+        // bays 4 m wide every 6 m (piers 2 m); between the bays at u 13-17 and 19-23 the fit's windows bleed over the pier (u 17-19),
+        // which the photo shows light; inside the bay at u 7-11 a light patch 0.6 m wide (a reflection)
+        const cellM = 0.1, nu = 300, ny = 200;
+        const covered = new Uint8Array(nu * ny).fill(1), window = new Uint8Array(nu * ny), lum = new Float32Array(nu * ny);
+        for (let y = 0; y < ny; y++) for (let x = 0; x < nu; x++) {
+            const u = x * cellM, k = y * nu + x, inBay = u % 6 >= 1 && u % 6 < 5;
+            const bleed = u >= 17 && u < 19, patch = u >= 8.7 && u < 9.3;
+            lum[k] = inBay && !patch ? 60 : 190;
+            if (inBay || bleed) window[k] = 1;
+        }
+        const { bays } = readWallBays({ u0: 0, y0: 0, nu, ny, cellM, covered, window, lum });
+        const cols = [...new Set(bays.map(b => `${Math.round(b.u0)}-${Math.round(b.u1)}`))];
+        expect(cols).toContain('13-17');
+        expect(cols).toContain('19-23');
+        expect(cols).toContain('7-11');
+        expect(bays.every(b => b.u1 - b.u0 < 6)).toBe(true);
+    });
 });

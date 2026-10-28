@@ -16,7 +16,9 @@
  * 2. the wall's evidence: every facade's photo laid on the wall at cellM, each cell covered (the photo reached it) and a
  *    window (inside one of the window fit's windows on that facade);
  * 3. its columns: a column is a bay where windows hold at least voteMin of its covered cells; runs of bay columns joined
- *    across mullions (gaps under mullionMaxM), kept from minBayM wide; columns the photo barely reached (under
+ *    across mullions (gaps under mullionMaxM) and split again where a light stretch as wide as the wall's own piers
+ *    (pierShare of their median width) crosses the run, leaving both pieces at least pierShare of its median bay wide,
+ *    kept from minBayM wide; columns the photo barely reached (under
  *    minCoverage) are unknown, and an unknown span continues the wall's own bay rhythm (median pitch and width) where it
  *    has at least two bays (generated);
  * 4. each bay's height, from the photos themselves (one facade's window fit may miss what another's photo shows): a row of
@@ -36,7 +38,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { WindowFitFile, WindowRect } from './window-fit';
 
-export const WALL_GRAMMAR_VERSION = 'wall-grammar/1';
+export const WALL_GRAMMAR_VERSION = 'wall-grammar/2';
 
 export const WALL_GRAMMAR_PARAMS = {
     /** One wall: normals within this cosine, planes within this (m), extents overlapping or within joinGapM (m). */
@@ -45,8 +47,8 @@ export const WALL_GRAMMAR_PARAMS = {
     cellM: 0.1,
     /** A column is a bay where windows hold at least this share of its covered cells; unknown under minCoverage covered. */
     voteMin: 0.15, minCoverage: 0.1,
-    /** Bay columns joined across gaps under this (m: a mullion; a pier is wider), and kept from this wide (m). */
-    mullionMaxM: 0.7, minBayM: 0.8,
+    /** Bay columns joined across gaps under this (m: a mullion; a pier is wider), and kept from this wide (m); a joined run is split again at a light stretch at least pierShare of the wall's median pier wide. */
+    mullionMaxM: 0.7, minBayM: 0.8, pierShare: 0.6,
     /** A bay's rows joined across wall rows up to maxGapM (m), kept from minRunM tall (m). */
     maxGapM: 2.5, minRunM: 5.0,
     /** Tiers: walls whose tops and bottoms lie within this (m). A wall covered under readCoverage borrows from its tier's best-read wall within widthTol of its width. */
@@ -123,19 +125,7 @@ export function readWallBays(e: WallEvidence, P: WallGrammarParams = WALL_GRAMMA
         for (let y = 0; y < ny; y++) { const k = y * nu + x; if (e.covered[k]) { cov++; if (e.window[k]) win++; } }
         state[x] = cov < P.minCoverage * ny ? -1 : win >= P.voteMin * cov ? 1 : 0;
     }
-    // bay runs across mullions
-    const runs: Array<[number, number]> = [];
-    for (let x = 0; x < nu;) {
-        if (state[x] !== 1) { x++; continue; }
-        let end = x; while (end < nu && state[end] === 1) end++;
-        const last = runs[runs.length - 1];
-        if (last && (x - last[1]) * cellM < P.mullionMaxM && state.subarray(last[1], x).every(v => v === 0 || v === 1)) last[1] = end; else runs.push([x, end]);
-        x = end;
-    }
-    const cols = runs.filter(([a, b]) => (b - a) * cellM >= P.minBayM);
-    // each bay's rows, from the photos themselves: a row is bay where it is darker than the midpoint between the wall's piers
-    // and its bays (both read from the columns above, so a shaded wall is judged by its own light), wall where lighter (a
-    // band), unknown where the photo did not reach
+    // the wall's piers and bays in its own light (each from the columns' states), the midpoint between them telling bay from wall
     // the median luminance of a column state's cells, by a 256-bin histogram (a wall holds millions of cells)
     const colLum = (want: number) => {
         const h = new Float64Array(256);
@@ -147,6 +137,35 @@ export function readWallBays(e: WallEvidence, P: WallGrammarParams = WALL_GRAMMA
         return 255;
     };
     const pierLum = colLum(0), bayLum = colLum(1), mid = (pierLum + bayLum) / 2;
+    // bay runs across mullions
+    const runs: Array<[number, number]> = [];
+    for (let x = 0; x < nu;) {
+        if (state[x] !== 1) { x++; continue; }
+        let end = x; while (end < nu && state[end] === 1) end++;
+        const last = runs[runs.length - 1];
+        if (last && (x - last[1]) * cellM < P.mullionMaxM && state.subarray(last[1], x).every(v => v === 0 || v === 1)) last[1] = end; else runs.push([x, end]);
+        x = end;
+    }
+    // a run of bay columns crossed by a light stretch as wide as the wall's own piers (pierShare of their median width) is
+    // two bays, not one: the window fit's columns joined across a pier it read as a mullion
+    const colL = Float64Array.from({ length: nu }, (_, x) => { let sum = 0, n = 0; for (let y = 0; y < ny; y++) { const l = e.lum[y * nu + x]; if (Number.isFinite(l)) { sum += l; n++; } } return n ? sum / n : NaN; });
+    const piers: number[] = [];
+    for (let i = 1; i < runs.length; i++) if (state.subarray(runs[i - 1][1], runs[i][0]).every(v => v === 0)) piers.push(runs[i][0] - runs[i - 1][1]);
+    const pierCells = piers.length ? Math.max(2, Math.round(P.pierShare * median(piers))) : Infinity;
+    // ...and both pieces at least pierShare of the wall's median bay wide (a light patch inside one bay is no pier)
+    const bayCells = median(runs.map(([a, b]) => b - a)) * P.pierShare;
+    const split: Array<[number, number]> = [];
+    for (const [a, b] of runs) {
+        let start = a;
+        for (let x = a; x < b;) {
+            if (!(colL[x] > mid)) { x++; continue; }
+            let end = x; while (end < b && colL[end] > mid) end++;
+            if (end - x >= pierCells && x - start >= bayCells && b - end >= bayCells) { split.push([start, x]); start = end; }
+            x = end;
+        }
+        if (b > start) split.push([start, b]);
+    }
+    const cols = split.filter(([a, b]) => (b - a) * cellM >= P.minBayM);
     const rowRuns = (a: number, b: number): Array<[number, number]> => {
         const row = new Int8Array(ny); // 1 bay row, 0 wall row, -1 unknown
         for (let y = 0; y < ny; y++) {
