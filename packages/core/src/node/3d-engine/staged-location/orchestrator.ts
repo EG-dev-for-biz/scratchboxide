@@ -90,6 +90,7 @@ import { remeshCleanupEnabled } from './remesh-cleanup';
 import { remeshOrientEnabled } from './remesh-orient';
 import { fittedPlanesOf, fittedWindowRects, fitWindowsForOrthos, WINDOW_FIT_FILE, WINDOW_FIT_VERSION, type WindowFitFile } from './window-fit';
 import { readWallGrammar, WALL_GRAMMAR_FILE, WALL_GRAMMAR_VERSION } from './wall-grammar';
+import { buildWallSheets, WALL_SHEETS_VERSION } from './wall-sheets';
 import { decodePng as decodePngForGrammar } from '../../texture-processing';
 import { weldTilesGlb, WELD_TILES_VERSION } from './weld-tiles';
 import { measureRevealDepth, REVEAL_DEPTH_VERSION, type RevealFacade, type RevealView } from './reveal-depth';
@@ -3426,7 +3427,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     }
                 }
                 // pipeline K: the facade orthos straightened and their smears levelled before the facades are rebuilt on them
-                let orthosKey: string | undefined, windowFit: string | undefined, wallGrammar: string | undefined, revealDepth: string | undefined, surveyViews: RevealView[] | undefined;
+                let orthosKey: string | undefined, windowFit: string | undefined, wallGrammar: string | undefined, wallSheets: string | undefined, revealDepth: string | undefined, surveyViews: RevealView[] | undefined;
                 if (pipelineK) {
                     if (!r.reliefOrthosDir) run.note(PROVENANCE.remeshed, 'pipeline K: tile_refine wrote no facade orthophotos, so no facade could be straightened; the remesh stands as cleaned');
                     else {
@@ -3451,6 +3452,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                     wallGrammar = wg.file;
                                     const bays = wg.grammar.walls.flatMap(w => w.bays);
                                     cache.writeRunNote(runId, 'pipeline_k_wall_grammar', { version: WALL_GRAMMAR_VERSION, walls: wg.grammar.walls.length, multiFacadeWalls: wg.grammar.walls.filter(w => w.facades.length > 1).length, tiers: new Set(wg.grammar.walls.map(w => w.tier)).size, baysRead: bays.filter(b => b.from === 'photo-inferred').length, baysGenerated: bays.filter(b => b.from === 'generated').length });
+                                    // one sheet per multi-facade wall, rebuilt in place of its facades (on unless SCRATCHBOX_K_WHOLE_WALLS=0)
+                                    if (stepOn('remesh.wallSheets', process.env.SCRATCHBOX_K_WHOLE_WALLS?.trim() !== '0')) {
+                                        const ws = await timed('wallSheets', async () => buildWallSheets(k.orthosDir, wg.grammar, wf.fit, b => { const d = decodePngForGrammar(b); return { rgba: d.rgba, width: d.width, height: d.height }; }));
+                                        wallSheets = ws.file;
+                                        cache.writeRunNote(runId, 'pipeline_k_wall_sheets', { version: WALL_SHEETS_VERSION, sheets: ws.sheets.map(sh => ({ wallId: sh.wallId, members: sh.members, sizeM: [Math.round(sh.facade.sMax - sh.facade.sMin), Math.round(sh.facade.tMax - sh.facade.tMin)], filledShare: sh.facade.textureFill?.share, windows: sh.windows.length, bays: sh.bays.length })) });
+                                        run.note(PROVENANCE.photoInferred, `whole walls (${WALL_SHEETS_VERSION}): ${ws.sheets.length} walls rebuilt as one sheet each from ${ws.sheets.reduce((a, sh) => a + sh.members.length, 0)} facades; their photo-less texels filled from each sheet's own repeats (generated)`);
+                                    } else logStep('remesh.wallSheets', 'skipped');
                                     run.note(PROVENANCE.photoInferred, `wall grammar (${WALL_GRAMMAR_VERSION}): ${wg.grammar.walls.length} walls from ${wg.grammar.walls.reduce((a, w) => a + w.facades.length, 0)} facades, ${bays.filter(b => b.from === 'photo-inferred').length} bays read from their photos together, ${bays.filter(b => b.from === 'generated').length} continued along a wall's rhythm or borrowed from its tier (generated)`);
                                 } catch (err) {
                                     if (isAbort(err) || io.signal.aborted) throw err;
@@ -3518,7 +3526,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const vec = eBuildings.flatMap(b => (b.extruded?.length ? b.extruded.filter(p => !p.planOnly).map(p => p.loops[0]) : [])).filter(l => l && l.length >= 3);
                         return vec.length ? vec : [structure.outline];
                     })() : undefined;
-                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: stepOn('polish.lattice', true), photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(wallGrammar ? { wallGrammar } : {}), ...(pipelineK && r.rawClayGlb ? { rawScan: r.rawClayGlb } : {}), ...(revealDepth ? { revealDepth } : {}), ...(kLoops && stepOn('polish.base', true) ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}), ...(pipelineK && stepOn('polish.seal', process.env.SCRATCHBOX_K_SEAL?.trim() === '1') ? { seal: true } : {}), ...(pipelineK && stepOn('polish.clip', process.env.SCRATCHBOX_K_CLIP?.trim() !== '0') ? { clip: true } : {}), ...(pipelineK && stepOn('polish.infill', process.env.SCRATCHBOX_K_INFILL?.trim() !== '0') ? { infill: true } : {}), cleanup: stepOn('polish.cleanup', remeshCleanupEnabled()), orient: stepOn('polish.orient', remeshOrientEnabled()), onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`polish.${step}`, state) }));
+                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: stepOn('polish.lattice', true), photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(wallGrammar ? { wallGrammar } : {}), ...(wallSheets ? { walls: wallSheets } : {}), ...(pipelineK && r.rawClayGlb ? { rawScan: r.rawClayGlb } : {}), ...(revealDepth ? { revealDepth } : {}), ...(kLoops && stepOn('polish.base', true) ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}), ...(pipelineK && stepOn('polish.seal', process.env.SCRATCHBOX_K_SEAL?.trim() === '1') ? { seal: true } : {}), ...(pipelineK && stepOn('polish.clip', process.env.SCRATCHBOX_K_CLIP?.trim() !== '0') ? { clip: true } : {}), ...(pipelineK && stepOn('polish.infill', process.env.SCRATCHBOX_K_INFILL?.trim() !== '0') ? { infill: true } : {}), cleanup: stepOn('polish.cleanup', remeshCleanupEnabled()), orient: stepOn('polish.orient', remeshOrientEnabled()), onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`polish.${step}`, state) }));
                     for (const [name, file] of Object.entries(pol.snapshots)) stepFiles.push([`polish.${name}`, file]);
                     // the steps turned off for this build, shown as skipped
                     for (const key of ['polish.cleanup', 'polish.lattice', 'polish.base', 'polish.clip', 'polish.infill', 'polish.seal', 'polish.orient', 'remesh.streetViewScore', 'remesh.visibleDefects']) if (request.steps?.[key] === false) logStep(key, 'skipped');

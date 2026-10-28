@@ -16,6 +16,12 @@
 import { describe, expect, it } from 'vitest';
 import { groupWalls, readWallBays, type GrammarFacade, type WallEvidence } from '../src/node/3d-engine/staged-location/wall-grammar';
 import { facadeSamples, latticeFacade, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
+import { buildWallSheets, SHEET_ID_BASE } from '../src/node/3d-engine/staged-location/wall-sheets';
+import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
+import { decodePng } from '../src/node/texture-processing';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 const facade = (facadeId: number, cx: number, z: number, width: number, y0: number, y1: number): GrammarFacade => ({
     facadeId, image: `f${facadeId}.png`, centroid: [cx, (y0 + y1) / 2, z], normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0],
@@ -92,5 +98,62 @@ describe('the wall grammar', () => {
         expect(cols).toContain('19-23');
         expect(cols).toContain('7-11');
         expect(bays.every(b => b.u1 - b.u0 < 6)).toBe(true);
+    });
+
+    it('lays a wall of two overlapping facades on one sheet: one photo from both, their windows carried, the gap filled and marked', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sheets-'));
+        // facade 1: s -10..10, t 0..20 (photo covers its left half); facade 2: 0.3 m behind, s 0..20 (photo covers it all)
+        const mk = (id: number, cx: number, z: number, coverTo: number): GrammarFacade => {
+            const f = { ...facade(id, cx, z, 20, 0, 20), uncoveredMask: `f${id}_u.png` };
+            const W = f.width, H = f.height, rgba = new Uint8Array(W * H * 4), unc = new Uint8Array(W * H);
+            for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const k = y * W + x; rgba.set(x < coverTo ? [180 - id * 40, 120, 100, 255] : [128, 128, 128, 255], k * 4); unc[k] = x < coverTo ? 0 : 255; }
+            fs.writeFileSync(path.join(dir, f.image), encodePng(W, H, Buffer.from(rgba), 4));
+            fs.writeFileSync(path.join(dir, f.uncoveredMask!), encodePng(W, H, Buffer.from(unc), 1));
+            return f;
+        };
+        const f1 = mk(1, 0, 0, 100), f2 = mk(2, 10, -0.3, 200);
+        fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify({ facades: [{ ...f1, coverage: 0.5 }, { ...f2, coverage: 1 }] }));
+        const grammar = { version: 'v', params: {} as never, facades: {}, walls: [{ wallId: 3, facades: [1, 2], normal: [0, 0, 1], axisU: [1, 0, 0], offset: 0, u0: -10, u1: 20, y0: 0, y1: 20, coverage: 1, tier: 0, bays: [{ u0: 2, u1: 6, y0: 2, y1: 18, from: 'photo-inferred' as const }] }] };
+        const fit = { version: 'v', params: {} as never, ms: 0, facades: [{ facadeId: 2, width: 200, height: 200, rects: [[20, 20, 60, 180]] as Array<[number, number, number, number]>, bands: [], ms: 0 }] };
+        const dec = (b: Buffer) => { const d = decodePng(b); return { rgba: d.rgba, width: d.width, height: d.height }; };
+        const { sheets } = buildWallSheets(dir, grammar as never, fit as never, dec);
+        expect(sheets).toHaveLength(1);
+        const sh = sheets[0];
+        expect(sh.facade.facadeId).toBe(SHEET_ID_BASE + 3);
+        expect(sh.members.sort()).toEqual([1, 2]);
+        // 30 m along the wall: facade 1's photo on its half, facade 2's on the rest; nothing left uncovered
+        expect(sh.facade.sMax - sh.facade.sMin).toBeCloseTo(30, 0);
+        const unc = decodePng(fs.readFileSync(path.join(dir, sh.facade.uncoveredMask!)));
+        let holes = 0; for (let k = 0; k < unc.width * unc.height; k++) if (unc.rgba[k * 4] > 127) holes++;
+        expect(holes).toBe(0);
+        // facade 2's window carried onto the sheet (s 2..6 of it is s 2..6 of the wall, 10..14 m from the sheet's left edge)
+        expect(sh.windows).toHaveLength(1);
+        expect(sh.windows[0][0] * 0.1).toBeCloseTo(12, 0);
+        expect(sh.bays).toHaveLength(1);
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('builds the whole wall where the scan has it, the photo or not, and nothing where the scan has no wall near the plane', () => {
+        // a 12 x 9 m wall measured over s 0-8 (a recess beyond); the photo reached only s 0-4 but its rows span the whole width
+        const PX = 0.1, W = 120, H = 90;
+        const f: ReliefFacade = { facadeId: 7, image: 'f.png', centroid: [0, 0, 0], normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0], sMin: 0, sMax: 12, tMin: 0, tMax: 9, pixel: PX, width: W, height: H, orthoSMin: 0, orthoTMax: 9, coverage: 1 };
+        const rgba = new Uint8Array(W * H * 4), unc = new Uint8Array(W * H);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { rgba.set([180, 170, 160, 255], (y * W + x) * 4); unc[y * W + x] = x >= 40 && x < 119 ? 1 : 0; }
+        const soup: number[] = [];
+        for (let s = 0; s < 8; s += 0.25) for (let t = 0; t < 9; t += 0.25) soup.push(s, t, 0, s + 0.25, t, 0, s + 0.25, t + 0.25, 0, s, t, 0, s + 0.25, t + 0.25, 0, s, t + 0.25, 0);
+        const smp = facadeSamples(Float32Array.from(soup), f);
+        const at = (r: NonNullable<ReturnType<typeof latticeFacade>>, sv: number, tv: number) => r.built[r.t.findIndex((x, i) => tv >= x && tv < r.t[i + 1]) * (r.s.length - 1) + r.s.findIndex((x, i) => sv >= x && sv < r.s[i + 1])];
+        // a window every 3 m (fitted, in pixels), so the lattice has its lines across the whole wall
+        const fitted: Array<[number, number, number, number]> = [];
+        for (let x = 10; x < W; x += 30) for (let y = 10; y < H - 20; y += 30) {
+            fitted.push([x, y, x + 10, y + 15]);
+            for (let yy = y; yy < y + 15; yy++) for (let xx = x; xx < x + 10; xx++) rgba.set([60, 60, 70, 255], (yy * W + xx) * 4);
+        }
+        const photoOnly = latticeFacade(f, { rgba, width: W, height: H }, smp, undefined, unc, false, fitted, undefined, undefined, undefined, false)!;
+        const whole = latticeFacade(f, { rgba, width: W, height: H }, smp, undefined, unc, false, fitted, undefined, undefined, undefined, true)!;
+        expect(at(photoOnly, 6, 4)).toBe(0);
+        expect(at(whole, 6, 4)).toBe(1);
+        expect(at(whole, 2, 4)).toBe(1);
+        expect(at(whole, 10, 4)).toBe(0);
     });
 });
