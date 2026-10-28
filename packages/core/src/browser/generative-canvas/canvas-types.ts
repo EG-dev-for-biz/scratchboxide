@@ -893,8 +893,23 @@ export interface SceneFocusPoint {
     localPosition: [number, number, number];
 }
 
+/**
+ * Film grain over the finished frame (after tone mapping, so it sits on the picture as on film): `amount` 0-1 (0 or absent
+ * draws none), the grain's size on the sensor in micrometres (the lens's film back: the same look at any viewport
+ * resolution; finer stocks are smaller), `chroma` 0-1 (0 monochrome), and `animate` (a new grain each frame, as film; false
+ * holds one pattern). Generated: no measurement of anything.
+ */
+export interface SceneFilmGrain {
+    amount: number;
+    sizeUm?: number;
+    chroma?: number;
+    animate?: boolean;
+}
+
 export interface SceneCameraLens {
     distortion?: SceneLensDistortion;
+    /** Optional film grain over the frame; none when absent. */
+    filmGrain?: SceneFilmGrain;
     focalLengthMm?: number;
     /** Sensor (film back) size in mm. The circle of confusion is scaled to pixels by the frame height on the sensor. */
     sensorWidthMm?: number;

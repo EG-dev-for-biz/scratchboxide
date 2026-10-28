@@ -17,12 +17,13 @@
  *   2. depth of field from that colour + depth (circle of confusion from focal length, f-number and focus);
  *   3. overlays (transform gizmo, selection box, brush ring) on top, sharp, still in the rectilinear frame;
  *   4. distortion of the whole frame (overlays bend with the objects they mark, so they stay on them);
- *   5. tone mapping and output colour space to the canvas (what the renderer applies when drawing straight to it).
+ *   5. tone mapping and output colour space to the canvas (what the renderer applies when drawing straight to it), then
+ *      film grain when the lens has it (on the finished picture, as on film).
  * Picking maps the pointer back through the distortion (mapPointerNdc), so a click hits what is drawn under it.
  */
 
 import * as THREE from 'three';
-import type { SceneCameraLens, SceneLensDistortion } from '../../canvas-types';
+import type { SceneCameraLens, SceneFilmGrain, SceneLensDistortion } from '../../canvas-types';
 import { VfxPlateMatchmoveService } from '../../services/video/VfxPlateMatchmoveService';
 import { LensDistortionEffect } from '../../services/optics/LensDistortionEffect';
 import { CinematicBokehPass } from '../../services/optics/CinematicBokehPass';
@@ -37,7 +38,10 @@ export const MAX_OVERSCAN = 2;
  */
 export const MAX_BLUR_RADIUS_FRAME_FRACTION = 0.12;
 
-export type ViewportOpticsPassName = 'depth-of-field' | 'lens-distortion' | 'output' | (string & {});
+export type ViewportOpticsPassName = 'depth-of-field' | 'lens-distortion' | 'film-grain' | 'output' | (string & {});
+
+/** Grain size on the sensor (micrometres) when the lens sets none: a fine 35 mm stock. */
+export const DEFAULT_GRAIN_SIZE_UM = 6;
 
 export interface ViewportDepthOfFieldPlan {
     focalLengthMm: number;
@@ -55,6 +59,8 @@ export interface ViewportDistortionPlan {
 
 export interface ViewportOpticsPlan {
     distortion: ViewportDistortionPlan | null;
+    /** Film grain drawn in the output pass, or null. */
+    filmGrain: Required<SceneFilmGrain> | null;
     depthOfField: ViewportDepthOfFieldPlan | null;
     /** Passes in draw order; empty = the viewport renders straight to the canvas as before. */
     passes: ViewportOpticsPassName[];
@@ -67,7 +73,7 @@ const finiteNumber = (v: unknown): v is number => typeof v === 'number' && Numbe
 
 /** Which passes a scene lens configures. Pure: no GPU objects. */
 export function planViewportOptics(lens: SceneCameraLens | undefined | null): ViewportOpticsPlan {
-    const plan: ViewportOpticsPlan = { distortion: null, depthOfField: null, passes: [], issues: [] };
+    const plan: ViewportOpticsPlan = { distortion: null, filmGrain: null, depthOfField: null, passes: [], issues: [] };
     if (!lens) return plan;
     const squeeze = finitePositive(lens.anamorphicSqueeze) ? lens.anamorphicSqueeze : 1;
 
@@ -89,7 +95,10 @@ export function planViewportOptics(lens: SceneCameraLens | undefined | null): Vi
         // auto focus, a tracked point, and manual focus with nothing stored yet are all measured by the viewport
         // (viewportFocus.ts): no stored distance is required before depth of field can draw
         const measured = lensMeasuresFocus(lens);
-        const wantsDof = lens.apertureFStop !== undefined || lens.focusDistanceMeters !== undefined || lens.focusObjectId !== undefined || measured;
+        // a lens holding only other passes (film grain, distortion) asks for no depth of field: measured focus counts as
+        // asking only with a focus mode or point, or depth of field switched on
+        const asksFocus = lens.focusMode !== undefined || lens.focusPoint !== undefined || lens.depthOfField === true;
+        const wantsDof = lens.apertureFStop !== undefined || lens.focusDistanceMeters !== undefined || lens.focusObjectId !== undefined || (measured && asksFocus);
         const hasFocus = finitePositive(lens.focusDistanceMeters) || (typeof lens.focusObjectId === 'string' && lens.focusObjectId.length > 0) || measured;
         if (finitePositive(lens.focalLengthMm) && finitePositive(lens.apertureFStop) && hasFocus) {
             plan.depthOfField = {
@@ -109,8 +118,14 @@ export function planViewportOptics(lens: SceneCameraLens | undefined | null): Vi
         }
     }
 
+    const g = lens.filmGrain;
+    if (g && finitePositive(g.amount)) {
+        plan.filmGrain = { amount: Math.min(1, g.amount), sizeUm: finitePositive(g.sizeUm) ? g.sizeUm : DEFAULT_GRAIN_SIZE_UM, chroma: finiteNumber(g.chroma) ? Math.min(1, Math.max(0, g.chroma)) : 0, animate: g.animate !== false };
+    }
+
     if (plan.depthOfField) plan.passes.push('depth-of-field');
     if (plan.distortion) plan.passes.push('lens-distortion');
+    if (plan.filmGrain) plan.passes.push('film-grain');
     if (plan.passes.length > 0) plan.passes.push('output');
     return plan;
 }
@@ -302,11 +317,42 @@ const OUTPUT_SHADER = {
         uniform sampler2D tDiffuse;
         uniform vec3 uBackground;   // flat background, already in the output colour space (not tone mapped)
         uniform bool uDisplayReferred;
+        // film grain: amount (0 none), grain cell size in output pixels, chroma, frame seed
+        uniform float uGrainAmount;
+        uniform float uGrainCellPx;
+        uniform float uGrainChroma;
+        uniform float uGrainSeed;
         varying vec2 vUv;
+
+        float sbHash(vec3 p) {
+            p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+            p += dot(p, p.yzx + 33.33);
+            return fract((p.x + p.y) * p.z);
+        }
+        // value noise on cells of uGrainCellPx, smoothly interpolated, zero mean, unit-ish spread
+        float sbGrain(vec2 px, float channel) {
+            vec2 q = px / max(uGrainCellPx, 0.5);
+            vec2 i = floor(q), f = fract(q);
+            f = f * f * (3.0 - 2.0 * f);
+            float s = uGrainSeed + channel * 17.0;
+            float a = sbHash(vec3(i, s)), b = sbHash(vec3(i + vec2(1.0, 0.0), s));
+            float c = sbHash(vec3(i + vec2(0.0, 1.0), s)), d = sbHash(vec3(i + vec2(1.0, 1.0), s));
+            return (mix(mix(a, b, f.x), mix(c, d, f.x), f.y) - 0.5) * 3.4;
+        }
+        vec3 sbApplyGrain(vec3 col) {
+            if (uGrainAmount <= 0.0) return col;
+            vec2 px = gl_FragCoord.xy;
+            float mono = sbGrain(px, 0.0);
+            vec3 n = mix(vec3(mono), vec3(mono, sbGrain(px, 1.0), sbGrain(px, 2.0)), uGrainChroma);
+            // strongest in the mid-tones, as an emulsion's grain shows most there
+            float l = clamp(dot(col, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+            float w = 0.25 + 0.75 * 4.0 * l * (1.0 - l);
+            return clamp(col + n * (0.12 * uGrainAmount * w), 0.0, 1.0);
+        }
         void main() {
             vec4 c = texture2D(tDiffuse, vUv);
             if (uDisplayReferred) {
-                gl_FragColor = vec4(c.rgb, 1.0);
+                gl_FragColor = vec4(sbApplyGrain(c.rgb), 1.0);
                 return;
             }
             // the scene was drawn over a transparent clear: alpha is its coverage (blur spreads it like the colour)
@@ -314,7 +360,7 @@ const OUTPUT_SHADER = {
             gl_FragColor = vec4(a > 1e-4 ? c.rgb / a : vec3(0.0), 1.0);
             #include <tonemapping_fragment>
             #include <colorspace_fragment>
-            gl_FragColor = vec4(mix(uBackground, gl_FragColor.rgb, a), 1.0);
+            gl_FragColor = vec4(sbApplyGrain(mix(uBackground, gl_FragColor.rgb, a)), 1.0);
         }
     `
 };
@@ -351,6 +397,7 @@ export class ViewportOpticsChain {
     private overscanValue: { overscan: number; folds: boolean; maxAspect?: number } = { overscan: 1, folds: false };
     private focus: { id: string; object: THREE.Object3D; centre: THREE.Vector3; frame: number } | null = null;
     private frame = 0;
+    private sensorHeightMm: number | undefined;
     private readonly size = new THREE.Vector2();
     private readonly scratch = new THREE.Vector3();
     private readonly box = new THREE.Box3();
@@ -359,6 +406,7 @@ export class ViewportOpticsChain {
     /** Sets the lens; creates the passes it configures and frees the rest. */
     public configure(lens: SceneCameraLens | undefined | null): ViewportOpticsPlan {
         this.plan = planViewportOptics(lens);
+        this.sensorHeightMm = lens?.sensorHeightMm;
         if (this.plan.distortion && !this.lensPass) {
             this.lensPass = new LensDistortionEffect({ mode: 'redistort', edgeMode: 'clamp', chromaticAberration: 0, enabled: true });
         } else if (!this.plan.distortion && this.lensPass) {
@@ -575,7 +623,7 @@ export class ViewportOpticsChain {
         // output: tone mapping + output colour space, as a direct draw to the canvas would get
         if (!this.output) {
             const material = new THREE.ShaderMaterial({
-                uniforms: { tDiffuse: { value: null }, uBackground: { value: new THREE.Vector3() }, uDisplayReferred: { value: false } },
+                uniforms: { tDiffuse: { value: null }, uBackground: { value: new THREE.Vector3() }, uDisplayReferred: { value: false }, uGrainAmount: { value: 0 }, uGrainCellPx: { value: 1 }, uGrainChroma: { value: 0 }, uGrainSeed: { value: 0 } },
                 vertexShader: OUTPUT_SHADER.vertexShader,
                 fragmentShader: OUTPUT_SHADER.fragmentShader,
                 depthTest: false,
@@ -590,6 +638,17 @@ export class ViewportOpticsChain {
         const ou = this.output.material.uniforms;
         ou.tDiffuse.value = current.texture;
         ou.uDisplayReferred.value = !!drawn_.displayReferred;
+        // film grain: its size on the sensor -> output pixels by the frame height on the sensor (the lens's film back)
+        const grain = this.plan.filmGrain;
+        ou.uGrainAmount.value = grain ? grain.amount : 0;
+        if (grain) {
+            // the lens's film back, else the 24 mm full-frame height the camera panel assumes
+            const sensorH = finitePositive(this.sensorHeightMm) ? this.sensorHeightMm : 24;
+            ou.uGrainCellPx.value = Math.max(0.5, (grain.sizeUm / 1000 / sensorH) * H);
+            ou.uGrainChroma.value = grain.chroma;
+            ou.uGrainSeed.value = grain.animate ? this.frame % 997 : 0;
+            drawn.push('film-grain');
+        }
         // a texture / cube background was drawn into the target opaque; the composite then never shows this colour
         const bg = backgroundColour ? backgroundColour.getRGB({ r: 0, g: 0, b: 0 }, renderer.outputColorSpace) : { r: 0, g: 0, b: 0 };
         (ou.uBackground.value as THREE.Vector3).set(bg.r, bg.g, bg.b);

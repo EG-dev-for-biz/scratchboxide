@@ -9,7 +9,7 @@
 
 import * as React from 'react';
 import type { SetCameraLensParams } from '../../services/operators/lighting-camera-operators';
-import { planViewportOptics } from './viewportOptics';
+import { DEFAULT_GRAIN_SIZE_UM, planViewportOptics } from './viewportOptics';
 import { DEFAULT_AUTO_FOCUS_AREA_FRACTION, DEFAULT_FOCUS_PULL_SECONDS, autoFocusAreaOf, effectiveFocusMode, focusPullSecondsOf, isFocusPoint } from './viewportFocus';
 import {
     type CameraCommand,
@@ -57,6 +57,9 @@ const BTN = 'relative group flex items-center justify-center w-5 h-5 rounded-md 
 const IDLE = 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5 border border-transparent';
 const ACTIVE = 'sb-3d-toolstrip-btn-active bg-blue-600/30 text-blue-300 border border-blue-500/50 shadow-md shadow-blue-900/30';
 // The app has no utility-class build: the panel is styled by these classes in browser/style/unified-ui.css.
+/** Film grain strength the switch turns on at. */
+const GRAIN_DEFAULT_AMOUNT = 0.35;
+
 const CHIP = 'sb-cam-chip';
 const CHIP_IDLE = '';
 const CHIP_ON = 'sb-cam-chip-on';
@@ -187,6 +190,8 @@ export const CameraSettingsControl: React.FC<CameraSettingsControlProps> = ({
     const focusMode = effectiveFocusMode(lens);
     const wantsDof = lens?.apertureFStop !== undefined || lens?.focusDistanceMeters !== undefined || !!lens?.focusObjectId || focusMode !== 'manual';
     const dofOn = lens?.depthOfField === true || (lens?.depthOfField !== false && wantsDof);
+    const grain = lens?.filmGrain && lens.filmGrain.amount > 0 ? lens.filmGrain : undefined;
+    const grainOn = !!grain;
     const dofMissing = plan.issues.find(i => i.startsWith('depth of field needs'));
     // the depth-of-field hint and the focus notices (a lost target, nothing under the AF area) are shown in its section
     const isFocusIssue = (i: string) => i.startsWith('focus');
@@ -590,6 +595,48 @@ export const CameraSettingsControl: React.FC<CameraSettingsControlProps> = ({
                         <NumberField label="Squeeze" unit="x" min={0.01} value={lens?.anamorphicSqueeze} placeholder="1" testId="sb-camera-squeeze"
                             onCommit={v => runLens({ anamorphicSqueeze: v }, `Camera: ${v}x squeeze`)} onClear={() => runLens({ anamorphicSqueeze: null }, 'Camera: squeeze removed')} />
                         <div className="sb-cam-note">Shapes the bokeh and distortion; the viewport keeps its own aspect ratio.</div>
+                    </Section>
+
+                    <Section
+                        title="Film grain"
+                        aside={
+                            <button
+                                type="button"
+                                role="switch"
+                                aria-checked={grainOn}
+                                aria-label="Film grain"
+                                data-testid="sb-camera-grain"
+                                className={`sb-cam-switch${grainOn ? ' sb-cam-switch-on' : ''}`}
+                                onClick={() => runLens(grainOn ? { filmGrain: null } : { filmGrain: { amount: GRAIN_DEFAULT_AMOUNT } }, grainOn ? 'Film grain off' : 'Film grain on')}
+                            >
+                                <span className="sb-cam-switch-knob" />
+                            </button>
+                        }
+                    >
+                        {grainOn && (
+                            <>
+                                <div className="sb-cam-row">
+                                    <span className="sb-cam-key">Amount</span>
+                                    <input type="range" aria-label="Grain amount" data-testid="sb-camera-grain-amount" className="sb-cam-range" min={0.01} max={1} step={0.01}
+                                        value={grain!.amount} onChange={e => runLens({ filmGrain: { amount: Number(e.target.value) } }, 'Film grain amount', true)} />
+                                    <span className="sb-cam-value">{fmt(grain!.amount, 2)}</span>
+                                </div>
+                                <NumberField label="Size" unit="µm" min={0.5} value={grain!.sizeUm} placeholder={fmt(DEFAULT_GRAIN_SIZE_UM)} testId="sb-camera-grain-size"
+                                    onCommit={v => runLens({ filmGrain: { sizeUm: v } }, `Film grain: ${v} µm`)} onClear={() => runLens({ filmGrain: { sizeUm: undefined } }, 'Film grain: default size')} />
+                                <div className="sb-cam-row">
+                                    <span className="sb-cam-key">Chroma</span>
+                                    <input type="range" aria-label="Grain chroma" data-testid="sb-camera-grain-chroma" className="sb-cam-range" min={0} max={1} step={0.01}
+                                        value={grain!.chroma ?? 0} onChange={e => runLens({ filmGrain: { chroma: Number(e.target.value) } }, 'Film grain chroma', true)} />
+                                    <span className="sb-cam-value">{fmt(grain!.chroma ?? 0, 2)}</span>
+                                </div>
+                                <label className="sb-cam-row sb-cam-check">
+                                    <input type="checkbox" data-testid="sb-camera-grain-animate" checked={grain!.animate !== false}
+                                        onChange={e => runLens({ filmGrain: { animate: e.target.checked } }, e.target.checked ? 'Film grain moves' : 'Film grain held')} />
+                                    <span>New grain each frame</span>
+                                </label>
+                                <div className="sb-cam-note">On the finished frame, sized on the sensor ({fmt(sensor.height)} mm film back); generated.</div>
+                            </>
+                        )}
                     </Section>
 
                     <Section title="View">

@@ -16,7 +16,7 @@ import {
     getSunVectorFromAngles
 } from '../atmosphere';
 import { sunAtLocalSolarTime } from './nature-atmosphere-operators';
-import type { Scene3DData, SceneCameraLens, SceneLensDistortion } from '../../canvas-types';
+import type { Scene3DData, SceneCameraLens, SceneLensDistortion, SceneFilmGrain } from '../../canvas-types';
 import { planViewportOptics, distortionMaxAspect } from '../../primitives/scene3d/viewportOptics';
 import { FOCUS_MODES_DRAWN, effectiveFocusMode, isFocusPoint } from '../../primitives/scene3d/viewportFocus';
 
@@ -52,6 +52,8 @@ export interface SetCameraLensParams {
     focusPoint?: FocusPointParams | null;
     anamorphicSqueeze?: number | null;
     depthOfField?: boolean | null;
+    /** Film grain (SceneFilmGrain); fields given are merged into the lens's, null removes it. */
+    filmGrain?: Partial<SceneFilmGrain> | null;
     /** Removes the whole lens (an ideal pinhole again: no optics passes). */
     clear?: boolean;
 }
@@ -139,6 +141,17 @@ export function mergeCameraLens(previous: SceneCameraLens | undefined, params: S
     if (params.depthOfField !== undefined) {
         if (params.depthOfField === null) delete lens.depthOfField;
         else lens.depthOfField = !!params.depthOfField;
+    }
+    if (params.filmGrain !== undefined) {
+        if (params.filmGrain === null) delete lens.filmGrain;
+        else {
+            const g: SceneFilmGrain = { ...(lens.filmGrain || { amount: 0 }), ...params.filmGrain };
+            if (typeof g.amount !== 'number' || !Number.isFinite(g.amount) || g.amount < 0 || g.amount > 1) throw new Error(`sb_set_camera_lens: filmGrain.amount must be in [0, 1] (got ${String(g.amount)}). Nothing was changed.`);
+            if (g.sizeUm !== undefined && !(typeof g.sizeUm === 'number' && Number.isFinite(g.sizeUm) && g.sizeUm > 0)) throw new Error(`sb_set_camera_lens: filmGrain.sizeUm must be a positive number of micrometres (got ${String(g.sizeUm)}). Nothing was changed.`);
+            if (g.chroma !== undefined && !(typeof g.chroma === 'number' && Number.isFinite(g.chroma) && g.chroma >= 0 && g.chroma <= 1)) throw new Error(`sb_set_camera_lens: filmGrain.chroma must be in [0, 1] (got ${String(g.chroma)}). Nothing was changed.`);
+            if (g.animate !== undefined) g.animate = !!g.animate;
+            lens.filmGrain = g;
+        }
     }
     if (params.distortion !== undefined) {
         if (params.distortion === null) delete lens.distortion;
