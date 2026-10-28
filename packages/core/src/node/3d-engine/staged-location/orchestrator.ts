@@ -89,6 +89,8 @@ import { describePolish, polishRemesh, REMESH_POLISH_VERSION } from './remesh-po
 import { remeshCleanupEnabled } from './remesh-cleanup';
 import { remeshOrientEnabled } from './remesh-orient';
 import { fittedPlanesOf, fittedWindowRects, fitWindowsForOrthos, WINDOW_FIT_FILE, WINDOW_FIT_VERSION, type WindowFitFile } from './window-fit';
+import { readWallGrammar, WALL_GRAMMAR_FILE, WALL_GRAMMAR_VERSION } from './wall-grammar';
+import { decodePng as decodePngForGrammar } from '../../texture-processing';
 import { weldTilesGlb, WELD_TILES_VERSION } from './weld-tiles';
 import { measureRevealDepth, REVEAL_DEPTH_VERSION, type RevealFacade, type RevealView } from './reveal-depth';
 import { streetViewClayScore } from './streetview-clay-score';
@@ -2625,7 +2627,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const kOrthos = materialSets ? cache.readRunNote<{ orthosDir?: string }>(runId, 'pipeline_k')?.orthosDir : undefined;
                 const fitFile = kOrthos ? path.join(kOrthos, WINDOW_FIT_FILE) : undefined;
                 const planes = kOrthos ? fittedPlanesOf(kOrthos) : [];
-                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '');
+                const grammarFile = kOrthos ? path.join(kOrthos, WALL_GRAMMAR_FILE) : undefined;
+                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '');
                 const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport; materialRegions?: TileRefineTwin['materialRegions'] }>('textures', key, async dir => {
                     const twin = await tileRefineTwin(bytes, target.layer.layer, kTwin ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), ...(harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0 } } : {}), ...(materialSets ? { materialRegions: { harvest: process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum', sets: (classes: RegionClass[]) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m) }), planes } } : {}) } : enhance ? {
                         recreate: {
@@ -3423,7 +3426,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     }
                 }
                 // pipeline K: the facade orthos straightened and their smears levelled before the facades are rebuilt on them
-                let orthosKey: string | undefined, windowFit: string | undefined, revealDepth: string | undefined, surveyViews: RevealView[] | undefined;
+                let orthosKey: string | undefined, windowFit: string | undefined, wallGrammar: string | undefined, revealDepth: string | undefined, surveyViews: RevealView[] | undefined;
                 if (pipelineK) {
                     if (!r.reliefOrthosDir) run.note(PROVENANCE.remeshed, 'pipeline K: tile_refine wrote no facade orthophotos, so no facade could be straightened; the remesh stands as cleaned');
                     else {
@@ -3442,6 +3445,17 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 io.progress('pipeline K: fitting the windows on the facade photos');
                                 const wf = await timed('windowFit', () => fitWindowsForOrthos(k.orthosDir, { signal: io.signal }));
                                 windowFit = wf.file;
+                                // the bay grammar read per wall, from all the photos of each wall's facades together (wall-grammar.ts)
+                                try {
+                                    const wg = await timed('wallGrammar', async () => readWallGrammar(k.orthosDir, wf.fit, b => { const d = decodePngForGrammar(b); return { rgba: d.rgba, width: d.width, height: d.height }; }));
+                                    wallGrammar = wg.file;
+                                    const bays = wg.grammar.walls.flatMap(w => w.bays);
+                                    cache.writeRunNote(runId, 'pipeline_k_wall_grammar', { version: WALL_GRAMMAR_VERSION, walls: wg.grammar.walls.length, multiFacadeWalls: wg.grammar.walls.filter(w => w.facades.length > 1).length, tiers: new Set(wg.grammar.walls.map(w => w.tier)).size, baysRead: bays.filter(b => b.from === 'photo-inferred').length, baysGenerated: bays.filter(b => b.from === 'generated').length });
+                                    run.note(PROVENANCE.photoInferred, `wall grammar (${WALL_GRAMMAR_VERSION}): ${wg.grammar.walls.length} walls from ${wg.grammar.walls.reduce((a, w) => a + w.facades.length, 0)} facades, ${bays.filter(b => b.from === 'photo-inferred').length} bays read from their photos together, ${bays.filter(b => b.from === 'generated').length} continued along a wall's rhythm or borrowed from its tier (generated)`);
+                                } catch (err) {
+                                    if (isAbort(err) || io.signal.aborted) throw err;
+                                    cache.writeRunNote(runId, 'pipeline_k_wall_grammar', { version: WALL_GRAMMAR_VERSION, failed: true, reason: errorMessage(err) });
+                                }
                                 const ok = wf.fit.facades.filter(f => !('error' in f)), failed = wf.fit.facades.filter(f => 'error' in f);
                                 cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, cached: wf.cached, ms: wf.fit.ms, facades: wf.fit.facades.map(f => ('error' in f ? f : { facadeId: f.facadeId, windows: f.rects.length, bands: f.bands.length, accepted: f.bands.filter(b => b.accepted).length, kinds: f.bands.filter(b => b.accepted).map(b => b.kind), ms: f.ms })) });
                                 run.note(PROVENANCE.photoInferred, `window fit (${WINDOW_FIT_VERSION}): ${ok.reduce((a, f) => a + ('rects' in f ? f.rects.length : 0), 0)} windows on ${ok.filter(f => 'rects' in f && f.rects.length).length} of ${wf.fit.facades.length} facades${failed.length ? `; ${failed.length} facades not fitted (${failed.map(f => `${f.facadeId}: ${'error' in f ? f.error : ''}`).join('; ').slice(0, 300)}), opened by their bay rhythm instead` : ''}`);
@@ -3504,7 +3518,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const vec = eBuildings.flatMap(b => (b.extruded?.length ? b.extruded.filter(p => !p.planOnly).map(p => p.loops[0]) : [])).filter(l => l && l.length >= 3);
                         return vec.length ? vec : [structure.outline];
                     })() : undefined;
-                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: stepOn('polish.lattice', true), photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(revealDepth ? { revealDepth } : {}), ...(kLoops && stepOn('polish.base', true) ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}), ...(pipelineK && stepOn('polish.seal', process.env.SCRATCHBOX_K_SEAL?.trim() === '1') ? { seal: true } : {}), ...(pipelineK && stepOn('polish.clip', process.env.SCRATCHBOX_K_CLIP?.trim() !== '0') ? { clip: true } : {}), ...(pipelineK && stepOn('polish.infill', process.env.SCRATCHBOX_K_INFILL?.trim() !== '0') ? { infill: true } : {}), cleanup: stepOn('polish.cleanup', remeshCleanupEnabled()), orient: stepOn('polish.orient', remeshOrientEnabled()), onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`polish.${step}`, state) }));
+                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: stepOn('polish.lattice', true), photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(wallGrammar ? { wallGrammar } : {}), ...(pipelineK && r.rawClayGlb ? { rawScan: r.rawClayGlb } : {}), ...(revealDepth ? { revealDepth } : {}), ...(kLoops && stepOn('polish.base', true) ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}), ...(pipelineK && stepOn('polish.seal', process.env.SCRATCHBOX_K_SEAL?.trim() === '1') ? { seal: true } : {}), ...(pipelineK && stepOn('polish.clip', process.env.SCRATCHBOX_K_CLIP?.trim() !== '0') ? { clip: true } : {}), ...(pipelineK && stepOn('polish.infill', process.env.SCRATCHBOX_K_INFILL?.trim() !== '0') ? { infill: true } : {}), cleanup: stepOn('polish.cleanup', remeshCleanupEnabled()), orient: stepOn('polish.orient', remeshOrientEnabled()), onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`polish.${step}`, state) }));
                     for (const [name, file] of Object.entries(pol.snapshots)) stepFiles.push([`polish.${name}`, file]);
                     // the steps turned off for this build, shown as skipped
                     for (const key of ['polish.cleanup', 'polish.lattice', 'polish.base', 'polish.clip', 'polish.infill', 'polish.seal', 'polish.orient', 'remesh.streetViewScore', 'remesh.visibleDefects']) if (request.steps?.[key] === false) logStep(key, 'skipped');

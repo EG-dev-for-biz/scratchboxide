@@ -29,14 +29,15 @@
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor, type ParsedGlb } from './glb-bytes';
 import { decodePng } from '../../texture-processing';
 import { cutScanToLattice, stitchLattice, watertightLatticeMesh, type CutReport, type StitchReport } from './pipeline-k/lattice-stitch';
-import { fittedPaneUvs, fittedWindowRects, fittedWindowUvs, WINDOW_FIT_VERSION, type WindowFitFile } from './window-fit';
+import { fittedGeneratedUvs, fittedPaneUvs, fittedWindowRects, fittedWindowUvs, WINDOW_FIT_VERSION, type WindowFitFile } from './window-fit';
 import { trustedReveal, type RevealDepthFile } from './reveal-depth';
+import { grammarBays, type WallGrammarFile } from './wall-grammar';
 import { repeatTexture, type RepeatTextureReport } from './facade-repeat-texture';
 import { encodePng } from './png-encode';
 import * as fs from 'fs';
 import * as path from 'path';
 
-export const FACADE_LATTICE_VERSION = 'facade-lattice/17';
+export const FACADE_LATTICE_VERSION = 'facade-lattice/18';
 
 export const FACADE_LATTICE_PARAMS = {
     /**
@@ -60,7 +61,7 @@ export const FACADE_LATTICE_PARAMS = {
     minDepthM: -1.2, maxDepthM: 0.8,
     /** A step face is drawn where neighbouring cells differ by more than this (m). */
     stepM: 0.03,
-    /** A facade is rebuilt only when its cells cover at least this share of its lattice with measurements. */
+    /** A facade is rebuilt only when its measured cells cover at least this share of its lattice's area. */
     minMeasuredShare: 0.5,
     /**
      * A cell is rebuilt only when at least this share of its ortho is covered by the photo (uncovered is exact grey 128 or
@@ -270,6 +271,8 @@ export interface FacadeLatticeResult {
     fittedWindows?: number[];
     /** The glass in those windows (window-fit.ts panes), u0 v0 u1 v1 each: photo-inferred. */
     fittedPanes?: number[];
+    /** Of the fitted windows, those continued into parts the photo never reached (window-fit.ts completeLattice), u0 v0 u1 v1 each: generated. */
+    generatedWindows?: number[];
     positions: Float32Array; normals: Float32Array; uv: Float32Array; indices: Uint32Array;
 }
 
@@ -341,11 +344,13 @@ export function facadeSamples(soup: Float32Array, f: ReliefFacade, P = FACADE_LA
 const median = (a: number[]) => { if (!a.length) return NaN; const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 
 /** The facade on its lattice: cell depths (measured, averaged along repeats) and the rebuilt surface in world space. */
-export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: number; height: number }, samples: Float64Array, P = FACADE_LATTICE_PARAMS, uncovered?: Uint8Array, photoRecess = false, fitted?: Array<[number, number, number, number]>, recessM?: number): FacadeLatticeResult | undefined {
+export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: number; height: number }, samples: Float64Array, P = FACADE_LATTICE_PARAMS, uncovered?: Uint8Array, photoRecess = false, fitted?: Array<[number, number, number, number]>, recessM?: number, bays?: Array<[number, number, number, number]>, reliefSamples?: Float64Array): FacadeLatticeResult | undefined {
     // pipeline K with a window fit: the lattice is drawn on the fitted windows, which are its window cells, and with the photo's
-    // recess on, on their strips too (each window column recessed whole between its piers)
-    const strips = fitted?.length && photoRecess ? windowStrips(fitted) : [];
-    const { s, t } = fitted?.length ? fittedLattice(photoLattice(img, f, P), [...fitted, ...strips], f, P) : photoLattice(img, f, P);
+    // recess on, on their strips too (each window column recessed whole between its piers): the wall grammar's bays when it
+    // read this facade's wall (wall-grammar.ts), else the strips of its own windows
+    const strips = photoRecess ? (bays ?? (fitted?.length ? windowStrips(fitted) : [])) : [];
+    const lines = [...(fitted ?? []), ...strips];
+    const { s, t } = lines.length ? fittedLattice(photoLattice(img, f, P), lines, f, P) : photoLattice(img, f, P);
     const ns = s.length - 1, nt = t.length - 1;
     if (ns < 1 || nt < 1) return undefined;
     const cellOf = (v: number, edges: number[]) => { let lo = 0, hi = edges.length - 1; if (v < edges[0] || v > edges[hi]) return -1; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (edges[m] <= v) lo = m; else hi = m; } return lo; };
@@ -367,8 +372,12 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
         if (all && n >= P.minCellPhotoShare * all) built[b * ns + a] = 1;
     }
     const raw = bucket.map(b => (b.length >= P.minSamples ? median(b) : NaN));
-    const measured = raw.filter(Number.isFinite).length;
-    if (measured / (ns * nt) < P.minMeasuredShare) return undefined;
+    // the share of the lattice's area the scan measures (by area, not by cell count: the lines a bay grammar draws make thin
+    // cells, and their number says nothing of how much of the wall is measured)
+    let measuredArea = 0;
+    for (let b = 0; b < nt; b++) for (let a = 0; a < ns; a++) if (Number.isFinite(raw[b * ns + a])) measuredArea += (s[a + 1] - s[a]) * (t[b + 1] - t[b]);
+    const measured = measuredArea / ((s[ns] - s[0]) * (t[nt] - t[0]));
+    if (!(measured >= P.minMeasuredShare)) return undefined;
     // repeats averaged: per row, the windows (read in rows and columns) and the wall each take their median depth
     const win = fitted?.length ? fittedCells(s, t, fitted) : windowGrid(lum, ns, nt);
     const strip = strips.length ? fittedCells(s, t, strips) : undefined;
@@ -391,8 +400,10 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
     let structure: FacadeLatticeResult['structure'];
     if (strip) {
         const cells = Uint8Array.from({ length: ns * nt }, (_, k) => (built[k] && !strip[k] && !win[k] ? 1 : 0));
+        // measured on the scan before its walls were flattened (reliefSamples) when given: the flattened scan has no relief left
+        const rawR = reliefSamples ? (() => { const bk: number[][] = Array.from({ length: ns * nt }, () => []); for (let i = 0; i < reliefSamples.length; i += 3) { const a = cellOf(reliefSamples[i], s), b = cellOf(reliefSamples[i + 1], t); if (a >= 0 && b >= 0) bk[b * ns + a].push(reliefSamples[i + 2]); } return bk.map(v => (v.length >= P.minSamples ? median(v) : NaN)); })() : raw;
         const stat = (keep: (k: number) => boolean) => {
-            const v = raw.filter((x, k) => keep(k) && Number.isFinite(x));
+            const v = rawR.filter((x, k) => keep(k) && Number.isFinite(x));
             if (v.length < P.minSamples) return undefined;
             const m = median(v), mad = median(v.map(x => Math.abs(x - m)));
             return { m, se: (1.4826 * mad) / Math.sqrt(v.length) };
@@ -506,7 +517,7 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
         if (!isBuilt(a, b - 1)) sideT(t[b], s[a], s[a + 1], beside(a, b - 1), d);
     }
     if (!built.some(v => v)) return undefined;
-    return { facadeId: f.facadeId, s, t, cells: built.reduce((x, v) => x + v, 0), measuredShare: Math.round((measured / (ns * nt)) * 1000) / 1000, depth, ...(photoRecess ? { photoRecessCells } : {}), ...(strips.length ? { strips, stripCells } : {}), ...(structure ? { structure } : {}), built, windows, cellU: s.map(v => (v - f.orthoSMin) / (img.width * f.pixel)), cellV: t.map(v => (f.orthoTMax - v) / (img.height * f.pixel)), positions: Float32Array.from(pos), normals: Float32Array.from(nrm), uv: Float32Array.from(uv), indices: Uint32Array.from(idx) };
+    return { facadeId: f.facadeId, s, t, cells: built.reduce((x, v) => x + v, 0), measuredShare: Math.round(measured * 1000) / 1000, depth, ...(photoRecess ? { photoRecessCells } : {}), ...(strips.length ? { strips, stripCells } : {}), ...(structure ? { structure } : {}), built, windows, cellU: s.map(v => (v - f.orthoSMin) / (img.width * f.pixel)), cellV: t.map(v => (f.orthoTMax - v) / (img.height * f.pixel)), positions: Float32Array.from(pos), normals: Float32Array.from(nrm), uv: Float32Array.from(uv), indices: Uint32Array.from(idx) };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -874,7 +885,7 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
         }
         const indices = acc(view(new Uint8Array(r.indices.buffer, r.indices.byteOffset, r.indices.byteLength), 34963), r.indices.length, 'SCALAR', 5125);
         json.meshes.push({ name: `facade_lattice_${f.facadeId}`, primitives: [{ attributes, indices, material, mode: 4 }] });
-        json.nodes.push({ name: `FacadeLattice_${f.facadeId}`, mesh: json.meshes.length - 1, extras: { sbFacadeLattice: { version: FACADE_LATTICE_VERSION, facadeId: f.facadeId, provenance: { lines: 'photo-inferred', depth: r.photoRecessCells ? `measured (median per cell, averaged along the row's repeats); ${r.photoRecessCells} window cells recessed as the straightened photo shows them (photo-inferred, ${r.recessFrom ?? "the photometric relief's contrast rule"})` : 'measured (median per cell, averaged along the row\'s repeats)', texture: f.textureFill || r.repeatTexture ? { photo: 'tile photo', ...(f.textureFill ? { holes: f.textureFill } : {}), ...(r.repeatTexture ? { repeats: r.repeatTexture } : {}) } : 'tile photo' }, cells: r.cells, measuredShare: r.measuredShare, sLines: r.s.length, tLines: r.t.length, ...(r.windows ? { windowCells: windowCellsExtras(r) } : {}), ...(r.fittedWindows ? { windows: { uv: r.fittedWindows, ...(r.fittedPanes ? { panes: r.fittedPanes } : {}), label: 'photo-inferred', source: WINDOW_FIT_VERSION } } : {}), ...(r.structure ? { structure: structureExtras(r) } : {}) } } });
+        json.nodes.push({ name: `FacadeLattice_${f.facadeId}`, mesh: json.meshes.length - 1, extras: { sbFacadeLattice: { version: FACADE_LATTICE_VERSION, facadeId: f.facadeId, provenance: { lines: 'photo-inferred', depth: r.photoRecessCells ? `measured (median per cell, averaged along the row's repeats); ${r.photoRecessCells} window cells recessed as the straightened photo shows them (photo-inferred, ${r.recessFrom ?? "the photometric relief's contrast rule"})` : 'measured (median per cell, averaged along the row\'s repeats)', texture: f.textureFill || r.repeatTexture ? { photo: 'tile photo', ...(f.textureFill ? { holes: f.textureFill } : {}), ...(r.repeatTexture ? { repeats: r.repeatTexture } : {}) } : 'tile photo' }, cells: r.cells, measuredShare: r.measuredShare, sLines: r.s.length, tLines: r.t.length, ...(r.windows ? { windowCells: windowCellsExtras(r) } : {}), ...(r.fittedWindows ? { windows: { uv: r.fittedWindows, ...(r.fittedPanes ? { panes: r.fittedPanes } : {}), label: 'photo-inferred', source: WINDOW_FIT_VERSION, ...(r.generatedWindows ? { generated: { uv: r.generatedWindows, label: 'generated', source: "the window grid continued into parts the photo never reached (its texture filled from the facade's own repeats)" } } : {}) } } : {}), ...(r.structure ? { structure: structureExtras(r) } : {}) } } });
         scene?.nodes?.push(json.nodes.length - 1);
     }
     bin.align4();
@@ -886,12 +897,14 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
 /** Cut-and-stitch rounds at most: each leaves as scan the rebuilt cells beside outline edges the stitch could join to nothing. */
 const STITCH_ROUNDS = 4;
 
-export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Uint8Array | undefined, orthosDir: string, P: typeof FACADE_LATTICE_PARAMS = FACADE_LATTICE_PARAMS, skip: Set<number> = new Set(), opts: { /** Pipeline K: the scan cut exactly to the rebuilt cells and stitched to them (pipeline-k/lattice-stitch.ts), instead of whole triangles removed. */ stitch?: boolean; /** Pipeline K: window recesses read from the straightened photo (PHOTO_RECESS), the scan being uncarved. */ photoRecess?: boolean; /** window_fit.json (window-fit.ts): each facade's fitted windows written into its extras. */ windowFit?: string; /** reveal_depth.json (reveal-depth.ts): each facade's window depth read from Street View. */ revealDepth?: string } = {}): { clay: Buffer; textured?: Buffer; stats: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears: TearReport; stitch?: { cut: CutReport; strips: StitchReport; /** Per round: outline edges joined to nothing, and the cells beside them left as scan for the next round. */ rounds?: Array<{ unjoined: number; cellsLeftAsScan: number }> }; photoRecessCells?: number; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number]; photoRecessCells?: number }> } } {
+export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Uint8Array | undefined, orthosDir: string, P: typeof FACADE_LATTICE_PARAMS = FACADE_LATTICE_PARAMS, skip: Set<number> = new Set(), opts: { /** Pipeline K: the scan cut exactly to the rebuilt cells and stitched to them (pipeline-k/lattice-stitch.ts), instead of whole triangles removed. */ stitch?: boolean; /** Pipeline K: window recesses read from the straightened photo (PHOTO_RECESS), the scan being uncarved. */ photoRecess?: boolean; /** window_fit.json (window-fit.ts): each facade's fitted windows written into its extras. */ windowFit?: string; /** reveal_depth.json (reveal-depth.ts): each facade's window depth read from Street View. */ revealDepth?: string; /** wall_grammar.json (wall-grammar.ts): each facade's bays read per wall. */ wallGrammar?: string; /** The isolated scan before its walls were flattened: where the structure's relief is measured. */ rawScan?: string } = {}): { clay: Buffer; textured?: Buffer; stats: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears: TearReport; stitch?: { cut: CutReport; strips: StitchReport; /** Per round: outline edges joined to nothing, and the cells beside them left as scan for the next round. */ rounds?: Array<{ unjoined: number; cellsLeftAsScan: number }> }; photoRecessCells?: number; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number]; photoRecessCells?: number }> } } {
     const facades = JSON.parse(fs.readFileSync(path.join(orthosDir, 'facades.json'), 'utf8')).facades as ReliefFacade[];
     const soup = glbSoup(parseGlbBytes(clayBytes));
     const done: Array<{ f: ReliefFacade; r: FacadeLatticeResult; png: Uint8Array }> = [];
     const fit = opts.windowFit && fs.existsSync(opts.windowFit) ? JSON.parse(fs.readFileSync(opts.windowFit, 'utf8')) as WindowFitFile : undefined;
     const reveal = opts.revealDepth && fs.existsSync(opts.revealDepth) ? JSON.parse(fs.readFileSync(opts.revealDepth, 'utf8')) as RevealDepthFile : undefined;
+    const grammar = opts.wallGrammar && fs.existsSync(opts.wallGrammar) ? JSON.parse(fs.readFileSync(opts.wallGrammar, 'utf8')) as WallGrammarFile : undefined;
+    const rawSoup = opts.rawScan && fs.existsSync(opts.rawScan) ? glbSoup(parseGlbBytes(fs.readFileSync(opts.rawScan))) : undefined;
     for (const f of facades.filter(x => facadeEligible(x, P) && !skip.has(x.facadeId))) {
         const file = path.join(orthosDir, f.image);
         if (!fs.existsSync(file)) continue;
@@ -906,7 +919,7 @@ export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Ui
         // a depth read from Street View is used only when it is confident and resolved from flush; else the contrast rule
         const read = planeRects?.length ? reveal?.facades[String(f.facadeId)] : undefined;
         const depth = trustedReveal(read, reveal?.params) ? read : undefined;
-        const r0 = latticeFacade(f, { rgba: new Uint8Array(img.rgba), width: img.width, height: img.height }, facadeSamples(soup, f, P), P, mask, opts.photoRecess === true, planeRects, depth?.depthM);
+        const r0 = latticeFacade(f, { rgba: new Uint8Array(img.rgba), width: img.width, height: img.height }, facadeSamples(soup, f, P), P, mask, opts.photoRecess === true, planeRects, depth?.depthM, grammarBays(grammar, f.facadeId), rawSoup ? facadeSamples(rawSoup, f, P) : undefined);
         // with window strips, the facade's photo redrawn from its own repeats (generated): sharper, evener, its holes filled
         let r = r0, tex: Uint8Array = png;
         if (r0?.strips?.length && rects?.length) {
@@ -914,7 +927,7 @@ export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Ui
             const rt = repeatTexture({ rgba: new Uint8Array(img.rgba), width: img.width, height: img.height }, f.pixel, rects, r0.strips.map(toPx), mask);
             if (rt.report.texels) { tex = encodePng(img.width, img.height, rt.rgba, 4); r = { ...r0, repeatTexture: rt.report }; }
         }
-        if (r) { const w = fit ? fittedWindowUvs(fit, f.facadeId) : undefined, pw = w && fit ? fittedPaneUvs(fit, f.facadeId) : undefined; done.push({ f, r: { ...r, ...(w ? { fittedWindows: w } : {}), ...(pw ? { fittedPanes: pw } : {}), ...(depth && r.photoRecessCells ? { recessFrom: `${depth.depthM} m read from Street View's window reveals, ${depth.reason}` } : {}) }, png: tex }); }
+        if (r) { const w = fit ? fittedWindowUvs(fit, f.facadeId) : undefined, pw = w && fit ? fittedPaneUvs(fit, f.facadeId) : undefined, gw = w && fit ? fittedGeneratedUvs(fit, f.facadeId) : undefined; done.push({ f, r: { ...r, ...(w ? { fittedWindows: w } : {}), ...(pw ? { fittedPanes: pw } : {}), ...(gw ? { generatedWindows: gw } : {}), ...(depth && r.photoRecessCells ? { recessFrom: `${depth.depthM} m read from Street View's window reveals, ${depth.reason}` } : {}) }, png: tex }); }
     }
     if (opts.stitch && done.length) {
         // the scan cut to the rebuilt cells (the same cut on the twin: the same triangles), the walls appended, the seams stitched.
