@@ -21,7 +21,7 @@ export interface StudioActions {
     handleOpenInAppBrowser: (targetUrl: string, targetTitle?: string) => void;
     handlePreviewCodeInCanvas: (language: string, content: string) => void;
     handleSelectVersion: (targetVersion: CanvasArtifact) => void;
-    handleUpdateArtifact: (updatedArtifact: CanvasArtifact) => void;
+    handleUpdateArtifact: (updatedArtifact: CanvasArtifact, opts?: { keepStage?: boolean }) => void;
     handleMorphArtifact: (morphedArtifact: CanvasArtifact) => void;
     /**
      * An artifact a canvas tool node's run produced or updated (a staged build's scene as its stages commit): kept in

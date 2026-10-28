@@ -11,6 +11,7 @@ import * as React from 'react';
 import { CanvasArtifact, LiveCodeSandboxData, PrimitiveType, StageLayoutMode, StudioLayoutMode } from '../canvas-types';
 import { ProjectItem } from '../ProjectsModal';
 import { ProjectArtifactController } from '../project-artifact-controller';
+import { StageDock } from './stage-dock';
 
 /** Everything the right-hand artifact stage (header, tabs, version controls and primitive surfaces) needs from the Studio. */
 export interface ArtifactStageProps {
@@ -22,6 +23,9 @@ export interface ArtifactStageProps {
     layoutMode: StudioLayoutMode;
     stageLayoutMode: StageLayoutMode;
     setStageLayoutMode: React.Dispatch<React.SetStateAction<StageLayoutMode>>;
+    /** A second artifact docked beside the main stage (dragged there from its tab). */
+    stageDock: StageDock | undefined;
+    setStageDock: React.Dispatch<React.SetStateAction<StageDock | undefined>>;
     documentPaneState: 'split' | 'collapsed' | 'expanded';
     setDocumentPaneState: React.Dispatch<React.SetStateAction<'split' | 'collapsed' | 'expanded'>>;
     docReadOnly: boolean;
@@ -47,7 +51,7 @@ export interface ArtifactStageProps {
     handleSelectRelatedArtifact: (artifactId: string) => void;
     handleOpenRelatedInBento: (artifactId: string) => void;
     handleSetSandboxViewMode: (mode: 'code' | 'split' | 'preview') => void;
-    handleUpdateArtifact: (updatedArtifact: CanvasArtifact) => void;
+    handleUpdateArtifact: (updatedArtifact: CanvasArtifact, opts?: { keepStage?: boolean }) => void;
     handleMorphArtifact: (morphedArtifact: CanvasArtifact) => void;
     handleOpenInAppBrowser: (targetUrl: string, targetTitle?: string) => void;
     handleSurfaceAiPrompt: (promptText: string) => void;

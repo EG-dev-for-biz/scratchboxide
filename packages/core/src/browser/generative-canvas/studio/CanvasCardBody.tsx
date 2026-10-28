@@ -22,6 +22,8 @@ import { VideoTimelinePrimitive } from '../primitives/VideoTimelinePrimitive';
 import { VirtualGeometryViewport } from '../primitives/VirtualGeometryViewport';
 import { morphArtifact } from '../primitive-transformer-engine';
 import { ArtifactStageProps } from './artifact-stage-props';
+import { DockedFrame, DockSplitter } from './DockedFrame';
+import { DOCK_RATIO_DEFAULT, DockSide, dockRefusal, dockSideAt, liveDock, TAB_DRAG_TYPE } from './stage-dock';
 
 /** The title of a document nobody named. */
 const UNTITLED_DOCUMENT = 'Untitled document';
@@ -451,11 +453,102 @@ export const CanvasCardBody: React.FC<ArtifactStageProps> = props => {
                 />
             </CanvasErrorBoundary>
         ) : (
-            <>
+            <DockedStage {...props}>
                 <DocumentCodeSurfaces {...props} />
                 <BoardGraphSpatialSurfaces {...props} />
-            </>
+            </DockedStage>
         )}
     </div>
+    );
+};
+
+/**
+ * The main stage with a second artifact docked beside it (stage-dock.ts). A tab dragged over the stage shows where it
+ * would dock (left, right or bottom edge); dropped there, it docks; dropped in the middle, it opens as a click does.
+ */
+const DockedStage: React.FC<ArtifactStageProps & { children: React.ReactNode }> = props => {
+    const { children, activeArtifact, artifactHistory, stageDock, setStageDock, handleSelectArtifactTab, handleUpdateArtifact, handleMorphArtifact, handleOpenInAppBrowser, handleSurfaceAiPrompt, getArtifactIcon, activeWorkspace, showToast } = props;
+    const containerRef = React.useRef<HTMLDivElement>(null);
+    const [hover, setHover] = React.useState<DockSide | 'center' | undefined>();
+    const open = artifactHistory.length ? artifactHistory : (activeArtifact ? [activeArtifact] : []);
+    const live = liveDock(stageDock, activeArtifact, open);
+    const isTabDrag = (e: React.DragEvent) => e.dataTransfer.types.includes(TAB_DRAG_TYPE);
+    const zoneAt = (e: React.DragEvent) => {
+        const r = containerRef.current?.getBoundingClientRect();
+        return r ? (dockSideAt(e.clientX, e.clientY, r) ?? 'center') : undefined;
+    };
+    const onDrop = (e: React.DragEvent) => {
+        if (!isTabDrag(e)) return;
+        e.preventDefault();
+        const zone = zoneAt(e);
+        setHover(undefined);
+        const art = open.find(a => a.id === e.dataTransfer.getData(TAB_DRAG_TYPE));
+        if (!art || !zone) return;
+        if (zone === 'center') { if (art.id !== activeArtifact?.id) handleSelectArtifactTab(art); return; }
+        // the main view dragged to an edge: the docked artifact (else the next open tab) becomes the main view
+        if (art.id === activeArtifact?.id) {
+            const next = live?.artifact ?? open.find(a => a.id !== art.id && !dockRefusal(art, a));
+            if (!next) { showToast(`Open another tab to dock "${art.title}" beside it`, 'ℹ️'); return; }
+            handleSelectArtifactTab(next);
+            setStageDock({ artifactId: art.id, side: zone, ratio: stageDock?.ratio ?? DOCK_RATIO_DEFAULT });
+            return;
+        }
+        const refused = dockRefusal(art, activeArtifact);
+        if (refused) { showToast(`Cannot dock "${art.title}": ${refused}`, '⚠️'); return; }
+        setStageDock({ artifactId: art.id, side: zone, ratio: stageDock?.ratio ?? DOCK_RATIO_DEFAULT });
+    };
+    const side = live?.dock.side;
+    const share = live ? `${Math.round(live.dock.ratio * 1000) / 10}%` : undefined;
+    const frame = live && (
+        <div key="dock" style={{ display: 'flex', minWidth: 0, minHeight: 0, flex: `0 0 ${share}` }}>
+            <DockedFrame
+                artifact={live.artifact}
+                getArtifactIcon={getArtifactIcon}
+                workspacePath={activeWorkspace.path}
+                onUpdateArtifact={a => handleUpdateArtifact(a, { keepStage: true })}
+                onMorphArtifact={handleMorphArtifact}
+                onPromptAction={handleSurfaceAiPrompt}
+                onOpenInBrowser={handleOpenInAppBrowser}
+                onSwap={() => {
+                    const main = activeArtifact;
+                    handleSelectArtifactTab(live.artifact);
+                    setStageDock(main ? { ...live.dock, artifactId: main.id } : undefined);
+                }}
+                onUndock={() => setStageDock(undefined)}
+            />
+        </div>
+    );
+    const splitter = live && (
+        <DockSplitter key="split" side={live.dock.side} containerRef={containerRef}
+            onRatio={ratio => setStageDock(d => (d ? { ...d, ratio } : d))}
+            onReset={() => setStageDock(d => (d ? { ...d, ratio: DOCK_RATIO_DEFAULT } : d))} />
+    );
+    const main = <div key="main" className="sb-docked-main" style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'auto' }}>{children}</div>;
+    return (
+        <div
+            ref={containerRef}
+            className="sb-docked-stage"
+            style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: side === 'top' || side === 'bottom' ? 'column' : 'row', position: 'relative' }}
+            onDragOver={e => { if (!isTabDrag(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; const z = zoneAt(e); if (z !== hover) setHover(z); }}
+            onDragLeave={e => { if (!containerRef.current?.contains(e.relatedTarget as Node | null)) setHover(undefined); }}
+            onDrop={onDrop}
+        >
+            {side === 'left' || side === 'top' ? [frame, splitter, main] : [main, splitter, frame]}
+            {hover && <DockDropHint zone={hover} />}
+        </div>
+    );
+};
+
+/** Where a dragged tab would land: the highlighted half of the stage, or the whole stage for "open it". */
+const DockDropHint: React.FC<{ zone: DockSide | 'center' }> = ({ zone }) => {
+    const box: React.CSSProperties = zone === 'left' ? { left: 0, top: 0, bottom: 0, width: '45%' }
+        : zone === 'right' ? { right: 0, top: 0, bottom: 0, width: '45%' }
+        : zone === 'top' ? { left: 0, right: 0, top: 0, height: '45%' }
+        : zone === 'bottom' ? { left: 0, right: 0, bottom: 0, height: '45%' }
+        : { left: 0, right: 0, top: 0, bottom: 0 };
+    return (
+        <div className="sb-dock-drop-hint" style={{ position: 'absolute', ...box, pointerEvents: 'none', background: 'rgba(10,132,255,0.12)', border: '2px solid rgba(10,132,255,0.6)', borderRadius: 6, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(160,200,255,0.95)', fontSize: 13 }}>
+            {zone === 'center' ? 'Open here' : `Dock ${zone}`}
+        </div>
     );
 };

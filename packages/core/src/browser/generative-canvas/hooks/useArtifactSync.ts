@@ -173,18 +173,22 @@ export interface UseArtifactSyncDeps {
 export function useArtifactSync(deps: UseArtifactSyncDeps) {
     const { activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, isGenerating, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions } = deps;
 
-    const handleUpdateArtifact = React.useCallback((updatedArtifact: CanvasArtifact) => {
+    /**
+     * An artifact edited on its surface: saved, versioned and written through its lens. It becomes the main view, first in
+     * the history, unless `keepStage` (a surface beside the main stage, the docked frame): then it is replaced where it is.
+     */
+    const handleUpdateArtifact = React.useCallback((updatedArtifact: CanvasArtifact, opts?: { keepStage?: boolean }) => {
         const canonicalArtifact = graphControllerRef.current.registerArtifact(
             updatedArtifact,
             `studio-update-${updatedArtifact.id}-${updatedArtifact.version}`
         );
         setGraphEpoch(epoch => epoch + 1);
-        setActiveArtifact(canonicalArtifact);
+        if (opts?.keepStage) setActiveArtifact(prev => (prev?.id === canonicalArtifact.id ? canonicalArtifact : prev));
+        else setActiveArtifact(canonicalArtifact);
         recordArtifactVersion(canonicalArtifact);
-        setArtifactHistory(prev => [
-            canonicalArtifact,
-            ...prev.filter(a => a.id !== updatedArtifact.id && a.id !== canonicalArtifact.id)
-        ]);
+        setArtifactHistory(prev => opts?.keepStage && prev.some(a => a.id === updatedArtifact.id)
+            ? prev.map(a => (a.id === updatedArtifact.id ? canonicalArtifact : a))
+            : [canonicalArtifact, ...prev.filter(a => a.id !== updatedArtifact.id && a.id !== canonicalArtifact.id)]);
 
         // Bi-directional lens unprojection to workspace disk
         try {
@@ -245,10 +249,13 @@ export function useArtifactSync(deps: UseArtifactSyncDeps) {
             setSessions(prev => {
                 const next = prev.map(s => {
                     if (s.id === currentSessionId) {
+                        const keep = opts?.keepStage && s.artifactHistory?.some(a => a.id === updatedArtifact.id);
                         return {
                             ...s,
-                            activeArtifact: canonicalArtifact,
-                            artifactHistory: s.artifactHistory
+                            activeArtifact: opts?.keepStage && s.activeArtifact?.id !== canonicalArtifact.id ? s.activeArtifact : canonicalArtifact,
+                            artifactHistory: keep
+                                ? s.artifactHistory!.map(a => (a.id === updatedArtifact.id ? canonicalArtifact : a))
+                                : s.artifactHistory
                                 ? [canonicalArtifact, ...s.artifactHistory.filter(a => a.id !== updatedArtifact.id && a.id !== canonicalArtifact.id)]
                                 : [canonicalArtifact],
                             messages: s.messages.map(m => {

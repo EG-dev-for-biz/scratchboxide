@@ -23,10 +23,11 @@ import {
     IconFolder
 } from '../canvas-icons';
 import { ArtifactStageProps } from './artifact-stage-props';
+import { TAB_DRAG_TYPE } from './stage-dock';
 
 /** Artifact tab strip on the left of the canvas card header (Studio / VS Code style). */
 export const CanvasTabsBar: React.FC<ArtifactStageProps> = props => {
-    const { activeArtifact, layoutMode, docReadOnly, canvasArtifactTabs, getArtifactIcon, getCanvasHeaderLabel, handleSelectArtifactTab, handleCloseArtifactTab, handleCreateNewSandboxTab } = props;
+    const { activeArtifact, layoutMode, docReadOnly, canvasArtifactTabs, getArtifactIcon, getCanvasHeaderLabel, handleSelectArtifactTab, handleCloseArtifactTab, handleCreateNewSandboxTab, stageDock, setStageDock } = props;
     const activeTabRef = React.useRef<HTMLDivElement>(null);
 
     React.useEffect(() => {
@@ -52,13 +53,21 @@ export const CanvasTabsBar: React.FC<ArtifactStageProps> = props => {
         >
             {canvasArtifactTabs.map(art => {
                 const isActive = activeArtifact?.id === art.id;
+                const isDocked = !isActive && stageDock?.artifactId === art.id;
                 return (
                     <div
                         key={art.id}
                         ref={isActive ? activeTabRef : undefined}
-                        className={`sb-canvas-tab ${isActive ? 'active' : ''}`}
-                        onClick={() => handleSelectArtifactTab(art)}
-                        title={`${art.title || art.type} (${art.type})`}
+                        className={`sb-canvas-tab ${isActive ? 'active' : ''} ${isDocked ? 'docked' : ''}`}
+                        draggable
+                        onDragStart={e => { e.dataTransfer.setData(TAB_DRAG_TYPE, art.id); e.dataTransfer.effectAllowed = 'move'; }}
+                        onClick={() => {
+                            // a docked tab clicked: it becomes the main view and the main one takes its place in the dock
+                            if (isDocked && activeArtifact) setStageDock(d => (d ? { ...d, artifactId: activeArtifact.id } : d));
+                            handleSelectArtifactTab(art);
+                        }}
+                        title={`${art.title || art.type} (${art.type})${isDocked ? ' — docked beside the main view' : ''}. Drag to an edge of the stage to dock it.`}
+                        style={isDocked ? { boxShadow: 'inset 0 -2px 0 rgba(10,132,255,0.7)' } : undefined}
                     >
                         <span className="sb-canvas-tab-icon">{getArtifactIcon(art.type)}</span>
                         <span className="sb-canvas-tab-title">
@@ -119,7 +128,9 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
         currentArtifactVersionIndex,
         isCurrentArtifactLatestVersion,
         handleRollbackArtifactToVersion,
-        handleSelectVersion
+        handleSelectVersion,
+        stageDock,
+        canvasArtifactTabs
     } = props;
 
     // Scratchbox Studio overflow menu state & click-outside dismissal
@@ -405,7 +416,7 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
                 )}
             </button>
 
-            {(layoutMode === '3d' || activeArtifact?.type === '3d-scene') && (
+            {(layoutMode === '3d' || activeArtifact?.type === '3d-scene' || (stageDock && canvasArtifactTabs.some(a => a.id === stageDock.artifactId && a.type === '3d-scene'))) && (
                 <button
                     type="button"
                     className="sb-canvas-icon-btn"

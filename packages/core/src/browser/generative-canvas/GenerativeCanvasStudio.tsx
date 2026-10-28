@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import type { StageDock } from './studio/stage-dock';
 import { usePersistedProjects } from './hooks/usePersistedProjects';
 import * as React from 'react';
 import {
@@ -322,6 +323,8 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     // Layout Modes (layoutMode itself lives in the chat store)
     const [aiInteractionMode, setAiInteractionMode] = React.useState<'agent' | 'ask' | 'plan'>('agent');
     const [stageLayoutMode, setStageLayoutMode] = React.useState<StageLayoutMode>('single');
+    // a second artifact docked beside the main stage, dragged there from its tab (studio/stage-dock.ts)
+    const [stageDock, setStageDock] = React.useState<StageDock | undefined>();
     const [docReadOnly, setDocReadOnly] = React.useState<boolean>(false);
     const [documentPaneState, setDocumentPaneState] = React.useState<'split' | 'collapsed' | 'expanded'>('split');
     const [splitRatio, setSplitRatio] = React.useState<number>(0.382); // Golden ratio ~38.2% chat, 61.8% stage
@@ -1298,6 +1301,8 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         layoutMode,
         stageLayoutMode,
         setStageLayoutMode,
+        stageDock,
+        setStageDock,
         documentPaneState,
         setDocumentPaneState,
         docReadOnly,
@@ -1635,7 +1640,40 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                                         >
                                             <div className="sb-canvas-resizer-line" />
                                             <div className="sb-canvas-resizer-knob" />
+                                            {/* collapse the chat to the edge (the canvas takes the width; the edge tab brings it back) */}
+                                            <button
+                                                type="button"
+                                                className="sb-btn sb-chat-collapse-btn"
+                                                onMouseDown={e => e.stopPropagation()}
+                                                onDoubleClick={e => e.stopPropagation()}
+                                                onClick={() => setDocumentPaneState('expanded')}
+                                                title="Collapse chat"
+                                                aria-label="Collapse chat"
+                                                style={{ position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', width: 18, height: 28, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, background: 'var(--sb-surface-card, #1c1c1e)', border: '1px solid var(--sb-ui-card-border, rgba(255,255,255,0.12))', color: 'var(--sb-cadence-high, #f4f4f5)', fontSize: 12, cursor: 'pointer', zIndex: 31 }}
+                                            >
+                                                ‹
+                                            </button>
                                         </div>
+                                    )}
+
+                                    {/* Floating left-edge tab to show the chat again when it is collapsed */}
+                                    {documentPaneState === 'expanded' && (
+                                        <button
+                                            type="button"
+                                            className="sb-btn sb-chat-reopen-tab animate-fadeIn"
+                                            onClick={() => setDocumentPaneState('split')}
+                                            title="Show chat"
+                                            aria-label="Show chat"
+                                            style={{
+                                                position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)',
+                                                background: 'var(--sb-surface-card, #1c1c1e)', border: '1px solid var(--sb-ui-card-border, rgba(255,255,255,0.12))', borderLeft: 'none',
+                                                borderRadius: '0 8px 8px 0', padding: '12px 7px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px',
+                                                cursor: 'pointer', boxShadow: '0 4px 16px rgba(0,0,0,0.25)', zIndex: 60, color: 'var(--sb-cadence-high, #f4f4f5)'
+                                            }}
+                                        >
+                                            <span aria-hidden>›</span>
+                                            <span style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: '11px', fontWeight: 600, letterSpacing: '0.04em' }}>Chat</span>
+                                        </button>
                                     )}
 
                                     {/* Right Pane (expanded 100%, or flex-1 filling remaining stage) */}
