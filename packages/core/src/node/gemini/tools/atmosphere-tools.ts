@@ -37,6 +37,38 @@ function requireDate(tool: string, val: unknown): Date {
 }
 
 /** How far the sun's shadow camera reaches around the scene's centre when nothing else sizes it: the camera's distance to its target, halved. */
+/** The scene's place: its geoAnchor, else the first object's (lat, lng in degrees). */
+export function sceneGeoAnchor(data: Scene3DData | undefined): { lat: number; lng: number } | undefined {
+    const ok = (g: any) => g && Number.isFinite(Number(g.lat)) && Number.isFinite(Number(g.lng)) && g.active !== false;
+    const g = ok((data as any)?.geoAnchor) ? (data as any).geoAnchor : (data as any)?.objects?.find((o: any) => ok(o?.space?.geoAnchor))?.space?.geoAnchor;
+    return g ? { lat: Number(g.lat), lng: Number(g.lng) } : undefined;
+}
+
+/**
+ * A geo-anchored scene's sun is always the real sun of its place (user decision, 2026-10-28): a wanted elevation (a preset's,
+ * or given angles) becomes the time on that date when the sun stands that high there, on the same side of the sky as the
+ * wanted azimuth (east: morning, west: afternoon), its azimuth the ephemeris's. A height the sun does not reach that day
+ * takes solar noon (or midnight, for one below the lowest), and says so.
+ */
+export function sunForPlace(lat: number, lng: number, day: Date, want: { elevationDeg: number; azimuthDeg: number }): { elevation: number; azimuth: number; date: Date; reached: boolean } {
+    // the day around its local solar noon, every two minutes
+    const noonUtcMs = Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 12) - (lng / 15) * 3600e3;
+    const afternoon = ((want.azimuthDeg % 360) + 360) % 360 > 180;
+    let best: { e: number; a: number; t: number; d: number } | undefined, hi = -Infinity, lo = Infinity, hiT = noonUtcMs, loT = noonUtcMs;
+    for (let m = -720; m <= 720; m += 2) {
+        const t = noonUtcMs + m * 60e3, p = calculateNOAASolarPosition(new Date(t), lat, lng);
+        if (p.elevationDeg > hi) { hi = p.elevationDeg; hiT = t; }
+        if (p.elevationDeg < lo) { lo = p.elevationDeg; loT = t; }
+        if ((m > 0) !== afternoon && m !== 0) continue;
+        const d = Math.abs(p.elevationDeg - want.elevationDeg);
+        if (!best || d < best.d) best = { e: p.elevationDeg, a: p.azimuthDeg, t, d };
+    }
+    const reached = want.elevationDeg <= hi && want.elevationDeg >= lo;
+    const t = reached ? best!.t : want.elevationDeg > hi ? hiT : loT;
+    const p = calculateNOAASolarPosition(new Date(t), lat, lng);
+    return { elevation: p.elevationDeg, azimuth: p.azimuthDeg, date: new Date(t), reached };
+}
+
 function shadowRadiusFor(data: Scene3DData): number {
     const cam = data.camera as { position?: number[]; target?: number[] } | undefined;
     const p = cam?.position, t = cam?.target ?? [0, 0, 0];
@@ -366,8 +398,20 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
         let elevation: number, azimuth: number, sunSource: string;
         let isoDate: string | undefined;
         const preset = asString(args.preset);
-        const lat = num(args.latitude), lng = num(args.longitude);
-        if (num(args.sunElevationDeg) !== undefined && num(args.sunAzimuthDeg) !== undefined) {
+        // the place: the call's, else the open scene's geoAnchor
+        const anchor = sceneGeoAnchor(ctx?.request?.activeArtifact?.type === '3d-scene' ? ctx.request.activeArtifact.data as Scene3DData : undefined);
+        const lat = num(args.latitude) ?? anchor?.lat, lng = num(args.longitude) ?? anchor?.lng;
+        const fromScene = num(args.latitude) === undefined && anchor !== undefined;
+        if (lat !== undefined && lng !== undefined && !(args.isoDate !== undefined && asString(args.isoDate))) {
+            // a geo-anchored scene keeps its real sun whatever was asked: the wanted height becomes a time of day there
+            const want = num(args.sunElevationDeg) !== undefined && num(args.sunAzimuthDeg) !== undefined
+                ? { elevationDeg: num(args.sunElevationDeg)!, azimuthDeg: num(args.sunAzimuthDeg)! }
+                : preset ? (() => { const p = getPresetLightingState(preset); return { elevationDeg: p.elevationDeg, azimuthDeg: p.azimuthDeg }; })() : undefined;
+            if (!want) throw new MissingInputError('atmosphere_configure_scene', 'the sun', 'give a preset, sunElevationDeg and sunAzimuthDeg, or isoDate (the scene is geo-anchored, so the sun is taken from its place)');
+            const sun = sunForPlace(lat, lng, new Date(), want);
+            elevation = sun.elevation; azimuth = sun.azimuth; isoDate = sun.date.toISOString();
+            sunSource = `NOAA ephemeris at ${fromScene ? "the scene's geoAnchor" : 'the given place'} (${lat.toFixed(4)}, ${lng.toFixed(4)}), ${isoDate}: the time the sun stands ${want.elevationDeg.toFixed(0)}° high${preset ? ` (preset ${preset})` : ''}${sun.reached ? '' : `; it never stands that high there that day, so ${want.elevationDeg > sun.elevation ? 'solar noon' : 'its lowest'} is used`}`;
+        } else if (num(args.sunElevationDeg) !== undefined && num(args.sunAzimuthDeg) !== undefined) {
             elevation = num(args.sunElevationDeg)!;
             azimuth = num(args.sunAzimuthDeg)!;
             sunSource = 'given';
