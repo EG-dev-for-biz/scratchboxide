@@ -56,7 +56,7 @@ function brown(): RgbaImage8 {
     return { width: W, height: H, rgba };
 }
 
-interface Quad { mesh: string; corners: number[]; uv: number[]; relief?: number; material: number }
+interface Quad { mesh: string; corners: number[]; uv: number[]; relief?: number; material: number; extras?: unknown }
 
 /** Named meshes of single quads, each on a material with its own embedded PNG. */
 function scene(quads: Quad[], photos: RgbaImage8[]): Uint8Array {
@@ -78,7 +78,7 @@ function scene(quads: Quad[], photos: RgbaImage8[]): Uint8Array {
     let o = 0;
     for (const c of chunks) { bin.set(c, o); o += c.length; }
     const json = {
-        asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: quads.map((_, k) => k) }], nodes: quads.map((_, k) => ({ mesh: k })), meshes,
+        asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: quads.map((_, k) => k) }], nodes: quads.map((q, k) => ({ mesh: k, ...(q.extras ? { extras: q.extras } : {}) })), meshes,
         extensionsUsed: ['KHR_materials_unlit'],
         materials: photos.map((_, k) => ({ name: `m${k}`, pbrMetallicRoughness: { baseColorTexture: { index: k } }, extensions: { KHR_materials_unlit: {} } })),
         textures: photos.map((_, k) => ({ source: k })), images, accessors, bufferViews: views, buffers: [{ byteLength: bin.length }]
@@ -247,6 +247,54 @@ describe('pipeline K material regions', () => {
         let m1 = 0;
         for (let k = 0; k < s1.orm.width * s1.orm.height; k++) if (s1.orm.rgba[k * 4 + 2]) m1++;
         expect(m1).toBe(0);
+    });
+
+    it("draws the lattice's window cells as punched windows on a wall with no pier rhythm", () => {
+        // a 12 x 9 m masonry wall, two dark 1.2 x 1.6 m windows; the lattice's cells: 3 columns x 2 rows, windows at (1, 0) and (1, 1)
+        const W = 120, H = 90, rgba = new Uint8Array(W * H * 4);
+        const inWin = (x: number, y: number) => x >= 54 && x < 66 && ((y >= 12 && y < 28) || (y >= 57 && y < 73));
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) rgba.set([...(inWin(x, y) ? [30, 35, 45] : [190, 185, 175]), 255], (y * W + x) * 4);
+        const masonry = { width: W, height: H, rgba };
+        const windowCells = { u: [0, 0.45, 0.55, 1], v: [1, 0.5, 0], cells: [1, 4], label: 'photo-inferred', source: 'test' };
+        const quads: Quad[] = [{ mesh: 'facade_lattice_1', corners: wall(0, 12, 9), uv: FULL_UV, material: 0, extras: { sbFacadeLattice: { facadeId: 1, windowCells } } }];
+        const g = parseGlbBytes(scene(quads, [masonry]));
+        const b = building(), bg = parseGlbBytes(b.glb);
+        const classes = readRegionClasses(bg.json, imagesOf(b.photos))!;
+        const plan = planMaterialRegions(g, g.json, imagesOf([masonry]), classes, sets(classes));
+        const f = plan.report.facades.perFacade[0];
+        expect(f.weight).toBe(0);
+        expect(f.windowCells).toBe(2);
+        expect(plan.report.facades.withOpenings).toBe(1);
+        const m = plan.materials[0];
+        const opened = (x: number, y: number) => m.orm.rgba[(y * W + x) * 4 + 2] > 0 || m.params.rgba[(y * W + x) * 4] > 0;
+        // inside each window: metal or glass; the wall beside them and between: neither
+        expect(opened(60, 20)).toBe(true);
+        expect(opened(60, 65)).toBe(true);
+        expect(opened(20, 20)).toBe(false);
+        expect(opened(60, 45)).toBe(false);
+    });
+
+    it("opens a facade at the window fit's windows, in place of its bays and window cells", () => {
+        // the piered facade (bays every 5 m), but with one fitted window: the second bay's left pane on its second storey
+        const piers = piered(), W = piers.width, H = piers.height;
+        const uv = [19 / W, 43 / H, 29 / W, 61 / H];
+        const windowCells = { u: [0, 0.5, 1], v: [0, 1], cells: [0, 1], label: 'photo-inferred', source: 'test' };
+        const quads: Quad[] = [{ mesh: 'facade_lattice_1', corners: wall(0, 20, 30), uv: FULL_UV, material: 0, extras: { sbFacadeLattice: { facadeId: 1, windowCells, windows: { uv, label: 'photo-inferred', source: 'test' } } } }];
+        const g = parseGlbBytes(scene(quads, [piers]));
+        const b = building(), bg = parseGlbBytes(b.glb);
+        const classes = readRegionClasses(bg.json, imagesOf(b.photos))!;
+        const plan = planMaterialRegions(g, g.json, imagesOf([piers]), classes, sets(classes));
+        const f = plan.report.facades.perFacade[0];
+        expect(f.fittedWindows).toBe(1);
+        expect(f.weight).toBe(0);
+        expect(f.windowCells).toBe(0);
+        expect(f.openings).toBe('1 windows from the window fit');
+        const m = plan.materials[0];
+        const opened = (x: number, y: number) => m.orm.rgba[(y * W + x) * 4 + 2] > 0 || m.params.rgba[(y * W + x) * 4] > 0;
+        // inside the fitted window: metal or glass; a pane of another bay, which the bay rhythm would have opened: wall
+        expect(opened(24, 50)).toBe(true);
+        expect(opened(74, 50)).toBe(false);
+        expect(opened(24, 120)).toBe(false);
     });
 
     it('scales the bays by a soft gate between nccLo and minNcc, not a hard cut', () => {

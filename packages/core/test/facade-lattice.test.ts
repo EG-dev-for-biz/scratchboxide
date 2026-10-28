@@ -18,8 +18,9 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { applyFacadeLattices, facadeSamples, latticeFacade, photoLattice, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
+import { applyFacadeLattices, facadeSamples, latticeFacade, photoLattice, windowGrid, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
 import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
+import { WINDOW_FIT_VERSION } from '../src/node/3d-engine/staged-location/window-fit';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 import { readGlbTriangles } from './helpers/clay-glb-render';
 
@@ -70,6 +71,76 @@ describe('facades on their photo lattice', () => {
         const storey = [1.5, 4.5, 7.5, 10.5].map(sv => cell(sv, 1.5));
         expect(new Set(storey).size).toBe(1);
         expect(r.indices.length).toBeGreaterThan(0);
+    });
+
+    it('marks the windows as window cells and writes them, in the photo\'s UVs, into the rebuilt facade\'s extras', () => {
+        const r = latticeFacade(f, photo(), facadeSamples(scan(), f))!;
+        const at = (sv: number, tv: number) => r.t.findIndex((x, i) => tv >= x && tv < r.t[i + 1]) * (r.s.length - 1) + r.s.findIndex((x, i) => sv >= x && sv < r.s[i + 1]);
+        // the window centres are window cells, the wall between them is not
+        for (const [sv, tv] of [[1.5, 1.5], [4.5, 4.5], [10.5, 7.5]]) expect(r.windows[at(sv, tv)]).toBe(1);
+        expect(r.windows[at(0.4, 2.8)]).toBe(0);
+        expect(r.windows[at(3, 1.5)]).toBe(0);
+        // the cell lines in the photo's UVs: u from s, v down from the top
+        expect(r.cellU[0]).toBeCloseTo((r.s[0] - f.orthoSMin) / (W * PX), 6);
+        expect(r.cellV[0]).toBeCloseTo((f.orthoTMax - r.t[0]) / (H * PX), 6);
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-'));
+        const soup = scan(), file = path.join(dir, 'clay.glb');
+        writeStagedGlbFile(file, [{ name: 'scan', positions: soup, indices: Uint32Array.from({ length: soup.length / 3 }, (_, i) => i) }], {});
+        const twin = applyFacadeLattices(fs.readFileSync(file), [{ f, r, png: Buffer.from('89504e470d0a1a0a', 'hex') }], true);
+        const wc = parseGlbBytes(twin.glb).json.nodes.at(-1).extras.sbFacadeLattice.windowCells;
+        expect(wc.label).toBe('photo-inferred');
+        expect(wc.u).toHaveLength(r.s.length);
+        expect(wc.cells).toContain(at(1.5, 1.5));
+        expect(wc.cells.length).toBe(r.windows.reduce((a: number, v: number) => a + v, 0));
+    });
+
+    it("draws the lattice on the window fit's windows: their edges are its lines, they alone are its window cells, recessed", () => {
+        // the fit found the windows of the first two bays only (the third left to the photo's own reading of nothing)
+        const fitted: Array<[number, number, number, number]> = [];
+        for (const s0 of [0.9, 3.9]) for (const t0 of [0.7, 3.7, 6.7]) fitted.push([s0, t0, s0 + 1.2, t0 + 1.6]);
+        const r = latticeFacade(f, photo(), facadeSamples(scan(), f), undefined, undefined, true, fitted)!;
+        for (const e of [0.9, 2.1, 3.9, 5.1]) expect(r.s.some(v => Math.abs(v - e) < 1e-9)).toBe(true);
+        for (const e of [0.7, 2.3, 3.7, 5.3, 6.7, 8.3]) expect(r.t.some(v => Math.abs(v - e) < 1e-9)).toBe(true);
+        const cellAt = (sv: number, tv: number) => [r.t.findIndex((x, i) => tv >= x && tv < r.t[i + 1]), r.s.findIndex((x, i) => sv >= x && sv < r.s[i + 1])];
+        const ns = r.s.length - 1;
+        const isWin = (sv: number, tv: number) => { const [b, a] = cellAt(sv, tv); return r.windows[b * ns + a] === 1; };
+        const depthAt = (sv: number, tv: number) => { const [b, a] = cellAt(sv, tv); return r.depth[b][a]; };
+        expect(isWin(1.5, 1.5)).toBe(true);
+        expect(isWin(4.5, 7.5)).toBe(true);
+        // the third bay's windows were not fitted: not window cells
+        expect(isWin(7.5, 1.5)).toBe(false);
+        // the fitted windows recess (at least the scan's 0.3 m); the wall beside them stays on the plane
+        expect(depthAt(1.5, 1.5)).toBeLessThan(-0.15);
+        expect(Math.abs(depthAt(3, 1.5))).toBeLessThan(0.1);
+    });
+
+    it("writes the window fit's windows, in the photo's UVs, into the rebuilt facade's extras", () => {
+        const r = latticeFacade(f, photo(), facadeSamples(scan(), f))!;
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-'));
+        const soup = scan(), file = path.join(dir, 'clay.glb');
+        writeStagedGlbFile(file, [{ name: 'scan', positions: soup, indices: Uint32Array.from({ length: soup.length / 3 }, (_, i) => i) }], {});
+        const fitted = [0.075, 0.1, 0.175, 0.3, 0.325, 0.1, 0.425, 0.3];
+        const twin = applyFacadeLattices(fs.readFileSync(file), [{ f, r: { ...r, fittedWindows: fitted }, png: Buffer.from('89504e470d0a1a0a', 'hex') }], true);
+        const ex = parseGlbBytes(twin.glb).json.nodes.at(-1).extras.sbFacadeLattice;
+        expect(ex.windows).toEqual({ uv: fitted, label: 'photo-inferred', source: WINDOW_FIT_VERSION });
+        // without a fit, no windows entry (the window cells stay)
+        const plain = applyFacadeLattices(fs.readFileSync(file), [{ f, r, png: Buffer.from('89504e470d0a1a0a', 'hex') }], true);
+        expect(parseGlbBytes(plain.glb).json.nodes.at(-1).extras.sbFacadeLattice.windows).toBeUndefined();
+    });
+
+    it('reads windows in rows and columns: weathered stone bands and a shaded pier are not windows', () => {
+        // 7 columns x 6 rows of cells: wall 200; windows (40) where columns 1, 3, 5 cross rows 1, 3; row 4 weathered stone
+        // (150 in every column), column 6 a shaded pier (150 in every row), row 0 a dark band of stone in one direction only
+        const ns = 7, nt = 6, lum = new Float64Array(ns * nt).fill(200);
+        for (const b of [1, 3]) for (const a of [1, 3, 5]) lum[b * ns + a] = 40;
+        for (let a = 0; a < ns; a++) lum[4 * ns + a] = 150;
+        for (let b = 0; b < nt; b++) if (lum[b * ns + 6] === 200) lum[b * ns + 6] = 150;
+        const w = windowGrid(lum, ns, nt);
+        const on = [...w].map((v, k) => (v ? k : -1)).filter(k => k >= 0);
+        expect(on.sort((x, y) => x - y)).toEqual([1 * ns + 1, 1 * ns + 3, 1 * ns + 5, 3 * ns + 1, 3 * ns + 3, 3 * ns + 5]);
+        // a uniform stone wall with patchy weathering has no windows
+        const stone = Float64Array.from({ length: ns * nt }, (_, k) => (k % 5 === 0 ? 160 : 200));
+        expect(windowGrid(stone, ns, nt).some(v => v)).toBe(false);
     });
 
     it('winds every face, the cells and their reveals, to face the way its normal says', () => {

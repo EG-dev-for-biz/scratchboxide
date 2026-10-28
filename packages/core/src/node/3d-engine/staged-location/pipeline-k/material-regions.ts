@@ -28,6 +28,9 @@
  *       beside it and deciding the same way (its own rhythm, or its band's); a smaller scan piece on a face takes the
  *       decision of the face's facade nearest it; elsewhere on a scan piece, only the photometric relief's recessed
  *       cells (_RELIEF_HEIGHT below recessM, photo-inferred) are openings;
+ *     - a rebuilt facade's punched windows: the lattice's window cells (facade-lattice.ts: each row's repeated cells darker
+ *       than its wall, in the straightened photo; written in the facade node's extras with the cell lines in the photo's
+ *       UVs) are openings at full weight too, where a wall shows windows but no pier rhythm (a masonry base);
  *     - elsewhere every texel is wall, whatever its colour (weathered or shaded stone falls in the darker classes).
  *  3. A library set per class (resolved by the caller: the texture library ranked by the class colour), its roughness,
  *     metalness and normal drawn at the set's real size over each rebuilt facade (box-filtered to the facade's texel, so
@@ -50,7 +53,7 @@ import type { RgbaImage8 } from '../tile-texture-transfer';
 import { GLASS_ROUGHNESS, MIN_REGION_M2, latticeGlassAgreement } from '../facade-materials';
 import { MATERIAL_PARAMS_CHANNELS } from '../staged-glb-writer';
 
-export const MATERIAL_REGIONS_VERSION = 'material-regions/12';
+export const MATERIAL_REGIONS_VERSION = 'material-regions/14';
 
 export const MATERIAL_REGIONS_PARAMS = {
     /** Appearance classes, texels sampled per facade photo, k-means iterations, sampling seed. */
@@ -105,7 +108,7 @@ export interface MaterialRegionsReport {
     classes: Array<Pick<RegionClass, 'index' | 'meanLab' | 'share' | 'wall'> & { set: string; distance: number; metalnessScale?: number; sizeEstimate?: string }>;
     /** The wall faces, each one rhythm decision for its rebuilt facades and the scan pieces on it. */
     faces: Array<{ facades: string[]; lengthM: number; rhythmNcc: number; pitchM: number; pierContrast: number; weight: number }>;
-    facades: { total: number; withOpenings: number; perFacade: Array<{ mesh: string; face: number; /** Whose rhythm decided its bays: its own photo, or its height band on its face. */ rhythmFrom: string; texelM: number; rhythmNcc: number; pitchM: number; pierContrast: number; weight: number; openings: string; openingShare: number; glassRegions: number; glassRejected: number }> };
+    facades: { total: number; withOpenings: number; perFacade: Array<{ mesh: string; face: number; /** The lattice's window cells drawn as openings (punched windows). */ windowCells: number; /** The window fit's windows drawn as the facade's openings (window-fit.ts), in place of its bays and window cells. */ fittedWindows: number; /** Whose rhythm decided its bays: its own photo, or its height band on its face. */ rhythmFrom: string; texelM: number; rhythmNcc: number; pitchM: number; pierContrast: number; weight: number; openings: string; openingShare: number; glassRegions: number; glassRejected: number }> };
     /** Scan pieces: the share of their texels that are openings, from a face's bays or from the relief's recesses. */
     scanPieces: { total: number; openingShare: number; fromFaces: number; fromRelief: number; walls: number; wallsWithBays: number; wallAreaWithBaysM2: number };
     texels: { total: number; metal: number; glass: number };
@@ -398,6 +401,21 @@ function forTexelsOf(uv: ArrayLike<number>, W: number, H: number, visit: (k: num
     }
 }
 
+/** A rebuilt facade's fitted windows (window-fit.ts), u0 v0 u1 v1 per window, as facade-lattice.ts wrote them (sbFacadeLattice.windows). */
+function fittedWindows(json: any, meshName: string): number[] | undefined {
+    const mi = (json.meshes ?? []).findIndex((m: any) => m.name === meshName);
+    const uv = (json.nodes ?? []).find((n: any) => n.mesh === mi && n.extras?.sbFacadeLattice?.windows)?.extras.sbFacadeLattice.windows.uv;
+    return Array.isArray(uv) && uv.length % 4 === 0 ? uv : undefined;
+}
+
+/** A rebuilt facade's window cells, as facade-lattice.ts wrote them in its node's extras (sbFacadeLattice.windowCells). */
+function latticeWindows(json: any, meshName: string): { u: number[]; v: number[]; cells: number[] } | undefined {
+    const mi = (json.meshes ?? []).findIndex((m: any) => m.name === meshName);
+    const node = (json.nodes ?? []).find((n: any) => n.mesh === mi && n.extras?.sbFacadeLattice?.windowCells);
+    const wc = node?.extras.sbFacadeLattice.windowCells;
+    return wc && Array.isArray(wc.u) && Array.isArray(wc.v) && Array.isArray(wc.cells) && wc.u.length > 1 && wc.v.length > 1 ? wc : undefined;
+}
+
 /** One facade's bay decision: its rhythm (its own, or its height band's on its face, whichever is surer) and its bay columns along the wall. */
 interface BayDecision { from: 'own' | 'band'; rhythm: Rhythm; bayAt: (s: number) => boolean }
 
@@ -633,14 +651,35 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
         const rhythm: Rhythm = decision ? decision.rhythm : { ncc: 0, pitchM: 0, contrast: 0, weight: 0 };
         const bayCol = new Uint8Array(W);
         if (decision && frame) for (let x = 0; x < W; x++) bayCol[x] = decision.bayAt(frame.a * (x + 0.5) + frame.b) ? 1 : 0;
-        const w = rhythm.weight;
-        const opening = new Uint8Array(N);
+        // the window fit's windows, where the facade has them: they are its openings, bays and punched windows alike
+        const fitted = fittedWindows(json, mesh);
+        const w = fitted ? 0 : rhythm.weight;
+        // per texel: an opening's weight (its bay column's rhythm weight, or 1 in a fitted window or a lattice window cell), 0 for wall
+        const opening = new Uint8Array(N), openWeight = new Float32Array(N);
+        let windowTexels = 0;
+        if (fitted) for (let i = 0; i < fitted.length; i += 4) {
+            const x0 = Math.max(0, Math.round(fitted[i] * W)), x1 = Math.min(W, Math.round(fitted[i + 2] * W));
+            const y0 = Math.max(0, Math.round(fitted[i + 1] * H)), y1 = Math.min(H, Math.round(fitted[i + 3] * H));
+            for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const k = y * W + x; if (!opening[k]) windowTexels++; opening[k] = 1; openWeight[k] = 1; }
+        }
         if (w > 0) {
             for (let y = 0; y < H; y++) {
                 let wall = 0;
                 for (let x = 0; x < W; x++) if (cls[y * W + x] === WALL) wall++;
                 if (wall / W > P.wallRowShare) continue;
-                for (let x = 0; x < W; x++) if (bayCol[x]) opening[y * W + x] = 1;
+                for (let x = 0; x < W; x++) if (bayCol[x]) { opening[y * W + x] = 1; openWeight[y * W + x] = w; }
+            }
+        }
+        // the punched windows the lattice found in the straightened photo (its window cells, in the photo's UVs)
+        const windows = fitted ? undefined : latticeWindows(json, mesh);
+        if (windows) {
+            const ns = windows.u.length - 1;
+            for (const c of windows.cells) {
+                const a = c % ns, b = Math.floor(c / ns);
+                if (b + 1 >= windows.v.length) continue;
+                const x0 = Math.max(0, Math.round(Math.min(windows.u[a], windows.u[a + 1]) * W)), x1 = Math.min(W, Math.round(Math.max(windows.u[a], windows.u[a + 1]) * W));
+                const y0 = Math.max(0, Math.round(Math.min(windows.v[b], windows.v[b + 1]) * H)), y1 = Math.min(H, Math.round(Math.max(windows.v[b], windows.v[b + 1]) * H));
+                for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const k = y * W + x; if (!opening[k]) windowTexels++; opening[k] = 1; openWeight[k] = 1; }
             }
         }
         // the finish of each texel: wall outside the openings, its class inside
@@ -709,15 +748,16 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
                 continue;
             }
             const t = tiles[finish[k]], j = ((y % t.th) * t.tw + (x % t.tw)) * 3;
-            write(orm, params, k, t.o[j + 1], Math.min(1, t.o[j + 2] * metalScale[finish[k]]) * w, 0);
+            write(orm, params, k, t.o[j + 1], Math.min(1, t.o[j + 2] * metalScale[finish[k]]) * (opening[k] ? openWeight[k] : 1), 0);
             nrm.rgba.set([Math.round(t.n[j] * 255), Math.round(t.n[j + 1] * 255), Math.round(t.n[j + 2] * 255), 255], k * 4);
         }
         let openN = 0;
         for (let k = 0; k < N; k++) openN += opening[k];
-        if (w > 0) report.facades.withOpenings++;
+        if (w > 0 || windowTexels) report.facades.withOpenings++;
         report.facades.perFacade.push({
             mesh, face: fi ?? -1, rhythmFrom: decision?.from ?? 'none', texelM: Math.round(texelM * 1e4) / 1e4, rhythmNcc: r2(rhythm.ncc), pitchM: r2(rhythm.pitchM), pierContrast: Math.round(rhythm.contrast * 10) / 10, weight: r2(w),
-            openings: w > 0 ? `bays between the piers of its wall face (weight ${r2(w)})` : 'none: no confirmed pier rhythm on its wall face', openingShare: Math.round((openN / N) * 1000) / 1000, glassRegions: accepted, glassRejected: rejected
+            windowCells: windows?.cells.length ?? 0, fittedWindows: fitted ? fitted.length / 4 : 0,
+            openings: fitted ? `${fitted.length / 4} windows from the window fit` : [w > 0 ? `bays between the piers of its wall face (weight ${r2(w)})` : '', windows?.cells.length ? `${windows.cells.length} punched windows from the lattice` : ''].filter(Boolean).join('; ') || 'none: no confirmed pier rhythm on its wall face and no window cells', openingShare: Math.round((openN / N) * 1000) / 1000, glassRegions: accepted, glassRejected: rejected
         });
         planned.push({ material: mi, orm, normal: nrm, params, ...(accepted ? { photoFallback: fallback } : {}), rebuilt: true, glass: accepted > 0 });
     }
@@ -836,7 +876,7 @@ export function writeMaterialRegions(json: any, plan: MaterialRegionsPlan, addTe
 export function describeMaterialRegions(r: MaterialRegionsReport): string {
     const pct = (a: number) => r.texels.total ? `${Math.round((100 * a) / r.texels.total)}%` : '0%';
     return `material regions: ${r.classes.length} appearance classes (${r.classes.map(c => `${c.wall ? 'wall' : 'L ' + Math.round(c.meanLab[0])} -> ${c.set}`).join(', ')}); ` +
-        `${r.faces.length} wall faces, ${r.faces.filter(f => f.weight > 0).length} with a pier rhythm (${r.facades.withOpenings} of ${r.facades.total} rebuilt facades got bays, the metal scaled by their face's weight); ` +
+        `${r.faces.length} wall faces, ${r.faces.filter(f => f.weight > 0).length} with a pier rhythm (${r.facades.withOpenings} of ${r.facades.total} rebuilt facades got openings: bays, the metal scaled by their face's weight, ${r.facades.perFacade.reduce((a, f) => a + f.windowCells, 0)} punched windows from the lattice, and ${r.facades.perFacade.filter(f => f.fittedWindows).length} facades opened at their ${r.facades.perFacade.reduce((a, f) => a + f.fittedWindows, 0)} fitted windows instead); ` +
         `scan pieces: ${r.scanPieces.wallsWithBays} of ${r.scanPieces.walls} scan walls with bays (${r.scanPieces.wallAreaWithBaysM2} m²), ${Math.round(r.scanPieces.fromFaces * 1000) / 10}% of their texels in bays, ${Math.round(r.scanPieces.fromRelief * 1000) / 10}% on the relief's recessed cells; ` +
         `${pct(r.texels.metal)} of texels metal (metalness at least ${MATERIAL_REGIONS_PARAMS.metalCountAt}), ${pct(r.texels.glass)} glass (${r.facades.perFacade.reduce((a, f) => a + f.glassRegions, 0)} regions accepted by the lattice test, ${r.facades.perFacade.reduce((a, f) => a + f.glassRejected, 0)} rejected); ` +
         `roughness, metalness and normal generated from the library, colour the photo (${r.ms} ms)`;

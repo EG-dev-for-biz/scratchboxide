@@ -2611,7 +2611,26 @@ private:
                << ",\"pixel\":" << detail::fmt(f.pixel) << ",\"texel\":" << detail::fmt(f.texel) << ",\"width\":" << f.orthoWidth << ",\"height\":" << f.orthoHeight
                << ",\"orthoSMin\":" << detail::fmt(f.orthoSMin) << ",\"orthoTMax\":" << detail::fmt(f.orthoTMax) << ",\"coverage\":" << detail::fmt(f.coverage)
                << ",\"pattern\":\"" << f.analysis.pattern << "\",\"latticeConfirmation\":" << detail::fmt(f.analysis.latticeConfirmation)
-               << ",\"latticeRejected\":" << (f.analysis.latticeRejected ? "true" : "false") << ",\"cells\":[";
+               << ",\"latticeRejected\":" << (f.analysis.latticeRejected ? "true" : "false");
+            // the grid the cells come from (whether or not its cells were confirmed): pitches, the folded dark cell and its runs,
+            // the lattice's rows and columns, so a later pass can lay the whole lattice out and judge each cell itself
+            {
+                const auto& a = f.analysis;
+                auto runs = [](const std::vector<std::pair<double, double>>& r) {
+                    std::string s = "[";
+                    for (size_t i = 0; i < r.size(); ++i) s += (i ? "," : "") + std::string("[") + detail::fmt(r[i].first) + "," + detail::fmt(r[i].second) + "]";
+                    return s + "]";
+                };
+                js << ",\"grid\":{\"periodS\":{\"found\":" << (a.periodS.found ? "true" : "false") << ",\"pitch\":" << detail::fmt(a.periodS.pitch) << ",\"periodicity\":" << detail::fmt(a.periodS.periodicity) << ",\"harmonics\":" << a.periodS.harmonics << "}"
+                   << ",\"periodT\":{\"found\":" << (a.periodT.found ? "true" : "false") << ",\"pitch\":" << detail::fmt(a.periodT.pitch) << ",\"periodicity\":" << detail::fmt(a.periodT.periodicity) << ",\"harmonics\":" << a.periodT.harmonics << "}"
+                   << ",\"cell\":{\"foundS\":" << (a.cell.foundS ? "true" : "false") << ",\"foundT\":" << (a.cell.foundT ? "true" : "false")
+                   << ",\"s0\":" << detail::fmt(a.cell.s0) << ",\"widthS\":" << detail::fmt(a.cell.widthS) << ",\"t0\":" << detail::fmt(a.cell.t0) << ",\"heightT\":" << detail::fmt(a.cell.heightT)
+                   << ",\"phaseS\":" << detail::fmt(a.cell.phaseS) << ",\"phaseT\":" << detail::fmt(a.cell.phaseT) << ",\"contrastS\":" << detail::fmt(a.cell.contrastS) << ",\"contrastT\":" << detail::fmt(a.cell.contrastT)
+                   << ",\"runsS\":" << runs(a.cell.runsS) << ",\"runsT\":" << runs(a.cell.runsT) << "}"
+                   << ",\"latticeRows\":" << a.latticeRows << ",\"latticeCols\":" << a.latticeCols << ",\"rowPitch\":" << detail::fmt(a.rowPitch)
+                   << ",\"cellsTested\":" << a.cellsTested << ",\"cellsAccepted\":" << a.cellsAccepted << "}";
+            }
+            js << ",\"cells\":[";
             bool fc = true;
             for (const auto& c : f.analysis.features) {
                 if (c.lattice == 0) continue;

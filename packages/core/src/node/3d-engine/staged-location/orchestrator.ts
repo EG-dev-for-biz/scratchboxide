@@ -86,6 +86,7 @@ import { buildDistrictMassingLayer, districtFootprint, districtMassingEnabled, D
 import { REVOLUTION_FIT_VERSION, revolutionFitEnabled, reviseForRevolutions, type RevolutionLayerSummary } from './revolution-fit';
 import { districtEDetail, districtEDetailEnabled, DISTRICT_E_DETAIL_VERSION } from './district-e-detail';
 import { describePolish, polishRemesh, REMESH_POLISH_VERSION } from './remesh-polish';
+import { fitWindowsForOrthos, WINDOW_FIT_VERSION } from './window-fit';
 import { wallSampleIndex } from './wall-plane-fit';
 import { assembleDistrictLayer, inBackground, districtMassingManifest, findStoredLayer, objectFrameOf, objectReuseEnabled, objectStoreEnabled, planDistrictObjects, readLayerManifests, storeSceneObjects, treesManifest, wholeLayerManifest, writeLayerManifests, type DistrictObjectPlan, type LayerObjectManifest } from './scene-objects';
 import { objectInputHash } from '../../asset-store/scene-object-store';
@@ -3350,7 +3351,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     }
                 }
                 // pipeline K: the facade orthos straightened and their smears levelled before the facades are rebuilt on them
-                let orthosKey: string | undefined;
+                let orthosKey: string | undefined, windowFit: string | undefined;
                 if (pipelineK) {
                     if (!r.reliefOrthosDir) run.note(PROVENANCE.remeshed, 'pipeline K: tile_refine wrote no facade orthophotos, so no facade could be straightened; the remesh stands as cleaned');
                     else {
@@ -3361,6 +3362,19 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             r = { ...r, reliefOrthosDir: k.orthosDir };
                             cache.writeRunNote(runId, 'pipeline_k', { version: PIPELINE_K_VERSION, orthosDir: k.orthosDir, cached: k.cached, ms: k.ms, reports: k.reports });
                             run.note(PROVENANCE.photoInferred, `pipeline K (${PIPELINE_K_VERSION}): ${describeRectified(k)}`);
+                            // the windows fitted on the straightened photos (window-fit.ts), for the lattice to hand to the material regions
+                            try {
+                                io.progress('pipeline K: fitting the windows on the facade photos');
+                                const wf = await timed('windowFit', () => fitWindowsForOrthos(k.orthosDir, { signal: io.signal }));
+                                windowFit = wf.file;
+                                const ok = wf.fit.facades.filter(f => !('error' in f)), failed = wf.fit.facades.filter(f => 'error' in f);
+                                cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, cached: wf.cached, ms: wf.fit.ms, facades: wf.fit.facades.map(f => ('error' in f ? f : { facadeId: f.facadeId, windows: f.rects.length, bands: f.bands.length, accepted: f.bands.filter(b => b.accepted).length, kinds: f.bands.filter(b => b.accepted).map(b => b.kind), ms: f.ms })) });
+                                run.note(PROVENANCE.photoInferred, `window fit (${WINDOW_FIT_VERSION}): ${ok.reduce((a, f) => a + ('rects' in f ? f.rects.length : 0), 0)} windows on ${ok.filter(f => 'rects' in f && f.rects.length).length} of ${wf.fit.facades.length} facades${failed.length ? `; ${failed.length} facades not fitted (${failed.map(f => `${f.facadeId}: ${'error' in f ? f.error : ''}`).join('; ').slice(0, 300)}), opened by their bay rhythm instead` : ''}`);
+                            } catch (err) {
+                                if (isAbort(err) || io.signal.aborted) throw err;
+                                cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, failed: true, reason: errorMessage(err) });
+                                run.note(PROVENANCE.photoInferred, `window fit failed (${errorMessage(err)}); the facades are opened by their bay rhythm and the lattice's window cells instead`);
+                            }
                         } catch (err) {
                             if (isAbort(err) || io.signal.aborted) throw err;
                             cache.writeRunNote(runId, 'pipeline_k', { version: PIPELINE_K_VERSION, failed: true, reason: errorMessage(err) });
@@ -3375,7 +3389,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const vec = eBuildings.flatMap(b => (b.extruded?.length ? b.extruded.filter(p => !p.planOnly).map(p => p.loops[0]) : [])).filter(l => l && l.length >= 3);
                         return vec.length ? vec : [structure.outline];
                     })() : undefined;
-                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: true, photoRecess: true } : {}), ...(kLoops ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}), ...(pipelineK && process.env.SCRATCHBOX_K_SEAL?.trim() === '1' ? { seal: true } : {}) }));
+                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: true, photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(kLoops ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}), ...(pipelineK && process.env.SCRATCHBOX_K_SEAL?.trim() === '1' ? { seal: true } : {}) }));
                     if (kLoops) cache.writeRunNote(runId, 'pipeline_k_base', { loops: kLoops, groundY: structure!.groundY, footprint: eBuildings.length ? 'Google vector footprint' : 'scan outline', report: pol.stats.base ?? null });
                     if (pol.clayGlb !== r.clayGlb) {
                         run.note(PROVENANCE.remeshed, `remesh polish (${REMESH_POLISH_VERSION}): ${describePolish(pol.stats)}`);
