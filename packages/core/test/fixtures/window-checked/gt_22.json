@@ -1,0 +1,63 @@
+{
+ "kind": "windows",
+ "facadeId": 22,
+ "crop": [
+  0,
+  300,
+  284,
+  584
+ ],
+ "pixel": 0.0771867198,
+ "windows": [
+  [
+   25,
+   0,
+   40,
+   300
+  ],
+  [
+   49,
+   0,
+   64,
+   300
+  ],
+  [
+   93,
+   0,
+   110,
+   300
+  ],
+  [
+   120,
+   0,
+   138,
+   300
+  ],
+  [
+   165,
+   0,
+   183,
+   300
+  ],
+  [
+   193,
+   0,
+   210,
+   300
+  ],
+  [
+   237,
+   0,
+   254,
+   300
+  ],
+  [
+   264,
+   0,
+   282,
+   300
+  ]
+ ],
+ "checked": "by eye by the agent on a 3x ruled crop: pane-frame edges of each window column (the vertical-variation profile agrees within about 2 px, and is the same cue the bay split uses); not human-verified",
+ "note": "tower window columns (window and spandrel ribbon per column) as the openings, split at the mullions, per the user 2026-10-27; every column runs the full crop height"
+}

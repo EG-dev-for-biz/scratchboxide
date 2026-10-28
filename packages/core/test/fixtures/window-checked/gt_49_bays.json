@@ -1,0 +1,39 @@
+{
+ "kind": "bays",
+ "facadeId": 49,
+ "crop": [
+  0,
+  300,
+  1354,
+  1654
+ ],
+ "pixel": 0.0771022588,
+ "windows": [
+  [
+   25,
+   0,
+   72,
+   300
+  ],
+  [
+   98,
+   0,
+   146,
+   300
+  ],
+  [
+   170,
+   0,
+   215,
+   300
+  ],
+  [
+   242,
+   0,
+   287,
+   300
+  ]
+ ],
+ "checked": "derived from the checked window columns of gt_49.json: neighbouring columns closer than 0.6 of the widest gap (the piers) joined across their mullion; not human-verified",
+ "note": "tower bays (the run of window columns between two piers, mullions included) as the relief recesses them"
+}

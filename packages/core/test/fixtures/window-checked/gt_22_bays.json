@@ -1,0 +1,39 @@
+{
+ "kind": "bays",
+ "facadeId": 22,
+ "crop": [
+  0,
+  300,
+  284,
+  584
+ ],
+ "pixel": 0.0771867198,
+ "windows": [
+  [
+   25,
+   0,
+   64,
+   300
+  ],
+  [
+   93,
+   0,
+   138,
+   300
+  ],
+  [
+   165,
+   0,
+   210,
+   300
+  ],
+  [
+   237,
+   0,
+   282,
+   300
+  ]
+ ],
+ "checked": "derived from the checked window columns of gt_22.json: neighbouring columns closer than 0.6 of the widest gap (the piers) joined across their mullion; not human-verified",
+ "note": "tower bays (the run of window columns between two piers, mullions included) as the relief recesses them"
+}
