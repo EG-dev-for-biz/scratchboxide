@@ -143,7 +143,10 @@ describe('pipeline K ortho rectifier', () => {
         const src = path.join(dir, 'relief_orthos');
         fs.mkdirSync(src);
         fs.writeFileSync(path.join(src, 'facade_0.png'), encodePng(W, H, bent.rgba, 4));
-        fs.writeFileSync(path.join(src, 'facade_1.png'), encodePng(W, H, bent.rgba, 4));
+        // facade 1: its photo covers every other column of its wall only (the rest the uncovered grey): too little to rectify
+        const sparse = Uint8Array.from(bent.rgba);
+        for (let y = 0; y < H; y++) for (let x = 1; x < W; x += 2) sparse.set([128, 128, 128, 255], (y * W + x) * 4);
+        fs.writeFileSync(path.join(src, 'facade_1.png'), encodePng(W, H, sparse, 4));
         const base = { centroid: [0, 0, 0], normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0], sMin: 0, sMax: W * PX, tMin: 0, tMax: H * PX, pixel: PX, width: W, height: H, orthoSMin: 0, orthoTMax: H * PX };
         fs.writeFileSync(path.join(src, 'facades.json'), JSON.stringify({ schema: 'test', facades: [{ ...base, facadeId: 0, image: 'facade_0.png', coverage: 0.9 }, { ...base, facadeId: 1, image: 'facade_1.png', coverage: 0.2 }] }));
         const r = await rectifyReliefOrthos(src, { threads: 1 });

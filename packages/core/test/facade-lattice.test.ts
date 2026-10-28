@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { applyFacadeLattices, facadeSamples, latticeFacade, photoLattice, windowGrid, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
+import { applyFacadeLattices, facadeSamples, latticeFacade, photoLattice, windowGrid, windowStrips, WINDOW_STRIPS, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
 import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { WINDOW_FIT_VERSION } from '../src/node/3d-engine/staged-location/window-fit';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
@@ -114,6 +114,61 @@ describe('facades on their photo lattice', () => {
         expect(Math.abs(depthAt(3, 1.5))).toBeLessThan(0.1);
     });
 
+    it('groups the fitted windows into columns and splits a column where its windows stand far apart (a band, a setback)', () => {
+        const w: Array<[number, number, number, number]> = [];
+        for (const s0 of [0.9, 3.9]) for (const t0 of [0.7, 3.7, 6.7]) w.push([s0, t0, s0 + 1.2, t0 + 1.6]);
+        // a third column whose top window stands 5 m above the others: two strips' worth of windows below, one alone above
+        w.push([6.9, 0.7, 8.1, 2.3], [6.95, 3.7, 8.05, 5.3], [6.9, 10.3, 8.1, 11.9]);
+        const strips = windowStrips(w);
+        // the column's edges are its windows' medians (of two, the upper)
+        const want = [[0.9, 0.7, 2.1, 8.3], [3.9, 0.7, 5.1, 8.3], [6.95, 0.7, 8.1, 5.3]];
+        expect(strips).toHaveLength(3);
+        strips.forEach((st, i) => st.forEach((v, k) => expect(v).toBeCloseTo(want[i][k], 9)));
+        // one window is no strip
+        expect(windowStrips([[0.9, 0.7, 2.1, 2.3]])).toEqual([]);
+    });
+
+    it('recesses each window column as one strip between proud piers, the windows a little deeper, the piers bevelled', () => {
+        // pipeline K: the scan uncarved (flat), every bay's windows fitted on all three storeys
+        const flat = scan().map((v, i) => (i % 3 === 2 ? 0 : v));
+        const fitted: Array<[number, number, number, number]> = [];
+        for (const s0 of [0.9, 3.9, 6.9, 9.9]) for (const t0 of [0.7, 3.7, 6.7]) fitted.push([s0, t0, s0 + 1.2, t0 + 1.6]);
+        const r = latticeFacade(f, photo(), facadeSamples(flat, f), undefined, undefined, true, fitted)!;
+        expect(r.strips).toHaveLength(4);
+        const cell = (sv: number, tv: number) => r.depth[r.t.findIndex((x, i) => tv >= x && tv < r.t[i + 1])][r.s.findIndex((x, i) => sv >= x && sv < r.s[i + 1])];
+        const spandrel = cell(1.5, 3.0), window = cell(1.5, 1.5), pier = cell(3.0, 3.0);
+        // the spandrel between two windows is recessed with the strip; the pier stays on the wall
+        expect(Math.abs(pier)).toBeLessThan(0.05);
+        expect(spandrel).toBeLessThan(-0.1);
+        expect(window).toBeCloseTo(spandrel - WINDOW_STRIPS.windowInsetM, 5);
+        // above the strips (the parapet, t 8.3..9) the wall is not recessed
+        expect(Math.abs(cell(1.5, 8.7))).toBeLessThan(0.05);
+        // the piers' arrises: faces leaning 45 degrees between the facade's normal and its s axis
+        let bevels = 0;
+        for (let i = 0; i < r.indices.length; i += 3) {
+            const k = r.indices[i], n = [r.normals[k * 3], r.normals[k * 3 + 1], r.normals[k * 3 + 2]];
+            if (Math.abs(Math.abs(n[0]) - Math.SQRT1_2) < 1e-3 && Math.abs(n[2] - Math.SQRT1_2) < 1e-3) bevels++;
+        }
+        expect(bevels).toBeGreaterThan(0);
+        // every face, bevels included, winds to face its normal
+        for (let i = 0; i < r.indices.length; i += 3) {
+            const [a, b, c] = [r.indices[i], r.indices[i + 1], r.indices[i + 2]];
+            const u = [0, 1, 2].map(k => r.positions[b * 3 + k] - r.positions[a * 3 + k]), v = [0, 1, 2].map(k => r.positions[c * 3 + k] - r.positions[a * 3 + k]);
+            const g = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+            expect(g[0] * r.normals[a * 3] + g[1] * r.normals[a * 3 + 1] + g[2] * r.normals[a * 3 + 2]).toBeGreaterThan(0);
+        }
+    });
+
+    it('recesses the fitted windows by a depth read from Street View when one is given, never shallower than the scan', () => {
+        const fitted: Array<[number, number, number, number]> = [[0.9, 0.7, 2.1, 2.3], [3.9, 0.7, 5.1, 2.3], [6.9, 0.7, 8.1, 2.3]];
+        const read = latticeFacade(f, photo(), facadeSamples(scan(), f), undefined, undefined, true, fitted, 0.5)!;
+        const cell = (r: typeof read, sv: number, tv: number) => r.depth[r.t.findIndex((x, i) => tv >= x && tv < r.t[i + 1])][r.s.findIndex((x, i) => sv >= x && sv < r.s[i + 1])];
+        expect(cell(read, 1.5, 1.5)).toBeLessThan(-0.45);
+        // a read depth shallower than the scan's 0.3 m keeps the scan's
+        const shallow = latticeFacade(f, photo(), facadeSamples(scan(), f), undefined, undefined, true, fitted, 0.1)!;
+        expect(cell(shallow, 1.5, 1.5)).toBeLessThan(-0.2);
+    });
+
     it("writes the window fit's windows, in the photo's UVs, into the rebuilt facade's extras", () => {
         const r = latticeFacade(f, photo(), facadeSamples(scan(), f))!;
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-'));
@@ -157,7 +212,7 @@ describe('facades on their photo lattice', () => {
         expect(reveals).toBeGreaterThan(0);
     });
 
-    it('closes a photo-recessed cell toward the scan: at the lattice\'s edge and beside a cell left as scan, a reveal back to the scan\'s depth', () => {
+    it('closes a photo-recessed cell toward a cell left as scan, and draws no face past the lattice\'s outer edge', () => {
         // pipeline K: the scan is uncarved (flat), the windows recessed from the photo; the facade starts inside a window (s 1.5)
         const flat = scan().map((v, i) => (i % 3 === 2 ? 0 : v));
         const g: ReliefFacade = { ...f, sMin: 1.5 };
@@ -175,15 +230,34 @@ describe('facades on their photo lattice', () => {
             }
             return false;
         };
-        // the window cut by the lattice's edge at s 1.5
-        expect(revealAt(1.5, 1)).toBe(true);
+        // the window cut by the lattice's edge at s 1.5: nothing past the edge (the neighbouring facade or the scan closes it; a
+        // face back to the cell's own depth would stand on the neighbour's plane, a one-texel smear over its pier)
+        expect(revealAt(1.5, 1)).toBe(false);
         // the window at s 3.9..5.1 beside the wall cells left as scan
         const edge = r.s.find(v => Math.abs(v - 5.1) <= 0.15)!;
         expect(edge).toBeDefined();
         const ns = r.s.length - 1, right = r.s.indexOf(edge);
         expect(r.built.some((v, k) => k % ns === right && !v)).toBe(true);
         expect(revealAt(edge, -1)).toBe(true);
-        // without the reveals toward the scan (the old rule) neither would be drawn: no rebuilt neighbour stands there
+    });
+
+    it("unfolds every reveal's texels into the recessed cell's photo, never one line of texels across it", () => {
+        const r = latticeFacade(f, photo(), facadeSamples(scan(), f), undefined, undefined, true)!;
+        let reveals = 0;
+        for (let i = 0; i < r.indices.length; i += 3) {
+            const ids = [r.indices[i], r.indices[i + 1], r.indices[i + 2]];
+            if (Math.abs(r.normals[ids[0] * 3 + 2]) > 0.5) continue;
+            reveals++;
+            // u and v both vary over the face (the face is unfolded), and every texel lies on the photo
+            const u = ids.map(k => r.uv[k * 2]), v = ids.map(k => r.uv[k * 2 + 1]);
+            expect(Math.max(...u) - Math.min(...u) + Math.max(...v) - Math.min(...v)).toBeGreaterThan(0);
+            const sideS = Math.abs(r.normals[ids[0] * 3]) > 0.5;
+            const spread = sideS ? Math.max(...u) - Math.min(...u) : Math.max(...v) - Math.min(...v);
+            const depth = Math.max(...ids.map(k => r.positions[k * 3 + 2])) - Math.min(...ids.map(k => r.positions[k * 3 + 2]));
+            expect(spread * (sideS ? W * PX : H * PX)).toBeCloseTo(depth, 5);
+            for (const x of [...u, ...v]) { expect(x).toBeGreaterThanOrEqual(-1e-6); expect(x).toBeLessThanOrEqual(1 + 1e-6); }
+        }
+        expect(reveals).toBeGreaterThan(0);
     });
 
     it('replaces the scan facade in the clay and the twin, the twin textured with the facade photo', () => {

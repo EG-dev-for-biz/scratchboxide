@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { fitFacadeWindows, fittedWindowUvs, type FitFrame, type ReliefGrid, type ReliefRunner, type WindowFitFile } from '../src/node/3d-engine/staged-location/window-fit';
+import { fitFacadeWindows, fittedWindowUvs, panesOfStrip, WINDOW_FIT_PARAMS, type FitFrame, type ReliefGrid, type ReliefRunner, type WindowFitFile } from '../src/node/3d-engine/staged-location/window-fit';
 
 const PX = 0.1, W = 300, H = 240; // a 30 x 24 m facade
 const frame: FitFrame = { pixel: PX, orthoSMin: 0, orthoTMax: 24, texel: 0.05 };
@@ -78,5 +78,25 @@ describe('the window fit', () => {
         expect(fittedWindowUvs(file, 5)).toBeUndefined();
         // a facade the fit placed nothing on (no grid to read): its other evidence decides
         expect(fittedWindowUvs(file, 6)).toBeUndefined();
+    });
+
+    it('splits a strip into its panes at the storey pitch: the bluer, lighter run is the glass', () => {
+        // a 20 px wide strip on stone, 400 px tall; every 40 px storey: 24 px of sky-lit glass, 16 px of brown spandrel
+        const Wd = 60, Hd = 400, rgba = new Uint8Array(Wd * Hd * 4), valid = new Uint8Array(Wd * Hd).fill(1);
+        for (let y = 0; y < Hd; y++) for (let x = 0; x < Wd; x++) {
+            const inStrip = x >= 20 && x < 40, glass = (y % 40) < 24;
+            rgba.set([...(inStrip ? (glass ? [150, 165, 185] : [80, 60, 50]) : [200, 190, 175]), 255], (y * Wd + x) * 4);
+        }
+        const panes = panesOfStrip({ rgba, width: Wd, height: Hd }, valid, [20, 0, 40, 400], 40, WINDOW_FIT_PARAMS)!;
+        expect(panes.length).toBe(10);
+        for (const [x0, y0, x1, y1] of panes) {
+            expect([x0, x1]).toEqual([20, 40]);
+            expect(y0 % 40).toBeLessThanOrEqual(2);
+            expect(Math.abs((y1 - y0) - 24)).toBeLessThanOrEqual(2);
+        }
+        // a strip of one colour has no panes to tell apart
+        const flat = Uint8Array.from(rgba);
+        for (let y = 0; y < Hd; y++) for (let x = 20; x < 40; x++) flat.set([80, 60, 50, 255], (y * Wd + x) * 4);
+        expect(panesOfStrip({ rgba: flat, width: Wd, height: Hd }, valid, [20, 0, 40, 400], 40, WINDOW_FIT_PARAMS)).toBeUndefined();
     });
 });

@@ -86,7 +86,11 @@ import { buildDistrictMassingLayer, districtFootprint, districtMassingEnabled, D
 import { REVOLUTION_FIT_VERSION, revolutionFitEnabled, reviseForRevolutions, type RevolutionLayerSummary } from './revolution-fit';
 import { districtEDetail, districtEDetailEnabled, DISTRICT_E_DETAIL_VERSION } from './district-e-detail';
 import { describePolish, polishRemesh, REMESH_POLISH_VERSION } from './remesh-polish';
-import { fitWindowsForOrthos, WINDOW_FIT_VERSION } from './window-fit';
+import { fittedWindowRects, fitWindowsForOrthos, WINDOW_FIT_VERSION, type WindowFitFile } from './window-fit';
+import { measureRevealDepth, REVEAL_DEPTH_VERSION, type RevealFacade, type RevealView } from './reveal-depth';
+import { streetViewClayScore } from './streetview-clay-score';
+import { decodeJpegInMemory } from './photo-palette';
+import type { ReliefFacade } from './facade-lattice';
 import { wallSampleIndex } from './wall-plane-fit';
 import { assembleDistrictLayer, inBackground, districtMassingManifest, findStoredLayer, objectFrameOf, objectReuseEnabled, objectStoreEnabled, planDistrictObjects, readLayerManifests, storeSceneObjects, treesManifest, wholeLayerManifest, writeLayerManifests, type DistrictObjectPlan, type LayerObjectManifest } from './scene-objects';
 import { objectInputHash } from '../../asset-store/scene-object-store';
@@ -267,7 +271,9 @@ export const STAGES = {
     survey: { order: -1, title: 'Surveying the four faces', budgetMs: EVIDENCE_DISCOVERY_ALLOWANCE_MS + SURVEY_IMAGE_TIMEOUT_MS + SURVEY_VISION_TIMEOUT_MS + 15_000 },
     evidence: { order: -1, title: 'Street View close-ups', budgetMs: EVIDENCE_STAGE_BUDGET_MS + 30_000 + MATCH_TIMEOUT_MS + 60_000 + EDGE_REGISTRATION_BUDGET_MS + 15_000 + JOINT_REGISTRATION_BUDGET_MS + 30_000 },
     'trees-measure': { order: -1, title: 'Measuring the trees', budgetMs: 300_000 },
-    remesh: { order: 2, title: 'Remeshed scan', budgetMs: 300_000 },
+    // pipeline K's remesh grew past 300 s with the window fit (~100 s), reveal depth (30-70 s) and the oblique tear audit
+    // (ESB: 275-323 s, run 7e4bd290 timed out at 309 s), so it gets 600 s
+    remesh: { order: 2, title: 'Remeshed scan', budgetMs: 600_000 },
     // a district's rebuilt buildings: pipeline E's massing for every building that passes its own check, and the remesh carved
     // where they stand (district-massing.ts); off unless SCRATCHBOX_STAGED_DISTRICT_MASSING=1
     // 5x the earlier 25 min (user decision, 2026-10-25): Haughwout's block took 38 min once its remesh committed
@@ -1315,6 +1321,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         for (const s of run.state.stages) if (PIPELINE_K_ISOLATE_SKIPPED.has(s.stage as StageId)) s.outOfScope = true;
     }
     const base = `${slug(request.query)}${request.isolate ? '_iso' : ''}`;
+    // a timed step: the run's step log (steps.jsonl), which the node map's live view reads
+    const logStep = (key: string, state: 'running' | 'done' | 'failed') => cache.logRunStep(runId, key, state);
     const persist = () => {
         const rec: RunRecord = {
             schema: 'scratchbox.staged-run/1', runId, request, place: placeValue, artifactId, keys: run.keys,
@@ -2299,7 +2307,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             const enhance = deps.textures?.enhance;
             const lightingClient = deps.textures?.lighting;
             const lightingModelIds = deps.textures?.lightingModels ?? lightingModels();
-            const timed = (into: Record<string, number>) => async <R>(k: string, work: () => Promise<R>): Promise<R> => { const t0 = now(); try { return await work(); } finally { into[k] = (into[k] ?? 0) + now() - t0; } };
+            const timed = (into: Record<string, number>) => async <R>(k: string, work: () => Promise<R>): Promise<R> => { const t0 = now(); logStep(`textures.${k}`, 'running'); let ok = false; try { const v = await work(); ok = true; return v; } finally { into[k] = (into[k] ?? 0) + now() - t0; logStep(`textures.${k}`, ok ? 'done' : 'failed'); } };
             const mainMs: Record<string, number> = {}, lateMs: Record<string, number> = {};
             // what gets a twin: every committed mesh layer the scene shows, or stands on (the ground), except vegetation and the
             // vector massing; a superseded layer is skipped unless it is the ground; the voted remesh is the next pass's own target
@@ -2558,12 +2566,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // pipeline K: no per-photo model recreate (it treats neighbouring photos differently); the de-lit photos are
                 // harmonised instead, one colour per side and height band with their seams levelled
                 const harmonizeOn = pipelineK && isolateOk;
-                // pipeline K's material regions: only with the app's texture library (deps.pipelineK), SCRATCHBOX_K_MATERIAL_REGIONS=0 off
-                const materialSets = harmonizeOn && process.env.SCRATCHBOX_K_MATERIAL_REGIONS?.trim() !== '0' ? deps.pipelineK?.materialSets : undefined;
-                if (harmonizeOn && !materialSets) cache.writeRunNote(runId, 'pipeline_k_materials', { skipped: deps.pipelineK?.materialSets ? 'SCRATCHBOX_K_MATERIAL_REGIONS=0' : 'no texture library in this build\'s services' });
+                // pipeline K's material regions: only with the app's texture library (deps.pipelineK), and off for now (user decision,
+                // 2026-10-28: the openings' finishes are not calculated correctly); SCRATCHBOX_K_MATERIAL_REGIONS=1 on
+                const materialSets = harmonizeOn && process.env.SCRATCHBOX_K_MATERIAL_REGIONS?.trim() === '1' ? deps.pipelineK?.materialSets : undefined;
+                if (harmonizeOn && !materialSets) cache.writeRunNote(runId, 'pipeline_k_materials', { skipped: deps.pipelineK?.materialSets ? 'off (SCRATCHBOX_K_MATERIAL_REGIONS=1 turns it on)' : 'no texture library in this build\'s services' });
                 const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? MATERIAL_REGIONS_VERSION : '', harmonizeOn ? PARTY_WALL_TEXTURE_VERSION : '', harmonizeOn && visionAvailable ? 'party-wall-image' : '');
                 const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport; materialRegions?: TileRefineTwin['materialRegions'] }>('textures', key, async dir => {
-                    const twin = await tileRefineTwin(bytes, target.layer.layer, harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0 }, ...(materialSets ? { materialRegions: { sets: (classes: RegionClass[]) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m) }) } } : {}) } : enhance ? {
+                    const twin = await tileRefineTwin(bytes, target.layer.layer, harmonizeOn ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), harmonize: { groundY: structure?.groundY ?? 0 }, ...(materialSets ? { materialRegions: { sets: (classes: RegionClass[]) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m) }) } } : {}) } : enhance ? {
                         recreate: {
                             client: enhance, ...(deps.textures?.enhanceModels ? { models: deps.textures.enhanceModels } : {}),
                             budgetMs: TILE_REFINE_RECREATE_BUDGET_MS
@@ -2574,10 +2583,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     let twinGlb: Uint8Array = twin.glb;
                     if (harmonizeOn) {
                         const orthosDir = cache.readRunNote<{ orthosDir?: string }>(runId, 'pipeline_k')?.orthosDir;
+                        logStep('twin.partyWall', 'running');
                         const pw = await texturePartyWall(twin.glb, { ...(visionAvailable ? { client: genAiEnhanceClient(visionAvailable.client) } : {}), models: [LIGHTING_MODEL_FULL], ...(orthosDir ? { orthosDir } : {}), signal: io.signal, progress: (m: string) => io.progress(m) }).catch((err: unknown) => {
                             if (isAbort(err) || io.signal.aborted) throw err;
                             return { glb: Buffer.from(twin.glb), report: { walls: -1, skipped: `texturing the party wall failed: ${errorMessage(err)}` } };
                         });
+                        logStep('twin.partyWall', 'done');
                         twinGlb = pw.glb;
                         cache.writeRunNote(runId, 'pipeline_k_party_wall', { version: PARTY_WALL_TEXTURE_VERSION, layer: target.layer.layer, ...pw.report });
                     }
@@ -2832,7 +2843,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
 
         // ---------------- trees-measure ----------------
         let strip: TileVegetationStripResult | undefined;
-        if (request.trees && request.procedural !== true) {
+        // a single building (pipeline K, isolated) keeps no surroundings: its trees are neither measured nor planted
+        const oneBuildingK = pipelineK && isolateMode;
+        if (request.trees && request.procedural !== true && !oneBuildingK) {
             // (the structure picked stays as scanned: a tree taken out beside it never takes its roof or walls along)
             const keep = structure && t.ground ? structureKeepCells(structure, t.ground) : undefined;
             const roi: StripRoi | undefined = structure ? { schema: 'scratchbox.strip-roi/1', polygon: grownOutline(structure.outline, ISOLATE_TREE_REACH_M), ...(keep ? { keep } : {}) } : undefined;
@@ -2876,7 +2889,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             });
             strip = measured.status === 'committed' ? measured.value : undefined;
         } else {
-            runner.skip('trees-measure', request.procedural === true ? PROCEDURAL_ONLY : 'trees were not asked for');
+            runner.skip('trees-measure', request.procedural === true ? PROCEDURAL_ONLY : oneBuildingK ? 'a single building keeps no surroundings, so its trees are not measured' : 'trees were not asked for');
         }
 
         // ---------------- roads (SB-Roadie: Google's road centrelines measured kerb to kerb on the tree-stripped scan; runs beside the remesh) ----------------
@@ -3037,7 +3050,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         type IRunState = { refined: TileRefineResult; layer: { objectId: string }; key: string; stage?: MassingStageResult };
         let eState: { stage: MassingStageResult; refined: TileRefineResult; layer: StagedLayer; key: string; ms: number; ledger?: LedgerEntry[] } | undefined;
         /** The ownership vote to run after the first isolate commits: what it needs to remesh the same structure again. */
-        let voteLater: { tilePath: string; isolatePick?: string; pick?: { pick: StructurePickResult; ground: GroundModel }; request: TileRefineRequest; orthos: { reliefOrthos?: boolean; reliefCarve?: boolean } } | undefined;
+        let voteLater: { tilePath: string; isolatePick?: string; pick?: { pick: StructurePickResult; ground: GroundModel }; request: TileRefineRequest; orthos: { reliefOrthos?: boolean; reliefCarve?: boolean; reliefAnalyse?: boolean } } | undefined;
         /** The residual audit of one pipeline E native run, into the build notes (and a degradation when it failed or left clusters unsure). */
         /** The footprint lock's check of a built layer against the footprint its massing stood on: recorded, and a breach
          * degraded -- unless `opts.clamp`, where a breach is first re-fit (pulled back onto the footprint, same vertices
@@ -3280,7 +3293,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const tilePath = strip ? strip.devegetatedGlb : extraction.texturedGlb;
                 // where the stage's time goes (the stage summary's breakdownMs)
                 const remeshMs: Record<string, number> = {};
-                const timed = async <R>(k: string, work: () => Promise<R>): Promise<R> => { const t0 = now(); try { return await work(); } finally { remeshMs[k] = (remeshMs[k] ?? 0) + now() - t0; } };
+                const timed = async <R>(k: string, work: () => Promise<R>): Promise<R> => { const t0 = now(); logStep(`remesh.${k}`, 'running'); let ok = false; try { const v = await work(); ok = true; return v; } finally { remeshMs[k] = (remeshMs[k] ?? 0) + now() - t0; logStep(`remesh.${k}`, ok ? 'done' : 'failed'); } };
                 // object ownership: outlines of the requested structure in registered views of the tile, voted onto its triangles
                 // the shared structure pick: tile_refine isolates exactly this footprint on this terrain
                 // (picked again, by the same rule at the same seed, on the scan tile_refine is given: with the measured trees
@@ -3307,7 +3320,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 };
                 // the facades' orthophotos for the grammar reading (facade-grammar.ts), only when it will run; pipeline K: the relief
                 // carves nothing in the scan (its window recesses are carved on the rebuilt facades, from the straightened photos)
-                const orthos = grammarOn || pipelineK ? { reliefOrthos: true, ...(pipelineK ? { reliefCarve: false } : {}) } : {};
+                const orthos = grammarOn || pipelineK ? { reliefOrthos: true, ...(pipelineK ? { reliefCarve: false, reliefAnalyse: false } : {}) } : {};
                 if (isolateMode && request.procedural !== true && deps.refine.renderOwnershipViews && visionAvailable) voteLater = { tilePath, ...(isolatePick ? { isolatePick } : {}), ...(remeshPick ? { pick: remeshPick } : {}), request: remeshRequest, orthos };
                 let r = await timed('tileRefine', () => deps.refine.refine({ ...remeshRequest!, ...orthos }));
                 // the isolated structure must be the one picked; when it is not (or tile_refine wrote no isolated scan to
@@ -3351,7 +3364,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     }
                 }
                 // pipeline K: the facade orthos straightened and their smears levelled before the facades are rebuilt on them
-                let orthosKey: string | undefined, windowFit: string | undefined;
+                let orthosKey: string | undefined, windowFit: string | undefined, revealDepth: string | undefined, surveyViews: RevealView[] | undefined;
                 if (pipelineK) {
                     if (!r.reliefOrthosDir) run.note(PROVENANCE.remeshed, 'pipeline K: tile_refine wrote no facade orthophotos, so no facade could be straightened; the remesh stands as cleaned');
                     else {
@@ -3375,6 +3388,46 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, failed: true, reason: errorMessage(err) });
                                 run.note(PROVENANCE.photoInferred, `window fit failed (${errorMessage(err)}); the facades are opened by their bay rhythm and the lattice's window cells instead`);
                             }
+                            // how deep the fitted windows sit, read from the survey's Street View photos (reveal-depth.ts)
+                            if (windowFit) {
+                                try {
+                                    const sres = surveyPromise ? (await surveyPromise.catch(() => undefined))?.result : undefined;
+                                    const views: RevealView[] = (sres?.read ?? []).flatMap(rd => {
+                                        const bytes = surveyImageBytes(sres!, rd.imageIndex);
+                                        if (!bytes) return [];
+                                        const d = decodeJpegInMemory(bytes);
+                                        return [{ id: `${rd.view.panoId}_h${Math.round(rd.view.headingDeg)}_p${Math.round(rd.view.pitchDeg)}`, camera: castCamera({ ...rd.view, widthPx: d.width, heightPx: d.height }), rgba: d.data, width: d.width, height: d.height }];
+                                    });
+                                    surveyViews = views;
+                                    // off for now (user decision, 2026-10-28): the reading was never confident enough to use on the ESB; the photos still
+                                    // feed the Street View score. SCRATCHBOX_K_REVEAL_DEPTH=1 turns it back on
+                                    if (process.env.SCRATCHBOX_K_REVEAL_DEPTH?.trim() !== '1') {
+                                        cache.writeRunNote(runId, 'pipeline_k_reveal_depth', { version: REVEAL_DEPTH_VERSION, skipped: true, reason: 'off (SCRATCHBOX_K_REVEAL_DEPTH=1 turns it on)' });
+                                        cache.logRunStep(runId, 'remesh.revealDepth', 'skipped');
+                                    } else if (!views.length) run.note(PROVENANCE.photoInferred, 'window depth: no Street View photo of the survey to read it from; the recesses follow the photo-contrast rule');
+                                    else {
+                                        const fitFile = JSON.parse(fs.readFileSync(windowFit, 'utf8')) as WindowFitFile;
+                                        const frames = (JSON.parse(fs.readFileSync(path.join(k.orthosDir, 'facades.json'), 'utf8')).facades as ReliefFacade[]);
+                                        const revealFacades: RevealFacade[] = frames.flatMap(f => {
+                                            const rects = fittedWindowRects(fitFile, f.facadeId);
+                                            return rects ? [{ facadeId: f.facadeId, centroid: f.centroid, normal: f.normal, axisS: f.axisS, axisT: f.axisT, windows: rects.map(([x0, y0, x1, y1]) => [f.orthoSMin + x0 * f.pixel, f.orthoTMax - y1 * f.pixel, f.orthoSMin + x1 * f.pixel, f.orthoTMax - y0 * f.pixel] as [number, number, number, number]) }] : [];
+                                        });
+                                        // what each photo sees first: the whole tile mesh (neighbours and trees too) from its camera
+                                        const tileMesh = sceneToRenderMesh(readGlbScene(extraction.geometryGlb));
+                                        for (const v of views) v.depth = renderFrameDepth(tileMesh, v.camera);
+                                        const rd = await timed('revealDepth', async () => measureRevealDepth(revealFacades, views, undefined, process.env.SCRATCHBOX_REVEAL_DEBUG === '1' ? path.join(k.orthosDir, 'reveal_debug') : undefined));
+                                        revealDepth = path.join(k.orthosDir, 'reveal_depth.json');
+                                        fs.writeFileSync(revealDepth, JSON.stringify(rd));
+                                        const own = Object.values(rd.facades).filter(x => x.from === 'own');
+                                        cache.writeRunNote(runId, 'pipeline_k_reveal_depth', { version: REVEAL_DEPTH_VERSION, views: rd.views, pairs: rd.pairs, building: rd.building ?? null, facades: rd.facades, fits: rd.fits });
+                                        run.note(PROVENANCE.photoInferred, `window depth (${REVEAL_DEPTH_VERSION}): ${rd.pairs} window readings in ${rd.views} Street View photos (© Google); ${own.length} facades read their own depth${rd.building ? `; the building's windows read together give ${rd.building.depthM} ± ${rd.building.seM} m, used on the ${Object.values(rd.facades).length - own.length} others` : '; the building as a whole gave no reading, so the others follow the photo-contrast rule'}`);
+                                    }
+                                } catch (err) {
+                                    if (isAbort(err) || io.signal.aborted) throw err;
+                                    cache.writeRunNote(runId, 'pipeline_k_reveal_depth', { version: REVEAL_DEPTH_VERSION, failed: true, reason: errorMessage(err) });
+                                    run.note(PROVENANCE.photoInferred, `window depth could not be read from Street View (${errorMessage(err)}); the recesses follow the photo-contrast rule`);
+                                }
+                            }
                         } catch (err) {
                             if (isAbort(err) || io.signal.aborted) throw err;
                             cache.writeRunNote(runId, 'pipeline_k', { version: PIPELINE_K_VERSION, failed: true, reason: errorMessage(err) });
@@ -3389,7 +3442,21 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const vec = eBuildings.flatMap(b => (b.extruded?.length ? b.extruded.filter(p => !p.planOnly).map(p => p.loops[0]) : [])).filter(l => l && l.length >= 3);
                         return vec.length ? vec : [structure.outline];
                     })() : undefined;
-                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: true, photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(kLoops ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}), ...(pipelineK && process.env.SCRATCHBOX_K_SEAL?.trim() === '1' ? { seal: true } : {}) }));
+                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: true, photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(revealDepth ? { revealDepth } : {}), ...(kLoops ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}), ...(pipelineK && process.env.SCRATCHBOX_K_SEAL?.trim() === '1' ? { seal: true } : {}), onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`polish.${step}`, state) }));
+                    // the clay's relief against Street View, before the polish and after it (streetview-clay-score.ts)
+                    if (pipelineK && surveyViews?.length && pol.clayGlb !== r.clayGlb) {
+                        try {
+                            const score = await timed('streetViewScore', async () => ({
+                                before: streetViewClayScore(sceneToRenderMesh(readGlbScene(r.clayGlb)), surveyViews!),
+                                after: streetViewClayScore(sceneToRenderMesh(readGlbScene(pol.clayGlb)), surveyViews!)
+                            }));
+                            cache.writeRunNote(runId, 'pipeline_k_streetview_score', { views: surveyViews.length, poses: 'nominal survey poses (±2 m), common to both', ...score });
+                            run.note(PROVENANCE.photoInferred, `clay against Street View (${surveyViews.length} photos, © Google): model edges ${score.before.modelToPhotoPx ?? '–'} → ${score.after.modelToPhotoPx ?? '–'} px from the photo's, photo edges ${score.before.photoToModelPx ?? '–'} → ${score.after.photoToModelPx ?? '–'} px from the model's (before → after the polish; lower is better)`);
+                        } catch (err) {
+                            if (isAbort(err) || io.signal.aborted) throw err;
+                            cache.writeRunNote(runId, 'pipeline_k_streetview_score', { failed: true, reason: errorMessage(err) });
+                        }
+                    }
                     if (kLoops) cache.writeRunNote(runId, 'pipeline_k_base', { loops: kLoops, groundY: structure!.groundY, footprint: eBuildings.length ? 'Google vector footprint' : 'scan outline', report: pol.stats.base ?? null });
                     if (pol.clayGlb !== r.clayGlb) {
                         run.note(PROVENANCE.remeshed, `remesh polish (${REMESH_POLISH_VERSION}): ${describePolish(pol.stats)}`);
@@ -3402,7 +3469,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         cache.writeRunNote(runId, 'pipeline_k_visible_defects', { ...seen, views: seen.views.map(({ mask: _m, ...v }) => v), judged: 'holes (untextured surface is judged on the finished model: pipeline_k_visible_defects_textured)' });
                         if (seen.holeShare > VISIBLE_DEFECTS_PARAMS.maxHoleShare || seen.maxViewHoleShare > VISIBLE_DEFECTS_PARAMS.maxViewHoleShare) isolateDegradations.push(run.degrade(record('remesh', 'visible_defects', {
                             part: { description: 'holes seen on the outside of the building' }, intended: 'every surface seen from outside closed',
-                            fellTo: 'a hole where it shows', provenanceAfter: PROVENANCE.generated, reason: seen.why, transient: false, runId, now: now()
+                            fellTo: 'a hole where it shows', provenanceAfter: PROVENANCE.generated, reason: `from ${seen.views.length} views, ${/[\d.]+% through holes.*$/.exec(seen.why)?.[0] ?? seen.why}`, transient: false, runId, now: now()
                         })));
                     }
                 }
@@ -3513,7 +3580,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 id: 'ownership',
                 run: async io => {
                     const msBy: Record<string, number> = {};
-                    const timed = async <R>(k: string, work: () => Promise<R>): Promise<R> => { const t0 = now(); try { return await work(); } finally { msBy[k] = (msBy[k] ?? 0) + now() - t0; } };
+                    const timed = async <R>(k: string, work: () => Promise<R>): Promise<R> => { const t0 = now(); logStep(`ownership.${k}`, 'running'); let ok = false; try { const v = await work(); ok = true; return v; } finally { msBy[k] = (msBy[k] ?? 0) + now() - t0; logStep(`ownership.${k}`, ok ? 'done' : 'failed'); } };
                     const first = remeshedNow;
                     const firstLayer = currentRemeshLayer(run);
                     if (!first || !firstLayer) return { status: 'skipped', source: '', reason: 'the remesh committed nothing to compare the vote with' };
@@ -3570,7 +3637,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         return notUsed('ownership_vote_unavailable', `the multi-view mask vote could not be made (${errorMessage(err)}); the geometric isolate stands`, err);
                     }
                     const votedRequest: TileRefineRequest = { ...v.request, ownership: { masksDir } };
-                    const voted = await timed('tileRefine', () => deps.refine.refine({ ...votedRequest, ...v.orthos }));
+                    // the vote is judged on the isolate alone: no facade orthos (they are wanted only if the voted remesh replaces the first)
+                    let voted = await timed('tileRefine', () => deps.refine.refine({ ...votedRequest }));
                     const picked = v.pick?.pick ?? structure!;
                     const terrain = v.pick?.ground ?? t.ground;
                     if (!voted.rawClayGlb || !terrain) return notUsed('ownership_vote_not_used', 'tile_refine wrote no voted isolate to check; the geometric isolate stands');
@@ -3587,7 +3655,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             source: `the vote moved ${moved}, under the ${Math.round(OWNERSHIP_MATERIAL_SHARE * 100)}% that would replace the geometric isolate; the first isolate and everything built on it stand (the vote's own remesh is not shown)`
                         };
                     }
-                    // material: the voted remesh replaces the first isolate and what was built on it (the rebuild runs again on it)
+                    // material: the voted remesh replaces the first isolate and what was built on it (the rebuild runs again on it),
+                    // so it is made again with the facade orthos the rebuild reads
+                    if (Object.keys(v.orthos).length) voted = await timed('tileRefine', () => deps.refine.refine({ ...votedRequest, ...v.orthos }));
                     run.keys.remesh = voted.cacheKey;
                     const key8 = voted.cacheKey.slice(0, 8);
                     const remembered = cache.remember('remesh', voted.cacheKey, { clay: voted.clayGlb }, [{ from: voted.clayGlb, as: `${base}_remesh_${key8}.glb` }], { ms: voted.ms });
@@ -4819,7 +4889,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- trees (plant) ‖ the rebuild ----------------
         const treesRun = async (): Promise<{ trees?: LocationClayTrees; putBack?: { triangles: number; crowns: number; reason: string } }> => {
             const remeshed = remeshedNow;
-            if (!request.trees || request.procedural === true) { runner.skip('trees', request.procedural === true ? PROCEDURAL_ONLY : 'trees were not asked for'); return {}; }
+            if (!request.trees || request.procedural === true || (pipelineK && isolateMode)) { runner.skip('trees', request.procedural === true ? PROCEDURAL_ONLY : pipelineK && isolateMode ? 'a single building keeps no surroundings, so no trees are planted' : 'trees were not asked for'); return {}; }
             if (!strip) { runner.skip('trees', 'the trees were not measured, so the scan keeps its own'); return {}; }
             if (!remeshed) {
                 const rec = run.degrade(record('trees', 'trees_stay_scanned', {

@@ -44,33 +44,34 @@ export interface RemeshPolishStats {
 
 export interface PolishedRemesh { clayGlb: string; texturedGlb?: string; cacheKey: string; stats: RemeshPolishStats }
 
-export function polishRemesh(input: { clayGlb: string; texturedGlb?: string; cacheKey: string; orthosDir?: string; /** Names the orthos when they are not tile_refine's own (pipeline K's rectified set), so the cache tells them apart. */ orthosKey?: string; skipFacades?: number[]; cleanup?: boolean; /** The scan's inward-facing pieces turned outward (remesh-orient.ts); on unless SCRATCHBOX_STAGED_REMESH_ORIENT=0. */ orient?: boolean; lattice?: boolean; /** Pipeline K: the base cleaned by the structure's footprint (pipeline-k/base-cleanup.ts), last. */ base?: { loops: Vec2[][]; groundY: number }; /** Pipeline K: the facades cut and stitched watertight, and the shell's open loops closed last (pipeline-k/lattice-stitch.ts). */ seal?: boolean; /** Pipeline K: the lattice recesses its windows as the straightened photo shows them (facade-lattice.ts PHOTO_RECESS), tile_refine having carved nothing. */ photoRecess?: boolean; /** Pipeline K: window_fit.json (window-fit.ts), whose windows the lattice writes into its extras. */ windowFit?: string }): PolishedRemesh {
+export function polishRemesh(input: { clayGlb: string; texturedGlb?: string; cacheKey: string; orthosDir?: string; /** Names the orthos when they are not tile_refine's own (pipeline K's rectified set), so the cache tells them apart. */ orthosKey?: string; skipFacades?: number[]; cleanup?: boolean; /** The scan's inward-facing pieces turned outward (remesh-orient.ts); on unless SCRATCHBOX_STAGED_REMESH_ORIENT=0. */ orient?: boolean; lattice?: boolean; /** Pipeline K: the base cleaned by the structure's footprint (pipeline-k/base-cleanup.ts), last. */ base?: { loops: Vec2[][]; groundY: number }; /** Pipeline K: the facades cut and stitched watertight, and the shell's open loops closed last (pipeline-k/lattice-stitch.ts). */ seal?: boolean; /** Pipeline K: the lattice recesses its windows as the straightened photo shows them (facade-lattice.ts PHOTO_RECESS), tile_refine having carved nothing. */ photoRecess?: boolean; /** Pipeline K: window_fit.json (window-fit.ts), whose windows the lattice writes into its extras. */ windowFit?: string; /** Pipeline K: reveal_depth.json (reveal-depth.ts), the windows' depth read from Street View. */ revealDepth?: string; /** Each polish step as it starts and finishes (the run's step log). */ onStep?: (step: string, state: 'running' | 'done' | 'failed') => void }): PolishedRemesh {
     const cleanup = input.cleanup ?? remeshCleanupEnabled(), orient = input.orient ?? remeshOrientEnabled(), lattice = (input.lattice ?? facadeLatticeEnabled()) && !!input.orthosDir && fs.existsSync(path.join(input.orthosDir, 'facades.json'));
     if (!cleanup && !orient && !lattice && !input.base && !input.seal) return { clayGlb: input.clayGlb, ...(input.texturedGlb ? { texturedGlb: input.texturedGlb } : {}), cacheKey: input.cacheKey, stats: {} };
-    const opts = JSON.stringify({ v: REMESH_POLISH_VERSION, cleanup, orient, lattice, skip: [...(input.skipFacades ?? [])].sort((a, b) => a - b), ...(input.orthosKey ? { orthos: input.orthosKey } : {}), ...(input.base ? { base: BASE_CLEANUP_VERSION, loops: input.base.loops, groundY: input.base.groundY } : {}), ...(input.seal ? { seal: LATTICE_STITCH_VERSION } : {}), ...(input.photoRecess ? { photoRecess: PHOTO_RECESS } : {}), ...(input.windowFit && fs.existsSync(input.windowFit) ? { windowFit: crypto.createHash('sha256').update(fs.readFileSync(input.windowFit)).digest('hex').slice(0, 16) } : {}) });
+    const opts = JSON.stringify({ v: REMESH_POLISH_VERSION, cleanup, orient, lattice, skip: [...(input.skipFacades ?? [])].sort((a, b) => a - b), ...(input.orthosKey ? { orthos: input.orthosKey } : {}), ...(input.base ? { base: BASE_CLEANUP_VERSION, loops: input.base.loops, groundY: input.base.groundY } : {}), ...(input.seal ? { seal: LATTICE_STITCH_VERSION } : {}), ...(input.photoRecess ? { photoRecess: PHOTO_RECESS } : {}), ...(input.windowFit && fs.existsSync(input.windowFit) ? { windowFit: crypto.createHash('sha256').update(fs.readFileSync(input.windowFit)).digest('hex').slice(0, 16) } : {}), ...(input.revealDepth && fs.existsSync(input.revealDepth) ? { revealDepth: crypto.createHash('sha256').update(fs.readFileSync(input.revealDepth)).digest('hex').slice(0, 16) } : {}) });
     const tag = crypto.createHash('sha256').update(opts).digest('hex').slice(0, 16);
     const dir = path.join(path.dirname(input.clayGlb), 'polish', tag);
     const clayOut = path.join(dir, 'clay.glb'), texOut = input.texturedGlb ? path.join(dir, 'textured.glb') : undefined, statsFile = path.join(dir, 'stats.json');
     if (!fs.existsSync(statsFile)) {
         let clay: Uint8Array = fs.readFileSync(input.clayGlb), tex: Uint8Array | undefined = input.texturedGlb ? fs.readFileSync(input.texturedGlb) : undefined;
         const stats: RemeshPolishStats = {};
-        if (cleanup) { const c = cleanRemesh(clay, tex ? [tex] : []); clay = c.clay; tex = tex ? c.others[0] : undefined; stats.cleanup = c.stats; }
+        const step = <R>(name: string, work: () => R): R => { input.onStep?.(name, 'running'); let ok = false; try { const v = work(); ok = true; return v; } finally { input.onStep?.(name, ok ? 'done' : 'failed'); } };
+        if (cleanup) { step('cleanup', () => { const c = cleanRemesh(clay, tex ? [tex] : []); clay = c.clay; tex = tex ? c.others[0] : undefined; stats.cleanup = c.stats; }); }
         if (lattice) {
             const skip = new Set(input.skipFacades ?? []);
-            const l = rebuildFacadesOnLattice(clay, tex, input.orthosDir!, FACADE_LATTICE_PARAMS, skip, { stitch: input.seal === true, photoRecess: input.photoRecess === true, ...(input.windowFit ? { windowFit: input.windowFit } : {}) });
+            const l = step('lattice', () => rebuildFacadesOnLattice(clay, tex, input.orthosDir!, FACADE_LATTICE_PARAMS, skip, { stitch: input.seal === true, photoRecess: input.photoRecess === true, ...(input.windowFit ? { windowFit: input.windowFit } : {}), ...(input.revealDepth ? { revealDepth: input.revealDepth } : {}) }));
             clay = l.clay; tex = l.textured ?? tex; stats.lattice = l.stats;
         }
         if (input.base) {
-            const b = cleanBase(clay, tex ? [tex] : [], input.base.loops, input.base.groundY);
+            const b = step('base', () => cleanBase(clay, tex ? [tex] : [], input.base!.loops, input.base!.groundY));
             clay = b.clay; tex = tex ? b.others[0] : undefined; stats.base = b.report;
         }
         if (input.seal) {
-            const sl = fillOpenLoops(clay, tex ? [tex] : [], input.base ? { footprint: input.base.loops } : {});
+            const sl = step('seal', () => fillOpenLoops(clay, tex ? [tex] : [], input.base ? { footprint: input.base.loops } : {}));
             clay = sl.clay; tex = tex ? sl.others[0] : undefined; stats.seal = sl.report;
         }
         // last: the base cleanup reads the shell's inside seen along the footprint line as an open party wall, so the scan is
         // turned to face outward only once that wall is closed (and the rebuilt facades are in place)
-        if (orient) { const o = orientRemesh(clay, tex ? [tex] : []); clay = o.clay; tex = tex ? o.others[0] : undefined; stats.orient = o.stats; }
+        if (orient) { step('orient', () => { const o = orientRemesh(clay, tex ? [tex] : []); clay = o.clay; tex = tex ? o.others[0] : undefined; stats.orient = o.stats; }); }
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(clayOut, clay);
         if (texOut && tex) fs.writeFileSync(texOut, tex);

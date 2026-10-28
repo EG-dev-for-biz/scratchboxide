@@ -297,6 +297,28 @@ describe('pipeline K material regions', () => {
         expect(opened(24, 120)).toBe(false);
     });
 
+    it("draws a fitted window's panes as glass and the rest of it as one frame finish, never the stone", () => {
+        // the piered facade with one fitted strip window (a bay's left pane column over two storeys) and its upper pane
+        const piers = piered(), W = piers.width, H = piers.height;
+        const win = [19 / W, 8 / H, 29 / W, 43 / H], pane = [19 / W, 8 / H, 29 / W, 26 / H];
+        const quads: Quad[] = [{ mesh: 'facade_lattice_1', corners: wall(0, 20, 30), uv: FULL_UV, material: 0, extras: { sbFacadeLattice: { facadeId: 1, windows: { uv: win, panes: pane, label: 'photo-inferred', source: 'test' } } } }];
+        const g = parseGlbBytes(scene(quads, [piers]));
+        const b = building(), bg = parseGlbBytes(b.glb);
+        const classes = readRegionClasses(bg.json, imagesOf(b.photos))!;
+        const plan = planMaterialRegions(g, g.json, imagesOf([piers]), classes, sets(classes));
+        const f = plan.report.facades.perFacade[0];
+        expect(f.panes).toBe(1);
+        expect(f.paneShare).toBeGreaterThan(0);
+        const m = plan.materials[0];
+        const glass = (x: number, y: number) => m.params.rgba[(y * W + x) * 4] > 0;
+        const metal = (x: number, y: number) => m.orm.rgba[(y * W + x) * 4 + 2] > 0;
+        // in the pane: glass; in the window below it (spandrel, even where its colour is the stone's): the frame's metal; outside: neither
+        expect(glass(24, 15)).toBe(true);
+        expect(glass(24, 35)).toBe(false);
+        expect(metal(24, 35)).toBe(true);
+        expect(glass(24, 100) || metal(24, 100)).toBe(false);
+    });
+
     it('scales the bays by a soft gate between nccLo and minNcc, not a hard cut', () => {
         const strong = pierRhythm(piered(), PX);
         expect(strong.weight).toBe(1);

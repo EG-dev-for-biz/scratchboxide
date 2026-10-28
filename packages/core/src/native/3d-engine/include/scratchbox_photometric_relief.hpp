@@ -187,6 +187,9 @@ struct ReliefParams {
     // false: analyse (and export the orthophotos) but carve nothing: the scene is written as it came. Pipeline K carves its
     // window recesses later, on the facades it rebuilds from the straightened photos (facade-lattice.ts).
     bool carve{true};
+    // false (with carve false and an export dir): the orthophotos are written and nothing is analysed; pipeline K reads the
+    // windows itself on the straightened photos (window-fit.ts), so the analysis would be thrown away
+    bool analyse{true};
     double minProminence{0.08};      // peak height above the preceding dip
     double minTemplateContrast{0.015};
     double darkRunMinDepth{0.15};    // a dark band of the folded profile dips at least this share of its contrast below mid level
@@ -2734,6 +2737,7 @@ private:
             Orthophoto photo;
             if (!p_.orthoExportDir.empty() || grammar) photo = rasterizeSlab(R, px);
             if (!p_.orthoExportDir.empty()) writeOrthoExport(rep, photo);
+            if (!p_.analyse && !p_.carve && !p_.orthoExportDir.empty() && !grammar) { rep.skipReason = "exported only (not analysed)"; return; }
             const auto a0 = Clock::now();
             rep.analysis = analyzeOrthophoto(o, rep.texel, p_, innerThreads, grammar, grammar ? &photo : nullptr);
             if (grammar && !rep.analysis.grammarGiven) { rep.analysis.grammarGiven = true; rep.analysis.grammarNote = "the facade's photo could not be analysed"; }

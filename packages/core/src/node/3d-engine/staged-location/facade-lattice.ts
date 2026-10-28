@@ -29,15 +29,21 @@
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor, type ParsedGlb } from './glb-bytes';
 import { decodePng } from '../../texture-processing';
 import { cutScanToLattice, stitchLattice, watertightLatticeMesh, type CutReport, type StitchReport } from './pipeline-k/lattice-stitch';
-import { fittedWindowRects, fittedWindowUvs, WINDOW_FIT_VERSION, type WindowFitFile } from './window-fit';
+import { fittedPaneUvs, fittedWindowRects, fittedWindowUvs, WINDOW_FIT_VERSION, type WindowFitFile } from './window-fit';
+import { trustedReveal, type RevealDepthFile } from './reveal-depth';
 import * as fs from 'fs';
 import * as path from 'path';
 
-export const FACADE_LATTICE_VERSION = 'facade-lattice/9';
+export const FACADE_LATTICE_VERSION = 'facade-lattice/14';
 
 export const FACADE_LATTICE_PARAMS = {
-    /** Facades tile_refine rectified with at least this share of their ortho covered. */
+    /**
+     * Facades tile_refine rectified with at least this share covered: of the wall's own outline when it was measured
+     * (wallCoverage, pipeline K), else of the ortho's rectangle. A stepped face's rectangle holds the air beside its setbacks.
+     */
     minCoverage: 0.6,
+    /** A facade's wall (wallAreaM2, when measured) must span at least this (m²): slivers of a plane are not facades. */
+    minWallM2: 20,
     /** A line is an edge-energy peak above mean + k sd. */
     peakK: 1.0,
     /** Lines closer than this merge (m). */
@@ -63,14 +69,20 @@ export const FACADE_LATTICE_PARAMS = {
      * The tear audit: each facade seen straight on at this pixel (m); a tear is a pixel where the scan had surface within the
      * depth band and the result has nothing in front of the band's back plus this (m).
      */
-    auditPixelM: 0.2, tearDepthM: 0.5
+    auditPixelM: 0.2, tearDepthM: 0.5,
+    /**
+     * The audit also looks at each facade from these angles (deg off its normal: to each side about its up axis, then up and
+     * down about its along axis): a slit at a recess side or a facade's edge shows only at an angle (0.81% of the ESB was seen
+     * through such holes while the straight-on audit found none).
+     */
+    auditYawDeg: 45, auditPitchDeg: 35
 };
 
 /**
  * What the tear audit found: torn pixels in the first pass, scan triangles put back over them, facades left unrebuilt because a
  * tear stayed after that, and torn pixels left at the end (0 unless the scan itself lacked surface there).
  */
-export interface TearReport { found: number; restoredTriangles: number; droppedFacades: number[]; left: number }
+export interface TearReport { found: number; restoredTriangles: number; droppedFacades: number[]; left: number; /** Of `found`, torn pixels seen only from an angle; and those left after restoring (the rebuilt geometry's own slits). */ oblique?: number; obliqueLeft?: number }
 
 export interface ReliefFacade {
     facadeId: number; image: string; centroid: number[]; normal: number[]; axisS: number[]; axisT: number[];
@@ -79,6 +91,30 @@ export interface ReliefFacade {
     uncoveredMask?: string;
     /** How the image's holes were filled, carried into the rebuilt facade's provenance. */
     textureFill?: { label: string; texels: number; share: number; method: string };
+    /** The share of the wall's own outline (each row from its first to its last covered pixel) the photo covers, and that outline's area (wallCoverage). */
+    wallCoverage?: number; wallAreaM2?: number;
+}
+
+/**
+ * How much of a facade's wall its ortho covers: each row's span from its first to its last covered pixel is the wall's
+ * outline there (a stepped face narrows at each setback, the air beside it outside every span), and covered pixels are those
+ * the facade's own triangles reached (not transparent, not the uncovered grey 128).
+ */
+export function wallCoverage(img: { rgba: ArrayLike<number>; width: number; height: number }, pixel: number): { wallCoverage: number; wallAreaM2: number } {
+    const { width: W, height: H, rgba } = img;
+    const covered = (k: number) => rgba[k * 4 + 3] > 0 && !(rgba[k * 4] === 128 && rgba[k * 4 + 1] === 128 && rgba[k * 4 + 2] === 128);
+    let inside = 0, hit = 0;
+    for (let y = 0; y < H; y++) {
+        let a = -1, b = -1, n = 0;
+        for (let x = 0; x < W; x++) if (covered(y * W + x)) { if (a < 0) a = x; b = x; n++; }
+        if (a >= 0) { inside += b - a + 1; hit += n; }
+    }
+    return { wallCoverage: inside ? hit / inside : 0, wallAreaM2: inside * pixel * pixel };
+}
+
+/** A facade the lattice (and the window fit) works on: covered enough over its wall (or its rectangle) and not a sliver. */
+export function facadeEligible(f: Pick<ReliefFacade, 'coverage' | 'wallCoverage' | 'wallAreaM2'>, P: Pick<typeof FACADE_LATTICE_PARAMS, 'minCoverage' | 'minWallM2'> = FACADE_LATTICE_PARAMS): boolean {
+    return (f.wallCoverage ?? f.coverage) >= P.minCoverage && (f.wallAreaM2 ?? Infinity) >= P.minWallM2;
 }
 
 /**
@@ -118,6 +154,42 @@ export function windowGrid(lum: ArrayLike<number>, ns: number, nt: number, R = W
     return out;
 }
 
+/**
+ * Window strips (pipeline K with a window fit): the fitted windows grouped into columns (windows whose spans along s overlap by
+ * at least `overlap` of the narrower), each column split where its windows stand more than `maxGapM` apart up the wall (a
+ * band, a setback), and every run of at least `minWindows` windows drawn as one strip from its lowest window's sill to its
+ * highest window's head, at the column's median edges. The strip is recessed whole (its spandrels with it) between the piers
+ * that stay on the wall, and its windows a further `windowInsetM`; the front edges of every step at least twice `bevelM` deep
+ * are bevelled by `bevelM` at 45 degrees, so a pier's arris catches the light. Photo-inferred, read from the facade's own fit.
+ */
+export const WINDOW_STRIPS = { overlap: 0.5, maxGapM: 2.5, minWindows: 2, windowInsetM: 0.05, bevelM: 0.04 };
+
+export function windowStrips(windows: Array<[number, number, number, number]>, R = WINDOW_STRIPS): Array<[number, number, number, number]> {
+    const n = windows.length, parent = Array.from({ length: n }, (_, i) => i);
+    const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+        const a = windows[i], b = windows[j], ov = Math.min(a[2], b[2]) - Math.max(a[0], b[0]);
+        if (ov >= R.overlap * Math.min(a[2] - a[0], b[2] - b[0])) parent[find(i)] = find(j);
+    }
+    const cols = new Map<number, Array<[number, number, number, number]>>();
+    windows.forEach((w, i) => { const r = find(i); cols.set(r, [...(cols.get(r) ?? []), w]); });
+    const out: Array<[number, number, number, number]> = [];
+    for (const col of cols.values()) {
+        col.sort((a, b) => a[1] - b[1]);
+        let run: Array<[number, number, number, number]> = [];
+        const close = () => {
+            if (run.length >= R.minWindows) out.push([median(run.map(w => w[0])), Math.min(...run.map(w => w[1])), median(run.map(w => w[2])), Math.max(...run.map(w => w[3]))]);
+            run = [];
+        };
+        for (const w of col) {
+            if (run.length && w[1] - Math.max(...run.map(x => x[3])) > R.maxGapM) close();
+            run.push(w);
+        }
+        close();
+    }
+    return out.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+}
+
 /** The cells whose centre lies in one of the fitted windows ([s0, t0, s1, t1] in the plane's frame). */
 export function fittedCells(s: number[], t: number[], windows: Array<[number, number, number, number]>): Uint8Array {
     const ns = s.length - 1, nt = t.length - 1, out = new Uint8Array(ns * nt);
@@ -139,6 +211,10 @@ export interface FacadeLatticeResult {
     depth: number[][];
     /** Cells whose depth is the photo's window recess (photoRecess), not the scan's: photo-inferred. */
     photoRecessCells?: number;
+    /** Where that recess's depth came from: Street View's reveals (reveal-depth.ts) or the contrast rule. */
+    recessFrom?: string;
+    /** The window strips (WINDOW_STRIPS) recessed whole, [s0, t0, s1, t1] each, and their rebuilt cells: photo-inferred. */
+    strips?: Array<[number, number, number, number]>; stripCells?: number;
     /** Per cell (row-major, t then s): 1 when it was rebuilt, 0 when the photo does not cover it and the scan stays. */
     built: Uint8Array;
     /**
@@ -149,6 +225,8 @@ export interface FacadeLatticeResult {
     windows: Uint8Array; cellU: number[]; cellV: number[];
     /** The window fit's windows on this facade (window-fit.ts), u0 v0 u1 v1 per window in the photo's UVs: photo-inferred. */
     fittedWindows?: number[];
+    /** The glass in those windows (window-fit.ts panes), u0 v0 u1 v1 each: photo-inferred. */
+    fittedPanes?: number[];
     positions: Float32Array; normals: Float32Array; uv: Float32Array; indices: Uint32Array;
 }
 
@@ -220,9 +298,11 @@ export function facadeSamples(soup: Float32Array, f: ReliefFacade, P = FACADE_LA
 const median = (a: number[]) => { if (!a.length) return NaN; const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 
 /** The facade on its lattice: cell depths (measured, averaged along repeats) and the rebuilt surface in world space. */
-export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: number; height: number }, samples: Float64Array, P = FACADE_LATTICE_PARAMS, uncovered?: Uint8Array, photoRecess = false, fitted?: Array<[number, number, number, number]>): FacadeLatticeResult | undefined {
-    // pipeline K with a window fit: the lattice is drawn on the fitted windows, which are its window cells
-    const { s, t } = fitted?.length ? fittedLattice(photoLattice(img, f, P), fitted, f, P) : photoLattice(img, f, P);
+export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: number; height: number }, samples: Float64Array, P = FACADE_LATTICE_PARAMS, uncovered?: Uint8Array, photoRecess = false, fitted?: Array<[number, number, number, number]>, recessM?: number): FacadeLatticeResult | undefined {
+    // pipeline K with a window fit: the lattice is drawn on the fitted windows, which are its window cells, and with the photo's
+    // recess on, on their strips too (each window column recessed whole between its piers)
+    const strips = fitted?.length && photoRecess ? windowStrips(fitted) : [];
+    const { s, t } = fitted?.length ? fittedLattice(photoLattice(img, f, P), [...fitted, ...strips], f, P) : photoLattice(img, f, P);
     const ns = s.length - 1, nt = t.length - 1;
     if (ns < 1 || nt < 1) return undefined;
     const cellOf = (v: number, edges: number[]) => { let lo = 0, hi = edges.length - 1; if (v < edges[0] || v > edges[hi]) return -1; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (edges[m] <= v) lo = m; else hi = m; } return lo; };
@@ -248,12 +328,37 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
     if (measured / (ns * nt) < P.minMeasuredShare) return undefined;
     // repeats averaged: per row, the windows (read in rows and columns) and the wall each take their median depth
     const win = fitted?.length ? fittedCells(s, t, fitted) : windowGrid(lum, ns, nt);
+    const strip = strips.length ? fittedCells(s, t, strips) : undefined;
     const depth: number[][] = [];
     const rowMeds: number[] = [];
-    let photoRecessCells = 0;
+    let photoRecessCells = 0, stripCells = 0;
     const windows = new Uint8Array(ns * nt);
     const clamp = (v: number) => Math.min(P.maxDepthM, Math.max(P.minDepthM, v));
+    // strips: one recess for the facade, from its windows' contrast against the wall outside every strip (a row of spandrels
+    // has no window of its own to read it from)
+    let stripR: number | undefined;
+    if (strip) {
+        const all = Array.from({ length: ns * nt }, (_, k) => k);
+        const wallLum = median(all.filter(k => !strip[k] && !win[k]).map(k => lum[k]).filter(Number.isFinite));
+        const openLum = median(all.filter(k => win[k]).map(k => lum[k]).filter(Number.isFinite));
+        stripR = wallLum > 0 && Number.isFinite(openLum) ? (recessM !== undefined ? recessM : photoRecessDepth(1 - openLum / wallLum)) : undefined;
+    }
     for (let b = 0; b < nt; b++) {
+        if (strip) {
+            const cells = Array.from({ length: ns }, (_, a) => b * ns + a);
+            const rowMed = median(cells.map(k => raw[k]).filter(Number.isFinite));
+            rowMeds.push(rowMed);
+            const wall0 = median(cells.filter(k => !strip[k] && !win[k]).map(k => raw[k]).filter(Number.isFinite));
+            const wall = Number.isFinite(wall0) ? wall0 : Number.isFinite(rowMed) ? rowMed : 0;
+            for (const k of cells) if (win[k] && built[k]) windows[k] = 1;
+            depth.push(cells.map(k => {
+                if (stripR === undefined || !(strip[k] || win[k])) return clamp(wall);
+                if (built[k]) { stripCells++; if (win[k]) photoRecessCells++; }
+                // a window never shallower than the scan measures it
+                return clamp(win[k] ? Math.min(wall - stripR - WINDOW_STRIPS.windowInsetM, Number.isFinite(raw[k]) ? raw[k] : Infinity) : wall - stripR);
+            }));
+            continue;
+        }
         const cells = Array.from({ length: ns }, (_, a) => b * ns + a);
         const dark = cells.filter(k => win[k]), light = cells.filter(k => !win[k]);
         let dm = median(dark.map(k => raw[k]).filter(Number.isFinite));
@@ -266,7 +371,8 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
             const wall = Number.isFinite(lm) ? lm : rowMed, wallLum = median(light.map(k => lum[k]).filter(Number.isFinite));
             const contrast = wallLum > 0 ? 1 - median(dark.map(k => lum[k])) / wallLum : 0;
             for (const k of dark) if (built[k]) windows[k] = 1;
-            const r = photoRecess && wallLum > 0 && Number.isFinite(wall) ? photoRecessDepth(contrast) : undefined;
+            // the depth read from Street View (reveal-depth.ts) where there is one, else the photo's contrast rule
+            const r = photoRecess && wallLum > 0 && Number.isFinite(wall) ? (recessM !== undefined ? recessM : photoRecessDepth(contrast)) : undefined;
             if (r !== undefined && !(dm <= wall - r)) { dm = wall - r; recessed = true; }
         }
         depth.push(cells.map(k => clamp(Number.isFinite(win[k] ? dm : lm) ? (win[k] ? dm : lm) : Number.isFinite(rowMed) ? rowMed : 0)));
@@ -276,29 +382,56 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
     const pos: number[] = [], nrm: number[] = [], uv: number[] = [], idx: number[] = [];
     const W = img.width * f.pixel, H = img.height * f.pixel;
     const world = (sv: number, tv: number, d: number) => [0, 1, 2].map(k => f.centroid[k] + sv * f.axisS[k] + tv * f.axisT[k] + d * f.normal[k]);
-    const quad = (pts: Array<[number, number, number]>, n: number[]) => {
+    // texels by the plane's frame; a side face passes where its points read the photo (unfolded), else it would take one texel line
+    const quad = (pts: Array<[number, number, number]>, n: number[], at: (sv: number, tv: number, d: number) => [number, number] = (sv, tv) => [sv, tv]) => {
         const base = pos.length / 3;
-        for (const [sv, tv, d] of pts) { pos.push(...world(sv, tv, d)); nrm.push(...n); uv.push((sv - f.orthoSMin) / W, (f.orthoTMax - tv) / H); }
-        idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+        for (const [sv, tv, d] of pts) { const [us, ut] = at(sv, tv, d); pos.push(...world(sv, tv, d)); nrm.push(...n); uv.push((us - f.orthoSMin) / W, (f.orthoTMax - ut) / H); }
+        // wound counter-clockwise seen from the side n points to
+        const p = (i: number) => pos.slice((base + i) * 3, (base + i) * 3 + 3), o = p(0), e1 = p(1).map((x, k) => x - o[k]), e2 = p(2).map((x, k) => x - o[k]);
+        const g = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+        if (dot(g, n) < 0) idx.push(base, base + 2, base + 1, base, base + 3, base + 2);
+        else idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
     };
     const N = f.normal, S = f.axisS, T = f.axisT, neg = (v: number[]) => v.map(x => -x);
-    // a side face on line s = sv between depth L (the smaller-s side) and R, wound to face the side it shows to (S x T = N)
+    // a side face on line s = sv between depth L (the smaller-s side) and R, wound to face the side it shows to (S x T = N); its
+    // texels unfold into the recessed side's photo, from the edge (the front depth) inward as far as the face is deep, so a
+    // reveal shows the photo beside the opening rather than one column of texels drawn across it
+    // with strips, a step at least twice bevelM deep has its front edge bevelled at 45 degrees: the bevel leans over the recessed
+    // side by c and the side face below it starts c into it, so the front cell's arris catches the light (WINDOW_STRIPS)
+    const bevelOf = (L: number, R: number) => (strips.length && Math.abs(L - R) >= 2 * WINDOW_STRIPS.bevelM ? WINDOW_STRIPS.bevelM : 0);
+    const unit = (v: number[]) => { const l = Math.hypot(v[0], v[1], v[2]); return v.map(x => x / l); };
     const sideS = (sv: number, t0: number, t1: number, L: number, R: number) => {
         if (!(Math.abs(L - R) > P.stepM)) return;
-        if (L > R) quad([[sv, t0, R], [sv, t1, R], [sv, t1, L], [sv, t0, L]], S);
-        else quad([[sv, t0, L], [sv, t0, R], [sv, t1, R], [sv, t1, L]], neg(S));
+        const front = Math.max(L, R), back = Math.min(L, R), into = L < R ? -1 : 1, c = bevelOf(L, R), sb = sv + into * c;
+        const at = (sx: number, tv: number, d: number): [number, number] => [sx + into * (front - d), tv];
+        if (c) {
+            // the bevel, facing out and over the recess (N + into S)
+            if (L > R) quad([[sv, t0, front], [sb, t0, front - c], [sb, t1, front - c], [sv, t1, front]], unit(N.map((x, k) => x + into * S[k])), at);
+            else quad([[sv, t0, front], [sv, t1, front], [sb, t1, front - c], [sb, t0, front - c]], unit(N.map((x, k) => x + into * S[k])), at);
+        }
+        const top = front - c;
+        if (L > R) quad([[sb, t0, back], [sb, t1, back], [sb, t1, top], [sb, t0, top]], S, at);
+        else quad([[sb, t0, top], [sb, t0, back], [sb, t1, back], [sb, t1, top]], neg(S), at);
     };
     // on line t = tv between depth B (the smaller-t side, below) and A
     const sideT = (tv: number, s0: number, s1: number, B: number, A: number) => {
         if (!(Math.abs(B - A) > P.stepM)) return;
-        if (B > A) quad([[s0, tv, A], [s0, tv, B], [s1, tv, B], [s1, tv, A]], T);
-        else quad([[s0, tv, B], [s1, tv, B], [s1, tv, A], [s0, tv, A]], neg(T));
+        const front = Math.max(B, A), back = Math.min(B, A), into = B < A ? -1 : 1, c = bevelOf(B, A), tb = tv + into * c;
+        const at = (sv: number, ty: number, d: number): [number, number] => [sv, ty + into * (front - d)];
+        if (c) {
+            if (B > A) quad([[s0, tv, front], [s1, tv, front], [s1, tb, front - c], [s0, tb, front - c]], unit(N.map((x, k) => x + into * T[k])), at);
+            else quad([[s0, tv, front], [s0, tb, front - c], [s1, tb, front - c], [s1, tv, front]], unit(N.map((x, k) => x + into * T[k])), at);
+        }
+        const top = front - c;
+        if (B > A) quad([[s0, tb, back], [s0, tb, top], [s1, tb, top], [s1, tb, back]], T, at);
+        else quad([[s0, tb, top], [s1, tb, top], [s1, tb, back], [s0, tb, back]], neg(T), at);
     };
-    // where the scan stands beside a rebuilt cell: a neighbour left as scan, or past the lattice's edge (the scan's own depth in
-    // the cell, uncarved): its measured depth, else its row's; NaN when the scan measures nothing there (no face is drawn)
+    // where the scan stands beside a rebuilt cell (a neighbour left as scan): its measured depth, else its row's; NaN when the
+    // scan measures nothing there (no face is drawn). Past the lattice's outer edge nothing is drawn: the neighbouring facade or
+    // the scan closes the corner, and a face back to the edge cell's own depth would lie on that facade's plane, over its pier
     const scanDepthAt = (a: number, b: number) => { const v = raw[b * ns + a]; return Number.isFinite(v) ? clamp(v) : Number.isFinite(rowMeds[b]) ? clamp(rowMeds[b]) : NaN; };
     const isBuilt = (a: number, b: number) => a >= 0 && b >= 0 && a < ns && b < nt && !!built[b * ns + a];
-    const beside = (a: number, b: number, na: number, nb: number) => isBuilt(na, nb) ? depth[nb][na] : na >= 0 && nb >= 0 && na < ns && nb < nt ? scanDepthAt(na, nb) : scanDepthAt(a, b);
+    const beside = (na: number, nb: number) => isBuilt(na, nb) ? depth[nb][na] : na >= 0 && nb >= 0 && na < ns && nb < nt ? scanDepthAt(na, nb) : NaN;
     for (let b = 0; b < nt; b++) for (let a = 0; a < ns; a++) {
         // a cell the photo does not cover keeps the scan
         if (!built[b * ns + a]) continue;
@@ -306,13 +439,13 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
         // counter-clockwise seen from outside (along +normal): s right, t up
         quad([[s[a], t[b], d], [s[a + 1], t[b], d], [s[a + 1], t[b + 1], d], [s[a], t[b + 1], d]], N);
         // reveals: to every side, toward a rebuilt cell (drawn once, from its smaller-s or smaller-t side) or toward the scan
-        sideS(s[a + 1], t[b], t[b + 1], d, beside(a, b, a + 1, b));
-        if (!isBuilt(a - 1, b)) sideS(s[a], t[b], t[b + 1], beside(a, b, a - 1, b), d);
-        sideT(t[b + 1], s[a], s[a + 1], d, beside(a, b, a, b + 1));
-        if (!isBuilt(a, b - 1)) sideT(t[b], s[a], s[a + 1], beside(a, b, a, b - 1), d);
+        sideS(s[a + 1], t[b], t[b + 1], d, beside(a + 1, b));
+        if (!isBuilt(a - 1, b)) sideS(s[a], t[b], t[b + 1], beside(a - 1, b), d);
+        sideT(t[b + 1], s[a], s[a + 1], d, beside(a, b + 1));
+        if (!isBuilt(a, b - 1)) sideT(t[b], s[a], s[a + 1], beside(a, b - 1), d);
     }
     if (!built.some(v => v)) return undefined;
-    return { facadeId: f.facadeId, s, t, cells: built.reduce((x, v) => x + v, 0), measuredShare: Math.round((measured / (ns * nt)) * 1000) / 1000, depth, ...(photoRecess ? { photoRecessCells } : {}), built, windows, cellU: s.map(v => (v - f.orthoSMin) / (img.width * f.pixel)), cellV: t.map(v => (f.orthoTMax - v) / (img.height * f.pixel)), positions: Float32Array.from(pos), normals: Float32Array.from(nrm), uv: Float32Array.from(uv), indices: Uint32Array.from(idx) };
+    return { facadeId: f.facadeId, s, t, cells: built.reduce((x, v) => x + v, 0), measuredShare: Math.round((measured / (ns * nt)) * 1000) / 1000, depth, ...(photoRecess ? { photoRecessCells } : {}), ...(strips.length ? { strips, stripCells } : {}), built, windows, cellU: s.map(v => (v - f.orthoSMin) / (img.width * f.pixel)), cellV: t.map(v => (f.orthoTMax - v) / (img.height * f.pixel)), positions: Float32Array.from(pos), normals: Float32Array.from(nrm), uv: Float32Array.from(uv), indices: Uint32Array.from(idx) };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -424,6 +557,66 @@ function outermostDepth(soup: Float32Array, f: ReliefFacade, r: Pick<FacadeLatti
     return { W, H, s0, t0, depth };
 }
 
+/** A view of a facade's lattice from an angle: the facade's frame turned by yaw about its up axis, then pitch about its along axis. */
+interface AuditView { c: number[]; S: number[]; T: number[]; N: number[]; s0: number; s1: number; t0: number; t1: number }
+function obliqueViews(f: ReliefFacade, r: Pick<FacadeLatticeResult, 's' | 't'>, P = FACADE_LATTICE_PARAMS): AuditView[] {
+    const turn = (a: number[], b: number[], deg: number) => { const c = Math.cos((deg * Math.PI) / 180), si = Math.sin((deg * Math.PI) / 180); return [a.map((v, k) => c * v + si * b[k]), b.map((v, k) => c * v - si * a[k])]; };
+    const out: AuditView[] = [];
+    const box: number[][] = [];
+    for (const sv of [r.s[0], r.s[r.s.length - 1]]) for (const tv of [r.t[0], r.t[r.t.length - 1]]) for (const dv of [-P.depthBandM, P.depthBandM]) box.push([0, 1, 2].map(k => sv * f.axisS[k] + tv * f.axisT[k] + dv * f.normal[k]));
+    for (const [yaw, pitch] of [[P.auditYawDeg, 0], [-P.auditYawDeg, 0], [0, P.auditPitchDeg], [0, -P.auditPitchDeg]]) {
+        // yaw: normal toward +S; pitch: normal toward +T
+        let N = f.normal, S = f.axisS, T = f.axisT;
+        if (yaw) [N, S] = turn(N, S, yaw);
+        if (pitch) [N, T] = turn(N, T, pitch);
+        const ss = box.map(q => dot(q, S)), ts = box.map(q => dot(q, T));
+        out.push({ c: f.centroid, S, T, N, s0: Math.min(...ss), s1: Math.max(...ss), t0: Math.min(...ts), t1: Math.max(...ts) });
+    }
+    return out;
+}
+
+/**
+ * The outermost surface seen from an angled view (depth along the view's normal), and where that surface lies against the
+ * facade's own plane (its distance along the facade normal), over the facade's world box.
+ */
+function obliqueDepth(soup: Float32Array, f: ReliefFacade, v: AuditView, px: number, live?: Uint8Array): { W: number; H: number; s0: number; t0: number; depth: Float32Array; onPlane: Float32Array; view: AuditView } {
+    const W = Math.max(1, Math.ceil((v.s1 - v.s0) / px)), H = Math.max(1, Math.ceil((v.t1 - v.t0) / px));
+    const depth = new Float32Array(W * H).fill(-Infinity), onPlane = new Float32Array(W * H).fill(NaN);
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity], reach = FACADE_LATTICE_PARAMS.depthBandM + 1;
+    for (const sv of [v.s0, v.s1]) for (const tv of [v.t0, v.t1]) for (const dv of [-reach, reach]) for (let k = 0; k < 3; k++) {
+        const w = v.c[k] + sv * v.S[k] + tv * v.T[k] + dv * v.N[k];
+        lo[k] = Math.min(lo[k], w - 0.01); hi[k] = Math.max(hi[k], w + 0.01);
+    }
+    for (let i = 0, k = 0; i + 8 < soup.length; i += 9, k++) {
+        if (live && !live[k]) continue;
+        let outside = false;
+        for (let a = 0; a < 3 && !outside; a++) outside = Math.max(soup[i + a], soup[i + 3 + a], soup[i + 6 + a]) < lo[a] || Math.min(soup[i + a], soup[i + 3 + a], soup[i + 6 + a]) > hi[a];
+        if (outside) continue;
+        const S = [0, 0, 0], T = [0, 0, 0], D = [0, 0, 0], F = [0, 0, 0];
+        for (let j = 0; j < 3; j++) {
+            const m = [soup[i + 3 * j] - v.c[0], soup[i + 3 * j + 1] - v.c[1], soup[i + 3 * j + 2] - v.c[2]];
+            S[j] = (dot(m, v.S) - v.s0) / px - 0.5; T[j] = (dot(m, v.T) - v.t0) / px - 0.5; D[j] = dot(m, v.N); F[j] = dot(m, f.normal);
+        }
+        const area = (S[1] - S[0]) * (T[2] - T[0]) - (S[2] - S[0]) * (T[1] - T[0]);
+        if (Math.abs(area) < 1e-9) continue;
+        const x0 = Math.max(0, Math.ceil(Math.min(...S))), x1 = Math.min(W - 1, Math.floor(Math.max(...S))), y0 = Math.max(0, Math.ceil(Math.min(...T))), y1 = Math.min(H - 1, Math.floor(Math.max(...T)));
+        for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+            const w1 = ((x - S[0]) * (T[2] - T[0]) - (S[2] - S[0]) * (y - T[0])) / area, w2 = ((S[1] - S[0]) * (y - T[0]) - (x - S[0]) * (T[1] - T[0])) / area, w0 = 1 - w1 - w2;
+            if (w0 < -1e-6 || w1 < -1e-6 || w2 < -1e-6) continue;
+            const d = w0 * D[0] + w1 * D[1] + w2 * D[2], o = y * W + x;
+            if (d > depth[o]) { depth[o] = d; onPlane[o] = w0 * F[0] + w1 * F[1] + w2 * F[2]; }
+        }
+    }
+    return { W, H, s0: v.s0, t0: v.t0, depth, onPlane, view: v };
+}
+
+/** Tears seen from an angle: the scan's outermost surface there lies on the facade (within its depth band) and the result shows something farther back. */
+function obliqueTearPixels(before: ReturnType<typeof obliqueDepth>, after: ReturnType<typeof obliqueDepth>, P = FACADE_LATTICE_PARAMS): number[] {
+    const out: number[] = [];
+    for (let o = 0; o < before.depth.length; o++) if (Number.isFinite(before.depth[o]) && Math.abs(before.onPlane[o]) <= P.depthBandM && !(after.depth[o] >= before.depth[o] - P.tearDepthM)) out.push(o);
+    return out;
+}
+
 /**
  * Tears a rebuild opened in facade f: pixels (seen straight on, over its lattice) where the scan had surface within the
  * depth band (`before` is capped at the band: a wall far in front belongs to another facade) and the result has none in front of the band's back (only the inside of the building, or nothing, shows through).
@@ -496,14 +689,23 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
         for (let k = 0; k < nTri; k++) if (claim[k] >= 0) live[k] = 0;
         return { soup: all, live };
     };
-    const audit = (count: boolean): Array<{ fi: number; pix: number[]; grid: ReturnType<typeof outermostDepth> }> => {
+    type AuditGrid = { W: number; H: number; s0: number; t0: number; view?: AuditView };
+    const audit = (count: boolean): Array<{ fi: number; pix: number[]; grid: AuditGrid; oblique?: boolean }> => {
         const { soup: rs, live } = resultSoup();
-        const torn: Array<{ fi: number; pix: number[]; grid: ReturnType<typeof outermostDepth> }> = [];
+        const torn: Array<{ fi: number; pix: number[]; grid: AuditGrid; oblique?: boolean }> = [];
         facadesIn.forEach((x, fi) => {
             const before = outermostDepth(soup, x.f, x.r, P.auditPixelM, undefined, P.depthBandM), after = outermostDepth(rs, x.f, x.r, P.auditPixelM, live);
             const pix = tearPixels(before, after, P);
             if (pix.length) torn.push({ fi, pix, grid: before });
             if (count) tears.found += pix.length;
+            // the same facade from four angles: slits at recess sides and edges show only obliquely
+            if (dropped.has(fi)) return;
+            for (const v of obliqueViews(x.f, x.r, P)) {
+                const b = obliqueDepth(soup, x.f, v, P.auditPixelM), a = obliqueDepth(rs, x.f, v, P.auditPixelM, live);
+                const op = obliqueTearPixels(b, a, P);
+                if (op.length) torn.push({ fi, pix: op, grid: b, oblique: true });
+                if (count) { tears.found += op.length; tears.oblique = (tears.oblique ?? 0) + op.length; }
+            }
         });
         return torn;
     };
@@ -514,14 +716,16 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
         let n = 0;
         for (const { fi, pix, grid } of list) {
             const f = facadesIn[fi].f, mark = new Uint8Array(grid.W * grid.H);
+            // the frame the torn pixels were seen in: the facade straight on, or one of its angled views
+            const fc = grid.view?.c ?? f.centroid, fS = grid.view?.S ?? f.axisS, fT = grid.view?.T ?? f.axisT;
             for (const o of pix) { const x = o % grid.W, y = Math.floor(o / grid.W); for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const xx = x + dx, yy = y + dy; if (xx >= 0 && yy >= 0 && xx < grid.W && yy < grid.H) mark[yy * grid.W + xx] = 1; } }
             for (let k = 0; k < nTri; k++) {
                 if (claim[k] < 0) continue;
                 let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, near = false;
                 for (let j = 0; j < 3; j++) {
-                    const m = [soup[k * 9 + 3 * j] - f.centroid[0], soup[k * 9 + 3 * j + 1] - f.centroid[1], soup[k * 9 + 3 * j + 2] - f.centroid[2]];
+                    const m = [soup[k * 9 + 3 * j] - fc[0], soup[k * 9 + 3 * j + 1] - fc[1], soup[k * 9 + 3 * j + 2] - fc[2]];
                     if (Math.abs(dot(m, f.normal)) <= P.depthBandM + P.tearDepthM) near = true;
-                    const x = (dot(m, f.axisS) - grid.s0) / P.auditPixelM, y = (dot(m, f.axisT) - grid.t0) / P.auditPixelM;
+                    const x = (dot(m, fS) - grid.s0) / P.auditPixelM, y = (dot(m, fT) - grid.t0) / P.auditPixelM;
                     x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
                 }
                 if (!near || x1 < 0 || y1 < 0 || x0 >= grid.W || y0 >= grid.H) continue;
@@ -536,16 +740,20 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
         tears.restoredTriangles += restore(torn);
         torn = audit(false);
     }
-    // still torn: the facades whose own removals lie under a torn pixel are not rebuilt, and the removals are decided again
-    for (let round = 0; torn.length && round < 4; round++) {
-        for (const { fi } of torn) if (!dropped.has(fi)) { dropped.add(fi); tears.droppedFacades.push(facadesIn[fi].f.facadeId); }
+    // still torn straight on: the facades whose own removals lie under a torn pixel are not rebuilt, and the removals are decided
+    // again. A tear seen only from an angle restores the scan behind it but drops no facade: some angled slits are the rebuilt
+    // geometry's own (a recess side drawn only toward built cells), which no scan triangle closes
+    const straight = (list: typeof torn) => list.filter(x => !x.oblique);
+    for (let round = 0; straight(torn).length && round < 4; round++) {
+        for (const { fi } of straight(torn)) if (!dropped.has(fi)) { dropped.add(fi); tears.droppedFacades.push(facadesIn[fi].f.facadeId); }
         decide();
         torn = audit(false);
         if (torn.length) { tears.restoredTriangles += restore(torn); torn = audit(false); }
     }
-    tears.left = torn.reduce((a, x) => a + x.pix.length, 0);
-    // the last resort: anything still torn means no facade is rebuilt (the scan is shown whole, as it came)
-    if (tears.left) { facadesIn.forEach((x, fi) => { if (!dropped.has(fi)) { dropped.add(fi); tears.droppedFacades.push(x.f.facadeId); } }); decide(); tears.left = audit(false).reduce((a, x) => a + x.pix.length, 0); }
+    tears.left = straight(torn).reduce((a, x) => a + x.pix.length, 0);
+    tears.obliqueLeft = torn.filter(x => x.oblique).reduce((a, x) => a + x.pix.length, 0);
+    // the last resort: anything still torn straight on means no facade is rebuilt (the scan is shown whole, as it came)
+    if (tears.left) { facadesIn.forEach((x, fi) => { if (!dropped.has(fi)) { dropped.add(fi); tears.droppedFacades.push(x.f.facadeId); } }); decide(); tears.left = straight(audit(false)).reduce((a, x) => a + x.pix.length, 0); }
     // 3. the removals written: a removed triangle made degenerate in place
     let removed = 0;
     for (const pr of prims) for (let t = 0; t + 2 < pr.I.length; t += 3) {
@@ -582,7 +790,7 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
         }
         const indices = acc(view(new Uint8Array(r.indices.buffer, r.indices.byteOffset, r.indices.byteLength), 34963), r.indices.length, 'SCALAR', 5125);
         json.meshes.push({ name: `facade_lattice_${f.facadeId}`, primitives: [{ attributes, indices, material, mode: 4 }] });
-        json.nodes.push({ name: `FacadeLattice_${f.facadeId}`, mesh: json.meshes.length - 1, extras: { sbFacadeLattice: { version: FACADE_LATTICE_VERSION, facadeId: f.facadeId, provenance: { lines: 'photo-inferred', depth: r.photoRecessCells ? `measured (median per cell, averaged along the row's repeats); ${r.photoRecessCells} window cells recessed as the straightened photo shows them (photo-inferred, the photometric relief's contrast rule)` : 'measured (median per cell, averaged along the row\'s repeats)', texture: f.textureFill ? { photo: 'tile photo', holes: f.textureFill } : 'tile photo' }, cells: r.cells, measuredShare: r.measuredShare, sLines: r.s.length, tLines: r.t.length, ...(r.windows ? { windowCells: windowCellsExtras(r) } : {}), ...(r.fittedWindows ? { windows: { uv: r.fittedWindows, label: 'photo-inferred', source: WINDOW_FIT_VERSION } } : {}) } } });
+        json.nodes.push({ name: `FacadeLattice_${f.facadeId}`, mesh: json.meshes.length - 1, extras: { sbFacadeLattice: { version: FACADE_LATTICE_VERSION, facadeId: f.facadeId, provenance: { lines: 'photo-inferred', depth: r.photoRecessCells ? `measured (median per cell, averaged along the row's repeats); ${r.photoRecessCells} window cells recessed as the straightened photo shows them (photo-inferred, ${r.recessFrom ?? "the photometric relief's contrast rule"})` : 'measured (median per cell, averaged along the row\'s repeats)', texture: f.textureFill ? { photo: 'tile photo', holes: f.textureFill } : 'tile photo' }, cells: r.cells, measuredShare: r.measuredShare, sLines: r.s.length, tLines: r.t.length, ...(r.windows ? { windowCells: windowCellsExtras(r) } : {}), ...(r.fittedWindows ? { windows: { uv: r.fittedWindows, ...(r.fittedPanes ? { panes: r.fittedPanes } : {}), label: 'photo-inferred', source: WINDOW_FIT_VERSION } } : {}) } } });
         scene?.nodes?.push(json.nodes.length - 1);
     }
     bin.align4();
@@ -594,12 +802,13 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
 /** Cut-and-stitch rounds at most: each leaves as scan the rebuilt cells beside outline edges the stitch could join to nothing. */
 const STITCH_ROUNDS = 4;
 
-export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Uint8Array | undefined, orthosDir: string, P: typeof FACADE_LATTICE_PARAMS = FACADE_LATTICE_PARAMS, skip: Set<number> = new Set(), opts: { /** Pipeline K: the scan cut exactly to the rebuilt cells and stitched to them (pipeline-k/lattice-stitch.ts), instead of whole triangles removed. */ stitch?: boolean; /** Pipeline K: window recesses read from the straightened photo (PHOTO_RECESS), the scan being uncarved. */ photoRecess?: boolean; /** window_fit.json (window-fit.ts): each facade's fitted windows written into its extras. */ windowFit?: string } = {}): { clay: Buffer; textured?: Buffer; stats: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears: TearReport; stitch?: { cut: CutReport; strips: StitchReport; /** Per round: outline edges joined to nothing, and the cells beside them left as scan for the next round. */ rounds?: Array<{ unjoined: number; cellsLeftAsScan: number }> }; photoRecessCells?: number; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number]; photoRecessCells?: number }> } } {
+export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Uint8Array | undefined, orthosDir: string, P: typeof FACADE_LATTICE_PARAMS = FACADE_LATTICE_PARAMS, skip: Set<number> = new Set(), opts: { /** Pipeline K: the scan cut exactly to the rebuilt cells and stitched to them (pipeline-k/lattice-stitch.ts), instead of whole triangles removed. */ stitch?: boolean; /** Pipeline K: window recesses read from the straightened photo (PHOTO_RECESS), the scan being uncarved. */ photoRecess?: boolean; /** window_fit.json (window-fit.ts): each facade's fitted windows written into its extras. */ windowFit?: string; /** reveal_depth.json (reveal-depth.ts): each facade's window depth read from Street View. */ revealDepth?: string } = {}): { clay: Buffer; textured?: Buffer; stats: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears: TearReport; stitch?: { cut: CutReport; strips: StitchReport; /** Per round: outline edges joined to nothing, and the cells beside them left as scan for the next round. */ rounds?: Array<{ unjoined: number; cellsLeftAsScan: number }> }; photoRecessCells?: number; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number]; photoRecessCells?: number }> } } {
     const facades = JSON.parse(fs.readFileSync(path.join(orthosDir, 'facades.json'), 'utf8')).facades as ReliefFacade[];
     const soup = glbSoup(parseGlbBytes(clayBytes));
     const done: Array<{ f: ReliefFacade; r: FacadeLatticeResult; png: Uint8Array }> = [];
     const fit = opts.windowFit && fs.existsSync(opts.windowFit) ? JSON.parse(fs.readFileSync(opts.windowFit, 'utf8')) as WindowFitFile : undefined;
-    for (const f of facades.filter(x => x.coverage >= P.minCoverage && !skip.has(x.facadeId))) {
+    const reveal = opts.revealDepth && fs.existsSync(opts.revealDepth) ? JSON.parse(fs.readFileSync(opts.revealDepth, 'utf8')) as RevealDepthFile : undefined;
+    for (const f of facades.filter(x => facadeEligible(x, P) && !skip.has(x.facadeId))) {
         const file = path.join(orthosDir, f.image);
         if (!fs.existsSync(file)) continue;
         const png = fs.readFileSync(file);
@@ -610,8 +819,11 @@ export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Ui
         // the window fit's windows in the plane's frame: the lattice is drawn on them and they are its window cells
         const rects = fit ? fittedWindowRects(fit, f.facadeId) : undefined;
         const planeRects = rects?.map(([x0, y0, x1, y1]) => [f.orthoSMin + x0 * f.pixel, f.orthoTMax - y1 * f.pixel, f.orthoSMin + x1 * f.pixel, f.orthoTMax - y0 * f.pixel] as [number, number, number, number]);
-        const r = latticeFacade(f, { rgba: new Uint8Array(img.rgba), width: img.width, height: img.height }, facadeSamples(soup, f, P), P, mask, opts.photoRecess === true, planeRects);
-        if (r) { const w = fit ? fittedWindowUvs(fit, f.facadeId) : undefined; done.push({ f, r: w ? { ...r, fittedWindows: w } : r, png }); }
+        // a depth read from Street View is used only when it is confident and resolved from flush; else the contrast rule
+        const read = planeRects?.length ? reveal?.facades[String(f.facadeId)] : undefined;
+        const depth = trustedReveal(read, reveal?.params) ? read : undefined;
+        const r = latticeFacade(f, { rgba: new Uint8Array(img.rgba), width: img.width, height: img.height }, facadeSamples(soup, f, P), P, mask, opts.photoRecess === true, planeRects, depth?.depthM);
+        if (r) { const w = fit ? fittedWindowUvs(fit, f.facadeId) : undefined, pw = w && fit ? fittedPaneUvs(fit, f.facadeId) : undefined; done.push({ f, r: { ...r, ...(w ? { fittedWindows: w } : {}), ...(pw ? { fittedPanes: pw } : {}), ...(depth && r.photoRecessCells ? { recessFrom: `${depth.depthM} m read from Street View's window reveals, ${depth.reason}` } : {}) }, png }); }
     }
     if (opts.stitch && done.length) {
         // the scan cut to the rebuilt cells (the same cut on the twin: the same triangles), the walls appended, the seams stitched.

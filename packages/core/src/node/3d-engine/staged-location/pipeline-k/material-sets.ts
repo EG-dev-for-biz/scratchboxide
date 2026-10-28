@@ -34,7 +34,7 @@ const PREPARED_SIZE = 256;
  * `metallic`: the photo stays the colour, so a fully metal bay would show only the scene's reflection; part metal keeps
  * the photo's darkness with some sheen.
  */
-export const REGION_FINISH = { wall: { roughness: 0.8, metallic: 0, normalTiltDeg: 3 }, opening: { metallic: 0.4, bareMetallic: 0.9, normalTiltDeg: 2 } } as const;
+export const REGION_FINISH = { wall: { roughness: 0.8, metallic: 0, normalTiltDeg: 3 }, opening: { metallic: 0.2, bareMetallic: 0.9, normalTiltDeg: 2 } } as const;
 
 /**
  * The wall is ranked in two passes: a shortlist by colour and finish, measured (normal relief among the statistics), then

@@ -32,8 +32,9 @@ import * as path from 'path';
 import { decodePng } from '../../texture-processing';
 import { compileNativeCached, defaultNativeFlags, NativeBuildError, placeCachedBinary } from '../native-build-cache';
 import { findTileRefineRepoRoot } from '../tile-refine-service';
+import { FACADE_LATTICE_PARAMS, facadeEligible } from './facade-lattice';
 
-export const WINDOW_FIT_VERSION = 'window-fit/1';
+export const WINDOW_FIT_VERSION = 'window-fit/2';
 
 export const WINDOW_FIT_PARAMS = {
     /** A cell's darkness above its surround's: the cell is present. */
@@ -72,6 +73,8 @@ export const WINDOW_FIT_PARAMS = {
     subAc: 0.3, subMajority: 0.6,
     /** A band reading's evidence score must exceed this to be accepted. */
     minScore: 0.12,
+    /** A strip splits into panes when its storey's two colour runs differ by at least this (RGB distance, 0-255) and the glass run is this share of the storey. */
+    paneContrast: 18, paneShare: [0.2, 0.8] as [number, number],
     /** Column pitch search range for the band split's smoothing (m), and the running-mean window it detrends with (m). */
     pitchS: [1.5, 9.0] as [number, number], meanWindowM: 12.0
 };
@@ -94,9 +97,13 @@ export type WindowRect = [number, number, number, number];
 
 export interface WindowFitBand {
     band: [number, number, number, number]; accepted: boolean; why?: string; grid?: 'facade' | 'band'; kind?: Kind;
-    scores?: Record<string, number>; droppedRows?: number; heldOut?: string; margin?: number; subPitch?: string;
+    scores?: Record<string, number>; droppedRows?: number; heldOut?: string; margin?: number; subPitch?: string; panes?: string;
 }
-export interface WindowFit { rects: WindowRect[]; bands: WindowFitBand[] }
+/**
+ * `rects` are the openings (a punched window, or a strip of windows and spandrels storey on storey); `panes` the glass in
+ * them: each punched window, and the panes a strip's colours split it into at its storey pitch.
+ */
+export interface WindowFit { rects: WindowRect[]; panes: WindowRect[]; bands: WindowFitBand[] }
 
 type Kind = 'cells' | 'strips' | 'nested-cells' | 'nested-strips' | 'pier-cells' | 'pier-strips';
 const KINDS: Kind[] = ['cells', 'strips', 'nested-cells', 'nested-strips', 'pier-cells', 'pier-strips'];
@@ -605,6 +612,55 @@ function splitBays(c: Ctx, rects: WindowRect[]): { rects: WindowRect[]; found: n
     return { rects: out, found: nf, bays: bays.size };
 }
 
+/**
+ * A strip's panes: storey on storey a strip alternates glass and spandrel. Its rows (the middle 60% of its width) are folded at
+ * the storey pitch (fractional, so the phase holds over the whole height) and their colours split in two (2-means). The glass
+ * run is the one nearer the sky's colour: the bluer of the two, the lighter on a tie (glass reflects the sky; a spandrel is
+ * metal or stone). No split (undefined) when the two runs barely differ or the glass is not a real share of the storey.
+ */
+export function panesOfStrip(img: { rgba: ArrayLike<number>; width: number; height: number }, valid: Uint8Array, r: WindowRect, pitchPx: number, P: WindowFitParams): WindowRect[] | undefined {
+    const [xa, ya, xb, yb] = r, w = xb - xa, W = img.width;
+    if (!(pitchPx >= 6) || yb - ya < 1.6 * pitchPx || w < 3) return undefined;
+    const nb = Math.max(6, Math.round(pitchPx)), sum = Array.from({ length: nb }, () => [0, 0, 0, 0]);
+    const ca = xa + Math.floor(w * 0.2), cb = Math.max(ca + 1, xb - Math.floor(w * 0.2));
+    for (let y = ya; y < yb; y++) {
+        const bin = Math.min(nb - 1, Math.floor((((y - ya) % pitchPx) / pitchPx) * nb));
+        for (let x = ca; x < cb; x++) { const k = y * W + x; if (!valid[k]) continue; for (let c = 0; c < 3; c++) sum[bin][c] += img.rgba[k * 4 + c]; sum[bin][3]++; }
+    }
+    if (sum.some(b => b[3] === 0)) return undefined;
+    const fold = sum.map(b => [b[0] / b[3], b[1] / b[3], b[2] / b[3]]);
+    const lum = (c: number[]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    // 2-means, from the darkest and the lightest bins
+    let A = fold.reduce((m, c) => (lum(c) < lum(m) ? c : m)), B = fold.reduce((m, c) => (lum(c) > lum(m) ? c : m));
+    let side = fold.map(() => 0);
+    for (let it = 0; it < 10; it++) {
+        side = fold.map(c => (Math.hypot(c[0] - A[0], c[1] - A[1], c[2] - A[2]) <= Math.hypot(c[0] - B[0], c[1] - B[1], c[2] - B[2]) ? 0 : 1));
+        const mean = (s: number) => { const m = [0, 0, 0]; let n = 0; fold.forEach((c, i) => { if (side[i] === s) { for (let k = 0; k < 3; k++) m[k] += c[k]; n++; } }); return n ? m.map(v => v / n) : undefined; };
+        const a = mean(0), b = mean(1);
+        if (!a || !b) return undefined;
+        A = a; B = b;
+    }
+    if (Math.hypot(A[0] - B[0], A[1] - B[1], A[2] - B[2]) < P.paneContrast) return undefined;
+    const blue = (c: number[]) => c[2] / Math.max(1, c[0] + c[1] + c[2]);
+    const glassSide = Math.abs(blue(A) - blue(B)) > 0.01 ? (blue(A) > blue(B) ? 0 : 1) : lum(A) > lum(B) ? 0 : 1;
+    const share = side.filter(s => s === glassSide).length / nb;
+    if (share < P.paneShare[0] || share > P.paneShare[1]) return undefined;
+    // the glass run: the longest run of glass bins, round the storey
+    let best: [number, number] = [0, 0];
+    for (let i = 0; i < nb; i++) {
+        if (side[i] !== glassSide || side[(i - 1 + nb) % nb] === glassSide) continue;
+        let n = 0; while (n < nb && side[(i + n) % nb] === glassSide) n++;
+        if (n > best[1]) best = [i, n];
+    }
+    if (!best[1]) return undefined;
+    const out: WindowRect[] = [];
+    for (let k = -1; ya + k * pitchPx < yb; k++) {
+        const y0 = Math.max(ya, Math.round(ya + k * pitchPx + (best[0] / nb) * pitchPx)), y1 = Math.min(yb, Math.round(ya + k * pitchPx + ((best[0] + best[1]) / nb) * pitchPx));
+        if (y1 - y0 >= 2) out.push([xa, y0, xb, y1]);
+    }
+    return out.length ? out : undefined;
+}
+
 // ------------------------------------------------------------------------------------------------ the fit
 
 /** IoU of a rect set's mask (all inside `band`) against `ref`, counted where `where` holds within the band (`shift` rolls the set). */
@@ -651,7 +707,7 @@ export async function fitFacadeWindows(img: { rgba: ArrayLike<number>; width: nu
             if (n / ((b1 - b0) * (a1 - a0)) >= 0.3) bands.push([a0, a1, b0, b1]);
         }
     }
-    if (!bands.length) return { rects: [], bands: [] };
+    if (!bands.length) return { rects: [], panes: [], bands: [] };
     // the relief: the whole facade and each band, then the same with each held-out half hidden
     const span = Math.max(4, Math.trunc(P.heldOutSpanM / px));
     const foldSpecs: Array<{ name: string; hide: 's' | 't'; parity: number }> = [{ name: 'stripes-a', hide: 's', parity: 0 }, { name: 'stripes-b', hide: 's', parity: 1 }, { name: 'bands-a', hide: 't', parity: 0 }, { name: 'bands-b', hide: 't', parity: 1 }];
@@ -665,7 +721,7 @@ export async function fitFacadeWindows(img: { rgba: ArrayLike<number>; width: nu
         if (kind.endsWith('cells')) return rephaseColumns(c, refineCells(c, cellsLayout(c, g, band, kind.startsWith('nested')), band), band);
         return refineStrips(c, rephaseColumns(c, stripsLayout(c, g, band, kind.startsWith('nested')), band), band, ptPx);
     };
-    const rects: WindowRect[] = [], report: WindowFitBand[] = [];
+    const rects: WindowRect[] = [], panes: WindowRect[] = [], report: WindowFitBand[] = [];
     for (let bi = 0; bi < bands.length; bi++) {
         const band = bands[bi], own = grids[bi];
         const inBand = (k: number) => !!valid[k];
@@ -719,8 +775,16 @@ export async function fitFacadeWindows(img: { rgba: ArrayLike<number>; width: nu
         if (!info.accepted) { info.why = 'held-out folds'; continue; }
         if (kind.endsWith('strips')) { const s = splitBays(c, chosen); chosen = s.rects; info.subPitch = `${s.found}/${s.bays}`; }
         rects.push(...chosen);
+        // the glass in them: a punched window is its own pane; a strip (window over spandrel, storey on storey) is split at its
+        // storey pitch into its panes and spandrels by their colours
+        if (!kind.endsWith('strips')) panes.push(...chosen);
+        else {
+            let split = 0;
+            for (const r of chosen) { const ps = panesOfStrip(img, valid, r, g.periodT.found ? g.periodT.pitch / px : 0, P); if (ps) { panes.push(...ps); split++; } }
+            info.panes = `${split}/${chosen.length}`;
+        }
     }
-    return { rects: joinAcrossBands(rects, bands), bands: report };
+    return { rects: joinAcrossBands(rects, bands), panes, bands: report };
 }
 
 /** A window cut by a band's edge (the bands' change points fall where they fall) joined again: two windows meeting at a band edge, on the same columns. */
@@ -777,7 +841,7 @@ export function nativeRelief(bin: string, png: string, mask: string | undefined,
 /** window_fit.json beside the orthos: per facade its windows in photo pixels and UVs, and its bands' decisions. */
 export interface WindowFitFile {
     version: string; params: WindowFitParams; ms: number;
-    facades: Array<{ facadeId: number; width: number; height: number; rects: WindowRect[]; bands: WindowFitBand[]; ms: number } | { facadeId: number; error: string }>;
+    facades: Array<{ facadeId: number; width: number; height: number; rects: WindowRect[]; panes?: WindowRect[]; bands: WindowFitBand[]; ms: number } | { facadeId: number; error: string }>;
 }
 export const WINDOW_FIT_FILE = 'window_fit.json';
 
@@ -790,8 +854,8 @@ export async function fitWindowsForOrthos(orthosDir: string, opts: { minCoverage
     }
     const t0 = Date.now();
     const bin = await ensureReliefBandBinary();
-    const facades = (JSON.parse(fs.readFileSync(path.join(orthosDir, 'facades.json'), 'utf8')).facades as Array<FitFrame & { facadeId: number; image: string; coverage: number; uncoveredMask?: string }>)
-        .filter(f => f.coverage >= (opts.minCoverage ?? 0.6) && fs.existsSync(path.join(orthosDir, f.image)));
+    const facades = (JSON.parse(fs.readFileSync(path.join(orthosDir, 'facades.json'), 'utf8')).facades as Array<FitFrame & { facadeId: number; image: string; coverage: number; wallCoverage?: number; wallAreaM2?: number; uncoveredMask?: string }>)
+        .filter(f => facadeEligible(f, { ...FACADE_LATTICE_PARAMS, ...(opts.minCoverage !== undefined ? { minCoverage: opts.minCoverage } : {}) }) && fs.existsSync(path.join(orthosDir, f.image)));
     const out: WindowFitFile['facades'] = [];
     let next = 0;
     const worker = async () => {
@@ -804,7 +868,7 @@ export async function fitWindowsForOrthos(orthosDir: string, opts: { minCoverage
                 const img = decodePng(fs.readFileSync(png));
                 const mask = maskFile && fs.existsSync(maskFile) ? (() => { const m = decodePng(fs.readFileSync(maskFile)); return Uint8Array.from({ length: m.width * m.height }, (_, k) => (m.rgba[k * 4] >= 128 ? 1 : 0)); })() : undefined;
                 const fit = await fitFacadeWindows({ rgba: img.rgba, width: img.width, height: img.height }, mask, f, nativeRelief(bin, png, maskFile && fs.existsSync(maskFile) ? maskFile : undefined, f, opts.signal), P);
-                out.push({ facadeId: f.facadeId, width: img.width, height: img.height, rects: fit.rects, bands: fit.bands, ms: Date.now() - t });
+                out.push({ facadeId: f.facadeId, width: img.width, height: img.height, rects: fit.rects, panes: fit.panes, bands: fit.bands, ms: Date.now() - t });
             } catch (err) {
                 if (opts.signal?.aborted) throw err;
                 out.push({ facadeId: f.facadeId, error: err instanceof Error ? err.message : String(err) });
@@ -821,6 +885,13 @@ export async function fitWindowsForOrthos(orthosDir: string, opts: { minCoverage
 function fittedEntry(fit: WindowFitFile, facadeId: number) {
     const e = fit.facades.find(x => x.facadeId === facadeId);
     return !e || 'error' in e || !e.rects.length ? undefined : e;
+}
+
+/** A facade's panes (the glass in its fitted windows) in the photo's UVs, u0 v0 u1 v1 each; none when the fit gave no windows or no panes. */
+export function fittedPaneUvs(fit: WindowFitFile, facadeId: number): number[] | undefined {
+    const e = fittedEntry(fit, facadeId);
+    if (!e || !e.panes?.length) return undefined;
+    return e.panes.flatMap(([x0, y0, x1, y1]) => [x0 / e.width, y0 / e.height, x1 / e.width, y1 / e.height]);
 }
 
 /** A facade's fitted windows from window_fit.json in photo pixels, or none (as fittedWindowUvs). */

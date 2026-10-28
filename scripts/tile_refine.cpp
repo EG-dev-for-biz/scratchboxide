@@ -129,6 +129,7 @@ static void usage() {
         "  --relief-own-regions    relief: grow its own facade regions instead of using the detected wall planes\n"
         "  --relief-orthos DIR     write each analysed facade's orthophoto (facade_<id>.png) and frame (facades.json)\n"
         "  --relief-no-carve       relief: analyse (and write the orthos) but carve nothing\n"
+        "  --relief-export-only    relief: write the orthos, neither analyse nor carve (pipeline K reads its own)\n"
         "  --facade-grammar FILE   photo-inferred facade grammars (text: 'facade id nx ny nz cx cy cz confidence source'\n"
         "                          then 'tier t0 t1 s0 s1 [s0 s1 ...]' lines); each becomes its facade's window lattice\n"
         "  --flatten-band M        facade flatten: vertices within M of a detected wall plane move onto it (default 0.10)\n"
@@ -217,6 +218,7 @@ int main(int argc, char** argv) {
         else if (a == "--relief-own-regions") p.reliefOnWallPlanes = false;
         else if (a == "--relief-orthos") p.reliefParams.orthoExportDir = next();
         else if (a == "--relief-no-carve") p.reliefParams.carve = false;
+        else if (a == "--relief-export-only") { p.reliefParams.carve = false; p.reliefParams.analyse = false; }
         else if (a == "--facade-grammar") grammarPath = next();
         else if (a == "--flatten-band") p.flatten.band = num();
         else if (a == "--no-flatten") p.flatten.band = 0;

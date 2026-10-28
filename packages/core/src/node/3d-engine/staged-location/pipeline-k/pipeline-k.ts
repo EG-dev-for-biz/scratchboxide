@@ -25,11 +25,12 @@ import * as os from 'os';
 import * as path from 'path';
 import { Worker } from 'worker_threads';
 import { workerTsRegisterSource } from '../../../worker-ts-register';
-import { FACADE_LATTICE_PARAMS, type ReliefFacade } from '../facade-lattice';
+import { FACADE_LATTICE_PARAMS, facadeEligible, wallCoverage, type ReliefFacade } from '../facade-lattice';
+import { decodePng } from '../../../texture-processing';
 import { ORTHO_RECTIFY_PARAMS, ORTHO_RECTIFY_VERSION, uncoveredMaskName, type OrthoRectifyParams, type OrthoRectifyReport } from './ortho-rectify';
 import type { RectifyJob, RectifyMessage } from './ortho-rectify-worker';
 
-export const PIPELINE_K_VERSION = `pipeline-k/1(${ORTHO_RECTIFY_VERSION})`;
+export const PIPELINE_K_VERSION = `pipeline-k/2(${ORTHO_RECTIFY_VERSION})`;
 
 /** Pipeline K when the request (or SCRATCHBOX_STAGED_PROCEDURAL) asks for 'k'. */
 export function stagedPipelineK(request: { pipeline?: string }, env: NodeJS.ProcessEnv = process.env): boolean {
@@ -105,7 +106,14 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
     const tmp = `${outDir}.tmp-${process.pid}-${Date.now()}`;
     fs.mkdirSync(tmp, { recursive: true });
     try {
-        const todo = facadesJson.facades.filter(f => f.coverage >= minCoverage && fs.existsSync(path.join(srcDir, f.image)));
+        // each facade's coverage over its own wall (a stepped face's rectangle holds the air beside its setbacks)
+        for (const f of facadesJson.facades) {
+            const file = path.join(srcDir, f.image);
+            if (!fs.existsSync(file)) continue;
+            const w = wallCoverage(decodePng(fs.readFileSync(file)), f.pixel);
+            f.wallCoverage = Math.round(w.wallCoverage * 1000) / 1000; f.wallAreaM2 = Math.round(w.wallAreaM2);
+        }
+        const todo = facadesJson.facades.filter(f => facadeEligible(f, { ...FACADE_LATTICE_PARAMS, minCoverage }) && fs.existsSync(path.join(srcDir, f.image)));
         for (const f of facadesJson.facades) if (!todo.includes(f) && fs.existsSync(path.join(srcDir, f.image))) fs.copyFileSync(path.join(srcDir, f.image), path.join(tmp, f.image));
         // largest first, dealt round the threads
         const n = Math.max(1, Math.min(opts.threads ?? Math.max(1, Math.min(4, os.cpus().length - 1)), todo.length));
