@@ -66,6 +66,9 @@ import { ShowcaseDemoItem } from './demos/preloadedDemos';
 import { DEFAULT_RECENT_PROJECTS, ProjectItem } from './ProjectsModal';
 import { SpotlightLauncherModal } from './SpotlightLauncherModal';
 import { AutomationsModal } from './AutomationsModal';
+/** The chat's default share of the window beside the canvas (the drag range is 22-65%). */
+const CHAT_SPLIT_DEFAULT = 0.28;
+
 export { AutomationsModal };
 import { GoogleDriveConnectModal } from './GoogleDriveConnectModal';
 import { GitReviewModal } from './GitReviewModal';
@@ -327,7 +330,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const [stageDock, setStageDock] = React.useState<StageDock | undefined>();
     const [docReadOnly, setDocReadOnly] = React.useState<boolean>(false);
     const [documentPaneState, setDocumentPaneState] = React.useState<'split' | 'collapsed' | 'expanded'>('split');
-    const [splitRatio, setSplitRatio] = React.useState<number>(0.382); // Golden ratio ~38.2% chat, 61.8% stage
+    const [splitRatio, setSplitRatio] = React.useState<number>(CHAT_SPLIT_DEFAULT);
     const [isDraggingSplitter, setIsDraggingSplitter] = React.useState<boolean>(false);
     const splitContainerRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -1635,8 +1638,8 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                                                 e.preventDefault();
                                                 setIsDraggingSplitter(true);
                                             }}
-                                            onDoubleClick={() => setSplitRatio(0.382)}
-                                            title="Drag to resize split pane · Double-click to reset (38/62 golden ratio)"
+                                            onDoubleClick={() => setSplitRatio(CHAT_SPLIT_DEFAULT)}
+                                            title={`Drag to resize split pane · Double-click to reset (${Math.round(CHAT_SPLIT_DEFAULT * 100)}% chat)`}
                                         >
                                             <div className="sb-canvas-resizer-line" />
                                             <div className="sb-canvas-resizer-knob" />
