@@ -14,8 +14,12 @@
  * are the module's own. The windows are found where they are drawn, and the shopfront gets none.
  */
 
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { describe, expect, it } from 'vitest';
-import { fitFacadeWindows, fittedWindowUvs, panesOfStrip, WINDOW_FIT_PARAMS, type FitFrame, type ReliefGrid, type ReliefRunner, type WindowFitFile } from '../src/node/3d-engine/staged-location/window-fit';
+import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
+import { ensureReliefBandBinary, fitFacadeWindows, fittedPlanesOf, fittedWindowUvs, nativeRelief, panesOfStrip, WINDOW_FIT_PARAMS, type FitFrame, type ReliefGrid, type ReliefRunner, type WindowFitFile } from '../src/node/3d-engine/staged-location/window-fit';
 
 const PX = 0.1, W = 300, H = 240; // a 30 x 24 m facade
 const frame: FitFrame = { pixel: PX, orthoSMin: 0, orthoTMax: 24, texel: 0.05 };
@@ -98,5 +102,45 @@ describe('the window fit', () => {
         const flat = Uint8Array.from(rgba);
         for (let y = 0; y < Hd; y++) for (let x = 20; x < 40; x++) flat.set([80, 60, 50, 255], (y * Wd + x) * 4);
         expect(panesOfStrip({ rgba: flat, width: Wd, height: Hd }, valid, [20, 0, 40, 400], 40, WINDOW_FIT_PARAMS)).toBeUndefined();
+    });
+
+    it("reads a narrow tower face's bay pitch: two bays across the band are enough (the relief's minPeriodsInSpan)", async () => {
+        // a 14 m wide, 40 m tall face at 0.077 m texels: light piers 1.6 m wide every 5.6 m, dark bays between with a light
+        // spandrel every 3.5 m; the bay pitch is more than a third of the width, so a search for three of it finds none
+        const px = 0.077, w = Math.round(14 / px), h = Math.round(40 / px), rgba = new Uint8Array(w * h * 4);
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+            const s = (x + 0.5) * px, t = (y + 0.5) * px, pier = s % 5.6 < 1.6, spandrel = t % 3.5 < 0.9;
+            const v = pier ? 190 : spandrel ? 120 : 45;
+            rgba.set([v, v, v, 255], (y * w + x) * 4);
+        }
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'relief-band-'));
+        const png = path.join(dir, 'facade.png');
+        fs.writeFileSync(png, encodePng(w, h, Buffer.from(rgba), 4));
+        const bin = await ensureReliefBandBinary();
+        const [g] = await nativeRelief(bin, png, undefined, { pixel: px, orthoSMin: 0, orthoTMax: 40, texel: 2 * px })('-', 4, 0, [[0, w, 0, h]]);
+        fs.rmSync(dir, { recursive: true, force: true });
+        expect(g.periodS.found).toBe(true);
+        expect(g.periodS.pitch).toBeCloseTo(5.6, 0);
+        expect(g.periodT.found).toBe(true);
+        expect(g.periodT.pitch).toBeCloseTo(3.5, 0);
+    }, 600_000);
+
+    it('reads every fitted plane with its frame, its windows and panes; a plane with no windows or a size mismatch is left out', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fitted-planes-'));
+        const frame = (facadeId: number, width: number) => ({ facadeId, image: `facade_${facadeId}.png`, centroid: [0, 10, 0], normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0], orthoSMin: -5, orthoTMax: 10, pixel: 0.1, width, height: 200, coverage: 0.4 });
+        fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify({ facades: [frame(1, 100), frame(2, 100), frame(3, 100)] }));
+        const fit: WindowFitFile = { version: 'v', params: WINDOW_FIT_PARAMS, ms: 0, facades: [
+            { facadeId: 1, width: 100, height: 200, rects: [[10, 10, 20, 30]], panes: [[10, 10, 20, 18]], bands: [], ms: 0 },
+            { facadeId: 2, width: 100, height: 200, rects: [], bands: [], ms: 0 },
+            { facadeId: 3, width: 90, height: 200, rects: [[1, 1, 2, 2]], bands: [], ms: 0 }
+        ] };
+        fs.writeFileSync(path.join(dir, 'window_fit.json'), JSON.stringify(fit));
+        const planes = fittedPlanesOf(dir);
+        fs.rmSync(dir, { recursive: true, force: true });
+        expect(planes.map(p => p.facadeId)).toEqual([1]);
+        expect(planes[0].windows).toEqual([[10, 10, 20, 30]]);
+        expect(planes[0].panes).toEqual([[10, 10, 20, 18]]);
+        expect(planes[0].orthoTMax).toBe(10);
+        expect(fittedPlanesOf(path.join(os.tmpdir(), 'no-such-orthos'))).toEqual([]);
     });
 });

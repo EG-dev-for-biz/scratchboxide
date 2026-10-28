@@ -66,6 +66,9 @@ int main(int argc, char** argv) {
     // a held-out fold: alternate stripes along the wall (s) or bands up it (t) of `span` pixels, those of `parity` hidden
     const auto hidden = [&](int x, int y) { return (hide == 's' && (x / span) % 2 == parity) || (hide == 't' && (y / span) % 2 == parity); };
     pr::ReliefParams p;
+    // a narrow wall (three bays of a tower's face) still has its bay pitch searched: two of it across the band suffice, the
+    // window fit's held-out folds then judging whether the reading repeats
+    p.minPeriodsInSpan = 2;
     for (int a = 10; a + 3 < argc; a += 4) {
         const int x0 = std::stoi(argv[a]), x1 = std::stoi(argv[a + 1]), y0 = std::stoi(argv[a + 2]), y1 = std::stoi(argv[a + 3]);
         pr::Orthophoto o;

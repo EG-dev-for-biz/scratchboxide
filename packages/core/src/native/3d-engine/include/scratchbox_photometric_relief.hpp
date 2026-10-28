@@ -155,6 +155,7 @@ struct ReliefParams {
     double minPitch{0.8};
     double maxPitch{8.0};
     double minPeriodicity{0.15};     // normalized autocorrelation of the chosen peak
+    int minPeriodsInSpan{3};         // a pitch is searched only when the span holds this many of it (2: a narrow wall's bays)
     double minLatticeConfirmation{0.4};  // cells / strips are kept only when confirmed at this share of the sites tested
     int minLatticeSites{4};              // ...and at this many sites at least (fewer is a coincidence, not a repeat)
     // Lattice rows: the modes of the confirmed cells' centres along t (across all columns, at least half a t pitch
@@ -598,7 +599,7 @@ inline PeriodEstimate detectPeriod(const std::vector<float>& lum, const std::vec
     for (int scale = 0; scale < std::max(1, p.periodScales); ++scale) {
         const double r = std::max(p.maxPitch, 2.0) / std::pow(2.0, scale);
         if (scale > 0 && r < 0.5 * p.minPitch) break;
-        const int kMax = std::min(static_cast<int>(std::floor(std::min(p.maxPitch, p.scalePitchReach * r) / px)), n / 3);
+        const int kMax = std::min(static_cast<int>(std::floor(std::min(p.maxPitch, p.scalePitchReach * r) / px)), n / std::max(2, p.minPeriodsInSpan));
         if (kMax <= kMin + 2) continue;
         const int rad = std::max(1, static_cast<int>(std::lround(r / px)));
         std::fill(x.begin(), x.end(), 0.0f);

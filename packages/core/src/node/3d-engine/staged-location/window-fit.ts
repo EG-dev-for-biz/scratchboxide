@@ -32,9 +32,9 @@ import * as path from 'path';
 import { decodePng } from '../../texture-processing';
 import { compileNativeCached, defaultNativeFlags, NativeBuildError, placeCachedBinary } from '../native-build-cache';
 import { findTileRefineRepoRoot } from '../tile-refine-service';
-import { FACADE_LATTICE_PARAMS, facadeEligible } from './facade-lattice';
+import { encodePng } from './png-encode';
 
-export const WINDOW_FIT_VERSION = 'window-fit/2';
+export const WINDOW_FIT_VERSION = 'window-fit/4';
 
 export const WINDOW_FIT_PARAMS = {
     /** A cell's darkness above its surround's: the cell is present. */
@@ -845,8 +845,13 @@ export interface WindowFitFile {
 }
 export const WINDOW_FIT_FILE = 'window_fit.json';
 
-/** Fits the windows of every facade in an orthos directory (relief_orthos/facades.json), several at a time; writes window_fit.json. */
-export async function fitWindowsForOrthos(orthosDir: string, opts: { minCoverage?: number; concurrency?: number; signal?: AbortSignal; params?: WindowFitParams } = {}): Promise<{ file: string; fit: WindowFitFile; cached: boolean }> {
+/**
+ * Fits the windows of every facade plane in an orthos directory (relief_orthos/facades.json), whatever its photo's
+ * coverage (the fit reads only covered texels: a plane the rebuild leaves as scan still has its windows drawn on the scan),
+ * several at a time; writes window_fit.json. A plane with no uncovered mask beside it (one pipeline K did not straighten)
+ * has it read from its ortho: the texels the photo never reached are exact grey 128 or transparent.
+ */
+export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency?: number; signal?: AbortSignal; params?: WindowFitParams } = {}): Promise<{ file: string; fit: WindowFitFile; cached: boolean }> {
     const file = path.join(orthosDir, WINDOW_FIT_FILE), P = opts.params ?? WINDOW_FIT_PARAMS;
     if (fs.existsSync(file)) {
         const prior = JSON.parse(fs.readFileSync(file, 'utf8')) as WindowFitFile;
@@ -855,19 +860,27 @@ export async function fitWindowsForOrthos(orthosDir: string, opts: { minCoverage
     const t0 = Date.now();
     const bin = await ensureReliefBandBinary();
     const facades = (JSON.parse(fs.readFileSync(path.join(orthosDir, 'facades.json'), 'utf8')).facades as Array<FitFrame & { facadeId: number; image: string; coverage: number; wallCoverage?: number; wallAreaM2?: number; uncoveredMask?: string }>)
-        .filter(f => facadeEligible(f, { ...FACADE_LATTICE_PARAMS, ...(opts.minCoverage !== undefined ? { minCoverage: opts.minCoverage } : {}) }) && fs.existsSync(path.join(orthosDir, f.image)));
+        .filter(f => fs.existsSync(path.join(orthosDir, f.image)));
     const out: WindowFitFile['facades'] = [];
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'window-fit-'));
     let next = 0;
     const worker = async () => {
         for (;;) {
             const f = facades[next++];
             if (!f) return;
             if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('aborted');
-            const t = Date.now(), png = path.join(orthosDir, f.image), maskFile = f.uncoveredMask ? path.join(orthosDir, f.uncoveredMask) : undefined;
+            const t = Date.now(), png = path.join(orthosDir, f.image);
+            let maskFile = f.uncoveredMask ? path.join(orthosDir, f.uncoveredMask) : undefined;
             try {
                 const img = decodePng(fs.readFileSync(png));
-                const mask = maskFile && fs.existsSync(maskFile) ? (() => { const m = decodePng(fs.readFileSync(maskFile)); return Uint8Array.from({ length: m.width * m.height }, (_, k) => (m.rgba[k * 4] >= 128 ? 1 : 0)); })() : undefined;
-                const fit = await fitFacadeWindows({ rgba: img.rgba, width: img.width, height: img.height }, mask, f, nativeRelief(bin, png, maskFile && fs.existsSync(maskFile) ? maskFile : undefined, f, opts.signal), P);
+                let mask: Uint8Array;
+                if (maskFile && fs.existsSync(maskFile)) { const m = decodePng(fs.readFileSync(maskFile)); mask = Uint8Array.from({ length: m.width * m.height }, (_, k) => (m.rgba[k * 4] >= 128 ? 1 : 0)); }
+                else {
+                    mask = Uint8Array.from({ length: img.width * img.height }, (_, k) => (img.rgba[k * 4 + 3] === 0 || (img.rgba[k * 4] === 128 && img.rgba[k * 4 + 1] === 128 && img.rgba[k * 4 + 2] === 128) ? 1 : 0));
+                    maskFile = path.join(scratch, `${f.facadeId}_uncovered.png`);
+                    fs.writeFileSync(maskFile, encodePng(img.width, img.height, Buffer.from(mask.map(v => (v ? 255 : 0))), 1));
+                }
+                const fit = await fitFacadeWindows({ rgba: img.rgba, width: img.width, height: img.height }, mask, f, nativeRelief(bin, png, maskFile, f, opts.signal), P);
                 out.push({ facadeId: f.facadeId, width: img.width, height: img.height, rects: fit.rects, panes: fit.panes, bands: fit.bands, ms: Date.now() - t });
             } catch (err) {
                 if (opts.signal?.aborted) throw err;
@@ -875,7 +888,8 @@ export async function fitWindowsForOrthos(orthosDir: string, opts: { minCoverage
             }
         }
     };
-    await Promise.all(Array.from({ length: Math.max(1, opts.concurrency ?? Math.max(1, Math.min(8, os.cpus().length - 1))) }, worker));
+    try { await Promise.all(Array.from({ length: Math.max(1, opts.concurrency ?? Math.max(1, Math.min(8, os.cpus().length - 1))) }, worker)); }
+    finally { fs.rmSync(scratch, { recursive: true, force: true }); }
     out.sort((a, b) => a.facadeId - b.facadeId);
     const fit: WindowFitFile = { version: WINDOW_FIT_VERSION, params: P, ms: Date.now() - t0, facades: out };
     fs.writeFileSync(file, JSON.stringify(fit));
@@ -908,4 +922,25 @@ export function fittedWindowUvs(fit: WindowFitFile, facadeId: number): number[] 
     const e = fittedEntry(fit, facadeId);
     if (!e) return undefined;
     return e.rects.flatMap(([x0, y0, x1, y1]) => [x0 / e.width, y0 / e.height, x1 / e.width, y1 / e.height]);
+}
+
+/** A facade plane's fitted windows in its ortho's frame (relief_orthos/facades.json): world = centroid + s axisS + t axisT, pixel x at s = orthoSMin + x pixel, y at t = orthoTMax - y pixel. */
+export interface FittedPlane {
+    facadeId: number; centroid: number[]; normal: number[]; axisS: number[]; axisT: number[];
+    orthoSMin: number; orthoTMax: number; pixel: number; width: number; height: number;
+    /** The fitted windows and their panes, photo-pixel rects [x0, y0, x1, y1]. */
+    windows: WindowRect[]; panes: WindowRect[];
+}
+
+/** Every plane with fitted windows in an orthos directory (facades.json and window_fit.json beside it); none when either is missing. */
+export function fittedPlanesOf(orthosDir: string): FittedPlane[] {
+    const ff = path.join(orthosDir, 'facades.json'), wf = path.join(orthosDir, WINDOW_FIT_FILE);
+    if (!fs.existsSync(ff) || !fs.existsSync(wf)) return [];
+    const frames = JSON.parse(fs.readFileSync(ff, 'utf8')).facades as Array<Omit<FittedPlane, 'windows' | 'panes'>>;
+    const fit = JSON.parse(fs.readFileSync(wf, 'utf8')) as WindowFitFile;
+    return frames.flatMap(f => {
+        const e = fittedEntry(fit, f.facadeId);
+        if (!e || e.width !== f.width || e.height !== f.height) return [];
+        return [{ facadeId: f.facadeId, centroid: f.centroid, normal: f.normal, axisS: f.axisS, axisT: f.axisT, orthoSMin: f.orthoSMin, orthoTMax: f.orthoTMax, pixel: f.pixel, width: f.width, height: f.height, windows: e.rects, panes: e.panes ?? [] }];
+    });
 }
