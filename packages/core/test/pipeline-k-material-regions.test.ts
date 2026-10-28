@@ -157,8 +157,8 @@ describe('pipeline K material regions', () => {
         const plan = planMaterialRegions(g, g.json, imagesOf([photo]), classes, sets(classes));
         const f = plan.report.facades.perFacade[0];
         expect(f.fittedWindows).toBe(1);
-        expect(f.panes).toBe(1);
-        expect(f.paneShare).toBeGreaterThan(0);
+        expect(f.bays).toBe(0);
+        expect(f.glassShare).toBeGreaterThan(0);
         expect(f.frameSet).not.toBe('TestStone');
         expect(plan.report.facades.withWindows).toBe(1);
         const m = plan.materials[0];
@@ -172,7 +172,7 @@ describe('pipeline K material regions', () => {
         expect(at(m.params, 74, 50)[0]).toBe(0);
         expect(metalTexels(m.orm)).toBe(0);
         // the pane carries its seed in the parameters alpha (the viewer's tilt), everything else 255
-        expect(at(m.params, 24, 15)[3]).toBe(paneSeed(0));
+        expect(at(m.params, 24, 15)[3]).toBe(paneSeed(100001));
         expect(at(m.params, 24, 35)[3]).toBe(255);
         expect(at(m.params, 74, 50)[3]).toBe(255);
         const seeds = Array.from({ length: 500 }, (_, i) => paneSeed(i));
@@ -181,41 +181,44 @@ describe('pipeline K material regions', () => {
         expect(new Set(seeds).size).toBeGreaterThan(200);
     });
 
-    it("draws a fitted plane's windows on the scan piece lying on it, and none on a piece off the plane", () => {
+    it("draws glass on a scan piece only in its fitted plane's bays, off the wall's class; none on a piece off the plane", () => {
         const { glb, photos } = building();
         const g = parseGlbBytes(glb);
         const images = imagesOf(photos);
         const classes = readRegionClasses(g.json, images)!;
-        // a plane through the scan piece relief_m0 (x 50-55, y 0-5, z 0, facing +z): one window s -1.5..0.5 (x 51-53), t 1.5..-1.5 (y 4..1), its pane the top metre
-        const plane: FittedPlane = { facadeId: 9, centroid: [52.5, 2.5, 0], normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0], orthoSMin: -2.5, orthoTMax: 2.5, pixel: 0.1, width: 50, height: 50, windows: [[10, 10, 30, 40]], panes: [[10, 10, 30, 20]] };
+        // a plane through the scan piece relief_m0 (x 50-55, y 0-5, z 0, facing +z): a column of three windows s -1.5..0.5
+        // (x 51-53), each 1.2 m tall every 1.5 m up the wall (t 2.2 to -2.3): one bay from y 0.2 to 4.7
+        const windows: Array<[number, number, number, number]> = [[10, 3, 30, 15], [10, 18, 30, 30], [10, 33, 30, 45]];
+        const plane: FittedPlane = { facadeId: 9, centroid: [52.5, 2.5, 0], normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0], orthoSMin: -2.5, orthoTMax: 2.5, pixel: 0.1, width: 50, height: 50, windows, panes: windows };
         const plan = planMaterialRegions(g, g.json, images, classes, sets(classes), [plane]);
         const m = plan.materials.find(x => x.material === 2)!;
-        // the texel at world (52, 3.5): glass with its seed; (52, 2): the window's frame; (54, 2): wall; relief_m1 (x 55-60, off the plane's ortho): wall
+        // the brown scan photo is not the wall's class: the bay is glass; beside it (x 54) and relief_m1 (off the plane's ortho), wall
         const wall = roughnessOf(classes[3]);
         expect(at(m.params, 12, 9)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
         expect(at(m.params, 12, 9)[3]).toBeLessThan(255);
         expect(at(m.orm, 12, 9)[1]).toBe(Math.round(GLASS_ROUGHNESS * 255));
-        expect(at(m.params, 12, 19)[0]).toBe(0);
-        expect(at(m.orm, 12, 19)[1]).not.toBe(wall);
         expect(at(m.orm, 25, 19)[1]).toBe(wall);
         expect(at(m.orm, 50, 19)[1]).toBe(wall);
         expect(metalTexels(m.orm)).toBe(0);
         expect(m.glass).toBe(true);
         expect(plan.report.scanPieces.planes).toEqual([9]);
-        expect(plan.report.scanPieces.windowShare).toBeGreaterThan(0);
         expect(plan.report.scanPieces.paneShare).toBeGreaterThan(0);
-        expect(plan.report.scanPieces.onPlanes).toBeGreaterThan(plan.report.scanPieces.windowShare);
+        // one window alone makes no bay: no glass on the scan piece
+        const single = planMaterialRegions(g, g.json, imagesOf(photos), classes, sets(classes), [{ ...plane, windows: [windows[0]], panes: [windows[0]] }]);
+        expect(single.materials.find(x => x.material === 2)!.glass).toBe(false);
         // a plane facing the other way draws nothing
         const back = planMaterialRegions(g, g.json, imagesOf(photos), classes, sets(classes), [{ ...plane, normal: [0, 0, -1], axisS: [-1, 0, 0] }]);
         expect(back.report.scanPieces.planes).toEqual([]);
     });
 
-    it("puts the stone's relief on the structure alone, the bays' infill the frame's, where the lattice drew a structure", () => {
-        // the piered facade with one fitted window and its pane, and the lattice's structure: the piers (x 0-15 mod 50) full height
+    it("puts the stone's relief on the structure alone and glass in the bays it frames, off the wall's class", () => {
+        // the piered facade with one fitted window and its pane, the lattice's structure (the piers, x 0-15 mod 50, full height)
+        // and its bays (x 15-50 mod 50) up to 25 m (v from 1/6)
         const photo = piered(), W = photo.width, H = photo.height;
         const win = [19 / W, 8 / H, 29 / W, 43 / H], pane = [19 / W, 8 / H, 29 / W, 26 / H];
         const runs = [0, 50, 100, 150].flatMap(x => [x / W, 0, (x + 15) / W, 1]);
-        const quads: Quad[] = [{ mesh: 'facade_lattice_1', corners: wall(0, 20, 30), uv: FULL_UV, material: 0, extras: { sbFacadeLattice: { facadeId: 1, windows: { uv: win, panes: pane, label: 'photo-inferred', source: 'test' }, structure: { uv: runs, reliefM: 0.18, reliefFrom: 'measured', reason: 'test', chamferM: 0.05, label: 'photo-inferred' } } } }];
+        const bays = [15, 65, 115, 165].flatMap(x => [x / W, 1 / 6, (x + 35) / W, 1]);
+        const quads: Quad[] = [{ mesh: 'facade_lattice_1', corners: wall(0, 20, 30), uv: FULL_UV, material: 0, extras: { sbFacadeLattice: { facadeId: 1, windows: { uv: win, panes: pane, label: 'photo-inferred', source: 'test' }, structure: { uv: runs, bays, reliefM: 0.18, reliefFrom: 'measured', reason: 'test', chamferM: 0.05, label: 'photo-inferred' } } } }];
         const g = parseGlbBytes(scene(quads, [photo]));
         const b = building(), bg = parseGlbBytes(b.glb);
         const classes = readRegionClasses(bg.json, imagesOf(b.photos))!;
@@ -224,11 +227,30 @@ describe('pipeline K material regions', () => {
         const frame = classes.find(c => sets(classes)[c.index].name === f.frameSet)!;
         expect(f.structureShare).toBeCloseTo(0.3, 2);
         expect(frame.wall).toBe(false);
-        // a pier: the wall's (stone) set; a spandrel in a bay outside any window: the frame's; the pane: glass
+        // a pier: the wall's (stone) set; a spandrel and a pane in a bay: glass; the fitted window above the bays (outside
+        // them): its pane glass, the rest of it the frame's
         expect(at(m.orm, 7, 100)[1]).toBe(roughnessOf(classes[3]));
-        expect(at(m.orm, 74, 120)[1]).toBe(roughnessOf(frame));
+        expect(at(m.params, 74, 110)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
+        expect(at(m.params, 74, 120)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
         expect(at(m.orm, 24, 15)[1]).toBe(Math.round(GLASS_ROUGHNESS * 255));
+        expect(at(m.orm, 24, 35)[1]).toBe(roughnessOf(frame));
+        expect(f.bays).toBe(4);
         expect(metalTexels(m.orm)).toBe(0);
+    });
+
+    it("draws no glass on a pane whose texels are the wall's class: stone, whatever the fit read", () => {
+        // the piered facade with two fitted windows and panes: one on a bay's glass, one across a pier (stone)
+        const photo = piered(), W = photo.width, H = photo.height;
+        const glassWin = [19 / W, 8 / H, 29 / W, 26 / H], pierWin = [1 / W, 40 / H, 14 / W, 70 / H];
+        const quads: Quad[] = [{ mesh: 'facade_lattice_1', corners: wall(0, 20, 30), uv: FULL_UV, material: 0, extras: { sbFacadeLattice: { facadeId: 1, windows: { uv: [...glassWin, ...pierWin], panes: [...glassWin, ...pierWin], label: 'photo-inferred', source: 'test' } } } }];
+        const g = parseGlbBytes(scene(quads, [photo]));
+        const b = building(), bg = parseGlbBytes(b.glb);
+        const classes = readRegionClasses(bg.json, imagesOf(b.photos))!;
+        const plan = planMaterialRegions(g, g.json, imagesOf([photo]), classes, sets(classes));
+        const m = plan.materials[0];
+        expect(at(m.params, 24, 15)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
+        expect(at(m.params, 7, 55)[0]).toBe(0);
+        expect(plan.report.panesOnStone).toBe(1);
     });
 
     it('keeps the photo as the base colour everywhere, panes included', () => {

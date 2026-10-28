@@ -515,10 +515,10 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
 
 /**
  * The structure for the GLB extras (sbFacadeLattice.structure): its cells as runs along each row, u0 v0 u1 v1 in the photo's
- * UVs (v down from the top), with its relief, where that came from, and the chamfer; the outline photo-inferred (read from
+ * UVs (v down from the top), the bays it frames (the window strips) in the same UVs, with its relief, where that came from, and the chamfer; the outline photo-inferred (read from
  * the window fit's bays).
  */
-export function structureExtras(r: FacadeLatticeResult): { uv: number[]; reliefM: number; reliefFrom: string; reason: string; chamferM: number; label: string } | undefined {
+export function structureExtras(r: FacadeLatticeResult): { uv: number[]; bays: number[]; reliefM: number; reliefFrom: string; reason: string; chamferM: number; label: string } | undefined {
     if (!r.structure) return undefined;
     const ns = r.s.length - 1, nt = r.t.length - 1, uv: number[] = [];
     for (let b = 0; b < nt; b++) for (let a = 0; a < ns; a++) {
@@ -527,8 +527,13 @@ export function structureExtras(r: FacadeLatticeResult): { uv: number[]; reliefM
         while (e + 1 < ns && r.structure.cells[b * ns + e + 1]) e++;
         uv.push(r.cellU[a], r.cellV[b + 1], r.cellU[e + 1], r.cellV[b]);
     }
+    // the bays it frames (the window strips, [s0, t0, s1, t1] in the plane's frame) in the same UVs: u and v run linearly with s and t
+    const sN = r.s.length - 1, tN = r.t.length - 1;
+    const uOf = (sv: number) => r.cellU[0] + ((sv - r.s[0]) / (r.s[sN] - r.s[0])) * (r.cellU[sN] - r.cellU[0]);
+    const vOf = (tv: number) => r.cellV[0] + ((tv - r.t[0]) / (r.t[tN] - r.t[0])) * (r.cellV[tN] - r.cellV[0]);
+    const bays = (r.strips ?? []).flatMap(([s0, t0, s1, t1]) => [uOf(s0), vOf(t1), uOf(s1), vOf(t0)]);
     const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
-    return { uv: uv.map(r4), reliefM: Math.round(r.structure.reliefM * 1000) / 1000, reliefFrom: r.structure.reliefFrom, reason: r.structure.reason, chamferM: STRUCTURE.chamferM, label: 'photo-inferred' };
+    return { uv: uv.map(r4), bays: bays.map(r4), reliefM: Math.round(r.structure.reliefM * 1000) / 1000, reliefFrom: r.structure.reliefFrom, reason: r.structure.reason, chamferM: STRUCTURE.chamferM, label: 'photo-inferred' };
 }
 
 /**
