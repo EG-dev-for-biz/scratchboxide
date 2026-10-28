@@ -19,7 +19,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { completeLattice, ensureReliefBandBinary, fitFacadeWindows, fittedPlanesOf, panesOfUnitCell, panesUnlikeWall, fittedWindowUvs, nativeRelief, panesOfStrip, WINDOW_FIT_PARAMS, type FitFrame, type ReliefGrid, type ReliefRunner, type WindowFitFile } from '../src/node/3d-engine/staged-location/window-fit';
+import { completeLattice, Darkness, ensureReliefBandBinary, storeyColumn, fitFacadeWindows, fittedPlanesOf, panesOfUnitCell, panesUnlikeWall, fittedWindowUvs, nativeRelief, panesOfStrip, WINDOW_FIT_PARAMS, type FitFrame, type ReliefGrid, type ReliefRunner, type WindowFitFile } from '../src/node/3d-engine/staged-location/window-fit';
 
 const PX = 0.1, W = 300, H = 240; // a 30 x 24 m facade
 const frame: FitFrame = { pixel: PX, orthoSMin: 0, orthoTMax: 24, texel: 0.05 };
@@ -206,5 +206,45 @@ describe('the window fit', () => {
         const r = panesUnlikeWall({ rgba, width: W, height: H }, valid, [a, b], [a, b], [0, W, 0, H]);
         expect(r.panes).toEqual([a]);
         expect(r.dropped).toBe(1);
+    });
+
+    it('reads a narrow face as one window column from its storey rhythm, and nothing from plain stone', () => {
+        // a 3 m wide, 35 m tall return face at 0.1 m: stone edges 0.6 m each side, between them a window 1.4 m tall every 3.5 m
+        const px = 0.1, w = 30, h = 350, rgba = new Uint8Array(w * h * 4);
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+            const inCol = x >= 6 && x < 24, win = inCol && (y * px) % 3.5 >= 1.0 && (y * px) % 3.5 < 2.4;
+            rgba.set(win ? [40, 45, 55, 255] : [200, 190, 172, 255], (y * w + x) * 4);
+        }
+        const frame: FitFrame = { pixel: px, orthoSMin: 0, orthoTMax: 35, texel: 0.2 };
+        const ctx = { f: frame, dk: Darkness.of({ rgba, width: w, height: h }, undefined, px).dk, P: WINDOW_FIT_PARAMS };
+        const r = storeyColumn(ctx as never, [0, w, 0, h], 3.5)!;
+        expect(r.rects.length).toBeGreaterThanOrEqual(9);
+        for (const [x0, y0, x1, y1] of r.rects) {
+            expect(x0).toBeGreaterThanOrEqual(5); expect(x1).toBeLessThanOrEqual(25);
+            expect(((y0 * px) % 3.5)).toBeGreaterThan(0.8); expect(((y0 * px) % 3.5)).toBeLessThan(1.3);
+            expect((y1 - y0) * px).toBeGreaterThan(1.1); expect((y1 - y0) * px).toBeLessThan(1.7);
+        }
+        const plain = new Uint8Array(w * h * 4);
+        for (let k = 0; k < w * h; k++) plain.set([200, 190, 172, 255], k * 4);
+        expect(storeyColumn({ ...ctx, dk: Darkness.of({ rgba: plain, width: w, height: h }, undefined, px).dk } as never, [0, w, 0, h], 3.5)).toBeUndefined();
+    });
+
+    it("continues the grid into parts the photo never reached, flanked on both axes, labelled generated; never at the grid's edge", () => {
+        // 4 x 4 dark windows on light stone; the photo never reached site (1, 1) (inside) nor site (3, 3) (a corner)
+        const W = 130, H = 170, rgba = new Uint8Array(W * H * 4), valid = new Uint8Array(W * H).fill(1);
+        for (let k = 0; k < W * H; k++) rgba.set([200, 192, 178, 255], k * 4);
+        const site = (c: number, r: number): [number, number, number, number] => [10 + c * 30, 10 + r * 40, 22 + c * 30, 30 + r * 40];
+        const rects: Array<[number, number, number, number]> = [];
+        for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) {
+            const q = site(c, r), hole = (c === 1 && r === 1) || (c === 3 && r === 3);
+            for (let y = q[1] - 3; y < q[3] + 3; y++) for (let x = q[0] - 3; x < q[2] + 3; x++) if (hole) valid[y * W + x] = 0;
+            if (hole) continue;
+            for (let y = q[1]; y < q[3]; y++) for (let x = q[0]; x < q[2]; x++) rgba.set([45, 42, 44, 255], (y * W + x) * 4);
+            rects.push(q);
+        }
+        const done = completeLattice({ rgba, width: W, height: H }, valid, rects, [0, W, 0, H]);
+        expect(done.generated).toEqual([site(1, 1)]);
+        expect(done.rects).toContainEqual(site(1, 1));
+        expect(done.rects).not.toContainEqual(site(3, 3));
     });
 });
