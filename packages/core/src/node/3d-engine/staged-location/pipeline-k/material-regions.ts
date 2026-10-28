@@ -15,16 +15,16 @@
  *
  *  1. Appearance classes: k-means in CIELAB on texels sampled from the rebuilt facades' photos, one set of classes for the
  *     whole building. The lightest class is the wall.
- *  2. Openings: where the lattice drew a structure (facade-lattice.ts STRUCTURE: the piers, bands and parapets) and the bays
- *     it frames (the window strips), the wall's set is drawn on the structure alone; the bays' texels that are not the
- *     wall's class are glass (a bay of punched windows runs over the stone between them, which stays stone), and so are
- *     the fitted panes of the punched windows outside the bays (a base; window-fit.ts), less a pane most of whose texels
- *     are the wall's class; the rest of each bay and window the frame's finish, one set: the most common class
- *     other than the wall among them. A scan piece lying on a fitted plane (facing its way within planeCos, within
- *     planeBandM of it; window-fit.ts fittedPlanesOf) takes that plane's bays alone (the strips windowStrips draws from
- *     its windows), each texel projected into the plane's ortho. Everywhere else every texel is wall, whatever its
- *     colour: a darker class is weathered or shaded stone as often as anything else, and a colour alone never makes a
- *     window or a metal.
+ *  2. Openings: where the lattice drew a structure (facade-lattice.ts STRUCTURE: the piers, bands and parapets) and the
+ *     bays it frames (the window strips), the wall's set is drawn on the structure alone; glass is decided by bay, never
+ *     texel by texel: a bay most of whose texels are not the wall's class is glass whole; a bay mostly of the wall's
+ *     class (a column of punched windows on a masonry wall) and the windows outside the bays (a base; window-fit.ts)
+ *     take glass on their fitted panes alone, less a pane most of whose texels are the wall's class; the rest the
+ *     frame's finish, one set: the most common class other than the wall among them. A scan piece lying on a fitted
+ *     plane (facing its way within planeCos, within planeBandM of it; window-fit.ts fittedPlanesOf) takes glass by that
+ *     plane's bays alone (the strips windowStrips draws from its windows; a bay mostly of the wall's class there none),
+ *     each texel projected into the plane's ortho. Everywhere else every texel is wall, whatever its colour: a darker
+ *     class is weathered or shaded stone as often as anything else, and a colour alone never makes a window or a metal.
  *  3. A library set per class (resolved by the caller: the texture library ranked by the class colour as a dielectric
  *     surface), its roughness and normal drawn at the set's real size over each rebuilt facade (box-filtered to the
  *     facade's texel, so a tile never aliases), and the wall set's mean finish on scan pieces. Nothing is drawn metal: no
@@ -47,14 +47,14 @@ import { bandResponses, TEXTURE_BANDS_M, type TextureEnergy } from './material-h
 import type { FittedPlane } from '../window-fit';
 import { windowStrips } from '../facade-lattice';
 
-export const MATERIAL_REGIONS_VERSION = 'material-regions/23';
+export const MATERIAL_REGIONS_VERSION = 'material-regions/25';
 
 export const MATERIAL_REGIONS_PARAMS = {
     /** Appearance classes, texels sampled per facade photo, k-means iterations, sampling seed. */
     classes: 4, samplesPerPhoto: 40000, iterations: 40, seed: 7,
     /** A fitted pane's glass weight in the parameters texture (0-255): the window fit's confidence, not a measurement of the glass. */
     paneGlassWeight: 128,
-    /** A punched window's pane (outside the bays) is drawn as glass only when less than this share of its texels fall in the wall's class. */
+    /** A bay is glass whole, and a punched window's pane glass, only when less than this share of its texels fall in the wall's class. */
     paneWallShare: 0.5,
     /** A scan triangle lies on a fitted plane when it faces the plane's way within this cosine and its centre is within this of the plane (m). */
     planeCos: 0.9, planeBandM: 1.0
@@ -102,8 +102,10 @@ export interface MaterialRegionsReport {
     /** Scan pieces: their texels on a fitted plane, in its windows and in its panes (shares of all their texels), and the planes drawn on them. */
     scanPieces: { total: number; onPlanes: number; windowShare: number; paneShare: number; planes: number[] };
     texels: { total: number; glass: number };
-    /** Punched windows' panes (outside the bays) not drawn as glass: most of their texels the wall's class. */
+    /** Punched windows' panes (outside the glass bays) not drawn as glass: most of their texels the wall's class. */
     panesOnStone: number;
+    /** Bays (rebuilt facades' and scan pieces') mostly of the wall's class: glass only on their windows' panes. */
+    baysOnStone: number;
     ms: number;
 }
 
@@ -439,7 +441,7 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
     const report: MaterialRegionsReport = {
         version: MATERIAL_REGIONS_VERSION,
         classes: classes.map((c, k) => ({ index: c.index, meanLab: c.meanLab, share: c.share, wall: c.wall, set: sets[k].name, distance: Math.round(sets[k].distance * 100) / 100, ...(sets[k].harvest ? { harvest: sets[k].harvest } : {}), ...(c.texture ? { texture: c.texture, facades: c.facades } : {}) })),
-        facades: { total: rebuilt.size, withWindows: 0, perFacade: [] }, scanPieces: { total: other.size, onPlanes: 0, windowShare: 0, paneShare: 0, planes: [] }, texels: { total: 0, glass: 0 }, panesOnStone: 0, ms: 0
+        facades: { total: rebuilt.size, withWindows: 0, perFacade: [] }, scanPieces: { total: other.size, onPlanes: 0, windowShare: 0, paneShare: 0, planes: [] }, texels: { total: 0, glass: 0 }, panesOnStone: 0, baysOnStone: 0, ms: 0
     };
     const done = new Set<number>();
     // dielectric everywhere: the set's roughness, metalness 0
@@ -463,25 +465,23 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
         const window = new Uint8Array(N), pane = new Uint8Array(N);
         const windowN = markRects(fitted, W, H, window);
         // the structure (piers, bands, parapets) and the bays it frames, where the lattice drew them: the stone's relief on the
-        // structure alone; glass only in the bays, on their texels that are not the wall's class (a bay of punched windows
-        // runs over the stone between them), each bay its own seed; the rest of a bay, and a window outside the bays, the
-        // frame's finish
+        // structure alone; glass by bay, never texel by texel: a bay most of whose texels are not the wall's class (a recessed
+        // bay of glass and spandrels) is glass whole, each bay its own seed; a bay mostly of the wall's class (a column of
+        // punched windows on a masonry wall) and a window outside the bays take glass on their fitted panes alone, less a pane
+        // most of whose texels are the wall's class; the rest of a bay or window the frame's finish
         const runs = structureRuns(json, mesh), stone = new Uint8Array(N);
         const stoneN = runs ? markRects(runs, W, H, stone) : 0;
         const bays = structureBays(json, mesh) ?? [], bayId = paneIdsOf(bays, W, H, new Uint8Array(N).fill(1));
-        const bayMask = Uint8Array.from(bayId, v => (v ? 1 : 0));
+        const stoneBays = stonePanes(img, classes, bayId, P.paneWallShare);
+        const glassBay = (k: number) => !!bayId[k] && !stoneBays.has(bayId[k]);
         let paneN = 0;
-        if (bays.length) {
-            const cls = classify(img, classes, bayMask);
-            for (let k = 0; k < N; k++) if (bayId[k] && cls[k] !== WALL) { pane[k] = paneSeed(bayId[k] - 1); paneN++; }
-        }
-        // and the punched windows outside the bays (a base, a wall of single windows): their fitted panes, less those most of
-        // whose texels are the wall's class (stone, whatever the fit read)
+        for (let k = 0; k < N; k++) if (glassBay(k)) { pane[k] = paneSeed(bayId[k] - 1); paneN++; }
         const loose = new Uint8Array(N);
-        for (let k = 0; k < N; k++) loose[k] = window[k] && !bayId[k] ? 1 : 0;
+        for (let k = 0; k < N; k++) loose[k] = window[k] && !glassBay(k) ? 1 : 0;
         const paneIds = paneIdsOf(fittedPanes(json, mesh) ?? [], W, H, loose), stoneIds = stonePanes(img, classes, paneIds, P.paneWallShare);
         for (let k = 0; k < N; k++) if (paneIds[k] && !stoneIds.has(paneIds[k])) { pane[k] = paneSeed(100000 + paneIds[k]); paneN++; }
         report.panesOnStone += stoneIds.size;
+        report.baysOnStone += stoneBays.size;
         const framed = (k: number) => !pane[k] && (!!bayId[k] || !!window[k]);
         // the frame: its most common class other than the wall, among the bays' texels that are not glass and the windows'
         let frameClass = WALL;
@@ -526,10 +526,11 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
         const win = new Uint8Array(pl.width * pl.height);
         const uv = (rs: number[][]) => rs.flatMap(([x0, y0, x1, y1]) => [x0 / pl.width, y0 / pl.height, x1 / pl.width, y1 / pl.height]);
         markRects(uv(pl.windows), pl.width, pl.height, win);
-        const strips = windowStrips(pl.windows.map(([x0, y0, x1, y1]) => [pl.orthoSMin + x0 * pl.pixel, pl.orthoTMax - y1 * pl.pixel, pl.orthoSMin + x1 * pl.pixel, pl.orthoTMax - y0 * pl.pixel] as [number, number, number, number]));
-        const bayPx = strips.map(([s0, t0, s1, t1]) => [(s0 - pl.orthoSMin) / pl.pixel, (pl.orthoTMax - t1) / pl.pixel, (s1 - pl.orthoSMin) / pl.pixel, (pl.orthoTMax - t0) / pl.pixel]);
+        // the wall grammar's bays when it read this plane's wall, else the strips the plane's own windows make
+        const bayPx: number[][] = pl.bays ?? windowStrips(pl.windows.map(([x0, y0, x1, y1]) => [pl.orthoSMin + x0 * pl.pixel, pl.orthoTMax - y1 * pl.pixel, pl.orthoSMin + x1 * pl.pixel, pl.orthoTMax - y0 * pl.pixel] as [number, number, number, number]))
+            .map(([s0, t0, s1, t1]) => [(s0 - pl.orthoSMin) / pl.pixel, (pl.orthoTMax - t1) / pl.pixel, (s1 - pl.orthoSMin) / pl.pixel, (pl.orthoTMax - t0) / pl.pixel]);
         const local = paneIdsOf(uv(bayPx), pl.width, pl.height, new Uint8Array(pl.width * pl.height).fill(1)), base = bayBase;
-        bayBase += strips.length;
+        bayBase += bayPx.length;
         const bay = Int32Array.from(local, v => (v ? v + base : 0));
         const off = dot3(pl.centroid, pl.normal);
         return { pl, win, bay, off };
@@ -573,12 +574,10 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
                 if (best!.bay[j]) bayId[k] = best!.bay[j];
             });
         });
-        // glass only in the plane's bays, on their texels that are not the wall's class here
-        const bayMask = Uint8Array.from(bayId, v => (v ? 1 : 0));
-        if (bayMask.some(v => v)) {
-            const cls = classify(img, classes, bayMask);
-            for (let k = 0; k < N; k++) if (bayId[k] && cls[k] !== WALL) pane[k] = paneSeed(bayId[k] - 1);
-        }
+        // glass by the plane's bays: a bay whose texels here are mostly not the wall's class is glass whole
+        const stoneBays = stonePanes(img, classes, bayId, P.paneWallShare);
+        for (let k = 0; k < N; k++) if (bayId[k] && !stoneBays.has(bayId[k])) pane[k] = paneSeed(bayId[k] - 1);
+        report.baysOnStone += stoneBays.size;
         // the windows' frame: the most common class other than the wall among their texels that are not pane
         let frameClass = WALL;
         const frameMask = Uint8Array.from(win, (v, k) => ((v || bayId[k]) && !pane[k] ? 1 : 0));
@@ -643,7 +642,7 @@ export function describeMaterialRegions(r: MaterialRegionsReport): string {
     const pct = (a: number) => r.texels.total ? `${Math.round((100 * a) / r.texels.total)}%` : '0%';
     const windows = r.facades.perFacade.reduce((a, f) => a + f.fittedWindows, 0), bays = r.facades.perFacade.reduce((a, f) => a + f.bays, 0);
     return `material regions: ${r.classes.length} appearance classes (${r.classes.map(c => `${c.wall ? 'wall' : 'L ' + Math.round(c.meanLab[0])} -> ${c.set}`).join(', ')}); ` +
-        `${r.facades.withWindows} of ${r.facades.total} rebuilt facades opened at their ${windows} fitted windows (glass in their ${bays} bays off the wall's class and in the punched windows' panes outside them, ${r.panesOnStone} of those left as stone: ${pct(r.texels.glass)} of texels); ` +
+        `${r.facades.withWindows} of ${r.facades.total} rebuilt facades opened at their ${windows} fitted windows (glass in their ${bays} bays whole, ${r.baysOnStone} bays mostly stone taking glass on their windows' panes alone, ${r.panesOnStone} panes left as stone: ${pct(r.texels.glass)} of texels); ` +
         `every other texel the wall's set; ${r.scanPieces.total} scan pieces its mean finish, ${Math.round(r.scanPieces.onPlanes * 1000) / 10}% of their texels on ${r.scanPieces.planes.length} fitted planes (${Math.round(r.scanPieces.windowShare * 1000) / 10}% in windows, ${Math.round(r.scanPieces.paneShare * 1000) / 10}% glass); nothing metal; ` +
         `roughness and normal generated from the library, colour the photo (${r.ms} ms)`;
 }

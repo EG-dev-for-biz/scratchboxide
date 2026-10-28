@@ -232,9 +232,17 @@ describe('pipeline K material regions', () => {
         expect(at(m.orm, 7, 100)[1]).toBe(roughnessOf(classes[3]));
         expect(at(m.params, 74, 110)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
         expect(at(m.params, 74, 120)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
+        // a pane mirroring the sky (light, the third storey's) is glass too: a bay is glass whole, never cut texel by texel
+        expect(at(m.params, 24, 85)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
         expect(at(m.orm, 24, 15)[1]).toBe(Math.round(GLASS_ROUGHNESS * 255));
         expect(at(m.orm, 24, 35)[1]).toBe(roughnessOf(frame));
         expect(f.bays).toBe(4);
+        expect(plan.report.baysOnStone).toBe(0);
+        // a "bay" drawn over a pier (mostly the wall's class) is no glass bay: only its window's panes would be
+        const gp = parseGlbBytes(scene([{ ...quads[0], extras: { sbFacadeLattice: { facadeId: 1, structure: { uv: runs, bays: [1 / W, 1 / 6, 14 / W, 1], reliefM: 0.18, reliefFrom: 'measured', reason: 'test', chamferM: 0.05, label: 'photo-inferred' } } } }], [photo]));
+        const onPier = planMaterialRegions(gp, gp.json, imagesOf([photo]), classes, sets(classes));
+        expect(onPier.report.baysOnStone).toBe(1);
+        expect(at(onPier.materials[0].params, 7, 100)[0]).toBe(0);
         expect(metalTexels(m.orm)).toBe(0);
     });
 
