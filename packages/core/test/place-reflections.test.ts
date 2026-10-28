@@ -25,7 +25,7 @@ import { openStagedPage, stagedChrome, type StagedPage } from './helpers/staged-
 import { rewriteGlbJson, writeFixtureGlb, type FixtureMesh } from './helpers/mesh-glb-fixtures';
 import { REPO_ROOT } from './helpers/requirements';
 import { classifyAtmosphere, type AtmosphereInput } from '../src/browser/generative-canvas/primitives/scene3d/syncAtmosphere';
-import { createFallbackSkyTexture, fallbackSkyScale, PLACE_REFLECTION_FALLBACK_SOURCE } from '../src/browser/generative-canvas/primitives/scene3d/reflectionProbe';
+import { createFallbackSkyTexture, fallbackSkyScale, PLACE_REFLECTION_FALLBACK_SOURCE, PROBE_SUN_RADIUS_DEG, sceneSun } from '../src/browser/generative-canvas/primitives/scene3d/reflectionProbe';
 
 const SHOTS = path.join(REPO_ROOT, 'test-results', 'screenshots', 'place_reflections');
 const STEP = 16;
@@ -171,6 +171,44 @@ describe('place reflections: classification and the fallback sky (no WebGL)', ()
         expect(classifyAtmosphere({ ...base, has3DTiles: true, renderMode: 'clay' }).placeReflections).toBe(false);
         // the studio room stays off at places, as before
         expect(classifyAtmosphere({ ...base, hasGeoCoordinates: true }).studioReflections).toBe(false);
+    });
+    test("draws the scene's sun in the fallback sky: a disc toward its light that sends exactly its irradiance", () => {
+        const scene = new THREE.Scene();
+        const light = new THREE.DirectionalLight(0xffeedd, 3);
+        light.position.set(-40, 30, 0);
+        scene.add(light, light.target);
+        scene.updateMatrixWorld(true);
+        const sun = sceneSun(scene)!;
+        expect(sun.direction[0]).toBeCloseTo(-0.8, 3);
+        expect(sun.direction[1]).toBeCloseTo(0.6, 3);
+        expect(sun.irradiance).toBe(3);
+        const plain = createFallbackSkyTexture(1), lit = createFallbackSkyTexture(1, sun);
+        const W = lit.image.width, H = lit.image.height, d = lit.image.data as Float32Array;
+        // the sky under the disc: the plain sky resampled to this resolution (rows are constant along u)
+        const pw = plain.image.width, ph = plain.image.height, pd = plain.image.data as Float32Array;
+        let e = [0, 0, 0], peak = 0, peakAt = [0, 0, 0];
+        for (let j = 0; j < H; j++) {
+            const lat = ((j + 0.5) / H - 0.5) * Math.PI, dOmega = ((2 * Math.PI) / W) * (Math.PI / H) * Math.cos(lat);
+            const pj = Math.min(ph - 1, Math.floor(((j + 0.5) / H) * ph));
+            for (let i = 0; i < W; i++) {
+                const o = (j * W + i) * 4;
+                const extra = [0, 1, 2].map(c => d[o + c] - pd[(pj * pw) * 4 + c]);
+                if (extra[0] < 1) continue;
+                for (let c = 0; c < 3; c++) e[c] += extra[c] * dOmega;
+                if (extra[0] > peak) { peak = extra[0]; const phi = ((i + 0.5) / W - 0.5) * 2 * Math.PI; peakAt = [Math.cos(phi) * Math.cos(lat), Math.sin(lat), Math.sin(phi) * Math.cos(lat)]; }
+            }
+        }
+        const col = light.color;
+        expect(e[0]).toBeCloseTo(3 * col.r, 1);
+        expect(e[2]).toBeCloseTo(3 * col.b, 1);
+        // the brightest texel within the disc's radius of the light's direction
+        const cosToSun = peakAt[0] * sun.direction[0] + peakAt[1] * sun.direction[1] + peakAt[2] * sun.direction[2];
+        expect(Math.acos(Math.min(1, cosToSun)) * 180 / Math.PI).toBeLessThan(PROBE_SUN_RADIUS_DEG);
+        expect(lit.userData.sun).toEqual(sun);
+        // a sun below the horizon draws none
+        const set = createFallbackSkyTexture(1, { ...sun, direction: [0, -1, 0] });
+        expect(set.image.width).toBe(plain.image.width);
+        plain.dispose(); lit.dispose(); set.dispose();
     });
     test('the fallback sky is labelled, blue above, bright at the horizon, dark below, and scaled to the scene lights', () => {
         const tex = createFallbackSkyTexture(1);

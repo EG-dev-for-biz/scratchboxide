@@ -15,8 +15,10 @@
  *    interior as base colour; their reflection is the scene's own environment: a cube render of the scene from the layer's
  *    centre with the layer's own extent clipped away by the near plane (so the probe sees the street, the neighbours and
  *    the sky, not the building's inside), prefiltered (PMREM) and set as the material's environment. It moves with the
- *    camera like a reflection, never painted on. Metal texels (parameters B > 0: pipeline K's material regions) see the
- *    same environment; every other texel the scene's direct light only.
+ *    camera like a reflection, never painted on. Glass reflects it scaled by its weight (parameters R / 255, the
+ *    reading's confidence), metal texels (parameters B > 0) whole; every other texel the scene's direct light only. A
+ *    pane of glass with a seed (parameters alpha 1..254, pipeline K's fitted panes) is tilted by up to PANE_TILT_DEG of
+ *    its own, so a facade's panes catch the sun (in the probe's sky, reflectionProbe.ts) one by one.
  *  - Measured coursing: the kernel's course profile (a tangent-space normal over one pitch) is applied by world height at
  *    each reading's pitch and phase, where the parameters texture (G = reading + 1) says so; the relief fades out where a
  *    course is smaller than a pixel. Albedo is untouched.
@@ -56,6 +58,9 @@ export function hasFacadeMaterial(m: THREE.Material | undefined): boolean {
     return !!(m && (m.userData as Record<string, unknown>)[FACADE_MATERIAL_KEY]);
 }
 
+/** The largest tilt of a pane of glass off its wall's plane (degrees; generated: real panes sit a degree or two off it). */
+export const PANE_TILT_DEG = 1.5;
+
 const VERTEX_DECL = 'varying vec3 vSbWPos;';
 const VERTEX_BODY = 'vSbWPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;';
 const FRAGMENT_DECL = `
@@ -91,18 +96,38 @@ const FRAGMENT_COURSES = `
         }
     }
 #endif
+#if defined( USE_MAP )
+    {
+        // a pane of glass with a seed (parameters alpha 1..254) sits tilted by a small angle of its own, so the panes of a
+        // facade catch the sun one by one instead of all at one angle
+        vec4 sbPane = texture2D( uSbMatParams, vMapUv );
+        float sbSeed = floor( sbPane.a * 255.0 + 0.5 );
+        if ( sbPane.r > 0.0 && sbSeed >= 1.0 && sbSeed <= 254.0 ) {
+            vec3 sbUp = normalize( ( viewMatrix * vec4( 0.0, 1.0, 0.0, 0.0 ) ).xyz );
+            vec3 sbB = sbUp - normal * dot( sbUp, normal );
+            float sbBl = length( sbB );
+            if ( sbBl > 0.3 ) {
+                sbB /= sbBl;
+                vec3 sbT = cross( sbB, normal );
+                float sbAz = sbSeed * 2.39996, sbTilt = radians( ${PANE_TILT_DEG.toFixed(2)} ) * sqrt( fract( sbSeed * 0.618034 ) );
+                normal = normalize( normal + tan( sbTilt ) * ( cos( sbAz ) * sbT + sin( sbAz ) * sbB ) );
+            }
+        }
+    }
+#endif
 `;
 /**
- * The environment reflects only on the texels read as glass (params R > 0): the walls keep exactly the lighting they had
- * (no environment term), so the reading changes nothing on them but their relief.
+ * The environment reflects only on the texels read as glass (params R > 0, scaled by that weight) or metal (B > 0): the
+ * walls keep exactly the lighting they had (no environment term), so the reading changes nothing on them but their relief.
  */
 const FRAGMENT_ENV_GATE = `
 #include <lights_fragment_maps>
 #if defined( USE_MAP ) && defined( USE_ENVMAP )
     {
-        // glass and metal see the environment (a metal's look is its reflection); other texels the scene's direct light only
+        // metal sees the environment whole (a metal's look is its reflection); glass by its weight (the reading's
+        // confidence: a pane at half weight reflects half); other texels the scene's direct light only
         vec4 sbP = texture2D( uSbMatParams, vMapUv );
-        float sbEnv = sbP.r > 0.0 || sbP.b > 0.0 ? 1.0 : 0.0;
+        float sbEnv = sbP.b > 0.0 ? 1.0 : sbP.r;
         iblIrradiance *= sbEnv;
         radiance *= sbEnv;
     }
@@ -161,7 +186,7 @@ export async function prepareFacadeMaterials(gltf: GltfLike): Promise<number> {
                         .replace('#include <normal_fragment_maps>', FRAGMENT_COURSES)
                         .replace('#include <lights_fragment_maps>', FRAGMENT_ENV_GATE);
                 };
-                mat.customProgramCacheKey = () => `sb-facade-v1:${withCourses ? courses.length : 0}`;
+                mat.customProgramCacheKey = () => `sb-facade-v3:${withCourses ? courses.length : 0}`;
                 mat.needsUpdate = true;
             }
             patched++;
