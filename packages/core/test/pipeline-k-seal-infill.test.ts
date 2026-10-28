@@ -185,4 +185,17 @@ describe('pipeline K seal: closed where it is safe', () => {
         expect(pts.length).toBe(18);
         expect(pts.every(p => p[2] === 0 && p[0] >= 4 && p[0] <= 6 && p[1] >= 4 && p[1] <= 6)).toBe(true);
     });
+
+    it('leaves a hole a rebuilt wall stands in for: no cap drawn back over the recessed rebuild', () => {
+        // the front's 2 m x 2 m hole with a rebuilt cell 0.3 m behind it (inside the box), wound like the front
+        const rebuilt = face([3, 3, 0.3], [1, 0, 0], [0, 1, 0], true, (i, j) => i >= 4 || j >= 4);
+        const out = fillOpenLoops(glb([{ name: 'scan', tris: [...front(), ...rest()] }, { name: 'wall', tris: rebuilt, facadeId: 1 }]), []);
+        expect(out.report.droppedCoveredM2).toBeGreaterThanOrEqual(3);
+        const g = parseGlbBytes(out.clay), node = g.json.nodes.find((n: any) => n.name === 'Seal');
+        const X = node ? readAccessor(g, g.json.meshes[node.mesh].primitives[0].attributes.POSITION).data : new Float32Array();
+        const pts = Array.from({ length: X.length / 3 }, (_, i) => [X[i * 3], X[i * 3 + 1], X[i * 3 + 2]]);
+        expect(pts.filter(p => p[2] === 0 && p[0] >= 4 && p[0] <= 6 && p[1] >= 4 && p[1] <= 6)).toHaveLength(0);
+        // without the wall the same hole is capped
+        expect(fillOpenLoops(glb([{ name: 'scan', tris: [...front(), ...rest()] }]), []).report.droppedCoveredM2).toBe(0);
+    });
 });

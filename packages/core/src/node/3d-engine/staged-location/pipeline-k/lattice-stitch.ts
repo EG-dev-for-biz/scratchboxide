@@ -41,7 +41,7 @@ import { outsideFootprint, signedFootprintDistance } from './base-cleanup';
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor } from '../glb-bytes';
 import type { FacadeLatticeResult, ReliefFacade } from '../facade-lattice';
 
-export const LATTICE_STITCH_VERSION = 'lattice-stitch/15';
+export const LATTICE_STITCH_VERSION = 'lattice-stitch/16';
 
 export const LATTICE_STITCH_PARAMS = {
     /** The slab of a rebuilt facade cut from the scan: within this of its plane (m). */
@@ -58,6 +58,10 @@ export const LATTICE_STITCH_PARAMS = {
     cutFacingMin: 0.5,
     /** Fill lying on a surface the scan already has (its centre, corners and points along its edges within this (m) of it, facing alike) is a second skin, not a hole: dropped. */
     doubledM: 0.02,
+    /** Fill a rebuilt wall already stands in for (parallel to it, within this of it (m), over it at every probe) is dropped: the scan
+     *  removed over the rebuilt cells leaves loops around them, and capping those would draw the old flat scan back in front of the
+     *  recessed rebuild. Probed on a grid of coveredByWallCellM (m). */
+    coveredByWallM: 1, coveredByWallCellM: 2,
     /** The building's envelope for the fill: its top-down height map at this cell (m); a fill triangle past it or the footprint by the margin (m) pokes out. */
     envelopeCellM: 1, envelopeMarginM: 0.3,
     /** Fill texturing: a triangle facing along a rebuilt facade (|cos| at least this), within wallBandM (m) of its depth range and over its ortho (UVs within the margin of 0..1), is that wall's infill. */
@@ -395,8 +399,8 @@ const dist3 = (a: ArrayLike<number>, b: ArrayLike<number>) => Math.hypot(a[0] - 
 const cross3 = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 
 /** Whether a point lies on one of these triangles (within tol, inside it, facing like n within about 25°), none touching the vertices `not`. */
-function surfaceProbe(pos: number[][], tris: number[][], tol: number): (q: number[], n: number[], not?: number[]) => boolean {
-    const C = 1, grid = new Map<string, number[]>();
+function surfaceProbe(pos: number[][], tris: number[][], tol: number, C = 1): (q: number[], n: number[], not?: number[]) => boolean {
+    const grid = new Map<string, number[]>();
     tris.forEach((f, t) => {
         const [a, b, c] = f.map(v => pos[v]);
         const lo = [0, 1, 2].map(k => Math.floor((Math.min(a[k], b[k], c[k]) - tol) / C)), hi = [0, 1, 2].map(k => Math.floor((Math.max(a[k], b[k], c[k]) + tol) / C));
@@ -790,7 +794,7 @@ export function stitchLattice(clay: Uint8Array, others: Uint8Array[], facades: F
 }
 
 /** openBefore / openAfter: edges of an odd number of triangles (open); nonManifoldAfter: closed edges of four or more. */
-export interface FillReport { openBefore: number; kinds: Record<string, number>; loops: number; split: number; filled: number; clipped3d: number; skippedWallOnly: number; /** Loops left open because no ear stayed inside the building. */ rejectedTriangles: number; unclosedLoops: number; /** Loops left open because their rim strays off its plane (rimPlanarM) around a cap over offRimCapM2: count and cap area (m²). */ refusedCaps: number; refusedCapM2: number; /** Fill dropped because it lay on a surface the scan already has (m²). */ droppedDoubledM2: number; /** Fill lying wholly over a surface already there (within skinM): kept in the clay, left out of the textured twin (m²). */ skinHiddenM2: number; openPathEdges: number; openAfter: number; nonManifoldAfter: number; addedAreaM2: number }
+export interface FillReport { openBefore: number; kinds: Record<string, number>; loops: number; split: number; filled: number; clipped3d: number; skippedWallOnly: number; /** Loops left open because no ear stayed inside the building. */ rejectedTriangles: number; unclosedLoops: number; /** Loops left open because their rim strays off its plane (rimPlanarM) around a cap over offRimCapM2: count and cap area (m²). */ refusedCaps: number; refusedCapM2: number; /** Fill dropped because it lay on a surface the scan already has (m²). */ droppedDoubledM2: number; /** Fill dropped because a rebuilt wall stands in for it (coveredByWallM; m²). */ droppedCoveredM2: number; /** Fill lying wholly over a surface already there (within skinM): kept in the clay, left out of the textured twin (m²). */ skinHiddenM2: number; openPathEdges: number; openAfter: number; nonManifoldAfter: number; addedAreaM2: number }
 
 /** The open loops left closed (the scan's holes, corners, the base: the bottom capped), counted again after. */
 export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], opts: { /** The structure's footprint (plan loops [x, z]): a fill past it pokes out of the building. */ footprint?: Vec2[][] } = {}, P: LatticeStitchParams = LATTICE_STITCH_PARAMS): { clay: Buffer; others: Buffer[]; report: FillReport } {
@@ -836,7 +840,7 @@ export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], opts: { /*
         const k = fa !== undefined && fb !== undefined ? (fa === fb ? 'inside one wall' : 'between two walls') : fa !== undefined || fb !== undefined ? 'wall to scan' : 'scan';
         kinds[k] = (kinds[k] ?? 0) + 1;
     }
-    const report: FillReport = { openBefore: open.length, kinds, loops: loops.length, split: 0, filled: 0, clipped3d: 0, skippedWallOnly: 0, rejectedTriangles: 0, unclosedLoops: 0, refusedCaps: 0, refusedCapM2: 0, droppedDoubledM2: 0, skinHiddenM2: 0, openPathEdges, openAfter: 0, nonManifoldAfter: 0, addedAreaM2: 0 };
+    const report: FillReport = { openBefore: open.length, kinds, loops: loops.length, split: 0, filled: 0, clipped3d: 0, skippedWallOnly: 0, rejectedTriangles: 0, unclosedLoops: 0, refusedCaps: 0, refusedCapM2: 0, droppedDoubledM2: 0, droppedCoveredM2: 0, skinHiddenM2: 0, openPathEdges, openAfter: 0, nonManifoldAfter: 0, addedAreaM2: 0 };
     const out: number[][][] = [], addedFaces: number[][] = [];
     // the building's envelope before the fill: its top-down height map (the highest surface per cell) and its footprint;
     // a fill triangle above the one or outside the other (past envelopeMarginM) would poke out of the building
@@ -939,6 +943,7 @@ export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], opts: { /*
     // a fill triangle lying on a surface already there (an odd count where the scan is doubled, not a hole) is dropped:
     // it would be a second, photo-less skin over the real one
     const onSurface = surfaceProbe(w.pos, w.tris, P.doubledM);
+    const onWall = surfaceProbe(w.pos, w.tris.filter((_, i) => w.wall[i] >= 0), P.coveredByWallM, P.coveredByWallCellM);
     let kept = 0;
     for (let i = 0; i < out.length; i++) {
         const [a, b, c] = out[i];
@@ -948,10 +953,12 @@ export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], opts: { /*
         const probes = [[(a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3], ...[[a, b], [b, c], [c, a]].flatMap(([p, q]) => [0, 0.25, 0.5, 0.75].map(l => at(p, q, l)))];
         // on a separate layer only: fill folded back over the scan triangle beside its hole lies on that triangle, and the hole is real
         if (probes.every(q => onSurface(q, n, addedFaces[i]))) { report.droppedDoubledM2 += Math.hypot(n[0], n[1], n[2]) / 2; continue; }
+        if (probes.every(q => onWall(q, n))) { report.droppedCoveredM2 += Math.hypot(n[0], n[1], n[2]) / 2; continue; }
         out[kept] = out[i]; addedFaces[kept] = addedFaces[i]; kept++;
     }
     out.length = kept; addedFaces.length = kept;
     report.droppedDoubledM2 = Math.round(report.droppedDoubledM2);
+    report.droppedCoveredM2 = Math.round(report.droppedCoveredM2);
     report.refusedCapM2 = Math.round(report.refusedCapM2);
     // the textured twin judges the fill in pieces of at most pieceM: a piece lying over a surface already there (most of it
     // within skinM, its own neighbours included) closes no visible hole and is left out (it would show over the photo); the
