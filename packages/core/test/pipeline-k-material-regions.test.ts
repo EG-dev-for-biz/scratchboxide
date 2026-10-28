@@ -210,6 +210,27 @@ describe('pipeline K material regions', () => {
         expect(back.report.scanPieces.planes).toEqual([]);
     });
 
+    it("puts the stone's relief on the structure alone, the bays' infill the frame's, where the lattice drew a structure", () => {
+        // the piered facade with one fitted window and its pane, and the lattice's structure: the piers (x 0-15 mod 50) full height
+        const photo = piered(), W = photo.width, H = photo.height;
+        const win = [19 / W, 8 / H, 29 / W, 43 / H], pane = [19 / W, 8 / H, 29 / W, 26 / H];
+        const runs = [0, 50, 100, 150].flatMap(x => [x / W, 0, (x + 15) / W, 1]);
+        const quads: Quad[] = [{ mesh: 'facade_lattice_1', corners: wall(0, 20, 30), uv: FULL_UV, material: 0, extras: { sbFacadeLattice: { facadeId: 1, windows: { uv: win, panes: pane, label: 'photo-inferred', source: 'test' }, structure: { uv: runs, reliefM: 0.18, reliefFrom: 'measured', reason: 'test', chamferM: 0.05, label: 'photo-inferred' } } } }];
+        const g = parseGlbBytes(scene(quads, [photo]));
+        const b = building(), bg = parseGlbBytes(b.glb);
+        const classes = readRegionClasses(bg.json, imagesOf(b.photos))!;
+        const plan = planMaterialRegions(g, g.json, imagesOf([photo]), classes, sets(classes));
+        const m = plan.materials[0], f = plan.report.facades.perFacade[0];
+        const frame = classes.find(c => sets(classes)[c.index].name === f.frameSet)!;
+        expect(f.structureShare).toBeCloseTo(0.3, 2);
+        expect(frame.wall).toBe(false);
+        // a pier: the wall's (stone) set; a spandrel in a bay outside any window: the frame's; the pane: glass
+        expect(at(m.orm, 7, 100)[1]).toBe(roughnessOf(classes[3]));
+        expect(at(m.orm, 74, 120)[1]).toBe(roughnessOf(frame));
+        expect(at(m.orm, 24, 15)[1]).toBe(Math.round(GLASS_ROUGHNESS * 255));
+        expect(metalTexels(m.orm)).toBe(0);
+    });
+
     it('keeps the photo as the base colour everywhere, panes included', () => {
         const { g, photo, classes } = fittedFacade();
         const images = imagesOf([photo]);

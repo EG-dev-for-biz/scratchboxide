@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { applyFacadeLattices, facadeSamples, latticeFacade, photoLattice, windowBays, windowGrid, windowStrips, WINDOW_STRIPS, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
+import { applyFacadeLattices, facadeSamples, latticeFacade, photoLattice, STRUCTURE, structureExtras, windowBays, windowGrid, windowStrips, WINDOW_STRIPS, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
 import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { WINDOW_FIT_VERSION } from '../src/node/3d-engine/staged-location/window-fit';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
@@ -145,7 +145,7 @@ describe('facades on their photo lattice', () => {
         expect(windowBays([[0, 0, 1.4, 10], [2.1, 20, 3.5, 30], [5.5, 0, 6.9, 10]])).toHaveLength(3);
     });
 
-    it('recesses each window column as one strip between proud piers, the windows a little deeper, the piers bevelled', () => {
+    it('recesses each window column as one strip between proud piers, the windows a little deeper, the piers chamfered', () => {
         // pipeline K: the scan uncarved (flat), every bay's windows fitted on all three storeys
         const flat = scan().map((v, i) => (i % 3 === 2 ? 0 : v));
         const fitted: Array<[number, number, number, number]> = [];
@@ -160,7 +160,15 @@ describe('facades on their photo lattice', () => {
         expect(window).toBeCloseTo(spandrel - WINDOW_STRIPS.windowInsetM, 5);
         // above the strips (the parapet, t 8.3..9) the wall is not recessed
         expect(Math.abs(cell(1.5, 8.7))).toBeLessThan(0.05);
-        // the piers' arrises: faces leaning 45 degrees between the facade's normal and its s axis
+        // the structure: the piers and the parapet, standing proud by the photo's recess (the flat scan resolves none)
+        expect(r.structure!.reliefFrom).toBe('photo-inferred');
+        expect(r.structure!.reliefM).toBeCloseTo(pier - spandrel, 5);
+        const at = (sv: number, tv: number) => r.structure!.cells[r.t.findIndex((x, i) => tv >= x && tv < r.t[i + 1]) * (r.s.length - 1) + r.s.findIndex((x, i) => sv >= x && sv < r.s[i + 1])];
+        expect(at(3.0, 3.0)).toBe(1);
+        expect(at(1.5, 8.7)).toBe(1);
+        expect(at(1.5, 3.0)).toBe(0);
+        expect(at(1.5, 1.5)).toBe(0);
+        // the piers' arrises: faces leaning 45 degrees between the facade's normal and its s axis, chamferM deep
         let bevels = 0;
         for (let i = 0; i < r.indices.length; i += 3) {
             const k = r.indices[i], n = [r.normals[k * 3], r.normals[k * 3 + 1], r.normals[k * 3 + 2]];
@@ -174,6 +182,41 @@ describe('facades on their photo lattice', () => {
             const g = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
             expect(g[0] * r.normals[a * 3] + g[1] * r.normals[a * 3 + 1] + g[2] * r.normals[a * 3 + 2]).toBeGreaterThan(0);
         }
+    });
+
+    it("stands the structure proud by the scan's own pier-to-bay depth when it resolves one, else a plausible depth, and writes it to the extras", () => {
+        const fitted: Array<[number, number, number, number]> = [];
+        for (const s0 of [0.9, 3.9, 6.9, 9.9]) for (const t0 of [0.7, 3.7, 6.7]) fitted.push([s0, t0, s0 + 1.2, t0 + 1.6]);
+        // the scan: the bays (s 0.9-2.1 mod 3, t 0.7-8.3) 0.18 m behind the piers, +-6 cm noise
+        let seed = 5;
+        const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 0.12;
+        const out: number[] = [];
+        const z = (sv: number, tv: number) => (sv % 3 > 0.9 && sv % 3 < 2.1 && tv > 0.7 && tv < 8.3 ? -0.18 : 0) + rnd();
+        for (let sv = 0; sv < 12; sv += 0.25) for (let tv = 0; tv < 9; tv += 0.25) {
+            const a = [sv, tv, z(sv, tv)], b = [sv + 0.25, tv, z(sv + 0.25, tv)], c = [sv + 0.25, tv + 0.25, z(sv + 0.25, tv + 0.25)], d = [sv, tv + 0.25, z(sv, tv + 0.25)];
+            out.push(...a, ...b, ...c, ...a, ...c, ...d);
+        }
+        const r = latticeFacade(f, photo(), facadeSamples(Float32Array.from(out), f), undefined, undefined, true, fitted)!;
+        expect(r.structure!.reliefFrom).toBe('measured');
+        expect(r.structure!.reliefM).toBeGreaterThan(0.12);
+        expect(r.structure!.reliefM).toBeLessThan(0.24);
+        // no photo contrast (an even grey photo) and a flat scan: a plausible depth, labelled generated
+        const grey = photo(); grey.rgba.fill(150);
+        for (let k = 3; k < grey.rgba.length; k += 4) grey.rgba[k] = 255;
+        const g = latticeFacade(f, grey, facadeSamples(scan().map((v, i) => (i % 3 === 2 ? 0 : v)), f), undefined, undefined, true, fitted)!;
+        expect(g.structure!.reliefFrom).toBe('generated');
+        expect(g.structure!.reliefM).toBe(STRUCTURE.defaultReliefM);
+        // the extras: runs in the photo's UVs inside [0, 1], with the relief's source and the chamfer
+        const ex = structureExtras(r)!;
+        expect(ex.uv.length % 4).toBe(0);
+        expect(ex.uv.length).toBeGreaterThan(0);
+        expect(ex.uv.every(v => v >= 0 && v <= 1)).toBe(true);
+        expect(ex.reliefFrom).toBe('measured');
+        expect(ex.chamferM).toBe(STRUCTURE.chamferM);
+        // the pier at s 2.1-3.9 in its middle storey (t 3.0, v 0.667) is in a run; the bay at s 1.5 is not
+        const inRun = (u: number, v: number) => { for (let i = 0; i < ex.uv.length; i += 4) if (u >= ex.uv[i] && u <= ex.uv[i + 2] && v >= ex.uv[i + 1] && v <= ex.uv[i + 3]) return true; return false; };
+        expect(inRun(3.0 / 12, 1 - 3.0 / 9)).toBe(true);
+        expect(inRun(1.5 / 12, 1 - 3.0 / 9)).toBe(false);
     });
 
     it('recesses the fitted windows by a depth read from Street View when one is given, never shallower than the scan', () => {

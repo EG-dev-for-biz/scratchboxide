@@ -36,7 +36,7 @@ import { encodePng } from './png-encode';
 import * as fs from 'fs';
 import * as path from 'path';
 
-export const FACADE_LATTICE_VERSION = 'facade-lattice/16';
+export const FACADE_LATTICE_VERSION = 'facade-lattice/17';
 
 export const FACADE_LATTICE_PARAMS = {
     /**
@@ -165,10 +165,20 @@ export function windowGrid(lum: ArrayLike<number>, ns: number, nt: number, R = W
  * are one bay when the gap between them is under `mullionRatio` of the gaps beside it in their row (the narrower of the two
  * neighbours: a mullion stands between two piers, a pier between two mullions, and a wide gap at a corner or a setback
  * makes no pier a mullion); a row of equal gaps stays one strip per column. The bay is recessed whole (its
- * spandrels and mullions with it) between the piers that stay on the wall, and its windows a further `windowInsetM`; the front edges of every step at least twice `bevelM` deep
- * are bevelled by `bevelM` at 45 degrees, so a pier's arris catches the light. Photo-inferred, read from the facade's own fit.
+ * spandrels and mullions with it) between the piers that stay on the wall (the structure, STRUCTURE), and its windows a
+ * further `windowInsetM`. Photo-inferred, read from the facade's own fit.
  */
-export const WINDOW_STRIPS = { overlap: 0.5, maxGapM: 2.5, minWindows: 2, minStripM: 5, mullionRatio: 0.6, windowInsetM: 0.05, bevelM: 0.04 };
+export const WINDOW_STRIPS = { overlap: 0.5, maxGapM: 2.5, minWindows: 2, minStripM: 5, mullionRatio: 0.6, windowInsetM: 0.05 };
+
+/**
+ * The structure (pipeline K with window strips): a facade's cells outside its bays and windows (piers, bands, parapets: the
+ * masonry frame the bays sit in) stand proud of the bays by the scan's measured pier-to-bay depth when it resolves one (the
+ * difference of the two medians at least minReliefM and two standard errors), else the depth the photo's recess rule (or
+ * Street View's reveals) gives, else defaultReliefM (generated); the front edge of every step at least twice chamferM deep
+ * is chamfered by chamferM at 45 degrees, so the stone's arrises catch the light. Written into the facade's extras
+ * (sbFacadeLattice.structure) so the material regions put the stone's relief on the structure alone.
+ */
+export const STRUCTURE = { chamferM: 0.05, minReliefM: 0.03, defaultReliefM: 0.10 };
 
 export function windowStrips(windows: Array<[number, number, number, number]>, R = WINDOW_STRIPS): Array<[number, number, number, number]> {
     const n = windows.length, parent = Array.from({ length: n }, (_, i) => i);
@@ -244,6 +254,8 @@ export interface FacadeLatticeResult {
     recessFrom?: string;
     /** The window strips (WINDOW_STRIPS) recessed whole, [s0, t0, s1, t1] each, and their rebuilt cells: photo-inferred. */
     strips?: Array<[number, number, number, number]>; stripCells?: number;
+    /** The structure (STRUCTURE): per cell 1 for a rebuilt cell outside the bays and windows; its relief over the bays and where that came from. */
+    structure?: { cells: Uint8Array; reliefM: number; reliefFrom: 'measured' | 'photo-inferred' | 'generated'; reason: string };
     /** The facade photo redrawn from its own repeats (facade-repeat-texture.ts): generated. */
     repeatTexture?: RepeatTextureReport;
     /** Per cell (row-major, t then s): 1 when it was rebuilt, 0 when the photo does not cover it and the scan stays. */
@@ -374,6 +386,24 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
         const openLum = median(all.filter(k => win[k]).map(k => lum[k]).filter(Number.isFinite));
         stripR = wallLum > 0 && Number.isFinite(openLum) ? (recessM !== undefined ? recessM : photoRecessDepth(1 - openLum / wallLum)) : undefined;
     }
+    // the structure's relief over the bays: the scan's, when it resolves one, else the recess the photo (or Street View) gives,
+    // else a plausible one
+    let structure: FacadeLatticeResult['structure'];
+    if (strip) {
+        const cells = Uint8Array.from({ length: ns * nt }, (_, k) => (built[k] && !strip[k] && !win[k] ? 1 : 0));
+        const stat = (keep: (k: number) => boolean) => {
+            const v = raw.filter((x, k) => keep(k) && Number.isFinite(x));
+            if (v.length < P.minSamples) return undefined;
+            const m = median(v), mad = median(v.map(x => Math.abs(x - m)));
+            return { m, se: (1.4826 * mad) / Math.sqrt(v.length) };
+        };
+        const pier = stat(k => !strip[k] && !win[k]), bay = stat(k => !!strip[k] && !win[k]);
+        const diff = pier && bay ? pier.m - bay.m : NaN, se = pier && bay ? Math.hypot(pier.se, bay.se) : NaN;
+        if (diff >= STRUCTURE.minReliefM && diff >= 2 * se) structure = { cells, reliefM: diff, reliefFrom: 'measured', reason: `the scan's piers ${Math.round(diff * 100)} cm proud of its bays (median of each, +-${Math.round(se * 100)} cm)` };
+        else if (stripR !== undefined) structure = { cells, reliefM: stripR, reliefFrom: 'photo-inferred', reason: `the scan resolves no pier-to-bay depth (${Number.isFinite(diff) ? `${Math.round(diff * 100)} +- ${Math.round(se * 100)} cm` : 'too few samples'}); ${recessM !== undefined ? "Street View's window reveals" : "the photometric relief's contrast rule"} gives ${Math.round(stripR * 100)} cm` };
+        else structure = { cells, reliefM: STRUCTURE.defaultReliefM, reliefFrom: 'generated', reason: `neither the scan (${Number.isFinite(diff) ? `${Math.round(diff * 100)} +- ${Math.round(se * 100)} cm` : 'too few samples'}) nor the photo's contrast gives a pier-to-bay depth; a plausible ${STRUCTURE.defaultReliefM * 100} cm` };
+        stripR = structure.reliefM;
+    }
     for (let b = 0; b < nt; b++) {
         if (strip) {
             const cells = Array.from({ length: ns }, (_, a) => b * ns + a);
@@ -427,9 +457,9 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
     // a side face on line s = sv between depth L (the smaller-s side) and R, wound to face the side it shows to (S x T = N); its
     // texels unfold into the recessed side's photo, from the edge (the front depth) inward as far as the face is deep, so a
     // reveal shows the photo beside the opening rather than one column of texels drawn across it
-    // with strips, a step at least twice bevelM deep has its front edge bevelled at 45 degrees: the bevel leans over the recessed
-    // side by c and the side face below it starts c into it, so the front cell's arris catches the light (WINDOW_STRIPS)
-    const bevelOf = (L: number, R: number) => (strips.length && Math.abs(L - R) >= 2 * WINDOW_STRIPS.bevelM ? WINDOW_STRIPS.bevelM : 0);
+    // with the structure, a step at least twice chamferM deep has its front edge chamfered at 45 degrees: the chamfer leans over
+    // the recessed side by c and the side face below it starts c into it, so the stone's arris catches the light (STRUCTURE)
+    const bevelOf = (L: number, R: number) => (structure && Math.abs(L - R) >= 2 * STRUCTURE.chamferM ? STRUCTURE.chamferM : 0);
     const unit = (v: number[]) => { const l = Math.hypot(v[0], v[1], v[2]); return v.map(x => x / l); };
     const sideS = (sv: number, t0: number, t1: number, L: number, R: number) => {
         if (!(Math.abs(L - R) > P.stepM)) return;
@@ -476,12 +506,30 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
         if (!isBuilt(a, b - 1)) sideT(t[b], s[a], s[a + 1], beside(a, b - 1), d);
     }
     if (!built.some(v => v)) return undefined;
-    return { facadeId: f.facadeId, s, t, cells: built.reduce((x, v) => x + v, 0), measuredShare: Math.round((measured / (ns * nt)) * 1000) / 1000, depth, ...(photoRecess ? { photoRecessCells } : {}), ...(strips.length ? { strips, stripCells } : {}), built, windows, cellU: s.map(v => (v - f.orthoSMin) / (img.width * f.pixel)), cellV: t.map(v => (f.orthoTMax - v) / (img.height * f.pixel)), positions: Float32Array.from(pos), normals: Float32Array.from(nrm), uv: Float32Array.from(uv), indices: Uint32Array.from(idx) };
+    return { facadeId: f.facadeId, s, t, cells: built.reduce((x, v) => x + v, 0), measuredShare: Math.round((measured / (ns * nt)) * 1000) / 1000, depth, ...(photoRecess ? { photoRecessCells } : {}), ...(strips.length ? { strips, stripCells } : {}), ...(structure ? { structure } : {}), built, windows, cellU: s.map(v => (v - f.orthoSMin) / (img.width * f.pixel)), cellV: t.map(v => (f.orthoTMax - v) / (img.height * f.pixel)), positions: Float32Array.from(pos), normals: Float32Array.from(nrm), uv: Float32Array.from(uv), indices: Uint32Array.from(idx) };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
 // GLB editing: the facade's scan triangles made degenerate, the rebuilt facade appended
 // ---------------------------------------------------------------------------------------------------------------
+
+/**
+ * The structure for the GLB extras (sbFacadeLattice.structure): its cells as runs along each row, u0 v0 u1 v1 in the photo's
+ * UVs (v down from the top), with its relief, where that came from, and the chamfer; the outline photo-inferred (read from
+ * the window fit's bays).
+ */
+export function structureExtras(r: FacadeLatticeResult): { uv: number[]; reliefM: number; reliefFrom: string; reason: string; chamferM: number; label: string } | undefined {
+    if (!r.structure) return undefined;
+    const ns = r.s.length - 1, nt = r.t.length - 1, uv: number[] = [];
+    for (let b = 0; b < nt; b++) for (let a = 0; a < ns; a++) {
+        if (!r.structure.cells[b * ns + a] || (a > 0 && r.structure.cells[b * ns + a - 1])) continue;
+        let e = a;
+        while (e + 1 < ns && r.structure.cells[b * ns + e + 1]) e++;
+        uv.push(r.cellU[a], r.cellV[b + 1], r.cellU[e + 1], r.cellV[b]);
+    }
+    const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
+    return { uv: uv.map(r4), reliefM: Math.round(r.structure.reliefM * 1000) / 1000, reliefFrom: r.structure.reliefFrom, reason: r.structure.reason, chamferM: STRUCTURE.chamferM, label: 'photo-inferred' };
+}
 
 /**
  * The lattice's window cells for the GLB extras (sbFacadeLattice.windowCells): its cell lines in the photo's UVs and the
@@ -821,7 +869,7 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
         }
         const indices = acc(view(new Uint8Array(r.indices.buffer, r.indices.byteOffset, r.indices.byteLength), 34963), r.indices.length, 'SCALAR', 5125);
         json.meshes.push({ name: `facade_lattice_${f.facadeId}`, primitives: [{ attributes, indices, material, mode: 4 }] });
-        json.nodes.push({ name: `FacadeLattice_${f.facadeId}`, mesh: json.meshes.length - 1, extras: { sbFacadeLattice: { version: FACADE_LATTICE_VERSION, facadeId: f.facadeId, provenance: { lines: 'photo-inferred', depth: r.photoRecessCells ? `measured (median per cell, averaged along the row's repeats); ${r.photoRecessCells} window cells recessed as the straightened photo shows them (photo-inferred, ${r.recessFrom ?? "the photometric relief's contrast rule"})` : 'measured (median per cell, averaged along the row\'s repeats)', texture: f.textureFill || r.repeatTexture ? { photo: 'tile photo', ...(f.textureFill ? { holes: f.textureFill } : {}), ...(r.repeatTexture ? { repeats: r.repeatTexture } : {}) } : 'tile photo' }, cells: r.cells, measuredShare: r.measuredShare, sLines: r.s.length, tLines: r.t.length, ...(r.windows ? { windowCells: windowCellsExtras(r) } : {}), ...(r.fittedWindows ? { windows: { uv: r.fittedWindows, ...(r.fittedPanes ? { panes: r.fittedPanes } : {}), label: 'photo-inferred', source: WINDOW_FIT_VERSION } } : {}) } } });
+        json.nodes.push({ name: `FacadeLattice_${f.facadeId}`, mesh: json.meshes.length - 1, extras: { sbFacadeLattice: { version: FACADE_LATTICE_VERSION, facadeId: f.facadeId, provenance: { lines: 'photo-inferred', depth: r.photoRecessCells ? `measured (median per cell, averaged along the row's repeats); ${r.photoRecessCells} window cells recessed as the straightened photo shows them (photo-inferred, ${r.recessFrom ?? "the photometric relief's contrast rule"})` : 'measured (median per cell, averaged along the row\'s repeats)', texture: f.textureFill || r.repeatTexture ? { photo: 'tile photo', ...(f.textureFill ? { holes: f.textureFill } : {}), ...(r.repeatTexture ? { repeats: r.repeatTexture } : {}) } : 'tile photo' }, cells: r.cells, measuredShare: r.measuredShare, sLines: r.s.length, tLines: r.t.length, ...(r.windows ? { windowCells: windowCellsExtras(r) } : {}), ...(r.fittedWindows ? { windows: { uv: r.fittedWindows, ...(r.fittedPanes ? { panes: r.fittedPanes } : {}), label: 'photo-inferred', source: WINDOW_FIT_VERSION } } : {}), ...(r.structure ? { structure: structureExtras(r) } : {}) } } });
         scene?.nodes?.push(json.nodes.length - 1);
     }
     bin.align4();

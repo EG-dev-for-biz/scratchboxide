@@ -17,7 +17,9 @@
  *     whole building. The lightest class is the wall.
  *  2. Openings come only from the window fit (window-fit.ts, written by facade-lattice.ts in each rebuilt facade's node
  *     extras): its panes are glass, the rest of each fitted window its frame (mullions, spandrels), one finish, the
- *     window's most common class other than the wall. A scan piece lying on a fitted plane (facing its way within
+ *     window's most common class other than the wall. Where the lattice drew a structure (facade-lattice.ts STRUCTURE:
+ *     the piers, bands and parapets the bays sit in), the wall's set is drawn on it alone and the bays' infill (spandrels,
+ *     mullions) takes the frame's. A scan piece lying on a fitted plane (facing its way within
  *     planeCos, within planeBandM of it; window-fit.ts fittedPlanesOf, every plane fitted whatever its photo's coverage)
  *     takes that plane's windows and panes the same way, each texel projected into the plane's ortho. Everywhere else every texel is wall, whatever its colour: a darker
  *     class is weathered or shaded stone as often as anything else, and a colour alone never makes a window or a metal.
@@ -42,7 +44,7 @@ import { MATERIAL_PARAMS_CHANNELS } from '../staged-glb-writer';
 import { bandResponses, TEXTURE_BANDS_M, type TextureEnergy } from './material-harvest';
 import type { FittedPlane } from '../window-fit';
 
-export const MATERIAL_REGIONS_VERSION = 'material-regions/20';
+export const MATERIAL_REGIONS_VERSION = 'material-regions/21';
 
 export const MATERIAL_REGIONS_PARAMS = {
     /** Appearance classes, texels sampled per facade photo, k-means iterations, sampling seed. */
@@ -91,7 +93,7 @@ export interface RegionSet {
 export interface MaterialRegionsReport {
     version: string;
     classes: Array<Pick<RegionClass, 'index' | 'meanLab' | 'share' | 'wall' | 'texture' | 'facades'> & { set: string; distance: number; harvest?: RegionSet['harvest'] }>;
-    facades: { total: number; withWindows: number; perFacade: Array<{ mesh: string; texelM: number; /** The window fit's windows (window-fit.ts) and panes, and the share of the facade each covers. */ fittedWindows: number; panes: number; windowShare: number; paneShare: number; /** The class the windows' frames are drawn with. */ frameSet: string }> };
+    facades: { total: number; withWindows: number; perFacade: Array<{ mesh: string; texelM: number; /** The window fit's windows (window-fit.ts) and panes, and the share of the facade each covers. */ fittedWindows: number; panes: number; windowShare: number; paneShare: number; /** The share of the facade its structure covers (the wall's set there; the bays' infill takes the frame's). */ structureShare: number; /** The class the windows' frames and the bays' infill are drawn with. */ frameSet: string }> };
     /** Scan pieces: their texels on a fitted plane, in its windows and in its panes (shares of all their texels), and the planes drawn on them. */
     scanPieces: { total: number; onPlanes: number; windowShare: number; paneShare: number; planes: number[] };
     texels: { total: number; glass: number };
@@ -190,6 +192,13 @@ function fittedWindows(json: any, meshName: string): number[] | undefined {
 function fittedPanes(json: any, meshName: string): number[] | undefined {
     const mi = (json.meshes ?? []).findIndex((m: any) => m.name === meshName);
     const uv = (json.nodes ?? []).find((n: any) => n.mesh === mi && n.extras?.sbFacadeLattice?.windows)?.extras.sbFacadeLattice.windows.panes;
+    return Array.isArray(uv) && uv.length % 4 === 0 && uv.length ? uv : undefined;
+}
+
+/** A rebuilt facade's structure (facade-lattice.ts STRUCTURE: its piers, bands and parapets), u0 v0 u1 v1 per run, as facade-lattice.ts wrote it. */
+function structureRuns(json: any, meshName: string): number[] | undefined {
+    const mi = (json.meshes ?? []).findIndex((m: any) => m.name === meshName);
+    const uv = (json.nodes ?? []).find((n: any) => n.mesh === mi && n.extras?.sbFacadeLattice?.structure)?.extras.sbFacadeLattice.structure.uv;
     return Array.isArray(uv) && uv.length % 4 === 0 && uv.length ? uv : undefined;
 }
 
@@ -418,11 +427,17 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
         const fitted = fittedWindows(json, mesh) ?? [], panes = fittedPanes(json, mesh) ?? [];
         const window = new Uint8Array(N), pane = new Uint8Array(N);
         const windowN = markRects(fitted, W, H, window), paneN = markRects(panes, W, H, pane, window, paneSeed);
-        // a window's frame: its most common class other than the wall, among its texels that are not pane
+        // the structure (piers, bands, parapets) where the lattice drew one: the stone's relief there alone, the bays' infill
+        // (spandrels, mullions) the windows' frame finish
+        const runs = structureRuns(json, mesh), stone = new Uint8Array(N);
+        const stoneN = runs ? markRects(runs, W, H, stone) : 0;
+        const framed = (k: number) => (window[k] && !pane[k]) || (!!runs && !stone[k] && !window[k]);
+        // the frame: its most common class other than the wall, among the window texels that are not pane and the bays' infill
         let frameClass = WALL;
-        if (windowN > paneN) {
-            const cls = classify(img, classes, window), inFrames = new Uint32Array(K);
-            for (let k = 0; k < N; k++) if (window[k] && !pane[k] && cls[k] !== WALL) inFrames[cls[k]]++;
+        const frameMask = Uint8Array.from({ length: N }, (_, k) => (framed(k) ? 1 : 0));
+        if (frameMask.some(v => v)) {
+            const cls = classify(img, classes, frameMask), inFrames = new Uint32Array(K);
+            for (let k = 0; k < N; k++) if (frameMask[k] && cls[k] !== WALL) inFrames[cls[k]]++;
             for (let c = 0; c < WALL; c++) if (inFrames[c] && (frameClass === WALL || inFrames[c] > inFrames[frameClass])) frameClass = c;
         }
 
@@ -440,14 +455,14 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
                 nrm.rgba.set([128, 128, 255, 255], k * 4);
                 continue;
             }
-            const t = window[k] ? frameTile : wallTile, j = ((y % t.th) * t.tw + (x % t.tw)) * 3;
+            const t = framed(k) ? frameTile : wallTile, j = ((y % t.th) * t.tw + (x % t.tw)) * 3;
             write(orm, params, k, t.o[j + 1], 0);
             nrm.rgba.set([Math.round(t.n[j] * 255), Math.round(t.n[j + 1] * 255), Math.round(t.n[j + 2] * 255), 255], k * 4);
         }
         if (windowN) report.facades.withWindows++;
         report.facades.perFacade.push({
             mesh, texelM: Math.round(texelM * 1e4) / 1e4, fittedWindows: fitted.length / 4, panes: panes.length / 4,
-            windowShare: r3(windowN / N), paneShare: r3(paneN / N), frameSet: sets[frameClass].name
+            windowShare: r3(windowN / N), paneShare: r3(paneN / N), structureShare: r3(stoneN / N), frameSet: sets[frameClass].name
         });
         planned.push({ material: mi, orm, normal: nrm, params, rebuilt: true, glass: paneN > 0 });
     }
@@ -546,7 +561,7 @@ export function writeMaterialRegions(json: any, plan: MaterialRegionsPlan, addTe
             sbMaterialRegions: {
                 version: MATERIAL_REGIONS_VERSION,
                 baseColor: { label: 'photo-inferred', source: "pipeline K's harmonised photo" },
-                roughness: { label: 'generated', source: `texture library sets per appearance class (${plan.sets.map(s => s.harvest ? `${s.name}, chosen by colour and texture at the tile's texel (tile-only harvest), its finer grain ${s.harvest.grain}` : s.name).join('; ')}); ${pm.rebuilt ? "the wall's set outside the window fit's windows, their frame class's set inside" : "the wall set's mean finish, the frame class's in the windows of the fitted plane it lies on"}` },
+                roughness: { label: 'generated', source: `texture library sets per appearance class (${plan.sets.map(s => s.harvest ? `${s.name}, chosen by colour and texture at the tile's texel (tile-only harvest), its finer grain ${s.harvest.grain}` : s.name).join('; ')}); ${pm.rebuilt ? "the wall's set on the structure (piers, bands, parapets; outside the windows where the lattice drew none), the frame class's set in the windows and the bays' infill" : "the wall set's mean finish, the frame class's in the windows of the fitted plane it lies on"}` },
                 metalness: { label: 'generated', source: 'none drawn: no reading here tells a metal from a dark stone' },
                 ...(pm.normal ? { normal: { label: 'generated', source: 'the same sets tiled at their real size' } } : {}),
                 ...(pm.glass ? { glass: { label: 'photo-inferred', source: "the window fit's panes (window-fit.ts), the photo kept as their colour" }, paneTilt: { label: 'generated', source: "each pane's seed (parameters alpha): the viewer tilts it by a small angle of its own, as real panes sit off their wall's plane" } } : {})
