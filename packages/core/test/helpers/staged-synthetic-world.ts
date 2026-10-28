@@ -34,8 +34,9 @@ export function readTris(file: string): Tri[] {
 
 export type Tri = [number, number, number, number, number, number, number, number, number];
 
+/** a, b, c, d in order round the quad; wound d, c, b, a so the face's front is the side real tiles show (glTF: counter-clockwise seen from outside). */
 function quad(a: number[], b: number[], c: number[], d: number[]): Tri[] {
-    return [[...a, ...b, ...c] as Tri, [...a, ...c, ...d] as Tri];
+    return [[...a, ...c, ...b] as Tri, [...a, ...d, ...c] as Tri];
 }
 
 export function building(x0: number, x1: number, z0: number, z1: number, h: number): Tri[] {

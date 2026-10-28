@@ -77,10 +77,12 @@ export function refreshSceneNodeGraph(current: NodeGraphData, scene: CanvasArtif
     const d = scene.data as Scene3DData;
     if (d?.stagedBuild) {
         // a staged view redraws only from a newer run record, or once when it was drawn by an older graph version
+        // or when its step switches changed
         const outdated = !link.key?.startsWith(`${SCENE_GRAPH_VERSION}:`);
-        if (d.stagedBuild.updatedAtMs <= link.updatedAtMs && !outdated) return undefined;
-        const next = refreshStageGraph(current.nodes, d.stagedBuild);
-        return { ...current, title: next.title, subtitle: next.subtitle, nodes: next.nodes as GraphNode[], edges: next.edges, stageViewOf: { ...next.stageViewOf, key: sceneGraphKey(scene) } };
+        const toggles = JSON.stringify(d.stagedStepToggles ?? {});
+        if (d.stagedBuild.updatedAtMs <= link.updatedAtMs && !outdated && toggles === (link.toggles ?? '{}')) return undefined;
+        const next = refreshStageGraph(current.nodes, d.stagedBuild, d.stagedStepToggles);
+        return { ...current, title: next.title, subtitle: next.subtitle, nodes: next.nodes as GraphNode[], edges: next.edges, stageViewOf: { ...next.stageViewOf, key: sceneGraphKey(scene), toggles } };
     }
     const key = sceneGraphKey(scene);
     if (link.key === key) return undefined;

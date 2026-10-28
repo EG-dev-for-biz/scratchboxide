@@ -73,3 +73,60 @@ export function applyDisplayFlag(flag: SceneDisplayFlag | undefined, t: DisplayF
     }
     return hidden;
 }
+
+/**
+ * A build step's snapshot (SceneDisplayFlag.snapshot): loaded while the flag holds it, drawn in the frame of the first
+ * loaded layer it shares a scan frame with, and released when the flag moves on.
+ */
+export class StepSnapshotView {
+    private url?: string;
+    private root?: THREE.Object3D;
+    private loading?: string;
+
+    constructor(private readonly load: (url: string) => Promise<THREE.Object3D>) {}
+
+    /** Every frame: follows the flag, and keeps the snapshot on its frame's layer (which may move or load late). */
+    sync(flag: SceneDisplayFlag | undefined, scene: THREE.Scene | undefined, objectRoots: ReadonlyMap<string, THREE.Object3D>): void {
+        const want = flag?.snapshot?.url;
+        if (want !== this.url) {
+            this.release();
+            this.url = want;
+            if (want) {
+                this.loading = want;
+                this.load(want).then(root => {
+                    if (this.loading !== want || this.url !== want) { disposeTree(root); return; }
+                    this.loading = undefined;
+                    root.matrixAutoUpdate = false;
+                    root.name = 'sbStepSnapshot';
+                    this.root = root;
+                    scene?.add(root);
+                }).catch(err => {
+                    if (this.loading === want) this.loading = undefined;
+                    console.warn(`[display flag] the step snapshot ${want} did not load:`, err);
+                });
+            }
+        }
+        if (!this.root || !flag?.snapshot) return;
+        const frame = flag.snapshot.frameOf.map(id => objectRoots.get(id)).find(Boolean);
+        if (frame) { frame.updateWorldMatrix(true, false); this.root.matrix.copy(frame.matrixWorld); this.root.matrixWorldNeedsUpdate = true; }
+    }
+
+    release(): void {
+        this.loading = undefined;
+        if (this.root) { this.root.parent?.remove(this.root); disposeTree(this.root); this.root = undefined; }
+        this.url = undefined;
+    }
+}
+
+function disposeTree(root: THREE.Object3D): void {
+    root.traverse(o => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        m.geometry?.dispose();
+        for (const mat of Array.isArray(m.material) ? m.material : [m.material]) {
+            if (!mat) continue;
+            for (const v of Object.values(mat)) if (v instanceof THREE.Texture) v.dispose();
+            mat.dispose();
+        }
+    });
+}

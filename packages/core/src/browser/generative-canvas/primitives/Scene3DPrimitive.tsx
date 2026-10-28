@@ -36,7 +36,7 @@ import type {
     SculptBrushOptions
 } from '../services/mesh-sculpting-engine';
 import { useViewportHistory } from './scene3d/useViewportHistory';
-import { applyDisplayFlag } from './scene3d/displayFlag';
+import { applyDisplayFlag, StepSnapshotView } from './scene3d/displayFlag';
 import { ViewportHistoryButtons } from './scene3d/ViewportHistoryButtons';
 import type { HistoryEditMeta } from './scene3d/useViewportHistory';
 import { ObjectEditCapture, createGeometrySwapEdit } from '../services/viewport-history-deltas';
@@ -2374,6 +2374,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
         let displayFlagWasOn = false;
         let compiledRootCache: THREE.Object3D | undefined;
+        // a build step's snapshot under the flag (the model as it stood after that step)
+        const stepSnapshot = new StepSnapshotView(url => new GLTFLoader().loadAsync(resolveExternalModelUri(url)).then(g => g.scene));
         const animate = () => {
             try {
                 const now = performance.now();
@@ -2521,6 +2523,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 if (flag || displayFlagWasOn) {
                     if (!compiledRootCache?.parent) compiledRootCache = stack.scene?.getObjectByName(GENERATED_ROOT_NAME) ?? undefined;
                     applyDisplayFlag(flag, { objectRoots: externalObjectsMapRef.current, meshes: customMeshRegistryRef.current, compiledRoot: compiledRootCache });
+                    stepSnapshot.sync(flag, stack.scene ?? undefined, externalObjectsMapRef.current);
                     displayFlagWasOn = !!flag;
                 }
                 const timeFrame = !!gpuFrameTimer?.available && treeLodControllers().length > 0;
@@ -2545,6 +2548,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 animationFrameIdRef.current = null;
             }
             gpuFrameTimer?.dispose();
+            stepSnapshot.release();
             detachControls();
             detachResize();
             if (selectionBoxRef.current) {

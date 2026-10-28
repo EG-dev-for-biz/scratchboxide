@@ -1724,7 +1724,8 @@ function buildOperatorHistoryNodes(scene: Scene3DData, resolveMeshNodeId: (objec
 export function morphScene3DToNodeGraph(scene: Scene3DData): NodeGraphData {
     // a staged location build is its run: the build as one runnable tool node and its stages, read from the record
     if (scene?.stagedBuild?.stages?.length) {
-        return { ...stagedBuildToNodeGraph(scene.stagedBuild), sourceArtifact: { type: '3d-scene', data: scene } };
+        const g = stagedBuildToNodeGraph(scene.stagedBuild, scene.stagedStepToggles);
+        return { ...g, stageViewOf: { ...g.stageViewOf, toggles: JSON.stringify(scene.stagedStepToggles ?? {}) }, sourceArtifact: { type: '3d-scene', data: scene } };
     }
     const title = scene?.title ? `${scene.title} — Scene Graph` : '3D Scene Graph';
     const meshes = Array.isArray(scene?.customMeshes) ? scene.customMeshes : [];

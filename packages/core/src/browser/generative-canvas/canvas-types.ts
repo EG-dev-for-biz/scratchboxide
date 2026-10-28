@@ -484,7 +484,7 @@ export interface NodeGraphData {
      * The scene this graph shows (a staged build's stage view, or a scene's node graph): the run record time it was
      * drawn from, or for a scene with no staged run the scene state `key` (sceneGraphKey); redrawn when either changes.
      */
-    stageViewOf?: { artifactId: string; updatedAtMs: number; key?: string };
+    stageViewOf?: { artifactId: string; updatedAtMs: number; key?: string; /** The step switches it was drawn with (JSON). */ toggles?: string };
 }
 
 // ==========================================
@@ -936,6 +936,11 @@ export interface SceneDisplayFlag {
     meshIds?: string[];
     /** Named nodes of the compiled model to show (and what they contain). */
     partNames?: string[];
+    /**
+     * A build step's snapshot: the model as it stood after that step, loaded only while the flag holds it and drawn in the
+     * frame of the first loaded object of `frameOf` (the staged layers it shares a scan frame with).
+     */
+    snapshot?: { url: string; frameOf: string[] };
 }
 
 export interface Scene3DData {
@@ -954,6 +959,8 @@ export interface Scene3DData {
      * A flagged layer a later stage replaced is drawn as a replaced layer (a ghost).
      */
     displayFlag?: SceneDisplayFlag;
+    /** A staged build's step switches for its next run (the build graph's toggles), by step key: true on, false off. */
+    stagedStepToggles?: Record<string, boolean>;
     /**
      * Optional semantic domain or classification token.
      * 

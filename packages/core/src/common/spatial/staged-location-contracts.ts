@@ -1003,6 +1003,8 @@ export interface StagedBuildState {
     /** Server clock at the last artifact emission. */
     updatedAtMs: number;
     stages: StageSummary[];
+    /** The timed steps inside the stages (remesh.windowFit, polish.lattice, twin.materials), in the order they started. */
+    steps?: StageStepSummary[];
     layers: StagedLayer[];
     degradations: DegradationRecord[];
     /** Colour, pattern and a per-run description per label. */
@@ -1019,6 +1021,23 @@ export interface StagedBuildState {
     materialMode?: 'clay' | 'textured' | (string & {});
     /** The background texture pass: its progress and per-layer outcome, while it runs and after. */
     texturePass?: StagedTexturePassState;
+}
+
+/**
+ * One timed step inside a stage. `key` is "<group>.<step>" (remesh.windowFit, polish.lattice, twin.materials); `stage` the
+ * stage it runs in. A step that changed the model carries its result as it stood then (`snapshot`): published under one
+ * name per place and step, so only the latest run's snapshot is kept.
+ */
+export interface StageStepSummary {
+    key: string;
+    stage: string;
+    /** `skipped`: turned off for this build, or off by default. */
+    status: 'running' | 'done' | 'failed' | 'skipped';
+    startedAtMs: number;
+    endedAtMs?: number;
+    ms?: number;
+    /** The model after this step: drawn in the frame of the first loaded layer of `frameOf` (the same scan frame). */
+    snapshot?: { url: string; bytes: number; frameOf: string[] };
 }
 
 /** The texture pass as the viewport and the model see it. */
@@ -2081,7 +2100,11 @@ const DEFINITIONS = {
         materialMode: STR,
         texturePass: obj(['status', 'layersDone', 'layersTotal'], {
             status: ref('stageStatus'), layersDone: NONNEG_INT, layersTotal: NONNEG_INT, rungShares: arr(ref('unit')), message: STR
-        })
+        }),
+        steps: arr(obj(['key', 'stage', 'status', 'startedAtMs'], {
+            key: STR, stage: STR, status: { enum: ['running', 'done', 'failed', 'skipped'] }, startedAtMs: NUM, endedAtMs: NUM, ms: NUM,
+            snapshot: obj(['url', 'bytes', 'frameOf'], { url: STR, bytes: NONNEG_INT, frameOf: arr(STR) })
+        }))
     }),
     StageEvent: obj(['schema', 'runId', 'seq', 'stage', 'order', 'status', 'title', 'source', 'degradations', 'timings'], {
         schema: { const: 'scratchbox.stage-event/2' }, runId: { type: 'string', pattern: '^[0-9a-f]{8}$' }, seq: NONNEG_INT, stage: STR, order: INT,

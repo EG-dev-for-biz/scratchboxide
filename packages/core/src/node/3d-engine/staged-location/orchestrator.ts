@@ -86,6 +86,8 @@ import { buildDistrictMassingLayer, districtFootprint, districtMassingEnabled, D
 import { REVOLUTION_FIT_VERSION, revolutionFitEnabled, reviseForRevolutions, type RevolutionLayerSummary } from './revolution-fit';
 import { districtEDetail, districtEDetailEnabled, DISTRICT_E_DETAIL_VERSION } from './district-e-detail';
 import { describePolish, polishRemesh, REMESH_POLISH_VERSION } from './remesh-polish';
+import { remeshCleanupEnabled } from './remesh-cleanup';
+import { remeshOrientEnabled } from './remesh-orient';
 import { fittedWindowRects, fitWindowsForOrthos, WINDOW_FIT_VERSION, type WindowFitFile } from './window-fit';
 import { weldTilesGlb, WELD_TILES_VERSION } from './weld-tiles';
 import { measureRevealDepth, REVEAL_DEPTH_VERSION, type RevealFacade, type RevealView } from './reveal-depth';
@@ -221,6 +223,7 @@ import { contextWithoutStructure, registeredSurveyViews, trustedRegisteredPose }
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
 import { facadeGrammarEnabled, grammarFileText, runFacadeGrammarPass, FACADE_GRAMMAR_GATE_VERSION, FACADE_GRAMMAR_PROMPT_VERSION, type GrammarFacadeOutcome } from './facade-grammar';
 import { TEXTURE_LADDER_RUNGS, type ProjectionView, type TexturePassDegradation, type TexturePassRecord, type TextureLayerBundle } from '../../../common/spatial/texture-pass-contracts';
+import { TOGGLEABLE_STEPS } from '../../../common/staged-build-steps';
 
 /** What the evidence stage spent: free metadata queries, billed images and the seconds the images took. */
 export interface EvidenceCost { metadataCalls: number; cachedCalls: number; imagesRequested: number; imagesFetched: number; fetchMs: number }
@@ -443,6 +446,11 @@ export interface StagedLocationRequest {
      * rebuilt on them; it replaces pipeline E and the facade grammar for the build.
      */
     pipeline?: 'g' | 'h' | 'i' | 'j' | 'k' | (string & {});
+    /**
+     * Steps turned on or off for this build, by step key (TOGGLEABLE_STEPS in staged-build-steps.ts): the node graph's
+     * toggles. A step not named keeps its default (its environment switch, else on).
+     */
+    steps?: Record<string, boolean>;
 }
 
 export interface StagedExtraction {
@@ -672,6 +680,23 @@ class StagedRun {
 
     summary(id: StageId): StageSummary {
         return this.state.stages.find(s => s.stage === id)!;
+    }
+
+    /** A timed step inside a stage started or ended (key "<group>.<step>"); it streams with the stage's next event. */
+    step(key: string, stage: string, status: 'running' | 'done' | 'failed' | 'skipped'): void {
+        if (this.closed) return;
+        const steps = this.state.steps ?? (this.state.steps = []);
+        let s = status === 'running' ? undefined : [...steps].reverse().find(x => x.key === key);
+        if (!s) { s = { key, stage, status, startedAtMs: this.now() }; steps.push(s); }
+        s.status = status;
+        if (status !== 'running') { s.endedAtMs = this.now(); s.ms = s.endedAtMs - s.startedAtMs; }
+    }
+
+    /** The model as it stood after a step: on that step's latest record. */
+    stepSnapshot(key: string, snapshot: NonNullable<NonNullable<StagedBuildState['steps']>[number]['snapshot']>): void {
+        if (this.closed) return;
+        const s = [...(this.state.steps ?? [])].reverse().find(x => x.key === key);
+        if (s) s.snapshot = snapshot;
     }
 
     /** Ends the run's record: later calls from abandoned work change nothing and stream nothing. */
@@ -1322,8 +1347,18 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         for (const s of run.state.stages) if (PIPELINE_K_ISOLATE_SKIPPED.has(s.stage as StageId)) s.outOfScope = true;
     }
     const base = `${slug(request.query)}${request.isolate ? '_iso' : ''}`;
-    // a timed step: the run's step log (steps.jsonl), which the node map's live view reads
-    const logStep = (key: string, state: 'running' | 'done' | 'failed') => cache.logRunStep(runId, key, state);
+    // a step the node graph can turn on or off for this build: the request's choice, else the step's default
+    const stepOn = (key: string, byDefault: boolean): boolean => {
+        const asked = request.steps?.[key];
+        return typeof asked === 'boolean' && TOGGLEABLE_STEPS.has(key) ? asked : byDefault;
+    };
+    // a timed step: the run's step log (steps.jsonl) and the run record the node graph reads (StagedBuildState.steps)
+    const STEP_STAGE: Record<string, string> = { polish: 'remesh', twin: 'textures' };
+    const logStep = (key: string, state: 'running' | 'done' | 'failed' | 'skipped') => {
+        cache.logRunStep(runId, key, state);
+        const group = key.split('.', 1)[0];
+        run.step(key, STEP_STAGE[group] ?? group, state);
+    };
     const persist = () => {
         const rec: RunRecord = {
             schema: 'scratchbox.staged-run/1', runId, request, place: placeValue, artifactId, keys: run.keys,
@@ -2577,14 +2612,18 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 if (carvedBy) bytes = hideFootprintInGlb(bytes, carvedBy).glb;
                 // pipeline K: no per-photo model recreate (it treats neighbouring photos differently); the de-lit photos are
                 // harmonised instead, one colour per side and height band with their seams levelled
-                const harmonizeOn = pipelineK && isolateOk;
+                const kTwin = pipelineK && isolateOk;
+                const harmonizeOn = kTwin && stepOn('twin.harmonize', true);
+                // the image-model party wall: off by default (user decision, 2026-10-28: the tiled wall did not work; the clip and infill close the side), SCRATCHBOX_K_PARTY_WALL_TEXTURE=1 or the node graph on
+                const partyWallOn = kTwin && stepOn('twin.partyWall', process.env.SCRATCHBOX_K_PARTY_WALL_TEXTURE?.trim() === '1');
                 // pipeline K's material regions: only with the app's texture library (deps.pipelineK), and off for now (user decision,
                 // 2026-10-28: the openings' finishes are not calculated correctly); SCRATCHBOX_K_MATERIAL_REGIONS=1 on
-                const materialSets = harmonizeOn && process.env.SCRATCHBOX_K_MATERIAL_REGIONS?.trim() === '1' ? deps.pipelineK?.materialSets : undefined;
-                if (harmonizeOn && !materialSets) cache.writeRunNote(runId, 'pipeline_k_materials', { skipped: deps.pipelineK?.materialSets ? 'off (SCRATCHBOX_K_MATERIAL_REGIONS=1 turns it on)' : 'no texture library in this build\'s services' });
-                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? MATERIAL_REGIONS_VERSION : '', harmonizeOn ? PARTY_WALL_TEXTURE_VERSION : '', harmonizeOn && visionAvailable ? 'party-wall-image' : '');
+                const materialSets = kTwin && stepOn('twin.materials', process.env.SCRATCHBOX_K_MATERIAL_REGIONS?.trim() === '1') ? deps.pipelineK?.materialSets : undefined;
+                if (kTwin && !materialSets) logStep('twin.materials', 'skipped');
+                if (kTwin && !materialSets) cache.writeRunNote(runId, 'pipeline_k_materials', { skipped: deps.pipelineK?.materialSets ? 'off (SCRATCHBOX_K_MATERIAL_REGIONS=1 turns it on)' : 'no texture library in this build\'s services' });
+                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? MATERIAL_REGIONS_VERSION : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '');
                 const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport; materialRegions?: TileRefineTwin['materialRegions'] }>('textures', key, async dir => {
-                    const twin = await tileRefineTwin(bytes, target.layer.layer, harmonizeOn ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), harmonize: { groundY: structure?.groundY ?? 0 }, ...(materialSets ? { materialRegions: { sets: (classes: RegionClass[]) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m) }) } } : {}) } : enhance ? {
+                    const twin = await tileRefineTwin(bytes, target.layer.layer, kTwin ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), ...(harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0 } } : {}), ...(materialSets ? { materialRegions: { sets: (classes: RegionClass[]) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m) }) } } : {}) } : enhance ? {
                         recreate: {
                             client: enhance, ...(deps.textures?.enhanceModels ? { models: deps.textures.enhanceModels } : {}),
                             budgetMs: TILE_REFINE_RECREATE_BUDGET_MS
@@ -2593,8 +2632,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (twin.harmonize) cache.writeRunNote(runId, 'pipeline_k_texture', { version: TEXTURE_HARMONIZE_VERSION, layer: target.layer.layer, ...twin.harmonize });
                     // pipeline K: the party wall (a wall the scan lacks, base-cleanup.ts) drawn as the building's masonry continued, by the image model
                     let twinGlb: Uint8Array = twin.glb;
-                    // the image-model party wall: off by default (user decision, 2026-10-28: the tiled wall did not work; the clip and infill close the side), SCRATCHBOX_K_PARTY_WALL_TEXTURE=1 on
-                    if (harmonizeOn && process.env.SCRATCHBOX_K_PARTY_WALL_TEXTURE?.trim() === '1') {
+                    if (kTwin && !harmonizeOn) logStep('twin.harmonize', 'skipped');
+                    if (kTwin && !partyWallOn) logStep('twin.partyWall', 'skipped');
+                    if (partyWallOn) {
                         const orthosDir = cache.readRunNote<{ orthosDir?: string }>(runId, 'pipeline_k')?.orthosDir;
                         logStep('twin.partyWall', 'running');
                         const pw = await texturePartyWall(twin.glb, { ...(visionAvailable ? { client: genAiEnhanceClient(visionAvailable.client) } : {}), models: [LIGHTING_MODEL_FULL], ...(orthosDir ? { orthosDir } : {}), signal: io.signal, progress: (m: string) => io.progress(m) }).catch((err: unknown) => {
@@ -3336,6 +3376,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const orthos = grammarOn || pipelineK ? { reliefOrthos: true, ...(pipelineK ? { reliefCarve: false, reliefAnalyse: false } : {}) } : {};
                 if (isolateMode && request.procedural !== true && deps.refine.renderOwnershipViews && visionAvailable) voteLater = { tilePath, ...(isolatePick ? { isolatePick } : {}), ...(remeshPick ? { pick: remeshPick } : {}), request: remeshRequest, orthos };
                 let r = await timed('tileRefine', () => deps.refine.refine({ ...remeshRequest!, ...orthos }));
+                // the model after each step that changed it, for the node graph (published once the layer is committed)
+                const stepFiles: Array<[string, string]> = [['remesh.tileRefine', r.texturedGlb ?? r.clayGlb]];
                 // the isolated structure must be the one picked; when it is not (or tile_refine wrote no isolated scan to
                 // check), the district around it is remeshed whole and shown instead, labelled: never isolated fragments
                 const isolateDegradations: DegradationRecord[] = [];
@@ -3389,7 +3431,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             cache.writeRunNote(runId, 'pipeline_k', { version: PIPELINE_K_VERSION, orthosDir: k.orthosDir, cached: k.cached, ms: k.ms, reports: k.reports });
                             run.note(PROVENANCE.photoInferred, `pipeline K (${PIPELINE_K_VERSION}): ${describeRectified(k)}`);
                             // the windows fitted on the straightened photos (window-fit.ts), for the lattice to hand to the material regions
-                            try {
+                            if (!stepOn('remesh.windowFit', true)) {
+                                logStep('remesh.windowFit', 'skipped');
+                                cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, skipped: true, reason: 'turned off for this build' });
+                            } else try {
                                 io.progress('pipeline K: fitting the windows on the facade photos');
                                 const wf = await timed('windowFit', () => fitWindowsForOrthos(k.orthosDir, { signal: io.signal }));
                                 windowFit = wf.file;
@@ -3414,9 +3459,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                     surveyViews = views;
                                     // off for now (user decision, 2026-10-28): the reading was never confident enough to use on the ESB; the photos still
                                     // feed the Street View score. SCRATCHBOX_K_REVEAL_DEPTH=1 turns it back on
-                                    if (process.env.SCRATCHBOX_K_REVEAL_DEPTH?.trim() !== '1') {
-                                        cache.writeRunNote(runId, 'pipeline_k_reveal_depth', { version: REVEAL_DEPTH_VERSION, skipped: true, reason: 'off (SCRATCHBOX_K_REVEAL_DEPTH=1 turns it on)' });
-                                        cache.logRunStep(runId, 'remesh.revealDepth', 'skipped');
+                                    if (!stepOn('remesh.revealDepth', process.env.SCRATCHBOX_K_REVEAL_DEPTH?.trim() === '1')) {
+                                        cache.writeRunNote(runId, 'pipeline_k_reveal_depth', { version: REVEAL_DEPTH_VERSION, skipped: true, reason: request.steps?.['remesh.revealDepth'] === false ? 'turned off for this build' : 'off (SCRATCHBOX_K_REVEAL_DEPTH=1 or the node graph turns it on)' });
+                                        logStep('remesh.revealDepth', 'skipped');
                                     } else if (!views.length) run.note(PROVENANCE.photoInferred, 'window depth: no Street View photo of the survey to read it from; the recesses follow the photo-contrast rule');
                                     else {
                                         const fitFile = JSON.parse(fs.readFileSync(windowFit, 'utf8')) as WindowFitFile;
@@ -3455,9 +3500,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const vec = eBuildings.flatMap(b => (b.extruded?.length ? b.extruded.filter(p => !p.planOnly).map(p => p.loops[0]) : [])).filter(l => l && l.length >= 3);
                         return vec.length ? vec : [structure.outline];
                     })() : undefined;
-                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: true, photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(revealDepth ? { revealDepth } : {}), ...(kLoops ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}), ...(pipelineK && process.env.SCRATCHBOX_K_SEAL?.trim() === '1' ? { seal: true } : {}), ...(pipelineK && process.env.SCRATCHBOX_K_CLIP?.trim() !== '0' ? { clip: true } : {}), ...(pipelineK && process.env.SCRATCHBOX_K_INFILL?.trim() !== '0' ? { infill: true } : {}), onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`polish.${step}`, state) }));
+                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: stepOn('polish.lattice', true), photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(revealDepth ? { revealDepth } : {}), ...(kLoops && stepOn('polish.base', true) ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}), ...(pipelineK && stepOn('polish.seal', process.env.SCRATCHBOX_K_SEAL?.trim() === '1') ? { seal: true } : {}), ...(pipelineK && stepOn('polish.clip', process.env.SCRATCHBOX_K_CLIP?.trim() !== '0') ? { clip: true } : {}), ...(pipelineK && stepOn('polish.infill', process.env.SCRATCHBOX_K_INFILL?.trim() !== '0') ? { infill: true } : {}), cleanup: stepOn('polish.cleanup', remeshCleanupEnabled()), orient: stepOn('polish.orient', remeshOrientEnabled()), onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`polish.${step}`, state) }));
+                    for (const [name, file] of Object.entries(pol.snapshots)) stepFiles.push([`polish.${name}`, file]);
+                    // the steps turned off for this build, shown as skipped
+                    for (const key of ['polish.cleanup', 'polish.lattice', 'polish.base', 'polish.clip', 'polish.infill', 'polish.seal', 'polish.orient', 'remesh.streetViewScore', 'remesh.visibleDefects']) if (request.steps?.[key] === false) logStep(key, 'skipped');
                     // the clay's relief against Street View, before the polish and after it (streetview-clay-score.ts)
-                    if (pipelineK && surveyViews?.length && pol.clayGlb !== r.clayGlb) {
+                    if (pipelineK && surveyViews?.length && pol.clayGlb !== r.clayGlb && stepOn('remesh.streetViewScore', true)) {
                         try {
                             const score = await timed('streetViewScore', async () => ({
                                 before: streetViewClayScore(sceneToRenderMesh(readGlbScene(r.clayGlb)), surveyViews!),
@@ -3477,7 +3525,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     }
                     // the build looked at from outside: holes seen on it are flagged here, where its geometry is final; untextured surface
                     // is judged on the finished model in the texture stage, which still paints some of it (the party wall)
-                    if (pipelineK && isolateMode && pol.texturedGlb) {
+                    if (pipelineK && isolateMode && pol.texturedGlb && stepOn('remesh.visibleDefects', true)) {
                         const seen = await timed('visibleDefects', async () => measureVisibleDefects(fs.readFileSync(pol.texturedGlb!)));
                         cache.writeRunNote(runId, 'pipeline_k_visible_defects', { ...seen, views: seen.views.map(({ mask: _m, ...v }) => v), judged: 'holes (untextured surface is judged on the finished model: pipeline_k_visible_defects_textured)' });
                         if (seen.holeShare > VISIBLE_DEFECTS_PARAMS.maxHoleShare || seen.maxViewHoleShare > VISIBLE_DEFECTS_PARAMS.maxViewHoleShare) isolateDegradations.push(run.degrade(record('remesh', 'visible_defects', {
@@ -3521,6 +3569,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     extra: { rawGlbPath: extraction.rawGlbPath ?? extraction.texturedGlb, treesRemoved: Number(strip?.stats?.triangles?.removed ?? 0) > 0 }
                 });
                 run.setGround(layer.objectId);
+                // one file per place and step, so the next run's snapshot replaces this one (only the latest run is kept)
+                for (const [key, file] of stepFiles) {
+                    try {
+                        const snap = cache.publishFile(file, `${base}_step_${key.replace('.', '_')}.glb`);
+                        run.stepSnapshot(key, { url: snap.url, bytes: snap.bytes, frameOf: [layer.objectId, l1.objectId] });
+                    } catch { /* a snapshot is a view of the build, never part of it */ }
+                }
                 const degradations: DegradationRecord[] = [...isolateDegradations];
                 refineTextured.set(layer.objectId, r.texturedGlb);
                 let status: 'committed' | 'degraded' = 'committed';

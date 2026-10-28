@@ -20,6 +20,7 @@
  *   the final scene. A place that cannot be resolved or has no tile coverage fails the call; nothing else does.
  */
 
+import { TOGGLEABLE_STEPS } from '../../../common/staged-build-steps';
 import { solarRoofFromBuildingShape } from './pipeline-e/solar-roof';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
@@ -172,6 +173,10 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
     const envProcedural = (process.env.SCRATCHBOX_STAGED_PROCEDURAL ?? '').trim().toLowerCase();
     const pipeline = asked ?? (args.isolate === true && args.procedural === undefined && !['g', 'h', 'i', 'j'].includes(envProcedural) ? 'k' : undefined);
     const radiusM = typeof args.radiusMeters === 'number' && args.radiusMeters > 0 ? args.radiusMeters : undefined;
+    // steps turned on or off for this build (the node graph's switches), by step key: unknown keys and non-booleans are dropped
+    const steps = args.steps && typeof args.steps === 'object' && !Array.isArray(args.steps)
+        ? Object.fromEntries(Object.entries(args.steps as Record<string, unknown>).filter((e): e is [string, boolean] => TOGGLEABLE_STEPS.has(e[0]) && typeof e[1] === 'boolean'))
+        : undefined;
     return {
         request: {
             query,
@@ -186,6 +191,7 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
             // which pipeline ('g', 'h', 'i' or 'j' procedural, pipeline-h/pipeline-h.ts stagedProcedural reads it, else the environment;
             // 'k' the straightened scan, pipeline-k/pipeline-k.ts)
             ...(pipeline ? { pipeline } : {}),
+            ...(steps ? { steps } : {}),
             ...(place ? { place } : {})
         },
         ...(retry ? { retry } : {}),

@@ -236,11 +236,18 @@ describe('createStagedLocationDeps: the real dependencies', () => {
         expect(((await createStagedLocationDeps(root)).vision as any).candidates).toEqual(['gemini-4-argon', 'gemini-3.8-flash']);
     });
 
-    it('no code in the staged build asks the Street View Static API for an image', () => {
+    it('no code in the staged build asks the Street View Static API for an image, except street identification outside the US', () => {
         const dir = path.join(__dirname, '../src/node/3d-engine/staged-location');
+        const staticApi = /maps\.googleapis\.com\/maps\/api\/streetview(?!\/metadata)/g;
         for (const file of fs.readdirSync(dir).filter(f => f.endsWith('.ts'))) {
             const text = fs.readFileSync(path.join(dir, file), 'utf8');
-            expect(text, file).not.toMatch(/maps\.googleapis\.com\/maps\/api\/streetview(?!\/metadata)/);
+            if (file !== 'street-identify.ts') { expect(text, file).not.toMatch(staticApi); continue; }
+            // the one documented fallback (user decision, 2026-10-28): the grounding API serves US panoramas only, so street
+            // identification reads the Static API's views where it refuses every panorama asked for, and only in fetchStaticViews
+            expect(text.match(staticApi), file).toHaveLength(1);
+            const fn = text.slice(text.indexOf('export async function fetchStaticViews'));
+            expect(fn.slice(0, fn.indexOf('\n}\n')), file).toMatch(staticApi);
+            expect(text, file).toMatch(/the grounding API refused every panorama asked for here[\s\S]*source = 'static'/);
         }
     });
 });

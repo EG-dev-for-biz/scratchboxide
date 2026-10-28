@@ -49,8 +49,8 @@ import { graphHistories, recordGraphEdit, redoGraphEdit, undoGraphEdit } from '.
 import type { ToolNodeCatalogEntry } from '../../../common/tool-node-protocol';
 import { compactResultFields, isToolNode, resolveToolNodeArgs, toolNodeLabel, toolNodeParameters, toolRunOrder } from '../../../common/tool-node-graph';
 import { refreshSceneNodeGraph } from '../scene-node-graph';
-import { displayFlagFor, withDisplayFlag } from '../scene-display-flag';
-import { DisplayFlagToggle, SceneOutputBody } from './SceneOutputParts';
+import { displayFlagFor, withDisplayFlag, withStepToggle } from '../scene-display-flag';
+import { DisplayFlagToggle, SceneOutputBody, StepSwitch } from './SceneOutputParts';
 import { ParamPanel } from './ParamControls';
 import { applySceneNodeParam, sceneNodeFields } from '../scene-node-params';
 import { resolveModeForArtifact } from '../guardrails-service';
@@ -473,6 +473,10 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
     const displayFlag = graphScene?.displayFlag;
     const setDisplayFlag = (flag: SceneDisplayFlag | undefined) => {
         if (stageScene && studioActions) studioActions.applyStreamedArtifact(withDisplayFlag(stageScene, flag));
+    };
+    /** A build step switched on or off for the next run: saved on the scene, which redraws this graph and the build node's arguments. */
+    const setStepToggle = (key: string, on: boolean) => {
+        if (stageScene && studioActions) studioActions.applyStreamedArtifact(withStepToggle(stageScene, key, on));
     };
     /** A node's live parameter set in its scene: the scene's data changes, and the viewport and this graph follow. */
     const setSceneParam = (node: GraphNode, key: string, value: unknown) => {
@@ -2110,7 +2114,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                 } ${isDragging ? 'sb-node-dragging' : ''} ${
                                     isSimActive ? 'sb-node-sim-active' : ''
                                 }`}
-                                style={{ left: `${node.x}px`, top: `${node.y}px`, height: cardHeight, ...(displayFlag?.nodeId === node.id ? { outline: '2px solid rgba(10,132,255,0.8)', outlineOffset: '2px' } : {}) }}
+                                style={{ left: `${node.x}px`, top: `${node.y}px`, height: cardHeight, ...(node.parameters?.off ? { opacity: 0.45 } : {}), ...(displayFlag?.nodeId === node.id ? { outline: '2px solid rgba(10,132,255,0.8)', outlineOffset: '2px' } : {}) }}
                                 onMouseDown={e => handleMouseDownNode(node, e)}
                                 onDoubleClick={e => handleDoubleClickNode(node, e)}
                                 onMouseUp={e => {
@@ -2821,7 +2825,13 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                                 )}
                                 {(() => {
                                     const flag = displayFlagFor(node, graphScene);
-                                    return flag ? <DisplayFlagToggle on={displayFlag?.nodeId === node.id} onToggle={() => setDisplayFlag(displayFlag?.nodeId === node.id ? undefined : flag)} /> : null;
+                                    const toggle = node.parameters?.toggle as { key: string; on: boolean; whenOff: string } | undefined;
+                                    return flag || toggle ? (
+                                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                                            {flag && <DisplayFlagToggle on={displayFlag?.nodeId === node.id} onToggle={() => setDisplayFlag(displayFlag?.nodeId === node.id ? undefined : flag)} />}
+                                            {toggle && stageScene && <StepSwitch on={toggle.on} whenOff={toggle.whenOff} onToggle={() => setStepToggle(toggle.key, !toggle.on)} />}
+                                        </div>
+                                    ) : null;
                                 })()}
                                 {isToolNode(node) && (
                                     <ToolNodeCardBody

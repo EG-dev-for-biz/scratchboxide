@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { TOGGLEABLE_STEPS } from '../../../common/staged-build-steps';
 import type { FloaterPruningReport } from '../../../common/spatial/splat-floater-pruning';
 import * as path from 'path';
 import * as THREE from 'three';
@@ -225,6 +226,11 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'STRING',
                     enum: ['g', 'h', 'i', 'j', 'k'],
                     description: 'Which pipeline rebuilds the structure (with isolate). "k" is the default for one building, from the chat and the 3D Building button (see the end of this description); "j" (the procedural default, with procedural true): the isolated scan is rendered at four planned views, made into one photoreal character sheet of the building (one 4K image, every view checked against the scan), the four views are sent together once to Meshy 7.1 multi-image-to-3D on Fal.ai, the model is fitted onto the scan\'s footprint and height and labelled generated, with its fit (plan IoU, share outside the footprint) reported; needs FAL_KEY. "i": the same character sheet, fitting and labelling as "j", but with Trellis multi in place of Meshy as the 3D model service, run six times (one per seed, about $0.12 a building), the candidate whose silhouette and plan best match the sheet and the scan kept, its textures colour-matched to the building\'s swatch; needs FAL_KEY. "h": the scan leads and vector/Solar data only agree with it, the structure is seeded on the vector building nearest the place, the build commits what its time budget allows instead of being discarded at the limit, readings that explain almost none of their wall are dropped, continued openings are checked before the native build, rejections are reported by reason, and an evidence ledger of every decision is written into the brief. "g": the earlier rules. "k" (with isolate, not procedural): the real scan straightened instead of rebuilt: the remeshed structure\'s walls snapped to their fitted planes, each facade\'s photo straightened (its pier and storey lines traced and warped straight, smears levelled against the facade\'s own repeats) and the facade rebuilt flat on those lines with that photo; use it when the user asks for one building, to straighten or clean up the building from Google Maps with its own texture. Default "k" with isolate; with procedural true, "j" (SCRATCHBOX_STAGED_PROCEDURAL=g, h, i or j makes that procedural pipeline the default instead of "k").'
+                },
+                steps: {
+                    type: 'OBJECT',
+                    description: 'Steps of a pipeline K build turned on (true) or off (false) for this build only, by step key; a step not named keeps its default. Set by the build graph\'s step switches when the build is re-run; pass it only when the user asks to turn a named step on or off.',
+                    properties: Object.fromEntries([...TOGGLEABLE_STEPS].map(([key, whenOff]) => [key, { type: 'BOOLEAN', description: `Off: ${whenOff}.` }]))
                 },
                 procedural: {
                     type: 'BOOLEAN',
