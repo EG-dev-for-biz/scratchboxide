@@ -45,7 +45,7 @@
 
 import { medianOf } from '../pipeline-e/image-ops';
 
-export const ORTHO_RECTIFY_VERSION = 'ortho-rectify/1';
+export const ORTHO_RECTIFY_VERSION = 'ortho-rectify/2';
 
 export const ORTHO_RECTIFY_PARAMS = {
     /** A line is an edge-energy peak above mean + k sd of its profile (facade-lattice.ts). */
@@ -85,7 +85,15 @@ export const ORTHO_RECTIFY_PARAMS = {
     /** The smear low-pass: half-height and half-width of its box (m; the width is also capped at a third of the pitch). */
     smearRadiusYM: 2.5, smearRadiusXM: 0.6,
     /** A smear is a low-passed log ratio beyond k robust sd and beyond minLog; its correction is capped at maxLog. */
-    smearK: 3, smearMinLog: 0.12, smearMaxLog: Math.log(1.8)
+    smearK: 3, smearMinLog: 0.12, smearMaxLog: Math.log(1.8),
+    /**
+     * Featureless photo (user decision, 2026-10-28: a wall a neighbour hid comes as a grey smear in the tile photo): a texel
+     * whose fine detail (its luma's departure from its 3x3 mean, averaged over featureWindowM) is under featurelessRatio of the
+     * facade's median, in a region of at least featurelessMinM2 and featurelessMinSideM on both sides (a plain pier or band
+     * stays), is refilled region by region from one aligned source (pipeline-k.ts continueFeatureless), labelled generated.
+     * It is not counted as uncovered by the rebuild (the wall stands there).
+     */
+    featureWindowM: 1, featurelessRatio: 0.3, featurelessMinM2: 4, featurelessMinSideM: 1.5
 };
 export type OrthoRectifyParams = typeof ORTHO_RECTIFY_PARAMS;
 
@@ -122,12 +130,16 @@ export interface OrthoRectifyResult {
     image: Rgba; report: OrthoRectifyReport;
     /** 1 where the photo did not cover the (straightened) ortho, before its holes were filled: what the facade rebuild reads as uncovered. */
     uncovered: Uint8Array;
+    /** 1 where the photo is featureless and the facade's own repeats did not refill it (its photo kept): for another facade to continue. */
+    featureless: Uint8Array;
 }
 
 const UNCOVERED = 128;
 
 /** The file beside a rectified ortho that marks where its photo did not reach (one channel, 255 = uncovered). */
 export const uncoveredMaskName = (image: string) => image.replace(/\.png$/i, '') + '_uncovered.png';
+/** The featureless mask beside an ortho (one channel, 255 = a smear its own repeats did not refill). */
+export const featurelessMaskName = (image: string) => image.replace(/\.png$/i, '') + '_featureless.png';
 const isUncovered = (rgba: Uint8Array, i: number) => rgba[i * 4] === UNCOVERED && rgba[i * 4 + 1] === UNCOVERED && rgba[i * 4 + 2] === UNCOVERED;
 
 /** Covered mask and luma of an ortho. */
@@ -474,15 +486,69 @@ export function axisPeriod(img: Rgba, pixelM: number, axis: 'x' | 'y', minM: num
     return undefined;
 }
 
-/** What the hole fill did: uncovered texels found, and filled from horizontal repeats, vertical repeats, or the nearest real texel. */
-export interface HoleFill { uncovered: number; fromRepeats: number; fromStoreys: number; fromNearest: number; periodPx?: number; storeyPx?: number }
+/** What the hole fill did: uncovered texels found, and filled from horizontal repeats, vertical repeats, or the nearest real texel; and featureless texels left for another facade (pipeline-k.ts). */
+export interface HoleFill { uncovered: number; fromRepeats: number; fromStoreys: number; fromNearest: number; periodPx?: number; storeyPx?: number; featureless?: number; featurelessLeft?: number }
+
+/**
+ * Where an ortho's photo is featureless (ORTHO_RECTIFY_PARAMS.featureless*): 1 per texel of a large smooth region, the
+ * smear a photo leaves on a wall it did not see.
+ */
+export function featurelessMask(img: Rgba, pixelM: number, P: OrthoRectifyParams = ORTHO_RECTIFY_PARAMS): Uint8Array {
+    const { valid, L } = planes(img), W = img.width, H = img.height, N = W * H;
+    // fine detail: |luma - its 3x3 mean| over the covered neighbours
+    const e = new Float32Array(N), ev = new Uint8Array(N);
+    for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+        const i = y * W + x;
+        if (!valid[i]) continue;
+        let s = 0, n = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const j = i + dy * W + dx; if (valid[j]) { s += L[j]; n++; } }
+        e[i] = Math.abs(L[i] - s / n); ev[i] = 1;
+    }
+    // averaged over the window by integral images
+    const r = Math.max(1, Math.round(P.featureWindowM / pixelM / 2));
+    const S = new Float64Array((W + 1) * (H + 1)), C = new Float64Array((W + 1) * (H + 1));
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const k = (y + 1) * (W + 1) + x + 1;
+        S[k] = e[y * W + x] + S[k - 1] + S[k - W - 1] - S[k - W - 2];
+        C[k] = ev[y * W + x] + C[k - 1] + C[k - W - 1] - C[k - W - 2];
+    }
+    const box = (A: Float64Array, x0: number, y0: number, x1: number, y1: number) => A[y1 * (W + 1) + x1] - A[y0 * (W + 1) + x1] - A[y1 * (W + 1) + x0] + A[y0 * (W + 1) + x0];
+    const local = new Float32Array(N).fill(NaN), all: number[] = [];
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        if (!ev[i]) continue;
+        const x0 = Math.max(0, x - r), y0 = Math.max(0, y - r), x1 = Math.min(W, x + r + 1), y1 = Math.min(H, y + r + 1), n = box(C, x0, y0, x1, y1);
+        if (n > 0) { local[i] = box(S, x0, y0, x1, y1) / n; if ((x + y) % 3 === 0) all.push(local[i]); }
+    }
+    const out = new Uint8Array(N);
+    if (!all.length) return out;
+    all.sort((a, b) => a - b);
+    const thr = P.featurelessRatio * all[all.length >> 1];
+    const flat = new Uint8Array(N);
+    for (let i = 0; i < N; i++) if (local[i] < thr) flat[i] = 1;
+    // regions: large enough, and wide and tall enough
+    const minPx = P.featurelessMinM2 / (pixelM * pixelM), side = P.featurelessMinSideM / pixelM;
+    const seen = new Uint8Array(N), stack: number[] = [], comp: number[] = [];
+    for (let i = 0; i < N; i++) {
+        if (!flat[i] || seen[i]) continue;
+        comp.length = 0; stack.push(i); seen[i] = 1;
+        let x0 = W, x1 = 0, y0 = H, y1 = 0;
+        while (stack.length) {
+            const j = stack.pop()!, x = j % W, y = (j - x) / W;
+            comp.push(j); x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+            for (const k of [x > 0 ? j - 1 : -1, x < W - 1 ? j + 1 : -1, j - W, j + W]) if (k >= 0 && k < N && flat[k] && !seen[k]) { seen[k] = 1; stack.push(k); }
+        }
+        if (comp.length >= minPx && x1 - x0 + 1 >= side && y1 - y0 + 1 >= side) for (const j of comp) out[j] = 1;
+    }
+    return out;
+}
 
 /**
  * The ortho's holes (uncovered texels, exact grey 128) filled from real texels only, never from another fill: first the
  * facade's own repeats at its bay pitch (the per-channel median of the covered texels at +-k pitches, chosen by luma), then
  * its repeats at its storey pitch, then the nearest real texel. A believable fill, reported for labelling (generated).
  */
-export function fillHoles(img: Rgba, pixelM: number, P: OrthoRectifyParams = ORTHO_RECTIFY_PARAMS): { image: Rgba; fill: HoleFill } {
+export function fillHoles(img: Rgba, pixelM: number, P: OrthoRectifyParams = ORTHO_RECTIFY_PARAMS, opts: { /** Texels never filled from the nearest real texel (featureless photo: left for another facade). */ noNearest?: Uint8Array } = {}): { image: Rgba; fill: HoleFill } {
     const { valid, L } = planes(img), W = img.width, H = img.height, N = W * H;
     const out = new Uint8Array(img.rgba);
     const known = new Uint8Array(valid);
@@ -527,7 +593,11 @@ export function fillHoles(img: Rgba, pixelM: number, P: OrthoRectifyParams = ORT
             src[j] = src[i]; queue[tail++] = j;
         }
     }
-    for (let i = 0; i < N; i++) if (!known[i] && img.rgba[i * 4 + 3] && src[i] >= 0) { write(i, src[i]); fill.fromNearest++; }
+    for (let i = 0; i < N; i++) {
+        if (known[i] || !img.rgba[i * 4 + 3] || src[i] < 0) continue;
+        if (opts.noNearest?.[i]) { fill.featurelessLeft = (fill.featurelessLeft ?? 0) + 1; continue; }
+        write(i, src[i]); fill.fromNearest++;
+    }
     return { image: { width: W, height: H, rgba: out }, fill };
 }
 
@@ -722,10 +792,17 @@ export function rectifyOrtho(img: Rgba, pixelM: number, P: OrthoRectifyParams = 
     const uncovered = new Uint8Array(W * H);
     for (let k = 0; k < W * H; k++) if (image.rgba[k * 4 + 3] && isUncovered(image.rgba, k)) uncovered[k] = 1;
     const holes = fillHoles(image, pixelM, P);
+    // featureless photo (a smear on a wall the photo did not see) is kept here and marked: each smear region is refilled whole,
+    // from one aligned source, once every facade is straightened (pipeline-k.ts continueFeatureless); not counted as uncovered
+    const flat = featurelessMask(image, pixelM, P);
+    const left = new Uint8Array(W * H);
+    let featureless = 0;
+    for (let k = 0; k < W * H; k++) if (flat[k] && !uncovered[k]) { left[k] = 1; featureless++; }
+    holes.fill.featureless = featureless;
     image = holes.image;
     report.holes = holes.fill;
     report.ms = Date.now() - t0;
-    return { image, report, uncovered };
+    return { image, report, uncovered, featureless: left };
 }
 
 /** The given lines traced again on another image, each sample searched about its straight position (for the after measure). */

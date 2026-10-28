@@ -17,7 +17,7 @@ import * as path from 'path';
 import { parentPort, workerData } from 'worker_threads';
 import { decodePng } from '../../../texture-processing';
 import { encodePng } from '../png-encode';
-import { rectifyOrtho, uncoveredMaskName, type OrthoRectifyParams, type OrthoRectifyReport } from './ortho-rectify';
+import { featurelessMaskName, rectifyOrtho, uncoveredMaskName, type OrthoRectifyParams, type OrthoRectifyReport } from './ortho-rectify';
 
 export interface RectifyJob { srcDir: string; outDir: string; facades: Array<{ facadeId: number; image: string; pixel: number }>; params: OrthoRectifyParams }
 export type RectifyMessage = { facadeId: number; report?: OrthoRectifyReport; error?: string };
@@ -30,6 +30,7 @@ for (const f of job.facades) {
         fs.writeFileSync(path.join(job.outDir, f.image), encodePng(r.image.width, r.image.height, r.image.rgba, 4));
         // where the photo did not reach (its holes are filled in the ortho): the facade rebuild reads coverage from this
         fs.writeFileSync(path.join(job.outDir, uncoveredMaskName(f.image)), encodePng(r.image.width, r.image.height, r.uncovered.map(v => (v ? 255 : 0)), 1));
+        if (r.featureless.some(v => v)) fs.writeFileSync(path.join(job.outDir, featurelessMaskName(f.image)), encodePng(r.image.width, r.image.height, r.featureless.map(v => (v ? 255 : 0)), 1));
         parentPort!.postMessage({ facadeId: f.facadeId, report: r.report } satisfies RectifyMessage);
     } catch (err) {
         parentPort!.postMessage({ facadeId: f.facadeId, error: (err as Error).message } satisfies RectifyMessage);
