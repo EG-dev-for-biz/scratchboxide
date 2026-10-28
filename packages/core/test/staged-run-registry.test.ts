@@ -122,4 +122,18 @@ describe('followStagedRun', () => {
         expect(late).toEqual(['finished']);
         expect(calls.length).toBe(2);
     });
+
+    it('keeps one poll at its interval when a caller leaves and comes back on every event (an effect re-run)', async () => {
+        let n = 0;
+        const fetchImpl = (async () => { n++; return { status: 200, ok: true, statusText: '', json: async () => snap([], 'running') } as Response; }) as typeof fetch;
+        // 20 leave-and-return cycles within ~40 ms, the poll at 100 ms
+        let stop = followStagedRunShared('rerun0001', { onEvents: () => undefined, onEnd: () => undefined }, { pollMs: 100, fetchImpl });
+        for (let i = 0; i < 20; i++) {
+            await new Promise(r => setTimeout(r, 2));
+            stop();
+            stop = followStagedRunShared('rerun0001', { onEvents: () => undefined, onEnd: () => undefined }, { pollMs: 100, fetchImpl });
+        }
+        expect(n).toBeLessThanOrEqual(2);
+        stop();
+    });
 });

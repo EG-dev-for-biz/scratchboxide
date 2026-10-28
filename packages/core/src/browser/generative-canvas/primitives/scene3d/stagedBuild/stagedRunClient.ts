@@ -71,8 +71,10 @@ export function followStagedRun(runId: string, opts: {
     let after = opts.after;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const pollMs = opts.pollMs ?? STAGED_RUN_POLL_MS;
     const tick = async () => {
         if (stopped) return;
+        lastPollAt.set(runId, Date.now());
         try {
             const r = await fetchStagedRun(runId, after, opts.fetchImpl);
             if (stopped) return;
@@ -89,23 +91,35 @@ export function followStagedRun(runId: string, opts: {
         } catch {
             // the server is away for a moment: try again on the next tick
         }
-        timer = setTimeout(tick, opts.pollMs ?? STAGED_RUN_POLL_MS);
+        timer = setTimeout(tick, pollMs);
     };
-    void tick();
+    // never sooner than the poll interval after this run's last poll, however often followers come and go
+    const wait = Math.max(0, (lastPollAt.get(runId) ?? 0) + pollMs - Date.now());
+    if (wait > 0) timer = setTimeout(tick, wait); else void tick();
     return { stop: () => { stopped = true; if (timer) clearTimeout(timer); } };
 }
+
+/** When each run was last polled (ms), so a follower started again right after another stopped waits out the interval. */
+const lastPollAt = new Map<string, number>();
 
 type SharedListener = { onEvents: Parameters<typeof followStagedRun>[1]['onEvents']; onEnd: Parameters<typeof followStagedRun>[1]['onEnd'] };
 interface SharedEntry {
     follower: StagedRunFollower;
     listeners: Set<SharedListener>;
     ended?: { status: StagedRunSnapshot['status'] | 'unknown'; snapshot?: StagedRunSnapshot };
+    /** The stop pending after the last listener left (a listener that comes back within the grace keeps the poll). */
+    stopTimer?: ReturnType<typeof setTimeout>;
 }
+
+/** How long a run's poll outlives its last listener (ms): an effect that unsubscribes and subscribes again keeps one poll. */
+const SHARED_STOP_GRACE_MS = 1000;
 const shared = new Map<string, SharedEntry>();
 
 /**
  * One follower per run for the whole page, however many viewports or effect re-runs ask for it: each caller gets the
- * run's events from its own subscription on; the poll stops when the last caller leaves or the run ends.
+ * run's events from its own subscription on; the poll stops when the run ends, or SHARED_STOP_GRACE_MS after the last
+ * caller leaves (an effect that re-subscribes on every event it applies keeps the one poll instead of starting a new one,
+ * which polled the server back to back until the browser ran out of connections).
  */
 export function followStagedRunShared(runId: string, listener: SharedListener, opts: { after?: number; pollMs?: number; fetchImpl?: typeof fetch } = {}): () => void {
     let entry: SharedEntry | undefined = shared.get(runId);
@@ -130,13 +144,19 @@ export function followStagedRunShared(runId: string, listener: SharedListener, o
         shared.set(runId, e);
         entry = e;
     }
+    if (entry.stopTimer) { clearTimeout(entry.stopTimer); entry.stopTimer = undefined; }
     entry.listeners.add(listener);
     const e = entry;
     return () => {
         e.listeners.delete(listener);
-        if (e.listeners.size === 0 && !e.ended) {
-            e.follower.stop();
-            if (shared.get(runId) === e) shared.delete(runId);
+        if (e.listeners.size === 0 && !e.ended && !e.stopTimer) {
+            e.stopTimer = setTimeout(() => {
+                e.stopTimer = undefined;
+                if (e.listeners.size) return;
+                e.follower.stop();
+                if (shared.get(runId) === e) shared.delete(runId);
+            }, SHARED_STOP_GRACE_MS);
+            (e.stopTimer as { unref?: () => void }).unref?.();
         }
     };
 }
