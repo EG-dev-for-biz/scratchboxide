@@ -27,7 +27,8 @@
  *  4. Skirt: along each edge's wall line, where the lowest kept surface within skirtSearchM of the edge stands more than
  *     skirtMinGapM above the ground, a strip from the ground up to it closes the base (labelled generated). Where no
  *     surface stands near the edge at all, nothing is added by the skirt: it only closes a short gap.
- *  5. Party wall: along each edge's wall line the building is looked at from outside (cells of partyCellM along the edge and
+ *  5. Party wall (off by default, partyWall; user decision, 2026-10-28: its spans stood out as flat jagged planes, so the
+ *     building is clipped to its footprint and its openings closed by the infill instead, remesh-polish.ts): along each edge's wall line the building is looked at from outside (cells of partyCellM along the edge and
  *     up); a cell whose first surface is the back of one (the inside of the building: the scan has no outer wall there,
  *     typically a wall shared with a neighbour, removed with it) is closed by a generated wall on the wall line, in spans of
  *     at least partyMinSpanM, above the skirt and no higher than the building stands at the line (partyReachM). A real wall set back behind the line shows its front and is left as it is.
@@ -43,7 +44,7 @@ import type { Vec2 } from '../../../../common/spatial/staged-location-contracts'
 import { FOOTPRINT_MAX_PROJECTION_M } from '../footprint-lock';
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor } from '../glb-bytes';
 
-export const BASE_CLEANUP_VERSION = 'base-cleanup/5';
+export const BASE_CLEANUP_VERSION = 'base-cleanup/6';
 
 export const BASE_CLEANUP_PARAMS = {
     /** Vertices closer than this weld into one (m). */
@@ -75,7 +76,11 @@ export const BASE_CLEANUP_PARAMS = {
     /** Party wall: the cell (m) the edge is looked at in, from outside; a missing span shorter than partyMinSpanM (m) is left. */
     partyCellM: 0.5, partyMinSpanM: 1,
     /** Party wall: never higher than the building stands at the wall line (its highest surface within this (m) inside it). */
-    partyReachM: 1.5
+    partyReachM: 1.5,
+    /** Whether the party wall (step 5) is drawn at all. */
+    partyWall: false,
+    /** The clip (clipToFootprint): every surface cut at the footprint plus this margin (m), at any height. */
+    clipMarginM: 0.3
 };
 export type BaseCleanupParams = typeof BASE_CLEANUP_PARAMS;
 
@@ -98,6 +103,21 @@ const dist2Seg = (px: number, pz: number, a: Vec2, b: Vec2) => {
     const t = l2 > 0 ? Math.max(0, Math.min(1, ((px - a[0]) * dx + (pz - a[1]) * dz) / l2)) : 0;
     return Math.hypot(px - a[0] - t * dx, pz - a[1] - t * dz);
 };
+
+/** A plan point's signed distance to the footprint's outline: negative inside a loop, positive outside (m). */
+export function signedFootprintDistance(x: number, z: number, loops: Vec2[][]): number {
+    let inside = false, best = Infinity;
+    for (const loop of loops) {
+        let inLoop = false;
+        for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
+            const a = loop[i], b = loop[j];
+            if ((a[1] > z) !== (b[1] > z) && x < ((b[0] - a[0]) * (z - a[1])) / (b[1] - a[1]) + a[0]) inLoop = !inLoop;
+            best = Math.min(best, dist2Seg(x, z, a, b));
+        }
+        if (inLoop) inside = true;
+    }
+    return inside ? -best : best;
+}
 
 /** How far a plan point stands outside the footprint (0 inside any loop). */
 export function outsideFootprint(x: number, z: number, loops: Vec2[][]): number {
@@ -300,6 +320,7 @@ function decide(tris: Tri[], loops: Vec2[][], groundY: number, P: BaseCleanupPar
     // 5. the party wall: each edge looked at from outside, on its wall line; a cell whose first surface is a back face shows
     // the inside, where the scan has no outer wall
     const party: number[][] = [];
+    if (!P.partyWall) return { remove, skirt, party, report };
     const kept = tris.filter(t => !remove.has(centreKey(t)));
     const topY = kept.reduce((m, t) => Math.max(m, t.a[1], t.b[1], t.c[1]), groundY);
     edges.forEach((e, ei) => {

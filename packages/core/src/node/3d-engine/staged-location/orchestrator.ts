@@ -87,6 +87,7 @@ import { REVOLUTION_FIT_VERSION, revolutionFitEnabled, reviseForRevolutions, typ
 import { districtEDetail, districtEDetailEnabled, DISTRICT_E_DETAIL_VERSION } from './district-e-detail';
 import { describePolish, polishRemesh, REMESH_POLISH_VERSION } from './remesh-polish';
 import { fittedWindowRects, fitWindowsForOrthos, WINDOW_FIT_VERSION, type WindowFitFile } from './window-fit';
+import { weldTilesGlb, WELD_TILES_VERSION } from './weld-tiles';
 import { measureRevealDepth, REVEAL_DEPTH_VERSION, type RevealFacade, type RevealView } from './reveal-depth';
 import { streetViewClayScore } from './streetview-clay-score';
 import { decodeJpegInMemory } from './photo-palette';
@@ -1597,7 +1598,18 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 run.geoAnchor = e.geoAnchor;
                 run.state.attribution = [...new Set(['Map data ©Google', ...e.copyrights.filter(c => c && c !== 'Google').map(c => `Map data ©${c}`)])];
                 const key8 = value.key.slice(0, 8);
-                const published = cache.publishFile(e.geometryGlb, `${base}_tiles_${key8}.glb`);
+                // the tiles welded at their seams for the clay (weld-tiles.ts; the raw extraction stays as it came), cached beside it
+                let shown = e.geometryGlb;
+                if (process.env.SCRATCHBOX_WELD_TILES?.trim() !== '0') {
+                    const welded = path.join(path.dirname(e.geometryGlb), `geometry_welded_${WELD_TILES_VERSION.replace(/\W/g, '_')}.glb`);
+                    try {
+                        if (!fs.existsSync(welded)) { const w = weldTilesGlb(fs.readFileSync(e.geometryGlb)); fs.writeFileSync(welded, w.glb); run.note(PROVENANCE.asScanned, `tiles welded at their seams (${WELD_TILES_VERSION}): ${w.report.meshesIn} tile meshes, ${w.report.verticesIn.toLocaleString('en-US')} vertices to ${w.report.verticesWelded.toLocaleString('en-US')} within ${w.report.weldM * 100} cm, normals averaged across the old seams`); }
+                        shown = welded;
+                    } catch (err) {
+                        run.note(PROVENANCE.asScanned, `the tiles could not be welded (${errorMessage(err)}); the extraction is shown as it came`);
+                    }
+                }
+                const published = cache.publishFile(shown, `${base}_tiles_${key8}.glb`);
                 let orderUrl: string | undefined;
                 if (e.downloadOrder) {
                     const orderFile = path.join(path.dirname(e.geometryGlb), 'download_order.json');
@@ -2581,7 +2593,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (twin.harmonize) cache.writeRunNote(runId, 'pipeline_k_texture', { version: TEXTURE_HARMONIZE_VERSION, layer: target.layer.layer, ...twin.harmonize });
                     // pipeline K: the party wall (a wall the scan lacks, base-cleanup.ts) drawn as the building's masonry continued, by the image model
                     let twinGlb: Uint8Array = twin.glb;
-                    if (harmonizeOn) {
+                    // the image-model party wall: off by default (user decision, 2026-10-28: the tiled wall did not work; the clip and infill close the side), SCRATCHBOX_K_PARTY_WALL_TEXTURE=1 on
+                    if (harmonizeOn && process.env.SCRATCHBOX_K_PARTY_WALL_TEXTURE?.trim() === '1') {
                         const orthosDir = cache.readRunNote<{ orthosDir?: string }>(runId, 'pipeline_k')?.orthosDir;
                         logStep('twin.partyWall', 'running');
                         const pw = await texturePartyWall(twin.glb, { ...(visionAvailable ? { client: genAiEnhanceClient(visionAvailable.client) } : {}), models: [LIGHTING_MODEL_FULL], ...(orthosDir ? { orthosDir } : {}), signal: io.signal, progress: (m: string) => io.progress(m) }).catch((err: unknown) => {
@@ -3442,7 +3455,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const vec = eBuildings.flatMap(b => (b.extruded?.length ? b.extruded.filter(p => !p.planOnly).map(p => p.loops[0]) : [])).filter(l => l && l.length >= 3);
                         return vec.length ? vec : [structure.outline];
                     })() : undefined;
-                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: true, photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(revealDepth ? { revealDepth } : {}), ...(kLoops ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}), ...(pipelineK && process.env.SCRATCHBOX_K_SEAL?.trim() === '1' ? { seal: true } : {}), onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`polish.${step}`, state) }));
+                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: true, photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(revealDepth ? { revealDepth } : {}), ...(kLoops ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}), ...(pipelineK && process.env.SCRATCHBOX_K_SEAL?.trim() === '1' ? { seal: true } : {}), ...(pipelineK && process.env.SCRATCHBOX_K_CLIP?.trim() !== '0' ? { clip: true } : {}), ...(pipelineK && process.env.SCRATCHBOX_K_INFILL?.trim() !== '0' ? { infill: true } : {}), onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`polish.${step}`, state) }));
                     // the clay's relief against Street View, before the polish and after it (streetview-clay-score.ts)
                     if (pipelineK && surveyViews?.length && pol.clayGlb !== r.clayGlb) {
                         try {

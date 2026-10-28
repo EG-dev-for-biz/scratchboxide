@@ -136,6 +136,33 @@ describe('pipeline K seal: fill textured as the surface it closes', () => {
     });
 });
 
+describe('pipeline K infill where no photo reached', () => {
+    it("continues the nearest rebuilt facade facing the same way across it, that facade's photo repeating, labelled generated", () => {
+        // the front (z = 0) is a rebuilt facade with its photo; the back (z = 10) is scan no photo reached, with a hole
+        const wallUv: UvOf = p => [(p[0] + 1) / 12, (11 - p[1]) / 12];
+        const frontAll = () => face([0, 0, 0], [1, 0, 0], [0, 1, 0], true);
+        const back = () => face([0, 0, 10], [1, 0, 0], [0, 1, 0], false, hole);
+        const sides = () => [...face([0, 0, 0], [0, 0, 1], [0, 1, 0], false), ...face([10, 0, 0], [0, 0, 1], [0, 1, 0], true), ...face([0, 0, 0], [1, 0, 0], [0, 0, 1], false), ...face([0, 10, 0], [1, 0, 0], [0, 0, 1], true)];
+        const clay = glb([{ name: 'FacadeLattice_3', tris: frontAll(), facadeId: 3 }, { name: 'scan', tris: [...back(), ...sides()] }]);
+        const tex = glb([{ name: 'FacadeLattice_3', tris: frontAll(), uv: wallUv, facadeId: 3 }, { name: 'scan', tris: [...back(), ...sides()] }]);
+        const out = fillOpenLoops(clay, [tex]);
+        const seal = sealOf(out.others[0]);
+        const fill = seal.tris.filter(t => t.p.every(v => v[2] === 10 && v[0] >= 4 && v[0] <= 6 && v[1] >= 4 && v[1] <= 6));
+        expect(fill.length).toBe(6);
+        for (const t of fill) {
+            expect(t.material).toBe('FacadeLattice_3_continued');
+            t.p.forEach((v, k) => { expect(t.uv![k][0]).toBeCloseTo(wallUv(v)[0], 5); expect(t.uv![k][1]).toBeCloseTo(wallUv(v)[1], 5); });
+        }
+        expect(seal.extras.continued).toBe(6);
+        expect(seal.extras.provenance.label).toBe('generated');
+        // the continued material repeats its photo past its edges
+        const g = parseGlbBytes(out.others[0]);
+        const mat = g.json.materials.find((m: any) => m.name === 'FacadeLattice_3_continued');
+        const sampler = g.json.samplers[g.json.textures[mat.pbrMetallicRoughness.baseColorTexture.index].sampler];
+        expect([sampler.wrapS, sampler.wrapT]).toEqual([10497, 10497]);
+    });
+});
+
 describe('pipeline K seal: closed where it is safe', () => {
     it('caps a flat hole, and leaves open a hole whose rim bends around a corner', () => {
         // the front's flat 2 m x 2 m hole, and a 1 m x 1 m hole on each side of the front-right corner, meeting at it: one loop

@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { cleanBase, outsideFootprint } from '../src/node/3d-engine/staged-location/pipeline-k/base-cleanup';
+import { BASE_CLEANUP_PARAMS, cleanBase, outsideFootprint } from '../src/node/3d-engine/staged-location/pipeline-k/base-cleanup';
 import { parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 import { readGlbTriangles } from './helpers/clay-glb-render';
@@ -111,7 +111,7 @@ describe('pipeline K base cleanup', () => {
         expect(worst).toBeLessThan(0.7);
     });
 
-    it('closes a side the scan has no wall on (a party wall) with a generated wall facing out, and leaves the scanned sides', () => {
+    it('with the party wall on (off by default), closes a side the scan has no wall on with a generated wall facing out, and leaves the scanned sides', () => {
         // the tower from the ground up, its x = 10 side missing: from that side the inside of the other walls shows
         const walls = box(0, 10, 0, 20, 0, 10);
         const missing = (i: number) => { const xs = [walls[i * 9], walls[i * 9 + 3], walls[i * 9 + 6]]; return xs.every(x => x === 10); };
@@ -122,7 +122,7 @@ describe('pipeline K base cleanup', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'base-'));
         const file = path.join(dir, 'clay.glb');
         writeStagedGlbFile(file, [{ name: 'scan', positions: soup, indices: Uint32Array.from({ length: soup.length / 3 }, (_, i) => i) }], {});
-        const r = cleanBase(fs.readFileSync(file), [], footprint, 0);
+        const r = cleanBase(fs.readFileSync(file), [], footprint, 0, { ...BASE_CLEANUP_PARAMS, partyWall: true });
         expect(r.report.partyWall.edges).toBe(1);
         expect(r.report.partyWall.areaM2).toBeGreaterThan(180);
         expect(r.report.partyWall.areaM2).toBeLessThanOrEqual(200);

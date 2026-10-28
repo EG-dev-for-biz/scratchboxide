@@ -37,11 +37,11 @@
 
 import { ShapeUtils, Vector2 } from 'three';
 import type { Vec2 } from '../../../../common/spatial/staged-location-contracts';
-import { outsideFootprint } from './base-cleanup';
+import { outsideFootprint, signedFootprintDistance } from './base-cleanup';
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor } from '../glb-bytes';
 import type { FacadeLatticeResult, ReliefFacade } from '../facade-lattice';
 
-export const LATTICE_STITCH_VERSION = 'lattice-stitch/13';
+export const LATTICE_STITCH_VERSION = 'lattice-stitch/15';
 
 export const LATTICE_STITCH_PARAMS = {
     /** The slab of a rebuilt facade cut from the scan: within this of its plane (m). */
@@ -64,6 +64,8 @@ export const LATTICE_STITCH_PARAMS = {
     wallFacingMin: 0.9, wallBandM: 0.5, wallUvMargin: 0.002,
     /** Fill texturing elsewhere: corner UVs only when their mapping is sheared no more than this (larger over smaller stretch). */
     maxShear: 2,
+    /** Fill no photo reached: continued from the nearest rebuilt facade facing within this |cos|, no further than continueMaxM (m). */
+    continueFacingMin: 0.9, continueMaxM: 80,
     /** Fill over a surface already there: at least skinShare of its probes within skinM (m) of one facing alike (a scan with relief under it is not flat). Shown only in the clay, not the textured twin. */
     skinM: 0.5, skinShare: 0.75,
     /** A loop whose rim strays off its best-fit plane by more than rimPlanarM (m) is left open when its cap would exceed offRimCapM2 (m²). */
@@ -239,6 +241,12 @@ export function cutScanToLattice(bytes: Uint8Array, facades: Facade[], P: Lattic
         }
         if (kept.length) appended.push({ pr, polys: kept });
     }
+    return { glb: appendPieces(glb, appended, { sbLatticeCut: { version: LATTICE_STITCH_VERSION, provenance: 'as-scanned: the scan cut exactly to the rebuilt cells' } }), report };
+}
+
+/** The GLB with each source primitive's kept pieces appended as a new primitive (same material and attributes, `extras`). */
+function appendPieces(glb: ReturnType<typeof parseGlbBytes>, appended: Array<{ pr: PrimRead; polys: Vx[][] }>, extras: Record<string, unknown>): Buffer {
+    const json = glb.json;
     // the kept pieces: one new primitive per source primitive, same material and attributes
     const chunks: Uint8Array[] = [glb.bin];
     let len = glb.bin.length;
@@ -262,7 +270,7 @@ export function cutScanToLattice(bytes: Uint8Array, facades: Facade[], P: Lattic
         });
         const idx = Uint32Array.from(tris);
         json.accessors.push({ bufferView: push(new Uint8Array(idx.buffer), 34963), componentType: 5125, count: idx.length, type: 'SCALAR' });
-        json.meshes[pr.mesh].primitives.push({ attributes, indices: json.accessors.length - 1, mode: 4, ...(src.material !== undefined ? { material: src.material } : {}), extras: { sbLatticeCut: { version: LATTICE_STITCH_VERSION, provenance: 'as-scanned: the scan cut exactly to the rebuilt cells' } } });
+        json.meshes[pr.mesh].primitives.push({ attributes, indices: json.accessors.length - 1, mode: 4, ...(src.material !== undefined ? { material: src.material } : {}), extras });
     }
     const pad = (4 - (len % 4)) % 4;
     if (pad) { chunks.push(new Uint8Array(pad)); len += pad; }
@@ -270,8 +278,62 @@ export function cutScanToLattice(bytes: Uint8Array, facades: Facade[], P: Lattic
     let o = 0;
     for (const c of chunks) { bin.set(c, o); o += c.length; }
     json.buffers = [{ ...(json.buffers?.[0] ?? {}), byteLength: len }];
-    return { glb: assembleGlb(json, bin), report };
+    return assembleGlb(json, bin);
 }
+
+/**
+ * The building clipped to its footprint (pipeline K, after the base cleanup): every surface, at any height, cut where it
+ * crosses the footprint's outline pushed out by marginM, and the pieces outside dropped. A triangle with a corner outside is
+ * split along each outline edge's offset line it crosses (the line's zero found on each triangle edge from the ends in one
+ * fixed order, so neighbours share the cut), and each piece is kept or dropped by where its centre stands. Every vertex
+ * attribute is carried (UVs, normals), so the textured twin is clipped the same way. The openings the cut leaves are for the
+ * fill (fillOpenLoops) to close.
+ */
+export function clipToFootprint(bytes: Uint8Array, loops: Vec2[][], marginM: number): { glb: Buffer; report: ClipReport } {
+    const glb = parseGlbBytes(bytes);
+    const dv = new DataView(glb.bin.buffer, glb.bin.byteOffset, glb.bin.byteLength);
+    const report: ClipReport = { cutTriangles: 0, removedTriangles: 0, removedAreaM2: 0, marginM };
+    const outside = (x: number, z: number) => signedFootprintDistance(x, z, loops) - marginM;
+    // each outline edge's line, pushed out by the margin: its outward normal is the side a point just off its middle stands outside
+    const lines: Array<{ key: string; g: (v: Vx) => number }> = [];
+    loops.forEach((loop, li) => loop.forEach((a, i) => {
+        const b = loop[(i + 1) % loop.length], dx = b[0] - a[0], dz = b[1] - a[1], l = Math.hypot(dx, dz);
+        if (!(l > 0)) return;
+        let nx = dz / l, nz = -dx / l;
+        const mx = (a[0] + b[0]) / 2, mz = (a[1] + b[1]) / 2;
+        if (signedFootprintDistance(mx + nx * 1e-3, mz + nz * 1e-3, loops) < 0) { nx = -nx; nz = -nz; }
+        lines.push({ key: `fp${li}.${i}`, g: v => (v.p[0] - a[0]) * nx + (v.p[2] - a[1]) * nz - marginM });
+    }));
+    const area = (poly: Vx[]) => { let s = 0; for (let k = 1; k + 1 < poly.length; k++) s += Math.hypot(...cross3(sub3(poly[k].p, poly[0].p), sub3(poly[k + 1].p, poly[0].p)) as [number, number, number]) / 2; return s; };
+    const centreOutside = (poly: Vx[]) => outside(poly.reduce((a, v) => a + v.p[0], 0) / poly.length, poly.reduce((a, v) => a + v.p[2], 0) / poly.length) > 0;
+    const appended: Array<{ pr: PrimRead; polys: Vx[][] }> = [];
+    for (const pr of readPrims(glb)) {
+        const kept: Vx[][] = [];
+        const cache = new Map<string, Vx>();
+        for (let t = 0; t + 2 < pr.I.length; t += 3) {
+            const ids = [pr.I[t], pr.I[t + 1], pr.I[t + 2]];
+            if (ids[0] === ids[1] || ids[1] === ids[2] || ids[0] === ids[2]) continue;
+            const tri = ids.map(i => vertexOf(pr, i));
+            if (tri.every(v => outside(v.p[0], v.p[2]) < 0)) continue;
+            let polys: Vx[][] = [tri];
+            for (const { key, g } of lines) {
+                if (!polys.some(poly => { const gs = poly.map(g); return Math.min(...gs) < -1e-9 && Math.max(...gs) > 1e-9; })) continue;
+                polys = polys.flatMap(poly => split(poly, g, key, pr, cache)).filter(q => q.length >= 3);
+            }
+            const inside = polys.filter(poly => !centreOutside(poly));
+            if (inside.length === 1 && polys.length === 1) continue;
+            // the original goes; what lies inside is appended
+            for (const e of [t + 1, t + 2]) { const o = pr.idxBase + e * pr.idxStride; if (pr.idxSize === 4) dv.setUint32(o, pr.I[t], true); else if (pr.idxSize === 2) dv.setUint16(o, pr.I[t], true); else dv.setUint8(o, pr.I[t]); }
+            for (const poly of polys) if (centreOutside(poly)) report.removedAreaM2 += area(poly);
+            if (inside.length) { report.cutTriangles++; kept.push(...inside); } else report.removedTriangles++;
+        }
+        if (kept.length) appended.push({ pr, polys: kept });
+    }
+    report.removedAreaM2 = Math.round(report.removedAreaM2);
+    return { glb: appendPieces(glb, appended, { sbFootprintClip: { version: LATTICE_STITCH_VERSION, provenance: `as-scanned: the scan cut at the footprint's outline plus ${marginM} m` } }), report };
+}
+
+export interface ClipReport { cutTriangles: number; removedTriangles: number; removedAreaM2: number; marginM: number }
 
 /** A welded view of a GLB's live triangles: positions, faces, and which faces belong to rebuilt walls. */
 function welded(bytes: Uint8Array, P: LatticeStitchParams): { pos: number[][]; tris: number[][]; wall: number[]; idOf: (p: ArrayLike<number>) => number | undefined } {
@@ -438,8 +500,12 @@ function uvShear(p: number[][], uv: number[][]): number {
  * infill: it takes that facade's straightened photo at that very spot, through the wall's own planar mapping (the photo where
  * it reached, the facade's repeats where it did not). Any other takes the photo at its triangle's corners (a material all
  * three share, their own UVs, interpolated over the piece), only when that mapping is a plain copy of the triangle's shape
- * (texels per metre within a few times its material's own, no more than maxShear sheared); the rest is clay. Undefined when
- * the GLB has no textured triangle.
+ * (texels per metre within a few times its material's own, no more than maxShear sheared). The rest, where no photo reached
+ * (a wall a neighbour hid, user decision 2026-10-28), continues the nearest rebuilt facade facing the same way (facing within
+ * continueFacingMin; nearest by its distance outside that facade's photo in the plane plus the planes' distance apart, at most
+ * continueMaxM): that facade's own planar mapping carried on across it, the photo repeating past its edges (the facade's
+ * material with a repeating sampler); labelled generated. Clay only where no such facade stands. Undefined when the GLB has
+ * no textured triangle.
  */
 function appendTexturedTriangles(bytes: Uint8Array, tris: number[][][], name: string, method: string, pieces?: Piece[], P: LatticeStitchParams = LATTICE_STITCH_PARAMS): Buffer | undefined {
     if (!tris.length) return undefined;
@@ -478,7 +544,36 @@ function appendTexturedTriangles(bytes: Uint8Array, tris: number[][][], name: st
         }
         return undefined;
     });
-    let maps: Array<{ material: number; uv: number[][]; wall?: boolean } | undefined> = parts.map(({ parent, p: f, w }) => {
+    // a facade's material drawn repeating (its photo carried on past its edges), made once per facade material
+    const repeating = new Map<number, number>();
+    const repeatOf = (mat: number) => {
+        let r = repeating.get(mat);
+        if (r !== undefined) return r;
+        const src = json.materials[mat], tex = json.textures[src.pbrMetallicRoughness.baseColorTexture.index];
+        json.samplers ??= [];
+        json.samplers.push({ magFilter: 9729, minFilter: 9987, wrapS: 10497, wrapT: 10497 });
+        json.textures.push({ ...tex, sampler: json.samplers.length - 1 });
+        json.materials.push({ ...src, name: `${src.name ?? 'facade'}_continued`, pbrMetallicRoughness: { ...src.pbrMetallicRoughness, baseColorTexture: { ...src.pbrMetallicRoughness.baseColorTexture, index: json.textures.length - 1 } }, doubleSided: true });
+        r = json.materials.length - 1;
+        repeating.set(mat, r);
+        return r;
+    };
+    // where no photo reached: the nearest rebuilt facade facing the same way, its mapping continued
+    const continued = (f: number[][], m: number[], A: number): { material: number; uv: number[][]; continued: true } | undefined => {
+        let best: { material: number; uv: number[][]; continued: true } | undefined, bestD = P.continueMaxM;
+        for (const wm of walls) {
+            if (Math.abs(dot(m, wm.n)) < P.continueFacingMin * A) continue;
+            const uv = f.map(p => [dot(wm.U, p) + wm.u0, dot(wm.V, p) + wm.v0]);
+            // how far outside the photo, in metres along each axis (uv per metre is the axis's length), and the planes apart
+            const du = Math.max(0, -Math.min(...uv.map(x => x[0])), Math.max(...uv.map(x => x[0])) - 1) / (Math.hypot(wm.U[0], wm.U[1], wm.U[2]) || 1);
+            const dvv = Math.max(0, -Math.min(...uv.map(x => x[1])), Math.max(...uv.map(x => x[1])) - 1) / (Math.hypot(wm.V[0], wm.V[1], wm.V[2]) || 1);
+            const dd = f.map(p => dot(p, wm.n)), off = Math.max(0, wm.dLo - Math.min(...dd), Math.max(...dd) - wm.dHi);
+            const d = Math.hypot(du, dvv) + off;
+            if (d < bestD) { bestD = d; best = { material: repeatOf(wm.material), uv, continued: true }; }
+        }
+        return best;
+    };
+    let maps: Array<{ material: number; uv: number[][]; wall?: boolean; continued?: boolean } | undefined> = parts.map(({ parent, p: f, w }) => {
         const m = cross3(sub3(f[1], f[0]), sub3(f[2], f[0])), A = Math.hypot(m[0], m[1], m[2]);
         if (!(A > 1e-12)) return undefined;
         // infill on a rebuilt facade: the nearest wall it lies on
@@ -493,7 +588,7 @@ function appendTexturedTriangles(bytes: Uint8Array, tris: number[][][], name: st
         }
         if (best) return best;
         const c = cornerMap[parent];
-        return c ? { material: c.material, uv: w.map(b => [0, 1].map(k => b[0] * c.uv[0][k] + b[1] * c.uv[1][k] + b[2] * c.uv[2][k])) } : undefined;
+        return c ? { material: c.material, uv: w.map(b => [0, 1].map(k => b[0] * c.uv[0][k] + b[1] * c.uv[1][k] + b[2] * c.uv[2][k])) } : continued(f, m, A);
     });
     // a triangle all of whose pieces are kept and clay (most are inside the shell) goes back whole
     const kept = new Map<number, { n: number; clay: number }>();
@@ -531,9 +626,9 @@ function appendTexturedTriangles(bytes: Uint8Array, tris: number[][][], name: st
         json.accessors.push({ bufferView: push(idx, 34963), componentType: 5125, count: idx.length, type: 'SCALAR' });
         primitives.push({ attributes, indices: json.accessors.length - 1, material, mode: 4 });
     }
-    const onWall = maps.filter(x => x?.wall).length, textured = maps.filter(x => x && !x.wall).length;
+    const onWall = maps.filter(x => x?.wall).length, carried = maps.filter(x => x?.continued).length, textured = maps.filter(x => x && !x.wall && !x.continued).length;
     json.meshes.push({ name, primitives });
-    json.nodes.push({ name, mesh: json.meshes.length - 1, extras: { sbSeal: { version: LATTICE_STITCH_VERSION, provenance: { label: 'generated', method: `${method}; ${onWall} of ${parts.length} pieces lie on a rebuilt facade and take its straightened photo there (its repeats where the photo did not reach), ${textured} the photo at their triangle's corners, the rest clay` }, wallInfill: onWall, cornerTextured: textured, clay: parts.length - onWall - textured } } });
+    json.nodes.push({ name, mesh: json.meshes.length - 1, extras: { sbSeal: { version: LATTICE_STITCH_VERSION, provenance: { label: 'generated', method: `${method}; ${onWall} of ${parts.length} pieces lie on a rebuilt facade and take its straightened photo there (its repeats where the photo did not reach), ${textured} the photo at their triangle's corners, ${carried} where no photo reached continue the nearest rebuilt facade facing the same way (its photo carried on and repeating), the rest clay` }, wallInfill: onWall, cornerTextured: textured, continued: carried, clay: parts.length - onWall - textured - carried } } });
     json.scenes?.[json.scene ?? 0]?.nodes?.push(json.nodes.length - 1);
     const pad = (4 - (len % 4)) % 4;
     if (pad) { chunks.push(new Uint8Array(pad)); len += pad; }
