@@ -54,16 +54,8 @@ export function generatePoissonDiskKernel(numSamples: number = 24): Float32Array
     return kernel;
 }
 
-export const CINEMATIC_BOKEH_SHADER = {
-    vertexShader: `
-        varying vec2 vUv;
-        void main() {
-            vUv = uv;
-            gl_Position = vec4(position, 1.0);
-        }
-    `,
-    fragmentShader: `
-        uniform sampler2D tColor;
+/** Shared GLSL: uniforms, metric depth and the signed thin-lens circle of confusion (diameter, full-resolution pixels). */
+const COC_GLSL = `
         uniform sampler2D tDepth;
         uniform vec2 uResolution;
         uniform float uCameraNear;
@@ -78,12 +70,6 @@ export const CINEMATIC_BOKEH_SHADER = {
         uniform bool uIsLinearDepth;
         uniform bool uEnabled;
 
-        varying vec2 vUv;
-
-        // Golden Angle constant in radians (approx 137.507764 degrees)
-        const float GOLDEN_ANGLE = 2.39996323;
-        const int NUM_SAMPLES = 24;
-
         // Reads depth in meters
         float getMetricDepth(vec2 uv) {
             float rawDepth = texture2D(tDepth, uv).r;
@@ -96,7 +82,7 @@ export const CINEMATIC_BOKEH_SHADER = {
             return max(metricZ, 0.001);
         }
 
-        // Computes signed Circle of Confusion (CoC) in pixels
+        // Computes signed Circle of Confusion (CoC) in pixels (positive behind the plane of focus)
         float computeCoCPixels(float depthMeters) {
             float d = max(depthMeters, 0.01);
             float df = max(uFocusDistance, 0.01);
@@ -117,64 +103,136 @@ export const CINEMATIC_BOKEH_SHADER = {
 
             return clamp(cocPx, -uMaxBlurRadiusPx, uMaxBlurRadiusPx);
         }
+`;
+
+const QUAD_VERTEX = `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = vec4(position, 1.0);
+        }
+    `;
+
+/**
+ * Pass 1, at half resolution: the colour (4 bilinear taps = a 4 x 4 box) with each tap weighted 1 / (1 + luma) (Karis),
+ * so a sub-pixel highlight (a sun glint) is averaged in at the weight of its area instead of popping the whole texel;
+ * and, into a second target, the signed blur radius in half-resolution pixels (r; computeCoCPixels gives the radius in
+ * full-resolution pixels when uBokehScale is 0.5, as the viewport sets it) and the largest of the taps' (g). Both are
+ * mip-mapped, so the gather can read any footprint as one stable area average.
+ */
+export const CINEMATIC_BOKEH_PREFILTER_SHADER = {
+    vertexShader: QUAD_VERTEX,
+    fragmentShader: `
+        uniform sampler2D tColor;
+        uniform bool uWriteCoc;
+        ${COC_GLSL}
+        varying vec2 vUv;
+        void main() {
+            vec2 px = 1.0 / uResolution;
+            vec2 o[4];
+            o[0] = vec2(-1.0, -1.0); o[1] = vec2(1.0, -1.0); o[2] = vec2(-1.0, 1.0); o[3] = vec2(1.0, 1.0);
+            if (uWriteCoc) {
+                float sum = 0.0, far = 0.0;
+                for (int i = 0; i < 4; i++) {
+                    float c = computeCoCPixels(getMetricDepth(vUv + o[i] * 0.5 * px)) * 0.5;
+                    sum += c; far = max(far, abs(c));
+                }
+                gl_FragColor = vec4(sum * 0.25, far, 0.0, 1.0);
+                return;
+            }
+            vec4 acc = vec4(0.0); float wsum = 0.0;
+            for (int i = 0; i < 4; i++) {
+                vec4 c = texture2D(tColor, vUv + o[i] * px);
+                // the colour is premultiplied by coverage: weigh by the luma of what is drawn there
+                vec3 rgb = c.a > 1e-4 ? c.rgb / c.a : vec3(0.0);
+                float w = 1.0 / (1.0 + max(rgb.r, max(rgb.g, rgb.b)));
+                acc += c * w; wsum += w;
+            }
+            gl_FragColor = acc / max(wsum, 1e-6);
+        }
+    `
+};
+
+/**
+ * Pass 2, at half resolution: the gather. A golden-angle spiral of taps over the blur circle, as many as its area needs
+ * (8 to 64), each reading the prefiltered colour and blur radius at the mip level whose texel matches the spacing between
+ * taps, so nothing the taps skip over can flicker in and out as the view moves. A tap counts where its own blur reaches
+ * the centre (scatter as gather), so a sharp foreground never smears over the background behind it.
+ */
+export const CINEMATIC_BOKEH_SHADER = {
+    vertexShader: QUAD_VERTEX,
+    fragmentShader: `
+        uniform sampler2D tColorHalf;
+        uniform sampler2D tCocHalf;
+        uniform vec2 uHalfResolution;
+        ${COC_GLSL}
+        varying vec2 vUv;
+
+        // Golden Angle constant in radians (approx 137.507764 degrees)
+        const float GOLDEN_ANGLE = 2.39996323;
+        const int MAX_SAMPLES = 64;
 
         void main() {
-            vec4 centerColor = texture2D(tColor, vUv);
-
-            if (!uEnabled) {
+            vec4 centerColor = texture2D(tColorHalf, vUv);
+            vec2 centerCoc = texture2D(tCocHalf, vUv).rg;
+            // blur radius in half-resolution pixels (the prefilter stored it so)
+            float R = abs(centerCoc.r);
+            if (!uEnabled || R < 0.5) {
                 gl_FragColor = centerColor;
                 return;
             }
-
-            float centerDepth = getMetricDepth(vUv);
-            float centerCoC = computeCoCPixels(centerDepth);
-            float centerRadius = abs(centerCoC);
-
-            // Fast exit for sharp in-focus fragments
-            if (centerRadius < 0.5) {
-                gl_FragColor = centerColor;
-                return;
-            }
-
-            vec4 colorAccum = centerColor;
-            float weightAccum = 1.0;
-
-            vec2 invRes = 1.0 / uResolution;
+            float n = clamp(ceil(3.14159265 * R * R / 4.0), 8.0, float(MAX_SAMPLES));
+            float spacing = R * sqrt(3.14159265 / n);
+            float lod = log2(max(spacing, 1.0));
+            vec2 invRes = 1.0 / uHalfResolution;
             vec2 aspectCorrection = vec2(1.0 / max(uAnamorphicRatio, 0.5), 1.0);
-
-            // Multi-tap Golden Spiral Poisson distribution
-            for (int i = 1; i <= NUM_SAMPLES; i++) {
+            vec4 acc = centerColor;
+            float wsum = 1.0;
+            for (int i = 0; i < MAX_SAMPLES; i++) {
                 float fi = float(i);
+                if (fi >= n) break;
+                float r = R * sqrt((fi + 0.5) / n);
                 float theta = fi * GOLDEN_ANGLE;
-                float r = sqrt(fi / float(NUM_SAMPLES));
-
-                vec2 dir = vec2(cos(theta), sin(theta)) * aspectCorrection;
-                vec2 sampleUv = vUv + dir * (r * centerRadius) * invRes;
-
-                // Clamp to edge
-                sampleUv = clamp(sampleUv, vec2(0.0), vec2(1.0));
-
-                float sampleDepth = getMetricDepth(sampleUv);
-                float sampleCoC = computeCoCPixels(sampleDepth);
-                float sampleRadius = abs(sampleCoC);
-
-                // Depth weighting: avoid foreground bleeding over background,
-                // but allow background to blur smoothly behind foreground edges.
-                float weight = 1.0;
-                if (sampleDepth > centerDepth) {
-                    // Sample is in background: weight by whether sample itself is blurred
-                    weight = clamp((sampleRadius - r * centerRadius + 1.0) / 2.0, 0.0, 1.0);
-                } else {
-                    // Sample is in foreground: full weight to blend over background
-                    weight = clamp((sampleRadius - r * centerRadius + 1.0) / 2.0, 0.0, 1.0);
-                }
-
-                vec4 sampleColor = texture2D(tColor, sampleUv);
-                colorAccum += sampleColor * weight;
-                weightAccum += weight;
+                vec2 uv = clamp(vUv + vec2(cos(theta), sin(theta)) * aspectCorrection * r * invRes, vec2(0.0), vec2(1.0));
+                vec2 sc = textureLod(tCocHalf, uv, lod).rg;
+                // the tap's own blur radius (half px) must reach the centre
+                float sampleR = abs(sc.r);
+                float w = clamp((sampleR - r) / spacing + 1.0, 0.0, 1.0);
+                vec4 c = textureLod(tColorHalf, uv, lod);
+                vec3 rgb = c.a > 1e-4 ? c.rgb / c.a : vec3(0.0);
+                w /= 1.0 + max(rgb.r, max(rgb.g, rgb.b));
+                acc += c * w; wsum += w;
             }
+            // the centre tap was not Karis-weighted when it was added: weigh it like the rest
+            vec3 crgb = centerColor.a > 1e-4 ? centerColor.rgb / centerColor.a : vec3(0.0);
+            float cw = 1.0 / (1.0 + max(crgb.r, max(crgb.g, crgb.b)));
+            acc += centerColor * (cw - 1.0); wsum += cw - 1.0;
+            gl_FragColor = acc / max(wsum, 1e-6);
+        }
+    `
+};
 
-            gl_FragColor = colorAccum / max(weightAccum, 0.0001);
+/**
+ * Pass 3, at full resolution: the sharp frame where the blur is under a pixel, the gathered blur (bilinear from half
+ * resolution) where it is larger, blended smoothly between (0.5 to 2 px radius), so a pixel near the plane of focus
+ * never snaps between sharp and soft as the focus or the view moves.
+ */
+export const CINEMATIC_BOKEH_COMPOSITE_SHADER = {
+    vertexShader: QUAD_VERTEX,
+    fragmentShader: `
+        uniform sampler2D tColor;
+        uniform sampler2D tBlurHalf;
+        uniform sampler2D tCocHalf;
+        ${COC_GLSL}
+        varying vec2 vUv;
+        void main() {
+            vec4 sharp = texture2D(tColor, vUv);
+            if (!uEnabled) { gl_FragColor = sharp; return; }
+            float radius = abs(computeCoCPixels(getMetricDepth(vUv)));
+            // a blurred foreground spreads over sharp pixels beside it: the half-res neighbourhood's largest blur, in full px
+            float spread = textureLod(tCocHalf, vUv, 1.0).g * 2.0;
+            float t = smoothstep(0.5, 2.0, max(radius, spread));
+            gl_FragColor = mix(sharp, texture2D(tBlurHalf, vUv), t);
         }
     `
 };
@@ -183,7 +241,13 @@ export const CINEMATIC_BOKEH_SHADER = {
  * Professional real-time Cinematic Depth-of-Field and Bokeh post-processing pass.
  */
 export class CinematicBokehPass {
+    /** The gather; its uniforms are shared by the prefilter and composite materials (one set of lens values). */
     private material: THREE.ShaderMaterial;
+    private prefilter: THREE.ShaderMaterial;
+    private composite: THREE.ShaderMaterial;
+    private colorHalf: THREE.WebGLRenderTarget | null = null;
+    private cocHalf: THREE.WebGLRenderTarget | null = null;
+    private blurHalf: THREE.WebGLRenderTarget | null = null;
     private quadCamera: THREE.OrthographicCamera;
     private quadScene: THREE.Scene;
     private quadMesh: THREE.Mesh;
@@ -236,6 +300,10 @@ export class CinematicBokehPass {
             depthTest: false,
             depthWrite: false
         });
+        const shared = this.material.uniforms;
+        Object.assign(shared, { tColorHalf: { value: null }, tCocHalf: { value: null }, tBlurHalf: { value: null }, uHalfResolution: { value: new THREE.Vector2(Math.ceil(resWidth / 2), Math.ceil(resHeight / 2)) }, uWriteCoc: { value: false } });
+        this.prefilter = new THREE.ShaderMaterial({ uniforms: shared, vertexShader: CINEMATIC_BOKEH_PREFILTER_SHADER.vertexShader, fragmentShader: CINEMATIC_BOKEH_PREFILTER_SHADER.fragmentShader, depthTest: false, depthWrite: false });
+        this.composite = new THREE.ShaderMaterial({ uniforms: shared, vertexShader: CINEMATIC_BOKEH_COMPOSITE_SHADER.vertexShader, fragmentShader: CINEMATIC_BOKEH_COMPOSITE_SHADER.fragmentShader, depthTest: false, depthWrite: false });
 
         this.quadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
         this.quadScene = new THREE.Scene();
@@ -394,8 +462,23 @@ export class CinematicBokehPass {
         return { ...this.params };
     }
 
+    /** A half-resolution target (half float); mip-mapped for the gather's footprints when `mips`. */
+    private half(current: THREE.WebGLRenderTarget | null, w: number, h: number, mips: boolean): THREE.WebGLRenderTarget {
+        if (current && current.width === w && current.height === h) return current;
+        current?.dispose();
+        const t = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, format: THREE.RGBAFormat, depthBuffer: false, magFilter: THREE.LinearFilter, minFilter: mips ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter, generateMipmaps: mips });
+        return t;
+    }
+
+    private draw(renderer: THREE.WebGLRenderer, material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget | null): void {
+        this.quadMesh.material = material;
+        renderer.setRenderTarget(target);
+        renderer.render(this.quadScene, this.quadCamera);
+    }
+
     /**
-     * Executes the bokeh render pass.
+     * Executes the bokeh render pass: prefilter (colour and blur radius at half resolution, mip-mapped), gather at half
+     * resolution, composite at full resolution into `target` (the canvas when null; the current target when undefined).
      */
     public render(
         renderer: THREE.WebGLRenderer,
@@ -405,18 +488,30 @@ export class CinematicBokehPass {
         height: number,
         target?: THREE.WebGLRenderTarget | null
     ): void {
-        this.material.uniforms.tColor.value = colorTexture;
-        this.material.uniforms.tDepth.value = depthTexture;
-        this.material.uniforms.uResolution.value.set(width, height);
+        const u = this.material.uniforms;
+        u.tColor.value = colorTexture;
+        u.tDepth.value = depthTexture;
+        u.uResolution.value.set(width, height);
+        const hw = Math.max(1, Math.ceil(width / 2)), hh = Math.max(1, Math.ceil(height / 2));
+        u.uHalfResolution.value.set(hw, hh);
+        this.colorHalf = this.half(this.colorHalf, hw, hh, true);
+        this.cocHalf = this.half(this.cocHalf, hw, hh, true);
+        this.blurHalf = this.half(this.blurHalf, hw, hh, false);
 
         const prevTarget = renderer.getRenderTarget();
-        if (target !== undefined) {
-            renderer.setRenderTarget(target);
-        }
-
-        renderer.render(this.quadScene, this.quadCamera);
-
-        if (target !== undefined) {
+        const out = target !== undefined ? target : prevTarget;
+        try {
+            u.uWriteCoc.value = false;
+            this.draw(renderer, this.prefilter, this.colorHalf);
+            u.uWriteCoc.value = true;
+            this.draw(renderer, this.prefilter, this.cocHalf);
+            u.tColorHalf.value = this.colorHalf.texture;
+            u.tCocHalf.value = this.cocHalf.texture;
+            this.draw(renderer, this.material, this.blurHalf);
+            u.tBlurHalf.value = this.blurHalf.texture;
+            this.draw(renderer, this.composite, out);
+        } finally {
+            this.quadMesh.material = this.material;
             renderer.setRenderTarget(prevTarget);
         }
     }
@@ -426,6 +521,10 @@ export class CinematicBokehPass {
      */
     public dispose(): void {
         this.material.dispose();
+        this.prefilter.dispose();
+        this.composite.dispose();
+        this.colorHalf?.dispose(); this.cocHalf?.dispose(); this.blurHalf?.dispose();
+        this.colorHalf = this.cocHalf = this.blurHalf = null;
         this.quadMesh.geometry.dispose();
     }
 }

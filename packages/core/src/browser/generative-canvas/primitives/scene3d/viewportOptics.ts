@@ -30,8 +30,12 @@ import { lensMeasuresFocus } from './viewportFocus';
 
 /** Widest overscan rendered for distortion (2x the frame on each axis = 4x the pixels). */
 export const MAX_OVERSCAN = 2;
-/** Depth-of-field sample spread cap, as a fraction of the frame height (24 taps stay smooth up to about this). */
-export const MAX_BLUR_RADIUS_FRAME_FRACTION = 0.025;
+/**
+ * Depth-of-field blur radius cap, as a fraction of the frame height. The pass reads each tap's footprint from a mip chain,
+ * so a wide blur stays smooth; the cap only bounds what a lens far wider than any real one would ask for (an 85 mm f/1.4
+ * focused at 2 m blurs infinity to a radius of about 5.6% of a full-frame height).
+ */
+export const MAX_BLUR_RADIUS_FRAME_FRACTION = 0.12;
 
 export type ViewportOpticsPassName = 'depth-of-field' | 'lens-distortion' | 'output' | (string & {});
 
