@@ -166,6 +166,24 @@ async function polyHavenPreviews(id: string, signal?: AbortSignal): Promise<NonN
     };
 }
 
+/**
+ * A set's colour preview (its publisher's 1K JPEG), cached under build/texture-library/previews: what the tile-only harvest
+ * measures a set's texture from (pipeline-k/material-harvest.ts). Undefined when the publisher lists none.
+ */
+export async function libraryColourPreview(entry: TextureLibraryEntry, repoRoot: string, signal?: AbortSignal): Promise<Uint8Array | undefined> {
+    const dir = path.join(repoRoot, 'build', 'texture-library', 'previews');
+    const file = path.join(dir, `${entry.id}.jpg`);
+    if (fs.existsSync(file)) return fs.readFileSync(file);
+    const previews = entry.previews?.color ? entry.previews : entry.publisher === 'Poly Haven' ? await polyHavenPreviews(entry.id, signal) : {};
+    if (!previews.color) return undefined;
+    const r = await fetchRetry(previews.color, signal);
+    if (!r.ok) return undefined;
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, bytes);
+    return bytes;
+}
+
 /** Whether a set has been measured at the current STATS_VERSION, or failed to be (a failure is not retried). */
 export function libraryEntryMeasured(repoRoot: string, id: string): boolean {
     try { const st = JSON.parse(fs.readFileSync(statsFile(repoRoot, id), 'utf8')) as MeasuredStats; return !!st.error || st.version === STATS_VERSION; } catch { return false; }

@@ -9,15 +9,17 @@
 
 /**
  * The library sets of pipeline K's material regions (material-regions.ts): for each appearance class, the texture
- * library set nearest its colour and its wanted finish (REGION_FINISH; searchTextureLibrary for the wall, among the sets whose colour has been
- * measured and whose publisher gives a real size and a normal and roughness map), fetched from the library bucket (fetchLibrarySets) and prepared
- * small by the engine (surface.prepare_material_maps), cached beside the set for later builds.
+ * library set nearest its colour as a dielectric surface (REGION_FINISH; searchTextureLibrary among the sets whose colour
+ * has been measured, whose publisher gives a real size and a normal and roughness map, and that are not metal), fetched
+ * from the library bucket (fetchLibrarySets) and prepared small by the engine (surface.prepare_material_maps), cached
+ * beside the set for later builds.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import { searchTextureLibrary, type TextureLibraryEntry } from '../../../../common/spatial/texture-library-index';
-import { fetchLibrarySets, loadTextureLibraryIndex, measureLibraryEntries } from '../../texture-library';
+import { fetchLibrarySets, libraryColourPreview, loadTextureLibraryIndex, measureLibraryEntries } from '../../texture-library';
+import { libraryTextureEnergy, textureDistance } from './material-harvest';
 import { NativePythonRunnerService } from '../../native-python-runner-service';
 import { decodeImageInMemory } from '../tile-texture-transfer';
 import type { RegionClass, RegionSet } from './material-regions';
@@ -26,39 +28,26 @@ import type { RegionClass, RegionSet } from './material-regions';
 const PREPARED_SIZE = 256;
 
 /**
- * The finish each class is ranked toward, against the sets' measured roughness and metalness: the wall class is matte
- * and not metal (whatever its colour, a wall is never drawn as metal), ranked by its colour as well. The darker classes
- * are drawn only in openings, where metal is allowed: they take a bare metal (measured metalness at least bareMetallic;
- * a set whose mean lands between is a mix of metal and dirt, or a misread map), ranked by hue, hue spread and a flat
- * sheet's normal relief, never by lightness (the photo, not the set, gives the colour). Its metalness is drawn scaled to
- * `metallic`: the photo stays the colour, so a fully metal bay would show only the scene's reflection; part metal keeps
- * the photo's darkness with some sheen.
+ * The finish every class is ranked toward, against the sets' measured roughness and metalness: matte and not metal,
+ * whatever its colour (a dark class is weathered or shaded stone as often as anything; a colour never makes a metal). A
+ * set measured at maxMetallic or more is left out.
  */
-export const REGION_FINISH = { wall: { roughness: 0.8, metallic: 0, normalTiltDeg: 3 }, opening: { metallic: 0.2, bareMetallic: 0.9, normalTiltDeg: 2 } } as const;
+export const REGION_FINISH = { roughness: 0.8, metallic: 0, normalTiltDeg: 3, maxMetallic: 0.5 } as const;
 
 /**
- * The wall is ranked in two passes: a shortlist by colour and finish, measured (normal relief among the statistics), then
+ * Each class is ranked in two passes: a shortlist by colour and finish, measured (normal relief among the statistics), then
  * ranked again with the relief. A wall's grain is the tile-scale relief of dressed masonry or render, a few degrees of
  * normal tilt; a rough rock of the same colour (15 degrees and more) reads as rubble or granite under a low sun.
  */
-const WALL_SHORTLIST = 24;
-
-const isBareMetal = (e: TextureLibraryEntry) => !!e.colour && e.metallic !== undefined && e.metallic >= REGION_FINISH.opening.bareMetallic;
+const SHORTLIST = 24;
 
 /**
- * The bare metals nearest an opening class by hue and hue spread (the library search's units), never by lightness, plus,
- * when `withRelief`, the normal relief toward a flat sheet's (the search's units; unmeasured counts one unit). Best first.
+ * The tile-only harvest's pick (material-harvest.ts), for a class with a measured texture: its own colour shortlist (the
+ * library search's nearest TEXTURE_SHORTLIST among the sets on that class's SHORTLIST; never another class's, whose
+ * nearer colours would crowd out the sets of the right grain) ranked again by colour and texture together, each measured as the tiles would
+ * show the set (its preview at the class's texel and the set's real size), each distance over its median on the shortlist.
  */
-function rankBareMetals(pool: TextureLibraryEntry[], c: RegionClass, withRelief: boolean): Array<{ entry: TextureLibraryEntry; distance: number }> {
-    const chroma = (v: readonly number[]) => Math.hypot(v[1], v[2]);
-    const want = REGION_FINISH.opening.normalTiltDeg;
-    return pool.filter(isBareMetal).map(e => {
-        const L = e.colour!.meanLab, S = e.colour!.spreadLab;
-        let d = Math.hypot(L[1] - c.meanLab[1], L[2] - c.meanLab[2]) / 10 + Math.abs(chroma(S) - chroma(c.spreadLab)) / 6;
-        if (withRelief) d += e.normalTiltRmsDeg === undefined ? 1 : Math.abs(Math.log((e.normalTiltRmsDeg + 1) / (want + 1))) / Math.log(1.3);
-        return { entry: e, distance: d };
-    }).sort((a, b) => a.distance - b.distance || a.entry.id.localeCompare(b.entry.id));
-}
+const TEXTURE_SHORTLIST = 12, TEXTURE_WEIGHT = 1;
 
 const linearToSrgb = (c: number) => (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
 
@@ -73,39 +62,44 @@ export async function resolveRegionSets(classes: RegionClass[], opts: { repoRoot
     const index = loadTextureLibraryIndex(repoRoot);
     if (!index) throw new Error(`the texture library index has not been built (assets/textures/library/index.json under ${repoRoot})`);
     const mapped = index.sets.filter(e => e.colour && e.maps.color && e.maps.normal && (e.maps.roughness || e.maps.arm));
-    const pool = mapped.filter(e => e.realSizeM);
-    if (!pool.length) throw new Error('no texture library set has a measured colour, a real size and normal and roughness maps');
-    // the opening classes may also take a set without a publisher size (most bare-metal sets have none), tiled at
-    // the median size of the library's sized bare metals (metalness at least bareMetallic; part-metal sets such as whole
-    // curtain-wall facades tile at a building's scale, not a sheet's): an estimate, labelled generated with its reason
-    const sizedMetals = pool.filter(e => e.metallic !== undefined && e.metallic >= REGION_FINISH.opening.bareMetallic).map(e => e.realSizeM!).sort((a, b) => Math.max(...a) - Math.max(...b));
-    const metalSize = sizedMetals.length ? sizedMetals[Math.floor(sizedMetals.length / 2)] : undefined;
-    const wallQuery = (c: RegionClass) => ({ colorSrgb: c.meanLinear.map(linearToSrgb) as [number, number, number], colorSpreadLab: c.spreadLab, roughness: REGION_FINISH.wall.roughness, metallic: REGION_FINISH.wall.metallic });
-    // the wall's shortlist measured first, so its normal relief can be ranked
-    const shortlist = new Set<string>();
-    for (const c of classes.filter(c => c.wall)) for (const h of searchTextureLibrary({ ...index, sets: pool }, { ...wallQuery(c), limit: WALL_SHORTLIST }).hits) shortlist.add(h.entry.id);
+    const notMetal = (e: TextureLibraryEntry) => !(e.metallic !== undefined && e.metallic >= REGION_FINISH.maxMetallic);
+    const pool = mapped.filter(e => e.realSizeM && notMetal(e));
+    if (!pool.length) throw new Error('no texture library set that is not metal has a measured colour, a real size and normal and roughness maps');
+    const query = (c: RegionClass) => ({ colorSrgb: c.meanLinear.map(linearToSrgb) as [number, number, number], colorSpreadLab: c.spreadLab, roughness: REGION_FINISH.roughness, metallic: REGION_FINISH.metallic });
+    // every class's shortlist measured first, so its normal relief can be ranked (and a set measured as metal left out)
+    const own = classes.map(c => new Set(searchTextureLibrary({ ...index, sets: pool }, { ...query(c), limit: SHORTLIST }).hits.map(h => h.entry.id)));
+    const shortlist = new Set(own.flatMap(o => [...o]));
     if (shortlist.size) {
-        opts.progress?.(`material regions: measuring ${shortlist.size} wall candidates`);
+        opts.progress?.(`material regions: measuring ${shortlist.size} candidates`);
         await measureLibraryEntries(pool.filter(e => shortlist.has(e.id)), { repoRoot, ...(opts.signal ? { signal: opts.signal } : {}) });
     }
-    // the opening classes' bare metals: a shortlist by hue, measured for their relief, then ranked with it
-    const metalPool = metalSize ? mapped : pool;
-    const metalShortlist = new Set<string>();
-    for (const c of classes.filter(c => !c.wall)) for (const h of rankBareMetals(metalPool, c, false).slice(0, WALL_SHORTLIST)) metalShortlist.add(h.entry.id);
-    if (metalShortlist.size) {
-        opts.progress?.(`material regions: measuring ${metalShortlist.size} metal candidates`);
-        await measureLibraryEntries(metalPool.filter(e => metalShortlist.has(e.id)), { repoRoot, ...(opts.signal ? { signal: opts.signal } : {}) });
-    }
     const reloaded = (loadTextureLibraryIndex(repoRoot) ?? index).sets;
-    const measured = reloaded.filter(e => shortlist.has(e.id) && e.colour);
-    const metals = reloaded.filter(e => metalShortlist.has(e.id) && (e.realSizeM || metalSize) && e.maps.normal && (e.maps.roughness || e.maps.arm));
-    const chosen = classes.map(c => {
-        const hit = c.wall
-            ? searchTextureLibrary({ ...index, sets: measured }, { ...wallQuery(c), normalTiltDeg: REGION_FINISH.wall.normalTiltDeg, limit: 1 }).hits[0]
-            : rankBareMetals(metals, c, true)[0];
-        if (!hit) throw new Error(c.wall ? `no texture library set for appearance class ${c.index}` : `no bare metal set (measured metalness at least ${REGION_FINISH.opening.bareMetallic}) for opening class ${c.index}`);
+    const measured = reloaded.filter(e => shortlist.has(e.id) && e.colour && notMetal(e));
+    const textured = new Map<number, { colourDistance: number; textureDistance: number; setEnergy: number[]; candidates: number }>();
+    const chosen = await Promise.all(classes.map(async (c, k) => {
+        const mine = measured.filter(e => own[k].has(e.id));
+        if (c.texture) {
+            const hits = searchTextureLibrary({ ...index, sets: mine }, { ...query(c), normalTiltDeg: REGION_FINISH.normalTiltDeg, limit: TEXTURE_SHORTLIST }).hits.filter(h => h.entry.realSizeM);
+            const scored: Array<{ hit: (typeof hits)[number]; tex: number; energy: number[] }> = [];
+            for (const hit of hits) {
+                const bytes = await libraryColourPreview(hit.entry, repoRoot, opts.signal).catch(() => undefined);
+                if (!bytes) continue;
+                const e = libraryTextureEnergy(decodeImageInMemory(bytes), hit.entry.realSizeM!, c.texture.texelM);
+                const tex = textureDistance(c.texture.energy, e.energy);
+                if (Number.isFinite(tex)) scored.push({ hit, tex, energy: e.energy });
+            }
+            if (scored.length) {
+                const med = (v: number[]) => { const q = [...v].sort((a, b) => a - b); return q[q.length >> 1] || 1; };
+                const dc = med(scored.map(x => x.hit.distance)), dt = med(scored.map(x => x.tex));
+                const best = scored.reduce((a, b) => (b.hit.distance / dc + TEXTURE_WEIGHT * b.tex / dt < a.hit.distance / dc + TEXTURE_WEIGHT * a.tex / dt ? b : a));
+                textured.set(k, { colourDistance: best.hit.distance, textureDistance: Math.round(best.tex * 1000) / 1000, setEnergy: best.energy.map(v => Math.round(v * 1e6) / 1e6), candidates: scored.length });
+                return best.hit;
+            }
+        }
+        const hit = searchTextureLibrary({ ...index, sets: mine }, { ...query(c), normalTiltDeg: REGION_FINISH.normalTiltDeg, limit: 1 }).hits[0];
+        if (!hit) throw new Error(`no texture library set for appearance class ${c.index}`);
         return hit;
-    });
+    }));
     const fetched = await fetchLibrarySets([...new Set(chosen.map(h => h.entry.id))], { repoRoot, ...(opts.signal ? { signal: opts.signal } : {}), ...(opts.progress ? { progress: opts.progress } : {}) });
     if (fetched.missing.length) throw new Error(`texture library: ${fetched.missing.map(m => m.reason).join('; ')}`);
     const prepared = new Map<string, { normal: string; orm: string }>();
@@ -136,9 +130,8 @@ for j in json.load(open(${JSON.stringify(jobs)})):
     return chosen.map((hit, k) => {
         const files = prepared.get(hit.entry.id)!;
         return {
-            name: hit.entry.id, realSizeM: hit.entry.realSizeM ?? metalSize!, distance: hit.distance,
-            ...(!classes[k].wall && hit.entry.metallic ? { metalnessScale: REGION_FINISH.opening.metallic / hit.entry.metallic } : {}),
-            ...(hit.entry.realSizeM ? {} : { realSizeEstimate: `its publisher gives no real size; tiled at ${metalSize!.join(' x ')} m, the median size of the library's ${sizedMetals.length} sized bare-metal sets` }),
+            name: hit.entry.id, realSizeM: hit.entry.realSizeM!, distance: hit.distance,
+            ...(textured.has(k) ? { harvest: { ...textured.get(k)!, classEnergy: classes[k].texture!.energy, texelM: classes[k].texture!.texelM, grain: `generated: the set's detail finer than the tile's ${Math.round(classes[k].texture!.texelM * 100)} cm texel is its own, below the tile's resolution` } } : {}),
             normal: decodeImageInMemory(fs.readFileSync(files.normal)), orm: decodeImageInMemory(fs.readFileSync(files.orm))
         };
     });

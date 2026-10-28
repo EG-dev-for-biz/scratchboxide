@@ -299,7 +299,7 @@ export interface TexturedTwinOptions extends TexturedTwinInput {
 }
 
 /** What the material parameters image's channels mean (written beside it in the GLB). */
-export const MATERIAL_PARAMS_CHANNELS = 'R = glass weight 0..255 (the region confidence), G = index + 1 into courses[] (0 = no coursing read), B = metalness 0..255, A = 255';
+export const MATERIAL_PARAMS_CHANNELS = 'R = glass weight 0..255 (the region confidence), G = index + 1 into courses[] (0 = no coursing read), B = metalness 0..255, A = 255, or on a pane of glass its seed 1..254 (the viewer tilts each pane by a small angle of its own)';
 
 /** What the confidence image's channels mean (written beside it in the GLB). */
 export const CONFIDENCE_CHANNELS = 'R = index into provenance[], G = weight 0..255, B = ladder rung (TEXTURE_LADDER_RUNGS), A = 255 where a stage produced the texel';

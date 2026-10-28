@@ -33,6 +33,7 @@
  * ladder, bounded concurrency and a time budget so a district with hundreds of leaf photos still finishes).
  */
 
+import type { FittedPlane } from './window-fit';
 import * as jpegJs from 'jpeg-js';
 import { TEXTURE_LADDER_RUNGS, TEXTURE_RUNG_CLAY } from '../../../common/spatial/texture-pass-contracts';
 import { delightLinearRgb, linearToSrgb255, PHOTOGRAMMETRIC_DELIGHT, SRGB8_TO_LINEAR } from '../../../common/spatial/photogrammetric-delight';
@@ -160,7 +161,7 @@ function resizeToExact(img: RgbaImage8, width: number, height: number): RgbaImag
 }
 
 /** The twin of tile_refine's photo-textured output `texturedGlb` (its bytes) for the layer `layerKey`. */
-export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, opts?: { /** Each step as it starts and finishes (the run's step log). */ onStep?: (step: string, state: 'running' | 'done' | 'failed') => void; recreate?: TileRefineRecreateOptions; /** Pipeline K: the de-lit photos colour-matched per side and height band and their seams levelled (pipeline-k/texture-harmonize.ts), measured from this ground. */ harmonize?: { groundY: number }; /** Pipeline K: roughness, metalness and normal under the photos by appearance region (pipeline-k/material-regions.ts), one library set per class. */ materialRegions?: { sets: (classes: RegionClass[]) => Promise<RegionSet[]> } }): Promise<TileRefineTwin> {
+export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, opts?: { /** Each step as it starts and finishes (the run's step log). */ onStep?: (step: string, state: 'running' | 'done' | 'failed') => void; recreate?: TileRefineRecreateOptions; /** Pipeline K: the de-lit photos colour-matched per side and height band and their seams levelled (pipeline-k/texture-harmonize.ts), measured from this ground. */ harmonize?: { groundY: number }; /** Pipeline K: roughness, metalness and normal under the photos by appearance region (pipeline-k/material-regions.ts), one library set per class. */ materialRegions?: { sets: (classes: RegionClass[]) => Promise<RegionSet[]>; /** The tile-only harvest (material-harvest.ts): classes read from the wall alone, with their texture, for a pick by colour and texture. */ harvest?: boolean; /** The window fit's planes (window-fit.ts fittedPlanesOf): their windows drawn on the scan pieces lying on them. */ planes?: FittedPlane[] } }): Promise<TileRefineTwin> {
     const g = parseGlbBytes(texturedGlb);
     const json = JSON.parse(JSON.stringify(g.json));
     const materials: any[] = json.materials ?? (json.materials = []);
@@ -240,10 +241,10 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     let regionsPlan: MaterialRegionsPlan | undefined, regionsSkipped: string | undefined;
     if (opts?.materialRegions && finalImage.size) {
         opts.onStep?.('materials', 'running');
-        const classes = readRegionClasses(json, finalImage);
+        const classes = readRegionClasses(json, finalImage, undefined, opts.materialRegions.harvest ? { g } : undefined);
         if (!classes) regionsSkipped = 'no rebuilt facade photo to read appearance classes from';
         else {
-            try { regionsPlan = planMaterialRegions(g, json, finalImage, classes, await opts.materialRegions.sets(classes)); } catch (err) { regionsSkipped = `the library sets could not be resolved: ${err instanceof Error ? err.message : String(err)}`; }
+            try { regionsPlan = planMaterialRegions(g, json, finalImage, classes, await opts.materialRegions.sets(classes), opts.materialRegions.planes ?? []); } catch (err) { regionsSkipped = `the library sets could not be resolved: ${err instanceof Error ? err.message : String(err)}`; }
         }
         opts.onStep?.('materials', regionsSkipped ? 'failed' : 'done');
     }
@@ -299,7 +300,7 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
         provenance.push({ source: 'material-regions', label: 'generated', method: describeMaterialRegions(r), coverage: photoArea / total });
         const regionProvenance = [provenance.length - 1];
         if (r.texels.glass) {
-            provenance.push({ source: 'facade-material-reading', label: 'photo-inferred', method: "glass by the facade material reading's tile-only test (a regular lattice of regions darker than the wall, within the bays of facades with a pier rhythm): base colour the region's measured interior, roughness of float glass, dielectric", coverage: (photoArea / total) * (r.texels.glass / Math.max(1, r.texels.total)) });
+            provenance.push({ source: 'facade-material-reading', label: 'photo-inferred', method: "glass on the window fit's panes (the viewer reads them as the facade material reading's glass): the photo kept as their colour, roughness of float glass, dielectric", coverage: (photoArea / total) * (r.texels.glass / Math.max(1, r.texels.total)) });
             regionProvenance.push(provenance.length - 1);
         }
         json.samplers.push({ magFilter: 9729, minFilter: 9729, wrapS: 10497, wrapT: 10497 });
