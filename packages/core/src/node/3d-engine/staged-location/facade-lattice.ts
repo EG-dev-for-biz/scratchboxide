@@ -31,10 +31,12 @@ import { decodePng } from '../../texture-processing';
 import { cutScanToLattice, stitchLattice, watertightLatticeMesh, type CutReport, type StitchReport } from './pipeline-k/lattice-stitch';
 import { fittedPaneUvs, fittedWindowRects, fittedWindowUvs, WINDOW_FIT_VERSION, type WindowFitFile } from './window-fit';
 import { trustedReveal, type RevealDepthFile } from './reveal-depth';
+import { repeatTexture, type RepeatTextureReport } from './facade-repeat-texture';
+import { encodePng } from './png-encode';
 import * as fs from 'fs';
 import * as path from 'path';
 
-export const FACADE_LATTICE_VERSION = 'facade-lattice/14';
+export const FACADE_LATTICE_VERSION = 'facade-lattice/16';
 
 export const FACADE_LATTICE_PARAMS = {
     /**
@@ -157,12 +159,16 @@ export function windowGrid(lum: ArrayLike<number>, ns: number, nt: number, R = W
 /**
  * Window strips (pipeline K with a window fit): the fitted windows grouped into columns (windows whose spans along s overlap by
  * at least `overlap` of the narrower), each column split where its windows stand more than `maxGapM` apart up the wall (a
- * band, a setback), and every run of at least `minWindows` windows drawn as one strip from its lowest window's sill to its
- * highest window's head, at the column's median edges. The strip is recessed whole (its spandrels with it) between the piers
- * that stay on the wall, and its windows a further `windowInsetM`; the front edges of every step at least twice `bevelM` deep
+ * band, a setback), and every run of at least `minWindows` windows, or one at least `minStripM` tall (a fit that reads the column as one
+ * opening), drawn as one strip from its lowest window's sill to its
+ * highest window's head, at the column's median edges. Then bays: side by side (overlapping up the wall by half), two strips
+ * are one bay when the gap between them is under `mullionRatio` of the gaps beside it in their row (the narrower of the two
+ * neighbours: a mullion stands between two piers, a pier between two mullions, and a wide gap at a corner or a setback
+ * makes no pier a mullion); a row of equal gaps stays one strip per column. The bay is recessed whole (its
+ * spandrels and mullions with it) between the piers that stay on the wall, and its windows a further `windowInsetM`; the front edges of every step at least twice `bevelM` deep
  * are bevelled by `bevelM` at 45 degrees, so a pier's arris catches the light. Photo-inferred, read from the facade's own fit.
  */
-export const WINDOW_STRIPS = { overlap: 0.5, maxGapM: 2.5, minWindows: 2, windowInsetM: 0.05, bevelM: 0.04 };
+export const WINDOW_STRIPS = { overlap: 0.5, maxGapM: 2.5, minWindows: 2, minStripM: 5, mullionRatio: 0.6, windowInsetM: 0.05, bevelM: 0.04 };
 
 export function windowStrips(windows: Array<[number, number, number, number]>, R = WINDOW_STRIPS): Array<[number, number, number, number]> {
     const n = windows.length, parent = Array.from({ length: n }, (_, i) => i);
@@ -178,7 +184,7 @@ export function windowStrips(windows: Array<[number, number, number, number]>, R
         col.sort((a, b) => a[1] - b[1]);
         let run: Array<[number, number, number, number]> = [];
         const close = () => {
-            if (run.length >= R.minWindows) out.push([median(run.map(w => w[0])), Math.min(...run.map(w => w[1])), median(run.map(w => w[2])), Math.max(...run.map(w => w[3]))]);
+            if (run.length >= R.minWindows || (run.length && Math.max(...run.map(w => w[3])) - Math.min(...run.map(w => w[1])) >= R.minStripM)) out.push([median(run.map(w => w[0])), Math.min(...run.map(w => w[1])), median(run.map(w => w[2])), Math.max(...run.map(w => w[3]))]);
             run = [];
         };
         for (const w of col) {
@@ -186,6 +192,29 @@ export function windowStrips(windows: Array<[number, number, number, number]>, R
             run.push(w);
         }
         close();
+    }
+    return windowBays(out.sort((a, b) => a[0] - b[0] || a[1] - b[1]), R);
+}
+
+/** Strips side by side joined into bays across their mullions (WINDOW_STRIPS.mullionRatio); see windowStrips. */
+export function windowBays(strips: Array<[number, number, number, number]>, R = WINDOW_STRIPS): Array<[number, number, number, number]> {
+    const tOverlap = (a: number[], b: number[]) => Math.min(a[3], b[3]) - Math.max(a[1], b[1]) >= R.overlap * Math.min(a[3] - a[1], b[3] - b[1]);
+    const out: Array<[number, number, number, number]> = [];
+    const used = new Set<number>();
+    for (let i = 0; i < strips.length; i++) {
+        if (used.has(i)) continue;
+        // the row: every strip standing beside this one up the wall, left to right
+        const row = strips.map((x, k) => [x, k] as const).filter(([x, k]) => !used.has(k) && tOverlap(x, strips[i])).sort((a, b) => a[0][0] - b[0][0]);
+        row.forEach(([, k]) => used.add(k));
+        const gaps = row.slice(1).map(([x], j) => x[0] - row[j][0][2]);
+        // a gap against the narrower of its neighbours (none: it stays)
+        const beside = (j: number) => Math.min(j > 0 ? gaps[j - 1] : Infinity, j + 1 < gaps.length ? gaps[j + 1] : Infinity);
+        let bay: [number, number, number, number] = [...row[0][0]];
+        row.slice(1).forEach(([x], j) => {
+            if (Number.isFinite(beside(j)) && gaps[j] < R.mullionRatio * beside(j)) bay = [bay[0], Math.min(bay[1], x[1]), x[2], Math.max(bay[3], x[3])];
+            else { out.push(bay); bay = [...x]; }
+        });
+        out.push(bay);
     }
     return out.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
 }
@@ -215,6 +244,8 @@ export interface FacadeLatticeResult {
     recessFrom?: string;
     /** The window strips (WINDOW_STRIPS) recessed whole, [s0, t0, s1, t1] each, and their rebuilt cells: photo-inferred. */
     strips?: Array<[number, number, number, number]>; stripCells?: number;
+    /** The facade photo redrawn from its own repeats (facade-repeat-texture.ts): generated. */
+    repeatTexture?: RepeatTextureReport;
     /** Per cell (row-major, t then s): 1 when it was rebuilt, 0 when the photo does not cover it and the scan stays. */
     built: Uint8Array;
     /**
@@ -790,7 +821,7 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
         }
         const indices = acc(view(new Uint8Array(r.indices.buffer, r.indices.byteOffset, r.indices.byteLength), 34963), r.indices.length, 'SCALAR', 5125);
         json.meshes.push({ name: `facade_lattice_${f.facadeId}`, primitives: [{ attributes, indices, material, mode: 4 }] });
-        json.nodes.push({ name: `FacadeLattice_${f.facadeId}`, mesh: json.meshes.length - 1, extras: { sbFacadeLattice: { version: FACADE_LATTICE_VERSION, facadeId: f.facadeId, provenance: { lines: 'photo-inferred', depth: r.photoRecessCells ? `measured (median per cell, averaged along the row's repeats); ${r.photoRecessCells} window cells recessed as the straightened photo shows them (photo-inferred, ${r.recessFrom ?? "the photometric relief's contrast rule"})` : 'measured (median per cell, averaged along the row\'s repeats)', texture: f.textureFill ? { photo: 'tile photo', holes: f.textureFill } : 'tile photo' }, cells: r.cells, measuredShare: r.measuredShare, sLines: r.s.length, tLines: r.t.length, ...(r.windows ? { windowCells: windowCellsExtras(r) } : {}), ...(r.fittedWindows ? { windows: { uv: r.fittedWindows, ...(r.fittedPanes ? { panes: r.fittedPanes } : {}), label: 'photo-inferred', source: WINDOW_FIT_VERSION } } : {}) } } });
+        json.nodes.push({ name: `FacadeLattice_${f.facadeId}`, mesh: json.meshes.length - 1, extras: { sbFacadeLattice: { version: FACADE_LATTICE_VERSION, facadeId: f.facadeId, provenance: { lines: 'photo-inferred', depth: r.photoRecessCells ? `measured (median per cell, averaged along the row's repeats); ${r.photoRecessCells} window cells recessed as the straightened photo shows them (photo-inferred, ${r.recessFrom ?? "the photometric relief's contrast rule"})` : 'measured (median per cell, averaged along the row\'s repeats)', texture: f.textureFill || r.repeatTexture ? { photo: 'tile photo', ...(f.textureFill ? { holes: f.textureFill } : {}), ...(r.repeatTexture ? { repeats: r.repeatTexture } : {}) } : 'tile photo' }, cells: r.cells, measuredShare: r.measuredShare, sLines: r.s.length, tLines: r.t.length, ...(r.windows ? { windowCells: windowCellsExtras(r) } : {}), ...(r.fittedWindows ? { windows: { uv: r.fittedWindows, ...(r.fittedPanes ? { panes: r.fittedPanes } : {}), label: 'photo-inferred', source: WINDOW_FIT_VERSION } } : {}) } } });
         scene?.nodes?.push(json.nodes.length - 1);
     }
     bin.align4();
@@ -822,8 +853,15 @@ export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Ui
         // a depth read from Street View is used only when it is confident and resolved from flush; else the contrast rule
         const read = planeRects?.length ? reveal?.facades[String(f.facadeId)] : undefined;
         const depth = trustedReveal(read, reveal?.params) ? read : undefined;
-        const r = latticeFacade(f, { rgba: new Uint8Array(img.rgba), width: img.width, height: img.height }, facadeSamples(soup, f, P), P, mask, opts.photoRecess === true, planeRects, depth?.depthM);
-        if (r) { const w = fit ? fittedWindowUvs(fit, f.facadeId) : undefined, pw = w && fit ? fittedPaneUvs(fit, f.facadeId) : undefined; done.push({ f, r: { ...r, ...(w ? { fittedWindows: w } : {}), ...(pw ? { fittedPanes: pw } : {}), ...(depth && r.photoRecessCells ? { recessFrom: `${depth.depthM} m read from Street View's window reveals, ${depth.reason}` } : {}) }, png }); }
+        const r0 = latticeFacade(f, { rgba: new Uint8Array(img.rgba), width: img.width, height: img.height }, facadeSamples(soup, f, P), P, mask, opts.photoRecess === true, planeRects, depth?.depthM);
+        // with window strips, the facade's photo redrawn from its own repeats (generated): sharper, evener, its holes filled
+        let r = r0, tex: Uint8Array = png;
+        if (r0?.strips?.length && rects?.length) {
+            const toPx = (st: [number, number, number, number]): [number, number, number, number] => [(st[0] - f.orthoSMin) / f.pixel, (f.orthoTMax - st[3]) / f.pixel, (st[2] - f.orthoSMin) / f.pixel, (f.orthoTMax - st[1]) / f.pixel];
+            const rt = repeatTexture({ rgba: new Uint8Array(img.rgba), width: img.width, height: img.height }, f.pixel, rects, r0.strips.map(toPx), mask);
+            if (rt.report.texels) { tex = encodePng(img.width, img.height, rt.rgba, 4); r = { ...r0, repeatTexture: rt.report }; }
+        }
+        if (r) { const w = fit ? fittedWindowUvs(fit, f.facadeId) : undefined, pw = w && fit ? fittedPaneUvs(fit, f.facadeId) : undefined; done.push({ f, r: { ...r, ...(w ? { fittedWindows: w } : {}), ...(pw ? { fittedPanes: pw } : {}), ...(depth && r.photoRecessCells ? { recessFrom: `${depth.depthM} m read from Street View's window reveals, ${depth.reason}` } : {}) }, png: tex }); }
     }
     if (opts.stitch && done.length) {
         // the scan cut to the rebuilt cells (the same cut on the twin: the same triangles), the walls appended, the seams stitched.

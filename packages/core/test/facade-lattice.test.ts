@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { applyFacadeLattices, facadeSamples, latticeFacade, photoLattice, windowGrid, windowStrips, WINDOW_STRIPS, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
+import { applyFacadeLattices, facadeSamples, latticeFacade, photoLattice, windowBays, windowGrid, windowStrips, WINDOW_STRIPS, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
 import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { WINDOW_FIT_VERSION } from '../src/node/3d-engine/staged-location/window-fit';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
@@ -126,6 +126,23 @@ describe('facades on their photo lattice', () => {
         strips.forEach((st, i) => st.forEach((v, k) => expect(v).toBeCloseTo(want[i][k], 9)));
         // one window is no strip
         expect(windowStrips([[0.9, 0.7, 2.1, 2.3]])).toEqual([]);
+    });
+
+    it('joins window columns across a mullion into one bay, and leaves columns with equal gaps (piers) apart', () => {
+        // the ESB's tower faces: columns 1.4 m wide, 0.7 m mullions inside a bay, 2 m piers between bays
+        const cols: Array<[number, number, number, number]> = [[0, 0, 1.4, 30], [2.1, 0, 3.5, 30], [5.5, 0, 6.9, 30], [7.6, 0, 9, 30]];
+        const bays = windowBays(cols);
+        expect(bays).toHaveLength(2);
+        bays.forEach((b, i) => b.forEach((v, k) => expect(v).toBeCloseTo([[0, 0, 3.5, 30], [5.5, 0, 9, 30]][i][k], 9)));
+        // one column per bay (every gap a pier): nothing joins
+        expect(windowBays([[0, 0, 1.4, 30], [3.4, 0, 4.8, 30], [6.8, 0, 8.2, 30]])).toHaveLength(3);
+        // a wide gap at a corner or setback makes no pier a mullion
+        expect(windowBays([[0, 0, 1.4, 30], [2.1, 0, 3.5, 30], [5.5, 0, 6.9, 30], [7.6, 0, 9, 30], [19, 0, 20.4, 30], [21.1, 0, 22.5, 30]])).toHaveLength(3);
+        // a column the fit read as one tall opening is a strip of its own
+        expect(windowStrips([[0, 0, 1.4, 30], [3.4, 0, 4.8, 30]])).toHaveLength(2);
+        expect(windowStrips([[0, 0, 1.4, 2]])).toHaveLength(0);
+        // columns that do not stand side by side up the wall never join
+        expect(windowBays([[0, 0, 1.4, 10], [2.1, 20, 3.5, 30], [5.5, 0, 6.9, 10]])).toHaveLength(3);
     });
 
     it('recesses each window column as one strip between proud piers, the windows a little deeper, the piers bevelled', () => {
