@@ -74,12 +74,23 @@ uniform float uSbCourseWidth;
 uniform vec2 uSbParamsSize;
 `;
 /**
- * Specular anti-aliasing before the lights: where the shading normal changes faster than a pixel can show (pane edges,
- * relief, distant facades), the roughness rises by the normal's spread over the pixel (Kaplanyan-Tokuyoshi), so a smooth
- * surface the pixel cannot resolve settles into an even sheen instead of shimmering as the view moves.
+ * The least roughness glass is drawn with (generated): window glass in place carries dust, film and the slight waviness
+ * of float glass, so its reflection is always a touch diffused, never the measured 0.05 of clean float glass alone.
+ */
+export const GLASS_MIN_ROUGHNESS = 0.12;
+
+/**
+ * Before the lights: the glass roughness floor (GLASS_MIN_ROUGHNESS), then specular anti-aliasing: where the shading
+ * normal changes faster than a pixel can show (pane edges, relief, distant facades), the roughness rises by the normal's
+ * spread over the pixel (Kaplanyan-Tokuyoshi), so a smooth surface the pixel cannot resolve settles into an even sheen
+ * instead of shimmering as the view moves.
  */
 const FRAGMENT_SPECULAR_AA = `
     {
+        // glass in place is never a perfect mirror (dust, film, the waviness of float glass): a floor on its roughness
+        #if defined( USE_MAP )
+        if ( texture2D( uSbMatParams, vMapUv ).r > 0.0 ) roughnessFactor = max( roughnessFactor, ${GLASS_MIN_ROUGHNESS.toFixed(3)} );
+        #endif
         vec3 sbDn = fwidth( normal );
         float sbVar = clamp( 0.5 * dot( sbDn, sbDn ), 0.0, 0.18 );
         roughnessFactor = min( 1.0, sqrt( roughnessFactor * roughnessFactor + sbVar ) );
@@ -211,7 +222,7 @@ export async function prepareFacadeMaterials(gltf: GltfLike): Promise<number> {
                         .replace('#include <lights_physical_fragment>', FRAGMENT_SPECULAR_AA)
                         .replace('#include <lights_fragment_maps>', FRAGMENT_ENV_GATE);
                 };
-                mat.customProgramCacheKey = () => `sb-facade-v4:${withCourses ? courses.length : 0}`;
+                mat.customProgramCacheKey = () => `sb-facade-v5:${withCourses ? courses.length : 0}`;
                 mat.needsUpdate = true;
             }
             patched++;
