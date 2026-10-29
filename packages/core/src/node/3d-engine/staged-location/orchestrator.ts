@@ -1733,7 +1733,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     }
                 };
                 let next = 0, joined = 0;
-                const one = async (c: DistrictChunkPlan['chunks'][number]) => {
+                const retry: Array<DistrictChunkPlan['chunks'][number]> = [];
+                const one = async (c: DistrictChunkPlan['chunks'][number], last = false) => {
                     const t0 = now();
                     const ll = frameToLatLng(placeValue!, [c.cx, c.cz]);
                     io.progress(`chunk ${c.index}: building ${c.buildings.length} buildings within ${Math.round(c.radiusM)} m`);
@@ -1786,7 +1787,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         })));
                         run.emit('chunks', 'running', { message: `${joined} of ${todo.length} chunks joined`, layers: batch }, true);
                     } catch (err) {
-                        if (isAbort(err) || io.signal.aborted) throw err;
+                        // only this build being stopped ends the stage: a chunk's own hard failure (its tiles could not be fetched,
+                        // a network error of the moment) is that chunk's, built once more after the others, then left to its vector buildings
+                        if (io.signal.aborted || (err as Error)?.name === 'AbortError') throw err;
+                        if (!last) { retry.push(c); io.progress(`chunk ${c.index} failed (${errorMessage(err)}); it is built again after the others`); return; }
                         report.push({ index: c.index, radiusM: c.radiusM, buildings: c.buildings.length, status: 'failed', ms: now() - t0, error: errorMessage(err) });
                         degradations.push(run.degrade(record('chunks', 'chunk_failed', {
                             part: { description: `chunk ${c.index} of the district` }, intended: `its ${c.buildings.length} buildings and ground at leaf LOD`, fellTo: "the vector buildings past the centre build's tiles",
@@ -1795,6 +1799,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     }
                 };
                 await Promise.all(Array.from({ length: Math.min(parallel, todo.length) }, async () => { while (next < todo.length) await one(todo[next++]); }));
+                if (retry.length) { let k = 0; await Promise.all(Array.from({ length: Math.min(parallel, retry.length) }, async () => { while (k < retry.length) await one(retry[k++], true); })); }
                 // ---- the seam stage over the joined ground (scene-healing §3.1; pipeline-k/district-seams.ts), one chunk at a time:
                 // the chunks' photos levelled to one another by a gain per chunk, fitted where they meet; each chunk's ground cut
                 // exactly at the cell lines around what it owns, and its cut edge moved onto the edge the chunks before it left
