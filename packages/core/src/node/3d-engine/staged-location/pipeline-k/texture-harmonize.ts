@@ -161,9 +161,11 @@ const seenFromAbove = (x: number, y: number, z: number, top: (x: number, z: numb
 /**
  * Which texels of each photo (image index -> its size) are roof and which are wall (TEXEL_*), from the triangles that use
  * them, grown by two texels so a bilinear lookup at a triangle's edge reads its own surface. Hidden up-facing surfaces
- * count as wall (nothing shows them).
+ * count as wall (nothing shows them). A texel two surfaces share is wall unless both are roof (harmonise's references);
+ * with `sharedTexel: 'up'` it is roof when either is (a lift of the upward surfaces reaching every texel they draw).
  */
-export function surfaceClassMasks(g: ParsedGlb, json: any, sizes: Map<number, { width: number; height: number }>, P: TextureHarmonizeParams = TEXTURE_HARMONIZE_PARAMS): Map<number, Uint8Array> {
+export function surfaceClassMasks(g: ParsedGlb, json: any, sizes: Map<number, { width: number; height: number }>, P: TextureHarmonizeParams = TEXTURE_HARMONIZE_PARAMS, opts: { sharedTexel?: 'wall' | 'up' } = {}): Map<number, Uint8Array> {
+    const upWins = opts.sharedTexel === 'up';
     const top = topHeightMap(g, json, P);
     const masks = new Map<number, Uint8Array>();
     for (const [img, s] of sizes) masks.set(img, new Uint8Array(s.width * s.height));
@@ -183,9 +185,9 @@ export function surfaceClassMasks(g: ParsedGlb, json: any, sizes: Map<number, { 
             if (a < 0 || b < 0 || a + b > 1) continue;
             const c = 1 - a - b;
             const cls = surf.up && seenFromAbove(a * p[0] + b * p[3] + c * p[6], a * p[1] + b * p[4] + c * p[7], a * p[2] + b * p[5] + c * p[8], top, P) ? TEXEL_ROOF : TEXEL_WALL;
-            // a texel two surfaces share stays roof only if both are
+            // a texel two surfaces share stays roof only if both are (or, upWins, if either is)
             const k = y * s.width + x;
-            m[k] = m[k] === TEXEL_NONE ? cls : Math.min(m[k], cls);
+            m[k] = m[k] === TEXEL_NONE ? cls : upWins ? Math.max(m[k], cls) : Math.min(m[k], cls);
         }
     });
     for (const [img, m] of masks) {
