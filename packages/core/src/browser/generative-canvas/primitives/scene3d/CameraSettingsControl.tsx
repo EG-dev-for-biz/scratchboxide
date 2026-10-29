@@ -9,7 +9,7 @@
 
 import * as React from 'react';
 import type { SetCameraLensParams } from '../../services/operators/lighting-camera-operators';
-import { DEFAULT_GRAIN_SIZE_UM, planViewportOptics } from './viewportOptics';
+import { DEFAULT_DIFFUSION_SPREAD, DEFAULT_FLARE, DEFAULT_GRAIN_SIZE_UM, planViewportOptics } from './viewportOptics';
 import { DEFAULT_AUTO_FOCUS_AREA_FRACTION, DEFAULT_FOCUS_PULL_SECONDS, autoFocusAreaOf, effectiveFocusMode, focusPullSecondsOf, isFocusPoint } from './viewportFocus';
 import {
     type CameraCommand,
@@ -59,6 +59,20 @@ const ACTIVE = 'sb-3d-toolstrip-btn-active bg-blue-600/30 text-blue-300 border b
 // The app has no utility-class build: the panel is styled by these classes in browser/style/unified-ui.css.
 /** Film grain strength the switch turns on at. */
 const GRAIN_DEFAULT_AMOUNT = 0.35;
+/**
+ * Distortion starting points (normalized camera coordinates, the OpenCV convention): each a lens character, not a model of
+ * a named lens; the sliders below take it from there.
+ */
+const DISTORTION_PRESETS: Array<{ label: string; title: string; k1: number; k2: number; chromaticAberration: number }> = [
+    { label: 'Barrel', title: 'A wide prime: edges bow outward a little', k1: -0.08, k2: 0, chromaticAberration: 0.002 },
+    { label: 'Strong barrel', title: 'A very wide lens: straight lines curve clearly near the edges', k1: -0.22, k2: 0.04, chromaticAberration: 0.004 },
+    { label: 'Pincushion', title: 'A long zoom: edges pull inward slightly', k1: 0.05, k2: 0, chromaticAberration: 0.001 },
+    { label: 'Mustache', title: 'Barrel at the centre turning to pincushion at the corners (a complex wide design)', k1: -0.15, k2: 0.12, chromaticAberration: 0.003 }
+];
+/** Flare amount the switch turns on at (a clean modern lens). */
+const FLARE_DEFAULT_AMOUNT = 0.3;
+/** Black Pro-Mist strengths (share of light scattered) by filter grade. */
+const DIFFUSION_GRADES: Array<{ label: string; strength: number }> = [{ label: '1/8', strength: 0.06 }, { label: '1/4', strength: 0.12 }, { label: '1/2', strength: 0.25 }];
 
 const CHIP = 'sb-cam-chip';
 const CHIP_IDLE = '';
@@ -192,6 +206,8 @@ export const CameraSettingsControl: React.FC<CameraSettingsControlProps> = ({
     const dofOn = lens?.depthOfField === true || (lens?.depthOfField !== false && wantsDof);
     const grain = lens?.filmGrain && lens.filmGrain.amount > 0 ? lens.filmGrain : undefined;
     const grainOn = !!grain;
+    const flare = lens?.flare && lens.flare.amount > 0 ? lens.flare : undefined;
+    const diffusion = lens?.diffusion && lens.diffusion.strength > 0 ? lens.diffusion : undefined;
     const dofMissing = plan.issues.find(i => i.startsWith('depth of field needs'));
     // the depth-of-field hint and the focus notices (a lost target, nothing under the AF area) are shown in its section
     const isFocusIssue = (i: string) => i.startsWith('focus');
@@ -567,8 +583,27 @@ export const CameraSettingsControl: React.FC<CameraSettingsControlProps> = ({
                             </button>
                         }
                     >
+                        <div className="sb-cam-chips" role="group" aria-label="Distortion presets">
+                            {DISTORTION_PRESETS.map(p => {
+                                const on = near(distortion?.k1, p.k1) && near(distortion?.k2 ?? 0, p.k2);
+                                return (
+                                    <button key={p.label} type="button" title={p.title} data-testid={`sb-camera-distortion-${p.label.toLowerCase().replace(/\s+/g, '-')}`}
+                                        aria-pressed={on} className={`${CHIP} ${on ? CHIP_ON : CHIP_IDLE}`}
+                                        onClick={() => runLens({ distortion: { k1: p.k1, k2: p.k2, k3: 0, p1: 0, p2: 0, chromaticAberration: p.chromaticAberration } }, `Lens distortion: ${p.label.toLowerCase()}`)}>
+                                        {p.label}
+                                    </button>
+                                );
+                            })}
+                        </div>
                         {distortionRow('k1')}
                         {distortionRow('k2')}
+                        <div className="sb-cam-row">
+                            <span className="sb-cam-key">Colour fringe</span>
+                            <input type="range" aria-label="Chromatic aberration" data-testid="sb-camera-chromatic-aberration" className="sb-cam-range" min={0} max={0.02} step={0.0005}
+                                value={distortion?.chromaticAberration ?? 0}
+                                onChange={e => runLens({ distortion: { k1: distortion?.k1 ?? 0, chromaticAberration: Number(e.target.value) } }, 'Chromatic aberration', true)} />
+                            <span className="sb-cam-value">{fmt(distortion?.chromaticAberration ?? 0, 4)}</span>
+                        </div>
                         <button
                             type="button"
                             aria-expanded={showAdvanced}
@@ -578,7 +613,7 @@ export const CameraSettingsControl: React.FC<CameraSettingsControlProps> = ({
                             {showAdvanced ? '▾ Advanced (k3, p1, p2)' : '▸ Advanced (k3, p1, p2)'}
                         </button>
                         {showAdvanced && (['k3', 'p1', 'p2'] as const).map(distortionRow)}
-                        <div className="sb-cam-note">k1 &lt; 0 barrel, k1 &gt; 0 pincushion (normalized camera coordinates).</div>
+                        <div className="sb-cam-note">k1 &lt; 0 barrel, k1 &gt; 0 pincushion (normalized camera coordinates). Colour fringe shifts red and blue apart toward the edges.</div>
                     </Section>
 
                     <Section title="Anamorphic squeeze">
@@ -635,6 +670,87 @@ export const CameraSettingsControl: React.FC<CameraSettingsControlProps> = ({
                                     <span>New grain each frame</span>
                                 </label>
                                 <div className="sb-cam-note">On the finished frame, sized on the sensor ({fmt(sensor.height)} mm film back); generated.</div>
+                            </>
+                        )}
+                    </Section>
+
+                    <Section
+                        title="Lens flare"
+                        aside={
+                            <button type="button" role="switch" aria-checked={!!flare} aria-label="Lens flare" data-testid="sb-camera-flare"
+                                className={`sb-cam-switch${flare ? ' sb-cam-switch-on' : ''}`}
+                                onClick={() => runLens(flare ? { flare: null } : { flare: { amount: FLARE_DEFAULT_AMOUNT } }, flare ? 'Lens flare off' : 'Lens flare on')}>
+                                <span className="sb-cam-switch-knob" />
+                            </button>
+                        }
+                    >
+                        {flare && (
+                            <>
+                                <div className="sb-cam-row">
+                                    <span className="sb-cam-key">Amount</span>
+                                    <input type="range" aria-label="Flare amount" data-testid="sb-camera-flare-amount" className="sb-cam-range" min={0.01} max={1} step={0.01}
+                                        value={flare.amount} onChange={e => runLens({ flare: { amount: Number(e.target.value) } }, 'Lens flare amount', true)} />
+                                    <span className="sb-cam-value">{fmt(flare.amount, 2)}</span>
+                                </div>
+                                <div className="sb-cam-row">
+                                    <span className="sb-cam-key">Ghosts</span>
+                                    <input type="range" aria-label="Flare ghosts" data-testid="sb-camera-flare-ghosts" className="sb-cam-range" min={0} max={8} step={1}
+                                        value={flare.ghosts ?? DEFAULT_FLARE.ghosts} onChange={e => runLens({ flare: { ghosts: Number(e.target.value) } }, 'Lens flare ghosts', true)} />
+                                    <span className="sb-cam-value">{flare.ghosts ?? DEFAULT_FLARE.ghosts}</span>
+                                </div>
+                                <div className="sb-cam-row">
+                                    <span className="sb-cam-key">Halo</span>
+                                    <input type="range" aria-label="Flare halo" data-testid="sb-camera-flare-halo" className="sb-cam-range" min={0} max={1} step={0.01}
+                                        value={flare.halo ?? DEFAULT_FLARE.halo} onChange={e => runLens({ flare: { halo: Number(e.target.value) } }, 'Lens flare halo', true)} />
+                                    <span className="sb-cam-value">{fmt(flare.halo ?? DEFAULT_FLARE.halo, 2)}</span>
+                                </div>
+                                <div className="sb-cam-row">
+                                    <span className="sb-cam-key">Streak</span>
+                                    <input type="range" aria-label="Flare streak" data-testid="sb-camera-flare-streak" className="sb-cam-range" min={0} max={1} step={0.01}
+                                        value={flare.streak ?? DEFAULT_FLARE.streak} onChange={e => runLens({ flare: { streak: Number(e.target.value) } }, 'Lens flare streak', true)} />
+                                    <span className="sb-cam-value">{fmt(flare.streak ?? DEFAULT_FLARE.streak, 2)}</span>
+                                </div>
+                                <NumberField label="Threshold" min={0.01} value={flare.threshold} placeholder={fmt(DEFAULT_FLARE.threshold)} testId="sb-camera-flare-threshold"
+                                    onCommit={v => runLens({ flare: { threshold: v } }, `Lens flare threshold ${v}`)} onClear={() => runLens({ flare: { threshold: undefined } }, 'Lens flare: default threshold')} />
+                                <div className="sb-cam-note">From whatever is brighter than the threshold (the sun, a lamp, a glint): ghosts through the centre, a halo, a horizontal streak; generated.</div>
+                            </>
+                        )}
+                    </Section>
+
+                    <Section
+                        title="Diffusion"
+                        aside={
+                            <button type="button" role="switch" aria-checked={!!diffusion} aria-label="Diffusion filter" data-testid="sb-camera-diffusion"
+                                className={`sb-cam-switch${diffusion ? ' sb-cam-switch-on' : ''}`}
+                                onClick={() => runLens(diffusion ? { diffusion: null } : { diffusion: { strength: DIFFUSION_GRADES[0].strength } }, diffusion ? 'Diffusion off' : 'Diffusion: Black Pro-Mist 1/8')}>
+                                <span className="sb-cam-switch-knob" />
+                            </button>
+                        }
+                    >
+                        {diffusion && (
+                            <>
+                                <div className="sb-cam-chips" role="group" aria-label="Black Pro-Mist grade">
+                                    {DIFFUSION_GRADES.map(g => (
+                                        <button key={g.label} type="button" data-testid={`sb-camera-diffusion-${g.label.replace('/', '-')}`}
+                                            aria-pressed={near(diffusion.strength, g.strength)} className={`${CHIP} ${near(diffusion.strength, g.strength) ? CHIP_ON : CHIP_IDLE}`}
+                                            onClick={() => runLens({ diffusion: { strength: g.strength } }, `Diffusion: Black Pro-Mist ${g.label}`)}>
+                                            {g.label}
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className="sb-cam-row">
+                                    <span className="sb-cam-key">Strength</span>
+                                    <input type="range" aria-label="Diffusion strength" data-testid="sb-camera-diffusion-strength" className="sb-cam-range" min={0.01} max={0.5} step={0.01}
+                                        value={diffusion.strength} onChange={e => runLens({ diffusion: { strength: Number(e.target.value) } }, 'Diffusion strength', true)} />
+                                    <span className="sb-cam-value">{fmt(diffusion.strength, 2)}</span>
+                                </div>
+                                <div className="sb-cam-row">
+                                    <span className="sb-cam-key">Spread</span>
+                                    <input type="range" aria-label="Diffusion spread" data-testid="sb-camera-diffusion-spread" className="sb-cam-range" min={0.005} max={0.15} step={0.005}
+                                        value={diffusion.spread ?? DEFAULT_DIFFUSION_SPREAD} onChange={e => runLens({ diffusion: { spread: Number(e.target.value) } }, 'Diffusion spread', true)} />
+                                    <span className="sb-cam-value">{fmt(diffusion.spread ?? DEFAULT_DIFFUSION_SPREAD, 3)}</span>
+                                </div>
+                                <div className="sb-cam-note">A Black Pro-Mist: a share of the light scattered into a soft glow, so highlights bloom while blacks away from light stay black; generated.</div>
                             </>
                         )}
                     </Section>

@@ -116,7 +116,8 @@ const QUAD_VERTEX = `
 /**
  * Pass 1, at half resolution: the colour (4 bilinear taps = a 4 x 4 box), a plain average: every highlight keeps its
  * energy (a defocused sun spreads into a bright disc, as through a lens), and a sub-pixel one counts by its area. No
- * luma weight and no cap: a luma weight made a small sun pump as it moved across taps, a cap took the sun's bloom away;
+ * luma weight and no cap: a luma weight made a small sun pump as it moved across taps, a cap took the sun's bloom away
+ * (only a non-finite texel is held: sbFiniteColor);
  * and, into a second target, the signed blur radius in half-resolution pixels (r; computeCoCPixels gives the radius in
  * full-resolution pixels when uBokehScale is 0.5, as the viewport sets it) and the largest of the taps' (g). Both are
  * mip-mapped, so the gather can read any footprint as one stable area average.
@@ -128,6 +129,13 @@ export const CINEMATIC_BOKEH_PREFILTER_SHADER = {
         uniform bool uWriteCoc;
         ${COC_GLSL}
         varying vec2 vUv;
+        // A texel that overflowed the half-float scene target (infinite) or is not a number would poison every average it
+        // enters (the whole blur disc and its mip chain, flashing frame to frame): an overflow is held at the half-float
+        // ceiling and a NaN taken as dark. Finite highlights pass unchanged, keeping their energy.
+        vec4 sbFiniteColor(vec4 c) {
+            for (int k = 0; k < 4; k++) if (!(c[k] == c[k])) c[k] = 0.0;
+            return clamp(c, vec4(-6.0e4), vec4(6.0e4));
+        }
         void main() {
             vec2 px = 1.0 / uResolution;
             vec2 o[4];
@@ -142,7 +150,7 @@ export const CINEMATIC_BOKEH_PREFILTER_SHADER = {
                 return;
             }
             vec4 acc = vec4(0.0);
-            for (int i = 0; i < 4; i++) acc += texture2D(tColor, vUv + o[i] * px);
+            for (int i = 0; i < 4; i++) acc += sbFiniteColor(texture2D(tColor, vUv + o[i] * px));
             float wsum = 4.0;
             gl_FragColor = acc / max(wsum, 1e-6);
         }

@@ -16,7 +16,7 @@ import {
     getSunVectorFromAngles
 } from '../atmosphere';
 import { sunAtLocalSolarTime } from './nature-atmosphere-operators';
-import type { Scene3DData, SceneCameraLens, SceneLensDistortion, SceneFilmGrain } from '../../canvas-types';
+import type { Scene3DData, SceneCameraLens, SceneLensDistortion, SceneFilmGrain, SceneLensFlare, SceneLensDiffusion } from '../../canvas-types';
 import { planViewportOptics, distortionMaxAspect } from '../../primitives/scene3d/viewportOptics';
 import { FOCUS_MODES_DRAWN, effectiveFocusMode, isFocusPoint } from '../../primitives/scene3d/viewportFocus';
 
@@ -54,6 +54,10 @@ export interface SetCameraLensParams {
     depthOfField?: boolean | null;
     /** Film grain (SceneFilmGrain); fields given are merged into the lens's, null removes it. */
     filmGrain?: Partial<SceneFilmGrain> | null;
+    /** Lens flare (SceneLensFlare); fields given are merged into the lens's, null removes it. */
+    flare?: Partial<SceneLensFlare> | null;
+    /** Diffusion filter, e.g. a Black Pro-Mist (SceneLensDiffusion); fields given are merged, null removes it. */
+    diffusion?: Partial<SceneLensDiffusion> | null;
     /** Removes the whole lens (an ideal pinhole again: no optics passes). */
     clear?: boolean;
 }
@@ -151,6 +155,27 @@ export function mergeCameraLens(previous: SceneCameraLens | undefined, params: S
             if (g.chroma !== undefined && !(typeof g.chroma === 'number' && Number.isFinite(g.chroma) && g.chroma >= 0 && g.chroma <= 1)) throw new Error(`sb_set_camera_lens: filmGrain.chroma must be in [0, 1] (got ${String(g.chroma)}). Nothing was changed.`);
             if (g.animate !== undefined) g.animate = !!g.animate;
             lens.filmGrain = g;
+        }
+    }
+    const inRange = (v: unknown, lo: number, hi: number) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
+    if (params.flare !== undefined) {
+        if (params.flare === null) delete lens.flare;
+        else {
+            const fl: SceneLensFlare = { ...(lens.flare || { amount: 0 }), ...params.flare };
+            if (!inRange(fl.amount, 0, 1)) throw new Error(`sb_set_camera_lens: flare.amount must be in [0, 1] (got ${String(fl.amount)}). Nothing was changed.`);
+            if (fl.ghosts !== undefined && !(inRange(fl.ghosts, 0, 8) && Number.isInteger(fl.ghosts))) throw new Error(`sb_set_camera_lens: flare.ghosts must be a whole number from 0 to 8 (got ${String(fl.ghosts)}). Nothing was changed.`);
+            for (const k of ['halo', 'streak'] as const) if (fl[k] !== undefined && !inRange(fl[k], 0, 1)) throw new Error(`sb_set_camera_lens: flare.${k} must be in [0, 1] (got ${String(fl[k])}). Nothing was changed.`);
+            if (fl.threshold !== undefined && !(typeof fl.threshold === 'number' && Number.isFinite(fl.threshold) && fl.threshold > 0)) throw new Error(`sb_set_camera_lens: flare.threshold must be a positive linear luminance (got ${String(fl.threshold)}). Nothing was changed.`);
+            lens.flare = fl;
+        }
+    }
+    if (params.diffusion !== undefined) {
+        if (params.diffusion === null) delete lens.diffusion;
+        else {
+            const df: SceneLensDiffusion = { ...(lens.diffusion || { strength: 0 }), ...params.diffusion };
+            if (!inRange(df.strength, 0, 1)) throw new Error(`sb_set_camera_lens: diffusion.strength must be in [0, 1] (got ${String(df.strength)}). Nothing was changed.`);
+            if (df.spread !== undefined && !inRange(df.spread, 0.001, 0.5)) throw new Error(`sb_set_camera_lens: diffusion.spread must be a fraction of the frame height in [0.001, 0.5] (got ${String(df.spread)}). Nothing was changed.`);
+            lens.diffusion = df;
         }
     }
     if (params.distortion !== undefined) {
