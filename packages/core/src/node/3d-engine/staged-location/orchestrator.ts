@@ -196,6 +196,7 @@ import { PIPELINE_G_VERSION, runPipelineG, stagedPipelineG } from './pipeline-g/
 import { H_BUDGET_MARGIN_MS, H_POLICY, PIPELINE_H_VERSION, stagedProcedural } from './pipeline-h/pipeline-h';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK } from './pipeline-k/pipeline-k';
 import { PARTY_WALL_TEXTURE_VERSION, texturePartyWall } from './pipeline-k/party-wall-texture';
+import { detailBakeProvenance, TILE_DETAIL_BAKE_VERSION, type TileDetailBakeReport } from '../../spatial/tile-detail-bake';
 import { measureVisibleDefects, VISIBLE_DEFECTS_PARAMS } from './pipeline-k/visible-defects';
 import { TEXTURE_HARMONIZE_VERSION, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
 import { describeMaterialRegions, MATERIAL_REGIONS_VERSION, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
@@ -546,7 +547,11 @@ export interface StagedLocationDeps {
     /** Search-grounded reference images (search-grounded-reference.ts; the bridges' detail): a client with the image models; absent = none. */
     groundedReferences?: () => Promise<GroundedReferenceClient>;
     /** Pipeline K's material regions: one texture library set per appearance class (pipeline-k/material-sets.ts); absent = the stage is not run (tests, stand-in deps). */
-    pipelineK?: { materialSets?: (classes: RegionClass[], opts: { signal?: AbortSignal; progress?: (m: string) => void }) => Promise<RegionSet[]> };
+    pipelineK?: {
+        materialSets?: (classes: RegionClass[], opts: { signal?: AbortSignal; progress?: (m: string) => void }) => Promise<RegionSet[]>;
+        /** The swatch detail bake (tile-detail-bake.ts): the building's survey swatches harvested from the tiles, baked into the twin's atlases. */
+        detailBake?: (input: { glb: Uint8Array; tilesGlb: string; lat: number; lng: number; place: string; workDir: string; signal: AbortSignal; progress: (m: string) => void }) => Promise<{ glb: Buffer; report: TileDetailBakeReport }>;
+    };
     textures?: {
         enhance?: EnhanceModelClient; enhanceModels?: string[]; maxDensityTexelsPerMeter?: number; maxSide?: number; disabled?: string;
         /** 'recreate' (default) removes the tile transfer's own baked shadow/highlight and recovers the material's true colour, gated on structure and hue/chroma; 'sharpen' is the earlier, lighting-locked mode. See texture-enhance.ts. */
@@ -2656,13 +2661,16 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // 2026-10-28: the openings' finishes are not calculated correctly); SCRATCHBOX_K_MATERIAL_REGIONS=1 on
                 const materialSets = kTwin && stepOn('twin.materials', process.env.SCRATCHBOX_K_MATERIAL_REGIONS?.trim() === '1') ? deps.pipelineK?.materialSets : undefined;
                 if (kTwin && !materialSets) logStep('twin.materials', 'skipped');
+                // the swatch detail bake: the building's survey swatches (AI Beautify, one image call per station) baked into the
+                // twin's atlases as the detail band the tile cannot carry (generated); off by default, SCRATCHBOX_K_DETAIL_BAKE=1 or the node graph on
+                const detailBakeOn = kTwin && !!deps.pipelineK?.detailBake && stepOn('twin.detailBake', process.env.SCRATCHBOX_K_DETAIL_BAKE?.trim() === '1');
                 if (kTwin && !materialSets) cache.writeRunNote(runId, 'pipeline_k_materials', { skipped: deps.pipelineK?.materialSets ? 'off (SCRATCHBOX_K_MATERIAL_REGIONS=1 turns it on)' : 'no texture library in this build\'s services' });
                 // the window fit's planes, whose windows material regions draws on the scan pieces lying on them
                 const kOrthos = materialSets ? cache.readRunNote<{ orthosDir?: string }>(runId, 'pipeline_k')?.orthosDir : undefined;
                 const fitFile = kOrthos ? path.join(kOrthos, WINDOW_FIT_FILE) : undefined;
                 const planes = kOrthos ? fittedPlanesOf(kOrthos) : [];
                 const grammarFile = kOrthos ? path.join(kOrthos, WALL_GRAMMAR_FILE) : undefined;
-                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '');
+                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '');
                 const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport; materialRegions?: TileRefineTwin['materialRegions'] }>('textures', key, async dir => {
                     const twin = await tileRefineTwin(bytes, target.layer.layer, kTwin ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), ...(harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0 } } : {}), ...(materialSets ? { materialRegions: { harvest: process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum', sets: (classes: RegionClass[]) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m) }), planes } } : {}) } : enhance ? {
                         recreate: {
@@ -2686,8 +2694,22 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         twinGlb = pw.glb;
                         cache.writeRunNote(runId, 'pipeline_k_party_wall', { version: PARTY_WALL_TEXTURE_VERSION, layer: target.layer.layer, ...pw.report });
                     }
+                    let provenance = twin.provenance;
+                    if (kTwin && !detailBakeOn) logStep('twin.detailBake', 'skipped');
+                    if (detailBakeOn) {
+                        logStep('twin.detailBake', 'running');
+                        const place = run.state.place;
+                        const db = await deps.pipelineK!.detailBake!({ glb: twinGlb, tilesGlb: extraction.texturedGlb, lat: place.lat, lng: place.lng, place: place.resolvedAddress || request.query, workDir: path.join(cache.dir, 'detail_bake'), signal: io.signal, progress: (m: string) => io.progress(m) }).catch((err: unknown) => {
+                            if (isAbort(err) || io.signal.aborted) throw err;
+                            return { glb: Buffer.from(twinGlb), report: { version: TILE_DETAIL_BAKE_VERSION, replaced: 0, skipped: `the detail bake failed: ${errorMessage(err)}` } as TileDetailBakeReport };
+                        });
+                        logStep('twin.detailBake', db.report.replaced ? 'done' : 'skipped');
+                        if (db.report.replaced) { twinGlb = db.glb; provenance = [...provenance, detailBakeProvenance(db.report)]; }
+                        io.progress(db.report.replaced ? `swatch detail baked into ${db.report.replaced} of ${db.report.images} atlases (${Math.round(100 * db.report.coverage)}% of the surface, generated)` : `no swatch detail baked: ${db.report.skipped}`);
+                        cache.writeRunNote(runId, 'pipeline_k_detail_bake', { layer: target.layer.layer, ...db.report });
+                    }
                     fs.writeFileSync(path.join(dir, 'twin.glb'), twinGlb);
-                    return { value: { rungShares: twin.rungShares, provenance: twin.provenance, ladderRung: twin.ladderRung, triangles: twin.triangles, ...(twin.harmonize ? { harmonize: twin.harmonize } : {}), ...(twin.materialRegions ? { materialRegions: twin.materialRegions } : {}) } };
+                    return { value: { rungShares: twin.rungShares, provenance, ladderRung: twin.ladderRung, triangles: twin.triangles, ...(twin.harmonize ? { harmonize: twin.harmonize } : {}), ...(twin.materialRegions ? { materialRegions: twin.materialRegions } : {}) } };
                 }, { publish: () => [{ from: 'twin.glb', as: `${base}_${target.layer.layer}_tex_${key.slice(0, 8)}.glb` }], bypass: bypass('textures') });
                 const pub = entry.published[0];
                 // the material regions' report, whether the stage ran now or its result came from the cache

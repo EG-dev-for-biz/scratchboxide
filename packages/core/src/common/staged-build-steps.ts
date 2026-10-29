@@ -65,6 +65,7 @@ export const BUILD_STEPS: BuildStepSpec[] = [
     { key: 'twin.harmonize', stage: 'textures', title: 'Harmonise the photos', needs: ['delit'], makes: ['harmonised'] },
     { key: 'twin.materials', stage: 'textures', title: 'Material regions', needs: ['harmonised', 'windows'], makes: ['materials'] },
     { key: 'twin.partyWall', stage: 'textures', title: 'Party wall', needs: ['harmonised', 'baseClay'], makes: ['partyWall'] },
+    { key: 'twin.detailBake', stage: 'textures', title: 'Swatch detail', needs: ['harmonised', 'tiles'], makes: ['detail'] },
     { key: 'textures.lateLayers', stage: 'textures', title: 'Textures of later layers', needs: ['materials'], makes: ['late'] },
     { key: 'textures-late', stage: 'textures-late', title: 'Textures of later layers', needs: ['materials'], makes: ['late'] }
 ];
@@ -91,5 +92,6 @@ export const TOGGLEABLE_STEPS = new Map<string, string>([
     ['evidence', 'no Street View close-ups or their registration (a 3D Building reads neither)'],
     ['twin.harmonize', 'the de-lit photos are kept as they are, photo by photo'],
     ['twin.materials', 'no roughness, metal or glass maps: the photos only'],
-    ['twin.partyWall', 'the party wall stays untextured']
+    ['twin.partyWall', 'the party wall stays untextured'],
+    ['twin.detailBake', 'the photo atlases keep the tile\'s own resolution, no swatch detail']
 ]);

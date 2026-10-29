@@ -51,6 +51,7 @@ import { resolveRegionSets } from './pipeline-k/material-sets';
 import { StageCache, stagedWorkspaceRoot } from './stage-cache';
 import { genAiEnhanceClient } from './texture-enhance';
 import { lightingCorrectionEnabled, lightingModels } from './texture-lighting';
+import { bakeTileDetail, defaultSwatchServices, subjectSwatchLibrary } from '../../spatial/tile-detail-bake';
 import {
     STAGE_IDS, runStagedLocation, type StageId, type StagedExtraction, type StagedLocationDeps, type StagedLocationRequest, type ResolvedPlace
 } from './orchestrator';
@@ -236,7 +237,15 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
         // fails pipeline I/J with that reason
         pipelineI: { generator: () => createDefaultStationImageGenerator({ workspaceRoot: cache.dir }), model: (name?: string) => name === 'meshy' ? createFalMeshyClient() : createFalTrellisClient() },
         // pipeline K's material regions: a texture library set per appearance class, fetched from the library bucket
-        pipelineK: { materialSets: (classes, o) => resolveRegionSets(classes, o) },
+        // and the swatch detail bake (off unless asked): the building's survey swatches baked into the twin's atlases
+        pipelineK: {
+            materialSets: (classes, o) => resolveRegionSets(classes, o),
+            detailBake: async i => {
+                const services = await defaultSwatchServices(cache.dir);
+                const library = await subjectSwatchLibrary({ tilesGlb: i.tilesGlb, lat: i.lat, lng: i.lng, place: i.place, workDir: i.workDir, services, log: i.progress, signal: i.signal });
+                return bakeTileDetail({ glb: i.glb, libraryPath: library.libraryPath, ground: i.tilesGlb, workDir: path.join(i.workDir, 'bake'), log: i.progress });
+            }
+        },
         ...(elevationService ? {
             elevation: {
                 sample: async (points: Array<{ lat: number; lng: number }>) => {
