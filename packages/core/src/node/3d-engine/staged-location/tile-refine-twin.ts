@@ -44,6 +44,8 @@ import { encodePng } from './png-encode';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { decodeImageInMemory, type RgbaImage8 } from './tile-texture-transfer';
 import { harmonizeTextures, surfaceClassMasks, TEXEL_ROOF, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
+import { viewRelight, type ViewRelightParams, type ViewRelightReport } from './pipeline-k/view-relight';
+import { roofShadowLift, type RoofShadowReport } from './pipeline-k/roof-shadow';
 import { describeMaterialRegions, readRegionClasses, writeMaterialRegions, type MaterialRegionsPlan, type MaterialRegionsReport, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { planMaterialRegionsOnThreads } from './pipeline-k/material-regions-pool';
 import {
@@ -82,6 +84,10 @@ export interface TileRefineTwin {
     triangles: number;
     recreate?: TileRefineRecreateReport;
     harmonize?: TextureHarmonizeReport;
+    /** Pipeline K: the photos evened out from image-model relights of rendered views (pipeline-k/view-relight.ts), or why not. */
+    viewRelight?: ViewRelightReport;
+    /** Pipeline K: the cast shadow the mesh throws on its roof decks lifted, a sun fitted per deck (pipeline-k/roof-shadow.ts), or why not. */
+    roofShadow?: RoofShadowReport;
     /** Pipeline K's material regions (pipeline-k/material-regions.ts), or why they were not drawn. */
     materialRegions?: MaterialRegionsReport | { skipped: string };
 }
@@ -162,7 +168,7 @@ function resizeToExact(img: RgbaImage8, width: number, height: number): RgbaImag
 }
 
 /** The twin of tile_refine's photo-textured output `texturedGlb` (its bytes) for the layer `layerKey`. */
-export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, opts?: { /** Each step as it starts and finishes (the run's step log). */ onStep?: (step: string, state: 'running' | 'done' | 'failed') => void; recreate?: TileRefineRecreateOptions; /** Pipeline K: the de-lit photos colour-matched per side and height band and their seams levelled (pipeline-k/texture-harmonize.ts), measured from this ground. */ harmonize?: { groundY: number }; /** Pipeline K: roughness, metalness and normal under the photos by appearance region (pipeline-k/material-regions.ts), one library set per class. */ materialRegions?: { sets: (classes: RegionClass[]) => Promise<RegionSet[]>; /** The tile-only harvest (material-harvest.ts): classes read from the wall alone, with their texture, for a pick by colour and texture. */ harvest?: boolean; /** The window fit's planes (window-fit.ts fittedPlanesOf): their windows drawn on the scan pieces lying on them. */ planes?: FittedPlane[] } }): Promise<TileRefineTwin> {
+export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, opts?: { /** Each step as it starts and finishes (the run's step log). */ onStep?: (step: string, state: 'running' | 'done' | 'failed') => void; recreate?: TileRefineRecreateOptions; /** Pipeline K: the de-lit photos colour-matched per side and height band and their seams levelled (pipeline-k/texture-harmonize.ts), measured from this ground. */ harmonize?: { groundY: number }; /** Pipeline K (with harmonize): the photos relit from rendered views of the building (pipeline-k/view-relight.ts) before harmonising. */ viewRelight?: { client: EnhanceModelClient; models: string[]; params?: Partial<ViewRelightParams>; signal?: AbortSignal; progress?: (message: string) => void }; /** The mesh's cast shadow on its roofs and terraces lifted (pipeline-k/roof-shadow.ts), before any harmonising: pipeline K or a district. */ roofShadow?: { /** The tile extraction with its neighbours (same frame): their shadows on the lower terraces. */ context?: { vertices: ArrayLike<number>; indices: ArrayLike<number> }; progress?: (message: string) => void }; /** Pipeline K: roughness, metalness and normal under the photos by appearance region (pipeline-k/material-regions.ts), one library set per class. */ materialRegions?: { sets: (classes: RegionClass[]) => Promise<RegionSet[]>; /** The tile-only harvest (material-harvest.ts): classes read from the wall alone, with their texture, for a pick by colour and texture. */ harvest?: boolean; /** The window fit's planes (window-fit.ts fittedPlanesOf): their windows drawn on the scan pieces lying on them. */ planes?: FittedPlane[] } }): Promise<TileRefineTwin> {
     const g = parseGlbBytes(texturedGlb);
     const json = JSON.parse(JSON.stringify(g.json));
     const materials: any[] = json.materials ?? (json.materials = []);
@@ -203,7 +209,7 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
         try { decodedImages.push({ i, im, decoded: decodeImageInMemory(raw) }); } catch { /* not decodable: left as it is */ }
     });
     // pipeline K: which texels are roof, seen from above (their de-light and colour match differ from the walls')
-    const surfaces = opts?.harmonize ? surfaceClassMasks(g, json, new Map(decodedImages.map(d => [d.i, d.decoded]))) : undefined;
+    const surfaces = opts?.harmonize || opts?.roofShadow ? surfaceClassMasks(g, json, new Map(decodedImages.map(d => [d.i, d.decoded]))) : undefined;
     let roofTexels = 0;
     if (surfaces) for (const m of surfaces.values()) for (let k = 0; k < m.length; k++) if (m[k] === TEXEL_ROOF) roofTexels++;
     const jobs: ImageJob[] = decodedImages.map(({ i, im, decoded }) => ({ originalIndex: i, name: im.name ?? `image_${i}`, mimeType: im.mimeType, delit: delightImage(decoded, surfaces?.get(i)) }));
@@ -236,6 +242,19 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
 
     // pipeline K: one colour across the photos (after the de-light, on the pixels that will be shown)
     let harmonize: TextureHarmonizeReport | undefined;
+    let relight: ViewRelightReport | undefined;
+    if (opts?.harmonize && opts.viewRelight && finalImage.size) {
+        const vr = opts.viewRelight;
+        opts.onStep?.('viewRelight', 'running');
+        relight = await viewRelight(g, json, finalImage, { client: vr.client, models: vr.models, groundY: opts.harmonize.groundY, ...(surfaces ? { surfaces } : {}), ...(vr.params ? { params: vr.params } : {}), ...(vr.signal ? { signal: vr.signal } : {}), ...(vr.progress ? { progress: vr.progress } : {}) });
+        opts.onStep?.('viewRelight', 'done');
+    }
+    let roofShadow: RoofShadowReport | undefined;
+    if (opts?.roofShadow && surfaces && finalImage.size) {
+        opts.onStep?.('roofShadow', 'running');
+        roofShadow = await roofShadowLift(g, json, finalImage, surfaces, { ...(opts.roofShadow.context ? { context: opts.roofShadow.context } : {}), ...(opts.roofShadow.progress ? { progress: opts.roofShadow.progress } : {}) });
+        opts.onStep?.('roofShadow', 'done');
+    }
     if (opts?.harmonize && finalImage.size) { opts.onStep?.('harmonize', 'running'); harmonize = harmonizeTextures(g, json, finalImage, opts.harmonize.groundY, undefined, surfaces); opts.onStep?.('harmonize', 'done'); }
 
     // pipeline K: material regions on the harmonised photos (accepted glass edits them before they are encoded)
@@ -274,7 +293,9 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     const method = () => {
         const roofs = roofTexels ? `; roofs seen from above (${roofTexels} texels) highlights only, no shadow lift` : '';
         const base = `tile_refine's remesh carries the leaf tiles' own photos (UVs into each leaf's image), de-lit (shadowLift ${PHOTOGRAMMETRIC_DELIGHT.defaults.shadowLift}, highlightCompress ${PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress}${roofs}; ${delit} of ${delit} photos)`;
-        const h = harmonize?.kept ? `; then harmonised (pipeline K): ${harmonize.why}` : harmonize ? `; harmonising left them as they were (${harmonize.why})` : '';
+        const vr = relight?.applied ? `; evened out from image-model relights of rendered views, the model's pixels never used (pipeline K): ${relight.why}` : relight ? `; the view relight left them as they were (${relight.why})` : '';
+        const rs = roofShadow?.applied ? `; the mesh's cast shadow on its roof decks lifted, a sun fitted per deck (pipeline K, photo-inferred): ${roofShadow.why}` : roofShadow ? `; roof shadows left as they were (${roofShadow.why})` : '';
+        const h = vr + rs + (harmonize?.kept ? `; then harmonised (pipeline K): ${harmonize.why}` : harmonize ? `; harmonising left them as they were (${harmonize.why})` : '');
         if (!recreate) return base + h;
         return `${base}${h}, further recreated by ${recreate.modelsUsed.join(', ') || 'an image model'} removing the scan's own baked shadow/highlight and recovering the material's true colour (gated on structure and hue/chroma): ${recreate.accepted} of ${recreate.attempted} accepted (${recreate.rejected} rejected, ${recreate.failed} model failures${recreate.timedOut ? `, ${recreate.timedOut} ran out of time` : ''})`;
     };
@@ -340,5 +361,5 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     let o = 0;
     for (const b of bin) { out.set(b, o); o += b.byteLength; }
     const ladderRung = rungShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1);
-    return { glb: assembleGlb(json, out), rungShares, provenance, ladderRung, triangles, ...(recreate ? { recreate } : {}), ...(harmonize ? { harmonize } : {}), ...(regionsPlan ? { materialRegions: regionsPlan.report } : regionsSkipped ? { materialRegions: { skipped: regionsSkipped } } : {}) };
+    return { glb: assembleGlb(json, out), rungShares, provenance, ladderRung, triangles, ...(recreate ? { recreate } : {}), ...(harmonize ? { harmonize } : {}), ...(relight ? { viewRelight: relight } : {}), ...(roofShadow ? { roofShadow } : {}), ...(regionsPlan ? { materialRegions: regionsPlan.report } : regionsSkipped ? { materialRegions: { skipped: regionsSkipped } } : {}) };
 }

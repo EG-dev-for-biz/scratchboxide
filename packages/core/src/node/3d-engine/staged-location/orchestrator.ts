@@ -199,6 +199,8 @@ import { PARTY_WALL_TEXTURE_VERSION, texturePartyWall } from './pipeline-k/party
 import { detailBakeProvenance, TILE_DETAIL_BAKE_VERSION, type TileDetailBakeReport } from '../../spatial/tile-detail-bake';
 import { measureVisibleDefects, VISIBLE_DEFECTS_PARAMS } from './pipeline-k/visible-defects';
 import { TEXTURE_HARMONIZE_VERSION, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
+import { VIEW_RELIGHT_VERSION, viewRelightEnvParams } from './pipeline-k/view-relight';
+import { ROOF_SHADOW_VERSION, roofShadowAuditPng } from './pipeline-k/roof-shadow';
 import { describeMaterialRegions, MATERIAL_REGIONS_VERSION, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE, PIPELINE_I_VERSION, TRELLIS_SEEDS, runPipelineI } from './pipeline-i/pipeline-i';
 import { PROJECT_MAX_RELIEF_M, pipelineIRefineEnabled, refinePipelineI, type RefineOutcome } from './pipeline-i/refine';
@@ -2664,21 +2666,41 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // the swatch detail bake: the building's survey swatches (AI Beautify, one image call per station) baked into the
                 // twin's atlases as the detail band the tile cannot carry (generated); off by default, SCRATCHBOX_K_DETAIL_BAKE=1 or the node graph on
                 const detailBakeOn = kTwin && !!deps.pipelineK?.detailBake && stepOn('twin.detailBake', process.env.SCRATCHBOX_K_DETAIL_BAKE?.trim() === '1');
+                // the view relight: the photos evened out from image-model relights of rendered views (pipeline-k/view-relight.ts);
+                // off by default, SCRATCHBOX_K_VIEW_RELIGHT=1 or the node graph on; needs the lighting model client
+                const relightClient = harmonizeOn && stepOn('twin.viewRelight', process.env.SCRATCHBOX_K_VIEW_RELIGHT?.trim() === '1') ? deps.textures?.lighting : undefined;
+                if (kTwin && !relightClient) logStep('twin.viewRelight', 'skipped');
+                // the roof shadow lift: suns fitted from the mesh, its cast shadow on every roof and terrace lifted (pipeline-k/roof-shadow.ts),
+                // a single building (pipeline K, with harmonising) or a district's twin alike; off by default, SCRATCHBOX_K_ROOF_SHADOW=1 or the node graph on
+                const roofShadowOn = (!kTwin || harmonizeOn) && stepOn('twin.roofShadow', process.env.SCRATCHBOX_K_ROOF_SHADOW?.trim() === '1');
+                const roofShadowOpts = roofShadowOn ? { roofShadow: { ...(extraction.geometryGlb && fs.existsSync(extraction.geometryGlb) ? { context: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)) } : {}), progress: (m: string) => io.progress(`textures: ${m}`) } } : {};
+                if (kTwin && !roofShadowOn) logStep('twin.roofShadow', 'skipped');
                 if (kTwin && !materialSets) cache.writeRunNote(runId, 'pipeline_k_materials', { skipped: deps.pipelineK?.materialSets ? 'off (SCRATCHBOX_K_MATERIAL_REGIONS=1 turns it on)' : 'no texture library in this build\'s services' });
                 // the window fit's planes, whose windows material regions draws on the scan pieces lying on them
                 const kOrthos = materialSets ? cache.readRunNote<{ orthosDir?: string }>(runId, 'pipeline_k')?.orthosDir : undefined;
                 const fitFile = kOrthos ? path.join(kOrthos, WINDOW_FIT_FILE) : undefined;
                 const planes = kOrthos ? fittedPlanesOf(kOrthos) : [];
                 const grammarFile = kOrthos ? path.join(kOrthos, WALL_GRAMMAR_FILE) : undefined;
-                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '');
+                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '', relightClient ? `${VIEW_RELIGHT_VERSION}:${lightingModels().join(',')}:${lightingPromptVariant()}:${viewRelightEnvParams().key}` : '', roofShadowOn ? ROOF_SHADOW_VERSION : '');
                 const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport; materialRegions?: TileRefineTwin['materialRegions'] }>('textures', key, async dir => {
-                    const twin = await tileRefineTwin(bytes, target.layer.layer, kTwin ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), ...(harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0 } } : {}), ...(materialSets ? { materialRegions: { harvest: process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum', sets: (classes: RegionClass[]) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m) }), planes } } : {}) } : enhance ? {
-                        recreate: {
+                    const twin = await tileRefineTwin(bytes, target.layer.layer, kTwin ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), ...(harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0 } } : {}), ...(relightClient ? { viewRelight: { client: relightClient, models: lightingModels(), params: viewRelightEnvParams().params, signal: io.signal, progress: (m: string) => io.progress(`textures: ${m}`) } } : {}), ...roofShadowOpts, ...(materialSets ? { materialRegions: { harvest: process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum', sets: (classes: RegionClass[]) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m) }), planes } } : {}) } : enhance || roofShadowOn ? {
+                        ...(enhance ? { recreate: {
                             client: enhance, ...(deps.textures?.enhanceModels ? { models: deps.textures.enhanceModels } : {}),
                             budgetMs: TILE_REFINE_RECREATE_BUDGET_MS
-                        }
+                        } } : {}),
+                        ...roofShadowOpts
                     } : undefined);
                     if (twin.harmonize) cache.writeRunNote(runId, 'pipeline_k_texture', { version: TEXTURE_HARMONIZE_VERSION, layer: target.layer.layer, ...twin.harmonize });
+                    if (twin.viewRelight) cache.writeRunNote(runId, 'pipeline_k_view_relight', { version: VIEW_RELIGHT_VERSION, layer: target.layer.layer, ...twin.viewRelight });
+                    if (twin.roofShadow) {
+                        // the audit from above beside the twin (run notes hold no images); the note names it
+                        const { auditGrid, ...note } = twin.roofShadow;
+                        const auditPng = auditGrid ? path.join(dir, 'roof_shadow_topdown.png') : undefined;
+                        if (auditGrid && auditPng) fs.writeFileSync(auditPng, roofShadowAuditPng(auditGrid));
+                        // the stage writes into <entry>.tmp-<pid>-<hex>, renamed to <entry> when it finishes: the note names the entry
+                        const auditFinal = auditPng ? path.join(dir.replace(/\.tmp-\d+-[0-9a-f]+$/, ''), 'roof_shadow_topdown.png') : undefined;
+                        cache.writeRunNote(runId, 'roof_shadow', { version: ROOF_SHADOW_VERSION, layer: target.layer.layer, ...(auditGrid && auditFinal ? { auditPng: auditFinal, auditGrid: { cellM: auditGrid.cellM, x0: auditGrid.x0, z0: auditGrid.z0, w: auditGrid.w, h: auditGrid.h } } : {}), ...note });
+                    }
                     // pipeline K: the party wall (a wall the scan lacks, base-cleanup.ts) drawn as the building's masonry continued, by the image model
                     let twinGlb: Uint8Array = twin.glb;
                     if (kTwin && !harmonizeOn) logStep('twin.harmonize', 'skipped');

@@ -317,7 +317,21 @@ export function detailLock(original: RgbaImage8, answer: RgbaImage8, opts: { mas
     if (shift > t.maxShiftPx) {
         return { accepted: false, metrics, reasonCode: 'lighting_misaligned', reason: `the answer is shifted against the photo by ${shift.toFixed(2)} px at ${t.checkSide} px (limit ${t.maxShiftPx})` };
     }
-    // the field: masked grid means, masked Gaussian on the grid, ratio, clamp
+    const f = gainField(original, ans, mask, sigmaFrac);
+    metrics.clampedShare = f.clampedShare;
+    metrics.meanGain = f.meanGain;
+    if (metrics.clampedShare > t.maxClampedShare) {
+        return { accepted: false, metrics, reasonCode: 'lighting_out_of_range', reason: `${(100 * metrics.clampedShare).toFixed(0)} percent of the subject would need a gain outside ${GAIN_MIN.toFixed(2)}..${GAIN_MAX} (limit ${(100 * t.maxClampedShare).toFixed(0)} percent): the answer is not a relighting of this photo` };
+    }
+    return { accepted: true, metrics, field: f.field };
+}
+
+/**
+ * The smooth gain field blur(answer) / blur(original) of two registered images of one size: masked grid means, a masked
+ * Gaussian on the grid, the ratio, clamped. Outside the mask the field is the masked neighbours' smooth continuation.
+ */
+export function gainField(original: RgbaImage8, ans: RgbaImage8, mask: Uint8Array | undefined, sigmaFrac: number = BLUR_FRACTION): { field: NonNullable<LightingLockResult['field']>; clampedShare: number; meanGain: Vec3 } {
+    const W = original.width, H = original.height;
     const s = FIELD_GRID / Math.max(W, H);
     const gw = Math.max(2, Math.round(W * s)), gh = Math.max(2, Math.round(H * s));
     const go = gridMeans(original, mask, gw, gh), ga = gridMeans(ans, mask, gw, gh);
@@ -342,16 +356,11 @@ export function detailLock(original: RgbaImage8, answer: RgbaImage8, opts: { mas
         }
     }
     for (let g = 0; g < gw * gh; g++) if (go.w[g] > 0) { masked++; clamped += isClamped[g]; }
-    metrics.clampedShare = masked ? clamped / masked : 0;
-    metrics.meanGain = wsum ? [sum[0] / wsum, sum[1] / wsum, sum[2] / wsum] : [1, 1, 1];
-    if (metrics.clampedShare > t.maxClampedShare) {
-        return { accepted: false, metrics, reasonCode: 'lighting_out_of_range', reason: `${(100 * metrics.clampedShare).toFixed(0)} percent of the subject would need a gain outside ${GAIN_MIN.toFixed(2)}..${GAIN_MAX} (limit ${(100 * t.maxClampedShare).toFixed(0)} percent): the answer is not a relighting of this photo` };
-    }
-    return { accepted: true, metrics, field: { gw, gh, gain } };
+    return { field: { gw, gh, gain }, clampedShare: masked ? clamped / masked : 0, meanGain: wsum ? [sum[0] / wsum, sum[1] / wsum, sum[2] / wsum] : [1, 1, 1] };
 }
 
 /** The field's gain at image pixel (x, y) of a W x H image (bilinear between cell centres). */
-function fieldAt(f: NonNullable<LightingLockResult['field']>, W: number, H: number, x: number, y: number, out: Float64Array): void {
+export function fieldAt(f: NonNullable<LightingLockResult['field']>, W: number, H: number, x: number, y: number, out: Float64Array): void {
     const fx = Math.min(f.gw - 1, Math.max(0, ((x + 0.5) * f.gw) / W - 0.5)), fy = Math.min(f.gh - 1, Math.max(0, ((y + 0.5) * f.gh) / H - 0.5));
     const x0 = Math.floor(fx), y0 = Math.floor(fy), x1 = Math.min(f.gw - 1, x0 + 1), y1 = Math.min(f.gh - 1, y0 + 1), ax = fx - x0, ay = fy - y0;
     for (let c = 0; c < 3; c++) {
