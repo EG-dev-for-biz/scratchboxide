@@ -21,7 +21,7 @@ import * as jpegJs from 'jpeg-js';
 import { describe, expect, it } from 'vitest';
 import { assembleGlb, parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
-import { parseVehicleReply, removeVehicles, type VehicleJudge } from '../src/node/3d-engine/staged-location/vehicle-removal';
+import { parseVehicleBatchReply, parseVehicleReply, removeVehicles, VEHICLE_REMOVAL_PARAMS, type VehicleBatchJudge, type VehicleJudge } from '../src/node/3d-engine/staged-location/vehicle-removal';
 import { buildGroundModel, loadScanMesh } from '../src/node/spatial/StreetViewSurveyPlanner';
 
 const HALF = 15, STEP = 0.25, TEX = 600;
@@ -207,5 +207,36 @@ describe('vehicle removal', () => {
         expect(r[0].lo).toEqual([20, -16]);
         expect(r[0].hi).toEqual([40, -8]);
         expect(r[0]).toMatchObject({ label: 'van', vehicle: true, permanent: false, confidence: 0.8, crop: 3 });
+    });
+
+    it('reads the crops in batches, and any crop the batch leaves out on its own, to the same result', async () => {
+        const scan = loadScanMesh(tex);
+        const ground = buildGroundModel(scan, { cellMeters: 1 });
+        // the batch judge answers every crop but the last of each batch, as the single judge would
+        const seen: number[][] = [];
+        const many: VehicleBatchJudge = async crops => {
+            seen.push(crops.map(c => c.index));
+            const out = new Map();
+            for (const c of crops.slice(0, -1)) out.set(c.index, await judge(c));
+            return out;
+        };
+        let singles = 0;
+        const one: VehicleJudge = async c => { singles++; return judge(c); };
+        const P = { ...VEHICLE_REMOVAL_PARAMS, batch: 2 };
+        const out = await removeVehicles({ texturedGlb: tex, geometryGlb: geo, scan, ground, judge: one, judgeMany: many, outDir: path.join(dir, 'batched'), P });
+        const r = out.report;
+        expect(seen.every(b => b.length <= 2)).toBe(true);
+        expect(singles).toBe(seen.length);
+        expect(r.modelCalls).toBe(seen.length + singles);
+        expect(r.removed).toHaveLength(1);
+        expect(r.removed[0].labels).toEqual(['parked red car']);
+    });
+
+    it("parses a batch reply per image, leaving out an image it does not answer", () => {
+        const crops = [{ index: 7, frame: { x0: 0, z0: 0, widthM: 10, heightM: 10 } }, { index: 9, frame: { x0: 100, z0: 0, widthM: 10, heightM: 10 } }];
+        const r = parseVehicleBatchReply('{"images":[{"image":2,"objects":[{"box_2d":[0,0,500,500],"label":"car","vehicle":true}]}]}', crops);
+        expect([...r.keys()]).toEqual([9]);
+        expect(r.get(9)![0].lo).toEqual([100, 0]);
+        expect(r.get(9)![0].crop).toBe(9);
     });
 });

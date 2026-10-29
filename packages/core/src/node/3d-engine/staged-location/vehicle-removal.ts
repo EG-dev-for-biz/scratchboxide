@@ -43,7 +43,7 @@ import { renderTriangles } from './photo-match-eval';
 import { encodePng } from './png-encode';
 import type { VisionModelChain } from '../../gemini/vision-model-chain';
 
-export const VEHICLE_REMOVAL_VERSION = 'vehicle-removal/1';
+export const VEHICLE_REMOVAL_VERSION = 'vehicle-removal/2';
 
 export const VEHICLE_REMOVAL_PARAMS = {
     /** The top-surface grid. */
@@ -94,6 +94,11 @@ export const VEHICLE_REMOVAL_PARAMS = {
     concurrency: 10,
     /** Each call's limit. */
     timeoutMs: 90_000,
+    /** Crops read in one call (visionVehicleBatchJudge): a district's hundreds of crops in a tenth of the calls; a crop the
+     * batch's answer leaves out is read again on its own. 1: one crop a call. */
+    batch: 6,
+    /** A batch call's limit: its images are read together. */
+    batchTimeoutMs: 180_000,
     sendQuality: 90
 };
 export type VehicleRemovalParams = typeof VEHICLE_REMOVAL_PARAMS;
@@ -285,6 +290,35 @@ export function vehiclePrompt(crop: Pick<VehicleCrop, 'frame' | 'texelM'>): stri
         'An empty list is a correct answer when there is nothing.';
 }
 
+/** Reads several crops in one call: per crop index, what in it is a vehicle; a crop missing from the map was not answered. */
+export type VehicleBatchJudge = (crops: VehicleCrop[], signal?: AbortSignal) => Promise<Map<number, VehicleReading[]>>;
+
+/** The prompt for several crops at once: each image is introduced by its number, size and scale before it is sent. */
+export function vehicleBatchPrompt(count: number): string {
+    return `The ${count} images above are top-down orthophotos, north up, of a photogrammetry scan of a real city, each introduced by its number, size and scale. ` +
+        'The scan bakes in whatever stood there when it was flown; objects come out as soft, melted, rounded blobs with their colours smeared over them. ' +
+        'In each image separately, find every vehicle of any kind and size, parked or moving, wherever it stands (road, kerbside, car park, tracks, driveway), even when it is half melted into the road or cut off by the image edge. ' +
+        'Give each one its own box, tight around it, even in a row of vehicles nose to tail. Also box anything else you considered and decided is not a vehicle, so the decision is explicit. ' +
+        'Reply JSON only: {"images": [{"image": the image\'s number, "objects": [{"box_2d": [ymin, xmin, ymax, xmax] in 0-1000 of that image, "label": "a few words of what it is", ' +
+        '"vehicle": true|false, "permanent": true|false (false when it stands there only for a while and would not be in a model of the place next month), "confidence": 0..1}]}]}, ' +
+        'one entry for every image, in order. An empty list of objects is a correct answer for an image with nothing.';
+}
+
+/** Parses a batch reply into each crop's plan boxes (crops[k] is image k + 1); a crop with no entry is left out of the map. */
+export function parseVehicleBatchReply(text: string, crops: Array<Pick<VehicleCrop, 'frame' | 'index'>>): Map<number, VehicleReading[]> {
+    const out = new Map<number, VehicleReading[]>();
+    const m = text.match(/\{[\s\S]*\}/);
+    if (!m) return out;
+    let doc: any;
+    try { doc = JSON.parse(m[0]); } catch { return out; }
+    for (const e of Array.isArray(doc?.images) ? doc.images : []) {
+        const k = Number(e?.image) - 1;
+        if (!Number.isInteger(k) || k < 0 || k >= crops.length || !Array.isArray(e?.objects)) continue;
+        out.set(crops[k].index, parseVehicleReply(JSON.stringify({ objects: e.objects }), crops[k]));
+    }
+    return out;
+}
+
 /** Parses the model's reply into plan boxes (the image's row 0 is the frame's minimum z). */
 export function parseVehicleReply(text: string, crop: Pick<VehicleCrop, 'frame' | 'index'>): VehicleReading[] {
     const m = text.match(/\{[\s\S]*\}/);
@@ -305,6 +339,28 @@ export function parseVehicleReply(text: string, crop: Pick<VehicleCrop, 'frame' 
         });
     }
     return out;
+}
+
+/** The vision model reading several crops in one call (VEHICLE_REMOVAL_PARAMS.batch). */
+export function visionVehicleBatchJudge(vision: VisionModelChain<string>, P: VehicleRemovalParams = VEHICLE_REMOVAL_PARAMS): VehicleBatchJudge {
+    return async (crops, signal) => {
+        const own = new AbortController();
+        const timer = setTimeout(() => own.abort(new Error(`the vision call took longer than ${P.batchTimeoutMs / 1000} s`)), P.batchTimeoutMs);
+        try {
+            const parts = crops.flatMap((c, k) => [
+                { text: `Image ${k + 1}: ${Math.round(c.frame.widthM)} m by ${Math.round(c.frame.heightM)} m, about ${Math.round(c.texelM * 100)} cm per pixel.` },
+                { inlineData: { mimeType: 'image/jpeg', data: c.jpeg.toString('base64') } }
+            ]);
+            const r = await vision.generate({
+                contents: [{ role: 'user', parts: [...parts, { text: vehicleBatchPrompt(crops.length) }] }],
+                config: { responseMimeType: 'application/json', temperature: 0, maxOutputTokens: 8192 * Math.min(4, crops.length), abortSignal: signal ? AbortSignal.any([signal, own.signal]) : own.signal }
+            }, { stage: 'vehicles' });
+            const text = (r.response.candidates?.[0]?.content?.parts ?? []).filter(p => !(p as { thought?: boolean }).thought).map(p => p.text ?? '').join('');
+            const got = parseVehicleBatchReply(text, crops);
+            if (got.size) r.remember();
+            return got;
+        } finally { clearTimeout(timer); }
+    };
 }
 
 /** The vision model as the judge. */
@@ -1009,6 +1065,8 @@ export interface RemoveVehiclesInput {
     ground: GroundModel;
     look?: VehicleLookups;
     judge: VehicleJudge;
+    /** Reads several crops in one call (P.batch at a time); a crop it leaves out is read again with `judge`. */
+    judgeMany?: VehicleBatchJudge;
     outDir: string;
     /** Writes each crop sent to the model (and the fills) beside the outputs. */
     keepImages?: boolean;
@@ -1046,8 +1104,8 @@ export async function removeVehicles(input: RemoveVehiclesInput): Promise<Remove
     const cropDir = path.join(input.outDir, 'crops');
     if (input.keepImages) fs.mkdirSync(cropDir, { recursive: true });
     const failedFirst = new Set<number>();
-    const readCrop = async (c: { frame: TopDownFrame }, index: number, last: boolean) => {
-        if (input.signal?.aborted) throw input.signal.reason ?? new Error('aborted');
+    let modelCalls = 0;
+    const renderCrop = (c: { frame: TopDownFrame }, index: number): VehicleCrop => {
         const sub = selectTriangles(tris, trianglesNear(tris, c.frame));
         let topY = -Infinity;
         for (let i = 1; i < sub.positions.length; i += 3) topY = Math.max(topY, sub.positions[i]);
@@ -1056,18 +1114,37 @@ export async function removeVehicles(input: RemoveVehiclesInput): Promise<Remove
         const r = renderTriangles([sub], cam, { supersample: 1, ambient: 1, background: [128, 128, 128] });
         const jpeg = Buffer.from(jpegJs.encode({ data: Buffer.from(r.rgba.buffer, r.rgba.byteOffset, r.rgba.byteLength), width: r.width, height: r.height }, P.sendQuality).data);
         if (input.keepImages) fs.writeFileSync(path.join(cropDir, `crop_${index}.jpg`), jpeg);
+        return { index, frame: c.frame, jpeg, widthPx: r.width, heightPx: r.height, texelM: c.frame.widthM / r.width };
+    };
+    const readCrop = async (c: { frame: TopDownFrame }, index: number, last: boolean) => {
+        if (input.signal?.aborted) throw input.signal.reason ?? new Error('aborted');
+        const crop = renderCrop(c, index);
         try {
-            const got = await input.judge({ index, frame: c.frame, jpeg, widthPx: r.width, heightPx: r.height, texelM: c.frame.widthM / r.width }, input.signal);
-            readings.push(...got);
+            modelCalls++;
+            readings.push(...await input.judge(crop, input.signal));
         } catch (err) {
             if (input.signal?.aborted) throw err;
             if (last) failedCalls.push({ crop: index, error: err instanceof Error ? err.message : String(err) });
             else failedFirst.add(index);
         }
     };
-    await mapConcurrent(crops, P.concurrency, (c, index) => readCrop(c, index, false));
-    // a call that failed (a timeout, a refusal of the moment) is asked once more
-    if (failedFirst.size) await mapConcurrent([...failedFirst], P.concurrency, index => readCrop(crops[index], index, true));
+    if (input.judgeMany && P.batch > 1) {
+        // several crops a call; a crop the batch's answer leaves out (or a batch that failed) is read once more on its own
+        const batches: number[][] = [];
+        for (let k = 0; k < crops.length; k += P.batch) batches.push(crops.slice(k, k + P.batch).map((_, j) => k + j));
+        await mapConcurrent(batches, P.concurrency, async ids => {
+            if (input.signal?.aborted) throw input.signal.reason ?? new Error('aborted');
+            const rendered = ids.map(i => renderCrop(crops[i], i));
+            let got = new Map<number, VehicleReading[]>();
+            try { modelCalls++; got = await input.judgeMany!(rendered, input.signal); } catch (err) { if (input.signal?.aborted) throw err; }
+            for (const i of ids) { const r = got.get(i); if (r) readings.push(...r); else failedFirst.add(i); }
+        });
+        if (failedFirst.size) await mapConcurrent([...failedFirst], P.concurrency, index => readCrop(crops[index], index, true));
+    } else {
+        await mapConcurrent(crops, P.concurrency, (c, index) => readCrop(c, index, false));
+        // a call that failed (a timeout, a refusal of the moment) is asked once more
+        if (failedFirst.size) await mapConcurrent([...failedFirst], P.concurrency, index => readCrop(crops[index], index, true));
+    }
     readings.sort((a, b) => a.crop - b.crop || a.lo[0] - b.lo[0] || a.lo[1] - b.lo[1]);
     const { region, unmatchedReadings, vehicles: distinct, boxOnly } = vehicleRegion(grid, candidates, readings, P);
     measureRings(region, input.scan, input.ground, P);
@@ -1095,7 +1172,7 @@ export async function removeVehicles(input: RemoveVehiclesInput): Promise<Remove
         }
     };
     const report: VehicleRemovalReport = {
-        schema: 'scratchbox.vehicle-removal/1', version: VEHICLE_REMOVAL_VERSION, candidates: candidates.length, crops: crops.length, modelCalls: crops.length - failedCalls.length, failedCalls,
+        schema: 'scratchbox.vehicle-removal/1', version: VEHICLE_REMOVAL_VERSION, candidates: candidates.length, crops: crops.length, modelCalls, failedCalls,
         readings: readings.map((r, k) => { const used = new Set(region.groups.flatMap(g => g.readings)); return { ...r, removed: used.has(k) || [...used].some(u => sameObject(readings[u], r)) }; }),
         vehicles: distinct.length, boxOnlyVehicles: boxOnly.length, unpatchedVehicles: unmatchedReadings.length - boxOnly.length, transientKept: readings.filter(r => !r.vehicle && !r.permanent).length,
         removed, patch: {}, notes: [], ms: 0
