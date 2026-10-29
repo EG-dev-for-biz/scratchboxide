@@ -25,6 +25,9 @@
  *     zone at the read storey pitch (the pitch measured over the whole zone where it repeats three times or more: the
  *     strongest repeat of the image near the read pitch, whichever way the brightness goes), only where the photo covers
  *     the plane (nothing is drawn where it never reached: no generated windows);
+ *     The wide walls are read first; a narrow face (a tower's window column, a few metres wide, where the model tends to
+ *     skip storeys) is then guided by the storey pitch they were read at: a reading whose rows are a whole number of
+ *     those storeys apart, or a single row, is tiled at it (storeys run on around a building);
  *  4. judge: the outlines are drawn over the read crop and a second crop of the zone the model was not shown, and the
  *     model accepts or rejects the zone, column by column. A rejected zone draws nothing; a plane with no accepted zone
  *     keeps the window fit's reading.
@@ -43,20 +46,20 @@ import { encodePng } from '../png-encode';
 import type { FitFrame, FittedPlane, WindowFitFile, WindowRect } from '../window-fit';
 import { PLANES_FILE, type PlaneOrthosFile } from './plane-orthos';
 
-export const FACADE_READER_VERSION = 'facade-reader/4';
+export const FACADE_READER_VERSION = 'facade-reader/6';
 
 /** The reader's vision model: fast, cheap and good enough at reading openings (benchmarked 2026-10-29 on the ESB's tower crops against gemini-4-argon and gemini-3.5-flash-lite); the app's other vision models are the fallback. */
 export const FACADE_READER_MODEL = { model: 'gemini-3.8-flash', thinkingBudget: 512 } as const;
 
 export const FACADE_READER_PARAMS = {
-    /** Planes smaller than this (m), or with less of their photo covered, are not read. */
-    minWidthM: 6, minHeightM: 10, minCoverage: 0.3,
+    /** Planes smaller than this (m), or with less of their photo covered, are not read: a wall at least minWallWidthM wide and minHeightM tall (a tower's narrow window-column faces included), a roof at least minWidthM each way. */
+    minWallWidthM: 2, minWidthM: 6, minHeightM: 10, minCoverage: 0.3,
     /** The unit cell's crop: up to this tall (m), at least this covered (or nine tenths of the plane's own coverage); the image the model sees is scaled to at most maxSidePx. */
     readCropM: 24, minCropCoverage: 0.7, maxSidePx: 1600, maxScale: 4,
     /** Zones read per plane at most. */
     maxZones: 4,
-    /** Planes read per build at most (the largest covered area first; the rest reported unread), and at once. */
-    maxPlanes: 80, concurrency: 12,
+    /** Planes read per build at most (the walls first, then the roofs, each largest covered area first; the rest reported unread), and at once. */
+    maxPlanes: 120, concurrency: 16,
     /** A plane whose covered photo varies less than this (luminance standard deviation over mean) is blank: nothing to read, no call. */
     minContrast: 0.06,
     /** The pitch is measured within this share of the read pitch; an opening is drawn where this share of it is covered. */
@@ -89,7 +92,7 @@ export interface FacadeJudgement { accept: boolean; badColumns: number[]; conf: 
 export interface ZoneRecord {
     label?: string; region: ImageRegion; outcome: 'drawn' | 'none' | 'rejected' | 'failed'; why: string;
     reading?: { rows: number; openings: number; conf: number; notes?: string; between?: string };
-    fit?: { pitchPx: number; pitchM: number; measured: boolean; columns: number; rows: number; openings: number };
+    fit?: { pitchPx: number; pitchM: number; measured: boolean; /** The storey pitch taken from the building's wide walls (readPlanes' guide). */ guided?: boolean; columns: number; rows: number; openings: number };
     glass?: GlassReading; judge?: FacadeJudgement;
 }
 
@@ -134,7 +137,7 @@ export function judgePrompt(columns: number): string {
     return [
         'This image is two parts of one zone of a building surface side by side, with magenta outlines drawn by a program where it thinks each opening\'s glass is.',
         `The outlines stand in ${columns} column${columns === 1 ? '' : 's'} on each part, numbered 1 to ${columns} from left to right (the same numbering on both parts).`,
-        'Judge whether the outlines sit on the real openings: each outline should cover one opening\'s glass, not a pier, a spandrel or blank surface, and every opening in a column should have its outline.',
+        'Judge whether the outlines sit on the real openings: each outline should cover one opening\'s glass, not a pier, a spandrel or blank surface, and every opening in a column should have its outline. Uniform grey or black areas are not covered by the photo: no outlines are drawn there on purpose, so openings you cannot see there are not missed.',
         'Give "accept": true when most outlines sit on openings; "badColumns": the numbers of columns whose outlines mostly miss the openings; "conf": 0..100; "notes": one short sentence.',
         'Answer with JSON only: {"accept":true,"badColumns":[],"conf":0,"notes":"..."}'
     ].join('\n');
@@ -240,12 +243,17 @@ export function zoneCrops(L: Float32Array, W: number, zone: ImageRegion, h: numb
     return { read: box(read), ...(held !== undefined ? { heldOut: box(held) } : {}) };
 }
 
-/** A region of the photo as a PNG scaled by `scale` (nearest texel), with optional outlines (photo pixels). */
-export function regionPng(img: FacadePhoto, r: ImageRegion, scale: number, outlines: WindowRect[] = []): { png: Buffer; width: number; height: number; rgba: Uint8Array } {
+/**
+ * A region of the photo as a PNG scaled by `scale` (nearest texel), with optional outlines (photo pixels). With `L`, the
+ * texels the photo never reached (NaN there) are drawn uniform grey, so the model neither reads nor misses openings in
+ * texture filled from the facade's repeats.
+ */
+export function regionPng(img: FacadePhoto, r: ImageRegion, scale: number, outlines: WindowRect[] = [], L?: Float32Array): { png: Buffer; width: number; height: number; rgba: Uint8Array } {
     const W = img.width, ow = Math.max(1, Math.round((r.x1 - r.x0) * scale)), oh = Math.max(1, Math.round((r.y1 - r.y0) * scale));
     const out = new Uint8Array(ow * oh * 4);
     for (let y = 0; y < oh; y++) for (let x = 0; x < ow; x++) {
         const sx = Math.min(W - 1, r.x0 + Math.floor(x / scale)), sy = Math.min(img.height - 1, r.y0 + Math.floor(y / scale)), p = (sy * W + sx) * 4, q = (y * ow + x) * 4;
+        if (L && !Number.isFinite(L[sy * W + sx])) { out[q] = out[q + 1] = out[q + 2] = 128; out[q + 3] = 255; continue; }
         out[q] = img.rgba[p]; out[q + 1] = img.rgba[p + 1]; out[q + 2] = img.rgba[p + 2]; out[q + 3] = 255;
     }
     const lw = Math.max(1, Math.round(scale / 2));
@@ -289,29 +297,33 @@ export function columnsOf(reading: FacadeReading, cropW: number): ReaderColumn[]
     return groups.filter(g => g.length >= need).map(g => ({ x0: med(g.map(o => o.x0)), x1: med(g.map(o => o.x1)), panes: med(g.map(o => o.panes)), rows: g.length }));
 }
 
-export interface ZoneTiling { pitch: number; measured: boolean; columns: ReaderColumn[]; rows: Array<[number, number]>; rects: WindowRect[]; columnOf: number[] }
+export interface ZoneTiling { pitch: number; measured: boolean; guided?: boolean; columns: ReaderColumn[]; rows: Array<[number, number]>; rects: WindowRect[]; columnOf: number[] }
 
 /**
  * The zone filled from the model's cell: its columns at their read places; its rows at the read storey pitch (measured
  * over the zone, within pitchSearch, where it repeats three times or more: the image's strongest repeat down the columns,
  * whichever way the brightness goes) from the read rows' own phase, each row the read opening height, through the zone;
- * an opening where the photo covers it.
+ * an opening where the photo covers it. With `guidePx`, the storey pitch the building's wide walls were read at: a narrow
+ * face's reading that skips storeys (its rows a whole number of guide pitches apart, within a fifth of one) or holds a
+ * single row is tiled at the guide pitch instead (storeys run on around a building).
  */
-export function tileZone(L: Float32Array, W: number, zone: ImageRegion, crop: ImageRegion, reading: FacadeReading, P: FacadeReaderParams = FACADE_READER_PARAMS): ZoneTiling | { why: string } {
+export function tileZone(L: Float32Array, W: number, zone: ImageRegion, crop: ImageRegion, reading: FacadeReading, P: FacadeReaderParams = FACADE_READER_PARAMS, guidePx?: number): ZoneTiling | { why: string } {
     const cw = crop.x1 - crop.x0, ch = crop.y1 - crop.y0;
     const columns = columnsOf(reading, cw).map(c => ({ ...c, x0: c.x0 + crop.x0, x1: c.x1 + crop.x0 }));
     if (!columns.length) return { why: 'the reading gave no column of openings' };
     const read = reading.rows.map(r => [crop.y0 + (r.y[0] / 1000) * ch, crop.y0 + (r.y[1] / 1000) * ch] as [number, number]).sort((a, b) => a[0] - b[0]);
     const oh = [...read.map(r => r[1] - r[0])].sort((a, b) => a - b)[read.length >> 1];
-    // one row read: it alone (a ground floor, one band of rooflights)
-    if (read.length < 2) {
+    // one row read: it alone (a ground floor, one band of rooflights), unless a guide says the storeys run on
+    if (read.length < 2 && !(guidePx && guidePx > 2)) {
         const rects: WindowRect[] = [], columnOf: number[] = [];
         columns.forEach((c, ci) => { if (coveredShare(L, W, c.x0, read[0][0], c.x1, read[0][1]) >= P.minCovered) { rects.push([c.x0, read[0][0], c.x1, read[0][1]]); columnOf.push(ci); } });
         return rects.length ? { pitch: 0, measured: false, columns, rows: [read[0]], rects, columnOf } : { why: 'the photo does not cover the one row read' };
     }
     const tops = read.map(r => r[0]), steps = tops.slice(1).map((t, i) => t - tops[i]).filter(s => s > 2).sort((a, b) => a - b);
-    if (!steps.length) return { why: 'the rows read overlap' };
-    let pitch = steps[steps.length >> 1], measured = false;
+    if (!steps.length && !(guidePx && guidePx > 2)) return { why: 'the rows read overlap' };
+    let pitch = steps.length ? steps[steps.length >> 1] : guidePx!, measured = false, guided = !steps.length;
+    // a reading that skips storeys: its rows a whole number of the building's storeys apart
+    if (guidePx && guidePx > 2 && steps.length) { const n = pitch / guidePx; if (Math.round(n) >= 1 && Math.abs(n - Math.round(n)) <= 0.2) { guided = Math.round(n) > 1 || Math.abs(pitch - guidePx) > 1; pitch = guidePx; } }
     // the pitch measured over the zone: the strongest autocorrelation of the columns' mean brightness near the read pitch
     if ((zone.y1 - zone.y0) >= 3 * pitch) {
         const prof: number[] = [];
@@ -319,11 +331,13 @@ export function tileZone(L: Float32Array, W: number, zone: ImageRegion, crop: Im
         const fin = prof.filter(Number.isFinite), m = fin.reduce((a, b) => a + b, 0) / Math.max(1, fin.length);
         const ac = (lag: number) => { let s = 0, n = 0; for (let i = 0; i + lag < prof.length; i++) if (Number.isFinite(prof[i]) && Number.isFinite(prof[i + lag])) { s += (prof[i] - m) * (prof[i + lag] - m); n++; } return n > pitch ? s / n : -Infinity; };
         let best = -Infinity, bl = -1;
-        for (let lag = Math.max(3, Math.floor(pitch * (1 - P.pitchSearch))); lag <= Math.ceil(pitch * (1 + P.pitchSearch)); lag++) { const v = ac(lag); if (v > best) { best = v; bl = lag; } }
+        // guided: the building's pitch held within 3% (a narrow face's own repeat is noisy)
+        const span = guided ? 0.03 : P.pitchSearch;
+        for (let lag = Math.max(3, Math.floor(pitch * (1 - span))); lag <= Math.ceil(pitch * (1 + span)); lag++) { const v = ac(lag); if (v > best) { best = v; bl = lag; } }
         if (bl > 0 && best > 0) {
             const a1 = ac(bl - 1), a2 = ac(bl + 1), den = a1 - 2 * best + a2;
-            pitch = Number.isFinite(a1) && Number.isFinite(a2) && den < 0 ? bl + 0.5 * (a1 - a2) / den : bl;
-            measured = true;
+            const m2 = Number.isFinite(a1) && Number.isFinite(a2) && den < 0 ? bl + 0.5 * (a1 - a2) / den : bl;
+            if (!guided || Math.abs(m2 - pitch) <= 0.03 * pitch) { pitch = m2; measured = true; }
         }
     }
     // the read rows' phase at that pitch (their circular mean), then every row through the zone
@@ -335,7 +349,7 @@ export function tileZone(L: Float32Array, W: number, zone: ImageRegion, crop: Im
     const rects: WindowRect[] = [], columnOf: number[] = [];
     columns.forEach((col, ci) => { for (const [y0, y1] of rows) if (coveredShare(L, W, col.x0, y0, col.x1, y1) >= P.minCovered) { rects.push([col.x0, y0, col.x1, y1]); columnOf.push(ci); } });
     if (!rects.length) return { why: 'the photo does not cover the zone\'s openings' };
-    return { pitch, measured, columns, rows, rects, columnOf };
+    return { pitch, measured, ...(guided ? { guided } : {}), columns, rows, rects, columnOf };
 }
 
 // ------------------------------------------------------------------------------------------------ one plane, all planes
@@ -348,7 +362,7 @@ const round2 = (r: WindowRect): WindowRect => r.map(v => Math.round(v * 100) / 1
  * The agent on one plane (see the file comment): overview, a unit cell per zone, the zone tiled, judged. The record says
  * what each zone came to; the openings, panes and glass zones are returned when any zone was drawn.
  */
-export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> | undefined, f: FacadeFrame, ask: FacadeAsk, P: FacadeReaderParams = FACADE_READER_PARAMS, review?: (png: Buffer, tag: string) => void): Promise<{ record: FacadeReadRecord; rects?: WindowRect[]; panes?: WindowRect[]; glass?: Array<{ region: ImageRegion; glass: GlassReading }> }> {
+export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> | undefined, f: FacadeFrame, ask: FacadeAsk, P: FacadeReaderParams = FACADE_READER_PARAMS, review?: (png: Buffer, tag: string) => void, guide?: { pitchM: number }): Promise<{ record: FacadeReadRecord; rects?: WindowRect[]; panes?: WindowRect[]; glass?: Array<{ region: ImageRegion; glass: GlassReading }> }> {
     const t0 = Date.now(), W = img.width, H = img.height, roof = f.kind === 'roof';
     let calls = 0;
     const rec = (outcome: FacadeReadRecord['outcome'], why: string, zones?: ZoneRecord[]): FacadeReadRecord => ({ facadeId: f.facadeId, outcome, why, ...(zones ? { zones } : {}), calls, ms: Date.now() - t0 });
@@ -363,7 +377,7 @@ export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> 
     if (H <= cropPx * 1.25) zones = [{ region: whole }];
     else {
         let parsed: ReturnType<typeof parseZones>;
-        try { parsed = parseZones(await call(regionPng(img, whole, Math.min(1, scaleFor(whole, P))).png, overviewPrompt(W * f.pixel, H * f.pixel, roof), 'overview', whole)); }
+        try { parsed = parseZones(await call(regionPng(img, whole, Math.min(1, scaleFor(whole, P)), [], L).png, overviewPrompt(W * f.pixel, H * f.pixel, roof), 'overview', whole)); }
         catch (err) { return { record: rec('failed', `the overview failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300)) }; }
         if (parsed.conf < P.minConf) return { record: rec('kept', `the model was unsure of the plane's zones (${parsed.conf})`) };
         zones = parsed.zones.filter(z => z.openings).slice(0, P.maxZones).map(z => ({ region: { x0: Math.floor((z.box[0] / 1000) * W), y0: Math.floor((z.box[1] / 1000) * H), x1: Math.ceil((z.box[2] / 1000) * W), y1: Math.ceil((z.box[3] / 1000) * H) }, ...(z.label ? { label: z.label } : {}) }));
@@ -379,18 +393,18 @@ export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> 
         if (!read) { zr.outcome = 'none'; zr.why = 'no part of the zone is covered enough to read'; continue; }
         const scale = scaleFor(read, P);
         let reading: FacadeReading;
-        try { reading = parseReading(await call(regionPng(img, read, scale).png, readPrompt((read.x1 - read.x0) * f.pixel, (read.y1 - read.y0) * f.pixel, roof), 'read', read)); }
+        try { reading = parseReading(await call(regionPng(img, read, scale, [], L).png, readPrompt((read.x1 - read.x0) * f.pixel, (read.y1 - read.y0) * f.pixel, roof), 'read', read)); }
         catch (err) { zr.why = `the reading failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300); continue; }
         zr.reading = { rows: reading.rows.length, openings: reading.rows.reduce((a, r) => a + r.openings.length, 0), conf: reading.conf, ...(reading.notes ? { notes: reading.notes } : {}), ...(reading.between ? { between: reading.between } : {}) };
         if (reading.glass) zr.glass = reading.glass;
         if (reading.conf < P.minConf) { zr.outcome = 'none'; zr.why = `the model was unsure of its reading (${reading.conf})`; continue; }
         if (!reading.rows.length) { zr.outcome = 'none'; zr.why = 'the model saw no openings in the zone'; continue; }
-        const t = tileZone(L, W, z.region, read, reading, P);
+        const t = tileZone(L, W, z.region, read, reading, P, guide && !roof ? guide.pitchM / f.pixel : undefined);
         if ('why' in t) { zr.outcome = 'none'; zr.why = t.why; continue; }
-        zr.fit = { pitchPx: Math.round(t.pitch * 100) / 100, pitchM: Math.round(t.pitch * f.pixel * 100) / 100, measured: t.measured, columns: t.columns.length, rows: t.rows.length, openings: t.rects.length };
+        zr.fit = { pitchPx: Math.round(t.pitch * 100) / 100, pitchM: Math.round(t.pitch * f.pixel * 100) / 100, measured: t.measured, ...(t.guided ? { guided: true } : {}), columns: t.columns.length, rows: t.rows.length, openings: t.rects.length };
         // the judge: the outlines over the read crop and a held-out one
         const kept = [...new Set(t.columnOf)].sort((a, b) => a - b);
-        const judged = sideBySide(regionPng(img, read, scale, t.rects), regionPng(img, heldOut ?? read, scale, t.rects));
+        const judged = sideBySide(regionPng(img, read, scale, t.rects, L), regionPng(img, heldOut ?? read, scale, t.rects, L));
         review?.(judged, `z${zi}`);
         let judge: FacadeJudgement;
         try { judge = parseJudgement(await call(judged, judgePrompt(kept.length), 'judge', heldOut ?? read)); }
@@ -424,12 +438,14 @@ export interface FacadeReaderFile {
     unread: { planes: number; areaM2: number };
     /** The planes whose openings were drawn. */
     readings: PlaneReading[];
+    /** The storey pitch the wide walls were read at, given to the narrow ones. */
+    guide?: { pitchM: number };
 }
 
 export const FACADE_READER_FILE = 'facade_reader.json';
 
 /**
- * Reads the largest covered planes of an orthos directory (maxPlanes at most): the walls tile_refine photographed
+ * Reads the planes of an orthos directory (maxPlanes at most, the walls first, each kind largest first): the walls tile_refine photographed
  * (facades.json) and every other plane (planes.json). Needs only the photos, so it runs beside the window fit; its
  * readings go into window_fit.json after (mergeReadings). Done once per photo set: facade_reader.json of this version is
  * returned as it is. The judged overlays are kept in facade_reader/ for review.
@@ -443,22 +459,26 @@ export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { sign
     }
     const t0 = Date.now();
     // the walls tile_refine photographed (facades.json), then every other plane of the building (plane-orthos.ts: roofs,
-    // terraces, slopes, the walls it did not analyse); the largest covered area first, up to maxPlanes, the rest reported
+    // terraces, slopes, the walls it did not analyse); walls then roofs, up to maxPlanes, the rest reported
     const pf = path.join(orthosDir, PLANES_FILE);
     const others = fs.existsSync(pf) ? (JSON.parse(fs.readFileSync(pf, 'utf8')) as PlaneOrthosFile).planes as unknown as FacadeFrame[] : [];
     const areaOf = (f: FacadeFrame) => f.width * f.height * f.pixel * f.pixel * (f.coverage ?? 0);
     const eligible = [...(JSON.parse(fs.readFileSync(path.join(orthosDir, 'facades.json'), 'utf8')).facades as FacadeFrame[]), ...others]
-        .filter(f => fs.existsSync(path.join(orthosDir, f.image)) && (f.coverage ?? 0) >= P.minCoverage && (f.kind === 'roof' ? f.width * f.pixel >= P.minWidthM && f.height * f.pixel >= P.minWidthM : f.width * f.pixel >= P.minWidthM && f.height * f.pixel >= P.minHeightM))
-        .sort((a, b) => areaOf(b) - areaOf(a));
+        .filter(f => fs.existsSync(path.join(orthosDir, f.image)) && (f.coverage ?? 0) >= P.minCoverage && (f.kind === 'roof' ? f.width * f.pixel >= P.minWidthM && f.height * f.pixel >= P.minWidthM : f.width * f.pixel >= P.minWallWidthM && f.height * f.pixel >= P.minHeightM))
+        // the walls first (most of a building's openings), then the roofs and terraces, each the largest covered area first
+        .sort((a, b) => Number(a.kind === 'roof') - Number(b.kind === 'roof') || areaOf(b) - areaOf(a));
     const frames = eligible.slice(0, P.maxPlanes);
     const unread = { planes: eligible.length - frames.length, areaM2: Math.round(eligible.slice(P.maxPlanes).reduce((a, f) => a + areaOf(f), 0)) };
     const reviewDir = path.join(orthosDir, 'facade_reader');
     fs.mkdirSync(reviewDir, { recursive: true });
     const records: FacadeReadRecord[] = [], readings: PlaneReading[] = [];
-    let next = 0, done = 0;
+    // the wide walls first; then the narrow faces (a tower's window columns, where the model tends to skip storeys) and the
+    // roofs, the narrow walls guided by the storey pitch the wide ones were read at (their drawn zones' median, by openings)
+    const wide = (f: FacadeFrame) => f.kind !== 'roof' && f.width * f.pixel >= P.minWidthM;
+    let queue = frames.filter(wide), next = 0, done = 0, guide: { pitchM: number } | undefined;
     const worker = async () => {
         for (;;) {
-            const f = frames[next++];
+            const f = queue[next++];
             if (!f) return;
             if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('aborted');
             try {
@@ -466,7 +486,7 @@ export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { sign
                 let uncovered: Uint8Array | undefined;
                 const mf = f.uncoveredMask ? path.join(orthosDir, f.uncoveredMask) : undefined;
                 if (mf && fs.existsSync(mf)) { const m = decodePng(fs.readFileSync(mf)); uncovered = Uint8Array.from({ length: m.width * m.height }, (_, k) => (m.rgba[k * 4] >= 128 ? 1 : 0)); }
-                const r = await readFacade({ rgba: d.rgba, width: d.width, height: d.height }, uncovered, f, ask, P, (png, tag) => fs.writeFileSync(path.join(reviewDir, `${f.facadeId}_${tag}.png`), png));
+                const r = await readFacade({ rgba: d.rgba, width: d.width, height: d.height }, uncovered, f, ask, P, (png, tag) => fs.writeFileSync(path.join(reviewDir, `${f.facadeId}_${tag}.png`), png), guide);
                 records.push(r.record);
                 if (r.rects && r.panes) readings.push({ facadeId: f.facadeId, width: d.width, height: d.height, rects: r.rects, panes: r.panes, ...(r.glass?.length ? { glass: r.glass } : {}) });
             } catch (err) {
@@ -476,10 +496,15 @@ export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { sign
             opts.progress?.(`pipeline K: reading the building's planes (${++done} of ${frames.length})`);
         }
     };
-    await Promise.all(Array.from({ length: Math.max(1, Math.min(P.concurrency, frames.length)) }, worker));
+    const run = () => Promise.all(Array.from({ length: Math.max(1, Math.min(P.concurrency, queue.length)) }, worker));
+    await run();
+    const pitches: Array<[number, number]> = records.flatMap(r => (r.zones ?? []).filter(z => z.outcome === 'drawn' && z.fit && z.fit.rows > 1 && z.fit.pitchM > 0).map(z => [z.fit!.pitchM, z.fit!.openings] as [number, number])).sort((a, b) => a[0] - b[0]);
+    if (pitches.length) { const half = pitches.reduce((a, p) => a + p[1], 0) / 2; let acc = 0; for (const [m, w] of pitches) { acc += w; if (acc >= half) { guide = { pitchM: m }; break; } } }
+    queue = frames.filter(f => !wide(f)); next = 0;
+    await run();
     records.sort((a, b) => a.facadeId - b.facadeId);
     readings.sort((a, b) => a.facadeId - b.facadeId);
-    const file: FacadeReaderFile = { version: FACADE_READER_VERSION, params: P, ms: Date.now() - t0, facades: records, unread, readings };
+    const file: FacadeReaderFile = { version: FACADE_READER_VERSION, params: P, ms: Date.now() - t0, facades: records, unread, readings, ...(guide ? { guide } : {}) };
     fs.writeFileSync(recFile, JSON.stringify(file));
     return { records: file, cached: false };
 }

@@ -18,7 +18,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { FACADE_READER_VERSION, mergeReadings, parseJudgement, parseReading, parseZones, readFacade, readPlanes, type FacadeAsk, type FacadePhoto } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader';
+import { FACADE_READER_VERSION, luminanceOf, mergeReadings, parseJudgement, parseReading, parseZones, readFacade, readPlanes, tileZone, type FacadeAsk, type FacadePhoto } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 
 // a 30 m x 60 m facade at 0.1 m a pixel: 5 bays, each two windows 12 px wide, storeys every 38.4 px, windows 22 px tall;
@@ -105,6 +105,26 @@ describe('pipeline K facade reader (vision agent)', () => {
         checkOpenings(r.rects!, 4);
     });
 
+    it("tiles a narrow face's reading that skips storeys at the building's storey pitch (the guide)", () => {
+        const L = luminanceOf(facade());
+        const zone = { x0: 0, x1: W, y0: GREY_ROWS, y1: H }, crop = { x0: 0, x1: W, y0: 200, y1: 440 };
+        // the model saw every other storey only (rows two storeys apart)
+        const rows = [] as Array<{ y: [number, number]; openings: Array<{ x: [number, number]; panes: number }> }>;
+        for (let k = 0; k < 20; k += 2) { const t = PHASE + k * PITCH; if (t >= crop.y0 && t + WIN_H <= crop.y1) rows.push({ y: [((t - crop.y0) / 240) * 1000, ((t + WIN_H - crop.y0) / 240) * 1000], openings: [{ x: [(cols[0][0] / W) * 1000, (cols[0][1] / W) * 1000], panes: 1 }] }); }
+        const reading = { rows, conf: 80 };
+        const unguided = tileZone(L, W, zone, crop, reading);
+        const guided = tileZone(L, W, zone, crop, reading, undefined, PITCH);
+        if ('why' in unguided || 'why' in guided) throw new Error('no tiling');
+        expect(Math.abs(unguided.pitch - 2 * PITCH)).toBeLessThan(1);
+        expect(guided.guided).toBe(true);
+        expect(Math.abs(guided.pitch - PITCH)).toBeLessThan(0.6);
+        expect(guided.rects.length).toBeGreaterThanOrEqual(2 * unguided.rects.length - 1);
+        // a single row read: tiled through the zone at the guide
+        const one = tileZone(L, W, zone, crop, { rows: rows.slice(0, 1), conf: 80 }, undefined, PITCH);
+        if ('why' in one) throw new Error('no tiling');
+        expect(one.rows.length).toBeGreaterThan(10);
+    });
+
     it("keeps the window fit's reading when the judge rejects the outlines", async () => {
         const r = await readFacade(facade(), undefined, frame, standIn(false).ask);
         expect(r.record.outcome).toBe('kept');
@@ -133,6 +153,26 @@ describe('pipeline K facade reader (vision agent)', () => {
         const r = parseReading('x {"rows":[{"y":[100,200],"openings":[{"x":[10,20],"panes":3}]}],"glass":{"transparency":4,"tint":"blue"},"conf":70} y');
         expect(r.rows[0].openings[0].panes).toBe(3);
         expect(r.glass).toEqual({ transparency: 1, reflectivity: 0.3, opaque: false });
+    });
+
+    it('reads a narrow window-column wall (3 m wide) before any roof, and leaves out a roof under 6 m', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'facade-reader-narrow-'));
+        try {
+            const img = facade(), Wn = 30;
+            const narrow = new Uint8Array(Wn * H * 4);
+            for (let y = 0; y < H; y++) narrow.set(img.rgba.subarray((y * W + 14) * 4, (y * W + 14 + Wn) * 4), y * Wn * 4);
+            fs.writeFileSync(path.join(dir, 'f7.png'), encodePng(Wn, H, narrow, 4));
+            fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify({ facades: [{ ...frame, width: Wn }] }));
+            // a roof 5 m across: too small to read
+            fs.writeFileSync(path.join(dir, 'plane_20000.png'), encodePng(50, 50, new Uint8Array(50 * 50 * 4).fill(200), 4));
+            fs.writeFileSync(path.join(dir, 'planes.json'), JSON.stringify({ planes: [{ facadeId: 20000, image: 'plane_20000.png', kind: 'roof', width: 50, height: 50, pixel: 0.1, coverage: 1, orthoSMin: 0, orthoTMax: 5, texel: 0.1 }] }));
+            const seen: number[] = [];
+            const { ask } = standIn();
+            const r = await readPlanes(dir, async (png, prompt, kind, region) => { seen.push(region.x1 - region.x0); return ask(png, prompt, kind, region); });
+            expect(r.records.facades.map(f => f.facadeId)).toEqual([7]);
+            expect(r.records.facades[0].outcome).not.toBe('skipped');
+            expect(seen.length).toBeGreaterThan(0);
+        } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     });
 
     it("writes the openings and the glass into window_fit.json, the window fit's own kept, and reads once", async () => {

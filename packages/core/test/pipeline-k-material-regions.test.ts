@@ -204,9 +204,16 @@ describe('pipeline K material regions', () => {
         expect(m.glass).toBe(true);
         expect(plan.report.scanPieces.planes).toEqual([9]);
         expect(plan.report.scanPieces.paneShare).toBeGreaterThan(0);
-        // one window alone makes no bay: no glass on the scan piece
+        // one window alone makes no bay, but its pane is glass all the same (a row of windows has no strip to make a bay)
         const single = planMaterialRegions(g, g.json, imagesOf(photos), classes, sets(classes), [{ ...plane, windows: [windows[0]], panes: [windows[0]] }]);
-        expect(single.materials.find(x => x.material === 2)!.glass).toBe(false);
+        const sm = single.materials.find(x => x.material === 2)!;
+        expect(sm.glass).toBe(true);
+        expect(at(sm.params, 12, 9)[0]).toBeGreaterThan(0);
+        // and not beside it
+        expect(at(sm.params, 25, 19)[0]).toBe(0);
+        // no pane, no glass
+        const none = planMaterialRegions(g, g.json, imagesOf(photos), classes, sets(classes), [{ ...plane, windows: [windows[0]], panes: [] }]);
+        expect(none.materials.find(x => x.material === 2)!.glass).toBe(false);
         // a plane facing the other way draws nothing
         const back = planMaterialRegions(g, g.json, imagesOf(photos), classes, sets(classes), [{ ...plane, normal: [0, 0, -1], axisS: [-1, 0, 0] }]);
         expect(back.report.scanPieces.planes).toEqual([]);
