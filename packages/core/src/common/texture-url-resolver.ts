@@ -15,8 +15,11 @@
  * not one of our own texture-library paths passes through untouched.
  */
 
-/** Root-relative prefixes that identify a texture-library asset (mirrors the server's allow-list). */
-const TEXTURE_LIBRARY_ROOTS = ['textures/', 'extracted_textures/'];
+/**
+ * Root-relative prefixes that identify a texture-library asset (mirrors the server's allow-list): `texture-library/` for
+ * the material sets at the bucket's root, `textures/` and `extracted_textures/` for the paths once served from `public/`.
+ */
+const TEXTURE_LIBRARY_ROOTS = ['texture-library/', 'textures/', 'extracted_textures/'];
 
 interface CachedSignedUrl {
     url: string;

@@ -18,6 +18,7 @@
 
 import type { GraphNode, Scene3DData, Media4DObject } from './canvas-types';
 import { withStagedMaterialMode } from './primitives/scene3d/stagedBuild/texturedTwins';
+import { applySceneWeather, clearSceneWeather, DEFAULT_SCENE_WEATHER, readSceneWeather, sceneLocation, weatherPhase, weatherSun } from './services/atmosphere/scene-weather';
 
 export type ParamControl =
     | { kind: 'select'; options: string[] }
@@ -82,6 +83,19 @@ export function sceneNodeFields(node: GraphNode, scene: Scene3DData | undefined)
             { key: 'kelvinTemperature', label: 'Colour temperature', control: { kind: 'slider', min: 1500, max: 12000, step: 100, unit: 'K' }, value: env.kelvinTemperature ?? 6500 }
         ];
     }
+    if (node.id === 'n-weather') {
+        const w = readSceneWeather(scene);
+        const v = w ?? DEFAULT_SCENE_WEATHER;
+        const sun = weatherSun(v, sceneLocation(scene));
+        return [
+            { key: 'enabled', label: 'Weather', control: { kind: 'toggle' }, value: !!w, hint: 'Off: the scene keeps its own sky (no uninvited atmosphere)' },
+            { key: 'timeOfDay', label: 'Time of day', control: { kind: 'slider', min: 0, max: 24, step: 0.05, unit: 'h' }, value: v.timeOfDay, hint: `${weatherPhase(sun.elevationDeg)}, sun ${sun.elevationDeg.toFixed(1)}° up (${sun.source === 'ephemeris' ? 'ephemeris at the scene\'s place' : 'plain sun path: no place set'})` },
+            { key: 'date', label: 'Date', control: { kind: 'text' }, value: v.date ?? '', hint: 'yyyy-mm-dd; empty = today' },
+            { key: 'cloudCover', label: 'Cloud cover', control: { kind: 'slider', min: 0, max: 1, step: 0.01 }, value: v.cloudCover },
+            { key: 'haze', label: 'Haze', control: { kind: 'slider', min: 0, max: 1, step: 0.01 }, value: v.haze },
+            { key: 'fog', label: 'Fog', control: { kind: 'slider', min: 0, max: 1, step: 0.01 }, value: v.fog }
+        ];
+    }
     if (node.parameters?.output) {
         if (scene.stagedBuild) {
             return [{ key: 'materialMode', label: 'Materials', control: { kind: 'select', options: ['clay', 'textured'] }, value: scene.stagedBuild.materialMode ?? 'clay' }];
@@ -128,6 +142,12 @@ export function applySceneNodeParam(scene: Scene3DData, node: GraphNode, key: st
             return { ...scene, features: { ...(scene.features || {}), atmosphericScattering: next } };
         }
         return { ...scene, environment: { ...(scene.environment || {}), [key]: value } };
+    }
+    if (node.id === 'n-weather') {
+        if (key === 'enabled') return value ? applySceneWeather(scene, {}) : clearSceneWeather(scene);
+        if (key === 'date') return applySceneWeather(scene, { date: typeof value === 'string' && value ? value : undefined });
+        if (key === 'timeOfDay' || key === 'cloudCover' || key === 'haze' || key === 'fog') return applySceneWeather(scene, { [key]: Number(value) });
+        return scene;
     }
     if (node.parameters?.output) {
         if (key === 'materialMode' && scene.stagedBuild && (value === 'clay' || value === 'textured')) return withStagedMaterialMode(scene as any, value) as Scene3DData;

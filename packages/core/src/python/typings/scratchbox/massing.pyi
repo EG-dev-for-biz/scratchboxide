@@ -66,10 +66,10 @@ Ring = typing.Any
 
 class Scan:
     """A structure's scan: its surface samples, the ground it stands on, and the district around it (for hidden walls)."""
-    def __init__(self, mesh, plan: typing.Optional[typing.List[typing.Sequence[typing.Tuple[float, float]]]] = None, ground_y: typing.Optional[float] = None, spacing: float = 0.5, district=None) -> None: ...
+    def __init__(self, mesh, plan: typing.List[typing.Sequence[typing.Tuple[float, float]]] | None = None, ground_y: float | None = None, spacing: float = 0.5, district=None) -> None: ...
 
     @classmethod
-    def load(cls, path: str, plan: typing.Optional[typing.List[typing.Sequence[typing.Tuple[float, float]]]] = None, ground_y: typing.Optional[float] = None, district: typing.Optional[str] = None, crop_margin: typing.Optional[float] = None, spacing: float = 0.5) -> Scan:
+    def load(cls, path: str, plan: typing.List[typing.Sequence[typing.Tuple[float, float]]] | None = None, ground_y: float | None = None, district: str | None = None, crop_margin: float | None = None, spacing: float = 0.5) -> Scan:
         """
         The scan in `path` (a GLB). It should be the structure alone (an isolated scan): every candidate is judged
         against all of it. `district` (a GLB of the surroundings) lets walls pressed against a taller neighbour go
@@ -114,7 +114,7 @@ class Scan:
     def lofted_sections(self, link_iou: float = 0.35, keep_tol: float = 0.4, min_piece: float = 0.5) -> Candidate:
         """Each slice's pieces followed upward and skinned: tapers, legs and overhangs as the scan has them."""
 
-    def roof_objects(self, photo: typing.Optional[str] = None, photo_frame: typing.Optional[dict] = None, min_rise: float = 0.6) -> dict:
+    def roof_objects(self, photo: str | None = None, photo_frame: dict | None = None, min_rise: float = 0.6) -> dict:
         """
         The objects standing on the roof (tanks, bulkheads, plant, anything): found where the scan stands above the roof
         plane, their edges sharpened by the photo straight down when there is one, each fitted by the simplest of its
@@ -126,7 +126,7 @@ class Scan:
     def snapped_plan(self) -> typing.List[typing.Tuple[float, float]]:
         """The footprint with each edge moved onto the scan's wall (the scan's own plan without a footprint)."""
 
-    def block_with_roof_objects(self, photo: typing.Optional[str] = None, photo_frame: typing.Optional[dict] = None) -> Candidate:
+    def block_with_roof_objects(self, photo: str | None = None, photo_frame: dict | None = None) -> Candidate:
         """The block, and every object fitted on its roof, as one candidate (the roof objects in report `roof`)."""
 
     def tiers(self, change: float = 0.15, min_tier: float = 3.0) -> Candidate:
@@ -151,7 +151,7 @@ class Scan:
 Sequence = typing.Sequence
 Tuple = typing.Tuple
 
-def choose(scan: Scan, candidates: typing.Optional[typing.List[Candidate]] = None, min_coverage: float = 0.9, min_precision: float = 0.85, relief: float = 2.5) -> Choice:
+def choose(scan: Scan, candidates: typing.List[Candidate] | None = None, min_coverage: float = 0.9, min_precision: float = 0.85, relief: float = 2.5) -> Choice:
     """
     Score `candidates` (default: scan.candidates(), simplest first) and take the first that explains the scan
     (coverage with the `relief` allowance, precision at 1 m).
@@ -160,7 +160,7 @@ def choose(scan: Scan, candidates: typing.Optional[typing.List[Candidate]] = Non
 import json
 import os
 
-def read_glb(path: str, max_triangles: typing.Optional[int] = None) -> list:
+def read_glb(path: str, max_triangles: int | None = None) -> list:
     """
     The meshes of the GLB at ``path``, in world space (see the module docstring). ``max_triangles`` stops reading once
     that many triangles are read (a very large scan), with the meshes read so far.

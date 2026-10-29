@@ -116,11 +116,22 @@ export function getSolarPosition(date: Date, lat: number, lng: number): SolarPos
  * directional light at this position * distance casts light correctly).
  */
 export function solarDirectionVector(pos: SolarPosition): [number, number, number] {
-  const r = Math.cos(pos.altitude);
-  const x = r * Math.sin(pos.azimuth); // east component
-  const y = Math.sin(pos.altitude); // up component
-  const z = -r * Math.cos(pos.azimuth); // -z = north
-  return [x, y, z];
+  return sunDirectionFromRadians(pos.altitude, pos.azimuth);
+}
+
+/**
+ * The one sun direction of the app (unit vector toward the sun, scene convention +X east, +Y up, -Z north) from its
+ * elevation above the horizon and its azimuth clockwise from north, in radians. Every sun direction is computed here:
+ * the viewport's (solar-position.ts), the sky photometry's and the photo match's.
+ */
+export function sunDirectionFromRadians(elevationRad: number, azimuthRad: number): [number, number, number] {
+  const r = Math.cos(elevationRad);
+  return [r * Math.sin(azimuthRad), Math.sin(elevationRad), -r * Math.cos(azimuthRad)];
+}
+
+/** sunDirectionFromRadians in degrees. */
+export function sunDirectionFromAngles(elevationDeg: number, azimuthDeg: number): [number, number, number] {
+  return sunDirectionFromRadians((elevationDeg * Math.PI) / 180, (azimuthDeg * Math.PI) / 180);
 }
 
 /**

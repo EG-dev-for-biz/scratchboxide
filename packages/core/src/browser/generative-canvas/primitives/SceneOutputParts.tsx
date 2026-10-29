@@ -42,6 +42,22 @@ export const SceneOutputBody: React.FC<SceneOutputBodyProps> = ({ flag, finalSum
     </div>
 );
 
+/** A build step's switch for the next run: on runs it, off leaves it out (its downstream steps read the earlier result). */
+export const StepSwitch: React.FC<{ on: boolean; whenOff: string; onToggle: () => void }> = ({ on, whenOff, onToggle }) => (
+    <button
+        type="button"
+        className="sb-btn"
+        role="switch"
+        aria-checked={on}
+        style={{ ...btn, margin: '4px 0 4px 6px', ...(on ? { background: 'rgba(52,199,89,0.2)', borderColor: 'rgba(52,199,89,0.55)' } : {}) }}
+        onMouseDown={e => e.stopPropagation()}
+        onClick={e => { e.stopPropagation(); onToggle(); }}
+        title={on ? `On for the next build. Turn off: ${whenOff}.` : `Off for the next build: ${whenOff}. Click to turn on.`}
+    >
+        {on ? '● On' : '○ Off'}
+    </button>
+);
+
 export const DisplayFlagToggle: React.FC<{ on: boolean; onToggle: () => void }> = ({ on, onToggle }) => (
     <button
         type="button"

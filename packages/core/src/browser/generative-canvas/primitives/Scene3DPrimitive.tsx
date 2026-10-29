@@ -36,7 +36,7 @@ import type {
     SculptBrushOptions
 } from '../services/mesh-sculpting-engine';
 import { useViewportHistory } from './scene3d/useViewportHistory';
-import { applyDisplayFlag } from './scene3d/displayFlag';
+import { applyDisplayFlag, StepSnapshotView } from './scene3d/displayFlag';
 import { ViewportHistoryButtons } from './scene3d/ViewportHistoryButtons';
 import type { HistoryEditMeta } from './scene3d/useViewportHistory';
 import { ObjectEditCapture, createGeometrySwapEdit } from '../services/viewport-history-deltas';
@@ -139,7 +139,7 @@ import { liveTilesAnchor, syncTilesLayer } from './scene3d/syncTilesLayer';
 import { sceneAsksForLiveTiles } from './scene3d/liveTilesAnchor';
 import { groundDatumBadge, projectRoutePoint } from './scene3d/geoAnchorLabels';
 import type { TilesLayerInput } from './scene3d/syncTilesLayer';
-import { classifyAtmosphere, drawsProceduralBiomeTerrain, syncAtmosphere } from './scene3d/syncAtmosphere';
+import { classifyAtmosphere, compensateUnlitForExposure, drawsProceduralBiomeTerrain, syncAtmosphere } from './scene3d/syncAtmosphere';
 import { PlaceReflections, placeReflectionsEnabled } from './scene3d/placeReflections';
 import type { AtmosphereInput } from './scene3d/syncAtmosphere';
 import { classifySceneContent, drawableModelKind, hasNonFallbackObjectContent, syncSceneContent, syncWasmMesh, undrawableSceneObjects } from './scene3d/syncSceneContent';
@@ -157,6 +157,7 @@ import { attachViewportControls, readWorldPose, stepCamera } from './scene3d/att
 import { syncVectorRoadmapBlueprint } from './scene3d/syncVectorRoadmapBlueprint';
 import { VectorRoadmapHUD } from './scene3d/VectorRoadmapHUD';
 import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
+import { WeatherControl } from './scene3d/WeatherPanel';
 import { computeSceneGeometryBounds, calculateStandoffCamera } from './scene3d/autoFraming';
 import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle, VectorRoadmapHandle, Scene3DRenderMode } from './scene3d/types';
 import { applyClayRenderMode } from './scene3d/clayRenderMode';
@@ -184,6 +185,7 @@ import {
 import { groupVariantSets, resolveActiveVariants, variantSetKeyOf } from './scene3d/variantSets';
 import type { VectorRoadmapConfig } from '../canvas-types';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { applyWeatheringLayer } from './scene3d/weatheringLayer';
 import { CINEMATIC_RIGS, computeSceneBudgetTelemetry } from './scene3d/lightingRigs';
 import type { SceneBudgetTelemetry } from './scene3d/lightingRigs';
 import { useStagedBuild } from './scene3d/stagedBuild/useStagedBuild';
@@ -2148,8 +2150,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             const aerial = aerialPerspectiveRef.current;
             if (aerial && skyDomeModuleRef.current) {
                 aerial.render(renderer, scene, camera, skyDomeModuleRef.current.sunDirection, skyDomeModuleRef.current.diurnalProfile, skyDomeModuleRef.current);
-                // its full-screen pass writes final values (it applies no tone mapping of its own on the canvas either)
-                return { depthTexture: aerial.renderTarget?.depthTexture ?? null, displayReferred: true };
+                // its full-screen pass writes scene-referred light; the canvas (or the optics chain) tone maps it
+                return { depthTexture: aerial.renderTarget?.depthTexture ?? null };
             }
             renderer.render(scene, camera);
             return { depthTexture: target?.depthTexture ?? null };
@@ -2182,12 +2184,20 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         let reportedOpticsIssues = '';
         const treeFrameSize = new THREE.Vector2();
         let treeStatsShownAt = 0;
+        let unlitExposure = 1, unlitCheckFrame = 0;
         const renderFrame = () => {
+            // an atmospheric sky meters the camera from its sun and sky (sky-light-rig.ts); any other scene keeps 1
+            renderer.toneMappingExposure = skyDomeModuleRef.current?.exposure ?? 1;
+            // unlit photo materials keep their own exposure: checked when it changes, and now and then for new meshes
+            if (renderer.toneMappingExposure !== unlitExposure || (renderer.toneMappingExposure !== 1 && ++unlitCheckFrame % 60 === 0)) {
+                unlitExposure = renderer.toneMappingExposure;
+                compensateUnlitForExposure(scene, unlitExposure);
+            }
             if (opticsChain.active) {
                 opticsChain.render(renderer, camera, {
                     overlays: [transformGizmoGroupRef.current, selectionBoxRef.current, brushCursorMeshRef.current],
                     scene,
-                    displayReferred: !!(aerialPerspectiveRef.current && skyDomeModuleRef.current),
+                    displayReferred: false,
                     drawScene,
                     resolveObject: resolveViewportObject,
                     measureFocus: (cam, depthTexture, frame, issues) =>
@@ -2373,6 +2383,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
         let displayFlagWasOn = false;
         let compiledRootCache: THREE.Object3D | undefined;
+        // a build step's snapshot under the flag (the model as it stood after that step)
+        const stepSnapshot = new StepSnapshotView(url => new GLTFLoader().loadAsync(resolveExternalModelUri(url)).then(g => g.scene));
         const animate = () => {
             try {
                 const now = performance.now();
@@ -2403,8 +2415,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 aerialPerspectiveRef.current?.update(t, deltaSec);
                 godRaysRef.current?.update?.(t, deltaSec);
                 // a cloud in front of the sun dims and diffuses the rays the same way it already dims SunGlare's halo
-                // (both read the same measured cloudVisibility, so the two stay consistent with each other)
-                godRaysRef.current?.setCloudVisibility?.(skyDomeModuleRef.current?.sunGlare?.cloudVisibility ?? 1);
+                // (both from the same measured cloudVisibility, eased the same way: a raw read stepped the rays with each probe)
+                godRaysRef.current?.setCloudVisibility?.(skyDomeModuleRef.current?.sunGlare?.easedCloudVisibility() ?? 1);
 
                 // Biome terrain dynamics
                 terrainBiomeRef.current?.update?.(t, deltaSec);
@@ -2520,6 +2532,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 if (flag || displayFlagWasOn) {
                     if (!compiledRootCache?.parent) compiledRootCache = stack.scene?.getObjectByName(GENERATED_ROOT_NAME) ?? undefined;
                     applyDisplayFlag(flag, { objectRoots: externalObjectsMapRef.current, meshes: customMeshRegistryRef.current, compiledRoot: compiledRootCache });
+                    stepSnapshot.sync(flag, stack.scene ?? undefined, externalObjectsMapRef.current);
                     displayFlagWasOn = !!flag;
                 }
                 const timeFrame = !!gpuFrameTimer?.available && treeLodControllers().length > 0;
@@ -2544,6 +2557,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 animationFrameIdRef.current = null;
             }
             gpuFrameTimer?.dispose();
+            stepSnapshot.release();
             detachControls();
             detachResize();
             if (selectionBoxRef.current) {
@@ -2989,6 +3003,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 gltf.scene.name = 'scratchbox-cpp-generated-root';
                 scene.add(gltf.scene);
                 gltf.scene.updateMatrixWorld(true);
+                // a built model's weathering layer (SB_material_weathering): its atlas blended over the surfaces
+                void applyWeatheringLayer(gltf)
+                    .then(n => { if (n) console.info(`[Scene3D] weathering layer blended on ${n} material(s)`); })
+                    .catch(err => console.warn('[Scene3D] weathering layer not applied:', err));
                 // SB-Veggie trees in the generated GLB (scene extras sbTrees, nodes with sbTree): the same level-of-detail
                 // controller and tree textures a staged place's trees get, attached before the clay pass
                 const treeLod = new TreeLodController(gltf.scene, { crownShading: sceneDataRef.current?.treeCrownShading, view: sceneDataRef.current?.treeLod });
@@ -3325,6 +3343,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                             }
                         }
                     });
+
+                    // a built model's weathering layer (SB_material_weathering): its atlas blended over the surfaces
+                    void applyWeatheringLayer(gltf)
+                        .then(n => { if (n) console.info(`[Scene3D] weathering layer blended on ${n} material(s)`); })
+                        .catch(err => console.warn('[Scene3D] weathering layer not applied:', err));
 
                     const ground = groundTileModeRef.current;
                     model.visible = isVisibleForGroundMode(def, ground.effectiveGroundTileMode, ground.hasExplicit3DTileObject);
@@ -4203,6 +4226,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                         <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
                     </svg>
                 </button>
+
+                {/* Weather: time of day into night, cloud cover, haze, fog (scene-weather.ts) */}
+                <WeatherControl sceneData={sceneData} mutateSceneData={mutateSceneData} />
 
                 {/* Camera settings: lens, depth of field, distortion (sb_set_camera / sb_set_camera_lens) */}
                 <CameraSettingsControl

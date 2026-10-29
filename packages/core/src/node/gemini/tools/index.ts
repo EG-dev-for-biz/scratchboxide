@@ -31,8 +31,10 @@ export * from './pbr-material-tools';
 export * from './weathering-tools';
 export * from './local-sf3d-tools';
 export * from './tile-refine-tools';
+export * from './scene-healing-tools';
 export * from './object-reference-tools';
 export * from './sb-script-guide-tools';
+export * from './texture-library-tools';
 export * from './virtual-geometry-tools';
 export * from './location-evidence-tools';
 export * from './location-reference-tools';
@@ -56,6 +58,7 @@ export * from './wall-plane-segment-tools';
 import type { ToolDeclaration, ToolHandler } from './types';
 import { LOCAL_SF3D_TOOL_DECLARATIONS, localSf3DHandlers } from './local-sf3d-tools';
 import { TILE_REFINE_TOOL_DECLARATIONS, tileRefineHandlers } from './tile-refine-tools';
+import { SCENE_HEALING_TOOL_DECLARATIONS, sceneHealingHandlers } from './scene-healing-tools';
 import { VIRTUAL_GEOMETRY_TOOL_DECLARATIONS, virtualGeometryHandlers } from './virtual-geometry-tools';
 import { LOCATION_EVIDENCE_TOOL_DECLARATIONS, locationEvidenceHandlers } from './location-evidence-tools';
 import { LOCATION_REFERENCE_TOOL_DECLARATIONS, locationReferenceHandlers } from './location-reference-tools';
@@ -68,6 +71,7 @@ import { PYTHON_3D_TOOL_DECLARATIONS, python3DHandlers } from './python-3d-tools
 import { MASSING_TOOL_DECLARATIONS, massingHandlers } from './massing-tools';
 import { OBJECT_REFERENCE_TOOL_DECLARATIONS, objectReferenceHandlers } from './object-reference-tools';
 import { SB_SCRIPT_GUIDE_TOOL_DECLARATIONS, sbScriptGuideHandlers } from './sb-script-guide-tools';
+import { TEXTURE_LIBRARY_TOOL_DECLARATIONS, textureLibraryHandlers } from './texture-library-tools';
 import { MESH_SHAPING_TOOL_DECLARATIONS, meshShapingHandlers } from './mesh-shaping-tools';
 import { SB_RIG_TOOL_DECLARATIONS, sbRigHandlers } from './sb-rig-tools';
 import { NANO_BANANA_TOOL_DECLARATIONS, nanoBananaHandlers, IMAGE_GENERATION_TOOL_DECLARATIONS, imageGenerationHandlers } from './nano-banana-tools';
@@ -189,8 +193,10 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...MASSING_TOOL_DECLARATIONS,
     ...OBJECT_REFERENCE_TOOL_DECLARATIONS,
     ...SB_SCRIPT_GUIDE_TOOL_DECLARATIONS,
+    ...TEXTURE_LIBRARY_TOOL_DECLARATIONS,
     ...GOOGLE_3D_TILES_TOOL_DECLARATIONS,
     ...TILE_REFINE_TOOL_DECLARATIONS,
+    ...SCENE_HEALING_TOOL_DECLARATIONS,
     ...VIRTUAL_GEOMETRY_TOOL_DECLARATIONS,
     ...LOCATION_EVIDENCE_TOOL_DECLARATIONS,
     ...LOCATION_REFERENCE_TOOL_DECLARATIONS,
@@ -247,8 +253,10 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...massingHandlers,
     ...objectReferenceHandlers,
     ...sbScriptGuideHandlers,
+    ...textureLibraryHandlers,
     ...google3DTilesHandlers,
     ...tileRefineHandlers,
+    ...sceneHealingHandlers,
     ...virtualGeometryHandlers,
     ...locationEvidenceHandlers,
     ...locationReferenceHandlers,

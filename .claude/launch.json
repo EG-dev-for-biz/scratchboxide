@@ -6,7 +6,6 @@
       "runtimeExecutable": "env",
       "runtimeArgs": [
         "SCRATCHBOX_NO_ELECTRON=true",
-        "SCRATCHBOX_DEV_FOLLOW_MAIN=1",
         "PORT=3013",
         "SCRATCHBOX_WEB_PORT=3032",
         "SCRATCHBOX_TOOLS_PORT=3014",
@@ -133,6 +132,59 @@
         "dev"
       ],
       "port": 3200,
+      "autoPort": false
+    },
+    {
+      "name": "scratchbox-latest-main",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SCRATCHBOX_NO_ELECTRON=true",
+        "PORT=3050",
+        "SCRATCHBOX_WEB_PORT=3052",
+        "SCRATCHBOX_TOOLS_PORT=3051",
+        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3052,http://localhost:3052",
+        "npm",
+        "--prefix",
+        "/Users/eligreen/dev/scratchbox-main",
+        "run",
+        "dev"
+      ],
+      "port": 3052,
+      "autoPort": false
+    },
+    {
+      "name": "scratchbox-cartesian-normal-snapping",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SCRATCHBOX_NO_ELECTRON=true",
+        "PORT=3071",
+        "SCRATCHBOX_WEB_PORT=3070",
+        "SCRATCHBOX_TOOLS_PORT=3072",
+        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3070,http://localhost:3070",
+        "npm",
+        "--prefix",
+        "/Users/eligreen/dev/scratchbox-ide-master",
+        "run",
+        "dev"
+      ],
+      "port": 3070
+    },
+    {
+      "name": "scratchbox-pipeline-k",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SCRATCHBOX_NO_ELECTRON=true",
+        "PORT=3371",
+        "SCRATCHBOX_WEB_PORT=3370",
+        "SCRATCHBOX_TOOLS_PORT=3372",
+        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3370,http://localhost:3370",
+        "npm",
+        "--prefix",
+        "/Users/eligreen/dev/scratchbox-ide-master",
+        "run",
+        "dev"
+      ],
+      "port": 3370,
       "autoPort": false
     }
   ]

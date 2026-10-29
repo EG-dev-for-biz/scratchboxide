@@ -21,6 +21,11 @@ import { stageLayerIds } from '../../common/staged-build-graph';
 export function displayFlagFor(node: GraphNode, scene: Scene3DData | undefined): SceneDisplayFlag | undefined {
     if (!scene || node.parameters?.output) return undefined;
     const p = node.parameters || {};
+    // a build step that changed the model: its snapshot alone (a step without one shows its stage's layers, below)
+    const snap = p.snapshot as { url?: unknown; frameOf?: unknown } | undefined;
+    if (snap && typeof snap.url === 'string' && Array.isArray(snap.frameOf) && scene.stagedBuild) {
+        return { nodeId: node.id, label: node.label, objectIds: [], snapshot: { url: snap.url, frameOf: snap.frameOf.filter((id): id is string => typeof id === 'string') } };
+    }
     if (typeof p.stage === 'string' && scene.stagedBuild) {
         const loaded = new Set((scene.objects || []).map(o => o.id));
         const objectIds = stageLayerIds(scene.stagedBuild, p.stage).filter(id => loaded.has(id));
@@ -42,4 +47,10 @@ export function displayFlagFor(node: GraphNode, scene: Scene3DData | undefined):
 export function withDisplayFlag(scene: CanvasArtifact, flag: SceneDisplayFlag | undefined): CanvasArtifact {
     const { displayFlag: _, ...rest } = (scene.data || {}) as Scene3DData;
     return { ...scene, data: flag ? { ...rest, displayFlag: flag } : rest };
+}
+
+/** The scene with a build step switched on or off for its next run (Scene3DData.stagedStepToggles). */
+export function withStepToggle(scene: CanvasArtifact, key: string, on: boolean): CanvasArtifact {
+    const data = (scene.data || {}) as Scene3DData;
+    return { ...scene, data: { ...data, stagedStepToggles: { ...(data.stagedStepToggles ?? {}), [key]: on } } };
 }

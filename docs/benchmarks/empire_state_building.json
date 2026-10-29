@@ -1,0 +1,28 @@
+{
+  "schema": "scratchbox.massing-benchmark/1",
+  "name": "Empire State Building",
+  "place": "350 Fifth Avenue, New York, NY 10118",
+  "use": "Evaluation only (sb.benchmark_massing): a building's documented form to score a massing against. Nothing builds geometry from this file.",
+  "recorded": "2026-10-26",
+  "sources": [
+    { "id": "wikipedia", "url": "https://en.wikipedia.org/wiki/Empire_State_Building", "supports": "footprint 424 x 187 ft; 5-storey base over the whole lot; 60 ft setback on all sides above the 5th storey; setbacks at the 21st, 25th, 30th, 72nd, 81st and 85th storeys; 102 storeys; roof 1,250 ft at the 102nd floor; top floor 1,224 ft; antenna tip 1,454 ft; mast 158 ft above the 86th floor in four rectangular tiers, a cylindrical shaft and a conical pinnacle" },
+    { "id": "structurae", "url": "https://structurae.net/structures/20000022", "supports": "setback floors 21, 25, 30, 72, 81, 85; 60 ft setback above the 5th storey; setbacks at the tops of elevator shafts (interiors at most 28 ft deep)" },
+    { "id": "nrhp", "url": "https://npgallery.nps.gov/NRHP/GetAsset/NHLS/82001192_text", "supports": "National Register nomination, its description taken from the NYC Landmarks Preservation Commission designation report LP-2000 (1981): setbacks at the 21st, 25th, 30th and 72nd floors, a pronounced one at the 81st, a final one at the 85th; 1,250 ft, 102 storeys (scanned PDF: read through search summaries, not directly)" }
+  ],
+  "documented": {
+    "base_footprint_m": { "value": [129.2, 57.0], "as_documented": "424 x 187 ft", "source": "wikipedia" },
+    "base_storeys": { "value": 5, "source": "wikipedia" },
+    "base_setback_m": { "value": 18.3, "as_documented": "60 ft on all sides", "source": "wikipedia" },
+    "setback_floors": { "value": [5, 21, 25, 30, 72, 81, 85], "note": "5 = the top of the base", "source": "wikipedia, structurae, nrhp" },
+    "storeys": { "value": 102, "source": "wikipedia" },
+    "roof_m": { "value": 381.0, "as_documented": "1,250 ft (102nd floor)", "source": "wikipedia" },
+    "top_floor_m": { "value": 373.1, "as_documented": "1,224 ft", "source": "wikipedia" },
+    "antenna_tip_m": { "value": 443.2, "as_documented": "1,454 ft", "source": "wikipedia" },
+    "mast_above_86th_m": { "value": 48.2, "as_documented": "158 ft", "source": "wikipedia" }
+  },
+  "estimated": {
+    "storey_m": { "value": 3.735, "method": "roof_m / storeys (1,250 ft / 102): no floor-to-floor height is documented in these sources" },
+    "setback_heights_m": { "method": "setback floor x storey_m; the base's storeys are taller than average, so its estimate runs low" },
+    "tolerance_m": { "value": 7.5, "method": "2 average storeys: the per-floor heights are not documented" }
+  }
+}

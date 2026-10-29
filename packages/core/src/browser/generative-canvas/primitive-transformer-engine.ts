@@ -29,6 +29,7 @@ import {
     SandboxLanguage,
     Scene3DData
 } from './canvas-types';
+import { formatTimeOfDay, readSceneWeather } from './services/atmosphere/scene-weather';
 import { stableProjectArtifactId } from '../../common/project-artifact-graph-protocol';
 import { stagedBuildToNodeGraph } from '../../common/staged-build-graph';
 import { sceneGraphKey } from './scene-graph-key';
@@ -1724,7 +1725,8 @@ function buildOperatorHistoryNodes(scene: Scene3DData, resolveMeshNodeId: (objec
 export function morphScene3DToNodeGraph(scene: Scene3DData): NodeGraphData {
     // a staged location build is its run: the build as one runnable tool node and its stages, read from the record
     if (scene?.stagedBuild?.stages?.length) {
-        return { ...stagedBuildToNodeGraph(scene.stagedBuild), sourceArtifact: { type: '3d-scene', data: scene } };
+        const g = stagedBuildToNodeGraph(scene.stagedBuild, scene.stagedStepToggles);
+        return { ...g, stageViewOf: { ...g.stageViewOf, toggles: JSON.stringify(scene.stagedStepToggles ?? {}) }, sourceArtifact: { type: '3d-scene', data: scene } };
     }
     const title = scene?.title ? `${scene.title} — Scene Graph` : '3D Scene Graph';
     const meshes = Array.isArray(scene?.customMeshes) ? scene.customMeshes : [];
@@ -1751,6 +1753,20 @@ export function morphScene3DToNodeGraph(scene: Scene3DData): NodeGraphData {
         y: 420,
         parameters: { skybox: scene.environment?.skybox, lighting: scene.environment?.lighting, ground: scene.environment?.ground }
     };
+    // the scene's weather (scene-weather.ts): time of day, date, clouds, haze, fog, feeding the environment's sky
+    const weather = readSceneWeather(scene);
+    const weatherNode: GraphNode = {
+        id: 'n-weather',
+        label: 'Weather',
+        subtitle: weather ? `${formatTimeOfDay(weather.timeOfDay)} · ${Math.round(weather.cloudCover * 100)}% cloud` : 'Not set (the scene keeps its own sky)',
+        category: 'environment',
+        color: 'amber',
+        status: 'completed',
+        x: 60,
+        y: 580,
+        parameters: weather ? { ...weather } : {}
+    };
+    const weatherEdge: GraphEdge = { id: 'e-weather-env', source: 'n-weather', target: 'n-env', style: 'solid', color: 'amber' };
     // the graph's end: what the viewport shows (the whole scene, or what the display flag picks)
     const renderNode: GraphNode = {
         id: 'n-render',
@@ -1834,8 +1850,8 @@ export function morphScene3DToNodeGraph(scene: Scene3DData): NodeGraphData {
             return {
                 title,
                 subtitle,
-                nodes: [camNode, envNode, ...glbMeshes.nodes, ...objectNodes, renderNode, ...(opHistory?.nodes ?? [])],
-                edges: [edges[0], envEdge, ...glbMeshes.edges, ...objectEdges, ...(opHistory?.edges ?? [])],
+                nodes: [camNode, envNode, weatherNode, ...glbMeshes.nodes, ...objectNodes, renderNode, ...(opHistory?.nodes ?? [])],
+                edges: [edges[0], envEdge, weatherEdge, ...glbMeshes.edges, ...objectEdges, ...(opHistory?.edges ?? [])],
                 sourceArtifact: { type: '3d-scene', data: scene }
             };
         }
@@ -1848,8 +1864,8 @@ export function morphScene3DToNodeGraph(scene: Scene3DData): NodeGraphData {
     return {
         title,
         subtitle,
-        nodes: [camNode, envNode, ...meshNodes, ...objectNodes, renderNode, ...(opHistory?.nodes ?? [])],
-        edges: [...edges, ...(meshes.length ? [] : [envEdge]), ...objectEdges, ...(opHistory?.edges ?? [])],
+        nodes: [camNode, envNode, weatherNode, ...meshNodes, ...objectNodes, renderNode, ...(opHistory?.nodes ?? [])],
+        edges: [...edges, ...(meshes.length ? [] : [envEdge]), weatherEdge, ...objectEdges, ...(opHistory?.edges ?? [])],
         sourceArtifact: { type: '3d-scene', data: scene }
     };
 }

@@ -13,6 +13,10 @@
  *
  * - scraps: edge-connected pieces smaller than `minPieceAreaM2` go (a sliver hanging by one vertex is its own piece), the
  *   melted bits a photogrammetric scan leaves on edges and roofs;
+ * - spikes: a vertex whose cotangent Laplacian (its offset from its neighbours' weighted average, in its own edge lengths)
+ *   stands more than `spikeK` robust deviations (median absolute deviation) above its two-ring neighbourhood's is a spike;
+ *   only those are pulled back toward their neighbours (which stay put, so nothing shrinks), at most `spikeMaxShiftM`. Open-edge
+ *   vertices are never flagged (a border is irregular by nature);
  * - feature-preserving smoothing: bilateral filtering of the face normals (neighbours weighted by distance and by how
  *   alike their normals are, so a corner or a cornice is not averaged away), then the vertices moved to agree with the
  *   filtered normals (each vertex toward the planes of its faces). Flat walls come out flat, edges stay sharp. A vertex
@@ -25,7 +29,7 @@
 
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor, type ParsedGlb } from './glb-bytes';
 
-export const REMESH_CLEANUP_VERSION = 'remesh-cleanup/1';
+export const REMESH_CLEANUP_VERSION = 'remesh-cleanup/3';
 
 /** On unless SCRATCHBOX_STAGED_REMESH_CLEANUP=0. */
 export function remeshCleanupEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -42,13 +46,21 @@ export const REMESH_CLEANUP_PARAMS = {
     /** No vertex moves further than this from the scan (m). */
     maxShiftM: 0.3,
     /** Positions within this are one vertex (m). */
-    weldM: 0.001
+    weldM: 0.001,
+    /** Spikes: flagged above this many robust deviations of the two-ring's Laplacian (0 turns the pass off); spikeSteps
+     *  steps of spikeLambda x the Laplacian on the flagged vertices only; no spike moves further than spikeMaxShiftM (m).
+     *  Off by default: on the Empire State Building it moved 180 vertices, up to the cap, on thin real features, and the
+     *  photos stretched over them (untextured 0.24% -> 0.35%, smears 0.09% -> 0.19%). It needs a texture-stretch guard
+     *  and an outside check before and after before it comes back on. */
+    spikeK: 0, spikeLambda: 0.6, spikeSteps: 4, spikeMaxShiftM: 3
 };
 
 export interface RemeshCleanupStats {
     vertices: number; triangles: number;
     pieces: number; piecesRemoved: number; trianglesRemoved: number; areaRemovedM2: number;
     meanShiftM: number; p95ShiftM: number; maxShiftM: number; clampedVertices: number;
+    /** Vertices flagged as spikes and pulled back, and the largest such move (m). */
+    spikeVertices?: number; spikeMaxMoveM?: number;
 }
 
 /** The edits: a displacement per welded vertex (keyed by its original position) and the removed triangles (keyed by their three positions). */
@@ -102,6 +114,81 @@ function faceData(P: Float64Array, T: Uint32Array): { n: Float64Array; c: Float6
     return { n, c, area };
 }
 
+/**
+ * Spikes found and pulled back: per vertex the cotangent-weighted Laplacian (neighbours' weighted average minus the vertex)
+ * over its mean edge length; a vertex whose measure exceeds the two-ring's median by spikeK robust deviations (1.4826 x MAD)
+ * and above each of its own neighbours (the tip, not the ring around it) is flagged, and only flagged vertices take spikeSteps
+ * steps toward their neighbours' weighted average (the neighbours fixed, so nothing shrinks), each clamped to spikeMaxShiftM.
+ */
+export function spikeEdits(P0: Float64Array, T: Uint32Array, keepFace: Uint8Array, vertFaces: number[][], R = REMESH_CLEANUP_PARAMS): { positions: Float64Array; flagged: number; maxMove: number } {
+    const V = P0.length / 3, F = T.length / 3, P = Float64Array.from(P0);
+    if (!(R.spikeK > 0)) return { positions: P, flagged: 0, maxMove: 0 };
+    // cotangent weights per edge (both opposite angles), and which vertices lie on an open edge
+    const w = new Map<string, number>(), uses = new Map<string, number>();
+    const ek = (a: number, b: number) => (a < b ? `${a}_${b}` : `${b}_${a}`);
+    const cot = (o: number, a: number, b: number) => {
+        const ux = P0[a * 3] - P0[o * 3], uy = P0[a * 3 + 1] - P0[o * 3 + 1], uz = P0[a * 3 + 2] - P0[o * 3 + 2], vx = P0[b * 3] - P0[o * 3], vy = P0[b * 3 + 1] - P0[o * 3 + 1], vz = P0[b * 3 + 2] - P0[o * 3 + 2];
+        const d = ux * vx + uy * vy + uz * vz, cr = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+        return cr > 1e-12 ? Math.max(0, Math.min(10, d / cr)) : 0;
+    };
+    for (let f = 0; f < F; f++) {
+        if (!keepFace[f]) continue;
+        for (let k = 0; k < 3; k++) {
+            const a = T[f * 3 + k], b = T[f * 3 + ((k + 1) % 3)], o = T[f * 3 + ((k + 2) % 3)], e = ek(a, b);
+            w.set(e, (w.get(e) ?? 0) + 0.5 * cot(o, a, b));
+            uses.set(e, (uses.get(e) ?? 0) + 1);
+        }
+    }
+    const nbr: Array<Array<[number, number]>> = Array.from({ length: V }, () => []);
+    const border = new Uint8Array(V);
+    for (const [e, we] of w) {
+        const [a, b] = e.split('_').map(Number);
+        nbr[a].push([b, we]); nbr[b].push([a, we]);
+        if (uses.get(e) === 1) { border[a] = 1; border[b] = 1; }
+    }
+    // the Laplacian at positions X: weighted neighbour average minus the vertex (uniform weights when the cotangents vanish)
+    const lap = (X: Float64Array, v: number): [number, number, number] => {
+        let sw = 0, x = 0, y = 0, z = 0;
+        for (const [u, we] of nbr[v]) sw += we;
+        const uni = !(sw > 1e-9);
+        if (uni) sw = nbr[v].length;
+        for (const [u, we] of nbr[v]) { const ww = uni ? 1 : we; x += ww * X[u * 3]; y += ww * X[u * 3 + 1]; z += ww * X[u * 3 + 2]; }
+        return sw > 0 ? [x / sw - X[v * 3], y / sw - X[v * 3 + 1], z / sw - X[v * 3 + 2]] : [0, 0, 0];
+    };
+    const m = new Float64Array(V);
+    for (let v = 0; v < V; v++) {
+        if (!vertFaces[v].length || !nbr[v].length) continue;
+        let el = 0;
+        for (const [u] of nbr[v]) el += Math.hypot(P0[u * 3] - P0[v * 3], P0[u * 3 + 1] - P0[v * 3 + 1], P0[u * 3 + 2] - P0[v * 3 + 2]);
+        el /= nbr[v].length;
+        const L = lap(P0, v);
+        m[v] = el > 1e-9 ? Math.hypot(L[0], L[1], L[2]) / el : 0;
+    }
+    const flagged: number[] = [];
+    for (let v = 0; v < V; v++) {
+        if (border[v] || !nbr[v].length) continue;
+        const ring = new Set<number>();
+        for (const [u] of nbr[v]) { ring.add(u); for (const [t] of nbr[u]) if (t !== v) ring.add(t); }
+        const vals = [...ring].map(u => m[u]).sort((a, b) => a - b);
+        if (vals.length < 6) continue;
+        const med = vals[vals.length >> 1], dev = vals.map(x => Math.abs(x - med)).sort((a, b) => a - b)[vals.length >> 1];
+        // the tip only: its neighbours see the spike too, but less than the tip itself
+        if (m[v] > med + R.spikeK * 1.4826 * dev + 0.05 && nbr[v].every(([u]) => m[u] < m[v])) flagged.push(v);
+    }
+    let maxMove = 0;
+    for (let step = 0; step < R.spikeSteps; step++) {
+        const f = R.spikeLambda;
+        const d = flagged.map(v => lap(P, v));
+        flagged.forEach((v, i) => {
+            for (let k = 0; k < 3; k++) P[v * 3 + k] += f * d[i][k];
+            const ox = P[v * 3] - P0[v * 3], oy = P[v * 3 + 1] - P0[v * 3 + 1], oz = P[v * 3 + 2] - P0[v * 3 + 2], o = Math.hypot(ox, oy, oz);
+            if (o > R.spikeMaxShiftM) { const s = R.spikeMaxShiftM / o; P[v * 3] = P0[v * 3] + ox * s; P[v * 3 + 1] = P0[v * 3 + 1] + oy * s; P[v * 3 + 2] = P0[v * 3 + 2] + oz * s; }
+        });
+    }
+    for (const v of flagged) maxMove = Math.max(maxMove, Math.hypot(P[v * 3] - P0[v * 3], P[v * 3 + 1] - P0[v * 3 + 1], P[v * 3 + 2] - P0[v * 3 + 2]));
+    return { positions: P, flagged: flagged.length, maxMove };
+}
+
 /** Computes the edits on a welded mesh. */
 export function cleanupEdits(mesh: { positions: Float64Array; triangles: Uint32Array; keys: string[] }, R = REMESH_CLEANUP_PARAMS): RemeshEdits {
     const P0 = mesh.positions, T = mesh.triangles, V = P0.length / 3, F = T.length / 3;
@@ -128,8 +215,11 @@ export function cleanupEdits(mesh: { positions: Float64Array; triangles: Uint32A
     let edgeSum = 0, edgeN = 0;
     for (let f = 0; f < F; f++) if (keepFace[f]) for (let k = 0; k < 3; k++) { const a = T[f * 3 + k] * 3, b = T[f * 3 + ((k + 1) % 3)] * 3; edgeSum += Math.hypot(P0[a] - P0[b], P0[a + 1] - P0[b + 1], P0[a + 2] - P0[b + 2]); edgeN++; }
     const sigmaS = Math.max(1e-3, (edgeSum / Math.max(1, edgeN)) * R.spatialSigmaEdges), sigmaR = R.normalSigma;
+    // ---- spikes pulled back before the smoothing (the smoothing then works from where they land)
+    const spikes = spikeEdits(P0, T, keepFace, vertFaces, R);
+    const PS = spikes.positions;
     // ---- bilateral normal filtering
-    let { n, c, area } = faceData(P0, T);
+    let { n, c, area } = faceData(PS, T);
     for (let it = 0; it < R.normalIterations; it++) {
         const out = new Float64Array(F * 3);
         for (let f = 0; f < F; f++) {
@@ -148,8 +238,8 @@ export function cleanupEdits(mesh: { positions: Float64Array; triangles: Uint32A
         }
         n = out;
     }
-    // ---- vertices moved toward their faces' filtered planes (within maxShiftM of the scan)
-    const P = Float64Array.from(P0);
+    // ---- vertices moved toward their faces' filtered planes (within maxShiftM of the scan, after the spikes)
+    const P = Float64Array.from(PS);
     for (let it = 0; it < R.vertexIterations; it++) {
         const cur = faceData(P, T);
         c = cur.c;
@@ -162,9 +252,9 @@ export function cleanupEdits(mesh: { positions: Float64Array; triangles: Uint32A
                 dx += n[f * 3] * d; dy += n[f * 3 + 1] * d; dz += n[f * 3 + 2] * d;
             }
             P[v * 3] += dx / fs.length; P[v * 3 + 1] += dy / fs.length; P[v * 3 + 2] += dz / fs.length;
-            // clamp to the scan
-            const ox = P[v * 3] - P0[v * 3], oy = P[v * 3 + 1] - P0[v * 3 + 1], oz = P[v * 3 + 2] - P0[v * 3 + 2], o = Math.hypot(ox, oy, oz);
-            if (o > R.maxShiftM) { const s = R.maxShiftM / o; P[v * 3] = P0[v * 3] + ox * s; P[v * 3 + 1] = P0[v * 3 + 1] + oy * s; P[v * 3 + 2] = P0[v * 3 + 2] + oz * s; }
+            // clamp to the scan (as the spike pass left it)
+            const ox = P[v * 3] - PS[v * 3], oy = P[v * 3 + 1] - PS[v * 3 + 1], oz = P[v * 3 + 2] - PS[v * 3 + 2], o = Math.hypot(ox, oy, oz);
+            if (o > R.maxShiftM) { const s = R.maxShiftM / o; P[v * 3] = PS[v * 3] + ox * s; P[v * 3 + 1] = PS[v * 3 + 1] + oy * s; P[v * 3 + 2] = PS[v * 3 + 2] + oz * s; }
         }
     }
     const shift = new Map<string, [number, number, number]>(), shifts: number[] = [];
@@ -173,7 +263,7 @@ export function cleanupEdits(mesh: { positions: Float64Array; triangles: Uint32A
         const s: [number, number, number] = [P[v * 3] - P0[v * 3], P[v * 3 + 1] - P0[v * 3 + 1], P[v * 3 + 2] - P0[v * 3 + 2]];
         const m = Math.hypot(...s);
         if (vertFaces[v].length) shifts.push(m);
-        if (m >= R.maxShiftM - 1e-6) clamped++;
+        if (Math.hypot(P[v * 3] - PS[v * 3], P[v * 3 + 1] - PS[v * 3 + 1], P[v * 3 + 2] - PS[v * 3 + 2]) >= R.maxShiftM - 1e-6) clamped++;
         if (m > 1e-6) shift.set(mesh.keys[v], s);
     }
     const removed = new Set<string>();
@@ -184,7 +274,8 @@ export function cleanupEdits(mesh: { positions: Float64Array; triangles: Uint32A
         shift, removed,
         stats: {
             vertices: V, triangles: F, pieces: pieceArea.size, piecesRemoved, trianglesRemoved, areaRemovedM2: Math.round(areaRemoved * 10) / 10,
-            meanShiftM: r3(shifts.reduce((a, b) => a + b, 0) / Math.max(1, shifts.length)), p95ShiftM: r3(shifts[Math.floor(shifts.length * 0.95)] ?? 0), maxShiftM: r3(shifts[shifts.length - 1] ?? 0), clampedVertices: clamped
+            meanShiftM: r3(shifts.reduce((a, b) => a + b, 0) / Math.max(1, shifts.length)), p95ShiftM: r3(shifts[Math.floor(shifts.length * 0.95)] ?? 0), maxShiftM: r3(shifts[shifts.length - 1] ?? 0), clampedVertices: clamped,
+            spikeVertices: spikes.flagged, spikeMaxMoveM: r3(spikes.maxMove)
         }
     };
 }

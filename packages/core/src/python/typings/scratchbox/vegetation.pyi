@@ -26,7 +26,7 @@ SPECIES_INDEX: str
 
 class SbVeggieTree:
     """One SB-Veggie tree, described by measurements (metres, y up). Grown when the scene that holds it is written."""
-    def __init__(self, position: typing.Any = (0.0, 0.0, 0.0), height: float = 10.0, crown_radius: typing.Union[float, typing.Sequence[float]] = 3.5, crown_base_height: typing.Optional[float] = None, crown_widest_at: float = 0.5, crown_top_exponent: float = 2.0, trunk_radius: typing.Optional[float] = None, leaf_color: typing.Any = None, label: typing.Optional[str] = None, name: typing.Optional[str] = None): ...
+    def __init__(self, position: typing.Any = (0.0, 0.0, 0.0), height: float = 10.0, crown_radius: float | typing.Sequence[float] = 3.5, crown_base_height: float | None = None, crown_widest_at: float = 0.5, crown_top_exponent: float = 2.0, trunk_radius: float | None = None, leaf_color: typing.Any = None, label: str | None = None, name: str | None = None): ...
 
     def translate(self, *args) -> SbVeggieTree: ...
 
@@ -69,11 +69,11 @@ TREES_SCHEMA: str
 Tuple = typing.Tuple
 Union = typing.Union
 
-def attach_trees(glb: bytes, trees: typing.Sequence[SbVeggieTree], seed: typing.Optional[str] = None) -> bytes:
+def attach_trees(glb: bytes, trees: typing.Sequence[SbVeggieTree], seed: str | None = None) -> bytes:
     """The scene GLB with its SB-Veggie trees grown and written into it."""
 
 
-def create_tree(position: typing.Any = None, height: typing.Optional[float] = None, crown_radius: typing.Union[float, typing.Sequence[float], NoneType] = None, crown_base_height: typing.Optional[float] = None, crown_widest_at: float = 0.5, crown_top_exponent: float = 2.0, trunk_radius: typing.Optional[float] = None, leaf_color: typing.Any = None, label: typing.Optional[str] = None, name: typing.Optional[str] = None, **kwargs) -> SbVeggieTree:
+def create_tree(position: typing.Any = None, height: float | None = None, crown_radius: float | typing.Sequence[float] | None = None, crown_base_height: float | None = None, crown_widest_at: float = 0.5, crown_top_exponent: float = 2.0, trunk_radius: float | None = None, leaf_color: typing.Any = None, label: str | None = None, name: str | None = None, **kwargs) -> SbVeggieTree:
     """
     One SB-Veggie tree described by measurements (metres): position = trunk base (x, y, z); height = base to crown top;
     crown_radius = crown half-spread (or (along x, along z)); crown_base_height = lowest crown above the base (None: from
@@ -84,11 +84,11 @@ def create_tree(position: typing.Any = None, height: typing.Optional[float] = No
     """
 
 
-def create_vegetation(pos: typing.Any = (0.0, 0.0, 0.0), height: float = 12.0, crown_radius: typing.Union[float, typing.Sequence[float]] = 3.0, clear_trunk_height: typing.Optional[float] = None, **kwargs) -> SbVeggieTree:
+def create_vegetation(pos: typing.Any = (0.0, 0.0, 0.0), height: float = 12.0, crown_radius: float | typing.Sequence[float] = 3.0, clear_trunk_height: float | None = None, **kwargs) -> SbVeggieTree:
     """Alias of create_tree with the older positional names (pos, height, crown_radius, clear_trunk_height = crown base)."""
 
 
-def grow_trees(trees: typing.Iterable[SbVeggieTree], seed: typing.Optional[str] = None, triangle_budget: typing.Optional[float] = None, label: typing.Optional[str] = None) -> typing.Tuple[bytes, dict]:
+def grow_trees(trees: typing.Iterable[SbVeggieTree], seed: str | None = None, triangle_budget: float | None = None, label: str | None = None) -> typing.Tuple[bytes, dict]:
     """Grows the trees natively (scratchbox_native.vegetation) and returns (trees GLB bytes, stats)."""
 
 import hashlib

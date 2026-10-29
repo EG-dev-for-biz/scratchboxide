@@ -54,6 +54,9 @@ struct BuildingMaterials {
     PbrMaterial frame{ "Frame_PBR" };
     PbrMaterial roof{ "Roof_PBR" };
     PbrMaterial foundation{ "Foundation_PBR" };
+    /** Horizontal trim on every floor: sills, ledges, belt and string courses, cornices, mouldings and the floor slabs'
+     * edges (the plinth alone is foundation). */
+    PbrMaterial trim{ "Trim_PBR" };
 
     static BuildingMaterials createArchitecturalPalette() {
         BuildingMaterials mats;
@@ -84,6 +87,11 @@ struct BuildingMaterials {
         mats.foundation.roughnessFactor = 0.92f;
         mats.foundation.metallicFactor = 0.02f;
 
+        // Trim: the same cast stone as the plinth until a script sets it apart
+        mats.trim.baseColorFactor = Vec4(0.55f, 0.54f, 0.52f, 1.0f);
+        mats.trim.roughnessFactor = 0.92f;
+        mats.trim.metallicFactor = 0.02f;
+
         return mats;
     }
 };
@@ -102,6 +110,7 @@ struct FacadeDetails {
     float hoodPitchDeg{0.0f};               // 0 = straight hood; above 0 the hood rises to a pediment apex
     float hoodExtensionM{0.08f};            // hood extension past each jamb
 
+    float beltProjectionM{0.16f};           // the box belt course on every floor line (no string-course profile): 0 = none
     float pilasterWidthM{0.0f};             // > 0 adds pilasters at bay boundaries
     float pilasterProjectionM{0.08f};
     int pilasterBayStride{1};               // every Nth bay boundary
@@ -183,6 +192,8 @@ struct BuildingConfig {
     float windowRecessDepth{0.22f};     // Reveal / recess depth from outer wall (meters)
     float frameThickness{0.08f};        // Thickness of window frame perimeter (meters)
     float mullionThickness{0.05f};      // Center mullion division thickness (meters)
+    int windowsPerBay{1};               // openings side by side in each bay (a pair = 2), windowWidth each
+    float windowGapM{0.4f};             // wall between the openings of one bay (meters)
 
     float doorWidth{2.4f};              // Ground floor entrance door width (meters)
     float doorHeight{2.8f};             // Ground floor entrance door height (meters)
@@ -725,7 +736,28 @@ public:
         const std::vector<Vec2>* hoodProfile{nullptr};
         float hoodPitchDeg{0};
         int balcony{0};                 // 0 none, 1 per opening, 2 continuous
+        int count{1};                   // openings side by side in the bay, `gap` of wall between them
+        float gap{0};
+        float span() const { return count * width + (count - 1) * gap; }
     };
+
+    /**
+     * The cells a bay's openings split it into, one opening centred in each: the bay itself for one opening, else
+     * boundaries in the middle of the wall between neighbouring openings (the outer cells reach the bay's edges).
+     */
+    static std::vector<std::pair<float, float>> openingCells(float u0, float u1, const OpeningSpec& o) {
+        if (o.count <= 1 || !o.open || o.entrance) return { { u0, u1 } };
+        std::vector<std::pair<float, float>> cells;
+        const float mid = 0.5f * (u0 + u1), step = o.width + o.gap;
+        float left = u0;
+        for (int k = 0; k < o.count; ++k) {
+            const float c = mid + (k - 0.5f * (o.count - 1)) * step;
+            const float right = k + 1 < o.count ? c + 0.5f * step : u1;
+            cells.push_back({ left, right });
+            left = right;
+        }
+        return cells;
+    }
 
     /** What the opening in bay `bay` of floor `floor` on side `side` is, after every matching rule. */
     static OpeningSpec resolveOpening(const BuildingConfig& cfg, int side, int floor, int bay, int bayCount, float bayW) {
@@ -762,7 +794,15 @@ public:
             if (r.balcony >= 0) o.balcony = r.balcony;
         }
         float floorH = floorHeightOf(cfg, floor);
-        o.width = std::min(o.width, bayW * 0.85f);
+        if (!o.entrance && cfg.windowsPerBay > 1) {
+            o.count = cfg.windowsPerBay;
+            o.gap = std::max(0.0f, cfg.windowGapM);
+            // the openings and the walls between them fit in the bay, else the bay keeps one opening
+            const float each = (bayW * 0.85f - (o.count - 1) * o.gap) / o.count;
+            if (each < 0.3f) { o.count = 1; o.gap = 0; }
+            else o.width = std::min(o.width, each);
+        }
+        if (o.count == 1) o.width = std::min(o.width, bayW * 0.85f);
         // The sill stays low enough for a 0.3 m opening under the 0.4 m lintel band, so a rule-set
         // sill can never push the opening through the floor above.
         o.sill = std::clamp(o.sill, 0.0f, std::max(0.0f, floorH - 0.7f));
@@ -832,12 +872,13 @@ public:
             { "frame",      &config.materials.frame,      Vec3(0, 0, 1) },
             { "roof",       &config.materials.roof,       Vec3(s, s, 0) },
             { "foundation", &config.materials.foundation, Vec3(0, s, s) },
+            { "trim",       &config.materials.trim,       Vec3(s, 0, s) },
         };
-        constexpr int slotCount = 5;
+        constexpr int slotCount = 6;
 
         BuildingConfig coded = config;
         PbrMaterial* codedSlots[slotCount] = { &coded.materials.wall, &coded.materials.glass, &coded.materials.frame,
-                                               &coded.materials.roof, &coded.materials.foundation };
+                                               &coded.materials.roof, &coded.materials.foundation, &coded.materials.trim };
         for (int i = 0; i < slotCount; ++i) {
             codedSlots[i]->baseColorFactor = Vec4(slots[i].code.x, slots[i].code.y, slots[i].code.z, 1.0f);
         }
@@ -1001,11 +1042,9 @@ private:
                 float yNext = currY + curFloorH;
 
                 for (int b = 0; b < bayCount; ++b) {
-                    float u0 = edges[b];
-                    float u1 = edges[b + 1];
+                  const OpeningSpec spec = resolveOpening(cfg, static_cast<int>(sideIdx), floor, b, bayCount, edges[b + 1] - edges[b]);
+                  for (const auto& [u0, u1] : openingCells(edges[b], edges[b + 1], spec)) {
                     float bayCenterU = (u0 + u1) * 0.5f;
-
-                    const OpeningSpec spec = resolveOpening(cfg, static_cast<int>(sideIdx), floor, b, bayCount, u1 - u0);
                     bool isEntranceBay = spec.entrance;
                     float openW = spec.open ? spec.width : 0.0f;
                     float openH = spec.height;
@@ -1118,15 +1157,15 @@ private:
                         Vec3 sBR_out = sBR + sProj;
 
                         // Sill Top Wash (sloping down to shed water)
-                        addQuad(mesh, sTL, sTR, sTR_out, sTL_out, Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 1.05f);
+                        addQuad(mesh, sTL, sTR, sTR_out, sTL_out, Vec3(0, 1, 0), cfg.materials.trim.baseColorFactor * 1.05f);
                         // Sill Front Nose
-                        addQuad(mesh, sBL_out, sBR_out, sTR_out, sTL_out, side.normal, cfg.materials.foundation.baseColorFactor * 0.95f);
+                        addQuad(mesh, sBL_out, sBR_out, sTR_out, sTL_out, side.normal, cfg.materials.trim.baseColorFactor * 0.95f);
                         // Sill Underside (casts drop shadow)
-                        addQuad(mesh, sBL, sBL_out, sBR_out, sBR, -Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 0.60f);
+                        addQuad(mesh, sBL, sBL_out, sBR_out, sBR, -Vec3(0, 1, 0), cfg.materials.trim.baseColorFactor * 0.60f);
                         // Sill Left Return Horn
-                        addQuad(mesh, sBL, sTL, sTL_out, sBL_out, -side.rightDir, cfg.materials.foundation.baseColorFactor * 0.85f);
+                        addQuad(mesh, sBL, sTL, sTL_out, sBL_out, -side.rightDir, cfg.materials.trim.baseColorFactor * 0.85f);
                         // Sill Right Return Horn
-                        addQuad(mesh, sBR_out, sTR_out, sTR, sBR, side.rightDir, cfg.materials.foundation.baseColorFactor * 0.85f);
+                        addQuad(mesh, sBR_out, sTR_out, sTR, sBR, side.rightDir, cfg.materials.trim.baseColorFactor * 0.85f);
                     }
 
                     // 5c. Projecting Window Lintel / Head Cap
@@ -1141,11 +1180,11 @@ private:
                         Vec3 lTR = lR + Vec3(0, lintelH, 0);
 
                         // Front face
-                        addQuad(mesh, lL + lProj, lR + lProj, lTR + lProj, lTL + lProj, side.normal, cfg.materials.foundation.baseColorFactor);
+                        addQuad(mesh, lL + lProj, lR + lProj, lTR + lProj, lTL + lProj, side.normal, cfg.materials.trim.baseColorFactor);
                         // Top slope wash
-                        addQuad(mesh, lTL, lTR, lTR + lProj, lTL + lProj, Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 1.05f);
+                        addQuad(mesh, lTL, lTR, lTR + lProj, lTL + lProj, Vec3(0, 1, 0), cfg.materials.trim.baseColorFactor * 1.05f);
                         // Underside
-                        addQuad(mesh, lL, lL + lProj, lR + lProj, lR, -Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 0.70f);
+                        addQuad(mesh, lL, lL + lProj, lR + lProj, lR, -Vec3(0, 1, 0), cfg.materials.trim.baseColorFactor * 0.70f);
                     }
 
                     // 6. Recessed Glazing / Door Panel
@@ -1179,6 +1218,7 @@ private:
                         Vec3 m3 = midT - side.rightDir * (mt * 0.5f) + side.normal * 0.02f;
                         addQuad(mesh, m0, m1, m2, m3, side.normal, cfg.materials.frame.baseColorFactor);
                     }
+                  }
                 }
 
                 currY = yNext;
@@ -1312,26 +1352,39 @@ private:
         }
         const float sgn = area2 >= 0.0f ? 1.0f : -1.0f;
         auto cross2 = [](const Vec2& a, const Vec2& b, const Vec2& c) { return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x); };
+        // Squared outlines put corners exactly on the line of other walls (a notch's inner corner on the line between two
+        // outer ones). A vertex on a candidate ear's edge must block it, or the ear's diagonal runs through that corner
+        // and a later triangle spans the notch outside the walls; in float its cross product lands a hair either side
+        // of zero, so "on the edge" is within a hair of the plan's size, not within 1e-9.
+        float span = 0.0f;
+        for (const Vec2& p : poly) span = std::max(span, std::max(std::abs(p.x), std::abs(p.y)));
+        const float hair = 1e-5f * (span * span + 1.0f);
         auto inside = [&](const Vec2& p, const Vec2& a, const Vec2& b, const Vec2& c) {
-            return cross2(a, b, p) * sgn >= -1e-9f && cross2(b, c, p) * sgn >= -1e-9f && cross2(c, a, p) * sgn >= -1e-9f;
+            return cross2(a, b, p) * sgn >= -hair && cross2(b, c, p) * sgn >= -hair && cross2(c, a, p) * sgn >= -hair;
+        };
+        // a second pass, only when no ear passes the first, lets only a vertex strictly inside block an ear
+        auto strictlyInside = [&](const Vec2& p, const Vec2& a, const Vec2& b, const Vec2& c) {
+            return cross2(a, b, p) * sgn > hair && cross2(b, c, p) * sgn > hair && cross2(c, a, p) * sgn > hair;
         };
         while (idx.size() > 3) {
             bool clipped = false;
+            for (int pass = 0; pass < 2 && !clipped; ++pass) {
             for (size_t i = 0; i < idx.size() && !clipped; ++i) {
                 size_t ia = idx[(i + idx.size() - 1) % idx.size()], ib = idx[i], ic = idx[(i + 1) % idx.size()];
-                if (cross2(poly[ia], poly[ib], poly[ic]) * sgn <= 1e-12f) continue;   // reflex or flat corner
+                if (cross2(poly[ia], poly[ib], poly[ic]) * sgn <= (pass == 0 ? 1e-12f : hair)) continue;   // reflex or flat corner
                 bool empty = true;
                 for (size_t j : idx) {
                     if (j == ia || j == ib || j == ic) continue;
                     // a bridged hole repeats points: a copy of the ear's own corner does not block it
                     const Vec2& q = poly[j];
                     if ((q - poly[ia]).lengthSq() < 1e-12f || (q - poly[ib]).lengthSq() < 1e-12f || (q - poly[ic]).lengthSq() < 1e-12f) continue;
-                    if (inside(q, poly[ia], poly[ib], poly[ic])) { empty = false; break; }
+                    if (pass == 0 ? inside(q, poly[ia], poly[ib], poly[ic]) : strictlyInside(q, poly[ia], poly[ib], poly[ic])) { empty = false; break; }
                 }
                 if (!empty) continue;
                 out.push_back({ia, ib, ic});
                 idx.erase(idx.begin() + static_cast<long>(i));
                 clipped = true;
+            }
             }
             if (!clipped) {   // no ear (degenerate input): drop a vertex rather than loop forever
                 size_t ia = idx[idx.size() - 1], ib = idx[0], ic = idx[1];
@@ -1361,9 +1414,15 @@ private:
         return dot2(rIn, edgeNormal2(rOut)) < -0.17f;   // more than ~10 degrees inward
     }
     static bool segmentsCross(const Vec2& a, const Vec2& b, const Vec2& c, const Vec2& d) {
-        auto o = [](const Vec2& p, const Vec2& q, const Vec2& r) { return (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x); };
-        const float d1 = o(c, d, a), d2 = o(c, d, b), d3 = o(a, b, c), d4 = o(a, b, d);
-        const float eps = 1e-7f;
+        // In double, with a tolerance scaled to the edges: points are stored as floats, so two edges on one wall line (a
+        // wall running straight past a notch) give orientations of float noise around zero, which a fixed tolerance
+        // read as a crossing. Within the tolerance a point counts as on the line, and touching or collinear is no cross.
+        auto o = [](const Vec2& p, const Vec2& q, const Vec2& r) {
+            return (double(q.x) - p.x) * (double(r.y) - p.y) - (double(q.y) - p.y) * (double(r.x) - p.x);
+        };
+        const double d1 = o(c, d, a), d2 = o(c, d, b), d3 = o(a, b, c), d4 = o(a, b, d);
+        const double L = std::max(double((b - a).length()), double((d - c).length()));
+        const double eps = 1e-6 * L * L + 1e-9;
         return ((d1 > eps && d2 < -eps) || (d1 < -eps && d2 > eps)) && ((d3 > eps && d4 < -eps) || (d3 < -eps && d4 > eps));
     }
     static bool pointInLoop(const Vec2& p, const std::vector<Vec2>& l) {
@@ -1644,7 +1703,7 @@ private:
 
     static void generateFacadeDetails(const BuildingConfig& cfg, ScratchboxMesh& mesh) {
         const FacadeDetails& d = cfg.details;
-        const Vec4 trim = cfg.materials.foundation.baseColorFactor;
+        const Vec4 trim = cfg.materials.trim.baseColorFactor;
         const Vec4 wall = cfg.materials.wall.baseColorFactor;
         const Vec4 metal = cfg.materials.frame.baseColorFactor;
         const Vec4 roof = cfg.materials.roof.baseColorFactor;
@@ -1737,6 +1796,8 @@ private:
 
                     float openBottom = baseY + spec.sill;
                     float openTop = openBottom + spec.height;
+                    for (const auto& [c0, c1] : openingCells(edges[b], edges[b + 1], spec)) {
+                    const float center = 0.5f * (c0 + c1);
                     if (spec.hasSill && spec.sillProfile->size() >= 3) {
                         std::vector<Vec3> path = { at(center - openW * 0.5f - d.sillHornM, openBottom),
                                                    at(center + openW * 0.5f + d.sillHornM, openBottom) };
@@ -1755,6 +1816,8 @@ private:
                         }
                         sweepProfileMitred(mesh, path, outs, ups, *spec.hoodProfile, false, trim);
                     }
+                    }
+                    openW = spec.span();
 
                     float half = openW * 0.5f + d.balconyExtraWidthM * 0.5f;
                     if (spec.balcony == 1) {
@@ -1775,7 +1838,7 @@ private:
                     float widest = 0.0f;
                     for (int f = 0; f < cfg.floorCount; ++f) {
                         const OpeningSpec o = resolveOpening(cfg, static_cast<int>(sideIdx), f, b, bayCount, bw);
-                        if (o.open) widest = std::max(widest, o.width);
+                        if (o.open) widest = std::max(widest, o.span());
                     }
                     gap = std::min(gap, bw - widest);
                 }
@@ -1906,18 +1969,20 @@ private:
     static void generateFloorSlabs(const BuildingConfig& cfg, ScratchboxMesh& mesh) {
         if (hasOutline(cfg)) {
             const auto loops = outlineLoops(cfg);
-            const Vec4 trim = cfg.materials.foundation.baseColorFactor;
+            const Vec4 trim = cfg.materials.trim.baseColorFactor;
             const auto& scf = cfg.details.stringCourseFloors;
             for (int floor = 0; floor <= cfg.floorCount; ++floor) {
                 const float y = floorBaseY(cfg, floor);
-                addCapLoops(mesh, loops, y, true, trim * 0.8f);
+                // the top slab is the roof deck (a setback terrace when a tier stands on it): roof, not trim
+                addCapLoops(mesh, loops, y, true, floor == cfg.floorCount ? cfg.materials.roof.baseColorFactor : trim * 0.8f);
                 bool profiledBand = floor == cfg.floorCount
                     ? cfg.details.corniceProfile.size() >= 3
                     : cfg.details.stringCourseProfile.size() >= 3 && (scf.empty() || std::find(scf.begin(), scf.end(), floor) != scf.end());
                 if (floor == 0 || profiledBand) continue;
                 // The box belt course of the rectangle, as a section swept round every loop: drip face, front, wash.
                 const bool cornice = floor == cfg.floorCount;
-                const float proj = cornice ? 0.32f : 0.16f, h = cornice ? 0.28f : 0.16f;
+                if (!cornice && cfg.details.beltProjectionM <= 0.0f) continue;
+                const float proj = cornice ? 0.32f : cfg.details.beltProjectionM, h = cornice ? 0.28f : 0.16f;
                 addHorizontalLoop(mesh, cfg, y, { Vec2(0.0f, -h), Vec2(proj, -h), Vec2(proj, 0.0f), Vec2(0.0f, 0.04f) }, trim);
             }
             return;
@@ -1933,8 +1998,8 @@ private:
             Vec3 p2( hx, currY, -hz);
             Vec3 p3(-hx, currY, -hz);
 
-            // Upward facing
-            addQuad(mesh, p0, p1, p2, p3, Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 0.8f);
+            // Upward facing; the top slab is the roof deck (a setback terrace when a tier stands on it)
+            addQuad(mesh, p0, p1, p2, p3, Vec3(0, 1, 0), floor == cfg.floorCount ? cfg.materials.roof.baseColorFactor : cfg.materials.trim.baseColorFactor * 0.8f);
 
             // Exterior projecting belt course / stringcourse moulding wrapping the perimeter
             // A profile replaces the box belt only on the floor lines it is swept on (generateFacadeDetails
@@ -1943,9 +2008,9 @@ private:
             bool profiledBand = floor == cfg.floorCount
                 ? cfg.details.corniceProfile.size() >= 3
                 : cfg.details.stringCourseProfile.size() >= 3 && (scf.empty() || std::find(scf.begin(), scf.end(), floor) != scf.end());
-            if (floor > 0 && !profiledBand) {
+            if (floor > 0 && !profiledBand && (floor == cfg.floorCount || cfg.details.beltProjectionM > 0.0f)) {
                 bool isRoofCornice = (floor == cfg.floorCount);
-                float beltProj = isRoofCornice ? 0.32f : 0.16f;
+                float beltProj = isRoofCornice ? 0.32f : cfg.details.beltProjectionM;
                 float beltH = isRoofCornice ? 0.28f : 0.16f;
                 float bTopY = currY;
                 float bBotY = currY - beltH;
@@ -1955,25 +2020,25 @@ private:
 
                 // 4-side exterior belt course quads:
                 // Front (+Z)
-                addQuad(mesh, Vec3(-outX, bBotY, outZ), Vec3(outX, bBotY, outZ), Vec3(outX, bTopY, outZ), Vec3(-outX, bTopY, outZ), Vec3(0, 0, 1), cfg.materials.foundation.baseColorFactor);
+                addQuad(mesh, Vec3(-outX, bBotY, outZ), Vec3(outX, bBotY, outZ), Vec3(outX, bTopY, outZ), Vec3(-outX, bTopY, outZ), Vec3(0, 0, 1), cfg.materials.trim.baseColorFactor);
                 // Back (-Z)
-                addQuad(mesh, Vec3(outX, bBotY, -outZ), Vec3(-outX, bBotY, -outZ), Vec3(-outX, bTopY, -outZ), Vec3(outX, bTopY, -outZ), Vec3(0, 0, -1), cfg.materials.foundation.baseColorFactor);
+                addQuad(mesh, Vec3(outX, bBotY, -outZ), Vec3(-outX, bBotY, -outZ), Vec3(-outX, bTopY, -outZ), Vec3(outX, bTopY, -outZ), Vec3(0, 0, -1), cfg.materials.trim.baseColorFactor);
                 // Left (-X)
-                addQuad(mesh, Vec3(-outX, bBotY, -outZ), Vec3(-outX, bBotY, outZ), Vec3(-outX, bTopY, outZ), Vec3(-outX, bTopY, -outZ), Vec3(-1, 0, 0), cfg.materials.foundation.baseColorFactor);
+                addQuad(mesh, Vec3(-outX, bBotY, -outZ), Vec3(-outX, bBotY, outZ), Vec3(-outX, bTopY, outZ), Vec3(-outX, bTopY, -outZ), Vec3(-1, 0, 0), cfg.materials.trim.baseColorFactor);
                 // Right (+X)
-                addQuad(mesh, Vec3(outX, bBotY, outZ), Vec3(outX, bBotY, -outZ), Vec3(outX, bTopY, -outZ), Vec3(outX, bTopY, outZ), Vec3(1, 0, 0), cfg.materials.foundation.baseColorFactor);
+                addQuad(mesh, Vec3(outX, bBotY, outZ), Vec3(outX, bBotY, -outZ), Vec3(outX, bTopY, -outZ), Vec3(outX, bTopY, outZ), Vec3(1, 0, 0), cfg.materials.trim.baseColorFactor);
 
                 // Top wash (slopes down from wall to outer edge)
-                addQuad(mesh, Vec3(-hx, bTopY + 0.04f, hz), Vec3(hx, bTopY + 0.04f, hz), Vec3(outX, bTopY, outZ), Vec3(-outX, bTopY, outZ), Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 1.05f);
-                addQuad(mesh, Vec3(hx, bTopY + 0.04f, -hz), Vec3(-hx, bTopY + 0.04f, -hz), Vec3(-outX, bTopY, -outZ), Vec3(outX, bTopY, -outZ), Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 1.05f);
-                addQuad(mesh, Vec3(-hx, bTopY + 0.04f, -hz), Vec3(-hx, bTopY + 0.04f, hz), Vec3(-outX, bTopY, outZ), Vec3(-outX, bTopY, -outZ), Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 1.05f);
-                addQuad(mesh, Vec3(hx, bTopY + 0.04f, hz), Vec3(hx, bTopY + 0.04f, -hz), Vec3(outX, bTopY, -outZ), Vec3(outX, bTopY, outZ), Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 1.05f);
+                addQuad(mesh, Vec3(-hx, bTopY + 0.04f, hz), Vec3(hx, bTopY + 0.04f, hz), Vec3(outX, bTopY, outZ), Vec3(-outX, bTopY, outZ), Vec3(0, 1, 0), cfg.materials.trim.baseColorFactor * 1.05f);
+                addQuad(mesh, Vec3(hx, bTopY + 0.04f, -hz), Vec3(-hx, bTopY + 0.04f, -hz), Vec3(-outX, bTopY, -outZ), Vec3(outX, bTopY, -outZ), Vec3(0, 1, 0), cfg.materials.trim.baseColorFactor * 1.05f);
+                addQuad(mesh, Vec3(-hx, bTopY + 0.04f, -hz), Vec3(-hx, bTopY + 0.04f, hz), Vec3(-outX, bTopY, outZ), Vec3(-outX, bTopY, -outZ), Vec3(0, 1, 0), cfg.materials.trim.baseColorFactor * 1.05f);
+                addQuad(mesh, Vec3(hx, bTopY + 0.04f, hz), Vec3(hx, bTopY + 0.04f, -hz), Vec3(outX, bTopY, -outZ), Vec3(outX, bTopY, outZ), Vec3(0, 1, 0), cfg.materials.trim.baseColorFactor * 1.05f);
 
                 // Underside drip face (casts continuous shadow onto wall below)
-                addQuad(mesh, Vec3(-hx, bBotY, hz), Vec3(-outX, bBotY, outZ), Vec3(outX, bBotY, outZ), Vec3(hx, bBotY, hz), -Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 0.60f);
-                addQuad(mesh, Vec3(hx, bBotY, -hz), Vec3(outX, bBotY, -outZ), Vec3(-outX, bBotY, -outZ), Vec3(-hx, bBotY, -hz), -Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 0.60f);
-                addQuad(mesh, Vec3(-hx, bBotY, -hz), Vec3(-outX, bBotY, -outZ), Vec3(-outX, bBotY, outZ), Vec3(-hx, bBotY, hz), -Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 0.60f);
-                addQuad(mesh, Vec3(hx, bBotY, hz), Vec3(outX, bBotY, outZ), Vec3(outX, bBotY, -outZ), Vec3(hx, bBotY, -hz), -Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 0.60f);
+                addQuad(mesh, Vec3(-hx, bBotY, hz), Vec3(-outX, bBotY, outZ), Vec3(outX, bBotY, outZ), Vec3(hx, bBotY, hz), -Vec3(0, 1, 0), cfg.materials.trim.baseColorFactor * 0.60f);
+                addQuad(mesh, Vec3(hx, bBotY, -hz), Vec3(outX, bBotY, -outZ), Vec3(-outX, bBotY, -outZ), Vec3(-hx, bBotY, -hz), -Vec3(0, 1, 0), cfg.materials.trim.baseColorFactor * 0.60f);
+                addQuad(mesh, Vec3(-hx, bBotY, -hz), Vec3(-outX, bBotY, -outZ), Vec3(-outX, bBotY, outZ), Vec3(-hx, bBotY, hz), -Vec3(0, 1, 0), cfg.materials.trim.baseColorFactor * 0.60f);
+                addQuad(mesh, Vec3(hx, bBotY, hz), Vec3(outX, bBotY, outZ), Vec3(outX, bBotY, -outZ), Vec3(hx, bBotY, -hz), -Vec3(0, 1, 0), cfg.materials.trim.baseColorFactor * 0.60f);
             }
 
             if (floor < cfg.floorCount) {

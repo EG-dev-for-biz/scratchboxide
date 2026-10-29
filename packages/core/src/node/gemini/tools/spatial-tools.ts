@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { TOGGLEABLE_STEPS } from '../../../common/staged-build-steps';
 import type { FloaterPruningReport } from '../../../common/spatial/splat-floater-pruning';
 import * as path from 'path';
 import * as THREE from 'three';
@@ -102,6 +103,7 @@ import { applySunToScene } from './atmosphere-tools';
 import type { CanvasArtifact, Scene3DData, SceneCameraLens } from '../../../browser/generative-canvas/canvas-types';
 import { autoFocusAreaOf, effectiveFocusMode, focusPullSecondsOf } from '../../../browser/generative-canvas/primitives/scene3d/viewportFocus';
 import { DirectDispatchOperatorEngine } from '../../../browser/generative-canvas/services/direct-dispatch-operator-engine';
+import type { SetCameraLensParams } from '../../../browser/generative-canvas/services/operators/lighting-camera-operators';
 import { cameraToFrameCoefficients } from '../../../browser/generative-canvas/primitives/scene3d/viewportOptics';
 import { DEFAULT_CAMERA_FOV_DEG } from '../../../browser/generative-canvas/primitives/scene3d/createRendererStack';
 
@@ -223,12 +225,17 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 pipeline: {
                     type: 'STRING',
-                    enum: ['g', 'h', 'i', 'j'],
-                    description: 'Which procedural pipeline rebuilds the structure (with isolate and procedural). "j" (the default, the 3D Building button): the isolated scan is rendered at four planned views, made into one photoreal character sheet of the building (one 4K image, every view checked against the scan), the four views are sent together once to Meshy 7.1 multi-image-to-3D on Fal.ai, the model is fitted onto the scan\'s footprint and height and labelled generated, with its fit (plan IoU, share outside the footprint) reported; needs FAL_KEY. "i": the same character sheet, fitting and labelling as "j", but with Trellis multi in place of Meshy as the 3D model service, run six times (one per seed, about $0.12 a building), the candidate whose silhouette and plan best match the sheet and the scan kept, its textures colour-matched to the building\'s swatch; needs FAL_KEY. "h": the scan leads and vector/Solar data only agree with it, the structure is seeded on the vector building nearest the place, the build commits what its time budget allows instead of being discarded at the limit, readings that explain almost none of their wall are dropped, continued openings are checked before the native build, rejections are reported by reason, and an evidence ledger of every decision is written into the brief. "g": the earlier rules. Default "j" (SCRATCHBOX_STAGED_PROCEDURAL=g, h or i changes it).'
+                    enum: ['g', 'h', 'i', 'j', 'k'],
+                    description: 'Which pipeline rebuilds the structure (with isolate). "k" is the default for one building, from the chat and the 3D Building button (see the end of this description); "j" (the procedural default, with procedural true): the isolated scan is rendered at four planned views, made into one photoreal character sheet of the building (one 4K image, every view checked against the scan), the four views are sent together once to Meshy 7.1 multi-image-to-3D on Fal.ai, the model is fitted onto the scan\'s footprint and height and labelled generated, with its fit (plan IoU, share outside the footprint) reported; needs FAL_KEY. "i": the same character sheet, fitting and labelling as "j", but with Trellis multi in place of Meshy as the 3D model service, run six times (one per seed, about $0.12 a building), the candidate whose silhouette and plan best match the sheet and the scan kept, its textures colour-matched to the building\'s swatch; needs FAL_KEY. "h": the scan leads and vector/Solar data only agree with it, the structure is seeded on the vector building nearest the place, the build commits what its time budget allows instead of being discarded at the limit, readings that explain almost none of their wall are dropped, continued openings are checked before the native build, rejections are reported by reason, and an evidence ledger of every decision is written into the brief. "g": the earlier rules. "k" (with isolate, not procedural): the real scan straightened instead of rebuilt: the remeshed structure\'s walls snapped to their fitted planes, each facade\'s photo straightened (its pier and storey lines traced and warped straight, smears levelled against the facade\'s own repeats) and the facade rebuilt flat on those lines with that photo; use it when the user asks for one building, to straighten or clean up the building from Google Maps with its own texture. Default "k" with isolate; with procedural true, "j" (SCRATCHBOX_STAGED_PROCEDURAL=g, h, i or j makes that procedural pipeline the default instead of "k").'
+                },
+                steps: {
+                    type: 'OBJECT',
+                    description: 'Steps of a pipeline K build turned on (true) or off (false) for this build only, by step key; a step not named keeps its default. Set by the build graph\'s step switches when the build is re-run; pass it only when the user asks to turn a named step on or off.',
+                    properties: Object.fromEntries([...TOGGLEABLE_STEPS].map(([key, whenOff]) => [key, { type: 'BOOLEAN', description: `Off: ${whenOff}.` }]))
                 },
                 procedural: {
                     type: 'BOOLEAN',
-                    description: 'With isolate: rebuild the structure procedurally (pipeline G) instead of detailing its scan. Survey cameras on the street around it are rendered from the photo tiles onto measured wall elevations, each wall is read as a facade program in metres (rows of openings with their arched heads, cornices and bands, piers and colonnettes, shop fronts, colours) and built natively on the vector massing, every face painted from its reading: a clean, procedural building, nothing of the scan in it. What was read is labelled photo-inferred, what was continued into unseen parts generated. Default true with isolate (one building is built procedurally, from the chat and from the 3D Building button alike); pass false only when the user asks for the scan itself detailed rather than a procedural building.'
+                    description: 'With isolate: rebuild the structure procedurally (pipeline G) instead of detailing its scan. Survey cameras on the street around it are rendered from the photo tiles onto measured wall elevations, each wall is read as a facade program in metres (rows of openings with their arched heads, cornices and bands, piers and colonnettes, shop fronts, colours) and built natively on the vector massing, every face painted from its reading: a clean, procedural building, nothing of the scan in it. What was read is labelled photo-inferred, what was continued into unseen parts generated. Leave it unset for one building: it then runs pipeline K, the real scan straightened with its own photo (from the chat and the 3D Building button alike). Pass true only when the user asks for a procedural rebuild (or name a procedural pipeline); pass false only when the user asks for the scan detailed on its vector massing.'
                 },
                 atomicBuildingIntegrity: {
                     type: 'BOOLEAN',
@@ -1641,6 +1648,8 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 isoDate: { type: 'STRING', description: 'ISO-8601 instant for the sun (lighting "scene" only); default the instant the stations were synthesized for.' },
                 stationIds: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Building-survey character sheet: exactly four station ids (in quadrant order: top left, top right, bottom left, bottom right). The four views go into one 2 x 2 sheet on white and are made photorealistic by one 4K Nano Banana 2 image, so every view shows the same building in the same colours; each panel is then checked like a station (edge alignment and scan outline) and the whole sheet is generated again unless all four pass. Use instead of stationId; pick views that see the structure from different sides, e.g. the street faces, a corner and an aerial for the roof.' },
                 maxRerolls: { type: 'NUMBER', description: 'Further attempts after a rejected image (default 2).' },
+                imageModel: { type: 'STRING', description: 'Optional image model id or product name (nano-banana-2, nano-banana-pro, nano-banana-lite): only that model is asked. Default: the standard image models in order.' },
+                imageSize: { type: 'STRING', description: 'Optional output size: "1K", "2K" (default) or "4K". Nano Banana Lite makes 1K only.' },
                 moodPromptContext: { type: 'STRING', description: 'Optional extra sentence(s) for the prompt (mood light only with lighting "scene").' },
                 styleSuffix: { type: 'STRING', description: 'Optional style suffix appended verbatim.' },
                 width: { type: 'NUMBER', description: 'Render/generation width (default 1920).' },
@@ -1907,7 +1916,7 @@ function chatProgress(ctx: ToolContext | undefined): (fraction: number, message?
  * models via the workspace's Google media credentials. There is no stand-in generator: without credentials the first
  * generation fails with the credential error.
  */
-async function resolveStationImageGenerator(ctx: { workspaceRoot: string }): Promise<import('../../spatial/BeautifyStationService').StationImageGenerator> {
+async function resolveStationImageGenerator(ctx: { workspaceRoot: string }, imageModel?: string, imageSize?: '1K' | '2K' | '4K'): Promise<import('../../spatial/BeautifyStationService').StationImageGenerator> {
     const { createGoogleStationImageGenerator } = await import('../../spatial/BeautifyStationService');
     const { GoogleMediaGenerationService } = await import('../../google-media-generation-service');
     const { GoogleMediaCredentialsService } = await import('../../google-media-credentials-service');
@@ -1915,7 +1924,9 @@ async function resolveStationImageGenerator(ctx: { workspaceRoot: string }): Pro
     const assetStore = new MediaAssetStore();
     const credentials = new GoogleMediaCredentialsService();
     const mediaService = new GoogleMediaGenerationService(assetStore, () => credentials.createClient());
-    return createGoogleStationImageGenerator({ mediaService, assetStore, workspaceRoot: ctx.workspaceRoot || process.cwd() });
+    // a named model is the only one asked (no fallback to the defaults): the result says which model answered
+    const { resolveImageModelId } = await import('../../../common/media-generation-protocol');
+    return createGoogleStationImageGenerator({ mediaService, assetStore, workspaceRoot: ctx.workspaceRoot || process.cwd(), ...(imageModel ? { modelPriority: [resolveImageModelId(imageModel)] } : {}), ...(imageSize ? { imageSize } : {}) });
 }
 
 export const panoramaHandlers: Record<string, ToolHandler> = {
@@ -2863,7 +2874,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             const ids = (args.stationIds as unknown[]).map(Number);
             if (ids.length !== 4) throw new MissingInputError('survey_beautify_station', 'stationIds', `a character sheet takes exactly four station ids, got ${ids.length}`);
             const stations = ids.map(id => { const st = (data.poses as any[]).find(p => p.id === id); if (!st) throw new Error(`survey_beautify_station: station ${id} not found`); return st; });
-            const generator = await resolveStationImageGenerator(ctx);
+            const generator = await resolveStationImageGenerator(ctx, typeof args.imageModel === 'string' && args.imageModel.trim() ? args.imageModel.trim() : undefined, args.imageSize === '1K' || args.imageSize === '2K' || args.imageSize === '4K' ? args.imageSize : undefined);
             const { registerBeautifyHandlers } = await import('../../spatial/survey-router');
             const deps = registerBeautifyHandlers({}, generator, process.cwd());
             const res = await deps.beautifySheet!({ ...args, stations, anchor: data.anchor, glbPath: asString(args.glbPath), signal: ctx.signal }, chatProgress(ctx));
@@ -2876,7 +2887,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         if (args.stationId === undefined) throw new MissingInputError('survey_beautify_station', 'stationId', 'or stationIds (four) for a character sheet');
         const station = (data.poses as any[]).find(p => p.id === args.stationId);
         if (!station) throw new Error(`survey_beautify_station: station ${args.stationId} not found`);
-        const generator = await resolveStationImageGenerator(ctx);
+        const generator = await resolveStationImageGenerator(ctx, typeof args.imageModel === 'string' && args.imageModel.trim() ? args.imageModel.trim() : undefined, args.imageSize === '1K' || args.imageSize === '2K' || args.imageSize === '4K' ? args.imageSize : undefined);
         const { registerBeautifyHandlers } = await import('../../spatial/survey-router');
         const deps = registerBeautifyHandlers({}, generator, process.cwd());
         const res = await deps.beautifyStation!({ ...args, station, anchor: data.anchor, glbPath: asString(args.glbPath), signal: ctx.signal }, chatProgress(ctx));
@@ -4702,6 +4713,29 @@ export const PHYSICAL_CAMERA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 enableDepthOfField: {
                     type: 'BOOLEAN',
                     description: 'Whether post-processing depth of field and bokeh blurring is enabled.'
+                },
+                flare: {
+                    type: 'OBJECT',
+                    description: 'Lens flare from the frame\'s bright light (ghosts mirrored through the centre, a halo, an optional horizontal streak). amount 0 removes it.',
+                    properties: {
+                        amount: { type: 'NUMBER', description: 'Flare strength in [0, 1] (0.3 is a natural flare).' },
+                        ghosts: { type: 'NUMBER', description: 'Number of ghosts, a whole number 0-8 (default 4).' },
+                        halo: { type: 'NUMBER', description: 'Halo ring strength in [0, 1] (default 0.3).' },
+                        streak: { type: 'NUMBER', description: 'Horizontal (anamorphic) streak strength in [0, 1] (default 0).' },
+                        threshold: { type: 'NUMBER', description: 'Linear brightness above which light flares, > 0 (default 1.5: brighter than white).' }
+                    }
+                },
+                diffusion: {
+                    type: 'OBJECT',
+                    description: 'A diffusion filter (Black Pro-Mist): a share of all light scattered into a soft glow round highlights. strength 0 removes it.',
+                    properties: {
+                        strength: { type: 'NUMBER', description: 'Share of light diffused, in [0, 1] (1/8 grade about 0.06, 1/4 about 0.12, 1/2 about 0.25).' },
+                        spread: { type: 'NUMBER', description: 'Glow radius as a fraction of the frame height, in [0.001, 0.5] (default 0.04).' }
+                    }
+                },
+                temporalAntiAliasing: {
+                    type: 'BOOLEAN',
+                    description: 'Temporal anti-aliasing under the lens effects (default on): keeps small bright light from flickering through depth of field, flare and diffusion. false turns it off.'
                 }
             },
             required: ['focalLengthMm', 'apertureFStop']
@@ -4880,8 +4914,12 @@ export const physicalCameraHandlers: Record<string, ToolHandler> = {
             ...(autoFocusAreaFraction !== undefined ? { autoFocusAreaFraction } : {}),
             ...(focusPullSeconds !== undefined ? { focusPullSeconds } : {}),
             anamorphicSqueeze: anamorphicRatio > 0 ? anamorphicRatio : 1,
-            depthOfField: enableDepthOfField
-        });
+            depthOfField: enableDepthOfField,
+            // amount / strength 0 removes the effect; the operator validates the ranges
+            ...(args.flare && typeof args.flare === 'object' ? { flare: Number((args.flare as { amount?: unknown }).amount) === 0 ? null : args.flare } : {}),
+            ...(args.diffusion && typeof args.diffusion === 'object' ? { diffusion: Number((args.diffusion as { strength?: unknown }).strength) === 0 ? null : args.diffusion } : {}),
+            ...(typeof args.temporalAntiAliasing === 'boolean' ? { temporalAntiAliasing: args.temporalAntiAliasing } : {})
+        } as SetCameraLensParams);
         if (!lensRes.success) return notApplied(lensRes.error || 'sb_set_camera_lens failed');
         const passes = ((lensRes.data as { passes?: string[] })?.passes) ?? [];
         const dofDrawn = passes.includes('depth-of-field');

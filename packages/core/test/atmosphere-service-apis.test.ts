@@ -419,11 +419,13 @@ describe('Atmospheric Capabilities First-Class APIs', () => {
             expect(cfg.inscatteringIntensity).toBeUndefined();
         });
 
-        it('atmosphere_configure_scene adds clouds only when a coverage is given, and aerial perspective only when asked', () => {
+        it('atmosphere_configure_scene adds clouds only when a coverage is given; aerial perspective comes with the sky unless turned off', () => {
             const plain = atmosphereHandlers.atmosphere_configure_scene({ sunElevationDeg: 30, sunAzimuthDeg: 200 }, {} as any);
             const plainCfg = plain.resultPayload.config as any;
             expect(plainCfg.volumetricClouds).toBe(false);
-            expect(plainCfg.aerialPerspectiveEnabled).toBe(false);
+            expect(plainCfg.aerialPerspectiveEnabled).toBe(true);
+            const off = atmosphereHandlers.atmosphere_configure_scene({ sunElevationDeg: 30, sunAzimuthDeg: 200, enableAerialPerspective: false }, {} as any);
+            expect((off.resultPayload.config as any).aerialPerspectiveEnabled).toBe(false);
             expect(plainCfg.godRays).toBeUndefined();
             expect(plainCfg.sunElevation).toBe(30);
 

@@ -1,8 +1,9 @@
 """Real-scale tileable PBR surface texture synthesis"""
 
+import collections.abc
 import scratchbox_native.math
 
-__all__ = ['CoursedSurfaceParams', 'synthesize_coursed_surface']
+__all__ = ['CoursedSurfaceParams', 'prepare_material_maps', 'remap_png_channels', 'synthesize_coursed_surface', 'transfer_lab_png']
 
 
 class CoursedSurfaceParams:
@@ -119,5 +120,17 @@ class CoursedSurfaceParams:
     def seed(self, value: int) -> None: ...
 
 
+def prepare_material_maps(color: str, normal: str = '', roughness: str = '', ao: str = '', metalness: str = '', arm: str = '', max_size: int = 2048) -> dict:
+    """Decode a surface library's maps (PNG 8/16-bit or baseline JPEG), area-resample them to at most max_size pixels a side and pack them as albedo, normal and ORM PNG bytes, with per-pixel statistics (colour mean and spread in linear sRGB and CIELAB, roughness mean and spread, metalness mean, share at least 0.5 and 95th percentile, normal tilt RMS in degrees)"""
+
+
+def remap_png_channels(png_bytes: bytes, scale: collections.abc.Sequence[float], offset: collections.abc.Sequence[float] = ..., srgb: bool = False) -> bytes:
+    """Remap a map's channels as v * scale + offset (in linear light when srgb: a colour map), baking a measured colour or roughness into a library map; returns PNG bytes"""
+
+
 def synthesize_coursed_surface(params: scratchbox_native.surface.CoursedSurfaceParams) -> dict:
     """Synthesize a seamless coursed-surface PBR set (albedo, normal, ORM as PNG bytes) and its tile size in metres"""
+
+
+def transfer_lab_png(png_bytes: bytes, mean_lab: collections.abc.Sequence[float], spread_lab: collections.abc.Sequence[float]) -> dict:
+    """Move a colour map's CIELAB distribution to mean_lab / spread_lab (per channel: (v - mean) * spread_lab / spread + mean_lab; a channel without spread of its own, or given a negative spread, is only shifted), keeping its grain and variation. Returns {png, mean_lab, spread_lab, mean_linear} measured on the result, and the source's from_mean_lab / from_spread_lab"""

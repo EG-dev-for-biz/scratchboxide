@@ -43,6 +43,71 @@ export interface BentoStageLayoutProps {
     workspacePath?: string;
 }
 
+/** What a surface rendered outside the main stage (a bento pane, the docked frame) is given. */
+export interface ArtifactSurfaceContext {
+    onUpdateArtifact?: (artifact: CanvasArtifact) => void;
+    onPromptAction?: (promptText: string) => void;
+    onOpenInBrowser?: (url: string, title?: string) => void;
+    workspacePath?: string;
+}
+
+/** An artifact's own surface, by its type, for a pane beside the main stage. */
+export function renderArtifactSurface(artifact: CanvasArtifact, { onUpdateArtifact, onPromptAction, onOpenInBrowser, workspacePath }: ArtifactSurfaceContext): React.ReactNode {
+    switch (artifact.type) {
+        case 'live-code-sandbox':
+            return (
+                <LiveCodeSandboxPrimitive
+                    data={artifact.data as LiveCodeSandboxData}
+                    onUpdate={updatedData => onUpdateArtifact?.({ ...artifact, data: updatedData })}
+                    onPromptAction={onPromptAction}
+                    hideTopbar={true}
+                />
+            );
+        case 'markdown-document':
+            return (
+                <MarkdownDocumentPrimitive
+                    data={artifact.data as MarkdownDocumentData}
+                    onUpdate={(updatedData: MarkdownDocumentData) => onUpdateArtifact?.({ ...artifact, data: updatedData })}
+                    onPromptAction={onPromptAction}
+                    onOpenInBrowser={onOpenInBrowser}
+                    workspacePath={workspacePath}
+                />
+            );
+        case 'kanban-board':
+            return (
+                <KanbanBoardPrimitive
+                    data={artifact.data as KanbanBoardData}
+                    onUpdate={updatedData => onUpdateArtifact?.({ ...artifact, data: updatedData })}
+                />
+            );
+        case 'interactive-browser':
+        case 'browser':
+            return (
+                <InteractiveBrowserPrimitive
+                    data={artifact.data as InteractiveBrowserData}
+                    onUpdate={updatedData => onUpdateArtifact?.({ ...artifact, data: updatedData })}
+                    onPromptAction={onPromptAction}
+                />
+            );
+        case 'node-graph':
+            return (
+                <NodeGraphPrimitive
+                    data={artifact.data as NodeGraphData}
+                    onUpdate={updatedData => onUpdateArtifact?.({ ...artifact, data: updatedData })}
+                    workspacePath={workspacePath}
+                    artifactId={artifact.id}
+                />
+            );
+        default:
+            return (
+                <div style={{ padding: 24, color: 'var(--sb-foreground, #ccc)' }}>
+                    <h3>{artifact.title}</h3>
+                    <p>{artifact.summary}</p>
+                </div>
+            );
+    }
+}
+
 export const BentoStageLayout: React.FC<BentoStageLayoutProps> = ({
     layoutMode = 'single',
     onLayoutModeChange,
@@ -118,59 +183,7 @@ export const BentoStageLayout: React.FC<BentoStageLayoutProps> = ({
             );
         }
 
-        switch (artifact.type) {
-            case 'live-code-sandbox':
-                return (
-                    <LiveCodeSandboxPrimitive
-                        data={artifact.data as LiveCodeSandboxData}
-                        onUpdate={updatedData => onUpdateArtifact?.({ ...artifact, data: updatedData })}
-                        onPromptAction={onPromptAction}
-                        hideTopbar={true}
-                    />
-                );
-            case 'markdown-document':
-                return (
-                    <MarkdownDocumentPrimitive
-                        data={artifact.data as MarkdownDocumentData}
-                        onUpdate={(updatedData: MarkdownDocumentData) => onUpdateArtifact?.({ ...artifact, data: updatedData })}
-                        onPromptAction={onPromptAction}
-                        onOpenInBrowser={onOpenInBrowser}
-                        workspacePath={workspacePath}
-                    />
-                );
-            case 'kanban-board':
-                return (
-                    <KanbanBoardPrimitive
-                        data={artifact.data as KanbanBoardData}
-                        onUpdate={updatedData => onUpdateArtifact?.({ ...artifact, data: updatedData })}
-                    />
-                );
-            case 'interactive-browser':
-            case 'browser':
-                return (
-                    <InteractiveBrowserPrimitive
-                        data={artifact.data as InteractiveBrowserData}
-                        onUpdate={updatedData => onUpdateArtifact?.({ ...artifact, data: updatedData })}
-                        onPromptAction={onPromptAction}
-                    />
-                );
-            case 'node-graph':
-                return (
-                    <NodeGraphPrimitive
-                        data={artifact.data as NodeGraphData}
-                        onUpdate={updatedData => onUpdateArtifact?.({ ...artifact, data: updatedData })}
-                        workspacePath={workspacePath}
-                        artifactId={artifact.id}
-                    />
-                );
-            default:
-                return (
-                    <div style={{ padding: 24, color: 'var(--sb-foreground, #ccc)' }}>
-                        <h3>{artifact.title}</h3>
-                        <p>{artifact.summary}</p>
-                    </div>
-                );
-        }
+        return renderArtifactSurface(artifact, { onUpdateArtifact, onPromptAction, onOpenInBrowser, workspacePath });
     };
 
     const renderPane = (paneIndex: number, style?: React.CSSProperties) => {

@@ -1,0 +1,39 @@
+{
+ "kind": "bays",
+ "facadeId": 0,
+ "crop": [
+  0,
+  300,
+  2000,
+  2300
+ ],
+ "pixel": 0.077085103,
+ "windows": [
+  [
+   27,
+   0,
+   75,
+   213
+  ],
+  [
+   97,
+   0,
+   168,
+   213
+  ],
+  [
+   192,
+   0,
+   238,
+   300
+  ],
+  [
+   270,
+   0,
+   300,
+   300
+  ]
+ ],
+ "checked": "by eye by the agent on enlarged crops (candidates accepted or rejected, missing windows added); not human-verified",
+ "note": "tower bays (the run of window columns between two piers, mullions included) as the relief recesses them"
+}

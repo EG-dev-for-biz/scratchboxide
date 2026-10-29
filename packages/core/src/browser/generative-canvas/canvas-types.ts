@@ -484,7 +484,7 @@ export interface NodeGraphData {
      * The scene this graph shows (a staged build's stage view, or a scene's node graph): the run record time it was
      * drawn from, or for a scene with no staged run the scene state `key` (sceneGraphKey); redrawn when either changes.
      */
-    stageViewOf?: { artifactId: string; updatedAtMs: number; key?: string };
+    stageViewOf?: { artifactId: string; updatedAtMs: number; key?: string; /** The step switches it was drawn with (JSON). */ toggles?: string };
 }
 
 // ==========================================
@@ -893,8 +893,56 @@ export interface SceneFocusPoint {
     localPosition: [number, number, number];
 }
 
+/**
+ * Film grain over the finished frame (after tone mapping, so it sits on the picture as on film): `amount` 0-1 (0 or absent
+ * draws none), the grain's size on the sensor in micrometres (the lens's film back: the same look at any viewport
+ * resolution; finer stocks are smaller), `chroma` 0-1 (0 monochrome), and `animate` (a new grain each frame, as film; false
+ * holds one pattern). Generated: no measurement of anything.
+ */
+export interface SceneFilmGrain {
+    amount: number;
+    sizeUm?: number;
+    chroma?: number;
+    animate?: boolean;
+}
+
+/**
+ * Lens flare from the frame's own bright light: ghosts (each bright area reflected back through the frame's centre by the
+ * lens's surfaces), a halo ring round the centre and an optional horizontal streak (the anamorphic flare). Any light above
+ * `threshold` flares, whatever it is; none when absent.
+ */
+export interface SceneLensFlare {
+    /** Overall strength, 0-1 (0.3 a clean modern lens, 1 an uncoated one). */
+    amount: number;
+    /** Ghost count along the line through the centre (0-8, default 4). */
+    ghosts?: number;
+    /** Halo ring strength, 0-1 (default 0.3). */
+    halo?: number;
+    /** Horizontal streak strength, 0-1 (default 0). */
+    streak?: number;
+    /** Linear scene luminance above which light flares (default 1.5: brighter than white). */
+    threshold?: number;
+}
+
+/**
+ * A diffusion filter in front of the lens (a Black Pro-Mist): a share of all light scattered into a soft, wide glow, so
+ * highlights bloom and the shadows beside them lift a little, while blacks away from light stay black. None when absent.
+ */
+export interface SceneLensDiffusion {
+    /** Share of the light scattered, 0-1 (a 1/8 filter about 0.06, 1/4 about 0.12, 1/2 about 0.25). */
+    strength: number;
+    /** Glow width as a fraction of the frame height (default 0.04). */
+    spread?: number;
+}
+
 export interface SceneCameraLens {
     distortion?: SceneLensDistortion;
+    /** Optional film grain over the frame; none when absent. */
+    filmGrain?: SceneFilmGrain;
+    /** Optional lens flare from the frame's bright light; none when absent. */
+    flare?: SceneLensFlare;
+    /** Optional diffusion filter (Black Pro-Mist); none when absent. */
+    diffusion?: SceneLensDiffusion;
     focalLengthMm?: number;
     /** Sensor (film back) size in mm. The circle of confusion is scaled to pixels by the frame height on the sensor. */
     sensorWidthMm?: number;
@@ -922,6 +970,11 @@ export interface SceneCameraLens {
     anamorphicSqueeze?: number;
     /** False keeps the lens values but draws no depth of field. */
     depthOfField?: boolean;
+    /**
+     * Temporal anti-aliasing under the lens effects (a jittered camera averaged over recent frames), so small bright
+     * light does not flicker through depth of field, flare or diffusion. On whenever any lens effect is drawn; false turns it off.
+     */
+    temporalAntiAliasing?: boolean;
 }
 
 /** What the viewport shows while a graph node holds the display flag; every list is optional, one is enough. */
@@ -936,6 +989,11 @@ export interface SceneDisplayFlag {
     meshIds?: string[];
     /** Named nodes of the compiled model to show (and what they contain). */
     partNames?: string[];
+    /**
+     * A build step's snapshot: the model as it stood after that step, loaded only while the flag holds it and drawn in the
+     * frame of the first loaded object of `frameOf` (the staged layers it shares a scan frame with).
+     */
+    snapshot?: { url: string; frameOf: string[] };
 }
 
 export interface Scene3DData {
@@ -954,6 +1012,8 @@ export interface Scene3DData {
      * A flagged layer a later stage replaced is drawn as a replaced layer (a ghost).
      */
     displayFlag?: SceneDisplayFlag;
+    /** A staged build's step switches for its next run (the build graph's toggles), by step key: true on, false off. */
+    stagedStepToggles?: Record<string, boolean>;
     /**
      * Optional semantic domain or classification token.
      * 
@@ -1043,6 +1103,11 @@ export interface Scene3DData {
          */
         keepPoseOnLoad?: boolean;
     };
+    /**
+     * The scene's weather (the viewport's Weather tool, the graph's Weather node): time of day, date, cloud cover, haze and
+     * fog, turned into the sky config by services/atmosphere/scene-weather.ts applySceneWeather; absent = no weather set.
+     */
+    weather?: import('./services/atmosphere/scene-weather').SceneWeatherState;
     environment?: {
         skybox?: string;
         lighting?: string;

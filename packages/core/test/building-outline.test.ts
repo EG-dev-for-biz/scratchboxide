@@ -47,7 +47,7 @@ print("slots", sorted(m.name.split("_")[-1] for m in parts))
         expect(out).toContain("facades [('edge0', 28, 180), ('edge1', 12, 90), ('edge2', 16, 0), ('edge3', 12, 90), ('edge4', 12, 0), ('edge5', 24, 270)]");
         expect(out).toContain('in notch 0');            // the inside corner is a return, balconies stop short of it
         expect(out).toContain('extent -15 15 -16 10');  // walls plus projecting trim, never more than a metre out
-        expect(out).toContain("slots ['foundation', 'frame', 'glass', 'roof', 'wall']");
+        expect(out).toContain("slots ['foundation', 'frame', 'glass', 'roof', 'trim', 'wall']");
     }, 600000);
 
     it('builds a courtyard plan whose inner walls face into the court and leaves the court open', async () => {

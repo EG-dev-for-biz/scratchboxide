@@ -64,6 +64,11 @@ export interface ShapeStageInput {
     vision?: ShapeVisionClient;
     outDir: string;
     signal?: AbortSignal;
+    /**
+     * Pictures shown with the contact sheet when the program is written (a close-up of detail finer than the scan, e.g. an
+     * AI-Beautified render): the model may take counts and proportions from them; every size is still fitted to the scan.
+     */
+    referenceImages?: Array<{ mimeType: string; bytes: Uint8Array; caption: string }>;
 }
 
 export interface TreeMeasurement {
@@ -394,7 +399,11 @@ export async function runShapeStage(input: ShapeStageInput): Promise<ShapeStageR
         return { raw, model: r.model, ms: Date.now() - t0, cached: !!r.cached };
     };
     t = Date.now();
-    const first = await ask([{ text: PROGRAM_PROMPT(input.place, scan, measured, extent) }, { inlineData: { mimeType: 'image/png', data: sheet.toString('base64') } }], 'shape-program');
+    const references = (input.referenceImages ?? []).flatMap(r => [
+        { text: `Reference picture: ${r.caption} Take counts and proportions of detail the scan melts from it (steps, fins, drums, ribs); its sizes are not measured, the scan's are.` },
+        { inlineData: { mimeType: r.mimeType, data: Buffer.from(r.bytes).toString('base64') } }
+    ]);
+    const first = await ask([{ text: PROGRAM_PROMPT(input.place, scan, measured, extent) }, { inlineData: { mimeType: 'image/png', data: sheet.toString('base64') } }, ...references], 'shape-program');
     timingsMs.gemini = first.ms;
     fs.writeFileSync(path.join(input.outDir, 'program_raw.json'), JSON.stringify(first.raw, null, 1));
     const v1 = validateProgram(first.raw, bounds);

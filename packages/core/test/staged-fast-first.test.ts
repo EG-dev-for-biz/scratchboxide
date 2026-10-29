@@ -19,6 +19,7 @@
  * No network, no billed call.
  */
 
+import { TEXTURE_RUNG_CLAY } from '../src/common/spatial/texture-pass-contracts';
 import { afterAll, describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -352,7 +353,7 @@ describe('districts are textured by default', () => {
         fs.mkdirSync(dir, { recursive: true });
         const file = writeTris(path.join(dir, 'tex.glb'), building(0, 10, 0, 10, 10));
         const bare = await tileRefineTwin(fs.readFileSync(file), 'l2');
-        expect(bare.rungShares[5]).toBeCloseTo(1, 6);
+        expect(bare.rungShares[TEXTURE_RUNG_CLAY]).toBeCloseTo(1, 6);
         expect(bare.provenance).toEqual([expect.objectContaining({ source: 'clay', coverage: 1 })]);
     });
 });

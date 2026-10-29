@@ -93,9 +93,17 @@ const SHELL_SKY_COVER: Array<[number, number]> = [
 
 /** The shader's internal coverage that shows as `skyCover` of the sky (the measured table, inverted). */
 export function shellCoverageForSkyCover(skyCover: number): number {
+    return coverageForSkyCover(SHELL_SKY_COVER, skyCover);
+}
+
+/**
+ * A measured (coverage, sky cover) table read the other way: the coverage that shows as `skyCover` of the sky, linear
+ * between rows. The dome's cumulus layer (AtmosphericSkyDome.ts) and the shell decks each have their own table.
+ */
+export function coverageForSkyCover(table: ReadonlyArray<readonly [number, number]>, skyCover: number): number {
     const f = Math.min(1, Math.max(0, skyCover));
-    for (let i = 1; i < SHELL_SKY_COVER.length; i++) {
-        const [c0, f0] = SHELL_SKY_COVER[i - 1], [c1, f1] = SHELL_SKY_COVER[i];
+    for (let i = 1; i < table.length; i++) {
+        const [c0, f0] = table[i - 1], [c1, f1] = table[i];
         if (f <= f1) return c0 + ((c1 - c0) * (f - f0)) / Math.max(1e-9, f1 - f0);
     }
     return 1;

@@ -342,6 +342,18 @@ export class StageCache {
         fs.writeFileSync(file, JSON.stringify(data));
     }
 
+    /**
+     * One line of a run's step log (steps.jsonl beside its record): a timed step inside a stage started or finished, so a
+     * watcher (the pipeline node map) can show which step is running, not only which stage. Diagnostics: never throws.
+     */
+    logRunStep(runId: string, step: string, state: 'running' | 'done' | 'failed' | 'skipped'): void {
+        try {
+            const file = path.join(path.dirname(this.runRecordPath(runId)), 'steps.jsonl');
+            fs.mkdirSync(path.dirname(file), { recursive: true });
+            fs.appendFileSync(file, JSON.stringify({ atMs: Date.now(), step, state }) + '\n');
+        } catch { /* a step log is diagnostics */ }
+    }
+
     /** A side file of a run written by writeRunNote, or undefined when the run has none by that name. */
     readRunNote<T>(runId: string, name: string): T | undefined {
         if (!/^[a-z_-]+$/.test(name)) throw new Error(`stage cache: bad run note name "${name}"`);

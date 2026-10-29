@@ -32,6 +32,7 @@
     "docs:mcp": "node scripts/generate_mcp_docs.mjs",
     "docs:mcp:live": "node scripts/generate_mcp_docs.mjs --live",
     "docs:mcp:check": "node scripts/generate_mcp_docs.mjs --check",
+    "score:windows": "ts-node --transpile-only -O '{\"module\":\"commonjs\",\"target\":\"es2020\"}' scripts/score_windows.ts",
     "audit:ast": "node .agents/skills/prevent-architectural-simulation-trap/scripts/audit_simulation_trap.js",
     "audit:math": "node .agents/skills/prevent-architectural-simulation-trap/scripts/verify_3d_math_invariants.js",
     "test": "vitest run",

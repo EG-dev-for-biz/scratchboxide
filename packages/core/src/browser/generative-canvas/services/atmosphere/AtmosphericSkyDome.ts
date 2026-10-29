@@ -22,10 +22,13 @@ import {
     getPresetLightingState
 } from './diurnal-lighting';
 import { getSunVectorFromAngles } from './solar-position';
-import { buildPhysicalSkyLut } from './physical-sky';
+import { buildPhysicalSkyLut, PhysicalSkyLut } from './physical-sky';
+import { calibratedExposure, luminance, NIGHT_MOON_INTENSITY, NIGHT_SKY_LIGHT_FLOOR, nightFillWeight, physicalSkyLevel, skyIrradianceChroma } from './sky-light-rig';
 import { SunGlare } from './SunGlare';
-import { cloudShellUniformArrays, cloudShellWindSpeeds, MAX_CLOUD_SHELL_LAYERS, resolveCloudShellLayers } from './cloud-shell-layers';
+import { cloudShellUniformArrays, cloudShellWindSpeeds, coverageForSkyCover, MAX_CLOUD_SHELL_LAYERS, resolveCloudShellLayers } from './cloud-shell-layers';
 import { InvalidInputError, MissingInputError } from '../../../../common/errors/pipeline-errors';
+
+const colorLuminance = (c: THREE.Color) => luminance([c.r, c.g, c.b]);
 
 export const ATMOSPHERE_VERTEX_SHADER = /* glsl */ `
 varying vec3 vWorldPosition;
@@ -40,8 +43,11 @@ void main() {
 }
 `;
 
-/** Cube-map face size the sky is baked at (texels per 90°: ~0.09° per texel). */
-export const SKY_BAKE_RESOLUTION = 1024;
+/**
+ * Cube-map face size the sky is baked at (texels per 90°: ~0.044° per texel, finer than a 1080p pixel at a 60° field of
+ * view; at 1024 a cloud's edge showed as texel blocks).
+ */
+export const SKY_BAKE_RESOLUTION = 2048;
 /** While clouds drift, how often (seconds of scene time) the bake starts another one-face-per-frame refresh. */
 export const SKY_REFRESH_SECONDS = 0.5;
 
@@ -76,10 +82,14 @@ uniform float uCloudAltitude;
 uniform float uTime;
 
 // Physical sky (physical-sky.ts): radiance over (azimuth from the sun / pi, sqrt(elevation / 90°)), scaled so its
-// light on a level surface equals the scene's sky light. uPhysicalSkyWeight fades to the night palette below -6°.
+// light on a level surface equals the scene's sky light. uPhysicalSkyWeight is 1: the palette below is no longer drawn.
 uniform sampler2D uSkyLut;
 uniform float uSkyScale;
 uniform float uPhysicalSkyWeight;
+uniform vec3 uNightSky;
+uniform vec3 uGroundRadiance;
+// Stars are display-tuned points: divided by the camera's exposure so they show the same whatever it meters.
+uniform float uStarScale;
 
 // Shell cloud decks (CloudShellLayer), highest first. A: base, thickness, coverage, optical depth.
 // B: feature size, elongation, heading (rad), HG g. C: albedo rgb, shell count.
@@ -403,8 +413,9 @@ void main() {
     vec3 twilightZenith = vec3(0.05, 0.12, 0.38);
     vec3 twilightHorizon = vec3(0.72, 0.35, 0.45);
 
-    vec3 nightZenith = vec3(0.005, 0.01, 0.025);
-    vec3 nightHorizon = vec3(0.015, 0.025, 0.05);
+    // a dim blue night (moonlit air and airglow), dark but never black, as a night photograph shows it
+    vec3 nightZenith = vec3(0.045, 0.065, 0.14);
+    vec3 nightHorizon = vec3(0.09, 0.115, 0.19);
 
     // Smooth diurnal phase blending
     float dayFactor = smoothstep(0.08, 0.30, sunH);
@@ -443,6 +454,20 @@ void main() {
         horizonColor = mix(horizonColor, physicalSkyRadiance(normalize(side + vec3(0.0, 0.05, 0.0))), uPhysicalSkyWeight);
         skyColor = mix(skyColor, physicalSkyRadiance(rayDir), uPhysicalSkyWeight);
     }
+    // Night: moonlit air and airglow (scene-referred), brighter toward the horizon by the van Rhijn factor of a layer
+    // ~90 km up (about 6x at the horizon), reaching the cloud light through the zenith and horizon colours too.
+    if (uNightSky.r + uNightSky.g + uNightSky.b > 0.0) {
+        float vr = 1.0 / sqrt(1.0 - 0.9725 * (1.0 - max(rayDir.y, 0.0) * max(rayDir.y, 0.0)));
+        skyColor += uNightSky * vr;
+        zenithColor += uNightSky;
+        horizonColor += uNightSky * 2.0;
+    }
+    // Below the horizon is ground, not sky (gaffer skill 2): albedo ~0.15 under the scene's light, with a firm line that
+    // softens into the horizon haze over the first few degrees (a far ground is seen through kilometres of air).
+    if (rayDir.y < 0.0) {
+        float groundSeen = (1.0 - exp(rayDir.y * 30.0)) * smoothstep(0.0, -0.004, rayDir.y);
+        skyColor = mix(skyColor, uGroundRadiance, groundSeen);
+    }
 
     // Low-sun directional horizon glow (the physical sky has its own)
     if (uPhysicalSkyWeight < 1.0 && sunH > -0.05 && sunH < 0.28) {
@@ -470,6 +495,23 @@ void main() {
         skyColor += physicalSun;
     }
 
+    // --- 2a. STARS: fixed points on the sky (hashed from the view direction, so baked with the sky and never in front of
+    // the scene), fading in from 3° to 12° below the horizon and toward the horizon, where the air is thickest.
+    if (sunH < -0.05 && rayDir.y > 0.0) {
+        float starNight = smoothstep(-0.05, -0.21, sunH);
+        vec3 sp = rayDir * 260.0;
+        vec3 cell = floor(sp);
+        float h = fract(sin(dot(cell, vec3(127.1, 311.7, 74.7))) * 43758.5453);
+        if (h > 0.982) {
+            vec3 jitter = vec3(fract(h * 17.3), fract(h * 29.1), fract(h * 41.7)) - 0.5;
+            float d = length(fract(sp) - 0.5 - jitter * 0.5);
+            float mag = fract(h * 91.7);
+            float star = smoothstep(0.22, 0.0, d) * (0.25 + 2.5 * mag * mag);
+            vec3 tint = mix(vec3(1.0, 0.86, 0.72), vec3(0.78, 0.86, 1.0), fract(h * 53.1));
+            skyColor += tint * star * starNight * smoothstep(0.0, 0.2, rayDir.y) * 2.0 * uStarScale;
+        }
+    }
+
     // --- 2b. SHELL CLOUD DECKS (behind the volumetric layer; they dim the sun disc they cross) ---
     skyColor = compositeCloudShells(skyColor, rayDir, cosViewSun, mix(zenithColor, horizonColor, 0.5) * 0.9);
 
@@ -485,7 +527,7 @@ void main() {
             // About one step per 40 m of path (32-80 steps, affordable since the sky is baked; double steps through clear air), jittered per pixel by interleaved gradient noise so
             // the steps do not show as striations.
             float pathLen = tEnd - tStart;
-            int steps = int(clamp(pathLen / 40.0, 32.0, 80.0));
+            int steps = int(clamp(pathLen / 30.0, 48.0, 120.0));
             float dt = pathLen / float(steps);
             float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
             float t = tStart + dt * ign;
@@ -497,7 +539,7 @@ void main() {
             float T = 1.0;
             bool skipped = false;
             // Back-ups after a skipped stride use iterations but not steps, so the loop has headroom.
-            for (int i = 0; i < 112; i++) {
+            for (int i = 0; i < 170; i++) {
                 if (t > tEnd) break;
                 vec3 p = rayDir * t;
                 float h;
@@ -511,10 +553,11 @@ void main() {
                     continue;
                 }
                 if (d > 0.002) {
-                    // Optical depth toward the sun over ~3.8 km (6 doubling steps, shape only): deep enough that a
-                    // backlit cloud's core goes dark while its thin rim stays bright.
-                    float od = 0.0, ls = 60.0, lt = 0.0;
-                    for (int k = 0; k < 6; k++) {
+                    // Optical depth toward the sun over ~6.3 km (7 doubling steps, shape only): deep enough that a
+                    // backlit cloud's core goes dark while its thin rim stays bright, and at a low sun long enough to
+                    // reach the neighbouring cloud between this one and the sun (cloud-to-cloud shadow).
+                    float od = 0.0, ls = 50.0, lt = 0.0;
+                    for (int k = 0; k < 7; k++) {
                         lt += ls;
                         float hh;
                         od += cumulusDensity(p + uSunDirection * lt, 0.0, ramp, hh) * ls;
@@ -531,10 +574,15 @@ void main() {
                     // is isotropic, so a thick backlit cloud is dark with a bright thin rim.
                     float forwardBias = 0.5 * exp(-tauSun / 8.0);
                     float msPhase = mix(1.0, henyeyGreenstein(cosViewSun, 0.4) * 12.566371, forwardBias);
-                    vec3 sunL = sunE * (exp(-tauSun) * ph + diffuseT * msPhase * 3.0 / 12.566371);
+                    // Powder (Schneider): just inside a cloud's edge little light has scattered in yet, so edges facing
+                    // away from the sun read darker and the creases between puffs show; toward the sun it fades out so
+                    // the backlit rim keeps its silver lining.
+                    float powder = mix(1.0 - exp(-2.0 * sigmaT * d * 120.0), 1.0, smoothstep(0.3, 0.95, cosViewSun));
+                    vec3 sunL = sunE * (exp(-tauSun) * ph + diffuseT * msPhase * 3.0 / 12.566371) * powder;
                     // Sky light: the zenith's on the tops, the darker horizon/ground light under the base.
                     // A cloud sees the sky, other cloud and the ground, so its ambient light is half desaturated.
-                    vec3 skyAmb = mix(horizonColor * 0.5, zenithColor * 1.2, h);
+                    // The base sees the horizon sky and the ground below (dark), so bellies sit well under the tops.
+                    vec3 skyAmb = mix(horizonColor * 0.3, zenithColor * 1.2, h * h * (3.0 - 2.0 * h));
                     vec3 ambient = mix(skyAmb, vec3(dot(skyAmb, vec3(0.2126, 0.7152, 0.0722))), 0.5) * mix(0.6, 1.0, diffuseT);
                     float sT = sigmaT * d;
                     vec3 S = sT * (sunL + ambient);
@@ -634,12 +682,7 @@ const CUMULUS_SKY_COVER: Array<[number, number]> = [
 
 /** Plan coverage of the cumulus layer that shows as `skyCover` of the sky (the measured table, inverted). */
 export function layerCoverageForSkyCover(skyCover: number): number {
-    const f = Math.min(1, Math.max(0, skyCover));
-    for (let i = 1; i < CUMULUS_SKY_COVER.length; i++) {
-        const [l0, f0] = CUMULUS_SKY_COVER[i - 1], [l1, f1] = CUMULUS_SKY_COVER[i];
-        if (f <= f1) return l0 + ((l1 - l0) * (f - f0)) / Math.max(1e-9, f1 - f0);
-    }
-    return 1;
+    return coverageForSkyCover(CUMULUS_SKY_COVER, skyCover);
 }
 
 export function createAtmosphericSkyDome(
@@ -704,16 +747,32 @@ export function createAtmosphericSkyDome(
 
         uSkyLut: { value: null as THREE.DataTexture | null },
         uSkyScale: { value: 0 },
-        uPhysicalSkyWeight: { value: 0 }
+        uPhysicalSkyWeight: { value: 0 },
+        uNightSky: { value: new THREE.Color(0, 0, 0) },
+        uStarScale: { value: 1 },
+        uGroundRadiance: { value: new THREE.Color(0, 0, 0) }
     };
 
-    // The physical sky for the current sun, scaled so the dome lights a level surface as the scene's sky light does.
+    // The physical sky for the current sun, scaled so the dome lights a level surface as the scene's sky light does, and
+    // the source of the hemisphere light's colour and (below the horizon) level and of the haze colour: one set of light
+    // numbers (sky-light-rig.ts). It is drawn down to the end of astronomical twilight (-18°) and under it, with no palette.
     let skyLutTexture: THREE.DataTexture | undefined;
+    let currentLut: PhysicalSkyLut | undefined;
+    let exposure = 1;
+    const skyTurbidity = () => config.turbidity ?? diurnalProfile.turbidity ?? 2;
+    let sunsetAnchor: { turbidity: number; lut: PhysicalSkyLut; level: number } | undefined;
+    const sunsetSkyAnchor = () => {
+        const turbidity = skyTurbidity();
+        if (!sunsetAnchor || sunsetAnchor.turbidity !== turbidity) {
+            const p = computeDiurnalLightingProfile(0, beamOptions);
+            sunsetAnchor = { turbidity, lut: buildPhysicalSkyLut({ sunElevationDeg: 0, turbidity }), level: p.skyLightIntensity * colorLuminance(new THREE.Color(skyLightColorHex(p))) };
+        }
+        return sunsetAnchor;
+    };
     const applyPhysicalSky = (elevDeg: number) => {
-        const weight = THREE.MathUtils.smoothstep(elevDeg, -10, -6);
-        uniforms.uPhysicalSkyWeight.value = weight;
-        if (weight <= 0) return;
-        const lut = buildPhysicalSkyLut({ sunElevationDeg: elevDeg, turbidity: config.turbidity ?? diurnalProfile.turbidity ?? 2 });
+        uniforms.uPhysicalSkyWeight.value = 1;
+        const lut = buildPhysicalSkyLut({ sunElevationDeg: Math.max(-18, elevDeg), turbidity: skyTurbidity() });
+        currentLut = lut;
         const W = lut.azimuthResolution, H = lut.elevationResolution;
         const rgba = new Float32Array(W * H * 4);
         for (let i = 0; i < W * H; i++) { rgba[i * 4] = lut.data[i * 3]; rgba[i * 4 + 1] = lut.data[i * 3 + 1]; rgba[i * 4 + 2] = lut.data[i * 3 + 2]; rgba[i * 4 + 3] = 1; }
@@ -729,10 +788,25 @@ export function createAtmosphericSkyDome(
         }
         skyLutTexture.needsUpdate = true;
         uniforms.uSkyLut.value = skyLutTexture;
-        const e = lut.horizontalIrradiance;
-        const skyLightLevel = diurnalProfile.skyLightIntensity * hemiLight.color.r * 0.2126 + diurnalProfile.skyLightIntensity * hemiLight.color.g * 0.7152 + diurnalProfile.skyLightIntensity * hemiLight.color.b * 0.0722;
-        uniforms.uSkyScale.value = skyLightLevel / Math.max(1e-12, 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2]);
+        // The level: the profile's by day (its hemisphere colour's luminance times its intensity, as before); below the
+        // horizon the physical table's fall from the sunset value. A chosen kelvin still tints the light; otherwise the
+        // hemisphere light takes the physical sky's own colour.
+        const anchor = sunsetSkyAnchor();
+        const dayLevel = diurnalProfile.skyLightIntensity * colorLuminance(new THREE.Color(skyLightColorHex(diurnalProfile)));
+        const skyLevel = physicalSkyLevel(elevDeg, lut, dayLevel, anchor.level, anchor.lut);
+        const chroma = skyIrradianceChroma(lut);
+        const hemiColor = new THREE.Color().setRGB(chroma[0], chroma[1], chroma[2], THREE.LinearSRGBColorSpace);
+        if (config.kelvinTemperature) hemiColor.multiply(kelvinToRGB(config.kelvinTemperature)).multiplyScalar(1 / Math.max(1e-6, colorLuminance(hemiColor)));
+        hemiLight.color.copy(hemiColor);
+        hemiLight.intensity = skyLevel;
+        uniforms.uSkyScale.value = skyLevel / Math.max(1e-30, luminance(lut.horizontalIrradiance));
+        // Haze: the sky's own radiance at the horizon and zenith (scene-referred), for the aerial perspective.
+        const LW = lut.azimuthResolution, LH = lut.elevationResolution, scale = uniforms.uSkyScale.value;
+        const avgRow = (row: number) => { const c = [0, 0, 0]; for (let j = 0; j < LW; j++) for (let k = 0; k < 3; k++) c[k] += lut.data[(row * LW + j) * 3 + k] * scale / LW; return new THREE.Color().setRGB(c[0], c[1], c[2], THREE.LinearSRGBColorSpace); };
+        hazeHorizon.copy(avgRow(1));
+        hazeZenith.copy(avgRow(LH - 1));
     };
+    const hazeHorizon = new THREE.Color(), hazeZenith = new THREE.Color();
 
     const applyCloudLayers = (layers: unknown) => {
         const resolved = resolveCloudShellLayers(layers, 'createAtmosphericSkyDome');
@@ -925,6 +999,47 @@ export function createAtmosphericSkyDome(
     }
     scene.add(sunLight);
 
+    // Night light: a cool moonlight, opposite the sun and well up, and a floor under the sky light, fading in from 2° to
+    // 12° below the horizon, so a night scene reads as moonlit (dim, blue, soft shadows) rather than black. The moon's
+    // place is a stand-in (no lunar ephemeris here): it is labelled so on the light.
+    const moonLight = new THREE.DirectionalLight(0x9fb6ff, 0);
+    moonLight.name = 'AtmosphericMoonLight';
+    moonLight.userData.provenance = 'generated: night light opposite the sun (no lunar ephemeris)';
+    moonLight.castShadow = false;
+    if (moonLight.shadow) { moonLight.shadow.bias = -0.0005; moonLight.shadow.mapSize.width = 1024; moonLight.shadow.mapSize.height = 1024; moonLight.shadow.radius = 4; }
+    scene.add(moonLight);
+    // The night fill (sky-light-rig.ts) is added to the physical sky's light, and drawn on the dome as moonlit air and
+    // airglow (uNightSky): brighter toward the horizon, where the path through the glowing layer is longer.
+    const NIGHT_SKY_COLOR = new THREE.Color(0x6f86c8);
+    const applyNightLight = (elevDeg: number, sunDir: THREE.Vector3) => {
+        const t = nightFillWeight(elevDeg);
+        const moonDir = new THREE.Vector3(-sunDir.x, Math.max(0.55, -sunDir.y), -sunDir.z).normalize();
+        moonLight.position.copy(moonDir).multiplyScalar(sunDistance);
+        moonLight.intensity = NIGHT_MOON_INTENSITY * t;
+        // no moon shadows: its shadow camera is three's default 10 m box, never fitted to the content as the sun's is
+        // (syncAtmosphere fitSunShadowToContent), so everything outside it read as moon-shadowed: a grey orb by the
+        // ESB at -12° was lit on 1 of 404 pixels
+        moonLight.castShadow = false;
+        const fill = NIGHT_SKY_LIGHT_FLOOR * t;
+        const physical = hemiLight.intensity;
+        if (fill > 0) {
+            const nightColor = NIGHT_SKY_COLOR.clone().multiplyScalar(1 / colorLuminance(NIGHT_SKY_COLOR));
+            hemiLight.color.multiplyScalar(physical).add(nightColor.clone().multiplyScalar(fill)).multiplyScalar(1 / (physical + fill));
+            hemiLight.intensity = physical + fill;
+        }
+        // radiance at the zenith whose cosine-weighted irradiance (with the van Rhijn brightening, ~1.25x) is a quarter of
+        // the fill: the rest of the fill stands for the moon's own light on surfaces. At the fill's full irradiance the
+        // sky at -12° measured brighter than at -6° (0.097 vs 0.040 on the ESB), night above dusk.
+        (uniforms.uNightSky.value as THREE.Color).copy(NIGHT_SKY_COLOR).multiplyScalar((0.25 * fill) / (Math.PI * 1.25 * colorLuminance(NIGHT_SKY_COLOR)));
+        // the camera meters the sun on a level surface plus the sky and night fill
+        exposure = calibratedExposure(sunLight.intensity * Math.max(0, sunDir.y) + hemiLight.intensity + moonLight.intensity * moonDir.y);
+        uniforms.uStarScale.value = 1 / exposure;
+        // the ground under the horizon: a grey of albedo 0.15 lit by the sun on a level surface and the sky
+        const groundE = sunLight.intensity * Math.max(0, sunDir.y) + hemiLight.intensity + moonLight.intensity * moonDir.y;
+        (uniforms.uGroundRadiance.value as THREE.Color).setRGB(1, 1, 1).multiplyScalar(0.15 * groundE / Math.PI);
+    };
+    applyNightLight(initialElev, sunDirection);
+
     // Update function applying solar angles
     const applySolarState = (elevDeg: number, azimDeg: number, customProfile?: any) => {
         initialElev = elevDeg;
@@ -952,10 +1067,9 @@ export function createAtmosphericSkyDome(
         if (sunLight.shadow) sunLight.shadow.radius = diurnalProfile.shadowSoftness ?? 1;
 
         const hemiKelvin = effectiveSunKelvin(diurnalProfile, config, diurnalProfile.isGoldenHour);
-        hemiLight.intensity = diurnalProfile.skyLightIntensity;
-        hemiLight.color.set(new THREE.Color(skyLightColorHex(diurnalProfile)).multiply(kelvinToRGB(hemiKelvin)));
         hemiLight.groundColor.copy(groundBounceColor(diurnalProfile, elevDeg, hemiKelvin));
         applyPhysicalSky(elevDeg);
+        applyNightLight(elevDeg, sunDirection);
     };
 
     return {
@@ -971,6 +1085,10 @@ export function createAtmosphericSkyDome(
         get diurnalProfile() {
             return diurnalProfile;
         },
+        get exposure() {
+            return exposure;
+        },
+        hazeColors: () => ({ horizon: hazeHorizon.clone(), zenith: hazeZenith.clone() }),
         update: (time: number, _delta: number) => {
             uniforms.uTime.value = time;
         },
@@ -1001,6 +1119,7 @@ export function createAtmosphericSkyDome(
             scene.remove(sunMesh);
             scene.remove(hemiLight);
             scene.remove(sunLight);
+            scene.remove(moonLight);
             scene.remove(sunGlare.mesh);
             sunGlare.dispose();
             skyGeo.dispose();

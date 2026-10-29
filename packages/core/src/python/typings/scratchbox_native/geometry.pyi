@@ -27,6 +27,12 @@ class Mesh:
     def material(self, value: PbrMaterial) -> None: ...
 
     @property
+    def has_uv1(self) -> bool:
+        """Whether the vertices' uv1 is a second UV set to write (TEXCOORD_1)"""
+    @has_uv1.setter
+    def has_uv1(self, value: bool) -> None: ...
+
+    @property
     def vertex_count(self) -> int: ...
 
     @property
@@ -186,6 +192,12 @@ class Vertex:
     @tangent.setter
     def tangent(self, value: scratchbox_native.math.Vec4) -> None: ...
 
+    @property
+    def uv1(self) -> scratchbox_native.math.Vec2:
+        """Second UV set (glTF TEXCOORD_1), written when the mesh's has_uv1 is set"""
+    @uv1.setter
+    def uv1(self, value: scratchbox_native.math.Vec2) -> None: ...
+
 
 def boolean_mesh(a: scratchbox_native.geometry.Mesh, b: scratchbox_native.geometry.Mesh, op: str) -> Mesh:
     """Boolean a and b by BSP mesh CSG: op is "union", "subtract" or "intersect""""
@@ -200,7 +212,7 @@ def create_beveled_box(size=(1.0, 1.0, 1.0), bevel=0.02, color=None, material=No
 def create_box(*args, **kwargs) -> Mesh: ...
 
 
-def create_cambered_foil(span: float = 1.8, chord: float = 0.45, camber: float = 0.04, thickness: float = 0.05, angle_of_attack_deg: float = -4.0, axis: str = 'x', endplates: bool = True, endplate_height: float = 0.25, endplate_thickness: float = 0.015, color: typing.Optional[typing.Tuple[float, float, float, float]] = None, material: typing.Any = None, **kwargs) -> Mesh:
+def create_cambered_foil(span: float = 1.8, chord: float = 0.45, camber: float = 0.04, thickness: float = 0.05, angle_of_attack_deg: float = -4.0, axis: str = 'x', endplates: bool = True, endplate_height: float = 0.25, endplate_thickness: float = 0.015, color: typing.Tuple[float, float, float, float] | None = None, material: typing.Any = None, **kwargs) -> Mesh:
     """
     Cambered Aerodynamic Foil / Wing Generator.
     Synthesizes downforce wings, airplane wings, hydrofoil rudders, or turbine blades
@@ -237,7 +249,7 @@ def create_lathe(profile, segments=32, total_angle_rad=None, color=None, materia
 def create_loft(slices, close_ends=True, color=None, material=None, **kwargs) -> Mesh: ...
 
 
-def create_lofted_hull(stations, profile: str = 'superellipse', m: float = 2.8, close_ends: bool = True, n_pts: int = 32, color: typing.Optional[typing.Tuple[float, float, float, float]] = None, material: typing.Any = None, **kwargs) -> Mesh:
+def create_lofted_hull(stations, profile: str = 'superellipse', m: float = 2.8, close_ends: bool = True, n_pts: int = 32, color: typing.Tuple[float, float, float, float] | None = None, material: typing.Any = None, **kwargs) -> Mesh:
     """
     Continuous Compound-Curvature Hull Generator (ADA Invariant 1 & 6).
     Synthesizes continuous streamlined bodies (monocoques, fuselages, hulls, organ bodies)
@@ -252,7 +264,7 @@ def create_lofted_hull(stations, profile: str = 'superellipse', m: float = 2.8, 
 def create_plane(width=2.0, height=2.0, depth=None, seg_x=4, seg_y=4, segments=None, width_segments=None, depth_segments=None, size=None, color=None, material=None, **kwargs) -> Mesh: ...
 
 
-def create_revolving_component(radius: float = 0.5, length: float = 1.0, axis='lateral', profile: str = 'cylinder', crown: float = 0.0, recess: float = 0.0, segments: int = 32, color: typing.Optional[typing.Tuple[float, float, float, float]] = None, material: typing.Any = None, **kwargs) -> Mesh:
+def create_revolving_component(radius: float = 0.5, length: float = 1.0, axis='lateral', profile: str = 'cylinder', crown: float = 0.0, recess: float = 0.0, segments: int = 32, color: typing.Tuple[float, float, float, float] | None = None, material: typing.Any = None, **kwargs) -> Mesh:
     """
     Universal Kinematic Revolving Component Operator (ADA Invariant 6).
     Synthesizes revolving solids (wheels, drums, rollers, pulleys, turbine rotors,
@@ -281,7 +293,7 @@ def create_sweep(curve: collections.abc.Sequence[scratchbox_native.math.Vec3], p
 def create_torus(main_radius: float = 1.0, tube_radius: float = 0.25, radial_segments: int = 24, tubular_segments: int = 36, color: scratchbox_native.math.Vec4 = ...) -> Mesh: ...
 
 
-def create_wheel(radius: float = 0.35, width: float = 0.3, rim_radius: typing.Optional[float] = None, rim_recess: float = 0.04, tread_bevel: float = 0.025, axis: str = 'lateral', ground: bool = True, color: typing.Optional[typing.Tuple[float, float, float, float]] = None, material: typing.Any = None, **kwargs) -> Mesh:
+def create_wheel(radius: float = 0.35, width: float = 0.3, rim_radius: float | None = None, rim_recess: float = 0.04, tread_bevel: float = 0.025, axis: str = 'lateral', ground: bool = True, color: typing.Tuple[float, float, float, float] | None = None, material: typing.Any = None, **kwargs) -> Mesh:
     """
     Universal Rolling Wheel / Tire Operator.
     Synthesizes an authentic multi-element wheel:
@@ -292,7 +304,7 @@ def create_wheel(radius: float = 0.35, width: float = 0.3, rim_radius: typing.Op
     """
 
 
-def create_wheel_assembly(track_width: float = 1.6, wheelbase: float = 3.2, wheel_radius: float = 0.35, tire_width: float = 0.3, ground_clearance: float = 0.05, axle_pairs: int = 2, camber_deg: float = 0.0, toe_deg: float = 0.0, suspension: str = 'double_wishbone', color: typing.Optional[typing.Tuple[float, float, float, float]] = None, material: typing.Any = None, **kwargs) -> Mesh:
+def create_wheel_assembly(track_width: float = 1.6, wheelbase: float = 3.2, wheel_radius: float = 0.35, tire_width: float = 0.3, ground_clearance: float = 0.05, axle_pairs: int = 2, camber_deg: float = 0.0, toe_deg: float = 0.0, suspension: str = 'double_wishbone', color: typing.Tuple[float, float, float, float] | None = None, material: typing.Any = None, **kwargs) -> Mesh:
     """
     Universal Ground Vehicle Wheel & Suspension Assembly.
     Spawns N axle pairs of upright, grounded rolling wheels spaced at track_width and wheelbase,

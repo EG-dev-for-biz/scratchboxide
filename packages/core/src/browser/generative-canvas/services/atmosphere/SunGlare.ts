@@ -17,7 +17,9 @@
  * It is drawn after the scene as a screen-space overlay, scaled by how much of the sun is visible: through cloud (the
  * baked sky's disc at the sun's direction against its cloudless value) and past geometry (a 1° probe render from the
  * camera toward the sun, a few times a second). A sun behind a building or thick cloud has no glare; one at an edge
- * glows over it, as in footage.
+ * glows over it, as in footage. The measured visibility is eased toward, over VISIBILITY_EASE_SECONDS, never stepped: the
+ * probe sees leaves, cornices and window edges slide across the disc, and a glare that jumped with each probe read
+ * flickered, worst under depth of field, which spreads every jump over its whole blur disc.
  */
 
 import * as THREE from 'three';
@@ -27,8 +29,11 @@ export const GLARE_K = 4.2;
 export const GLARE_N = 2.5;
 /** Angular radius of the sun's disc, degrees. */
 export const SUN_RADIUS_DEG = 0.267;
-const PROBE_SIZE = 16;
+/** The geometry probe's side (pixels; the disc covers ~550 of them) and how often it is read. */
+const PROBE_SIZE = 32;
 const PROBE_EVERY_FRAMES = 4;
+/** Time constant (s) of the glide from the shown visibility to the measured one. */
+export const VISIBILITY_EASE_SECONDS = 0.2;
 
 const GLARE_VERTEX = /* glsl */ `
 varying vec2 vNdc;
@@ -78,6 +83,12 @@ export class SunGlare {
     /** Last measured fractions of the sun left visible. */
     cloudVisibility = 1;
     geometryVisibility = 1;
+    /** The visibility the glare is drawn with: eased toward the measured one (VISIBILITY_EASE_SECONDS). */
+    shownVisibility = -1;
+    private lastEaseMs = 0;
+    /** The cloud visibility eased the same way, for what else dims with cloud (the god rays): never read the raw one. */
+    shownCloudVisibility = -1;
+    private lastCloudEaseMs = 0;
     private readonly material: THREE.ShaderMaterial;
     private readonly probeTarget = new THREE.WebGLRenderTarget(PROBE_SIZE, PROBE_SIZE, { type: THREE.UnsignedByteType });
     private readonly skyTarget = new THREE.WebGLRenderTarget(1, 1, { type: THREE.FloatType });
@@ -156,7 +167,25 @@ export class SunGlare {
             this.measureCloud(renderer, sun);
             this.measureGeometry(renderer, scene, camera, sun);
         }
-        (u.uSunIrradiance.value as THREE.Color).copy(this.inputs.sunIrradiance()).multiplyScalar(this.strength * up * this.visibility);
+        (u.uSunIrradiance.value as THREE.Color).copy(this.inputs.sunIrradiance()).multiplyScalar(this.strength * up * this.ease(this.visibility));
+    }
+
+    /** The cloud visibility, eased (call once a frame; the first call takes it as it is). */
+    easedCloudVisibility(nowMs: number = performance.now()): number {
+        if (this.shownCloudVisibility < 0) { this.shownCloudVisibility = this.cloudVisibility; this.lastCloudEaseMs = nowMs; return this.cloudVisibility; }
+        const dt = Math.min(0.5, Math.max(0, (nowMs - this.lastCloudEaseMs) / 1000));
+        this.lastCloudEaseMs = nowMs;
+        this.shownCloudVisibility += (this.cloudVisibility - this.shownCloudVisibility) * (1 - Math.exp(-dt / VISIBILITY_EASE_SECONDS));
+        return this.shownCloudVisibility;
+    }
+
+    /** One step of the glide toward `target` (frame-rate independent; the first measure is taken as it is). */
+    ease(target: number, nowMs: number = performance.now()): number {
+        if (this.shownVisibility < 0) { this.shownVisibility = target; this.lastEaseMs = nowMs; return target; }
+        const dt = Math.min(0.5, Math.max(0, (nowMs - this.lastEaseMs) / 1000));
+        this.lastEaseMs = nowMs;
+        this.shownVisibility += (target - this.shownVisibility) * (1 - Math.exp(-dt / VISIBILITY_EASE_SECONDS));
+        return this.shownVisibility;
     }
 
     /** The baked sky's radiance at the sun against the disc's cloudless value. */

@@ -438,18 +438,15 @@ export function readFacadeMaterials(input: FacadeMaterialInput): FacadeMaterialR
             // the tile alone: the measured raster must agree with what glass looks like on the face
             const c = face >= 0 ? centroid(list, face) : undefined;
             const others = (tileMarkedRegions.get(face) ?? []).filter(o => o.r !== r);
-            const tol = 0.3 / (face >= 0 ? surfaces[face].mppM : 1);
-            const neighbours = c ? others.filter(o => (Math.abs(o.c[0] - c[0]) < tol || Math.abs(o.c[1] - c[1]) < tol) && o.n >= 0.5 * list.length && o.n <= 2 * list.length).length : 0;
             let lum = 0, ln = 0, l2 = 0;
             const f = face >= 0 ? surfaces[face] : undefined;
             if (f) for (const j of list) if (tileFace[j] === face) { const v = f.luminance[(tileRC[j] >>> 16) * f.width + (tileRC[j] & 0xffff)]; if (Number.isFinite(v)) { lum += v; l2 += v * v; ln++; } }
             const mean = ln ? lum / ln : 0, cv = ln && mean > 0 ? Math.sqrt(Math.max(0, l2 / ln - mean * mean)) / mean : 0;
             const ws = face >= 0 ? statsOfFace(face) : { wallMean: 0, wallCv: 0 };
-            const darker = mean < 0.8 * ws.wallMean, uniform = cv < 0.8 * ws.wallCv;
+            const agree = latticeGlassAgreement({ centre: c, texels: list.length, others, tolPx: 0.3 / (face >= 0 ? surfaces[face].mppM : 1), mean, cv, ...ws });
+            const { neighbours, darker, uniform } = agree;
             lattice = { neighbours, darker, uniform };
-            // darker is required: on Washington Square Arch the masks proposed uniform marble panels in rows as glass (not
-            // darker than the stone); glass in the tile's blended photos shows its dark interior
-            if (neighbours >= 2 && darker) {
+            if (agree.accepted) {
                 accepted = true; decidedBy = 'tiles'; confidence = 0.5 * (tileMarked ?? 0) * (uniform ? 1 : 0.8);
                 reason = `no pano sees it; the tile marks it, it sits in a row or column with ${neighbours} like regions and is darker${uniform ? ' and more uniform' : ''} than the face's wall`;
             } else reason = `no pano sees it; the tile marks it but the raster does not agree (${neighbours} like regions in line, ${darker ? 'darker' : 'not darker'}, ${uniform ? 'uniform' : 'not more uniform'} than the wall)`;
@@ -692,6 +689,20 @@ function meanLinear(rgba: Uint8Array, list: number[]): Vec3 {
     let r = 0, g = 0, b = 0, n = 0;
     for (const j of list) { if (!rgba[j * 4 + 3]) continue; r += SRGB8_TO_LINEAR[rgba[j * 4]]; g += SRGB8_TO_LINEAR[rgba[j * 4 + 1]]; b += SRGB8_TO_LINEAR[rgba[j * 4 + 2]]; n++; }
     return n ? [r3(r / n), r3(g / n), r3(b / n)] : [0, 0, 0];
+}
+
+/**
+ * Whether a tile-only glass candidate agrees with what glass looks like on its face: at least two like regions (half to
+ * twice its size) in its row or column (centres within tolPx), and darker than the face's wall (its interior). Darker is
+ * required: on Washington Square Arch the masks proposed uniform marble panels in rows as glass (not darker than the
+ * stone); glass in the tile's blended photos shows its dark interior. Local to this (non-K) reading: pipeline K's
+ * `material-regions.ts` gets its openings from `window-fit.ts` and does not call this function.
+ */
+export function latticeGlassAgreement(o: { centre: [number, number] | undefined; texels: number; others: Array<{ c: [number, number]; n: number }>; tolPx: number; mean: number; cv: number; wallMean: number; wallCv: number }): { neighbours: number; darker: boolean; uniform: boolean; accepted: boolean } {
+    const c = o.centre;
+    const neighbours = c ? o.others.filter(x => (Math.abs(x.c[0] - c[0]) < o.tolPx || Math.abs(x.c[1] - c[1]) < o.tolPx) && x.n >= 0.5 * o.texels && x.n <= 2 * o.texels).length : 0;
+    const darker = o.mean < 0.8 * o.wallMean, uniform = o.cv < 0.8 * o.wallCv;
+    return { neighbours, darker, uniform, accepted: neighbours >= 2 && darker };
 }
 
 /** Per-texel material parameters for the viewer (RGBA8, sampled nearest): R glass weight, G coursing index + 1, B metalness, A 255. */

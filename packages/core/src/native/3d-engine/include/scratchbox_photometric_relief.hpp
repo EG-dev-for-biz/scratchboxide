@@ -155,6 +155,7 @@ struct ReliefParams {
     double minPitch{0.8};
     double maxPitch{8.0};
     double minPeriodicity{0.15};     // normalized autocorrelation of the chosen peak
+    int minPeriodsInSpan{3};         // a pitch is searched only when the span holds this many of it (2: a narrow wall's bays)
     double minLatticeConfirmation{0.4};  // cells / strips are kept only when confirmed at this share of the sites tested
     int minLatticeSites{4};              // ...and at this many sites at least (fewer is a coincidence, not a repeat)
     // Lattice rows: the modes of the confirmed cells' centres along t (across all columns, at least half a t pitch
@@ -184,6 +185,12 @@ struct ReliefParams {
     // When set, every analysed facade's orthophoto (facade_<id>.png, plain RGB, uncovered pixels mid grey) and its metric
     // frame and cells (facades.json) are written here: the image a grammar is read from, in the frame it is fitted to.
     std::string orthoExportDir;
+    // false: analyse (and export the orthophotos) but carve nothing: the scene is written as it came. Pipeline K carves its
+    // window recesses later, on the facades it rebuilds from the straightened photos (facade-lattice.ts).
+    bool carve{true};
+    // false (with carve false and an export dir): the orthophotos are written and nothing is analysed; pipeline K reads the
+    // windows itself on the straightened photos (window-fit.ts), so the analysis would be thrown away
+    bool analyse{true};
     double minProminence{0.08};      // peak height above the preceding dip
     double minTemplateContrast{0.015};
     double darkRunMinDepth{0.15};    // a dark band of the folded profile dips at least this share of its contrast below mid level
@@ -592,7 +599,7 @@ inline PeriodEstimate detectPeriod(const std::vector<float>& lum, const std::vec
     for (int scale = 0; scale < std::max(1, p.periodScales); ++scale) {
         const double r = std::max(p.maxPitch, 2.0) / std::pow(2.0, scale);
         if (scale > 0 && r < 0.5 * p.minPitch) break;
-        const int kMax = std::min(static_cast<int>(std::floor(std::min(p.maxPitch, p.scalePitchReach * r) / px)), n / 3);
+        const int kMax = std::min(static_cast<int>(std::floor(std::min(p.maxPitch, p.scalePitchReach * r) / px)), n / std::max(2, p.minPeriodsInSpan));
         if (kMax <= kMin + 2) continue;
         const int rad = std::max(1, static_cast<int>(std::lround(r / px)));
         std::fill(x.begin(), x.end(), 0.0f);
@@ -2608,7 +2615,26 @@ private:
                << ",\"pixel\":" << detail::fmt(f.pixel) << ",\"texel\":" << detail::fmt(f.texel) << ",\"width\":" << f.orthoWidth << ",\"height\":" << f.orthoHeight
                << ",\"orthoSMin\":" << detail::fmt(f.orthoSMin) << ",\"orthoTMax\":" << detail::fmt(f.orthoTMax) << ",\"coverage\":" << detail::fmt(f.coverage)
                << ",\"pattern\":\"" << f.analysis.pattern << "\",\"latticeConfirmation\":" << detail::fmt(f.analysis.latticeConfirmation)
-               << ",\"latticeRejected\":" << (f.analysis.latticeRejected ? "true" : "false") << ",\"cells\":[";
+               << ",\"latticeRejected\":" << (f.analysis.latticeRejected ? "true" : "false");
+            // the grid the cells come from (whether or not its cells were confirmed): pitches, the folded dark cell and its runs,
+            // the lattice's rows and columns, so a later pass can lay the whole lattice out and judge each cell itself
+            {
+                const auto& a = f.analysis;
+                auto runs = [](const std::vector<std::pair<double, double>>& r) {
+                    std::string s = "[";
+                    for (size_t i = 0; i < r.size(); ++i) s += (i ? "," : "") + std::string("[") + detail::fmt(r[i].first) + "," + detail::fmt(r[i].second) + "]";
+                    return s + "]";
+                };
+                js << ",\"grid\":{\"periodS\":{\"found\":" << (a.periodS.found ? "true" : "false") << ",\"pitch\":" << detail::fmt(a.periodS.pitch) << ",\"periodicity\":" << detail::fmt(a.periodS.periodicity) << ",\"harmonics\":" << a.periodS.harmonics << "}"
+                   << ",\"periodT\":{\"found\":" << (a.periodT.found ? "true" : "false") << ",\"pitch\":" << detail::fmt(a.periodT.pitch) << ",\"periodicity\":" << detail::fmt(a.periodT.periodicity) << ",\"harmonics\":" << a.periodT.harmonics << "}"
+                   << ",\"cell\":{\"foundS\":" << (a.cell.foundS ? "true" : "false") << ",\"foundT\":" << (a.cell.foundT ? "true" : "false")
+                   << ",\"s0\":" << detail::fmt(a.cell.s0) << ",\"widthS\":" << detail::fmt(a.cell.widthS) << ",\"t0\":" << detail::fmt(a.cell.t0) << ",\"heightT\":" << detail::fmt(a.cell.heightT)
+                   << ",\"phaseS\":" << detail::fmt(a.cell.phaseS) << ",\"phaseT\":" << detail::fmt(a.cell.phaseT) << ",\"contrastS\":" << detail::fmt(a.cell.contrastS) << ",\"contrastT\":" << detail::fmt(a.cell.contrastT)
+                   << ",\"runsS\":" << runs(a.cell.runsS) << ",\"runsT\":" << runs(a.cell.runsT) << "}"
+                   << ",\"latticeRows\":" << a.latticeRows << ",\"latticeCols\":" << a.latticeCols << ",\"rowPitch\":" << detail::fmt(a.rowPitch)
+                   << ",\"cellsTested\":" << a.cellsTested << ",\"cellsAccepted\":" << a.cellsAccepted << "}";
+            }
+            js << ",\"cells\":[";
             bool fc = true;
             for (const auto& c : f.analysis.features) {
                 if (c.lattice == 0) continue;
@@ -2712,6 +2738,7 @@ private:
             Orthophoto photo;
             if (!p_.orthoExportDir.empty() || grammar) photo = rasterizeSlab(R, px);
             if (!p_.orthoExportDir.empty()) writeOrthoExport(rep, photo);
+            if (!p_.analyse && !p_.carve && !p_.orthoExportDir.empty() && !grammar) { rep.skipReason = "exported only (not analysed)"; return; }
             const auto a0 = Clock::now();
             rep.analysis = analyzeOrthophoto(o, rep.texel, p_, innerThreads, grammar, grammar ? &photo : nullptr);
             if (grammar && !rep.analysis.grammarGiven) { rep.analysis.grammarGiven = true; rep.analysis.grammarNote = "the facade's photo could not be analysed"; }
@@ -3288,7 +3315,7 @@ private:
         std::vector<uint8_t> treated(regions_.size(), 0);
         for (auto& R : regions_) {
             auto it = repOf.find(R.id);
-            if (it == repOf.end() || R.features.empty()) continue;
+            if (!p_.carve || it == repOf.end() || R.features.empty()) continue;
             tessellateRegion(R, result_.facades[it->second]);
             if (result_.facades[it->second].treated) treated[static_cast<size_t>(R.id)] = 1;
         }

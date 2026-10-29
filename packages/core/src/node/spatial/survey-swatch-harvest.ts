@@ -46,19 +46,40 @@ export const SUBJECT_MARGIN_M = 2;
 export type V3 = [number, number, number];
 export interface TextureStationPlan { key: string; eye: V3; target: V3 }
 
-/** The stations around `hero` (see the module comment). */
-export function planTextureStations(hero: Pick<HeroModel, 'centroid' | 'groundY' | 'gridYawDeg' | 'heightMeters'>): TextureStationPlan[] {
+/**
+ * How far the footprint reaches from its centroid along a plan direction (radians, x towards z): the last footprint cell
+ * met marching out from the centroid. A station stands TEXTURE_STATION_STANDOFF_M beyond it, outside the wall, whatever
+ * the building's size (from the centroid, a large footprint put the cameras inside the building).
+ */
+export function footprintReach(hero: Pick<HeroModel, 'centroid' | 'footprint'>, ground: Pick<GroundModel, 'cellIndex' | 'cellMeters'>, maxMeters = 600): (angle: number) => number {
+    return angle => {
+        const dx = Math.cos(angle), dz = Math.sin(angle), step = ground.cellMeters / 2;
+        let last = 0;
+        for (let t = 0; t <= maxMeters; t += step) {
+            const i = ground.cellIndex(hero.centroid.x + dx * t, hero.centroid.z + dz * t);
+            if (i >= 0 && hero.footprint[i]) last = t;
+        }
+        return last;
+    };
+}
+
+/** The stations around `hero` (see the module comment); `reach` (footprintReach) puts them outside its walls. */
+export function planTextureStations(hero: Pick<HeroModel, 'centroid' | 'groundY' | 'gridYawDeg' | 'heightMeters'>, reach: (angle: number) => number = () => 0): TextureStationPlan[] {
     const c = hero.centroid, gy = hero.groundY, H = Math.max(6, hero.heightMeters), yaw = hero.gridYawDeg * Math.PI / 180;
     const out: TextureStationPlan[] = [];
+    let span = 0;
     for (let f = 0; f < 4; f++) for (const off of [-TEXTURE_STATION_SPREAD_DEG, 0, TEXTURE_STATION_SPREAD_DEG]) {
+        const a = yaw + f * Math.PI / 2 + off * Math.PI / 180, d = reach(a) + TEXTURE_STATION_STANDOFF_M;
+        span = Math.max(span, reach(a));
         for (const [row, eyeY, lookY] of [['street', 2, Math.min(10, H / 3)], ['mid', H / 2, H / 2]] as const) {
-            const a = yaw + f * Math.PI / 2 + off * Math.PI / 180;
-            out.push({ key: `f${f}_${off}_${row}`, eye: [c.x + Math.cos(a) * TEXTURE_STATION_STANDOFF_M, gy + eyeY, c.z + Math.sin(a) * TEXTURE_STATION_STANDOFF_M], target: [c.x, gy + lookY, c.z] });
+            out.push({ key: `f${f}_${off}_${row}`, eye: [c.x + Math.cos(a) * d, gy + eyeY, c.z + Math.sin(a) * d], target: [c.x, gy + lookY, c.z] });
         }
     }
     const o = TEXTURE_STATION_OPTICS;
     const vfov = 2 * Math.atan(o.sensorWidthMm / (2 * o.focalLengthMm) / o.aspectRatio);
-    const r = Math.hypot(TEXTURE_STATION_STANDOFF_M, TEXTURE_STATION_STANDOFF_M, H) / 2 * 1.15, dist = r / Math.sin(vfov / 2);
+    // the aerials frame the whole building: its footprint's span (or, without one, the standoff) and its height
+    const R = span > 0 ? 2 * span : TEXTURE_STATION_STANDOFF_M;
+    const r = Math.hypot(R, R, H) / 2 * 1.15, dist = r / Math.sin(vfov / 2);
     const el = TEXTURE_AERIAL_ELEVATION_DEG * Math.PI / 180;
     for (let k = 0; k < TEXTURE_AERIALS; k++) {
         const a = yaw + Math.PI / 4 + k * 2 * Math.PI / TEXTURE_AERIALS;
@@ -123,7 +144,7 @@ export async function harvestSurveySwatches(input: {
     const frames: HarvestFrameInput[] = [];
     const stations: SurveySwatchHarvestResult['stations'] = [];
     let id = 1;
-    for (const s of planTextureStations(hero)) {
+    for (const s of planTextureStations(hero, footprintReach(hero, ground))) {
         if (input.signal?.aborted) throw new Error('stopped');
         const station = stationFromLookAt(id++, s.eye, s.target, TEXTURE_STATION_OPTICS, input.anchor, { name: s.key });
         const render = await renderer.renderStation(station, { renderMode: 'albedo', glbPath: input.tileGlb, width: w, height: h, samplesPerPixel: 16 });

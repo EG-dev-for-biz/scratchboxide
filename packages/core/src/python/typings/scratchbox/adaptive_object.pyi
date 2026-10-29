@@ -26,7 +26,7 @@ Optional = typing.Optional
 Tuple = typing.Tuple
 annotations: typing.Any
 
-def create_cambered_foil(span: float = 1.8, chord: float = 0.45, camber: float = 0.04, thickness: float = 0.05, angle_of_attack_deg: float = -4.0, axis: str = 'x', endplates: bool = True, endplate_height: float = 0.25, endplate_thickness: float = 0.015, color: typing.Optional[typing.Tuple[float, float, float, float]] = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
+def create_cambered_foil(span: float = 1.8, chord: float = 0.45, camber: float = 0.04, thickness: float = 0.05, angle_of_attack_deg: float = -4.0, axis: str = 'x', endplates: bool = True, endplate_height: float = 0.25, endplate_thickness: float = 0.015, color: typing.Tuple[float, float, float, float] | None = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
     """
     Cambered Aerodynamic Foil / Wing Generator.
     Synthesizes downforce wings, airplane wings, hydrofoil rudders, or turbine blades
@@ -45,7 +45,7 @@ def create_intake_strainer(center: typing.Tuple[float, float, float], normal: ty
     """Operator 3: Concentric and radial debris strainer screen for fluid intake/exhaust."""
 
 
-def create_lofted_hull(stations, profile: str = 'superellipse', m: float = 2.8, close_ends: bool = True, n_pts: int = 32, color: typing.Optional[typing.Tuple[float, float, float, float]] = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
+def create_lofted_hull(stations, profile: str = 'superellipse', m: float = 2.8, close_ends: bool = True, n_pts: int = 32, color: typing.Tuple[float, float, float, float] | None = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
     """
     Continuous Compound-Curvature Hull Generator (ADA Invariant 1 & 6).
     Synthesizes continuous streamlined bodies (monocoques, fuselages, hulls, organ bodies)
@@ -68,7 +68,7 @@ def create_panelized_loft(stations: typing.List[typing.Dict[str, typing.Any]], n
     """
 
 
-def create_revolving_component(radius: float = 0.5, length: float = 1.0, axis='lateral', profile: str = 'cylinder', crown: float = 0.0, recess: float = 0.0, segments: int = 32, color: typing.Optional[typing.Tuple[float, float, float, float]] = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
+def create_revolving_component(radius: float = 0.5, length: float = 1.0, axis='lateral', profile: str = 'cylinder', crown: float = 0.0, recess: float = 0.0, segments: int = 32, color: typing.Tuple[float, float, float, float] | None = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
     """
     Universal Kinematic Revolving Component Operator (ADA Invariant 6).
     Synthesizes revolving solids (wheels, drums, rollers, pulleys, turbine rotors,
@@ -96,7 +96,7 @@ def create_structural_truss_member(pt_a: typing.Tuple[float, float, float], pt_b
     """
 
 
-def create_wheel(radius: float = 0.35, width: float = 0.3, rim_radius: typing.Optional[float] = None, rim_recess: float = 0.04, tread_bevel: float = 0.025, axis: str = 'lateral', ground: bool = True, color: typing.Optional[typing.Tuple[float, float, float, float]] = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
+def create_wheel(radius: float = 0.35, width: float = 0.3, rim_radius: float | None = None, rim_recess: float = 0.04, tread_bevel: float = 0.025, axis: str = 'lateral', ground: bool = True, color: typing.Tuple[float, float, float, float] | None = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
     """
     Universal Rolling Wheel / Tire Operator.
     Synthesizes an authentic multi-element wheel:
@@ -107,7 +107,7 @@ def create_wheel(radius: float = 0.35, width: float = 0.3, rim_radius: typing.Op
     """
 
 
-def create_wheel_assembly(track_width: float = 1.6, wheelbase: float = 3.2, wheel_radius: float = 0.35, tire_width: float = 0.3, ground_clearance: float = 0.05, axle_pairs: int = 2, camber_deg: float = 0.0, toe_deg: float = 0.0, suspension: str = 'double_wishbone', color: typing.Optional[typing.Tuple[float, float, float, float]] = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
+def create_wheel_assembly(track_width: float = 1.6, wheelbase: float = 3.2, wheel_radius: float = 0.35, tire_width: float = 0.3, ground_clearance: float = 0.05, axle_pairs: int = 2, camber_deg: float = 0.0, toe_deg: float = 0.0, suspension: str = 'double_wishbone', color: typing.Tuple[float, float, float, float] | None = None, material: typing.Any = None, **kwargs) -> scratchbox_native.geometry.Mesh:
     """
     Universal Ground Vehicle Wheel & Suspension Assembly.
     Spawns N axle pairs of upright, grounded rolling wheels spaced at track_width and wheelbase,
@@ -117,7 +117,7 @@ def create_wheel_assembly(track_width: float = 1.6, wheelbase: float = 3.2, whee
 import math
 import os
 
-def replicate_metric_array(distribution_mode: str = 'CURVE_1D', guide_points: typing.Optional[typing.List[typing.Tuple[float, float, float]]] = None, pitch_meters: float = 0.1, seed_geometry: typing.Any = None, color: typing.Tuple[float, float, float, float] = (0.55, 0.57, 0.6, 1.0)) -> 'scratchbox_native.geometry.Mesh':
+def replicate_metric_array(distribution_mode: str = 'CURVE_1D', guide_points: typing.List[typing.Tuple[float, float, float]] | None = None, pitch_meters: float = 0.1, seed_geometry: typing.Any = None, color: typing.Tuple[float, float, float, float] = (0.55, 0.57, 0.6, 1.0)) -> 'scratchbox_native.geometry.Mesh':
     """
     Operator 3: Affine Metric Replicator (Pillar 11).
     Copies seed_geometry, any mesh built around the origin, to points at metric pitch p:
@@ -128,7 +128,7 @@ def replicate_metric_array(distribution_mode: str = 'CURVE_1D', guide_points: ty
     """
 
 
-def revolve_harmonic_solid(anchor_point: typing.Tuple[float, float, float] = (0.0, 0.0, 0.0), axis: typing.Tuple[float, float, float] = (0.0, 1.0, 0.0), profile_curve: typing.Optional[typing.List[typing.Tuple[float, float]]] = None, harmonic_lobe_count: int = 0, harmonic_depth_ratio: float = 0.2, helix_pitch_meters: float = 0.0, color: typing.Tuple[float, float, float, float] = (0.55, 0.57, 0.6, 1.0)) -> 'scratchbox_native.geometry.Mesh':
+def revolve_harmonic_solid(anchor_point: typing.Tuple[float, float, float] = (0.0, 0.0, 0.0), axis: typing.Tuple[float, float, float] = (0.0, 1.0, 0.0), profile_curve: typing.List[typing.Tuple[float, float]] | None = None, harmonic_lobe_count: int = 0, harmonic_depth_ratio: float = 0.2, helix_pitch_meters: float = 0.0, color: typing.Tuple[float, float, float, float] = (0.55, 0.57, 0.6, 1.0)) -> 'scratchbox_native.geometry.Mesh':
     """
     Operator 2: Harmonic Solid of Revolution (Pillar 11).
     Revolves a 2D meridian curve r(z) around a 3D axis with continuous radial harmonic lobes
@@ -148,7 +148,7 @@ def superellipse_point(cx: float, cy: float, rx: float, ry: float, theta: float,
     """Evaluates a 2D super-ellipse at parameter angle theta."""
 
 
-def sweep_curve_profile(path: typing.List[typing.Tuple[float, float, float]], profile: str = 'CIRCULAR', profile_dimensions: typing.Tuple[float, float] = (0.04, 0.04), scale_taper: typing.Tuple[float, float] = (1.0, 1.0), twist_deg: float = 0.0, radial_modulation: typing.Optional[typing.Dict[str, float]] = None, color: typing.Tuple[float, float, float, float] = (0.55, 0.57, 0.6, 1.0)) -> 'scratchbox_native.geometry.Mesh':
+def sweep_curve_profile(path: typing.List[typing.Tuple[float, float, float]], profile: str = 'CIRCULAR', profile_dimensions: typing.Tuple[float, float] = (0.04, 0.04), scale_taper: typing.Tuple[float, float] = (1.0, 1.0), twist_deg: float = 0.0, radial_modulation: typing.Dict[str, float] | None = None, color: typing.Tuple[float, float, float, float] = (0.55, 0.57, 0.6, 1.0)) -> 'scratchbox_native.geometry.Mesh':
     """
     Operator 1: SE(3) Lie Group Curve Sweep (Pillar 11).
     Sweeps a 2D cross-section P(u, v) along 3D carrier curve C(t) using Rotation-Minimizing Frames (RMF).

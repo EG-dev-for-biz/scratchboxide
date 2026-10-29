@@ -42,6 +42,8 @@ export interface SiteMassing {
     /** Highest point the vector data reaches (a modeled volume's antenna or spire can rise above its sliced tiers). */
     topM?: number;
     tiers: SiteTier[];
+    /** Where the tiers come from: a modeled volume sliced, vector extrusions, or none (sb.site_tiers then reads the scan). */
+    source: 'modeled' | 'extruded' | 'none';
     /** The facade grid's direction, degrees from +x, when the scan measured it (walls of a gridded city are rotated). */
     wallDirectionDeg?: number;
     footprintAreaM2: number;
@@ -111,6 +113,7 @@ export async function measureSiteMassing(place: string, opts: { workspaceRoot: s
         frame: 'metres from the place point: x east, z south (the generator\'s frame), y up from the lowest point of the building',
         ...(t.vector.heightMeters !== undefined ? { topM: t.vector.heightMeters } : {}),
         tiers,
+        source: t.vector.kind === 'modeled' && tiers.length ? 'modeled' : tiers.length ? 'extruded' : 'none',
         ...(directionDeg !== undefined ? { wallDirectionDeg: directionDeg } : {}),
         footprintAreaM2: t.footprint.areaM2,
         notes

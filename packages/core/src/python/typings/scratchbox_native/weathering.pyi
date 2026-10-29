@@ -4,7 +4,7 @@ import collections.abc
 import scratchbox_native.geometry
 import scratchbox_native.math
 
-__all__ = ['BlotParams', 'WeatheringParams', 'bake_weathering', 'make_decal_panel', 'synthesize_blot']
+__all__ = ['BlotParams', 'FacadeGuides', 'PhotoStainField', 'WeatheringParams', 'bake_weathering', 'build_photo_stain', 'load_facade_guides', 'make_decal_panel', 'synthesize_blot']
 
 
 class BlotParams:
@@ -56,6 +56,39 @@ class BlotParams:
     def seed(self, value: int) -> None: ...
 
 
+class FacadeGuides:
+    """A building's straightened facade photos (pipeline K) on their planes in the build's frame: registration, colours per part and the repeat-residual stain for the weathering bake"""
+    @property
+    def facade_count(self) -> int: ...
+
+    @property
+    def notes(self) -> list[str]: ...
+
+    def register_and_colour(self, parts: collections.abc.Sequence[tuple[str, int, scratchbox_native.geometry.Mesh]], spacing_m: float = 0.25) -> dict:
+        """Register each facade photo to the built parts (name, role: 1 glass, 0 wall, -1 neither, mesh) and read each part's photo colour where it lands (linear)"""
+
+    def facade_png(self, id: int) -> object:
+        """The photo a facade reads (the finished model seen straight on, or the ortho), as PNG bytes"""
+
+    def element_textures(self, y0: float, y1: float, out_px: float = 40.0, course_m: float = 0.6, head_m: float = 1.2) -> dict:
+        """A height band's own textures from the photos: the median pier and spandrel over every repeat, with stone joints drawn on"""
+
+    def lattices(self) -> list:
+        """Each facade photo's lattice: pier pitch and width, and pier, infill and glass colours (linear)"""
+
+    def stain_at(self, point: scratchbox_native.math.Vec3, normal: scratchbox_native.math.Vec3) -> object:
+        """The repeat-residual stain (0..1) and photo colour at a surface point, or None"""
+
+
+class PhotoStainField:
+    """A building's staining read from its photographic scan, flattened per facing and filtered a bay wide and a storey tall"""
+    @property
+    def samples(self) -> int: ...
+
+    def sample(self, point: scratchbox_native.math.Vec3, normal: scratchbox_native.math.Vec3) -> object:
+        """The filtered linear photo colour and its support at a surface point, or None"""
+
+
 class WeatheringParams:
     def __init__(self) -> None: ...
 
@@ -73,6 +106,26 @@ class WeatheringParams:
     def overlay_offset_m(self) -> float: ...
     @overlay_offset_m.setter
     def overlay_offset_m(self, value: float) -> None: ...
+
+    @property
+    def layer(self) -> bool: ...
+    @layer.setter
+    def layer(self, value: bool) -> None: ...
+
+    @property
+    def photo_strength(self) -> float: ...
+    @photo_strength.setter
+    def photo_strength(self, value: float) -> None: ...
+
+    @property
+    def photo_band_m(self) -> float: ...
+    @photo_band_m.setter
+    def photo_band_m(self, value: float) -> None: ...
+
+    @property
+    def photo_min_support(self) -> float: ...
+    @photo_min_support.setter
+    def photo_min_support(self, value: float) -> None: ...
 
     @property
     def streak_strength(self) -> float: ...
@@ -195,8 +248,16 @@ class WeatheringParams:
     def seed(self, value: int) -> None: ...
 
 
-def bake_weathering(receivers: collections.abc.Sequence[scratchbox_native.geometry.Mesh], occluders: collections.abc.Sequence[scratchbox_native.geometry.Mesh], params: scratchbox_native.weathering.WeatheringParams, name: str = 'Weathering', decals: collections.abc.Sequence[tuple[scratchbox_native.math.Vec3, scratchbox_native.math.Vec3, scratchbox_native.math.Vec3, float, float, float, float, bytes]] = ...) -> dict:
-    """Bake streaks, exposure wash, shelter and cavity grime, rising damp and soot from the geometry into an RGBA atlas; returns an alpha-blended overlay shell of the receivers mapped into it. Each decal (center, normal, up, width_m, height_m, depth_m, opacity, png_bytes) is painted into the atlas over the weathering"""
+def bake_weathering(receivers: collections.abc.Sequence[scratchbox_native.geometry.Mesh], occluders: collections.abc.Sequence[scratchbox_native.geometry.Mesh], params: scratchbox_native.weathering.WeatheringParams, name: str = 'Weathering', decals: collections.abc.Sequence[tuple[scratchbox_native.math.Vec3, scratchbox_native.math.Vec3, scratchbox_native.math.Vec3, float, float, float, float, bytes]] = ..., photo: scratchbox_native.weathering.PhotoStainField | None = None, guides: scratchbox_native.weathering.FacadeGuides | None = None) -> dict:
+    """Bake streaks, exposure wash, shelter and cavity grime, rising damp and soot from the geometry into an RGBA atlas; returns an alpha-blended overlay shell of the receivers mapped into it, or with params.layer the receivers themselves ("layered", in order) with uv1 into it. Each decal (center, normal, up, width_m, height_m, depth_m, opacity, png_bytes) is painted into the atlas over the weathering"""
+
+
+def build_photo_stain(textured_glb: str, ground_y: float, plan: collections.abc.Sequence[collections.abc.Sequence[tuple[float, float]]], bay_m: float = 2.8, storey_m: float = 3.7, cell_m: float = 0.25, margin_m: float = 2.0) -> PhotoStainField:
+    """Read a building's staining from its textured scan (tile photos, unlit) inside the plan outline: per facing, a grid of the facade's plane at cell_m, filtered bay_m wide and storey_m tall, for bake_weathering(photo=...)"""
+
+
+def load_facade_guides(facades: collections.abc.Sequence[dict], model: str = '', model_matrix: collections.abc.Sequence[float] = ...) -> FacadeGuides:
+    """Load the facade guides (sb.site()['guides']['facades']): photos, masks and each facade's repeat-residual stain; with model (pipeline K's finished GLB) the photos are that model seen straight on"""
 
 
 def make_decal_panel(center: scratchbox_native.math.Vec3, normal: scratchbox_native.math.Vec3, up: scratchbox_native.math.Vec3, width_m: float, height_m: float, thickness_m: float = 0.0, standoff_m: float = 0.004, name: str = 'Decal') -> scratchbox_native.geometry.Mesh:

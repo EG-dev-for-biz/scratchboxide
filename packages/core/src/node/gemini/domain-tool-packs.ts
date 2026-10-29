@@ -31,6 +31,7 @@ import {
 } from './tools/spatial-tools';
 import { UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS } from './tools/universal-3d-structure-tools';
 import { TILE_REFINE_TOOL_DECLARATIONS } from './tools/tile-refine-tools';
+import { SCENE_HEALING_TOOL_DECLARATIONS } from './tools/scene-healing-tools';
 import { LOCATION_EVIDENCE_TOOL_DECLARATIONS } from './tools/location-evidence-tools';
 import { LOCATION_REFERENCE_TOOL_DECLARATIONS } from './tools/location-reference-tools';
 import { SURFACE_MATERIALS_TOOL_DECLARATIONS } from './tools/surface-material-tools';
@@ -109,6 +110,7 @@ export const GEOSPATIAL_3D_PACK: ToolPackDefinition = {
         ...PANORAMA_TOOL_DECLARATIONS,
         ...UTDRA_TOOL_DECLARATIONS,
         ...TILE_REFINE_TOOL_DECLARATIONS,
+        ...SCENE_HEALING_TOOL_DECLARATIONS,
         ...LOCATION_EVIDENCE_TOOL_DECLARATIONS,
         ...LOCATION_REFERENCE_TOOL_DECLARATIONS,
         ...SURFACE_MATERIALS_TOOL_DECLARATIONS,
@@ -128,6 +130,7 @@ export const GEOSPATIAL_3D_PACK: ToolPackDefinition = {
         ...PANORAMA_TOOL_DECLARATIONS.map(d => d.name),
         ...UTDRA_TOOL_DECLARATIONS.map(d => d.name),
         ...TILE_REFINE_TOOL_DECLARATIONS.map(d => d.name),
+        ...SCENE_HEALING_TOOL_DECLARATIONS.map(d => d.name),
         ...LOCATION_EVIDENCE_TOOL_DECLARATIONS.map(d => d.name),
         ...LOCATION_REFERENCE_TOOL_DECLARATIONS.map(d => d.name),
         ...SURFACE_MATERIALS_TOOL_DECLARATIONS.map(d => d.name),

@@ -93,6 +93,10 @@ export interface OutlineLimits {
     maxOverflow?: number;
     /** Largest share drawn as sky inside the outline. Default 0.03. */
     maxUnderfill?: number;
+    /** Least mean colour change (CIE76) inside the outline: below it the image is the reference returned. Default OUTLINE_MIN_CHANGE. */
+    minChange?: number;
+    /** Largest share of built structure (window-dense texture) outside the outline, of the outline's area. Default OUTLINE_MAX_BUILT_OUTSIDE. */
+    maxBuiltOutside?: number;
 }
 
 /** How a station image fits the mesh's outline from the same camera (building-survey mode). */
@@ -103,6 +107,16 @@ export interface OutlineFit {
     underfill: number;
     /** Frame borders the mesh touches above the horizon: the subject is not wholly in frame. */
     cropped: Array<'top' | 'left' | 'right'>;
+    /** Mean colour change (CIE76) from the reference render inside the outline: near 0, the reference was returned. */
+    change: number;
+    /** Share of the reference's empty background the image left as it was (e.g. the render's black). */
+    backgroundKept: number;
+    /**
+     * Built structure (window-dense texture) outside the outline, as a share of the outline's area: a building drawn twice,
+     * or neighbours where the reference is empty (the prompt allows only open sky and street there). Measured in every
+     * frame, aerials included, since it needs no sky.
+     */
+    builtOutside: number;
     passed: boolean;
     reason?: string;
 }
@@ -126,6 +140,18 @@ export const OUTLINE_TOLERANCE = 0.012;
  * 255/100 against a and b): a grey facade under a grey overcast sky differs mostly in lightness.
  */
 export const OUTLINE_SKY_DISTANCE = 30;
+/**
+ * Least mean colour change inside the outline for an image to count as drawn (CIE76). The Plaza, 2026-10-28: Nano Banana
+ * Lite returned an aerial at 3.0 with the render's black background kept; the standard model changed 11 to 18.
+ */
+export const OUTLINE_MIN_CHANGE = 5;
+/**
+ * Largest built structure outside the outline, as a share of the outline's area. The Plaza, 2026-10-28: clean frames 0 to
+ * 0.06; the hotel drawn three times 1.33; neighbours invented where the render was empty 0.95 to 1.92.
+ */
+export const OUTLINE_MAX_BUILT_OUTSIDE = 0.15;
+/** Sobel magnitude (8-bit grey) of a strong edge, and the share of strong edges in a 9 x 9 window that reads as built texture. */
+const BUILT_EDGE = 40, BUILT_DENSITY = 0.18;
 const OUTLINE_LIGHTNESS_WEIGHT = 2.55;
 
 export function srgbToLab(r: number, g: number, b: number): [number, number, number] {
@@ -152,12 +178,28 @@ function morph(m: Uint8Array, w: number, h: number, r: number, dilate: boolean):
     return out;
 }
 
+/** 1 where the share of 1s in the (2r + 1)^2 window around a pixel exceeds `share`. */
+function boxShare(m: Uint8Array, w: number, h: number, r: number, share: number): Uint8Array {
+    const I = new Int32Array((w + 1) * (h + 1));
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) I[(y + 1) * (w + 1) + x + 1] = m[y * w + x] + I[y * (w + 1) + x + 1] + I[(y + 1) * (w + 1) + x] - I[y * (w + 1) + x];
+    const out = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const x0 = Math.max(0, x - r), x1 = Math.min(w, x + r + 1), y0 = Math.max(0, y - r), y1 = Math.min(h, y + r + 1);
+        const sum = I[y1 * (w + 1) + x1] - I[y0 * (w + 1) + x1] - I[y1 * (w + 1) + x0] + I[y0 * (w + 1) + x0];
+        out[y * w + x] = sum > share * (x1 - x0) * (y1 - y0) ? 1 : 0;
+    }
+    return out;
+}
+
 /**
  * Does a station image stay inside the mesh's outline from the same camera? Above the horizon everything the mesh
  * covers is subject and everything else is background, so there: overflow = non-sky pixels outside the outline (grown by
  * OUTLINE_TOLERANCE) and underfill = sky pixels inside it (shrunk by the same), both as shares of the mesh's area above
  * the horizon. The sky colour is measured per row from pixels well away from the outline. The subject must also be
- * wholly in frame: above the horizon the mesh may not touch the top or a side border.
+ * wholly in frame: above the horizon the mesh may not touch the top or a side border. In every frame, with or without
+ * sky: the image must have been drawn (its colour inside the outline moved from the reference's by OUTLINE_MIN_CHANGE, and
+ * the reference's empty background not kept unchanged with it), and no built structure may stand where the reference is empty
+ * (OUTLINE_MAX_BUILT_OUTSIDE: a second copy of the building, or invented neighbours).
  */
 export function checkStationOutline(blockout: StationBlockoutRender, station: ColmapCameraPose, rgba: Buffer, width: number, height: number, limits: OutlineLimits = {}): OutlineFit {
     const maxOver = limits.maxOverflow ?? 0.03, maxUnder = limits.maxUnderfill ?? 0.03;
@@ -167,12 +209,45 @@ export function checkStationOutline(blockout: StationBlockoutRender, station: Co
     const hz = Math.min(h, Math.max(0, Math.floor((cy + fy * Math.tan((station.pitchDegrees || 0) * Math.PI / 180)) / s)));
     const sil = new Uint8Array(w * h);
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) sil[y * w + x] = blockout.silhouette[(y * s) * blockout.width + x * s] ? 1 : 0;
+    // the image on the outline's grid (whole frame): its colour against the reference's, and its built texture
+    const at = (x: number, y: number) => (Math.min(height - 1, Math.floor((y + 0.5) * s * height / blockout.height)) * width + Math.min(width - 1, Math.floor((x + 0.5) * s * width / blockout.width))) * 4;
+    const grey = new Float32Array(w * h);
+    let dIn = 0, nIn = 0, kept = 0, nOut = 0;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const i = at(x, y), j = ((y * s) * blockout.width + x * s) * 4;
+        grey[y * w + x] = 0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2];
+        const a = srgbToLab(rgba[i], rgba[i + 1], rgba[i + 2]), b = srgbToLab(blockout.rgba[j], blockout.rgba[j + 1], blockout.rgba[j + 2]);
+        const d = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+        if (sil[y * w + x]) { dIn += d; nIn++; } else { nOut++; if (d < 8) kept++; }
+    }
+    const change = nIn ? dIn / nIn : 0, backgroundKept = nOut ? kept / nOut : 0;
+    const strong = new Uint8Array(w * h);
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+        const g = (dx: number, dy: number) => grey[(y + dy) * w + x + dx];
+        const gx = g(1, -1) + 2 * g(1, 0) + g(1, 1) - g(-1, -1) - 2 * g(-1, 0) - g(-1, 1);
+        const gy = g(-1, 1) + 2 * g(0, 1) + g(1, 1) - g(-1, -1) - 2 * g(0, -1) - g(1, -1);
+        strong[y * w + x] = Math.hypot(gx, gy) > BUILT_EDGE ? 1 : 0;
+    }
+    let built: Uint8Array = boxShare(strong, w, h, 4, BUILT_DENSITY);
+    built = morph(morph(built, w, h, 2, false), w, h, 2, true);
+    const away = morph(sil, w, h, 2 * Math.max(1, Math.round(OUTLINE_TOLERANCE * w)), true);
+    let silArea = 0, outside = 0;
+    for (let i = 0; i < w * h; i++) { if (sil[i]) silArea++; if (built[i] && !away[i]) outside++; }
+    const builtOutside = outside / Math.max(silArea, 1);
+    const minChange = limits.minChange ?? OUTLINE_MIN_CHANGE, maxBuilt = limits.maxBuiltOutside ?? OUTLINE_MAX_BUILT_OUTSIDE;
+    const drawnReasons: string[] = [];
+    // a reference whose empty background was sky may rightly keep it: the background counts only with little change inside
+    if (change < minChange || (backgroundKept > 0.9 && change < 2 * minChange)) drawnReasons.push(`the reference came back nearly unchanged (colour change ${change.toFixed(1)}, ${(backgroundKept * 100).toFixed(0)}% of its empty background kept)`);
+    if (builtOutside > maxBuilt) drawnReasons.push(`built structure drawn where the reference is empty, ${(builtOutside * 100).toFixed(0)}% of the subject's area (a second building or invented neighbours; > ${(maxBuilt * 100).toFixed(0)}%)`);
     const cropped: OutlineFit['cropped'] = [];
     // only above the horizon: below it the mesh is the ground plane, which reaches the borders of any frame
     if (hz > 0) for (let x = 0; x < w; x++) if (sil[x]) { cropped.push('top'); break; }
     for (let y = 0; y < hz; y++) if (sil[y * w]) { cropped.push('left'); break; }
     for (let y = 0; y < hz; y++) if (sil[y * w + w - 1]) { cropped.push('right'); break; }
-    const notChecked = (reason: string): OutlineFit => ({ checked: false, overflow: 0, underfill: 0, cropped, passed: cropped.length === 0, reason: cropped.length ? `the subject runs off the ${cropped.join(', ')} of the frame` : reason });
+    const notChecked = (reason: string): OutlineFit => {
+        const reasons = [...drawnReasons, ...(cropped.length ? [`the subject runs off the ${cropped.join(', ')} of the frame`] : [])];
+        return { checked: false, overflow: 0, underfill: 0, cropped, change, backgroundKept, builtOutside, passed: reasons.length === 0, reason: [...reasons, reason].join('; ') };
+    };
     if (hz < Math.max(4, h * 0.05)) return notChecked('no sky above the horizon in this frame to tell the subject from the background');
     const r = Math.max(1, Math.round(OUTLINE_TOLERANCE * w));
     const grown = morph(sil, w, h, r, true), shrunk = morph(sil, w, h, r, false), far = morph(sil, w, h, 3 * r, true);
@@ -215,7 +290,8 @@ export function checkStationOutline(blockout: StationBlockoutRender, station: Co
     if (overflow >= maxOver) reasons.push(`${(overflow * 100).toFixed(1)}% of the subject is drawn outside the scan outline (> ${(maxOver * 100).toFixed(0)}%)`);
     if (underfill >= maxUnder) reasons.push(`${(underfill * 100).toFixed(1)}% of the scan outline is drawn as sky (> ${(maxUnder * 100).toFixed(0)}%)`);
     if (cropped.length) reasons.push(`the subject runs off the ${cropped.join(', ')} of the frame`);
-    return { checked: true, overflow, underfill, cropped, passed: reasons.length === 0, reason: reasons.join('; ') || undefined };
+    reasons.push(...drawnReasons);
+    return { checked: true, overflow, underfill, cropped, change, backgroundKept, builtOutside, passed: reasons.length === 0, reason: reasons.join('; ') || undefined };
 }
 
 export interface StationWarp {

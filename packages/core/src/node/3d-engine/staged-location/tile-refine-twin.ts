@@ -33,6 +33,7 @@
  * ladder, bounded concurrency and a time budget so a district with hundreds of leaf photos still finishes).
  */
 
+import type { FittedPlane } from './window-fit';
 import * as jpegJs from 'jpeg-js';
 import { TEXTURE_LADDER_RUNGS, TEXTURE_RUNG_CLAY } from '../../../common/spatial/texture-pass-contracts';
 import { delightLinearRgb, linearToSrgb255, PHOTOGRAMMETRIC_DELIGHT, SRGB8_TO_LINEAR } from '../../../common/spatial/photogrammetric-delight';
@@ -42,6 +43,8 @@ import { assembleGlb, parseGlbBytes, readAccessor } from './glb-bytes';
 import { encodePng } from './png-encode';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { decodeImageInMemory, type RgbaImage8 } from './tile-texture-transfer';
+import { harmonizeTextures, surfaceClassMasks, TEXEL_ROOF, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
+import { describeMaterialRegions, planMaterialRegions, readRegionClasses, writeMaterialRegions, type MaterialRegionsPlan, type MaterialRegionsReport, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import {
     boxDownsample, cropImage, enhancementGate, padToModelAspect, RECREATE_GATE, recreatePrompt,
     type EnhanceModelClient, type EnhanceModelRequest
@@ -77,6 +80,9 @@ export interface TileRefineTwin {
     ladderRung: number;
     triangles: number;
     recreate?: TileRefineRecreateReport;
+    harmonize?: TextureHarmonizeReport;
+    /** Pipeline K's material regions (pipeline-k/material-regions.ts), or why they were not drawn. */
+    materialRegions?: MaterialRegionsReport | { skipped: string };
 }
 
 function triArea(p: Float64Array, a: number, b: number, c: number): number {
@@ -90,10 +96,14 @@ const png = (img: RgbaImage8): Uint8Array => encodePng(img.width, img.height, Bu
 /** One embedded photo, decoded and de-lit, ready to encode or to try recreating. */
 interface ImageJob { originalIndex: number; name: string; mimeType: string; delit: RgbaImage8; }
 
-function delightImage(decoded: RgbaImage8): RgbaImage8 {
+/** Roof texels (pipeline K): highlights compressed, no shadow lift (a roof photographed from the air is lit; a dark one is a dark material). */
+const ROOF_DELIGHT = { shadowLift: 0, highlightCompress: PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress };
+
+function delightImage(decoded: RgbaImage8, surface?: Uint8Array): RgbaImage8 {
     const out = new Uint8Array(decoded.rgba.length);
     for (let p = 0; p < decoded.rgba.length; p += 4) {
-        const [lr, lg, lb] = delightLinearRgb(SRGB8_TO_LINEAR[decoded.rgba[p]], SRGB8_TO_LINEAR[decoded.rgba[p + 1]], SRGB8_TO_LINEAR[decoded.rgba[p + 2]]);
+        const params = surface?.[p >> 2] === TEXEL_ROOF ? ROOF_DELIGHT : PHOTOGRAMMETRIC_DELIGHT.defaults;
+        const [lr, lg, lb] = delightLinearRgb(SRGB8_TO_LINEAR[decoded.rgba[p]], SRGB8_TO_LINEAR[decoded.rgba[p + 1]], SRGB8_TO_LINEAR[decoded.rgba[p + 2]], params);
         out[p] = Math.round(linearToSrgb255(lr)); out[p + 1] = Math.round(linearToSrgb255(lg)); out[p + 2] = Math.round(linearToSrgb255(lb)); out[p + 3] = decoded.rgba[p + 3];
     }
     return { width: decoded.width, height: decoded.height, rgba: out };
@@ -151,7 +161,7 @@ function resizeToExact(img: RgbaImage8, width: number, height: number): RgbaImag
 }
 
 /** The twin of tile_refine's photo-textured output `texturedGlb` (its bytes) for the layer `layerKey`. */
-export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, opts?: { recreate?: TileRefineRecreateOptions }): Promise<TileRefineTwin> {
+export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, opts?: { /** Each step as it starts and finishes (the run's step log). */ onStep?: (step: string, state: 'running' | 'done' | 'failed') => void; recreate?: TileRefineRecreateOptions; /** Pipeline K: the de-lit photos colour-matched per side and height band and their seams levelled (pipeline-k/texture-harmonize.ts), measured from this ground. */ harmonize?: { groundY: number }; /** Pipeline K: roughness, metalness and normal under the photos by appearance region (pipeline-k/material-regions.ts), one library set per class. */ materialRegions?: { sets: (classes: RegionClass[]) => Promise<RegionSet[]>; /** The tile-only harvest (material-harvest.ts): classes read from the wall alone, with their texture, for a pick by colour and texture. */ harvest?: boolean; /** The window fit's planes (window-fit.ts fittedPlanesOf): their windows drawn on the scan pieces lying on them. */ planes?: FittedPlane[] } }): Promise<TileRefineTwin> {
     const g = parseGlbBytes(texturedGlb);
     const json = JSON.parse(JSON.stringify(g.json));
     const materials: any[] = json.materials ?? (json.materials = []);
@@ -184,15 +194,18 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
 
     // Stage 1 (always): decode and de-light every embedded photo. Stage 2 (opts.recreate given): try an image-model
     // recreate on top of the de-lit baseline, gated, concurrency-bounded and time-budgeted.
-    const jobs: ImageJob[] = [];
+    const decodedImages: Array<{ i: number; im: any; decoded: RgbaImage8 }> = [];
     json.images.forEach((im: any, i: number) => {
         if (im.bufferView === undefined || (im.mimeType !== 'image/jpeg' && im.mimeType !== 'image/png')) return;
         const view = json.bufferViews[im.bufferView];
         const raw = g.bin.subarray(view.byteOffset ?? 0, (view.byteOffset ?? 0) + view.byteLength);
-        let decoded: RgbaImage8;
-        try { decoded = decodeImageInMemory(raw); } catch { return; }
-        jobs.push({ originalIndex: i, name: im.name ?? `image_${i}`, mimeType: im.mimeType, delit: delightImage(decoded) });
+        try { decodedImages.push({ i, im, decoded: decodeImageInMemory(raw) }); } catch { /* not decodable: left as it is */ }
     });
+    // pipeline K: which texels are roof, seen from above (their de-light and colour match differ from the walls')
+    const surfaces = opts?.harmonize ? surfaceClassMasks(g, json, new Map(decodedImages.map(d => [d.i, d.decoded]))) : undefined;
+    let roofTexels = 0;
+    if (surfaces) for (const m of surfaces.values()) for (let k = 0; k < m.length; k++) if (m[k] === TEXEL_ROOF) roofTexels++;
+    const jobs: ImageJob[] = decodedImages.map(({ i, im, decoded }) => ({ originalIndex: i, name: im.name ?? `image_${i}`, mimeType: im.mimeType, delit: delightImage(decoded, surfaces?.get(i)) }));
 
     const finalImage = new Map<number, RgbaImage8>();
     for (const job of jobs) finalImage.set(job.originalIndex, job.delit);
@@ -220,6 +233,22 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
         recreate = { attempted, accepted, rejected, failed, timedOut, modelsUsed: Array.from(modelsUsed) };
     }
 
+    // pipeline K: one colour across the photos (after the de-light, on the pixels that will be shown)
+    let harmonize: TextureHarmonizeReport | undefined;
+    if (opts?.harmonize && finalImage.size) { opts.onStep?.('harmonize', 'running'); harmonize = harmonizeTextures(g, json, finalImage, opts.harmonize.groundY, undefined, surfaces); opts.onStep?.('harmonize', 'done'); }
+
+    // pipeline K: material regions on the harmonised photos (accepted glass edits them before they are encoded)
+    let regionsPlan: MaterialRegionsPlan | undefined, regionsSkipped: string | undefined;
+    if (opts?.materialRegions && finalImage.size) {
+        opts.onStep?.('materials', 'running');
+        const classes = readRegionClasses(json, finalImage, undefined, opts.materialRegions.harvest ? { g } : undefined);
+        if (!classes) regionsSkipped = 'no rebuilt facade photo to read appearance classes from';
+        else {
+            try { regionsPlan = planMaterialRegions(g, json, finalImage, classes, await opts.materialRegions.sets(classes), opts.materialRegions.planes ?? []); } catch (err) { regionsSkipped = `the library sets could not be resolved: ${err instanceof Error ? err.message : String(err)}`; }
+        }
+        opts.onStep?.('materials', regionsSkipped ? 'failed' : 'done');
+    }
+
     // the binary chunk: appended to below, both for the final (de-lit or recreated) photos and the confidence texels
     const bin: Uint8Array[] = [g.bin];
     let binLength = g.bin.byteLength;
@@ -239,9 +268,11 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
 
     const delit = jobs.length;
     const method = () => {
-        const base = `tile_refine's remesh carries the leaf tiles' own photos (UVs into each leaf's image), de-lit (shadowLift ${PHOTOGRAMMETRIC_DELIGHT.defaults.shadowLift}, highlightCompress ${PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress}; ${delit} of ${delit} photos)`;
-        if (!recreate) return base;
-        return `${base}, further recreated by ${recreate.modelsUsed.join(', ') || 'an image model'} removing the scan's own baked shadow/highlight and recovering the material's true colour (gated on structure and hue/chroma): ${recreate.accepted} of ${recreate.attempted} accepted (${recreate.rejected} rejected, ${recreate.failed} model failures${recreate.timedOut ? `, ${recreate.timedOut} ran out of time` : ''})`;
+        const roofs = roofTexels ? `; roofs seen from above (${roofTexels} texels) highlights only, no shadow lift` : '';
+        const base = `tile_refine's remesh carries the leaf tiles' own photos (UVs into each leaf's image), de-lit (shadowLift ${PHOTOGRAMMETRIC_DELIGHT.defaults.shadowLift}, highlightCompress ${PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress}${roofs}; ${delit} of ${delit} photos)`;
+        const h = harmonize?.kept ? `; then harmonised (pipeline K): ${harmonize.why}` : harmonize ? `; harmonising left them as they were (${harmonize.why})` : '';
+        if (!recreate) return base + h;
+        return `${base}${h}, further recreated by ${recreate.modelsUsed.join(', ') || 'an image model'} removing the scan's own baked shadow/highlight and recovering the material's true colour (gated on structure and hue/chroma): ${recreate.accepted} of ${recreate.attempted} accepted (${recreate.rejected} rejected, ${recreate.failed} model failures${recreate.timedOut ? `, ${recreate.timedOut} ran out of time` : ''})`;
     };
     const provenance = [
         { source: 'tile-photo', label: 'photo-inferred', method: delit ? method() : "tile_refine's remesh carries the leaf tiles' own photos (UVs into each leaf's image), as captured: not de-lit", coverage: photoArea / total },
@@ -264,6 +295,27 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     };
     const photoConf = photoArea > 0 ? confTexture(indexOf('tile-photo'), RUNG_TILE_PHOTO) : -1;
     const bareConf = bareArea > 0 ? confTexture(indexOf('clay'), TEXTURE_RUNG_CLAY) : -1;
+    if (regionsPlan) {
+        const r = regionsPlan.report;
+        provenance.push({ source: 'material-regions', label: 'generated', method: describeMaterialRegions(r), coverage: photoArea / total });
+        const regionProvenance = [provenance.length - 1];
+        if (r.texels.glass) {
+            provenance.push({ source: 'facade-material-reading', label: 'photo-inferred', method: "glass on the window fit's panes (the viewer reads them as the facade material reading's glass): the photo kept as their colour, roughness of float glass, dielectric", coverage: (photoArea / total) * (r.texels.glass / Math.max(1, r.texels.total)) });
+            regionProvenance.push(provenance.length - 1);
+        }
+        json.samplers.push({ magFilter: 9729, minFilter: 9729, wrapS: 10497, wrapT: 10497 });
+        const linear = json.samplers.length - 1;
+        writeMaterialRegions(json, regionsPlan, (img, mimeType, name) => {
+            const bytes = encodeAs(img, mimeType);
+            pad();
+            json.bufferViews.push({ buffer: 0, byteOffset: binLength, byteLength: bytes.length });
+            bin.push(bytes);
+            binLength += bytes.length;
+            json.images.push({ name, mimeType, bufferView: json.bufferViews.length - 1 });
+            json.textures.push({ sampler: linear, source: json.images.length - 1, name });
+            return json.textures.length - 1;
+        }, regionProvenance);
+    }
     materials.forEach((m, mi) => {
         const conf = photo(mi) ? photoConf : bareConf;
         if (conf < 0) return;
@@ -284,5 +336,5 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     let o = 0;
     for (const b of bin) { out.set(b, o); o += b.byteLength; }
     const ladderRung = rungShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1);
-    return { glb: assembleGlb(json, out), rungShares, provenance, ladderRung, triangles, ...(recreate ? { recreate } : {}) };
+    return { glb: assembleGlb(json, out), rungShares, provenance, ladderRung, triangles, ...(recreate ? { recreate } : {}), ...(harmonize ? { harmonize } : {}), ...(regionsPlan ? { materialRegions: regionsPlan.report } : regionsSkipped ? { materialRegions: { skipped: regionsSkipped } } : {}) };
 }

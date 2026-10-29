@@ -8,14 +8,16 @@
  ********************************************************************************/
 
 /**
- * Tile-chunk seam weld on its own: the native pre-pass (scratchbox_tile_seam_weld.hpp) behind its CLI driver
- * (scripts/tile_seam_weld.cpp), built through the native build cache. tile_refine runs the same kernel as its
- * first stage, so a staged location never needs this service; it is for welding a scan without the rest of
- * tile_refine (measuring a seam, a test, a caller that only wants the stitched scan).
+ * The tile seam stage: the native seam passes (scratchbox_tile_seam_weld.hpp) behind their CLI driver
+ * (scripts/tile_seam_weld.cpp), built through the native build cache. A staged location runs it on the tile
+ * extraction as it arrives, and every later stage reads the welded scan (the raw extraction stays as it came).
  *
- * The weld closes the 1-3 cm position gaps between adjacent Google 3D Tiles chunks (boundary positions of
- * different pieces within `toleranceM` snap onto each other) and drops the triangles the weld collapses into
- * slivers. Positions only: UVs, materials and images pass through unchanged.
+ * Three passes, each bounded by `toleranceM`:
+ *  1. overlap trim: where two tiles cover the same surface, the border triangles of one lying wholly over the other go;
+ *  2. weld: border positions of different tiles snap onto each other (the 1-3 cm gaps between chunks), and the triangles
+ *     the weld collapses into slivers are dropped;
+ *  3. T-junctions: a border position lying on another tile's edge moves onto it and the edge is split there.
+ * UVs are carried (interpolated along a split edge); materials and images pass through.
  */
 
 import { execFile } from 'child_process';
@@ -23,6 +25,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { compileNativeCached, defaultNativeFlags, NativeBuildError, placeCachedBinary } from './native-build-cache';
 import { findTileRefineRepoRoot } from './tile-refine-service';
+
+/** The seam stage's version: names its cached outputs beside the extraction, so a change to any pass rebuilds them. */
+export const TILE_SEAMS_VERSION = 'tile-seams/2';
 
 export type TileSeamWeldErrorCode = 'bad_request' | 'build_failed' | 'run_failed' | 'invalid_output';
 
@@ -44,6 +49,10 @@ export interface TileSeamWeldRequest {
     toleranceM?: number;
     /** Drop the triangles the weld collapses into slivers (default true). */
     dropSlivers?: boolean;
+    /** Trim the border triangles of a tile lying wholly over another tile's surface (default true). */
+    overlapTrim?: boolean;
+    /** Close T-junctions: a border position on another tile's edge moved onto it and the edge split there (default true). */
+    tJunctions?: boolean;
     /** Worker threads (default: all cores). */
     threads?: number;
     /** Longest the run may take, not counting a first-use build (default 120 s). */
@@ -86,12 +95,20 @@ export interface TileSeamWeldStats {
     gapHistogram: number[];
 }
 
+/** The overlap trim's counts (TileSeamTrimStats). */
+export interface TileSeamTrimStats { trianglesDropped: number; areaM2: number; roundsRun: number }
+/** The T-junction closure's counts (TileSeamTJunctionStats). */
+export interface TileSeamTJunctionStats { borderEdges: number; found: number; closed: number; edgesSplit: number; trianglesAdded: number; reverted: number; deferred: number; roundsRun: number; maxMoveM: number }
+
 export interface TileSeamWeldResult {
     inputTriangles: number;
     outputTriangles: number;
     toleranceM: number;
     dropSlivers: boolean;
     seamWeld: TileSeamWeldStats;
+    /** Present when the pass ran. */
+    overlapTrim?: TileSeamTrimStats;
+    tJunctions?: TileSeamTJunctionStats;
     ms: { load: number; weld: number; write: number };
     binaryPath: string;
 }
@@ -131,7 +148,10 @@ export function parseTileSeamWeldReport(text: string): Omit<TileSeamWeldResult, 
     for (const k of ['inputTriangles', 'outputTriangles', 'toleranceM'] as const) if (!Number.isFinite(raw[k])) throw new TileSeamWeldError('invalid_output', `tile_seam_weld report lacks ${k}`);
     return {
         inputTriangles: raw.inputTriangles, outputTriangles: raw.outputTriangles, toleranceM: raw.toleranceM, dropSlivers: raw.dropSlivers === true,
-        seamWeld: sw as TileSeamWeldStats, ms: { load: Number(raw.ms?.load) || 0, weld: Number(raw.ms?.weld) || 0, write: Number(raw.ms?.write) || 0 }
+        seamWeld: sw as TileSeamWeldStats,
+        ...(raw.overlapTrim && Number.isFinite(raw.overlapTrim.trianglesDropped) ? { overlapTrim: raw.overlapTrim as TileSeamTrimStats } : {}),
+        ...(raw.tJunctions && Number.isFinite(raw.tJunctions.closed) ? { tJunctions: raw.tJunctions as TileSeamTJunctionStats } : {}),
+        ms: { load: Number(raw.ms?.load) || 0, weld: Number(raw.ms?.weld) || 0, write: Number(raw.ms?.write) || 0 }
     };
 }
 
@@ -147,6 +167,8 @@ export async function runTileSeamWeld(req: TileSeamWeldRequest): Promise<TileSea
     if (req.outputGlb) args.push('--out', req.outputGlb);
     if (req.outputClayGlb) args.push('--out-clay', req.outputClayGlb);
     if (req.dropSlivers === false) args.push('--no-drop');
+    if (req.overlapTrim === false) args.push('--no-overlap-trim');
+    if (req.tJunctions === false) args.push('--no-tjunctions');
     if (req.threads !== undefined) args.push('--threads', String(req.threads));
     try {
         await new Promise<void>((resolve, reject) => {

@@ -85,6 +85,42 @@ describe('a procedural-only build (the 3D Building button)', () => {
     });
 });
 
+describe('a pipeline K isolate (the 3D Building default)', () => {
+    it('never loads the surroundings: no vector massing, terrain, vehicle removal or roads, none of them listed', async () => {
+        const asked: number[] = [];
+        const elevation = { sample: async (points: Array<{ lat: number; lng: number }>) => { asked.push(points.length); return points.map(() => 20); } };
+        const s = setup(ARCH, {}, { elevation });
+        const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false, pipeline: 'k' }, s.deps, s.ctx);
+        const surroundings = ['vector', 'vehicles', 'terrain', 'roads'];
+        for (const st of surroundings) expect(statusOf(s.events, st)).toEqual(['skipped']);
+        expect(s.events.filter(x => surroundings.includes(x.e.stage)).every(x => x.e.outOfScope === true)).toBe(true);
+        expect(asked).toEqual([]);
+        const listed = new Set<string>();
+        for (const { artifact } of s.events) for (const st of ((artifact as any)?.data?.stagedBuild?.stages ?? [])) listed.add(st.stage);
+        expect([...listed].filter(id => surroundings.includes(id))).toEqual([]);
+        expect((result.artifact as any).data.stagedBuild.layers.filter((l: any) => surroundings.includes(l.stage))).toEqual([]);
+        // the building itself is still staged from the tiles
+        expect((result.artifact as any).data.stagedBuild.layers.some((l: any) => l.stage === 'tiles' || l.stage === 'remesh')).toBe(true);
+    });
+
+    it('keeps the straightened scan: no scan fit is run (nor the detail placed on one), none of it listed or degraded', async () => {
+        const sf = fakeScanFit(path.join(TMP, 'sf-k'));
+        const s = setup(ARCH, {}, { scanFit: sf.deps });
+        const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false, pipeline: 'k' }, s.deps, s.ctx);
+        const fitChain = ['fit', 'project', 'vision', 'correct', 'detail', 'figures'];
+        for (const st of fitChain) expect(statusOf(s.events, st)).toEqual(['skipped']);
+        expect(s.events.filter(x => fitChain.includes(x.e.stage)).every(x => x.e.outOfScope === true)).toBe(true);
+        for (const st of fitChain) expect(result.stages.find(x => x.stage === st)?.reason).toMatch(/pipeline K keeps the building's own scan/);
+        expect(sf.calls.fit).toBe(0);
+        expect(result.degradations.filter(d => fitChain.includes(d.stage))).toEqual([]);
+        // the textures still run on the remeshed scan
+        expect(statusOf(s.events, 'textures')).not.toContain('skipped');
+        // and no Street View close-ups are fetched: nothing in a 3D Building reads them
+        expect(statusOf(s.events, 'evidence')).toEqual(['skipped']);
+        expect(result.stages.find(x => x.stage === 'evidence')?.reason).toMatch(/reads no Street View close-ups/);
+    });
+});
+
 describe('a district', () => {
     it('with an elevation sampler, the ground around the place is a measured terrain layer under everything; without one the stage is skipped', async () => {
         const asked: number[] = [];

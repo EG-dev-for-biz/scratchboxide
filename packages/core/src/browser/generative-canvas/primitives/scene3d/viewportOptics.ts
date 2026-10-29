@@ -17,23 +17,39 @@
  *   2. depth of field from that colour + depth (circle of confusion from focal length, f-number and focus);
  *   3. overlays (transform gizmo, selection box, brush ring) on top, sharp, still in the rectilinear frame;
  *   4. distortion of the whole frame (overlays bend with the objects they mark, so they stay on them);
- *   5. tone mapping and output colour space to the canvas (what the renderer applies when drawing straight to it).
+ *   5. lens flare and diffusion (LensGlowPass) read from that frame: the light the lens and a filter in front of it spread;
+ *   6. tone mapping and output colour space to the canvas (what the renderer applies when drawing straight to it), with the
+ *      flare and diffusion added before it, then film grain when the lens has it (on the finished picture, as on film).
  * Picking maps the pointer back through the distortion (mapPointerNdc), so a click hits what is drawn under it.
  */
 
 import * as THREE from 'three';
-import type { SceneCameraLens, SceneLensDistortion } from '../../canvas-types';
+import type { SceneCameraLens, SceneFilmGrain, SceneLensDiffusion, SceneLensDistortion, SceneLensFlare } from '../../canvas-types';
 import { VfxPlateMatchmoveService } from '../../services/video/VfxPlateMatchmoveService';
 import { LensDistortionEffect } from '../../services/optics/LensDistortionEffect';
 import { CinematicBokehPass } from '../../services/optics/CinematicBokehPass';
+import { LensGlowPass, type LensGlowSettings } from '../../services/optics/LensGlowPass';
+import { TemporalAAPass } from '../../services/optics/TemporalAAPass';
 import { lensMeasuresFocus } from './viewportFocus';
 
 /** Widest overscan rendered for distortion (2x the frame on each axis = 4x the pixels). */
 export const MAX_OVERSCAN = 2;
-/** Depth-of-field sample spread cap, as a fraction of the frame height (24 taps stay smooth up to about this). */
-export const MAX_BLUR_RADIUS_FRAME_FRACTION = 0.025;
+/**
+ * Depth-of-field blur radius cap, as a fraction of the frame height. The pass reads each tap's footprint from a mip chain,
+ * so a wide blur stays smooth; the cap only bounds what a lens far wider than any real one would ask for (an 85 mm f/1.4
+ * focused at 2 m blurs infinity to a radius of about 5.6% of a full-frame height).
+ */
+export const MAX_BLUR_RADIUS_FRAME_FRACTION = 0.12;
 
-export type ViewportOpticsPassName = 'depth-of-field' | 'lens-distortion' | 'output' | (string & {});
+export type ViewportOpticsPassName = 'temporal-aa' | 'depth-of-field' | 'lens-distortion' | 'lens-flare' | 'diffusion' | 'film-grain' | 'output' | (string & {});
+
+/** Flare defaults when the lens sets only an amount: four ghosts, a faint halo, no streak, flaring above 1.5 (brighter than white). */
+export const DEFAULT_FLARE: Required<Omit<SceneLensFlare, 'amount'>> = { ghosts: 4, halo: 0.3, streak: 0, threshold: 1.5 };
+/** Diffusion glow width (Gaussian sigma) as a fraction of the frame height, when the lens sets none. */
+export const DEFAULT_DIFFUSION_SPREAD = 0.04;
+
+/** Grain size on the sensor (micrometres) when the lens sets none: a fine 35 mm stock. */
+export const DEFAULT_GRAIN_SIZE_UM = 6;
 
 export interface ViewportDepthOfFieldPlan {
     focalLengthMm: number;
@@ -51,6 +67,11 @@ export interface ViewportDistortionPlan {
 
 export interface ViewportOpticsPlan {
     distortion: ViewportDistortionPlan | null;
+    /** Film grain drawn in the output pass, or null. */
+    filmGrain: Required<SceneFilmGrain> | null;
+    /** Lens flare and diffusion (LensGlowPass), or null. */
+    flare: Required<SceneLensFlare> | null;
+    diffusion: Required<SceneLensDiffusion> | null;
     depthOfField: ViewportDepthOfFieldPlan | null;
     /** Passes in draw order; empty = the viewport renders straight to the canvas as before. */
     passes: ViewportOpticsPassName[];
@@ -63,7 +84,7 @@ const finiteNumber = (v: unknown): v is number => typeof v === 'number' && Numbe
 
 /** Which passes a scene lens configures. Pure: no GPU objects. */
 export function planViewportOptics(lens: SceneCameraLens | undefined | null): ViewportOpticsPlan {
-    const plan: ViewportOpticsPlan = { distortion: null, depthOfField: null, passes: [], issues: [] };
+    const plan: ViewportOpticsPlan = { distortion: null, filmGrain: null, flare: null, diffusion: null, depthOfField: null, passes: [], issues: [] };
     if (!lens) return plan;
     const squeeze = finitePositive(lens.anamorphicSqueeze) ? lens.anamorphicSqueeze : 1;
 
@@ -72,7 +93,8 @@ export function planViewportOptics(lens: SceneCameraLens | undefined | null): Vi
         const c = { k1: d.k1, k2: d.k2 ?? 0, k3: d.k3 ?? 0, p1: d.p1 ?? 0, p2: d.p2 ?? 0 };
         if (!Object.values(c).every(finiteNumber)) {
             plan.issues.push('lens distortion has a coefficient that is not a finite number');
-        } else if (Object.values(c).some(v => v !== 0)) {
+        } else if (Object.values(c).some(v => v !== 0) || finitePositive(d.chromaticAberration)) {
+            // lateral colour alone is drawn too (the distortion pass with zero coefficients only shifts red and blue)
             plan.distortion = {
                 coefficients: c,
                 chromaticAberration: finitePositive(d.chromaticAberration) ? d.chromaticAberration : 0,
@@ -85,7 +107,10 @@ export function planViewportOptics(lens: SceneCameraLens | undefined | null): Vi
         // auto focus, a tracked point, and manual focus with nothing stored yet are all measured by the viewport
         // (viewportFocus.ts): no stored distance is required before depth of field can draw
         const measured = lensMeasuresFocus(lens);
-        const wantsDof = lens.apertureFStop !== undefined || lens.focusDistanceMeters !== undefined || lens.focusObjectId !== undefined || measured;
+        // a lens holding only other passes (film grain, distortion) asks for no depth of field: measured focus counts as
+        // asking only with a focus mode or point, or depth of field switched on
+        const asksFocus = lens.focusMode !== undefined || lens.focusPoint !== undefined || lens.depthOfField === true;
+        const wantsDof = lens.apertureFStop !== undefined || lens.focusDistanceMeters !== undefined || lens.focusObjectId !== undefined || (measured && asksFocus);
         const hasFocus = finitePositive(lens.focusDistanceMeters) || (typeof lens.focusObjectId === 'string' && lens.focusObjectId.length > 0) || measured;
         if (finitePositive(lens.focalLengthMm) && finitePositive(lens.apertureFStop) && hasFocus) {
             plan.depthOfField = {
@@ -105,8 +130,32 @@ export function planViewportOptics(lens: SceneCameraLens | undefined | null): Vi
         }
     }
 
+    const g = lens.filmGrain;
+    if (g && finitePositive(g.amount)) {
+        plan.filmGrain = { amount: Math.min(1, g.amount), sizeUm: finitePositive(g.sizeUm) ? g.sizeUm : DEFAULT_GRAIN_SIZE_UM, chroma: finiteNumber(g.chroma) ? Math.min(1, Math.max(0, g.chroma)) : 0, animate: g.animate !== false };
+    }
+
+    const f = lens.flare;
+    if (f && finitePositive(f.amount)) {
+        const clamp01 = (v: unknown, dflt: number) => (finiteNumber(v) ? Math.min(1, Math.max(0, v)) : dflt);
+        plan.flare = {
+            amount: Math.min(1, f.amount),
+            ghosts: finiteNumber(f.ghosts) ? Math.min(8, Math.max(0, Math.round(f.ghosts))) : DEFAULT_FLARE.ghosts,
+            halo: clamp01(f.halo, DEFAULT_FLARE.halo),
+            streak: clamp01(f.streak, DEFAULT_FLARE.streak),
+            threshold: finitePositive(f.threshold) ? f.threshold : DEFAULT_FLARE.threshold
+        };
+    }
+    const m = lens.diffusion;
+    if (m && finitePositive(m.strength)) {
+        plan.diffusion = { strength: Math.min(1, m.strength), spread: finitePositive(m.spread) ? Math.min(0.5, m.spread) : DEFAULT_DIFFUSION_SPREAD };
+    }
+
     if (plan.depthOfField) plan.passes.push('depth-of-field');
     if (plan.distortion) plan.passes.push('lens-distortion');
+    if (plan.flare) plan.passes.push('lens-flare');
+    if (plan.diffusion) plan.passes.push('diffusion');
+    if (plan.filmGrain) plan.passes.push('film-grain');
     if (plan.passes.length > 0) plan.passes.push('output');
     return plan;
 }
@@ -298,11 +347,57 @@ const OUTPUT_SHADER = {
         uniform sampler2D tDiffuse;
         uniform vec3 uBackground;   // flat background, already in the output colour space (not tone mapped)
         uniform bool uDisplayReferred;
+        // film grain: amount (0 none), grain cell size in output pixels, chroma, frame seed
+        uniform float uGrainAmount;
+        uniform float uGrainCellPx;
+        uniform float uGrainChroma;
+        uniform float uGrainSeed;
+        // lens flare and diffusion (LensGlowPass), linear and premultiplied like tDiffuse
+        uniform sampler2D tDiffusion;
+        uniform float uDiffusion;
+        uniform sampler2D tGhosts;
+        uniform sampler2D tStreak;
+        uniform float uFlare;
+        uniform float uStreak;
         varying vec2 vUv;
+
+        float sbHash(vec3 p) {
+            p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+            p += dot(p, p.yzx + 33.33);
+            return fract((p.x + p.y) * p.z);
+        }
+        // value noise on cells of uGrainCellPx, smoothly interpolated, zero mean, unit-ish spread
+        float sbGrain(vec2 px, float channel) {
+            vec2 q = px / max(uGrainCellPx, 0.5);
+            vec2 i = floor(q), f = fract(q);
+            f = f * f * (3.0 - 2.0 * f);
+            float s = uGrainSeed + channel * 17.0;
+            float a = sbHash(vec3(i, s)), b = sbHash(vec3(i + vec2(1.0, 0.0), s));
+            float c = sbHash(vec3(i + vec2(0.0, 1.0), s)), d = sbHash(vec3(i + vec2(1.0, 1.0), s));
+            return (mix(mix(a, b, f.x), mix(c, d, f.x), f.y) - 0.5) * 3.4;
+        }
+        vec3 sbApplyGrain(vec3 col) {
+            if (uGrainAmount <= 0.0) return col;
+            vec2 px = gl_FragCoord.xy;
+            float mono = sbGrain(px, 0.0);
+            vec3 n = mix(vec3(mono), vec3(mono, sbGrain(px, 1.0), sbGrain(px, 2.0)), uGrainChroma);
+            // strongest in the mid-tones, as an emulsion's grain shows most there
+            float l = clamp(dot(col, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+            float w = 0.25 + 0.75 * 4.0 * l * (1.0 - l);
+            return clamp(col + n * (0.12 * uGrainAmount * w), 0.0, 1.0);
+        }
         void main() {
             vec4 c = texture2D(tDiffuse, vUv);
+            // a filter in front of the lens scatters a share of all light into its glow (energy kept: what goes into the
+            // glow leaves the sharp image), and the lens adds its flare; both before tone mapping, as light
+            if (uDiffusion > 0.0) c = c * (1.0 - uDiffusion) + texture2D(tDiffusion, vUv) * uDiffusion;
+            if (uFlare > 0.0) {
+                vec3 flare = (texture2D(tGhosts, vUv).rgb + texture2D(tStreak, vUv).rgb * uStreak) * uFlare;
+                // light over an uncovered (flat background) pixel still shows: it raises the coverage it is drawn with
+                c = vec4(c.rgb + flare, max(c.a, clamp(dot(flare, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0)));
+            }
             if (uDisplayReferred) {
-                gl_FragColor = vec4(c.rgb, 1.0);
+                gl_FragColor = vec4(sbApplyGrain(c.rgb), 1.0);
                 return;
             }
             // the scene was drawn over a transparent clear: alpha is its coverage (blur spreads it like the colour)
@@ -310,7 +405,7 @@ const OUTPUT_SHADER = {
             gl_FragColor = vec4(a > 1e-4 ? c.rgb / a : vec3(0.0), 1.0);
             #include <tonemapping_fragment>
             #include <colorspace_fragment>
-            gl_FragColor = vec4(mix(uBackground, gl_FragColor.rgb, a), 1.0);
+            gl_FragColor = vec4(sbApplyGrain(mix(uBackground, gl_FragColor.rgb, a)), 1.0);
         }
     `
 };
@@ -339,6 +434,9 @@ export class ViewportOpticsChain {
     private plan: ViewportOpticsPlan = planViewportOptics(undefined);
     private lensPass: LensDistortionEffect | null = null;
     private bokehPass: CinematicBokehPass | null = null;
+    private glowPass: LensGlowPass | null = null;
+    private taaPass: TemporalAAPass | null = null;
+    private taaCopyTarget: THREE.WebGLRenderTarget | null = null;
     private sceneTarget: THREE.WebGLRenderTarget | null = null;
     private dofTarget: THREE.WebGLRenderTarget | null = null;
     private lensTarget: THREE.WebGLRenderTarget | null = null;
@@ -347,6 +445,7 @@ export class ViewportOpticsChain {
     private overscanValue: { overscan: number; folds: boolean; maxAspect?: number } = { overscan: 1, folds: false };
     private focus: { id: string; object: THREE.Object3D; centre: THREE.Vector3; frame: number } | null = null;
     private frame = 0;
+    private sensorHeightMm: number | undefined;
     private readonly size = new THREE.Vector2();
     private readonly scratch = new THREE.Vector3();
     private readonly box = new THREE.Box3();
@@ -355,6 +454,7 @@ export class ViewportOpticsChain {
     /** Sets the lens; creates the passes it configures and frees the rest. */
     public configure(lens: SceneCameraLens | undefined | null): ViewportOpticsPlan {
         this.plan = planViewportOptics(lens);
+        this.sensorHeightMm = lens?.sensorHeightMm;
         if (this.plan.distortion && !this.lensPass) {
             this.lensPass = new LensDistortionEffect({ mode: 'redistort', edgeMode: 'clamp', chromaticAberration: 0, enabled: true });
         } else if (!this.plan.distortion && this.lensPass) {
@@ -371,6 +471,20 @@ export class ViewportOpticsChain {
             this.dofTarget?.dispose();
             this.dofTarget = null;
         }
+        if ((this.plan.flare || this.plan.diffusion) && !this.glowPass) {
+            this.glowPass = new LensGlowPass();
+        } else if (!this.plan.flare && !this.plan.diffusion && this.glowPass) {
+            this.glowPass.dispose();
+            this.glowPass = null;
+        }
+        // temporal anti-aliasing runs whenever the chain draws, unless the lens turns it off
+        const taa = this.active && lens?.temporalAntiAliasing !== false;
+        if (taa && !this.taaPass) this.taaPass = new TemporalAAPass();
+        else if (!taa && this.taaPass) {
+            this.taaPass.dispose();
+            this.taaPass = null;
+        }
+        this.taaPass?.reset();
         if (!this.plan.depthOfField || this.focus?.id !== this.plan.depthOfField.focusObjectId) this.focus = null;
         if (!this.active) this.disposeTargets();
         this.overscanKey = '';
@@ -480,6 +594,9 @@ export class ViewportOpticsChain {
         this.sceneTarget = this.ensureTarget(this.sceneTarget, RW, RH, true, samples);
         const widened = RW !== W || RH !== H;
         if (widened) camera.setViewOffset(W, H, -(RW - W) / 2, -(RH - H) / 2, RW, RH);
+        // a sub-pixel jitter of the projection for this frame's scene draw only (depth of field and overlays see the
+        // unjittered camera)
+        this.taaPass?.beginJitter(camera, RW, RH);
 
         const overlays = io.overlays.filter((o): o is THREE.Object3D => !!o && o.visible);
         overlays.forEach(o => { o.visible = false; });
@@ -506,9 +623,21 @@ export class ViewportOpticsChain {
                 renderer.setClearColor(clearColour, clearAlpha);
             }
             overlays.forEach(o => { o.visible = true; });
+            this.taaPass?.endJitter(camera);
         }
         const depthTexture = drawn_.depthTexture;
         let current = this.sceneTarget;
+
+        // temporal anti-aliasing: every lens effect after it reads the steady, resolved frame
+        if (this.taaPass) {
+            if (depthTexture) {
+                current = this.taaPass.render(renderer, current.texture, depthTexture, RW, RH);
+                drawn.push('temporal-aa');
+            } else {
+                issues.push('no depth texture from the scene draw; temporal anti-aliasing not drawn');
+                this.taaPass.reset();
+            }
+        }
 
         // depth of field
         let focusM: number | null = null;
@@ -542,6 +671,12 @@ export class ViewportOpticsChain {
 
         // overlays: sharp, on top, in the same (widened) frustum as the scene
         if (overlays.length > 0) {
+            // the resolved frame is also the next frame's history: overlays go on a copy of it
+            if (this.taaPass && current !== this.sceneTarget && current !== this.dofTarget) {
+                this.taaCopyTarget = this.ensureTarget(this.taaCopyTarget, RW, RH, false, 0);
+                this.taaPass.copy(renderer, current.texture, this.taaCopyTarget);
+                current = this.taaCopyTarget;
+            }
             const autoClear = renderer.autoClear;
             renderer.autoClear = false;
             renderer.setRenderTarget(current);
@@ -571,7 +706,10 @@ export class ViewportOpticsChain {
         // output: tone mapping + output colour space, as a direct draw to the canvas would get
         if (!this.output) {
             const material = new THREE.ShaderMaterial({
-                uniforms: { tDiffuse: { value: null }, uBackground: { value: new THREE.Vector3() }, uDisplayReferred: { value: false } },
+                uniforms: {
+                    tDiffuse: { value: null }, uBackground: { value: new THREE.Vector3() }, uDisplayReferred: { value: false }, uGrainAmount: { value: 0 }, uGrainCellPx: { value: 1 }, uGrainChroma: { value: 0 }, uGrainSeed: { value: 0 },
+                    tDiffusion: { value: null }, uDiffusion: { value: 0 }, tGhosts: { value: null }, tStreak: { value: null }, uFlare: { value: 0 }, uStreak: { value: 0 }
+                },
                 vertexShader: OUTPUT_SHADER.vertexShader,
                 fragmentShader: OUTPUT_SHADER.fragmentShader,
                 depthTest: false,
@@ -585,7 +723,30 @@ export class ViewportOpticsChain {
         }
         const ou = this.output.material.uniforms;
         ou.tDiffuse.value = current.texture;
+        // lens flare and diffusion, from the frame as it now stands (after depth of field and distortion)
+        const glow = this.glowPass && (this.plan.flare || this.plan.diffusion)
+            ? this.glowPass.render(renderer, current.texture, current.width, current.height, { flare: this.plan.flare, diffusion: this.plan.diffusion } satisfies LensGlowSettings)
+            : null;
+        ou.uDiffusion.value = glow?.diffusion ? glow.diffusionStrength : 0;
+        ou.tDiffusion.value = glow?.diffusion ?? null;
+        ou.uFlare.value = glow?.ghosts ? glow.flareAmount : 0;
+        ou.tGhosts.value = glow?.ghosts ?? null;
+        ou.tStreak.value = glow?.streak ?? glow?.ghosts ?? null;
+        ou.uStreak.value = glow?.streak ? glow.streakGain : 0;
+        if (glow?.ghosts) drawn.push('lens-flare');
+        if (glow?.diffusion) drawn.push('diffusion');
         ou.uDisplayReferred.value = !!drawn_.displayReferred;
+        // film grain: its size on the sensor -> output pixels by the frame height on the sensor (the lens's film back)
+        const grain = this.plan.filmGrain;
+        ou.uGrainAmount.value = grain ? grain.amount : 0;
+        if (grain) {
+            // the lens's film back, else the 24 mm full-frame height the camera panel assumes
+            const sensorH = finitePositive(this.sensorHeightMm) ? this.sensorHeightMm : 24;
+            ou.uGrainCellPx.value = Math.max(0.5, (grain.sizeUm / 1000 / sensorH) * H);
+            ou.uGrainChroma.value = grain.chroma;
+            ou.uGrainSeed.value = grain.animate ? this.frame % 997 : 0;
+            drawn.push('film-grain');
+        }
         // a texture / cube background was drawn into the target opaque; the composite then never shows this colour
         const bg = backgroundColour ? backgroundColour.getRGB({ r: 0, g: 0, b: 0 }, renderer.outputColorSpace) : { r: 0, g: 0, b: 0 };
         (ou.uBackground.value as THREE.Vector3).set(bg.r, bg.g, bg.b);
@@ -601,7 +762,8 @@ export class ViewportOpticsChain {
         this.sceneTarget?.dispose();
         this.dofTarget?.dispose();
         this.lensTarget?.dispose();
-        this.sceneTarget = this.dofTarget = this.lensTarget = null;
+        this.taaCopyTarget?.dispose();
+        this.sceneTarget = this.dofTarget = this.lensTarget = this.taaCopyTarget = null;
         if (this.output) {
             this.output.material.dispose();
             this.output.mesh.geometry.dispose();

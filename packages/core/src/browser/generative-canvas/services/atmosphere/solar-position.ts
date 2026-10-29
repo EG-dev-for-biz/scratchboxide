@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import * as THREE from 'three';
+import { sunDirectionFromRadians } from '../../../../common/coordinate/solarPosition';
 import { SolarCoordinates } from './atmosphere-types';
 import { computeSolarEphemeris } from '../../../../common/coordinate/solarPosition';
 
@@ -46,12 +47,7 @@ export function calculateNOAASolarPosition(date: Date, lat: number, lng: number)
  * Convention in Three.js viewport: +X East, +Y Up, -Z North.
  */
 export function calculateENUSunVector(altitudeRad: number, azimuthRad: number): THREE.Vector3 {
-    const cosElev = Math.cos(altitudeRad);
-    return new THREE.Vector3(
-        cosElev * Math.sin(azimuthRad),  // East (+X)
-        Math.sin(altitudeRad),          // Up (+Y)
-        -cosElev * Math.cos(azimuthRad) // North (-Z)
-    ).normalize();
+    return new THREE.Vector3(...sunDirectionFromRadians(altitudeRad, azimuthRad)).normalize();
 }
 
 /**

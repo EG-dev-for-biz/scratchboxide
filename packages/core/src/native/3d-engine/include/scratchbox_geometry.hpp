@@ -279,6 +279,9 @@ struct Vertex {
     Vec2 uv{0.0f, 0.0f};
     Vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
     Vec4 tangent{1.0f, 0.0f, 0.0f, 1.0f};
+    /** A second UV set (glTF TEXCOORD_1), written only for meshes that set hasUv1: a unique per-surface atlas such as
+     * the weathering layer, beside the tiled `uv`. */
+    Vec2 uv1{0.0f, 0.0f};
 
     constexpr Vertex() = default;
     constexpr Vertex(const Vec3& p, const Vec3& n = {0, 1, 0}, const Vec2& u = {0, 0}, const Vec4& c = {1, 1, 1, 1}, const Vec4& t = {1, 0, 0, 1})
@@ -292,6 +295,8 @@ public:
     std::vector<uint32_t> indices;
     AABB bounds;
     PbrMaterial material;
+    /** Whether the vertices' uv1 carries a second UV set worth writing (TEXCOORD_1). */
+    bool hasUv1{false};
 
     ScratchboxMesh() = default;
     explicit ScratchboxMesh(std::string meshName) : name(std::move(meshName)) {}
@@ -314,6 +319,7 @@ public:
     }
 
     void append(const ScratchboxMesh& other) {
+        hasUv1 = hasUv1 || other.hasUv1;
         uint32_t offset = static_cast<uint32_t>(vertices.size());
         vertices.insert(vertices.end(), other.vertices.begin(), other.vertices.end());
         indices.reserve(indices.size() + other.indices.size());
@@ -386,7 +392,7 @@ public:
     }
 
     /**
-     * Merges vertices whose position, normal, UV, colour and tangent are all bit-identical, re-indexing the
+     * Merges vertices whose position, normal, UVs, colour and tangent are all bit-identical, re-indexing the
      * triangles. Nothing a renderer can see changes (unlike weldVertices, which merges by position alone and so
      * smooths hard edges and UV seams); a triangle-soup mesh, where each quad repeats its two shared corners,
      * shrinks by a third or more. Returns the number of vertices removed.
@@ -394,7 +400,7 @@ public:
     size_t weldIdenticalVertices() {
         if (vertices.empty()) return 0;
         struct Key {
-            float f[16];
+            float f[18];
             bool operator==(const Key& o) const { return std::memcmp(f, o.f, sizeof(f)) == 0; }
         };
         struct KeyHash {
@@ -413,7 +419,8 @@ public:
         for (size_t i = 0; i < vertices.size(); ++i) {
             const Vertex& v = vertices[i];
             const Key k{{ v.position.x, v.position.y, v.position.z, v.normal.x, v.normal.y, v.normal.z, v.uv.x, v.uv.y,
-                          v.color.x, v.color.y, v.color.z, v.color.w, v.tangent.x, v.tangent.y, v.tangent.z, v.tangent.w }};
+                          v.color.x, v.color.y, v.color.z, v.color.w, v.tangent.x, v.tangent.y, v.tangent.z, v.tangent.w,
+                          v.uv1.x, v.uv1.y }};
             auto [it, inserted] = seen.emplace(k, static_cast<uint32_t>(kept.size()));
             if (inserted) kept.push_back(v);
             remap[i] = it->second;
@@ -528,6 +535,7 @@ public:
     }
 
     void merge(const ScratchboxMesh& other) {
+        hasUv1 = hasUv1 || other.hasUv1;
         uint32_t offset = static_cast<uint32_t>(vertices.size());
         vertices.insert(vertices.end(), other.vertices.begin(), other.vertices.end());
         for (uint32_t idx : other.indices) {

@@ -1,0 +1,63 @@
+{
+ "kind": "windows",
+ "facadeId": 0,
+ "crop": [
+  0,
+  300,
+  2000,
+  2300
+ ],
+ "pixel": 0.077085103,
+ "windows": [
+  [
+   29,
+   0,
+   46,
+   213
+  ],
+  [
+   55,
+   0,
+   72,
+   213
+  ],
+  [
+   99,
+   0,
+   115,
+   213
+  ],
+  [
+   125,
+   0,
+   140,
+   213
+  ],
+  [
+   150,
+   0,
+   166,
+   213
+  ],
+  [
+   193,
+   0,
+   210,
+   300
+  ],
+  [
+   219,
+   0,
+   236,
+   300
+  ],
+  [
+   271,
+   0,
+   290,
+   300
+  ]
+ ],
+ "checked": "by eye by the agent on enlarged crops (candidates accepted or rejected, missing windows added); not human-verified; columns read from the luminance profile across rows 0-213 and a ruled crop",
+ "note": "tower window columns (window and spandrel ribbon per column) as the openings, split at the mullions between them; per the user 2026-10-27. The bay version is gt_0_bays.json"
+}

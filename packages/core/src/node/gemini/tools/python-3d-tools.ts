@@ -20,6 +20,11 @@ import { formatSbApiErrors, sbTypeCheckMetadata, typeCheckSbScript } from '../..
 import { SB_API_CORE_SUMMARY, SB_API_VERSION } from '../../3d-engine/sb-api.generated';
 import { firstPassRenderMode } from '../scene3d-first-pass-baseline';
 import { measureSiteMassing, type SiteMassing } from '../../3d-engine/site-massing';
+import { readSiteFacade, type SiteFacade } from '../../3d-engine/site-facade';
+import { fitSiteCrown, type SiteCrown } from '../../3d-engine/site-crown';
+import { measureSiteScan, type SiteScan } from '../../3d-engine/site-scan';
+import { fetchLibrarySets } from '../../3d-engine/texture-library';
+import { findSiteGuides } from '../../3d-engine/site-guides';
 import * as os from 'os';
 import { StageCache, stagedWorkspaceRoot } from '../../3d-engine/staged-location/stage-cache';
 import { roofPhotoFor, type StructureScanNote } from '../../3d-engine/staged-location/scan-massing';
@@ -235,6 +240,19 @@ export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'STRING',
                     description: 'Optional: a real building (name, address or "lat, lng") whose measured massing the script should be sized from. Its footprint, setback tiers and heights (Google vector data; a modeled volume is sliced at its flat levels) are measured before the script runs and read in it with sb.site(); sb.site_tiers() turns them into create_building_parts arguments. Sizing only: the scene still opens in the studio, not at the place.'
                 },
+                siteFacade: {
+                    type: 'BOOLEAN',
+                    description: 'Optional, with site: also read the building\'s facade (storey heights, bay width, window sizes, plinth, cornice, piers, colours) so sb.site_tiers() applies it. Lower floors are read from Google Street View (photo-inferred); floors above what the street sees from AI-Beautified renders of the 3D tiles, cross-checked against the raw render (generated). Takes a few minutes the first time (tile download, image and vision calls).'
+                },
+                siteCrown: {
+                    type: 'BOOLEAN',
+                    description: 'Optional, with site: also fit the building\'s crown (whatever stands above its last full tier: a spire, mast, lantern, drums, fins) from the 3D tiles, so sb.site_crown() returns it as add-ons. The shape program writes the crown as prisms, faceted revolves, sweeps and repeats; their sizes are fitted to the tiles (measured), counts of finer detail come from an AI-Beautified close-up (generated), and the fit\'s silhouette disagreement with the tiles is reported. Takes a minute or two the first time.'
+                },
+                librarySets: {
+                    type: 'ARRAY',
+                    items: { type: 'STRING' },
+                    description: 'Optional: surface material sets from the texture library (photographed and scanned ambientCG and Poly Haven PBR sets) to fetch before the script runs, by set name. Take the names from texture_library_search (search once per surface with its read colour, finish and tile size); never name a set from memory. Pass the top few results per surface: sb.library_surface() picks the one nearest a measured colour and finish, remaps it there and sizes its tile from the set\'s measured real size. Names the library lacks are reported with the closest ones it has. A set is a few hundred MB the first time (cached after).'
+                },
                 renderMode: {
                     type: 'STRING',
                     enum: ['pbr', 'clay'],
@@ -325,6 +343,9 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
         // 2b. A site to size the building on: measured before the script runs, handed over as a JSON file. A site that
         // cannot be measured fails the call with the reason (no invented massing).
         let site: SiteMassing | undefined;
+        let facade: SiteFacade | undefined;
+        let crown: SiteCrown | undefined;
+        let scan: SiteScan | undefined;
         const siteEnv: Record<string, string> = {};
         if (typeof args.site === 'string' && args.site.trim()) {
             try {
@@ -332,9 +353,58 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
             } catch (err) {
                 return failedOutcome(err, `Could not measure the site "${args.site.trim()}"; the script did not run`);
             }
+            // the building's tile scan: sb.site_tiers' source without a modeled volume, and sb.site_score's reference
+            try {
+                scan = await measureSiteScan(site, { workspaceRoot: _ctx?.workspaceRoot ?? process.cwd(), ...(_ctx?.signal ? { signal: _ctx.signal } : {}), ...(_ctx?.reportProgress ? { progress: _ctx.reportProgress } : {}) });
+            } catch (err) {
+                site.notes.push(`no tile scan of the building (sb.site_score and scan tiers unavailable): ${err instanceof Error ? err.message : String(err)}`);
+            }
+            if (args.siteFacade === true) {
+                try {
+                    facade = await readSiteFacade(site, { workspaceRoot: _ctx?.workspaceRoot ?? process.cwd(), ...(_ctx?.signal ? { signal: _ctx.signal } : {}), ...(_ctx?.reportProgress ? { progress: _ctx.reportProgress } : {}) });
+                } catch (err) {
+                    // the massing still sizes the building; the facade stays on the script's own values, said in the notes
+                    site.notes.push(`facade not read: ${err instanceof Error ? err.message : String(err)}`);
+                }
+            }
+            if (args.siteCrown === true) {
+                try {
+                    crown = await fitSiteCrown(site, { workspaceRoot: _ctx?.workspaceRoot ?? process.cwd(), ...(_ctx?.signal ? { signal: _ctx.signal } : {}), ...(_ctx?.reportProgress ? { progress: _ctx.reportProgress } : {}) });
+                } catch (err) {
+                    site.notes.push(`crown not fitted: ${err instanceof Error ? err.message : String(err)}`);
+                }
+            }
             const siteFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-site-json-')), 'site.json');
-            fs.writeFileSync(siteFile, JSON.stringify(site));
+            // pipeline K's straightened facade photos of the building, when a 3D Building run made them: registration,
+            // colours per part and the stain the weathering bake reads (sb.site_guides)
+            let guides: unknown, guidesReason: string | undefined;
+            if (scan?.photoGlbPath && scan.photoGroundY !== undefined) {
+                try {
+                    const g = findSiteGuides(site.place, scan.photoGlbPath, scan.photoGroundY);
+                    if ('reason' in g) guidesReason = g.reason; else guides = g;
+                } catch (err) {
+                    guidesReason = `facade guides not read: ${err instanceof Error ? err.message : String(err)}`;
+                }
+            }
+            fs.writeFileSync(siteFile, JSON.stringify({ ...site, ...(scan ? { scan } : {}), ...(facade ? { facade } : {}), ...(crown ? { crown } : {}),
+                ...(guides ? { guides } : {}), ...(guidesReason ? { guidesReason } : {}) }));
             siteEnv.SCRATCHBOX_SITE_JSON = siteFile;
+        }
+
+        // 2c. Texture library sets the script names, fetched into the cache and handed over as a manifest. A name the
+        // library lacks is reported in the manifest (with the closest names), not a failed call; no credentials fail it.
+        const libraryEnv: Record<string, string> = {};
+        const librarySets = Array.isArray(args.librarySets) ? (args.librarySets as unknown[]).filter((n): n is string => typeof n === 'string' && !!n.trim()) : [];
+        if (librarySets.length) {
+            try {
+                const repoRoot = process.env.SCRATCHBOX_ROOT || (fs.existsSync(path.resolve(process.cwd(), 'packages')) ? process.cwd() : path.resolve(process.cwd(), '..'));
+                const fetched = await fetchLibrarySets(librarySets, { repoRoot, ...(_ctx?.signal ? { signal: _ctx.signal } : {}), ...(_ctx?.reportProgress ? { progress: _ctx.reportProgress } : {}) });
+                const manifest = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-library-json-')), 'library.json');
+                fs.writeFileSync(manifest, JSON.stringify(fetched));
+                libraryEnv.SCRATCHBOX_LIBRARY_JSON = manifest;
+            } catch (err) {
+                return failedOutcome(err, `Could not fetch the texture library sets ${librarySets.join(', ')}; the script did not run`);
+            }
         }
 
         // 3. Execute Python script
@@ -359,7 +429,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
         }
         const result = await runner.runScript(effectiveScript, {
             timeoutMs,
-            env: { ...process.env, ...siteEnv, ...scanEnv }
+            env: { ...process.env, ...siteEnv, ...scanEnv, ...libraryEnv }
         });
 
         // Per User Directive: No silent fallbacks or synthetic substitutes.
@@ -574,7 +644,9 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 ...(joinsScene ? { joinedScene: { artifactId: prevScene!.id, objectId: scanObject!.id, scan: structureScan!.note.scanGlb } } : {}),
                 glbPath: result.glbPath,
                 glbGenerated: true,
-                ...(site ? { site: { resolvedAs: site.place.resolvedAs, topM: site.topM, tiers: site.tiers.map(t => ({ baseM: +t.baseM.toFixed(1), topM: +t.topM.toFixed(1), areaM2: Math.round(t.areaM2), provenance: t.provenance })), notes: site.notes } } : {}),
+                ...(site ? { site: { resolvedAs: site.place.resolvedAs, topM: site.topM, tiers: site.tiers.map(t => ({ baseM: +t.baseM.toFixed(1), topM: +t.topM.toFixed(1), areaM2: Math.round(t.areaM2), provenance: t.provenance })), notes: site.notes,
+                    ...(facade ? { facade: { readings: facade.readings.map(r => ({ scope: r.scope, appliesM: [Math.round(r.appliesFromM), Math.round(r.appliesToM)], provenance: r.provenance, confidence: r.confidence, values: r.values, rejected: r.rejected, source: r.source })), notes: facade.notes } } : {}),
+                    ...(crown ? { crown: { fromM: crown.fromM, toM: crown.toM, silhouetteDisagreement: crown.silhouette, silhouetteBefore: crown.silhouetteBefore, matched: crown.matched, pieces: crown.pieces.map(p => ({ id: p.id, operator: p.operator, label: p.label, provenance: p.provenance, measured: p.measured, generated: p.generated })), notes: crown.notes } } : {}) } } : {}),
                 vertexCount: writtenGeometry.totalVertices,
                 triangleCount: writtenGeometry.totalTriangles,
                 // the scene's trees: SB-Veggie, grown natively from sb.create_tree descriptions (absent: none)
