@@ -1,7 +1,9 @@
 # SB-Fenestra: windows fitted to a facade, one model for geometry and materials
 
-Date: 2026-10-27. Status: design, phase 0 prototype next. Scope: staged-location building rebuilds (pipeline K first); the
-model is generic (any facade with repeated openings), not ESB-specific.
+Date: 2026-10-27. Status: shipped as `window-fit.ts` (commits 68787d84, 9284a058, d1c8c91a, 415927dc, a3f2027f,
+2026-10-27/28); the lattice and material regions read its fit per §11.16's close. This doc is kept as the record of how
+that model was reached — read §11 for what's already in the repo before adding a new heuristic. Scope: staged-location
+building rebuilds (pipeline K first); the model is generic (any facade with repeated openings), not ESB-specific.
 
 ## 1. Problem
 

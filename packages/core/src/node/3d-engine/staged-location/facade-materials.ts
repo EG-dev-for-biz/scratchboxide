@@ -695,7 +695,8 @@ function meanLinear(rgba: Uint8Array, list: number[]): Vec3 {
  * Whether a tile-only glass candidate agrees with what glass looks like on its face: at least two like regions (half to
  * twice its size) in its row or column (centres within tolPx), and darker than the face's wall (its interior). Darker is
  * required: on Washington Square Arch the masks proposed uniform marble panels in rows as glass (not darker than the
- * stone); glass in the tile's blended photos shows its dark interior. Shared with pipeline K's material regions.
+ * stone); glass in the tile's blended photos shows its dark interior. Local to this (non-K) reading: pipeline K's
+ * `material-regions.ts` gets its openings from `window-fit.ts` and does not call this function.
  */
 export function latticeGlassAgreement(o: { centre: [number, number] | undefined; texels: number; others: Array<{ c: [number, number]; n: number }>; tolPx: number; mean: number; cv: number; wallMean: number; wallCv: number }): { neighbours: number; darker: boolean; uniform: boolean; accepted: boolean } {
     const c = o.centre;

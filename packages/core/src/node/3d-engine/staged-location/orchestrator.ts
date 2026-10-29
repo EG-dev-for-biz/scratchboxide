@@ -88,7 +88,7 @@ import { districtEDetail, districtEDetailEnabled, DISTRICT_E_DETAIL_VERSION } fr
 import { describePolish, polishRemesh, REMESH_POLISH_VERSION } from './remesh-polish';
 import { remeshCleanupEnabled } from './remesh-cleanup';
 import { remeshOrientEnabled } from './remesh-orient';
-import { fittedPlanesOf, fittedWindowRects, fitWindowsForOrthos, WINDOW_FIT_FILE, WINDOW_FIT_VERSION, type WindowFitFile } from './window-fit';
+import { fittedPlanesOf, fittedWindowRects, fitWindowsForOrthos, WINDOW_FIT_FILE, WINDOW_FIT_VERSION, type SegmentOpeningMask, type WindowFitFile } from './window-fit';
 import { readWallGrammar, WALL_GRAMMAR_FILE, WALL_GRAMMAR_VERSION } from './wall-grammar';
 import { buildWallSheets, WALL_SHEETS_VERSION } from './wall-sheets';
 import { decodePng as decodePngForGrammar } from '../../texture-processing';
@@ -174,7 +174,7 @@ import {
 import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../common/spatial/switch-location';
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
 import { palettesFromSurvey, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
-import { facadeMaterialsEnabled, gatherMaterialEvidence, scanFacePlanes, segmenterTool, type MaterialEvidence, type SegmentImage } from './facade-material-evidence';
+import { facadeMaterialsEnabled, gatherMaterialEvidence, MASK_YES, scanFacePlanes, segmenterTool, type MaterialEvidence, type SegmentImage } from './facade-material-evidence';
 import { gatherSelfRenderEvidence } from '../../spatial/specular-material-evidence';
 import { projectMaskedViewsToUv } from '../../spatial/specular-material-projection';
 import { bakeSpecularMaterials } from '../../spatial/specular-material-bake';
@@ -3477,7 +3477,19 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, skipped: true, reason: 'turned off for this build' });
                             } else try {
                                 io.progress('pipeline K: fitting the windows on the facade photos');
-                                const wf = await timed('windowFit', () => fitWindowsForOrthos(k.orthosDir, { signal: io.signal }));
+                                // the no-pattern tail only (window-fit.ts): an open-vocabulary mask of "window"/"door", opt-in since it
+                                // bills per call (docs/research/2026-10-27-sb-fenestra-window-fit-design.md, section 1, evidence 6)
+                                const windowSegmentOn = process.env.SCRATCHBOX_K_WINDOW_SEGMENT?.trim() === '1';
+                                const windowSegment: SegmentOpeningMask | undefined = windowSegmentOn ? async (pngPath, width, height, signal) => {
+                                    const segment = deps.textures?.segment ?? segmenterTool();
+                                    const png = fs.readFileSync(pngPath);
+                                    const [win, door] = await Promise.all([segment(png, width, height, 'a window opening', signal), segment(png, width, height, 'a door opening', signal)]);
+                                    if (!win.mask && !door.mask) return undefined;
+                                    const out = new Uint8Array(width * height);
+                                    for (let i = 0; i < out.length; i++) out[i] = (win.mask?.[i] === MASK_YES || door.mask?.[i] === MASK_YES) ? 1 : 0;
+                                    return out;
+                                } : undefined;
+                                const wf = await timed('windowFit', () => fitWindowsForOrthos(k.orthosDir, { signal: io.signal, ...(windowSegment ? { segment: windowSegment } : {}) }));
                                 windowFit = wf.file;
                                 // the bay grammar read per wall, from all the photos of each wall's facades together (wall-grammar.ts)
                                 try {
@@ -3498,8 +3510,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                     cache.writeRunNote(runId, 'pipeline_k_wall_grammar', { version: WALL_GRAMMAR_VERSION, failed: true, reason: errorMessage(err) });
                                 }
                                 const ok = wf.fit.facades.filter(f => !('error' in f)), failed = wf.fit.facades.filter(f => 'error' in f);
-                                cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, cached: wf.cached, ms: wf.fit.ms, facades: wf.fit.facades.map(f => ('error' in f ? f : { facadeId: f.facadeId, windows: f.rects.length, bands: f.bands.length, accepted: f.bands.filter(b => b.accepted).length, kinds: f.bands.filter(b => b.accepted).map(b => b.kind), ms: f.ms })) });
-                                run.note(PROVENANCE.photoInferred, `window fit (${WINDOW_FIT_VERSION}): ${ok.reduce((a, f) => a + ('rects' in f ? f.rects.length : 0), 0)} windows on ${ok.filter(f => 'rects' in f && f.rects.length).length} of ${wf.fit.facades.length} facades${failed.length ? `; ${failed.length} facades not fitted (${failed.map(f => `${f.facadeId}: ${'error' in f ? f.error : ''}`).join('; ').slice(0, 300)}), opened by their bay rhythm instead` : ''}`);
+                                const segmented = ok.filter(f => 'segmentAssisted' in f && f.segmentAssisted);
+                                cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, cached: wf.cached, segment: windowSegmentOn, ms: wf.fit.ms, facades: wf.fit.facades.map(f => ('error' in f ? f : { facadeId: f.facadeId, windows: f.rects.length, bands: f.bands.length, accepted: f.bands.filter(b => b.accepted).length, kinds: f.bands.filter(b => b.accepted).map(b => b.kind), ...(f.segmentAssisted ? { segmentAssisted: true } : {}), ms: f.ms })) });
+                                run.note(PROVENANCE.photoInferred, `window fit (${WINDOW_FIT_VERSION}): ${ok.reduce((a, f) => a + ('rects' in f ? f.rects.length : 0), 0)} windows on ${ok.filter(f => 'rects' in f && f.rects.length).length} of ${wf.fit.facades.length} facades${segmented.length ? `, ${segmented.length} of them only from an open-vocabulary mask of their photo (the structural fit found nothing)` : ''}${failed.length ? `; ${failed.length} facades not fitted (${failed.map(f => `${f.facadeId}: ${'error' in f ? f.error : ''}`).join('; ').slice(0, 300)}), opened by their bay rhythm instead` : ''}`);
                             } catch (err) {
                                 if (isAbort(err) || io.signal.aborted) throw err;
                                 cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, failed: true, reason: errorMessage(err) });
