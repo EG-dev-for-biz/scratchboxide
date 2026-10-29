@@ -35,6 +35,14 @@ export function WeatherControl({ sceneData, mutateSceneData }: WeatherControlPro
     const sun = weatherSun(w, loc);
     const latest = React.useRef(w);
     latest.current = w;
+    // the weather switched off is remembered, so switching it back on brings the same day back
+    const lastOn = React.useRef<SceneWeather | undefined>(current);
+    if (current) lastOn.current = current;
+    const toggle = () => {
+        setPlaying(false);
+        if (current) mutateSceneData(prev => clearSceneWeather(prev), { operator: 'clear_weather' });
+        else mutateSceneData(prev => applySceneWeather(prev, lastOn.current ?? {}), { operator: 'set_weather', params: lastOn.current ?? {} });
+    };
 
     // a change while dragging or playing is kept out of the undo history; the release records one step
     const set = React.useCallback((patch: Partial<SceneWeather>, live = false) => {
@@ -78,9 +86,17 @@ export function WeatherControl({ sceneData, mutateSceneData }: WeatherControlPro
                 <div className="sb-3d-camera-panel sb-3d-weather-panel" role="dialog" aria-label="Weather">
                     <div className="sb-cam-header">
                         <span>Weather</span>
-                        <button type="button" className="sb-cam-close" onClick={() => setOpen(false)} aria-label="Close weather">×</button>
+                        <div className="sb-cam-row">
+                            <button
+                                type="button" role="switch" aria-checked={!!current} aria-label="Weather on"
+                                className={`sb-cam-switch ${current ? 'sb-cam-switch-on' : ''}`}
+                                onClick={toggle}
+                                title={current ? 'Turn the weather off (the scene keeps its own sky)' : 'Turn the weather on'}
+                            ><span className="sb-cam-switch-knob" /></button>
+                            <button type="button" className="sb-cam-close" onClick={() => setOpen(false)} aria-label="Close weather">×</button>
+                        </div>
                     </div>
-                    {!current && <div className="sb-cam-note">No weather is set: the scene keeps its own look. Any change below adds a sky.</div>}
+                    {!current && <div className="sb-cam-note">Weather is off: the scene keeps its own look. Switch it on, or change anything below.</div>}
                     <div className="sb-cam-section">
                         <div className="sb-cam-readout">
                             <span>Time of day</span>
@@ -107,9 +123,6 @@ export function WeatherControl({ sceneData, mutateSceneData }: WeatherControlPro
                             ? `Sun from the ephemeris at ${loc!.lat.toFixed(3)}, ${loc!.lng.toFixed(3)}: ${sun.elevationDeg.toFixed(1)}° up, ${sun.azimuthDeg.toFixed(0)}° azimuth.`
                             : `No place is set, so the sun follows a plain path (rises east at 06:00, sets west at 18:00): ${sun.elevationDeg.toFixed(1)}° up.`}
                     </div>
-                    {current && (
-                        <button type="button" className="sb-cam-chip sb-cam-wide" onClick={() => { setPlaying(false); mutateSceneData(prev => clearSceneWeather(prev), { operator: 'clear_weather' }); }} title="Remove the weather and restore the scene's own sky">Off: restore the scene's own sky</button>
-                    )}
                 </div>
             )}
         </div>
