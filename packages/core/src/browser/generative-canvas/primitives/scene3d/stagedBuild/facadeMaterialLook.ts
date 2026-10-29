@@ -212,7 +212,9 @@ const FRAGMENT_ENV_GATE = `
                 radiance *= sbVis;
             }
         }
-        iblIrradiance *= sbEnv;
+        // the probe's diffuse light only on metal: glass and stone are already lit by the scene's sky fill (the hemisphere
+        // light), so adding the probe's irradiance lit a glass texel's photo colour twice
+        iblIrradiance *= sbP.b > 0.0 ? 1.0 : 0.0;
         radiance *= sbEnv;
     }
 #endif
@@ -308,7 +310,7 @@ export async function prepareFacadeMaterials(gltf: GltfLike): Promise<number> {
                         .replace('#include <lights_physical_fragment>', FRAGMENT_SPECULAR_AA)
                         .replace('#include <lights_fragment_maps>', FRAGMENT_ENV_GATE);
                 };
-                mat.customProgramCacheKey = () => `sb-facade-v7:${withCourses ? courses.length : 0}`;
+                mat.customProgramCacheKey = () => `sb-facade-v8:${withCourses ? courses.length : 0}`;
                 mat.needsUpdate = true;
             }
             patched++;

@@ -104,6 +104,16 @@ these three being too strong, too weak, the wrong colour or not occluded where i
     floor of 0.05 shimmered (0.159); dropping the fade outright shimmered at 450 m (0.111); capping the specular
     anti-aliasing on glass changed nothing here. The camera's lens flare (when it is on) adds a halo disc round the
     glint that spills past the building's edge: that part of the ball is the lens, not the glass.
+  - **shaded glass brighter than the stone around it** (2026-10-29, run 138bb104 with material regions on, New York sky at
+    14:00, sun 27 deg up; views 230 m out, 110 m up): shaded glass measured 1.81x the shaded wall, the environment 72% of it.
+    The panes were seen nearly head-on (median incidence 15.5 deg) at glass weight 0.5, yet the environment term was
+    0.168 x probe radiance x weight, four times a dielectric's ~0.04: the shader also gave glass texels the probe's
+    diffuse irradiance, so their photo colour was lit by the hemisphere fill and by the probe again. With the probe's
+    irradiance kept to metal (`facadeMaterialLook.ts`), shaded glass is 0.59x the shaded wall, the environment 14% of it
+    (0.066 x radiance x weight), shaded glass 0.15x the lit wall, glass in sun 0.65x the lit stone; the walls unchanged
+    (lit / shaded 5.0). Kept.
+  So the earlier reading below (horizon sky at grazing Fresnel) was not the main cause on this view: check the reflection
+  term against Fresnel at the measured incidence before blaming the sky.
   So glass in shade reading bright on this scene is mostly the real horizon sky at grazing Fresnel. If it still reads as
   glare, look next at the glass's base colour and roughness floor and at the viewer's exposure, measured as in
   section 4, before touching the sky.
