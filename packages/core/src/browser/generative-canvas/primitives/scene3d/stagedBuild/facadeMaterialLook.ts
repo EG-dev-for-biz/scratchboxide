@@ -18,7 +18,9 @@
  *    camera like a reflection, never painted on. Glass reflects it scaled by its weight (parameters R / 255, the
  *    reading's confidence), metal texels (parameters B > 0) whole; every other texel the scene's direct light only. A
  *    pane of glass with a seed (parameters alpha 1..254, pipeline K's fitted panes) is tilted by up to PANE_TILT_DEG of
- *    its own, so a facade's panes catch the sun (in the probe's sky, reflectionProbe.ts) one by one.
+ *    its own, so a facade's panes catch the sun light's (shadowed) highlight one by one; the tilt fades out as a pane
+ *    shrinks to a few pixels, and the roughness rises where the normal varies within a pixel (specular anti-aliasing),
+ *    so distant glass does not shimmer.
  *  - Measured coursing: the kernel's course profile (a tangent-space normal over one pitch) is applied by world height at
  *    each reading's pitch and phase, where the parameters texture (G = reading + 1) says so; the relief fades out where a
  *    course is smaller than a pixel. Albedo is untouched.
@@ -69,7 +71,22 @@ uniform sampler2D uSbMatParams;
 uniform sampler2D uSbCourses;
 uniform vec4 uSbCourse[ ${MAX_COURSES} ];
 uniform float uSbCourseWidth;
+uniform vec2 uSbParamsSize;
 `;
+/**
+ * Specular anti-aliasing before the lights: where the shading normal changes faster than a pixel can show (pane edges,
+ * relief, distant facades), the roughness rises by the normal's spread over the pixel (Kaplanyan-Tokuyoshi), so a smooth
+ * surface the pixel cannot resolve settles into an even sheen instead of shimmering as the view moves.
+ */
+const FRAGMENT_SPECULAR_AA = `
+    {
+        vec3 sbDn = fwidth( normal );
+        float sbVar = clamp( 0.5 * dot( sbDn, sbDn ), 0.0, 0.18 );
+        roughnessFactor = min( 1.0, sqrt( roughnessFactor * roughnessFactor + sbVar ) );
+    }
+#include <lights_physical_fragment>
+`;
+
 /** After the normal maps: the measured courses' relief, by world height. */
 const FRAGMENT_COURSES = `
 #include <normal_fragment_maps>
@@ -102,14 +119,20 @@ const FRAGMENT_COURSES = `
         // facade catch the sun one by one instead of all at one angle
         vec4 sbPane = texture2D( uSbMatParams, vMapUv );
         float sbSeed = floor( sbPane.a * 255.0 + 0.5 );
-        if ( sbPane.r > 0.0 && sbSeed >= 1.0 && sbSeed <= 254.0 ) {
+        // a pane a few pixels across (far away) would flip between reflections as the view moves: the tilt fades out as
+        // the parameters texture's texels shrink below a pixel's footprint (a pane is ~10 of them), so distant glass
+        // reads as one even sheet
+        vec2 sbTexels = fwidth( vMapUv ) * uSbParamsSize;
+        float sbFootprint = max( sbTexels.x, sbTexels.y );
+        float sbTiltFade = 1.0 - smoothstep( 1.0, 4.0, sbFootprint );
+        if ( sbPane.r > 0.0 && sbSeed >= 1.0 && sbSeed <= 254.0 && sbTiltFade > 0.0 ) {
             vec3 sbUp = normalize( ( viewMatrix * vec4( 0.0, 1.0, 0.0, 0.0 ) ).xyz );
             vec3 sbB = sbUp - normal * dot( sbUp, normal );
             float sbBl = length( sbB );
             if ( sbBl > 0.3 ) {
                 sbB /= sbBl;
                 vec3 sbT = cross( sbB, normal );
-                float sbAz = sbSeed * 2.39996, sbTilt = radians( ${PANE_TILT_DEG.toFixed(2)} ) * sqrt( fract( sbSeed * 0.618034 ) );
+                float sbAz = sbSeed * 2.39996, sbTilt = sbTiltFade * radians( ${PANE_TILT_DEG.toFixed(2)} ) * sqrt( fract( sbSeed * 0.618034 ) );
                 normal = normalize( normal + tan( sbTilt ) * ( cos( sbAz ) * sbT + sin( sbAz ) * sbB ) );
             }
         }
@@ -171,7 +194,8 @@ export async function prepareFacadeMaterials(gltf: GltfLike): Promise<number> {
                     uSbMatParams: { value: params },
                     uSbCourses: { value: courseTex ?? params },
                     uSbCourse: { value: Array.from({ length: MAX_COURSES }, (_, i) => new THREE.Vector4(courses[i]?.pitchM ?? 1, courses[i]?.phaseM ?? 0, 0, 0)) },
-                    uSbCourseWidth: { value: (courseTex?.image as { width?: number } | undefined)?.width ?? Math.max(4, courses.length * 4) }
+                    uSbCourseWidth: { value: (courseTex?.image as { width?: number } | undefined)?.width ?? Math.max(4, courses.length * 4) },
+                    uSbParamsSize: { value: new THREE.Vector2((params.image as { width?: number } | undefined)?.width ?? 1, (params.image as { height?: number } | undefined)?.height ?? 1) }
                 };
                 if (withCourses) mat.defines = { ...(mat.defines ?? {}), SB_COURSES: '' };
                 const prior = mat.onBeforeCompile;
@@ -184,9 +208,10 @@ export async function prepareFacadeMaterials(gltf: GltfLike): Promise<number> {
                     shader.fragmentShader = shader.fragmentShader
                         .replace('#include <common>', `#include <common>\n${FRAGMENT_DECL}`)
                         .replace('#include <normal_fragment_maps>', FRAGMENT_COURSES)
+                        .replace('#include <lights_physical_fragment>', FRAGMENT_SPECULAR_AA)
                         .replace('#include <lights_fragment_maps>', FRAGMENT_ENV_GATE);
                 };
-                mat.customProgramCacheKey = () => `sb-facade-v3:${withCourses ? courses.length : 0}`;
+                mat.customProgramCacheKey = () => `sb-facade-v4:${withCourses ? courses.length : 0}`;
                 mat.needsUpdate = true;
             }
             patched++;
