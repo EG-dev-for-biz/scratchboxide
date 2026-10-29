@@ -18,6 +18,7 @@ import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-locatio
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { GLASS_ROUGHNESS } from '../src/node/3d-engine/staged-location/facade-materials';
 import { MATERIAL_REGIONS_PARAMS, paneSeed, planMaterialRegions, readRegionClasses, type RegionClass, type RegionSet } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
+import { planMaterialRegionsOnThreads } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions-pool';
 import { tileRefineTwin } from '../src/node/3d-engine/staged-location/tile-refine-twin';
 import type { FittedPlane } from '../src/node/3d-engine/staged-location/window-fit';
 import { decodeImageInMemory, type RgbaImage8 } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
@@ -209,6 +210,29 @@ describe('pipeline K material regions', () => {
         // a plane facing the other way draws nothing
         const back = planMaterialRegions(g, g.json, imagesOf(photos), classes, sets(classes), [{ ...plane, normal: [0, 0, -1], axisS: [-1, 0, 0] }]);
         expect(back.report.scanPieces.planes).toEqual([]);
+    });
+
+    it('plans the same maps and report on worker threads as on one thread', async () => {
+        const { glb, photos: flat } = building();
+        // photo noise, so texels of one colour bucket differ (each thread's colour cache fills in its own order)
+        const photos = flat.map((p, i) => ({ ...p, rgba: p.rgba.map((v, k) => (k % 4 === 3 ? v : Math.max(0, Math.min(255, v + ((k * 7919 + i * 104729) % 13) - 6)))) }));
+        const g = parseGlbBytes(glb);
+        const classes = readRegionClasses(g.json, imagesOf(photos))!;
+        const windows: Array<[number, number, number, number]> = [[10, 3, 30, 15], [10, 18, 30, 30], [10, 33, 30, 45]];
+        const plane: FittedPlane = { facadeId: 9, centroid: [52.5, 2.5, 0], normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0], orthoSMin: -2.5, orthoTMax: 2.5, pixel: 0.1, width: 50, height: 50, windows, panes: windows };
+        const one = planMaterialRegions(g, g.json, imagesOf(photos), classes, sets(classes), [plane]);
+        const many = await planMaterialRegionsOnThreads(g, g.json, imagesOf(photos), classes, sets(classes), [plane], undefined, { threads: 3 });
+        expect(many.materials.length).toBeGreaterThan(1);
+        expect(many.materials.map(m => m.material)).toEqual(one.materials.map(m => m.material));
+        many.materials.forEach((m, i) => {
+            const o = one.materials[i];
+            expect(Buffer.from(m.orm.rgba).equals(Buffer.from(o.orm.rgba))).toBe(true);
+            expect(Buffer.from(m.params.rgba).equals(Buffer.from(o.params.rgba))).toBe(true);
+            expect(!!m.normal && Buffer.from(m.normal.rgba).equals(Buffer.from(o.normal!.rgba))).toBe(!!o.normal);
+            expect([m.rebuilt, m.glass]).toEqual([o.rebuilt, o.glass]);
+        });
+        expect({ ...many.report, ms: 0 }).toEqual({ ...one.report, ms: 0 });
+        expect(many.report.scanPieces.planes).toEqual([9]);
     });
 
     it("puts the stone's relief on the structure alone and glass in the bays it frames, off the wall's class", () => {

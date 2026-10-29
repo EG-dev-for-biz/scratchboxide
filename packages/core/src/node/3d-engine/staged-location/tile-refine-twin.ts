@@ -44,7 +44,8 @@ import { encodePng } from './png-encode';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { decodeImageInMemory, type RgbaImage8 } from './tile-texture-transfer';
 import { harmonizeTextures, surfaceClassMasks, TEXEL_ROOF, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
-import { describeMaterialRegions, planMaterialRegions, readRegionClasses, writeMaterialRegions, type MaterialRegionsPlan, type MaterialRegionsReport, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
+import { describeMaterialRegions, readRegionClasses, writeMaterialRegions, type MaterialRegionsPlan, type MaterialRegionsReport, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
+import { planMaterialRegionsOnThreads } from './pipeline-k/material-regions-pool';
 import {
     boxDownsample, cropImage, enhancementGate, padToModelAspect, RECREATE_GATE, recreatePrompt,
     type EnhanceModelClient, type EnhanceModelRequest
@@ -244,7 +245,10 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
         const classes = readRegionClasses(json, finalImage, undefined, opts.materialRegions.harvest ? { g } : undefined);
         if (!classes) regionsSkipped = 'no rebuilt facade photo to read appearance classes from';
         else {
-            try { regionsPlan = planMaterialRegions(g, json, finalImage, classes, await opts.materialRegions.sets(classes), opts.materialRegions.planes ?? []); } catch (err) { regionsSkipped = `the library sets could not be resolved: ${err instanceof Error ? err.message : String(err)}`; }
+            let sets: RegionSet[] | undefined;
+            try { sets = await opts.materialRegions.sets(classes); } catch (err) { regionsSkipped = `the library sets could not be resolved: ${err instanceof Error ? err.message : String(err)}`; }
+            // each photo's maps planned on its own worker thread (material-regions-pool.ts), the same plan as on one
+            if (sets) try { regionsPlan = await planMaterialRegionsOnThreads(g, json, finalImage, classes, sets, opts.materialRegions.planes ?? []); } catch (err) { regionsSkipped = `planning the maps failed: ${err instanceof Error ? err.message : String(err)}`; }
         }
         opts.onStep?.('materials', regionsSkipped ? 'failed' : 'done');
     }
