@@ -136,6 +136,31 @@ export function haltonJitter(index: number, length = 8): [number, number] {
     return [halton(i, 2) - 0.5, halton(i, 3) - 0.5];
 }
 
+/** A turn of the view this large between two frames, or a zoom this large, is a cut: the history is dropped. */
+export const CUT_TURN_DEGREES = 10;
+export const CUT_ZOOM_RATIO = 1.05;
+
+export interface CameraPose { forward: THREE.Vector3; fov: number }
+
+function poseOf(camera: THREE.PerspectiveCamera, reuse: CameraPose | null): CameraPose {
+    const pose = reuse ?? { forward: new THREE.Vector3(), fov: camera.fov };
+    camera.getWorldDirection(pose.forward);
+    pose.fov = camera.fov;
+    return pose;
+}
+
+/**
+ * True when the camera jumped since the last pose: turned more than CUT_TURN_DEGREES or zoomed past CUT_ZOOM_RATIO
+ * in one frame. Moving the camera along is not a cut (reprojection follows it; the clip catches what it uncovers).
+ */
+export function isCameraCut(last: CameraPose | null, camera: THREE.PerspectiveCamera): boolean {
+    if (!last) return false;
+    const forward = camera.getWorldDirection(new THREE.Vector3());
+    const turn = THREE.MathUtils.radToDeg(forward.angleTo(last.forward));
+    const zoom = Math.max(camera.fov, last.fov) / Math.max(1e-6, Math.min(camera.fov, last.fov));
+    return turn > CUT_TURN_DEGREES || zoom > CUT_ZOOM_RATIO;
+}
+
 /** Share of the current frame in each blend: about the last 10 frames are averaged at rest. */
 export const TAA_CURRENT_WEIGHT = 0.1;
 
@@ -158,6 +183,7 @@ export class TemporalAAPass {
     private readonly viewProj = new THREE.Matrix4();
     private readonly prevViewProj = new THREE.Matrix4();
     private jitterPx: [number, number] = [0, 0];
+    private lastPose: CameraPose | null = null;
 
     constructor() {
         this.material = new THREE.ShaderMaterial({
@@ -182,6 +208,8 @@ export class TemporalAAPass {
      */
     beginJitter(camera: THREE.PerspectiveCamera, width: number, height: number): void {
         camera.updateMatrixWorld();
+        if (isCameraCut(this.lastPose, camera)) this.hasHistory = false;
+        this.lastPose = poseOf(camera, this.lastPose);
         this.viewProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
         this.jitterPx = haltonJitter(this.frameIndex++);
         const e = camera.projectionMatrix.elements;

@@ -103,6 +103,7 @@ import { applySunToScene } from './atmosphere-tools';
 import type { CanvasArtifact, Scene3DData, SceneCameraLens } from '../../../browser/generative-canvas/canvas-types';
 import { autoFocusAreaOf, effectiveFocusMode, focusPullSecondsOf } from '../../../browser/generative-canvas/primitives/scene3d/viewportFocus';
 import { DirectDispatchOperatorEngine } from '../../../browser/generative-canvas/services/direct-dispatch-operator-engine';
+import type { SetCameraLensParams } from '../../../browser/generative-canvas/services/operators/lighting-camera-operators';
 import { cameraToFrameCoefficients } from '../../../browser/generative-canvas/primitives/scene3d/viewportOptics';
 import { DEFAULT_CAMERA_FOV_DEG } from '../../../browser/generative-canvas/primitives/scene3d/createRendererStack';
 
@@ -4708,6 +4709,29 @@ export const PHYSICAL_CAMERA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 enableDepthOfField: {
                     type: 'BOOLEAN',
                     description: 'Whether post-processing depth of field and bokeh blurring is enabled.'
+                },
+                flare: {
+                    type: 'OBJECT',
+                    description: 'Lens flare from the frame\'s bright light (ghosts mirrored through the centre, a halo, an optional horizontal streak). amount 0 removes it.',
+                    properties: {
+                        amount: { type: 'NUMBER', description: 'Flare strength in [0, 1] (0.3 is a natural flare).' },
+                        ghosts: { type: 'NUMBER', description: 'Number of ghosts, a whole number 0-8 (default 4).' },
+                        halo: { type: 'NUMBER', description: 'Halo ring strength in [0, 1] (default 0.3).' },
+                        streak: { type: 'NUMBER', description: 'Horizontal (anamorphic) streak strength in [0, 1] (default 0).' },
+                        threshold: { type: 'NUMBER', description: 'Linear brightness above which light flares, > 0 (default 1.5: brighter than white).' }
+                    }
+                },
+                diffusion: {
+                    type: 'OBJECT',
+                    description: 'A diffusion filter (Black Pro-Mist): a share of all light scattered into a soft glow round highlights. strength 0 removes it.',
+                    properties: {
+                        strength: { type: 'NUMBER', description: 'Share of light diffused, in [0, 1] (1/8 grade about 0.06, 1/4 about 0.12, 1/2 about 0.25).' },
+                        spread: { type: 'NUMBER', description: 'Glow radius as a fraction of the frame height, in [0.001, 0.5] (default 0.04).' }
+                    }
+                },
+                temporalAntiAliasing: {
+                    type: 'BOOLEAN',
+                    description: 'Temporal anti-aliasing under the lens effects (default on): keeps small bright light from flickering through depth of field, flare and diffusion. false turns it off.'
                 }
             },
             required: ['focalLengthMm', 'apertureFStop']
@@ -4886,8 +4910,12 @@ export const physicalCameraHandlers: Record<string, ToolHandler> = {
             ...(autoFocusAreaFraction !== undefined ? { autoFocusAreaFraction } : {}),
             ...(focusPullSeconds !== undefined ? { focusPullSeconds } : {}),
             anamorphicSqueeze: anamorphicRatio > 0 ? anamorphicRatio : 1,
-            depthOfField: enableDepthOfField
-        });
+            depthOfField: enableDepthOfField,
+            // amount / strength 0 removes the effect; the operator validates the ranges
+            ...(args.flare && typeof args.flare === 'object' ? { flare: Number((args.flare as { amount?: unknown }).amount) === 0 ? null : args.flare } : {}),
+            ...(args.diffusion && typeof args.diffusion === 'object' ? { diffusion: Number((args.diffusion as { strength?: unknown }).strength) === 0 ? null : args.diffusion } : {}),
+            ...(typeof args.temporalAntiAliasing === 'boolean' ? { temporalAntiAliasing: args.temporalAntiAliasing } : {})
+        } as SetCameraLensParams);
         if (!lensRes.success) return notApplied(lensRes.error || 'sb_set_camera_lens failed');
         const passes = ((lensRes.data as { passes?: string[] })?.passes) ?? [];
         const dofDrawn = passes.includes('depth-of-field');

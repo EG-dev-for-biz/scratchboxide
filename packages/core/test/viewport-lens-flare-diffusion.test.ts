@@ -18,7 +18,7 @@ import * as THREE from 'three';
 import { DEFAULT_DIFFUSION_SPREAD, DEFAULT_FLARE, planViewportOptics } from '../src/browser/generative-canvas/primitives/scene3d/viewportOptics';
 import { mergeCameraLens } from '../src/browser/generative-canvas/services/operators/lighting-camera-operators';
 import { SunGlare, VISIBILITY_EASE_SECONDS } from '../src/browser/generative-canvas/services/atmosphere/SunGlare';
-import { haltonJitter, TemporalAAPass } from '../src/browser/generative-canvas/services/optics/TemporalAAPass';
+import { haltonJitter, isCameraCut, TemporalAAPass } from '../src/browser/generative-canvas/services/optics/TemporalAAPass';
 
 describe('lens flare and diffusion on the scene lens', () => {
     it('plans each only when asked for, with defaults filled in and values held to their ranges', () => {
@@ -112,5 +112,43 @@ describe('temporal anti-aliasing jitter', () => {
         taa.endJitter(camera);
         expect(camera.projectionMatrix.equals(before)).toBe(true);
         taa.dispose();
+    });
+});
+
+describe('temporal anti-aliasing on a camera cut', () => {
+    const cam = (yawDeg: number, fov = 45) => {
+        const c = new THREE.PerspectiveCamera(fov, 1.5, 0.1, 100);
+        c.rotation.y = THREE.MathUtils.degToRad(yawDeg);
+        c.updateMatrixWorld();
+        return c;
+    };
+    const pose = (c: THREE.PerspectiveCamera) => ({ forward: c.getWorldDirection(new THREE.Vector3()), fov: c.fov });
+
+    it('calls a sharp turn or zoom a cut, and a pan or a walk not', () => {
+        expect(isCameraCut(null, cam(0))).toBe(false);
+        expect(isCameraCut(pose(cam(0)), cam(2))).toBe(false);
+        expect(isCameraCut(pose(cam(0)), cam(25))).toBe(true);
+        expect(isCameraCut(pose(cam(0)), cam(0, 30))).toBe(true);
+        const walked = cam(0);
+        walked.position.set(5, 0, -3);
+        walked.updateMatrixWorld();
+        expect(isCameraCut(pose(cam(0)), walked)).toBe(false);
+    });
+});
+
+describe('the chat puts flare, diffusion and the anti-aliasing switch on the lens', () => {
+    it('configure_physical_camera passes them through, and an amount of 0 removes the flare', async () => {
+        const { physicalCameraHandlers } = await import('../src/node/gemini/tools/spatial-tools');
+        const scene = { camera: { position: [0, 1.6, 5], target: [0, 1, 0], fov: 40 }, customMeshes: [] };
+        const ctx = (data: unknown) => ({ request: { activeArtifact: { id: 's', type: '3d-scene', title: 't', version: 1, data } } }) as any;
+        let out = await physicalCameraHandlers.configure_physical_camera({ focalLengthMm: 50, apertureFStop: 2.8, flare: { amount: 0.3, streak: 0.4 }, diffusion: { strength: 0.12 }, temporalAntiAliasing: false }, ctx(scene)) as any;
+        expect(out.resultPayload.applied).toBe(true);
+        const lens = out.resultPayload.artifact.data.camera.lens;
+        expect(lens.flare).toEqual({ amount: 0.3, streak: 0.4 });
+        expect(lens.diffusion).toEqual({ strength: 0.12 });
+        expect(lens.temporalAntiAliasing).toBe(false);
+        out = await physicalCameraHandlers.configure_physical_camera({ focalLengthMm: 50, apertureFStop: 2.8, flare: { amount: 0 } }, ctx(out.resultPayload.artifact.data)) as any;
+        expect(out.resultPayload.artifact.data.camera.lens.flare).toBeUndefined();
+        expect(out.resultPayload.artifact.data.camera.lens.diffusion).toEqual({ strength: 0.12 });
     });
 });
