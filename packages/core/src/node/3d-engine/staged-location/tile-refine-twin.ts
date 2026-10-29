@@ -46,6 +46,7 @@ import { decodeImageInMemory, type RgbaImage8 } from './tile-texture-transfer';
 import { harmonizeTextures, surfaceClassMasks, TEXEL_ROOF, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
 import { viewRelight, type ViewRelightParams, type ViewRelightReport } from './pipeline-k/view-relight';
 import { roofShadowLift, type RoofShadowReport } from './pipeline-k/roof-shadow';
+import { evaluateShadowLift, type ShadowLiftQaReport } from './pipeline-k/shadow-lift-qa';
 import { describeMaterialRegions, readRegionClasses, writeMaterialRegions, type MaterialRegionsPlan, type MaterialRegionsReport, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { planMaterialRegionsOnThreads } from './pipeline-k/material-regions-pool';
 import {
@@ -88,6 +89,8 @@ export interface TileRefineTwin {
     viewRelight?: ViewRelightReport;
     /** Pipeline K: the cast shadow the mesh throws on its roof decks lifted, a sun fitted per deck (pipeline-k/roof-shadow.ts), or why not. */
     roofShadow?: RoofShadowReport;
+    /** The roof shadow lift judged on the surfaces seen from above, photos before against after (pipeline-k/shadow-lift-qa.ts). */
+    roofShadowQa?: ShadowLiftQaReport;
     /** Pipeline K's material regions (pipeline-k/material-regions.ts), or why they were not drawn. */
     materialRegions?: MaterialRegionsReport | { skipped: string };
 }
@@ -249,11 +252,17 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
         relight = await viewRelight(g, json, finalImage, { client: vr.client, models: vr.models, groundY: opts.harmonize.groundY, ...(surfaces ? { surfaces } : {}), ...(vr.params ? { params: vr.params } : {}), ...(vr.signal ? { signal: vr.signal } : {}), ...(vr.progress ? { progress: vr.progress } : {}) });
         opts.onStep?.('viewRelight', 'done');
     }
-    let roofShadow: RoofShadowReport | undefined;
+    let roofShadow: RoofShadowReport | undefined, roofShadowQa: ShadowLiftQaReport | undefined;
     if (opts?.roofShadow && surfaces && finalImage.size) {
         opts.onStep?.('roofShadow', 'running');
+        const beforeLift = new Map(finalImage);
         roofShadow = await roofShadowLift(g, json, finalImage, surfaces, { ...(opts.roofShadow.context ? { context: opts.roofShadow.context } : {}), ...(opts.roofShadow.progress ? { progress: opts.roofShadow.progress } : {}) });
         opts.onStep?.('roofShadow', 'done');
+        if (roofShadow.applied) {
+            opts.onStep?.('roofShadowQa', 'running');
+            roofShadowQa = evaluateShadowLift(g, json, beforeLift, finalImage, { surfaces });
+            opts.onStep?.('roofShadowQa', 'done');
+        }
     }
     if (opts?.harmonize && finalImage.size) { opts.onStep?.('harmonize', 'running'); harmonize = harmonizeTextures(g, json, finalImage, opts.harmonize.groundY, undefined, surfaces); opts.onStep?.('harmonize', 'done'); }
 
@@ -361,5 +370,5 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     let o = 0;
     for (const b of bin) { out.set(b, o); o += b.byteLength; }
     const ladderRung = rungShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1);
-    return { glb: assembleGlb(json, out), rungShares, provenance, ladderRung, triangles, ...(recreate ? { recreate } : {}), ...(harmonize ? { harmonize } : {}), ...(relight ? { viewRelight: relight } : {}), ...(roofShadow ? { roofShadow } : {}), ...(regionsPlan ? { materialRegions: regionsPlan.report } : regionsSkipped ? { materialRegions: { skipped: regionsSkipped } } : {}) };
+    return { glb: assembleGlb(json, out), rungShares, provenance, ladderRung, triangles, ...(recreate ? { recreate } : {}), ...(harmonize ? { harmonize } : {}), ...(relight ? { viewRelight: relight } : {}), ...(roofShadow ? { roofShadow } : {}), ...(roofShadowQa ? { roofShadowQa } : {}), ...(regionsPlan ? { materialRegions: regionsPlan.report } : regionsSkipped ? { materialRegions: { skipped: regionsSkipped } } : {}) };
 }

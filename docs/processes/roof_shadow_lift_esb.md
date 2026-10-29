@@ -37,6 +37,28 @@
 
 ---
 
+### The shadow-lift QA (any lift method, the ESB as its baseline)
+
+`pipeline-k/shadow-lift-qa.ts` (`evaluateShadowLift`) judges a lift from the photos before and after it on the mesh they texture, knowing nothing of suns or method: the per-building step and a district pass are measured alike. It runs in the twin after the roof-shadow step (run note `roof_shadow_qa.json`, picture `roof_shadow_qa.png` beside the twin) and reports, over the surfaces seen from above:
+
+* **halo**: a lifted texel that was darker than the unlifted surface around it and is now brighter than it by 15% or more (an over-lift; with the share at an edge);
+* **lifted lit**: a lifted texel that was not darker than the unlifted surface around it (a wrong sun or shadow, or the patchwork of a per-photo lift: its shaded neighbours left unlifted);
+* **residual**: still 25% or more darker than its surface after the lift;
+* the median step from shade to the lit surface before and after;
+* photo seams (texture-harmonize.ts's patch measure) before and after, all patches and lifted ones, and optionally after re-harmonising copies of both (for a lift applied after harmonising).
+
+`ESB_SHADOW_LIFT_BASELINE` and `compareToBaseline` hold the ESB numbers any method is compared on.
+
+| Measure (ESB, before harmonising) | uncapped lift (dry run) | capped lift (dry run) | live run 651b85ee: the baseline |
+|---|---|---|---|
+| halo share | 17.5% | 11.8% | 11.2% (97% at an edge) |
+| lifted-lit share | 59.6% | 37.2% | 32.7% |
+| residual share | 12.2% | 27.6% | 36.1% |
+| step to the lit surface (log) | 0.43 -> 0.01 | 0.32 -> 0.04 | 0.35 -> 0.05 |
+| photo seams after harmonising | 0.1255 -> 0.1285 (re-harmonised) | 0.1255 -> 0.1260 (re-harmonised) | 0.1261 |
+
+From above (`roof_shadow_qa` picture) the defects are thin rims along the lifted areas' edges, not patches: the mesh's shadow edge a few decimetres off the photo's. Run 651b85ee's remesh was recomputed (78,593 seam pairs against 85,412 before), so its numbers stand on their own input. Its picture was lost when another session cleared the stage cache at 12:42; the run note keeps the numbers.
+
 ## 4. Candidate Tool/Service Ideas
 
 * **No-sun photos by capture:** photos of one capture share a sun; grouping the no-sun fragments by appearance of their lit areas (white balance, exposure) or by atlas adjacency could hand them a sun none can fit alone.

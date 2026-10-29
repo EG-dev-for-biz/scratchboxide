@@ -154,10 +154,10 @@ export function roofShadowAuditPng(grid: NonNullable<RoofShadowReport['auditGrid
 const sunDir = (azDeg: number, elDeg: number) => [Math.cos(elDeg * DEG) * Math.cos(azDeg * DEG), Math.sin(elDeg * DEG), Math.cos(elDeg * DEG) * Math.sin(azDeg * DEG)];
 
 /** The topmost surface toward the sun over a plane perpendicular to it: per pixel the largest p . s of any triangle. */
-interface ShadowMap { s: number[]; r: number[]; u: number[]; X0: number; Y1: number; W: number; H: number; mpp: number; slope: number; top: Float32Array }
+export interface ShadowMap { s: number[]; r: number[]; u: number[]; X0: number; Y1: number; W: number; H: number; mpp: number; slope: number; top: Float32Array }
 
 /** Triangles that cast shadows: flat corners, nine floats a triangle. */
-interface Occluders { P: Float32Array; n: number }
+export interface Occluders { P: Float32Array; n: number }
 
 /**
  * The twin's triangles and the context's that stand off its footprint (a 1 m grid of the twin's plan, grown by footprintGrowM)
@@ -202,7 +202,7 @@ function occludersOf(soup: Soup, context: { vertices: ArrayLike<number>; indices
     return { P: all, n: soup.n + out.length / 9 };
 }
 
-function shadowMap(soup: Occluders, azDeg: number, elDeg: number, mpp: number): ShadowMap {
+export function shadowMap(soup: Occluders, azDeg: number, elDeg: number, mpp: number): ShadowMap {
     const s = sunDir(azDeg, elDeg);
     // a horizontal axis across the sun, and the third one
     const r0 = [-s[2], 0, s[0]], rl = Math.hypot(r0[0], r0[2]) || 1;
@@ -250,7 +250,7 @@ function shadowMap(soup: Occluders, azDeg: number, elDeg: number, mpp: number): 
 }
 
 /** 1 when something of the mesh stands between the point and the sun (nearest pixel). */
-function shadowedAt(m: ShadowMap, x: number, y: number, z: number, biasM: number): boolean {
+export function shadowedAt(m: ShadowMap, x: number, y: number, z: number, biasM: number): boolean {
     const px = Math.floor((x * m.r[0] + y * m.r[1] + z * m.r[2] - m.X0) / m.mpp), py = Math.floor((m.Y1 - (x * m.u[0] + y * m.u[1] + z * m.u[2])) / m.mpp);
     if (px < 0 || py < 0 || px >= m.W || py >= m.H) return false;
     return m.top[py * m.W + px] > x * m.s[0] + y * m.s[1] + z * m.s[2] + biasM + m.slope;
@@ -357,6 +357,8 @@ export async function roofShadowLift(g: ParsedGlb, json: any, photos: Map<number
     const P = { ...ROOF_SHADOW_PARAMS, ...(opts.params ?? {}) };
     const t0 = Date.now();
     const soup = collect(g, json);
+    // an empty twin (a chunk with nothing in it) has no extent: every map would be Infinity pixels a side
+    if (!soup.n) return { applied: false, why: 'the twin has no triangles', cells: 0, planes: 0, fitted: 0, texelsLifted: 0, photosChanged: 0, contextTriangles: 0, photoRecords: [], terraces: { photos: 0, unconfirmed: 0, ownFit: 0, lifted: 0, liftedWhollyInShadow: 0, rejected: 0, lit: 0, components: 0, componentsLifted: 0, rejections: [] }, candidates: 0, ms: Date.now() - t0, records: [] };
     const above = shadowMap(soup, 0, 89.9, P.aboveMapM);
     const occ = occludersOf(soup, opts.context, P);
     const cells = roofCells(soup, photos, surfaces, above, P);

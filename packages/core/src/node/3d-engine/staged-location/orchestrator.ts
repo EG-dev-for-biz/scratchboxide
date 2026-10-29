@@ -201,6 +201,7 @@ import { measureVisibleDefects, VISIBLE_DEFECTS_PARAMS } from './pipeline-k/visi
 import { TEXTURE_HARMONIZE_VERSION, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
 import { VIEW_RELIGHT_VERSION, viewRelightEnvParams } from './pipeline-k/view-relight';
 import { ROOF_SHADOW_VERSION, roofShadowAuditPng } from './pipeline-k/roof-shadow';
+import { shadowLiftQaPng } from './pipeline-k/shadow-lift-qa';
 import { describeMaterialRegions, MATERIAL_REGIONS_VERSION, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE, PIPELINE_I_VERSION, TRELLIS_SEEDS, runPipelineI } from './pipeline-i/pipeline-i';
 import { PROJECT_MAX_RELIEF_M, pipelineIRefineEnabled, refinePipelineI, type RefineOutcome } from './pipeline-i/refine';
@@ -2699,6 +2700,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         if (auditGrid && auditPng) fs.writeFileSync(auditPng, roofShadowAuditPng(auditGrid));
                         // the stage writes into <entry>.tmp-<pid>-<hex>, renamed to <entry> when it finishes: the note names the entry
                         const auditFinal = auditPng ? path.join(dir.replace(/\.tmp-\d+-[0-9a-f]+$/, ''), 'roof_shadow_topdown.png') : undefined;
+                        if (twin.roofShadowQa) {
+                            // the lift judged from above (halos, lifts on lit surfaces, seams), its picture beside the audit
+                            const { grid, ...qa } = twin.roofShadowQa;
+                            if (grid) fs.writeFileSync(path.join(dir, 'roof_shadow_qa.png'), shadowLiftQaPng(grid));
+                            cache.writeRunNote(runId, 'roof_shadow_qa', { layer: target.layer.layer, ...(grid ? { png: path.join(dir.replace(/\.tmp-\d+-[0-9a-f]+$/, ''), 'roof_shadow_qa.png') } : {}), ...qa });
+                        }
                         cache.writeRunNote(runId, 'roof_shadow', { version: ROOF_SHADOW_VERSION, layer: target.layer.layer, ...(auditGrid && auditFinal ? { auditPng: auditFinal, auditGrid: { cellM: auditGrid.cellM, x0: auditGrid.x0, z0: auditGrid.z0, w: auditGrid.w, h: auditGrid.h } } : {}), ...note });
                     }
                     // pipeline K: the party wall (a wall the scan lacks, base-cleanup.ts) drawn as the building's masonry continued, by the image model
