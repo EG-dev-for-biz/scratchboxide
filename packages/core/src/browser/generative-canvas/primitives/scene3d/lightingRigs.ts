@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import * as THREE from 'three';
+import { kelvinToRGB } from '../../services/atmosphere/kelvin';
 
 export interface PhysicalLightConfig {
     name: string;
@@ -38,42 +39,10 @@ export interface CinematicRigDefinition {
  * Analytic Planckian locus polynomial approximation.
  */
 export function kelvinToRgb(kelvin: number): THREE.Color {
-    const k = Math.min(Math.max(kelvin, 1000), 15000) / 100;
-    let r = 0;
-    let g = 0;
-    let b = 0;
-
-    // Red
-    if (k <= 66) {
-        r = 1.0;
-    } else {
-        r = (329.698727446 * Math.pow(k - 60, -0.1332047592)) / 255.0;
-    }
-
-    // Green
-    if (k <= 66) {
-        g = (99.4708025861 * Math.log(k) - 161.1195681661) / 255.0;
-    } else {
-        g = (288.1221695283 * Math.pow(k - 60, -0.0755148492)) / 255.0;
-    }
-
-    // Blue
-    if (k >= 66) {
-        b = 1.0;
-    } else if (k <= 19) {
-        b = 0.0;
-    } else {
-        b = (138.5177312231 * Math.log(k - 10) - 305.0447927307) / 255.0;
-    }
-
-    r = Math.min(Math.max(r, 0), 1);
-    g = Math.min(Math.max(g, 0), 1);
-    b = Math.min(Math.max(b, 0), 1);
-
-    // sRGB to Linear conversion
-    const toLinear = (c: number) => c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-
-    return new THREE.Color(toLinear(r), toLinear(g), toLinear(b));
+    // the one blackbody (kelvin.ts kelvinToRGB, sRGB components), held to the rigs' 1000-15000 K and made linear
+    const c = kelvinToRGB(Math.min(Math.max(kelvin, 1000), 15000));
+    const toLinear = (v: number) => v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    return new THREE.Color(toLinear(c.r), toLinear(c.g), toLinear(c.b));
 }
 
 /**

@@ -30,7 +30,7 @@ export const ATMOSPHERE_FEATURE_KEYS: readonly string[] = [...SKY_FEATURE_KEYS, 
 const ENVIRONMENT_FEATURE_KEYS = [...ATMOSPHERE_FEATURE_KEYS, 'terrainBiomes'];
 const ENVIRONMENT_BLOCK_KEYS = ['skybox', 'fog', 'aerialPerspective', 'cloudShadows', 'timeOfDay', 'ground', 'groundTileMode'];
 /** `classifyAtmosphere` reads `atmosphere` beside `features.atmosphericScattering`. */
-const ENVIRONMENT_SCENE_KEYS = ['atmosphere', 'atmosphericScattering', 'worldBranch', 'renderMode', 'groundTileMode'];
+const ENVIRONMENT_SCENE_KEYS = ['atmosphere', 'atmosphericScattering', 'worldBranch', 'renderMode', 'groundTileMode', 'weather'];
 
 function isSwitchedOn(value: unknown): boolean {
     return value === true || (typeof value === 'object' && value !== null && (value as { enabled?: unknown }).enabled !== false);

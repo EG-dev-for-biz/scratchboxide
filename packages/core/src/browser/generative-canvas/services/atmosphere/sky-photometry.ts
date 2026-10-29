@@ -17,6 +17,7 @@
  */
 
 import { PipelineError } from '../../../../common/errors/pipeline-errors';
+import { sunDirectionFromAngles } from '../../../../common/coordinate/solarPosition';
 
 /** The image shows no sun disc and no sky luminance gradient that pins the sun down. */
 export class SunNotFoundError extends PipelineError {
@@ -70,8 +71,7 @@ export function directionToAngles(d: Vec3): { elevationDeg: number; azimuthDeg: 
 
 /** Unit vector toward a sun at (elevation, azimuth clockwise from north). */
 export function anglesToDirection(elevationDeg: number, azimuthDeg: number): Vec3 {
-    const e = elevationDeg * DEG, a = azimuthDeg * DEG;
-    return [Math.cos(e) * Math.sin(a), Math.sin(e), -Math.cos(e) * Math.cos(a)];
+    return sunDirectionFromAngles(elevationDeg, azimuthDeg);
 }
 
 export function srgbToLinear(c: number): number {

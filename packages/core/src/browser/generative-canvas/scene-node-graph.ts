@@ -113,6 +113,6 @@ export function refreshSceneNodeGraph(current: NodeGraphData, scene: CanvasArtif
 
 /** Nodes a scene graph draws from the scene itself (as opposed to nodes the user placed on it). */
 function isSceneDrawnNode(n: GraphNode): boolean {
-    return n.id === 'n-cam' || n.id === 'n-env' || n.id === 'n-render' || !!n.parameters?.output
+    return n.id === 'n-cam' || n.id === 'n-env' || n.id === 'n-weather' || n.id === 'n-render' || !!n.parameters?.output
         || n.id.startsWith('obj-') || n.id.startsWith('mesh-') || n.id.startsWith('glb-node-');
 }

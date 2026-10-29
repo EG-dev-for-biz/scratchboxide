@@ -24,7 +24,7 @@ import {
 import { getSunVectorFromAngles } from './solar-position';
 import { buildPhysicalSkyLut } from './physical-sky';
 import { SunGlare } from './SunGlare';
-import { cloudShellUniformArrays, cloudShellWindSpeeds, MAX_CLOUD_SHELL_LAYERS, resolveCloudShellLayers } from './cloud-shell-layers';
+import { cloudShellUniformArrays, cloudShellWindSpeeds, coverageForSkyCover, MAX_CLOUD_SHELL_LAYERS, resolveCloudShellLayers } from './cloud-shell-layers';
 import { InvalidInputError, MissingInputError } from '../../../../common/errors/pipeline-errors';
 
 export const ATMOSPHERE_VERTEX_SHADER = /* glsl */ `
@@ -403,8 +403,9 @@ void main() {
     vec3 twilightZenith = vec3(0.05, 0.12, 0.38);
     vec3 twilightHorizon = vec3(0.72, 0.35, 0.45);
 
-    vec3 nightZenith = vec3(0.005, 0.01, 0.025);
-    vec3 nightHorizon = vec3(0.015, 0.025, 0.05);
+    // a dim blue night (moonlit air and airglow), dark but never black, as a night photograph shows it
+    vec3 nightZenith = vec3(0.045, 0.065, 0.14);
+    vec3 nightHorizon = vec3(0.09, 0.115, 0.19);
 
     // Smooth diurnal phase blending
     float dayFactor = smoothstep(0.08, 0.30, sunH);
@@ -468,6 +469,23 @@ void main() {
         vec3 physicalSun = (sunDisc * 12.0 + glare) * directSunRadiance;
 
         skyColor += physicalSun;
+    }
+
+    // --- 2a. STARS: fixed points on the sky (hashed from the view direction, so baked with the sky and never in front of
+    // the scene), fading in from 3° to 12° below the horizon and toward the horizon, where the air is thickest.
+    if (sunH < -0.05 && rayDir.y > 0.0) {
+        float starNight = smoothstep(-0.05, -0.21, sunH);
+        vec3 sp = rayDir * 260.0;
+        vec3 cell = floor(sp);
+        float h = fract(sin(dot(cell, vec3(127.1, 311.7, 74.7))) * 43758.5453);
+        if (h > 0.982) {
+            vec3 jitter = vec3(fract(h * 17.3), fract(h * 29.1), fract(h * 41.7)) - 0.5;
+            float d = length(fract(sp) - 0.5 - jitter * 0.5);
+            float mag = fract(h * 91.7);
+            float star = smoothstep(0.22, 0.0, d) * (0.25 + 2.5 * mag * mag);
+            vec3 tint = mix(vec3(1.0, 0.86, 0.72), vec3(0.78, 0.86, 1.0), fract(h * 53.1));
+            skyColor += tint * star * starNight * smoothstep(0.0, 0.2, rayDir.y) * 2.0;
+        }
     }
 
     // --- 2b. SHELL CLOUD DECKS (behind the volumetric layer; they dim the sun disc they cross) ---
@@ -634,12 +652,7 @@ const CUMULUS_SKY_COVER: Array<[number, number]> = [
 
 /** Plan coverage of the cumulus layer that shows as `skyCover` of the sky (the measured table, inverted). */
 export function layerCoverageForSkyCover(skyCover: number): number {
-    const f = Math.min(1, Math.max(0, skyCover));
-    for (let i = 1; i < CUMULUS_SKY_COVER.length; i++) {
-        const [l0, f0] = CUMULUS_SKY_COVER[i - 1], [l1, f1] = CUMULUS_SKY_COVER[i];
-        if (f <= f1) return l0 + ((l1 - l0) * (f - f0)) / Math.max(1e-9, f1 - f0);
-    }
-    return 1;
+    return coverageForSkyCover(CUMULUS_SKY_COVER, skyCover);
 }
 
 export function createAtmosphericSkyDome(
@@ -925,6 +938,28 @@ export function createAtmosphericSkyDome(
     }
     scene.add(sunLight);
 
+    // Night light: a cool moonlight, opposite the sun and well up, and a floor under the sky light, fading in from 2° to
+    // 12° below the horizon, so a night scene reads as moonlit (dim, blue, soft shadows) rather than black. The moon's
+    // place is a stand-in (no lunar ephemeris here): it is labelled so on the light.
+    const moonLight = new THREE.DirectionalLight(0x9fb6ff, 0);
+    moonLight.name = 'AtmosphericMoonLight';
+    moonLight.userData.provenance = 'generated: night light opposite the sun (no lunar ephemeris)';
+    moonLight.castShadow = false;
+    if (moonLight.shadow) { moonLight.shadow.bias = -0.0005; moonLight.shadow.mapSize.width = 1024; moonLight.shadow.mapSize.height = 1024; moonLight.shadow.radius = 4; }
+    scene.add(moonLight);
+    const NIGHT_MOON_INTENSITY = 0.55, NIGHT_SKY_LIGHT_FLOOR = 0.32;
+    const applyNightLight = (elevDeg: number, sunDir: THREE.Vector3) => {
+        const night = Math.min(1, Math.max(0, (-2 - elevDeg) / 10));
+        const t = night * night * (3 - 2 * night);
+        const moonDir = new THREE.Vector3(-sunDir.x, Math.max(0.55, -sunDir.y), -sunDir.z).normalize();
+        moonLight.position.copy(moonDir).multiplyScalar(sunDistance);
+        moonLight.intensity = NIGHT_MOON_INTENSITY * t;
+        moonLight.castShadow = t > 0.05;
+        hemiLight.intensity = Math.max(hemiLight.intensity, NIGHT_SKY_LIGHT_FLOOR * t);
+        if (t > 0) hemiLight.color.lerp(new THREE.Color(0x6f86c8), t);
+    };
+    applyNightLight(initialElev, sunDirection);
+
     // Update function applying solar angles
     const applySolarState = (elevDeg: number, azimDeg: number, customProfile?: any) => {
         initialElev = elevDeg;
@@ -955,6 +990,7 @@ export function createAtmosphericSkyDome(
         hemiLight.intensity = diurnalProfile.skyLightIntensity;
         hemiLight.color.set(new THREE.Color(skyLightColorHex(diurnalProfile)).multiply(kelvinToRGB(hemiKelvin)));
         hemiLight.groundColor.copy(groundBounceColor(diurnalProfile, elevDeg, hemiKelvin));
+        applyNightLight(elevDeg, sunDirection);
         applyPhysicalSky(elevDeg);
     };
 
@@ -1001,6 +1037,7 @@ export function createAtmosphericSkyDome(
             scene.remove(sunMesh);
             scene.remove(hemiLight);
             scene.remove(sunLight);
+            scene.remove(moonLight);
             scene.remove(sunGlare.mesh);
             sunGlare.dispose();
             skyGeo.dispose();

@@ -1065,6 +1065,11 @@ export interface Scene3DData {
          */
         keepPoseOnLoad?: boolean;
     };
+    /**
+     * The scene's weather (the viewport's Weather tool, the graph's Weather node): time of day, date, cloud cover, haze and
+     * fog, turned into the sky config by services/atmosphere/scene-weather.ts applySceneWeather; absent = no weather set.
+     */
+    weather?: import('./services/atmosphere/scene-weather').SceneWeatherState;
     environment?: {
         skybox?: string;
         lighting?: string;
