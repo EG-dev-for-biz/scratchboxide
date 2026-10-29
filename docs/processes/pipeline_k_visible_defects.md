@@ -54,6 +54,24 @@ Own instance `scratchbox-k-no-surroundings` (ports 3570 / 3571 / 3572), new chat
 - Timeline: `remesh degraded`, breakdown `visibleDefects: 1299 ms`.
 - Build panel: "Staged build degraded: ... remesh: visible_defects; fit: fit_rejected". The chat reply spells the reason out (clay within its limit, holes over it, the FacadeLattice nodes named). Screenshot: `docs/screenshots/2026-10-27-esb-visible-defects-live-run.jpg`.
 
+## Follow-up (2026-10-27): reveals closed, the fit left out, clay judged on the finished model
+
+**Status:** holes Verified (offline and live); still 0.12 points over the hole limit.
+
+- **Reveals wound backwards.** In `facade-lattice.ts` `latticeFacade`, every step face across s and every upward step face across t was wound opposite its declared normal. On the ESB polish that is 31,410 + 5,585 triangles, 8,156 m². The material is single-sided, so the viewer culled them from the side they show to, and the check read them as back faces.
+- **Reveals beside the scan.** A rebuilt cell also had no reveal toward a neighbour left as scan, or past the lattice's edge.
+- **The fix** (`facade-lattice/5`): one helper winds every side face outward. A reveal is now drawn toward a rebuilt cell, toward a scan cell (to its measured depth), and at the lattice's edge (to the scan's own depth in the cell).
+- **Offline replay** (tile_refine `ec2cfbc7`, K orthos `fd680ca2`, run `2e702979`'s base loops):
+  - holes 3.98% → 1.12%; worst view 5.35% → 1.73%;
+  - by height band on the horizon views: below 25 m 0.71% → 0.47%, 25 to 200 m 1.92% → 0.24%, above 200 m 1.10% → 0.28%;
+  - every lattice face now agrees with its normal.
+- **The fit.** It is no longer run for a K isolate (`fit`, `project`, `vision`, `correct`, `detail` and `figures` are out of scope). K keeps the straightened scan, and an accepted fit would replace it with primitives. On the ESB it was always rejected by its gates, not its time limit: 82% of the scan kept as scanned (limit 35%), 94% of the rebuild unobserved (limit 35%), fit-to-scan RMS 10 cm (limit 6 cm).
+- **Clay judged on the finished model.** The remesh stage measured clay before the texture stage paints the party wall, so the PartyWall (79% of the clay) was always reported. That stage now degrades on holes only. The finished twin is measured in the texture stage (note `pipeline_k_visible_defects_textured`, degradation `visible_clay` on the texture pass).
+- **Live**, own instance `scratchbox-k-defects` (3610 / 3611 / 3612), the 3D Building button:
+  - run `4309ff23`: `fit` skipped, no `fit_rejected`, holes 1.12% (worst 1.73%);
+  - run `d674158b`: the finished model has 0.30% clay (limit 1%) and 1.12% holes, the same as offline.
+- **Left:** 0.47% of the holes at the base (the wedge beside the party wall, `relief_m34`), and scattered slits at the setbacks (`FacadeLattice_10`, `relief_m11`). Images: `docs/screenshots/` was not written; the masks are in this session's scratchpad only.
+
 ## Candidate Tool/Service Ideas
 
 - Export the defect images with the run note (they make the degradation readable at a glance); a PNG encoder is not in `packages/core`'s dependencies, so this needs one or a native writer.
