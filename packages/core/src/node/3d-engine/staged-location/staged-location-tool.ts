@@ -20,6 +20,7 @@
  *   the final scene. A place that cannot be resolved or has no tile coverage fails the call; nothing else does.
  */
 
+import { mirrorCachesInBackground } from '../../cloud-store/cache-mirror';
 import { TOGGLEABLE_STEPS } from '../../../common/staged-build-steps';
 import { solarRoofFromBuildingShape } from './pipeline-e/solar-roof';
 import * as crypto from 'crypto';
@@ -471,11 +472,14 @@ export async function runStagedLocationTool(
         });
     } catch (err) {
         registry.end(runId, own.signal.aborted ? 'stopped' : 'failed', undefined, (err as Error)?.message ?? String(err));
+        if (!injected) mirrorCachesInBackground(root);
         detach();
         ctx.signal?.removeEventListener('abort', forwardAbort);
         throw err;
     }
     registry.end(runId, outcome.result.status === 'stopped' ? 'stopped' : 'finished', outcome.result.artifact as CanvasArtifact | undefined);
+    // the run's caches (its stage entries, run records, native caches; its chunks' too) to the training bucket, for regressors
+    if (!injected) mirrorCachesInBackground(root);
     detach();
     ctx.signal?.removeEventListener('abort', forwardAbort);
     if (copyTo && fs.existsSync(outcome.compat.glbPath)) {
