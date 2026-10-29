@@ -1648,6 +1648,8 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 isoDate: { type: 'STRING', description: 'ISO-8601 instant for the sun (lighting "scene" only); default the instant the stations were synthesized for.' },
                 stationIds: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Building-survey character sheet: exactly four station ids (in quadrant order: top left, top right, bottom left, bottom right). The four views go into one 2 x 2 sheet on white and are made photorealistic by one 4K Nano Banana 2 image, so every view shows the same building in the same colours; each panel is then checked like a station (edge alignment and scan outline) and the whole sheet is generated again unless all four pass. Use instead of stationId; pick views that see the structure from different sides, e.g. the street faces, a corner and an aerial for the roof.' },
                 maxRerolls: { type: 'NUMBER', description: 'Further attempts after a rejected image (default 2).' },
+                imageModel: { type: 'STRING', description: 'Optional image model id or product name (nano-banana-2, nano-banana-pro, nano-banana-lite): only that model is asked. Default: the standard image models in order.' },
+                imageSize: { type: 'STRING', description: 'Optional output size: "1K", "2K" (default) or "4K". Nano Banana Lite makes 1K only.' },
                 moodPromptContext: { type: 'STRING', description: 'Optional extra sentence(s) for the prompt (mood light only with lighting "scene").' },
                 styleSuffix: { type: 'STRING', description: 'Optional style suffix appended verbatim.' },
                 width: { type: 'NUMBER', description: 'Render/generation width (default 1920).' },
@@ -1914,7 +1916,7 @@ function chatProgress(ctx: ToolContext | undefined): (fraction: number, message?
  * models via the workspace's Google media credentials. There is no stand-in generator: without credentials the first
  * generation fails with the credential error.
  */
-async function resolveStationImageGenerator(ctx: { workspaceRoot: string }): Promise<import('../../spatial/BeautifyStationService').StationImageGenerator> {
+async function resolveStationImageGenerator(ctx: { workspaceRoot: string }, imageModel?: string, imageSize?: '1K' | '2K' | '4K'): Promise<import('../../spatial/BeautifyStationService').StationImageGenerator> {
     const { createGoogleStationImageGenerator } = await import('../../spatial/BeautifyStationService');
     const { GoogleMediaGenerationService } = await import('../../google-media-generation-service');
     const { GoogleMediaCredentialsService } = await import('../../google-media-credentials-service');
@@ -1922,7 +1924,9 @@ async function resolveStationImageGenerator(ctx: { workspaceRoot: string }): Pro
     const assetStore = new MediaAssetStore();
     const credentials = new GoogleMediaCredentialsService();
     const mediaService = new GoogleMediaGenerationService(assetStore, () => credentials.createClient());
-    return createGoogleStationImageGenerator({ mediaService, assetStore, workspaceRoot: ctx.workspaceRoot || process.cwd() });
+    // a named model is the only one asked (no fallback to the defaults): the result says which model answered
+    const { resolveImageModelId } = await import('../../../common/media-generation-protocol');
+    return createGoogleStationImageGenerator({ mediaService, assetStore, workspaceRoot: ctx.workspaceRoot || process.cwd(), ...(imageModel ? { modelPriority: [resolveImageModelId(imageModel)] } : {}), ...(imageSize ? { imageSize } : {}) });
 }
 
 export const panoramaHandlers: Record<string, ToolHandler> = {
@@ -2870,7 +2874,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             const ids = (args.stationIds as unknown[]).map(Number);
             if (ids.length !== 4) throw new MissingInputError('survey_beautify_station', 'stationIds', `a character sheet takes exactly four station ids, got ${ids.length}`);
             const stations = ids.map(id => { const st = (data.poses as any[]).find(p => p.id === id); if (!st) throw new Error(`survey_beautify_station: station ${id} not found`); return st; });
-            const generator = await resolveStationImageGenerator(ctx);
+            const generator = await resolveStationImageGenerator(ctx, typeof args.imageModel === 'string' && args.imageModel.trim() ? args.imageModel.trim() : undefined, args.imageSize === '1K' || args.imageSize === '2K' || args.imageSize === '4K' ? args.imageSize : undefined);
             const { registerBeautifyHandlers } = await import('../../spatial/survey-router');
             const deps = registerBeautifyHandlers({}, generator, process.cwd());
             const res = await deps.beautifySheet!({ ...args, stations, anchor: data.anchor, glbPath: asString(args.glbPath), signal: ctx.signal }, chatProgress(ctx));
@@ -2883,7 +2887,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         if (args.stationId === undefined) throw new MissingInputError('survey_beautify_station', 'stationId', 'or stationIds (four) for a character sheet');
         const station = (data.poses as any[]).find(p => p.id === args.stationId);
         if (!station) throw new Error(`survey_beautify_station: station ${args.stationId} not found`);
-        const generator = await resolveStationImageGenerator(ctx);
+        const generator = await resolveStationImageGenerator(ctx, typeof args.imageModel === 'string' && args.imageModel.trim() ? args.imageModel.trim() : undefined, args.imageSize === '1K' || args.imageSize === '2K' || args.imageSize === '4K' ? args.imageSize : undefined);
         const { registerBeautifyHandlers } = await import('../../spatial/survey-router');
         const deps = registerBeautifyHandlers({}, generator, process.cwd());
         const res = await deps.beautifyStation!({ ...args, station, anchor: data.anchor, glbPath: asString(args.glbPath), signal: ctx.signal }, chatProgress(ctx));

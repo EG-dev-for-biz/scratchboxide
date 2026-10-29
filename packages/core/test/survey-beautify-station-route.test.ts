@@ -15,6 +15,7 @@ import { stationFromLookAt } from '../src/common/spatial/SurveySynthesisEngine';
 import { SurveyStationRenderService } from '../src/node/spatial/SurveyStationRenderService';
 import { registerBeautifyHandlers } from '../src/node/spatial/survey-router';
 import type { StationImageGenerator } from '../src/node/spatial/BeautifyStationService';
+import { decodePng, encodePng } from '../src/node/texture-processing';
 import { EVEN_LIGHT_SENTENCE, OUTLINE_LOCK_SENTENCE } from '../src/browser/generative-canvas/services/location-beautify-service';
 import type { GeodeticAnchor } from '../src/common/spatial/colmap-vector-reference-types';
 import { writeBoxGroundGlb } from './helpers/box-ground-glb';
@@ -28,6 +29,18 @@ afterAll(() => fs.removeSync(WORK));
 /** Hands the reference render back unchanged (a geometry-perfect "photograph"), recording each prompt. */
 function echoGenerator(prompts: string[]): StationImageGenerator {
     return { name: 'echo', async generate(args) { prompts.push(args.prompt); return args.blockoutPng; } };
+}
+/** The reference drawn: its clay recoloured as a model's stone would be (an echoed reference fails building-survey mode's outline check). */
+function drawnGenerator(prompts: string[]): StationImageGenerator {
+    return {
+        name: 'drawn',
+        async generate(args) {
+            prompts.push(args.prompt);
+            const b = decodePng(args.blockoutPng), out = Buffer.from(b.rgba);
+            for (let i = 0; i < out.length; i += 4) { const l = out[i]; out[i] = Math.min(255, l * 1.15 + 20); out[i + 1] = Math.min(255, l * 0.95 + 10); out[i + 2] = l * 0.75; }
+            return encodePng(b.width, b.height, out);
+        }
+    };
 }
 
 async function plannedStation(id: number, isoDate: string) {
@@ -55,7 +68,7 @@ describe('survey_beautify_station route', () => {
     it('building-survey mode locks and checks the outline and reports the fit', async () => {
         const planned = await plannedStation(2, '2026-10-23T16:00:00Z');
         const prompts: string[] = [];
-        const deps = registerBeautifyHandlers({}, echoGenerator(prompts), WORK);
+        const deps = registerBeautifyHandlers({}, drawnGenerator(prompts), WORK);
         const res = await deps.beautifyStation!({ station: planned, glbPath: GLB, locationName: 'Test Box', width: 320, maxRerolls: 0, mode: 'building-survey', renderMode: 'clay', outDir: path.join(WORK, 'survey') }, () => {});
         expect(prompts[0]).toContain(OUTLINE_LOCK_SENTENCE);
         expect(res.qc.outline.checked).toBe(true);

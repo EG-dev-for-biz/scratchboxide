@@ -35,7 +35,7 @@ interface Call { prompt: string; width: number; height: number; aspectRatio: str
  */
 function sheetGenerator(calls: Call[], opts: { scale?: number; widenQuadrant?: number; widenPx?: number; dividers?: boolean; frame?: boolean } = {}): StationImageGenerator {
     return {
-        name: 'sheet-echo',
+        name: 'sheet-drawn',
         async generate(args) {
             calls.push({ prompt: args.prompt, width: args.width, height: args.height, aspectRatio: args.aspectRatio, imageSize: args.imageSize });
             const src = decodePng(args.blockoutPng);
@@ -49,6 +49,8 @@ function sheetGenerator(calls: Call[], opts: { scale?: number; widenQuadrant?: n
                     for (let x = last + 1; x <= Math.min(ox + W / 2 - 1, last + (opts.widenPx ?? 40)); x++) rgba.copy(rgba, (y * W + x) * 4, (y * W + last) * 4, (y * W + last) * 4 + 4);
                 }
             }
+            // drawn, not echoed: the clay is recoloured as a model's stone would be (an echoed reference fails the outline check)
+            for (let i = 0; i < W * H * 4; i += 4) if (!(rgba[i] === 255 && rgba[i + 1] === 255 && rgba[i + 2] === 255)) { const l = rgba[i]; rgba[i] = Math.min(255, l * 1.15 + 20); rgba[i + 1] = Math.min(255, l * 0.95 + 10); rgba[i + 2] = l * 0.75; }
             const ink = (x: number, y: number) => { const i = (y * W + x) * 4; rgba[i] = rgba[i + 1] = rgba[i + 2] = 20; };
             if (opts.dividers) for (let t = 0; t < 2; t++) { for (let y = 0; y < H; y++) ink(W / 2 - 1 + t, y); for (let x = 0; x < W; x++) ink(x, H / 2 - 1 + t); }
             if (opts.frame) for (let t = 0; t < 2; t++) { for (let y = 0; y < H; y++) { ink(t + 1, y); ink(W - 2 - t, y); } for (let x = 0; x < W; x++) { ink(x, t + 1); ink(x, H - 2 - t); } }
