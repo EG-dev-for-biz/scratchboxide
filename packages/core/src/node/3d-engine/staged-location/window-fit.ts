@@ -31,10 +31,11 @@
  * The windows are photo-inferred. Facades are fitted in parallel, before the lattice reads them (window_fit.json beside the
  * orthos).
  *
- * A facade this leaves with no rects at all (the no-pattern tail) may be retried once against an opening mask from an
- * open-vocabulary segmenter (SCRATCHBOX_K_WINDOW_SEGMENT, off by default: it bills per call), widening step 3's darkness
- * mask (unionMask) rather than adding a seventh reading — the six readings, the bands, the gate and the bay split are
- * unchanged either way.
+ * A facade this leaves with no rects at all (no grid repeats on it, or it is too narrow or short to repeat) may be read
+ * once more from an open-vocabulary segmenter's opening mask (SCRATCHBOX_K_WINDOW_SEGMENT, off by default: it bills per
+ * call): maskWindows keeps only the openings the photo confirms, their repeats, and a window column continued through
+ * photo that never reached it (generated). Beside the facade reader (pipeline-k/facade-reader.ts), only the facades its
+ * gates leave unread are offered (SegmentScope).
  */
 
 import { execFile } from 'child_process';
@@ -44,6 +45,7 @@ import * as path from 'path';
 import { decodePng } from '../../texture-processing';
 import { compileNativeCached, defaultNativeFlags, NativeBuildError, placeCachedBinary } from '../native-build-cache';
 import { findTileRefineRepoRoot } from '../tile-refine-service';
+import { MASK_YES, type SegmentImage } from './facade-material-evidence';
 import { encodePng } from './png-encode';
 
 export const WINDOW_FIT_VERSION = 'window-fit/8';
@@ -105,7 +107,20 @@ export const WINDOW_FIT_PARAMS = {
     /** A pane is glass only when its mean colour lies at least this far (CIELAB) from the wall beside its window (panesUnlikeWall). */
     glassDeltaE: 12,
     /** Column pitch search range for the band split's smoothing (m), and the running-mean window it detrends with (m). */
-    pitchS: [1.5, 9.0] as [number, number], meanWindowM: 12.0
+    pitchS: [1.5, 9.0] as [number, number], meanWindowM: 12.0,
+    /**
+     * The opening-mask reading (maskWindows), for a facade the six readings left empty. A texel is opening evidence where
+     * its darkness reaches `evidence`. A seed is a part of the segmenter's mask the photo confirms: a run of evidence the
+     * mask covers, at least minWidthM x minHeightM, filling at least `fill` of the photo inside its box, darker by `contrast`
+     * than the wall on every side the photo reaches (sideM wide), and plainly darker there too: each such side at least
+     * `lumRatio` times its luminance (the darkness is relative to its surround, so on an evenly dark wall it reads noise).
+     * Its repeats are the photo's own runs of evidence passing the same tests at a seed's size (each side within
+     * `sizeRatio`), so a mask that outlined one window of a row still gives the row. A window column (an opening at least
+     * columnMinM tall, more than a storey) continues up and down its own width, stepM at a time, through photo that never
+     * reached it or that still reads as opening, until the photo shows wall (a step at least half reached and lighter than
+     * `evidence`), and is kept only to the last step the photo reaches that still shows it: generated. A photo with a side under minSidePx is enlarged for the segmenter (openingSegmenter).
+     */
+    mask: { evidence: 0.2, minWidthM: 0.5, minHeightM: 0.8, fill: 0.5, contrast: 0.06, lumRatio: 1.25, sideM: 0.4, sizeRatio: 1.33, columnMinM: 6.0, stepM: 0.8, minSidePx: 160 }
 };
 export type WindowFitParams = typeof WINDOW_FIT_PARAMS;
 
@@ -125,7 +140,7 @@ export interface FitFrame { pixel: number; orthoSMin: number; orthoTMax: number;
 export type WindowRect = [number, number, number, number];
 
 export interface WindowFitBand {
-    band: [number, number, number, number]; accepted: boolean; why?: string; grid?: 'facade' | 'band' | 'column'; kind?: Kind;
+    band: [number, number, number, number]; accepted: boolean; why?: string; grid?: 'facade' | 'band' | 'column' | 'mask'; kind?: Kind | 'mask';
     /** The band whose own grid this band read with (neither the facade's nor its own read), by index. */
     borrowedFrom?: number;
     /** A narrow face read as one window column (storeyColumn): storeys kept of storeys read. */
@@ -253,13 +268,6 @@ function otsuMask(dk: Darkness, valid: Uint8Array): Uint8Array {
     }
     const thr = at / 64, out = new Uint8Array(dk.D.length);
     for (let k = 0; k < out.length; k++) out[k] = valid[k] && dk.D[k] > thr ? 1 : 0;
-    return out;
-}
-
-/** The darkness mask widened by an opening mask from elsewhere (an open-vocabulary segmenter): either marking it is enough. */
-function unionMask(a: Uint8Array, b: Uint8Array, valid: Uint8Array): Uint8Array {
-    const out = new Uint8Array(a.length);
-    for (let k = 0; k < out.length; k++) out[k] = valid[k] && (a[k] || b[k]) ? 1 : 0;
     return out;
 }
 
@@ -839,6 +847,82 @@ export function storeyColumn(c: Ctx, band: Band, tPitchM: number): { rects: Wind
  * that reads lighter than its piers (glass mirroring the sky) or dark at random (blinds, an open sash) still sits on the
  * grid. Photo-inferred.
  */
+/** The 4-connected components of a binary mask: each one's box (x0, y0, x1, y1, exclusive) and pixel count. */
+function components(m: Uint8Array, W: number, H: number): Array<{ rect: WindowRect; n: number }> {
+    const seen = new Uint8Array(W * H), out: Array<{ rect: WindowRect; n: number }> = [], stack: number[] = [];
+    for (let k = 0; k < W * H; k++) {
+        if (!m[k] || seen[k]) continue;
+        let x0 = W, y0 = H, x1 = -1, y1 = -1, n = 0;
+        seen[k] = 1; stack.push(k);
+        while (stack.length) {
+            const j = stack.pop()!, x = j % W, y = (j - x) / W;
+            n++; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+            const next = [x > 0 ? j - 1 : -1, x < W - 1 ? j + 1 : -1, y > 0 ? j - W : -1, y < H - 1 ? j + W : -1];
+            for (const q of next) if (q >= 0 && m[q] && !seen[q]) { seen[q] = 1; stack.push(q); }
+        }
+        out.push({ rect: [x0, y0, x1 + 1, y1 + 1], n });
+    }
+    return out;
+}
+
+/**
+ * The opening-mask reading: a facade's windows from an open-vocabulary segmenter's mask (1 = an opening), kept only where
+ * the photo confirms them, for a facade the six readings left empty (no grid repeats on it, or it is too narrow or too
+ * short to repeat). The mask is never trusted alone: it proposes, the photo decides (P.mask). Seeds are the mask's runs of
+ * photo darkness that read as openings; their repeats are the photo's own runs at a seed's size. A mask the photo does
+ * not confirm anywhere (a segmenter outlining a blank or evenly dark wall) gives no windows, and says why.
+ */
+export function maskWindows(img: { rgba: ArrayLike<number>; width: number; height: number }, uncovered: ArrayLike<number> | undefined, f: FitFrame, openingMask: Uint8Array, P: WindowFitParams = WINDOW_FIT_PARAMS): WindowFit & { seeds: number; repeats: number } {
+    const W = img.width, H = img.height, px = f.pixel, M = P.mask;
+    const { dk, valid } = Darkness.of(img, uncovered, px);
+    const evidence = new Uint8Array(W * H), proposed = new Uint8Array(W * H), lum = new Float64Array(W * H);
+    for (let k = 0; k < W * H; k++) {
+        evidence[k] = valid[k] && dk.D[k] >= M.evidence ? 1 : 0; proposed[k] = evidence[k] && openingMask[k] ? 1 : 0;
+        lum[k] = 0.2126 * img.rgba[k * 4] + 0.7152 * img.rgba[k * 4 + 1] + 0.0722 * img.rgba[k * 4 + 2];
+    }
+    // the photo inside a box: how much of it is reached, and its mean luminance there
+    const photo = (x0: number, x1: number, y0: number, y1: number) => {
+        let n = 0, s = 0;
+        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const k = y * W + x; if (valid[k]) { n++; s += lum[k]; } }
+        return { reached: n, share: n / Math.max(1, (x1 - x0) * (y1 - y0)), lum: n ? s / n : NaN };
+    };
+    const side = Math.max(2, Math.round(M.sideM / px));
+    const reads = ({ rect: [x0, y0, x1, y1], n }: { rect: WindowRect; n: number }): boolean => {
+        const w = x1 - x0, h = y1 - y0, inner = photo(x0, x1, y0, y1);
+        if (w * px < M.minWidthM || h * px < M.minHeightM || n < M.fill * inner.reached) return false;
+        const inside = dk.boxMean(x0, x1, y0, y1);
+        const sides: Array<[number, number, number, number]> = [[x0 - side, x0, y0, y1], [x1, x1 + side, y0, y1], [x0, x1, y0 - side, y0], [x0, x1, y1, y1 + side]];
+        const judged = sides.map(([a0, a1, b0, b1]) => [Math.max(0, a0), Math.min(W, a1), Math.max(0, b0), Math.min(H, b1)] as const)
+            .filter(([a0, a1, b0, b1]) => a1 > a0 && b1 > b0 && dk.finiteShare(a0, a1, b0, b1) >= 0.5);
+        return judged.length > 0 && judged.every(([a0, a1, b0, b1]) => inside - dk.boxMean(a0, a1, b0, b1) >= M.contrast && photo(a0, a1, b0, b1).lum >= M.lumRatio * inner.lum);
+    };
+    const seeds = components(proposed, W, H).filter(reads).map(c => c.rect);
+    const near = (a: number, b: number) => Math.max(a, b) <= M.sizeRatio * Math.min(a, b);
+    const repeats = seeds.length ? components(evidence, W, H).filter(c => {
+        const [x0, y0, x1, y1] = c.rect;
+        return seeds.some(s => near(x1 - x0, s[2] - s[0]) && near(y1 - y0, s[3] - s[1])) && !seeds.some(s => boxesIou(s, c.rect) > 0.3) && reads(c);
+    }).map(c => c.rect) : [];
+    // a window column continued through photo that never reached it, or still reads as opening, to where the wall shows
+    const found = [...seeds, ...repeats];
+    const generated: WindowRect[] = [];
+    const step = Math.max(1, Math.round(M.stepM / px));
+    const taken = (x0: number, x1: number, y0: number, y1: number) => [...found, ...generated].some(r => r[0] < x1 && r[2] > x0 && r[1] < y1 && r[3] > y0);
+    const wall = (x0: number, x1: number, y0: number, y1: number) => photo(x0, x1, y0, y1).share >= 0.5 && dk.boxMean(x0, x1, y0, y1) < M.evidence;
+    // only as far as the last step the photo reaches and still shows the column: unreached photo with nothing beyond it is no column
+    const shown = (x0: number, x1: number, y0: number, y1: number) => photo(x0, x1, y0, y1).share >= 0.5;
+    for (const [x0, y0, x1, y1] of found.filter(r => (r[3] - r[1]) * px >= M.columnMinM)) {
+        let down = y1, downShown = y1;
+        while (down < H && !wall(x0, x1, down, Math.min(H, down + step)) && !taken(x0, x1, down, Math.min(H, down + step))) { const next = Math.min(H, down + step); if (shown(x0, x1, down, next)) downShown = next; down = next; }
+        if (downShown > y1) generated.push([x0, y1, x1, downShown]);
+        let up = y0, upShown = y0;
+        while (up > 0 && !wall(x0, x1, Math.max(0, up - step), up) && !taken(x0, x1, Math.max(0, up - step), up)) { const next = Math.max(0, up - step); if (shown(x0, x1, next, up)) upShown = next; up = next; }
+        if (upShown < y0) generated.push([x0, upShown, x1, y0]);
+    }
+    const rects = [...found, ...generated].sort(cmpRect);
+    const band: WindowFitBand = { band: [0, W, 0, H], accepted: rects.length > 0, grid: 'mask', kind: 'mask', ...(generated.length ? { generated: generated.length } : {}), ...(rects.length ? {} : { why: 'the photo confirms none of the mask' }) };
+    return { rects, panes: found.sort(cmpRect), bands: [band], ...(generated.length ? { generated: generated.sort(cmpRect) } : {}), seeds: seeds.length, repeats: repeats.length };
+}
+
 export function completeLattice(img: { rgba: ArrayLike<number>; width: number; height: number }, valid: Uint8Array, rects: WindowRect[], band: Band, P: WindowFitParams = WINDOW_FIT_PARAMS, grid: WindowRect[] = rects): { rects: WindowRect[]; added: number; stone: number; generated: WindowRect[] } {
     const C = P.complete;
     if (grid.length < 4) return { rects, added: 0, stone: 0, generated: [] };
@@ -1026,17 +1110,12 @@ function maskIou(rects: WindowRect[], band: Band, W: number, H: number, ref: Uin
 
 const usable = (g: ReliefGrid | undefined): g is ReliefGrid => !!g && g.periodS.found && g.periodT.found && g.cell.foundS && g.cell.foundT;
 
-/**
- * Fits one facade's windows from its straightened photo (rgba), its uncovered mask (1 = the photo did not reach) and frame.
- * `openingMask` (same W x H pixels, 1 = an opening), when given, widens the darkness-only mask every candidate is scored
- * against (unionMask): evidence from elsewhere (an open-vocabulary segmenter) rather than a second detector, since the
- * six readings, the bands, the gate and the bay split are otherwise unchanged.
- */
-export async function fitFacadeWindows(img: { rgba: ArrayLike<number>; width: number; height: number }, uncovered: ArrayLike<number> | undefined, f: FitFrame, relief: ReliefRunner, openingMask: Uint8Array | undefined, P: WindowFitParams = WINDOW_FIT_PARAMS): Promise<WindowFit> {
+/** Fits one facade's windows from its straightened photo (rgba), its uncovered mask (1 = the photo did not reach) and frame. */
+export async function fitFacadeWindows(img: { rgba: ArrayLike<number>; width: number; height: number }, uncovered: ArrayLike<number> | undefined, f: FitFrame, relief: ReliefRunner, P: WindowFitParams = WINDOW_FIT_PARAMS): Promise<WindowFit> {
     const W = img.width, H = img.height, px = f.pixel;
     const { dk, valid } = Darkness.of(img, uncovered, px);
     const c: Ctx = { f, dk, P };
-    const dark = openingMask && openingMask.length === W * H ? unionMask(otsuMask(dk, valid), openingMask, valid) : otsuMask(dk, valid);
+    const dark = otsuMask(dk, valid);
     lateralEvidence(dk, valid, dark, px, P);
     // bands: change points of the darkness along the wall (columns as vectors of 1 m row sums), then up it within each
     const colMean = dk.colMeans(0, W, 0, H);
@@ -1233,14 +1312,65 @@ export function nativeRelief(bin: string, png: string, mask: string | undefined,
 /** window_fit.json beside the orthos: per facade its windows in photo pixels and UVs, and its bands' decisions. */
 /**
  * Asks an open-vocabulary segmenter for a facade photo's opening mask (1 = a window or door, same W x H pixels as the
- * photo), or undefined when it found none. Only called for the band of one storey gets nothing; the no-pattern tail
- * (the structural fit's own rects came back empty); never a second detector run on every facade.
+ * photo), or undefined when it found none. Called only for the no-pattern tail (a facade whose structural fit came back
+ * with no rects), never as a second detector on every facade.
  */
 export type SegmentOpeningMask = (pngPath: string, width: number, height: number, signal?: AbortSignal) => Promise<Uint8Array | undefined>;
 
+/**
+ * A facade photo's opening mask from an open-vocabulary segmenter (a SegmentImage): "a window opening" and "a door
+ * opening", either marking a texel enough. A photo whose short side is under minSidePx is enlarged by a whole factor
+ * (nearest) before the call and its mask taken back by majority: on facade 63 of the ESB, 43 x 712 px, the model found the
+ * windows on 1 call in 4 at its own size, on 4 in 4 enlarged four times.
+ */
+export function openingSegmenter(segment: SegmentImage, minSidePx = WINDOW_FIT_PARAMS.mask.minSidePx): SegmentOpeningMask {
+    return async (pngPath, width, height, signal) => {
+        const s = Math.max(1, Math.ceil(minSidePx / Math.min(width, height)));
+        let png: Buffer = fs.readFileSync(pngPath);
+        const W = width * s, H = height * s;
+        if (s > 1) {
+            const src = decodePng(png), big = Buffer.alloc(W * H * 4);
+            for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const k = (Math.floor(y / s) * width + Math.floor(x / s)) * 4; big.set(src.rgba.subarray(k, k + 4), (y * W + x) * 4); }
+            png = encodePng(W, H, big, 4);
+        }
+        const [win, door] = await Promise.all(['a window opening', 'a door opening'].map(t => segment(png, W, H, t, signal)));
+        if (!win.mask && !door.mask) return undefined;
+        const out = new Uint8Array(width * height);
+        for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+            let n = 0;
+            for (let dy = 0; dy < s; dy++) for (let dx = 0; dx < s; dx++) { const k = (y * s + dy) * W + x * s + dx; if (win.mask?.[k] === MASK_YES || door.mask?.[k] === MASK_YES) n++; }
+            out[y * width + x] = 2 * n >= s * s ? 1 : 0;
+        }
+        return out;
+    };
+}
+
+/**
+ * What the segmenter did for one no-pattern facade: `assisted` (the photo confirmed `seeds` of its openings, found
+ * `repeats` of them and continued `generated` window columns), `no-windows` (it marked `openingShare` of the photo and the
+ * photo confirmed none of it), `not-found` (it marked nothing) or `failed` (the call threw: `error`).
+ */
+export interface SegmentTry { outcome: 'assisted' | 'no-windows' | 'not-found' | 'failed'; openingShare?: number; seeds?: number; repeats?: number; generated?: number; error?: string; ms: number }
+/** The segmenter tries' record; a window_fit.json written with another (or none) is fitted again when the segmenter is on. */
+export const SEGMENT_TRY_VERSION = 'segment-try/2';
+
+/**
+ * Which of the empty facades the segmenter is offered, when another reader covers the rest (pipeline-k/facade-reader.ts
+ * reads every plane its gates admit and replaces the window fit's openings there, so offering those too would only double
+ * the calls). `key` names the rule in window_fit.json's cache key, so a changed rule fits again.
+ */
+export interface SegmentScope { key: string; includes: (plane: { facadeId: number; widthM: number; heightM: number; coverage: number }) => boolean }
+
 export interface WindowFitFile {
-    version: string; params: WindowFitParams; /** An opening-mask segmenter (SCRATCHBOX_K_WINDOW_SEGMENT) assisted the no-pattern tail of this run. */ segment?: boolean; ms: number;
-    facades: Array<{ facadeId: number; width: number; height: number; rects: WindowRect[]; panes?: WindowRect[]; /** Windows continued into parts the photo never reached: generated. */ generated?: WindowRect[]; bands: WindowFitBand[]; /** This facade had no structural fit; an opening-mask segmenter's result is used instead. */ segmentAssisted?: boolean; ms: number } | { facadeId: number; error: string }>;
+    version: string; params: WindowFitParams; /** An opening-mask segmenter (SCRATCHBOX_K_WINDOW_SEGMENT) was offered the no-pattern tail of this run: the record's version (SEGMENT_TRY_VERSION). */ segment?: string; ms: number;
+    facades: Array<{ facadeId: number; width: number; height: number; rects: WindowRect[]; panes?: WindowRect[]; /** Windows continued into parts the photo never reached: generated. */ generated?: WindowRect[]; bands: WindowFitBand[]; /** The segmenter's try on a facade the structural fit left empty. */ segmentTry?: SegmentTry; ms: number } | { facadeId: number; error: string }>;
+}
+
+/** The segmenter's tries over a fit, counted by outcome, with the first few failures' messages. */
+export function segmentSummary(fit: WindowFitFile): { attempted: number; assisted: number; noWindows: number; notFound: number; failed: number; errors: string[] } {
+    const tries = fit.facades.flatMap(f => ('segmentTry' in f && f.segmentTry ? [f.segmentTry] : []));
+    const n = (o: SegmentTry['outcome']) => tries.filter(t => t.outcome === o).length;
+    return { attempted: tries.length, assisted: n('assisted'), noWindows: n('no-windows'), notFound: n('not-found'), failed: n('failed'), errors: [...new Set(tries.flatMap(t => (t.error ? [t.error] : [])))].slice(0, 3) };
 }
 export const WINDOW_FIT_FILE = 'window_fit.json';
 
@@ -1250,11 +1380,12 @@ export const WINDOW_FIT_FILE = 'window_fit.json';
  * several at a time; writes window_fit.json. A plane with no uncovered mask beside it (one pipeline K did not straighten)
  * has it read from its ortho: the texels the photo never reached are exact grey 128 or transparent.
  */
-export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency?: number; signal?: AbortSignal; params?: WindowFitParams; segment?: SegmentOpeningMask } = {}): Promise<{ file: string; fit: WindowFitFile; cached: boolean }> {
-    const file = path.join(orthosDir, WINDOW_FIT_FILE), P = opts.params ?? WINDOW_FIT_PARAMS, segmentOn = !!opts.segment;
+export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency?: number; signal?: AbortSignal; params?: WindowFitParams; segment?: SegmentOpeningMask; segmentScope?: SegmentScope } = {}): Promise<{ file: string; fit: WindowFitFile; cached: boolean }> {
+    const file = path.join(orthosDir, WINDOW_FIT_FILE), P = opts.params ?? WINDOW_FIT_PARAMS;
+    const segment = opts.segment ? `${SEGMENT_TRY_VERSION}${opts.segmentScope ? `:${opts.segmentScope.key}` : ''}` : undefined;
     if (fs.existsSync(file)) {
         const prior = JSON.parse(fs.readFileSync(file, 'utf8')) as WindowFitFile;
-        if (prior.version === WINDOW_FIT_VERSION && JSON.stringify(prior.params) === JSON.stringify(P) && !!prior.segment === segmentOn) return { file, fit: prior, cached: true };
+        if (prior.version === WINDOW_FIT_VERSION && JSON.stringify(prior.params) === JSON.stringify(P) && prior.segment === segment) return { file, fit: prior, cached: true };
     }
     const t0 = Date.now();
     const bin = await ensureReliefBandBinary();
@@ -1279,19 +1410,25 @@ export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency
                     maskFile = path.join(scratch, `${f.facadeId}_uncovered.png`);
                     fs.writeFileSync(maskFile, encodePng(img.width, img.height, Buffer.from(mask.map(v => (v ? 255 : 0))), 1));
                 }
-                let fit = await fitFacadeWindows({ rgba: img.rgba, width: img.width, height: img.height }, mask, f, nativeRelief(bin, png, maskFile, f, opts.signal), undefined, P);
-                // the structural fit found nothing at all (the no-pattern tail, docs/research/2026-10-27-sb-fenestra-window-fit-design.md
-                // section 1): ask the segmenter for an opening mask and re-score the same six readings against it, rather than a
-                // second detector
-                let segmentAssisted = false;
-                if (!fit.rects.length && opts.segment) {
-                    const openingMask = await opts.segment(png, img.width, img.height, opts.signal).catch(() => undefined);
-                    if (openingMask && openingMask.length === img.width * img.height) {
-                        const retried = await fitFacadeWindows({ rgba: img.rgba, width: img.width, height: img.height }, mask, f, nativeRelief(bin, png, maskFile, f, opts.signal), openingMask, P);
-                        if (retried.rects.length) { fit = retried; segmentAssisted = true; }
+                let fit = await fitFacadeWindows({ rgba: img.rgba, width: img.width, height: img.height }, mask, f, nativeRelief(bin, png, maskFile, f, opts.signal), P);
+                // the six readings found nothing (the no-pattern tail): the segmenter's opening mask, as far as the photo confirms it
+                let segmentTry: SegmentTry | undefined;
+                if (!fit.rects.length && opts.segment && (!opts.segmentScope || opts.segmentScope.includes({ facadeId: f.facadeId, widthM: img.width * f.pixel, heightM: img.height * f.pixel, coverage: f.coverage }))) {
+                    const ts = Date.now();
+                    let openingMask: Uint8Array | undefined, error: string | undefined;
+                    try { openingMask = await opts.segment(png, img.width, img.height, opts.signal); }
+                    catch (err) { if (opts.signal?.aborted) throw err; error = (err instanceof Error ? err.message : String(err)).slice(0, 300); }
+                    if (error !== undefined) segmentTry = { outcome: 'failed', error, ms: Date.now() - ts };
+                    else if (!openingMask || openingMask.length !== img.width * img.height) segmentTry = { outcome: 'not-found', ms: Date.now() - ts };
+                    else {
+                        let marked = 0; for (const v of openingMask) marked += v ? 1 : 0;
+                        const read = maskWindows({ rgba: img.rgba, width: img.width, height: img.height }, mask, f, openingMask, P);
+                        if (read.rects.length) fit = { rects: read.rects, panes: read.panes, bands: [...fit.bands, ...read.bands], ...(read.generated ? { generated: read.generated } : {}) };
+                        else fit = { ...fit, bands: [...fit.bands, ...read.bands] };
+                        segmentTry = { outcome: read.rects.length ? 'assisted' : 'no-windows', openingShare: Math.round((marked / openingMask.length) * 1000) / 1000, seeds: read.seeds, repeats: read.repeats, ...(read.generated ? { generated: read.generated.length } : {}), ms: Date.now() - ts };
                     }
                 }
-                out.push({ facadeId: f.facadeId, width: img.width, height: img.height, rects: fit.rects, panes: fit.panes, ...(fit.generated ? { generated: fit.generated } : {}), bands: fit.bands, ...(segmentAssisted ? { segmentAssisted: true } : {}), ms: Date.now() - t });
+                out.push({ facadeId: f.facadeId, width: img.width, height: img.height, rects: fit.rects, panes: fit.panes, ...(fit.generated ? { generated: fit.generated } : {}), bands: fit.bands, ...(segmentTry ? { segmentTry } : {}), ms: Date.now() - t });
             } catch (err) {
                 if (opts.signal?.aborted) throw err;
                 out.push({ facadeId: f.facadeId, error: err instanceof Error ? err.message : String(err) });
@@ -1301,7 +1438,7 @@ export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency
     try { await Promise.all(Array.from({ length: Math.max(1, opts.concurrency ?? Math.max(1, Math.min(8, os.cpus().length - 1))) }, worker)); }
     finally { fs.rmSync(scratch, { recursive: true, force: true }); }
     out.sort((a, b) => a.facadeId - b.facadeId);
-    const fit: WindowFitFile = { version: WINDOW_FIT_VERSION, params: P, ...(segmentOn ? { segment: true } : {}), ms: Date.now() - t0, facades: out };
+    const fit: WindowFitFile = { version: WINDOW_FIT_VERSION, params: P, ...(segment ? { segment } : {}), ms: Date.now() - t0, facades: out };
     fs.writeFileSync(file, JSON.stringify(fit));
     return { file, fit, cached: false };
 }

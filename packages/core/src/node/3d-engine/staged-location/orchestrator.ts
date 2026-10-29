@@ -88,7 +88,7 @@ import { districtEDetail, districtEDetailEnabled, DISTRICT_E_DETAIL_VERSION } fr
 import { describePolish, polishRemesh, REMESH_POLISH_VERSION } from './remesh-polish';
 import { remeshCleanupEnabled } from './remesh-cleanup';
 import { remeshOrientEnabled } from './remesh-orient';
-import { fittedPlanesOf, fittedWindowRects, fitWindowsForOrthos, WINDOW_FIT_FILE, WINDOW_FIT_VERSION, type SegmentOpeningMask, type WindowFitFile } from './window-fit';
+import { fittedPlanesOf, fittedWindowRects, fitWindowsForOrthos, openingSegmenter, segmentSummary, WINDOW_FIT_FILE, WINDOW_FIT_VERSION, type WindowFitFile } from './window-fit';
 import { readWallGrammar, WALL_GRAMMAR_FILE, WALL_GRAMMAR_VERSION } from './wall-grammar';
 import { buildWallSheets, WALL_SHEETS_VERSION } from './wall-sheets';
 import { decodePng as decodePngForGrammar } from '../../texture-processing';
@@ -174,7 +174,7 @@ import {
 import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../common/spatial/switch-location';
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
 import { palettesFromSurvey, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
-import { facadeMaterialsEnabled, gatherMaterialEvidence, MASK_YES, scanFacePlanes, segmenterTool, type MaterialEvidence, type SegmentImage } from './facade-material-evidence';
+import { facadeMaterialsEnabled, gatherMaterialEvidence, scanFacePlanes, segmenterTool, type MaterialEvidence, type SegmentImage } from './facade-material-evidence';
 import { gatherSelfRenderEvidence } from '../../spatial/specular-material-evidence';
 import { projectMaskedViewsToUv } from '../../spatial/specular-material-projection';
 import { bakeSpecularMaterials } from '../../spatial/specular-material-bake';
@@ -202,7 +202,7 @@ import { measureVisibleDefects, VISIBLE_DEFECTS_PARAMS } from './pipeline-k/visi
 import { TEXTURE_HARMONIZE_VERSION, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
 import { VIEW_RELIGHT_VERSION, viewRelightEnvParams } from './pipeline-k/view-relight';
 import { ROOF_SHADOW_VERSION, roofShadowAuditPng } from './pipeline-k/roof-shadow';
-import { FACADE_READER_MODEL, FACADE_READER_VERSION, mergeReadings, parseJudgement, parseReading, parseZones, readerPlanesOf, readPlanes, type FacadeAsk } from './pipeline-k/facade-reader';
+import { FACADE_READER_MODEL, FACADE_READER_PARAMS, FACADE_READER_VERSION, mergeReadings, parseJudgement, parseReading, parseZones, readerPlanesOf, readPlanes, type FacadeAsk } from './pipeline-k/facade-reader';
 import { PLANE_ORTHOS_VERSION, planeOrthos } from './pipeline-k/plane-orthos';
 import { shadowLiftQaPng } from './pipeline-k/shadow-lift-qa';
 import { describeMaterialRegions, MATERIAL_REGIONS_VERSION, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
@@ -3541,15 +3541,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 // the no-pattern tail only (window-fit.ts): an open-vocabulary mask of "window"/"door", opt-in since it
                                 // bills per call (docs/research/2026-10-27-sb-fenestra-window-fit-design.md, section 1, evidence 6)
                                 const windowSegmentOn = process.env.SCRATCHBOX_K_WINDOW_SEGMENT?.trim() === '1';
-                                const windowSegment: SegmentOpeningMask | undefined = windowSegmentOn ? async (pngPath, width, height, signal) => {
-                                    const segment = deps.textures?.segment ?? segmenterTool();
-                                    const png = fs.readFileSync(pngPath);
-                                    const [win, door] = await Promise.all([segment(png, width, height, 'a window opening', signal), segment(png, width, height, 'a door opening', signal)]);
-                                    if (!win.mask && !door.mask) return undefined;
-                                    const out = new Uint8Array(width * height);
-                                    for (let i = 0; i < out.length; i++) out[i] = (win.mask?.[i] === MASK_YES || door.mask?.[i] === MASK_YES) ? 1 : 0;
-                                    return out;
-                                } : undefined;
+                                const windowSegment = windowSegmentOn ? openingSegmenter(deps.textures?.segment ?? segmenterTool()) : undefined;
                                 // every plane of the building read by a vision agent and judged (pipeline-k/facade-reader.ts): the walls
                                 // tile_refine photographed and every other plane (roofs, terraces, the walls it did not analyse;
                                 // plane-orthos.ts); it needs only the photos, so it runs beside the window fit and is merged into its
@@ -3576,7 +3568,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                     // awaited after the window fit; a failure is handled there
                                     readerRun.catch(() => undefined);
                                 } else logStep('remesh.facadeRead', 'skipped');
-                                const wf = await timed('windowFit', () => fitWindowsForOrthos(k.orthosDir, { signal: io.signal, ...(windowSegment ? { segment: windowSegment } : {}) }));
+                                // with the reader on, the segmenter takes only the walls its gates leave unread (as readPlanes filters them:
+                                // shorter than minHeightM, narrower than minWallWidthM or under minCoverage covered); the reader would
+                                // replace the segmenter's windows on every other plane
+                                const RP = FACADE_READER_PARAMS;
+                                const segmentScope = windowSegment && readerOn ? { key: `beside-${FACADE_READER_VERSION}:${RP.minWallWidthM}/${RP.minHeightM}/${RP.minCoverage}`, includes: (p: { widthM: number; heightM: number; coverage: number }) => !(p.coverage >= RP.minCoverage && p.widthM >= RP.minWallWidthM && p.heightM >= RP.minHeightM) } : undefined;
+                                const wf = await timed('windowFit', () => fitWindowsForOrthos(k.orthosDir, { signal: io.signal, ...(windowSegment ? { segment: windowSegment } : {}), ...(segmentScope ? { segmentScope } : {}) }));
                                 windowFit = wf.file;
                                 if (readerRun) {
                                     try {
@@ -3610,9 +3607,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                     cache.writeRunNote(runId, 'pipeline_k_wall_grammar', { version: WALL_GRAMMAR_VERSION, failed: true, reason: errorMessage(err) });
                                 }
                                 const ok = wf.fit.facades.filter(f => !('error' in f)), failed = wf.fit.facades.filter(f => 'error' in f);
-                                const segmented = ok.filter(f => 'segmentAssisted' in f && f.segmentAssisted);
-                                cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, cached: wf.cached, segment: windowSegmentOn, ms: wf.fit.ms, facades: wf.fit.facades.map(f => ('error' in f ? f : { facadeId: f.facadeId, windows: f.rects.length, bands: f.bands.length, accepted: f.bands.filter(b => b.accepted).length, kinds: f.bands.filter(b => b.accepted).map(b => b.kind), ...(f.segmentAssisted ? { segmentAssisted: true } : {}), ms: f.ms })) });
-                                run.note(PROVENANCE.photoInferred, `window fit (${WINDOW_FIT_VERSION}): ${ok.reduce((a, f) => a + ('rects' in f ? f.rects.length : 0), 0)} windows on ${ok.filter(f => 'rects' in f && f.rects.length).length} of ${wf.fit.facades.length} facades${segmented.length ? `, ${segmented.length} of them only from an open-vocabulary mask of their photo (the structural fit found nothing)` : ''}${failed.length ? `; ${failed.length} facades not fitted (${failed.map(f => `${f.facadeId}: ${'error' in f ? f.error : ''}`).join('; ').slice(0, 300)}), opened by their bay rhythm instead` : ''}`);
+                                const seg = segmentSummary(wf.fit);
+                                cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, cached: wf.cached, segment: windowSegmentOn, ...(windowSegmentOn ? { segmentTries: seg, segmentScope: segmentScope?.key ?? 'every facade the fit left empty' } : {}), ms: wf.fit.ms, facades: wf.fit.facades.map(f => ('error' in f ? f : { facadeId: f.facadeId, windows: f.rects.length, bands: f.bands.length, accepted: f.bands.filter(b => b.accepted).length, kinds: f.bands.filter(b => b.accepted).map(b => b.kind), ...(f.segmentTry ? { segmentTry: f.segmentTry } : {}), ms: f.ms })) });
+                                const segNote = seg.attempted ? `; of the ${seg.attempted} facades the structural fit left empty, an open-vocabulary mask of their photo gave windows the photo confirms on ${seg.assisted}, openings the photo does not confirm on ${seg.noWindows}, and nothing on ${seg.notFound}${seg.failed ? `, and ${seg.failed} calls failed (${seg.errors.join('; ')})` : ''}` : '';
+                                run.note(PROVENANCE.photoInferred, `window fit (${WINDOW_FIT_VERSION}): ${ok.reduce((a, f) => a + ('rects' in f ? f.rects.length : 0), 0)} windows on ${ok.filter(f => 'rects' in f && f.rects.length).length} of ${wf.fit.facades.length} facades${segNote}${failed.length ? `; ${failed.length} facades not fitted (${failed.map(f => `${f.facadeId}: ${'error' in f ? f.error : ''}`).join('; ').slice(0, 300)}), opened by their bay rhythm instead` : ''}`);
                             } catch (err) {
                                 if (isAbort(err) || io.signal.aborted) throw err;
                                 cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, failed: true, reason: errorMessage(err) });

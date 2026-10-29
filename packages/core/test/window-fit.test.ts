@@ -19,7 +19,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { completeLattice, Darkness, ensureReliefBandBinary, storeyColumn, fitFacadeWindows, fittedPlanesOf, panesOfUnitCell, panesUnlikeWall, fittedWindowUvs, nativeRelief, panesOfStrip, WINDOW_FIT_PARAMS, type FitFrame, type ReliefGrid, type ReliefRunner, type WindowFitFile } from '../src/node/3d-engine/staged-location/window-fit';
+import { completeLattice, Darkness, ensureReliefBandBinary, storeyColumn, fitFacadeWindows, fittedPlanesOf, panesOfUnitCell, panesUnlikeWall, fittedWindowUvs, fitWindowsForOrthos, maskWindows, nativeRelief, openingSegmenter, panesOfStrip, segmentSummary, WINDOW_FIT_PARAMS, type FitFrame, type ReliefGrid, type ReliefRunner, type SegmentOpeningMask, type WindowFitFile } from '../src/node/3d-engine/staged-location/window-fit';
 
 const PX = 0.1, W = 300, H = 240; // a 30 x 24 m facade
 const frame: FitFrame = { pixel: PX, orthoSMin: 0, orthoTMax: 24, texel: 0.05 };
@@ -75,6 +75,103 @@ describe('the window fit', () => {
         expect(s.precision).toBeGreaterThan(0.9);
     });
 
+    it("counts the segmenter's tries on the no-pattern tail by outcome, failures with their messages", () => {
+        const empty = { width: 10, height: 10, rects: [], bands: [], ms: 0 };
+        const file: WindowFitFile = { version: 'test', params: {} as never, segment: 'segment-try/2', ms: 0, facades: [
+            { facadeId: 0, width: 10, height: 10, rects: [[1, 1, 3, 3]], bands: [], ms: 0 },
+            { facadeId: 1, ...empty, rects: [[1, 1, 3, 3]], segmentTry: { outcome: 'assisted', openingShare: 0.2, ms: 5 } },
+            { facadeId: 2, ...empty, segmentTry: { outcome: 'no-windows', openingShare: 0.01, ms: 5 } },
+            { facadeId: 3, ...empty, segmentTry: { outcome: 'not-found', ms: 5 } },
+            { facadeId: 4, ...empty, segmentTry: { outcome: 'failed', error: 'no vision model', ms: 1 } },
+            { facadeId: 5, ...empty, segmentTry: { outcome: 'failed', error: 'no vision model', ms: 1 } },
+            { facadeId: 6, error: 'relief_band failed' }
+        ] };
+        expect(segmentSummary(file)).toEqual({ attempted: 5, assisted: 1, noWindows: 1, notFound: 1, failed: 2, errors: ['no vision model'] });
+    });
+
+    describe('the opening-mask reading (a facade the six readings left empty)', () => {
+        const MW = 120, MH = 60, mf: FitFrame = { pixel: PX, orthoSMin: 0, orthoTMax: 6, texel: 0.05 };
+        /** A 12 x 6 m wall of `wall` grey with dark `win` windows 1.5 x 3 m at x 10, 50, 90 px, y 15. */
+        const row = (wall: number, win: number) => {
+            const rgba = new Uint8Array(MW * MH * 4);
+            for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
+                const v = [10, 50, 90].some(a => x >= a && x < a + 15) && y >= 15 && y < 45 ? win : wall;
+                rgba.set([v, v, v, 255], (y * MW + x) * 4);
+            }
+            return { rgba, width: MW, height: MH };
+        };
+        const outline = (x0: number, x1: number, y0: number, y1: number) => Uint8Array.from({ length: MW * MH }, (_, k) => ((k % MW) >= x0 && (k % MW) < x1 && Math.floor(k / MW) >= y0 && Math.floor(k / MW) < y1 ? 1 : 0));
+
+        it("keeps the openings the photo confirms and finds their repeats: a mask of one window gives the row's three", () => {
+            const r = maskWindows(row(170, 50), undefined, mf, outline(8, 27, 13, 47));
+            expect(r.seeds).toBe(1);
+            expect(r.repeats).toBe(2);
+            expect(r.rects).toEqual([[10, 15, 25, 45], [50, 15, 65, 45], [90, 15, 105, 45]]);
+            expect(r.bands[0]).toMatchObject({ accepted: true, grid: 'mask' });
+        });
+
+        it('gives a mask the photo does not confirm no windows: a blank wall, and an evenly dark wall', () => {
+            const blank = maskWindows(row(150, 150), undefined, mf, outline(0, 60, 0, 60));
+            expect(blank.rects).toEqual([]);
+            expect(blank.bands[0]).toMatchObject({ accepted: false, why: 'the photo confirms none of the mask' });
+            // on a wall this dark a small difference reads as darkness against its surround, but is no plainer than the wall
+            const dark = maskWindows(row(30, 26), undefined, mf, outline(8, 27, 13, 47));
+            expect(dark.rects).toEqual([]);
+        });
+
+        it('enlarges a thin photo for the segmenter and takes its mask back at the photo size, window or door', async () => {
+            // a 10 x 40 px photo: enlarged 16 times (short side to 160 px); the segmenter marks x 32-95 as a window and y 0-63
+            // as a door in the enlarged frame, i.e. photo columns 2-5 and rows 0-3
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opening-seg-')), file = path.join(dir, 'f.png');
+            fs.writeFileSync(file, encodePng(10, 40, Buffer.alloc(10 * 40 * 4, 200), 4));
+            const seen: Array<[number, number, string]> = [];
+            const seg = openingSegmenter(async (_png, w, h, target) => {
+                seen.push([w, h, target]);
+                const m = new Uint8Array(w * h);
+                for (let k = 0; k < m.length; k++) { const x = k % w, y = Math.floor(k / w); m[k] = (target.includes('window') ? x >= 32 && x < 96 : y < 64) ? 255 : 0; }
+                return { mask: m };
+            });
+            const out = (await seg(file, 10, 40))!;
+            expect(seen.map(s => s.slice(0, 2))).toEqual([[160, 640], [160, 640]]);
+            for (let y = 0; y < 40; y++) for (let x = 0; x < 10; x++) expect(out[y * 10 + x]).toBe((x >= 2 && x < 6) || y < 4 ? 1 : 0);
+            // neither target found: no mask
+            expect(await openingSegmenter(async () => ({ mask: null }))(file, 10, 40)).toBeUndefined();
+            fs.rmSync(dir, { recursive: true, force: true });
+        });
+
+        // a 3 x 30 m face: a dark column between light piers down to 26 m, light stone below; the photo reaches its top 10 m,
+        // misses the next `gap` rows, and reaches the rest
+        const columnFace = (gap: number) => {
+            const CW = 30, CH = 300, rgba = new Uint8Array(CW * CH * 4), uncovered = new Uint8Array(CW * CH);
+            for (let y = 0; y < CH; y++) for (let x = 0; x < CW; x++) {
+                const v = x >= 8 && x < 22 && y < 260 ? 60 : 180;
+                rgba.set([v, v, v, 255], (y * CW + x) * 4);
+                uncovered[y * CW + x] = y >= 100 && y < 100 + gap ? 1 : 0;
+            }
+            const mask = Uint8Array.from({ length: CW * CH }, (_, k) => ((k % CW) >= 6 && (k % CW) < 24 && Math.floor(k / CW) < 100 ? 1 : 0));
+            return maskWindows({ rgba, width: CW, height: CH }, uncovered, { pixel: PX, orthoSMin: 0, orthoTMax: 30, texel: 0.05 }, mask);
+        };
+
+        it('continues a window column through photo that never reached it to where the photo shows it again, labelled generated', () => {
+            // missed 12 m, then the photo shows the column for its last 4 m and the stone below it
+            const r = columnFace(120);
+            expect(r.seeds).toBe(1);
+            expect(r.panes).toEqual([[8, 0, 22, 100]]);
+            expect(r.generated).toHaveLength(1);
+            const [g] = r.generated!;
+            expect(g.slice(0, 3)).toEqual([8, 100, 22]);
+            expect(g[3]).toBeGreaterThanOrEqual(256);
+            expect(g[3]).toBeLessThanOrEqual(268);
+        });
+
+        it('does not continue a column into photo that never reached it when nothing beyond shows the column', () => {
+            // missed from 10 m to the foot: no step the photo reaches shows the column below its confirmed part
+            const r = columnFace(200);
+            expect(r.panes).toEqual([[8, 0, 22, 100]]);
+            expect(r.generated).toBeUndefined();
+        });
+    });
+
     it("hands the lattice each facade's windows in its photo's UVs", () => {
         const file: WindowFitFile = { version: 'test', params: {} as never, ms: 0, facades: [{ facadeId: 3, width: 200, height: 100, rects: [[20, 10, 60, 50]], bands: [], ms: 0 }, { facadeId: 4, error: 'relief_band failed' }, { facadeId: 6, width: 100, height: 100, rects: [], bands: [], ms: 0 }] };
         expect(fittedWindowUvs(file, 3)).toEqual([0.1, 0.1, 0.3, 0.5]);
@@ -123,6 +220,29 @@ describe('the window fit', () => {
         expect(g.periodS.pitch).toBeCloseTo(5.6, 0);
         expect(g.periodT.found).toBe(true);
         expect(g.periodT.pitch).toBeCloseTo(3.5, 0);
+    }, 600_000);
+
+    it('offers the segmenter only the empty facades its scope admits, and fits again when the scope changes', async () => {
+        // two blank walls, so the structural fit leaves both empty: a 12 x 30 m one and a 12 x 6 m strip; the scope admits
+        // walls under 10 m tall, as beside a reader that reads the rest
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'segment-scope-')), px = 0.1;
+        const facades = [{ facadeId: 1, h: 300 }, { facadeId: 2, h: 60 }].map(({ facadeId, h }) => {
+            const w = 120, image = `facade_${facadeId}.png`;
+            fs.writeFileSync(path.join(dir, image), encodePng(w, h, Buffer.alloc(w * h * 4, 170).map((v, k) => (k % 4 === 3 ? 255 : v)), 4));
+            return { facadeId, image, coverage: 1, pixel: px, orthoSMin: 0, orthoTMax: h * px, texel: 2 * px };
+        });
+        fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify({ facades }));
+        const asked: string[] = [];
+        const segment: SegmentOpeningMask = async png => { asked.push(path.basename(png)); return undefined; };
+        const short = { key: 'under-10m', includes: (p: { heightM: number }) => p.heightM < 10 };
+        const r = await fitWindowsForOrthos(dir, { segment, segmentScope: short, concurrency: 1 });
+        expect(asked).toEqual(['facade_2.png']);
+        const tries = r.fit.facades.map(f => ('error' in f ? 'error' : f.segmentTry?.outcome));
+        expect(tries).toEqual([undefined, 'not-found']);
+        // the same scope: the file stands; another scope: fitted again
+        expect((await fitWindowsForOrthos(dir, { segment, segmentScope: short })).cached).toBe(true);
+        expect((await fitWindowsForOrthos(dir, { segment, segmentScope: { key: 'all', includes: () => true } })).cached).toBe(false);
+        fs.rmSync(dir, { recursive: true, force: true });
     }, 600_000);
 
     it('reads every fitted plane with its frame, its windows and panes; a plane with no windows or a size mismatch is left out', () => {
