@@ -46,6 +46,7 @@ import { decodePng } from '../../texture-processing';
 import { compileNativeCached, defaultNativeFlags, NativeBuildError, placeCachedBinary } from '../native-build-cache';
 import { findTileRefineRepoRoot } from '../tile-refine-service';
 import { MASK_YES, type SegmentImage } from './facade-material-evidence';
+import { countSet, readOccluded, unreadMask } from './pipeline-k/occlusion';
 import { encodePng } from './png-encode';
 
 export const WINDOW_FIT_VERSION = 'window-fit/8';
@@ -1363,7 +1364,7 @@ export interface SegmentScope { key: string; includes: (plane: { facadeId: numbe
 
 export interface WindowFitFile {
     version: string; params: WindowFitParams; /** An opening-mask segmenter (SCRATCHBOX_K_WINDOW_SEGMENT) was offered the no-pattern tail of this run: the record's version (SEGMENT_TRY_VERSION). */ segment?: string; ms: number;
-    facades: Array<{ facadeId: number; width: number; height: number; rects: WindowRect[]; panes?: WindowRect[]; /** Windows continued into parts the photo never reached: generated. */ generated?: WindowRect[]; bands: WindowFitBand[]; /** The segmenter's try on a facade the structural fit left empty. */ segmentTry?: SegmentTry; ms: number } | { facadeId: number; error: string }>;
+    facades: Array<{ facadeId: number; width: number; height: number; rects: WindowRect[]; panes?: WindowRect[]; /** Windows continued into parts the photo never reached: generated. */ generated?: WindowRect[]; bands: WindowFitBand[]; /** The segmenter's try on a facade the structural fit left empty. */ segmentTry?: SegmentTry; /** Covered texels not read because something stood in front of them (pipeline-k/occlusion.ts). */ occludedTexels?: number; ms: number } | { facadeId: number; error: string }>;
 }
 
 /** The segmenter's tries over a fit, counted by outcome, with the first few failures' messages. */
@@ -1375,7 +1376,7 @@ export function segmentSummary(fit: WindowFitFile): { attempted: number; assiste
 export const WINDOW_FIT_FILE = 'window_fit.json';
 
 /** A facade of an orthos folder (facades.json) as the window fit reads it. */
-export type OrthoFacade = FitFrame & { facadeId: number; image: string; width: number; height: number; coverage: number; wallCoverage?: number; wallAreaM2?: number; uncoveredMask?: string };
+export type OrthoFacade = FitFrame & { facadeId: number; image: string; width: number; height: number; coverage: number; wallCoverage?: number; wallAreaM2?: number; uncoveredMask?: string; occludedMask?: string };
 /** One facade's entry in window_fit.json. */
 export type WindowFitEntry = WindowFitFile['facades'][number];
 
@@ -1384,12 +1385,21 @@ export function orthoFacades(orthosDir: string): OrthoFacade[] {
     return (JSON.parse(fs.readFileSync(path.join(orthosDir, 'facades.json'), 'utf8')).facades as OrthoFacade[]).filter(f => fs.existsSync(path.join(orthosDir, f.image)));
 }
 
-/** A facade's photo and where it never reached: its own uncovered mask, else the photo's empty and grey texels. */
-function facadePhoto(orthosDir: string, f: OrthoFacade): { img: ReturnType<typeof decodePng>; mask: Uint8Array; own: boolean } {
+/**
+ * A facade's photo and the texels not read in it: where it never reached (its own uncovered mask, else the photo's empty
+ * and grey texels) and where something stood in front of the facade when it was photographed (pipeline-k/occlusion.ts).
+ * `own`: the mask is the uncovered mask file as it is; `occluded`: the occluded texels the photo did reach, when any.
+ */
+function facadePhoto(orthosDir: string, f: OrthoFacade): { img: ReturnType<typeof decodePng>; mask: Uint8Array; own: boolean; occluded?: Uint8Array } {
     const img = decodePng(fs.readFileSync(path.join(orthosDir, f.image)));
     const maskFile = f.uncoveredMask ? path.join(orthosDir, f.uncoveredMask) : undefined;
-    if (maskFile && fs.existsSync(maskFile)) { const m = decodePng(fs.readFileSync(maskFile)); return { img, mask: Uint8Array.from({ length: m.width * m.height }, (_, k) => (m.rgba[k * 4] >= 128 ? 1 : 0)), own: true }; }
-    return { img, mask: Uint8Array.from({ length: img.width * img.height }, (_, k) => (img.rgba[k * 4 + 3] === 0 || (img.rgba[k * 4] === 128 && img.rgba[k * 4 + 1] === 128 && img.rgba[k * 4 + 2] === 128) ? 1 : 0)), own: false };
+    const fromFile = !!maskFile && fs.existsSync(maskFile);
+    const uncovered = fromFile ? (() => { const m = decodePng(fs.readFileSync(maskFile!)); return Uint8Array.from({ length: m.width * m.height }, (_, k) => (m.rgba[k * 4] >= 128 ? 1 : 0)); })()
+        : Uint8Array.from({ length: img.width * img.height }, (_, k) => (img.rgba[k * 4 + 3] === 0 || (img.rgba[k * 4] === 128 && img.rgba[k * 4 + 1] === 128 && img.rgba[k * 4 + 2] === 128) ? 1 : 0));
+    const occ = readOccluded(orthosDir, f, img.width, img.height);
+    const occluded = occ ? occ.map((v, k) => (v && !uncovered[k] ? 1 : 0)) : undefined;
+    if (!occluded || !countSet(occluded)) return { img, mask: uncovered, own: fromFile };
+    return { img, mask: unreadMask(uncovered, occluded, uncovered.length), own: false, occluded };
 }
 
 /**
@@ -1408,11 +1418,12 @@ export async function fitOrthoFacades(orthosDir: string, facades: OrthoFacade[],
             if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('aborted');
             const t = Date.now(), png = path.join(orthosDir, f.image);
             try {
-                const { img, mask, own } = facadePhoto(orthosDir, f);
+                const { img, mask, own, occluded } = facadePhoto(orthosDir, f);
                 let maskFile = own ? path.join(orthosDir, f.uncoveredMask!) : undefined;
-                if (!maskFile) { maskFile = path.join(scratch, `${f.facadeId}_uncovered.png`); fs.writeFileSync(maskFile, encodePng(img.width, img.height, Buffer.from(mask.map(v => (v ? 255 : 0))), 1)); }
+                if (!maskFile) { maskFile = path.join(scratch, `${f.facadeId}_unread.png`); fs.writeFileSync(maskFile, encodePng(img.width, img.height, Buffer.from(mask.map(v => (v ? 255 : 0))), 1)); }
                 const fit = await fitFacadeWindows({ rgba: img.rgba, width: img.width, height: img.height }, mask, f, nativeRelief(bin, png, maskFile, f, opts.signal), P);
-                out.push({ facadeId: f.facadeId, width: img.width, height: img.height, rects: fit.rects, panes: fit.panes, ...(fit.generated ? { generated: fit.generated } : {}), bands: fit.bands, ms: Date.now() - t });
+                const occludedRead = occluded ? countSet(occluded) : 0;
+                out.push({ facadeId: f.facadeId, width: img.width, height: img.height, rects: fit.rects, panes: fit.panes, ...(fit.generated ? { generated: fit.generated } : {}), bands: fit.bands, ...(occludedRead ? { occludedTexels: occludedRead } : {}), ms: Date.now() - t });
             } catch (err) {
                 if (opts.signal?.aborted) throw err;
                 out.push({ facadeId: f.facadeId, error: err instanceof Error ? err.message : String(err) });
@@ -1469,7 +1480,7 @@ export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency
                     else fit = { ...fit, bands: [...fit.bands, ...read.bands] };
                     segmentTry = { outcome: read.rects.length ? 'assisted' : 'no-windows', openingShare: Math.round((marked / openingMask.length) * 1000) / 1000, seeds: read.seeds, repeats: read.repeats, ...(read.generated ? { generated: read.generated.length } : {}), ms: Date.now() - ts };
                 }
-                out[item.k] = { facadeId: e.facadeId, width: e.width, height: e.height, rects: fit.rects, panes: fit.panes, ...(fit.generated ? { generated: fit.generated } : {}), bands: fit.bands, segmentTry, ms: e.ms + (Date.now() - ts) };
+                out[item.k] = { facadeId: e.facadeId, width: e.width, height: e.height, rects: fit.rects, panes: fit.panes, ...(fit.generated ? { generated: fit.generated } : {}), bands: fit.bands, segmentTry, ...(e.occludedTexels ? { occludedTexels: e.occludedTexels } : {}), ms: e.ms + (Date.now() - ts) };
             }
         };
         await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, tail.length)) }, worker));

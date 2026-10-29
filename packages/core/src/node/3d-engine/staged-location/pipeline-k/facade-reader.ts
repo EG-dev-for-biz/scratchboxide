@@ -47,6 +47,7 @@ import { encodePng } from '../png-encode';
 import type { FitFrame, FittedPlane, WindowFitFile, WindowRect } from '../window-fit';
 import { contactSheet, contextFor, parseBrief, briefPrompt, planePlaces, type BuildingBrief, type NamedBuilding, type PlaneFamily } from './facade-reader-brief';
 import { exemplarOf, matchExemplar, mergeMatches, TEMPLATE_PARAMS, type TemplateMatch, type WindowExemplar } from './facade-reader-template';
+import { readOccluded, unreadMask } from './occlusion';
 import { PLANES_FILE, type PlaneOrthosFile } from './plane-orthos';
 
 export const FACADE_READER_VERSION = 'facade-reader/10';
@@ -380,7 +381,7 @@ export function tileZone(L: Float32Array, W: number, zone: ImageRegion, crop: Im
 
 // ------------------------------------------------------------------------------------------------ one plane, all planes
 
-type FacadeFrame = FitFrame & { facadeId: number; image: string; coverage: number; uncoveredMask?: string; width: number; height: number; kind?: string };
+type FacadeFrame = FitFrame & { facadeId: number; image: string; coverage: number; uncoveredMask?: string; occludedMask?: string; width: number; height: number; kind?: string };
 
 const round2 = (r: WindowRect): WindowRect => r.map(v => Math.round(v * 100) / 100) as WindowRect;
 
@@ -669,6 +670,9 @@ export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { sign
                 let uncovered: Uint8Array | undefined;
                 const mf = f.uncoveredMask ? path.join(orthosDir, f.uncoveredMask) : undefined;
                 if (mf && fs.existsSync(mf)) { const m = decodePng(fs.readFileSync(mf)); uncovered = Uint8Array.from({ length: m.width * m.height }, (_, k) => (m.rgba[k * 4] >= 128 ? 1 : 0)); }
+                // what stood in front of the facade when it was photographed is greyed out of the crops and not tiled from (occlusion.ts)
+                const occluded = readOccluded(orthosDir, f, d.width, d.height);
+                if (occluded) uncovered = unreadMask(uncovered, occluded, d.width * d.height);
                 const img = { rgba: d.rgba, width: d.width, height: d.height }, review = (png: Buffer, tag: string) => fs.writeFileSync(path.join(reviewDir, `${f.facadeId}_${tag}.png`), png);
                 let r: { record: FacadeReadRecord; rects?: WindowRect[]; panes?: WindowRect[]; glass?: Array<{ region: ImageRegion; glass: GlassReading }>; exemplars?: WindowExemplar[] } | undefined;
                 if (P.template && st && fam && !isLead) {

@@ -3547,9 +3547,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 };
                 // the facades' orthophotos for the grammar reading (facade-grammar.ts), only when it will run; pipeline K: the relief
                 // carves nothing in the scan (its window recesses are carved on the rebuilt facades, from the straightened photos)
-                const orthos = grammarOn || pipelineK ? { reliefOrthos: true, ...(pipelineK ? { reliefCarve: false, reliefAnalyse: false } : {}) } : {};
+                // pipeline K: an occlusion mask beside each ortho (what stood in front of the facade when it was photographed),
+                // cast against the scan before the tree strip took its crowns out, else the scan as loaded
+                const occlusionOn = pipelineK && stepOn('remesh.occlusion', process.env.SCRATCHBOX_K_OCCLUSION?.trim() !== '0');
+                const occlusion = occlusionOn ? { reliefOcclusion: tilePath !== extraction.texturedGlb ? extraction.texturedGlb : true } : {};
+                const orthos = grammarOn || pipelineK ? { reliefOrthos: true, ...(pipelineK ? { reliefCarve: false, reliefAnalyse: false, ...occlusion } : {}) } : {};
                 if (isolateMode && request.procedural !== true && deps.refine.renderOwnershipViews && visionAvailable) voteLater = { tilePath, ...(isolatePick ? { isolatePick } : {}), ...(remeshPick ? { pick: remeshPick } : {}), request: remeshRequest, orthos };
                 let r = await timed('tileRefine', () => deps.refine.refine({ ...remeshRequest!, ...orthos }));
+                logStep('remesh.occlusion', occlusionOn ? 'done' : 'skipped');
                 // the model after each step that changed it, for the node graph (published once the layer is committed)
                 const stepFiles: Array<[string, string]> = [['remesh.tileRefine', r.texturedGlb ?? r.clayGlb]];
                 // the isolated structure must be the one picked; when it is not (or tile_refine wrote no isolated scan to
