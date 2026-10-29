@@ -29,7 +29,7 @@
 
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor, type ParsedGlb } from './glb-bytes';
 
-export const REMESH_CLEANUP_VERSION = 'remesh-cleanup/2';
+export const REMESH_CLEANUP_VERSION = 'remesh-cleanup/3';
 
 /** On unless SCRATCHBOX_STAGED_REMESH_CLEANUP=0. */
 export function remeshCleanupEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -48,8 +48,11 @@ export const REMESH_CLEANUP_PARAMS = {
     /** Positions within this are one vertex (m). */
     weldM: 0.001,
     /** Spikes: flagged above this many robust deviations of the two-ring's Laplacian (0 turns the pass off); spikeSteps
-     *  steps of spikeLambda x the Laplacian on the flagged vertices only; no spike moves further than spikeMaxShiftM (m). */
-    spikeK: 4, spikeLambda: 0.6, spikeSteps: 4, spikeMaxShiftM: 3
+     *  steps of spikeLambda x the Laplacian on the flagged vertices only; no spike moves further than spikeMaxShiftM (m).
+     *  Off by default: on the Empire State Building it moved 180 vertices, up to the cap, on thin real features, and the
+     *  photos stretched over them (untextured 0.24% -> 0.35%, smears 0.09% -> 0.19%). It needs a texture-stretch guard
+     *  and an outside check before and after before it comes back on. */
+    spikeK: 0, spikeLambda: 0.6, spikeSteps: 4, spikeMaxShiftM: 3
 };
 
 export interface RemeshCleanupStats {

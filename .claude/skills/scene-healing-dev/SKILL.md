@@ -19,7 +19,7 @@ read it first. This file maps it onto the codebase.
 | Hole fill (shortest-closing-edge ears, envelope guard, refused caps, covered-by-wall drop) | `pipeline-k/lattice-stitch.ts` `fillOpenLoops` | done |
 | Inside-out turning | `remesh-orient.ts` | done |
 | Outside check (clay, holes, smears by node, 12 views) | `pipeline-k/visible-defects.ts` | done; pipeline K only |
-| Spike filter | `remesh-cleanup.ts` `spikeEdits` (before the bilateral smoothing, which now filters from the corrected positions) | done (uncommitted): cotangent Laplacian over mean edge length, flagged at median + 4 x 1.4826 x MAD of the two-ring and only at the tip, pulled back 4 x 0.6 toward fixed neighbours, at most 3 m; `remesh-cleanup/2` |
+| Spike filter | `remesh-cleanup.ts` `spikeEdits` | built, **off by default** (`spikeK: 0`, `remesh-cleanup/3`): on the ESB it moved 180 vertices up to its 3 m cap on thin real features and stretched the photos (untextured 0.24% -> 0.35%, smears 0.09% -> 0.19%). Before turning it on: a texture-stretch guard (no move that stretches a textured triangle's mapping), a cap within the scan's error, and the outside check before and after |
 | Overlap trim between pieces | `TileSeamWeld::trimOverlaps` (seam stage) | partial: drops only triangles wholly over a lower piece; most overlap strips are crossed by larger, partly covered triangles (needs a cut along the other piece's rim) |
 | Step / groove blend | — | missing |
 | Per-piece colour levelling across seams | `texture-harmonize.ts` (building photos only) | missing for tiles |
