@@ -88,11 +88,11 @@ import { districtEDetail, districtEDetailEnabled, DISTRICT_E_DETAIL_VERSION } fr
 import { describePolish, polishRemesh, REMESH_POLISH_VERSION } from './remesh-polish';
 import { remeshCleanupEnabled } from './remesh-cleanup';
 import { remeshOrientEnabled } from './remesh-orient';
-import { fittedPlanesOf, fittedWindowRects, fitWindowsForOrthos, WINDOW_FIT_FILE, WINDOW_FIT_VERSION, type WindowFitFile } from './window-fit';
+import { fittedPlanesOf, fittedWindowRects, fitWindowsForOrthos, WINDOW_FIT_FILE, WINDOW_FIT_VERSION, type SegmentOpeningMask, type WindowFitFile } from './window-fit';
 import { readWallGrammar, WALL_GRAMMAR_FILE, WALL_GRAMMAR_VERSION } from './wall-grammar';
 import { buildWallSheets, WALL_SHEETS_VERSION } from './wall-sheets';
 import { decodePng as decodePngForGrammar } from '../../texture-processing';
-import { weldTilesGlb, WELD_TILES_VERSION } from './weld-tiles';
+import { TILE_SEAMS_VERSION, type TileSeamWeldRequest, type TileSeamWeldResult } from '../tile-seam-weld-service';
 import { measureRevealDepth, REVEAL_DEPTH_VERSION, type RevealFacade, type RevealView } from './reveal-depth';
 import { streetViewClayScore } from './streetview-clay-score';
 import { decodeJpegInMemory } from './photo-palette';
@@ -174,7 +174,7 @@ import {
 import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../common/spatial/switch-location';
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
 import { palettesFromSurvey, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
-import { facadeMaterialsEnabled, gatherMaterialEvidence, scanFacePlanes, segmenterTool, type MaterialEvidence, type SegmentImage } from './facade-material-evidence';
+import { facadeMaterialsEnabled, gatherMaterialEvidence, MASK_YES, scanFacePlanes, segmenterTool, type MaterialEvidence, type SegmentImage } from './facade-material-evidence';
 import { gatherSelfRenderEvidence } from '../../spatial/specular-material-evidence';
 import { projectMaskedViewsToUv } from '../../spatial/specular-material-projection';
 import { bakeSpecularMaterials } from '../../spatial/specular-material-bake';
@@ -200,6 +200,7 @@ import { chunkCpuShare, chunkOwner, chunkParallel, chunkTerritory, DISTRICT_CHUN
 import { addSeamEdges, applySeamGain, cutChunkGround, DISTRICT_SEAMS_PARAMS, DISTRICT_SEAMS_VERSION, sampleSeamColour, seamCoverage, seamOwner, solveSeamGains, type SeamCoverage, type SeamCutReport, type SeamEdges, type SeamSamples } from './pipeline-k/district-seams';
 import * as os from 'os';
 import { PARTY_WALL_TEXTURE_VERSION, texturePartyWall } from './pipeline-k/party-wall-texture';
+import { detailBakeProvenance, TILE_DETAIL_BAKE_VERSION, type TileDetailBakeReport } from '../../spatial/tile-detail-bake';
 import { measureVisibleDefects, VISIBLE_DEFECTS_PARAMS } from './pipeline-k/visible-defects';
 import { TEXTURE_HARMONIZE_VERSION, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
 import { describeMaterialRegions, MATERIAL_REGIONS_VERSION, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
@@ -533,6 +534,12 @@ export interface StagedLocationDeps {
      * stand-in deps leave it out, so their vision replies are not asked about vehicles.
      */
     vehicleRemoval?: boolean;
+    /**
+     * The tile seam stage (tile-seam-weld-service.ts runTileSeamWeld): the extraction's seams closed as it arrives, and
+     * every later stage reads the welded scan. The app's deps provide it; stand-in deps leave it out (the raw extraction is
+     * used and the run says so).
+     */
+    tileSeams?(req: TileSeamWeldRequest): Promise<TileSeamWeldResult>;
     /** Google Solar API roof facets of the building closest to (lat, lng) (pipeline E's massing); absent without a key. */
     solarRoof?(lat: number, lng: number): Promise<SolarRoof>;
     /**
@@ -553,7 +560,11 @@ export interface StagedLocationDeps {
     /** Search-grounded reference images (search-grounded-reference.ts; the bridges' detail): a client with the image models; absent = none. */
     groundedReferences?: () => Promise<GroundedReferenceClient>;
     /** Pipeline K's material regions: one texture library set per appearance class (pipeline-k/material-sets.ts); absent = the stage is not run (tests, stand-in deps). */
-    pipelineK?: { materialSets?: (classes: RegionClass[], opts: { signal?: AbortSignal; progress?: (m: string) => void }) => Promise<RegionSet[]> };
+    pipelineK?: {
+        materialSets?: (classes: RegionClass[], opts: { signal?: AbortSignal; progress?: (m: string) => void }) => Promise<RegionSet[]>;
+        /** The swatch detail bake (tile-detail-bake.ts): the building's survey swatches harvested from the tiles, baked into the twin's atlases. */
+        detailBake?: (input: { glb: Uint8Array; tilesGlb: string; lat: number; lng: number; place: string; workDir: string; signal: AbortSignal; progress: (m: string) => void }) => Promise<{ glb: Buffer; report: TileDetailBakeReport }>;
+    };
     textures?: {
         enhance?: EnhanceModelClient; enhanceModels?: string[]; maxDensityTexelsPerMeter?: number; maxSide?: number; disabled?: string;
         /** 'recreate' (default) removes the tile transfer's own baked shadow/highlight and recovers the material's true colour, gated on structure and hue/chroma; 'sharpen' is the earlier, lighting-locked mode. See texture-enhance.ts. */
@@ -1973,25 +1984,44 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const x = await extractCached(radiusM, io, chunkRect);
                     value = { extraction: x.extraction, key: x.key, sizedTo: radiusM > baseRadiusM ? 'district-containment' : 'request', rounds: 1, cached: x.cached, builtAtMs: x.builtAtMs };
                 }
-                // L1: the extraction as downloaded, geometry only, with the run's fixed camera
+                // the tile seams closed as the extraction arrives (tile-seam-weld-service.ts: overlaps trimmed, positions welded,
+                // T-junctions split), cached beside it; every later stage reads the welded scan, the raw extraction stays as it came
+                if (deps.tileSeams && process.env.SCRATCHBOX_TILE_SEAMS?.trim() !== '0') {
+                    // the passes on unless switched off (SCRATCHBOX_TILE_SEAM_TJUNCTIONS=0, SCRATCHBOX_TILE_SEAM_OVERLAP=0); the cache name says which ran
+                    const tj = process.env.SCRATCHBOX_TILE_SEAM_TJUNCTIONS?.trim() !== '0', ov = process.env.SCRATCHBOX_TILE_SEAM_OVERLAP?.trim() !== '0';
+                    const raw = value.extraction, tag = `${TILE_SEAMS_VERSION.replace(/\W/g, '_')}${tj ? '' : '_notj'}${ov ? '' : '_noov'}`, dir = path.dirname(raw.texturedGlb);
+                    const tex = path.join(dir, `textured_${tag}.glb`), clay = path.join(dir, `geometry_${tag}.glb`), report = path.join(dir, `seams_${tag}.json`);
+                    try {
+                        if (!(fs.existsSync(tex) && fs.existsSync(clay) && fs.existsSync(report))) {
+                            // written under temporary names and renamed: a build reading the same extraction never sees half a file
+                            const sfx = `.tmp-${process.pid}-${Date.now()}`;
+                            const r = await deps.tileSeams({ inputGlb: raw.texturedGlb, outputGlb: tex + sfx, outputClayGlb: clay + sfx, tJunctions: tj, overlapTrim: ov, timeoutMs: 600_000 });
+                            fs.renameSync(tex + sfx, tex); fs.renameSync(clay + sfx, clay);
+                            fs.writeFileSync(report, JSON.stringify({ version: TILE_SEAMS_VERSION, ...r }));
+                        }
+                        const r = JSON.parse(fs.readFileSync(report, 'utf8')) as TileSeamWeldResult;
+                        const sw = r.seamWeld, tjs = r.tJunctions, ot = r.overlapTrim;
+                        cache.writeRunNote(runId, 'tile_seams', { version: TILE_SEAMS_VERSION, raw: raw.texturedGlb, inputTriangles: r.inputTriangles, outputTriangles: r.outputTriangles, toleranceM: r.toleranceM, seamWeld: sw, ...(ot ? { overlapTrim: ot } : {}), ...(tjs ? { tJunctions: tjs } : {}) });
+                        run.note(PROVENANCE.asScanned, `tile seams closed (${TILE_SEAMS_VERSION}, within ${Math.round(r.toleranceM * 100)} cm, nothing moved further): ` +
+                            `${ot ? `${Math.round(ot.areaM2)} m² of doubled surface trimmed, ` : ''}${sw.groupsWelded.toLocaleString('en-US')} border points welded to the next tile's, ` +
+                            `${tjs ? `${tjs.closed.toLocaleString('en-US')} T-junctions split into the next tile's edge, ` : ''}${sw.trianglesDropped.toLocaleString('en-US')} collapsed slivers dropped; the raw extraction is kept as it came`);
+                        value.extraction = { ...raw, texturedGlb: tex, geometryGlb: clay };
+                        // later stages key on the tiles key: the welded scan is another input; the sizing's scan was the raw one
+                        value.key = stageKey(value.key, tag);
+                        value.scan = undefined;
+                    } catch (err) {
+                        if (io.signal.aborted) throw err;
+                        run.note(PROVENANCE.asScanned, `the tile seams could not be closed (${errorMessage(err)}); every stage reads the extraction as it came`);
+                    }
+                } else if (!deps.tileSeams) run.note(PROVENANCE.asScanned, 'the tile seams are left as the extraction came (no seam stage in these deps)');
+                // L1: the extraction (welded at its seams when the seam stage ran), geometry only, with the run's fixed camera
                 const e = value.extraction;
                 run.keys.tiles = value.key;
                 run.cacheStatus.tiles = value.cached ? 'hit' : 'miss';
                 run.geoAnchor = e.geoAnchor;
                 run.state.attribution = [...new Set(['Map data ©Google', ...e.copyrights.filter(c => c && c !== 'Google').map(c => `Map data ©${c}`)])];
                 const key8 = value.key.slice(0, 8);
-                // the tiles welded at their seams for the clay (weld-tiles.ts; the raw extraction stays as it came), cached beside it
-                let shown = e.geometryGlb;
-                if (process.env.SCRATCHBOX_WELD_TILES?.trim() !== '0') {
-                    const welded = path.join(path.dirname(e.geometryGlb), `geometry_welded_${WELD_TILES_VERSION.replace(/\W/g, '_')}.glb`);
-                    try {
-                        if (!fs.existsSync(welded)) { const w = weldTilesGlb(fs.readFileSync(e.geometryGlb)); fs.writeFileSync(welded, w.glb); run.note(PROVENANCE.asScanned, `tiles welded at their seams (${WELD_TILES_VERSION}): ${w.report.meshesIn} tile meshes, ${w.report.verticesIn.toLocaleString('en-US')} vertices to ${w.report.verticesWelded.toLocaleString('en-US')} within ${w.report.weldM * 100} cm, normals averaged across the old seams`); }
-                        shown = welded;
-                    } catch (err) {
-                        run.note(PROVENANCE.asScanned, `the tiles could not be welded (${errorMessage(err)}); the extraction is shown as it came`);
-                    }
-                }
-                const published = cache.publishFile(shown, `${base}_tiles_${key8}.glb`);
+                const published = cache.publishFile(e.geometryGlb, `${base}_tiles_${key8}.glb`);
                 let orderUrl: string | undefined;
                 if (e.downloadOrder) {
                     const orderFile = path.join(path.dirname(e.geometryGlb), 'download_order.json');
@@ -2299,6 +2329,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const evidenceStop = new AbortController();
 
         const startEvidence = (fit: StructureFit | undefined): void => {
+            // a 3D Building (pipeline K) reads no Street View close-up and no registration: its textures come from tile_refine's
+            // twin and the fit stage is skipped, so the stage is off for it (SCRATCHBOX_K_EVIDENCE=1, or the node graph's
+            // 'evidence' switch, turns it back on)
+            if (pipelineK && !stepOn('evidence', process.env.SCRATCHBOX_K_EVIDENCE?.trim() === '1')) {
+                runner.skip('evidence', 'a 3D Building reads no Street View close-ups or their registration (SCRATCHBOX_K_EVIDENCE=1 turns them on)');
+                evidenceDecided.resolve();
+                return;
+            }
             // the close-ups are planned from what the survey found: they wait for it (it began long before the fit ended)
             const surveyDone = surveyPromise ? surveyPromise.catch(() => undefined) : Promise.resolve(undefined);
             evidencePromise = surveyDone.then(surveyOut => runner.stage<{ images: EvidenceImage[]; panos: PanoCandidate[]; cost: EvidenceCost; plan?: DetailPlan; registration?: Registration; match?: MatchResult; runCrops?: RunCrops }>({
@@ -2975,13 +3013,16 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // 2026-10-28: the openings' finishes are not calculated correctly); SCRATCHBOX_K_MATERIAL_REGIONS=1 on
                 const materialSets = kTwin && stepOn('twin.materials', process.env.SCRATCHBOX_K_MATERIAL_REGIONS?.trim() === '1') ? deps.pipelineK?.materialSets : undefined;
                 if (kTwin && !materialSets) logStep('twin.materials', 'skipped');
+                // the swatch detail bake: the building's survey swatches (AI Beautify, one image call per station) baked into the
+                // twin's atlases as the detail band the tile cannot carry (generated); off by default, SCRATCHBOX_K_DETAIL_BAKE=1 or the node graph on
+                const detailBakeOn = kTwin && !!deps.pipelineK?.detailBake && stepOn('twin.detailBake', process.env.SCRATCHBOX_K_DETAIL_BAKE?.trim() === '1');
                 if (kTwin && !materialSets) cache.writeRunNote(runId, 'pipeline_k_materials', { skipped: deps.pipelineK?.materialSets ? 'off (SCRATCHBOX_K_MATERIAL_REGIONS=1 turns it on)' : 'no texture library in this build\'s services' });
                 // the window fit's planes, whose windows material regions draws on the scan pieces lying on them
                 const kOrthos = materialSets ? cache.readRunNote<{ orthosDir?: string }>(runId, 'pipeline_k')?.orthosDir : undefined;
                 const fitFile = kOrthos ? path.join(kOrthos, WINDOW_FIT_FILE) : undefined;
                 const planes = kOrthos ? fittedPlanesOf(kOrthos) : [];
                 const grammarFile = kOrthos ? path.join(kOrthos, WALL_GRAMMAR_FILE) : undefined;
-                const key = stageKey(TILE_REFINE_TWIN_VERSION, upwardLift ? `upLift:${upwardLift}` : '', target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', kdBuildings ? `kd:${sha256Bytes(Buffer.from(JSON.stringify(kdBuildings)))}` : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '');
+                const key = stageKey(TILE_REFINE_TWIN_VERSION, upwardLift ? `upLift:${upwardLift}` : '', target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '');
                 const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport; materialRegions?: TileRefineTwin['materialRegions'] }>('textures', key, async dir => {
                     const twin = await tileRefineTwin(bytes, target.layer.layer, kTwin ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), ...(upwardLift ? { upwardShadowLift: upwardLift } : {}), ...(harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0, ...(kdBuildings ? { buildingOf: districtBuildingIndex(kdBuildings) } : {}) } } : {}), ...(materialSets ? { materialRegions: { harvest: process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum', sets: (classes: RegionClass[]) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m) }), planes } } : {}) } : enhance ? {
                         recreate: {
@@ -3005,8 +3046,22 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         twinGlb = pw.glb;
                         cache.writeRunNote(runId, 'pipeline_k_party_wall', { version: PARTY_WALL_TEXTURE_VERSION, layer: target.layer.layer, ...pw.report });
                     }
+                    let provenance = twin.provenance;
+                    if (kTwin && !detailBakeOn) logStep('twin.detailBake', 'skipped');
+                    if (detailBakeOn) {
+                        logStep('twin.detailBake', 'running');
+                        const place = run.state.place;
+                        const db = await deps.pipelineK!.detailBake!({ glb: twinGlb, tilesGlb: extraction.texturedGlb, lat: place.lat, lng: place.lng, place: place.resolvedAddress || request.query, workDir: path.join(cache.dir, 'detail_bake'), signal: io.signal, progress: (m: string) => io.progress(m) }).catch((err: unknown) => {
+                            if (isAbort(err) || io.signal.aborted) throw err;
+                            return { glb: Buffer.from(twinGlb), report: { version: TILE_DETAIL_BAKE_VERSION, replaced: 0, skipped: `the detail bake failed: ${errorMessage(err)}` } as TileDetailBakeReport };
+                        });
+                        logStep('twin.detailBake', db.report.replaced ? 'done' : 'skipped');
+                        if (db.report.replaced) { twinGlb = db.glb; provenance = [...provenance, detailBakeProvenance(db.report)]; }
+                        io.progress(db.report.replaced ? `swatch detail baked into ${db.report.replaced} of ${db.report.images} atlases (${Math.round(100 * db.report.coverage)}% of the surface, generated)` : `no swatch detail baked: ${db.report.skipped}`);
+                        cache.writeRunNote(runId, 'pipeline_k_detail_bake', { layer: target.layer.layer, ...db.report });
+                    }
                     fs.writeFileSync(path.join(dir, 'twin.glb'), twinGlb);
-                    return { value: { rungShares: twin.rungShares, provenance: twin.provenance, ladderRung: twin.ladderRung, triangles: twin.triangles, ...(twin.harmonize ? { harmonize: twin.harmonize } : {}), ...(twin.materialRegions ? { materialRegions: twin.materialRegions } : {}) } };
+                    return { value: { rungShares: twin.rungShares, provenance, ladderRung: twin.ladderRung, triangles: twin.triangles, ...(twin.harmonize ? { harmonize: twin.harmonize } : {}), ...(twin.materialRegions ? { materialRegions: twin.materialRegions } : {}) } };
                 }, { publish: () => [{ from: 'twin.glb', as: `${base}_${target.layer.layer}_tex_${key.slice(0, 8)}.glb` }], bypass: bypass('textures') });
                 const pub = entry.published[0];
                 // the material regions' report, whether the stage ran now or its result came from the cache
@@ -3796,7 +3851,19 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, skipped: true, reason: 'turned off for this build' });
                             } else try {
                                 io.progress('pipeline K: fitting the windows on the facade photos');
-                                const wf = await timed('windowFit', () => fitWindowsForOrthos(k.orthosDir, { signal: io.signal, ...(cpuShare ? { concurrency: cpuShare.threads } : {}) }));
+                                // the no-pattern tail only (window-fit.ts): an open-vocabulary mask of "window"/"door", opt-in since it
+                                // bills per call (docs/research/2026-10-27-sb-fenestra-window-fit-design.md, section 1, evidence 6)
+                                const windowSegmentOn = process.env.SCRATCHBOX_K_WINDOW_SEGMENT?.trim() === '1';
+                                const windowSegment: SegmentOpeningMask | undefined = windowSegmentOn ? async (pngPath, width, height, signal) => {
+                                    const segment = deps.textures?.segment ?? segmenterTool();
+                                    const png = fs.readFileSync(pngPath);
+                                    const [win, door] = await Promise.all([segment(png, width, height, 'a window opening', signal), segment(png, width, height, 'a door opening', signal)]);
+                                    if (!win.mask && !door.mask) return undefined;
+                                    const out = new Uint8Array(width * height);
+                                    for (let i = 0; i < out.length; i++) out[i] = (win.mask?.[i] === MASK_YES || door.mask?.[i] === MASK_YES) ? 1 : 0;
+                                    return out;
+                                } : undefined;
+                                const wf = await timed('windowFit', () => fitWindowsForOrthos(k.orthosDir, { signal: io.signal, ...(cpuShare ? { concurrency: cpuShare.threads } : {}), ...(windowSegment ? { segment: windowSegment } : {}) }));
                                 windowFit = wf.file;
                                 // the bay grammar read per wall, from all the photos of each wall's facades together (wall-grammar.ts)
                                 try {
@@ -3817,8 +3884,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                     cache.writeRunNote(runId, 'pipeline_k_wall_grammar', { version: WALL_GRAMMAR_VERSION, failed: true, reason: errorMessage(err) });
                                 }
                                 const ok = wf.fit.facades.filter(f => !('error' in f)), failed = wf.fit.facades.filter(f => 'error' in f);
-                                cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, cached: wf.cached, ms: wf.fit.ms, facades: wf.fit.facades.map(f => ('error' in f ? f : { facadeId: f.facadeId, windows: f.rects.length, bands: f.bands.length, accepted: f.bands.filter(b => b.accepted).length, kinds: f.bands.filter(b => b.accepted).map(b => b.kind), ms: f.ms })) });
-                                run.note(PROVENANCE.photoInferred, `window fit (${WINDOW_FIT_VERSION}): ${ok.reduce((a, f) => a + ('rects' in f ? f.rects.length : 0), 0)} windows on ${ok.filter(f => 'rects' in f && f.rects.length).length} of ${wf.fit.facades.length} facades${failed.length ? `; ${failed.length} facades not fitted (${failed.map(f => `${f.facadeId}: ${'error' in f ? f.error : ''}`).join('; ').slice(0, 300)}), opened by their bay rhythm instead` : ''}`);
+                                const segmented = ok.filter(f => 'segmentAssisted' in f && f.segmentAssisted);
+                                cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, cached: wf.cached, segment: windowSegmentOn, ms: wf.fit.ms, facades: wf.fit.facades.map(f => ('error' in f ? f : { facadeId: f.facadeId, windows: f.rects.length, bands: f.bands.length, accepted: f.bands.filter(b => b.accepted).length, kinds: f.bands.filter(b => b.accepted).map(b => b.kind), ...(f.segmentAssisted ? { segmentAssisted: true } : {}), ms: f.ms })) });
+                                run.note(PROVENANCE.photoInferred, `window fit (${WINDOW_FIT_VERSION}): ${ok.reduce((a, f) => a + ('rects' in f ? f.rects.length : 0), 0)} windows on ${ok.filter(f => 'rects' in f && f.rects.length).length} of ${wf.fit.facades.length} facades${segmented.length ? `, ${segmented.length} of them only from an open-vocabulary mask of their photo (the structural fit found nothing)` : ''}${failed.length ? `; ${failed.length} facades not fitted (${failed.map(f => `${f.facadeId}: ${'error' in f ? f.error : ''}`).join('; ').slice(0, 300)}), opened by their bay rhythm instead` : ''}`);
                             } catch (err) {
                                 if (isAbort(err) || io.signal.aborted) throw err;
                                 cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, failed: true, reason: errorMessage(err) });

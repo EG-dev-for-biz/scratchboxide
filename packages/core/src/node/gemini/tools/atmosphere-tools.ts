@@ -193,7 +193,7 @@ export const ATMOSPHERE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 enableAerialPerspective: {
                     type: 'BOOLEAN',
-                    description: 'Enable depth inscattering aerial perspective (off unless true).'
+                    description: 'Depth inscattering aerial perspective (haze with distance); on with the sky unless false.'
                 },
                 enableGodRays: {
                     type: 'BOOLEAN',
@@ -444,7 +444,7 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
             sunPosition: [sunDir[0] * 100, sunDir[1] * 100, sunDir[2] * 100],
             volumetricClouds: clouds,
             cloudShadowsEnabled: clouds && args.enableCloudShadows === true,
-            aerialPerspectiveEnabled: args.enableAerialPerspective === true
+            aerialPerspectiveEnabled: args.enableAerialPerspective !== false
         };
         if (num(args.turbidity) !== undefined) config.turbidity = num(args.turbidity);
         if (lat !== undefined && lng !== undefined) { config.latitude = lat; config.longitude = lng; }

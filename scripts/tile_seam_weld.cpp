@@ -17,8 +17,11 @@
  * scan on its own (docs/processes/tile_seam_weld.md), for tests and for any caller that only wants
  * the weld (TileSeamWeldService, packages/core/src/node/3d-engine/tile-seam-weld-service.ts).
  *
+ * Before the weld, the overlap trim (one surface kept where two pieces cover it); after it, the T-junction closure (a
+ * border position on another piece's edge interior moved onto it and the edge split there). Both on unless switched off.
+ *
  * usage: tile_seam_weld --input <scan.glb> [--out <welded.glb>] [--out-clay <welded_clay.glb>] [--stats <stats.json>]
- *                       [--tolerance M] [--no-drop] [--threads N]
+ *                       [--tolerance M] [--no-drop] [--no-overlap-trim] [--no-tjunctions] [--threads N]
  */
 
 #include "scratchbox_gltf_scene.hpp"
@@ -38,6 +41,7 @@
 
 using scratchbox::tile_seam_weld::TileSeamWeld;
 using scratchbox::tile_seam_weld::TileSeamWeldParams;
+using scratchbox::tile_seam_weld::TileSeamCloseParams;
 
 static void usage() {
     std::cerr <<
@@ -45,6 +49,9 @@ static void usage() {
         "  --tolerance M      boundary groups of different pieces within M of each other are welded (default 0.03)\n"
         "  --no-drop          keep the triangles the weld collapses into slivers\n"
         "  --sliver-altitude-fraction F  a touched triangle is a sliver when its altitude is at most F x tolerance (default 0.5)\n"
+        "  --no-overlap-trim  keep both surfaces where two pieces cover the same one\n"
+        "  --overlap-tolerance M  a border triangle within M of a lower piece's surface everywhere is an overlap (default: the tolerance)\n"
+        "  --no-tjunctions    leave border positions lying on another piece's edge interior as they are\n"
         "  --threads N        worker threads (default: all cores)\n"
         "  --contacts-csv F   write every welded position (x y z, tile frame) with its gap in metres, for inspection\n";
 }
@@ -97,7 +104,9 @@ static bool writeBytes(const std::string& file, const std::vector<uint8_t>& byte
 int main(int argc, char** argv) {
     std::string input, out, outClay, statsPath, contactsCsv;
     TileSeamWeldParams p;
-    bool drop = true;
+    TileSeamCloseParams cp;
+    bool drop = true, trim = true, tjunctions = true;
+    double overlapTol = -1;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         auto next = [&]() -> std::string { if (i + 1 >= argc) { usage(); std::exit(2); } return argv[++i]; };
@@ -109,6 +118,9 @@ int main(int argc, char** argv) {
         else if (a == "--no-drop") drop = false;
         else if (a == "--sliver-altitude-fraction") p.sliverAltitudeFraction = std::atof(next().c_str());
         else if (a == "--threads") p.threads = std::atoi(next().c_str());
+        else if (a == "--no-overlap-trim") trim = false;
+        else if (a == "--overlap-tolerance") overlapTol = std::atof(next().c_str());
+        else if (a == "--no-tjunctions") tjunctions = false;
         else if (a == "--contacts-csv") contactsCsv = next();
         else if (a == "--help" || a == "-h") { usage(); return 0; }
         else { std::cerr << "unknown argument " << a << "\n"; usage(); return 2; }
@@ -123,6 +135,13 @@ int main(int argc, char** argv) {
     const size_t inputTriangles = scene.mesh.indices.size() / 3;
     const auto t1 = std::chrono::steady_clock::now();
 
+    cp.toleranceM = p.weldToleranceM;
+    cp.overlapToleranceM = overlapTol >= 0 ? overlapTol : p.weldToleranceM;
+    cp.threads = p.threads;
+    scratchbox::tile_seam_weld::TileSeamTrimStats trimStats;
+    if (trim) trimStats = TileSeamWeld::trimOverlaps(scene.mesh, {&scene.triangleMaterial}, cp);
+    // each vertex's piece before the weld joins pieces (the T-junction closure tells pieces apart by it); the trim joins nothing
+    auto vertexPiece = TileSeamWeld::vertexPieces(scene.mesh);
     std::vector<scratchbox::geometry::Vec3> before;
     if (!contactsCsv.empty()) { before.reserve(scene.mesh.vertices.size()); for (const auto& v : scene.mesh.vertices) before.push_back(v.position); }
     const auto r = TileSeamWeld::weldAndMarkSlivers(scene.mesh, p);
@@ -138,6 +157,8 @@ int main(int argc, char** argv) {
         }
     }
     TileSeamWeld::compactDropped(scene.mesh, r.keepTriangle, {&scene.triangleMaterial});
+    scratchbox::tile_seam_weld::TileSeamTJunctionStats tjStats;
+    if (tjunctions) tjStats = TileSeamWeld::closeTJunctions(scene.mesh, {&scene.triangleMaterial}, cp, &vertexPiece);
     const auto t2 = std::chrono::steady_clock::now();
 
     const double creaseDeg = 30.0;
@@ -158,6 +179,8 @@ int main(int argc, char** argv) {
     std::string js = "{\"ok\": true, \"input\": \"" + input + "\", \"inputTriangles\": " + std::to_string(inputTriangles) +
         ", \"outputTriangles\": " + std::to_string(outputTriangles) + ", \"toleranceM\": " + std::to_string(p.weldToleranceM) +
         ", \"dropSlivers\": " + (drop ? "true" : "false") + ", \"seamWeld\": {" + TileSeamWeld::statsJson(r.stats) + "}" +
+        (trim ? ", \"overlapTrim\": {" + TileSeamWeld::trimStatsJson(trimStats) + "}" : std::string()) +
+        (tjunctions ? ", \"tJunctions\": {" + TileSeamWeld::tJunctionStatsJson(tjStats) + "}" : std::string()) +
         ", \"ms\": {\"load\": " + std::to_string(ms(t0, t1)) + ", \"weld\": " + std::to_string(ms(t1, t2)) + ", \"write\": " + std::to_string(ms(t2, t3)) + "}}\n";
     if (!statsPath.empty()) {
         std::ofstream s(statsPath);

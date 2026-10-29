@@ -107,9 +107,13 @@ describe.skipIf(!stagedChrome.ok)('camera settings panel in the real viewport (h
     afterAll(async () => { await page?.close(); });
 
     test('the camera button sits under frame/fit in the tool strip and opens / closes the panel (mouse, Escape, outside press, keyboard)', async () => {
-        const order = await page.eval<string[]>(`Array.from(document.querySelectorAll('.sb-3d-toolstrip .sb-3d-toolstrip-btn')).slice(0, 4).map(b => b.getAttribute('title'))`);
-        expect(order[1]).toMatch(/Frame All/);
-        expect(order[2]).toMatch(/^Camera Settings/);
+        const order = await page.eval<string[]>(`Array.from(document.querySelectorAll('.sb-3d-toolstrip .sb-3d-toolstrip-btn')).slice(0, 5).map(b => b.getAttribute('title') ?? '')`);
+        // the camera button sits in the viewing group after frame/fit (the weather button may sit between them)
+        const frameAt = order.findIndex(t => /Frame All/.test(t));
+        const cameraAt = order.findIndex(t => /^Camera Settings/.test(t));
+        expect(frameAt).toBeGreaterThanOrEqual(0);
+        expect(cameraAt).toBeGreaterThan(frameAt);
+        expect(cameraAt - frameAt).toBeLessThanOrEqual(2);
         await shot('01_toolbar_camera_icon');
 
         await clickTestId('sb-3d-camera-settings');
@@ -162,7 +166,10 @@ describe.skipIf(!stagedChrome.ok)('camera settings panel in the real viewport (h
         s = await last();
         expect(s.camera.lens).toMatchObject({ depthOfField: true, apertureFStop: 1.4 });
         expect(await page.eval(`${q('sb-camera-dof')}.getAttribute('aria-checked')`)).toBe('true');
-        expect(await page.eval<string>(`${q('sb-camera-dof-missing')}.innerText`)).toMatch(/focus/);
+        // with no focus set, depth of field still draws: the viewport measures focus (a85dcc4a), so nothing is reported missing
+        await settle(400);
+        expect(await page.eval<boolean>(`!!${q('sb-camera-dof-missing')}`)).toBe(false);
+        expect((await optics()).drawn).toContain('depth-of-field');
 
         // pick focus: a click focuses at the clicked point (a merged mesh has no single column to name)
         await clickTestId('sb-camera-pick-focus');

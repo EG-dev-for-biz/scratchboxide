@@ -5,7 +5,7 @@
     <p><strong>Autonomous AI Generative Canvas Studio, Visual Primitives & 3D Geospatial Engine</strong></p>
     <p>
         <a href="#intellectual-property--patents"><img src="https://img.shields.io/badge/USPTO-Patent%20Pending-blue.svg" alt="USPTO Patent Pending" /></a>
-        <a href="#intellectual-property--patents"><img src="https://img.shields.io/badge/Application-64%2F168%2C583-informational.svg" alt="U.S. Application 64/168,583" /></a>
+        <a href="#intellectual-property--patents"><img src="https://img.shields.io/badge/Application-64%2F168%2C583-informational.svg" alt="U.S. Application U.S. Application 64/168,583 64/169,274" /></a>
     </p>
 </div>
 

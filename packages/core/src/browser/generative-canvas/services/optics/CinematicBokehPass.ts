@@ -114,8 +114,10 @@ const QUAD_VERTEX = `
     `;
 
 /**
- * Pass 1, at half resolution: the colour (4 bilinear taps = a 4 x 4 box) with each tap weighted 1 / (1 + luma) (Karis),
- * so a sub-pixel highlight (a sun glint) is averaged in at the weight of its area instead of popping the whole texel;
+ * Pass 1, at half resolution: the colour (4 bilinear taps = a 4 x 4 box), a plain average: every highlight keeps its
+ * energy (a defocused sun spreads into a bright disc, as through a lens), and a sub-pixel one counts by its area. No
+ * luma weight and no cap: a luma weight made a small sun pump as it moved across taps, a cap took the sun's bloom away
+ * (only a non-finite texel is held: sbFiniteColor);
  * and, into a second target, the signed blur radius in half-resolution pixels (r; computeCoCPixels gives the radius in
  * full-resolution pixels when uBokehScale is 0.5, as the viewport sets it) and the largest of the taps' (g). Both are
  * mip-mapped, so the gather can read any footprint as one stable area average.
@@ -127,6 +129,17 @@ export const CINEMATIC_BOKEH_PREFILTER_SHADER = {
         uniform bool uWriteCoc;
         ${COC_GLSL}
         varying vec2 vUv;
+        // A texel that overflowed the half-float scene target (infinite) or is not a number would poison every average it
+        // enters (the whole blur disc and its mip chain, flashing frame to frame): an overflow is held at the half-float
+        // ceiling and a NaN taken as dark. Finite highlights pass unchanged, keeping their energy.
+        vec4 sbFiniteColor(vec4 c) {
+            for (int k = 0; k < 4; k++) if (!(c[k] == c[k])) c[k] = 0.0;
+            c = clamp(c, vec4(-6.0e4), vec4(6.0e4));
+            // soft ceiling: above 2e4 (far brighter than any sun the scene draws) luminance rolls off toward 4e4, smoothly
+            float l = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
+            if (l > 2.0e4) { float e = l - 2.0e4; c.rgb *= (2.0e4 + e / (1.0 + e / 2.0e4)) / l; }
+            return c;
+        }
         void main() {
             vec2 px = 1.0 / uResolution;
             vec2 o[4];
@@ -140,14 +153,9 @@ export const CINEMATIC_BOKEH_PREFILTER_SHADER = {
                 gl_FragColor = vec4(sum * 0.25, far, 0.0, 1.0);
                 return;
             }
-            vec4 acc = vec4(0.0); float wsum = 0.0;
-            for (int i = 0; i < 4; i++) {
-                vec4 c = texture2D(tColor, vUv + o[i] * px);
-                // the colour is premultiplied by coverage: weigh by the luma of what is drawn there
-                vec3 rgb = c.a > 1e-4 ? c.rgb / c.a : vec3(0.0);
-                float w = 1.0 / (1.0 + max(rgb.r, max(rgb.g, rgb.b)));
-                acc += c * w; wsum += w;
-            }
+            vec4 acc = vec4(0.0);
+            for (int i = 0; i < 4; i++) acc += sbFiniteColor(texture2D(tColor, vUv + o[i] * px));
+            float wsum = 4.0;
             gl_FragColor = acc / max(wsum, 1e-6);
         }
     `
@@ -155,8 +163,8 @@ export const CINEMATIC_BOKEH_PREFILTER_SHADER = {
 
 /**
  * Pass 2, at half resolution: the gather. A golden-angle spiral of taps over the blur circle, as many as its area needs
- * (8 to 64), each reading the prefiltered colour and blur radius at the mip level whose texel matches the spacing between
- * taps, so nothing the taps skip over can flicker in and out as the view moves. A tap counts where its own blur reaches
+ * (8 to 96), each reading the prefiltered colour and blur radius one mip level coarser than the spacing between taps
+ * (overlapping footprints), so nothing the taps skip over can flicker in and out as the view moves. A tap counts where its own blur reaches
  * the centre (scatter as gather), so a sharp foreground never smears over the background behind it.
  */
 export const CINEMATIC_BOKEH_SHADER = {
@@ -170,7 +178,7 @@ export const CINEMATIC_BOKEH_SHADER = {
 
         // Golden Angle constant in radians (approx 137.507764 degrees)
         const float GOLDEN_ANGLE = 2.39996323;
-        const int MAX_SAMPLES = 64;
+        const int MAX_SAMPLES = 96;
 
         void main() {
             vec4 centerColor = texture2D(tColorHalf, vUv);
@@ -183,7 +191,9 @@ export const CINEMATIC_BOKEH_SHADER = {
             }
             float n = clamp(ceil(3.14159265 * R * R / 4.0), 8.0, float(MAX_SAMPLES));
             float spacing = R * sqrt(3.14159265 / n);
-            float lod = log2(max(spacing, 1.0));
+            // one level coarser than the spacing: neighbouring taps' footprints overlap, so a bright point gives the same
+            // total wherever it falls between them (a footprint the size of the spacing alone leaves it pumping with phase)
+            float lod = log2(max(spacing, 1.0)) + 1.0;
             vec2 invRes = 1.0 / uHalfResolution;
             vec2 aspectCorrection = vec2(1.0 / max(uAnamorphicRatio, 0.5), 1.0);
             vec4 acc = centerColor;
@@ -198,15 +208,8 @@ export const CINEMATIC_BOKEH_SHADER = {
                 // the tap's own blur radius (half px) must reach the centre
                 float sampleR = abs(sc.r);
                 float w = clamp((sampleR - r) / spacing + 1.0, 0.0, 1.0);
-                vec4 c = textureLod(tColorHalf, uv, lod);
-                vec3 rgb = c.a > 1e-4 ? c.rgb / c.a : vec3(0.0);
-                w /= 1.0 + max(rgb.r, max(rgb.g, rgb.b));
-                acc += c * w; wsum += w;
+                acc += textureLod(tColorHalf, uv, lod) * w; wsum += w;
             }
-            // the centre tap was not Karis-weighted when it was added: weigh it like the rest
-            vec3 crgb = centerColor.a > 1e-4 ? centerColor.rgb / centerColor.a : vec3(0.0);
-            float cw = 1.0 / (1.0 + max(crgb.r, max(crgb.g, crgb.b)));
-            acc += centerColor * (cw - 1.0); wsum += cw - 1.0;
             gl_FragColor = acc / max(wsum, 1e-6);
         }
     `

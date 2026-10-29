@@ -60,6 +60,7 @@
 
 import { isOrthoCamera, type DecodedImage, type OrthoCamera, type PinholeCamera, type RenderCamera } from '../../../common/spatial/texture-pass-contracts';
 import type { Vec3 } from '../../../common/spatial/staged-location-contracts';
+import { sunDirectionFromAngles } from '../../../common/coordinate/solarPosition';
 import { SRGB8_TO_LINEAR, linearToSrgb255 } from '../../../common/spatial/photogrammetric-delight';
 import { distanceTransform, gaussianBlur } from '../../spatial/StreetViewPoseRegistrar';
 import { chamferMean, FIT_CHAMFER_TRUNCATION_PX, reducedLuminance, structuralEdges } from './texture-fit-metric';
@@ -465,8 +466,7 @@ export interface LitOptions extends Partial<Omit<typeof PHOTO_MATCH_LIT, 'sunDir
 
 /** The direction towards the sun (tile frame: x east, y up, z south) from its azimuth (degrees clockwise from north) and elevation. */
 export function sunDirection(azimuthDeg: number, elevationDeg: number): Vec3 {
-    const a = (azimuthDeg * Math.PI) / 180, e = (elevationDeg * Math.PI) / 180;
-    return [Math.sin(a) * Math.cos(e), Math.sin(e), -Math.cos(a) * Math.cos(e)];
+    return sunDirectionFromAngles(elevationDeg, azimuthDeg);
 }
 
 /**

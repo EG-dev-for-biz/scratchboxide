@@ -29,6 +29,7 @@ import { cachedGeminiSegmenter } from '../../spatial/StreetViewMaterialHarvester
 import { SurveyStationRenderService } from '../../spatial/SurveyStationRenderService';
 import { BeautifyStationService, createDefaultStationImageGenerator } from '../../spatial/BeautifyStationService';
 import { GoogleMediaCredentialsService } from '../../google-media-credentials-service';
+import { bakeTileDetail, defaultSwatchServices, subjectSwatchLibrary, type SwatchServices, type TileDetailBakeReport } from '../../spatial/tile-detail-bake';
 
 export const SURFACE_MATERIALS_TOOL_NAME = 'infer_surface_materials';
 
@@ -213,9 +214,97 @@ export function createSurveySwatchesHandler(deps: {
     };
 }
 
-export const SURFACE_MATERIALS_TOOL_DECLARATIONS: ToolDeclaration[] = [SURFACE_MATERIALS_TOOL_DECLARATION, SURVEY_SWATCHES_TOOL_DECLARATION];
+// =============================================================================
+// tile_detail_bake: finer surface detail on a scan's photo atlases, from the building's own survey swatches
+// =============================================================================
+
+export const TILE_DETAIL_BAKE_TOOL_NAME = 'tile_detail_bake';
+
+export const TILE_DETAIL_BAKE_TOOL_DECLARATION: ToolDeclaration = {
+    name: TILE_DETAIL_BAKE_TOOL_NAME,
+    description: 'Give a scan\'s blurry photo textures finer surface detail (stone grain, joints, weathering) from the building\'s own texture '
+        + 'swatches: each atlas is upscaled 2x or 4x and only the detail the tile is too coarse to carry is added, at the swatch\'s real size, '
+        + 'on the surfaces whose measured colour, tilt and height match a swatch; the tile\'s own colour and detail are kept, a patch that would '
+        + 'get less sharp is reverted, and an atlas the swatches do not sharpen is left as it was. Geometry and UVs never move. Swatches come '
+        + 'from survey_harvest_swatches (pass its libraryPath), or are harvested here from the place (AI Beautify, one image call per survey '
+        + 'station, several minutes). Every changed texture is labelled generated in the GLB. Works on a place\'s tiles GLB or a staged '
+        + 'building\'s textured twin. Returns the baked GLB with a /models URL and, per atlas, its coverage and sharpness gain.',
+    parameters: {
+        type: 'OBJECT',
+        properties: {
+            glbPath: { type: 'STRING', description: 'The scan to give detail: a local GLB path or a /models/... URL (tiles or a staged twin).' },
+            libraryPath: { type: 'STRING', description: 'A swatch library.json from survey_harvest_swatches. Without it, `place` is required and its swatches are harvested.' },
+            place: { type: 'STRING', description: 'The building whose swatches to harvest: an address or name, or "lat, lng" (when no libraryPath).' },
+            tilesGlb: { type: 'STRING', description: 'Optional: the place\'s tiles GLB, for the harvest and the terrain height (default: downloaded around the place).' },
+            beautify: { type: 'BOOLEAN', description: 'Harvest through AI Beautify (default true; false harvests raw tile renders, which add almost no detail).' },
+            outputDir: { type: 'STRING', description: 'Optional work folder (default .scratchbox/detail_bake/<place or scan> in the workspace).' }
+        },
+        required: ['glbPath']
+    }
+};
+
+export function createTileDetailBakeHandler(deps: {
+    staged?: Pick<Awaited<ReturnType<typeof createStagedLocationDeps>>, 'geocode' | 'extract'>;
+    services?: SwatchServices; bake?: typeof bakeTileDetail; library?: typeof subjectSwatchLibrary; modelsDir?: string;
+} = {}): ToolHandler {
+    return async (args, ctx) => {
+        const glbArg = str(args.glbPath);
+        if (!glbArg) throw new MissingInputError(TILE_DETAIL_BAKE_TOOL_NAME, 'glbPath', 'the scan GLB to give detail (a path or /models URL)');
+        const modelsDir = deps.modelsDir ?? path.join(resolveRepoRoot(), 'public', 'models');
+        const glbPath = glbArg.startsWith('/models/') ? path.join(modelsDir, glbArg.slice('/models/'.length)) : glbArg;
+        if (!fs.existsSync(glbPath)) throw new MissingInputError(TILE_DETAIL_BAKE_TOOL_NAME, 'glbPath', `an existing GLB (${glbPath} was not found)`);
+        const root = stagedWorkspaceRoot();
+        let libraryPath = str(args.libraryPath), tilesGlb = str(args.tilesGlb), placeName = '';
+        let harvested: { reused: boolean; swatches?: number } | undefined;
+        if (!libraryPath) {
+            const placeArg = str(args.place);
+            if (!placeArg) throw new MissingInputError(TILE_DETAIL_BAKE_TOOL_NAME, 'place', 'the building to harvest swatches from (or pass libraryPath from survey_harvest_swatches)');
+            const staged = deps.staged ?? await createStagedLocationDeps(root, { signal: ctx?.signal });
+            const ll = /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/.exec(placeArg);
+            const place = ll ? { lat: Number(ll[1]), lng: Number(ll[2]), formattedAddress: placeArg } : await staged.geocode(placeArg, ctx?.signal);
+            placeName = place.formattedAddress;
+            const workDir = str(args.outputDir) || path.join(root, '.scratchbox', 'detail_bake', `${slug(place.formattedAddress)}_${place.lat.toFixed(5)}_${place.lng.toFixed(5)}`);
+            if (!tilesGlb) {
+                const tilesDir = path.join(workDir, 'tiles');
+                tilesGlb = path.join(tilesDir, 'textured.glb');
+                if (!fs.existsSync(tilesGlb)) {
+                    ctx?.reportProgress?.('downloading the Google 3D Tiles around the building');
+                    fs.mkdirSync(tilesDir, { recursive: true });
+                    tilesGlb = (await staged.extract({ lat: place.lat, lng: place.lng, radiusM: 60, outDir: tilesDir, place: place as never, ...(ctx?.signal ? { signal: ctx.signal } : {}), onProgress: m => ctx?.reportProgress?.(m) })).texturedGlb;
+                }
+            }
+            const services = deps.services ?? await defaultSwatchServices(root, { beautify: args.beautify !== false });
+            const lib = await (deps.library ?? subjectSwatchLibrary)({ tilesGlb, lat: place.lat, lng: place.lng, place: place.formattedAddress, workDir, services, log: m => ctx?.reportProgress?.(m), ...(ctx?.signal ? { signal: ctx.signal } : {}) });
+            libraryPath = lib.libraryPath;
+            harvested = { reused: lib.reused, ...(lib.harvest ? { swatches: lib.harvest.swatches.length } : {}) };
+        }
+        const workDir = str(args.outputDir) || path.join(root, '.scratchbox', 'detail_bake', slug(path.basename(glbPath, '.glb')));
+        fs.mkdirSync(workDir, { recursive: true });
+        ctx?.reportProgress?.('baking the swatches\' detail into the atlases');
+        const { glb, report } = await (deps.bake ?? bakeTileDetail)({ glb: glbPath, libraryPath, ...(tilesGlb ? { ground: tilesGlb } : {}), workDir, log: m => ctx?.reportProgress?.(m) });
+        let published: { path: string; url: string } | undefined;
+        if (report.replaced) {
+            fs.mkdirSync(modelsDir, { recursive: true });
+            const name = `${path.basename(glbPath, '.glb')}_detail_${Date.now()}.glb`;
+            fs.writeFileSync(path.join(modelsDir, name), glb);
+            published = { path: path.join(modelsDir, name), url: `/models/${name}` };
+        }
+        const gains = report.perImage.filter(i => i.replaced && i.sharpnessRatio !== null).map(i => i.sharpnessRatio!);
+        const median = gains.length ? gains.sort((a, b) => a - b)[gains.length >> 1] : null;
+        const summary = report.replaced
+            ? `Baked swatch detail into ${report.replaced} of ${report.images} atlases${placeName ? ` of ${placeName}` : ''}: ${report.coveredAreaM2} of ${report.areaM2} m2 given detail, median sharpness x${median}${harvested ? ` (${harvested.reused ? 'swatches reused' : `${harvested.swatches ?? 0} swatches harvested`})` : ''}. Labelled generated.`
+            : `No detail baked: ${report.skipped ?? 'no atlas changed'}. The scan is unchanged.`;
+        return {
+            resultPayload: { success: true, glbPath, libraryPath, ...(published ? { published } : {}), ...(harvested ? { harvested } : {}), report: report as TileDetailBakeReport, provenance: { label: 'generated', basis: 'survey swatch detail baked into the photo atlases; the tile\'s colour and detail kept' }, summary },
+            summaryResult: summary
+        };
+    };
+}
+
+export const SURFACE_MATERIALS_TOOL_DECLARATIONS: ToolDeclaration[] = [SURFACE_MATERIALS_TOOL_DECLARATION, SURVEY_SWATCHES_TOOL_DECLARATION, TILE_DETAIL_BAKE_TOOL_DECLARATION];
 
 export const surfaceMaterialsHandlers: Record<string, ToolHandler> = {
     [SURFACE_MATERIALS_TOOL_NAME]: createSurfaceMaterialsHandler(),
-    [SURVEY_SWATCHES_TOOL_NAME]: createSurveySwatchesHandler()
+    [SURVEY_SWATCHES_TOOL_NAME]: createSurveySwatchesHandler(),
+    [TILE_DETAIL_BAKE_TOOL_NAME]: createTileDetailBakeHandler()
 };

@@ -85,4 +85,28 @@ describe('remesh cleanup', () => {
         for (let t = 0; t < after.indices.length; t += 3) if (after.indices[t] === after.indices[t + 1] && after.indices[t + 1] === after.indices[t + 2]) degenerate++;
         expect(degenerate).toBe(1);
     });
+
+    it('pulls a lone spike back (when switched on) to the surface and leaves a clean grid, a box and its edges alone', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cleanup-spike-'));
+        // a flat 10 x 10 m floor on a 0.5 m grid, its centre vertex raised 1.5 m
+        const flat = (spike: boolean) => {
+            const positions: number[] = [], indices: number[] = [], n = 20;
+            for (let j = 0; j <= n; j++) for (let i = 0; i <= n; i++) positions.push(i * 0.5, spike && i === 10 && j === 10 ? 1.5 : 0, j * 0.5);
+            for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const a = j * (n + 1) + i; indices.push(a, a + n + 2, a + 1, a, a + n + 1, a + n + 2); }
+            return { positions, indices };
+        };
+        const R = { ...REMESH_CLEANUP_PARAMS, spikeK: 4 };
+        const spiked = flat(true), out = cleanRemesh(writeGlb(path.join(dir, 's.glb'), spiked.positions, spiked.indices), [], R);
+        expect(out.stats.spikeVertices).toBe(1);
+        const after = readGlbTriangles(out.clay);
+        let top = -Infinity;
+        for (let v = 1; v < after.positions.length; v += 3) top = Math.max(top, after.positions[v]);
+        expect(top).toBeLessThan(0.15);
+        // nothing to pull on a clean floor, nor on the noisy corner's two walls and their shared edge
+        const clean = flat(false);
+        expect(cleanRemesh(writeGlb(path.join(dir, 'c.glb'), clean.positions, clean.indices), [], R).stats.spikeVertices).toBe(0);
+        const corner = noisyCorner(), c = cleanRemesh(writeGlb(path.join(dir, 'k.glb'), corner.positions, corner.indices), [], R);
+        expect(c.stats.spikeVertices!).toBeLessThan(0.01 * c.stats.vertices);
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
 });

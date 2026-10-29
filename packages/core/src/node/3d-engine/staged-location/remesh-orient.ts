@@ -26,7 +26,7 @@
 
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor, type ParsedGlb } from './glb-bytes';
 
-export const REMESH_ORIENT_VERSION = 'remesh-orient/3';
+export const REMESH_ORIENT_VERSION = 'remesh-orient/4';
 
 /** On unless SCRATCHBOX_STAGED_REMESH_ORIENT=0. */
 export function remeshOrientEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -152,7 +152,11 @@ interface Soup { pos: Float32Array }
 /** Every triangle of a GLB (tile_refine writes no node transforms), in mesh and primitive order. */
 function soupOf(g: ParsedGlb): Soup {
     const out: number[] = [];
-    for (const m of g.json.meshes ?? []) for (const p of m.primitives ?? []) {
+    // the infill's caps (sbSeal) are faced out by their own test (lattice-stitch.ts fillOpenLoops) and left out: a cap lying on a
+    // scan piece wins its depth ties, so the piece would never be seen from behind and never turned
+    const fill = new Set<number>();
+    for (const n of g.json.nodes ?? []) if (n.mesh !== undefined && n.extras?.sbSeal) fill.add(n.mesh);
+    for (const [mi, m] of (g.json.meshes ?? []).entries()) for (const p of fill.has(mi) ? [] : m.primitives ?? []) {
         if ((p.mode ?? 4) !== 4 || p.attributes?.POSITION === undefined) continue;
         const P = readAccessor(g, p.attributes.POSITION).data, I = p.indices !== undefined ? readAccessor(g, p.indices).data : undefined;
         const n = I ? I.length : P.length / 3;
@@ -248,7 +252,10 @@ export function turnTriangles(bytes: Uint8Array, keys: Set<string>, P: RemeshOri
     if (!keys.size) return { glb: Buffer.from(bytes), turned: 0 };
     const json = g.json, dv = new DataView(g.bin.buffer, g.bin.byteOffset, g.bin.byteLength);
     let turned = 0;
-    for (const m of json.meshes ?? []) for (const p of m.primitives ?? []) {
+    // the infill's caps keep their own facing (soupOf)
+    const fill = new Set<number>();
+    for (const n of json.nodes ?? []) if (n.mesh !== undefined && n.extras?.sbSeal) fill.add(n.mesh);
+    for (const [mi, m] of (json.meshes ?? []).entries()) for (const p of fill.has(mi) ? [] : m.primitives ?? []) {
         if ((p.mode ?? 4) !== 4 || p.attributes?.POSITION === undefined || p.indices === undefined) continue;
         const pos = readAccessor(g, p.attributes.POSITION).data;
         const il = accessorLayout(json, p.indices);

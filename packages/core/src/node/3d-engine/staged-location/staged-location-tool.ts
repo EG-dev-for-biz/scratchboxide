@@ -42,6 +42,7 @@ import { Google3DTileBlockoutPipelineService, getGoogle3DTilesFullTexture, prefe
 import { resolveMapsApiKey } from '../../../browser/generative-canvas/services/google-maps-service';
 import { GoogleElevationService } from '../../../browser/generative-canvas/services/google-elevation-service';
 import { getTileRefineService } from '../tile-refine-service';
+import { runTileSeamWeld } from '../tile-seam-weld-service';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
 import { fetchVectorEvidence } from './vector-footprints';
 import { fetchElevations } from './vector-first-paint';
@@ -54,6 +55,7 @@ import { resolveRegionSets } from './pipeline-k/material-sets';
 import { StageCache, stagedWorkspaceRoot } from './stage-cache';
 import { genAiEnhanceClient } from './texture-enhance';
 import { lightingCorrectionEnabled, lightingModels } from './texture-lighting';
+import { bakeTileDetail, defaultSwatchServices, subjectSwatchLibrary } from '../../spatial/tile-detail-bake';
 import {
     STAGE_IDS, runStagedLocation, StagedLocationHardFailure, type StageId, type StagedExtraction, type StagedLocationContext, type StagedLocationDeps,
     type StagedLocationOutcome, type StagedLocationRequest, type ResolvedPlace
@@ -241,7 +243,15 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
         // fails pipeline I/J with that reason
         pipelineI: { generator: () => createDefaultStationImageGenerator({ workspaceRoot: cache.dir }), model: (name?: string) => name === 'meshy' ? createFalMeshyClient() : createFalTrellisClient() },
         // pipeline K's material regions: a texture library set per appearance class, fetched from the library bucket
-        pipelineK: { materialSets: (classes, o) => resolveRegionSets(classes, o) },
+        // and the swatch detail bake (off unless asked): the building's survey swatches baked into the twin's atlases
+        pipelineK: {
+            materialSets: (classes, o) => resolveRegionSets(classes, o),
+            detailBake: async i => {
+                const services = await defaultSwatchServices(cache.dir);
+                const library = await subjectSwatchLibrary({ tilesGlb: i.tilesGlb, lat: i.lat, lng: i.lng, place: i.place, workDir: i.workDir, services, log: i.progress, signal: i.signal });
+                return bakeTileDetail({ glb: i.glb, libraryPath: library.libraryPath, ground: i.tilesGlb, workDir: path.join(i.workDir, 'bake'), log: i.progress });
+            }
+        },
         ...(elevationService ? {
             elevation: {
                 sample: async (points: Array<{ lat: number; lng: number }>) => {
@@ -308,6 +318,8 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
         // search-grounded reference images (the bridges' detail the scan cannot resolve): the Vertex client with the image models
         groundedReferences: async () => (await new GoogleMediaCredentialsService().createVertexClient()) as unknown as GroundedReferenceClient,
         vehicleRemoval: true,
+        // the tile seam stage on the extraction as it arrives (tile-seam-weld-service.ts)
+        tileSeams: runTileSeamWeld,
         // pipeline K-D: the district's leaf tiles fetched ahead of its chunks, into the shared leaf cache
         prefetchTiles: req => prefetchGoogle3DTileLeaves({ lat: req.lat, lng: req.lng, ...(req.elevation !== undefined ? { elevation: req.elevation } : {}) }, req.radiusM, { ...(req.signal ? { signal: req.signal } : {}), ...(req.onProgress ? { onProgress: req.onProgress } : {}) }),
         // pipeline K-D: each chunk of a chunked district is a build of its own, on its own worker thread

@@ -322,6 +322,48 @@ describe('BeautifyStationService: render -> prompt -> generate -> QC -> aligned 
             expect(fit.checked).toBe(false);
             expect(fit.reason).toContain('no sky above the horizon');
         });
+
+        it('rejects the reference returned nearly unchanged, aerials included, and passes the same frame drawn', async () => {
+            const st = renderer.enrichStations([stationFromLookAt(16, [0, 120, 30], [0, 0, 0], OPTICS, ANCHOR)])[0];
+            const blockout = renderer.renderStationBlockout(st, { width: 320, height: 180 });
+            const echoed = BeautifyModule.checkStationOutline(blockout, st, blockout.rgba, 320, 180);
+            expect(echoed.checked).toBe(false);
+            expect(echoed.change).toBeLessThan(1);
+            expect(echoed.passed).toBe(false);
+            expect(echoed.reason).toContain('came back nearly unchanged');
+            const drawn = decodePng(await mockGenerator(0).generate({ prompt: '', blockoutPng: blockout.png, width: 320, height: 180 } as any) as Buffer);
+            const fit = BeautifyModule.checkStationOutline(blockout, st, Buffer.from(drawn.rgba), 320, 180);
+            expect(fit.change).toBeGreaterThan(BeautifyModule.OUTLINE_MIN_CHANGE);
+            expect(fit.builtOutside).toBeLessThan(BeautifyModule.OUTLINE_MAX_BUILT_OUTSIDE);
+            expect(fit.passed).toBe(true);
+        });
+
+        it('rejects a second building drawn where the reference is empty, in a frame with sky and in an aerial', async () => {
+            // the box alone (no ground plane): an isolated building's render is empty around it, as pipeline K's are
+            const boxOnly = path.join(WORK_DIR, 'box_only.glb');
+            writeBoxGroundGlb(boxOnly, [-5, 0, -5], [5, 20, 5], 0);
+            const isolated = new SurveyStationRenderService();
+            await isolated.loadMesh(boxOnly);
+            for (const [id, eye, target] of [[17, [0, 10, 60], [0, 10, 0]], [18, [0, 90, 40], [0, 5, 0]]] as Array<[number, [number, number, number], [number, number, number]]>) {
+                const st = isolated.enrichStations([stationFromLookAt(id, eye, target, OPTICS, ANCHOR)])[0];
+                const blockout = isolated.renderStationBlockout(st, { width: 320, height: 180 });
+                const drawn = decodePng(await mockGenerator(0).generate({ prompt: '', blockoutPng: blockout.png, width: 320, height: 180 } as any) as Buffer);
+                // a windowed facade (4 px windows on a 6 px grid) painted where the subject's outline is empty, as large as the subject
+                let sil = 0, x0 = 320, x1 = 0, y0 = 180, y1 = 0;
+                for (let y = 0; y < 180; y++) for (let x = 0; x < 320; x++) if (blockout.silhouette[y * 320 + x]) { sil++; x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+                const bw = x1 - x0 + 1, left = x0 - bw - 12 >= 0 ? x0 - bw - 12 : x1 + 12;
+                const copy = Buffer.from(drawn.rgba);
+                for (let y = y0; y <= y1; y++) for (let x = left; x < Math.min(320, left + bw); x++) {
+                    const win = (x - left) % 6 < 4 && (y - y0) % 6 < 4, i = (y * 320 + x) * 4;
+                    copy[i] = win ? 40 : 200; copy[i + 1] = win ? 45 : 190; copy[i + 2] = win ? 55 : 170; copy[i + 3] = 255;
+                }
+                const fit = BeautifyModule.checkStationOutline(blockout, st, copy, 320, 180);
+                expect(sil).toBeGreaterThan(0);
+                expect(fit.builtOutside).toBeGreaterThan(BeautifyModule.OUTLINE_MAX_BUILT_OUTSIDE);
+                expect(fit.passed).toBe(false);
+                expect(fit.reason).toContain('a second building or invented neighbours');
+            }
+        });
     });
 });
 

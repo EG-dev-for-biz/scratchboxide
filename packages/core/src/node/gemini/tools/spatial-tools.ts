@@ -103,6 +103,7 @@ import { applySunToScene } from './atmosphere-tools';
 import type { CanvasArtifact, Scene3DData, SceneCameraLens } from '../../../browser/generative-canvas/canvas-types';
 import { autoFocusAreaOf, effectiveFocusMode, focusPullSecondsOf } from '../../../browser/generative-canvas/primitives/scene3d/viewportFocus';
 import { DirectDispatchOperatorEngine } from '../../../browser/generative-canvas/services/direct-dispatch-operator-engine';
+import type { SetCameraLensParams } from '../../../browser/generative-canvas/services/operators/lighting-camera-operators';
 import { cameraToFrameCoefficients } from '../../../browser/generative-canvas/primitives/scene3d/viewportOptics';
 import { DEFAULT_CAMERA_FOV_DEG } from '../../../browser/generative-canvas/primitives/scene3d/createRendererStack';
 
@@ -1647,6 +1648,8 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 isoDate: { type: 'STRING', description: 'ISO-8601 instant for the sun (lighting "scene" only); default the instant the stations were synthesized for.' },
                 stationIds: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Building-survey character sheet: exactly four station ids (in quadrant order: top left, top right, bottom left, bottom right). The four views go into one 2 x 2 sheet on white and are made photorealistic by one 4K Nano Banana 2 image, so every view shows the same building in the same colours; each panel is then checked like a station (edge alignment and scan outline) and the whole sheet is generated again unless all four pass. Use instead of stationId; pick views that see the structure from different sides, e.g. the street faces, a corner and an aerial for the roof.' },
                 maxRerolls: { type: 'NUMBER', description: 'Further attempts after a rejected image (default 2).' },
+                imageModel: { type: 'STRING', description: 'Optional image model id or product name (nano-banana-2, nano-banana-pro, nano-banana-lite): only that model is asked. Default: the standard image models in order.' },
+                imageSize: { type: 'STRING', description: 'Optional output size: "1K", "2K" (default) or "4K". Nano Banana Lite makes 1K only.' },
                 moodPromptContext: { type: 'STRING', description: 'Optional extra sentence(s) for the prompt (mood light only with lighting "scene").' },
                 styleSuffix: { type: 'STRING', description: 'Optional style suffix appended verbatim.' },
                 width: { type: 'NUMBER', description: 'Render/generation width (default 1920).' },
@@ -1913,7 +1916,7 @@ function chatProgress(ctx: ToolContext | undefined): (fraction: number, message?
  * models via the workspace's Google media credentials. There is no stand-in generator: without credentials the first
  * generation fails with the credential error.
  */
-async function resolveStationImageGenerator(ctx: { workspaceRoot: string }): Promise<import('../../spatial/BeautifyStationService').StationImageGenerator> {
+async function resolveStationImageGenerator(ctx: { workspaceRoot: string }, imageModel?: string, imageSize?: '1K' | '2K' | '4K'): Promise<import('../../spatial/BeautifyStationService').StationImageGenerator> {
     const { createGoogleStationImageGenerator } = await import('../../spatial/BeautifyStationService');
     const { GoogleMediaGenerationService } = await import('../../google-media-generation-service');
     const { GoogleMediaCredentialsService } = await import('../../google-media-credentials-service');
@@ -1921,7 +1924,9 @@ async function resolveStationImageGenerator(ctx: { workspaceRoot: string }): Pro
     const assetStore = new MediaAssetStore();
     const credentials = new GoogleMediaCredentialsService();
     const mediaService = new GoogleMediaGenerationService(assetStore, () => credentials.createClient());
-    return createGoogleStationImageGenerator({ mediaService, assetStore, workspaceRoot: ctx.workspaceRoot || process.cwd() });
+    // a named model is the only one asked (no fallback to the defaults): the result says which model answered
+    const { resolveImageModelId } = await import('../../../common/media-generation-protocol');
+    return createGoogleStationImageGenerator({ mediaService, assetStore, workspaceRoot: ctx.workspaceRoot || process.cwd(), ...(imageModel ? { modelPriority: [resolveImageModelId(imageModel)] } : {}), ...(imageSize ? { imageSize } : {}) });
 }
 
 export const panoramaHandlers: Record<string, ToolHandler> = {
@@ -2869,7 +2874,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             const ids = (args.stationIds as unknown[]).map(Number);
             if (ids.length !== 4) throw new MissingInputError('survey_beautify_station', 'stationIds', `a character sheet takes exactly four station ids, got ${ids.length}`);
             const stations = ids.map(id => { const st = (data.poses as any[]).find(p => p.id === id); if (!st) throw new Error(`survey_beautify_station: station ${id} not found`); return st; });
-            const generator = await resolveStationImageGenerator(ctx);
+            const generator = await resolveStationImageGenerator(ctx, typeof args.imageModel === 'string' && args.imageModel.trim() ? args.imageModel.trim() : undefined, args.imageSize === '1K' || args.imageSize === '2K' || args.imageSize === '4K' ? args.imageSize : undefined);
             const { registerBeautifyHandlers } = await import('../../spatial/survey-router');
             const deps = registerBeautifyHandlers({}, generator, process.cwd());
             const res = await deps.beautifySheet!({ ...args, stations, anchor: data.anchor, glbPath: asString(args.glbPath), signal: ctx.signal }, chatProgress(ctx));
@@ -2882,7 +2887,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         if (args.stationId === undefined) throw new MissingInputError('survey_beautify_station', 'stationId', 'or stationIds (four) for a character sheet');
         const station = (data.poses as any[]).find(p => p.id === args.stationId);
         if (!station) throw new Error(`survey_beautify_station: station ${args.stationId} not found`);
-        const generator = await resolveStationImageGenerator(ctx);
+        const generator = await resolveStationImageGenerator(ctx, typeof args.imageModel === 'string' && args.imageModel.trim() ? args.imageModel.trim() : undefined, args.imageSize === '1K' || args.imageSize === '2K' || args.imageSize === '4K' ? args.imageSize : undefined);
         const { registerBeautifyHandlers } = await import('../../spatial/survey-router');
         const deps = registerBeautifyHandlers({}, generator, process.cwd());
         const res = await deps.beautifyStation!({ ...args, station, anchor: data.anchor, glbPath: asString(args.glbPath), signal: ctx.signal }, chatProgress(ctx));
@@ -4708,6 +4713,29 @@ export const PHYSICAL_CAMERA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 enableDepthOfField: {
                     type: 'BOOLEAN',
                     description: 'Whether post-processing depth of field and bokeh blurring is enabled.'
+                },
+                flare: {
+                    type: 'OBJECT',
+                    description: 'Lens flare from the frame\'s bright light (ghosts mirrored through the centre, a halo, an optional horizontal streak). amount 0 removes it.',
+                    properties: {
+                        amount: { type: 'NUMBER', description: 'Flare strength in [0, 1] (0.3 is a natural flare).' },
+                        ghosts: { type: 'NUMBER', description: 'Number of ghosts, a whole number 0-8 (default 4).' },
+                        halo: { type: 'NUMBER', description: 'Halo ring strength in [0, 1] (default 0.3).' },
+                        streak: { type: 'NUMBER', description: 'Horizontal (anamorphic) streak strength in [0, 1] (default 0).' },
+                        threshold: { type: 'NUMBER', description: 'Linear brightness above which light flares, > 0 (default 1.5: brighter than white).' }
+                    }
+                },
+                diffusion: {
+                    type: 'OBJECT',
+                    description: 'A diffusion filter (Black Pro-Mist): a share of all light scattered into a soft glow round highlights. strength 0 removes it.',
+                    properties: {
+                        strength: { type: 'NUMBER', description: 'Share of light diffused, in [0, 1] (1/8 grade about 0.06, 1/4 about 0.12, 1/2 about 0.25).' },
+                        spread: { type: 'NUMBER', description: 'Glow radius as a fraction of the frame height, in [0.001, 0.5] (default 0.04).' }
+                    }
+                },
+                temporalAntiAliasing: {
+                    type: 'BOOLEAN',
+                    description: 'Temporal anti-aliasing under the lens effects (default on): keeps small bright light from flickering through depth of field, flare and diffusion. false turns it off.'
                 }
             },
             required: ['focalLengthMm', 'apertureFStop']
@@ -4886,8 +4914,12 @@ export const physicalCameraHandlers: Record<string, ToolHandler> = {
             ...(autoFocusAreaFraction !== undefined ? { autoFocusAreaFraction } : {}),
             ...(focusPullSeconds !== undefined ? { focusPullSeconds } : {}),
             anamorphicSqueeze: anamorphicRatio > 0 ? anamorphicRatio : 1,
-            depthOfField: enableDepthOfField
-        });
+            depthOfField: enableDepthOfField,
+            // amount / strength 0 removes the effect; the operator validates the ranges
+            ...(args.flare && typeof args.flare === 'object' ? { flare: Number((args.flare as { amount?: unknown }).amount) === 0 ? null : args.flare } : {}),
+            ...(args.diffusion && typeof args.diffusion === 'object' ? { diffusion: Number((args.diffusion as { strength?: unknown }).strength) === 0 ? null : args.diffusion } : {}),
+            ...(typeof args.temporalAntiAliasing === 'boolean' ? { temporalAntiAliasing: args.temporalAntiAliasing } : {})
+        } as SetCameraLensParams);
         if (!lensRes.success) return notApplied(lensRes.error || 'sb_set_camera_lens failed');
         const passes = ((lensRes.data as { passes?: string[] })?.passes) ?? [];
         const dofDrawn = passes.includes('depth-of-field');

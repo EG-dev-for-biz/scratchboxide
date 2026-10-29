@@ -18,7 +18,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { describe, expect, it } from 'vitest';
-import { onSubject, planTextureStations, TEXTURE_AERIALS, TEXTURE_STATION_STANDOFF_M } from '../src/node/spatial/survey-swatch-harvest';
+import { footprintReach, onSubject, planTextureStations, TEXTURE_AERIALS, TEXTURE_STATION_STANDOFF_M } from '../src/node/spatial/survey-swatch-harvest';
 import { cosineSimilarity, encodeEmbedding, fastMatchSwatchToLibrary, mapFilesOf, matchSwatchToLibrary, openPbrLibrary, publishPbrLibraryIndex } from '../src/node/spatial/pbr-library-match';
 import { createSurveySwatchesHandler, SURFACE_MATERIALS_TOOL_DECLARATIONS, SURVEY_SWATCHES_TOOL_NAME } from '../src/node/gemini/tools/surface-material-tools';
 
@@ -39,6 +39,23 @@ describe('texture survey stations', () => {
         const sq = st.find(s => s.key === 'f0_0_street')!;
         expect(Math.atan2(sq.eye[2] + 5, sq.eye[0] - 10) * 180 / Math.PI).toBeCloseTo(30, 6);
         for (const a of st.filter(x => x.key.startsWith('aerial'))) expect(a.eye[1]).toBeGreaterThan(2 + 40);
+    });
+
+    it('stand outside a large footprint, the standoff measured from its wall', () => {
+        // a 120 x 40 m footprint (1 m cells) centred on (60, 20), long side along x
+        const ground = { cellMeters: 1, cellIndex: (x: number, z: number) => (x >= -100 && x < 220 && z >= -100 && z < 140 ? (Math.floor(z) + 100) * 320 + Math.floor(x) + 100 : -1) };
+        const footprint = new Uint8Array(320 * 240);
+        for (let z = 0; z < 40; z++) for (let x = 0; x < 120; x++) footprint[(z + 100) * 320 + x + 100] = 1;
+        const hero = { centroid: { x: 60, z: 20 }, groundY: 0, gridYawDeg: 0, heightMeters: 200, footprint };
+        const reach = footprintReach(hero, ground);
+        expect(reach(0)).toBeCloseTo(59.5, 0);
+        expect(reach(Math.PI / 2)).toBeCloseTo(19.5, 0);
+        const st = planTextureStations(hero, reach);
+        const onLong = st.find(s => s.key === 'f1_0_mid')!, onShort = st.find(s => s.key === 'f0_0_street')!;
+        expect(onShort.eye[0] - 60).toBeCloseTo(reach(0) + TEXTURE_STATION_STANDOFF_M, 6);
+        expect(onLong.eye[2] - 20).toBeCloseTo(reach(Math.PI / 2) + TEXTURE_STATION_STANDOFF_M, 6);
+        // every facade station is outside the footprint
+        for (const s of st.filter(x => !x.key.startsWith('aerial'))) expect(footprint[ground.cellIndex(s.eye[0], s.eye[2])]).toBe(0);
     });
 
     it('count a swatch as the subject when its centre is on the footprint or within the margin', () => {

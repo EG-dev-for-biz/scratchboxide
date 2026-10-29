@@ -197,6 +197,10 @@ export interface AtmosphericSkyDomeModule {
     sunLight: THREE.DirectionalLight;
     sunDirection: THREE.Vector3;
     diurnalProfile: DiurnalLightingProfile;
+    /** The camera's metered exposure for this sun and sky (sky-light-rig.ts calibratedExposure); the viewport applies it. */
+    readonly exposure: number;
+    /** The physical sky's mean radiance at the horizon and the zenith (scene-referred, linear): the haze's colours. */
+    hazeColors: () => { horizon: THREE.Color; zenith: THREE.Color };
     /**
      * Keeps the sky around the view: centres the dome and sun disc on the camera and scales them to just inside its far
      * plane, so the dome's edge is never seen however far the camera pulls back (a sky is at infinity). The sun light is

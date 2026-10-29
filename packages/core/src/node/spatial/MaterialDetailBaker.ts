@@ -154,7 +154,7 @@ export function buildPlaneClusters(scan: BaseScan, opts: ClusterOptions = {}): {
     const nt = scan.triCount;
     const vid = new Map<string, number>();
     const triV = new Int32Array(nt * 3);
-    const tN = new Float64Array(nt * 3), tC = new Float64Array(nt * 3), tA = new Float64Array(nt);
+    const tN = new Float64Array(nt * 3), tC = new Float64Array(nt * 3), tA = new Float64Array(nt), triP = new Float32Array(nt * 9);
     for (const p of scan.prims) {
         const P = p.positions;
         const local = new Int32Array(P.length / 3);
@@ -174,7 +174,10 @@ export function buildPlaneClusters(scan: BaseScan, opts: ClusterOptions = {}): {
             const l = Math.hypot(nx, ny, nz);
             tA[g] = 0.5 * l;
             if (l > 1e-12) { tN[g * 3] = nx / l; tN[g * 3 + 1] = ny / l; tN[g * 3 + 2] = nz / l; }
-            for (let k = 0; k < 3; k++) tC[g * 3 + k] = (P[a * 3 + k] + P[b * 3 + k] + P[c * 3 + k]) / 3;
+            for (let k = 0; k < 3; k++) {
+                tC[g * 3 + k] = (P[a * 3 + k] + P[b * 3 + k] + P[c * 3 + k]) / 3;
+                triP[g * 9 + k] = P[a * 3 + k]; triP[g * 9 + 3 + k] = P[b * 3 + k]; triP[g * 9 + 6 + k] = P[c * 3 + k];
+            }
         }
     }
     // edge adjacency
@@ -224,7 +227,8 @@ export function buildPlaneClusters(scan: BaseScan, opts: ClusterOptions = {}): {
         const min: Vec3 = [Infinity, Infinity, Infinity], max: Vec3 = [-Infinity, -Infinity, -Infinity];
         let rss = 0;
         for (const t of members) {
-            for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], tC[t * 3 + k]); max[k] = Math.max(max[k], tC[t * 3 + k]); }
+            // the extent of the triangles themselves (their corners), not of their centres
+            for (let k = 0; k < 3; k++) for (let j = 0; j < 3; j++) { const v = triP[t * 9 + j * 3 + k]; if (v < min[k]) min[k] = v; if (v > max[k]) max[k] = v; }
             const r = n[0] * tC[t * 3] + n[1] * tC[t * 3 + 1] + n[2] * tC[t * 3 + 2] - d;
             rss += r * r * tA[t];
         }
@@ -235,6 +239,93 @@ export function buildPlaneClusters(scan: BaseScan, opts: ClusterOptions = {}): {
         });
     }
     return { triCluster, clusters };
+}
+
+export interface PlaneMergeOptions {
+    /** Largest angle between two clusters' normals (same facing). Default 10 deg. */
+    angleDeg?: number;
+    /** Largest difference of their plane offsets. Default 0.5 m. */
+    distanceMeters?: number;
+    /** Largest gap between their bounding boxes. Default 1.5 m. */
+    gapMeters?: number;
+    /** Clusters smaller than this are left as they are (too small to know their plane). Default 0.05 m^2. */
+    minAreaM2?: number;
+}
+
+/**
+ * Whole planes from a fragmented scan: region growing stops at every noisy triangle, so one photogrammetry wall comes out
+ * as hundreds of patches, each projecting its swatch from its own origin (seams between them) and most too small to be
+ * matched. Clusters facing the same way (normals within `angleDeg`), on the same plane (offsets within `distanceMeters`)
+ * and near each other (boxes within `gapMeters`) are joined, largest first; the joined plane is their area-weighted
+ * fit. Returns new clusters and the remapped triangle-to-cluster map (the input is not changed).
+ */
+export function mergeCoplanarClusters(triCluster: Int32Array, clusters: PlaneCluster[], opts: PlaneMergeOptions = {}): { triCluster: Int32Array; clusters: PlaneCluster[]; merged: number } {
+    const cosT = Math.cos((opts.angleDeg ?? 10) * Math.PI / 180), dTol = opts.distanceMeters ?? 0.5, gap = opts.gapMeters ?? 1.5, minA = opts.minAreaM2 ?? 0.05;
+    const binA = (opts.angleDeg ?? 10) * Math.PI / 180;
+    interface Group { members: number[]; sn: Vec3; sc: Vec3; area: number; n: Vec3; d: number; min: Vec3; max: Vec3; rss: number }
+    const groups: Group[] = [];
+    const bins = new Map<string, number[]>();
+    const keyOf = (n: Vec3, d: number, da: number, de: number, dd: number) => {
+        const az = Math.atan2(n[2], n[0]), el = Math.asin(Math.max(-1, Math.min(1, n[1])));
+        return `${Math.round(az / binA) + da}|${Math.round(el / binA) + de}|${Math.round(d / dTol) + dd}`;
+    };
+    const boxGap = (aMin: Vec3, aMax: Vec3, bMin: Vec3, bMax: Vec3) => {
+        let s2 = 0;
+        for (let k = 0; k < 3; k++) { const g = Math.max(aMin[k] - bMax[k], bMin[k] - aMax[k], 0); s2 += g * g; }
+        return Math.sqrt(s2);
+    };
+    const groupOf = new Int32Array(clusters.length).fill(-1);
+    const order = clusters.map((_, i) => i).sort((a, b) => clusters[b].area - clusters[a].area);
+    let merged = 0;
+    for (const ci of order) {
+        const c = clusters[ci];
+        let into = -1;
+        if (c.area >= minA) {
+            let bestGap = Infinity;
+            for (let da = -1; da <= 1; da++) for (let de = -1; de <= 1; de++) for (let dd = -1; dd <= 1; dd++) {
+                for (const gi of bins.get(keyOf(c.normal, c.offset, da, de, dd)) ?? []) {
+                    const g = groups[gi];
+                    if (g.n[0] * c.normal[0] + g.n[1] * c.normal[1] + g.n[2] * c.normal[2] < cosT) continue;
+                    // the cluster's centre against the group's plane, and the group's centre against the cluster's
+                    const o = c.origin, go: Vec3 = [g.sc[0] / g.area, g.sc[1] / g.area, g.sc[2] / g.area];
+                    if (Math.abs(g.n[0] * o[0] + g.n[1] * o[1] + g.n[2] * o[2] - g.d) > dTol) continue;
+                    if (Math.abs(c.normal[0] * go[0] + c.normal[1] * go[1] + c.normal[2] * go[2] - c.offset) > dTol * 4) continue;
+                    const bg = boxGap(c.min, c.max, g.min, g.max);
+                    if (bg <= gap && bg < bestGap) { bestGap = bg; into = gi; }
+                }
+            }
+        }
+        if (into < 0) {
+            into = groups.length;
+            groups.push({ members: [], sn: [0, 0, 0], sc: [0, 0, 0], area: 0, n: c.normal, d: c.offset, min: [...c.min] as Vec3, max: [...c.max] as Vec3, rss: 0 });
+            const k = keyOf(c.normal, c.offset, 0, 0, 0);
+            const l = bins.get(k);
+            if (l) l.push(into); else bins.set(k, [into]);
+        } else merged++;
+        const g = groups[into];
+        g.members.push(ci);
+        for (let k = 0; k < 3; k++) { g.sn[k] += c.normal[k] * c.area; g.sc[k] += c.origin[k] * c.area; g.min[k] = Math.min(g.min[k], c.min[k]); g.max[k] = Math.max(g.max[k], c.max[k]); }
+        g.area += c.area;
+        g.rss += c.planarityRmsMeters ** 2 * c.area;
+        const l = Math.hypot(...g.sn) || 1;
+        g.n = [g.sn[0] / l, g.sn[1] / l, g.sn[2] / l];
+        g.d = (g.n[0] * g.sc[0] + g.n[1] * g.sc[1] + g.n[2] * g.sc[2]) / g.area;
+        groupOf[ci] = into;
+    }
+    const out: PlaneCluster[] = groups.map((g, id) => {
+        const origin: Vec3 = [g.sc[0] / g.area, g.sc[1] / g.area, g.sc[2] / g.area];
+        // planarity: the members' own spread plus their offsets from the joined plane
+        let rss = g.rss;
+        for (const ci of g.members) { const o = clusters[ci].origin; const r = g.n[0] * o[0] + g.n[1] * o[1] + g.n[2] * o[2] - g.d; rss += r * r * clusters[ci].area; }
+        const { uAxis, vAxis } = planeAxes(g.n, [1, 0, 0]);
+        return {
+            id, normal: g.n, offset: g.d, origin, uAxis, vAxis, area: g.area, triCount: g.members.reduce((a, ci) => a + clusters[ci].triCount, 0),
+            tiltDeg: Math.acos(Math.min(1, Math.abs(g.n[1]))) * 180 / Math.PI, min: g.min, max: g.max, planarityRmsMeters: Math.sqrt(rss / g.area)
+        };
+    });
+    const tc = new Int32Array(triCluster.length);
+    for (let t = 0; t < tc.length; t++) tc[t] = triCluster[t] < 0 ? -1 : groupOf[triCluster[t]];
+    return { triCluster: tc, clusters: out, merged };
 }
 
 /** Decoded linear-RGB baseColor images by image index (lazily). */
@@ -685,8 +776,21 @@ export interface BakeOptions {
     maxLossBlockFraction?: number;
     /** JPEG qualities tried after `jpegQuality` when encoding loses local sharpness. Default [95]. */
     fallbackJpegQualities?: number[];
+    /**
+     * How far match confidence overrides the tile-energy fade (0..1). The detail is faded where the tile's own high band
+     * already carries as much energy as the swatch's (the tile is sharper there); on a photo scan that band is mostly
+     * compression noise, so a confident match keeps the swatch's band: the fade is scaled by (1 - confidenceGate x alpha).
+     * Default 0 (the fade alone).
+     */
+    confidenceGate?: number;
+    /** An atlas is replaced only when at least this share of its chart texels received detail (alpha-weighted). Default 0. */
+    minCoverageFraction?: number;
+    /** Only these atlases (image indices) are baked; the rest are kept. Default: all. */
+    onlyImages?: number[];
     /** Report only: write nothing but the plan. */
     dryRun?: boolean;
+    /** Edits the output glTF JSON once the replaced images are known (e.g. their provenance labels). */
+    annotate?: (json: any, replaced: Map<number, PrimitiveBakeReport>) => void;
     log?: (msg: string) => void;
 }
 
@@ -851,6 +955,8 @@ export async function bakeMaterialDetail(
     const minGain = opts.minSharpnessGain ?? 1.1;
     const mixSharpness = opts.candidateMixSharpness ?? 4;
     const maxLossFraction = opts.maxLossBlockFraction ?? 0.005;
+    const confGate = Math.min(1, Math.max(0, opts.confidenceGate ?? 0)), minCoverage = opts.minCoverageFraction ?? 0;
+    const only = opts.onlyImages ? new Set(opts.onlyImages) : undefined;
     const assignOf = new Map<number, ClusterAssignment>();
     for (const a of assignments) if (a.candidates.length && a.confidence > 0) assignOf.set(a.cluster, a);
     const assignArr: Array<ClusterAssignment | undefined> = clusters.map(c => assignOf.get(c.id));
@@ -948,6 +1054,7 @@ export async function bakeMaterialDetail(
             blocksWithSharpnessLoss: 0, blocksChecked: 0, blocksBelowBicubic: 0, blocksReverted: 0, materials: [], swatches: [], bytesBefore: originalBytes(g), bytesAfter: originalBytes(g)
         };
         reports.push(rep);
+        if (only && !only.has(g.imageIndex)) { rep.reason = 'not asked for'; continue; }
         if (!plans.includes(g) || g.scale < 2) { rep.reason = g.assignedArea > 0 ? 'no resolution benefit or over budget' : 'no assigned material'; continue; }
         if (opts.dryRun) { rep.scale = g.scale; rep.reason = 'dry run'; continue; }
         const s = g.scale, W = g.width * s, H = g.height * s, n = W * H;
@@ -1031,7 +1138,7 @@ export async function bakeMaterialDetail(
         for (let i = 0; i < n; i++) {
             if (!(alpha[i] > 0) || R[i] === 1) continue;
             const em = EM2s[i * 3], et = ET2s[i * 3];
-            const gte = em > 1e-12 ? Math.min(1, Math.max(0, 1 - et / em)) : 0;
+            const gte = em > 1e-12 ? Math.min(1, Math.max(0, 1 - (1 - confGate * Math.min(1, alpha[i])) * et / em)) : 0;
             const k = alpha[i] * gte * (R[i] - 1);
             if (k === 0) continue;
             for (let c = 0; c < 3; c++) delta[i * 3 + c] = Lt[i * 3 + c] * k;
@@ -1122,6 +1229,7 @@ export async function bakeMaterialDetail(
         rep.jpegQuality = usedQuality;
         const skip = (reason: string) => { rep.reason = reason; log(`image ${g.imageIndex}: kept (${reason})`); };
         if (detailTexels === 0) { skip('no texel received detail'); continue; }
+        if (rep.coverageFraction < minCoverage) { skip(`detail covers ${(100 * rep.coverageFraction).toFixed(1)}% of the atlas (< ${(100 * minCoverage).toFixed(1)}%)`); continue; }
         if (!rep.sharpness || rep.sharpness.ratio < minGain) { skip(`no measurable sharpness gain (x${rep.sharpness?.ratio ?? '-'} < ${minGain})`); continue; }
         if (lossBlocks > maxLossFraction * checked) { skip(`re-encoding would reduce local sharpness in ${lossBlocks} of ${checked} blocks`); continue; }
         replacements.set(g.imageIndex, jpeg);
@@ -1129,7 +1237,7 @@ export async function bakeMaterialDetail(
         log(`image ${g.imageIndex}: ${img.width}x${img.height} -> ${W}x${H}, covered ${rep.coveredAreaM2} m2 (${(100 * rep.coverageFraction).toFixed(1)}%), sharpness x${rep.sharpness?.ratio ?? '-'}, loss blocks ${lossBlocks}/${checked}, q${usedQuality}, ${(jpeg.length / 1024).toFixed(0)} KB`);
     }
     // ---------------- budget after encoding ----------------
-    const assembled = () => assembleGlb(scan, replacements);
+    const assembled = () => assembleGlb(scan, replacements, opts.annotate ? json => opts.annotate!(json, new Map([...replacements.keys()].map(ii => [ii, reports.find(r => r.imageIndex === ii)!]))) : undefined);
     let glb = assembled();
     const byPriority = plans.slice().reverse();
     for (const g of byPriority) {
@@ -1145,8 +1253,8 @@ export async function bakeMaterialDetail(
     return { glb, reports, totals: { images: reports.length, replaced: replacements.size, areaM2: +area.toFixed(1), coveredAreaM2: +covered.toFixed(1), bytesIn: scan.bin.length, bytesOut: glb.length } };
 }
 
-/** Re-packs the GLB with replaced image bytes; every other buffer view is copied byte-for-byte; JSON otherwise unchanged. */
-export function assembleGlb(scan: BaseScan, replacements: Map<number, Buffer>): Buffer {
+/** Re-packs the GLB with replaced image bytes; every other buffer view is copied byte-for-byte; JSON otherwise unchanged but for `annotate`. */
+export function assembleGlb(scan: BaseScan, replacements: Map<number, Buffer>, annotate?: (json: any) => void): Buffer {
     const json = JSON.parse(JSON.stringify(scan.json));
     const viewOfImage = new Map<number, number>();
     (json.images ?? []).forEach((img: any, i: number) => { if (img.bufferView !== undefined) viewOfImage.set(img.bufferView, i); });
@@ -1156,5 +1264,6 @@ export function assembleGlb(scan: BaseScan, replacements: Map<number, Buffer>): 
         return scan.bin.subarray(v.byteOffset || 0, (v.byteOffset || 0) + v.byteLength);
     });
     for (const [ii] of replacements) if (json.images[ii]) json.images[ii].mimeType = 'image/jpeg';
+    annotate?.(json);
     return GltfBinaryPacker.packGlb(json, views, true).glbBuffer;
 }

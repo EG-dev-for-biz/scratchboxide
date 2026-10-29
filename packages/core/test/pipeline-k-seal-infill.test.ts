@@ -16,7 +16,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { fillOpenLoops } from '../src/node/3d-engine/staged-location/pipeline-k/lattice-stitch';
+import { fillOpenLoops, foldIntoRepeats, repeatPitch } from '../src/node/3d-engine/staged-location/pipeline-k/lattice-stitch';
+import { readGlbTriangles } from './helpers/clay-glb-render';
 import { assembleGlb, parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
 
 type V = [number, number, number];
@@ -155,6 +156,11 @@ describe('pipeline K infill where no photo reached', () => {
         }
         expect(seal.extras.continued).toBe(6);
         expect(seal.extras.provenance.label).toBe('generated');
+        // each piece carries its route and confidence; the front has no fitted windows, so no repeat cell: the lower confidence
+        const cont = seal.extras.routes.find((r: any) => r.code === 3);
+        expect(cont.pieces).toBe(6);
+        expect(cont.meanConfidence).toBeGreaterThan(0);
+        expect(cont.meanConfidence).toBeLessThanOrEqual(0.25);
         // the continued material repeats its photo past its edges
         const g = parseGlbBytes(out.others[0]);
         const mat = g.json.materials.find((m: any) => m.name === 'FacadeLattice_3_continued');
@@ -163,7 +169,48 @@ describe('pipeline K infill where no photo reached', () => {
     });
 });
 
+describe('pipeline K seal: continued infill from the facade\'s own repeat cell', () => {
+    it('reads the bay and storey pitch from the fitted windows', () => {
+        // a 5 x 4 grid of windows, 0.1 apart in u and 0.2 in v
+        const uv: number[] = [];
+        for (let a = 0; a < 5; a++) for (let b = 0; b < 4; b++) uv.push(0.1 + a * 0.1, 0.1 + b * 0.2, 0.15 + a * 0.1, 0.2 + b * 0.2);
+        const p = repeatPitch(uv);
+        expect(p.pu).toBeCloseTo(0.1, 6);
+        expect(p.pv).toBeCloseTo(0.2, 6);
+        expect(repeatPitch(uv.slice(0, 8))).toEqual({});
+    });
+
+    it('moves a piece past the photo by whole repeat cells into the nearest repeats, not by whole photos', () => {
+        const uv = [[1.23, 0.5], [1.27, 0.5], [1.25, 0.55]];
+        const f = foldIntoRepeats(uv, 0.1, 0.2);
+        // three bays back: inside the photo, at the same place in its bay
+        f.forEach((q, k) => { expect(q[0]).toBeCloseTo(uv[k][0] - 0.3, 6); expect(q[1]).toBeCloseTo(uv[k][1], 6); });
+        expect(Math.max(...f.map(q => q[0]))).toBeLessThanOrEqual(1);
+        // below the photo by less than a storey: one storey up
+        const g = foldIntoRepeats([[0.5, -0.05], [0.55, -0.05], [0.5, -0.01]], 0.1, 0.2);
+        g.forEach(q => expect(q[1]).toBeGreaterThanOrEqual(0.149));
+        // no pitch: folded by whole photos
+        expect(foldIntoRepeats([[1.2, 0.5], [1.3, 0.5], [1.25, 0.6]])[0][0]).toBeCloseTo(0.2, 6);
+    });
+});
+
 describe('pipeline K seal: closed where it is safe', () => {
+    it('faces every cap out of the building, by where the building lies, whichever way the surface around it is wound', () => {
+        // the front (z = 0, outward -z) has a 2 m x 2 m hole; the box wound outward, then wound inward throughout
+        for (const inward of [false, true]) {
+            const flipAll = (t: V[]) => { const o: V[] = []; for (let i = 0; i < t.length; i += 3) o.push(t[i], t[i + 2], t[i + 1]); return o; };
+            const tris = [...front(), ...rest()];
+            const out = fillOpenLoops(glb([{ name: 'scan', tris: inward ? flipAll(tris) : tris }]), []);
+            const r = readGlbTriangles(out.clay), seal = r.nodeRanges.find(x => x.name === 'Seal')!;
+            expect(seal.triangleCount).toBeGreaterThan(0);
+            for (let t = seal.firstTriangle; t < seal.firstTriangle + seal.triangleCount; t++) {
+                const P = [0, 1, 2].map(k => { const v = r.indices[t * 3 + k]; return [r.positions[v * 3], r.positions[v * 3 + 1], r.positions[v * 3 + 2]]; });
+                const nz = (P[1][0] - P[0][0]) * (P[2][1] - P[0][1]) - (P[1][1] - P[0][1]) * (P[2][0] - P[0][0]);
+                expect(Math.sign(nz)).toBe(-1);
+            }
+        }
+    });
+
     it('caps a flat hole, and leaves open a hole whose rim bends around a corner', () => {
         // the front's flat 2 m x 2 m hole, and a 1 m x 1 m hole on each side of the front-right corner, meeting at it: one loop
         // bent through 90 degrees (its rim 0.35 m off its own best plane, its cap 1.4 m²)
@@ -184,5 +231,18 @@ describe('pipeline K seal: closed where it is safe', () => {
         const pts = Array.from({ length: X.length / 3 }, (_, i) => [X[i * 3], X[i * 3 + 1], X[i * 3 + 2]]);
         expect(pts.length).toBe(18);
         expect(pts.every(p => p[2] === 0 && p[0] >= 4 && p[0] <= 6 && p[1] >= 4 && p[1] <= 6)).toBe(true);
+    });
+
+    it('leaves a hole a rebuilt wall stands in for: no cap drawn back over the recessed rebuild', () => {
+        // the front's 2 m x 2 m hole with a rebuilt cell 0.3 m behind it (inside the box), wound like the front
+        const rebuilt = face([3, 3, 0.3], [1, 0, 0], [0, 1, 0], true, (i, j) => i >= 4 || j >= 4);
+        const out = fillOpenLoops(glb([{ name: 'scan', tris: [...front(), ...rest()] }, { name: 'wall', tris: rebuilt, facadeId: 1 }]), []);
+        expect(out.report.droppedCoveredM2).toBeGreaterThanOrEqual(3);
+        const g = parseGlbBytes(out.clay), node = g.json.nodes.find((n: any) => n.name === 'Seal');
+        const X = node ? readAccessor(g, g.json.meshes[node.mesh].primitives[0].attributes.POSITION).data : new Float32Array();
+        const pts = Array.from({ length: X.length / 3 }, (_, i) => [X[i * 3], X[i * 3 + 1], X[i * 3 + 2]]);
+        expect(pts.filter(p => p[2] === 0 && p[0] >= 4 && p[0] <= 6 && p[1] >= 4 && p[1] <= 6)).toHaveLength(0);
+        // without the wall the same hole is capped
+        expect(fillOpenLoops(glb([{ name: 'scan', tris: [...front(), ...rest()] }]), []).report.droppedCoveredM2).toBe(0);
     });
 });

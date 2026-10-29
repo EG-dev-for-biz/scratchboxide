@@ -30,6 +30,11 @@
  *    read them; every pane kept only where it reads unlike the stone beside its window (panesUnlikeWall).
  * The windows are photo-inferred. Facades are fitted in parallel, before the lattice reads them (window_fit.json beside the
  * orthos).
+ *
+ * A facade this leaves with no rects at all (the no-pattern tail) may be retried once against an opening mask from an
+ * open-vocabulary segmenter (SCRATCHBOX_K_WINDOW_SEGMENT, off by default: it bills per call), widening step 3's darkness
+ * mask (unionMask) rather than adding a seventh reading — the six readings, the bands, the gate and the bay split are
+ * unchanged either way.
  */
 
 import { execFile } from 'child_process';
@@ -248,6 +253,13 @@ function otsuMask(dk: Darkness, valid: Uint8Array): Uint8Array {
     }
     const thr = at / 64, out = new Uint8Array(dk.D.length);
     for (let k = 0; k < out.length; k++) out[k] = valid[k] && dk.D[k] > thr ? 1 : 0;
+    return out;
+}
+
+/** The darkness mask widened by an opening mask from elsewhere (an open-vocabulary segmenter): either marking it is enough. */
+function unionMask(a: Uint8Array, b: Uint8Array, valid: Uint8Array): Uint8Array {
+    const out = new Uint8Array(a.length);
+    for (let k = 0; k < out.length; k++) out[k] = valid[k] && (a[k] || b[k]) ? 1 : 0;
     return out;
 }
 
@@ -1014,12 +1026,17 @@ function maskIou(rects: WindowRect[], band: Band, W: number, H: number, ref: Uin
 
 const usable = (g: ReliefGrid | undefined): g is ReliefGrid => !!g && g.periodS.found && g.periodT.found && g.cell.foundS && g.cell.foundT;
 
-/** Fits one facade's windows from its straightened photo (rgba), its uncovered mask (1 = the photo did not reach) and frame. */
-export async function fitFacadeWindows(img: { rgba: ArrayLike<number>; width: number; height: number }, uncovered: ArrayLike<number> | undefined, f: FitFrame, relief: ReliefRunner, P: WindowFitParams = WINDOW_FIT_PARAMS): Promise<WindowFit> {
+/**
+ * Fits one facade's windows from its straightened photo (rgba), its uncovered mask (1 = the photo did not reach) and frame.
+ * `openingMask` (same W x H pixels, 1 = an opening), when given, widens the darkness-only mask every candidate is scored
+ * against (unionMask): evidence from elsewhere (an open-vocabulary segmenter) rather than a second detector, since the
+ * six readings, the bands, the gate and the bay split are otherwise unchanged.
+ */
+export async function fitFacadeWindows(img: { rgba: ArrayLike<number>; width: number; height: number }, uncovered: ArrayLike<number> | undefined, f: FitFrame, relief: ReliefRunner, openingMask: Uint8Array | undefined, P: WindowFitParams = WINDOW_FIT_PARAMS): Promise<WindowFit> {
     const W = img.width, H = img.height, px = f.pixel;
     const { dk, valid } = Darkness.of(img, uncovered, px);
     const c: Ctx = { f, dk, P };
-    const dark = otsuMask(dk, valid);
+    const dark = openingMask && openingMask.length === W * H ? unionMask(otsuMask(dk, valid), openingMask, valid) : otsuMask(dk, valid);
     lateralEvidence(dk, valid, dark, px, P);
     // bands: change points of the darkness along the wall (columns as vectors of 1 m row sums), then up it within each
     const colMean = dk.colMeans(0, W, 0, H);
@@ -1214,9 +1231,16 @@ export function nativeRelief(bin: string, png: string, mask: string | undefined,
 }
 
 /** window_fit.json beside the orthos: per facade its windows in photo pixels and UVs, and its bands' decisions. */
+/**
+ * Asks an open-vocabulary segmenter for a facade photo's opening mask (1 = a window or door, same W x H pixels as the
+ * photo), or undefined when it found none. Only called for the band of one storey gets nothing; the no-pattern tail
+ * (the structural fit's own rects came back empty); never a second detector run on every facade.
+ */
+export type SegmentOpeningMask = (pngPath: string, width: number, height: number, signal?: AbortSignal) => Promise<Uint8Array | undefined>;
+
 export interface WindowFitFile {
-    version: string; params: WindowFitParams; ms: number;
-    facades: Array<{ facadeId: number; width: number; height: number; rects: WindowRect[]; panes?: WindowRect[]; /** Windows continued into parts the photo never reached: generated. */ generated?: WindowRect[]; bands: WindowFitBand[]; ms: number } | { facadeId: number; error: string }>;
+    version: string; params: WindowFitParams; /** An opening-mask segmenter (SCRATCHBOX_K_WINDOW_SEGMENT) assisted the no-pattern tail of this run. */ segment?: boolean; ms: number;
+    facades: Array<{ facadeId: number; width: number; height: number; rects: WindowRect[]; panes?: WindowRect[]; /** Windows continued into parts the photo never reached: generated. */ generated?: WindowRect[]; bands: WindowFitBand[]; /** This facade had no structural fit; an opening-mask segmenter's result is used instead. */ segmentAssisted?: boolean; ms: number } | { facadeId: number; error: string }>;
 }
 export const WINDOW_FIT_FILE = 'window_fit.json';
 
@@ -1226,11 +1250,11 @@ export const WINDOW_FIT_FILE = 'window_fit.json';
  * several at a time; writes window_fit.json. A plane with no uncovered mask beside it (one pipeline K did not straighten)
  * has it read from its ortho: the texels the photo never reached are exact grey 128 or transparent.
  */
-export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency?: number; signal?: AbortSignal; params?: WindowFitParams } = {}): Promise<{ file: string; fit: WindowFitFile; cached: boolean }> {
-    const file = path.join(orthosDir, WINDOW_FIT_FILE), P = opts.params ?? WINDOW_FIT_PARAMS;
+export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency?: number; signal?: AbortSignal; params?: WindowFitParams; segment?: SegmentOpeningMask } = {}): Promise<{ file: string; fit: WindowFitFile; cached: boolean }> {
+    const file = path.join(orthosDir, WINDOW_FIT_FILE), P = opts.params ?? WINDOW_FIT_PARAMS, segmentOn = !!opts.segment;
     if (fs.existsSync(file)) {
         const prior = JSON.parse(fs.readFileSync(file, 'utf8')) as WindowFitFile;
-        if (prior.version === WINDOW_FIT_VERSION && JSON.stringify(prior.params) === JSON.stringify(P)) return { file, fit: prior, cached: true };
+        if (prior.version === WINDOW_FIT_VERSION && JSON.stringify(prior.params) === JSON.stringify(P) && !!prior.segment === segmentOn) return { file, fit: prior, cached: true };
     }
     const t0 = Date.now();
     const bin = await ensureReliefBandBinary();
@@ -1255,8 +1279,19 @@ export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency
                     maskFile = path.join(scratch, `${f.facadeId}_uncovered.png`);
                     fs.writeFileSync(maskFile, encodePng(img.width, img.height, Buffer.from(mask.map(v => (v ? 255 : 0))), 1));
                 }
-                const fit = await fitFacadeWindows({ rgba: img.rgba, width: img.width, height: img.height }, mask, f, nativeRelief(bin, png, maskFile, f, opts.signal), P);
-                out.push({ facadeId: f.facadeId, width: img.width, height: img.height, rects: fit.rects, panes: fit.panes, ...(fit.generated ? { generated: fit.generated } : {}), bands: fit.bands, ms: Date.now() - t });
+                let fit = await fitFacadeWindows({ rgba: img.rgba, width: img.width, height: img.height }, mask, f, nativeRelief(bin, png, maskFile, f, opts.signal), undefined, P);
+                // the structural fit found nothing at all (the no-pattern tail, docs/research/2026-10-27-sb-fenestra-window-fit-design.md
+                // section 1): ask the segmenter for an opening mask and re-score the same six readings against it, rather than a
+                // second detector
+                let segmentAssisted = false;
+                if (!fit.rects.length && opts.segment) {
+                    const openingMask = await opts.segment(png, img.width, img.height, opts.signal).catch(() => undefined);
+                    if (openingMask && openingMask.length === img.width * img.height) {
+                        const retried = await fitFacadeWindows({ rgba: img.rgba, width: img.width, height: img.height }, mask, f, nativeRelief(bin, png, maskFile, f, opts.signal), openingMask, P);
+                        if (retried.rects.length) { fit = retried; segmentAssisted = true; }
+                    }
+                }
+                out.push({ facadeId: f.facadeId, width: img.width, height: img.height, rects: fit.rects, panes: fit.panes, ...(fit.generated ? { generated: fit.generated } : {}), bands: fit.bands, ...(segmentAssisted ? { segmentAssisted: true } : {}), ms: Date.now() - t });
             } catch (err) {
                 if (opts.signal?.aborted) throw err;
                 out.push({ facadeId: f.facadeId, error: err instanceof Error ? err.message : String(err) });
@@ -1266,7 +1301,7 @@ export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency
     try { await Promise.all(Array.from({ length: Math.max(1, opts.concurrency ?? Math.max(1, Math.min(8, os.cpus().length - 1))) }, worker)); }
     finally { fs.rmSync(scratch, { recursive: true, force: true }); }
     out.sort((a, b) => a.facadeId - b.facadeId);
-    const fit: WindowFitFile = { version: WINDOW_FIT_VERSION, params: P, ms: Date.now() - t0, facades: out };
+    const fit: WindowFitFile = { version: WINDOW_FIT_VERSION, params: P, ...(segmentOn ? { segment: true } : {}), ms: Date.now() - t0, facades: out };
     fs.writeFileSync(file, JSON.stringify(fit));
     return { file, fit, cached: false };
 }

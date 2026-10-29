@@ -237,7 +237,7 @@ async function runContextualPrimitiveTests() {
     const graphFrom3D = morphScene3DToNodeGraph(sceneData1);
     assert.ok(graphFrom3D.nodes && graphFrom3D.nodes.length > 0);
     // Real decomposition, not a fixed stub: one node per customMesh, plus the
-    // 3 scaffold nodes (camera/environment/renderer) — never a hardcoded count.
+    // 4 scaffold nodes (camera/environment/weather/renderer) — never a hardcoded count.
     const expectedMeshCount = sceneData1.customMeshes?.length ?? 0;
     const meshNodes = graphFrom3D.nodes.filter(n => n.id.startsWith('mesh-'));
     assert.strictEqual(meshNodes.length, expectedMeshCount,
@@ -254,8 +254,8 @@ async function runContextualPrimitiveTests() {
     const expectedObjectCount = sceneData1.objects?.length ?? 0;
     assert.strictEqual(graphFrom3D.nodes.filter(n => n.id.startsWith('obj-')).length, expectedObjectCount,
         'Node graph should contain exactly one node per scene object');
-    assert.strictEqual(graphFrom3D.nodes.length, expectedMeshCount + 3 + expectedOpCount + expectedObjectCount,
-        'Node graph should be mesh and object nodes plus camera/environment/output scaffold plus real operator-history nodes only');
+    assert.strictEqual(graphFrom3D.nodes.length, expectedMeshCount + 4 + expectedOpCount + expectedObjectCount,
+        'Node graph should be mesh and object nodes plus camera/environment/weather/output scaffold plus real operator-history nodes only');
     const firstMesh = sceneData1.customMeshes![0];
     const firstMeshNode = graphFrom3D.nodes.find(n => n.id === `mesh-${firstMesh.id}`);
     assert.ok(firstMeshNode, 'Each scene mesh should produce a corresponding graph node by id');
