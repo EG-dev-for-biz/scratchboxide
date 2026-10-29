@@ -2673,8 +2673,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const relightClient = harmonizeOn && stepOn('twin.viewRelight', process.env.SCRATCHBOX_K_VIEW_RELIGHT?.trim() === '1') ? deps.textures?.lighting : undefined;
                 if (kTwin && !relightClient) logStep('twin.viewRelight', 'skipped');
                 // the roof shadow lift: suns fitted from the mesh, its cast shadow on every roof and terrace lifted (pipeline-k/roof-shadow.ts),
-                // a single building (pipeline K, with harmonising) or a district's twin alike; off by default, SCRATCHBOX_K_ROOF_SHADOW=1 or the node graph on
-                const roofShadowOn = (!kTwin || harmonizeOn) && stepOn('twin.roofShadow', process.env.SCRATCHBOX_K_ROOF_SHADOW?.trim() === '1');
+                // a single building (pipeline K, with harmonising) or a district's twin alike; on by default for pipeline K (user decision,
+                // 2026-10-29), SCRATCHBOX_K_ROOF_SHADOW=0 or the node graph off; elsewhere off, SCRATCHBOX_K_ROOF_SHADOW=1 or the node graph on
+                const roofShadowEnv = process.env.SCRATCHBOX_K_ROOF_SHADOW?.trim();
+                const roofShadowOn = (!kTwin || harmonizeOn) && stepOn('twin.roofShadow', kTwin ? roofShadowEnv !== '0' : roofShadowEnv === '1');
                 const roofShadowOpts = roofShadowOn ? { roofShadow: { ...(extraction.geometryGlb && fs.existsSync(extraction.geometryGlb) ? { context: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)) } : {}), progress: (m: string) => io.progress(`textures: ${m}`) } } : {};
                 if (kTwin && !roofShadowOn) logStep('twin.roofShadow', 'skipped');
                 if (kTwin && !materialSets) cache.writeRunNote(runId, 'pipeline_k_materials', { skipped: deps.pipelineK?.materialSets ? 'off (SCRATCHBOX_K_MATERIAL_REGIONS=1 turns it on)' : 'no texture library in this build\'s services' });
@@ -2690,7 +2692,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             client: enhance, ...(deps.textures?.enhanceModels ? { models: deps.textures.enhanceModels } : {}),
                             budgetMs: TILE_REFINE_RECREATE_BUDGET_MS
                         } } : {}),
-                        ...roofShadowOpts
+                        ...roofShadowOpts,
+                        // a district's twin logs its roof shadow step too (the other twin steps are pipeline K's)
+                        ...(roofShadowOn ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => { if (step === 'roofShadow') logStep(`twin.${step}`, state); } } : {})
                     } : undefined);
                     if (twin.harmonize) cache.writeRunNote(runId, 'pipeline_k_texture', { version: TEXTURE_HARMONIZE_VERSION, layer: target.layer.layer, ...twin.harmonize });
                     if (twin.viewRelight) cache.writeRunNote(runId, 'pipeline_k_view_relight', { version: VIEW_RELIGHT_VERSION, layer: target.layer.layer, ...twin.viewRelight });
@@ -2707,6 +2711,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             if (grid) fs.writeFileSync(path.join(dir, 'roof_shadow_qa.png'), shadowLiftQaPng(grid));
                             cache.writeRunNote(runId, 'roof_shadow_qa', { layer: target.layer.layer, ...(grid ? { png: path.join(dir.replace(/\.tmp-\d+-[0-9a-f]+$/, ''), 'roof_shadow_qa.png') } : {}), ...qa });
                         }
+                        if (auditFinal) io.progress(`textures: the roof shadow lift seen from above (green lifted, orange rejected, magenta no sun, grey lit): ${auditFinal}`);
                         cache.writeRunNote(runId, 'roof_shadow', { version: ROOF_SHADOW_VERSION, layer: target.layer.layer, ...(auditGrid && auditFinal ? { auditPng: auditFinal, auditGrid: { cellM: auditGrid.cellM, x0: auditGrid.x0, z0: auditGrid.z0, w: auditGrid.w, h: auditGrid.h } } : {}), ...note });
                     }
                     // pipeline K: the party wall (a wall the scan lacks, base-cleanup.ts) drawn as the building's masonry continued, by the image model
