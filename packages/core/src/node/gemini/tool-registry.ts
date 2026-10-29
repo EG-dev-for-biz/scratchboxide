@@ -97,6 +97,8 @@ import {
     browserHandlers,
     TILE_REFINE_TOOL_DECLARATIONS,
     tileRefineHandlers,
+    SCENE_HEALING_TOOL_DECLARATIONS,
+    sceneHealingHandlers,
     VIRTUAL_GEOMETRY_TOOL_DECLARATIONS,
     virtualGeometryHandlers,
     LOCATION_EVIDENCE_TOOL_DECLARATIONS,
@@ -657,6 +659,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
     registerTools(registry, PANORAMA_TOOL_DECLARATIONS, { ...analyticalGroomHandlers, ...panoramaHandlers }, 'workspace');
     registerTools(registry, UTDRA_TOOL_DECLARATIONS, utdraHandlers, 'workspace');
     registerTools(registry, TILE_REFINE_TOOL_DECLARATIONS, tileRefineHandlers, 'workspace');
+    registerTools(registry, SCENE_HEALING_TOOL_DECLARATIONS, sceneHealingHandlers, 'workspace');
     registerTools(registry, VIRTUAL_GEOMETRY_TOOL_DECLARATIONS, virtualGeometryHandlers, 'workspace');
     registerTools(registry, LOCATION_EVIDENCE_TOOL_DECLARATIONS, locationEvidenceHandlers, 'workspace');
     registerTools(registry, LOCATION_REFERENCE_TOOL_DECLARATIONS, locationReferenceHandlers, 'workspace');
