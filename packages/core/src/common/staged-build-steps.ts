@@ -88,6 +88,7 @@ export const TOGGLEABLE_STEPS = new Map<string, string>([
     ['polish.orient', 'inward-facing scan pieces stay as they are'],
     ['remesh.streetViewScore', 'no relief score against Street View'],
     ['remesh.visibleDefects', 'holes are not looked for'],
+    ['evidence', 'no Street View close-ups or their registration (a 3D Building reads neither)'],
     ['twin.harmonize', 'the de-lit photos are kept as they are, photo by photo'],
     ['twin.materials', 'no roughness, metal or glass maps: the photos only'],
     ['twin.partyWall', 'the party wall stays untextured']

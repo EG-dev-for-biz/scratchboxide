@@ -1978,6 +1978,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const evidenceStop = new AbortController();
 
         const startEvidence = (fit: StructureFit | undefined): void => {
+            // a 3D Building (pipeline K) reads no Street View close-up and no registration: its textures come from tile_refine's
+            // twin and the fit stage is skipped, so the stage is off for it (SCRATCHBOX_K_EVIDENCE=1, or the node graph's
+            // 'evidence' switch, turns it back on)
+            if (pipelineK && !stepOn('evidence', process.env.SCRATCHBOX_K_EVIDENCE?.trim() === '1')) {
+                runner.skip('evidence', 'a 3D Building reads no Street View close-ups or their registration (SCRATCHBOX_K_EVIDENCE=1 turns them on)');
+                evidenceDecided.resolve();
+                return;
+            }
             // the close-ups are planned from what the survey found: they wait for it (it began long before the fit ended)
             const surveyDone = surveyPromise ? surveyPromise.catch(() => undefined) : Promise.resolve(undefined);
             evidencePromise = surveyDone.then(surveyOut => runner.stage<{ images: EvidenceImage[]; panos: PanoCandidate[]; cost: EvidenceCost; plan?: DetailPlan; registration?: Registration; match?: MatchResult; runCrops?: RunCrops }>({

@@ -115,6 +115,9 @@ describe('a pipeline K isolate (the 3D Building default)', () => {
         expect(result.degradations.filter(d => fitChain.includes(d.stage))).toEqual([]);
         // the textures still run on the remeshed scan
         expect(statusOf(s.events, 'textures')).not.toContain('skipped');
+        // and no Street View close-ups are fetched: nothing in a 3D Building reads them
+        expect(statusOf(s.events, 'evidence')).toEqual(['skipped']);
+        expect(result.stages.find(x => x.stage === 'evidence')?.reason).toMatch(/reads no Street View close-ups/);
     });
 });
 
