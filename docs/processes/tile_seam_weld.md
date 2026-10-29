@@ -93,3 +93,28 @@ Also run: every tile-refine, scan-rectifier, scan-fit, facade-grammar and staged
 - **T-junction closure in the pre-pass** (split the foreign edge at the snapped point): would take the remaining 71 near-gaps on the isolate and the wedges of §3; needs a topology change and a test that the split keeps UVs.
 - **Proud-feature audit plane list in `stats.json`**: without it the 3 → 1 plane change on the live input cannot be attributed (same wall split by a seam, or two walls lost).
 - **A seam-contact overlay in the viewport's provenance view** from `--contacts-csv`: the app has no way to show where chunks meet.
+
+## 7. The seam stage on the extraction (2026-10-28)
+
+**Status: Measured offline on the Washington Square Park extraction; not yet verified in a live build.**
+
+The weld now runs on the tile extraction as it arrives, before any stage reads it (orchestrator, `deps.tileSeams` → `runTileSeamWeld`, cached beside the extraction as `textured_tile_seams_2.glb`, `geometry_tile_seams_2.glb` and `seams_tile_seams_2.json`; `SCRATCHBOX_TILE_SEAMS=0` off). Every stage, the tiles layer shown included, reads the welded files, and the tiles key carries the stage's version. `weld-tiles.ts` (a 1 cm weld for the shown clay only) is retired. Two passes were added to `scratchbox_tile_seam_weld.hpp`:
+
+- **Overlap trim** (`trimOverlaps`, before the weld): a border triangle whose probes all lie within 3 cm of a lower piece's surface facing the same way is dropped, ring by ring.
+- **T-junction closure** (`closeTJunctions`, after the weld): a border position on the interior of another piece's border edge, within 3 cm, moves onto it and that edge's triangle is split there (UVs interpolated). Which piece a position or edge belongs to is taken before the weld joins pieces. In a round only the higher piece's positions move (as in the weld); the lower piece's points are split into the moved edges the next round without moving. A move onto an edge whose ends move waits a round. A move that would turn a triangle inside out is taken back.
+
+Census (`seams.ts` in the session scratchpad, by tile material: 689 tiles, 1.62 M triangles), raw extraction against the stage's output:
+
+| | raw | seam stage |
+|---|---|---|
+| gaps 0.1 mm–3 cm | 119,088 | 2,472 |
+| T-junctions within 3 cm | 35,120 | 4,721 |
+| steps 1–3 cm | 99,394 | 43,615 |
+| gaps 3–50 cm | 148,191 | 147,600 |
+| overlap (two tiles' up-facing surfaces within 1 m) | 10,911 m² | 10,309 m² |
+
+The stage: 51,550 positions welded (largest move 2.2 cm), 24,918 T-junctions split (largest move 3.0 cm, 20 reverted), 640 m² of overlap trimmed, 1,619,782 → 1,642,565 triangles, 55 s.
+
+What it does not close: gaps over 3 cm (tree crowns and roofs against the ground tiles), and most overlap. The trim only drops triangles lying wholly over the other tile, and most overlapping strips are crossed by larger, partly covered triangles. Closing those needs a cut along the other tile's rim. Steps, grooves and colour jumps across seams are not touched yet.
+
+Tests: `tile-seam-weld.test.ts` adds interleaved border points closed into each other's edges (no seam edge left open; 6 splits) and the overlap trim (a 10 cm column lying 1 cm over the neighbour dropped, then welded).

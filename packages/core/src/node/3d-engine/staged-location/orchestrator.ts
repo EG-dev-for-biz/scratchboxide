@@ -92,7 +92,7 @@ import { fittedPlanesOf, fittedWindowRects, fitWindowsForOrthos, WINDOW_FIT_FILE
 import { readWallGrammar, WALL_GRAMMAR_FILE, WALL_GRAMMAR_VERSION } from './wall-grammar';
 import { buildWallSheets, WALL_SHEETS_VERSION } from './wall-sheets';
 import { decodePng as decodePngForGrammar } from '../../texture-processing';
-import { weldTilesGlb, WELD_TILES_VERSION } from './weld-tiles';
+import { TILE_SEAMS_VERSION, type TileSeamWeldRequest, type TileSeamWeldResult } from '../tile-seam-weld-service';
 import { measureRevealDepth, REVEAL_DEPTH_VERSION, type RevealFacade, type RevealView } from './reveal-depth';
 import { streetViewClayScore } from './streetview-clay-score';
 import { decodeJpegInMemory } from './photo-palette';
@@ -520,6 +520,12 @@ export interface StagedLocationDeps {
      * stand-in deps leave it out, so their vision replies are not asked about vehicles.
      */
     vehicleRemoval?: boolean;
+    /**
+     * The tile seam stage (tile-seam-weld-service.ts runTileSeamWeld): the extraction's seams closed as it arrives, and
+     * every later stage reads the welded scan. The app's deps provide it; stand-in deps leave it out (the raw extraction is
+     * used and the run says so).
+     */
+    tileSeams?(req: TileSeamWeldRequest): Promise<TileSeamWeldResult>;
     /** Google Solar API roof facets of the building closest to (lat, lng) (pipeline E's massing); absent without a key. */
     solarRoof?(lat: number, lng: number): Promise<SolarRoof>;
     /**
@@ -1629,25 +1635,44 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const x = await extractCached(radiusM, io);
                     value = { extraction: x.extraction, key: x.key, sizedTo: radiusM > baseRadiusM ? 'district-containment' : 'request', rounds: 1, cached: x.cached, builtAtMs: x.builtAtMs };
                 }
-                // L1: the extraction as downloaded, geometry only, with the run's fixed camera
+                // the tile seams closed as the extraction arrives (tile-seam-weld-service.ts: overlaps trimmed, positions welded,
+                // T-junctions split), cached beside it; every later stage reads the welded scan, the raw extraction stays as it came
+                if (deps.tileSeams && process.env.SCRATCHBOX_TILE_SEAMS?.trim() !== '0') {
+                    // the passes on unless switched off (SCRATCHBOX_TILE_SEAM_TJUNCTIONS=0, SCRATCHBOX_TILE_SEAM_OVERLAP=0); the cache name says which ran
+                    const tj = process.env.SCRATCHBOX_TILE_SEAM_TJUNCTIONS?.trim() !== '0', ov = process.env.SCRATCHBOX_TILE_SEAM_OVERLAP?.trim() !== '0';
+                    const raw = value.extraction, tag = `${TILE_SEAMS_VERSION.replace(/\W/g, '_')}${tj ? '' : '_notj'}${ov ? '' : '_noov'}`, dir = path.dirname(raw.texturedGlb);
+                    const tex = path.join(dir, `textured_${tag}.glb`), clay = path.join(dir, `geometry_${tag}.glb`), report = path.join(dir, `seams_${tag}.json`);
+                    try {
+                        if (!(fs.existsSync(tex) && fs.existsSync(clay) && fs.existsSync(report))) {
+                            // written under temporary names and renamed: a build reading the same extraction never sees half a file
+                            const sfx = `.tmp-${process.pid}-${Date.now()}`;
+                            const r = await deps.tileSeams({ inputGlb: raw.texturedGlb, outputGlb: tex + sfx, outputClayGlb: clay + sfx, tJunctions: tj, overlapTrim: ov, timeoutMs: 600_000 });
+                            fs.renameSync(tex + sfx, tex); fs.renameSync(clay + sfx, clay);
+                            fs.writeFileSync(report, JSON.stringify({ version: TILE_SEAMS_VERSION, ...r }));
+                        }
+                        const r = JSON.parse(fs.readFileSync(report, 'utf8')) as TileSeamWeldResult;
+                        const sw = r.seamWeld, tjs = r.tJunctions, ot = r.overlapTrim;
+                        cache.writeRunNote(runId, 'tile_seams', { version: TILE_SEAMS_VERSION, raw: raw.texturedGlb, inputTriangles: r.inputTriangles, outputTriangles: r.outputTriangles, toleranceM: r.toleranceM, seamWeld: sw, ...(ot ? { overlapTrim: ot } : {}), ...(tjs ? { tJunctions: tjs } : {}) });
+                        run.note(PROVENANCE.asScanned, `tile seams closed (${TILE_SEAMS_VERSION}, within ${Math.round(r.toleranceM * 100)} cm, nothing moved further): ` +
+                            `${ot ? `${Math.round(ot.areaM2)} m² of doubled surface trimmed, ` : ''}${sw.groupsWelded.toLocaleString('en-US')} border points welded to the next tile's, ` +
+                            `${tjs ? `${tjs.closed.toLocaleString('en-US')} T-junctions split into the next tile's edge, ` : ''}${sw.trianglesDropped.toLocaleString('en-US')} collapsed slivers dropped; the raw extraction is kept as it came`);
+                        value.extraction = { ...raw, texturedGlb: tex, geometryGlb: clay };
+                        // later stages key on the tiles key: the welded scan is another input; the sizing's scan was the raw one
+                        value.key = stageKey(value.key, tag);
+                        value.scan = undefined;
+                    } catch (err) {
+                        if (io.signal.aborted) throw err;
+                        run.note(PROVENANCE.asScanned, `the tile seams could not be closed (${errorMessage(err)}); every stage reads the extraction as it came`);
+                    }
+                } else if (!deps.tileSeams) run.note(PROVENANCE.asScanned, 'the tile seams are left as the extraction came (no seam stage in these deps)');
+                // L1: the extraction (welded at its seams when the seam stage ran), geometry only, with the run's fixed camera
                 const e = value.extraction;
                 run.keys.tiles = value.key;
                 run.cacheStatus.tiles = value.cached ? 'hit' : 'miss';
                 run.geoAnchor = e.geoAnchor;
                 run.state.attribution = [...new Set(['Map data ©Google', ...e.copyrights.filter(c => c && c !== 'Google').map(c => `Map data ©${c}`)])];
                 const key8 = value.key.slice(0, 8);
-                // the tiles welded at their seams for the clay (weld-tiles.ts; the raw extraction stays as it came), cached beside it
-                let shown = e.geometryGlb;
-                if (process.env.SCRATCHBOX_WELD_TILES?.trim() !== '0') {
-                    const welded = path.join(path.dirname(e.geometryGlb), `geometry_welded_${WELD_TILES_VERSION.replace(/\W/g, '_')}.glb`);
-                    try {
-                        if (!fs.existsSync(welded)) { const w = weldTilesGlb(fs.readFileSync(e.geometryGlb)); fs.writeFileSync(welded, w.glb); run.note(PROVENANCE.asScanned, `tiles welded at their seams (${WELD_TILES_VERSION}): ${w.report.meshesIn} tile meshes, ${w.report.verticesIn.toLocaleString('en-US')} vertices to ${w.report.verticesWelded.toLocaleString('en-US')} within ${w.report.weldM * 100} cm, normals averaged across the old seams`); }
-                        shown = welded;
-                    } catch (err) {
-                        run.note(PROVENANCE.asScanned, `the tiles could not be welded (${errorMessage(err)}); the extraction is shown as it came`);
-                    }
-                }
-                const published = cache.publishFile(shown, `${base}_tiles_${key8}.glb`);
+                const published = cache.publishFile(e.geometryGlb, `${base}_tiles_${key8}.glb`);
                 let orderUrl: string | undefined;
                 if (e.downloadOrder) {
                     const orderFile = path.join(path.dirname(e.geometryGlb), 'download_order.json');

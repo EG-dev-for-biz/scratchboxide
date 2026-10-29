@@ -38,6 +38,7 @@ import { Google3DTileBlockoutPipelineService, getGoogle3DTilesFullTexture } from
 import { resolveMapsApiKey } from '../../../browser/generative-canvas/services/google-maps-service';
 import { GoogleElevationService } from '../../../browser/generative-canvas/services/google-elevation-service';
 import { getTileRefineService } from '../tile-refine-service';
+import { runTileSeamWeld } from '../tile-seam-weld-service';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
 import { fetchVectorEvidence } from './vector-footprints';
 import { fetchElevations } from './vector-first-paint';
@@ -302,6 +303,8 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
         // search-grounded reference images (the bridges' detail the scan cannot resolve): the Vertex client with the image models
         groundedReferences: async () => (await new GoogleMediaCredentialsService().createVertexClient()) as unknown as GroundedReferenceClient,
         vehicleRemoval: true,
+        // the tile seam stage on the extraction as it arrives (tile-seam-weld-service.ts)
+        tileSeams: runTileSeamWeld,
         // the texture pass's model texture rung: the image model redraws the tile transfer, kept only past its gate
         // (SCRATCHBOX_TEXTURE_ENHANCE=0 turns the rung off); default mode 'recreate' (user decision, 2026-10-21) removes
         // the scan's own baked shadow/highlight and recovers the material's true colour, gated on structure and

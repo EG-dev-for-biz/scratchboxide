@@ -9,7 +9,7 @@
 
 /**
  * The building clipped to its footprint (every surface cut at the outline plus the margin, at any height, attributes carried,
- * the openings closed by the infill), and the tiles welded at their seams when they arrive.
+ * the openings closed by the infill). The tiles' seams are closed by the seam stage (tile-seam-weld.test.ts).
  */
 
 import * as fs from 'fs';
@@ -18,7 +18,6 @@ import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { clipToFootprint, fillOpenLoops } from '../src/node/3d-engine/staged-location/pipeline-k/lattice-stitch';
 import { BASE_CLEANUP_PARAMS, cleanBase } from '../src/node/3d-engine/staged-location/pipeline-k/base-cleanup';
-import { weldTilesGlb } from '../src/node/3d-engine/staged-location/weld-tiles';
 import { assembleGlb, parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 import { readGlbTriangles } from './helpers/clay-glb-render';
@@ -109,54 +108,5 @@ describe('the building clipped to its footprint', () => {
         const soup = quad([0, 0, 0], [10, 0, 0], [10, 20, 0], [0, 20, 0]);
         const r = cleanBase(glbOf(soup), [], footprint, 0);
         expect(r.report.partyWall.areaM2).toBe(0);
-    });
-});
-
-describe('tiles welded at their seams', () => {
-    /** Two tiles as two meshes: a flat 10 x 10 m patch each side of x = 10, their shared edge 2 mm apart, and a wall standing on the far edge. */
-    function tiles(): Uint8Array {
-        const parts = [
-            quad([0, 0, 0], [0, 0, 10], [10, 0, 10], [10, 0, 0]),
-            [...quad([10.002, 0, 0], [10.002, 0, 10], [20, 0, 10], [20, 0, 0]), ...quad([20, 0, 0], [20, 0, 10], [20, 10, 10], [20, 10, 0])]
-        ];
-        const arrays: Uint8Array[] = [];
-        const json: any = { asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0, 1] }], nodes: [], meshes: [], accessors: [], bufferViews: [] };
-        let off = 0;
-        parts.forEach((p, i) => {
-            const f = Float32Array.from(p), b = new Uint8Array(f.buffer);
-            json.bufferViews.push({ buffer: 0, byteOffset: off, byteLength: b.length }); arrays.push(b); off += b.length;
-            json.accessors.push({ bufferView: i, componentType: 5126, count: p.length / 3, type: 'VEC3', min: [0, 0, 0], max: [20, 10, 10] });
-            json.meshes.push({ primitives: [{ attributes: { POSITION: i }, mode: 4 }] });
-            json.nodes.push({ mesh: i });
-        });
-        const bin = new Uint8Array(off);
-        let o = 0;
-        for (const a of arrays) { bin.set(a, o); o += a.length; }
-        json.buffers = [{ byteLength: off }];
-        return assembleGlb(json, bin);
-    }
-
-    it('joins the tiles into one mesh, shares the seam\'s vertices, and keeps every triangle', () => {
-        const { glb, report } = weldTilesGlb(tiles());
-        expect(report.meshesIn).toBe(2);
-        expect(report.trianglesOut).toBe(6);
-        const g = parseGlbBytes(glb);
-        expect(g.json.meshes).toHaveLength(1);
-        // the seam's two vertices each side became one: 4 + 4 + 4 corners in, the 2 seam pairs and the wall's 2 base corners shared
-        expect(report.verticesIn).toBe(18);
-        expect(report.verticesWelded).toBe(8);
-    });
-
-    it('averages normals across the old seam but keeps the crease where the wall stands', () => {
-        const { glb } = weldTilesGlb(tiles());
-        const g = parseGlbBytes(glb);
-        const p = g.json.meshes[0].primitives[0];
-        const P = readAccessor(g, p.attributes.POSITION).data, N = readAccessor(g, p.attributes.NORMAL).data;
-        for (let i = 0; i < P.length / 3; i++) {
-            const n = [N[i * 3], N[i * 3 + 1], N[i * 3 + 2]];
-            // the ground (y = 0) faces straight up on both tiles, the seam included; the wall faces along x, its crease kept
-            if (Math.abs(P[i * 3 + 1]) < 1e-6 && n[1] > 0.5) expect(n[1]).toBeCloseTo(1, 6);
-            else expect(Math.abs(n[0])).toBeCloseTo(1, 6);
-        }
     });
 });
