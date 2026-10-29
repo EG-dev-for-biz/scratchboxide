@@ -52,6 +52,8 @@ export interface SetCameraLensParams {
     focusPoint?: FocusPointParams | null;
     anamorphicSqueeze?: number | null;
     depthOfField?: boolean | null;
+    /** False turns off temporal anti-aliasing under the lens effects; null restores the default (on). */
+    temporalAntiAliasing?: boolean | null;
     /** Film grain (SceneFilmGrain); fields given are merged into the lens's, null removes it. */
     filmGrain?: Partial<SceneFilmGrain> | null;
     /** Lens flare (SceneLensFlare); fields given are merged into the lens's, null removes it. */
@@ -145,6 +147,10 @@ export function mergeCameraLens(previous: SceneCameraLens | undefined, params: S
     if (params.depthOfField !== undefined) {
         if (params.depthOfField === null) delete lens.depthOfField;
         else lens.depthOfField = !!params.depthOfField;
+    }
+    if (params.temporalAntiAliasing !== undefined) {
+        if (params.temporalAntiAliasing === null) delete lens.temporalAntiAliasing;
+        else lens.temporalAntiAliasing = !!params.temporalAntiAliasing;
     }
     if (params.filmGrain !== undefined) {
         if (params.filmGrain === null) delete lens.filmGrain;

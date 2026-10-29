@@ -29,6 +29,7 @@ import { VfxPlateMatchmoveService } from '../../services/video/VfxPlateMatchmove
 import { LensDistortionEffect } from '../../services/optics/LensDistortionEffect';
 import { CinematicBokehPass } from '../../services/optics/CinematicBokehPass';
 import { LensGlowPass, type LensGlowSettings } from '../../services/optics/LensGlowPass';
+import { TemporalAAPass } from '../../services/optics/TemporalAAPass';
 import { lensMeasuresFocus } from './viewportFocus';
 
 /** Widest overscan rendered for distortion (2x the frame on each axis = 4x the pixels). */
@@ -40,7 +41,7 @@ export const MAX_OVERSCAN = 2;
  */
 export const MAX_BLUR_RADIUS_FRAME_FRACTION = 0.12;
 
-export type ViewportOpticsPassName = 'depth-of-field' | 'lens-distortion' | 'lens-flare' | 'diffusion' | 'film-grain' | 'output' | (string & {});
+export type ViewportOpticsPassName = 'temporal-aa' | 'depth-of-field' | 'lens-distortion' | 'lens-flare' | 'diffusion' | 'film-grain' | 'output' | (string & {});
 
 /** Flare defaults when the lens sets only an amount: four ghosts, a faint halo, no streak, flaring above 1.5 (brighter than white). */
 export const DEFAULT_FLARE: Required<Omit<SceneLensFlare, 'amount'>> = { ghosts: 4, halo: 0.3, streak: 0, threshold: 1.5 };
@@ -434,6 +435,8 @@ export class ViewportOpticsChain {
     private lensPass: LensDistortionEffect | null = null;
     private bokehPass: CinematicBokehPass | null = null;
     private glowPass: LensGlowPass | null = null;
+    private taaPass: TemporalAAPass | null = null;
+    private taaCopyTarget: THREE.WebGLRenderTarget | null = null;
     private sceneTarget: THREE.WebGLRenderTarget | null = null;
     private dofTarget: THREE.WebGLRenderTarget | null = null;
     private lensTarget: THREE.WebGLRenderTarget | null = null;
@@ -474,6 +477,14 @@ export class ViewportOpticsChain {
             this.glowPass.dispose();
             this.glowPass = null;
         }
+        // temporal anti-aliasing runs whenever the chain draws, unless the lens turns it off
+        const taa = this.active && lens?.temporalAntiAliasing !== false;
+        if (taa && !this.taaPass) this.taaPass = new TemporalAAPass();
+        else if (!taa && this.taaPass) {
+            this.taaPass.dispose();
+            this.taaPass = null;
+        }
+        this.taaPass?.reset();
         if (!this.plan.depthOfField || this.focus?.id !== this.plan.depthOfField.focusObjectId) this.focus = null;
         if (!this.active) this.disposeTargets();
         this.overscanKey = '';
@@ -583,6 +594,9 @@ export class ViewportOpticsChain {
         this.sceneTarget = this.ensureTarget(this.sceneTarget, RW, RH, true, samples);
         const widened = RW !== W || RH !== H;
         if (widened) camera.setViewOffset(W, H, -(RW - W) / 2, -(RH - H) / 2, RW, RH);
+        // a sub-pixel jitter of the projection for this frame's scene draw only (depth of field and overlays see the
+        // unjittered camera)
+        this.taaPass?.beginJitter(camera, RW, RH);
 
         const overlays = io.overlays.filter((o): o is THREE.Object3D => !!o && o.visible);
         overlays.forEach(o => { o.visible = false; });
@@ -609,9 +623,21 @@ export class ViewportOpticsChain {
                 renderer.setClearColor(clearColour, clearAlpha);
             }
             overlays.forEach(o => { o.visible = true; });
+            this.taaPass?.endJitter(camera);
         }
         const depthTexture = drawn_.depthTexture;
         let current = this.sceneTarget;
+
+        // temporal anti-aliasing: every lens effect after it reads the steady, resolved frame
+        if (this.taaPass) {
+            if (depthTexture) {
+                current = this.taaPass.render(renderer, current.texture, depthTexture, RW, RH);
+                drawn.push('temporal-aa');
+            } else {
+                issues.push('no depth texture from the scene draw; temporal anti-aliasing not drawn');
+                this.taaPass.reset();
+            }
+        }
 
         // depth of field
         let focusM: number | null = null;
@@ -645,6 +671,12 @@ export class ViewportOpticsChain {
 
         // overlays: sharp, on top, in the same (widened) frustum as the scene
         if (overlays.length > 0) {
+            // the resolved frame is also the next frame's history: overlays go on a copy of it
+            if (this.taaPass && current !== this.sceneTarget && current !== this.dofTarget) {
+                this.taaCopyTarget = this.ensureTarget(this.taaCopyTarget, RW, RH, false, 0);
+                this.taaPass.copy(renderer, current.texture, this.taaCopyTarget);
+                current = this.taaCopyTarget;
+            }
             const autoClear = renderer.autoClear;
             renderer.autoClear = false;
             renderer.setRenderTarget(current);
@@ -730,7 +762,8 @@ export class ViewportOpticsChain {
         this.sceneTarget?.dispose();
         this.dofTarget?.dispose();
         this.lensTarget?.dispose();
-        this.sceneTarget = this.dofTarget = this.lensTarget = null;
+        this.taaCopyTarget?.dispose();
+        this.sceneTarget = this.dofTarget = this.lensTarget = this.taaCopyTarget = null;
         if (this.output) {
             this.output.material.dispose();
             this.output.mesh.geometry.dispose();

@@ -216,6 +216,9 @@ export const CameraSettingsControl: React.FC<CameraSettingsControlProps> = ({
     const heldDistance = measuredFocus !== null ? { focusDistanceMeters: Number(measuredFocus.toFixed(3)) } : {};
     const setFocusMode = (mode: 'manual' | 'auto') => {
         if (mode === focusMode) return;
+        // the distance as the viewport measures it now, not as the panel last polled it
+        const now = readFocusDistance?.() ?? measuredFocus;
+        const heldDistance = now !== null && now !== undefined ? { focusDistanceMeters: Number(now.toFixed(3)) } : {};
         if (mode === 'auto') {
             runLens({
                 focusMode: 'auto',

@@ -970,6 +970,11 @@ export interface SceneCameraLens {
     anamorphicSqueeze?: number;
     /** False keeps the lens values but draws no depth of field. */
     depthOfField?: boolean;
+    /**
+     * Temporal anti-aliasing under the lens effects (a jittered camera averaged over recent frames), so small bright
+     * light does not flicker through depth of field, flare or diffusion. On whenever any lens effect is drawn; false turns it off.
+     */
+    temporalAntiAliasing?: boolean;
 }
 
 /** What the viewport shows while a graph node holds the display flag; every list is optional, one is enough. */

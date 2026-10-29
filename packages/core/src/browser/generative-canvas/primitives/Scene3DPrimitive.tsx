@@ -2407,8 +2407,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 aerialPerspectiveRef.current?.update(t, deltaSec);
                 godRaysRef.current?.update?.(t, deltaSec);
                 // a cloud in front of the sun dims and diffuses the rays the same way it already dims SunGlare's halo
-                // (both read the same measured cloudVisibility, so the two stay consistent with each other)
-                godRaysRef.current?.setCloudVisibility?.(skyDomeModuleRef.current?.sunGlare?.cloudVisibility ?? 1);
+                // (both from the same measured cloudVisibility, eased the same way: a raw read stepped the rays with each probe)
+                godRaysRef.current?.setCloudVisibility?.(skyDomeModuleRef.current?.sunGlare?.easedCloudVisibility() ?? 1);
 
                 // Biome terrain dynamics
                 terrainBiomeRef.current?.update?.(t, deltaSec);

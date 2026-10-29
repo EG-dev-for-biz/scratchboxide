@@ -134,7 +134,11 @@ export const CINEMATIC_BOKEH_PREFILTER_SHADER = {
         // ceiling and a NaN taken as dark. Finite highlights pass unchanged, keeping their energy.
         vec4 sbFiniteColor(vec4 c) {
             for (int k = 0; k < 4; k++) if (!(c[k] == c[k])) c[k] = 0.0;
-            return clamp(c, vec4(-6.0e4), vec4(6.0e4));
+            c = clamp(c, vec4(-6.0e4), vec4(6.0e4));
+            // soft ceiling: above 2e4 (far brighter than any sun the scene draws) luminance rolls off toward 4e4, smoothly
+            float l = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
+            if (l > 2.0e4) { float e = l - 2.0e4; c.rgb *= (2.0e4 + e / (1.0 + e / 2.0e4)) / l; }
+            return c;
         }
         void main() {
             vec2 px = 1.0 / uResolution;

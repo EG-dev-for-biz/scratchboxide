@@ -18,6 +18,7 @@ import * as THREE from 'three';
 import { DEFAULT_DIFFUSION_SPREAD, DEFAULT_FLARE, planViewportOptics } from '../src/browser/generative-canvas/primitives/scene3d/viewportOptics';
 import { mergeCameraLens } from '../src/browser/generative-canvas/services/operators/lighting-camera-operators';
 import { SunGlare, VISIBILITY_EASE_SECONDS } from '../src/browser/generative-canvas/services/atmosphere/SunGlare';
+import { haltonJitter, TemporalAAPass } from '../src/browser/generative-canvas/services/optics/TemporalAAPass';
 
 describe('lens flare and diffusion on the scene lens', () => {
     it('plans each only when asked for, with defaults filled in and values held to their ranges', () => {
@@ -83,5 +84,33 @@ describe('the sun glare under a changing visibility', () => {
     it('reaches the same value at any frame rate', () => {
         const at = (fps: number) => { const g = glare(); g.ease(1, 0); let v = 1; for (let t = 1000 / fps; t <= 500 + 1e-6; t += 1000 / fps) v = g.ease(0, t); g.dispose(); return v; };
         expect(Math.abs(at(30) - at(120))).toBeLessThan(0.01);
+    });
+});
+
+describe('temporal anti-aliasing jitter', () => {
+    it('covers the pixel evenly over its cycle, centred on it', () => {
+        const pts = Array.from({ length: 8 }, (_, i) => haltonJitter(i));
+        for (const [x, y] of pts) { expect(Math.abs(x)).toBeLessThan(0.5); expect(Math.abs(y)).toBeLessThan(0.5); }
+        expect(new Set(pts.map(p => p.join(','))).size).toBe(8);
+        const mx = pts.reduce((a, p) => a + p[0], 0) / 8, my = pts.reduce((a, p) => a + p[1], 0) / 8;
+        expect(Math.abs(mx)).toBeLessThan(0.1);
+        expect(Math.abs(my)).toBeLessThan(0.1);
+        expect(haltonJitter(8)).toEqual(haltonJitter(0));
+    });
+
+    it('offsets the projection by a sub-pixel step and restores it after the draw', () => {
+        const camera = new THREE.PerspectiveCamera(45, 2, 0.1, 100);
+        camera.updateProjectionMatrix();
+        const before = camera.projectionMatrix.clone();
+        const taa = new TemporalAAPass();
+        taa.beginJitter(camera, 800, 400);
+        const [jx, jy] = taa.jitter;
+        // a point straight ahead lands jx pixels off the centre
+        const p = new THREE.Vector3(0, 0, -10).applyMatrix4(camera.projectionMatrix);
+        expect(p.x * 400).toBeCloseTo(jx, 4);
+        expect(p.y * 200).toBeCloseTo(jy, 4);
+        taa.endJitter(camera);
+        expect(camera.projectionMatrix.equals(before)).toBe(true);
+        taa.dispose();
     });
 });
