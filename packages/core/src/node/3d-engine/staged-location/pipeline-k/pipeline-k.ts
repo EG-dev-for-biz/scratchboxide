@@ -144,7 +144,13 @@ export const PIPELINE_K_VERSION = `pipeline-k/3(${ORTHO_RECTIFY_VERSION})`;
 
 /** Pipeline K when the request (or SCRATCHBOX_STAGED_PROCEDURAL) asks for 'k'. */
 export function stagedPipelineK(request: { pipeline?: string }, env: NodeJS.ProcessEnv = process.env): boolean {
-    return (request.pipeline ?? env.SCRATCHBOX_STAGED_PROCEDURAL ?? '').trim().toLowerCase() === 'k';
+    const p = (request.pipeline ?? env.SCRATCHBOX_STAGED_PROCEDURAL ?? '').trim().toLowerCase();
+    return p === 'k' || p === 'kd';
+}
+
+/** Pipeline K-D: K's straightening applied to a whole district (no isolate), its trees and surroundings kept. */
+export function stagedPipelineKD(request: { pipeline?: string; isolate?: boolean }): boolean {
+    return (request.pipeline ?? '').trim().toLowerCase() === 'kd' && request.isolate !== true;
 }
 
 export interface RectifiedOrthos {

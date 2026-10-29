@@ -38,7 +38,9 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     // and inactivity watchdogs; the blockout runner adds ffmpeg encodes (10 min cap each).
     // A district (no isolate) rebuilds every building the scan confirms: its massing alone may take 125 min
     // (orchestrator.ts DISTRICT_RUN_BUDGET_MS, 140 min, plus the run's 2 min margin).
-    google_3d_tiles_get_clay: args => ({ maxMs: args.isolate === true ? 40 * MIN : 142 * MIN }),
+    // Pipeline K-D builds a large district as chunks, each a district build of its own, several at a time
+    // (orchestrator.ts CHUNKED_DISTRICT_RUN_BUDGET_MS, 360 min, plus the margin).
+    google_3d_tiles_get_clay: args => ({ maxMs: args.isolate === true ? 40 * MIN : args.pipeline === 'kd' ? 362 * MIN : 142 * MIN }),
     google_3d_tiles_get_full_texture: { maxMs: 40 * MIN },
     google_3d_tiles_clay_blockout_runner: { maxMs: 60 * MIN },
     // With a location it ingests 3D Tiles (above) before running the script.

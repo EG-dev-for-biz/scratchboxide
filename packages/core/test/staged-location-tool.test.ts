@@ -76,6 +76,10 @@ describe('parseStagedLocationArgs', () => {
         expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', isolate: true, procedural: false }).request).not.toHaveProperty('procedural');
         expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', isolate: true, procedural: false }).request).not.toHaveProperty('pipeline');
         expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', procedural: true }).request).not.toHaveProperty('procedural');
+        // pipeline K-D: K over a district, never isolated nor procedural
+        expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', pipeline: 'kd' }).request).toMatchObject({ isolate: false, pipeline: 'kd' });
+        expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', isolate: true, pipeline: 'kd' }).request).toMatchObject({ isolate: false, pipeline: 'kd' });
+        expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', isolate: true, pipeline: 'kd' }).request).not.toHaveProperty('procedural');
     });
 
     it('needs a query, a sound tree budget, and for a retry a run id of 8 hex digits and a known stage; a retry needs no query', () => {

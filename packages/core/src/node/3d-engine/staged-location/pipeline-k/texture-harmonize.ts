@@ -43,7 +43,7 @@ import { SRGB8_TO_LINEAR, linearToSrgb255 } from '../../../../common/spatial/pho
 import type { RgbaImage8 } from '../tile-texture-transfer';
 import { Rows, solveLeastSquares } from './ortho-rectify';
 
-export const TEXTURE_HARMONIZE_VERSION = 'texture-harmonize/2';
+export const TEXTURE_HARMONIZE_VERSION = 'texture-harmonize/4';
 
 export const TEXTURE_HARMONIZE_PARAMS = {
     /** Sample spacing over the triangles (m), and at most this many samples a triangle. */
@@ -70,6 +70,8 @@ export interface TextureHarmonizeReport {
     gains: { meanAbsLog: number; maxAbsLog: number };
     seams: { pairs: number; before: number; afterMatch: number; after: number };
     kept: boolean; why: string; ms: number;
+    /** Where the time went, by phase (ms). */
+    phasesMs?: Record<string, number>;
 }
 
 interface Sample { x: number; y: number; z: number; nx: number; ny: number; nz: number; img: number; u: number; v: number; w: number; c: [number, number, number]; roof: boolean }
@@ -104,17 +106,20 @@ function forEachTexturedTriangle(g: ParsedGlb, json: any, fn: (img: number, p: F
 /** The top-down height map of every triangle of the GLB (the highest surface over each heightCellM cell). */
 function topHeightMap(g: ParsedGlb, json: any, P: TextureHarmonizeParams): (x: number, z: number) => number {
     let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
-    const tris: number[] = [];
+    // sized up front (a district's corners outgrow a plain array)
+    const prims: Array<{ pos: ArrayLike<number>; idx?: ArrayLike<number>; n: number }> = [];
     for (const mesh of json.meshes ?? []) for (const prim of mesh.primitives ?? []) {
         if ((prim.mode ?? 4) !== 4 || prim.attributes?.POSITION === undefined) continue;
         const pos = readAccessor(g, prim.attributes.POSITION).data;
         const idx = prim.indices !== undefined ? readAccessor(g, prim.indices).data : undefined;
-        const n = idx ? idx.length : pos.length / 3;
-        for (let t = 0; t < n; t++) {
-            const i = idx ? idx[t] : t;
-            tris.push(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
-            x0 = Math.min(x0, pos[i * 3]); x1 = Math.max(x1, pos[i * 3]); z0 = Math.min(z0, pos[i * 3 + 2]); z1 = Math.max(z1, pos[i * 3 + 2]);
-        }
+        prims.push({ pos, ...(idx ? { idx } : {}), n: Math.floor((idx ? idx.length : pos.length / 3) / 3) * 3 });
+    }
+    const tris = new Float32Array(prims.reduce((a, q) => a + q.n * 3, 0));
+    let o = 0;
+    for (const { pos, idx, n } of prims) for (let t = 0; t < n; t++) {
+        const i = idx ? idx[t] : t;
+        tris[o++] = pos[i * 3]; tris[o++] = pos[i * 3 + 1]; tris[o++] = pos[i * 3 + 2];
+        x0 = Math.min(x0, pos[i * 3]); x1 = Math.max(x1, pos[i * 3]); z0 = Math.min(z0, pos[i * 3 + 2]); z1 = Math.max(z1, pos[i * 3 + 2]);
     }
     if (!tris.length) return () => -Infinity;
     const c = P.heightCellM, W = Math.max(1, Math.ceil((x1 - x0) / c) + 1), H = Math.max(1, Math.ceil((z1 - z0) / c) + 1);
@@ -220,12 +225,29 @@ function sampleLinear(img: RgbaImage8, u: number, v: number): [number, number, n
 function samplesOf(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, P: TextureHarmonizeParams, areas: { roofM2: number; hiddenM2: number }): Sample[] {
     const out: Sample[] = [];
     const top = topHeightMap(g, json, P);
+    // a triangle smaller than one sample's patch adds its area to a carry, and takes one sample (at its middle, weighted by
+    // the carried area) once the carry reaches a patch: the samples follow the surface's area, not its triangle count (a
+    // district's scan, a million and more small triangles, made several million samples that its memory could not hold)
+    const patch = P.sampleM * P.sampleM;
+    const carried = new Map<number, number>();
     forEachTexturedTriangle(g, json, (source, p, uv) => {
         const img = images.get(source);
         if (!img) return;
         const surf = triangleFacing(p, P);
         if (!surf) return;
         const [nx, ny, nz] = surf.n;
+        if (surf.area < patch) {
+            // per photo: one photo's small triangles never lend their area to another's sample
+            const carry = (carried.get(source) ?? 0) + surf.area;
+            if (carry < patch) { carried.set(source, carry); return; }
+            carried.set(source, 0);
+            const x = (p[0] + p[3] + p[6]) / 3, y = (p[1] + p[4] + p[7]) / 3, z = (p[2] + p[5] + p[8]) / 3, w = carry;
+            const roof = surf.up && seenFromAbove(x, y, z, top, P);
+            if (surf.up) { if (roof) areas.roofM2 += w; else { areas.hiddenM2 += w; return; } }
+            const su = (uv[0] + uv[2] + uv[4]) / 3, sv = (uv[1] + uv[3] + uv[5]) / 3, lin = sampleLinear(img, su, sv);
+            out.push({ x, y, z, nx, ny, nz, img: source, u: su, v: sv, w, c: [Math.log(lin[0] + LOG_EPS), Math.log(lin[1] + LOG_EPS), Math.log(lin[2] + LOG_EPS)], roof });
+            return;
+        }
         const ux = p[3] - p[0], uy = p[4] - p[1], uz = p[5] - p[2], vx = p[6] - p[0], vy = p[7] - p[1], vz = p[8] - p[2];
         const steps = Math.max(1, Math.min(Math.floor(Math.sqrt(2 * P.maxSamplesPerTriangle)) - 1, Math.ceil(Math.max(Math.hypot(ux, uy, uz), Math.hypot(vx, vy, vz)) / P.sampleM)));
         const count = ((steps + 1) * (steps + 2)) / 2, w = surf.area / count;
@@ -270,21 +292,28 @@ function fieldWeights(f: Field, u: number, v: number): [number[], number[]] {
 /**
  * Harmonises the photos in `images` (image index -> de-lit photo) of the textured GLB `g` (its JSON `json`) in place:
  * colour matched per side and height band, seams levelled. `groundY` is the ground the bands are measured from;
- * `masks` are the photos' surfaceClassMasks (computed here when not given).
+ * `masks` are the photos' surfaceClassMasks (computed here when not given). A district (pipeline K-D) passes `buildingOf`,
+ * the building a point stands in (by plan x, z; -1 for none): the groups and the seam patches are then per building as well, so a
+ * photo is only compared with the others on the same building's surfaces, and two buildings of different stone keep their
+ * own colours, even where they meet flush.
  */
-export function harmonizeTextures(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, groundY: number, P: TextureHarmonizeParams = TEXTURE_HARMONIZE_PARAMS, masks?: Map<number, Uint8Array>): TextureHarmonizeReport {
+export function harmonizeTextures(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, groundY: number, P: TextureHarmonizeParams = TEXTURE_HARMONIZE_PARAMS, masks?: Map<number, Uint8Array>, opts: { buildingOf?: (x: number, z: number) => number; /** Each phase as it ends, with its time (ms). */ onPhase?: (phase: string, ms: number) => void } = {}): TextureHarmonizeReport {
     const t0 = Date.now();
+    const phasesMs: Record<string, number> = {};
+    let tp = t0;
+    const phase = (name: string) => { const t = Date.now(); phasesMs[name] = t - tp; tp = t; opts.onPhase?.(name, phasesMs[name]); };
     const areas = { roofM2: 0, hiddenM2: 0 };
     const samples = samplesOf(g, json, images, P, areas);
+    phase('samples');
     const report: TextureHarmonizeReport = { images: images.size, samples: samples.length, groups: 0, roofs: { roofM2: Math.round(areas.roofM2), hiddenM2: Math.round(areas.hiddenM2), roofGains: 0 }, gains: { meanAbsLog: 0, maxAbsLog: 0 }, seams: { pairs: 0, before: 0, afterMatch: 0, after: 0 }, kept: false, why: '', ms: 0 };
     if (samples.length < 100 || images.size < 2) { report.why = 'fewer than two photos or too few samples: nothing to harmonise'; report.ms = Date.now() - t0; return report; }
     // 2. groups and their references
     const groupOf = (s: Sample) => {
-        const band = Math.floor((s.y - groundY) / P.bandM);
-        if (s.ny > P.flatNy) return `up:${band}`;
-        if (s.ny < -P.flatNy) return `down:${band}`;
+        const band = Math.floor((s.y - groundY) / P.bandM), b = opts.buildingOf ? `b${opts.buildingOf(s.x, s.z)}:` : '';
+        if (s.ny > P.flatNy) return `${b}up:${band}`;
+        if (s.ny < -P.flatNy) return `${b}down:${band}`;
         const az = Math.atan2(s.nx, s.nz), bin = ((Math.round((az / (2 * Math.PI)) * P.sideBins) % P.sideBins) + P.sideBins) % P.sideBins;
-        return `side${bin}:${band}`;
+        return `${b}side${bin}:${band}`;
     };
     // a photo's roof and the rest of it are matched apart: one gain each (key gainKey; the photo is key >> 1)
     const gainKey = (s: Sample) => s.img * 2 + (s.roof ? 1 : 0);
@@ -316,11 +345,13 @@ export function harmonizeTextures(g: ParsedGlb, json: any, images: Map<number, R
         for (const v of gg) { sumAbs += Math.abs(v); maxAbs = Math.max(maxAbs, Math.abs(v)); }
     }
     report.gains = { meanAbsLog: gain.size ? +(sumAbs / (3 * gain.size)).toFixed(4) : 0, maxAbsLog: +maxAbs.toFixed(4) };
+    phase('gains');
     // 3. seam patches: per cell of space and facing, the mean colour and UV of each photo there; a patch two photos share is a seam
     const facingBin = (s: Sample) => (s.ny > P.flatNy ? 'u' : s.ny < -P.flatNy ? 'd' : String(((Math.round((Math.atan2(s.nx, s.nz) / (2 * Math.PI)) * P.seamFacingBins) % P.seamFacingBins) + P.seamFacingBins) % P.seamFacingBins));
     const patches = new Map<string, Map<number, { w: number; c: [number, number, number]; u: number; v: number }>>();
     for (const s of samples) {
-        const k = `${Math.floor(s.x / P.seamM)},${Math.floor(s.y / P.seamM)},${Math.floor(s.z / P.seamM)},${facingBin(s)}`;
+        // a district: two buildings meeting flush are never levelled into each other
+        const k = `${opts.buildingOf ? `b${opts.buildingOf(s.x, s.z)}:` : ''}${Math.floor(s.x / P.seamM)},${Math.floor(s.y / P.seamM)},${Math.floor(s.z / P.seamM)},${facingBin(s)}`;
         let m = patches.get(k); if (!m) patches.set(k, (m = new Map()));
         let e = m.get(gainKey(s)); if (!e) m.set(gainKey(s), (e = { w: 0, c: [0, 0, 0], u: 0, v: 0 }));
         e.w += s.w; e.u += s.w * s.u; e.v += s.w * s.v; for (let c = 0; c < 3; c++) e.c[c] += s.w * s.c[c];
@@ -333,6 +364,7 @@ export function harmonizeTextures(g: ParsedGlb, json: any, images: Map<number, R
         for (let k = 1; k < list.length; k++) pairs.push({ a: list[0], b: list[k], w: Math.min(list[0].w, list[k].w) });
     }
     report.seams.pairs = pairs.length;
+    phase('patches');
     const g0 = (img: number, c: number) => gain.get(img)?.[c] ?? 0;
     const seamDiff = (off?: Float64Array[], fields?: Map<number, Field>, useGain = true) => {
         let s = 0, wt = 0;
@@ -358,6 +390,7 @@ export function harmonizeTextures(g: ParsedGlb, json: any, images: Map<number, R
         fields.set(img, { nx, ny, base: nodes });
         nodes += nx * ny;
     }
+    phase('seamsBefore');
     const off: Float64Array[] = [];
     for (let c = 0; c < 3; c++) {
         const rows = new Rows();
@@ -376,26 +409,36 @@ export function harmonizeTextures(g: ParsedGlb, json: any, images: Map<number, R
         for (let k = 0; k < nodes; k++) sol.u[k] = Math.max(-P.maxOffsetLog, Math.min(P.maxOffsetLog, sol.u[k]));
         off.push(sol.u);
     }
+    phase('solve');
     report.seams.after = +seamDiff(off, fields).toFixed(4);
+    report.phasesMs = phasesMs;
     if (!(report.seams.after < report.seams.before)) { report.why = `the seams did not get closer (${report.seams.before} -> ${report.seams.after} in log colour)`; report.ms = Date.now() - t0; return report; }
     // apply: per texel, the photo's gain (its roof's on a roof texel) and its field's offset, in linear light
     const classOf = masks ?? surfaceClassMasks(g, json, images, P);
     for (const [img, im] of images) {
         const f = fields.get(img)!, wallGain = gain.get(img * 2) ?? [0, 0, 0], roofGain = gain.get(img * 2 + 1) ?? [0, 0, 0], out = new Uint8Array(im.rgba);
         const mask = classOf.get(img);
-        for (let y = 0; y < im.height; y++) for (let x = 0; x < im.width; x++) {
-            const [k, w] = fieldWeights(f, (x + 0.5) / im.width, (y + 0.5) / im.height);
-            const p = (y * im.width + x) * 4;
-            const gg = mask?.[y * im.width + x] === TEXEL_ROOF ? roofGain : wallGain;
-            for (let c = 0; c < 3; c++) {
-                let o = gg[c];
-                for (let q = 0; q < 4; q++) o += w[q] * off[c][k[q]];
-                const lin = SRGB8_TO_LINEAR[im.rgba[p + c]] * Math.exp(o);
-                out[p + c] = Math.round(linearToSrgb255(lin));
+        // the field's bilinear cell and weight per column and per row (fieldWeights, worked out once per line, not per texel)
+        const W = im.width, H = im.height, ci = new Int32Array(W), ca = new Float64Array(W), rj = new Int32Array(H), rb = new Float64Array(H);
+        for (let x = 0; x < W; x++) { const fx = ((x + 0.5) / W) * (f.nx - 1); ci[x] = Math.min(f.nx - 2, Math.floor(fx)); ca[x] = fx - ci[x]; }
+        for (let y = 0; y < H; y++) { const fy = ((y + 0.5) / H) * (f.ny - 1); rj[y] = Math.min(f.ny - 2, Math.floor(fy)); rb[y] = fy - rj[y]; }
+        for (let y = 0; y < H; y++) {
+            const b = rb[y], row = f.base + rj[y] * f.nx;
+            for (let x = 0; x < W; x++) {
+                const a = ca[x], k00 = row + ci[x], k10 = k00 + 1, k01 = k00 + f.nx, k11 = k01 + 1;
+                const w00 = (1 - a) * (1 - b), w10 = a * (1 - b), w01 = (1 - a) * b, w11 = a * b;
+                const p = (y * W + x) * 4;
+                const gg = mask?.[y * W + x] === TEXEL_ROOF ? roofGain : wallGain;
+                for (let c = 0; c < 3; c++) {
+                    const oc = off[c];
+                    const o = gg[c] + w00 * oc[k00] + w10 * oc[k10] + w01 * oc[k01] + w11 * oc[k11];
+                    out[p + c] = Math.round(linearToSrgb255(SRGB8_TO_LINEAR[im.rgba[p + c]] * Math.exp(o)));
+                }
             }
         }
         images.set(img, { width: im.width, height: im.height, rgba: out });
     }
+    phase('apply');
     report.kept = true;
     report.why = `${images.size} photos matched to ${report.groups} side and height-band references, roofs apart (${report.roofs.roofM2} m² of roof seen from above, ${report.roofs.hiddenM2} m² of hidden up-facing surface left out; ${report.roofs.roofGains} roof gains) (mean gain ${Math.round((Math.exp(report.gains.meanAbsLog) - 1) * 100)}%), ${pairs.length} shared surface patches levelled: mean patch difference ${report.seams.before} -> ${report.seams.afterMatch} (matched) -> ${report.seams.after} (levelled), in log colour`;
     report.ms = Date.now() - t0;

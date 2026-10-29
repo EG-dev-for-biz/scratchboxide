@@ -161,7 +161,7 @@ function resizeToExact(img: RgbaImage8, width: number, height: number): RgbaImag
 }
 
 /** The twin of tile_refine's photo-textured output `texturedGlb` (its bytes) for the layer `layerKey`. */
-export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, opts?: { /** Each step as it starts and finishes (the run's step log). */ onStep?: (step: string, state: 'running' | 'done' | 'failed') => void; recreate?: TileRefineRecreateOptions; /** Pipeline K: the de-lit photos colour-matched per side and height band and their seams levelled (pipeline-k/texture-harmonize.ts), measured from this ground. */ harmonize?: { groundY: number }; /** Pipeline K: roughness, metalness and normal under the photos by appearance region (pipeline-k/material-regions.ts), one library set per class. */ materialRegions?: { sets: (classes: RegionClass[]) => Promise<RegionSet[]>; /** The tile-only harvest (material-harvest.ts): classes read from the wall alone, with their texture, for a pick by colour and texture. */ harvest?: boolean; /** The window fit's planes (window-fit.ts fittedPlanesOf): their windows drawn on the scan pieces lying on them. */ planes?: FittedPlane[] } }): Promise<TileRefineTwin> {
+export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, opts?: { /** Each step as it starts and finishes (the run's step log). */ onStep?: (step: string, state: 'running' | 'done' | 'failed') => void; recreate?: TileRefineRecreateOptions; /** Pipeline K: the de-lit photos colour-matched per side and height band and their seams levelled (pipeline-k/texture-harmonize.ts), measured from this ground. */ /** false: the photos are already de-lit (a chunked district's welded ground, its chunks' twins joined): harmonised as they are. */ delight?: boolean; harmonize?: { groundY: number; /** A district (K-D): the building a point stands in (plan x, z; -1 for none), so colours are matched per building. */ buildingOf?: (x: number, z: number) => number }; /** Pipeline K: roughness, metalness and normal under the photos by appearance region (pipeline-k/material-regions.ts), one library set per class. */ materialRegions?: { sets: (classes: RegionClass[]) => Promise<RegionSet[]>; /** The tile-only harvest (material-harvest.ts): classes read from the wall alone, with their texture, for a pick by colour and texture. */ harvest?: boolean; /** The window fit's planes (window-fit.ts fittedPlanesOf): their windows drawn on the scan pieces lying on them. */ planes?: FittedPlane[] } }): Promise<TileRefineTwin> {
     const g = parseGlbBytes(texturedGlb);
     const json = JSON.parse(JSON.stringify(g.json));
     const materials: any[] = json.materials ?? (json.materials = []);
@@ -205,7 +205,7 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     const surfaces = opts?.harmonize ? surfaceClassMasks(g, json, new Map(decodedImages.map(d => [d.i, d.decoded]))) : undefined;
     let roofTexels = 0;
     if (surfaces) for (const m of surfaces.values()) for (let k = 0; k < m.length; k++) if (m[k] === TEXEL_ROOF) roofTexels++;
-    const jobs: ImageJob[] = decodedImages.map(({ i, im, decoded }) => ({ originalIndex: i, name: im.name ?? `image_${i}`, mimeType: im.mimeType, delit: delightImage(decoded, surfaces?.get(i)) }));
+    const jobs: ImageJob[] = decodedImages.map(({ i, im, decoded }) => ({ originalIndex: i, name: im.name ?? `image_${i}`, mimeType: im.mimeType, delit: opts?.delight === false ? decoded : delightImage(decoded, surfaces?.get(i)) }));
 
     const finalImage = new Map<number, RgbaImage8>();
     for (const job of jobs) finalImage.set(job.originalIndex, job.delit);
@@ -235,7 +235,7 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
 
     // pipeline K: one colour across the photos (after the de-light, on the pixels that will be shown)
     let harmonize: TextureHarmonizeReport | undefined;
-    if (opts?.harmonize && finalImage.size) { opts.onStep?.('harmonize', 'running'); harmonize = harmonizeTextures(g, json, finalImage, opts.harmonize.groundY, undefined, surfaces); opts.onStep?.('harmonize', 'done'); }
+    if (opts?.harmonize && finalImage.size) { opts.onStep?.('harmonize', 'running'); harmonize = harmonizeTextures(g, json, finalImage, opts.harmonize.groundY, undefined, surfaces, opts.harmonize.buildingOf ? { buildingOf: opts.harmonize.buildingOf } : {}); opts.onStep?.('harmonize', 'done'); }
 
     // pipeline K: material regions on the harmonised photos (accepted glass edits them before they are encoded)
     let regionsPlan: MaterialRegionsPlan | undefined, regionsSkipped: string | undefined;

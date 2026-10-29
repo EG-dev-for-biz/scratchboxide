@@ -25,16 +25,19 @@ import { solarRoofFromBuildingShape } from './pipeline-e/solar-roof';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as v8 from 'v8';
+import { Worker } from 'worker_threads';
+import { workerTsRegisterSource } from '../../worker-ts-register';
 import { isClientDisconnect, stagedRunRegistry } from './staged-run-registry';
 import type { CanvasArtifact } from '../../../browser/generative-canvas/canvas-types';
 import type { ToolContext, ToolHandlerOutcome, ToolResultPayload } from '../../gemini/tools/types';
 import { MissingInputError } from '../../../common/errors/pipeline-errors';
-import { STAGED_VISION_MODEL_DEFAULT } from '../../../common/spatial/staged-location-contracts';
+import { STAGED_VISION_MODEL_DEFAULT, type StageEvent } from '../../../common/spatial/staged-location-contracts';
 import { GeminiClient } from '../../gemini/gemini-client';
 import { GoogleMediaCredentialsService } from '../../google-media-credentials-service';
 import type { GroundedReferenceClient } from '../../spatial/search-grounded-reference';
 import { createStreetViewGroundingImageService } from '../../spatial/StreetViewGroundingImageService';
-import { Google3DTileBlockoutPipelineService, getGoogle3DTilesFullTexture } from '../../spatial/Google3DTileBlockoutPipelineService';
+import { Google3DTileBlockoutPipelineService, getGoogle3DTilesFullTexture, prefetchGoogle3DTileLeaves } from '../../spatial/Google3DTileBlockoutPipelineService';
 import { resolveMapsApiKey } from '../../../browser/generative-canvas/services/google-maps-service';
 import { GoogleElevationService } from '../../../browser/generative-canvas/services/google-elevation-service';
 import { getTileRefineService } from '../tile-refine-service';
@@ -51,7 +54,8 @@ import { StageCache, stagedWorkspaceRoot } from './stage-cache';
 import { genAiEnhanceClient } from './texture-enhance';
 import { lightingCorrectionEnabled, lightingModels } from './texture-lighting';
 import {
-    STAGE_IDS, runStagedLocation, type StageId, type StagedExtraction, type StagedLocationDeps, type StagedLocationRequest, type ResolvedPlace
+    STAGE_IDS, runStagedLocation, StagedLocationHardFailure, type StageId, type StagedExtraction, type StagedLocationContext, type StagedLocationDeps,
+    type StagedLocationOutcome, type StagedLocationRequest, type ResolvedPlace
 } from './orchestrator';
 
 // ----------------------------------------------------------------------------------------------------------------
@@ -166,7 +170,8 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
         }
     }
     const place = parsePlaceArg(toolName, args.place);
-    const asked = args.pipeline === 'g' || args.pipeline === 'h' || args.pipeline === 'i' || args.pipeline === 'j' || args.pipeline === 'k' ? args.pipeline : undefined;
+    // 'kd' is K over a whole district: it never isolates
+    const asked = args.pipeline === 'g' || args.pipeline === 'h' || args.pipeline === 'i' || args.pipeline === 'j' || args.pipeline === 'k' || args.pipeline === 'kd' ? args.pipeline : undefined;
     // one building is pipeline K's, the scan straightened with its own photo, from the chat and the 3D Building button alike
     // (user decision 2026-10-26), unless the caller asks for a procedural rebuild (procedural true, or a procedural pipeline by
     // name or by SCRATCHBOX_STAGED_PROCEDURAL) or for the scan detailed (procedural false)
@@ -180,14 +185,14 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
     return {
         request: {
             query,
-            isolate: args.isolate === true,
+            isolate: args.isolate === true && asked !== 'kd',
             ...(radiusM !== undefined ? { radiusM } : {}),
             trees: args.trees !== false,
             ...(treeTriangleBudget !== undefined ? { treeTriangleBudget } : {}),
             stageIntoActiveScene: args.stageIntoActiveScene === true,
             ...(typeof args.enhance === 'boolean' ? { enhance: args.enhance } : {}),
             // a procedural rebuild when asked for (above); never for pipeline K or a scan asked to be detailed
-            ...(args.isolate === true && args.procedural !== false && pipeline !== 'k' ? { procedural: true } : {}),
+            ...(args.isolate === true && args.procedural !== false && pipeline !== 'k' && pipeline !== 'kd' ? { procedural: true } : {}),
             // which pipeline ('g', 'h', 'i' or 'j' procedural, pipeline-h/pipeline-h.ts stagedProcedural reads it, else the environment;
             // 'k' the straightened scan, pipeline-k/pipeline-k.ts)
             ...(pipeline ? { pipeline } : {}),
@@ -260,7 +265,7 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
             const r = await getGoogle3DTilesFullTexture({
                 lat: req.lat, lng: req.lng, formattedAddress: req.place.formattedAddress, landmarkName: req.place.formattedAddress,
                 ...(req.place.elevation !== undefined ? { elevation: req.place.elevation } : {})
-            }, { radiusMeters: req.radiusM, outputDir: req.outDir, outputGlbPath: textured, geometryGlbPath: geometry, signal: req.signal });
+            }, { radiusMeters: req.radiusM, outputDir: req.outDir, outputGlbPath: textured, geometryGlbPath: geometry, signal: req.signal, ...(req.rect ? { rect: req.rect } : {}) });
             if (r.mock) throw new Error('the extraction returned placeholder tiles, not Google 3D Tiles');
             if (!r.geometryGlbPath || !r.frame || !r.leafIds || !r.copyrights || !r.fetchedAt || r.leafGeometricErrorM === undefined) {
                 throw new Error('the extraction did not report its leaves, attribution and frame');
@@ -302,6 +307,10 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
         // search-grounded reference images (the bridges' detail the scan cannot resolve): the Vertex client with the image models
         groundedReferences: async () => (await new GoogleMediaCredentialsService().createVertexClient()) as unknown as GroundedReferenceClient,
         vehicleRemoval: true,
+        // pipeline K-D: the district's leaf tiles fetched ahead of its chunks, into the shared leaf cache
+        prefetchTiles: req => prefetchGoogle3DTileLeaves({ lat: req.lat, lng: req.lng, ...(req.elevation !== undefined ? { elevation: req.elevation } : {}) }, req.radiusM, { ...(req.signal ? { signal: req.signal } : {}), ...(req.onProgress ? { onProgress: req.onProgress } : {}) }),
+        // pipeline K-D: each chunk of a chunked district is a build of its own, on its own worker thread
+        runChunk: (request, o) => runStagedLocationOffThread(request, workspaceRoot, undefined, { ...(o.signal ? { signal: o.signal } : {}), ...(o.onProgress ? { reportProgress: (m: string) => o.onProgress!(m) } : {}) }),
         // the texture pass's model texture rung: the image model redraws the tile transfer, kept only past its gate
         // (SCRATCHBOX_TEXTURE_ENHANCE=0 turns the rung off); default mode 'recreate' (user decision, 2026-10-21) removes
         // the scan's own baked shadow/highlight and recovers the material's true colour, gated on structure and
@@ -343,6 +352,78 @@ export function stagedToolPayload(outcome: Awaited<ReturnType<typeof runStagedLo
     } as unknown as ToolResultPayload;
 }
 
+/** What the main thread sends a build's worker (staged-location-worker.ts): a stop. */
+export type StagedWorkerIn = { kind: 'abort'; message: string; name?: string };
+/** What a build's worker posts back: its stage events and progress as they happen, then its outcome or its error. */
+export type StagedWorkerOut =
+    | { kind: 'event'; event: StageEvent; artifact?: CanvasArtifact }
+    | { kind: 'progress'; message: string; fraction?: number }
+    | { kind: 'done'; outcome: StagedLocationOutcome }
+    | { kind: 'error'; name: string; message: string; stack?: string; stage?: string; reasonCode?: string };
+
+/** SCRATCHBOX_STAGED_WORKER=0 runs the staged build on the server's main thread, as before. */
+export function stagedWorkerEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+    return env.SCRATCHBOX_STAGED_WORKER?.trim() !== '0';
+}
+
+const STAGED_WORKER_BOOTSTRAP = `
+const { workerData } = require('worker_threads');
+${workerTsRegisterSource()}
+require(workerData.entry);
+`;
+
+/**
+ * runStagedLocation on its own worker thread, with services it makes itself (createStagedLocationDeps on `root`): the
+ * same events, outcome and errors, while the server's main thread stays free to stream the chat and serve the layers
+ * already committed. The worker gets the server's own heap limit; the signal stops it (the build ends as stopped, and
+ * the worker is terminated if it has not ended a few seconds later).
+ */
+export function runStagedLocationOffThread(request: StagedLocationRequest, root: string, runId: string | undefined, ctx: StagedLocationContext): Promise<StagedLocationOutcome> {
+    const dir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
+    const entry = ['staged-location-worker.js', 'staged-location-worker.ts'].map(n => path.join(dir, n)).find(p => fs.existsSync(p));
+    if (!entry) return Promise.reject(new Error(`the staged build worker was not found beside ${dir}`));
+    const heapMb = Math.floor(v8.getHeapStatistics().heap_size_limit / (1024 * 1024));
+    return new Promise<StagedLocationOutcome>((resolve, reject) => {
+        let settled = false, killTimer: NodeJS.Timeout | undefined;
+        const w = new Worker(STAGED_WORKER_BOOTSTRAP, {
+            eval: true, resourceLimits: { maxOldGenerationSizeMb: heapMb },
+            workerData: {
+                entry, request, root, runId,
+                ...(ctx.remainingMs ? { deadlineAt: Date.now() + ctx.remainingMs() } : {}),
+                ...(ctx.activeArtifact ? { activeArtifact: ctx.activeArtifact } : {}),
+                ...(ctx.retry ? { retry: ctx.retry } : {}), ...(ctx.resume ? { resume: ctx.resume } : {})
+            }
+        });
+        const finish = (fn: () => void) => {
+            if (settled) return;
+            settled = true;
+            ctx.signal?.removeEventListener('abort', onAbort);
+            if (killTimer) clearTimeout(killTimer);
+            fn();
+        };
+        // the build ends itself on a stop (as stopped, with what it committed); a worker that has not ended is terminated
+        const onAbort = () => {
+            const r = ctx.signal!.reason;
+            w.postMessage({ kind: 'abort', message: r instanceof Error ? r.message : String(r ?? 'stopped'), ...(r instanceof Error ? { name: r.name } : {}) } satisfies StagedWorkerIn);
+            killTimer = setTimeout(() => finish(() => { void w.terminate(); reject(r instanceof Error ? r : new Error('the staged build was stopped')); }), 10_000);
+        };
+        if (ctx.signal?.aborted) onAbort(); else ctx.signal?.addEventListener('abort', onAbort, { once: true });
+        w.on('message', (m: StagedWorkerOut) => {
+            if (m.kind === 'event') ctx.emitStage?.(m.event, m.artifact);
+            else if (m.kind === 'progress') ctx.reportProgress?.(m.message, m.fraction);
+            else if (m.kind === 'done') finish(() => { resolve(m.outcome); void w.terminate(); });
+            else finish(() => {
+                const e = m.name === 'StagedLocationHardFailure' ? new StagedLocationHardFailure((m.stage ?? 'resolve') as StageId, m.reasonCode ?? 'failed', m.message) : Object.assign(new Error(m.message), { name: m.name });
+                if (m.stack) e.stack = m.stack;
+                reject(e);
+                void w.terminate();
+            });
+        });
+        w.on('error', err => finish(() => reject(err)));
+        w.on('exit', code => finish(() => reject(new Error(`the staged build worker exited with code ${code} before it answered`))));
+    });
+}
+
 /** google_3d_tiles_get_clay when it remeshes: the staged build. `injected` replaces the real dependencies (tests). */
 export async function runStagedLocationTool(
     toolName: string,
@@ -366,10 +447,19 @@ export async function runStagedLocationTool(
     const runId = injected?.newRunId?.() ?? crypto.randomBytes(4).toString('hex');
     registry.begin(runId, own);
     const detach = registry.attach(runId, (event, artifact) => ctx.emitStage?.(event, artifact));
-    const deps = injected ?? await createStagedLocationDeps(root, { signal: own.signal });
     let outcome: Awaited<ReturnType<typeof runStagedLocation>>;
     try {
-        outcome = await runStagedLocation(request, { ...deps, newRunId: () => runId }, {
+        // the build on its own thread (its stages hold the CPU for minutes), unless the services are injected (tests) or it is turned off
+        if (!injected && stagedWorkerEnabled()) outcome = await runStagedLocationOffThread(request, root, runId, {
+            signal: own.signal,
+            emitStage: (event, artifact) => registry.record(runId, event, artifact),
+            ...(ctx.reportProgress ? { reportProgress: ctx.reportProgress } : {}),
+            ...(typeof (ctx as unknown as { remainingMs?: () => number }).remainingMs === 'function' ? { remainingMs: (ctx as unknown as { remainingMs: () => number }).remainingMs } : {}),
+            ...(ctx.request?.activeArtifact ? { activeArtifact: ctx.request.activeArtifact } : {}),
+            ...(retry ? { retry } : {}),
+            ...(resume ? { resume } : {})
+        });
+        else outcome = await runStagedLocation(request, { ...(injected ?? await createStagedLocationDeps(root, { signal: own.signal })), newRunId: () => runId }, {
             signal: own.signal,
             emitStage: (event, artifact) => registry.record(runId, event, artifact),
             reportProgress: ctx.reportProgress,

@@ -114,7 +114,7 @@ import {
 import { VisionModelChain, type VisionGenAIClient } from '../../gemini/vision-model-chain';
 import { segmentOwnershipViews } from './ownership-masks';
 import { buildGroundModel, geodeticToScan, loadScanMesh, scanToGeodetic, surfaceModel, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
-import { removeVehicles, vehicleRemovalEnabled, visionVehicleJudge, VEHICLE_REMOVAL_PARAMS, VEHICLE_REMOVAL_VERSION, type VehicleRemovalReport } from './vehicle-removal';
+import { removeVehicles, vehicleRemovalEnabled, visionVehicleBatchJudge, visionVehicleJudge, VEHICLE_REMOVAL_PARAMS, VEHICLE_REMOVAL_VERSION, type VehicleRemovalReport } from './vehicle-removal';
 import { buildRoadMesh, measureRoadSurfaces, sbRoadieEnabled, writeRoadsGlb, PROCEDURAL_ROADS_VERSION, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
 import { renderTopDownPhoto } from './top-down-photo';
 import { synthesizeRoadTextures } from './road-texture';
@@ -194,7 +194,12 @@ import { fetchFootprints, type FootprintSource } from './facade-footprints';
 import { runMassingStage, runNativeMassing, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, SCAN_FOOTPRINT_TOKEN, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
 import { PIPELINE_G_VERSION, runPipelineG, stagedPipelineG } from './pipeline-g/pipeline-g';
 import { H_BUDGET_MARGIN_MS, H_POLICY, PIPELINE_H_VERSION, stagedProcedural } from './pipeline-h/pipeline-h';
-import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK } from './pipeline-k/pipeline-k';
+import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
+import { districtBuildingIndex, districtFootprints } from './pipeline-k/district-buildings';
+import { chunkCpuShare, chunkOwner, chunkParallel, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, planDistrictChunks, type DistrictChunkPlan, type TileFrame } from './pipeline-k/district-chunks';
+import { mergeGlbs } from './glb-subset';
+import { runTileSeamWeld } from '../tile-seam-weld-service';
+import * as os from 'os';
 import { PARTY_WALL_TEXTURE_VERSION, texturePartyWall } from './pipeline-k/party-wall-texture';
 import { measureVisibleDefects, VISIBLE_DEFECTS_PARAMS } from './pipeline-k/visible-defects';
 import { TEXTURE_HARMONIZE_VERSION, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
@@ -327,7 +332,9 @@ export const STAGES = {
      * budget, the same ratio as before the raise (this stage waits on top of the main pass, and may texture more than
      * one later layer).
      */
-    'textures-late': { order: -1, title: 'Real textures of later layers', budgetMs: 12_000_000 }
+    'textures-late': { order: -1, title: 'Real textures of later layers', budgetMs: 12_000_000 },
+    // pipeline K-D: the rest of a chunked district, each chunk a build of its own, several at once, joined as each finishes
+    chunks: { order: 2, title: 'The rest of the district', budgetMs: 21_600_000 }
 } as const;
 export type StageId = keyof typeof STAGES;
 
@@ -390,6 +397,8 @@ export const RUN_BUDGET_MS = 38 * 60_000;
  * own 125 min; the chat tool's limit for a district call (tool-time-budgets.ts) is this plus the margin.
  */
 export const DISTRICT_RUN_BUDGET_MS = 140 * 60_000;
+/** Pipeline K-D's chunked district: its chunks are whole district builds of their own, several at a time (tool-time-budgets.ts adds the margin). */
+export const CHUNKED_DISTRICT_RUN_BUDGET_MS = 360 * 60_000;
 export const RUN_DEADLINE_MARGIN_MS = 120_000;
 /** Layers the texture pass works on at once. */
 export /** The no-fit rung's Street View is kept only on at least this many held-out views (fewer cannot tell it from the clay). */
@@ -448,12 +457,17 @@ export interface StagedLocationRequest {
      * 'k' (pipeline-k/) is not procedural: the remeshed scan, its facade orthos straightened and levelled, its facades
      * rebuilt on them; it replaces pipeline E and the facade grammar for the build.
      */
-    pipeline?: 'g' | 'h' | 'i' | 'j' | 'k' | (string & {});
+    pipeline?: 'g' | 'h' | 'i' | 'j' | 'k' | 'kd' | (string & {});
     /**
      * Steps turned on or off for this build, by step key (TOGGLEABLE_STEPS in staged-build-steps.ts): the node graph's
      * toggles. A step not named keeps its default (its environment switch, else on).
      */
     steps?: Record<string, boolean>;
+    /**
+     * Pipeline K-D: this build is one chunk of a chunked district (pipeline-k/district-chunks.ts), run by the district's own
+     * build, which places its layers in the district's frame and cuts them to what the chunk owns; it never chunks itself.
+     */
+    chunk?: { of: string; index: number; /** What it extracts (x east, z south, m about its own place): its cell grown to its buildings. */ rect?: { x0: number; z0: number; x1: number; z1: number } };
 }
 
 export interface StagedExtraction {
@@ -492,7 +506,7 @@ export interface StagedLocationDeps {
     /** Heights above mean sea level (metres) for geodetic points, in order (the Google Elevation API); absent without a key. */
     elevation?: { sample(points: Array<{ lat: number; lng: number }>, signal?: AbortSignal): Promise<number[]> };
     /** Extracts the leaves within radiusM of (lat, lng) into `outDir` (textured.glb, geometry.glb). */
-    extract(req: { lat: number; lng: number; radiusM: number; outDir: string; place: ResolvedPlace; signal?: AbortSignal; onProgress?: (message: string) => void }): Promise<StagedExtraction>;
+    extract(req: { lat: number; lng: number; radiusM: number; outDir: string; place: ResolvedPlace; signal?: AbortSignal; onProgress?: (message: string) => void; /** Only the leaves touching this rectangle (x east, z south, m about the place): a chunk of a chunked district. */ rect?: { x0: number; z0: number; x1: number; z1: number } }): Promise<StagedExtraction>;
     vegetation: {
         strip(req: TileVegetationStripRequest & { roi?: StripRoi }): Promise<TileVegetationStripResult>;
         plant(req: TileVegetationPlantRequest): Promise<TileVegetationPlantResult>;
@@ -561,6 +575,10 @@ export interface StagedLocationDeps {
     now?: () => number;
     newRunId?: () => string;
     sleep?: (ms: number) => Promise<void>;
+    /** Pipeline K-D: every leaf tile of the district's radius fetched into the shared leaf cache while the chunks build; absent = each chunk fetches its own. */
+    prefetchTiles?: (req: { lat: number; lng: number; elevation?: number; radiusM: number; signal?: AbortSignal; onProgress?: (done: number, total: number) => void }) => Promise<{ leaves: number; downloaded: number; ms: number }>;
+    /** Pipeline K-D: one chunk of a chunked district built on its own (its own worker, staged-location-tool.ts); absent = no chunking. */
+    runChunk?: (request: StagedLocationRequest, opts: { signal?: AbortSignal; onProgress?: (message: string) => void }) => Promise<StagedLocationOutcome>;
 }
 
 export interface StagedLocationContext {
@@ -602,6 +620,8 @@ export interface StagedLocationOutcome {
         remesh: { ok: boolean; url?: string; error?: string };
         resolvedAddress: string;
         geoAnchor: StagedExtraction['geoAnchor'];
+        /** The tangent frame every layer is in (x east, y up, z south about the place, at the extraction's origin height). */
+        frame?: TileFrame;
         /** The raw high-resolution textured extraction. */
         glbPath: string;
         /** The clay ground the objects stand on (the remeshed scan, or its rung). */
@@ -882,6 +902,9 @@ class Runner {
 
     /** A procedural-only build (the 3D Building button): every skip is a step outside that build, left out of the progress view. */
     proceduralOnly = false;
+    /** Every stage's limit times this: a chunked district's builds share the machine (pipeline-k/district-chunks.ts chunkCpuShare). */
+    budgetScale = 1;
+    private budget(id: StageId): number { return STAGES[id].budgetMs * this.budgetScale; }
     /** Stages outside this kind of build on their own (a pipeline K isolate's surroundings), also left out of the progress view. */
     outOfScope: ReadonlySet<StageId> = new Set();
 
@@ -909,7 +932,7 @@ class Runner {
             return { status: 'stopped', source: '', reason };
         }
         this.run.emit(id, 'running');
-        const io = this.io(STAGES[id].budgetMs, extraSignal);
+        const io = this.io(this.budget(id), extraSignal);
         try {
             const out = await this.race(def.run(io.io), io);
             return this.finish(id, out);
@@ -924,9 +947,9 @@ class Runner {
                 this.run.emit(id, 'failed', { reason: hard.message });
                 throw hard;
             }
-            const failure = why === 'budget' ? Object.assign(new Error(`${STAGES[id].title} took longer than its ${Math.round(STAGES[id].budgetMs / 1000)} s limit`), { code: 'timeout' }) : err;
+            const failure = why === 'budget' ? Object.assign(new Error(`${STAGES[id].title} took longer than its ${Math.round(this.budget(id) / 1000)} s limit`), { code: 'timeout' }) : err;
             if (!def.degrade) throw failure;
-            const rung = this.io(STAGES[id].budgetMs, extraSignal);
+            const rung = this.io(this.budget(id), extraSignal);
             try {
                 const out = await this.race(def.degrade(failure, rung.io), rung);
                 return this.finish(id, out);
@@ -1230,6 +1253,77 @@ const BUILDING_BRIEFS = new WeakMap<StagedRun, { path: string; images: number }>
 /** What the district layers lost to the kept structure, per layer (the result's activeScene.footprintHidden). */
 const FOOTPRINT_REPORTS = new WeakMap<StagedRun, { footprint?: StructureFootprint; error?: string; layers: Array<{ objectId: string; removedTriangles: number; keptTriangles: number }> }>();
 
+/** The native steps' own time limit when the request names none (tile-refine-service.ts, tile-vegetation-service.ts). */
+const NATIVE_STEP_TIMEOUT_MS = 300_000;
+
+/** The services with each native step held to `share.threads` and its time limit scaled by `share.slowdown` (a chunked district). */
+function withCpuShare(deps: StagedLocationDeps, share: { threads: number; slowdown: number }): StagedLocationDeps {
+    const limit = (ms: number | undefined) => ms ?? Math.round(NATIVE_STEP_TIMEOUT_MS * share.slowdown);
+    const refine = deps.refine;
+    return {
+        ...deps,
+        refine: {
+            refine: req => refine.refine({ ...req, threads: req.threads ?? share.threads, timeoutMs: limit(req.timeoutMs) }),
+            ...(refine.renderOwnershipViews ? { renderOwnershipViews: refine.renderOwnershipViews.bind(refine) } : {})
+        },
+        vegetation: {
+            ...deps.vegetation,
+            strip: req => deps.vegetation.strip({ ...req, threads: req.threads ?? share.threads, timeoutMs: limit(req.timeoutMs) }),
+            plant: req => deps.vegetation.plant({ ...req, threads: req.threads ?? share.threads, timeoutMs: limit(req.timeoutMs) })
+        }
+    };
+}
+
+/** Two layer transforms one after the other (either may be absent). */
+function chainLayerTransforms(a: StagedRun['layerTransform'], b: StagedRun['layerTransform']): StagedRun['layerTransform'] {
+    if (!a) return b;
+    if (!b) return a;
+    return (layer, meta) => b(a(layer, meta), meta);
+}
+
+/** A layer file joined into a chunked district (published under this suffix): never cut again. */
+const CHUNK_URL = /_kd\d+_[0-9a-f]{8}\.glb$/;
+
+/**
+ * Pipeline K-D: the centre build of a chunked district keeps only what it owns (pipeline-k/district-chunks.ts): each layer
+ * it commits (and its textured twin) is cut, the scan and ground by triangle to `keep` (what it owns and a band past it, for
+ * the seam stage), trees whole to `keepOwn`. The vector first paint and the chunks joined from the other builds
+ * (meta.extra.chunk) are left as they are.
+ */
+function territoryClipper(run: StagedRun, cache: StageCache, keep: (x: number, z: number) => boolean, keepOwn: (x: number, z: number) => boolean): (layer: StagedLayer, meta: StagedLayerObjectMeta) => StagedLayer {
+    const done = new Map<string, { url: string; bytes: number; kept: number } | undefined>();
+    const identity = Float64Array.from([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    const clip = (url: string, whole: boolean) => {
+        if (!url.startsWith('/models/') || CHUNK_URL.test(url)) return undefined;
+        if (done.has(url)) return done.get(url);
+        const source = path.join(cache.modelsDir, path.basename(url));
+        if (!fs.existsSync(source)) return undefined;
+        const out = joinChunkGlb(fs.readFileSync(source), identity, whole ? keepOwn : keep, { whole });
+        let r: { url: string; bytes: number; kept: number } | undefined;
+        if (out.removedTriangles) {
+            const dir = path.join(cache.dir, 'district-chunks');
+            fs.mkdirSync(dir, { recursive: true });
+            const name = `${path.basename(url, '.glb')}_kd0_${crypto.createHash('sha256').update(url).digest('hex').slice(0, 8)}.glb`;
+            fs.writeFileSync(path.join(dir, name), out.glb);
+            const pub = cache.publishFile(path.join(dir, name), name);
+            r = { url: pub.url, bytes: pub.bytes, kept: out.keptTriangles };
+        }
+        done.set(url, r);
+        return r;
+    };
+    return (layer, meta) => {
+        if (layer.stage === 'vector' || (meta.extra as { chunk?: number } | undefined)?.chunk !== undefined) return layer;
+        const whole = !!meta.vegetation;
+        const c = clip(layer.url, whole), ct = layer.textured ? clip(layer.textured.url, whole) : undefined;
+        if (!c && !ct) return layer;
+        return {
+            ...layer,
+            ...(c ? { url: c.url, bytes: c.bytes, counts: { vertices: layer.counts.vertices, triangles: c.kept } } : {}),
+            ...(layer.textured && ct ? { textured: { ...layer.textured, url: ct.url, bytes: ct.bytes } } : {})
+        };
+    };
+}
+
 /**
  * The layer transform of a run staged around a kept structure: each district scan layer (source Google3DTilesClay, not
  * vegetation) is republished without its triangles inside the structure's footprint and above its base. The footprint
@@ -1339,12 +1433,20 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     const artifactId = stagedArtifactId(runId, intoActive?.id);
     const run = new StagedRun(runId, request, ctx, now, artifactId, intoActive);
     runningStages = () => STAGE_IDS.filter(id => run.summary(id).status === 'running');
-    const runner = new Runner(run, ctx, now, request.isolate ? RUN_BUDGET_MS : DISTRICT_RUN_BUDGET_MS);
+    const runner = new Runner(run, ctx, now, request.isolate ? RUN_BUDGET_MS : stagedPipelineKD(request) && !request.chunk ? CHUNKED_DISTRICT_RUN_BUDGET_MS : DISTRICT_RUN_BUDGET_MS);
     runner.proceduralOnly = request.procedural === true;
     // a procedural-only build never lists the other stages, not even as pending before they are skipped
     if (runner.proceduralOnly) for (const s of run.state.stages) if (!PROCEDURAL_STAGES.has(s.stage)) s.outOfScope = true;
     // a pipeline K isolate (the 3D Building default) never loads the place around the building
     const kIsolate = request.isolate === true && request.procedural !== true && stagedPipelineK(request);
+    /** Pipeline K-D: K over a whole district; its vector buildings, once read, group the twin's colour match per building. */
+    const kdDistrict = stagedPipelineKD(request);
+    let districtBuildings: PaintBuilding[] | undefined;
+    /** Pipeline K-D's chunks, when the district is larger than one build reaches (planned once the place is resolved). */
+    let chunkPlan: DistrictChunkPlan | undefined;
+    // a chunked district's builds share the machine: each its share of the cores, its native and stage limits scaled to match
+    const cpuShare = kdDistrict && (request.chunk || (request.radiusM ?? 250) > DISTRICT_CHUNKS_PARAMS.minChunkedRadiusM) ? chunkCpuShare() : undefined;
+    if (cpuShare) { deps = withCpuShare(deps, cpuShare); runner.budgetScale = cpuShare.slowdown; }
     if (kIsolate) {
         runner.outOfScope = PIPELINE_K_ISOLATE_SKIPPED;
         for (const s of run.state.stages) if (PIPELINE_K_ISOLATE_SKIPPED.has(s.stage as StageId)) s.outOfScope = true;
@@ -1407,6 +1509,25 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         placeValue = resolved.value;
         run.state.place = { query: request.query, resolvedAddress: placeValue.formattedAddress, lat: placeValue.lat, lng: placeValue.lng, ...(placeValue.alternatives?.length ? { alternatives: placeValue.alternatives } : {}) };
         persist();
+        // pipeline K-D: a district larger than one build reaches is cut into chunks (pipeline-k/district-chunks.ts); this build is the
+        // centre chunk, its extraction sized to the buildings it owns, and the 'chunks' stage builds and joins the rest
+        if (kdDistrict && !request.chunk && deps.runChunk && deps.vectorEvidence) {
+            try {
+                const radius = request.radiusM ?? 250;
+                const ev = await deps.vectorEvidence({ lat: placeValue.lat, lng: placeValue.lng, radiusM: radius });
+                chunkPlan = planDistrictChunks(radius, selectPaintBuildings(ev, radius).buildings.map(b => ({ id: b.id, centroid: b.centroid, loops: b.parts.map(p => p.loops[0]).filter(l => l && l.length >= 3) })));
+                if (chunkPlan) {
+                    cache.writeRunNote(runId, 'district_chunks', { ...chunkPlan, footprints: chunkPlan.footprints.length });
+                    const owner = chunkOwner(chunkPlan), centre = chunkPlan.chunks.find(c => c.centre)!;
+                    run.note(PROVENANCE.asScanned, `chunked district (${DISTRICT_CHUNKS_VERSION}): the ${Math.round(radius)} m asked for cut into ${chunkPlan.chunks.length} chunks of ${chunkPlan.cellM} m, each building whole in one of them; this build is the centre one (${Math.round(centre.radiusM)} m), the others are built alongside it and joined`);
+                    run.layerTransform = chainLayerTransforms(run.layerTransform, territoryClipper(run, cache, chunkTerritory(chunkPlan, centre.index, DISTRICT_CHUNKS_PARAMS.seamBandM), (x, z) => owner(x, z) === centre.index));
+                }
+            } catch (err) {
+                if (isAbort(err)) throw err;
+                chunkPlan = undefined;
+                run.note(PROVENANCE.asScanned, `the district could not be planned in chunks (${errorMessage(err)}): it is built as one, as far as one build reaches`);
+            }
+        }
         // staged into the active scene: an earlier build's structure rebuild stays (unless this run rebuilds it at the same
         // place), and the district layers lose their own scan of it where it stands
         if (intoActive) {
@@ -1453,6 +1574,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (elevations) { const value = inputs; await cache.run('vector', key, async () => ({ value }), { bypass: true }); }
                 }
                 const { sel, elevations, elevationError } = inputs;
+                if (kdDistrict) districtBuildings = sel.buildings;
                 const left = [
                     sel.partsGivenDefaultHeight ? `${sel.partsGivenDefaultHeight} footprint part${sel.partsGivenDefaultHeight === 1 ? '' : 's'} with no height in the vector data shown at a plausible ${PLAUSIBLE_DEFAULT_HEIGHT_M} m (generated)` : '',
                     sel.buildingsGivenDefaultHeight ? `${sel.buildingsGivenDefaultHeight} building${sel.buildingsGivenDefaultHeight === 1 ? '' : 's'} with no measured height at all, shown at ${PLAUSIBLE_DEFAULT_HEIGHT_M} m (generated)` : '',
@@ -1561,11 +1683,170 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         vectorPromise.catch(() => undefined);
         siblings.push(vectorPromise);
 
+        // ---------------- chunks (pipeline K-D: the rest of a chunked district, pipeline-k/district-chunks.ts) ----------------
+        // each chunk is a district build of its own on its own worker, several at once, nearest first; as each finishes its
+        // layers are placed in this build's frame, cut to what it owns and committed here
+        if (!chunkPlan) runner.skip('chunks', kdDistrict && !request.chunk ? 'the district is small enough for one build' : 'not a chunked district (pipeline K-D)');
+        const plan = chunkPlan;
+        const chunksPromise = !plan ? Promise.resolve(undefined) : runner.stage<{ chunks: number; joined: number; failed: number }>({
+            id: 'chunks',
+            run: async io => {
+                const tiles = await tilesReady;
+                if (!tiles) return { status: 'skipped', source: '', reason: 'the centre build has no tiles to join the chunks to' };
+                const here: TileFrame = { lat: placeValue!.lat, lng: placeValue!.lng, originEllipsoidalHeightM: tiles.extraction.originEllipsoidalHeightM };
+                const owner = chunkOwner(plan);
+                const todo = plan.chunks.filter(c => !c.centre).sort((a, b) => Math.hypot(a.cx, a.cz) - Math.hypot(b.cx, b.cz));
+                // several at once, as memory allows (a district build holds several GB), the centre build running beside them
+                const parallel = chunkParallel();
+                // every chunk's leaf tiles fetched while the first chunks build, nearest first (the chunks are built nearest first too):
+                // a later chunk's extraction then reads its leaves from disk; best effort, a chunk fetches what is missing itself
+                let prefetch: { leaves: number; downloaded: number; ms: number } | { error: string } | undefined;
+                const prefetching = deps.prefetchTiles ? deps.prefetchTiles({ lat: placeValue!.lat, lng: placeValue!.lng, ...(placeValue!.elevation !== undefined ? { elevation: placeValue!.elevation } : {}), radiusM: plan.radiusM, signal: io.signal, onProgress: (d, n) => { if (d === n || d % 512 === 0) io.progress(`fetched ${d} of ${n} leaf tiles for the chunks`); } })
+                    .then(r => { prefetch = r; }, err => { if (!io.signal.aborted) prefetch = { error: errorMessage(err) }; }) : Promise.resolve();
+                const committed: StagedLayer[] = [];
+                const degradations: DegradationRecord[] = [];
+                const report: Array<{ index: number; radiusM: number; buildings: number; status: string; layers?: number; truncated?: boolean; ms: number; error?: string }> = [];
+                let next = 0, joined = 0;
+                const one = async (c: DistrictChunkPlan['chunks'][number]) => {
+                    const t0 = now();
+                    const ll = frameToLatLng(placeValue!, [c.cx, c.cz]);
+                    io.progress(`chunk ${c.index}: building ${c.buildings.length} buildings within ${Math.round(c.radiusM)} m`);
+                    try {
+                        const out = await deps.runChunk!({
+                            query: request.query, isolate: false, radiusM: c.radiusM, trees: request.trees, stageIntoActiveScene: false, pipeline: 'kd',
+                            place: { lat: ll.lat, lng: ll.lng, formattedAddress: `${placeValue!.formattedAddress} (chunk ${c.index})` },
+                            ...(request.enhance !== undefined ? { enhance: request.enhance } : {}), ...(request.steps ? { steps: request.steps } : {}),
+                            chunk: { of: runId, index: c.index, rect: { x0: c.rect.x0 - c.cx, z0: c.rect.z0 - c.cz, x1: c.rect.x1 - c.cx, z1: c.rect.z1 - c.cz } }
+                        }, { signal: io.signal, onProgress: m => io.progress(`chunk ${c.index}: ${m}`) });
+                        if (!out.compat.frame) throw new Error('the chunk did not report its frame');
+                        const m = frameTransform(out.compat.frame, here);
+                        const mine = (x: number, z: number) => owner(x, z) === c.index, band = chunkTerritory(plan, c.index, DISTRICT_CHUNKS_PARAMS.seamBandM);
+                        const layers = ((out.result.artifact as { data?: { stagedBuild?: { layers?: StagedLayer[] } } } | undefined)?.data?.stagedBuild?.layers ?? []);
+                        const hidden = new Set(layers.filter(l => !l.retired).flatMap(l => l.supersedes));
+                        const take = layers.filter(l => !l.retired && !hidden.has(l.objectId) && l.stage !== 'vector');
+                        const dir = path.join(cache.dir, 'district-chunks');
+                        fs.mkdirSync(dir, { recursive: true });
+                        const joinFile = (url: string, whole: boolean) => {
+                            const source = path.join(cache.modelsDir, path.basename(url));
+                            if (!fs.existsSync(source)) return undefined;
+                            const r = joinChunkGlb(fs.readFileSync(source), m, whole ? mine : band, { whole });
+                            const name = `${path.basename(url, '.glb')}_kd${c.index}_${crypto.createHash('sha256').update(`${runId}:${url}`).digest('hex').slice(0, 8)}.glb`;
+                            fs.writeFileSync(path.join(dir, name), r.glb);
+                            return { ...cache.publishFile(path.join(dir, name), name), kept: r.keptTriangles };
+                        };
+                        const batch: StagedLayer[] = [];
+                        for (const l of take) {
+                            const whole = l.stage === 'trees';
+                            const clay = joinFile(l.url, whole);
+                            if (!clay || !clay.kept) continue;
+                            const tex = l.textured ? joinFile(l.textured.url, whole) : undefined;
+                            const layer: StagedLayer = {
+                                ...l, objectId: `${l.objectId}-kd${c.index}`, url: clay.url, bytes: clay.bytes, counts: { vertices: l.counts.vertices, triangles: clay.kept },
+                                supersedes: [], revealAfter: [], reveal: { ...l.reveal, crossfadeFrom: [] },
+                                ...(l.textured && tex ? { textured: { ...l.textured, url: tex.url, bytes: tex.bytes } } : {}),
+                                provenance: { ...l.provenance, note: `${l.provenance.note ? `${l.provenance.note}; ` : ''}chunk ${c.index} of the district, built on its own and joined here: what it owns (its buildings whole, its cell of the ground)` }
+                            };
+                            run.commit(layer, { source: l.stage === 'trees' ? 'SB-Veggie' : 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, ...(l.stage === 'trees' ? { vegetation: true } : {}), extra: { chunk: c.index } });
+                            batch.push(layer);
+                        }
+                        committed.push(...batch);
+                        joined++;
+                        const truncated = out.result.stages.some(s => s.stage === 'tiles' && s.status === 'degraded');
+                        report.push({ index: c.index, radiusM: c.radiusM, buildings: c.buildings.length, status: out.result.status, layers: batch.length, truncated, ms: now() - t0 });
+                        if (truncated) degradations.push(run.degrade(record('chunks', 'chunk_truncated', {
+                            part: { description: `chunk ${c.index} of the district` }, intended: `its ${Math.round(c.radiusM)} m at leaf LOD`, fellTo: 'as far as its leaf tiles reach',
+                            provenanceAfter: PROVENANCE.asScanned, reason: `chunk ${c.index}'s extraction reached the leaf-tile cap before its own radius`, transient: false, runId, now: now()
+                        })));
+                        run.emit('chunks', 'running', { message: `${joined} of ${todo.length} chunks joined`, layers: batch }, true);
+                    } catch (err) {
+                        if (isAbort(err) || io.signal.aborted) throw err;
+                        report.push({ index: c.index, radiusM: c.radiusM, buildings: c.buildings.length, status: 'failed', ms: now() - t0, error: errorMessage(err) });
+                        degradations.push(run.degrade(record('chunks', 'chunk_failed', {
+                            part: { description: `chunk ${c.index} of the district` }, intended: `its ${c.buildings.length} buildings and ground at leaf LOD`, fellTo: "the vector buildings past the centre build's tiles",
+                            provenanceAfter: PROVENANCE.asScanned, reason: `chunk ${c.index} could not be built (${errorMessage(err)})`, cause: err, transient: true, runId, now: now()
+                        })));
+                    }
+                };
+                await Promise.all(Array.from({ length: Math.min(parallel, todo.length) }, async () => { while (next < todo.length) await one(todo[next++]); }));
+                // ---- the seam stage over the joined ground (scene-healing §3.1): the chunks' grounds, each with its band past its
+                // edge, merged (the centre first, then the chunks as they were joined: the overlap trim keeps the lower piece), their
+                // overlaps trimmed, their rims welded within the tolerance and their T-junctions closed (tile_seam_weld, native);
+                // then one colour across them: a gain per photo toward its building's or its ground's reference, and smooth offset
+                // fields where the chunks meet (texture-harmonize.ts); committed as one ground in place of the chunks' ----
+                let seams: Record<string, unknown> | undefined;
+                if (joined) {
+                    // the centre build's own ground and its texture are committed first
+                    for (const id of ['remesh', 'textures', 'textures-late'] as StageId[]) {
+                        while (['pending', 'running'].includes(run.summary(id).status)) {
+                            if (io.signal.aborted) throw io.signal.reason ?? abortError();
+                            await new Promise(r => setTimeout(r, 5_000));
+                        }
+                    }
+                    const shown = run.state.layers.filter(l => !l.retired);
+                    const hiddenNow = new Set(shown.flatMap(l => l.supersedes));
+                    const grounds = shown.filter(l => l.layer === 'l2' && !hiddenNow.has(l.objectId))
+                        .sort((a, b) => (a.objectId.includes('-kd') ? 1 : 0) - (b.objectId.includes('-kd') ? 1 : 0));
+                    if (grounds.length >= 2) {
+                        const t1 = now();
+                        io.progress(`closing the seams between ${grounds.length} chunks' ground`);
+                        const dir = path.join(cache.dir, 'district-chunks', runId);
+                        fs.mkdirSync(dir, { recursive: true });
+                        const textured = grounds.every(l => l.textured);
+                        const merged = mergeGlbs(grounds.map(l => parseGlbBytes(fs.readFileSync(path.join(cache.modelsDir, path.basename(textured ? l.textured!.url : l.url))))), { name: 'district_ground', generator: `scratchbox staged-location pipeline K-D (${DISTRICT_CHUNKS_VERSION}: chunks joined)` });
+                        fs.writeFileSync(path.join(dir, 'ground_merged.glb'), merged);
+                        const weld = await runTileSeamWeld({ inputGlb: path.join(dir, 'ground_merged.glb'), outputGlb: path.join(dir, 'ground_welded.glb'), outputClayGlb: path.join(dir, 'ground_welded_clay.glb'), toleranceM: DISTRICT_CHUNKS_PARAMS.weldToleranceM, timeoutMs: 1_800_000 });
+                        let colour: TextureHarmonizeReport | undefined;
+                        if (textured) {
+                            const fps = districtBuildings?.length ? districtFootprints(districtBuildings) : undefined;
+                            const tw = await tileRefineTwin(fs.readFileSync(path.join(dir, 'ground_welded.glb')), 'l2kd', { delight: false, harmonize: { groundY: 0, ...(fps ? { buildingOf: districtBuildingIndex(fps) } : {}) } });
+                            colour = tw.harmonize;
+                            fs.writeFileSync(path.join(dir, 'ground_levelled.glb'), tw.glb);
+                        }
+                        const key8 = crypto.createHash('sha256').update(`${runId}:${grounds.map(l => l.url).join('|')}`).digest('hex').slice(0, 8);
+                        const pubClay = cache.publishFile(path.join(dir, 'ground_welded_clay.glb'), `${base}_district_ground_${key8}.glb`);
+                        const pubTex = textured ? cache.publishFile(path.join(dir, colour ? 'ground_levelled.glb' : 'ground_welded.glb'), `${base}_district_ground_tex_${key8}.glb`) : undefined;
+                        const sw = weld.seamWeld;
+                        const note = `the ${grounds.length} chunks' ground joined (${DISTRICT_CHUNKS_VERSION}): each kept a ${DISTRICT_CHUNKS_PARAMS.seamBandM} m band past its own edge, the overlaps trimmed by chunk order, ${sw.groupsWelded} rim positions welded within ${DISTRICT_CHUNKS_PARAMS.weldToleranceM * 100} cm (largest move ${(sw.maxWeldDisplacementM * 100).toFixed(1)} cm, within the scan's own error), ${sw.trianglesDropped} sliver triangles dropped${colour ? `; colour across the chunks: ${colour.kept ? colour.why : `left as it was (${colour.why})`}` : ''}`;
+                        const g0 = grounds[0];
+                        const layer: StagedLayer = {
+                            ...g0, objectId: `stg-${key8}-l2kd`, stage: 'chunks', layer: 'l2kd', url: pubClay.url, bytes: pubClay.bytes, counts: layerCounts(path.join(dir, 'ground_welded_clay.glb')),
+                            supersedes: grounds.map(l => l.objectId), revealAfter: [], reveal: { durationMs: 800, stagger: 0, crossfadeFrom: grounds.map(l => l.objectId) },
+                            ...(g0.textured && pubTex ? { textured: { ...g0.textured, url: pubTex.url, bytes: pubTex.bytes } } : {}),
+                            provenance: { ...g0.provenance, note }, cached: false, builtAtMs: now()
+                        };
+                        run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, isGround: true, extra: { chunk: -1 } });
+                        run.setGround(layer.objectId);
+                        committed.push(layer);
+                        run.note(PROVENANCE.remeshed, note);
+                        seams = { grounds: grounds.length, weld: sw, weldMs: weld.ms, ...(colour ? { colour } : {}), ms: now() - t1 };
+                    }
+                }
+                await prefetching;
+                cache.writeRunNote(runId, 'district_chunks_joined', { version: DISTRICT_CHUNKS_VERSION, parallel, chunks: report, ...(seams ? { seams } : {}), ...(prefetch ? { prefetch } : {}) });
+                // the vector buildings shown past the centre build's tiles stand in only where no chunk was joined
+                if (joined === todo.length) for (const l of run.state.layers.filter(x => x.layer === 'l0o' && !x.retired)) run.commit({ ...l, retired: true }, run.layerMeta[l.objectId]);
+                const failed = todo.length - joined;
+                return {
+                    status: failed || degradations.length ? 'degraded' : 'committed', value: { chunks: plan.chunks.length, joined, failed }, layers: committed, degradations,
+                    source: `${joined} of ${todo.length} chunks around the centre built and joined (${parallel} at a time), every building whole in one chunk`
+                };
+            },
+            degrade: async err => ({
+                status: 'degraded', source: '', reason: `the chunks could not be built (${errorMessage(err)})`,
+                degradations: [run.degrade(record('chunks', 'chunks_failed', {
+                    part: { description: 'the district past the centre chunk' }, intended: 'every chunk built and joined', fellTo: "the vector buildings past the centre build's tiles",
+                    provenanceAfter: PROVENANCE.asScanned, reason: `the chunks could not be built (${errorMessage(err)})`, cause: err, transient: true, runId, now: now()
+                }))]
+            })
+        });
+        chunksPromise.catch(() => undefined);
+        siblings.push(chunksPromise);
+
         // ---------------- tiles ----------------
         type TilesValue = { extraction: StagedExtraction; key: string; sizedTo: 'structure' | 'request' | 'district-fallback' | 'district-containment'; structure?: StructurePickResult; ground?: GroundModel; scan?: ScanMesh; unmaskedTop?: Float32Array; canopy?: CanopyMask; vector?: EvidenceLookup; vectorError?: string; rounds: number; cached: boolean; builtAtMs: number };
         /** One extraction, cached for 7 days by place and radius; the entry holds its files, named relative to it. */
-        const extractCached = async (radiusM: number, io: StageIO): Promise<{ extraction: StagedExtraction; key: string; cached: boolean; builtAtMs: number }> => {
-            const key = stageKey('extract/v2', placeValue!.lat.toFixed(6), placeValue!.lng.toFixed(6), Math.round(radiusM));
+        const extractCached = async (radiusM: number, io: StageIO, rect?: { x0: number; z0: number; x1: number; z1: number }): Promise<{ extraction: StagedExtraction; key: string; cached: boolean; builtAtMs: number }> => {
+            const key = stageKey('extract/v2', placeValue!.lat.toFixed(6), placeValue!.lng.toFixed(6), Math.round(radiusM), rect ? [rect.x0, rect.z0, rect.x1, rect.z1].map(v => v.toFixed(1)).join(',') : '');
             const inEntry = (dir: string, v: StagedExtraction): StagedExtraction => ({ ...v, texturedGlb: path.join(dir, v.texturedGlb), geometryGlb: path.join(dir, v.geometryGlb) });
             const hit = !bypass('tiles') ? cache.get<StagedExtraction>('tiles', key) : undefined;
             if (hit && now() - hit.builtAtMs < EXTRACTION_TTL_MS) {
@@ -1573,7 +1854,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 if (fs.existsSync(v.texturedGlb) && fs.existsSync(v.geometryGlb)) return { extraction: v, key, cached: true, builtAtMs: hit.builtAtMs };
             }
             const entry = await cache.run('tiles', key, async dir => {
-                const x = await deps.extract({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM, outDir: dir, place: placeValue!, signal: io.signal, onProgress: m => io.progress(m) });
+                const x = await deps.extract({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM, outDir: dir, place: placeValue!, signal: io.signal, onProgress: m => io.progress(m), ...(rect ? { rect } : {}) });
                 return { value: { ...x, texturedGlb: path.relative(dir, x.texturedGlb), geometryGlb: path.relative(dir, x.geometryGlb) } };
             }, { bypass: true });
             return { extraction: inEntry(entry.dir, entry.value), key, cached: false, builtAtMs: entry.builtAtMs };
@@ -1608,9 +1889,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         }));
                     }
                 } else {
-                    const baseRadiusM = request.radiusM ?? 250;
+                    // a chunked district's centre build reaches its own chunk; the others reach the rest
+                    const baseRadiusM = chunkPlan ? chunkPlan.chunks.find(c => c.centre)!.radiusM : request.radiusM ?? 250;
                     let radiusM = baseRadiusM;
-                    if (deps.vectorEvidence) {
+                    // a chunk of a chunked district extracts its rectangle: its cell already grown to every building it owns
+                    const chunkRect = request.chunk?.rect ?? (chunkPlan ? chunkPlan.chunks.find(c => c.centre)!.rect : undefined);
+                    if (deps.vectorEvidence && !chunkRect) {
                         try {
                             const ev = await deps.vectorEvidence({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: baseRadiusM });
                             radiusM = districtContainmentRadiusM(ev, baseRadiusM);
@@ -1626,7 +1910,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             if (io.signal.aborted) throw err;
                         }
                     }
-                    const x = await extractCached(radiusM, io);
+                    const x = await extractCached(radiusM, io, chunkRect);
                     value = { extraction: x.extraction, key: x.key, sizedTo: radiusM > baseRadiusM ? 'district-containment' : 'request', rounds: 1, cached: x.cached, builtAtMs: x.builtAtMs };
                 }
                 // L1: the extraction as downloaded, geometry only, with the run's fixed camera
@@ -1738,9 +2022,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         io.progress('reading the vehicles from above');
                         const scan = t.scan ?? loadScanMesh(e.texturedGlb);
                         const ground = buildGroundModel(scan, { cellMeters: 1, ...(look ? { water: look.waterAt, road: look.roadAt } : {}) });
-                        const chain = new VisionModelChain<string>({ client: vis.client, candidates: vis.candidates, signal: io.signal, ...chainExtras('vehicles'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                        // SCRATCHBOX_VEHICLES_MODEL: a model tried first for these reads (a faster one; not the default until a checked set shows it reads as well)
+                        const vehicleModel = process.env.SCRATCHBOX_VEHICLES_MODEL?.trim();
+                        const chain = new VisionModelChain<string>({ client: vis.client, candidates: vehicleModel ? [vehicleModel, ...vis.candidates.filter(m => m !== vehicleModel)] : vis.candidates, signal: io.signal, ...chainExtras('vehicles'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
                         const out = await removeVehicles({
-                            texturedGlb: e.texturedGlb, geometryGlb: e.geometryGlb, scan, ground, judge: visionVehicleJudge(chain), outDir: dir, signal: io.signal,
+                            texturedGlb: e.texturedGlb, geometryGlb: e.geometryGlb, scan, ground, judge: visionVehicleJudge(chain), judgeMany: visionVehicleBatchJudge(chain), outDir: dir, signal: io.signal,
                             look: { ...(look ? { buildingAt: look.buildingAt, waterAt: look.waterAt, roadAt: look.roadAt } : {}), within: (x, z) => Math.hypot(x, z) <= covered },
                             log: m => io.progress(m)
                         });
@@ -2615,7 +2901,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 if (carvedBy) bytes = hideFootprintInGlb(bytes, carvedBy).glb;
                 // pipeline K: no per-photo model recreate (it treats neighbouring photos differently); the de-lit photos are
                 // harmonised instead, one colour per side and height band with their seams levelled
-                const kTwin = pipelineK && isolateOk;
+                // pipeline K-D: a district's twin too, its colours matched per building (district-buildings.ts)
+                const kTwin = pipelineK && (isolateOk || (kdDistrict && !request.isolate));
+                const kdBuildings = kTwin && kdDistrict && districtBuildings?.length ? districtFootprints(districtBuildings) : undefined;
                 const harmonizeOn = kTwin && stepOn('twin.harmonize', true);
                 // the image-model party wall: off by default (user decision, 2026-10-28: the tiled wall did not work; the clip and infill close the side), SCRATCHBOX_K_PARTY_WALL_TEXTURE=1 or the node graph on
                 const partyWallOn = kTwin && stepOn('twin.partyWall', process.env.SCRATCHBOX_K_PARTY_WALL_TEXTURE?.trim() === '1');
@@ -2629,9 +2917,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const fitFile = kOrthos ? path.join(kOrthos, WINDOW_FIT_FILE) : undefined;
                 const planes = kOrthos ? fittedPlanesOf(kOrthos) : [];
                 const grammarFile = kOrthos ? path.join(kOrthos, WALL_GRAMMAR_FILE) : undefined;
-                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '');
+                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', kdBuildings ? `kd:${sha256Bytes(Buffer.from(JSON.stringify(kdBuildings)))}` : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '');
                 const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport; materialRegions?: TileRefineTwin['materialRegions'] }>('textures', key, async dir => {
-                    const twin = await tileRefineTwin(bytes, target.layer.layer, kTwin ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), ...(harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0 } } : {}), ...(materialSets ? { materialRegions: { harvest: process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum', sets: (classes: RegionClass[]) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m) }), planes } } : {}) } : enhance ? {
+                    const twin = await tileRefineTwin(bytes, target.layer.layer, kTwin ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), ...(harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0, ...(kdBuildings ? { buildingOf: districtBuildingIndex(kdBuildings) } : {}) } } : {}), ...(materialSets ? { materialRegions: { harvest: process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum', sets: (classes: RegionClass[]) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m) }), planes } } : {}) } : enhance ? {
                         recreate: {
                             client: enhance, ...(deps.textures?.enhanceModels ? { models: deps.textures.enhanceModels } : {}),
                             budgetMs: TILE_REFINE_RECREATE_BUDGET_MS
@@ -3433,7 +3721,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     else {
                         try {
                             io.progress('pipeline K: straightening the facade photos');
-                            const k = await timed('pipelineK', () => rectifyReliefOrthos(r.reliefOrthosDir!, { signal: io.signal }));
+                            const k = await timed('pipelineK', () => rectifyReliefOrthos(r.reliefOrthosDir!, { signal: io.signal, ...(cpuShare ? { threads: cpuShare.threads } : {}) }));
                             orthosKey = `${PIPELINE_K_VERSION}:${k.key}`;
                             r = { ...r, reliefOrthosDir: k.orthosDir };
                             cache.writeRunNote(runId, 'pipeline_k', { version: PIPELINE_K_VERSION, orthosDir: k.orthosDir, cached: k.cached, ms: k.ms, reports: k.reports });
@@ -3444,7 +3732,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, skipped: true, reason: 'turned off for this build' });
                             } else try {
                                 io.progress('pipeline K: fitting the windows on the facade photos');
-                                const wf = await timed('windowFit', () => fitWindowsForOrthos(k.orthosDir, { signal: io.signal }));
+                                const wf = await timed('windowFit', () => fitWindowsForOrthos(k.orthosDir, { signal: io.signal, ...(cpuShare ? { concurrency: cpuShare.threads } : {}) }));
                                 windowFit = wf.file;
                                 // the bay grammar read per wall, from all the photos of each wall's facades together (wall-grammar.ts)
                                 try {
@@ -4455,7 +4743,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         startGrammar();
 
         // ---------------- the district's rebuilt buildings (district-massing.ts) ----------------
-        if (!request.isolate && strip && deps.vectorEvidence && remesh.value?.refined && remesh.value.committed && districtMassingEnabled()) {
+        // pipeline K-D keeps the district's scan and straightens it (pipeline K): no building is massed again
+        if (!request.isolate && !pipelineK && strip && deps.vectorEvidence && remesh.value?.refined && remesh.value.committed && districtMassingEnabled()) {
             const stripped = strip, refined = remesh.value.refined, remeshId = remesh.value.groundLayerId;
             const procedural = proceduralDistrictEnabled();
             type DistrictMassingValue = {
@@ -4974,6 +5263,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             siblings.push(massingPromise);
         } else {
             runner.skip('massing', request.isolate ? 'an isolated structure is rebuilt by its own pipeline'
+                : pipelineK ? "pipeline K-D keeps the district's scan and straightens its facades instead of massing its buildings again"
                 : !districtMassingEnabled() ? 'the district massing is off (SCRATCHBOX_STAGED_DISTRICT_MASSING=1 to try it)'
                 : !strip ? 'the trees were not measured: there is no tree-free scan to measure the buildings on'
                 : !deps.vectorEvidence ? 'no Google vector data: no footprints to rebuild from'
@@ -6008,6 +6298,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
             remesh: f.remeshed ? { ok: true, url: remeshLayer?.url } : { ok: false, error: (run.state.degradations.find(d => d.stage === 'remesh' && d.reasonCode === 'remesh_failed') ?? run.state.degradations.find(d => d.stage === 'remesh'))?.reason ?? 'the remesh did not run' },
             resolvedAddress: f.place.formattedAddress,
             geoAnchor: f.extraction.geoAnchor,
+            frame: { lat: f.place.lat, lng: f.place.lng, originEllipsoidalHeightM: f.extraction.originEllipsoidalHeightM },
             glbPath: f.extraction.rawGlbPath ?? f.extraction.texturedGlb,
             ...(f.groundFile ? { groundGlbPath: f.groundFile } : {}),
             ...(f.trees ? { trees: f.trees } : {})
