@@ -66,6 +66,16 @@ Branch at 0efa1133 (the scoped fallback) on top of 087152dc (reader concurrency 
 * **The backend ran out of memory again** at about 648 s into the build: `FATAL ERROR: Ineffective mark-compacts near heap limit`, heap about 4078 MB. The last log lines before it were the reader's `grammar gemini-3.8-flash` calls, about 6 minutes after the window fit had finished, and `facade_reader/` held 122 files. The JS stack ends in a zlib `CompressionStream` callback (PNG encoding). So concurrency 12 does not fix the reader's memory. The crash is not the segmenter's: run 0ff5e864 crashed the same way with it off. Reported to the reader's session.
 * **The build never finished,** so there is no lattice, glass or viewport result to judge for this run.
 
+## 3d. The reader's out-of-memory crash: cause and fix (runs 6fab5dd3, 6c6c7b96, 2026-10-29)
+
+* **Not concurrency.** Run 6fab5dd3 (reader version 8: concurrency 6, 1200 px crops) crashed the same way. Its memory held flat at about 1.7 GB through plane 73 of 120, then went to 5.3 GB within 10 s. That shape is a runaway allocation, not a leak. The API stopped answering beforehand (a blocked event loop), which also fooled this session's first watcher in run 5f1762a6.
+* **Cause:** `tileZone` (`pipeline-k/facade-reader.ts`) refined the measured storey pitch with a parabola through the best autocorrelation lag and its two neighbours, even when that lag was at the edge of the search window and the curve was still rising past it. A square-wave facade's autocorrelation is piecewise linear there, so the parabola is nearly flat and its vertex can land anywhere. Unguided zones accepted it, and the row loop never ended with a pitch near or below zero.
+* **Reproduction:** on the old code, the test fixture with three rows read 45, 46, 47, 49 or 52 px apart ran out of memory (5 of 23 spacings). Spacing 62 gave a pitch of 102.67 px, outside its search window of 56 to 68 px.
+* **Fix (1c9695a2, facade-reader/9):** the vertex is used only when the best lag peaks above both neighbours, which keeps it within half a lag. A pitch of 2 px or less ends the zone with its reason. A test sweeps all 23 spacings.
+* **Confirmed in the app:** uncached run 6c6c7b96 finished (676 s). The reader read 120 planes in 291 s: 70 replaced, 43 kept, 6 skipped, 1 failed (malformed JSON from the model on plane 35's overview). Memory held at about 3.2 GB through the reader, with one 4.7 GB peak after it had finished. The 2 px guard never fired.
+* **Correction to 3c:** run c7e2d085 was another session's build (its server on 3940–3942 shares this checkout's cache), not this session's.
+* **Open:** in run 6c6c7b96 the window fit ran without the segmenter (`segment: false`) although the server's environment has `SCRATCHBOX_K_WINDOW_SEGMENT=1`. The build was started through `/gemini/tools/run-stream` rather than the chat, because another session's hot edits crashed the page. Not yet explained.
+
 ## 4. Candidate Tool/Service Ideas
 
 * **A "frame this facade" viewport action** — given a facade id of the build, set the camera head-on to its plane and outline its fitted windows; this session computed the plane from `facades.json`, called `__SB_SET_CAMERA_VIEW__` by hand and projected the rects with the page's three.js camera to know where to look.
