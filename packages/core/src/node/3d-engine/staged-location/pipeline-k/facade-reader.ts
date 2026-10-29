@@ -55,20 +55,15 @@ export const FACADE_READER_PARAMS = {
     /** Planes smaller than this (m), or with less of their photo covered, are not read: a wall at least minWallWidthM wide and minHeightM tall (a tower's narrow window-column faces included), a roof at least minWidthM each way. */
     minWallWidthM: 2, minWidthM: 6, minHeightM: 10, minCoverage: 0.3,
     /** The unit cell's crop: up to this tall (m), at least this covered (or nine tenths of the plane's own coverage); the image the model sees
-     * is scaled to at most maxSidePx (cut from 1600 to 1200, user report 2026-10-29: still OOM'd at concurrency 12, and the crash's zlib
-     * frame is CompressionStream's threadpool callback, not this file's own PNG code (encodePng/decodePng are zlib.deflateSync/inflateSync,
-     * same thread, no threadpool) — most likely the SDK gzipping each multi-MB base64 request body on Node's default 4-thread pool, with
-     * more requests in flight than that can drain; shrinking the payload and the count both ease it). */
-    readCropM: 24, minCropCoverage: 0.7, maxSidePx: 1200, maxScale: 4,
+     * is scaled to at most maxSidePx. (2026-10-29: cut to 1200 and concurrency to 6 chasing an OOM that looked like request-compression
+     * pressure; the real cause was tileZone's pitch refinement, fixed in facade-reader/9. Restored to 1600 now that it's fixed.) */
+    readCropM: 24, minCropCoverage: 0.7, maxSidePx: 1600, maxScale: 4,
     /** Zones read per plane at most. */
     maxZones: 4,
     /** Planes read per build at most (the walls first, then the roofs, each largest covered area first; the rest reported unread). */
     maxPlanes: 120,
-    /** At once, cut further to 6 (user report, 2026-10-29: 12 still OOM'd about 6 minutes into facadeRead; 16 crashed sooner). A request's
-     * image payload is gzipped on Node's default 4-thread libuv pool before it goes out; 12 concurrent requests, plus up to 8 hedge
-     * duplicates (VISION_HEDGE_MAX_IN_FLIGHT, shared across the whole process), is up to 20 multi-MB payloads competing for 4 threads,
-     * which queue rather than fail, holding their buffers until a thread frees up. 6 keeps the steady-state queue short of that. */
-    concurrency: 6,
+    /** At once. */
+    concurrency: 12,
     /** A plane whose covered photo varies less than this (luminance standard deviation over mean) is blank: nothing to read, no call. */
     minContrast: 0.06,
     /** The pitch is measured within this share of the read pitch; an opening is drawn where this share of it is covered. */
