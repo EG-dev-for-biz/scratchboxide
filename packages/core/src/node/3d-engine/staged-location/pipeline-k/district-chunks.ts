@@ -23,9 +23,12 @@
  *     cell it lies in; past the radius, to none.
  *  3. The join (joinChunkGlb): a chunk's layers, built in the chunk's own tangent frame, are placed in the district's frame
  *     by the exact rigid transform between the two frames (through ECEF), and cut to what the chunk owns: the scan and the
- *     ground triangle by triangle, by each triangle's middle; trees whole, by each connected piece's middle.
- * Seams: two neighbouring chunks remeshed the ground on either side of a cell line independently, so the line can show a
- * small step or gap at the scan's own triangle size. It never runs through a building with a footprint.
+ *     ground triangle by triangle, each kept when its middle or a corner lies in what the chunk keeps (its own, and a band
+ *     of `seamBandM` past its edge); trees whole, by each connected piece's middle.
+ * Seams: two neighbouring chunks remeshed the ground on either side of a cell line independently, and harmonised their
+ * photos to their own references; the seam stage (district-seams.ts) cuts the overlapping bands exactly at the line, moves
+ * the later chunk's cut edge onto the earlier one's, and levels their colour where they meet. A line never runs through a
+ * building with a footprint.
  */
 
 import * as os from 'os';
@@ -34,17 +37,15 @@ import { GoogleTileDistrictCrawler } from '../../../spatial/GoogleTileDistrictCr
 import { assembleGlb, nodeWorldMatrices, parseGlbBytes, readAccessor, transformPoint, type Mat4 } from '../glb-bytes';
 import { districtBuildingIndex, type DistrictFootprint } from './district-buildings';
 
-export const DISTRICT_CHUNKS_VERSION = 'district-chunks/1';
+export const DISTRICT_CHUNKS_VERSION = 'district-chunks/2';
 
 export const DISTRICT_CHUNKS_PARAMS = {
     /** The grid's cell (m): small enough that a chunk's extraction stays under the leaf-tile cap in a dense centre. */
     cellM: 120,
     /** Context past what a chunk owns (m): its remesh, trees and ground see past their own edge. */
     marginM: 8,
-    /** The ground a chunk keeps past its own edge (m), for the seam stage to trim and weld (scene-healing §3.1). */
+    /** The ground a chunk keeps past its own edge (m), for the seam stage to cut at the line and read colour in (district-seams.ts). */
     seamBandM: 3,
-    /** The seam weld's tolerance (m): rims of neighbouring chunks this close are welded (scene-healing §3.1). */
-    weldToleranceM: 0.03,
     /** A district this small is one build (m): its whole radius already fits under the leaf-tile cap. */
     minChunkedRadiusM: 140,
     /** Chunk builds at once beside the centre build (fewer when memory is short: a build holds several GB). */
@@ -128,12 +129,16 @@ export function chunkParallel(P = DISTRICT_CHUNKS_PARAMS, totalMem = os.totalmem
 export function chunkOwner(plan: DistrictChunkPlan): (x: number, z: number) => number {
     const inBuilding = districtBuildingIndex(plan.footprints, { marginM: 0, cellM: 20 });
     const half = plan.cellM / 2;
+    // the cell by its grid position (a point on a cell line goes to the lower row, then the lower column, as the plan's
+    // row-major order has it); a point whose cell is not in the plan falls back to the search
+    const at = new Map<string, number>();
+    plan.chunks.forEach((c, k) => at.set(`${Math.round(c.cx / plan.cellM)},${Math.round(c.cz / plan.cellM)}`, k));
     return (x, z) => {
         const b = inBuilding(x, z);
         if (b >= 0) return plan.footprints[b].chunk;
         if (Math.hypot(x, z) > plan.radiusM) return -1;
-        const k = plan.chunks.findIndex(c => Math.abs(x - c.cx) <= half && Math.abs(z - c.cz) <= half);
-        return k;
+        const k = at.get(`${Math.ceil((x - half) / plan.cellM)},${Math.ceil((z - half) / plan.cellM)}`);
+        return k ?? plan.chunks.findIndex(c => Math.abs(x - c.cx) <= half && Math.abs(z - c.cz) <= half);
     };
 }
 
@@ -186,8 +191,8 @@ export interface JoinReport { keptTriangles: number; removedTriangles: number; p
 
 /**
  * A chunk's layer GLB placed in the district's frame (`transform`, on a new root node over its scene; its vertices are
- * not rewritten) and cut to what `keep` (plan x, z in the district's frame) gives it: triangle by triangle by each one's
- * middle, or with `whole`, connected piece by piece by each piece's middle (trees: never cut through).
+ * not rewritten) and cut to what `keep` (plan x, z in the district's frame) gives it: triangle by triangle, kept when its
+ * middle or any corner lies in it, or with `whole`, connected piece by piece by each piece's middle (trees: never cut through).
  */
 export function joinChunkGlb(bytes: Uint8Array, transform: Mat4, keep: (x: number, z: number) => boolean, opts: { whole?: boolean; /** false: the transform on a root node, the vertices as they were. */ bake?: boolean } = {}): { glb: Buffer } & JoinReport {
     const glb = parseGlbBytes(bytes);
@@ -229,10 +234,15 @@ export function joinChunkGlb(bytes: Uint8Array, transform: Mat4, keep: (x: numbe
                 }
                 for (let t = 0; t + 2 < count; t += 3) keepTri[t / 3] = verdict.get(find(vi(t))) ? 1 : 0;
             } else {
+                // a triangle that reaches what `keep` gives (its middle or any corner) is kept whole: a long one whose middle lies
+                // past the band but which covers ground the chunk keeps would otherwise leave a hole there that only the
+                // neighbour covered; the seam stage cuts what lies past the line (district-seams.ts)
+                const corner = new Int8Array(pos.length / 3).fill(-1);
+                const kept = (v: number) => { if (corner[v] < 0) { const w = transformPoint(m, pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2]); corner[v] = keep(w[0], w[2]) ? 1 : 0; } return corner[v] === 1; };
                 for (let t = 0; t + 2 < count; t += 3) {
                     const a = vi(t), b = vi(t + 1), c = vi(t + 2);
                     const w = transformPoint(m, (pos[a * 3] + pos[b * 3] + pos[c * 3]) / 3, (pos[a * 3 + 1] + pos[b * 3 + 1] + pos[c * 3 + 1]) / 3, (pos[a * 3 + 2] + pos[b * 3 + 2] + pos[c * 3 + 2]) / 3);
-                    keepTri[t / 3] = keep(w[0], w[2]) ? 1 : 0;
+                    keepTri[t / 3] = keep(w[0], w[2]) || kept(a) || kept(b) || kept(c) ? 1 : 0;
                 }
             }
             const out: number[] = [];
