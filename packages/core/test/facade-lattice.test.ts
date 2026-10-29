@@ -382,6 +382,21 @@ describe('facades on their photo lattice', () => {
         expect(all.built.every(v => v === 1)).toBe(true);
     });
 
+    it('keeps the scan where it lies further behind the plane than any recess (the wall behind a setback), building no deep box there', () => {
+        // the top storey's scan stands 1.6 m behind the plane: another wall, not a window
+        const deep = scan().map((v, i) => (i % 3 === 2 && scan()[i - 1] >= 6.25 ? v - 1.6 : v));
+        const r = latticeFacade(f, photo(), facadeSamples(deep, f))!;
+        const row = (tv: number) => r.t.findIndex((x, i) => tv >= x && tv < r.t[i + 1]);
+        const ns = r.s.length - 1;
+        const builtIn = (tv: number) => r.built.slice(row(tv) * ns, row(tv) * ns + ns);
+        expect(builtIn(7.5).every(v => v === 0)).toBe(true);
+        expect(builtIn(1.5).every(v => v === 1)).toBe(true);
+        // nothing the rebuild drew lies at the clamp's depth
+        let minZ = Infinity;
+        for (let v = 2; v < r.positions.length; v += 3) minZ = Math.min(minZ, r.positions[v]);
+        expect(minZ).toBeGreaterThan(-1.0);
+    });
+
     it('never leaves a tear: what the rebuild claims but does not build is found by the audit, and the scan is put back', () => {
         const soup = scan();
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-'));

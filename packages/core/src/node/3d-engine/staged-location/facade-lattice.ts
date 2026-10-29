@@ -407,6 +407,10 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
         const k = b * ns + a;
         if (!built[k] && Number.isFinite(raw[k]) && inOutline(a, b)) built[k] = 1;
     }
+    // a cell whose scan lies further behind the plane than any recess (minDepthM) is another surface: the wall behind a setback,
+    // or the air beside it with the tower behind seen through it. Rebuilt, it became a box minDepthM deep wearing the photo of
+    // what lies behind; it keeps the scan instead
+    for (let k = 0; k < ns * nt; k++) if (built[k] && Number.isFinite(raw[k]) && raw[k] < P.minDepthM) built[k] = 0;
     // repeats averaged: per row, the windows (read in rows and columns) and the wall each take their median depth
     const win = fitted?.length ? fittedCells(s, t, fitted) : windowGrid(lum, ns, nt);
     const strip = strips.length ? fittedCells(s, t, strips) : undefined;
@@ -528,9 +532,9 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
         else quad([[s0, tb, top], [s1, tb, top], [s1, tb, back], [s0, tb, back]], neg(T), at);
     };
     // where the scan stands beside a rebuilt cell (a neighbour left as scan): its measured depth, else its row's; NaN when the
-    // scan measures nothing there (no face is drawn). Past the lattice's outer edge nothing is drawn: the neighbouring facade or
+    // scan measures nothing there, or another surface further behind than any recess (no face is drawn). Past the lattice's outer edge nothing is drawn: the neighbouring facade or
     // the scan closes the corner, and a face back to the edge cell's own depth would lie on that facade's plane, over its pier
-    const scanDepthAt = (a: number, b: number) => { const v = raw[b * ns + a]; return Number.isFinite(v) ? clamp(v) : Number.isFinite(rowMeds[b]) ? clamp(rowMeds[b]) : NaN; };
+    const scanDepthAt = (a: number, b: number) => { const v = raw[b * ns + a]; return Number.isFinite(v) ? (v < P.minDepthM ? NaN : clamp(v)) : Number.isFinite(rowMeds[b]) ? clamp(rowMeds[b]) : NaN; };
     const isBuilt = (a: number, b: number) => a >= 0 && b >= 0 && a < ns && b < nt && !!built[b * ns + a];
     const beside = (na: number, nb: number) => isBuilt(na, nb) ? depth[nb][na] : na >= 0 && nb >= 0 && na < ns && nb < nt ? scanDepthAt(na, nb) : NaN;
     for (let b = 0; b < nt; b++) for (let a = 0; a < ns; a++) {

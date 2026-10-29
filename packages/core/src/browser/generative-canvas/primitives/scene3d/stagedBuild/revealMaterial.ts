@@ -63,6 +63,13 @@ export function confidenceMapOf(m: THREE.Material | undefined): THREE.Texture | 
 }
 
 /** What one staged mesh should look like this frame. */
+/**
+ * Material flag: the surface was rebuilt on the plane of the scan it replaces, and parts of that scan stay (where the rebuild
+ * does not cover a whole scan triangle, or where the tear audit put it back to close a slit), coplanar with it: drawn with a
+ * small depth bias in front, the rebuild wins wherever both are drawn and the scan shows only where the rebuild is not.
+ */
+export const FRONT_BIAS_KEY = 'sbFrontBias';
+
 export interface MeshStagedLook {
     reveal?: {
         /** The node's own progress, 0..1 (the layer's progress mapped through the node's window). */
@@ -510,11 +517,14 @@ function setUniforms(mat: THREE.Material, mesh: THREE.Object3D, look: MeshStaged
         u.uSbWorkRange.value.set(w.minY, w.maxY);
         u.uSbWorkColor.value.copy(w.color);
     }
-    const over = !!r?.overSource;
-    if (mat.polygonOffset !== over) {
-        mat.polygonOffset = over;
-        mat.polygonOffsetFactor = over ? -1 : 0;
-        mat.polygonOffsetUnits = over ? -4 : 0;
+    // revealed over a source: in front of it; a rebuilt surface lying on the scan it replaces (FRONT_BIAS_KEY): in front of
+    // that scan, always. The two add up
+    const over = !!r?.overSource, front = mat.userData[FRONT_BIAS_KEY] === true;
+    const factor = (over ? -1 : 0) + (front ? -1 : 0), units = (over ? -4 : 0) + (front ? -2 : 0);
+    if (mat.polygonOffsetFactor !== factor || mat.polygonOffsetUnits !== units || mat.polygonOffset !== (over || front)) {
+        mat.polygonOffset = over || front;
+        mat.polygonOffsetFactor = factor;
+        mat.polygonOffsetUnits = units;
     }
     u.uSbPxScale.value = pxScale;
     const p = look.provenance;
