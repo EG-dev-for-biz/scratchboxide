@@ -139,7 +139,8 @@ describe('step switches for the next build', () => {
         // window fit off: the lattice and the materials read the straightened photos, and reveal depth too
         expect(edge(g, 'step-remesh.pipelineK', 'step-polish.lattice')?.label).toContain('straightened facade photos');
         expect(edge(g, 'step-remesh.windowFit', 'step-polish.lattice')).toBeUndefined();
-        expect(edge(g, 'step-remesh.pipelineK', 'step-twin.materials')?.label).toBe('straightened facade photos (Window fit off)');
+        // (this recorded build predates the facade reader, so its readings fall through to the straightened photos too)
+        expect(edge(g, 'step-remesh.pipelineK', 'step-twin.materials')?.label).toContain('straightened facade photos (Window fit off)');
         // the build node re-runs with the switches
         expect(node(g, BUILD_NODE_ID).parameters.toolArgs).toMatchObject({ steps: { 'polish.cleanup': false, 'remesh.windowFit': false } });
     });

@@ -29,7 +29,7 @@ export interface BuildStepSpec {
 /** What a result is, for the edge labels. */
 export const BUILD_RESULTS: Record<string, string> = {
     place: 'the place', tiles: 'tile mesh', surveyPhotos: 'Street View photos', canopy: 'canopy',
-    scanClay: 'remeshed scan', orthos: 'facade orthophotos', straightOrthos: 'straightened facade photos', windows: 'windows',
+    scanClay: 'remeshed scan', orthos: 'facade orthophotos', straightOrthos: 'straightened facade photos', windows: 'windows', planeReadings: 'openings read by the vision agent',
     depth: 'window depth', cleanClay: 'cleaned scan', latticeClay: 'facades rebuilt', baseClay: 'base cleaned',
     sealedClay: 'sealed shell', finalClay: 'final model', score: 'relief score', holes: 'holes seen',
     ownerViews: 'ownership views', ownerMasks: 'ownership vote', votedClay: 'voted remesh', registeredPoses: 'registered photos', treeStrip: 'trees', delit: 'de-lit photos',
@@ -45,9 +45,10 @@ export const BUILD_STEPS: BuildStepSpec[] = [
     { key: 'remesh.tileRefine', stage: 'remesh', title: 'tile_refine: isolate, remesh, flatten', needs: ['tiles'], makes: ['scanClay', 'orthos'] },
     { key: 'remesh.pipelineK', stage: 'remesh', title: 'Straighten the facade photos', needs: ['orthos'], makes: ['straightOrthos'] },
     { key: 'remesh.windowFit', stage: 'remesh', title: 'Window fit', needs: ['straightOrthos'], makes: ['windows'] },
+    { key: 'remesh.facadeRead', stage: 'remesh', title: 'Read every plane\'s openings', needs: ['straightOrthos', 'tiles'], makes: ['planeReadings'] },
     { key: 'remesh.revealDepth', stage: 'remesh', title: 'Window depth from Street View', needs: ['windows', 'surveyPhotos'], makes: ['depth'] },
     { key: 'polish.cleanup', stage: 'remesh', title: 'Remesh cleanup', needs: ['scanClay'], makes: ['cleanClay'] },
-    { key: 'polish.lattice', stage: 'remesh', title: 'Facades rebuilt on the lattice', needs: ['cleanClay', 'straightOrthos', 'windows', 'depth'], makes: ['latticeClay'] },
+    { key: 'polish.lattice', stage: 'remesh', title: 'Facades rebuilt on the lattice', needs: ['cleanClay', 'straightOrthos', 'windows', 'planeReadings', 'depth'], makes: ['latticeClay'] },
     { key: 'polish.base', stage: 'remesh', title: 'Base cleanup', needs: ['latticeClay'], makes: ['baseClay'] },
     { key: 'polish.clip', stage: 'remesh', title: 'Clip at the footprint', needs: ['baseClay'], makes: ['baseClay'] },
     { key: 'polish.infill', stage: 'remesh', title: 'Fill the openings', needs: ['baseClay'], makes: ['baseClay'] },
@@ -65,7 +66,7 @@ export const BUILD_STEPS: BuildStepSpec[] = [
     { key: 'twin.viewRelight', stage: 'textures', title: 'Relight from views', needs: ['delit'], makes: ['relit'] },
     { key: 'twin.roofShadow', stage: 'textures', title: 'Lift roof shadows', needs: ['delit'], makes: ['roofLit'] },
     { key: 'twin.harmonize', stage: 'textures', title: 'Harmonise the photos', needs: ['delit'], makes: ['harmonised'] },
-    { key: 'twin.materials', stage: 'textures', title: 'Material regions', needs: ['harmonised', 'windows'], makes: ['materials'] },
+    { key: 'twin.materials', stage: 'textures', title: 'Material regions', needs: ['harmonised', 'windows', 'planeReadings'], makes: ['materials'] },
     { key: 'twin.partyWall', stage: 'textures', title: 'Party wall', needs: ['harmonised', 'baseClay'], makes: ['partyWall'] },
     { key: 'twin.detailBake', stage: 'textures', title: 'Swatch detail', needs: ['harmonised', 'tiles'], makes: ['detail'] },
     { key: 'textures.lateLayers', stage: 'textures', title: 'Textures of later layers', needs: ['materials'], makes: ['late'] },
@@ -81,6 +82,7 @@ export const WRAPPER_STEPS = new Set(['remesh.polish', 'textures.waitRebuildGram
  */
 export const TOGGLEABLE_STEPS = new Map<string, string>([
     ['remesh.windowFit', 'the facades are opened by their bay rhythm and the lattice\'s own window cells'],
+    ['remesh.facadeRead', 'the openings stay as the window fit read them; roofs and the walls without a facade photo get none'],
     ['remesh.revealDepth', 'the recesses follow the photo-contrast rule'],
     ['polish.cleanup', 'the lattice works on the remesh as tile_refine left it'],
     ['polish.lattice', 'the facades stay as scanned'],

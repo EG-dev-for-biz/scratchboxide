@@ -277,6 +277,25 @@ describe('pipeline K material regions', () => {
         expect(metalTexels(m.orm)).toBe(0);
     });
 
+    it("puts glass on a bay's fitted panes alone when it holds any (the facade reader's punched windows), whole on a bay without", () => {
+        const photo = piered(), W = photo.width, H = photo.height;
+        const runs = [0, 50, 100, 150].flatMap(x => [x / W, 0, (x + 15) / W, 1]);
+        const bays = [15, 65, 115, 165].flatMap(x => [x / W, 1 / 6, (x + 35) / W, 1]);
+        // the second bay's panes, storey by storey (x 69-79 and 86-96, y 8-26 every 35)
+        const panes = [2, 3, 4, 5, 6, 7].flatMap(k => [69, 86].flatMap(x => [x / W, (8 + 35 * k) / H, (x + 10) / W, (26 + 35 * k) / H]));
+        const quads: Quad[] = [{ mesh: 'facade_lattice_1', corners: wall(0, 20, 30), uv: FULL_UV, material: 0, extras: { sbFacadeLattice: { facadeId: 1, windows: { uv: panes, panes, label: 'photo-inferred', source: 'test' }, structure: { uv: runs, bays, reliefM: 0.18, reliefFrom: 'measured', reason: 'test', chamferM: 0.05, label: 'photo-inferred' } } } }];
+        const g = parseGlbBytes(scene(quads, [photo]));
+        const b = building(), bg = parseGlbBytes(b.glb);
+        const classes = readRegionClasses(bg.json, imagesOf(b.photos))!;
+        const m = planMaterialRegions(g, g.json, imagesOf([photo]), classes, sets(classes)).materials[0];
+        // the paned bay: glass on a pane, none on the spandrel between storeys (the frame's finish there)
+        expect(at(m.params, 74, 118)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
+        expect(at(m.params, 74, 135)[0]).toBe(0);
+        expect(at(m.orm, 74, 135)[1]).not.toBe(Math.round(GLASS_ROUGHNESS * 255));
+        // the bay without panes: glass whole, spandrel included
+        expect(at(m.params, 24, 135)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
+    });
+
     it("draws no glass on a pane whose texels are the wall's class: stone, whatever the fit read", () => {
         // the piered facade with two fitted windows and panes: one on a bay's glass, one across a pier (stone)
         const photo = piered(), W = photo.width, H = photo.height;

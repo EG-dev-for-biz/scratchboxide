@@ -49,7 +49,7 @@ import { bandResponses, TEXTURE_BANDS_M, type TextureEnergy } from './material-h
 import type { FittedPlane } from '../window-fit';
 import { windowStrips } from '../facade-lattice';
 
-export const MATERIAL_REGIONS_VERSION = 'material-regions/27';
+export const MATERIAL_REGIONS_VERSION = 'material-regions/28';
 
 export const MATERIAL_REGIONS_PARAMS = {
     /** Appearance classes, texels sampled per facade photo, k-means iterations, sampling seed. */
@@ -495,7 +495,7 @@ export interface MaterialPlanContext {
     rasters: () => PlaneRaster[];
 }
 
-interface PlaneRaster { pl: FittedPlane; win: Uint8Array; bay: Int32Array; off: number; storey?: { pitch: number; phase: number } }
+interface PlaneRaster { pl: FittedPlane; win: Uint8Array; bay: Int32Array; off: number; storey?: { pitch: number; phase: number }; /** The plane's fitted panes, and the bays holding any of them. */ pane: Uint8Array; panedBays: Set<number> }
 
 export function materialPlanContext(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, classes: RegionClass[], sets: RegionSet[], planes: FittedPlane[] = [], P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS): MaterialPlanContext {
     let built: PlaneRaster[] | undefined;
@@ -513,7 +513,11 @@ export function materialPlanContext(g: ParsedGlb, json: any, images: Map<number,
             bayBase += bayPx.length;
             const bay = Int32Array.from(local, v => (v ? v + base : 0));
             const off = dot3(pl.centroid, pl.normal), storey = storeyPitchOf(uv(pl.windows), pl.width, pl.height);
-            return { pl, win, bay, off, storey };
+            const pane = new Uint8Array(pl.width * pl.height);
+            markRects(uv(pl.panes), pl.width, pl.height, pane);
+            const panedBays = new Set<number>();
+            for (let j = 0; j < pane.length; j++) if (pane[j] && bay[j]) panedBays.add(bay[j]);
+            return { pl, win, bay, off, storey, pane, panedBays };
         });
         return built;
     };
@@ -562,7 +566,11 @@ export function planMaterialJob(job: MaterialPlanJob, ctx: MaterialPlanContext):
         const stoneN = runs ? markRects(runs, W, H, stone) : 0;
         const bays = structureBays(json, mesh) ?? [], bayId = paneIdsOf(bays, W, H, new Uint8Array(N).fill(1));
         const stoneBays = stonePanes(img, classes, bayId, P.paneWallShare);
-        const glassBay = (k: number) => !!bayId[k] && !stoneBays.has(bayId[k]);
+        // a bay holding fitted panes (the facade reader's punched windows) takes glass on its panes alone, its spandrels and
+        // mullions the frame's finish; a bay without is glass whole
+        const allPanes = paneIdsOf(fittedPanes(json, mesh) ?? [], W, H, new Uint8Array(N).fill(1)), panedBays = new Set<number>();
+        for (let k = 0; k < N; k++) if (allPanes[k] && bayId[k]) panedBays.add(bayId[k]);
+        const glassBay = (k: number) => !!bayId[k] && !stoneBays.has(bayId[k]) && (!panedBays.has(bayId[k]) || !!allPanes[k]);
         let paneN = 0;
         // each bay's glass tilted storey by storey (the facade's own storey pitch, from its fitted windows), so a glint covers a
         // storey's glass, not a whole bay
@@ -622,7 +630,7 @@ export function planMaterialJob(job: MaterialPlanJob, ctx: MaterialPlanContext):
     {
         const { width: W, height: H } = img, N = W * H;
         // per texel: on a plane (1), in a window (2), or the pane's seed (in pane)
-        const on = new Uint8Array(N), win = new Uint8Array(N), bayId = new Int32Array(N), storeyOf = new Int32Array(N), pane = new Uint8Array(N);
+        const on = new Uint8Array(N), win = new Uint8Array(N), bayId = new Int32Array(N), storeyOf = new Int32Array(N), pane = new Uint8Array(N), onPane = new Uint8Array(N), paned = new Uint8Array(N);
         const rasters = ctx.rasters();
         if (rasters.length) forEachTriangleOf(g, json, mi, (p, uv) => {
             const ux = p[3] - p[0], uy = p[4] - p[1], uz = p[5] - p[2], vx = p[6] - p[0], vy = p[7] - p[1], vz = p[8] - p[2];
@@ -650,12 +658,13 @@ export function planMaterialJob(job: MaterialPlanJob, ctx: MaterialPlanContext):
                 if (x < 0 || y < 0 || x >= pl.width || y >= pl.height) return;
                 const j = y * pl.width + x;
                 if (best!.win[j]) win[k] = 1;
-                if (best!.bay[j]) { bayId[k] = best!.bay[j]; storeyOf[k] = best!.storey ? Math.floor((y - best!.storey.phase) / best!.storey.pitch) : 0; }
+                if (best!.bay[j]) { bayId[k] = best!.bay[j]; storeyOf[k] = best!.storey ? Math.floor((y - best!.storey.phase) / best!.storey.pitch) : 0; if (best!.panedBays.has(best!.bay[j])) paned[k] = 1; }
+                if (best!.pane[j]) onPane[k] = 1;
             });
         });
         // glass by the plane's bays: a bay whose texels here are mostly not the wall's class is glass whole
         const stoneBays = stonePanes(img, classes, bayId, P.paneWallShare);
-        for (let k = 0; k < N; k++) if (bayId[k] && !stoneBays.has(bayId[k])) pane[k] = paneSeed((bayId[k] - 1) * 997 + storeyOf[k] + 500);
+        for (let k = 0; k < N; k++) if (bayId[k] && !stoneBays.has(bayId[k]) && (!paned[k] || onPane[k])) pane[k] = paneSeed((bayId[k] - 1) * 997 + storeyOf[k] + 500);
         piece.baysOnStone += stoneBays.size;
         // the windows' frame: the most common class other than the wall among their texels that are not pane
         let frameClass = WALL;

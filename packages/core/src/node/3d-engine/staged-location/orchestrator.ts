@@ -111,7 +111,7 @@ import {
     GENERATED_HEIGHT_LABEL, PLAUSIBLE_DEFAULT_HEIGHT_M, VECTOR_ISOLATE_RADIUS_M, VECTOR_MASSING_VERSION,
     VECTOR_MODELLED_LABEL, VECTOR_OUTER_MAX_COVERED_SHARE, type ElevationLookup, type PaintBuilding, type PaintSelection
 } from './vector-first-paint';
-import { VisionModelChain, type VisionGenAIClient } from '../../gemini/vision-model-chain';
+import { VISION_CALL_POLICY, VisionModelChain, type VisionGenAIClient } from '../../gemini/vision-model-chain';
 import { segmentOwnershipViews } from './ownership-masks';
 import { buildGroundModel, geodeticToScan, loadScanMesh, scanToGeodetic, surfaceModel, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
 import { removeVehicles, vehicleRemovalEnabled, visionVehicleJudge, VEHICLE_REMOVAL_PARAMS, VEHICLE_REMOVAL_VERSION, type VehicleRemovalReport } from './vehicle-removal';
@@ -202,6 +202,8 @@ import { measureVisibleDefects, VISIBLE_DEFECTS_PARAMS } from './pipeline-k/visi
 import { TEXTURE_HARMONIZE_VERSION, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
 import { VIEW_RELIGHT_VERSION, viewRelightEnvParams } from './pipeline-k/view-relight';
 import { ROOF_SHADOW_VERSION, roofShadowAuditPng } from './pipeline-k/roof-shadow';
+import { FACADE_READER_MODEL, FACADE_READER_VERSION, mergeReadings, parseJudgement, parseReading, parseZones, readerPlanesOf, readPlanes, type FacadeAsk } from './pipeline-k/facade-reader';
+import { PLANE_ORTHOS_VERSION, planeOrthos } from './pipeline-k/plane-orthos';
 import { shadowLiftQaPng } from './pipeline-k/shadow-lift-qa';
 import { describeMaterialRegions, MATERIAL_REGIONS_VERSION, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE, PIPELINE_I_VERSION, TRELLIS_SEEDS, runPipelineI } from './pipeline-i/pipeline-i';
@@ -284,8 +286,10 @@ export const STAGES = {
     evidence: { order: -1, title: 'Street View close-ups', budgetMs: EVIDENCE_STAGE_BUDGET_MS + 30_000 + MATCH_TIMEOUT_MS + 60_000 + EDGE_REGISTRATION_BUDGET_MS + 15_000 + JOINT_REGISTRATION_BUDGET_MS + 30_000 },
     'trees-measure': { order: -1, title: 'Measuring the trees', budgetMs: 300_000 },
     // pipeline K's remesh grew past 300 s with the window fit (~100 s), reveal depth (30-70 s) and the oblique tear audit
-    // (ESB: 275-323 s, run 7e4bd290 timed out at 309 s), so it gets 600 s
-    remesh: { order: 2, title: 'Remeshed scan', budgetMs: 600_000 },
+    // (ESB: 275-323 s, run 7e4bd290 timed out at 309 s), so it got 600 s; the facade reader (a vision agent over up to 80
+    // planes, beside the window fit) cut off at 600 s on a loaded machine (ESB run 9cd54e94: tile_refine 134 s, window fit
+    // 207 s), so 900 s
+    remesh: { order: 2, title: 'Remeshed scan', budgetMs: 900_000 },
     // a district's rebuilt buildings: pipeline E's massing for every building that passes its own check, and the remesh carved
     // where they stand (district-massing.ts); off unless SCRATCHBOX_STAGED_DISTRICT_MASSING=1
     // 5x the earlier 25 min (user decision, 2026-10-25): Haughwout's block took 38 min once its remesh committed
@@ -2683,7 +2687,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // the window fit's planes, whose windows material regions draws on the scan pieces lying on them
                 const kOrthos = materialSets ? cache.readRunNote<{ orthosDir?: string }>(runId, 'pipeline_k')?.orthosDir : undefined;
                 const fitFile = kOrthos ? path.join(kOrthos, WINDOW_FIT_FILE) : undefined;
-                const planes = kOrthos ? fittedPlanesOf(kOrthos) : [];
+                const planes = kOrthos ? [...fittedPlanesOf(kOrthos), ...readerPlanesOf(kOrthos)] : [];
                 const grammarFile = kOrthos ? path.join(kOrthos, WALL_GRAMMAR_FILE) : undefined;
                 const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '', relightClient ? `${VIEW_RELIGHT_VERSION}:${lightingModels().join(',')}:${lightingPromptVariant()}:${viewRelightEnvParams().key}` : '', roofShadowOn ? ROOF_SHADOW_VERSION : '', process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' ? SKY_DELIGHT_VERSION : '');
                 const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport; materialRegions?: TileRefineTwin['materialRegions'] }>('textures', key, async dir => {
@@ -3546,8 +3550,47 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                     for (let i = 0; i < out.length; i++) out[i] = (win.mask?.[i] === MASK_YES || door.mask?.[i] === MASK_YES) ? 1 : 0;
                                     return out;
                                 } : undefined;
+                                // every plane of the building read by a vision agent and judged (pipeline-k/facade-reader.ts): the walls
+                                // tile_refine photographed and every other plane (roofs, terraces, the walls it did not analyse;
+                                // plane-orthos.ts); it needs only the photos, so it runs beside the window fit and is merged into its
+                                // file after; on with a vision model, SCRATCHBOX_K_FACADE_READ=0 or the node graph off
+                                const readerOn = !!(visionAvailable && r.texturedGlb && stepOn('remesh.facadeRead', process.env.SCRATCHBOX_K_FACADE_READ?.trim() !== '0'));
+                                let readerRun: Promise<{ po: Awaited<ReturnType<typeof planeOrthos>>; read: Awaited<ReturnType<typeof readPlanes>> }> | undefined;
+                                if (readerOn && visionAvailable && r.texturedGlb) {
+                                    // the reader's fast, cheap model first (FACADE_READER_MODEL), the app's other vision models behind it
+                                    const readChain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: [...new Set([FACADE_READER_MODEL.model, ...visionAvailable.candidates])], signal: io.signal, ...chainExtras('remesh'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                                    const replyText = (res: { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> }) => (res.candidates?.[0]?.content?.parts ?? []).filter(q => !q.thought).map(q => q.text ?? '').join('');
+                                    const ask: FacadeAsk = async (png, prompt, kind) => {
+                                        const res = await readChain.generate({ contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: png.toString('base64') } }, { text: prompt }] }], config: { responseMimeType: 'application/json', temperature: 0, abortSignal: io.signal } },
+                                            { stage: 'grammar', ...VISION_CALL_POLICY.grammar, thinkingBudget: FACADE_READER_MODEL.thinkingBudget, valid: x => { try { (kind === 'overview' ? parseZones : kind === 'read' ? parseReading : parseJudgement)(replyText(x)); return true; } catch { return false; } } });
+                                        const text = replyText(res.response);
+                                        res.remember();
+                                        return text;
+                                    };
+                                    const textured = r.texturedGlb;
+                                    readerRun = timed('facadeRead', async () => {
+                                        const po = await planeOrthos(textured, k.orthosDir);
+                                        io.progress(`pipeline K: reading the building's planes (${po.file.planes.length} beyond the facades)`);
+                                        return { po, read: await readPlanes(k.orthosDir, ask, { signal: io.signal, progress: m => io.progress(m) }) };
+                                    });
+                                    // awaited after the window fit; a failure is handled there
+                                    readerRun.catch(() => undefined);
+                                } else logStep('remesh.facadeRead', 'skipped');
                                 const wf = await timed('windowFit', () => fitWindowsForOrthos(k.orthosDir, { signal: io.signal, ...(windowSegment ? { segment: windowSegment } : {}) }));
                                 windowFit = wf.file;
+                                if (readerRun) {
+                                    try {
+                                        const fr = await readerRun;
+                                        Object.assign(wf, { fit: mergeReadings(k.orthosDir, wf.fit, fr.read.records.readings) });
+                                        const recs = fr.read.records.facades, by = (o: string) => recs.filter(x => x.outcome === o).length;
+                                        const replaced = recs.filter(x => x.outcome === 'replaced');
+                                        cache.writeRunNote(runId, 'pipeline_k_facade_reader', { version: FACADE_READER_VERSION, planeOrthos: PLANE_ORTHOS_VERSION, cached: fr.read.cached, planes: fr.po.file.planes.length, planesSkipped: fr.po.file.skipped, read: recs.length, replaced: by('replaced'), kept: by('kept'), skipped: by('skipped'), failed: by('failed'), unread: fr.read.records.unread, ms: fr.read.records.ms, reviewDir: path.join(k.orthosDir, 'facade_reader'), records: recs });
+                                        run.note(PROVENANCE.photoInferred, `facade reader (${FACADE_READER_VERSION}): of ${recs.length} planes read (${fr.po.file.planes.length} of them roofs, terraces and walls beyond the facade photos), ${replaced.length} had their openings placed by a vision model's reading, fitted to the photo and judged (${replaced.reduce((a, x) => a + (x.zones ?? []).reduce((b, z) => b + (z.outcome === 'drawn' ? z.fit?.openings ?? 0 : 0), 0), 0)} openings), ${by('kept')} kept the window fit's reading, ${by('skipped')} were blank or too little covered${fr.read.records.unread.planes ? `; ${fr.read.records.unread.planes} smaller planes (${fr.read.records.unread.areaM2} m²) were not read` : ''}`);
+                                    } catch (err) {
+                                        if (isAbort(err) || io.signal.aborted) throw err;
+                                        cache.writeRunNote(runId, 'pipeline_k_facade_reader', { version: FACADE_READER_VERSION, failed: true, reason: errorMessage(err) });
+                                    }
+                                }
                                 // the bay grammar read per wall, from all the photos of each wall's facades together (wall-grammar.ts)
                                 try {
                                     const wg = await timed('wallGrammar', async () => readWallGrammar(k.orthosDir, wf.fit, b => { const d = decodePngForGrammar(b); return { rgba: d.rgba, width: d.width, height: d.height }; }));
