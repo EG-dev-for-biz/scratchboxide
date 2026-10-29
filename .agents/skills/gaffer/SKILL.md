@@ -50,8 +50,9 @@ these three being too strong, too weak, the wrong colour or not occluded where i
   texel or vertex (bent normal and visibility). A surface in the sun's shadow still sees the sky, so sun shadow alone
   never removes a reflection; occlusion does.
 - **Roughness spreads what is there.** A rough floor on glass (dust, float-glass waviness) is right, but it turns a
-  wrong bright horizon into a sheen over whole facades. Fix the environment first; keep glass roughness low
-  (about 0.05) once it is right, rising only where the normal varies within a pixel (specular anti-aliasing).
+  wrong bright horizon into a sheen over whole facades, and the sun's glint into one soft ball. Fix the environment
+  first; keep glass roughness low (0.05-0.08) once it is right, rising only where the normal varies within a pixel
+  (specular anti-aliasing) or where the panes a pixel covers are too small to show their own tilts.
 
 ## 3. Glass
 
@@ -94,6 +95,15 @@ these three being too strong, too weak, the wrong colour or not occluded where i
     occlusion (`recessOf`, rebuilt facades with a structure only) about 1% more; walls unchanged. Both kept;
   - a capture hook that drew the sky without its sun and at the sky light's strength changed nothing here and cost a
     full sky re-bake per capture: not kept.
+  - **the sun's glint read as one soft, banded ball** (2026-10-28, sun 34 degrees up, camera 260 m out on the sun's side):
+    the glass roughness floor (0.12) spread the sun's image over a dozen bays, and the pane tilt faded out while panes
+    were still 2-4 pixels across, so every pane mirrored at one angle; the piers cut that one disc into stripes. A floor
+    of 0.08 and the tilt kept until a pane is under a pixel (its spread then handed to the roughness) took the glint from
+    1,117 to 575 bright pixels and 33 to 45 pieces, its largest piece from 33% to 27% of them, with no more shimmer as
+    the camera moves (frame-to-frame glint energy change 0.088 vs 0.089 at 260 m, 0.037 vs 0.044 at 450 m). Kept. A
+    floor of 0.05 shimmered (0.159); dropping the fade outright shimmered at 450 m (0.111); capping the specular
+    anti-aliasing on glass changed nothing here. The camera's lens flare (when it is on) adds a halo disc round the
+    glint that spills past the building's edge: that part of the ball is the lens, not the glass.
   So glass in shade reading bright on this scene is mostly the real horizon sky at grazing Fresnel. If it still reads as
   glare, look next at the glass's base colour and roughness floor and at the viewer's exposure, measured as in
   section 4, before touching the sky.

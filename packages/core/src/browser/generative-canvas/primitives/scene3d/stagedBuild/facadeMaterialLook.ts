@@ -19,7 +19,8 @@
  *    reading's confidence), metal texels (parameters B > 0) whole; every other texel the scene's direct light only. A
  *    pane of glass with a seed (parameters alpha 1..254, pipeline K's fitted panes) is tilted by up to PANE_TILT_DEG of
  *    its own, so a facade's panes catch the sun light's (shadowed) highlight one by one; the tilt fades out as a pane
- *    shrinks to a few pixels, and the roughness rises where the normal varies within a pixel (specular anti-aliasing),
+ *    shrinks to under a pixel, its spread handed to the roughness, and the roughness rises where the normal varies
+ *    within a pixel (specular anti-aliasing),
  *    so distant glass does not shimmer. Where a pane's reflection points below the horizon it sees ground of
  *    GLASS_GROUND_ALBEDO under the scene's sky and sun, never brighter (whatever the probe drew there), and a pane recessed
  *    behind its piers (recessOf: the structure's relief over its bay's width) loses the grazing part of its reflection to
@@ -80,9 +81,11 @@ uniform float uSbGroundAlbedo;
 `;
 /**
  * The least roughness glass is drawn with (generated): window glass in place carries dust, film and the slight waviness
- * of float glass, so its reflection is always a touch diffused, never the measured 0.05 of clean float glass alone.
+ * of float glass, so its reflection is always a touch diffused, never the measured 0.05 of clean float glass alone. 0.12
+ * spread the sun's image over a dozen bays as one soft ball (Empire State Building, 2026-10-28: glint pixels 1,117 at
+ * 0.12, 575 at 0.08 with the panes' tilts kept, the largest piece 33% of them, 27% at 0.08).
  */
-export const GLASS_MIN_ROUGHNESS = 0.12;
+export const GLASS_MIN_ROUGHNESS = 0.08;
 
 /** The ground's albedo a pane reflects below the horizon (generated: asphalt and stone, 0.1-0.2; gaffer skill, section 1). */
 export const GLASS_GROUND_ALBEDO = 0.15;
@@ -102,6 +105,9 @@ const FRAGMENT_SPECULAR_AA = `
         vec3 sbDn = fwidth( normal );
         float sbVar = clamp( 0.5 * dot( sbDn, sbDn ), 0.0, 0.18 );
         roughnessFactor = min( 1.0, sqrt( roughnessFactor * roughnessFactor + sbVar ) );
+        // the panes' tilts a pixel can no longer show (see the tilt below) widen its lobe instead, as the average of the
+        // tilted panes it covers would: GGX alpha (roughness squared) about the largest tilt's slope
+        roughnessFactor = max( roughnessFactor, sbTiltLost * sqrt( tan( radians( ${PANE_TILT_DEG.toFixed(2)} ) ) ) );
     }
 #include <lights_physical_fragment>
 `;
@@ -109,6 +115,7 @@ const FRAGMENT_SPECULAR_AA = `
 /** After the normal maps: the measured courses' relief, by world height. */
 const FRAGMENT_COURSES = `
 #include <normal_fragment_maps>
+float sbTiltLost = 0.0;
 #if defined( USE_MAP ) && defined( SB_COURSES )
     {
         vec4 sbParams = texture2D( uSbMatParams, vMapUv );
@@ -138,12 +145,14 @@ const FRAGMENT_COURSES = `
         // facade catch the sun one by one instead of all at one angle
         vec4 sbPane = texture2D( uSbMatParams, vMapUv );
         float sbSeed = floor( sbPane.a * 255.0 + 0.5 );
-        // a pane a few pixels across (far away) would flip between reflections as the view moves: the tilt fades out as
-        // the parameters texture's texels shrink below a pixel's footprint (a pane is ~10 of them), so distant glass
-        // reads as one even sheet
+        // a pane under a pixel across (far away) would flip between reflections as the view moves: the tilt fades out as
+        // the pane shrinks from 2.5 pixels to 1 (a pane is ~10 of the parameters texture's texels) and its spread goes to
+        // the roughness (sbTiltLost), so distant glass reads as one even sheet, while panes a few pixels across still catch
+        // the sun one by one rather than as one ball
         vec2 sbTexels = fwidth( vMapUv ) * uSbParamsSize;
         float sbFootprint = max( sbTexels.x, sbTexels.y );
-        float sbTiltFade = 1.0 - smoothstep( 1.0, 4.0, sbFootprint );
+        float sbTiltFade = 1.0 - smoothstep( 4.0, 10.0, sbFootprint );
+        if ( sbPane.r > 0.0 && sbSeed >= 1.0 && sbSeed <= 254.0 ) sbTiltLost = 1.0 - sbTiltFade;
         if ( sbPane.r > 0.0 && sbSeed >= 1.0 && sbSeed <= 254.0 && sbTiltFade > 0.0 ) {
             vec3 sbUp = normalize( ( viewMatrix * vec4( 0.0, 1.0, 0.0, 0.0 ) ).xyz );
             vec3 sbB = sbUp - normal * dot( sbUp, normal );
@@ -299,7 +308,7 @@ export async function prepareFacadeMaterials(gltf: GltfLike): Promise<number> {
                         .replace('#include <lights_physical_fragment>', FRAGMENT_SPECULAR_AA)
                         .replace('#include <lights_fragment_maps>', FRAGMENT_ENV_GATE);
                 };
-                mat.customProgramCacheKey = () => `sb-facade-v6:${withCourses ? courses.length : 0}`;
+                mat.customProgramCacheKey = () => `sb-facade-v7:${withCourses ? courses.length : 0}`;
                 mat.needsUpdate = true;
             }
             patched++;
