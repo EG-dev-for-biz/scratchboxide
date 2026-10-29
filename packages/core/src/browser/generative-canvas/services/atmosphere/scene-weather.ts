@@ -114,6 +114,12 @@ export function weatherSun(w: SceneWeather, location?: { lat: number; lng: numbe
     return { elevationDeg, azimuthDeg, source: 'sun-path' };
 }
 
+/** The aerial perspective's range for a haze (m): long in clear air, short in thick haze, a tenth of it in a studio scene. */
+export function hazeRangeM(haze: number, large: boolean): number {
+    const clear = large ? 2000 : 200, thick = large ? 80 : 8;
+    return clear * Math.pow(thick / clear, clamp(haze, 0, 1));
+}
+
 /** The scene's weather, when one is set. */
 export function readSceneWeather(scene: Partial<Scene3DData> | undefined): SceneWeather | undefined {
     const w = (scene as { weather?: SceneWeatherState } | undefined)?.weather;
@@ -146,6 +152,13 @@ export function applySceneWeather(scene: Scene3DData, weather: Partial<SceneWeat
         cloudDensity: w.cloudCover > 0 ? 0.3 + 0.4 * w.cloudCover : 0,
         cloudShadowsEnabled: w.cloudCover > 0.05,
         turbidity: 2 + 8 * w.haze,
+        // haze is in the air all around, not only in the sky: the aerial perspective pass (AerialPerspectiveEffect.ts)
+        // fades every surface toward the sky's colour with distance, over a range that shortens as the haze thickens
+        // (a district clears to about 2 km, thick haze to 80 m; a studio scene a tenth of that)
+        aerialPerspectiveEnabled: w.haze > 0.02,
+        aerialPerspectiveRange: hazeRangeM(w.haze, large),
+        mie: 0.002 + 0.03 * w.haze,
+        inscatteringIntensity: 1,
         fogDensity: w.fog > 0 ? w.fog * (large ? 0.002 : 0.04) : 0,
         weather: { version: SCENE_WEATHER_VERSION, sun: sun.source }
     };

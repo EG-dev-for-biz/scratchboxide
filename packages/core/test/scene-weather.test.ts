@@ -66,6 +66,20 @@ describe('scene weather', () => {
         expect(sceneOptsIntoAtmosphere(back)).toBe(false);
     });
 
+    it('puts haze into the air around the scene, not only into the sky: the aerial perspective thickens with it', () => {
+        const thin = applySceneWeather(studio(), { haze: 0.1 }).features!.atmosphericScattering as Record<string, number | boolean>;
+        const thick = applySceneWeather(studio(), { haze: 0.9 }).features!.atmosphericScattering as Record<string, number | boolean>;
+        expect(thin.aerialPerspectiveEnabled).toBe(true);
+        expect(thick.aerialPerspectiveRange as number).toBeLessThan(thin.aerialPerspectiveRange as number);
+        expect(thick.mie as number).toBeGreaterThan(thin.mie as number);
+        const none = applySceneWeather(studio(), { haze: 0 }).features!.atmosphericScattering as Record<string, number | boolean>;
+        expect(none.aerialPerspectiveEnabled).toBe(false);
+        // a district hazes over hundreds of metres, a studio scene over tens
+        const district = applySceneWeather({ ...studio(), geoAnchor: { lat: 52.37, lng: 4.89 } } as Scene3DData, { haze: 0.5 }).features!.atmosphericScattering as Record<string, number>;
+        expect(district.aerialPerspectiveRange).toBeCloseTo(400, 0);
+        expect(clearSceneWeather(applySceneWeather(studio(), { haze: 0.5 })).features?.atmosphericScattering).toBeUndefined();
+    });
+
     it('keeps the sky config fields the weather does not own', () => {
         const s0 = { ...studio(), features: { atmosphericScattering: { enabled: true, godRaysIntensity: 0.4, kelvinTemperature: 5000 } } } as unknown as Scene3DData;
         const s = applySceneWeather(s0, { cloudCover: 0.2 });
