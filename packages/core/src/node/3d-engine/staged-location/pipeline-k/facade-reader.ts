@@ -46,7 +46,7 @@ import { encodePng } from '../png-encode';
 import type { FitFrame, FittedPlane, WindowFitFile, WindowRect } from '../window-fit';
 import { PLANES_FILE, type PlaneOrthosFile } from './plane-orthos';
 
-export const FACADE_READER_VERSION = 'facade-reader/6';
+export const FACADE_READER_VERSION = 'facade-reader/7';
 
 /** The reader's vision model: fast, cheap and good enough at reading openings (benchmarked 2026-10-29 on the ESB's tower crops against gemini-4-argon and gemini-3.5-flash-lite); the app's other vision models are the fallback. */
 export const FACADE_READER_MODEL = { model: 'gemini-3.8-flash', thinkingBudget: 512 } as const;
@@ -58,8 +58,12 @@ export const FACADE_READER_PARAMS = {
     readCropM: 24, minCropCoverage: 0.7, maxSidePx: 1600, maxScale: 4,
     /** Zones read per plane at most. */
     maxZones: 4,
-    /** Planes read per build at most (the walls first, then the roofs, each largest covered area first; the rest reported unread), and at once. */
-    maxPlanes: 120, concurrency: 16,
+    /** Planes read per build at most (the walls first, then the roofs, each largest covered area first; the rest reported unread). */
+    maxPlanes: 120,
+    /** At once: kept at the known-good 12 (user report, 2026-10-29: 16 crashed the app's heap on an uncached ESB build, 120 planes at a time
+     * does not raise peak concurrent memory on its own since workers pull from a queue, but 12 -> 16 was the one capacity knob this
+     * session raised alongside it, and the only one bounding how many planes' photos are decoded at once). */
+    concurrency: 12,
     /** A plane whose covered photo varies less than this (luminance standard deviation over mean) is blank: nothing to read, no call. */
     minContrast: 0.06,
     /** The pitch is measured within this share of the read pitch; an opening is drawn where this share of it is covered. */
