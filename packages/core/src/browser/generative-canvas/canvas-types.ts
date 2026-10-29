@@ -2237,7 +2237,7 @@ export const DEFAULT_MCP_SERVERS: McpServerItem[] = [
 ];
 
 // ==========================================
-// 12. Context Mention Engine Types (@file, @folder, @git, @terminal, @web, @docs, @mcp)
+// 12. Context Mention Engine Types (@file, @folder, @git, @terminal, @web, @docs, @mcp, @scene, @mesh, @camera, @timeline)
 // ==========================================
 export type ContextMentionCategory =
     | 'file'
@@ -2248,7 +2248,11 @@ export type ContextMentionCategory =
     | 'web'
     | 'docs'
     | 'mcp'
-    | 'skill';
+    | 'skill'
+    | 'scene'
+    | 'mesh'
+    | 'camera'
+    | 'timeline';
 
 export interface ContextMentionItem {
     id: string;

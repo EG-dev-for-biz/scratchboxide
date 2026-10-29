@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import * as React from 'react';
-import { McpServerItem } from './canvas-types';
+import { CanvasArtifact, McpServerItem } from './canvas-types';
 import {
     ContextMentionCategory,
     ContextMentionItem,
@@ -25,6 +25,7 @@ export interface ContextMentionAutocompletePopoverProps {
     workspaceFiles?: string[];
     gitStatus?: { branch?: string; modified?: string[]; staged?: string[]; untracked?: string[] } | any;
     mcpServers?: McpServerItem[];
+    activeArtifact?: CanvasArtifact;
     onSelectMention: (item: ContextMentionItem) => void;
     onClose: () => void;
     positionStyle?: React.CSSProperties;
@@ -41,6 +42,7 @@ export const ContextMentionAutocompletePopover: React.FC<ContextMentionAutocompl
     workspaceFiles,
     gitStatus,
     mcpServers,
+    activeArtifact,
     onSelectMention,
     onClose,
     positionStyle,
@@ -64,10 +66,23 @@ export const ContextMentionAutocompletePopover: React.FC<ContextMentionAutocompl
         query,
         workspaceFiles && workspaceFiles.length > 0 ? workspaceFiles : defaultFiles,
         gitStatus,
-        mcpServers
+        mcpServers,
+        activeArtifact
     );
 
-    const categories: ContextMentionCategory[] = ['file', 'folder', 'git', 'terminal', 'web', 'docs', 'mcp'];
+    const categories: ContextMentionCategory[] = [
+        'file',
+        'folder',
+        'scene',
+        'mesh',
+        'camera',
+        'timeline',
+        'git',
+        'terminal',
+        'web',
+        'docs',
+        'mcp'
+    ];
 
     return (
         <div

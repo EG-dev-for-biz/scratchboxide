@@ -1130,7 +1130,14 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
     const { executeDeepWritePipeline, handleDeepWriteResume } = useDeepWritePipeline({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, setActiveArtifact, setCurrentSessionId, setIsGenerating, setMessages, setSessions });
 
-    const { sendMessage: handleSendMessage, cancelInFlight: handleStopGenerating, streamInFlight } = useSendMessage({
+    const {
+        sendMessage: handleSendMessage,
+        queueMessage: handleQueueMessage,
+        queuedMessages,
+        removeQueuedMessage,
+        cancelInFlight: handleStopGenerating,
+        streamInFlight
+    } = useSendMessage({
         inputValue,
         isGenerating,
         setInputValue,
@@ -1186,6 +1193,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
     React.useEffect(() => {
         (window as any).__scratchbox_send_prompt = (text: string) => handleSendMessage(text);
+        (window as any).__scratchbox_queue_prompt = (text: string) => handleQueueMessage(text);
         (window as any).__scratchbox_new_chat = () => handleNewChat();
         const handleSendPromptEvent = (e: Event) => {
             const detail = (e as CustomEvent).detail;
@@ -1196,10 +1204,11 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         window.addEventListener('scratchbox:send-prompt', handleSendPromptEvent);
         return () => {
             delete (window as any).__scratchbox_send_prompt;
+            delete (window as any).__scratchbox_queue_prompt;
             delete (window as any).__scratchbox_new_chat;
             window.removeEventListener('scratchbox:send-prompt', handleSendPromptEvent);
         };
-    }, [handleSendMessage, handleNewChat]);
+    }, [handleSendMessage, handleQueueMessage, handleNewChat]);
 
     React.useEffect(() => {
         (window as any).__scratchbox_is_generating = isGenerating;
@@ -1209,7 +1218,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const workspaceFileDeps: UseWorkspaceFilesDeps = { activeArtifact, activeWorkspace, artifactHistory, currentSessionId, handleSendMessage, isGenerating, layoutMode, messages, setActiveArtifact, setArtifactHistory, setCurrentSessionId, setLayoutMode, setMessages, setSessions, setShowComposerWorkspaceMenu, setShowNewWorkspaceMenu, showComposerWorkspaceMenu, showNewWorkspaceMenu, showToast };
     const { handleFileClick, handleSurfaceAiPrompt } = useWorkspaceFiles(workspaceFileDeps);
     const { handleCreateWorkspaceFile } = useWorkspaceFileCreation(workspaceFileDeps);
-    const { filteredAutocompleteSkills, handleKeyDown, handleVoiceToggle, isVoiceActive } = useComposerInput({ activeContextCategory, autocompleteQuery, autocompleteType, handleSelectAutocompleteContext, handleSelectAutocompleteSkill, handleSendMessage, mcpServers, selectedAutocompleteIndex, setAutocompleteQuery, setAutocompleteType, setInputValue, setSelectedAutocompleteIndex, showToast, skills, workspaceFilesList, workspaceGitStatus });
+    const { filteredAutocompleteSkills, handleKeyDown, handleVoiceToggle, isVoiceActive } = useComposerInput({ activeArtifact, activeContextCategory, autocompleteQuery, autocompleteType, handleQueueMessage, handleSelectAutocompleteContext, handleSelectAutocompleteSkill, handleSendMessage, isGenerating, mcpServers, selectedAutocompleteIndex, setAutocompleteQuery, setAutocompleteType, setInputValue, setSelectedAutocompleteIndex, showToast, skills, workspaceFilesList, workspaceGitStatus });
 
 
 
@@ -1253,7 +1262,11 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         handleSelectAutocompleteSkill,
         handleSelectAutocompleteContext,
         activeArtifactTitle: activeArtifact?.title,
+        activeArtifact,
         sendMessage: () => handleSendMessage(),
+        queueMessage: () => handleQueueMessage(),
+        queuedMessages,
+        removeQueuedMessage,
         stopGenerating: handleStopGenerating,
         canStop: streamInFlight
     };

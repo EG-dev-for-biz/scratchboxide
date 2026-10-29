@@ -8,11 +8,11 @@
  ********************************************************************************/
 
 import * as React from 'react';
-import { McpServerItem, SkillItem, StudioLayoutMode } from '../canvas-types';
+import { CanvasArtifact, McpServerItem, SkillItem, StudioLayoutMode } from '../canvas-types';
 import type { ContextMentionCategory, ContextMentionItem } from '../context-mention-engine';
 import { ContextMentionAutocompletePopover } from '../ContextMentionAutocompletePopover';
 import { IconClose, IconMic, IconPlus } from '../canvas-icons';
-import type { AttachedDataFile } from '../hooks/useSendMessage';
+import type { AttachedDataFile, QueuedPromptItem } from '../hooks/useSendMessage';
 import { isImageFile, type ComposerImage } from '../hooks/useImageAttachments';
 import type { WorkspaceGitStatusSnapshot } from '../state/studio-defaults';
 
@@ -73,6 +73,7 @@ export interface ComposerProps {
     workspaceFilesList: string[];
     workspaceGitStatus: WorkspaceGitStatusSnapshot;
     activeArtifactTitle: string | undefined;
+    activeArtifact?: CanvasArtifact;
     layoutMode: StudioLayoutMode;
     inputRef: React.RefObject<HTMLTextAreaElement>;
     fileInputRef: React.RefObject<HTMLInputElement>;
@@ -85,6 +86,12 @@ export interface ComposerProps {
     handleSelectAutocompleteSkill: (skill: SkillItem) => void;
     handleSelectAutocompleteContext: (item: ContextMentionItem) => void;
     sendMessage: () => void;
+    /** Queue a follow-up message while a turn is streaming without aborting the active build. */
+    queueMessage?: () => void;
+    /** Queued follow-up messages waiting for the active turn to finish. */
+    queuedMessages?: QueuedPromptItem[];
+    /** Remove a queued follow-up message by id. */
+    removeQueuedMessage?: (id: string) => void;
     /** Stops the reply being generated; offered in place of the send button while `canStop`. */
     stopGenerating: () => void;
     /**
@@ -119,15 +126,15 @@ export const Composer: React.FC<ComposerProps> = ({
     setAiInteractionMode,
     attachedDataFile,
     setAttachedDataFile,
-    attachedContextMentions,
+    attachedContextMentions = [],
     setAttachedContextMentions,
-    attachedImages,
+    attachedImages = [],
     addImageFiles,
     removeAttachedImage,
-    skills,
-    mcpServers,
-    selectedSkillIds,
-    selectedMcpIds,
+    skills = [],
+    mcpServers = [],
+    selectedSkillIds = [],
+    selectedMcpIds = [],
     autocompleteType,
     setAutocompleteType,
     autocompleteQuery,
@@ -138,6 +145,7 @@ export const Composer: React.FC<ComposerProps> = ({
     workspaceFilesList,
     workspaceGitStatus,
     activeArtifactTitle,
+    activeArtifact,
     layoutMode,
     inputRef,
     fileInputRef,
@@ -150,6 +158,9 @@ export const Composer: React.FC<ComposerProps> = ({
     handleSelectAutocompleteSkill,
     handleSelectAutocompleteContext,
     sendMessage,
+    queueMessage,
+    queuedMessages = [],
+    removeQueuedMessage,
     stopGenerating,
     canStop
 }) => (
@@ -187,6 +198,35 @@ export const Composer: React.FC<ComposerProps> = ({
             <div className="sb-composer-drag-hint-overlay animate-fadeIn">
                 <span className="sb-drag-hint-icon">🖼️</span>
                 <span className="sb-drag-hint-text">Drop an image to show the agent, or a CSV / data file for a KPI dashboard &amp; table</span>
+            </div>
+        )}
+
+        {/* Queued Follow-Up Messages Bar */}
+        {queuedMessages.length > 0 && (
+            <div className="sb-composer-active-pills-row sb-composer-queued-row" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: 6, marginBottom: 4 }}>
+                <span className="sb-composer-pills-label" style={{ color: '#60a5fa' }}>Queued ({queuedMessages.length}):</span>
+                {queuedMessages.map(item => (
+                    <span
+                        key={item.id}
+                        className="sb-composer-pill"
+                        style={{ background: 'rgba(59, 130, 246, 0.14)', borderColor: 'rgba(59, 130, 246, 0.35)', color: '#bfdbfe' }}
+                        title={`Queued at ${item.queuedAt}: ${item.text}`}
+                    >
+                        <span className="sb-composer-pill-icon">📥</span>
+                        <span className="sb-composer-pill-text max-w-[200px] truncate">{item.text}</span>
+                        {removeQueuedMessage && (
+                            <button
+                                type="button"
+                                className="sb-composer-pill-remove"
+                                onClick={() => removeQueuedMessage(item.id)}
+                                aria-label={`Remove queued message: ${item.text}`}
+                                title="Remove queued message"
+                            >
+                                <IconClose size={9} strokeWidth={2.5} />
+                            </button>
+                        )}
+                    </span>
+                ))}
             </div>
         )}
 
@@ -294,6 +334,7 @@ export const Composer: React.FC<ComposerProps> = ({
                 workspaceFiles={workspaceFilesList}
                 gitStatus={workspaceGitStatus}
                 mcpServers={mcpServers}
+                activeArtifact={activeArtifact}
                 onSelectMention={handleSelectAutocompleteContext}
                 onClose={() => setAutocompleteType(undefined)}
                 width="420px"
@@ -397,9 +438,13 @@ export const Composer: React.FC<ComposerProps> = ({
                     ref={inputRef}
                     rows={1}
                     className="sb-composer-main-input"
-                    placeholder={getComposerPlaceholder(attachedDataFile, activeArtifactTitle, layoutMode)}
+                    placeholder={
+                        isGenerating && canStop
+                            ? 'Ask a follow-up (Enter to queue while generating)...'
+                            : getComposerPlaceholder(attachedDataFile, activeArtifactTitle, layoutMode)
+                    }
                     value={inputValue}
-                    disabled={isGenerating}
+                    disabled={isGenerating && !canStop && !queueMessage}
                     onChange={handleInputChange}
                     onKeyDown={handleKeyDown}
                     onPaste={e => {
@@ -424,6 +469,22 @@ export const Composer: React.FC<ComposerProps> = ({
                 >
                     <IconMic size={15} strokeWidth={1.8} />
                 </button>
+
+                {isGenerating && canStop && queueMessage && (inputValue.trim() || attachedDataFile) && (
+                    <button
+                        type="button"
+                        className="sb-composer-send-circle sb-send-ready"
+                        style={{ marginRight: 4, background: 'rgba(59, 130, 246, 0.22)', border: '1px solid rgba(59, 130, 246, 0.45)', color: '#93c5fd' }}
+                        onClick={() => queueMessage()}
+                        aria-label="Queue follow-up message"
+                        title="Queue follow-up message (Enter)"
+                    >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
+                    </button>
+                )}
 
                 {isGenerating && canStop ? (
                     <button

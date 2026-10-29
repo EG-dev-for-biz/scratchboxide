@@ -21,6 +21,7 @@ import { OBJECT_BUILD_SOURCE, type BuiltObjectRecord } from '../../common/spatia
 import { stagedBuildContext } from '../3d-engine/staged-location/staged-summary';
 import { SB_API_SUMMARY } from '../3d-engine/sb-api.generated';
 import { toolOfferMode } from './tool-catalog';
+import { summarizeSceneStateForAgent } from '../../browser/generative-canvas/lenses/Scene3DWorldLens';
 
 /** Workspace-intelligence services the system instruction draws context from. */
 export interface PromptContextServices {
@@ -1001,41 +1002,7 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
             userPrompt += `\n[Active Document Content: ${JSON.stringify({ title: docData.title, sections: docData.sections }).slice(0, 3000)}]`;
         } else if (request.activeArtifact.type === '3d-scene' && request.activeArtifact.data) {
             const sceneData = request.activeArtifact.data as Scene3DData;
-            const objectsSummary = (sceneData.customMeshes || []).map(m => ({
-                id: m.id,
-                name: m.name || m.id,
-                type: m.type,
-                position: m.position,
-                rotation: m.rotation,
-                scale: m.scale,
-                material: m.material
-            }));
-            const media4dSummary = (sceneData.objects || []).map(o => ({
-                id: o.id,
-                space: o.space?.spatial3d,
-                role: o.content?.metadata?.role,
-                source: o.content?.metadata?.source,
-                resolvedAddress: o.content?.metadata?.resolvedAddress || o.content?.metadata?.location,
-                isGround: o.content?.metadata?.isGround,
-                dims: o.content?.metadata?.dims,
-                durableUri: o.content?.durableUri,
-                boundingBox: o.content?.metadata?.boundingBox,
-                restyledFrom: o.content?.metadata?.restyledFrom
-            }));
-            const sceneSummary = {
-                title: sceneData.title,
-                subtitle: sceneData.subtitle,
-                renderMode: sceneData.renderMode,
-                camera: sceneData.camera,
-                environment: sceneData.environment,
-                groundDatum: (sceneData as any).groundDatum,
-                geoAnchor: (sceneData as any).geoAnchor,
-                sculptSettings: sceneData.sculptSettings,
-                features: sceneData.features,
-                customMeshes: objectsSummary,
-                objects: media4dSummary,
-                recentOperators: (sceneData.operatorStack || []).slice(-10)
-            };
+            const sceneSummary = summarizeSceneStateForAgent(sceneData);
             // a staged location build on the canvas: its run state, degradations and retry handle, ahead of the capped summary
             userPrompt += stagedBuildContext(sceneData);
             userPrompt += `\n[Active 3D Scene In-Memory State: ${JSON.stringify(sceneSummary).slice(0, 5000)}]`;

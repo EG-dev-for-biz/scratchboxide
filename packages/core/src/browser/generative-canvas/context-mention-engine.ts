@@ -8,10 +8,13 @@
  ********************************************************************************/
 
 import type {
+    CanvasArtifact,
     ContextMentionCategory,
     ContextMentionItem,
     McpServerItem,
-    ParsedContextMentions
+    ParsedContextMentions,
+    Scene3DData,
+    VideoTimelineData
 } from './canvas-types';
 
 export type {
@@ -30,7 +33,11 @@ export const CONTEXT_MENTION_TAGS: ContextMentionCategory[] = [
     'web',
     'docs',
     'mcp',
-    'skill'
+    'skill',
+    'scene',
+    'mesh',
+    'camera',
+    'timeline'
 ];
 
 export const CONTEXT_MENTION_METADATA: Record<
@@ -40,7 +47,7 @@ export const CONTEXT_MENTION_METADATA: Record<
     file: {
         label: 'File (@file)',
         icon: '📄',
-        description: 'Reference a workspace file (.tsx, .ts, .json, .css)',
+        description: 'Reference a workspace file (.tsx, .ts, .py, .hpp, .glb)',
         placeholder: 'Search files...'
     },
     files: {
@@ -90,6 +97,30 @@ export const CONTEXT_MENTION_METADATA: Record<
         icon: '✨',
         description: 'Attach domain intelligence capability',
         placeholder: 'Search skills...'
+    },
+    scene: {
+        label: '3D Scene (@scene)',
+        icon: '🌐',
+        description: 'Reference active 3D scene state, environment, and staged layers',
+        placeholder: 'Filter scene state or layers...'
+    },
+    mesh: {
+        label: '3D Mesh (@mesh)',
+        icon: '🧊',
+        description: 'Reference a specific 3D mesh, object, or staged building layer',
+        placeholder: 'Search meshes or objects in scene...'
+    },
+    camera: {
+        label: '3D Camera (@camera)',
+        icon: '🎥',
+        description: 'Reference active 3D viewport camera pose, FOV, and target',
+        placeholder: 'Camera pose or keyframe...'
+    },
+    timeline: {
+        label: 'Timeline (@timeline)',
+        icon: '🎬',
+        description: 'Reference NLE playhead timecode, tracks, clips, or 3D keyframes',
+        placeholder: 'Search tracks, clips, or timecodes...'
     }
 };
 
@@ -218,6 +249,14 @@ export function parseContextMentions(prompt: string): ParsedContextMentions {
             resolvedType = 'web';
         } else if (rawTag === 'doc' || rawTag === 'reference') {
             resolvedType = 'docs';
+        } else if (rawTag === '3d' || rawTag === 'world' || rawTag === 'stage') {
+            resolvedType = 'scene';
+        } else if (rawTag === 'object' || rawTag === 'prop' || rawTag === 'layer' || rawTag === 'model') {
+            resolvedType = 'mesh';
+        } else if (rawTag === 'cam' || rawTag === 'view' || rawTag === 'viewport') {
+            resolvedType = 'camera';
+        } else if (rawTag === 'clip' || rawTag === 'track' || rawTag === 'playhead' || rawTag === 'nle') {
+            resolvedType = 'timeline';
         } else {
             // Check if matches known MCP server prefix
             resolvedType = 'mcp';
@@ -240,14 +279,16 @@ export function parseContextMentions(prompt: string): ParsedContextMentions {
 }
 
 /**
- * Real-time search query resolution across workspace files, git status, terminal logs, and MCP tools.
+ * Real-time search query resolution across workspace files, git status, terminal logs, MCP tools,
+ * and active 3D scene / VFX video-timeline artifacts (@scene, @mesh, @camera, @timeline).
  */
 export function resolveContextMentionQuery(
     type: ContextMentionCategory,
     query: string = '',
     workspaceFiles: string[] = [],
     gitStatus?: { branch?: string; modified?: string[]; staged?: string[]; untracked?: string[] },
-    mcpServers: McpServerItem[] = []
+    mcpServers: McpServerItem[] = [],
+    activeArtifact?: CanvasArtifact
 ): ContextMentionItem[] {
     const q = (query || '').toLowerCase().trim();
     const results: ContextMentionItem[] = [];
@@ -426,6 +467,235 @@ export function resolveContextMentionQuery(
             break;
         }
 
+        case 'scene': {
+            if (activeArtifact?.type === '3d-scene' && activeArtifact.data) {
+                const sceneData = activeArtifact.data as Scene3DData;
+                const objCount = (sceneData.objects?.length || 0) + (sceneData.customMeshes?.length || 0);
+                const layerCount = sceneData.stagedBuild?.layers?.length || 0;
+                const glbPath = sceneData.pythonGenerator?.glbPath || sceneData.cppGenerator?.glbPath;
+                const summaryParts = [
+                    `mode: ${sceneData.renderMode || 'pbr'}`,
+                    `${objCount} object${objCount === 1 ? '' : 's'}`,
+                    layerCount > 0 ? `${layerCount} staged layer${layerCount === 1 ? '' : 's'}` : undefined,
+                    glbPath ? `glb: ${glbPath}` : undefined
+                ].filter(Boolean);
+
+                const sceneTitle = sceneData.title || activeArtifact.title || 'Active 3D Scene';
+                if (!q || sceneTitle.toLowerCase().includes(q) || 'scene'.includes(q)) {
+                    results.push({
+                        id: `ctx-scene-${activeArtifact.id}`,
+                        type: 'scene',
+                        name: `scene: ${sceneTitle}`,
+                        description: summaryParts.join(' • '),
+                        detail: JSON.stringify({
+                            artifactId: activeArtifact.id,
+                            title: sceneTitle,
+                            renderMode: sceneData.renderMode || 'pbr',
+                            selectedMeshId: sceneData.selectedMeshId,
+                            glbPath,
+                            objectCount: objCount,
+                            stagedBuildPlace: sceneData.stagedBuild?.place,
+                            environment: sceneData.environment
+                        }),
+                        icon: '🌐',
+                        payload: {
+                            artifactId: activeArtifact.id,
+                            title: sceneTitle,
+                            renderMode: sceneData.renderMode || 'pbr',
+                            selectedMeshId: sceneData.selectedMeshId,
+                            glbPath
+                        }
+                    });
+                }
+
+                if (sceneData.stagedBuild?.stages) {
+                    for (const st of sceneData.stagedBuild.stages) {
+                        if (!q || st.title.toLowerCase().includes(q) || st.stage.toLowerCase().includes(q)) {
+                            results.push({
+                                id: `ctx-scene-stage-${st.stage}`,
+                                type: 'scene',
+                                name: `stage: ${st.title} (${st.status})`,
+                                description: `Staged location pipeline stage [${st.stage}] • source: ${st.source}`,
+                                detail: JSON.stringify(st),
+                                icon: '🏛️',
+                                payload: st
+                            });
+                        }
+                    }
+                }
+            }
+            break;
+        }
+
+        case 'mesh': {
+            if (activeArtifact?.type === '3d-scene' && activeArtifact.data) {
+                const sceneData = activeArtifact.data as Scene3DData;
+                const selectedId = sceneData.selectedMeshId;
+
+                for (const obj of sceneData.objects || []) {
+                    const isSelected = Boolean(selectedId && obj.id === selectedId);
+                    const label = obj.label || (obj as any).name || obj.id;
+                    if (!q || label.toLowerCase().includes(q) || obj.id.toLowerCase().includes(q) || (obj.type || '').toLowerCase().includes(q)) {
+                        const pos = Array.isArray(obj.position) ? `[${obj.position.map(n => Number(n).toFixed(2)).join(', ')}]` : '[0, 0, 0]';
+                        results.push({
+                            id: `ctx-mesh-obj-${obj.id}`,
+                            type: 'mesh',
+                            name: `mesh: ${label}${isSelected ? ' (selected)' : ''}`,
+                            path: obj.durableUri,
+                            description: `3D Object (${obj.type || 'mesh'}) at ${pos}${obj.material?.preset ? ` • ${obj.material.preset}` : ''}`,
+                            detail: JSON.stringify({
+                                id: obj.id,
+                                label,
+                                selected: isSelected,
+                                position: obj.position,
+                                rotation: obj.rotation,
+                                scale: obj.scale,
+                                bounds: (obj as any).bounds,
+                                durableUri: obj.durableUri,
+                                material: obj.material
+                            }),
+                            icon: isSelected ? '🎯' : '🧊',
+                            payload: obj
+                        });
+                    }
+                }
+
+                for (const mesh of sceneData.customMeshes || []) {
+                    const isSelected = Boolean(selectedId && mesh.id === selectedId);
+                    const label = mesh.label || (mesh as any).name || mesh.id;
+                    if (!q || label.toLowerCase().includes(q) || mesh.id.toLowerCase().includes(q)) {
+                        const pos = Array.isArray(mesh.position) ? `[${mesh.position.map(n => Number(n).toFixed(2)).join(', ')}]` : '[0, 0, 0]';
+                        results.push({
+                            id: `ctx-mesh-custom-${mesh.id}`,
+                            type: 'mesh',
+                            name: `mesh: ${label}${isSelected ? ' (selected)' : ''}`,
+                            description: `Procedural Mesh (${mesh.tier || 'primary'}) at ${pos}`,
+                            detail: JSON.stringify({
+                                id: mesh.id,
+                                label,
+                                tier: mesh.tier,
+                                selected: isSelected,
+                                position: mesh.position,
+                                rotation: mesh.rotation,
+                                scale: mesh.scale,
+                                material: mesh.material
+                            }),
+                            icon: isSelected ? '🎯' : '🧊',
+                            payload: mesh
+                        });
+                    }
+                }
+
+                for (const layer of sceneData.stagedBuild?.layers || []) {
+                    const label = layer.label || layer.id;
+                    if (!q || label.toLowerCase().includes(q) || layer.id.toLowerCase().includes(q) || (layer.provenance || '').toLowerCase().includes(q)) {
+                        results.push({
+                            id: `ctx-mesh-layer-${layer.id}`,
+                            type: 'mesh',
+                            name: `layer: ${label}`,
+                            path: layer.glbUrl,
+                            description: `Staged 3D Layer (${layer.provenance}) • ${layer.vertexCount?.toLocaleString() ?? 0} verts`,
+                            detail: JSON.stringify(layer),
+                            icon: '🏛️',
+                            payload: layer
+                        });
+                    }
+                }
+
+                // Sort selected mesh to the top
+                results.sort((a, b) => (b.name.includes('(selected)') ? 1 : 0) - (a.name.includes('(selected)') ? 1 : 0));
+            }
+            break;
+        }
+
+        case 'camera': {
+            if (activeArtifact?.type === '3d-scene' && activeArtifact.data) {
+                const sceneData = activeArtifact.data as Scene3DData;
+                const cam = sceneData.camera || { position: [5, 4, 8], target: [0, 0, 0], fov: 45 };
+                const pos = Array.isArray(cam.position) ? `[${cam.position.map(n => Number(n).toFixed(2)).join(', ')}]` : '[5, 4, 8]';
+                const tgt = Array.isArray(cam.target) ? `[${cam.target.map(n => Number(n).toFixed(2)).join(', ')}]` : '[0, 0, 0]';
+                if (!q || 'camera'.includes(q) || 'viewport'.includes(q) || (cam.preset || '').toLowerCase().includes(q)) {
+                    results.push({
+                        id: `ctx-camera-active-${activeArtifact.id}`,
+                        type: 'camera',
+                        name: `camera: Active Viewport (${cam.fov ?? 45}° FOV)`,
+                        description: `pos ${pos} → target ${tgt}${cam.preset ? ` • preset: ${cam.preset}` : ''}`,
+                        detail: JSON.stringify(cam),
+                        icon: '🎥',
+                        payload: cam
+                    });
+                }
+            }
+            break;
+        }
+
+        case 'timeline': {
+            if (activeArtifact?.type === 'video-timeline' && activeArtifact.data) {
+                const tl = activeArtifact.data as VideoTimelineData;
+                const currentTime = Number(tl.currentTime ?? 0);
+                const duration = Number(tl.duration ?? 0);
+                const fps = Number(tl.fps ?? 24);
+                const frame = Math.round(currentTime * fps);
+                if (!q || 'playhead'.includes(q) || 'timeline'.includes(q)) {
+                    results.push({
+                        id: `ctx-timeline-playhead-${activeArtifact.id}`,
+                        type: 'timeline',
+                        name: `timeline: Playhead @ ${currentTime.toFixed(2)}s (frame ${frame})`,
+                        description: `${tl.title || 'Video Timeline'} • duration ${duration.toFixed(2)}s @ ${fps} fps`,
+                        detail: JSON.stringify({
+                            artifactId: activeArtifact.id,
+                            title: tl.title,
+                            currentTime,
+                            frame,
+                            duration,
+                            fps,
+                            trackCount: tl.tracks?.length || 0
+                        }),
+                        icon: '⏱️',
+                        payload: { currentTime, frame, duration, fps }
+                    });
+                }
+                for (const track of tl.tracks || []) {
+                    const trackLabel = track.label || (track as any).name || track.id;
+                    for (const clip of track.clips || []) {
+                        const label = clip.label || (clip as any).name || clip.id;
+                        if (!q || label.toLowerCase().includes(q) || trackLabel.toLowerCase().includes(q)) {
+                            const start = Number(clip.startTime ?? 0);
+                            const end = start + Number(clip.duration ?? 0);
+                            results.push({
+                                id: `ctx-timeline-clip-${clip.id}`,
+                                type: 'timeline',
+                                name: `clip: ${label} [${start.toFixed(1)}s–${end.toFixed(1)}s]`,
+                                path: clip.mediaUrl,
+                                description: `Track "${trackLabel}" (${track.type})${clip.mediaUrl ? ` • ${clip.mediaUrl}` : ''}`,
+                                detail: JSON.stringify({ trackId: track.id, trackLabel, clip }),
+                                icon: '🎞️',
+                                payload: { trackId: track.id, clip }
+                            });
+                        }
+                    }
+                }
+            } else if (activeArtifact?.type === '3d-scene' && activeArtifact.data) {
+                const sceneData = activeArtifact.data as Scene3DData;
+                if (sceneData.timeline) {
+                    const tl = sceneData.timeline;
+                    const kfCount = tl.keyframes?.length || 0;
+                    if (!q || 'timeline'.includes(q) || 'keyframe'.includes(q)) {
+                        results.push({
+                            id: `ctx-timeline-3d-${activeArtifact.id}`,
+                            type: 'timeline',
+                            name: `timeline: 3D Scene @ ${Number(tl.currentTime ?? 0).toFixed(2)}s / ${Number(tl.duration ?? 0).toFixed(2)}s`,
+                            description: `${tl.fps ?? 24} fps • ${kfCount} keyframe${kfCount === 1 ? '' : 's'}`,
+                            detail: JSON.stringify(tl),
+                            icon: '🎬',
+                            payload: tl
+                        });
+                    }
+                }
+            }
+            break;
+        }
+
         default:
             break;
     }
@@ -440,6 +710,10 @@ function getFileExtensionIcon(fileName: string): string {
     if (fileName.endsWith('.css') || fileName.endsWith('.scss')) return '🎨';
     if (fileName.endsWith('.md')) return '📝';
     if (fileName.endsWith('.py')) return '🐍';
+    if (fileName.endsWith('.cpp') || fileName.endsWith('.hpp') || fileName.endsWith('.h')) return '⚙️';
+    if (fileName.endsWith('.glb') || fileName.endsWith('.gltf') || fileName.endsWith('.obj')) return '🧊';
+    if (fileName.endsWith('.spz') || fileName.endsWith('.ply') || fileName.endsWith('.splat')) return '✨';
+    if (fileName.endsWith('.mp4') || fileName.endsWith('.mov') || fileName.endsWith('.webm')) return '🎬';
     if (fileName.endsWith('.sh') || fileName.endsWith('.bash')) return '⚡';
     return '📄';
 }
