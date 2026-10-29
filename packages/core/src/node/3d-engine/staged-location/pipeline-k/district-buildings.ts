@@ -31,11 +31,14 @@ export interface DistrictFootprint { id: string; loops: Vec2[][] }
 export function districtBuildingIndex(buildings: DistrictFootprint[], P = DISTRICT_BUILDINGS_PARAMS): (x: number, z: number) => number {
     const grid = new Map<string, number[]>();
     const key = (i: number, j: number) => `${i},${j}`;
+    // each building's plan box grown by the margin: a point outside it is farther than the margin from the building
+    const box = new Float64Array(buildings.length * 4);
     buildings.forEach((b, k) => {
         const pts = b.loops.flat();
         if (!pts.length) return;
         let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
         for (const [x, z] of pts) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+        box.set([x0 - P.marginM, z0 - P.marginM, x1 + P.marginM, z1 + P.marginM], k * 4);
         for (let i = Math.floor((x0 - P.marginM) / P.cellM); i <= Math.floor((x1 + P.marginM) / P.cellM); i++)
             for (let j = Math.floor((z0 - P.marginM) / P.cellM); j <= Math.floor((z1 + P.marginM) / P.cellM); j++) {
                 const c = grid.get(key(i, j));
@@ -47,7 +50,11 @@ export function districtBuildingIndex(buildings: DistrictFootprint[], P = DISTRI
         if (!c) return -1;
         // signedFootprintDistance: negative inside, positive outside
         let best = -1, bestD = P.marginM;
-        for (const k of c) { const d = signedFootprintDistance(x, z, buildings[k].loops); if (d <= bestD) { bestD = d; best = k; } }
+        for (const k of c) {
+            if (x < box[k * 4] || z < box[k * 4 + 1] || x > box[k * 4 + 2] || z > box[k * 4 + 3]) continue;
+            const d = signedFootprintDistance(x, z, buildings[k].loops);
+            if (d <= bestD) { bestD = d; best = k; }
+        }
         return best;
     };
 }
