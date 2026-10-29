@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { findInwardTriangles, orientRemesh } from '../src/node/3d-engine/staged-location/remesh-orient';
+import { findInwardTriangles, orientRemesh, rayGrid, rayMeets, rayMeetsGrid } from '../src/node/3d-engine/staged-location/remesh-orient';
 import { parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 
@@ -57,6 +57,30 @@ function plusXFacing(bytes: Uint8Array): number[] {
 }
 
 describe('remesh turned to face outward', () => {
+    it('answers every ray test through its grid as the test over every triangle does', () => {
+        // 3000 random triangles in a 40 m box, and 2000 random rays from triangle centres
+        let seed = 7;
+        const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+        const n = 3000, pos = new Float32Array(n * 9);
+        for (let t = 0; t < n; t++) {
+            const c = [rnd() * 40, rnd() * 40, rnd() * 40];
+            for (let v = 0; v < 3; v++) for (let k = 0; k < 3; k++) pos[t * 9 + v * 3 + k] = c[k] + (rnd() - 0.5) * 3;
+        }
+        const g = rayGrid(pos);
+        let hits = 0, agree = 0;
+        for (let q = 0; q < 2000; q++) {
+            const t = Math.floor(rnd() * n), o = [0, 1, 2].map(k => (pos[t * 9 + k] + pos[t * 9 + 3 + k] + pos[t * 9 + 6 + k]) / 3);
+            const d0 = [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5], l = Math.hypot(d0[0], d0[1], d0[2]), d = d0.map(v => v / l);
+            const brute = rayMeets(pos, o, d, t, 0.2), fast = rayMeetsGrid(g, o, d, t, 0.2);
+            if (brute) hits++;
+            if (brute === fast) agree++;
+        }
+        expect(agree).toBe(2000);
+        expect(hits).toBeGreaterThan(200);
+        expect(hits).toBeLessThan(1800);
+    });
+
+
     it('turns the side wound inward and only it, in the clay and the twin alike, leaving nothing to turn', () => {
         const bytes = glb(box(true));
         const { keys, stats } = findInwardTriangles(bytes);
