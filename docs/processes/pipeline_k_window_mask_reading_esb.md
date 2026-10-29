@@ -58,6 +58,14 @@ Instance with `SCRATCHBOX_K_WINDOW_SEGMENT=1` and `SCRATCHBOX_K_MATERIAL_REGIONS
 
 ---
 
+## 3c. Scoped fallback beside the reader at concurrency 12 (run 5f1762a6, uncached, segmenter on, 2026-10-29)
+
+Branch at 0efa1133 (the scoped fallback) on top of 087152dc (reader concurrency 16 → 12). Ports 3980/3981/3982.
+
+* **The window fit and the scoped segmenter finished:** window fit 202 s; `window_fit.json` `segment: segment-try/2:beside-facade-reader/7:2/10/0.3`, 92 facades. Nine facades were offered, the ones the reader's gates skip: 16, 21, 26, 32 and 91 gave `no-windows`; 29, 30, 36 and 64 gave `not-found`. None was assisted, so the mask reading added no windows in this run.
+* **The backend ran out of memory again** at about 648 s into the build: `FATAL ERROR: Ineffective mark-compacts near heap limit`, heap about 4078 MB. The last log lines before it were the reader's `grammar gemini-3.8-flash` calls, about 6 minutes after the window fit had finished, and `facade_reader/` held 122 files. The JS stack ends in a zlib `CompressionStream` callback (PNG encoding). So concurrency 12 does not fix the reader's memory. The crash is not the segmenter's: run 0ff5e864 crashed the same way with it off. Reported to the reader's session.
+* **The build never finished,** so there is no lattice, glass or viewport result to judge for this run.
+
 ## 4. Candidate Tool/Service Ideas
 
 * **A "frame this facade" viewport action** — given a facade id of the build, set the camera head-on to its plane and outline its fitted windows; this session computed the plane from `facades.json`, called `__SB_SET_CAMERA_VIEW__` by hand and projected the rects with the page's three.js camera to know where to look.
