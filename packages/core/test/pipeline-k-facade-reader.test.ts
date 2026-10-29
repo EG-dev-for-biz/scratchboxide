@@ -125,6 +125,21 @@ describe('pipeline K facade reader (vision agent)', () => {
         expect(one.rows.length).toBeGreaterThan(10);
     });
 
+    it('keeps the measured pitch inside its search however far the read rows are off (the parabola never extrapolates)', () => {
+        const L = luminanceOf(facade());
+        const zone = { x0: 0, x1: W, y0: 0, y1: H }, crop = { x0: 0, x1: W, y0: 100, y1: 400 };
+        // three rows read `step` px apart: from 45 px on the search window sits on the repeat's straight flank, where the
+        // vertex of a parabola through the best lag at the window's edge once landed near or below zero
+        for (let step = 40; step <= 62; step++) {
+            const rows = [0, 1, 2].map(k => { const t = 120 + k * step; return { y: [((t - 100) / 300) * 1000, ((t + WIN_H - 100) / 300) * 1000] as [number, number], openings: cols.map(([a, c]) => ({ x: [(a / W) * 1000, (c / W) * 1000] as [number, number], panes: 1 })) }; });
+            const t = tileZone(L, W, zone, crop, { rows, conf: 80 });
+            if ('why' in t) throw new Error(`no tiling at ${step}: ${t.why}`);
+            expect(t.pitch).toBeGreaterThanOrEqual(Math.floor(step * 0.9) - 0.5);
+            expect(t.pitch).toBeLessThanOrEqual(Math.ceil(step * 1.1) + 0.5);
+            expect(t.rows.length).toBeLessThanOrEqual(Math.ceil(H / t.pitch) + 1);
+        }
+    });
+
     it("keeps the window fit's reading when the judge rejects the outlines", async () => {
         const r = await readFacade(facade(), undefined, frame, standIn(false).ask);
         expect(r.record.outcome).toBe('kept');

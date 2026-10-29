@@ -46,7 +46,7 @@ import { encodePng } from '../png-encode';
 import type { FitFrame, FittedPlane, WindowFitFile, WindowRect } from '../window-fit';
 import { PLANES_FILE, type PlaneOrthosFile } from './plane-orthos';
 
-export const FACADE_READER_VERSION = 'facade-reader/8';
+export const FACADE_READER_VERSION = 'facade-reader/9';
 
 /** The reader's vision model: fast, cheap and good enough at reading openings (benchmarked 2026-10-29 on the ESB's tower crops against gemini-4-argon and gemini-3.5-flash-lite); the app's other vision models are the fallback. */
 export const FACADE_READER_MODEL = { model: 'gemini-3.8-flash', thinkingBudget: 512 } as const;
@@ -344,11 +344,16 @@ export function tileZone(L: Float32Array, W: number, zone: ImageRegion, crop: Im
         const span = guided ? 0.03 : P.pitchSearch;
         for (let lag = Math.max(3, Math.floor(pitch * (1 - span))); lag <= Math.ceil(pitch * (1 + span)); lag++) { const v = ac(lag); if (v > best) { best = v; bl = lag; } }
         if (bl > 0 && best > 0) {
+            // the parabola's vertex only when the best lag peaks above both neighbours (then within half a lag of it): at the
+            // search's edge, the repeat still rising past it, the vertex can lie anywhere, and a pitch near or below zero
+            // tiled the zone without end until the process ran out of memory (ESB, 2026-10-29)
             const a1 = ac(bl - 1), a2 = ac(bl + 1), den = a1 - 2 * best + a2;
-            const m2 = Number.isFinite(a1) && Number.isFinite(a2) && den < 0 ? bl + 0.5 * (a1 - a2) / den : bl;
+            const m2 = Number.isFinite(a1) && Number.isFinite(a2) && den < 0 && a1 <= best && a2 <= best ? bl + 0.5 * (a1 - a2) / den : bl;
             if (!guided || Math.abs(m2 - pitch) <= 0.03 * pitch) { pitch = m2; measured = true; }
         }
     }
+    // a row loop over a pitch this small would not end
+    if (!(pitch > 2)) return { why: `the storey pitch came to ${Number.isFinite(pitch) ? pitch.toFixed(2) : String(pitch)} px` };
     // the read rows' phase at that pitch (their circular mean), then every row through the zone
     let c = 0, sn = 0;
     for (const t of tops) { const a = (2 * Math.PI * t) / pitch; c += Math.cos(a); sn += Math.sin(a); }
