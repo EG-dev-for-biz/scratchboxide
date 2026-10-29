@@ -79,12 +79,12 @@ type Facade = { f: ReliefFacade; r: FacadeLatticeResult };
 const dot = (a: ArrayLike<number>, b: ArrayLike<number>) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
 /** A vertex: position and every other attribute, flattened. */
-interface Vx { p: [number, number, number]; a: Float64Array; key: string }
+export interface Vx { p: [number, number, number]; a: Float64Array; key: string }
 const keyOf = (p: ArrayLike<number>) => `${p[0]},${p[1]},${p[2]}`;
 
-interface PrimRead { mesh: number; prim: number; names: string[]; comps: number[]; flags: boolean[]; data: Float64Array[]; I: ArrayLike<number>; idxBase: number; idxStride: number; idxSize: number }
+export interface PrimRead { mesh: number; prim: number; names: string[]; comps: number[]; flags: boolean[]; data: Float64Array[]; I: ArrayLike<number>; idxBase: number; idxStride: number; idxSize: number }
 
-function readPrims(glb: ReturnType<typeof parseGlbBytes>): PrimRead[] {
+export function readPrims(glb: ReturnType<typeof parseGlbBytes>): PrimRead[] {
     const out: PrimRead[] = [];
     (glb.json.meshes ?? []).forEach((m: any, mi: number) => (m.primitives ?? []).forEach((p: any, pi: number) => {
         if ((p.mode ?? 4) !== 4 || p.attributes?.POSITION === undefined || p.indices === undefined) return;
@@ -97,7 +97,7 @@ function readPrims(glb: ReturnType<typeof parseGlbBytes>): PrimRead[] {
     return out;
 }
 
-function vertexOf(pr: PrimRead, i: number): Vx {
+export function vertexOf(pr: PrimRead, i: number): Vx {
     const p: [number, number, number] = [pr.data[0][i * 3], pr.data[0][i * 3 + 1], pr.data[0][i * 3 + 2]];
     const a: number[] = [];
     for (let k = 1; k < pr.data.length; k++) for (let c = 0; c < pr.comps[k]; c++) a.push(pr.data[k][i * pr.comps[k] + c]);
@@ -120,14 +120,17 @@ function cutPoint(u: Vx, v: Vx, gu: number, gv: number, pr: PrimRead): Vx {
 }
 
 /** Splits a convex polygon by g (a plane): the parts with g <= 0 and g >= 0 (a vertex on the plane goes to both). */
-function split(poly: Vx[], g: (v: Vx) => number, plane: string, pr: PrimRead, cache: Map<string, Vx>): [Vx[], Vx[]] {
+export function split(poly: Vx[], g: (v: Vx) => number, plane: string, pr: PrimRead, cache: Map<string, Vx>): [Vx[], Vx[]] {
     const neg: Vx[] = [], pos: Vx[] = [], gs = poly.map(v => { const x = g(v); return Math.abs(x) < 1e-9 ? 0 : x; });
     for (let i = 0; i < poly.length; i++) {
         const u = poly[i], v = poly[(i + 1) % poly.length], gu = gs[i], gv = gs[(i + 1) % poly.length];
         if (gu <= 0) neg.push(u);
         if (gu >= 0) pos.push(u);
         if ((gu < 0 && gv > 0) || (gu > 0 && gv < 0)) {
-            const ck = u.key < v.key ? `${u.key}|${v.key}|${plane}` : `${v.key}|${u.key}|${plane}`;
+            // keyed by the ends' attributes too: across a UV seam two triangles share an edge's positions but not its UVs, and
+            // must not share its cut point (its position is the same either way: cutPoint orders the ends by position)
+            const ek = (x: Vx) => `${x.key}#${x.a.join(',')}`;
+            const ck = u.key < v.key ? `${ek(u)}|${ek(v)}|${plane}` : `${ek(v)}|${ek(u)}|${plane}`;
             let c = cache.get(ck);
             if (!c) { c = cutPoint(u, v, gu, gv, pr); cache.set(ck, c); }
             neg.push(c); pos.push(c);
@@ -245,7 +248,7 @@ export function cutScanToLattice(bytes: Uint8Array, facades: Facade[], P: Lattic
 }
 
 /** The GLB with each source primitive's kept pieces appended as a new primitive (same material and attributes, `extras`). */
-function appendPieces(glb: ReturnType<typeof parseGlbBytes>, appended: Array<{ pr: PrimRead; polys: Vx[][] }>, extras: Record<string, unknown>): Buffer {
+export function appendPieces(glb: ReturnType<typeof parseGlbBytes>, appended: Array<{ pr: PrimRead; polys: Vx[][] }>, extras: Record<string, unknown>): Buffer {
     const json = glb.json;
     // the kept pieces: one new primitive per source primitive, same material and attributes
     const chunks: Uint8Array[] = [glb.bin];
