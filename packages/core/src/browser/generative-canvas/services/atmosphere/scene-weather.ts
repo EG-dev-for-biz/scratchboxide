@@ -154,8 +154,8 @@ export function applySceneWeather(scene: Scene3DData, weather: Partial<SceneWeat
         turbidity: 2 + 8 * w.haze,
         // haze is in the air all around, not only in the sky: the aerial perspective pass (AerialPerspectiveEffect.ts)
         // fades every surface toward the sky's colour with distance, over a range that shortens as the haze thickens
-        // (a district clears to about 2 km, thick haze to 80 m; a studio scene a tenth of that)
-        aerialPerspectiveEnabled: w.haze > 0.02,
+        // (a district clears to about 2 km, thick haze to 80 m; a studio scene a tenth of that); on whenever the sky is
+        aerialPerspectiveEnabled: true,
         aerialPerspectiveRange: hazeRangeM(w.haze, large),
         mie: 0.002 + 0.03 * w.haze,
         inscatteringIntensity: 1,

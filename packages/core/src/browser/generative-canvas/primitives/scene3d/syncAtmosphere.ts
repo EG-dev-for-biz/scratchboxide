@@ -18,6 +18,7 @@ import { buildThreeJsLightingRig, isSceneLightingRig } from './lightingRigs';
 import type { AtmosphereHandle, RendererStack, Scene3DRenderMode } from './types';
 import { removeAndDispose } from './types';
 import { hasExplicitSun } from '../../../../common/scene-atmosphere-opt-in';
+import { hazeRangeM } from '../../services/atmosphere/scene-weather';
 
 export interface AtmosphereInput {
     skybox?: string;
@@ -268,6 +269,26 @@ export function fitSunShadowToContent(sunLight: THREE.DirectionalLight | undefin
 }
 
 /**
+ * Holds unlit photo-textured materials (a scan's twin drawn from its photos, MeshBasicMaterial with a map) at the
+ * brightness they had under exposure 1 when the camera's metered exposure (sky-light-rig.ts) differs: a photo already
+ * carries its own exposure, and scaling it again blew a night scene's unlit building out to white (exposure 9 at -12°).
+ * The authored colour is kept in userData and restored at exposure 1.
+ */
+export function compensateUnlitForExposure(scene: THREE.Object3D, exposure: number): void {
+    const k = 1 / Math.max(1e-6, exposure);
+    scene.traverse(o => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+            const basic = m as THREE.MeshBasicMaterial;
+            if (!basic?.isMeshBasicMaterial || !basic.map || !basic.toneMapped) continue;
+            const base = (basic.userData.sbUnlitBaseColor ??= basic.color.clone()) as THREE.Color;
+            basic.color.copy(base).multiplyScalar(k);
+        }
+    });
+}
+
+/**
  * Synchronises everything "environmental": background, fog, sky dome + aerial perspective +
  * cloud shadows, god rays, fallback lights, terrain floor, procedural biome terrain, starfield
  * and grid visibility. Re-run only when the atmosphere fingerprint changes; the renderer stack
@@ -359,11 +380,13 @@ export function syncAtmosphere(
         skyDomeObject = skyDomeModule.skyDome;
         fitSunShadowToContent(skyDomeModule.sunLight, shadowRadius);
 
-        if (atmoConfig.aerialPerspectiveEnabled === true) {
+        // Aerial perspective is part of the sky: on whenever the sky is (only an explicit false turns it off), over the
+        // range the air's haze sets (the turbidity read as the Weather tool's haze), so distance reads as depth.
+        if (atmoConfig.aerialPerspectiveEnabled !== false) {
             try {
                 aerialPerspective = createAerialPerspectiveEffect({
                     inscatteringIntensity: atmoConfig.inscatteringIntensity ?? 1.0,
-                    aerialPerspectiveRange: atmoConfig.aerialPerspectiveRange ?? 220.0,
+                    aerialPerspectiveRange: atmoConfig.aerialPerspectiveRange ?? hazeRangeM(((atmoConfig.turbidity ?? 2.4) - 2) / 8, isLargeScale),
                     rayleigh: atmoConfig.rayleigh ?? 0.5,
                     mie: atmoConfig.mie ?? 0.002,
                     turbidity: atmoConfig.turbidity ?? 1.5,

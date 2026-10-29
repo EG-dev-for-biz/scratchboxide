@@ -188,11 +188,6 @@ void computeAerialPerspective(
     float upFactor = max(0.0, viewDir.y);
     vec3 skyHorizon = mix(uHorizonColor, uZenithColor, pow(upFactor, 0.6));
 
-    if (uIsGoldenHour) {
-        skyHorizon = mix(skyHorizon, vec3(1.0, 0.55, 0.22), 0.45);
-    } else if (uIsTwilight) {
-        skyHorizon = mix(skyHorizon, vec3(0.55, 0.35, 0.65), 0.50);
-    }
 
     // Integrated inscattering along ray path
     vec3 inscatterFactor = vec3(1.0) - transmittance;
@@ -212,6 +207,8 @@ void main() {
     // Preserve sky dome without overfogging background dome
     if (depthVal >= 0.9999) {
         gl_FragColor = sceneColor;
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
         return;
     }
 
@@ -233,6 +230,10 @@ void main() {
     vec3 finalColor = litColor * transmittance + inscattering;
 
     gl_FragColor = vec4(finalColor, sceneColor.a);
+    // The scene target holds scene-referred light (half float): tone mapping and the output colour space apply here,
+    // drawn to the canvas; into the optics chain's target they are left to the chain.
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
 }
 `;
 
@@ -453,6 +454,8 @@ export class AerialPerspectiveEffect {
             minFilter: THREE.LinearFilter,
             magFilter: THREE.LinearFilter,
             format: THREE.RGBAFormat,
+            // scene-referred light above 1 (the sky, sunlit walls) survives to the tone mapping
+            type: THREE.HalfFloatType,
             depthTexture
         });
 
@@ -558,16 +561,12 @@ export class AerialPerspectiveEffect {
             u.uIsTwilight.value = diurnalProfile.isTwilight;
             u.uAerialAlbedoBoost.value = diurnalProfile.aerialAlbedoBoost;
 
-            if (diurnalProfile.isGoldenHour) {
-                u.uHorizonColor.value.set(0xf97316);
-                u.uZenithColor.value.set(0x311042);
-            } else if (diurnalProfile.isNight) {
-                u.uHorizonColor.value.set(0x0a1428);
-                u.uZenithColor.value.set(0x050a18);
-            } else {
-                u.uHorizonColor.value.set(0xe0f2fe);
-                u.uZenithColor.value.set(0x0369a1);
-            }
+        }
+        // The haze is the scene's own sky: the physical sky's radiance at the horizon and zenith (sky-light-rig.ts).
+        if (typeof skyDomeModule?.hazeColors === 'function') {
+            const haze = skyDomeModule.hazeColors();
+            u.uHorizonColor.value.copy(haze.horizon);
+            u.uZenithColor.value.copy(haze.zenith);
         }
 
         if (options.inscatteringIntensity !== undefined) {

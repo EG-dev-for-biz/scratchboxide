@@ -139,7 +139,7 @@ import { liveTilesAnchor, syncTilesLayer } from './scene3d/syncTilesLayer';
 import { sceneAsksForLiveTiles } from './scene3d/liveTilesAnchor';
 import { groundDatumBadge, projectRoutePoint } from './scene3d/geoAnchorLabels';
 import type { TilesLayerInput } from './scene3d/syncTilesLayer';
-import { classifyAtmosphere, drawsProceduralBiomeTerrain, syncAtmosphere } from './scene3d/syncAtmosphere';
+import { classifyAtmosphere, compensateUnlitForExposure, drawsProceduralBiomeTerrain, syncAtmosphere } from './scene3d/syncAtmosphere';
 import { PlaceReflections, placeReflectionsEnabled } from './scene3d/placeReflections';
 import type { AtmosphereInput } from './scene3d/syncAtmosphere';
 import { classifySceneContent, drawableModelKind, hasNonFallbackObjectContent, syncSceneContent, syncWasmMesh, undrawableSceneObjects } from './scene3d/syncSceneContent';
@@ -2150,8 +2150,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             const aerial = aerialPerspectiveRef.current;
             if (aerial && skyDomeModuleRef.current) {
                 aerial.render(renderer, scene, camera, skyDomeModuleRef.current.sunDirection, skyDomeModuleRef.current.diurnalProfile, skyDomeModuleRef.current);
-                // its full-screen pass writes final values (it applies no tone mapping of its own on the canvas either)
-                return { depthTexture: aerial.renderTarget?.depthTexture ?? null, displayReferred: true };
+                // its full-screen pass writes scene-referred light; the canvas (or the optics chain) tone maps it
+                return { depthTexture: aerial.renderTarget?.depthTexture ?? null };
             }
             renderer.render(scene, camera);
             return { depthTexture: target?.depthTexture ?? null };
@@ -2184,12 +2184,20 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         let reportedOpticsIssues = '';
         const treeFrameSize = new THREE.Vector2();
         let treeStatsShownAt = 0;
+        let unlitExposure = 1, unlitCheckFrame = 0;
         const renderFrame = () => {
+            // an atmospheric sky meters the camera from its sun and sky (sky-light-rig.ts); any other scene keeps 1
+            renderer.toneMappingExposure = skyDomeModuleRef.current?.exposure ?? 1;
+            // unlit photo materials keep their own exposure: checked when it changes, and now and then for new meshes
+            if (renderer.toneMappingExposure !== unlitExposure || (renderer.toneMappingExposure !== 1 && ++unlitCheckFrame % 60 === 0)) {
+                unlitExposure = renderer.toneMappingExposure;
+                compensateUnlitForExposure(scene, unlitExposure);
+            }
             if (opticsChain.active) {
                 opticsChain.render(renderer, camera, {
                     overlays: [transformGizmoGroupRef.current, selectionBoxRef.current, brushCursorMeshRef.current],
                     scene,
-                    displayReferred: !!(aerialPerspectiveRef.current && skyDomeModuleRef.current),
+                    displayReferred: false,
                     drawScene,
                     resolveObject: resolveViewportObject,
                     measureFocus: (cam, depthTexture, frame, issues) =>

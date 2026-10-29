@@ -62,7 +62,7 @@ describe('atmosphere_configure_scene applies the sun to the open scene', () => {
         const sun = calculateNOAASolarPosition(new Date(ISO), PLACE.latitude, PLACE.longitude);
         expect(out.status).toBeUndefined();
         expect(out.resultPayload).toMatchObject({ success: true, applied: true, appliedTo: 'scene-stg-498c306f', castShadows: true });
-        expect(out.resultPayload.operators).toEqual(['sb_set_diurnal_time_of_day', 'sb_configure_atmospheric_scattering']);
+        expect(out.resultPayload.operators).toEqual(['sb_set_diurnal_time_of_day', 'sb_configure_atmospheric_scattering', 'sb_configure_aerial_perspective']);
         expect(out.summaryResult).toMatch(/^Applied to the active 3D scene "Washington Square Arch": sun elevation/);
         const data = out.resultPayload.artifact.data;
         expect(out.resultPayload.artifact.version).toBe(4);

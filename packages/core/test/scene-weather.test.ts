@@ -73,7 +73,9 @@ describe('scene weather', () => {
         expect(thick.aerialPerspectiveRange as number).toBeLessThan(thin.aerialPerspectiveRange as number);
         expect(thick.mie as number).toBeGreaterThan(thin.mie as number);
         const none = applySceneWeather(studio(), { haze: 0 }).features!.atmosphericScattering as Record<string, number | boolean>;
-        expect(none.aerialPerspectiveEnabled).toBe(false);
+        // on with the sky even in the clearest air, over its longest range
+        expect(none.aerialPerspectiveEnabled).toBe(true);
+        expect(none.aerialPerspectiveRange as number).toBeGreaterThan(thin.aerialPerspectiveRange as number);
         // a district hazes over hundreds of metres, a studio scene over tens
         const district = applySceneWeather({ ...studio(), geoAnchor: { lat: 52.37, lng: 4.89 } } as Scene3DData, { haze: 0.5 }).features!.atmosphericScattering as Record<string, number>;
         expect(district.aerialPerspectiveRange).toBeCloseTo(400, 0);
