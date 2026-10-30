@@ -16,13 +16,13 @@ import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 
 /** A grid of ground over x0..x1, z0..z1 at `step`, its height y(x, z), uv over the grid, drawn with one flat grey photo. */
-function ground(x0: number, x1: number, z0: number, z1: number, step: number, y: (x: number, z: number) => number, grey: number | ((row: number) => number)): Buffer {
+function ground(x0: number, x1: number, z0: number, z1: number, step: number, y: (x: number, z: number) => number, grey: number | [number, number, number] | ((row: number) => number)): Buffer {
     const nx = Math.round((x1 - x0) / step), nz = Math.round((z1 - z0) / step);
     const pos: number[] = [], uv: number[] = [], idx: number[] = [];
     for (let j = 0; j <= nz; j++) for (let i = 0; i <= nx; i++) { const x = x0 + i * step, z = z0 + j * step; pos.push(x, y(x, z), z); uv.push(i / nx, j / nz); }
     for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) { const a = j * (nx + 1) + i; idx.push(a, a + nx + 1, a + 1, a + 1, a + nx + 1, a + nx + 2); }
     // a 4 x 4 photo: one grey, or a grey per row (its rows run along z)
-    const px = Uint8Array.from({ length: 48 }, (_, i) => (typeof grey === 'number' ? grey : grey(Math.floor(i / 12))));
+    const px = Uint8Array.from({ length: 48 }, (_, i) => (typeof grey === 'number' ? grey : Array.isArray(grey) ? grey[i % 3] : grey(Math.floor(i / 12))));
     return writeStagedGlb([{ name: 'ground', positions: Float32Array.from(pos), indices: Uint32Array.from(idx), uv: Float32Array.from(uv) }], { texture: { bytes: encodePng(4, 4, px, 3), mimeType: 'image/png' } });
 }
 
@@ -165,6 +165,20 @@ describe('pipeline K-D: the seam stage, one chunk at a time', () => {
         // one even step: the gains take all of it, the fields nothing
         expect(report.pairs[0].stepAfterFieldPct).toBeLessThan(0.5);
         expect(Math.max(...seamFieldAt(fields.get(centre), 60, 0).map(Math.abs))).toBeLessThan(0.01);
+    });
+
+    it("levels the chunks' brightness in full but their hue only a little, so no chunk is tinted", () => {
+        // the east chunk's photo is brighter and bluer than the centre's
+        const a3 = ground(50, 64, -5, 5, 1, () => 0, 100), b3 = ground(56, 70, -5, 5.5, 0.5, () => 0.05, [120, 125, 170]);
+        const { gains, report } = solveSeamGains(new Map([[centre, sampleSeamColour(a3, plan)], [east, sampleSeamColour(b3, plan)]]), plan);
+        const ga = gains.get(centre)!, gb = gains.get(east)!;
+        // each gain changes one channel against the others by at most 3% (maxHueShift)
+        for (const g of [ga, gb]) expect(Math.max(...g) / Math.min(...g)).toBeLessThanOrEqual(Math.exp(0.06) + 1e-9);
+        // the brightness step between them is gone
+        const lum = (v: number[]) => 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+        const ca = lum([0, 1, 2].map(q => srgbToLinear(100 / 255) * ga[q])), cb = lum([0, 1, 2].map(q => srgbToLinear([120, 125, 170][q] / 255) * gb[q]));
+        expect(Math.abs(Math.log(cb / ca))).toBeLessThan(0.01);
+        expect(report.pairs[0].stepAfterPct).toBeLessThan(1);
     });
 
     it('meets on one colour all along a line whose step changes along it, and leaves each chunk\'s inside as it was', () => {

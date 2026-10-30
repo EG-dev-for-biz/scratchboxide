@@ -20,6 +20,7 @@
  *     RGB. Where two chunks' samples stand on one surface (heights within `sameSurfaceM`), the median log ratio per channel
  *     is how much brighter one chunk's photos are than the other's there; one gain per chunk and channel is solved from
  *     every pair by least squares (mean zero over the chunks), so the district keeps its own overall level.
+ *     Brightness is levelled in full, hue only by `maxHueShift` (a gain per channel tinted whole chunks).
  *  2. Cut (cutChunkGround): each chunk's ground is cut exactly at the cell lines around what it owns, the pieces kept by
  *     who owns their middle, every vertex attribute carried, so both copies end on the same line. Where ownership changes
  *     at no cell line (the outline of a building that reaches into the next cell: its own chunk's build may have taken the
@@ -51,7 +52,7 @@ import { chunkOwner, DISTRICT_CHUNKS_PARAMS, type DistrictChunkPlan } from './di
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- glTF JSON is untyped */
 
-export const DISTRICT_SEAMS_VERSION = 'district-seams/1';
+export const DISTRICT_SEAMS_VERSION = 'district-seams/2';
 
 export const DISTRICT_SEAMS_PARAMS = {
     /** How far a later chunk's cut vertex may move onto an earlier chunk's cut edge (m): the step two remeshes leave. */
@@ -76,6 +77,12 @@ export const DISTRICT_SEAMS_PARAMS = {
     featherM: 30,
     /** The largest gain either way. */
     maxGain: 1.5,
+    /**
+     * The most a gain or correction may change one channel against the others (log; 0.03: 3%). The chunks' photos differ
+     * mostly in brightness; a gain per channel also moved their hue (up to 20% between chunks at Shibuya), which read as a
+     * tint over whole chunks. Brightness is levelled in full, hue only this far.
+     */
+    maxHueShift: 0.03,
     /** Least-squares sweeps. */
     iterations: 400,
     /** A gain this close to 1 is left out. */
@@ -496,8 +503,10 @@ export function solveSeamGains(samples: Map<number, SeamSamples>, plan: District
             if (Math.min(sa[1], sa[2], sa[3], sb[1], sb[2], sb[3]) < P.minLinear) continue;
             const key = `${ca},${cb}`;
             let r = ratios.get(key);
-            if (!r) ratios.set(key, r = { d: [[], [], []], x: [], z: [] });
+            // per channel, and (the fourth) the brightness: the luminance ratio itself, not a mean of the channels' logs
+            if (!r) ratios.set(key, r = { d: [[], [], [], []], x: [], z: [] });
             for (let q = 0; q < 3; q++) r.d[q].push(Math.log(sb[q + 1] / sa[q + 1]));
+            r.d[3].push(Math.log((0.2126 * sb[1] + 0.7152 * sb[2] + 0.0722 * sb[3]) / (0.2126 * sa[1] + 0.7152 * sa[2] + 0.0722 * sa[3])));
             r.x.push(x); r.z.push(z);
         }
     }
@@ -511,7 +520,7 @@ export function solveSeamGains(samples: Map<number, SeamSamples>, plan: District
         edges.push({ a, b, n: r.d[0].length, d: r.d.map(median) });
     }
     const nodes = [...new Set(edges.flatMap(e => [e.a, e.b]))];
-    const g = new Map<number, number[]>(nodes.map(n => [n, [0, 0, 0]]));
+    const g = new Map<number, number[]>(nodes.map(n => [n, [0, 0, 0, 0]]));
     const adj = new Map<number, Array<{ o: number; w: number; d: number[] }>>(nodes.map(n => [n, []]));
     for (const e of edges) {
         const w = Math.sqrt(e.n);
@@ -519,17 +528,28 @@ export function solveSeamGains(samples: Map<number, SeamSamples>, plan: District
         adj.get(e.b)!.push({ o: e.a, w, d: e.d.map(x => -x) });
     }
     for (let it = 0; it < P.iterations; it++) for (const n of nodes) {
-        const acc = [0, 0, 0];
+        const acc = [0, 0, 0, 0];
         let wsum = 0;
-        for (const { o, w, d } of adj.get(n)!) { const go = g.get(o)!; for (let q = 0; q < 3; q++) acc[q] += w * (go[q] + d[q]); wsum += w; }
+        for (const { o, w, d } of adj.get(n)!) { const go = g.get(o)!; for (let q = 0; q < 4; q++) acc[q] += w * (go[q] + d[q]); wsum += w; }
         g.set(n, acc.map(x => x / wsum));
     }
-    const mean = [0, 1, 2].map(q => nodes.reduce((s, n) => s + g.get(n)![q], 0) / Math.max(1, nodes.length));
+    const mean = [0, 1, 2, 3].map(q => nodes.reduce((s, n) => s + g.get(n)![q], 0) / Math.max(1, nodes.length));
     const lim = Math.log(P.maxGain);
+    // a log multiplier per channel from [r, g, b, brightness]: the brightness in full (clamped to maxGain), and each
+    // channel's difference from the channels' own mean at most maxHueShift on top
+    const brightnessFirst = (v: number[]) => {
+        const l = Math.max(-lim, Math.min(lim, v[3])), m = 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+        const h = [0, 1, 2].map(q => Math.max(-P.maxHueShift, Math.min(P.maxHueShift, v[q] - m)));
+        // the hue left with no brightness of its own (luminance-weighted mean zero), so the brightness stays l
+        const hm = 0.2126 * h[0] + 0.7152 * h[1] + 0.0722 * h[2];
+        return h.map(x => l + x - hm);
+    };
+    const brightness = new Map<number, number>();
     const gains = new Map<number, [number, number, number]>();
     for (const c of samples.keys()) {
         const v = g.get(c);
-        gains.set(c, v ? (v.map((x, q) => Math.exp(Math.max(-lim, Math.min(lim, x - mean[q])))) as [number, number, number]) : [1, 1, 1]);
+        gains.set(c, v ? (brightnessFirst(v.map((x, q) => x - mean[q])).map(Math.exp) as [number, number, number]) : [1, 1, 1]);
+        brightness.set(c, v ? Math.max(-lim, Math.min(lim, v[3] - mean[3])) : 0);
     }
     // the feathered fields: along each line two side-by-side chunks share, the step left after the gains, by bins
     const fields = new Map<number, SeamField>();
@@ -541,11 +561,11 @@ export function solveSeamGains(samples: Map<number, SeamSamples>, plan: District
         // side by side across x (the line runs along z) or across z (along x)
         const along: 0 | 2 = A.cx === B.cx ? 0 : 2, lineAt = along === 0 ? (A.cz + B.cz) / 2 : (A.cx + B.cx) / 2, s0 = (along === 0 ? A.cx : A.cz) - A.half;
         const nb = Math.round(plan.cellM / P.fieldBinM), r = ratios.get(`${e.a},${e.b}`)!;
-        const ga = gains.get(e.a)!.map(Math.log), gb = gains.get(e.b)!.map(Math.log);
-        const byBin: number[][][] = Array.from({ length: nb }, () => [[], [], []]);
+        const ga = [...gains.get(e.a)!.map(Math.log), brightness.get(e.a)!], gb = [...gains.get(e.b)!.map(Math.log), brightness.get(e.b)!];
+        const byBin: number[][][] = Array.from({ length: nb }, () => [[], [], [], []]);
         r.x.forEach((x, i) => {
             const k = Math.floor(((along === 0 ? x : r.z[i]) - s0) / P.fieldBinM);
-            if (k >= 0 && k < nb) for (let q = 0; q < 3; q++) byBin[k][q].push(r.d[q][i] + gb[q] - ga[q]);
+            if (k >= 0 && k < nb) for (let q = 0; q < 4; q++) byBin[k][q].push(r.d[q][i] + gb[q] - ga[q]);
         });
         // a bin with too few samples takes its neighbours' (held at the ends)
         let corr: Array<number[] | undefined> = byBin.map(b => (b[0].length >= P.fieldMinSamples ? b.map(median) : undefined));
@@ -559,7 +579,7 @@ export function solveSeamGains(samples: Map<number, SeamSamples>, plan: District
             return corr[lo]!.map((v, q) => v * (1 - u) + corr[hi]![q] * u);
         });
         // (each bin's median is already robust; read between the bins' middles linearly)
-        const smooth = corr.map(c => c!.map(v => Math.max(-lim, Math.min(lim, v))));
+        const smooth = corr.map(c => brightnessFirst(c!));
         // half of it each: a toward b (up by half the step), b toward a
         fieldOf(e.a).lines.push({ along, at: lineAt, s0, step: P.fieldBinM, corr: smooth.map(c => c.map(v => v / 2)) });
         fieldOf(e.b).lines.push({ along, at: lineAt, s0, step: P.fieldBinM, corr: smooth.map(c => c.map(v => -v / 2)) });
@@ -567,19 +587,19 @@ export function solveSeamGains(samples: Map<number, SeamSamples>, plan: District
     }
     const lum = (v: number[]) => 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
     const pct = (x: number) => Math.round((Math.exp(Math.abs(x)) - 1) * 1000) / 10;
+    // the brightness step (the luminance ratio, the fourth component) as joined, after the gains, and after the fields too
     const pairs = edges.map(e => {
-        const ga = gains.get(e.a)!.map(Math.log), gb = gains.get(e.b)!.map(Math.log);
+        const la = brightness.get(e.a)!, lb = brightness.get(e.b)!;
         const line = lineSteps.get(`${e.a},${e.b}`);
         const bins = line?.bins.filter(b => b.r.length) ?? [];
-        if (!line || !bins.length) return { a: e.a, b: e.b, samples: e.n, stepBeforePct: pct(lum(e.d)), stepAfterPct: pct(lum(e.d.map((x, q) => x - (ga[q] - gb[q])))) };
-        // per bin: as joined, after the gains (r), after the fields too (the fields read on the line, at the bin's middle)
+        if (!line || !bins.length) return { a: e.a, b: e.b, samples: e.n, stepBeforePct: pct(e.d[3]), stepAfterPct: pct(e.d[3] + lb - la) };
+        // per bin: r[3] is the step left after the gains; the fields read on the line, at the bin's middle
         const lineAt = line.along === 0 ? (plan.chunks[e.a].cz + plan.chunks[e.b].cz) / 2 : (plan.chunks[e.a].cx + plan.chunks[e.b].cx) / 2;
-        const before = bins.map(b => Math.abs(lum(b.r.map((v, q) => v - gb[q] + ga[q]))));
-        const after = bins.map(b => Math.abs(lum(b.r)));
+        const before = bins.map(b => Math.abs(b.r[3] - lb + la));
+        const after = bins.map(b => Math.abs(b.r[3]));
         const field = bins.map(b => {
             const [x, z] = line.along === 0 ? [b.s, lineAt] : [lineAt, b.s];
-            const fa = seamFieldAt(fields.get(e.a), x, z, P), fb = seamFieldAt(fields.get(e.b), x, z, P);
-            return Math.abs(lum(b.r.map((v, q) => v + fb[q] - fa[q])));
+            return Math.abs(b.r[3] + lum(seamFieldAt(fields.get(e.b), x, z, P)) - lum(seamFieldAt(fields.get(e.a), x, z, P)));
         });
         return { a: e.a, b: e.b, samples: e.n, stepBeforePct: pct(median(before)), stepAfterPct: pct(median(after)), stepAfterFieldPct: pct(median(field)) };
     });
