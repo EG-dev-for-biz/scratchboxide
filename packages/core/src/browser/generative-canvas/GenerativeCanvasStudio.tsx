@@ -1082,19 +1082,13 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     ]);
 
     // Desktop App & Window Interaction Coordination Listeners
+    // These events are the host asking the studio to open its own surfaces. They never call the host's handler back:
+    // the desktop app's onOpenPreferences / onOpenKeyboardShortcuts / onCreateFile send these same events, so calling
+    // them here looped until the stack overflowed (⌘, and ⌘/ opened nothing).
     React.useEffect(() => {
-        const handleOpenPreferencesListener = () => {
-            if (onOpenPreferences) onOpenPreferences();
-            else openSettingsToTab('general');
-        };
-        const handleOpenShortcutsListener = () => {
-            if (onOpenKeyboardShortcuts) onOpenKeyboardShortcuts();
-            else openSettingsToTab('shortcuts');
-        };
-        const handleCreateFileRequestedListener = () => {
-            if (onCreateFile) onCreateFile();
-            else openModal('spotlight');
-        };
+        const handleOpenPreferencesListener = () => openSettingsToTab('general');
+        const handleOpenShortcutsListener = () => openSettingsToTab('shortcuts');
+        const handleCreateFileRequestedListener = () => openModal('spotlight');
         const handleWorkspaceChangedListener = (e: Event) => {
             const detail = (e as CustomEvent).detail;
             if (detail?.path) {
@@ -1117,7 +1111,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
             window.removeEventListener('scratchbox:create-file-requested', handleCreateFileRequestedListener);
             window.removeEventListener('scratchbox:workspace-changed', handleWorkspaceChangedListener);
         };
-    }, [onOpenPreferences, onOpenKeyboardShortcuts, onCreateFile, openSettingsToTab, openModal, workspaces, setActiveWorkspace, showToast]);
+    }, [openSettingsToTab, openModal, workspaces, setActiveWorkspace, showToast]);
 
 
 

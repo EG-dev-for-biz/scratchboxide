@@ -18,6 +18,7 @@ import * as React from 'react';
 import { CanvasArtifact, InteractiveBrowserData, KanbanBoardData, LiveCodeSandboxData, MarkdownDocumentData, MetricDashboardData, NodeGraphData, PrimitiveType, StudioLayoutMode, VideoTimelineData, getActiveUserName } from '../canvas-types';
 import { resolveModeForArtifact } from '../guardrails-service';
 import { useCapabilities } from '../hooks/useCapabilities';
+import { newEmptySceneArtifact } from './useWorkspaceFiles';
 import { ChatState, ChatStore } from '../state/chatStore';
 
 export interface UseLayoutModeSwitchDeps {
@@ -460,7 +461,9 @@ export function useCreateEmptyCanvas(deps: UseLayoutModeSwitchDeps) {
                     mediaAssets: []
                 } as VideoTimelineData
             };
-        } else {
+        } else if (type === '3d-scene') {
+            newArtifact = newEmptySceneArtifact(Date.now(), customTitle || 'New 3D Scene');
+        } else if (type === 'metric-dashboard') {
             newArtifact = {
                 id: `art-metric-${Date.now()}`,
                 type: 'metric-dashboard',
@@ -490,6 +493,10 @@ export function useCreateEmptyCanvas(deps: UseLayoutModeSwitchDeps) {
                     }
                 } as MetricDashboardData
             };
+        } else {
+            // a type with no empty canvas says so, instead of opening some other primitive in its place
+            showToast(`No empty ${type} canvas can be created here`, '⚠️');
+            return;
         }
 
         setActiveArtifact(newArtifact);

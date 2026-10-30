@@ -214,12 +214,12 @@ export function artifactForOpenedFile(
 
 /** Creates a new workspace file of the given type as a fresh canvas + chat session. */
 /**
- * The scene a new "4D Scene" workspace opens with: empty, in the neutral studio, so the viewport says "No geometry"
- * until the user or the model adds something. It used to hold `internal:grid` and `internal:sunlight` objects that
- * draw nothing, a cyberpunk sky and a summary describing wave solvers and a WASM heap the scene does not have.
+ * The scene a new "4D Scene" workspace (or an empty 3D canvas) opens with: empty, in the neutral studio, so the
+ * viewport says "No geometry" until the user or the model adds something. It used to hold `internal:grid` and
+ * `internal:sunlight` objects that draw nothing, a cyberpunk sky and a summary describing wave solvers and a WASM heap
+ * the scene does not have.
  */
-export function newEmptySceneArtifact(now: number = Date.now()): CanvasArtifact {
-    const title = '4D Scene';
+export function newEmptySceneArtifact(now: number = Date.now(), title: string = '4D Scene'): CanvasArtifact {
     return {
         id: `art-3d-${now}`,
         type: '3d-scene',
