@@ -152,4 +152,24 @@ describe('the build caches mirrored to the training bucket', () => {
         const other = await cache.run('remesh', stageKey('remesh', 'other'), async dir => { fs.writeFileSync(path.join(dir, 'x.glb'), 'x'); return { value: 1 }; });
         expect(other.cached).toBe(false);
     });
+
+    it('restores an entry of many files several at a time, every byte in place', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cache-bucket-'));
+        let active = 0, most = 0;
+        // a bucket whose downloads take a moment, counting how many overlap
+        const slow = new DirectoryCloudBucket(dir);
+        const download = slow.download.bind(slow);
+        slow.download = async (key, file) => { active++; most = Math.max(most, active); await new Promise(r => setTimeout(r, 5)); try { return await download(key, file); } finally { active--; } };
+        const a = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cache-ws-a-')));
+        const native = path.join(a, '.scratchbox', 'cache', 'tile_refine', 'e'.repeat(16));
+        fs.mkdirSync(path.join(native, 'orthos'), { recursive: true });
+        fs.writeFileSync(path.join(native, 'done.json'), '{}');
+        for (let i = 0; i < 30; i++) fs.writeFileSync(path.join(native, 'orthos', `f${i}.png`), `ortho ${i}`);
+        for (const r of cacheMirrorRoots(a)) await syncCacheDir(slow, r.dir, r.prefix, { ...CACHE_MIRROR_PARAMS, settleMs: 0 });
+        const b = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cache-ws-b-')));
+        expect(await restoreCacheEntry(slow, b, `tile_refine/${'e'.repeat(16)}`)).toBe(true);
+        expect(most).toBeGreaterThan(1);
+        expect(most).toBeLessThanOrEqual(CACHE_MIRROR_PARAMS.restoreConcurrency);
+        for (let i = 0; i < 30; i++) expect(fs.readFileSync(path.join(b, '.scratchbox', 'cache', 'tile_refine', 'e'.repeat(16), 'orthos', `f${i}.png`), 'utf8')).toBe(`ortho ${i}`);
+    });
 });

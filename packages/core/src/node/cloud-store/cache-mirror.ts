@@ -42,6 +42,8 @@ export const CACHE_MIRROR_PARAMS = {
     settleMs: 60_000,
     /** Uploads at once. */
     concurrency: 6,
+    /** Downloads at once when an entry is restored. */
+    restoreConcurrency: 8,
     /** The manifest is saved after this many uploads, so an interrupted sync loses little. */
     saveEvery: 25
 };
@@ -182,11 +184,16 @@ export async function restoreCacheEntry(bucket: CloudBucket, workspaceRoot: stri
     if (!objects.some(o => o.key === `${prefix}done.json`)) return false;
     const tmp = `${dir}.tmp-restore-${process.pid}-${Date.now()}`;
     try {
-        for (const o of objects) {
-            const file = path.join(tmp, ...o.key.slice(prefix.length).split('/'));
-            fs.mkdirSync(path.dirname(file), { recursive: true });
-            if (!(await bucket.download(o.key, file))) throw new Error(`${bucket.label}/${o.key} could not be read`);
-        }
+        // several files at once (a dense chunk's tile_refine entry is hundreds of MB in many files)
+        let next = 0;
+        await Promise.all(Array.from({ length: Math.min(CACHE_MIRROR_PARAMS.restoreConcurrency, objects.length) }, async () => {
+            while (next < objects.length) {
+                const o = objects[next++];
+                const file = path.join(tmp, ...o.key.slice(prefix.length).split('/'));
+                fs.mkdirSync(path.dirname(file), { recursive: true });
+                if (!(await bucket.download(o.key, file))) throw new Error(`${bucket.label}/${o.key} could not be read`);
+            }
+        }));
         // the record's paths onto this workspace
         const doneFile = path.join(tmp, 'done.json');
         const text = fs.readFileSync(doneFile, 'utf8')
