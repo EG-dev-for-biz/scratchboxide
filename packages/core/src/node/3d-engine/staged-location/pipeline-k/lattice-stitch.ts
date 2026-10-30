@@ -410,22 +410,59 @@ const uvArea = (t: number[][]) => Math.abs((t[1][0] - t[0][0]) * (t[2][1] - t[0]
 const dist3 = (a: ArrayLike<number>, b: ArrayLike<number>) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 const cross3 = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 
-/** Whether a point lies on one of these triangles (within tol, inside it, facing like n within about 25°), none touching the vertices `not`. */
-function surfaceProbe(pos: number[][], tris: number[][], tol: number, C = 1): (q: number[], n: number[], not?: number[]) => boolean {
-    const grid = new Map<string, number[]>();
-    tris.forEach((f, t) => {
-        const [a, b, c] = f.map(v => pos[v]);
-        const lo = [0, 1, 2].map(k => Math.floor((Math.min(a[k], b[k], c[k]) - tol) / C)), hi = [0, 1, 2].map(k => Math.floor((Math.max(a[k], b[k], c[k]) + tol) / C));
-        if ((hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1) > 4000) return;
-        for (let x = lo[0]; x <= hi[0]; x++) for (let y = lo[1]; y <= hi[1]; y++) for (let z = lo[2]; z <= hi[2]; z++) { const k = `${x},${y},${z}`; const l = grid.get(k); if (l) l.push(t); else grid.set(k, [t]); }
+/** A grid cell's integer coordinates as one number (2^17 cells a side, centred on 0). */
+const cellKey = (x: number, y: number, z: number) => ((x + 65536) * 131072 + (y + 65536)) * 131072 + (z + 65536);
+
+/**
+ * The cells of size C any point of these triangles can fall in: each triangle sampled on a barycentric grid no coarser than C,
+ * every sample's cell and its neighbours (a point of the triangle lies within C of a sample, so within one cell of its cell).
+ */
+function cellsUnder(tris: number[][][], C: number): Set<number> {
+    const seen = new Set<number>(), out = new Set<number>();
+    for (const [a, b, c] of tris) {
+        const div = Math.max(1, Math.ceil(Math.max(dist3(a, b), dist3(b, c), dist3(c, a)) / C));
+        for (let i = 0; i <= div; i++) for (let j = 0; i + j <= div; j++) {
+            const u = i / div, v = j / div;
+            const x = Math.floor((a[0] + (b[0] - a[0]) * u + (c[0] - a[0]) * v) / C), y = Math.floor((a[1] + (b[1] - a[1]) * u + (c[1] - a[1]) * v) / C), z = Math.floor((a[2] + (b[2] - a[2]) * u + (c[2] - a[2]) * v) / C);
+            const k = cellKey(x, y, z);
+            if (seen.has(k)) continue;
+            seen.add(k);
+            for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) out.add(cellKey(x + dx, y + dy, z + dz));
+        }
+    }
+    return out;
+}
+
+/**
+ * Whether a point lies on one of these triangles (within tol, inside it, facing like n within about 25°), none touching the
+ * vertices `not`. With `near`, only points on those triangles are asked about: the grid holds only the cells under them.
+ */
+function surfaceProbe(pos: number[][], tris: number[][], tol: number, C = 1, near?: number[][][]): (q: number[], n: number[], not?: number[]) => boolean {
+    const focus = near ? cellsUnder(near, C) : undefined;
+    const grid = new Map<number, number[]>();
+    if (!focus || focus.size) tris.forEach((f, t) => {
+        const a = pos[f[0]], b = pos[f[1]], c = pos[f[2]];
+        const x0 = Math.floor((Math.min(a[0], b[0], c[0]) - tol) / C), y0 = Math.floor((Math.min(a[1], b[1], c[1]) - tol) / C), z0 = Math.floor((Math.min(a[2], b[2], c[2]) - tol) / C);
+        const x1 = Math.floor((Math.max(a[0], b[0], c[0]) + tol) / C), y1 = Math.floor((Math.max(a[1], b[1], c[1]) + tol) / C), z1 = Math.floor((Math.max(a[2], b[2], c[2]) + tol) / C);
+        if ((x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) > 4000) return;
+        for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) {
+            const k = cellKey(x, y, z);
+            if (focus && !focus.has(k)) continue;
+            const l = grid.get(k);
+            if (l) l.push(t); else grid.set(k, [t]);
+        }
     });
+    // each triangle's normal (unnormalised) and its length, worked out once
+    const M = new Float64Array(tris.length * 4).fill(NaN);
     return (q, n, not = []) => {
         const nl = Math.hypot(n[0], n[1], n[2]);
         if (!(nl > 0)) return false;
-        for (const t of grid.get(`${Math.floor(q[0] / C)},${Math.floor(q[1] / C)},${Math.floor(q[2] / C)}`) ?? []) {
-            if (tris[t].some(v => not.includes(v))) continue;
-            const [a, b, c] = tris[t].map(v => pos[v]);
-            const m = cross3(sub3(b, a), sub3(c, a)), ml = Math.hypot(m[0], m[1], m[2]);
+        for (const t of grid.get(cellKey(Math.floor(q[0] / C), Math.floor(q[1] / C), Math.floor(q[2] / C))) ?? []) {
+            const f = tris[t];
+            if (not.length && (not.includes(f[0]) || not.includes(f[1]) || not.includes(f[2]))) continue;
+            const a = pos[f[0]], b = pos[f[1]], c = pos[f[2]];
+            if (Number.isNaN(M[t * 4 + 3])) { const mm = cross3(sub3(b, a), sub3(c, a)); M[t * 4] = mm[0]; M[t * 4 + 1] = mm[1]; M[t * 4 + 2] = mm[2]; M[t * 4 + 3] = Math.hypot(mm[0], mm[1], mm[2]); }
+            const m = [M[t * 4], M[t * 4 + 1], M[t * 4 + 2]], ml = M[t * 4 + 3];
             if (!(ml > 0) || Math.abs(dot(m, n)) < 0.9 * ml * nl) continue;
             const d = dot(sub3(q, a), m) / ml;
             if (Math.abs(d) > tol) continue;
@@ -1077,8 +1114,9 @@ export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], opts: { /*
     }
     // a fill triangle lying on a surface already there (an odd count where the scan is doubled, not a hole) is dropped:
     // it would be a second, photo-less skin over the real one
-    const onSurface = surfaceProbe(w.pos, w.tris, P.doubledM);
-    const onWall = surfaceProbe(w.pos, w.tris.filter((_, i) => w.wall[i] >= 0), P.coveredByWallM, P.coveredByWallCellM);
+    // every probe below lies on a fill triangle: the grids hold only the cells under them
+    const onSurface = surfaceProbe(w.pos, w.tris, P.doubledM, 1, out);
+    const onWall = surfaceProbe(w.pos, w.tris.filter((_, i) => w.wall[i] >= 0), P.coveredByWallM, P.coveredByWallCellM, out);
     let kept = 0;
     for (let i = 0; i < out.length; i++) {
         const [a, b, c] = out[i];
@@ -1098,7 +1136,7 @@ export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], opts: { /*
     // the textured twin judges the fill in pieces of at most pieceM: a piece lying over a surface already there (most of it
     // within skinM, its own neighbours included) closes no visible hole and is left out (it would show over the photo); the
     // clay keeps every triangle whole, so the shell stays closed
-    const overSurface = surfaceProbe(w.pos, w.tris, P.skinM);
+    const overSurface = surfaceProbe(w.pos, w.tris, P.skinM, 1, out);
     const pieces: Piece[] = [];
     out.forEach((t, parent) => {
         const [a, b, c] = t, n = cross3(sub3(b, a), sub3(c, a));
