@@ -152,6 +152,7 @@ The voxel-fused photo splats were replaced by a splat on every patch of the scan
 - Saving writes the whole scene as `worlds/v2/<key>/scenes/<version>.json`, then `latest.json`. That includes camera, light, objects, colour harmony and splat edits.
 - `worlds/index/<folder>.json` maps a world's folder name to its cache key. `storeWorld` writes it; the 7th Ave world's entry was written by hand.
 - 3D World opens the newest saved version, else the build's own scene. On a machine without the world's folder, its files come from the cache first.
+- **Local copy first** (user ask, 2026-10-30). A world whose folder is on this machine opens from that folder alone: `scenes/latest.json` beside its files (written on every save and on a fetch), else the build's `scene3d.json`; `source` is `cache` or `local`. Afterwards the route checks the cloud in the background (`syncWorldScene`) and keeps a newer save made elsewhere for the next open. The `scenes/` folder is left out when the world is stored. Opening the 7th Ave world now takes 8 to 10 ms on the API (port 3421), down from about 4 s.
 
 **Live check.**
 - A blue paint stroke on the facade previewed while drawing, and undo and redo removed and restored it.
@@ -164,6 +165,5 @@ The voxel-fused photo splats were replaced by a splat on every patch of the scan
 - A stroke's sweep between points was a row of spheres, leaving the band narrower mid-segment. It is now an exact capsule.
 
 **Not done.**
-- Opening the world takes about 4 s, mostly Google Cloud round trips (index and latest).
 - No view lists the saved versions or opens an older one; `/versions` exists but nothing calls it.
 - The colour-harmony session reports that splats drawn through any optics pass (its grade, lens effects) come out brighter and washed out: the splat material is not tone-mapped, but the chain's output pass tone-maps the whole frame. Not fixed here.

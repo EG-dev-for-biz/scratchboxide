@@ -35,8 +35,10 @@ export const WORLD_MANIFEST = 'world.json';
 export const WORLD_INDEX_PREFIX = 'worlds/index';
 /** A world folder's name as the index and the world routes take it. */
 export const WORLD_SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$/;
-/** Per-station work in the output folder: not needed to show the world, so not stored. */
-const SKIPPED_DIRS = new Set(['stations']);
+/** This machine's copy of a world's saved scenes, beside its built files (world-scenes.ts). */
+export const WORLD_SCENES_DIR = 'scenes';
+/** Per-station work in the output folder, and the local copy of its saved scenes: not built files, so not stored. */
+const SKIPPED_DIRS = new Set(['stations', WORLD_SCENES_DIR]);
 
 /** The world cache bucket: SCRATCHBOX_WORLD_CACHE_BUCKET (`off` disables), else `worldCacheBucket` in cloud-store.json. */
 export function resolveWorldCacheBucketName(): string | undefined {
