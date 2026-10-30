@@ -49,7 +49,7 @@ import { bandResponses, TEXTURE_BANDS_M, type TextureEnergy } from './material-h
 import type { FittedPlane } from '../window-fit';
 import { windowStrips } from '../facade-lattice';
 
-export const MATERIAL_REGIONS_VERSION = 'material-regions/29';
+export const MATERIAL_REGIONS_VERSION = 'material-regions/30';
 
 export const MATERIAL_REGIONS_PARAMS = {
     /** Appearance classes, texels sampled per facade photo, k-means iterations, sampling seed. */
@@ -97,11 +97,13 @@ export interface RegionSet {
     distance: number;
     /** The tile-only harvest's pick (material-harvest.ts): the class's and the set's texture energy at the class's texel, the distances it was chosen by, and what of it is generated. */
     harvest?: { colourDistance: number; textureDistance: number; classEnergy: number[]; setEnergy: number[]; texelM: number; candidates: number; grain: string };
+    /** The pick by appearance (material-choice.ts): the candidates shown, whether the look or the ranking chose, what the chooser saw and why the ranking's nearest was kept. */
+    choice?: { candidates: string[]; by: 'appearance' | 'ranking'; seen?: string; conf?: number; why?: string };
 }
 
 export interface MaterialRegionsReport {
     version: string;
-    classes: Array<Pick<RegionClass, 'index' | 'meanLab' | 'share' | 'wall' | 'texture' | 'facades'> & { set: string; distance: number; harvest?: RegionSet['harvest'] }>;
+    classes: Array<Pick<RegionClass, 'index' | 'meanLab' | 'share' | 'wall' | 'texture' | 'facades'> & { set: string; distance: number; harvest?: RegionSet['harvest']; choice?: RegionSet['choice'] }>;
     facades: { total: number; withWindows: number; perFacade: Array<{ mesh: string; texelM: number; /** The window fit's windows (window-fit.ts) and the lattice's bays, the share of the facade the windows cover, and the share drawn as glass (the bays' texels off the wall's class). */ fittedWindows: number; bays: number; windowShare: number; glassShare: number; /** The share of the facade its structure covers (the wall's set there; the bays' infill takes the frame's). */ structureShare: number; /** The class the windows' frames and the bays' infill are drawn with. */ frameSet: string }> };
     /** Scan pieces: their texels on a fitted plane, in its windows and in its panes (shares of all their texels), and the planes drawn on them. */
     scanPieces: { total: number; onPlanes: number; windowShare: number; paneShare: number; planes: number[] };
@@ -701,7 +703,7 @@ export function mergeMaterialPlan(json: any, classes: RegionClass[], sets: Regio
     const { rebuilt, other } = photoMaterials(json);
     const report: MaterialRegionsReport = {
         version: MATERIAL_REGIONS_VERSION,
-        classes: classes.map((c, k) => ({ index: c.index, meanLab: c.meanLab, share: c.share, wall: c.wall, set: sets[k].name, distance: Math.round(sets[k].distance * 100) / 100, ...(sets[k].harvest ? { harvest: sets[k].harvest } : {}), ...(c.texture ? { texture: c.texture, facades: c.facades } : {}) })),
+        classes: classes.map((c, k) => ({ index: c.index, meanLab: c.meanLab, share: c.share, wall: c.wall, set: sets[k].name, distance: Math.round(sets[k].distance * 100) / 100, ...(sets[k].harvest ? { harvest: sets[k].harvest } : {}), ...(sets[k].choice ? { choice: sets[k].choice } : {}), ...(c.texture ? { texture: c.texture, facades: c.facades } : {}) })),
         facades: { total: rebuilt.size, withWindows: 0, perFacade: [] }, scanPieces: { total: other.size, onPlanes: 0, windowShare: 0, paneShare: 0, planes: [] }, texels: { total: 0, glass: 0 }, panesOnStone: 0, baysOnStone: 0, ms
     };
     const planned: PlannedMaterial[] = [], used = new Set<number>();
@@ -767,14 +769,16 @@ export function writeMaterialRegions(json: any, plan: MaterialRegionsPlan, addTe
 }
 
 /**
- * The appearance classes as a picture, for a vision model to name them (material-naming.ts): one row a class, up to
+ * The appearance classes as a picture, for a vision model to name them (material-naming.ts) and to choose their library
+ * sets by their look (material-choice.ts): one row a class, up to
  * `perClass` patches of the harmonised rebuilt facade photos where that class covers most of the patch (each texel given
  * to its nearest class, as the classes were read), scaled up `zoom` times, on white. The rows follow `classes`' order.
  */
-export function classSwatchSheet(json: any, images: Map<number, RgbaImage8>, classes: RegionClass[], opts: { patch?: number; perClass?: number; zoom?: number; seed?: number } = {}): { width: number; height: number; rgba: Uint8Array } | undefined {
+export function classSwatchSheet(json: any, images: Map<number, RgbaImage8>, classes: RegionClass[], opts: { patch?: number; perClass?: number; zoom?: number; seed?: number; /** The parsed GLB: the patches' real size measured (`spanM`). */ g?: ParsedGlb } = {}): { width: number; height: number; rgba: Uint8Array; /** The median real size of a patch, metres (with `g`). */ spanM?: number } | undefined {
     const patch = opts.patch ?? 24, per = opts.perClass ?? 6, zoom = opts.zoom ?? 4, gap = 8;
     const { rebuilt } = photoMaterials(json);
-    const photos = [...rebuilt.keys()].map(mi => images.get(photoOf(json, mi)!.image)).filter((x): x is RgbaImage8 => !!x && x.width > patch && x.height > patch);
+    const texel = new Map<RgbaImage8, number>();
+    const photos = [...rebuilt.keys()].map(mi => { const img = images.get(photoOf(json, mi)!.image); if (img && opts.g && !texel.has(img)) texel.set(img, texelMetres(opts.g, json, mi, img)); return img; }).filter((x): x is RgbaImage8 => !!x && x.width > patch && x.height > patch);
     if (!photos.length || !classes.length) return undefined;
     const nearest = (r: number, g: number, b: number) => { const L = labOf(r, g, b); let best = 0, bd = Infinity; classes.forEach((c, k) => { const d = (L[0] - c.meanLab[0]) ** 2 + (L[1] - c.meanLab[1]) ** 2 + (L[2] - c.meanLab[2]) ** 2; if (d < bd) { bd = d; best = k; } }); return best; };
     const found: Array<Array<{ img: RgbaImage8; x: number; y: number }>> = classes.map(() => []);
@@ -795,7 +799,8 @@ export function classSwatchSheet(json: any, images: Map<number, RgbaImage8>, cla
             out[dq] = p.img.rgba[sq]; out[dq + 1] = p.img.rgba[sq + 1]; out[dq + 2] = p.img.rgba[sq + 2]; out[dq + 3] = 255;
         }
     }));
-    return { width: W, height: H, rgba: out };
+    const spans = found.flat().map(p => patch * (texel.get(p.img) ?? 0)).filter(v => v > 0).sort((a, b) => a - b);
+    return { width: W, height: H, rgba: out, ...(spans.length ? { spanM: spans[spans.length >> 1] } : {}) };
 }
 
 /** One line for the build's notes. */

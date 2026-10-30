@@ -10,7 +10,8 @@
 /**
  * The library sets of pipeline K's material regions (material-regions.ts): for each appearance class, the texture
  * library set nearest its colour as a dielectric surface (REGION_FINISH; searchTextureLibrary among the sets whose colour
- * has been measured, whose publisher gives a real size and a normal and roughness map, and that are not metal), fetched
+ * has been measured, whose publisher gives a real size of a facade's scale (FACADE_TILE) and a normal and roughness map,
+ * and that are not metal; with a chooser, the one among its nearest that looks most like it, material-choice.ts), fetched
  * from the library bucket (fetchLibrarySets) and prepared small by the engine (surface.prepare_material_maps), cached
  * beside the set for later builds.
  */
@@ -23,6 +24,7 @@ import { libraryTextureEnergy, textureDistance } from './material-harvest';
 import { NativePythonRunnerService } from '../../native-python-runner-service';
 import { decodeImageInMemory } from '../tile-texture-transfer';
 import type { RegionClass, RegionSet } from './material-regions';
+import { CHOICE_CANDIDATES, type ChoiceCandidate, type ChoiceRow, type SetChoice } from './material-choice';
 
 /** Prepared map size: a facade texel is several centimetres, so a tile of a metre or two needs few texels. */
 const PREPARED_SIZE = 256;
@@ -49,6 +51,13 @@ const SHORTLIST = 24;
  */
 const TEXTURE_SHORTLIST = 12, TEXTURE_WEIGHT = 1;
 
+/**
+ * The real size a facade's set is ranked toward, and the largest it may have: a wall's surface is dressed at the scale of
+ * its units, a metre or two a tile (the library's median tile is 1.8 m), while a set whose one tile spans more than
+ * maxM was photographed from far above as ground (a beach, a field from the air), its grain the wrong size on a wall.
+ */
+export const FACADE_TILE = { wantM: 2, maxM: 8 } as const;
+
 const linearToSrgb = (c: number) => (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
 
 /** The repository root (the library index and cache live under it). */
@@ -57,15 +66,19 @@ export function libraryRepoRoot(): string {
 }
 
 /** One set per class, in class order. Throws with the reason when the library cannot give one. */
-export async function resolveRegionSets(classes: RegionClass[], opts: { repoRoot?: string; signal?: AbortSignal; progress?: (m: string) => void } = {}): Promise<RegionSet[]> {
+export async function resolveRegionSets(classes: RegionClass[], opts: {
+    repoRoot?: string; signal?: AbortSignal; progress?: (m: string) => void;
+    /** The pick by appearance (material-choice.ts): given each class's nearest candidates with their previews, the 1-based one per class that looks like it (0 or none: the ranking's nearest). */
+    choose?: (rows: ChoiceRow[]) => Promise<Array<SetChoice | undefined>>;
+} = {}): Promise<RegionSet[]> {
     const repoRoot = opts.repoRoot ?? libraryRepoRoot();
     const index = loadTextureLibraryIndex(repoRoot);
     if (!index) throw new Error(`the texture library index has not been built (assets/textures/library/index.json under ${repoRoot})`);
     const mapped = index.sets.filter(e => e.colour && e.maps.color && e.maps.normal && (e.maps.roughness || e.maps.arm));
     const notMetal = (e: TextureLibraryEntry) => !(e.metallic !== undefined && e.metallic >= REGION_FINISH.maxMetallic);
-    const pool = mapped.filter(e => e.realSizeM && notMetal(e));
-    if (!pool.length) throw new Error('no texture library set that is not metal has a measured colour, a real size and normal and roughness maps');
-    const query = (c: RegionClass) => ({ colorSrgb: c.meanLinear.map(linearToSrgb) as [number, number, number], colorSpreadLab: c.spreadLab, roughness: REGION_FINISH.roughness, metallic: REGION_FINISH.metallic });
+    const pool = mapped.filter(e => e.realSizeM && Math.max(...e.realSizeM) <= FACADE_TILE.maxM && notMetal(e));
+    if (!pool.length) throw new Error(`no texture library set that is not metal has a measured colour, a real size of at most ${FACADE_TILE.maxM} m and normal and roughness maps`);
+    const query = (c: RegionClass) => ({ colorSrgb: c.meanLinear.map(linearToSrgb) as [number, number, number], colorSpreadLab: c.spreadLab, roughness: REGION_FINISH.roughness, metallic: REGION_FINISH.metallic, tileSizeM: FACADE_TILE.wantM });
     // every class's shortlist measured first, so its normal relief can be ranked (and a set measured as metal left out)
     const own = classes.map(c => new Set(searchTextureLibrary({ ...index, sets: pool }, { ...query(c), limit: SHORTLIST }).hits.map(h => h.entry.id)));
     const shortlist = new Set(own.flatMap(o => [...o]));
@@ -76,8 +89,10 @@ export async function resolveRegionSets(classes: RegionClass[], opts: { repoRoot
     const reloaded = (loadTextureLibraryIndex(repoRoot) ?? index).sets;
     const measured = reloaded.filter(e => shortlist.has(e.id) && e.colour && notMetal(e));
     const textured = new Map<number, { colourDistance: number; textureDistance: number; setEnergy: number[]; candidates: number }>();
-    const chosen = await Promise.all(classes.map(async (c, k) => {
+    type Hit = ReturnType<typeof searchTextureLibrary>['hits'][number];
+    const ranked = await Promise.all(classes.map(async (c, k): Promise<Hit[]> => {
         const mine = measured.filter(e => own[k].has(e.id));
+        const nearest = () => searchTextureLibrary({ ...index, sets: mine }, { ...query(c), normalTiltDeg: REGION_FINISH.normalTiltDeg, limit: Math.max(1, CHOICE_CANDIDATES) }).hits;
         if (c.texture) {
             const hits = searchTextureLibrary({ ...index, sets: mine }, { ...query(c), normalTiltDeg: REGION_FINISH.normalTiltDeg, limit: TEXTURE_SHORTLIST }).hits.filter(h => h.entry.realSizeM);
             const scored: Array<{ hit: (typeof hits)[number]; tex: number; energy: number[] }> = [];
@@ -91,15 +106,41 @@ export async function resolveRegionSets(classes: RegionClass[], opts: { repoRoot
             if (scored.length) {
                 const med = (v: number[]) => { const q = [...v].sort((a, b) => a - b); return q[q.length >> 1] || 1; };
                 const dc = med(scored.map(x => x.hit.distance)), dt = med(scored.map(x => x.tex));
-                const best = scored.reduce((a, b) => (b.hit.distance / dc + TEXTURE_WEIGHT * b.tex / dt < a.hit.distance / dc + TEXTURE_WEIGHT * a.tex / dt ? b : a));
+                const score = (x: (typeof scored)[number]) => x.hit.distance / dc + TEXTURE_WEIGHT * x.tex / dt;
+                scored.sort((a, b) => score(a) - score(b));
+                const best = scored[0];
                 textured.set(k, { colourDistance: best.hit.distance, textureDistance: Math.round(best.tex * 1000) / 1000, setEnergy: best.energy.map(v => Math.round(v * 1e6) / 1e6), candidates: scored.length });
-                return best.hit;
+                return scored.map(x => x.hit);
             }
         }
-        const hit = searchTextureLibrary({ ...index, sets: mine }, { ...query(c), normalTiltDeg: REGION_FINISH.normalTiltDeg, limit: 1 }).hits[0];
-        if (!hit) throw new Error(`no texture library set for appearance class ${c.index}`);
-        return hit;
+        const hits = nearest();
+        if (!hits.length) throw new Error(`no texture library set for appearance class ${c.index}`);
+        return hits;
     }));
+    // the pick by appearance among each class's nearest; the ranking's nearest where it gives none
+    const choices: Array<{ candidates: string[]; pick?: SetChoice; why?: string } | undefined> = classes.map(() => undefined);
+    if (opts.choose) {
+        const rows: ChoiceRow[] = [];
+        for (const [k, hits] of ranked.entries()) {
+            const candidates: ChoiceCandidate[] = [];
+            for (const hit of hits.slice(0, CHOICE_CANDIDATES)) {
+                const bytes = await libraryColourPreview(hit.entry, repoRoot, opts.signal).catch(() => undefined);
+                if (bytes) candidates.push({ id: hit.entry.id, realSizeM: hit.entry.realSizeM!, preview: decodeImageInMemory(bytes) });
+            }
+            rows.push({ meanLinear: classes[k].meanLinear, candidates });
+        }
+        opts.progress?.(`material regions: choosing each class's set by its look among ${rows.reduce((a, r) => a + r.candidates.length, 0)} candidates`);
+        let picks: Array<SetChoice | undefined> | undefined, why: string | undefined;
+        try { picks = await opts.choose(rows); } catch (err) { if (opts.signal?.aborted) throw err; why = `the pick by appearance failed: ${err instanceof Error ? err.message : String(err)}`; }
+        rows.forEach((row, k) => {
+            const candidates = row.candidates.map(c => c.id), pick = picks?.[k];
+            choices[k] = pick ? { candidates, pick, ...(pick.pick === 0 ? { why: 'none of the candidates looked like the class; the ranking\'s nearest kept' } : {}) } : { candidates, why: why ?? 'the reply gave this class no pick; the ranking\'s nearest kept' };
+        });
+    }
+    const chosen = ranked.map((hits, k) => {
+        const p = choices[k]?.pick?.pick, id = p ? choices[k]!.candidates[p - 1] : undefined;
+        return (id && hits.find(h => h.entry.id === id)) || hits[0];
+    });
     const fetched = await fetchLibrarySets([...new Set(chosen.map(h => h.entry.id))], { repoRoot, ...(opts.signal ? { signal: opts.signal } : {}), ...(opts.progress ? { progress: opts.progress } : {}) });
     if (fetched.missing.length) throw new Error(`texture library: ${fetched.missing.map(m => m.reason).join('; ')}`);
     const prepared = new Map<string, { normal: string; orm: string }>();
@@ -131,6 +172,7 @@ for j in json.load(open(${JSON.stringify(jobs)})):
         const files = prepared.get(hit.entry.id)!;
         return {
             name: hit.entry.id, realSizeM: hit.entry.realSizeM!, distance: hit.distance,
+            ...(choices[k] ? { choice: { candidates: choices[k]!.candidates, by: choices[k]!.pick?.pick ? 'appearance' as const : 'ranking' as const, ...(choices[k]!.pick?.seen ? { seen: choices[k]!.pick!.seen } : {}), ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}), ...(choices[k]!.why ? { why: choices[k]!.why } : {}) } } : {}),
             ...(textured.has(k) ? { harvest: { ...textured.get(k)!, classEnergy: classes[k].texture!.energy, texelM: classes[k].texture!.texelM, grain: `generated: the set's detail finer than the tile's ${Math.round(classes[k].texture!.texelM * 100)} cm texel is its own, below the tile's resolution` } } : {}),
             normal: decodeImageInMemory(fs.readFileSync(files.normal)), orm: decodeImageInMemory(fs.readFileSync(files.orm))
         };

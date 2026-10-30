@@ -86,7 +86,8 @@ export function betweenSeen(records: FacadeReadRecord[], n = 5): string[] {
 export interface MaterialClassEntry {
     index: number; share: number; wall: boolean;
     colour: { lab: [number, number, number]; srgb: string; label: 'photo-inferred' };
-    set: { name: string; distance: number; label: 'generated' };
+    /** `by`: whether the set was picked by its look (material-choice.ts) or is the ranking's nearest; `seen`: the chooser's words for the class (a label). */
+    set: { name: string; distance: number; label: 'generated'; by?: 'appearance' | 'ranking'; seen?: string };
     words?: { text: string; conf: number; label: 'photo-inferred'; source: string };
 }
 
@@ -101,13 +102,13 @@ export interface MaterialClassesExtras {
 const hex = (linear: [number, number, number]) => '#' + linear.map(v => { const s = v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055; return Math.round(Math.max(0, Math.min(1, s)) * 255).toString(16).padStart(2, '0'); }).join('');
 
 /** The classes as saved with the building: each with its colour, its library set and (when named) its words, and the reader's glass. */
-export function materialClassesExtras(classes: Array<RegionClass & { set: string; distance: number }>, words: Array<ClassWords | undefined> | undefined, glass: GlassSeen[] = [], unnamed?: string): MaterialClassesExtras {
+export function materialClassesExtras(classes: Array<RegionClass & { set: string; distance: number; choice?: { by: 'appearance' | 'ranking'; seen?: string } }>, words: Array<ClassWords | undefined> | undefined, glass: GlassSeen[] = [], unnamed?: string): MaterialClassesExtras {
     return {
         schema: 'scratchbox.material-classes/1', version: MATERIAL_NAMING_VERSION,
         classes: classes.map((c, k) => ({
             index: c.index, share: c.share, wall: c.wall,
             colour: { lab: c.meanLab, srgb: hex(c.meanLinear), label: 'photo-inferred' },
-            set: { name: c.set, distance: Math.round(c.distance * 1000) / 1000, label: 'generated' },
+            set: { name: c.set, distance: Math.round(c.distance * 1000) / 1000, label: 'generated', ...(c.choice ? { by: c.choice.by, ...(c.choice.seen ? { seen: c.choice.seen } : {}) } : {}) },
             ...(words?.[k] ? { words: { text: words[k]!.words, conf: words[k]!.conf, label: 'photo-inferred', source: 'a vision model naming patches of the class, told the building, its brief and what the facade reader saw' } } : {})
         })),
         ...(glass.length ? { glass: glass.map(g => ({ ...g, label: 'photo-inferred' as const, source: "the facade reader's glass readings, by their words" })) } : {}),
