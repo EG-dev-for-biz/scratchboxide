@@ -99,6 +99,16 @@ export interface Location3DGSRequest {
 /** A standing viewer's eye above the ground, metres: where a street vantage's scene opens. */
 export const VIEWER_EYE_HEIGHT_M = 1.6;
 
+/** How far the walk runs each way along the street from the vantage. */
+export const WALK_HALF_LENGTH_M = 30;
+
+/** The walk the viewer stands on: along the street (its bearing, else across the look heading), at eye height. */
+function walkCorridor(viewer: { eye: [number, number, number]; headingDeg: number }, streetBearingDeg?: number): { a: [number, number]; b: [number, number]; eyeY: number } {
+    const along = ((streetBearingDeg ?? viewer.headingDeg + 90) * Math.PI) / 180;
+    const dx = Math.sin(along) * WALK_HALF_LENGTH_M, dz = -Math.cos(along) * WALK_HALF_LENGTH_M;
+    return { a: [viewer.eye[0] - dx, viewer.eye[2] - dz], b: [viewer.eye[0] + dx, viewer.eye[2] + dz], eyeY: viewer.eye[1] };
+}
+
 /** The street centrelines near a point, from the Google vector tiles (the road layer only). */
 async function defaultStreets(lat: number, lng: number, radiusM: number): Promise<VectorStreet[]> {
     const { SpatialVectorDataService } = await import('./SpatialVectorDataService');
@@ -382,8 +392,8 @@ export class Location3DGaussianSplatService {
             anchor,
             stations,
             ...(street?.stations.length ? { streetStations: street.stations.map(s => ({ station: s.station, photo: s.photo })) } : {}),
-            // a world to stand in is kept to the scan's ground and building hulls (no underground or floating splats)
-            ...(street ? { containToScan: true } : {}),
+            // a world to stand in: a splat on every patch of the scan (kept to its hulls), densest along the walk
+            ...(street && viewer ? { surfaceLayer: { corridor: walkCorridor(viewer, snap?.streetBearingDeg) } } : {}),
             outDir,
             beautify: beautifyContext,
             mode: 'chained',
@@ -484,8 +494,9 @@ type CachedWorld = Omit<Location3DGSResult, 'scene3DData' | 'splatPath' | 'splat
 function worldFromCache(hit: WorldManifest<CachedWorld>, outDir: string, durationMs: number, bucketLabel: string): Location3DGSResult {
     const { viewer, ...cached } = hit.result;
     const fusedSplatPath = path.join(outDir, 'fused.splat'), tilesetPath = path.join(outDir, 'tileset.json'), metaPath = path.join(outDir, 'tileset.meta.json');
+    const spzPath = path.join(outDir, 'fused.spz');
     const { scene3DData } = SurveySplatPipelineService.toScene3DData(
-        { success: true, stations: [], fusedSplatPath, fusedSplatCount: cached.splatCount, tilesetPath, metaPath, cropBox: cached.cropBox, durationMs },
+        { success: true, stations: [], fusedSplatPath, ...(fs.existsSync(spzPath) ? { spzPath } : {}), fusedSplatCount: cached.splatCount, tilesetPath, metaPath, cropBox: cached.cropBox, durationMs },
         cached.geoAnchor, cached.locationName, viewer ? { vantage: viewer } : {}
     );
     fs.writeJsonSync(path.join(outDir, 'scene3d.json'), scene3DData, { spaces: 2 });

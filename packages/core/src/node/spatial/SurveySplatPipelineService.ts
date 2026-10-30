@@ -27,6 +27,7 @@ import type { Scene3DData, Media4DObject } from '../../browser/generative-canvas
 import { buildNativeIfStale } from '../3d-engine/native-build';
 import { repoPath } from '../process/repo-python';
 import { containSplatsToScan, type ContainmentReport } from './splat-containment';
+import { buildSurfaceSplatLayer, type SurfaceLayerReport } from './surface-splat-layer';
 import { glbRaycaster } from './street-view-stations';
 
 /** Street stations' incidence floor: a camera 2.5 m up sees the street ground at 0.06 out to about 40 m. */
@@ -64,6 +65,12 @@ export interface SurveySplatPipelineRequest {
     streetMinCosIncidence?: number;
     /** Drop fused splats outside the scan's ground and building hulls before tiling (containSplatsToScan). */
     containToScan?: boolean;
+    /**
+     * A splat on every patch of the scan, coloured from the stations (surface-splat-layer.ts), instead of the stations'
+     * per-pixel splats fused by voxel: its spacing grows with the distance to the walk `corridor` (scan frame x, z at eye
+     * height), within `budget` splats. Also written as .spz, which the scene loads.
+     */
+    surfaceLayer?: { corridor: { a: [number, number]; b: [number, number]; eyeY: number }; budget?: number };
     outDir: string;
     beautify: StationBeautifyContext;
     /** 'chained' warps each accepted image into the next station (consistent materials); 'fanout' beautifies independently. */
@@ -174,6 +181,8 @@ export interface SurveySplatPipelineResult {
     success: boolean;
     stations: SurveySplatStationReport[];
     fusedSplatPath: string;
+    /** The same splats as SPZ (about a tenth of the size), when written: the scene loads it. */
+    spzPath?: string;
     fusedSplatCount: number;
     tilesetPath: string;
     metaPath: string;
@@ -434,41 +443,64 @@ export class SurveySplatPipelineService {
             }
             if (bakedStations.length === 0) throw new Error('No station passed QC; nothing to bake');
 
-            throwIfStopped(signal);
-            report(0.8, 'Fusing station splats');
             const voxel = req.voxelSizeMeters ?? 0.025;
-            const listPath = path.join(outDir, 'stations_to_fuse.txt');
-            await fs.outputFile(listPath, bakedStations.map(s => `${s.splatPath} ${s.station.cameraAltitude ?? s.station.positionLocalENU?.[1] ?? s.station.cameraHeightAboveGround ?? 50.0}`).join('\n'));
-            const dropFoliageArg = req.dropFoliage !== false ? '--drop-foliage' : '';
-            const normalPruneArg = `--normal-prune-cos ${req.normalPruneCos ?? 0.0}`;
-            const consistencyArg = req.dropInconsistent ? `--drop-inconsistent --color-consistency-thresh ${req.colorConsistencyThresh ?? 40.0}` : '';
-            const minViewsArg = (req.minViews && req.minViews > 1) ? `--min-views ${req.minViews}` : '';
-            const cropCenter = req.cropCenter ?? (req.cropBox ? [
-                (req.cropBox.min[0] + req.cropBox.max[0]) * 0.5,
-                (req.cropBox.min[2] + req.cropBox.max[2]) * 0.5
-            ] : [0.0, 0.0]);
-            const cropCenterArg = (cropCenter[0] !== 0 || cropCenter[1] !== 0) ? `--crop-center-x ${cropCenter[0]} --crop-center-z ${cropCenter[1]}` : '';
-            const cropRadiusVal = req.cropRadius ?? (req.cropBox ? Math.max(
-                Math.abs(req.cropBox.max[0] - cropCenter[0]),
-                Math.abs(req.cropBox.max[2] - cropCenter[1]),
-                Math.abs(req.cropBox.min[0] - cropCenter[0]),
-                Math.abs(req.cropBox.min[2] - cropCenter[1])
-            ) : 115.0);
-            const cropRadiusArg = cropRadiusVal > 0 ? `--crop-radius ${cropRadiusVal}` : '';
-            const fuseCmd = `"${baker}" --fuse-list "${listPath}" --voxel-size ${voxel} ${cropRadiusArg} ${cropCenterArg} ${dropFoliageArg} ${normalPruneArg} ${consistencyArg} ${minViewsArg} --exclude-underside --out-splat "${fusedSplatPath}" --json`;
-            const { stdout: fuseStdout } = await execAsync(fuseCmd, { maxBuffer: 16 * 1024 * 1024, signal });
-            const fuseRes = JSON.parse(fuseStdout.trim());
-            await fs.remove(listPath).catch(() => {});
-            let fusedCount = fuseRes.fusedSplatCount ?? 0;
-            // kept inside the scan's ground and building hulls (splat-containment.ts)
+            let fusedCount = 0;
+            let fuseBounds: { min: number[]; max: number[] } | undefined;
             let containment: ContainmentReport | undefined;
-            if (req.containToScan) {
+            let surface: SurfaceLayerReport | undefined;
+            const spzPath = path.join(outDir, 'fused.spz');
+            if (req.surfaceLayer) {
+                // a splat on every patch of the scan, coloured from the stations, in place of the per-pixel splats' voxel fuse
                 throwIfStopped(signal);
-                report(0.84, 'Containing the splats to the ground and the building hulls');
-                const contained = containSplatsToScan(await fs.readFile(fusedSplatPath), glbRaycaster(req.glbPath, { lat: req.anchor.lat, lng: req.anchor.lng, heightMeters: req.anchor.elevationMeters }));
-                await fs.writeFile(fusedSplatPath, contained.kept);
-                containment = contained.report;
-                fusedCount = contained.report.kept;
+                report(0.8, 'Laying a splat on every patch of the scan, coloured from the stations');
+                const layerStations = reports.filter(r => r.accepted && r.splatPath && r.imagePath).flatMap(r => {
+                    const baked = bakedStations.find(b => b.splatPath === r.splatPath);
+                    return baked ? [{ station: baked.station, imagePath: r.imagePath, posePath: r.splatPath!.replace(/\.splat$/, '.pose.json'), priority: r.groundingPanoId ? 1.5 : 1 }] : [];
+                });
+                surface = await buildSurfaceSplatLayer({
+                    glbPath: req.glbPath, anchor: req.anchor, renderer, stations: layerStations, corridor: req.surfaceLayer.corridor,
+                    outSplat: fusedSplatPath, outSpz: spzPath, workDir: path.join(outDir, 'surface_work'),
+                    ...(req.surfaceLayer.budget ? { budget: req.surfaceLayer.budget } : {}), ...(signal ? { signal } : {})
+                });
+                fusedCount = surface.splats;
+            } else {
+                throwIfStopped(signal);
+                report(0.8, 'Fusing station splats');
+                const voxel = req.voxelSizeMeters ?? 0.025;
+                const listPath = path.join(outDir, 'stations_to_fuse.txt');
+                await fs.outputFile(listPath, bakedStations.map(s => `${s.splatPath} ${s.station.cameraAltitude ?? s.station.positionLocalENU?.[1] ?? s.station.cameraHeightAboveGround ?? 50.0}`).join('\n'));
+                const dropFoliageArg = req.dropFoliage !== false ? '--drop-foliage' : '';
+                const normalPruneArg = `--normal-prune-cos ${req.normalPruneCos ?? 0.0}`;
+                const consistencyArg = req.dropInconsistent ? `--drop-inconsistent --color-consistency-thresh ${req.colorConsistencyThresh ?? 40.0}` : '';
+                const minViewsArg = (req.minViews && req.minViews > 1) ? `--min-views ${req.minViews}` : '';
+                const cropCenter = req.cropCenter ?? (req.cropBox ? [
+                    (req.cropBox.min[0] + req.cropBox.max[0]) * 0.5,
+                    (req.cropBox.min[2] + req.cropBox.max[2]) * 0.5
+                ] : [0.0, 0.0]);
+                const cropCenterArg = (cropCenter[0] !== 0 || cropCenter[1] !== 0) ? `--crop-center-x ${cropCenter[0]} --crop-center-z ${cropCenter[1]}` : '';
+                const cropRadiusVal = req.cropRadius ?? (req.cropBox ? Math.max(
+                    Math.abs(req.cropBox.max[0] - cropCenter[0]),
+                    Math.abs(req.cropBox.max[2] - cropCenter[1]),
+                    Math.abs(req.cropBox.min[0] - cropCenter[0]),
+                    Math.abs(req.cropBox.min[2] - cropCenter[1])
+                ) : 115.0);
+                const cropRadiusArg = cropRadiusVal > 0 ? `--crop-radius ${cropRadiusVal}` : '';
+                const fuseCmd = `"${baker}" --fuse-list "${listPath}" --voxel-size ${voxel} ${cropRadiusArg} ${cropCenterArg} ${dropFoliageArg} ${normalPruneArg} ${consistencyArg} ${minViewsArg} --exclude-underside --out-splat "${fusedSplatPath}" --json`;
+                const { stdout: fuseStdout } = await execAsync(fuseCmd, { maxBuffer: 16 * 1024 * 1024, signal });
+                const fuseRes = JSON.parse(fuseStdout.trim());
+                fuseBounds = fuseRes.bounds;
+                await fs.remove(listPath).catch(() => {});
+                fusedCount = fuseRes.fusedSplatCount ?? 0;
+                // kept inside the scan's ground and building hulls (splat-containment.ts)
+                if (req.containToScan) {
+                    throwIfStopped(signal);
+                    report(0.84, 'Containing the splats to the ground and the building hulls');
+                    const contained = containSplatsToScan(await fs.readFile(fusedSplatPath), glbRaycaster(req.glbPath, { lat: req.anchor.lat, lng: req.anchor.lng, heightMeters: req.anchor.elevationMeters }));
+                    await fs.writeFile(fusedSplatPath, contained.kept);
+                    containment = contained.report;
+                    fusedCount = contained.report.kept;
+                }
+
             }
 
             throwIfStopped(signal);
@@ -479,8 +511,8 @@ export class SurveySplatPipelineService {
             throwIfStopped(signal);
 
             const meshBounds = renderer.getMeshBounds()!;
-            const fMin = fuseRes.bounds?.min ?? [-100, -100, -100];
-            const fMax = fuseRes.bounds?.max ?? [100, 100, 100];
+            const fMin = fuseBounds?.min ?? [-100, -100, -100];
+            const fMax = fuseBounds?.max ?? [100, 100, 100];
             const cropBox = req.cropBox ?? {
                 min: [
                     Math.min(fMin[0] - 1.0, meshBounds.min[0] - 1.0),
@@ -498,13 +530,13 @@ export class SurveySplatPipelineService {
                 modelsUsed: Array.from(new Set(reports.map(r => r.modelUsed).filter((m): m is string => !!m))),
                 mode, anchor: req.anchor, glbPath: req.glbPath,
                 eyeHeight: stations[0]?.cameraHeightAboveGround ?? 1.7,
-                cropBox, fusedSplatCount: fusedCount, voxelSizeMeters: voxel, ...(containment ? { containment } : {}),
+                cropBox, fusedSplatCount: fusedCount, ...(surface ? { surfaceLayer: surface } : { voxelSizeMeters: voxel }), ...(containment ? { containment } : {}),
                 stations: reports, tiles: { tileCount: tileRes.tileCount, levels: tileRes.levels, tileBytes: tileRes.tileBytes },
                 createdAt: new Date().toISOString()
             };
             await fs.writeJson(metaPath, meta, { spaces: 2 });
             report(1, 'Done');
-            return { success: true, stations: reports, fusedSplatPath, fusedSplatCount: fusedCount, tilesetPath, metaPath, cropBox, durationMs: Date.now() - t0 };
+            return { success: true, stations: reports, fusedSplatPath, ...(surface ? { spzPath } : {}), fusedSplatCount: fusedCount, tilesetPath, metaPath, cropBox, durationMs: Date.now() - t0 };
         } catch (e: any) {
             // A stopped run is not a pipeline failure: the caller gets the stop itself.
             throwIfStopped(signal);
@@ -674,7 +706,7 @@ export class SurveySplatPipelineService {
             vantage?: { eye: [number, number, number]; headingDeg: number };
         } = {}
     ): { scene3DData: Scene3DData; splatMediaObject: Media4DObject } {
-        const splatUrl = SurveySplatPipelineService.toWebUrl(result.fusedSplatPath);
+        const splatUrl = SurveySplatPipelineService.toWebUrl(result.spzPath ?? result.fusedSplatPath);
         const tilesetUrl = SurveySplatPipelineService.toWebUrl(result.tilesetPath);
         const sceneSlug = locationName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
         const vantage = options.vantage;

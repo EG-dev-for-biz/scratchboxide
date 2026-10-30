@@ -9,7 +9,7 @@
 
 /**
  * Finished splat worlds kept in Google Cloud Storage, so the same world is not built from scratch again (user ask,
- * 2026-10-29). A world is stored under `worlds/v1/<key>/`: every file of its output folder except the per-station work
+ * 2026-10-29). A world is stored under `worlds/<version>/<key>/`: every file of its output folder except the per-station work
  * (`stations/`), then `world.json` last, which marks the copy complete and holds what the result needs to be rebuilt
  * without the build (the viewer, the anchor, the station reports).
  *
@@ -26,7 +26,7 @@ import { scratchboxHome } from '../asset-store/scratchbox-home';
 import { GcsCloudBucket, type CloudBucket } from './cloud-bucket';
 
 /** Bumped when a change to the pipeline makes worlds built before it not worth reusing. */
-export const WORLD_CACHE_VERSION = 'v1';
+export const WORLD_CACHE_VERSION = 'v2';
 export const WORLD_CACHE_PREFIX = `worlds/${WORLD_CACHE_VERSION}`;
 /** The manifest, written last: a world without it is an interrupted upload and is not used. */
 export const WORLD_MANIFEST = 'world.json';

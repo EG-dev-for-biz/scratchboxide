@@ -59,18 +59,24 @@ export interface ContainmentReport {
 /** Why each splat was kept or dropped (containSplatsToScan's `reasons`). */
 export const enum ContainmentReason { Ground = 0, Building = 1, Unmeasured = 2, Underground = 3, InAir = 4, AboveScan = 5 }
 
-/** Contains the splats in `splat` (the .splat layout) to the scan `ray` measures; returns the kept records, what went, and why per splat. */
-export function containSplatsToScan(splat: Buffer, ray: Pick<TileMeshRaycaster, 'topHitLocal'>, opts: ContainmentOptions = {}): { kept: Buffer; report: ContainmentReport; reasons: Uint8Array } {
-    const cell = opts.cellM ?? 1, band = opts.groundBandM ?? 0.6, rise = opts.buildingRiseM ?? 4;
-    const n = Math.floor(splat.length / SPLAT_RECORD_BYTES);
-    const f32 = (i: number, k: number) => splat.readFloatLE(i * SPLAT_RECORD_BYTES + k * 4);
+/** The scan's ground and building hulls on a grid over an extent; classify() says where a point stands against them. */
+export interface ScanHulls {
+    classify(x: number, y: number, z: number): ContainmentReason;
+    /** The ground's height under (x, z), or undefined where the scan does not cover it. */
+    groundAt(x: number, z: number): number | undefined;
+    buildingCells: number;
+    cells: number;
+}
 
-    // the grid over the splats' own extent
-    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    for (let i = 0; i < n; i++) {
-        const x = f32(i, 0), z = f32(i, 2);
-        if (x < minX) minX = x; if (x > maxX) maxX = x; if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
-    }
+/** A point the hulls keep: on the ground, inside a building or structure column, or over a cell the scan does not cover. */
+export function keptByHulls(reason: ContainmentReason): boolean {
+    return reason === ContainmentReason.Ground || reason === ContainmentReason.Building || reason === ContainmentReason.Unmeasured;
+}
+
+/** Builds the hulls the scan `ray` measures over the x/z extent (see the file comment). */
+export function buildScanHulls(ray: Pick<TileMeshRaycaster, 'topHitLocal'>, extent: { minX: number; maxX: number; minZ: number; maxZ: number }, opts: ContainmentOptions = {}): ScanHulls {
+    const cell = opts.cellM ?? 1, band = opts.groundBandM ?? 0.6, rise = opts.buildingRiseM ?? 4;
+    const { minX, maxX, minZ, maxZ } = extent;
     const cols = Math.max(1, Math.ceil((maxX - minX) / cell) + 1), rows = Math.max(1, Math.ceil((maxZ - minZ) / cell) + 1);
     const top = new Float32Array(cols * rows).fill(Number.NaN);
     for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
@@ -138,19 +144,53 @@ export function containSplatsToScan(splat: Buffer, ray: Pick<TileMeshRaycaster, 
         }
     }
 
-    const keep = new Uint8Array(n), reasons = new Uint8Array(n);
-    const report: ContainmentReport = { input: n, kept: 0, droppedUnderground: 0, droppedInAir: 0, droppedAboveScan: 0, unmeasured: 0, buildingCells: 0, cells: cols * rows };
-    for (let i = 0; i < isBuilding.length; i++) report.buildingCells += isBuilding[i];
+    let buildingCells = 0;
+    for (let i = 0; i < isBuilding.length; i++) buildingCells += isBuilding[i];
+    const cellOf = (x: number, z: number) => {
+        const c = Math.floor((x - minX) / cell), r = Math.floor((z - minZ) / cell);
+        return c < 0 || r < 0 || c >= cols || r >= rows ? -1 : r * cols + c;
+    };
+    return {
+        buildingCells, cells: cols * rows,
+        groundAt(x: number, z: number): number | undefined {
+            const k = cellOf(x, z);
+            return k < 0 || Number.isNaN(ground[k]) ? undefined : ground[k];
+        },
+        classify(x: number, y: number, z: number): ContainmentReason {
+            const k = cellOf(x, z);
+            if (k < 0) return ContainmentReason.Unmeasured;
+            const g = ground[k];
+            if (Number.isNaN(g)) return ContainmentReason.Unmeasured;
+            if (y < g - band) return ContainmentReason.Underground;
+            if (y <= g + band) return ContainmentReason.Ground;
+            if (!hull[k]) return ContainmentReason.InAir;
+            if (y > hullTop[k] + band) return ContainmentReason.AboveScan;
+            return ContainmentReason.Building;
+        }
+    };
+}
+
+/** Contains the splats in `splat` (the .splat layout) to the scan `ray` measures; returns the kept records, what went, and why per splat. */
+export function containSplatsToScan(splat: Buffer, ray: Pick<TileMeshRaycaster, 'topHitLocal'>, opts: ContainmentOptions = {}): { kept: Buffer; report: ContainmentReport; reasons: Uint8Array } {
+    const n = Math.floor(splat.length / SPLAT_RECORD_BYTES);
+    const f32 = (i: number, k: number) => splat.readFloatLE(i * SPLAT_RECORD_BYTES + k * 4);
+    // the grid over the splats' own extent
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     for (let i = 0; i < n; i++) {
-        const x = f32(i, 0), y = f32(i, 1), z = f32(i, 2);
-        const k = Math.min(rows - 1, Math.floor((z - minZ) / cell)) * cols + Math.min(cols - 1, Math.floor((x - minX) / cell));
-        const g = ground[k];
-        if (Number.isNaN(g)) { keep[i] = 1; reasons[i] = ContainmentReason.Unmeasured; report.unmeasured++; continue; }
-        if (y < g - band) { reasons[i] = ContainmentReason.Underground; report.droppedUnderground++; continue; }
-        if (y <= g + band) { keep[i] = 1; reasons[i] = ContainmentReason.Ground; continue; }
-        if (!hull[k]) { reasons[i] = ContainmentReason.InAir; report.droppedInAir++; continue; }
-        if (y > hullTop[k] + band) { reasons[i] = ContainmentReason.AboveScan; report.droppedAboveScan++; continue; }
-        keep[i] = 1; reasons[i] = ContainmentReason.Building;
+        const x = f32(i, 0), z = f32(i, 2);
+        if (x < minX) minX = x; if (x > maxX) maxX = x; if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+    }
+    const hulls = buildScanHulls(ray, { minX, maxX, minZ, maxZ }, opts);
+    const keep = new Uint8Array(n), reasons = new Uint8Array(n);
+    const report: ContainmentReport = { input: n, kept: 0, droppedUnderground: 0, droppedInAir: 0, droppedAboveScan: 0, unmeasured: 0, buildingCells: hulls.buildingCells, cells: hulls.cells };
+    for (let i = 0; i < n; i++) {
+        const why = hulls.classify(f32(i, 0), f32(i, 1), f32(i, 2));
+        reasons[i] = why;
+        if (keptByHulls(why)) keep[i] = 1;
+        if (why === ContainmentReason.Unmeasured) report.unmeasured++;
+        else if (why === ContainmentReason.Underground) report.droppedUnderground++;
+        else if (why === ContainmentReason.InAir) report.droppedInAir++;
+        else if (why === ContainmentReason.AboveScan) report.droppedAboveScan++;
     }
     let m = 0;
     for (let i = 0; i < n; i++) m += keep[i];

@@ -114,3 +114,25 @@ The user asked for a critique of the work. It was examined in the viewport, by p
 * **Stored:** this world, key `0536cef80b926fb1d30177b9`, 429 files, 212 MB. The manifest (`world.json`) is written last. The per-station work (`stations/`) is not stored, and no Street View photograph ever reaches the output folder.
 * **Fetched:** the same ask, sent to a new output folder, came back from the bucket in 1 min 46 s, against 10 to 37 minutes to build. The result says `worldCache.state: 'fetched'` and when the world was built. The scene was rewritten for the new folder's paths and opens first-person at the vantage. `refresh: true` builds the world again.
 
+
+## 8. Surface splat layer (2026-10-30)
+
+**Status: Verified in the live app** (port 3420, front-page 3D World button, `fused.spz` 200 OK, no console errors).
+
+The voxel-fused photo splats were replaced by a splat on every patch of the scan's surface (`surface-splat-layer.ts`, `scratchbox_surface_splats.hpp`, plan in `docs/research/2026-10-30-surface-splat-layer-plan.md`). Each splat is coloured from the best two stations that see it, and spacing tightens toward the walk.
+
+| Measure | Voxel world | Surface layer |
+|---|---|---|
+| Splats | 3.8 M | 4.0 M (3.72 M observed, 0.28 M unseen fill) |
+| Lower view empty, north | 30.6% | 0.6% |
+| Lower view empty, east | 34.4% | 22.3% |
+| SPZ | n/a | 34 MB |
+| Layer build | n/a | 8 s |
+
+- **The first viewport pass showed white cones beside the walk.** They were parked cars in the scan. Their triangles' centroids sat inside the ground band, so they were kept standing. Now a lump outside every hull, up to 4 m tall, is laid flat on the street it stands on, and anything taller is dropped. On 7th Ave that flattened 7,351 triangles. In the viewport the cones are gone and the street is continuous in all four directions.
+- **Still weak:**
+  - The wall right behind the vantage is smeared, because every station sees it only at a grazing angle (relaxed colours).
+  - Where a flattened van stood, its dark colour reads as a patch on the street.
+  - Stations' exposure gains often sit at the ±0.3 clamp.
+  - `tiles/` (`splat_to_3dtiles`) were not rebuilt with this layer; the scene loads the `.spz`.
+- **Cache:** the fixed world was stored over `worlds/v2/d46ee4caa1de6ae432e1a2e2` in `gs://scoutscan-splat-worlds`, the manifest written last.
