@@ -22,10 +22,13 @@
  *    the kerb and the road around keep their heights and the mesh keeps its topology: no triangle is removed, so no edge
  *    opens, and the lump is gone.
  * 4. The patch (texture): the texels of every moved triangle are painted again from an orthophoto of the road around the
- *    region: mirrored along the vehicle's long axis from the road just beyond its ends (lane lines and kerbs continue:
- *    photo-inferred), with the remaining mismatch at the region's edge spread across it (seamless), and the few texels no
- *    mirror reaches filled from their surroundings (generated). Painted from the plan position alone, so folded triangles
- *    of the old lump that now lie on each other show the same colour.
+ *    region: along the direction the road's own markings run (the photo's orientation around the region: lane lines, kerbs,
+ *    a crosswalk's bars), mirrored from the road just beyond the region's ends on that line (lane lines and kerbs continue:
+ *    photo-inferred), with the remaining mismatch at each end carried along the same line (seamless, and a lane's colour
+ *    never runs into the next lane), and texels neither end's look reaches (deep in a long queue) taking the road's look
+ *    along their lane (generated).
+ *    Painted from the plan position alone, so folded triangles of the old lump that now lie on each other show the same
+ *    colour.
  *
  * Every removal is labelled in the GLB's root extras (sbVehicleRemoval): what the model called it, the region, the patch's
  * provenance (heights estimated from the measured ring: generated; texels mirrored from the scan's own photo:
@@ -43,7 +46,7 @@ import { renderTriangles } from './photo-match-eval';
 import { encodePng } from './png-encode';
 import type { VisionModelChain } from '../../gemini/vision-model-chain';
 
-export const VEHICLE_REMOVAL_VERSION = 'vehicle-removal/2';
+export const VEHICLE_REMOVAL_VERSION = 'vehicle-removal/3';
 
 export const VEHICLE_REMOVAL_PARAMS = {
     /** The top-surface grid. */
@@ -75,8 +78,23 @@ export const VEHICLE_REMOVAL_PARAMS = {
     stackGapM: 1,
     /** The stack starts at the first surface no further than this below the street. */
     stackBelowStreetM: 0.5,
-    /** The model's confidence at or above which a vehicle is removed. */
+    /** The model's confidence at or above which a vehicle (or a temporary object) is removed. */
     minConfidence: 0.5,
+    /**
+     * Street clutter (user decision, 2026-10-30): what the model reads as neither a vehicle nor permanent (a vendor cart, a
+     * plaza umbrella, a scaffold shed: not in a model of the place next month) is removed with the vehicles; permanent
+     * fixtures (shelters, subway entrances, kiosks, planters, lamps, trees) stay. SCRATCHBOX_STAGED_CLUTTER=0 keeps them.
+     */
+    removeTemporary: true,
+    /**
+     * Debris on the carriageway: a proud lump too small to show the model (`componentMinAreaM2`) but at least this big (m²),
+     * at most `debrisMaxHeightM` tall, with at least `debrisRoadShare` of it inside the road corridor (Google's centreline
+     * and ROAD_HALF_WIDTH_M either side: the carriageway, not the sidewalk, whose posts, hydrants and bollards stay) is a
+     * remnant, a dropped load or the scan's own blob, and is patched like a vehicle without a reading. Infinity: none.
+     */
+    debrisMinAreaM2: 0.25,
+    debrisMaxHeightM: 1.5,
+    debrisRoadShare: 0.8,
     /** The region grows by this around the vehicle's cells (the lump's skirt down to the road). */
     skirtM: 0.75,
     /** The ring the patch heights are measured from: this far outside the region, scan vertices this close to the street. */
@@ -86,10 +104,46 @@ export const VEHICLE_REMOVAL_PARAMS = {
     /** The road photo the texels are painted from: this margin around the region, at this texel. */
     fillMarginM: 8,
     fillTexelM: 0.05,
-    /** The photo this close to any region is not mirrored from (it may still show the vehicle's edge); the seam step meets it instead. */
+    /** The photo this close to any region is not painted from (it may still show the vehicle's edge); the seam step meets it instead. */
     fillGuardM: 0.4,
-    /** How far past the mirror point a source texel is looked for. */
+    /** How far past the guard a source texel is looked for along a line (past another region, a gap in the photo). */
     fillSearchM: 6,
+    /**
+     * The direction the patch is painted along: the photo's own orientation (lane lines, kerbs, a crosswalk's bars) read from
+     * the road within `fillOrientM` of the region, nearer counting more (`fillOrientSigmaM`); with less coherence than
+     * `fillMinCoherence` (no markings to follow) the region's long axis.
+     */
+    fillOrientM: 3,
+    fillOrientSigmaM: 1.5,
+    fillMinCoherence: 0.2,
+    /**
+     * The stretch of road beyond each end a line is painted from: at most this long, and only as far as the road keeps its
+     * look (three texels in a row further than `fillRunTolerance` a channel from the stretch's mean end it: a crosswalk's bar
+     * or a line's edge beyond it is not carried into the patch). The line takes the colour of the stretch's first `fillBaseM`
+     * (the road at the region's edge, not a shade further off) and the stretch's grain (each texel's difference from the road
+     * within `fillGrainM` either side of it, held to `fillGrain` a channel), reflected back and forth across a longer hole.
+     */
+    fillRunM: 2,
+    fillRunTolerance: 30,
+    fillBaseM: 0.5,
+    fillGrain: 15,
+    fillGrainM: 0.4,
+    /**
+     * How far into the patch an end's look is carried: `fillReachPerRun` times as far as it was seen running beyond the end
+     * (a lane or a lane line seen for the full `fillRunM` is carried 10 m in; a crosswalk's bar glimpsed for 0.4 m between
+     * queued cars, 2 m), at least `fillReachMinM`, fading over `fillReachFadeM` past that into the road's look along its
+     * strip: the median of the street within `fillOrientM` of the regions (clear of them by the guard) along the painting
+     * direction, `fillStripM` across (a lane's colour beside its vehicles, not a glimpse of a bar or a tail light's smear),
+     * a strip with less than `fillStripMinM2` of it (a lane parked solid) taking the nearest strip's beside it (generated).
+     */
+    fillReachPerRun: 5,
+    fillReachMinM: 1,
+    fillReachFadeM: 1,
+    fillStripM: 0.2,
+    fillStripMinM2: 0.5,
+    /** The seam: the mismatch at an end (at most this much a channel) carried along the line, fading over this length. */
+    fillSeamMax: 30,
+    fillSeamFadeM: 1,
     /** Concurrent model calls. */
     concurrency: 10,
     /** Each call's limit. */
@@ -125,6 +179,8 @@ export interface ProudGrid {
     comp: Int32Array;
     /** 1 where a vehicle may be patched at all: inside the extraction's cover, not on water. */
     street: Uint8Array;
+    /** The carriageway's debris: lumps too small to show the model, each its cells (patched without a reading). */
+    debris?: number[][];
 }
 
 export interface VehicleCandidate {
@@ -181,6 +237,7 @@ function nearBuilding(buildingAt: (x: number, z: number) => number, x: number, z
 
 /** The proud components: what the model is shown. */
 export function vehicleCandidates(scan: ScanMesh, ground: GroundModel, look: VehicleLookups = {}, P: VehicleRemovalParams = VEHICLE_REMOVAL_PARAMS): { grid: ProudGrid; candidates: VehicleCandidate[] } {
+    // (the grid also carries the carriageway's debris: lumps too small to show the model, patched without a reading)
     const s = topSurface(scan, P.cellM);
     const { x0, z0, nx, nz, top } = s;
     const rel = new Float32Array(nx * nz).fill(NaN);
@@ -202,6 +259,7 @@ export function vehicleCandidates(scan: ScanMesh, ground: GroundModel, look: Veh
     }
     const comp = new Int32Array(nx * nz).fill(-1);
     const candidates: VehicleCandidate[] = [];
+    const debris: number[][] = [];
     const stack: number[] = [];
     const seen = new Uint8Array(nx * nz);
     let next = 0;
@@ -221,7 +279,16 @@ export function vehicleCandidates(scan: ScanMesh, ground: GroundModel, look: Veh
             }
         }
         const areaM2 = cells.length * P.cellM * P.cellM;
-        if (areaM2 < P.componentMinAreaM2 || areaM2 > P.componentMaxAreaM2) { for (const c of cells) comp[c] = -1; continue; }
+        if (areaM2 < P.componentMinAreaM2 || areaM2 > P.componentMaxAreaM2) {
+            for (const c of cells) comp[c] = -1;
+            // too small for the model: debris when it lies low on the carriageway
+            if (areaM2 >= P.debrisMinAreaM2 && areaM2 < P.componentMinAreaM2 && look.roadAt) {
+                let road = 0, h = 0;
+                for (const c of cells) { const i = c % nx, k = (c - i) / nx; if (look.roadAt(x0 + (i + 0.5) * P.cellM, z0 + (k + 0.5) * P.cellM)) road++; h = Math.max(h, rel[c]); }
+                if (h <= P.debrisMaxHeightM && road >= P.debrisRoadShare * cells.length) debris.push(cells);
+            }
+            continue;
+        }
         let lx = Infinity, lz = Infinity, hx = -Infinity, hz = -Infinity, h = 0, road = 0;
         for (const c of cells) {
             const i = c % nx, k = (c - i) / nx;
@@ -238,7 +305,7 @@ export function vehicleCandidates(scan: ScanMesh, ground: GroundModel, look: Veh
     candidates.forEach((c, k) => remap.set(c.id, k));
     for (let c = 0; c < comp.length; c++) if (comp[c] >= 0) comp[c] = remap.get(comp[c]) ?? -1;
     candidates.forEach((c, k) => { c.id = k; });
-    return { grid: { x0, z0, nx, nz, cellM: P.cellM, rel, comp, street }, candidates };
+    return { grid: { x0, z0, nx, nz, cellM: P.cellM, rel, comp, street, debris }, candidates };
 }
 
 /** Crops covering every candidate whole: greedy, the largest first, each crop centred on the candidate it starts from. */
@@ -393,6 +460,8 @@ export interface RegionGroup {
     readings: number[];
     /** Candidates it took (whole or in part). */
     candidates: number[];
+    /** Cells it took as carriageway debris (no reading). */
+    debrisCells?: number;
     /** Ring samples (x, y, z): the measured scan just outside it. */
     ring: Float32Array;
     /** The street height the ring gives when it is empty (GroundModel). */
@@ -430,7 +499,7 @@ function sameObject(a: VehicleReading, b: VehicleReading): boolean {
 export function vehicleRegion(grid: ProudGrid, candidates: VehicleCandidate[], readings: VehicleReading[], P: VehicleRemovalParams = VEHICLE_REMOVAL_PARAMS): { region: VehicleRegion; unmatchedReadings: number[]; vehicles: number[]; boxOnly: number[] } {
     const { x0, z0, nx, nz, cellM } = grid;
     // one vehicle seen in two overlapping crops is one vehicle: the most confident reading stands for it
-    const all = readings.map((r, k) => ({ r, k })).filter(({ r }) => r.vehicle && r.confidence >= P.minConfidence).sort((a, b) => b.r.confidence - a.r.confidence);
+    const all = readings.map((r, k) => ({ r, k })).filter(({ r }) => removable(r, P)).sort((a, b) => b.r.confidence - a.r.confidence);
     const vehicles: Array<{ r: VehicleReading; k: number }> = [];
     for (const v of all) if (!vehicles.some(u => sameObject(u.r, v.r))) vehicles.push(v);
     const boxOf = new Int32Array(nx * nz).fill(-1);
@@ -452,6 +521,9 @@ export function vehicleRegion(grid: ProudGrid, candidates: VehicleCandidate[], r
         const whole = share >= P.componentWholeShare;
         for (const cell of c.cells) if (whole || boxOf[cell] >= 0) { take[cell] = 1; if (boxOf[cell] >= 0) { matched.add(boxOf[cell]); if (!readingsOf.has(c.id)) readingsOf.set(c.id, new Set()); readingsOf.get(c.id)!.add(boxOf[cell]); } }
     }
+    // the carriageway's debris (no reading: too small to show the model)
+    const debrisCell = new Uint8Array(nx * nz);
+    for (const cells of grid.debris ?? []) for (const c of cells) { take[c] = 1; debrisCell[c] = 1; }
     // the vehicle's photo reaches past its proud cells (a bonnet, a boot, a low lump at its ends): every matched vehicle's box,
     // a little inside its edges, is taken too
     for (const { r, k } of vehicles) {
@@ -519,16 +591,28 @@ export function vehicleRegion(grid: ProudGrid, candidates: VehicleCandidate[], r
         }
         const ang = 0.5 * Math.atan2(2 * sxz, sxx - szz);
         const rs = new Set<number>(), cs = new Set<number>();
+        let debrisCells = 0;
         for (const c of cells) {
+            if (debrisCell[c]) debrisCells++;
             const cand = grid.comp[c];
             if (cand >= 0 && take[c]) { cs.add(cand); for (const q of readingsOf.get(cand) ?? []) rs.add(q); }
             const b = boxCell.get(c);
             if (b !== undefined) rs.add(b);
         }
-        groups.push({ id, cells, axis: [Math.cos(ang), Math.sin(ang)], lo: [lx, lz], hi: [hx, hz], readings: [...rs], candidates: [...cs], ring: new Float32Array(0), ringFromGroundModel: false });
+        groups.push({ id, cells, axis: [Math.cos(ang), Math.sin(ang)], lo: [lx, lz], hi: [hx, hz], readings: [...rs], candidates: [...cs], ...(debrisCells ? { debrisCells } : {}), ring: new Float32Array(0), ringFromGroundModel: false });
     }
     const unmatchedReadings = vehicles.map(v => v.k).filter(k => !matched.has(k));
     return { region: { x0, z0, nx, nz, cellM, group, groups, ceiling: new Float32Array(nx * nz).fill(Infinity), rel: grid.rel }, unmatchedReadings, vehicles: vehicles.map(v => v.k), boxOnly: [...boxOnly] };
+}
+
+/** The parameters a staged build removes with: street clutter (temporary objects, carriageway debris) off with SCRATCHBOX_STAGED_CLUTTER=0. */
+export function vehicleRemovalParams(env: NodeJS.ProcessEnv = process.env): VehicleRemovalParams {
+    return env.SCRATCHBOX_STAGED_CLUTTER?.trim() === '0' ? { ...VEHICLE_REMOVAL_PARAMS, removeTemporary: false, debrisMinAreaM2: Infinity } : VEHICLE_REMOVAL_PARAMS;
+}
+
+/** Whether a reading is removed: a vehicle, or (with removeTemporary) anything the model judged not permanent; confident enough either way. */
+export function removable(r: Pick<VehicleReading, 'vehicle' | 'permanent' | 'confidence'>, P: VehicleRemovalParams = VEHICLE_REMOVAL_PARAMS): boolean {
+    return (r.vehicle || (P.removeTemporary && !r.permanent)) && r.confidence >= P.minConfidence;
 }
 
 /** The region group a plan point falls in (-1: none). */
@@ -690,18 +774,105 @@ export function pushPull(values: Float32Array, known: Float32Array, w: number, h
     return out;
 }
 
+/**
+ * The direction (unit, plan) a region's patch is painted along: the orientation the road photo around it varies least
+ * along (lane lines, kerbs, a crosswalk's bars), from the colour structure tensor of the street texels `use` admits whose
+ * distance from the region (`dist`, texels; -1 beyond the band) is set, nearer counting more; `fallback` (the region's long
+ * axis) where the photo shows no direction (coherence under `fillMinCoherence`).
+ */
+export function fillDirection(val: Float32Array, use: (p: number) => boolean, dist: Int32Array, W: number, H: number, texelM: number, fallback: [number, number], P: VehicleRemovalParams = VEHICLE_REMOVAL_PARAMS): { dir: [number, number]; coherence: number } {
+    let jxx = 0, jzz = 0, jxz = 0;
+    const s2 = 2 * P.fillOrientSigmaM * P.fillOrientSigmaM;
+    for (let k = 1; k < H - 1; k++) for (let i = 1; i < W - 1; i++) {
+        const p = k * W + i;
+        if (dist[p] <= 0 || !use(p - W - 1) || !use(p - W) || !use(p - W + 1) || !use(p - 1) || !use(p + 1) || !use(p + W - 1) || !use(p + W) || !use(p + W + 1)) continue;
+        const w = Math.exp(-((dist[p] * texelM) ** 2) / s2);
+        // Scharr's kernel: a direction held to a fraction of a degree at any angle (a central difference drifts by degrees,
+        // and a degree is 17 cm across a 10 m queue)
+        for (let j = 0; j < 3; j++) {
+            const v = (q: number) => val[q * 3 + j];
+            const gx = (3 * (v(p - W + 1) - v(p - W - 1)) + 10 * (v(p + 1) - v(p - 1)) + 3 * (v(p + W + 1) - v(p + W - 1))) / 32;
+            const gz = (3 * (v(p + W - 1) - v(p - W - 1)) + 10 * (v(p + W) - v(p - W)) + 3 * (v(p + W + 1) - v(p - W + 1))) / 32;
+            jxx += w * gx * gx; jzz += w * gz * gz; jxz += w * gx * gz;
+        }
+    }
+    const coherence = jxx + jzz > 0 ? Math.sqrt((jxx - jzz) ** 2 + 4 * jxz * jxz) / (jxx + jzz) : 0;
+    if (coherence < P.fillMinCoherence) return { dir: fallback, coherence };
+    // the photo changes most across the markings; the patch is painted along them
+    const across = 0.5 * Math.atan2(2 * jxz, jxx - jzz);
+    return { dir: [-Math.sin(across), Math.cos(across)], coherence };
+}
+
+/**
+ * The road's look along strips of direction `dir` (`stripPx` across): per strip, the per-channel median of the texels `use`
+ * admits (every second texel each way); `at(i, k, out)` interpolates between the strips' centres. A strip with fewer than
+ * `minCount` of them takes its nearest neighbour's look, and with none anywhere, black.
+ */
+export function stripLooks(val: Float32Array, use: (p: number) => boolean, W: number, H: number, dir: [number, number], stripPx: number, minCount = 8): { at(i: number, k: number, out: number[]): void } {
+    const [ax, az] = dir;
+    const across = (i: number, k: number) => -az * i + ax * k;
+    const u0 = Math.min(across(0, 0), across(W, 0), across(0, H), across(W, H));
+    const u1 = Math.max(across(0, 0), across(W, 0), across(0, H), across(W, H));
+    const S = Math.max(1, Math.ceil((u1 - u0) / stripPx));
+    const hist = new Uint32Array(S * 3 * 256), count = new Uint32Array(S);
+    for (let k = 0; k < H; k += 2) for (let i = 0; i < W; i += 2) {
+        const p = k * W + i;
+        if (!use(p)) continue;
+        const b = Math.min(S - 1, Math.floor((across(i + 0.5, k + 0.5) - u0) / stripPx));
+        count[b]++;
+        for (let j = 0; j < 3; j++) hist[(b * 3 + j) * 256 + Math.max(0, Math.min(255, Math.round(val[p * 3 + j])))]++;
+    }
+    const looks = new Float32Array(S * 3), has = new Uint8Array(S);
+    for (let b = 0; b < S; b++) {
+        if (count[b] < minCount) continue;
+        has[b] = 1;
+        for (let j = 0; j < 3; j++) {
+            const h = (b * 3 + j) * 256;
+            let c = hist[h], v = 0;
+            while (v < 255 && c * 2 < count[b]) c += hist[h + ++v];
+            looks[b * 3 + j] = v;
+        }
+    }
+    // a strip without enough texels: its nearest strip's look
+    for (let b = 0; b < S; b++) {
+        if (has[b]) continue;
+        for (let d = 1; d < S; d++) {
+            const n = b - d >= 0 && has[b - d] ? b - d : b + d < S && has[b + d] ? b + d : -1;
+            if (n < 0) continue;
+            for (let j = 0; j < 3; j++) looks[b * 3 + j] = looks[n * 3 + j];
+            break;
+        }
+    }
+    return {
+        at(i: number, k: number, out: number[]) {
+            const f = Math.max(0, Math.min(S - 1, (across(i + 0.5, k + 0.5) - u0) / stripPx - 0.5));
+            const b0 = Math.floor(f), b1 = Math.min(S - 1, b0 + 1), a = f - b0;
+            for (let j = 0; j < 3; j++) out[j] = (1 - a) * looks[b0 * 3 + j] + a * looks[b1 * 3 + j];
+        }
+    };
+}
+
 export interface FillField {
     frame: TopDownFrame; texelM: number; width: number; height: number;
     /** sRGB8 RGB. */
     rgb: Uint8Array;
-    /** Hole texels mirrored from the photo (photo-inferred) and filled from surroundings (generated). */
+    /**
+     * The group's texels painted from the photo along the line (photo-inferred) and those taken from their strip's look where
+     * neither end's look reaches (generated), each texel counted by its share of either.
+     */
     mirrored: number; generated: number;
+    /** The direction painted along (unit, plan) and the photo's coherence there (0: no direction, the long axis used). */
+    direction: [number, number]; coherence: number;
 }
 
 /**
- * The road photo for one group: the scan rendered from above around it (the vehicles masked out), each masked texel mirrored
- * along the group's long axis from the road just beyond the region's end on each side (blended by nearness), then the
- * mismatch at the region's edge spread across it so the patch meets the photo around it without a seam.
+ * The road photo for one group: the scan rendered from above around it (every region masked out), each of the group's
+ * texels painted along the direction the road's own markings run (`fillDirection`): from the road just beyond the region's
+ * end on each side along that line, the stretch there reflected back and forth so a long region carries the road's texture
+ * (photo-inferred), the two ends blended by nearness and by how far each end's look was seen running on. Then the mismatch
+ * with the photo at each end is spread along the same line, so the patch meets the photo around it without a seam and a
+ * lane's colour never runs into the next lane; where neither end's look reaches, the texel takes the road's look along its
+ * strip (generated).
  */
 export function buildFillField(tris: TileTriangles, region: VehicleRegion, g: RegionGroup, P: VehicleRemovalParams = VEHICLE_REMOVAL_PARAMS): FillField {
     const frame: TopDownFrame = { x0: g.lo[0] - P.fillMarginM, z0: g.lo[1] - P.fillMarginM, widthM: g.hi[0] - g.lo[0] + 2 * P.fillMarginM, heightM: g.hi[1] - g.lo[1] + 2 * P.fillMarginM };
@@ -714,98 +885,161 @@ export function buildFillField(tris: TileTriangles, region: VehicleRegion, g: Re
     const W = cam.width, H = cam.height;
     texelM = frame.widthM / W;
     const r = renderTriangles([sub], cam, { supersample: 1, ambient: 1, background: [0, 0, 0] });
-    // hole: inside any vehicle region; known: drawn and not a hole
+    // hole: inside any region; mine: inside this group (the texels its patch reads); known: drawn and not a hole
     const hole = new Uint8Array(W * H), known = new Uint8Array(W * H);
+    const mine: number[] = [];
     for (let k = 0; k < H; k++) for (let i = 0; i < W; i++) {
         const p = k * W + i;
         const x = frame.x0 + (i + 0.5) * texelM, z = frame.z0 + (k + 0.5) * texelM;
         const ci = Math.floor((x - region.x0) / region.cellM), ck = Math.floor((z - region.z0) / region.cellM);
         const c = ci < 0 || ck < 0 || ci >= region.nx || ck >= region.nz ? -1 : ck * region.nx + ci;
-        if (c >= 0 && region.group[c] >= 0) hole[p] = 1;
+        if (c >= 0 && region.group[c] >= 0) { hole[p] = 1; if (region.group[c] === g.id) mine.push(p); }
         // the street only: what stands on it (a canopy, a vehicle the model did not box) is no source for the street under a vehicle
         else if (r.coverage[p] > 0.5 && c >= 0 && region.rel[c] <= P.ringMaxAboveStreetM) known[p] = 1;
     }
     const src = r.rgba;
-    const val = new Float32Array(W * H * 3), have = new Float32Array(W * H);
-    for (let p = 0; p < W * H; p++) if (known[p]) { val[p * 3] = src[p * 4]; val[p * 3 + 1] = src[p * 4 + 1]; val[p * 3 + 2] = src[p * 4 + 2]; have[p] = 1; }
-    // sources: known texels clear of every hole by the guard
+    const val = new Float32Array(W * H * 3);
+    for (let p = 0; p < W * H; p++) if (known[p]) { val[p * 3] = src[p * 4]; val[p * 3 + 1] = src[p * 4 + 1]; val[p * 3 + 2] = src[p * 4 + 2]; }
+    // each texel's distance from the nearest region (4-neighbour steps; -1 past the orientation band)
     const guard = Math.max(1, Math.round(P.fillGuardM / texelM));
-    const near = new Uint8Array(W * H);
+    const band = Math.max(guard + 2, Math.round(P.fillOrientM / texelM));
+    const dist = new Int32Array(W * H).fill(-1);
     {
         let frontier: number[] = [];
-        for (let p = 0; p < W * H; p++) if (hole[p]) { near[p] = 1; frontier.push(p); }
-        for (let s = 0; s < guard && frontier.length; s++) {
+        for (let p = 0; p < W * H; p++) if (hole[p]) { dist[p] = 0; frontier.push(p); }
+        for (let s = 1; s <= band && frontier.length; s++) {
             const nf: number[] = [];
             for (const p of frontier) {
                 const i = p % W, k = (p - i) / W;
-                for (const [di, dk] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-                    const ii = i + di, kk = k + dk;
-                    if (ii < 0 || kk < 0 || ii >= W || kk >= H) continue;
-                    const q = kk * W + ii;
-                    if (!near[q]) { near[q] = 1; nf.push(q); }
-                }
+                if (i > 0 && dist[p - 1] < 0) { dist[p - 1] = s; nf.push(p - 1); }
+                if (i < W - 1 && dist[p + 1] < 0) { dist[p + 1] = s; nf.push(p + 1); }
+                if (k > 0 && dist[p - W] < 0) { dist[p - W] = s; nf.push(p - W); }
+                if (k < H - 1 && dist[p + W] < 0) { dist[p + W] = s; nf.push(p + W); }
             }
             frontier = nf;
         }
     }
-    const searchPx = Math.round(P.fillSearchM / texelM);
-    const [ax, az] = g.axis;
+    // sources: street texels clear of every region by the guard (nearer, the photo may still show the vehicle's edge)
+    const source = (q: number) => q >= 0 && known[q] === 1 && (dist[q] < 0 || dist[q] > guard);
+    const { dir: [ax, az], coherence } = fillDirection(val, source, dist, W, H, texelM, g.axis, P);
+    const searchPx = guard + Math.round(P.fillSearchM / texelM), runPx = Math.max(1, Math.round(P.fillRunM / texelM));
+    const reachMinPx = P.fillReachMinM / texelM, reachFadePx = P.fillReachFadeM / texelM, basePx = Math.max(1, Math.round(P.fillBaseM / texelM));
+    const grainPx = Math.max(1, Math.round(P.fillGrainM / texelM));
     const maxSteps = Math.ceil(Math.hypot(W, H));
     const at = (fi: number, fk: number) => { const i = Math.round(fi), k = Math.round(fk); return i < 0 || k < 0 || i >= W || k >= H ? -1 : k * W + i; };
-    let mirrored = 0, generated = 0;
+    const off = (q: number, m: number[]) => Math.max(Math.abs(val[q * 3] - m[0]), Math.abs(val[q * 3 + 1] - m[1]), Math.abs(val[q * 3 + 2] - m[2]));
+    // the stretch of road from step `s0` along a line: as far as it keeps its look (at most fillRunM), its length, its mean
+    // and the mean of its first fillBaseM
+    const st = { run: 0, m: [0, 0, 0], base: [0, 0, 0] };
+    const stretch = (i: number, k: number, dx: number, dz: number, s0: number) => {
+        const q0 = at(i + s0 * dx, k + s0 * dz);
+        let run = 1, n = 1, nb = 1, odd = 0;
+        for (let j = 0; j < 3; j++) st.m[j] = st.base[j] = val[q0 * 3 + j];
+        for (let s = s0 + 1; s < s0 + runPx; s++) {
+            const q = at(i + s * dx, k + s * dz);
+            if (!source(q)) break;
+            // a speck (a crack, a stain) is stepped over, not taken into the look
+            if (off(q, st.m) > P.fillRunTolerance) { if (++odd >= 3) break; continue; }
+            odd = 0;
+            for (let j = 0; j < 3; j++) st.m[j] = (st.m[j] * n + val[q * 3 + j]) / (n + 1);
+            if (s - s0 < basePx) { for (let j = 0; j < 3; j++) st.base[j] = (st.base[j] * nb + val[q * 3 + j]) / (nb + 1); nb++; }
+            n++; run = s - s0 + 1;
+        }
+        st.run = run;
+    };
+    // the mirror: a texel `e` deep inside takes the road at the region's edge with the grain of the road as far into the
+    // stretch, reflected back and forth across it (its difference from the road within fillGrainM either side, held to fillGrain)
+    const local = [0, 0, 0];
+    const grainAt = (i: number, k: number, dx: number, dz: number, s0: number, e: number, out: number[]) => {
+        const m = (e - 1) % (2 * st.run), t = m < st.run ? m : 2 * st.run - 1 - m;
+        let n = 0;
+        local[0] = local[1] = local[2] = 0;
+        for (let u = Math.max(0, t - grainPx); u <= Math.min(st.run - 1, t + grainPx); u++) {
+            const q = at(i + (s0 + u) * dx, k + (s0 + u) * dz);
+            if (!source(q)) continue;
+            n++; local[0] += val[q * 3]; local[1] += val[q * 3 + 1]; local[2] += val[q * 3 + 2];
+        }
+        const q = at(i + (s0 + t) * dx, k + (s0 + t) * dz);
+        for (let j = 0; j < 3; j++) out[j] = st.base[j] + (n ? Math.max(-P.fillGrain, Math.min(P.fillGrain, val[q * 3 + j] - local[j] / n)) : 0);
+    };
+    const c = [0, 0, 0];
+    const N = mine.length;
+    const paint = new Float32Array(W * H * 3), painted = new Uint8Array(W * H), trust = new Float32Array(N);
+    // per texel and side: the first texel past the region along the line, the last inside it, and how deep the texel lies
+    const endQ = new Int32Array(N * 2).fill(-1), lastQ = new Int32Array(N * 2).fill(-1), depth = new Int32Array(N * 2);
+    for (let n = 0; n < N; n++) {
+        const p = mine[n], i = p % W, k = (p - i) / W;
+        let sw = 0, a0 = 0, a1 = 0, a2 = 0, reached = 0;
+        for (let side = 0; side < 2; side++) {
+            const dx = side ? -ax : ax, dz = side ? -az : az;
+            let e = 0;
+            for (let s = 1; s <= maxSteps; s++) { const q = at(i + s * dx, k + s * dz); if (q < 0) break; if (!hole[q]) { e = s; break; } }
+            if (!e) continue;
+            endQ[n * 2 + side] = at(i + e * dx, k + e * dz); lastQ[n * 2 + side] = e > 1 ? at(i + (e - 1) * dx, k + (e - 1) * dz) : p; depth[n * 2 + side] = e;
+            // the first source past the guard (past another region, a gap in the photo), and the stretch of road from it
+            let s0 = 0;
+            for (let s = e; s <= e + searchPx; s++) { const q = at(i + s * dx, k + s * dz); if (q < 0) break; if (source(q)) { s0 = s; break; } }
+            if (!s0) continue;
+            stretch(i, k, dx, dz, s0);
+            grainAt(i, k, dx, dz, s0, e, c);
+            // carried in about as far as it was seen running on beyond the end
+            const reach = Math.max(reachMinPx, st.run * P.fillReachPerRun);
+            const f = e <= reach ? 1 : Math.exp(-(e - reach) / reachFadePx);
+            const w = f / (e * e);
+            reached = Math.max(reached, f);
+            sw += w; a0 += w * c[0]; a1 += w * c[1]; a2 += w * c[2];
+        }
+        if (sw > 0) { paint[p * 3] = a0 / sw; paint[p * 3 + 1] = a1 / sw; paint[p * 3 + 2] = a2 / sw; painted[p] = 1; trust[n] = reached; }
+    }
+    // the seam: at each end, the photo just outside (its street texels' 5x5 mean, the guard band included) less the paint just
+    // inside, held to `fillSeamMax` (more is something else at the end: a shadow, a kerb) and carried along the line by
+    // nearness to that end, fading with depth (a dark spot at an end never streaks across the patch)
+    const mean5 = (v: Float32Array, has: Uint8Array, q: number, out: number[]) => {
+        const i = q % W, k = (q - i) / W;
+        let c = 0; out[0] = out[1] = out[2] = 0;
+        for (let kk = Math.max(0, k - 2); kk <= Math.min(H - 1, k + 2); kk++) for (let ii = Math.max(0, i - 2); ii <= Math.min(W - 1, i + 2); ii++) {
+            const u = kk * W + ii;
+            if (!has[u]) continue;
+            c++; out[0] += v[u * 3]; out[1] += v[u * 3 + 1]; out[2] += v[u * 3 + 2];
+        }
+        if (c) { out[0] /= c; out[1] /= c; out[2] /= c; }
+        return c;
+    };
+    const fix = new Float32Array(N * 3);
+    const ph = [0, 0, 0], pa = [0, 0, 0];
+    const fadePx = P.fillSeamFadeM / texelM, cap = (v: number) => Math.max(-P.fillSeamMax, Math.min(P.fillSeamMax, v));
+    for (let n = 0; n < N; n++) {
+        const p = mine[n];
+        if (!painted[p]) continue;
+        let fw = 0, f0 = 0, f1 = 0, f2 = 0;
+        for (let side = 0; side < 2; side++) {
+            const q = endQ[n * 2 + side];
+            if (q < 0 || !mean5(val, known, q, ph) || !mean5(paint, painted, lastQ[n * 2 + side], pa)) continue;
+            const e = depth[n * 2 + side], w = 1 / e, fade = w * Math.exp(-(e - 1) / fadePx);
+            fw += w; f0 += fade * cap(ph[0] - pa[0]); f1 += fade * cap(ph[1] - pa[1]); f2 += fade * cap(ph[2] - pa[2]);
+        }
+        if (fw) { fix[n * 3] = f0 / fw; fix[n * 3 + 1] = f1 / fw; fix[n * 3 + 2] = f2 / fw; }
+    }
+    // the road's look along each strip of the painting direction: the median of its street beside the regions
+    const strips = stripLooks(val, q => dist[q] > 0 && source(q), W, H, [ax, az], Math.max(1, P.fillStripM / texelM), Math.ceil(P.fillStripMinM2 / (4 * texelM * texelM)));
+    const look = [0, 0, 0];
+    // the field: the photo, the painted texels (fading into their strip's look where neither end reaches), and what lies
+    // around (for the sampler) from its surroundings
     const fillV = new Float32Array(W * H * 3), fillK = new Float32Array(W * H);
     for (let p = 0; p < W * H; p++) if (known[p]) { fillV[p * 3] = val[p * 3]; fillV[p * 3 + 1] = val[p * 3 + 1]; fillV[p * 3 + 2] = val[p * 3 + 2]; fillK[p] = 1; }
-    for (let k = 0; k < H; k++) for (let i = 0; i < W; i++) {
-        const p = k * W + i;
-        if (!hole[p]) continue;
-        let sw = 0;
-        const acc = [0, 0, 0];
-        // along the long axis first (the lane goes on beyond the vehicle's ends); across it only when neither end has street
-        // (a vehicle between others in a row: the aisle or the lane beside it)
-        for (const [dx, dz] of [[ax, az], [-az, ax]]) {
-            for (const sgn of [1, -1]) {
-                // to the region's end, then as far again beyond it (the mirror), onward to the first source texel
-                let e = 0;
-                for (let s = 1; s <= maxSteps; s++) { const q = at(i + sgn * s * dx, k + sgn * s * dz); if (q < 0) break; if (!hole[q]) { e = s; break; } }
-                if (!e) continue;
-                for (let s = 2 * e; s <= 2 * e + searchPx; s++) {
-                    const q = at(i + sgn * s * dx, k + sgn * s * dz);
-                    if (q < 0) break;
-                    if (known[q] && !near[q]) { const w = 1 / (e * e); sw += w; for (let j = 0; j < 3; j++) acc[j] += w * val[q * 3 + j]; break; }
-                }
-            }
-            if (sw > 0) break;
-        }
-        if (sw > 0) { for (let j = 0; j < 3; j++) fillV[p * 3 + j] = acc[j] / sw; fillK[p] = 1; mirrored++; } else generated++;
+    let reachedShare = 0;
+    for (let n = 0; n < N; n++) {
+        const p = mine[n], i = p % W, k = (p - i) / W, t = trust[n];
+        strips.at(i, k, look);
+        for (let j = 0; j < 3; j++) fillV[p * 3 + j] = t * (paint[p * 3 + j] + fix[n * 3 + j]) + (1 - t) * look[j];
+        fillK[p] = 1;
+        reachedShare += t;
     }
-    // texels no mirror reached: from their surroundings
-    let field = generated ? pushPull(fillV, fillK, W, H, 3) : fillV;
-    // the seam: the mismatch at the hole's edge (known neighbours minus the fill), spread over the hole
-    const delta = new Float32Array(W * H * 3), dk = new Float32Array(W * H);
-    let edge = 0;
-    for (let k = 0; k < H; k++) for (let i = 0; i < W; i++) {
-        const p = k * W + i;
-        if (!hole[p]) continue;
-        let n = 0;
-        const m = [0, 0, 0];
-        for (const [di, dkk] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-            const q = at(i + di, k + dkk);
-            if (q >= 0 && known[q]) { n++; for (let j = 0; j < 3; j++) m[j] += val[q * 3 + j]; }
-        }
-        if (!n) continue;
-        for (let j = 0; j < 3; j++) delta[p * 3 + j] = m[j] / n - field[p * 3 + j];
-        dk[p] = 1; edge++;
-    }
-    if (edge) {
-        // outside the hole the correction is zero where the photo is known, so it fades into the photo
-        for (let p = 0; p < W * H; p++) if (!hole[p] && known[p]) dk[p] = 1;
-        const spread = pushPull(delta, dk, W, H, 3);
-        field = field === fillV ? field.slice() : field;
-        for (let p = 0; p < W * H; p++) if (hole[p]) for (let j = 0; j < 3; j++) field[p * 3 + j] += spread[p * 3 + j];
-    }
+    const field = pushPull(fillV, fillK, W, H, 3);
     const rgb = new Uint8Array(W * H * 3);
     for (let p = 0; p < W * H * 3; p++) rgb[p] = Math.max(0, Math.min(255, Math.round(field[p])));
-    return { frame, texelM, width: W, height: H, rgb, mirrored, generated };
+    const mirrored = Math.round(reachedShare);
+    return { frame, texelM, width: W, height: H, rgb, mirrored, generated: N - mirrored, direction: [ax, az], coherence };
 }
 
 /** Bilinear sRGB sample of a fill field at plan (x, z). */
@@ -834,7 +1068,8 @@ export function trianglesNear(tris: TileTriangles, f: TopDownFrame, marginM = 1)
 
 // ------------------------------------------------------------------------------------------------ the GLB
 
-function invert(m: Mat4): Mat4 {
+/** A node matrix's inverse (a world point back into the node's frame). */
+export function invert(m: Mat4): Mat4 {
     const inv = new Float64Array(16);
     inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] + m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
     inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] - m[8] * m[7] * m[14] - m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
@@ -1046,10 +1281,15 @@ export interface VehicleRemovalReport {
     boxOnlyVehicles: number;
     /** Of them, those with nothing to patch (their box holds no scan). */
     unpatchedVehicles: number;
-    /** Things the model judged not permanent and not vehicles: labelled only, never removed. */
+    /** Things the model judged not permanent and not vehicles but left (removeTemporary off, or not confident enough). */
     transientKept: number;
+    /** Regions removed for a temporary object, and for carriageway debris. */
+    temporaryRemoved?: number;
+    debrisRemoved?: number;
     removed: Array<{
         id: number; labels: string[]; lo: [number, number]; hi: [number, number]; areaM2: number;
+        /** What was removed: a vehicle, a temporary object, or carriageway debris. */
+        kind?: 'vehicle' | 'temporary' | 'debris';
         provenance: { geometry: 'generated'; texture: { photoInferredShare: number; generatedShare: number } };
         reason: string;
     }>;
@@ -1159,22 +1399,27 @@ export async function removeVehicles(input: RemoveVehiclesInput): Promise<Remove
         const f = fills.get(g.id)!;
         const holeTexels = f.mirrored + f.generated || 1;
         const labels = [...new Set(g.readings.map(k => readings[k].label))];
+        const temporary = g.readings.some(k => !readings[k].vehicle);
+        const what = labels.length ? `the vision model read ${labels.join('; ')} here in the scan's top-down photo${temporary ? ' (standing there only for a while: not part of the place)' : ''}` : g.debrisCells ? 'a lump too small to be a fixture lay low on the carriageway (a remnant, a dropped load or the scan\'s own blob)' : 'the vision model read a vehicle here';
         return {
             id: g.id, labels, lo: [r2(g.lo[0]), r2(g.lo[1])], hi: [r2(g.hi[0]), r2(g.hi[1])], areaM2: r2(g.cells.length * region.cellM * region.cellM),
             provenance: { geometry: 'generated', texture: { photoInferredShare: r2(f.mirrored / holeTexels), generatedShare: r2(f.generated / holeTexels) } },
-            reason: `the vision model read ${labels.length ? labels.join('; ') : 'a vehicle'} here in the scan's top-down photo, so the lump the scan made of it is removed: the surface under it is estimated from ${g.ringFromGroundModel ? "the measured street model (no scan ring around it)" : `${g.ring.length / 3} measured scan points around it`} (no measurement exists under a vehicle) and painted from the road photo around it`
+            kind: labels.length ? (temporary ? 'temporary' : 'vehicle') : g.debrisCells ? 'debris' : 'vehicle',
+            reason: `${what}, so the lump the scan made of it is removed: the surface under it is estimated from ${g.ringFromGroundModel ? "the measured street model (no scan ring around it)" : `${g.ring.length / 3} measured scan points around it`} (no measurement exists under a vehicle) and painted from the road photo around it`
         };
     });
     const extras = {
         sbVehicleRemoval: {
             version: VEHICLE_REMOVAL_VERSION,
-            removed: removed.map(r => ({ id: r.id, labels: r.labels, lo: r.lo, hi: r.hi, areaM2: r.areaM2, provenance: { geometry: { label: 'generated', reason: 'heights estimated from the measured scan around the vehicle: nothing was measured under it' }, texture: { label: r.provenance.texture.generatedShare > 0.5 ? 'generated' : 'photo-inferred', ...r.provenance.texture, reason: "mirrored from the scan's own photo of the road beyond the vehicle; texels no mirror reached are filled from their surroundings (generated)" } } }))
+            removed: removed.map(r => ({ id: r.id, labels: r.labels, lo: r.lo, hi: r.hi, areaM2: r.areaM2, provenance: { geometry: { label: 'generated', reason: 'heights estimated from the measured scan around the vehicle: nothing was measured under it' }, texture: { label: r.provenance.texture.generatedShare > 0.5 ? 'generated' : 'photo-inferred', ...r.provenance.texture, reason: "painted along the road's own markings from the scan's photo of the road beyond the vehicle's ends; texels no end's look reached take the road's look along their lane (generated)" } } }))
         }
     };
     const report: VehicleRemovalReport = {
         schema: 'scratchbox.vehicle-removal/1', version: VEHICLE_REMOVAL_VERSION, candidates: candidates.length, crops: crops.length, modelCalls, failedCalls,
         readings: readings.map((r, k) => { const used = new Set(region.groups.flatMap(g => g.readings)); return { ...r, removed: used.has(k) || [...used].some(u => sameObject(readings[u], r)) }; }),
-        vehicles: distinct.length, boxOnlyVehicles: boxOnly.length, unpatchedVehicles: unmatchedReadings.length - boxOnly.length, transientKept: readings.filter(r => !r.vehicle && !r.permanent).length,
+        vehicles: distinct.filter(k => readings[k].vehicle).length, boxOnlyVehicles: boxOnly.length, unpatchedVehicles: unmatchedReadings.length - boxOnly.length,
+        transientKept: readings.filter(r => !r.vehicle && !r.permanent && !removable(r, P)).length,
+        temporaryRemoved: removed.filter(r => r.kind === 'temporary').length, debrisRemoved: removed.filter(r => r.kind === 'debris').length,
         removed, patch: {}, notes: [], ms: 0
     };
     let texturedOut = input.texturedGlb, geometryOut = input.geometryGlb;
@@ -1190,7 +1435,7 @@ export async function removeVehicles(input: RemoveVehiclesInput): Promise<Remove
             report.patch.geometry = geo.stats;
         }
     }
-    report.notes.push(`vehicles: ${candidates.length} components of scan standing proud of the street shown to the vision model in ${crops.length} top-down crops (${failedCalls.length} calls failed); it read ${distinct.length} vehicles (${boxOnly.length} of them too flat in the scan to stand proud, patched by their box), ${removed.length} regions removed and patched (${r2(removed.reduce((s, r) => s + r.areaM2, 0))} m²)`);
+    report.notes.push(`vehicles: ${candidates.length} components of scan standing proud of the street shown to the vision model in ${crops.length} top-down crops (${failedCalls.length} calls failed); it read ${report.vehicles} vehicles (${boxOnly.length} of the removed too flat in the scan to stand proud, patched by their box); ${removed.length} regions removed and patched (${r2(removed.reduce((s, r) => s + r.areaM2, 0))} m²): ${removed.filter(r => r.kind === 'vehicle').length} vehicles, ${report.temporaryRemoved} temporary objects, ${report.debrisRemoved} carriageway debris`);
     report.ms = Date.now() - t0;
     fs.writeFileSync(path.join(input.outDir, 'vehicle_removal.json'), JSON.stringify(report, null, 1));
     return { texturedGlb: texturedOut, ...(geometryOut ? { geometryGlb: geometryOut } : {}), report };

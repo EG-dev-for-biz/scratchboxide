@@ -21,7 +21,7 @@ import * as jpegJs from 'jpeg-js';
 import { describe, expect, it } from 'vitest';
 import { assembleGlb, parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
-import { parseVehicleBatchReply, parseVehicleReply, removeVehicles, VEHICLE_REMOVAL_PARAMS, type VehicleBatchJudge, type VehicleJudge } from '../src/node/3d-engine/staged-location/vehicle-removal';
+import { fillDirection, parseVehicleBatchReply, parseVehicleReply, removeVehicles, vehicleRemovalParams, VEHICLE_REMOVAL_PARAMS, type VehicleBatchJudge, type VehicleJudge } from '../src/node/3d-engine/staged-location/vehicle-removal';
 import { buildGroundModel, loadScanMesh } from '../src/node/spatial/StreetViewSurveyPlanner';
 
 const HALF = 15, STEP = 0.25, TEX = 600;
@@ -45,12 +45,12 @@ function albedo(x: number, z: number): [number, number, number] {
     return [90, 90, 90];
 }
 
-function syntheticStreet(withTexture: boolean): Buffer {
+function syntheticStreet(withTexture: boolean, extra: (x: number, z: number) => number = () => 0, look = albedo, base = height): Buffer {
     const n = Math.round((2 * HALF) / STEP) + 1;
     const pos: number[] = [], nor: number[] = [], uv: number[] = [], idx: number[] = [];
     for (let k = 0; k < n; k++) for (let i = 0; i < n; i++) {
         const x = -HALF + i * STEP, z = -HALF + k * STEP;
-        pos.push(x, height(x, z), z); nor.push(0, 1, 0); uv.push((x + HALF) / (2 * HALF), (z + HALF) / (2 * HALF));
+        pos.push(x, base(x, z) + extra(x, z), z); nor.push(0, 1, 0); uv.push((x + HALF) / (2 * HALF), (z + HALF) / (2 * HALF));
     }
     for (let k = 0; k + 1 < n; k++) for (let i = 0; i + 1 < n; i++) {
         const a = k * n + i, b = a + 1, c = a + n, d = c + 1;
@@ -78,7 +78,7 @@ function syntheticStreet(withTexture: boolean): Buffer {
     if (withTexture) {
         const rgba = new Uint8Array(TEX * TEX * 4);
         for (let k = 0; k < TEX; k++) for (let i = 0; i < TEX; i++) {
-            const c = albedo(-HALF + ((i + 0.5) / TEX) * 2 * HALF, -HALF + ((k + 0.5) / TEX) * 2 * HALF);
+            const c = look(-HALF + ((i + 0.5) / TEX) * 2 * HALF, -HALF + ((k + 0.5) / TEX) * 2 * HALF);
             rgba.set([c[0], c[1], c[2], 255], (k * TEX + i) * 4);
         }
         const jpg = Buffer.from(jpegJs.encode({ data: Buffer.from(rgba.buffer), width: TEX, height: TEX }, 95).data);
@@ -238,5 +238,141 @@ describe('vehicle removal', () => {
         expect([...r.keys()]).toEqual([9]);
         expect(r.get(9)![0].lo).toEqual([100, 0]);
         expect(r.get(9)![0].crop).toBe(9);
+    });
+});
+
+/**
+ * Street clutter (user decision, 2026-10-30): what the model reads as neither a vehicle nor permanent goes with the vehicles,
+ * and a lump too small to show it, low on the carriageway, goes as debris; a permanent fixture, and a small lump on the
+ * sidewalk, stay. The same street, with a small lump in the carriageway west of the car and one on the sidewalk north of it.
+ */
+describe('street clutter removal', () => {
+    const lump = (cx: number, cz: number) => (x: number, z: number) => (Math.hypot(x - cx, z - cz) < 0.4 ? 0.6 : 0);
+    const roadLump = lump(-8, 1), walkLump = lump(-8, 9);
+    const extra = (x: number, z: number) => roadLump(x, z) + walkLump(x, z);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-clutter-'));
+    const tex = path.join(dir, 'in_textured.glb');
+    fs.writeFileSync(tex, syntheticStreet(true, extra));
+    // the carriageway: within 3 m of the street's centreline (z = 0); the sidewalk lump stands 9 m off it
+    const look = { roadAt: (_x: number, z: number) => Math.abs(z) <= 3 };
+    // the planter read as a vendor's cart: not a vehicle, not permanent
+    const cartJudge: VehicleJudge = async crop => (await judge(crop)).map(r => (r.label === 'round planter' ? { ...r, label: "street vendor's cart", permanent: false } : r));
+    const heightAt = (file: string, x: number, z: number) => {
+        const p = positionsOf(file);
+        let best = Infinity, y = NaN;
+        for (let v = 0; v < p.length; v += 3) { const d = Math.hypot(p[v] - x, p[v + 2] - z); if (d < best) { best = d; y = p[v + 1]; } }
+        return y;
+    };
+
+    it('removes a temporary object and the carriageway debris, and keeps the sidewalk lump', async () => {
+        const scan = loadScanMesh(tex);
+        const ground = buildGroundModel(scan, { cellMeters: 1 });
+        const out = await removeVehicles({ texturedGlb: tex, scan, ground, judge: cartJudge, look, outDir: path.join(dir, 'on') });
+        const r = out.report;
+        expect(r.vehicles).toBe(1);
+        expect(r.temporaryRemoved).toBe(1);
+        expect(r.debrisRemoved).toBe(1);
+        expect(r.transientKept).toBe(0);
+        expect(r.removed.map(x => x.kind).sort()).toEqual(['debris', 'temporary', 'vehicle']);
+        expect(r.removed.find(x => x.kind === 'temporary')!.labels).toEqual(["street vendor's cart"]);
+        expect(r.removed.find(x => x.kind === 'debris')!.reason).toMatch(/carriageway/);
+        // the cart and the carriageway lump are down at the street; the sidewalk lump still stands
+        expect(heightAt(out.texturedGlb, PLANTER.cx, PLANTER.cz) - road(PLANTER.cx)).toBeLessThan(0.15);
+        expect(heightAt(out.texturedGlb, -8, 1) - road(-8)).toBeLessThan(0.15);
+        expect(heightAt(out.texturedGlb, -8, 9) - road(-8)).toBeGreaterThan(0.5);
+    });
+
+    it('keeps them all with SCRATCHBOX_STAGED_CLUTTER=0', async () => {
+        const P = vehicleRemovalParams({ SCRATCHBOX_STAGED_CLUTTER: '0' });
+        expect(vehicleRemovalParams({})).toBe(VEHICLE_REMOVAL_PARAMS);
+        const scan = loadScanMesh(tex);
+        const ground = buildGroundModel(scan, { cellMeters: 1 });
+        const out = await removeVehicles({ texturedGlb: tex, scan, ground, judge: cartJudge, look, outDir: path.join(dir, 'off'), P });
+        expect(out.report.removed.map(x => x.kind)).toEqual(['vehicle']);
+        expect(out.report.transientKept).toBe(1);
+        expect(heightAt(out.texturedGlb, PLANTER.cx, PLANTER.cz) - road(PLANTER.cx)).toBeGreaterThan(1);
+        expect(heightAt(out.texturedGlb, -8, 1) - road(-8)).toBeGreaterThan(0.5);
+    });
+});
+
+/**
+ * The patch's paint follows the lanes (user report, 2026-10-30: a bus lane's red smeared into the next lane). A street at 30
+ * degrees: a red bus lane, a white line, a dark lane; a bus and a car queued nose to tail in the dark lane against the line,
+ * their skirt reaching over it. The patch must keep each lane's colour on its own side and carry the line through.
+ */
+describe('the patch paint follows the lanes', () => {
+    const TH = Math.PI / 6, ca = Math.cos(TH), sa = Math.sin(TH);
+    /** Across the street (+: the bus lane's side) and along it. */
+    const across = (x: number, z: number) => -sa * x + ca * z, along = (x: number, z: number) => ca * x + sa * z;
+    const VEHICLES = [
+        { v0: -8, v1: 2, u0: -2.9, u1: -0.4, h: 3, colour: [220, 180, 40] as [number, number, number], label: 'city bus' },
+        { v0: 3, v1: 7.5, u0: -2.9, u1: -0.4, h: 1.5, colour: [40, 60, 200] as [number, number, number], label: 'blue car' }
+    ];
+    // a photogrammetry drape: full height half a metre in from the footprint's edge
+    const inset = (vh: typeof VEHICLES[number], x: number, z: number) => { const u = across(x, z), v = along(x, z); return Math.min(u - vh.u0, vh.u1 - u, v - vh.v0, vh.v1 - v); };
+    const base = (x: number, z: number) => VEHICLES.reduce((y, vh) => Math.max(y, vh.h * Math.max(0, Math.min(1, inset(vh, x, z) / 0.5))), 0);
+    const look = (x: number, z: number): [number, number, number] => {
+        for (const vh of VEHICLES) if (inset(vh, x, z) > -0.1) return vh.colour;
+        const u = across(x, z);
+        return u > 0.15 ? [200, 40, 60] : u >= -0.15 ? [235, 235, 235] : [90, 90, 90];
+    };
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-lanes-'));
+    const tex = path.join(dir, 'in_textured.glb');
+    fs.writeFileSync(tex, syntheticStreet(true, () => 0, look, base));
+    const queueJudge: VehicleJudge = async crop => VEHICLES.flatMap(vh => {
+        const xs: number[] = [], zs: number[] = [];
+        for (const [u, v] of [[vh.u0, vh.v0], [vh.u0, vh.v1], [vh.u1, vh.v0], [vh.u1, vh.v1]]) { xs.push(-sa * u + ca * v); zs.push(ca * u + sa * v); }
+        const lo: [number, number] = [Math.min(...xs) - 0.15, Math.min(...zs) - 0.15], hi: [number, number] = [Math.max(...xs) + 0.15, Math.max(...zs) + 0.15];
+        const cx = (lo[0] + hi[0]) / 2, cz = (lo[1] + hi[1]) / 2;
+        const inCrop = cx >= crop.frame.x0 && cz >= crop.frame.z0 && cx <= crop.frame.x0 + crop.frame.widthM && cz <= crop.frame.z0 + crop.frame.heightM;
+        return inCrop ? [{ label: vh.label, vehicle: true, permanent: false, confidence: 0.9, lo, hi, crop: crop.index }] : [];
+    });
+
+    it('keeps the bus lane red, the lane beside it asphalt, and the line between them white', async () => {
+        const scan = loadScanMesh(tex);
+        const ground = buildGroundModel(scan, { cellMeters: 1 });
+        const out = await removeVehicles({ texturedGlb: tex, scan, ground, judge: queueJudge, outDir: path.join(dir, 'out') });
+        expect(out.report.removed).toHaveLength(1);
+        const g = parseGlbBytes(fs.readFileSync(out.texturedGlb));
+        const view = g.json.bufferViews[g.json.images[0].bufferView];
+        const img = decodeImageInMemory(g.bin.subarray(view.byteOffset, view.byteOffset + view.byteLength));
+        const texel = (u: number, v: number) => {
+            const x = -sa * u + ca * v, z = ca * u + sa * v;
+            const p = (Math.floor(((z + HALF) / (2 * HALF)) * img.height) * img.width + Math.floor(((x + HALF) / (2 * HALF)) * img.width)) * 4;
+            return [img.rgba[p], img.rgba[p + 1], img.rgba[p + 2]];
+        };
+        let lane = 0, red = 0, laneSamples = 0, line = 0, lineSamples = 0, busLane = 0, busSamples = 0;
+        for (let v = -7.5; v <= 7; v += 0.25) {
+            for (const u of [-2.6, -2, -1.4, -0.8]) {
+                const [r, gg, b] = texel(u, v);
+                laneSamples++;
+                if (r - gg > 40) red++;
+                if (Math.abs(r - 90) < 25 && Math.abs(gg - 90) < 25 && Math.abs(b - 90) < 25) lane++;
+            }
+            lineSamples++;
+            if (Math.min(...texel(0, v)) > 180) line++;
+            const [r, gg] = texel(0.26, v);
+            busSamples++;
+            if (r - gg > 80) busLane++;
+        }
+        expect(red).toBe(0);
+        expect(lane / laneSamples).toBeGreaterThan(0.95);
+        expect(line / lineSamples).toBeGreaterThan(0.8);
+        expect(busLane / busSamples).toBeGreaterThan(0.8);
+    });
+
+    it('reads the direction the markings run from the photo', () => {
+        const W = 160, H = 120, phi = (25 * Math.PI) / 180;
+        const val = new Float32Array(W * H * 3), dist = new Int32Array(W * H).fill(1);
+        for (let k = 0; k < H; k++) for (let i = 0; i < W; i++) {
+            const stripe = (((-Math.sin(phi) * i + Math.cos(phi) * k) / 12) % 1 + 1) % 1 < 0.3 ? 200 : 60;
+            val.set([stripe, stripe, stripe], (k * W + i) * 3);
+        }
+        const { dir: d, coherence } = fillDirection(val, () => true, dist, W, H, 0.05, [1, 0]);
+        expect(Math.abs(d[0] * Math.cos(phi) + d[1] * Math.sin(phi))).toBeGreaterThan(Math.cos((2 * Math.PI) / 180));
+        expect(coherence).toBeGreaterThan(0.8);
+        // no markings: the fallback (the region's long axis)
+        const flat = fillDirection(new Float32Array(W * H * 3).fill(90), () => true, dist, W, H, 0.05, [0, 1]);
+        expect(flat.dir).toEqual([0, 1]);
     });
 });

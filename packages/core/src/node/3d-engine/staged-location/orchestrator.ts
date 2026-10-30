@@ -114,7 +114,7 @@ import {
 import { VisionModelChain, type VisionGenAIClient } from '../../gemini/vision-model-chain';
 import { segmentOwnershipViews } from './ownership-masks';
 import { buildGroundModel, geodeticToScan, loadScanMesh, scanToGeodetic, surfaceModel, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
-import { removeVehicles, vehicleRemovalEnabled, visionVehicleBatchJudge, visionVehicleJudge, VEHICLE_REMOVAL_PARAMS, VEHICLE_REMOVAL_VERSION, type VehicleRemovalReport } from './vehicle-removal';
+import { removeVehicles, vehicleRemovalEnabled, vehicleRemovalParams, visionVehicleBatchJudge, visionVehicleJudge, VEHICLE_REMOVAL_VERSION, type VehicleRemovalReport } from './vehicle-removal';
 import { buildRoadMesh, measureRoadSurfaces, sbRoadieEnabled, writeRoadsGlb, PROCEDURAL_ROADS_VERSION, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
 import { renderTopDownPhoto } from './top-down-photo';
 import { synthesizeRoadTextures } from './road-texture';
@@ -275,7 +275,7 @@ export const STAGES = {
     tiles: { order: 1, title: 'Google 3D Tiles', budgetMs: 360_000 },
     // the vehicles the scan baked in, read by the vision model in top-down crops and patched out of the scan every later
     // stage builds on (vehicle-removal.ts; user rule, 2026-10-22); its layer replaces the raw tiles
-    vehicles: { order: 1, title: 'Removing vehicles', budgetMs: 480_000 },
+    vehicles: { order: 1, title: 'Removing vehicles and street clutter', budgetMs: 480_000 },
     // the real ground around the place from the Google Elevation API, out to TERRAIN_RADIUS_M, under everything else
     terrain: { order: 0, title: 'Surrounding terrain', budgetMs: 120_000 },
     // the streets: Google's road centrelines measured kerb to kerb on the scan, textured from the tile photo rendered from above
@@ -2105,7 +2105,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         try { look = evidenceLookup(await deps.vectorEvidence({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: covered + 20 }), covered + 20); vectorNote = 'vector'; }
                         catch (err) { if (isAbort(err) || io.signal.aborted) throw err; vectorNote = `none (${errorMessage(err)})`; }
                     }
-                    const key = stageKey(VEHICLE_REMOVAL_VERSION, t.key, vectorNote === 'none' ? 'none' : 'vector', covered.toFixed(1), vis.candidates, VEHICLE_REMOVAL_PARAMS);
+                    // the vehicles and the street clutter (temporary objects, carriageway debris; SCRATCHBOX_STAGED_CLUTTER=0 keeps them)
+                    const vehicleParams = vehicleRemovalParams();
+                    const key = stageKey(VEHICLE_REMOVAL_VERSION, t.key, vectorNote === 'none' ? 'none' : 'vector', covered.toFixed(1), vis.candidates, vehicleParams);
                     run.keys.vehicles = key;
                     type V = { textured: string; geometry: string; report: VehicleRemovalReport };
                     const entry = await cache.run<V>('vehicles', key, async dir => {
@@ -2116,7 +2118,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const vehicleModel = process.env.SCRATCHBOX_VEHICLES_MODEL?.trim();
                         const chain = new VisionModelChain<string>({ client: vis.client, candidates: vehicleModel ? [vehicleModel, ...vis.candidates.filter(m => m !== vehicleModel)] : vis.candidates, signal: io.signal, ...chainExtras('vehicles'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
                         const out = await removeVehicles({
-                            texturedGlb: e.texturedGlb, geometryGlb: e.geometryGlb, scan, ground, judge: visionVehicleJudge(chain), judgeMany: visionVehicleBatchJudge(chain), outDir: dir, signal: io.signal,
+                            texturedGlb: e.texturedGlb, geometryGlb: e.geometryGlb, scan, ground, judge: visionVehicleJudge(chain), judgeMany: visionVehicleBatchJudge(chain), outDir: dir, signal: io.signal, P: vehicleParams,
                             look: { ...(look ? { buildingAt: look.buildingAt, waterAt: look.waterAt, roadAt: look.roadAt } : {}), within: (x, z) => Math.hypot(x, z) <= covered },
                             log: m => io.progress(m)
                         });
@@ -2127,7 +2129,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const abs = (p: string) => (path.isAbsolute(p) ? p : path.join(entry.dir, p));
                     const report = entry.value.report;
                     run.cacheStatus.vehicles = entry.cached ? 'hit' : 'miss';
-                    cache.writeRunNote(runId, 'vehicles', { key, cached: entry.cached, dir: entry.dir, notes: report.notes, vehicles: report.vehicles, boxOnly: report.boxOnlyVehicles, unpatched: report.unpatchedVehicles, transientKept: report.transientKept, removed: report.removed, patch: report.patch, crops: report.crops, candidates: report.candidates, ms: report.ms, rawExtraction: e.texturedGlb });
+                    cache.writeRunNote(runId, 'vehicles', { key, cached: entry.cached, dir: entry.dir, notes: report.notes, vehicles: report.vehicles, boxOnly: report.boxOnlyVehicles, unpatched: report.unpatchedVehicles, transientKept: report.transientKept, temporaryRemoved: report.temporaryRemoved ?? 0, debrisRemoved: report.debrisRemoved ?? 0, removed: report.removed, patch: report.patch, crops: report.crops, candidates: report.candidates, ms: report.ms, rawExtraction: e.texturedGlb });
                     if (!report.removed.length) return { status: 'committed', value: { extraction: e, report }, source: `no vehicle to remove (${report.candidates} candidates read in ${report.crops} crops)`, cached: entry.cached, builtAtMs: entry.builtAtMs };
                     const extraction = { ...e, texturedGlb: abs(entry.value.textured), geometryGlb: abs(entry.value.geometry), rawGlbPath: abs(entry.value.textured) };
                     // the tiles without the vehicles replace the raw tiles in the viewport
