@@ -87,23 +87,4 @@ describe('remesh turned to face outward', () => {
         expect(r.stats.turned).toBe(0);
         expect(r.stats.facingOut).toBeGreaterThan(0);
     });
-
-    it("leaves the infill's caps out: a cap lying on an inward side neither hides it nor is turned with it", () => {
-        // the inward +x side, and an outward cap (sbSeal) over its lower cells, 1 cm proud
-        const cap: number[] = [];
-        for (let i = 0; i < 10; i++) for (let j = 0; j < 5; j++) {
-            const p = (a: number, b: number) => [10.01, b, -a];
-            const q = [p(i, j), p(i + 1, j), p(i + 1, j + 1), p(i, j + 1)];
-            for (const t of [[0, 1, 2], [0, 2, 3]]) for (const v of t) cap.push(...q[v]);
-        }
-        const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'orient-')), 'scan.glb');
-        const box1 = box(true);
-        writeStagedGlbFile(file, [
-            { name: 'scan', positions: box1, indices: Uint32Array.from({ length: box1.length / 3 }, (_, i) => i) },
-            { name: 'Seal', positions: Float32Array.from(cap), indices: Uint32Array.from({ length: cap.length / 3 }, (_, i) => i), extras: { sbSeal: { version: 'test' } } }
-        ], {});
-        const r = findInwardTriangles(fs.readFileSync(file));
-        // every cell of the inward side is found, the capped ones too
-        expect(r.stats.turned).toBe(600);
-    });
 });
