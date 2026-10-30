@@ -13,8 +13,8 @@ import { decodeSpz, isGzip } from '../../../../common/splat-spz-codec';
 import { CameraRelativeRTC } from '../../../../common/coordinate/CameraRelativeRTC';
 import { SplatRadixSorter } from './SplatRadixSorter';
 import { EWA_CUTOFF_SIGMA, EWA_SPLAT_GLSL } from '../../../../common/spatial/splat-ewa-projection';
-
 import { SplatEditIndex, applySplatStroke, replaySplatEdits, type SplatEditStroke } from '../../../../common/spatial/splat-edits';
+
 export interface SplatData {
   count: number;
   positions: Float32Array;
@@ -68,10 +68,10 @@ export interface PhotorealSplatOptions {
  * uploads one 4-byte-per-splat index buffer per sort event instead of rewriting
  * all five attribute arrays — roughly 14× less GPU bandwidth per sort.
  */
-export class PhotorealGaussianSplatMesh extends THREE.Group {
 /** The largest footprint a splat is picked by, metres (pickEditPoint). */
 const PICK_MAX_FOOTPRINT_M = 0.6;
 
+export class PhotorealGaussianSplatMesh extends THREE.Group {
   public readonly isPhotorealGaussianSplatMesh = true;
   public readonly splatCount: number;
   public readonly splatData: SplatData;
@@ -98,12 +98,12 @@ const PICK_MAX_FOOTPRINT_M = 0.6;
   private _posHighTex!: THREE.DataTexture;
   private _posLowTex!: THREE.DataTexture;
   private _texWidth = 1;
-
   /** The colour and opacity bytes as built (splat-edits.ts replays strokes over them); made on the first edit. */
   private _baseColorOpacity: Uint8Array | null = null;
   private _editIndex: SplatEditIndex | null = null;
   /** The bytes as drawn when the stroke being painted began (previewEditStroke redraws the whole stroke over them). */
   private _previewStart: Uint8Array | null = null;
+
   private static readonly _dummyRgbaF32 = (() => {
     const t = new THREE.DataTexture(new Float32Array(4), 1, 1, THREE.RGBAFormat, THREE.FloatType);
     t.magFilter = THREE.NearestFilter;
@@ -924,9 +924,6 @@ const PICK_MAX_FOOTPRINT_M = 0.6;
     return new PhotorealGaussianSplatMesh(splatData, options);
   }
 
-  public override dispose(): void {
-    this.radixSorter.dispose();
-    this.splatGeometry.dispose();
   /** The colour texture's bytes (RGBA8 per splat, as drawn), with the as-built copy taken before the first edit. */
   private _editBuffers(): { base: Uint8Array; rgba: Uint8Array } {
     const rgba = this._colorOpacityTex.image.data as Uint8Array;
@@ -1012,6 +1009,9 @@ const PICK_MAX_FOOTPRINT_M = 0.6;
     return { local, world: local.clone().applyMatrix4(this.matrixWorld) };
   }
 
+  public override dispose(): void {
+    this.radixSorter.dispose();
+    this.splatGeometry.dispose();
     this.splatMaterial.dispose();
     this._posTex.dispose();
     this._scaleTex.dispose();

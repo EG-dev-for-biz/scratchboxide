@@ -3069,6 +3069,9 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 artifact: { type: '3d-scene', data: res.scene3DData }
             } as unknown as ToolResultPayload,
             summaryResult: `Generated a 3DGS radiance field for ${res.locationName}: ${res.splatCount.toLocaleString()} splats from ${res.acceptedStations}/${res.stationCount} accepted station image(s) of the clay tiles ${res.glbPath} in ${(res.durationMs / 1000).toFixed(1)}s -> ${res.splatUrl}. ${res.imageSources.join(' ')}`
+                + (res.worldCache?.state === 'fetched' ? ` Fetched from the world cache (${res.worldCache.bucket}), built ${res.worldCache.storedAt}; nothing was generated (refresh: true builds it again).` : res.worldCache ? ` Being stored in the world cache (${res.worldCache.bucket}) for next time.` : '')
+                + (res.streetView?.snap ? ` Viewer placed at ${res.streetView.snap.lat.toFixed(6)}, ${res.streetView.snap.lng.toFixed(6)}, ${res.streetView.snap.offsetM.toFixed(1)} m from the street's centreline (${res.streetView.snap.reason}), looking ${res.streetView.snap.headingDeg.toFixed(1)}°.` : '')
+                + (res.streetView ? ` Street level: ${res.streetView.accepted}/${res.streetView.stations} Street View station(s) accepted from ${res.streetView.panos.length} pano(s) (${res.streetView.discovery.panosFound} found)${res.streetView.unmatched ? `, ${res.streetView.unmatched} of them stitched in although the photograph disagrees with the scan (by design)` : ''}; ${res.streetView.registrationSummary}.${res.streetView.failures.length ? ` ${res.streetView.failures.length} view(s) failed or were refused.` : ''} Their pictures are generated from the photographs, which were not stored.` : '')
         };
     },
 
@@ -3078,9 +3081,6 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const faceResolution = typeof args.faceResolution === 'number' ? args.faceResolution : undefined;
         const equirectangularWidth = typeof args.equirectangularWidth === 'number' ? args.equirectangularWidth : undefined;
         const equirectangularHeight = typeof args.equirectangularHeight === 'number' ? args.equirectangularHeight : undefined;
-                + (res.worldCache?.state === 'fetched' ? ` Fetched from the world cache (${res.worldCache.bucket}), built ${res.worldCache.storedAt}; nothing was generated (refresh: true builds it again).` : res.worldCache ? ` Being stored in the world cache (${res.worldCache.bucket}) for next time.` : '')
-                + (res.streetView?.snap ? ` Viewer placed at ${res.streetView.snap.lat.toFixed(6)}, ${res.streetView.snap.lng.toFixed(6)}, ${res.streetView.snap.offsetM.toFixed(1)} m from the street's centreline (${res.streetView.snap.reason}), looking ${res.streetView.snap.headingDeg.toFixed(1)}°.` : '')
-                + (res.streetView ? ` Street level: ${res.streetView.accepted}/${res.streetView.stations} Street View station(s) accepted from ${res.streetView.panos.length} pano(s) (${res.streetView.discovery.panosFound} found)${res.streetView.unmatched ? `, ${res.streetView.unmatched} of them stitched in although the photograph disagrees with the scan (by design)` : ''}; ${res.streetView.registrationSummary}.${res.streetView.failures.length ? ` ${res.streetView.failures.length} view(s) failed or were refused.` : ''} Their pictures are generated from the photographs, which were not stored.` : '')
         const styleHint = asString(args.styleHint) || undefined;
         const prompt = asString(args.prompt) || undefined;
         const model = asString(args.model) || undefined;

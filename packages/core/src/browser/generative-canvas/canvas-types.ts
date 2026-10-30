@@ -978,13 +978,6 @@ export interface SceneCameraLens {
     temporalAntiAliasing?: boolean;
 }
 
-/** What the viewport shows while a graph node holds the display flag; every list is optional, one is enough. */
-export interface SceneDisplayFlag {
-    /** The graph node holding the flag. */
-    nodeId: string;
-    /** What it shows, for the viewport badge and the Output node ("Google 3D Tiles", "seat"). */
-    label: string;
-    /** Scene objects to show (staged layers, placed models), by objects[].id. */
 /** One arc of a colour harmony template: its centre `offsetDeg` from the template's hue, and its full width, in degrees. */
 export interface SceneColorHarmonySector {
     offsetDeg: number;
@@ -1010,6 +1003,13 @@ export interface SceneColorHarmony {
     tint?: number;
 }
 
+/** What the viewport shows while a graph node holds the display flag; every list is optional, one is enough. */
+export interface SceneDisplayFlag {
+    /** The graph node holding the flag. */
+    nodeId: string;
+    /** What it shows, for the viewport badge and the Output node ("Google 3D Tiles", "seat"). */
+    label: string;
+    /** Scene objects to show (staged layers, placed models), by objects[].id. */
     objectIds?: string[];
     /** customMeshes to show, by id. */
     meshIds?: string[];
@@ -1054,11 +1054,6 @@ export interface Scene3DData {
     sceneType?: 'adaptive' | 'custom' | string;
     domainOrTopic?: string;
     splatUrl?: string;
-    splatTilesetUrl?: string;
-    splatOptions?: {
-        splatScale?: number;
-        maxSplats?: number;
-        enableRTC?: boolean;
     /** Brush strokes replayed, in order, over the splat as it was built (common/spatial/splat-edits.ts). */
     splatEdits?: SplatEditStroke[];
     /**
@@ -1066,6 +1061,11 @@ export interface Scene3DData {
      * scene that was opened (`/api/worlds/<slug>/scene`).
      */
     world?: { slug: string; version?: string; savedAt?: string };
+    splatTilesetUrl?: string;
+    splatOptions?: {
+        splatScale?: number;
+        maxSplats?: number;
+        enableRTC?: boolean;
         enableSoftZ?: boolean;
         contactShadow?: boolean;
         cropBox?: { min: [number, number, number]; max: [number, number, number] };
@@ -1141,6 +1141,8 @@ export interface Scene3DData {
      * fog, turned into the sky config by services/atmosphere/scene-weather.ts applySceneWeather; absent = no weather set.
      */
     weather?: import('./services/atmosphere/scene-weather').SceneWeatherState;
+    /** A colour harmony grade the viewport draws on the scene's objects (sb_set_color_harmony); absent = none. */
+    colorHarmony?: SceneColorHarmony;
     environment?: {
         skybox?: string;
         lighting?: string;
@@ -1148,8 +1150,6 @@ export interface Scene3DData {
         timeOfDay?: number;
         sunElevation?: number;
         sunAzimuth?: number;
-    /** A colour harmony grade the viewport draws on the scene's objects (sb_set_color_harmony); absent = none. */
-    colorHarmony?: SceneColorHarmony;
         lightingPreset?: string;
         latitude?: number;
         longitude?: number;

@@ -1195,18 +1195,18 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     // fetched from the world cache when not on this machine; with neither, the prompt builds it.
     const handleOpenStarterWorld = React.useCallback(async (item: StarterButton) => {
         const world = item.world!;
-        if (!data) {
-            try {
-                const res = await fetch(world.scenePath, { cache: 'no-store' });
-                if (res.ok) data = { ...(await res.json() as Scene3DData), world: { slug: world.slug } };
-            } catch { data = undefined; }
-        }
         let data: Scene3DData | undefined;
         try {
             const res = await fetch(`/api/worlds/${encodeURIComponent(world.slug)}/scene`, { cache: 'no-store' });
             const body = res.ok ? await res.json() : undefined;
             if (body?.success) data = body.scene as Scene3DData;
         } catch { data = undefined; }
+        if (!data) {
+            try {
+                const res = await fetch(world.scenePath, { cache: 'no-store' });
+                if (res.ok) data = { ...(await res.json() as Scene3DData), world: { slug: world.slug } };
+            } catch { data = undefined; }
+        }
         if (!data?.splatUrl) {
             handleSendMessage(pickStarterPrompt(item));
             return;
