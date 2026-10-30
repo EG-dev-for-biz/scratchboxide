@@ -119,6 +119,18 @@ describe('tile_refine occlusion masks', () => {
         expect(mask!.v.reduce((a, v) => Math.max(a, v), 0)).toBeLessThan(40);
     }, 300_000);
 
+    it('leaves a face between two flanking walls clear when it is seen straight on, and a building across the street out of reach', () => {
+        // two fins 6 m deep standing out of the facade 4 m apart (z 2..3 and -3..-2), and a 40 m building 20 m across the street
+        const fins = [...box(10, 16, 0, 40, 2, 3), ...box(10, 16, 0, 40, -3, -2)];
+        const street = box(30, 40, 0, 40, -30, 30);
+        const { facade, mask } = run('fins', [...scene(false), ...fins, ...street]);
+        expect(mask).toBeDefined();
+        // between the fins the sideways rays hit them, but the straight-on ones are clear: not occluded
+        expect(meanIn(facade, mask!, 5, 35, -1.5, 1.5).mean).toBeLessThan(0.2);
+        // the building across the street is out of reach
+        expect(meanIn(facade, mask!, 2, 38, -14, -5).mean).toBeLessThan(0.05);
+    }, 300_000);
+
     it('casts against the occluder file when the block was taken out of the scan', () => {
         const { facade, mask, stats } = run('file', scene(false), scene(true));
         expect(stats.relief.occlusion.source).toContain('occ.glb');

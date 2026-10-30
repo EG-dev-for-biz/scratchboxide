@@ -187,14 +187,16 @@ struct ReliefParams {
     // frame and cells (facades.json) are written here: the image a grammar is read from, in the frame it is fitted to.
     std::string orthoExportDir;
     // Occlusion (with an export dir and an occluder scene): beside each orthophoto, facade_<id>_occluded.png, one channel,
-    // 255 x the share of a fan of rays, from the facade out toward where the capture could have stood, that a surface of the
-    // occluder scene blocks within occlusionReach: the texels something stood in front of when the photo was taken (a
-    // crown, an awning, a neighbour), whose colour may be that thing's. Measured on a grid of occlusionCellM, read
-    // bilinearly; the rays start occlusionStandoff off the plane, past the facade photo's own slab (grammarSlabFront).
+    // 255 x how blocked the facade's clearest direction toward the capture was: for each yaw of the fan, the share of its
+    // elevations' rays that a surface of the occluder scene blocks within occlusionReach, the least of those. The texels
+    // something stood close in front of when the photo was taken (a crown, an awning, a fin or wing of the building),
+    // whose colour may be that thing's; a face between flanking walls that a camera saw straight on is clear, and the
+    // reach stops short of the buildings across a street. Measured on a grid of occlusionCellM, read bilinearly; the rays
+    // start occlusionStandoff off the plane, past the facade photo's own slab (grammarSlabFront).
     const bvh::BvhTree* occluders{nullptr};
     double occlusionCellM{0.5};
     double occlusionStandoff{0.8};
-    double occlusionReach{25.0};
+    double occlusionReach{12.0};
     // a ray counts hits only past this along it: a surface the wall itself meets (the ground at its foot) is no occluder
     double occlusionSkipM{0.3};
     // the fan: the facade's outward horizontal normal turned by each yaw, tilted up by each elevation (degrees)
@@ -2631,14 +2633,16 @@ private:
         if (h.length() < 1e-6) return;  // a level plane has no outward horizontal
         h = h * (1.0 / h.length());
         const P3 side(-h.z, 0.0, h.x), up(0.0, 1.0, 0.0);
+        // the fan, yaw by yaw: fan[yi * E + ei]
         std::vector<math::Vec3> fan;
-        for (double e : p_.occlusionElevationsDeg)
-            for (double y : p_.occlusionYawsDeg) {
+        const size_t E = p_.occlusionElevationsDeg.size();
+        for (double y : p_.occlusionYawsDeg)
+            for (double e : p_.occlusionElevationsDeg) {
                 const double ce = std::cos(e * kPi / 180.0), se = std::sin(e * kPi / 180.0), cy = std::cos(y * kPi / 180.0), sy = std::sin(y * kPi / 180.0);
                 const P3 d = (h * cy + side * sy) * ce + up * se;
                 fan.push_back(math::Vec3(static_cast<float>(d.x), static_cast<float>(d.y), static_cast<float>(d.z)));
             }
-        if (fan.empty()) return;
+        if (fan.empty() || E == 0) return;
         const int W = o.width, H = o.height;
         const int step = std::max(1, static_cast<int>(std::lround(p_.occlusionCellM / o.pixel)));
         const int gw = (W + step - 1) / step + 1, gh = (H + step - 1) / step + 1;
@@ -2651,9 +2655,15 @@ private:
                     const double col = std::min<double>(W - 1, gx * step), row = std::min<double>(H - 1, gy * step);
                     const P3 p = R.c + R.u * o.sAt(col) + R.v * o.tAt(row) + R.n * p_.occlusionStandoff;
                     const math::Vec3 org(static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z));
-                    int blocked = 0;
-                    for (const auto& d : fan) if (p_.occluders->raycastAny(math::Ray(org + d * skip, d), reach)) ++blocked;
-                    grid[static_cast<size_t>(gy) * gw + gx] = static_cast<float>(blocked) / static_cast<float>(fan.size());
+                    // the clearest yaw decides: its share of blocked elevations (a yaw already worse than the best is cut short)
+                    size_t least = E;
+                    for (size_t y0 = 0; y0 < fan.size() && least > 0; y0 += E) {
+                        size_t blocked = 0;
+                        for (size_t ei = 0; ei < E && blocked < least; ++ei)
+                            if (p_.occluders->raycastAny(math::Ray(org + fan[y0 + ei] * skip, fan[y0 + ei]), reach)) ++blocked;
+                        least = std::min(least, blocked);
+                    }
+                    grid[static_cast<size_t>(gy) * gw + gx] = static_cast<float>(least) / static_cast<float>(E);
                 }
         };
         const unsigned nt = std::max(1u, std::min<unsigned>(threads, static_cast<unsigned>(gh)));
