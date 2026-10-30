@@ -22,6 +22,10 @@
  *
  * Only where a training bucket is configured (training-pair-capture.ts resolveTrainingBucketName), and not with
  * SCRATCHBOX_CACHE_MIRROR=off. Nothing here ever fails a build: a file that could not be sent is tried again next sync.
+ *
+ * And back (restoreCacheEntry): a stage entry the workspace lacks is read from the bucket before the stage runs
+ * (stage-cache.ts `restore`, wired in staged-location-tool.ts; SCRATCHBOX_CACHE_RESTORE=off never), with the native and
+ * stage entries it points at, so a wiped cache or another machine rebuilds a scene from what was built before.
  */
 
 import * as fs from 'fs';
@@ -150,4 +154,71 @@ export function mirrorCachesInBackground(workspaceRoot: string, opts: { bucket?:
         // files written in the build's last minute are sent once they have settled
         if (waiting) setTimeout(() => mirrorCachesInBackground(workspaceRoot, opts), CACHE_MIRROR_PARAMS.settleMs + 5_000).unref();
     })().finally(() => { running = undefined; });
+}
+
+const RESTORE_ROOTS = ['staged_location', 'tile_refine', 'tile_vegetation'];
+const SAFE_PART = (p: string) => KEY_PART.test(p) && p !== '.' && p !== '..';
+
+/**
+ * The other way: a cache entry this workspace lacks, read back from the bucket (`cache/v1/<root>/<path>/`), so a build on a
+ * wiped cache or another machine reuses what was built before. `rel` is the entry as it lies in the cache
+ * (`staged_location/<stage>/<key>`, `tile_refine/<key>`). Restored only when the bucket holds the entry whole (its
+ * done.json); its files land in a temp dir that is renamed into place. The record's absolute paths are moved onto this
+ * workspace (`…/.scratchbox/cache/…`, `…/public/models/…`; on the machine that built it they are the same), and the native
+ * and stage entries it points at are restored first, so its published models can be published again from their sources.
+ * The restored files are recorded in the mirror's manifest, not sent back. True when the entry is now here.
+ */
+export async function restoreCacheEntry(bucket: CloudBucket, workspaceRoot: string, rel: string, opts: { modelsDir?: string; seen?: Set<string> } = {}): Promise<boolean> {
+    const parts = rel.split('/');
+    if (!RESTORE_ROOTS.includes(parts[0]) || parts.length < 2 || !parts.every(SAFE_PART)) return false;
+    const seen = opts.seen ?? new Set<string>();
+    if (seen.has(rel)) return false;
+    seen.add(rel);
+    const cacheRoot = path.join(workspaceRoot, '.scratchbox', 'cache'), modelsDir = opts.modelsDir ?? path.join(workspaceRoot, 'public', 'models');
+    const dir = path.join(cacheRoot, ...parts);
+    if (fs.existsSync(path.join(dir, 'done.json'))) return true;
+    const prefix = `${CACHE_MIRROR_PREFIX}/${rel}/`;
+    const objects = (await bucket.list(prefix)).filter(o => o.key.startsWith(prefix) && o.key.slice(prefix.length).split('/').every(SAFE_PART));
+    if (!objects.some(o => o.key === `${prefix}done.json`)) return false;
+    const tmp = `${dir}.tmp-restore-${process.pid}-${Date.now()}`;
+    try {
+        for (const o of objects) {
+            const file = path.join(tmp, ...o.key.slice(prefix.length).split('/'));
+            fs.mkdirSync(path.dirname(file), { recursive: true });
+            if (!(await bucket.download(o.key, file))) throw new Error(`${bucket.label}/${o.key} could not be read`);
+        }
+        // the record's paths onto this workspace
+        const doneFile = path.join(tmp, 'done.json');
+        const text = fs.readFileSync(doneFile, 'utf8')
+            .replace(/"[^"]*?\/\.scratchbox\/cache\//g, () => JSON.stringify(`${cacheRoot}/`).slice(0, -1))
+            .replace(/"[^"]*?\/public\/models\//g, () => JSON.stringify(`${modelsDir}/`).slice(0, -1));
+        fs.writeFileSync(doneFile, text);
+        // the entries it points at, restored first, so its sources are here when it is read
+        const at = cacheRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const refs = new Set<string>();
+        for (const m of text.matchAll(new RegExp(`${at}/(tile_refine|tile_vegetation)/([A-Za-z0-9._-]+)`, 'g'))) refs.add(`${m[1]}/${m[2]}`);
+        for (const m of text.matchAll(new RegExp(`${at}/staged_location/([a-z0-9][a-z0-9-]*)/([0-9a-f]{64})`, 'g'))) refs.add(`staged_location/${m[1]}/${m[2]}`);
+        for (const r of refs) await restoreCacheEntry(bucket, workspaceRoot, r, { modelsDir, seen });
+        if (fs.existsSync(path.join(dir, 'done.json'))) { fs.rmSync(tmp, { recursive: true, force: true }); return true; }
+        fs.mkdirSync(path.dirname(dir), { recursive: true });
+        fs.rmSync(dir, { recursive: true, force: true });
+        fs.renameSync(tmp, dir);
+    } catch (err) {
+        fs.rmSync(tmp, { recursive: true, force: true });
+        throw err;
+    }
+    // what came from the bucket is not sent back to it
+    const manifestFile = path.join(cacheRoot, parts[0], MANIFEST);
+    try {
+        let manifest: { bucket: string; files: Record<string, string> } = { bucket: bucket.label, files: {} };
+        try { const m = JSON.parse(fs.readFileSync(manifestFile, 'utf8')); if (m?.bucket === bucket.label && m.files) manifest = m; } catch { /* none yet */ }
+        for (const f of walk(dir)) {
+            const st = fs.statSync(path.join(dir, f));
+            manifest.files[[...parts.slice(1), f].join('/')] = `${st.size}:${Math.round(st.mtimeMs)}`;
+        }
+        const t = `${manifestFile}.tmp-${process.pid}`;
+        fs.writeFileSync(t, JSON.stringify(manifest));
+        fs.renameSync(t, manifestFile);
+    } catch { /* at worst the files are sent again */ }
+    return true;
 }

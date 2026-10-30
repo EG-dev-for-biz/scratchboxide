@@ -20,7 +20,7 @@
  *   the final scene. A place that cannot be resolved or has no tile coverage fails the call; nothing else does.
  */
 
-import { mirrorCachesInBackground } from '../../cloud-store/cache-mirror';
+import { cacheMirrorBucket, mirrorCachesInBackground, restoreCacheEntry } from '../../cloud-store/cache-mirror';
 import { TOGGLEABLE_STEPS } from '../../../common/staged-build-steps';
 import { solarRoofFromBuildingShape } from './pipeline-e/solar-roof';
 import * as crypto from 'crypto';
@@ -217,7 +217,9 @@ function stoppableFetch(signal: AbortSignal | undefined): typeof fetch | undefin
 
 /** The orchestrator's dependencies wired to the app's own services. */
 export async function createStagedLocationDeps(workspaceRoot: string, options: { signal?: AbortSignal } = {}): Promise<StagedLocationDeps> {
-    const cache = new StageCache({ workspaceRoot });
+    // a stage this workspace lacks is read back from the cache mirror's bucket before it runs (SCRATCHBOX_CACHE_RESTORE=off: never)
+    const mirror = process.env.SCRATCHBOX_CACHE_RESTORE?.trim() === 'off' ? undefined : cacheMirrorBucket();
+    const cache: StageCache = new StageCache({ workspaceRoot, ...(mirror ? { restore: (stage: string, key: string) => restoreCacheEntry(mirror, cache.workspaceRoot, `staged_location/${stage}/${key}`, { modelsDir: cache.modelsDir }) } : {}) });
     const gemini = new GeminiClient();
     const vegetation = getTileVegetationService(workspaceRoot);
     const canopy = (vegetation as unknown as { canopy?: (req: { tilePath: string; cellM?: number; signal?: AbortSignal }) => Promise<any> }).canopy;

@@ -11,7 +11,9 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
-import { cacheMirrorBucket, cacheMirrorRoots, syncCacheDir } from '../src/node/cloud-store/cache-mirror';
+import { CACHE_MIRROR_PARAMS, cacheMirrorBucket, cacheMirrorRoots, restoreCacheEntry, syncCacheDir } from '../src/node/cloud-store/cache-mirror';
+import { DirectoryCloudBucket } from '../src/node/cloud-store/cloud-bucket';
+import { StageCache, stageKey } from '../src/node/3d-engine/staged-location/stage-cache';
 import type { CloudBucket, CloudObject, PutFileOptions } from '../src/node/cloud-store/cloud-bucket';
 
 /** A bucket in memory: what was written, with its bytes and metadata. */
@@ -113,5 +115,41 @@ describe('the build caches mirrored to the training bucket', () => {
         } finally {
             for (const [k, v] of [['SCRATCHBOX_TRAINING_BUCKET', saved.t], ['SCRATCHBOX_CACHE_MIRROR', saved.m], ['SCRATCHBOX_HOME', saved.h]] as const) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
         }
+    });
+
+    it('reads a stage back on another workspace: its files, the native entry its model came from, the model published again', async () => {
+        const bucket = new DirectoryCloudBucket(fs.mkdtempSync(path.join(os.tmpdir(), 'cache-bucket-')));
+        const now = { ...CACHE_MIRROR_PARAMS, settleMs: 0 };
+        // workspace A: a native entry (tile_refine) and a stage whose published model is that entry's file
+        const a = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cache-ws-a-')));
+        const native = path.join(a, '.scratchbox', 'cache', 'tile_refine', 'f'.repeat(16));
+        fs.mkdirSync(native, { recursive: true });
+        fs.writeFileSync(path.join(native, 'done.json'), '{}');
+        fs.writeFileSync(path.join(native, 'textured.glb'), 'the refined scan');
+        const key = stageKey('remesh', 'test');
+        const built = await new StageCache({ workspaceRoot: a }).run('remesh', key, async dir => {
+            fs.writeFileSync(path.join(dir, 'clay.glb'), 'clay bytes');
+            return { value: { twin: path.join(native, 'textured.glb'), triangles: 42 } };
+        }, { publish: () => [{ from: path.join(native, 'textured.glb'), as: 'scene_remesh.glb' }] });
+        expect(built.cached).toBe(false);
+        for (const r of cacheMirrorRoots(a)) await syncCacheDir(bucket, r.dir, r.prefix, now);
+        // workspace B, elsewhere: the same stage is read back, never built
+        const b = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cache-ws-b-')));
+        const cache = new StageCache({ workspaceRoot: b, restore: (stage, k) => restoreCacheEntry(bucket, b, `staged_location/${stage}/${k}`) });
+        const got = await cache.run<{ twin: string; triangles: number }>('remesh', key, async () => { throw new Error('built again'); });
+        expect(got.cached).toBe(true);
+        expect(got.value.triangles).toBe(42);
+        // the paths are this workspace's, the native entry is here, the model is published here with the same bytes
+        expect(got.value.twin).toBe(path.join(b, '.scratchbox', 'cache', 'tile_refine', 'f'.repeat(16), 'textured.glb'));
+        expect(fs.readFileSync(got.value.twin, 'utf8')).toBe('the refined scan');
+        expect(fs.readFileSync(path.join(got.dir, 'clay.glb'), 'utf8')).toBe('clay bytes');
+        expect(got.published[0].path).toBe(path.join(b, 'public', 'models', 'scene_remesh.glb'));
+        expect(got.published[0].sha256).toBe(built.published[0].sha256);
+        expect(fs.readFileSync(got.published[0].path, 'utf8')).toBe('the refined scan');
+        // what came from the bucket is not sent back
+        for (const r of cacheMirrorRoots(b)) expect((await syncCacheDir(bucket, r.dir, r.prefix, now)).uploaded).toBe(0);
+        // a stage the bucket does not hold is built
+        const other = await cache.run('remesh', stageKey('remesh', 'other'), async dir => { fs.writeFileSync(path.join(dir, 'x.glb'), 'x'); return { value: 1 }; });
+        expect(other.cached).toBe(false);
     });
 });
