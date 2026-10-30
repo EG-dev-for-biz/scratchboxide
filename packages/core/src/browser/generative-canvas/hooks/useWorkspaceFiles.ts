@@ -23,6 +23,7 @@ import { NodeGraphPrimitive } from '../primitives/NodeGraphPrimitive';
 import { Scene3DPrimitive } from '../primitives/Scene3DPrimitive';
 import { ChatState, ChatStore } from '../state/chatStore';
 import { LIVE_CODE_STARTER_APP } from '../studio/liveCodeStarterTemplate';
+import { canCreateInLayoutMode, canShowPrimitive } from '../../../common/product-scope';
 
 export interface UseWorkspaceFilesDeps {
     activeArtifact: ChatState['activeArtifact'];
@@ -71,6 +72,10 @@ export function useWorkspaceFiles(deps: UseWorkspaceFilesDeps) {
         }
 
         const opened = artifactForOpenedFile(filePath, fileName, realContent, activeArtifact);
+        if (!canShowPrimitive(opened.artifact.type)) {
+            showToast(`${fileName} would open as a ${opened.artifact.type}, which this 3D and VFX build does not show.`, '⚠️');
+            return;
+        }
         setLayoutMode(opened.layoutMode);
         const updatedArtifact = opened.artifact;
         setActiveArtifact(updatedArtifact);
@@ -239,6 +244,10 @@ export function useWorkspaceFileCreation(deps: UseWorkspaceFilesDeps) {
     const { activeArtifact, activeWorkspace, artifactHistory, layoutMode, messages, setActiveArtifact, setArtifactHistory, setCurrentSessionId, setLayoutMode, setMessages, setSessions, showToast } = deps;
 
     const handleCreateWorkspaceFile = (type: WorkspaceFileType) => {
+        if (!canCreateInLayoutMode(type)) {
+            showToast('This build of Scratchbox is limited to 3D and VFX projects: new files are chats, 3D scenes and video timelines.', '⚠️');
+            return;
+        }
         const newSessionId = `session-${type}-${Date.now()}`;
 
         let newSession: ChatSession;

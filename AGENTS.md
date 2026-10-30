@@ -57,6 +57,11 @@ These rules are for coding agents changing this repository. The in-app chat mode
 
 ## 4. Product behaviour (enforced in code; keep the code and this summary in step)
 
+- **3D/VFX product gate** (temporary, while the app is developed as a 3D and VFX tool; user ask, 2026-10-30). `SCRATCHBOX_PRODUCT_SCOPE=3d-vfx` in the environment the app starts with (server and Vite both read the process environment; unset, nothing changes) limits what can be made to 3D scenes and video timelines; node graphs and browser pages still show as companions the app opens. One module decides, by canvas type only (`common/product-scope.ts`):
+  - **model:** the creating prompts describe only those types and put pictures in the chat (`scopedPersona`); `mount_canvas_primitive` and `morph_canvas_primitive` refuse other types with the reason; a tag of another type in a reply is not opened and the chat says why (`streaming.ts` `inScopeArtifact`); deep write answers 403;
+  - **UI:** starter buttons, Spotlight, the sidebar "+" menu, the canvas "+" tab, View As, preview-in-canvas, file open and Admin demos offer nothing else; off-scope slash commands answer with a chat note;
+  - **saved work:** never filtered from the chat store; a session's other canvases are hidden from tabs and stage and its out-of-scope mode shows as chat, and all of it returns when the gate is off.
+
 - **Textured by default, clay on request** (user decision, 2026-10-19).
   - **The default:** new scenes open with their authored materials (`renderMode: 'pbr'`; the viewport default, `applyFirstPassBaseline` in `scene3d-first-pass-baseline.ts`).
   - **Clay** (`renderMode: 'clay'`, `sb.PbrMaterial.clay()`) is used:

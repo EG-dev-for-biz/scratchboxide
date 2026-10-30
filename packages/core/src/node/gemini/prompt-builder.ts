@@ -21,6 +21,7 @@ import { OBJECT_BUILD_SOURCE, type BuiltObjectRecord } from '../../common/spatia
 import { stagedBuildContext } from '../3d-engine/staged-location/staged-summary';
 import { SB_API_SUMMARY } from '../3d-engine/sb-api.generated';
 import { toolOfferMode } from './tool-catalog';
+import { canCreatePrimitive, isScopedTo3dVfx } from '../../common/product-scope';
 import { summarizeSceneStateForAgent } from '../../browser/generative-canvas/lenses/Scene3DWorldLens';
 
 /** Workspace-intelligence services the system instruction draws context from. */
@@ -409,6 +410,93 @@ Output complete, high-quality, fully runnable React 19 code with Tailwind CSS, L
 \`\`\`
 `;
 
+/** What the model is told in the 3D/VFX build (common/product-scope.ts), ahead of the canvas specification. */
+export const PRODUCT_SCOPE_SECTION = `
+### PRODUCT SCOPE (THIS BUILD: 3D AND VFX ONLY):
+This build of Scratchbox makes two kinds of canvas: 3D scenes ("3d-scene") and video timelines ("video-timeline"). The app opens a scene's node graph and studio browser pages by itself; never create those. Documents, code sandboxes and micro-apps, dashboards, kanban boards, forms, checklists, mind maps and hubs are not available: mount_canvas_primitive and morph_canvas_primitive refuse them, and a tag or JSON block of those types is not opened. Wherever other instructions here mention those types, they do not apply in this build. When a request would need one, answer in the chat (prose, tables and inline images are fine), say in one sentence that this build is limited to 3D and VFX projects, and offer the 3D or video route that fits, if there is one.
+`;
+
+/** The 3D scene's picture rule in the 3D/VFX build, where there are no documents to hold a picture. */
+const SCOPED_PICTURE_RULE = `      - When the user asks for a picture, image, photo, illustration, painting, drawing, storyboard frame or concept art:
+        Make it with the generate_image tool and show it in your chat reply as a markdown image ![title](url), using the url the tool returns, with a short caption. This build has no documents to hold pictures.
+        The result says which model answered and that the picture is generated. If generate_image fails, say so: never show a placeholder or a made-up URL.
+        Do not revise an open "3d-scene" for a picture request.`;
+
+/** Persona lines that push work into a code sandbox, dropped in the 3D/VFX build. */
+const SANDBOX_PUSH_MARKERS = [
+    'CODE-FIRST UNIVERSAL APPLICATION CREATION',
+    "eagerly mount an interactive 'live-code-sandbox'",
+    'IN-SITU VISUAL PIN REFINEMENT',
+    'ENCAPSULATED VIRTUAL SDK'
+];
+
+/**
+ * The canvas specification for the 3D/VFX build: the entries for the types people can make there (picked by type
+ * name, never by words in a prompt), the tag and envelope formats without the sandbox example, and pictures shown in
+ * the chat reply instead of a document.
+ */
+export function scopedCanvasSpecification(spec: string = CANVAS_PRIMITIVES_SPECIFICATION): string {
+    const blocks: string[][] = [];
+    for (const line of spec.split('\n')) {
+        if (blocks.length === 0 || specEntryHead(line) || line.startsWith('### ')) blocks.push([line]);
+        else blocks[blocks.length - 1].push(line);
+    }
+    const kept: string[] = [];
+    let entryNumber = 0;
+    for (const block of blocks) {
+        const head = block[0];
+        const entry = specEntryHead(head);
+        if (entry) {
+            if (!canCreatePrimitive(entry.type, '3d-vfx')) continue;
+            entryNumber += 1;
+            kept.push(`${entryNumber}.${entry.rest}`, ...withScopedMediaRules(block.slice(1)));
+        } else if (head.startsWith('### THE ')) {
+            kept.push('### THE SCRATCHBOX CANVAS PRIMITIVES IN THIS BUILD (3D AND VFX ONLY):', ...block.slice(1));
+        } else if (head.startsWith('### UNBOUNDED GENERATIVE MICRO-APPS')) {
+            continue;
+        } else if (head.startsWith('### UNIFIED ARTIFACT TAG')) {
+            const start = block.findIndex(l => l.startsWith('For `live-code-sandbox`'));
+            const end = start < 0 ? -1 : block.findIndex((l, i) => i > start && l.trim() === '</scratchboxPrimitive>');
+            kept.push(...(start < 0 || end < 0 ? block : [...block.slice(0, start), ...block.slice(end + 1)]));
+        } else {
+            kept.push(...block);
+        }
+    }
+    return kept.join('\n');
+}
+
+/** A numbered spec entry's head (`11. "3d-scene" (or ...):`): its type and the text after its number. */
+function specEntryHead(line: string): { type: string; rest: string } | undefined {
+    const dot = line.indexOf('. "');
+    const number = line.slice(0, dot);
+    if (dot < 1 || [...number].some(c => c < '0' || c > '9')) return undefined;
+    const close = line.indexOf('"', dot + 3);
+    return close > dot + 3 ? { type: line.slice(dot + 3, close), rest: line.slice(dot + 1) } : undefined;
+}
+
+/** A spec entry's lines with the document picture rule replaced by the chat one and the video-article rule dropped. */
+function withScopedMediaRules(lines: string[]): string[] {
+    const out = [...lines];
+    const article = out.findIndex(l => l.includes('When the user asks for a written article'));
+    if (article >= 0) out.splice(article, 2);
+    const picture = out.findIndex(l => l.includes("illustrated editorial 'picture'"));
+    const video = out.findIndex(l => l.includes('When the user asks for VIDEO EDITING'));
+    if (picture >= 0 && video > picture) out.splice(picture, video - picture, SCOPED_PICTURE_RULE);
+    return out;
+}
+
+/**
+ * A creating persona (agent or studio chat) for the 3D/VFX build: the scope note ahead of the scoped specification,
+ * without the lines that push work into a code sandbox.
+ */
+export function scopedPersona(persona: string): string {
+    return persona
+        .split(CANVAS_PRIMITIVES_SPECIFICATION).join(`${PRODUCT_SCOPE_SECTION}\n${scopedCanvasSpecification()}`)
+        .split('\n')
+        .filter(line => !SANDBOX_PUSH_MARKERS.some(marker => line.includes(marker)))
+        .join('\n');
+}
+
 
 /**
  * One policy for every prompt in the modes that offer the 3D tools (not Plan or Ask, which offer only read-only
@@ -746,6 +834,10 @@ ${CANVAS_PRIMITIVES_SPECIFICATION}
 `;
     }
 
+    // The 3D/VFX build (common/product-scope.ts) describes only the canvases it makes; Plan and Ask create none.
+    const scoped = isScopedTo3dVfx() && !isPlan && !isAsk;
+    if (scoped) basePersona = scopedPersona(basePersona);
+
     let superpowersSection = '';
     if (request.attachedSkills && request.attachedSkills.length > 0) {
         superpowersSection = '\n\n### ACTIVE ATTACHED SUPERPOWERS (SKILL.md):\n';
@@ -848,7 +940,7 @@ ${CANVAS_PRIMITIVES_SPECIFICATION}
 You have direct, sandboxed function-calling access to the developer's workspace and terminal.${toolOfferMode() === 'catalog' ? `
 Tools not yet declared are listed in load_tools: load the ones a task needs by name, then call them.` : ''}
 Available workspace tools:
-- mount_canvas_primitive: Declaratively mount an interactive visual canvas primitive on the stage (3D scene, live code sandbox, kanban board, markdown document, or node graph).
+- mount_canvas_primitive: Declaratively mount an interactive visual canvas primitive on the stage (${scoped ? '3D scene or video timeline' : '3D scene, live code sandbox, kanban board, markdown document, or node graph'}).
 - ask_user_question: Ask the user a structured multiple-choice question with answer options, radio/checkboxes, and an optional recommended path when requirements are ambiguous.
 - present_execution_plan: Present a structured confirmation plan card with steps and deliverables before executing expensive multi-step tasks.
 - workspace_read_file: Inspect disk contents and slice line ranges.

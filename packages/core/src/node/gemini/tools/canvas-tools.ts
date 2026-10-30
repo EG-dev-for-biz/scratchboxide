@@ -19,6 +19,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { glbToTriangleSoup } from '../../3d-engine/part-connectivity';
 import { measureGlbBase64MeshCounts } from '../../../common/glb-mesh-counts';
+import { primitiveOutOfScopeReason } from '../../../common/product-scope';
 import { auditModelAgainstRequest, callVisionModel } from '../../3d-engine/visual-review';
 import type { ToolDeclaration, ToolHandler } from './types';
 import { applyFirstPassBaseline, firstPassRenderMode, keepOpenSceneRenderMode } from '../scene3d-first-pass-baseline';
@@ -257,6 +258,10 @@ export const canvasHandlers: Record<string, ToolHandler> = {
                 summaryResult: `Failed: ${error}`
             };
         }
+        const outOfScope = primitiveOutOfScopeReason(primitiveType);
+        if (outOfScope) {
+            return { status: 'failed', resultPayload: { success: false, error: outOfScope }, summaryResult: `Failed: ${outOfScope}` };
+        }
         let title = asString(args.title) || 'Visual Creation';
         let summary = asString(args.summary) || `Synthesized ${title} on visual canvas.`;
         // The payload is the primitive's data as the model wrote it; anything else fails the call so the model can resend it.
@@ -463,7 +468,8 @@ export const canvasHandlers: Record<string, ToolHandler> = {
     },
 
     morph_canvas_primitive(args, _ctx) {
-        const targetType = (asString(args.targetType) || '') as PrimitiveType;
+        const requestedTarget = asString(args.targetType);
+        const targetType = normalizePrimitiveType(requestedTarget);
         const active = _ctx?.request?.activeArtifact;
         if (!active) {
             return {
@@ -473,11 +479,18 @@ export const canvasHandlers: Record<string, ToolHandler> = {
             };
         }
         if (!targetType) {
+            const message = requestedTarget
+                ? `Unknown targetType "${requestedTarget}". Use one of: ${PRIMITIVE_TYPES.join(', ')}.`
+                : 'targetType is required.';
             return {
                 status: 'failed',
-                resultPayload: { status: 'error', message: 'targetType is required.' },
-                summaryResult: 'Missing targetType.'
+                resultPayload: { status: 'error', message },
+                summaryResult: requestedTarget ? `Failed: ${message}` : 'Missing targetType.'
             };
+        }
+        const outOfScope = primitiveOutOfScopeReason(targetType);
+        if (outOfScope) {
+            return { status: 'failed', resultPayload: { status: 'error', message: outOfScope }, summaryResult: `Failed: ${outOfScope}` };
         }
         if (active.type === targetType) {
             return {

@@ -206,7 +206,8 @@ export { StreamBufferQueue, captureActiveCanvasScreenshot } from './chat/streami
 import { StreamBufferQueue, captureActiveCanvasScreenshot, streamTokensAsync } from './chat/streaming-utils';
 import { useSendMessage } from './hooks/useSendMessage';
 import { LIVE_CODE_STARTER_APP } from './studio/liveCodeStarterTemplate';
-import { STARTER_BUTTONS, pickStarterPrompt, type StarterButton } from './studio/starterPrompts';
+import { pickStarterPrompt, visibleStarterButtons, type StarterButton } from './studio/starterPrompts';
+import { canCreatePrimitive, canShowLayoutMode, canShowPrimitive, primitiveOutOfScopeReason } from '../../common/product-scope';
 
 export interface GenerativeCanvasStudioProps {
     onOpenFolder?: () => void;
@@ -241,7 +242,9 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         setArtifactVersions,
         setLayoutMode
     } = chatStore;
-    const { sessions, currentSessionId, messages, activeArtifact, artifactHistory, artifactVersions, layoutMode } = chatState;
+    const { sessions, currentSessionId, messages, activeArtifact, artifactHistory, artifactVersions, layoutMode: savedLayoutMode } = chatState;
+    // The 3D/VFX build (common/product-scope.ts) shows a mode it does not offer as chat; the saved mode is left as it is.
+    const layoutMode = canShowLayoutMode(savedLayoutMode) ? savedLayoutMode : 'chat';
     const activeSession = selectActiveSession(chatState);
 
     const recordArtifactVersion = (art: CanvasArtifact) => {
@@ -573,6 +576,10 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         const handleOpenPrimitive = (e: Event) => {
             const detail = (e as CustomEvent).detail;
             if (detail?.type) {
+                if (!canShowPrimitive(detail.type)) {
+                    showToast(primitiveOutOfScopeReason(detail.type) || `No ${detail.type} canvas in this build`, '⚠️');
+                    return;
+                }
                 if (detail.forceNew) {
                     handleCreateEmptyCanvas(detail.type, detail.title);
                     return;
@@ -672,6 +679,9 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         if (activeArtifact && !list.some(a => a.id === activeArtifact.id)) {
             list.unshift(activeArtifact);
         }
+        // Tabs only for canvases this build shows (common/product-scope.ts); the others stay in the session.
+        const shown = list.filter(a => canShowPrimitive(a.type));
+        list.splice(0, list.length, ...shown);
         // Deduplicate tabs by type and title to prevent identical runs from cluttering the tab strip
         const seen = new Set<string>();
         const deduped: typeof list = [];
@@ -722,6 +732,11 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     }, [activeArtifact, artifactHistory]);
 
     const handleCreateNewSandboxTab = React.useCallback(() => {
+        const outOfScope = primitiveOutOfScopeReason('live-code-sandbox');
+        if (outOfScope) {
+            showToast(outOfScope, '⚠️');
+            return;
+        }
         const newTab: CanvasArtifact = {
             id: `art-sandbox-${Date.now()}`,
             type: 'live-code-sandbox',
@@ -766,7 +781,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
             };
             setActiveArtifact(updated);
             setArtifactHistory(prev => prev.map(a => a.id === updated.id ? updated : a));
-        } else if (activeArtifact) {
+        } else if (activeArtifact && canCreatePrimitive('live-code-sandbox')) {
             const morphed = morphArtifact(activeArtifact, 'live-code-sandbox');
             const updated = {
                 ...morphed,
@@ -1340,10 +1355,12 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         onFileClick: handleFileClick
     };
 
+    // The 3D/VFX build (common/product-scope.ts) shows only the canvases it offers; the session keeps the others as saved.
+    const visibleArtifactHistory = React.useMemo(() => artifactHistory.filter(a => canShowPrimitive(a.type)), [artifactHistory]);
     const artifactStageProps: ArtifactStageProps = {
-        activeArtifact,
+        activeArtifact: activeArtifact && canShowPrimitive(activeArtifact.type) ? activeArtifact : undefined,
         setActiveArtifact,
-        artifactHistory,
+        artifactHistory: visibleArtifactHistory,
         setArtifactHistory,
         activeWorkspace,
         layoutMode,
@@ -1536,7 +1553,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                                             maxWidth: '680px',
                                             margin: '20px auto 0 auto'
                                         }}>
-                                            {STARTER_BUTTONS.map(item => (
+                                            {visibleStarterButtons().map(item => (
                                                 <button
                                                     key={item.label}
                                                     type="button"

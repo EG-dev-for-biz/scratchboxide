@@ -14,6 +14,7 @@ import { Icon3D, IconAutomations, IconChat, IconChevronDown, IconChevronRight, I
 import { ProjectItem } from '../ProjectsModal';
 import { FileTreeNode, POSE_3D_TREE, SCRATCHBOX_TREE } from './workspace-trees';
 import { WorkspaceFileTree } from './WorkspaceFileTree';
+import { canCreatePrimitive, canShowLayoutMode } from '../../../common/product-scope';
 
 export function getSessionIcon(session?: ChatSession): React.ReactElement | null {
     if (!session) return null;
@@ -70,7 +71,9 @@ export interface WorkspaceSidebarProps {
  */
 export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
     const activeUserName = getActiveUserName();
-    const { activeWorkspace, setActiveWorkspace, workspaces, sessions, currentSessionId, isSidebarOpen, setIsSidebarOpen, handleCreateNewWorkspace, onCreateWorkspaceFile, handleDeleteSession, handleNewChat, handleSelectSession, onOpenFolder, onOpenWorkspace, openSettingsToTab, showToast, showNewWorkspaceMenu, setShowNewWorkspaceMenu, newWorkspaceInputName, setNewWorkspaceInputName, onFileClick } = props;
+    const { activeWorkspace, setActiveWorkspace, workspaces, sessions: allSessions, currentSessionId, isSidebarOpen, setIsSidebarOpen, handleCreateNewWorkspace, onCreateWorkspaceFile, handleDeleteSession, handleNewChat, handleSelectSession, onOpenFolder, onOpenWorkspace, openSettingsToTab, showToast, showNewWorkspaceMenu, setShowNewWorkspaceMenu, newWorkspaceInputName, setNewWorkspaceInputName, onFileClick } = props;
+    // A file made as a document, sandbox or board is not listed in the 3D/VFX build (common/product-scope.ts); it stays saved.
+    const sessions = React.useMemo(() => allSessions.filter(s => canShowLayoutMode(s.fileType || 'chat')), [allSessions]);
 
     // Scratchbox Studio Sidebar Layout & Navigation State
     const [sidebarSearchQuery, setSidebarSearchQuery] = React.useState<string>('');
@@ -410,50 +413,58 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
                                         <span className="sb-dropdown-item-sub">Conversational AI thread</span>
                                     </div>
                                 </button>
-                                <button
-                                    type="button"
-                                    className="sb-dropdown-item"
-                                    onClick={() => handleCreateWorkspaceFile('code')}
-                                >
-                                    <IconCode size={13} className="text-zinc-300" />
-                                    <div className="sb-dropdown-item-text">
-                                        <span className="sb-dropdown-item-title">Code Sandbox</span>
-                                        <span className="sb-dropdown-item-sub">Interactive React / Python runner</span>
-                                    </div>
-                                </button>
-                                <button
-                                    type="button"
-                                    className="sb-dropdown-item"
-                                    onClick={() => handleCreateWorkspaceFile('document')}
-                                >
-                                    <IconDocument size={13} className="text-zinc-300" />
-                                    <div className="sb-dropdown-item-text">
-                                        <span className="sb-dropdown-item-title">Document Spec</span>
-                                        <span className="sb-dropdown-item-sub">Rich block notes & spec</span>
-                                    </div>
-                                </button>
-                                <button
-                                    type="button"
-                                    className="sb-dropdown-item"
-                                    onClick={() => handleCreateWorkspaceFile('kanban')}
-                                >
-                                    <IconKanban size={13} className="text-zinc-300" />
-                                    <div className="sb-dropdown-item-text">
-                                        <span className="sb-dropdown-item-title">Kanban Board</span>
-                                        <span className="sb-dropdown-item-sub">Sprint roadmap & stage tracking</span>
-                                    </div>
-                                </button>
-                                <button
-                                    type="button"
-                                    className="sb-dropdown-item"
-                                    onClick={() => handleCreateWorkspaceFile('automation')}
-                                >
-                                    <IconAutomations size={13} className="text-zinc-300" />
-                                    <div className="sb-dropdown-item-text">
-                                        <span className="sb-dropdown-item-title">Canvas Workflow</span>
-                                        <span className="sb-dropdown-item-sub">Visual node graph & pipeline</span>
-                                    </div>
-                                </button>
+                                {canCreatePrimitive('live-code-sandbox') && (
+                                    <button
+                                        type="button"
+                                        className="sb-dropdown-item"
+                                        onClick={() => handleCreateWorkspaceFile('code')}
+                                    >
+                                        <IconCode size={13} className="text-zinc-300" />
+                                        <div className="sb-dropdown-item-text">
+                                            <span className="sb-dropdown-item-title">Code Sandbox</span>
+                                            <span className="sb-dropdown-item-sub">Interactive React / Python runner</span>
+                                        </div>
+                                    </button>
+                                )}
+                                {canCreatePrimitive('markdown-document') && (
+                                    <button
+                                        type="button"
+                                        className="sb-dropdown-item"
+                                        onClick={() => handleCreateWorkspaceFile('document')}
+                                    >
+                                        <IconDocument size={13} className="text-zinc-300" />
+                                        <div className="sb-dropdown-item-text">
+                                            <span className="sb-dropdown-item-title">Document Spec</span>
+                                            <span className="sb-dropdown-item-sub">Rich block notes & spec</span>
+                                        </div>
+                                    </button>
+                                )}
+                                {canCreatePrimitive('kanban-board') && (
+                                    <button
+                                        type="button"
+                                        className="sb-dropdown-item"
+                                        onClick={() => handleCreateWorkspaceFile('kanban')}
+                                    >
+                                        <IconKanban size={13} className="text-zinc-300" />
+                                        <div className="sb-dropdown-item-text">
+                                            <span className="sb-dropdown-item-title">Kanban Board</span>
+                                            <span className="sb-dropdown-item-sub">Sprint roadmap & stage tracking</span>
+                                        </div>
+                                    </button>
+                                )}
+                                {canCreatePrimitive('node-graph') && (
+                                    <button
+                                        type="button"
+                                        className="sb-dropdown-item"
+                                        onClick={() => handleCreateWorkspaceFile('automation')}
+                                    >
+                                        <IconAutomations size={13} className="text-zinc-300" />
+                                        <div className="sb-dropdown-item-text">
+                                            <span className="sb-dropdown-item-title">Canvas Workflow</span>
+                                            <span className="sb-dropdown-item-sub">Visual node graph & pipeline</span>
+                                        </div>
+                                    </button>
+                                )}
                                 <button
                                     type="button"
                                     className="sb-dropdown-item"
@@ -465,17 +476,19 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
                                         <span className="sb-dropdown-item-sub">Temporal 4-dimensional spatial studio</span>
                                     </div>
                                 </button>
-                                <button
-                                    type="button"
-                                    className="sb-dropdown-item"
-                                    onClick={() => handleCreateWorkspaceFile('browser')}
-                                >
-                                    <IconGlobe size={13} className="text-zinc-300" />
-                                    <div className="sb-dropdown-item-text">
-                                        <span className="sb-dropdown-item-title">Web Browser</span>
-                                        <span className="sb-dropdown-item-sub">Interactive AI-controlled web canvas</span>
-                                    </div>
-                                </button>
+                                {canCreatePrimitive('interactive-browser') && (
+                                    <button
+                                        type="button"
+                                        className="sb-dropdown-item"
+                                        onClick={() => handleCreateWorkspaceFile('browser')}
+                                    >
+                                        <IconGlobe size={13} className="text-zinc-300" />
+                                        <div className="sb-dropdown-item-text">
+                                            <span className="sb-dropdown-item-title">Web Browser</span>
+                                            <span className="sb-dropdown-item-sub">Interactive AI-controlled web canvas</span>
+                                        </div>
+                                    </button>
+                                )}
                                 <button
                                     type="button"
                                     className="sb-dropdown-item"

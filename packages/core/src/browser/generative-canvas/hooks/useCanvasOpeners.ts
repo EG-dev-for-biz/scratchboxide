@@ -19,6 +19,7 @@ import { stableProjectArtifactId } from '../../../common/project-artifact-graph-
 import { ProjectItem } from '../ProjectsModal';
 import { CanvasArtifact, ChatSession, InteractiveBrowserData, LiveCodeSandboxData, SandboxLanguage, SandboxTemplate, StageLayoutMode, WorkspaceFileType } from '../canvas-types';
 import { resolveModeForArtifact } from '../guardrails-service';
+import { primitiveOutOfScopeReason } from '../../../common/product-scope';
 import { ChatState, ChatStore } from '../state/chatStore';
 import { WorkspaceGraphCoordinator } from '../studio/useWorkspaceGraphCoordinator';
 import { artifactOnStage, upsertArtifact } from '../tool-node-runs';
@@ -130,6 +131,11 @@ export function useCanvasOpeners(deps: UseCanvasOpenersDeps) {
     }, [activeArtifact, activeWorkspace.id, stageLayoutMode, currentSessionId, showToast]);
 
     const handlePreviewCodeInCanvas = React.useCallback((language: string, content: string) => {
+        const outOfScope = primitiveOutOfScopeReason('live-code-sandbox');
+        if (outOfScope) {
+            showToast(outOfScope, '⚠️');
+            return;
+        }
         const lang = (language || '').toLowerCase();
         let template: SandboxTemplate = 'react';
         let fileName = 'App.tsx';
@@ -202,6 +208,11 @@ ${content}
     }, [showToast]);
 
     const handleMorphArtifact = React.useCallback((morphedArtifact: CanvasArtifact) => {
+        const outOfScope = primitiveOutOfScopeReason(morphedArtifact.type);
+        if (outOfScope) {
+            showToast(outOfScope, '⚠️');
+            return;
+        }
         const correlationId = `morph-${activeArtifact?.id || 'unknown'}-${morphedArtifact.id}`;
         const source = activeArtifact
             ? graphControllerRef.current.registerArtifact(activeArtifact, correlationId)

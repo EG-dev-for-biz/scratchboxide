@@ -7,6 +7,9 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import type { PrimitiveType } from '../canvas-types';
+import { canCreatePrimitive } from '../../../common/product-scope';
+
 /**
  * Example prompts for the new-chat starter buttons. A button with several examples sends a random one, never the one
  * it sent last, so repeated clicks show different things the app can do. These are only example request texts typed
@@ -16,6 +19,8 @@
 export interface StarterButton {
     icon: string;
     label: string;
+    /** The canvas the request makes; the 3D/VFX build (common/product-scope.ts) hides a button for any other. */
+    makes: PrimitiveType;
     /** One or more example requests; one is picked per click. */
     prompts: readonly string[];
     /**
@@ -32,10 +37,11 @@ export const PENN_STATION_WORLD_SLUG = '7th_avenue_west_32nd_street_new_york_40.
 export const PENN_STATION_WORLD_DIR = `/tilesets/${PENN_STATION_WORLD_SLUG}`;
 
 export const STARTER_BUTTONS: readonly StarterButton[] = [
-    { icon: '✨', label: 'Interactive App', prompts: ['Build an interactive audio visualizer app with responsive controls'] },
+    { icon: '✨', label: 'Interactive App', makes: 'live-code-sandbox', prompts: ['Build an interactive audio visualizer app with responsive controls'] },
     {
         icon: '🪐',
         label: '3D Scene',
+        makes: '3d-scene',
         // A real district in a major city: the request routes to the staged Google 3D Tiles build (prompt-builder.ts),
         // which remeshes and resurfaces every building, applies the real textures and regrows the measured trees.
         // Stays in district mode deliberately (not isolate: true) - that is a different build shape (one structure,
@@ -71,6 +77,7 @@ export const STARTER_BUTTONS: readonly StarterButton[] = [
     {
         icon: '🏛️',
         label: '3D Building',
+        makes: '3d-scene',
         // The Empire State Building, the building-generator benchmark (2026-10-26), straightened by pipeline K
         // (google_3d_tiles_get_clay with isolate; pipeline-k/, the default for one building since 2026-10-26, user decision):
         // the remeshed scan's walls flat on their fitted planes, each facade photo's pier and storey lines traced and warped
@@ -83,6 +90,7 @@ export const STARTER_BUTTONS: readonly StarterButton[] = [
     {
         icon: '🌐',
         label: '3D World',
+        makes: '3d-scene',
         // A walkable Gaussian splat world (user ask, 2026-10-29): standing on 7th Avenue's west sidewalk at the Penn Station /
         // Madison Square Garden entrance, looking east across the avenue, built from registered Street View and the 3D
         // tiles (location_generate_3dgs with a street vantage). Opens the world already built; without it, builds it.
@@ -91,8 +99,13 @@ export const STARTER_BUTTONS: readonly StarterButton[] = [
         ],
         world: { slug: PENN_STATION_WORLD_SLUG, scenePath: `${PENN_STATION_WORLD_DIR}/scene3d.json`, title: '7th Ave at Penn Station - splat world' },
     },
-    { icon: '🎬', label: 'Video NLE', prompts: ['Assemble a multi-track video timeline with color grading and title graphics'] },
+    { icon: '🎬', label: 'Video NLE', makes: 'video-timeline', prompts: ['Assemble a multi-track video timeline with color grading and title graphics'] },
 ];
+
+/** The starter buttons this build offers: all of them, or in the 3D/VFX build those that make a 3D scene or a timeline. */
+export function visibleStarterButtons(): readonly StarterButton[] {
+    return STARTER_BUTTONS.filter(button => canCreatePrimitive(button.makes));
+}
 
 const LAST_KEY = 'sb.starterPrompt.last.';
 

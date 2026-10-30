@@ -34,6 +34,7 @@ import {
 } from './gemini-client';
 import { compactChatHistory, HISTORY_SUMMARY_INSTRUCTION } from './history-compaction';
 import { toolBlockedReason } from './tool-permissions';
+import { primitiveOutOfScopeReason } from '../../common/product-scope';
 import { resolveToolTimeBudget } from './tool-time-budgets';
 import {
     buildToolDeclarations,
@@ -500,7 +501,7 @@ export class StreamingEngine {
             }
         });
 
-        const artifact = await buildPendingPythonGenerator(this.synthesizeArtifact(request.prompt, state.accumulatedText, request, []), signal);
+        const artifact = await buildPendingPythonGenerator(this.inScopeArtifact(this.synthesizeArtifact(request.prompt, state.accumulatedText, request, []), onEvent, agent), signal);
 
         const summary = {
             text: state.accumulatedText,
@@ -1060,7 +1061,7 @@ export class StreamingEngine {
         // mode. Synthesizing from prompt keywords (e.g. "World Cup" -> "world") invented documents and scenes the model
         // never wrote, so a prose reply leaves the canvas as it is.
         const artifact = streamMountedArtifact
-            || await buildPendingPythonGenerator(this.synthesizeArtifact(request.prompt, accumulatedText, request, mcpExecutions, accumulatedGroundingMetadata), signal);
+            || await buildPendingPythonGenerator(this.inScopeArtifact(this.synthesizeArtifact(request.prompt, accumulatedText, request, mcpExecutions, accumulatedGroundingMetadata), onEvent, model), signal);
 
         if (request.requireGoogleSearch) {
             const g = accumulatedGroundingMetadata as { webSearchQueries?: string[]; groundingChunks?: unknown[] } | undefined;
@@ -1214,6 +1215,17 @@ export class StreamingEngine {
             clearInterval(heartbeat);
             signal?.removeEventListener('abort', onAbort);
         }
+    }
+
+    /**
+     * A canvas the model wrote into its reply that this build cannot make (common/product-scope.ts) is not opened, and
+     * the chat says why; the mount and morph tools refuse such types themselves, so the model hears it there.
+     */
+    private inScopeArtifact(artifact: CanvasArtifact | undefined, onEvent: StreamEventSink, model: string): CanvasArtifact | undefined {
+        const outOfScope = artifact ? primitiveOutOfScopeReason(artifact.type) : undefined;
+        if (!outOfScope) return artifact;
+        onEvent({ type: 'status', text: outOfScope, modelUsed: model });
+        return undefined;
     }
 
     /** Route a model tool call to the registry. Calls that cannot run are reported as failures, never as success. */

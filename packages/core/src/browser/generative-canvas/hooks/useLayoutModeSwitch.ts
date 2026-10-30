@@ -19,6 +19,7 @@ import { CanvasArtifact, InteractiveBrowserData, KanbanBoardData, LiveCodeSandbo
 import { resolveModeForArtifact } from '../guardrails-service';
 import { useCapabilities } from '../hooks/useCapabilities';
 import { newEmptySceneArtifact } from './useWorkspaceFiles';
+import { canShowLayoutMode, primitiveOutOfScopeReason } from '../../../common/product-scope';
 import { ChatState, ChatStore } from '../state/chatStore';
 
 export interface UseLayoutModeSwitchDeps {
@@ -38,7 +39,10 @@ export function useLayoutModeSwitch(deps: UseLayoutModeSwitchDeps) {
 
     // Switch dedicated workspace layout mode (Chat, Code/Sandbox, Document/Spec, Kanban)
     const handleSwitchMode = (targetMode: StudioLayoutMode) => {
-        const effectiveMode = targetMode === 'canvas' ? 'code' : targetMode;
+        const requestedMode = targetMode === 'canvas' ? 'code' : targetMode;
+        // The 3D/VFX build (common/product-scope.ts) shows a mode it does not offer as chat, and makes nothing for it;
+        // the session's saved canvases are left as they are.
+        const effectiveMode = canShowLayoutMode(requestedMode) ? requestedMode : 'chat';
         setLayoutMode(effectiveMode);
         if (effectiveMode !== 'chat') {
             setDocumentPaneState(prev => prev === 'collapsed' ? 'split' : prev);
@@ -342,6 +346,11 @@ export function useCreateEmptyCanvas(deps: UseLayoutModeSwitchDeps) {
     const { recordArtifactVersion, setActiveArtifact, setArtifactHistory, setLayoutMode, showToast } = deps;
 
     const handleCreateEmptyCanvas = (type: PrimitiveType, customTitle?: string) => {
+        const outOfScope = primitiveOutOfScopeReason(type);
+        if (outOfScope) {
+            showToast(outOfScope, '⚠️');
+            return;
+        }
         let newArtifact: CanvasArtifact;
         const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 

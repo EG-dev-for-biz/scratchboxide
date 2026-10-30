@@ -54,6 +54,7 @@ import {
     type StepCutoff
 } from './toolStepState';
 import { resolveModeForArtifact } from '../guardrails-service';
+import { isScopedTo3dVfx } from '../../../common/product-scope';
 import { cleanMessageTextSmart } from '../ChatMarkdownRenderer';
 import { ProjectArtifactController } from '../project-artifact-controller';
 import { WorkspaceConfigClient } from '../workspace-config-client';
@@ -211,10 +212,32 @@ async function runTerminalMention(item: ContextMentionItem, workspaceRoot?: stri
     }
 }
 
+/** Slash commands for what the 3D/VFX build (common/product-scope.ts) does not offer, each with what it would open. */
+const SCOPED_OFF_COMMANDS: Readonly<Record<string, string>> = {
+    plan: 'deep write', deepwrite: 'deep write', codebase: 'deep write', spec: 'deep write',
+    doc: 'documents', document: 'documents', code: 'code sandboxes', sandbox: 'code sandboxes',
+    graph: 'node graphs', workflow: 'node graphs', kanban: 'kanban boards', board: 'kanban boards',
+    dashboard: 'dashboards', metrics: 'dashboards'
+};
+
 /** Step 1 — `/plan`, `/agent`, `/settings`, `/3d`, `/code`, `/video`, etc. handle slash commands. Returns true if handled. */
 async function handleSlashCommands(d: SendMessageDeps, text: string): Promise<boolean> {
     const { setInputValue, executeDeepWritePipeline, handleStartAgent, setLayoutMode, showToast, openSettingsToTab } = d;
     const lowerText = text.trim().toLowerCase();
+
+    // 0. In the 3D/VFX build such a command answers in the chat instead of running (toasts are not shown in this app).
+    const command = lowerText.match(/^\/([a-z0-9-]+)(\s|$)/)?.[1];
+    if (command && isScopedTo3dVfx() && Object.prototype.hasOwnProperty.call(SCOPED_OFF_COMMANDS, command)) {
+        setInputValue('');
+        const note: ChatMessage = {
+            id: `msg-scope-${Date.now()}`,
+            sender: 'assistant',
+            text: `\`/${command}\` is off: this build of Scratchbox is limited to 3D and VFX projects and does not offer ${SCOPED_OFF_COMMANDS[command]}. Ask for a 3D scene or a video timeline instead.`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+        d.setMessages(prev => [...prev, note]);
+        return true;
+    }
 
     // 1. Settings slash command
     if (lowerText === '/settings' || lowerText.startsWith('/settings ')) {

@@ -10,6 +10,7 @@
 import * as React from 'react';
 import { MORPH_TARGETS } from '../../primitive-transformer-engine';
 import { PrimitiveType } from '../../canvas-types';
+import { canCreatePrimitive } from '../../../../common/product-scope';
 
 export const PRIMITIVE_TYPE_LABELS: Partial<Record<PrimitiveType, string>> = {
     '3d-scene': '3D Scene',
@@ -41,7 +42,8 @@ export interface ViewAsMenuProps {
  */
 export const ViewAsMenu: React.FC<ViewAsMenuProps> = ({ currentType, onSelect, targets, triggerClassName }) => {
     const [open, setOpen] = React.useState(false);
-    const resolvedTargets = targets ?? MORPH_TARGETS[currentType] ?? [];
+    // The 3D/VFX build (common/product-scope.ts) offers only the canvases it makes.
+    const resolvedTargets = (targets ?? MORPH_TARGETS[currentType] ?? []).filter(t => canCreatePrimitive(t));
     if (resolvedTargets.length === 0) {
         return null;
     }
