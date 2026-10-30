@@ -18,7 +18,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { FACADE_READER_VERSION, luminanceOf, mergeReadings, parseJudgement, parseReading, parseZones, readFacade, readPlanes, tileZone, type FacadeAsk, type FacadePhoto } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader';
+import { FACADE_READER_PARAMS, FACADE_READER_VERSION, luminanceOf, mergeReadings, parseJudgement, parseReading, parseZones, readFacade, readPlanes, tileZone, type FacadeAsk, type FacadePhoto } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 
 // a 30 m x 60 m facade at 0.1 m a pixel: 5 bays, each two windows 12 px wide, storeys every 38.4 px, windows 22 px tall;
@@ -187,6 +187,44 @@ describe('pipeline K facade reader (vision agent)', () => {
             expect(r.records.facades.map(f => f.facadeId)).toEqual([7]);
             expect(r.records.facades[0].outcome).not.toBe('skipped');
             expect(seen.length).toBeGreaterThan(0);
+        } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    it("reads a narrow face beside the wide walls, tiles it at their storey pitch once they are read, and keeps the calls in flight under the limit", async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'facade-reader-schedule-'));
+        try {
+            const img = facade(), Wn = 30, X0 = 14;
+            const narrow = new Uint8Array(Wn * H * 4);
+            for (let y = 0; y < H; y++) narrow.set(img.rgba.subarray((y * W + X0) * 4, (y * W + X0 + Wn) * 4), y * Wn * 4);
+            fs.writeFileSync(path.join(dir, 'f7.png'), encodePng(W, H, Uint8Array.from(img.rgba), 4));
+            fs.writeFileSync(path.join(dir, 'f8.png'), encodePng(Wn, H, narrow, 4));
+            fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify({ facades: [frame, { ...frame, facadeId: 8, image: 'f8.png', width: Wn }] }));
+            const { ask } = standIn();
+            const events: string[] = [];
+            let inFlight = 0, maxInFlight = 0;
+            // the wide wall answers slowly; the narrow face (3 m) at once, its reading every other storey only
+            const timed: FacadeAsk = async (png, prompt, kind, region) => {
+                const isNarrow = kind === 'overview' ? region.x1 === Wn : region.x1 - region.x0 <= Wn;
+                inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+                try {
+                    if (!isNarrow) await new Promise(r => setTimeout(r, 40));
+                    if (isNarrow && kind === 'read') {
+                        const ch = region.y1 - region.y0, rows = [];
+                        for (let k = 0; k < 20; k += 2) { const t = PHASE + k * PITCH; if (t >= region.y0 && t + WIN_H <= region.y1) rows.push({ y: [((t - region.y0) / ch) * 1000, ((t + WIN_H - region.y0) / ch) * 1000], openings: [[18, 30]].map(([a, c]) => ({ x: [((a - X0) / Wn) * 1000, ((c - X0) / Wn) * 1000], panes: 1 })) }); }
+                        return JSON.stringify({ rows, conf: 80 });
+                    }
+                    return await ask(png, prompt, kind, region);
+                } finally { inFlight--; events.push(`${isNarrow ? 'narrow' : 'wide'}:${kind}`); }
+            };
+            const r = await readPlanes(dir, timed, { params: { ...FACADE_READER_PARAMS, concurrency: 2 } });
+            expect(maxInFlight).toBe(2);
+            // the narrow face's reading came back while the wide wall was still being read; its judge only after the wide wall
+            expect(events.indexOf('narrow:read')).toBeLessThan(events.lastIndexOf('wide:judge'));
+            expect(events.lastIndexOf('narrow:judge')).toBeGreaterThan(events.lastIndexOf('wide:judge'));
+            expect(Math.abs(r.records.guide!.pitchM - PITCH * PIXEL)).toBeLessThan(0.06);
+            const z = r.records.facades.find(f => f.facadeId === 8)!.zones!.find(x => x.outcome === 'drawn')!;
+            expect(z.fit!.guided).toBe(true);
+            expect(Math.abs(z.fit!.pitchPx - PITCH)).toBeLessThan(0.6);
         } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     });
 
