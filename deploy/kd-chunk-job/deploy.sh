@@ -13,7 +13,8 @@ set -euo pipefail
 # Needs your own `gcloud auth login`. Every step creates or changes billed resources in the project.
 #
 #   SA_KEY_FILE          the app's service-account key (default ~/.scratchbox-ide/service-account.json)
-#   GOOGLE_MAPS_API_KEY  the Maps key (setup only)
+#   GOOGLE_MAPS_API_KEY  the Maps key (setup, and job with KD_JOB_AUTH=app)
+#   KD_JOB_AUTH=app      job runs as the app's account, no secrets (when nobody may grant access to them)
 #   PROJECT / REGION     default scoutscan / us-central1
 ################################################################################
 
@@ -97,13 +98,25 @@ build() {
 
 job() {
   local app; app="$(app_sa)"
-  echo "[job] $JOB -> $IMAGE"
+  local common="SCRATCHBOX_TRAINING_BUCKET=$TRAINING_BUCKET,SCRATCHBOX_STORE_BUCKET=off,SCRATCHBOX_CPUS=8,SCRATCHBOX_TEXTURE_WORKERS=7"
+  local auth
+  if [ "${KD_JOB_AUTH:-secrets}" = "app" ]; then
+    # the job runs as the app's account with no key file (the Gemini client's SCRATCHBOX_GOOGLE_ADC fallback), and the Maps
+    # key as a plain variable of the job: for a project where nobody here may grant access to the secrets
+    [ -n "${GOOGLE_MAPS_API_KEY:-}" ] || { echo "set GOOGLE_MAPS_API_KEY"; exit 1; }
+    echo "[job] $JOB -> $IMAGE, as $app, the Maps key a plain job variable"
+    auth=(--service-account "$app" --clear-secrets --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT,SCRATCHBOX_GOOGLE_ADC=1,GOOGLE_MAPS_API_KEY=$GOOGLE_MAPS_API_KEY,$common")
+  else
+    echo "[job] $JOB -> $IMAGE, as $JOB_SA, keys from Secret Manager"
+    auth=(--service-account "$JOB_SA" \
+      --set-secrets "/secrets/sa/key.json=$SA_SECRET:latest,GOOGLE_MAPS_API_KEY=$MAPS_SECRET:latest" \
+      --set-env-vars "GOOGLE_APPLICATION_CREDENTIALS=/secrets/sa/key.json,$common")
+  fi
   "${G[@]}" run jobs deploy "$JOB" --region "$REGION" --image "$IMAGE" \
-    --tasks 1 --max-retries 0 --task-timeout 3h --cpu 8 --memory 32Gi --execution-environment gen2 \
-    --service-account "$JOB_SA" \
-    --set-secrets "/secrets/sa/key.json=$SA_SECRET:latest,GOOGLE_MAPS_API_KEY=$MAPS_SECRET:latest" \
-    --set-env-vars "GOOGLE_APPLICATION_CREDENTIALS=/secrets/sa/key.json,SCRATCHBOX_TRAINING_BUCKET=$TRAINING_BUCKET,SCRATCHBOX_STORE_BUCKET=off,SCRATCHBOX_CPUS=8,SCRATCHBOX_TEXTURE_WORKERS=7"
-  "${G[@]}" run jobs add-iam-policy-binding "$JOB" --region "$REGION" --member "serviceAccount:$app" --role roles/run.developer >/dev/null
+    --tasks 1 --max-retries 0 --task-timeout 3h --cpu 8 --memory 32Gi --execution-environment gen2 "${auth[@]}"
+  # a job run as the app's own account needs no grant for the app to run it (Editor)
+  [ "${KD_JOB_AUTH:-secrets}" = "app" ] \
+    || "${G[@]}" run jobs add-iam-policy-binding "$JOB" --region "$REGION" --member "serviceAccount:$app" --role roles/run.developer >/dev/null
 }
 
 JOB_ID="${JOB_SA%%@*}"
@@ -113,5 +126,5 @@ case "${1:-}" in
   build) build ;;
   job) job ;;
   all) setup; build; job ;;
-  *) sed -n '4,19p' "$0"; exit 2 ;;
+  *) sed -n '4,20p' "$0"; exit 2 ;;
 esac

@@ -16,8 +16,9 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DirectoryCloudBucket } from '../src/node/cloud-store/cloud-bucket';
+import { GeminiClient } from '../src/node/gemini/gemini-client';
 import {
     checkImageSkew, cloudChunkConfig, cloudRunTaskCostUsd, createCloudChunkRunner, imageCommit, kdChunkJobPrefix, kdChunkLayerFiles,
     localiseJobPaths, newProgressLines, parseExecution, type CloudExecution, type CloudRunJobs, type KdChunkJobSpec
@@ -239,5 +240,23 @@ describe('pipeline K-D cloud chunk runner: pieces', () => {
         expect(chunkCpuShare(16, DISTRICT_CHUNKS_PARAMS, { SCRATCHBOX_KD_CHUNK_RUNNER: 'cloud' })).toEqual({ builds: 1, threads: 16, slowdown: 1 });
         expect(chunkCpuShare(8, DISTRICT_CHUNKS_PARAMS, { SCRATCHBOX_KD_CHUNK_JOB: '1' })).toEqual({ builds: 1, threads: 8, slowdown: 1 });
         expect(machineCores({ SCRATCHBOX_CPUS: '8' })).toBe(8);
+    });
+});
+
+describe('pipeline K-D chunk job: the task\'s own Google account', () => {
+    afterEach(() => { vi.unstubAllEnvs(); });
+
+    it('is used only when asked (SCRATCHBOX_GOOGLE_ADC=1 with a project), never in place of a key file', () => {
+        vi.stubEnv('GOOGLE_SERVICE_ACCOUNT_JSON', '');
+        vi.stubEnv('GOOGLE_CLOUD_PROJECT', 'scoutscan');
+        vi.stubEnv('SCRATCHBOX_GOOGLE_ADC', '');
+        expect(new GeminiClient({ serviceAccountCandidatePaths: [] }).ensureAuth()).toBe(false);
+        vi.stubEnv('SCRATCHBOX_GOOGLE_ADC', '1');
+        const client = new GeminiClient({ serviceAccountCandidatePaths: [] });
+        expect(client.ensureAuth()).toBe(true);
+        expect(client.cachedProjectId).toBe('scoutscan');
+        expect(client.cachedServiceAccountPath).toBeUndefined();
+        vi.stubEnv('GOOGLE_CLOUD_PROJECT', '');
+        expect(new GeminiClient({ serviceAccountCandidatePaths: [] }).ensureAuth()).toBe(false);
     });
 });
