@@ -15,7 +15,7 @@ import { promisify } from 'util';
 import { SurveySynthesisEngine, cameraBasis } from '../../common/spatial/SurveySynthesisEngine';
 import type { ColmapCameraPose, GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-types';
 import { SurveyStationRenderService, EMPTY_DEPTH } from './SurveyStationRenderService';
-import { BeautifyStationService, createDefaultStationImageGenerator, describeStationImageSource, type StationImageGenerator, type BeautifyStationResult } from './BeautifyStationService';
+import { BeautifyStationService, createDefaultStationImageGenerator, describeStationImageSource, isNoImageAnswer, STATION_EMPTY_IMAGE_ATTEMPTS, warpCoverage, type StationImageGenerator, type BeautifyStationResult, type GroundingPhoto } from './BeautifyStationService';
 import type { StationBeautifyContext } from '../../browser/generative-canvas/services/location-beautify-service';
 import { Splat3DTilesService } from './Splat3DTilesService';
 import { SplatService } from '../3d-engine/splat-service';
@@ -25,8 +25,22 @@ import { decodePng, calibrateStoneAlbedoRgba, type StoneAlbedoPreset } from '../
 import type { TileSunSpec } from '../3d-engine/native-tile-path-tracer-service';
 import type { Scene3DData, Media4DObject } from '../../browser/generative-canvas/canvas-types';
 import { buildNativeIfStale } from '../3d-engine/native-build';
+import { repoPath } from '../process/repo-python';
+import { containSplatsToScan, type ContainmentReport } from './splat-containment';
+import { glbRaycaster } from './street-view-stations';
+
+/** Street stations' incidence floor: a camera 2.5 m up sees the street ground at 0.06 out to about 40 m. */
+export const STREET_MIN_COS_INCIDENCE = 0.06;
 
 const execAsync = promisify(exec);
+
+/** Whether a plate's recorded camera (`<station>_plate.json`) is this station's: within 5 cm and about 0.25 degrees. */
+function samePose(plate: { eye?: number[]; forward?: number[] } | null, st: ColmapCameraPose): boolean {
+    if (!plate?.eye || !plate.forward) return false;
+    const e = st.positionLocalENU, f = st.forwardVector;
+    return Math.hypot(plate.eye[0] - e[0], plate.eye[1] - e[1], plate.eye[2] - e[2]) < 0.05
+        && plate.forward[0] * f[0] + plate.forward[1] * f[1] + plate.forward[2] * f[2] > 0.99999;
+}
 
 /** Throws the signal's reason (or an AbortError) once the caller has stopped the run. */
 function throwIfStopped(signal?: AbortSignal): void {
@@ -39,6 +53,17 @@ export interface SurveySplatPipelineRequest {
     anchor: GeodeticAnchor;
     /** Stations to process (already enriched or not; they are re-enriched against the GLB). */
     stations: ColmapCameraPose[];
+    /**
+     * Street-level stations posed by registered Street View photographs (planStreetViewStations). They run before
+     * `stations` and are never ranked out: each beautifies its own photograph (in memory only, the Street View seed
+     * prompt) instead of the blockout, and is first in the fuse list, so the fuser's exposure target and the chain's
+     * first reference are a street view. Their ids must not repeat a station's.
+     */
+    streetStations?: Array<{ station: ColmapCameraPose; photo: GroundingPhoto }>;
+    /** Street stations' floor on |n.view| when baking (default STREET_MIN_COS_INCIDENCE): they see the ground grazing. */
+    streetMinCosIncidence?: number;
+    /** Drop fused splats outside the scan's ground and building hulls before tiling (containSplatsToScan). */
+    containToScan?: boolean;
     outDir: string;
     beautify: StationBeautifyContext;
     /** 'chained' warps each accepted image into the next station (consistent materials); 'fanout' beautifies independently. */
@@ -138,6 +163,11 @@ export interface SurveySplatStationReport {
     modelUsed?: string;
     /** Where the picture came from: the model (and why, when it was not the requested one) or the reused plate. */
     imageSource?: string;
+    /** A street station: the Street View pano its picture was transformed from, and its capture month. */
+    groundingPanoId?: string;
+    groundingDate?: string;
+    /** A street station kept although its picture failed the geometry check against the scan: the check's reason. */
+    scanMismatch?: string;
 }
 
 export interface SurveySplatPipelineResult {
@@ -166,7 +196,8 @@ export type ProgressReporter = (progress: number, message?: string) => void;
  */
 export class SurveySplatPipelineService {
     private compiler = new NativeCppCompilerService();
-    private bakerPath = path.resolve(process.cwd(), 'build/station_to_splats');
+    // the repository's, not the process's: the app's server runs from desktop-app/
+    private bakerPath = repoPath('build', 'station_to_splats');
 
     /** The caller's generator, else the default image model, which resolves its credentials only when a station needs a new image. */
     private readonly generator: StationImageGenerator;
@@ -176,7 +207,7 @@ export class SurveySplatPipelineService {
     }
 
     async ensureBaker(signal?: AbortSignal): Promise<string> {
-        const src = path.resolve(process.cwd(), 'scripts/station_to_splats.cpp');
+        const src = repoPath('scripts', 'station_to_splats.cpp');
         throwIfStopped(signal);
         return buildNativeIfStale({ source: src, binary: this.bakerPath, includeDir: this.compiler.getSdkIncludePath(), libs: ['-lz'] });
     }
@@ -199,6 +230,10 @@ export class SurveySplatPipelineService {
             const engine = new SurveySynthesisEngine();
             let stations = renderer.enrichStations(req.stations, { isoDate: req.isoDate });
             if (req.maxStations && req.maxStations < stations.length) stations = engine.rankForBeautify(stations, { maxCount: req.maxStations });
+            const street = req.streetStations ?? [];
+            const photoOf = new Map<number, GroundingPhoto>(street.map(s => [s.station.id, s.photo]));
+            if (photoOf.size !== street.length || stations.some(st => photoOf.has(st.id))) throw new Error('street station ids must be unique and apart from the survey stations\'');
+            stations = [...renderer.enrichStations(street.map(s => s.station), { isoDate: req.isoDate }), ...stations];
             const mode = req.mode ?? 'chained';
             const width = req.renderWidth ?? 1920;
             const baker = await this.ensureBaker(signal);
@@ -212,11 +247,16 @@ export class SurveySplatPipelineService {
             // One station end to end: reuse or beautify its plate, then bake it. In chained mode each station is
             // conditioned on the previous accepted one, so they run in order; in fanout mode they are independent
             // and run several at a time (the image calls overlap; the bake is a native subprocess per station).
-            const runStation = async (i: number, signal: AbortSignal | undefined): Promise<{ localReports: SurveySplatStationReport[]; localBaked: { splatPath: string; station: ColmapCameraPose }[] }> => {
+            // A street station beautifies its own photograph, never the chain's reference, so street stations run
+            // several at a time in either mode; `accepted` hands the chain its first reference.
+            // `ref`: this station's own chained reference (a street view it is anchored on), in place of the running chain's.
+            const runStation = async (i: number, signal: AbortSignal | undefined, ref?: BeautifyStationResult): Promise<{ localReports: SurveySplatStationReport[]; localBaked: { splatPath: string; station: ColmapCameraPose }[]; accepted?: BeautifyStationResult }> => {
                 throwIfStopped(signal);
                 const localReports: SurveySplatStationReport[] = [];
                 const localBaked: { splatPath: string; station: ColmapCameraPose }[] = [];
                 const st = stations[i];
+                const photo = photoOf.get(st.id);
+                const grounding = photo ? { groundingPanoId: photo.panoId, ...(photo.date ? { groundingDate: photo.date } : {}) } : {};
                 const base = path.join(stationsDir, `station_${String(st.id).padStart(3, '0')}`);
                 const splatPath = `${base}.splat`;
                 const posePath = `${base}.pose.json`;
@@ -230,14 +270,17 @@ export class SurveySplatPipelineService {
                 // QC against this mesh that a fresh image gets; one that fails is moved aside, never baked.
                 let res: BeautifyStationResult | undefined;
                 let reuseNote: string | undefined;
-                if (!req.forceRebake && (await fs.pathExists(beautifiedPath))) {
+                // a street plate skips the geometry check, so it is reused only for the camera it was made for
+                const platePath = `${base}_plate.json`;
+                const plateFitsStation = !photo || samePose(await fs.readJson(platePath).catch(() => null), st);
+                if (!req.forceRebake && plateFitsStation && (await fs.pathExists(beautifiedPath))) {
                     report(0.05 + 0.7 * (i / stations.length), `Checking the beautified image already on disk for station ${st.id} (${i + 1}/${stations.length})`);
                     const imagePng = await fs.readFile(beautifiedPath);
                     const dec = decodePng(imagePng);
                     const blockout = renderer.renderStationBlockout(st, { width: dec.width, height: dec.height });
                     await fs.outputFile(blockoutPath, blockout.png);
-                    const verified = BeautifyStationService.verifyStationImage(renderer, st, blockout, dec.rgba, dec.width, dec.height, req.draft ? { maxIterations: 0 } : undefined);
-                    if (verified.qc.passed) {
+                    const verified = BeautifyStationService.verifyStationImage(renderer, st, blockout, dec.rgba, dec.width, dec.height, req.draft || photo ? { maxIterations: 0 } : undefined);
+                    if (verified.qc.passed || photo) {
                         const stStat = await fs.stat(splatPath).catch(() => null);
                         const bStat = await fs.stat(beautifiedPath);
                         if (stStat && stStat.size > 100000 && fs.existsSync(posePath) && stStat.mtimeMs >= bStat.mtimeMs) {
@@ -253,7 +296,10 @@ export class SurveySplatPipelineService {
                                 positionLocalENU: posENU,
                                 forwardVector: fwdVec,
                                 name: st.name,
-                                imageSource: `Reused the station splat already on disk at ${splatPath}, after its beautified plate passed geometry QC again (${pctOf(verified.qc)}); no image was generated.`
+                                imageSource: photo
+                                    ? `Reused the street station splat already on disk at ${splatPath} (kept whatever its match with the scan, ${pctOf(verified.qc)}); no image was generated.`
+                                    : `Reused the station splat already on disk at ${splatPath}, after its beautified plate passed geometry QC again (${pctOf(verified.qc)}); no image was generated.`,
+                                ...grounding
                             });
                             localBaked.push({ splatPath, station: { ...st, positionLocalENU: posENU, forwardVector: fwdVec } });
                             return { localReports, localBaked };
@@ -284,9 +330,11 @@ export class SurveySplatPipelineService {
                     generatedAny = true;
                     report(0.05 + 0.7 * (i / stations.length), `Beautifying station ${st.id} (${i + 1}/${stations.length})`);
                     const stationRenderMode = req.renderMode ?? (req.renderProvider === 'pathtracer' ? 'albedo' : 'clay');
-                    res = await beautifier.beautify(st, req.beautify, {
+                    const beautifyOnce = () => beautifier.beautify(st, req.beautify, {
                         width,
-                        reference: mode === 'chained' ? reference : undefined,
+                        reference: mode === 'chained' ? (ref ?? reference) : undefined,
+                        // a street station is stitched in whether or not its photograph agrees with the scan
+                        ...(photo ? { groundingPhoto: photo, acceptUnmatched: true } : {}),
                         maxRerolls: req.maxRerolls,
                         draft: req.draft,
                         renderMode: stationRenderMode,
@@ -294,10 +342,32 @@ export class SurveySplatPipelineService {
                         stoneType: req.stoneType,
                         signal
                     });
+                    // An image model that answers with no image (an empty STOP, a blocked prompt) fails this one station:
+                    // it is asked once more, then left out and reported. A model that cannot be reached at all still ends the run.
+                    let noImage: string | undefined;
+                    for (let attempt = 0; attempt < STATION_EMPTY_IMAGE_ATTEMPTS && !res; attempt++) {
+                        try {
+                            res = await beautifyOnce();
+                        } catch (err) {
+                            if (signal?.aborted || !isNoImageAnswer(err)) throw err;
+                            noImage = err.message;
+                        }
+                    }
                     throwIfStopped(signal);
+                    if (!res) {
+                        const reason = `no image after ${STATION_EMPTY_IMAGE_ATTEMPTS} attempts (${noImage})`;
+                        localReports.push({
+                            stationId: st.id, accepted: false, attempts: STATION_EMPTY_IMAGE_ATTEMPTS, usedReference: false, splatCount: 0, imagePath: '', blockoutPath,
+                            qc: { overlapPercent: 0, residualPx: Number.NaN, deltaYawDeg: Number.NaN, deltaPitchDeg: Number.NaN, deltaPositionM: Number.NaN, passed: false, reason },
+                            prompt: '', positionLocalENU: st.positionLocalENU, forwardVector: st.forwardVector, name: st.name,
+                            imageSource: `The ${this.generator.name} generator gave no image: ${reason}.`, ...grounding
+                        });
+                        return { localReports, localBaked };
+                    }
                     await fs.outputFile(blockoutPath, res.blockout.png);
                     if (res.accepted) {
                         await fs.outputFile(beautifiedPath, res.imagePng);
+                        await fs.writeJson(platePath, { eye: st.positionLocalENU, forward: st.forwardVector, ...(photo ? { panoId: photo.panoId } : {}) });
                         await fs.remove(rejectedPath);
                     } else {
                         // A rejected image is kept for inspection under its own name, never as the station's plate.
@@ -314,29 +384,50 @@ export class SurveySplatPipelineService {
                     forwardVector: res.alignedStation.forwardVector || st.forwardVector,
                     name: st.name,
                     modelUsed: res.modelUsed,
-                    imageSource: reuseNote ?? describeStationImageSource(res)
+                    imageSource: reuseNote ?? describeStationImageSource(res),
+                    ...grounding,
+                    ...(photo && !res.qc.passed ? { scanMismatch: res.qc.reason ?? 'the photograph and the scan disagree' } : {})
                 };
                 if (res.accepted) {
                     throwIfStopped(signal);
-                    const baked = await this.bakeStation(baker, res, `${base}.splat`, req);
+                    // a street camera 2.5 m up sees the ground beyond ~12 m at a grazing angle: kept for it (elongation stays capped),
+                    // or the street it stands on is a hole in the world
+                    const baked = await this.bakeStation(baker, res, `${base}.splat`, photo ? { ...req, minCosIncidence: req.streetMinCosIncidence ?? STREET_MIN_COS_INCIDENCE } : req);
                     rep.splatCount = baked.splatCount;
                     rep.splatPath = baked.splatPath;
                     localBaked.push({ splatPath: baked.splatPath, station: res.alignedStation });
-                    if (mode === 'chained') reference = res;
+                    if (mode === 'chained' && !photo) reference = res;
                 }
                 localReports.push(rep);
-                return { localReports, localBaked };
+                return { localReports, localBaked, ...(res.accepted ? { accepted: res } : {}) };
             };
+            const limit = Math.max(1, req.fanoutConcurrency ?? 4);
+            const runBounded = (from: number, to: number) => mapBounded(stations.slice(from, to).map((_, k) => from + k), (i, _k, stationSignal) => runStation(i, stationSignal), { limit, signal });
             const outcomes = mode === 'chained'
                 ? await (async () => {
-                    const seq: Awaited<ReturnType<typeof runStation>>[] = [];
-                    for (let i = 0; i < stations.length; i++) seq.push(await runStation(i, signal));
+                    const seq: Awaited<ReturnType<typeof runStation>>[] = street.length ? await runBounded(0, street.length) : [];
+                    const anchors = seq.map(o => o.accepted).filter((a): a is BeautifyStationResult => !!a);
+                    if (!anchors.length) {
+                        for (let i = street.length; i < stations.length; i++) seq.push(await runStation(i, signal));
+                        return seq;
+                    }
+                    // Anchored on the street views: each survey station takes as its reference the accepted street view
+                    // that covers most of its frame, warped into it, instead of the station before it. The survey
+                    // stations then depend on no other survey station, so they run several at a time too.
+                    const anchorFor = (st: ColmapCameraPose): BeautifyStationResult => {
+                        const w = 240, h = Math.round(w / (st.aspectRatio && st.aspectRatio > 0 ? st.aspectRatio : 16 / 9));
+                        const { intrinsics } = SurveyStationRenderService.stationToCameraPose6DOF(st, w, h);
+                        let best = anchors[0], bestCover = -1;
+                        for (const a of anchors) {
+                            const cover = warpCoverage({ depth: a.blockout.depth, width: a.blockout.width, height: a.blockout.height, intrinsics: a.blockout.intrinsics, station: a.alignedStation }, { intrinsics, station: st, width: w, height: h });
+                            if (cover > bestCover) { best = a; bestCover = cover; }
+                        }
+                        return best;
+                    };
+                    seq.push(...await mapBounded(stations.slice(street.length).map((_, k) => street.length + k), (i, _k, stationSignal) => runStation(i, stationSignal, anchorFor(stations[i])), { limit, signal }));
                     return seq;
                 })()
-                : await mapBounded(stations.map((_, i) => i), (i, _k, stationSignal) => runStation(i, stationSignal), {
-                    limit: Math.max(1, req.fanoutConcurrency ?? 4),
-                    signal
-                });
+                : await runBounded(0, stations.length);
             for (const outcome of outcomes) {
                 reports.push(...outcome.localReports);
                 bakedStations.push(...outcome.localBaked);
@@ -368,7 +459,17 @@ export class SurveySplatPipelineService {
             const { stdout: fuseStdout } = await execAsync(fuseCmd, { maxBuffer: 16 * 1024 * 1024, signal });
             const fuseRes = JSON.parse(fuseStdout.trim());
             await fs.remove(listPath).catch(() => {});
-            const fusedCount = fuseRes.fusedSplatCount ?? 0;
+            let fusedCount = fuseRes.fusedSplatCount ?? 0;
+            // kept inside the scan's ground and building hulls (splat-containment.ts)
+            let containment: ContainmentReport | undefined;
+            if (req.containToScan) {
+                throwIfStopped(signal);
+                report(0.84, 'Containing the splats to the ground and the building hulls');
+                const contained = containSplatsToScan(await fs.readFile(fusedSplatPath), glbRaycaster(req.glbPath, { lat: req.anchor.lat, lng: req.anchor.lng, heightMeters: req.anchor.elevationMeters }));
+                await fs.writeFile(fusedSplatPath, contained.kept);
+                containment = contained.report;
+                fusedCount = contained.report.kept;
+            }
 
             throwIfStopped(signal);
             report(0.88, 'Tiling');
@@ -397,7 +498,7 @@ export class SurveySplatPipelineService {
                 modelsUsed: Array.from(new Set(reports.map(r => r.modelUsed).filter((m): m is string => !!m))),
                 mode, anchor: req.anchor, glbPath: req.glbPath,
                 eyeHeight: stations[0]?.cameraHeightAboveGround ?? 1.7,
-                cropBox, fusedSplatCount: fusedCount, voxelSizeMeters: voxel,
+                cropBox, fusedSplatCount: fusedCount, voxelSizeMeters: voxel, ...(containment ? { containment } : {}),
                 stations: reports, tiles: { tileCount: tileRes.tileCount, levels: tileRes.levels, tileBytes: tileRes.tileBytes },
                 createdAt: new Date().toISOString()
             };
@@ -541,17 +642,17 @@ export class SurveySplatPipelineService {
     }
 
     /**
-     * Converts a local file path to a web URL serving from public or file://
+     * A file under the served `public/` folder as its web path; a URL or a web path as given; anything else as file://.
+     * An absolute file path is a file, not a web path: the pipeline's outputs are absolute and must reach the viewer as
+     * /tilesets/..., never as /Users/....
      */
     public static toWebUrl(filePath: string): string {
         if (!filePath) return '';
-        if (filePath.startsWith('http://') || filePath.startsWith('https://') || filePath.startsWith('/')) {
-            return filePath;
-        }
-        const rel = path.relative(path.resolve(process.cwd(), 'public'), filePath);
-        if (!rel.startsWith('..')) {
-            return `/${rel.replace(/\\/g, '/')}`;
-        }
+        if (filePath.startsWith('http://') || filePath.startsWith('https://')) return filePath;
+        const rel = path.relative(path.resolve(process.cwd(), 'public'), path.resolve(filePath));
+        if (!rel.startsWith('..') && !path.isAbsolute(rel)) return `/${rel.replace(/\\/g, '/')}`;
+        // a web path already (e.g. /tilesets/x/fused.splat), not a file on this machine
+        if (filePath.startsWith('/') && !fs.existsSync(filePath)) return filePath;
         return `file://${filePath}`;
     }
 
@@ -566,11 +667,19 @@ export class SurveySplatPipelineService {
             splatScale?: number;
             contactShadow?: boolean;
             enableSoftZ?: boolean;
+            /**
+             * Where a viewer stands (the splat frame) and the compass heading they look along: the scene opens there in
+             * first-person (walk) mode instead of orbiting the place from above.
+             */
+            vantage?: { eye: [number, number, number]; headingDeg: number };
         } = {}
     ): { scene3DData: Scene3DData; splatMediaObject: Media4DObject } {
         const splatUrl = SurveySplatPipelineService.toWebUrl(result.fusedSplatPath);
         const tilesetUrl = SurveySplatPipelineService.toWebUrl(result.tilesetPath);
         const sceneSlug = locationName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        const vantage = options.vantage;
+        // the look direction on the ground (x east, z south): heading clockwise from north
+        const look: [number, number] = vantage ? [Math.sin(vantage.headingDeg * Math.PI / 180), -Math.cos(vantage.headingDeg * Math.PI / 180)] : [0, 0];
 
         const splatMediaObject: Media4DObject = {
             id: `${sceneSlug}-3dgs`,
@@ -613,8 +722,8 @@ export class SurveySplatPipelineService {
             worldBranch: `splat-world/${sceneSlug}`,
             sceneType: 'gaussian_splat',
             renderMode: 'pbr',
-            cameraMode: 'orbit',
-            animation: 'orbit',
+            cameraMode: vantage ? 'fps' : 'orbit',
+            animation: vantage ? 'idle' : 'orbit',
             splatUrl,
             splatTilesetUrl: tilesetUrl,
             splatOptions: {
@@ -631,21 +740,22 @@ export class SurveySplatPipelineService {
                 playbackSpeed: 1.0,
                 isLooping: true
             },
-            camera: {
-                position: [0, 20, 45],
-                target: [0, 2, 0],
-                fov: 45
-            },
+            camera: vantage
+                ? { position: vantage.eye, target: [vantage.eye[0] + 20 * look[0], vantage.eye[1], vantage.eye[2] + 20 * look[1]], fov: 60, keepPoseOnLoad: true }
+                : { position: [0, 20, 45], target: [0, 2, 0], fov: 45 },
+            // no uninvited atmosphere (AGENTS.md 3.6): the splat carries its own (even) light, the scene is a neutral studio
             environment: {
-                skybox: 'golden_hour',
-                lighting: 'golden_hour',
+                skybox: 'studio',
+                lighting: 'studio',
                 ground: false
             },
             geoAnchor: {
                 lat: anchor.lat,
                 lng: anchor.lng,
                 elevation: anchor.elevationMeters,
-                active: true,
+                // the splat is the world (built from these tiles): live tiles streamed around it would cover it with
+                // their coarser copy of the same place, so the place is kept for reference, not streamed
+                active: false,
                 landmarkName: locationName
             },
             customMeshes: [],
