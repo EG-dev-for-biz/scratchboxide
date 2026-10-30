@@ -41,7 +41,7 @@ import { outsideFootprint, signedFootprintDistance } from './base-cleanup';
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor } from '../glb-bytes';
 import type { FacadeLatticeResult, ReliefFacade } from '../facade-lattice';
 
-export const LATTICE_STITCH_VERSION = 'lattice-stitch/18';
+export const LATTICE_STITCH_VERSION = 'lattice-stitch/19';
 
 export const LATTICE_STITCH_PARAMS = {
     /** The slab of a rebuilt facade cut from the scan: within this of its plane (m). */
