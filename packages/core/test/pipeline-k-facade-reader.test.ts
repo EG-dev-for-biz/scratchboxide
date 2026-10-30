@@ -20,6 +20,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { FACADE_READER_PARAMS, FACADE_READER_VERSION, luminanceOf, mergeReadings, parseJudgement, parseReading, parseZones, readFacade, readPlanes, tileZone, type FacadeAsk, type FacadePhoto } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
+import { contextFor, parseBrief, planePlaces } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader-brief';
+import { exemplarOf, matchExemplar } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader-template';
 
 // a 30 m x 60 m facade at 0.1 m a pixel: 5 bays, each two windows 12 px wide, storeys every 38.4 px, windows 22 px tall;
 // its top 6 m never reached by the photo
@@ -216,7 +218,7 @@ describe('pipeline K facade reader (vision agent)', () => {
                     return await ask(png, prompt, kind, region);
                 } finally { inFlight--; events.push(`${isNarrow ? 'narrow' : 'wide'}:${kind}`); }
             };
-            const r = await readPlanes(dir, timed, { params: { ...FACADE_READER_PARAMS, concurrency: 2 } });
+            const r = await readPlanes(dir, timed, { params: { ...FACADE_READER_PARAMS, concurrency: 2, brief: false } });
             expect(maxInFlight).toBe(2);
             // the narrow face's reading came back while the wide wall was still being read; its judge only after the wide wall
             expect(events.indexOf('narrow:read')).toBeLessThan(events.lastIndexOf('wide:judge'));
@@ -225,6 +227,69 @@ describe('pipeline K facade reader (vision agent)', () => {
             const z = r.records.facades.find(f => f.facadeId === 8)!.zones!.find(x => x.outcome === 'drawn')!;
             expect(z.fit!.guided).toBe(true);
             expect(Math.abs(z.fit!.pitchPx - PITCH)).toBeLessThan(0.6);
+        } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    it('reads the brief: cells mapped to their planes (an unknown or repeated cell dropped), and tells a reading its family and place', () => {
+        const cells = [{ cell: 'r1c1', facadeId: 7 }, { cell: 'r1c2', facadeId: 8 }, { cell: 'r2c1', facadeId: 9 }];
+        const b = parseBrief('x {"building":"A stepped Art Deco tower in limestone","families":[{"name":"shaft","cells":["R1C1","r1c2","r9c9"],"openings":"paired one-over-one windows","storeyM":3.8},{"name":"crown","cells":["r1c2","r2c1"]}],"conf":80} y', cells);
+        expect(b.families).toEqual([{ name: 'shaft', planes: [7, 8], openings: 'paired one-over-one windows', storeyM: 3.8 }, { name: 'crown', planes: [9] }]);
+        expect(() => parseBrief('{"families":[]}', cells)).toThrow();
+        const places = planePlaces([
+            { facadeId: 7, image: 'a', width: 300, height: 600, pixel: 0.1, centroid: [0, 40, 0], normal: [1, 0, 0], axisT: [0, 1, 0], tMin: -30, tMax: 30 },
+            { facadeId: 8, image: 'b', width: 300, height: 600, pixel: 0.1, centroid: [0, 70, 0], normal: [0, 0, -1], axisT: [0, 1, 0], tMin: -30, tMax: 30 }
+        ]);
+        expect(places.get(7)).toMatchObject({ kind: 'wall', bearingDeg: 90, widthM: 30, heightM: 60, bottomM: 0, topM: 60 });
+        expect(places.get(8)).toMatchObject({ bearingDeg: 0, bottomM: 30, topM: 90 });
+        const told = contextFor(b, places.get(8), b.families[0]);
+        expect(told).toContain('A stepped Art Deco tower');
+        expect(told).toContain('facing north');
+        expect(told).toContain('"shaft" (2 planes), whose openings are: paired one-over-one windows; storeys about 3.8 m');
+    });
+
+    it("finds a family's window again on a darker photo of the same wall, every one of them, and nothing on a blank wall", () => {
+        const a = luminanceOf(facade()), dark = luminanceOf(facade(40, 120));
+        const ex = exemplarOf({ L: a, W, H, pixel: PIXEL }, [cols[4][0], PHASE + 6 * PITCH, cols[4][1], PHASE + 6 * PITCH + WIN_H], 2, 7, 'shaft')!;
+        expect(ex).toBeDefined();
+        const found = matchExemplar({ L: dark, W, H, pixel: PIXEL }, ex);
+        const truth = cols.flatMap(([x0, x1]) => Array.from({ length: 20 }, (_, k) => [x0, PHASE + k * PITCH, x1, PHASE + k * PITCH + WIN_H]).filter(r => r[1] >= GREY_ROWS + 6 && r[3] <= H - 6));
+        // every covered window (away from the grey top and the edges) found within 2 px, and nothing that is not one
+        for (const t of truth) expect(found.some(m => Math.abs(m.rect[0] - t[0]) <= 2 && Math.abs(m.rect[1] - t[1]) <= 2)).toBe(true);
+        for (const m of found) expect(truth.some(t => Math.abs(m.rect[0] - t[0]) <= 3 && Math.abs(m.rect[1] - t[1]) <= 3) || m.rect[1] < GREY_ROWS + 8 || m.rect[3] > H - 8).toBe(true);
+        const blank = luminanceOf(facade(190, 190));
+        expect(matchExemplar({ L: blank, W, H, pixel: PIXEL }, ex)).toEqual([]);
+    });
+
+    it("reads a family's lead and draws its sibling from the lead's window with one judge call, told the building", async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'facade-reader-family-'));
+        try {
+            fs.writeFileSync(path.join(dir, 'f7.png'), encodePng(W, H, Uint8Array.from(facade().rgba), 4));
+            fs.writeFileSync(path.join(dir, 'f8.png'), encodePng(W, H, Uint8Array.from(facade(45, 150).rgba), 4));
+            const geo = { centroid: [0, 30, 0], axisT: [0, 1, 0], tMin: -30, tMax: 30 };
+            fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify({ facades: [{ ...frame, ...geo, normal: [0, 0, 1] }, { ...frame, ...geo, facadeId: 8, image: 'f8.png', coverage: 0.85, normal: [1, 0, 0] }] }));
+            const { ask } = standIn();
+            const calls: string[] = [], prompts: string[] = [];
+            const withBrief: FacadeAsk = async (png, prompt, kind, region) => {
+                calls.push(kind); prompts.push(prompt);
+                if (kind === 'brief') return JSON.stringify({ building: 'A limestone office tower of punched windows', families: [{ name: 'office floors', cells: ['r1c1', 'r1c2'], openings: 'pairs of single windows in each bay' }], conf: 80 });
+                return ask(png, prompt, kind as 'overview' | 'read' | 'judge', region);
+            };
+            const r = await readPlanes(dir, withBrief);
+            expect(calls).toEqual(['brief', 'overview', 'read', 'judge', 'judge']);
+            // the lead's overview and reading were told the building and its family; the judge was not
+            expect(prompts[1]).toContain('A limestone office tower');
+            expect(prompts[2]).toContain('"office floors"');
+            expect(prompts[3]).not.toContain('Building context');
+            const sib = r.records.facades.find(f => f.facadeId === 8)!;
+            expect(sib.outcome).toBe('replaced');
+            expect(sib.family).toBe('office floors');
+            expect(sib.zones![0].template).toMatchObject({ fromPlane: 7 });
+            const lead = r.records.readings.find(x => x.facadeId === 7)!, drawn = r.records.readings.find(x => x.facadeId === 8)!;
+            // the sibling's windows where the lead's are, give or take the template's 2 px
+            expect(drawn.rects.length).toBeGreaterThanOrEqual(lead.rects.length - cols.length);
+            for (const rr of drawn.rects) expect(lead.rects.some(l => Math.abs(l[0] - rr[0]) <= 4 && Math.abs(l[1] - rr[1]) <= 4)).toBe(true);
+            expect(drawn.panes.length).toBe(2 * drawn.rects.length);
+            expect((r.records.brief as any).families[0].planes).toEqual([7, 8]);
         } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     });
 

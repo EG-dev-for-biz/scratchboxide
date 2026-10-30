@@ -766,6 +766,38 @@ export function writeMaterialRegions(json: any, plan: MaterialRegionsPlan, addTe
     }
 }
 
+/**
+ * The appearance classes as a picture, for a vision model to name them (material-naming.ts): one row a class, up to
+ * `perClass` patches of the harmonised rebuilt facade photos where that class covers most of the patch (each texel given
+ * to its nearest class, as the classes were read), scaled up `zoom` times, on white. The rows follow `classes`' order.
+ */
+export function classSwatchSheet(json: any, images: Map<number, RgbaImage8>, classes: RegionClass[], opts: { patch?: number; perClass?: number; zoom?: number; seed?: number } = {}): { width: number; height: number; rgba: Uint8Array } | undefined {
+    const patch = opts.patch ?? 24, per = opts.perClass ?? 6, zoom = opts.zoom ?? 4, gap = 8;
+    const { rebuilt } = photoMaterials(json);
+    const photos = [...rebuilt.keys()].map(mi => images.get(photoOf(json, mi)!.image)).filter((x): x is RgbaImage8 => !!x && x.width > patch && x.height > patch);
+    if (!photos.length || !classes.length) return undefined;
+    const nearest = (r: number, g: number, b: number) => { const L = labOf(r, g, b); let best = 0, bd = Infinity; classes.forEach((c, k) => { const d = (L[0] - c.meanLab[0]) ** 2 + (L[1] - c.meanLab[1]) ** 2 + (L[2] - c.meanLab[2]) ** 2; if (d < bd) { bd = d; best = k; } }); return best; };
+    const found: Array<Array<{ img: RgbaImage8; x: number; y: number }>> = classes.map(() => []);
+    const rnd = sampler(opts.seed ?? 11);
+    for (let tries = 0; tries < 4000 && found.some(f => f.length < per); tries++) {
+        const img = photos[tries % photos.length], x = Math.floor(rnd() * (img.width - patch)), y = Math.floor(rnd() * (img.height - patch));
+        const count = new Array<number>(classes.length).fill(0);
+        let covered = 0;
+        for (let yy = y; yy < y + patch; yy += 2) for (let xx = x; xx < x + patch; xx += 2) { const q = (yy * img.width + xx) * 4; if (!img.rgba[q + 3]) continue; covered++; count[nearest(img.rgba[q], img.rgba[q + 1], img.rgba[q + 2])]++; }
+        if (covered < 0.9 * (patch / 2) ** 2) continue;
+        const k = count.indexOf(Math.max(...count));
+        if (count[k] >= 0.7 * covered && found[k].length < per) found[k].push({ img, x, y });
+    }
+    const cell = patch * zoom, W = per * (cell + gap) + gap, H = classes.length * (cell + gap) + gap, out = new Uint8Array(W * H * 4).fill(255);
+    found.forEach((row, r) => row.forEach((p, c) => {
+        for (let y = 0; y < cell; y++) for (let x = 0; x < cell; x++) {
+            const sq = ((p.y + Math.floor(y / zoom)) * p.img.width + p.x + Math.floor(x / zoom)) * 4, dq = ((gap + r * (cell + gap) + y) * W + gap + c * (cell + gap) + x) * 4;
+            out[dq] = p.img.rgba[sq]; out[dq + 1] = p.img.rgba[sq + 1]; out[dq + 2] = p.img.rgba[sq + 2]; out[dq + 3] = 255;
+        }
+    }));
+    return { width: W, height: H, rgba: out };
+}
+
 /** One line for the build's notes. */
 export function describeMaterialRegions(r: MaterialRegionsReport): string {
     const pct = (a: number) => r.texels.total ? `${Math.round((100 * a) / r.texels.total)}%` : '0%';
