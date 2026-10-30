@@ -3840,7 +3840,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     else {
                         try {
                             io.progress('pipeline K: straightening the facade photos');
-                            const k = await timed('pipelineK', () => rectifyReliefOrthos(r.reliefOrthosDir!, { signal: io.signal, ...(cpuShare ? { threads: cpuShare.threads } : {}) }));
+                            // the facades' small holes no real source covers: inpainted by the image model when the build has one
+                            // (capped per build, pipeline-k.ts HOLE_INPAINT); SCRATCHBOX_K_HOLE_INPAINT=0 off
+                            const holeInpaint = deps.textures?.enhance && process.env.SCRATCHBOX_K_HOLE_INPAINT?.trim() !== '0' ? { client: deps.textures.enhance, models: [LIGHTING_MODEL_LITE] } : undefined;
+                            const k = await timed('pipelineK', () => rectifyReliefOrthos(r.reliefOrthosDir!, { signal: io.signal, ...(cpuShare ? { threads: cpuShare.threads } : {}), ...(holeInpaint ? { inpaint: holeInpaint } : {}) }));
                             orthosKey = `${PIPELINE_K_VERSION}:${k.key}`;
                             r = { ...r, reliefOrthosDir: k.orthosDir };
                             cache.writeRunNote(runId, 'pipeline_k', { version: PIPELINE_K_VERSION, orthosDir: k.orthosDir, cached: k.cached, ms: k.ms, reports: k.reports });
