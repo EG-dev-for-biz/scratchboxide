@@ -10,7 +10,7 @@
 /**
  * The 3D viewport's Colour harmony tool: a tool strip button and its panel, anchored beside it like the Weather tool
  * (the same panel styles). A hue wheel to turn the template, template shapes, sector width, strength, saturation and
- * whether the sky and background are graded too. Every change goes through color-harmony.ts mergeColorHarmony, the
+ * tint. Every change goes through color-harmony.ts mergeColorHarmony, the
  * same function sb_set_color_harmony uses; the optics chain draws it (ColorHarmonyPass).
  */
 
@@ -175,11 +175,7 @@ export function ColorHarmonyControl({ sceneData, mutateSceneData }: ColorHarmony
                     {range('Strength', h.strength ?? 1, 1, (v, live) => set({ strength: v }, live), `${Math.round((h.strength ?? 1) * 100)}%`)}
                     {range('Saturation', h.chroma ?? 1, 2, (v, live) => set({ chroma: v }, live), `${Math.round((h.chroma ?? 1) * 100)}%`)}
                     {range('Tint (colours greys and clay)', h.tint ?? 0, 1, (v, live) => set({ tint: v }, live), `${Math.round((h.tint ?? 0) * 100)}%`)}
-                    <label className="sb-cam-row sb-cam-check">
-                        <input type="checkbox" checked={h.includeBackground === true} onChange={e => set({ includeBackground: e.target.checked })} />
-                        <span>Grade the sky and background too</span>
-                    </label>
-                    <div className="sb-cam-note">Keeps lightness, so shading stays. Viewport only: materials are unchanged.</div>
+                    <div className="sb-cam-note">Scene objects only, never the sky. Keeps lightness, so shading stays.</div>
                 </div>
             )}
         </div>

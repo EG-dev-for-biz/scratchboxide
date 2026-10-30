@@ -995,7 +995,7 @@ export interface SceneColorHarmonySector {
  * A colour harmony grade on the viewport (the tool strip's Colour harmony panel, sb_set_color_harmony): every hue drawn
  * moves toward the nearest sector of a template turned to `hueDeg` on the OKLCH hue circle (Cohen-Or et al. 2006), keeping
  * its lightness, so shading and texture stay and only the colour changes. Drawn in linear light before tone mapping, on
- * the scene's objects only unless `includeBackground`. The template is any list of sectors: no named template types.
+ * the scene's objects only: the sky and background are their own component and are never graded. The template is any list of sectors: no named template types.
  */
 export interface SceneColorHarmony {
     /** Where the template is turned, degrees on the OKLCH hue circle (about 30 red, 110 yellow, 145 green, 265 blue). */
@@ -1008,8 +1008,6 @@ export interface SceneColorHarmony {
     chroma?: number;
     /** Colour added at hueDeg, 0-1, scaled by lightness (default 0): what colours neutral surfaces (clay, white, grey), which have no hue to move. */
     tint?: number;
-    /** True grades the sky and background too; default false, the scene's objects only. */
-    includeBackground?: boolean;
 }
 
     objectIds?: string[];

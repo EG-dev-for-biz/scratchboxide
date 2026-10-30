@@ -13,8 +13,7 @@
  * h' = C + (w / 2) (1 - G(|h - C|)) sign(h - C), G a Gaussian of sigma w / 2, so every hue lands inside a sector and
  * hues near the centre move least. Lightness is kept (shading and texture stay); chroma is scaled on its own.
  *
- * The maths here is the reference for ColorHarmonyPass's shader (kept in step with it) and grades the flat background,
- * which the viewport composites after the scene. Pure: no GPU objects.
+ * The maths here is the reference for ColorHarmonyPass's shader (kept in step with it). Pure: no GPU objects.
  */
 
 import type { SceneColorHarmony, SceneColorHarmonySector } from '../../canvas-types';
@@ -42,7 +41,6 @@ export interface ColorHarmonyPlan {
     strength: number;
     chroma: number;
     tint: number;
-    includeBackground: boolean;
 }
 
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -70,7 +68,7 @@ export function planColorHarmony(h: SceneColorHarmony | undefined | null): { har
     const tint = finite(h.tint) ? Math.min(1, Math.max(0, h.tint)) : 0;
     // nothing moves: no pass
     if (strength === 0 && chroma === 1 && tint === 0) return { harmony: null, issues };
-    return { harmony: { hueDeg: wrapDeg(h.hueDeg), sectors, strength, chroma, tint, includeBackground: h.includeBackground === true }, issues };
+    return { harmony: { hueDeg: wrapDeg(h.hueDeg), sectors, strength, chroma, tint }, issues };
 }
 
 /** The harmonised hue (degrees) of hue `hDeg`, before the strength mix. */
@@ -143,7 +141,6 @@ export interface SetColorHarmonyParams {
     strength?: number | null;
     chroma?: number | null;
     tint?: number | null;
-    includeBackground?: boolean | null;
     clear?: boolean;
 }
 
@@ -176,7 +173,5 @@ export function mergeColorHarmony(previous: SceneColorHarmony | undefined, param
     unit('strength', 1);
     unit('chroma', 2);
     unit('tint', 1);
-    if (params.includeBackground === null) delete next.includeBackground;
-    else if (params.includeBackground !== undefined) next.includeBackground = params.includeBackground === true;
     return next;
 }

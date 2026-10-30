@@ -10,9 +10,9 @@
 /**
  * The colour harmony grade (color-harmony.ts, whose maths this shader repeats) as a full-screen pass in the viewport's
  * optics chain, on the scene draw before depth of field and the overlays. Colour is the chain's linear,
- * coverage-premultiplied RGBA: each pixel is un-premultiplied, harmonised in OKLCH and premultiplied again, so a flat
- * background (alpha 0, composited by the output pass) is never touched. Over an opaque background (a sky texture, a
- * cube map, the sky dome) the scene's objects are told apart by depth: the background writes none.
+ * coverage-premultiplied RGBA: each pixel is un-premultiplied, harmonised in OKLCH and premultiplied again. Only the
+ * scene's objects are graded, never the sky, which is its own component: objects are what wrote depth (a sky texture,
+ * cube map or dome writes none), and content that writes no depth either (Gaussian splats) by its drawn coverage.
  */
 
 import * as THREE from 'three';
@@ -31,7 +31,10 @@ const HARMONY_FRAGMENT = /* glsl */ `
 #define TINT_CHROMA ${TINT_CHROMA.toFixed(6)}
 uniform sampler2D tColor;
 uniform sampler2D tDepth;
-uniform bool uUseDepth;
+uniform sampler2D tCoverage;         // alpha: coverage of content that writes no depth (splats)
+uniform bool uUseCoverage;
+uniform sampler2D tDisplay;          // alpha: coverage of content that writes display (sRGB) values, not linear light (splats)
+uniform bool uUseDisplay;
 uniform float uHue;                  // radians
 uniform int uSectorCount;
 uniform vec2 uSectors[MAX_SECTORS];  // (centre offset, width), radians
@@ -87,19 +90,31 @@ float harmonizedHue(float h) {
     return centre + sign(diff) * halfW * (1.0 - g) * ease;
 }
 
-void main() {
-    vec4 c = texture2D(tColor, vUv);
-    // an opaque background writes no depth: only what the scene's geometry covers is graded
-    if (c.a <= 1e-4 || (uUseDepth && texture2D(tDepth, vUv).x >= 1.0)) { gl_FragColor = c; return; }
-    vec3 lab = linearSrgbToOklab(max(c.rgb / c.a, vec3(0.0)));
+vec3 grade(vec3 linear) {
+    vec3 lab = linearSrgbToOklab(max(linear, vec3(0.0)));
     float chroma = length(lab.yz);
     float h = atan(lab.z, lab.y);
     float hNew = h + uStrength * wrapPi(harmonizedHue(h) - h);
     float cNew = chroma * uChroma;
     // the tint: chroma added at the template hue, so a neutral (which has no hue to move) takes the colour too
     vec2 ab = cNew * vec2(cos(hNew), sin(hNew)) + uTint * TINT_CHROMA * clamp(lab.x, 0.0, 1.0) * vec2(cos(uHue), sin(uHue));
-    vec3 rgb = max(oklabToLinearSrgb(vec3(lab.x, ab)), vec3(0.0));
-    gl_FragColor = vec4(rgb * c.a, c.a);
+    return max(oklabToLinearSrgb(vec3(lab.x, ab)), vec3(0.0));
+}
+vec3 srgbToLinear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c)); }
+vec3 linearToSrgb(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
+
+void main() {
+    vec4 c = texture2D(tColor, vUv);
+    // the share of the pixel that is the scene's content, never the sky: geometry that wrote depth, else the coverage of
+    // content that writes none (a splat over the sky grades by its own alpha)
+    float w = texture2D(tDepth, vUv).x < 1.0 ? 1.0 : 0.0;
+    if (uUseCoverage) w = max(w, clamp(texture2D(tCoverage, vUv).a, 0.0, 1.0));
+    if (c.a <= 1e-4 || w <= 0.0) { gl_FragColor = c; return; }
+    vec3 src = max(c.rgb / c.a, vec3(0.0));
+    vec3 rgb = grade(src);
+    // display-valued content (the output leaves it as drawn) is graded in linear light and written back as display values
+    if (uUseDisplay) rgb = mix(rgb, linearToSrgb(grade(srgbToLinear(min(src, vec3(1.0))))), clamp(texture2D(tDisplay, vUv).a, 0.0, 1.0));
+    gl_FragColor = mix(c, vec4(rgb * c.a, c.a), w);
 }`;
 
 export class ColorHarmonyPass {
@@ -111,7 +126,7 @@ export class ColorHarmonyPass {
     constructor() {
         this.material = new THREE.ShaderMaterial({
             uniforms: {
-                tColor: { value: null }, tDepth: { value: null }, uUseDepth: { value: false },
+                tColor: { value: null }, tDepth: { value: null }, tCoverage: { value: null }, uUseCoverage: { value: false }, tDisplay: { value: null }, uUseDisplay: { value: false },
                 uHue: { value: 0 }, uSectorCount: { value: 0 },
                 uSectors: { value: Array.from({ length: MAX_HARMONY_SECTORS }, () => new THREE.Vector2()) },
                 uStrength: { value: 1 }, uChroma: { value: 1 }, uTint: { value: 0 }
@@ -127,15 +142,19 @@ export class ColorHarmonyPass {
     }
 
     /**
-     * Grades `color` into `target`. `depth` is read only with `useDepth` (an opaque background, objects only); without
-     * it every covered pixel is graded.
+     * Grades the scene's objects in `color` into `target`: where `depth` has geometry, and where `coverage`
+     * (depthless-coverage.ts: splats) covers; the sky and background are left as drawn. Where `display` covers (content
+     * whose shader writes display values), the grade is done in linear light and written back as display values.
      */
-    render(renderer: THREE.WebGLRenderer, color: THREE.Texture, depth: THREE.Texture | null, useDepth: boolean, plan: ColorHarmonyPlan, target: THREE.WebGLRenderTarget): void {
+    render(renderer: THREE.WebGLRenderer, color: THREE.Texture, depth: THREE.Texture, plan: ColorHarmonyPlan, target: THREE.WebGLRenderTarget, coverage: THREE.Texture | null = null, display: THREE.Texture | null = null): void {
         const u = this.material.uniforms;
         const rad = Math.PI / 180;
         u.tColor.value = color;
         u.tDepth.value = depth;
-        u.uUseDepth.value = useDepth && !!depth;
+        u.tCoverage.value = coverage;
+        u.uUseCoverage.value = !!coverage;
+        u.tDisplay.value = display;
+        u.uUseDisplay.value = !!display;
         u.uHue.value = plan.hueDeg * rad;
         u.uSectorCount.value = Math.min(plan.sectors.length, MAX_HARMONY_SECTORS);
         (u.uSectors.value as THREE.Vector2[]).forEach((v, i) => {

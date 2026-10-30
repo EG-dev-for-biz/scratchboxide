@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import * as THREE from 'three';
+import { DEPTHLESS_CONTENT_KEY } from '../postprocessing/depthless-coverage';
 import { decodeSpz, isGzip } from '../../../../common/splat-spz-codec';
 import { CameraRelativeRTC } from '../../../../common/coordinate/CameraRelativeRTC';
 import { SplatRadixSorter } from './SplatRadixSorter';
@@ -459,6 +460,8 @@ const PICK_MAX_FOOTPRINT_M = 0.6;
 
     this.splatMesh = new THREE.Mesh(this.splatGeometry, this.splatMaterial);
     this.splatMesh.frustumCulled = false;
+    // writes no depth: post passes that tell objects from the background read its coverage instead (depthless-coverage.ts)
+    this.splatMesh.userData[DEPTHLESS_CONTENT_KEY] = true;
     // The EWA projection works in pixels, so keep the viewport uniform equal to the drawing buffer being rendered.
     const drawingBuffer = new THREE.Vector2();
     this.splatMesh.onBeforeRender = (renderer: THREE.WebGLRenderer) => {

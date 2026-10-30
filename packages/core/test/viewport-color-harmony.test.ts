@@ -31,10 +31,13 @@ import {
 import { ViewportOpticsChain, planViewportOptics } from '../src/browser/generative-canvas/primitives/scene3d/viewportOptics';
 import { createOperatorEngine } from '../src/browser/generative-canvas/services/direct-dispatch-operator-engine';
 import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
+import * as THREE from 'three';
+import { DEPTHLESS_CONTENT_KEY, findDepthlessContent, findToneMapExemptContent, writesDisplayValues } from '../src/browser/generative-canvas/services/postprocessing/depthless-coverage';
+import { PhotorealGaussianSplatMesh } from '../src/browser/generative-canvas/services/spatial/PhotorealGaussianSplatMesh';
 
 const angle = (a: number, b: number) => Math.abs((((a - b) % 360) + 540) % 360 - 180);
 const plan = (p: Partial<ColorHarmonyPlan> & { hueDeg: number }): ColorHarmonyPlan =>
-    ({ sectors: [{ offsetDeg: 0, widthDeg: 94 }], strength: 1, chroma: 1, tint: 0, includeBackground: false, ...p });
+    ({ sectors: [{ offsetDeg: 0, widthDeg: 94 }], strength: 1, chroma: 1, tint: 0, ...p });
 
 describe('colour harmony maths', () => {
     it('Oklab round-trips linear sRGB, HDR values included', () => {
@@ -117,7 +120,7 @@ describe('colour harmony plan and chain', () => {
         expect(planColorHarmony({ hueDeg: NaN }).issues[0]).toMatch(/hueDeg/);
         expect(planColorHarmony({ hueDeg: 40, strength: 0 }).harmony).toBeNull();
         expect(planColorHarmony({ hueDeg: 40, strength: 0, chroma: 0.5 }).harmony?.chroma).toBe(0.5);
-        expect(planColorHarmony({ hueDeg: -30 }).harmony).toEqual({ hueDeg: 330, sectors: [{ offsetDeg: 0, widthDeg: 94 }], strength: 1, chroma: 1, tint: 0, includeBackground: false });
+        expect(planColorHarmony({ hueDeg: -30 }).harmony).toEqual({ hueDeg: 330, sectors: [{ offsetDeg: 0, widthDeg: 94 }], strength: 1, chroma: 1, tint: 0 });
     });
 
     it('draws before the lens passes, and alone needs no temporal anti-aliasing', () => {
@@ -154,6 +157,62 @@ describe('colour harmony plan and chain', () => {
     });
 });
 
+describe('objects only, never the sky; splats included', () => {
+    it('a Gaussian splat mesh, which writes no depth, offers its coverage; hidden content does not', () => {
+        const n = 4;
+        const splats = new PhotorealGaussianSplatMesh({
+            count: n, positions: new Float32Array(n * 3), scales: new Float32Array(n * 3).fill(0.1),
+            colors: new Float32Array(n * 3).fill(0.5), opacities: new Float32Array(n).fill(1), quats: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1])
+        });
+        const scene = new THREE.Scene();
+        scene.add(splats);
+        const found = findDepthlessContent(scene);
+        expect(found).toHaveLength(1);
+        expect(found[0].userData[DEPTHLESS_CONTENT_KEY]).toBe(true);
+        expect(((found[0] as THREE.Mesh).material as THREE.Material).depthWrite).toBe(false);
+        splats.visible = false;
+        expect(findDepthlessContent(scene)).toHaveLength(0);
+    });
+
+    it('sorts content the output must not tone-map: splats write display values, tone-mapping-off built-ins are untoned', () => {
+        const n = 4;
+        const splats = new PhotorealGaussianSplatMesh({
+            count: n, positions: new Float32Array(n * 3), scales: new Float32Array(n * 3).fill(0.1),
+            colors: new Float32Array(n * 3).fill(0.5), opacities: new Float32Array(n).fill(1), quats: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1])
+        });
+        const provenance = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshStandardMaterial());
+        (provenance.material as THREE.Material).toneMapped = false;
+        const lit = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshStandardMaterial());
+        const rays = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.ShaderMaterial({ fragmentShader: 'void main() { gl_FragColor = vec4(1.0); }', blending: THREE.AdditiveBlending }));
+        const sky = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.ShaderMaterial({ fragmentShader: 'void main() { gl_FragColor = vec4(1.0);\n#include <tonemapping_fragment>\n#include <colorspace_fragment>\n}' }));
+        const gizmo = new THREE.Group();
+        const gizmoPart = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ toneMapped: false }));
+        gizmo.add(gizmoPart);
+        const scene = new THREE.Scene();
+        scene.add(splats, provenance, lit, rays, sky, gizmo);
+        const found = findToneMapExemptContent(scene, new Set([gizmo]));
+        expect(found.display).toEqual(findDepthlessContent(scene));
+        expect(found.untoned).toEqual([provenance]);
+        expect(writesDisplayValues(sky.material as THREE.Material)).toBe(false);
+        expect(findToneMapExemptContent(scene).untoned).toEqual([provenance, gizmoPart]);
+    });
+
+    it('the output leaves untoned content un-tone-mapped and display content as drawn; the grade decodes display content', () => {
+        const optics = fs.readFileSync(path.join(__dirname, '../src/browser/generative-canvas/primitives/scene3d/viewportOptics.ts'), 'utf8');
+        expect(optics).toMatch(/vec3 untonedRgb = gl_FragColor\.rgb;\s*#include <tonemapping_fragment>\s*if \(uUseUntoned\) gl_FragColor\.rgb = mix\(gl_FragColor\.rgb, untonedRgb, clamp\(texture2D\(tUntoned, vUv\)\.a, 0\.0, 1\.0\)\);\s*#include <colorspace_fragment>\s*if \(uUseDisplay\) gl_FragColor\.rgb = mix\(gl_FragColor\.rgb, untonedRgb, clamp\(texture2D\(tDisplay, vUv\)\.a, 0\.0, 1\.0\)\);/);
+        const glsl = fs.readFileSync(path.join(__dirname, '../src/browser/generative-canvas/services/postprocessing/ColorHarmonyPass.ts'), 'utf8');
+        expect(glsl).toMatch(/linearToSrgb\(grade\(srgbToLinear\(min\(src, vec3\(1\.0\)\)\)\)\)/);
+    });
+
+    it('the shader grades by depth and splat coverage only, with no background option left', () => {
+        const glsl = fs.readFileSync(path.join(__dirname, '../src/browser/generative-canvas/services/postprocessing/ColorHarmonyPass.ts'), 'utf8');
+        expect(glsl).toMatch(/float w = texture2D\(tDepth, vUv\)\.x < 1\.0 \? 1\.0 : 0\.0;/);
+        expect(glsl).toMatch(/if \(uUseCoverage\) w = max\(w, clamp\(texture2D\(tCoverage, vUv\)\.a, 0\.0, 1\.0\)\);/);
+        expect(glsl).toMatch(/gl_FragColor = mix\(c, vec4\(rgb \* c\.a, c\.a\), w\);/);
+        expect(planColorHarmony({ hueDeg: 10, includeBackground: true } as any).harmony).not.toHaveProperty('includeBackground');
+    });
+});
+
 describe('sb_set_color_harmony', () => {
     it('validates and merges; null resets a field, clear removes the grade', () => {
         expect(() => mergeColorHarmony(undefined, { strength: 0.5 })).toThrow(/hueDeg/);
@@ -161,7 +220,7 @@ describe('sb_set_color_harmony', () => {
         expect(() => mergeColorHarmony(undefined, { hueDeg: 10, sectors: [] })).toThrow(/sectors/);
         const a = mergeColorHarmony(undefined, { hueDeg: 370, strength: 0.4 })!;
         expect(a).toEqual({ hueDeg: 10, strength: 0.4 });
-        expect(mergeColorHarmony(a, { strength: null, includeBackground: true })).toEqual({ hueDeg: 10, includeBackground: true });
+        expect(mergeColorHarmony(a, { strength: null, tint: 0.5 })).toEqual({ hueDeg: 10, tint: 0.5 });
         expect(mergeColorHarmony(a, { clear: true })).toBeUndefined();
     });
 

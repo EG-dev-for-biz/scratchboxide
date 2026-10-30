@@ -20,6 +20,9 @@
  *   5. lens flare and diffusion (LensGlowPass) read from that frame: the light the lens and a filter in front of it spread;
  *   6. tone mapping and output colour space to the canvas (what the renderer applies when drawing straight to it), with the
  *      flare and diffusion added before it, then film grain when the lens has it (on the finished picture, as on film).
+ *      Content drawn with tone mapping off (provenance views) is left un-tone-mapped, and content whose shader writes
+ *      final display values (splats) is left as drawn, each by its coverage mask (depthless-coverage.ts, drawn after
+ *      step 1 against the scene's depth), as a direct draw leaves them.
  * Picking maps the pointer back through the distortion (mapPointerNdc), so a click hits what is drawn under it.
  */
 
@@ -31,7 +34,8 @@ import { CinematicBokehPass } from '../../services/optics/CinematicBokehPass';
 import { LensGlowPass, type LensGlowSettings } from '../../services/optics/LensGlowPass';
 import { TemporalAAPass } from '../../services/optics/TemporalAAPass';
 import { ColorHarmonyPass } from '../../services/postprocessing/ColorHarmonyPass';
-import { harmonizeLinearRgb, planColorHarmony, type ColorHarmonyPlan } from '../../services/postprocessing/color-harmony';
+import { planColorHarmony, type ColorHarmonyPlan } from '../../services/postprocessing/color-harmony';
+import { findDepthlessContent, findToneMapExemptContent, renderContentMask, sameContent } from '../../services/postprocessing/depthless-coverage';
 import { lensMeasuresFocus } from './viewportFocus';
 
 /** Widest overscan rendered for distortion (2x the frame on each axis = 4x the pixels). */
@@ -370,6 +374,12 @@ const OUTPUT_SHADER = {
         uniform sampler2D tStreak;
         uniform float uFlare;
         uniform float uStreak;
+        // coverage (alpha) of content drawn with tone mapping off: left un-tone-mapped, as a direct draw leaves it
+        uniform sampler2D tUntoned;
+        uniform bool uUseUntoned;
+        // coverage of content whose shader writes final display values (splats): left as drawn, neither tone-mapped nor encoded
+        uniform sampler2D tDisplay;
+        uniform bool uUseDisplay;
         varying vec2 vUv;
 
         float sbHash(vec3 p) {
@@ -414,8 +424,11 @@ const OUTPUT_SHADER = {
             // the scene was drawn over a transparent clear: alpha is its coverage (blur spreads it like the colour)
             float a = clamp(c.a, 0.0, 1.0);
             gl_FragColor = vec4(a > 1e-4 ? c.rgb / a : vec3(0.0), 1.0);
+            vec3 untonedRgb = gl_FragColor.rgb;
             #include <tonemapping_fragment>
+            if (uUseUntoned) gl_FragColor.rgb = mix(gl_FragColor.rgb, untonedRgb, clamp(texture2D(tUntoned, vUv).a, 0.0, 1.0));
             #include <colorspace_fragment>
+            if (uUseDisplay) gl_FragColor.rgb = mix(gl_FragColor.rgb, untonedRgb, clamp(texture2D(tDisplay, vUv).a, 0.0, 1.0));
             gl_FragColor = vec4(sbApplyGrain(mix(uBackground, gl_FragColor.rgb, a)), 1.0);
         }
     `
@@ -449,6 +462,13 @@ export class ViewportOpticsChain {
     private taaPass: TemporalAAPass | null = null;
     private harmonyPass: ColorHarmonyPass | null = null;
     private harmonyTarget: THREE.WebGLRenderTarget | null = null;
+    private coverageTarget: THREE.WebGLRenderTarget | null = null;
+    /** Coverage of content drawn with tone mapping off (provenance views): the output leaves it un-tone-mapped. */
+    private untonedTarget: THREE.WebGLRenderTarget | null = null;
+    private untonedLensTarget: THREE.WebGLRenderTarget | null = null;
+    /** Coverage of content whose shader writes final display values (splats): the output leaves it as drawn. */
+    private displayTarget: THREE.WebGLRenderTarget | null = null;
+    private displayLensTarget: THREE.WebGLRenderTarget | null = null;
     private taaCopyTarget: THREE.WebGLRenderTarget | null = null;
     private sceneTarget: THREE.WebGLRenderTarget | null = null;
     private dofTarget: THREE.WebGLRenderTarget | null = null;
@@ -649,6 +669,32 @@ export class ViewportOpticsChain {
             this.taaPass?.endJitter(camera);
         }
         const depthTexture = drawn_.depthTexture;
+        // content masks, drawn alone against the scene's depth (so what other geometry hides is not in them):
+        //  - the harmony grade is on the scene's objects only, never the sky (a dome mesh, a texture, a flat colour): objects
+        //    are what wrote depth, and content that writes none (splats) by its coverage;
+        //  - content drawn with tone mapping off (splats, provenance views) is left un-tone-mapped by the output, as a direct
+        //    draw to the canvas leaves it
+        let coverage: THREE.Texture | null = null;
+        let untoned: THREE.Texture | null = null;
+        let display: THREE.Texture | null = null;
+        const depthless = this.plan.colorHarmony && depthTexture ? findDepthlessContent(scene) : [];
+        const exempt = !drawn_.displayReferred ? findToneMapExemptContent(scene, new Set(overlays)) : { untoned: [], display: [] };
+        if (exempt.untoned.length + exempt.display.length > 0 && !depthTexture) issues.push('no depth texture from the scene draw; content drawn with tone mapping off (splats, provenance views) is tone-mapped with the rest');
+        if (depthTexture && exempt.untoned.length > 0) {
+            this.untonedTarget = this.ensureTarget(this.untonedTarget, RW, RH, true, 0);
+            if (renderContentMask(renderer, camera, exempt.untoned, this.untonedTarget, depthTexture)) untoned = this.untonedTarget.texture;
+        }
+        if (depthTexture && exempt.display.length > 0) {
+            this.displayTarget = this.ensureTarget(this.displayTarget, RW, RH, true, 0);
+            if (renderContentMask(renderer, camera, exempt.display, this.displayTarget, depthTexture)) display = this.displayTarget.texture;
+        }
+        if (depthless.length > 0) {
+            if (display && sameContent(depthless, exempt.display)) coverage = display;
+            else {
+                this.coverageTarget = this.ensureTarget(this.coverageTarget, RW, RH, true, 0);
+                if (renderContentMask(renderer, camera, depthless, this.coverageTarget, depthTexture)) coverage = this.coverageTarget.texture;
+            }
+        }
         let current = this.sceneTarget;
         let taaHistory: THREE.WebGLRenderTarget | null = null;
 
@@ -666,13 +712,11 @@ export class ViewportOpticsChain {
         // colour harmony: on the scene's own light, before depth of field blurs objects into the background
         const harmony = this.plan.colorHarmony;
         if (harmony && this.harmonyPass) {
-            // a flat background is not in the target (alpha 0); an opaque one is, and only depth tells it from the objects
-            const useDepth = !harmony.includeBackground && !flatBackground;
-            if (useDepth && !depthTexture) {
+            if (!depthTexture) {
                 issues.push('no depth texture from the scene draw; colour harmony not drawn (it could not tell the objects from the background)');
             } else {
                 this.harmonyTarget = this.ensureTarget(this.harmonyTarget, RW, RH, false, 0);
-                this.harmonyPass.render(renderer, current.texture, depthTexture, useDepth, harmony, this.harmonyTarget);
+                this.harmonyPass.render(renderer, current.texture, depthTexture, harmony, this.harmonyTarget, coverage, display);
                 current = this.harmonyTarget;
                 drawn.push('color-harmony');
             }
@@ -739,6 +783,18 @@ export class ViewportOpticsChain {
                 .setSourceScale(W / RW, H / RH);
             this.lensPass.render(renderer, current.texture, this.lensTarget);
             current = this.lensTarget;
+            // the tone mapping masks bend with the frame they mark
+            this.lensPass.setChromaticAberration(0);
+            if (untoned) {
+                this.untonedLensTarget = this.ensureTarget(this.untonedLensTarget, W, H, false, 0);
+                this.lensPass.render(renderer, untoned, this.untonedLensTarget);
+                untoned = this.untonedLensTarget.texture;
+            }
+            if (display) {
+                this.displayLensTarget = this.ensureTarget(this.displayLensTarget, W, H, false, 0);
+                this.lensPass.render(renderer, display, this.displayLensTarget);
+                display = this.displayLensTarget.texture;
+            }
             drawn.push('lens-distortion');
         }
 
@@ -747,7 +803,8 @@ export class ViewportOpticsChain {
             const material = new THREE.ShaderMaterial({
                 uniforms: {
                     tDiffuse: { value: null }, uBackground: { value: new THREE.Vector3() }, uDisplayReferred: { value: false }, uGrainAmount: { value: 0 }, uGrainCellPx: { value: 1 }, uGrainChroma: { value: 0 }, uGrainSeed: { value: 0 },
-                    tDiffusion: { value: null }, uDiffusion: { value: 0 }, tGhosts: { value: null }, tStreak: { value: null }, uFlare: { value: 0 }, uStreak: { value: 0 }
+                    tDiffusion: { value: null }, uDiffusion: { value: 0 }, tGhosts: { value: null }, tStreak: { value: null }, uFlare: { value: 0 }, uStreak: { value: 0 },
+                    tUntoned: { value: null }, uUseUntoned: { value: false }, tDisplay: { value: null }, uUseDisplay: { value: false }
                 },
                 vertexShader: OUTPUT_SHADER.vertexShader,
                 fragmentShader: OUTPUT_SHADER.fragmentShader,
@@ -775,6 +832,10 @@ export class ViewportOpticsChain {
         if (glow?.ghosts) drawn.push('lens-flare');
         if (glow?.diffusion) drawn.push('diffusion');
         ou.uDisplayReferred.value = !!drawn_.displayReferred;
+        ou.tUntoned.value = untoned;
+        ou.uUseUntoned.value = !!untoned;
+        ou.tDisplay.value = display;
+        ou.uUseDisplay.value = !!display;
         // film grain: its size on the sensor -> output pixels by the frame height on the sensor (the lens's film back)
         const grain = this.plan.filmGrain;
         ou.uGrainAmount.value = grain ? grain.amount : 0;
@@ -787,10 +848,6 @@ export class ViewportOpticsChain {
             drawn.push('film-grain');
         }
         // a texture / cube background was drawn into the target opaque; the composite then never shows this colour
-        if (backgroundColour && harmony?.includeBackground && drawn.includes('color-harmony')) {
-            const [r, g, b] = harmonizeLinearRgb([backgroundColour.r, backgroundColour.g, backgroundColour.b], harmony);
-            backgroundColour.setRGB(r, g, b);
-        }
         const bg = backgroundColour ? backgroundColour.getRGB({ r: 0, g: 0, b: 0 }, renderer.outputColorSpace) : { r: 0, g: 0, b: 0 };
         (ou.uBackground.value as THREE.Vector3).set(bg.r, bg.g, bg.b);
         renderer.setRenderTarget(null);
@@ -807,7 +864,12 @@ export class ViewportOpticsChain {
         this.lensTarget?.dispose();
         this.taaCopyTarget?.dispose();
         this.harmonyTarget?.dispose();
-        this.sceneTarget = this.dofTarget = this.lensTarget = this.taaCopyTarget = this.harmonyTarget = null;
+        this.coverageTarget?.dispose();
+        this.untonedTarget?.dispose();
+        this.untonedLensTarget?.dispose();
+        this.displayTarget?.dispose();
+        this.displayLensTarget?.dispose();
+        this.sceneTarget = this.dofTarget = this.lensTarget = this.taaCopyTarget = this.harmonyTarget = this.coverageTarget = this.untonedTarget = this.untonedLensTarget = this.displayTarget = this.displayLensTarget = null;
         if (this.output) {
             this.output.material.dispose();
             this.output.mesh.geometry.dispose();
