@@ -19,6 +19,7 @@
  */
 
 import * as crypto from 'crypto';
+import * as os from 'os';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { GoogleMediaCredentialsService } from '../google-media-credentials-service';
@@ -30,6 +31,10 @@ export const WORLD_CACHE_VERSION = 'v2';
 export const WORLD_CACHE_PREFIX = `worlds/${WORLD_CACHE_VERSION}`;
 /** The manifest, written last: a world without it is an interrupted upload and is not used. */
 export const WORLD_MANIFEST = 'world.json';
+/** Where a world's folder name points at its key: `<WORLD_INDEX_PREFIX>/<folder name>.json` holds { key, version }. */
+export const WORLD_INDEX_PREFIX = 'worlds/index';
+/** A world folder's name as the index and the world routes take it. */
+export const WORLD_SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$/;
 /** Per-station work in the output folder: not needed to show the world, so not stored. */
 const SKIPPED_DIRS = new Set(['stations']);
 
@@ -77,7 +82,32 @@ async function filesUnder(dir: string, rel = ''): Promise<string[]> {
     return out;
 }
 
-/** Stores the world built in `outDir` under `key`, the manifest last. Returns the number of files stored. */
+/** Points the world folder name `slug` at `key`, so the world can be opened (and saved) by its folder name alone. */
+export async function writeWorldIndex(bucket: CloudBucket, slug: string, key: string): Promise<void> {
+    if (!WORLD_SLUG.test(slug)) throw new Error(`world cache: bad world name ${JSON.stringify(slug)}`);
+    const tmp = path.join(os.tmpdir(), `sb-world-index-${process.pid}-${Date.now()}.json`);
+    await fs.writeJson(tmp, { key, version: WORLD_CACHE_VERSION });
+    try {
+        await bucket.putFile(`${WORLD_INDEX_PREFIX}/${slug}.json`, tmp, { contentType: 'application/json' });
+    } finally {
+        await fs.remove(tmp);
+    }
+}
+
+/** The key the world folder name `slug` points at in this cache version, or undefined. */
+export async function readWorldIndex(bucket: CloudBucket, slug: string): Promise<string | undefined> {
+    if (!WORLD_SLUG.test(slug)) return undefined;
+    const tmp = path.join(os.tmpdir(), `sb-world-index-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+    try {
+        if (!(await bucket.download(`${WORLD_INDEX_PREFIX}/${slug}.json`, tmp))) return undefined;
+        const entry = await fs.readJson(tmp) as { key?: string; version?: string };
+        return entry.version === WORLD_CACHE_VERSION && typeof entry.key === 'string' ? entry.key : undefined;
+    } finally {
+        await fs.remove(tmp);
+    }
+}
+
+/** Stores the world built in `outDir` under `key`, the manifest last, then its folder name in the index. Returns the number of files stored. */
 export async function storeWorld<T>(bucket: CloudBucket, key: string, outDir: string, result: T): Promise<number> {
     const files = await filesUnder(outDir);
     for (const f of files) await bucket.putFile(`${WORLD_CACHE_PREFIX}/${key}/${f}`, path.join(outDir, f), { metadata: { world: key } });
@@ -89,6 +119,8 @@ export async function storeWorld<T>(bucket: CloudBucket, key: string, outDir: st
     } finally {
         await fs.remove(tmp);
     }
+    const slug = path.basename(outDir);
+    if (WORLD_SLUG.test(slug)) await writeWorldIndex(bucket, slug, key);
     return files.length;
 }
 

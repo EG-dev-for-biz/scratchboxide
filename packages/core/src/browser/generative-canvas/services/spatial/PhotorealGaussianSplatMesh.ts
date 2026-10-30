@@ -13,6 +13,7 @@ import { CameraRelativeRTC } from '../../../../common/coordinate/CameraRelativeR
 import { SplatRadixSorter } from './SplatRadixSorter';
 import { EWA_CUTOFF_SIGMA, EWA_SPLAT_GLSL } from '../../../../common/spatial/splat-ewa-projection';
 
+import { SplatEditIndex, applySplatStroke, replaySplatEdits, type SplatEditStroke } from '../../../../common/spatial/splat-edits';
 export interface SplatData {
   count: number;
   positions: Float32Array;
@@ -67,6 +68,9 @@ export interface PhotorealSplatOptions {
  * all five attribute arrays — roughly 14× less GPU bandwidth per sort.
  */
 export class PhotorealGaussianSplatMesh extends THREE.Group {
+/** The largest footprint a splat is picked by, metres (pickEditPoint). */
+const PICK_MAX_FOOTPRINT_M = 0.6;
+
   public readonly isPhotorealGaussianSplatMesh = true;
   public readonly splatCount: number;
   public readonly splatData: SplatData;
@@ -94,6 +98,11 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
   private _posLowTex!: THREE.DataTexture;
   private _texWidth = 1;
 
+  /** The colour and opacity bytes as built (splat-edits.ts replays strokes over them); made on the first edit. */
+  private _baseColorOpacity: Uint8Array | null = null;
+  private _editIndex: SplatEditIndex | null = null;
+  /** The bytes as drawn when the stroke being painted began (previewEditStroke redraws the whole stroke over them). */
+  private _previewStart: Uint8Array | null = null;
   private static readonly _dummyRgbaF32 = (() => {
     const t = new THREE.DataTexture(new Float32Array(4), 1, 1, THREE.RGBAFormat, THREE.FloatType);
     t.magFilter = THREE.NearestFilter;
@@ -915,6 +924,91 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
   public override dispose(): void {
     this.radixSorter.dispose();
     this.splatGeometry.dispose();
+  /** The colour texture's bytes (RGBA8 per splat, as drawn), with the as-built copy taken before the first edit. */
+  private _editBuffers(): { base: Uint8Array; rgba: Uint8Array } {
+    const rgba = this._colorOpacityTex.image.data as Uint8Array;
+    if (!this._baseColorOpacity) this._baseColorOpacity = rgba.slice();
+    return { base: this._baseColorOpacity, rgba };
+  }
+
+  /** The grid over the splat centres the brush and the pick query (built on first use, a second or so for millions). */
+  public get editIndex(): SplatEditIndex {
+    if (!this._editIndex) this._editIndex = new SplatEditIndex(this.splatData.positions, this.splatCount);
+    return this._editIndex;
+  }
+
+  /** Whether any splat is drawn differently from how it was built. */
+  public get isEdited(): boolean {
+    const base = this._baseColorOpacity;
+    if (!base) return false;
+    const rgba = this._colorOpacityTex.image.data as Uint8Array;
+    for (let i = 0; i < this.splatCount * 4; i++) if (rgba[i] !== base[i]) return true;
+    return false;
+  }
+
+  /** Draws the splat as built with `strokes` replayed over it, in order. */
+  public replayEdits(strokes: readonly SplatEditStroke[]): void {
+    if (!strokes.length && !this._baseColorOpacity) return;
+    const { base, rgba } = this._editBuffers();
+    replaySplatEdits(this.editIndex, base, rgba, strokes);
+    this._colorOpacityTex.needsUpdate = true;
+  }
+
+  /** Applies one stroke over what is drawn now; returns the splats it changed. */
+  public applyEditStroke(stroke: SplatEditStroke): number {
+    const { base, rgba } = this._editBuffers();
+    const n = applySplatStroke(this.editIndex, base, rgba, stroke);
+    if (n) this._colorOpacityTex.needsUpdate = true;
+    return n;
+  }
+
+  /** Starts previewing a stroke: what is drawn now is kept, so each preview redraws the stroke once over it. */
+  public beginEditPreview(): void {
+    this._previewStart = this._editBuffers().rgba.slice();
+  }
+
+  /**
+   * Draws `stroke` (as painted so far) over what was drawn when the preview began. Redrawing it whole, rather than
+   * adding each new piece, makes the preview match the stroke's replay: overlapping pieces do not paint twice.
+   */
+  public previewEditStroke(stroke: SplatEditStroke): void {
+    const { base, rgba } = this._editBuffers();
+    if (this._previewStart) rgba.set(this._previewStart);
+    applySplatStroke(this.editIndex, base, rgba, stroke);
+    this._colorOpacityTex.needsUpdate = true;
+  }
+
+  /** Ends the preview, keeping what it drew; returns whether the stroke changed any splat. */
+  public endEditPreview(): boolean {
+    const start = this._previewStart;
+    this._previewStart = null;
+    if (!start) return false;
+    const rgba = this._colorOpacityTex.image.data as Uint8Array;
+    for (let i = 0; i < this.splatCount * 4; i++) if (rgba[i] !== start[i]) return true;
+    return false;
+  }
+
+  /**
+   * The nearest drawn splat under a world-space ray: its centre in this splat's frame and in the world, or undefined.
+   * A splat counts as hit when the ray passes within its footprint (two sigmas) or a few pixels' width of its centre.
+   */
+  public pickEditPoint(ray: THREE.Ray, maxDistance = 500, pixelAngle = 0.002): { local: THREE.Vector3; world: THREE.Vector3 } | undefined {
+    this.updateWorldMatrix(true, false);
+    const inv = this.matrixWorld.clone().invert();
+    const o = ray.origin.clone().applyMatrix4(inv);
+    const d = ray.origin.clone().add(ray.direction).applyMatrix4(inv).sub(o).normalize();
+    const rgba = this._colorOpacityTex.image.data as Uint8Array;
+    const index = this.editIndex;
+    // a splat is hit within two sigmas of its largest axis (its drawn footprint), capped so a stray giant does not catch every ray
+    const sc = this.splatData.scales;
+    const footprint = (i: number) => 2 * Math.max(sc[i * 3], sc[i * 3 + 1], sc[i * 3 + 2]);
+    const hit = index.pick([o.x, o.y, o.z], [d.x, d.y, d.z], rgba, maxDistance, t => Math.max(0.03, pixelAngle * t), footprint, PICK_MAX_FOOTPRINT_M);
+    if (!hit) return undefined;
+    const p = this.splatData.positions;
+    const local = new THREE.Vector3(p[hit.index * 3], p[hit.index * 3 + 1], p[hit.index * 3 + 2]);
+    return { local, world: local.clone().applyMatrix4(this.matrixWorld) };
+  }
+
     this.splatMaterial.dispose();
     this._posTex.dispose();
     this._scaleTex.dispose();

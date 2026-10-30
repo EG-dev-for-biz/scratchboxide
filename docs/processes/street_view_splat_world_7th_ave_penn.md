@@ -136,3 +136,34 @@ The voxel-fused photo splats were replaced by a splat on every patch of the scan
   - Stations' exposure gains often sit at the ±0.3 clamp.
   - `tiles/` (`splat_to_3dtiles`) were not rebuilt with this layer; the scene loads the `.spz`.
 - **Cache:** the fixed world was stored over `worlds/v2/d46ee4caa1de6ae432e1a2e2` in `gs://scoutscan-splat-worlds`, the manifest written last.
+
+## 9. Editable splats, saved to the cloud (2026-10-30)
+
+**Status: Verified in the live app** (port 3420, front-page 3D World button).
+
+**Splat brush.** The viewport's toolstrip has an Edit splats control, shown when the scene has a splat. It offers Erase, Restore and Paint (colour and strength), with a radius from 5 cm to 4 m.
+- A stroke is a path swept by a sphere in the splat's own frame (`common/spatial/splat-edits.ts`).
+- Strokes are kept in `Scene3DData.splatEdits` and replayed over the splat as built; the `.spz` is never rewritten.
+- Undo and redo remove and restore a stroke. Left-drag paints and right-drag looks around.
+- Picking uses each splat's footprint (two sigmas, capped at 0.6 m).
+- On the 4.0 M-splat world: the grid builds in about 0.2 s and a pick takes 15 to 40 ms. Hover picking is limited to once every 50 ms.
+
+**Cloud versions.** The routes are `/api/worlds/<folder>/scene` (GET and POST) and `/versions` (`world-scenes.ts`, `worldRoutes.ts`).
+- Saving writes the whole scene as `worlds/v2/<key>/scenes/<version>.json`, then `latest.json`. That includes camera, light, objects, colour harmony and splat edits.
+- `worlds/index/<folder>.json` maps a world's folder name to its cache key. `storeWorld` writes it; the 7th Ave world's entry was written by hand.
+- 3D World opens the newest saved version, else the build's own scene. On a machine without the world's folder, its files come from the cache first.
+
+**Live check.**
+- A blue paint stroke on the facade previewed while drawing, and undo and redo removed and restored it.
+- Save wrote version `20261030T184905Z-10jk` (a 3.6 KB scene). A new chat's 3D World opened it from the cloud (`source: cloud`) with the stroke replayed.
+- The test version was then removed from the bucket, so the world opens as built.
+- An earlier erase stroke worked too: it cut a hole through the street, showing that erasing reveals what is behind (here, nothing).
+
+**Fixed during the check.**
+- The first stroke remounted the viewport and left a second tab. The cause: the 3D World artifact had a timestamp id, which the project graph replaced on its first update. It now opens under `world-<folder>`, registered in the graph like other openers.
+- A stroke's sweep between points was a row of spheres, leaving the band narrower mid-segment. It is now an exact capsule.
+
+**Not done.**
+- Opening the world takes about 4 s, mostly Google Cloud round trips (index and latest).
+- No view lists the saved versions or opens an older one; `/versions` exists but nothing calls it.
+- The colour-harmony session reports that splats drawn through any optics pass (its grade, lens effects) come out brighter and washed out: the splat material is not tone-mapped, but the chain's output pass tone-maps the whole frame. Not fixed here.

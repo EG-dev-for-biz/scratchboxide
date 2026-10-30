@@ -1191,29 +1191,41 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         openSettingsToTab
     });
 
-    // A starter button for a world already built: its saved scene opens in a 3D Scene; not on this machine, the prompt builds it.
+    // A starter button for a world already built: its newest saved version (else its build's scene) opens in a 3D Scene,
+    // fetched from the world cache when not on this machine; with neither, the prompt builds it.
     const handleOpenStarterWorld = React.useCallback(async (item: StarterButton) => {
         const world = item.world!;
+        if (!data) {
+            try {
+                const res = await fetch(world.scenePath, { cache: 'no-store' });
+                if (res.ok) data = { ...(await res.json() as Scene3DData), world: { slug: world.slug } };
+            } catch { data = undefined; }
+        }
         let data: Scene3DData | undefined;
         try {
-            const res = await fetch(world.scenePath, { cache: 'no-store' });
-            if (res.ok) data = await res.json() as Scene3DData;
+            const res = await fetch(`/api/worlds/${encodeURIComponent(world.slug)}/scene`, { cache: 'no-store' });
+            const body = res.ok ? await res.json() : undefined;
+            if (body?.success) data = body.scene as Scene3DData;
         } catch { data = undefined; }
         if (!data?.splatUrl) {
             handleSendMessage(pickStarterPrompt(item));
             return;
         }
-        const art: CanvasArtifact = {
-            id: `art-world-${Date.now()}`,
+        // Registered in the project graph under a stable id (the world's name), as every opener does: an id the graph
+        // would replace on the first edit would remount the viewport mid-stroke and leave a second tab.
+        const art = graphControllerRef.current.registerArtifact({
+            id: `world-${world.slug}`,
             type: '3d-scene',
             title: world.title,
             summary: data.subtitle ?? world.title,
             version: 1,
             createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             data
-        };
+        }, `open-world-${world.slug}`);
+        setGraphEpoch(epoch => epoch + 1);
         setActiveArtifact(art);
-        setArtifactHistory(prev => [art, ...prev]);
+        recordArtifactVersion(art);
+        setArtifactHistory(prev => [art, ...prev.filter(a => a.id !== art.id)]);
         setLayoutMode(resolveModeForArtifact('3d-scene'));
     }, [handleSendMessage]);
 

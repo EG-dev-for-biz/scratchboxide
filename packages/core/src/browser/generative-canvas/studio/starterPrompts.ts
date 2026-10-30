@@ -19,15 +19,17 @@ export interface StarterButton {
     /** One or more example requests; one is picked per click. */
     prompts: readonly string[];
     /**
-     * A world already built: the button opens its saved scene (the Scene3DData location_generate_3dgs writes beside its
-     * tileset, `scene3d.json`) in a 3D Scene straight away. When that file is not on this machine it sends its prompt,
-     * which builds the world.
+     * A world already built: the button opens it in a 3D Scene straight away, by its folder name `slug` through
+     * /api/worlds (its newest saved version, else the Scene3DData location_generate_3dgs wrote beside its tileset,
+     * `scenePath`; its files fetched from the world cache when not on this machine). When neither is there it sends its
+     * prompt, which builds the world.
      */
-    world?: { scenePath: string; title: string };
+    world?: { slug: string; scenePath: string; title: string };
 }
 
 /** The splat world on 7th Avenue's west sidewalk at the Penn Station / Madison Square Garden entrance (built 2026-10-29). */
-export const PENN_STATION_WORLD_DIR = '/tilesets/7th_avenue_west_32nd_street_new_york_40.74974_-73.99163';
+export const PENN_STATION_WORLD_SLUG = '7th_avenue_west_32nd_street_new_york_40.74974_-73.99163';
+export const PENN_STATION_WORLD_DIR = `/tilesets/${PENN_STATION_WORLD_SLUG}`;
 
 export const STARTER_BUTTONS: readonly StarterButton[] = [
     { icon: '✨', label: 'Interactive App', prompts: ['Build an interactive audio visualizer app with responsive controls'] },
@@ -87,7 +89,7 @@ export const STARTER_BUTTONS: readonly StarterButton[] = [
         prompts: [
             'Make a walkable 3D Gaussian splat world of the spot on the west sidewalk of 7th Ave at the Penn Station and Madison Square Garden entrance, looking east across the avenue.',
         ],
-        world: { scenePath: `${PENN_STATION_WORLD_DIR}/scene3d.json`, title: '7th Ave at Penn Station - splat world' },
+        world: { slug: PENN_STATION_WORLD_SLUG, scenePath: `${PENN_STATION_WORLD_DIR}/scene3d.json`, title: '7th Ave at Penn Station - splat world' },
     },
     { icon: '🎬', label: 'Video NLE', prompts: ['Assemble a multi-track video timeline with color grading and title graphics'] },
 ];

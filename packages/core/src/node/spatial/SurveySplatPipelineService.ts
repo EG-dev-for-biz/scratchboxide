@@ -757,6 +757,8 @@ export class SurveySplatPipelineService {
             cameraMode: vantage ? 'fps' : 'orbit',
             animation: vantage ? 'idle' : 'orbit',
             splatUrl,
+            // a world served from /tilesets is opened and saved by its folder name (/api/worlds, world-scenes.ts)
+            ...(splatUrl.startsWith('/tilesets/') ? { world: { slug: path.basename(path.dirname(result.spzPath ?? result.fusedSplatPath)) } } : {}),
             splatTilesetUrl: tilesetUrl,
             splatOptions: {
                 splatScale: options.splatScale ?? 1.0,

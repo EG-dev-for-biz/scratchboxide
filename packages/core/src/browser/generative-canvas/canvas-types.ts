@@ -28,6 +28,7 @@ export function getActiveUserName(customName?: string): string {
 }
 
 import type { VideoTimelineData, TimelineTrack, KeyframeEasing } from './services/video/videoTypes';
+import type { SplatEditStroke } from '../../common/spatial/splat-edits';
 import type { StagedBuildState } from '../../common/spatial/staged-location-contracts';
 export type { VideoTimelineData, TimelineTrack };
 export * from './services/video/videoTypes';
@@ -691,7 +692,7 @@ export interface SculptSettings {
 
 export type TransformGizmoMode = 'translate' | 'rotate' | 'scale' | 'none';
 export type TransformGizmoSpace = 'world' | 'local';
-export type ViewportToolMode = 'view' | 'sculpt' | 'transform';
+export type ViewportToolMode = 'view' | 'sculpt' | 'transform' | 'splat';
 
 export interface SculptableMeshBuffer {
     vertexPositions: Float32Array;
@@ -1060,6 +1061,13 @@ export interface Scene3DData {
         splatScale?: number;
         maxSplats?: number;
         enableRTC?: boolean;
+    /** Brush strokes replayed, in order, over the splat as it was built (common/spatial/splat-edits.ts). */
+    splatEdits?: SplatEditStroke[];
+    /**
+     * A built world kept in the world cache (location_generate_3dgs): its folder's name, and the saved version of this
+     * scene that was opened (`/api/worlds/<slug>/scene`).
+     */
+    world?: { slug: string; version?: string; savedAt?: string };
         enableSoftZ?: boolean;
         contactShadow?: boolean;
         cropBox?: { min: [number, number, number]; max: [number, number, number] };
