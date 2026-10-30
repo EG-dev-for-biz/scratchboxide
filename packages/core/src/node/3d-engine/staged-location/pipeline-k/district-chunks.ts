@@ -114,15 +114,36 @@ export function planDistrictChunks(radiusM: number, buildings: Array<{ id: strin
  * its native steps (tile_refine, tile_vegetation, the rectify and window-fit workers), and its time limits grow by the same
  * factor, so a step slowed by sharing the machine is not taken for a failed one (five builds each on every core timed out).
  */
-export function chunkCpuShare(cores = os.cpus().length, P = DISTRICT_CHUNKS_PARAMS): { builds: number; threads: number; slowdown: number } {
-    const builds = chunkParallel(P) + 1;
+export function chunkCpuShare(cores = machineCores(), P = DISTRICT_CHUNKS_PARAMS, env: NodeJS.ProcessEnv = process.env): { builds: number; threads: number; slowdown: number } {
+    // a build alone on its machine: the centre when the chunks run in the cloud, and a chunk in its cloud job
+    const builds = kdChunkRunner(env) === 'cloud' || env.SCRATCHBOX_KD_CHUNK_JOB === '1' ? 1 : chunkParallel(P, os.totalmem(), env) + 1;
     const threads = Math.max(2, Math.floor(cores / builds));
     return { builds, threads, slowdown: Math.max(1, cores / threads) };
 }
 
-/** Chunk builds at once: `parallel`, fewer when memory is short (a district build holds several GB; 24 GB a build). */
-export function chunkParallel(P = DISTRICT_CHUNKS_PARAMS, totalMem = os.totalmem()): number {
+/**
+ * Chunk builds at once: `parallel`, fewer when memory is short (a district build holds several GB; 24 GB a build). With the
+ * cloud runner each chunk has a machine of its own, so the width is SCRATCHBOX_KD_CLOUD_PARALLEL (default 48: every chunk of
+ * a 350 m district at once), set lower when the region's Cloud Run quota does not cover it.
+ */
+export function chunkParallel(P = DISTRICT_CHUNKS_PARAMS, totalMem = os.totalmem(), env: NodeJS.ProcessEnv = process.env): number {
+    if (kdChunkRunner(env) === 'cloud') {
+        const n = Number(env.SCRATCHBOX_KD_CLOUD_PARALLEL);
+        return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 48;
+    }
     return Math.max(1, Math.min(P.parallel, Math.floor(totalMem / (24 * 1024 ** 3)) - 1));
+}
+
+/** Where a chunked district's chunks build: on this machine's worker threads, or one Cloud Run job each (SCRATCHBOX_KD_CHUNK_RUNNER=cloud; cloud-chunk-runner.ts). */
+export function kdChunkRunner(env: NodeJS.ProcessEnv = process.env): 'local' | 'cloud' {
+    return env.SCRATCHBOX_KD_CHUNK_RUNNER?.trim() === 'cloud' ? 'cloud' : 'local';
+}
+
+/** This machine's cores: SCRATCHBOX_CPUS when set (a container can report its host's cores, not its own), else what the OS reports. */
+export function machineCores(env: NodeJS.ProcessEnv = process.env): number {
+    const n = Number(env.SCRATCHBOX_CPUS);
+    if (Number.isFinite(n) && n >= 1) return Math.floor(n);
+    return typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
 }
 
 /** Which chunk a plan point belongs to (see the file comment); -1 past the radius. */

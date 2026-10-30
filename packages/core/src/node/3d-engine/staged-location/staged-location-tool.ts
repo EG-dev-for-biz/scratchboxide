@@ -21,6 +21,9 @@
  */
 
 import { cacheMirrorBucket, mirrorCachesInBackground, restoreCacheEntry } from '../../cloud-store/cache-mirror';
+import { GcsCloudBucket } from '../../cloud-store/cloud-bucket';
+import { cloudChunkConfig, CloudRunJobsRest, createCloudChunkRunner, type RunChunk } from './cloud-chunk-runner';
+import { kdChunkRunner } from './pipeline-k/district-chunks';
 import { TOGGLEABLE_STEPS } from '../../../common/staged-build-steps';
 import { solarRoofFromBuildingShape } from './pipeline-e/solar-roof';
 import * as crypto from 'crypto';
@@ -322,10 +325,13 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
         vehicleRemoval: true,
         // the tile seam stage on the extraction as it arrives (tile-seam-weld-service.ts)
         tileSeams: runTileSeamWeld,
-        // pipeline K-D: the district's leaf tiles fetched ahead of its chunks, into the shared leaf cache
-        prefetchTiles: req => prefetchGoogle3DTileLeaves({ lat: req.lat, lng: req.lng, ...(req.elevation !== undefined ? { elevation: req.elevation } : {}) }, req.radiusM, { ...(req.signal ? { signal: req.signal } : {}), ...(req.onProgress ? { onProgress: req.onProgress } : {}) }),
-        // pipeline K-D: each chunk of a chunked district is a build of its own, on its own worker thread
-        runChunk: (request, o) => runStagedLocationOffThread(request, workspaceRoot, undefined, { ...(o.signal ? { signal: o.signal } : {}), ...(o.onProgress ? { reportProgress: (m: string) => o.onProgress!(m) } : {}) }),
+        // pipeline K-D: each chunk of a chunked district is a build of its own, on its own worker thread, or with
+        // SCRATCHBOX_KD_CHUNK_RUNNER=cloud one Cloud Run job each (cloud-chunk-runner.ts); the district's leaf tiles are
+        // fetched ahead of its chunks into the shared leaf cache only when the chunks build here
+        ...(kdChunkRunner() === 'cloud' ? { runChunk: cloudRunChunk(cache) } : {
+            prefetchTiles: (req: Parameters<NonNullable<StagedLocationDeps['prefetchTiles']>>[0]) => prefetchGoogle3DTileLeaves({ lat: req.lat, lng: req.lng, ...(req.elevation !== undefined ? { elevation: req.elevation } : {}) }, req.radiusM, { ...(req.signal ? { signal: req.signal } : {}), ...(req.onProgress ? { onProgress: req.onProgress } : {}) }),
+            runChunk: (request: StagedLocationRequest, o: { signal?: AbortSignal; onProgress?: (message: string) => void }) => runStagedLocationOffThread(request, workspaceRoot, undefined, { ...(o.signal ? { signal: o.signal } : {}), ...(o.onProgress ? { reportProgress: (m: string) => o.onProgress!(m) } : {}) })
+        }),
         // the texture pass's model texture rung: the image model redraws the tile transfer, kept only past its gate
         // (SCRATCHBOX_TEXTURE_ENHANCE=0 turns the rung off); default mode 'recreate' (user decision, 2026-10-21) removes
         // the scan's own baked shadow/highlight and recovers the material's true colour, gated on structure and
@@ -340,6 +346,25 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
             } : {}),
             ...(lightingCorrectionEnabled() ? { lighting: genAiEnhanceClient(vision.client), lightingModels: lightingModels() } : {})
         } : {}
+    };
+}
+
+/**
+ * The cloud chunk runner on the app's service account: the job bucket (SCRATCHBOX_KD_JOB_BUCKET) and the Cloud Run job
+ * (cloud-chunk-runner.ts cloudChunkConfig), made on the first chunk, so a district without credentials fails its chunks
+ * with that reason (the orchestrator then degrades them) rather than building them here.
+ */
+function cloudRunChunk(cache: StageCache): NonNullable<StagedLocationDeps['runChunk']> {
+    let runner: Promise<RunChunk> | undefined;
+    const make = async (): Promise<RunChunk> => {
+        const config = cloudChunkConfig();
+        const storage = new GoogleMediaCredentialsService().createStorageClient();
+        return createCloudChunkRunner({ cache, config, bucket: new GcsCloudBucket(storage.bucket(config.bucket)), jobs: await CloudRunJobsRest.create(config) });
+    };
+    return async (request, o) => {
+        runner ??= make();
+        runner.catch(() => { runner = undefined; });
+        return (await runner)(request, o);
     };
 }
 
