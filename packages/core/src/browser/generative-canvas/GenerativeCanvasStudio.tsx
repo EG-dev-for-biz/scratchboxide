@@ -206,7 +206,7 @@ export { StreamBufferQueue, captureActiveCanvasScreenshot } from './chat/streami
 import { StreamBufferQueue, captureActiveCanvasScreenshot, streamTokensAsync } from './chat/streaming-utils';
 import { useSendMessage } from './hooks/useSendMessage';
 import { LIVE_CODE_STARTER_APP } from './studio/liveCodeStarterTemplate';
-import { STARTER_BUTTONS, pickStarterPrompt } from './studio/starterPrompts';
+import { STARTER_BUTTONS, pickStarterPrompt, type StarterButton } from './studio/starterPrompts';
 
 export interface GenerativeCanvasStudioProps {
     onOpenFolder?: () => void;
@@ -1191,6 +1191,32 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         openSettingsToTab
     });
 
+    // A starter button for a world already built: its saved scene opens in a 3D Scene; not on this machine, the prompt builds it.
+    const handleOpenStarterWorld = React.useCallback(async (item: StarterButton) => {
+        const world = item.world!;
+        let data: Scene3DData | undefined;
+        try {
+            const res = await fetch(world.scenePath, { cache: 'no-store' });
+            if (res.ok) data = await res.json() as Scene3DData;
+        } catch { data = undefined; }
+        if (!data?.splatUrl) {
+            handleSendMessage(pickStarterPrompt(item));
+            return;
+        }
+        const art: CanvasArtifact = {
+            id: `art-world-${Date.now()}`,
+            type: '3d-scene',
+            title: world.title,
+            summary: data.subtitle ?? world.title,
+            version: 1,
+            createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            data
+        };
+        setActiveArtifact(art);
+        setArtifactHistory(prev => [art, ...prev]);
+        setLayoutMode(resolveModeForArtifact('3d-scene'));
+    }, [handleSendMessage]);
+
     React.useEffect(() => {
         (window as any).__scratchbox_send_prompt = (text: string) => handleSendMessage(text);
         (window as any).__scratchbox_queue_prompt = (text: string) => handleQueueMessage(text);
@@ -1509,7 +1535,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                                                     key={item.label}
                                                     type="button"
                                                     className="sb-btn sb-starter-chip"
-                                                    onClick={() => handleSendMessage(pickStarterPrompt(item))}
+                                                    onClick={() => item.world ? void handleOpenStarterWorld(item) : handleSendMessage(pickStarterPrompt(item))}
                                                     style={{
                                                         display: 'inline-flex',
                                                         alignItems: 'center',

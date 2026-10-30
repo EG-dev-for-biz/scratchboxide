@@ -358,7 +358,10 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
             rot.phi -= deltaY * 0.005;
             rot.phi = Math.max(0.05, Math.min(Math.PI - 0.05, rot.phi));
         } else {
-            camera.rotation.order = 'YXZ';
+            // Re-express the current orientation as yaw-pitch (YXZ) before turning it. Only relabelling the order would
+            // read lookAt's XYZ angles as YXZ ones: a view facing more than 90 degrees from -Z (x = z = PI in XYZ)
+            // then turned upside down on the first drag.
+            if (camera.rotation.order !== 'YXZ') camera.rotation.setFromQuaternion(camera.quaternion, 'YXZ');
             camera.rotation.y -= deltaX * 0.003;
             camera.rotation.x -= deltaY * 0.003;
             camera.rotation.x = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, camera.rotation.x));

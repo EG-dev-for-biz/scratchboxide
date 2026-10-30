@@ -18,7 +18,16 @@ export interface StarterButton {
     label: string;
     /** One or more example requests; one is picked per click. */
     prompts: readonly string[];
+    /**
+     * A world already built: the button opens its saved scene (the Scene3DData location_generate_3dgs writes beside its
+     * tileset, `scene3d.json`) in a 3D Scene straight away. When that file is not on this machine it sends its prompt,
+     * which builds the world.
+     */
+    world?: { scenePath: string; title: string };
 }
+
+/** The splat world on 7th Avenue's west sidewalk at the Penn Station / Madison Square Garden entrance (built 2026-10-29). */
+export const PENN_STATION_WORLD_DIR = '/tilesets/7th_avenue_west_32nd_street_new_york_40.74974_-73.99163';
 
 export const STARTER_BUTTONS: readonly StarterButton[] = [
     { icon: '✨', label: 'Interactive App', prompts: ['Build an interactive audio visualizer app with responsive controls'] },
@@ -69,39 +78,18 @@ export const STARTER_BUTTONS: readonly StarterButton[] = [
             'Build a 3D building of the Empire State Building at 350 Fifth Avenue, New York: isolate it and straighten it from Google Maps, its walls flat and its own photo texture straightened',
         ],
     },
+    {
+        icon: '🌐',
+        label: '3D World',
+        // A walkable Gaussian splat world (user ask, 2026-10-29): standing on 7th Avenue's west sidewalk at the Penn Station /
+        // Madison Square Garden entrance, looking east across the avenue, built from registered Street View and the 3D
+        // tiles (location_generate_3dgs with a street vantage). Opens the world already built; without it, builds it.
+        prompts: [
+            'Make a walkable 3D Gaussian splat world of the spot on the west sidewalk of 7th Ave at the Penn Station and Madison Square Garden entrance, looking east across the avenue.',
+        ],
+        world: { scenePath: `${PENN_STATION_WORLD_DIR}/scene3d.json`, title: '7th Ave at Penn Station - splat world' },
+    },
     { icon: '🎬', label: 'Video NLE', prompts: ['Assemble a multi-track video timeline with color grading and title graphics'] },
-    {
-        icon: '📄',
-        label: 'System Spec',
-        prompts: [
-            'Draft a technical architecture specification with interface invariants',
-            'Draft a technical specification for an offline-first note-taking app with end-to-end encrypted sync',
-            'Draft a technical specification for a real-time multiplayer game server with lag compensation',
-            'Draft a technical specification for a payment service with idempotent retries and an audit log',
-            'Draft a technical specification for over-the-air firmware updates on a fleet of smart thermostats',
-            'Draft a technical specification for a video transcoding pipeline running on cloud workers',
-            'Draft a technical specification for a hospital bed-tracking system with role-based access',
-            'Draft a technical specification for a drone delivery fleet’s flight-planning service',
-            'Draft a technical specification for a search autocomplete service handling 50,000 queries per second',
-            'Draft a technical specification for a library book reservation API with waitlists',
-        ],
-    },
-    {
-        icon: '📊',
-        label: 'KPI Dashboard',
-        prompts: [
-            'Dashboard for real-time telemetry metrics and system throughput',
-            'Dashboard for an online store: daily revenue, conversion rate, cart abandonment and top products',
-            'Dashboard for a hospital emergency department: wait times, bed occupancy and triage levels',
-            'Dashboard for a solar farm: power output, panel efficiency, inverter health and weather',
-            'Dashboard for a SaaS product: monthly recurring revenue, churn, activation and NPS',
-            'Dashboard for a city bike-share network: trips per hour, dock availability and rebalancing',
-            'Dashboard for a coffee roastery: batches roasted, roast profiles, green bean inventory and wholesale orders',
-            'Dashboard for a customer support team: ticket volume, first response time, resolution rate and satisfaction',
-            'Dashboard for a warehouse: orders picked per hour, pick accuracy, backlog and late shipments',
-            'Dashboard for a podcast network: downloads, listener retention, ad fill rate and top episodes',
-        ],
-    },
 ];
 
 const LAST_KEY = 'sb.starterPrompt.last.';
