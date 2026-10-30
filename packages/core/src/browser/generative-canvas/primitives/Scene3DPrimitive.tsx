@@ -158,6 +158,7 @@ import { syncVectorRoadmapBlueprint } from './scene3d/syncVectorRoadmapBlueprint
 import { VectorRoadmapHUD } from './scene3d/VectorRoadmapHUD';
 import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
 import { WeatherControl } from './scene3d/WeatherPanel';
+import { ColorHarmonyControl } from './scene3d/ColorHarmonyPanel';
 import { computeSceneGeometryBounds, calculateStandoffCamera } from './scene3d/autoFraming';
 import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle, VectorRoadmapHandle, Scene3DRenderMode } from './scene3d/types';
 import { applyClayRenderMode } from './scene3d/clayRenderMode';
@@ -2157,7 +2158,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             return { depthTexture: target?.depthTexture ?? null };
         };
         const opticsChain = new ViewportOpticsChain();
-        opticsChain.configure(sceneDataRef.current.camera?.lens);
+        opticsChain.configure(sceneDataRef.current.camera?.lens, sceneDataRef.current.colorHarmony);
         opticsChainRef.current = opticsChain;
         (window as any).__SB_3D_OPTICS__ = opticsChain;
         const focusController = new ViewportFocusController();
@@ -2707,10 +2708,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         };
     }, [atmosphereFingerprint]);
 
-    // ---- 3b. Lens optics: distortion and depth-of-field passes from camera.lens (none when it configures none) ----
-    const lensFingerprint = JSON.stringify(sceneData.camera?.lens ?? null);
+    // ---- 3b. Lens optics: distortion and depth-of-field passes from camera.lens, and the colour harmony grade (none when neither configures one) ----
+    const lensFingerprint = JSON.stringify([sceneData.camera?.lens ?? null, sceneData.colorHarmony ?? null]);
     React.useEffect(() => {
-        opticsChainRef.current?.configure(sceneDataRef.current.camera?.lens);
+        opticsChainRef.current?.configure(sceneDataRef.current.camera?.lens, sceneDataRef.current.colorHarmony);
         focusControllerRef.current?.configure(sceneDataRef.current.camera?.lens);
     }, [lensFingerprint]);
 
@@ -4229,6 +4230,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
                 {/* Weather: time of day into night, cloud cover, haze, fog (scene-weather.ts) */}
                 <WeatherControl sceneData={sceneData} mutateSceneData={mutateSceneData} />
+
+                {/* Colour harmony: every hue on the objects moved toward a hue template (color-harmony.ts) */}
+                <ColorHarmonyControl sceneData={sceneData} mutateSceneData={mutateSceneData} />
 
                 {/* Camera settings: lens, depth of field, distortion (sb_set_camera / sb_set_camera_lens) */}
                 <CameraSettingsControl

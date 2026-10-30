@@ -24,12 +24,14 @@
  */
 
 import * as THREE from 'three';
-import type { SceneCameraLens, SceneFilmGrain, SceneLensDiffusion, SceneLensDistortion, SceneLensFlare } from '../../canvas-types';
+import type { SceneCameraLens, SceneColorHarmony, SceneFilmGrain, SceneLensDiffusion, SceneLensDistortion, SceneLensFlare } from '../../canvas-types';
 import { VfxPlateMatchmoveService } from '../../services/video/VfxPlateMatchmoveService';
 import { LensDistortionEffect } from '../../services/optics/LensDistortionEffect';
 import { CinematicBokehPass } from '../../services/optics/CinematicBokehPass';
 import { LensGlowPass, type LensGlowSettings } from '../../services/optics/LensGlowPass';
 import { TemporalAAPass } from '../../services/optics/TemporalAAPass';
+import { ColorHarmonyPass } from '../../services/postprocessing/ColorHarmonyPass';
+import { harmonizeLinearRgb, planColorHarmony, type ColorHarmonyPlan } from '../../services/postprocessing/color-harmony';
 import { lensMeasuresFocus } from './viewportFocus';
 
 /** Widest overscan rendered for distortion (2x the frame on each axis = 4x the pixels). */
@@ -41,7 +43,7 @@ export const MAX_OVERSCAN = 2;
  */
 export const MAX_BLUR_RADIUS_FRAME_FRACTION = 0.12;
 
-export type ViewportOpticsPassName = 'temporal-aa' | 'depth-of-field' | 'lens-distortion' | 'lens-flare' | 'diffusion' | 'film-grain' | 'output' | (string & {});
+export type ViewportOpticsPassName = 'temporal-aa' | 'color-harmony' | 'depth-of-field' | 'lens-distortion' | 'lens-flare' | 'diffusion' | 'film-grain' | 'output' | (string & {});
 
 /** Flare defaults when the lens sets only an amount: four ghosts, a faint halo, no streak, flaring above 1.5 (brighter than white). */
 export const DEFAULT_FLARE: Required<Omit<SceneLensFlare, 'amount'>> = { ghosts: 4, halo: 0.3, streak: 0, threshold: 1.5 };
@@ -73,6 +75,8 @@ export interface ViewportOpticsPlan {
     flare: Required<SceneLensFlare> | null;
     diffusion: Required<SceneLensDiffusion> | null;
     depthOfField: ViewportDepthOfFieldPlan | null;
+    /** The scene's colour harmony grade (color-harmony.ts), drawn on the scene before depth of field, or null. */
+    colorHarmony: ColorHarmonyPlan | null;
     /** Passes in draw order; empty = the viewport renders straight to the canvas as before. */
     passes: ViewportOpticsPassName[];
     /** Lens values present but not drawn, and why. */
@@ -82,10 +86,17 @@ export interface ViewportOpticsPlan {
 const finitePositive = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0;
 const finiteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
-/** Which passes a scene lens configures. Pure: no GPU objects. */
-export function planViewportOptics(lens: SceneCameraLens | undefined | null): ViewportOpticsPlan {
-    const plan: ViewportOpticsPlan = { distortion: null, filmGrain: null, flare: null, diffusion: null, depthOfField: null, passes: [], issues: [] };
-    if (!lens) return plan;
+/** Which passes a scene lens (and the scene's colour harmony grade) configures. Pure: no GPU objects. */
+export function planViewportOptics(lens: SceneCameraLens | undefined | null, harmony?: SceneColorHarmony | null): ViewportOpticsPlan {
+    const plan: ViewportOpticsPlan = { distortion: null, filmGrain: null, flare: null, diffusion: null, depthOfField: null, colorHarmony: null, passes: [], issues: [] };
+    const graded = planColorHarmony(harmony);
+    plan.colorHarmony = graded.harmony;
+    plan.issues.push(...graded.issues);
+    if (plan.colorHarmony) plan.passes.push('color-harmony');
+    if (!lens) {
+        if (plan.passes.length > 0) plan.passes.push('output');
+        return plan;
+    }
     const squeeze = finitePositive(lens.anamorphicSqueeze) ? lens.anamorphicSqueeze : 1;
 
     const d = lens.distortion;
@@ -436,6 +447,8 @@ export class ViewportOpticsChain {
     private bokehPass: CinematicBokehPass | null = null;
     private glowPass: LensGlowPass | null = null;
     private taaPass: TemporalAAPass | null = null;
+    private harmonyPass: ColorHarmonyPass | null = null;
+    private harmonyTarget: THREE.WebGLRenderTarget | null = null;
     private taaCopyTarget: THREE.WebGLRenderTarget | null = null;
     private sceneTarget: THREE.WebGLRenderTarget | null = null;
     private dofTarget: THREE.WebGLRenderTarget | null = null;
@@ -451,9 +464,9 @@ export class ViewportOpticsChain {
     private readonly box = new THREE.Box3();
     public status: ViewportOpticsStatus = { passes: [], drawn: [], overscan: 1, focusDistanceMeters: null, issues: [] };
 
-    /** Sets the lens; creates the passes it configures and frees the rest. */
-    public configure(lens: SceneCameraLens | undefined | null): ViewportOpticsPlan {
-        this.plan = planViewportOptics(lens);
+    /** Sets the lens and the scene's colour harmony grade; creates the passes they configure and frees the rest. */
+    public configure(lens: SceneCameraLens | undefined | null, harmony?: SceneColorHarmony | null): ViewportOpticsPlan {
+        this.plan = planViewportOptics(lens, harmony);
         this.sensorHeightMm = lens?.sensorHeightMm;
         if (this.plan.distortion && !this.lensPass) {
             this.lensPass = new LensDistortionEffect({ mode: 'redistort', edgeMode: 'clamp', chromaticAberration: 0, enabled: true });
@@ -477,8 +490,18 @@ export class ViewportOpticsChain {
             this.glowPass.dispose();
             this.glowPass = null;
         }
-        // temporal anti-aliasing runs whenever the chain draws, unless the lens turns it off
-        const taa = this.active && lens?.temporalAntiAliasing !== false;
+        if (this.plan.colorHarmony && !this.harmonyPass) {
+            this.harmonyPass = new ColorHarmonyPass();
+        } else if (!this.plan.colorHarmony && this.harmonyPass) {
+            this.harmonyPass.dispose();
+            this.harmonyPass = null;
+            this.harmonyTarget?.dispose();
+            this.harmonyTarget = null;
+        }
+        // temporal anti-aliasing runs whenever a lens effect draws, unless the lens turns it off (a colour grade alone
+        // spreads no light, so it does not need it)
+        const lensEffect = this.plan.passes.some(p => p !== 'color-harmony' && p !== 'output');
+        const taa = lensEffect && lens?.temporalAntiAliasing !== false;
         if (taa && !this.taaPass) this.taaPass = new TemporalAAPass();
         else if (!taa && this.taaPass) {
             this.taaPass.dispose();
@@ -627,15 +650,31 @@ export class ViewportOpticsChain {
         }
         const depthTexture = drawn_.depthTexture;
         let current = this.sceneTarget;
+        let taaHistory: THREE.WebGLRenderTarget | null = null;
 
         // temporal anti-aliasing: every lens effect after it reads the steady, resolved frame
         if (this.taaPass) {
             if (depthTexture) {
-                current = this.taaPass.render(renderer, current.texture, depthTexture, RW, RH);
+                current = taaHistory = this.taaPass.render(renderer, current.texture, depthTexture, RW, RH);
                 drawn.push('temporal-aa');
             } else {
                 issues.push('no depth texture from the scene draw; temporal anti-aliasing not drawn');
                 this.taaPass.reset();
+            }
+        }
+
+        // colour harmony: on the scene's own light, before depth of field blurs objects into the background
+        const harmony = this.plan.colorHarmony;
+        if (harmony && this.harmonyPass) {
+            // a flat background is not in the target (alpha 0); an opaque one is, and only depth tells it from the objects
+            const useDepth = !harmony.includeBackground && !flatBackground;
+            if (useDepth && !depthTexture) {
+                issues.push('no depth texture from the scene draw; colour harmony not drawn (it could not tell the objects from the background)');
+            } else {
+                this.harmonyTarget = this.ensureTarget(this.harmonyTarget, RW, RH, false, 0);
+                this.harmonyPass.render(renderer, current.texture, depthTexture, useDepth, harmony, this.harmonyTarget);
+                current = this.harmonyTarget;
+                drawn.push('color-harmony');
             }
         }
 
@@ -672,7 +711,7 @@ export class ViewportOpticsChain {
         // overlays: sharp, on top, in the same (widened) frustum as the scene
         if (overlays.length > 0) {
             // the resolved frame is also the next frame's history: overlays go on a copy of it
-            if (this.taaPass && current !== this.sceneTarget && current !== this.dofTarget) {
+            if (this.taaPass && taaHistory && current === taaHistory) {
                 this.taaCopyTarget = this.ensureTarget(this.taaCopyTarget, RW, RH, false, 0);
                 this.taaPass.copy(renderer, current.texture, this.taaCopyTarget);
                 current = this.taaCopyTarget;
@@ -748,6 +787,10 @@ export class ViewportOpticsChain {
             drawn.push('film-grain');
         }
         // a texture / cube background was drawn into the target opaque; the composite then never shows this colour
+        if (backgroundColour && harmony?.includeBackground && drawn.includes('color-harmony')) {
+            const [r, g, b] = harmonizeLinearRgb([backgroundColour.r, backgroundColour.g, backgroundColour.b], harmony);
+            backgroundColour.setRGB(r, g, b);
+        }
         const bg = backgroundColour ? backgroundColour.getRGB({ r: 0, g: 0, b: 0 }, renderer.outputColorSpace) : { r: 0, g: 0, b: 0 };
         (ou.uBackground.value as THREE.Vector3).set(bg.r, bg.g, bg.b);
         renderer.setRenderTarget(null);
@@ -763,7 +806,8 @@ export class ViewportOpticsChain {
         this.dofTarget?.dispose();
         this.lensTarget?.dispose();
         this.taaCopyTarget?.dispose();
-        this.sceneTarget = this.dofTarget = this.lensTarget = this.taaCopyTarget = null;
+        this.harmonyTarget?.dispose();
+        this.sceneTarget = this.dofTarget = this.lensTarget = this.taaCopyTarget = this.harmonyTarget = null;
         if (this.output) {
             this.output.material.dispose();
             this.output.mesh.geometry.dispose();

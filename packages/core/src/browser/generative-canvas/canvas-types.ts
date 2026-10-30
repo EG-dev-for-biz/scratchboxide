@@ -984,6 +984,33 @@ export interface SceneDisplayFlag {
     /** What it shows, for the viewport badge and the Output node ("Google 3D Tiles", "seat"). */
     label: string;
     /** Scene objects to show (staged layers, placed models), by objects[].id. */
+/** One arc of a colour harmony template: its centre `offsetDeg` from the template's hue, and its full width, in degrees. */
+export interface SceneColorHarmonySector {
+    offsetDeg: number;
+    widthDeg: number;
+}
+
+/**
+ * A colour harmony grade on the viewport (the tool strip's Colour harmony panel, sb_set_color_harmony): every hue drawn
+ * moves toward the nearest sector of a template turned to `hueDeg` on the OKLCH hue circle (Cohen-Or et al. 2006), keeping
+ * its lightness, so shading and texture stay and only the colour changes. Drawn in linear light before tone mapping, on
+ * the scene's objects only unless `includeBackground`. The template is any list of sectors: no named template types.
+ */
+export interface SceneColorHarmony {
+    /** Where the template is turned, degrees on the OKLCH hue circle (about 30 red, 110 yellow, 145 green, 265 blue). */
+    hueDeg: number;
+    /** The template's sectors relative to hueDeg (1-8); absent = one 94 degree sector round hueDeg. */
+    sectors?: SceneColorHarmonySector[];
+    /** How far each hue moves toward its harmonised hue, 0-1 (default 1). */
+    strength?: number;
+    /** Chroma (saturation) scale, 0-2 (default 1; 0 greys everything). */
+    chroma?: number;
+    /** Colour added at hueDeg, 0-1, scaled by lightness (default 0): what colours neutral surfaces (clay, white, grey), which have no hue to move. */
+    tint?: number;
+    /** True grades the sky and background too; default false, the scene's objects only. */
+    includeBackground?: boolean;
+}
+
     objectIds?: string[];
     /** customMeshes to show, by id. */
     meshIds?: string[];
@@ -1115,6 +1142,8 @@ export interface Scene3DData {
         timeOfDay?: number;
         sunElevation?: number;
         sunAzimuth?: number;
+    /** A colour harmony grade the viewport draws on the scene's objects (sb_set_color_harmony); absent = none. */
+    colorHarmony?: SceneColorHarmony;
         lightingPreset?: string;
         latitude?: number;
         longitude?: number;
