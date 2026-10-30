@@ -14,6 +14,7 @@ import { removeAndDispose } from './types';
 
 import type { PbrTextureSet } from '../../canvas-types';
 import { getPresetConfig } from './proceduralPbrTextures';
+import { authoredMaterialOf } from './clayRenderMode';
 import { resolveTextureUrl } from '../../../../common/texture-url-resolver';
 
 export interface CustomMeshDefinition {
@@ -56,16 +57,18 @@ function createGeometry(type: string | undefined): THREE.BufferGeometry {
     return new THREE.BoxGeometry(1, 1, 1);
 }
 
+/** Key on a custom mesh's userData: the pbrTextures set its material was last given, as JSON. */
+const PBR_SIG_KEY = 'sbPbrSig';
+
 /**
  * Resolves `src` (a texture-library path is exchanged for a signed GCS URL; anything else — a data
- * URI, an already-absolute URL — passes through unchanged) and loads it, guarding against the
- * target material having been replaced while the signed-URL request was in flight.
+ * URI, an already-absolute URL — passes through unchanged) and loads it, dropping the texture when
+ * `isCurrent` says the material or texture set it was for has been replaced while it loaded.
  */
 function loadPbrTexture(
     loader: THREE.TextureLoader,
     src: string,
-    mesh: THREE.Mesh,
-    expectedMaterial: THREE.Material,
+    isCurrent: () => boolean,
     onLoad: (tex: THREE.Texture) => void
 ): void {
     resolveTextureUrl(src)
@@ -73,7 +76,7 @@ function loadPbrTexture(
             loader.load(
                 resolvedUrl,
                 (tex) => {
-                    if (mesh.material !== expectedMaterial) {
+                    if (!isCurrent()) {
                         tex.dispose();
                         return;
                     }
@@ -159,6 +162,14 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
         }
 
         const pbrMat = mesh.material as THREE.MeshPhysicalMaterial;
+        // the factors multiply the maps, so they follow the definition on every sync, not only when the material is made
+        try {
+            pbrMat.color.set((def.material?.color ?? presetConfig?.color ?? 0xffffff) as any);
+        } catch {
+            pbrMat.color.set(0xffffff);
+        }
+        pbrMat.metalness = def.material?.metalness ?? presetConfig?.metalness ?? 0.1;
+        pbrMat.roughness = def.material?.roughness ?? presetConfig?.roughness ?? 0.5;
         const albedoSrc = pbr.albedoUrl || pbr.albedoMap;
         const normalSrc = pbr.normalUrl || pbr.normalMap;
         const ormSrc = pbr.ormUrl || pbr.ormMap;
@@ -166,8 +177,20 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
         const metallicSrc = pbr.metallicUrl || pbr.metalnessMap;
         const aoSrc = pbr.aoUrl || pbr.aoMap;
 
+        // Maps the set no longer names go, so a new texture never shows over an earlier one's relief.
+        if (!albedoSrc) pbrMat.map = null;
+        if (!normalSrc) pbrMat.normalMap = null;
+        if (!roughnessSrc && !ormSrc) pbrMat.roughnessMap = null;
+        if (!metallicSrc && !ormSrc) pbrMat.metalnessMap = null;
+        if (!aoSrc && !ormSrc) pbrMat.aoMap = null;
+
+        // A load lands only on the material of the set it was started for (clay mode may be holding that material aside).
+        const pbrSig = JSON.stringify(pbr);
+        mesh.userData[PBR_SIG_KEY] = pbrSig;
+        const isCurrent = () => mesh.userData[PBR_SIG_KEY] === pbrSig && authoredMaterialOf(mesh) === pbrMat;
+
         if (ormSrc) {
-            loadPbrTexture(loader, ormSrc, mesh, pbrMat, (tex) => {
+            loadPbrTexture(loader, ormSrc, isCurrent, (tex) => {
                 tex.wrapS = THREE.RepeatWrapping;
                 tex.wrapT = THREE.RepeatWrapping;
                 tex.repeat.set(repeat[0], repeat[1]);
@@ -181,7 +204,7 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
         }
 
         if (albedoSrc) {
-            loadPbrTexture(loader, albedoSrc, mesh, pbrMat, (tex) => {
+            loadPbrTexture(loader, albedoSrc, isCurrent, (tex) => {
                 tex.wrapS = THREE.RepeatWrapping;
                 tex.wrapT = THREE.RepeatWrapping;
                 tex.repeat.set(repeat[0], repeat[1]);
@@ -191,7 +214,7 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
             });
         }
         if (normalSrc) {
-            loadPbrTexture(loader, normalSrc, mesh, pbrMat, (tex) => {
+            loadPbrTexture(loader, normalSrc, isCurrent, (tex) => {
                 tex.wrapS = THREE.RepeatWrapping;
                 tex.wrapT = THREE.RepeatWrapping;
                 tex.repeat.set(repeat[0], repeat[1]);
@@ -202,7 +225,7 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
             });
         }
         if (roughnessSrc) {
-            loadPbrTexture(loader, roughnessSrc, mesh, pbrMat, (tex) => {
+            loadPbrTexture(loader, roughnessSrc, isCurrent, (tex) => {
                 tex.wrapS = THREE.RepeatWrapping;
                 tex.wrapT = THREE.RepeatWrapping;
                 tex.repeat.set(repeat[0], repeat[1]);
@@ -212,7 +235,7 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
             });
         }
         if (metallicSrc) {
-            loadPbrTexture(loader, metallicSrc, mesh, pbrMat, (tex) => {
+            loadPbrTexture(loader, metallicSrc, isCurrent, (tex) => {
                 tex.wrapS = THREE.RepeatWrapping;
                 tex.wrapT = THREE.RepeatWrapping;
                 tex.repeat.set(repeat[0], repeat[1]);
@@ -222,7 +245,7 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
             });
         }
         if (aoSrc) {
-            loadPbrTexture(loader, aoSrc, mesh, pbrMat, (tex) => {
+            loadPbrTexture(loader, aoSrc, isCurrent, (tex) => {
                 tex.wrapS = THREE.RepeatWrapping;
                 tex.wrapT = THREE.RepeatWrapping;
                 tex.repeat.set(repeat[0], repeat[1]);
@@ -234,6 +257,21 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
         }
         pbrMat.needsUpdate = true;
     } else {
+        if (mesh.userData[PBR_SIG_KEY] !== undefined) {
+            // the texture set was removed (an undo, an edit): its maps go with it
+            delete mesh.userData[PBR_SIG_KEY];
+            const authored = authoredMaterialOf(mesh);
+            for (const m of Array.isArray(authored) ? authored : [authored]) {
+                const std = m as THREE.MeshStandardMaterial;
+                if (!std.isMeshStandardMaterial) continue;
+                std.map = null;
+                std.normalMap = null;
+                std.roughnessMap = null;
+                std.metalnessMap = null;
+                std.aoMap = null;
+                std.needsUpdate = true;
+            }
+        }
         const hasPreset = !!presetConfig;
         const hasSheenOrHair = !!(def.fabricProperties || def.hairGroom || def.material?.sheen || (presetConfig && presetConfig.sheen));
         const hasGlassOrPhysical = hasPreset || hasSheenOrHair || def.material?.transmission !== undefined || def.material?.ior !== undefined || def.material?.clearcoat !== undefined;
