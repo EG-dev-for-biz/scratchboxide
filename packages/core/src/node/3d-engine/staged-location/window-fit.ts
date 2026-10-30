@@ -1374,24 +1374,31 @@ export function segmentSummary(fit: WindowFitFile): { attempted: number; assiste
 }
 export const WINDOW_FIT_FILE = 'window_fit.json';
 
+/** A facade of an orthos folder (facades.json) as the window fit reads it. */
+export type OrthoFacade = FitFrame & { facadeId: number; image: string; width: number; height: number; coverage: number; wallCoverage?: number; wallAreaM2?: number; uncoveredMask?: string };
+/** One facade's entry in window_fit.json. */
+export type WindowFitEntry = WindowFitFile['facades'][number];
+
+/** The facades of an orthos folder whose photo is there. */
+export function orthoFacades(orthosDir: string): OrthoFacade[] {
+    return (JSON.parse(fs.readFileSync(path.join(orthosDir, 'facades.json'), 'utf8')).facades as OrthoFacade[]).filter(f => fs.existsSync(path.join(orthosDir, f.image)));
+}
+
+/** A facade's photo and where it never reached: its own uncovered mask, else the photo's empty and grey texels. */
+function facadePhoto(orthosDir: string, f: OrthoFacade): { img: ReturnType<typeof decodePng>; mask: Uint8Array; own: boolean } {
+    const img = decodePng(fs.readFileSync(path.join(orthosDir, f.image)));
+    const maskFile = f.uncoveredMask ? path.join(orthosDir, f.uncoveredMask) : undefined;
+    if (maskFile && fs.existsSync(maskFile)) { const m = decodePng(fs.readFileSync(maskFile)); return { img, mask: Uint8Array.from({ length: m.width * m.height }, (_, k) => (m.rgba[k * 4] >= 128 ? 1 : 0)), own: true }; }
+    return { img, mask: Uint8Array.from({ length: img.width * img.height }, (_, k) => (img.rgba[k * 4 + 3] === 0 || (img.rgba[k * 4] === 128 && img.rgba[k * 4 + 1] === 128 && img.rgba[k * 4 + 2] === 128) ? 1 : 0)), own: false };
+}
+
 /**
- * Fits the windows of every facade plane in an orthos directory (relief_orthos/facades.json), whatever its photo's
- * coverage (the fit reads only covered texels: a plane the rebuild leaves as scan still has its windows drawn on the scan),
- * several at a time; writes window_fit.json. A plane with no uncovered mask beside it (one pipeline K did not straighten)
- * has it read from its ortho: the texels the photo never reached are exact grey 128 or transparent.
+ * The structural fit (the six readings) of these facades on this thread, `concurrency` at once so their native relief
+ * runs overlap; a facade that fails is its entry's error. The opening-mask fallback is fitWindowsForOrthos's.
  */
-export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency?: number; signal?: AbortSignal; params?: WindowFitParams; segment?: SegmentOpeningMask; segmentScope?: SegmentScope } = {}): Promise<{ file: string; fit: WindowFitFile; cached: boolean }> {
-    const file = path.join(orthosDir, WINDOW_FIT_FILE), P = opts.params ?? WINDOW_FIT_PARAMS;
-    const segment = opts.segment ? `${SEGMENT_TRY_VERSION}${opts.segmentScope ? `:${opts.segmentScope.key}` : ''}` : undefined;
-    if (fs.existsSync(file)) {
-        const prior = JSON.parse(fs.readFileSync(file, 'utf8')) as WindowFitFile;
-        if (prior.version === WINDOW_FIT_VERSION && JSON.stringify(prior.params) === JSON.stringify(P) && prior.segment === segment) return { file, fit: prior, cached: true };
-    }
-    const t0 = Date.now();
+export async function fitOrthoFacades(orthosDir: string, facades: OrthoFacade[], P: WindowFitParams = WINDOW_FIT_PARAMS, opts: { concurrency?: number; signal?: AbortSignal } = {}): Promise<WindowFitEntry[]> {
     const bin = await ensureReliefBandBinary();
-    const facades = (JSON.parse(fs.readFileSync(path.join(orthosDir, 'facades.json'), 'utf8')).facades as Array<FitFrame & { facadeId: number; image: string; coverage: number; wallCoverage?: number; wallAreaM2?: number; uncoveredMask?: string }>)
-        .filter(f => fs.existsSync(path.join(orthosDir, f.image)));
-    const out: WindowFitFile['facades'] = [];
+    const out: WindowFitEntry[] = [];
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'window-fit-'));
     let next = 0;
     const worker = async () => {
@@ -1400,43 +1407,73 @@ export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency
             if (!f) return;
             if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('aborted');
             const t = Date.now(), png = path.join(orthosDir, f.image);
-            let maskFile = f.uncoveredMask ? path.join(orthosDir, f.uncoveredMask) : undefined;
             try {
-                const img = decodePng(fs.readFileSync(png));
-                let mask: Uint8Array;
-                if (maskFile && fs.existsSync(maskFile)) { const m = decodePng(fs.readFileSync(maskFile)); mask = Uint8Array.from({ length: m.width * m.height }, (_, k) => (m.rgba[k * 4] >= 128 ? 1 : 0)); }
-                else {
-                    mask = Uint8Array.from({ length: img.width * img.height }, (_, k) => (img.rgba[k * 4 + 3] === 0 || (img.rgba[k * 4] === 128 && img.rgba[k * 4 + 1] === 128 && img.rgba[k * 4 + 2] === 128) ? 1 : 0));
-                    maskFile = path.join(scratch, `${f.facadeId}_uncovered.png`);
-                    fs.writeFileSync(maskFile, encodePng(img.width, img.height, Buffer.from(mask.map(v => (v ? 255 : 0))), 1));
-                }
-                let fit = await fitFacadeWindows({ rgba: img.rgba, width: img.width, height: img.height }, mask, f, nativeRelief(bin, png, maskFile, f, opts.signal), P);
-                // the six readings found nothing (the no-pattern tail): the segmenter's opening mask, as far as the photo confirms it
-                let segmentTry: SegmentTry | undefined;
-                if (!fit.rects.length && opts.segment && (!opts.segmentScope || opts.segmentScope.includes({ facadeId: f.facadeId, widthM: img.width * f.pixel, heightM: img.height * f.pixel, coverage: f.coverage }))) {
-                    const ts = Date.now();
-                    let openingMask: Uint8Array | undefined, error: string | undefined;
-                    try { openingMask = await opts.segment(png, img.width, img.height, opts.signal); }
-                    catch (err) { if (opts.signal?.aborted) throw err; error = (err instanceof Error ? err.message : String(err)).slice(0, 300); }
-                    if (error !== undefined) segmentTry = { outcome: 'failed', error, ms: Date.now() - ts };
-                    else if (!openingMask || openingMask.length !== img.width * img.height) segmentTry = { outcome: 'not-found', ms: Date.now() - ts };
-                    else {
-                        let marked = 0; for (const v of openingMask) marked += v ? 1 : 0;
-                        const read = maskWindows({ rgba: img.rgba, width: img.width, height: img.height }, mask, f, openingMask, P);
-                        if (read.rects.length) fit = { rects: read.rects, panes: read.panes, bands: [...fit.bands, ...read.bands], ...(read.generated ? { generated: read.generated } : {}) };
-                        else fit = { ...fit, bands: [...fit.bands, ...read.bands] };
-                        segmentTry = { outcome: read.rects.length ? 'assisted' : 'no-windows', openingShare: Math.round((marked / openingMask.length) * 1000) / 1000, seeds: read.seeds, repeats: read.repeats, ...(read.generated ? { generated: read.generated.length } : {}), ms: Date.now() - ts };
-                    }
-                }
-                out.push({ facadeId: f.facadeId, width: img.width, height: img.height, rects: fit.rects, panes: fit.panes, ...(fit.generated ? { generated: fit.generated } : {}), bands: fit.bands, ...(segmentTry ? { segmentTry } : {}), ms: Date.now() - t });
+                const { img, mask, own } = facadePhoto(orthosDir, f);
+                let maskFile = own ? path.join(orthosDir, f.uncoveredMask!) : undefined;
+                if (!maskFile) { maskFile = path.join(scratch, `${f.facadeId}_uncovered.png`); fs.writeFileSync(maskFile, encodePng(img.width, img.height, Buffer.from(mask.map(v => (v ? 255 : 0))), 1)); }
+                const fit = await fitFacadeWindows({ rgba: img.rgba, width: img.width, height: img.height }, mask, f, nativeRelief(bin, png, maskFile, f, opts.signal), P);
+                out.push({ facadeId: f.facadeId, width: img.width, height: img.height, rects: fit.rects, panes: fit.panes, ...(fit.generated ? { generated: fit.generated } : {}), bands: fit.bands, ms: Date.now() - t });
             } catch (err) {
                 if (opts.signal?.aborted) throw err;
                 out.push({ facadeId: f.facadeId, error: err instanceof Error ? err.message : String(err) });
             }
         }
     };
-    try { await Promise.all(Array.from({ length: Math.max(1, opts.concurrency ?? Math.max(1, Math.min(8, os.cpus().length - 1))) }, worker)); }
+    try { await Promise.all(Array.from({ length: Math.max(1, opts.concurrency ?? 1) }, worker)); }
     finally { fs.rmSync(scratch, { recursive: true, force: true }); }
+    return out;
+}
+
+/**
+ * Fits the windows of every facade plane in an orthos directory (relief_orthos/facades.json), whatever its photo's
+ * coverage (the fit reads only covered texels: a plane the rebuild leaves as scan still has its windows drawn on the scan),
+ * several at a time; writes window_fit.json. A plane with no uncovered mask beside it (one pipeline K did not straighten)
+ * has it read from its ortho: the texels the photo never reached are exact grey 128 or transparent.
+ */
+export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency?: number; signal?: AbortSignal; params?: WindowFitParams; segment?: SegmentOpeningMask; segmentScope?: SegmentScope; /** The structural fit of these facades elsewhere (worker threads: remesh-worker-pool.ts), the same entries fitOrthoFacades gives. */ fitFacades?: (facades: OrthoFacade[], P: WindowFitParams) => Promise<WindowFitEntry[]> } = {}): Promise<{ file: string; fit: WindowFitFile; cached: boolean }> {
+    const file = path.join(orthosDir, WINDOW_FIT_FILE), P = opts.params ?? WINDOW_FIT_PARAMS;
+    const segment = opts.segment ? `${SEGMENT_TRY_VERSION}${opts.segmentScope ? `:${opts.segmentScope.key}` : ''}` : undefined;
+    if (fs.existsSync(file)) {
+        const prior = JSON.parse(fs.readFileSync(file, 'utf8')) as WindowFitFile;
+        if (prior.version === WINDOW_FIT_VERSION && JSON.stringify(prior.params) === JSON.stringify(P) && prior.segment === segment) return { file, fit: prior, cached: true };
+    }
+    const t0 = Date.now();
+    const facades = orthoFacades(orthosDir);
+    const concurrency = Math.max(1, opts.concurrency ?? Math.max(1, Math.min(8, os.cpus().length - 1)));
+    const out = opts.fitFacades ? await opts.fitFacades(facades, P) : await fitOrthoFacades(orthosDir, facades, P, { concurrency, ...(opts.signal ? { signal: opts.signal } : {}) });
+    // the six readings found nothing (the no-pattern tail): the segmenter's opening mask, as far as the photo confirms it. On
+    // this thread, since it calls a model
+    const segmentFn = opts.segment;
+    if (segmentFn) {
+        const tail = out.map((e, k) => ({ e, k })).filter(({ e }) => !('error' in e) && !e.rects.length);
+        let next = 0;
+        const worker = async () => {
+            for (;;) {
+                const item = tail[next++];
+                if (!item) return;
+                if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('aborted');
+                const e = item.e as Exclude<WindowFitEntry, { error: string }>, f = facades.find(x => x.facadeId === e.facadeId)!;
+                const png = path.join(orthosDir, f.image), { img, mask } = facadePhoto(orthosDir, f);
+                if (opts.segmentScope && !opts.segmentScope.includes({ facadeId: f.facadeId, widthM: img.width * f.pixel, heightM: img.height * f.pixel, coverage: f.coverage })) continue;
+                const ts = Date.now();
+                let openingMask: Uint8Array | undefined, error: string | undefined, segmentTry: SegmentTry;
+                try { openingMask = await segmentFn(png, img.width, img.height, opts.signal); }
+                catch (err) { if (opts.signal?.aborted) throw err; error = (err instanceof Error ? err.message : String(err)).slice(0, 300); }
+                let fit: WindowFit = { rects: e.rects, panes: e.panes ?? [], bands: e.bands, ...(e.generated ? { generated: e.generated } : {}) };
+                if (error !== undefined) segmentTry = { outcome: 'failed', error, ms: Date.now() - ts };
+                else if (!openingMask || openingMask.length !== img.width * img.height) segmentTry = { outcome: 'not-found', ms: Date.now() - ts };
+                else {
+                    let marked = 0; for (const v of openingMask) marked += v ? 1 : 0;
+                    const read = maskWindows({ rgba: img.rgba, width: img.width, height: img.height }, mask, f, openingMask, P);
+                    if (read.rects.length) fit = { rects: read.rects, panes: read.panes, bands: [...fit.bands, ...read.bands], ...(read.generated ? { generated: read.generated } : {}) };
+                    else fit = { ...fit, bands: [...fit.bands, ...read.bands] };
+                    segmentTry = { outcome: read.rects.length ? 'assisted' : 'no-windows', openingShare: Math.round((marked / openingMask.length) * 1000) / 1000, seeds: read.seeds, repeats: read.repeats, ...(read.generated ? { generated: read.generated.length } : {}), ms: Date.now() - ts };
+                }
+                out[item.k] = { facadeId: e.facadeId, width: e.width, height: e.height, rects: fit.rects, panes: fit.panes, ...(fit.generated ? { generated: fit.generated } : {}), bands: fit.bands, segmentTry, ms: e.ms + (Date.now() - ts) };
+            }
+        };
+        await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, tail.length)) }, worker));
+    }
     out.sort((a, b) => a.facadeId - b.facadeId);
     const fit: WindowFitFile = { version: WINDOW_FIT_VERSION, params: P, ...(segment ? { segment } : {}), ms: Date.now() - t0, facades: out };
     fs.writeFileSync(file, JSON.stringify(fit));
