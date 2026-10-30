@@ -5,6 +5,7 @@ set -euo pipefail
 # Pipeline K-D cloud chunk job (docs/research/2026-10-29-kd-cloud-chunk-runner-plan.md).
 #
 #   deploy/kd-chunk-job/deploy.sh setup   bucket, secrets, service account, IAM (once)
+#   deploy/kd-chunk-job/deploy.sh grants  the IAM bindings alone (needs Owner or Secret Manager Admin)
 #   deploy/kd-chunk-job/deploy.sh build   the image of HEAD, tagged with its commit (Cloud Build)
 #   deploy/kd-chunk-job/deploy.sh job     the Cloud Run job, pointed at HEAD's image
 #   deploy/kd-chunk-job/deploy.sh all     the three in order
@@ -51,13 +52,20 @@ setup() {
   "${G[@]}" iam service-accounts describe "$JOB_SA" >/dev/null 2>&1 \
     || "${G[@]}" iam service-accounts create "$JOB_ID" --display-name "Pipeline K-D chunk job"
 
-  echo "[setup] secrets"
-  "${G[@]}" secrets describe "$SA_SECRET" >/dev/null 2>&1 || "${G[@]}" secrets create "$SA_SECRET" --replication-policy automatic
-  "${G[@]}" secrets versions add "$SA_SECRET" --data-file "$SA_KEY_FILE"
-  "${G[@]}" secrets describe "$MAPS_SECRET" >/dev/null 2>&1 || "${G[@]}" secrets create "$MAPS_SECRET" --replication-policy automatic
-  printf '%s' "$GOOGLE_MAPS_API_KEY" | "${G[@]}" secrets versions add "$MAPS_SECRET" --data-file -
+  echo "[setup] secrets (a version only when the secret is new)"
+  "${G[@]}" secrets describe "$SA_SECRET" >/dev/null 2>&1 \
+    || { "${G[@]}" secrets create "$SA_SECRET" --replication-policy automatic && "${G[@]}" secrets versions add "$SA_SECRET" --data-file "$SA_KEY_FILE"; }
+  "${G[@]}" secrets describe "$MAPS_SECRET" >/dev/null 2>&1 \
+    || { "${G[@]}" secrets create "$MAPS_SECRET" --replication-policy automatic && printf '%s' "$GOOGLE_MAPS_API_KEY" | "${G[@]}" secrets versions add "$MAPS_SECRET" --data-file -; }
+  grants
+  echo "[setup] done. Cloud Run quota in $REGION must cover SCRATCHBOX_KD_CLOUD_PARALLEL x 8 vCPU (48 x 8 = 384):"
+  echo "        https://console.cloud.google.com/iam-admin/quotas?project=$PROJECT&service=run.googleapis.com"
+}
 
-  echo "[setup] IAM"
+# The IAM bindings alone (rerun safely). Setting a secret's policy needs Owner or Secret Manager Admin on the project.
+grants() {
+  local app; app="$(app_sa)"
+  echo "[grants] the job's account reads the two secrets and both buckets"
   for s in "$SA_SECRET" "$MAPS_SECRET"; do
     "${G[@]}" secrets add-iam-policy-binding "$s" --member "serviceAccount:$JOB_SA" --role roles/secretmanager.secretAccessor >/dev/null
   done
@@ -65,10 +73,15 @@ setup() {
     "${G[@]}" storage buckets add-iam-policy-binding "gs://$b" --member "serviceAccount:$JOB_SA" --role roles/storage.objectAdmin >/dev/null
   done
   # the laptop (the app's account) writes requests, reads results, runs and cancels executions as the job's account
+  echo "[grants] the app's account ($app) uses the job bucket, the job and the job's account"
   "${G[@]}" storage buckets add-iam-policy-binding "gs://$JOB_BUCKET" --member "serviceAccount:$app" --role roles/storage.objectAdmin >/dev/null
   "${G[@]}" iam service-accounts add-iam-policy-binding "$JOB_SA" --member "serviceAccount:$app" --role roles/iam.serviceAccountUser >/dev/null
-  echo "[setup] done. Cloud Run quota in $REGION must cover SCRATCHBOX_KD_CLOUD_PARALLEL x 8 vCPU (48 x 8 = 384):"
-  echo "        https://console.cloud.google.com/iam-admin/quotas?project=$PROJECT&service=run.googleapis.com"
+  if "${G[@]}" run jobs describe "$JOB" --region "$REGION" >/dev/null 2>&1; then
+    "${G[@]}" run jobs add-iam-policy-binding "$JOB" --region "$REGION" --member "serviceAccount:$app" --role roles/run.developer >/dev/null
+  else
+    echo "[grants] the job does not exist yet: run 'job', which grants run.developer on it"
+  fi
+  echo "[grants] done"
 }
 
 build() {
@@ -96,8 +109,9 @@ job() {
 JOB_ID="${JOB_SA%%@*}"
 case "${1:-}" in
   setup) setup ;;
+  grants) grants ;;
   build) build ;;
   job) job ;;
   all) setup; build; job ;;
-  *) sed -n '4,18p' "$0"; exit 2 ;;
+  *) sed -n '4,19p' "$0"; exit 2 ;;
 esac
