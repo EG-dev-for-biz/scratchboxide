@@ -66,6 +66,7 @@ function defectsSummary(r: VisibleDefectsReport) {
     return {
         clayPct: pct(r.clayShare), holePct: pct(r.holeShare), smearPct: pct(r.smearShare),
         worstViewClayPct: pct(r.maxViewClayShare), worstViewHolePct: pct(r.maxViewHoleShare), flagged: r.flagged,
+        largestHoleM2: r.largestHoleRegionM2, holeRegions: r.holeRegions.slice(0, 3),
         holesAt: top(r.byNode.holes), clayAt: top(r.byNode.clay), smearAt: top(r.byNode.smear), why: r.why
     };
 }
