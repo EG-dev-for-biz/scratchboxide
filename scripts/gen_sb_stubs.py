@@ -134,6 +134,7 @@ class Member:
     probe: str | None = None  # source path for return inference (python callables without a return annotation)
     probe_self: str | None = None  # the class a probed function is stored on as a method (probed with a typed self)
     native_return: str | None = None  # return type of the native callable this Python patch replaced
+    raises_only: bool = False  # its body only raises (a call kept to explain why it cannot run): stubbed, never summarised
 
 
 @dataclass
@@ -422,6 +423,21 @@ class Analyzer:
             return None
         return f"{mod}.{qual}"
 
+    @staticmethod
+    def only_raises(fn: Any) -> bool:
+        """True when a Python function's body, past its docstring, is a single raise."""
+        try:
+            tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+        except (OSError, TypeError, SyntaxError):
+            return False
+        defs = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        if not defs:
+            return False
+        body = defs[0].body
+        if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str):
+            body = body[1:]
+        return len(body) == 1 and isinstance(body[0], ast.Raise)
+
     def callable_member(self, name: str, fn: Any, kind: str, current: str, imports: set[str], owner: type | None = None) -> Member:
         if is_nb_callable(fn):
             return Member(name, kind, self.nb_signatures(fn, name, current, imports), doc=None)
@@ -443,7 +459,8 @@ class Analyzer:
             if len(rets) == 1 and None not in rets:
                 native_return = rets.pop()
             doc = doc or next((e[1] for e in orig.__nb_signature__ if e[1]), None)
-        return Member(name, kind, sigs, doc=inspect.cleandoc(doc) if doc else None, probe=probe, probe_self=probe_self, native_return=native_return)
+        return Member(name, kind, sigs, doc=inspect.cleandoc(doc) if doc else None, probe=probe, probe_self=probe_self, native_return=native_return,
+                      raises_only=self.only_raises(target))
 
     # ---------------------------------------------------------------- classes
     def class_model(self, cls: type, name: str, qualname: str, current: str, imports: set[str]) -> ClassModel:
@@ -1047,7 +1064,8 @@ def summary_entries(models: dict[str, ModuleModel], max_params: int = MAX_SUMMAR
         return f"  {prefix}{name}{compact_params(s.params, max_params, class_names)}{ret}" + (f"  # {doc}" if doc else "")
 
     def callable_lines(m: Member, prefix: str) -> list[str]:
-        return [sig_line(prefix, m.name, s, m.doc) for s in m.sigs[:2]]
+        # a call whose body only raises is in the stubs (a script calling it gets its explanation), not in the API listed
+        return [] if m.raises_only else [sig_line(prefix, m.name, s, m.doc) for s in m.sigs[:2]]
 
     # how often each class is referenced: returned by a callable, a property's type, or named on sb
     refs: dict[str, int] = {}

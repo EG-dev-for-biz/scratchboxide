@@ -141,8 +141,6 @@ sb.architecture:
   _ArchitectureModule.generate_peripteral_temple(archetype='roman_peripteral', order: RomanOrder=..., footprint_length=42.0, footprint_width=24.0, column_count_x=8, column_count_y=14, column_height=7.5, plinth_height=1.4, …) -> Mesh  # Construct an authentic Vitruvian classical temple with peripteral colonnade and gable roof
 sb.constants:
   attributes: OUTPUT_GLB_PATH (read-only)
-sb.geospatial:
-  _GeospatialModule.load_location(query=None)  # Scripts are not staged on real places, so there is no place to load.
 sb.human:
   attributes: Any, Armature, CANONICAL_22_BONES, FACS_52_ACTION_UNITS, GenderMorph, Human, PoseBone, PrincipledBsdfMaterial, SbHumanModel, ShapeKeyBlock, ShapeKeys, Skeleton, StudioHuman, Union
   _human_namespace.create(name='Human', height=1.78, gender_beta=0.0, position=(0.0, 0.0, 0.0), **kwargs) -> StudioHuman  # Primary DCC factory function for creating a high-fidelity Studio Human.
@@ -167,10 +165,13 @@ sb.Armature:
   attributes: bones, pose
   sb.Armature()
   .get_bone(name) -> PoseBone | None
+sb.PoseBone:
+  attributes: name, rotation_euler, rotation_quaternion, location, scale
+  sb.PoseBone(name)
 sb.ShapeKeyBlock:
   attributes: name, value
   sb.ShapeKeyBlock(name, value=0.0)
-Also in the API (not listed here): sb.PbrMaterialWrapper; sb.PoseBone; sb.PrincipledBsdfMaterial; sb.ShapeKeys; sb.math.AABB; sb.human.Skeleton; sb.math.Quat; sb.processing.HausdorffResult; …
+Also in the API (not listed here): sb.PbrMaterialWrapper; sb.PrincipledBsdfMaterial; sb.ShapeKeys; sb.math.AABB; sb.human.Skeleton; sb.math.Quat; sb.processing.HausdorffResult; sb.processing.SurfaceSamplePoint; sb.scan_massing.Slice; …
 `;
 
 /** The same reference within the small budget used in the execute_3d_python_script description. */
@@ -191,9 +192,9 @@ sb.Structure: attributes: material: Any, mesh, archetype, footprint_length, foot
 sb.Terrain: attributes: material: Any, extents, archetype, domain_warp_scale, hydraulic_erosion_steps, min_x, max_x, min_z, max_z, mesh; Terrain(surface_or_mesh, extents, archetype, domain_warp_scale, hydraulic_erosion_steps); sample_height(x, z) -> float; sample_normal(x, z) -> Any (+5 more)
 sb.architecture: attributes: RomanOrder, BuildingConfig, RoofType; _ArchitectureModule.create_building(width=18.0, depth=14.0, floors=4, floor_height=3.4, ground_floor_height=4.2, …) -> Mesh; _ArchitectureModule.generate_building(config: BuildingConfig, name='ProceduralBuilding') -> Mesh; _ArchitectureModule.generate_peripteral_temple(archetype='roman_peripteral', order: RomanOrder=..., footprint_length=42.0, footprint_width=24.0, column_count_x=8, …) -> Mesh
 sb.constants: attributes: OUTPUT_GLB_PATH (read-only)
-sb.geospatial: _GeospatialModule.load_location(query=None)
 sb.human: attributes: Any, Armature, CANONICAL_22_BONES, FACS_52_ACTION_UNITS, GenderMorph, Human, PoseBone, PrincipledBsdfMaterial, SbHumanModel, ShapeKeyBlock, ShapeKeys, Skeleton, StudioHuman, Union; _human_namespace.create(name='Human', height=1.78, gender_beta=0.0, position=(0.0, 0.0, 0.0), **kwargs) -> StudioHuman (+2 more)
-Also in the API (not listed here): sb.layout; sb.nature; sb.pbr; sb.validation; sb.composer.StudioLight; sb.Armature; …
+sb.layout: attributes: SpatialConstraintSolver (read-only) (+2 more)
+Also in the API (not listed here): sb.nature; sb.pbr; sb.validation; sb.composer.StudioLight; sb.Armature; …
 `;
 
 /** Names each module and class of the stubs defines (classes by their short name), for the type-check gate's
