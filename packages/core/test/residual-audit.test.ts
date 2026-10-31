@@ -229,12 +229,14 @@ function buildGlb(meshes: Array<{ name: string; positions: Float32Array; indices
 describe('parapet sweep over a wall another part split (the 488 Broadway spike)', () => {
     it('resolves the split wall to its pieces, joins only walls that meet, and sits on the wall top, not at the part\'s top cap', async () => {
         const dir = tmp();
-        // a 20 x 12 m block whose roof plane (y 12) sits far under its top cap (y 30), and a small block on its roof whose
-        // corner lies on wall 0: wall 0 is split into "w:a:0:0:0" and "w:a:0:0:1", so the key read before ("w:a:0:0") is gone
+        // a 20 x 12 m block whose roof plane (y 12) sits far under its top cap (y 30), and a low annex against wall 0 whose
+        // corners lie on it: wall 0 is split into "w:a:0:0:0", ":1" (above the annex) and ":2", so the key read before
+        // ("w:a:0:0") is gone. (At 488 Broadway a block on the roof split the wall; since c60b5458 a part standing higher no
+        // longer cuts the walls below it, so the split here comes from a part standing on the same ground.)
         const m: Pick<Massing, 'parts' | 'meshes'> = {
             parts: [
                 { id: 'a', baseY: 0, topY: 30, loops: [[[0, 0], [20, 0], [20, -12], [0, -12]]], planes: [{ a: 12, b: 0, c: 0, tag: 'flat' }], heightSource: 'vector', heights: {} },
-                { id: 'b', baseY: 11.7, topY: 15, loops: [[[8, 0], [12, 0], [12, -4], [8, -4]]], planes: [], heightSource: 'vector', heights: {} }
+                { id: 'b', baseY: 0, topY: 5, loops: [[[8, 4], [12, 4], [12, 0], [8, 0]]], planes: [], heightSource: 'vector', heights: {} }
             ],
             meshes: []
         };
