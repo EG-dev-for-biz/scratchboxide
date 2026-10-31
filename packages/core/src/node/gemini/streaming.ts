@@ -34,6 +34,7 @@ import {
 } from './gemini-client';
 import { compactChatHistory, HISTORY_SUMMARY_INSTRUCTION } from './history-compaction';
 import { toolBlockedReason } from './tool-permissions';
+import { primitiveOutOfScopeReason } from '../../common/product-scope';
 import { resolveToolTimeBudget } from './tool-time-budgets';
 import {
     buildToolDeclarations,
@@ -52,7 +53,7 @@ import { buildChatPayload, functionDeclarationCount, toolsForModel, type BuiltCh
 import { LOAD_TOOLS_NAME } from './tool-catalog';
 import { describeRouteOutcome, raceRoutedCall, routerConfig, type StartStream } from './fast-router';
 import { ContextCacheManager, type ContextCacheTarget } from './context-cache';
-import { AgentVerificationService } from './agent-verification-service';
+import { AgentVerificationService, extractGeometryVerificationInput, type GeometryVerificationOptions } from './agent-verification-service';
 import { ChatTurnTimer } from './chat-turn-telemetry';
 
 export type StreamEventSink = (event: GeminiStreamEvent) => void;
@@ -500,7 +501,7 @@ export class StreamingEngine {
             }
         });
 
-        const artifact = await buildPendingPythonGenerator(this.synthesizeArtifact(request.prompt, state.accumulatedText, request, []), signal);
+        const artifact = await buildPendingPythonGenerator(this.inScopeArtifact(this.synthesizeArtifact(request.prompt, state.accumulatedText, request, []), onEvent, agent), signal);
 
         const summary = {
             text: state.accumulatedText,
@@ -655,6 +656,7 @@ export class StreamingEngine {
         let awaitingUser = false;
         let currentTurn = 0;
         const modifiedFiles = new Set<string>();
+        let pendingGeometryVerification: GeometryVerificationOptions | undefined;
         let verificationAttempts = 0;
         const maxVerificationAttempts = 2;
 
@@ -743,6 +745,13 @@ export class StreamingEngine {
 
                 const { exec, resultPayload } = await this.executeToolCallWithDeadline({ id: toolCall.id, name: toolName, args: toolCall.args }, request, onEvent, model, signal);
                 mcpExecutions.push(exec);
+
+                if (exec.status === 'completed') {
+                    const geomInput = extractGeometryVerificationInput(resultPayload);
+                    if (geomInput) {
+                        pendingGeometryVerification = geomInput;
+                    }
+                }
 
                 if (toolName === 'mount_canvas_primitive' || (resultPayload && (resultPayload as any).artifact)) {
                     const mountedArtifact: CanvasArtifact | undefined = (resultPayload as any)?.artifact
@@ -935,8 +944,10 @@ export class StreamingEngine {
                     break;
                 }
 
-                // In agent mode (or if autoVerify is explicitly requested), verify modified files and self-heal
-                const shouldVerify = (request.mode === 'agent' || request.autoVerify) && modifiedFiles.size > 0;
+                // In agent mode (or if autoVerify is explicitly requested), verify modified files / 3D geometry and self-heal
+                const hasCodeToVerify = modifiedFiles.size > 0;
+                const hasGeometryToVerify = pendingGeometryVerification !== undefined;
+                const shouldVerify = (request.mode === 'agent' || request.autoVerify) && (hasCodeToVerify || hasGeometryToVerify);
                 if (shouldVerify && verificationAttempts < maxVerificationAttempts) {
                     verificationAttempts++;
                     onEvent({
@@ -946,29 +957,50 @@ export class StreamingEngine {
 
                     const toolCtx = this.toolContext(request);
                     const verifier = new AgentVerificationService(toolCtx.lsp, toolCtx.sandbox);
-                    const outcome = await verifier.verify({
-                        workspaceRoot: toolCtx.workspaceRoot,
-                        modifiedFiles: Array.from(modifiedFiles),
-                        // A full test run per edit is too slow for chat; the typecheck runs every time.
-                        runTests: false
-                    });
+                    const geomSnapshot = pendingGeometryVerification;
+                    pendingGeometryVerification = undefined;
 
-                    onEvent({
-                        type: 'verification_result',
-                        verification: outcome,
-                        modelUsed: model
-                    });
+                    let outcome = hasCodeToVerify
+                        ? await verifier.verify({
+                            workspaceRoot: toolCtx.workspaceRoot,
+                            modifiedFiles: Array.from(modifiedFiles),
+                            // A full test run per edit is too slow for chat; the typecheck runs every time.
+                            runTests: false
+                        })
+                        : undefined;
 
-                    if (!outcome.passed) {
-                        // Diagnostic errors detected: initiate self-healing turn
-                        payload.contents.push({ role: 'model', parts: [{ text: turnText || accumulatedText }] });
-                        payload.contents.push({
-                            role: 'user',
-                            parts: [{
-                                text: `[AUTOMATED VERIFICATION FEEDBACK]\n${outcome.summary || ''}\n\nRead the failing lines, find the cause, and fix it with workspace tools.`
-                            }]
+                    if (geomSnapshot) {
+                        const geomOutcome = verifier.verifyGeometry(geomSnapshot);
+                        if (!outcome) {
+                            outcome = geomOutcome;
+                        } else {
+                            outcome = {
+                                ...outcome,
+                                passed: outcome.passed && geomOutcome.passed,
+                                summary: [outcome.summary, geomOutcome.summary].filter(Boolean).join('\n'),
+                                geometryVerification: geomOutcome.geometryVerification
+                            };
+                        }
+                    }
+
+                    if (outcome) {
+                        onEvent({
+                            type: 'verification_result',
+                            verification: outcome,
+                            modelUsed: model
                         });
-                        continue;
+
+                        if (!outcome.passed) {
+                            // Diagnostic or geometry errors detected: initiate self-healing turn
+                            payload.contents.push({ role: 'model', parts: [{ text: turnText || accumulatedText }] });
+                            payload.contents.push({
+                                role: 'user',
+                                parts: [{
+                                    text: `[AUTOMATED VERIFICATION FEEDBACK]\n${outcome.summary || ''}\n\n${hasCodeToVerify ? 'Read the failing lines, find the cause, and fix it with workspace tools.' : 'Inspect the geometry failure and re-run the 3D generation or repair tool with valid non-degenerate parameters.'}`
+                                }]
+                            });
+                            continue;
+                        }
                     }
                 }
 
@@ -1029,7 +1061,7 @@ export class StreamingEngine {
         // mode. Synthesizing from prompt keywords (e.g. "World Cup" -> "world") invented documents and scenes the model
         // never wrote, so a prose reply leaves the canvas as it is.
         const artifact = streamMountedArtifact
-            || await buildPendingPythonGenerator(this.synthesizeArtifact(request.prompt, accumulatedText, request, mcpExecutions, accumulatedGroundingMetadata), signal);
+            || await buildPendingPythonGenerator(this.inScopeArtifact(this.synthesizeArtifact(request.prompt, accumulatedText, request, mcpExecutions, accumulatedGroundingMetadata), onEvent, model), signal);
 
         if (request.requireGoogleSearch) {
             const g = accumulatedGroundingMetadata as { webSearchQueries?: string[]; groundingChunks?: unknown[] } | undefined;
@@ -1183,6 +1215,17 @@ export class StreamingEngine {
             clearInterval(heartbeat);
             signal?.removeEventListener('abort', onAbort);
         }
+    }
+
+    /**
+     * A canvas the model wrote into its reply that this build cannot make (common/product-scope.ts) is not opened, and
+     * the chat says why; the mount and morph tools refuse such types themselves, so the model hears it there.
+     */
+    private inScopeArtifact(artifact: CanvasArtifact | undefined, onEvent: StreamEventSink, model: string): CanvasArtifact | undefined {
+        const outOfScope = artifact ? primitiveOutOfScopeReason(artifact.type) : undefined;
+        if (!outOfScope) return artifact;
+        onEvent({ type: 'status', text: outOfScope, modelUsed: model });
+        return undefined;
     }
 
     /** Route a model tool call to the registry. Calls that cannot run are reported as failures, never as success. */

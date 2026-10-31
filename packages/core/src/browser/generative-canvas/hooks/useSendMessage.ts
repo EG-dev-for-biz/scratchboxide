@@ -54,6 +54,8 @@ import {
     type StepCutoff
 } from './toolStepState';
 import { resolveModeForArtifact } from '../guardrails-service';
+import { isScopedTo3dVfx } from '../../../common/product-scope';
+import { postScopeNote } from '../chat/scopeNote';
 import { cleanMessageTextSmart } from '../ChatMarkdownRenderer';
 import { ProjectArtifactController } from '../project-artifact-controller';
 import { WorkspaceConfigClient } from '../workspace-config-client';
@@ -211,10 +213,26 @@ async function runTerminalMention(item: ContextMentionItem, workspaceRoot?: stri
     }
 }
 
+/** Slash commands for what the 3D/VFX build (common/product-scope.ts) does not offer, each with what it would open. */
+const SCOPED_OFF_COMMANDS: Readonly<Record<string, string>> = {
+    plan: 'deep write', deepwrite: 'deep write', codebase: 'deep write', spec: 'deep write',
+    doc: 'documents', document: 'documents', code: 'code sandboxes', sandbox: 'code sandboxes',
+    graph: 'node graphs', workflow: 'node graphs', kanban: 'kanban boards', board: 'kanban boards',
+    dashboard: 'dashboards', metrics: 'dashboards'
+};
+
 /** Step 1 — `/plan`, `/agent`, `/settings`, `/3d`, `/code`, `/video`, etc. handle slash commands. Returns true if handled. */
 async function handleSlashCommands(d: SendMessageDeps, text: string): Promise<boolean> {
     const { setInputValue, executeDeepWritePipeline, handleStartAgent, setLayoutMode, showToast, openSettingsToTab } = d;
     const lowerText = text.trim().toLowerCase();
+
+    // 0. In the 3D/VFX build such a command answers in the chat instead of running (toasts are not shown in this app).
+    const command = lowerText.match(/^\/([a-z0-9-]+)(\s|$)/)?.[1];
+    if (command && isScopedTo3dVfx() && Object.prototype.hasOwnProperty.call(SCOPED_OFF_COMMANDS, command)) {
+        setInputValue('');
+        postScopeNote(d.setMessages, `\`/${command}\` is off: this build of Scratchbox is limited to 3D and VFX projects and does not offer ${SCOPED_OFF_COMMANDS[command]}. Ask for a 3D scene or a video timeline instead.`);
+        return true;
+    }
 
     // 1. Settings slash command
     if (lowerText === '/settings' || lowerText.startsWith('/settings ')) {
@@ -428,15 +446,32 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
         }
 
         // The whole conversation before this message; the server summarizes older turns when it
-        // outgrows the context budget. Assistant turns note which tools ran, since their results
-        // are not replayed.
+        // outgrows the context budget. Assistant turns note which tools ran (including up to 1200 chars
+        // of summaryResult plus structured resultFields like glbPath/durableUri/vertexCount) and any
+        // interactive question/plan cards, since raw tool payloads are not replayed.
         const chatHistory = updatedMessages
             .slice(0, -1)
             .filter(m => m.sender !== 'system' && !m.isStreaming)
             .map(m => {
-                const tools = (m.mcpExecutions || [])
-                    .map(e => `${e.toolName} (${e.status})${e.summaryResult ? `: ${e.summaryResult.slice(0, 200)}` : ''}`);
-                const text = tools.length > 0 ? `${m.text}\n\n[Tools run: ${tools.join('; ')}]` : m.text;
+                const tools = (m.mcpExecutions || []).map(e => {
+                    const summary = e.summaryResult ? `: ${e.summaryResult.slice(0, 1200)}` : '';
+                    const fields = e.resultFields && Object.keys(e.resultFields).length > 0
+                        ? ` ${JSON.stringify(e.resultFields)}`
+                        : '';
+                    return `${e.toolName} (${e.status})${summary}${fields}`;
+                });
+                const cardNotes: string[] = [];
+                if (m.questionCard?.questions?.length) {
+                    cardNotes.push(`[Clarification Questions Asked: ${m.questionCard.questions.map(q => q.prompt).join(' | ')}]`);
+                }
+                if (m.executionPlanCard) {
+                    cardNotes.push(`[Execution Plan Proposed: "${m.executionPlanCard.title}" — Goal: ${m.executionPlanCard.goal}; Steps: ${m.executionPlanCard.steps.map(s => s.title).join(' -> ')}]`);
+                }
+                const suffixes = [
+                    tools.length > 0 ? `[Tools run: ${tools.join('; ')}]` : '',
+                    ...cardNotes
+                ].filter(Boolean);
+                const text = suffixes.length > 0 ? `${m.text}\n\n${suffixes.join('\n')}` : m.text;
                 return { role: (m.sender === 'assistant' ? 'model' : 'user') as ('user' | 'model'), text };
             })
             .filter(m => m.text.trim());
@@ -835,7 +870,9 @@ function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, fina
 
     // Only update active UI if user is still on this target session
     if (targetVisible) {
+        d.messages = nextFullMessages;
         setMessages(nextFullMessages);
+        d.isGenerating = false;
         setIsGenerating(false);
         setLiveThinkingText('');
         setLiveThinkingSeconds(0);
@@ -843,6 +880,7 @@ function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, fina
         setLiveStreamedText('');
         setActiveStreamingSectionId(undefined);
         if (finalArtifact) {
+            d.activeArtifact = finalArtifact;
             setActiveArtifact(finalArtifact);
             // The tab the artifact streamed into becomes the committed one (the commit may have given it its project id).
             setArtifactHistory(prev => withCommittedArtifact(prev, finalArtifact, generatedArtifact?.id));
@@ -850,6 +888,7 @@ function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, fina
             recordArtifactVersion(finalArtifact);
         }
     } else {
+        d.isGenerating = false;
         setIsGenerating(false);
         setLiveThinkingText('');
         setLiveThinkingSeconds(0);
@@ -859,9 +898,25 @@ function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, fina
     }
 }
 
+export interface QueuedPromptItem {
+    id: string;
+    text: string;
+    targetPrimitiveType?: PrimitiveType;
+    queuedAt: string;
+}
+
 export interface UseSendMessageResult {
     /** Send a chat message (defaults to the composer text). Stable identity across renders. */
     sendMessage: (textToSend?: string, targetPrimitiveType?: PrimitiveType) => Promise<void>;
+    /**
+     * Queue a follow-up message while a turn is currently streaming without aborting the active build,
+     * or send immediately if idle. Automatically drains in FIFO order when the active turn completes.
+     */
+    queueMessage: (textToQueue?: string, targetPrimitiveType?: PrimitiveType) => void;
+    /** Currently queued follow-up prompts waiting for the in-flight turn to finish. */
+    queuedMessages: QueuedPromptItem[];
+    /** Remove a queued follow-up prompt by id. */
+    removeQueuedMessage: (id: string) => void;
     /**
      * Stop the reply being generated (the composer's Stop button). The request is aborted, which tells
      * the server to end the turn and stop the running tool; the text, thinking and tool steps that
@@ -897,6 +952,9 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
     const [streamInFlight, setStreamInFlight] = React.useState(false);
     /** Streams ended by the user's Stop (their partial reply is kept) rather than by a newer send or unmount. */
     const userStopsRef = React.useRef(new WeakSet<AbortSignal>());
+    /** Non-blocking follow-up prompts queued while a build/turn is streaming. */
+    const queuedMessagesRef = React.useRef<QueuedPromptItem[]>([]);
+    const [queuedMessages, setQueuedMessages] = React.useState<QueuedPromptItem[]>([]);
 
     const abortInFlight = React.useCallback((byUser: boolean) => {
         const controller = abortRef.current;
@@ -915,10 +973,21 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
 
     React.useEffect(() => () => abortInFlight(false), [abortInFlight]);
 
+    const removeQueuedMessage = React.useCallback((id: string) => {
+        queuedMessagesRef.current = queuedMessagesRef.current.filter(item => item.id !== id);
+        setQueuedMessages(queuedMessagesRef.current);
+    }, []);
+
     const sendMessage = React.useCallback(async (textToSend?: string, targetPrimitiveType?: PrimitiveType) => {
         const d = depsRef.current;
         const text = textToSend !== undefined ? textToSend : d.inputValue;
-        if (!text.trim()) {
+        const trimmed = text.trim();
+        if (!trimmed) {
+            return;
+        }
+        // Guard against bare '/' or '@' trigger tokens being submitted as prompts
+        if (trimmed === '/' || trimmed === '@') {
+            d.setAutocompleteType(trimmed === '/' ? 'skill' : 'context');
             return;
         }
         if (d.isGenerating) {
@@ -977,6 +1046,7 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
         };
         signal.addEventListener('abort', onAbort, { once: true });
 
+        let completedNormally = false;
         try {
             const backend = await streamBackendResponse(depsRef.current, ctx, signal);
             if (signal.aborted) {
@@ -985,6 +1055,7 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
             const finalAssistantMsg = buildFinalReply(depsRef.current, ctx, backend);
             signal.removeEventListener('abort', onAbort);
             commitAssistantMessage(depsRef.current, ctx, finalAssistantMsg, backend.generatedArtifact);
+            completedNormally = true;
         } catch (err) {
             // Never leave the composer stuck in the generating state.
             console.error('[useSendMessage] Could not save the reply:', err);
@@ -996,10 +1067,57 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
         } finally {
             settleStagedRunInSession(depsRef.current, ctx.progress.artifact, 'interrupted');
             releaseController();
+            if (completedNormally && queuedMessagesRef.current.length > 0) {
+                const [nextItem, ...rest] = queuedMessagesRef.current;
+                queuedMessagesRef.current = rest;
+                setQueuedMessages(rest);
+                setTimeout(() => {
+                    void sendMessage(nextItem.text, nextItem.targetPrimitiveType);
+                }, 20);
+            }
         }
     }, [abortInFlight]);
 
-    return { sendMessage, cancelInFlight, streamInFlight };
+    const queueMessage = React.useCallback((textToQueue?: string, targetPrimitiveType?: PrimitiveType) => {
+        const d = depsRef.current;
+        const raw = textToQueue !== undefined ? textToQueue : d.inputValue;
+        const trimmed = raw.trim();
+        if (!trimmed) {
+            return;
+        }
+        if (trimmed === '/' || trimmed === '@') {
+            d.setAutocompleteType(trimmed === '/' ? 'skill' : 'context');
+            return;
+        }
+        if (!d.isGenerating && abortRef.current === null) {
+            void sendMessage(textToQueue, targetPrimitiveType);
+            return;
+        }
+        const item: QueuedPromptItem = {
+            id: `queued-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            text: trimmed,
+            targetPrimitiveType,
+            queuedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+        queuedMessagesRef.current = [...queuedMessagesRef.current, item];
+        setQueuedMessages(queuedMessagesRef.current);
+        if (textToQueue === undefined) {
+            d.setInputValue('');
+            d.setAutocompleteType(undefined);
+        }
+        d.showToast('Queued follow-up message for after current build', '📥');
+    }, [sendMessage]);
+
+    return {
+        sendMessage,
+        queueMessage,
+        get queuedMessages() {
+            return queuedMessagesRef.current;
+        },
+        removeQueuedMessage,
+        cancelInFlight,
+        streamInFlight
+    };
 }
 
 /**

@@ -35,11 +35,17 @@
  * inner shell, a floor slab seen from above), which is drawn as a front face. The report gives each share per view and
  * over all views, and which nodes the defect pixels belong to. A build over a limit is flagged (the orchestrator degrades
  * it with this report); nothing is changed.
+ *
+ * Shares alone miss one long hole: a 1.5 m gap down 110 m of a tower's corner (the ESB build of 2026-10-26, its facade
+ * sheet stopping short of the next face) is 0.3% of the view it shows in, under every share limit, and reads from the
+ * street as a grey strip (the inside's photo seen from behind). So each view's hole pixels are also joined into regions
+ * (8-connected); a region over maxHoleRegionM2 flags the build whatever the shares, and the largest regions are reported
+ * with their size, the node whose back face shows and where they are (the mean world point of their pixels' back faces).
  */
 
 import { nodeWorldMatrices, parseGlbBytes, readAccessor, transformPoint, type ParsedGlb } from '../glb-bytes';
 
-export const VISIBLE_DEFECTS_VERSION = 'visible-defects/2';
+export const VISIBLE_DEFECTS_VERSION = 'visible-defects/3';
 
 export const VISIBLE_DEFECTS_PARAMS = {
     /** Pixels along each view's longer side, when pixelM is 0. */
@@ -60,6 +66,11 @@ export const VISIBLE_DEFECTS_PARAMS = {
     /** Over these shares in any one view, the build is flagged too (a clay band or a row of holes on one face). */
     maxViewClayShare: 0.03,
     maxViewHoleShare: 0.03,
+    /** One connected hole region (one view) over this area (m²) flags the build too: a strip or a gap that shows from the street. */
+    maxHoleRegionM2: 40,
+    /** Hole regions from this area (m²) are reported, at most holeRegionsReported of them (largest first, one per place). */
+    holeRegionReportM2: 1,
+    holeRegionsReported: 8,
     /** A textured triangle is smeared when its texture mapping, in texels, stretches one way less than this share of the other. */
     smearRatio: 0.05
 };
@@ -69,9 +80,22 @@ export type VisibleDefectsParams = typeof VISIBLE_DEFECTS_PARAMS;
 export const DEFECT = { background: 0, good: 1, clay: 2, inside: 3, seeThrough: 4 } as const;
 
 export interface DefectCounts { building: number; clay: number; inside: number; seeThrough: number; /** Of clay: textured but smeared. */ smear: number }
+/** One connected region of hole pixels (inside visible or see-through) in one view. */
+export interface HoleRegion {
+    azimuthDeg: number; elevationDeg: number;
+    /** Its pixels' area (m²), its bounding box's longer side (m) and its mean width (area over length, m). */
+    areaM2: number; lengthM: number; widthM: number;
+    /** Where the hole is (the model's frame, m): its pixels' mean image point at the mean depth of the surface around its rim. */
+    center: [number, number, number];
+    /** The node most of the back faces seen through it belong to, and the node most of the surface around its rim belongs to. */
+    node: string;
+    rimNode: string;
+}
 export interface VisibleDefectsView extends DefectCounts {
     azimuthDeg: number; elevationDeg: number;
     clayShare: number; holeShare: number;
+    /** The view's largest hole region (m²), 0 without one. */
+    largestHoleRegionM2: number;
     /** With keepMasks: the view's classes (DEFECT), row 0 at the top. */
     mask?: { width: number; height: number; data: Uint8Array };
 }
@@ -87,6 +111,11 @@ export interface VisibleDefectsReport extends DefectCounts {
     smearShare: number;
     /** Defect pixels by node name (all views): clay (smears included) by the drawn surface's node, holes by the back face's node. */
     byNode: { clay: Record<string, number>; holes: Record<string, number>; smear: Record<string, number> };
+    /** The largest hole regions over all views, largest first, one per place; the largest one's area (m², 0 without one). */
+    holeRegions: HoleRegion[];
+    largestHoleRegionM2: number;
+    /** Over a hole limit: either share, or one region over maxHoleRegionM2. */
+    holesFlagged: boolean;
     flagged: boolean;
     why: string;
 }
@@ -172,8 +201,11 @@ function readSoup(glb: ParsedGlb, smearRatio: number): Soup {
     return { pos: Float32Array.from(pos), clay: Uint8Array.from(clay), smear: Uint8Array.from(smear), twoSided: Uint8Array.from(twoSided), node: Int32Array.from(node), names };
 }
 
+/** A hole region before its node is named: the node's index in the soup. */
+type ViewHoleRegion = Omit<HoleRegion, 'node' | 'rimNode'> & { node: number; rimNode: number };
+
 /** One orthographic view: per pixel the nearest triangle drawn and the nearest triangle at all, then the class. */
-function renderView(s: Soup, azimuthDeg: number, elevationDeg: number, P: VisibleDefectsParams, byClay: number[], byHole: number[], bySmear: number[], keepMask: boolean): VisibleDefectsView {
+function renderView(s: Soup, azimuthDeg: number, elevationDeg: number, P: VisibleDefectsParams, byClay: number[], byHole: number[], bySmear: number[], keepMask: boolean, regions: ViewHoleRegion[]): VisibleDefectsView {
     const az = (azimuthDeg * Math.PI) / 180, el = (elevationDeg * Math.PI) / 180;
     // toward the viewer (y up); right and up of the image
     const d = [Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)];
@@ -214,6 +246,7 @@ function renderView(s: Soup, azimuthDeg: number, elevationDeg: number, P: Visibl
     }
     const counts: DefectCounts = { building: 0, clay: 0, inside: 0, seeThrough: 0, smear: 0 };
     const mask = keepMask ? new Uint8Array(W * H) : undefined;
+    const cls = new Uint8Array(W * H);
     for (let o = 0; o < raw.length; o++) {
         if (raw[o] < 0) continue;
         counts.building++;
@@ -227,23 +260,73 @@ function renderView(s: Soup, azimuthDeg: number, elevationDeg: number, P: Visibl
             if (s.smear[drawn[o]]) { counts.smear++; bySmear[s.node[drawn[o]]]++; }
         }
         if (k === DEFECT.clay) counts.clay++; else if (k === DEFECT.inside) counts.inside++; else if (k === DEFECT.seeThrough) counts.seeThrough++;
+        cls[o] = k;
         // flipped to row 0 at the top
         if (mask) mask[(H - 1 - Math.floor(o / W)) * W + (o % W)] = k;
     }
+    // the hole pixels joined into 8-connected regions, each measured in metres and placed on the surface around its rim (the
+    // back faces seen through a hole differ from view to view; the rim is where the hole is)
+    const isHole = (o: number) => cls[o] === DEFECT.inside || cls[o] === DEFECT.seeThrough;
+    const visited = new Uint8Array(W * H), stack = new Int32Array(W * H);
+    let largest = 0;
+    for (let o0 = 0; o0 < cls.length; o0++) {
+        if (visited[o0] || !isHole(o0)) continue;
+        let top = 0, n = 0, xa = W, xb = -1, ya = H, yb = -1, sx = 0, sy = 0, rimZ = 0, rimN = 0, zAll = 0;
+        const votes = new Map<number, number>(), rimVotes = new Map<number, number>();
+        visited[o0] = 1; stack[top++] = o0;
+        while (top > 0) {
+            const o = stack[--top], x = o % W, y = (o - x) / W;
+            n++;
+            if (x < xa) xa = x; if (x > xb) xb = x; if (y < ya) ya = y; if (y > yb) yb = y;
+            sx += x; sy += y; zAll += rawZ[o];
+            const nd = s.node[raw[o]];
+            votes.set(nd, (votes.get(nd) ?? 0) + 1);
+            for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+                const xx = x + dx, yy = y + dy;
+                if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+                const q = yy * W + xx;
+                if (isHole(q)) { if (!visited[q]) { visited[q] = 1; stack[top++] = q; } }
+                else if (raw[q] >= 0) { rimZ += rawZ[q]; rimN++; const rn = s.node[raw[q]]; rimVotes.set(rn, (rimVotes.get(rn) ?? 0) + 1); }
+            }
+        }
+        const areaM2 = n * px * px;
+        if (areaM2 > largest) largest = areaM2;
+        if (areaM2 < P.holeRegionReportM2) continue;
+        const lengthM = Math.max(xb - xa + 1, yb - ya + 1) * px;
+        const most = (m: Map<number, number>) => { let k = -1, best = 0; for (const [key, v] of m) if (v > best) { best = v; k = key; } return k; };
+        const X = x0 + (sx / n) * px, Y = y0 + (sy / n) * px, Z = rimN ? rimZ / rimN : zAll / n;
+        regions.push({
+            azimuthDeg, elevationDeg, areaM2, lengthM, widthM: areaM2 / lengthM,
+            center: [X * r[0] + Y * u[0] + Z * d[0], X * r[1] + Y * u[1] + Z * d[1], X * r[2] + Y * u[2] + Z * d[2]], node: most(votes), rimNode: most(rimVotes)
+        });
+    }
     const b = Math.max(1, counts.building);
     return {
-        azimuthDeg, elevationDeg, ...counts, clayShare: counts.clay / b, holeShare: (counts.inside + counts.seeThrough) / b,
+        azimuthDeg, elevationDeg, ...counts, clayShare: counts.clay / b, holeShare: (counts.inside + counts.seeThrough) / b, largestHoleRegionM2: largest,
         ...(mask ? { mask: { width: W, height: H, data: mask } } : {})
     };
+}
+
+/** The largest regions, one per place: a region whose centre lies within half the longer of the two lengths of a larger one already kept is the same hole seen from another view. */
+function distinctHoleRegions(regions: ViewHoleRegion[], names: string[], max: number): HoleRegion[] {
+    const kept: ViewHoleRegion[] = [];
+    for (const g of [...regions].sort((a, b) => b.areaM2 - a.areaM2)) {
+        if (kept.length >= max) break;
+        if (kept.some(k => Math.hypot(k.center[0] - g.center[0], k.center[1] - g.center[1], k.center[2] - g.center[2]) < Math.max(k.lengthM, g.lengthM) / 2)) continue;
+        kept.push(g);
+    }
+    const r1 = (x: number) => Math.round(x * 10) / 10;
+    const name = (i: number) => names[i] ?? `node ${i}`;
+    return kept.map(g => ({ ...g, areaM2: r1(g.areaM2), lengthM: r1(g.lengthM), widthM: Math.round(g.widthM * 100) / 100, center: g.center.map(r1) as [number, number, number], node: name(g.node), rimNode: name(g.rimNode) }));
 }
 
 /** The visible defects of a textured build (GLB bytes), from views around it and above it. */
 export function measureVisibleDefects(bytes: Uint8Array, P: VisibleDefectsParams = VISIBLE_DEFECTS_PARAMS, opts: { keepMasks?: boolean } = {}): VisibleDefectsReport {
     const s = readSoup(parseGlbBytes(bytes), P.smearRatio);
     const byClay = new Array<number>(s.names.length).fill(0), byHole = new Array<number>(s.names.length).fill(0), bySmear = new Array<number>(s.names.length).fill(0);
-    const views: VisibleDefectsView[] = [];
-    for (let az = 0; az < 360; az += P.azimuthStepDeg) views.push(renderView(s, az, 0, P, byClay, byHole, bySmear, opts.keepMasks === true));
-    for (const az of [45, 135, 225, 315]) views.push(renderView(s, az, P.aboveElevationDeg, P, byClay, byHole, bySmear, opts.keepMasks === true));
+    const views: VisibleDefectsView[] = [], regions: ViewHoleRegion[] = [];
+    for (let az = 0; az < 360; az += P.azimuthStepDeg) views.push(renderView(s, az, 0, P, byClay, byHole, bySmear, opts.keepMasks === true, regions));
+    for (const az of [45, 135, 225, 315]) views.push(renderView(s, az, P.aboveElevationDeg, P, byClay, byHole, bySmear, opts.keepMasks === true, regions));
     const sum = (k: keyof DefectCounts) => views.reduce((a, v) => a + v[k], 0);
     const counts: DefectCounts = { building: sum('building'), clay: sum('clay'), inside: sum('inside'), seeThrough: sum('seeThrough'), smear: sum('smear') };
     const b = Math.max(1, counts.building);
@@ -255,9 +338,14 @@ export function measureVisibleDefects(bytes: Uint8Array, P: VisibleDefectsParams
     const top = (c: Record<string, number>, total: number) => Object.entries(c).sort((x, y) => y[1] - x[1]).slice(0, 3).map(([k, v]) => `${k} ${pct(v / Math.max(1, total))}`).join(', ');
     const worst = (k: 'clayShare' | 'holeShare') => views.reduce((a, v) => (v[k] > a[k] ? v : a), views[0]);
     const wc = worst('clayShare'), wh = worst('holeShare');
-    const flagged = clayShare > P.maxClayShare || holeShare > P.maxHoleShare || maxViewClayShare > P.maxViewClayShare || maxViewHoleShare > P.maxViewHoleShare;
+    const holeRegions = distinctHoleRegions(regions, s.names, P.holeRegionsReported);
+    const largestHoleRegionM2 = Math.max(0, ...views.map(v => v.largestHoleRegionM2));
+    const holesFlagged = holeShare > P.maxHoleShare || maxViewHoleShare > P.maxViewHoleShare || largestHoleRegionM2 > P.maxHoleRegionM2;
+    const flagged = clayShare > P.maxClayShare || maxViewClayShare > P.maxViewClayShare || holesFlagged;
+    const g = holeRegions[0];
+    const region = g ? `; the largest hole ${g.areaM2} m² (${g.lengthM} m long, ${g.widthM} m wide, limit ${P.maxHoleRegionM2} m²) at [${g.center.join(', ')}] in ${g.rimNode} (the back of ${g.node} showing), seen at ${g.azimuthDeg}°/${g.elevationDeg}°` : '';
     const why = `from ${views.length} views, ${pct(clayShare)} of the building is seen untextured (limit ${pct(P.maxClayShare)}; worst view ${pct(maxViewClayShare)} at ${wc.azimuthDeg}°/${wc.elevationDeg}°)` +
         `${counts.clay ? `, from ${top(byNode.clay, counts.clay)}` : ''}${counts.smear ? ` (${pct(counts.smear / b)} textured but smeared, from ${top(byNode.smear, counts.smear)})` : ''}; ${pct(holeShare)} through holes: ${pct(counts.inside / b)} showing the inside, ${pct(counts.seeThrough / b)} see-through (limit ${pct(P.maxHoleShare)}; worst view ${pct(maxViewHoleShare)} at ${wh.azimuthDeg}°/${wh.elevationDeg}°)` +
-        `${counts.inside + counts.seeThrough ? `, at the back faces of ${top(byNode.holes, counts.inside + counts.seeThrough)}` : ''}`;
-    return { version: VISIBLE_DEFECTS_VERSION, views, ...counts, clayShare, holeShare, smearShare: counts.smear / b, maxViewClayShare, maxViewHoleShare, byNode, flagged, why };
+        `${counts.inside + counts.seeThrough ? `, at the back faces of ${top(byNode.holes, counts.inside + counts.seeThrough)}` : ''}${region}`;
+    return { version: VISIBLE_DEFECTS_VERSION, views, ...counts, clayShare, holeShare, smearShare: counts.smear / b, maxViewClayShare, maxViewHoleShare, byNode, holeRegions, largestHoleRegionM2, holesFlagged, flagged, why };
 }

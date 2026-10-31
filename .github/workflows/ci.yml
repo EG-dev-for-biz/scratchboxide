@@ -54,6 +54,11 @@ jobs:
       - name: Python venv for the native engine
         run: |
           python -m venv .venv
+          # PyPI's Linux torch wheel brings the CUDA libraries (several GB) and fills the runner's disk; the tests run
+          # on the CPU, so take the CPU build of the pinned version first (requirements.txt's pin then counts as met).
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            .venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu "$(grep -E '^torch==' requirements.txt)"
+          fi
           .venv/bin/pip install -r requirements.txt
           python -m pip install numpy
 

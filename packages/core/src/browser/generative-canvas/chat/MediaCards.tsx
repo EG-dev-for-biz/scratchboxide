@@ -11,6 +11,7 @@ import * as React from 'react';
 import * as THREE from 'three';
 import type { TextureMatrixResult, TextureMatrixCandidate } from '../../../common/media-generation-protocol';
 import { resolveTextureUrl } from '../../../common/texture-url-resolver';
+import { canCreatePrimitive } from '../../../common/product-scope';
 import { describeMeshTextureOutcome, requestMeshTexture, type MeshTextureChannels, type MeshTextureOutcome } from '../primitives/scene3d/meshTexture';
 
 /**
@@ -122,12 +123,14 @@ export const ImageGeneratedCard: React.FC<{
                             >
                                 Apply as 3D Texture
                             </button>
-                            <button
-                                className="sb-btn sb-btn-secondary sb-btn-xs"
-                                onClick={() => handleAction('Insert into Code', img)}
-                            >
-                                Insert into Code
-                            </button>
+                            {canCreatePrimitive('live-code-sandbox') && (
+                                <button
+                                    className="sb-btn sb-btn-secondary sb-btn-xs"
+                                    onClick={() => handleAction('Insert into Code', img)}
+                                >
+                                    Insert into Code
+                                </button>
+                            )}
                             <button
                                 className="sb-btn sb-btn-secondary sb-btn-xs"
                                 onClick={() => handleAction('Remix Prompt', img)}

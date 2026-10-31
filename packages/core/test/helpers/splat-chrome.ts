@@ -17,6 +17,7 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
+import { removeChromeProfile } from './chrome-profile';
 import type { Requirement } from './requirements';
 
 const CHROME = ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/Applications/Chromium.app/Contents/MacOS/Chromium', '/usr/bin/google-chrome', '/usr/bin/chromium'];
@@ -140,7 +141,7 @@ export async function openSplatChrome(opts: { width: number; height: number; bac
         try { ws?.close(); } catch { /* closed */ }
         proc.kill('SIGKILL');
         await new Promise<void>(r => server.close(() => r()));
-        fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+        removeChromeProfile(profile);
     };
     try {
         let port = '';

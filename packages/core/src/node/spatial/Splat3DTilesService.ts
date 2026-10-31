@@ -14,6 +14,7 @@ import { promisify } from 'util';
 import { LocalTangentPlane, type LatLngAlt } from '../../common/coordinate/LocalTangentPlane';
 import { NativeCppCompilerService } from '../3d-engine/native-compiler-service';
 import { buildNativeIfStale } from '../3d-engine/native-build';
+import { repoPath } from '../process/repo-python';
 
 const execFileAsync = promisify(execFile);
 
@@ -63,10 +64,11 @@ interface TreeNode {
  */
 export class Splat3DTilesService {
     private compiler = new NativeCppCompilerService();
-    private binaryPath = path.resolve(process.cwd(), 'build/splat_to_3dtiles');
+    // the repository's, not the process's: the app's server runs from desktop-app/
+    private binaryPath = repoPath('build', 'splat_to_3dtiles');
 
     async ensureBinary(): Promise<string> {
-        const src = path.resolve(process.cwd(), 'scripts/splat_to_3dtiles.cpp');
+        const src = repoPath('scripts', 'splat_to_3dtiles.cpp');
         if (!fs.existsSync(src)) throw new Error(`Tiler source not found: ${src}`);
         return buildNativeIfStale({ source: src, binary: this.binaryPath, includeDir: this.compiler.getSdkIncludePath(), libs: ['-lz'] });
     }

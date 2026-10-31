@@ -9,6 +9,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import type { CanvasArtifact } from '../canvas-types';
+import { canCreatePrimitive } from '../../../common/product-scope';
 import {
     VideoTimelineData,
     TimelineTrack,
@@ -475,16 +476,18 @@ export const VideoTimelinePrimitive: React.FC<VideoTimelinePrimitiveProps> = ({
                             <span>3D Stage</span>
                         </button>
 
-                        {/* Morph to Code */}
-                        <button
-                            type="button"
-                            onClick={handleMorphToCode}
-                            className="sb-btn sb-btn-secondary sb-btn-xs px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-750 text-zinc-300 text-xs flex items-center gap-1.5 transition-colors"
-                            title="Morph into React Video Player Component"
-                        >
-                            <span>💻</span>
-                            <span>React Player</span>
-                        </button>
+                        {/* Morph to Code (not in the 3D/VFX build, which makes no code sandboxes) */}
+                        {canCreatePrimitive('live-code-sandbox') && (
+                            <button
+                                type="button"
+                                onClick={handleMorphToCode}
+                                className="sb-btn sb-btn-secondary sb-btn-xs px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-750 text-zinc-300 text-xs flex items-center gap-1.5 transition-colors"
+                                title="Morph into React Video Player Component"
+                            >
+                                <span>💻</span>
+                                <span>React Player</span>
+                            </button>
+                        )}
                     </div>
                 </div>
             )}

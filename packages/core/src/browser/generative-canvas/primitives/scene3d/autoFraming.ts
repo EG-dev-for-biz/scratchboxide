@@ -136,7 +136,7 @@ export function computeSceneGeometryBounds(scene: THREE.Scene): SceneBoundsResul
  */
 export function calculateStandoffCamera(
     bounds: SceneBoundsResult,
-    cameraDef?: { position?: [number, number, number]; target?: [number, number, number]; fov?: number },
+    cameraDef?: { position?: [number, number, number]; target?: [number, number, number]; fov?: number; keepPoseOnLoad?: boolean },
     options: AutoFramingOptions = {}
 ): AutoFramingResult | null {
     if (!bounds.hasGeometry || bounds.box.isEmpty()) return null;
@@ -172,8 +172,9 @@ export function calculateStandoffCamera(
                 Math.abs(camPos.z - 15) < 0.1 &&
                 Math.abs(camPos.y - 12) < 5.0;
 
-            // Detect if camera is clipping inside geometry or dangerously close to bounds
-            const isInsideGeometry = bounds.box.containsPoint(camPos) || dist < radius * 1.15;
+            // Detect if camera is clipping inside geometry or dangerously close to bounds. A pose saved on purpose
+            // (keepPoseOnLoad) is kept even inside: a viewer standing in a walkable world is meant to be there.
+            const isInsideGeometry = !cameraDef.keepPoseOnLoad && (bounds.box.containsPoint(camPos) || dist < radius * 1.15);
 
             // Only retain cameraDef if it is an intentional, valid camera safely outside geometry
             if (!isBoilerplateDefault && !isInsideGeometry) {

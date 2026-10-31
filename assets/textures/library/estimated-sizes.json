@@ -1,0 +1,6474 @@
+{
+ "schema": "scratchbox.texture-library-sizes/1",
+ "about": "Real tile widths, metres, for library sets whose publisher gives no size: estimated by a vision model from each set's colour preview and publisher text (generated; scripts/estimate_texture_library_sizes.ts). A publisher size always wins. validation: the same estimate against sets whose publisher gives a size.",
+ "model": "gemini-4-argon",
+ "estimatedAt": "2026-10-30T22:46:45.797Z",
+ "validation": {
+  "sets": 48,
+  "medianRatio": 1.31,
+  "within1_5x": 0.667,
+  "within2x": 0.896
+ },
+ "sets": {
+  "AcousticFoam001": {
+   "widthM": 0.6,
+   "conf": 40
+  },
+  "AcousticFoam002": {
+   "widthM": 0.6,
+   "conf": 40
+  },
+  "AcousticFoam003": {
+   "widthM": 0.6,
+   "conf": 50
+  },
+  "Asphalt004": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Asphalt005": {
+   "widthM": 1.2,
+   "conf": 70
+  },
+  "Asphalt006": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Asphalt007": {
+   "widthM": 1.8,
+   "conf": 60
+  },
+  "Asphalt008": {
+   "widthM": 2.5,
+   "conf": 75
+  },
+  "Asphalt009": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Asphalt010": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "Asphalt011": {
+   "widthM": 3,
+   "conf": 45
+  },
+  "Asphalt012": {
+   "widthM": 2.5,
+   "conf": 45
+  },
+  "Asphalt013": {
+   "widthM": 2.5,
+   "conf": 45
+  },
+  "Asphalt014": {
+   "widthM": 2,
+   "conf": 35
+  },
+  "Asphalt015": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Asphalt016": {
+   "widthM": 3.5,
+   "conf": 50
+  },
+  "Asphalt017": {
+   "widthM": 3.5,
+   "conf": 50
+  },
+  "Asphalt018": {
+   "widthM": 3.5,
+   "conf": 50
+  },
+  "Asphalt019": {
+   "widthM": 3.5,
+   "conf": 50
+  },
+  "Asphalt024A": {
+   "widthM": 2.5,
+   "conf": 40
+  },
+  "Asphalt024B": {
+   "widthM": 2.5,
+   "conf": 45
+  },
+  "Asphalt024C": {
+   "widthM": 1.8,
+   "conf": 45
+  },
+  "Asphalt025A": {
+   "widthM": 1.6,
+   "conf": 35
+  },
+  "Asphalt025B": {
+   "widthM": 1.6,
+   "conf": 35
+  },
+  "Asphalt025C": {
+   "widthM": 1.6,
+   "conf": 35
+  },
+  "Asphalt026A": {
+   "widthM": 2,
+   "conf": 45
+  },
+  "Asphalt026B": {
+   "widthM": 2,
+   "conf": 45
+  },
+  "Asphalt026C": {
+   "widthM": 2,
+   "conf": 45
+  },
+  "Asphalt027A": {
+   "widthM": 1.5,
+   "conf": 35
+  },
+  "Asphalt027B": {
+   "widthM": 1.5,
+   "conf": 45
+  },
+  "Asphalt027C": {
+   "widthM": 1.5,
+   "conf": 45
+  },
+  "Asphalt028A": {
+   "widthM": 1.8,
+   "conf": 35
+  },
+  "Asphalt028B": {
+   "widthM": 2.5,
+   "conf": 45
+  },
+  "Asphalt028C": {
+   "widthM": 3,
+   "conf": 60
+  },
+  "Asphalt029A": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Asphalt029B": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Asphalt031": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Asphalt032": {
+   "widthM": 1,
+   "conf": 65
+  },
+  "AsphaltDamageSet002": {
+   "widthM": 1,
+   "conf": 85
+  },
+  "Bark001": {
+   "widthM": 0.4,
+   "conf": 75
+  },
+  "Bark002": {
+   "widthM": 0.8,
+   "conf": 70
+  },
+  "Bark003": {
+   "widthM": 0.8,
+   "conf": 65
+  },
+  "Bark004": {
+   "widthM": 0.8,
+   "conf": 70
+  },
+  "Bark005": {
+   "widthM": 0.6,
+   "conf": 60
+  },
+  "Bark006": {
+   "widthM": 0.7,
+   "conf": 55
+  },
+  "Bark007": {
+   "widthM": 0.7,
+   "conf": 55
+  },
+  "Bark008": {
+   "widthM": 0.35,
+   "conf": 55
+  },
+  "Bark009": {
+   "widthM": 0.6,
+   "conf": 55
+  },
+  "Bark010": {
+   "widthM": 0.5,
+   "conf": 55
+  },
+  "Bark011": {
+   "widthM": 0.35,
+   "conf": 55
+  },
+  "Bark012": {
+   "widthM": 0.7,
+   "conf": 55
+  },
+  "Bark013": {
+   "widthM": 0.7,
+   "conf": 55
+  },
+  "Bark015": {
+   "widthM": 0.6,
+   "conf": 55
+  },
+  "Bricks004": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "Bricks005": {
+   "widthM": 1.5,
+   "conf": 85
+  },
+  "Bricks006": {
+   "widthM": 1.5,
+   "conf": 85
+  },
+  "Bricks007": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "Bricks009": {
+   "widthM": 2.5,
+   "conf": 85
+  },
+  "Bricks010": {
+   "widthM": 2.2,
+   "conf": 85
+  },
+  "Bricks012": {
+   "widthM": 1.4,
+   "conf": 90
+  },
+  "Bricks013": {
+   "widthM": 2,
+   "conf": 80
+  },
+  "Bricks014": {
+   "widthM": 1.5,
+   "conf": 85
+  },
+  "Bricks015": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "Bricks017": {
+   "widthM": 1.4,
+   "conf": 85
+  },
+  "Bricks018": {
+   "widthM": 1.4,
+   "conf": 85
+  },
+  "Bricks019": {
+   "widthM": 0.9,
+   "conf": 80
+  },
+  "Bricks020": {
+   "widthM": 1.4,
+   "conf": 90
+  },
+  "Bricks021": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "Bricks022": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "Bricks023": {
+   "widthM": 1,
+   "conf": 85
+  },
+  "Bricks024": {
+   "widthM": 0.8,
+   "conf": 75
+  },
+  "Bricks025": {
+   "widthM": 1.5,
+   "conf": 85
+  },
+  "Bricks026": {
+   "widthM": 1,
+   "conf": 85
+  },
+  "Bricks027": {
+   "widthM": 1.1,
+   "conf": 85
+  },
+  "Bricks029": {
+   "widthM": 1.1,
+   "conf": 85
+  },
+  "Bricks030": {
+   "widthM": 2,
+   "conf": 80
+  },
+  "Bricks031": {
+   "widthM": 2,
+   "conf": 80
+  },
+  "Bricks032": {
+   "widthM": 2,
+   "conf": 80
+  },
+  "Bricks033": {
+   "widthM": 2,
+   "conf": 80
+  },
+  "Bricks034": {
+   "widthM": 2,
+   "conf": 85
+  },
+  "Bricks035": {
+   "widthM": 2,
+   "conf": 85
+  },
+  "Bricks036": {
+   "widthM": 2,
+   "conf": 85
+  },
+  "Bricks037": {
+   "widthM": 2,
+   "conf": 85
+  },
+  "Bricks039": {
+   "widthM": 1,
+   "conf": 85
+  },
+  "Bricks040": {
+   "widthM": 1,
+   "conf": 85
+  },
+  "Bricks041": {
+   "widthM": 1,
+   "conf": 85
+  },
+  "Bricks042": {
+   "widthM": 1,
+   "conf": 85
+  },
+  "Bricks043": {
+   "widthM": 1,
+   "conf": 80
+  },
+  "Bricks044": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "Bricks045": {
+   "widthM": 1,
+   "conf": 85
+  },
+  "Bricks046": {
+   "widthM": 1,
+   "conf": 85
+  },
+  "Bricks047": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Bricks048": {
+   "widthM": 1.5,
+   "conf": 75
+  },
+  "Bricks049": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Bricks050": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Bricks073A": {
+   "widthM": 1.8,
+   "conf": 85
+  },
+  "Bricks073B": {
+   "widthM": 1.8,
+   "conf": 85
+  },
+  "Bricks073C": {
+   "widthM": 1.8,
+   "conf": 85
+  },
+  "Bricks077": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "Bricks084": {
+   "widthM": 2.5,
+   "conf": 70
+  },
+  "Bricks091": {
+   "widthM": 1.5,
+   "conf": 70
+  },
+  "Bricks095": {
+   "widthM": 2.5,
+   "conf": 65
+  },
+  "Bricks096": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "Bricks097": {
+   "widthM": 2.5,
+   "conf": 90
+  },
+  "Bricks098": {
+   "widthM": 1.8,
+   "conf": 80
+  },
+  "Bricks099": {
+   "widthM": 2.4,
+   "conf": 80
+  },
+  "Bricks101": {
+   "widthM": 2.4,
+   "conf": 95
+  },
+  "Bricks102": {
+   "widthM": 2,
+   "conf": 85
+  },
+  "Bricks103": {
+   "widthM": 1.5,
+   "conf": 85
+  },
+  "Bricks104": {
+   "widthM": 2.5,
+   "conf": 95
+  },
+  "Candy001": {
+   "widthM": 0.06,
+   "conf": 75
+  },
+  "Candy002": {
+   "widthM": 0.06,
+   "conf": 75
+  },
+  "Candy003": {
+   "widthM": 0.04,
+   "conf": 80
+  },
+  "Cardboard001": {
+   "widthM": 0.35,
+   "conf": 75
+  },
+  "Cardboard002": {
+   "widthM": 0.35,
+   "conf": 70
+  },
+  "Cardboard003": {
+   "widthM": 0.35,
+   "conf": 70
+  },
+  "Cardboard004": {
+   "widthM": 0.35,
+   "conf": 70
+  },
+  "Carpet001": {
+   "widthM": 0.5,
+   "conf": 65
+  },
+  "Carpet002": {
+   "widthM": 0.5,
+   "conf": 65
+  },
+  "Carpet003": {
+   "widthM": 0.5,
+   "conf": 65
+  },
+  "Carpet004": {
+   "widthM": 0.5,
+   "conf": 65
+  },
+  "Carpet005": {
+   "widthM": 0.5,
+   "conf": 65
+  },
+  "Carpet006": {
+   "widthM": 0.6,
+   "conf": 65
+  },
+  "Carpet007": {
+   "widthM": 0.5,
+   "conf": 65
+  },
+  "Carpet008": {
+   "widthM": 0.5,
+   "conf": 65
+  },
+  "Carpet009": {
+   "widthM": 0.4,
+   "conf": 70
+  },
+  "Carpet010": {
+   "widthM": 0.5,
+   "conf": 70
+  },
+  "Carpet011": {
+   "widthM": 0.3,
+   "conf": 65
+  },
+  "Carpet012": {
+   "widthM": 0.3,
+   "conf": 65
+  },
+  "Carpet013": {
+   "widthM": 0.3,
+   "conf": 65
+  },
+  "Carpet014": {
+   "widthM": 0.3,
+   "conf": 75
+  },
+  "Chainmail001": {
+   "widthM": 0.5,
+   "conf": 65
+  },
+  "Chainmail002": {
+   "widthM": 0.5,
+   "conf": 65
+  },
+  "Chainmail003": {
+   "widthM": 0.5,
+   "conf": 65
+  },
+  "Chainmail004": {
+   "widthM": 0.15,
+   "conf": 85
+  },
+  "ChewingGum001": {
+   "widthM": 1,
+   "conf": 70
+  },
+  "ChewingGum002": {
+   "widthM": 1,
+   "conf": 70
+  },
+  "Chip001": {
+   "widthM": 0.3,
+   "conf": 60
+  },
+  "Chip002": {
+   "widthM": 0.3,
+   "conf": 60
+  },
+  "Chip003": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Chip004": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Chip005": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Chip006": {
+   "widthM": 0.3,
+   "conf": 60
+  },
+  "Chip007": {
+   "widthM": 0.3,
+   "conf": 60
+  },
+  "Chipboard001": {
+   "widthM": 1,
+   "conf": 75
+  },
+  "Chipboard002": {
+   "widthM": 1,
+   "conf": 75
+  },
+  "Chipboard003": {
+   "widthM": 1,
+   "conf": 75
+  },
+  "Chipboard004": {
+   "widthM": 0.5,
+   "conf": 80
+  },
+  "Chipboard005": {
+   "widthM": 0.5,
+   "conf": 80
+  },
+  "Chipboard006": {
+   "widthM": 0.4,
+   "conf": 75
+  },
+  "Chipboard007": {
+   "widthM": 0.4,
+   "conf": 75
+  },
+  "Chipboard008": {
+   "widthM": 0.4,
+   "conf": 75
+  },
+  "ChristmasTreeOrnament001": {
+   "widthM": 0.25,
+   "conf": 70
+  },
+  "ChristmasTreeOrnament002": {
+   "widthM": 0.25,
+   "conf": 70
+  },
+  "ChristmasTreeOrnament003": {
+   "widthM": 0.25,
+   "conf": 70
+  },
+  "ChristmasTreeOrnament004": {
+   "widthM": 0.25,
+   "conf": 70
+  },
+  "ChristmasTreeOrnament005": {
+   "widthM": 0.25,
+   "conf": 70
+  },
+  "ChristmasTreeOrnament006": {
+   "widthM": 0.25,
+   "conf": 70
+  },
+  "ChristmasTreeOrnament007": {
+   "widthM": 0.25,
+   "conf": 70
+  },
+  "ChristmasTreeOrnament008": {
+   "widthM": 0.25,
+   "conf": 70
+  },
+  "ChristmasTreeOrnament009": {
+   "widthM": 0.25,
+   "conf": 70
+  },
+  "ChristmasTreeOrnament010": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "ChristmasTreeOrnament011": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "ChristmasTreeOrnament012": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "ChristmasTreeOrnament013": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "ChristmasTreeOrnament014": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "ChristmasTreeOrnament015": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "ChristmasTreeOrnament016": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "ChristmasTreeOrnament017": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "ChristmasTreeOrnament018": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "ChristmasTreeOrnament019": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "ChristmasTreeOrnament020": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "ChristmasTreeOrnament021": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Clay001": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Clay002": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Clay003": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Clay004": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Concrete003": {
+   "widthM": 1,
+   "conf": 60
+  },
+  "Concrete004": {
+   "widthM": 2.5,
+   "conf": 60
+  },
+  "Concrete005": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Concrete006": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Concrete007": {
+   "widthM": 3,
+   "conf": 65
+  },
+  "Concrete008": {
+   "widthM": 2.5,
+   "conf": 65
+  },
+  "Concrete009": {
+   "widthM": 3,
+   "conf": 60
+  },
+  "Concrete010": {
+   "widthM": 3,
+   "conf": 60
+  },
+  "Concrete011": {
+   "widthM": 0.5,
+   "conf": 65
+  },
+  "Concrete012": {
+   "widthM": 1.5,
+   "conf": 40
+  },
+  "Concrete013": {
+   "widthM": 2.5,
+   "conf": 50
+  },
+  "Concrete014": {
+   "widthM": 2,
+   "conf": 30
+  },
+  "Concrete015": {
+   "widthM": 2,
+   "conf": 30
+  },
+  "Concrete016": {
+   "widthM": 2,
+   "conf": 30
+  },
+  "Concrete017": {
+   "widthM": 2,
+   "conf": 30
+  },
+  "Concrete018": {
+   "widthM": 0.5,
+   "conf": 65
+  },
+  "Concrete019": {
+   "widthM": 2,
+   "conf": 30
+  },
+  "Concrete020": {
+   "widthM": 2,
+   "conf": 30
+  },
+  "Concrete021": {
+   "widthM": 1.2,
+   "conf": 30
+  },
+  "Concrete022": {
+   "widthM": 1.2,
+   "conf": 30
+  },
+  "Concrete023": {
+   "widthM": 1.2,
+   "conf": 30
+  },
+  "Concrete024": {
+   "widthM": 1.2,
+   "conf": 25
+  },
+  "Concrete025": {
+   "widthM": 0.8,
+   "conf": 45
+  },
+  "Concrete026": {
+   "widthM": 0.8,
+   "conf": 50
+  },
+  "Concrete027": {
+   "widthM": 2.5,
+   "conf": 55
+  },
+  "Concrete028": {
+   "widthM": 2.5,
+   "conf": 55
+  },
+  "Concrete029": {
+   "widthM": 2.5,
+   "conf": 55
+  },
+  "Concrete030": {
+   "widthM": 2.5,
+   "conf": 45
+  },
+  "Concrete031": {
+   "widthM": 2.5,
+   "conf": 50
+  },
+  "Concrete032": {
+   "widthM": 2,
+   "conf": 30
+  },
+  "Concrete033": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Concrete036": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Concrete037": {
+   "widthM": 1,
+   "conf": 60
+  },
+  "Concrete041A": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Concrete041B": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Concrete041C": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Concrete041D": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Concrete042A": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Concrete042B": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Concrete042C": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Concrete042D": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Concrete043A": {
+   "widthM": 2.5,
+   "conf": 60
+  },
+  "Concrete043B": {
+   "widthM": 2.5,
+   "conf": 60
+  },
+  "Concrete043C": {
+   "widthM": 2.5,
+   "conf": 60
+  },
+  "Concrete043D": {
+   "widthM": 2.5,
+   "conf": 60
+  },
+  "Concrete044A": {
+   "widthM": 2.5,
+   "conf": 60
+  },
+  "Concrete044B": {
+   "widthM": 2.5,
+   "conf": 60
+  },
+  "Concrete044C": {
+   "widthM": 2.5,
+   "conf": 60
+  },
+  "Concrete044D": {
+   "widthM": 2.5,
+   "conf": 60
+  },
+  "Concrete047A": {
+   "widthM": 1.8,
+   "conf": 75
+  },
+  "Concrete047B": {
+   "widthM": 1.8,
+   "conf": 80
+  },
+  "Concrete048": {
+   "widthM": 1.5,
+   "conf": 65
+  },
+  "CookieSet003": {
+   "widthM": 0.18,
+   "conf": 85
+  },
+  "Cork001": {
+   "widthM": 0.25,
+   "conf": 75
+  },
+  "Cork002": {
+   "widthM": 0.4,
+   "conf": 70
+  },
+  "Cork003": {
+   "widthM": 0.2,
+   "conf": 80
+  },
+  "Cork004": {
+   "widthM": 0.25,
+   "conf": 75
+  },
+  "CorrugatedSteel001": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "CorrugatedSteel002": {
+   "widthM": 1.5,
+   "conf": 85
+  },
+  "CorrugatedSteel003": {
+   "widthM": 1.2,
+   "conf": 80
+  },
+  "CorrugatedSteel004": {
+   "widthM": 1.5,
+   "conf": 80
+  },
+  "CorrugatedSteel005": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "CorrugatedSteel006A": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "CorrugatedSteel006B": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "CorrugatedSteel006C": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "CorrugatedSteel007A": {
+   "widthM": 3,
+   "conf": 60
+  },
+  "CorrugatedSteel007B": {
+   "widthM": 3,
+   "conf": 60
+  },
+  "CorrugatedSteel007C": {
+   "widthM": 3,
+   "conf": 60
+  },
+  "CorrugatedSteel008A": {
+   "widthM": 3,
+   "conf": 60
+  },
+  "CorrugatedSteel008B": {
+   "widthM": 3,
+   "conf": 60
+  },
+  "CorrugatedSteel008C": {
+   "widthM": 3,
+   "conf": 60
+  },
+  "CorrugatedSteel009": {
+   "widthM": 2.5,
+   "conf": 60
+  },
+  "DiamondPlate001": {
+   "widthM": 0.7,
+   "conf": 75
+  },
+  "DiamondPlate002": {
+   "widthM": 0.7,
+   "conf": 75
+  },
+  "DiamondPlate003": {
+   "widthM": 0.7,
+   "conf": 75
+  },
+  "DiamondPlate004": {
+   "widthM": 0.7,
+   "conf": 75
+  },
+  "DiamondPlate005A": {
+   "widthM": 0.7,
+   "conf": 65
+  },
+  "DiamondPlate005B": {
+   "widthM": 0.8,
+   "conf": 80
+  },
+  "DiamondPlate005C": {
+   "widthM": 0.8,
+   "conf": 80
+  },
+  "DiamondPlate005D": {
+   "widthM": 0.8,
+   "conf": 80
+  },
+  "DiamondPlate006A": {
+   "widthM": 0.8,
+   "conf": 75
+  },
+  "DiamondPlate006B": {
+   "widthM": 0.8,
+   "conf": 80
+  },
+  "DiamondPlate006C": {
+   "widthM": 0.8,
+   "conf": 80
+  },
+  "DiamondPlate006D": {
+   "widthM": 0.8,
+   "conf": 75
+  },
+  "DiamondPlate007A": {
+   "widthM": 0.8,
+   "conf": 75
+  },
+  "DiamondPlate007B": {
+   "widthM": 0.8,
+   "conf": 80
+  },
+  "DiamondPlate007C": {
+   "widthM": 0.8,
+   "conf": 80
+  },
+  "DiamondPlate007D": {
+   "widthM": 0.8,
+   "conf": 75
+  },
+  "DiamondPlate008A": {
+   "widthM": 0.8,
+   "conf": 75
+  },
+  "DiamondPlate008B": {
+   "widthM": 0.7,
+   "conf": 85
+  },
+  "DiamondPlate008C": {
+   "widthM": 0.7,
+   "conf": 85
+  },
+  "DiamondPlate008D": {
+   "widthM": 0.7,
+   "conf": 85
+  },
+  "DiamondPlate009": {
+   "widthM": 0.8,
+   "conf": 80
+  },
+  "Door002": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "Fabric004": {
+   "widthM": 0.02,
+   "conf": 75
+  },
+  "Fabric005": {
+   "widthM": 0.08,
+   "conf": 80
+  },
+  "Fabric006": {
+   "widthM": 0.08,
+   "conf": 80
+  },
+  "Fabric007": {
+   "widthM": 0.2,
+   "conf": 75
+  },
+  "Fabric008": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Fabric009": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Fabric010": {
+   "widthM": 0.1,
+   "conf": 60
+  },
+  "Fabric011": {
+   "widthM": 0.1,
+   "conf": 60
+  },
+  "Fabric012": {
+   "widthM": 0.08,
+   "conf": 65
+  },
+  "Fabric013": {
+   "widthM": 0.12,
+   "conf": 60
+  },
+  "Fabric014": {
+   "widthM": 0.1,
+   "conf": 55
+  },
+  "Fabric015": {
+   "widthM": 0.08,
+   "conf": 60
+  },
+  "Fabric016": {
+   "widthM": 0.08,
+   "conf": 70
+  },
+  "Fabric017": {
+   "widthM": 0.09,
+   "conf": 70
+  },
+  "Fabric018": {
+   "widthM": 0.07,
+   "conf": 70
+  },
+  "Fabric019": {
+   "widthM": 0.1,
+   "conf": 65
+  },
+  "Fabric020": {
+   "widthM": 0.16,
+   "conf": 68
+  },
+  "Fabric021": {
+   "widthM": 0.1,
+   "conf": 60
+  },
+  "Fabric022": {
+   "widthM": 0.25,
+   "conf": 75
+  },
+  "Fabric023": {
+   "widthM": 0.3,
+   "conf": 75
+  },
+  "Fabric024": {
+   "widthM": 2,
+   "conf": 85
+  },
+  "Fabric025": {
+   "widthM": 1,
+   "conf": 88
+  },
+  "Fabric026": {
+   "widthM": 0.5,
+   "conf": 80
+  },
+  "Fabric027": {
+   "widthM": 0.6,
+   "conf": 75
+  },
+  "Fabric028": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Fabric029": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Fabric030": {
+   "widthM": 0.2,
+   "conf": 80
+  },
+  "Fabric031": {
+   "widthM": 0.25,
+   "conf": 78
+  },
+  "Fabric032": {
+   "widthM": 0.15,
+   "conf": 60
+  },
+  "Fabric033": {
+   "widthM": 0.15,
+   "conf": 60
+  },
+  "Fabric034": {
+   "widthM": 0.15,
+   "conf": 60
+  },
+  "Fabric035": {
+   "widthM": 0.15,
+   "conf": 65
+  },
+  "Fabric036": {
+   "widthM": 0.15,
+   "conf": 65
+  },
+  "Fabric037": {
+   "widthM": 0.15,
+   "conf": 65
+  },
+  "Fabric038": {
+   "widthM": 0.15,
+   "conf": 65
+  },
+  "Fabric039": {
+   "widthM": 0.15,
+   "conf": 65
+  },
+  "Fabric040": {
+   "widthM": 0.15,
+   "conf": 65
+  },
+  "Fabric041": {
+   "widthM": 0.15,
+   "conf": 65
+  },
+  "Fabric042": {
+   "widthM": 0.15,
+   "conf": 65
+  },
+  "Fabric043": {
+   "widthM": 0.15,
+   "conf": 60
+  },
+  "Fabric044": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Fabric045": {
+   "widthM": 0.3,
+   "conf": 55
+  },
+  "Fabric050": {
+   "widthM": 0.15,
+   "conf": 70
+  },
+  "Fabric051": {
+   "widthM": 0.15,
+   "conf": 70
+  },
+  "Fabric052": {
+   "widthM": 0.15,
+   "conf": 70
+  },
+  "Fabric053": {
+   "widthM": 0.15,
+   "conf": 70
+  },
+  "Fabric054": {
+   "widthM": 0.15,
+   "conf": 70
+  },
+  "Fabric055": {
+   "widthM": 0.15,
+   "conf": 75
+  },
+  "Fabric056": {
+   "widthM": 0.15,
+   "conf": 75
+  },
+  "Fabric057": {
+   "widthM": 0.15,
+   "conf": 70
+  },
+  "Fabric058": {
+   "widthM": 0.15,
+   "conf": 70
+  },
+  "Fabric059": {
+   "widthM": 0.2,
+   "conf": 50
+  },
+  "Fabric060": {
+   "widthM": 0.16,
+   "conf": 40
+  },
+  "Fabric067": {
+   "widthM": 0.15,
+   "conf": 50
+  },
+  "Fabric068": {
+   "widthM": 0.15,
+   "conf": 50
+  },
+  "Fabric069": {
+   "widthM": 0.15,
+   "conf": 50
+  },
+  "Fabric070": {
+   "widthM": 0.15,
+   "conf": 40
+  },
+  "Fabric071": {
+   "widthM": 0.15,
+   "conf": 50
+  },
+  "Fabric072": {
+   "widthM": 0.15,
+   "conf": 50
+  },
+  "Fabric073": {
+   "widthM": 0.15,
+   "conf": 50
+  },
+  "Fabric074": {
+   "widthM": 0.15,
+   "conf": 50
+  },
+  "Fabric075": {
+   "widthM": 0.15,
+   "conf": 50
+  },
+  "Fabric076": {
+   "widthM": 0.15,
+   "conf": 50
+  },
+  "Fabric077": {
+   "widthM": 0.15,
+   "conf": 40
+  },
+  "Fabric080": {
+   "widthM": 0.16,
+   "conf": 70
+  },
+  "Fabric081A": {
+   "widthM": 0.12,
+   "conf": 60
+  },
+  "Fabric081B": {
+   "widthM": 0.12,
+   "conf": 60
+  },
+  "Fabric081C": {
+   "widthM": 0.12,
+   "conf": 60
+  },
+  "Fabric082A": {
+   "widthM": 0.12,
+   "conf": 60
+  },
+  "Fabric082B": {
+   "widthM": 0.12,
+   "conf": 60
+  },
+  "Fabric082C": {
+   "widthM": 0.12,
+   "conf": 60
+  },
+  "Fabric083": {
+   "widthM": 0.1,
+   "conf": 70
+  },
+  "Facade001": {
+   "widthM": 25,
+   "conf": 65
+  },
+  "Facade002": {
+   "widthM": 25,
+   "conf": 65
+  },
+  "Facade003": {
+   "widthM": 25,
+   "conf": 65
+  },
+  "Facade004": {
+   "widthM": 25,
+   "conf": 65
+  },
+  "Facade005": {
+   "widthM": 30,
+   "conf": 75
+  },
+  "Facade006": {
+   "widthM": 20,
+   "conf": 75
+  },
+  "Facade007": {
+   "widthM": 60,
+   "conf": 75
+  },
+  "Facade008": {
+   "widthM": 90,
+   "conf": 75
+  },
+  "Facade009": {
+   "widthM": 40,
+   "conf": 75
+  },
+  "Facade010": {
+   "widthM": 150,
+   "conf": 70
+  },
+  "Facade011": {
+   "widthM": 90,
+   "conf": 75
+  },
+  "Facade012": {
+   "widthM": 80,
+   "conf": 75
+  },
+  "Facade013": {
+   "widthM": 70,
+   "conf": 75
+  },
+  "Facade014": {
+   "widthM": 80,
+   "conf": 75
+  },
+  "Facade015": {
+   "widthM": 80,
+   "conf": 75
+  },
+  "Facade016": {
+   "widthM": 80,
+   "conf": 75
+  },
+  "Facade017": {
+   "widthM": 36,
+   "conf": 75
+  },
+  "Fence001": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Fence002": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Fence003": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Fence004": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Fence005": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Fence006": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Fingerprints001": {
+   "widthM": 0.3,
+   "conf": 75
+  },
+  "Fingerprints002": {
+   "widthM": 0.3,
+   "conf": 75
+  },
+  "Fingerprints003": {
+   "widthM": 0.3,
+   "conf": 75
+  },
+  "Fingerprints004": {
+   "widthM": 0.2,
+   "conf": 85
+  },
+  "FlowerSet001": {
+   "widthM": 0.15,
+   "conf": 80
+  },
+  "Foam001": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Foam002": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Foam003": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Foil001": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Foil002": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Foil003": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Foliage001": {
+   "widthM": 0.2,
+   "conf": 75
+  },
+  "Foliage002": {
+   "widthM": 0.3,
+   "conf": 75
+  },
+  "Foliage003": {
+   "widthM": 0.25,
+   "conf": 75
+  },
+  "Foliage004": {
+   "widthM": 0.2,
+   "conf": 75
+  },
+  "Foliage005": {
+   "widthM": 0.15,
+   "conf": 75
+  },
+  "Foliage006": {
+   "widthM": 0.15,
+   "conf": 75
+  },
+  "Foliage007": {
+   "widthM": 0.3,
+   "conf": 75
+  },
+  "FoodCrossSectionSet001": {
+   "widthM": 0.1,
+   "conf": 85
+  },
+  "FoodCrossSectionSet002": {
+   "widthM": 0.12,
+   "conf": 85
+  },
+  "FoodCrossSectionSet003": {
+   "widthM": 0.06,
+   "conf": 85
+  },
+  "Footsteps002": {
+   "widthM": 8,
+   "conf": 75
+  },
+  "Footsteps003": {
+   "widthM": 1,
+   "conf": 85
+  },
+  "Footsteps004": {
+   "widthM": 1,
+   "conf": 85
+  },
+  "Footsteps005": {
+   "widthM": 1,
+   "conf": 85
+  },
+  "Footsteps006": {
+   "widthM": 1,
+   "conf": 85
+  },
+  "GlazedTerracotta001": {
+   "widthM": 0.5,
+   "conf": 50
+  },
+  "GlazedTerracotta002": {
+   "widthM": 0.5,
+   "conf": 50
+  },
+  "GlazedTerracotta003": {
+   "widthM": 0.4,
+   "conf": 30
+  },
+  "Granite001A": {
+   "widthM": 0.4,
+   "conf": 50
+  },
+  "Granite001B": {
+   "widthM": 0.4,
+   "conf": 50
+  },
+  "Granite002A": {
+   "widthM": 0.4,
+   "conf": 50
+  },
+  "Granite002B": {
+   "widthM": 0.4,
+   "conf": 50
+  },
+  "Granite003A": {
+   "widthM": 0.4,
+   "conf": 50
+  },
+  "Granite003B": {
+   "widthM": 0.4,
+   "conf": 50
+  },
+  "Granite004A": {
+   "widthM": 0.4,
+   "conf": 50
+  },
+  "Granite004B": {
+   "widthM": 0.4,
+   "conf": 50
+  },
+  "Granite005A": {
+   "widthM": 0.4,
+   "conf": 50
+  },
+  "Granite005B": {
+   "widthM": 0.4,
+   "conf": 50
+  },
+  "Granite006A": {
+   "widthM": 0.4,
+   "conf": 50
+  },
+  "Granite006B": {
+   "widthM": 0.4,
+   "conf": 50
+  },
+  "Granite007A": {
+   "widthM": 0.5,
+   "conf": 50
+  },
+  "Granite007B": {
+   "widthM": 0.5,
+   "conf": 50
+  },
+  "Grass005": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Grass006": {
+   "widthM": 1.2,
+   "conf": 60
+  },
+  "Grass007": {
+   "widthM": 1.5,
+   "conf": 65
+  },
+  "Grass008": {
+   "widthM": 1.8,
+   "conf": 60
+  },
+  "Grate002": {
+   "widthM": 0.6,
+   "conf": 85
+  },
+  "Gravel001": {
+   "widthM": 1.2,
+   "conf": 60
+  },
+  "Gravel002": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Gravel003": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Gravel004": {
+   "widthM": 1,
+   "conf": 65
+  },
+  "Gravel005": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Gravel006": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Gravel007": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Gravel008": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Gravel009": {
+   "widthM": 1.5,
+   "conf": 55
+  },
+  "Gravel010": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Gravel011": {
+   "widthM": 2,
+   "conf": 55
+  },
+  "Gravel012": {
+   "widthM": 2,
+   "conf": 55
+  },
+  "Gravel013": {
+   "widthM": 2,
+   "conf": 55
+  },
+  "Gravel014": {
+   "widthM": 2,
+   "conf": 55
+  },
+  "Gravel015": {
+   "widthM": 1.2,
+   "conf": 65
+  },
+  "Gravel032": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Gravel034": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Gravel036S": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Gravel037": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Gravel040": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Gravel042": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Ground001": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Ground003": {
+   "widthM": 1.5,
+   "conf": 65
+  },
+  "Ground004": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Ground005": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Ground006": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Ground007": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Ground008": {
+   "widthM": 1.2,
+   "conf": 65
+  },
+  "Ground009": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Ground010": {
+   "widthM": 1.5,
+   "conf": 40
+  },
+  "Ground011": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "Ground012": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Ground013": {
+   "widthM": 2,
+   "conf": 65
+  },
+  "Ground015": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Ground016": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Ground017": {
+   "widthM": 2.5,
+   "conf": 60
+  },
+  "Ground018": {
+   "widthM": 1.5,
+   "conf": 65
+  },
+  "Ground019": {
+   "widthM": 1.5,
+   "conf": 80
+  },
+  "Ground020": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Ground021": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Ground022": {
+   "widthM": 1.2,
+   "conf": 50
+  },
+  "Ground023": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Ground024": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Ground025": {
+   "widthM": 1.2,
+   "conf": 50
+  },
+  "Ground026": {
+   "widthM": 1.2,
+   "conf": 40
+  },
+  "Ground027": {
+   "widthM": 1.2,
+   "conf": 40
+  },
+  "Ground028": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Ground029": {
+   "widthM": 1.2,
+   "conf": 40
+  },
+  "Ground030": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Ground031": {
+   "widthM": 1.2,
+   "conf": 55
+  },
+  "Ground032": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "Ground033": {
+   "widthM": 2,
+   "conf": 30
+  },
+  "Ground034": {
+   "widthM": 2,
+   "conf": 40
+  },
+  "Ground035": {
+   "widthM": 2,
+   "conf": 40
+  },
+  "Ground036": {
+   "widthM": 1.2,
+   "conf": 60
+  },
+  "Ground038": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Ground039": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Ground040": {
+   "widthM": 2,
+   "conf": 55
+  },
+  "Ground041": {
+   "widthM": 2,
+   "conf": 55
+  },
+  "Ground042": {
+   "widthM": 2,
+   "conf": 55
+  },
+  "Ground049C": {
+   "widthM": 1.5,
+   "conf": 45
+  },
+  "Ground053": {
+   "widthM": 2,
+   "conf": 45
+  },
+  "Ground057": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Ground058": {
+   "widthM": 2,
+   "conf": 55
+  },
+  "Ground060": {
+   "widthM": 1.8,
+   "conf": 60
+  },
+  "Ground061": {
+   "widthM": 2.5,
+   "conf": 45
+  },
+  "Ground063": {
+   "widthM": 1.2,
+   "conf": 70
+  },
+  "Ground064": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Ground066": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Ground067": {
+   "widthM": 1.8,
+   "conf": 65
+  },
+  "Ground068": {
+   "widthM": 2,
+   "conf": 65
+  },
+  "Ground069": {
+   "widthM": 1.5,
+   "conf": 65
+  },
+  "Ground076": {
+   "widthM": 1.8,
+   "conf": 70
+  },
+  "Ground077": {
+   "widthM": 1.5,
+   "conf": 70
+  },
+  "Ground078": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "Ground079L": {
+   "widthM": 2,
+   "conf": 30
+  },
+  "Ground080": {
+   "widthM": 2,
+   "conf": 35
+  },
+  "Ground081": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "Ground082L": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Ground082S": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Ground083": {
+   "widthM": 2,
+   "conf": 30
+  },
+  "Ground084": {
+   "widthM": 2,
+   "conf": 35
+  },
+  "Ground085": {
+   "widthM": 2,
+   "conf": 35
+  },
+  "Ground086": {
+   "widthM": 2,
+   "conf": 40
+  },
+  "Ground087": {
+   "widthM": 2,
+   "conf": 30
+  },
+  "Ground088": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Ground089": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Ground090": {
+   "widthM": 2,
+   "conf": 60
+  },
+  "Ground091": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Ground092A": {
+   "widthM": 2,
+   "conf": 65
+  },
+  "Ground092B": {
+   "widthM": 2,
+   "conf": 65
+  },
+  "Ground092C": {
+   "widthM": 2,
+   "conf": 65
+  },
+  "Ground093A": {
+   "widthM": 2,
+   "conf": 65
+  },
+  "Ground093B": {
+   "widthM": 2,
+   "conf": 65
+  },
+  "Ground093C": {
+   "widthM": 2,
+   "conf": 65
+  },
+  "Ground094A": {
+   "widthM": 2,
+   "conf": 65
+  },
+  "Ground094B": {
+   "widthM": 2,
+   "conf": 65
+  },
+  "Ground094C": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Ground095A": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Ground095B": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Ground096A": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Ground096B": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Ground097": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Ground098": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Ground099": {
+   "widthM": 2,
+   "conf": 40
+  },
+  "Ground100": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Ground101": {
+   "widthM": 1.5,
+   "conf": 40
+  },
+  "Ground102": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Ground103": {
+   "widthM": 1.5,
+   "conf": 65
+  },
+  "Ground104": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Ground105": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Ground112": {
+   "widthM": 1.5,
+   "conf": 65
+  },
+  "Ice001": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Ice002": {
+   "widthM": 3,
+   "conf": 50
+  },
+  "Ice003": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Ice004": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Ivory001A": {
+   "widthM": 0.25,
+   "conf": 40
+  },
+  "Ivory001B": {
+   "widthM": 0.25,
+   "conf": 40
+  },
+  "Ivory002A": {
+   "widthM": 0.25,
+   "conf": 40
+  },
+  "Ivory002B": {
+   "widthM": 0.25,
+   "conf": 40
+  },
+  "Lava001": {
+   "widthM": 2.5,
+   "conf": 50
+  },
+  "Lava002": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "Lava003": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "Lava004": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "Lava005": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "Leaf001": {
+   "widthM": 0.15,
+   "conf": 85
+  },
+  "Leaf002": {
+   "widthM": 0.2,
+   "conf": 85
+  },
+  "Leaf003": {
+   "widthM": 0.2,
+   "conf": 85
+  },
+  "LeafSet001": {
+   "widthM": 0.2,
+   "conf": 80
+  },
+  "LeafSet002": {
+   "widthM": 0.15,
+   "conf": 80
+  },
+  "LeafSet003": {
+   "widthM": 0.15,
+   "conf": 80
+  },
+  "LeafSet004": {
+   "widthM": 0.25,
+   "conf": 85
+  },
+  "LeafSet005": {
+   "widthM": 0.2,
+   "conf": 85
+  },
+  "LeafSet006": {
+   "widthM": 0.18,
+   "conf": 75
+  },
+  "LeafSet007": {
+   "widthM": 0.18,
+   "conf": 75
+  },
+  "LeafSet008": {
+   "widthM": 0.2,
+   "conf": 75
+  },
+  "LeafSet009": {
+   "widthM": 0.22,
+   "conf": 75
+  },
+  "LeafSet010": {
+   "widthM": 0.3,
+   "conf": 80
+  },
+  "LeafSet011": {
+   "widthM": 0.22,
+   "conf": 75
+  },
+  "LeafSet012": {
+   "widthM": 0.25,
+   "conf": 80
+  },
+  "LeafSet013": {
+   "widthM": 0.25,
+   "conf": 75
+  },
+  "LeafSet014": {
+   "widthM": 0.22,
+   "conf": 75
+  },
+  "LeafSet016": {
+   "widthM": 0.25,
+   "conf": 80
+  },
+  "LeafSet019": {
+   "widthM": 0.25,
+   "conf": 70
+  },
+  "LeafSet023": {
+   "widthM": 0.2,
+   "conf": 75
+  },
+  "LeafSet025": {
+   "widthM": 0.3,
+   "conf": 85
+  },
+  "LeafSet030": {
+   "widthM": 0.4,
+   "conf": 80
+  },
+  "Leaking001": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking002": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking003": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking004": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking005": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking006": {
+   "widthM": 0.4,
+   "conf": 60
+  },
+  "Leaking007": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking008": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking009": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking010A": {
+   "widthM": 0.8,
+   "conf": 60
+  },
+  "Leaking010B": {
+   "widthM": 1.2,
+   "conf": 40
+  },
+  "Leaking010C": {
+   "widthM": 1.2,
+   "conf": 40
+  },
+  "Leaking011A": {
+   "widthM": 1.2,
+   "conf": 40
+  },
+  "Leaking011B": {
+   "widthM": 1.2,
+   "conf": 40
+  },
+  "Leaking011C": {
+   "widthM": 1.2,
+   "conf": 40
+  },
+  "Leaking012A": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Leaking012B": {
+   "widthM": 0.3,
+   "conf": 60
+  },
+  "Leaking012C": {
+   "widthM": 0.3,
+   "conf": 60
+  },
+  "Leaking013A": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Leaking013B": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Leaking013C": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Leaking014A": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Leaking014B": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking014C": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking015A": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking015B": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking015C": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking016A": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking016B": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking016C": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking017A": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking017B": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking017C": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking018A": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Leaking018B": {
+   "widthM": 1.2,
+   "conf": 30
+  },
+  "Leaking018C": {
+   "widthM": 1.2,
+   "conf": 30
+  },
+  "Leaking019A": {
+   "widthM": 1.2,
+   "conf": 20
+  },
+  "Leaking019B": {
+   "widthM": 1.2,
+   "conf": 30
+  },
+  "Leaking019C": {
+   "widthM": 1.2,
+   "conf": 30
+  },
+  "Leather001": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Leather002": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Leather003": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Leather004": {
+   "widthM": 0.3,
+   "conf": 35
+  },
+  "Leather005": {
+   "widthM": 0.35,
+   "conf": 40
+  },
+  "Leather006": {
+   "widthM": 0.3,
+   "conf": 35
+  },
+  "Leather007": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Leather008": {
+   "widthM": 0.25,
+   "conf": 75
+  },
+  "Leather009": {
+   "widthM": 0.8,
+   "conf": 70
+  },
+  "Leather010": {
+   "widthM": 0.8,
+   "conf": 70
+  },
+  "Leather011": {
+   "widthM": 0.8,
+   "conf": 70
+  },
+  "Leather012": {
+   "widthM": 0.8,
+   "conf": 70
+  },
+  "Leather013": {
+   "widthM": 0.8,
+   "conf": 70
+  },
+  "Leather014": {
+   "widthM": 0.3,
+   "conf": 60
+  },
+  "Leather015": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Leather016": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Leather017": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Leather018": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Leather019": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Leather020": {
+   "widthM": 0.14,
+   "conf": 59
+  },
+  "Leather021": {
+   "widthM": 0.14,
+   "conf": 64
+  },
+  "Leather022": {
+   "widthM": 0.14,
+   "conf": 64
+  },
+  "Leather023": {
+   "widthM": 0.14,
+   "conf": 69
+  },
+  "Leather024": {
+   "widthM": 0.14,
+   "conf": 64
+  },
+  "Leather025": {
+   "widthM": 0.15,
+   "conf": 59
+  },
+  "Leather026": {
+   "widthM": 0.15,
+   "conf": 59
+  },
+  "Leather027": {
+   "widthM": 0.15,
+   "conf": 59
+  },
+  "Leather037": {
+   "widthM": 0.14,
+   "conf": 59
+  },
+  "Leather038": {
+   "widthM": 0.14,
+   "conf": 59
+  },
+  "Leather039": {
+   "widthM": 0.14,
+   "conf": 59
+  },
+  "ManholeCover001": {
+   "widthM": 0.85,
+   "conf": 84
+  },
+  "ManholeCover002": {
+   "widthM": 0.4,
+   "conf": 75
+  },
+  "ManholeCover007": {
+   "widthM": 1.2,
+   "conf": 70
+  },
+  "ManholeCover009": {
+   "widthM": 0.8,
+   "conf": 85
+  },
+  "Marble001": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble002": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble003": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble004": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble005": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble006": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble007": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble008": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble009": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble010": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble011": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble012": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble013": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble014": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble015": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble016": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble017": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble018": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble019": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble020": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble021": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Marble022": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Marble023": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Marble024": {
+   "widthM": 0.3,
+   "conf": 30
+  },
+  "Marble025": {
+   "widthM": 0.3,
+   "conf": 30
+  },
+  "Marble026": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal001": {
+   "widthM": 0.25,
+   "conf": 40
+  },
+  "Metal002": {
+   "widthM": 0.25,
+   "conf": 40
+  },
+  "Metal003": {
+   "widthM": 0.25,
+   "conf": 40
+  },
+  "Metal004": {
+   "widthM": 0.25,
+   "conf": 40
+  },
+  "Metal005": {
+   "widthM": 0.25,
+   "conf": 40
+  },
+  "Metal006": {
+   "widthM": 0.25,
+   "conf": 40
+  },
+  "Metal007": {
+   "widthM": 0.25,
+   "conf": 40
+  },
+  "Metal008": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal009": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal010": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal011": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal012": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal013": {
+   "widthM": 0.5,
+   "conf": 40
+  },
+  "Metal014": {
+   "widthM": 0.5,
+   "conf": 40
+  },
+  "Metal015": {
+   "widthM": 0.5,
+   "conf": 40
+  },
+  "Metal016": {
+   "widthM": 0.5,
+   "conf": 40
+  },
+  "Metal017": {
+   "widthM": 0.5,
+   "conf": 40
+  },
+  "Metal018": {
+   "widthM": 0.5,
+   "conf": 40
+  },
+  "Metal019": {
+   "widthM": 0.5,
+   "conf": 40
+  },
+  "Metal020": {
+   "widthM": 0.6,
+   "conf": 50
+  },
+  "Metal021": {
+   "widthM": 0.6,
+   "conf": 50
+  },
+  "Metal022": {
+   "widthM": 0.6,
+   "conf": 50
+  },
+  "Metal023": {
+   "widthM": 0.6,
+   "conf": 50
+  },
+  "Metal024": {
+   "widthM": 0.6,
+   "conf": 50
+  },
+  "Metal025": {
+   "widthM": 0.6,
+   "conf": 50
+  },
+  "Metal026": {
+   "widthM": 0.6,
+   "conf": 50
+  },
+  "Metal027": {
+   "widthM": 0.3,
+   "conf": 35
+  },
+  "Metal028": {
+   "widthM": 0.3,
+   "conf": 35
+  },
+  "Metal029": {
+   "widthM": 0.3,
+   "conf": 35
+  },
+  "Metal030": {
+   "widthM": 0.5,
+   "conf": 30
+  },
+  "Metal031": {
+   "widthM": 0.5,
+   "conf": 30
+  },
+  "Metal032": {
+   "widthM": 1,
+   "conf": 15
+  },
+  "Metal033": {
+   "widthM": 1,
+   "conf": 15
+  },
+  "Metal034": {
+   "widthM": 1,
+   "conf": 15
+  },
+  "Metal035": {
+   "widthM": 1,
+   "conf": 15
+  },
+  "Metal036": {
+   "widthM": 0.5,
+   "conf": 25
+  },
+  "Metal037": {
+   "widthM": 0.25,
+   "conf": 65
+  },
+  "Metal038": {
+   "widthM": 0.35,
+   "conf": 50
+  },
+  "Metal039": {
+   "widthM": 0.3,
+   "conf": 60
+  },
+  "Metal040": {
+   "widthM": 0.3,
+   "conf": 60
+  },
+  "Metal041A": {
+   "widthM": 1,
+   "conf": 20
+  },
+  "Metal041B": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Metal041C": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Metal042A": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal042B": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal043A": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal043B": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal044A": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal044B": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal045A": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal045B": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal046A": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal046B": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal047A": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal047B": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal048A": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal048B": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Metal048C": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Metal049A": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal049B": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Metal049C": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Metal050A": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal050B": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Metal050C": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Metal051A": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Metal051B": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Metal051C": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Metal052A": {
+   "widthM": 1,
+   "conf": 30
+  },
+  "Metal052B": {
+   "widthM": 1,
+   "conf": 35
+  },
+  "Metal052C": {
+   "widthM": 1,
+   "conf": 40
+  },
+  "Metal053A": {
+   "widthM": 1,
+   "conf": 30
+  },
+  "Metal053B": {
+   "widthM": 1,
+   "conf": 40
+  },
+  "Metal053C": {
+   "widthM": 1,
+   "conf": 40
+  },
+  "Metal054A": {
+   "widthM": 1,
+   "conf": 35
+  },
+  "Metal054B": {
+   "widthM": 1,
+   "conf": 40
+  },
+  "Metal054C": {
+   "widthM": 1,
+   "conf": 40
+  },
+  "Metal055A": {
+   "widthM": 1,
+   "conf": 35
+  },
+  "Metal055B": {
+   "widthM": 1,
+   "conf": 40
+  },
+  "Metal055C": {
+   "widthM": 1,
+   "conf": 40
+  },
+  "Metal056A": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Metal056B": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Metal056C": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Metal057A": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Metal057B": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Metal057C": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Metal058A": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Metal058B": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Metal058C": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Metal059A": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Metal059B": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Metal059C": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Metal060A": {
+   "widthM": 0.5,
+   "conf": 10
+  },
+  "Metal060B": {
+   "widthM": 0.5,
+   "conf": 20
+  },
+  "Metal060C": {
+   "widthM": 0.5,
+   "conf": 20
+  },
+  "Metal061A": {
+   "widthM": 0.5,
+   "conf": 10
+  },
+  "Metal061B": {
+   "widthM": 0.5,
+   "conf": 15
+  },
+  "Metal061C": {
+   "widthM": 0.5,
+   "conf": 20
+  },
+  "Metal062A": {
+   "widthM": 0.5,
+   "conf": 10
+  },
+  "Metal062B": {
+   "widthM": 0.5,
+   "conf": 20
+  },
+  "Metal062C": {
+   "widthM": 0.5,
+   "conf": 20
+  },
+  "Metal063": {
+   "widthM": 0.5,
+   "conf": 15
+  },
+  "MetalPlates001": {
+   "widthM": 1.5,
+   "conf": 45
+  },
+  "MetalPlates002": {
+   "widthM": 1.5,
+   "conf": 45
+  },
+  "MetalPlates003": {
+   "widthM": 1.2,
+   "conf": 60
+  },
+  "MetalPlates004": {
+   "widthM": 2,
+   "conf": 45
+  },
+  "MetalPlates005": {
+   "widthM": 2,
+   "conf": 45
+  },
+  "MetalPlates006": {
+   "widthM": 1.5,
+   "conf": 40
+  },
+  "MetalPlates007": {
+   "widthM": 1.5,
+   "conf": 40
+  },
+  "MetalPlates008": {
+   "widthM": 2,
+   "conf": 40
+  },
+  "MetalPlates009": {
+   "widthM": 1.5,
+   "conf": 45
+  },
+  "MetalPlates015A": {
+   "widthM": 1.2,
+   "conf": 50
+  },
+  "MetalPlates015B": {
+   "widthM": 1.2,
+   "conf": 50
+  },
+  "MetalPlates016A": {
+   "widthM": 1.2,
+   "conf": 50
+  },
+  "MetalPlates016B": {
+   "widthM": 1.2,
+   "conf": 50
+  },
+  "MetalPlates017A": {
+   "widthM": 1.2,
+   "conf": 50
+  },
+  "MetalPlates017B": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "MetalWalkway001": {
+   "widthM": 0.5,
+   "conf": 75
+  },
+  "MetalWalkway002": {
+   "widthM": 0.3,
+   "conf": 75
+  },
+  "MetalWalkway003": {
+   "widthM": 1.2,
+   "conf": 70
+  },
+  "MetalWalkway004": {
+   "widthM": 0.3,
+   "conf": 75
+  },
+  "MetalWalkway005": {
+   "widthM": 0.3,
+   "conf": 75
+  },
+  "MetalWalkway006": {
+   "widthM": 0.5,
+   "conf": 75
+  },
+  "MetalWalkway007": {
+   "widthM": 0.15,
+   "conf": 75
+  },
+  "MetalWalkway008": {
+   "widthM": 0.5,
+   "conf": 75
+  },
+  "MetalWalkway009": {
+   "widthM": 0.5,
+   "conf": 75
+  },
+  "MetalWalkway010": {
+   "widthM": 1,
+   "conf": 70
+  },
+  "MetalWalkway011": {
+   "widthM": 1,
+   "conf": 70
+  },
+  "MetalWalkway012": {
+   "widthM": 0.7,
+   "conf": 75
+  },
+  "MetalWalkway013": {
+   "widthM": 0.7,
+   "conf": 75
+  },
+  "MetalWalkway014": {
+   "widthM": 0.4,
+   "conf": 75
+  },
+  "Moss002": {
+   "widthM": 0.4,
+   "conf": 60
+  },
+  "Moss003": {
+   "widthM": 0.35,
+   "conf": 60
+  },
+  "Moss004": {
+   "widthM": 0.4,
+   "conf": 60
+  },
+  "Onyx001": {
+   "widthM": 0.5,
+   "conf": 50
+  },
+  "Onyx002": {
+   "widthM": 0.5,
+   "conf": 50
+  },
+  "Onyx003": {
+   "widthM": 0.5,
+   "conf": 50
+  },
+  "Onyx004": {
+   "widthM": 0.5,
+   "conf": 50
+  },
+  "Onyx005": {
+   "widthM": 0.5,
+   "conf": 50
+  },
+  "Onyx006": {
+   "widthM": 0.5,
+   "conf": 50
+  },
+  "Onyx007": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Onyx008": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Onyx009": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Onyx010": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Onyx011": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Onyx012": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Onyx013": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Onyx014": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Onyx015": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Paint001": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Paint002": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Paint003": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Paint004": {
+   "widthM": 0.3,
+   "conf": 30
+  },
+  "Paint005": {
+   "widthM": 0.3,
+   "conf": 30
+  },
+  "Paint006": {
+   "widthM": 0.3,
+   "conf": 30
+  },
+  "PaintedMetal001": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "PaintedMetal002": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "PaintedMetal003": {
+   "widthM": 0.5,
+   "conf": 40
+  },
+  "PaintedMetal004": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "PaintedMetal005": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "PaintedMetal006": {
+   "widthM": 0.6,
+   "conf": 50
+  },
+  "PaintedMetal007": {
+   "widthM": 0.6,
+   "conf": 50
+  },
+  "PaintedMetal008": {
+   "widthM": 0.6,
+   "conf": 50
+  },
+  "PaintedMetal009": {
+   "widthM": 0.6,
+   "conf": 50
+  },
+  "PaintedMetal010": {
+   "widthM": 1.2,
+   "conf": 30
+  },
+  "PaintedMetal011": {
+   "widthM": 1.2,
+   "conf": 30
+  },
+  "PaintedMetal012": {
+   "widthM": 1.2,
+   "conf": 30
+  },
+  "PaintedMetal013": {
+   "widthM": 1.2,
+   "conf": 30
+  },
+  "PaintedMetal014": {
+   "widthM": 1.2,
+   "conf": 30
+  },
+  "PaintedMetal015": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "PaintedMetal016": {
+   "widthM": 1.2,
+   "conf": 40
+  },
+  "PaintedMetal017": {
+   "widthM": 0.4,
+   "conf": 70
+  },
+  "PaintedMetal018": {
+   "widthM": 0.4,
+   "conf": 70
+  },
+  "PaintedPlaster001": {
+   "widthM": 2,
+   "conf": 30
+  },
+  "PaintedPlaster002": {
+   "widthM": 2,
+   "conf": 30
+  },
+  "PaintedPlaster003": {
+   "widthM": 2,
+   "conf": 30
+  },
+  "PaintedPlaster004": {
+   "widthM": 1.5,
+   "conf": 30
+  },
+  "PaintedPlaster005": {
+   "widthM": 1.5,
+   "conf": 30
+  },
+  "PaintedPlaster006": {
+   "widthM": 1.5,
+   "conf": 40
+  },
+  "PaintedPlaster007": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "PaintedPlaster008": {
+   "widthM": 2,
+   "conf": 85
+  },
+  "PaintedPlaster009": {
+   "widthM": 2,
+   "conf": 80
+  },
+  "PaintedPlaster010": {
+   "widthM": 2,
+   "conf": 90
+  },
+  "PaintedPlaster011": {
+   "widthM": 2,
+   "conf": 70
+  },
+  "PaintedPlaster012": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "PaintedPlaster013": {
+   "widthM": 2,
+   "conf": 85
+  },
+  "PaintedPlaster014": {
+   "widthM": 2,
+   "conf": 85
+  },
+  "PaintedPlaster015": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "PaintedPlaster016": {
+   "widthM": 2,
+   "conf": 85
+  },
+  "PaintedPlaster017": {
+   "widthM": 1.5,
+   "conf": 40
+  },
+  "PaintedPlaster018": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "PaintedWood001": {
+   "widthM": 0.6,
+   "conf": 55
+  },
+  "PaintedWood002": {
+   "widthM": 0.6,
+   "conf": 55
+  },
+  "PaintedWood003": {
+   "widthM": 0.6,
+   "conf": 55
+  },
+  "PaintedWood004": {
+   "widthM": 0.6,
+   "conf": 55
+  },
+  "PaintedWood005": {
+   "widthM": 0.6,
+   "conf": 55
+  },
+  "PaintedWood006A": {
+   "widthM": 0.8,
+   "conf": 65
+  },
+  "PaintedWood006B": {
+   "widthM": 0.8,
+   "conf": 65
+  },
+  "PaintedWood006C": {
+   "widthM": 0.8,
+   "conf": 65
+  },
+  "PaintedWood007A": {
+   "widthM": 0.8,
+   "conf": 60
+  },
+  "PaintedWood007B": {
+   "widthM": 0.6,
+   "conf": 55
+  },
+  "PaintedWood007C": {
+   "widthM": 0.6,
+   "conf": 55
+  },
+  "PaintedWood008A": {
+   "widthM": 0.6,
+   "conf": 55
+  },
+  "PaintedWood008B": {
+   "widthM": 0.6,
+   "conf": 55
+  },
+  "PaintedWood008C": {
+   "widthM": 0.6,
+   "conf": 55
+  },
+  "PaintedWood009A": {
+   "widthM": 0.6,
+   "conf": 55
+  },
+  "PaintedWood009B": {
+   "widthM": 0.6,
+   "conf": 55
+  },
+  "PaintedWood009C": {
+   "widthM": 0.6,
+   "conf": 55
+  },
+  "Painting001": {
+   "widthM": 0.8,
+   "conf": 60
+  },
+  "Paper001": {
+   "widthM": 0.3,
+   "conf": 65
+  },
+  "Paper003": {
+   "widthM": 0.25,
+   "conf": 65
+  },
+  "Paper005": {
+   "widthM": 0.2,
+   "conf": 50
+  },
+  "Paper006": {
+   "widthM": 0.2,
+   "conf": 55
+  },
+  "Pathway003": {
+   "widthM": 4,
+   "conf": 65
+  },
+  "Pathway004": {
+   "widthM": 3,
+   "conf": 70
+  },
+  "PavingEdge001": {
+   "widthM": 1,
+   "conf": 65
+  },
+  "PavingEdge002": {
+   "widthM": 6,
+   "conf": 75
+  },
+  "PavingStones006": {
+   "widthM": 0.6,
+   "conf": 85
+  },
+  "PavingStones007": {
+   "widthM": 2.4,
+   "conf": 85
+  },
+  "PavingStones008": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "PavingStones009": {
+   "widthM": 1.1,
+   "conf": 80
+  },
+  "PavingStones010": {
+   "widthM": 1.1,
+   "conf": 80
+  },
+  "PavingStones011": {
+   "widthM": 1.5,
+   "conf": 75
+  },
+  "PavingStones012": {
+   "widthM": 1.4,
+   "conf": 80
+  },
+  "PavingStones013": {
+   "widthM": 1.4,
+   "conf": 85
+  },
+  "PavingStones014": {
+   "widthM": 2.5,
+   "conf": 80
+  },
+  "PavingStones015": {
+   "widthM": 1.4,
+   "conf": 85
+  },
+  "PavingStones016": {
+   "widthM": 1.4,
+   "conf": 80
+  },
+  "PavingStones017": {
+   "widthM": 2,
+   "conf": 80
+  },
+  "PavingStones018": {
+   "widthM": 1.5,
+   "conf": 80
+  },
+  "PavingStones019": {
+   "widthM": 1.8,
+   "conf": 80
+  },
+  "PavingStones020": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "PavingStones021": {
+   "widthM": 1.8,
+   "conf": 80
+  },
+  "PavingStones022": {
+   "widthM": 1.6,
+   "conf": 75
+  },
+  "PavingStones023": {
+   "widthM": 1.4,
+   "conf": 85
+  },
+  "PavingStones024": {
+   "widthM": 1.7,
+   "conf": 85
+  },
+  "PavingStones025": {
+   "widthM": 1.5,
+   "conf": 80
+  },
+  "PavingStones026": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "PavingStones028": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "PavingStones029": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "PavingStones030": {
+   "widthM": 1.7,
+   "conf": 85
+  },
+  "PavingStones032": {
+   "widthM": 1.6,
+   "conf": 90
+  },
+  "PavingStones033": {
+   "widthM": 1.5,
+   "conf": 85
+  },
+  "PavingStones035": {
+   "widthM": 1.8,
+   "conf": 85
+  },
+  "PavingStones036": {
+   "widthM": 1.6,
+   "conf": 80
+  },
+  "PavingStones037": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "PavingStones038": {
+   "widthM": 1.8,
+   "conf": 75
+  },
+  "PavingStones039": {
+   "widthM": 1,
+   "conf": 80
+  },
+  "PavingStones040": {
+   "widthM": 1.8,
+   "conf": 85
+  },
+  "PavingStones041": {
+   "widthM": 2,
+   "conf": 80
+  },
+  "PavingStones042": {
+   "widthM": 1.8,
+   "conf": 80
+  },
+  "PavingStones043": {
+   "widthM": 1.8,
+   "conf": 85
+  },
+  "PavingStones044": {
+   "widthM": 1.5,
+   "conf": 90
+  },
+  "PavingStones045": {
+   "widthM": 1.6,
+   "conf": 80
+  },
+  "PavingStones046": {
+   "widthM": 1.8,
+   "conf": 80
+  },
+  "PavingStones047": {
+   "widthM": 3,
+   "conf": 80
+  },
+  "PavingStones048": {
+   "widthM": 2.5,
+   "conf": 80
+  },
+  "PavingStones049": {
+   "widthM": 2.4,
+   "conf": 80
+  },
+  "PavingStones050": {
+   "widthM": 2.2,
+   "conf": 80
+  },
+  "PavingStones051": {
+   "widthM": 2.6,
+   "conf": 80
+  },
+  "PavingStones052": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "PavingStones053": {
+   "widthM": 2.4,
+   "conf": 85
+  },
+  "PavingStones056": {
+   "widthM": 2.5,
+   "conf": 85
+  },
+  "PavingStones057": {
+   "widthM": 2.5,
+   "conf": 75
+  },
+  "PavingStones058": {
+   "widthM": 2.5,
+   "conf": 75
+  },
+  "PavingStones059": {
+   "widthM": 2.5,
+   "conf": 75
+  },
+  "PavingStones060": {
+   "widthM": 2.5,
+   "conf": 75
+  },
+  "PavingStones061": {
+   "widthM": 2.5,
+   "conf": 75
+  },
+  "PavingStones062": {
+   "widthM": 2.5,
+   "conf": 75
+  },
+  "PavingStones063": {
+   "widthM": 2.5,
+   "conf": 75
+  },
+  "PavingStones064": {
+   "widthM": 2.5,
+   "conf": 75
+  },
+  "PavingStones065": {
+   "widthM": 2.5,
+   "conf": 75
+  },
+  "PavingStones066": {
+   "widthM": 2.5,
+   "conf": 75
+  },
+  "PavingStones067": {
+   "widthM": 1.8,
+   "conf": 75
+  },
+  "PavingStones068": {
+   "widthM": 1.8,
+   "conf": 75
+  },
+  "PavingStones069": {
+   "widthM": 3,
+   "conf": 60
+  },
+  "PavingStones071": {
+   "widthM": 0.9,
+   "conf": 85
+  },
+  "PavingStones072": {
+   "widthM": 0.9,
+   "conf": 85
+  },
+  "PavingStones073": {
+   "widthM": 0.9,
+   "conf": 85
+  },
+  "PavingStones074": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "PavingStones075": {
+   "widthM": 1.2,
+   "conf": 80
+  },
+  "PavingStones076": {
+   "widthM": 1.5,
+   "conf": 80
+  },
+  "PavingStones077": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "PavingStones078": {
+   "widthM": 1.8,
+   "conf": 85
+  },
+  "PavingStones079": {
+   "widthM": 1.2,
+   "conf": 80
+  },
+  "PavingStones080": {
+   "widthM": 1.5,
+   "conf": 80
+  },
+  "PavingStones081": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "PavingStones082": {
+   "widthM": 1,
+   "conf": 85
+  },
+  "PavingStones083": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "PavingStones084": {
+   "widthM": 1.8,
+   "conf": 80
+  },
+  "PavingStones085": {
+   "widthM": 1.8,
+   "conf": 80
+  },
+  "PavingStones086": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "PavingStones087": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "PavingStones088": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "PavingStones089": {
+   "widthM": 1.6,
+   "conf": 80
+  },
+  "PavingStones090": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "PavingStones091": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "PavingStones094": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "PavingStones095": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "PavingStones096": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "PavingStones097": {
+   "widthM": 2,
+   "conf": 80
+  },
+  "PavingStones098": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "PavingStones111": {
+   "widthM": 3.5,
+   "conf": 75
+  },
+  "PavingStones112": {
+   "widthM": 1.5,
+   "conf": 85
+  },
+  "PavingStones115A": {
+   "widthM": 1.5,
+   "conf": 80
+  },
+  "PavingStones115B": {
+   "widthM": 1.5,
+   "conf": 80
+  },
+  "PavingStones115C": {
+   "widthM": 1.5,
+   "conf": 80
+  },
+  "PavingStones116": {
+   "widthM": 1.5,
+   "conf": 85
+  },
+  "PavingStones117": {
+   "widthM": 2,
+   "conf": 80
+  },
+  "PavingStones120": {
+   "widthM": 2,
+   "conf": 80
+  },
+  "PavingStones121": {
+   "widthM": 2.5,
+   "conf": 75
+  },
+  "PavingStones123": {
+   "widthM": 2,
+   "conf": 85
+  },
+  "PavingStones124": {
+   "widthM": 1.8,
+   "conf": 85
+  },
+  "PavingStones131": {
+   "widthM": 1.6,
+   "conf": 80
+  },
+  "PavingStones132": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "PavingStones133": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "PavingStones134": {
+   "widthM": 1.8,
+   "conf": 75
+  },
+  "PavingStones136": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "PavingStones141": {
+   "widthM": 1.8,
+   "conf": 75
+  },
+  "PavingStones142": {
+   "widthM": 1.5,
+   "conf": 80
+  },
+  "PavingStones143": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "PavingStones144": {
+   "widthM": 1.5,
+   "conf": 80
+  },
+  "PavingStones145": {
+   "widthM": 1.8,
+   "conf": 75
+  },
+  "PavingStones146": {
+   "widthM": 2.5,
+   "conf": 75
+  },
+  "PavingStones147": {
+   "widthM": 3.5,
+   "conf": 70
+  },
+  "PavingStones148": {
+   "widthM": 2.5,
+   "conf": 75
+  },
+  "PavingStones149": {
+   "widthM": 1.5,
+   "conf": 75
+  },
+  "PaymentCard001": {
+   "widthM": 0.086,
+   "conf": 95
+  },
+  "PaymentCard002": {
+   "widthM": 0.086,
+   "conf": 95
+  },
+  "PaymentCard003": {
+   "widthM": 0.086,
+   "conf": 95
+  },
+  "PineNeedles001": {
+   "widthM": 0.25,
+   "conf": 70
+  },
+  "Pipe001": {
+   "widthM": 0.4,
+   "conf": 40
+  },
+  "Pipe002": {
+   "widthM": 0.4,
+   "conf": 40
+  },
+  "Pipe003": {
+   "widthM": 0.4,
+   "conf": 40
+  },
+  "Pipe004": {
+   "widthM": 0.4,
+   "conf": 40
+  },
+  "Pizza001": {
+   "widthM": 0.35,
+   "conf": 85
+  },
+  "Pizza002": {
+   "widthM": 0.35,
+   "conf": 85
+  },
+  "Planks002": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Planks003": {
+   "widthM": 1,
+   "conf": 75
+  },
+  "Planks004": {
+   "widthM": 1.5,
+   "conf": 70
+  },
+  "Planks005": {
+   "widthM": 0.9,
+   "conf": 70
+  },
+  "Planks008": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Planks009": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Planks010": {
+   "widthM": 1.5,
+   "conf": 75
+  },
+  "Planks011": {
+   "widthM": 2.5,
+   "conf": 70
+  },
+  "Planks012": {
+   "widthM": 2.5,
+   "conf": 70
+  },
+  "Planks013": {
+   "widthM": 2.5,
+   "conf": 70
+  },
+  "Planks014": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "Planks015": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "Planks016": {
+   "widthM": 1.5,
+   "conf": 85
+  },
+  "Planks017": {
+   "widthM": 1.5,
+   "conf": 80
+  },
+  "Planks018": {
+   "widthM": 2.5,
+   "conf": 80
+  },
+  "Planks019": {
+   "widthM": 1.8,
+   "conf": 85
+  },
+  "Planks020": {
+   "widthM": 1.8,
+   "conf": 85
+  },
+  "Planks023A": {
+   "widthM": 1.6,
+   "conf": 80
+  },
+  "Planks023B": {
+   "widthM": 1.6,
+   "conf": 80
+  },
+  "Planks023C": {
+   "widthM": 1.6,
+   "conf": 80
+  },
+  "Planks024A": {
+   "widthM": 1.6,
+   "conf": 80
+  },
+  "Planks024B": {
+   "widthM": 1.6,
+   "conf": 80
+  },
+  "Planks024C": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Planks025A": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Planks025B": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Planks025C": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Planks026A": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Planks026B": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Planks026C": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Planks027A": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Planks027B": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Planks027C": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Planks030A": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Planks030B": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Planks030C": {
+   "widthM": 2,
+   "conf": 85
+  },
+  "Planks031A": {
+   "widthM": 2,
+   "conf": 85
+  },
+  "Planks031B": {
+   "widthM": 2,
+   "conf": 85
+  },
+  "Planks031C": {
+   "widthM": 2,
+   "conf": 85
+  },
+  "Planks032": {
+   "widthM": 2,
+   "conf": 80
+  },
+  "Planks033A": {
+   "widthM": 2.5,
+   "conf": 85
+  },
+  "Planks033B": {
+   "widthM": 2.5,
+   "conf": 85
+  },
+  "Planks034A": {
+   "widthM": 2.5,
+   "conf": 85
+  },
+  "Planks034B": {
+   "widthM": 2.5,
+   "conf": 85
+  },
+  "Planks035A": {
+   "widthM": 2.5,
+   "conf": 85
+  },
+  "Planks035B": {
+   "widthM": 2.5,
+   "conf": 85
+  },
+  "Planks036A": {
+   "widthM": 2.5,
+   "conf": 85
+  },
+  "Planks036B": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "Planks037A": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "Planks037B": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "Plaster001": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Plaster002": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Plaster003": {
+   "widthM": 1.2,
+   "conf": 70
+  },
+  "Plaster004": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Plaster005": {
+   "widthM": 2,
+   "conf": 60
+  },
+  "Plaster006": {
+   "widthM": 2,
+   "conf": 60
+  },
+  "Plaster007": {
+   "widthM": 1.5,
+   "conf": 80
+  },
+  "Plastic001": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Plastic002": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Plastic003": {
+   "widthM": 0.2,
+   "conf": 30
+  },
+  "Plastic004": {
+   "widthM": 0.2,
+   "conf": 30
+  },
+  "Plastic005": {
+   "widthM": 0.2,
+   "conf": 30
+  },
+  "Plastic006": {
+   "widthM": 0.2,
+   "conf": 30
+  },
+  "Plastic007": {
+   "widthM": 0.2,
+   "conf": 30
+  },
+  "Plastic008": {
+   "widthM": 0.2,
+   "conf": 30
+  },
+  "Plastic009": {
+   "widthM": 0.2,
+   "conf": 30
+  },
+  "Plastic010": {
+   "widthM": 0.2,
+   "conf": 30
+  },
+  "Plastic011": {
+   "widthM": 0.2,
+   "conf": 30
+  },
+  "Plastic012A": {
+   "widthM": 0.2,
+   "conf": 30
+  },
+  "Plastic012B": {
+   "widthM": 0.2,
+   "conf": 30
+  },
+  "Plastic013A": {
+   "widthM": 0.2,
+   "conf": 30
+  },
+  "Plastic013B": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Plastic014A": {
+   "widthM": 0.25,
+   "conf": 40
+  },
+  "Plastic014B": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Plastic015A": {
+   "widthM": 0.25,
+   "conf": 40
+  },
+  "Plastic015B": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Plastic016A": {
+   "widthM": 0.25,
+   "conf": 40
+  },
+  "Plastic016B": {
+   "widthM": 0.25,
+   "conf": 45
+  },
+  "Plastic017A": {
+   "widthM": 0.25,
+   "conf": 40
+  },
+  "Plastic017B": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Plastic018A": {
+   "widthM": 0.25,
+   "conf": 45
+  },
+  "Plastic018B": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Porcelain001": {
+   "widthM": 0.2,
+   "conf": 30
+  },
+  "Porcelain002": {
+   "widthM": 0.5,
+   "conf": 10
+  },
+  "Porcelain003": {
+   "widthM": 0.5,
+   "conf": 10
+  },
+  "Road008A": {
+   "widthM": 7,
+   "conf": 85
+  },
+  "Road008B": {
+   "widthM": 7,
+   "conf": 85
+  },
+  "Road008C": {
+   "widthM": 7,
+   "conf": 85
+  },
+  "Road009A": {
+   "widthM": 7,
+   "conf": 85
+  },
+  "Road009B": {
+   "widthM": 7,
+   "conf": 85
+  },
+  "Road009C": {
+   "widthM": 7,
+   "conf": 85
+  },
+  "Road010A": {
+   "widthM": 7,
+   "conf": 80
+  },
+  "Road010B": {
+   "widthM": 7,
+   "conf": 80
+  },
+  "Road010C": {
+   "widthM": 7,
+   "conf": 80
+  },
+  "Road011A": {
+   "widthM": 7,
+   "conf": 85
+  },
+  "Road011B": {
+   "widthM": 8,
+   "conf": 85
+  },
+  "Road011C": {
+   "widthM": 8,
+   "conf": 85
+  },
+  "Road012A": {
+   "widthM": 8,
+   "conf": 75
+  },
+  "Road012B": {
+   "widthM": 8,
+   "conf": 75
+  },
+  "Road012C": {
+   "widthM": 8,
+   "conf": 75
+  },
+  "Road013A": {
+   "widthM": 8,
+   "conf": 75
+  },
+  "Road013B": {
+   "widthM": 8,
+   "conf": 80
+  },
+  "Road013C": {
+   "widthM": 8,
+   "conf": 80
+  },
+  "Road014A": {
+   "widthM": 8,
+   "conf": 75
+  },
+  "Road014B": {
+   "widthM": 8,
+   "conf": 75
+  },
+  "Road014C": {
+   "widthM": 8,
+   "conf": 75
+  },
+  "Road015A": {
+   "widthM": 8,
+   "conf": 75
+  },
+  "Road015B": {
+   "widthM": 8,
+   "conf": 50
+  },
+  "Road015C": {
+   "widthM": 8,
+   "conf": 50
+  },
+  "RoadLines001": {
+   "widthM": 6,
+   "conf": 50
+  },
+  "RoadLines003": {
+   "widthM": 0.3,
+   "conf": 70
+  },
+  "RoadLines004": {
+   "widthM": 0.3,
+   "conf": 70
+  },
+  "RoadLines006": {
+   "widthM": 7,
+   "conf": 75
+  },
+  "RoadLines007": {
+   "widthM": 7,
+   "conf": 75
+  },
+  "RoadLines008": {
+   "widthM": 7,
+   "conf": 75
+  },
+  "RoadLines009": {
+   "widthM": 7,
+   "conf": 75
+  },
+  "RoadLines010": {
+   "widthM": 14,
+   "conf": 75
+  },
+  "RoadLines011": {
+   "widthM": 14,
+   "conf": 75
+  },
+  "RoadLines012": {
+   "widthM": 4.5,
+   "conf": 65
+  },
+  "RoadLines013": {
+   "widthM": 3,
+   "conf": 75
+  },
+  "RoadLines014": {
+   "widthM": 3,
+   "conf": 75
+  },
+  "RoadLines015": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "RoadLines016": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "RoadLines017": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "RoadLines018": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "RoadLines019A": {
+   "widthM": 10,
+   "conf": 50
+  },
+  "RoadLines019B": {
+   "widthM": 10,
+   "conf": 60
+  },
+  "RoadLines019C": {
+   "widthM": 10,
+   "conf": 60
+  },
+  "RoadLines020A": {
+   "widthM": 5,
+   "conf": 50
+  },
+  "RoadLines020B": {
+   "widthM": 5,
+   "conf": 60
+  },
+  "RoadLines020C": {
+   "widthM": 5,
+   "conf": 65
+  },
+  "RoadLines021A": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "RoadLines021B": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "RoadLines021C": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "RoadLines022A": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "RoadLines022B": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "RoadLines022C": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "RoadLines023A": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "RoadLines023B": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "RoadLines023C": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "RoadLines024A": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "RoadLines024B": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "RoadLines024C": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "RoadLines025A": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "RoadLines025B": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "RoadLines025C": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "RoadLines026A": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "RoadLines026B": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "RoadLines026C": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "RoadLines027A": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "RoadLines027B": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "RoadLines027C": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "RoadLines028A": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "RoadLines028B": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "RoadLines028C": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "RoadLines029A": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "RoadLines029B": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "RoadLines029C": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "RoadLines030A": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "RoadLines030B": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "RoadLines030C": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "RoadLines031A": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "RoadLines031B": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "RoadLines031C": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "RoadLines032A": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "RoadLines032B": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "RoadLines032C": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "RoadLines033A": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "RoadLines033B": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "RoadLines033C": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "RoadLines034A": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "RoadLines034B": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "RoadLines034C": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "RoadLines035A": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "RoadLines035B": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "RoadLines035C": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Rock002": {
+   "widthM": 2,
+   "conf": 60
+  },
+  "Rock003": {
+   "widthM": 2,
+   "conf": 60
+  },
+  "Rock004": {
+   "widthM": 1.2,
+   "conf": 30
+  },
+  "Rock005": {
+   "widthM": 1.5,
+   "conf": 30
+  },
+  "Rock006": {
+   "widthM": 5,
+   "conf": 20
+  },
+  "Rock007": {
+   "widthM": 5,
+   "conf": 20
+  },
+  "Rock008": {
+   "widthM": 5,
+   "conf": 20
+  },
+  "Rock009": {
+   "widthM": 5,
+   "conf": 20
+  },
+  "Rock010": {
+   "widthM": 3,
+   "conf": 30
+  },
+  "Rock011": {
+   "widthM": 3,
+   "conf": 30
+  },
+  "Rock012": {
+   "widthM": 3,
+   "conf": 30
+  },
+  "Rock013": {
+   "widthM": 3,
+   "conf": 30
+  },
+  "Rock014": {
+   "widthM": 3,
+   "conf": 30
+  },
+  "Rock015": {
+   "widthM": 3,
+   "conf": 30
+  },
+  "Rock016": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Rock017": {
+   "widthM": 1.2,
+   "conf": 55
+  },
+  "Rock018": {
+   "widthM": 1,
+   "conf": 55
+  },
+  "Rock019": {
+   "widthM": 1.2,
+   "conf": 55
+  },
+  "Rock020": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Rock021": {
+   "widthM": 1.2,
+   "conf": 50
+  },
+  "Rock022": {
+   "widthM": 2,
+   "conf": 60
+  },
+  "Rock023": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Rock024": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Rock025": {
+   "widthM": 1.2,
+   "conf": 50
+  },
+  "Rock026": {
+   "widthM": 2.5,
+   "conf": 60
+  },
+  "Rock027": {
+   "widthM": 3,
+   "conf": 60
+  },
+  "Rock028": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "Rock029": {
+   "widthM": 3,
+   "conf": 30
+  },
+  "Rock030": {
+   "widthM": 2.5,
+   "conf": 30
+  },
+  "Rock031": {
+   "widthM": 3,
+   "conf": 30
+  },
+  "Rock032": {
+   "widthM": 2.5,
+   "conf": 30
+  },
+  "Rock033": {
+   "widthM": 3,
+   "conf": 35
+  },
+  "Rock034": {
+   "widthM": 3,
+   "conf": 35
+  },
+  "Rock035": {
+   "widthM": 2.5,
+   "conf": 30
+  },
+  "Rock036": {
+   "widthM": 3,
+   "conf": 35
+  },
+  "Rock037": {
+   "widthM": 3.5,
+   "conf": 40
+  },
+  "Rock038": {
+   "widthM": 3.5,
+   "conf": 40
+  },
+  "Rock039": {
+   "widthM": 3,
+   "conf": 35
+  },
+  "Rock040": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Rock041": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Rock047": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Rock048": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Rock049": {
+   "widthM": 2.5,
+   "conf": 60
+  },
+  "Rock050": {
+   "widthM": 2.5,
+   "conf": 60
+  },
+  "Rock051": {
+   "widthM": 3,
+   "conf": 65
+  },
+  "Rock052": {
+   "widthM": 3.5,
+   "conf": 65
+  },
+  "Rock053": {
+   "widthM": 2.5,
+   "conf": 60
+  },
+  "Rock055": {
+   "widthM": 4,
+   "conf": 65
+  },
+  "Rock056": {
+   "widthM": 4,
+   "conf": 65
+  },
+  "Rock057": {
+   "widthM": 2,
+   "conf": 60
+  },
+  "Rock058": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "Rock059": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "Rock060": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "Rock061": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "Rock062": {
+   "widthM": 3,
+   "conf": 40
+  },
+  "Rock063": {
+   "widthM": 2.5,
+   "conf": 60
+  },
+  "Rock064": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Rocks001": {
+   "widthM": 1.5,
+   "conf": 70
+  },
+  "Rocks002": {
+   "widthM": 0.8,
+   "conf": 70
+  },
+  "Rocks004": {
+   "widthM": 1.5,
+   "conf": 75
+  },
+  "Rocks005": {
+   "widthM": 0.7,
+   "conf": 75
+  },
+  "Rocks006": {
+   "widthM": 1,
+   "conf": 65
+  },
+  "Rocks007": {
+   "widthM": 2.5,
+   "conf": 60
+  },
+  "Rocks008": {
+   "widthM": 2.5,
+   "conf": 60
+  },
+  "Rocks009": {
+   "widthM": 1.2,
+   "conf": 65
+  },
+  "Rocks010": {
+   "widthM": 2,
+   "conf": 60
+  },
+  "Rocks011": {
+   "widthM": 3,
+   "conf": 55
+  },
+  "Rocks012": {
+   "widthM": 2,
+   "conf": 60
+  },
+  "Rocks013": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Rocks014": {
+   "widthM": 1,
+   "conf": 60
+  },
+  "Rocks015": {
+   "widthM": 1,
+   "conf": 60
+  },
+  "Rocks016": {
+   "widthM": 2.5,
+   "conf": 55
+  },
+  "Rocks017": {
+   "widthM": 2,
+   "conf": 60
+  },
+  "Rocks018": {
+   "widthM": 2,
+   "conf": 60
+  },
+  "Rocks019": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Rocks020": {
+   "widthM": 3,
+   "conf": 50
+  },
+  "Rocks021": {
+   "widthM": 3,
+   "conf": 50
+  },
+  "Rocks023": {
+   "widthM": 1.2,
+   "conf": 65
+  },
+  "RoofingTiles001": {
+   "widthM": 2.5,
+   "conf": 75
+  },
+  "RoofingTiles002": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "RoofingTiles003": {
+   "widthM": 3,
+   "conf": 75
+  },
+  "RoofingTiles004": {
+   "widthM": 2.5,
+   "conf": 75
+  },
+  "RoofingTiles005": {
+   "widthM": 3,
+   "conf": 75
+  },
+  "Rope001": {
+   "widthM": 0.02,
+   "conf": 70
+  },
+  "Rope002": {
+   "widthM": 0.02,
+   "conf": 70
+  },
+  "Rope003": {
+   "widthM": 0.02,
+   "conf": 70
+  },
+  "Rust001": {
+   "widthM": 1.2,
+   "conf": 30
+  },
+  "Rust002": {
+   "widthM": 1,
+   "conf": 25
+  },
+  "Rust003": {
+   "widthM": 1,
+   "conf": 25
+  },
+  "Rust004": {
+   "widthM": 1,
+   "conf": 25
+  },
+  "Rust005": {
+   "widthM": 1,
+   "conf": 25
+  },
+  "Rust006": {
+   "widthM": 1,
+   "conf": 25
+  },
+  "Rust007": {
+   "widthM": 1,
+   "conf": 25
+  },
+  "Rust008": {
+   "widthM": 1,
+   "conf": 25
+  },
+  "Rust009": {
+   "widthM": 1,
+   "conf": 25
+  },
+  "Rust010": {
+   "widthM": 1,
+   "conf": 25
+  },
+  "ScatteredLeaves001": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "ScatteredLeaves002": {
+   "widthM": 2,
+   "conf": 40
+  },
+  "ScatteredLeaves003": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "ScatteredLeaves004": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "ScatteredLeaves005": {
+   "widthM": 3,
+   "conf": 85
+  },
+  "ScatteredLeaves006": {
+   "widthM": 1.5,
+   "conf": 85
+  },
+  "ScatteredLeaves007": {
+   "widthM": 1.2,
+   "conf": 85
+  },
+  "Scratches001": {
+   "widthM": 0.5,
+   "conf": 60
+  },
+  "Scratches002": {
+   "widthM": 0.5,
+   "conf": 60
+  },
+  "Scratches003": {
+   "widthM": 0.5,
+   "conf": 60
+  },
+  "Scratches004": {
+   "widthM": 0.5,
+   "conf": 60
+  },
+  "Scratches005": {
+   "widthM": 0.5,
+   "conf": 60
+  },
+  "ScrewSet001": {
+   "widthM": 0.06,
+   "conf": 75
+  },
+  "SheetMetal001": {
+   "widthM": 1,
+   "conf": 70
+  },
+  "SheetMetal002": {
+   "widthM": 0.3,
+   "conf": 60
+  },
+  "SheetMetal003": {
+   "widthM": 0.5,
+   "conf": 50
+  },
+  "SheetMetal004": {
+   "widthM": 0.5,
+   "conf": 50
+  },
+  "Shells001": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "ShellSet001": {
+   "widthM": 0.15,
+   "conf": 85
+  },
+  "Sign002": {
+   "widthM": 0.3,
+   "conf": 80
+  },
+  "Sign017": {
+   "widthM": 0.3,
+   "conf": 80
+  },
+  "Smear005": {
+   "widthM": 0.2,
+   "conf": 50
+  },
+  "Smear006": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Smear007": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Snow001": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Snow002": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Snow003": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Snow004": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "Snow005": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Snow007A": {
+   "widthM": 4,
+   "conf": 60
+  },
+  "Snow007B": {
+   "widthM": 8,
+   "conf": 85
+  },
+  "Snow007C": {
+   "widthM": 8,
+   "conf": 85
+  },
+  "Snow008A": {
+   "widthM": 4,
+   "conf": 60
+  },
+  "Snow008B": {
+   "widthM": 8,
+   "conf": 85
+  },
+  "Snow008C": {
+   "widthM": 3,
+   "conf": 60
+  },
+  "Snow009A": {
+   "widthM": 3,
+   "conf": 50
+  },
+  "Snow009B": {
+   "widthM": 3,
+   "conf": 60
+  },
+  "Snow009C": {
+   "widthM": 3,
+   "conf": 60
+  },
+  "Snow010A": {
+   "widthM": 3,
+   "conf": 50
+  },
+  "Snow010B": {
+   "widthM": 3,
+   "conf": 60
+  },
+  "Snow010C": {
+   "widthM": 3,
+   "conf": 60
+  },
+  "Snow011": {
+   "widthM": 2.5,
+   "conf": 85
+  },
+  "Snow012": {
+   "widthM": 2.5,
+   "conf": 75
+  },
+  "Snow013": {
+   "widthM": 2.5,
+   "conf": 80
+  },
+  "Snow014": {
+   "widthM": 1.5,
+   "conf": 65
+  },
+  "Snow015": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "Sponge001": {
+   "widthM": 0.1,
+   "conf": 50
+  },
+  "Sponge002": {
+   "widthM": 0.1,
+   "conf": 50
+  },
+  "Sponge003": {
+   "widthM": 0.1,
+   "conf": 50
+  },
+  "Sticker001": {
+   "widthM": 0.2,
+   "conf": 75
+  },
+  "StickSet001": {
+   "widthM": 0.3,
+   "conf": 75
+  },
+  "Styrofoam001": {
+   "widthM": 0.2,
+   "conf": 50
+  },
+  "Styrofoam002": {
+   "widthM": 0.2,
+   "conf": 50
+  },
+  "Styrofoam003": {
+   "widthM": 0.2,
+   "conf": 50
+  },
+  "Styrofoam004": {
+   "widthM": 0.2,
+   "conf": 50
+  },
+  "Styrofoam005": {
+   "widthM": 0.2,
+   "conf": 50
+  },
+  "SurfaceImperfections001": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "SurfaceImperfections002": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "SurfaceImperfections003": {
+   "widthM": 0.5,
+   "conf": 30
+  },
+  "SurfaceImperfections004": {
+   "widthM": 0.4,
+   "conf": 75
+  },
+  "SurfaceImperfections005": {
+   "widthM": 1,
+   "conf": 70
+  },
+  "SurfaceImperfections006": {
+   "widthM": 0.45,
+   "conf": 75
+  },
+  "SurfaceImperfections007": {
+   "widthM": 0.3,
+   "conf": 35
+  },
+  "SurfaceImperfections008": {
+   "widthM": 0.5,
+   "conf": 30
+  },
+  "SurfaceImperfections009": {
+   "widthM": 0.3,
+   "conf": 35
+  },
+  "SurfaceImperfections010": {
+   "widthM": 0.4,
+   "conf": 40
+  },
+  "SurfaceImperfections011": {
+   "widthM": 0.25,
+   "conf": 35
+  },
+  "SurfaceImperfections012": {
+   "widthM": 0.3,
+   "conf": 35
+  },
+  "SurfaceImperfections013": {
+   "widthM": 0.4,
+   "conf": 30
+  },
+  "TactilePaving005": {
+   "widthM": 1.5,
+   "conf": 85
+  },
+  "Tape001": {
+   "widthM": 0.7,
+   "conf": 60
+  },
+  "Tape002": {
+   "widthM": 0.7,
+   "conf": 60
+  },
+  "Tape003": {
+   "widthM": 0.7,
+   "conf": 60
+  },
+  "Tape004": {
+   "widthM": 0.3,
+   "conf": 75
+  },
+  "Tape005": {
+   "widthM": 0.35,
+   "conf": 75
+  },
+  "Tape006": {
+   "widthM": 0.3,
+   "conf": 75
+  },
+  "Terrazzo001": {
+   "widthM": 0.5,
+   "conf": 70
+  },
+  "Terrazzo002": {
+   "widthM": 0.6,
+   "conf": 70
+  },
+  "Terrazzo003": {
+   "widthM": 0.6,
+   "conf": 70
+  },
+  "Terrazzo004": {
+   "widthM": 0.6,
+   "conf": 70
+  },
+  "Terrazzo005": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Terrazzo006": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Terrazzo007": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Terrazzo008": {
+   "widthM": 0.3,
+   "conf": 50
+  },
+  "Terrazzo009": {
+   "widthM": 0.4,
+   "conf": 55
+  },
+  "Terrazzo010": {
+   "widthM": 0.45,
+   "conf": 55
+  },
+  "Terrazzo011": {
+   "widthM": 0.35,
+   "conf": 55
+  },
+  "Terrazzo012": {
+   "widthM": 0.4,
+   "conf": 55
+  },
+  "Terrazzo013": {
+   "widthM": 0.4,
+   "conf": 55
+  },
+  "Terrazzo014": {
+   "widthM": 0.35,
+   "conf": 55
+  },
+  "Terrazzo015": {
+   "widthM": 0.35,
+   "conf": 55
+  },
+  "Terrazzo016": {
+   "widthM": 0.35,
+   "conf": 55
+  },
+  "Terrazzo017": {
+   "widthM": 0.3,
+   "conf": 60
+  },
+  "Terrazzo018": {
+   "widthM": 0.3,
+   "conf": 60
+  },
+  "ThatchedRoof001A": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "ThatchedRoof001B": {
+   "widthM": 2,
+   "conf": 50
+  },
+  "ThatchedRoof002A": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "ThatchedRoof002B": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Tiles003": {
+   "widthM": 0.3,
+   "conf": 65
+  },
+  "Tiles004": {
+   "widthM": 0.3,
+   "conf": 75
+  },
+  "Tiles005": {
+   "widthM": 0.3,
+   "conf": 75
+  },
+  "Tiles006": {
+   "widthM": 0.25,
+   "conf": 75
+  },
+  "Tiles008": {
+   "widthM": 0.6,
+   "conf": 75
+  },
+  "Tiles009": {
+   "widthM": 0.6,
+   "conf": 75
+  },
+  "Tiles010": {
+   "widthM": 0.6,
+   "conf": 75
+  },
+  "Tiles011": {
+   "widthM": 0.6,
+   "conf": 75
+  },
+  "Tiles012": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Tiles013": {
+   "widthM": 1.6,
+   "conf": 70
+  },
+  "Tiles014": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Tiles015": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Tiles016": {
+   "widthM": 0.8,
+   "conf": 65
+  },
+  "Tiles017": {
+   "widthM": 0.8,
+   "conf": 75
+  },
+  "Tiles018": {
+   "widthM": 0.8,
+   "conf": 75
+  },
+  "Tiles019": {
+   "widthM": 0.9,
+   "conf": 50
+  },
+  "Tiles020": {
+   "widthM": 1.6,
+   "conf": 50
+  },
+  "Tiles021": {
+   "widthM": 0.8,
+   "conf": 50
+  },
+  "Tiles022": {
+   "widthM": 0.8,
+   "conf": 60
+  },
+  "Tiles023": {
+   "widthM": 0.8,
+   "conf": 50
+  },
+  "Tiles024": {
+   "widthM": 1.1,
+   "conf": 50
+  },
+  "Tiles025": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Tiles026": {
+   "widthM": 1.4,
+   "conf": 60
+  },
+  "Tiles027": {
+   "widthM": 1.8,
+   "conf": 60
+  },
+  "Tiles028": {
+   "widthM": 1.6,
+   "conf": 60
+  },
+  "Tiles029": {
+   "widthM": 1.2,
+   "conf": 65
+  },
+  "Tiles030": {
+   "widthM": 1.2,
+   "conf": 65
+  },
+  "Tiles031": {
+   "widthM": 0.8,
+   "conf": 70
+  },
+  "Tiles032": {
+   "widthM": 1,
+   "conf": 75
+  },
+  "Tiles033": {
+   "widthM": 1,
+   "conf": 75
+  },
+  "Tiles034": {
+   "widthM": 1,
+   "conf": 75
+  },
+  "Tiles035": {
+   "widthM": 0.5,
+   "conf": 70
+  },
+  "Tiles036": {
+   "widthM": 1,
+   "conf": 75
+  },
+  "Tiles037": {
+   "widthM": 1,
+   "conf": 75
+  },
+  "Tiles039": {
+   "widthM": 2.4,
+   "conf": 70
+  },
+  "Tiles040": {
+   "widthM": 2.4,
+   "conf": 70
+  },
+  "Tiles041": {
+   "widthM": 2.4,
+   "conf": 70
+  },
+  "Tiles042": {
+   "widthM": 2.4,
+   "conf": 70
+  },
+  "Tiles043": {
+   "widthM": 2.4,
+   "conf": 70
+  },
+  "Tiles044": {
+   "widthM": 1.2,
+   "conf": 50
+  },
+  "Tiles045": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Tiles046": {
+   "widthM": 1,
+   "conf": 60
+  },
+  "Tiles047": {
+   "widthM": 1.5,
+   "conf": 65
+  },
+  "Tiles048": {
+   "widthM": 0.8,
+   "conf": 65
+  },
+  "Tiles049": {
+   "widthM": 1.2,
+   "conf": 65
+  },
+  "Tiles050": {
+   "widthM": 1.8,
+   "conf": 65
+  },
+  "Tiles051": {
+   "widthM": 1.2,
+   "conf": 60
+  },
+  "Tiles052": {
+   "widthM": 1.6,
+   "conf": 70
+  },
+  "Tiles053": {
+   "widthM": 0.8,
+   "conf": 70
+  },
+  "Tiles054": {
+   "widthM": 1.6,
+   "conf": 65
+  },
+  "Tiles055": {
+   "widthM": 1.2,
+   "conf": 65
+  },
+  "Tiles056": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Tiles057": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Tiles058": {
+   "widthM": 1.6,
+   "conf": 70
+  },
+  "Tiles059": {
+   "widthM": 1.6,
+   "conf": 75
+  },
+  "Tiles060": {
+   "widthM": 1.2,
+   "conf": 70
+  },
+  "Tiles061": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Tiles062": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Tiles078": {
+   "widthM": 0.6,
+   "conf": 60
+  },
+  "Tiles079": {
+   "widthM": 1.5,
+   "conf": 75
+  },
+  "Tiles080": {
+   "widthM": 1.5,
+   "conf": 75
+  },
+  "Tiles081": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Tiles082": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Tiles111": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Tiles112": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Tiles113": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Tiles114": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Tiles115": {
+   "widthM": 1.5,
+   "conf": 70
+  },
+  "Tiles116": {
+   "widthM": 1.5,
+   "conf": 70
+  },
+  "Tiles117": {
+   "widthM": 1.5,
+   "conf": 70
+  },
+  "Tiles118": {
+   "widthM": 0.3,
+   "conf": 85
+  },
+  "Tiles119": {
+   "widthM": 0.3,
+   "conf": 85
+  },
+  "Tiles120": {
+   "widthM": 0.3,
+   "conf": 85
+  },
+  "Tiles121": {
+   "widthM": 0.3,
+   "conf": 85
+  },
+  "Tiles122": {
+   "widthM": 0.3,
+   "conf": 85
+  },
+  "Tiles123": {
+   "widthM": 0.3,
+   "conf": 85
+  },
+  "Tiles124": {
+   "widthM": 0.3,
+   "conf": 85
+  },
+  "Tiles125": {
+   "widthM": 0.3,
+   "conf": 85
+  },
+  "Tiles126": {
+   "widthM": 0.3,
+   "conf": 85
+  },
+  "Tiles127": {
+   "widthM": 0.3,
+   "conf": 85
+  },
+  "Tiles128A": {
+   "widthM": 0.3,
+   "conf": 85
+  },
+  "Tiles128B": {
+   "widthM": 0.3,
+   "conf": 85
+  },
+  "Tiles129A": {
+   "widthM": 0.3,
+   "conf": 85
+  },
+  "Tiles129B": {
+   "widthM": 0.3,
+   "conf": 85
+  },
+  "Tiles132A": {
+   "widthM": 0.5,
+   "conf": 75
+  },
+  "Tiles132B": {
+   "widthM": 0.5,
+   "conf": 75
+  },
+  "Tiles132C": {
+   "widthM": 0.5,
+   "conf": 75
+  },
+  "Tiles132D": {
+   "widthM": 1.2,
+   "conf": 50
+  },
+  "Tiles133A": {
+   "widthM": 1.2,
+   "conf": 50
+  },
+  "Tiles133B": {
+   "widthM": 1.2,
+   "conf": 50
+  },
+  "Tiles133C": {
+   "widthM": 1.2,
+   "conf": 50
+  },
+  "Tiles133D": {
+   "widthM": 1.2,
+   "conf": 50
+  },
+  "Tiles134A": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Tiles134B": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Tiles134C": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Tiles134D": {
+   "widthM": 1.5,
+   "conf": 50
+  },
+  "Tiles135A": {
+   "widthM": 1.2,
+   "conf": 50
+  },
+  "Tiles135B": {
+   "widthM": 1.2,
+   "conf": 50
+  },
+  "Tiles135C": {
+   "widthM": 1.2,
+   "conf": 50
+  },
+  "Tiles135D": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "Tiles136A": {
+   "widthM": 1.2,
+   "conf": 65
+  },
+  "Tiles136B": {
+   "widthM": 1.2,
+   "conf": 65
+  },
+  "Tiles136C": {
+   "widthM": 1.2,
+   "conf": 65
+  },
+  "Tiles136D": {
+   "widthM": 1.2,
+   "conf": 65
+  },
+  "Tiles137A": {
+   "widthM": 1.2,
+   "conf": 65
+  },
+  "Tiles137B": {
+   "widthM": 1.2,
+   "conf": 65
+  },
+  "Tiles137C": {
+   "widthM": 1.2,
+   "conf": 65
+  },
+  "Tiles137D": {
+   "widthM": 1.2,
+   "conf": 65
+  },
+  "Tiles138": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "TreeEnd002": {
+   "widthM": 0.35,
+   "conf": 75
+  },
+  "TreeEnd003": {
+   "widthM": 0.35,
+   "conf": 60
+  },
+  "TreeEnd004": {
+   "widthM": 0.3,
+   "conf": 60
+  },
+  "Wallpaper001A": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Wallpaper001B": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Wallpaper001C": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Wallpaper002A": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Wallpaper002B": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Wallpaper002C": {
+   "widthM": 1,
+   "conf": 50
+  },
+  "Wicker007A": {
+   "widthM": 0.25,
+   "conf": 65
+  },
+  "Wicker007B": {
+   "widthM": 0.25,
+   "conf": 65
+  },
+  "Wicker008A": {
+   "widthM": 0.25,
+   "conf": 65
+  },
+  "Wicker008B": {
+   "widthM": 0.25,
+   "conf": 65
+  },
+  "Wicker009A": {
+   "widthM": 0.15,
+   "conf": 60
+  },
+  "Wicker009B": {
+   "widthM": 0.15,
+   "conf": 60
+  },
+  "Wicker010A": {
+   "widthM": 0.15,
+   "conf": 60
+  },
+  "Wicker010B": {
+   "widthM": 0.15,
+   "conf": 60
+  },
+  "Wicker011A": {
+   "widthM": 0.15,
+   "conf": 60
+  },
+  "Wicker011B": {
+   "widthM": 0.15,
+   "conf": 60
+  },
+  "Wicker012A": {
+   "widthM": 0.15,
+   "conf": 60
+  },
+  "Wicker012B": {
+   "widthM": 0.15,
+   "conf": 60
+  },
+  "Wood001": {
+   "widthM": 0.35,
+   "conf": 50
+  },
+  "Wood002": {
+   "widthM": 0.35,
+   "conf": 50
+  },
+  "Wood003": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Wood004": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Wood005": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Wood006": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Wood007": {
+   "widthM": 0.5,
+   "conf": 45
+  },
+  "Wood008": {
+   "widthM": 0.5,
+   "conf": 40
+  },
+  "Wood009": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Wood010": {
+   "widthM": 0.5,
+   "conf": 40
+  },
+  "Wood011": {
+   "widthM": 0.25,
+   "conf": 35
+  },
+  "Wood012": {
+   "widthM": 0.5,
+   "conf": 35
+  },
+  "Wood013": {
+   "widthM": 0.5,
+   "conf": 40
+  },
+  "Wood014": {
+   "widthM": 0.5,
+   "conf": 40
+  },
+  "Wood015": {
+   "widthM": 0.5,
+   "conf": 40
+  },
+  "Wood016": {
+   "widthM": 0.5,
+   "conf": 40
+  },
+  "Wood017": {
+   "widthM": 0.4,
+   "conf": 50
+  },
+  "Wood018": {
+   "widthM": 0.4,
+   "conf": 50
+  },
+  "Wood019": {
+   "widthM": 0.4,
+   "conf": 50
+  },
+  "Wood020": {
+   "widthM": 0.4,
+   "conf": 50
+  },
+  "Wood021": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Wood022": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Wood023": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Wood024": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Wood025": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Wood026": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Wood027": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Wood028": {
+   "widthM": 0.25,
+   "conf": 50
+  },
+  "Wood029": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Wood030": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Wood031": {
+   "widthM": 0.35,
+   "conf": 40
+  },
+  "Wood032": {
+   "widthM": 0.3,
+   "conf": 40
+  },
+  "Wood033": {
+   "widthM": 0.35,
+   "conf": 40
+  },
+  "Wood034": {
+   "widthM": 0.8,
+   "conf": 40
+  },
+  "Wood035": {
+   "widthM": 0.4,
+   "conf": 40
+  },
+  "Wood036": {
+   "widthM": 0.4,
+   "conf": 40
+  },
+  "Wood037": {
+   "widthM": 0.4,
+   "conf": 40
+  },
+  "Wood038": {
+   "widthM": 0.4,
+   "conf": 40
+  },
+  "Wood039": {
+   "widthM": 0.4,
+   "conf": 40
+  },
+  "Wood040": {
+   "widthM": 1.2,
+   "conf": 45
+  },
+  "Wood041": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Wood042": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Wood043": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Wood044": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Wood045": {
+   "widthM": 1.2,
+   "conf": 75
+  },
+  "Wood046": {
+   "widthM": 0.4,
+   "conf": 70
+  },
+  "Wood059": {
+   "widthM": 0.3,
+   "conf": 65
+  },
+  "Wood060": {
+   "widthM": 0.3,
+   "conf": 65
+  },
+  "Wood061": {
+   "widthM": 0.3,
+   "conf": 65
+  },
+  "Wood062": {
+   "widthM": 0.3,
+   "conf": 65
+  },
+  "Wood063": {
+   "widthM": 0.3,
+   "conf": 65
+  },
+  "Wood064": {
+   "widthM": 0.3,
+   "conf": 65
+  },
+  "Wood065": {
+   "widthM": 0.4,
+   "conf": 50
+  },
+  "Wood080": {
+   "widthM": 1.6,
+   "conf": 70
+  },
+  "Wood081": {
+   "widthM": 0.4,
+   "conf": 60
+  },
+  "Wood082A": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "Wood082B": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "Wood083A": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "Wood083B": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "Wood084A": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "Wood084B": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "Wood085A": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "Wood085B": {
+   "widthM": 1.6,
+   "conf": 85
+  },
+  "Wood086": {
+   "widthM": 0.4,
+   "conf": 50
+  },
+  "Wood087": {
+   "widthM": 0.15,
+   "conf": 60
+  },
+  "Wood088": {
+   "widthM": 0.15,
+   "conf": 60
+  },
+  "Wood089": {
+   "widthM": 0.15,
+   "conf": 60
+  },
+  "Wood094": {
+   "widthM": 0.6,
+   "conf": 55
+  },
+  "Wood095": {
+   "widthM": 0.5,
+   "conf": 55
+  },
+  "WoodChips001": {
+   "widthM": 1.2,
+   "conf": 65
+  },
+  "WoodFloor003": {
+   "widthM": 2,
+   "conf": 80
+  },
+  "WoodFloor004": {
+   "widthM": 2,
+   "conf": 80
+  },
+  "WoodFloor005": {
+   "widthM": 2,
+   "conf": 80
+  },
+  "WoodFloor006": {
+   "widthM": 2,
+   "conf": 80
+  },
+  "WoodFloor007": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "WoodFloor008": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "WoodFloor009": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "WoodFloor010": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "WoodFloor011": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "WoodFloor012": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "WoodFloor013": {
+   "widthM": 1.8,
+   "conf": 60
+  },
+  "WoodFloor014": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "WoodFloor015": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "WoodFloor016": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "WoodFloor017": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "WoodFloor018": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "WoodFloor019": {
+   "widthM": 2,
+   "conf": 75
+  },
+  "WoodFloor020": {
+   "widthM": 1.8,
+   "conf": 75
+  },
+  "WoodFloor021": {
+   "widthM": 1.8,
+   "conf": 75
+  },
+  "WoodFloor022": {
+   "widthM": 1.8,
+   "conf": 75
+  },
+  "WoodFloor023": {
+   "widthM": 1.8,
+   "conf": 75
+  },
+  "WoodFloor024": {
+   "widthM": 1.8,
+   "conf": 75
+  },
+  "WoodFloor025": {
+   "widthM": 1.8,
+   "conf": 75
+  },
+  "WoodFloor026": {
+   "widthM": 1.6,
+   "conf": 70
+  },
+  "WoodFloor027": {
+   "widthM": 2,
+   "conf": 70
+  },
+  "WoodFloor028": {
+   "widthM": 2,
+   "conf": 70
+  },
+  "WoodFloor029": {
+   "widthM": 2,
+   "conf": 60
+  },
+  "WoodFloor061": {
+   "widthM": 2,
+   "conf": 65
+  },
+  "WoodFloor062": {
+   "widthM": 3,
+   "conf": 80
+  },
+  "WoodFloor063": {
+   "widthM": 3,
+   "conf": 80
+  },
+  "WoodFloor064": {
+   "widthM": 3,
+   "conf": 80
+  },
+  "WoodFloor065A": {
+   "widthM": 2.5,
+   "conf": 80
+  },
+  "WoodFloor065B": {
+   "widthM": 2.5,
+   "conf": 80
+  },
+  "WoodFloor066A": {
+   "widthM": 2.5,
+   "conf": 80
+  },
+  "WoodFloor066B": {
+   "widthM": 2.5,
+   "conf": 80
+  },
+  "WoodFloor067A": {
+   "widthM": 2.5,
+   "conf": 80
+  },
+  "WoodFloor067B": {
+   "widthM": 2.5,
+   "conf": 80
+  },
+  "WoodFloor068": {
+   "widthM": 1.5,
+   "conf": 85
+  },
+  "WoodFloor069": {
+   "widthM": 1.5,
+   "conf": 85
+  },
+  "WoodFloor070": {
+   "widthM": 1.5,
+   "conf": 85
+  },
+  "WoodFloor071": {
+   "widthM": 1.5,
+   "conf": 75
+  },
+  "WoodSiding001": {
+   "widthM": 1.2,
+   "conf": 60
+  },
+  "WoodSiding002": {
+   "widthM": 1.8,
+   "conf": 60
+  },
+  "WoodSiding003": {
+   "widthM": 1.8,
+   "conf": 60
+  },
+  "WoodSiding004": {
+   "widthM": 2,
+   "conf": 60
+  },
+  "WoodSiding005": {
+   "widthM": 2,
+   "conf": 60
+  },
+  "WoodSiding006": {
+   "widthM": 1.5,
+   "conf": 60
+  },
+  "WoodSiding007": {
+   "widthM": 1.8,
+   "conf": 60
+  },
+  "WoodSiding008": {
+   "widthM": 2.2,
+   "conf": 60
+  },
+  "WoodSiding009": {
+   "widthM": 2.5,
+   "conf": 70
+  }
+ }
+}

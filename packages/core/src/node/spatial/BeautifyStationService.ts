@@ -10,11 +10,11 @@
 import { SurveyStationRenderService, EMPTY_DEPTH, type StationBlockoutRender } from './SurveyStationRenderService';
 import { HeadlessMeshSilhouetteRenderer } from './HeadlessMeshSilhouetteRenderer';
 import { SubPixelEdgeAlignmentOptimizer, computeSobelField, evaluateEdgeOverlap, type CameraPose6DOF, type SobelEdgeField } from './SubPixelEdgeAlignmentOptimizer';
-import { buildStationBeautifyPrompt, CHAINED_STATION_STYLE_LOCK, STATION_DETAIL_SENTENCE, type StationBeautifyContext } from '../../browser/generative-canvas/services/location-beautify-service';
+import { buildStationBeautifyPrompt, buildStreetViewSeedBeautifyPrompt, CHAINED_STATION_STYLE_LOCK, STATION_DETAIL_SENTENCE, type StationBeautifyContext } from '../../browser/generative-canvas/services/location-beautify-service';
 import { cameraBasis, yawPitchFromForward, type PinholeIntrinsics } from '../../common/spatial/SurveySynthesisEngine';
 import type { ColmapCameraPose } from '../../common/spatial/colmap-vector-reference-types';
-import { decodePng, encodePng, type StoneAlbedoPreset } from '../texture-processing';
-import { MissingInputError } from '../../common/errors/pipeline-errors';
+import { decodePng, encodePng, resampleRgba, type StoneAlbedoPreset } from '../texture-processing';
+import { MediaModelUnavailableError, MissingInputError } from '../../common/errors/pipeline-errors';
 import { GoogleMediaGenerationService } from '../google-media-generation-service';
 import { GoogleMediaCredentialsService } from '../google-media-credentials-service';
 import { MediaAssetStore } from '../media-asset-store';
@@ -42,6 +42,11 @@ export interface StationImageGenerator {
         blockoutPng: Buffer;
         referencePng?: Buffer;     // previous accepted station warped into this pose (chained mode)
         maskPng?: Buffer;          // white = disocclusion (fill), black = keep from reference
+        /**
+         * A Street View photograph registered to this station (Maps Imagery Grounding), to be transformed in place of the
+         * blockout. Held in memory only: a generator sends these bytes as they are and never writes them.
+         */
+        groundingPhoto?: { bytes: Buffer; mimeType: string };
         aspectRatio: string;       // e.g. '16:9'
         width: number; height: number;
         /** Output size the caller needs (a character sheet asks for '4K'); a generator without sizes ignores it. */
@@ -72,6 +77,18 @@ export interface BeautifyStationOptions {
     maxRerolls?: number;           // default 2 (0 in draft)
     /** Previous accepted result for chained consistency (its image is warped into this station). */
     reference?: BeautifyStationResult;
+    /**
+     * The Street View photograph this station was registered to: the image model transforms it (the Street View seed
+     * prompt, buildStreetViewSeedBeautifyPrompt) instead of the blockout, and `reference` is not used. The bytes stay in
+     * memory; the result is generated and names the pano it came from.
+     */
+    groundingPhoto?: GroundingPhoto;
+    /**
+     * Keep the image whatever the geometry check finds (user decision, 2026-10-29: the photographs and the scan are
+     * stitched together even where they disagree, e.g. a building since demolished). The check runs once at the
+     * station's own pose, which it does not move, is reported in `qc`, and never causes a reroll.
+     */
+    acceptUnmatched?: boolean;
     qc?: { maxYawDeg?: number; maxPitchDeg?: number; maxPositionM?: number; maxIterations?: number; minOverlapPercent?: number };
     /** Optional pre-rendered blockout or full-textured capture override. When provided, replaces default clay rendering. */
     blockoutOverride?: StationBlockoutRender;
@@ -86,6 +103,15 @@ export interface BeautifyStationOptions {
      * prompt says so (OUTLINE_LOCK_SENTENCE). A failing image counts as a rejected attempt and is rerolled.
      */
     outline?: boolean | OutlineLimits;
+}
+
+/** A Maps Imagery Grounding photograph, in memory only (its bytes are never written, cached or re-encoded). */
+export interface GroundingPhoto {
+    bytes: Buffer;
+    mimeType: string;
+    panoId: string;
+    /** "YYYY-MM", the capture month, when the metadata gave one. */
+    date?: string;
 }
 
 export interface OutlineLimits {
@@ -318,6 +344,9 @@ export interface BeautifyStationResult {
     modelUsed?: string;
     /** Which model produced it and, when it was not the requested one, why. */
     modelNote?: string;
+    /** The Street View pano the image was transformed from (options.groundingPhoto), and its capture month. */
+    groundingPanoId?: string;
+    groundingDate?: string;
 }
 
 export interface WarpSource { rgba: Buffer; depth: Float32Array; width: number; height: number; intrinsics: PinholeIntrinsics; station: ColmapCameraPose }
@@ -382,6 +411,47 @@ export function warpStationImage(src: WarpSource, dst: WarpTarget): StationWarp 
     return { warpedPng: encodePng(W, H, out), maskPng: encodePng(W, H, maskRgba), rgba: out, mask: dil, coveredFraction: covered / dil.length };
 }
 
+/** Tries per station when the image model answers with no image (an empty STOP, a blocked prompt). */
+export const STATION_EMPTY_IMAGE_ATTEMPTS = 2;
+
+/**
+ * The image model answered without an image (an empty STOP, a blocked prompt): that fails one station, which a run
+ * leaves out and reports, not the run. A model that cannot be reached at all (credentials, quota, network) is not this.
+ */
+export function isNoImageAnswer(err: unknown): err is MediaModelUnavailableError {
+    return err instanceof MediaModelUnavailableError && /returned no image|Safety filter blocked/i.test(err.reason);
+}
+
+/**
+ * Share of a station's frame a reference station's surface lands in (the warp of warpStationImage, sampled every
+ * `stride` source pixels onto a grid of `stride`-pixel cells): how much of the target a warped reference would cover.
+ */
+export function warpCoverage(src: Omit<WarpSource, 'rgba'>, dst: WarpTarget, stride = 8): number {
+    const A = basisFor(src.station), B = basisFor(dst.station);
+    const gw = Math.max(1, Math.ceil(dst.width / stride)), gh = Math.max(1, Math.ceil(dst.height / stride));
+    const hit = new Uint8Array(gw * gh);
+    let n = 0;
+    for (let y = 0; y < src.height; y += stride) {
+        for (let x = 0; x < src.width; x += stride) {
+            const z = src.depth[y * src.width + x];
+            if (!(z < EMPTY_DEPTH * 0.5) || z <= 0) continue;
+            const cx = (x + 0.5 - src.intrinsics.cx) / src.intrinsics.fx * z;
+            const cy = -(y + 0.5 - src.intrinsics.cy) / src.intrinsics.fy * z;
+            const dx = A.eye[0] + A.right[0] * cx + A.up[0] * cy + A.forward[0] * z - B.eye[0];
+            const dy = A.eye[1] + A.right[1] * cx + A.up[1] * cy + A.forward[1] * z - B.eye[1];
+            const dz = A.eye[2] + A.right[2] * cx + A.up[2] * cy + A.forward[2] * z - B.eye[2];
+            const bz = dx * B.forward[0] + dy * B.forward[1] + dz * B.forward[2];
+            if (bz <= 0.05) continue;
+            const px = dst.intrinsics.cx + dst.intrinsics.fx * (dx * B.right[0] + dy * B.right[1] + dz * B.right[2]) / bz;
+            const py = dst.intrinsics.cy - dst.intrinsics.fy * (dx * B.up[0] + dy * B.up[1] + dz * B.up[2]) / bz;
+            if (px < 0 || py < 0 || px >= dst.width || py >= dst.height) continue;
+            const k = Math.floor(py / stride) * gw + Math.floor(px / stride);
+            if (!hit[k]) { hit[k] = 1; n++; }
+        }
+    }
+    return n / hit.length;
+}
+
 /**
  * Beautify one survey station: pose-exact clay blockout -> station-grounded prompt -> image model
  * (optionally anchored on the previous accepted station warped into this pose) -> geometric QC by
@@ -429,11 +499,18 @@ export class BeautifyStationService {
 
         let warp: StationWarp | undefined;
         const outlineLimits: OutlineLimits | null = options.outline ? (options.outline === true ? {} : options.outline) : null;
-        let prompt = buildStationBeautifyPrompt(station, { ...ctx, aspectRatio: resolvedAspectRatio, outlineLock: ctx.outlineLock || !!outlineLimits });
-        if (options.reference) {
+        const photo = options.groundingPhoto;
+        let prompt = photo
+            ? buildStreetViewSeedBeautifyPrompt(station, { ...ctx, aspectRatio: resolvedAspectRatio })
+            : buildStationBeautifyPrompt(station, { ...ctx, aspectRatio: resolvedAspectRatio, outlineLock: ctx.outlineLock || !!outlineLimits });
+        if (options.reference && !photo) {
             const ref = options.reference;
+            // the depth and intrinsics are the blockout's: the model's answer (often larger, e.g. 2528 x 1696 for a
+            // 1920 x 1280 blockout) is brought to the blockout's size, or the depth would be read at the wrong pixels
+            const { width: bw, height: bh } = ref.blockout;
+            const refRgba = ref.image.width === bw && ref.image.height === bh ? ref.image.rgba : resampleRgba(ref.image.rgba, ref.image.width, ref.image.height, bw, bh);
             warp = warpStationImage(
-                { rgba: ref.image.rgba, depth: ref.blockout.depth, width: ref.image.width, height: ref.image.height, intrinsics: ref.blockout.intrinsics, station: ref.alignedStation },
+                { rgba: refRgba, depth: ref.blockout.depth, width: bw, height: bh, intrinsics: ref.blockout.intrinsics, station: ref.alignedStation },
                 { intrinsics: blockout.intrinsics, station, width, height }
             );
             if (!prompt.includes(STATION_DETAIL_SENTENCE)) throw new Error('BeautifyStationService: the station prompt no longer ends with the detail sentence the chain lock replaces');
@@ -448,7 +525,7 @@ export class BeautifyStationService {
                 throw options.signal.reason instanceof Error ? options.signal.reason : Object.assign(new Error('Station beautify was stopped'), { name: 'AbortError' });
             }
             attempts++;
-            const { png, modelUsed, modelNote } = toStationImageAnswer(await this.generator.generate({ prompt, blockoutPng: blockout.png, referencePng: warp?.warpedPng, maskPng: warp?.maskPng, aspectRatio: resolvedAspectRatio, width, height, signal: options.signal }));
+            const { png, modelUsed, modelNote } = toStationImageAnswer(await this.generator.generate({ prompt, blockoutPng: blockout.png, referencePng: warp?.warpedPng, maskPng: warp?.maskPng, ...(photo ? { groundingPhoto: { bytes: photo.bytes, mimeType: photo.mimeType } } : {}), aspectRatio: resolvedAspectRatio, width, height, signal: options.signal }));
             // A generator that finished despite the Stop: its image is not used.
             if (options.signal?.aborted) {
                 throw options.signal.reason instanceof Error ? options.signal.reason : Object.assign(new Error('Station beautify was stopped'), { name: 'AbortError' });
@@ -460,7 +537,7 @@ export class BeautifyStationService {
                 decoded.rgba,
                 decoded.width,
                 decoded.height,
-                isDraft ? { ...options.qc, maxIterations: 0, minOverlapPercent: options.qc?.minOverlapPercent ?? 85.0 } : options.qc
+                isDraft || options.acceptUnmatched ? { ...options.qc, maxIterations: 0, minOverlapPercent: options.qc?.minOverlapPercent ?? 85.0 } : options.qc
             );
             if (outlineLimits) {
                 const fit = checkStationOutline(blockout, station, decoded.rgba, decoded.width, decoded.height, outlineLimits);
@@ -472,15 +549,16 @@ export class BeautifyStationService {
                 || (!best.qc.passed && !qc.passed && (outlineLimits ? outlineMiss(qc) < outlineMiss(best.qc) : qc.overlapPercent > best.qc.overlapPercent))) {
                 best = { png, qc, aligned, rgba: decoded.rgba, modelUsed, modelNote };
             }
-            if (qc.passed) break;
+            if (qc.passed || options.acceptUnmatched) break;
         }
         const b = best!;
         const dec = decodePng(b.png);
         return {
             station, alignedStation: b.aligned, prompt, blockout, imagePng: b.png,
             image: { width: dec.width, height: dec.height, rgba: b.rgba },
-            qc: b.qc, accepted: b.qc.passed, attempts, warp, generator: this.generator.name,
-            modelUsed: b.modelUsed, modelNote: b.modelNote
+            qc: b.qc, accepted: b.qc.passed || !!options.acceptUnmatched, attempts, warp, generator: this.generator.name,
+            modelUsed: b.modelUsed, modelNote: b.modelNote,
+            ...(photo ? { groundingPanoId: photo.panoId, ...(photo.date ? { groundingDate: photo.date } : {}) } : {})
         };
     }
 
@@ -694,9 +772,10 @@ function norm(v: [number, number, number]): [number, number, number] { const l =
 /**
  * Default generator over GoogleMediaGenerationService (Nano Banana / Gemini image models):
  * the blockout, optional warped reference and mask are passed as reference assets in that order.
+ * A Street View grounding photograph is sent alone, inline, as the source image: it never goes to the asset store.
  */
 export function createGoogleStationImageGenerator(deps: {
-    mediaService: { generateImage(req: any, options?: { signal?: AbortSignal }): Promise<{ asset: any; modelUsed: string; modelNote?: string }> };
+    mediaService: { generateImage(req: any, options?: { signal?: AbortSignal; inlineSource?: { data: Buffer; mimeType: string } }): Promise<{ asset: any; modelUsed: string; modelNote?: string }> };
     assetStore: { put(workspaceRoot: string, bytes: Buffer, mimeType: string): Promise<any>; resolve(workspaceRoot: string, asset: any): string };
     workspaceRoot: string;
     modelPriority?: string[];
@@ -708,21 +787,24 @@ export function createGoogleStationImageGenerator(deps: {
         fidelity: deps.fidelity,
         async generate(args) {
             const fs = await import('fs-extra');
-            const refs: any[] = [await deps.assetStore.put(deps.workspaceRoot, args.blockoutPng, 'image/png')];
-            if (args.referencePng) refs.push(await deps.assetStore.put(deps.workspaceRoot, args.referencePng, 'image/png'));
-            if (args.maskPng) refs.push(await deps.assetStore.put(deps.workspaceRoot, args.maskPng, 'image/png'));
+            const photo = args.groundingPhoto;
+            const refs: any[] = [];
+            if (!photo) {
+                refs.push(await deps.assetStore.put(deps.workspaceRoot, args.blockoutPng, 'image/png'));
+                if (args.referencePng) refs.push(await deps.assetStore.put(deps.workspaceRoot, args.referencePng, 'image/png'));
+                if (args.maskPng) refs.push(await deps.assetStore.put(deps.workspaceRoot, args.maskPng, 'image/png'));
+            }
             const res = await deps.mediaService.generateImage({
                 kind: 'image',
                 idempotencyKey: `station_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
                 prompt: args.prompt,
                 workspaceRoot: deps.workspaceRoot,
-                sourceAsset: refs[0],
-                referenceAssets: refs.slice(1),
+                ...(refs.length ? { sourceAsset: refs[0], referenceAssets: refs.slice(1) } : {}),
                 aspectRatio: args.aspectRatio,
                 imageSize: args.imageSize ?? deps.imageSize ?? (deps.fidelity === 'draft' ? '1K' : '2K'),
                 modelPriority: deps.modelPriority,
                 fidelity: deps.fidelity
-            }, { signal: args.signal });
+            }, { signal: args.signal, ...(photo ? { inlineSource: { data: photo.bytes, mimeType: photo.mimeType } } : {}) });
             return {
                 png: await ensureStationPng(await fs.readFile(deps.assetStore.resolve(deps.workspaceRoot, res.asset))),
                 modelUsed: res.modelUsed,

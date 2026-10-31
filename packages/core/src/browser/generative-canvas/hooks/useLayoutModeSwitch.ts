@@ -18,6 +18,9 @@ import * as React from 'react';
 import { CanvasArtifact, InteractiveBrowserData, KanbanBoardData, LiveCodeSandboxData, MarkdownDocumentData, MetricDashboardData, NodeGraphData, PrimitiveType, StudioLayoutMode, VideoTimelineData, getActiveUserName } from '../canvas-types';
 import { resolveModeForArtifact } from '../guardrails-service';
 import { useCapabilities } from '../hooks/useCapabilities';
+import { newEmptySceneArtifact } from './useWorkspaceFiles';
+import { canShowLayoutMode, primitiveOutOfScopeReason } from '../../../common/product-scope';
+import { postScopeNote } from '../chat/scopeNote';
 import { ChatState, ChatStore } from '../state/chatStore';
 
 export interface UseLayoutModeSwitchDeps {
@@ -28,6 +31,7 @@ export interface UseLayoutModeSwitchDeps {
     setArtifactHistory: ChatStore['setArtifactHistory'];
     setDocumentPaneState: React.Dispatch<React.SetStateAction<'split' | 'collapsed' | 'expanded'>>;
     setLayoutMode: ChatStore['setLayoutMode'];
+    setMessages: ChatStore['setMessages'];
     showToast: (text: string, icon?: string) => void;
     skills: ReturnType<typeof useCapabilities>['skills'];
 }
@@ -37,7 +41,10 @@ export function useLayoutModeSwitch(deps: UseLayoutModeSwitchDeps) {
 
     // Switch dedicated workspace layout mode (Chat, Code/Sandbox, Document/Spec, Kanban)
     const handleSwitchMode = (targetMode: StudioLayoutMode) => {
-        const effectiveMode = targetMode === 'canvas' ? 'code' : targetMode;
+        const requestedMode = targetMode === 'canvas' ? 'code' : targetMode;
+        // The 3D/VFX build (common/product-scope.ts) shows a mode it does not offer as chat, and makes nothing for it;
+        // the session's saved canvases are left as they are.
+        const effectiveMode = canShowLayoutMode(requestedMode) ? requestedMode : 'chat';
         setLayoutMode(effectiveMode);
         if (effectiveMode !== 'chat') {
             setDocumentPaneState(prev => prev === 'collapsed' ? 'split' : prev);
@@ -338,9 +345,14 @@ export function useLayoutModeSwitch(deps: UseLayoutModeSwitchDeps) {
 
 /** Creates an empty canvas artifact of the given primitive type and activates it. */
 export function useCreateEmptyCanvas(deps: UseLayoutModeSwitchDeps) {
-    const { recordArtifactVersion, setActiveArtifact, setArtifactHistory, setLayoutMode, showToast } = deps;
+    const { recordArtifactVersion, setActiveArtifact, setArtifactHistory, setLayoutMode, setMessages, showToast } = deps;
 
     const handleCreateEmptyCanvas = (type: PrimitiveType, customTitle?: string) => {
+        const outOfScope = primitiveOutOfScopeReason(type);
+        if (outOfScope) {
+            postScopeNote(setMessages, outOfScope);
+            return;
+        }
         let newArtifact: CanvasArtifact;
         const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -460,7 +472,9 @@ export function useCreateEmptyCanvas(deps: UseLayoutModeSwitchDeps) {
                     mediaAssets: []
                 } as VideoTimelineData
             };
-        } else {
+        } else if (type === '3d-scene') {
+            newArtifact = newEmptySceneArtifact(Date.now(), customTitle || 'New 3D Scene');
+        } else if (type === 'metric-dashboard') {
             newArtifact = {
                 id: `art-metric-${Date.now()}`,
                 type: 'metric-dashboard',
@@ -490,6 +504,10 @@ export function useCreateEmptyCanvas(deps: UseLayoutModeSwitchDeps) {
                     }
                 } as MetricDashboardData
             };
+        } else {
+            // a type with no empty canvas says so, instead of opening some other primitive in its place
+            showToast(`No empty ${type} canvas can be created here`, '⚠️');
+            return;
         }
 
         setActiveArtifact(newArtifact);

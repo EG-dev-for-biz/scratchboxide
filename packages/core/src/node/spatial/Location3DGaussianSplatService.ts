@@ -18,9 +18,14 @@ import {
     type StationImageGenerator
 } from './BeautifyStationService';
 import { resolveSurveyPreset } from './survey-router';
-import { getGoogle3DTilesClay } from './Google3DTileBlockoutPipelineService';
+import { geocode3DTilesAddress, getGoogle3DTilesClay } from './Google3DTileBlockoutPipelineService';
 import type { ColmapCameraPose, GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-types';
 import type { Scene3DData, Media4DObject } from '../../browser/generative-canvas/canvas-types';
+import { glbRaycaster, planStreetViewStations, snapVantageToDrivenSidewalk, snapVantageToSidewalk, SNAP_STREET_RADIUS_M, type SidewalkSnap, type StreetVantage, type StreetViewStationsResult, type VectorStreet } from './street-view-stations';
+import { geodeticToScan } from './StreetViewSurveyPlanner';
+import { discoverPanosAt, type StreetViewEvidenceDeps } from '../3d-engine/staged-location/streetview-evidence';
+import type { CloudBucket } from '../cloud-store/cloud-bucket';
+import { defaultWorldCacheBucket, fetchWorld, storeWorld, worldCacheKey, type WorldManifest } from '../cloud-store/world-cache';
 
 export interface Location3DGSRequest {
     location: string;
@@ -61,6 +66,27 @@ export interface Location3DGSRequest {
     draft?: boolean;
     /** Generation fidelity tier */
     fidelity?: 'draft' | 'production';
+    /**
+     * Where a viewer stands and looks: adds street-level stations posed by the registered Street View panoramas around it
+     * (planStreetViewStations), each beautified from its own photograph. Its lat/lng default to the resolved place. Needs
+     * `streetView`.
+     */
+    vantage?: Partial<Pick<StreetVantage, 'lat' | 'lng' | 'headingDeg'>> & Omit<StreetVantage, 'lat' | 'lng' | 'headingDeg'> & {
+        /**
+         * The compass direction from the street to the sidewalk the viewer stands on ("the west sidewalk": 270). Given, the
+         * viewer is snapped onto that sidewalk of the street nearest the place (snapVantageToSidewalk) and a heading near
+         * "across the street" is snapped to it.
+         */
+        sideDeg?: number;
+    };
+    /** The Maps key and the grounding service the vantage's stations are found and fetched with. */
+    streetView?: StreetViewEvidenceDeps;
+    /** Street centrelines near a point, for the sidewalk snap (default: the Google vector tiles, SpatialVectorDataService). */
+    streets?: (lat: number, lng: number, radiusM: number) => Promise<VectorStreet[]>;
+    /** Where finished worlds are kept (default: defaultWorldCacheBucket(); null: none). A world found there is fetched, not built. */
+    worldCache?: CloudBucket | null;
+    /** Build the world even when the world cache holds it (the new one then replaces it there). */
+    refresh?: boolean;
     onProgress?: (progress: number, message?: string) => void;
     /**
      * The caller's Stop (the chat's Stop button or the tool's time limit). Checked before and after the tile
@@ -68,6 +94,26 @@ export interface Location3DGSRequest {
      * and tiler; generate() then rejects with its reason and generates or writes nothing more.
      */
     signal?: AbortSignal;
+}
+
+/** A standing viewer's eye above the ground, metres: where a street vantage's scene opens. */
+export const VIEWER_EYE_HEIGHT_M = 1.6;
+
+/** How far the walk runs each way along the street from the vantage. */
+export const WALK_HALF_LENGTH_M = 30;
+
+/** The walk the viewer stands on: along the street (its bearing, else across the look heading), at eye height. */
+function walkCorridor(viewer: { eye: [number, number, number]; headingDeg: number }, streetBearingDeg?: number): { a: [number, number]; b: [number, number]; eyeY: number } {
+    const along = ((streetBearingDeg ?? viewer.headingDeg + 90) * Math.PI) / 180;
+    const dx = Math.sin(along) * WALK_HALF_LENGTH_M, dz = -Math.cos(along) * WALK_HALF_LENGTH_M;
+    return { a: [viewer.eye[0] - dx, viewer.eye[2] - dz], b: [viewer.eye[0] + dx, viewer.eye[2] + dz], eyeY: viewer.eye[1] };
+}
+
+/** The street centrelines near a point, from the Google vector tiles (the road layer only). */
+async function defaultStreets(lat: number, lng: number, radiusM: number): Promise<VectorStreet[]> {
+    const { SpatialVectorDataService } = await import('./SpatialVectorDataService');
+    const data = await SpatialVectorDataService.querySpatialVectorData({ latitude: lat, longitude: lng, radiusMeters: radiusM, layers: ['road'] });
+    return data.roads.map(r => ({ geodeticPath: r.geodeticPath, ...(typeof r.widthM === 'number' ? { widthM: r.widthM } : {}) }));
 }
 
 /** Throws the signal's reason (or an AbortError) once the caller has stopped the run. */
@@ -98,6 +144,10 @@ export interface Location3DGSResult {
     modelsUsed: string[];
     /** One line per distinct station image source: the model that answered and, when another was asked for, why. */
     imageSources: string[];
+    /** With a vantage: where the viewer was placed (the sidewalk snap), the street stations found, how many were accepted, and how they were registered. */
+    streetView?: Omit<StreetViewStationsResult, 'stations'> & { snap?: SidewalkSnap; stations: number; accepted: number; unmatched: number; panos: string[] };
+    /** The world cache: this world was fetched from it (built when `storedAt`), or is being stored in it. */
+    worldCache?: { key: string; bucket: string; state: 'fetched' | 'storing'; storedAt?: string };
 }
 
 /**
@@ -145,11 +195,39 @@ export class Location3DGaussianSplatService {
 
         progressReporter(0.02, `Resolving geodetic location for "${req.location}"...`);
 
+        // A vantage on a sidewalk: the street and side from the vector tiles first, so the place is extracted around
+        // where the viewer stands, not around a landmark's middle; the scan refines the offset once it is extracted.
+        let centre = { lat: req.lat ?? req.vantage?.lat, lng: req.lng ?? req.vantage?.lng };
+        let sidewalk: { streets: VectorStreet[]; coarse: SidewalkSnap } | undefined;
+        if (req.vantage && !req.streetView) throw new MissingInputError('location_generate_3dgs', 'streetView', 'a vantage needs the Maps key and the Maps Imagery Grounding service to find and fetch its Street View');
+        if (req.vantage?.sideDeg !== undefined && req.streetView) {
+            if (centre.lat === undefined || centre.lng === undefined) {
+                const g = await geocode3DTilesAddress(req.location);
+                centre = { lat: g.lat, lng: g.lng };
+            }
+            const placeLat = centre.lat!, placeLng = centre.lng!;
+            const placeOrigin = { lat: placeLat, lng: placeLng, heightMeters: 0 };
+            const streets = await (req.streets ?? defaultStreets)(placeLat, placeLng, SNAP_STREET_RADIUS_M + 50);
+            const sv = req.streetView;
+            progressReporter(0.03, 'Finding the street the vantage stands on...');
+            const coarse = await snapVantageToDrivenSidewalk({
+                origin: placeOrigin, place: { x: 0, z: 0 }, sideDeg: req.vantage.sideDeg,
+                ...(req.vantage.headingDeg !== undefined ? { headingDeg: req.vantage.headingDeg } : {}), streets,
+                // a street a Google car drove has a Google-captured pano on it (the free metadata endpoint, cached)
+                driven: async c => (await discoverPanosAt(placeOrigin, [c], sv, req.signal, c, 1)).panos.length > 0
+            });
+            throwIfStopped(req.signal);
+            if (!coarse) throw new MissingInputError('location_generate_3dgs', 'vantage', `no street within ${SNAP_STREET_RADIUS_M} m of ${req.location} (${placeLat.toFixed(6)}, ${placeLng.toFixed(6)}) has its ${req.vantage.sideDeg}° side toward the place in the vector tiles (${streets.length} streets read), so the sidewalk could not be placed; give the street corner as the location, or the viewer's own coordinates without vantageSideDeg`);
+            sidewalk = { streets, coarse };
+            centre = { lat: coarse.lat, lng: coarse.lng };
+        }
+
         // 1. Resolve the location (coordinates, or a place name via Google Places) and plan the survey
         const preset = await resolveSurveyPreset({
             location: req.location,
-            lat: req.lat,
-            lng: req.lng,
+            // a vantage given by coordinates, or snapped to a sidewalk, centres the place (the extraction and the crop) on it
+            lat: req.lat ?? centre.lat,
+            lng: req.lng ?? centre.lng,
             elevationMeters: req.elevation,
             headingDeg: req.headingDeg,
             glbPath: req.glbPath,
@@ -168,6 +246,32 @@ export class Location3DGaussianSplatService {
         }, root);
 
         const anchor = preset.anchor;
+        const resolvedOutDir = req.outDir || preset.outDir;
+        const outDir = path.isAbsolute(resolvedOutDir) ? resolvedOutDir : path.resolve(root, resolvedOutDir);
+
+        // A world built before from the same ask is fetched from the world cache instead of built again.
+        const cache = req.worldCache === null ? undefined : (req.worldCache ?? defaultWorldCacheBucket());
+        const cacheKey = worldCacheKey({
+            lat: anchor.lat.toFixed(6), lng: anchor.lng.toFixed(6), location: req.location, glbPath: req.glbPath,
+            headingDeg: req.vantage?.headingDeg, sideDeg: req.vantage?.sideDeg, walkMeters: req.vantage?.walkMeters, maxPanos: req.vantage?.maxPanos,
+            cameraCount: req.cameraCount, surveyPattern: req.surveyPattern, draft: req.draft === true || req.fidelity === 'draft',
+            styleSuffix: req.styleSuffix, moodPromptContext: req.moodPromptContext, architecturalStyle: req.architecturalStyle, stylePreset: req.stylePreset, mood: req.mood
+        });
+        if (cache && !req.refresh) {
+            progressReporter(0.05, `Looking for this world in the world cache (${cache.label})...`);
+            try {
+                const hit = await fetchWorld<CachedWorld>(cache, cacheKey, outDir);
+                if (hit) {
+                    progressReporter(1.0, `Fetched the world built ${hit.storedAt} from the world cache`);
+                    return worldFromCache(hit, outDir, Date.now() - t0, cache.label);
+                }
+            } catch (err) {
+                // an unreachable cache is not a failed world: it is built, and the reason is said
+                progressReporter(0.05, `The world cache could not be read (${err instanceof Error ? err.message : String(err)}); building the world`);
+            }
+            throwIfStopped(req.signal);
+        }
+
         // The survey renders the place's own clay tiles: a GLB the caller passed, else a fresh extraction at the
         // resolved anchor. A failed extraction fails the call; no model on disk is picked by the place's name, no
         // tile geometry is synthesized, and no other place's model is substituted.
@@ -214,8 +318,6 @@ export class Location3DGaussianSplatService {
             });
         }
 
-        const resolvedOutDir = req.outDir || preset.outDir;
-        const outDir = path.isAbsolute(resolvedOutDir) ? resolvedOutDir : path.resolve(root, resolvedOutDir);
         await fs.ensureDir(outDir);
 
         // 2. Resolve the image generator (Nano Banana / Google media generation). There is no stand-in: an injected
@@ -245,6 +347,43 @@ export class Location3DGaussianSplatService {
             styleSuffix: req.styleSuffix !== undefined ? req.styleSuffix : ''
         };
 
+        let street: StreetViewStationsResult | undefined;
+        let snap: SidewalkSnap | undefined;
+        let viewer: { eye: [number, number, number]; headingDeg: number } | undefined;
+        if (req.vantage && req.streetView) {
+            const place = { lat: req.vantage.lat ?? anchor.lat, lng: req.vantage.lng ?? anchor.lng };
+            let vantage: StreetVantage;
+            if (req.vantage.sideDeg !== undefined && sidewalk) {
+                progressReporter(0.07, 'Placing the viewer on the sidewalk, in front of the building line the scan shows...');
+                const origin = { lat: anchor.lat, lng: anchor.lng, heightMeters: anchor.elevationMeters };
+                // from the chosen street's own centreline point, the refine finds that street again (0 m away)
+                const found = snapVantageToSidewalk({
+                    origin, place: geodeticToScan(origin, sidewalk.coarse.streetPoint.lat, sidewalk.coarse.streetPoint.lng), sideDeg: req.vantage.sideDeg,
+                    ...(req.vantage.headingDeg !== undefined ? { headingDeg: req.vantage.headingDeg } : {}),
+                    streets: sidewalk.streets, ray: glbRaycaster(glbPath, origin)
+                }) ?? sidewalk.coarse;
+                // the street choice (and why) is the coarse snap's; the offset is the scan's
+                snap = { ...found, reason: [found.reason, sidewalk.coarse.reason.split('; ').slice(1).join('; ')].filter(Boolean).join('; ') };
+                vantage = { ...req.vantage, lat: found.lat, lng: found.lng, headingDeg: found.headingDeg };
+            } else {
+                if (req.vantage.headingDeg === undefined) throw new MissingInputError('location_generate_3dgs', 'vantageHeadingDeg', 'a vantage without vantageSideDeg needs the heading the viewer looks along');
+                vantage = { ...req.vantage, ...place, headingDeg: req.vantage.headingDeg };
+            }
+            progressReporter(0.08, 'Finding and registering the Street View around the vantage...');
+            street = await planStreetViewStations({
+                glbPath, anchor,
+                vantage,
+                streetView: req.streetView,
+                // apart from the survey's own ids
+                firstId: 1000 + stations.reduce((m, s) => Math.max(m, s.id), 0),
+                signal: req.signal,
+                onProgress: m => progressReporter(0.09, m)
+            });
+            throwIfStopped(req.signal);
+            // the scene opens where the viewer stands: eye height above the scan's sidewalk, looking along the heading
+            viewer = { eye: [street.vantageLocal.x, (street.vantageGroundY ?? 0) + VIEWER_EYE_HEIGHT_M, street.vantageLocal.z], headingDeg: vantage.headingDeg };
+        }
+
         progressReporter(0.1, `Launching SurveySplatPipelineService for ${beautifyContext.locationName}...`);
 
         const svc = new SurveySplatPipelineService({ generator });
@@ -252,6 +391,9 @@ export class Location3DGaussianSplatService {
             glbPath,
             anchor,
             stations,
+            ...(street?.stations.length ? { streetStations: street.stations.map(s => ({ station: s.station, photo: s.photo })) } : {}),
+            // a world to stand in: a splat on every patch of the scan (kept to its hulls), densest along the walk
+            ...(street && viewer ? { surfaceLayer: { corridor: walkCorridor(viewer, snap?.streetBearingDeg) } } : {}),
             outDir,
             beautify: beautifyContext,
             mode: 'chained',
@@ -290,15 +432,18 @@ export class Location3DGaussianSplatService {
         const { scene3DData, splatMediaObject } = SurveySplatPipelineService.toScene3DData(
             pipelineResult,
             anchor,
-            beautifyContext.locationName
+            beautifyContext.locationName,
+            viewer ? { vantage: viewer } : {}
         );
+        // the scene beside its tileset, so the world can be opened again without building it (the 3D World starter button)
+        await fs.writeJson(path.join(outDir, 'scene3d.json'), scene3DData, { spaces: 2 });
 
         const splatUrl = splatMediaObject.content.durableUri || SurveySplatPipelineService.toWebUrl(pipelineResult.fusedSplatPath);
         const tilesetUrl = SurveySplatPipelineService.toWebUrl(pipelineResult.tilesetPath);
 
         progressReporter(1.0, `3DGS generation complete (${pipelineResult.fusedSplatCount.toLocaleString()} splats)`);
 
-        return {
+        const result: Location3DGSResult = {
             success: pipelineResult.success,
             locationName: beautifyContext.locationName,
             geoAnchor: anchor,
@@ -315,9 +460,52 @@ export class Location3DGaussianSplatService {
             cropBox: pipelineResult.cropBox,
             durationMs: Date.now() - t0,
             modelsUsed: Array.from(new Set(pipelineResult.stations.map(st => st.modelUsed).filter((m): m is string => !!m))),
-            imageSources: Array.from(new Set(pipelineResult.stations.map(st => st.imageSource).filter((m): m is string => !!m)))
+            imageSources: Array.from(new Set(pipelineResult.stations.map(st => st.imageSource).filter((m): m is string => !!m))),
+            ...(street ? {
+                streetView: {
+                    ...(snap ? { snap } : {}),
+                    vantageLocal: street.vantageLocal, discovery: street.discovery, failures: street.failures, registrationSummary: street.registrationSummary,
+                    stations: street.stations.length,
+                    accepted: pipelineResult.stations.filter(st => st.accepted && st.groundingPanoId).length,
+                    unmatched: pipelineResult.stations.filter(st => st.accepted && st.scanMismatch).length,
+                    panos: Array.from(new Set(street.stations.map(s => s.photo.panoId)))
+                }
+            } : {})
         };
+        if (cache) {
+            // stored after the answer, so the user is not kept waiting on the upload; the manifest goes last, so an
+            // interrupted upload is never taken for a world
+            const { scene3DData: _scene, splatPath: _s, splatUrl: _u, tilesetPath: _t, tilesetUrl: _tu, metaPath: _m, ...rest } = result;
+            result.worldCache = { key: cacheKey, bucket: cache.label, state: 'storing' };
+            void storeWorld<CachedWorld>(cache, cacheKey, outDir, { ...rest, ...(viewer ? { viewer } : {}) })
+                .then(n => console.log(`[world-cache] stored ${n} files of ${beautifyContext.locationName} as ${cacheKey} in ${cache.label}`))
+                .catch(err => console.warn(`[world-cache] could not store ${cacheKey} in ${cache.label}: ${err instanceof Error ? err.message : String(err)}`));
+        }
+        return result;
     }
+}
+
+/** What the world cache keeps of a result: everything but its local paths and scene, and where the viewer stands. */
+type CachedWorld = Omit<Location3DGSResult, 'scene3DData' | 'splatPath' | 'splatUrl' | 'tilesetPath' | 'tilesetUrl' | 'metaPath' | 'worldCache'> & {
+    viewer?: { eye: [number, number, number]; headingDeg: number };
+};
+
+/** A result rebuilt from a cached world fetched into `outDir`: the scene made again for this machine's paths. */
+function worldFromCache(hit: WorldManifest<CachedWorld>, outDir: string, durationMs: number, bucketLabel: string): Location3DGSResult {
+    const { viewer, ...cached } = hit.result;
+    const fusedSplatPath = path.join(outDir, 'fused.splat'), tilesetPath = path.join(outDir, 'tileset.json'), metaPath = path.join(outDir, 'tileset.meta.json');
+    const spzPath = path.join(outDir, 'fused.spz');
+    const { scene3DData } = SurveySplatPipelineService.toScene3DData(
+        { success: true, stations: [], fusedSplatPath, ...(fs.existsSync(spzPath) ? { spzPath } : {}), fusedSplatCount: cached.splatCount, tilesetPath, metaPath, cropBox: cached.cropBox, durationMs },
+        cached.geoAnchor, cached.locationName, viewer ? { vantage: viewer } : {}
+    );
+    fs.writeJsonSync(path.join(outDir, 'scene3d.json'), scene3DData, { spaces: 2 });
+    return {
+        ...cached, scene3DData, durationMs,
+        splatPath: fusedSplatPath, splatUrl: SurveySplatPipelineService.toWebUrl(fusedSplatPath),
+        tilesetPath, tilesetUrl: SurveySplatPipelineService.toWebUrl(tilesetPath), metaPath,
+        worldCache: { key: hit.key, bucket: bucketLabel, state: 'fetched', storedAt: hit.storedAt }
+    };
 }
 
 /**

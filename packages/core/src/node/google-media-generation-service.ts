@@ -259,14 +259,19 @@ export class GoogleMediaGenerationService {
      *
      * `options.signal` stops the request (an AbortError, never a model failure): it is checked before the call and
      * between models, and passed to the SDK so an in-flight call is cancelled and no further model is asked.
+     *
+     * `options.inlineSource` is a source image held in memory only (a Maps Imagery Grounding photograph, whose bytes
+     * may not be written): it is sent in place of `sourceAsset`, exactly as given, and never stored.
      */
-    async generateImage(request: ImageGenerationRequest, options?: { signal?: AbortSignal }): Promise<MediaGenerationResult> {
+    async generateImage(request: ImageGenerationRequest, options?: { signal?: AbortSignal; inlineSource?: { data: Buffer; mimeType: string } }): Promise<MediaGenerationResult> {
         validateMediaGenerationRequest(request);
         if (options?.signal?.aborted) throw mediaRequestAborted();
         const client = await this.getClient();
 
         const contents: any[] = [{ text: request.prompt }];
-        if (request.sourceAsset) {
+        if (options?.inlineSource) {
+            contents.push({ inlineData: { data: options.inlineSource.data.toString('base64'), mimeType: options.inlineSource.mimeType } });
+        } else if (request.sourceAsset) {
             const sourceBytes = await fs.readFile(this.assetStore.resolve(request.workspaceRoot, request.sourceAsset));
             contents.push({
                 inlineData: {

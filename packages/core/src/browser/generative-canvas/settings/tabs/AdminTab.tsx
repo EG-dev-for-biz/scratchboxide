@@ -10,6 +10,7 @@
 import * as React from 'react';
 import { useSettingsContext } from '../SettingsContext';
 import { PRELOADED_SHOWCASE_DEMOS, ShowcaseDemoItem } from '../../demos/preloadedDemos';
+import { canShowPrimitive } from '../../../../common/product-scope';
 import { IconExternalLink, IconSparkles } from '../../canvas-icons';
 
 export interface StandaloneStudioItem {
@@ -385,6 +386,8 @@ export const AdminTab: React.FC = () => {
     };
 
     const filteredInApp = PRELOADED_SHOWCASE_DEMOS.filter(demo => {
+        // The 3D/VFX build (common/product-scope.ts) lists only demos whose canvas it shows.
+        if (!canShowPrimitive(demo.artifact.type)) return false;
         const matchesCategory = selectedCategory === 'all' || selectedCategory === 'canvas';
         if (!matchesCategory) return false;
         if (!searchQuery.trim()) return true;

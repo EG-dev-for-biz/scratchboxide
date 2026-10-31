@@ -13,18 +13,21 @@ import {
     PrimitiveType
 } from './canvas-types';
 import {
+    Icon3D,
     IconAutomations,
     IconChat,
     IconClose,
     IconCode,
     IconDiff,
     IconDocument,
+    IconFilm,
     IconKanban,
     IconMcp,
     IconSearch,
     IconSparkles,
     IconTerminal
 } from './canvas-icons';
+import { canCreatePrimitive } from '../../common/product-scope';
 
 export interface SpotlightActionItem {
     id: string;
@@ -33,6 +36,8 @@ export interface SpotlightActionItem {
     category: 'Actions' | 'Canvases' | 'Files' | 'AI Tools' | 'Recent';
     icon: React.ReactNode;
     shortcut?: string;
+    /** The canvas the action creates; the 3D/VFX build (common/product-scope.ts) leaves out an action for any other. */
+    makes?: PrimitiveType;
     onExecute: () => void;
 }
 
@@ -98,6 +103,7 @@ export const SpotlightLauncherModal: React.FC<SpotlightLauncherModalProps> = ({
             subtitle: 'Orchestrate interactive canvas primitives, templates, and pipelines',
             category: 'Actions',
             icon: <IconAutomations size={15} className="text-cyan-400" />,
+            makes: 'node-graph',
             onExecute: () => {
                 onClose();
                 if (onOpenAutomations) onOpenAutomations();
@@ -117,11 +123,36 @@ export const SpotlightLauncherModal: React.FC<SpotlightLauncherModalProps> = ({
             }
         },
         {
+            id: 'act-new-3d-scene',
+            title: 'New 3D Scene',
+            subtitle: 'An empty scene in the neutral studio, ready for models, tiles or a script',
+            category: 'Canvases',
+            icon: <Icon3D size={15} className="text-blue-400" />,
+            makes: '3d-scene',
+            onExecute: () => {
+                onClose();
+                onCreateArtifact('3d-scene', 'New 3D Scene');
+            }
+        },
+        {
+            id: 'act-new-video-timeline',
+            title: 'New Video Timeline',
+            subtitle: 'An empty multi-track timeline for clips, plates and audio',
+            category: 'Canvases',
+            icon: <IconFilm size={15} className="text-rose-400" />,
+            makes: 'video-timeline',
+            onExecute: () => {
+                onClose();
+                onCreateArtifact('video-timeline', 'New Video Timeline');
+            }
+        },
+        {
             id: 'act-new-code-sandbox',
             title: 'Create Live Code Sandbox',
             subtitle: 'Interactive React 19 / Tailwind / Pyodide workspace with hot reload',
             category: 'Canvases',
             icon: <IconCode size={15} className="text-emerald-400" />,
+            makes: 'live-code-sandbox',
             onExecute: () => {
                 onClose();
                 onCreateArtifact('live-code-sandbox', 'Live UI Sandbox');
@@ -133,6 +164,7 @@ export const SpotlightLauncherModal: React.FC<SpotlightLauncherModalProps> = ({
             subtitle: 'Rich Markdown doc with comparison tables & callouts',
             category: 'Canvases',
             icon: <IconDocument size={15} className="text-purple-400" />,
+            makes: 'markdown-document',
             onExecute: () => {
                 onClose();
                 onCreateArtifact('markdown-document', 'Architecture Spec');
@@ -144,6 +176,7 @@ export const SpotlightLauncherModal: React.FC<SpotlightLauncherModalProps> = ({
             subtitle: 'Agile task delivery board with stage columns & priority tags',
             category: 'Canvases',
             icon: <IconKanban size={15} className="text-amber-400" />,
+            makes: 'kanban-board',
             onExecute: () => {
                 onClose();
                 onCreateArtifact('kanban-board', 'Sprint Delivery Board');
@@ -155,6 +188,7 @@ export const SpotlightLauncherModal: React.FC<SpotlightLauncherModalProps> = ({
             subtitle: 'n8n/Miro interactive system architecture & signal routing graph',
             category: 'Canvases',
             icon: <IconAutomations size={15} className="text-cyan-400" />,
+            makes: 'node-graph',
             onExecute: () => {
                 onClose();
                 onCreateArtifact('node-graph', 'System Node Flow');
@@ -216,7 +250,7 @@ export const SpotlightLauncherModal: React.FC<SpotlightLauncherModalProps> = ({
         }
     }));
 
-    const allItems = [...defaultActions, ...fileActions, ...sessionActions];
+    const allItems = [...defaultActions.filter(item => !item.makes || canCreatePrimitive(item.makes)), ...fileActions, ...sessionActions];
 
     const filteredItems = allItems.filter(item => {
         if (!searchQuery.trim()) return true;

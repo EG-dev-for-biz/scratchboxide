@@ -28,9 +28,17 @@ export function getActiveUserName(customName?: string): string {
 }
 
 import type { VideoTimelineData, TimelineTrack, KeyframeEasing } from './services/video/videoTypes';
+import type { SplatEditStroke } from '../../common/spatial/splat-edits';
 import type { StagedBuildState } from '../../common/spatial/staged-location-contracts';
 export type { VideoTimelineData, TimelineTrack };
 export * from './services/video/videoTypes';
+
+/** Keyframes on a timeline's tracks: every animated property's keys on every element. */
+export function sceneTimelineKeyframeCount(tracks?: TimelineTrack[]): number {
+    let n = 0;
+    for (const track of tracks ?? []) for (const el of track.elements ?? []) for (const keys of Object.values(el.keyframes ?? {})) n += keys.length;
+    return n;
+}
 
 /** Every primitive the canvas can render: the contract for a canvas artifact's `type`. */
 export const PRIMITIVE_TYPES = [
@@ -691,7 +699,7 @@ export interface SculptSettings {
 
 export type TransformGizmoMode = 'translate' | 'rotate' | 'scale' | 'none';
 export type TransformGizmoSpace = 'world' | 'local';
-export type ViewportToolMode = 'view' | 'sculpt' | 'transform';
+export type ViewportToolMode = 'view' | 'sculpt' | 'transform' | 'splat';
 
 export interface SculptableMeshBuffer {
     vertexPositions: Float32Array;
@@ -977,6 +985,31 @@ export interface SceneCameraLens {
     temporalAntiAliasing?: boolean;
 }
 
+/** One arc of a colour harmony template: its centre `offsetDeg` from the template's hue, and its full width, in degrees. */
+export interface SceneColorHarmonySector {
+    offsetDeg: number;
+    widthDeg: number;
+}
+
+/**
+ * A colour harmony grade on the viewport (the tool strip's Colour harmony panel, sb_set_color_harmony): every hue drawn
+ * moves toward the nearest sector of a template turned to `hueDeg` on the OKLCH hue circle (Cohen-Or et al. 2006), keeping
+ * its lightness, so shading and texture stay and only the colour changes. Drawn in linear light before tone mapping, on
+ * the scene's objects only: the sky and background are their own component and are never graded. The template is any list of sectors: no named template types.
+ */
+export interface SceneColorHarmony {
+    /** Where the template is turned, degrees on the OKLCH hue circle (about 30 red, 110 yellow, 145 green, 265 blue). */
+    hueDeg: number;
+    /** The template's sectors relative to hueDeg (1-8); absent = one 94 degree sector round hueDeg. */
+    sectors?: SceneColorHarmonySector[];
+    /** How far each hue moves toward its harmonised hue, 0-1 (default 1). */
+    strength?: number;
+    /** Chroma (saturation) scale, 0-2 (default 1; 0 greys everything). */
+    chroma?: number;
+    /** Colour added at hueDeg, 0-1, scaled by lightness (default 0): what colours neutral surfaces (clay, white, grey), which have no hue to move. */
+    tint?: number;
+}
+
 /** What the viewport shows while a graph node holds the display flag; every list is optional, one is enough. */
 export interface SceneDisplayFlag {
     /** The graph node holding the flag. */
@@ -1028,6 +1061,13 @@ export interface Scene3DData {
     sceneType?: 'adaptive' | 'custom' | string;
     domainOrTopic?: string;
     splatUrl?: string;
+    /** Brush strokes replayed, in order, over the splat as it was built (common/spatial/splat-edits.ts). */
+    splatEdits?: SplatEditStroke[];
+    /**
+     * A built world kept in the world cache (location_generate_3dgs): its folder's name, and the saved version of this
+     * scene that was opened (`/api/worlds/<slug>/scene`).
+     */
+    world?: { slug: string; version?: string; savedAt?: string };
     splatTilesetUrl?: string;
     splatOptions?: {
         splatScale?: number;
@@ -1108,6 +1148,8 @@ export interface Scene3DData {
      * fog, turned into the sky config by services/atmosphere/scene-weather.ts applySceneWeather; absent = no weather set.
      */
     weather?: import('./services/atmosphere/scene-weather').SceneWeatherState;
+    /** A colour harmony grade the viewport draws on the scene's objects (sb_set_color_harmony); absent = none. */
+    colorHarmony?: SceneColorHarmony;
     environment?: {
         skybox?: string;
         lighting?: string;
@@ -2237,7 +2279,7 @@ export const DEFAULT_MCP_SERVERS: McpServerItem[] = [
 ];
 
 // ==========================================
-// 12. Context Mention Engine Types (@file, @folder, @git, @terminal, @web, @docs, @mcp)
+// 12. Context Mention Engine Types (@file, @folder, @git, @terminal, @web, @docs, @mcp, @scene, @mesh, @camera, @timeline)
 // ==========================================
 export type ContextMentionCategory =
     | 'file'
@@ -2248,7 +2290,11 @@ export type ContextMentionCategory =
     | 'web'
     | 'docs'
     | 'mcp'
-    | 'skill';
+    | 'skill'
+    | 'scene'
+    | 'mesh'
+    | 'camera'
+    | 'timeline';
 
 export interface ContextMentionItem {
     id: string;

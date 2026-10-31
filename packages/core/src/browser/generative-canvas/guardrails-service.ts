@@ -18,6 +18,7 @@ import {
     PrimitiveType,
     StudioLayoutMode
 } from './canvas-types';
+import { canShowLayoutMode } from '../../common/product-scope';
 
 export type CliCommandGuardrailLevel = 'safe_read' | 'prompt_confirm' | 'blocked_danger';
 
@@ -272,13 +273,14 @@ export function resolveModeForArtifact(type: PrimitiveType | string): StudioLayo
  * Sanitizes layout mode to ensure only valid non-legacy modes are used.
  */
 export function sanitizeLayoutMode(mode?: string, artifact?: CanvasArtifact): StudioLayoutMode {
+    let resolved: StudioLayoutMode = 'chat';
     if (mode === 'chat' || mode === 'code' || mode === 'canvas' || mode === 'document' || mode === 'kanban' || mode === 'automation' || mode === '3d' || mode === 'browser' || mode === 'video') {
-        return mode === 'canvas' ? 'code' : (mode as StudioLayoutMode);
+        resolved = mode === 'canvas' ? 'code' : (mode as StudioLayoutMode);
+    } else if (artifact) {
+        resolved = resolveModeForArtifact(artifact.type);
     }
-    if (artifact) {
-        return resolveModeForArtifact(artifact.type);
-    }
-    return 'chat';
+    // A mode the 3D/VFX build does not offer (common/product-scope.ts) restores as chat; the saved canvas is kept.
+    return canShowLayoutMode(resolved) ? resolved : 'chat';
 }
 
 /**
