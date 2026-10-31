@@ -4,11 +4,14 @@ Date: 2026-10-31. Status: **draft, not approved, nothing run.** No paid judge ca
 approves this document. Three things block the run as written:
 - **The Penn 2 comparison waits for kd's merge.** It cannot run until kd is merged onto the code the other arms run (see
   "Arms").
-- **The Penn 2 comparison also waits for a `poses` input.** Its two fixed poses need a `poses` input on
+- **The Penn 2 comparison also waits for the `poses` input to be merged.** Its two fixed poses use the `poses` input of
   `photo_match_evaluate`.
-  - The parks session ("Photo-match views at parks and eye height") is adding it on its branch, because it owns the view
-    code.
-  - It is not in this branch. This branch does not edit `photo-match-evaluate.ts` for it, so the file has one writer.
+  - The parks session ("Photo-match views at parks and eye height") added it on its own branch,
+    `claude/elastic-jennings-e32939`, in e3ea6dc5 (code and tests) and c87dc68b (process note). That branch is not
+    pushed and not merged into this one.
+  - It was checked on a synthetic block and in a dry run at the ESB. No Penn Station tile is cached, so it has not been
+    tried at Penn 2.
+  - This branch does not edit `photo-match-evaluate.ts`, so the file has one writer.
 - **The benchmark-place run waits for a labelling fix.** The tool must first label a whole-place arm by the isolate when
   the isolate is the target (see "The reference at the benchmark places").
   - The fix is also in `photo-match-evaluate.ts`, so it waits for the parks session's work too, or goes to it.
@@ -121,11 +124,18 @@ At Penn 2:
 ```
 photo_match_evaluate {
   arms: [DM (named first: the reference), DS, KD, K, X1, X2, each { id, label, runId, glbs, scope }],
-  poses: [pose A, pose B as fixed below, in the shape the poses input takes when it lands],
-  views: 8 in all (the two poses and 6 automatic), runs: 3, clay: true, judgeRegions: true, trees: true, baseline: true,
-  includeSatelliteOrtho: false
+  poses: [
+    { label: 'A facade', lat: <corner>, lng: <corner>, headingDeg: <avenue bearing + 270>, pitchDeg: 12, fovDeg: 80 },
+    { label: 'B uptown', lat: <corner>, lng: <corner>, headingDeg: <avenue bearing>, pitchDeg: 12, fovDeg: 80 }
+  ],
+  views: 8, runs: 3, clay: true, judgeRegions: true, trees: true, baseline: true, includeSatelliteOrtho: false
 }
 ```
+
+- **`views: 8` counts the poses.** The registered fixed views come first, in the order given, and the nearest automatic
+  views fill the other six, never from a pose's pano.
+- **A swapped pose names its pano.** It is given as `panoId` in place of `lat`/`lng` (see "Views at Penn 2").
+- **The values in angle brackets** are filled in as "Views at Penn 2" says.
 
 The number of renders per call differs by place:
 - **At Penn 2:** raw, DM, DS, KD, K, X1 and X2, 7 in all. That is one more than the earlier draft's 6, and three more than
@@ -167,18 +177,30 @@ and it needs the structure to fill 6% of the frame, so the look up 7th Ave canno
     270°, about 299°.
   - **Pose B, uptown.** From the same pano, looking uptown along 7th Ave toward Primark and Macy's. The heading is the
     avenue's bearing, about 29°.
-- **How a pose is framed.**
+- **How a pose is given to the tool** (the `poses` input as it landed):
+  - **Position.** `lat`/`lng` is the corner of 7th Ave and W 32nd St, written into this draft before any build. The tool
+    looks from the nearest Google-captured pano within 20 m of it, its eye 2.5 m over the street there.
   - **Headings.** Both headings come from the avenue's line in the reference frame: the vector stage's road line, else
-    Penn 2's 7th Ave facade line in the tile. They are not taken from a map.
-  - **Pitch and field of view.** The tool's own framing for a close view: 12° up, an 80° field of view, 4:3. The eye is
-    the tool's, 2.5 m over the terrain at the pano.
-- **What a pose must pass.** Each pose must still be held out (no build used its pano) and register by edges to at most
-  5 px. It is exempt from the target-share rule.
-- **If a pose's pano was used or does not lock.** Take the next nearest unused pano on 7th Ave with the same heading:
-  between 31st and 33rd St for pose A, between 32nd and 33rd St for pose B. Report the swap.
-- **If none locks.** Judge Penn 2 on its automatic views, and report the fixed poses as missing.
-- **If the photo and the tile show Penn 2's facade from different eras.** Penn 2 was reclad. Take the next pano by date
-  at that spot, and note it in the dry run.
+    Penn 2's 7th Ave facade line in the tile. They are measured once DM's reference exists, before the dry run, and
+    entered as `headingDeg` (clockwise from true north). They are not taken from a map, and they are computed, not chosen
+    after any score.
+  - **Pitch and field of view.** `pitchDeg: 12` (up) and `fovDeg: 80`, the tool's own framing for a close view (4:3).
+    These are set explicitly, because the input's defaults are 0° and 90°.
+- **What a pose must pass.** These are the tool's own checks:
+  - **Held out.** A pano any build used is refused (`used-by-build`).
+  - **Registered.** A view that does not register by edges to at most 5 px is not used (`not-registered`).
+  - **No target-share gate.** The target's share of the frame is reported in `heldOut.fixed[].targetScreenShare`, not
+    used to decide.
+- **Swaps, made before the paid run.** The tool never swaps a pano by itself, so swaps are made by hand, by naming the
+  next pano as `panoId`:
+  - **If a pose's pano was used** (`used-by-build` in the dry run), take the next nearest unused pano on 7th Ave with the
+    same heading: between 31st and 33rd St for pose A, between 32nd and 33rd St for pose B. Report the swap.
+  - **If the photo and the tile show Penn 2's facade from different eras** (Penn 2 was reclad), or a sign is unreadable
+    in the sign check, take the next pano by date at that spot. Note it in the dry run.
+- **A pose that does not register.** Registration happens only inside the paid call; the tool has no register-only
+  pass. So a `not-registered` pose is not swapped: an automatic view fills its slot, and the pose is reported as missing,
+  with its residuals. A swap there would need a second paid call.
+- **If no pose is left.** Judge Penn 2 on its automatic views, and report the fixed poses as missing.
 - **No names in code.** The poses name only pano ids and angles. No sign or brand name goes into a tool argument, a prompt
   or code.
 - **Bar 6 counts views here.** With one place there are no places to agree, so bar 6 counts views over all eight. Eight
@@ -248,8 +270,8 @@ the benchmark places not blocked, plus Penn 2 (or its fallback).
     KD and the other two includes the far field, which is part of what kd changes. A gap between DM and DS does not
     include it.
   - Pose B, uptown to Macy's, is where this shows most. The report says so.
-- **Bar 5 and the poses.** Bar 5 leaves out a view where the target fills less than 6% of the frame, because the move it
-  tests barely shows there. That is pose B, and pose A as well under the fallback.
+- **Bar 5 and the poses.** Bar 5 leaves out a pose whose `heldOut.fixed[].targetScreenShare` is under 0.06, because the
+  move it tests barely shows there. That is expected for pose B, and for pose A as well under the fallback.
 
 Secondary, reported and deciding nothing: SSIM, edge chamfer, CIEDE2000 and agreement per region, for every arm.
 
@@ -296,6 +318,11 @@ Both are made locally from the arms' own files, at no cost, and judged blind in 
 
     The target checks above lead to the fallback, not to a stop.
 - **The poses (at Penn 2).**
+  - **Their outcomes, in the dry run.** Read `heldOut.fixed`, which gives each pose's pano, its distance from the corner,
+    and its status.
+    - `used-by-build` leads to the swap above.
+    - `no-pano` there may only mean that the Street View metadata cache lacks the corner's panos: the dry run's lookup
+      reads that cache. Check it again with the real lookup in the sign check.
   - **In frame, in the dry run.** The dry run's photos are stand-ins rendered from DM's tile, so it can show the poses
     and every arm's render there.
     - Pose A must face Penn 2's 7th Ave facade across the avenue.
@@ -350,7 +377,9 @@ When the fresh builds exist at a place, write a config and run the driver. Confi
   "out": "docs/screenshots/m1_prereg/<place>", "args": { ...the tool arguments above for that place... } }
 ```
 
-The reference run is K's at a benchmark place and DM's at Penn 2. At Penn 2 the driver passes the poses too.
+The reference run is K's at a benchmark place and DM's at Penn 2. At Penn 2 the arguments carry the poses. The driver
+on the parks session's branch finds their panos in the Street View metadata cache, and stand-in registration is the
+identity, so `not-registered` cannot show before the paid run.
 
 Run it with credentials unreachable:
 
