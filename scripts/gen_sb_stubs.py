@@ -1153,18 +1153,25 @@ def build_summary(models: dict[str, ModuleModel], budget_tokens: int, version: s
     reserve = 300  # room for the list of omitted blocks
     used = len(head)
     kept: list[list[str]] = [[] for _ in blocks]
-    # first pass: a share that falls with the block's rank (60, 30, 20, 15, ... lines, at least 4); second pass: the rest
+    # first pass: a share that falls with the block's rank (60, 30, 20, 15, ... lines, at least 4), also capped in
+    # characters (30%, 15%, 10%, ... of the budget) so a block of long lines (sb's functions with their docs) cannot
+    # take the whole budget and push the classes out; second pass: the rest
+    spent = [0] * len(blocks)
     for first_pass in (True, False):
         for i, (heading, lines) in enumerate(blocks):
             quota = max(4, 60 // (i + 1)) if first_pass else None
+            share = (budget - reserve) * 0.3 / (i + 1) if first_pass else None
             for l in lines[len(kept[i]):]:
                 if quota is not None and len(kept[i]) >= quota:
                     break
                 cost = len(l) + 1 + (len(heading) + 2 if not kept[i] else 0)
+                if share is not None and len(kept[i]) >= 4 and spent[i] + cost > share:
+                    break
                 if used + cost > budget - reserve:
                     break
                 kept[i].append(l)
                 used += cost
+                spent[i] += cost
     out = [head]
     omitted: list[str] = []
     for (heading, lines), k in zip(blocks, kept):
