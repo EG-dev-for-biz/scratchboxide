@@ -8,8 +8,8 @@
  ********************************************************************************/
 
 import { Request, Response, Router } from 'express';
-import { defaultWorldCacheBucket, readWorldIndex } from '../../../packages/core/src/node/cloud-store/world-cache';
-import { listWorldScenes, openWorld, saveWorld, syncWorldScene } from '../../../packages/core/src/node/cloud-store/world-scenes';
+import { defaultWorldCacheBucket } from '../../../packages/core/src/node/cloud-store/world-cache';
+import { listWorldVersions, openWorld, openWorldVersion, saveWorld, syncWorldScene } from '../../../packages/core/src/node/cloud-store/world-scenes';
 import { repoPath } from '../../../packages/core/src/node/process/repo-python';
 
 /** Where built worlds live: the folder the renderer serves as /tilesets. */
@@ -25,10 +25,17 @@ export function createWorldRouter(): Router {
     /**
      * The newest saved version of the world's scene, else the build's own: { scene, source, version?, savedAt? }. A world
      * on this machine answers from its local copy without waiting on the cloud, which is checked afterwards for a newer save.
+     * `?version=<name>` opens that saved version instead, and `?version=built` the build's own scene.
      */
     router.get('/:slug/scene', async (req: Request, res: Response) => {
         try {
             const bucket = defaultWorldCacheBucket();
+            const version = typeof req.query.version === 'string' && req.query.version ? req.query.version : undefined;
+            if (version) {
+                const picked = await openWorldVersion<Record<string, unknown>>(req.params.slug, version, TILESETS_DIR, bucket);
+                res.json({ success: true, ...picked, scene: { ...picked.scene, world: { slug: req.params.slug, ...(picked.version ? { version: picked.version, savedAt: picked.savedAt } : {}) } } });
+                return;
+            }
             const opened = await openWorld<Record<string, unknown>>(req.params.slug, TILESETS_DIR, bucket);
             res.json({ success: true, ...opened, scene: { ...opened.scene, world: { slug: req.params.slug, ...(opened.version ? { version: opened.version, savedAt: opened.savedAt } : {}) } } });
             if (bucket && opened.source !== 'cloud') {
@@ -56,12 +63,10 @@ export function createWorldRouter(): Router {
         }
     });
 
-    /** The saved versions of the world's scene, newest first. */
+    /** The saved versions of the world's scene, newest first: { versions: [{ version, savedAt }], source }. */
     router.get('/:slug/versions', async (req: Request, res: Response) => {
         try {
-            const bucket = defaultWorldCacheBucket();
-            const key = bucket ? await readWorldIndex(bucket, req.params.slug) : undefined;
-            res.json({ success: true, versions: bucket && key ? await listWorldScenes(bucket, key) : [] });
+            res.json({ success: true, ...(await listWorldVersions(req.params.slug, TILESETS_DIR, defaultWorldCacheBucket())) });
         } catch (err: any) {
             res.status(500).json({ success: false, error: err?.message || String(err) });
         }
