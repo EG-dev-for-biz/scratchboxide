@@ -579,6 +579,67 @@ describe('photo_match_evaluate tool', () => {
         });
     }, 240_000);
 
+    it('labels a whole place by the isolate\'s plan outline when the isolate is the target: the hero inside it, its neighbours outside, the tile and the hero arms as before', async () => {
+        const models = path.join(root, 'public', 'models');
+        const ground260 = { ...ground(260), png: checkerPng([110, 110, 105], [96, 96, 92]) };
+        // X1: the hero alone as a whole place (the decoy with no place round it)
+        const heroGlb = path.join(models, 'synthetic_hero_place_77777777.glb');
+        writeGlb(heroGlb, [{ ...TARGET, png: realFacade }]);
+        // W: the whole place as the tile has it
+        const wholeGlb = path.join(models, 'synthetic_whole_place_88888888.glb');
+        writeGlb(wholeGlb, [ground260, { ...TARGET, png: realFacade }, { ...NEIGHBOUR, png: facadePng([200, 196, 186], [60, 70, 80]) }]);
+        // P: a rebuilt place, the hero 0.3 m out on every side (clipped at its footprint + 0.3 m), a lower building 1.5 m east of
+        // the hero's wall that the tile does not have, and the tile's neighbour across the street
+        const rebuiltGlb = path.join(models, 'synthetic_rebuilt_place_99999999.glb');
+        writeGlb(rebuiltGlb, [ground260, { ...box(0, 0, 14.6, 12.6, 16), png: realFacade }, { ...box(12.5, 0, 8, 12, 10), color: [0.6, 0.6, 0.55] }, { ...NEIGHBOUR, png: facadePng([200, 196, 186], [60, 70, 80]) }]);
+        const handler = createPhotoMatchEvaluateHandler(() => fakeDeps(root));
+        const out = await handler({
+            arms: [
+                // K's run named first: the reference, its isolate the target
+                { id: 'K', label: 'HERO', runId: RUN, glbs: [staged.altGlb] },
+                { id: 'X1', label: 'HERO ALONE', glbs: [heroGlb], scope: 'place' },
+                { id: 'W', label: 'WHOLE PLACE', glbs: [wholeGlb], scope: 'place' },
+                { id: 'P', label: 'REBUILT PLACE', glbs: [rebuiltGlb], scope: 'place' }
+            ],
+            excludePanoIds: ['USED_WEST'], views: 3, runs: 1, clay: false
+        }, ctxFor(root));
+        const r = out.resultPayload as any;
+        expect(out.status, JSON.stringify(r).slice(0, 800)).toBe('completed');
+        // the tile's own labels are the isolate's, matched triangle by triangle, as before
+        expect(r.regions.target.source).toMatch(/the isolate/);
+        expect(r.regions.target.triangles).toBe(10);
+        expect(r.regions.target.matchedShare).toBe(1);
+        expect(r.arms.map((a: any) => [a.id, a.scope])).toEqual([['raw', 'target'], ['K', 'target'], ['X1', 'place'], ['W', 'place'], ['P', 'place']]);
+        // the outline: the 14 x 12 m isolate on the 1 m grid, every cell whose centre lies within 1 m of it in plan
+        expect(r.regions.placeOutline.reachM).toBe(1);
+        expect(r.regions.placeOutline.areaM2).toBeGreaterThanOrEqual(14 * 12);
+        expect(r.regions.placeOutline.areaM2).toBeLessThanOrEqual(16 * 14);
+        expect(r.regions.arms).toMatch(/plan outline/);
+        // every arm's triangles by label: the hero arms are the target wherever they stand; a whole place inside the outline is
+        // the target, the rest a neighbour, the street ground
+        expect(r.regions.armTriangles.raw).toEqual({ triangles: 10, target: 10, neighbours: 0, ground: 0, trees: 0 });
+        expect(r.regions.armTriangles.K).toEqual({ triangles: 10, target: 10, neighbours: 0, ground: 0, trees: 0 });
+        expect(r.regions.armTriangles.X1).toEqual({ triangles: 10, target: 10, neighbours: 0, ground: 0, trees: 0 });
+        expect(r.regions.armTriangles.W).toEqual({ triangles: 22, target: 10, neighbours: 10, ground: 2, trees: 0 });
+        expect(r.regions.armTriangles.P).toEqual({ triangles: 32, target: 10, neighbours: 20, ground: 2, trees: 0 });
+        expect(r.views).toHaveLength(3);
+        let sawNeighbour = false;
+        for (const v of r.views) {
+            expect(v.regions.pixels.target).toBeGreaterThan(1000);
+            // the whole place labelled by the outline shows exactly what the tile shows; so do the raw scan and the hero in its street
+            for (const id of ['raw', 'K', 'W']) expect(v.regions.arms[id].frame.agreement, `${v.id} ${id}`).toBe(1);
+            // the hero alone is the building where the tile's building is, and nothing of the place round it
+            for (const id of ['X1', 'P']) expect(v.regions.arms[id].building.agreement, `${v.id} ${id}`).toBeGreaterThan(0.95);
+            if (v.regions.pixels.neighbours > 500) {
+                sawNeighbour = true;
+                expect(v.regions.arms.X1.neighbours.agreement).toBeLessThan(0.3);
+                expect(v.regions.arms.W.neighbours.agreement).toBe(1);
+            }
+        }
+        expect(sawNeighbour).toBe(true);
+        r.views.forEach((v: any, k: number) => fs.copyFileSync(v.regions.maskGrid, path.join(SHOTS, `tool_photo_match_isolate_outline_masks_view${k}.png`)));
+    }, 240_000);
+
     it('reads a seam-welded district run through its tile_seams note, and picks the target inside Google\'s footprint the run read', async () => {
         // a podium with a tower on it (the target), a neighbour; the run keys its tiles on the welded scan, which has no entry of its own
         const place2 = { lat: 40.71, lng: -74.01, formattedAddress: 'Synthetic Tower, Test City' };

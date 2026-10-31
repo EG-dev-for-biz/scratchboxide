@@ -1016,6 +1016,66 @@ export function triangleRegions(t: TileTriangles, terrain: TerrainLookup, standi
     return out;
 }
 
+/** The terrain grid a plan outline is drawn on (StreetViewSurveyPlanner's GroundModel is one). */
+export interface TerrainGrid extends TerrainLookup { x0: number; z0: number; nx: number; nz: number; cellMeters: number; cellIndex(x: number, z: number): number }
+
+/**
+ * A cell is in a plan outline when its centre lies within this (m) of a standing triangle in plan: a wall on a cell boundary
+ * takes the cells on both sides, and a wall rebuilt up to half a metre outside the scanned one (K clips at 0.3 m) stays inside.
+ */
+export const PHOTO_MATCH_OUTLINE_REACH_M = 1;
+
+/**
+ * The plan outline of a mesh on the terrain grid, from geometry alone: 1 for every cell whose centre lies within
+ * PHOTO_MATCH_OUTLINE_REACH_M in plan of one of its standing triangles (standing as triangleRegions decides: a roof by its
+ * area, a wall by its foot line), and for every cell those enclose (not 4-connected to the grid's edge through cells outside:
+ * a courtyard, a gap in the roof).
+ */
+export function planOutlineCells(t: TileTriangles, terrain: TerrainGrid, reachM = PHOTO_MATCH_OUTLINE_REACH_M): Uint8Array {
+    const { x0, z0, nx, nz, cellMeters: cell } = terrain;
+    const out = new Uint8Array(nx * nz);
+    const labels = triangleRegions(t, terrain, REGION.target);
+    const P = t.positions, r2 = reachM * reachM;
+    const segDist2 = (px: number, pz: number, ax: number, az: number, bx: number, bz: number) => {
+        const dx = bx - ax, dz = bz - az, l = dx * dx + dz * dz;
+        const s = l > 0 ? Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / l)) : 0;
+        const ex = ax + s * dx - px, ez = az + s * dz - pz;
+        return ex * ex + ez * ez;
+    };
+    for (let i = 0; i < labels.length; i++) {
+        if (labels[i] !== REGION.target) continue;
+        const o = i * 9, ax = P[o], az = P[o + 2], bx = P[o + 3], bz = P[o + 5], cx = P[o + 6], cz = P[o + 8];
+        const area2 = (bx - ax) * (cz - az) - (bz - az) * (cx - ax);
+        const i0 = Math.max(0, Math.floor((Math.min(ax, bx, cx) - reachM - x0) / cell)), i1 = Math.min(nx - 1, Math.floor((Math.max(ax, bx, cx) + reachM - x0) / cell));
+        const k0 = Math.max(0, Math.floor((Math.min(az, bz, cz) - reachM - z0) / cell)), k1 = Math.min(nz - 1, Math.floor((Math.max(az, bz, cz) + reachM - z0) / cell));
+        for (let k = k0; k <= k1; k++) for (let j = i0; j <= i1; j++) {
+            const c = k * nx + j;
+            if (out[c]) continue;
+            const px = x0 + (j + 0.5) * cell, pz = z0 + (k + 0.5) * cell;
+            let inside = false;
+            if (Math.abs(area2) > 1e-9) {
+                const w0 = (bx - px) * (cz - pz) - (bz - pz) * (cx - px), w1 = (cx - px) * (az - pz) - (cz - pz) * (ax - px), w2 = (ax - px) * (bz - pz) - (az - pz) * (bx - px);
+                inside = area2 > 0 ? w0 >= 0 && w1 >= 0 && w2 >= 0 : w0 <= 0 && w1 <= 0 && w2 <= 0;
+            }
+            if (inside || Math.min(segDist2(px, pz, ax, az, bx, bz), segDist2(px, pz, bx, bz, cx, cz), segDist2(px, pz, cx, cz, ax, az)) <= r2) out[c] = 1;
+        }
+    }
+    // the cells outside: 4-connected to the grid's edge through cells not in the outline; the rest are enclosed by it
+    const outside = new Uint8Array(nx * nz), stack: number[] = [];
+    const seed = (c: number) => { if (!out[c] && !outside[c]) { outside[c] = 1; stack.push(c); } };
+    for (let j = 0; j < nx; j++) { seed(j); seed((nz - 1) * nx + j); }
+    for (let k = 0; k < nz; k++) { seed(k * nx); seed(k * nx + nx - 1); }
+    while (stack.length) {
+        const c = stack.pop()!, j = c % nx, k = (c - j) / nx;
+        if (j > 0) seed(c - 1);
+        if (j + 1 < nx) seed(c + 1);
+        if (k > 0) seed(c - nx);
+        if (k + 1 < nz) seed(c + nx);
+    }
+    for (let c = 0; c < out.length; c++) if (!outside[c]) out[c] = 1;
+    return out;
+}
+
 /** The masks the secondary numbers are measured over: the whole frame, the target (building), the ground, the neighbours, the measured tree crowns and the skyline band. */
 export const PHOTO_MATCH_REGIONS = ['frame', 'building', 'ground', 'neighbours', 'trees', 'skyline'] as const;
 export type PhotoMatchRegion = typeof PHOTO_MATCH_REGIONS[number];

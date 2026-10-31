@@ -22,8 +22,8 @@ import { describe, expect, it } from 'vitest';
 import type { OrthoCamera } from '../src/common/spatial/texture-pass-contracts';
 import { SRGB8_TO_LINEAR } from '../src/common/spatial/photogrammetric-delight';
 import {
-    aggregateCriteria, composeGrid, judgePrompt, judgeView, parseJudgeReply, regionMasks, regionOverlay, regionScores, renderTriangles, skylineBandPx, triangleRegions,
-    JUDGE_REGION_CRITERIA, PHOTO_MATCH_GROUND_BAND_M, PHOTO_MATCH_REGION_LEGEND, REGION, type JudgeClient, type TerrainLookup
+    aggregateCriteria, composeGrid, judgePrompt, judgeView, parseJudgeReply, planOutlineCells, regionMasks, regionOverlay, regionScores, renderTriangles, skylineBandPx, triangleRegions,
+    JUDGE_REGION_CRITERIA, PHOTO_MATCH_GROUND_BAND_M, PHOTO_MATCH_REGION_LEGEND, REGION, type JudgeClient, type TerrainGrid, type TerrainLookup
 } from '../src/node/3d-engine/staged-location/photo-match-eval';
 import type { TileTriangles } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 
@@ -115,6 +115,34 @@ describe('photo-match regions from geometry', () => {
         const byFootprint = triangleRegions(two, FLAT, (i, x) => { seen.push([i, x]); return x < 0 ? REGION.target : REGION.neighbours; });
         expect([...byFootprint]).toEqual([REGION.target, REGION.target, REGION.neighbours, REGION.neighbours]);
         expect(seen.map(s => s[0])).toEqual([0, 1, 2, 3]);
+    });
+
+    it('draws a plan outline on the terrain grid from standing geometry: roofs by area, walls by their foot line, enclosed cells filled, the street left out', () => {
+        // a flat 1 m grid over x, z in [-20, 20]
+        const grid: TerrainGrid = {
+            groundAt: () => 0, x0: -20, z0: -20, nx: 40, nz: 40, cellMeters: 1,
+            cellIndex: (x, z) => { const i = Math.floor(x + 20), k = Math.floor(z + 20); return i < 0 || k < 0 || i >= 40 || k >= 40 ? -1 : k * 40 + i; }
+        };
+        const at = (cells: Uint8Array, x: number, z: number) => cells[grid.cellIndex(x, z)];
+        const sum = (cells: Uint8Array) => cells.reduce((n, f) => n + f, 0);
+        const grey: V3 = [128, 128, 128];
+        // a roofed box 10 x 6 m: every cell whose centre lies within 1 m of it, x in [-6, 6) and z in [-4, 4)
+        const roofed = planOutlineCells(soup(box(-5, 5, -3, 3, 12), grey), grid);
+        expect(sum(roofed)).toBe(12 * 8);
+        for (const [x, z] of [[0, 0], [5.9, 0], [-5.9, 3.9], [0, -3.9]]) expect(at(roofed, x, z), `${x}, ${z}`).toBe(1);
+        for (const [x, z] of [[6.1, 0], [-6.1, 0], [0, 4.1], [0, -4.1]]) expect(at(roofed, x, z), `${x}, ${z}`).toBe(0);
+        // four walls and no roof (a scan hole over the whole roof): the foot lines and every cell they enclose, 18 x 18
+        const ring = box(-8, 8, -8, 8, 12).slice(1);
+        const walls = planOutlineCells(soup(ring, grey), grid);
+        expect(sum(walls)).toBe(18 * 18);
+        expect(at(walls, 0, 0)).toBe(1);
+        // a wall missing: nothing is enclosed, so the yard between the other three stays outside
+        const open = planOutlineCells(soup([ring[0], ring[2], ring[3]], grey), grid);
+        expect(at(open, 0, 0)).toBe(0);
+        expect(at(open, -8, 0)).toBe(1);
+        expect(at(open, 0, 8.6)).toBe(0);
+        // the street (within the ground band of the terrain) draws nothing
+        expect(sum(planOutlineCells(soup([[[-20, 0.1, -20], [20, 0.1, -20], [20, 0.1, 20], [-20, 0.1, 20]]], grey), grid))).toBe(0);
     });
 
     it('counts every region\'s pixels exactly from above: target roof, neighbour roof, ground, sky past the tile', () => {

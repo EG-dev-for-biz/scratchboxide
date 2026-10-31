@@ -36,8 +36,8 @@ import * as path from 'path';
 import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome } from '../types';
 import type { StagedBuildState, StagedLayer, Vec3 } from '../../../../common/spatial/staged-location-contracts';
 import {
-    aggregateCriteria, aggregateRuns, armLayerTriangles, armMeshesForView, composeGrid, coverageMask, judgeView, judgeViewClay, loadArmLayer, perceptualScores, regionMasks, regionOverlay, regionScores, renderPng,
-    renderTriangles, triangleRegions, JUDGE_CRITERIA, JUDGE_REGION_CRITERIA, PHOTO_MATCH_GROUND_BAND_M, PHOTO_MATCH_REGION_LEGEND, PHOTO_MATCH_REGIONS, REGION,
+    aggregateCriteria, aggregateRuns, armLayerTriangles, armMeshesForView, composeGrid, coverageMask, judgeView, judgeViewClay, loadArmLayer, perceptualScores, planOutlineCells, regionMasks, regionOverlay, regionScores, renderPng,
+    renderTriangles, triangleRegions, JUDGE_CRITERIA, JUDGE_REGION_CRITERIA, PHOTO_MATCH_GROUND_BAND_M, PHOTO_MATCH_OUTLINE_REACH_M, PHOTO_MATCH_REGION_LEGEND, PHOTO_MATCH_REGIONS, REGION,
     type ArmLayer, type ArmRender, type CriterionStat, type JudgeClient, type JudgeCriterion, type JudgeRegionCriterion, type JudgeRun, type PerceptualScores, type PhotoMatchRegion, type RegionMasks, type RegionScore
 } from '../../../3d-engine/staged-location/photo-match-eval';
 import { readTileTriangles, decodeImageInMemory, type TileTriangles } from '../../../3d-engine/staged-location/tile-texture-transfer';
@@ -1137,13 +1137,28 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         };
     });
     for (const a of loaded) if (!a.triangles) throw new PhotoMatchError('no_build', `arm ${a.id} has no triangles${a.baseline && hasTarget ? ' on the target' : ''}.`);
-    // labels: an arm that stands in for the target is the target where it stands; a whole place follows the target's footprint
-    const placeRule = (_i: number, x: number, z: number) => (targetAt?.(x, z) ? REGION.target : REGION.neighbours);
+    // labels: an arm that stands in for the target is the target where it stands; a whole place follows the target's footprint,
+    // the picked structure's cells, else (an isolate as the target) the isolate's plan outline on the terrain grid
+    const placeArms = loaded.filter(a => a.scope === 'place').length;
+    const outline = isolate && placeArms ? planOutlineCells(isolate, terrain) : undefined;
+    const outlineCells = outline ? outline.reduce((n, f) => n + f, 0) : 0;
+    const placeAt = targetAt ?? (outline ? (x: number, z: number) => { const c = terrain.cellIndex(x, z); return c >= 0 && outline[c] === 1; } : undefined);
+    const placeRule = (_i: number, x: number, z: number) => (placeAt?.(x, z) ? REGION.target : REGION.neighbours);
     const armLabels = loaded.map(a => a.parts.map(l => (l.trees ? REGION.trees
         : a.baseline ? (hasTarget ? fullLabels.filter((_, i) => targetFlags[i]) : fullLabels)
             : triangleRegions(l.fixed!, terrain, a.scope === 'target' ? (hasTarget || isoFlags ? REGION.target : REGION.neighbours) : placeRule))));
     const targetArmsDrawTrees = loaded.some(a => a.scope === 'target' && a.treeLayers > 0);
-    const placeArms = loaded.filter(a => a.scope === 'place').length;
+    // each arm's triangles by label (a trees layer counted whole, every level)
+    const armTriangles = Object.fromEntries(loaded.map((a, k) => {
+        const n = { triangles: 0, target: 0, neighbours: 0, ground: 0, trees: 0 };
+        a.parts.forEach((l, j) => {
+            const lab = armLabels[k][j];
+            if (typeof lab === 'number') { const c = armLayerTriangles(l); n.triangles += c; n.trees += c; return; }
+            n.triangles += lab.length;
+            for (const v of lab) { if (v === REGION.target) n.target++; else if (v === REGION.neighbours) n.neighbours++; else if (v === REGION.ground) n.ground++; else if (v === REGION.trees) n.trees++; }
+        });
+        return [a.id, n];
+    }));
     const regionsNote = {
         method: `every triangle labelled from geometry alone, then each pixel by the surface its ray hits (z-buffer, the most common label of its samples; no hit is sky). Ground: no vertex more than ${PHOTO_MATCH_GROUND_BAND_M} m above the terrain under it (off the terrain: facing within 60 degrees of up). ` +
             'Standing geometry is the target, a measured crown or a neighbour. The masks are the reference tile\'s (the measured scan, whole), the same for every arm; the skyline band is every pixel near where standing geometry meets the sky. Colour and brightness decide nothing.',
@@ -1160,7 +1175,16 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
                     triangles: targetCount, areaM2: Math.round(pick.areaM2), heightM: r2(pick.heightM), geocodeToStructureM: r2(pick.geocodeToStructureM), footprintSource: pick.footprintSource
                 }
                 : { source: 'none', reason: 'the build isolated no structure and no structure stands within the pick\'s search window of the frame origin, so the building mask is empty and every standing triangle is a neighbour' },
-        arms: 'an arm that stands in for the target (scope target) is the target wherever it stands; a whole place (scope place) is labelled by the target\'s footprint, like the tile',
+        arms: 'an arm that stands in for the target (scope target) is the target wherever it stands; a whole place (scope place) is labelled by the target\'s footprint, like the tile'
+            + (outline ? ': with the isolate as the target, its plan outline (placeOutline)' : ''),
+        ...(outline ? {
+            placeOutline: {
+                source: 'the isolate\'s plan outline on the terrain grid, from geometry alone',
+                method: `every ${terrain.cellMeters} m cell whose centre lies within ${PHOTO_MATCH_OUTLINE_REACH_M} m in plan of one of the isolate's standing triangles (a roof by its area, a wall by its foot line), and every cell those enclose (a courtyard, a gap in the roof); a whole place's standing triangle is the target when its centroid falls in such a cell, else a neighbour, so a wall rebuilt up to half a metre outside the scanned one stays the target, and a neighbour's face within about a metre of the target's counts as the target`,
+                cells: outlineCells, areaM2: Math.round(outlineCells * terrain.cellMeters * terrain.cellMeters), reachM: PHOTO_MATCH_OUTLINE_REACH_M
+            }
+        } : {}),
+        armTriangles,
         trees: crownFlags ? 'the scanned crowns the run\'s tree strip measured (removed_trees.glb), and every regrown trees layer' : 'only regrown trees layers: the run records no tree strip, so scanned crowns count as neighbours'
     };
     let context: TileTriangles[] | undefined;
