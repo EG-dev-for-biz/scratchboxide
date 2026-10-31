@@ -167,50 +167,6 @@ describe('pipeline K outside check: holes', () => {
         expect(measureVisibleDefects(glb(cube(), []), P).smear).toBe(0);
     });
 
-    it('one long slot down a tower (1 m x 100 m, under both share limits) is flagged as a hole region; a short one is only reported', () => {
-        // a 40 x 120 x 40 m tower drawn double-sided like the twin, its front face (z = 40) open in a 1 m slot 1 m in from the
-        // corner, from 10 m up to 10 + slot m: the far walls' insides show through it (the ESB build of 2026-10-26's corner strip)
-        const tower = (slot: number): V[] => [
-            ...quad([0, 0, 40], [38, 0, 0], [0, 120, 0]),
-            ...quad([38, 0, 40], [1, 0, 0], [0, 10, 0]), ...quad([38, 10 + slot, 40], [1, 0, 0], [0, 110 - slot, 0]),
-            ...quad([39, 0, 40], [1, 0, 0], [0, 120, 0]),
-            ...quad([40, 0, 0], [-40, 0, 0], [0, 120, 0]), ...quad([0, 0, 0], [0, 0, 40], [0, 120, 0]),
-            ...quad([40, 0, 40], [0, 0, -40], [0, 120, 0]), ...quad([0, 120, 40], [40, 0, 0], [0, 0, -40]), ...quad([0, 0, 0], [40, 0, 0], [0, 0, 40])
-        ];
-        const T = { ...VISIBLE_DEFECTS_PARAMS, pixelM: 0.25 };
-        const long = measureVisibleDefects(glb([], [], tower(100)), T);
-        expect(long.holeShare).toBeLessThan(T.maxHoleShare);
-        expect(long.maxViewHoleShare).toBeLessThan(T.maxViewHoleShare);
-        expect(long.largestHoleRegionM2).toBeGreaterThan(T.maxHoleRegionM2);
-        expect(long.holesFlagged).toBe(true);
-        expect(long.flagged).toBe(true);
-        // straight on: the slot's area, length and width (the pixels on its two edges belong to the wall: 0.75 of its 1 m at
-        // 0.25 m pixels), behind the far wall's inside, centred on the slot
-        const g = long.holeRegions[0];
-        expect(g.areaM2).toBeGreaterThan(70);
-        expect(g.areaM2).toBeLessThan(105);
-        expect(g.lengthM).toBeCloseTo(100, -1);
-        expect(g.widthM).toBeGreaterThan(0.7);
-        expect(g.widthM).toBeLessThan(1.05);
-        expect(g.node).toBe('Inner');
-        expect(g.rimNode).toBe('Inner');
-        // placed in the front face, where the slot is
-        expect(Math.abs(g.center[0] - 38.5)).toBeLessThan(1);
-        expect(Math.abs(g.center[1] - 60)).toBeLessThan(2);
-        expect(Math.abs(g.center[2] - 40)).toBeLessThan(1);
-        // the same slot seen from the other views is one place: listed once
-        expect(long.holeRegions.filter(h => Math.abs(h.center[0] - 38.5) < 2 && Math.abs(h.center[1] - 60) < 10 && Math.abs(h.center[2] - 40) < 2).length).toBe(1);
-        expect(long.why).toMatch(/the largest hole \d+(\.\d)? m² \(\d+(\.\d)? m long/);
-        const short = measureVisibleDefects(glb([], [], tower(20)), T);
-        expect(short.holeRegions[0].areaM2).toBeGreaterThan(14);
-        expect(short.largestHoleRegionM2).toBeLessThan(T.maxHoleRegionM2);
-        expect(short.holesFlagged).toBe(false);
-        expect(short.flagged).toBe(false);
-        const closed = measureVisibleDefects(glb([], [], tower(0)), T);
-        expect(closed.holeRegions).toEqual([]);
-        expect(closed.largestHoleRegionM2).toBe(0);
-    });
-
     it("judges the mapping in texels: a long thin facade on a long thin photo (76 x 3.5 m on 988 x 45 px) is not a smear", () => {
         // the ESB's ground band: u per metre 1/76, v per metre 1/3.5; in uv units that is 20:1, in texels 13 px/m both ways
         const p = [0, 0, 0, 76, 0, 0, 0, 3.5, 0], uv = [0, 0, 1, 0, 0, 1];

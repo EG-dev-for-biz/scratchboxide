@@ -19,7 +19,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { searchTextureLibrary, type TextureLibraryEntry } from '../../../../common/spatial/texture-library-index';
-import { fetchLibrarySets, libraryColourPreview, loadTextureLibraryIndex, measureLibraryEntries } from '../../texture-library';
+import { fetchLibrarySets, libraryColourPreview, libraryEntryMeasured, loadTextureLibraryIndex, measureLibraryEntries } from '../../texture-library';
 import { libraryTextureEnergy, textureDistance } from './material-harvest';
 import { NativePythonRunnerService } from '../../native-python-runner-service';
 import { decodeImageInMemory } from '../tile-texture-transfer';
@@ -72,11 +72,20 @@ export async function resolveRegionSets(classes: RegionClass[], opts: {
     choose?: (rows: ChoiceRow[]) => Promise<Array<SetChoice | undefined>>;
 } = {}): Promise<RegionSet[]> {
     const repoRoot = opts.repoRoot ?? libraryRepoRoot();
-    const index = loadTextureLibraryIndex(repoRoot);
+    let index = loadTextureLibraryIndex(repoRoot);
     if (!index) throw new Error(`the texture library index has not been built (assets/textures/library/index.json under ${repoRoot})`);
-    const mapped = index.sets.filter(e => e.colour && e.maps.color && e.maps.normal && (e.maps.roughness || e.maps.arm));
     const notMetal = (e: TextureLibraryEntry) => !(e.metallic !== undefined && e.metallic >= REGION_FINISH.maxMetallic);
-    const pool = mapped.filter(e => e.realSizeM && Math.max(...e.realSizeM) <= FACADE_TILE.maxM && notMetal(e));
+    const wallScale = (e: TextureLibraryEntry) => !!e.maps.color && !!e.maps.normal && !!(e.maps.roughness || e.maps.arm) && !!e.realSizeM && Math.max(...e.realSizeM) <= FACADE_TILE.maxM && notMetal(e);
+    // every set of a facade's scale is ranked by its measured colour: any not yet measured is measured first (once; cached).
+    // Best effort: when the measuring fails, the sets already measured are ranked, and the build says so
+    const unmeasured = index.sets.filter(e => wallScale(e) && !e.colour && !libraryEntryMeasured(repoRoot, e.id));
+    if (unmeasured.length) {
+        opts.progress?.(`material regions: measuring ${unmeasured.length} library sets not yet measured`);
+        try { await measureLibraryEntries(unmeasured, { repoRoot, ...(opts.signal ? { signal: opts.signal } : {}) }); }
+        catch (err) { if (opts.signal?.aborted) throw err; opts.progress?.(`material regions: ${unmeasured.length} library sets could not be measured (${err instanceof Error ? err.message : String(err)}); ranking the sets already measured`); }
+        index = loadTextureLibraryIndex(repoRoot) ?? index;
+    }
+    const pool = index.sets.filter(e => e.colour && wallScale(e));
     if (!pool.length) throw new Error(`no texture library set that is not metal has a measured colour, a real size of at most ${FACADE_TILE.maxM} m and normal and roughness maps`);
     const query = (c: RegionClass) => ({ colorSrgb: c.meanLinear.map(linearToSrgb) as [number, number, number], colorSpreadLab: c.spreadLab, roughness: REGION_FINISH.roughness, metallic: REGION_FINISH.metallic, tileSizeM: FACADE_TILE.wantM });
     // every class's shortlist measured first, so its normal relief can be ranked (and a set measured as metal left out)
