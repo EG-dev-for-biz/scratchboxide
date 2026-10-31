@@ -34,7 +34,7 @@ import { CinematicBokehPass } from '../../services/optics/CinematicBokehPass';
 import { LensGlowPass, type LensGlowSettings } from '../../services/optics/LensGlowPass';
 import { TemporalAAPass } from '../../services/optics/TemporalAAPass';
 import { ColorHarmonyPass } from '../../services/postprocessing/ColorHarmonyPass';
-import { planColorHarmony, type ColorHarmonyPlan } from '../../services/postprocessing/color-harmony';
+import { harmonizeLinearRgb, planColorHarmony, type ColorHarmonyPlan } from '../../services/postprocessing/color-harmony';
 import { findDepthlessContent, findToneMapExemptContent, renderContentMask, renderObjectMask, sameContent } from '../../services/postprocessing/depthless-coverage';
 import { LOOK_BANDS, planLookMatch, type LookMatchPlan } from '../../services/postprocessing/look-match';
 import { lensMeasuresFocus } from './viewportFocus';
@@ -359,6 +359,31 @@ export interface ViewportOpticsFrameIO {
     measureFocus?: (camera: THREE.PerspectiveCamera, depthTexture: THREE.Texture | null, frame: { width: number; height: number; renderWidth: number; renderHeight: number }, issues: string[]) => number | null | undefined;
 }
 
+/**
+ * A look match in GLSL (look-match.ts applyLookMatch, which this repeats) over one set of knot uniforms: (sourceL,
+ * targetL, chromaGain, -) and (sourceA, sourceB, targetA, targetB), on display colours.
+ */
+function lookMatchGlsl(name: string, knotL: string, knotAB: string, count: string): string {
+    return /* glsl */ `
+        vec3 ${name}(vec3 shown) {
+            vec3 lin = uSrgbOutput ? sbDecode(clamp(shown, 0.0, 1.0)) : clamp(shown, 0.0, 1.0);
+            vec3 lab = sbToOklab(lin);
+            vec4 l0 = ${knotL}[0], l1 = ${knotL}[1], ab0 = ${knotAB}[0], ab1 = ${knotAB}[1];
+            for (int i = 1; i < ${LOOK_BANDS} - 1; i++) {
+                if (i + 1 >= ${count} || lab.x <= ${knotL}[i].x) break;
+                l0 = ${knotL}[i]; l1 = ${knotL}[i + 1]; ab0 = ${knotAB}[i]; ab1 = ${knotAB}[i + 1];
+            }
+            float t = clamp((lab.x - l0.x) / (l1.x - l0.x), 0.0, 1.0);
+            float L2 = lab.x < l0.x ? lab.x + (l0.y - l0.x) : lab.x > l1.x ? lab.x + (l1.y - l1.x) : mix(l0.y, l1.y, t);
+            vec4 ab = mix(ab0, ab1, t);
+            float gain = mix(l0.z, l1.z, t);
+            vec2 moved = (lab.yz - ab.xy) * gain + ab.zw;
+            vec3 graded = mix(lab, vec3(L2, moved), uLookMatch);
+            vec3 outLin = clamp(sbFromOklab(graded), 0.0, 1.0);
+            return uSrgbOutput ? sbEncode(outLin) : outLin;
+        }`;
+}
+
 const OUTPUT_SHADER = {
     vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -395,6 +420,10 @@ const OUTPUT_SHADER = {
         uniform int uKnotCount;
         uniform vec4 uKnotL[${LOOK_BANDS}];
         uniform vec4 uKnotAB[${LOOK_BANDS}];
+        // the sky's own knots (uSkyKnotCount 0: the sky is left as drawn)
+        uniform int uSkyKnotCount;
+        uniform vec4 uSkyKnotL[${LOOK_BANDS}];
+        uniform vec4 uSkyKnotAB[${LOOK_BANDS}];
         uniform sampler2D tObjects;
         uniform bool uSrgbOutput;
         varying vec2 vUv;
@@ -423,27 +452,15 @@ const OUTPUT_SHADER = {
         }
         vec3 sbDecode(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c)); }
         vec3 sbEncode(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
-        vec3 sbLookMatch(vec3 shown) {
-            vec3 lin = uSrgbOutput ? sbDecode(clamp(shown, 0.0, 1.0)) : clamp(shown, 0.0, 1.0);
-            vec3 lab = sbToOklab(lin);
-            vec4 l0 = uKnotL[0], l1 = uKnotL[1], ab0 = uKnotAB[0], ab1 = uKnotAB[1];
-            for (int i = 1; i < ${LOOK_BANDS} - 1; i++) {
-                if (i + 1 >= uKnotCount || lab.x <= uKnotL[i].x) break;
-                l0 = uKnotL[i]; l1 = uKnotL[i + 1]; ab0 = uKnotAB[i]; ab1 = uKnotAB[i + 1];
-            }
-            float t = clamp((lab.x - l0.x) / (l1.x - l0.x), 0.0, 1.0);
-            float L2 = lab.x < l0.x ? lab.x + (l0.y - l0.x) : lab.x > l1.x ? lab.x + (l1.y - l1.x) : mix(l0.y, l1.y, t);
-            vec4 ab = mix(ab0, ab1, t);
-            float gain = mix(l0.z, l1.z, t);
-            vec2 moved = (lab.yz - ab.xy) * gain + ab.zw;
-            vec3 graded = mix(lab, vec3(L2, moved), uLookMatch);
-            vec3 outLin = clamp(sbFromOklab(graded), 0.0, 1.0);
-            return uSrgbOutput ? sbEncode(outLin) : outLin;
-        }
+${lookMatchGlsl('sbLookObjects', 'uKnotL', 'uKnotAB', 'uKnotCount')}
+${lookMatchGlsl('sbLookSky', 'uSkyKnotL', 'uSkyKnotAB', 'uSkyKnotCount')}
+        // the objects (where tObjects marks them) take their match, the rest the sky's when it has one
         vec3 sbMatched(vec3 shown) {
             if (uLookMatch <= 0.0) return shown;
             float w = clamp(texture2D(tObjects, vUv).r, 0.0, 1.0);
-            return w > 0.0 ? mix(shown, sbLookMatch(shown), w) : shown;
+            vec3 outRgb = w > 0.0 ? mix(shown, sbLookObjects(shown), w) : shown;
+            if (uSkyKnotCount >= 2 && w < 1.0) outRgb = mix(outRgb, sbLookSky(shown), 1.0 - w);
+            return outRgb;
         }
 
         float sbHash(vec3 p) {
@@ -493,7 +510,7 @@ const OUTPUT_SHADER = {
             if (uUseUntoned) gl_FragColor.rgb = mix(gl_FragColor.rgb, untonedRgb, clamp(texture2D(tUntoned, vUv).a, 0.0, 1.0));
             #include <colorspace_fragment>
             if (uUseDisplay) gl_FragColor.rgb = mix(gl_FragColor.rgb, untonedRgb, clamp(texture2D(tDisplay, vUv).a, 0.0, 1.0));
-            gl_FragColor = vec4(sbApplyGrain(mix(uBackground, sbMatched(gl_FragColor.rgb), a)), 1.0);
+            gl_FragColor = vec4(sbApplyGrain(sbMatched(mix(uBackground, gl_FragColor.rgb, a))), 1.0);
         }
     `
 };
@@ -958,7 +975,10 @@ export class ViewportOpticsChain {
                     tUntoned: { value: null }, uUseUntoned: { value: false }, tDisplay: { value: null }, uUseDisplay: { value: false },
                     uLookMatch: { value: 0 }, uKnotCount: { value: 0 }, tObjects: { value: null }, uSrgbOutput: { value: true },
                     uKnotL: { value: Array.from({ length: LOOK_BANDS }, () => new THREE.Vector4()) },
-                    uKnotAB: { value: Array.from({ length: LOOK_BANDS }, () => new THREE.Vector4()) }
+                    uKnotAB: { value: Array.from({ length: LOOK_BANDS }, () => new THREE.Vector4()) },
+                    uSkyKnotCount: { value: 0 },
+                    uSkyKnotL: { value: Array.from({ length: LOOK_BANDS }, () => new THREE.Vector4()) },
+                    uSkyKnotAB: { value: Array.from({ length: LOOK_BANDS }, () => new THREE.Vector4()) }
                 },
                 vertexShader: OUTPUT_SHADER.vertexShader,
                 fragmentShader: OUTPUT_SHADER.fragmentShader,
@@ -1002,6 +1022,13 @@ export class ViewportOpticsChain {
             drawn.push('film-grain');
         }
         // a texture / cube background was drawn into the target opaque; the composite then never shows this colour
+        // a flat background is composited here, outside the harmony pass's target: a grade that takes the sky grades it here
+        const harmonyOnSky = harmony && drawn.includes('color-harmony') && harmony.includeSky ? harmony : null;
+        if (backgroundColour && harmonyOnSky) {
+            // a Color holds linear (working colour space) values
+            const [r, g, b] = harmonizeLinearRgb([backgroundColour.r, backgroundColour.g, backgroundColour.b], harmonyOnSky);
+            backgroundColour.setRGB(r, g, b);
+        }
         const bg = backgroundColour ? backgroundColour.getRGB({ r: 0, g: 0, b: 0 }, renderer.outputColorSpace) : { r: 0, g: 0, b: 0 };
         (ou.uBackground.value as THREE.Vector3).set(bg.r, bg.g, bg.b);
         // the look match, on the objects as shown
@@ -1010,12 +1037,15 @@ export class ViewportOpticsChain {
         ou.uSrgbOutput.value = renderer.outputColorSpace === THREE.SRGBColorSpace;
         if (look) {
             ou.uKnotCount.value = look.knots.length;
-            look.knots.forEach((k, i) => {
-                (ou.uKnotL.value as THREE.Vector4[])[i].set(k.sourceL, k.targetL, k.chromaGain, 0);
-                (ou.uKnotAB.value as THREE.Vector4[])[i].set(k.sourceA, k.sourceB, k.targetA, k.targetB);
+            const load = (knots: LookMatchPlan['knots'], l: THREE.Vector4[], ab: THREE.Vector4[]) => knots.forEach((k, i) => {
+                l[i].set(k.sourceL, k.targetL, k.chromaGain, 0);
+                ab[i].set(k.sourceA, k.sourceB, k.targetA, k.targetB);
             });
+            load(look.knots, ou.uKnotL.value, ou.uKnotAB.value);
+            if (look.sky) load(look.sky, ou.uSkyKnotL.value, ou.uSkyKnotAB.value);
             drawn.push('look-match');
         }
+        ou.uSkyKnotCount.value = look?.sky ? look.sky.length : 0;
         renderer.setRenderTarget(null);
         if (sample) {
             // the frame as it shows before the match, read back as drawn, then the frame drawn again with it

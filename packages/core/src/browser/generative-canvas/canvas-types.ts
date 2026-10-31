@@ -995,7 +995,7 @@ export interface SceneColorHarmonySector {
  * A colour harmony grade on the viewport (the tool strip's Colour harmony panel, sb_set_color_harmony): every hue drawn
  * moves toward the nearest sector of a template turned to `hueDeg` on the OKLCH hue circle (Cohen-Or et al. 2006), keeping
  * its lightness, so shading and texture stay and only the colour changes. Drawn in linear light before tone mapping, on
- * the scene's objects only: the sky and background are their own component and are never graded. The template is any list of sectors: no named template types.
+ * the scene's objects only unless `includeSky` asks for the sky and background too. The template is any list of sectors: no named template types.
  */
 export interface SceneColorHarmony {
     /** Where the template is turned, degrees on the OKLCH hue circle (about 30 red, 110 yellow, 145 green, 265 blue). */
@@ -1008,6 +1008,8 @@ export interface SceneColorHarmony {
     chroma?: number;
     /** Colour added at hueDeg, 0-1, scaled by lightness (default 0): what colours neutral surfaces (clay, white, grey), which have no hue to move. */
     tint?: number;
+    /** Grade the sky and background too (opt-in; default false: the scene's objects only). */
+    includeSky?: boolean;
 }
 
 /**
@@ -1042,7 +1044,7 @@ export interface SceneLookMatchKnot {
  * A look matched from a reference photo onto the viewport's objects (the Colour harmony panel's reference photo,
  * sb_set_look_match): the objects' display colours, band by lightness, are mapped onto the reference's: a tone curve, a
  * colour per band, and the spread of colour about it. Drawn after tone mapping (a grade on what is shown, the domain the
- * photo was measured in), on the scene's objects only, never the sky. The fit is made against one view; `reference.bands`
+ * photo was measured in), on the scene's objects only, and on the sky only when `sky` holds its own fit. The fit is made against one view; `reference.bands`
  * keep the photo's look, so it can be refitted to another view without the photo.
  */
 export interface SceneLookMatch {
@@ -1055,6 +1057,11 @@ export interface SceneLookMatch {
     };
     /** By sourceL ascending. */
     knots: SceneLookMatchKnot[];
+    /**
+     * The sky matched too (opt-in): what is not the scene's objects (the background, a sky texture or dome) mapped onto the
+     * photo's sky (cut out by the segmenter) the same way. Absent = the sky is left as drawn.
+     */
+    sky?: { bands: SceneLookBand[]; knots: SceneLookMatchKnot[] };
     /** How far the match is applied, 0-1 (default 1). */
     strength?: number;
 }

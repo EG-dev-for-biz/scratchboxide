@@ -40,6 +40,28 @@ Step 1 of the reference-photo look match (`services/postprocessing/look-match.ts
 - **Console:** no errors from the grade, the panel or WebGL. Connection-refused errors appeared only while the backend was still starting.
 - **Screenshots** (gitignored): `docs/screenshots/look-match/esb_unmatched.png`, `esb_matched.png` and `esb_panel.jpg`.
 
+## Second round: the pink windows, and the sky (2026-10-31)
+
+The user's screenshots showed pink windows and pink speckled stone, under a studio sky that did not match the photo. There were two causes:
+
+- **The hue harmony was on** (hue 30, Analogous, 100%). It moves the blue-grey glass round to the nearest edge of a red template, which is magenta. That is what the harmony does with that template; the panel's switch turns it off.
+- **The refit had a colour gain of 3 in a mid band.** The view's spread there was 0.004 against the photo's 0.013, and a ratio of two such small spreads amplified the harmony's magenta.
+
+Fixes:
+
+- **The gain floor.** The gain is now the ratio of spreads with a floor of 0.015 added in quadrature to each (`chromaGainOf`), held within 0.5 to 2. The same view refitted with the harmony still on gives gains of 0.92 to 1.31, where the old ones reached 3, and the windows read grey again: `esb_harmony_old_gain.png` against `esb_harmony_new_gain.png`.
+- **Flat surfaces fit properly.** Source bands of one lightness (a flat background, a flat surface) are now merged into one knot whose target is the mean of their reference bands. Before, a flat colour went to the reference's darkest band.
+- **The sky, opt-in, for both grades:**
+  - the look match's **Match the sky too** cuts "the sky" out of the photo (a second segmenter call, run alongside the first) and fits everything that is not an object onto it (`lookMatch.sky`). **Unmatch the sky** or `sb_set_look_match { clearSky: true }` removes it;
+  - the harmony's **Grade the sky too** (`colorHarmony.includeSky`) grades every pixel of the harmony pass, and the chain grades a flat background colour itself, since that colour is composited by the output pass.
+
+Live, with the harmony off and the photo matched again with the sky on, both cut-outs returned in 21 s:
+
+- **The sky:** the flat studio background went from 176, 184, 196 to 187, 196, 211. Its Oklab lightness is 0.818 and colour (-0.004, -0.023), against the photo sky's mean of 0.818 and (-0.005, -0.022). See `esb_match_with_sky.png`.
+- **The building:** mean 97, 99, 99, neutral grey stone with no pink.
+
+**Limit:** a flat sky becomes the photo sky's mean colour, still flat. The photo's gradient and clouds need the sky itself to change (the Weather tool, step 2), not a grade.
+
 ## Candidate Tool/Service Ideas
 
 - **Refit as the camera settles.** A fit is made against one framing and drifts when the view changes (0.07 in L here). Re-measure the view, against the stored photo bands, when the camera stops moving.

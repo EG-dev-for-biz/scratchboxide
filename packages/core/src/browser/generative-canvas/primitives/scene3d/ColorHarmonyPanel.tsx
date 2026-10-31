@@ -36,8 +36,14 @@ export interface ColorHarmonyControlProps {
 /** The reference photo is measured at this size (longest side, pixels): enough for a band's mean, quick to read. */
 const REFERENCE_MEASURE_PX = 1024;
 
-/** A photo file's display colours at REFERENCE_MEASURE_PX, and the cut-out of `target` in it (when one is given). */
-async function readReference(file: File, target: string): Promise<{ rgba: Uint8ClampedArray; mask?: Uint8ClampedArray; found?: string }> {
+/** A photo read for measuring: its display colours at REFERENCE_MEASURE_PX, and how to cut parts out of it. */
+interface ReferencePhoto {
+    rgba: Uint8ClampedArray;
+    /** The cut-out of `target` (the segmenter's mask, at the same size), and what the segmenter found. */
+    cutOut(target: string): Promise<{ mask: Uint8ClampedArray; found?: string }>;
+}
+
+async function readReference(file: File): Promise<ReferencePhoto> {
     const bitmap = await createImageBitmap(file);
     const scale = Math.min(1, REFERENCE_MEASURE_PX / Math.max(bitmap.width, bitmap.height));
     const w = Math.max(1, Math.round(bitmap.width * scale)), h = Math.max(1, Math.round(bitmap.height * scale));
@@ -51,28 +57,47 @@ async function readReference(file: File, target: string): Promise<{ rgba: Uint8C
     };
     const rgba = draw(bitmap);
     bitmap.close();
-    if (!target) return { rgba };
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    let binary = '';
-    for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-    const res = await fetch('/api/color-match/segment', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageBase64: btoa(binary), mimeType: file.type, target })
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok || !body.success) throw new Error(body.error || `the segmenter answered ${res.status}`);
-    const maskBitmap = await createImageBitmap(new Blob([Uint8Array.from(atob(body.maskBase64), c => c.charCodeAt(0))], { type: 'image/png' }));
-    const mask = draw(maskBitmap);
-    maskBitmap.close();
-    return { rgba, mask, found: body.found };
+    let encoded: string | null = null;
+    const cutOut = async (target: string) => {
+        if (encoded === null) {
+            const bytes = new Uint8Array(await file.arrayBuffer());
+            let binary = '';
+            for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+            encoded = btoa(binary);
+        }
+        const res = await fetch('/api/color-match/segment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ imageBase64: encoded, mimeType: file.type, target })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.success) throw new Error(body.error || `the segmenter answered ${res.status}`);
+        const maskBitmap = await createImageBitmap(new Blob([Uint8Array.from(atob(body.maskBase64), c => c.charCodeAt(0))], { type: 'image/png' }));
+        const mask = draw(maskBitmap);
+        maskBitmap.close();
+        return { mask, found: body.found as string | undefined };
+    };
+    return { rgba, cutOut };
 }
 
-/** The look of the viewport's objects as shown (the selected one, when given). */
-async function measureViewport(sample: (ids?: string[]) => Promise<ViewportObjectSample>, objectId: string | null): Promise<SceneLookBand[]> {
+/** What the photo's sky is matched with: the segmenter's description of it. */
+const SKY_TARGET = 'the sky';
+
+/** The mask with every weight flipped (what is not the objects). */
+const inverted = (mask: Uint8Array): Uint8Array => mask.map(v => 255 - v);
+
+/**
+ * The look of the viewport's objects as shown (the selected one, when given), and of everything else (the sky and
+ * background) when `withSky`.
+ */
+async function measureViewport(sample: (ids?: string[]) => Promise<ViewportObjectSample>, objectId: string | null, withSky: boolean): Promise<{ objects: SceneLookBand[]; sky?: SceneLookBand[] }> {
     const shot = await sample(objectId ? [objectId] : undefined);
     if (shot.missing.length) throw new Error(`${shot.missing.join(', ')} is not in the viewport`);
-    return measureLook({ rgba: shot.rgba, mask: shot.mask, maskStride: 4 }, objectId ? 'the selected object' : 'the scene\'s objects');
+    const objects = measureLook({ rgba: shot.rgba, mask: shot.mask, maskStride: 4 }, objectId ? 'the selected object' : 'the scene\'s objects');
+    if (!withSky) return { objects };
+    // the sky is what is not any object, whichever objects the match is measured on
+    const all = objectId ? await sample() : shot;
+    return { objects, sky: measureLook({ rgba: all.rgba, mask: inverted(all.mask), maskStride: 4 }, 'the sky in the view') };
 }
 
 /** Template shapes the panel offers: each only writes a list of sectors (the label names nothing the shader reads). */
@@ -160,6 +185,7 @@ export function ColorHarmonyControl({ sceneData, mutateSceneData, selectedObject
     const [refUrl, setRefUrl] = React.useState<string | null>(null);
     const [refTarget, setRefTarget] = React.useState('');
     const [onSelected, setOnSelected] = React.useState(false);
+    const [withSky, setWithSky] = React.useState(false);
     const [matchState, setMatchState] = React.useState<{ busy?: string; error?: string; note?: string }>({});
     const fileInput = React.useRef<HTMLInputElement>(null);
     React.useEffect(() => () => { if (refUrl) URL.revokeObjectURL(refUrl); }, [refUrl]);
@@ -184,14 +210,27 @@ export function ColorHarmonyControl({ sceneData, mutateSceneData, selectedObject
         if (!refFile || !sampleObjects) return;
         const target = refTarget.trim();
         try {
-            setMatchState({ busy: target ? `Finding ${JSON.stringify(target)} in the photo…` : 'Measuring the photo…' });
-            const ref = await readReference(refFile, target);
-            const reference = measureLook({ rgba: ref.rgba, mask: ref.mask, maskStride: 4 }, target ? `${JSON.stringify(target)} in the photo` : 'the photo');
+            const what = [target && JSON.stringify(target), withSky && 'the sky'].filter(Boolean).join(' and ');
+            setMatchState({ busy: what ? `Finding ${what} in the photo…` : 'Measuring the photo…' });
+            const photo = await readReference(refFile);
+            // the photo's two cut-outs at once; a photo with no sky still matches its objects
+            const [cut, skyCut] = await Promise.all([
+                target ? photo.cutOut(target) : Promise.resolve(null),
+                withSky ? photo.cutOut(SKY_TARGET).catch((e: Error) => e) : Promise.resolve(null)
+            ]);
+            const reference = measureLook({ rgba: photo.rgba, mask: cut?.mask, maskStride: 4 }, target ? `${JSON.stringify(target)} in the photo` : 'the photo');
+            const skyRef = skyCut && !(skyCut instanceof Error) ? measureLook({ rgba: photo.rgba, mask: skyCut.mask, maskStride: 4 }, 'the sky in the photo') : null;
             setMatchState({ busy: 'Measuring the view…' });
-            const source = await measureViewport(sampleObjects, measureOn);
-            const next: SceneLookMatch = { reference: { label: refFile.name, ...(target ? { target } : {}), bands: reference }, knots: fitLookMatch(source, reference), ...(look?.strength !== undefined ? { strength: look.strength } : {}) };
-            writeLook(next, { reference: refFile.name, target: target || undefined, measuredOn: measureOn ?? 'all objects' });
-            setMatchState({ note: `Matched to ${refFile.name}${ref.found ? ` (${ref.found})` : ''}, measured on ${measureOn ? 'the selected object' : 'all objects'} in this view.` });
+            const source = await measureViewport(sampleObjects, measureOn, !!skyRef);
+            const next: SceneLookMatch = {
+                reference: { label: refFile.name, ...(target ? { target } : {}), bands: reference },
+                knots: fitLookMatch(source.objects, reference),
+                ...(skyRef && source.sky ? { sky: { bands: skyRef, knots: fitLookMatch(source.sky, skyRef) } } : {}),
+                ...(look?.strength !== undefined ? { strength: look.strength } : {})
+            };
+            writeLook(next, { reference: refFile.name, target: target || undefined, sky: !!next.sky, measuredOn: measureOn ?? 'all objects' });
+            const skyNote = skyCut instanceof Error ? ` The sky was not matched: ${skyCut.message}` : next.sky ? ' The sky is matched to the photo\'s sky.' : '';
+            setMatchState({ note: `Matched to ${refFile.name}${cut?.found ? ` (${cut.found})` : ''}, measured on ${measureOn ? 'the selected object' : 'all objects'} in this view.${skyNote}` });
         } catch (e) {
             setMatchState({ error: (e as Error).message });
         }
@@ -200,9 +239,10 @@ export function ColorHarmonyControl({ sceneData, mutateSceneData, selectedObject
         if (!look || !sampleObjects) return;
         try {
             setMatchState({ busy: 'Measuring the view…' });
-            const source = await measureViewport(sampleObjects, measureOn);
-            writeLook({ ...look, knots: fitLookMatch(source, look.reference.bands) }, { refit: true, measuredOn: measureOn ?? 'all objects' });
-            setMatchState({ note: `Refitted to this view (${measureOn ? 'the selected object' : 'all objects'}).` });
+            const source = await measureViewport(sampleObjects, measureOn, !!look.sky);
+            const sky = look.sky && source.sky ? { sky: { bands: look.sky.bands, knots: fitLookMatch(source.sky, look.sky.bands) } } : {};
+            writeLook({ ...look, knots: fitLookMatch(source.objects, look.reference.bands), ...sky }, { refit: true, measuredOn: measureOn ?? 'all objects' });
+            setMatchState({ note: `Refitted to this view (${measureOn ? 'the selected object' : 'all objects'}${look.sky ? ', and the sky' : ''}).` });
         } catch (e) {
             setMatchState({ error: (e as Error).message });
         }
@@ -280,7 +320,15 @@ export function ColorHarmonyControl({ sceneData, mutateSceneData, selectedObject
                     {range('Strength', h.strength ?? 1, 1, (v, live) => set({ strength: v }, live), `${Math.round((h.strength ?? 1) * 100)}%`)}
                     {range('Saturation', h.chroma ?? 1, 2, (v, live) => set({ chroma: v }, live), `${Math.round((h.chroma ?? 1) * 100)}%`)}
                     {range('Tint (colours greys and clay)', h.tint ?? 0, 1, (v, live) => set({ tint: v }, live), `${Math.round((h.tint ?? 0) * 100)}%`)}
-                    <div className="sb-cam-note">Scene objects only, never the sky. Keeps lightness, so shading stays.</div>
+                    <div className="sb-cam-chips">
+                        <button
+                            type="button" role="switch" aria-checked={!!h.includeSky}
+                            className={`sb-cam-chip ${current && h.includeSky ? 'sb-cam-chip-on' : ''}`}
+                            onClick={() => set({ includeSky: !h.includeSky })}
+                            title="Grade the sky and background as well as the scene's objects"
+                        >Grade the sky too</button>
+                    </div>
+                    <div className="sb-cam-note">{current && h.includeSky ? 'The objects and the sky are graded.' : 'Scene objects only; the sky is left as drawn.'} Keeps lightness, so shading stays.</div>
                     <div className="sb-cam-section sb-look-match">
                         <div className="sb-cam-readout">
                             <span>Match a reference photo</span>
@@ -310,7 +358,16 @@ export function ColorHarmonyControl({ sceneData, mutateSceneData, selectedObject
                             <div className="sb-cam-chips" style={{ marginTop: 6 }}>
                                 <button type="button" className={`sb-cam-chip ${!measureOn ? 'sb-cam-chip-on' : ''}`} onClick={() => setOnSelected(false)}>All objects</button>
                                 <button type="button" className={`sb-cam-chip ${measureOn ? 'sb-cam-chip-on' : ''}`} disabled={!selectedObjectId} title={selectedObjectId ? undefined : 'Select an object in the viewport first'} onClick={() => setOnSelected(true)}>Selected object</button>
+                                {refFile && (
+                                    <button
+                                        type="button" role="switch" aria-checked={withSky}
+                                        className={`sb-cam-chip ${withSky ? 'sb-cam-chip-on' : ''}`}
+                                        onClick={() => setWithSky(v => !v)}
+                                        title="Also match the view's sky and background to the photo's sky"
+                                    >Match the sky too</button>
+                                )}
                                 {refFile && <button type="button" className="sb-cam-chip sb-cam-chip-on" disabled={!!matchState.busy || !sampleObjects} onClick={match}>Match</button>}
+                                {look?.sky && <button type="button" className="sb-cam-chip" onClick={() => setLook({ clearSky: true })} title="Leave the sky as drawn">Unmatch the sky</button>}
                                 {look && <button type="button" className="sb-cam-chip" disabled={!!matchState.busy || !sampleObjects} onClick={refit} title="Measure this view again against the matched photo">Refit to view</button>}
                             </div>
                         )}

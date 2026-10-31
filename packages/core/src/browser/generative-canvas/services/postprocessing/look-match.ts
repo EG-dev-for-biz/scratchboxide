@@ -30,11 +30,14 @@ export const MAX_LOOK_PIXELS = 200_000;
 /** Pixels whose mask weight is under this are left out. */
 export const LOOK_MASK_THRESHOLD = 0.5;
 /**
- * Spread ratio bounds. Below MIN_SOURCE_SPREAD the objects have no colour to scale (clay, grey): their gain is 1 and the
- * band's colour comes from the mean shift alone, so noise is never amplified into colour.
+ * Spread ratio bounds. The ratio is taken with SPREAD_FLOOR added (in quadrature) to both spreads, so a band with little
+ * colour (stone, glass, clay: a spread of a few thousandths) is not scaled by a ratio of two small, noisy numbers: its
+ * colour comes mostly from the mean shift, and the colour it has (or another grade gave it) is not amplified.
  */
-export const CHROMA_GAIN_RANGE: [number, number] = [0.25, 3];
-export const MIN_SOURCE_SPREAD = 0.004;
+export const CHROMA_GAIN_RANGE: [number, number] = [0.5, 2];
+export const SPREAD_FLOOR = 0.015;
+/** Source bands whose lightness is within this of each other are one knot (a flat surface, a flat sky): see fitLookMatch. */
+export const TIED_LIGHTNESS = 2e-3;
 /** The tone curve's slope between knots is kept within this range, so a step in the photo's histogram is not a step on screen. */
 export const TONE_SLOPE_RANGE: [number, number] = [0.25, 4];
 
@@ -50,6 +53,8 @@ export interface LookPixels {
 export interface LookMatchPlan {
     knots: SceneLookMatchKnot[];
     strength: number;
+    /** The sky's own match (what is not the objects), or null when the sky is left as drawn. */
+    sky: SceneLookMatchKnot[] | null;
 }
 
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -117,43 +122,67 @@ export function measureLook(px: LookPixels, side: string): SceneLookBand[] {
     return bands;
 }
 
+/** The colour gain of a band: the ratio of spreads, each with SPREAD_FLOOR added in quadrature, within CHROMA_GAIN_RANGE. */
+export function chromaGainOf(sourceSpread: number, referenceSpread: number): number {
+    const f2 = SPREAD_FLOOR * SPREAD_FLOOR;
+    return clamp(Math.sqrt((referenceSpread * referenceSpread + f2) / (sourceSpread * sourceSpread + f2)), CHROMA_GAIN_RANGE[0], CHROMA_GAIN_RANGE[1]);
+}
+
 /**
- * The map from the objects' look onto the reference's: one knot per band, at the same rank. Source lightness is made
- * strictly rising (a flat render has equal medians), and the tone curve's slope kept within TONE_SLOPE_RANGE.
+ * The map from the objects' look onto the reference's: one knot per band, at the same rank. Source bands of one lightness
+ * (a flat surface, a flat background: every pixel the same) are one knot whose target is the mean of their reference
+ * bands, so a flat colour goes to the reference's middle, not to its darkest band; a single knot becomes a plain offset.
+ * The tone curve's slope is kept within TONE_SLOPE_RANGE.
  */
 export function fitLookMatch(source: SceneLookBand[], reference: SceneLookBand[]): SceneLookMatchKnot[] {
     if (source.length !== reference.length || source.length < 2) throw new Error(`a look match needs the same number of bands on both sides (got ${source.length} and ${reference.length})`);
+    // runs of tied source lightness, each averaged on both sides
+    const groups: Array<{ s: SceneLookBand; r: SceneLookBand }> = [];
+    for (let k = 0; k < source.length;) {
+        let j = k + 1;
+        while (j < source.length && source[j].L - source[k].L < TIED_LIGHTNESS) j++;
+        const mean = (bands: SceneLookBand[], key: keyof SceneLookBand) => bands.slice(k, j).reduce((t, b) => t + b[key], 0) / (j - k);
+        const avg = (bands: SceneLookBand[]): SceneLookBand => ({ L: mean(bands, 'L'), a: mean(bands, 'a'), b: mean(bands, 'b'), spread: mean(bands, 'spread') });
+        groups.push({ s: avg(source), r: avg(reference) });
+        k = j;
+    }
     const knots: SceneLookMatchKnot[] = [];
     let lastS = -Infinity, lastT = -Infinity;
-    for (let k = 0; k < source.length; k++) {
-        const s = source[k], r = reference[k];
-        const sourceL = Math.max(s.L, lastS + 1e-3);
+    for (const { s, r } of groups) {
+        const sourceL = Math.max(s.L, lastS + TIED_LIGHTNESS);
         let targetL = r.L;
-        if (k > 0) {
+        if (knots.length > 0) {
             const dS = sourceL - lastS;
             targetL = clamp(targetL, lastT + dS * TONE_SLOPE_RANGE[0], lastT + dS * TONE_SLOPE_RANGE[1]);
         }
-        const chromaGain = s.spread < MIN_SOURCE_SPREAD ? 1 : clamp(r.spread / s.spread, CHROMA_GAIN_RANGE[0], CHROMA_GAIN_RANGE[1]);
-        knots.push({ sourceL, targetL, sourceA: s.a, sourceB: s.b, targetA: r.a, targetB: r.b, chromaGain });
+        knots.push({ sourceL, targetL, sourceA: s.a, sourceB: s.b, targetA: r.a, targetB: r.b, chromaGain: chromaGainOf(s.spread, r.spread) });
         lastS = sourceL; lastT = targetL;
     }
+    // one knot: the same offset carried a little above it (the map needs a segment)
+    if (knots.length === 1) knots.push({ ...knots[0], sourceL: knots[0].sourceL + 0.01, targetL: knots[0].targetL + 0.01 });
     return knots;
 }
 
 /** What a scene's look match draws, or null (with the reason in issues when it is malformed). */
 export function planLookMatch(m: SceneLookMatch | undefined | null): { lookMatch: LookMatchPlan | null; issues: string[] } {
     if (!m) return { lookMatch: null, issues: [] };
-    const knots = Array.isArray(m.knots) ? m.knots : [];
     const keys: Array<keyof SceneLookMatchKnot> = ['sourceL', 'targetL', 'sourceA', 'sourceB', 'targetA', 'targetB', 'chromaGain'];
-    const ok = knots.length >= 2 && knots.length <= LOOK_BANDS && knots.every((k, i) => k && keys.every(key => finite(k[key])) && (i === 0 || k.sourceL > knots[i - 1].sourceL));
-    if (!ok) return { lookMatch: null, issues: [`look match not drawn: it needs 2 to ${LOOK_BANDS} knots of finite numbers, by rising sourceL`] };
+    const valid = (knots: unknown): knots is SceneLookMatchKnot[] => Array.isArray(knots) && knots.length >= 2 && knots.length <= LOOK_BANDS
+        && knots.every((k, i) => k && keys.every(key => finite(k[key])) && (i === 0 || k.sourceL > knots[i - 1].sourceL));
+    if (!valid(m.knots)) return { lookMatch: null, issues: [`look match not drawn: it needs 2 to ${LOOK_BANDS} knots of finite numbers, by rising sourceL`] };
+    const issues: string[] = [];
+    let sky: SceneLookMatchKnot[] | null = null;
+    if (m.sky) {
+        if (valid(m.sky.knots)) sky = m.sky.knots.map(k => ({ ...k }));
+        else issues.push(`the look match's sky not drawn: it needs 2 to ${LOOK_BANDS} knots of finite numbers, by rising sourceL`);
+    }
     const strength = finite(m.strength) ? clamp(m.strength, 0, 1) : 1;
-    if (strength === 0) return { lookMatch: null, issues: [] };
-    return { lookMatch: { knots: knots.map(k => ({ ...k })), strength }, issues: [] };
+    if (strength === 0) return { lookMatch: null, issues };
+    return { lookMatch: { knots: m.knots.map(k => ({ ...k })), strength, sky }, issues };
 }
 
 /** One display colour (each channel 0-1) through the match, as the shader does it. */
-export function applyLookMatch(rgb: readonly [number, number, number], plan: LookMatchPlan): [number, number, number] {
+export function applyLookMatch(rgb: readonly [number, number, number], plan: Pick<LookMatchPlan, 'knots' | 'strength'>): [number, number, number] {
     const [L, a, b] = displayToOklab(rgb[0], rgb[1], rgb[2]);
     const ks = plan.knots;
     // the segment holding L; past either end, the end knot's offsets carry on
@@ -171,9 +200,10 @@ export function applyLookMatch(rgb: readonly [number, number, number], plan: Loo
     return oklabToDisplay(L + (L2 - L) * s, a + (a2 - a) * s, b + (b2 - b) * s);
 }
 
-/** Parameters of sb_set_look_match: strength (null resets it), or clear. The fit itself is made from a reference photo. */
+/** Parameters of sb_set_look_match: strength (null resets it), clearSky (leave the sky as drawn), or clear. The fit itself is made from a reference photo. */
 export interface SetLookMatchParams {
     strength?: number | null;
+    clearSky?: boolean;
     clear?: boolean;
 }
 
@@ -188,5 +218,6 @@ export function mergeLookMatch(previous: SceneLookMatch | undefined, params: Set
         if (!finite(params.strength) || params.strength < 0 || params.strength > 1) fail(`strength must be in [0, 1] (got ${String(params.strength)})`);
         next.strength = params.strength;
     }
+    if (params.clearSky) delete next.sky;
     return next;
 }

@@ -11,7 +11,9 @@
  * A reference photo's look matched onto the viewport's objects (look-match.ts, the output pass, sb_set_look_match):
  * - a look is measured by lightness band on the masked pixels only;
  * - a view matched to itself is unchanged; a grey render matched to a warm, contrasty photo then measures as the photo;
- * - a colourless (clay) render takes the photo's colour from the mean shift, never from amplified noise;
+ * - a colourless (clay) render takes the photo's colour from the mean shift, never from amplified noise, and a band with
+ *   little colour is not scaled by a ratio of two small spreads;
+ * - a flat colour (a studio background) goes to the reference's middle; the sky is matched only when asked;
  * - the tone curve's slope is bounded, the chain draws the match in the output pass before the grain, and the shader
  *   repeats the reference maths' constants.
  */
@@ -22,6 +24,7 @@ import * as path from 'path';
 import {
     applyLookMatch,
     CHROMA_GAIN_RANGE,
+    chromaGainOf,
     displayToOklab,
     fitLookMatch,
     LOOK_BANDS,
@@ -121,12 +124,12 @@ describe('fitting and applying a look match', () => {
         expect(after[LOOK_BANDS - 1].b).toBeGreaterThan(0);
     });
 
-    it('a colourless render takes the colour from the mean shift, its gain kept at 1', () => {
+    it('a colourless render takes the colour from the mean shift, its gain near 1', () => {
         const n = 6000;
         const clay = measureLook(image(n, ramp(n, 0.3, 0.8)), 'clay');
         const stone = measureLook(image(n, i => { const v = 0.3 + (0.5 * i) / (n - 1); return [v, v * 0.92, v * 0.8]; }), 'stone');
         const knots = fitLookMatch(clay, stone);
-        for (const k of knots) expect(k.chromaGain).toBe(1);
+        for (const k of knots) expect(k.chromaGain).toBeCloseTo(1, 1);
         const out = applyLookMatch([0.55, 0.55, 0.55], { knots, strength: 1 });
         const lab = displayToOklab(...out);
         expect(Math.hypot(lab[1], lab[2])).toBeGreaterThan(0.02);
@@ -149,6 +152,27 @@ describe('fitting and applying a look match', () => {
         expect(half).toBeCloseTo((full + none) / 2, 2);
     });
 
+    it('a band with little colour is not amplified: the gain takes the spreads with a floor', () => {
+        // the ESB refit that went pink: the view's mid band had a spread of 0.004, the photo's 0.013 (a raw ratio of 3)
+        expect(chromaGainOf(0.004, 0.013)).toBeLessThan(1.3);
+        expect(chromaGainOf(0.004, 0.013)).toBeGreaterThan(1);
+        // a colourful band still scales by about the ratio, within the range
+        expect(chromaGainOf(0.05, 0.08)).toBeCloseTo(1.55, 1);
+        expect(chromaGainOf(0.01, 0.5)).toBe(CHROMA_GAIN_RANGE[1]);
+        expect(chromaGainOf(0.5, 0.01)).toBe(CHROMA_GAIN_RANGE[0]);
+    });
+
+    it('a flat colour (a studio background) goes to the reference\'s middle, not its darkest band', () => {
+        const flat = measureLook(image(5000, () => [0.7, 0.74, 0.8]), 'flat sky');
+        // a photo's sky: a gradient from blue-grey to near white
+        const sky = measureLook(image(5000, i => { const t = i / 4999; return [0.55 + 0.4 * t, 0.62 + 0.34 * t, 0.75 + 0.22 * t]; }), 'photo sky');
+        const knots = fitLookMatch(flat, sky);
+        expect(knots).toHaveLength(2);
+        const out = displayToOklab(...applyLookMatch([0.7, 0.74, 0.8], { knots, strength: 1 }));
+        const meanL = sky.reduce((t, b) => t + b.L, 0) / sky.length;
+        expect(out[0]).toBeCloseTo(meanL, 2);
+    });
+
     it('Oklab display round trip', () => {
         for (const c of [[0.1, 0.5, 0.9], [0.9, 0.2, 0.1], [0.5, 0.5, 0.5]] as const) {
             const back = oklabToDisplay(...displayToOklab(...c));
@@ -167,6 +191,17 @@ describe('the look match in the chain', () => {
         expect(planViewportOptics({ filmGrain: { amount: 0.3 } } as any, undefined, look).passes).toEqual(['look-match', 'film-grain', 'output']);
         expect(planViewportOptics(undefined, undefined, { ...look, strength: 0 }).passes).toEqual([]);
         expect(planLookMatch({ ...look, knots: [look.knots[1], look.knots[0]] }).lookMatch).toBeNull();
+        expect(planLookMatch(look).lookMatch?.sky).toBeNull();
+        expect(planLookMatch({ ...look, sky: { bands, knots: look.knots } }).lookMatch?.sky).toHaveLength(LOOK_BANDS);
+        const badSky = planLookMatch({ ...look, sky: { bands, knots: [] } });
+        expect(badSky.lookMatch?.sky).toBeNull();
+        expect(badSky.issues[0]).toMatch(/sky not drawn/);
+    });
+
+    it('the output matches the objects where the mask marks them and the sky elsewhere, after the background is composited', () => {
+        const optics = fs.readFileSync(path.join(__dirname, '../src/browser/generative-canvas/primitives/scene3d/viewportOptics.ts'), 'utf8');
+        expect(optics).toMatch(/if \(uSkyKnotCount >= 2 && w < 1\.0\) outRgb = mix\(outRgb, sbLookSky\(shown\), 1\.0 - w\);/);
+        expect(optics).toMatch(/sbApplyGrain\(sbMatched\(mix\(uBackground, gl_FragColor\.rgb, a\)\)\)/);
     });
 
     it('the shader repeats the reference maths (Oklab constants, segment rule, gain about the mean) and weights by the object mask', () => {
@@ -179,7 +214,6 @@ describe('the look match in the chain', () => {
         expect(optics).toMatch(/vec2 moved = \(lab\.yz - ab\.xy\) \* gain \+ ab\.zw;/);
         expect(optics).toMatch(/lab\.x < l0\.x \? lab\.x \+ \(l0\.y - l0\.x\) : lab\.x > l1\.x \? lab\.x \+ \(l1\.y - l1\.x\) : mix\(l0\.y, l1\.y, t\)/);
         expect(optics).toMatch(/float w = clamp\(texture2D\(tObjects, vUv\)\.r, 0\.0, 1\.0\);/);
-        expect(optics).toMatch(/sbApplyGrain\(mix\(uBackground, sbMatched\(gl_FragColor\.rgb\), a\)\)/);
         const mask = fs.readFileSync(path.join(dir, 'services/postprocessing/depthless-coverage.ts'), 'utf8');
         expect(mask).toMatch(/float w = texture2D\(tDepth, vUv\)\.x < 1\.0 \? 1\.0 : 0\.0;\s*if \(uUseCoverage\) w = max\(w, clamp\(texture2D\(tCoverage, vUv\)\.a, 0\.0, 1\.0\)\);/);
     });
@@ -193,6 +227,8 @@ describe('the look match in the chain', () => {
         expect(res.success).toBe(true);
         expect(res.data).toMatchObject({ drawn: true, lookMatch: { reference: { label: 'esb.jpg', target: 'the building' }, strength: 0.6, knots: LOOK_BANDS } });
         expect(engine.getSceneData().lookMatch?.strength).toBe(0.6);
+        engine.dispatch('sb_set_look_match', { clearSky: true });
+        expect(engine.getSceneData().lookMatch?.sky).toBeUndefined();
         engine.dispatch('sb_set_look_match', { clear: true });
         expect(engine.getSceneData().lookMatch).toBeUndefined();
     });

@@ -467,7 +467,7 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_set_color_harmony',
         category: 'lighting_camera',
-        description: 'Puts a colour harmony grade on the viewport: every hue on the scene\'s objects moves toward the nearest sector of a hue template turned to hueDeg (degrees on the OKLCH hue circle: about 30 red, 110 yellow, 145 green, 265 blue), keeping lightness so shading and texture stay. sectors: 1-8 { offsetDeg, widthDeg } relative to hueDeg (default one 94 degree sector; e.g. two 18 degree sectors at 0 and 180 for complementary colours). strength 0-1 (default 1), chroma 0-2 saturation scale (default 1), tint 0-1 colour added at hueDeg so neutral surfaces such as clay take the colour too (default 0; a harmony alone cannot move a grey, which has no hue). Only the scene\'s objects are graded, never the sky or background. A field given replaces it, null resets it; clear removes the grade. A viewport grade: materials are unchanged.',
+        description: 'Puts a colour harmony grade on the viewport: every hue on the scene\'s objects moves toward the nearest sector of a hue template turned to hueDeg (degrees on the OKLCH hue circle: about 30 red, 110 yellow, 145 green, 265 blue), keeping lightness so shading and texture stay. sectors: 1-8 { offsetDeg, widthDeg } relative to hueDeg (default one 94 degree sector; e.g. two 18 degree sectors at 0 and 180 for complementary colours). strength 0-1 (default 1), chroma 0-2 saturation scale (default 1), tint 0-1 colour added at hueDeg so neutral surfaces such as clay take the colour too (default 0; a harmony alone cannot move a grey, which has no hue). Only the scene\'s objects are graded unless includeSky: true (the sky and background too). A field given replaces it, null resets it; clear removes the grade. A viewport grade: materials are unchanged.',
         execute: (ctx, params: SetColorHarmonyParams) => {
             const scene = ctx.getSceneData();
             const harmony = mergeColorHarmony(scene.colorHarmony, params || {});
@@ -480,14 +480,14 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
     {
         name: 'sb_set_look_match',
         category: 'lighting_camera',
-        description: 'Adjusts the look matched from a reference photo onto the viewport\'s objects (made in the Colour harmony panel: the user drops a photo, optionally names what in it to measure, and the objects\' colours by lightness band are mapped onto the photo\'s: tone curve, colour cast per tone, saturation). strength 0-1 how far the match is applied (default 1; null resets it); clear removes it. Only the scene\'s objects, never the sky. A viewport grade: materials are unchanged. The match itself can only be made from the panel, which reads the photo and the view.',
+        description: 'Adjusts the look matched from a reference photo onto the viewport\'s objects (made in the Colour harmony panel: the user drops a photo, optionally names what in it to measure, and the objects\' colours by lightness band are mapped onto the photo\'s: tone curve, colour cast per tone, saturation). strength 0-1 how far the match is applied (default 1; null resets it); clearSky: true leaves the sky as drawn (a sky match is made in the panel, from the photo\'s sky); clear removes the match. The sky is matched only when the panel matched it. A viewport grade: materials are unchanged. The match itself can only be made from the panel, which reads the photo and the view.',
         execute: (ctx, params: SetLookMatchParams) => {
             const scene = ctx.getSceneData();
             const look = mergeLookMatch(scene.lookMatch, params || {});
             if (look) scene.lookMatch = look;
             else delete scene.lookMatch;
             const plan = planLookMatch(look);
-            return { lookMatch: look ? { reference: { label: look.reference.label, target: look.reference.target }, strength: look.strength ?? 1, knots: look.knots.length } : null, drawn: !!plan.lookMatch, issues: plan.issues };
+            return { lookMatch: look ? { reference: { label: look.reference.label, target: look.reference.target }, strength: look.strength ?? 1, knots: look.knots.length, skyMatched: !!look.sky } : null, drawn: !!plan.lookMatch, issues: plan.issues };
         }
     },
     {
