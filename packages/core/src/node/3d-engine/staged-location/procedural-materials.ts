@@ -387,7 +387,7 @@ export function roadSubjects(roads: RoadSurface[], photo: TopDownPhoto, frame: T
 // Writing the layers
 // =============================================================================
 
-function useOf(key: string, choice: SurfaceChoice, library: SurfaceLibrary, name: string): LibraryMaterialUse {
+function materialUseOf(key: string, choice: SurfaceChoice, library: SurfaceLibrary, name: string): LibraryMaterialUse {
     const entry = library.entry(choice.entryId)!;
     return { name, entryId: choice.entryId, tint: surfaceTint(entry, choice.measured.linearRgb), extras: { ...surfaceMaterialLabel(choice, library, entry), surfaceKey: key } };
 }
@@ -415,7 +415,7 @@ export function writeLibraryGroundGlb(file: string, surf: GroundSurface, g: Grou
     const used = g.regions.map((_, j) => j).filter(j => tris[j].length);
     const keyOf = (j: number) => `ground:${j}`;
     const library_ = used.filter(j => !layers.overrides?.has(keyOf(j)));
-    const uses = library_.map(j => ({ ...useOf(keyOf(j), choices.get(keyOf(j))!, library, `Ground${j}_${choices.get(keyOf(j))!.entryId}`), ...(layers.field ? { variationMean: 1 / COLOUR_FIELD_PARAMS.headroom } : {}) }));
+    const uses = library_.map(j => ({ ...materialUseOf(keyOf(j), choices.get(keyOf(j))!, library, `Ground${j}_${choices.get(keyOf(j))!.entryId}`), ...(layers.field ? { variationMean: 1 / COLOUR_FIELD_PARAMS.headroom } : {}) }));
     const set = buildLibraryMaterials(library, uses);
     const materialOf = new Map<number, number>(library_.map((j, m) => [j, m]));
     for (const j of used) if (!materialOf.has(j)) { materialOf.set(j, set.materials.length); set.materials.push(uniqueSurfaceMaterial(layers.overrides!.get(keyOf(j))!, choices.get(keyOf(j)) ? { entryId: choices.get(keyOf(j))!.entryId } : undefined)); }
@@ -455,8 +455,8 @@ export function writeLibraryGroundGlb(file: string, surf: GroundSurface, g: Grou
 export function writeLibraryRoadsGlb(file: string, mesh: RoadMesh, markings: { positions: Float32Array; indices: Uint32Array; colors: Float32Array } | undefined, choices: { carriageway: SurfaceChoice; kerbs: SurfaceChoice }, library: SurfaceLibrary, extras: Record<string, unknown>, layers: SurfaceLayers = {}): { path: string; bytes: number; field?: { measured: number; shadowed: number; unmeasured: number } } {
     const cwKey = 'roads:carriageway', kbKey = 'roads:kerbs';
     const uses = [
-        { ...useOf(cwKey, choices.carriageway, library, `Carriageway_${choices.carriageway.entryId}`), ...(layers.field ? { variationMean: 1 / COLOUR_FIELD_PARAMS.headroom } : {}) },
-        useOf(kbKey, choices.kerbs, library, `Kerbs_${choices.kerbs.entryId}`)
+        { ...materialUseOf(cwKey, choices.carriageway, library, `Carriageway_${choices.carriageway.entryId}`), ...(layers.field ? { variationMean: 1 / COLOUR_FIELD_PARAMS.headroom } : {}) },
+        materialUseOf(kbKey, choices.kerbs, library, `Kerbs_${choices.kerbs.entryId}`)
     ];
     const set = buildLibraryMaterials(library, uses);
     const own = (key: string, k: number) => {
@@ -625,7 +625,7 @@ export function writeLibraryMassingGlb(file: string, run: Pick<MassingRun, 'node
     });
     const keyList = [...keys];
     const matIndex = new Map(keyList.map((k, i) => [k, i]));
-    const uses = keyList.map(k => useOf(k, choiceOf(k), input.library, k.replace(/[^\w]+/g, '_')));
+    const uses = keyList.map(k => materialUseOf(k, choiceOf(k), input.library, k.replace(/[^\w]+/g, '_')));
     const set = buildLibraryMaterials(input.library, uses);
     let triangles = 0;
     const nodes: StagedGlbNode[] = run.nodes.map((n, ni) => {
@@ -706,7 +706,7 @@ export function proceduralFillSpec(input: {
     bridges?: { names: string[] };
 }): StoredFillSpec {
     const entries: string[] = [], uses: StoredFillSpec['uses'] = [], useOf = new Map<string, number>();
-    const use = (key: string, c: SurfaceChoice): number => {
+    const indexOfUse = (key: string, c: SurfaceChoice): number => {
         if (useOf.has(key)) return useOf.get(key)!;
         const e = input.library.entry(c.entryId)!;
         let ei = entries.indexOf(c.entryId);
@@ -715,27 +715,27 @@ export function proceduralFillSpec(input: {
         useOf.set(key, uses.length - 1);
         return uses.length - 1;
     };
-    const fw = use('district:walls', input.fallback.walls), fl = use('district:roofs', input.fallback.roofs);
+    const fw = indexOfUse('district:walls', input.fallback.walls), fl = indexOfUse('district:roofs', input.fallback.roofs);
     const byNode: LibraryFillSpec['byNode'] = {};
     input.massing?.names.forEach((name, i) => {
         const b = input.massing!.buildingOf[i];
         const w = b && input.choices.get(`building:${b}:walls`), r = b && input.choices.get(`building:${b}:roofs`);
-        byNode[name] = { wall: w ? use(`building:${b}:walls`, w) : fw, level: r ? use(`building:${b}:roofs`, r) : fl };
+        byNode[name] = { wall: w ? indexOfUse(`building:${b}:walls`, w) : fw, level: r ? indexOfUse(`building:${b}:roofs`, r) : fl };
     });
     const cw = input.choices.get('roads:carriageway'), kb = input.choices.get('roads:kerbs') ?? cw;
     if (input.roads && cw) {
-        byNode.carriageway = { wall: use('roads:kerbs', kb!), level: use('roads:carriageway', cw) };
-        byNode.kerbs = { wall: use('roads:kerbs', kb!), level: use('roads:kerbs', kb!) };
+        byNode.carriageway = { wall: indexOfUse('roads:kerbs', kb!), level: indexOfUse('roads:carriageway', cw) };
+        byNode.kerbs = { wall: indexOfUse('roads:kerbs', kb!), level: indexOfUse('roads:kerbs', kb!) };
     }
     const bs = input.choices.get('bridges:structure');
     for (const name of input.bridges?.names ?? []) {
-        const u = bs ? use('bridges:structure', bs) : fw;
+        const u = bs ? indexOfUse('bridges:structure', bs) : fw;
         byNode[name] = { wall: u, level: u };
     }
     let grids: StoredFillSpec['grids'];
     if (input.ground) {
         const g = input.ground;
-        const map = g.regions.map((_, j) => { const c = input.choices.get(`ground:${j}`); return c ? use(`ground:${j}`, c) : -1; });
+        const map = g.regions.map((_, j) => { const c = input.choices.get(`ground:${j}`); return c ? indexOfUse(`ground:${j}`, c) : -1; });
         const grid = new Int16Array(g.nx * g.nz).fill(-1);
         for (let i = 0; i < grid.length; i++) if (g.region[i] >= 0) grid[i] = map[g.region[i]] ?? -1;
         const first = map.find(m => m >= 0) ?? fl;
