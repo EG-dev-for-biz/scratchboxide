@@ -10,7 +10,8 @@
 /**
  * The surface splat layer (docs/research/2026-10-30-surface-splat-layer-plan.md): a splat on every patch of the scan's
  * surface, coloured from the station images, in place of one splat per photo pixel thinned by a voxel fuse. Coverage
- * then follows the geometry, so a surface no photo happened to hit is not a hole.
+ * then follows the geometry, so a surface no photo happened to hit is not a hole. Each patch of surface is coloured
+ * from one station, and the stations' colours are brought together only where they show the same content.
  *
  * This prepares what the native builder (scripts/mesh_to_surface_splats.cpp, scratchbox_surface_splats.hpp) reads: the
  * scan's triangles the hulls keep (splat-containment.ts: no pits, no car lumps, nothing above the scan), each station's
@@ -84,7 +85,19 @@ export interface SurfaceLayerReport {
     unobserved: number;
     spacingScale: number;
     spzBytes: number;
-    gains: number[];
+    /** Patches (one station each), patches whose station the smoothing changed, splats their patch's station could not see. */
+    patches: number;
+    relabelled: number;
+    fallback: number;
+    /**
+     * The stations' colour agreement on the patches two of them see face on (scratchbox_surface_splats.hpp): shared
+     * patches and the same-content ones among them, the median difference of all (natural log, linear light), the
+     * same-content ones' mean difference as read, after the gains and after the offset field, how much one gain per
+     * station leaves unexplained, and which corrections were applied.
+     */
+    seams: { pairs: number; inliers: number; medianAll: number; before: number; afterGain: number; after: number; gainResidual: number; gainsKept: boolean; fieldKept: boolean };
+    /** Per station, per channel (r, g, b); all 1 when no gain was applied. */
+    gains: number[][];
     ms: number;
 }
 
