@@ -710,3 +710,20 @@ Values the procedure above fills in, written as they are fixed. Each is written 
   - **So every arm runs at `11 Penn Plaza, New York`** (K, then DM, DS and KD), with its own building as the target. The
     views stay at the corner: poses A and B keep their position and headings, and the automatic views aim at 11 Penn
     Plaza. Under the fallback, pose A shows Penn 2 as a neighbour. K run 1ef02345 is kept aside and not judged.
+- **The pose headings** (measured before the dry run, from DM's reference tile, run 0ced0b89). DM's vector stage holds
+  building footprints but no road lines, so the second source in "Views at Penn 2" is used: Penn 2's 7th Ave facade line
+  in the tile.
+  - **How it was measured.** Take the scanned wall triangles within 45 m of the corner on the avenue's west side: 4 to
+    40 m above the ground, near vertical, facing east of north-south. Their dominant plane is the 233 triangles (3,062 m²)
+    within 20° of the median normal.
+  - **The result.** The plane's area-weighted normal bearing is 118.98°, so the avenue bears 28.98° uptown. A line fitted
+    through the same triangles agrees at 28.5°.
+  - **Pose A** (Penn 2's facade): `headingDeg` 299.0. **Pose B** (uptown): `headingDeg` 29.0. Both use the corner above,
+    `pitchDeg` 12 and `fovDeg` 80.
+- **DM and DS are one build at Penn 2.**
+  - DM (run 0ced0b89) asked for `district: 'massing'`, but its massing pass rebuilt 0 of 8 buildings, each for "the
+    footprint runs past the extraction". The 524-leaf cap stopped the scan at 81 m (`radius_truncated`).
+  - DS (run 5d29b92d, `district: 'scan'`) hit every stage in DM's cache, and its visible layers are the same files:
+    the remeshed scan within 81 m, Google's vector buildings beyond, and the trees.
+  - For bar 6 the DM-DS pair compares identical builds, so it can only read "the judge cannot tell". It also gives a
+    check of the judge's noise on two identical images in one blind call.
