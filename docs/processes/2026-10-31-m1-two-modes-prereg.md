@@ -1,20 +1,29 @@
 # Preregistration (draft): today's build modes judged as whole places, K at the benchmark places and the district at Penn 2
 
 Date: 2026-10-31. Status: **draft, not approved, nothing run.** No paid judge call and no live build happen until the user
-approves this document. Three things block the run as written:
-- **The Penn 2 comparison waits for kd's merge.** It cannot run until kd is merged onto the code the other arms run (see
-  "Arms").
-- **The Penn 2 comparison also waits for the `poses` input to be merged.** Its two fixed poses use the `poses` input of
-  `photo_match_evaluate`.
-  - The parks session ("Photo-match views at parks and eye height") added it on its own branch,
-    `claude/elastic-jennings-e32939`, in e3ea6dc5 (code and tests) and c87dc68b (process note). That branch is not
-    pushed and not merged into this one.
-  - It was checked on a synthetic block and in a dry run at the ESB. No Penn Station tile is cached, so it has not been
-    tried at Penn 2.
-  - This branch does not edit `photo-match-evaluate.ts`, so the file has one writer.
-- **The benchmark-place run waits for a labelling fix.** The tool must first label a whole-place arm by the isolate when
-  the isolate is the target (see "The reference at the benchmark places").
-  - The fix is also in `photo-match-evaluate.ts`, so it waits for the parks session's work too, or goes to it.
+approves this document.
+
+**The code the run uses.** kd, this judge branch and the `poses` input are merged on one local branch, `feat/m1-run`, at
+6febae69 (worktree `.claude/worktrees/m1-run`, not pushed; the user asked for it). It holds:
+- `feat/kd-on-switches`, kd moved onto the district switch;
+- `claude/elastic-jennings-e32939`, the parks session's views, eye height and `poses` input;
+- `feat/m1-world-judge` up to 7832901d.
+
+Every arm is built, and every dry run and the paid run are made, from that one branch, so KD and the K arm carry the same
+K. Its checks:
+- **Typecheck:** clean across all packages.
+- **Tests:** 55 test files pass with credentials unreachable.
+- **One failure that predates the merges:** `photo-match-eval-tree-cutout` "card-only tree" fails (clay coverage 0.8396
+  against a bar of 0.8352). It fails the same way on the merged branches on their own.
+
+The `poses` input was checked on a synthetic block and in a dry run at the ESB. No Penn Station tile is cached, so it has
+not been tried at Penn 2.
+
+**One thing still blocks the benchmark-place run: a labelling fix.** The tool must first label a whole-place arm by the
+isolate when the isolate is the target (see "The reference at the benchmark places").
+- The fix is in `photo-match-evaluate.ts`, which now also holds the `poses` input. It goes on top of `feat/m1-run`, with
+  one writer.
+- The Penn 2 comparison does not wait for it: there DM's pick labels X1.
 
 The method is `.claude/skills/judge-preregister/SKILL.md`; the judge is described in
 `docs/processes/photo_match_world_regions.md`. Decisions of 2026-10-31:
@@ -44,26 +53,27 @@ This comparison settles two things.
 
 ## Arms
 
-All arms at a place are built fresh and uncached from the same query text: clear the stage caches, then restart the
-server. The arms must resolve to one geocoded point (one frame). The district switch is read from the server's
-environment, so set it and restart before each district build.
+All arms at a place are built fresh and uncached from the same query text, on `feat/m1-run`: clear the stage caches,
+then restart the server. The arms must resolve to one geocoded point (one frame).
+
+A district build names its look in the request with the staged tool's `district` argument. That argument comes before the
+server's `SCRATCHBOX_STAGED_DISTRICT`, so the arms need no change to the environment between them. Leave that variable
+unset, so that nothing but the argument decides.
 
 | Id | Label | Build | Scope | Where |
 |---|---|---|---|---|
-| DM | District, massing neighbours | `isolate: false` (radius 250 m), trees on, `SCRATCHBOX_STAGED_DISTRICT` unset (massing, today's default) | place (named first at Penn 2: the reference) | Penn 2 |
-| DS | District, cleaned-scan neighbours | as DM, `SCRATCHBOX_STAGED_DISTRICT=scan` | place | Penn 2 |
-| KD | District, kd neighbours | kd, as merged: K over the whole district in 120 m chunks, the scan kept, no massing; `isolate: false` (radius 250 m), trees on | place | Penn 2 |
+| DM | District, massing neighbours | `isolate: false` (radius 250 m), trees on, `district: 'massing'` (the default, given explicitly) | place (named first at Penn 2: the reference) | Penn 2 |
+| DS | District, cleaned-scan neighbours | as DM, `district: 'scan'` | place | Penn 2 |
+| KD | District, kd neighbours | as DM, `district: 'kd'`: K over the whole district in 120 m chunks, the scan kept, no massing (a kd district never isolates) | place | Penn 2 |
 | K | Pipeline K, one building | `isolate: true`, `pipeline: 'k'`, everything else default | target (named first at the benchmark places: the reference) | every place |
 | raw | The raw scan cut to the target | `baseline` (on) | target | every place |
 
-- **KD is blocked until kd is merged.**
-  - kd lives on the unmerged branch `feat/pipeline-kd`. On 2026-10-31 that branch was 20 commits ahead of origin/main and
-    77 behind, and its worktree `.claude/worktrees/k-d` held 6 uncommitted files.
-  - Built from that branch, KD would carry an older K than today's K arm. So KD is built only from code that holds both
-    kd and the K the other arms run.
-  - On its branch, kd is selected with `pipeline: 'kd'`. The plan moves it under `SCRATCHBOX_STAGED_DISTRICT` when it
-    merges. The switch is written here as "kd, as merged" and named when the merge lands.
-- **DR stays out of the first run.** DR is the rebuilt district (`SCRATCHBOX_STAGED_DISTRICT=rebuilt`).
+- **KD is on the code the other arms run.**
+  - kd is merged on `feat/m1-run` with the district switch. `SCRATCHBOX_STAGED_DISTRICT=kd` and the staged tool's older
+    `pipeline: 'kd'` select the same look, but this draft uses `district: 'kd'` only.
+  - Built from its old branch, `feat/pipeline-kd`, KD would carry an older K than the K arm's. So no arm is built from
+    that branch.
+- **DR stays out of the first run.** DR is the rebuilt district (`district: 'rebuilt'`).
 - **The reference arm.** At Penn 2, DM is named first, because the first run is the reference:
   - its tile has the widest single extraction (KD's run tile is its centre chunk's);
   - it gives the masks and the automatic views;
@@ -162,7 +172,8 @@ The query text is fixed here and used for every arm at the place.
   - kept when the target fills at least 6% of the frame and at least 30% of it is unhidden;
   - registered by edges to at most 5 px, and the nearest four that lock are used.
 - **Blocked places.** At a park the structure rule finds nothing within 30 m of the place. **Decision for the user:**
-  - either judge the parks with the open-place view rule the parks session is building, once it lands;
+  - either judge the parks with the open-place view rule, now merged on `feat/m1-run` (views look at the place itself
+    when no structure stands at it);
   - or query a building on the park's edge, which would change what the place tests.
 
 ### Views at Penn 2: two fixed poses and six automatic
@@ -338,8 +349,8 @@ Both are made locally from the arms' own files, at no cost, and judged blind in 
     If not, use the swap and era rules in "Views at Penn 2". With no pano left, judge on the automatic views, and report
     the pose as missing.
   - **The table above** is filled at the same time.
-- **KD's own dry-run rules (at Penn 2).** The record names below are those on `feat/pipeline-kd`; check them again after
-  the merge. Stop if:
+- **KD's own dry-run rules (at Penn 2).** The record names below were checked on `feat/m1-run` at 6febae69. They are the
+  ones kd's own branch used, and the chunk grid is unchanged. Stop if:
   - **Not every chunk was built and joined.** The `chunks` stage must be committed, not degraded, with `failed: 0` and
     `joined` equal to the chunks round the centre. At 250 m kd's plan has 21 cells: 20 chunks and the centre build.
   - **Any chunk failed.** A `chunk_failed` or `chunks_failed` degradation means a chunk that failed after its retry
@@ -378,8 +389,8 @@ When the fresh builds exist at a place, write a config and run the driver. Confi
 ```
 
 The reference run is K's at a benchmark place and DM's at Penn 2. At Penn 2 the arguments carry the poses. The driver
-on the parks session's branch finds their panos in the Street View metadata cache, and stand-in registration is the
-identity, so `not-registered` cannot show before the paid run.
+(as merged on `feat/m1-run`) finds their panos in the Street View metadata cache, and stand-in registration is the
+identity, so `not-registered` cannot show before the paid run. Run it in the `feat/m1-run` worktree.
 
 Run it with credentials unreachable:
 
