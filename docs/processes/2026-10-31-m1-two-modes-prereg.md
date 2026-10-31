@@ -1,7 +1,15 @@
-# Preregistration (draft): today's build modes judged as whole places, K at the benchmark places and the district at Penn 2
+# Preregistration: today's build modes judged as whole places, K at the benchmark places and the district at Penn 2
 
-Date: 2026-10-31. Status: **draft, not approved, nothing run.** No paid judge call and no live build happen until the user
-approves this document.
+Date: 2026-10-31. Status: **approved by the user on 2026-10-31** (the draft at a14558d2). Nothing below changes after
+this line except the report. The user's answers, word for word:
+- **Approval:** "Approve and run (Recommended)".
+- **Penn 2's query text, `2 Penn Plaza, New York`:** "Use it (Recommended)".
+- **The parks (Bryant Park, Dolores Park):** "Leave them out (Recommended)". The run is the four benchmark places and
+  Penn 2, the 144 judge calls the cost assumes.
+- **The views earlier comparisons judged at the ESB and the Haughwout Building:** "Keep them in (Recommended)". No
+  `excludePanoIds` are given for them.
+- **Spending:** "any budget within $100 does not need to be approved". The estimate below is $15 to $75 through
+  2026-11-30. If the actual spend would pass $100 at any point, the run stops and is reported.
 
 **The code the run uses.** kd, this judge branch and the `poses` input are merged on one local branch, `feat/m1-run`
 (worktree `.claude/worktrees/m1-run`, not pushed; the user asked for it). It is fast-forwarded to `feat/m1-world-judge`
@@ -163,23 +171,22 @@ The query text is fixed here and used for every arm at the place.
 
 | Place | Query | Tests | Note |
 |---|---|---|---|
-| Penn Station at 32nd: Penn 2 | `2 Penn Plaza, New York` | district (bar 6) and judge calibration | The user's place for every district test (2026-10-31): Penn Station at 7th Ave and W 32nd St, Manhattan, with Penn 2 as the target. Penn 2 stands on the west side of 7th Ave, where W 32nd St ends at its facade. The 250 m radius reaches Macy's at 34th to 35th St. **The query text is the main session's choice, not yet confirmed by the user.** |
+| Penn Station at 32nd: Penn 2 | `2 Penn Plaza, New York` | district (bar 6) and judge calibration | The user's place for every district test (2026-10-31): Penn Station at 7th Ave and W 32nd St, Manhattan, with Penn 2 as the target. Penn 2 stands on the west side of 7th Ave, where W 32nd St ends at its facade. The 250 m radius reaches Macy's at 34th to 35th St. **The query text was confirmed by the user on 2026-10-31.** |
 | Fallback: 11 Penn Plaza | `11 Penn Plaza, New York` | as above, only if the fallback is taken | The building on the east side of 7th Ave between W 31st and W 32nd St, at the same corner, where the user's map line ended. See "The target at Penn 2, and its fallback". |
 | Empire State Building | `Empire State Building, New York` | judge calibration | dense, tall |
 | Haughwout Building | `Haughwout Building, 488 Broadway, New York` | judge calibration | low-rise street |
-| Bryant Park | `Bryant Park, New York` | - | **blocked**: no structure at the place (see below) |
+| Bryant Park | `Bryant Park, New York` | - | **left out** (the user, 2026-10-31): no structure at the place (see below) |
 | Ferry Building | `Ferry Building, San Francisco` | judge calibration | waterfront, plaza |
-| Dolores Park | `Dolores Park, San Francisco` | - | **blocked**: no structure at the place |
+| Dolores Park | `Dolores Park, San Francisco` | - | **left out** (the user, 2026-10-31): no structure at the place |
 | Griffith Observatory | `Griffith Observatory, Los Angeles` | judge calibration | hillside, horizon |
 
 - **Views at the benchmark places: four per place.** They are held out and registered, and the tool chooses them:
   - Google-captured panos that no arm's build used, aimed at the target;
   - kept when the target fills at least 6% of the frame and at least 30% of it is unhidden;
   - registered by edges to at most 5 px, and the nearest four that lock are used.
-- **Blocked places.** At a park the structure rule finds nothing within 30 m of the place. **Decision for the user:**
-  - either judge the parks with the open-place view rule, now merged on `feat/m1-run` (views look at the place itself
-    when no structure stands at it);
-  - or query a building on the park's edge, which would change what the place tests.
+- **The parks: left out of this run** (the user's decision, 2026-10-31). At a park the structure rule finds nothing
+  within 30 m of the place. A later run could judge them with the open-place view rule, now merged on `feat/m1-run`, or
+  query a building on the park's edge.
 
 ### Views at Penn 2: two fixed poses and six automatic
 
@@ -391,11 +398,11 @@ Both are made locally from the arms' own files, at no cost, and judged blind in 
   (`staged_location_photo_match_bakeoff.md`, `facade_materials_merge_eval.md`, `streetview_value.md` and others). Their
   `report.json` files went with the cache clears, so the pano lists survive only where those docs recorded them.
   - They are not excluded: the judge does not learn from them.
-  - **Decision for the user:** add the recorded ones to `excludePanoIds` if a fully unseen set is wanted.
+  - **Kept in** (the user's decision, 2026-10-31): no `excludePanoIds` are given for them.
   - No earlier comparison is known at Penn 2.
 - **The stand-in dry run** on run 7f594cd6 (2026-10-31) judged nothing real.
 
-## Step 2: the free dry run (before approval of the spend)
+## Step 2: the free dry run (before any paid call)
 
 When the fresh builds exist at a place, write a config and run the driver. Config:
 
@@ -563,8 +570,8 @@ list. Its price is estimated:
   needs no approval.
 - **From 2026-12-01, when Gemini 4 Argon's price doubles: about $25 to $124.** The high end is over $100.
 - **The parks, if added later:** about $1.20 each for the K build, plus their judge calls.
-- **Approval still needed.** The $100 rule does not approve this draft. Nothing is built or paid for until the user
-  approves it.
+- **Approved.** The user approved the run on 2026-10-31. It is made by 2026-11-30, while the judge's price is
+  $2 / $10 per million.
 
 ## Report
 
