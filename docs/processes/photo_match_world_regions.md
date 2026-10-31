@@ -33,7 +33,9 @@ inside the building mask. It now measures the whole place.
   hash is pinned in the test), and so is the reply format.
 - **Both build modes.** `arms[].scope` says what an arm is:
   - `target`, the default for an isolated run and for GLBs: the arm is drawn in the tile with the target cut out.
-  - `place`, the default for a district run: the arm is the whole place and is drawn on its own.
+  - `place`, the default for a district run: the arm is the whole place and is drawn on its own. Its standing triangles
+    are labelled by the target's footprint: the picked structure's cells, or, with an isolate as the target, the
+    isolate's plan outline (see "A whole place with an isolate as the target" below).
 
   Two runs extracted at one place are brought onto one frame by their origin heights (`liftedM`).
 
@@ -190,6 +192,72 @@ How it was checked:
     takes its place.
 - **ESB dry run** (run 7f594cd6). A position 3 m from a pano the automatic rule rejects was judged first, at the heading,
   pitch and fov given. A pano the K build scored itself on was refused.
+
+## A whole place with an isolate as the target (2026-10-31, later)
+
+**The gap.** A whole-place arm (`scope: 'place'`) was labelled by the target's footprint only when the target was
+picked. With an isolate as the target (a K run named first) there was no footprint, so every standing triangle of such an
+arm was a neighbour. The decoy X1 (K's GLBs as a whole place) then had no building at all, and its hero counted as
+neighbours wherever the photo had a building in front of it.
+
+**The outline method** (`planOutlineCells` in `photo-match-eval.ts`). It uses geometry only; colour and class decide
+nothing.
+- **The cells.** On the reference tile's terrain grid (1 m), a cell is in the outline when its centre lies within 1 m in
+  plan (`PHOTO_MATCH_OUTLINE_REACH_M`) of one of the isolate's standing triangles. Standing is decided as for the regions
+  (`triangleRegions`), so a roof counts by its area, a wall by its foot line, and the street under the isolate not at all.
+- **Enclosed cells join.** These are cells not 4-connected to the grid's edge through cells outside: a courtyard, or a gap
+  in the roof.
+- **The labels.** A whole place's standing triangle is the target when its centroid falls in an outline cell, else a
+  neighbour.
+- **The tolerance.** A wall rebuilt up to half a metre outside the scanned one stays the target (K clips at its footprint
+  plus 0.3 m). A neighbour's face within about a metre of the target's counts as the target.
+- **What stays the same.** It applies only to whole-place arms with an isolate as the target. The tile's own labels (the
+  isolate matched triangle by triangle) and every `scope: 'target'` arm are labelled as before. With a picked target, a
+  whole place still follows the pick's cells.
+
+**Report.**
+- `regions.placeOutline` gives the method, the cells, the area and the reach. It is present only when the outline was
+  used.
+- `regions.armTriangles` gives every arm's triangles by label (target, neighbours, ground, trees; a trees layer is counted
+  whole). It covers every run.
+
+**How it was checked.**
+- **Unit test** (`photo-match-eval-regions.test.ts`), on a flat 1 m grid:
+  - a roofed 10 × 6 m box is exactly the 12 × 8 cells within 1 m of it;
+  - four walls with no roof are their foot lines plus the 18 × 18 cells they enclose;
+  - with one wall missing, the yard stays outside;
+  - the street draws nothing.
+- **Tool test** (`photo-match-evaluate-tool.test.ts`). The synthetic block's K run is named first, so its isolate is the
+  target. The whole-place arms are labelled triangle for triangle:
+  - X1, the hero alone: 10 target and nothing else;
+  - the place as the tile has it: 10 target, 10 neighbours and 2 ground, with frame agreement 1.00 in every view;
+  - a rebuilt place: its hero 0.3 m out on every side is 10 target; a building 1.5 m east of the hero's wall and the
+    neighbour across the street are 20 neighbours; the street is 2 ground.
+  - The tile's labels (`matchedShare` 1), the raw scan and the hero arm are unchanged.
+  - With the outline switched off, the test fails on X1's counts (0 target).
+- All photo-match tests pass with credentials unreachable, except `photo-match-eval-tree-cutout` "card-only tree". That
+  failure predates this change (0.8396 against 0.8352). The core typecheck is clean.
+- **Free dry run at the ESB** (run 7f594cd6, the driver's stand-ins, no network and no model call, 34 s):
+  - **Arms:** K's polish clay as K (`scope: 'target'`), and the same GLB as X1 (`scope: 'place'`). Both judged in 4 views.
+  - **The outline:** 8,607 cells (m²), from the isolate's 98,883 triangles.
+  - **X1's triangles:** 941,198 in all: 933,344 target, 10 neighbours and 7,844 ground. That is 99.999% of its standing
+    triangles as target. Under the old rule all 933,354 would have been neighbours.
+  - **X1's agreement, by region:**
+
+    | View | Distance | Target in the photo | Neighbours in the photo | X1 building | X1 neighbours | X1 ground |
+    |---|---|---|---|---|---|---|
+    | v0 | 45.8 m | 89.5% | 4.2% | 1.00 | 0.00 | 0.06 |
+    | v1 | 46.3 m | 34.0% | 36.7% | 1.00 | 0.00 | 0.03 |
+    | v2 | 52.0 m | 19.7% | 80.3% | 1.00 | 0.00 | - |
+    | v3 | 72.2 m | 12.6% | 83.7% | 1.00 | 0.00 | 0.08 |
+
+  - In `masks_view1.png` (`docs/screenshots/m1_world_judge/esb_dryrun_x1/`, gitignored), X1's hero is red throughout,
+    with a sliver of ground at its base. The street and the neighbours are missing, so its frame agreement falls to 0.47.
+  - The reference's own mask still shows the 96.7% isolate match: part of the ESB's facade is blue in the reference, and
+    X1 draws it red there. Fresh, uncached builds match fully (`matchedShare` 1).
+
+Not verified: the outline has not met a fresh K build, a courtyard building, or a district arm with real abutting
+neighbours.
 
 ## Follow-ups
 

@@ -3,27 +3,25 @@
 Date: 2026-10-31. Status: **draft, not approved, nothing run.** No paid judge call and no live build happen until the user
 approves this document.
 
-**The code the run uses.** kd, this judge branch and the `poses` input are merged on one local branch, `feat/m1-run`, at
-6febae69 (worktree `.claude/worktrees/m1-run`, not pushed; the user asked for it). It holds:
+**The code the run uses.** kd, this judge branch and the `poses` input are merged on one local branch, `feat/m1-run`
+(worktree `.claude/worktrees/m1-run`, not pushed; the user asked for it). It is fast-forwarded to `feat/m1-world-judge`
+with X1's labelling fix, and holds:
 - `feat/kd-on-switches`, kd moved onto the district switch;
 - `claude/elastic-jennings-e32939`, the parks session's views, eye height and `poses` input;
-- `feat/m1-world-judge` up to 7832901d.
+- `feat/m1-world-judge`: the judge, this draft, and whole-place arms labelled by the isolate's plan outline when the
+  isolate is the target (see "The reference at the benchmark places").
 
 Every arm is built, and every dry run and the paid run are made, from that one branch, so KD and the K arm carry the same
 K. Its checks:
-- **Typecheck:** clean across all packages.
-- **Tests:** 55 test files pass with credentials unreachable.
+- **At the merge (6febae69):** a clean typecheck across all packages, and 55 test files passing with credentials
+  unreachable.
+- **On the labelling fix:** the photo-match tests pass with credentials unreachable, and `packages/core` typechecks
+  clean.
 - **One failure that predates the merges:** `photo-match-eval-tree-cutout` "card-only tree" fails (clay coverage 0.8396
   against a bar of 0.8352). It fails the same way on the merged branches on their own.
 
 The `poses` input was checked on a synthetic block and in a dry run at the ESB. No Penn Station tile is cached, so it has
 not been tried at Penn 2.
-
-**One thing still blocks the benchmark-place run: a labelling fix.** The tool must first label a whole-place arm by the
-isolate when the isolate is the target (see "The reference at the benchmark places").
-- The fix is in `photo-match-evaluate.ts`, which now also holds the `poses` input. It goes on top of `feat/m1-run`, with
-  one writer.
-- The Penn 2 comparison does not wait for it: there DM's pick labels X1.
 
 The method is `.claude/skills/judge-preregister/SKILL.md`; the judge is described in
 `docs/processes/photo_match_world_regions.md`. Decisions of 2026-10-31:
@@ -88,7 +86,7 @@ unset, so that nothing but the argument decides.
 ### The reference at the benchmark places
 
 With no district arm there, the reference is K's own run. No reference district build is needed. Of the three things DM
-gave, K's run gives the first two itself, and the third needs a tool fix, not a build:
+gave, K's run gives the first two itself, and the third came from a tool fix, not a build:
 
 - **The masks and the street context: K's tile.**
   - At the ESB, K's extraction is the 80 m one. Its welded geometry spans about 175 m east to west and 190 m north to
@@ -100,15 +98,22 @@ gave, K's run gives the first two itself, and the third needs a tool fix, not a 
 - **The target: K's isolate, matched triangle by triangle.**
   - On a fresh build the isolate and the reference tile are one extraction, so `matchedShare` should be 1.00.
   - Bar 8 reads that share at these places.
-- **X1's labels: the tool fix (found while writing this draft).**
-  - The tool labels a whole-place arm (`scope: 'place'`) by the target's footprint, but only when the target was picked
-    (`placeRule` in `photo-match-evaluate.ts`).
-  - With an isolate as the target there is no footprint, so every standing triangle of X1 is labelled neighbours. Its
-    hero would then "agree" with the reference's neighbours wherever the photo has a building in front of the hero. That
-    is what bar 4 reads.
-  - **Fix before the dry run:** with an isolate as the target, a whole-place arm's standing triangles inside the isolate's
-    plan outline (on the terrain grid) are the target.
-  - At Penn 2, DM's pick gives the footprint, so X1 is labelled correctly there today.
+- **X1's labels: K's isolate's plan outline** (the tool fix, found while writing this draft).
+  - **The gap.** The tool used to label a whole-place arm (`scope: 'place'`) by the target's footprint only when the
+    target was picked. With an isolate as the target every standing triangle of X1 was a neighbour, so its hero
+    "agreed" with the reference's neighbours wherever the photo had a building in front of the hero. That is what bar 4
+    reads.
+  - **The rule now.** On the terrain grid (1 m), the outline is:
+    - every cell whose centre lies within 1 m in plan of one of the isolate's standing triangles;
+    - every cell those enclose.
+
+    A whole-place arm's standing triangle is the target when its centroid falls in the outline, else a neighbour. It is
+    decided by geometry alone. The tile's labels and the `scope: 'target'` arms are unchanged. The method is in
+    `docs/processes/photo_match_world_regions.md` and in the tool's `regions.placeOutline`.
+  - **In the free dry run at the ESB** (run 7f594cd6), X1's standing triangles were 933,344 target and 10 neighbours.
+    Its building agreement was 1.00 in all four views, its neighbours agreement 0.00 and its ground agreement 0.03 to
+    0.08.
+  - **At Penn 2,** DM's pick gives the footprint, and X1 is labelled by it as before.
 
 A reference district build would add a wider tile, but there are three reasons not to build one:
 - **Cost.** It is one more fresh district build per place.
@@ -271,6 +276,16 @@ the benchmark places not blocked, plus Penn 2 (or its fallback).
 | 7 | raw | frame (`agreement`) | exactly 1.00 at every view | equal | the reference or the cut is broken; stop |
 | 8 | The target | `regions.target` | at Penn 2 (a picked target), `footprintSource` is `vector-footprint`; at the benchmark places (K's isolate), `matchedShare` is at least 0.99 | - | the building mask is unreliable at that place; it stays out of the building bars |
 
+- **How bar 4 labels X1.** X1 is scored on the reference tile's ground and neighbours masks; its own labels say what it
+  shows there.
+  - **At the benchmark places,** K's isolate is the target. X1's standing triangles inside the isolate's plan outline on
+    the terrain grid (every cell whose centre lies within 1 m of the isolate's standing triangles, and every cell they
+    enclose) are the target, and the rest are neighbours. The tool reports the outline in `regions.placeOutline`, and X1's
+    triangles by label in `regions.armTriangles.X1`.
+  - **At Penn 2,** DM's picked footprint labels X1 instead.
+  - **What it reads.** Either way X1 holds only the hero, so its agreement on ground and neighbours measures the street
+    and the buildings it lacks. In the free dry run at the ESB it was 0.00 on the neighbours and 0.03 to 0.08 on the
+    ground, in all four views.
 - **Bar 6 with fewer views.** If fewer than 8 views lock, the sign must hold at three quarters of the judged views. With
   fewer than 6 judged views, bar 6 is indicative only.
 - **Bar 6's chance level.** On its own, a 6-of-8 split one way happens by chance about 29% of the time. The gap wider than
@@ -293,7 +308,7 @@ Both are made locally from the arms' own files, at no cost, and judged blind in 
 - **X1: the hero with no place round it.** K's GLBs with `scope: 'place'`, drawn alone, with no street and no neighbours.
   - It must lose on ground and neighbours (bars 3 and 4).
   - Its building can stay close to K's.
-  - At the benchmark places it needs the labelling fix above.
+  - At the benchmark places it is labelled by K's isolate's plan outline (see "How bar 4 labels X1").
 - **X2: the hero moved.** K's GLBs with the root node translated 4 m along +x (one node translation in the glTF JSON),
   `scope: 'target'`. It must lose on the building (bar 5).
 
@@ -322,7 +337,8 @@ Both are made locally from the arms' own files, at no cost, and judged blind in 
   - `liftedM` over 1 m;
   - at a benchmark place:
     - `regions.target.matchedShare` under 0.99;
-    - X1's building agreement under 0.9 (a check of the labelling fix);
+    - X1's building agreement under 0.9 (a check of the outline labelling; 1.00 in every view of the ESB dry run on
+      run 7f594cd6);
   - at Penn 2:
     - no `vector-footprint` target at DM;
     - K's hero not inside DM's target mask in the mask grids (K isolated another building than the one DM picks).
