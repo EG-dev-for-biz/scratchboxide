@@ -109,6 +109,24 @@ user's decision: "Yes, use bar 8").
   - No arm was lifted, and no frame mismatched.
 - **Unchanged.** No bar, arm, decoy, place, view or pose changed.
 
+**Amendment 4, 2026-10-31, before any paid call: Penn 2's geocode test is that the geocode lies on Penn 2's own
+footprint** (the user's decision: "Keep Penn 2").
+- **The change.** In "The target at Penn 2, and its fallback", the condition "The geocode is off" (`2 Penn Plaza, New
+  York` geocodes more than about 50 m from 7th Ave and W 32nd St) is replaced by: the geocode lies on the target's own
+  Google footprint. The other conditions stay:
+  - Penn 2 has a footprint of its own;
+  - the target does not grow into Madison Square Garden or the station.
+- **The evidence, from K run 1ef02345.**
+  - The geocode is 68.3 m from the corner. The 50 m was a proxy, set for the draft, for the wrong building being picked.
+  - The run chose footprint 17/38596/49262/f46 "because it covers the geocoded point". It is 5,593 m², and its IoU with
+    the scan's structure is 0.92.
+  - K's isolate stops about 100 m west of 7th Ave, short of the middle of the block.
+
+  So the geocode lies on Penn 2's own footprint, and the checks for a wrong building pass.
+- **The record.** The fallback was never applied. 11 Penn Plaza's K build, started under it, is kept aside and not
+  judged. Every Penn 2 arm is built with `2 Penn Plaza, New York`, and K's arm is run 1ef02345.
+- **Unchanged.** No bar, arm, decoy, view, pose or other place changed.
+
 The method is `.claude/skills/judge-preregister/SKILL.md`; the judge is described in
 `docs/processes/photo_match_world_regions.md`. Decisions of 2026-10-31:
 - **The user's, recorded in the plan.** These are in
@@ -314,7 +332,7 @@ and it needs the structure to fill 6% of the frame, so the look up 7th Ave canno
 Penn 2 shares one superblock with Madison Square Garden and the station, so its target is checked before the district
 builds. **Build K first at Penn 2, and read its records.** Use the fallback if any of these shows:
 - **The geocode is off.** `2 Penn Plaza, New York` geocodes more than about 50 m from 7th Ave and W 32nd St (the run's
-  geocoded point).
+  geocoded point). **Amended 2026-10-31 (amendment 4):** the geocode does not lie on the target's own Google footprint.
 - **No footprint of its own.** Penn 2 has no vector footprint of its own. Either the run's footprint note says "footprint
   from the scan's geometry alone", or the footprint holding the place is one feature for the whole block.
 - **It grows into the complex.** Penn 2's footprint or K's isolate grows into Madison Square Garden or the station:
