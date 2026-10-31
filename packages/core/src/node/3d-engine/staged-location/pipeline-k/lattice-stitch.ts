@@ -41,7 +41,7 @@ import { outsideFootprint, signedFootprintDistance } from './base-cleanup';
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor } from '../glb-bytes';
 import type { FacadeLatticeResult, ReliefFacade } from '../facade-lattice';
 
-export const LATTICE_STITCH_VERSION = 'lattice-stitch/20';
+export const LATTICE_STITCH_VERSION = 'lattice-stitch/21';
 
 export const LATTICE_STITCH_PARAMS = {
     /** The slab of a rebuilt facade cut from the scan: within this of its plane (m). */
@@ -56,6 +56,10 @@ export const LATTICE_STITCH_PARAMS = {
     splitPerimeterM: 8, splitRatio: 0.35,
     /** Cut: only scan triangles facing along a facade (|cos| of their normal to its normal at least this) are wall it replaces; roofs, ledges and terraces meeting it stay. */
     cutFacingMin: 0.5,
+    /** Cut: keep the pieces over the rebuilt cells too (the scan only split at the cells' lines), for a caller that removes them itself (facade-lattice.ts, under its tear audit). */
+    cutKeepInside: false,
+    /** Cut: only the scan facing the way the rebuilt wall faces (not a parapet's or a thin wall's other side behind it, which the rebuild does not replace). */
+    cutSameFacing: false,
     /** Fill lying on a surface the scan already has (its centre, corners and points along its edges within this (m) of it, facing alike) is a second skin, not a hole: dropped. */
     doubledM: 0.02,
     /** Fill a rebuilt wall already stands in for (parallel to it, within this of it (m), over it at every probe) is dropped: the scan
@@ -140,7 +144,9 @@ function split(poly: Vx[], g: (v: Vx) => number, plane: string, pr: PrimRead, ca
         if (gu <= 0) neg.push(u);
         if (gu >= 0) pos.push(u);
         if ((gu < 0 && gv > 0) || (gu > 0 && gv < 0)) {
-            const ck = u.key < v.key ? `${u.key}|${v.key}|${plane}` : `${v.key}|${u.key}|${plane}`;
+            // keyed by the ends' attributes too: across a texture seam two triangles share an edge's positions but not its UVs
+            const uk = `${u.key}#${u.a.join(',')}`, vk = `${v.key}#${v.a.join(',')}`;
+            const ck = uk < vk ? `${uk}|${vk}|${plane}` : `${vk}|${uk}|${plane}`;
             let c = cache.get(ck);
             if (!c) { c = cutPoint(u, v, gu, gv, pr); cache.set(ck, c); }
             neg.push(c); pos.push(c);
@@ -222,10 +228,11 @@ export function cutScanToLattice(bytes: Uint8Array, facades: Facade[], P: Lattic
             for (const fr of frames) {
                 const { f, r } = fr;
                 // the rebuilt cells replace wall only: a roof, ledge or terrace meeting the wall is no part of them
-                if (!(tl > 0) || Math.abs(dot(tn, f.normal)) < P.cutFacingMin * tl) continue;
+                if (!(tl > 0) || (P.cutSameFacing ? dot(tn, f.normal) : Math.abs(dot(tn, f.normal))) < P.cutFacingMin * tl) continue;
                 const st = (v: Vx) => { const m = [v.p[0] - f.centroid[0], v.p[1] - f.centroid[1], v.p[2] - f.centroid[2]]; return [dot(m, f.axisS), dot(m, f.axisT), dot(m, f.normal)]; };
                 const all = polys.flat().map(st);
-                const smin = Math.min(...all.map(c => c[0])), smax = Math.max(...all.map(c => c[0])), tmin = Math.min(...all.map(c => c[1])), tmax = Math.max(...all.map(c => c[1])), dmin = Math.min(...all.map(c => c[2])), dmax = Math.max(...all.map(c => c[2]));
+                let smin = Infinity, smax = -Infinity, tmin = Infinity, tmax = -Infinity, dmin = Infinity, dmax = -Infinity;
+                for (const c of all) { smin = Math.min(smin, c[0]); smax = Math.max(smax, c[0]); tmin = Math.min(tmin, c[1]); tmax = Math.max(tmax, c[1]); dmin = Math.min(dmin, c[2]); dmax = Math.max(dmax, c[2]); }
                 if (smax <= fr.s0 || smin >= fr.s1 || tmax <= fr.t0 || tmin >= fr.t1 || dmax <= -P.depthBandM || dmin >= P.depthBandM) continue;
                 // does it reach a rebuilt cell at all
                 const a0 = cellIndex(Math.max(smin, fr.s0), r.s), a1 = cellIndex(Math.min(smax, fr.s1), r.s), b0 = cellIndex(Math.max(tmin, fr.t0), r.t), b1 = cellIndex(Math.min(tmax, fr.t1), r.t);
@@ -242,7 +249,7 @@ export function cutScanToLattice(bytes: Uint8Array, facades: Facade[], P: Lattic
                     const c = poly.map(st), cs = c.reduce((s, x) => s + x[0], 0) / c.length, ct = c.reduce((s, x) => s + x[1], 0) / c.length, cd = c.reduce((s, x) => s + x[2], 0) / c.length;
                     const inside = cs > fr.s0 && cs < fr.s1 && ct > fr.t0 && ct < fr.t1 && Math.abs(cd) < P.depthBandM && r.built[cellIndex(ct, r.t) * fr.ns + cellIndex(cs, r.s)];
                     if (inside) report.removedPieces++;
-                    return !inside;
+                    return !inside || P.cutKeepInside;
                 });
             }
             if (!touched) continue;
