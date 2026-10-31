@@ -4,16 +4,24 @@ Date: 2026-10-31. Status: **draft, not approved, nothing run.** No paid judge ca
 approves this document. Three things block the run as written:
 - **The Penn 2 comparison waits for kd's merge.** It cannot run until kd is merged onto the code the other arms run (see
   "Arms").
-- **The Penn 2 comparison also waits for a tool argument.** Its two corner views need an argument for fixed views that the
-  tool does not have (see "Places and views").
+- **The Penn 2 comparison also waits for a `poses` input.** Its two fixed poses need a `poses` input on
+  `photo_match_evaluate`.
+  - The parks session ("Photo-match views at parks and eye height") is adding it on its branch, because it owns the view
+    code.
+  - It is not in this branch. This branch does not edit `photo-match-evaluate.ts` for it, so the file has one writer.
 - **The benchmark-place run waits for a labelling fix.** The tool must first label a whole-place arm by the isolate when
   the isolate is the target (see "The reference at the benchmark places").
+  - The fix is also in `photo-match-evaluate.ts`, so it waits for the parks session's work too, or goes to it.
 
 The method is `.claude/skills/judge-preregister/SKILL.md`; the judge is described in
-`docs/processes/photo_match_world_regions.md`. The user's decisions of 2026-10-31 are recorded in the plan
-(`docs/research/2026-10-30-hyper-realistic-real-world-plan.md`: M1, M2 and Decisions):
-- kd joins as a district arm, and DS stays;
-- every district test runs at Penn Station, at 7th Avenue and West 32nd Street, with Penn 2 as the target.
+`docs/processes/photo_match_world_regions.md`. Decisions of 2026-10-31:
+- **The user's, recorded in the plan.** These are in
+  `docs/research/2026-10-30-hyper-realistic-real-world-plan.md` (M1, M2 and Decisions):
+  - kd joins as a district arm, and DS stays;
+  - every district test runs at Penn Station, at 7th Avenue and West 32nd Street, with Penn 2 as the target.
+- **The main session's, on the user's go-ahead** ("if it doesn't work do what you think is best"):
+  - the two fixed poses and their swap rules;
+  - the 11 Penn Plaza fallback target.
 
 ## Question
 
@@ -55,7 +63,7 @@ environment, so set it and restart before each district build.
 - **DR stays out of the first run.** DR is the rebuilt district (`SCRATCHBOX_STAGED_DISTRICT=rebuilt`).
 - **The reference arm.** At Penn 2, DM is named first, because the first run is the reference:
   - its tile has the widest single extraction (KD's run tile is its centre chunk's);
-  - it gives the masks and the views;
+  - it gives the masks and the automatic views;
   - its vector stage gives the target's footprint.
 
   K is drawn there in DM's tile, with the target DM picks cut out. At the benchmark places, K is named first (see "The
@@ -113,8 +121,9 @@ At Penn 2:
 ```
 photo_match_evaluate {
   arms: [DM (named first: the reference), DS, KD, K, X1, X2, each { id, label, runId, glbs, scope }],
-  views: 8, runs: 3, clay: true, judgeRegions: true, trees: true, baseline: true, includeSatelliteOrtho: false,
-  + the two corner views, each a pano id and a heading, pitch and field of view (an argument the tool does not have yet)
+  poses: [pose A, pose B as fixed below, in the shape the poses input takes when it lands],
+  views: 8 in all (the two poses and 6 automatic), runs: 3, clay: true, judgeRegions: true, trees: true, baseline: true,
+  includeSatelliteOrtho: false
 }
 ```
 
@@ -129,7 +138,8 @@ The query text is fixed here and used for every arm at the place.
 
 | Place | Query | Tests | Note |
 |---|---|---|---|
-| Penn Station at 32nd: Penn 2 | `2 Penn Plaza, New York` | district (bar 6) and judge calibration | the user's place for every district test (2026-10-31): Penn Station at 7th Ave and W 32nd St, Manhattan, with Penn 2 as the target. W 32nd St ends at 7th Ave at Penn 2's facade, and the 250 m radius reaches Macy's at 34th to 35th St. **The query text is this draft's choice, not yet confirmed by the user.** |
+| Penn Station at 32nd: Penn 2 | `2 Penn Plaza, New York` | district (bar 6) and judge calibration | The user's place for every district test (2026-10-31): Penn Station at 7th Ave and W 32nd St, Manhattan, with Penn 2 as the target. Penn 2 stands on the west side of 7th Ave, where W 32nd St ends at its facade. The 250 m radius reaches Macy's at 34th to 35th St. **The query text is the main session's choice, not yet confirmed by the user.** |
+| Fallback: 11 Penn Plaza | `11 Penn Plaza, New York` | as above, only if the fallback is taken | The building on the east side of 7th Ave between W 31st and W 32nd St, at the same corner, where the user's map line ended. See "The target at Penn 2, and its fallback". |
 | Empire State Building | `Empire State Building, New York` | judge calibration | dense, tall |
 | Haughwout Building | `Haughwout Building, 488 Broadway, New York` | judge calibration | low-rise street |
 | Bryant Park | `Bryant Park, New York` | - | **blocked**: no structure at the place (see below) |
@@ -141,49 +151,81 @@ The query text is fixed here and used for every arm at the place.
   - Google-captured panos that no arm's build used, aimed at the target;
   - kept when the target fills at least 6% of the frame and at least 30% of it is unhidden;
   - registered by edges to at most 5 px, and the nearest four that lock are used.
-- **Views at Penn 2: eight in one call, the tool's maximum.** Two are fixed corner views, and the tool chooses the other
-  six by the rules above.
-  - **View A, Penn 2's facade.** From W 32nd St at 7th Ave, facing Penn 2's 7th Ave facade, where the user's photo shows
-    the Chase sign. The heading is about 119°, east along W 32nd St (Manhattan's grid runs about 29° east of true north).
-  - **View B, up 7th Ave.** From the same corner, looking north up 7th Ave to Primark and Macy's, at a heading of about
-    29°. Penn 2 sits at the frame's edge, so this view fails the rule that the target fills at least 6% of the frame.
-  - **Both corner views must be held out and registered.** Each must be a Google-captured pano that no arm's build used,
-    registered by edges like the others. If every capture at the corner was used by a build, or none locks, the view
-    cannot be judged: stop and report it.
-  - **Bar 6 counts views here.** With one place there are no places to agree, so bar 6 counts views over all eight.
-    Eight views let the sign hold at three quarters of them, the rate the earlier draft asked of places (3 of 4). The
-    two corner views are also reported on their own beside the bar; they decide nothing alone.
-- **The tool cannot take the corner views today** (checked 2026-10-31).
-  - `photo_match_evaluate` has no argument for a fixed pano or pose. Every view comes from its rule: aimed at the target,
-    with the 6% and 30% thresholds.
-  - `excludePanoIds` can narrow the candidates to the corner's panos. It cannot aim a view or waive the 6% threshold, so it
-    cannot give view B.
-  - The parks session's new rule (session "Photo-match views at parks and eye height", commit 6d6d25f7 on
-    `claude/elastic-jennings-e32939`) applies only where no structure stands at the place. There the views look at the
-    place itself. At Penn 2 the pick finds Penn 2, so that rule does not apply.
-  - **So the corner views need a new argument:** a fixed held-out view given as a pano id with a heading, pitch and field
-    of view. It is checked as held out and registered like the others, and is exempt from the target-share rule. The
-    tool is not changed for it in this pass.
-  - The fixed views name only pano ids and angles. No sign or brand name goes into a tool argument, a prompt or code.
 - **Blocked places.** At a park the structure rule finds nothing within 30 m of the place. **Decision for the user:**
-  - either judge the parks with the open-place view rule the parks session is building (above), once it lands;
+  - either judge the parks with the open-place view rule the parks session is building, once it lands;
   - or query a building on the park's edge, which would change what the place tests.
 
-### What each arm shows at the corner views
+### Views at Penn 2: two fixed poses and six automatic
 
-Recorded, deciding nothing. Fill it from the dry run's renders (what each arm draws) and the paid run's grids (the
-photo beside them). For each arm, say what it draws where the photo shows each sign: for example the tile photo's sign,
-the arm's own texture, a blank wall, massing, or nothing.
+Eight views in one call, the tool's maximum. The tool chooses six by the rules above. Two are fixed here, before any build
+exists, so they are not picked after seeing results. Today's rule cannot give them: it aims every view at the structure,
+and it needs the structure to fill 6% of the frame, so the look up 7th Ave cannot pass.
+
+- **The poses.**
+  - **Pose A, Penn 2's facade.** From the pano nearest 7th Ave and W 32nd St, facing Penn 2's 7th Ave facade across the
+    avenue, where the user's photo shows the Chase sign. The heading is perpendicular to the avenue: its bearing plus
+    270°, about 299°.
+  - **Pose B, uptown.** From the same pano, looking uptown along 7th Ave toward Primark and Macy's. The heading is the
+    avenue's bearing, about 29°.
+- **How a pose is framed.**
+  - **Headings.** Both headings come from the avenue's line in the reference frame: the vector stage's road line, else
+    Penn 2's 7th Ave facade line in the tile. They are not taken from a map.
+  - **Pitch and field of view.** The tool's own framing for a close view: 12° up, an 80° field of view, 4:3. The eye is
+    the tool's, 2.5 m over the terrain at the pano.
+- **What a pose must pass.** Each pose must still be held out (no build used its pano) and register by edges to at most
+  5 px. It is exempt from the target-share rule.
+- **If a pose's pano was used or does not lock.** Take the next nearest unused pano on 7th Ave with the same heading:
+  between 31st and 33rd St for pose A, between 32nd and 33rd St for pose B. Report the swap.
+- **If none locks.** Judge Penn 2 on its automatic views, and report the fixed poses as missing.
+- **If the photo and the tile show Penn 2's facade from different eras.** Penn 2 was reclad. Take the next pano by date
+  at that spot, and note it in the dry run.
+- **No names in code.** The poses name only pano ids and angles. No sign or brand name goes into a tool argument, a prompt
+  or code.
+- **Bar 6 counts views here.** With one place there are no places to agree, so bar 6 counts views over all eight. Eight
+  views let the sign hold at three quarters of them, the rate the earlier draft asked of places (3 of 4). The two poses
+  are also reported on their own beside the bar; they decide nothing alone.
+
+### The target at Penn 2, and its fallback
+
+Penn 2 shares one superblock with Madison Square Garden and the station, so its target is checked before the district
+builds. **Build K first at Penn 2, and read its records.** Use the fallback if any of these shows:
+- **The geocode is off.** `2 Penn Plaza, New York` geocodes more than about 50 m from 7th Ave and W 32nd St (the run's
+  geocoded point).
+- **No footprint of its own.** Penn 2 has no vector footprint of its own. Either the run's footprint note says "footprint
+  from the scan's geometry alone", or the footprint holding the place is one feature for the whole block.
+- **It grows into the complex.** Penn 2's footprint or K's isolate grows into Madison Square Garden or the station:
+  - it reaches past the middle of the block from 7th Ave (the isolate GLB's plan extent);
+  - or, seen in the mask grids, it takes in the arena.
+
+The same checks apply to DM's picked target in DM's dry run.
+
+- **Report, either way:**
+  - the footprint the vector stage gives the place: the run's note "footprint from Google vector data", with its feature
+    ids and area, the share raised in the scan, and whether it encloses the structure;
+  - DM's `regions.target`: `areaM2`, `heightM` and `footprintSource`;
+  - the plan extent and area of K's isolate.
+- **The fallback.** Every arm runs at `11 Penn Plaza, New York`, in one frame, with its own building as the target. It is
+  at the same corner, and it is the building the user's map line ended on.
+  - **The views stay at 7th Ave and W 32nd St.** Poses A and B keep their panos and headings, and the six automatic
+    views aim at 11 Penn Plaza.
+  - **Under the fallback, pose A shows Penn 2 as a neighbour.**
+  - **The report records** which target was used and why.
+
+### What each arm shows at the poses
+
+Recorded, deciding nothing. Fill it from the dry run's renders (what each arm draws) and the paid run's grids (the photo
+beside them). For each arm, say what it draws where the photo shows each sign: for example the tile photo's sign, the
+arm's own texture, a blank wall, massing, or nothing.
 
 | View | The photo | raw | DM | DS | KD | K | X1 | X2 |
 |---|---|---|---|---|---|---|---|---|
 | A: Penn 2's 7th Ave facade, the Chase sign | | | | | | | | |
-| B: north up 7th Ave, Primark and Macy's | | | | | | | | |
+| B: uptown along 7th Ave, Primark and Macy's | | | | | | | | |
 
 ## Bars
 
 Fixed before any paid call. "Spread" means the judge's run spread (`runSd`) as the tool reports it. "Judged places" are
-the benchmark places not blocked, plus Penn 2.
+the benchmark places not blocked, plus Penn 2 (or its fallback).
 
 | # | Metric | Mask | Bar | Direction | A miss means |
 |---|---|---|---|---|---|
@@ -205,7 +247,9 @@ the benchmark places not blocked, plus Penn 2.
   - Past that reach (`radius_truncated`), DM and DS both show vector massing, and KD shows its chunks. So a gap between
     KD and the other two includes the far field, which is part of what kd changes. A gap between DM and DS does not
     include it.
-  - View B, up 7th Ave to Macy's, is where this shows most. The report says so.
+  - Pose B, uptown to Macy's, is where this shows most. The report says so.
+- **Bar 5 and the poses.** Bar 5 leaves out a view where the target fills less than 6% of the frame, because the move it
+  tests barely shows there. That is pose B, and pose A as well under the fallback.
 
 Secondary, reported and deciding nothing: SSIM, edge chamfer, CIEDE2000 and agreement per region, for every arm.
 
@@ -225,8 +269,12 @@ Both are made locally from the arms' own files, at no cost, and judged blind in 
 - **Spend cap.**
   - **Judge calls** are views × runs × 2 (textured and clay): 24 per benchmark place (96 for the four that are not
     blocked), 48 at Penn 2, 144 in all.
-  - **Street View grounding images:** at most 8 per benchmark place. At Penn 2, at most 14: 12 in the run, plus the two
-    corner photos fetched first for the sign check. That is 46 in all.
+  - **Street View grounding images:** at most 8 per benchmark place. At Penn 2, at most 18:
+    - 12 in the run;
+    - the two pose photos, fetched first for the sign check;
+    - up to 4 for pose swaps (2 per pose).
+
+    That is 50 in all.
   - Anything past that stops the run.
 - **A decoy that passes.** If bars 3 to 5 miss at a place, stop, and fix the judge or the views, not the builds.
 - **Spread wider than the gap.** If bar 6 misses for a pair, report "the judge cannot tell" for that pair, not a winner.
@@ -245,28 +293,24 @@ Both are made locally from the arms' own files, at no cost, and judged blind in 
   - at Penn 2:
     - no `vector-footprint` target at DM;
     - K's hero not inside DM's target mask in the mask grids (K isolated another building than the one DM picks).
-- **The corner views (at Penn 2).**
-  - **In frame, in the dry run.** The dry run's photos are stand-ins rendered from DM's tile, so it can show the poses
-    and every arm's render there. View A must face Penn 2's 7th Ave facade, and view B must look up 7th Ave with Penn 2
-    at the frame's edge. Review both with the `screenshot-review` skill, and stop if either is not in frame.
-  - **The signs readable, before any judge call.** The stand-in photos cannot show the photo's signs. So fetch the two
-    real corner photos first (2 grounding images, inside the cap above) and review them with `screenshot-review`:
-    - in view A, the Chase sign on Penn 2's facade is readable;
-    - in view B, Primark's and Macy's signs up 7th Ave are readable.
 
-    If not (for example an older capture, or a truck in front), take another capture at the corner that no build used.
-    If none serves, stop.
+    The target checks above lead to the fallback, not to a stop.
+- **The poses (at Penn 2).**
+  - **In frame, in the dry run.** The dry run's photos are stand-ins rendered from DM's tile, so it can show the poses
+    and every arm's render there.
+    - Pose A must face Penn 2's 7th Ave facade across the avenue.
+    - Pose B must look uptown along 7th Ave.
+    - Review both with the `screenshot-review` skill. If either is off, its heading was computed wrong. Fix it from the
+      avenue's line before any paid call.
+  - **The signs readable, before any judge call.** The stand-in photos cannot show the photo's signs. So fetch the two
+    real pose photos first (inside the cap above) and review them with `screenshot-review`:
+    - in pose A, the Chase sign on Penn 2's facade is readable;
+    - in pose B, Primark's and Macy's signs up 7th Ave are readable;
+    - the facade in the photo is the one in the tile (the same era).
+
+    If not, use the swap and era rules in "Views at Penn 2". With no pano left, judge on the automatic views, and report
+    the pose as missing.
   - **The table above** is filled at the same time.
-- **The target is Penn 2 alone (at Penn 2).** Penn 2 shares one superblock with Madison Square Garden and the station.
-  - **Report** the footprint the vector stage gives the place: the run's note "footprint from Google vector data" (its
-    feature ids and area, the share raised in the scan, and whether it encloses the structure). Also report DM's
-    `regions.target` (`areaM2`, `heightM`, `footprintSource`), and the plan extent and area of K's isolate (from the
-    isolate GLB's bounds).
-  - **Stop if** DM's target or K's isolate is the complex rather than Penn 2 alone:
-    - the mask grids draw the arena, or the block's buildings toward 8th Ave, as target;
-    - or K's isolate reaches past the middle of the block from 7th Ave;
-    - or the vector footprint at the place is one feature for the whole block, so neither the pick nor K's footprint clip
-      can keep to Penn 2.
 - **KD's own dry-run rules (at Penn 2).** The record names below are those on `feat/pipeline-kd`; check them again after
   the merge. Stop if:
   - **Not every chunk was built and joined.** The `chunks` stage must be committed, not degraded, with `failed: 0` and
@@ -284,10 +328,11 @@ Both are made locally from the arms' own files, at no cost, and judged blind in 
 
 ## Exposure
 
-- **Panos any arm's build used** are excluded by the tool. It reads the runs' notes, stage entries, scene and GLB extras,
-  and since this branch also views named after a pano (`<panoId>_h<deg>_p<deg>`). On the ESB K run 7f594cd6, the 16 panos
-  its Street View score used are now excluded. At Penn 2, K's Street View score may use the corner's panos. A corner view
-  then needs another capture at the corner (see "Places and views").
+- **Panos any arm's build used** are excluded by the tool.
+  - It reads the runs' notes, stage entries, scene and GLB extras, and since this branch also views named after a pano
+    (`<panoId>_h<deg>_p<deg>`). On the ESB K run 7f594cd6, the 16 panos its Street View score used are now excluded.
+  - At Penn 2, K's Street View score may use the corner's panos. A pose then takes the next nearest unused pano (see
+    "Views at Penn 2").
 - **Panos earlier comparisons judged.** The ESB and the Haughwout Building were judged in earlier work
   (`staged_location_photo_match_bakeoff.md`, `facade_materials_merge_eval.md`, `streetview_value.md` and others). Their
   `report.json` files went with the cache clears, so the pano lists survive only where those docs recorded them.
@@ -305,8 +350,7 @@ When the fresh builds exist at a place, write a config and run the driver. Confi
   "out": "docs/screenshots/m1_prereg/<place>", "args": { ...the tool arguments above for that place... } }
 ```
 
-The reference run is K's at a benchmark place and DM's at Penn 2. At Penn 2 the driver needs the corner-view argument
-too.
+The reference run is K's at a benchmark place and DM's at Penn 2. At Penn 2 the driver passes the poses too.
 
 Run it with credentials unreachable:
 
@@ -325,8 +369,9 @@ It must show:
 
 - **Builds.** All fresh and uncached, one after another, one place at a time (the Mac is heavily loaded).
   - **At the benchmark places:** one build per place (K). That is 4 for the places not blocked, 6 with the parks.
-  - **At Penn 2:** four builds (DM, DS, KD, K).
-  - **In all:** 8 builds (10 with the parks).
+  - **At Penn 2:** four builds, K first (for the target checks), then DM, DS and KD.
+  - **The fallback:** it adds one build, K again at 11 Penn Plaza. The districts are then built there, not at Penn 2.
+  - **In all:** 8 builds, 9 with the fallback, 2 more with the parks.
   - **KD's time:** on its branch, Shibuya at 350 m was 44 chunks round the centre in about 106 minutes. At 250 m, kd's
     plan has 20 chunks round the centre, so about 50 minutes. That is an estimate scaled by chunk count, not a
     measurement.
@@ -335,7 +380,7 @@ It must show:
   - 48 at Penn 2, each with the photo and 7 renders.
 
   **The price per call is to be filled in before approval.**
-- **Street View grounding.** Up to 46 images.
+- **Street View grounding.** Up to 50 images.
 - **Decoys and dry runs.** Free.
 
 ## Report
@@ -343,6 +388,7 @@ It must show:
 After the single paid run:
 - Fill one row per bar with each arm's value and spread, each decoy's value, and met or missed. For bar 6, give one row
   per pair.
-- Give the corner views on their own, with the table of what each arm shows there.
+- Say which target was used at Penn 2 (Penn 2 or 11 Penn Plaza) and why, and any pose swap.
+- Give the poses on their own, with the table of what each arm shows there.
 - Give the two decisions named in the question.
 - Attach the grids and mask grids.
