@@ -33,7 +33,7 @@ import { createDefaultStationImageGenerator } from '../../spatial/BeautifyStatio
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import { clampToFootprint, footprintConformance, FOOTPRINT_MAX_PROJECTION_M } from './footprint-lock';
-import { readTileTriangles } from './tile-texture-transfer';
+import { readTileTriangles, type RgbaImage8 } from './tile-texture-transfer';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import * as path from 'path';
 import type { CanvasArtifact } from '../../../browser/generative-canvas/canvas-types';
@@ -85,12 +85,14 @@ import { buildSceneInventory, sceneInventorySummary, SCENE_INVENTORY_VERSION, ty
 import { buildDistrictMassingLayer, districtFootprint, districtMassingEnabled, DISTRICT_MASSING_PARAMS, DISTRICT_MASSING_VERSION, DISTRICT_TEXEL_M, massDistrict, planeFirstEnabled, proceduralDistrictEnabled } from './district-massing';
 import { REVOLUTION_FIT_VERSION, revolutionFitEnabled, reviseForRevolutions, type RevolutionLayerSummary } from './revolution-fit';
 import { districtEDetail, districtEDetailEnabled, DISTRICT_E_DETAIL_VERSION } from './district-e-detail';
-import { describePolish, polishRemesh, REMESH_POLISH_VERSION } from './remesh-polish';
+import { describePolish, polishRemesh, REMESH_POLISH_VERSION, type PolishedRemesh } from './remesh-polish';
+import { remeshWorkersEnabled, remeshWorkerThreads, runRemeshJob, runRemeshJobs } from './remesh-worker-pool';
+import type { PolishJobInput } from './remesh-worker';
 import { remeshCleanupEnabled } from './remesh-cleanup';
 import { remeshOrientEnabled } from './remesh-orient';
-import { fittedPlanesOf, fittedWindowRects, fitWindowsForOrthos, WINDOW_FIT_FILE, WINDOW_FIT_VERSION, type SegmentOpeningMask, type WindowFitFile } from './window-fit';
-import { readWallGrammar, WALL_GRAMMAR_FILE, WALL_GRAMMAR_VERSION } from './wall-grammar';
-import { buildWallSheets, WALL_SHEETS_VERSION } from './wall-sheets';
+import { fittedPlanesOf, fittedWindowRects, fitWindowsForOrthos, openingSegmenter, segmentSummary, WINDOW_FIT_FILE, WINDOW_FIT_VERSION, type OrthoFacade, type WindowFitEntry, type WindowFitFile, type WindowFitParams } from './window-fit';
+import { readWallGrammar, WALL_GRAMMAR_FILE, WALL_GRAMMAR_VERSION, type WallGrammarFile } from './wall-grammar';
+import { buildWallSheets, WALL_SHEETS_VERSION, type WallSheet } from './wall-sheets';
 import { decodePng as decodePngForGrammar } from '../../texture-processing';
 import { TILE_SEAMS_VERSION, type TileSeamWeldRequest, type TileSeamWeldResult } from '../tile-seam-weld-service';
 import { measureRevealDepth, REVEAL_DEPTH_VERSION, type RevealFacade, type RevealView } from './reveal-depth';
@@ -174,7 +176,7 @@ import {
 import { buildSwitchLocationPills, switchLocationMarkdown } from '../../../common/spatial/switch-location';
 import { summarizeStagedBuild, type StagedSummaryInput } from './staged-summary';
 import { palettesFromSurvey, photoTierEnabled, textureLayer, TEXTURE_PASS_VERSION, type TextureLayerOutcome } from './texture-pass';
-import { facadeMaterialsEnabled, gatherMaterialEvidence, MASK_YES, scanFacePlanes, segmenterTool, type MaterialEvidence, type SegmentImage } from './facade-material-evidence';
+import { facadeMaterialsEnabled, gatherMaterialEvidence, scanFacePlanes, segmenterTool, type MaterialEvidence, type SegmentImage } from './facade-material-evidence';
 import { gatherSelfRenderEvidence } from '../../spatial/specular-material-evidence';
 import { projectMaskedViewsToUv } from '../../spatial/specular-material-projection';
 import { bakeSpecularMaterials } from '../../spatial/specular-material-bake';
@@ -202,8 +204,12 @@ import { measureVisibleDefects, VISIBLE_DEFECTS_PARAMS } from './pipeline-k/visi
 import { TEXTURE_HARMONIZE_VERSION, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
 import { VIEW_RELIGHT_VERSION, viewRelightEnvParams } from './pipeline-k/view-relight';
 import { ROOF_SHADOW_VERSION, roofShadowAuditPng } from './pipeline-k/roof-shadow';
-import { FACADE_READER_MODEL, FACADE_READER_VERSION, mergeReadings, parseJudgement, parseReading, parseZones, readerPlanesOf, readPlanes, type FacadeAsk } from './pipeline-k/facade-reader';
-import { PLANE_ORTHOS_VERSION, planeOrthos } from './pipeline-k/plane-orthos';
+import { FACADE_READER_MODEL, FACADE_READER_PARAMS, FACADE_READER_VERSION, parseJudgement, parseReading, parseZones, type FacadeAsk } from './pipeline-k/facade-reader';
+import { parseBrief } from './pipeline-k/facade-reader-brief';
+import { readOnTwin, TWIN_READER_VERSION } from './pipeline-k/twin-reader';
+import { CHOICE_SPAN_M, candidateSheetPng, choicePrompt, MATERIAL_CHOICE_VERSION, parseChoices, type ChoiceRow, type SetChoice } from './pipeline-k/material-choice';
+import { betweenSeen, glassSeen, MATERIAL_NAMING_VERSION, namingPrompt, parseClassWords } from './pipeline-k/material-naming';
+import type { FacadeReadRecord } from './pipeline-k/facade-reader';
 import { shadowLiftQaPng } from './pipeline-k/shadow-lift-qa';
 import { describeMaterialRegions, MATERIAL_REGIONS_VERSION, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE, PIPELINE_I_VERSION, TRELLIS_SEEDS, runPipelineI } from './pipeline-i/pipeline-i';
@@ -556,7 +562,7 @@ export interface StagedLocationDeps {
     groundedReferences?: () => Promise<GroundedReferenceClient>;
     /** Pipeline K's material regions: one texture library set per appearance class (pipeline-k/material-sets.ts); absent = the stage is not run (tests, stand-in deps). */
     pipelineK?: {
-        materialSets?: (classes: RegionClass[], opts: { signal?: AbortSignal; progress?: (m: string) => void }) => Promise<RegionSet[]>;
+        materialSets?: (classes: RegionClass[], opts: { signal?: AbortSignal; progress?: (m: string) => void; /** The pick by appearance among each class's nearest sets (pipeline-k/material-choice.ts). */ choose?: (rows: ChoiceRow[]) => Promise<Array<SetChoice | undefined>> }) => Promise<RegionSet[]>;
         /** The swatch detail bake (tile-detail-bake.ts): the building's survey swatches harvested from the tiles, baked into the twin's atlases. */
         detailBake?: (input: { glb: Uint8Array; tilesGlb: string; lat: number; lng: number; place: string; workDir: string; signal: AbortSignal; progress: (m: string) => void }) => Promise<{ glb: Buffer; report: TileDetailBakeReport }>;
     };
@@ -1877,6 +1883,20 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- survey (pass 1: starts now and runs beside the remesh and the fit; needs only the structure pick) ----------------
         const visionForSurvey = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
         const visionAvailable = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
+        // the facade reader's calls (pipeline-k/facade-reader.ts): its fast, cheap model first (FACADE_READER_MODEL), the app's
+        // other vision models behind it, each reply checked as its kind is parsed
+        const facadeReaderAsk = (signal: AbortSignal, stage: StageId): FacadeAsk | undefined => {
+            if (!visionAvailable) return undefined;
+            const readChain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: [...new Set([FACADE_READER_MODEL.model, ...visionAvailable.candidates])], signal, ...chainExtras(stage), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+            const replyText = (res: { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> }) => (res.candidates?.[0]?.content?.parts ?? []).filter(q => !q.thought).map(q => q.text ?? '').join('');
+            return async (png, prompt, kind) => {
+                const res = await readChain.generate({ contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: png.toString('base64') } }, { text: prompt }] }], config: { responseMimeType: 'application/json', temperature: 0, abortSignal: signal } },
+                    { stage: 'grammar', ...VISION_CALL_POLICY.grammar, thinkingBudget: FACADE_READER_MODEL.thinkingBudget, valid: x => { try { (kind === 'overview' ? parseZones : kind === 'read' ? parseReading : kind === 'brief' ? parseBrief : parseJudgement)(replyText(x)); return true; } catch { return false; } } });
+                const text = replyText(res.response);
+                res.remember();
+                return text;
+            };
+        };
         const rebuildPossible = isolateMode && !!deps.scanFit;
         // the free pano discovery is done once for the survey and the close-ups; it ends only with the call
         const discoveryStop = new AbortController();
@@ -2667,7 +2687,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const partyWallOn = kTwin && stepOn('twin.partyWall', process.env.SCRATCHBOX_K_PARTY_WALL_TEXTURE?.trim() === '1');
                 // pipeline K's material regions: only with the app's texture library (deps.pipelineK), and off for now (user decision,
                 // 2026-10-28: the openings' finishes are not calculated correctly); SCRATCHBOX_K_MATERIAL_REGIONS=1 on
-                const materialSets = kTwin && stepOn('twin.materials', process.env.SCRATCHBOX_K_MATERIAL_REGIONS?.trim() === '1') ? deps.pipelineK?.materialSets : undefined;
+                const materialSets = kTwin && stepOn('twin.materials', process.env.SCRATCHBOX_K_MATERIAL_REGIONS?.trim() !== '0') ? deps.pipelineK?.materialSets : undefined;
                 if (kTwin && !materialSets) logStep('twin.materials', 'skipped');
                 // the swatch detail bake: the building's survey swatches (AI Beautify, one image call per station) baked into the
                 // twin's atlases as the detail band the tile cannot carry (generated); off by default, SCRATCHBOX_K_DETAIL_BAKE=1 or the node graph on
@@ -2683,15 +2703,67 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const roofShadowOn = (!kTwin || harmonizeOn) && stepOn('twin.roofShadow', kTwin ? roofShadowEnv !== '0' : roofShadowEnv === '1');
                 const roofShadowOpts = roofShadowOn ? { roofShadow: { ...(extraction.geometryGlb && fs.existsSync(extraction.geometryGlb) ? { context: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)) } : {}), progress: (m: string) => io.progress(`textures: ${m}`) } } : {};
                 if (kTwin && !roofShadowOn) logStep('twin.roofShadow', 'skipped');
-                if (kTwin && !materialSets) cache.writeRunNote(runId, 'pipeline_k_materials', { skipped: deps.pipelineK?.materialSets ? 'off (SCRATCHBOX_K_MATERIAL_REGIONS=1 turns it on)' : 'no texture library in this build\'s services' });
+                if (kTwin && !materialSets) cache.writeRunNote(runId, 'pipeline_k_materials', { skipped: deps.pipelineK?.materialSets ? 'off (SCRATCHBOX_K_MATERIAL_REGIONS=0 or the node graph)' : 'no texture library in this build\'s services' });
                 // the window fit's planes, whose windows material regions draws on the scan pieces lying on them
                 const kOrthos = materialSets ? cache.readRunNote<{ orthosDir?: string }>(runId, 'pipeline_k')?.orthosDir : undefined;
                 const fitFile = kOrthos ? path.join(kOrthos, WINDOW_FIT_FILE) : undefined;
-                const planes = kOrthos ? [...fittedPlanesOf(kOrthos), ...readerPlanesOf(kOrthos)] : [];
+                const planes = kOrthos ? fittedPlanesOf(kOrthos) : [];
+                // the facade reader on the finished exterior (pipeline-k/twin-reader.ts): after the twin's de-light, roof shadow and
+                // harmonising, every plane read on the photos as they will be shown; its openings draw the glass in place of the
+                // window fit's where it drew. tile_refine's flat scan (beside the K orthos) gives the other planes their frames
+                const flatGlb = kOrthos ? path.join(path.dirname(kOrthos), 'textured.glb') : undefined;
+                const readerAsk = kOrthos && flatGlb && fs.existsSync(flatGlb) && stepOn('remesh.facadeRead', process.env.SCRATCHBOX_K_FACADE_READ?.trim() !== '0') ? facadeReaderAsk(io.signal, 'textures') : undefined;
+                // what the reader saw, for the namer of the building's materials below
+                let readerSeen: { records: FacadeReadRecord[]; brief?: string } | undefined;
+                const planesFor = readerAsk ? async (finalImage: Map<number, RgbaImage8>, json: any) => {
+                    try {
+                        const tr = await readOnTwin({ orthosDir: kOrthos!, flatGlb: flatGlb!, twinJson: json, finalImage, fitted: planes, ask: readerAsk, building: { name: request.query, ...(run.state.place?.resolvedAddress ? { address: run.state.place.resolvedAddress } : {}) }, signal: io.signal, progress: (m: string) => io.progress(`textures: ${m}`) });
+                        const recs = tr.records.facades, by = (o: string) => recs.filter(x => x.outcome === o).length;
+                        readerSeen = { records: recs, ...(tr.records.brief && 'building' in tr.records.brief ? { brief: tr.records.brief.building } : {}) };
+                        cache.writeRunNote(runId, 'pipeline_k_facade_reader', { version: FACADE_READER_VERSION, on: TWIN_READER_VERSION, ...tr.report, read: recs.length, replaced: by('replaced'), kept: by('kept'), skipped: by('skipped'), failed: by('failed'), unread: tr.records.unread, ms: tr.records.ms, ...(tr.records.brief ? { brief: tr.records.brief } : {}), reviewDir: path.join(tr.report.dir, 'facade_reader'), records: recs });
+                        run.note(PROVENANCE.photoInferred, `facade reader (${FACADE_READER_VERSION}) on the finished exterior: of ${recs.length} planes read, ${by('replaced')} had their openings placed by a vision model's reading (told the building and its families), fitted to the photo and judged; they draw the glass, the window fit's elsewhere`);
+                        return tr.planes;
+                    } catch (err) {
+                        if (isAbort(err) || io.signal.aborted) throw err;
+                        cache.writeRunNote(runId, 'pipeline_k_facade_reader', { version: FACADE_READER_VERSION, on: TWIN_READER_VERSION, failed: true, reason: errorMessage(err) });
+                        return planes;
+                    }
+                } : undefined;
+                // the building's materials named from a picture of each appearance class (pipeline-k/material-naming.ts), told the
+                // building, its brief and what the reader saw between and in its windows; saved with the twin
+                const nameClasses = materialSets && visionAvailable ? async (classes: RegionClass[], swatches: Buffer) => {
+                    const seen = readerSeen?.records ?? [], glass = glassSeen(seen);
+                    try {
+                        const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: [...new Set([FACADE_READER_MODEL.model, ...visionAvailable.candidates])], signal: io.signal, ...chainExtras('textures'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                        const replyText = (res: { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> }) => (res.candidates?.[0]?.content?.parts ?? []).filter(q => !q.thought).map(q => q.text ?? '').join('');
+                        const prompt = namingPrompt(classes, { building: [request.query, run.state.place?.resolvedAddress].filter(Boolean).join(', '), ...(readerSeen?.brief ? { brief: readerSeen.brief } : {}), between: betweenSeen(seen), glass: glass.map(g => g.words) });
+                        const res = await chain.generate({ contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: swatches.toString('base64') } }, { text: prompt }] }], config: { responseMimeType: 'application/json', temperature: 0, abortSignal: io.signal } },
+                            { stage: 'grammar', ...VISION_CALL_POLICY.grammar, thinkingBudget: FACADE_READER_MODEL.thinkingBudget, valid: x => { try { parseClassWords(replyText(x), classes.length); return true; } catch { return false; } } });
+                        const words = parseClassWords(replyText(res.response), classes.length);
+                        res.remember();
+                        return { words, glass };
+                    } catch (err) {
+                        if (isAbort(err) || io.signal.aborted) throw err;
+                        return { glass, unnamed: `naming the classes failed: ${errorMessage(err)}` };
+                    }
+                } : undefined;
+                // each class's library set picked by its look among the nearest the ranking gives (pipeline-k/material-choice.ts):
+                // the class's patches beside each candidate at the same real size, recoloured to the class's colour
+                const chooseSets = materialSets && visionAvailable ? async (rows: ChoiceRow[], swatches: { png: Buffer; spanM?: number }) => {
+                    const spanM = swatches.spanM ?? CHOICE_SPAN_M, sheet = candidateSheetPng(rows, spanM);
+                    const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: [...new Set([FACADE_READER_MODEL.model, ...visionAvailable.candidates])], signal: io.signal, ...chainExtras('textures'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                    const replyText = (res: { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> }) => (res.candidates?.[0]?.content?.parts ?? []).filter(q => !q.thought).map(q => q.text ?? '').join('');
+                    const prompt = choicePrompt(rows, spanM, { building: [request.query, run.state.place?.resolvedAddress].filter(Boolean).join(', '), ...(readerSeen?.brief ? { brief: readerSeen.brief } : {}) });
+                    const res = await chain.generate({ contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: swatches.png.toString('base64') } }, { inlineData: { mimeType: 'image/png', data: sheet.toString('base64') } }, { text: prompt }] }], config: { responseMimeType: 'application/json', temperature: 0, abortSignal: io.signal } },
+                        { stage: 'grammar', ...VISION_CALL_POLICY.grammar, thinkingBudget: FACADE_READER_MODEL.thinkingBudget, valid: x => { try { parseChoices(replyText(x), rows); return true; } catch { return false; } } });
+                    const picks = parseChoices(replyText(res.response), rows);
+                    res.remember();
+                    return picks;
+                } : undefined;
                 const grammarFile = kOrthos ? path.join(kOrthos, WALL_GRAMMAR_FILE) : undefined;
-                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '', relightClient ? `${VIEW_RELIGHT_VERSION}:${lightingModels().join(',')}:${lightingPromptVariant()}:${viewRelightEnvParams().key}` : '', roofShadowOn ? ROOF_SHADOW_VERSION : '', process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' ? SKY_DELIGHT_VERSION : '');
-                const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport; materialRegions?: TileRefineTwin['materialRegions'] }>('textures', key, async dir => {
-                    const twin = await tileRefineTwin(bytes, target.layer.layer, kTwin ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), ...(harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0, ...(process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' && extraction.geometryGlb && fs.existsSync(extraction.geometryGlb) ? { skyContext: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)) } : {}) } } : {}), ...(relightClient ? { viewRelight: { client: relightClient, models: lightingModels(), params: viewRelightEnvParams().params, signal: io.signal, progress: (m: string) => io.progress(`textures: ${m}`) } } : {}), ...roofShadowOpts, ...(materialSets ? { materialRegions: { harvest: process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum', sets: (classes: RegionClass[]) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m) }), planes } } : {}) } : enhance || roofShadowOn ? {
+                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '', relightClient ? `${VIEW_RELIGHT_VERSION}:${lightingModels().join(',')}:${lightingPromptVariant()}:${viewRelightEnvParams().key}` : '', roofShadowOn ? ROOF_SHADOW_VERSION : '', process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' ? SKY_DELIGHT_VERSION : '', readerAsk ? `${FACADE_READER_VERSION}:${TWIN_READER_VERSION}:${JSON.stringify(FACADE_READER_PARAMS)}` : '', nameClasses ? MATERIAL_NAMING_VERSION : '', chooseSets ? MATERIAL_CHOICE_VERSION : '');
+                const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport; materialRegions?: TileRefineTwin['materialRegions']; materialClasses?: TileRefineTwin['materialClasses'] }>('textures', key, async dir => {
+                    const twin = await tileRefineTwin(bytes, target.layer.layer, kTwin ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), ...(harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0, ...(process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' && extraction.geometryGlb && fs.existsSync(extraction.geometryGlb) ? { skyContext: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)) } : {}) } } : {}), ...(relightClient ? { viewRelight: { client: relightClient, models: lightingModels(), params: viewRelightEnvParams().params, signal: io.signal, progress: (m: string) => io.progress(`textures: ${m}`) } } : {}), ...roofShadowOpts, ...(materialSets ? { materialRegions: { harvest: process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum', sets: (classes: RegionClass[], swatches?: { png: Buffer; spanM?: number }) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m), ...(chooseSets && swatches ? { choose: (rows: ChoiceRow[]) => chooseSets(rows, swatches) } : {}) }), planes, ...(planesFor ? { planesFor } : {}), ...(nameClasses ? { nameClasses } : {}) } } : {}) } : enhance || roofShadowOn ? {
                         ...(enhance ? { recreate: {
                             client: enhance, ...(deps.textures?.enhanceModels ? { models: deps.textures.enhanceModels } : {}),
                             budgetMs: TILE_REFINE_RECREATE_BUDGET_MS
@@ -2748,13 +2820,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         cache.writeRunNote(runId, 'pipeline_k_detail_bake', { layer: target.layer.layer, ...db.report });
                     }
                     fs.writeFileSync(path.join(dir, 'twin.glb'), twinGlb);
-                    return { value: { rungShares: twin.rungShares, provenance, ladderRung: twin.ladderRung, triangles: twin.triangles, ...(twin.harmonize ? { harmonize: twin.harmonize } : {}), ...(twin.materialRegions ? { materialRegions: twin.materialRegions } : {}) } };
+                    return { value: { rungShares: twin.rungShares, provenance, ladderRung: twin.ladderRung, triangles: twin.triangles, ...(twin.harmonize ? { harmonize: twin.harmonize } : {}), ...(twin.materialRegions ? { materialRegions: twin.materialRegions } : {}), ...(twin.materialClasses ? { materialClasses: twin.materialClasses } : {}) } };
                 }, { publish: () => [{ from: 'twin.glb', as: `${base}_${target.layer.layer}_tex_${key.slice(0, 8)}.glb` }], bypass: bypass('textures') });
                 const pub = entry.published[0];
                 // the material regions' report, whether the stage ran now or its result came from the cache
                 if (materialSets) {
                     const mr = entry.value.materialRegions;
-                    cache.writeRunNote(runId, 'pipeline_k_materials', { layer: target.layer.layer, cached: entry.cached, ...(mr ?? { skipped: 'the cached textures were written before their result carried the material regions\' report; nothing was recorded for them' }) });
+                    cache.writeRunNote(runId, 'pipeline_k_materials', { layer: target.layer.layer, cached: entry.cached, ...(mr ?? { skipped: 'the cached textures were written before their result carried the material regions\' report; nothing was recorded for them' }), ...(entry.value.materialClasses ? { materialClasses: entry.value.materialClasses } : {}) });
                     if (mr) io.progress('skipped' in mr ? `material regions not drawn: ${mr.skipped}` : `${describeMaterialRegions(mr)}${entry.cached ? ' (cached)' : ''}`);
                 }
                 // pipeline K's finished model, for scripts that rebuild the building from it (site-guides.ts)
@@ -3475,9 +3547,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 };
                 // the facades' orthophotos for the grammar reading (facade-grammar.ts), only when it will run; pipeline K: the relief
                 // carves nothing in the scan (its window recesses are carved on the rebuilt facades, from the straightened photos)
-                const orthos = grammarOn || pipelineK ? { reliefOrthos: true, ...(pipelineK ? { reliefCarve: false, reliefAnalyse: false } : {}) } : {};
+                // pipeline K: an occlusion mask beside each ortho (what stood in front of the facade when it was photographed),
+                // cast against the scan before the tree strip took its crowns out, else the scan as loaded
+                const occlusionOn = pipelineK && stepOn('remesh.occlusion', process.env.SCRATCHBOX_K_OCCLUSION?.trim() !== '0');
+                const occlusion = occlusionOn ? { reliefOcclusion: tilePath !== extraction.texturedGlb ? extraction.texturedGlb : true } : {};
+                const orthos = grammarOn || pipelineK ? { reliefOrthos: true, ...(pipelineK ? { reliefCarve: false, reliefAnalyse: false, ...occlusion } : {}) } : {};
                 if (isolateMode && request.procedural !== true && deps.refine.renderOwnershipViews && visionAvailable) voteLater = { tilePath, ...(isolatePick ? { isolatePick } : {}), ...(remeshPick ? { pick: remeshPick } : {}), request: remeshRequest, orthos };
                 let r = await timed('tileRefine', () => deps.refine.refine({ ...remeshRequest!, ...orthos }));
+                logStep('remesh.occlusion', occlusionOn ? 'done' : 'skipped');
                 // the model after each step that changed it, for the node graph (published once the layer is committed)
                 const stepFiles: Array<[string, string]> = [['remesh.tileRefine', r.texturedGlb ?? r.clayGlb]];
                 // the isolated structure must be the one picked; when it is not (or tile_refine wrote no isolated scan to
@@ -3541,65 +3618,31 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 // the no-pattern tail only (window-fit.ts): an open-vocabulary mask of "window"/"door", opt-in since it
                                 // bills per call (docs/research/2026-10-27-sb-fenestra-window-fit-design.md, section 1, evidence 6)
                                 const windowSegmentOn = process.env.SCRATCHBOX_K_WINDOW_SEGMENT?.trim() === '1';
-                                const windowSegment: SegmentOpeningMask | undefined = windowSegmentOn ? async (pngPath, width, height, signal) => {
-                                    const segment = deps.textures?.segment ?? segmenterTool();
-                                    const png = fs.readFileSync(pngPath);
-                                    const [win, door] = await Promise.all([segment(png, width, height, 'a window opening', signal), segment(png, width, height, 'a door opening', signal)]);
-                                    if (!win.mask && !door.mask) return undefined;
-                                    const out = new Uint8Array(width * height);
-                                    for (let i = 0; i < out.length; i++) out[i] = (win.mask?.[i] === MASK_YES || door.mask?.[i] === MASK_YES) ? 1 : 0;
-                                    return out;
-                                } : undefined;
-                                // every plane of the building read by a vision agent and judged (pipeline-k/facade-reader.ts): the walls
-                                // tile_refine photographed and every other plane (roofs, terraces, the walls it did not analyse;
-                                // plane-orthos.ts); it needs only the photos, so it runs beside the window fit and is merged into its
-                                // file after; on with a vision model, SCRATCHBOX_K_FACADE_READ=0 or the node graph off
-                                const readerOn = !!(visionAvailable && r.texturedGlb && stepOn('remesh.facadeRead', process.env.SCRATCHBOX_K_FACADE_READ?.trim() !== '0'));
-                                let readerRun: Promise<{ po: Awaited<ReturnType<typeof planeOrthos>>; read: Awaited<ReturnType<typeof readPlanes>> }> | undefined;
-                                if (readerOn && visionAvailable && r.texturedGlb) {
-                                    // the reader's fast, cheap model first (FACADE_READER_MODEL), the app's other vision models behind it
-                                    const readChain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: [...new Set([FACADE_READER_MODEL.model, ...visionAvailable.candidates])], signal: io.signal, ...chainExtras('remesh'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
-                                    const replyText = (res: { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> }) => (res.candidates?.[0]?.content?.parts ?? []).filter(q => !q.thought).map(q => q.text ?? '').join('');
-                                    const ask: FacadeAsk = async (png, prompt, kind) => {
-                                        const res = await readChain.generate({ contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: png.toString('base64') } }, { text: prompt }] }], config: { responseMimeType: 'application/json', temperature: 0, abortSignal: io.signal } },
-                                            { stage: 'grammar', ...VISION_CALL_POLICY.grammar, thinkingBudget: FACADE_READER_MODEL.thinkingBudget, valid: x => { try { (kind === 'overview' ? parseZones : kind === 'read' ? parseReading : parseJudgement)(replyText(x)); return true; } catch { return false; } } });
-                                        const text = replyText(res.response);
-                                        res.remember();
-                                        return text;
-                                    };
-                                    const textured = r.texturedGlb;
-                                    readerRun = timed('facadeRead', async () => {
-                                        const po = await planeOrthos(textured, k.orthosDir);
-                                        io.progress(`pipeline K: reading the building's planes (${po.file.planes.length} beyond the facades)`);
-                                        return { po, read: await readPlanes(k.orthosDir, ask, { signal: io.signal, progress: m => io.progress(m) }) };
-                                    });
-                                    // awaited after the window fit; a failure is handled there
-                                    readerRun.catch(() => undefined);
-                                } else logStep('remesh.facadeRead', 'skipped');
-                                const wf = await timed('windowFit', () => fitWindowsForOrthos(k.orthosDir, { signal: io.signal, ...(windowSegment ? { segment: windowSegment } : {}) }));
+                                const windowSegment = windowSegmentOn ? openingSegmenter(deps.textures?.segment ?? segmenterTool()) : undefined;
+                                // the facade reader reads every plane on the finished exterior, in the texture stage (pipeline-k/twin-reader.ts,
+                                // user decision 2026-10-30), and draws the glass; the window recesses stay this window fit's
+                                const readerOn = !!(visionAvailable && stepOn('remesh.facadeRead', process.env.SCRATCHBOX_K_FACADE_READ?.trim() !== '0'));
+                                // with the reader on, the segmenter takes only the walls its gates leave unread (as readPlanes filters them:
+                                // shorter than minHeightM, narrower than minWallWidthM or under minCoverage covered); the reader would
+                                // replace the segmenter's windows on every other plane
+                                const RP = FACADE_READER_PARAMS;
+                                const segmentScope = windowSegment && readerOn ? { key: `beside-${FACADE_READER_VERSION}:${RP.minWallWidthM}/${RP.minHeightM}/${RP.minCoverage}`, includes: (p: { widthM: number; heightM: number; coverage: number }) => !(p.coverage >= RP.minCoverage && p.widthM >= RP.minWallWidthM && p.heightM >= RP.minHeightM) } : undefined;
+                                // the steps below run on worker threads, off this thread and each in a heap of its own (remesh-worker-pool.ts),
+                                // unless SCRATCHBOX_REMESH_WORKERS=0: the window fit a facade a job, largest first
+                                const onThreads = remeshWorkersEnabled();
+                                const fitOnThreads = (facades: OrthoFacade[], P: WindowFitParams) =>
+                                    runRemeshJobs<WindowFitEntry>(facades.map(facade => ({ kind: 'windowFacade' as const, orthosDir: k.orthosDir, facade, params: P })), { threads: remeshWorkerThreads(), order: facades.map((_, i) => i).sort((a, b) => facades[b].width * facades[b].height - facades[a].width * facades[a].height || a - b), signal: io.signal });
+                                const wf = await timed('windowFit', () => fitWindowsForOrthos(k.orthosDir, { signal: io.signal, ...(windowSegment ? { segment: windowSegment } : {}), ...(segmentScope ? { segmentScope } : {}), ...(onThreads ? { fitFacades: fitOnThreads } : {}) }));
                                 windowFit = wf.file;
-                                if (readerRun) {
-                                    try {
-                                        const fr = await readerRun;
-                                        Object.assign(wf, { fit: mergeReadings(k.orthosDir, wf.fit, fr.read.records.readings) });
-                                        const recs = fr.read.records.facades, by = (o: string) => recs.filter(x => x.outcome === o).length;
-                                        const replaced = recs.filter(x => x.outcome === 'replaced');
-                                        cache.writeRunNote(runId, 'pipeline_k_facade_reader', { version: FACADE_READER_VERSION, planeOrthos: PLANE_ORTHOS_VERSION, cached: fr.read.cached, planes: fr.po.file.planes.length, planesSkipped: fr.po.file.skipped, read: recs.length, replaced: by('replaced'), kept: by('kept'), skipped: by('skipped'), failed: by('failed'), unread: fr.read.records.unread, ms: fr.read.records.ms, reviewDir: path.join(k.orthosDir, 'facade_reader'), records: recs });
-                                        run.note(PROVENANCE.photoInferred, `facade reader (${FACADE_READER_VERSION}): of ${recs.length} planes read (${fr.po.file.planes.length} of them roofs, terraces and walls beyond the facade photos), ${replaced.length} had their openings placed by a vision model's reading, fitted to the photo and judged (${replaced.reduce((a, x) => a + (x.zones ?? []).reduce((b, z) => b + (z.outcome === 'drawn' ? z.fit?.openings ?? 0 : 0), 0), 0)} openings), ${by('kept')} kept the window fit's reading, ${by('skipped')} were blank or too little covered${fr.read.records.unread.planes ? `; ${fr.read.records.unread.planes} smaller planes (${fr.read.records.unread.areaM2} m²) were not read` : ''}`);
-                                    } catch (err) {
-                                        if (isAbort(err) || io.signal.aborted) throw err;
-                                        cache.writeRunNote(runId, 'pipeline_k_facade_reader', { version: FACADE_READER_VERSION, failed: true, reason: errorMessage(err) });
-                                    }
-                                }
                                 // the bay grammar read per wall, from all the photos of each wall's facades together (wall-grammar.ts)
                                 try {
-                                    const wg = await timed('wallGrammar', async () => readWallGrammar(k.orthosDir, wf.fit, b => { const d = decodePngForGrammar(b); return { rgba: d.rgba, width: d.width, height: d.height }; }));
+                                    const wg = await timed('wallGrammar', async () => onThreads ? runRemeshJob<{ file: string; grammar: WallGrammarFile }>({ kind: 'wallGrammar', orthosDir: k.orthosDir, fit: wf.fit }, { signal: io.signal }) : readWallGrammar(k.orthosDir, wf.fit, b => { const d = decodePngForGrammar(b); return { rgba: d.rgba, width: d.width, height: d.height }; }));
                                     wallGrammar = wg.file;
                                     const bays = wg.grammar.walls.flatMap(w => w.bays);
                                     cache.writeRunNote(runId, 'pipeline_k_wall_grammar', { version: WALL_GRAMMAR_VERSION, walls: wg.grammar.walls.length, multiFacadeWalls: wg.grammar.walls.filter(w => w.facades.length > 1).length, tiers: new Set(wg.grammar.walls.map(w => w.tier)).size, baysRead: bays.filter(b => b.from === 'photo-inferred').length, baysGenerated: bays.filter(b => b.from === 'generated').length });
                                     // one sheet per multi-facade wall, rebuilt in place of its facades (on unless SCRATCHBOX_K_WHOLE_WALLS=0)
                                     if (stepOn('remesh.wallSheets', process.env.SCRATCHBOX_K_WHOLE_WALLS?.trim() !== '0')) {
-                                        const ws = await timed('wallSheets', async () => buildWallSheets(k.orthosDir, wg.grammar, wf.fit, b => { const d = decodePngForGrammar(b); return { rgba: d.rgba, width: d.width, height: d.height }; }));
+                                        const ws = await timed('wallSheets', async () => onThreads ? runRemeshJob<{ file: string; sheets: WallSheet[] }>({ kind: 'wallSheets', orthosDir: k.orthosDir, grammar: wg.grammar, fit: wf.fit }, { signal: io.signal }) : buildWallSheets(k.orthosDir, wg.grammar, wf.fit, b => { const d = decodePngForGrammar(b); return { rgba: d.rgba, width: d.width, height: d.height }; }));
                                         wallSheets = ws.file;
                                         cache.writeRunNote(runId, 'pipeline_k_wall_sheets', { version: WALL_SHEETS_VERSION, sheets: ws.sheets.map(sh => ({ wallId: sh.wallId, members: sh.members, sizeM: [Math.round(sh.facade.sMax - sh.facade.sMin), Math.round(sh.facade.tMax - sh.facade.tMin)], filledShare: sh.facade.textureFill?.share, windows: sh.windows.length, bays: sh.bays.length })) });
                                         run.note(PROVENANCE.photoInferred, `whole walls (${WALL_SHEETS_VERSION}): ${ws.sheets.length} walls rebuilt as one sheet each from ${ws.sheets.reduce((a, sh) => a + sh.members.length, 0)} facades; their photo-less texels filled from each sheet's own repeats (generated)`);
@@ -3610,9 +3653,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                     cache.writeRunNote(runId, 'pipeline_k_wall_grammar', { version: WALL_GRAMMAR_VERSION, failed: true, reason: errorMessage(err) });
                                 }
                                 const ok = wf.fit.facades.filter(f => !('error' in f)), failed = wf.fit.facades.filter(f => 'error' in f);
-                                const segmented = ok.filter(f => 'segmentAssisted' in f && f.segmentAssisted);
-                                cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, cached: wf.cached, segment: windowSegmentOn, ms: wf.fit.ms, facades: wf.fit.facades.map(f => ('error' in f ? f : { facadeId: f.facadeId, windows: f.rects.length, bands: f.bands.length, accepted: f.bands.filter(b => b.accepted).length, kinds: f.bands.filter(b => b.accepted).map(b => b.kind), ...(f.segmentAssisted ? { segmentAssisted: true } : {}), ms: f.ms })) });
-                                run.note(PROVENANCE.photoInferred, `window fit (${WINDOW_FIT_VERSION}): ${ok.reduce((a, f) => a + ('rects' in f ? f.rects.length : 0), 0)} windows on ${ok.filter(f => 'rects' in f && f.rects.length).length} of ${wf.fit.facades.length} facades${segmented.length ? `, ${segmented.length} of them only from an open-vocabulary mask of their photo (the structural fit found nothing)` : ''}${failed.length ? `; ${failed.length} facades not fitted (${failed.map(f => `${f.facadeId}: ${'error' in f ? f.error : ''}`).join('; ').slice(0, 300)}), opened by their bay rhythm instead` : ''}`);
+                                const seg = segmentSummary(wf.fit);
+                                cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, cached: wf.cached, segment: windowSegmentOn, ...(windowSegmentOn ? { segmentTries: seg, segmentScope: segmentScope?.key ?? 'every facade the fit left empty' } : {}), ms: wf.fit.ms, facades: wf.fit.facades.map(f => ('error' in f ? f : { facadeId: f.facadeId, windows: f.rects.length, bands: f.bands.length, accepted: f.bands.filter(b => b.accepted).length, kinds: f.bands.filter(b => b.accepted).map(b => b.kind), ...(f.segmentTry ? { segmentTry: f.segmentTry } : {}), ms: f.ms })) });
+                                const segNote = seg.attempted ? `; of the ${seg.attempted} facades the structural fit left empty, an open-vocabulary mask of their photo gave windows the photo confirms on ${seg.assisted}, openings the photo does not confirm on ${seg.noWindows}, and nothing on ${seg.notFound}${seg.failed ? `, and ${seg.failed} calls failed (${seg.errors.join('; ')})` : ''}` : '';
+                                run.note(PROVENANCE.photoInferred, `window fit (${WINDOW_FIT_VERSION}): ${ok.reduce((a, f) => a + ('rects' in f ? f.rects.length : 0), 0)} windows on ${ok.filter(f => 'rects' in f && f.rects.length).length} of ${wf.fit.facades.length} facades${segNote}${failed.length ? `; ${failed.length} facades not fitted (${failed.map(f => `${f.facadeId}: ${'error' in f ? f.error : ''}`).join('; ').slice(0, 300)}), opened by their bay rhythm instead` : ''}`);
                             } catch (err) {
                                 if (isAbort(err) || io.signal.aborted) throw err;
                                 cache.writeRunNote(runId, 'pipeline_k_window_fit', { version: WINDOW_FIT_VERSION, failed: true, reason: errorMessage(err) });
@@ -3672,7 +3716,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const vec = eBuildings.flatMap(b => (b.extruded?.length ? b.extruded.filter(p => !p.planOnly).map(p => p.loops[0]) : [])).filter(l => l && l.length >= 3);
                         return vec.length ? vec : [structure.outline];
                     })() : undefined;
-                    const pol = await timed('polish', async () => polishRemesh({ clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: stepOn('polish.lattice', true), photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(wallGrammar ? { wallGrammar } : {}), ...(wallSheets ? { walls: wallSheets } : {}), ...(pipelineK && r.rawClayGlb ? { rawScan: r.rawClayGlb } : {}), ...(revealDepth ? { revealDepth } : {}), ...(kLoops && stepOn('polish.base', true) ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}), ...(pipelineK && stepOn('polish.seal', process.env.SCRATCHBOX_K_SEAL?.trim() === '1') ? { seal: true } : {}), ...(pipelineK && stepOn('polish.clip', process.env.SCRATCHBOX_K_CLIP?.trim() !== '0') ? { clip: true } : {}), ...(pipelineK && stepOn('polish.infill', process.env.SCRATCHBOX_K_INFILL?.trim() !== '0') ? { infill: true } : {}), cleanup: stepOn('polish.cleanup', remeshCleanupEnabled()), orient: stepOn('polish.orient', remeshOrientEnabled()), onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`polish.${step}`, state) }));
+                    // pipeline K's polish (the lattice, clip and infill: a minute and more) on a worker thread, in a heap of its own
+                    // (remesh-worker-pool.ts), unless SCRATCHBOX_REMESH_WORKERS=0; a lighter polish stays here, short of a thread's start
+                    const polishInput: PolishJobInput = { clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: stepOn('polish.lattice', true), photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(wallGrammar ? { wallGrammar } : {}), ...(wallSheets ? { walls: wallSheets } : {}), ...(pipelineK && r.rawClayGlb ? { rawScan: r.rawClayGlb } : {}), ...(revealDepth ? { revealDepth } : {}), ...(kLoops && stepOn('polish.base', true) ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}), ...(pipelineK && stepOn('polish.seal', process.env.SCRATCHBOX_K_SEAL?.trim() === '1') ? { seal: true } : {}), ...(pipelineK && stepOn('polish.clip', process.env.SCRATCHBOX_K_CLIP?.trim() !== '0') ? { clip: true } : {}), ...(pipelineK && stepOn('polish.infill', process.env.SCRATCHBOX_K_INFILL?.trim() !== '0') ? { infill: true } : {}), cleanup: stepOn('polish.cleanup', remeshCleanupEnabled()), orient: stepOn('polish.orient', remeshOrientEnabled()) };
+                    const onPolishStep = (step: string, state: 'running' | 'done' | 'failed') => logStep(`polish.${step}`, state);
+                    const pol = await timed('polish', async () => pipelineK && remeshWorkersEnabled() ? runRemeshJob<PolishedRemesh>({ kind: 'polish', input: polishInput }, { signal: io.signal, onStep: onPolishStep }) : polishRemesh({ ...polishInput, onStep: onPolishStep }));
                     for (const [name, file] of Object.entries(pol.snapshots)) stepFiles.push([`polish.${name}`, file]);
                     // the steps turned off for this build, shown as skipped
                     for (const key of ['polish.cleanup', 'polish.lattice', 'polish.base', 'polish.clip', 'polish.infill', 'polish.seal', 'polish.orient', 'remesh.streetViewScore', 'remesh.visibleDefects']) if (request.steps?.[key] === false) logStep(key, 'skipped');
@@ -3700,7 +3748,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (pipelineK && isolateMode && pol.texturedGlb && stepOn('remesh.visibleDefects', true)) {
                         const seen = await timed('visibleDefects', async () => measureVisibleDefects(fs.readFileSync(pol.texturedGlb!)));
                         cache.writeRunNote(runId, 'pipeline_k_visible_defects', { ...seen, views: seen.views.map(({ mask: _m, ...v }) => v), judged: 'holes (untextured surface is judged on the finished model: pipeline_k_visible_defects_textured)' });
-                        if (seen.holeShare > VISIBLE_DEFECTS_PARAMS.maxHoleShare || seen.maxViewHoleShare > VISIBLE_DEFECTS_PARAMS.maxViewHoleShare) isolateDegradations.push(run.degrade(record('remesh', 'visible_defects', {
+                        if (seen.holesFlagged) isolateDegradations.push(run.degrade(record('remesh', 'visible_defects', {
                             part: { description: 'holes seen on the outside of the building' }, intended: 'every surface seen from outside closed',
                             fellTo: 'a hole where it shows', provenanceAfter: PROVENANCE.generated, reason: `from ${seen.views.length} views, ${/[\d.]+% through holes.*$/.exec(seen.why)?.[0] ?? seen.why}`, transient: false, runId, now: now()
                         })));

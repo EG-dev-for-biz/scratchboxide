@@ -73,6 +73,7 @@ import { createPathTraceRouter } from './routes/pathTraceRoutes';
 import { createTileRefineRouter } from './routes/tileRefineRoutes';
 import { createTextureRouter } from './routes/textureRoutes';
 import { createMediaRouter, createVideoRouter } from './routes/mediaVideoRoutes';
+import { createWorldRouter } from './routes/worldRoutes';
 import {
     createTileCleanupRouter,
     createPbrRouter,
@@ -755,6 +756,7 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
 
     app.use('/api/3d/ar', createArRouter());
     app.use('/api/geo', createGeoRouter());
+    app.use('/api/worlds', createWorldRouter());
     app.use('/api/panorama', createPanoramaRouter(mediaCredentials));
     app.use('/api/3d-engine/splat-studio', createSplatStudioRouter());
     app.use('/api/textures', createTextureRouter(mediaCredentials));

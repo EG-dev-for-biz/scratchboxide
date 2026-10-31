@@ -19,6 +19,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { glbToTriangleSoup } from '../../3d-engine/part-connectivity';
 import { measureGlbBase64MeshCounts } from '../../../common/glb-mesh-counts';
+import { primitiveOutOfScopeReason } from '../../../common/product-scope';
 import { auditModelAgainstRequest, callVisionModel } from '../../3d-engine/visual-review';
 import type { ToolDeclaration, ToolHandler } from './types';
 import { applyFirstPassBaseline, firstPassRenderMode, keepOpenSceneRenderMode } from '../scene3d-first-pass-baseline';
@@ -197,7 +198,7 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'scene_3d_dispatch_operators',
-        description: 'Dispatches high-performance in-memory 3D scene operators against the active 3D canvas stage via DirectDispatchOperatorEngine. Runs on the scene data: transforms (sb_set_transform, sb_translate, sb_rotate, sb_scale), PBR material properties (sb_set_material_pbr), lighting and sun (sb_setup_lighting, sb_set_diurnal_time_of_day), physics and keyframes (sb_add_physics, sb_insert_keyframe), and camera framing (sb_set_camera, sb_frame_bounds), without re-compiling geometry. Operators that edit mesh geometry need the live 3D viewport and fail here with errorCode not_available_here.',
+        description: 'Dispatches high-performance in-memory 3D scene operators against the active 3D canvas stage via DirectDispatchOperatorEngine. Runs on the scene data: transforms (sb_set_transform, sb_translate, sb_rotate, sb_scale), PBR material properties (sb_set_material_pbr), lighting and sun (sb_setup_lighting, sb_set_diurnal_time_of_day), physics and keyframes (sb_add_physics, sb_insert_keyframe), camera framing (sb_set_camera, sb_frame_bounds), and a colour harmony grade on the viewport (sb_set_color_harmony: the objects\' hues moved toward a hue template), without re-compiling geometry. Operators that edit mesh geometry need the live 3D viewport and fail here with errorCode not_available_here.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -256,6 +257,10 @@ export const canvasHandlers: Record<string, ToolHandler> = {
                 resultPayload: { success: false, error },
                 summaryResult: `Failed: ${error}`
             };
+        }
+        const outOfScope = primitiveOutOfScopeReason(primitiveType);
+        if (outOfScope) {
+            return { status: 'failed', resultPayload: { success: false, error: outOfScope }, summaryResult: `Failed: ${outOfScope}` };
         }
         let title = asString(args.title) || 'Visual Creation';
         let summary = asString(args.summary) || `Synthesized ${title} on visual canvas.`;
@@ -463,7 +468,8 @@ export const canvasHandlers: Record<string, ToolHandler> = {
     },
 
     morph_canvas_primitive(args, _ctx) {
-        const targetType = (asString(args.targetType) || '') as PrimitiveType;
+        const requestedTarget = asString(args.targetType);
+        const targetType = normalizePrimitiveType(requestedTarget);
         const active = _ctx?.request?.activeArtifact;
         if (!active) {
             return {
@@ -473,11 +479,18 @@ export const canvasHandlers: Record<string, ToolHandler> = {
             };
         }
         if (!targetType) {
+            const message = requestedTarget
+                ? `Unknown targetType "${requestedTarget}". Use one of: ${PRIMITIVE_TYPES.join(', ')}.`
+                : 'targetType is required.';
             return {
                 status: 'failed',
-                resultPayload: { status: 'error', message: 'targetType is required.' },
-                summaryResult: 'Missing targetType.'
+                resultPayload: { status: 'error', message },
+                summaryResult: requestedTarget ? `Failed: ${message}` : 'Missing targetType.'
             };
+        }
+        const outOfScope = primitiveOutOfScopeReason(targetType);
+        if (outOfScope) {
+            return { status: 'failed', resultPayload: { status: 'error', message: outOfScope }, summaryResult: `Failed: ${outOfScope}` };
         }
         if (active.type === targetType) {
             return {

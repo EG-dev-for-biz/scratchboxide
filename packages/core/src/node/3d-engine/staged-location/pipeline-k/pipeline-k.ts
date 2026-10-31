@@ -27,7 +27,7 @@ import { Worker } from 'worker_threads';
 import { workerTsRegisterSource } from '../../../worker-ts-register';
 import { FACADE_LATTICE_PARAMS, facadeEligible, wallCoverage, type ReliefFacade } from '../facade-lattice';
 import { decodePng } from '../../../texture-processing';
-import { featurelessMaskName, ORTHO_RECTIFY_PARAMS, ORTHO_RECTIFY_VERSION, uncoveredMaskName, type OrthoRectifyParams, type OrthoRectifyReport } from './ortho-rectify';
+import { featurelessMaskName, occludedMaskName, ORTHO_RECTIFY_PARAMS, ORTHO_RECTIFY_VERSION, uncoveredMaskName, type OrthoRectifyParams, type OrthoRectifyReport } from './ortho-rectify';
 import type { RectifyJob, RectifyMessage } from './ortho-rectify-worker';
 import { encodePng } from '../png-encode';
 
@@ -225,14 +225,23 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
         }
         const todo = facadesJson.facades.filter(f => facadeEligible(f, { ...FACADE_LATTICE_PARAMS, minCoverage }) && fs.existsSync(path.join(srcDir, f.image)));
         for (const f of facadesJson.facades) if (!todo.includes(f) && fs.existsSync(path.join(srcDir, f.image))) fs.copyFileSync(path.join(srcDir, f.image), path.join(tmp, f.image));
+        // tile_refine's occlusion masks: a straightened facade's comes back through its warp; the others' are copied as they are
+        for (const f of facadesJson.facades) {
+            const occ = occludedMaskName(f.image);
+            if (!todo.includes(f) && fs.existsSync(path.join(srcDir, occ))) fs.copyFileSync(path.join(srcDir, occ), path.join(tmp, occ));
+        }
         // largest first, dealt round the threads
         const n = Math.max(1, Math.min(opts.threads ?? Math.max(1, Math.min(4, os.cpus().length - 1)), todo.length));
         const sorted = [...todo].sort((a, b) => b.width * b.height - a.width * a.height);
         const jobs: RectifyJob[] = Array.from({ length: n }, () => ({ srcDir, outDir: tmp, facades: [], params }));
         sorted.forEach((f, k) => jobs[k % n].facades.push({ facadeId: f.facadeId, image: f.image, pixel: f.pixel }));
         const msgs = await runWorkers(jobs.filter(j => j.facades.length), opts.signal);
-        // a facade that failed keeps its original ortho
-        for (const m of msgs) if (m.error) { const f = todo.find(x => x.facadeId === m.facadeId)!; fs.copyFileSync(path.join(srcDir, f.image), path.join(tmp, f.image)); }
+        // a facade that failed keeps its original ortho (and its occlusion mask)
+        for (const m of msgs) if (m.error) {
+            const f = todo.find(x => x.facadeId === m.facadeId)!, occ = occludedMaskName(f.image);
+            fs.copyFileSync(path.join(srcDir, f.image), path.join(tmp, f.image));
+            if (fs.existsSync(path.join(srcDir, occ))) fs.copyFileSync(path.join(srcDir, occ), path.join(tmp, occ));
+        }
         const reports = todo.map(f => msgs.find(m => m.facadeId === f.facadeId) ?? { facadeId: f.facadeId, error: 'no report came back' });
         // featureless photo the facades' own repeats could not refill: continued from the nearest facade facing the same way
         const images = new Map<number, FacadeImage>();
@@ -248,6 +257,8 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
             const r = reports.find(y => y.facadeId === id);
             if (r && 'report' in r && r.report) (r.report.holes as typeof r.report.holes & { continued?: ContinuedFill }).continued = c;
         }
+        // a facade with an occlusion mask beside it names it (tile_refine named it; a warped one keeps the name)
+        for (const f of facadesJson.facades) if (fs.existsSync(path.join(tmp, occludedMaskName(f.image)))) f.occludedMask = occludedMaskName(f.image);
         // a rectified facade names its uncovered mask (the rebuild reads coverage from it, its ortho's holes being filled) and its fill
         for (const f of facadesJson.facades) {
             const rep = reports.find(x => x.facadeId === f.facadeId)?.report;

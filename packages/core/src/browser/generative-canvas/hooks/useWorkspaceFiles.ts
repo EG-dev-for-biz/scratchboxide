@@ -23,6 +23,8 @@ import { NodeGraphPrimitive } from '../primitives/NodeGraphPrimitive';
 import { Scene3DPrimitive } from '../primitives/Scene3DPrimitive';
 import { ChatState, ChatStore } from '../state/chatStore';
 import { LIVE_CODE_STARTER_APP } from '../studio/liveCodeStarterTemplate';
+import { canCreateInLayoutMode, canShowPrimitive } from '../../../common/product-scope';
+import { postScopeNote } from '../chat/scopeNote';
 
 export interface UseWorkspaceFilesDeps {
     activeArtifact: ChatState['activeArtifact'];
@@ -71,6 +73,10 @@ export function useWorkspaceFiles(deps: UseWorkspaceFilesDeps) {
         }
 
         const opened = artifactForOpenedFile(filePath, fileName, realContent, activeArtifact);
+        if (!canShowPrimitive(opened.artifact.type)) {
+            postScopeNote(setMessages, `${fileName} would open as a ${opened.artifact.type}, which this 3D and VFX build does not show.`);
+            return;
+        }
         setLayoutMode(opened.layoutMode);
         const updatedArtifact = opened.artifact;
         setActiveArtifact(updatedArtifact);
@@ -214,12 +220,12 @@ export function artifactForOpenedFile(
 
 /** Creates a new workspace file of the given type as a fresh canvas + chat session. */
 /**
- * The scene a new "4D Scene" workspace opens with: empty, in the neutral studio, so the viewport says "No geometry"
- * until the user or the model adds something. It used to hold `internal:grid` and `internal:sunlight` objects that
- * draw nothing, a cyberpunk sky and a summary describing wave solvers and a WASM heap the scene does not have.
+ * The scene a new "4D Scene" workspace (or an empty 3D canvas) opens with: empty, in the neutral studio, so the
+ * viewport says "No geometry" until the user or the model adds something. It used to hold `internal:grid` and
+ * `internal:sunlight` objects that draw nothing, a cyberpunk sky and a summary describing wave solvers and a WASM heap
+ * the scene does not have.
  */
-export function newEmptySceneArtifact(now: number = Date.now()): CanvasArtifact {
-    const title = '4D Scene';
+export function newEmptySceneArtifact(now: number = Date.now(), title: string = '4D Scene'): CanvasArtifact {
     return {
         id: `art-3d-${now}`,
         type: '3d-scene',
@@ -239,6 +245,10 @@ export function useWorkspaceFileCreation(deps: UseWorkspaceFilesDeps) {
     const { activeArtifact, activeWorkspace, artifactHistory, layoutMode, messages, setActiveArtifact, setArtifactHistory, setCurrentSessionId, setLayoutMode, setMessages, setSessions, showToast } = deps;
 
     const handleCreateWorkspaceFile = (type: WorkspaceFileType) => {
+        if (!canCreateInLayoutMode(type)) {
+            postScopeNote(setMessages, 'This build of Scratchbox is limited to 3D and VFX projects: new files are chats, 3D scenes and video timelines.');
+            return;
+        }
         const newSessionId = `session-${type}-${Date.now()}`;
 
         let newSession: ChatSession;

@@ -29,7 +29,7 @@ export interface BuildStepSpec {
 /** What a result is, for the edge labels. */
 export const BUILD_RESULTS: Record<string, string> = {
     place: 'the place', tiles: 'tile mesh', surveyPhotos: 'Street View photos', canopy: 'canopy',
-    scanClay: 'remeshed scan', orthos: 'facade orthophotos', straightOrthos: 'straightened facade photos', windows: 'windows', planeReadings: 'openings read by the vision agent',
+    scanClay: 'remeshed scan', orthos: 'facade orthophotos', straightOrthos: 'straightened facade photos', occlusion: 'occlusion masks', windows: 'windows', planeReadings: 'openings read by the vision agent',
     depth: 'window depth', cleanClay: 'cleaned scan', latticeClay: 'facades rebuilt', baseClay: 'base cleaned',
     sealedClay: 'sealed shell', finalClay: 'final model', score: 'relief score', holes: 'holes seen',
     ownerViews: 'ownership views', ownerMasks: 'ownership vote', votedClay: 'voted remesh', registeredPoses: 'registered photos', treeStrip: 'trees', delit: 'de-lit photos',
@@ -43,7 +43,8 @@ export const BUILD_STEPS: BuildStepSpec[] = [
     { key: 'survey', stage: 'survey', title: 'Street View survey', needs: ['place', 'tiles'], makes: ['surveyPhotos'] },
     { key: 'trees-measure', stage: 'trees-measure', title: 'Measure the canopy', needs: ['tiles'], makes: ['canopy'] },
     { key: 'remesh.tileRefine', stage: 'remesh', title: 'tile_refine: isolate, remesh, flatten', needs: ['tiles'], makes: ['scanClay', 'orthos'] },
-    { key: 'remesh.pipelineK', stage: 'remesh', title: 'Straighten the facade photos', needs: ['orthos'], makes: ['straightOrthos'] },
+    { key: 'remesh.occlusion', stage: 'remesh', title: 'What stood in front of each facade', needs: ['tiles'], makes: ['occlusion'] },
+    { key: 'remesh.pipelineK', stage: 'remesh', title: 'Straighten the facade photos', needs: ['orthos', 'occlusion'], makes: ['straightOrthos'] },
     { key: 'remesh.windowFit', stage: 'remesh', title: 'Window fit', needs: ['straightOrthos'], makes: ['windows'] },
     { key: 'remesh.facadeRead', stage: 'remesh', title: 'Read every plane\'s openings', needs: ['straightOrthos', 'tiles'], makes: ['planeReadings'] },
     { key: 'remesh.revealDepth', stage: 'remesh', title: 'Window depth from Street View', needs: ['windows', 'surveyPhotos'], makes: ['depth'] },
@@ -81,6 +82,7 @@ export const WRAPPER_STEPS = new Set(['remesh.polish', 'textures.waitRebuildGram
  * off. The rest (the place, the tiles, tile_refine) every later step needs, so they have no switch.
  */
 export const TOGGLEABLE_STEPS = new Map<string, string>([
+    ['remesh.occlusion', 'a facade texel behind a tree, an awning or a neighbour is read as wall like any other'],
     ['remesh.windowFit', 'the facades are opened by their bay rhythm and the lattice\'s own window cells'],
     ['remesh.facadeRead', 'the openings stay as the window fit read them; roofs and the walls without a facade photo get none'],
     ['remesh.revealDepth', 'the recesses follow the photo-contrast rule'],

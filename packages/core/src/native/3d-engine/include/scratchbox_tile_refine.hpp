@@ -160,6 +160,11 @@ struct TileRefineParams {
     tile_seam_weld::TileSeamWeldParams seamWeld;
     scan_rectifier::ScanRectifierParams rect;
     photometric_relief::ReliefParams reliefParams;
+    // Occlusion masks beside the relief orthos (ReliefParams::occluders): cast against occludersPath when given (the scan
+    // before anything was taken out of it, e.g. the extraction a tree strip ran on), else against the scan as loaded,
+    // before isolation; only its triangles within the relief's region of interest grown by the rays' reach are used.
+    bool reliefOcclusion{false};
+    std::string reliefOccludersPath;
     // Isolate: keep only the structure under the anchor plus a ground apron, then run every later stage on that subset.
     // The structure is the connected footprint (DSM above the terrain) nearest the anchor, with its enclosed courtyards,
     // taken whole: every triangle over it (no height cap), closed over mesh connectivity through raised triangles, so
@@ -754,6 +759,8 @@ private:
     scan_rectifier::ScanRectifierResult rect;
     photometric_relief::ReliefResult relief;
     std::vector<uint32_t> keptTris;            // raw triangle index of every rectified triangle passed on
+    std::vector<float> loadedPos;              // reliefOcclusion without an occluder file: the scan as loaded, before isolation
+    std::vector<uint32_t> loadedIdx;
     // a wall plane (see detectWallPlanes): n.p = d, in-plane support box [lo1, hi1] x [lo2, hi2] along t1, t2
     struct WallPlane { V3 n, c, t1, t2; double d{0}, area{0}, lo1{0}, hi1{0}, lo2{0}, hi2{0}, rmsIn{0}; std::vector<uint32_t> tris, inl; };
     std::vector<WallPlane> flattenPlanes;      // the facade flatten's wall planes (they also frame the relief)
@@ -785,6 +792,7 @@ private:
             }
         }
         adoptSceneGeometry();
+        if (P.relief && P.reliefOcclusion && P.reliefOccludersPath.empty() && P.isolate) { loadedPos = rawPos; loadedIdx = rawIdx; }
         lap("seam_weld");
 
         js << "  \"input\": {\"path\": \"" << jsonEscape(input) << "\", \"vertices\": " << V << ", \"triangles\": " << F << ", \"images\": " << scene.images.size()
@@ -869,6 +877,15 @@ private:
             rp.roiEnabled = roiEnabled;
             rp.roiMinX = roiMinX; rp.roiMaxX = roiMaxX; rp.roiMinZ = roiMinZ; rp.roiMaxZ = roiMaxZ;
             rp.creaseAngleDeg = P.creaseAngleDeg;
+            geometry::ScratchboxMesh occluderMesh;
+            bvh::BvhTree occluderTree;
+            if (P.reliefOcclusion && !rp.orthoExportDir.empty()) {
+                std::string why = occluderScene(occluderMesh);
+                if (why.empty() && occluderTree.build(occluderMesh)) rp.occluders = &occluderTree;
+                occlusionNote = why.empty() ? (rp.occluders ? "" : "the occluder scene has no triangles") : why;
+                occluderTriangles = occluderMesh.indices.size() / 3;
+                lap("occluders");
+            }
             if (P.reliefOnWallPlanes) {
                 // one relief region, and one window lattice, per wall plane of the rectified surface
                 std::vector<WallPlane> planes = flattenPlanes;
@@ -972,6 +989,57 @@ private:
     }
 
     MeshView rawView() const { return MeshView{rawPos.data(), V, rawIdx.data(), F}; }
+
+    std::string occlusionNote;
+    size_t occluderTriangles{0};
+
+    /**
+     * The scene the occlusion rays are cast against (TileRefineParams::reliefOcclusion): the occluder file, else the scan as
+     * loaded (isolate) or as it stands (no isolate: nothing was taken out), cut to the triangles touching the relief's region
+     * of interest grown by the rays' reach. Returns why there is none, else "".
+     */
+    std::string occluderScene(geometry::ScratchboxMesh& out) const {
+        std::vector<float> filePos;
+        std::vector<uint32_t> fileIdx;
+        const std::vector<float>* pos = &rawPos;
+        const std::vector<uint32_t>* idx = &rawIdx;
+        if (!P.reliefOccludersPath.empty()) {
+            gltf::GltfScene occ = gltf::GlbSceneReader::readFile(P.reliefOccludersPath);
+            if (!occ.ok) return "the occluder scene " + P.reliefOccludersPath + " could not be read: " + occ.error;
+            filePos.resize(occ.mesh.vertices.size() * 3);
+            for (size_t v = 0; v < occ.mesh.vertices.size(); ++v) {
+                const auto& p = occ.mesh.vertices[v].position;
+                filePos[3 * v] = p.x; filePos[3 * v + 1] = p.y; filePos[3 * v + 2] = p.z;
+            }
+            fileIdx = std::move(occ.mesh.indices);
+            pos = &filePos; idx = &fileIdx;
+        } else if (P.isolate) {
+            if (loadedIdx.empty()) return "the scan as loaded was not kept";
+            pos = &loadedPos; idx = &loadedIdx;
+        }
+        const double grow = P.reliefParams.occlusionReach + P.reliefParams.occlusionStandoff;
+        std::vector<int64_t> remap(pos->size() / 3, -1);
+        for (size_t t = 0; t + 2 < idx->size(); t += 3) {
+            bool near = !roiEnabled;
+            for (int k = 0; k < 3 && !near; ++k) {
+                const size_t v = (*idx)[t + k];
+                const double x = (*pos)[3 * v], z = (*pos)[3 * v + 2];
+                near = x >= roiMinX - grow && x <= roiMaxX + grow && z >= roiMinZ - grow && z <= roiMaxZ + grow;
+            }
+            if (!near) continue;
+            for (int k = 0; k < 3; ++k) {
+                const uint32_t v = (*idx)[t + k];
+                if (remap[v] < 0) {
+                    remap[v] = static_cast<int64_t>(out.vertices.size());
+                    geometry::Vertex vx;
+                    vx.position = math::Vec3((*pos)[3 * v], (*pos)[3 * v + 1], (*pos)[3 * v + 2]);
+                    out.vertices.push_back(vx);
+                }
+                out.indices.push_back(static_cast<uint32_t>(remap[v]));
+            }
+        }
+        return "";
+    }
 
     /** The raw arrays (positions, indices, materials, bounds) from scene.mesh, as loaded or as isolated. */
     void adoptSceneGeometry() {
@@ -3678,6 +3746,8 @@ private:
            << ", \"proudArea_m2\": " << num(relief.proudArea) << ", \"provenance\": \"" << (relief.regionsTreated ? "inferred" : "none") << "\""
            << ", \"latticesRejected\": " << relief.latticesRejected << ", \"latticeFeaturesDropped\": " << relief.latticeFeaturesDropped
            << ", \"proudClampedDropped\": " << relief.proudClampedDropped << ", \"facadesFromWallPlanes\": " << (P.reliefOnWallPlanes ? "true" : "false")
+           << ", \"occlusion\": {\"enabled\": " << (P.reliefOcclusion ? "true" : "false") << ", \"source\": \"" << jsonEscape(P.reliefOccludersPath.empty() ? (P.isolate ? "scan as loaded" : "scan") : P.reliefOccludersPath)
+           << "\", \"triangles\": " << occluderTriangles << ", \"note\": \"" << jsonEscape(occlusionNote) << "\"}"
            << ", \"observedCells\": " << relief.observedCells << ", \"inferredCells\": " << relief.inferredCells << ", \"inferredContradicted\": " << relief.inferredContradicted
            << ", \"cellsAtMaxDepth\": " << relief.cellsAtMaxDepth << ", \"recessDepthSource\": \"photo-contrast\""
            << ", \"insertedBorderVertices\": " << relief.insertedBorderVertices << ", \"earClipFallbacks\": " << relief.earClipFallbacks << ", \"earClipUnfilled\": " << relief.earClipUnfilled

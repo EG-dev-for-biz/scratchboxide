@@ -96,6 +96,9 @@ export default defineConfig(({ mode }) => {
       'process.env.GOOGLE_MAPS_API_KEY': JSON.stringify(googleMapsKey),
       'process.env.MAP_TILES_API_KEY': JSON.stringify(googleMapsKey),
       'process.env.SCRATCHBOX_API_PORT': JSON.stringify(process.env.PORT || process.env.SCRATCHBOX_API_PORT || '3001'),
+      // The temporary 3D/VFX product gate (packages/core/src/common/product-scope.ts); unset leaves every canvas type on.
+      // Read from the process environment only, as the API server reads it, so the two halves always agree.
+      'process.env.SCRATCHBOX_PRODUCT_SCOPE': JSON.stringify(process.env.SCRATCHBOX_PRODUCT_SCOPE || ''),
       // Never compile the launch token into served JS; it arrives via IPC or the launch URL.
       'process.env.SCRATCHBOX_LAUNCH_TOKEN': JSON.stringify('')
     },

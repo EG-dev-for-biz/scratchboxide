@@ -48,6 +48,13 @@ export interface TileRefineRequest {
     /** false (with reliefCarve false and reliefOrthos): the orthos are written and nothing is analysed (pipeline K reads its own windows). */
     reliefAnalyse?: boolean;
     /**
+     * With reliefOrthos: an occlusion mask beside each ortho (facade_<id>_occluded.png, named in facades.json), the share
+     * of a fan of rays from the facade toward where the capture stood that something in front of it blocks. true casts
+     * against the scan as loaded (before isolation); a path (a .glb inside the workspace) against that scene instead: the
+     * scan before something was taken out of it (the tree strip's input).
+     */
+    reliefOcclusion?: boolean | string;
+    /**
      * Facade flatten: vertices within `band` metres of a detected wall plane move onto it (default on, band 0.10).
      * `false` turns it off; `{ band }` sets the band (0..0.5 m).
      */
@@ -313,6 +320,18 @@ export class TileRefineService {
         } else if (req.reliefCarve === false) {
             cliArgs.push('--relief-no-carve');
             keyParams.reliefCarve = false;
+        }
+        if (req.reliefOcclusion !== undefined && req.reliefOcclusion !== false && req.relief !== false) {
+            if (typeof req.reliefOcclusion === 'string') {
+                const occ = resolveWithinRoot(this.workspaceRoot, req.reliefOcclusion);
+                if (!occ.toLowerCase().endsWith('.glb') || !fs.existsSync(occ)) throw new TileRefineError('bad_request', 'reliefOcclusion must be true or an existing .glb inside the workspace');
+                cliArgs.push('--relief-occluders', occ);
+                const st = fs.statSync(occ);
+                keyParams.reliefOcclusion = crypto.createHash('sha256').update(`${occ}\0${st.size}\0${st.mtimeMs}`).digest('hex');
+            } else {
+                cliArgs.push('--relief-occlusion');
+                keyParams.reliefOcclusion = true;
+            }
         }
         if (req.facadeFlatten === false) {
             cliArgs.push('--no-flatten');

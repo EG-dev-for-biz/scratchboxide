@@ -31,6 +31,7 @@ import {
 } from '../../../packages/core/src/common';
 import { RouteContext } from './types';
 import { MediaModelUnavailableError } from '../../../packages/core/src/common/errors/pipeline-errors';
+import { isScopedTo3dVfx } from '../../../packages/core/src/common/product-scope';
 import { createMemoriesRouter } from './memoriesRoutes';
 
 export interface GeminiRouterServices {
@@ -396,6 +397,11 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
         const { prompt, sessionId, workspaceRoot, activeArtifact, useGoogleSearch } = req.body || {};
         if (!prompt) {
             res.status(400).json({ success: false, error: 'Prompt is required' });
+            return;
+        }
+        // Deep write makes documents, boards and graphs, which the 3D/VFX build does not offer.
+        if (isScopedTo3dVfx()) {
+            res.status(403).json({ success: false, error: 'This build of Scratchbox is limited to 3D and VFX projects, so deep write (documents, boards and plans) is off.' });
             return;
         }
         let safeRoot: string;

@@ -20,16 +20,22 @@
  *   5. lens flare and diffusion (LensGlowPass) read from that frame: the light the lens and a filter in front of it spread;
  *   6. tone mapping and output colour space to the canvas (what the renderer applies when drawing straight to it), with the
  *      flare and diffusion added before it, then film grain when the lens has it (on the finished picture, as on film).
+ *      Content drawn with tone mapping off (provenance views) is left un-tone-mapped, and content whose shader writes
+ *      final display values (splats) is left as drawn, each by its coverage mask (depthless-coverage.ts, drawn after
+ *      step 1 against the scene's depth), as a direct draw leaves them.
  * Picking maps the pointer back through the distortion (mapPointerNdc), so a click hits what is drawn under it.
  */
 
 import * as THREE from 'three';
-import type { SceneCameraLens, SceneFilmGrain, SceneLensDiffusion, SceneLensDistortion, SceneLensFlare } from '../../canvas-types';
+import type { SceneCameraLens, SceneColorHarmony, SceneFilmGrain, SceneLensDiffusion, SceneLensDistortion, SceneLensFlare } from '../../canvas-types';
 import { VfxPlateMatchmoveService } from '../../services/video/VfxPlateMatchmoveService';
 import { LensDistortionEffect } from '../../services/optics/LensDistortionEffect';
 import { CinematicBokehPass } from '../../services/optics/CinematicBokehPass';
 import { LensGlowPass, type LensGlowSettings } from '../../services/optics/LensGlowPass';
 import { TemporalAAPass } from '../../services/optics/TemporalAAPass';
+import { ColorHarmonyPass } from '../../services/postprocessing/ColorHarmonyPass';
+import { planColorHarmony, type ColorHarmonyPlan } from '../../services/postprocessing/color-harmony';
+import { findDepthlessContent, findToneMapExemptContent, renderContentMask, sameContent } from '../../services/postprocessing/depthless-coverage';
 import { lensMeasuresFocus } from './viewportFocus';
 
 /** Widest overscan rendered for distortion (2x the frame on each axis = 4x the pixels). */
@@ -41,7 +47,7 @@ export const MAX_OVERSCAN = 2;
  */
 export const MAX_BLUR_RADIUS_FRAME_FRACTION = 0.12;
 
-export type ViewportOpticsPassName = 'temporal-aa' | 'depth-of-field' | 'lens-distortion' | 'lens-flare' | 'diffusion' | 'film-grain' | 'output' | (string & {});
+export type ViewportOpticsPassName = 'temporal-aa' | 'color-harmony' | 'depth-of-field' | 'lens-distortion' | 'lens-flare' | 'diffusion' | 'film-grain' | 'output' | (string & {});
 
 /** Flare defaults when the lens sets only an amount: four ghosts, a faint halo, no streak, flaring above 1.5 (brighter than white). */
 export const DEFAULT_FLARE: Required<Omit<SceneLensFlare, 'amount'>> = { ghosts: 4, halo: 0.3, streak: 0, threshold: 1.5 };
@@ -73,6 +79,8 @@ export interface ViewportOpticsPlan {
     flare: Required<SceneLensFlare> | null;
     diffusion: Required<SceneLensDiffusion> | null;
     depthOfField: ViewportDepthOfFieldPlan | null;
+    /** The scene's colour harmony grade (color-harmony.ts), drawn on the scene before depth of field, or null. */
+    colorHarmony: ColorHarmonyPlan | null;
     /** Passes in draw order; empty = the viewport renders straight to the canvas as before. */
     passes: ViewportOpticsPassName[];
     /** Lens values present but not drawn, and why. */
@@ -82,10 +90,17 @@ export interface ViewportOpticsPlan {
 const finitePositive = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0;
 const finiteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
-/** Which passes a scene lens configures. Pure: no GPU objects. */
-export function planViewportOptics(lens: SceneCameraLens | undefined | null): ViewportOpticsPlan {
-    const plan: ViewportOpticsPlan = { distortion: null, filmGrain: null, flare: null, diffusion: null, depthOfField: null, passes: [], issues: [] };
-    if (!lens) return plan;
+/** Which passes a scene lens (and the scene's colour harmony grade) configures. Pure: no GPU objects. */
+export function planViewportOptics(lens: SceneCameraLens | undefined | null, harmony?: SceneColorHarmony | null): ViewportOpticsPlan {
+    const plan: ViewportOpticsPlan = { distortion: null, filmGrain: null, flare: null, diffusion: null, depthOfField: null, colorHarmony: null, passes: [], issues: [] };
+    const graded = planColorHarmony(harmony);
+    plan.colorHarmony = graded.harmony;
+    plan.issues.push(...graded.issues);
+    if (plan.colorHarmony) plan.passes.push('color-harmony');
+    if (!lens) {
+        if (plan.passes.length > 0) plan.passes.push('output');
+        return plan;
+    }
     const squeeze = finitePositive(lens.anamorphicSqueeze) ? lens.anamorphicSqueeze : 1;
 
     const d = lens.distortion;
@@ -359,6 +374,12 @@ const OUTPUT_SHADER = {
         uniform sampler2D tStreak;
         uniform float uFlare;
         uniform float uStreak;
+        // coverage (alpha) of content drawn with tone mapping off: left un-tone-mapped, as a direct draw leaves it
+        uniform sampler2D tUntoned;
+        uniform bool uUseUntoned;
+        // coverage of content whose shader writes final display values (splats): left as drawn, neither tone-mapped nor encoded
+        uniform sampler2D tDisplay;
+        uniform bool uUseDisplay;
         varying vec2 vUv;
 
         float sbHash(vec3 p) {
@@ -403,8 +424,11 @@ const OUTPUT_SHADER = {
             // the scene was drawn over a transparent clear: alpha is its coverage (blur spreads it like the colour)
             float a = clamp(c.a, 0.0, 1.0);
             gl_FragColor = vec4(a > 1e-4 ? c.rgb / a : vec3(0.0), 1.0);
+            vec3 untonedRgb = gl_FragColor.rgb;
             #include <tonemapping_fragment>
+            if (uUseUntoned) gl_FragColor.rgb = mix(gl_FragColor.rgb, untonedRgb, clamp(texture2D(tUntoned, vUv).a, 0.0, 1.0));
             #include <colorspace_fragment>
+            if (uUseDisplay) gl_FragColor.rgb = mix(gl_FragColor.rgb, untonedRgb, clamp(texture2D(tDisplay, vUv).a, 0.0, 1.0));
             gl_FragColor = vec4(sbApplyGrain(mix(uBackground, gl_FragColor.rgb, a)), 1.0);
         }
     `
@@ -436,6 +460,15 @@ export class ViewportOpticsChain {
     private bokehPass: CinematicBokehPass | null = null;
     private glowPass: LensGlowPass | null = null;
     private taaPass: TemporalAAPass | null = null;
+    private harmonyPass: ColorHarmonyPass | null = null;
+    private harmonyTarget: THREE.WebGLRenderTarget | null = null;
+    private coverageTarget: THREE.WebGLRenderTarget | null = null;
+    /** Coverage of content drawn with tone mapping off (provenance views): the output leaves it un-tone-mapped. */
+    private untonedTarget: THREE.WebGLRenderTarget | null = null;
+    private untonedLensTarget: THREE.WebGLRenderTarget | null = null;
+    /** Coverage of content whose shader writes final display values (splats): the output leaves it as drawn. */
+    private displayTarget: THREE.WebGLRenderTarget | null = null;
+    private displayLensTarget: THREE.WebGLRenderTarget | null = null;
     private taaCopyTarget: THREE.WebGLRenderTarget | null = null;
     private sceneTarget: THREE.WebGLRenderTarget | null = null;
     private dofTarget: THREE.WebGLRenderTarget | null = null;
@@ -451,9 +484,9 @@ export class ViewportOpticsChain {
     private readonly box = new THREE.Box3();
     public status: ViewportOpticsStatus = { passes: [], drawn: [], overscan: 1, focusDistanceMeters: null, issues: [] };
 
-    /** Sets the lens; creates the passes it configures and frees the rest. */
-    public configure(lens: SceneCameraLens | undefined | null): ViewportOpticsPlan {
-        this.plan = planViewportOptics(lens);
+    /** Sets the lens and the scene's colour harmony grade; creates the passes they configure and frees the rest. */
+    public configure(lens: SceneCameraLens | undefined | null, harmony?: SceneColorHarmony | null): ViewportOpticsPlan {
+        this.plan = planViewportOptics(lens, harmony);
         this.sensorHeightMm = lens?.sensorHeightMm;
         if (this.plan.distortion && !this.lensPass) {
             this.lensPass = new LensDistortionEffect({ mode: 'redistort', edgeMode: 'clamp', chromaticAberration: 0, enabled: true });
@@ -477,8 +510,18 @@ export class ViewportOpticsChain {
             this.glowPass.dispose();
             this.glowPass = null;
         }
-        // temporal anti-aliasing runs whenever the chain draws, unless the lens turns it off
-        const taa = this.active && lens?.temporalAntiAliasing !== false;
+        if (this.plan.colorHarmony && !this.harmonyPass) {
+            this.harmonyPass = new ColorHarmonyPass();
+        } else if (!this.plan.colorHarmony && this.harmonyPass) {
+            this.harmonyPass.dispose();
+            this.harmonyPass = null;
+            this.harmonyTarget?.dispose();
+            this.harmonyTarget = null;
+        }
+        // temporal anti-aliasing runs whenever a lens effect draws, unless the lens turns it off (a colour grade alone
+        // spreads no light, so it does not need it)
+        const lensEffect = this.plan.passes.some(p => p !== 'color-harmony' && p !== 'output');
+        const taa = lensEffect && lens?.temporalAntiAliasing !== false;
         if (taa && !this.taaPass) this.taaPass = new TemporalAAPass();
         else if (!taa && this.taaPass) {
             this.taaPass.dispose();
@@ -626,16 +669,56 @@ export class ViewportOpticsChain {
             this.taaPass?.endJitter(camera);
         }
         const depthTexture = drawn_.depthTexture;
+        // content masks, drawn alone against the scene's depth (so what other geometry hides is not in them):
+        //  - the harmony grade is on the scene's objects only, never the sky (a dome mesh, a texture, a flat colour): objects
+        //    are what wrote depth, and content that writes none (splats) by its coverage;
+        //  - content drawn with tone mapping off (splats, provenance views) is left un-tone-mapped by the output, as a direct
+        //    draw to the canvas leaves it
+        let coverage: THREE.Texture | null = null;
+        let untoned: THREE.Texture | null = null;
+        let display: THREE.Texture | null = null;
+        const depthless = this.plan.colorHarmony && depthTexture ? findDepthlessContent(scene) : [];
+        const exempt = !drawn_.displayReferred ? findToneMapExemptContent(scene, new Set(overlays)) : { untoned: [], display: [] };
+        if (exempt.untoned.length + exempt.display.length > 0 && !depthTexture) issues.push('no depth texture from the scene draw; content drawn with tone mapping off (splats, provenance views) is tone-mapped with the rest');
+        if (depthTexture && exempt.untoned.length > 0) {
+            this.untonedTarget = this.ensureTarget(this.untonedTarget, RW, RH, true, 0);
+            if (renderContentMask(renderer, camera, exempt.untoned, this.untonedTarget, depthTexture)) untoned = this.untonedTarget.texture;
+        }
+        if (depthTexture && exempt.display.length > 0) {
+            this.displayTarget = this.ensureTarget(this.displayTarget, RW, RH, true, 0);
+            if (renderContentMask(renderer, camera, exempt.display, this.displayTarget, depthTexture)) display = this.displayTarget.texture;
+        }
+        if (depthless.length > 0) {
+            if (display && sameContent(depthless, exempt.display)) coverage = display;
+            else {
+                this.coverageTarget = this.ensureTarget(this.coverageTarget, RW, RH, true, 0);
+                if (renderContentMask(renderer, camera, depthless, this.coverageTarget, depthTexture)) coverage = this.coverageTarget.texture;
+            }
+        }
         let current = this.sceneTarget;
+        let taaHistory: THREE.WebGLRenderTarget | null = null;
 
         // temporal anti-aliasing: every lens effect after it reads the steady, resolved frame
         if (this.taaPass) {
             if (depthTexture) {
-                current = this.taaPass.render(renderer, current.texture, depthTexture, RW, RH);
+                current = taaHistory = this.taaPass.render(renderer, current.texture, depthTexture, RW, RH);
                 drawn.push('temporal-aa');
             } else {
                 issues.push('no depth texture from the scene draw; temporal anti-aliasing not drawn');
                 this.taaPass.reset();
+            }
+        }
+
+        // colour harmony: on the scene's own light, before depth of field blurs objects into the background
+        const harmony = this.plan.colorHarmony;
+        if (harmony && this.harmonyPass) {
+            if (!depthTexture) {
+                issues.push('no depth texture from the scene draw; colour harmony not drawn (it could not tell the objects from the background)');
+            } else {
+                this.harmonyTarget = this.ensureTarget(this.harmonyTarget, RW, RH, false, 0);
+                this.harmonyPass.render(renderer, current.texture, depthTexture, harmony, this.harmonyTarget, coverage, display);
+                current = this.harmonyTarget;
+                drawn.push('color-harmony');
             }
         }
 
@@ -672,7 +755,7 @@ export class ViewportOpticsChain {
         // overlays: sharp, on top, in the same (widened) frustum as the scene
         if (overlays.length > 0) {
             // the resolved frame is also the next frame's history: overlays go on a copy of it
-            if (this.taaPass && current !== this.sceneTarget && current !== this.dofTarget) {
+            if (this.taaPass && taaHistory && current === taaHistory) {
                 this.taaCopyTarget = this.ensureTarget(this.taaCopyTarget, RW, RH, false, 0);
                 this.taaPass.copy(renderer, current.texture, this.taaCopyTarget);
                 current = this.taaCopyTarget;
@@ -700,6 +783,18 @@ export class ViewportOpticsChain {
                 .setSourceScale(W / RW, H / RH);
             this.lensPass.render(renderer, current.texture, this.lensTarget);
             current = this.lensTarget;
+            // the tone mapping masks bend with the frame they mark
+            this.lensPass.setChromaticAberration(0);
+            if (untoned) {
+                this.untonedLensTarget = this.ensureTarget(this.untonedLensTarget, W, H, false, 0);
+                this.lensPass.render(renderer, untoned, this.untonedLensTarget);
+                untoned = this.untonedLensTarget.texture;
+            }
+            if (display) {
+                this.displayLensTarget = this.ensureTarget(this.displayLensTarget, W, H, false, 0);
+                this.lensPass.render(renderer, display, this.displayLensTarget);
+                display = this.displayLensTarget.texture;
+            }
             drawn.push('lens-distortion');
         }
 
@@ -708,7 +803,8 @@ export class ViewportOpticsChain {
             const material = new THREE.ShaderMaterial({
                 uniforms: {
                     tDiffuse: { value: null }, uBackground: { value: new THREE.Vector3() }, uDisplayReferred: { value: false }, uGrainAmount: { value: 0 }, uGrainCellPx: { value: 1 }, uGrainChroma: { value: 0 }, uGrainSeed: { value: 0 },
-                    tDiffusion: { value: null }, uDiffusion: { value: 0 }, tGhosts: { value: null }, tStreak: { value: null }, uFlare: { value: 0 }, uStreak: { value: 0 }
+                    tDiffusion: { value: null }, uDiffusion: { value: 0 }, tGhosts: { value: null }, tStreak: { value: null }, uFlare: { value: 0 }, uStreak: { value: 0 },
+                    tUntoned: { value: null }, uUseUntoned: { value: false }, tDisplay: { value: null }, uUseDisplay: { value: false }
                 },
                 vertexShader: OUTPUT_SHADER.vertexShader,
                 fragmentShader: OUTPUT_SHADER.fragmentShader,
@@ -736,6 +832,10 @@ export class ViewportOpticsChain {
         if (glow?.ghosts) drawn.push('lens-flare');
         if (glow?.diffusion) drawn.push('diffusion');
         ou.uDisplayReferred.value = !!drawn_.displayReferred;
+        ou.tUntoned.value = untoned;
+        ou.uUseUntoned.value = !!untoned;
+        ou.tDisplay.value = display;
+        ou.uUseDisplay.value = !!display;
         // film grain: its size on the sensor -> output pixels by the frame height on the sensor (the lens's film back)
         const grain = this.plan.filmGrain;
         ou.uGrainAmount.value = grain ? grain.amount : 0;
@@ -763,7 +863,13 @@ export class ViewportOpticsChain {
         this.dofTarget?.dispose();
         this.lensTarget?.dispose();
         this.taaCopyTarget?.dispose();
-        this.sceneTarget = this.dofTarget = this.lensTarget = this.taaCopyTarget = null;
+        this.harmonyTarget?.dispose();
+        this.coverageTarget?.dispose();
+        this.untonedTarget?.dispose();
+        this.untonedLensTarget?.dispose();
+        this.displayTarget?.dispose();
+        this.displayLensTarget?.dispose();
+        this.sceneTarget = this.dofTarget = this.lensTarget = this.taaCopyTarget = this.harmonyTarget = this.coverageTarget = this.untonedTarget = this.untonedLensTarget = this.displayTarget = this.displayLensTarget = null;
         if (this.output) {
             this.output.material.dispose();
             this.output.mesh.geometry.dispose();

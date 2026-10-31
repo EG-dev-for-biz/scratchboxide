@@ -96,6 +96,8 @@ export interface ReliefFacade {
     sMin: number; sMax: number; tMin: number; tMax: number; pixel: number; width: number; height: number; orthoSMin: number; orthoTMax: number; coverage: number;
     /** A mask beside the image (one channel, 255 = the photo did not reach) when the image's holes were filled (pipeline K). */
     uncoveredMask?: string;
+    /** tile_refine's occlusion mask beside the image (pipeline-k/occlusion.ts), with its mean and occluded share. */
+    occludedMask?: string; occlusionMean?: number; occludedShare?: number;
     /** How the image's holes were filled, carried into the rebuilt facade's provenance. */
     textureFill?: { label: string; texels: number; share: number; method: string };
     /** The share of the wall's own outline (each row from its first to its last covered pixel) the photo covers, and that outline's area (wallCoverage). */

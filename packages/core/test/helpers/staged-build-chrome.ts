@@ -19,6 +19,7 @@ import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
 import { spawn, type ChildProcess } from 'child_process';
+import { removeChromeProfile } from './chrome-profile';
 import { REPO_ROOT, type Requirement } from './requirements';
 
 const CHROME_CANDIDATES = [
@@ -257,7 +258,7 @@ ${opts.manualFrames ? MANUAL_FRAMES : ''}</head><body><div id="root"></div><scri
             proc.kill('SIGKILL');
             await Promise.race([exited, new Promise(r => setTimeout(r, 5000))]);
             await new Promise<void>(r => server.close(() => r()));
-            fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+            removeChromeProfile(profile);
         }
     };
 }
