@@ -32,7 +32,7 @@ import { orthoReferenceCamera, orthoReferenceRecord, type OrthoReference } from 
 import { bearingDeg, type PanoCandidate } from '../src/node/3d-engine/staged-location/streetview-evidence';
 import { buildGroundModel, loadScanMesh, scanToGeodetic } from '../src/node/spatial/StreetViewSurveyPlanner';
 import {
-    collectPanoIds, createPhotoMatchEvaluateHandler, heldOutViews, nearTriangleFlags, onSurfaceFlags, surfaceCoverShare, surfacesWithin, visibleStagedLayers, HELD_OUT_MIN_VISIBLE, OPEN_PLACE_RADII_M,
+    collectPanoIds, createPhotoMatchEvaluateHandler, footprintLookup, heldOutViews, nearTriangleFlags, onSurfaceFlags, surfaceCoverShare, surfacesWithin, visibleStagedLayers, HELD_OUT_MIN_VISIBLE, OPEN_PLACE_RADII_M,
     PHOTO_MATCH_EVALUATE_TOOL, PHOTO_MATCH_ISOLATE_SURFACE_M, type HeldOutRegistration, type PhotoMatchDeps
 } from '../src/node/gemini/tools/location-evidence/photo-match-evaluate';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
@@ -761,6 +761,52 @@ describe('photo_match_evaluate tool', () => {
         console.log('scan-only pick', b.regions.target.areaM2, 'm2; with the footprint', r.regions.target.areaM2, 'm2');
         r.views.forEach((v: any, k: number) => fs.copyFileSync(v.regions.maskGrid, path.join(SHOTS, `tool_photo_match_footprint_masks_view${k}.png`)));
         b.views.forEach((v: any, k: number) => fs.copyFileSync(v.regions.maskGrid, path.join(SHOTS, `tool_photo_match_scan_only_masks_view${k}.png`)));
+    }, 240_000);
+
+    it('reads a building Google models only as a 3D volume as a footprint: the pick at the place is inside it', async () => {
+        // a closed box volume as the vector stage stores it (x, height, z), with no extruded parts
+        const boxVolume = (x0: number, x1: number, z0: number, z1: number, h: number) => {
+            const vertices: Array<[number, number, number]> = [[x0, 0, z0], [x1, 0, z0], [x1, 0, z1], [x0, 0, z1], [x0, h, z0], [x1, h, z0], [x1, h, z1], [x0, h, z1]];
+            const indices = [0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5, 2, 3, 7, 2, 7, 6, 3, 0, 4, 3, 4, 7];
+            return { vertices, indices };
+        };
+        const look = footprintLookup([
+            { id: 'parts', parts: [{ loops: [[[30, -5], [40, -5], [40, 5], [30, 5]]] }] },
+            { id: 'volume', parts: [], volumes: [boxVolume(-15, 15, -10, 10, 40)] }
+        ]);
+        expect(look.buildingAt(0, 0)).toBe(2);
+        expect(look.buildingAt(14.5, 9.5)).toBe(2);
+        expect(look.buildingAt(35, 0)).toBe(1);
+        expect(look.buildingAt(20, 0)).toBe(0);
+        expect(look.buildingAt(0, 12)).toBe(0);
+
+        // through the tool: the same podium and tower as the seam-welded test, the vector stage holding the podium as a
+        // volume only; the pick takes Google's footprint, the whole podium and tower, not the tower alone
+        const place3 = { lat: 40.715, lng: -74.015, formattedAddress: 'Synthetic Volume, Test City' };
+        const sl = path.join(root, '.scratchbox', 'cache', 'staged_location');
+        const TK = '7'.repeat(64), VK = '8'.repeat(64), RUN3 = 'f6f6f6f6';
+        const podium = box(0, 0, 30, 20, 6), tower = box(0, 0, 10, 10, 40), other = box(40, 0, 10, 10, 22);
+        const street: Part[] = [
+            { ...ground(260), png: checkerPng([110, 110, 105], [96, 96, 92]) }, { ...podium, png: facadePng([150, 140, 120], [40, 50, 60]) },
+            { ...tower, png: facadePng([190, 180, 160], [40, 50, 60]) }, { ...other, png: facadePng([200, 196, 186], [60, 70, 80]) }
+        ];
+        writeTileAt(root, TK, place3, street);
+        fs.mkdirSync(path.join(sl, 'vector', VK), { recursive: true });
+        fs.writeFileSync(path.join(sl, 'vector', VK, 'done.json'), JSON.stringify({
+            schema: 'scratchbox.stage-cache/1', stage: 'vector', key: VK, builtAtMs: 1, ms: 1, published: [],
+            value: { sel: { buildings: [{ id: 'podium', parts: [], volumes: [boxVolume(-15, 15, -10, 10, 40)] }, { id: 'other', parts: [{ loops: [[[35, -5], [45, -5], [45, 5], [35, 5]]], minH: 0, topH: 22 }] }] }, tiles: 1 }
+        }));
+        const runDir = path.join(sl, 'runs', RUN3);
+        fs.mkdirSync(runDir, { recursive: true });
+        fs.writeFileSync(path.join(runDir, 'stages.json'), JSON.stringify({ schema: 'scratchbox.staged-run/1', runId: RUN3, request: { query: 'Synthetic Volume', isolate: false }, place: place3, keys: { tiles: TK, vector: VK }, statuses: {}, createdAtMs: 1 }));
+        const districtGlb = path.join(root, 'public', 'models', 'synthetic_volume_district_77777777.glb');
+        writeGlb(districtGlb, street);
+        const out = await createPhotoMatchEvaluateHandler(() => fakeDeps(root, { street: path.join(sl, 'tiles', TK, 'textured.glb') }))({ arms: [{ id: 'D', label: 'DISTRICT', runId: RUN3, glbs: [districtGlb] }], views: 2, runs: 1, clay: false }, ctxFor(root));
+        const r = out.resultPayload as any;
+        expect(out.status, JSON.stringify(r).slice(0, 800)).toBe('completed');
+        expect(r.regions.target.footprintSource).toBe('vector-footprint');
+        expect(r.regions.target.areaM2).toBeGreaterThanOrEqual(560);
+        expect(r.regions.target.areaM2).toBeLessThanOrEqual(700);
     }, 240_000);
 
     it('takes GLBs with an anchor, finding the cached extraction there', async () => {
