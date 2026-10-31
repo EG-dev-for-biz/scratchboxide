@@ -93,7 +93,8 @@ export async function syncCacheDir(bucket: CloudBucket, root: string, prefix: st
         try { st = fs.statSync(path.join(root, rel)); } catch { continue; }
         const stamp = `${st.size}:${Math.round(st.mtimeMs)}`;
         if (manifest.files[rel] === stamp) { report.unchanged++; continue; }
-        if (now() - st.mtimeMs < P.settleMs) { report.waiting++; continue; }
+        // settleMs 0 sends everything: a file just written can carry an mtime a fraction of a millisecond past now()
+        if (P.settleMs > 0 && now() - st.mtimeMs < P.settleMs) { report.waiting++; continue; }
         todo.push({ rel, stamp, bytes: st.size });
     }
     let next = 0, sinceSave = 0;
