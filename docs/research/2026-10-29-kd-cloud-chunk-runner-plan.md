@@ -56,7 +56,7 @@ Smoke test before any district: one chunk built both locally and in the cloud fr
 - The laptop's app service account needs `roles/run.developer` on the job (to run executions with overrides and cancel them) and `roles/iam.serviceAccountUser` on `kd-chunk-job@`.
 - **Gemini quota:** the vision calls share one quota. Locally three chunks' vehicle stages overlap; in the cloud up to 44 would. The first trial (8 chunks) measures 429s and vehicle-stage time. If they degrade, the runner staggers starts (N executions a minute), rather than anything clever across processes.
 
-Deploy needs the user's own `gcloud` login: the CLI here is on `eli@scratchbox.ai` with expired tokens and the default project `scratchbox-canvas`, and the setup above (secrets, IAM, job, Cloud Build) is done once, by `deploy/kd-chunk-job/deploy.sh`, with `--project scoutscan`.
+Update 2026-10-30: `gcloud` is now signed in as `eli@spvce.ai`, granted storage.admin, run.admin, aiplatform.user, iam.serviceAccountUser, cloudbuild.builds.editor, artifactregistry.writer, logging.viewer and serviceusage admin in `scoutscan`. Bucket writes are verified; Cloud Run, Vertex and bucket creation are not yet. Secret Manager admin is not in that list: creating the two secrets may need it. The setup above (secrets, IAM, job, Cloud Build) is done once, by `deploy/kd-chunk-job/deploy.sh`, with `--project scoutscan`.
 
 ### 4. File transfer: a new bucket (recommended)
 
@@ -77,6 +77,7 @@ A separate bucket keeps transient job traffic out of the training bucket (whose 
 
 - Phase 1 (this task): each task starts with an empty stage cache, builds, and mirrors its caches to `cache/v1/` (`syncCacheDir`, the same layout as the laptop's). This matches the rule that test builds are judged uncached anyway.
 - Leaf tiles: each task fetches its own chunk's leaves from Google (the laptop's prefetch does nothing for a cloud task). Map Tiles billing is per root-tileset session, so 44 sessions instead of one is a small cost; it is in the cost table.
+- Since commit 0ecb8890 the stage cache can read entries back from the training bucket (`restoreCacheEntry`); chunk jobs can use it for re-runs, which mostly covers phase 2.
 - Phase 2 (only if wanted): read-through, i.e. before a stage runs, the job looks up `cache/v1/staged_location/<stage>/<key>/done.json` and pulls the entry. That makes a re-run of a district after a late-stage change cheap. It needs a hook in `StageCache.get`, so it is left out of this task.
 
 ### 6. Cost per district (Shibuya 350 m, 44 chunks + the local centre)
