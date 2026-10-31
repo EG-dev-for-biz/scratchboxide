@@ -30,9 +30,9 @@ import { renderTriangles, PHOTO_MATCH_BACKGROUND, PHOTO_MATCH_CLAY, type JudgeCl
 import { castCamera } from '../src/node/3d-engine/staged-location/survey-casting';
 import { orthoReferenceCamera, orthoReferenceRecord, type OrthoReference } from '../src/node/3d-engine/staged-location/ortho-reference';
 import { bearingDeg, type PanoCandidate } from '../src/node/3d-engine/staged-location/streetview-evidence';
-import { buildGroundModel, loadScanMesh } from '../src/node/spatial/StreetViewSurveyPlanner';
+import { buildGroundModel, loadScanMesh, scanToGeodetic } from '../src/node/spatial/StreetViewSurveyPlanner';
 import {
-    collectPanoIds, createPhotoMatchEvaluateHandler, heldOutViews, surfacesWithin, visibleStagedLayers, OPEN_PLACE_RADII_M, PHOTO_MATCH_EVALUATE_TOOL, type HeldOutRegistration, type PhotoMatchDeps
+    collectPanoIds, createPhotoMatchEvaluateHandler, heldOutViews, surfacesWithin, visibleStagedLayers, HELD_OUT_MIN_VISIBLE, OPEN_PLACE_RADII_M, PHOTO_MATCH_EVALUATE_TOOL, type HeldOutRegistration, type PhotoMatchDeps
 } from '../src/node/gemini/tools/location-evidence/photo-match-evaluate';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { LOCATION_EVIDENCE_TOOL_DECLARATIONS } from '../src/node/gemini/tools/location-evidence-tools';
@@ -208,10 +208,18 @@ const PANOS: PanoCandidate[] = [
     { panoId: 'HIDDEN_EAST', lat: 0, lng: 0, date: '2025-07', copyright: '© Google', x: 52, z: 0 }
 ];
 
-function fakeDeps(root: string, opts: { panos?: PanoCandidate[]; unlocked?: string[]; judgeCalls?: { n: number; clay?: number; regions?: number }; satellite?: boolean; street?: string } = {}): PhotoMatchDeps {
+function fakeDeps(root: string, opts: {
+    panos?: PanoCandidate[]; unlocked?: string[]; judgeCalls?: { n: number; clay?: number; regions?: number }; satellite?: boolean; street?: string;
+    /** Every grounding request made, as the API receives it. */
+    requests?: Array<{ panoId: string; headingDegree: number; pitchDegree: number; fovDegree: number }>;
+} = {}): PhotoMatchDeps {
     const street = readTileTriangles(fs.readFileSync(opts.street ?? path.join(root, '.scratchbox/cache/staged_location/tiles', TILES_KEY, 'textured.glb')));
     const panos = opts.panos ?? PANOS;
     return {
+        // a fixed pose's panos: every pano known, in no order (the tool takes the nearest), or the one named
+        posePanos: async (_origin, at) => ('panoId' in at
+            ? { panos: panos.filter(p => p.panoId === at.panoId), ...(panos.some(p => p.panoId === at.panoId) ? {} : { reason: `pano ${at.panoId}: not found` }) }
+            : { panos: [...panos].reverse() }),
         stagedRoot: () => root,
         // the "satellite": the street rendered straight down at the GSD of a zoom-19 Static Maps crop (512 px, scale 1)
         ...(opts.satellite ? {
@@ -225,6 +233,7 @@ function fakeDeps(root: string, opts: { panos?: PanoCandidate[]; unlocked?: stri
         grounding: () => ({
             // the "photo": the street rendered from the requested view (the pano eye 2.5 m over the ground)
             retrieveGroundingImage: async req => {
+                opts.requests?.push({ panoId: req.panoId, headingDegree: req.headingDegree, pitchDegree: req.pitchDegree, fovDegree: req.fovDegree });
                 const p = panos.find(q => q.panoId === req.panoId)!;
                 const W = 320, H = 240;
                 const cam = castCamera({ eye: [p.x, 2.48, p.z], headingDeg: req.headingDegree, pitchDeg: -req.pitchDegree, fovDeg: req.fovDegree, widthPx: W, heightPx: H });
@@ -722,6 +731,62 @@ describe('photo_match_evaluate tool', () => {
         }
         expect(calls.n).toBe(2);
         r.views.forEach((v: any, k: number) => fs.copyFileSync(v.regions.maskGrid, path.join(SHOTS, `tool_photo_match_open_place_masks_view${k}.png`)));
+    }, 240_000);
+
+    it('judges fixed poses with the automatic views: the nearest pano, the heading as given, a used pano refused', async () => {
+        // the run's frame: its geocoded place at the tile extraction's height
+        const at = (x: number, z: number) => { const g = scanToGeodetic({ lat: PLACE.lat, lng: PLACE.lng, heightMeters: -30 }, x, 0, z); return { lat: g.lat, lng: g.lng }; };
+        const requests: Array<{ panoId: string; headingDegree: number; pitchDegree: number; fovDegree: number }> = [];
+        const calls = { n: 0 };
+        const handler = createPhotoMatchEvaluateHandler(() => fakeDeps(root, { requests, judgeCalls: calls }));
+        const out = await handler({
+            views: 3, runs: 1, clay: false,
+            poses: [
+                // 2.8 m from the pano east of the neighbour, which hides the block from it: the automatic rule never takes it
+                { label: 'past the neighbour', ...at(50, 2), headingDeg: 250, pitchDeg: 4, fovDeg: 60 },
+                { panoId: 'USED_WEST', headingDeg: 90 },
+                { ...at(0, 200), headingDeg: 0 },
+                { panoId: 'HELD_NORTH', headingDeg: 180, fovDeg: 70 }
+            ]
+        }, ctxFor(root, staged.scene));
+        const r = out.resultPayload as any;
+        expect(out.status, JSON.stringify(r).slice(0, 1200)).toBe('completed');
+        const [east, used, far, north] = r.heldOut.fixed;
+        expect(east).toMatchObject({ pose: 1, label: 'past the neighbour', status: 'judged', panoId: 'HIDDEN_EAST', headingDeg: 250, pitchDeg: 4, fovDeg: 60, eyeGround: 'terrain', viewId: expect.stringMatching(/^v0_/) });
+        expect(east.panoDistanceM).toBeCloseTo(Math.hypot(2, 2), 1);
+        expect(east.targetVisibleShare).toBeLessThan(HELD_OUT_MIN_VISIBLE);
+        expect(used).toMatchObject({ pose: 2, status: 'used-by-build', panoId: 'USED_WEST' });
+        expect(used.reason).toMatch(/used by a build/);
+        expect(far).toMatchObject({ pose: 3, status: 'no-pano' });
+        expect(far.reason).toMatch(/stands \d+\.\d m from the position, past 20 m/);
+        expect(north).toMatchObject({ pose: 4, status: 'judged', panoId: 'HELD_NORTH', headingDeg: 180, pitchDeg: 0, fovDeg: 70 });
+        expect(north.panoDistanceM).toBeUndefined();
+        // four poses raise the views to four: both fixed views first, then the nearest automatic ones, never a fixed pose's pano again
+        expect(r.heldOut.viewsRaisedTo).toBe(4);
+        expect(r.views.map((v: any) => [v.panoId, v.fixed?.pose ?? null, v.headingDeg])).toEqual([
+            ['HIDDEN_EAST', 1, 250], ['HELD_NORTH', 4, 180], ...r.views.slice(2).map((v: any) => [v.panoId, null, v.headingDeg])
+        ]);
+        expect(r.views.slice(2).map((v: any) => v.panoId).sort()).toEqual(['HELD_SOUTH', 'HELD_SW']);
+        expect(calls.n).toBe(4);
+        // the grounding API was asked for exactly the poses given (its pitch counts down as positive); the used pano never
+        expect(requests.filter(q => q.panoId === 'HIDDEN_EAST')).toEqual([{ panoId: 'HIDDEN_EAST', headingDegree: 250, pitchDegree: -4, fovDegree: 60 }]);
+        expect(requests.filter(q => q.panoId === 'HELD_NORTH')).toEqual([{ panoId: 'HELD_NORTH', headingDegree: 180, pitchDegree: 0, fovDegree: 70 }]);
+        expect(requests.some(q => q.panoId === 'USED_WEST')).toBe(false);
+        expect(r.summary).toMatch(/Fixed poses: 2 of 4 judged; not used: pose 2, used-by-build; pose 3, no-pano/);
+        fs.copyFileSync(r.grids[0], path.join(SHOTS, 'tool_photo_match_fixed_pose_view0.png'));
+
+        // a fixed view that does not register is not used: it says why, and an automatic view takes its place
+        const noLock = await createPhotoMatchEvaluateHandler(() => fakeDeps(root, { unlocked: ['HELD_NORTH'] }))({ views: 2, runs: 1, clay: false, poses: [{ panoId: 'HELD_NORTH', headingDeg: 180 }] }, ctxFor(root, staged.scene));
+        const n = noLock.resultPayload as any;
+        expect(noLock.status, JSON.stringify(n).slice(0, 800)).toBe('completed');
+        expect(n.heldOut.fixed[0]).toMatchObject({ status: 'not-registered', panoId: 'HELD_NORTH', edgeResidualPx: { prior: 6, edge: 9 } });
+        expect(n.heldOut.fixed[0].reason).toMatch(/went from 6\.00 to 9\.00 px/);
+        expect(n.views.map((v: any) => v.panoId).sort()).toEqual(['HELD_SOUTH', 'HELD_SW']);
+        expect(n.views.every((v: any) => !v.fixed)).toBe(true);
+
+        // a pose with no heading, or a field of view the grounding API cannot serve, is refused before anything runs
+        expect(((await handler({ poses: [{ lat: PLACE.lat, lng: PLACE.lng }] }, ctxFor(root, staged.scene))).resultPayload as any).message).toMatch(/pose 1: headingDeg/);
+        expect(((await handler({ poses: [{ panoId: 'HELD_NORTH', headingDeg: 0, fovDeg: 120 }] }, ctxFor(root, staged.scene))).resultPayload as any).code).toBe('bad_arguments');
     }, 240_000);
 
     it('fails with typed errors and no scores when no view can be held out or registered', async () => {

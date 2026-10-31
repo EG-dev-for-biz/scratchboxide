@@ -10,7 +10,7 @@
 /**
  * The free dry run of a photo-match comparison on real builds (the judge-preregister skill's step 2): photo_match_evaluate's
  * own path on the runs and GLBs a preregistration names, with stand-ins only at the billed edges. Discovery lists the real
- * pano positions an earlier build cached (the Street View metadata cache: no fetch), each "photo" is the reference tile
+ * pano positions an earlier build cached (the Street View metadata cache: no fetch; fixed poses take their panos from it too), each "photo" is the reference tile
  * rendered from the requested view, registration is the identity, and the judge is blind and scores by pixel difference.
  * It shows every arm renders at every held-out pose, which panos are excluded, the call count and the region masks; it scores
  * nothing that means anything. Skipped unless PHOTO_MATCH_DRYRUN names a JSON file:
@@ -56,16 +56,29 @@ describe.skipIf(!CONFIG)('photo-match dry run on real builds (PHOTO_MATCH_DRYRUN
             }
         };
         const listed: PanoCandidate[] = [];
+        // every Google pano the metadata cache holds, in the tile frame
+        const cachedPanos = (origin: Parameters<PhotoMatchDeps['discover']>[0], cacheDir: string): PanoCandidate[] => {
+            const meta = JSON.parse(fs.readFileSync(path.join(cacheDir, 'streetview', 'metadata.json'), 'utf8')) as Record<string, { status: string; panoId?: string; lat?: number; lng?: number; date?: string; copyright?: string }>;
+            const out = new Map<string, PanoCandidate>();
+            for (const v of Object.values(meta)) {
+                if (v.status !== 'OK' || !v.panoId || out.has(v.panoId) || !/Google/.test(v.copyright ?? '')) continue;
+                const q = geodeticToScan(origin, v.lat!, v.lng!);
+                out.set(v.panoId, { panoId: v.panoId, lat: v.lat!, lng: v.lng!, ...(v.date ? { date: v.date } : {}), copyright: v.copyright!, x: q.x, z: q.z });
+            }
+            return [...out.values()];
+        };
+        const list = (ps: PanoCandidate[]) => { for (const p of ps) if (!listed.some(q => q.panoId === p.panoId)) listed.push(p); return ps; };
         const deps: PhotoMatchDeps = {
             stagedRoot: () => cfg.root,
             discover: async (origin, centre, cacheDir) => {
-                const meta = JSON.parse(fs.readFileSync(path.join(cacheDir, 'streetview', 'metadata.json'), 'utf8')) as Record<string, { status: string; panoId?: string; lat?: number; lng?: number; date?: string; copyright?: string }>;
-                for (const v of Object.values(meta)) {
-                    if (v.status !== 'OK' || !v.panoId || listed.some(p => p.panoId === v.panoId) || !/Google/.test(v.copyright ?? '')) continue;
-                    const q = geodeticToScan(origin, v.lat!, v.lng!);
-                    if (Math.hypot(q.x - centre.x, q.z - centre.z) < 200) listed.push({ panoId: v.panoId, lat: v.lat!, lng: v.lng!, ...(v.date ? { date: v.date } : {}), copyright: v.copyright!, x: q.x, z: q.z });
-                }
+                list(cachedPanos(origin, cacheDir).filter(p => Math.hypot(p.x - centre.x, p.z - centre.z) < 200));
                 return listed;
+            },
+            // fixed poses (args.poses): the cached panos only, so a pose whose pano no earlier build looked up drops out as "no-pano"
+            posePanos: async (origin, at, cacheDir) => {
+                const all = cachedPanos(origin, cacheDir);
+                const panos = list('panoId' in at ? all.filter(p => p.panoId === at.panoId) : all.filter(p => Math.hypot(p.x - at.x, p.z - at.z) < 50));
+                return { panos, ...(panos.length ? {} : { reason: 'panoId' in at ? `pano ${at.panoId} is not in the metadata cache (stand-in)` : 'no cached pano near the position (stand-in)' }) };
             },
             grounding: () => ({
                 retrieveGroundingImage: async (req: { panoId: string; headingDegree: number; pitchDegree: number; fovDegree: number }) => {
@@ -90,6 +103,7 @@ describe.skipIf(!CONFIG)('photo-match dry run on real builds (PHOTO_MATCH_DRYRUN
             fs.copyFileSync(v.regions.maskGrid, path.join(cfg.out, `masks_view${k}.png`));
         });
         fs.writeFileSync(path.join(cfg.out, 'report.json'), JSON.stringify({ ...r, standInJudgeCalls: calls }, null, 1));
-        console.log(`dry run: ${r.views.length} views, ${listed.length} panos listed, ${r.heldOut.usedByBuild} used by the builds and excluded, stand-in judge calls ${JSON.stringify(calls)}; ${r.context}`);
+        console.log(`dry run: ${r.views.length} views, ${listed.length} panos listed, ${r.heldOut.usedByBuild} used by the builds and excluded, stand-in judge calls ${JSON.stringify(calls)}; ${r.context}`
+            + (r.heldOut.fixed ? `; fixed poses: ${r.heldOut.fixed.map((o: any) => `${o.pose} ${o.status}${o.panoId ? ` (${o.panoId})` : ''}`).join(', ')}` : ''));
     }, 1_800_000);
 });

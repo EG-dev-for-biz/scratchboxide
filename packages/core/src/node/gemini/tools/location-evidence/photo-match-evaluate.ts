@@ -45,12 +45,14 @@ import { encodePng } from '../../../3d-engine/staged-location/png-encode';
 import { fetchOrthoReference, orthoReferenceCamera, type OrthoReference } from '../../../3d-engine/staged-location/ortho-reference';
 import { castCamera } from '../../../3d-engine/staged-location/survey-casting';
 import { isTreesLodJson } from '../../../3d-engine/staged-location/tree-lod-view';
-import { bearingDeg, discoverPanos, fetchViews, type PanoCandidate, type SelectedView, type StreetViewEvidenceDeps } from '../../../3d-engine/staged-location/streetview-evidence';
+import { bearingDeg, discoverPanos, discoverPanosAt, evidenceImageId, fetchViews, knownRefusals, type PanoCandidate, type SelectedView, type StreetViewEvidenceDeps } from '../../../3d-engine/staged-location/streetview-evidence';
+import { fetchStreetViewPanoMetadata } from '../../../spatial/StreetViewPanoramaProjectionService';
+import { isGoogleCapture } from '../../../spatial/StreetViewGroundingImageService';
 import { EDGE_MAX_RESIDUAL_PX, type HeldImage } from '../../../3d-engine/staged-location/pano-edge-registration';
 import { runPanoRegistrationOffThread } from '../../../3d-engine/staged-location/pano-registration-run';
 import { StageCache, stagedWorkspaceRoot } from '../../../3d-engine/staged-location/stage-cache';
 import { readGlbScene, renderFrameDepth, sceneToRenderMesh, type PoseCorrection } from '../../../spatial/StreetViewPoseRegistrar';
-import { buildGroundModel, loadScanMesh } from '../../../spatial/StreetViewSurveyPlanner';
+import { buildGroundModel, geodeticToScan, loadScanMesh } from '../../../spatial/StreetViewSurveyPlanner';
 import { pickStructure, PICK_STRUCTURE, STRUCTURE_SEED_SEARCH_M } from '../../../3d-engine/staged-location/extraction-sizing';
 import { evidenceLookup, type EvidenceLookup } from '../../../3d-engine/staged-location/vector-footprints';
 import type { RenderMesh3D } from '../../../spatial/HeadlessMeshSilhouetteRenderer';
@@ -75,6 +77,10 @@ export const HELD_OUT_MIN_SCREEN = 0.06;
  * views qualify.
  */
 export const OPEN_PLACE_RADII_M = [1, 2, 3, 4].map(k => k * STRUCTURE_SEED_SEARCH_M);
+/** A fixed pose looks from the nearest Google-captured pano within this distance of its position, else it is not used. */
+export const FIXED_POSE_MAX_PANO_M = 20;
+/** A fixed pose's field of view when none is given (the grounding API's own default and its widest). */
+export const FIXED_POSE_DEFAULT_FOV = 90;
 
 export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
     name: PHOTO_MATCH_EVALUATE_TOOL,
@@ -117,7 +123,26 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
                     }
                 }
             },
-            views: { type: 'NUMBER', description: `Held-out views to judge (default ${PHOTO_MATCH_DEFAULT_VIEWS}, at most ${PHOTO_MATCH_MAX_VIEWS}).` },
+            views: { type: 'NUMBER', description: `Held-out views to judge (default ${PHOTO_MATCH_DEFAULT_VIEWS}, at most ${PHOTO_MATCH_MAX_VIEWS}), fixed poses included.` },
+            poses: {
+                type: 'ARRAY',
+                description: `Fixed held-out views, judged blind with the automatic ones and counted in views (raised to their number; at most ${PHOTO_MATCH_MAX_VIEWS}). ` +
+                    `Each looks from the nearest Google-captured Street View pano within ${FIXED_POSE_MAX_PANO_M} m of lat/lng, or from the pano named, along headingDeg. ` +
+                    'A pano any build used is refused and a view that does not register is not used; heldOut.fixed reports every pose, the pano it used and why any dropped out.',
+                items: {
+                    type: 'OBJECT',
+                    properties: {
+                        label: { type: 'STRING', description: 'Short name for the pose in the report.' },
+                        lat: { type: 'NUMBER' },
+                        lng: { type: 'NUMBER' },
+                        panoId: { type: 'STRING', description: 'Instead of lat/lng: the pano to look from.' },
+                        headingDeg: { type: 'NUMBER', description: 'View direction, degrees clockwise from north.' },
+                        pitchDeg: { type: 'NUMBER', description: 'Elevation, degrees, up positive (default 0).' },
+                        fovDeg: { type: 'NUMBER', description: `Horizontal field of view, 10-90 degrees (default ${FIXED_POSE_DEFAULT_FOV}).` }
+                    },
+                    required: ['headingDeg']
+                }
+            },
             inContext: { type: 'BOOLEAN', description: 'Render each build inside the photo-textured tile with only the target cut out, the same street for every build (default true). False renders it alone on grey with the tile as an occluder.' },
             judgeModel: { type: 'STRING', description: `Vision model asked first (default ${PHOTO_MATCH_DEFAULT_JUDGE}; the chat's fallbacks follow).` },
             runs: { type: 'NUMBER', description: `Blind judgements per view, each with the order reshuffled (default ${PHOTO_MATCH_DEFAULT_RUNS}).` },
@@ -163,6 +188,11 @@ export interface PhotoMatchDeps {
     stagedRoot(): string;
     /** Google-captured panos near `centre` (tile frame), the grounding API's known refusals left out. */
     discover(origin: GeodeticOrigin, centre: { x: number; z: number }, cacheDir: string, signal?: AbortSignal): Promise<PanoCandidate[]>;
+    /**
+     * Panos a fixed pose can look from, Google captures only and the grounding API's known refusals left out: those found round a
+     * point (tile frame; the tool takes the nearest), or the one pano named. None, with the reason, when there is none.
+     */
+    posePanos?(origin: GeodeticOrigin, at: { x: number; z: number } | { panoId: string }, cacheDir: string, signal?: AbortSignal): Promise<{ panos: PanoCandidate[]; reason?: string }>;
     /** The grounding service on the app's service account. Throws street_view_unavailable when it is not configured. */
     grounding(): NonNullable<StreetViewEvidenceDeps['grounding']>;
     /** Edge registration of the images against the tile mesh files (in a worker thread). */
@@ -186,6 +216,30 @@ export function defaultPhotoMatchDeps(): PhotoMatchDeps {
         discover: async (origin, centre, cacheDir, signal) => {
             const r = await discoverPanos(origin, [], { mapsApiKey: maps().resolveMapsApiKey(), metadataCachePath: path.join(cacheDir, 'streetview', 'metadata.json') }, signal, centre);
             return r.panos;
+        },
+        posePanos: async (origin, at, cacheDir, signal) => {
+            const sv = { mapsApiKey: maps().resolveMapsApiKey(), metadataCachePath: path.join(cacheDir, 'streetview', 'metadata.json') };
+            if ('panoId' in at) {
+                let m: Awaited<ReturnType<typeof fetchStreetViewPanoMetadata>>;
+                try {
+                    m = await fetchStreetViewPanoMetadata({ panoId: at.panoId, apiKey: sv.mapsApiKey });
+                } catch (err) {
+                    if (/No Street View panorama found/.test((err as Error).message)) return { panos: [], reason: `pano ${at.panoId}: ${(err as Error).message}` };
+                    throw err;
+                }
+                if (!isGoogleCapture(m.copyright)) return { panos: [], reason: `pano ${at.panoId} is not a Google capture (${m.copyright ?? 'no copyright given'})` };
+                const refused = knownRefusals(sv).get(at.panoId);
+                if (refused) return { panos: [], reason: `the grounding API refuses pano ${at.panoId}: ${refused}` };
+                const q = geodeticToScan(origin, m.lat, m.lng);
+                return { panos: [{ panoId: m.panoId, lat: m.lat, lng: m.lng, ...(m.date ? { date: m.date } : {}), ...(m.copyright ? { copyright: m.copyright } : {}), x: q.x, z: q.z }] };
+            }
+            // the nearest pano to each probe within 8 m: the point itself and two rings round it reach every pano within the limit
+            const probes = [at, ...([[8, 8], [16, 12]] as const).flatMap(([r, n]) => Array.from({ length: n }, (_, k) => {
+                const a = (2 * Math.PI * k) / n;
+                return { x: at.x + r * Math.sin(a), z: at.z - r * Math.cos(a) };
+            }))];
+            const r = await discoverPanosAt(origin, probes, sv, signal, at);
+            return { panos: r.panos, ...(r.panos.length ? {} : { reason: `no Google-captured pano found round the position (${r.rejectedNotGoogle} not Google captures, ${r.rejectedRefused} refused by the grounding API)` }) };
         },
         grounding: () => {
             const { GeminiClient } = gem();
@@ -628,6 +682,23 @@ export type HeldOutEyeGround = 'terrain' | 'lowest-surface' | 'structure-base';
 
 export interface HeldOutCandidateView extends SelectedView { close: boolean; visibleShare: number; screenShare: number; eyeGround: HeldOutEyeGround }
 
+/** The street under (x, z): the terrain ground model, else (off it) the lowest surface of `context` within 1.5 m; undefined when neither. */
+function streetAt(x: number, z: number, context: RenderMesh3D, terrain?: { groundAt(x: number, z: number): number }): { y: number; on: HeldOutEyeGround } | undefined {
+    const t = terrain ? terrain.groundAt(x, z) : NaN;
+    if (Number.isFinite(t)) return { y: t, on: 'terrain' };
+    const s = groundAt(context.vertices, context.indices, x, z);
+    return Number.isFinite(s) ? { y: s, on: 'lowest-surface' } : undefined;
+}
+
+/** How much of a 160 x 120 frame the target fills (screen), and the share of that which the context does not hide (seen). */
+function targetShares(target: RenderMesh3D, context: RenderMesh3D, v: { eye: Vec3; headingDeg: number; pitchDeg: number; fovDeg: number }): { screen: number; seen: number } {
+    const cam = castCamera({ eye: v.eye, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg, widthPx: 160, heightPx: 120 });
+    const isoD = renderFrameDepth(target, cam), ctxD = renderFrameDepth(context, cam);
+    let seen = 0, isoPx = 0;
+    for (let i = 0; i < isoD.length; i++) if (isoD[i] < 1e8) { isoPx++; if (ctxD[i] >= isoD[i] - 0.6) seen++; }
+    return { screen: isoPx / isoD.length, seen: isoPx ? seen / isoPx : 0 };
+}
+
 /**
  * Candidate views from the unused panos: one per pano, aimed at the structure (its nearest wall with a wide view when the pano
  * stands close, else its centre), kept when the structure fills enough of the frame and the tile mesh does not hide most of it.
@@ -638,18 +709,17 @@ export interface HeldOutCandidateView extends SelectedView { close: boolean; vis
 export function heldOutViews(panos: PanoCandidate[], structure: Structure, context: RenderMesh3D, exclude: Set<string>, terrain?: { groundAt(x: number, z: number): number }): { views: HeldOutCandidateView[]; rejected: string[] } {
     const { cx, cz, radiusM: R, ymin, ymax, openGroundY } = structure;
     const open = openGroundY !== undefined;
-    const V = context.vertices, I = context.indices, IV = open ? new Float32Array(0) : structure.mesh.vertices;
+    const IV = open ? new Float32Array(0) : structure.mesh.vertices;
     const near = panos.filter(p => !exclude.has(p.panoId)).map(p => ({ ...p, d: Math.hypot(p.x - cx, p.z - cz) })).filter(p => p.d > R * 0.5 + 3 && p.d < R + 110);
     near.sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '') || a.panoId.localeCompare(b.panoId));
     const cands: typeof near = [];
     for (const p of near) if (!cands.some(q => Math.hypot(q.x - p.x, q.z - p.z) < 10)) cands.push(p);
     const views: HeldOutCandidateView[] = [], rejected: string[] = [];
     for (const p of cands) {
-        let gy = terrain ? terrain.groundAt(p.x, p.z) : NaN;
-        let eyeGround: HeldOutEyeGround = 'terrain';
-        if (!Number.isFinite(gy)) { gy = groundAt(V, I, p.x, p.z); eyeGround = 'lowest-surface'; }
-        if (!Number.isFinite(gy)) { if (p.d > R + 60) { rejected.push(`${p.panoId}: no ground under it`); continue; } gy = ymin; eyeGround = 'structure-base'; }
-        const eye: Vec3 = [p.x, gy + 2.5, p.z];
+        let street = streetAt(p.x, p.z, context, terrain);
+        if (!street) { if (p.d > R + 60) { rejected.push(`${p.panoId}: no ground under it`); continue; } street = { y: ymin, on: 'structure-base' }; }
+        const eye: Vec3 = [p.x, street.y + 2.5, p.z];
+        const eyeGround = street.on;
         let nx = cx, nz = cz, dn = Infinity;
         for (let i = 0; i < IV.length; i += 30) { const dd = Math.hypot(IV[i] - p.x, IV[i + 2] - p.z); if (dd < dn) { dn = dd; nx = IV[i]; nz = IV[i + 2]; } }
         const close = dn < 22;
@@ -657,11 +727,7 @@ export function heldOutViews(panos: PanoCandidate[], structure: Structure, conte
         const fovDeg = Math.round(close ? 80 : Math.max(50, Math.min(90, 2 * Math.atan((R * 0.9) / Math.max(1, p.d)) * 180 / Math.PI)));
         const mid = open ? openGroundY : ymin + 0.4 * (ymax - ymin);
         const pitchDeg = Math.round((close ? 12 : Math.max(-5, Math.min(30, Math.atan((mid - eye[1]) / p.d) * 180 / Math.PI))) * 10) / 10;
-        const cam = castCamera({ eye, headingDeg, pitchDeg, fovDeg, widthPx: 160, heightPx: 120 });
-        const isoD = renderFrameDepth(structure.mesh, cam), ctxD = renderFrameDepth(context, cam);
-        let seen = 0, isoPx = 0;
-        for (let i = 0; i < isoD.length; i++) if (isoD[i] < 1e8) { isoPx++; if (ctxD[i] >= isoD[i] - 0.6) seen++; }
-        const share = isoPx ? seen / isoPx : 0, screen = isoPx / isoD.length;
+        const { screen, seen: share } = targetShares(structure.mesh, context, { eye, headingDeg, pitchDeg, fovDeg });
         if (screen < HELD_OUT_MIN_SCREEN || share < HELD_OUT_MIN_VISIBLE) { rejected.push(`${p.panoId}: ${p.d.toFixed(0)} m, fills ${(screen * 100).toFixed(0)}% of the frame, ${(share * 100).toFixed(0)}% of it unhidden`); continue; }
         views.push({
             panoId: p.panoId, ...(p.date ? { date: p.date } : {}), ...(p.copyright ? { copyright: p.copyright } : {}), eye, headingDeg, pitchDeg, fovDeg, aspectRatio: 'RATIO_4X3',
@@ -692,6 +758,107 @@ export function openPlaceViews(panos: PanoCandidate[], context: RenderMesh3D, te
     return { ...best!, tried };
 }
 
+/** A fixed held-out view as asked for (`poses`): where it looks from and along which direction. */
+export interface FixedPoseSpec { pose: number; label?: string; at: { lat: number; lng: number } | { panoId: string }; headingDeg: number; pitchDeg: number; fovDeg: number }
+
+/** What became of a fixed pose: judged, or why it dropped out (heldOut.fixed). */
+export interface FixedPoseOutcome {
+    pose: number;
+    label?: string;
+    requested: FixedPoseSpec['at'];
+    headingDeg: number; pitchDeg: number; fovDeg: number;
+    status: 'judged' | 'no-pano' | 'used-by-build' | 'no-ground' | 'duplicate' | 'not-fetched' | 'not-registered';
+    reason?: string;
+    panoId?: string;
+    date?: string;
+    /** From the position asked for to the pano used (a lat/lng pose). */
+    panoDistanceM?: number;
+    eyeGround?: HeldOutEyeGround;
+    /** The automatic views' target in this view, measured as they measure it (reported, never a gate): its share of the frame, and the share of it unhidden. */
+    targetScreenShare?: number;
+    targetVisibleShare?: number;
+    edgeResidualPx?: { prior: number | null; edge: number | null };
+    viewId?: string;
+}
+
+function parsePoses(raw: unknown): FixedPoseSpec[] {
+    if (raw === undefined || raw === null) return [];
+    if (!Array.isArray(raw)) throw new PhotoMatchError('bad_arguments', 'poses must be an array of { lat, lng (or panoId), headingDeg, pitchDeg?, fovDeg? }.');
+    if (raw.length > PHOTO_MATCH_MAX_VIEWS) throw new PhotoMatchError('bad_arguments', `at most ${PHOTO_MATCH_MAX_VIEWS} poses (each is one view).`);
+    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+    return raw.map((p: Record<string, unknown> | undefined, k) => {
+        const pose = k + 1;
+        const bad = (m: string) => new PhotoMatchError('bad_arguments', `pose ${pose}: ${m}`);
+        const headingDeg = num(p?.headingDeg);
+        if (headingDeg === undefined) throw bad('headingDeg (degrees clockwise from north) is required.');
+        const panoId = typeof p?.panoId === 'string' && p.panoId.trim() ? p.panoId.trim() : undefined;
+        const lat = num(p?.lat), lng = num(p?.lng);
+        if (!panoId && (lat === undefined || lng === undefined || Math.abs(lat) > 90 || Math.abs(lng) > 180)) throw bad('give lat and lng, or panoId.');
+        const pitchDeg = num(p?.pitchDeg) ?? 0, fovDeg = num(p?.fovDeg) ?? FIXED_POSE_DEFAULT_FOV;
+        if (Math.abs(pitchDeg) > 90) throw bad('pitchDeg must lie within -90 to 90.');
+        if (fovDeg < 10 || fovDeg > 90) throw bad('fovDeg must lie within 10 to 90 (the grounding API serves at most 90).');
+        const label = typeof p?.label === 'string' && p.label.trim() ? p.label.trim().slice(0, 60) : undefined;
+        return { pose, ...(label ? { label } : {}), at: panoId ? { panoId } : { lat: lat!, lng: lng! }, headingDeg: ((headingDeg % 360) + 360) % 360, pitchDeg, fovDeg };
+    });
+}
+
+/**
+ * The views of the fixed poses: each looks from the nearest Google-captured pano within FIXED_POSE_MAX_PANO_M of its position (or
+ * from the pano named), its eye 2.5 m over the street there, along the heading asked for. A pano any build used is refused, as is
+ * a pose with no pano near enough, no ground under it, or the very view of an earlier pose. The views that remain are fetched and
+ * registered with the automatic ones; `views` maps each to its outcome, which the caller completes.
+ */
+async function fixedPoseViews(specs: FixedPoseSpec[], input: {
+    origin: GeodeticOrigin; cacheDir: string; posePanos: NonNullable<PhotoMatchDeps['posePanos']>; signal?: AbortSignal;
+    context: RenderMesh3D; terrain: { groundAt(x: number, z: number): number }; used: Set<string>;
+    /** What the automatic views look at: distances are measured from its centre, and its share of each view is reported when it has a mesh. */
+    centre: { x: number; z: number }; target?: RenderMesh3D;
+}): Promise<{ outcomes: FixedPoseOutcome[]; views: Map<SelectedView, FixedPoseOutcome> }> {
+    const outcomes: FixedPoseOutcome[] = [];
+    const views = new Map<SelectedView, FixedPoseOutcome>();
+    const ids = new Set<string>();
+    for (const s of specs) {
+        stopIfAborted(input.signal);
+        const o: FixedPoseOutcome = { pose: s.pose, ...(s.label ? { label: s.label } : {}), requested: s.at, headingDeg: s.headingDeg, pitchDeg: s.pitchDeg, fovDeg: s.fovDeg, status: 'no-pano' };
+        outcomes.push(o);
+        const named = 'panoId' in s.at ? s.at.panoId : undefined;
+        const point = 'lat' in s.at ? geodeticToScan(input.origin, s.at.lat, s.at.lng) : undefined;
+        const found = await input.posePanos(input.origin, point ?? { panoId: named! }, input.cacheDir, input.signal);
+        let pano: PanoCandidate | undefined, dist = 0;
+        if (point) {
+            for (const p of found.panos) { const d = Math.hypot(p.x - point.x, p.z - point.z); if (!pano || d < dist) { pano = p; dist = d; } }
+            if (pano && dist > FIXED_POSE_MAX_PANO_M) { o.reason = `the nearest Google-captured pano found (${pano.panoId}) stands ${dist.toFixed(1)} m from the position, past ${FIXED_POSE_MAX_PANO_M} m`; continue; }
+        } else {
+            pano = found.panos.find(p => p.panoId === named);
+        }
+        if (!pano) { o.reason = found.reason ?? (point ? `no Google-captured pano within ${FIXED_POSE_MAX_PANO_M} m of the position` : 'the pano named was not found'); continue; }
+        o.panoId = pano.panoId;
+        if (pano.date) o.date = pano.date;
+        if (point) o.panoDistanceM = r2(dist);
+        if (input.used.has(pano.panoId)) { o.status = 'used-by-build'; o.reason = `pano ${pano.panoId} was used by a build, so it cannot be held out`; continue; }
+        const street = streetAt(pano.x, pano.z, input.context, input.terrain);
+        if (!street) { o.status = 'no-ground'; o.reason = `no ground under pano ${pano.panoId}: it stands off the reference tile`; continue; }
+        o.eyeGround = street.on;
+        const view: SelectedView = {
+            panoId: pano.panoId, ...(pano.date ? { date: pano.date } : {}), ...(pano.copyright ? { copyright: pano.copyright } : {}),
+            eye: [pano.x, street.y + 2.5, pano.z], headingDeg: s.headingDeg, pitchDeg: s.pitchDeg, fovDeg: s.fovDeg, aspectRatio: 'RATIO_4X3',
+            distanceM: Math.round(Math.hypot(pano.x - input.centre.x, pano.z - input.centre.z) * 10) / 10, facadeHeadingDeg: (s.headingDeg + 180) % 360, score: 0
+        };
+        const id = evidenceImageId(view);
+        if (ids.has(id)) { o.status = 'duplicate'; o.reason = `the same view as an earlier pose (pano ${pano.panoId}, heading ${s.headingDeg})`; continue; }
+        ids.add(id);
+        if (input.target) {
+            const sh = targetShares(input.target, input.context, view);
+            o.targetScreenShare = r2(sh.screen);
+            o.targetVisibleShare = r2(sh.seen);
+            view.score = sh.seen;
+        }
+        o.status = 'not-fetched';
+        views.set(view, o);
+    }
+    return { outcomes, views };
+}
+
 /** Spread: the nearest and the farthest, then the most different by bearing and distance. */
 export function spreadViews<T extends { headingDeg: number; distanceM: number }>(views: T[], n: number): T[] {
     const sorted = [...views].sort((a, b) => a.distanceM - b.distanceM);
@@ -720,6 +887,8 @@ export interface PhotoMatchViewResult {
     id: string;
     panoId: string;
     date?: string;
+    /** A fixed pose's view (`poses`): which pose, as numbered from 1 in the order given. */
+    fixed?: { pose: number; label?: string };
     distanceM: number;
     headingDeg: number;
     pitchDeg: number;
@@ -786,7 +955,11 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     const progress = (m: string, f?: number) => ctx.reportProgress?.(m, f);
     const activeData = ctx.request?.activeArtifact?.type === '3d-scene' ? (ctx.request.activeArtifact.data as { stagedBuild?: StagedBuildState } | undefined) : undefined;
     const active = activeData?.stagedBuild && Array.isArray(activeData.stagedBuild.layers) ? activeData.stagedBuild : undefined;
-    const nViews = intArg(args.views, PHOTO_MATCH_DEFAULT_VIEWS, 1, PHOTO_MATCH_MAX_VIEWS);
+    const poses = parsePoses(args.poses);
+    if (poses.length && !deps.posePanos) throw new PhotoMatchError('street_view_unavailable', 'fixed poses need a pano lookup (posePanos), and none is configured here.');
+    // fixed poses count toward the views, which are never fewer than they
+    const askedViews = intArg(args.views, PHOTO_MATCH_DEFAULT_VIEWS, 1, PHOTO_MATCH_MAX_VIEWS);
+    const nViews = Math.max(askedViews, poses.length);
     const nRuns = intArg(args.runs, PHOTO_MATCH_DEFAULT_RUNS, 1, PHOTO_MATCH_MAX_RUNS);
     const wantContext = args.inContext !== false;
     const wantClay = args.clay !== false;
@@ -869,10 +1042,19 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
                 : sceneToRenderMesh(firstBuild.glbs.filter(f => !isTreesLodJson(glbJson(f))).flatMap(f => readGlbScene(f))));
     const near = structure ? 'the structure' : 'the place';
     progress(`finding Street View panos near ${near} that the build never used`, 0.02);
-    const panos = await deps.discover(ref.origin, structure ? { x: structure.cx, z: structure.cz } : { x: 0, z: 0 }, builds.cache.dir, signal);
+    const centre = structure ? { x: structure.cx, z: structure.cz } : { x: 0, z: 0 };
+    const panos = await deps.discover(ref.origin, centre, builds.cache.dir, signal);
     stopIfAborted(signal);
-    const open = structure ? undefined : openPlaceViews(panos, contextMesh, terrain, builds.used, fetchCount);
-    const { views: candidates, rejected } = open ?? heldOutViews(panos, structure!, contextMesh, builds.used, terrain);
+    // the fixed poses first: the automatic views never repeat a pano one of them looks from
+    if (poses.length) progress(`finding the panos of ${poses.length} fixed pose${poses.length === 1 ? '' : 's'}`, 0.03);
+    const fixed = poses.length ? await fixedPoseViews(poses, {
+        origin: ref.origin, cacheDir: builds.cache.dir, posePanos: deps.posePanos!, ...(signal ? { signal } : {}), context: contextMesh, terrain, used: builds.used,
+        centre, ...(structure ? { target: structure.mesh } : {})
+    }) : undefined;
+    const fixedReady = fixed ? [...fixed.views.keys()] : [];
+    const autoExclude = fixedReady.length ? new Set([...builds.used, ...fixedReady.map(v => v.panoId)]) : builds.used;
+    const open = structure ? undefined : openPlaceViews(panos, contextMesh, terrain, autoExclude, fetchCount);
+    const { views: candidates, rejected } = open ?? heldOutViews(panos, structure!, contextMesh, autoExclude, terrain);
     const viewTarget = {
         rule: viewRule,
         source: viewRule === 'isolate' ? 'the isolate (the scan the build isolated)'
@@ -882,15 +1064,19 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         ...(open ? { radiusM: open.radiusM, triangles: open.triangles, tried: open.tried } : {})
     };
     const unusedNear = panos.filter(p => !builds.used.has(p.panoId)).length;
-    if (!candidates.length) {
-        throw new PhotoMatchError('no_heldout_candidates', `No held-out view: of ${panos.length} Google panos near ${near}, ${panos.length - unusedNear} were used by the build and none of the other ${unusedNear} sees enough of it unhidden.`, { panosNear: panos.length, usedByBuild: builds.used.size, viewTarget, rejected: rejected.slice(0, 20) });
+    const fixedNote = fixed ? { fixed: fixed.outcomes } : {};
+    if (!candidates.length && !fixedReady.length) {
+        throw new PhotoMatchError('no_heldout_candidates', `No held-out view: of ${panos.length} Google panos near ${near}, ${panos.length - unusedNear} were used by the build and none of the other ${unusedNear} sees enough of it unhidden${fixed ? `, and none of the ${poses.length} fixed poses has a pano that can be held out` : ''}.`, { panosNear: panos.length, usedByBuild: builds.used.size, viewTarget, rejected: rejected.slice(0, 20), ...fixedNote });
     }
-    const toFetch = spreadViews(candidates, fetchCount);
+    // every fixed view, then the automatic ones to fill the fetch (they stand in for fixed views that do not register)
+    const toFetch: SelectedView[] = [...fixedReady, ...spreadViews(candidates, Math.max(0, fetchCount - fixedReady.length))];
     progress(`fetching ${toFetch.length} held-out Street View images through the grounding API`, 0.08);
     const got = await fetchViews(toFetch, { grounding: deps.grounding() }, signal);
     stopIfAborted(signal);
+    for (const f of got.failures) { const o = fixed?.views.get(f.view); if (o) o.reason = `the grounding API did not serve it: ${f.error}`; }
+    for (const im of got.images) { const o = fixed?.views.get(im.view); if (o) o.status = 'not-registered'; }
     if (!got.images.length) {
-        throw new PhotoMatchError('no_heldout_fetched', `None of the ${toFetch.length} held-out Street View images could be fetched: ${got.failures.slice(0, 4).map(f => `${f.view.panoId}: ${f.error}`).join('; ')}`, { failures: got.failures.map(f => ({ panoId: f.view.panoId, error: f.error })) });
+        throw new PhotoMatchError('no_heldout_fetched', `None of the ${toFetch.length} held-out Street View images could be fetched: ${got.failures.slice(0, 4).map(f => `${f.view.panoId}: ${f.error}`).join('; ')}`, { failures: got.failures.map(f => ({ panoId: f.view.panoId, error: f.error })), ...fixedNote });
     }
     progress(`registering ${got.images.length} held-out images against the tile mesh by silhouette and edges`, 0.15);
     const regs = await deps.register(got.images.map(im => ({ id: im.id, bytes: im.bytes, widthPx: im.widthPx, heightPx: im.heightPx, view: im.view })), [ref.tileGeometry], signal, m => progress(m));
@@ -903,15 +1089,25 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     });
     const unregistered = got.images.filter(im => !locked.some(l => l.im === im)).map(im => {
         const o = regs.find(q => q.panoId === im.view.panoId);
-        return { panoId: im.view.panoId, edgeResidualPx: o?.edgeResidualPx ?? null, reason: o ? o.reason : 'not registered' };
+        const fx = fixed?.views.get(im.view);
+        if (fx) {
+            const ep = o?.edgeResidualPx;
+            if (ep) fx.edgeResidualPx = ep;
+            fx.reason = `did not register against the tile mesh (an edge residual of at most ${EDGE_MAX_RESIDUAL_PX} px, lower than at the start, is needed${ep ? `; it went from ${fmt(ep.prior)} to ${fmt(ep.edge)} px` : ''}): ${o ? o.reason : 'not registered'}`;
+        }
+        return { panoId: im.view.panoId, edgeResidualPx: o?.edgeResidualPx ?? null, reason: o ? o.reason : 'not registered', ...(fx ? { fixedPose: fx.pose } : {}) };
     });
     if (!locked.length) {
         const few = got.images.length < 2 ? ' Only one image came back, and the edge registration needs at least two.' : '';
-        throw new PhotoMatchError('no_heldout_registered', `None of the ${got.images.length} held-out images registered against the tile mesh (an edge residual of at most ${EDGE_MAX_RESIDUAL_PX} px, lower than at the start), so no pose is trusted enough to judge from.${few}`, { unregistered });
+        throw new PhotoMatchError('no_heldout_registered', `None of the ${got.images.length} held-out images registered against the tile mesh (an edge residual of at most ${EDGE_MAX_RESIDUAL_PX} px, lower than at the start), so no pose is trusted enough to judge from.${few}`, { unregistered, ...fixedNote });
     }
-    const chosen = locked.sort((a, b) => a.im.view.distanceM - b.im.view.distanceM).slice(0, nViews);
+    // the fixed views that registered, in the order asked, then the nearest automatic ones
+    const isFixed = (l: { im: { view: SelectedView } }) => !!fixed?.views.has(l.im.view);
+    const chosen = [...locked.filter(isFixed), ...locked.filter(l => !isFixed(l)).sort((a, b) => a.im.view.distanceM - b.im.view.distanceM)].slice(0, nViews);
     for (const c of chosen) {
         if (builds.used.has(c.im.view.panoId)) throw new PhotoMatchError('heldout_used_by_build', `pano ${c.im.view.panoId} was used by the build; it cannot be held out.`);
+        const fx = fixed?.views.get(c.im.view);
+        if (fx) { fx.status = 'judged'; fx.edgeResidualPx = c.reg.edgeResidualPx; delete fx.reason; }
     }
 
     // ---------------- regions: every triangle labelled by geometry ----------------
@@ -1053,6 +1249,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         const pixel: Record<string, PerceptualScores> = {};
         const files: Record<string, string> = {};
         const viewId = `v${k}_${v.panoId.slice(0, 6).replace(/[^A-Za-z0-9_-]/g, '_')}`;
+        const fx = fixed?.views.get(v);
+        if (fx) fx.viewId = viewId;
         const regionArms: Record<string, Record<PhotoMatchRegion, RegionScore>> = {};
         for (const x of renders) {
             pixel[x.id] = perceptualScores(photo, x.r, mask);
@@ -1077,7 +1275,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         }
         prepared.push({
             view: {
-                id: viewId, panoId: v.panoId, ...(v.date ? { date: v.date } : {}), distanceM: v.distanceM, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg,
+                id: viewId, panoId: v.panoId, ...(v.date ? { date: v.date } : {}), ...(fx ? { fixed: { pose: fx.pose, ...(fx.label ? { label: fx.label } : {}) } } : {}),
+                distanceM: v.distanceM, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg,
                 size: [img.width, img.height], edgeResidualPx: reg.edgeResidualPx, maskPixels: mask.reduce((s, m) => s + m, 0), grid: path.join(outDir, `grid_${viewId}.png`), renders: files, pixel,
                 ...(wantClay ? { clayRenders: clayFiles, clayGrid: path.join(outDir, `grid_${viewId}_clay.png`) } : {}),
                 ...(Object.keys(treeLevels).length ? { trees: treeLevels } : {}),
@@ -1311,6 +1510,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         + (wantRegionJudge ? regionJudgeLine(loaded, judgeRegionScores, regionJudged.length, scored.length) : '')
         + ` Region metrics (masks from geometry: whole frame, building, ground, neighbours, trees, skyline) per arm in pixelMetrics.regions and views[].regions; the masks are drawn in each grid${pick || isoFlags ? '' : '; no target was found, so the building mask is empty'}.`
         + (open ? ` No structure stands at the place, so the views look at the place itself: the tile's surfaces within ${open.radiusM} m of it (heldOut.viewTarget).` : '')
+        + (fixed ? fixedPoseLine(fixed.outcomes) : '')
         + satelliteLine(loaded, satellite, satPrepared?.view);
     const report = {
         status: 'success',
@@ -1340,6 +1540,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         grids: views.map(v => v.grid),
         heldOut: {
             viewTarget,
+            // every fixed pose: the pano it looked from and its view, or why it dropped out
+            ...(fixed ? { fixed: fixed.outcomes, ...(nViews > askedViews ? { viewsRaisedTo: nViews } : {}) } : {}),
             panosNear: panos.length,
             usedByBuild: builds.used.size,
             usedPanoSources: builds.usedSources,
@@ -1369,6 +1571,14 @@ function satelliteLine(loaded: Array<{ id: string; label: string }>, sat: Record
     if (!view?.judge) return ` Satellite second opinion (Google Static Maps, top-down at ${gsd} m/px, capture date unknown): rendered and gridded, but the judge returned no usable scores for it${view?.judgeError ? ` (${view.judgeError})` : ''}; not counted in the scores.`;
     const ranked = [...loaded].filter(a => view.judge!.stats[a.id]?.overall).sort((a, b) => view.judge!.stats[b.id].overall.mean - view.judge!.stats[a.id].overall.mean);
     return ` Satellite second opinion (Google Static Maps, top-down at ${gsd} m/px, capture date unknown; not counted in the scores): ${ranked.map(a => `${a.label} [${a.id}] overall ${view.judge!.stats[a.id].overall.mean.toFixed(1)}`).join('; ')}.`;
+}
+
+/** The fixed poses' line of the summary: how many were judged, and why any dropped out. */
+function fixedPoseLine(outcomes: FixedPoseOutcome[]): string {
+    const judged = outcomes.filter(o => o.status === 'judged').length;
+    const dropped = outcomes.filter(o => o.status !== 'judged');
+    const name = (o: FixedPoseOutcome) => `pose ${o.pose}${o.label ? ` (${o.label})` : ''}`;
+    return ` Fixed poses: ${judged} of ${outcomes.length} judged${dropped.length ? `; not used: ${dropped.map(o => `${name(o)}, ${o.status}`).join('; ')}` : ''} (heldOut.fixed).`;
 }
 
 /** The judge's region line of the summary (judgeRegions): ground, neighbours and skyline per arm. */
