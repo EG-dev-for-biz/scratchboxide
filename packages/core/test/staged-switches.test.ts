@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { reportStagedSwitchProblems, stagedBuildingPipelineEnv, stagedDistrictMode, stagedModelService, stagedSwitchProblems } from '../src/node/3d-engine/staged-location/staged-switches';
+import { reportStagedSwitchProblems, stagedBuildingPipelineEnv, stagedDistrict, stagedDistrictMode, stagedModelService, stagedSwitchProblems } from '../src/node/3d-engine/staged-location/staged-switches';
 import { districtMassingEnabled, proceduralDistrictEnabled } from '../src/node/3d-engine/staged-location/district-massing';
 import { stagedPipelineK } from '../src/node/3d-engine/staged-location/pipeline-k/pipeline-k';
 import { parseStagedLocationArgs } from '../src/node/3d-engine/staged-location/staged-location-tool';
@@ -47,15 +47,22 @@ describe('staged build switches: one meaning each (2026-10-30)', () => {
             [{ SCRATCHBOX_STAGED_DISTRICT: 'scan' }, 'scan', false, false],
             [{ SCRATCHBOX_STAGED_DISTRICT: ' Rebuilt ' }, 'rebuilt', true, true],
             [{ SCRATCHBOX_STAGED_DISTRICT: 'procedural' }, 'massing', true, false],
+            // K over the district: the scan kept and straightened, no massing
+            [{ SCRATCHBOX_STAGED_DISTRICT: 'KD' }, 'kd', false, false],
             // the retired switches no longer change the district
             [{ SCRATCHBOX_STAGED_PROCEDURAL: '1' }, 'massing', true, false],
             [{ SCRATCHBOX_STAGED_DISTRICT_MASSING: '0' }, 'massing', true, false]
         ];
         for (const [vars, mode, massing, rebuilt] of cases) {
             expect(stagedDistrictMode(env(vars)), JSON.stringify(vars)).toBe(mode);
-            expect(districtMassingEnabled(env(vars)), JSON.stringify(vars)).toBe(massing);
-            expect(proceduralDistrictEnabled(env(vars)), JSON.stringify(vars)).toBe(rebuilt);
+            expect(districtMassingEnabled({}, env(vars)), JSON.stringify(vars)).toBe(massing);
+            expect(proceduralDistrictEnabled({}, env(vars)), JSON.stringify(vars)).toBe(rebuilt);
         }
+        // a build's own district comes first; one the switch does not take falls back to the environment
+        expect(stagedDistrict({ district: 'scan' }, env({ SCRATCHBOX_STAGED_DISTRICT: 'kd' }))).toBe('scan');
+        expect(stagedDistrict({ district: 'nope' }, env({ SCRATCHBOX_STAGED_DISTRICT: 'rebuilt' }))).toBe('rebuilt');
+        expect(districtMassingEnabled({ district: 'kd' }, env({}))).toBe(false);
+        expect(proceduralDistrictEnabled({ district: 'rebuilt' }, env({ SCRATCHBOX_STAGED_DISTRICT: 'scan' }))).toBe(true);
     });
 
     it('names the setting that replaces a retired switch or letter, and the values a switch does not take', () => {
@@ -79,8 +86,12 @@ describe('staged build switches: one meaning each (2026-10-30)', () => {
             .toEqual(['SCRATCHBOX_STAGED_MODEL_SERVICE takes meshy, trellis; "triposr" is ignored, so pipeline J uses Meshy.']);
         expect(stagedSwitchProblems(env({ SCRATCHBOX_STAGED_GEOMETRY: 'G' }))[0]).toMatch(/^SCRATCHBOX_STAGED_GEOMETRY=g is ignored: .*; set SCRATCHBOX_STAGED_BUILDING_PIPELINE=j\.$/);
         expect(stagedSwitchProblems(env({ SCRATCHBOX_STAGED_DISTRICT: 'procedural' })))
-            .toEqual(['SCRATCHBOX_STAGED_DISTRICT takes scan, massing, rebuilt; "procedural" is ignored, so a district has its massing.']);
+            .toEqual(['SCRATCHBOX_STAGED_DISTRICT takes scan, massing, rebuilt, kd; "procedural" is ignored, so a district has its massing.']);
         expect(stagedSwitchProblems(env({ SCRATCHBOX_STAGED_PROCEDURAL: 'k', SCRATCHBOX_STAGED_DISTRICT_MASSING: '0' }))).toHaveLength(2);
+        // kd was a pipeline letter on its branch: it is the district's look
+        expect(stagedSwitchProblems(env({ SCRATCHBOX_STAGED_PROCEDURAL: 'kd' }))[0]).toMatch(/set SCRATCHBOX_STAGED_DISTRICT=kd\.$/);
+        expect(stagedSwitchProblems(env({ SCRATCHBOX_STAGED_BUILDING_PIPELINE: 'kd' }))).toEqual(['SCRATCHBOX_STAGED_BUILDING_PIPELINE=kd is ignored: kd is how a district is shown; set SCRATCHBOX_STAGED_DISTRICT=kd.']);
+        expect(stagedSwitchProblems(env({ SCRATCHBOX_STAGED_DISTRICT: 'kd' }))).toEqual([]);
     });
 
     it('reports once per process', () => {

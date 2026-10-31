@@ -48,7 +48,7 @@ import { dropResidualClusters, dropWallBandResidual, planeFirstMassing, PLANE_RE
 import type { ProvenanceRecord } from '../../../common/spatial/staged-location-contracts';
 import type { MassingNode } from './pipeline-e/native-massing';
 import type { MassingPart } from './pipeline-e/massing-spec';
-import { stagedDistrictMode } from './staged-switches';
+import { stagedDistrict } from './staged-switches';
 
 /** Plane-first walls (wall-plane-fit.ts): off unless SCRATCHBOX_STAGED_PLANE_FIRST=1. */
 export function planeFirstEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -59,10 +59,12 @@ export const DISTRICT_MASSING_VERSION = `district-massing/1${planeFirstEnabled()
 
 /**
  * The district massing stage: pipeline E's massing for every building the scan confirms, the default for districts (user
- * decision 2026-10-22, "pipeline E as our default for districts"); SCRATCHBOX_STAGED_DISTRICT=scan turns it off.
+ * decision 2026-10-22, "pipeline E as our default for districts"); a district shown as scanned or as kd has none (the
+ * request's `district`, else SCRATCHBOX_STAGED_DISTRICT).
  */
-export function districtMassingEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-    return stagedDistrictMode(env) !== 'scan';
+export function districtMassingEnabled(request: { district?: string } = {}, env: NodeJS.ProcessEnv = process.env): boolean {
+    const mode = stagedDistrict(request, env);
+    return mode === 'massing' || mode === 'rebuilt';
 }
 
 /**
@@ -70,8 +72,8 @@ export function districtMassingEnabled(env: NodeJS.ProcessEnv = process.env): bo
  * (lenient), the ground a measured surface, the streets SB-Roadie's carriageways and kerbs; the scan stays as the reference
  * the rebuilt layers supersede (user direction, 2026-10-22: the tiles as a visual reference, the scene recreated).
  */
-export function proceduralDistrictEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-    return stagedDistrictMode(env) === 'rebuilt';
+export function proceduralDistrictEnabled(request: { district?: string } = {}, env: NodeJS.ProcessEnv = process.env): boolean {
+    return stagedDistrict(request, env) === 'rebuilt';
 }
 
 /**

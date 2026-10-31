@@ -17,10 +17,12 @@
 
 import * as fs from 'fs-extra';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import {
     ProjectArtifactGraph,
     createEmptyProjectGraph,
     parseProjectGraph,
+    projectGraphFromObject,
     serializeProjectGraph
 } from '../common/project-artifact-graph-protocol';
 import { diffProjectGraphs, type ProjectChange } from '../common/project-graph-diff';
@@ -28,6 +30,16 @@ import { defaultDurableAssetStore, DurableAssetStore } from './asset-store/durab
 import type { EventRow } from './asset-store/asset-db';
 
 const GRAPH_FILE = 'project-artifacts.json';
+/**
+ * The graph file holds everything but the revisions' bodies (layout SPLIT_LAYOUT: `revisions` empty, `revisionIds` the
+ * graph's revisions); each revision is its own file under REVISIONS_DIR, written once (a revision never changes). A save
+ * then writes the small index and the new revisions only, instead of the whole history. A file without the layout (every
+ * revision inside it) still loads, and is split at its next save.
+ */
+const SPLIT_LAYOUT = 'split/1';
+const REVISIONS_DIR = 'project-revisions';
+
+type GraphIndex = Omit<ProjectArtifactGraph, 'revisions'> & { revisions: Record<string, never>; layout: typeof SPLIT_LAYOUT; revisionIds: string[] };
 
 let tempCounter = 0;
 
@@ -52,7 +64,7 @@ export class ProjectArtifactStore {
         const root = this.resolveRoot(workspaceRoot);
         const filePath = this.resolvePath(workspaceRoot);
         if (await fs.pathExists(filePath)) {
-            const graph = parseProjectGraph(await fs.readFile(filePath, 'utf8'));
+            const graph = await this.readGraph(filePath);
             if (graph.project.id !== projectId) {
                 throw new Error(`Stored graph belongs to ${graph.project.id}, not ${projectId}`);
             }
@@ -86,15 +98,40 @@ export class ProjectArtifactStore {
     save(workspaceRoot: string, graph: ProjectArtifactGraph): Promise<void> {
         const filePath = this.resolvePath(workspaceRoot);
         const root = this.resolveRoot(workspaceRoot);
-        const serialized = serializeProjectGraph(graph);
+        return this.queue(filePath, async () => {
+            await this.writeSplit(filePath, graph, Object.keys(graph.revisions ?? {}));
+            this.recordSave(root, filePath, graph);
+        });
+    }
+
+    /**
+     * A save of what changed: `part` is the graph with only the revisions the store does not hold yet (every other field
+     * whole: artifacts, edges, heads, selection, commands). Its revisions are added to the stored ones and the rest
+     * replaces the index, so a client never sends, nor can drop, the history it already saved. When a head names a
+     * revision the store has neither held nor been sent, nothing is written and those revisions are returned (the client
+     * sends them and saves again).
+     */
+    merge(workspaceRoot: string, part: ProjectArtifactGraph): Promise<{ missingRevisions: string[] }> {
+        const filePath = this.resolvePath(workspaceRoot);
+        const root = this.resolveRoot(workspaceRoot);
+        return this.queue(filePath, async () => {
+            const stored = await this.storedRevisionIds(filePath, part.project.id);
+            const ids = new Set([...stored, ...Object.keys(part.revisions ?? {})]);
+            const missingRevisions = [...new Set(Object.values(part.heads ?? {}))].filter(id => !ids.has(id));
+            if (missingRevisions.length) return { missingRevisions };
+            await this.writeSplit(filePath, part, [...ids]);
+            if (this.store()) this.recordSave(root, filePath, await this.readGraph(filePath));
+            return { missingRevisions };
+        });
+    }
+
+    /** Saves to one graph file run one after another, in call order (last caller wins); a failure never blocks the next. */
+    private queue<R>(filePath: string, work: () => Promise<R>): Promise<R> {
         const previous = this.writeQueues.get(filePath) ?? Promise.resolve();
         const next = previous
             .catch(() => undefined) // a failed predecessor must not poison the queue
-            .then(async () => {
-                await this.writeAtomic(filePath, serialized);
-                this.recordSave(root, filePath, graph, serialized);
-            });
-        this.writeQueues.set(filePath, next);
+            .then(work);
+        this.writeQueues.set(filePath, next as Promise<unknown> as Promise<void>);
         next.finally(() => {
             if (this.writeQueues.get(filePath) === next) {
                 this.writeQueues.delete(filePath);
@@ -114,10 +151,11 @@ export class ProjectArtifactStore {
     }
 
     /** The graph in the database and the changes since the last save, in one transaction; a failure here never undoes the file write. */
-    private recordSave(root: string, filePath: string, graph: ProjectArtifactGraph, serialized: string): void {
+    private recordSave(root: string, filePath: string, graph: ProjectArtifactGraph): void {
         const store = this.store();
         if (!store) return;
         try {
+            const serialized = serializeProjectGraph(graph);
             const projectId = graph.project.id;
             const before = this.lastSaved.get(filePath) ?? this.previousGraph(store, projectId, root);
             const changes = diffProjectGraphs(before, graph);
@@ -160,6 +198,50 @@ export class ProjectArtifactStore {
         }
     }
 
+    /** The graph in a graph file, either layout: a split file's revisions read from their own files. */
+    private async readGraph(filePath: string): Promise<ProjectArtifactGraph> {
+        const raw = JSON.parse(await fs.readFile(filePath, 'utf8'));
+        if (raw?.layout !== SPLIT_LAYOUT) return projectGraphFromObject(raw);
+        const dir = path.join(path.dirname(filePath), REVISIONS_DIR);
+        const revisions: Record<string, unknown> = {};
+        for (const id of (raw.revisionIds ?? []) as string[]) {
+            const file = path.join(dir, revisionFileName(id));
+            try { revisions[id] = JSON.parse(await fs.readFile(file, 'utf8')); }
+            catch { console.warn(`[project-artifact-store] revision ${id} is listed in ${filePath} but ${file} cannot be read`); }
+        }
+        delete raw.layout;
+        delete raw.revisionIds;
+        return projectGraphFromObject({ ...raw, revisions });
+    }
+
+    /** The revisions a graph file holds, without reading their bodies when it is split (a whole file is read once and split). */
+    private async storedRevisionIds(filePath: string, projectId: string): Promise<string[]> {
+        if (!(await fs.pathExists(filePath))) return [];
+        const raw = JSON.parse(await fs.readFile(filePath, 'utf8'));
+        if (raw?.project?.id !== projectId) throw new Error(`Stored graph belongs to ${raw?.project?.id}, not ${projectId}`);
+        if (raw.layout === SPLIT_LAYOUT) return raw.revisionIds ?? [];
+        // a whole file (every revision inside it): its revisions go to their own files now, so they are not lost to the merge
+        const whole = projectGraphFromObject(raw);
+        const ids = Object.keys(whole.revisions);
+        await this.writeSplit(filePath, whole, ids);
+        return ids;
+    }
+
+    /**
+     * Writes `graph` as the split layout listing `revisionIds`: each of `graph`'s revisions that has no file yet gets one
+     * (a revision never changes, so an existing file is kept), then the small index replaces the graph file.
+     */
+    private async writeSplit(filePath: string, graph: ProjectArtifactGraph, revisionIds: string[]): Promise<void> {
+        const dir = path.join(path.dirname(filePath), REVISIONS_DIR);
+        await fs.ensureDir(dir);
+        for (const [id, revision] of Object.entries(graph.revisions ?? {})) {
+            const file = path.join(dir, revisionFileName(id));
+            if (!(await fs.pathExists(file))) await this.writeAtomic(file, JSON.stringify(revision));
+        }
+        const index: GraphIndex = { ...graph, revisions: {}, layout: SPLIT_LAYOUT, revisionIds };
+        await this.writeAtomic(filePath, JSON.stringify(index, undefined, 2));
+    }
+
     private async writeAtomic(filePath: string, content: string): Promise<void> {
         await fs.ensureDir(path.dirname(filePath));
         const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.${tempCounter++}.tmp`;
@@ -179,6 +261,11 @@ export class ProjectArtifactStore {
     private resolvePath(workspaceRoot: string): string {
         return path.join(this.resolveRoot(workspaceRoot), '.scratchbox', GRAPH_FILE);
     }
+}
+
+/** A revision's file name: its id hashed (ids are not safe path parts). */
+function revisionFileName(id: string): string {
+    return `${crypto.createHash('sha1').update(id).digest('hex')}.json`;
 }
 
 function withWorkspace(change: ProjectChange, workspace: string): ProjectChange & { workspace: string } {

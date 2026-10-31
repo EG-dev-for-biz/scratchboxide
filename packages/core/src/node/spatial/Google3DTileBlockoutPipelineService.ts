@@ -277,6 +277,11 @@ export interface Google3DTilesQueryOptions {
   zenithAltitudeMeters?: number;
   maxLeaves?: number;
   /**
+   * Keep only the leaf tiles touching this rectangle of the tangent plane (x east, z south, metres about the anchor), of
+   * those within the radius: a chunked district's chunk extracts its own cell and buildings, not a circle around them.
+   */
+  rect?: { x0: number; z0: number; x1: number; z1: number };
+  /**
    * Also write the staged build's first layer here: the same triangles with no images, textures or UVs and one clay
    * material, with run-independent node extras (stage, provenance, build order, leaf id). Direct tile crawl only.
    */
@@ -2517,7 +2522,10 @@ export class Google3DTileBlockoutPipelineService {
     const maxLeaves = options?.maxLeaves || 524;
     // Sort leaves by 3D distance from anchor in ECEF space so the central landmark is 100% contiguous and complete
     const anchorFrame = GoogleTileDistrictCrawler.localFrame(anchor.lat, anchor.lng, anchor.heightGuessM);
-    const sortedLeaves = [...leaves].sort((a, b) => {
+    // a rectangle asked for: only the leaves touching it (a leaf with no box cannot be placed, and is kept)
+    const rect = options?.rect;
+    const picked = rect ? leaves.filter(l => !(Array.isArray(l.box) && l.box.length >= 12) || GoogleTileDistrictCrawler.footprintIntersectsRect(l.box, anchorFrame, rect)) : leaves;
+    const sortedLeaves = [...picked].sort((a, b) => {
       const distA = Math.hypot(a.box[0] - anchorFrame.origin[0], a.box[1] - anchorFrame.origin[1], a.box[2] - anchorFrame.origin[2]);
       const distB = Math.hypot(b.box[0] - anchorFrame.origin[0], b.box[1] - anchorFrame.origin[1], b.box[2] - anchorFrame.origin[2]);
       return distA - distB;
@@ -2740,6 +2748,32 @@ function extractionStopped(signal: AbortSignal): Error {
 /** Per-call temp root for offline-mock placeholder outputs that were not given an explicit path. */
 function offlineMockOutputRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-tile-blockout-mock-'));
+}
+
+/**
+ * Downloads every leaf tile within `radiusM` of a place into the shared leaf cache (.scratchbox/tiles_cache/leaves), nearest
+ * first, in batches, holding none of them in memory: a chunked district fetches its whole radius at network speed while its
+ * first chunks build, so each later chunk's extraction reads its leaves from disk. Returns how many leaves were selected and
+ * how many were not already cached.
+ */
+export async function prefetchGoogle3DTileLeaves(place: { lat: number; lng: number; elevation?: number }, radiusM: number, opts: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void; batch?: number } = {}): Promise<{ leaves: number; downloaded: number; ms: number }> {
+  const t0 = Date.now();
+  const apiKey = resolveMapsApiKey();
+  if (!apiKey) throw new TileExtractionError('crawl', 'no Google Maps API key is configured, so Photorealistic 3D Tiles cannot be downloaded (add the key in Settings)');
+  const cacheDir = path.join(process.cwd(), '.scratchbox', 'tiles_cache', 'leaves');
+  const crawler = new GoogleTileDistrictCrawler({ apiKey, cacheDir });
+  const anchor = { lat: place.lat, lng: place.lng, heightGuessM: (place.elevation ?? 0) + geoidUndulation(place.lat, place.lng) };
+  const { leaves, session } = await crawler.collectLeafTiles(anchor, radiusM);
+  const frame = GoogleTileDistrictCrawler.localFrame(anchor.lat, anchor.lng, anchor.heightGuessM);
+  const dist = (l: { box: number[] }) => (Array.isArray(l.box) && l.box.length >= 3 ? Math.hypot(l.box[0] - frame.origin[0], l.box[1] - frame.origin[1], l.box[2] - frame.origin[2]) : Infinity);
+  const todo = [...leaves].sort((a, b) => dist(a) - dist(b)).filter(l => !fs.existsSync(path.join(cacheDir, `${l.id}.glb`)));
+  const batch = Math.max(1, opts.batch ?? 64);
+  for (let k = 0; k < todo.length; k += batch) {
+    if (opts.signal?.aborted) throw opts.signal.reason instanceof Error ? opts.signal.reason : new Error('the tile prefetch was stopped');
+    await crawler.downloadLeaves(todo.slice(k, k + batch), session);
+    opts.onProgress?.(Math.min(todo.length, k + batch), todo.length);
+  }
+  return { leaves: leaves.length, downloaded: todo.length, ms: Date.now() - t0 };
 }
 
 /**
