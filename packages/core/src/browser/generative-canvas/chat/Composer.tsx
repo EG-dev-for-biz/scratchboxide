@@ -15,6 +15,7 @@ import { IconClose, IconMic, IconPlus } from '../canvas-icons';
 import type { AttachedDataFile, QueuedPromptItem } from '../hooks/useSendMessage';
 import { isImageFile, type ComposerImage } from '../hooks/useImageAttachments';
 import type { WorkspaceGitStatusSnapshot } from '../state/studio-defaults';
+import { isScopedTo3dVfx } from '../../../common/product-scope';
 
 export function getComposerPlaceholder(
     attachedDataFile: AttachedDataFile | undefined,
@@ -39,7 +40,10 @@ export function getComposerPlaceholder(
     if (layoutMode === 'automation' || layoutMode === 'canvas') {
         return 'Ask AI to edit Canvas Workflow...';
     }
-    return 'Prompt any creation (3D, apps, specs, boards)... (/ for skills, @ for context)';
+    // The 3D/VFX build (common/product-scope.ts) names only what it makes.
+    return isScopedTo3dVfx()
+        ? 'Prompt a 3D scene, a building or a video edit... (/ for skills, @ for context)'
+        : 'Prompt any creation (3D, apps, specs, boards)... (/ for skills, @ for context)';
 }
 
 export interface ComposerProps {

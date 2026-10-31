@@ -16,8 +16,17 @@ import { buildSystemInstruction, scopedCanvasSpecification, CANVAS_PRIMITIVES_SP
 import { GeminiService } from '../src/node/gemini-service';
 import type { GeminiStreamEvent } from '../src/common/gemini-protocol';
 import type { CanvasArtifact } from '../src/browser/generative-canvas/canvas-types';
-import { visibleStarterButtons } from '../src/browser/generative-canvas/studio/starterPrompts';
+import * as React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { homeHeadline, visibleStarterButtons } from '../src/browser/generative-canvas/studio/starterPrompts';
 import { sanitizeLayoutMode } from '../src/browser/generative-canvas/guardrails-service';
+import { getComposerPlaceholder } from '../src/browser/generative-canvas/chat/Composer';
+import { VideoTimelinePrimitive } from '../src/browser/generative-canvas/primitives/VideoTimelinePrimitive';
+import { ImageGeneratedCard } from '../src/browser/generative-canvas/chat/MediaCards';
+import { useCanvasOpeners, type UseCanvasOpenersDeps } from '../src/browser/generative-canvas/hooks/useCanvasOpeners';
+import { useCreateEmptyCanvas, type UseLayoutModeSwitchDeps } from '../src/browser/generative-canvas/hooks/useLayoutModeSwitch';
+import { useWorkspaceFileCreation, type UseWorkspaceFilesDeps } from '../src/browser/generative-canvas/hooks/useWorkspaceFiles';
+import type { ChatMessage } from '../src/browser/generative-canvas/canvas-types';
 
 const ENV = 'SCRATCHBOX_PRODUCT_SCOPE';
 let saved: string | undefined;
@@ -191,5 +200,68 @@ describe('the studio', () => {
         expect(['document', 'code', 'canvas', 'kanban'].map(m => sanitizeLayoutMode(m))).toEqual(['chat', 'chat', 'chat', 'chat']);
         expect(sanitizeLayoutMode(undefined, kanban)).toBe('chat');
         expect(['3d', 'video', 'automation', 'browser', 'chat'].map(m => sanitizeLayoutMode(m))).toEqual(['3d', 'video', 'automation', 'browser', 'chat']);
+    });
+
+    it('names only what the build makes in the headline, the composer, the timeline header and an image card', () => {
+        const timelineHeader = () => renderToStaticMarkup(React.createElement(VideoTimelinePrimitive, { onMorphArtifact: () => undefined }));
+        const imageCard = () => renderToStaticMarkup(React.createElement(ImageGeneratedCard, { imageContent: '/i.png' }));
+        expect(homeHeadline()).toBe('A canvas for AI work. What can I help you design, build, or analyze today?');
+        expect(getComposerPlaceholder(undefined, undefined, 'chat')).toContain('(3D, apps, specs, boards)');
+        expect(timelineHeader()).toContain('React Player');
+        expect(imageCard()).toContain('Insert into Code');
+        scopeOn();
+        expect(homeHeadline()).toBe('A canvas for 3D and VFX work. What scene or shot can I help you build today?');
+        expect(getComposerPlaceholder(undefined, undefined, 'chat')).toBe('Prompt a 3D scene, a building or a video edit... (/ for skills, @ for context)');
+        const header = timelineHeader();
+        expect(header).not.toContain('React Player');
+        expect(header).toContain('3D Stage');
+        const card = imageCard();
+        expect(card).not.toContain('Insert into Code');
+        expect(card).toContain('Apply as 3D Texture');
+    });
+
+    it('says every refusal in the chat and leaves the stage as it was', () => {
+        scopeOn();
+        const posted: ChatMessage[] = [];
+        const touched: string[] = [];
+        const setMessages = (update: unknown) => {
+            const prev = [{ id: 'm0', sender: 'user', text: 'hi', timestamp: '' }] as ChatMessage[];
+            const next = typeof update === 'function' ? (update as (p: ChatMessage[]) => ChatMessage[])(prev) : update as ChatMessage[];
+            expect(next.slice(0, 1)).toEqual(prev);
+            posted.push(...next.slice(1));
+        };
+        const touch = (name: string) => () => { touched.push(name); };
+        const shared = {
+            activeArtifact: undefined, artifactHistory: [], currentSessionId: 'session-1', layoutMode: 'video', messages: [],
+            setActiveArtifact: touch('activeArtifact'), setArtifactHistory: touch('artifactHistory'), setLayoutMode: touch('layoutMode'),
+            setSessions: touch('sessions'), setCurrentSessionId: touch('currentSessionId'), setMessages, showToast: touch('toast'),
+            recordArtifactVersion: touch('version'), persistSessionsImmediately: touch('persist'), setGraphEpoch: touch('graph'),
+            graphControllerRef: { current: { registerArtifact: touch('register'), findBrowserByUrl: () => undefined } },
+            activeWorkspace: { id: 'w1', name: 'W', path: '' }, stageLayoutMode: 'single', skills: [], setDocumentPaneState: touch('pane')
+        };
+        let openers: ReturnType<typeof useCanvasOpeners> | undefined;
+        let emptyCanvas: ReturnType<typeof useCreateEmptyCanvas> | undefined;
+        let fileCreation: ReturnType<typeof useWorkspaceFileCreation> | undefined;
+        const Probe = () => {
+            openers = useCanvasOpeners(shared as unknown as UseCanvasOpenersDeps);
+            emptyCanvas = useCreateEmptyCanvas(shared as unknown as UseLayoutModeSwitchDeps);
+            fileCreation = useWorkspaceFileCreation(shared as unknown as UseWorkspaceFilesDeps);
+            return null;
+        };
+        renderToStaticMarkup(React.createElement(Probe));
+
+        const sandbox: CanvasArtifact = { id: 'art-code', type: 'live-code-sandbox', title: 'Player', summary: '', data: { files: [] } as any, createdAt: '', version: 1 };
+        openers!.handleMorphArtifact(sandbox);
+        openers!.handlePreviewCodeInCanvas('tsx', 'export default () => null;');
+        emptyCanvas!.handleCreateEmptyCanvas('kanban-board');
+        fileCreation!.handleCreateWorkspaceFile('code');
+
+        expect(touched).toEqual([]);
+        expect(posted.map(m => m.sender)).toEqual(['assistant', 'assistant', 'assistant', 'assistant']);
+        expect(posted[0].text).toContain('no live-code-sandbox was created');
+        expect(posted[1].text).toContain('no live-code-sandbox was created');
+        expect(posted[2].text).toContain('no kanban-board was created');
+        expect(posted[3].text).toBe('This build of Scratchbox is limited to 3D and VFX projects: new files are chats, 3D scenes and video timelines.');
+        expect(new Set(posted.map(m => m.id)).size).toBe(4);
     });
 });

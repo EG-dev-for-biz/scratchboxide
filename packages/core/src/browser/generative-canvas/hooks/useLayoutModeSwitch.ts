@@ -20,6 +20,7 @@ import { resolveModeForArtifact } from '../guardrails-service';
 import { useCapabilities } from '../hooks/useCapabilities';
 import { newEmptySceneArtifact } from './useWorkspaceFiles';
 import { canShowLayoutMode, primitiveOutOfScopeReason } from '../../../common/product-scope';
+import { postScopeNote } from '../chat/scopeNote';
 import { ChatState, ChatStore } from '../state/chatStore';
 
 export interface UseLayoutModeSwitchDeps {
@@ -30,6 +31,7 @@ export interface UseLayoutModeSwitchDeps {
     setArtifactHistory: ChatStore['setArtifactHistory'];
     setDocumentPaneState: React.Dispatch<React.SetStateAction<'split' | 'collapsed' | 'expanded'>>;
     setLayoutMode: ChatStore['setLayoutMode'];
+    setMessages: ChatStore['setMessages'];
     showToast: (text: string, icon?: string) => void;
     skills: ReturnType<typeof useCapabilities>['skills'];
 }
@@ -343,12 +345,12 @@ export function useLayoutModeSwitch(deps: UseLayoutModeSwitchDeps) {
 
 /** Creates an empty canvas artifact of the given primitive type and activates it. */
 export function useCreateEmptyCanvas(deps: UseLayoutModeSwitchDeps) {
-    const { recordArtifactVersion, setActiveArtifact, setArtifactHistory, setLayoutMode, showToast } = deps;
+    const { recordArtifactVersion, setActiveArtifact, setArtifactHistory, setLayoutMode, setMessages, showToast } = deps;
 
     const handleCreateEmptyCanvas = (type: PrimitiveType, customTitle?: string) => {
         const outOfScope = primitiveOutOfScopeReason(type);
         if (outOfScope) {
-            showToast(outOfScope, '⚠️');
+            postScopeNote(setMessages, outOfScope);
             return;
         }
         let newArtifact: CanvasArtifact;

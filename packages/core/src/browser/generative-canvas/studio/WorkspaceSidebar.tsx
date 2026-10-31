@@ -14,7 +14,7 @@ import { Icon3D, IconAutomations, IconChat, IconChevronDown, IconChevronRight, I
 import { ProjectItem } from '../ProjectsModal';
 import { FileTreeNode, POSE_3D_TREE, SCRATCHBOX_TREE } from './workspace-trees';
 import { WorkspaceFileTree } from './WorkspaceFileTree';
-import { canCreatePrimitive, canShowLayoutMode } from '../../../common/product-scope';
+import { canCreatePrimitive, canShowLayoutMode, isScopedTo3dVfx } from '../../../common/product-scope';
 
 export function getSessionIcon(session?: ChatSession): React.ReactElement | null {
     if (!session) return null;
@@ -390,7 +390,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
                                             e.stopPropagation();
                                             setShowAddFileMenu(!showAddFileMenu);
                                         }}
-                                        title="Add file to workspace (Chat, Code, Document, Kanban)"
+                                        title={isScopedTo3dVfx() ? 'Add file to workspace (Chat, 4D Scene, Video Timeline)' : 'Add file to workspace (Chat, Code, Document, Kanban)'}
                                     >
                                         <IconPlus size={12} strokeWidth={2} />
                                     </button>

@@ -34,6 +34,7 @@ import {
     IconTerminal,
     IconTrash
 } from '../canvas-icons';
+import { canCreatePrimitive } from '../../../common/product-scope';
 
 /** How long the server may hold a pending-actions request open waiting for the agent's next action. */
 const BROWSER_ACTION_LONG_POLL_MS = 25_000;
@@ -1307,10 +1308,12 @@ export const InteractiveBrowserPrimitive: React.FC<InteractiveBrowserPrimitivePr
                                     <IconSmartphone size={13} />
                                     <span>Emulate iPhone 15 Mobile</span>
                                 </button>
-                                <button type="button" className="sb-quick-pill" onClick={() => handleQuickAction('morph_sandbox')}>
-                                    <IconBrowser size={13} />
-                                    <span>Morph to Code Sandbox</span>
-                                </button>
+                                {canCreatePrimitive('live-code-sandbox') && (
+                                    <button type="button" className="sb-quick-pill" onClick={() => handleQuickAction('morph_sandbox')}>
+                                        <IconBrowser size={13} />
+                                        <span>Morph to Code Sandbox</span>
+                                    </button>
+                                )}
                             </div>
                         )}
 

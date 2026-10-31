@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import type { PrimitiveType } from '../canvas-types';
-import { canCreatePrimitive } from '../../../common/product-scope';
+import { canCreatePrimitive, isScopedTo3dVfx } from '../../../common/product-scope';
 
 /**
  * Example prompts for the new-chat starter buttons. A button with several examples sends a random one, never the one
@@ -105,6 +105,13 @@ export const STARTER_BUTTONS: readonly StarterButton[] = [
 /** The starter buttons this build offers: all of them, or in the 3D/VFX build those that make a 3D scene or a timeline. */
 export function visibleStarterButtons(): readonly StarterButton[] {
     return STARTER_BUTTONS.filter(button => canCreatePrimitive(button.makes));
+}
+
+/** The home page's headline: in the 3D/VFX build it names only what the build makes. */
+export function homeHeadline(): string {
+    return isScopedTo3dVfx()
+        ? 'A canvas for 3D and VFX work. What scene or shot can I help you build today?'
+        : 'A canvas for AI work. What can I help you design, build, or analyze today?';
 }
 
 const LAST_KEY = 'sb.starterPrompt.last.';

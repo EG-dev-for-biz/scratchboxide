@@ -55,6 +55,7 @@ import {
 } from './toolStepState';
 import { resolveModeForArtifact } from '../guardrails-service';
 import { isScopedTo3dVfx } from '../../../common/product-scope';
+import { postScopeNote } from '../chat/scopeNote';
 import { cleanMessageTextSmart } from '../ChatMarkdownRenderer';
 import { ProjectArtifactController } from '../project-artifact-controller';
 import { WorkspaceConfigClient } from '../workspace-config-client';
@@ -229,13 +230,7 @@ async function handleSlashCommands(d: SendMessageDeps, text: string): Promise<bo
     const command = lowerText.match(/^\/([a-z0-9-]+)(\s|$)/)?.[1];
     if (command && isScopedTo3dVfx() && Object.prototype.hasOwnProperty.call(SCOPED_OFF_COMMANDS, command)) {
         setInputValue('');
-        const note: ChatMessage = {
-            id: `msg-scope-${Date.now()}`,
-            sender: 'assistant',
-            text: `\`/${command}\` is off: this build of Scratchbox is limited to 3D and VFX projects and does not offer ${SCOPED_OFF_COMMANDS[command]}. Ask for a 3D scene or a video timeline instead.`,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        };
-        d.setMessages(prev => [...prev, note]);
+        postScopeNote(d.setMessages, `\`/${command}\` is off: this build of Scratchbox is limited to 3D and VFX projects and does not offer ${SCOPED_OFF_COMMANDS[command]}. Ask for a 3D scene or a video timeline instead.`);
         return true;
     }
 

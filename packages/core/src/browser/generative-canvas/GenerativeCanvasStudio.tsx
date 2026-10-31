@@ -206,8 +206,9 @@ export { StreamBufferQueue, captureActiveCanvasScreenshot } from './chat/streami
 import { StreamBufferQueue, captureActiveCanvasScreenshot, streamTokensAsync } from './chat/streaming-utils';
 import { useSendMessage } from './hooks/useSendMessage';
 import { LIVE_CODE_STARTER_APP } from './studio/liveCodeStarterTemplate';
-import { pickStarterPrompt, visibleStarterButtons, type StarterButton } from './studio/starterPrompts';
+import { homeHeadline, pickStarterPrompt, visibleStarterButtons, type StarterButton } from './studio/starterPrompts';
 import { canCreatePrimitive, canShowLayoutMode, canShowPrimitive, primitiveOutOfScopeReason } from '../../common/product-scope';
+import { postScopeNote } from './chat/scopeNote';
 
 export interface GenerativeCanvasStudioProps {
     onOpenFolder?: () => void;
@@ -362,7 +363,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         };
     }, [isDraggingSplitter]);
 
-    const layoutModeDeps: UseLayoutModeSwitchDeps = { activeArtifact, artifactHistory, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setDocumentPaneState, setLayoutMode, showToast, skills };
+    const layoutModeDeps: UseLayoutModeSwitchDeps = { activeArtifact, artifactHistory, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setDocumentPaneState, setLayoutMode, setMessages, showToast, skills };
     const { handleSwitchMode } = useLayoutModeSwitch(layoutModeDeps);
     const { handleCreateEmptyCanvas } = useCreateEmptyCanvas(layoutModeDeps);
 
@@ -568,7 +569,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const { handleUpdateArtifact } = useArtifactSync({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, isGenerating, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions });
 
 
-    const { handleMorphArtifact, handleOpenInAppBrowser, handlePreviewCodeInCanvas, applyStreamedArtifact } = useCanvasOpeners({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, layoutMode, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setLayoutMode, setSessions, showToast, stageLayoutMode });
+    const { handleMorphArtifact, handleOpenInAppBrowser, handlePreviewCodeInCanvas, applyStreamedArtifact } = useCanvasOpeners({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, layoutMode, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setLayoutMode, setMessages, setSessions, showToast, stageLayoutMode });
     const { syncSandboxSaveToMarkdown, triggerGoogleDocsExport, triggerGoogleDriveSave, triggerMarkdownExport } = useArtifactExports({ activeArtifact, artifactHistory, handleOpenInAppBrowser, handleUpdateArtifact, openModal, showToast });
 
     // Cross-Primitive Event Listeners (Media cards -> 3D scene / Sandbox / Timeline / Composer)
@@ -577,7 +578,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
             const detail = (e as CustomEvent).detail;
             if (detail?.type) {
                 if (!canShowPrimitive(detail.type)) {
-                    showToast(primitiveOutOfScopeReason(detail.type) || `No ${detail.type} canvas in this build`, '⚠️');
+                    postScopeNote(setMessages, primitiveOutOfScopeReason(detail.type) || `No ${detail.type} canvas in this build`);
                     return;
                 }
                 if (detail.forceNew) {
@@ -641,7 +642,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
             window.removeEventListener('scratchbox:apply-3d-texture', handleApply3DTexture);
             window.removeEventListener('scratchbox:add-video-to-timeline', handleAddVideoToTimeline);
         };
-    }, [activeArtifact, artifactHistory, handleCreateEmptyCanvas, handleUpdateArtifact, setActiveArtifact, setLayoutMode, setInputValue, showToast]);
+    }, [activeArtifact, artifactHistory, handleCreateEmptyCanvas, handleUpdateArtifact, setActiveArtifact, setLayoutMode, setInputValue, setMessages, showToast]);
 
 
 
@@ -734,7 +735,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const handleCreateNewSandboxTab = React.useCallback(() => {
         const outOfScope = primitiveOutOfScopeReason('live-code-sandbox');
         if (outOfScope) {
-            showToast(outOfScope, '⚠️');
+            postScopeNote(setMessages, outOfScope);
             return;
         }
         const newTab: CanvasArtifact = {
@@ -766,7 +767,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         setArtifactHistory(prev => [newTab, ...prev]);
         setLayoutMode('code');
         showToast('Created new Live Code Preview tab', '⚡');
-    }, [showToast]);
+    }, [setMessages, showToast]);
 
     const activeSandboxData = activeArtifact?.type === 'live-code-sandbox' ? (activeArtifact.data as LiveCodeSandboxData) : null;
 
@@ -1541,7 +1542,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                                         </div>
 
                                         <h1 className="sb-chat-empty-hero-title">
-                                            A canvas for AI work. What can I help you design, build, or analyze today?
+                                            {homeHeadline()}
                                         </h1>
 
                                         {/* Clean Quick Creation Starters */}
