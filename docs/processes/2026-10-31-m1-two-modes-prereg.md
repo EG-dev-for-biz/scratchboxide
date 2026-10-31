@@ -582,3 +582,16 @@ After the single paid run:
 - Give the poses on their own, with the table of what each arm shows there.
 - Give the two decisions named in the question.
 - Attach the grids and mask grids.
+
+### Run record
+
+Values the procedure above fills in, written as they are fixed. Each is written before the step that uses it.
+
+- **The corner of 7th Ave and W 32nd St** (poses A and B, `lat`/`lng`): 40.7497146, -73.9915593. This is the Google
+  Geocoding API's intersection result for "7th Ave & W 32nd St, New York, NY" (type `intersection`, geometric centre),
+  read on 2026-10-31 before any build at Penn 2.
+- **The app the arms are built and judged in.** `feat/m1-run`, from its worktree, on its own launch entry
+  `scratchbox-m1-run` (web 3620, API 3621, tools 3622), with `SCRATCHBOX_STAGED_DISTRICT` unset (`env -u`). The builds
+  and the paid run go through the app's own tool endpoint (`/gemini/tools/run-stream`, the node graph's tool runner).
+  The stage caches are those of that worktree (`.scratchbox/cache`). Before each place's builds they are moved aside,
+  so nothing is reused, and the server is restarted. Each place's cache is put back only to judge that place.
