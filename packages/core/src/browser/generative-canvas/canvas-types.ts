@@ -1010,6 +1010,55 @@ export interface SceneColorHarmony {
     tint?: number;
 }
 
+/**
+ * The look of a reference photo, measured over what it shows (the whole photo, or the part a description picks out) by
+ * lightness band: each band's lightness, its mean Oklab colour, and the spread of colour about that mean. Measured on the
+ * photo's display colours.
+ */
+export interface SceneLookBand {
+    /** Oklab lightness (0-1). */
+    L: number;
+    /** Mean Oklab a and b. */
+    a: number;
+    b: number;
+    /** RMS distance of colours from (a, b): how colourful the band is about its mean. */
+    spread: number;
+}
+
+/** One knot of a fitted look match, at a lightness the scene's objects show: where that lightness and its colour go. */
+export interface SceneLookMatchKnot {
+    sourceL: number;
+    targetL: number;
+    /** The objects' mean Oklab a, b at sourceL, and the reference's at targetL. */
+    sourceA: number;
+    sourceB: number;
+    targetA: number;
+    targetB: number;
+    /** Scale of colour about the mean (the reference's spread over the objects'). */
+    chromaGain: number;
+}
+
+/**
+ * A look matched from a reference photo onto the viewport's objects (the Colour harmony panel's reference photo,
+ * sb_set_look_match): the objects' display colours, band by lightness, are mapped onto the reference's: a tone curve, a
+ * colour per band, and the spread of colour about it. Drawn after tone mapping (a grade on what is shown, the domain the
+ * photo was measured in), on the scene's objects only, never the sky. The fit is made against one view; `reference.bands`
+ * keep the photo's look, so it can be refitted to another view without the photo.
+ */
+export interface SceneLookMatch {
+    reference: {
+        /** A name for the photo (its file name); a label only. */
+        label?: string;
+        /** What in the photo was measured (a description given to the segmenter), absent = the whole photo; a label only. */
+        target?: string;
+        bands: SceneLookBand[];
+    };
+    /** By sourceL ascending. */
+    knots: SceneLookMatchKnot[];
+    /** How far the match is applied, 0-1 (default 1). */
+    strength?: number;
+}
+
 /** What the viewport shows while a graph node holds the display flag; every list is optional, one is enough. */
 export interface SceneDisplayFlag {
     /** The graph node holding the flag. */
@@ -1150,6 +1199,8 @@ export interface Scene3DData {
     weather?: import('./services/atmosphere/scene-weather').SceneWeatherState;
     /** A colour harmony grade the viewport draws on the scene's objects (sb_set_color_harmony); absent = none. */
     colorHarmony?: SceneColorHarmony;
+    /** A look matched from a reference photo, drawn on the scene's objects (sb_set_look_match); absent = none. */
+    lookMatch?: SceneLookMatch;
     environment?: {
         skybox?: string;
         lighting?: string;

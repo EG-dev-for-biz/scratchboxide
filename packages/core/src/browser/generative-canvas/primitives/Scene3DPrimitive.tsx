@@ -2190,7 +2190,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             return { depthTexture: target?.depthTexture ?? null };
         };
         const opticsChain = new ViewportOpticsChain();
-        opticsChain.configure(sceneDataRef.current.camera?.lens, sceneDataRef.current.colorHarmony);
+        opticsChain.configure(sceneDataRef.current.camera?.lens, sceneDataRef.current.colorHarmony, sceneDataRef.current.lookMatch);
         opticsChainRef.current = opticsChain;
         (window as any).__SB_3D_OPTICS__ = opticsChain;
         const focusController = new ViewportFocusController();
@@ -2741,9 +2741,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     }, [atmosphereFingerprint]);
 
     // ---- 3b. Lens optics: distortion and depth-of-field passes from camera.lens, and the colour harmony grade (none when neither configures one) ----
-    const lensFingerprint = JSON.stringify([sceneData.camera?.lens ?? null, sceneData.colorHarmony ?? null]);
+    const lensFingerprint = JSON.stringify([sceneData.camera?.lens ?? null, sceneData.colorHarmony ?? null, sceneData.lookMatch ?? null]);
     React.useEffect(() => {
-        opticsChainRef.current?.configure(sceneDataRef.current.camera?.lens, sceneDataRef.current.colorHarmony);
+        opticsChainRef.current?.configure(sceneDataRef.current.camera?.lens, sceneDataRef.current.colorHarmony, sceneDataRef.current.lookMatch);
         focusControllerRef.current?.configure(sceneDataRef.current.camera?.lens);
     }, [lensFingerprint]);
 
@@ -3817,6 +3817,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     }, []);
 
     const readFocusDistance = React.useCallback(() => opticsChainRef.current?.status.focusDistanceMeters ?? null, []);
+    const sampleViewportObjects = React.useCallback((objectIds?: string[]) => {
+        const chain = opticsChainRef.current;
+        return chain ? chain.requestObjectSample(objectIds) : Promise.reject(new Error('the viewport is not drawing'));
+    }, []);
 
     // Pick focus: a click focuses at the clicked point's distance (Manual) or locks onto that surface point, stored in
     // its object's local frame so it follows the object (Track); Alt-click tracks the whole object.
@@ -4280,7 +4284,12 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 <WeatherControl sceneData={sceneData} mutateSceneData={mutateSceneData} />
 
                 {/* Colour harmony: every hue on the objects moved toward a hue template (color-harmony.ts) */}
-                <ColorHarmonyControl sceneData={sceneData} mutateSceneData={mutateSceneData} />
+                <ColorHarmonyControl
+                    sceneData={sceneData}
+                    mutateSceneData={mutateSceneData}
+                    selectedObjectId={selectedObjectId}
+                    sampleObjects={sampleViewportObjects}
+                />
 
                 {/* Camera settings: lens, depth of field, distortion (sb_set_camera / sb_set_camera_lens) */}
                 <CameraSettingsControl

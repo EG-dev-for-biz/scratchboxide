@@ -20,6 +20,7 @@ import type { Scene3DData, SceneCameraLens, SceneLensDistortion, SceneFilmGrain,
 import { planViewportOptics, distortionMaxAspect } from '../../primitives/scene3d/viewportOptics';
 import { FOCUS_MODES_DRAWN, effectiveFocusMode, isFocusPoint } from '../../primitives/scene3d/viewportFocus';
 import { mergeColorHarmony, planColorHarmony, type SetColorHarmonyParams } from '../postprocessing/color-harmony';
+import { mergeLookMatch, planLookMatch, type SetLookMatchParams } from '../postprocessing/look-match';
 
 type Vec3 = [number, number, number];
 
@@ -474,6 +475,19 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
             else delete scene.colorHarmony;
             const plan = planColorHarmony(harmony);
             return { colorHarmony: harmony ?? null, drawn: !!plan.harmony, issues: plan.issues };
+        }
+    },
+    {
+        name: 'sb_set_look_match',
+        category: 'lighting_camera',
+        description: 'Adjusts the look matched from a reference photo onto the viewport\'s objects (made in the Colour harmony panel: the user drops a photo, optionally names what in it to measure, and the objects\' colours by lightness band are mapped onto the photo\'s: tone curve, colour cast per tone, saturation). strength 0-1 how far the match is applied (default 1; null resets it); clear removes it. Only the scene\'s objects, never the sky. A viewport grade: materials are unchanged. The match itself can only be made from the panel, which reads the photo and the view.',
+        execute: (ctx, params: SetLookMatchParams) => {
+            const scene = ctx.getSceneData();
+            const look = mergeLookMatch(scene.lookMatch, params || {});
+            if (look) scene.lookMatch = look;
+            else delete scene.lookMatch;
+            const plan = planLookMatch(look);
+            return { lookMatch: look ? { reference: { label: look.reference.label, target: look.reference.target }, strength: look.strength ?? 1, knots: look.knots.length } : null, drawn: !!plan.lookMatch, issues: plan.issues };
         }
     },
     {
