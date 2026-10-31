@@ -22,6 +22,7 @@ import { OCCLUSION_PARAMS, readOccluded, unreadMask } from '../src/node/3d-engin
 import { wallEvidence, type GrammarFacade } from '../src/node/3d-engine/staged-location/wall-grammar';
 import { buildWallSheets } from '../src/node/3d-engine/staged-location/wall-sheets';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
+import { continueIntoOccluded, type WindowRect } from '../src/node/3d-engine/staged-location/window-fit';
 import { decodePng } from '../src/node/texture-processing';
 
 const dec = (b: Buffer) => { const d = decodePng(b); return { rgba: d.rgba, width: d.width, height: d.height }; };
@@ -91,6 +92,33 @@ describe('pipeline K occlusion masks', () => {
         const plain = wallEvidence(dir, [{ ...f, occludedMask: undefined }], new Map(), [1, 0, 0], -10, 0, 10, 10, dec);
         expect(Array.from(plain.covered).filter(v => v).length).toBeGreaterThan(left + right);
         fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('continues a regular grid into an occluded band at its own pitch, and stops at clear photo', () => {
+        // 4 columns x 5 rows of 10 x 14 px windows at a 20 px / 24 px pitch, read in y 0..120; texels y 120..200 occluded,
+        // y 200..240 clear again (photo that was read and showed wall)
+        const W = 100, H = 240, rects: WindowRect[] = [];
+        for (let c = 0; c < 4; c++) for (let r = 0; r < 5; r++) rects.push([10 + 20 * c, 5 + 24 * r, 20 + 20 * c, 19 + 24 * r]);
+        const occ = new Uint8Array(W * H);
+        for (let y = 120; y < 200; y++) occ.fill(1, y * W, (y + 1) * W);
+        const { rects: all, generated } = continueIntoOccluded(rects, occ, W, H);
+        // rows at y 125, 149, 173 lie wholly in the band (the one at 197 runs into clear photo): 3 per column
+        expect(generated).toHaveLength(12);
+        expect(generated.every(r => r[1] >= 120 && r[3] <= 200)).toBe(true);
+        expect(new Set(generated.map(r => r[1]))).toEqual(new Set([125, 149, 173]));
+        expect(all).toHaveLength(32);
+        // nothing occluded: nothing added
+        expect(continueIntoOccluded(rects, new Uint8Array(W * H), W, H).generated).toHaveLength(0);
+    });
+
+    it('draws a strip on through the occluded run below it, and leaves an irregular column alone', () => {
+        const W = 60, H = 200, occ = new Uint8Array(W * H);
+        for (let y = 100; y < 160; y++) occ.fill(1, y * W, (y + 1) * W);
+        const strip = continueIntoOccluded([[20, 10, 30, 100]], occ, W, H);
+        expect(strip.generated).toEqual([[20, 100, 30, 160]]);
+        // a column whose steps differ by more than pitchTol is no grid
+        const ragged: WindowRect[] = [[20, 10, 30, 20], [20, 30, 30, 40], [20, 80, 30, 90]];
+        expect(continueIntoOccluded(ragged, occ, W, H).generated).toHaveLength(0);
     });
 
     it('lays the member that saw a texel clear on the sheet, and marks what only an occluded member saw', () => {

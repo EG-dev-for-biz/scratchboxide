@@ -99,6 +99,13 @@ export const WINDOW_FIT_PARAMS = {
      */
     complete: { overlap: 0.5, minAxis: 3, minValid: 0.5, clearShare: 0.2 },
     /**
+     * A window column or row continued into what stood in front of the facade (continueIntoOccluded, pipeline-k/occlusion.ts):
+     * a column (row) of at least minMembers windows at a regular pitch (each step within pitchTol of the median) steps on
+     * past its last window while the next site is at least minShare occluded and free of windows; a strip (a window at least
+     * stripAspect times as tall as wide) is drawn on through the occluded run below and above it. Generated.
+     */
+    occludedContinue: { minShare: 0.5, minMembers: 3, pitchTol: 0.25, stripAspect: 4 },
+    /**
      * A band no wider than maxWidthM with no grid along the wall (one window column across) is read from its storey rhythm
      * (storeyColumn): its dark run across the width (at least minColumnShare of it) is the column, its rows folded at the
      * storey pitch give each storey's window (the dark run, minContrast deep, a share of the storey within runShare), and a
@@ -982,6 +989,61 @@ export function completeLattice(img: { rgba: ArrayLike<number>; width: number; h
     return { rects: out.sort(cmpRect), added, stone, generated };
 }
 
+/**
+ * The facade's windows continued into the texels something stood in front of when it was photographed (`occluded`, 1 per
+ * texel; pipeline-k/occlusion.ts). Those texels are not read, and they lie mostly at a facade's edges (the street band, a
+ * wing in front of the base) where the lattice completion, which fills only a site with windows on every side, never
+ * reaches. Here a regular column steps on at its own pitch, a regular row likewise along the wall, and a strip is drawn on
+ * through the occluded run beside its end, each only over occluded texels and never onto a window (P.occludedContinue).
+ * What it adds is generated, as the completion's windows over unreached photo are.
+ */
+export function continueIntoOccluded(rects: WindowRect[], occluded: ArrayLike<number>, W: number, H: number, P: WindowFitParams = WINDOW_FIT_PARAMS): { rects: WindowRect[]; generated: WindowRect[] } {
+    const O = P.occludedContinue;
+    // summed-area table of the occlusion: a box's occluded share in O(1)
+    const S = new Float64Array((W + 1) * (H + 1));
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) S[(y + 1) * (W + 1) + x + 1] = (occluded[y * W + x] ? 1 : 0) + S[y * (W + 1) + x + 1] + S[(y + 1) * (W + 1) + x] - S[y * (W + 1) + x];
+    const share = (r: WindowRect) => {
+        const x0 = Math.max(0, Math.round(r[0])), y0 = Math.max(0, Math.round(r[1])), x1 = Math.min(W, Math.round(r[2])), y1 = Math.min(H, Math.round(r[3]));
+        if (x1 <= x0 || y1 <= y0) return 0;
+        return (S[y1 * (W + 1) + x1] - S[y0 * (W + 1) + x1] - S[y1 * (W + 1) + x0] + S[y0 * (W + 1) + x0]) / ((x1 - x0) * (y1 - y0));
+    };
+    const generated: WindowRect[] = [];
+    const free = (r: WindowRect) => ![...rects, ...generated].some(q => q[0] < r[2] && q[2] > r[0] && q[1] < r[3] && q[3] > r[1]);
+    const inside = (r: WindowRect) => r[0] >= 0 && r[1] >= 0 && r[2] <= W && r[3] <= H;
+    // a group of windows along an axis (0: a column, stepping in y; 1: a row, stepping in x)
+    const step = (members: WindowRect[], axis: 0 | 1) => {
+        const a0 = axis === 0 ? 1 : 0, a1 = a0 + 2, b0 = axis === 0 ? 0 : 1, b1 = b0 + 2;
+        const ms = [...members].sort((p, q) => p[a0] - q[a0]);
+        const gaps = ms.slice(1).map((r, i) => (r[a0] + r[a1]) / 2 - (ms[i][a0] + ms[i][a1]) / 2);
+        const pitch = median(gaps);
+        if (!(pitch > 0) || gaps.some(g => Math.abs(g - pitch) > O.pitchTol * pitch)) return;
+        const lo = median(ms.map(r => r[b0])), hi = median(ms.map(r => r[b1])), size = median(ms.map(r => r[a1] - r[a0]));
+        for (const dir of [-1, 1]) {
+            const end = dir > 0 ? ms[ms.length - 1] : ms[0];
+            for (let c = (end[a0] + end[a1]) / 2 + dir * pitch; ; c += dir * pitch) {
+                const s0 = Math.round(c - size / 2), s1 = Math.round(c + size / 2);
+                const r: WindowRect = axis === 0 ? [Math.round(lo), s0, Math.round(hi), s1] : [s0, Math.round(lo), s1, Math.round(hi)];
+                if (!inside(r) || share(r) < O.minShare || !free(r)) break;
+                generated.push(r);
+            }
+        }
+    };
+    const C = P.complete;
+    for (const g of spanGroups(rects.map(r => [r[0], r[2]]), C.overlap)) if (g.members.length >= O.minMembers) step(g.members.map(k => rects[k]), 0);
+    for (const g of spanGroups(rects.map(r => [r[1], r[3]]), C.overlap)) if (g.members.length >= O.minMembers) step(g.members.map(k => rects[k]), 1);
+    // a strip: on down and up through the occluded run beside its ends, row by row of texels
+    const rowOccluded = (x0: number, x1: number, y: number) => share([x0, y, x1, y + 1]) >= O.minShare;
+    for (const r of rects) {
+        if (r[3] - r[1] < O.stripAspect * (r[2] - r[0])) continue;
+        let down = r[3];
+        while (down < H && rowOccluded(r[0], r[2], down)) down++;
+        let up = r[1];
+        while (up > 0 && rowOccluded(r[0], r[2], up - 1)) up--;
+        for (const e of [[r[0], r[3], r[2], down], [r[0], up, r[2], r[1]]] as WindowRect[]) if (e[3] > e[1] && free(e)) generated.push(e);
+    }
+    return { rects: [...rects, ...generated].sort(cmpRect), generated: generated.sort(cmpRect) };
+}
+
 /** The fold's two colours (2-means from its darkest and lightest bins) and the glass side: the bluer, the lighter on a tie. */
 function glassSplit(fold: number[][], P: WindowFitParams): { side: number[]; glass: number[]; other: number[] } | undefined {
     const lum = (c: number[]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
@@ -1364,7 +1426,7 @@ export interface SegmentScope { key: string; includes: (plane: { facadeId: numbe
 
 export interface WindowFitFile {
     version: string; params: WindowFitParams; /** An opening-mask segmenter (SCRATCHBOX_K_WINDOW_SEGMENT) was offered the no-pattern tail of this run: the record's version (SEGMENT_TRY_VERSION). */ segment?: string; ms: number;
-    facades: Array<{ facadeId: number; width: number; height: number; rects: WindowRect[]; panes?: WindowRect[]; /** Windows continued into parts the photo never reached: generated. */ generated?: WindowRect[]; bands: WindowFitBand[]; /** The segmenter's try on a facade the structural fit left empty. */ segmentTry?: SegmentTry; /** Covered texels not read because something stood in front of them (pipeline-k/occlusion.ts). */ occludedTexels?: number; ms: number } | { facadeId: number; error: string }>;
+    facades: Array<{ facadeId: number; width: number; height: number; rects: WindowRect[]; panes?: WindowRect[]; /** Windows continued into parts the photo never reached: generated. */ generated?: WindowRect[]; bands: WindowFitBand[]; /** The segmenter's try on a facade the structural fit left empty. */ segmentTry?: SegmentTry; /** Covered texels not read because something stood in front of them (pipeline-k/occlusion.ts), and the windows continued into them (generated, continueIntoOccluded). */ occludedTexels?: number; occludedContinued?: number; ms: number } | { facadeId: number; error: string }>;
 }
 
 /** The segmenter's tries over a fit, counted by outcome, with the first few failures' messages. */
@@ -1421,9 +1483,16 @@ export async function fitOrthoFacades(orthosDir: string, facades: OrthoFacade[],
                 const { img, mask, own, occluded } = facadePhoto(orthosDir, f);
                 let maskFile = own ? path.join(orthosDir, f.uncoveredMask!) : undefined;
                 if (!maskFile) { maskFile = path.join(scratch, `${f.facadeId}_unread.png`); fs.writeFileSync(maskFile, encodePng(img.width, img.height, Buffer.from(mask.map(v => (v ? 255 : 0))), 1)); }
-                const fit = await fitFacadeWindows({ rgba: img.rgba, width: img.width, height: img.height }, mask, f, nativeRelief(bin, png, maskFile, f, opts.signal), P);
+                let fit = await fitFacadeWindows({ rgba: img.rgba, width: img.width, height: img.height }, mask, f, nativeRelief(bin, png, maskFile, f, opts.signal), P);
                 const occludedRead = occluded ? countSet(occluded) : 0;
-                out.push({ facadeId: f.facadeId, width: img.width, height: img.height, rects: fit.rects, panes: fit.panes, ...(fit.generated ? { generated: fit.generated } : {}), bands: fit.bands, ...(occludedRead ? { occludedTexels: occludedRead } : {}), ms: Date.now() - t });
+                // the windows continued into what stood in front of the facade (generated)
+                let occludedContinued = 0;
+                if (occluded && occludedRead && fit.rects.length) {
+                    const cont = continueIntoOccluded(fit.rects, occluded, img.width, img.height, P);
+                    occludedContinued = cont.generated.length;
+                    if (occludedContinued) fit = { ...fit, rects: cont.rects, generated: [...(fit.generated ?? []), ...cont.generated].sort(cmpRect) };
+                }
+                out.push({ facadeId: f.facadeId, width: img.width, height: img.height, rects: fit.rects, panes: fit.panes, ...(fit.generated ? { generated: fit.generated } : {}), bands: fit.bands, ...(occludedRead ? { occludedTexels: occludedRead, occludedContinued } : {}), ms: Date.now() - t });
             } catch (err) {
                 if (opts.signal?.aborted) throw err;
                 out.push({ facadeId: f.facadeId, error: err instanceof Error ? err.message : String(err) });
@@ -1480,7 +1549,7 @@ export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency
                     else fit = { ...fit, bands: [...fit.bands, ...read.bands] };
                     segmentTry = { outcome: read.rects.length ? 'assisted' : 'no-windows', openingShare: Math.round((marked / openingMask.length) * 1000) / 1000, seeds: read.seeds, repeats: read.repeats, ...(read.generated ? { generated: read.generated.length } : {}), ms: Date.now() - ts };
                 }
-                out[item.k] = { facadeId: e.facadeId, width: e.width, height: e.height, rects: fit.rects, panes: fit.panes, ...(fit.generated ? { generated: fit.generated } : {}), bands: fit.bands, segmentTry, ...(e.occludedTexels ? { occludedTexels: e.occludedTexels } : {}), ms: e.ms + (Date.now() - ts) };
+                out[item.k] = { facadeId: e.facadeId, width: e.width, height: e.height, rects: fit.rects, panes: fit.panes, ...(fit.generated ? { generated: fit.generated } : {}), bands: fit.bands, segmentTry, ...(e.occludedTexels ? { occludedTexels: e.occludedTexels, occludedContinued: e.occludedContinued ?? 0 } : {}), ms: e.ms + (Date.now() - ts) };
             }
         };
         await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, tail.length)) }, worker));
