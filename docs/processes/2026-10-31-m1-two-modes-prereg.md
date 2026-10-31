@@ -428,16 +428,143 @@ It must show:
   - **At Penn 2:** four builds, K first (for the target checks), then DM, DS and KD.
   - **The fallback:** it adds one build, K again at 11 Penn Plaza. The districts are then built there, not at Penn 2.
   - **In all:** 8 builds, 9 with the fallback, 2 more with the parks.
-  - **KD's time:** on its branch, Shibuya at 350 m was 44 chunks round the centre in about 106 minutes. At 250 m, kd's
-    plan has 20 chunks round the centre, so about 50 minutes. That is an estimate scaled by chunk count, not a
-    measurement.
-- **Judge.** 144 calls on the default judge (`gemini-4-argon`) with a 24,576-token thinking budget:
-  - 96 at the benchmark places, each with the photo and 4 renders;
-  - 48 at Penn 2, each with the photo and 7 renders.
-
-  **The price per call is to be filled in before approval.**
-- **Street View grounding.** Up to 50 images.
+  - **KD's time (measured).** On the k-d branch, a kd district at Union Square with the same plan (250 m, 120 m cells,
+    20 chunks round the centre) took 86 minutes from its start to its last chunk's end (run 75354746, 2026-10-30). Its
+    chunks took 4 to 19 minutes each, 3 at a time. Shibuya at 350 m was 44 chunks in about 106 minutes.
 - **Decoys and dry runs.** Free.
+
+### Price
+
+Every figure below is labelled:
+- **measured:** from the app's own records;
+- **price page:** from Google's published price;
+- **estimated.**
+
+Prices are in US dollars and were read on 2026-10-31.
+
+**Sources.**
+- Vertex AI generative AI pricing, <https://cloud.google.com/vertex-ai/generative-ai/pricing>, which now serves
+  <https://cloud.google.com/model-garden/pricing>. The page shows no update date.
+- Google Maps Platform core services pricing list, <https://developers.google.com/maps/billing-and-pricing/pricing>,
+  last updated 2026-10-30.
+- Map Tiles API usage and billing, <https://developers.google.com/maps/documentation/tile/usage-and-billing>, last
+  updated 2026-10-30.
+
+#### The judge: 144 calls
+
+**What the code calls.**
+- **Model:** `gemini-4-argon` (`PHOTO_MATCH_DEFAULT_JUDGE`), through `VisionModelChain`. The fallbacks
+  (`gemini-3.8-flash` and older) cost less.
+- **Endpoint:** Vertex AI, with the app's service account (`GeminiClient.getGenAIClient` prefers it), at the `global`
+  location (`VERTEX_LOCATION`).
+- **Thinking.** The judge asks for a 24,576-token budget. Gemini 4 takes a level instead, so the budget becomes
+  `thinkingLevel: HIGH` (`thinking-config.ts`). It is not a token cap, and the call sets no `maxOutputTokens`.
+- **Other settings:** temperature 1 and a JSON reply. A reply that does not parse is asked once more.
+
+**Price (price page).** Gemini 4 Argon on the global endpoint costs, per million tokens:
+
+| Period | Input (text, image) | Output (response and reasoning) |
+|---|---|---|
+| Through 2026-11-30 | $2.00 | $10.00 |
+| From 2026-12-01 | $4.00 | $20.00 |
+
+The page gives the lower price as a promotion paid as 50% credits back on net spend, so an invoice may show the list price
+before the credit.
+
+**Tokens per call.**
+- **Images (measured).** Each image is billed a fixed number of tokens, whatever its size:
+  - 1,064 tokens in 27 `gemini-4-argon` replies of ESB run 7f594cd6 (the staged vision-reply cache);
+  - 1,089 tokens each in 109 replies on the k-d branch (1 to 6 images per call, exact multiples).
+
+  The figures below use 1,089.
+  - A benchmark-place call (the photo and 4 renders) is 5,445 image tokens.
+  - A Penn 2 call (the photo and 7 renders) is 8,712.
+- **Prompt text (estimated).** The prompts are built by the tool's own functions and counted offline at about 4
+  characters a token: about 760 tokens textured (2,970 to 3,027 characters with the region criteria) and about 400
+  clay (1,504 to 1,561).
+- **Reply (estimated).** About 75 tokens per render textured and about 37 clay: 150 to 520 a call.
+- **Thinking (estimated).**
+  - **Low:** 2,000 tokens.
+  - **High:** 24,576 tokens, the budget the judge names, used as the planning bound.
+
+  No judge call at HIGH has been made, so neither figure is measured.
+
+**Per call, through 2026-11-30** (twice this from 2026-12-01):
+
+| Call | Input tokens | Output tokens (low to high) | Price (low to high) |
+|---|---|---|---|
+| Benchmark place, textured | 6,205 | 2,300 to 24,876 | $0.035 to $0.26 |
+| Benchmark place, clay | 5,845 | 2,150 to 24,726 | $0.033 to $0.26 |
+| Penn 2, textured | 9,472 | 2,520 to 25,096 | $0.044 to $0.27 |
+| Penn 2, clay | 9,112 | 2,260 to 24,836 | $0.041 to $0.27 |
+
+**In all, 144 calls** (96 at the benchmark places, 48 at Penn 2, half of each textured):
+- **$5.33 to $37.84** through 2026-11-30;
+- **$10.66 to $75.68** from 2026-12-01.
+
+**Outside that range.**
+- A retried reply is one more call at the same price, and the spend cap counts it.
+- On HIGH, thinking is not bounded at 24,576 tokens. The price page notes Gemini 4 completions can run to 1 million
+  tokens. A call that thinks past the bound costs $0.01 more per 1,000 tokens.
+
+#### The builds: 8, or 9 with the fallback
+
+All builds run on this Mac. KD's chunks build in local worker threads (`runChunk` is `runStagedLocationOffThread` on
+`feat/m1-run`; there is no cloud chunk job in that code). So no build pays for compute; what they pay for is Google's APIs.
+
+- **K, 5 builds (6 with the fallback): about $1.20 each (measured, at the ESB).** On run 7f594cd6, every vision reply
+  in its build window (17:19 to 17:27, 387 in the vision-reply cache) was:
+  - **360 calls on `gemini-3.8-flash`:** 550,333 input and 121,970 output tokens, $0.87. Most of them are the facade
+    reader: 351 calls reading 120 planes, its maximum. Flash costs $0.75 / $3.75 per million (price page, introductory
+    through 2026-12-31).
+  - **27 calls on `gemini-4-argon`:** 49,312 input and 23,324 output tokens, $0.33 ($0.66 from 2026-12-01).
+
+  The ESB is the largest building here, so the other places should cost less.
+  - **Material choice** adds one call per build, with two sheets of patches (estimated under $0.02).
+  - **Measuring library tile sizes** is one Flash call per set not yet measured, done once and kept (estimated at most
+    $1 in all).
+- **KD: $2.99 (measured, at Union Square on the k-d branch).**
+  - **What was recorded:** in run 75354746's window, 87 `gemini-4-argon` calls, 504,216 input and 198,238 output
+    tokens ($5.98 from 2026-12-01).
+  - **What may be missing:** no Flash calls were recorded, so its chunks may not have run the facade reader, or ran it
+    outside the reply cache. If every chunk reads its planes as the ESB build did, the 20 chunks add up to $17.40.
+  - **High: $20.39.**
+- **DM and DS: $0 to $3 each (estimated).** These district builds were not measured. The high is KD's measured cost.
+- **Street View survey images in K: up to 16 per K build (`MAX_STREET_VIEW_IMAGES_PER_BUILDING`).** That is 80 to 96
+  images through the Imagery Grounding API, fetched again because the caches are cleared before each build.
+- **3D Tiles (price page).** Only a root tileset request is billed: $6.00 per 1,000 after 1,000 free a month. Tile
+  requests within its three-hour session are not billed. Each extraction opens about one session (estimated). That
+  is about 30 with KD's 21 extractions, so under 50 in all: under $0.30, and nothing if the month stays within the
+  free 1,000.
+- **Street View metadata:** free (price page).
+
+#### Street View grounding: the judge's up to 50 images
+
+The Imagery Grounding API (`retrieveGroundingImage`) needs an allowlisted project and is not on the Maps Platform price
+list. Its price is estimated:
+- at Static Street View's $7.00 per 1,000 (price page): $0.35 for the judge's 50, or $0.91 to $1.02 with the builds'
+  survey images;
+- at Dynamic Street View's $14.00 per 1,000: $2.04 for all 146.
+
+#### Total
+
+| Part | Low | High | Label |
+|---|---|---|---|
+| Judge, 144 calls | $5.33 | $37.84 | price page × estimated tokens (images measured) |
+| K, 5 to 6 builds | $6.00 | $7.32 | measured at the ESB |
+| KD | $2.99 | $20.39 | measured at Union Square; high estimated |
+| DM and DS | $0 | $6.00 | estimated |
+| Library sizes, once | $0 | $1.00 | estimated |
+| Street View grounding, 130 to 146 images | $0.91 | $2.04 | estimated (no published price) |
+| 3D Tiles root requests | $0 | $0.30 | price page × estimated count |
+| **All** | **about $15** | **about $75** | |
+
+- **Through 2026-11-30: about $15 to $75.** This is **under the $100 the user set on 2026-10-31** for spending that
+  needs no approval.
+- **From 2026-12-01, when Gemini 4 Argon's price doubles: about $25 to $124.** The high end is over $100.
+- **The parks, if added later:** about $1.20 each for the K build, plus their judge calls.
+- **Approval still needed.** The $100 rule does not approve this draft. Nothing is built or paid for until the user
+  approves it.
 
 ## Report
 
