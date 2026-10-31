@@ -12,7 +12,7 @@
  * facades snapped to fitted planes, the remesh polish's cleanup), every rectified facade's ortho is straightened and its
  * smears levelled (ortho-rectify.ts), and the facade is then rebuilt on the lines that ortho shows and textured with it
  * (facade-lattice.ts through remesh-polish.ts). Asked for with the staged tool's pipeline 'k' (or
- * SCRATCHBOX_STAGED_PROCEDURAL=k); it replaces pipeline E's massing and any procedural rebuild for that build, so what is
+ * SCRATCHBOX_STAGED_BUILDING_PIPELINE=k); it replaces pipeline E's massing and any procedural rebuild for that build, so what is
  * shown is the real scan, straightened, with its own photo.
  *
  * The rectified orthos are written beside the originals in a folder keyed by the rectifier's version and parameters,
@@ -30,6 +30,7 @@ import { decodePng } from '../../../texture-processing';
 import { featurelessMaskName, occludedMaskName, ORTHO_RECTIFY_PARAMS, ORTHO_RECTIFY_VERSION, uncoveredMaskName, type OrthoRectifyParams, type OrthoRectifyReport } from './ortho-rectify';
 import type { RectifyJob, RectifyMessage } from './ortho-rectify-worker';
 import { encodePng } from '../png-encode';
+import { stagedBuildingPipelineEnv } from '../staged-switches';
 
 /** The featureless photo refilled region by region: regions found, filled (each from one source at one shift), their texels, and the texels kept as photographed. */
 export interface ContinuedFill { regions: number; filled: number; texels: number; fromFacades: Record<string, number>; kept: number; sources: Array<{ texels: number; from: number; shiftM: number; ringDiff: number }> }
@@ -142,9 +143,9 @@ export function continueFeatureless(images: Map<number, FacadeImage>, P = CONTIN
 
 export const PIPELINE_K_VERSION = `pipeline-k/3(${ORTHO_RECTIFY_VERSION})`;
 
-/** Pipeline K when the request (or SCRATCHBOX_STAGED_PROCEDURAL) asks for 'k'. */
+/** Pipeline K when the request (or SCRATCHBOX_STAGED_BUILDING_PIPELINE) asks for 'k'. */
 export function stagedPipelineK(request: { pipeline?: string }, env: NodeJS.ProcessEnv = process.env): boolean {
-    return (request.pipeline ?? env.SCRATCHBOX_STAGED_PROCEDURAL ?? '').trim().toLowerCase() === 'k';
+    return (request.pipeline !== undefined ? request.pipeline.trim().toLowerCase() : stagedBuildingPipelineEnv(env)) === 'k';
 }
 
 export interface RectifiedOrthos {

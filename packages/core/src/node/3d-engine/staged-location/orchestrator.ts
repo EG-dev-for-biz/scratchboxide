@@ -29,7 +29,6 @@
  * A Stop marks the run stopped and ends at once (tile_refine has no signal and runs on to its own cache).
  */
 
-import { createDefaultStationImageGenerator } from '../../spatial/BeautifyStationService';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import { clampToFootprint, footprintConformance, FOOTPRINT_MAX_PROJECTION_M } from './footprint-lock';
@@ -194,9 +193,8 @@ import { recordDiscoveredObjects } from '../../asset-store/object-catalog';
 import { genAiEnhanceClient, type EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { fetchFootprints, type FootprintSource } from './facade-footprints';
-import { runMassingStage, runNativeMassing, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, SCAN_FOOTPRINT_TOKEN, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
-import { PIPELINE_G_VERSION, runPipelineG, stagedPipelineG } from './pipeline-g/pipeline-g';
-import { H_BUDGET_MARGIN_MS, H_POLICY, PIPELINE_H_VERSION, stagedProcedural } from './pipeline-h/pipeline-h';
+import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, SCAN_FOOTPRINT_TOKEN, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
+import { stagedModelService } from './staged-switches';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK } from './pipeline-k/pipeline-k';
 import { PARTY_WALL_TEXTURE_VERSION, texturePartyWall } from './pipeline-k/party-wall-texture';
 import { detailBakeProvenance, TILE_DETAIL_BAKE_VERSION, type TileDetailBakeReport } from '../../spatial/tile-detail-bake';
@@ -220,8 +218,6 @@ import { sceneTrainingPairs } from './scene-training-pairs';
 import type { ModelClient } from './pipeline-i/fal-trellis';
 import type { StationImageGenerator } from '../../spatial/BeautifyStationService';
 import { ledgerFromMassingNote, type LedgerEntry } from './pipeline-h/ledger';
-import { asMassingParts, candidateLine, runScanMassing, SCAN_MASSING_PROVENANCE, type StructureScanNote } from './scan-massing';
-import { checkMassing } from './pipeline-e/massing-spec';
 import type { GroundedReferenceClient } from '../../spatial/search-grounded-reference';
 import type { MassingRun } from './pipeline-e/native-massing';
 import { mslToTileY, type SolarRoof } from './pipeline-e/solar-roof';
@@ -297,7 +293,7 @@ export const STAGES = {
     // 207 s), so 900 s
     remesh: { order: 2, title: 'Remeshed scan', budgetMs: 900_000 },
     // a district's rebuilt buildings: pipeline E's massing for every building that passes its own check, and the remesh carved
-    // where they stand (district-massing.ts); off unless SCRATCHBOX_STAGED_DISTRICT_MASSING=1
+    // where they stand (district-massing.ts); on unless SCRATCHBOX_STAGED_DISTRICT=scan
     // 5x the earlier 25 min (user decision, 2026-10-25): Haughwout's block took 38 min once its remesh committed
     massing: { order: 2, title: 'Rebuilt buildings', budgetMs: 7_500_000 },
     // the facades' grammars read from the tile photo (three readings per facade, concurrently), gated, and the relief run
@@ -305,9 +301,8 @@ export const STAGES = {
     // Street View survey (about 3 min, alongside the readings) and up to 8 redraws (about 2.5 min)
     // version F (on by default; SCRATCHBOX_STAGED_GEOMETRY=e reverts to E's own inference) reads, adjusts and redraws
     // in this slot: a longer limit
-    // pipeline G's tall walls read for up to READ_TIMEOUT_MAX_MS each (pipeline-g/read.ts), so its slot has the longer budget too;
-    // 5000 s (user decision 2026-10-24, was 900 s): pipeline H's own budget, derived from this, then leaves time for every
-    // re-read, facade texture and roof redraw instead of skipping them
+    // 5000 s (user decision 2026-10-24, was 900 s, for the procedural rebuilds' re-reads): pipeline J's character sheet and
+    // model service take their budget from this
     grammar: { order: 2, title: 'Facade grammar', budgetMs: 5_000_000 },
     // pipeline E: measured relief on the clean massing (the scan averaged along what repeats), then the photo-match gate
     relief: { order: 2, title: 'Measured relief', budgetMs: 480_000 },
@@ -450,20 +445,23 @@ export interface StagedLocationRequest {
      */
     enhance?: boolean;
     /**
-     * Pipeline G (with isolate): the structure's facades rebuilt procedurally from a survey of the tile (pipeline-g/), in
-     * place of pipeline E's inference; SCRATCHBOX_STAGED_GEOMETRY=g turns it on for every isolated build.
+     * A procedural rebuild (with isolate): pipeline J, a generated model of the structure in place of pipeline E's
+     * inference (pipelines G and H, the earlier procedural rebuilds, were retired on 2026-10-30).
      */
     procedural?: boolean;
     /**
-     * Which procedural pipeline: 'j' (pipeline-i/: a character sheet of the scan made into a model by Meshy on Fal.ai,
-     * one seed, and fitted to the scan; the default when the deps provide its services), 'i' (the same pipeline with
-     * Trellis instead: best of six seeds, then a swatch colour match), 'h' (pipeline-h/: the scan leads, the build
-     * commits what its budget allows, weak readings gated, continued openings deduped, rejections by reason, an evidence
-     * ledger; the default when no model services are wired) or 'g'. SCRATCHBOX_STAGED_PROCEDURAL changes the default.
-     * 'k' (pipeline-k/) is not procedural: the remeshed scan, its facade orthos straightened and levelled, its facades
-     * rebuilt on them; it replaces pipeline E and the facade grammar for the build.
+     * Which pipeline: 'j' (pipeline-i/: a character sheet of the scan made into a model by `modelService` on Fal.ai and
+     * fitted to the scan; with procedural) or 'k' (pipeline-k/, not procedural: the remeshed scan, its facade orthos
+     * straightened and levelled, its facades rebuilt on them; it replaces pipeline E and the facade grammar for the build).
+     * SCRATCHBOX_STAGED_BUILDING_PIPELINE changes the default.
      */
-    pipeline?: 'g' | 'h' | 'i' | 'j' | 'k' | (string & {});
+    pipeline?: 'j' | 'k' | (string & {});
+    /**
+     * Pipeline J's 3D model service (staged-switches.ts): 'meshy' (Meshy 7.1, one seed, its own texture kept; the
+     * default) or 'trellis' (Trellis multi, the best of six seeds, then a swatch colour match; formerly pipeline I).
+     * SCRATCHBOX_STAGED_MODEL_SERVICE changes the default.
+     */
+    modelService?: 'meshy' | 'trellis' | (string & {});
     /**
      * Steps turned on or off for this build, by step key (TOGGLEABLE_STEPS in staged-build-steps.ts): the node graph's
      * toggles. A step not named keeps its default (its environment switch, else on).
@@ -544,10 +542,9 @@ export interface StagedLocationDeps {
     /** Google Solar API roof facets of the building closest to (lat, lng) (pipeline E's massing); absent without a key. */
     solarRoof?(lat: number, lng: number): Promise<SolarRoof>;
     /**
-     * Pipeline I and J's paid services (the 3D Building default when present: pipeline-i/): the image model for the
-     * character sheet and a Fal.ai model client (Trellis for pipeline I, Meshy for pipeline J), made on first use so a
-     * missing key fails that build with its reason. The app's deps (createStagedLocationDeps) provide them; stand-in
-     * deps leave them out and procedural builds default to pipeline H.
+     * Pipeline J's paid services (pipeline-i/): the image model for the character sheet and a Fal.ai model client by
+     * model service ('meshy' or 'trellis'), made on first use so a missing key fails that build with its reason. The
+     * app's deps (createStagedLocationDeps) provide them; without them a procedural build degrades with that reason.
      */
     pipelineI?: { generator: () => StationImageGenerator; model: (name?: string) => ModelClient };
     /** Vector building footprints near a place (facade grammar's independent check); default: Google vector feature tiles. */
@@ -1249,9 +1246,6 @@ function loadMesh(files: Array<string | undefined>): RenderMesh3D {
 /** A district layer published without the kept structure's footprint (keptStructureCarver). */
 const CARVED_URL = /_around_[0-9a-f]{8}\.glb$/;
 
-/** Pipeline G's building brief of a run (the result's buildingBrief). */
-const BUILDING_BRIEFS = new WeakMap<StagedRun, { path: string; images: number }>();
-
 /** What the district layers lost to the kept structure, per layer (the result's activeScene.footprintHidden). */
 const FOOTPRINT_REPORTS = new WeakMap<StagedRun, { footprint?: StructureFootprint; error?: string; layers: Array<{ objectId: string; removedTriangles: number; keptTriangles: number }> }>();
 
@@ -1613,8 +1607,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         extract: async radiusM => { const x = await extractCached(radiusM, io); last = x; return x.extraction; },
                         ...(deps.vegetation.canopy ? { canopy: async (tile: string) => (await deps.vegetation.canopy!({ tilePath: tile, signal: io.signal })).mask } : {}),
                         ...(deps.vectorEvidence ? { vector: async (radiusM: number) => evidenceLookup(await deps.vectorEvidence!({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM }), radiusM) } : {}),
-                        // pipeline H: the pick seeded on the vector building nearest the place (a landmark's address point is often the road)
-                        ...(stagedPipelineG(request) && stagedProcedural(request, process.env, !!deps.pipelineI) !== 'g' ? { seedFromVector: true } : {}),
+                        // a procedural build: the pick seeded on the vector building nearest the place (a landmark's address point is often the road)
+                        ...(request.procedural === true ? { seedFromVector: true } : {}),
                         placeName: request.query, onProgress: m => io.progress(m), signal: io.signal
                     });
                     if (sizing.structure?.seededOn) run.note(PROVENANCE.asScanned, `structure pick seeded on ${sizing.structure.seededOn}`);
@@ -1917,10 +1911,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         /** Pipeline K (pipeline-k/): the remeshed scan with straightened facade photos, in place of E and the grammar. */
         const pipelineK = stagedPipelineK(request);
         const pipelineE = stagedPipelineE() && request.isolate && !pipelineK;
-        /** The procedural pipeline of this request ('g', 'h' or 'i'), undefined when none is asked for. */
-        const procedural: 'g' | 'h' | 'i' | 'j' | undefined = stagedPipelineG(request) && !pipelineK ? stagedProcedural(request, process.env, !!deps.pipelineI) : undefined;
-        /** H's scan-led structure and massing rules: pipeline I builds on the same isolate and massing as H. */
-        const scanLed = procedural === 'h' || procedural === 'i' || procedural === 'j';
+        /** The procedural pipeline of this request, 'j' (pipeline-i/), undefined when none is asked for (G and H retired 2026-10-30). */
+        const procedural: 'j' | undefined = request.procedural === true && !pipelineK ? 'j' : undefined;
+        /** Pipeline J's 3D model service: Meshy unless the request or SCRATCHBOX_STAGED_MODEL_SERVICE asks for Trellis. */
+        const modelService = stagedModelService(request);
+        /** The scan-led structure and massing rules pipeline J builds on: the scan's own plan when the vector massing fails its check. */
+        const scanLed = procedural !== undefined;
         // no usable vector footprint at the place (eg. the Great Pyramid of Giza): pipeline E still runs, on the
         // structure's own convex outline on the scan instead of leaving it to the unstructured remeshed-scan fallback.
         // structure.vectorFootprint is only present when a vector-evidence lookup actually ran (extraction-sizing.ts);
@@ -3268,14 +3264,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         let remeshRequest: TileRefineRequest | undefined;
         type RemeshValue = { refined?: TileRefineResult; flattened?: ScanFitFlattenResult; groundLayerId: string; groundFile: string; committed: boolean };
         /**
-         * What pipeline I/J (iRun) and its specular pass actually need: the isolated scan, a layer id to supersede, and a
+         * What pipeline J (iRun) and its specular pass actually need: the isolated scan, a layer id to supersede, and a
          * cache key. `stage` (pipeline E's vector massing) is optional: iRun only reads it for its own optional refine
-         * step (pipelineIRefineEnabled), so pipeline I/J can run on the plain remeshed scan too, when pipeline E's massing
+         * step (pipelineIRefineEnabled), so pipeline J can run on the plain remeshed scan too, when pipeline E's massing
          * did not pass the scan-agreement gate (user decision, 2026-10-24: default to generative facades there rather
          * than none at all — see grammarRun's `!eState` branch).
          */
         type IRunState = { refined: TileRefineResult; layer: { objectId: string }; key: string; stage?: MassingStageResult };
-        let eState: { stage: MassingStageResult; refined: TileRefineResult; layer: StagedLayer; key: string; ms: number; ledger?: LedgerEntry[] } | undefined;
+        let eState: { stage: MassingStageResult; refined: TileRefineResult; layer: StagedLayer; key: string; ms: number } | undefined;
         /** The ownership vote to run after the first isolate commits: what it needs to remesh the same structure again. */
         let voteLater: { tilePath: string; isolatePick?: string; pick?: { pick: StructurePickResult; ground: GroundModel }; request: TileRefineRequest; orthos: { reliefOrthos?: boolean; reliefCarve?: boolean; reliefAnalyse?: boolean } } | undefined;
         /** The residual audit of one pipeline E native run, into the build notes (and a degradation when it failed or left clusters unsure). */
@@ -3288,7 +3284,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             let c = footprintConformance(readTileTriangles(fs.readFileSync(files.clayGlb)).positions, loops);
             // a footprint that is the scan's own plan (no Google footprint: scanDerivedFootprint, a simplified outline of the
             // structure) is coarser than the walls built on it: the Flatiron's rounded prow stood 5 m past its 11-corner plan.
-            // Its breach is recorded, not degraded (pipeline H; the lock proper needs a footprint that is not the scan itself)
+            // Its breach is recorded, not degraded (a scan-led build; the lock proper needs a footprint that is not the scan itself)
             const scanPlan = parts.length > 0 && parts.every(p => p.provenance === SCAN_FOOTPRINT_TOKEN);
             let outFiles = files, fitNote = '';
             if (!c.ok && !scanPlan && opts.clamp) {
@@ -3421,42 +3417,19 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 }
                 let r = await runMassingStage({ tilePath, isolateGlb: refined.rawClayGlb, buildings: eBuildings, groundY: picked.pick.groundY, scanTop, cells: picked.pick.cells, solar, outDir: dir, signal: io.signal, ...(shapeMassing ? { massing: shapeMassing } : {}), preferExtrusion: true, ...(request.procedural === true ? { audit: false } : {}) }, 'remesh', key);
                 let c = r.massing.check;
-                /** Pipeline H's ledger of the massing's choices (footprint, heights), handed to the rebuild. */
+                /** The scan-led massing's ledger of its choices (footprint, heights), kept in the run note. */
                 const massingLedger: LedgerEntry[] = [];
                 if (scanLed) massingLedger.push({ decision: 'structure', chosen: structure?.seededOn ? `the structure at ${structure.seededOn}` : `the raised structure nearest the place (${structure?.geocodeToStructureM ?? '?'} m from it)`, why: structure?.seededOn ? 'a vector building stands within the search window: its raised cell nearest the place seeds the pick' : 'no vector building raised within the search window, or none asked for', sources: [{ source: 'vector', value: structure?.seededOn ?? 'none used', used: !!structure?.seededOn }, { source: 'scan', value: `${structure?.areaM2 ?? '?'} m2 raised, ${structure?.heightM ?? '?'} m high`, used: true }] });
-                // pipeline H: the vector massing is guidance; when it fails its check against the scan, the massing is built
-                // again from the scan's own plan before anything falls back (the NYPL fell back at 5.41 m vs 4.96 m allowed)
+                // a procedural build: the vector massing is guidance; when it fails its check against the scan, the massing is
+                // built again from the scan's own plan before anything falls back (the NYPL fell back at 5.41 m vs 4.96 m allowed)
                 const scanPlan = scanLed && !c.ok && !eBuildings.some(b => b.provenance === SCAN_FOOTPRINT_TOKEN) ? scanDerivedFootprint(structure) : undefined;
                 if (scanPlan) {
-                    io.progress(`pipeline H: the vector massing ${c.reason ?? 'could not be built'}; the massing from the scan's own plan instead`);
+                    io.progress(`the vector massing ${c.reason ?? 'could not be built'}; the massing from the scan's own plan instead`);
                     const r2 = await runMassingStage({ tilePath, isolateGlb: refined.rawClayGlb, buildings: [scanPlan], groundY: picked.pick.groundY, scanTop, cells: picked.pick.cells, solar, outDir: `${dir}_scanplan`, signal: io.signal, preferExtrusion: true, ...(request.procedural === true ? { audit: false } : {}) }, 'remesh', `${key}_scanplan`);
                     massingLedger.push({ decision: 'footprint', chosen: r2.massing.check.ok ? "the scan's own plan" : 'none', why: `the vector massing ${c.reason ?? 'could not be built'}; the scan's plan ${r2.massing.check.ok ? `passed (IoU ${r2.massing.check.iou}, roof ${r2.massing.check.heightErrMedianM} m off)` : `failed too (${r2.massing.check.reason ?? 'could not be built'})`}`, sources: [{ source: 'vector', value: `IoU ${c.iou}, roof ${c.heightErrMedianM} m off`, used: false }, { source: 'scan', value: `IoU ${r2.massing.check.iou}, roof ${r2.massing.check.heightErrMedianM} m off`, used: r2.massing.check.ok }] });
                     if (r2.massing.check.ok) { r = r2; c = r2.massing.check; }
                 } else if (scanLed) {
                     massingLedger.push({ decision: 'footprint', chosen: eBuildings.some(b => b.provenance === SCAN_FOOTPRINT_TOKEN) ? "the scan's own plan (no Google footprint)" : `Google vector footprint${eBuildings.length > 1 ? 's' : ''} ${eBuildings.map(b => b.id).join(', ')}`, why: c.ok ? `plan IoU ${c.iou}, roof ${c.heightErrMedianM} m off the scan` : c.reason ?? 'the massing could not be built', sources: [{ source: eBuildings.some(b => b.provenance === SCAN_FOOTPRINT_TOKEN) ? 'scan' : 'vector', value: `IoU ${c.iou}`, used: c.ok }] });
-                }
-                // pipeline H: the scan leads, so when neither the vector massing nor the scan's own plan passes the check (one
-                // height on a stepped tower: the Empire State's roof came out 34 m off), the scan-led massing is the third
-                // attempt (scan-massing.ts: block, roof objects, tiers, judged by the same check)
-                const scanNoteE = procedural === 'h' && !c.ok ? cache.readRunNote<StructureScanNote>(runId, 'structure_scan') : undefined;
-                if (scanNoteE) {
-                    try {
-                        io.progress(`pipeline H: the massing ${c.reason ?? 'could not be built'}; the scan-led massing instead`);
-                        const sm = await runScanMassing(scanNoteE, { signal: io.signal });
-                        const built = asMassingParts(sm);
-                        const sources = sm.candidates.map(x => ({ source: 'scan', value: `${x.label}: coverage ${x.coverage.toFixed(2)}, precision ${x.precision.toFixed(2)}`, used: x.label === sm.chosen && !('reason' in built) }));
-                        if ('reason' in built) massingLedger.push({ decision: 'massing', chosen: 'none', why: `the vector massing ${c.reason ?? 'could not be built'}; ${built.reason}`, sources });
-                        else {
-                            const check = checkMassing(built.parts, built.meshes, { groundY: picked.pick.groundY, scanTop, cells: picked.pick.cells });
-                            const r3 = await runMassingStage({ tilePath, isolateGlb: refined.rawClayGlb, buildings: eBuildings, groundY: picked.pick.groundY, scanTop, cells: picked.pick.cells, solar, outDir: `${dir}_scanmassing`, signal: io.signal, massing: { ...r.massing, parts: built.parts, meshes: built.meshes, check, notes: built.notes }, preferExtrusion: true, ...(request.procedural === true ? { audit: false } : {}) }, 'remesh', `${key}_scanmassing`);
-                            massingLedger.push({ decision: 'massing', chosen: check.ok ? `the scan-led massing: ${sm.chosen} (${built.parts.length} parts, ${built.meshes.length} solids)` : 'none', why: `the vector massing ${c.reason ?? 'could not be built'}; the scan-led massing ${check.ok ? `passed (IoU ${check.iou}, roof ${check.heightErrMedianM} m off)` : `failed too (${check.reason ?? 'could not be built'})`}: ${sm.why}`, sources });
-                            cache.writeRunNote(runId, 'scan_massing', { stage: 'remesh', chosen: sm.chosen, explains: sm.explains, why: sm.why, candidates: sm.candidates, roofY: sm.roofY, groundY: sm.groundY, used: check.ok, check, notes: built.notes });
-                            if (check.ok && r3.run && r3.files) { r = r3; c = check; }
-                        }
-                    } catch (err) {
-                        if (io.signal.aborted) throw err;
-                        massingLedger.push({ decision: 'massing', chosen: 'none', why: `the scan-led massing failed (${errorMessage(err)})`, sources: [] });
-                    }
                 }
                 if (scanLed) for (const n of r.massing.notes) { const e = ledgerFromMassingNote(n); if (e) massingLedger.push(e); }
                 cache.writeRunNote(runId, 'pipeline_e', { check: r.massing.check, solar: r.massing.solar, solarNote, notes: r.massing.notes, timingsMs: r.timingsMs, native: r.run ? { timingsMs: r.run.report.timingsMs, snap: r.run.report.snap, residual: r.run.report.residual, faces: r.run.report.faces.length } : undefined, ...(massingLedger.length ? { ledger: massingLedger } : {}) });
@@ -3481,7 +3454,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     provenanceLabels: ['vector-massing', PROVENANCE.asScanned], supersedes: [l1.objectId], revealAfter: [],
                     reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [l1.objectId] }, cached: false, builtAtMs: now(), counts,
                     // the 3D Building build (request.procedural) shows no tile-photo texture: its massing stays clay until pipeline
-                    // G's own painted build replaces it (user decision 2026-10-22)
+                    // J's generated model replaces it (user decision 2026-10-22)
                     ...(request.procedural === true ? {} : { textured: {
                         url: pubTex.url, bytes: pubTex.bytes, ladderRung: r.files.texturedShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1),
                         rungShares: r.files.texturedShares, provenance: legend.map(e => ({ source: e.source, label: e.label, method: e.method, coverage: 0 })),
@@ -3491,7 +3464,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, extra: { rawGlbPath: extraction.rawGlbPath ?? extraction.texturedGlb, pipeline: 'e' } });
                 run.setGround(layer.objectId);
                 run.note('vector-massing', note);
-                eState = { stage: r, refined, layer, key, ms: now() - t0, ...(massingLedger.length ? { ledger: massingLedger } : {}) };
+                eState = { stage: r, refined, layer, key, ms: now() - t0 };
                 return {
                     status: 'committed', value: { refined, groundLayerId: layer.objectId, groundFile: r.files.clayGlb, committed: true },
                     source: `pipeline E: clean massing from Google vector data, textured from the tile photo, in ${((now() - t0) / 1000).toFixed(1)} s (${counts.triangles.toLocaleString('en-US')} triangles)`,
@@ -3992,9 +3965,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
 
         // ---------------- pipeline E inference (the grammar stage's slot): roof, bands, windows, bays, fill, straightening, colour ----------------
         // one Street View survey of the structure for a stage: the views registered against the tile mesh and cut out by the
-        // ownership and occluder masks, with their obstruction-free copies (pipeline E's inference and pipeline G's walls)
-        // pipeline G's walls take the few views that show the most of them: the survey runs inside its stage's time limit
-        const G_STREET_VIEWS = 4;
+        // ownership and occluder masks, with their obstruction-free copies (pipeline E's inference)
         const streetSurveyFor = (e: NonNullable<typeof eState>, io: { progress(m: string): void; signal: AbortSignal }, structureMesh: ReturnType<typeof sceneToRenderMesh>, maxViews = ENHANCE_STREET_VIEWS) => {
             const sv = streetView ?? {};
             const segmenter = process.env.SCRATCHBOX_TEXTURE_OWNERSHIP === '0' ? false : deps.textures?.segmenter
@@ -4146,122 +4117,18 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             }
         };
 
-        // ---------------- pipeline G (the grammar stage's slot, request.procedural): the facades rebuilt procedurally from a survey of the tile ----------------
-        const gRun = async (e: NonNullable<typeof eState>): Promise<void> => {
-            if (!visionAvailable) { runner.skip('grammar', 'pipeline G reads its survey with a vision model, and none is configured'); return; }
-            await runner.stage<{ steps: StepRecord[] }>({
-                id: 'grammar',
-                run: async io => {
-                    const t0 = now();
-                    const r = e.stage;
-                    const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: visionAvailable.candidates, signal: ctx.signal, ...chainExtras('grammar'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
-                    // the walls' street-level references: the registered Street View views with their obstruction-free copies
-                    const gSurvey = (request.enhance ?? stagedEnhance()) ? streetSurveyFor(e, io, sceneToRenderMesh(readGlbScene(r.files!.clayGlb)), G_STREET_VIEWS) : undefined;
-                    const gTile = strip ? strip.devegetatedGlb : extraction.texturedGlb;
-                    // pipeline H builds its facades on the scan-led massing (scan-massing.ts): the simplest candidate that explains
-                    // the structure's scan (block, block + roof objects, tiers) is natively built first, and its walls are the ones
-                    // surveyed and read; E's vector massing stays when the scan has no such candidate or the massing fails
-                    let gMassing = r.massing, gNative = r.run!, roofObjectsGiven: string[] | undefined;
-                    const hLedger: LedgerEntry[] = [...(e.ledger ?? [])];
-                    // the massing stage already fell to the scan-led massing (the vector one failed its check): built on as it is
-                    const eScanLed = r.massing.parts.some(p => p.provenance === SCAN_MASSING_PROVENANCE);
-                    if (eScanLed) roofObjectsGiven = r.massing.notes.filter(n => n.startsWith('roof object'));
-                    const scanNote = procedural === 'h' && !eScanLed ? cache.readRunNote<StructureScanNote>(runId, 'structure_scan') : undefined;
-                    if (scanNote?.scanGlb && fs.existsSync(scanNote.scanGlb)) {
-                        const tm = now();
-                        try {
-                            io.progress('pipeline H: the scan-led massing (block, roof objects, tiers and lofts scored against the scan)');
-                            const sm = await runScanMassing(scanNote, { signal: io.signal });
-                            const sources = sm.candidates.map(c => ({ source: 'scan', value: `${c.label}: coverage ${c.coverage.toFixed(2)}, precision ${c.precision.toFixed(2)}`, used: c.label === sm.chosen }));
-                            const built = asMassingParts(sm);
-                            if ('reason' in built) {
-                                hLedger.push({ decision: 'massing', chosen: 'the vector massing', why: `${built.reason}; the facades are built on the vector massing (${candidateLine(sm)})`, sources });
-                            } else {
-                                const scanMassing = { ...r.massing, parts: built.parts, meshes: built.meshes };
-                                gNative = await runNativeMassing(scanMassing, { tilePath: gTile, isolateGlb: e.refined.rawClayGlb!, dir: path.join(cache.dir, 'pipeline_h', 'scan_massing', stageKey(PIPELINE_H_VERSION, e.key).slice(0, 24)), groundY: structure!.groundY, audit: false, params: { residual: 0, sections: 0, topdown: 0, snapMaxM: 0 }, signal: io.signal });
-                                gMassing = scanMassing;
-                                roofObjectsGiven = built.notes.slice(1);
-                                hLedger.push({ decision: 'massing', chosen: `${sm.chosen} (${built.parts.length} parts, ${built.meshes.length} solids)`, why: `${sm.why}${sm.explains ? '' : ' (no candidate explains the scan within tolerance; the best fit)'}`, sources });
-                            }
-                            cache.writeRunNote(runId, 'scan_massing', { chosen: sm.chosen, explains: sm.explains, why: sm.why, candidates: sm.candidates, roofY: sm.roofY, groundY: sm.groundY, used: !('reason' in built), ...('reason' in built ? { reason: built.reason } : { notes: built.notes }), ms: now() - tm });
-                        } catch (err) {
-                            if (io.signal.aborted) throw err;
-                            hLedger.push({ decision: 'massing', chosen: 'the vector massing', why: `the scan-led massing failed (${errorMessage(err)})`, sources: [] });
-                            cache.writeRunNote(runId, 'scan_massing', { used: false, error: errorMessage(err), ms: now() - tm });
-                        }
-                    }
-                    const out = await runPipelineG({
-                        massing: gMassing, run: gNative, tilePath: gTile, ...(roofObjectsGiven ? { roofObjectsGiven } : {}),
-                        dir: path.join(cache.dir, procedural === 'h' ? 'pipeline_h' : 'pipeline_g', stageKey(procedural === 'h' ? PIPELINE_H_VERSION : PIPELINE_G_VERSION, e.key).slice(0, 24)), stage: 'grammar', stageKey: e.key,
-                        chain, place: placeValue!.formattedAddress || request.query, structure: structure!, ground: t.ground!,
-                        anchor: { lat: placeValue!.lat, lng: placeValue!.lng, elevationMeters: 0 }, signal: io.signal, onProgress: m => io.progress(m),
-                        // the facade texture builder on every read wall, as pipeline E's enhanced mode (the real-data view turns it off):
-                        // Nano Banana Lite redraws, the full model fills (infill, and walls with unseen areas: Lite leaves them grey)
-                        ...((request.enhance ?? stagedEnhance()) ? { enhance: { client: genAiPlateClient(visionAvailable.client), models: enhanceModels(), cacheDir: path.join(cache.dir, 'enhance_plates'), infill: { client: genAiEnhanceClient(visionAvailable.client), models: [LIGHTING_MODEL_FULL] }, unseenModels: [LIGHTING_MODEL_FULL], ...(gSurvey ? { streetViews: async () => (await gSurvey()).views } : {}) } } : {}),
-                        // a search-grounded reference of every wall still weak after its re-read (references.ts), for the brief, not the
-                        // build; the same toggle as enhance (generated help, off in the real-data view)
-                        ...((request.enhance ?? stagedEnhance()) ? { references: { client: visionAvailable.client as unknown as GroundedReferenceClient, outputDir: path.join(cache.dir, 'location_reference') } } : {}),
-                        // the brief and its images published under public/, outside the chat tools' IGNORED_DIRS (.scratchbox/cache is
-                        // one of them): workspace_view_file and workspace_view_image can only reach what is published here
-                        publicDir: path.resolve(cache.modelsDir, '..', 'briefs', e.key.slice(0, 8)),
-                        // pipeline H: its rules, and a budget of what the stage's limit leaves after the slot's own work so far,
-                        // less the margin for committing; the massing's ledger entries ahead of the rebuild's own
-                        // what names the building (building-name.ts): the evidence's POIs, the request's words and the address
-                        naming: { ...(t.vector ? { pois: t.vector.pois } : {}), query: request.query, address: placeValue!.formattedAddress },
-                        // pipeline H-S (opt-in, SCRATCHBOX_H_SHEET_PLATES=1): the wall plates take their colour from a character sheet
-                        // of the isolated structure, best of three sheets ranked by H's own facade reading (sheet-plates.ts)
-                        ...(procedural === 'h' && process.env.SCRATCHBOX_H_SHEET_PLATES === '1' && e.refined?.texturedGlb
-                            ? { sheetPlates: { structureGlb: e.refined.texturedGlb, generator: createDefaultStationImageGenerator({ workspaceRoot: cache.dir }), readScore: true } } : {}),
-                        ...(procedural === 'h' ? { policy: { ...H_POLICY, budgetMs: Math.max(0, STAGES.grammar.budgetMs - (now() - t0) - H_BUDGET_MARGIN_MS) }, ledger: hLedger } : {})
-                    });
-                    cache.writeRunNote(runId, procedural === 'h' ? 'pipeline_h' : 'pipeline_g', { steps: out.steps, timingsMs: out.timingsMs, plates: out.plates, stations: out.stations, names: out.names, ...(out.brief ? { brief: out.brief } : {}), ...(procedural === 'h' ? { ledger: out.ledger, budgetNotes: out.budgetNotes } : {}) });
-                    if (out.brief && 'path' in out.brief) BUILDING_BRIEFS.set(run, out.brief);
-                    checkFootprintLock('grammar', 'pipeline G layer', { clayGlb: out.files.clayGlb, texturedGlb: out.files.texturedGlb }, r.massing.parts);
-                    const key8 = e.key.slice(0, 8);
-                    const pubClay = cache.publishFile(out.files.clayGlb, `${base}_massing_${key8}_pipelineg.glb`);
-                    const pubTex = cache.publishFile(out.files.texturedGlb, `${base}_massing_${key8}_pipelineg_tex.glb`);
-                    const describe = `${out.names.primary ? `${out.names.primary}; ` : ''}${out.steps.map(s => `${s.step}: ${s.accepted} of ${s.proposed}`).join('; ')}`;
-                    const layer: StagedLayer = {
-                        objectId: layerObjectId(e.key, 'l2g'), stage: 'grammar', layer: 'l2g', order: STAGES.grammar.order, url: pubClay.url, bytes: pubClay.bytes,
-                        provenance: { label: PROVENANCE.photoInferred, measuredGeometry: false, confidence: 0.5, method: `pipeline ${(procedural ?? 'g').toUpperCase()}: survey stations path-traced from the photo tile, laid onto metric wall plates, read as facade programs (arched openings, bands, piers, colonnettes) and built natively on the ${procedural === 'h' ? 'scan-led' : 'vector'} massing; faces painted from the reading${procedural === 'h' ? '; weak readings gated, continued openings checked, every decision in the ledger' : ''}`, sources: [{ kind: 'stage-output', id: `pipeline-${procedural ?? 'g'}:${key8}` }], note: describe },
-                        provenanceLabels: ['vector-massing', PROVENANCE.photoInferred, 'generated'], supersedes: [e.layer.objectId], revealAfter: [e.layer.objectId],
-                        reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [e.layer.objectId] }, cached: false, builtAtMs: now(), counts: layerCounts(out.files.clayGlb),
-                        textured: {
-                            url: pubTex.url, bytes: pubTex.bytes, ladderRung: out.files.texturedShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1),
-                            rungShares: out.files.texturedShares, provenance: out.legend.map(x => ({ source: x.source, label: x.label, method: x.method, coverage: 0 })),
-                            confidenceChannels: 'R = index into provenance[], G = weight 0..255, B = ladder rung (TEXTURE_LADDER_RUNGS), A = 255 where a stage produced the texel', builtAtMs: now(), cached: false
-                        }
-                    };
-                    run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, extra: { pipeline: procedural ?? 'g' } });
-                    run.note(PROVENANCE.photoInferred, `pipeline ${(procedural ?? 'g').toUpperCase()}: ${describe}`);
-                    captureTraining(e, {
-                        source: `pipeline-${procedural ?? 'g'}`, pipelineVersion: procedural === 'h' ? PIPELINE_H_VERSION : PIPELINE_G_VERSION, outcome: 'delivered',
-                        files: { 'target.textured': out.files.texturedGlb, 'target.clay': out.files.clayGlb }, provenanceLabels: layer.provenanceLabels, notes: { steps: out.steps }
-                    });
-                    return { status: 'committed', value: { steps: out.steps }, layers: [layer], source: `pipeline ${(procedural ?? 'g').toUpperCase()} in ${((now() - t0) / 1000).toFixed(0)} s: ${describe}${out.budgetNotes.length ? ` (budget: ${out.budgetNotes.join('; ')})` : ''}` };
-                },
-                degrade: async err => (captureTraining(e, { source: `pipeline-${procedural ?? 'g'}`, pipelineVersion: procedural === 'h' ? PIPELINE_H_VERSION : PIPELINE_G_VERSION, outcome: 'failed', reason: errorMessage(err) }), {
-                    status: 'degraded', source: 'the clean massing stands without the procedural facades', reason: `pipeline ${(procedural ?? 'g').toUpperCase()} failed (${errorMessage(err)})`,
-                    degradations: [run.degrade(record('grammar', 'pipeline_g_failed', {
-                        part: { description: 'the procedural facades of the massing' }, intended: 'facades read from a survey of the tile and built procedurally (arches, bands, members)', fellTo: 'the clean massing with its tile ortho textures',
-                        provenanceAfter: 'vector-massing', reason: `pipeline ${(procedural ?? 'g').toUpperCase()} failed (${errorMessage(err)})`, cause: err, transient: true, runId, now: now(), reuses: ['resolve', 'tiles', 'trees-measure', 'remesh']
-                    }))]
-                })
-            });
-        };
-
-        // ---------------- pipeline I/J (the grammar stage's slot, J the 3D Building default): character sheet -> Meshy (J, one seed) or Trellis (I, best of six), fitted to the scan ----------------
+        // ---------------- pipeline J (the grammar stage's slot, request.procedural): character sheet -> Meshy (one seed) or Trellis (best of six), fitted to the scan ----------------
         const iRun = async (e: IRunState): Promise<void> => {
+            const isMeshy = modelService === 'meshy';
             await runner.stage<{ steps: Array<{ step: string; accepted: number; proposed: number }> }>({
                 id: 'grammar',
                 run: async io => {
                     const t0 = now();
-                    if (!deps.pipelineI) throw new Error(`pipeline ${(procedural ?? 'i').toUpperCase()} needs its image model and a Fal.ai 3D model service, which these deps do not provide`);
+                    if (!deps.pipelineI) throw new Error(`pipeline J needs its image model and a Fal.ai 3D model service (${modelService}), which these deps do not provide`);
                     // the model client first: a missing FAL_KEY fails here, before the 4K sheet is drawn
-                    const isMeshy = procedural === 'j';
-                    const model = deps.pipelineI.model(isMeshy ? 'meshy' : 'trellis');
-                    // pipeline J: Meshy's single output is already texture-complete, so skip Trellis's best-of-six
-                    // seed selection and its swatch colour match (tuned for Trellis's own colour drift)
+                    const model = deps.pipelineI.model(modelService);
+                    // Meshy's single output is already texture-complete, so it skips Trellis's best-of-six seed selection and
+                    // its swatch colour match (tuned for Trellis's own colour drift)
                     const out = await runPipelineI({
                         texturedGlb: e.refined.texturedGlb, clayGlb: e.refined.rawClayGlb ?? e.refined.clayGlb,
                         footprint: { cells: structure!.cells, groundY: structure!.groundY, heightM: structure!.heightM },
@@ -4273,9 +4140,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         signal: io.signal, onProgress: m => io.progress(m), now
                     });
                     cache.writeRunNote(runId, 'pipeline_i', { steps: out.steps, timingsMs: out.timingsMs, plan: out.plan, sheet: out.sheet, model: out.model, candidates: out.candidates, swatch: out.swatch, fit: out.fit, ...(out.holes ? { holes: out.holes } : {}), files: out.files });
-                    // the prototype refinement with pipeline H's evidence (refine.ts, SCRATCHBOX_PIPELINE_I_REFINE=1): the massing's footprint as
+                    // the prototype refinement with the survey's evidence (refine.ts, SCRATCHBOX_PIPELINE_I_REFINE=1): the massing's footprint as
                     // the fit target, the tile's wall plates scored against the model's and projected where its walls lie on the planes.
-                    // Any failure leaves pipeline I's own model standing, with the reason in the run note.
+                    // Any failure leaves pipeline J's own model standing, with the reason in the run note.
                     let refined: RefineOutcome | undefined;
                     if (pipelineIRefineEnabled() && e.stage?.run && t.ground) {
                         try {
@@ -4309,9 +4176,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const pubTex = cache.publishFile(refined?.files.texturedGlb ?? out.files.texturedGlb, `${base}_massing_${key8}_pipelinei_tex.glb`);
                     const projectedFaces = refined?.facades.filter(x => x.projected) ?? [];
                     const describe = `${out.steps.map(s => `${s.step}: ${s.accepted} of ${s.proposed}`).join('; ')}; fit to the scan: plan IoU ${f.planIoU.toFixed(2)}, ${(f.overflowShare * 100).toFixed(0)}% of the model outside the footprint (reported, not clipped), ${(f.coverage * 100).toFixed(0)}% of the footprint covered` +
-                        (refined ? `; refined with pipeline H: fitted to the massing footprint (plan IoU with the scan ${refined.fit.scanIoUOfMassingFit.toFixed(2)}, shifted ${refined.fit.shift.map(v => v.toFixed(2)).join(', ')} m), ${refined.facades.length} facades scored, the tile's plates projected onto ${projectedFaces.length} (${refined.projected.texels.toLocaleString('en-US')} texels, photo-inferred)` : '') +
+                        (refined ? `; refined with the survey: fitted to the massing footprint (plan IoU with the scan ${refined.fit.scanIoUOfMassingFit.toFixed(2)}, shifted ${refined.fit.shift.map(v => v.toFixed(2)).join(', ')} m), ${refined.facades.length} facades scored, the tile's plates projected onto ${projectedFaces.length} (${refined.projected.texels.toLocaleString('en-US')} texels, photo-inferred)` : '') +
                         (refined?.holes?.holePixels ? `; ${refined.holes.holePixels} texels of the model's own texture it never covered: ${refined.holes.decision === 'accepted' ? `${refined.holes.filledPixels} filled by ${refined.holes.modelUsed} (generated)` : `left as the model built them (${refined.holes.reason ?? refined.holes.decision})`}` : '');
-                    const method = `pipeline I: the isolated scan rendered from its tile photos at four planned stations, made into one building-survey character sheet (one 4K image, every panel checked against the scan), the four views sent together to ${out.model.model} on Fal.ai once per seed, the best of ${out.candidates.length} (seed ${out.model.seed}, job ${out.model.requestId}) by its silhouette against the sheet and its plan fit, its textures colour-matched to the structure's swatch, fitted onto the scan's footprint and height (yaw ${f.yawDeg.toFixed(1)} deg${f.mirrored ? ', mirrored' : ''}, scale ${f.scale.toFixed(2)})`;
+                    const method = `pipeline J (${modelService}): the isolated scan rendered from its tile photos at four planned stations, made into one building-survey character sheet (one 4K image, every panel checked against the scan), the four views sent together to ${out.model.model} on Fal.ai ${isMeshy ? `once (job ${out.model.requestId}), its own textures kept` : `once per seed, the best of ${out.candidates.length} (seed ${out.model.seed}, job ${out.model.requestId}) by its silhouette against the sheet and its plan fit, its textures colour-matched to the structure's swatch`}, fitted onto the scan's footprint and height (yaw ${f.yawDeg.toFixed(1)} deg${f.mirrored ? ', mirrored' : ''}, scale ${f.scale.toFixed(2)})`;
                     const generated = TEXTURE_LADDER_RUNGS.indexOf('generated tileable PBR');
                     const layer: StagedLayer = {
                         objectId: layerObjectId(e.key, 'l2i'), stage: 'grammar', layer: 'l2i', order: STAGES.grammar.order, url: pubClay.url, bytes: pubClay.bytes,
@@ -4321,13 +4188,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [e.layer.objectId] }, cached: false, builtAtMs: now(), counts: layerCounts(refined?.files.clayGlb ?? out.files.clayGlb),
                         textured: {
                             url: pubTex.url, bytes: pubTex.bytes, ladderRung: generated, rungShares: TEXTURE_LADDER_RUNGS.map((_, k) => (k === generated ? 1 : 0)),
-                            provenance: [{ source: 'pipeline-i-trellis', label: 'generated', method: `${out.model.model}'s textures (seed ${out.model.seed}), made from the character sheet's four views and colour-matched to the structure's swatch measured from them`, coverage: 1 },
-                                ...(projectedFaces.length ? [{ source: 'pipeline-i-refine-plates', label: refined?.cleaned ? 'generated' : PROVENANCE.photoInferred, method: `the tile's wall plates (pipeline G's survey stations)${refined?.cleaned ? ', redrawn by the facade texture builder and kept through its identity gate,' : ''} projected onto the model where its wall lies within ${PROJECT_MAX_RELIEF_M} m of the massing's plane: ${projectedFaces.map(x => x.key).join(', ')}`, coverage: 0 }] : [])],
+                            provenance: [{ source: `pipeline-j-${modelService}`, label: 'generated', method: `${out.model.model}'s textures (seed ${out.model.seed}), made from the character sheet's four views${isMeshy ? '' : ' and colour-matched to the structure\'s swatch measured from them'}`, coverage: 1 },
+                                ...(projectedFaces.length ? [{ source: 'pipeline-i-refine-plates', label: refined?.cleaned ? 'generated' : PROVENANCE.photoInferred, method: `the tile's wall plates (the survey stations)${refined?.cleaned ? ', redrawn by the facade texture builder and kept through its identity gate,' : ''} projected onto the model where its wall lies within ${PROJECT_MAX_RELIEF_M} m of the massing's plane: ${projectedFaces.map(x => x.key).join(', ')}`, coverage: 0 }] : [])],
                             confidenceChannels: 'none: the model carries its own textures', builtAtMs: now(), cached: false
                         }
                     };
-                    run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, extra: { pipeline: 'i' } });
-                    run.note('generated', `pipeline I: ${describe}`);
+                    run.commit(layer, { source: 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, extra: { pipeline: 'j', modelService } });
+                    run.note('generated', `pipeline J (${modelService}): ${describe}`);
                     captureTraining(e, {
                         source: out.model.model, pipelineVersion: PIPELINE_I_VERSION, outcome: 'delivered',
                         files: {
@@ -4340,19 +4207,19 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         targetBeyondScan: { note: `${out.model.model} drew the whole structure from the character sheet's views; sides, backs and roof the scan did not see are generated` },
                         notes: { steps: out.steps, plan: out.plan, sheet: out.sheet, model: out.model, candidates: out.candidates, swatch: out.swatch, fitMatrix: f.matrix }
                     });
-                    return { status: 'committed', value: { steps: out.steps }, layers: [layer], source: `pipeline I in ${((now() - t0) / 1000).toFixed(0)} s: ${describe}` };
+                    return { status: 'committed', value: { steps: out.steps }, layers: [layer], source: `pipeline J (${modelService}) in ${((now() - t0) / 1000).toFixed(0)} s: ${describe}` };
                 },
                 degrade: async err => (captureTraining(e, { source: 'pipeline-i', pipelineVersion: PIPELINE_I_VERSION, outcome: 'failed', reason: errorMessage(err) }), {
-                    status: 'degraded', source: 'the clean massing stands without the generated model', reason: `pipeline I failed (${errorMessage(err)})`,
+                    status: 'degraded', source: 'the clean massing stands without the generated model', reason: `pipeline J (${modelService}) failed (${errorMessage(err)})`,
                     degradations: [run.degrade(record('grammar', 'pipeline_i_failed', {
-                        part: { description: 'the generated model of the structure' }, intended: 'a model made by Trellis from a character sheet of the scan, the best of several seeds, colour-matched and fitted to the scan', fellTo: 'the clean massing with its tile ortho textures',
-                        provenanceAfter: 'vector-massing', reason: `pipeline I failed (${errorMessage(err)})`, cause: err, transient: true, runId, now: now(), reuses: ['resolve', 'tiles', 'trees-measure', 'remesh']
+                        part: { description: 'the generated model of the structure' }, intended: isMeshy ? 'a model made by Meshy from a character sheet of the scan and fitted to the scan' : 'a model made by Trellis from a character sheet of the scan, the best of several seeds, colour-matched and fitted to the scan', fellTo: 'the clean massing with its tile ortho textures',
+                        provenanceAfter: 'vector-massing', reason: `pipeline J (${modelService}) failed (${errorMessage(err)})`, cause: err, transient: true, runId, now: now(), reuses: ['resolve', 'tiles', 'trees-measure', 'remesh']
                     }))]
                 })
             });
         };
 
-        // pipeline I/J's generated model checked for glass the same way G/H's photo-read facades are (facade-material-evidence.ts's
+        // pipeline J's generated model checked for glass the same way photo-read facades are (facade-material-evidence.ts's
         // floor, generalized to any mesh: specular-material-projection.ts): self-rendered, since there is no photo evidence of a model
         // nobody has seen built; accepted regions are baked straight into the already-published textured GLB, in place, so nothing
         // downstream needs to know this ran. Best-effort: any failure is recorded and never fails the build.
@@ -4484,20 +4351,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- facade grammar (photo-inferred window lattices on the remeshed facades) ----------------
         const grammarRun = async (): Promise<void> => {
             const remeshed = remeshedNow;
-            if (eState && stagedPipelineG(request)) {
-                if (procedural === 'i' || procedural === 'j') {
-                    await iRun(eState);
-                    await iSpecularPass(eState);
-                    runner.skip('relief', `pipeline ${procedural.toUpperCase()} places a generated model of the structure; the measured relief would put scan detail on the massing it replaces`);
-                    return;
-                }
-                await gRun(eState);
-                runner.skip('relief', 'pipeline G builds the facades procedurally from its survey; the measured relief would put scan detail back');
+            if (eState && procedural) {
+                await iRun(eState);
+                await iSpecularPass(eState);
+                runner.skip('relief', 'pipeline J places a generated model of the structure; the measured relief would put scan detail on the massing it replaces');
                 return;
             }
             if (eState) { const inf = await eInferenceRun(eState); await eReliefRun(eState, inf); return; }
-            if (!eState && remeshed && stagedPipelineG(request) && (procedural === 'i' || procedural === 'j')) {
-                // The vector-massing gate rejected (eWhyNot) — but pipeline I/J does not actually need pipeline E's clean
+            if (!eState && remeshed && procedural) {
+                // The vector-massing gate rejected (eWhyNot) — but pipeline J does not actually need pipeline E's clean
                 // massing: it generates its own model from a character sheet of the scan and fits that to the scan's own
                 // footprint and height afterward (out.fit, reported). Default to generative here too (user decision,
                 // 2026-10-24): try it directly on the plain remeshed scan. There is no fit-quality gate yet deciding
@@ -4508,16 +4370,16 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 if (groundLayerId) {
                     await iRun({ refined: remeshed, layer: { objectId: groundLayerId }, key: remeshed.cacheKey });
                     await iSpecularPass({ key: remeshed.cacheKey });
-                    runner.skip('relief', `pipeline ${procedural.toUpperCase()} places a generated model of the structure on the remeshed scan (its vector massing did not pass agreement with the scan: ${eWhyNot ?? 'see the pipeline E fallback'}); the measured relief would put scan detail on the massing it replaces`);
+                    runner.skip('relief', `pipeline J places a generated model of the structure on the remeshed scan (its vector massing did not pass agreement with the scan: ${eWhyNot ?? 'see the pipeline E fallback'}); the measured relief would put scan detail on the massing it replaces`);
                     return;
                 }
             }
-            if (stagedPipelineG(request)) {
-                // asked for a procedural rebuild, but G builds on E's vector massing and there is none: say so, never silently
-                run.degrade(record('grammar', 'pipeline_g_unavailable', {
-                    part: { description: 'the procedural rebuild of the structure' }, intended: 'pipeline G: facades read from a survey of the tile and built procedurally on the vector massing',
+            if (procedural) {
+                // asked for a procedural rebuild, but neither E's massing nor a remeshed scan stands to build it on: say so, never silently
+                run.degrade(record('grammar', 'pipeline_j_unavailable', {
+                    part: { description: 'the procedural rebuild of the structure' }, intended: 'pipeline J: a generated model of the structure from a character sheet of the scan, fitted to the scan',
                     fellTo: 'the current pipeline (remesh, fit, detail)', provenanceAfter: PROVENANCE.remeshed,
-                    reason: `pipeline G builds on pipeline E's vector massing, which this structure did not get (${eWhyNot ?? 'see the pipeline E fallback: the massing did not match the scan'})`,
+                    reason: `pipeline J builds on pipeline E's massing or the remeshed scan, and this structure got neither (${eWhyNot ?? 'the remesh did not commit'})`,
                     transient: false, runId, now: now()
                 }));
             }
@@ -5168,7 +5030,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             siblings.push(massingPromise);
         } else {
             runner.skip('massing', request.isolate ? 'an isolated structure is rebuilt by its own pipeline'
-                : !districtMassingEnabled() ? 'the district massing is off (SCRATCHBOX_STAGED_DISTRICT_MASSING=1 to try it)'
+                : !districtMassingEnabled() ? 'the district is shown as scanned (SCRATCHBOX_STAGED_DISTRICT=scan; massing, the default, rebuilds its buildings)'
                 : !strip ? 'the trees were not measured: there is no tree-free scan to measure the buildings on'
                 : !deps.vectorEvidence ? 'no Google vector data: no footprints to rebuild from'
                 : 'the remesh did not commit: there is nothing to rebuild the buildings in');
@@ -5375,9 +5237,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             };
             if (!request.isolate) { skipRest('not an isolated structure'); return out; }
             if (eState) {
-                const g = request.procedural === true;
-                const why = g ? 'pipeline G rebuilds the structure procedurally on the footprint massing, from its own survey of the tile' : 'pipeline E built the structure from the vector massing (SCRATCHBOX_STAGED_PIPELINE=e)';
-                const tex = g ? 'pipeline G paints its faces from its survey plates' : 'pipeline E textures its faces from orthographic renders of the tile photo';
+                const j = request.procedural === true;
+                const why = j ? 'pipeline J places a generated model of the structure, fitted to the scan' : 'pipeline E built the structure from the vector massing (SCRATCHBOX_STAGED_PIPELINE=e)';
+                const tex = j ? 'pipeline J\'s model carries its own textures' : 'pipeline E textures its faces from orthographic renders of the tile photo';
                 skipRest(why);
                 runner.skip('survey', why);
                 runner.skip('textures', tex);
@@ -6166,7 +6028,6 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
         ...(activeScene ? { activeScene } : {}),
         ...(run.state.materialHints ? { materialHints: run.state.materialHints } : {}),
         ...(f.textures ? { texturePass: f.textures.record } : {}),
-        ...(BUILDING_BRIEFS.get(run) ? { buildingBrief: BUILDING_BRIEFS.get(run)! } : {}),
         ...(photoCost ? { photoCost } : {}),
         ...(f.rebuild.figures?.length ? { figures: f.rebuild.figures } : {}),
         ...(f.trees ? { trees: f.trees } : {}),

@@ -52,7 +52,7 @@ State which of these you ruled out, and how.
 A picture alone cannot say "wrong". Put it beside what it should match, from the same viewpoint:
 
 - **the source**: the isolated scan, the photo tiles (top-down photo for roofs and lawns), Street View;
-- **the previous version** or the shipped pipeline (pipeline H today) at the same camera;
+- **the previous version** or the shipped pipeline (pipeline K today) at the same camera;
 - **a known case**: a synthetic test with a known answer, or the Haughwout benchmark.
 
 Make an **inventory** of the reference first, then tick it off in the result. For a roof: tank, bulkheads, hatch,
