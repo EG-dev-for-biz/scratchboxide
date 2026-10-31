@@ -33,6 +33,13 @@ import type { StagedBuildState } from '../../common/spatial/staged-location-cont
 export type { VideoTimelineData, TimelineTrack };
 export * from './services/video/videoTypes';
 
+/** Keyframes on a timeline's tracks: every animated property's keys on every element. */
+export function sceneTimelineKeyframeCount(tracks?: TimelineTrack[]): number {
+    let n = 0;
+    for (const track of tracks ?? []) for (const el of track.elements ?? []) for (const keys of Object.values(el.keyframes ?? {})) n += keys.length;
+    return n;
+}
+
 /** Every primitive the canvas can render: the contract for a canvas artifact's `type`. */
 export const PRIMITIVE_TYPES = [
     'metric-dashboard',

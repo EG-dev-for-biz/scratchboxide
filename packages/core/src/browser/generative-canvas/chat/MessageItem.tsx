@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import * as React from 'react';
-import { ChatMessage } from '../canvas-types';
+import { ChatMessage, McpExecutionState } from '../canvas-types';
 import { CanvasErrorBoundary } from '../CanvasErrorBoundary';
 import {
     AgentExecutionStepper,

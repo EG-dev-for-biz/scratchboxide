@@ -16,6 +16,7 @@ import type {
     Scene3DData,
     VideoTimelineData
 } from './canvas-types';
+import { sceneTimelineKeyframeCount } from './canvas-types';
 
 export type {
     ContextMentionCategory,
@@ -534,24 +535,22 @@ export function resolveContextMentionQuery(
 
                 for (const obj of sceneData.objects || []) {
                     const isSelected = Boolean(selectedId && obj.id === selectedId);
-                    const label = obj.label || (obj as any).name || obj.id;
-                    if (!q || label.toLowerCase().includes(q) || obj.id.toLowerCase().includes(q) || (obj.type || '').toLowerCase().includes(q)) {
-                        const pos = Array.isArray(obj.position) ? `[${obj.position.map(n => Number(n).toFixed(2)).join(', ')}]` : '[0, 0, 0]';
+                    const kind = obj.content?.type || 'mesh';
+                    if (!q || obj.id.toLowerCase().includes(q) || kind.toLowerCase().includes(q)) {
+                        const s = obj.space?.spatial3d;
+                        const pos = s ? `[${[s.x, s.y, s.z].map(n => Number(n).toFixed(2)).join(', ')}]` : '[0, 0, 0]';
                         results.push({
                             id: `ctx-mesh-obj-${obj.id}`,
                             type: 'mesh',
-                            name: `mesh: ${label}${isSelected ? ' (selected)' : ''}`,
-                            path: obj.durableUri,
-                            description: `3D Object (${obj.type || 'mesh'}) at ${pos}${obj.material?.preset ? ` • ${obj.material.preset}` : ''}`,
+                            name: `mesh: ${obj.id}${isSelected ? ' (selected)' : ''}`,
+                            path: obj.content?.durableUri,
+                            description: `3D Object (${kind}) at ${pos}`,
                             detail: JSON.stringify({
                                 id: obj.id,
-                                label,
                                 selected: isSelected,
-                                position: obj.position,
-                                rotation: obj.rotation,
-                                scale: obj.scale,
-                                bounds: (obj as any).bounds,
-                                durableUri: obj.durableUri,
+                                spatial3d: s,
+                                boundingBox: obj.space?.boundingBox,
+                                durableUri: obj.content?.durableUri,
                                 material: obj.material
                             }),
                             icon: isSelected ? '🎯' : '🧊',
@@ -562,7 +561,7 @@ export function resolveContextMentionQuery(
 
                 for (const mesh of sceneData.customMeshes || []) {
                     const isSelected = Boolean(selectedId && mesh.id === selectedId);
-                    const label = mesh.label || (mesh as any).name || mesh.id;
+                    const label = mesh.name || mesh.id;
                     if (!q || label.toLowerCase().includes(q) || mesh.id.toLowerCase().includes(q)) {
                         const pos = Array.isArray(mesh.position) ? `[${mesh.position.map(n => Number(n).toFixed(2)).join(', ')}]` : '[0, 0, 0]';
                         results.push({
@@ -587,14 +586,15 @@ export function resolveContextMentionQuery(
                 }
 
                 for (const layer of sceneData.stagedBuild?.layers || []) {
-                    const label = layer.label || layer.id;
-                    if (!q || label.toLowerCase().includes(q) || layer.id.toLowerCase().includes(q) || (layer.provenance || '').toLowerCase().includes(q)) {
+                    const label = `${layer.stage}/${layer.layer}`;
+                    const provenance = layer.provenance?.label || 'unlabelled';
+                    if (!q || label.toLowerCase().includes(q) || layer.objectId.toLowerCase().includes(q) || provenance.toLowerCase().includes(q)) {
                         results.push({
-                            id: `ctx-mesh-layer-${layer.id}`,
+                            id: `ctx-mesh-layer-${layer.objectId}`,
                             type: 'mesh',
                             name: `layer: ${label}`,
-                            path: layer.glbUrl,
-                            description: `Staged 3D Layer (${layer.provenance}) • ${layer.vertexCount?.toLocaleString() ?? 0} verts`,
+                            path: layer.url,
+                            description: `Staged 3D Layer (${provenance}) • ${layer.counts?.vertices?.toLocaleString() ?? 0} verts`,
                             detail: JSON.stringify(layer),
                             icon: '🏛️',
                             payload: layer
@@ -614,12 +614,12 @@ export function resolveContextMentionQuery(
                 const cam = sceneData.camera || { position: [5, 4, 8], target: [0, 0, 0], fov: 45 };
                 const pos = Array.isArray(cam.position) ? `[${cam.position.map(n => Number(n).toFixed(2)).join(', ')}]` : '[5, 4, 8]';
                 const tgt = Array.isArray(cam.target) ? `[${cam.target.map(n => Number(n).toFixed(2)).join(', ')}]` : '[0, 0, 0]';
-                if (!q || 'camera'.includes(q) || 'viewport'.includes(q) || (cam.preset || '').toLowerCase().includes(q)) {
+                if (!q || 'camera'.includes(q) || 'viewport'.includes(q)) {
                     results.push({
                         id: `ctx-camera-active-${activeArtifact.id}`,
                         type: 'camera',
                         name: `camera: Active Viewport (${cam.fov ?? 45}° FOV)`,
-                        description: `pos ${pos} → target ${tgt}${cam.preset ? ` • preset: ${cam.preset}` : ''}`,
+                        description: `pos ${pos} → target ${tgt}`,
                         detail: JSON.stringify(cam),
                         icon: '🎥',
                         payload: cam
@@ -656,9 +656,9 @@ export function resolveContextMentionQuery(
                     });
                 }
                 for (const track of tl.tracks || []) {
-                    const trackLabel = track.label || (track as any).name || track.id;
-                    for (const clip of track.clips || []) {
-                        const label = clip.label || (clip as any).name || clip.id;
+                    const trackLabel = track.name || track.id;
+                    for (const clip of track.elements || []) {
+                        const label = clip.name || clip.id;
                         if (!q || label.toLowerCase().includes(q) || trackLabel.toLowerCase().includes(q)) {
                             const start = Number(clip.startTime ?? 0);
                             const end = start + Number(clip.duration ?? 0);
@@ -666,8 +666,8 @@ export function resolveContextMentionQuery(
                                 id: `ctx-timeline-clip-${clip.id}`,
                                 type: 'timeline',
                                 name: `clip: ${label} [${start.toFixed(1)}s–${end.toFixed(1)}s]`,
-                                path: clip.mediaUrl,
-                                description: `Track "${trackLabel}" (${track.type})${clip.mediaUrl ? ` • ${clip.mediaUrl}` : ''}`,
+                                path: clip.url,
+                                description: `Track "${trackLabel}" (${track.type})${clip.url ? ` • ${clip.url}` : ''}`,
                                 detail: JSON.stringify({ trackId: track.id, trackLabel, clip }),
                                 icon: '🎞️',
                                 payload: { trackId: track.id, clip }
@@ -679,13 +679,14 @@ export function resolveContextMentionQuery(
                 const sceneData = activeArtifact.data as Scene3DData;
                 if (sceneData.timeline) {
                     const tl = sceneData.timeline;
-                    const kfCount = tl.keyframes?.length || 0;
+                    const kfCount = sceneTimelineKeyframeCount(tl.tracks);
+                    const trackCount = tl.tracks?.length ?? 0;
                     if (!q || 'timeline'.includes(q) || 'keyframe'.includes(q)) {
                         results.push({
                             id: `ctx-timeline-3d-${activeArtifact.id}`,
                             type: 'timeline',
-                            name: `timeline: 3D Scene @ ${Number(tl.currentTime ?? 0).toFixed(2)}s / ${Number(tl.duration ?? 0).toFixed(2)}s`,
-                            description: `${tl.fps ?? 24} fps • ${kfCount} keyframe${kfCount === 1 ? '' : 's'}`,
+                            name: `timeline: 3D Scene @ ${((tl.currentTimeMs ?? 0) / 1000).toFixed(2)}s / ${((tl.durationMs ?? 0) / 1000).toFixed(2)}s`,
+                            description: `${trackCount} track${trackCount === 1 ? '' : 's'} • ${kfCount} keyframe${kfCount === 1 ? '' : 's'}`,
                             detail: JSON.stringify(tl),
                             icon: '🎬',
                             payload: tl

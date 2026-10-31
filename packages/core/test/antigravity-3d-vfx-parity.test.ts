@@ -416,12 +416,17 @@ describe('Antigravity 3D & VFX Interaction Parity (7 Pillars)', () => {
                     }
                 ],
                 timeline: {
-                    duration: 12,
-                    currentTime: 3.5,
-                    fps: 24,
+                    durationMs: 12000,
+                    currentTimeMs: 3500,
                     isPlaying: false,
-                    keyframes: [{ id: 'kf-1', time: 0 }, { id: 'kf-2', time: 6 }]
-                } as any
+                    tracks: [{
+                        id: 'track-3d', name: 'Spire', type: '3d', locked: false, visible: true,
+                        elements: [{
+                            id: 'el-spire', name: 'Spire rise', type: '3d', startTime: 0, duration: 12, trimStart: 0, trimEnd: 0,
+                            keyframes: { y: [{ id: 'kf-1', time: 0, value: 0 }, { id: 'kf-2', time: 6, value: 24 }] }
+                        }]
+                    }]
+                }
             } as Scene3DData
         };
 
@@ -452,6 +457,7 @@ describe('Antigravity 3D & VFX Interaction Parity (7 Pillars)', () => {
             const timelineItems = resolveContextMentionQuery('timeline', '', [], undefined, [], sceneArtifact);
             expect(timelineItems.length).toBeGreaterThan(0);
             expect(timelineItems[0].name).toContain('3.50s / 12.00s');
+            expect(timelineItems[0].description).toBe('1 track • 2 keyframes');
         });
 
         it('resolves NLE video-timeline clips and playhead frame when a video-timeline artifact is active', () => {
@@ -468,17 +474,21 @@ describe('Antigravity 3D & VFX Interaction Parity (7 Pillars)', () => {
                     currentTime: 2.0,
                     fps: 24,
                     aspectRatio: '16:9',
+                    zoom: 40,
+                    mediaAssets: [],
                     tracks: [
                         {
                             id: 'track-v1',
                             name: 'V1 Plate',
                             type: 'video',
-                            clips: [
-                                { id: 'clip-1', name: 'Matchmove_Blockout.mp4', startTime: 0, duration: 4 }
+                            locked: false,
+                            visible: true,
+                            elements: [
+                                { id: 'clip-1', name: 'Matchmove_Blockout.mp4', type: 'video', startTime: 0, duration: 4, trimStart: 0, trimEnd: 4 }
                             ]
                         }
                     ]
-                } as unknown as VideoTimelineData
+                } satisfies VideoTimelineData
             };
 
             const timelineItems = resolveContextMentionQuery('timeline', '', [], undefined, [], videoArtifact);
@@ -626,12 +636,17 @@ describe('Antigravity 3D & VFX Interaction Parity (7 Pillars)', () => {
                     }
                 ],
                 timeline: {
-                    currentTime: 4.25,
-                    duration: 10,
-                    fps: 30,
+                    currentTimeMs: 4250,
+                    durationMs: 10000,
                     isPlaying: true,
-                    keyframes: [{ id: 'k1', time: 0 }, { id: 'k2', time: 4.25 }]
-                } as any,
+                    tracks: [{
+                        id: 'track-hub', name: 'Rotor Hub', type: '3d', locked: false, visible: true,
+                        elements: [{
+                            id: 'el-hub', name: 'Hub spin', type: '3d', startTime: 0, duration: 10, trimStart: 0, trimEnd: 0,
+                            keyframes: { yaw: [{ id: 'k1', time: 0, value: 0 }, { id: 'k2', time: 4.25, value: 180 }] }
+                        }]
+                    }]
+                },
                 operatorStack: [
                     { id: 'op-1', type: 'bevel', label: 'Chamfer Hub Rim', params: { width: 0.02 } } as any
                 ],
@@ -644,6 +659,7 @@ describe('Antigravity 3D & VFX Interaction Parity (7 Pillars)', () => {
             expect(summary.selectedMeshId).toBe('rotor-hub');
             expect((summary.customMeshes as any[])[0].selected).toBe(true);
             expect((summary.timeline as any).currentTime).toBe(4.25);
+            expect((summary.timeline as any).keyframeCount).toBe(2);
             expect((summary.recentActions as any[]).length).toBe(1);
             expect(Scene3DWorldLens.summarizeSceneStateForAgent(sceneData)).toEqual(summary);
 

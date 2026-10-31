@@ -746,7 +746,7 @@ export class StreamingEngine {
                 const { exec, resultPayload } = await this.executeToolCallWithDeadline({ id: toolCall.id, name: toolName, args: toolCall.args }, request, onEvent, model, signal);
                 mcpExecutions.push(exec);
 
-                if (exec.status !== 'error') {
+                if (exec.status === 'completed') {
                     const geomInput = extractGeometryVerificationInput(resultPayload);
                     if (geomInput) {
                         pendingGeometryVerification = geomInput;

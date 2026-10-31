@@ -17,7 +17,8 @@ import {
 import {
     Media4DObject,
     PrimitiveType,
-    Scene3DData
+    Scene3DData,
+    sceneTimelineKeyframeCount
 } from '../canvas-types';
 import {
     DirectDispatchOperatorEngine,
@@ -346,13 +347,14 @@ export function summarizeSceneStateForAgent(sceneData: Scene3DData): Record<stri
         restyledFrom: o.content?.metadata?.restyledFrom,
         ...(selectedId && o.id === selectedId ? { selected: true } : {})
     }));
-    const timelineSummary = sceneData.timeline
+    const tl = sceneData.timeline;
+    const timelineSummary = tl
         ? {
-            currentTime: sceneData.timeline.currentTime,
-            duration: sceneData.timeline.duration,
-            fps: sceneData.timeline.fps,
-            isPlaying: sceneData.timeline.isPlaying,
-            keyframeCount: Array.isArray(sceneData.timeline.keyframes) ? sceneData.timeline.keyframes.length : 0
+            currentTime: (tl.currentTimeMs ?? 0) / 1000,
+            duration: (tl.durationMs ?? 0) / 1000,
+            isPlaying: tl.isPlaying,
+            trackCount: tl.tracks?.length ?? 0,
+            keyframeCount: sceneTimelineKeyframeCount(tl.tracks)
         }
         : undefined;
     return {
