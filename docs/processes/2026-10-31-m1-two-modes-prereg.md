@@ -705,6 +705,8 @@ Values the procedure above fills in, written as they are fixed. Each is written 
   - **The rest of the build.** The structure stands 75.8 m from the geocoded point. The build is degraded:
     - 2.2% through holes;
     - the survey read 13 of 16 faces, and two images timed out.
+  - **Superseded by amendment 4 (the user kept Penn 2): the fallback was not applied.** Every Penn 2 arm is built with
+    `2 Penn Plaza, New York`, and K's arm is run 1ef02345. The text below was the record before that decision.
   - **So every arm runs at `11 Penn Plaza, New York`** (K, then DM, DS and KD), with its own building as the target. The
     views stay at the corner: poses A and B keep their position and headings, and the automatic views aim at 11 Penn
     Plaza. Under the fallback, pose A shows Penn 2 as a neighbour. K run 1ef02345 is kept aside and not judged.
