@@ -58,6 +58,24 @@ not been tried at Penn 2.
   triangle count share is 0.967.
 - **Unchanged.** No bar, arm, decoy, place, view, pose or stop rule changed.
 
+**Amendment 2, 2026-10-31, before any paid call: the dry run's X1 check counts X1's labels.**
+- **The evidence.** The ESB dry run, redone on amendment 1, passed `matchedShare` at 0.996. It then hit the stop rule
+  "X1's building agreement under 0.9" in one view. X1's building agreement per view was 1.00, 0.998, 1.00, and 0.895 in
+  v3.
+- **The cause.** v3 looks past a neighbour's wall at the building's corner.
+  - There the reference's target includes a narrow angled wall strip, about 6% of the frame width.
+  - The strip is in tile_refine's isolate and in the raw scan. K's polish clips at its footprint plus 0.3 m, so K and X1
+    (K's own GLB) show the street behind it. K's own building agreement in v3 is 0.895 too.
+  - X1's labels are right: 951,696 of its 951,701 standing triangles are the target.
+- **Why it is amended, not waived.** The rule's own text says it checks the outline labelling. As written it measured
+  geometry K removed, which is something else.
+- **The change.** At every benchmark place the dry run's X1 check is now: the share of X1's standing triangles labelled
+  target (`regions.armTriangles.X1`: target over target, neighbours and trees) is at least 0.99. X1's building agreement
+  per view stays in the dry-run record as information.
+- **A finding about K, for the report.** K drops scanned wall that the isolate keeps. Bars 1 and 5 and the building scores
+  will see it. Nothing is done about it in this run.
+- **Unchanged.** No bar, arm, decoy, place, view, pose or other stop rule changed.
+
 The method is `.claude/skills/judge-preregister/SKILL.md`; the judge is described in
 `docs/processes/photo_match_world_regions.md`. Decisions of 2026-10-31:
 - **The user's, recorded in the plan.** These are in
@@ -373,7 +391,8 @@ Both are made locally from the arms' own files, at no cost, and judged blind in 
   - at a benchmark place:
     - `regions.target.matchedShare` under 0.99;
     - X1's building agreement under 0.9 (a check of the outline labelling; 1.00 in every view of the ESB dry run on
-      run 7f594cd6);
+      run 7f594cd6). **Amended 2026-10-31 (amendment 2):** the share of X1's standing triangles labelled target under
+      0.99; the building agreement per view is kept as information;
   - at Penn 2:
     - no `vector-footprint` target at DM;
     - K's hero not inside DM's target mask in the mask grids (K isolated another building than the one DM picks).
