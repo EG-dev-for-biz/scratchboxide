@@ -234,7 +234,7 @@ export interface CloudChunkRunnerOptions {
     bucket: CloudBucket;
     jobs: CloudRunJobs;
     config?: CloudChunkConfig;
-    /** This checkout's commit (default `git rev-parse HEAD` in the workspace). */
+    /** This checkout's commit (default `git rev-parse HEAD` where this code lives: the code that runs is what the image must match, wherever the workspace is). */
     head?: () => string | undefined;
     newRunId?: () => string;
     env?: NodeJS.ProcessEnv;
@@ -250,7 +250,7 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
     const log = o.log ?? ((m: string) => console.log(m));
     let checked: Promise<string> | undefined;
     const imageChecked = () => checked ??= o.jobs.jobImage().then(image => {
-        checkImageSkew(image, (o.head ?? (() => gitHead(o.cache.workspaceRoot)))(), env);
+        checkImageSkew(image, (o.head ?? (() => gitHead(__dirname)))(), env);
         return image;
     });
 
