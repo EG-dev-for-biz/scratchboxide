@@ -16,7 +16,8 @@
  *     cache), or GLB paths plus a geodetic anchor; several builds can be compared at once (arms);
  *  2. held-out views: Google-captured panos near the structure that no arm used (checked against every pano id the runs'
  *     records, notes, scene and GLBs name), one view each aimed at the structure, kept when the structure fills enough of the
- *     frame and the tile mesh does not hide most of it; the images come through the grounding API and are posed against the
+ *     frame and the tile mesh does not hide most of it; at a place with no structure at it (a park, a plaza) the tile's surfaces
+ *     round the place stand in for the structure (openPlaceViews); the images come through the grounding API and are posed against the
  *     full tile mesh by edge registration; a view is used only when its edge residual locks (at most 5 px, lower than the start);
  *  3. every arm is rendered from exactly each pose, in its street (the photo-textured tile with the target cut out, the same
  *     for every arm), and judged blind against the photo with reshuffled orders; pixel metrics are secondary;
@@ -50,7 +51,7 @@ import { runPanoRegistrationOffThread } from '../../../3d-engine/staged-location
 import { StageCache, stagedWorkspaceRoot } from '../../../3d-engine/staged-location/stage-cache';
 import { readGlbScene, renderFrameDepth, sceneToRenderMesh, type PoseCorrection } from '../../../spatial/StreetViewPoseRegistrar';
 import { buildGroundModel, loadScanMesh } from '../../../spatial/StreetViewSurveyPlanner';
-import { pickStructure, PICK_STRUCTURE } from '../../../3d-engine/staged-location/extraction-sizing';
+import { pickStructure, PICK_STRUCTURE, STRUCTURE_SEED_SEARCH_M } from '../../../3d-engine/staged-location/extraction-sizing';
 import { evidenceLookup, type EvidenceLookup } from '../../../3d-engine/staged-location/vector-footprints';
 import type { RenderMesh3D } from '../../../spatial/HeadlessMeshSilhouetteRenderer';
 import type { GeodeticOrigin } from '../../../spatial/StreetViewSurveyPlanner';
@@ -68,6 +69,12 @@ export const PHOTO_MATCH_MAX_RUNS = 6;
 export const HELD_OUT_MIN_VISIBLE = 0.3;
 /** Least share of the frame the structure must fill. */
 export const HELD_OUT_MIN_SCREEN = 0.06;
+/**
+ * A place with no structure at it (a park, a plaza): the views look at the tile's surfaces within these radii of the place,
+ * the structure pick's own search window first (where it found nothing standing), widened a window at a time until enough
+ * views qualify.
+ */
+export const OPEN_PLACE_RADII_M = [1, 2, 3, 4].map(k => k * STRUCTURE_SEED_SEARCH_M);
 
 export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
     name: PHOTO_MATCH_EVALUATE_TOOL,
@@ -559,7 +566,11 @@ function groundAt(V: ArrayLike<number>, I: ArrayLike<number>, x: number, z: numb
     return Number.isFinite(best) ? best : NaN;
 }
 
-interface Structure { cx: number; cz: number; radiusM: number; ymin: number; ymax: number; mesh: RenderMesh3D }
+interface Structure {
+    cx: number; cz: number; radiusM: number; ymin: number; ymax: number; mesh: RenderMesh3D;
+    /** An open place (no structure at it): the views aim at its centre and at its ground there (this height), never at a nearest wall. */
+    openGroundY?: number;
+}
 
 function structureOf(mesh: RenderMesh3D): Structure {
     const V = mesh.vertices;
@@ -572,6 +583,46 @@ function structureOf(mesh: RenderMesh3D): Structure {
     return { cx, cz, radiusM: R, ymin, ymax, mesh };
 }
 
+/**
+ * The surfaces of `mesh` within `r` of (cx, cz) in plan. A triangle that crosses the circle is cut at it (at a 32-sided polygon
+ * round it, heights interpolated), so a large ground triangle counts for its part inside and nothing reaches past the circle.
+ */
+export function surfacesWithin(mesh: RenderMesh3D, cx: number, cz: number, r: number): RenderMesh3D {
+    const SIDES = 32;
+    const V = mesh.vertices, I = mesh.indices;
+    const out: number[] = [];
+    const emit = (poly: number[][]) => { for (let k = 1; k + 1 < poly.length; k++) for (const p of [poly[0], poly[k], poly[k + 1]]) out.push(p[0], p[1], p[2]); };
+    for (let t = 0; t < I.length; t += 3) {
+        const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
+        // wholly outside the circle's square, or wholly inside the circle
+        if (Math.min(V[a], V[b], V[c]) - cx > r || Math.max(V[a], V[b], V[c]) - cx < -r || Math.min(V[a + 2], V[b + 2], V[c + 2]) - cz > r || Math.max(V[a + 2], V[b + 2], V[c + 2]) - cz < -r) continue;
+        const tri = [a, b, c].map(o => [V[o], V[o + 1], V[o + 2]]);
+        if (tri.every(p => Math.hypot(p[0] - cx, p[2] - cz) <= r)) { emit(tri); continue; }
+        let poly = tri;
+        for (let k = 0; k < SIDES && poly.length >= 3; k++) {
+            const nx = Math.cos((2 * Math.PI * k) / SIDES), nz = Math.sin((2 * Math.PI * k) / SIDES);
+            const side = (p: number[]) => (p[0] - cx) * nx + (p[2] - cz) * nz - r;
+            const kept: number[][] = [];
+            for (let i = 0; i < poly.length; i++) {
+                const p = poly[i], q = poly[(i + 1) % poly.length], sp = side(p), sq = side(q);
+                if (sp <= 0) kept.push(p);
+                if ((sp <= 0) !== (sq <= 0)) { const f = sp / (sp - sq); kept.push([p[0] + f * (q[0] - p[0]), p[1] + f * (q[1] - p[1]), p[2] + f * (q[2] - p[2])]); }
+            }
+            poly = kept;
+        }
+        if (poly.length >= 3) emit(poly);
+    }
+    return { vertices: Float32Array.from(out), indices: Uint32Array.from({ length: out.length / 3 }, (_, k) => k) };
+}
+
+/** An open place as the views' target: the surfaces within `radiusM` of the frame origin (the place), aimed at its ground there. */
+function openPlace(disc: RenderMesh3D, terrain: { groundAt(x: number, z: number): number }, radiusM: number): Structure {
+    let ymin = Infinity, ymax = -Infinity;
+    for (let i = 1; i < disc.vertices.length; i += 3) { ymin = Math.min(ymin, disc.vertices[i]); ymax = Math.max(ymax, disc.vertices[i]); }
+    const g = terrain.groundAt(0, 0);
+    return { cx: 0, cz: 0, radiusM, ymin, ymax, mesh: disc, openGroundY: Number.isFinite(g) ? g : ymin };
+}
+
 /** What a candidate's eye stands on: the terrain ground model, the lowest surface within 1.5 m (off the terrain), the structure's base. */
 export type HeldOutEyeGround = 'terrain' | 'lowest-surface' | 'structure-base';
 
@@ -580,12 +631,14 @@ export interface HeldOutCandidateView extends SelectedView { close: boolean; vis
 /**
  * Candidate views from the unused panos: one per pano, aimed at the structure (its nearest wall with a wide view when the pano
  * stands close, else its centre), kept when the structure fills enough of the frame and the tile mesh does not hide most of it.
+ * An open place is aimed at its centre, at its ground there, from near and far alike.
  * The eye stands 2.5 m over the street: the terrain ground model under the pano (`terrain`, the reference tile's), else the
  * lowest surface within 1.5 m (scan below the street, a vault or a cutting, can reach far under it: the terrain does not).
  */
 export function heldOutViews(panos: PanoCandidate[], structure: Structure, context: RenderMesh3D, exclude: Set<string>, terrain?: { groundAt(x: number, z: number): number }): { views: HeldOutCandidateView[]; rejected: string[] } {
-    const { cx, cz, radiusM: R, ymin, ymax } = structure;
-    const V = context.vertices, I = context.indices, IV = structure.mesh.vertices;
+    const { cx, cz, radiusM: R, ymin, ymax, openGroundY } = structure;
+    const open = openGroundY !== undefined;
+    const V = context.vertices, I = context.indices, IV = open ? new Float32Array(0) : structure.mesh.vertices;
     const near = panos.filter(p => !exclude.has(p.panoId)).map(p => ({ ...p, d: Math.hypot(p.x - cx, p.z - cz) })).filter(p => p.d > R * 0.5 + 3 && p.d < R + 110);
     near.sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '') || a.panoId.localeCompare(b.panoId));
     const cands: typeof near = [];
@@ -602,7 +655,7 @@ export function heldOutViews(panos: PanoCandidate[], structure: Structure, conte
         const close = dn < 22;
         const headingDeg = Math.round(bearingDeg(p.x, p.z, close ? nx : cx, close ? nz : cz) * 10) / 10;
         const fovDeg = Math.round(close ? 80 : Math.max(50, Math.min(90, 2 * Math.atan((R * 0.9) / Math.max(1, p.d)) * 180 / Math.PI)));
-        const mid = ymin + 0.4 * (ymax - ymin);
+        const mid = open ? openGroundY : ymin + 0.4 * (ymax - ymin);
         const pitchDeg = Math.round((close ? 12 : Math.max(-5, Math.min(30, Math.atan((mid - eye[1]) / p.d) * 180 / Math.PI))) * 10) / 10;
         const cam = castCamera({ eye, headingDeg, pitchDeg, fovDeg, widthPx: 160, heightPx: 120 });
         const isoD = renderFrameDepth(structure.mesh, cam), ctxD = renderFrameDepth(context, cam);
@@ -617,6 +670,26 @@ export function heldOutViews(panos: PanoCandidate[], structure: Structure, conte
         });
     }
     return { views, rejected };
+}
+
+/**
+ * Candidate views of a place with no structure at it: the tile's surfaces within a radius of the frame origin stand in for
+ * the structure, at the first of OPEN_PLACE_RADII_M where at least `want` views qualify, else at the radius where the most do.
+ * Geometry alone decides: what stands and lies round the place, never what it is called or coded as.
+ */
+export function openPlaceViews(panos: PanoCandidate[], context: RenderMesh3D, terrain: { groundAt(x: number, z: number): number }, exclude: Set<string>, want: number): {
+    views: HeldOutCandidateView[]; rejected: string[]; radiusM: number; triangles: number; tried: Array<{ radiusM: number; candidates: number }>;
+} {
+    const tried: Array<{ radiusM: number; candidates: number }> = [];
+    let best: { views: HeldOutCandidateView[]; rejected: string[]; radiusM: number; triangles: number } | undefined;
+    for (const radiusM of OPEN_PLACE_RADII_M) {
+        const disc = surfacesWithin(context, 0, 0, radiusM);
+        const r = disc.indices.length ? heldOutViews(panos, openPlace(disc, terrain, radiusM), context, exclude, terrain) : { views: [], rejected: [`no surface of the tile within ${radiusM} m of the place`] };
+        tried.push({ radiusM, candidates: r.views.length });
+        if (!best || r.views.length > best.views.length) best = { ...r, radiusM, triangles: disc.indices.length / 3 };
+        if (r.views.length >= want) break;
+    }
+    return { ...best!, tried };
 }
 
 /** Spread: the nearest and the farthest, then the most different by bearing and distance. */
@@ -784,21 +857,35 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     const targetAt = pick ? (x: number, z: number) => { const c = terrain.cellIndex(x, z); return c >= 0 && pick.footprintMask[c] === PICK_STRUCTURE; } : undefined;
 
     // ---------------- held-out views ----------------
-    progress('finding Street View panos near the structure that the build never used', 0.02);
-    // the structure the views look at: the isolate, else the structure picked at the place, else the first build's layers
-    // without its trees (a trees GLB holds every level)
-    const targetMesh = ref.isolate ? sceneToRenderMesh(readGlbScene(ref.isolate))
-        : pick ? standingIn(scan.mesh, terrain, targetAt!)
-            : sceneToRenderMesh(arms.find(a => !a.baseline)!.glbs.filter(f => !isTreesLodJson(glbJson(f))).flatMap(f => readGlbScene(f)));
-    const structure = structureOf(targetMesh);
-    const panos = await deps.discover(ref.origin, { x: structure.cx, z: structure.cz }, builds.cache.dir, signal);
+    // what the views look at: the isolate, else the structure picked at the place; with no structure at the place, the first
+    // build's layers without its trees (a trees GLB holds every level) when that build stands in for the target, else the place
+    // itself (a whole-place build reaches far past it: a district's terrain runs for kilometres, and no view would qualify)
+    const firstBuild = arms.find(a => !a.baseline)!;
+    const fetchCount = Math.min(12, Math.max(4, nViews * 2));
+    const viewRule = ref.isolate ? 'isolate' : pick ? 'picked-structure' : firstBuild.scope === 'target' ? 'first-build' : 'open-place';
+    const structure = viewRule === 'open-place' ? undefined : structureOf(
+        viewRule === 'isolate' ? sceneToRenderMesh(readGlbScene(ref.isolate!))
+            : viewRule === 'picked-structure' ? standingIn(scan.mesh, terrain, targetAt!)
+                : sceneToRenderMesh(firstBuild.glbs.filter(f => !isTreesLodJson(glbJson(f))).flatMap(f => readGlbScene(f))));
+    const near = structure ? 'the structure' : 'the place';
+    progress(`finding Street View panos near ${near} that the build never used`, 0.02);
+    const panos = await deps.discover(ref.origin, structure ? { x: structure.cx, z: structure.cz } : { x: 0, z: 0 }, builds.cache.dir, signal);
     stopIfAborted(signal);
-    const { views: candidates, rejected } = heldOutViews(panos, structure, contextMesh, builds.used, terrain);
+    const open = structure ? undefined : openPlaceViews(panos, contextMesh, terrain, builds.used, fetchCount);
+    const { views: candidates, rejected } = open ?? heldOutViews(panos, structure!, contextMesh, builds.used, terrain);
+    const viewTarget = {
+        rule: viewRule,
+        source: viewRule === 'isolate' ? 'the isolate (the scan the build isolated)'
+            : viewRule === 'picked-structure' ? 'the structure the app\'s structure rule picks at the frame origin, standing on the terrain'
+                : viewRule === 'first-build' ? `the first build's layers (${firstBuild.id}, which stands in for the target): no structure stands within ${STRUCTURE_SEED_SEARCH_M} m of the place`
+                    : `the place itself: no structure stands within ${STRUCTURE_SEED_SEARCH_M} m of it, so every surface of the reference tile within ${open!.radiusM} m of the frame origin (cut at that circle) stands in for one, each view aimed at its centre; the radius is the first of ${OPEN_PLACE_RADII_M.join(', ')} m at which ${fetchCount} views qualify, else the one where the most do`,
+        ...(open ? { radiusM: open.radiusM, triangles: open.triangles, tried: open.tried } : {})
+    };
     const unusedNear = panos.filter(p => !builds.used.has(p.panoId)).length;
     if (!candidates.length) {
-        throw new PhotoMatchError('no_heldout_candidates', `No held-out view: of ${panos.length} Google panos near the structure, ${panos.length - unusedNear} were used by the build and none of the other ${unusedNear} sees enough of it unhidden.`, { panosNear: panos.length, usedByBuild: builds.used.size, rejected: rejected.slice(0, 20) });
+        throw new PhotoMatchError('no_heldout_candidates', `No held-out view: of ${panos.length} Google panos near ${near}, ${panos.length - unusedNear} were used by the build and none of the other ${unusedNear} sees enough of it unhidden.`, { panosNear: panos.length, usedByBuild: builds.used.size, viewTarget, rejected: rejected.slice(0, 20) });
     }
-    const toFetch = spreadViews(candidates, Math.min(12, Math.max(4, nViews * 2)));
+    const toFetch = spreadViews(candidates, fetchCount);
     progress(`fetching ${toFetch.length} held-out Street View images through the grounding API`, 0.08);
     const got = await fetchViews(toFetch, { grounding: deps.grounding() }, signal);
     stopIfAborted(signal);
@@ -1223,6 +1310,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         + (wantClay ? clayLine(loaded, clayScores, clayScored.length, prepared.length) : '')
         + (wantRegionJudge ? regionJudgeLine(loaded, judgeRegionScores, regionJudged.length, scored.length) : '')
         + ` Region metrics (masks from geometry: whole frame, building, ground, neighbours, trees, skyline) per arm in pixelMetrics.regions and views[].regions; the masks are drawn in each grid${pick || isoFlags ? '' : '; no target was found, so the building mask is empty'}.`
+        + (open ? ` No structure stands at the place, so the views look at the place itself: the tile's surfaces within ${open.radiusM} m of it (heldOut.viewTarget).` : '')
         + satelliteLine(loaded, satellite, satPrepared?.view);
     const report = {
         status: 'success',
@@ -1251,6 +1339,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         views: views.map(v => ({ ...v, renders: v.renders })),
         grids: views.map(v => v.grid),
         heldOut: {
+            viewTarget,
             panosNear: panos.length,
             usedByBuild: builds.used.size,
             usedPanoSources: builds.usedSources,

@@ -29,10 +29,10 @@ import { readTileTriangles, decodeImageInMemory } from '../src/node/3d-engine/st
 import { renderTriangles, PHOTO_MATCH_BACKGROUND, PHOTO_MATCH_CLAY, type JudgeClient } from '../src/node/3d-engine/staged-location/photo-match-eval';
 import { castCamera } from '../src/node/3d-engine/staged-location/survey-casting';
 import { orthoReferenceCamera, orthoReferenceRecord, type OrthoReference } from '../src/node/3d-engine/staged-location/ortho-reference';
-import type { PanoCandidate } from '../src/node/3d-engine/staged-location/streetview-evidence';
+import { bearingDeg, type PanoCandidate } from '../src/node/3d-engine/staged-location/streetview-evidence';
 import { buildGroundModel, loadScanMesh } from '../src/node/spatial/StreetViewSurveyPlanner';
 import {
-    collectPanoIds, createPhotoMatchEvaluateHandler, heldOutViews, visibleStagedLayers, PHOTO_MATCH_EVALUATE_TOOL, type HeldOutRegistration, type PhotoMatchDeps
+    collectPanoIds, createPhotoMatchEvaluateHandler, heldOutViews, surfacesWithin, visibleStagedLayers, OPEN_PLACE_RADII_M, PHOTO_MATCH_EVALUATE_TOOL, type HeldOutRegistration, type PhotoMatchDeps
 } from '../src/node/gemini/tools/location-evidence/photo-match-evaluate';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { LOCATION_EVIDENCE_TOOL_DECLARATIONS } from '../src/node/gemini/tools/location-evidence-tools';
@@ -667,6 +667,62 @@ describe('photo_match_evaluate tool', () => {
         expect(r.views.map((v: any) => v.panoId).sort()).toEqual(['OVER_VAULT', 'SOUTH']);
         expect(r.heldOut.eyeGround).toEqual({ terrain: 2 });
     }, 120_000);
+
+    it('looks at a place with no structure at it: the tile round the place, widened until enough views qualify', async () => {
+        // a walled park: a low basin at its centre, a 2.9 m wall 45 m out, streets, then buildings 70 m and more from the place
+        // (nothing 3 m tall within 30 m of it, so the structure rule picks nothing)
+        const anchor = { lat: 40.73, lng: -74.03 };
+        const lawn = ground(260);
+        const wall = (cx: number, cz: number, w: number, d: number) => ({ ...box(cx, cz, w, d, 2.9), png: checkerPng([120, 112, 100], [110, 104, 94]) });
+        const park: Part[] = [
+            { ...lawn, png: checkerPng([80, 120, 70], [70, 110, 62]) }, { ...box(0, 0, 8, 8, 0.8), png: checkerPng([150, 150, 156], [140, 140, 146]) },
+            wall(0, -45, 90, 0.6), wall(0, 45, 90, 0.6), wall(-45, 0, 0.6, 90), wall(45, 0, 0.6, 90),
+            { ...box(0, -80, 70, 20, 30), png: facadePng([168, 92, 70], [40, 52, 70]) }, { ...box(0, 80, 70, 20, 24), png: facadePng([200, 196, 186], [60, 70, 80]) },
+            { ...box(-80, 0, 20, 70, 28), png: facadePng([150, 140, 120], [40, 50, 60]) }, { ...box(80, 0, 20, 70, 26), png: facadePng([190, 180, 160], [40, 50, 60]) }
+        ];
+        const textured = writeTileAt(root, '8'.repeat(64), anchor, park);
+        const districtGlb = path.join(root, 'public', 'models', 'synthetic_park_district_77777777.glb');
+        writeGlb(districtGlb, park);
+        const pano = (panoId: string, x: number, z: number, date: string): PanoCandidate => ({ panoId, lat: 0, lng: 0, date, copyright: '© Google', x, z });
+        const panos = [pano('IN_PARK', 20, 8, '2025-09'), pano('N1', 0, -55, '2025-08'), pano('N2', 30, -55, '2025-07'), pano('S1', -10, 56, '2025-06'), pano('W1', -55, 10, '2025-05'), pano('E1', 55, -20, '2025-04')];
+
+        // the ground is two triangles of 130 m: cut at the circle, it counts for exactly the disc (a centroid test keeps nothing)
+        const disc = surfacesWithin({ vertices: Float32Array.from(lawn.positions), indices: Uint32Array.from(lawn.indices) }, 0, 0, 30);
+        let area = 0, reach = 0;
+        for (let i = 0; i < disc.vertices.length; i += 9) {
+            const [ax, az, bx, bz, cx, cz] = [disc.vertices[i], disc.vertices[i + 2], disc.vertices[i + 3], disc.vertices[i + 5], disc.vertices[i + 6], disc.vertices[i + 8]];
+            area += Math.abs((bx - ax) * (cz - az) - (cx - ax) * (bz - az)) / 2;
+            reach = Math.max(reach, Math.hypot(ax, az), Math.hypot(bx, bz), Math.hypot(cx, cz));
+        }
+        expect(area / (Math.PI * 30 * 30)).toBeCloseTo(1, 2);
+        expect(reach).toBeLessThanOrEqual(30 / Math.cos(Math.PI / 32) + 1e-3);
+
+        const calls = { n: 0 };
+        const out = await createPhotoMatchEvaluateHandler(() => fakeDeps(root, { panos, street: textured, judgeCalls: calls }))({ arms: [{ id: 'D', label: 'DISTRICT', glbs: [districtGlb], scope: 'place' }], anchor, views: 2, runs: 1, clay: false }, ctxFor(root));
+        const r = out.resultPayload as any;
+        expect(out.status, JSON.stringify(r).slice(0, 1200)).toBe('completed');
+        // within the pick's window only the pano inside the park sees the place (the wall hides it from the streets), so the
+        // place widens one window: the wall and the lawn to 60 m are then what the street panos look at
+        const vt = r.heldOut.viewTarget;
+        expect(vt.rule).toBe('open-place');
+        expect(vt.tried[0]).toEqual({ radiusM: OPEN_PLACE_RADII_M[0], candidates: 1 });
+        expect(vt.radiusM).toBe(OPEN_PLACE_RADII_M[1]);
+        expect(vt.tried[1].candidates).toBe(5);
+        expect(vt.source).toMatch(/no structure stands within 30 m/);
+        expect(r.regions.target.source).toBe('none');
+        expect(r.summary).toMatch(/No structure stands at the place, so the views look at the place itself/);
+        expect(r.views).toHaveLength(2);
+        for (const v of r.views) {
+            // aimed at the place's centre, not at the nearest thing to the pano
+            const p = panos.find(q => q.panoId === v.panoId)!;
+            expect(Math.abs(v.headingDeg - bearingDeg(p.x, p.z, 0, 0))).toBeLessThan(0.1);
+            expect(v.regions.pixels.target).toBe(0);
+            expect(v.regions.pixels.ground).toBeGreaterThan(1000);
+            expect(v.regions.arms.D.frame.agreement).toBe(1);
+        }
+        expect(calls.n).toBe(2);
+        r.views.forEach((v: any, k: number) => fs.copyFileSync(v.regions.maskGrid, path.join(SHOTS, `tool_photo_match_open_place_masks_view${k}.png`)));
+    }, 240_000);
 
     it('fails with typed errors and no scores when no view can be held out or registered', async () => {
         const onlyUsed = createPhotoMatchEvaluateHandler(() => fakeDeps(root, { panos: PANOS.filter(p => p.panoId === 'USED_WEST' || p.panoId === 'HIDDEN_EAST') }));
