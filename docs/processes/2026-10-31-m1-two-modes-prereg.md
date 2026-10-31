@@ -127,6 +127,20 @@ footprint** (the user's decision: "Keep Penn 2").
   judged. Every Penn 2 arm is built with `2 Penn Plaza, New York`, and K's arm is run 1ef02345.
 - **Unchanged.** No bar, arm, decoy, view, pose or other place changed.
 
+**Amendment 5, 2026-10-31, before any paid call: pose B is kept without a Primark sign** (the user's decision: "Keep
+pose B").
+- **The sign check.** Both real pose photos come from pano feKTMhN8YAZUGcqdatV7rw (3.4 m from the corner, 2026-04),
+  fetched through the m1-run app.
+  - In pose A (299°), the Chase sign on Penn 2's facade is readable.
+  - In pose B (29°), the Macy's blade sign is readable when enlarged. No Primark sign is in the photo: the billboards up
+    the avenue carry other ads.
+- **The rule as written.** A sign that is unreadable leads to the next pano by date at that spot. None is discoverable
+  with the app's lookup: the metadata returns only the newest pano at a place, and the other panos within 20 m are also
+  2026-04 (two user photospheres are not eligible). So the rule would have reported pose B missing.
+- **The change.** Pose B is kept on pano feKTMhN8YAZUGcqdatV7rw at 29°. Its purpose, the view uptown along 7th Ave to
+  Macy's and the far field, is met.
+- **Unchanged.** No bar, arm, place or other view changed. Pose A is kept as checked.
+
 The method is `.claude/skills/judge-preregister/SKILL.md`; the judge is described in
 `docs/processes/photo_match_world_regions.md`. Decisions of 2026-10-31:
 - **The user's, recorded in the plan.** These are in
