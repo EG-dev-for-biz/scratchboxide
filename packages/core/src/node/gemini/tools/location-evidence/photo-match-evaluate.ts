@@ -435,7 +435,7 @@ class BuildResolver {
         const stripKey = rec.keys?.['trees-measure'];
         const removed = stripKey && /^[0-9a-f]{16,}$/.test(stripKey) ? path.join(this.root, '.scratchbox', 'cache', 'tile_vegetation', stripKey, 'removed_trees.glb') : undefined;
         // the footprints of Google's buildings the vector stage read (in the place's frame: x east, z south, the same origin)
-        const vector = this.stageValue<{ sel?: { buildings?: Array<{ id: string; parts: Array<{ loops: Array<Array<[number, number]>> }> }> } }>('vector', rec.keys?.vector);
+        const vector = this.stageValue<{ sel?: { buildings?: StoredVectorBuilding[] } }>('vector', rec.keys?.vector);
         const footprints = vector?.value.sel?.buildings?.length ? footprintLookup(vector.value.sel.buildings) : undefined;
         return {
             origin: { lat: place.lat, lng: place.lng, heightMeters: tiles.value.originEllipsoidalHeightM },
@@ -505,11 +505,35 @@ class BuildResolver {
     }
 }
 
-/** The point lookup the structure pick reads (feature index + 1, 0 off every footprint) from footprints in the tile frame. */
-function footprintLookup(buildings: Array<{ id: string; parts: Array<{ loops: Array<Array<[number, number]>> }> }>): EvidenceLookup {
+/** A building as the vector stage stores it (vector-first-paint.ts): extruded parts' loops, and modelled volumes (x, height, z). */
+interface StoredVectorBuilding {
+    id: string;
+    parts: Array<{ loops: Array<Array<[number, number]>> }>;
+    volumes?: Array<{ vertices: Array<[number, number, number]>; indices: number[] }>;
+}
+
+/**
+ * The point lookup the structure pick reads (feature index + 1, 0 off every footprint) from footprints in the tile frame. A
+ * building Google models as a 3D volume has no extruded parts; its plan is the union of its triangles seen from above, as
+ * vector-footprints.ts reads it from the tiles.
+ */
+export function footprintLookup(buildings: StoredVectorBuilding[]): EvidenceLookup {
+    const plans = buildings.map(b => {
+        const parts: Array<Array<Array<[number, number]>>> = b.parts.map(p => p.loops);
+        for (const v of b.volumes ?? []) {
+            const q = v.vertices.map(([x, , z]) => [x, z] as [number, number]);
+            for (let i = 0; i + 2 < v.indices.length; i += 3) {
+                const tri = [q[v.indices[i]], q[v.indices[i + 1]], q[v.indices[i + 2]]];
+                if (!tri.every(Boolean)) continue;
+                const area = (tri[1][0] - tri[0][0]) * (tri[2][1] - tri[0][1]) - (tri[2][0] - tri[0][0]) * (tri[1][1] - tri[0][1]);
+                if (Math.abs(area) > 1e-3) parts.push([tri]);
+            }
+        }
+        return { id: b.id, parts };
+    });
     let reach = 0;
-    for (const b of buildings) for (const p of b.parts) for (const l of p.loops) for (const [x, z] of l) reach = Math.max(reach, Math.abs(x), Math.abs(z));
-    return evidenceLookup({ buildings: buildings.map(b => ({ id: b.id, parts: b.parts.map(p => p.loops) })), water: [], roads: [], tiles: 0, zoom: 0 }, Math.min(2000, Math.ceil(reach)));
+    for (const b of plans) for (const p of b.parts) for (const l of p) for (const [x, z] of l) reach = Math.max(reach, Math.abs(x), Math.abs(z));
+    return evidenceLookup({ buildings: plans, water: [], roads: [], tiles: 0, zoom: 0 }, Math.min(2000, Math.ceil(reach)));
 }
 
 function armId(raw: unknown, k: number): string {
