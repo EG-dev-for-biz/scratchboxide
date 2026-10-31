@@ -29,11 +29,15 @@ export interface CodeToken {
     text: string;
 }
 
+/** A GFM table column's alignment, from the colons of its delimiter cell (`:---`, `:---:`, `---:`); null when it has none. */
+export type TableAlign = 'left' | 'center' | 'right' | null;
+
 export type MarkdownBlock =
     | { type: 'code'; language: string; content: string }
     | { type: 'heading'; level: number; content: string }
     | { type: 'list'; listType: 'bullet' | 'ordered'; items: string[] }
     | { type: 'blockquote'; content: string }
+    | { type: 'table'; header: string[]; align: TableAlign[]; rows: string[][] }
     | { type: 'paragraph'; content: string };
 
 const KEYWORDS = new Set([
@@ -344,8 +348,75 @@ export function parseMarkdownBlocks(text: string): MarkdownBlock[] {
     return blocks;
 }
 
+/** True when a line holds a pipe that is not escaped as `\|`. */
+function hasUnescapedPipe(line: string): boolean {
+    return /(?:^|[^\\])\|/.test(line);
+}
+
 /**
- * Parses markdown subsegments (headings, lists, blockquotes, paragraphs) within a text chunk.
+ * Splits a GFM table row into trimmed cells: the outer pipes are optional and dropped, and `\|` stays a literal pipe
+ * inside its cell (inline code included, as GFM specifies).
+ */
+export function splitTableRow(line: string): string[] {
+    let row = line.trim();
+    if (row.startsWith('|')) row = row.slice(1);
+    if (row.endsWith('|') && !row.endsWith('\\|')) row = row.slice(0, -1);
+    const cells: string[] = [];
+    let cell = '';
+    for (let c = 0; c < row.length; c++) {
+        if (row[c] === '\\' && row[c + 1] === '|') {
+            cell += '|';
+            c++;
+        } else if (row[c] === '|') {
+            cells.push(cell.trim());
+            cell = '';
+        } else {
+            cell += row[c];
+        }
+    }
+    cells.push(cell.trim());
+    return cells;
+}
+
+/** The column alignments of a GFM delimiter row (`| :--- | :---: | ---: |`), or null when the line is not one. */
+function parseTableDelimiterRow(line: string): TableAlign[] | null {
+    if (!hasUnescapedPipe(line)) return null;
+    const cells = splitTableRow(line);
+    if (!cells.every(cell => /^:?-+:?$/.test(cell))) return null;
+    return cells.map(cell => {
+        const left = cell.startsWith(':');
+        const right = cell.endsWith(':');
+        return left && right ? 'center' : right ? 'right' : left ? 'left' : null;
+    });
+}
+
+/**
+ * Reads a GFM pipe table starting at `start`: a header row, then a delimiter row with the same number of cells, then
+ * body rows until a blank line, a line with no pipe, or another block (heading, quote). Body rows are padded or cut to
+ * the header's width. Returns null when the lines there are not a table, so text that merely contains pipes stays text.
+ * While a reply streams, a half-written last row is already a row: it fills in place instead of flashing as text.
+ */
+function parseTableAt(lines: string[], start: number): { block: MarkdownBlock; end: number } | null {
+    const headerLine = lines[start];
+    if (!hasUnescapedPipe(headerLine) || start + 1 >= lines.length) return null;
+    const align = parseTableDelimiterRow(lines[start + 1]);
+    const header = splitTableRow(headerLine);
+    if (!align || align.length !== header.length) return null;
+
+    const rows: string[][] = [];
+    let end = start + 2;
+    for (; end < lines.length; end++) {
+        const line = lines[end];
+        if (!line.trim() || !hasUnescapedPipe(line) || /^\s{0,3}(?:#{1,6}\s|>)/.test(line)) break;
+        const cells = splitTableRow(line).slice(0, header.length);
+        while (cells.length < header.length) cells.push('');
+        rows.push(cells);
+    }
+    return { block: { type: 'table', header, align, rows }, end };
+}
+
+/**
+ * Parses markdown subsegments (headings, lists, blockquotes, tables, paragraphs) within a text chunk.
  */
 function parseTextSegment(rawSegment: string, blocks: MarkdownBlock[]) {
     const rawLines = rawSegment.split('\n');
@@ -423,6 +494,16 @@ function parseTextSegment(rawSegment: string, blocks: MarkdownBlock[]) {
             continue;
         } else {
             flushQuote();
+        }
+
+        // GFM pipe table (it may follow a paragraph line directly, as on GitHub)
+        const table = parseTableAt(rawLines, i);
+        if (table) {
+            flushParagraph();
+            flushList();
+            blocks.push(table.block);
+            i = table.end - 1;
+            continue;
         }
 
         // Bullet List (- or * or • or +)
@@ -1267,6 +1348,57 @@ export const ChatMarkdownRenderer: React.FC<ChatMarkdownRendererProps> = ({
                                 <ul key={bIdx} className="sb-chat-bullet-list">
                                     {items.map((item, iIdx) => renderListItem(item, iIdx))}
                                 </ul>
+                            );
+                        }
+
+                        case 'table': {
+                            const header = Array.isArray(block.header) ? block.header : [];
+                            const rows = Array.isArray(block.rows) ? block.rows : [];
+                            const cellStyle = (cIdx: number): React.CSSProperties | undefined => {
+                                const align = block.align?.[cIdx];
+                                return align ? { textAlign: align } : undefined;
+                            };
+                            // while streaming, the cursor sits after the last cell written so far, not in the padding
+                            const lastRow = rows[rows.length - 1];
+                            const cursorCol = lastRow ? lastRow.reduce((at, cell, cIdx) => (cell ? cIdx : at), 0) : header.length - 1;
+                            const renderCell = (content: string, isLastCell: boolean) => (
+                                <>
+                                    <InlineMarkdown
+                                        text={content || ''}
+                                        onOpenInBrowser={onOpenInBrowser}
+                                        onOpenWikilink={onOpenWikilink}
+                                        onPromptAction={onPromptAction}
+                                    />
+                                    {isStreaming && isLast && isLastCell && <StreamingCursor />}
+                                </>
+                            );
+                            return (
+                                <div key={bIdx} className="sb-chat-table-scroll">
+                                    <table className="sb-chat-table">
+                                        <thead>
+                                            <tr>
+                                                {header.map((cell, cIdx) => (
+                                                    <th key={cIdx} style={cellStyle(cIdx)}>
+                                                        {renderCell(cell, !lastRow && cIdx === cursorCol)}
+                                                    </th>
+                                                ))}
+                                            </tr>
+                                        </thead>
+                                        {rows.length > 0 && (
+                                            <tbody>
+                                                {rows.map((row, rIdx) => (
+                                                    <tr key={rIdx}>
+                                                        {row.map((cell, cIdx) => (
+                                                            <td key={cIdx} style={cellStyle(cIdx)}>
+                                                                {renderCell(cell, rIdx === rows.length - 1 && cIdx === cursorCol)}
+                                                            </td>
+                                                        ))}
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        )}
+                                    </table>
+                                </div>
                             );
                         }
 

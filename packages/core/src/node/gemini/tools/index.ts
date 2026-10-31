@@ -56,6 +56,11 @@ export * from './wall-plane-segment-tools';
 
 
 import type { ToolDeclaration, ToolHandler } from './types';
+
+/** A pack that exports its handlers as [declaration, handler] pairs, as the handler map registerTools and the MCP take. */
+export function handlersByName(pairs: ReadonlyArray<readonly [ToolDeclaration, ToolHandler]>): Record<string, ToolHandler> {
+    return Object.fromEntries(pairs.map(([decl, handler]) => [decl.name, handler]));
+}
 import { LOCAL_SF3D_TOOL_DECLARATIONS, localSf3DHandlers } from './local-sf3d-tools';
 import { TILE_REFINE_TOOL_DECLARATIONS, tileRefineHandlers } from './tile-refine-tools';
 import { SCENE_HEALING_TOOL_DECLARATIONS, sceneHealingHandlers } from './scene-healing-tools';

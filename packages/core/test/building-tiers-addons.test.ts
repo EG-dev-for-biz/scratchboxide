@@ -50,7 +50,8 @@ except ValueError as e:
         expect(out).toContain('top wall x -4.5 7.5');          // 12 m wide, centred on x = 1.5
         expect(out).toContain('south start (-4.5, 11.0, 2.0)'); // 8 m deep, centred on z = -2
         expect(out).toContain('soot y True');
-        expect(out).toContain("parts 10 keys ['Low/east', 'Low/north'] plain south is low True");
+        // six slots per tier (wall, glass, frame, roof, foundation, trim), two tiers
+        expect(out).toContain("parts 12 keys ['Low/east', 'Low/north'] plain south is low True");
         expect(out).toContain('RAISED True');
         expect(out).not.toContain('NO ERROR');
     }, 600000);

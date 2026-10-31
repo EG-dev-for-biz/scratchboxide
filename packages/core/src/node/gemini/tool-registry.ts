@@ -125,7 +125,34 @@ import {
     WEATHERING_TOOL_DECLARATIONS,
     WEATHERING_TOOL_HANDLERS,
     HYDRAULIC_EROSION_TOOL_DECLARATIONS,
-    HYDRAULIC_EROSION_TOOL_HANDLERS
+    HYDRAULIC_EROSION_TOOL_HANDLERS,
+    BVH_QUERY_TOOL_DECLARATIONS,
+    bvhQueryHandlers,
+    SPECULAR_MATERIALS_TOOL_DECLARATIONS,
+    specularMaterialHandlers,
+    CHRONO_SHADOW_TOOL_DECLARATIONS,
+    chronoShadowHandlers,
+    VANISHING_POINT_TOOL_DECLARATIONS,
+    vanishingPointHandlers,
+    TILE_ELEVATION_TOOL_DECLARATIONS,
+    tileElevationHandlers,
+    CSG_APERTURE_TOOL_DECLARATIONS,
+    csgApertureHandlers,
+    GLASS_FRACTURE_TOOL_DECLARATIONS,
+    glassFractureHandlers,
+    TRAJECTORY_COLLISION_TOOL_DECLARATIONS,
+    trajectoryCollisionHandlers,
+    BAY_RHYTHM_TOOL_DECLARATIONS,
+    bayRhythmHandlers,
+    RIGIDBODY_DROP_TOOL_DECLARATIONS,
+    rigidbodyDropHandlers,
+    XPBD_CLOTH_TOOL_DECLARATIONS,
+    xpbdClothHandlers,
+    SH9_LIGHTING_TOOL_DECLARATIONS,
+    sh9LightingHandlers,
+    WALL_PLANE_SEGMENT_TOOL_DECLARATIONS,
+    wallPlaneSegmentHandlers,
+    handlersByName
 } from './tools';
 
 interface ToolRegistration {
@@ -699,6 +726,20 @@ export function createDefaultToolRegistry(): ToolRegistry {
     registerTools(registry, BROWSER_TOOL_DECLARATIONS, browserHandlers, 'browser');
     registerTools(registry, WEATHERING_TOOL_DECLARATIONS, WEATHERING_TOOL_HANDLERS, 'workspace');
     registerTools(registry, HYDRAULIC_EROSION_TOOL_DECLARATIONS, HYDRAULIC_EROSION_TOOL_HANDLERS, 'workspace');
+    // Packs whose handlers are [declaration, handler] pairs; declared in DEFAULT_TOOL_DECLARATIONS and named by the domain packs.
+    registerTools(registry, BVH_QUERY_TOOL_DECLARATIONS, handlersByName(bvhQueryHandlers), 'workspace');
+    registerTools(registry, SPECULAR_MATERIALS_TOOL_DECLARATIONS, handlersByName(specularMaterialHandlers), 'workspace');
+    registerTools(registry, CHRONO_SHADOW_TOOL_DECLARATIONS, handlersByName(chronoShadowHandlers), 'workspace');
+    registerTools(registry, VANISHING_POINT_TOOL_DECLARATIONS, handlersByName(vanishingPointHandlers), 'workspace');
+    registerTools(registry, TILE_ELEVATION_TOOL_DECLARATIONS, handlersByName(tileElevationHandlers), 'workspace');
+    registerTools(registry, CSG_APERTURE_TOOL_DECLARATIONS, handlersByName(csgApertureHandlers), 'workspace');
+    registerTools(registry, GLASS_FRACTURE_TOOL_DECLARATIONS, handlersByName(glassFractureHandlers), 'workspace');
+    registerTools(registry, TRAJECTORY_COLLISION_TOOL_DECLARATIONS, handlersByName(trajectoryCollisionHandlers), 'workspace');
+    registerTools(registry, BAY_RHYTHM_TOOL_DECLARATIONS, handlersByName(bayRhythmHandlers), 'workspace');
+    registerTools(registry, RIGIDBODY_DROP_TOOL_DECLARATIONS, handlersByName(rigidbodyDropHandlers), 'workspace');
+    registerTools(registry, XPBD_CLOTH_TOOL_DECLARATIONS, handlersByName(xpbdClothHandlers), 'workspace');
+    registerTools(registry, SH9_LIGHTING_TOOL_DECLARATIONS, handlersByName(sh9LightingHandlers), 'workspace');
+    registerTools(registry, WALL_PLANE_SEGMENT_TOOL_DECLARATIONS, handlersByName(wallPlaneSegmentHandlers), 'workspace');
     // Not offered as itself: buildToolDeclarations builds its declaration (the catalog) per request.
     registry.register(LOAD_TOOLS_NAME, loadToolsDeclaration([]), createLoadToolsHandler(name => registry.has(name) && name !== LOAD_TOOLS_NAME), 'workspace', { offeredByDefault: false });
     return registry;

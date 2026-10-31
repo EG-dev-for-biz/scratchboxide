@@ -63,8 +63,16 @@ describe('no scene stands in for one nothing built', () => {
         expect(error.message).toContain('google_3d_tiles_get_clay');
     });
 
-    it('still builds the demo session\'s glass scene, which the studio synthesizes when it loads', () => {
-        expect(synthesizeContextual3DScene('build me a scene of a bully going through a plate of glass').sceneType).toBe('glass_shatter');
+    it('still builds a scene a template fits, and fails a glass-shatter prompt that no template routes any more', () => {
+        const car = synthesizeContextual3DScene('a red sports car');
+        expect(car.customMeshes?.length).toBeGreaterThan(0);
+        expect(car.cppGenerator?.sourceCode).toContain('scratchbox_engine.hpp');
+
+        // The ballistics/glass keyword routing is gone (ADA rule 2) and no studio demo synthesizes this scene on load;
+        // the native fracture is the vfx_fracture_glass_pane tool.
+        const error = thrown(() => synthesizeContextual3DScene('build me a scene of a bully going through a plate of glass'));
+        expect(error).toBeInstanceOf(NoSceneBuiltError);
+        expect(error.message).toContain('No 3D scene was built for "build me a scene of a bully going through a plate of glass"');
     });
 
     it('does not morph a document no template fits into a 3D scene', () => {

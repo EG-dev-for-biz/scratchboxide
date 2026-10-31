@@ -49,6 +49,11 @@ export function setTreeLodTexturedMaterial(mesh: THREE.Mesh, material: THREE.Mat
     mesh.material = material;
 }
 
+/** The material a mesh draws with outside clay mode: the one it wears, or the one clay mode set aside to restore. */
+export function authoredMaterialOf(mesh: THREE.Mesh): THREE.Material | THREE.Material[] {
+    return (mesh.userData[ORIGINAL_KEY] as THREE.Material | THREE.Material[] | undefined) ?? mesh.material;
+}
+
 function resetClay(mat: THREE.MeshStandardMaterial): void {
     mat.color.setHex(CLAY_SURFACE.color);
     mat.roughness = CLAY_SURFACE.roughness;

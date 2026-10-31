@@ -14,11 +14,11 @@
  */
 
 export const TOOL_TASK_GROUPS: ReadonlyArray<{ title: string; packs: readonly string[] }> = [
-    { title: 'Locations & tiles', packs: ['Google 3D Tiles', 'Tile Refine', 'Utdra', 'Location Evidence', 'Location Reference', 'SB Roadie', 'Webxr Geospatial', 'Geobox Precision'] },
-    { title: 'Build geometry', packs: ['Universal 3D Structure', 'Python 3D', 'Object Reference', 'Local SF3D', 'Turnaround', 'Botanical Tree', 'Mesh Shaping', 'Virtual Geometry', 'SB Script Guide', 'Bvh Query'] },
-    { title: 'Materials & textures', packs: ['Surface Materials', 'Pbr Material', 'Image to Pbr', 'Algorithmic UV', 'Nano Banana'] },
-    { title: 'Light, sky & camera', packs: ['Lighting', 'Atmosphere', 'Physical Camera', 'Optics Lens Distortion'] },
-    { title: 'Characters & motion', packs: ['SB Rig', 'Avatar 4DGS', 'Humanoid Avatar', 'Analytical Groom', 'Pose Depth', 'Tapir 4DGS'] },
+    { title: 'Locations & tiles', packs: ['Google 3D Tiles', 'Tile Refine', 'Utdra', 'Location Evidence', 'Location Reference', 'SB Roadie', 'Webxr Geospatial', 'Geobox Precision', 'Tile Elevation', 'Bay Rhythm', 'Wall Plane Segment'] },
+    { title: 'Build geometry', packs: ['Universal 3D Structure', 'Python 3D', 'Object Reference', 'Local SF3D', 'Turnaround', 'Botanical Tree', 'Mesh Shaping', 'Virtual Geometry', 'SB Script Guide', 'Bvh Query', 'Massing', 'Scene Healing', 'Csg Aperture', 'Glass Fracture', 'Hydraulic Erosion'] },
+    { title: 'Materials & textures', packs: ['Surface Materials', 'Pbr Material', 'Image to Pbr', 'Algorithmic UV', 'Nano Banana', 'Texture Library', 'Weathering', 'Specular Materials'] },
+    { title: 'Light, sky & camera', packs: ['Lighting', 'Atmosphere', 'Physical Camera', 'Optics Lens Distortion', 'SH9 Lighting', 'Chrono Shadow', 'Vanishing Point', 'Trajectory Collision'] },
+    { title: 'Characters & motion', packs: ['SB Rig', 'Avatar 4DGS', 'Humanoid Avatar', 'Analytical Groom', 'Pose Depth', 'Tapir 4DGS', 'Rigidbody Drop', 'Xpbd Cloth'] },
     { title: 'Splats & panoramas', packs: ['Panorama'] },
     { title: 'Image & video', packs: ['Image Generation', 'Vfx Video', 'Adaptive Matchmove', 'AI Beautify'] },
     { title: 'Workspace & code', packs: ['Workspace', 'Lens', 'Browser', 'Canvas'] }
