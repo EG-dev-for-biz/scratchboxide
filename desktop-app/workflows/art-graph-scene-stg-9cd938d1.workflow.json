@@ -1,0 +1,663 @@
+{
+  "title": "Shibuya Scramble Crossing, 21 Udagawacho, Shibuya, Tokyo 150-0042, Japan — build stages",
+  "subtitle": "Run 9cd938d1 (running): 23 stages, 4 committed, 1 skipped, 16 pending, 1 degraded, 1 running. Stages are read-only; the build node re-runs the whole build.",
+  "nodes": [
+    {
+      "id": "staged-build",
+      "label": "Build: Shibuya Scramble Crossing, 21 Udagawacho, Shibuya, Tokyo 150-0042, Japan",
+      "subtitle": "google_3d_tiles_get_clay",
+      "category": "tool",
+      "color": "cyan",
+      "x": 60,
+      "y": 120,
+      "status": "running",
+      "notes": "Run 9cd938d1, running. Re-running builds the place again into this scene with the same query; the run's other options are not in the scene record.",
+      "parameters": {
+        "toolName": "google_3d_tiles_get_clay",
+        "toolArgs": {
+          "query": "Shibuya Crossing, Tokyo",
+          "stageIntoActiveScene": true
+        },
+        "targetArtifactId": "scene-stg-9cd938d1"
+      },
+      "outputData": {
+        "resultPayload": {
+          "runId": "9cd938d1",
+          "runState": "running",
+          "resolvedAddress": "Shibuya Scramble Crossing, 21 Udagawacho, Shibuya, Tokyo 150-0042, Japan",
+          "lat": 35.659482,
+          "lng": 139.70056
+        },
+        "recorded": true
+      }
+    },
+    {
+      "id": "stage-resolve",
+      "label": "Place",
+      "subtitle": "Shibuya Scramble Crossing, 21 Udagawacho, Shibuya, Tokyo 150-0042, Japan",
+      "category": "stage",
+      "color": "emerald",
+      "x": 360,
+      "y": 60,
+      "status": "completed",
+      "executionDurationMs": 312,
+      "details": "Status: committed\nTime: 0.3 s",
+      "parameters": {
+        "stage": "resolve",
+        "status": "committed",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-survey",
+      "label": "Surveying the four faces",
+      "subtitle": "survey",
+      "category": "stage",
+      "color": "blue",
+      "x": 360,
+      "y": 260,
+      "status": "pending",
+      "executionDurationMs": 87348,
+      "details": "Status: skipped\nTime: 87.3 s\nReason: not an isolated structure",
+      "notes": "not an isolated structure",
+      "parameters": {
+        "stage": "survey",
+        "status": "skipped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-evidence",
+      "label": "Street View close-ups",
+      "subtitle": "evidence",
+      "category": "stage",
+      "color": "blue",
+      "x": 360,
+      "y": 460,
+      "status": "pending",
+      "details": "Status: pending",
+      "parameters": {
+        "stage": "evidence",
+        "status": "pending",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-project",
+      "label": "Slots in the photos",
+      "subtitle": "project",
+      "category": "stage",
+      "color": "blue",
+      "x": 360,
+      "y": 860,
+      "status": "pending",
+      "details": "Status: pending",
+      "parameters": {
+        "stage": "project",
+        "status": "pending",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-vision",
+      "label": "Reading the photos",
+      "subtitle": "vision",
+      "category": "stage",
+      "color": "blue",
+      "x": 360,
+      "y": 1060,
+      "status": "pending",
+      "details": "Status: pending",
+      "parameters": {
+        "stage": "vision",
+        "status": "pending",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-ownership",
+      "label": "Ownership vote",
+      "subtitle": "ownership",
+      "category": "stage",
+      "color": "blue",
+      "x": 360,
+      "y": 1260,
+      "status": "pending",
+      "details": "Status: pending",
+      "parameters": {
+        "stage": "ownership",
+        "status": "pending",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-textures",
+      "label": "Real textures",
+      "subtitle": "textures",
+      "category": "stage",
+      "color": "blue",
+      "x": 360,
+      "y": 1460,
+      "status": "pending",
+      "details": "Status: pending",
+      "parameters": {
+        "stage": "textures",
+        "status": "pending",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-textures-late",
+      "label": "Real textures of later layers",
+      "subtitle": "textures-late",
+      "category": "stage",
+      "color": "blue",
+      "x": 360,
+      "y": 1660,
+      "status": "pending",
+      "details": "Status: pending",
+      "parameters": {
+        "stage": "textures-late",
+        "status": "pending",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-roads",
+      "label": "Road surfaces",
+      "subtitle": "roads",
+      "category": "stage",
+      "color": "blue",
+      "x": 1230,
+      "y": 60,
+      "status": "pending",
+      "details": "Status: pending",
+      "parameters": {
+        "stage": "roads",
+        "status": "pending",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-remesh",
+      "label": "Remeshed scan",
+      "subtitle": "remesh",
+      "category": "stage",
+      "color": "blue",
+      "x": 1230,
+      "y": 260,
+      "status": "pending",
+      "details": "Status: pending",
+      "parameters": {
+        "stage": "remesh",
+        "status": "pending",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-massing",
+      "label": "Rebuilt buildings",
+      "subtitle": "massing",
+      "category": "stage",
+      "color": "blue",
+      "x": 1230,
+      "y": 460,
+      "status": "pending",
+      "details": "Status: pending",
+      "parameters": {
+        "stage": "massing",
+        "status": "pending",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-grammar",
+      "label": "Facade grammar",
+      "subtitle": "grammar",
+      "category": "stage",
+      "color": "blue",
+      "x": 1230,
+      "y": 660,
+      "status": "pending",
+      "details": "Status: pending",
+      "parameters": {
+        "stage": "grammar",
+        "status": "pending",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-relief",
+      "label": "Measured relief",
+      "subtitle": "relief",
+      "category": "stage",
+      "color": "blue",
+      "x": 1230,
+      "y": 860,
+      "status": "pending",
+      "details": "Status: pending",
+      "parameters": {
+        "stage": "relief",
+        "status": "pending",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-fit",
+      "label": "Scan-fitted rebuild",
+      "subtitle": "fit",
+      "category": "stage",
+      "color": "blue",
+      "x": 1520,
+      "y": 60,
+      "status": "pending",
+      "details": "Status: pending",
+      "parameters": {
+        "stage": "fit",
+        "status": "pending",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-correct",
+      "label": "Photo corrections",
+      "subtitle": "correct",
+      "category": "stage",
+      "color": "blue",
+      "x": 1520,
+      "y": 260,
+      "status": "pending",
+      "details": "Status: pending",
+      "parameters": {
+        "stage": "correct",
+        "status": "pending",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-detail",
+      "label": "Photo-inferred detail",
+      "subtitle": "detail",
+      "category": "stage",
+      "color": "blue",
+      "x": 1810,
+      "y": 60,
+      "status": "pending",
+      "details": "Status: pending",
+      "parameters": {
+        "stage": "detail",
+        "status": "pending",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-figures",
+      "label": "Figures",
+      "subtitle": "figures",
+      "category": "stage",
+      "color": "blue",
+      "x": 1810,
+      "y": 260,
+      "status": "pending",
+      "details": "Status: pending",
+      "parameters": {
+        "stage": "figures",
+        "status": "pending",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-trees",
+      "label": "Trees",
+      "subtitle": "trees",
+      "category": "stage",
+      "color": "blue",
+      "x": 2100,
+      "y": 60,
+      "status": "pending",
+      "details": "Status: pending",
+      "parameters": {
+        "stage": "trees",
+        "status": "pending",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-vector",
+      "label": "Google vector massing",
+      "subtitle": "362 buildings from Google vector data, shown in 1.0 s; 1 kept past the tiles; 205 footprint parts with no height in the vector data shown at a plausible 12 m (generated); 75 buildings with no measured height at all, shown at 12 m (generated); 3 buildings with no footprint shape and no Google volume left out",
+      "category": "stage",
+      "color": "emerald",
+      "x": 650,
+      "y": 260,
+      "status": "completed",
+      "executionDurationMs": 37632,
+      "details": "Status: committed\nTime: 37.6 s\nLayers: 2",
+      "parameters": {
+        "stage": "vector",
+        "status": "committed",
+        "layers": 2,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-tiles",
+      "label": "Google 3D Tiles",
+      "subtitle": "524 leaf tiles within 131 m (grown from 250 m to 350 m so a building the base radius reached is not cut by it)",
+      "category": "stage",
+      "color": "amber",
+      "x": 940,
+      "y": 260,
+      "status": "completed",
+      "executionDurationMs": 23241,
+      "details": "Status: degraded\nTime: 23.2 s\nLayers: 1\nDegraded parts: 1",
+      "parameters": {
+        "stage": "tiles",
+        "status": "degraded",
+        "layers": 1,
+        "degradations": 1,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-vehicles",
+      "label": "Removing vehicles",
+      "subtitle": "vehicles: 180 components of scan standing proud of the street shown to the vision model in 30 top-down crops (0 calls failed); it read 74 vehicles (15 of them too flat in the scan to stand proud, patched by their box), 42 regions removed and patched (1759.14 m²)",
+      "category": "stage",
+      "color": "emerald",
+      "x": 940,
+      "y": 60,
+      "status": "completed",
+      "executionDurationMs": 63627,
+      "details": "Status: committed\nTime: 63.6 s\nLayers: 1",
+      "parameters": {
+        "stage": "vehicles",
+        "status": "committed",
+        "layers": 1,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-terrain",
+      "label": "Surrounding terrain",
+      "subtitle": "Google Elevation API: 6,561 heights out to 4 km",
+      "category": "stage",
+      "color": "emerald",
+      "x": 650,
+      "y": 60,
+      "status": "completed",
+      "executionDurationMs": 3676,
+      "details": "Status: committed\nTime: 3.7 s\nLayers: 1",
+      "parameters": {
+        "stage": "terrain",
+        "status": "committed",
+        "layers": 1,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-trees-measure",
+      "label": "Measuring the trees",
+      "subtitle": "trees-measure",
+      "category": "stage",
+      "color": "indigo",
+      "x": 360,
+      "y": 660,
+      "status": "running",
+      "details": "Status: running",
+      "parameters": {
+        "stage": "trees-measure",
+        "status": "running",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "scene-output",
+      "label": "Output: viewport",
+      "subtitle": "3 layers in the scene",
+      "category": "output",
+      "color": "emerald",
+      "x": 2390,
+      "y": 120,
+      "status": "running",
+      "details": "vector: l0o\nvehicles: l1\nterrain: l0",
+      "parameters": {
+        "output": true,
+        "finalObjectIds": [
+          "stg-70cb6a49-l0o",
+          "stg-3cb88961-l1",
+          "stg-cb39329a-l0"
+        ],
+        "readOnly": true
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-vector>tiles",
+      "source": "stage-vector",
+      "target": "stage-tiles",
+      "label": "replaces layer",
+      "style": "solid"
+    },
+    {
+      "id": "e-tiles>vector",
+      "source": "stage-tiles",
+      "target": "stage-vector",
+      "label": "builds on",
+      "style": "solid"
+    },
+    {
+      "id": "e-tiles>vehicles",
+      "source": "stage-tiles",
+      "target": "stage-vehicles",
+      "label": "replaces layer",
+      "style": "solid"
+    },
+    {
+      "id": "e-build-stage-resolve",
+      "source": "staged-build",
+      "target": "stage-resolve",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-survey",
+      "source": "staged-build",
+      "target": "stage-survey",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-evidence",
+      "source": "staged-build",
+      "target": "stage-evidence",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-project",
+      "source": "staged-build",
+      "target": "stage-project",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-vision",
+      "source": "staged-build",
+      "target": "stage-vision",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-ownership",
+      "source": "staged-build",
+      "target": "stage-ownership",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-textures",
+      "source": "staged-build",
+      "target": "stage-textures",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-textures-late",
+      "source": "staged-build",
+      "target": "stage-textures-late",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-roads",
+      "source": "staged-build",
+      "target": "stage-roads",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-remesh",
+      "source": "staged-build",
+      "target": "stage-remesh",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-massing",
+      "source": "staged-build",
+      "target": "stage-massing",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-grammar",
+      "source": "staged-build",
+      "target": "stage-grammar",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-relief",
+      "source": "staged-build",
+      "target": "stage-relief",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-fit",
+      "source": "staged-build",
+      "target": "stage-fit",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-correct",
+      "source": "staged-build",
+      "target": "stage-correct",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-detail",
+      "source": "staged-build",
+      "target": "stage-detail",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-figures",
+      "source": "staged-build",
+      "target": "stage-figures",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-trees",
+      "source": "staged-build",
+      "target": "stage-trees",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-terrain",
+      "source": "staged-build",
+      "target": "stage-terrain",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-trees-measure",
+      "source": "staged-build",
+      "target": "stage-trees-measure",
+      "style": "dashed"
+    },
+    {
+      "id": "e-out-vector",
+      "source": "stage-vector",
+      "target": "scene-output",
+      "label": "final layer",
+      "style": "solid"
+    },
+    {
+      "id": "e-out-vehicles",
+      "source": "stage-vehicles",
+      "target": "scene-output",
+      "label": "final layer",
+      "style": "solid"
+    },
+    {
+      "id": "e-out-terrain",
+      "source": "stage-terrain",
+      "target": "scene-output",
+      "label": "final layer",
+      "style": "solid"
+    }
+  ]
+}
