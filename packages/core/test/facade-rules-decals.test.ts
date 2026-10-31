@@ -50,7 +50,7 @@ for label, kw in (("rules", dict(facade_rules=[{"floors": (1, 3), "opening": Fal
 parts = sb.create_building_parts(width=20, depth=12, floors=3, bay_width=4.0, window_width=1.0,
     facade_rules=[{"floors": (0, 2), "window_width_m": 3.3}], details={"pilaster_width_m": 2.0, "pilaster_projection_m": 0.2})
 glass = sorted(set(round(p[0], 3) for p in part(parts, 'glass') if abs(p[2] - 5.75) < 0.05 and 5.0 < p[1] < 8.0))
-shafts = sorted(set(round(p[0], 3) for p in part(parts, 'foundation') if 6.1 < p[2] < 6.25 and abs(p[1] - 0.8) < 1e-3))
+shafts = sorted(set(round(p[0], 3) for p in part(parts, 'trim') if 6.1 < p[2] < 6.25 and abs(p[1] - 0.8) < 1e-3))   # pilasters are trim
 overlap = sum(1 for g in glass for a, b in zip(shafts[::2], shafts[1::2]) if a < g < b)
 print("glass", glass); print("shafts", shafts); print("overlap", overlap)
 `);

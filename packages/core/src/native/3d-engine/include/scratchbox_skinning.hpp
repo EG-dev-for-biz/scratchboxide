@@ -1126,7 +1126,7 @@ public:
             // Submandibular throat & Jawline shelf base
             RingSpec{ .center = math::Vec3(0, 1.545f,  0.004f) * scale, .rx = neckRx2 * 1.08f, .rz = neckRz * 1.02f, .frontBulge = 0.04f, .backBulge = 0.05f, .zOffset = 0.002f * scale, .temporalFlats = 0.0f, .bustCenterWidth = bustWidth },
             // Mandible & Mental protuberance (Chin pogonion - Loomis drawing pad)
-            RingSpec{ .center = math::Vec3(0, 1.568f,  0.010f) * scale, .rx = jawRx, .rz = cranialRz * 0.76f, .frontBulge = chinFront, .backBulge = 0.06f, .zOffset = 0.008f * scale, .temporalFlats = 0.10f, .chinShelf = chinShelfVal, .jawTaper = (gender == GenderMorph::Female ? 0.58f : 0.50f), .bustCenterWidth = bustWidth },
+            RingSpec{ .center = math::Vec3(0, 1.568f,  0.010f) * scale, .rx = jawRx, .rz = cranialRz * 0.76f, .frontBulge = chinFront, .backBulge = 0.06f, .zOffset = 0.008f * scale, .temporalFlats = 0.10f, .chinShelf = chinShelfVal, .bustCenterWidth = bustWidth, .jawTaper = (gender == GenderMorph::Female ? 0.58f : 0.50f) },
             // Lower lip & Labiomental groove
             RingSpec{ .center = math::Vec3(0, 1.590f,  0.010f) * scale, .rx = jawRx * 1.02f, .rz = cranialRz * 0.80f, .frontBulge = 0.12f, .backBulge = 0.05f, .zOffset = 0.008f * scale, .temporalFlats = 0.12f, .chinShelf = chinShelfVal * 0.5f, .bustCenterWidth = bustWidth, .oralPlanes = oralPlanesVal * 0.85f, .jawTaper = (gender == GenderMorph::Female ? 0.46f : 0.38f) },
             // Oral fissure & Upper lip / Philtrum
