@@ -9,20 +9,23 @@
 
 import * as fs from 'fs-extra';
 
-/** Minimal GLB writer: axis-aligned box [min,max] plus a ground quad, indexed triangles, no node transform. */
-export function writeBoxGroundGlb(file: string, boxMin: number[], boxMax: number[], groundHalf: number): void {
+/** Minimal GLB writer: axis-aligned box [min,max] plus a ground quad, indexed triangles, no node transform. `lumps` are more boxes on the ground (a parked car). */
+export function writeBoxGroundGlb(file: string, boxMin: number[], boxMax: number[], groundHalf: number, lumps: Array<[number[], number[]]> = []): void {
     const V: number[] = [], I: number[] = [];
     const quad = (a: number[], b: number[], c: number[], d: number[]) => {
         const base = V.length / 3;
         V.push(...a, ...b, ...c, ...d);
         I.push(base, base + 1, base + 2, base, base + 2, base + 3);
     };
-    const [x0, y0, z0] = boxMin, [x1, y1, z1] = boxMax;
-    quad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]); // +Z
-    quad([x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0]); // -Z
-    quad([x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1]); // +X
-    quad([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]); // -X
-    quad([x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]); // +Y top
+    const box = ([x0, y0, z0]: number[], [x1, y1, z1]: number[]) => {
+        quad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]); // +Z
+        quad([x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0]); // -Z
+        quad([x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1]); // +X
+        quad([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]); // -X
+        quad([x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]); // +Y top
+    };
+    box(boxMin, boxMax);
+    for (const [a, b] of lumps) box(a, b);
     // Ground as a 20x20 grid: the software rasterizer has no near-plane clipping, so large
     // triangles straddling the camera plane would be dropped (real tile meshes are finely tessellated)
     const g = groundHalf, N = 20, cell = (2 * g) / N;

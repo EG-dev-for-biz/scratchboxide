@@ -23,6 +23,7 @@ import type { GizmoHandleType } from '../../services/transform-gizmo-engine';
 import type { RendererStack } from './types';
 import { externalObjectIdOf, findExternalObjectRoot } from './selection';
 import { stagedPartOfHit } from './stagedBuild/mergeStagedParts';
+import type { SplatEditTool } from './splatEditTool';
 
 type Ref<T> = { current: T };
 
@@ -70,6 +71,8 @@ export interface ViewportControlContext {
      * of selecting, and presses skip the gizmo and sculpt tools (the camera panel's "pick focus"). Drags still orbit and pan.
      */
     pointPick?: Ref<((hit: THREE.Intersection | undefined, event: MouseEvent) => void) | null>;
+    /** The Edit Splats brush (splatEditTool.ts): in the 'splat' tool mode a primary press on a splat paints a stroke. */
+    splatEdit?: Ref<SplatEditTool | null>;
 
     resolveSelectableObject: (hit: THREE.Object3D, root: THREE.Object3D) => THREE.Object3D;
     selectObject: Ref<(obj: THREE.Object3D | null) => void>;
@@ -130,6 +133,7 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
     let downX = 0;
     let downY = 0;
     let isSculpting = false;
+    let isSplatPainting = false;
     let isGizmoDragging = false;
     // Local transform of the selection when the drag began; the whole drag is one history step.
     let gizmoCapture: ObjectEditCapture | null = null;
@@ -229,6 +233,13 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
             }
         }
 
+        // 2b. Splat brush stroke (a press that meets no splat falls through to look around)
+        if (!pointPicking && ctx.toolMode.current === 'splat' && e.button === 0 && !e.shiftKey && ctx.splatEdit?.current?.begin(raycaster.ray)) {
+            isSplatPainting = true;
+            isDragging = false;
+            return;
+        }
+
         // 3. Orbit / pan drag. Selection is deferred to mouseup so that a drag neither raycasts the
         //    scene nor re-selects (selecting persists the artifact through onUpdate).
         if (e.button === 1) e.preventDefault(); // suppress middle-click autoscroll
@@ -317,6 +328,13 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
             return;
         }
 
+        // 1b. Splat brush stroke, and its cursor while hovering
+        if (isSplatPainting) {
+            ctx.splatEdit?.current?.extend(raycaster.ray);
+            return;
+        }
+        if (ctx.toolMode.current === 'splat' && !isDragging) ctx.splatEdit?.current?.hover(raycaster.ray);
+
         // 2. Continuous sculpt stroke
         const sculptMesh = ctx.sculptMesh.current;
         if (isSculpting && sculptMesh) {
@@ -358,7 +376,10 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
             rot.phi -= deltaY * 0.005;
             rot.phi = Math.max(0.05, Math.min(Math.PI - 0.05, rot.phi));
         } else {
-            camera.rotation.order = 'YXZ';
+            // Re-express the current orientation as yaw-pitch (YXZ) before turning it. Only relabelling the order would
+            // read lookAt's XYZ angles as YXZ ones: a view facing more than 90 degrees from -Z (x = z = PI in XYZ)
+            // then turned upside down on the first drag.
+            if (camera.rotation.order !== 'YXZ') camera.rotation.setFromQuaternion(camera.quaternion, 'YXZ');
             camera.rotation.y -= deltaX * 0.003;
             camera.rotation.x -= deltaY * 0.003;
             camera.rotation.x = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, camera.rotation.x));
@@ -449,6 +470,11 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
     };
 
     const handleMouseUp = (e: MouseEvent) => {
+        if (isSplatPainting) {
+            isSplatPainting = false;
+            ctx.splatEdit?.current?.end();
+            return;
+        }
         if (isSculpting) commitSculptStroke();
         if (isGizmoDragging && ctx.selectedObject.current) commitGizmoTransform(ctx.selectedObject.current);
 

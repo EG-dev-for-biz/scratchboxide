@@ -387,7 +387,7 @@ export function roadSubjects(roads: RoadSurface[], photo: TopDownPhoto, frame: T
 // Writing the layers
 // =============================================================================
 
-function materialUseOf(key: string, choice: SurfaceChoice, library: SurfaceLibrary, name: string): LibraryMaterialUse {
+function libraryUseOf(key: string, choice: SurfaceChoice, library: SurfaceLibrary, name: string): LibraryMaterialUse {
     const entry = library.entry(choice.entryId)!;
     return { name, entryId: choice.entryId, tint: surfaceTint(entry, choice.measured.linearRgb), extras: { ...surfaceMaterialLabel(choice, library, entry), surfaceKey: key } };
 }
@@ -415,7 +415,7 @@ export function writeLibraryGroundGlb(file: string, surf: GroundSurface, g: Grou
     const used = g.regions.map((_, j) => j).filter(j => tris[j].length);
     const keyOf = (j: number) => `ground:${j}`;
     const library_ = used.filter(j => !layers.overrides?.has(keyOf(j)));
-    const uses = library_.map(j => ({ ...materialUseOf(keyOf(j), choices.get(keyOf(j))!, library, `Ground${j}_${choices.get(keyOf(j))!.entryId}`), ...(layers.field ? { variationMean: 1 / COLOUR_FIELD_PARAMS.headroom } : {}) }));
+    const uses = library_.map(j => ({ ...libraryUseOf(keyOf(j), choices.get(keyOf(j))!, library, `Ground${j}_${choices.get(keyOf(j))!.entryId}`), ...(layers.field ? { variationMean: 1 / COLOUR_FIELD_PARAMS.headroom } : {}) }));
     const set = buildLibraryMaterials(library, uses);
     const materialOf = new Map<number, number>(library_.map((j, m) => [j, m]));
     for (const j of used) if (!materialOf.has(j)) { materialOf.set(j, set.materials.length); set.materials.push(uniqueSurfaceMaterial(layers.overrides!.get(keyOf(j))!, choices.get(keyOf(j)) ? { entryId: choices.get(keyOf(j))!.entryId } : undefined)); }
@@ -455,8 +455,8 @@ export function writeLibraryGroundGlb(file: string, surf: GroundSurface, g: Grou
 export function writeLibraryRoadsGlb(file: string, mesh: RoadMesh, markings: { positions: Float32Array; indices: Uint32Array; colors: Float32Array } | undefined, choices: { carriageway: SurfaceChoice; kerbs: SurfaceChoice }, library: SurfaceLibrary, extras: Record<string, unknown>, layers: SurfaceLayers = {}): { path: string; bytes: number; field?: { measured: number; shadowed: number; unmeasured: number } } {
     const cwKey = 'roads:carriageway', kbKey = 'roads:kerbs';
     const uses = [
-        { ...materialUseOf(cwKey, choices.carriageway, library, `Carriageway_${choices.carriageway.entryId}`), ...(layers.field ? { variationMean: 1 / COLOUR_FIELD_PARAMS.headroom } : {}) },
-        materialUseOf(kbKey, choices.kerbs, library, `Kerbs_${choices.kerbs.entryId}`)
+        { ...libraryUseOf(cwKey, choices.carriageway, library, `Carriageway_${choices.carriageway.entryId}`), ...(layers.field ? { variationMean: 1 / COLOUR_FIELD_PARAMS.headroom } : {}) },
+        libraryUseOf(kbKey, choices.kerbs, library, `Kerbs_${choices.kerbs.entryId}`)
     ];
     const set = buildLibraryMaterials(library, uses);
     const own = (key: string, k: number) => {
@@ -625,7 +625,7 @@ export function writeLibraryMassingGlb(file: string, run: Pick<MassingRun, 'node
     });
     const keyList = [...keys];
     const matIndex = new Map(keyList.map((k, i) => [k, i]));
-    const uses = keyList.map(k => materialUseOf(k, choiceOf(k), input.library, k.replace(/[^\w]+/g, '_')));
+    const uses = keyList.map(k => libraryUseOf(k, choiceOf(k), input.library, k.replace(/[^\w]+/g, '_')));
     const set = buildLibraryMaterials(input.library, uses);
     let triangles = 0;
     const nodes: StagedGlbNode[] = run.nodes.map((n, ni) => {

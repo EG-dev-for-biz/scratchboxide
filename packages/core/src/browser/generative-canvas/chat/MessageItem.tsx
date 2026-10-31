@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import * as React from 'react';
-import { ChatMessage } from '../canvas-types';
+import { ChatMessage, McpExecutionState } from '../canvas-types';
 import { CanvasErrorBoundary } from '../CanvasErrorBoundary';
 import {
     AgentExecutionStepper,
@@ -35,6 +35,66 @@ export interface MessageItemProps {
     checkpointFeedbackValue: string;
 }
 
+export interface GroupedToolStatusSummary {
+    allCompleted: boolean;
+    hasRunning: boolean;
+    hasUnrecoveredFailure: boolean;
+    hasRecoveredRetry: boolean;
+    completedCount: number;
+    retriedCount: number;
+    statusClass: 'completed' | 'running' | 'failed';
+    statusText: string;
+}
+
+/**
+ * Computes the aggregate status of a turn's tool calls, distinguishing an unrecovered failure
+ * from a self-healed/retried tool call where a subsequent call in the same turn succeeded.
+ */
+export function summarizeGroupedToolStatus(executions: McpExecutionState[]): GroupedToolStatusSummary {
+    const hasRunning = executions.some(e => e.status === 'running');
+    const completedCount = executions.filter(e => e.status === 'completed').length;
+    const failedIndices = executions
+        .map((e, idx) => (e.status === 'failed' ? idx : -1))
+        .filter(idx => idx >= 0);
+
+    const allFailuresRecovered =
+        failedIndices.length > 0 &&
+        !hasRunning &&
+        executions[executions.length - 1]?.status === 'completed' &&
+        failedIndices.every(fi =>
+            executions.slice(fi + 1).some(later => later.status === 'completed')
+        );
+
+    const hasUnrecoveredFailure = failedIndices.length > 0 && !allFailuresRecovered;
+    const hasRecoveredRetry = failedIndices.length > 0 && allFailuresRecovered;
+    const allCompleted = executions.every(e => e.status === 'completed') || hasRecoveredRetry;
+
+    const statusClass: 'completed' | 'running' | 'failed' = hasUnrecoveredFailure
+        ? 'failed'
+        : hasRunning
+            ? 'running'
+            : 'completed';
+
+    const statusText = hasUnrecoveredFailure
+        ? 'Failed'
+        : hasRunning
+            ? 'Running…'
+            : hasRecoveredRetry
+                ? `✓ ${completedCount} Completed (${failedIndices.length} retried)`
+                : `✓ ${executions.length} Completed`;
+
+    return {
+        allCompleted,
+        hasRunning,
+        hasUnrecoveredFailure,
+        hasRecoveredRetry,
+        completedCount,
+        retriedCount: failedIndices.length,
+        statusClass,
+        statusText
+    };
+}
+
 const GroupedMcpExecutions: React.FC<{ executions: any[] }> = ({ executions }) => {
     const [isExpanded, setIsExpanded] = React.useState(false);
 
@@ -44,12 +104,7 @@ const GroupedMcpExecutions: React.FC<{ executions: any[] }> = ({ executions }) =
         return <InlineMcpCard exec={executions[0]} />;
     }
 
-    const allCompleted = executions.every(e => e.status === 'completed');
-    const hasRunning = executions.some(e => e.status === 'running');
-    const hasFailed = executions.some(e => e.status === 'failed');
-
-    const statusClass = hasFailed ? 'failed' : hasRunning ? 'running' : 'completed';
-    const statusText = hasFailed ? 'Failed' : hasRunning ? 'Running…' : `✓ ${executions.length} Completed`;
+    const { allCompleted, statusClass, statusText } = summarizeGroupedToolStatus(executions);
 
     return (
         <div className="sb-grouped-mcp-container">

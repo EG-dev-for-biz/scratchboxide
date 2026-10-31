@@ -35,7 +35,10 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     survey_harvest_swatches: { maxMs: 90 * MIN, idleMs: 10 * MIN },
     // the same harvest when no swatch library is given, then the atlas bake (minutes for a few hundred atlases)
     tile_detail_bake: { maxMs: 90 * MIN, idleMs: 10 * MIN },
-    location_generate_3dgs: { maxMs: 60 * MIN, idleMs: 10 * MIN },
+    // with a street vantage, up to 6 panos x 4 views of street stations (four at a time) come before the survey's chain
+    location_generate_3dgs: args => (typeof args.vantageHeadingDeg === 'number' || typeof args.vantageSideDeg === 'number')
+        ? { maxMs: 120 * MIN, idleMs: 15 * MIN }
+        : { maxMs: 60 * MIN, idleMs: 10 * MIN },
     // The headless-Chrome tile runner allows itself up to ~38 min for a 72-frame orbit and has its own startup
     // and inactivity watchdogs; the blockout runner adds ffmpeg encodes (10 min cap each).
     // A district (no isolate) rebuilds every building the scan confirms: its massing alone may take 125 min

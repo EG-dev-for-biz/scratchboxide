@@ -53,15 +53,13 @@ jobs:
           python-version: '3.14'
 
       # numpy on the PATH python3: the skinning-parity test runs scripts/sbx_skinning.py with it.
-      # Linux: torch from PyPI brings its CUDA wheels (several GB, more than the runner's free disk) and no test uses a
-      # GPU, so the CPU build of the pinned torch goes in first; requirements.txt then finds torch==X satisfied by X+cpu.
-      # torch stays in the venv: repo-python.test.ts checks the sidecars' modules, torch and transformers among them.
       - name: Python venv for the native engine
         run: |
           python -m venv .venv
+          # PyPI's Linux torch wheel brings the CUDA libraries (several GB) and fills the runner's disk; the tests run
+          # on the CPU, so take the CPU build of the pinned version first (requirements.txt's pin then counts as met).
           if [ "$RUNNER_OS" = "Linux" ]; then
-            .venv/bin/pip install "$(grep '^torch==' requirements.txt)+cpu" \
-              --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+            .venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu "$(grep -E '^torch==' requirements.txt)"
           fi
           .venv/bin/pip install -r requirements.txt
           python -m pip install numpy

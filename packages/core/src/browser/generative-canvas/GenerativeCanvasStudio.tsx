@@ -205,7 +205,9 @@ export { StreamBufferQueue, captureActiveCanvasScreenshot } from './chat/streami
 import { StreamBufferQueue, captureActiveCanvasScreenshot, streamTokensAsync } from './chat/streaming-utils';
 import { useSendMessage } from './hooks/useSendMessage';
 import { LIVE_CODE_STARTER_APP } from './studio/liveCodeStarterTemplate';
-import { STARTER_BUTTONS, pickStarterPrompt } from './studio/starterPrompts';
+import { homeHeadline, pickStarterPrompt, visibleStarterButtons, type StarterButton } from './studio/starterPrompts';
+import { canCreatePrimitive, canShowLayoutMode, canShowPrimitive, primitiveOutOfScopeReason } from '../../common/product-scope';
+import { postScopeNote } from './chat/scopeNote';
 
 export interface GenerativeCanvasStudioProps {
     onOpenFolder?: () => void;
@@ -240,7 +242,9 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         setArtifactVersions,
         setLayoutMode
     } = chatStore;
-    const { sessions, currentSessionId, messages, activeArtifact, artifactHistory, artifactVersions, layoutMode } = chatState;
+    const { sessions, currentSessionId, messages, activeArtifact, artifactHistory, artifactVersions, layoutMode: savedLayoutMode } = chatState;
+    // The 3D/VFX build (common/product-scope.ts) shows a mode it does not offer as chat; the saved mode is left as it is.
+    const layoutMode = canShowLayoutMode(savedLayoutMode) ? savedLayoutMode : 'chat';
     const activeSession = selectActiveSession(chatState);
 
     const recordArtifactVersion = (art: CanvasArtifact) => {
@@ -356,7 +360,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         };
     }, [isDraggingSplitter]);
 
-    const layoutModeDeps: UseLayoutModeSwitchDeps = { activeArtifact, artifactHistory, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setDocumentPaneState, setLayoutMode, showToast, skills };
+    const layoutModeDeps: UseLayoutModeSwitchDeps = { activeArtifact, artifactHistory, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setDocumentPaneState, setLayoutMode, setMessages, showToast, skills };
     const { handleSwitchMode } = useLayoutModeSwitch(layoutModeDeps);
     const { handleCreateEmptyCanvas } = useCreateEmptyCanvas(layoutModeDeps);
 
@@ -562,7 +566,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const { handleUpdateArtifact } = useArtifactSync({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, isGenerating, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions });
 
 
-    const { handleMorphArtifact, handleOpenInAppBrowser, handlePreviewCodeInCanvas, applyStreamedArtifact } = useCanvasOpeners({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, layoutMode, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setLayoutMode, setSessions, showToast, stageLayoutMode });
+    const { handleMorphArtifact, handleOpenInAppBrowser, handlePreviewCodeInCanvas, applyStreamedArtifact } = useCanvasOpeners({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, layoutMode, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setLayoutMode, setMessages, setSessions, showToast, stageLayoutMode });
     const { syncSandboxSaveToMarkdown, triggerGoogleDocsExport, triggerGoogleDriveSave, triggerMarkdownExport } = useArtifactExports({ activeArtifact, artifactHistory, handleOpenInAppBrowser, handleUpdateArtifact, openModal, showToast });
 
     // Cross-Primitive Event Listeners (Media cards -> 3D scene / Sandbox / Timeline / Composer)
@@ -570,6 +574,10 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         const handleOpenPrimitive = (e: Event) => {
             const detail = (e as CustomEvent).detail;
             if (detail?.type) {
+                if (!canShowPrimitive(detail.type)) {
+                    postScopeNote(setMessages, primitiveOutOfScopeReason(detail.type) || `No ${detail.type} canvas in this build`);
+                    return;
+                }
                 if (detail.forceNew) {
                     handleCreateEmptyCanvas(detail.type, detail.title);
                     return;
@@ -631,7 +639,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
             window.removeEventListener('scratchbox:apply-3d-texture', handleApply3DTexture);
             window.removeEventListener('scratchbox:add-video-to-timeline', handleAddVideoToTimeline);
         };
-    }, [activeArtifact, artifactHistory, handleCreateEmptyCanvas, handleUpdateArtifact, setActiveArtifact, setLayoutMode, setInputValue, showToast]);
+    }, [activeArtifact, artifactHistory, handleCreateEmptyCanvas, handleUpdateArtifact, setActiveArtifact, setLayoutMode, setInputValue, setMessages, showToast]);
 
 
 
@@ -669,6 +677,9 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         if (activeArtifact && !list.some(a => a.id === activeArtifact.id)) {
             list.unshift(activeArtifact);
         }
+        // Tabs only for canvases this build shows (common/product-scope.ts); the others stay in the session.
+        const shown = list.filter(a => canShowPrimitive(a.type));
+        list.splice(0, list.length, ...shown);
         // Deduplicate tabs by type and title to prevent identical runs from cluttering the tab strip
         const seen = new Set<string>();
         const deduped: typeof list = [];
@@ -719,6 +730,11 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     }, [activeArtifact, artifactHistory]);
 
     const handleCreateNewSandboxTab = React.useCallback(() => {
+        const outOfScope = primitiveOutOfScopeReason('live-code-sandbox');
+        if (outOfScope) {
+            postScopeNote(setMessages, outOfScope);
+            return;
+        }
         const newTab: CanvasArtifact = {
             id: `art-sandbox-${Date.now()}`,
             type: 'live-code-sandbox',
@@ -748,7 +764,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         setArtifactHistory(prev => [newTab, ...prev]);
         setLayoutMode('code');
         showToast('Created new Live Code Preview tab', '⚡');
-    }, [showToast]);
+    }, [setMessages, showToast]);
 
     const activeSandboxData = activeArtifact?.type === 'live-code-sandbox' ? (activeArtifact.data as LiveCodeSandboxData) : null;
 
@@ -763,7 +779,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
             };
             setActiveArtifact(updated);
             setArtifactHistory(prev => prev.map(a => a.id === updated.id ? updated : a));
-        } else if (activeArtifact) {
+        } else if (activeArtifact && canCreatePrimitive('live-code-sandbox')) {
             const morphed = morphArtifact(activeArtifact, 'live-code-sandbox');
             const updated = {
                 ...morphed,
@@ -1079,19 +1095,13 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     ]);
 
     // Desktop App & Window Interaction Coordination Listeners
+    // These events are the host asking the studio to open its own surfaces. They never call the host's handler back:
+    // the desktop app's onOpenPreferences / onOpenKeyboardShortcuts / onCreateFile send these same events, so calling
+    // them here looped until the stack overflowed (⌘, and ⌘/ opened nothing).
     React.useEffect(() => {
-        const handleOpenPreferencesListener = () => {
-            if (onOpenPreferences) onOpenPreferences();
-            else openSettingsToTab('general');
-        };
-        const handleOpenShortcutsListener = () => {
-            if (onOpenKeyboardShortcuts) onOpenKeyboardShortcuts();
-            else openSettingsToTab('shortcuts');
-        };
-        const handleCreateFileRequestedListener = () => {
-            if (onCreateFile) onCreateFile();
-            else openModal('spotlight');
-        };
+        const handleOpenPreferencesListener = () => openSettingsToTab('general');
+        const handleOpenShortcutsListener = () => openSettingsToTab('shortcuts');
+        const handleCreateFileRequestedListener = () => openModal('spotlight');
         const handleWorkspaceChangedListener = (e: Event) => {
             const detail = (e as CustomEvent).detail;
             if (detail?.path) {
@@ -1114,7 +1124,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
             window.removeEventListener('scratchbox:create-file-requested', handleCreateFileRequestedListener);
             window.removeEventListener('scratchbox:workspace-changed', handleWorkspaceChangedListener);
         };
-    }, [onOpenPreferences, onOpenKeyboardShortcuts, onCreateFile, openSettingsToTab, openModal, workspaces, setActiveWorkspace, showToast]);
+    }, [openSettingsToTab, openModal, workspaces, setActiveWorkspace, showToast]);
 
 
 
@@ -1127,7 +1137,14 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
     const { executeDeepWritePipeline, handleDeepWriteResume } = useDeepWritePipeline({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, setActiveArtifact, setCurrentSessionId, setIsGenerating, setMessages, setSessions });
 
-    const { sendMessage: handleSendMessage, cancelInFlight: handleStopGenerating, streamInFlight } = useSendMessage({
+    const {
+        sendMessage: handleSendMessage,
+        queueMessage: handleQueueMessage,
+        queuedMessages,
+        removeQueuedMessage,
+        cancelInFlight: handleStopGenerating,
+        streamInFlight
+    } = useSendMessage({
         inputValue,
         isGenerating,
         setInputValue,
@@ -1181,8 +1198,47 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         openSettingsToTab
     });
 
+    // A starter button for a world already built: its newest saved version (else its build's scene) opens in a 3D Scene,
+    // fetched from the world cache when not on this machine; with neither, the prompt builds it.
+    const handleOpenStarterWorld = React.useCallback(async (item: StarterButton) => {
+        const world = item.world!;
+        let data: Scene3DData | undefined;
+        try {
+            const res = await fetch(`/api/worlds/${encodeURIComponent(world.slug)}/scene`, { cache: 'no-store' });
+            const body = res.ok ? await res.json() : undefined;
+            if (body?.success) data = body.scene as Scene3DData;
+        } catch { data = undefined; }
+        if (!data) {
+            try {
+                const res = await fetch(world.scenePath, { cache: 'no-store' });
+                if (res.ok) data = { ...(await res.json() as Scene3DData), world: { slug: world.slug } };
+            } catch { data = undefined; }
+        }
+        if (!data?.splatUrl) {
+            handleSendMessage(pickStarterPrompt(item));
+            return;
+        }
+        // Registered in the project graph under a stable id (the world's name), as every opener does: an id the graph
+        // would replace on the first edit would remount the viewport mid-stroke and leave a second tab.
+        const art = graphControllerRef.current.registerArtifact({
+            id: `world-${world.slug}`,
+            type: '3d-scene',
+            title: world.title,
+            summary: data.subtitle ?? world.title,
+            version: 1,
+            createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            data
+        }, `open-world-${world.slug}`);
+        setGraphEpoch(epoch => epoch + 1);
+        setActiveArtifact(art);
+        recordArtifactVersion(art);
+        setArtifactHistory(prev => [art, ...prev.filter(a => a.id !== art.id)]);
+        setLayoutMode(resolveModeForArtifact('3d-scene'));
+    }, [handleSendMessage]);
+
     React.useEffect(() => {
         (window as any).__scratchbox_send_prompt = (text: string) => handleSendMessage(text);
+        (window as any).__scratchbox_queue_prompt = (text: string) => handleQueueMessage(text);
         (window as any).__scratchbox_new_chat = () => handleNewChat();
         const handleSendPromptEvent = (e: Event) => {
             const detail = (e as CustomEvent).detail;
@@ -1193,10 +1249,11 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         window.addEventListener('scratchbox:send-prompt', handleSendPromptEvent);
         return () => {
             delete (window as any).__scratchbox_send_prompt;
+            delete (window as any).__scratchbox_queue_prompt;
             delete (window as any).__scratchbox_new_chat;
             window.removeEventListener('scratchbox:send-prompt', handleSendPromptEvent);
         };
-    }, [handleSendMessage, handleNewChat]);
+    }, [handleSendMessage, handleQueueMessage, handleNewChat]);
 
     React.useEffect(() => {
         (window as any).__scratchbox_is_generating = isGenerating;
@@ -1206,7 +1263,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const workspaceFileDeps: UseWorkspaceFilesDeps = { activeArtifact, activeWorkspace, artifactHistory, currentSessionId, handleSendMessage, isGenerating, layoutMode, messages, setActiveArtifact, setArtifactHistory, setCurrentSessionId, setLayoutMode, setMessages, setSessions, setShowComposerWorkspaceMenu, setShowNewWorkspaceMenu, showComposerWorkspaceMenu, showNewWorkspaceMenu, showToast };
     const { handleFileClick, handleSurfaceAiPrompt } = useWorkspaceFiles(workspaceFileDeps);
     const { handleCreateWorkspaceFile } = useWorkspaceFileCreation(workspaceFileDeps);
-    const { filteredAutocompleteSkills, handleKeyDown, handleVoiceToggle, isVoiceActive } = useComposerInput({ activeContextCategory, autocompleteQuery, autocompleteType, handleSelectAutocompleteContext, handleSelectAutocompleteSkill, handleSendMessage, mcpServers, selectedAutocompleteIndex, setAutocompleteQuery, setAutocompleteType, setInputValue, setSelectedAutocompleteIndex, showToast, skills, workspaceFilesList, workspaceGitStatus });
+    const { filteredAutocompleteSkills, handleKeyDown, handleVoiceToggle, isVoiceActive } = useComposerInput({ activeArtifact, activeContextCategory, autocompleteQuery, autocompleteType, handleQueueMessage, handleSelectAutocompleteContext, handleSelectAutocompleteSkill, handleSendMessage, isGenerating, mcpServers, selectedAutocompleteIndex, setAutocompleteQuery, setAutocompleteType, setInputValue, setSelectedAutocompleteIndex, showToast, skills, workspaceFilesList, workspaceGitStatus });
 
 
 
@@ -1250,7 +1307,11 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         handleSelectAutocompleteSkill,
         handleSelectAutocompleteContext,
         activeArtifactTitle: activeArtifact?.title,
+        activeArtifact,
         sendMessage: () => handleSendMessage(),
+        queueMessage: () => handleQueueMessage(),
+        queuedMessages,
+        removeQueuedMessage,
         stopGenerating: handleStopGenerating,
         canStop: streamInFlight
     };
@@ -1292,10 +1353,12 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         onFileClick: handleFileClick
     };
 
+    // The 3D/VFX build (common/product-scope.ts) shows only the canvases it offers; the session keeps the others as saved.
+    const visibleArtifactHistory = React.useMemo(() => artifactHistory.filter(a => canShowPrimitive(a.type)), [artifactHistory]);
     const artifactStageProps: ArtifactStageProps = {
-        activeArtifact,
+        activeArtifact: activeArtifact && canShowPrimitive(activeArtifact.type) ? activeArtifact : undefined,
         setActiveArtifact,
-        artifactHistory,
+        artifactHistory: visibleArtifactHistory,
         setArtifactHistory,
         activeWorkspace,
         layoutMode,
@@ -1476,7 +1539,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                                         </div>
 
                                         <h1 className="sb-chat-empty-hero-title">
-                                            A canvas for AI work. What can I help you design, build, or analyze today?
+                                            {homeHeadline()}
                                         </h1>
 
                                         {/* Clean Quick Creation Starters */}
@@ -1488,12 +1551,12 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                                             maxWidth: '680px',
                                             margin: '20px auto 0 auto'
                                         }}>
-                                            {STARTER_BUTTONS.map(item => (
+                                            {visibleStarterButtons().map(item => (
                                                 <button
                                                     key={item.label}
                                                     type="button"
                                                     className="sb-btn sb-starter-chip"
-                                                    onClick={() => handleSendMessage(pickStarterPrompt(item))}
+                                                    onClick={() => item.world ? void handleOpenStarterWorld(item) : handleSendMessage(pickStarterPrompt(item))}
                                                     style={{
                                                         display: 'inline-flex',
                                                         alignItems: 'center',

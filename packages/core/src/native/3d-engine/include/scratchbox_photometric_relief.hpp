@@ -51,6 +51,7 @@
 #ifndef SCRATCHBOX_PHOTOMETRIC_RELIEF_HPP
 #define SCRATCHBOX_PHOTOMETRIC_RELIEF_HPP
 
+#include "scratchbox_bvh.hpp"
 #include "scratchbox_gltf_scene.hpp"
 #include "scratchbox_png.hpp"
 
@@ -185,6 +186,24 @@ struct ReliefParams {
     // When set, every analysed facade's orthophoto (facade_<id>.png, plain RGB, uncovered pixels mid grey) and its metric
     // frame and cells (facades.json) are written here: the image a grammar is read from, in the frame it is fitted to.
     std::string orthoExportDir;
+    // Occlusion (with an export dir and an occluder scene): beside each orthophoto, facade_<id>_occluded.png, one channel,
+    // 255 x how blocked the facade's clearest direction toward the capture was: for each yaw of the fan, the share of its
+    // elevations' rays that a surface of the occluder scene blocks within occlusionReach, the least of those. The texels
+    // something stood close in front of when the photo was taken (a crown, an awning, a fin or wing of the building),
+    // whose colour may be that thing's; a face between flanking walls that a camera saw straight on is clear, and the
+    // reach stops short of the buildings across a street. Measured on a grid of occlusionCellM, read bilinearly; the rays
+    // start occlusionStandoff off the plane, past the facade photo's own slab (grammarSlabFront).
+    const bvh::BvhTree* occluders{nullptr};
+    double occlusionCellM{0.5};
+    double occlusionStandoff{0.8};
+    double occlusionReach{12.0};
+    // a ray counts hits only past this along it: a surface the wall itself meets (the ground at its foot) is no occluder
+    double occlusionSkipM{0.3};
+    // the fan: the facade's outward horizontal normal turned by each yaw, tilted up by each elevation (degrees)
+    std::vector<double> occlusionYawsDeg{-30.0, 0.0, 30.0};
+    std::vector<double> occlusionElevationsDeg{0.0, 30.0, 45.0, 60.0};
+    // a texel at least this share blocked counts toward the facade's reported occluded share
+    double occlusionReportShare{0.65};
     // false: analyse (and export the orthophotos) but carve nothing: the scene is written as it came. Pipeline K carves its
     // window recesses later, on the facades it rebuilds from the straightened photos (facade-lattice.ts).
     bool carve{true};
@@ -324,6 +343,9 @@ struct FacadeReport {
     int orthoWidth{0}, orthoHeight{0};
     double orthoSMin{0}, orthoTMax{0};  // plane (s, t) of the orthophoto's top-left pixel corner
     double coverage{0};
+    // the occlusion mask's summary (ReliefParams::occluders): mean blocked share over the photo's covered texels, and the
+    // share of covered texels at least occlusionReportShare blocked; -1 when no mask was written
+    double occlusionMean{-1}, occludedShare{-1};
     FacadeAnalysis analysis;
     bool treated{false};
     std::string skipReason;
@@ -2600,6 +2622,79 @@ private:
         f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     }
 
+    /**
+     * The occlusion mask of a facade photo (ReliefParams::occluders): per grid point of occlusionCellM on the plane, the share
+     * of the fan's rays blocked within occlusionReach, read bilinearly at every pixel. Written as facade_<id>_occluded.png
+     * (255 = every ray blocked); the summary over the photo's covered texels goes into the report.
+     */
+    void writeOcclusionMask(FacadeReport& rep, const Region& R, const Orthophoto& o, unsigned threads) const {
+        const double kPi = 3.14159265358979323846;
+        P3 h(R.n.x, 0.0, R.n.z);
+        if (h.length() < 1e-6) return;  // a level plane has no outward horizontal
+        h = h * (1.0 / h.length());
+        const P3 side(-h.z, 0.0, h.x), up(0.0, 1.0, 0.0);
+        // the fan, yaw by yaw: fan[yi * E + ei]
+        std::vector<math::Vec3> fan;
+        const size_t E = p_.occlusionElevationsDeg.size();
+        for (double y : p_.occlusionYawsDeg)
+            for (double e : p_.occlusionElevationsDeg) {
+                const double ce = std::cos(e * kPi / 180.0), se = std::sin(e * kPi / 180.0), cy = std::cos(y * kPi / 180.0), sy = std::sin(y * kPi / 180.0);
+                const P3 d = (h * cy + side * sy) * ce + up * se;
+                fan.push_back(math::Vec3(static_cast<float>(d.x), static_cast<float>(d.y), static_cast<float>(d.z)));
+            }
+        if (fan.empty() || E == 0) return;
+        const int W = o.width, H = o.height;
+        const int step = std::max(1, static_cast<int>(std::lround(p_.occlusionCellM / o.pixel)));
+        const int gw = (W + step - 1) / step + 1, gh = (H + step - 1) / step + 1;
+        std::vector<float> grid(static_cast<size_t>(gw) * gh, 0.0f);
+        const float reach = static_cast<float>(p_.occlusionReach - p_.occlusionSkipM), skip = static_cast<float>(p_.occlusionSkipM);
+        auto rows = [&](int g0, int g1) {
+            for (int gy = g0; gy < g1; ++gy)
+                for (int gx = 0; gx < gw; ++gx) {
+                    // grid point (gx, gy) sits at pixel centre (gx * step, gy * step), clamped to the photo
+                    const double col = std::min<double>(W - 1, gx * step), row = std::min<double>(H - 1, gy * step);
+                    const P3 p = R.c + R.u * o.sAt(col) + R.v * o.tAt(row) + R.n * p_.occlusionStandoff;
+                    const math::Vec3 org(static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z));
+                    // the clearest yaw decides: its share of blocked elevations (a yaw already worse than the best is cut short)
+                    size_t least = E;
+                    for (size_t y0 = 0; y0 < fan.size() && least > 0; y0 += E) {
+                        size_t blocked = 0;
+                        for (size_t ei = 0; ei < E && blocked < least; ++ei)
+                            if (p_.occluders->raycastAny(math::Ray(org + fan[y0 + ei] * skip, fan[y0 + ei]), reach)) ++blocked;
+                        least = std::min(least, blocked);
+                    }
+                    grid[static_cast<size_t>(gy) * gw + gx] = static_cast<float>(least) / static_cast<float>(E);
+                }
+        };
+        const unsigned nt = std::max(1u, std::min<unsigned>(threads, static_cast<unsigned>(gh)));
+        if (nt <= 1) rows(0, gh);
+        else {
+            std::vector<std::thread> pool;
+            for (unsigned k = 0; k < nt; ++k) pool.emplace_back(rows, static_cast<int>(static_cast<long>(gh) * k / nt), static_cast<int>(static_cast<long>(gh) * (k + 1) / nt));
+            for (auto& t : pool) t.join();
+        }
+        texture::ImageBuffer img(W, H, 1, 0);
+        double sum = 0;
+        size_t covered = 0, occluded = 0;
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x) {
+                const double fx = static_cast<double>(x) / step, fy = static_cast<double>(y) / step;
+                const int x0 = std::min(gw - 1, static_cast<int>(fx)), y0 = std::min(gh - 1, static_cast<int>(fy));
+                const int x1 = std::min(gw - 1, x0 + 1), y1 = std::min(gh - 1, y0 + 1);
+                const double a = fx - x0, b = fy - y0;
+                const double v = (1 - a) * (1 - b) * grid[static_cast<size_t>(y0) * gw + x0] + a * (1 - b) * grid[static_cast<size_t>(y0) * gw + x1]
+                               + (1 - a) * b * grid[static_cast<size_t>(y1) * gw + x0] + a * b * grid[static_cast<size_t>(y1) * gw + x1];
+                const size_t i = static_cast<size_t>(y) * W + x;
+                img.data[i] = static_cast<uint8_t>(std::clamp(std::lround(v * 255.0), 0L, 255L));
+                if (o.cov[i]) { ++covered; sum += v; if (v >= p_.occlusionReportShare) ++occluded; }
+            }
+        auto bytes = png::encode(img, 6);
+        std::ofstream f(p_.orthoExportDir + "/facade_" + std::to_string(rep.id) + "_occluded.png", std::ios::binary);
+        f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        rep.occlusionMean = covered ? sum / covered : 0.0;
+        rep.occludedShare = covered ? static_cast<double>(occluded) / covered : 0.0;
+    }
+
     /** facades.json beside the exported orthophotos: each analysed facade's metric frame and its cells after analysis. */
     void writeOrthoIndex() const {
         std::ostringstream js;
@@ -2616,6 +2711,8 @@ private:
                << ",\"orthoSMin\":" << detail::fmt(f.orthoSMin) << ",\"orthoTMax\":" << detail::fmt(f.orthoTMax) << ",\"coverage\":" << detail::fmt(f.coverage)
                << ",\"pattern\":\"" << f.analysis.pattern << "\",\"latticeConfirmation\":" << detail::fmt(f.analysis.latticeConfirmation)
                << ",\"latticeRejected\":" << (f.analysis.latticeRejected ? "true" : "false");
+            if (f.occlusionMean >= 0)
+                js << ",\"occludedMask\":\"facade_" << f.id << "_occluded.png\",\"occlusionMean\":" << detail::fmt(f.occlusionMean) << ",\"occludedShare\":" << detail::fmt(f.occludedShare);
             // the grid the cells come from (whether or not its cells were confirmed): pitches, the folded dark cell and its runs,
             // the lattice's rows and columns, so a later pass can lay the whole lattice out and judge each cell itself
             {
@@ -2738,6 +2835,7 @@ private:
             Orthophoto photo;
             if (!p_.orthoExportDir.empty() || grammar) photo = rasterizeSlab(R, px);
             if (!p_.orthoExportDir.empty()) writeOrthoExport(rep, photo);
+            if (!p_.orthoExportDir.empty() && p_.occluders) writeOcclusionMask(rep, R, photo, innerThreads);
             if (!p_.analyse && !p_.carve && !p_.orthoExportDir.empty() && !grammar) { rep.skipReason = "exported only (not analysed)"; return; }
             const auto a0 = Clock::now();
             rep.analysis = analyzeOrthophoto(o, rep.texel, p_, innerThreads, grammar, grammar ? &photo : nullptr);

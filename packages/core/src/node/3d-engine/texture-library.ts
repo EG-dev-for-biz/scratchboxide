@@ -26,6 +26,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { GoogleMediaCredentialsService } from '../google-media-credentials-service';
 import { NativePythonRunnerService } from './native-python-runner-service';
+import { ESTIMATED_SIZES_FILE, type EstimatedSizes } from './texture-library-sizes';
 import type { TextureLibraryColour, TextureLibraryEntry, TextureLibraryIndex } from '../../common/spatial/texture-library-index';
 
 export interface LibrarySetMaps {
@@ -130,12 +131,34 @@ export function loadTextureLibraryIndex(repoRoot: string): TextureLibraryIndex |
     if (indexCache?.file !== file || indexCache.mtimeMs !== mtimeMs) indexCache = { file, mtimeMs, index: JSON.parse(fs.readFileSync(file, 'utf8')) as TextureLibraryIndex };
     let measured: string[] = [];
     try { measured = fs.readdirSync(statsDir(repoRoot)).filter(f => f.endsWith('.json')); } catch { /* nothing measured yet */ }
-    if (!measured.length) return indexCache.index;
+    const estimates = estimatedSizes(path.join(path.dirname(file), ESTIMATED_SIZES_FILE));
+    if (!measured.length && !estimates) return indexCache.index;
     const stats = new Map<string, MeasuredStats>();
     for (const f of measured) {
         try { stats.set(f.slice(0, -5), JSON.parse(fs.readFileSync(path.join(statsDir(repoRoot), f), 'utf8')) as MeasuredStats); } catch { /* a half-written file: measured again when needed */ }
     }
-    return { ...indexCache.index, sets: indexCache.index.sets.map(e => withStats(e, stats.get(e.id))) };
+    return { ...indexCache.index, sets: indexCache.index.sets.map(e => withEstimatedSize(withStats(e, stats.get(e.id)), estimates)) };
+}
+
+let sizesCache: { file: string; mtimeMs: number; doc: EstimatedSizes } | undefined;
+/** The estimated tile sizes (texture-library-sizes.ts), when they have been made. */
+function estimatedSizes(file: string): EstimatedSizes | undefined {
+    let mtimeMs: number;
+    try { mtimeMs = fs.statSync(file).mtimeMs; } catch { return undefined; }
+    if (sizesCache?.file !== file || sizesCache.mtimeMs !== mtimeMs) sizesCache = { file, mtimeMs, doc: JSON.parse(fs.readFileSync(file, 'utf8')) as EstimatedSizes };
+    return sizesCache.doc;
+}
+
+/** A set without a publisher size given its estimated width, its height from its pixels' aspect, and labelled so. */
+function withEstimatedSize(e: TextureLibraryEntry, doc: EstimatedSizes | undefined): TextureLibraryEntry {
+    const est = doc?.sets[e.id];
+    if (e.realSizeM || !est) return e;
+    const aspect = e.pixels ? e.pixels[1] / e.pixels[0] : 1;
+    return {
+        ...e, realSizeM: [est.widthM, Math.round(est.widthM * aspect * 1000) / 1000],
+        sizeSource: `estimated from its preview by a vision model (${doc!.model}, confidence ${Math.round(est.conf)}; generated)`,
+        notes: (e.notes ?? []).filter(n => !/no real size/.test(n))
+    };
 }
 
 async function fetchRetry(url: string, signal?: AbortSignal, tries = 3): Promise<Response> {
@@ -194,6 +217,9 @@ export function libraryEntryMeasured(repoRoot: string, id: string): boolean {
  * their publishers' small preview maps, and caches the statistics per set; the previews are deleted once measured. Sets
  * measured before (at the current STATS_VERSION, or that failed) are skipped. Only what a search is about to rank is measured, never the whole library.
  */
+/** Sets measured per engine run (measureLibraryEntries). */
+const MEASURE_CHUNK = 64;
+
 export async function measureLibraryEntries(entries: TextureLibraryEntry[], opts: { repoRoot: string; signal?: AbortSignal; concurrency?: number }): Promise<{ measured: string[]; failed: Array<{ id: string; reason: string }> }> {
     const todo = entries.filter(e => !libraryEntryMeasured(opts.repoRoot, e.id));
     const failed: Array<{ id: string; reason: string }> = [];
@@ -224,11 +250,14 @@ export async function measureLibraryEntries(entries: TextureLibraryEntry[], opts
         }
     }));
     try {
-        if (jobs.length) {
-            const out = path.join(work, 'stats.json');
+        // in chunks, each its own engine run whose statistics are written as it finishes: a long list on a busy machine
+        // never runs one call past its time limit, and what was measured is kept when a later chunk fails
+        for (let at = 0; at < jobs.length; at += MEASURE_CHUNK) {
+            const chunk = jobs.slice(at, at + MEASURE_CHUNK), tag = `${at / MEASURE_CHUNK}`;
+            const out = path.join(work, `stats_${tag}.json`), jobsFile = path.join(work, `jobs_${tag}.json`);
             const script = `
 import json, scratchbox_native as n
-jobs = json.load(open(${JSON.stringify(path.join(work, 'jobs.json'))}))
+jobs = json.load(open(${JSON.stringify(jobsFile)}))
 out = {}
 for j in jobs:
     try:
@@ -241,13 +270,13 @@ for j in jobs:
         out[j["id"]] = {"error": str(e)}
 json.dump(out, open(${JSON.stringify(out)}, "w"))
 `;
-            fs.writeFileSync(path.join(work, 'jobs.json'), JSON.stringify(jobs));
-            const run = await NativePythonRunnerService.getInstance().runScript(script, { timeoutMs: 10 * 60 * 1000 });
-            if (!run.success) throw new Error(`measuring the library previews failed: ${run.stderr || run.errorDetails}`);
+            fs.writeFileSync(jobsFile, JSON.stringify(chunk));
+            const run = await NativePythonRunnerService.getInstance().runScript(script, { timeoutMs: 10 * 60 * 1000, ...(opts.signal ? { signal: opts.signal } : {}) });
+            if (!run.success) throw new Error(`measuring the library previews failed (sets ${at + 1}-${at + chunk.length} of ${jobs.length}; ${at} measured before): ${run.stderr || run.errorDetails || 'the engine run ended without a reason (its time limit?)'}`);
             const raw = JSON.parse(fs.readFileSync(out, 'utf8')) as Record<string, Record<string, any>>;
             const r4 = (v: number) => Math.round(v * 1e4) / 1e4, r2 = (v: number) => Math.round(v * 100) / 100;
             fs.mkdirSync(statsDir(opts.repoRoot), { recursive: true });
-            for (const j of jobs) {
+            for (const j of chunk) {
                 const st = raw[j.id];
                 const m: MeasuredStats = !st || st.error ? { error: st?.error ?? 'no statistics returned' } : {
                     colour: {
