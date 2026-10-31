@@ -24,6 +24,7 @@ import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { tileRefineRootFor } from '../src/node/gemini/tools/tile-refine-tools';
 import { findTileRefineRepoRoot, TileRefineService } from '../src/node/3d-engine/tile-refine-service';
 import { TileVegetationError, TileVegetationService } from '../src/node/3d-engine/tile-vegetation-service';
+import { TILE_SEAMS_VERSION } from '../src/node/3d-engine/tile-seam-weld-service';
 import { Google3DTileCrawlerBaker } from '../src/node/spatial/Google3DTileCrawlerBaker';
 import { Google3DTileBlockoutPipelineService } from '../src/node/spatial/Google3DTileBlockoutPipelineService';
 import { DistrictTooLargeError, GoogleTileDistrictCrawler } from '../src/node/spatial/GoogleTileDistrictCrawler';
@@ -445,7 +446,8 @@ describe('tile_refine reads the tiles the extraction tools write', () => {
 describe('a location request returns remeshed geometry', () => {
     /**
      * tile_refine stand-in (exercised for real in tile-refine.test.ts): writes small remeshed GLBs (4 vertices and 2
-     * triangles) and reports stats in tile_refine's shape. It also checks publishAs against tile_refine's naming rule.
+     * triangles, a 10 m square: the remesh cleanup drops pieces under 3 m² as scraps, 64f473b3) and reports stats in
+     * tile_refine's shape. It also checks publishAs against tile_refine's naming rule.
      */
     let remeshDir = '';
     const fakeRefine = (fail?: string) => vi.spyOn(TileRefineService.prototype, 'refine').mockImplementation(async (req: any) => {
@@ -455,7 +457,7 @@ describe('a location request returns remeshed geometry', () => {
         if (base !== undefined && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(base)) throw new Error('publishAs must be a plain name ([A-Za-z0-9_-], up to 64 chars)');
         remeshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tile-remesh-'));
         scratch.push(remeshDir);
-        const quad = leafGlb([[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]], [0, 1, 2, 1, 3, 2]);
+        const quad = leafGlb([[0, 0, 0], [10, 0, 0], [0, 10, 0], [10, 10, 0]], [0, 1, 2, 1, 3, 2]);
         fs.writeFileSync(path.join(remeshDir, 'textured.glb'), quad);
         fs.writeFileSync(path.join(remeshDir, 'clay.glb'), quad);
         return {
@@ -542,6 +544,14 @@ describe('a location request returns remeshed geometry', () => {
         expect(payload.mode).toBe('full-texture');
     });
 
+    /**
+     * The extraction with its tile seams closed (dffab125), written beside the raw extraction (textured.glb): every stage
+     * after the tiles reads it, and the raw extraction is kept as it came.
+     */
+    const WELDED = `textured_${TILE_SEAMS_VERSION.replace(/\W/g, '_')}.glb`;
+    /** The file a layer of the mounted scene was published as. */
+    const publishedFile = (layer: any) => path.join(process.env.SCRATCHBOX_ROOT!, 'public', 'models', path.basename(layer.content.durableUri));
+
     /** The layers of the mounted scene, by their stage layer name (l1 tiles, l2 remesh, l5 trees). */
     const layersOf = (payload: any): Record<string, any> => Object.fromEntries(payload.artifact.data.objects.map((o: any) => [o.content.metadata.stagedLayer, o]));
 
@@ -554,17 +564,23 @@ describe('a location request returns remeshed geometry', () => {
         expect(outcome.exec.status).toBe('completed');
         expect(payload.status).toBe('complete');
         expect(payload.mode).toBe('clay');
-        // the trees are measured in the photo tiles (the textured extraction), remeshing runs on what is left, the trees are grown afterwards
-        expect(path.basename(veg.strip.mock.calls[0][0].tilePath)).toBe('textured.glb');
-        expect(fs.readFileSync(payload.glbPath)).toEqual(fs.readFileSync(veg.strip.mock.calls[0][0].tilePath));
+        // the trees are measured in the photo tiles (the textured extraction, its tile seams closed), remeshing runs on what is
+        // left, the trees are grown afterwards; the raw extraction beside the welded one is what the result names, unchanged
+        const stripped = veg.strip.mock.calls[0][0].tilePath as string;
+        expect(path.basename(stripped)).toBe(WELDED);
+        expect(fs.readFileSync(payload.glbPath)).toEqual(fs.readFileSync(path.join(path.dirname(stripped), 'textured.glb')));
         expect(refine.mock.calls[0][0]).toMatchObject({ tilePath: path.join(veg.dir, 'devegetated.glb') });
         expect(refine.mock.calls[0][0].isolate).toBeUndefined();
         expect(veg.plant).toHaveBeenCalledTimes(1);
         // no budget given: the trees' budget comes from the measured crowns within the scene's cap, not from the remeshed tile
-        expect(veg.plant.mock.calls[0][0]).toMatchObject({ crownsPath: path.join(veg.dir, 'crowns.json'), sceneTriangleCap: 1_500_000, seed: 'abababababababab', supportMeshPath: undefined, groundMeshPath: path.join(remeshDir, 'clay.glb') });
+        expect(veg.plant.mock.calls[0][0]).toMatchObject({ crownsPath: path.join(veg.dir, 'crowns.json'), sceneTriangleCap: 1_500_000, seed: 'abababababababab', supportMeshPath: undefined });
         expect(veg.plant.mock.calls[0][0].triangleBudget).toBeUndefined();
         // the scene: the tiles as downloaded, the remesh that supersedes them (the ground objects stand on), the trees
         const layers = layersOf(payload);
+        // every trunk base is measured against the remesh that is mounted: tile_refine's clay as the remesh polish left it
+        const ground = veg.plant.mock.calls[0][0].groundMeshPath as string;
+        expect(path.relative(remeshDir, ground)).toMatch(/^polish[\\/][0-9a-f]{16}[\\/]clay\.glb$/);
+        expect(fs.readFileSync(ground)).toEqual(fs.readFileSync(publishedFile(layers.l2)));
         expect(Object.keys(layers)).toEqual(['l1', 'l2', 'l5']);
         expect(layers.l2.content.metadata).toMatchObject({ role: 'environment', remeshed: true, treesRemoved: true, isGround: true, source: 'Google3DTilesClay' });
         expect(layers.l1.content.metadata.isGround).toBe(false);
@@ -655,7 +671,7 @@ describe('a location request returns remeshed geometry', () => {
         const payload: any = outcome.resultPayload;
         expect(outcome.exec.status).toBe('completed');
         expect(veg.strip).not.toHaveBeenCalled();
-        expect(path.basename(refine.mock.calls[0][0].tilePath)).toBe('textured.glb');
+        expect(path.basename(refine.mock.calls[0][0].tilePath)).toBe(WELDED);
         expect(Object.keys(layersOf(payload))).toEqual(['l1', 'l2']);
         expect(payload.trees).toBeUndefined();
     });
@@ -779,8 +795,8 @@ describe('a location request returns remeshed geometry', () => {
         const payload: any = outcome.resultPayload;
         expect(outcome.exec.status).toBe('completed');
         expect(payload.status).toBe('degraded');
-        // the remesh runs on the raw extraction, its scanned trees in it; nothing is planted
-        expect(path.basename(refine.mock.calls[0][0].tilePath)).toBe('textured.glb');
+        // the remesh runs on the extraction (its tile seams closed), its scanned trees in it; nothing is planted
+        expect(path.basename(refine.mock.calls[0][0].tilePath)).toBe(WELDED);
         expect(veg.plant).not.toHaveBeenCalled();
         expect(Object.keys(layersOf(payload))).toEqual(['l1', 'l2']);
         const d = payload.degradations.find((x: any) => x.stage === 'trees-measure');
@@ -850,8 +866,8 @@ describe('a location request returns remeshed geometry', () => {
         const outcome = await ask('google_3d_tiles_get_clay', {}, 'clay_short.glb');
         const payload: any = outcome.resultPayload;
         expect(outcome.exec.status).toBe('completed');
-        // every trunk base is measured against the model that is mounted
-        expect(veg.plant.mock.calls[0][0].groundMeshPath).toBe(path.join(remeshDir, 'clay.glb'));
+        // every trunk base is measured against the model that is mounted (the remesh as the polish left it)
+        expect(fs.readFileSync(veg.plant.mock.calls[0][0].groundMeshPath)).toEqual(fs.readFileSync(publishedFile(layersOf(payload).l2)));
         expect(payload.trees.keptAsScanned[0].closedSide).toEqual({ areaM2: 329.4, topY: 9.48, bottomY: -0.53 });
         expect(payload.trees.shortOfCrown).toHaveLength(1);
         expect(payload.trees.offGround).toEqual([{ crownId: 2, gapM: 17.7 }]);

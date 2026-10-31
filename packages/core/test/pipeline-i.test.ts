@@ -271,13 +271,23 @@ function fakeTrellis(sent: Array<{ images: Buffer[]; seed?: number }>): ModelCli
     };
 }
 
+/**
+ * The reference sheet drawn, not echoed (an echoed reference fails the outline check since 8056aebd): its clay recoloured
+ * as a model's stone would be, the white sheet left white, the geometry untouched (a sheet that holds to the scan exactly).
+ */
+function drawnSheet(blockoutPng: Buffer): Buffer {
+    const d = decodePng(blockoutPng), rgba = Buffer.from(d.rgba);
+    for (let i = 0; i < rgba.length; i += 4) if (!(rgba[i] === 255 && rgba[i + 1] === 255 && rgba[i + 2] === 255)) { const l = rgba[i]; rgba[i] = Math.min(255, l * 1.15 + 20); rgba[i + 1] = Math.min(255, l * 0.95 + 10); rgba[i + 2] = l * 0.75; }
+    return encodePng(d.width, d.height, rgba);
+}
+
 describe('pipeline I end to end (stand-in image model and Trellis)', () => {
     it('plans, draws and checks the sheet, runs every seed, keeps the one that fits the sheet and the scan, colour-matches and places it', async () => {
         const scan = path.join(WORK, 'scan.glb');
         fs.writeFileSync(scan, scanGlb());
         const cells = new Set<string>(); for (let x = -5; x < 5; x++) for (let z = -5; z < 5; z++) cells.add(`${x},${z}`);
-        // the image model hands the reference sheet back (a sheet that holds to the scan exactly)
-        const generator: StationImageGenerator = { name: 'sheet-echo', async generate(args) { expect(args.imageSize).toBe('4K'); return { png: args.blockoutPng, modelUsed: 'gemini-3.1-flash-image' }; } };
+        // the image model draws the reference sheet (a sheet that holds to the scan exactly)
+        const generator: StationImageGenerator = { name: 'sheet-drawn', async generate(args) { expect(args.imageSize).toBe('4K'); return { png: drawnSheet(args.blockoutPng), modelUsed: 'gemini-3.1-flash-image' }; } };
         const sent: Array<{ images: Buffer[]; seed?: number }> = [];
         const out = await runPipelineI({ texturedGlb: scan, clayGlb: scan, footprint: { cells, groundY: 0, heightM: 20 }, anchor: ANCHOR, place: 'Test Box', dir: path.join(WORK, 'run'), generator, model: fakeTrellis(sent), seeds: [7, 11, 23], budgetMs: 600_000, panelWidth: 320, renderMode: 'clay' });
         expect(sent.map(x => x.seed).sort((a, b) => (a ?? 0) - (b ?? 0))).toEqual([7, 11, 23]);
@@ -308,7 +318,7 @@ describe('pipeline I end to end (stand-in image model and Trellis)', () => {
     it('fails with every seed\'s reason when no model comes back', async () => {
         const scan = path.join(WORK, 'scan3.glb'); fs.writeFileSync(scan, scanGlb());
         const cells = new Set<string>(); for (let x = -5; x < 5; x++) for (let z = -5; z < 5; z++) cells.add(`${x},${z}`);
-        const generator: StationImageGenerator = { name: 'sheet-echo', async generate(args) { return args.blockoutPng; } };
+        const generator: StationImageGenerator = { name: 'sheet-drawn', async generate(args) { return drawnSheet(args.blockoutPng); } };
         await expect(runPipelineI({ texturedGlb: scan, clayGlb: scan, footprint: { cells, groundY: 0, heightM: 20 }, anchor: ANCHOR, place: 'Test Box', dir: path.join(WORK, 'run3'), generator, model: fakeTrellis([]), seeds: [23], budgetMs: 600_000, panelWidth: 320, renderMode: 'clay' })).rejects.toThrow(/no fal-ai\/trellis\/multi model came back: seed 23: fal: job failed/);
     });
 

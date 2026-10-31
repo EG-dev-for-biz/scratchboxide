@@ -152,7 +152,9 @@ describe('photo-match evaluator: tree leaves and crown cards cut out as the view
         const svc = new TileVegetationService({ workspaceRoot: work, repoRoot: REPO });
         await svc.ensureBinary();
         fs.writeFileSync(path.join(work, 'crowns.json'), JSON.stringify({ version: 1, frame: { frame: 'x = east, y = up, z = south (metres)' }, params: { sampleSpacing: 0.7 }, crowns: [TREE] }));
-        planted = await svc.plant({ crownsPath: 'crowns.json', triangleBudget: 14000, seed: 'abc' });
+        // grown with the default proportions, not a species entry's (7fad2acc): a matched entry lowers this crown's base, its
+        // mid cards then cover ~0.80 of the crown instead of ~0.75 and no longer leave the gaps this fixture is for
+        planted = await svc.plant({ crownsPath: 'crowns.json', triangleBudget: 14000, seed: 'abc', species: false });
         glb = fs.readFileSync(planted.treesGlb);
         ref = referenceCrown(work, TREE, readGlbChunks(glb).json.nodes.find((n: any) => n.extras?.sbTree).extras);
         fs.mkdirSync(SHOTS, { recursive: true });
