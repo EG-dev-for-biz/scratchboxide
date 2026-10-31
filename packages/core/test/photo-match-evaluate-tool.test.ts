@@ -32,7 +32,8 @@ import { orthoReferenceCamera, orthoReferenceRecord, type OrthoReference } from 
 import { bearingDeg, type PanoCandidate } from '../src/node/3d-engine/staged-location/streetview-evidence';
 import { buildGroundModel, loadScanMesh, scanToGeodetic } from '../src/node/spatial/StreetViewSurveyPlanner';
 import {
-    collectPanoIds, createPhotoMatchEvaluateHandler, heldOutViews, surfacesWithin, visibleStagedLayers, HELD_OUT_MIN_VISIBLE, OPEN_PLACE_RADII_M, PHOTO_MATCH_EVALUATE_TOOL, type HeldOutRegistration, type PhotoMatchDeps
+    collectPanoIds, createPhotoMatchEvaluateHandler, heldOutViews, nearTriangleFlags, onSurfaceFlags, surfaceCoverShare, surfacesWithin, visibleStagedLayers, HELD_OUT_MIN_VISIBLE, OPEN_PLACE_RADII_M,
+    PHOTO_MATCH_EVALUATE_TOOL, PHOTO_MATCH_ISOLATE_SURFACE_M, type HeldOutRegistration, type PhotoMatchDeps
 } from '../src/node/gemini/tools/location-evidence/photo-match-evaluate';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { LOCATION_EVIDENCE_TOOL_DECLARATIONS } from '../src/node/gemini/tools/location-evidence-tools';
@@ -65,6 +66,22 @@ function box(cx: number, cz: number, w: number, d: number, h: number): Omit<Part
         q.forEach(p => positions.push(...p));
         uvs.push(0, 1, 1, 1, 1, 0, 0, 0);
         indices.push(b, b + 1, b + 2, b, b + 2, b + 3);
+    }
+    return { positions, uvs, indices };
+}
+
+/** The same faces cut into pieces, as an isolate cut out of the scan holds them: each quad as four triangles round its centre. */
+function cutFaces(p: Omit<Part, 'png' | 'color'>): Omit<Part, 'png' | 'color'> {
+    const positions: number[] = [], uvs: number[] = [], indices: number[] = [];
+    for (let q = 0; q < p.positions.length / 12; q++) {
+        const v = [0, 1, 2, 3].map(k => p.positions.slice((q * 4 + k) * 3, (q * 4 + k) * 3 + 3)), t = [0, 1, 2, 3].map(k => p.uvs.slice((q * 4 + k) * 2, (q * 4 + k) * 2 + 2));
+        const c = [0, 1, 2].map(k => v.reduce((s, x) => s + x[k], 0) / 4), ct = [0, 1].map(k => t.reduce((s, x) => s + x[k], 0) / 4);
+        for (let k = 0; k < 4; k++) {
+            const b = positions.length / 3;
+            positions.push(...v[k], ...v[(k + 1) % 4], ...c);
+            uvs.push(...t[k], ...t[(k + 1) % 4], ...ct);
+            indices.push(b, b + 1, b + 2);
+        }
     }
     return { positions, uvs, indices };
 }
@@ -578,6 +595,57 @@ describe('photo_match_evaluate tool', () => {
             fs.copyFileSync(v.grid, path.join(SHOTS, `tool_photo_match_district_view${k}.png`));
         });
     }, 240_000);
+
+    it('labels the tile\'s target by the isolate\'s surface: an isolate cut into pieces still covers its building, a triangle straddling the cut goes by its centroid, a neighbour stays a neighbour', async () => {
+        // the tile: the street, the target (two triangles a face), the neighbour, and an apron triangle reaching under the target's
+        // corner; the isolate: the target cut into four pieces a face, and the part of the apron under the corner (cut at x = 7)
+        const dir = path.join(root, 'cut_isolate');
+        const apron = { positions: [5, 0.01, 7, 9, 0.01, 7, 9, 0.01, 9], uvs: [0, 0, 1, 0, 1, 1], indices: [0, 1, 2] };
+        const apronCut = { positions: [5, 0.01, 7, 7, 0.01, 7, 7, 0.01, 8], uvs: [0, 0, 1, 0, 1, 1], indices: [0, 1, 2] };
+        const tileGlb = path.join(dir, 'tile.glb'), isoGlb = path.join(dir, 'isolate.glb');
+        writeGlb(tileGlb, [{ ...ground(260), color: [0.4, 0.4, 0.4] }, { ...TARGET, color: [0.6, 0.3, 0.2] }, { ...NEIGHBOUR, color: [0.8, 0.8, 0.7] }, { ...apron, color: [0.5, 0.5, 0.5] }]);
+        writeGlb(isoGlb, [{ ...cutFaces(TARGET), color: [0.6, 0.3, 0.2] }, { ...apronCut, color: [0.5, 0.5, 0.5] }]);
+        const tile = readTileTriangles(fs.readFileSync(tileGlb)), iso = readTileTriangles(fs.readFileSync(isoGlb));
+        let one = 0;
+        const assembleTriangleGlb = (positions: number[]): Buffer => {
+            const f = path.join(dir, `one_${one++}.glb`);
+            writeGlb(f, [{ positions, uvs: [0, 0, 1, 0, 1, 1], indices: [0, 1, 2], color: [0.5, 0.5, 0.5] }]);
+            return fs.readFileSync(f);
+        };
+        expect([tile.texture.length, iso.texture.length]).toEqual([2 + 10 + 10 + 1, 20 + 1]);
+        // centroid to centroid, the earlier rule, finds none of the cut target
+        expect(nearTriangleFlags(tile, iso).reduce((n, f) => n + f, 0)).toBe(0);
+        // on the surface: all ten of the target's triangles, not the street, not the neighbour, not the apron (its centroid, at
+        // x = 7.67, lies past the cut)
+        const flags = onSurfaceFlags(tile, iso);
+        expect([...flags]).toEqual([0, 0, ...new Array(10).fill(1), ...new Array(10).fill(0), 0]);
+        // the same apron triangle cut the other way (its centroid on the isolate's piece) is the target
+        const apronInside = readTileTriangles(assembleTriangleGlb([5, 0.01, 7, 7.5, 0.01, 7, 6, 0.01, 7.9]));
+        expect([...onSurfaceFlags(apronInside, iso)]).toEqual([1]);
+        // the isolate's area the target covers: all of the building (1,000 m²), none of the apron's piece (1 m²)
+        const share = surfaceCoverShare(iso, tile, flags);
+        expect(share).toBeCloseTo(1000 / 1001, 3);
+        expect(share).toBeGreaterThanOrEqual(0.99);
+        // within the tolerance, not past it: the target's north wall (z = -6) moved out by twice it is off the surface
+        const lifted = readTileTriangles(assembleTriangleGlb(Array.from(tile.positions.slice(2 * 9, 3 * 9)).map((v, k) => (k % 3 === 2 ? v - 2 * PHOTO_MATCH_ISOLATE_SURFACE_M : v))));
+        expect([...onSurfaceFlags(lifted, iso)]).toEqual([0]);
+
+        // through the tool: the run's isolate replaced by the cut one, the street as before
+        const handler = createPhotoMatchEvaluateHandler(() => fakeDeps(root));
+        const out = await handler({ glbs: [staged.altGlb], anchor: { lat: PLACE.lat, lng: PLACE.lng }, isolateGlb: isoGlb, views: 2, runs: 1, clay: false, place: 'Synthetic Block' }, ctxFor(root));
+        const r = out.resultPayload as any;
+        expect(out.status, JSON.stringify(r).slice(0, 600)).toBe('completed');
+        expect(r.regions.target.source).toMatch(/centroid lies on its surface, within 3 cm/);
+        expect(r.regions.target.triangles).toBe(10);
+        expect(r.regions.target.isolateTriangles).toBe(21);
+        expect(r.regions.target.matchedShare).toBeGreaterThanOrEqual(0.99);
+        expect(r.regions.target.matchedShareByTriangles).toBe(0);
+        expect(r.regions.armTriangles.raw).toEqual({ triangles: 10, target: 10, neighbours: 0, ground: 0, trees: 0 });
+        for (const v of r.views) {
+            expect(v.regions.pixels.target).toBeGreaterThan(1000);
+            expect(v.regions.arms.raw.frame.agreement).toBe(1);
+        }
+    }, 120_000);
 
     it('labels a whole place by the isolate\'s plan outline when the isolate is the target: the hero inside it, its neighbours outside, the tile and the hero arms as before', async () => {
         const models = path.join(root, 'public', 'models');

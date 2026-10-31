@@ -575,6 +575,83 @@ export function nearTriangleFlags(t: TileTriangles, ref: TileTriangles, tol = 0.
     return flags;
 }
 
+/**
+ * How far (m) a tile triangle's centroid may lie from the isolate's surface and still be on it: the seam weld's tolerance
+ * (tile-seam-weld-service, 3 cm), the most a weld moved a vertex of the scan the isolate was cut from.
+ */
+export const PHOTO_MATCH_ISOLATE_SURFACE_M = 0.03;
+
+/** Squared distance from p to the triangle (a, b, c) (Ericson, Real-Time Collision Detection 5.1.5). */
+function pointTriangleDist2(P: ArrayLike<number>, o: number, px: number, py: number, pz: number): number {
+    const ax = P[o], ay = P[o + 1], az = P[o + 2], bx = P[o + 3], by = P[o + 4], bz = P[o + 5], cx = P[o + 6], cy = P[o + 7], cz = P[o + 8];
+    const abx = bx - ax, aby = by - ay, abz = bz - az, acx = cx - ax, acy = cy - ay, acz = cz - az;
+    const apx = px - ax, apy = py - ay, apz = pz - az;
+    const d2 = (x: number, y: number, z: number) => (px - x) ** 2 + (py - y) ** 2 + (pz - z) ** 2;
+    const d1 = abx * apx + aby * apy + abz * apz, e1 = acx * apx + acy * apy + acz * apz;
+    if (d1 <= 0 && e1 <= 0) return d2(ax, ay, az);
+    const bpx = px - bx, bpy = py - by, bpz = pz - bz;
+    const d3 = abx * bpx + aby * bpy + abz * bpz, e3 = acx * bpx + acy * bpy + acz * bpz;
+    if (d3 >= 0 && e3 <= d3) return d2(bx, by, bz);
+    const vc = d1 * e3 - d3 * e1;
+    if (vc <= 0 && d1 >= 0 && d3 <= 0) { const v = d1 / (d1 - d3); return d2(ax + v * abx, ay + v * aby, az + v * abz); }
+    const cpx = px - cx, cpy = py - cy, cpz = pz - cz;
+    const d6 = abx * cpx + aby * cpy + abz * cpz, e6 = acx * cpx + acy * cpy + acz * cpz;
+    if (e6 >= 0 && d6 <= e6) return d2(cx, cy, cz);
+    const vb = d6 * e1 - d1 * e6;
+    if (vb <= 0 && e1 >= 0 && e6 <= 0) { const w = e1 / (e1 - e6); return d2(ax + w * acx, ay + w * acy, az + w * acz); }
+    const va = d3 * e6 - d6 * e3;
+    if (va <= 0 && e3 - d3 >= 0 && d6 - e6 >= 0) { const w = (e3 - d3) / (e3 - d3 + d6 - e6); return d2(bx + w * (cx - bx), by + w * (cy - by), bz + w * (cz - bz)); }
+    const den = 1 / (va + vb + vc), v = vb * den, w = vc * den;
+    return d2(ax + abx * v + acx * w, ay + aby * v + acy * w, az + abz * v + acz * w);
+}
+
+/** A point query against triangles: whether a point lies within `tol` of any of them (a uniform grid over their bounds). */
+function surfaceIndex(t: TileTriangles, tol: number, keep?: Uint8Array): (x: number, y: number, z: number) => boolean {
+    const CELL = 2, grid = new Map<string, number[]>(), P = t.positions;
+    const cell = (v: number) => Math.floor(v / CELL);
+    for (let i = 0; i < t.texture.length; i++) {
+        if (keep && !keep[i]) continue;
+        const o = i * 9, lo = [0, 1, 2].map(k => cell(Math.min(P[o + k], P[o + 3 + k], P[o + 6 + k]) - tol)), hi = [0, 1, 2].map(k => cell(Math.max(P[o + k], P[o + 3 + k], P[o + 6 + k]) + tol));
+        for (let x = lo[0]; x <= hi[0]; x++) for (let y = lo[1]; y <= hi[1]; y++) for (let z = lo[2]; z <= hi[2]; z++) {
+            const k = `${x},${y},${z}`, list = grid.get(k);
+            if (list) list.push(o); else grid.set(k, [o]);
+        }
+    }
+    const tol2 = tol * tol;
+    return (x, y, z) => !!grid.get(`${cell(x)},${cell(y)},${cell(z)}`)?.some(o => pointTriangleDist2(P, o, x, y, z) <= tol2);
+}
+
+/**
+ * Per triangle of `t`, 1 when its centroid lies on `ref`'s surface (within `tol`, point to triangle). A triangle of `t` that
+ * `ref` holds cut into pieces (an isolate cut at its outline, split at a seam) is found whole; one `ref` cut through is
+ * decided by where its centroid falls.
+ */
+export function onSurfaceFlags(t: TileTriangles, ref: TileTriangles, tol = PHOTO_MATCH_ISOLATE_SURFACE_M): Uint8Array {
+    const near = surfaceIndex(ref, tol), c = centroids(t), flags = new Uint8Array(t.texture.length);
+    for (let i = 0; i < flags.length; i++) if (near(c[i * 3], c[i * 3 + 1], c[i * 3 + 2])) flags[i] = 1;
+    return flags;
+}
+
+/**
+ * The share of `ref`'s area within `tol` of the triangles of `t` that `flags` selects: each triangle of `ref` sampled at four
+ * interior points (its centroid and the midpoints between it and each corner), each standing for a quarter of its area.
+ */
+export function surfaceCoverShare(ref: TileTriangles, t: TileTriangles, flags: Uint8Array, tol = PHOTO_MATCH_ISOLATE_SURFACE_M): number {
+    const near = surfaceIndex(t, tol, flags), P = ref.positions;
+    let total = 0, covered = 0;
+    for (let i = 0; i < ref.texture.length; i++) {
+        const o = i * 9;
+        const ux = P[o + 3] - P[o], uy = P[o + 4] - P[o + 1], uz = P[o + 5] - P[o + 2], vx = P[o + 6] - P[o], vy = P[o + 7] - P[o + 1], vz = P[o + 8] - P[o + 2];
+        const area = 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+        if (!(area > 0)) continue;
+        total += area;
+        const g = [0, 1, 2].map(k => (P[o + k] + P[o + 3 + k] + P[o + 6 + k]) / 3);
+        const samples = [g, ...[0, 3, 6].map(v => [0, 1, 2].map(k => (g[k] + P[o + v + k]) / 2))];
+        for (const s of samples) if (near(s[0], s[1], s[2])) covered += area / 4;
+    }
+    return total > 0 ? covered / total : 0;
+}
+
 /** The triangles of `t` whose entry in `keepFlags` is set, in order. */
 function selectTriangles(t: TileTriangles, keepFlags: Uint8Array): TileTriangles {
     const keep: number[] = [];
@@ -1020,7 +1097,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
 
     // ---------------- the reference tile, its terrain and the target ----------------
     // The reference is the measured tile, whole. Its terrain is the ground model of the tile's geometry; the target is the
-    // isolate (matched triangle by triangle) or, when the build isolated nothing, the structure the app's structure rule picks
+    // isolate (every tile triangle on its surface) or, when the build isolated nothing, the structure the app's structure rule picks
     // at the frame origin (the place); the crowns are the ones the run's tree strip measured.
     progress('measuring the reference tile: its terrain and the target at the place', 0.01);
     const scan = loadScanMesh(ref.tileGeometry);
@@ -1114,7 +1191,9 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     progress('labelling the tile and every arm by geometry: terrain, the target, measured crowns, neighbours', 0.21);
     const full = readTileTriangles(fs.readFileSync(ref.tileTextured));
     const isolate = ref.isolate ? readTileTriangles(fs.readFileSync(ref.isolate)) : undefined;
-    const isoFlags = isolate ? nearTriangleFlags(full, isolate) : undefined;
+    // the isolate's triangles in the tile: every tile triangle whose centroid lies on the isolate's surface (tile_refine cuts the
+    // isolate's triangles at its outline, so they are not the tile's triangles one for one)
+    const isoFlags = isolate ? onSurfaceFlags(full, isolate) : undefined;
     const crownFlags = ref.removedTrees ? nearTriangleFlags(full, readTileTriangles(fs.readFileSync(ref.removedTrees))) : undefined;
     const fullLabels = triangleRegions(full, terrain, (i, x, z) => (crownFlags?.[i] ? REGION.trees : (isoFlags ? isoFlags[i] : targetAt?.(x, z)) ? REGION.target : REGION.neighbours));
     // the target's triangles in the tile: the isolate's, else the picked structure's standing triangles
@@ -1165,9 +1244,14 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         terrain: { source: 'the reference tile\'s geometry', method: terrain.terrainMethod, cellM: terrain.cellMeters },
         target: isoFlags
             ? {
-                source: 'the isolate (the scan the build isolated), matched triangle by triangle', triangles: targetCount, isolateTriangles: isolate!.texture.length,
-                // an isolate cut from another scan than the reference (a raw extraction against a welded one) matches only in part
-                matchedShare: r3(targetCount / Math.max(1, isolate!.texture.length))
+                source: `the isolate (the scan the build isolated): every tile triangle whose centroid lies on its surface, within ${PHOTO_MATCH_ISOLATE_SURFACE_M * 100} cm`,
+                triangles: targetCount, isolateTriangles: isolate!.texture.length,
+                // how much of the isolate the target covers: the share of its area within the tolerance of the tile triangles labelled
+                // target (an isolate cut from another scan than the reference, a raw extraction against a welded one, covers only part)
+                matchedShare: r3(surfaceCoverShare(isolate!, full, isoFlags)),
+                // the earlier count, for comparison: tile triangles whose centroid is an isolate triangle's (within 1 cm), over the
+                // isolate's triangles; cut triangles never match it
+                matchedShareByTriangles: r3(nearTriangleFlags(full, isolate!).reduce((n, f) => n + f, 0) / Math.max(1, isolate!.texture.length))
             }
             : pick
                 ? {
