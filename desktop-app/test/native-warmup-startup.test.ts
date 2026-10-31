@@ -44,7 +44,7 @@ describe('native warm-up placement', () => {
         const fakeServer = () => Object.assign(new EventEmitter(), { close: vi.fn() });
         vi.doMock('../server/app', () => ({
             createStandaloneServer: () => ({
-                locals: { launchToken: 'test-token', exportedToolsStore: {} },
+                locals: { launchToken: 'test-token', exportedToolsStore: {}, geminiService: { warmChatPrompt: vi.fn(async () => { order.push('chat prompt warm-up'); }) } },
                 listen: (_port: number, _host: string, cb: () => void) => { order.push('api listening'); cb(); return fakeServer(); }
             }),
             createToolsServer: () => ({ listen: (_p: number, _h: string, cb: () => void) => { cb(); return fakeServer(); } }),
@@ -57,7 +57,8 @@ describe('native warm-up placement', () => {
         const handlersBefore = { rejection: process.listeners('unhandledRejection'), exception: process.listeners('uncaughtException') };
         try {
             await import('../server/index');
-            expect(order).toEqual(['api listening', 'warm-up']);
+            // the first chat turn's payload is warmed after listening too (184b5630)
+            expect(order).toEqual(['api listening', 'warm-up', 'chat prompt warm-up']);
         } finally {
             // the entry point installs process-wide handlers; leave the test process as it was
             for (const l of process.listeners('unhandledRejection')) if (!handlersBefore.rejection.includes(l)) process.removeListener('unhandledRejection', l);
