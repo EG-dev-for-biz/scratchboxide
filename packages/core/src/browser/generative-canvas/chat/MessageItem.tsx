@@ -486,7 +486,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                         <div style={{ display: 'flex', gap: '2px' }}>
                             {(msg.imagesContent && msg.imagesContent.length > 0 ? msg.imagesContent : [msg.imageContent!]).map((src, i) => (
                                 <img
-                                    key={i}
+                                    key={`${i}-${src.slice(-48)}`}
                                     src={src}
                                     alt={`Supplied reference image ${i + 1}`}
                                     style={{ flex: 1, minWidth: 0, width: '100%', maxHeight: '180px', objectFit: 'cover', display: 'block' }}

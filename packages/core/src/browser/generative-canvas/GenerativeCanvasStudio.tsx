@@ -7,7 +7,6 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import type { StageDock } from './studio/stage-dock';
 import { usePersistedProjects } from './hooks/usePersistedProjects';
 import * as React from 'react';
 import {
@@ -36,7 +35,6 @@ import {
     SkillItem,
     StudioAppearanceConfig,
     StudioLayoutMode,
-    StageLayoutMode,
     StudioSettingsTab,
     TokenBudgetMetrics,
     TerminalExecutionError,
@@ -171,6 +169,7 @@ import { useResolvedWorkspaceRoot } from './hooks/useResolvedWorkspaceRoot';
 import { useComposerGitEnv } from './hooks/useComposerGitEnv';
 import { useArtifactExports } from './hooks/useArtifactExports';
 import { useCanvasOpeners } from './hooks/useCanvasOpeners';
+import { useStageLayout } from './hooks/useStageLayout';
 import { useArtifactSync } from './hooks/useArtifactSync';
 import { useLayoutModeSwitch, useCreateEmptyCanvas, UseLayoutModeSwitchDeps } from './hooks/useLayoutModeSwitch';
 import { useWorkspaceFiles, useWorkspaceFileCreation, UseWorkspaceFilesDeps } from './hooks/useWorkspaceFiles';
@@ -325,9 +324,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
     // Layout Modes (layoutMode itself lives in the chat store)
     const [aiInteractionMode, setAiInteractionMode] = React.useState<'agent' | 'ask' | 'plan'>('agent');
-    const [stageLayoutMode, setStageLayoutMode] = React.useState<StageLayoutMode>('single');
-    // a second artifact docked beside the main stage, dragged there from its tab (studio/stage-dock.ts)
-    const [stageDock, setStageDock] = React.useState<StageDock | undefined>();
+    const { stageLayoutMode, setStageLayoutMode, stageDock, setStageDock } = useStageLayout();
     const [docReadOnly, setDocReadOnly] = React.useState<boolean>(false);
     const [documentPaneState, setDocumentPaneState] = React.useState<'split' | 'collapsed' | 'expanded'>('split');
     const [splitRatio, setSplitRatio] = React.useState<number>(CHAT_SPLIT_DEFAULT);
