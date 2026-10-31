@@ -256,9 +256,10 @@ describe('sb script guide', () => {
         const scripted = await buildSystemInstruction({ prompt: 'refactor the login handler', mode: 'agent', activeArtifact: SCRIPT_SCENE } as any);
         expect(SB_PYTHON_SCRIPT_GUIDE.length).toBeGreaterThan(14_000);
         expect(scripted.length - unrelated.length).toBeGreaterThanOrEqual(SB_PYTHON_SCRIPT_GUIDE.length);
-        // Measured 2026-10-30: 53,162 characters (50,144 on 2026-10-21; the prompt additions since are not the guide).
-        // The ceiling guards against the guide (over 14,000 characters) coming back, not this.
-        expect(unrelated.length).toBeLessThan(54_000);
+        // Measured 2026-10-31: 54,002 characters (50,144 on 2026-10-21; the prompt additions since are not the guide, the
+        // latest b6551d97, d8ce6ada and 9a1493e9). The ceiling guards against the guide (over 14,000 characters) coming back,
+        // not this.
+        expect(unrelated.length).toBeLessThan(56_000);
     });
 
     it('is served by read_sb_script_guide, offered next to execute_3d_python_script', async () => {
