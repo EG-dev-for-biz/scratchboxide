@@ -24,8 +24,17 @@ known-bad build from a good one, is what turns a score into evidence.
   for shape alone (`clay`);
 - shows the judge the photo and the renders shuffled and unlabelled, `runs` times per view, and scores each 1-10 on
   shape, materials, detail, errors and overall, reported as mean and spread;
-- adds luminance SSIM, the structural-edge chamfer and CIEDE2000 inside the building mask, and a grid image;
-- compares several arms at once with `builds: [{ id, label, runId | glbs }]`; `baseline` adds the raw scan as an arm.
+- adds luminance SSIM, the structural-edge chamfer and CIEDE2000 inside the building mask, and the same numbers over the
+  whole frame and per region (`views[].regions`, `pixelMetrics.regions`: building, ground, neighbours, measured trees and
+  the skyline band), each with `agreement`, the share of the region where the arm shows what the reference tile shows. The
+  masks come from geometry (what each pixel's ray hits in the measured tile, labelled by terrain height, the target and the
+  measured crowns), never from colour, and are drawn in every grid and in a mask grid per view;
+- with `judgeRegions: true` the judge also scores the ground, the neighbours and the skyline, 1-10, in the same calls and
+  still blind (`regionScores`); the building's criteria are asked as before;
+- compares several arms at once with `arms: [{ id, label, runId | glbs, scope }]`; `baseline` adds the raw scan as an arm.
+  `scope: 'target'` (an isolated build, the default for one) is drawn in the tile with the target cut out; `scope: 'place'`
+  (a district build, the default for one) is the whole place and is drawn on its own. The first run named is the reference:
+  its tile gives the masks, the context and the views, so name the run with the widest extraction first.
 
 Judge calls per comparison: views x runs x (2 with clay, else 1), plus one more view with `includeSatelliteOrtho`. The
 defaults (4 views, 3 runs, clay on) make 24 calls.
@@ -69,9 +78,11 @@ way the app makes them.
 
 ## Step 2: the free dry run
 
-This step makes no model calls. Run the comparison under vitest with a stand-in judge client, the way
-`packages/core/test/photo-match-evaluate-tool.test.ts` does (`fakeJudge`), with credentials unreachable (empty HOME,
-credential variables unset; AGENTS.md section 6.3). It must show that:
+This step makes no model calls. Run the comparison under vitest with stand-ins at the billed edges and credentials
+unreachable (empty HOME, credential variables unset; AGENTS.md section 6.3): `packages/core/test/photo-match-dryrun.test.ts`
+runs `photo_match_evaluate`'s own path on the real runs and GLBs, with the real pano positions the Street View metadata cache
+holds, each "photo" rendered from the reference tile, identity registration and a blind pixel-difference judge (its header
+has the config; skipped unless `PHOTO_MATCH_DRYRUN` names it). It must show that:
 
 - every arm and every decoy renders at every held-out pose, with no empty or black render;
 - the held-out panos exclude every pano any arm's build used;
