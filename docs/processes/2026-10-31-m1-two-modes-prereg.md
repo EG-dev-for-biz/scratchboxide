@@ -31,6 +31,33 @@ K. Its checks:
 The `poses` input was checked on a synthetic block and in a dry run at the ESB. No Penn Station tile is cached, so it has
 not been tried at Penn 2.
 
+**Amendment, 2026-10-31, before any paid call: the tile's target is labelled by the isolate's surface.**
+- **The evidence.** The ESB dry run on the fresh K run 0bb20154 hit the stop rule `matchedShare` under 0.99, at 0.967. Every
+  stage of that run was a cache miss: the extraction and the remesh were fresh, from one extraction. In
+  `docs/screenshots/m1_prereg/esb_dryrun/masks_view1.png` a straight diagonal wedge of the building's own 34th St facade is
+  labelled neighbour in the reference mask. That is a broken reference mask, not a property of the build.
+- **The premise that was wrong.** This draft said that on a fresh build the isolate and the tile are one extraction, so
+  `matchedShare` should be 1.00. It is not. tile_refine cuts the isolate's triangles at its outline, so the isolate does
+  not hold the tile's triangles one for one:
+  - 4.9% of the isolate's triangles had no tile triangle with the same centroid, even at a 5 cm tolerance;
+  - 1.4% of its standing triangles (2.5% of their area) had none;
+  - the tile triangles they were cut from were left out of the target.
+
+  The 0.967 on run 7f594cd6, put down to a mixed extraction, is the same effect: the fresh build gives the same figure.
+- **The change.** It is in `photo-match-evaluate.ts`:
+  - A tile triangle is the target when its centroid lies on the isolate's surface: point to triangle, within 3 cm
+    (`PHOTO_MATCH_ISOLATE_SURFACE_M`, the seam weld's tolerance), in `onSurfaceFlags`. This replaces centroid-to-centroid
+    matching (`nearTriangleFlags`).
+  - A tile triangle the isolate's cut runs through goes by where its centroid falls.
+  - Penn 2's picked-footprint path is unchanged.
+- **Bar 8's measure.** Bar 8 keeps its 0.99 and its meaning: how much of the isolate the tile's target covers. With cut
+  triangles a count no longer measures that, so `matchedShare` is now by area (`surfaceCoverShare`): the share of the
+  isolate's area within 3 cm of the tile triangles labelled target. The earlier count is reported beside it as
+  `matchedShareByTriangles`. The dry-run stop rule `matchedShare` under 0.99 reads the same field.
+- **On run 0bb20154:** 105,452 tile triangles are the target (95,646 before), and `matchedShare` is 0.996 by area. The
+  triangle count share is 0.967.
+- **Unchanged.** No bar, arm, decoy, place, view, pose or stop rule changed.
+
 The method is `.claude/skills/judge-preregister/SKILL.md`; the judge is described in
 `docs/processes/photo_match_world_regions.md`. Decisions of 2026-10-31:
 - **The user's, recorded in the plan.** These are in
@@ -104,7 +131,8 @@ gave, K's run gives the first two itself, and the third came from a tool fix, no
     "Stop rules").
 - **The views: aimed at K's isolate.** That is what the dry run did.
 - **The target: K's isolate, matched triangle by triangle.**
-  - On a fresh build the isolate and the reference tile are one extraction, so `matchedShare` should be 1.00.
+  - On a fresh build the isolate and the reference tile are one extraction, so `matchedShare` should be 1.00. (Wrong as a
+    count: see the amendment. By area it is 0.996 on fresh run 0bb20154.)
   - Bar 8 reads that share at these places.
 - **X1's labels: K's isolate's plan outline** (the tool fix, found while writing this draft).
   - **The gap.** The tool used to label a whole-place arm (`scope: 'place'`) by the target's footprint only when the
