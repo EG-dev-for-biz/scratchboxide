@@ -76,6 +76,39 @@ not been tried at Penn 2.
   will see it. Nothing is done about it in this run.
 - **Unchanged.** No bar, arm, decoy, place, view, pose or other stop rule changed.
 
+**Amendment 3, 2026-10-31, before any paid call: a `matchedShare` miss is resolved by bar 8's own consequence** (the
+user's decision: "Yes, use bar 8").
+- **The rule.** A benchmark place whose `matchedShare` is under 0.99 is not stopped. As bar 8 says, its building mask is
+  unreliable there, so:
+  - it is left out of bars 1 and 5 (the building);
+  - it is counted in bars 2, 3, 4 and 7 (the regions and the raw scan).
+
+  The measure and the 0.99 stay as amendment 1 left them. The on-scan measure proposed while the dry runs were made (the
+  share over the part of the isolate that lies on the scan) is withdrawn and was never applied.
+- **The record, from the dry runs on the fresh builds.** "On-scan" is the share over the part of the isolate within 3 cm
+  of the scan. "Standing" and "ground" split the isolate's area by the ground band.
+
+  | Place | K run | `matchedShare` (area) | By count | On-scan | Standing | Ground | Cause |
+  |---|---|---|---|---|---|---|---|
+  | ESB | 0bb20154 | 0.996 | 0.967 | 0.999 | 0.999 | 0.936 | - (passes) |
+  | Haughwout Building | f4f25a8e | 0.875 | 0.880 | 0.992 | 0.896 | 0.698 | tile_refine's closure geometry: 471 m² of the isolate's 3,957 m² (365 standing, 106 ground) is not in the scan |
+  | Ferry Building | cdbda9bb | 0.862 | 0.824 | 0.986 | 0.903 | 0.635 | the same: 396 m² of 3,071 m² (247 standing, 149 ground) is not in the scan |
+  | Griffith Observatory | d04c4274 | 0.871 | 0.789 | 0.890 | 0.995 | 0.705 | ground triangles straddling the isolate's edge: the isolate holds 13,288 m² of ground-level terraces, and large tile ground triangles across its edge have their centroids outside it (the masks label those triangles ground either way); only 713 m² of 32,599 m² is off the scan |
+
+- **What is left for the building bars.** Bars 1 and 5 now rest on the ESB and Penn 2.
+  - Bar 5's "all but one judged place" then means one of two places. The bar is not changed; the report states it.
+  - The three places still count in bars 2, 3, 4 and 7.
+- **The Ferry Building's target is part of the building.** K isolated a 428 m² Google footprint at the geocoded point,
+  the central pavilion. The clock tower rising from it and the long wings are neighbours there, and the report says so.
+- **Griffith Observatory.** It has three judged views (14 panos near the place, one used by the build and excluded).
+  That is within the draft's minimum: a place is indicative only below three.
+- **The other dry-run checks passed at all three places.**
+  - Every arm and decoy rendered at every view, with no empty render and no arm without triangles.
+  - The raw scan's frame agreement is 1.00 in every view.
+  - X1's standing triangles are labelled target: 100% at the Haughwout and the Ferry Building, 99.98% at Griffith.
+  - No arm was lifted, and no frame mismatched.
+- **Unchanged.** No bar, arm, decoy, place, view or pose changed.
+
 The method is `.claude/skills/judge-preregister/SKILL.md`; the judge is described in
 `docs/processes/photo_match_world_regions.md`. Decisions of 2026-10-31:
 - **The user's, recorded in the plan.** These are in
@@ -389,7 +422,8 @@ Both are made locally from the arms' own files, at no cost, and judged blind in 
   - `frame_mismatch`;
   - `liftedM` over 1 m;
   - at a benchmark place:
-    - `regions.target.matchedShare` under 0.99;
+    - `regions.target.matchedShare` under 0.99 (**amended 2026-10-31, amendment 3:** not a stop; the place is left out of
+      bars 1 and 5, as bar 8 says);
     - X1's building agreement under 0.9 (a check of the outline labelling; 1.00 in every view of the ESB dry run on
       run 7f594cd6). **Amended 2026-10-31 (amendment 2):** the share of X1's standing triangles labelled target under
       0.99; the building agreement per view is kept as information;
