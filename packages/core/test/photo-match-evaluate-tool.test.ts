@@ -30,8 +30,9 @@ import { renderTriangles, PHOTO_MATCH_BACKGROUND, PHOTO_MATCH_CLAY, type JudgeCl
 import { castCamera } from '../src/node/3d-engine/staged-location/survey-casting';
 import { orthoReferenceCamera, orthoReferenceRecord, type OrthoReference } from '../src/node/3d-engine/staged-location/ortho-reference';
 import type { PanoCandidate } from '../src/node/3d-engine/staged-location/streetview-evidence';
+import { buildGroundModel, loadScanMesh } from '../src/node/spatial/StreetViewSurveyPlanner';
 import {
-    collectPanoIds, createPhotoMatchEvaluateHandler, visibleStagedLayers, PHOTO_MATCH_EVALUATE_TOOL, type HeldOutRegistration, type PhotoMatchDeps
+    collectPanoIds, createPhotoMatchEvaluateHandler, heldOutViews, visibleStagedLayers, PHOTO_MATCH_EVALUATE_TOOL, type HeldOutRegistration, type PhotoMatchDeps
 } from '../src/node/gemini/tools/location-evidence/photo-match-evaluate';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { LOCATION_EVIDENCE_TOOL_DECLARATIONS } from '../src/node/gemini/tools/location-evidence-tools';
@@ -125,6 +126,18 @@ function writeGlb(file: string, parts: Part[], extras?: Record<string, unknown>)
     for (const k of ['images', 'textures']) if (!json[k].length) delete json[k];
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, assembleGlb(json, bin));
+}
+
+/** A tile extraction in the staged cache at `anchor` (the textured street and its grey geometry); returns the textured GLB. */
+function writeTileAt(root: string, key: string, anchor: { lat: number; lng: number }, street: Part[]): string {
+    const dir = path.join(root, '.scratchbox', 'cache', 'staged_location', 'tiles', key);
+    writeGlb(path.join(dir, 'textured.glb'), street);
+    writeGlb(path.join(dir, 'geometry.glb'), street.map(p => ({ positions: p.positions, uvs: p.uvs, indices: p.indices, color: [0.5, 0.5, 0.5] as [number, number, number] })));
+    fs.writeFileSync(path.join(dir, 'done.json'), JSON.stringify({
+        schema: 'scratchbox.stage-cache/1', stage: 'tiles', key, builtAtMs: 1, ms: 1, published: [],
+        value: { texturedGlb: 'textured.glb', geometryGlb: 'geometry.glb', originEllipsoidalHeightM: -30, geoAnchor: anchor }
+    }));
+    return path.join(dir, 'textured.glb');
 }
 
 // ----------------------------------------------------------------------------------------------------------------
@@ -620,6 +633,39 @@ describe('photo_match_evaluate tool', () => {
         expect(r.reference).toBe('the cached extraction at the anchor');
         expect(r.origin.heightMeters).toBe(-30);
         expect(r.summary).toMatch(/Only 1 view could be judged/);
+    }, 120_000);
+
+    it('stands each held-out eye 2.5 m over the terrain, not over scan that lies below the street', async () => {
+        // a vault 20 m under the street north of the block: under the pano there, the lowest surface is its floor
+        const anchor = { lat: 40.72, lng: -74.02 };
+        const floor = { positions: [-8, -20, -46, 8, -20, -46, 8, -20, -30, -8, -20, -30], uvs: [0, 0, 1, 0, 1, 1, 0, 1], indices: [0, 2, 1, 0, 3, 2] };
+        const textured = writeTileAt(root, '9'.repeat(64), anchor, [
+            { ...ground(260), png: checkerPng([110, 110, 105], [96, 96, 92]) }, { ...TARGET, png: realFacade }, { ...floor, png: checkerPng([60, 60, 60], [50, 50, 50]) }
+        ]);
+        const panos: PanoCandidate[] = [
+            { panoId: 'OVER_VAULT', lat: 0, lng: 0, date: '2025-06', copyright: '© Google', x: 0, z: -38 },
+            { panoId: 'SOUTH', lat: 0, lng: 0, date: '2025-05', copyright: '© Google', x: 4, z: 34 }
+        ];
+        // the rule alone, on the tile's geometry: on the terrain the eye stands at street height; on the lowest surface it stood
+        // in the vault, under the street, which hid the whole block from it
+        const scan = loadScanMesh(textured.replace(/textured\.glb$/, 'geometry.glb'));
+        const terrain = buildGroundModel(scan, { cellMeters: 1 });
+        const block = { cx: 0, cz: 0, radiusM: Math.hypot(7, 6), ymin: 0, ymax: 16, mesh: { vertices: Float32Array.from(TARGET.positions), indices: Uint32Array.from(TARGET.indices) } };
+        const onTerrain = heldOutViews(panos, block, scan.mesh, new Set(), terrain);
+        const north = onTerrain.views.find(v => v.panoId === 'OVER_VAULT')!;
+        expect(north, onTerrain.rejected.join('; ')).toBeDefined();
+        expect(north.eye[1]).toBeCloseTo(2.48, 1);
+        expect(north.eyeGround).toBe('terrain');
+        const onLowest = heldOutViews(panos, block, scan.mesh, new Set());
+        expect(onLowest.views.map(v => v.panoId)).toEqual(['SOUTH']);
+        expect(onLowest.rejected.join('; ')).toMatch(/OVER_VAULT: 38 m, fills \d+% of the frame, \d% of it unhidden/);
+
+        // the tool: both panos held out and judged, every eye on the terrain
+        const out = await createPhotoMatchEvaluateHandler(() => fakeDeps(root, { panos, street: textured }))({ glbs: [staged.altGlb], anchor, views: 2, runs: 1, clay: false }, ctxFor(root));
+        const r = out.resultPayload as any;
+        expect(out.status, JSON.stringify(r).slice(0, 800)).toBe('completed');
+        expect(r.views.map((v: any) => v.panoId).sort()).toEqual(['OVER_VAULT', 'SOUTH']);
+        expect(r.heldOut.eyeGround).toEqual({ terrain: 2 });
     }, 120_000);
 
     it('fails with typed errors and no scores when no view can be held out or registered', async () => {

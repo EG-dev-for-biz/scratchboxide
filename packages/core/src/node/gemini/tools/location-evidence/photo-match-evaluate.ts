@@ -543,7 +543,7 @@ function standingIn(mesh: RenderMesh3D, terrain: { groundAt(x: number, z: number
     return { vertices: Float32Array.from(out), indices: Uint32Array.from({ length: out.length / 3 }, (_, k) => k) };
 }
 
-/** Lowest surface of the mesh under (x, z) within 1.5 m (the street), else NaN. */
+/** Lowest surface of the mesh under (x, z) within 1.5 m (the street off the terrain), else NaN. */
 function groundAt(V: ArrayLike<number>, I: ArrayLike<number>, x: number, z: number): number {
     let best = Infinity;
     for (let t = 0; t < I.length; t += 3) {
@@ -572,13 +572,18 @@ function structureOf(mesh: RenderMesh3D): Structure {
     return { cx, cz, radiusM: R, ymin, ymax, mesh };
 }
 
-export interface HeldOutCandidateView extends SelectedView { close: boolean; visibleShare: number; screenShare: number }
+/** What a candidate's eye stands on: the terrain ground model, the lowest surface within 1.5 m (off the terrain), the structure's base. */
+export type HeldOutEyeGround = 'terrain' | 'lowest-surface' | 'structure-base';
+
+export interface HeldOutCandidateView extends SelectedView { close: boolean; visibleShare: number; screenShare: number; eyeGround: HeldOutEyeGround }
 
 /**
  * Candidate views from the unused panos: one per pano, aimed at the structure (its nearest wall with a wide view when the pano
  * stands close, else its centre), kept when the structure fills enough of the frame and the tile mesh does not hide most of it.
+ * The eye stands 2.5 m over the street: the terrain ground model under the pano (`terrain`, the reference tile's), else the
+ * lowest surface within 1.5 m (scan below the street, a vault or a cutting, can reach far under it: the terrain does not).
  */
-export function heldOutViews(panos: PanoCandidate[], structure: Structure, context: RenderMesh3D, exclude: Set<string>): { views: HeldOutCandidateView[]; rejected: string[] } {
+export function heldOutViews(panos: PanoCandidate[], structure: Structure, context: RenderMesh3D, exclude: Set<string>, terrain?: { groundAt(x: number, z: number): number }): { views: HeldOutCandidateView[]; rejected: string[] } {
     const { cx, cz, radiusM: R, ymin, ymax } = structure;
     const V = context.vertices, I = context.indices, IV = structure.mesh.vertices;
     const near = panos.filter(p => !exclude.has(p.panoId)).map(p => ({ ...p, d: Math.hypot(p.x - cx, p.z - cz) })).filter(p => p.d > R * 0.5 + 3 && p.d < R + 110);
@@ -587,8 +592,10 @@ export function heldOutViews(panos: PanoCandidate[], structure: Structure, conte
     for (const p of near) if (!cands.some(q => Math.hypot(q.x - p.x, q.z - p.z) < 10)) cands.push(p);
     const views: HeldOutCandidateView[] = [], rejected: string[] = [];
     for (const p of cands) {
-        let gy = groundAt(V, I, p.x, p.z);
-        if (!Number.isFinite(gy)) { if (p.d > R + 60) { rejected.push(`${p.panoId}: no ground under it`); continue; } gy = ymin; }
+        let gy = terrain ? terrain.groundAt(p.x, p.z) : NaN;
+        let eyeGround: HeldOutEyeGround = 'terrain';
+        if (!Number.isFinite(gy)) { gy = groundAt(V, I, p.x, p.z); eyeGround = 'lowest-surface'; }
+        if (!Number.isFinite(gy)) { if (p.d > R + 60) { rejected.push(`${p.panoId}: no ground under it`); continue; } gy = ymin; eyeGround = 'structure-base'; }
         const eye: Vec3 = [p.x, gy + 2.5, p.z];
         let nx = cx, nz = cz, dn = Infinity;
         for (let i = 0; i < IV.length; i += 30) { const dd = Math.hypot(IV[i] - p.x, IV[i + 2] - p.z); if (dd < dn) { dn = dd; nx = IV[i]; nz = IV[i + 2]; } }
@@ -606,7 +613,7 @@ export function heldOutViews(panos: PanoCandidate[], structure: Structure, conte
         views.push({
             panoId: p.panoId, ...(p.date ? { date: p.date } : {}), ...(p.copyright ? { copyright: p.copyright } : {}), eye, headingDeg, pitchDeg, fovDeg, aspectRatio: 'RATIO_4X3',
             distanceM: Math.round(p.d * 10) / 10, facadeHeadingDeg: (headingDeg + 180) % 360, score: share, close,
-            visibleShare: Math.round(share * 100) / 100, screenShare: Math.round(screen * 100) / 100
+            visibleShare: Math.round(share * 100) / 100, screenShare: Math.round(screen * 100) / 100, eyeGround
         });
     }
     return { views, rejected };
@@ -786,7 +793,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     const structure = structureOf(targetMesh);
     const panos = await deps.discover(ref.origin, { x: structure.cx, z: structure.cz }, builds.cache.dir, signal);
     stopIfAborted(signal);
-    const { views: candidates, rejected } = heldOutViews(panos, structure, contextMesh, builds.used);
+    const { views: candidates, rejected } = heldOutViews(panos, structure, contextMesh, builds.used, terrain);
     const unusedNear = panos.filter(p => !builds.used.has(p.panoId)).length;
     if (!candidates.length) {
         throw new PhotoMatchError('no_heldout_candidates', `No held-out view: of ${panos.length} Google panos near the structure, ${panos.length - unusedNear} were used by the build and none of the other ${unusedNear} sees enough of it unhidden.`, { panosNear: panos.length, usedByBuild: builds.used.size, rejected: rejected.slice(0, 20) });
@@ -1248,6 +1255,9 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
             usedByBuild: builds.used.size,
             usedPanoSources: builds.usedSources,
             candidates: candidates.length,
+            notQualified: rejected.length,
+            // where each candidate's eye stands, 2.5 m up: the reference tile's terrain, else the lowest surface within 1.5 m
+            eyeGround: candidates.reduce((n, v) => ({ ...n, [v.eyeGround]: (n[v.eyeGround] ?? 0) + 1 }), {} as Partial<Record<HeldOutEyeGround, number>>),
             fetched: got.images.length,
             fetchFailures: got.failures.map(f => ({ panoId: f.view.panoId, error: f.error })),
             registered: locked.length,
