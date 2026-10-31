@@ -11,7 +11,8 @@ inside the building mask. It now measures the whole place.
   - **ground**: no vertex stands more than 0.6 m above the terrain under it (the base cleanup's street band). The terrain
     is the app's ground model (`buildGroundModel`, the walkable street surface) of the reference tile's geometry. Off the
     terrain, a facet is ground when it faces within 60 degrees of up.
-  - **target**: the isolate, matched triangle by triangle. With no isolate, it is the structure the app's structure rule
+  - **target**: the isolate: every tile triangle whose centroid lies on its surface (since 2026-10-31, later; it was
+    matched triangle by triangle). With no isolate, it is the structure the app's structure rule
     picks at the frame origin (`pickStructure`), inside Google's building footprint when the run's vector stage read one.
   - **trees**: the crowns the run's tree strip measured (`removed_trees.glb`) and every regrown trees layer.
   - **neighbours**: everything else standing.
@@ -96,7 +97,9 @@ inside the building mask. It now measures the whole place.
    upper shaft (2,438 m², 440 m), and the setback blocks count as neighbours. A district run's cached vector stage fixes
    this, and the tool now uses it. A district reference with no vector stage should not be trusted for the building mask;
    the report says which source decided (`regions.target.footprintSource`).
-3. **The isolate cut is only as good as the isolate's match with the reference tile.**
+3. **The isolate cut is only as good as the isolate's match with the reference tile.** (Corrected later on 2026-10-31:
+   the 96.7% was not a mixed extraction. A fresh build gives the same figure, because tile_refine cuts the isolate's
+   triangles at its outline. See "The isolate's target by its surface" below.)
    - On run 7f594cd6, 96.7% of the isolate's triangles matched. The tile was re-extracted today, while the run reused
      yesterday's cached remesh.
    - The unmatched triangles stay in the context. They show up as part of the ESB's own facade labelled neighbour (the
@@ -258,6 +261,47 @@ nothing.
 
 Not verified: the outline has not met a fresh K build, a courtyard building, or a district arm with real abutting
 neighbours.
+
+## The isolate's target by its surface (2026-10-31, later)
+
+**What the dry run found.** The preregistered ESB dry run on a fresh K build hit the stop rule `matchedShare` under 0.99,
+at 0.967. That run was 0bb20154, with every stage a cache miss.
+- In its reference mask a straight diagonal wedge of the building's own facade was labelled neighbour
+  (`docs/screenshots/m1_prereg/esb_dryrun/masks_view1.png`).
+- tile_refine cuts the isolate's triangles at its outline, so the isolate does not hold the tile's triangles one for one:
+  - 4.9% of the isolate's triangles had no tile triangle with the same centroid, even at 5 cm;
+  - by area, 2.5% of its standing parts had none.
+- The tile triangles they were cut from were left out of the target.
+
+**The rule now** (`onSurfaceFlags` in `photo-match-evaluate.ts`). Geometry decides, nothing else.
+- A tile triangle is the target when its centroid lies on the isolate's surface: point-to-triangle distance within 3 cm
+  (`PHOTO_MATCH_ISOLATE_SURFACE_M`, the seam weld's tolerance), through a 2 m grid over the isolate.
+- A triangle the isolate holds cut into pieces is found whole.
+- A triangle the cut runs through goes by where its centroid falls.
+
+**`matchedShare`.** It is now by area (`surfaceCoverShare`): the share of the isolate's area within 3 cm of the tile
+triangles labelled target. Each isolate triangle is sampled at four interior points, each standing for a quarter of its
+area. The earlier count is reported beside it as `matchedShareByTriangles`.
+
+**On run 0bb20154 (the ESB):**
+
+| | Before | After |
+|---|---|---|
+| Tile triangles labelled target | 95,646 | 105,452 |
+| `matchedShare` | 0.967 (by count) | 0.996 (by area) |
+
+The tolerance hardly matters: 0.9958 at 1 cm, 0.9963 at 3 cm, 0.9967 at 5 cm. The labelling takes under a second.
+
+**How it was checked** (`photo-match-evaluate-tool.test.ts`). The test isolate has the synthetic block's target cut into
+four pieces a face, plus a ground triangle cut at x = 7.
+- Centroid-to-centroid matching found none of the cut target.
+- On the surface:
+  - all ten of the target's tile triangles are found, and nothing of the street or the neighbour;
+  - the straddling triangle goes by its centroid both ways;
+  - a wall moved 6 cm off the surface is not found.
+- The area share is 1000/1001 (the 1 m² piece of ground is not covered).
+- Through the tool, with that isolate, the target is the tile's 10 triangles, `matchedShare` is at least 0.99,
+  `matchedShareByTriangles` is 0, and the raw scan's frame agreement is 1.00.
 
 ## Follow-ups
 
