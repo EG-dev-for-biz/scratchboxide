@@ -35,10 +35,12 @@ import * as path from 'path';
 import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome } from '../types';
 import type { StagedBuildState, StagedLayer, Vec3 } from '../../../../common/spatial/staged-location-contracts';
 import {
-    aggregateRuns, armLayerTriangles, armMeshesForView, composeGrid, coverageMask, judgeView, judgeViewClay, loadArmLayer, perceptualScores, renderPng, renderTriangles, JUDGE_CRITERIA,
-    type ArmLayer, type ArmRender, type CriterionStat, type JudgeClient, type JudgeCriterion, type JudgeRun, type PerceptualScores
+    aggregateCriteria, aggregateRuns, armLayerTriangles, armMeshesForView, composeGrid, coverageMask, judgeView, judgeViewClay, loadArmLayer, perceptualScores, regionMasks, regionOverlay, regionScores, renderPng,
+    renderTriangles, triangleRegions, JUDGE_CRITERIA, JUDGE_REGION_CRITERIA, PHOTO_MATCH_GROUND_BAND_M, PHOTO_MATCH_REGION_LEGEND, PHOTO_MATCH_REGIONS, REGION,
+    type ArmLayer, type ArmRender, type CriterionStat, type JudgeClient, type JudgeCriterion, type JudgeRegionCriterion, type JudgeRun, type PerceptualScores, type PhotoMatchRegion, type RegionMasks, type RegionScore
 } from '../../../3d-engine/staged-location/photo-match-eval';
 import { readTileTriangles, decodeImageInMemory, type TileTriangles } from '../../../3d-engine/staged-location/tile-texture-transfer';
+import { encodePng } from '../../../3d-engine/staged-location/png-encode';
 import { fetchOrthoReference, orthoReferenceCamera, type OrthoReference } from '../../../3d-engine/staged-location/ortho-reference';
 import { castCamera } from '../../../3d-engine/staged-location/survey-casting';
 import { isTreesLodJson } from '../../../3d-engine/staged-location/tree-lod-view';
@@ -47,6 +49,9 @@ import { EDGE_MAX_RESIDUAL_PX, type HeldImage } from '../../../3d-engine/staged-
 import { runPanoRegistrationOffThread } from '../../../3d-engine/staged-location/pano-registration-run';
 import { StageCache, stagedWorkspaceRoot } from '../../../3d-engine/staged-location/stage-cache';
 import { readGlbScene, renderFrameDepth, sceneToRenderMesh, type PoseCorrection } from '../../../spatial/StreetViewPoseRegistrar';
+import { buildGroundModel, loadScanMesh } from '../../../spatial/StreetViewSurveyPlanner';
+import { pickStructure, PICK_STRUCTURE } from '../../../3d-engine/staged-location/extraction-sizing';
+import { evidenceLookup, type EvidenceLookup } from '../../../3d-engine/staged-location/vector-footprints';
 import type { RenderMesh3D } from '../../../spatial/HeadlessMeshSilhouetteRenderer';
 import type { GeodeticOrigin } from '../../../spatial/StreetViewSurveyPlanner';
 import { resolveWithinRoot } from '../../../security/path-guard';
@@ -73,6 +78,7 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
         'renders every build from exactly those camera poses in its street, and has a vision model score the renders blind against each photo (shuffled and unlabelled, several runs) ' +
         'on shape, materials, detail, errors (10 = nothing wrong or invented), overall, realism (looks like a real photograph) and identity (recognisably this place), 1-10. Returns per-view and mean scores per criterion with their spread across runs and views, ' +
         'pixel metrics (SSIM, edge chamfer, colour difference: secondary, they do not rank builds reliably), the grid images (photo beside each render) and a short summary. ' +
+        'The pixel metrics are also given per region of each view: the whole frame, the target building, the ground, the neighbouring buildings, measured trees and the skyline band, with masks taken from the geometry each pixel shows (never from colour) and drawn in the grids. ' +
         'By default it also renders every build in uniform untextured clay from the same poses and has the judge score shape only (massing, openings, surface relief) against the photo: ' +
         'clayScores, clay grids; use them to compare geometry changes (relief, reveals, massing) that the photo texture hides. ' +
         'With no build named it evaluates the open staged scene. Compare versions by passing arms. Scores are relative judgements, not measurements: report the spread, and say when the views are few. ' +
@@ -99,7 +105,8 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
                         id: { type: 'STRING', description: 'Short id (letters/digits).' },
                         label: { type: 'STRING' },
                         runId: { type: 'STRING' },
-                        glbs: { type: 'ARRAY', items: { type: 'STRING' } }
+                        glbs: { type: 'ARRAY', items: { type: 'STRING' } },
+                        scope: { type: 'STRING', description: '"target": the build stands in for the target alone and is drawn in its street (the tile with the target cut out); "place": the build is the whole place (its own street and neighbours) and is drawn on its own. Default: an isolated run is "target", a district run "place", GLBs "target".' }
                     }
                 }
             },
@@ -112,6 +119,7 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
             baseline: { type: 'BOOLEAN', description: 'Also render the raw scan as downloaded (cut to the target) as a reference arm (default true when the tile is known).' },
             place: { type: 'STRING', description: 'The place as named to the judge (default: the run\'s resolved address).' },
             excludePanoIds: { type: 'ARRAY', items: { type: 'STRING' }, description: 'Panos the build used that the records do not show (GLB builds made elsewhere): never held out.' },
+            judgeRegions: { type: 'BOOLEAN', description: 'Also have the judge score the place around the building in every view: the ground, the neighbouring buildings and the skyline, 1-10, blind like the rest (regionScores). The building criteria are asked as before (default false; no extra judge calls).' },
             includeSatelliteOrtho: { type: 'BOOLEAN', description: 'Also fetch a Google Static Maps satellite crop centred on the place (zoom 19, 2048 px, its ground sample distance computed) and show the judge each build rendered top-down at that scale beside it, as one extra view labelled "satellite (Google Static Maps, date unknown)". A second opinion: reported in satelliteOrtho with the GSD, not counted in scores (default false; one Static Maps request and one or two more judge calls).' }
         }
     }
@@ -203,9 +211,19 @@ export function defaultPhotoMatchDeps(): PhotoMatchDeps {
 // the build: runs, GLBs, the reference tile and the panos the build used
 // =============================================================================
 
-interface ArmSpec { id: string; label: string; runId?: string; glbs?: string[] }
+/**
+ * What an arm is: `target` stands in for the target alone (an isolated build: drawn in its street, the tile with the target
+ * cut out), `place` is the whole place (a district build: drawn on its own, its own street and neighbours).
+ */
+export type ArmScope = 'target' | 'place';
 
-interface ResolvedArm { id: string; label: string; glbs: string[]; runId?: string; layers?: Array<{ layer: string; textured: boolean }>; baseline?: boolean; keepNear?: string }
+interface ArmSpec { id: string; label: string; runId?: string; glbs?: string[]; scope?: ArmScope }
+
+interface ResolvedArm {
+    id: string; label: string; glbs: string[]; runId?: string; layers?: Array<{ layer: string; textured: boolean }>; baseline?: boolean; scope: ArmScope;
+    /** Metres added to every height to bring the arm's frame onto the reference's (runs extracted at the same place, origin heights apart). */
+    dy?: number;
+}
 
 interface Reference {
     origin: GeodeticOrigin;
@@ -217,8 +235,12 @@ interface Reference {
     isolate?: string;
     /** The scanned trees the run's strip measured and removed (tile_vegetation removed_trees.glb), cut from the street when trees are drawn. */
     removedTrees?: string;
+    /** Google's building footprints the run read (its vector stage), for the structure pick at the place when nothing was isolated. */
+    footprints?: EvidenceLookup;
     source: string;
 }
+
+type TilesValue = { texturedGlb: string; geometryGlb: string; originEllipsoidalHeightM: number; geoAnchor?: { lat: number; lng: number } };
 
 interface RunRecordLike {
     runId: string;
@@ -229,14 +251,20 @@ interface RunRecordLike {
 
 const RUN_ID = /^[0-9a-f]{8}$/;
 const PANO_KEY = /^sv:([^:]+):/;
+/**
+ * A view of a pano named by its 22-character Google pano id and heading: "<panoId>_h<deg>_p<deg>" (the build's scored views),
+ * "SV_<panoId>_h<deg>" (survey stations), "<panoId>_h<deg>_p<deg>_f<deg>.jpg" (survey frames).
+ */
+const PANO_VIEW = /([A-Za-z0-9_-]{22})_h-?\d+/g;
 
-/** Every pano id a JSON value names: `panoId` strings, `panoIds` arrays and "sv:<panoId>:..." ids. */
+/** Every pano id a JSON value names: `panoId` strings, `panoIds` arrays, "sv:<panoId>:..." ids and views named after a pano. */
 export function collectPanoIds(value: unknown, into: Set<string> = new Set()): Set<string> {
     const walk = (v: unknown, key?: string): void => {
         if (typeof v === 'string') {
             if (key === 'panoId' && v) into.add(v);
             const m = PANO_KEY.exec(v);
             if (m) into.add(m[1]);
+            for (const view of v.matchAll(PANO_VIEW)) into.add(view[1]);
             return;
         }
         if (Array.isArray(v)) {
@@ -312,26 +340,50 @@ class BuildResolver {
         return hit ? { dir: hit.dir, value: hit.value } : undefined;
     }
 
+    /**
+     * The extraction of a run whose seam stage welded it: the run keys its tiles on the welded scan, and its tile_seams note
+     * names the raw extraction, whose cache entry holds the frame; the welded files lie beside it, named as the orchestrator
+     * names them (its tile seam step). Undefined without the note or the files.
+     */
+    weldedTiles(rec: RunRecordLike): { dir: string; value: TilesValue } | undefined {
+        const note = this.cache.readRunNote<{ version?: string; raw?: string; tJunctions?: unknown; overlapTrim?: unknown }>(rec.runId, 'tile_seams');
+        if (!note?.raw || !note.version) return undefined;
+        const dir = path.dirname(note.raw);
+        let raw: TilesValue | undefined;
+        try { raw = (JSON.parse(fs.readFileSync(path.join(dir, 'done.json'), 'utf8')) as { value?: TilesValue }).value; } catch { return undefined; }
+        const tag = `${note.version.replace(/\W/g, '_')}${note.tJunctions ? '' : '_notj'}${note.overlapTrim ? '' : '_noov'}`;
+        const value = raw && { ...raw, texturedGlb: `textured_${tag}.glb`, geometryGlb: `geometry_${tag}.glb` };
+        return value && fs.existsSync(path.join(dir, value.texturedGlb)) && fs.existsSync(path.join(dir, value.geometryGlb)) ? { dir, value } : undefined;
+    }
+
     /** The reference of a run: its tile, origin, isolate and place. */
     runReference(rec: RunRecordLike): Reference {
-        const tiles = this.stageValue<{ texturedGlb: string; geometryGlb: string; originEllipsoidalHeightM: number; geoAnchor?: { lat: number; lng: number } }>('tiles', rec.keys?.tiles);
-        if (!tiles) throw new PhotoMatchError('missing_reference_tile', `Staged run ${rec.runId} has no cached tile extraction (stage "tiles"), so its frame and street are unknown.`);
+        const direct = this.stageValue<TilesValue>('tiles', rec.keys?.tiles);
+        const welded = direct ? undefined : this.weldedTiles(rec);
+        const tiles = direct ?? welded;
+        if (!tiles) throw new PhotoMatchError('missing_reference_tile', `Staged run ${rec.runId} has no cached tile extraction (stage "tiles", nor a seam-welded scan its tile_seams note leads to), so its frame and street are unknown.`);
         const textured = path.join(tiles.dir, tiles.value.texturedGlb), geometry = path.join(tiles.dir, tiles.value.geometryGlb);
         if (!fs.existsSync(textured) || !fs.existsSync(geometry)) throw new PhotoMatchError('missing_reference_tile', `Staged run ${rec.runId}: the cached tile files are missing (${tiles.dir}).`);
         const place = rec.place ?? tiles.value.geoAnchor;
         if (!place) throw new PhotoMatchError('missing_reference_tile', `Staged run ${rec.runId} records no place coordinates.`);
         const remesh = this.stageValue<{ clay?: string }>('remesh', rec.keys?.remesh);
-        const iso = remesh?.value.clay ? path.join(path.dirname(remesh.value.clay), 'raw_clay.glb') : undefined;
+        // the isolate tile_refine wrote beside its clay; a polished clay (pipeline K: <entry>/polish/<key>/clay.glb) lies two
+        // levels below that entry
+        const iso = remesh?.value.clay ? [0, 2].map(up => path.join(path.dirname(remesh.value.clay!), ...new Array(up).fill('..'), 'raw_clay.glb')).map(f => path.normalize(f)).find(f => fs.existsSync(f)) : undefined;
         // the strip's cache entry (tile-vegetation-service.ts): its removed_trees.glb is what the regrown trees replace
         const stripKey = rec.keys?.['trees-measure'];
         const removed = stripKey && /^[0-9a-f]{16,}$/.test(stripKey) ? path.join(this.root, '.scratchbox', 'cache', 'tile_vegetation', stripKey, 'removed_trees.glb') : undefined;
+        // the footprints of Google's buildings the vector stage read (in the place's frame: x east, z south, the same origin)
+        const vector = this.stageValue<{ sel?: { buildings?: Array<{ id: string; parts: Array<{ loops: Array<Array<[number, number]>> }> }> } }>('vector', rec.keys?.vector);
+        const footprints = vector?.value.sel?.buildings?.length ? footprintLookup(vector.value.sel.buildings) : undefined;
         return {
             origin: { lat: place.lat, lng: place.lng, heightMeters: tiles.value.originEllipsoidalHeightM },
             place: rec.place?.formattedAddress ?? rec.request?.query ?? `${place.lat.toFixed(6)}, ${place.lng.toFixed(6)}`,
             tileTextured: textured, tileGeometry: geometry,
             ...(iso && fs.existsSync(iso) ? { isolate: iso } : {}),
             ...(removed && fs.existsSync(removed) ? { removedTrees: removed } : {}),
-            source: `staged run ${rec.runId}`
+            ...(footprints ? { footprints } : {}),
+            source: `staged run ${rec.runId}${welded ? ' (its seam-welded scan, which every stage of the run read)' : ''}`
         };
     }
 
@@ -392,6 +444,13 @@ class BuildResolver {
     }
 }
 
+/** The point lookup the structure pick reads (feature index + 1, 0 off every footprint) from footprints in the tile frame. */
+function footprintLookup(buildings: Array<{ id: string; parts: Array<{ loops: Array<Array<[number, number]>> }> }>): EvidenceLookup {
+    let reach = 0;
+    for (const b of buildings) for (const p of b.parts) for (const l of p.loops) for (const [x, z] of l) reach = Math.max(reach, Math.abs(x), Math.abs(z));
+    return evidenceLookup({ buildings: buildings.map(b => ({ id: b.id, parts: b.parts.map(p => p.loops) })), water: [], roads: [], tiles: 0, zoom: 0 }, Math.min(2000, Math.ceil(reach)));
+}
+
 function armId(raw: unknown, k: number): string {
     const s = typeof raw === 'string' ? raw.replace(/[^A-Za-z0-9+_-]/g, '').slice(0, 12) : '';
     return s || `B${k + 1}`;
@@ -405,7 +464,8 @@ function parseArms(args: Record<string, unknown>, active: StagedBuildState | und
             const runId = typeof a?.runId === 'string' && a.runId.trim() ? a.runId.trim() : undefined;
             const glbs = strs(a?.glbs);
             if (!runId && !glbs.length) throw new PhotoMatchError('bad_arguments', `arm ${id}: give a runId or glbs.`);
-            return { id, label: typeof a?.label === 'string' && a.label.trim() ? a.label.trim() : (runId ? `RUN ${runId}` : `BUILD ${id}`), ...(runId ? { runId } : {}), ...(glbs.length ? { glbs } : {}) };
+            const scope = a?.scope === 'target' || a?.scope === 'place' ? a.scope as ArmScope : undefined;
+            return { id, label: typeof a?.label === 'string' && a.label.trim() ? a.label.trim() : (runId ? `RUN ${runId}` : `BUILD ${id}`), ...(runId ? { runId } : {}), ...(glbs.length ? { glbs } : {}), ...(scope ? { scope } : {}) };
         });
         if (new Set(arms.map(a => a.id)).size !== arms.length) throw new PhotoMatchError('bad_arguments', 'arm ids must differ.');
         return arms;
@@ -428,6 +488,12 @@ function centroids(t: TileTriangles): Float32Array {
 
 /** Triangles of `t` whose centroid lies within `tol` of one of `ref`'s centroids (a hash grid); `drop` keeps the others instead. */
 export function keepNearTriangles(t: TileTriangles, ref: TileTriangles, tol = 0.01, drop = false): TileTriangles {
+    const near = nearTriangleFlags(t, ref, tol);
+    return selectTriangles(t, near.map(f => (!!f !== drop ? 1 : 0)));
+}
+
+/** Per triangle of `t`, 1 when its centroid lies within `tol` of one of `ref`'s centroids (a hash grid). */
+export function nearTriangleFlags(t: TileTriangles, ref: TileTriangles, tol = 0.01): Uint8Array {
     const grid = new Map<string, number[]>();
     const rc = centroids(ref), cell = (v: number) => Math.floor(v / tol);
     for (let i = 0; i < rc.length; i += 3) {
@@ -435,7 +501,7 @@ export function keepNearTriangles(t: TileTriangles, ref: TileTriangles, tol = 0.
         const list = grid.get(k);
         if (list) list.push(i); else grid.set(k, [i]);
     }
-    const tc = centroids(t), keep: number[] = [];
+    const tc = centroids(t), flags = new Uint8Array(t.texture.length);
     for (let i = 0; i < t.texture.length; i++) {
         const x = tc[i * 3], y = tc[i * 3 + 1], z = tc[i * 3 + 2];
         let hit = false;
@@ -443,11 +509,38 @@ export function keepNearTriangles(t: TileTriangles, ref: TileTriangles, tol = 0.
             const g = grid.get(`${cell(x) + dx},${cell(y) + dy},${cell(z) + dz}`);
             if (g?.some(j => Math.hypot(rc[j] - x, rc[j + 1] - y, rc[j + 2] - z) <= tol)) hit = true;
         }
-        if (hit !== drop) keep.push(i);
+        if (hit) flags[i] = 1;
     }
+    return flags;
+}
+
+/** The triangles of `t` whose entry in `keepFlags` is set, in order. */
+function selectTriangles(t: TileTriangles, keepFlags: Uint8Array): TileTriangles {
+    const keep: number[] = [];
+    for (let i = 0; i < keepFlags.length; i++) if (keepFlags[i]) keep.push(i);
     const pickF = (a: Float32Array, w: number) => { const o = new Float32Array(keep.length * w); keep.forEach((s, d) => o.set(a.subarray(s * w, s * w + w), d * w)); return o; };
     const pickI = (a: Int32Array, w: number) => { const o = new Int32Array(keep.length * w); keep.forEach((s, d) => o.set(a.subarray(s * w, s * w + w), d * w)); return o; };
     return { ...t, positions: pickF(t.positions, 9), uvs: pickF(t.uvs, 6), normals: pickF(t.normals, 3), texture: pickI(t.texture, 1), flatLinear: pickF(t.flatLinear, 3) };
+}
+
+/** A copy of `t` raised by `dy` metres (an arm from another extraction at the same place, onto the reference's frame). */
+function liftTriangles(t: TileTriangles, dy: number): TileTriangles {
+    const positions = Float32Array.from(t.positions);
+    for (let i = 1; i < positions.length; i += 3) positions[i] += dy;
+    return { ...t, positions };
+}
+
+/** The triangles of `mesh` that stand (a vertex more than the ground band above the terrain) with their centroid where `at` holds. */
+function standingIn(mesh: RenderMesh3D, terrain: { groundAt(x: number, z: number): number }, at: (x: number, z: number) => boolean): RenderMesh3D {
+    const V = mesh.vertices, I = mesh.indices;
+    const out: number[] = [];
+    for (let t = 0; t < I.length; t += 3) {
+        const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
+        if (!at((V[a] + V[b] + V[c]) / 3, (V[a + 2] + V[b + 2] + V[c + 2]) / 3)) continue;
+        if (![a, b, c].some(o => V[o + 1] - terrain.groundAt(V[o], V[o + 2]) > PHOTO_MATCH_GROUND_BAND_M)) continue;
+        for (const o of [a, b, c]) out.push(V[o], V[o + 1], V[o + 2]);
+    }
+    return { vertices: Float32Array.from(out), indices: Uint32Array.from({ length: out.length / 3 }, (_, k) => k) };
 }
 
 /** Lowest surface of the mesh under (x, z) within 1.5 m (the street), else NaN. */
@@ -556,8 +649,21 @@ export interface PhotoMatchViewResult {
     maskPixels: number;
     grid: string;
     renders: Record<string, string>;
-    judge?: { stats: Record<string, Record<JudgeCriterion, CriterionStat>>; notes: Record<string, string[]>; model: string };
+    judge?: {
+        stats: Record<string, Record<JudgeCriterion, CriterionStat>>; notes: Record<string, string[]>; model: string;
+        /** With judgeRegions: the place around the building, per arm. */
+        regionStats?: Record<string, Record<JudgeRegionCriterion, CriterionStat>>;
+    };
     judgeError?: string;
+    /**
+     * The regions of this view, from what each pixel's ray hits in the reference tile (the measured scan, labelled by geometry):
+     * pixels per label and in the skyline band (photo resolution), the masks drawn over the photo, and per arm the secondary
+     * numbers in every region with how far the arm's own labels agree with the reference's.
+     */
+    regions?: {
+        pixels: RegionMasks['pixels']; bandPx: number; masks: string; maskGrid: string;
+        arms: Record<string, Record<PhotoMatchRegion, RegionScore>>;
+    };
     /** The clay arm: each arm's untextured render from this pose, its grid, and the shape-only judgement. */
     clayRenders?: Record<string, string>;
     clayGrid?: string;
@@ -572,6 +678,7 @@ const DEFAULT_RUN_CONCURRENCY = 2;
 const yieldLoop = () => new Promise<void>(r => setImmediate(r));
 const r2 = (v: number) => Math.round(v * 100) / 100;
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
+const fmt = (v: number | null) => (v === null ? '-' : v.toFixed(2));
 
 function intArg(v: unknown, def: number, min: number, max: number): number {
     const n = typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : def;
@@ -604,6 +711,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     const wantContext = args.inContext !== false;
     const wantClay = args.clay !== false;
     const wantTrees = args.trees !== false;
+    const wantRegionJudge = args.judgeRegions === true;
     const judgeModel = typeof args.judgeModel === 'string' && args.judgeModel.trim() ? args.judgeModel.trim() : PHOTO_MATCH_DEFAULT_JUDGE;
     const root = deps.stagedRoot();
     const builds = new BuildResolver(root, ctx.workspaceRoot || root, active);
@@ -622,9 +730,14 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
             }
             builds.noteRunPanos(rec);
             const layers = spec.glbs ? { glbs: spec.glbs.map(g => builds.file(g, `arm ${spec.id} GLB`)), layers: undefined } : builds.runLayers(rec, wantTrees);
-            arms.push({ id: spec.id, label: spec.label, glbs: layers.glbs, runId: spec.runId, ...(layers.layers ? { layers: layers.layers } : {}) });
+            // two extractions at one place share the frame up to their origin heights
+            const dy = r.origin.heightMeters - ref.origin.heightMeters;
+            arms.push({
+                id: spec.id, label: spec.label, glbs: layers.glbs, runId: spec.runId, scope: spec.scope ?? (rec.request?.isolate ? 'target' : 'place'),
+                ...(layers.layers ? { layers: layers.layers } : {}), ...(Math.abs(dy) > 1e-3 ? { dy } : {})
+            });
         } else {
-            arms.push({ id: spec.id, label: spec.label, glbs: spec.glbs!.map(g => builds.file(g, `arm ${spec.id} GLB`)) });
+            arms.push({ id: spec.id, label: spec.label, glbs: spec.glbs!.map(g => builds.file(g, `arm ${spec.id} GLB`)), scope: spec.scope ?? 'target' });
         }
     }
     if (!ref) {
@@ -649,14 +762,27 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     builds.noteGlbPanos(arms.flatMap(a => a.glbs));
     for (const p of Array.isArray(args.excludePanoIds) ? args.excludePanoIds : []) if (typeof p === 'string' && p) builds.used.add(p);
     const withBaseline = args.baseline !== false;
-    if (withBaseline) arms.unshift({ id: 'raw', label: ref.isolate ? 'RAW SCAN (CUT TO TARGET)' : 'RAW SCAN', glbs: [ref.tileTextured], baseline: true, ...(ref.isolate ? { keepNear: ref.isolate } : {}) });
+    if (withBaseline) arms.unshift({ id: 'raw', label: 'RAW SCAN', glbs: [ref.tileTextured], baseline: true, scope: 'target' });
     stopIfAborted(signal);
+
+    // ---------------- the reference tile, its terrain and the target ----------------
+    // The reference is the measured tile, whole. Its terrain is the ground model of the tile's geometry; the target is the
+    // isolate (matched triangle by triangle) or, when the build isolated nothing, the structure the app's structure rule picks
+    // at the frame origin (the place); the crowns are the ones the run's tree strip measured.
+    progress('measuring the reference tile: its terrain and the target at the place', 0.01);
+    const scan = loadScanMesh(ref.tileGeometry);
+    const contextMesh = scan.mesh;
+    const terrain = buildGroundModel(scan, { cellMeters: 1 });
+    const pick = ref.isolate ? undefined : pickStructure(scan, terrain, { anchor: { x: 0, z: 0 }, ...(ref.footprints ? { footprints: { buildingAt: ref.footprints.buildingAt, buildings: ref.footprints.raster.buildings } } : {}) });
+    const targetAt = pick ? (x: number, z: number) => { const c = terrain.cellIndex(x, z); return c >= 0 && pick.footprintMask[c] === PICK_STRUCTURE; } : undefined;
 
     // ---------------- held-out views ----------------
     progress('finding Street View panos near the structure that the build never used', 0.02);
-    const contextMesh = sceneToRenderMesh(readGlbScene(ref.tileGeometry));
-    // the structure: the isolate, else the first build's layers without its trees (a trees GLB holds every level)
-    const targetMesh = sceneToRenderMesh((ref.isolate ? [ref.isolate] : arms.find(a => !a.baseline)!.glbs.filter(f => !isTreesLodJson(glbJson(f)))).flatMap(f => readGlbScene(f)));
+    // the structure the views look at: the isolate, else the structure picked at the place, else the first build's layers
+    // without its trees (a trees GLB holds every level)
+    const targetMesh = ref.isolate ? sceneToRenderMesh(readGlbScene(ref.isolate))
+        : pick ? standingIn(scan.mesh, terrain, targetAt!)
+            : sceneToRenderMesh(arms.find(a => !a.baseline)!.glbs.filter(f => !isTreesLodJson(glbJson(f))).flatMap(f => readGlbScene(f)));
     const structure = structureOf(targetMesh);
     const panos = await deps.discover(ref.origin, { x: structure.cx, z: structure.cz }, builds.cache.dir, signal);
     stopIfAborted(signal);
@@ -694,37 +820,82 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         if (builds.used.has(c.im.view.panoId)) throw new PhotoMatchError('heldout_used_by_build', `pano ${c.im.view.panoId} was used by the build; it cannot be held out.`);
     }
 
+    // ---------------- regions: every triangle labelled by geometry ----------------
+    progress('labelling the tile and every arm by geometry: terrain, the target, measured crowns, neighbours', 0.21);
+    const full = readTileTriangles(fs.readFileSync(ref.tileTextured));
+    const isolate = ref.isolate ? readTileTriangles(fs.readFileSync(ref.isolate)) : undefined;
+    const isoFlags = isolate ? nearTriangleFlags(full, isolate) : undefined;
+    const crownFlags = ref.removedTrees ? nearTriangleFlags(full, readTileTriangles(fs.readFileSync(ref.removedTrees))) : undefined;
+    const fullLabels = triangleRegions(full, terrain, (i, x, z) => (crownFlags?.[i] ? REGION.trees : (isoFlags ? isoFlags[i] : targetAt?.(x, z)) ? REGION.target : REGION.neighbours));
+    // the target's triangles in the tile: the isolate's, else the picked structure's standing triangles
+    const targetFlags = isoFlags ?? fullLabels.map(l => (l === REGION.target ? 1 : 0));
+    const targetCount = targetFlags.reduce((n, f) => n + f, 0);
+    const hasTarget = targetCount > 0;
+
     // ---------------- arms, context ----------------
     progress(`loading ${arms.length} arms`, 0.22);
     const loaded = arms.map(a => {
-        // a trees GLB (tree LOD contract) is kept for per-view level selection when trees are drawn; any other GLB is fixed
-        let parts: ArmLayer[] = a.glbs.map(g => loadArmLayer(fs.readFileSync(g), { treeLod: wantTrees }));
-        if (a.keepNear) { const cut = readTileTriangles(fs.readFileSync(a.keepNear)); parts = parts.map(l => (l.fixed ? { fixed: keepNearTriangles(l.fixed, cut) } : l)); }
-        return { ...a, parts, treeLayers: parts.filter(l => l.trees).length, triangles: parts.reduce((s, l) => s + armLayerTriangles(l), 0) };
+        // the raw scan: the tile cut to the target (whole when there is none); any other GLB as written, a trees GLB (tree LOD
+        // contract) kept for per-view level selection when trees are drawn
+        const parts: ArmLayer[] = a.baseline
+            ? [{ fixed: hasTarget ? selectTriangles(full, targetFlags) : full }]
+            : a.glbs.map(g => loadArmLayer(fs.readFileSync(g), { treeLod: wantTrees }));
+        if (a.dy) for (const l of parts) if (l.fixed) l.fixed = liftTriangles(l.fixed, a.dy);
+        return {
+            ...a, ...(a.baseline && hasTarget ? { label: 'RAW SCAN (CUT TO TARGET)' } : {}),
+            parts, treeLayers: parts.filter(l => l.trees).length, triangles: parts.reduce((s, l) => s + armLayerTriangles(l), 0)
+        };
     });
-    for (const a of loaded) if (!a.triangles) throw new PhotoMatchError('no_build', `arm ${a.id} has no triangles${a.keepNear ? ' near the isolated target' : ''}.`);
-    const drawsTrees = loaded.some(a => a.treeLayers > 0);
+    for (const a of loaded) if (!a.triangles) throw new PhotoMatchError('no_build', `arm ${a.id} has no triangles${a.baseline && hasTarget ? ' on the target' : ''}.`);
+    // labels: an arm that stands in for the target is the target where it stands; a whole place follows the target's footprint
+    const placeRule = (_i: number, x: number, z: number) => (targetAt?.(x, z) ? REGION.target : REGION.neighbours);
+    const armLabels = loaded.map(a => a.parts.map(l => (l.trees ? REGION.trees
+        : a.baseline ? (hasTarget ? fullLabels.filter((_, i) => targetFlags[i]) : fullLabels)
+            : triangleRegions(l.fixed!, terrain, a.scope === 'target' ? (hasTarget || isoFlags ? REGION.target : REGION.neighbours) : placeRule))));
+    const targetArmsDrawTrees = loaded.some(a => a.scope === 'target' && a.treeLayers > 0);
+    const placeArms = loaded.filter(a => a.scope === 'place').length;
+    const regionsNote = {
+        method: `every triangle labelled from geometry alone, then each pixel by the surface its ray hits (z-buffer, the most common label of its samples; no hit is sky). Ground: no vertex more than ${PHOTO_MATCH_GROUND_BAND_M} m above the terrain under it (off the terrain: facing within 60 degrees of up). ` +
+            'Standing geometry is the target, a measured crown or a neighbour. The masks are the reference tile\'s (the measured scan, whole), the same for every arm; the skyline band is every pixel near where standing geometry meets the sky. Colour and brightness decide nothing.',
+        terrain: { source: 'the reference tile\'s geometry', method: terrain.terrainMethod, cellM: terrain.cellMeters },
+        target: isoFlags
+            ? {
+                source: 'the isolate (the scan the build isolated), matched triangle by triangle', triangles: targetCount, isolateTriangles: isolate!.texture.length,
+                // an isolate cut from another scan than the reference (a raw extraction against a welded one) matches only in part
+                matchedShare: r3(targetCount / Math.max(1, isolate!.texture.length))
+            }
+            : pick
+                ? {
+                    source: `the structure the app's structure rule picks at the frame origin (extraction-sizing pickStructure, ${pick.footprintSource === 'vector-footprint' ? 'within Google\'s building footprint the run read' : ref.footprints ? `on the scan geometry: Google's footprint was not used (${pick.vectorFootprint?.reason ?? 'no reason given'})` : 'on the scan geometry alone: no building footprints are recorded for this build'})`,
+                    triangles: targetCount, areaM2: Math.round(pick.areaM2), heightM: r2(pick.heightM), geocodeToStructureM: r2(pick.geocodeToStructureM), footprintSource: pick.footprintSource
+                }
+                : { source: 'none', reason: 'the build isolated no structure and no structure stands within the pick\'s search window of the frame origin, so the building mask is empty and every standing triangle is a neighbour' },
+        arms: 'an arm that stands in for the target (scope target) is the target wherever it stands; a whole place (scope place) is labelled by the target\'s footprint, like the tile',
+        trees: crownFlags ? 'the scanned crowns the run\'s tree strip measured (removed_trees.glb), and every regrown trees layer' : 'only regrown trees layers: the run records no tree strip, so scanned crowns count as neighbours'
+    };
     let context: TileTriangles[] | undefined;
+    let contextLabels: Uint8Array | undefined;
     let contextNote: string;
-    if (wantContext && ref.isolate) {
-        const full = readTileTriangles(fs.readFileSync(ref.tileTextured));
-        let cut = keepNearTriangles(full, readTileTriangles(fs.readFileSync(ref.isolate)), 0.01, true);
-        const target = full.texture.length - cut.texture.length;
+    const targetSource = isoFlags ? 'the isolate' : 'the structure picked at the place';
+    if (wantContext && hasTarget && placeArms < loaded.length) {
         // the regrown trees replace the scanned ones the strip measured: those leave the street too, or the photo's trees stand twice
-        let treesCut = 0;
-        if (drawsTrees && ref.removedTrees) {
-            const before = cut.texture.length;
-            cut = keepNearTriangles(cut, readTileTriangles(fs.readFileSync(ref.removedTrees)), 0.01, true);
-            treesCut = before - cut.texture.length;
-        }
+        const cutTrees = targetArmsDrawTrees && !!crownFlags;
+        const keepFlags = targetFlags.map((f, i) => (!f && !(cutTrees && crownFlags![i]) ? 1 : 0));
+        const cut = selectTriangles(full, keepFlags);
+        contextLabels = fullLabels.filter((_, i) => keepFlags[i]);
+        const treesCut = cutTrees ? targetFlags.reduce((n, f, i) => n + (!f && crownFlags![i] ? 1 : 0), 0) : 0;
         context = [cut];
-        contextNote = `in context: every arm drawn in the photo-textured tile with the target's own ${target} triangles cut out${treesCut ? ` and the ${treesCut} triangles of the scanned trees the regrown trees replace` : ''} (${cut.texture.length} kept), the same street for every arm`
-            + (drawsTrees && !ref.removedTrees ? '; the scanned trees stay in the street (the run records no strip to cut them by)' : '');
+        contextNote = `in context: every arm that stands in for the target drawn in the photo-textured tile with the target's own ${targetCount} triangles (${targetSource}) cut out${treesCut ? ` and the ${treesCut} triangles of the scanned trees the regrown trees replace` : ''} (${cut.texture.length} kept), the same street for every such arm`
+            + (targetArmsDrawTrees && !ref.removedTrees ? '; the scanned trees stay in the street (the run records no strip to cut them by)' : '')
+            + (placeArms ? `; ${placeArms} arm${placeArms === 1 ? ' is' : 's are'} the whole place, drawn on its own` : '');
     } else {
-        contextNote = wantContext
-            ? 'not in context: the build isolated no single structure, so there is no target to cut out of the tile; each arm is drawn alone with the tile mesh hiding what stands in front'
-            : 'not in context (inContext false): each arm drawn alone on grey, the tile mesh hiding what stands in front';
+        contextNote = placeArms === loaded.length
+            ? 'whole places: every arm is the whole place, drawn on its own'
+            : wantContext
+                ? `not in context: no target was found to cut out of the tile; each arm is drawn alone${placeArms ? ' (a whole place with nothing hiding it, any other' : ' (each'} with the tile mesh hiding what stands in front)`
+                : `not in context (inContext false): each arm that stands in for the target drawn alone on grey, the tile mesh hiding what stands in front${placeArms ? '; a whole place drawn on its own' : ''}`;
     }
+    // what hides an arm drawn alone that stands in for the target: the tile (a whole place hides itself)
     const occluder = context ? undefined : contextMesh;
 
     const evalId = `${(ref.place.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 32) || 'place')}_${new Date(now()).toISOString().replace(/[-:]/g, '').slice(0, 15)}_${crypto.randomBytes(2).toString('hex')}`;
@@ -740,6 +911,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         photoLabel?: string;
         /** The satellite second opinion: judged and gridded like a view, kept out of the scores. */
         satellite?: boolean;
+        /** The photo with the reference's region masks drawn over it (the grids' second image). */
+        maskOverlay?: { width: number; height: number; rgba: Uint8Array };
     }
     const prepared: Prepared[] = [];
     for (let k = 0; k < chosen.length; k++) {
@@ -750,7 +923,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         const img = decodeImageInMemory(im.bytes);
         const photo = { width: img.width, height: img.height, rgba: img.rgba };
         const camera = castCamera({ eye: v.eye, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg, widthPx: img.width, heightPx: img.height, ...(reg.correction ? { correction: reg.correction } : {}) });
-        const occluderDepth = occluder ? renderFrameDepth(occluder, camera) : undefined;
+        const occluderDepth = occluder && placeArms < loaded.length ? renderFrameDepth(occluder, camera) : undefined;
         const renders: Array<{ id: string; label: string; r: ArmRender }> = [];
         // each arm as the viewport would draw it from this pose (one level per tree)
         const forView = loaded.map(a => armMeshesForView(a.parts, camera));
@@ -759,17 +932,26 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
             const t = forView[i].trees;
             if (t.length) treeLevels[a.id] = { atLevel: t.reduce((acc, x) => acc.map((n, k) => n + (x.atLevel[k] ?? 0)), new Array(Math.max(...t.map(x => x.atLevel.length))).fill(0)), drawnTriangles: t.reduce((n, x) => n + x.drawnTriangles, 0), allLevelTriangles: t.reduce((n, x) => n + x.allLevelTriangles, 0) };
         });
+        // a trees layer of an arm from another extraction is lifted onto the reference frame as it is chosen
+        forView.forEach((f, i) => { const dy = loaded[i].dy; if (dy) f.meshes = f.meshes.map((m, j) => (loaded[i].parts[j].trees ? liftTriangles(m, dy) : m)); });
+        // an arm standing in for the target in its street (or behind the tile's occluders); a whole place on its own
+        const drawn = (i: number) => (loaded[i].scope === 'place' ? {} : { ...(occluderDepth ? { occluderDepth } : {}), ...(context ? { context } : {}) });
+        const regionsFor = (i: number) => ({ meshes: armLabels[i], ...(contextLabels && loaded[i].scope !== 'place' ? { context: [contextLabels] } : {}) });
         for (let i = 0; i < loaded.length; i++) {
             const a = loaded[i];
-            renders.push({ id: a.id, label: a.label, r: renderTriangles(forView[i].meshes, camera, { ...(occluderDepth ? { occluderDepth } : {}), ...(context ? { context } : {}) }) });
+            renders.push({ id: a.id, label: a.label, r: renderTriangles(forView[i].meshes, camera, { ...drawn(i), regions: regionsFor(i) }) });
             await yieldLoop();
         }
+        // the reference regions: the measured tile, whole, from the same pose
+        const refLabels = renderTriangles([full], camera, { regions: { meshes: [fullLabels] } }).regions!;
+        const masks = regionMasks(refLabels, img.width, img.height);
+        await yieldLoop();
         // the clay arm: the same pose, occluders and street, every arm (and its street) untextured
         const clayRenders: Array<{ id: string; label: string; r: ArmRender }> = [];
         if (wantClay) {
             for (let i = 0; i < loaded.length; i++) {
                 const a = loaded[i];
-                clayRenders.push({ id: a.id, label: a.label, r: renderTriangles(forView[i].meshes, camera, { clay: true, ...(occluderDepth ? { occluderDepth } : {}), ...(context ? { context } : {}) }) });
+                clayRenders.push({ id: a.id, label: a.label, r: renderTriangles(forView[i].meshes, camera, { clay: true, ...drawn(i) }) });
                 await yieldLoop();
             }
         }
@@ -777,12 +959,23 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         const pixel: Record<string, PerceptualScores> = {};
         const files: Record<string, string> = {};
         const viewId = `v${k}_${v.panoId.slice(0, 6).replace(/[^A-Za-z0-9_-]/g, '_')}`;
+        const regionArms: Record<string, Record<PhotoMatchRegion, RegionScore>> = {};
         for (const x of renders) {
             pixel[x.id] = perceptualScores(photo, x.r, mask);
+            regionArms[x.id] = regionScores(photo, x.r, masks, refLabels);
             files[x.id] = path.join(outDir, `${viewId}_${x.id}.png`);
             fs.writeFileSync(files[x.id], renderPng(x.r));
             await yieldLoop();
         }
+        // the masks over the photo, and each arm's own labels over its render
+        const maskOverlay = regionOverlay(photo, refLabels, masks.masks.skyline);
+        const maskFile = path.join(outDir, `${viewId}_masks.png`), maskGrid = path.join(outDir, `grid_${viewId}_masks.png`);
+        fs.writeFileSync(maskFile, encodePng(maskOverlay.width, maskOverlay.height, maskOverlay.rgba, 4));
+        const armMaskTiles = renders.map(x => ({
+            image: regionOverlay(x.r, x.r.regions!, regionMasks(x.r.regions!, x.r.width, x.r.height).masks.skyline), label: `${x.label} LABELS`,
+            sublabel: `AGREES ${fmt(regionArms[x.id].frame.agreement)}  SKYLINE ${fmt(regionArms[x.id].skyline.agreement)}`
+        }));
+        fs.writeFileSync(maskGrid, composeGrid([{ image: maskOverlay, label: PHOTO_MATCH_REGION_LEGEND[0], sublabel: PHOTO_MATCH_REGION_LEGEND[1] }, ...armMaskTiles], { tileWidth: 560, columns: Math.min(4, armMaskTiles.length + 1), title: `${ref.place} - ${viewId} - REGIONS FROM GEOMETRY` }));
         const clayFiles: Record<string, string> = {};
         for (const x of clayRenders) {
             clayFiles[x.id] = path.join(outDir, `${viewId}_${x.id}_clay.png`);
@@ -793,9 +986,10 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
                 id: viewId, panoId: v.panoId, ...(v.date ? { date: v.date } : {}), distanceM: v.distanceM, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg,
                 size: [img.width, img.height], edgeResidualPx: reg.edgeResidualPx, maskPixels: mask.reduce((s, m) => s + m, 0), grid: path.join(outDir, `grid_${viewId}.png`), renders: files, pixel,
                 ...(wantClay ? { clayRenders: clayFiles, clayGrid: path.join(outDir, `grid_${viewId}_clay.png`) } : {}),
-                ...(Object.keys(treeLevels).length ? { trees: treeLevels } : {})
+                ...(Object.keys(treeLevels).length ? { trees: treeLevels } : {}),
+                regions: { pixels: masks.pixels, bandPx: masks.bandPx, masks: maskFile, maskGrid, arms: regionArms }
             },
-            photoBytes: im.bytes, mime: im.mimeType || 'image/jpeg', photo, renders, clayRenders
+            photoBytes: im.bytes, mime: im.mimeType || 'image/jpeg', photo, renders, clayRenders, maskOverlay
         });
     }
 
@@ -814,14 +1008,16 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
             stopIfAborted(signal);
             const cam = orthoReferenceCamera(sat);
             const forView = loaded.map(a => armMeshesForView(a.parts, cam));
+            forView.forEach((f, i) => { const dy = loaded[i].dy; if (dy) f.meshes = f.meshes.map((m, j) => (loaded[i].parts[j].trees ? liftTriangles(m, dy) : m)); });
+            const inStreet = (i: number) => (context && loaded[i].scope !== 'place' ? { context } : {});
             const renders: Array<{ id: string; label: string; r: ArmRender }> = [];
             for (let i = 0; i < loaded.length; i++) {
-                renders.push({ id: loaded[i].id, label: loaded[i].label, r: renderTriangles(forView[i].meshes, cam, context ? { context } : {}) });
+                renders.push({ id: loaded[i].id, label: loaded[i].label, r: renderTriangles(forView[i].meshes, cam, inStreet(i)) });
                 await yieldLoop();
             }
             const clayRenders: Array<{ id: string; label: string; r: ArmRender }> = [];
             if (wantClay) for (let i = 0; i < loaded.length; i++) {
-                clayRenders.push({ id: loaded[i].id, label: loaded[i].label, r: renderTriangles(forView[i].meshes, cam, { clay: true, ...(context ? { context } : {}) }) });
+                clayRenders.push({ id: loaded[i].id, label: loaded[i].label, r: renderTriangles(forView[i].meshes, cam, { clay: true, ...inStreet(i) }) });
                 await yieldLoop();
             }
             const mask = coverageMask(renders.find(x => x.id === maskArm)!.r);
@@ -871,13 +1067,18 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     await mapLimit(judgedList, DEFAULT_RUN_CONCURRENCY, async p => {
         stopIfAborted(signal);
         try {
+            // the place around the building only in the street views: a roof seen from above has no skyline
+            const regionsAsked = wantRegionJudge && !p.satellite;
             const runs: JudgeRun[] = await judgeView({
                 client: judge, place: ref!.place, photo: { bytes: p.photoBytes, mimeType: p.mime },
-                renders: p.renders.map(x => ({ armId: x.id, png: renderPng(x.r) })), repeats: nRuns, seed: `${evalId}:${p.view.id}`
+                renders: p.renders.map(x => ({ armId: x.id, png: renderPng(x.r) })), repeats: nRuns, seed: `${evalId}:${p.view.id}`, ...(regionsAsked ? { regions: true } : {})
             });
             const notes: Record<string, string[]> = {};
             for (const run of runs) for (const [id, n] of Object.entries(run.notes)) (notes[id] ??= []).push(n);
-            p.view.judge = { stats: aggregateRuns(runs, loaded.map(a => a.id)), notes, model: runs[runs.length - 1]?.model ?? '' };
+            p.view.judge = {
+                stats: aggregateRuns(runs, loaded.map(a => a.id)), notes, model: runs[runs.length - 1]?.model ?? '',
+                ...(regionsAsked ? { regionStats: aggregateCriteria(runs, loaded.map(a => a.id), JUDGE_REGION_CRITERIA) } : {})
+            };
         } catch (err) {
             if (signal?.aborted) throw new PhotoMatchError('stopped', 'The evaluation was stopped.');
             p.view.judgeError = (err as Error).message;
@@ -908,14 +1109,15 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
 
     // ---------------- grids ----------------
     for (const p of judgedList) {
-        const tiles = [{ image: p.photo, label: p.photoLabel ?? `REAL PHOTO ${Math.round(p.view.distanceM)} M`, sublabel: p.satellite ? `GSD ${(satellite.gsdMetresPerPixel as number).toFixed(3)} M/PX` : p.view.panoId.slice(0, 10) }, ...p.renders.map(x => {
+        const photoTile = { image: p.photo, label: p.photoLabel ?? `REAL PHOTO ${Math.round(p.view.distanceM)} M`, sublabel: p.satellite ? `GSD ${(satellite.gsdMetresPerPixel as number).toFixed(3)} M/PX` : p.view.panoId.slice(0, 10) };
+        const tiles = [photoTile, ...(p.maskOverlay ? [{ image: p.maskOverlay, label: PHOTO_MATCH_REGION_LEGEND[0], sublabel: PHOTO_MATCH_REGION_LEGEND[1] }] : []), ...p.renders.map(x => {
             const s = p.view.judge?.stats[x.id]?.overall;
             const ssim = p.view.pixel[x.id].ssim;
             return { image: x.r, label: x.label, sublabel: s ? `JUDGE ${s.mean.toFixed(1)} +- ${s.sd.toFixed(1)}  SSIM ${ssim ?? '-'}` : `NOT JUDGED  SSIM ${ssim ?? '-'}` };
         })];
         fs.writeFileSync(p.view.grid, composeGrid(tiles, { tileWidth: 560, columns: Math.min(4, tiles.length), title: `${ref.place} - ${p.view.id}${context ? ' - IN CONTEXT' : ''}` }));
         if (p.view.clayGrid) {
-            const clayTiles = [tiles[0], ...p.clayRenders.map(x => {
+            const clayTiles = [photoTile, ...p.clayRenders.map(x => {
                 const s = p.view.clayJudge?.stats[x.id]?.shape;
                 return { image: x.r, label: `${x.label} CLAY`, sublabel: s ? `SHAPE ${s.mean.toFixed(1)} +- ${s.sd.toFixed(1)}` : 'NOT JUDGED' };
             })];
@@ -966,6 +1168,38 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         pixelMean[a.id] = { coverage: m('coverage'), ssim: m('ssim'), edgeChamferPx: m('edgeChamferPx'), colourDeltaE: m('colourDeltaE') };
     }
 
+    // the regions: each arm's secondary numbers and label agreement per region, the mean over the views that have the region
+    type RegionMean = { ssim: number | null; edgeChamferPx: number | null; colourDeltaE: number | null; agreement: number | null; views: number };
+    const regionMean: Record<string, Record<PhotoMatchRegion, RegionMean>> = {};
+    for (const a of loaded) {
+        regionMean[a.id] = {} as Record<PhotoMatchRegion, RegionMean>;
+        for (const reg of PHOTO_MATCH_REGIONS) {
+            const per = views.map(x => x.regions?.arms[a.id]?.[reg]).filter((x): x is RegionScore => !!x && x.share > 0);
+            const m = (k: 'ssim' | 'edgeChamferPx' | 'colourDeltaE' | 'agreement') => {
+                const v = per.map(x => x[k]).filter((x): x is number => typeof x === 'number');
+                return v.length ? r3(v.reduce((t, x) => t + x, 0) / v.length) : null;
+            };
+            regionMean[a.id][reg] = { ssim: m('ssim'), edgeChamferPx: m('edgeChamferPx'), colourDeltaE: m('colourDeltaE'), agreement: m('agreement'), views: per.length };
+        }
+    }
+    // the judge on the place around the building (judgeRegions), over the views it scored
+    const regionJudged = scored.filter(p => p.view.judge?.regionStats);
+    const judgeRegionScores: Record<string, Record<JudgeRegionCriterion, ArmScore['overall']>> = {};
+    if (regionJudged.length) {
+        for (const a of loaded) {
+            judgeRegionScores[a.id] = {} as Record<JudgeRegionCriterion, ArmScore['overall']>;
+            for (const c of JUDGE_REGION_CRITERIA) {
+                const per = regionJudged.map(p => p.view.judge!.regionStats![a.id]?.[c]).filter((x): x is CriterionStat => !!x && Number.isFinite(x.mean));
+                const means = per.map(x => x.mean);
+                const mean = means.length ? means.reduce((t, x) => t + x, 0) / means.length : NaN;
+                judgeRegionScores[a.id][c] = {
+                    mean: r2(mean), runSd: r2(per.reduce((t, x) => t + x.sd, 0) / Math.max(1, per.length)),
+                    viewSd: r2(Math.sqrt(means.reduce((t, x) => t + (x - mean) ** 2, 0) / Math.max(1, means.length))), min: means.length ? r2(Math.min(...means)) : NaN, max: means.length ? r2(Math.max(...means)) : NaN
+                };
+            }
+        }
+    }
+
     const judgeModelUse = { requested: judge.requested ?? judgeModel, answered: judge.answeredModel ?? scored[0].view.judge!.model, skipped: judge.skipped ?? [] };
     // the satellite second opinion: its own judgement, apart from the scores
     if (satPrepared) {
@@ -978,8 +1212,10 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
             ...(v.clayJudge ? { clayJudge: v.clayJudge } : {}), ...(v.clayJudgeError ? { clayJudgeError: v.clayJudgeError } : {})
         };
     }
-    const summary = summarize({ ref, loaded, scores, views, scored: scored.length, nRuns, judgeModelUse, contextNote: context ? 'in context' : 'not in context', unregistered: unregistered.length, usedPanos: builds.used.size })
+    const summary = summarize({ ref, loaded, scores, views, scored: scored.length, nRuns, judgeModelUse, contextNote: context ? (placeArms ? 'in context (whole places on their own)' : 'in context') : placeArms === loaded.length ? 'as whole places' : 'not in context', unregistered: unregistered.length, usedPanos: builds.used.size })
         + (wantClay ? clayLine(loaded, clayScores, clayScored.length, prepared.length) : '')
+        + (wantRegionJudge ? regionJudgeLine(loaded, judgeRegionScores, regionJudged.length, scored.length) : '')
+        + ` Region metrics (masks from geometry: whole frame, building, ground, neighbours, trees, skyline) per arm in pixelMetrics.regions and views[].regions; the masks are drawn in each grid${pick || isoFlags ? '' : '; no target was found, so the building mask is empty'}.`
         + satelliteLine(loaded, satellite, satPrepared?.view);
     const report = {
         status: 'success',
@@ -992,13 +1228,19 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         context: contextNote,
         judgeModel: judgeModelUse,
         runsPerView: nRuns,
-        trees: wantTrees ? (drawsTrees ? 'regrown trees drawn one level per tree per view, as the viewport chooses it; scanned trees cut from the street' + (ref.removedTrees ? '' : ' (none recorded: they stay)') : 'no arm has a trees layer') : 'off: no trees layer drawn',
-        arms: loaded.map(a => ({ id: a.id, label: a.label, triangles: a.triangles, glbs: a.glbs, ...(a.treeLayers ? { treeLayers: a.treeLayers } : {}), ...(a.runId ? { runId: a.runId } : {}), ...(a.layers ? { layers: a.layers } : {}), ...(a.baseline ? { baseline: true } : {}) })),
+        trees: wantTrees ? (loaded.some(a => a.treeLayers > 0) ? 'regrown trees drawn one level per tree per view, as the viewport chooses it; scanned trees cut from the street' + (ref.removedTrees ? '' : ' (none recorded: they stay)') : 'no arm has a trees layer') : 'off: no trees layer drawn',
+        arms: loaded.map(a => ({ id: a.id, label: a.label, scope: a.scope, triangles: a.triangles, glbs: a.glbs, ...(a.dy ? { liftedM: r3(a.dy) } : {}), ...(a.treeLayers ? { treeLayers: a.treeLayers } : {}), ...(a.runId ? { runId: a.runId } : {}), ...(a.layers ? { layers: a.layers } : {}), ...(a.baseline ? { baseline: true } : {}) })),
         scores,
         clay: wantClay,
         ...(wantClay ? { clayScores, clayJudged: clayScored.length, clayGrids: views.map(v => v.clayGrid).filter((g): g is string => !!g) } : {}),
         satelliteOrtho: satellite,
-        pixelMetrics: { note: 'Secondary: inside the target mask (the raw scan\'s coverage when the baseline is on). They do not rank builds the way the judge does.', mean: pixelMean },
+        pixelMetrics: {
+            note: 'Secondary: inside the target mask (the raw scan\'s coverage when the baseline is on). They do not rank builds the way the judge does.', mean: pixelMean,
+            regions: { note: 'The same numbers per region of the reference tile\'s masks (from geometry), plus agreement: the share of the region where the arm\'s own labels show what the reference shows. Mean over the views that have the region.', mean: regionMean }
+        },
+        regions: regionsNote,
+        judgeRegions: wantRegionJudge,
+        ...(wantRegionJudge ? { regionScores: judgeRegionScores, regionJudged: regionJudged.length } : {}),
         views: views.map(v => ({ ...v, renders: v.renders })),
         grids: views.map(v => v.grid),
         heldOut: {
@@ -1028,6 +1270,12 @@ function satelliteLine(loaded: Array<{ id: string; label: string }>, sat: Record
     if (!view?.judge) return ` Satellite second opinion (Google Static Maps, top-down at ${gsd} m/px, capture date unknown): rendered and gridded, but the judge returned no usable scores for it${view?.judgeError ? ` (${view.judgeError})` : ''}; not counted in the scores.`;
     const ranked = [...loaded].filter(a => view.judge!.stats[a.id]?.overall).sort((a, b) => view.judge!.stats[b.id].overall.mean - view.judge!.stats[a.id].overall.mean);
     return ` Satellite second opinion (Google Static Maps, top-down at ${gsd} m/px, capture date unknown; not counted in the scores): ${ranked.map(a => `${a.label} [${a.id}] overall ${view.judge!.stats[a.id].overall.mean.toFixed(1)}`).join('; ')}.`;
+}
+
+/** The judge's region line of the summary (judgeRegions): ground, neighbours and skyline per arm. */
+function regionJudgeLine(loaded: Array<{ id: string; label: string }>, rs: Record<string, Record<JudgeRegionCriterion, ArmScore['overall']>>, judged: number, views: number): string {
+    if (!judged) return ` The place around the building (judgeRegions): the judge returned no usable region scores for any of the ${views} views.`;
+    return ` The place around the building (${judged} of ${views} views): ${loaded.map(a => `${a.label} [${a.id}] ground ${rs[a.id].ground.mean.toFixed(1)}, neighbours ${rs[a.id].neighbours.mean.toFixed(1)}, skyline ${rs[a.id].skyline.mean.toFixed(1)}`).join('; ')}.`;
 }
 
 /** The clay arm's line of the summary: shape only, untextured. */

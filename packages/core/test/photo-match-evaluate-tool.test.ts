@@ -13,7 +13,8 @@
  * the open scene's stagedBuild, and fakes only at the edges that would be billed or networked (pano discovery, the grounding
  * API, the edge registration worker, the judge). The "photos" are renders of the street from each requested view, so the raw
  * scan matches them and a wrongly textured build does not. Everything between (the build and used-pano resolution, view
- * selection, in-context rendering, pixel metrics, blind judging with reshuffles, grids, aggregation) is the real tool path.
+ * selection, in-context rendering, pixel metrics, the regions from geometry, blind judging with reshuffles, grids, aggregation)
+ * is the real tool path.
  * Screenshots under test-results/screenshots/tool_photo_match/.
  */
 
@@ -194,8 +195,8 @@ const PANOS: PanoCandidate[] = [
     { panoId: 'HIDDEN_EAST', lat: 0, lng: 0, date: '2025-07', copyright: '© Google', x: 52, z: 0 }
 ];
 
-function fakeDeps(root: string, opts: { panos?: PanoCandidate[]; unlocked?: string[]; judgeCalls?: { n: number }; satellite?: boolean } = {}): PhotoMatchDeps {
-    const street = readTileTriangles(fs.readFileSync(path.join(root, '.scratchbox/cache/staged_location/tiles', TILES_KEY, 'textured.glb')));
+function fakeDeps(root: string, opts: { panos?: PanoCandidate[]; unlocked?: string[]; judgeCalls?: { n: number; clay?: number; regions?: number }; satellite?: boolean; street?: string } = {}): PhotoMatchDeps {
+    const street = readTileTriangles(fs.readFileSync(opts.street ?? path.join(root, '.scratchbox/cache/staged_location/tiles', TILES_KEY, 'textured.glb')));
     const panos = opts.panos ?? PANOS;
     return {
         stagedRoot: () => root,
@@ -231,7 +232,7 @@ function fakeDeps(root: string, opts: { panos?: PanoCandidate[]; unlocked?: stri
  * for clay (the prompt says so), it scores shape only, by how well the render's sky (the clay background) matches the photo's
  * sky (the grey background the "photos" are rendered on): the silhouette, which texture cannot change.
  */
-function fakeJudge(calls?: { n: number; clay?: number }): JudgeClient & { requested: string; answeredModel: string; skipped: [] } {
+function fakeJudge(calls?: { n: number; clay?: number; regions?: number }): JudgeClient & { requested: string; answeredModel: string; skipped: [] } {
     const near = (img: { rgba: Uint8Array }, i: number, c: readonly number[]) => Math.abs(img.rgba[i] - c[0]) <= 8 && Math.abs(img.rgba[i + 1] - c[1]) <= 8 && Math.abs(img.rgba[i + 2] - c[2]) <= 8;
     return {
         requested: 'fake-judge', answeredModel: 'fake-judge', skipped: [],
@@ -249,11 +250,14 @@ function fakeJudge(calls?: { n: number; clay?: number }): JudgeClient & { reques
                 });
                 return { model: 'fake-judge', response: { candidates: [{ content: { parts: [{ text: JSON.stringify({ renders: entries }) }] } }] } };
             }
+            // asked for the place around the building too (the prompt lists the region criteria), it scores those from pixels as well
+            const regions = /- skyline: /.test(params.contents[0].parts.map(p => p.text ?? '').join(' '));
+            if (calls && regions) calls.regions = (calls.regions ?? 0) + 1;
             const renderEntries = renders.map((r, k) => {
                 let d = 0;
                 for (let i = 0; i < r.rgba.length; i += 4) d += Math.abs(r.rgba[i] - photo.rgba[i]) + Math.abs(r.rgba[i + 1] - photo.rgba[i + 1]) + Math.abs(r.rgba[i + 2] - photo.rgba[i + 2]);
                 const s = Math.max(1, Math.min(10, Math.round(10 - d / (r.rgba.length / 4) / 6)));
-                return { image: k + 1, shape: s, materials: s, detail: s, errors: s, overall: s, note: `diff-based ${s}` };
+                return { image: k + 1, shape: s, materials: s, detail: s, errors: s, overall: s, ...(regions ? { ground: s, neighbours: Math.max(1, s - 1), skyline: Math.min(10, s + 1) } : {}), note: `diff-based ${s}` };
             });
             return { model: 'fake-judge', response: { candidates: [{ content: { parts: [{ text: JSON.stringify({ renders: renderEntries }) }] } }] } };
         }
@@ -289,6 +293,10 @@ describe('photo_match_evaluate tool', () => {
 
     it('finds every pano a record names and the layers a staged scene shows', () => {
         expect([...collectPanoIds({ a: { panoId: 'P1' }, b: [{ panoIds: ['P2', 'P3'] }], c: 'sv:P4:90:0:60', d: { panoId: '' } })].sort()).toEqual(['P1', 'P2', 'P3', 'P4']);
+        // views named after a pano: the views a build scored itself on, survey stations and frames
+        expect([...collectPanoIds({
+            before: { views: [{ id: '3u8oHMLUFESFW7G_ne2NJA_h193_p55' }] }, station: 'SV_9lNp3PieY4hfrKRrQEWsIQ_h138', frame: '/x/nyfNITk8-CHQvykzhrvGTw_h272_p-5_f60.jpg', other: 'facade_h12_p3'
+        })].sort()).toEqual(['3u8oHMLUFESFW7G_ne2NJA', '9lNp3PieY4hfrKRrQEWsIQ', 'nyfNITk8-CHQvykzhrvGTw']);
         const vis = visibleStagedLayers(staged.scene.data.stagedBuild);
         expect(vis.map(l => l.layer)).toEqual(['l2']);
         // the trees layer only on request (the evaluator then draws one level per tree per view)
@@ -352,6 +360,34 @@ describe('photo_match_evaluate tool', () => {
             expect(v.clayJudge.stats.build.shape.mean).toBeGreaterThanOrEqual(1);
         }
         expect(r.summary).toMatch(/Clay, untextured, shape only \(3 of 3 views\)/);
+        // the regions, from geometry: the isolate is the target, the tile's terrain the ground; masks drawn in every grid
+        expect(r.regions.target.source).toMatch(/the isolate/);
+        expect(r.regions.terrain.method).toBe('walkable-surface');
+        expect(r.arms.map((a: any) => a.scope)).toEqual(['target', 'target']);
+        for (const v of r.views) {
+            const px = v.regions.pixels;
+            expect(px.target).toBeGreaterThan(1000);
+            expect(px.ground).toBeGreaterThan(1000);
+            expect(px.sky).toBeGreaterThan(1000);
+            expect(px.skyline).toBeGreaterThan(100);
+            expect(px.sky + px.ground + px.neighbours + px.target + px.trees).toBe(v.size[0] * v.size[1]);
+            // both arms have the scan's geometry in the same street: every pixel shows what the reference shows
+            for (const id of ['raw', 'build']) expect(v.regions.arms[id].frame.agreement).toBe(1);
+            // the wrong texture costs on the building, and both arms share the street (apart from the colour blur, 3 px, which
+            // carries the building's colour a little way onto the ground at its base)
+            expect(v.regions.arms.raw.building.ssim).toBeGreaterThan(v.regions.arms.build.building.ssim);
+            expect(v.regions.arms.raw.building.colourDeltaE).toBeLessThan(v.regions.arms.build.building.colourDeltaE);
+            expect(Math.abs(v.regions.arms.raw.ground.colourDeltaE - v.regions.arms.build.ground.colourDeltaE)).toBeLessThan(2);
+            // the old building numbers are untouched beside them
+            expect(v.pixel.raw.maskPixels).toBeGreaterThan(0);
+            for (const f of [v.regions.masks, v.regions.maskGrid]) expect(fs.readFileSync(f).subarray(1, 4).toString()).toBe('PNG');
+        }
+        expect(r.pixelMetrics.regions.mean.raw.building.ssim).toBeGreaterThan(r.pixelMetrics.regions.mean.build.building.ssim);
+        expect(r.pixelMetrics.regions.mean.raw.frame.agreement).toBe(1);
+        expect(r.judgeRegions).toBe(false);
+        expect(r.regionScores).toBeUndefined();
+        expect(r.summary).toMatch(/Region metrics \(masks from geometry/);
+        r.views.forEach((v: any, k: number) => fs.copyFileSync(v.regions.maskGrid, path.join(SHOTS, `tool_photo_match_staged_masks_view${k}.png`)));
         // the satellite second opinion is opt-in: not fetched, not rendered, said so
         expect(r.satelliteOrtho).toEqual({ used: false, requested: false, note: expect.stringMatching(/includeSatelliteOrtho/) });
         expect(r.summary).not.toMatch(/Satellite/);
@@ -448,6 +484,133 @@ describe('photo_match_evaluate tool', () => {
         expect(r.scores.B.overall.mean).toBeGreaterThan(r.scores.A.overall.mean);
         fs.copyFileSync(r.grids[0], path.join(SHOTS, 'tool_photo_match_arms_view0.png'));
     }, 120_000);
+
+    it('judges a district build as a whole place: the target picked at the place, regions per arm, a decoy without neighbours, the place judged blind', async () => {
+        const models = path.join(root, 'public', 'models');
+        const ground260 = { ...ground(260), png: checkerPng([110, 110, 105], [96, 96, 92]) };
+        // D: the whole place as the tile has it; N: the same place with its neighbour gone (a decoy the regions must catch)
+        const districtGlb = path.join(models, 'synthetic_district_44444444.glb');
+        writeGlb(districtGlb, [ground260, { ...TARGET, png: realFacade }, { ...NEIGHBOUR, png: facadePng([200, 196, 186], [60, 70, 80]) }]);
+        const noNeighbourGlb = path.join(models, 'synthetic_district_no_neighbour_55555555.glb');
+        writeGlb(noNeighbourGlb, [ground260, { ...TARGET, png: realFacade }]);
+        const calls = { n: 0, clay: 0, regions: 0 };
+        const handler = createPhotoMatchEvaluateHandler(() => fakeDeps(root, { judgeCalls: calls }));
+        const out = await handler({
+            arms: [
+                { id: 'D', label: 'DISTRICT', glbs: [districtGlb], scope: 'place' },
+                { id: 'N', label: 'NO NEIGHBOURS', glbs: [noNeighbourGlb], scope: 'place' },
+                // the hero alone (an isolated build's GLB) in the same comparison: drawn in the tile with the picked target cut out
+                { id: 'K', label: 'HERO ONLY', glbs: [staged.altGlb] }
+            ],
+            anchor: { lat: PLACE.lat, lng: PLACE.lng }, excludePanoIds: ['USED_WEST'], views: 3, runs: 1, clay: false, judgeRegions: true
+        }, ctxFor(root));
+        const r = out.resultPayload as any;
+        expect(out.status, JSON.stringify(r).slice(0, 800)).toBe('completed');
+        // no isolate: the target is the structure the structure rule picks at the place (the 14 x 12 m block, not its neighbour)
+        expect(r.regions.target.source).toMatch(/structure rule picks at the frame origin/);
+        expect(r.regions.target.areaM2).toBeGreaterThanOrEqual(150);
+        expect(r.regions.target.areaM2).toBeLessThanOrEqual(240);
+        expect(r.regions.target.heightM).toBeCloseTo(16, 0);
+        expect(r.arms.map((a: any) => [a.id, a.scope])).toEqual([['raw', 'target'], ['D', 'place'], ['N', 'place'], ['K', 'target']]);
+        expect(r.arms[0].label).toBe('RAW SCAN (CUT TO TARGET)');
+        expect(r.context).toMatch(/structure picked at the place/);
+        expect(r.context).toMatch(/2 arms are the whole place/);
+        // the views look at the target, not at the middle of everything the district holds
+        expect(r.views).toHaveLength(3);
+        for (const v of r.views) expect(v.distanceM).toBeLessThan(50);
+        let sawNeighbour = false;
+        for (const v of r.views) {
+            const px = v.regions.pixels;
+            expect(px.target).toBeGreaterThan(1000);
+            expect(px.ground).toBeGreaterThan(1000);
+            // the whole place, the raw scan and the hero in its street all show what the tile shows
+            for (const id of ['raw', 'D', 'K']) expect(v.regions.arms[id].frame.agreement, `${v.id} ${id}`).toBe(1);
+            expect(v.regions.arms.N.building.agreement).toBe(1);
+            if (px.neighbours > 500) {
+                sawNeighbour = true;
+                expect(v.regions.arms.N.neighbours.agreement).toBeLessThan(0.2);
+                expect(v.regions.arms.N.neighbours.colourDeltaE).toBeGreaterThan(v.regions.arms.D.neighbours.colourDeltaE);
+                expect(v.regions.arms.N.frame.agreement).toBeLessThan(1);
+            }
+        }
+        expect(sawNeighbour).toBe(true);
+        expect(r.pixelMetrics.regions.mean.D.neighbours.agreement).toBe(1);
+        expect(r.pixelMetrics.regions.mean.N.neighbours.agreement).toBeLessThan(0.5);
+        // the place judged blind in the same calls (no extra ones), the building's scores as before
+        expect(calls.n).toBe(3);
+        expect(calls.regions).toBe(3);
+        expect(r.judgeRegions).toBe(true);
+        expect(r.regionJudged).toBe(3);
+        for (const id of ['raw', 'D', 'N', 'K']) {
+            for (const c of ['ground', 'neighbours', 'skyline']) {
+                expect(r.regionScores[id][c].mean).toBeGreaterThanOrEqual(1);
+                expect(r.regionScores[id][c].mean).toBeLessThanOrEqual(10);
+            }
+            expect(Object.keys(r.scores[id]).sort()).toEqual(['detail', 'errors', 'identity', 'materials', 'overall', 'realism', 'shape']);
+            expect(r.views[0].judge.regionStats[id].skyline.mean).toBeGreaterThanOrEqual(1);
+        }
+        expect(r.regionScores.D.ground.mean).toBeGreaterThan(r.regionScores.N.ground.mean);
+        expect(r.summary).toMatch(/The place around the building \(3 of 3 views\)/);
+        r.views.forEach((v: any, k: number) => {
+            fs.copyFileSync(v.regions.maskGrid, path.join(SHOTS, `tool_photo_match_district_masks_view${k}.png`));
+            fs.copyFileSync(v.grid, path.join(SHOTS, `tool_photo_match_district_view${k}.png`));
+        });
+    }, 240_000);
+
+    it('reads a seam-welded district run through its tile_seams note, and picks the target inside Google\'s footprint the run read', async () => {
+        // a podium with a tower on it (the target), a neighbour; the run keys its tiles on the welded scan, which has no entry of its own
+        const place2 = { lat: 40.71, lng: -74.01, formattedAddress: 'Synthetic Tower, Test City' };
+        const sl = path.join(root, '.scratchbox', 'cache', 'staged_location');
+        const rawDir = path.join(sl, 'tiles', 'd'.repeat(64));
+        const podium = box(0, 0, 30, 20, 6), tower = box(0, 0, 10, 10, 40), other = box(40, 0, 10, 10, 22);
+        const street: Part[] = [
+            { ...ground(260), png: checkerPng([110, 110, 105], [96, 96, 92]) }, { ...podium, png: facadePng([150, 140, 120], [40, 50, 60]) },
+            { ...tower, png: facadePng([190, 180, 160], [40, 50, 60]) }, { ...other, png: facadePng([200, 196, 186], [60, 70, 80]) }
+        ];
+        writeGlb(path.join(rawDir, 'textured.glb'), street);
+        writeGlb(path.join(rawDir, 'geometry.glb'), street.map(p => ({ positions: p.positions, uvs: p.uvs, indices: p.indices, color: [0.5, 0.5, 0.5] as [number, number, number] })));
+        fs.copyFileSync(path.join(rawDir, 'textured.glb'), path.join(rawDir, 'textured_tile_seams_2.glb'));
+        fs.copyFileSync(path.join(rawDir, 'geometry.glb'), path.join(rawDir, 'geometry_tile_seams_2.glb'));
+        fs.writeFileSync(path.join(rawDir, 'done.json'), JSON.stringify({
+            schema: 'scratchbox.stage-cache/1', stage: 'tiles', key: 'd'.repeat(64), builtAtMs: 1, ms: 1, published: [],
+            value: { texturedGlb: 'textured.glb', geometryGlb: 'geometry.glb', originEllipsoidalHeightM: -31, geoAnchor: { lat: place2.lat, lng: place2.lng } }
+        }));
+        const VEC = 'f'.repeat(64), RUN2 = 'e5e5e5e5';
+        const rect = (x0: number, x1: number, z0: number, z1: number) => [[[x0, z0], [x1, z0], [x1, z1], [x0, z1]]];
+        fs.mkdirSync(path.join(sl, 'vector', VEC), { recursive: true });
+        fs.writeFileSync(path.join(sl, 'vector', VEC, 'done.json'), JSON.stringify({
+            schema: 'scratchbox.stage-cache/1', stage: 'vector', key: VEC, builtAtMs: 1, ms: 1, published: [],
+            value: { sel: { buildings: [{ id: 'podium', parts: [{ loops: rect(-15, 15, -10, 10), minH: 0, topH: 40 }] }, { id: 'other', parts: [{ loops: rect(35, 45, -5, 5), minH: 0, topH: 22 }] }] }, tiles: 1 }
+        }));
+        const runDir = path.join(sl, 'runs', RUN2);
+        fs.mkdirSync(runDir, { recursive: true });
+        fs.writeFileSync(path.join(runDir, 'stages.json'), JSON.stringify({ schema: 'scratchbox.staged-run/1', runId: RUN2, request: { query: 'Synthetic Tower', isolate: false }, place: place2, keys: { tiles: 'c'.repeat(64), vector: VEC }, statuses: {}, createdAtMs: 1 }));
+        fs.writeFileSync(path.join(runDir, 'tile_seams.json'), JSON.stringify({ version: 'tile-seams/2', raw: path.join(rawDir, 'textured.glb'), inputTriangles: 1, outputTriangles: 1, toleranceM: 0.03, seamWeld: {}, overlapTrim: {}, tJunctions: {} }));
+        const districtGlb = path.join(root, 'public', 'models', 'synthetic_tower_district_66666666.glb');
+        writeGlb(districtGlb, street);
+        const deps = () => fakeDeps(root, { street: path.join(rawDir, 'textured.glb') });
+        const out = await createPhotoMatchEvaluateHandler(deps)({ arms: [{ id: 'D', label: 'DISTRICT', runId: RUN2, glbs: [districtGlb] }], views: 2, runs: 1, clay: false }, ctxFor(root));
+        const r = out.resultPayload as any;
+        expect(out.status, JSON.stringify(r).slice(0, 800)).toBe('completed');
+        expect(r.reference).toMatch(/seam-welded scan/);
+        expect(r.origin.heightMeters).toBe(-31);
+        expect(r.arms.map((a: any) => [a.id, a.scope])).toEqual([['raw', 'target'], ['D', 'place']]);
+        // inside the footprint the whole building is the target: podium and tower (600 m²), not the tower alone
+        expect(r.regions.target.footprintSource).toBe('vector-footprint');
+        expect(r.regions.target.areaM2).toBeGreaterThanOrEqual(560);
+        expect(r.regions.target.areaM2).toBeLessThanOrEqual(700);
+        for (const v of r.views) expect(v.regions.arms.D.frame.agreement).toBe(1);
+        // the same tile without the footprints (GLBs and an anchor): the scan alone gives what it gives, and says so
+        const bare = await createPhotoMatchEvaluateHandler(deps)({ arms: [{ id: 'D', glbs: [districtGlb], scope: 'place' }], anchor: { lat: place2.lat, lng: place2.lng }, views: 1, runs: 1, clay: false }, ctxFor(root));
+        const b = bare.resultPayload as any;
+        expect(bare.status, JSON.stringify(b).slice(0, 800)).toBe('completed');
+        expect(b.regions.target.footprintSource).toBe('scan-geometry');
+        expect(b.regions.target.source).toMatch(/no building footprints are recorded/);
+        expect(b.regions.target.areaM2).toBeLessThan(300);
+        console.log('scan-only pick', b.regions.target.areaM2, 'm2; with the footprint', r.regions.target.areaM2, 'm2');
+        r.views.forEach((v: any, k: number) => fs.copyFileSync(v.regions.maskGrid, path.join(SHOTS, `tool_photo_match_footprint_masks_view${k}.png`)));
+        b.views.forEach((v: any, k: number) => fs.copyFileSync(v.regions.maskGrid, path.join(SHOTS, `tool_photo_match_scan_only_masks_view${k}.png`)));
+    }, 240_000);
 
     it('takes GLBs with an anchor, finding the cached extraction there', async () => {
         const handler = createPhotoMatchEvaluateHandler(() => fakeDeps(root));
