@@ -155,6 +155,42 @@ How it was checked:
 Not verified: no park tile is cached, so the open-place rule has not met a real park. Bryant Park and Dolores Park each
 need a fresh district build and a dry run before the preregistration can lift their block.
 
+## Fixed poses (2026-10-31, later)
+
+A preregistration can name its views: `poses`, each a position (`lat`/`lng`, or a `panoId`) and a `headingDeg`, with
+optional `pitchDeg` (default 0) and `fovDeg` (10 to 90, default 90), and a `label`. The automatic rule needs the target
+to fill 6% of the frame, so it never picks a look along a street with the target at its edge.
+
+- **The pano.** A pose looks from the nearest Google-captured pano within 20 m of its position, or from the pano named.
+  The app's lookup probes the position and two rings round it (8 and 16 m); the grounding API's known refusals are left out.
+- **The same checks as the automatic views.** A pano any build used is refused (`used-by-build`). A view that does not
+  register by edges (at most 5 px, lower than the start) is not used (`not-registered`, with its residuals). There is no
+  6% gate: the target's share of the frame and of it unhidden are reported, not used to decide.
+- **Views.** The fixed views are fetched, registered and judged blind with the automatic ones, and count toward `views`,
+  which is raised to the number of poses (`heldOut.viewsRaisedTo`). Registered fixed views come first, in the order
+  given; the nearest automatic views fill the rest, and never repeat a fixed pose's pano. The fetch stays at the tool's
+  usual count: the automatic views fetched are fewer by the number of fixed ones.
+- **Report.** `heldOut.fixed` lists every pose: the pano used, its distance from the position, the eye's ground, the
+  status (`judged`, `no-pano`, `used-by-build`, `no-ground`, `duplicate`, `not-fetched`, `not-registered`) and the
+  reason it dropped out. `views[].fixed` marks the fixed views, and the summary counts them.
+- **Dry run.** The driver's stand-in lookup takes fixed poses' panos from the metadata cache, so a pose whose pano no
+  earlier build looked up drops out there as `no-pano`.
+
+How it was checked:
+
+- **Tool test** (credentials unreachable). Four poses on the synthetic block, views 3:
+  - A position 2.8 m from the pano east of the neighbour, heading 250, pitch 4, fov 60. The neighbour hides the block
+    from that pano, and the automatic rule rejects it. It is judged first, and the grounding API was asked for heading
+    250, pitch -4 (its sign) and fov 60.
+  - A pano the build used: refused, never fetched.
+  - A position 200 m out: `no-pano`, with the distance to the nearest pano.
+  - A named pano, heading 180, fov 70: judged second.
+  - The views rise to 4, and the two automatic views are the other two panos.
+  - With that named pano failing registration, it is reported with its residuals (6 to 9 px), and an automatic view
+    takes its place.
+- **ESB dry run** (run 7f594cd6). A position 3 m from a pano the automatic rule rejects was judged first, at the heading,
+  pitch and fov given. A pano the K build scored itself on was refused.
+
 ## Follow-ups
 
 - **Eyes off the tile.** At the ESB, 9 of the 31 candidates stand beyond the tile's grid. Their eye is the structure's
