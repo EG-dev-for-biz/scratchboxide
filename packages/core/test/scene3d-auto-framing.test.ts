@@ -53,6 +53,21 @@ describe('Scene 3D Auto-Framing & Standoff Camera', () => {
         expect(autoFrame!.position[1]).toBeGreaterThan(bounds.sphere.center.y);
     });
 
+    it('keeps a pose saved on purpose inside the geometry (a viewer standing in a walkable world), and re-frames one that was not', () => {
+        const scene = new THREE.Scene();
+        // a 150 m street block the viewer stands inside
+        const block = new THREE.Mesh(new THREE.BoxGeometry(150, 40, 150), new THREE.MeshStandardMaterial());
+        block.position.set(0, 20, 0);
+        scene.add(block);
+        const bounds = computeSceneGeometryBounds(scene);
+        const eye: [number, number, number] = [-1, 1.6, -0.5], target: [number, number, number] = [19, 1.6, 9];
+        const kept = calculateStandoffCamera(bounds, { position: eye, target, fov: 60, keepPoseOnLoad: true });
+        expect(kept!.autoFramed).toBe(false);
+        expect(kept!.position).toEqual(eye);
+        const moved = calculateStandoffCamera(bounds, { position: eye, target, fov: 60 });
+        expect(moved!.autoFramed).toBe(true);
+    });
+
     it('frames a small prop (a ~0.5 m stool) closely instead of from a fixed 15 m', () => {
         const scene = new THREE.Scene();
         const stool = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.45, 0.4), new THREE.MeshStandardMaterial());

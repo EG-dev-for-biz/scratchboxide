@@ -19,6 +19,8 @@ import { stableProjectArtifactId } from '../../../common/project-artifact-graph-
 import { ProjectItem } from '../ProjectsModal';
 import { CanvasArtifact, ChatSession, InteractiveBrowserData, LiveCodeSandboxData, SandboxLanguage, SandboxTemplate, StageLayoutMode, WorkspaceFileType } from '../canvas-types';
 import { resolveModeForArtifact } from '../guardrails-service';
+import { primitiveOutOfScopeReason } from '../../../common/product-scope';
+import { postScopeNote } from '../chat/scopeNote';
 import { ChatState, ChatStore } from '../state/chatStore';
 import { WorkspaceGraphCoordinator } from '../studio/useWorkspaceGraphCoordinator';
 import { artifactOnStage, upsertArtifact } from '../tool-node-runs';
@@ -36,13 +38,14 @@ export interface UseCanvasOpenersDeps {
     setArtifactHistory: ChatStore['setArtifactHistory'];
     setGraphEpoch: WorkspaceGraphCoordinator['setGraphEpoch'];
     setLayoutMode: ChatStore['setLayoutMode'];
+    setMessages: ChatStore['setMessages'];
     setSessions: ChatStore['setSessions'];
     showToast: (text: string, icon?: string) => void;
     stageLayoutMode: StageLayoutMode;
 }
 
 export function useCanvasOpeners(deps: UseCanvasOpenersDeps) {
-    const { activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, layoutMode, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setLayoutMode, setSessions, showToast, stageLayoutMode } = deps;
+    const { activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, layoutMode, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setLayoutMode, setMessages, setSessions, showToast, stageLayoutMode } = deps;
 
     const handleOpenInAppBrowser = React.useCallback((targetUrl: string, targetTitle?: string) => {
         if (!targetUrl || targetUrl === '#') return;
@@ -130,6 +133,11 @@ export function useCanvasOpeners(deps: UseCanvasOpenersDeps) {
     }, [activeArtifact, activeWorkspace.id, stageLayoutMode, currentSessionId, showToast]);
 
     const handlePreviewCodeInCanvas = React.useCallback((language: string, content: string) => {
+        const outOfScope = primitiveOutOfScopeReason('live-code-sandbox');
+        if (outOfScope) {
+            postScopeNote(setMessages, outOfScope);
+            return;
+        }
         const lang = (language || '').toLowerCase();
         let template: SandboxTemplate = 'react';
         let fileName = 'App.tsx';
@@ -199,9 +207,14 @@ ${content}
         });
         setLayoutMode('code');
         showToast(`Previewing ${fileName} live in Canvas`, '⚡');
-    }, [showToast]);
+    }, [setMessages, showToast]);
 
     const handleMorphArtifact = React.useCallback((morphedArtifact: CanvasArtifact) => {
+        const outOfScope = primitiveOutOfScopeReason(morphedArtifact.type);
+        if (outOfScope) {
+            postScopeNote(setMessages, outOfScope);
+            return;
+        }
         const correlationId = `morph-${activeArtifact?.id || 'unknown'}-${morphedArtifact.id}`;
         const source = activeArtifact
             ? graphControllerRef.current.registerArtifact(activeArtifact, correlationId)
@@ -240,7 +253,7 @@ ${content}
             });
         }
         showToast(`Morphed to ${canonicalArtifact.title}`);
-    }, [activeArtifact, currentSessionId, persistSessionsImmediately]);
+    }, [activeArtifact, currentSessionId, persistSessionsImmediately, setMessages]);
 
     const applyStreamedArtifact = React.useCallback((art: CanvasArtifact) => {
         // replaced in place (a canvas tab keeps its position), added when new; the stage changes only if it shows this artifact

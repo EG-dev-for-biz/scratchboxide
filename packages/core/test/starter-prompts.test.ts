@@ -17,8 +17,8 @@ function memoryStorage() {
 const button = (label: string) => STARTER_BUTTONS.find(b => b.label === label)!;
 
 describe('new-chat starter buttons pick a varied example', () => {
-    it('3D Scene, System Spec and KPI Dashboard each have many distinct examples', () => {
-        for (const label of ['3D Scene', 'System Spec', 'KPI Dashboard']) {
+    it('3D Scene has many distinct examples', () => {
+        for (const label of ['3D Scene']) {
             const prompts = button(label).prompts;
             expect(prompts.length, label).toBeGreaterThanOrEqual(8);
             expect(new Set(prompts).size, `${label} has duplicates`).toBe(prompts.length);
@@ -51,9 +51,17 @@ describe('new-chat starter buttons pick a varied example', () => {
         expect(p).not.toMatch(/procedural/);
     });
 
+    it('the front page offers 3D World, opening the 7th Avenue splat world, and no System Spec or KPI Dashboard', () => {
+        expect(STARTER_BUTTONS.map(b => b.label)).toEqual(['Interactive App', '3D Scene', '3D Building', '3D World', 'Video NLE']);
+        const w = button('3D World');
+        expect(w.world!.scenePath).toBe('/tilesets/7th_avenue_west_32nd_street_new_york_40.74974_-73.99163/scene3d.json');
+        // without the built world on this machine, the button builds it from the chat
+        expect(w.prompts[0]).toMatch(/west sidewalk of 7th Ave at the Penn Station/);
+    });
+
     it('a single-example button always sends it, and storage that throws still works', () => {
         expect(pickStarterPrompt(button('Video NLE'), () => 0.5, memoryStorage())).toBe(button('Video NLE').prompts[0]);
         const broken = { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } };
-        expect(button('KPI Dashboard').prompts).toContain(pickStarterPrompt(button('KPI Dashboard'), () => 0.999, broken));
+        expect(button('3D Scene').prompts).toContain(pickStarterPrompt(button('3D Scene'), () => 0.999, broken));
     });
 });

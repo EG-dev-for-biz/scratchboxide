@@ -24,6 +24,7 @@ import {
 } from '../canvas-icons';
 import { ArtifactStageProps } from './artifact-stage-props';
 import { TAB_DRAG_TYPE } from './stage-dock';
+import { canCreatePrimitive } from '../../../common/product-scope';
 
 /** Artifact tab strip on the left of the canvas card header (Studio / VS Code style). */
 export const CanvasTabsBar: React.FC<ArtifactStageProps> = props => {
@@ -90,15 +91,17 @@ export const CanvasTabsBar: React.FC<ArtifactStageProps> = props => {
                 );
             })}
 
-            {/* New Tab Button (+) */}
-            <button
-                type="button"
-                className="sb-canvas-new-tab-btn"
-                onClick={handleCreateNewSandboxTab}
-                title="New Live Sandbox / Artifact Tab (+)"
-            >
-                <IconPlus size={12} strokeWidth={2} />
-            </button>
+            {/* New Tab Button (+): it makes a sandbox, which the 3D/VFX build (common/product-scope.ts) does not offer */}
+            {canCreatePrimitive('live-code-sandbox') && (
+                <button
+                    type="button"
+                    className="sb-canvas-new-tab-btn"
+                    onClick={handleCreateNewSandboxTab}
+                    title="New Live Sandbox / Artifact Tab (+)"
+                >
+                    <IconPlus size={12} strokeWidth={2} />
+                </button>
+            )}
         </div>
 
         {layoutMode === 'document' && docReadOnly && <span className="sb-doc-readonly-tag" style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', flexShrink: 0, margin: '0 8px' }}>READ-ONLY</span>}

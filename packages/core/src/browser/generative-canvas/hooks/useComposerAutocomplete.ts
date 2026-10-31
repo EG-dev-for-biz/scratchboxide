@@ -66,7 +66,19 @@ export function useComposerAutocomplete(deps: UseComposerAutocompleteDeps) {
 
         if (triggerMatch) {
             setAutocompleteType(triggerMatch.type === 'skill' ? 'skill' : 'context');
-            setAutocompleteQuery(triggerMatch.query);
+            let effectiveQuery = triggerMatch.query;
+            if (triggerMatch.type === 'context') {
+                const rawQ = triggerMatch.query.toLowerCase();
+                const categoryPrefixMatch = rawQ.match(/^(scene|mesh|camera|timeline|file|files|folder|git|terminal|web|docs|mcp)(?::(.*))?$/);
+                if (categoryPrefixMatch) {
+                    const matchedCat = (categoryPrefixMatch[1] === 'files' ? 'file' : categoryPrefixMatch[1]) as ContextMentionCategory;
+                    setActiveContextCategory(matchedCat);
+                    effectiveQuery = categoryPrefixMatch[2] !== undefined
+                        ? triggerMatch.query.slice(categoryPrefixMatch[1].length + 1)
+                        : '';
+                }
+            }
+            setAutocompleteQuery(effectiveQuery);
             setSelectedAutocompleteIndex(0);
         } else if (autocompleteType !== undefined) {
             setAutocompleteType(undefined);

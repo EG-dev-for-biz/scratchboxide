@@ -19,6 +19,7 @@ import { sunAtLocalSolarTime } from './nature-atmosphere-operators';
 import type { Scene3DData, SceneCameraLens, SceneLensDistortion, SceneFilmGrain, SceneLensFlare, SceneLensDiffusion } from '../../canvas-types';
 import { planViewportOptics, distortionMaxAspect } from '../../primitives/scene3d/viewportOptics';
 import { FOCUS_MODES_DRAWN, effectiveFocusMode, isFocusPoint } from '../../primitives/scene3d/viewportFocus';
+import { mergeColorHarmony, planColorHarmony, type SetColorHarmonyParams } from '../postprocessing/color-harmony';
 
 type Vec3 = [number, number, number];
 
@@ -460,6 +461,19 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
             scene.camera = camera;
             const plan = planViewportOptics(lens);
             return { lens: lens ?? null, passes: plan.passes, issues: [...plan.issues, ...warnings] };
+        }
+    },
+    {
+        name: 'sb_set_color_harmony',
+        category: 'lighting_camera',
+        description: 'Puts a colour harmony grade on the viewport: every hue on the scene\'s objects moves toward the nearest sector of a hue template turned to hueDeg (degrees on the OKLCH hue circle: about 30 red, 110 yellow, 145 green, 265 blue), keeping lightness so shading and texture stay. sectors: 1-8 { offsetDeg, widthDeg } relative to hueDeg (default one 94 degree sector; e.g. two 18 degree sectors at 0 and 180 for complementary colours). strength 0-1 (default 1), chroma 0-2 saturation scale (default 1), tint 0-1 colour added at hueDeg so neutral surfaces such as clay take the colour too (default 0; a harmony alone cannot move a grey, which has no hue). Only the scene\'s objects are graded, never the sky or background. A field given replaces it, null resets it; clear removes the grade. A viewport grade: materials are unchanged.',
+        execute: (ctx, params: SetColorHarmonyParams) => {
+            const scene = ctx.getSceneData();
+            const harmony = mergeColorHarmony(scene.colorHarmony, params || {});
+            if (harmony) scene.colorHarmony = harmony;
+            else delete scene.colorHarmony;
+            const plan = planColorHarmony(harmony);
+            return { colorHarmony: harmony ?? null, drawn: !!plan.harmony, issues: plan.issues };
         }
     },
     {

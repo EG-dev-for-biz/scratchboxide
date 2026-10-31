@@ -22,6 +22,7 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
+import { removeChromeProfile } from './chrome-profile';
 import type { Requirement } from './requirements';
 
 function findChrome(): string | undefined {
@@ -167,6 +168,6 @@ export async function withWebGpuPage<T>(
         proc.kill('SIGKILL');
         xvfb?.proc.kill('SIGKILL');
         await new Promise<void>(r => server.close(() => r()));
-        fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+        removeChromeProfile(profile);
     }
 }
