@@ -727,3 +727,20 @@ Values the procedure above fills in, written as they are fixed. Each is written 
     the remeshed scan within 81 m, Google's vector buildings beyond, and the trees.
   - For bar 6 the DM-DS pair compares identical builds, so it can only read "the judge cannot tell". It also gives a
     check of the judge's noise on two identical images in one blind call.
+- **KD's first attempt failed on disk space.** Run 85d60523 ran for 61 minutes and joined 19 of its 20 chunks.
+  - **The failure.** Chunk 20 failed with `ENOSPC: no space left on device`: the Mac's disk was full, 320 MB free of
+    1.8 TB, with every session on it writing. The run recorded `chunk_failed` and `chunks_failed`, and one vector-outer
+    layer (l0o) was still showing. Both are KD stop rules.
+  - **The cause.** It was the disk, not anything in KD's own pipeline.
+  - **What was removed.** With the user's approval, only what that run alone wrote went to the Trash
+    (`~/.Trash/m1-kd-85d60523-failed`): 214 entries, 23.42 GB.
+    - 21 tile_refine entries (11.22 GB);
+    - 21 tiles entries (0.86 GB);
+    - 20 remesh records;
+    - 77 chunk GLBs in district-chunks (5.7 GB);
+    - 74 published chunk GLBs (4.8 GB).
+
+    No kept run (K 1ef02345, DM 0ced0b89, DS 5d29b92d) referenced any of them. The run's record, timeline and logs are
+    kept.
+  - **The rebuild.** KD is rebuilt fresh from `feat/m1-run` once at least 30 GB is free, on a server restarted with
+    `SCRATCHBOX_CACHE_RESTORE=off`, so no stage comes back from the Cloud Storage bucket. No bar changes.
