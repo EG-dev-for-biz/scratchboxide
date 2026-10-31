@@ -111,16 +111,53 @@ inside the building mask. It now measures the whole place.
 - **Not run in the live app.** The change is the tool's server side; the chat drives it the same way as before.
 - **A pick with real vector footprints.** Only the synthetic one was tested: no ESB vector stage is cached.
 
+## Views at a place with no structure, and eye height (2026-10-31, later)
+
+Commits 84c10b79 and 6d6d25f7 on `claude/elastic-jennings-e32939`, on top of this branch.
+
+- **Which rule chose the views** is reported in `heldOut.viewTarget.rule`:
+  - `isolate`, or `picked-structure`, as before;
+  - `first-build`: no structure at the place, and the first build stands in for the target (scope `target`), as before;
+  - `open-place`: no structure at the place, and the first build is a whole place (a district).
+- **An open place.** The views look at the place itself: every surface of the reference tile within a radius of the frame
+  origin, cut at that circle (`surfacesWithin`, a 32-sided polygon). A large ground triangle counts for its part inside.
+  - Each view is aimed at the centre, at its ground there, never at the nearest wall.
+  - The radius is the pick's window (30 m) first, then 60, 90 and 120 m: the first at which as many views qualify as
+    the tool fetches, else the one where the most do. `viewTarget.tried` lists every radius tried and its candidates.
+  - Geometry alone decides: no names and no land-use codes.
+- **Eye height.** A pano's eye stands 2.5 m over the reference tile's terrain ground model (`buildGroundModel`).
+  - Off the terrain grid it falls back to the old rule: the lowest surface within 1.5 m, else the structure's base.
+  - `heldOut.eyeGround` counts which rule placed each candidate's eye. `heldOut.notQualified` counts the panos that did
+    not qualify.
+
+How it was checked:
+
+- **Tool tests:** 13, all passing with credentials unreachable.
+  - **A walled park:** nothing 3 m tall within 30 m of the place, and a 2.9 m wall 45 m out.
+    - Within 30 m only the pano inside the park qualifies; from the streets the wall hides the place.
+    - The place widens to 60 m, where 5 candidates qualify. Two are judged, each aimed at the centre.
+    - The 260 m ground (two triangles) cut at 30 m covers π·30² to within 0.5%. A centroid test would keep none of it.
+  - **A vault 20 m under the street:** the old rule put the eye 17.5 m under the street, which hid the block (3%
+    unhidden). On the terrain the eye stands at 2.48 m, and the view is judged.
+- **The ESB dry run** (run 7f594cd6, the same arguments as the dry run above): **no more candidates.**
+  - The views are unchanged: 31 candidates, 8 fetched, 8 registered and the same 4 judged.
+  - 22 eyes stand on the terrain. 9 panos stand off the tile's grid (the tile reaches about 90 m), so their eyes stay
+    on the structure's base.
+  - Both rules compared on all 71 panos with nothing excluded: 38 candidates each, the same set, eyes at most 0.72 m apart.
+  - The -19.7 m surface lies under no pano. At the ESB the fix neither adds nor removes a view. It removes a failure only
+    where scan lies below a pano.
+- **Cost of the open place on the ESB tile** (200,974 triangles): 1.3 s for two radii. Cutting the tile at 120 m takes
+  38 ms.
+- **Images** (gitignored):
+  - `docs/screenshots/m1_world_judge/esb_dryrun_eye/`;
+  - `test-results/screenshots/tool_photo_match/tool_photo_match_open_place_masks_view*.png`.
+
+Not verified: no park tile is cached, so the open-place rule has not met a real park. Bryant Park and Dolores Park each
+need a fresh district build and a dry run before the preregistration can lift their block.
+
 ## Follow-ups
 
-- **Views at a place with no structure.** At a park or a plaza (Bryant Park, Dolores Park) the pick finds no structure
-  within 30 m of the place. Views then fall back to the first build's layers, which for a district is the whole district,
-  so no held-out view qualifies. A view rule for a place with no structure at it is needed before those two places can be
-  judged.
-- **Eye height.** `heldOutViews` puts a pano's eye 2.5 m over the lowest surface within 1.5 m. At some points round the
-  ESB that surface lies far below the street: -19.7 m at a point 3 m off its north face, against a terrain of 0.9 m
-  (`geometry_tile_seams_2.glb` reaches -23.9 m). That can put the eye underground and reject the view. The terrain model
-  is now at hand and would give the street's height. Not changed here: it moves every held-out pose before registration,
-  and only a live run can show the effect on registration.
+- **Eyes off the tile.** At the ESB, 9 of the 31 candidates stand beyond the tile's grid. Their eye is the structure's
+  base plus 2.5 m, a guess the pose registration has to correct.
 - **A target mask clipped at the footprint.** Large scan triangles that straddle the target's outline are wholly target or
   wholly neighbour; splitting them at the outline would sharpen both masks.

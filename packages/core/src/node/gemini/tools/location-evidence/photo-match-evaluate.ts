@@ -1345,7 +1345,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
             usedPanoSources: builds.usedSources,
             candidates: candidates.length,
             notQualified: rejected.length,
-            // where each candidate's eye stands, 2.5 m up: the reference tile's terrain, else the lowest surface within 1.5 m
+            // where each candidate's eye stands, 2.5 m up: the reference tile's terrain, else the lowest surface within 1.5 m, else the structure's base
             eyeGround: candidates.reduce((n, v) => ({ ...n, [v.eyeGround]: (n[v.eyeGround] ?? 0) + 1 }), {} as Partial<Record<HeldOutEyeGround, number>>),
             fetched: got.images.length,
             fetchFailures: got.failures.map(f => ({ panoId: f.view.panoId, error: f.error })),
