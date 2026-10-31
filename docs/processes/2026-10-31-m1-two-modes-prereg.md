@@ -676,3 +676,17 @@ Values the procedure above fills in, written as they are fixed. Each is written 
   and the paid run go through the app's own tool endpoint (`/gemini/tools/run-stream`, the node graph's tool runner).
   The stage caches are those of that worktree (`.scratchbox/cache`). Before each place's builds they are moved aside,
   so nothing is reused, and the server is restarted. Each place's cache is put back only to judge that place.
+- **Penn 2's target checks, on K run 1ef02345** (fresh, every stage a cache miss). The fallback is taken.
+  - **The geocode is off.** `2 Penn Plaza, New York` resolved to 2 Pennsylvania Plaza at 40.750316, -73.991722. That is
+    68.3 m from the corner of 7th Ave and W 32nd St (66.9 m north, 13.7 m west), past the 50 m in "The target at
+    Penn 2, and its fallback". That alone takes the fallback.
+  - **The footprint.** Google's vector footprint, 5,593 m², with an IoU of 0.92 against the scan's structure. Its 7th Ave
+    frontage runs at x ≈ 7 to 10 m in the run's frame, and it reaches about 95 m west of the avenue.
+  - **K's isolate.** It spans x −88 to 15 m and z −22 to 100 m (about 103 by 122 m in plan), with a top at 143 m, in
+    37,219 triangles. It reaches about 100 m west of 7th Ave, short of the middle of the block.
+  - **The rest of the build.** The structure stands 75.8 m from the geocoded point. The build is degraded:
+    - 2.2% through holes;
+    - the survey read 13 of 16 faces, and two images timed out.
+  - **So every arm runs at `11 Penn Plaza, New York`** (K, then DM, DS and KD), with its own building as the target. The
+    views stay at the corner: poses A and B keep their position and headings, and the automatic views aim at 11 Penn
+    Plaza. Under the fallback, pose A shows Penn 2 as a neighbour. K run 1ef02345 is kept aside and not judged.
