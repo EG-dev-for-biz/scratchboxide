@@ -8,6 +8,7 @@ set -euo pipefail
 #   deploy/kd-chunk-job/deploy.sh grants  the IAM bindings alone (needs Owner or Secret Manager Admin)
 #   deploy/kd-chunk-job/deploy.sh build   the image of HEAD, tagged with its commit (Cloud Build)
 #   deploy/kd-chunk-job/deploy.sh job     the Cloud Run job, pointed at HEAD's image
+#   deploy/kd-chunk-job/deploy.sh job-app the job as the app's account, the Maps key from the main checkout's .env
 #   deploy/kd-chunk-job/deploy.sh all     the three in order
 #
 # Needs your own `gcloud auth login`. Every step creates or changes billed resources in the project.
@@ -125,6 +126,14 @@ case "${1:-}" in
   grants) grants ;;
   build) build ;;
   job) job ;;
+  job-app)
+    # the job as the app's account, the Maps key read from the main checkout's .env (never printed)
+    export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$SA_KEY_FILE" KD_JOB_AUTH=app
+    G=(gcloud --project "$PROJECT" --quiet)
+    ENV_FILE="${ENV_FILE:-$(git -C "$REPO_ROOT" worktree list --porcelain | sed -n '1s/^worktree //p')/.env}"
+    GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(grep -m1 '^GOOGLE_MAPS_API_KEY=' "$ENV_FILE" | cut -d= -f2- | tr -d "\"' \r")}"
+    export GOOGLE_MAPS_API_KEY
+    job ;;
   all) setup; build; job ;;
-  *) sed -n '4,20p' "$0"; exit 2 ;;
+  *) sed -n '4,21p' "$0"; exit 2 ;;
 esac
