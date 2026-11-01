@@ -59,9 +59,9 @@ import { StageCache, stagedWorkspaceRoot } from '../../../3d-engine/staged-locat
 import { readGlbScene, renderFrameDepth, sceneToRenderMesh, type PoseCorrection } from '../../../spatial/StreetViewPoseRegistrar';
 import { buildGroundModel, geodeticToScan, loadScanMesh } from '../../../spatial/StreetViewSurveyPlanner';
 import { pickStructure, PICK_STRUCTURE, STRUCTURE_SEED_SEARCH_M } from '../../../3d-engine/staged-location/extraction-sizing';
-import { evidenceLookup, type EvidenceLookup } from '../../../3d-engine/staged-location/vector-footprints';
+import { evidenceLookup, fetchVectorEvidence, type EvidenceLookup, type VectorEvidence } from '../../../3d-engine/staged-location/vector-footprints';
 import { BASE_CLEANUP_PARAMS, outsideFootprint } from '../../../3d-engine/staged-location/pipeline-k/base-cleanup';
-import { fetchFootprints, type FootprintSource } from '../../../3d-engine/staged-location/facade-footprints';
+import type { FootprintSource } from '../../../3d-engine/staged-location/facade-footprints';
 import type { RenderMesh3D } from '../../../spatial/HeadlessMeshSilhouetteRenderer';
 import type { GeodeticOrigin } from '../../../spatial/StreetViewSurveyPlanner';
 import { resolveWithinRoot } from '../../../security/path-guard';
@@ -223,9 +223,9 @@ export interface PhotoMatchDeps {
      */
     satelliteOrtho?(origin: GeodeticOrigin, signal?: AbortSignal): Promise<OrthoReference>;
     /**
-     * Google's vector building footprints within `radiusM` of a place, in its frame (the orchestrator's footprints dep:
-     * facade-footprints.ts fetchFootprints over the vector feature tiles). Read only when the reference run recorded none (no
-     * vector stage). Missing: none is fetched.
+     * Google's vector building footprints within `radiusM` of a place, in its frame (the orchestrator's footprints signature;
+     * by default the vector feature tiles as the structure pick reads them, footprintSourceOf). Read only when the reference
+     * run recorded none (no vector stage). Missing: none is fetched.
      */
     footprints?: (place: { lat: number; lng: number }, radiusM: number) => Promise<FootprintSource>;
     now?: () => number;
@@ -289,12 +289,30 @@ export function defaultPhotoMatchDeps(): PhotoMatchDeps {
             if (!apiKey) throw new PhotoMatchError('satellite_unavailable', 'the Static Maps satellite crop needs a Google Maps Platform API key (GOOGLE_MAPS_API_KEY or Settings), and none is configured.');
             return fetchOrthoReference({ lat: origin.lat, lng: origin.lng, zoom: 19, sizePx: 1024, scale: 2, apiKey, ...(signal ? { signal } : {}) });
         },
-        // the feature tiles on the app's service account, as the orchestrator reads them, kept beside the judge's cache
-        footprints: (place, radiusM) => cachedFootprints(path.join(stagedWorkspaceRoot(), '.scratchbox', 'cache', 'photo_match', 'footprints'), place, radiusM, () => {
+        // the feature tiles on the app's service account, read as the structure pick reads them at build time (the staged
+        // tool's vectorEvidence: extruded areas, plan-only footprints and modelled 3D volumes), kept beside the judge's cache.
+        // facade-footprints.ts fetchFootprints reads the same tiles but keeps extruded areas alone: a building Google models as
+        // a 3D volume (the Ferry Building) has no footprint there.
+        footprints: (place, radiusM) => cachedFootprints(path.join(stagedWorkspaceRoot(), '.scratchbox', 'cache', 'photo_match', 'footprints'), place, radiusM, async () => {
             const { GoogleVectorTileService } = require('../../../spatial/GoogleVectorTileService') as typeof import('../../../spatial/GoogleVectorTileService');
-            return fetchFootprints(place, radiusM, (x, y, z) => GoogleVectorTileService.fetchVectorTile(x, y, z, ''));
+            return footprintSourceOf(await fetchVectorEvidence({ lat: place.lat, lng: place.lng, radiusM, fetchTile: (x, y, z) => GoogleVectorTileService.fetchVectorTile(x, y, z, '') }), radiusM);
         })
     };
+}
+
+/**
+ * Vector evidence's buildings (fetchVectorEvidence, the place's frame) as footprint pieces: one piece per part, its outer
+ * loop as the ring (a modelled volume's plan comes as its triangles, each a part), the building's feature id as buildingId.
+ */
+export function footprintSourceOf(ev: Pick<VectorEvidence, 'buildings' | 'tiles' | 'zoom'>, radiusM: number): FootprintSource {
+    const buildings: FootprintSource['buildings'] = [];
+    for (const b of ev.buildings) {
+        b.parts.forEach((loops, k) => {
+            if (loops[0]?.length >= 3) buildings.push({ id: `${b.id}/p${k}`, buildingId: b.id, ring: loops[0], ...(b.heightM ? { heightM: b.heightM } : {}), heightSource: 'vector' });
+        });
+    }
+    const modelled = ev.buildings.filter(b => b.volumes?.length).length;
+    return { buildings, note: `${ev.buildings.length} building footprints within ${Math.round(radiusM)} m, ${modelled} of them modelled 3D volumes read as their plan (Google vector feature tiles, zoom ${ev.zoom}, ${ev.tiles} tiles)` };
 }
 
 /**

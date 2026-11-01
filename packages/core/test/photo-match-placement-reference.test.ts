@@ -23,7 +23,7 @@ import {
 import type { TileTriangles } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 import { castCamera } from '../src/node/3d-engine/staged-location/survey-casting';
 import { renderFrameDepth } from '../src/node/spatial/StreetViewPoseRegistrar';
-import { cachedFootprints, placementTarget, storedFootprints, streetMesh } from '../src/node/gemini/tools/location-evidence/photo-match-evaluate';
+import { cachedFootprints, footprintSourceOf, placementTarget, storedFootprints, streetMesh } from '../src/node/gemini/tools/location-evidence/photo-match-evaluate';
 import type { FootprintSource } from '../src/node/3d-engine/staged-location/facade-footprints';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -207,6 +207,18 @@ describe('placement reads the building, not the scan\'s defects', () => {
             { id: 'g/a', parts: [{ loops: [src.buildings[0].ring] }, { loops: [src.buildings[1].ring] }] },
             { id: 'g/b', parts: [{ loops: [src.buildings[2].ring] }] }
         ]);
+        // the default dep's reading of the feature tiles (fetchVectorEvidence): an extruded building's parts and a modelled
+        // volume's plan triangles alike become pieces of their building, so a building Google models in 3D has a footprint
+        const ev = {
+            tiles: 2, zoom: 17, buildings: [
+                { id: '17/1/2/f3', parts: [[[[0, 0], [10, 0], [10, 10], [0, 10]], [[2, 2], [4, 2], [4, 4]]]], heightM: 20 },
+                { id: '17/1/2/f9', parts: [[[[20, 0], [30, 0], [30, 10]]], [[[20, 0], [30, 10], [20, 10]]]], volumes: [{ vertices: [[20, 0, 0], [30, 0, 0], [30, 5, 10], [20, 5, 10]] as Array<[number, number, number]>, indices: [0, 1, 2, 0, 2, 3] }] }
+            ]
+        };
+        const fromTiles = footprintSourceOf(ev, 100);
+        expect(fromTiles.buildings.map(b => [b.id, b.buildingId, b.ring.length])).toEqual([['17/1/2/f3/p0', '17/1/2/f3', 4], ['17/1/2/f9/p0', '17/1/2/f9', 3], ['17/1/2/f9/p1', '17/1/2/f9', 3]]);
+        expect(fromTiles.note).toBe('2 building footprints within 100 m, 1 of them modelled 3D volumes read as their plan (Google vector feature tiles, zoom 17, 2 tiles)');
+        expect(storedFootprints(fromTiles).map(b => [b.id, b.parts.length])).toEqual([['17/1/2/f3', 1], ['17/1/2/f9', 2]]);
         // the second fetch at the same place and radius is read from the cache; another radius is fetched
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-footprints-'));
         try {
