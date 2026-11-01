@@ -350,6 +350,17 @@ Values written as they are fixed.
   - The tool's candidate check uses the tile to test whether the target is hidden. Past the edge, the tile holds
     nothing near the camera, so the check passes them. That is a follow-up for the view selection, not a rule of this
     run.
+- **After the run: the view selection is fixed** (the user's "Yes, fix it here", 2026-11-01; the commit after this one).
+  - **The change.** A pano with no ground under it (neither the tile's terrain nor a surface within 1.5 m) stands past
+    the reference tile's edge, and is no longer a candidate. A fixed pose there was already refused. Before, it was kept
+    with its eye 2.5 m over the structure's base.
+  - **What it changes, in free dry runs on the same caches.**
+    - **The ESB:** w4nU8T, hi-cmKU8 and Wf4-XFAA are no longer candidates. These are v1 and v3 of both paid ESB calls.
+      AGFKaBOw, lui1N8rP and p88-CBpq take their places in the fetch list, and no dry-run view is flagged for the tile's
+      edge.
+    - **The Haughwout:** its 8 such candidates go, the 6 dropped here among them. VVmGDj2p, 4rnMoRUG and nygqgDGF come
+      in.
+  - **Nothing above is redone.** The results stand as run. A later run on this code era-checks its own new views.
 - **Cost of this rerun.**
 
   | Place | Judge | Grounding | Era-check photos | Total |
