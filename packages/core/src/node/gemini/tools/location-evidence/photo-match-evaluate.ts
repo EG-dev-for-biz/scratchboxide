@@ -36,9 +36,11 @@ import * as path from 'path';
 import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome } from '../types';
 import type { StagedBuildState, StagedLayer, Vec3 } from '../../../../common/spatial/staged-location-contracts';
 import {
-    aggregateCriteria, aggregateRuns, armLayerTriangles, armMeshesForView, composeGrid, coverageMask, judgeView, judgeViewClay, loadArmLayer, perceptualScores, planOutlineCells, regionMasks, regionOverlay, regionScores, renderPng,
-    renderTriangles, triangleRegions, JUDGE_CRITERIA, JUDGE_REGION_CRITERIA, PHOTO_MATCH_GROUND_BAND_M, PHOTO_MATCH_OUTLINE_REACH_M, PHOTO_MATCH_REGION_LEGEND, PHOTO_MATCH_REGIONS, REGION,
-    type ArmLayer, type ArmRender, type CriterionStat, type JudgeClient, type JudgeCriterion, type JudgeRegionCriterion, type JudgeRun, type PerceptualScores, type PhotoMatchRegion, type RegionMasks, type RegionScore
+    aggregateCriteria, aggregateRuns, armLayerTriangles, armMeshesForView, composeGrid, coverageMask, judgeView, judgeViewClay, loadArmLayer, perceptualScores, photoEdgeField, planOutlineCells, regionMasks, regionOverlay, regionScores,
+    regionsInFrame, renderPng, renderTriangles, targetPlacement, tileEdgeInFrame, triangleRegions, JUDGE_CRITERIA, JUDGE_REGION_CRITERIA, PHOTO_MATCH_GROUND_BAND_M, PHOTO_MATCH_METRIC_WIDTH_PX, PHOTO_MATCH_OUTLINE_REACH_M, PHOTO_MATCH_PLACEMENT_BAND_PX, PHOTO_MATCH_PLACEMENT_SEARCH_PX,
+    PHOTO_MATCH_PLACEMENT_TRUNCATION_PX, PHOTO_MATCH_REGION_LEGEND, PHOTO_MATCH_REGION_MIN_SHARE, PHOTO_MATCH_REGIONS, PHOTO_MATCH_TILE_EDGE_MIN_SHARE, PHOTO_MATCH_TILE_EDGE_REACH_M, REGION,
+    type ArmLayer, type ArmRender, type CriterionStat, type JudgeClient, type JudgeCriterion, type JudgeRegionCriterion, type JudgeRun, type PerceptualScores, type PhotoMatchRegion, type RegionMasks, type RegionScore,
+    type TargetPlacement, type TileEdgeReading
 } from '../../../3d-engine/staged-location/photo-match-eval';
 import { readTileTriangles, decodeImageInMemory, type TileTriangles } from '../../../3d-engine/staged-location/tile-texture-transfer';
 import { encodePng } from '../../../3d-engine/staged-location/png-encode';
@@ -94,6 +96,8 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
         'The pixel metrics are also given per region of each view: the whole frame, the target building, the ground, the neighbouring buildings, measured trees and the skyline band, with masks taken from the geometry each pixel shows (never from colour) and drawn in the grids. ' +
         'By default it also renders every build in uniform untextured clay from the same poses and has the judge score shape only (massing, openings, surface relief) against the photo: ' +
         'clayScores, clay grids; use them to compare geometry changes (relief, reveals, massing) that the photo texture hides. ' +
+        'Every build\'s placement is also measured from edges, not by the judge: the image shift that sets the target\'s outline on the photo\'s edges (placement, px and degrees; 0 = drawn where the photo shows it). ' +
+        'A view whose registered eye stands under the street is not used; a region under 1% of a view is not judged there; a view where the reference tile ends inside the frame (its sky over what stands past the edge) is flagged (tileEdge) and its regions are not judged. ' +
         'With no build named it evaluates the open staged scene. Compare versions by passing arms. Scores are relative judgements, not measurements: report the spread, and say when the views are few. ' +
         'Fails with a typed error (no scores) when no held-out view can be found or registered. Takes a few minutes (Street View fetch, registration, several judge calls per view).',
     parameters: {
@@ -791,6 +795,31 @@ function streetAt(x: number, z: number, context: RenderMesh3D, terrain?: { groun
     return Number.isFinite(s) ? { y: s, on: 'lowest-surface' } : undefined;
 }
 
+/** How far round a pano the street is looked for when the tile has no surface under it (a pano past the tile's edge), m. */
+export const HELD_OUT_EYE_GROUND_REACH_M = 25;
+
+/**
+ * The street at an eye's plan position: as a candidate's eye stands (the terrain, else the lowest surface within 1.5 m), else
+ * (a pano past the tile's edge) the median terrain on the first ring round it, a metre at a time out to
+ * HELD_OUT_EYE_GROUND_REACH_M, that has any; undefined when none.
+ */
+export function streetUnderEye(x: number, z: number, context: RenderMesh3D, terrain: { groundAt(x: number, z: number): number }): { y: number; on: HeldOutEyeGround | 'nearest-terrain'; distanceM?: number } | undefined {
+    const s = streetAt(x, z, context, terrain);
+    if (s) return s;
+    for (let r = 1; r <= HELD_OUT_EYE_GROUND_REACH_M; r++) {
+        const ring: number[] = [];
+        for (let k = 0; k < 32; k++) { const a = (2 * Math.PI * k) / 32, g = terrain.groundAt(x + r * Math.sin(a), z - r * Math.cos(a)); if (Number.isFinite(g)) ring.push(g); }
+        if (ring.length) { ring.sort((p, q) => p - q); return { y: ring[ring.length >> 1], on: 'nearest-terrain', distanceM: r }; }
+    }
+    return undefined;
+}
+
+/** A registered eye under the street there (streetUnderEye), with its depth below it; undefined when it stands above or none is known. */
+export function eyeUnderStreet(eye: Vec3, context: RenderMesh3D, terrain: { groundAt(x: number, z: number): number }): { streetY: number; depthM: number; on: string } | undefined {
+    const s = streetUnderEye(eye[0], eye[2], context, terrain);
+    return s && eye[1] < s.y ? { streetY: s.y, depthM: s.y - eye[1], on: s.on === 'nearest-terrain' ? `the terrain ${s.distanceM} m away (none under the pano)` : s.on } : undefined;
+}
+
 /** How much of a 160 x 120 frame the target fills (screen), and the share of that which the context does not hide (seen). */
 function targetShares(target: RenderMesh3D, context: RenderMesh3D, v: { eye: Vec3; headingDeg: number; pitchDeg: number; fovDeg: number }): { screen: number; seen: number } {
     const cam = castCamera({ eye: v.eye, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg, widthPx: 160, heightPx: 120 });
@@ -1022,6 +1051,17 @@ export interface PhotoMatchViewResult {
     pixel: Record<string, PerceptualScores>;
     /** Per arm with a trees layer: trees drawn at each level from this pose, and triangles drawn against every level's. */
     trees?: Record<string, { atLevel: number[]; drawnTriangles: number; allLevelTriangles: number }>;
+    /**
+     * Where the reference tile ends inside the frame (tileEdgeInFrame), read before any score: flagged, the view's regions are
+     * not judged and it is left out of every region mean (its building is judged as before).
+     */
+    tileEdge?: TileEdgeReading;
+    /** The region criteria the judge was asked here: those the frame holds enough of, none when tileEdge is flagged. */
+    judgedRegions?: JudgeRegionCriterion[];
+    /** The region criteria not asked here, and why. */
+    regionsLeftOut?: Partial<Record<JudgeRegionCriterion, string>>;
+    /** Per arm, where its target is drawn against where the photo shows it, from edges (targetPlacement); null with no outline. */
+    placement?: Record<string, TargetPlacement | null>;
 }
 
 const DEFAULT_RUN_CONCURRENCY = 2;
@@ -1182,25 +1222,37 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     progress(`registering ${got.images.length} held-out images against the tile mesh by silhouette and edges`, 0.15);
     const regs = await deps.register(got.images.map(im => ({ id: im.id, bytes: im.bytes, widthPx: im.widthPx, heightPx: im.heightPx, view: im.view })), [ref.tileGeometry], signal, m => progress(m));
     stopIfAborted(signal);
+    // a view registers when its edge residual locks and its registered eye stands over the street (an eye under it sees the
+    // street from below, whatever the edges say)
+    const underStreet = new Map<SelectedView, string>();
     const locked = got.images.flatMap(im => {
         const o = regs.find(q => q.panoId === im.view.panoId);
         const before = o?.edgeResidualPx.prior ?? null, after = o?.edgeResidualPx.edge ?? null;
         const ok = !!o && !!o.correction && after !== null && after <= EDGE_MAX_RESIDUAL_PX && !(before !== null && after >= before);
-        return ok ? [{ im, reg: o! }] : [];
+        if (!ok) return [];
+        const c = o!.correction!, v = im.view;
+        const under = eyeUnderStreet([v.eye[0] + c.dx, v.eye[1] + c.dy, v.eye[2] + c.dz], contextMesh, terrain);
+        if (under) {
+            underStreet.set(v, `the registered eye stands ${under.depthM.toFixed(2)} m under the street (${under.streetY.toFixed(2)} m, from ${under.on}), so it sees the street from below: not used, whatever its edge residual`);
+            return [];
+        }
+        return [{ im, reg: o! }];
     });
     const unregistered = got.images.filter(im => !locked.some(l => l.im === im)).map(im => {
         const o = regs.find(q => q.panoId === im.view.panoId);
         const fx = fixed?.views.get(im.view);
+        const under = underStreet.get(im.view);
         if (fx) {
             const ep = o?.edgeResidualPx;
             if (ep) fx.edgeResidualPx = ep;
-            fx.reason = `did not register against the tile mesh (an edge residual of at most ${EDGE_MAX_RESIDUAL_PX} px, lower than at the start, is needed${ep ? `; it went from ${fmt(ep.prior)} to ${fmt(ep.edge)} px` : ''}): ${o ? o.reason : 'not registered'}`;
+            fx.reason = under ?? `did not register against the tile mesh (an edge residual of at most ${EDGE_MAX_RESIDUAL_PX} px, lower than at the start, is needed${ep ? `; it went from ${fmt(ep.prior)} to ${fmt(ep.edge)} px` : ''}): ${o ? o.reason : 'not registered'}`;
         }
-        return { panoId: im.view.panoId, edgeResidualPx: o?.edgeResidualPx ?? null, reason: o ? o.reason : 'not registered', ...(fx ? { fixedPose: fx.pose } : {}) };
+        return { panoId: im.view.panoId, edgeResidualPx: o?.edgeResidualPx ?? null, reason: under ?? (o ? o.reason : 'not registered'), ...(under ? { eyeUnderStreet: true } : {}), ...(fx ? { fixedPose: fx.pose } : {}) };
     });
     if (!locked.length) {
         const few = got.images.length < 2 ? ' Only one image came back, and the edge registration needs at least two.' : '';
-        throw new PhotoMatchError('no_heldout_registered', `None of the ${got.images.length} held-out images registered against the tile mesh (an edge residual of at most ${EDGE_MAX_RESIDUAL_PX} px, lower than at the start), so no pose is trusted enough to judge from.${few}`, { unregistered, ...fixedNote });
+        const under = underStreet.size ? ` ${underStreet.size} of them registered with the eye under the street.` : '';
+        throw new PhotoMatchError('no_heldout_registered', `None of the ${got.images.length} held-out images registered against the tile mesh (an edge residual of at most ${EDGE_MAX_RESIDUAL_PX} px, lower than at the start, with the eye over the street), so no pose is trusted enough to judge from.${few}${under}`, { unregistered, ...fixedNote });
     }
     // the fixed views that registered, in the order asked, then the nearest automatic ones
     const isFixed = (l: { im: { view: SelectedView } }) => !!fixed?.views.has(l.im.view);
@@ -1224,6 +1276,9 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     const targetFlags = isoFlags ?? fullLabels.map(l => (l === REGION.target ? 1 : 0));
     const targetCount = targetFlags.reduce((n, f) => n + f, 0);
     const hasTarget = targetCount > 0;
+    // the target alone (the scan's): where the photo's silhouette of it is read for each arm's placement
+    const targetTris = hasTarget ? selectTriangles(full, targetFlags) : undefined;
+    const targetLabels = hasTarget ? fullLabels.filter((_, i) => targetFlags[i]) : undefined;
 
     // ---------------- arms, context ----------------
     progress(`loading ${arms.length} arms`, 0.22);
@@ -1231,7 +1286,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         // the raw scan: the tile cut to the target (whole when there is none); any other GLB as written, a trees GLB (tree LOD
         // contract) kept for per-view level selection when trees are drawn
         const parts: ArmLayer[] = a.baseline
-            ? [{ fixed: hasTarget ? selectTriangles(full, targetFlags) : full }]
+            ? [{ fixed: targetTris ?? full }]
             : a.glbs.map(g => loadArmLayer(fs.readFileSync(g), { treeLod: wantTrees }));
         if (a.dy) for (const l of parts) if (l.fixed) l.fixed = liftTriangles(l.fixed, a.dy);
         return {
@@ -1248,7 +1303,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     const placeAt = targetAt ?? (outline ? (x: number, z: number) => { const c = terrain.cellIndex(x, z); return c >= 0 && outline[c] === 1; } : undefined);
     const placeRule = (_i: number, x: number, z: number) => (placeAt?.(x, z) ? REGION.target : REGION.neighbours);
     const armLabels = loaded.map(a => a.parts.map(l => (l.trees ? REGION.trees
-        : a.baseline ? (hasTarget ? fullLabels.filter((_, i) => targetFlags[i]) : fullLabels)
+        : a.baseline ? (targetLabels ?? fullLabels)
             : triangleRegions(l.fixed!, terrain, a.scope === 'target' ? (hasTarget || isoFlags ? REGION.target : REGION.neighbours) : placeRule))));
     const targetArmsDrawTrees = loaded.some(a => a.scope === 'target' && a.treeLayers > 0);
     // each arm's triangles by label (a trees layer counted whole, every level)
@@ -1367,6 +1422,29 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         // the reference regions: the measured tile, whole, from the same pose
         const refLabels = renderTriangles([full], camera, { regions: { meshes: [fullLabels] } }).regions!;
         const masks = regionMasks(refLabels, img.width, img.height);
+        // before any score: where the tile ends inside the frame, and the regions the frame holds enough of to be judged
+        const tileEdge = tileEdgeInFrame(refLabels, camera, terrain);
+        const inFrame = regionsInFrame(masks.pixels, img.width * img.height);
+        const regionsLeftOut: Partial<Record<JudgeRegionCriterion, string>> = {};
+        for (const c of JUDGE_REGION_CRITERIA) {
+            if (!inFrame.includes(c)) regionsLeftOut[c] = `not in the frame (${(masks.pixels[c] / (img.width * img.height) * 100).toFixed(1)}% of it, under ${PHOTO_MATCH_REGION_MIN_SHARE * 100}%)`;
+            else if (tileEdge.flagged) regionsLeftOut[c] = `the reference tile ends inside the frame (${(tileEdge.share * 100).toFixed(1)}% of it is sky past the tile's edge)`;
+        }
+        const judgedRegions = tileEdge.flagged ? [] : inFrame;
+        // each arm's placement: drawn alone at the metric width from the registered pose, its outline set on the photo's
+        // silhouette of the target (its edges along the scan's target outline from the same pose)
+        const placement: Record<string, TargetPlacement | null> = {};
+        if (targetTris) {
+            const field = photoEdgeField(photo);
+            const camW = castCamera({ eye: v.eye, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg, widthPx: field.w, heightPx: field.h, ...(reg.correction ? { correction: reg.correction } : {}) });
+            const degPerPx = (2 * Math.atan(field.w / (2 * camW.fx)) * 180) / Math.PI / field.w;
+            const refW = renderTriangles([targetTris], camW, { supersample: 1, regions: { meshes: [targetLabels!] } }).regions!;
+            for (let i = 0; i < loaded.length; i++) {
+                const alone = renderTriangles(forView[i].meshes, camW, { supersample: 1, regions: { meshes: armLabels[i] } });
+                placement[loaded[i].id] = targetPlacement(field, refW, alone.regions!, degPerPx);
+                await yieldLoop();
+            }
+        }
         await yieldLoop();
         // the clay arm: the same pose, occluders and street, every arm (and its street) untextured
         const clayRenders: Array<{ id: string; label: string; r: ArmRender }> = [];
@@ -1412,7 +1490,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
                 size: [img.width, img.height], edgeResidualPx: reg.edgeResidualPx, maskPixels: mask.reduce((s, m) => s + m, 0), grid: path.join(outDir, `grid_${viewId}.png`), renders: files, pixel,
                 ...(wantClay ? { clayRenders: clayFiles, clayGrid: path.join(outDir, `grid_${viewId}_clay.png`) } : {}),
                 ...(Object.keys(treeLevels).length ? { trees: treeLevels } : {}),
-                regions: { pixels: masks.pixels, bandPx: masks.bandPx, masks: maskFile, maskGrid, arms: regionArms }
+                regions: { pixels: masks.pixels, bandPx: masks.bandPx, masks: maskFile, maskGrid, arms: regionArms },
+                tileEdge, judgedRegions, ...(Object.keys(regionsLeftOut).length ? { regionsLeftOut } : {}), placement
             },
             photoBytes: im.bytes, mime: im.mimeType || 'image/jpeg', photo, renders, clayRenders, maskOverlay
         });
@@ -1492,17 +1571,19 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     await mapLimit(judgedList, DEFAULT_RUN_CONCURRENCY, async p => {
         stopIfAborted(signal);
         try {
-            // the place around the building only in the street views: a roof seen from above has no skyline
+            // the place around the building only in the street views (a roof seen from above has no skyline), and there only the
+            // regions the frame holds enough of, none where the tile ends inside the frame
             const regionsAsked = wantRegionJudge && !p.satellite;
+            const asked = regionsAsked ? p.view.judgedRegions ?? [...JUDGE_REGION_CRITERIA] : [];
             const runs: JudgeRun[] = await judgeView({
                 client: judge, place: ref!.place, photo: { bytes: p.photoBytes, mimeType: p.mime },
-                renders: p.renders.map(x => ({ armId: x.id, png: renderPng(x.r) })), repeats: nRuns, seed: `${evalId}:${p.view.id}`, ...(regionsAsked ? { regions: true } : {})
+                renders: p.renders.map(x => ({ armId: x.id, png: renderPng(x.r) })), repeats: nRuns, seed: `${evalId}:${p.view.id}`, ...(regionsAsked ? { regions: asked } : {})
             });
             const notes: Record<string, string[]> = {};
             for (const run of runs) for (const [id, n] of Object.entries(run.notes)) (notes[id] ??= []).push(n);
             p.view.judge = {
                 stats: aggregateRuns(runs, loaded.map(a => a.id)), notes, model: runs[runs.length - 1]?.model ?? '',
-                ...(regionsAsked ? { regionStats: aggregateCriteria(runs, loaded.map(a => a.id), JUDGE_REGION_CRITERIA) } : {})
+                ...(regionsAsked && asked.length ? { regionStats: aggregateCriteria(runs, loaded.map(a => a.id), asked) as Record<string, Record<JudgeRegionCriterion, CriterionStat>> } : {})
             };
         } catch (err) {
             if (signal?.aborted) throw new PhotoMatchError('stopped', 'The evaluation was stopped.');
@@ -1599,7 +1680,10 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     for (const a of loaded) {
         regionMean[a.id] = {} as Record<PhotoMatchRegion, RegionMean>;
         for (const reg of PHOTO_MATCH_REGIONS) {
-            const per = views.map(x => x.regions?.arms[a.id]?.[reg]).filter((x): x is RegionScore => !!x && x.share > 0);
+            // the place round the building (not the frame or the building): only views that show the region and end inside the tile
+            const around = reg !== 'frame' && reg !== 'building';
+            const per = views.filter(x => !around || !x.tileEdge?.flagged).map(x => x.regions?.arms[a.id]?.[reg])
+                .filter((x): x is RegionScore => !!x && x.share > 0 && (!around || x.share >= PHOTO_MATCH_REGION_MIN_SHARE));
             const m = (k: 'ssim' | 'edgeChamferPx' | 'colourDeltaE' | 'agreement') => {
                 const v = per.map(x => x[k]).filter((x): x is number => typeof x === 'number');
                 return v.length ? r3(v.reduce((t, x) => t + x, 0) / v.length) : null;
@@ -1609,20 +1693,32 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     }
     // the judge on the place around the building (judgeRegions), over the views it scored
     const regionJudged = scored.filter(p => p.view.judge?.regionStats);
-    const judgeRegionScores: Record<string, Record<JudgeRegionCriterion, ArmScore['overall']>> = {};
+    // each criterion over the views that judged it (a region out of the frame, or past the tile's edge, is never asked); no view: null
+    const judgeRegionScores: Record<string, Record<JudgeRegionCriterion, ArmScore['overall'] & { views: number }>> = {};
     if (regionJudged.length) {
         for (const a of loaded) {
-            judgeRegionScores[a.id] = {} as Record<JudgeRegionCriterion, ArmScore['overall']>;
+            judgeRegionScores[a.id] = {} as Record<JudgeRegionCriterion, ArmScore['overall'] & { views: number }>;
             for (const c of JUDGE_REGION_CRITERIA) {
                 const per = regionJudged.map(p => p.view.judge!.regionStats![a.id]?.[c]).filter((x): x is CriterionStat => !!x && Number.isFinite(x.mean));
                 const means = per.map(x => x.mean);
                 const mean = means.length ? means.reduce((t, x) => t + x, 0) / means.length : NaN;
                 judgeRegionScores[a.id][c] = {
-                    mean: r2(mean), runSd: r2(per.reduce((t, x) => t + x.sd, 0) / Math.max(1, per.length)),
-                    viewSd: r2(Math.sqrt(means.reduce((t, x) => t + (x - mean) ** 2, 0) / Math.max(1, means.length))), min: means.length ? r2(Math.min(...means)) : NaN, max: means.length ? r2(Math.max(...means)) : NaN
+                    mean: r2(mean), runSd: per.length ? r2(per.reduce((t, x) => t + x.sd, 0) / per.length) : NaN,
+                    viewSd: per.length ? r2(Math.sqrt(means.reduce((t, x) => t + (x - mean) ** 2, 0) / means.length)) : NaN, min: means.length ? r2(Math.min(...means)) : NaN, max: means.length ? r2(Math.max(...means)) : NaN,
+                    views: per.length
                 };
             }
         }
+    }
+    // each arm's placement (targetPlacement) over the views where the target fills at least HELD_OUT_MIN_SCREEN of the frame
+    const placementViews = views.filter(v => (v.regions?.pixels.target ?? 0) / Math.max(1, v.size[0] * v.size[1]) >= HELD_OUT_MIN_SCREEN);
+    const placementMean: Record<string, { errorPx: number | null; errorDeg: number | null; views: number }> = {};
+    for (const a of loaded) {
+        const per = placementViews.map(v => v.placement?.[a.id]).filter((x): x is TargetPlacement => !!x);
+        placementMean[a.id] = {
+            errorPx: per.length ? r2(per.reduce((t, x) => t + x.errorPx, 0) / per.length) : null,
+            errorDeg: per.length ? r3(per.reduce((t, x) => t + x.errorDeg, 0) / per.length) : null, views: per.length
+        };
     }
 
     const judgeModelUse = { requested: judge.requested ?? judgeModel, answered: judge.answeredModel ?? scored[0].view.judge!.model, skipped: judge.skipped ?? [] };
@@ -1640,6 +1736,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     const summary = summarize({ ref, loaded, scores, views, scored: scored.length, nRuns, judgeModelUse, contextNote: context ? (placeArms ? 'in context (whole places on their own)' : 'in context') : placeArms === loaded.length ? 'as whole places' : 'not in context', unregistered: unregistered.length, usedPanos: builds.used.size })
         + (wantClay ? clayLine(loaded, clayScores, clayScored.length, prepared.length) : '')
         + (wantRegionJudge ? regionJudgeLine(loaded, judgeRegionScores, regionJudged.length, scored.length) : '')
+        + placementLine(loaded, placementMean, placementViews.length)
+        + viewChecksLine(views, underStreet.size)
         + ` Region metrics (masks from geometry: whole frame, building, ground, neighbours, trees, skyline) per arm in pixelMetrics.regions and views[].regions; the masks are drawn in each grid${pick || isoFlags ? '' : '; no target was found, so the building mask is empty'}.`
         + (open ? ` No structure stands at the place, so the views look at the place itself: the tile's surfaces within ${open.radiusM} m of it (heldOut.viewTarget).` : '')
         + (fixed ? fixedPoseLine(fixed.outcomes) : '')
@@ -1666,6 +1764,15 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
             regions: { note: 'The same numbers per region of the reference tile\'s masks (from geometry), plus agreement: the share of the region where the arm\'s own labels show what the reference shows. Mean over the views that have the region.', mean: regionMean }
         },
         regions: regionsNote,
+        placement: {
+            note: `Where each build's target is drawn against where the photo shows it, from edges, not by the judge. The photo's silhouette of the target is its structural edges within ${PHOTO_MATCH_PLACEMENT_BAND_PX} px of the scan's target outline from the registered pose (${PHOTO_MATCH_METRIC_WIDTH_PX} px wide); each build is drawn alone from the same pose. errorPx is the mean distance from that silhouette to the build's outline as drawn (truncated at ${PHOTO_MATCH_PLACEMENT_TRUNCATION_PX} px; errorDeg the angle): it grows with a move and with a wrong shape. Beside it, shiftPx is the image shift (within ${PHOTO_MATCH_PLACEMENT_SEARCH_PX} px) that brings the outline closest, and residualPx the error left there. Mean over the views where the target fills at least ${HELD_OUT_MIN_SCREEN * 100}% of the frame; per view in views[].placement.`,
+            mean: placementMean, views: placementViews.length
+        },
+        viewChecks: {
+            note: `Read before any score. A view whose registered eye stands under the street is not used (heldOut.unregistered, eyeUnderStreet). A region the judge scores is asked only where it holds at least ${PHOTO_MATCH_REGION_MIN_SHARE * 100}% of the frame (views[].judgedRegions, regionsLeftOut). A view where at least ${PHOTO_MATCH_TILE_EDGE_MIN_SHARE * 100}% of the frame is sky past the reference tile's edge (its ray leaves the tile lower than the tile stands within ${PHOTO_MATCH_TILE_EDGE_REACH_M} m of where it leaves) is flagged (views[].tileEdge): its regions are not judged and it is left out of the region means; its building is judged as before.`,
+            eyeUnderStreet: underStreet.size,
+            tileEdgeFlagged: views.filter(v => v.tileEdge?.flagged).map(v => v.id)
+        },
         judgeRegions: wantRegionJudge,
         ...(wantRegionJudge ? { regionScores: judgeRegionScores, regionJudged: regionJudged.length } : {}),
         views: views.map(v => ({ ...v, renders: v.renders })),
@@ -1713,10 +1820,24 @@ function fixedPoseLine(outcomes: FixedPoseOutcome[]): string {
     return ` Fixed poses: ${judged} of ${outcomes.length} judged${dropped.length ? `; not used: ${dropped.map(o => `${name(o)}, ${o.status}`).join('; ')}` : ''} (heldOut.fixed).`;
 }
 
-/** The judge's region line of the summary (judgeRegions): ground, neighbours and skyline per arm. */
-function regionJudgeLine(loaded: Array<{ id: string; label: string }>, rs: Record<string, Record<JudgeRegionCriterion, ArmScore['overall']>>, judged: number, views: number): string {
-    if (!judged) return ` The place around the building (judgeRegions): the judge returned no usable region scores for any of the ${views} views.`;
-    return ` The place around the building (${judged} of ${views} views): ${loaded.map(a => `${a.label} [${a.id}] ground ${rs[a.id].ground.mean.toFixed(1)}, neighbours ${rs[a.id].neighbours.mean.toFixed(1)}, skyline ${rs[a.id].skyline.mean.toFixed(1)}`).join('; ')}.`;
+/** The judge's region line of the summary (judgeRegions): ground, neighbours and skyline per arm, each over the views that judged it. */
+function regionJudgeLine(loaded: Array<{ id: string; label: string }>, rs: Record<string, Record<JudgeRegionCriterion, ArmScore['overall'] & { views: number }>>, judged: number, views: number): string {
+    if (!judged) return ` The place around the building (judgeRegions): no view was judged on it (none of the ${views} shows a region within the tile, or the judge returned none).`;
+    const one = (s: ArmScore['overall'] & { views: number }) => (s.views ? `${s.mean.toFixed(1)} (${s.views})` : 'not judged');
+    return ` The place around the building (${judged} of ${views} views; views per score in brackets): ${loaded.map(a => `${a.label} [${a.id}] ground ${one(rs[a.id].ground)}, neighbours ${one(rs[a.id].neighbours)}, skyline ${one(rs[a.id].skyline)}`).join('; ')}.`;
+}
+
+/** The placement line of the summary: each arm's mean placement error from edges. */
+function placementLine(loaded: Array<{ id: string; label: string }>, pm: Record<string, { errorPx: number | null; errorDeg: number | null; views: number }>, views: number): string {
+    if (!views) return ' Placement from edges: no view where the target fills enough of the frame.';
+    return ` Placement from edges (${views} view${views === 1 ? '' : 's'}; px at the metric width, 0 = where the photo shows it): ${loaded.map(a => `${a.label} [${a.id}] ${pm[a.id].errorPx === null ? 'no outline' : `${pm[a.id].errorPx!.toFixed(1)} px (${pm[a.id].errorDeg!.toFixed(2)} deg)`}`).join('; ')}.`;
+}
+
+/** The view checks' line of the summary: eyes under the street, views where the tile ends inside the frame. */
+function viewChecksLine(views: PhotoMatchViewResult[], underStreet: number): string {
+    const edge = views.filter(v => v.tileEdge?.flagged);
+    return (underStreet ? ` ${underStreet} registered view${underStreet === 1 ? '' : 's'} had the eye under the street and ${underStreet === 1 ? 'was' : 'were'} not used.` : '')
+        + (edge.length ? ` The reference tile ends inside the frame in ${edge.map(v => v.id).join(', ')}: ${edge.length === 1 ? 'its' : 'their'} regions were not judged.` : '');
 }
 
 /** The clay arm's line of the summary: shape only, untextured. */

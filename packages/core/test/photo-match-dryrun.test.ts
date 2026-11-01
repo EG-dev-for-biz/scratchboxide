@@ -43,14 +43,15 @@ describe.skipIf(!CONFIG)('photo-match dry run on real builds (PHOTO_MATCH_DRYRUN
             requested: 'stand-in', answeredModel: 'stand-in', skipped: [],
             async generate(params) {
                 const text = params.contents[0].parts.map(p => p.text ?? '').join(' ');
-                const clay = /untextured grey clay/.test(text), regions = /- skyline: /.test(text);
+                // the region criteria the prompt asks (a view asks only those it shows)
+                const clay = /untextured grey clay/.test(text), asked = ['ground', 'neighbours', 'skyline'].filter(c => text.includes(`- ${c}: `));
                 calls[clay ? 'clay' : 'textured']++;
                 const [photo, ...renders] = params.contents[0].parts.filter(p => p.inlineData).map(p => decodeImageInMemory(Buffer.from(p.inlineData!.data, 'base64')));
                 const entries = renders.map((r, k) => {
                     let d = 0;
                     for (let i = 0; i < r.rgba.length; i += 4) d += Math.abs(r.rgba[i] - photo.rgba[i]) + Math.abs(r.rgba[i + 1] - photo.rgba[i + 1]) + Math.abs(r.rgba[i + 2] - photo.rgba[i + 2]);
                     const s = Math.max(1, Math.min(10, Math.round(10 - d / (r.rgba.length / 4) / 6)));
-                    return clay ? { image: k + 1, shape: s, note: '' } : { image: k + 1, shape: s, materials: s, detail: s, errors: s, overall: s, ...(regions ? { ground: s, neighbours: s, skyline: s } : {}), note: '' };
+                    return clay ? { image: k + 1, shape: s, note: '' } : { image: k + 1, shape: s, materials: s, detail: s, errors: s, overall: s, ...Object.fromEntries(asked.map(c => [c, s])), note: '' };
                 });
                 return { model: 'stand-in', response: { candidates: [{ content: { parts: [{ text: JSON.stringify({ renders: entries }) }] } }] } };
             }

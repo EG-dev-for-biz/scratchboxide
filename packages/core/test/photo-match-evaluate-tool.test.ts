@@ -26,13 +26,13 @@ import * as jpeg from 'jpeg-js';
 import { assembleGlb } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { readTileTriangles, decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
-import { renderTriangles, PHOTO_MATCH_BACKGROUND, PHOTO_MATCH_CLAY, type JudgeClient } from '../src/node/3d-engine/staged-location/photo-match-eval';
+import { renderTriangles, tileEdgeInFrame, triangleRegions, PHOTO_MATCH_BACKGROUND, PHOTO_MATCH_CLAY, REGION, type JudgeClient } from '../src/node/3d-engine/staged-location/photo-match-eval';
 import { castCamera } from '../src/node/3d-engine/staged-location/survey-casting';
 import { orthoReferenceCamera, orthoReferenceRecord, type OrthoReference } from '../src/node/3d-engine/staged-location/ortho-reference';
 import { bearingDeg, type PanoCandidate } from '../src/node/3d-engine/staged-location/streetview-evidence';
 import { buildGroundModel, loadScanMesh, scanToGeodetic } from '../src/node/spatial/StreetViewSurveyPlanner';
 import {
-    collectPanoIds, createPhotoMatchEvaluateHandler, footprintLookup, heldOutViews, nearTriangleFlags, onSurfaceFlags, surfaceCoverShare, surfacesWithin, visibleStagedLayers, HELD_OUT_MIN_VISIBLE, OPEN_PLACE_RADII_M,
+    collectPanoIds, createPhotoMatchEvaluateHandler, eyeUnderStreet, footprintLookup, heldOutViews, nearTriangleFlags, onSurfaceFlags, surfaceCoverShare, surfacesWithin, visibleStagedLayers, HELD_OUT_MIN_VISIBLE, OPEN_PLACE_RADII_M,
     PHOTO_MATCH_EVALUATE_TOOL, PHOTO_MATCH_ISOLATE_SURFACE_M, type HeldOutRegistration, type PhotoMatchDeps
 } from '../src/node/gemini/tools/location-evidence/photo-match-evaluate';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
@@ -226,7 +226,9 @@ const PANOS: PanoCandidate[] = [
 ];
 
 function fakeDeps(root: string, opts: {
-    panos?: PanoCandidate[]; unlocked?: string[]; judgeCalls?: { n: number; clay?: number; regions?: number }; satellite?: boolean; street?: string;
+    panos?: PanoCandidate[]; unlocked?: string[]; judgeCalls?: JudgeCalls; satellite?: boolean; street?: string;
+    /** A registration's pose correction per pano (default none): it locks with a 1.5 px residual whatever the correction. */
+    corrections?: Record<string, { dx: number; dy: number; dz: number; dyawDeg: number; dpitchDeg: number; drollDeg: number }>;
     /** Every grounding request made, as the API receives it. */
     requests?: Array<{ panoId: string; headingDegree: number; pitchDegree: number; fovDegree: number }>;
 } = {}): PhotoMatchDeps {
@@ -261,17 +263,20 @@ function fakeDeps(root: string, opts: {
         }),
         register: async images => images.map((im): HeldOutRegistration => opts.unlocked?.includes(im.view.panoId)
             ? { panoId: im.view.panoId, edgeResidualPx: { prior: 6, edge: 9 }, reason: 'edges did not improve' }
-            : { panoId: im.view.panoId, edgeResidualPx: { prior: 4, edge: 1.5 }, correction: { dx: 0, dy: 0, dz: 0, dyawDeg: 0, dpitchDeg: 0, drollDeg: 0 }, reason: 'edges' }),
+            : { panoId: im.view.panoId, edgeResidualPx: { prior: 4, edge: 1.5 }, correction: opts.corrections?.[im.view.panoId] ?? { dx: 0, dy: 0, dz: 0, dyawDeg: 0, dpitchDeg: 0, drollDeg: 0 }, reason: 'edges' }),
         judge: async () => fakeJudge(opts.judgeCalls)
     };
 }
+
+/** What the fake judge was asked: calls, clay calls, calls asking any region criterion, and the region criteria each textured call asked. */
+interface JudgeCalls { n: number; clay?: number; regions?: number; asked?: string[][] }
 
 /**
  * Scores each render by its mean absolute difference from the photo (lower difference, higher score): blind to labels. Asked
  * for clay (the prompt says so), it scores shape only, by how well the render's sky (the clay background) matches the photo's
  * sky (the grey background the "photos" are rendered on): the silhouette, which texture cannot change.
  */
-function fakeJudge(calls?: { n: number; clay?: number; regions?: number }): JudgeClient & { requested: string; answeredModel: string; skipped: [] } {
+function fakeJudge(calls?: JudgeCalls): JudgeClient & { requested: string; answeredModel: string; skipped: [] } {
     const near = (img: { rgba: Uint8Array }, i: number, c: readonly number[]) => Math.abs(img.rgba[i] - c[0]) <= 8 && Math.abs(img.rgba[i + 1] - c[1]) <= 8 && Math.abs(img.rgba[i + 2] - c[2]) <= 8;
     return {
         requested: 'fake-judge', answeredModel: 'fake-judge', skipped: [],
@@ -289,14 +294,17 @@ function fakeJudge(calls?: { n: number; clay?: number; regions?: number }): Judg
                 });
                 return { model: 'fake-judge', response: { candidates: [{ content: { parts: [{ text: JSON.stringify({ renders: entries }) }] } }] } };
             }
-            // asked for the place around the building too (the prompt lists the region criteria), it scores those from pixels as well
-            const regions = /- skyline: /.test(params.contents[0].parts.map(p => p.text ?? '').join(' '));
-            if (calls && regions) calls.regions = (calls.regions ?? 0) + 1;
+            // asked for the place around the building too (the prompt lists the region criteria it asks), it scores those from pixels as well
+            const text = params.contents[0].parts.map(p => p.text ?? '').join(' ');
+            const asked = ['ground', 'neighbours', 'skyline'].filter(c => text.includes(`- ${c}: `));
+            if (calls && asked.length) calls.regions = (calls.regions ?? 0) + 1;
+            calls?.asked?.push(asked);
             const renderEntries = renders.map((r, k) => {
                 let d = 0;
                 for (let i = 0; i < r.rgba.length; i += 4) d += Math.abs(r.rgba[i] - photo.rgba[i]) + Math.abs(r.rgba[i + 1] - photo.rgba[i + 1]) + Math.abs(r.rgba[i + 2] - photo.rgba[i + 2]);
                 const s = Math.max(1, Math.min(10, Math.round(10 - d / (r.rgba.length / 4) / 6)));
-                return { image: k + 1, shape: s, materials: s, detail: s, errors: s, overall: s, ...(regions ? { ground: s, neighbours: Math.max(1, s - 1), skyline: Math.min(10, s + 1) } : {}), note: `diff-based ${s}` };
+                const region: Record<string, number> = { ground: s, neighbours: Math.max(1, s - 1), skyline: Math.min(10, s + 1) };
+                return { image: k + 1, shape: s, materials: s, detail: s, errors: s, overall: s, ...Object.fromEntries(asked.map(c => [c, region[c]])), note: `diff-based ${s}` };
             });
             return { model: 'fake-judge', response: { candidates: [{ content: { parts: [{ text: JSON.stringify({ renders: renderEntries }) }] } }] } };
         }
@@ -589,7 +597,11 @@ describe('photo_match_evaluate tool', () => {
             expect(r.views[0].judge.regionStats[id].skyline.mean).toBeGreaterThanOrEqual(1);
         }
         expect(r.regionScores.D.ground.mean).toBeGreaterThan(r.regionScores.N.ground.mean);
-        expect(r.summary).toMatch(/The place around the building \(3 of 3 views\)/);
+        expect(r.summary).toMatch(/The place around the building \(3 of 3 views; views per score in brackets\)/);
+        // the tile reaches past every frame; each view is asked the regions it shows (one holds under 1% of the neighbour)
+        for (const v of r.views) { expect(v.tileEdge.flagged).toBe(false); expect(v.judgedRegions).toEqual(expect.arrayContaining(['ground', 'skyline'])); }
+        expect(r.regionScores.D.ground.views).toBe(3);
+        expect(r.regionScores.D.neighbours.views).toBe(r.views.filter((v: any) => v.judgedRegions.includes('neighbours')).length);
         r.views.forEach((v: any, k: number) => {
             fs.copyFileSync(v.regions.maskGrid, path.join(SHOTS, `tool_photo_match_district_masks_view${k}.png`));
             fs.copyFileSync(v.grid, path.join(SHOTS, `tool_photo_match_district_view${k}.png`));
@@ -851,6 +863,124 @@ describe('photo_match_evaluate tool', () => {
         expect(r.views.map((v: any) => v.panoId).sort()).toEqual(['OVER_VAULT', 'SOUTH']);
         expect(r.heldOut.eyeGround).toEqual({ terrain: 2 });
     }, 120_000);
+
+    it('checks every view before any score: an eye under the street is not used, a region out of the frame is not asked, the build\'s placement is read from edges', async () => {
+        const models = path.join(root, 'public', 'models');
+        // a pale stone block, its outline plain against the grey sky; the build has its geometry, and X2 is it moved 4 m east
+        const anchor = { lat: 40.71, lng: -74.01 };
+        const stone = facadePng([222, 214, 196], [40, 52, 70]);
+        const textured = writeTileAt(root, '6'.repeat(64), anchor, [
+            { ...ground(260), png: checkerPng([110, 110, 105], [96, 96, 92]) }, { ...TARGET, png: stone }, { ...NEIGHBOUR, png: facadePng([200, 196, 186], [60, 70, 80]) }
+        ]);
+        const build = path.join(models, 'synthetic_stone_66666666.glb'), moved = path.join(models, 'synthetic_stone_moved_66666667.glb');
+        writeGlb(build, [{ ...TARGET, png: stone }]);
+        writeGlb(moved, [{ ...TARGET, positions: TARGET.positions.map((v, i) => (i % 3 === 0 ? v + 4 : v)), png: stone }]);
+        const calls: JudgeCalls = { n: 0, regions: 0, asked: [] };
+        // HELD_SW registers 3 m low: its eye under the street, whatever its 1.5 px residual
+        const deps = () => fakeDeps(root, { street: textured, judgeCalls: calls, corrections: { HELD_SW: { dx: 0, dy: -3, dz: 0, dyawDeg: 0, dpitchDeg: 0, drollDeg: 0 } } });
+        const out = await createPhotoMatchEvaluateHandler(deps)({
+            arms: [{ id: 'K', label: 'BUILD', glbs: [build] }, { id: 'X2', label: 'MOVED 4 M', glbs: [moved] }],
+            anchor, excludePanoIds: ['USED_WEST'], views: 3, runs: 1, clay: false, judgeRegions: true,
+            // looking up from the north pano: the roofline and the sky, no ground and no neighbour in the frame
+            poses: [{ label: 'up', panoId: 'HELD_NORTH', headingDeg: 180, pitchDeg: 25, fovDeg: 40 }]
+        }, ctxFor(root));
+        const r = out.resultPayload as any;
+        expect(out.status, JSON.stringify(r).slice(0, 1200)).toBe('completed');
+
+        // (b) the eye 3 m under the street: not used, said why, and the next view judged in its place
+        const sw = r.heldOut.unregistered.find((u: any) => u.panoId === 'HELD_SW');
+        expect(sw).toMatchObject({ eyeUnderStreet: true, edgeResidualPx: { prior: 4, edge: 1.5 } });
+        expect(sw.reason).toMatch(/registered eye stands 0\.5\d m under the street \(-0\.0\d m, from terrain\)/);
+        expect(r.views.map((v: any) => v.panoId)).not.toContain('HELD_SW');
+        expect(r.viewChecks.eyeUnderStreet).toBe(1);
+        expect(r.summary).toMatch(/1 registered view had the eye under the street and was not used/);
+
+        // (a) the upward view holds only the skyline: the judge is asked that alone there, ground and neighbours are left out with
+        // their share, and the means read only the views that show each region
+        const up = r.views.find((v: any) => v.fixed?.pose === 1);
+        expect(up.panoId).toBe('HELD_NORTH');
+        expect(up.regions.pixels.ground).toBe(0);
+        expect(up.judgedRegions).toEqual(['skyline']);
+        expect(up.regionsLeftOut.ground).toMatch(/not in the frame \(0\.0% of it, under 1%\)/);
+        expect(up.regionsLeftOut.neighbours).toMatch(/not in the frame/);
+        expect(Object.keys(up.judge.regionStats.K)).toEqual(['skyline']);
+        expect(calls.asked).toContainEqual(['skyline']);
+        const others = r.views.filter((v: any) => v !== up);
+        for (const v of others) expect(v.judgedRegions).toContain('ground');
+        expect(r.regionScores.K.ground.views).toBe(others.length);
+        expect(r.regionScores.K.skyline.views).toBe(r.views.length);
+        expect(r.pixelMetrics.regions.mean.K.ground.views).toBe(others.length);
+        expect(r.viewChecks.tileEdgeFlagged).toEqual([]);
+
+        // (d) placement from edges: the build drawn where the photo shows it sits on its silhouette (the edges a pixel off), the
+        // one moved 4 m stands off it, and its shift is the move back
+        expect(r.placement.views).toBe(r.views.length);
+        expect(r.placement.mean.raw.errorPx).toBeLessThanOrEqual(1.5);
+        expect(r.placement.mean.K.errorPx).toBeLessThanOrEqual(1.5);
+        expect(r.placement.mean.X2.errorPx).toBeGreaterThan(r.placement.mean.K.errorPx + 6);
+        for (const v of r.views) {
+            expect(v.placement.X2.errorPx, v.id).toBeGreaterThan(v.placement.K.errorPx + 3);
+            expect(v.placement.K.shiftLengthPx, v.id).toBeLessThanOrEqual(1);
+            expect(v.placement.X2.shiftLengthPx, v.id).toBeGreaterThan(5);
+        }
+        expect(r.summary).toMatch(new RegExp(`Placement from edges \\(${r.views.length} views; px at the metric width`));
+        r.views.forEach((v: any, k: number) => fs.copyFileSync(v.grid, path.join(SHOTS, `tool_photo_match_view_checks_view${k}.png`)));
+    }, 240_000);
+
+    it('flags a view where the reference tile ends inside the frame, before any score: its regions are not judged, its building is', async () => {
+        // a tile only 100 m across, a 40 m block at its south-east edge: past the edge beside it the photo would show the city going
+        // on, the masks show sky
+        const anchor = { lat: 40.74, lng: -74.04 };
+        const textured = writeTileAt(root, '7'.repeat(64), anchor, [
+            { ...ground(100), png: checkerPng([110, 110, 105], [96, 96, 92]) }, { ...TARGET, png: realFacade }, { ...box(38, 40, 10, 10, 40), png: facadePng([200, 196, 186], [60, 70, 80]) }
+        ]);
+        const panos: PanoCandidate[] = [
+            { panoId: 'NORTH', lat: 0, lng: 0, date: '2025-06', copyright: '© Google', x: 0, z: -38 },
+            { panoId: 'SOUTH', lat: 0, lng: 0, date: '2025-05', copyright: '© Google', x: 4, z: 34 }
+        ];
+        // the rule alone: from the north pano looking south, the sky right of the target leaves the tile beside the block, lower
+        // than it stands; looking up from the same pano over the target, the sky climbs past every surface first
+        const scan = loadScanMesh(textured.replace(/textured\.glb$/, 'geometry.glb'));
+        const terrain = buildGroundModel(scan, { cellMeters: 1 });
+        const full = readTileTriangles(fs.readFileSync(textured));
+        const labelsFrom = (cam: ReturnType<typeof castCamera>) => renderTriangles([full], cam, { regions: { meshes: [triangleRegions(full, terrain, REGION.neighbours)] } }).regions!;
+        const south = castCamera({ eye: [0, 2.48, -38], headingDeg: 180, pitchDeg: 5, fovDeg: 80, widthPx: 320, heightPx: 240 });
+        const edge = tileEdgeInFrame(labelsFrom(south), south, terrain);
+        expect(edge.flagged).toBe(true);
+        expect(edge.share).toBeGreaterThan(0.02);
+        const above = castCamera({ eye: [0, 2.48, -38], headingDeg: 180, pitchDeg: 40, fovDeg: 40, widthPx: 320, heightPx: 240 });
+        expect(tileEdgeInFrame(labelsFrom(above), above, terrain)).toMatchObject({ flagged: false, pastEdge: 0 });
+        // a pano past the edge: no terrain under it, the street taken from the nearest terrain round it
+        const off = eyeUnderStreet([0, -1, -58], scan.mesh, terrain)!;
+        expect(off.on).toMatch(/the terrain 8 m away \(none under the pano\)/);
+        expect(off.depthM).toBeCloseTo(0.98, 1);
+        expect(eyeUnderStreet([0, 2.48, -58], scan.mesh, terrain)).toBeUndefined();
+
+        // the tool: the north view is flagged and its regions are not asked; the south view, its sky leaving the tile over open
+        // ground, is judged in full
+        const calls: JudgeCalls = { n: 0, regions: 0, asked: [] };
+        const out = await createPhotoMatchEvaluateHandler(() => fakeDeps(root, { panos, street: textured, judgeCalls: calls }))({
+            glbs: [staged.altGlb], anchor, views: 2, runs: 1, clay: false, judgeRegions: true, poses: [{ panoId: 'NORTH', headingDeg: 180, pitchDeg: 5, fovDeg: 80 }]
+        }, ctxFor(root));
+        const r = out.resultPayload as any;
+        expect(out.status, JSON.stringify(r).slice(0, 1200)).toBe('completed');
+        const [north, south2] = r.views;
+        expect(north.panoId).toBe('NORTH');
+        expect(north.tileEdge.flagged).toBe(true);
+        expect(north.judgedRegions).toEqual([]);
+        expect(north.regionsLeftOut.ground).toMatch(/the reference tile ends inside the frame/);
+        expect(north.judge.regionStats).toBeUndefined();
+        expect(north.judge.stats.build.overall.mean).toBeGreaterThanOrEqual(1);
+        expect(south2.panoId).toBe('SOUTH');
+        expect(south2.tileEdge.flagged).toBe(false);
+        expect(south2.judgedRegions.length).toBeGreaterThan(0);
+        expect(r.viewChecks.tileEdgeFlagged).toEqual([north.id]);
+        expect(r.regionJudged).toBe(1);
+        expect(r.pixelMetrics.regions.mean.build.ground.views).toBe(1);
+        expect(r.pixelMetrics.regions.mean.build.building.views).toBe(2);
+        expect(r.summary).toMatch(new RegExp(`The reference tile ends inside the frame in ${north.id}: its regions were not judged`));
+        fs.copyFileSync(north.regions.maskGrid, path.join(SHOTS, 'tool_photo_match_tile_edge_masks.png'));
+    }, 240_000);
 
     it('looks at a place with no structure at it: the tile round the place, widened until enough views qualify', async () => {
         // a walled park: a low basin at its centre, a 2.9 m wall 45 m out, streets, then buildings 70 m and more from the place
