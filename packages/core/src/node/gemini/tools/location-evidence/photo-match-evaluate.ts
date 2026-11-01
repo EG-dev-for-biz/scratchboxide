@@ -782,8 +782,8 @@ function openPlace(disc: RenderMesh3D, terrain: { groundAt(x: number, z: number)
     return { cx: 0, cz: 0, radiusM, ymin, ymax, mesh: disc, openGroundY: Number.isFinite(g) ? g : ymin };
 }
 
-/** What a candidate's eye stands on: the terrain ground model, the lowest surface within 1.5 m (off the terrain), the structure's base. */
-export type HeldOutEyeGround = 'terrain' | 'lowest-surface' | 'structure-base';
+/** What a candidate's eye stands on: the terrain ground model, else the lowest surface within 1.5 m (off the terrain). */
+export type HeldOutEyeGround = 'terrain' | 'lowest-surface';
 
 export interface HeldOutCandidateView extends SelectedView { close: boolean; visibleShare: number; screenShare: number; eyeGround: HeldOutEyeGround }
 
@@ -835,6 +835,9 @@ function targetShares(target: RenderMesh3D, context: RenderMesh3D, v: { eye: Vec
  * An open place is aimed at its centre, at its ground there, from near and far alike.
  * The eye stands 2.5 m over the street: the terrain ground model under the pano (`terrain`, the reference tile's), else the
  * lowest surface within 1.5 m (scan below the street, a vault or a cutting, can reach far under it: the terrain does not).
+ * A pano with neither under it stands past the reference tile's edge and is not a candidate (as a fixed pose there is not):
+ * the tile holds nothing round its camera, so the street it stands on, the buildings beside it and whatever hides the target
+ * from it are all missing, and its photo can show a facade a few metres away where the tile sees the target down the street.
  */
 export function heldOutViews(panos: PanoCandidate[], structure: Structure, context: RenderMesh3D, exclude: Set<string>, terrain?: { groundAt(x: number, z: number): number }): { views: HeldOutCandidateView[]; rejected: string[] } {
     const { cx, cz, radiusM: R, ymin, ymax, openGroundY } = structure;
@@ -847,7 +850,7 @@ export function heldOutViews(panos: PanoCandidate[], structure: Structure, conte
     const views: HeldOutCandidateView[] = [], rejected: string[] = [];
     for (const p of cands) {
         let street = streetAt(p.x, p.z, context, terrain);
-        if (!street) { if (p.d > R + 60) { rejected.push(`${p.panoId}: no ground under it`); continue; } street = { y: ymin, on: 'structure-base' }; }
+        if (!street) { rejected.push(`${p.panoId}: ${p.d.toFixed(0)} m, no ground under it: it stands past the reference tile's edge`); continue; }
         const eye: Vec3 = [p.x, street.y + 2.5, p.z];
         const eyeGround = street.on;
         let nx = cx, nz = cz, dn = Infinity;
@@ -1786,7 +1789,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
             usedPanoSources: builds.usedSources,
             candidates: candidates.length,
             notQualified: rejected.length,
-            // where each candidate's eye stands, 2.5 m up: the reference tile's terrain, else the lowest surface within 1.5 m, else the structure's base
+            // where each candidate's eye stands, 2.5 m up: the reference tile's terrain, else the lowest surface within 1.5 m (a pano
+            // with neither stands past the tile's edge and is not a candidate)
             eyeGround: candidates.reduce((n, v) => ({ ...n, [v.eyeGround]: (n[v.eyeGround] ?? 0) + 1 }), {} as Partial<Record<HeldOutEyeGround, number>>),
             fetched: got.images.length,
             fetchFailures: got.failures.map(f => ({ panoId: f.view.panoId, error: f.error })),

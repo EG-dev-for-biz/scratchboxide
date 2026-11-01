@@ -982,6 +982,33 @@ describe('photo_match_evaluate tool', () => {
         fs.copyFileSync(north.regions.maskGrid, path.join(SHOTS, 'tool_photo_match_tile_edge_masks.png'));
     }, 240_000);
 
+    it('never takes a pano past the reference tile\'s edge as a candidate: no ground under it, not an eye on the structure\'s base', async () => {
+        // a tile 100 m across round the block: one pano on it, one 62 m out past its edge (within 60 m of the block's reach,
+        // where the old rule stood the eye on the block's base and kept the view)
+        const anchor = { lat: 40.75, lng: -74.05 };
+        const textured = writeTileAt(root, '5'.repeat(64), anchor, [{ ...ground(100), png: checkerPng([110, 110, 105], [96, 96, 92]) }, { ...TARGET, png: realFacade }]);
+        const panos: PanoCandidate[] = [
+            { panoId: 'ON_TILE', lat: 0, lng: 0, date: '2025-06', copyright: '© Google', x: 0, z: -38 },
+            { panoId: 'PAST_EDGE', lat: 0, lng: 0, date: '2025-07', copyright: '© Google', x: 0, z: -62 }
+        ];
+        const scan = loadScanMesh(textured.replace(/textured\.glb$/, 'geometry.glb'));
+        const terrain = buildGroundModel(scan, { cellMeters: 1 });
+        expect(terrain.groundAt(0, -62)).toBeNaN();
+        const block = { cx: 0, cz: 0, radiusM: Math.hypot(7, 6), ymin: 0, ymax: 16, mesh: { vertices: Float32Array.from(TARGET.positions), indices: Uint32Array.from(TARGET.indices) } };
+        const held = heldOutViews(panos, block, scan.mesh, new Set(), terrain);
+        expect(held.views.map(v => [v.panoId, v.eyeGround])).toEqual([['ON_TILE', 'terrain']]);
+        expect(held.rejected).toEqual(['PAST_EDGE: 62 m, no ground under it: it stands past the reference tile\'s edge']);
+
+        // the tool: the view on the tile judged, the other not fetched at all
+        const requests: Array<{ panoId: string; headingDegree: number; pitchDegree: number; fovDegree: number }> = [];
+        const out = await createPhotoMatchEvaluateHandler(() => fakeDeps(root, { panos, street: textured, requests }))({ glbs: [staged.altGlb], anchor, views: 2, runs: 1, clay: false }, ctxFor(root));
+        const r = out.resultPayload as any;
+        expect(out.status, JSON.stringify(r).slice(0, 800)).toBe('completed');
+        expect(r.views.map((v: any) => v.panoId)).toEqual(['ON_TILE']);
+        expect(r.heldOut).toMatchObject({ candidates: 1, notQualified: 1, eyeGround: { terrain: 1 } });
+        expect(requests.map(q => q.panoId)).toEqual(['ON_TILE']);
+    }, 120_000);
+
     it('looks at a place with no structure at it: the tile round the place, widened until enough views qualify', async () => {
         // a walled park: a low basin at its centre, a 2.9 m wall 45 m out, streets, then buildings 70 m and more from the place
         // (nothing 3 m tall within 30 m of it, so the structure rule picks nothing)
