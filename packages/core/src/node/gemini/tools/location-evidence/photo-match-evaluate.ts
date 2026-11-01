@@ -1139,11 +1139,12 @@ export interface PhotoMatchViewResult {
     /** Per arm, where its target is drawn against where the photo shows it, from edges (targetPlacement); null with no outline. */
     placement?: Record<string, TargetPlacement | null>;
     /**
-     * What placement was read against here: the footprint the scan's target was restricted to (null: the whole target), outlines
-     * with holes filled, and the street in front. A report without it is the earlier measure (the whole target, holes read,
-     * every arm drawn alone with nothing in front).
+     * What placement was read against here: Google's vector footprint the scan's target was restricted to (null: the whole
+     * target, and footprintNotUsed says why: none recorded, or it failed the fit rule), outlines with holes filled, and the
+     * street in front. A report without it is the earlier measure (the whole target, holes read, every arm drawn alone with
+     * nothing in front).
      */
-    placementReference?: { footprint: string | null; holesFilled: true; streetInFront: boolean };
+    placementReference?: { footprint: string | null; footprintNotUsed?: string; holesFilled: true; streetInFront: boolean };
 }
 
 const DEFAULT_RUN_CONCURRENCY = 2;
@@ -1647,7 +1648,13 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
                 ...(Object.keys(treeLevels).length ? { trees: treeLevels } : {}),
                 regions: { pixels: masks.pixels, bandPx: masks.bandPx, masks: maskFile, maskGrid, arms: regionArms },
                 tileEdge, judgedRegions, ...(Object.keys(regionsLeftOut).length ? { regionsLeftOut } : {}), placement,
-                ...(placementReference && Object.keys(placement).length ? { placementReference: { footprint: placementReference.footprint.used ? placementReference.footprint.source : null, holesFilled: true as const, streetInFront: placementReference.streetInFront } } : {})
+                ...(placementReference && Object.keys(placement).length ? {
+                    placementReference: {
+                        footprint: placementReference.footprint.used ? placementReference.footprint.source : null,
+                        ...(placementReference.footprint.used ? {} : { footprintNotUsed: placementReference.footprint.reason ?? 'no footprint' }),
+                        holesFilled: true as const, streetInFront: placementReference.streetInFront
+                    }
+                } : {})
             },
             photoBytes: im.bytes, mime: im.mimeType || 'image/jpeg', photo, renders, clayRenders, maskOverlay
         });
