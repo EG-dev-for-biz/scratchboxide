@@ -141,6 +141,22 @@ pose B").
   Macy's and the far field, is met.
 - **Unchanged.** No bar, arm, place or other view changed. Pose A is kept as checked.
 
+**Amendment 6, 2026-10-31, before any paid call: a lift over 1 m is allowed when it is only the frames' origin-height
+difference** (the user's decision: "Accept the lift").
+- **The rule.** The dry-run stop rule "`liftedM` over 1 m" is allowed when two conditions hold:
+  - the lift equals the two runs' recorded origin-height difference at the same latitude and longitude;
+  - the lifted arm's building agreement matches the reference's, view by view.
+- **The KD case.** KD 4a8937c3 is lifted −18.5 m: its centre extraction put its origin's ground at −12.5 m
+  (`tiles_ground`), DM 0ced0b89 at +6 m. KD's building agreement per view is 0.92 / - / 0.97 / 1.00 / 0.83 / 1.00 / 0.99 /
+  0.99, against DM's 1.00 / - / 1.00 / 1.00 / 0.83 / 1.00 / 0.94 / 1.00. In pose A its canopy lettering sits in place.
+- **A kd finding for the report.** KD placed its centre's ground at about −12.5 m, likely the station's below-street
+  level.
+- **Two facts for the Penn 2 report.**
+  - K's isolate is Penn 2 plus the station frontage: 507,589 standing triangles inside DM's target, 383,059 outside.
+  - In pose A the PENN STATION canopy, where the Chase sign hangs, is labelled neighbour: it lies outside Penn 2's
+    footprint.
+- **Unchanged.** No bar, arm, place or view changed.
+
 The method is `.claude/skills/judge-preregister/SKILL.md`; the judge is described in
 `docs/processes/photo_match_world_regions.md`. Decisions of 2026-10-31:
 - **The user's, recorded in the plan.** These are in
