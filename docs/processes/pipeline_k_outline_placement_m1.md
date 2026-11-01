@@ -2,7 +2,10 @@
 
 **Date:** 2026-11-01
 **Status:** diagnosed; no K stage moves the building's outline by 2 to 5 px. Most of M1's gap comes from how placement
-builds its reference. The real outline effects in K are 0.4 to 1.5 px. No code was changed.
+builds its reference. The real outline effects in K are 0.4 to 1.5 px. No K code was changed.
+**Update (2026-11-01):** the three corrections below are now placement's default in `photo_match_evaluate` (the user's
+approval, relayed by the main session; branch `fix/judge-placement-reference`). The rerun preregistration's amendment
+gives the old and new numbers.
 **Places:** the Empire State Building (K run `0bb20154`), the Ferry Building (`cdbda9bb`) and the Haughwout Building
 (`f4f25a8e`): the three M1 benchmark places.
 
