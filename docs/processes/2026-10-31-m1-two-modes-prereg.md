@@ -157,6 +157,49 @@ difference** (the user's decision: "Accept the lift").
     footprint.
 - **Unchanged.** No bar, arm, place or view changed.
 
+**Amendment 7, 2026-10-31, after Penn 2's paid call and before any paid call at the benchmark places: every held-out
+photo is era-checked against the tile** (the main session's instruction, on the user's "Yes, run them").
+- **Why.** At Penn 2 the photos showed the station's entrance in a later state than the tiles, and the decoys passed (see
+  the run record). The lettering matched in both eras, so a sign check would not have caught it.
+- **The check, at each benchmark place before its paid call.**
+  - **The views.** All 8 the paid call would fetch: the 4 it judges and the 4 that stand in for any that do not register.
+    They are listed by the tool's own view choice, with the real Street View metadata lookup (free) and stand-ins at
+    every billed edge (a scratch driver, not committed). The dry runs' lists are not used: they read only the cached
+    panos, and at the ESB they named other panos.
+  - **The pairs.** Each real photo is fetched through the app's `streetview_grounding_image` tool and set beside the
+    reference tile rendered from the same pano, heading, pitch and field of view: the dry run's stand-in pose, before
+    registration.
+  - **What is compared.** The target's structure: its massing, entrances, canopies, scaffolding or sheds, and facade
+    changes. Lettering and signs alone do not count.
+  - **A view in another era** is dropped by naming its pano in `excludePanoIds`, and the views chosen in its place are
+    checked the same way.
+  - **A place left with fewer than 3 judged views** (its minimum) is not judged, and is reported.
+- **The grounding cap.** The check fetches each place's photos once more: the judged call keeps its own fetches in memory
+  only. Those fetches are counted beside the cap, not in it. The cap of 8 per benchmark place stays on the judged call's
+  own fetches. At about $0.007 an image, the check adds about $0.06 a place.
+- **The stopped ESB call.** The ESB's paid call was started on the user's "Run the benchmarks", before this instruction
+  arrived, and stopped by hand once it did.
+  - It had fetched and registered its 8 photos and rendered one view.
+  - It made no judge call: none is logged, and its folder (`empire_state_building_20_w_34th__20261101T051801_8b1c`)
+    holds one view's renders and no scores.
+  - Its 8 images are counted in the spend.
+- **ESB (K run 0bb20154): all 8 views kept.** Each photo shows the building as the tile does. Where they differ, the
+  difference is signage, a storefront wrap, or the stand-in pose.
+
+  | Pano | Date | Heading / pitch | The photo | The tile at that pose | Outcome |
+  |---|---|---|---|---|---|
+  | G8sOFZp8 | 2026-04 | 218° / 12° | the 34th St podium: limestone piers, a glazed storefront band, bollards | the same piers, window rhythm, glazed band and bollards | kept |
+  | Wf4-XFAA | 2026-04 | 102° / 30° | the tower and its setbacks, up a side street | the same tower and setbacks, framed nearer | kept |
+  | uPcMge9M | 2026-04 | 338° / 12° | the 5th Ave and 33rd St corner: the podium, a storefront band wrapped in ads, bollards | the same corner, podium, glazed band and bollards | kept (the wrap is signage) |
+  | w4nU8TkI | 2026-04 | 273° / 12° | a 5th Ave corner: the podium, the corner storefront, bollards | the same podium and storefront; the stand-in eye sits low at the curb | kept |
+  | QcCvIfC8 | 2026-04 | 196° / 12° | the 34th St base: retail fronts under a large banner, a set-back upper wall | the same fronts, banner and wall | kept |
+  | Q1IjAWuz | 2024-09 | 357° / 12° | the 33rd St base: an entrance marquee and storefronts | the same marquee band and piers, partly hidden by a scanned lamp post | kept |
+  | hi-cmKU8 | 2026-04 | 317° / 30° | the tower over its podium, the setbacks, the flags | the same massing | kept |
+  | VqOxFz9R | 2024-09 | 304° / 12° | a podium corner: piers, a corner café's glazed front, bollards | the same piers, glazed front and bollards | kept |
+
+  The pairs are in `docs/screenshots/m1_prereg/era_check/esb/`.
+- **Unchanged.** No bar, arm, decoy, place or stop rule changed.
+
 The method is `.claude/skills/judge-preregister/SKILL.md`; the judge is described in
 `docs/processes/photo_match_world_regions.md`. Decisions of 2026-10-31:
 - **The user's, recorded in the plan.** These are in
