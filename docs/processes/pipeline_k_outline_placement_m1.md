@@ -4,8 +4,12 @@
 **Status:** diagnosed; no K stage moves the building's outline by 2 to 5 px. Most of M1's gap comes from how placement
 builds its reference. The real outline effects in K are 0.4 to 1.5 px. No K code was changed.
 **Update (2026-11-01):** the three corrections below are now placement's default in `photo_match_evaluate` (the user's
-approval, relayed by the main session; branch `fix/judge-placement-reference`). The rerun preregistration's amendment
-gives the old and new numbers.
+approval, relayed by the main session; branch `fix/judge-placement-reference`), with two changes from M1's review.
+- The footprint is Google's vector footprint the reference run read, never one a build recorded. Pipeline K isolate runs
+  have no vector stage, so the three runs here read the whole isolate.
+- Only the reference is restricted, and every arm, the raw scan included, is scored as built.
+
+The rerun preregistration's amendment gives the old and new numbers.
 **Places:** the Empire State Building (K run `0bb20154`), the Ferry Building (`cdbda9bb`) and the Haughwout Building
 (`f4f25a8e`): the three M1 benchmark places.
 

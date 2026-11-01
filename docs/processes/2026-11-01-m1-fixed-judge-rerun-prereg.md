@@ -423,65 +423,85 @@ placement's reference, the raw isolate's outline, with every arm drawn alone:
 
 ### The change
 
-The user approved it, relayed by the main session. It is on branch `fix/judge-placement-reference`, commits 56e29b9a and
-3964757f, and these are now the measure's default:
-1. **Footprint.** The photo's silhouette is read along the scan's target restricted to the building's footprint plus
-   0.3 m. That is the run's own footprint (its `pipeline_k_base` note), else Google's vector footprint the target pick
-   finds. A footprint that fails pipeline K's fit rule is not used, and the result says so. The rule fails when more than
-   20% of the target standing 3 m over the terrain lies more than 1.5 m outside the footprint.
-2. **Holes filled.** The reference's outline and each arm's are outer boundaries.
+The user approved it, relayed by the main session, with M1's review. It is on branch `fix/judge-placement-reference`,
+commits 56e29b9a, 3964757f and 1bcd0a5f, and these are now the measure's default:
+1. **Footprint.** The reference alone, the band where the photo's edges are searched, is read along the scan's target
+   restricted to Google's vector footprint plus 0.3 m.
+   - The footprint is the one the reference run's vector stage read, as the target pick chooses it at the place.
+   - It is never a footprint a build recorded: the reference does not come from a build it judges.
+   - It is not used when it fails pipeline K's fit rule: more than 20% of the target standing 3 m over the terrain lying
+     more than 1.5 m outside it.
+   - With no vector footprint, or one that does not fit, the whole isolate is read, and the result says so.
+2. **Holes filled.** Every outline is an outer boundary.
+   - This fills real openings too, such as an arch with the sky behind it. That is accepted for a measure of where the
+     building stands.
 3. **Street in front.** The reference and every arm are drawn behind the reference tile's street (its ground-labelled
    triangles as occluder depth). This includes the raw baseline, place arms and a splat world.
+
+**No arm is clipped.** Every arm, the raw baseline included, is scored as built. Scan pieces past the footprint are not the
+building, so they count against the raw arm.
 
 The 640 px width, the 24 px truncation and the 8 px band are unchanged. Each result now carries `placement.reference` and
 `views[].placementReference`: the footprint's source, `holesFilled` and `streetInFront`. A report without them is the
 old measure.
 
-At the three places the footprint is the run's Google vector footprint, and it fits:
+### No footprint at these three places
 
-| Place | Misfit share | Isolate triangles kept |
-|---|---|---|
-| ESB | 0 | 105,206 of 105,452 |
-| Ferry | 0.002 | 4,633 of 5,124 |
-| Haughwout | 0.027 | 6,355 of 7,219 |
+- **Why.** Pipeline K isolate builds skip the vector stage, so the three K runs record no Google footprint the judge can
+  read.
+- **What the judge reads.** At the ESB, the Ferry and the Haughwout it reads the whole isolate, and says so. Corrections
+  2 and 3 apply here; correction 1 does not.
+- **Where the footprint is.** K fetched Google's footprint itself while building and kept it only in its own run note,
+  which the judge must not read.
 
 ### How it was recomputed
 
-Offline, with no call. The driver used the paid calls' views, photos and registrations, and its views came from the
-views rule those calls ran on (108e37fb). It worked out both measures from the same renders:
+Offline, with no call. The driver used the paid calls' views, photos and registrations, and its views came from the views
+rule those calls ran on (108e37fb). It worked out both measures from the same renders:
 - the old measure with the judge's code at 531d3ee8;
 - the new measure with this branch.
 
 The old measure reproduces every per-view, per-arm value in the run record to the hundredth. So the measure is the only
 thing that changed.
 
-### Old and new, on the real photos (mean errorPx over the four judged views)
+### Old and new, on the real photos
 
-| Place | raw | K | X1 | X2 | X2 − K |
-|---|---|---|---|---|---|
-| ESB | 3.64 → 3.60 | 5.34 → 4.06 | 5.34 → 4.06 | 14.03 → 14.04 | 8.69 → **9.98** |
-| Ferry | 2.91 → 5.96 | 6.48 → 4.60 | 6.48 → 4.60 | 15.67 → 15.54 | 9.19 → **10.94** |
-| Haughwout | 3.67 → 6.63 | 8.47 → 4.13 | 8.47 → 4.13 | 15.80 → 15.63 | 7.33 → **11.50** |
+Mean errorPx over the four judged views, as the judge now reads these runs (no footprint).
 
-- **The raw arm is the whole isolate as scanned.** On the new measure, its pieces outside the footprint count against
-  it. That is why it now scores worse than K at the Ferry and the Haughwout, where the isolate holds the most of them.
+| Place | raw as built | raw clipped (information) | K | X1 | X2 | X2 − K |
+|---|---|---|---|---|---|---|
+| ESB | 3.64 → 3.57 | 3.51 → 3.56 | 5.34 → 4.05 | 5.34 → 4.05 | 14.03 → 14.09 | 8.69 → **10.04** |
+| Ferry | 2.91 → 3.19 | 6.18 → 4.06 | 6.48 → 4.68 | 6.48 → 4.68 | 15.67 → 15.55 | 9.19 → **10.87** |
+| Haughwout | 3.67 → 3.68 | 7.90 → 8.21 | 8.47 → 8.12 | 8.47 → 8.12 | 15.80 → 15.67 | 7.33 → **7.55** |
+
+- **"Raw as built"** is the baseline arm, and it is the score that counts.
+- **"Raw clipped"** is the same scan clipped to Google's footprint plus 0.3 m. It is information only: the judge clips no
+  arm. The footprint used for it is Google's as the K run recorded it, which the judge itself does not read.
 - **X2 − K per view, new measure:**
-  - ESB: 15.44, 6.42, 8.62, 9.47;
-  - Ferry: 14.42, 9.65, 14.07, 5.63;
-  - Haughwout: 14.42, 8.09, 12.48, 11.02.
+  - ESB: 15.64, 6.40, 8.65, 9.47;
+  - Ferry: 13.22, 9.40, 14.13, 6.70;
+  - Haughwout: 5.68, 8.28, 10.19, 6.05.
 
   X2 stays above K in every view.
+- **What the missing footprint costs.** At the ESB and the Ferry, holes and street alone bring K close to the scan. At
+  the Haughwout, K stays 4.4 px from the scan: the isolate's slice of the Broome St neighbour is still in the reference.
+- **For information: with Google's footprint as the reference** (the footprint K recorded, which a vector stage would
+  give the judge):
+  - raw as built: 3.60, 5.96, 6.63;
+  - K: 4.06, 4.60, 4.13;
+  - X2 − K: 9.98, 10.94, 11.50.
 
 ### D on the new measure: the stand-in dry run redone
 
 The views are the free dry run's above, and the photos are the stand-in photos that dry run rendered (the tile at the
-view, identity registration), read again by the new measure. The old measure reproduces that dry run's values exactly.
+view, identity registration), read again by the new measure. There is no footprint, as above. The old measure reproduces
+that dry run's values exactly.
 
 | Place | raw / K / X2, old | raw / K / X2, new | X2 − K per view, new | D, old | **D, new** |
 |---|---|---|---|---|---|
 | ESB | 2.18 / 7.55 / 16.57 | 2.17 / 2.98 / 13.99 | 6.22, 14.44, 17.74, 5.67 | 4.5 | **5.5** |
-| Haughwout | 2.77 / 5.89 / 18.54 | 3.89 / 3.27 / 17.81 | 11.70, 11.99, 19.94 (v0 has no placement) | 6.3 | **7.3** |
-| Ferry | 2.55 / 6.20 / 14.77 | 4.08 / 4.32 / 14.52 | 15.33, 10.53, 12.03, 2.90 | 4.3 | **5.1** |
+| Haughwout | 2.77 / 5.89 / 18.54 | 2.73 / 5.82 / 18.77 | 6.81, 13.46, 18.57 (v0 has no placement) | 6.3 | **6.5** |
+| Ferry | 2.55 / 6.20 / 14.77 | 2.68 / 5.90 / 15.06 | 11.88, 9.59, 12.06, 3.09 | 4.3 | **4.6** |
 
 D is half the mean X2 − K gap, and at least 2 px, as before.
 
@@ -489,13 +509,12 @@ D is half the mean X2 − K gap, and at least 2 px, as before.
 
 | Place | X2 − K | D | Bar 5 |
 |---|---|---|---|
-| ESB | 9.98 | 5.5 | **met** |
-| Haughwout | 11.50 | 7.3 | met; information only (amendment 3) |
-| Ferry | 10.94 | 5.1 | met; information only (amendment 3) |
+| ESB | 10.04 | 5.5 | **met** |
+| Haughwout | 7.55 | 6.5 | met; information only (amendment 3) |
+| Ferry | 10.87 | 4.6 | met; information only (amendment 3) |
 
-- **Bar 5 still holds at the ESB, where it counts.** It holds at the two places it does not count too.
-- **The gap is wider on the new measure** at every place. K moves 1.3 to 4.3 px closer to the photo, and X2 stays where
-  it was.
+- **Bar 5 still holds at the ESB, where it counts.** It holds at the two places it does not count too, by a small margin
+  at the Haughwout.
 - **The judge's scores and bars 1 to 4, 7 and 8 are unchanged.** The change touches placement only.
 - **Images.** `docs/screenshots/k_outline_placement/placement_old_new.png` (gitignored) charts the old against the new
-  per arm.
+  per arm, as the judge now reads these runs.
