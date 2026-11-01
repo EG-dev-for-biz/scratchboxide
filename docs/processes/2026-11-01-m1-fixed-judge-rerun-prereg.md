@@ -238,6 +238,24 @@ Values written as they are fixed.
       storefront, a brick wall with murals, a glass front. The tile at the same pose shows the Haughwout down the street.
     - With no target in the photo, its era cannot be read. These views are dropped and swapped by amendment 7's method:
       the dry run is made again with them excluded, and the new views are fetched and checked before the paid call.
+- **The Haughwout's swaps** (pairs in `docs/screenshots/m1_prereg/era_check/haughwout/`, the final list in
+  `views_final.json`). Three rounds of the free dry run with the dropped panos in `excludePanoIds`.
+
+  | Round | Excluded | New views | Outcome |
+  |---|---|---|---|
+  | 1 | the 3 above | hN4AIglX h334 (38 m), 3bPztYzZ h313 (77 m), bEK_FLEJ h269 (67 m) | hN4AIglX kept: the same cast-iron street as the tile. 3bPztYzZ and bEK_FLEJ dropped: a glass corner building and a cast-iron storefront a few metres from the camera, which the tile does not hold |
+  | 2 | 5 | uHC_00kK h319 (58 m), wDMyXU2L h286 (58 m) | uHC_00kK kept: the same street of cast-iron and glass fronts. wDMyXU2L dropped: a glass storefront at the camera |
+  | 3 | 6 | omuGS9re h359 (30 m) | kept: the arcaded cast-iron facade and the shop beside it, as in the tile |
+
+  - **The paid call's list.** It fetches Q9Oq9D-1, 1qMtd3bC, iqiqiEgp, uHC_00kK, dXtEY_Zc, AHxVmFrj, hN4AIglX and omuGS9re
+    (all 2026-04). All 8 show the building the tile holds, and all are kept.
+  - **The six dropped panos** are passed as `excludePanoIds`: EZhhT_bT, ChWZuxgr, 3rYZd7kq, 3bPztYzZ, bEK_FLEJ and
+    wDMyXU2L.
+  - **Why they all failed.** Every dropped pano stood past the tile's edge, where the tool's candidate check sees the
+    target through the empty space the tile leaves.
+  - **Photos fetched for the check:** 14 (8 + 3 + 2 + 1), about $0.10.
+  - **Placement on the final list (stand-ins):** mean errorPx raw 3.85, K 12.16, X2 19.88, a gap of 7.72. Half of it,
+    3.9, is under the preregistered D of 6.3, so D stays 6.3.
 
 ## Report
 
