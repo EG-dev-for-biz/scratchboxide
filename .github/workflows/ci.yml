@@ -23,11 +23,38 @@ concurrency:
 
 jobs:
   verify:
-    name: Typecheck, lint, test (${{ matrix.os }})
+    name: ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        include:
+          # The macos-15 runner takes four test files at a time, so the whole suite fits one job there.
+          - name: Typecheck, lint, test (macos-15)
+            os: macos-15
+            checks: true
+            test: true
+          # The ubuntu-24.04 runner of a private repository has 2 vCPUs, on which vitest runs one test file at a time,
+          # and the whole suite then outlasts the job limit: Ubuntu typechecks, lints and builds once and runs the
+          # tests in four shards (vitest --shard), each job inside the limit.
+          - name: Typecheck, lint, build (ubuntu-24.04)
+            os: ubuntu-24.04
+            checks: true
+          - name: Test (ubuntu-24.04, shard 1/4)
+            os: ubuntu-24.04
+            test: true
+            shard: 1/4
+          - name: Test (ubuntu-24.04, shard 2/4)
+            os: ubuntu-24.04
+            test: true
+            shard: 2/4
+          - name: Test (ubuntu-24.04, shard 3/4)
+            os: ubuntu-24.04
+            test: true
+            shard: 3/4
+          - name: Test (ubuntu-24.04, shard 4/4)
+            os: ubuntu-24.04
+            test: true
+            shard: 4/4
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     env:
@@ -49,11 +76,13 @@ jobs:
       # The Python of the project .venv requirements.txt was pinned from: the committed scratchbox stubs are generated on
       # it, and an older Python writes its annotations differently (typing.Optional[X], not X | None), failing sb-stubs.test.ts.
       - uses: actions/setup-python@v5
+        if: matrix.test
         with:
           python-version: '3.14'
 
       # numpy on the PATH python3: the skinning-parity test runs scripts/sbx_skinning.py with it.
       - name: Python venv for the native engine
+        if: matrix.test
         run: |
           python -m venv .venv
           # PyPI's Linux torch wheel brings the CUDA libraries (several GB) and fills the runner's disk; the tests run
@@ -67,6 +96,7 @@ jobs:
       # Media tests shell out to ffmpeg (JPEG/video encode) and cwebp (WebP textures); they skip
       # with a reason when the binary is missing, so install them here to keep CI covering them.
       - name: System tools for media tests (ffmpeg, cwebp)
+        if: matrix.test
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update
@@ -80,15 +110,21 @@ jobs:
         run: npm run build:core
 
       - name: Typecheck
+        if: matrix.checks
         run: npm run typecheck
 
       - name: Lint
+        if: matrix.checks
         run: npm run lint
 
       - name: Test
-        run: npm test
+        if: matrix.test
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: npm test -- ${SHARD:+--shard=$SHARD}
 
       - name: Build
+        if: matrix.checks
         run: npm run build
 
   docker:
