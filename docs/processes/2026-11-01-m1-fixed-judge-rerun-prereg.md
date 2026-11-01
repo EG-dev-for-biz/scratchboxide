@@ -454,6 +454,15 @@ old measure.
 - **Where the footprint is.** K fetched Google's footprint itself while building and kept it only in its own run note,
   which the judge must not read.
 
+| Place | K run | Google vector footprint the judge reads | Reference |
+|---|---|---|---|
+| ESB | 0bb20154 | none: the run has no vector stage | the whole isolate (fallback) |
+| Ferry | cdbda9bb | none: the run has no vector stage | the whole isolate (fallback) |
+| Haughwout | f4f25a8e | none: the run has no vector stage | the whole isolate (fallback) |
+
+No place got as far as the fit rule. Google's footprint as K recorded it would pass the rule at all three (misfit 0, 0.002
+and 0.027), but the judge does not read that record.
+
 ### How it was recomputed
 
 Offline, with no call. The driver used the paid calls' views, photos and registrations, and its views came from the views
