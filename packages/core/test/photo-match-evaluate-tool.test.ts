@@ -927,7 +927,7 @@ describe('photo_match_evaluate tool', () => {
         // what it was read against: the structure picked on the scan (no Google footprint recorded), outer outlines, every arm
         // behind the street
         expect(r.placement.reference).toMatchObject({ footprint: { used: false, source: 'none' }, holesFilled: true, streetInFront: true });
-        expect(r.placement.reference.footprint.reason).toMatch(/no Google vector footprint is recorded for the reference: the target is the structure picked on the scan geometry/);
+        expect(r.placement.reference.footprint.reason).toMatch(/no Google vector footprint is recorded for the reference \(it is not a staged run\): the target is the structure picked on the scan geometry/);
         for (const v of r.views) expect(v.placementReference).toEqual({ footprint: null, footprintNotUsed: r.placement.reference.footprint.reason, holesFilled: true, streetInFront: true });
         r.views.forEach((v: any, k: number) => fs.copyFileSync(v.grid, path.join(SHOTS, `tool_photo_match_view_checks_view${k}.png`)));
     }, 240_000);
@@ -966,7 +966,7 @@ describe('photo_match_evaluate tool', () => {
             vectorStage('9'.repeat(64), -7, 7);
             const fits = await run();
             expect(fits.placement.reference.footprint).toMatchObject({ used: true, marginM: 0.3, misfitShare: 0 });
-            expect(fits.placement.reference.footprint.source).toMatch(/^Google's vector footprint block, as the target pick chooses it at the place$/);
+            expect(fits.placement.reference.footprint.source).toBe('Google\'s vector footprint block, from the reference run\'s vector stage, as the target pick chooses it at the place');
             expect(fits.placement.reference.footprint.triangles).toBe(fits.placement.reference.footprint.of);
             expect(fits.views[0].placementReference.footprint).toBe(fits.placement.reference.footprint.source);
             expect(fits.views[0].placementReference).not.toHaveProperty('footprintNotUsed');
@@ -986,6 +986,69 @@ describe('photo_match_evaluate tool', () => {
             fs.rmSync(note, { force: true });
         }
     }, 180_000);
+
+    it('fetches Google\'s footprint at judging time when the run recorded none: used as a recorded one, never over a recorded one, and a failed fetch leaves the whole isolate', async () => {
+        const sl = path.join(root, '.scratchbox', 'cache', 'staged_location');
+        const stages = path.join(sl, 'runs', RUN, 'stages.json');
+        const before = fs.readFileSync(stages, 'utf8');
+        // the stand-in for facade-footprints.ts fetchFootprints: pieces in the place's frame, or a failure; every call recorded
+        const calls: Array<{ place: { lat: number; lng: number }; radiusM: number }> = [];
+        const piece = (x0: number, x1: number) => ({ id: 'g/block/e0', buildingId: 'g/block', ring: [[x0, -6], [x1, -6], [x1, 6], [x0, 6]] as Array<[number, number]>, heightSource: 'vector' });
+        const run = async (footprints?: PhotoMatchDeps['footprints']) => {
+            const deps = (): PhotoMatchDeps => ({ ...fakeDeps(root), ...(footprints ? { footprints: async (place, radiusM) => { calls.push({ place, radiusM }); return footprints(place, radiusM); } } : {}) });
+            const out = await createPhotoMatchEvaluateHandler(deps)({ views: 1, runs: 1, clay: false }, ctxFor(root, staged.scene));
+            expect(out.status, JSON.stringify(out.resultPayload).slice(0, 600)).toBe('completed');
+            return out.resultPayload as any;
+        };
+        try {
+            const bare = await run();
+            expect(bare.placement.reference).not.toHaveProperty('footprintFetch');
+            // fetched at the reference origin over at least 100 m: Google's footprint of the block is the reference's
+            const fetched = await run(async () => ({ buildings: [piece(-7, 7)], note: '1 extruded building footprint (stand-in)' }));
+            expect(calls).toHaveLength(1);
+            expect(calls[0].place).toEqual({ lat: PLACE.lat, lng: PLACE.lng });
+            expect(calls[0].radiusM).toBeGreaterThanOrEqual(100);
+            expect(fetched.placement.reference.footprintFetch).toEqual({ radiusM: calls[0].radiusM, buildings: 1, note: '1 extruded building footprint (stand-in)' });
+            expect(fetched.placement.reference.footprint).toMatchObject({ used: true, marginM: 0.3, misfitShare: 0 });
+            expect(fetched.placement.reference.footprint.source).toBe('Google\'s vector footprint g/block, fetched at judging time, as the target pick chooses it at the place');
+            expect(fetched.views[0].placementReference.footprint).toBe(fetched.placement.reference.footprint.source);
+            // a fetched footprint over half the block: pipeline K's fit rule rejects it, as it would a recorded one
+            const half = await run(async () => ({ buildings: [piece(-7, 0)], note: 'half (stand-in)' }));
+            expect(half.placement.reference.footprint).toMatchObject({ used: false });
+            expect(half.placement.reference.footprint.misfitShare).toBeGreaterThan(0.2);
+            expect(half.placement.reference.footprint.reason).toMatch(/does not fit the scan, so the whole target is read/);
+            // a fetch that throws, or finds nothing: the whole isolate, the evaluation completes, and the reason is given
+            const failed = await run(async () => { throw new Error('tiles down (stand-in)'); });
+            expect(failed.placement.reference.footprint).toMatchObject({ used: false, source: 'none' });
+            expect(failed.placement.reference.footprint.reason).toBe('no Google vector footprint is recorded for the reference (its run has no vector stage), and fetching one at judging time failed (tiles down (stand-in)): the whole target is read');
+            expect(failed.placement.reference.footprintFetch).toEqual({ radiusM: calls[0].radiusM, error: 'tiles down (stand-in)' });
+            expect(failed.views[0].placementReference.footprintNotUsed).toBe(failed.placement.reference.footprint.reason);
+            const empty = await run(async () => ({ buildings: [], note: 'no extruded building footprints (stand-in)' }));
+            expect(empty.placement.reference.footprint.reason).toMatch(/fetching at judging time found none \(no extruded building footprints \(stand-in\)\): the whole target is read$/);
+            // a recorded vector stage comes first: the fetch is not made
+            const VEC = '7'.repeat(64);
+            fs.mkdirSync(path.join(sl, 'vector', VEC), { recursive: true });
+            fs.writeFileSync(path.join(sl, 'vector', VEC, 'done.json'), JSON.stringify({
+                schema: 'scratchbox.stage-cache/1', stage: 'vector', key: VEC, builtAtMs: 1, ms: 1, published: [],
+                value: { sel: { buildings: [{ id: 'block', parts: [{ loops: [[[-7, -6], [7, -6], [7, 6], [-7, 6]]] }] }] }, tiles: 1 }
+            }));
+            const rec = JSON.parse(before);
+            fs.writeFileSync(stages, JSON.stringify({ ...rec, keys: { ...rec.keys, vector: VEC } }));
+            const n = calls.length;
+            const recorded = await run(async () => ({ buildings: [piece(-7, 0)], note: 'never asked' }));
+            expect(calls).toHaveLength(n);
+            expect(recorded.placement.reference).not.toHaveProperty('footprintFetch');
+            expect(recorded.placement.reference.footprint.source).toBe('Google\'s vector footprint block, from the reference run\'s vector stage, as the target pick chooses it at the place');
+            // the raw arm is scored as built every time: its triangles and placement never depend on the footprint
+            for (const r of [fetched, half, failed, empty, recorded]) {
+                expect(r.regions.armTriangles.raw).toEqual(bare.regions.armTriangles.raw);
+                expect(r.views[0].placement.raw).not.toBeNull();
+            }
+            for (const r of [half, failed, empty]) expect(r.placement.mean).toEqual(bare.placement.mean);
+        } finally {
+            fs.writeFileSync(stages, before);
+        }
+    }, 240_000);
 
     it('flags a view where the reference tile ends inside the frame, before any score: its regions are not judged, its building is', async () => {
         // a tile only 100 m across, a 40 m block at its south-east edge: past the edge beside it the photo would show the city going

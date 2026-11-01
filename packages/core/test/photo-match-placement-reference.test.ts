@@ -23,7 +23,11 @@ import {
 import type { TileTriangles } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 import { castCamera } from '../src/node/3d-engine/staged-location/survey-casting';
 import { renderFrameDepth } from '../src/node/spatial/StreetViewPoseRegistrar';
-import { placementTarget, streetMesh } from '../src/node/gemini/tools/location-evidence/photo-match-evaluate';
+import { cachedFootprints, placementTarget, storedFootprints, streetMesh } from '../src/node/gemini/tools/location-evidence/photo-match-evaluate';
+import type { FootprintSource } from '../src/node/3d-engine/staged-location/facade-footprints';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import type { Vec2 } from '../src/common/spatial/staged-location-contracts';
 
 type V3 = [number, number, number];
@@ -187,6 +191,42 @@ describe('placement reads the building, not the scan\'s defects', () => {
         expect(differ / target).toBeLessThan(0.01);
         // and it costs nothing: no further from the photo than the building itself
         expect(targetPlacement(field, reference, hidden, d)!.errorPx).toBeLessThanOrEqual(self.errorPx + 0.15);
+    });
+
+    it('reads fetched footprints as the vector stage stores them, and keeps a fetch by place and radius', async () => {
+        // a building's pieces (a podium, a setback tower) are its parts; a ring under three points is dropped
+        const src: FootprintSource = {
+            note: '3 pieces (stand-in)', buildings: [
+                { id: 'g/a/e0', buildingId: 'g/a', ring: [[0, 0], [10, 0], [10, 10], [0, 10]], heightSource: 'vector' },
+                { id: 'g/a/e1', buildingId: 'g/a', ring: [[2, 2], [8, 2], [8, 8], [2, 8]], heightSource: 'vector' },
+                { id: 'g/b/e0', buildingId: 'g/b', ring: [[20, 0], [30, 0], [30, 10]], heightSource: 'vector' },
+                { id: 'g/c/e0', buildingId: 'g/c', ring: [[40, 0], [50, 0]], heightSource: 'vector' }
+            ]
+        };
+        expect(storedFootprints(src)).toEqual([
+            { id: 'g/a', parts: [{ loops: [src.buildings[0].ring] }, { loops: [src.buildings[1].ring] }] },
+            { id: 'g/b', parts: [{ loops: [src.buildings[2].ring] }] }
+        ]);
+        // the second fetch at the same place and radius is read from the cache; another radius is fetched
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-footprints-'));
+        try {
+            let fetches = 0;
+            const fetch = async () => { fetches++; return src; };
+            const place = { lat: 40.7484405, lng: -73.9856644 };
+            const first = await cachedFootprints(dir, place, 120, fetch);
+            const again = await cachedFootprints(dir, place, 120, fetch);
+            expect(fetches).toBe(1);
+            expect(first).toEqual(src);
+            expect(again.buildings).toEqual(src.buildings);
+            expect(again.note).toMatch(/^3 pieces \(stand-in\) \(cached \d{4}-\d\d-\d\d\)$/);
+            await cachedFootprints(dir, place, 150, fetch);
+            expect(fetches).toBe(2);
+            // a failed fetch is not cached
+            await expect(cachedFootprints(dir, { lat: 1, lng: 2 }, 100, async () => { throw new Error('down'); })).rejects.toThrow('down');
+            expect(fs.readdirSync(dir).sort()).toEqual(['40.7484405_-73.9856644_r120.json', '40.7484405_-73.9856644_r150.json']);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
     });
 
     it('still ranks a build moved 4 m clearly below the building in place', () => {
