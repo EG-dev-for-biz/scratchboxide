@@ -37,7 +37,7 @@ import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome } fr
 import type { StagedBuildState, StagedLayer, Vec3 } from '../../../../common/spatial/staged-location-contracts';
 import {
     aggregateCriteria, aggregateRuns, armLayerTriangles, armMeshesForView, composeGrid, coverageMask, judgeView, judgeViewClay, loadArmLayer, perceptualScores, photoEdgeField, planOutlineCells, regionMasks, regionOverlay, regionScores,
-    regionsInFrame, renderPng, renderTriangles, targetPlacement, tileEdgeInFrame, triangleRegions, JUDGE_CRITERIA, JUDGE_REGION_CRITERIA, PHOTO_MATCH_GROUND_BAND_M, PHOTO_MATCH_METRIC_WIDTH_PX, PHOTO_MATCH_OUTLINE_REACH_M, PHOTO_MATCH_PLACEMENT_BAND_PX, PHOTO_MATCH_PLACEMENT_SEARCH_PX,
+    regionsInFrame, renderPng, renderTriangles, targetPlacement, tileEdgeInFrame, triangleRegions, type TileTopGrid, JUDGE_CRITERIA, JUDGE_REGION_CRITERIA, PHOTO_MATCH_GROUND_BAND_M, PHOTO_MATCH_METRIC_WIDTH_PX, PHOTO_MATCH_OUTLINE_REACH_M, PHOTO_MATCH_PLACEMENT_BAND_PX, PHOTO_MATCH_PLACEMENT_SEARCH_PX,
     PHOTO_MATCH_PLACEMENT_TRUNCATION_PX, PHOTO_MATCH_REGION_LEGEND, PHOTO_MATCH_REGION_MIN_SHARE, PHOTO_MATCH_REGIONS, PHOTO_MATCH_TILE_EDGE_MIN_SHARE, PHOTO_MATCH_TILE_EDGE_REACH_M, REGION,
     type ArmLayer, type ArmRender, type CriterionStat, type JudgeClient, type JudgeCriterion, type JudgeRegionCriterion, type JudgeRun, type PerceptualScores, type PhotoMatchRegion, type RegionMasks, type RegionScore,
     type TargetPlacement, type TileEdgeReading
@@ -820,6 +820,24 @@ export function eyeUnderStreet(eye: Vec3, context: RenderMesh3D, terrain: { grou
     return s && eye[1] < s.y ? { streetY: s.y, depthM: s.y - eye[1], on: s.on === 'nearest-terrain' ? `the terrain ${s.distanceM} m away (none under the pano)` : s.on } : undefined;
 }
 
+/**
+ * The longest stretch (m) of the plan segment from (ax, az) to (bx, bz) over cells where the tile has no surface (or past its
+ * grid), sampled every half cell.
+ */
+export function emptyTileAlong(grid: TileTopGrid, ax: number, az: number, bx: number, bz: number): number {
+    const { x0, z0, nx, nz, cellMeters: cell, top } = grid;
+    const len = Math.hypot(bx - ax, bz - az), steps = Math.max(1, Math.ceil(len / (cell / 2)));
+    let run = 0, longest = 0;
+    for (let k = 0; k <= steps; k++) {
+        const x = ax + ((bx - ax) * k) / steps, z = az + ((bz - az) * k) / steps;
+        const j = Math.floor((x - x0) / cell), i = Math.floor((z - z0) / cell);
+        const empty = j < 0 || i < 0 || j >= nx || i >= nz || !(top[i * nx + j] === top[i * nx + j]);
+        run = empty ? run + len / steps : 0;
+        if (run > longest) longest = run;
+    }
+    return longest;
+}
+
 /** How much of a 160 x 120 frame the target fills (screen), and the share of that which the context does not hide (seen). */
 function targetShares(target: RenderMesh3D, context: RenderMesh3D, v: { eye: Vec3; headingDeg: number; pitchDeg: number; fovDeg: number }): { screen: number; seen: number } {
     const cam = castCamera({ eye: v.eye, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg, widthPx: 160, heightPx: 120 });
@@ -838,8 +856,12 @@ function targetShares(target: RenderMesh3D, context: RenderMesh3D, v: { eye: Vec
  * A pano with neither under it stands past the reference tile's edge and is not a candidate (as a fixed pose there is not):
  * the tile holds nothing round its camera, so the street it stands on, the buildings beside it and whatever hides the target
  * from it are all missing, and its photo can show a facade a few metres away where the tile sees the target down the street.
+ * Nor is a pano whose sight line to what it aims at crosses empty tile (with the tile's surface grid, `terrain` as a
+ * GroundModel is one): more than two cells in a row with no surface, which the visibility check would see the target through.
+ * One empty cell is allowed: the grid's cells are filled from surface samples 0.6 of a cell apart, so a steep wall can miss one.
+ * Every pano rejected is listed with its reason.
  */
-export function heldOutViews(panos: PanoCandidate[], structure: Structure, context: RenderMesh3D, exclude: Set<string>, terrain?: { groundAt(x: number, z: number): number }): { views: HeldOutCandidateView[]; rejected: string[] } {
+export function heldOutViews(panos: PanoCandidate[], structure: Structure, context: RenderMesh3D, exclude: Set<string>, terrain?: { groundAt(x: number, z: number): number } & Partial<TileTopGrid>): { views: HeldOutCandidateView[]; rejected: string[] } {
     const { cx, cz, radiusM: R, ymin, ymax, openGroundY } = structure;
     const open = openGroundY !== undefined;
     const IV = open ? new Float32Array(0) : structure.mesh.vertices;
@@ -856,7 +878,12 @@ export function heldOutViews(panos: PanoCandidate[], structure: Structure, conte
         let nx = cx, nz = cz, dn = Infinity;
         for (let i = 0; i < IV.length; i += 30) { const dd = Math.hypot(IV[i] - p.x, IV[i + 2] - p.z); if (dd < dn) { dn = dd; nx = IV[i]; nz = IV[i + 2]; } }
         const close = dn < 22;
-        const headingDeg = Math.round(bearingDeg(p.x, p.z, close ? nx : cx, close ? nz : cz) * 10) / 10;
+        const [ax, az] = close ? [nx, nz] : [cx, cz];
+        if (terrain?.top) {
+            const grid = terrain as TileTopGrid, empty = emptyTileAlong(grid, p.x, p.z, ax, az);
+            if (empty > 2 * grid.cellMeters) { rejected.push(`${p.panoId}: ${p.d.toFixed(0)} m, its sight line to the target crosses ${empty.toFixed(1)} m of empty tile`); continue; }
+        }
+        const headingDeg = Math.round(bearingDeg(p.x, p.z, ax, az) * 10) / 10;
         const fovDeg = Math.round(close ? 80 : Math.max(50, Math.min(90, 2 * Math.atan((R * 0.9) / Math.max(1, p.d)) * 180 / Math.PI)));
         const mid = open ? openGroundY : ymin + 0.4 * (ymax - ymin);
         const pitchDeg = Math.round((close ? 12 : Math.max(-5, Math.min(30, Math.atan((mid - eye[1]) / p.d) * 180 / Math.PI))) * 10) / 10;
@@ -876,7 +903,7 @@ export function heldOutViews(panos: PanoCandidate[], structure: Structure, conte
  * the structure, at the first of OPEN_PLACE_RADII_M where at least `want` views qualify, else at the radius where the most do.
  * Geometry alone decides: what stands and lies round the place, never what it is called or coded as.
  */
-export function openPlaceViews(panos: PanoCandidate[], context: RenderMesh3D, terrain: { groundAt(x: number, z: number): number }, exclude: Set<string>, want: number): {
+export function openPlaceViews(panos: PanoCandidate[], context: RenderMesh3D, terrain: { groundAt(x: number, z: number): number } & Partial<TileTopGrid>, exclude: Set<string>, want: number): {
     views: HeldOutCandidateView[]; rejected: string[]; radiusM: number; triangles: number; tried: Array<{ radiusM: number; candidates: number }>;
 } {
     const tried: Array<{ radiusM: number; candidates: number }> = [];
@@ -1789,6 +1816,9 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
             usedPanoSources: builds.usedSources,
             candidates: candidates.length,
             notQualified: rejected.length,
+            // every pano near the target that is not a candidate, and why: past the tile's edge, a sight line over empty tile,
+            // too little of the target in the frame or unhidden
+            rejected,
             // where each candidate's eye stands, 2.5 m up: the reference tile's terrain, else the lowest surface within 1.5 m (a pano
             // with neither stands past the tile's edge and is not a candidate)
             eyeGround: candidates.reduce((n, v) => ({ ...n, [v.eyeGround]: (n[v.eyeGround] ?? 0) + 1 }), {} as Partial<Record<HeldOutEyeGround, number>>),
