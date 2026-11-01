@@ -322,11 +322,57 @@ public:
                 }
             }
 
+            // An edge open in the indices is an outline only when no other edge joins the same two positions: a UV seam,
+            // or the shared edge of a box built from separate faces, is open in the indices but closed in space.
+            // preserveBoundary alone pins outlines only (pinning a closed sphere's seam as well took its Hausdorff error
+            // at half the triangles from 0.48 to 0.64); preserveCreases still pins every edge open in the indices.
+            std::unordered_map<uint64_t, int> weldedEdgeUses;
+            std::vector<uint32_t> weldId;
+            if (!opt.preserveCreases) {
+                Vec3 lo = verts[0].position, hi = verts[0].position;
+                for (const auto& v : verts) {
+                    lo = Vec3(std::min(lo.x, v.position.x), std::min(lo.y, v.position.y), std::min(lo.z, v.position.z));
+                    hi = Vec3(std::max(hi.x, v.position.x), std::max(hi.y, v.position.y), std::max(hi.z, v.position.z));
+                }
+                const float eps = std::max(1e-5f, 1e-6f * (hi - lo).length()), inv = 1.0f / eps;
+                auto cellKey = [](int64_t x, int64_t y, int64_t z) -> uint64_t {
+                    return (static_cast<uint64_t>(x & 0x1fffff) << 42) | (static_cast<uint64_t>(y & 0x1fffff) << 21) | static_cast<uint64_t>(z & 0x1fffff);
+                };
+                // each vertex takes the id of the first vertex within eps of it, searched over the 27 cells around it
+                std::unordered_map<uint64_t, std::vector<uint32_t>> cells;
+                weldId.resize(numVerts);
+                for (uint32_t i = 0; i < numVerts; ++i) {
+                    const Vec3& p = verts[i].position;
+                    int64_t cx = static_cast<int64_t>(std::floor(p.x * inv)), cy = static_cast<int64_t>(std::floor(p.y * inv)), cz = static_cast<int64_t>(std::floor(p.z * inv));
+                    uint32_t id = i;
+                    for (int64_t dx = -1; dx <= 1 && id == i; ++dx)
+                        for (int64_t dy = -1; dy <= 1 && id == i; ++dy)
+                            for (int64_t dz = -1; dz <= 1 && id == i; ++dz) {
+                                auto it = cells.find(cellKey(cx + dx, cy + dy, cz + dz));
+                                if (it == cells.end()) continue;
+                                for (uint32_t j : it->second) if ((verts[j].position - p).length() <= eps) { id = j; break; }
+                            }
+                    weldId[i] = id;
+                    if (id == i) cells[cellKey(cx, cy, cz)].push_back(i);
+                }
+                for (size_t t = 0; t < initialTriCount; ++t)
+                    for (int e = 0; e < 3; ++e) {
+                        uint32_t wa = weldId[triangles[t].v[e]], wb = weldId[triangles[t].v[(e + 1) % 3]];
+                        if (wa != wb) ++weldedEdgeUses[edgeKey(wa, wb)];
+                    }
+            }
+            auto isOutline = [&](uint32_t a, uint32_t b) {
+                if (opt.preserveCreases) return true;
+                if (weldId[a] == weldId[b]) return false; // its ends are one point (a sphere's pole copies)
+                auto it = weldedEdgeUses.find(edgeKey(weldId[a], weldId[b]));
+                return it == weldedEdgeUses.end() || it->second < 2;
+            };
+
             constexpr double CREASE_WEIGHT = 1000.0;
             float creaseCos = std::cos(opt.creaseAngleDeg * static_cast<float>(PI) / 180.0f);
             for (const auto& [key, tris] : edgeTris) {
                 uint32_t a = static_cast<uint32_t>(key >> 32), b = static_cast<uint32_t>(key & 0xffffffffu);
-                bool isCrease = (tris[1] < 0);
+                bool isCrease = (tris[1] < 0) && isOutline(a, b);
                 if (!isCrease && opt.preserveCreases) {
                     float nd = triangles[tris[0]].normal.dot(triangles[tris[1]].normal);
                     isCrease = nd < creaseCos;
