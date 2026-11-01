@@ -396,6 +396,16 @@ export function scanDerivedFootprint(structure: Pick<StructurePickResult, 'outli
     return { id: 'scan-derived-footprint', parts: [], extruded: [{ loops: [structure.outline], heightM: structure.heightM }], provenance: SCAN_FOOTPRINT_TOKEN };
 }
 
+/**
+ * Where a footprint's loops come from, for the run notes: Google's vector footprint only when every building is one of
+ * Google's (a building carrying its own provenance token is not: scanDerivedFootprint's is the scan's outline).
+ */
+export function footprintSource(buildings: ReadonlyArray<Pick<VectorBuilding, 'provenance'>>): string {
+    if (buildings.length && buildings.every(b => b.provenance === undefined)) return 'Google vector footprint';
+    if (!buildings.length || buildings.some(b => b.provenance === SCAN_FOOTPRINT_TOKEN)) return 'scan outline';
+    return [...new Set(buildings.map(b => b.provenance ?? 'Google vector footprint'))].join(' + ');
+}
+
 export const STAGE_IDS = Object.keys(STAGES) as StageId[];
 
 /** The tool's budget is 40 minutes; the run stops starting stages 2 minutes before it. */
@@ -3388,7 +3398,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // footprint loops from extruded parts only: a modelled volume's parts are its triangles seen from above, not
                 // an outline, so without extruded parts the structure's own outline (the pick's) stands in
                 const planLoops = eBuildings.flatMap(b => (b.extruded?.length ? b.extruded.filter(p => !p.planOnly).map(p => p.loops[0]) : [])).filter(l => l && l.length >= 3);
-                cache.writeRunNote(runId, 'structure_scan', { schema: 'scratchbox.structure-scan/1', scanGlb: refined.rawClayGlb, districtGlb: tilePath, groundY: picked.pick.groundY, plan: planLoops.length ? planLoops : [structure!.outline], planSource: planLoops.length ? (eBuildings.some(b => b.provenance === SCAN_FOOTPRINT_TOKEN) ? 'scan outline' : 'Google vector footprint') : 'scan outline', place: placeValue?.formattedAddress ?? request.query });
+                cache.writeRunNote(runId, 'structure_scan', { schema: 'scratchbox.structure-scan/1', scanGlb: refined.rawClayGlb, districtGlb: tilePath, groundY: picked.pick.groundY, plan: planLoops.length ? planLoops : [structure!.outline], planSource: planLoops.length ? footprintSource(eBuildings) : 'scan outline', place: placeValue?.formattedAddress ?? request.query });
                 // Solar roof facets, in the tile frame
                 let solar: Array<{ pitchDeg: number; azimuthDeg: number; planeHeightMsl: number; center: { lat: number; lng: number }; areaM2: number; x: number; z: number; y: number }> = [];
                 let solarNote = 'no Solar roof facets (no API key)';
@@ -3711,11 +3721,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 }
                 // the scan cleaned and its rectified facades rebuilt on their photo's lines before it is textured (remesh-polish.ts)
                 {
-                    // pipeline K: the base cleaned by the structure's footprint (Google's vector footprint, else the scan's own outline)
-                    const kLoops = pipelineK && isolateMode && structure ? (() => {
+                    // pipeline K: the base cleaned by the structure's footprint (Google's vector footprint, else the scan's own outline),
+                    // named by where its loops come from
+                    const kBase = pipelineK && isolateMode && structure ? (() => {
                         const vec = eBuildings.flatMap(b => (b.extruded?.length ? b.extruded.filter(p => !p.planOnly).map(p => p.loops[0]) : [])).filter(l => l && l.length >= 3);
-                        return vec.length ? vec : [structure.outline];
+                        return vec.length ? { loops: vec, source: footprintSource(eBuildings) } : { loops: [structure.outline], source: 'scan outline' };
                     })() : undefined;
+                    const kLoops = kBase?.loops;
                     // pipeline K's polish (the lattice, clip and infill: a minute and more) on a worker thread, in a heap of its own
                     // (remesh-worker-pool.ts), unless SCRATCHBOX_REMESH_WORKERS=0; a lighter polish stays here, short of a thread's start
                     const polishInput: PolishJobInput = { clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: stepOn('polish.lattice', true), photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(wallGrammar ? { wallGrammar } : {}), ...(wallSheets ? { walls: wallSheets } : {}), ...(pipelineK && r.rawClayGlb ? { rawScan: r.rawClayGlb } : {}), ...(revealDepth ? { revealDepth } : {}), ...(kLoops && stepOn('polish.base', true) ? { base: { loops: kLoops, groundY: structure!.groundY } } : {}), ...(pipelineK && stepOn('polish.seal', process.env.SCRATCHBOX_K_SEAL?.trim() === '1') ? { seal: true } : {}), ...(pipelineK && stepOn('polish.clip', process.env.SCRATCHBOX_K_CLIP?.trim() !== '0') ? { clip: true } : {}), ...(pipelineK && stepOn('polish.infill', process.env.SCRATCHBOX_K_INFILL?.trim() !== '0') ? { infill: true } : {}), cleanup: stepOn('polish.cleanup', remeshCleanupEnabled()), orient: stepOn('polish.orient', remeshOrientEnabled()) };
@@ -3738,7 +3750,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             cache.writeRunNote(runId, 'pipeline_k_streetview_score', { failed: true, reason: errorMessage(err) });
                         }
                     }
-                    if (kLoops) cache.writeRunNote(runId, 'pipeline_k_base', { loops: kLoops, groundY: structure!.groundY, footprint: eBuildings.length ? 'Google vector footprint' : 'scan outline', report: pol.stats.base ?? null });
+                    if (kBase) cache.writeRunNote(runId, 'pipeline_k_base', { loops: kBase.loops, groundY: structure!.groundY, footprint: kBase.source, report: pol.stats.base ?? null });
                     if (pol.clayGlb !== r.clayGlb) {
                         run.note(PROVENANCE.remeshed, `remesh polish (${REMESH_POLISH_VERSION}): ${describePolish(pol.stats)}`);
                         r = { ...r, cacheKey: pol.cacheKey, clayGlb: pol.clayGlb, ...(pol.texturedGlb ? { texturedGlb: pol.texturedGlb } : {}) };
