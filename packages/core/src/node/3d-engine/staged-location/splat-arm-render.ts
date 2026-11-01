@@ -17,7 +17,11 @@
  *
  * With labels (one region label per splat) each render also carries `regions`: per pixel, the label of the splat that takes
  * it past half coverage, `skyLabel` where none does. labelSplats gives each splat the label of the nearest labelled triangle
- * (the judge's region labels of the tile the world was built on: its splats lie on that scan).
+ * (the judge's region labels of the tile the world was built on: its splats lie on that scan); splatRegions adds the judge's
+ * own rule from geometry for a splat no triangle is near.
+ *
+ * A splat world lies in the frame of the tile extraction it was built on; splatFrame reads that frame's origin from the
+ * extraction's GLB (named in the world's tileset.meta.json), and splatOffset moves it onto another frame.
  */
 
 import * as fs from 'fs';
@@ -25,11 +29,15 @@ import * as path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import type { PinholeCamera } from '../../../common/spatial/texture-pass-contracts';
+import { LocalTangentPlane } from '../../../common/coordinate/LocalTangentPlane';
 import { NativeCppCompilerService } from '../native-compiler-service';
 import { buildNativeIfStale } from '../native-build';
 import { repoPath } from '../../process/repo-python';
 import { nearestLabelIndex, type TriangleSoup } from '../../spatial/triangle-surface-index';
-import { PHOTO_MATCH_AMBIENT, PHOTO_MATCH_BACKGROUND, PHOTO_MATCH_CLAY, PHOTO_MATCH_NEAR_M, type ArmRender } from './photo-match-eval';
+import {
+    PHOTO_MATCH_AMBIENT, PHOTO_MATCH_BACKGROUND, PHOTO_MATCH_CLAY, PHOTO_MATCH_GROUND_BAND_M, PHOTO_MATCH_NEAR_M, REGION,
+    type ArmRender, type TerrainLookup
+} from './photo-match-eval';
 
 const execFileAsync = promisify(execFile);
 
@@ -48,6 +56,8 @@ export interface SplatArmOptions {
     /** One region label per splat, in the file's order. */
     labels?: Uint8Array;
     skyLabel?: number;
+    /** Metres added to every splat's position as it loads (its frame onto the cameras', splatOffset). */
+    offset?: readonly [number, number, number];
     /** Scratch folder for the manifest and the raw renders; removed afterwards. */
     workDir: string;
     signal?: AbortSignal;
@@ -70,13 +80,15 @@ function checkSplatFile(splatPath: string): void {
     if (!fs.existsSync(splatPath)) throw new Error(`the splat file ${splatPath} does not exist`);
 }
 
-/** The splats' centres, x y z per splat in the file's order. */
-export async function splatPositions(splatPath: string, workDir: string, signal?: AbortSignal): Promise<Float32Array> {
+const offsetLine = (offset?: readonly number[]) => (offset && offset.some(v => v !== 0) ? [`offset ${offset.map(v => v.toFixed(6)).join(' ')}`] : []);
+
+/** The splats' centres, x y z per splat in the file's order (moved by `offset`). */
+export async function splatPositions(splatPath: string, workDir: string, signal?: AbortSignal, offset?: readonly [number, number, number]): Promise<Float32Array> {
     checkSplatFile(splatPath);
     fs.mkdirSync(workDir, { recursive: true });
     try {
         const out = path.join(workDir, 'positions.f32');
-        await runSplatRender([`splats ${splatPath}`, `positions ${out}`], workDir, signal);
+        await runSplatRender([`splats ${splatPath}`, ...offsetLine(offset), `positions ${out}`], workDir, signal);
         const b = fs.readFileSync(out);
         return new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4).slice();
     } finally {
@@ -86,17 +98,97 @@ export async function splatPositions(splatPath: string, workDir: string, signal?
 
 /**
  * One region label per splat: the label of the nearest triangle of `soup` within `maxDist` (point to triangle; `labels` one
- * for all or one per triangle), else `fallback`. Also how many splats took the fallback.
+ * for all or one per triangle), else `fallback` (one label, or one from the splat's position). Also how many splats took the
+ * fallback.
  */
-export function labelSplats(positions: Float32Array, soup: TriangleSoup, labels: number | ArrayLike<number>, fallback: number, maxDist = 0.5): { labels: Uint8Array; fallback: number } {
+export function labelSplats(positions: Float32Array, soup: TriangleSoup, labels: number | ArrayLike<number>, fallback: number | ((x: number, y: number, z: number) => number), maxDist = 0.5): { labels: Uint8Array; fallback: number } {
     const nearest = nearestLabelIndex(soup, labels, maxDist);
     const out = new Uint8Array(positions.length / 3);
     let missed = 0;
     for (let i = 0; i < out.length; i++) {
-        const l = nearest(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
-        if (l < 0) { out[i] = fallback; missed++; } else out[i] = l;
+        const x = positions[i * 3], y = positions[i * 3 + 1], z = positions[i * 3 + 2];
+        const l = nearest(x, y, z);
+        if (l < 0) { out[i] = typeof fallback === 'number' ? fallback : fallback(x, y, z); missed++; } else out[i] = l;
     }
     return { labels: out, fallback: missed };
+}
+
+/** A splat world's labels and what they say about its frame. */
+export interface SplatRegions {
+    labels: Uint8Array;
+    /** Splats per REGION label (sky never). */
+    byLabel: { ground: number; neighbours: number; target: number; trees: number };
+    /** Share of splats no triangle of the reference lay within `maxDist` of (labelled by the rule from geometry). */
+    unmatchedShare: number;
+    /** Median height (m) of the ground-labelled splats over the terrain under them: how far the world's street sits off the reference's. */
+    groundGapM: number | null;
+}
+
+/**
+ * The judge's region labels for a splat world (its splats in the reference frame): each splat the label of the nearest
+ * labelled reference triangle within `maxDist`, else the judge's rule from geometry (triangleRegions on one point): ground
+ * within PHOTO_MATCH_GROUND_BAND_M over the terrain under it, else `standing(x, z)`; off the terrain, `standing` too.
+ */
+export function splatRegions(positions: Float32Array, reference: TriangleSoup, referenceLabels: ArrayLike<number>, terrain: TerrainLookup, standing: (x: number, z: number) => number, maxDist = 0.5): SplatRegions {
+    const byGeometry = (x: number, y: number, z: number) => {
+        const g = terrain.groundAt(x, z);
+        return g === g && y - g <= PHOTO_MATCH_GROUND_BAND_M ? REGION.ground : standing(x, z);
+    };
+    const { labels, fallback } = labelSplats(positions, reference, referenceLabels, byGeometry, maxDist);
+    const byLabel = { ground: 0, neighbours: 0, target: 0, trees: 0 };
+    const gaps: number[] = [];
+    for (let i = 0; i < labels.length; i++) {
+        const l = labels[i];
+        if (l === REGION.ground) {
+            byLabel.ground++;
+            const g = terrain.groundAt(positions[i * 3], positions[i * 3 + 2]);
+            if (g === g) gaps.push(positions[i * 3 + 1] - g);
+        } else if (l === REGION.neighbours) byLabel.neighbours++;
+        else if (l === REGION.target) byLabel.target++;
+        else if (l === REGION.trees) byLabel.trees++;
+    }
+    gaps.sort((a, b) => a - b);
+    return { labels, byLabel, unmatchedShare: labels.length ? fallback / labels.length : 0, groundGapM: gaps.length ? gaps[gaps.length >> 1] : null };
+}
+
+/** Where a splat world's frame sits on the Earth: its origin, ellipsoidal height. */
+export interface SplatFrame { lat: number; lng: number; heightMeters: number; source: string }
+
+/** The JSON chunk of a GLB (its first chunk). */
+function glbJsonOf(file: string): Record<string, any> {
+    const b = fs.readFileSync(file);
+    if (b.length < 20 || b.readUInt32LE(0) !== 0x46546c67) throw new Error(`${file} is not a GLB`);
+    return JSON.parse(b.toString('utf8', 20, 20 + b.readUInt32LE(12)));
+}
+
+/**
+ * The frame of the splat world at `splatPath`: the origin of the tile extraction it was built on, read from that GLB's
+ * extras (anchor.ellipsoidalHeightM), the GLB named by `glbPath` in the world's tileset.meta.json beside the file. The meta's
+ * own anchor.elevationMeters is a height above sea level, not the frame's origin, so it is not used.
+ */
+export function splatFrame(splatPath: string): SplatFrame {
+    const meta = path.join(path.dirname(splatPath), 'tileset.meta.json');
+    if (!fs.existsSync(meta)) throw new Error(`no tileset.meta.json beside ${splatPath}: give the splat world's origin`);
+    const glb = (JSON.parse(fs.readFileSync(meta, 'utf8')) as { glbPath?: unknown }).glbPath;
+    if (typeof glb !== 'string' || !fs.existsSync(glb)) throw new Error(`${meta} names no tile extraction that exists (glbPath ${String(glb)}): give the splat world's origin`);
+    const a = glbJsonOf(glb).extras?.anchor;
+    if (typeof a?.lat !== 'number' || typeof a?.lng !== 'number' || typeof a?.ellipsoidalHeightM !== 'number') {
+        throw new Error(`${glb} records no frame anchor (extras.anchor with ellipsoidalHeightM): give the splat world's origin`);
+    }
+    return { lat: a.lat, lng: a.lng, heightMeters: a.ellipsoidalHeightM, source: `the extras of ${path.basename(glb)}, the tile extraction the world was built on` };
+}
+
+/**
+ * The offset (m, x east, y up, z south) that moves a frame anchored at `from` onto the frame anchored at `to` (both origins
+ * at ellipsoidal heights), and the angle (radians) between their up axes, which the offset leaves out.
+ */
+export function splatOffset(to: { lat: number; lng: number; heightMeters: number }, from: { lat: number; lng: number; heightMeters: number }): { offsetM: [number, number, number]; tiltRad: number } {
+    const plane = new LocalTangentPlane({ lat: to.lat, lng: to.lng, alt: to.heightMeters });
+    const [x, y, z] = plane.toLocal({ lat: from.lat, lng: from.lng, alt: from.heightMeters });
+    const d2r = Math.PI / 180;
+    const up = (p: { lat: number; lng: number }) => [Math.cos(p.lat * d2r) * Math.cos(p.lng * d2r), Math.cos(p.lat * d2r) * Math.sin(p.lng * d2r), Math.sin(p.lat * d2r)];
+    const a = up(to), b = up(from);
+    return { offsetM: [x, y, z], tiltRad: Math.acos(Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])) };
 }
 
 /** Renders the splat file at `splatPath` from each of `views`; one ArmRender per view, in order. */
@@ -109,6 +201,7 @@ export async function renderSplatArm(splatPath: string, views: SplatArmView[], o
         const f = (v: ArrayLike<number>) => Array.from(v, x => Number(x).toFixed(6)).join(' ');
         const lines = [
             `splats ${splatPath}`,
+            ...offsetLine(opts.offset),
             `light ${PHOTO_MATCH_AMBIENT} ${PHOTO_MATCH_BACKGROUND.join(' ')} ${PHOTO_MATCH_NEAR_M}`,
             `clay ${PHOTO_MATCH_CLAY.albedo.join(' ')} ${PHOTO_MATCH_CLAY.ambient} ${PHOTO_MATCH_CLAY.background.join(' ')}`
         ];

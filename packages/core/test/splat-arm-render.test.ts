@@ -11,8 +11,8 @@ import { describe, it, expect, afterAll } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { labelSplats, renderSplatArm, splatPositions } from '../src/node/3d-engine/staged-location/splat-arm-render';
-import { PHOTO_MATCH_AMBIENT, PHOTO_MATCH_BACKGROUND, PHOTO_MATCH_CLAY } from '../src/node/3d-engine/staged-location/photo-match-eval';
+import { labelSplats, renderSplatArm, splatPositions, splatRegions } from '../src/node/3d-engine/staged-location/splat-arm-render';
+import { PHOTO_MATCH_AMBIENT, PHOTO_MATCH_BACKGROUND, PHOTO_MATCH_CLAY, PHOTO_MATCH_GROUND_BAND_M, REGION } from '../src/node/3d-engine/staged-location/photo-match-eval';
 import { projectSplatEwa } from '../src/common/spatial/splat-ewa-projection';
 import type { PinholeCamera } from '../src/common/spatial/texture-pass-contracts';
 
@@ -140,4 +140,33 @@ describe('renderSplatArm', () => {
         expect(syy / sxx).toBeGreaterThan(0.2);
         expect(syy / sxx).toBeLessThan(0.3);
     }, 120000);
+    it('moves every splat by an offset as it loads, in the render and in the centres', async () => {
+        // a metre west: the sheet's 100 px span moves 50 px left (fx 1 / z 10)
+        const [r] = await renderSplatArm(sheet, [{ camera: CAM }], { workDir: path.join(WORK, 'w4'), offset: [-1, 0, 0] });
+        expect(r.coverage[60 * r.width + 5]).toBeGreaterThan(0.99);
+        expect(r.coverage[60 * r.width + 105]).toBe(0);
+        const moved = await splatPositions(sheet, path.join(WORK, 'w5'), undefined, [-1, 0.5, 2]);
+        expect([moved[0], moved[1], moved[2]].map(v => Math.round(v * 1000) / 1000)).toEqual([list[0].p[0] - 1, list[0].p[1] + 0.5, list[0].p[2] + 2]);
+    }, 120000);
+});
+
+describe('splatRegions', () => {
+    it('labels a splat by the nearest reference triangle, else by the judge\'s rule from geometry, and measures its street\'s height', () => {
+        // the reference: one ground triangle (x 0..10, z 0..10) labelled ground, one wall triangle over it labelled target
+        const reference = { positions: Float32Array.from([0, 0, 0, 10, 0, 0, 0, 0, 10, 0, 0, 0, 0, 10, 0, 10, 0, 0]) };
+        const terrain = { groundAt: (x: number, z: number) => (x >= -20 && x <= 40 && z >= -20 && z <= 40 ? 0 : NaN) };
+        const positions = Float32Array.from([
+            2, 0.04, 2,                                   // on the ground triangle, 4 cm up: ground, by the triangle
+            1, 5, 0.1,                                    // on the wall: target, by the triangle
+            30, PHOTO_MATCH_GROUND_BAND_M / 2, 30,        // far from both, low over the terrain: ground, by the rule
+            30, 8, 30,                                    // far from both, standing: the standing rule (neighbours here)
+            100, 8, 100                                   // off the terrain: the standing rule
+        ]);
+        const r = splatRegions(positions, reference, [REGION.ground, REGION.target], terrain, (x, z) => (x < 50 ? REGION.neighbours : REGION.trees));
+        expect(Array.from(r.labels)).toEqual([REGION.ground, REGION.target, REGION.ground, REGION.neighbours, REGION.trees]);
+        expect(r.byLabel).toEqual({ ground: 2, neighbours: 1, target: 1, trees: 1 });
+        expect(r.unmatchedShare).toBeCloseTo(3 / 5, 6);
+        // the median of the ground splats' heights over the terrain (0.04 and half the band)
+        expect(r.groundGapM).toBeCloseTo(Math.max(0.04, PHOTO_MATCH_GROUND_BAND_M / 2), 4);
+    });
 });
