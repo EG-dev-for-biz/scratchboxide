@@ -168,6 +168,77 @@ outcome, make the paid call, then record and commit.
 
 Values written as they are fixed.
 
+- **The ESB's paid call on the fixed judge**: eval `empire_state_building_20_w_34th__20261101T070440_fd3a`. Images are
+  in `docs/screenshots/m1_prereg/esb_paid_fixed/`. The server was restarted on 108e37fb with the ESB's cache at the
+  build-time path and `SCRATCHBOX_CACHE_RESTORE=off`.
+  - **Views.** 8 fetched (amendment 7's list), 5 registered, 4 judged. No eye under the street.
+    - Judged: VqOxFz9R (2024-09, 83 m), w4nU8TkI (90 m), uPcMge9M (92 m), hi-cmKU8 (127 m), the last three 2026-04.
+    - Not registered: G8sOFZp8 (12 to 6.4 px), QcCvIfC8 and Q1IjAWuz (12 to 12 px).
+    These are the same views as the first ESB call.
+  - **The view checks, by code.**
+    - The tile ends inside the frame in v1 (10.1%), v2 (5.2%) and v3 (4.7%). These are the three views the first run
+      listed by hand.
+    - v3 also holds no ground.
+    - So bars 2 to 4 rest on v0, as before, and bars 1 and 5 on all four views.
+  - **Bars.**
+
+    | Bar | Views | Value | Result |
+    |---|---|---|---|
+    | 1 | 4 | mean runSd 0.35 (raw 0.47, K 0.35, X1 0.12, X2 0.47) | met |
+    | 2 | v0 | ground 0.00, neighbours 0.35, skyline 0.76 | met |
+    | 3 | v0 | ground: K 5.00, X1 3.00, gap 2.00; neighbours: K 6.33, X1 3.00, gap 3.33 | met |
+    | 4 | v0 | X1 agreement: ground 0.02, neighbours 0.00 | met |
+    | 5 (placement) | 4 | errorPx raw 3.64, K 5.34, X2 14.03; X2 − K 8.70, D 4.5 | met |
+    | 7 | 4 | 1.00 in every view | met |
+    | 8 | - | `matchedShare` 0.996 | met |
+
+  - **Placement per view** (errorPx; the best shift in brackets):
+
+    | View | raw | K | X2 |
+    |---|---|---|---|
+    | v0 | 3.62 | 8.16 [-5, -7] | 19.00 [36, -40] |
+    | v1 | 3.27 | 5.54 [0, 1] | 12.14 [0, -7] |
+    | v2 | 3.70 | 3.60 [1, 2] | 11.48 [-10, -1] |
+    | v3 | 3.95 | 4.05 [1, 4] | 13.51 [-11, 24] |
+
+    X2 stands 6.9 to 10.8 px further from the photo's silhouette than K in every view. The raw scan sits 3.3 to 4.0 px
+    from it: the registration's residual and the photo's edges.
+  - **The judge, deciding nothing.** On the building, K against X2 scores:
+    - overall 4.75 against 4.00 (gap 0.75);
+    - shape 5.67 against 4.75 (gap 0.92);
+    - clay shape 5.33 against 4.33 (gap 1.00).
+
+    The raw scan's overall is 6.75. The judge still barely sees the 4 m move; the edges do.
+  - **Cost.** Judge: 24 calls, all answered by `gemini-4-argon`: 141,989 tokens in, 4,592 out and 31,100 thinking; $0.64.
+    Grounding: 8 images, about $0.06. No 403, spend-cap or failed call.
+  - **No stop rule fired.** The run goes on to the Haughwout Building.
+
+- **The era check at the Ferry Building** (amendment 7's method). The 8 views the paid call will fetch were fetched
+  through the app, and each was set beside the tile at its stand-in pose. Pairs are in
+  `docs/screenshots/m1_prereg/era_check/ferry/`. **All 8 are kept.** Every photo shows the building the tile holds: the
+  arcade along the Embarcadero, the clock tower, the bays and the massing.
+
+  | View | Photo date | Distance from the origin | Kept, and why |
+  |---|---|---|---|
+  | ZR9VHLtY h53 | 2026-09 | 32 m | kept: the same arched bays and entrance as the tile |
+  | tDezGI3E h104 | 2025-05 | 142 m | kept: the arcade and tower behind the palms, as in the tile |
+  | XL-oDO4u h334 | 2026-09 | 112 m | kept: the tower and the north arcade; a construction fence at the right where the tile has market tents (temporary) |
+  | 4sXa5k8s h121 | 2026-09 | 62 m | kept: the tower and the arcade's corner, as in the tile |
+  | nF68xO_p h61 | 2025-05 | 102 m | kept: the arcade across the plaza; a palm trunk in front in both |
+  | dl-5J1q- h28 | 2025-05 | 137 m | kept: the tower over the plaza and its spheres, as in the tile |
+  | z6iR0rUI h14 | 2026-09 | 50 m | kept: the tower and the main facade; market tents in the tile only (temporary) |
+  | GOgaHhj9 h133 | 2026-09 | 118 m | kept: the tower up the Embarcadero, as in the tile |
+
+- **The era check at the Haughwout Building.** Of its 8 views:
+  - **5 show the building the tile holds:** the cast-iron arcades and the corner clock. The storefront signs differ.
+    These are Q9Oq9D-1 h18, 1qMtd3bC h109, iqiqiEgp h183, dXtEY_Zc h63 and AHxVmFrj h105, all 2026-04.
+  - **3 do not show the building at all:** EZhhT_bT h256 (80 m), ChWZuxgr h343 (72 m) and 3rYZd7kq h298 (56 m).
+    - Each pano stands past the tile's edge, its eye at the structure's base.
+    - Each photo is filled by a building a few metres from the camera that the tile does not hold: a cast-iron
+      storefront, a brick wall with murals, a glass front. The tile at the same pose shows the Haughwout down the street.
+    - With no target in the photo, its era cannot be read. These views are dropped and swapped by amendment 7's method:
+      the dry run is made again with them excluded, and the new views are fetched and checked before the paid call.
+
 ## Report
 
 After the last place:
