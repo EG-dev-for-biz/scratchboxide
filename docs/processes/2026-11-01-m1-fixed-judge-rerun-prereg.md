@@ -256,6 +256,38 @@ Values written as they are fixed.
   - **Photos fetched for the check:** 14 (8 + 3 + 2 + 1), about $0.10.
   - **Placement on the final list (stand-ins):** mean errorPx raw 3.85, K 12.16, X2 19.88, a gap of 7.72. Half of it,
     3.9, is under the preregistered D of 6.3, so D stays 6.3.
+- **A rule this preregistration carried over without saying so: amendment 3.** "Everything else the same" keeps amendment
+  3. A place whose `matchedShare` is under 0.99 stays out of bars 1 and 5 (the building) and counts in bars 2, 3, 4 and 7.
+  - The Haughwout (0.875) and the Ferry Building (0.862) are such places. Their bar-5 D values above should have said
+    so.
+  - Their placement and building numbers are reported as information. Bar 5 rests on the ESB.
+- **The Haughwout's paid call**: eval `e_v_haughwout_building_488_broad_20261101T071808_fff2`, on a server restarted
+  with its cache at the build-time path. Images are in `docs/screenshots/m1_prereg/haughwout_paid_fixed/`.
+  - **Views.** 8 fetched (the swapped list), 5 registered, 4 judged. No eye under the street.
+    - Judged: hN4AIglX (37 m), dXtEY_Zc (39 m), iqiqiEgp (43 m) and uHC_00kK (57 m), all 2026-04. Their edge residuals
+      went from 12 px to 1.2 to 4.6 px.
+    - Not registered: Q9Oq9D-1, AHxVmFrj and omuGS9re (12 to 12 px).
+  - **The tile ends inside every judged frame:** 11.3%, 11.8%, 9.9% and 22.0%. The mask grids bear it out: the photos
+    show buildings down Broadway and Broome St where the masks show sky. So no region was asked of the judge, and bars 2
+    to 4 are untested at the Haughwout.
+  - **Bars.**
+
+    | Bar | Value | Result |
+    |---|---|---|
+    | 1 | mean runSd 0.41 (raw 0.53, K 0.44, X1 0.35, X2 0.32) | met; out of the bars by amendment 3 |
+    | 2, 3, 4 | no view within the tile | untested |
+    | 5 (placement) | errorPx raw 3.67, K 8.47, X2 15.80; X2 − K 7.34 (D 6.3) | met; out of the bars by amendment 3 |
+    | 7 | 1.00 in every view | met |
+    | 8 | `matchedShare` 0.875 | missed, as in the dry run (amendment 3) |
+
+    Placement per view (errorPx, raw / K / X2): hN4AIglX 3.44 / 11.66 / 17.49; dXtEY_Zc 3.84 / 4.86 / 13.06;
+    iqiqiEgp 3.72 / 6.93 / 16.64; uHC_00kK 3.69 / 10.42 / 16.02. X2 is above K in every view, by 5.6 to 9.7 px.
+  - **The judge, information only.** Overall: raw 3.92, K 3.50, X1 2.75, X2 2.67. Clay shape: raw 5.83, K 4.33,
+    X2 3.50.
+  - **Cost.** Judge: 24 calls, all `gemini-4-argon`: 142,738 tokens in, 4,222 out and 31,257 thinking; $0.64.
+    Grounding: 8 images, about $0.06. No 403 or failed call.
+  - **No stop rule fired.** Bars 3 and 4 are untested, not missed, and bar 5 is out by amendment 3. On to the Ferry
+    Building.
 
 ## Report
 
