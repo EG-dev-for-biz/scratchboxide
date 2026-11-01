@@ -527,3 +527,128 @@ D is half the mean X2 − K gap, and at least 2 px, as before.
 - **The judge's scores and bars 1 to 4, 7 and 8 are unchanged.** The change touches placement only.
 - **Images.** `docs/screenshots/k_outline_placement/placement_old_new.png` (gitignored) charts the old against the new
   per arm, as the judge now reads these runs.
+
+## Amendment 2 (2026-11-01): Google's footprint fetched at judging time
+
+The user decided that the judge fetches Google's vector footprint itself when the reference run recorded none, relayed by
+the main session. The sections above stand as written. This section gives the change, a correction to the amendment
+above, and the numbers on it. No judge call was made. The fetch read 12 Google vector tiles, under $0.10 against the
+estimate of under $0.10.
+
+### The change (branch `fix/judge-fetch-footprint`)
+
+- **The fetch** (da6a2c29). The judge's deps gain an optional `footprints(place, radiusM)` with the orchestrator's
+  signature.
+  - It runs only when the reference recorded no vector stage, at the reference origin, over at least 100 m and the
+    isolate's reach.
+  - The result is read exactly as a recorded footprint: footprintLookup, the target pick at the place, and pipeline K's
+    20% fit rule.
+  - A recorded vector stage still comes first.
+  - A fetch that fails or finds nothing leaves the whole isolate, with the reason; the evaluation never fails on it.
+  - `placement.reference.footprint.source` says "fetched at judging time" or "from the reference run's vector stage", and
+    `placement.reference.footprintFetch` gives the radius and what was found.
+  - Fetches are cached by place and radius.
+- **The default reads the tiles as the structure pick does** (5c9e0d43).
+  - The brief named facade-footprints.ts `fetchFootprints`. That function keeps Google's extruded areas only.
+  - The Ferry Building is a modelled 3D volume, so it has no footprint there: the fetch returned 4 low buildings round the
+    plaza and none for the target.
+  - The default now reads the same feature tiles through vector-footprints.ts `fetchVectorEvidence`, as the staged tool's
+    structure pick does at build time: extruded areas, plan-only footprints, and modelled volumes read as their plan.
+  - Same tiles, same service account, no other source.
+
+### A correction to the amendment above
+
+K's `pipeline_k_base` note says "Google vector footprint" at all three places, but at the ESB and the Ferry its loops are
+the scan's own outline.
+- **The evidence:** every corner lies on the 1 m cell grid.
+- **The cause:** the orchestrator writes that label for any footprint K used, including its scan-derived fallback
+  (`scanDerivedFootprint`).
+- **What it corrects:** only the Haughwout's recorded footprint is Google's. The "for information: with Google's
+  footprint" numbers above are therefore Google's at the Haughwout, but the scan's outline at the ESB and the Ferry.
+
+### The footprints fetched
+
+| Place | Google feature | How Google models it | Plan area | IoU with the picked structure | Fit rule (misfit) | Isolate kept | Reference |
+|---|---|---|---|---|---|---|---|
+| ESB | 17/38598/49263/f31 | a 3D volume | 7,698 m² | 0.951 | passes (0.001) | 103,022 of 105,452 triangles | within the footprint |
+| Ferry | 17/20974/50652/f26 | a 3D volume, in two tiles (f75 and f26 share one extent; the pick takes f26) | 10,507 m² | 0.972 | **fails (0.688)** | - | the whole isolate (fallback) |
+| Haughwout | 17/38593/49276/f100 | an extruded footprint | 583 m² | 0.885 | passes (0.027) | 6,355 of 7,219 triangles | within the footprint |
+
+- **The Haughwout: the neighbour's slice is now left out.** The fetched footprint keeps exactly the triangles K's recorded
+  Google footprint kept. Rendered over the four real photos, the isolate left out of the reference is the neighbour's
+  storefront and upper bay on Broome St (v0 and v3) and thin strips along the building's edges.
+- **The ESB: the footprint cuts a little of the real building.** Google's volume stands a few decimetres inside the
+  scanned storefronts. The 4,343 m² left out lies just past the footprint's edges: 2,362 m² under 3 m (the storefronts'
+  base) and 1,345 m² at 3 to 15 m. Rendered, it is a thin line along the base and one storefront end.
+- **The Ferry: no footprint is used.** The pick takes one tile's piece of the building's volume, which covers too little
+  of the tower, so the fit rule rejects it.
+
+### Old and new, on the real photos (as the judge now reads them)
+
+Mean errorPx over the four judged views. "Old" is the run record. "New" has the fetched footprint where it fits.
+
+| Place | raw as built | raw clipped (information) | K | X1 | X2 | X2 − K |
+|---|---|---|---|---|---|---|
+| ESB | 3.64 → 3.96 | 3.63 | 5.34 → 4.53 | 5.34 → 4.53 | 14.03 → 13.91 | 8.69 → **9.38** |
+| Ferry | 2.91 → 3.19 | - | 6.48 → 4.68 | 6.48 → 4.68 | 15.67 → 15.55 | 9.19 → **10.87** |
+| Haughwout | 3.67 → 6.63 | 3.71 | 8.47 → 4.13 | 8.47 → 4.13 | 15.80 → 15.63 | 7.33 → **11.50** |
+
+- **"Raw clipped"** is the scan clipped to the fetched footprint, as information only. The Ferry has none, since no
+  footprint fits there.
+- **X2 − K per view:**
+  - ESB: 13.30, 6.44, 8.32, 9.46;
+  - Ferry: 13.22, 9.40, 14.13, 6.70;
+  - Haughwout: 14.42, 8.09, 12.48, 11.02.
+
+  X2 stays above K in every view.
+- **The Haughwout.** The neighbour's slice now counts against the raw scan (6.63), and K comes to within 0.5 px of the
+  scan clipped to the footprint.
+- **The ESB.** The cut costs K and the raw scan about 0.4 to 0.5 px against the measure with no footprint (K 4.05, raw
+  3.57).
+
+### D on this measure: the stand-in dry run redone
+
+| Place | raw / K / X2, old | raw / K / X2, new | X2 − K per view, new | D, old | **D, new** |
+|---|---|---|---|---|---|
+| ESB | 2.18 / 7.55 / 16.57 | 5.69 / 6.96 / 11.48 | 5.98, **−10.40**, 16.75, 5.72 | 4.5 | **2.3** |
+| Haughwout | 2.77 / 5.89 / 18.54 | 3.89 / 3.27 / 17.81 | 11.70, 11.99, 19.94 (v0 has no placement) | 6.3 | **7.3** |
+| Ferry | 2.55 / 6.20 / 14.77 | 2.68 / 5.90 / 15.06 | 11.88, 9.59, 12.06, 3.09 | 4.3 | **4.6** |
+
+**The ESB's stand-in v1 inverts.** v1 (Q1IjAW, 52 m) is all facade: its target fills 94% of the frame, so its outline is
+almost only the base line.
+- The footprint cuts a strip off the scanned base, so the reference's outline there is the cut line, where the photo
+  shows no edge.
+- K, drawn whole down to the street, is then 16.2 px off, and X2 5.8.
+- The other three views keep X2 well above K.
+- This is a cost of reading the silhouette along a cut: a restriction that removes part of the real building adds outline
+  the photo does not have.
+
+### What bar 5 reads now
+
+| Place | X2 − K | D | Bar 5 |
+|---|---|---|---|
+| ESB | 9.38 | 2.3 | **met** |
+| Haughwout | 11.50 | 7.3 | met; information only (amendment 3) |
+| Ferry | 10.87 | 4.6 | met; information only (amendment 3) |
+
+Bar 5 holds at all three places. At the ESB it holds against a D the cut has lowered from 5.5 to 2.3.
+
+### For information: a rule against cut lines (not built)
+
+The rule: read the silhouette only where the restricted reference's outline is also the whole isolate's, within 1.5 px. A
+restriction then removes outline (the debris) but never adds any (a cut line). It was computed offline with the same
+renders, and is not in the judge.
+
+| | ESB, real photos | ESB, stand-in dry run | Haughwout, real photos | Haughwout, stand-in dry run |
+|---|---|---|---|---|
+| raw as built | 3.96 → 3.41 | 5.69 → 2.03 | 6.63 → 3.46 | 3.89 → 2.73 |
+| K | 4.53 → 4.55 | 6.96 → 4.12 | 4.13 → 4.01 | 3.27 → 3.05 |
+| X2 − K | 9.38 → 10.00 | 4.52 → 8.53 (v1 no longer read) | 11.50 → 11.35 | 14.54 → 16.07 |
+| D from it | - | 2.3 → 4.3 | - | 7.3 → 8.0 |
+
+- **What it fixes:** the ESB's stand-in v1. With the cut line gone, too little outline is left there to read, so the view
+  gives no placement instead of an inverted one.
+- **What it costs:** the raw arm's debris no longer counts against it. At the Haughwout the raw scan reads 3.46 rather
+  than 6.63, because the boundary between the building and the neighbour's slice is not in the whole isolate's outline.
+  That goes against the decision that scan pieces past the footprint count against the raw arm.
+- **The choice is the main session's.**
