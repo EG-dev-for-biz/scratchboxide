@@ -361,6 +361,25 @@ Values written as they are fixed.
     - **The Haughwout:** its 8 such candidates go, the 6 dropped here among them. VVmGDj2p, 4rnMoRUG and nygqgDGF come
       in.
   - **Nothing above is redone.** The results stand as run. A later run on this code era-checks its own new views.
+- **Then, at the main session's request, the sight line too** (the next commit). From the tile's surface grid alone:
+  - a candidate is also refused when its sight line to what it aims at crosses more than two cells (2 m) of tile with no
+    surface;
+  - one empty cell is allowed, because the grid is filled from samples 0.6 of a cell apart;
+  - every refused pano is listed with its reason in `heldOut.rejected`.
+
+  **Free dry runs on the same caches:**
+
+  | Place | Refused past the edge | Refused for the sight line | The named views | The views the era checks kept |
+  |---|---|---|---|---|
+  | ESB | 5 | 1: N1m-DWz1, 123 m, crossing 34.0 m of empty tile; never in a fetch list | w4nU8T refused | 5 of 8 still candidates. Wf4-XFAA (130 m) and hi-cmKU8 (127 m) are refused as well: they too stand past the edge |
+  | Haughwout | 24 | 0 | all six refused | 6 of 8 still candidates. 1qMtd3bC (72 m) and uHC_00kK (57 m) are refused as well: they were the 2 candidates left on the structure's base in the swaps |
+  | Ferry | 2 | 0 | - | all 8 still candidates, and the same 8 are fetched |
+
+  - **Four views the era checks kept are refused by the same rule** as the seven the main session named. Their photos
+    showed the target: two look up at the ESB's tower over the rooftops, two look down a street at the Haughwout.
+  - **The tile cannot tell them from the six bad Haughwout views.** It holds nothing round any of their cameras, so
+    whether a building stands in front is not measured. Keeping them would need another measured source of what stands
+    there, such as Google's vector building footprints.
 - **Cost of this rerun.**
 
   | Place | Judge | Grounding | Era-check photos | Total |
