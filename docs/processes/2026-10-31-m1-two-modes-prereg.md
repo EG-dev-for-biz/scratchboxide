@@ -863,3 +863,36 @@ Values the procedure above fills in, written as they are fixed. Each is written 
       1.00, 0.83, 1.00, 0.94 and 1.00.
 
     Penn 2 is stopped on this rule, as written, until a decision.
+  - **Resolved by amendment 6** (the user accepted the lift).
+- **Penn 2's paid call** (eval `2_pennsylvania_plaza_new_york_ny_20261101T012152_1a3e`; images in
+  `docs/screenshots/m1_prereg/penn2_paid/`).
+  - **Views: 3 judged.** Poses A and B (pano feKTMhN8YAZUGcqdatV7rw, 2026-04) and one automatic view
+    (VVmScUGcit0trRrsom8QVw). Of the 19 panos near the place, 13 were used by the builds and 15 did not qualify, which
+    left one candidate. Every fetched view registered. With fewer than 6 judged views, bar 6 is indicative only.
+  - **Bars.**
+
+    | Bar | Value | Result |
+    |---|---|---|
+    | 1 | mean runSd 0.23 (per arm 0.16 to 0.47) | met |
+    | 2 | ground 0.20, neighbours 0.40, skyline 0.40 | met |
+    | 3 | ground: K 3.56, X1 2.78, gap 0.78; neighbours: K 5.22, X1 2.89, gap 2.33 | **missed** (ground) |
+    | 4 | X1 agreement: ground 0.035, neighbours 0.454 | **missed** (neighbours) |
+    | 5 | over poses A and v2 (B is under 6% target): overall gap 0.50, shape 0.17, clay shape 0.33 | **missed** |
+    | 6 | DM-DS gap 0.00; DM-KD and DS-KD gap 1.34 for KD (spreads 0.31), one way in 2 of 3 views | indicative only |
+    | 7 | 1.00 in every view | met |
+    | 8 | `vector-footprint`, 5,598 m² | met |
+
+  - **Why the decoys pass.** In pose A the 2026-04 photo shows the station's new entrance: a canopy under a glass roof.
+    The tiles show the earlier entrance, a dark wall with the station's lettering, nearer the camera. Every arm draws the
+    tiles' wall, so every arm scores 3 to 4 there, and the ground and building gaps between K and the decoys close.
+  - **Bar 4's neighbours miss is the masks, not the judge.** X1 is K's isolate as a whole place, and K's isolate holds the
+    station frontage round Penn 2 (amendment 6): 383,059 of its standing triangles lie outside the footprint and are
+    labelled neighbour, so X1 agrees with the reference's neighbours there.
+  - **Cost.** Judge: 18 calls, all answered by `gemini-4-argon`: 167,922 tokens in, 5,791 out, 19,971 thinking; $0.59 at
+    $2 / $10 per million, thinking billed as output. Street View grounding: 5 images (the two pose photos for the sign
+    check and the 3 views), about $0.03. No 403, spend-cap or failed call.
+  - **The stop rule fired** ("A decoy that passes"). The run stopped before the benchmark places, and nothing was changed.
+- **The user's decision after Penn 2's stop (2026-10-31): "Run the benchmarks".** Penn 2 is recorded as stopped: its
+  decoys pass where the tiles and the photo show the station's entrance from different eras. The four benchmark places
+  are judged as preregistered, with no change to the judge, the views, the bars or the builds. Their stop rules stand: a
+  decoy that passes at a benchmark place stops the run there.
