@@ -755,6 +755,124 @@ After the single paid run:
 - Give the two decisions named in the question.
 - Attach the grids and mask grids.
 
+### The result: stopped at the ESB, reported as it stands (2026-10-31)
+
+The run stopped twice on "A decoy that passes": at Penn 2 (X1, bars 3 and 4) and at the ESB (X2, bar 5). The user then
+chose "Stop and report". Two places were judged. The Haughwout Building, the Ferry Building and Griffith Observatory were
+built fresh and dry-run, but were never era-checked or judged. The main session left Penn 2 out of the benchmark run;
+its numbers are given here as recorded, and they decide nothing alone.
+
+- **The two decisions.**
+  1. **The M1 exit is not met.**
+     - The judge is repeatable: bars 1 and 2 are met at both places. The building's spread is 0.21 to 0.23, and no
+       region's is over 0.40.
+     - It does not rank known-bad builds clearly lower. At Penn 2, X1 is not 2.0 below K on the ground. At the ESB, X2
+       is not 1.0 below K on the building.
+     - So, as the question says, the judge or its views are fixed before any milestone is judged by them. Its region
+       scores do not yet become the measure for M2 to M8.
+  2. **M2's neighbours are not decided by this run.**
+     - Bar 6 is indicative only, with 3 judged views.
+     - KD's neighbours score 1.34 above DM's and DS's, wider than either spread (0.31). The gap is one way in 2 of the
+       3 views and a tie in pose A, where the photo and the tiles show the station's entrance from different eras.
+     - DM's massing rebuilt none of its 8 buildings (see "DM and DS are one build at Penn 2"), so DM was not a massing
+       arm here.
+     - By the question's rule, massing stays the default, because no arm beats it under bar 6. This run is no evidence
+       for or against massing itself.
+- **The bars.** At Penn 2 the tile-edge listing was not made in its run record. Read from the mask grids now, pose B's
+  sky mask lies over a building at its top right, the dark facade by the street sign, where the reference tile ends. So
+  pose B is left out of bars 2 to 4 below. Over v0 and v2 alone, bars 3 and 4 miss by more than over all three views,
+  and the stop stands. At the ESB, bars 2 to 4 rest on v0 (see the ESB's paid call).
+
+  | Bar | Penn 2 | Result | ESB | Result |
+  |---|---|---|---|---|
+  | 1, building run spread | 3 views: raw 0.16, DM 0.16, DS 0.16, KD 0.31, K 0.47, X1 0.16, X2 0.16; mean 0.23 | met | 4 views: raw 0.24, K 0.12, X1 0.12, X2 0.35; mean 0.21 | met |
+  | 2, region run spread | v0, v2: ground 0.17, neighbours 0.36, skyline 0.37 | met | v0: ground 0.00, neighbours 0.24, skyline 0.24 | met |
+  | 3, X1 against K (judge) | v0, v2: ground K 3.33, X1 3.00, gap 0.33; neighbours K 4.67, X1 3.17, gap 1.50 | **missed** | v0: ground K 5.00, X1 3.00, gap 2.00; neighbours K 6.33, X1 3.00, gap 3.33 | met |
+  | 4, X1 agreement | v0, v2: ground 0.05, neighbours 0.68 | **missed** (neighbours) | v0: ground 0.02, neighbours 0.00 | met |
+  | 5, X2 against K | poses A and v2 (B is under 6% target): overall K 3.50, X2 3.00, gap 0.50; shape 3.33 / 3.17, gap 0.17; clay shape 3.50 / 3.17, gap 0.33 | **missed** | 4 views: overall 5.08 / 4.58, gap 0.50; shape 5.25 / 4.50, gap 0.75; clay shape 5.67 / 4.58, gap 1.09 | **missed** |
+  | 6, DM-DS (neighbours) | gap 0.00; spreads 0.31 / 0.31; tied in all 3 views | indicative: the judge cannot tell | - | - |
+  | 6, DM-KD (neighbours) | 3.55 against 4.89, gap 1.34 for KD; spreads 0.31 / 0.31; KD higher in 2 views, tied in 1 | indicative | - | - |
+  | 6, DS-KD (neighbours) | as DM-KD (DM and DS scored alike in every view) | indicative | - | - |
+  | 7, raw frame agreement | 1.00 in all 3 views | met | 1.00 in all 4 views | met |
+  | 8, the target | `vector-footprint`, 5,598 m² | met | `matchedShare` 0.996 | met |
+
+  Bar 5 asks for the gap "at all but one judged place". With the ESB the only benchmark place judged, it is read per
+  place, as the stop rule reads it.
+
+  Every arm's judge scores, mean ± run spread over all the place's judged views:
+
+  | Place | Arm | Overall | Shape | Clay shape | Ground | Neighbours | Skyline |
+  |---|---|---|---|---|---|---|---|
+  | Penn 2 | raw | 4.56 ± 0.16 | 4.56 ± 0.16 | 3.67 ± 0.31 | 3.67 ± 0.00 | 5.55 ± 0.31 | 6.00 ± 0.31 |
+  | Penn 2 | DM | 4.11 ± 0.16 | 4.33 ± 0.00 | 3.78 ± 0.47 | 4.67 ± 0.31 | 3.55 ± 0.31 | 4.33 ± 0.47 |
+  | Penn 2 | DS | 4.11 ± 0.16 | 4.33 ± 0.00 | 3.78 ± 0.47 | 4.67 ± 0.31 | 3.55 ± 0.31 | 4.33 ± 0.47 |
+  | Penn 2 | KD | 4.45 ± 0.31 | 4.56 ± 0.16 | 4.33 ± 0.59 | 4.56 ± 0.47 | 4.89 ± 0.31 | 5.45 ± 0.31 |
+  | Penn 2 | K | 4.22 ± 0.47 | 3.89 ± 0.16 | 3.56 ± 0.47 | 3.56 ± 0.16 | 5.22 ± 0.63 | 5.11 ± 0.47 |
+  | Penn 2 | X1 | 2.78 ± 0.16 | 2.78 ± 0.16 | 3.45 ± 0.59 | 2.78 ± 0.16 | 2.89 ± 0.31 | 3.00 ± 0.31 |
+  | Penn 2 | X2 | 3.89 ± 0.16 | 3.78 ± 0.16 | 3.33 ± 0.31 | 3.33 ± 0.00 | 5.22 ± 0.59 | 4.78 ± 0.47 |
+  | ESB | raw | 6.34 ± 0.24 | 6.59 ± 0.24 | 3.83 ± 0.47 | 4.83 ± 0.12 | 5.75 ± 0.24 | 6.17 ± 0.24 |
+  | ESB | K | 5.08 ± 0.12 | 5.25 ± 0.24 | 5.67 ± 0.35 | 4.83 ± 0.12 | 5.75 ± 0.24 | 6.08 ± 0.12 |
+  | ESB | X1 | 3.83 ± 0.12 | 5.17 ± 0.35 | 5.67 ± 0.35 | 3.50 ± 0.00 | 3.00 ± 0.00 | 4.00 ± 0.24 |
+  | ESB | X2 | 4.58 ± 0.35 | 4.50 ± 0.24 | 4.58 ± 0.67 | 4.83 ± 0.12 | 5.17 ± 0.12 | 5.25 ± 0.24 |
+
+- **The target at Penn 2: Penn 2 itself, not the fallback.** K's records first took the fallback, because the geocode
+  lay 68 m from the corner. Amendment 4 (the user's "Keep Penn 2") replaced that test with "the geocode lies on Penn 2's
+  own footprint", so every arm was built with `2 Penn Plaza, New York`. DM's target is Google's footprint:
+  `vector-footprint`, 5,598 m², 138.8 m tall. K's isolate holds Penn 2 and the station frontage round it, with 383,059
+  standing triangles outside the footprint, which is what bar 4's neighbours miss reads.
+- **No pose swap.** Both poses look from pano feKTMhN8YAZUGcqdatV7rw (3.4 m from the corner, 2026-04), and both
+  registered. Pose B was kept without a Primark sign (amendment 5).
+- **The poses on their own** (judge means over 3 runs).
+
+  | Pose | Score | raw | DM | DS | KD | K | X1 | X2 |
+  |---|---|---|---|---|---|---|---|---|
+  | A (target share 0.85) | overall | 4.00 | 4.00 | 4.00 | 4.00 | 3.33 | 3.00 | 3.00 |
+  | A | neighbours | 4.33 | 4.33 | 4.33 | 4.33 | 3.67 | 3.33 | 4.00 |
+  | B (target share 0.01) | overall | 5.67 | 4.33 | 4.33 | 4.67 | 5.67 | 2.33 | 5.67 |
+  | B | neighbours | 6.33 | 3.33 | 3.33 | 4.33 | 6.33 | 2.33 | 6.33 |
+
+  At pose B, K, X2 and the raw scan draw the same frame, since the target is barely in it, and they score alike.
+
+  What each arm shows where the photo shows each sign (from the paid run's grids):
+
+  | View | The photo | raw | DM | DS | KD | K | X1 | X2 |
+  |---|---|---|---|---|---|---|---|---|
+  | A: Penn 2's 7th Ave facade, the Chase sign | The station's new entrance: a canopy on A-frame legs under a glass roof, the Chase sign a vertical banner on the canopy's front, the station's name on its fascia | The tiles' older entrance: a dark wall nearer the camera, with the station's name in the tile photo's lettering; no banner | The same wall and lettering, greyer, with a white patch in the roof above; no banner | As DM | The same wall, greyer, with no white patch; no banner | The wall as the raw scan draws it, with a white sliver at the top right; no banner | The wall, pale, with no street in front; no banner | The wall moved down and left; no banner |
+  | B: uptown along 7th Ave, Primark and Macy's | Macy's blade sign, small, left of the white office block; a yellow billboard where the tiles have a dark one; an open construction fence of posts on the right | The tile photo's blade sign, its lettering legible; the dark billboard; a solid fence slab on the right; cars in the street | The same blade sign and lettering; the towers past 81 m untextured white | As DM | The same blade sign; the far towers mostly textured, a few white | As the raw scan | Nothing: the hero is outside the frame | As the raw scan |
+
+  No arm draws the Chase banner: every arm draws the earlier entrance the tiles hold. No arm draws a Primark sign
+  either, and neither does the photo.
+- **What the misses point at.** The stop rule says to fix the judge or the views, not the builds. These are findings,
+  not changes:
+  - **The era.** At Penn 2 the photo and the tiles show the entrance from different eras (fixed for the benchmark
+    places by amendment 7's era check; the Penn 2 redo is the main session's separate preregistration).
+  - **The judge scores a region that is not in the frame.** At the ESB, v3 holds no ground, yet every arm scored 5 there.
+  - **Registration accepts an eye under the street.** At the ESB, v1 registered within 5 px with the camera below the
+    crosswalk.
+  - **The move is small at the distance.** A 4 m move at 83 to 127 m shifts the ESB a few per cent of the frame. Only
+    the clay view clears 1.0 there.
+  - **Few views.** At Penn 2, 13 of 19 panos were used by the builds and one automatic view was left. At the ESB, 4 of
+    8 fetched views registered.
+  - **K draws the ESB paler and flatter than the raw scan** (5.08 against 6.34). That is a build finding, outside this
+    comparison's stop rule. The main session has it in a separate session.
+- **The places not judged.** Their fresh K builds and dry runs are kept, for a later run:
+  - **Haughwout** run f4f25a8e;
+  - **Ferry** run cdbda9bb;
+  - **Griffith** run d04c4274.
+
+  Each one's cache is in `m1-run/.scratchbox/places/<place>/cache`.
+- **Cost, measured.** The judge is priced at $2 / $10 per million tokens, thinking billed as output. Grounding is about
+  $0.007 an image.
+  - Penn 2: $0.59 for 18 judge calls, plus about $0.03 for 5 images.
+  - The ESB: $0.65 for 24 judge calls, plus about $0.17 for 24 images.
+  - Total: about $1.44 for the judge and grounding, against the $60 stop. The builds' own API calls (estimated at
+    about $1.20 for each K build, $2.99 to $20.39 for KD) were not metered in this run.
+- **The grids and mask grids** (gitignored, on this Mac):
+  - `docs/screenshots/m1_prereg/penn2_paid/`;
+  - `docs/screenshots/m1_prereg/esb_paid/`;
+  - the era-check pairs in `docs/screenshots/m1_prereg/era_check/esb/`;
+  - each with the tool's `report.json`.
+
 ### Run record
 
 Values the procedure above fills in, written as they are fixed. Each is written before the step that uses it.
@@ -986,3 +1104,5 @@ Values the procedure above fills in, written as they are fixed. Each is written 
     was changed.
 - **Spend so far** (judge at $2 / $10 per million, thinking billed as output; grounding at about $0.007 an image): Penn 2
   $0.59 + about $0.03; the ESB $0.65 + about $0.17. In all about $1.44, far under the $60 stop.
+- **The user's decision after the ESB's stop (2026-10-31): "Stop and report".** The run ends here. The report is "The
+  result" above. Nothing was changed in the judge, the views, the bars or the builds.
