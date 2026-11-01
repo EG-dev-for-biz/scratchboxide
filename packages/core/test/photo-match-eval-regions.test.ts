@@ -22,8 +22,8 @@ import { describe, expect, it } from 'vitest';
 import type { OrthoCamera } from '../src/common/spatial/texture-pass-contracts';
 import { SRGB8_TO_LINEAR } from '../src/common/spatial/photogrammetric-delight';
 import {
-    aggregateCriteria, composeGrid, judgePrompt, judgeView, parseJudgeReply, planOutlineCells, regionMasks, regionOverlay, regionScores, renderTriangles, skylineBandPx, triangleRegions,
-    JUDGE_REGION_CRITERIA, PHOTO_MATCH_GROUND_BAND_M, PHOTO_MATCH_REGION_LEGEND, REGION, type JudgeClient, type TerrainGrid, type TerrainLookup
+    aggregateCriteria, composeGrid, judgePrompt, judgeView, parseJudgeReply, photoEdgeField, planOutlineCells, regionMasks, regionOverlay, regionScores, regionsInFrame, renderTriangles, skylineBandPx, targetPlacement, triangleRegions,
+    JUDGE_REGION_CRITERIA, PHOTO_MATCH_GROUND_BAND_M, PHOTO_MATCH_REGION_LEGEND, PHOTO_MATCH_REGION_MIN_SHARE, REGION, type JudgeClient, type TerrainGrid, type TerrainLookup
 } from '../src/node/3d-engine/staged-location/photo-match-eval';
 import type { TileTriangles } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 
@@ -265,6 +265,72 @@ describe('photo-match judge, region criteria', () => {
         expect(parseJudgeReply(full, 1, { regions: true }).scores[0]).toMatchObject({ ground: 2, neighbours: 8, skyline: 9, overall: 7 });
         // an old reader keeps reading only what it read before
         expect(parseJudgeReply(full, 1).scores[0]).not.toHaveProperty('ground');
+        // the prompt every region judgement before the frame check was asked with, unchanged for a view that shows every region
+        expect(crypto.createHash('sha256').update(q.preamble + '\n' + q.closing).digest('hex')).toBe('f3fb9c9a9e5b450890f2d1745e51527cd3abe27ac2d1bbfccd99a7d918414400');
+        expect(judgePrompt('PLACE', 3, { regions: [...JUDGE_REGION_CRITERIA] })).toEqual(q);
+    });
+
+    it('asks only the regions a view shows: the building criteria worded as before, the rest neither asked nor required', () => {
+        const all = judgePrompt('PLACE', 3, { regions: true });
+        const sky = judgePrompt('PLACE', 3, { regions: ['skyline'] });
+        expect(sky.preamble).toMatch(/One more judges the place around it: the skyline\. Do not reward/);
+        expect(sky.closing).toMatch(/on eight criteria/);
+        expect(sky.closing).toMatch(/- skyline: .*10 = the same outline\.\n/);
+        expect(sky.closing).not.toMatch(/- ground: |- neighbours: /);
+        expect(sky.closing).toMatch(/"identity":n,"skyline":n,"note"/);
+        // the building's seven criteria are asked in the same words either way
+        const building = (t: string) => t.slice(0, t.indexOf('- identity:'));
+        expect(building(sky.closing).replace('eight', 'ten')).toBe(building(all.closing));
+        const two = judgePrompt('PLACE', 3, { regions: ['neighbours', 'ground'] });
+        expect(two.preamble).toMatch(/Two more judge the place around it: the ground and the neighbouring buildings\. /);
+        expect(two.closing).toMatch(/cost;\n- neighbours: .*they match; missing, melted or invented neighbours cost\.\n/);
+        // a view with no region in it: the region-mode preamble, the building criteria alone
+        const none = judgePrompt('PLACE', 3, { regions: [] });
+        expect(none.preamble).toMatch(/Seven criteria judge only the target building the renders show: for them ignore [^.]*\. Do not reward/);
+        expect(none.closing).toMatch(/on seven criteria/);
+        expect(none.closing).toMatch(/whether or not the finer detail is exact\.\n/);
+        // the reply: only what was asked is required, and only that is read
+        const reply = '{"renders":[{"image":1,"shape":3,"materials":4,"detail":5,"errors":6,"overall":7,"skyline":9,"note":"x"}]}';
+        expect(parseJudgeReply(reply, 1, { regions: ['skyline'] }).problems).toEqual([]);
+        expect(parseJudgeReply(reply, 1, { regions: ['skyline'] }).scores[0]).toMatchObject({ skyline: 9 });
+        expect(parseJudgeReply(reply, 1, { regions: ['ground', 'skyline'] }).problems).toEqual(['image 1: ground is undefined']);
+        expect(parseJudgeReply('{"renders":[{"image":1,"shape":3,"materials":4,"detail":5,"errors":6,"overall":7,"ground":2}]}', 1, { regions: [] }).scores[0]).not.toHaveProperty('ground');
+        // the floor: a region under 1% of the frame is not in it
+        const px = { sky: 9000, ground: 99, neighbours: 100, target: 701, trees: 100, skyline: 400 };
+        expect(regionsInFrame(px, 10_000)).toEqual(['neighbours', 'skyline']);
+        expect(PHOTO_MATCH_REGION_MIN_SHARE).toBe(0.01);
+    });
+
+    it('places a target from edges alone: the shift that brings its outline onto the photo\'s silhouette, none where it is drawn right', () => {
+        // the photo: a pale block (40 px wide, 60 px tall) on a dark ground, crossed by a row of window-like bars that a facade's
+        // repeats would make, 320 x 240; the reference (the scan) draws the block where the photo shows it
+        const W = 320, H = 240;
+        const rgba = new Uint8Array(W * H * 4);
+        const inBlock = (x: number, y: number, ox = 0, oy = 0) => x >= 140 + ox && x < 180 + ox && y >= 90 + oy && y < 150 + oy;
+        const bar = (x: number, y: number) => (y >= 30 && y < 34) || (y >= 190 && y < 194) || (x >= 60 && x < 63);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const v = inBlock(x, y) ? 220 : bar(x, y) ? 160 : 40; rgba.set([v, v, v, 255], (y * W + x) * 4); }
+        const field = photoEdgeField({ width: W, height: H, rgba });
+        expect(field.w).toBe(W);
+        expect(field.edgePx).toBeGreaterThan(600);
+        const labels = (ox: number, oy: number) => Uint8Array.from({ length: W * H }, (_, i) => (inBlock(i % W, Math.floor(i / W), ox, oy) ? REGION.target : REGION.sky));
+        const reference = labels(0, 0);
+        const right = targetPlacement(field, reference, labels(0, 0), 0.25)!;
+        // the photo's edges lie on the boundary, the outline on the block's own boundary pixels: a pixel apart all round; the bars
+        // far from the outline are not the silhouette and are never read
+        expect(right).toMatchObject({ errorPx: 1, errorDeg: 0.25, shiftPx: [0, 0], shiftLengthPx: 0, residualPx: 1 });
+        expect(right.silhouettePx).toBeGreaterThan(150);
+        expect(right.silhouettePx).toBeLessThan(field.edgePx / 2);
+        // moved 12 px right and 5 px up: the error grows, and the shift is the move back (to the pixel the edge's own offset
+        // allows), with no error left after it
+        const moved = targetPlacement(field, reference, labels(12, -5), 0.25)!;
+        expect(moved.errorPx).toBeGreaterThan(4);
+        expect(moved.errorDeg).toBeCloseTo(moved.errorPx * 0.25, 2);
+        expect(Math.hypot(moved.shiftPx[0] + 12, moved.shiftPx[1] - 5)).toBeLessThanOrEqual(Math.SQRT2);
+        expect(Math.abs(moved.shiftLengthPx - 13)).toBeLessThanOrEqual(1.5);
+        expect(moved.residualPx).toBeLessThan(1.05);
+        // an outline the frame ends everywhere, or no silhouette, places nothing
+        expect(targetPlacement(field, reference, new Uint8Array(W * H).fill(REGION.target), 0.25)).toBeNull();
+        expect(targetPlacement(field, new Uint8Array(W * H).fill(REGION.sky), labels(0, 0), 0.25)).toBeNull();
     });
 
     it('maps region scores back to the arms through the reshuffles', async () => {

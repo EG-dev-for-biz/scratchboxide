@@ -1183,6 +1183,211 @@ export function regionOverlay(image: { width: number; height: number; rgba: Uint
 }
 
 // =============================================================================
+// Per view, before any score is read: the regions in the frame, where the tile ends, where the target stands
+// =============================================================================
+
+/**
+ * A region the judge scores must hold at least this share of the frame in the reference's masks. Below it the region is not in
+ * the view: the judge is not asked about it, its score is null and no mean or bar reads it.
+ */
+export const PHOTO_MATCH_REGION_MIN_SHARE = 0.01;
+
+/** The region criteria a view can be judged on: those whose region holds at least `minShare` of the frame. */
+export function regionsInFrame(pixels: RegionMasks['pixels'], total: number, minShare = PHOTO_MATCH_REGION_MIN_SHARE): JudgeRegionCriterion[] {
+    return JUDGE_REGION_CRITERIA.filter(c => pixels[c] / Math.max(1, total) >= minShare);
+}
+
+/** The tile's surfaces on a plan grid (StreetViewSurveyPlanner's GroundModel is one): the highest per cell, NaN where it has none. */
+export interface TileTopGrid { x0: number; z0: number; nx: number; nz: number; cellMeters: number; top: ArrayLike<number> }
+
+/** How far round the point where a ray leaves the tile its surfaces are read (m): the place goes on past the edge about as tall. */
+export const PHOTO_MATCH_TILE_EDGE_REACH_M = 20;
+/** A view whose frame holds at least this share of sky pixels past the tile's edge is flagged (its regions are not judged). */
+export const PHOTO_MATCH_TILE_EDGE_MIN_SHARE = 0.01;
+
+export interface TileEdgeReading {
+    /** Share of the frame labelled sky whose ray leaves the tile lower than its surfaces stand round the point it leaves. */
+    share: number;
+    flagged: boolean;
+    /** Pixels sampled (every `stride`-th, rows and columns), and how many of them lie past the edge. */
+    samples: number; pastEdge: number;
+}
+
+const nearTopCache = new WeakMap<object, { reach: number; near: Float32Array; max: number }>();
+
+/** Per cell, the highest surface within `reachM` (a square window), -Infinity where none; and the highest of all. */
+function nearTop(grid: TileTopGrid, reachM: number): { near: Float32Array; max: number } {
+    const hit = nearTopCache.get(grid.top as object);
+    if (hit && hit.reach === reachM) return hit;
+    const { nx, nz, top } = grid, r = Math.max(1, Math.ceil(reachM / grid.cellMeters));
+    const rows = new Float32Array(nx * nz), near = new Float32Array(nx * nz);
+    let max = -Infinity;
+    for (let k = 0; k < nz; k++) for (let j = 0; j < nx; j++) {
+        let m = -Infinity;
+        for (let jj = Math.max(0, j - r); jj <= Math.min(nx - 1, j + r); jj++) { const v = top[k * nx + jj]; if (v > m) m = v; }
+        rows[k * nx + j] = m;
+        const v = top[k * nx + j];
+        if (v > max) max = v;
+    }
+    for (let k = 0; k < nz; k++) for (let j = 0; j < nx; j++) {
+        let m = -Infinity;
+        for (let kk = Math.max(0, k - r); kk <= Math.min(nz - 1, k + r); kk++) { const v = rows[kk * nx + j]; if (v > m) m = v; }
+        near[k * nx + j] = m;
+    }
+    const out = { reach: reachM, near, max };
+    nearTopCache.set(grid.top as object, out);
+    return out;
+}
+
+/**
+ * Where the reference tile ends inside the frame, from geometry alone: of the pixels the reference labels sky (no surface hit),
+ * those whose ray leaves the tile (its last cell with a surface, else the eye when it never crosses one) lower than the tile's
+ * highest surface within PHOTO_MATCH_TILE_EDGE_REACH_M of that point. The photo shows whatever stands past that edge there,
+ * the masks show sky. A ray that climbs above the tile's highest surface before it leaves is the sky. Read before any score.
+ */
+export function tileEdgeInFrame(labels: Uint8Array, camera: PinholeCamera, grid: TileTopGrid, options: { stride?: number; reachM?: number; minShare?: number } = {}): TileEdgeReading {
+    const stride = options.stride ?? 4, minShare = options.minShare ?? PHOTO_MATCH_TILE_EDGE_MIN_SHARE;
+    const { near, max } = nearTop(grid, options.reachM ?? PHOTO_MATCH_TILE_EDGE_REACH_M);
+    const { x0, z0, nx, nz, cellMeters: cell, top } = grid;
+    const xEnd = x0 + nx * cell, zEnd = z0 + nz * cell;
+    const [ex, ey, ez] = camera.eye;
+    const cellAt = (x: number, z: number) => {
+        const j = Math.floor((x - x0) / cell), k = Math.floor((z - z0) / cell);
+        return j < 0 || k < 0 || j >= nx || k >= nz ? -1 : k * nx + j;
+    };
+    // past the farthest corner of the grid no ray meets a cell
+    const tMax = Math.max(...[[x0, z0], [xEnd, z0], [x0, zEnd], [xEnd, zEnd]].map(([x, z]) => Math.hypot(x - ex, z - ez))) + cell;
+    let samples = 0, pastEdge = 0;
+    for (let py = Math.floor(stride / 2); py < camera.height; py += stride) for (let px = Math.floor(stride / 2); px < camera.width; px += stride) {
+        samples++;
+        if (labels[py * camera.width + px] !== REGION.sky) continue;
+        const xc = (px + 0.5 - camera.cx) / camera.fx, yc = -(py + 0.5 - camera.cy) / camera.fy;
+        const d = [0, 1, 2].map(i => camera.right[i] * xc + camera.up[i] * yc + camera.fwd[i]);
+        const h = Math.hypot(d[0], d[2]);
+        if (h < 1e-9) { if (d[1] < 0) pastEdge++; continue; }
+        const ux = d[0] / h, uz = d[2] / h, slope = d[1] / h;
+        // march in plan, a cell at a time, until the ray leaves the grid (it cannot come back) or climbs past every surface
+        let last = -1, sky = false, inside = false;
+        for (let t = 0; t <= tMax; t += cell) {
+            if (slope >= 0 && ey + slope * t > max) { sky = true; break; }
+            const c = cellAt(ex + ux * t, ez + uz * t);
+            if (c < 0) { if (inside) break; continue; }
+            inside = true;
+            if (top[c] === top[c]) last = t;
+        }
+        if (sky) continue;
+        const te = Math.max(0, last), c = cellAt(ex + ux * te, ez + uz * te);
+        const standing = c >= 0 && near[c] > -Infinity ? near[c] : max;
+        if (ey + slope * te < standing) pastEdge++;
+    }
+    const share = samples ? pastEdge / samples : 0;
+    return { share: Math.round(share * 1000) / 1000, flagged: share >= minShare, samples, pastEdge };
+}
+
+/** Shifts up to this (px at the metric width) are tried when placing a build's target on the photo's silhouette. */
+export const PHOTO_MATCH_PLACEMENT_SEARCH_PX = 40;
+/** Distances from the photo's silhouette to a build's outline count up to this (px at the metric width). */
+export const PHOTO_MATCH_PLACEMENT_TRUNCATION_PX = 24;
+/**
+ * The photo's silhouette of the target: its structural edges within this (px at the metric width) of the reference's target
+ * outline (the scan, registered on the photo to an edge residual of at most 5 px).
+ */
+export const PHOTO_MATCH_PLACEMENT_BAND_PX = 8;
+/** Added to the cost per pixel of shift, so a direction the silhouette leaves free (a long straight edge) resolves to no shift. */
+const PLACEMENT_SHIFT_COST = 0.02;
+/** Least silhouette and outline pixels a placement is read from. */
+const PLACEMENT_MIN_PX = 60;
+
+/** The photo's structural edges at the metric width (texture-fit-metric's: straight segments of at least 22 px). */
+export interface PhotoEdgeField { w: number; h: number; edges: Uint8Array; edgePx: number }
+
+export function photoEdgeField(photo: DecodedImage): PhotoEdgeField {
+    const w = Math.min(photo.width, PHOTO_MATCH_METRIC_WIDTH_PX), h = Math.max(1, Math.round((photo.height * w) / photo.width));
+    const edges = structuralEdges(reducedLuminance(photo, w, h), w, h, new Uint8Array(w * h).fill(1));
+    let edgePx = 0;
+    for (let i = 0; i < edges.length; i++) edgePx += edges[i];
+    return { w, h, edges, edgePx };
+}
+
+export interface TargetPlacement {
+    /**
+     * The placement error: the mean distance (px at the metric width, truncated at PHOTO_MATCH_PLACEMENT_TRUNCATION_PX) from the
+     * photo's silhouette of the target to the build's outline as drawn. Lower is better; it grows with a move and with a wrong shape.
+     */
+    errorPx: number;
+    /** errorPx as an angle (degrees across the frame). */
+    errorDeg: number;
+    /** The image shift (px, x right, y down) that brings the build's outline closest to the silhouette, its length, and the error left at it. */
+    shiftPx: [number, number]; shiftLengthPx: number; residualPx: number;
+    /** The photo's silhouette pixels read, and the build's outline pixels. */
+    silhouettePx: number; outlinePx: number;
+}
+
+/**
+ * The target's outline in a label image at the metric width (REGION per pixel): target pixels with a 4-neighbour that is not
+ * the target, at least 2 px from the frame's edge (where the frame, not the target, ends the region).
+ */
+export function targetOutline(labels: Uint8Array, w: number, h: number): Uint8Array {
+    const out = new Uint8Array(w * h);
+    for (let y = 2; y < h - 2; y++) for (let x = 2; x < w - 2; x++) {
+        const i = y * w + x;
+        if (labels[i] !== REGION.target) continue;
+        if (labels[i - 1] !== REGION.target || labels[i + 1] !== REGION.target || labels[i - w] !== REGION.target || labels[i + w] !== REGION.target) out[i] = 1;
+    }
+    return out;
+}
+
+/**
+ * Where a build's target is drawn against where the photo shows it, from edges alone (never a vision score). The photo's
+ * silhouette of the target is its structural edges within PHOTO_MATCH_PLACEMENT_BAND_PX of the reference's target outline
+ * (`reference`: the scan's target drawn alone from the registered pose, at the metric width, labelled as the raw scan arm is).
+ * The placement error is the mean distance from that silhouette to the build's outline (`arm`: the build drawn alone from the
+ * same pose), truncated at PHOTO_MATCH_PLACEMENT_TRUNCATION_PX. Beside it, the image shift within PHOTO_MATCH_PLACEMENT_SEARCH_PX
+ * that brings the outline closest (plus PLACEMENT_SHIFT_COST per pixel of shift), searched every 2 px, then to the pixel, and
+ * the error left there: a move shows as a shift, a wrong shape as error no shift removes. The photo's other edges (windows,
+ * signs, the street) are never read, so a facade's repeats cannot pull it. Null with too few silhouette or outline pixels.
+ */
+export function targetPlacement(field: PhotoEdgeField, reference: Uint8Array, arm: Uint8Array, degPerPx: number): TargetPlacement | null {
+    const { w, h, edges } = field;
+    const nearRef = distanceTransform(targetOutline(reference, w, h), w, h, PHOTO_MATCH_PLACEMENT_BAND_PX + 1);
+    const xs: number[] = [], ys: number[] = [];
+    for (let i = 0; i < edges.length; i++) if (edges[i] && nearRef[i] <= PHOTO_MATCH_PLACEMENT_BAND_PX) { xs.push(i % w); ys.push((i - (i % w)) / w); }
+    const n = xs.length;
+    const outline = targetOutline(arm, w, h);
+    let outlinePx = 0;
+    for (let i = 0; i < outline.length; i++) outlinePx += outline[i];
+    if (n < PLACEMENT_MIN_PX || outlinePx < PLACEMENT_MIN_PX) return null;
+    const T = PHOTO_MATCH_PLACEMENT_TRUNCATION_PX;
+    const dt = distanceTransform(outline, w, h, T + 1);
+    // the build moved by (dx, dy): its outline's distance from each silhouette pixel is the distance at the pixel moved back
+    const cost = (dx: number, dy: number) => {
+        let s = 0, k = 0;
+        for (let p = 0; p < n; p++) {
+            const x = xs[p] - dx, y = ys[p] - dy;
+            if (x < 0 || y < 0 || x >= w || y >= h) continue;
+            s += Math.min(T, dt[y * w + x]); k++;
+        }
+        return k >= 0.6 * n ? s / k : Infinity;
+    };
+    const S = PHOTO_MATCH_PLACEMENT_SEARCH_PX;
+    const c0 = cost(0, 0);
+    let best = { dx: 0, dy: 0, c: c0, j: c0 };
+    const consider = (dx: number, dy: number) => {
+        const c = cost(dx, dy), j = c + PLACEMENT_SHIFT_COST * Math.hypot(dx, dy);
+        if (j < best.j) best = { dx, dy, c, j };
+    };
+    for (let dy = -S; dy <= S; dy += 2) for (let dx = -S; dx <= S; dx += 2) consider(dx, dy);
+    const cx = best.dx, cy = best.dy;
+    for (let dy = cy - 2; dy <= cy + 2; dy++) for (let dx = cx - 2; dx <= cx + 2; dx++) if (Math.abs(dx) <= S && Math.abs(dy) <= S) consider(dx, dy);
+    if (!Number.isFinite(c0)) return null;
+    return {
+        errorPx: Math.round(c0 * 100) / 100, errorDeg: Math.round(c0 * degPerPx * 1000) / 1000,
+        shiftPx: [best.dx, best.dy], shiftLengthPx: Math.round(Math.hypot(best.dx, best.dy) * 100) / 100, residualPx: Math.round(best.c * 100) / 100,
+        silhouettePx: n, outlinePx
+    };
+}
+
+// =============================================================================
 // Blind judging
 // =============================================================================
 
@@ -1225,36 +1430,53 @@ export function seededShuffle<T>(items: T[], seed: string): T[] {
     return a;
 }
 
+/** The place-around-the-building criteria a judgement asks: every one (`true`), the ones listed, or none. */
+function askedRegions(regions: boolean | readonly JudgeRegionCriterion[] | undefined): JudgeRegionCriterion[] {
+    return regions === true ? [...JUDGE_REGION_CRITERIA] : Array.isArray(regions) ? JUDGE_REGION_CRITERIA.filter(c => regions.includes(c)) : [];
+}
+
+const REGION_NAMES: Record<JudgeRegionCriterion, string> = { ground: 'the ground', neighbours: 'the neighbouring buildings', skyline: 'the skyline' };
+const COUNT_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+
 /**
- * The textured judgement's prompt. With `regions` the same seven building criteria come first, worded as before, and three
- * more score the place around the building (JUDGE_REGION_CRITERIA); without it the prompt is the one older reports used.
+ * The textured judgement's prompt. With `regions` (true, or the region criteria in the frame) the same seven building criteria
+ * come first, worded as before, and the region criteria asked score the place around the building (JUDGE_REGION_CRITERIA); a
+ * region the view does not show is not asked. Without it the prompt is the one older reports used.
  */
-export function judgePrompt(place: string, count: number, options: { regions?: boolean } = {}): { preamble: string; closing: string } {
-    const regions = options.regions === true;
+export function judgePrompt(place: string, count: number, options: { regions?: boolean | readonly JudgeRegionCriterion[] } = {}): { preamble: string; closing: string } {
+    const regions = options.regions === true || Array.isArray(options.regions);
+    const asked = askedRegions(options.regions);
+    const listed = asked.map(c => REGION_NAMES[c]);
+    const more = asked.length
+        ? `${COUNT_WORDS[asked.length][0].toUpperCase()}${COUNT_WORDS[asked.length].slice(1)} more judge${asked.length === 1 ? 's' : ''} the place around it: ${listed.length > 1 ? `${listed.slice(0, -1).join(', ')} and ${listed[listed.length - 1]}` : listed[0]}. `
+        : '';
     return {
         preamble: `You are judging how closely 3D reconstructions match a real place. Image 0 is a real photograph (Google Street View) of ${place}. ` +
             `Images 1 to ${count} are renders of ${count} different 3D reconstructions of that building, each rendered from exactly the camera position, direction, field of view and resolution of the photograph, ` +
             (regions
                 ? 'all with the same flat neutral light on the same flat grey background, which stands where the sky is. Seven criteria judge only the target building the renders show: for them ignore the sky, trees, vehicles, people, street furniture and the neighbouring buildings. ' +
-                'Three more judge the place around it: the ground, the neighbouring buildings and the skyline. '
+                more
                 : 'all with the same flat neutral light on the same flat grey background. Judge only the target building the renders show: ignore the sky, trees, vehicles, people, street furniture and any neighbouring buildings the renders leave out, ') +
             `${regions ? 'Do' : 'and do'} not reward or penalise a render for the absence of sun and shadows (no render has them). The renders are in no particular order and come from different methods.`,
-        closing: `Score every render 1-10 (10 best) against the photograph on ${regions ? 'ten' : 'seven'} criteria:\n` +
+        closing: `Score every render 1-10 (10 best) against the photograph on ${COUNT_WORDS[7 + asked.length]} criteria:\n` +
             '- shape: shape and silhouette match (massing, roofline, setbacks, openings in the right places);\n' +
             '- materials: materials and colour match (the facade materials and their colours as the photograph shows them);\n' +
             '- detail: detail believability (windows, cornices, ornament, storefronts read as the real ones, at a believable sharpness);\n' +
             '- errors: wrong or invented content, 10 = none (melted or broken geometry, smeared or doubled textures, things painted where they are not, content that is not in the photograph);\n' +
             '- overall: how much the render looks like this place in the photograph;\n' +
             '- realism: does the render look like a real photograph of a real building (convincing materials, sharpness and surface detail), whatever place it shows;\n' +
-            `- identity: would someone who knows this place recognise it in the render (massing, window rhythm, materials, colour, distinctive features such as towers, fire escapes, signage, the storefront layout), whether or not the finer detail is exact${regions ? ';' : '.'}\n` +
-            (regions
-                ? '- ground: the ground around the building against the photograph (streets, pavements, kerbs, plazas, lawns and terrain: their layout, levels, materials and colour), 10 = it matches; holes, steps, smears and missing or invented surfaces cost;\n' +
-                '- neighbours: the other buildings and structures around the target against the photograph (massing, heights, rooflines, facade materials and rhythm), 10 = they match; missing, melted or invented neighbours cost;\n' +
-                '- skyline: the outline where buildings and trees meet the sky (flat grey in every render) against the photograph\'s outline, 10 = the same outline.\n'
-                : '') +
-            `Use the whole scale and compare the renders with each other. Reply with JSON only: {"renders":[{"image":1,"shape":n,"materials":n,"detail":n,"errors":n,"overall":n,"realism":n,"identity":n,${regions ? '"ground":n,"neighbours":n,"skyline":n,' : ''}"note":"at most 20 words on what decides it"}, ...]} with one entry for each of images 1 to ${count}.`
+            `- identity: would someone who knows this place recognise it in the render (massing, window rhythm, materials, colour, distinctive features such as towers, fire escapes, signage, the storefront layout), whether or not the finer detail is exact${asked.length ? ';' : '.'}\n` +
+            asked.map((c, k) => `${REGION_CRITERION_LINES[c]}${k + 1 < asked.length ? ';' : '.'}\n`).join('') +
+            `Use the whole scale and compare the renders with each other. Reply with JSON only: {"renders":[{"image":1,"shape":n,"materials":n,"detail":n,"errors":n,"overall":n,"realism":n,"identity":n,${asked.map(c => `"${c}":n,`).join('')}"note":"at most 20 words on what decides it"}, ...]} with one entry for each of images 1 to ${count}.`
     };
 }
+
+/** Each region criterion as the judge is asked it (the line's end is added where it stands in the list). */
+const REGION_CRITERION_LINES: Record<JudgeRegionCriterion, string> = {
+    ground: '- ground: the ground around the building against the photograph (streets, pavements, kerbs, plazas, lawns and terrain: their layout, levels, materials and colour), 10 = it matches; holes, steps, smears and missing or invented surfaces cost',
+    neighbours: '- neighbours: the other buildings and structures around the target against the photograph (massing, heights, rooflines, facade materials and rhythm), 10 = they match; missing, melted or invented neighbours cost',
+    skyline: '- skyline: the outline where buildings and trees meet the sky (flat grey in every render) against the photograph\'s outline, 10 = the same outline'
+};
 
 /** The clay judgement's prompt: the same pose and blind protocol, every render in untextured clay, shape only. */
 export function clayJudgePrompt(place: string, count: number): { preamble: string; closing: string } {
@@ -1271,11 +1493,10 @@ export function clayJudgePrompt(place: string, count: number): { preamble: strin
     };
 }
 
-/** A textured judgement's reply; with `regions` the region criteria are required too (a reply without them is retried). */
-export function parseJudgeReply(text: string, count: number, options: { regions?: boolean } = {}): { scores: Array<JudgeScores & { note: string }>; problems: string[] } {
-    return options.regions
-        ? parseScores<JudgeScores>(text, count, [...JUDGE_CRITERIA, ...JUDGE_REGION_CRITERIA], [...JUDGE_REQUIRED_CRITERIA, ...JUDGE_REGION_CRITERIA])
-        : parseScores<JudgeScores>(text, count, JUDGE_CRITERIA, JUDGE_REQUIRED_CRITERIA);
+/** A textured judgement's reply; with `regions` the region criteria asked are required too (a reply without them is retried). */
+export function parseJudgeReply(text: string, count: number, options: { regions?: boolean | readonly JudgeRegionCriterion[] } = {}): { scores: Array<JudgeScores & { note: string }>; problems: string[] } {
+    const asked = askedRegions(options.regions);
+    return parseScores<JudgeScores>(text, count, [...JUDGE_CRITERIA, ...asked], [...JUDGE_REQUIRED_CRITERIA, ...asked]);
 }
 
 /** A clay judgement's reply: `shape` in 1-10 for every image. */
@@ -1316,7 +1537,7 @@ const jpegOrPngB64 = (img: { bytes: Uint8Array; mimeType: string }) => ({ inline
  * `seed` and the repeat), unlabelled. Returns the scores mapped back to the arm ids. A reply that does not parse is retried once.
  */
 export async function judgeView(input: JudgeViewInput): Promise<JudgeRun[]> {
-    const regions = input.regions === true;
+    const regions = input.regions === true || Array.isArray(input.regions) ? input.regions : false;
     return judgeRepeats<JudgeScores>(input, (place, count) => judgePrompt(place, count, { regions }), (text, count) => parseJudgeReply(text, count, { regions }), 'photo-match-judge');
 }
 
@@ -1331,8 +1552,11 @@ export async function judgeViewClay(input: JudgeViewInput): Promise<Array<JudgeR
 export interface JudgeViewInput {
     client: JudgeClient; place: string; photo: { bytes: Uint8Array; mimeType: string };
     renders: Array<{ armId: string; png: Uint8Array }>; repeats?: number; seed: string; thinkingBudget?: number; temperature?: number;
-    /** judgeView: also score the place around the building (JUDGE_REGION_CRITERIA). Ignored by judgeViewClay. */
-    regions?: boolean;
+    /**
+     * judgeView: also score the place around the building: every region criterion (true), or only those listed (the regions
+     * the view shows; none listed asks the building criteria in the same words). Ignored by judgeViewClay.
+     */
+    regions?: boolean | readonly JudgeRegionCriterion[];
 }
 
 async function judgeRepeats<S>(

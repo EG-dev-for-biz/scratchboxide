@@ -28,6 +28,7 @@ import { readTileTriangles, decodeImageInMemory } from '../src/node/3d-engine/st
 import { castCamera } from '../src/node/3d-engine/staged-location/survey-casting';
 import type { PanoCandidate } from '../src/node/3d-engine/staged-location/streetview-evidence';
 import { buildGroundModel, geodeticToScan, loadScanMesh } from '../src/node/spatial/StreetViewSurveyPlanner';
+import { isGoogleCapture } from '../src/node/spatial/StreetViewGroundingImageService';
 import { createPhotoMatchEvaluateHandler, type PhotoMatchDeps } from '../src/node/gemini/tools/location-evidence/photo-match-evaluate';
 import type { ToolContext } from '../src/node/gemini/tools/types';
 
@@ -43,25 +44,27 @@ describe.skipIf(!CONFIG)('photo-match dry run on real builds (PHOTO_MATCH_DRYRUN
             requested: 'stand-in', answeredModel: 'stand-in', skipped: [],
             async generate(params) {
                 const text = params.contents[0].parts.map(p => p.text ?? '').join(' ');
-                const clay = /untextured grey clay/.test(text), regions = /- skyline: /.test(text);
+                // the region criteria the prompt asks (a view asks only those it shows)
+                const clay = /untextured grey clay/.test(text), asked = ['ground', 'neighbours', 'skyline'].filter(c => text.includes(`- ${c}: `));
                 calls[clay ? 'clay' : 'textured']++;
                 const [photo, ...renders] = params.contents[0].parts.filter(p => p.inlineData).map(p => decodeImageInMemory(Buffer.from(p.inlineData!.data, 'base64')));
                 const entries = renders.map((r, k) => {
                     let d = 0;
                     for (let i = 0; i < r.rgba.length; i += 4) d += Math.abs(r.rgba[i] - photo.rgba[i]) + Math.abs(r.rgba[i + 1] - photo.rgba[i + 1]) + Math.abs(r.rgba[i + 2] - photo.rgba[i + 2]);
                     const s = Math.max(1, Math.min(10, Math.round(10 - d / (r.rgba.length / 4) / 6)));
-                    return clay ? { image: k + 1, shape: s, note: '' } : { image: k + 1, shape: s, materials: s, detail: s, errors: s, overall: s, ...(regions ? { ground: s, neighbours: s, skyline: s } : {}), note: '' };
+                    return clay ? { image: k + 1, shape: s, note: '' } : { image: k + 1, shape: s, materials: s, detail: s, errors: s, overall: s, ...Object.fromEntries(asked.map(c => [c, s])), note: '' };
                 });
                 return { model: 'stand-in', response: { candidates: [{ content: { parts: [{ text: JSON.stringify({ renders: entries }) }] } }] } };
             }
         };
         const listed: PanoCandidate[] = [];
-        // every Google pano the metadata cache holds, in the tile frame
+        // every Google-captured pano the metadata cache holds, in the tile frame (as the real lookup keeps them: "From a Google
+        // User" is a user's photosphere, which the grounding API does not serve)
         const cachedPanos = (origin: Parameters<PhotoMatchDeps['discover']>[0], cacheDir: string): PanoCandidate[] => {
             const meta = JSON.parse(fs.readFileSync(path.join(cacheDir, 'streetview', 'metadata.json'), 'utf8')) as Record<string, { status: string; panoId?: string; lat?: number; lng?: number; date?: string; copyright?: string }>;
             const out = new Map<string, PanoCandidate>();
             for (const v of Object.values(meta)) {
-                if (v.status !== 'OK' || !v.panoId || out.has(v.panoId) || !/Google/.test(v.copyright ?? '')) continue;
+                if (v.status !== 'OK' || !v.panoId || out.has(v.panoId) || !isGoogleCapture(v.copyright)) continue;
                 const q = geodeticToScan(origin, v.lat!, v.lng!);
                 out.set(v.panoId, { panoId: v.panoId, lat: v.lat!, lng: v.lng!, ...(v.date ? { date: v.date } : {}), copyright: v.copyright!, x: q.x, z: q.z });
             }
