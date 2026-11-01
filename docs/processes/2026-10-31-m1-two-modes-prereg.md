@@ -758,3 +758,92 @@ Values the procedure above fills in, written as they are fixed. Each is written 
     kept.
   - **The rebuild.** KD is rebuilt fresh from `feat/m1-run` once at least 30 GB is free, on a server restarted with
     `SCRATCHBOX_CACHE_RESTORE=off`, so no stage comes back from the Cloud Storage bucket. No bar changes.
+- **The Vertex AI spend cap (2026-10-31, afternoon).** From about 15:40 every Vertex call was refused with "403 Spend cap
+  breached for project 491718041258".
+  - **What it hit:** KD rebuild 251da75c's facade reader and material choice, in all 20 chunks and the centre, though
+    that run still reported "complete"; and DS rebuild 515a8c96's vehicle removal.
+  - **What it did not hit:** none of the runs being judged that were already built.
+  - **The fix:** the user raised the cap. Neither tainted run is judged.
+- **The judged Penn 2 arms.**
+  - **K:** 1ef02345.
+  - **DM:** 0ced0b89.
+  - **DS:** 45dfe6f5, rebuilt fresh in an empty cache once the cap was raised.
+  - **KD:** 4a8937c3, rebuilt fresh in an empty cache, in 62 minutes.
+    - KD's stop rules all pass. The `chunks` stage is committed, with 20 chunks listed, none failed and none truncated.
+      There are no degradations, the seams were closed over 21 grounds, and l0o is retired.
+    - In the centre run and all 20 chunk runs there is no vision failure: no 403, spend cap, quota or failed call.
+  - **Not judged:** 251da75c (built on the failed attempt's cache, then tainted by the cap), its published files copied
+    to the G-RAID; 85d60523 (ENOSPC); 5d29b92d and 515a8c96 (the earlier DS builds); 11 Penn Plaza's ced716ed.
+- **DS against DM, byte for byte.** DS 45dfe6f5 is not identical to DM 0ced0b89.
+  - **Identical:** the vector, vector-outer and terrain layers.
+  - **Different:** the remesh and the trees. DS also has an accepted facade-grammar layer (l2g) that DM's run rejected.
+  - **Why:** vehicle removal and the facade grammar are vision-model readings that vary from run to run. The
+    vehicle-free tiles that feed the remesh already differ.
+  - **What it means for bar 6.** DM's massing rebuilt none of its 8 buildings, so the two are one pipeline that differs
+    only from run to run. Bar 6's DM-DS pair is evaluated as written and is expected to read "the judge cannot tell".
+    Its gap is the noise floor (build to build, plus the judge) that DM-KD and DS-KD are read against. It is not
+    massing against scan.
+- **Freshness audit of the eight judged runs.** "Hit" means the stage's own record says it was cached.
+  - **ESB** 0bb20154, **Haughwout** f4f25a8e, **Ferry** cdbda9bb, **Griffith** d04c4274, **K** 1ef02345, **DS**
+    45dfe6f5 and **KD** 4a8937c3: every stage a miss.
+  - **DM** 0ced0b89: every stage a miss except resolve, a hit on K 1ef02345's geocode of the same address. That hit is
+    accepted: it is an address lookup, not build content.
+  - **textures-late.** It reads "cached" in most runs, even in the first build made in an empty cache. The stage
+    reports `lateLayers.every(o => o.cached)`, which is vacuously true when a build has no later layers to texture. So
+    it is not a reuse.
+- **Moves to the G-RAID** (`/Volumes/G-RAID MIRROR/m1-2026-10-31/kd_251da75c/`, the user's overflow drive), when the
+  disk watch tripped during the KD rebuild at 14 GB free:
+  - KD 251da75c's 121 published files, 14.0 GB, copied first with a manifest (`manifest.tsv`);
+  - the cache entries that KD's first two attempts alone wrote in Penn 2's cache: 31.3 GB across district-chunks,
+    tile_refine, textures, tiles, vehicles, vector and the rest. Each is listed in `moved_cache_entries.tsv`, and none is
+    referenced by a judged run.
+- **Each Penn 2 arm's files** (checked before reading the dry run). Every GLB each arm loads, with its sha256 (first 16
+  hex digits) and its source.
+  - **How a file was checked.** A stage-published file is matched against the sha256 its own run's stage entry recorded
+    when it published it. KD's chunk files are written by the chunk join, not published by a stage, so they are matched
+    against KD 4a8937c3's run record by size, and by being written during that run.
+  - **The shared names.** Three file names are shared by DM, DS and KD: `vector_c4b129fa`, `vector_outer_33db477b` (DM and
+    DS) and `terrain_0f909812` (DM and DS). The entry each of those runs published from recorded the same sha256, so each
+    arm loads its own run's bytes.
+  - **DS's own layers.** Its trees (`trees_eb757406`) and facade-grammar layer (`l2g_tex_e41d2a33`) have names no other
+    run published.
+
+  | Arm | File | sha256 | Source |
+  |---|---|---|---|
+  | DM | `2_penn_plaza_new_york_vector_c4b129fa.glb` | `3c03e1a50f2d541c` | DM 0ced0b89 (its stage entry); byte-identical to the other runs that published this name |
+  | DM | `2_penn_plaza_new_york_vector_outer_33db477b.glb` | `eb5088392c71dc66` | DM 0ced0b89 (its stage entry); byte-identical to the other runs that published this name |
+  | DM | `2_penn_plaza_new_york_terrain_0f909812.glb` | `367ad2c9f8083d7f` | DM 0ced0b89 (its stage entry); byte-identical to the other runs that published this name |
+  | DM | `2_penn_plaza_new_york_l2_tex_4b2a55fd.glb` | `3cf6352567df2e5e` | DM 0ced0b89 (its stage entry) |
+  | DM | `2_penn_plaza_new_york_trees_df15a652.glb` | `c83a74ad5226dbc0` | DM 0ced0b89 (its stage entry) |
+  | DS | `2_penn_plaza_new_york_vector_c4b129fa.glb` | `3c03e1a50f2d541c` | DS 45dfe6f5 (its stage entry); byte-identical to the other runs that published this name |
+  | DS | `2_penn_plaza_new_york_vector_outer_33db477b.glb` | `eb5088392c71dc66` | DS 45dfe6f5 (its stage entry); byte-identical to the other runs that published this name |
+  | DS | `2_penn_plaza_new_york_terrain_0f909812.glb` | `367ad2c9f8083d7f` | DS 45dfe6f5 (its stage entry); byte-identical to the other runs that published this name |
+  | DS | `2_penn_plaza_new_york_trees_eb757406.glb` | `6ff976936fce932d` | DS 45dfe6f5 (its stage entry) |
+  | DS | `2_penn_plaza_new_york_l2g_tex_e41d2a33.glb` | `0e623e61edc7f693` | DS 45dfe6f5 (its stage entry) |
+  | KD | `2_penn_plaza_new_york_vector_c4b129fa.glb` | `3c03e1a50f2d541c` | KD 4a8937c3 (its stage entry); byte-identical to the other runs that published this name |
+  | K | `2_penn_plaza_new_york_iso_l2_tex_646b230e.glb` | `2bae9e16480ec0e6` | K 1ef02345 (its stage entry) |
+  | X1 | `2_penn_plaza_new_york_iso_l2_tex_646b230e.glb` | `2bae9e16480ec0e6` | K 1ef02345's file (the decoy is K's own GLB) |
+  | X2 | `2_penn_plaza_new_york_iso_l2_tex_646b230e_x2.glb` | `e1a382dd906f008e` | made from K 1ef02345's file, root nodes moved 4 m along +x |
+  | KD | 28 chunk files (`trees_*_kdN`, `kd_ground_tex_N_*`), all named in KD 4a8937c3's run record | per file in `kd_files.tsv` beside the dry run | KD 4a8937c3 (its run record: sizes match, written during the run) |
+- **Penn 2's full dry run** (arms DM, DS, KD, K, X1, X2; poses A and B; on `feat/m1-run` at d6f89cd4; the caches of the
+  four judged runs merged at the build-time path, with DM's entries winning key collisions). Images:
+  `docs/screenshots/m1_prereg/penn2_dryrun/`.
+  - **Rendering and views.** Every arm and decoy rendered in all 8 views, poses A and B first. Both poses use pano
+    feKTMhN8YAZUGcqdatV7rw (`targetScreenShare` 0.85 and 0.01). 13 panos used by the builds were excluded. The
+    stand-in judge made 48 calls.
+  - **DM's target is Google's footprint** (`vector-footprint`, 5,598 m², 138.8 m), after fix d6f89cd4.
+  - **The raw scan's frame agreement is 1.00 in every view** (bar 7).
+  - **K's hero covers DM's target:** K's building agreement is 1.00 wherever the target shows. K isolated more than
+    the footprint, though: of X1's standing triangles (K's GLB as a whole place), 507,589 lie inside DM's target and
+    383,059 outside it, in the station frontage around Penn 2. So it is the same building plus extra, not another
+    building.
+  - **Pose A's target share.** At pose A the reference labels the PENN STATION entrance canopy, where the Chase sign
+    hangs, as neighbour: it lies outside Penn 2's vector footprint. Only the glass above is the target (21% of the frame).
+  - **Stop rule hit: KD is lifted −18.5 m** (`liftedM` over 1 m). KD's centre extraction recorded its origin's ground
+    at −12.5 m (`tiles_ground`), and DM's at 6 m. Same latitude and longitude, so the frames differ only in origin
+    height, and the tool lifts KD by the difference. After the lift, KD lands in place:
+    - in pose A its canopy and lettering sit where the scan's do;
+    - its building agreement per view is 0.92, -, 0.97, 1.00, 0.83, 1.00, 0.99 and 0.99, against DM's 1.00, -, 1.00,
+      1.00, 0.83, 1.00, 0.94 and 1.00.
+
+    Penn 2 is stopped on this rule, as written, until a decision.
