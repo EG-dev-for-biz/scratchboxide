@@ -13,7 +13,7 @@
  * exposed or processed differently from its neighbour's.
  *
  *  1. Samples: every textured triangle sampled about every sampleM, each sample with its 3D position, normal, photo and
- *     colour (linear RGB, in logs).
+ *     colour (linear RGB, in logs over a floor, logFloor: a near-black texel's colour is mostly noise).
  *  2. Colour match: the samples grouped by the side they face (sideBins compass bins of the horizontal normal; up and
  *     down apart) and by height band (bandM above the ground). Each group's reference is the area-weighted median of its
  *     photos' mean colours; each photo gets one gain per channel toward the references of the groups it covers (least
@@ -35,7 +35,7 @@
  * for its roof texels and one for the rest, each from its own groups: one photo-wide gain, set mostly by the walls it
  * covers, laid a rectangle of different tone over a flat roof. The masks also tell the twin's de-light which texels are
  * roof (tile-refine-twin.ts: no shadow lift there, since a roof photographed from the air is lit, and a dark roof is a
- * dark material).
+ * dark material; pipeline K lifts none on its walls either, PIPELINE_K_SHADOW_LIFT).
  */
 
 import { readAccessor, type ParsedGlb } from '../glb-bytes';
@@ -43,7 +43,7 @@ import { SRGB8_TO_LINEAR, linearToSrgb255 } from '../../../../common/spatial/pho
 import type { RgbaImage8 } from '../tile-texture-transfer';
 import { Rows, solveLeastSquares } from './ortho-rectify';
 
-export const TEXTURE_HARMONIZE_VERSION = 'texture-harmonize/4';
+export const TEXTURE_HARMONIZE_VERSION = 'texture-harmonize/5';
 
 export const TEXTURE_HARMONIZE_PARAMS = {
     /** Sample spacing over the triangles (m), and at most this many samples a triangle. */
@@ -59,7 +59,13 @@ export const TEXTURE_HARMONIZE_PARAMS = {
     /** Offsets are bounded (natural log). */
     maxOffsetLog: Math.log(1.6),
     /** Roofs: the top-down height map's cell (m), and how far below its top an up-facing surface may sit and still be roof (m). */
-    heightCellM: 0.5, roofToleranceM: 0.75
+    heightCellM: 0.5, roofToleranceM: 0.75,
+    /**
+     * A sample's colour is log(linear + logFloor), per channel. The floor (about sRGB 48) keeps a near-black texel's colour
+     * noise, a few levels that are a large ratio, from steering a photo's gains and offsets: at 1e-3, on the ESB's photos
+     * left as captured (pipeline K lifts no shadow), the windows' noise laid lilac and green patches over the stone.
+     */
+    logFloor: 0.03
 };
 export type TextureHarmonizeParams = typeof TEXTURE_HARMONIZE_PARAMS;
 
@@ -76,7 +82,6 @@ export interface TextureHarmonizeReport {
 
 interface Sample { x: number; y: number; z: number; nx: number; ny: number; nz: number; img: number; u: number; v: number; w: number; c: [number, number, number]; roof: boolean }
 
-const LOG_EPS = 1e-3;
 
 /** A texel's surface in surfaceClassMasks: none of the mesh's triangles uses it, a wall (or any surface not roof), a roof. */
 export const TEXEL_NONE = 0, TEXEL_WALL = 1, TEXEL_ROOF = 2;
@@ -247,7 +252,7 @@ function samplesOf(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, P: 
             const roof = surf.up && seenFromAbove(x, y, z, top, P);
             if (surf.up) { if (roof) areas.roofM2 += w; else { areas.hiddenM2 += w; return; } }
             const su = (uv[0] + uv[2] + uv[4]) / 3, sv = (uv[1] + uv[3] + uv[5]) / 3, lin = sampleLinear(img, su, sv);
-            out.push({ x, y, z, nx, ny, nz, img: source, u: su, v: sv, w, c: [Math.log(lin[0] + LOG_EPS), Math.log(lin[1] + LOG_EPS), Math.log(lin[2] + LOG_EPS)], roof });
+            out.push({ x, y, z, nx, ny, nz, img: source, u: su, v: sv, w, c: [Math.log(lin[0] + P.logFloor), Math.log(lin[1] + P.logFloor), Math.log(lin[2] + P.logFloor)], roof });
             return;
         }
         const ux = p[3] - p[0], uy = p[4] - p[1], uz = p[5] - p[2], vx = p[6] - p[0], vy = p[7] - p[1], vz = p[8] - p[2];
@@ -265,7 +270,7 @@ function samplesOf(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, P: 
             const lin = sampleLinear(img, su, sv);
             out.push({
                 x, y, z, nx, ny, nz,
-                img: source, u: su, v: sv, w, c: [Math.log(lin[0] + LOG_EPS), Math.log(lin[1] + LOG_EPS), Math.log(lin[2] + LOG_EPS)], roof
+                img: source, u: su, v: sv, w, c: [Math.log(lin[0] + P.logFloor), Math.log(lin[1] + P.logFloor), Math.log(lin[2] + P.logFloor)], roof
             });
         }
     });

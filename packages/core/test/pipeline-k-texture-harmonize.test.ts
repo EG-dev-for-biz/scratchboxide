@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
-import { harmonizeTextures } from '../src/node/3d-engine/staged-location/pipeline-k/texture-harmonize';
+import { harmonizeTextures, TEXTURE_HARMONIZE_PARAMS } from '../src/node/3d-engine/staged-location/pipeline-k/texture-harmonize';
 import type { RgbaImage8 } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 
 const N = 64;
@@ -81,6 +81,26 @@ describe('pipeline K texture harmonisation', () => {
         const r2 = harmonizeTextures(g2, g2.json, im2, 0, undefined, undefined, { buildingOf: () => 0 });
         expect(r2.seams.pairs).toBeGreaterThan(0);
         expect(r2.kept).toBe(true);
+    });
+
+    it("does not tint the stone after the dark windows' colour noise (the log floor)", () => {
+        // two photos of one wall, the same exposure and the same stone; only the near-black windows differ, by a green-poor
+        // cast of a few sRGB levels (the noise a photo's shadows carry)
+        const wallPhoto = (window: [number, number, number]): RgbaImage8 => {
+            const rgba = new Uint8Array(N * N * 4);
+            for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) rgba.set([...(x % 8 < 4 ? [150, 140, 125] : window), 255], (y * N + x) * 4);
+            return { width: N, height: N, rgba };
+        };
+        const stoneGreenShare = (im: RgbaImage8) => { let g = 0, s = 0; for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (x % 8 < 4) { const o = (y * N + x) * 4; g += im.rgba[o + 1]; s += im.rgba[o] + im.rgba[o + 1] + im.rgba[o + 2]; } return g / s; };
+        const run = (logFloor?: number) => {
+            const g = wall(), images = new Map<number, RgbaImage8>([[0, wallPhoto([12, 12, 12])], [1, wallPhoto([12, 6, 14])]]);
+            expect(harmonizeTextures(g, g.json, images, 0, logFloor === undefined ? undefined : { ...TEXTURE_HARMONIZE_PARAMS, logFloor }).kept).toBe(true);
+            // the larger shift of the stone's green share, either photo (the pair is levelled toward each other)
+            return Math.max(...[0, 1].map(k => Math.abs(stoneGreenShare(images.get(k)!) / stoneGreenShare(wallPhoto([0, 0, 0])) - 1)));
+        };
+        // the default floor: the stone keeps its hue; a floor at the 8-bit black level lets the windows' noise tint it
+        expect(run()).toBeLessThan(0.01);
+        expect(run(1e-3)).toBeGreaterThan(0.025);
     });
 
     it('leaves a single photo as it was', () => {
