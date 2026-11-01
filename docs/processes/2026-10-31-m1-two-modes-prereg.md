@@ -939,3 +939,50 @@ Values the procedure above fills in, written as they are fixed. Each is written 
   decoys pass where the tiles and the photo show the station's entrance from different eras. The four benchmark places
   are judged as preregistered, with no change to the judge, the views, the bars or the builds. Their stop rules stand: a
   decoy that passes at a benchmark place stops the run there.
+- **Penn 2 is left out of this run** (the main session, 2026-10-31). Its redo with era-matched views is a separate
+  preregistration, for later.
+- **The ESB's paid call** (eval `empire_state_building_20_w_34th__20261101T052223_16e0`; images in
+  `docs/screenshots/m1_prereg/esb_paid/`). It was made after amendment 7, on a restarted server, with the ESB's cache back
+  at the build-time path.
+  - **Views.** 8 fetched, 5 registered, 4 judged:
+    - judged: VqOxFz9R (2024-09, 83 m), w4nU8TkI (2026-04, 90 m), uPcMge9M (2026-04, 92 m) and hi-cmKU8 (2026-04,
+      127 m);
+    - not registered (the edge residual went from 12 px to 6.4, 12 and 12 px): G8sOFZp8, QcCvIfC8 and Q1IjAWuz.
+  - **The tile's edge.** In v1, v2 and v3 the sky mask lies over buildings in the photo: towers far down the avenue (v1),
+    and beyond the tile to the left (v2, v3). Those three views stay in bars 1 and 5 and are left out of bars 2 to 4,
+    which rest on v0 alone. The listing is read from the mask overlays alone. The bar script had already printed the
+    bars over all four views, so it was not made before any score was read, as the rule asks.
+  - **Bars.**
+
+    | Bar | Views | Value | Result |
+    |---|---|---|---|
+    | 1 | all 4 | mean runSd 0.21 (raw 0.24, K 0.12, X1 0.12, X2 0.35) | met |
+    | 2 | v0 | ground 0.00, neighbours 0.24, skyline 0.24 | met |
+    | 3 | v0 | ground: K 5.00, X1 3.00, gap 2.00; neighbours: K 6.33, X1 3.00, gap 3.33 | met |
+    | 4 | v0 | X1 agreement: ground 0.02, neighbours 0.00 | met |
+    | 5 | all 4 | K against X2: overall 5.08 / 4.58, gap 0.50; shape 5.25 / 4.50, gap 0.75; clay shape 5.67 / 4.58, gap 1.09 | **missed** |
+    | 7 | all 4 | 1.00 in every view | met |
+    | 8 | - | `matchedShare` 0.996 (0.967 by count) | met |
+
+    Over all four views, for the record: bar 3's ground gap is 1.33 (K 4.83, X1 3.50) and its neighbours gap 2.75; bar 4's
+    X1 agreement is 0.02 and 0.00; bar 2 is 0.09, 0.15 and 0.21.
+  - **The decoy that passes: X2.** Moved 4 m, it scores 0.50 below K overall and 0.75 below on shape, against a bar of
+    1.0. Only clay shape separates them (1.09).
+  - **What the grids show.**
+    - **K draws the building paler and flatter than the photo and the raw scan**, in every view. Its overall is 5.08
+      against the raw scan's 6.34, so it stands about as far below the raw scan as X2 stands below it.
+    - **At 83 to 127 m a 4 m move shifts the building by a few per cent of the frame.** In clay it is visible against
+      the empty ground, and the clay gap is the one that clears 1.0.
+    - **v3 holds no ground** (`agreement` null for every arm), yet the judge scored every arm's ground 5, X1 included.
+      Over all four views that view alone pulls bar 3's ground gap under 2.0. The judge scores a region that is not in
+      the frame.
+    - **v1's eye is under the street.** The renders show the crosswalk from below, with the bollards hanging under it,
+      and the view still registered within 5 px. Its ground and neighbours compare the street seen from beneath.
+  - **Cost.** Judge: 24 calls, all answered by `gemini-4-argon`: 144,816 tokens in, 4,836 out and 31,041 thinking; $0.65.
+    Street View grounding at the ESB: 24 images (8 in the stopped call, 8 for the era check, 8 in this call), about
+    $0.17. No 403, spend-cap or failed call.
+  - **The stop rule fired** ("A decoy that passes": bar 5 missed at the ESB). The run stopped before the Haughwout
+    Building, the Ferry Building and Griffith Observatory. No era check, build or judge call was made there, and nothing
+    was changed.
+- **Spend so far** (judge at $2 / $10 per million, thinking billed as output; grounding at about $0.007 an image): Penn 2
+  $0.59 + about $0.03; the ESB $0.65 + about $0.17. In all about $1.44, far under the $60 stop.
