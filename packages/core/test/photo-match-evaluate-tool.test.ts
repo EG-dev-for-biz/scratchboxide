@@ -924,37 +924,49 @@ describe('photo_match_evaluate tool', () => {
             expect(v.placement.X2.shiftLengthPx, v.id).toBeGreaterThan(5);
         }
         expect(r.summary).toMatch(new RegExp(`Placement from edges \\(${r.views.length} views; px at the metric width`));
-        // what it was read against: the picked structure (already its footprint's), outer outlines, every arm behind the street
-        expect(r.placement.reference).toMatchObject({ footprint: { used: true }, holesFilled: true, streetInFront: true });
-        expect(r.placement.reference.footprint.source).toMatch(/picked structure's own footprint/);
-        for (const v of r.views) expect(v.placementReference).toMatchObject({ holesFilled: true, streetInFront: true });
+        // what it was read against: the structure picked on the scan (no Google footprint recorded), outer outlines, every arm
+        // behind the street
+        expect(r.placement.reference).toMatchObject({ footprint: { used: false, source: 'none' }, holesFilled: true, streetInFront: true });
+        expect(r.placement.reference.footprint.reason).toMatch(/no Google vector footprint is recorded for the reference: the target is the structure picked on the scan geometry/);
+        for (const v of r.views) expect(v.placementReference).toEqual({ footprint: null, holesFilled: true, streetInFront: true });
         r.views.forEach((v: any, k: number) => fs.copyFileSync(v.grid, path.join(SHOTS, `tool_photo_match_view_checks_view${k}.png`)));
     }, 240_000);
 
-    it('reads placement along the isolate within the run\'s own footprint, and not within one that does not fit the scan', async () => {
-        const note = path.join(root, '.scratchbox', 'cache', 'staged_location', 'runs', RUN, 'pipeline_k_base.json');
-        const run = async (loops: number[][][]) => {
-            fs.writeFileSync(note, JSON.stringify({ loops, groundY: 0, footprint: 'Google vector footprint', report: null }));
+    it('reads placement along the isolate within Google\'s vector footprint the reference read, never within a footprint a build recorded', async () => {
+        const sl = path.join(root, '.scratchbox', 'cache', 'staged_location');
+        const runDir = path.join(sl, 'runs', RUN), stages = path.join(runDir, 'stages.json'), note = path.join(runDir, 'pipeline_k_base.json');
+        const before = fs.readFileSync(stages, 'utf8');
+        const run = async () => {
             const out = await createPhotoMatchEvaluateHandler(() => fakeDeps(root))({ views: 1, runs: 1, clay: false }, ctxFor(root, staged.scene));
             expect(out.status, JSON.stringify(out.resultPayload).slice(0, 600)).toBe('completed');
             return out.resultPayload as any;
         };
         try {
-            // the target's own plan (x -7..7, z -6..6): every triangle of the isolate stays
-            const fits = await run([[[-7, -6], [7, -6], [7, 6], [-7, 6]]]);
-            expect(fits.placement.reference).toMatchObject({ holesFilled: true, streetInFront: true, footprint: { used: true, marginM: 0.3, misfitShare: 0 } });
-            expect(fits.placement.reference.footprint.source).toMatch(/the run's own footprint \(Google vector footprint\).*pipeline_k_base note/);
-            expect(fits.placement.reference.footprint.triangles).toBe(fits.placement.reference.footprint.of);
-            expect(fits.views[0].placementReference.footprint).toBe(fits.placement.reference.footprint.source);
-            expect(fits.placement.mean.raw.errorPx).not.toBeNull();
-            // a corner of it: most of the building past it, so pipeline K's fit rule keeps the whole isolate and says why
-            const off = await run([[[-7, -6], [-3, -6], [-3, -2], [-7, -2]]]);
-            expect(off.placement.reference.footprint).toMatchObject({ used: false });
-            expect(off.placement.reference.footprint.misfitShare).toBeGreaterThan(0.2);
-            expect(off.placement.reference.footprint.reason).toMatch(/does not fit the scan, so the whole target is read/);
-            expect(off.views[0].placementReference.footprint).toBeNull();
-            expect(off.placement.mean.raw.errorPx).toBe(fits.placement.mean.raw.errorPx);
+            // a build's own record of its footprint (pipeline K's base note) is not read: with no vector stage there is none
+            fs.writeFileSync(note, JSON.stringify({ loops: [[[-7, -6], [7, -6], [7, 6], [-7, 6]]], groundY: 0, footprint: 'Google vector footprint', report: null }));
+            const noVector = await run();
+            expect(noVector.placement.reference).toMatchObject({ holesFilled: true, streetInFront: true, footprint: { used: false, source: 'none' } });
+            expect(noVector.placement.reference.footprint.reason).toMatch(/no Google vector footprint is recorded for the reference \(its run has no vector stage\): the whole target is read/);
+            expect(noVector.views[0].placementReference.footprint).toBeNull();
+            // the run's vector stage holds Google's footprint of the target (x -7..7, z -6..6): the isolate within it is the reference
+            const VEC = '9'.repeat(64);
+            fs.mkdirSync(path.join(sl, 'vector', VEC), { recursive: true });
+            fs.writeFileSync(path.join(sl, 'vector', VEC, 'done.json'), JSON.stringify({
+                schema: 'scratchbox.stage-cache/1', stage: 'vector', key: VEC, builtAtMs: 1, ms: 1, published: [],
+                value: { sel: { buildings: [{ id: 'block', parts: [{ loops: [[[-7, -6], [7, -6], [7, 6], [-7, 6]]] }] }] }, tiles: 1 }
+            }));
+            const rec = JSON.parse(before);
+            fs.writeFileSync(stages, JSON.stringify({ ...rec, keys: { ...rec.keys, vector: VEC } }));
+            const vector = await run();
+            expect(vector.placement.reference.footprint).toMatchObject({ used: true, marginM: 0.3, misfitShare: 0 });
+            expect(vector.placement.reference.footprint.source).toMatch(/^Google's vector footprint block, as the target pick chooses it at the place$/);
+            expect(vector.placement.reference.footprint.triangles).toBe(vector.placement.reference.footprint.of);
+            expect(vector.views[0].placementReference.footprint).toBe(vector.placement.reference.footprint.source);
+            // the raw arm is scored as built, the same triangles either way: only the reference is ever restricted
+            expect(vector.regions.armTriangles.raw).toEqual(noVector.regions.armTriangles.raw);
+            expect(vector.placement.mean.raw.errorPx).toBe(noVector.placement.mean.raw.errorPx);
         } finally {
+            fs.writeFileSync(stages, before);
             fs.rmSync(note, { force: true });
         }
     }, 120_000);

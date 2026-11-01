@@ -102,7 +102,7 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
         'The pixel metrics are also given per region of each view: the whole frame, the target building, the ground, the neighbouring buildings, measured trees and the skyline band, with masks taken from the geometry each pixel shows (never from colour) and drawn in the grids. ' +
         'By default it also renders every build in uniform untextured clay from the same poses and has the judge score shape only (massing, openings, surface relief) against the photo: ' +
         'clayScores, clay grids; use them to compare geometry changes (relief, reveals, massing) that the photo texture hides. ' +
-        'Every build\'s placement is also measured from edges, not by the judge: how far its outline is drawn from the photo\'s silhouette of the target, read along the scan\'s target within the building\'s footprint, outer outlines only, every build behind the scan\'s street (placement, px and degrees; 0 = drawn where the photo shows it). ' +
+        'Every build\'s placement is also measured from edges, not by the judge: how far its outline is drawn from the photo\'s silhouette of the target, read along the scan\'s target within Google\'s vector footprint when one is recorded, outer outlines only, every build as built behind the scan\'s street (placement, px and degrees; 0 = drawn where the photo shows it). ' +
         'A view whose registered eye stands under the street is not used; a region under 1% of a view is not judged there; a view where the reference tile ends inside the frame (its sky over what stands past the edge) is flagged (tileEdge) and its regions are not judged. ' +
         'With no build named it evaluates the open staged scene. Compare versions by passing arms. Scores are relative judgements, not measurements: report the spread, and say when the views are few. ' +
         'Fails with a typed error (no scores) when no held-out view can be found or registered. Takes a few minutes (Street View fetch, registration, several judge calls per view).',
@@ -320,8 +320,6 @@ interface Reference {
     removedTrees?: string;
     /** Google's building footprints the run read (its vector stage), for the structure pick at the place when nothing was isolated. */
     footprints?: EvidenceLookup;
-    /** The footprint the run built the structure in (its pipeline K base note, else its structure_scan note): loops in the tile frame. */
-    runFootprint?: { loops: Vec2[][]; source: string };
     source: string;
 }
 
@@ -461,7 +459,6 @@ class BuildResolver {
         // the footprints of Google's buildings the vector stage read (in the place's frame: x east, z south, the same origin)
         const vector = this.stageValue<{ sel?: { buildings?: StoredVectorBuilding[] } }>('vector', rec.keys?.vector);
         const footprints = vector?.value.sel?.buildings?.length ? footprintLookup(vector.value.sel.buildings) : undefined;
-        const runFootprint = this.runFootprint(rec.runId);
         return {
             origin: { lat: place.lat, lng: place.lng, heightMeters: tiles.value.originEllipsoidalHeightM },
             place: rec.place?.formattedAddress ?? rec.request?.query ?? `${place.lat.toFixed(6)}, ${place.lng.toFixed(6)}`,
@@ -469,24 +466,8 @@ class BuildResolver {
             ...(iso && fs.existsSync(iso) ? { isolate: iso } : {}),
             ...(removed && fs.existsSync(removed) ? { removedTrees: removed } : {}),
             ...(footprints ? { footprints } : {}),
-            ...(runFootprint ? { runFootprint } : {}),
             source: `staged run ${rec.runId}${welded ? ' (its seam-welded scan, which every stage of the run read)' : ''}`
         };
-    }
-
-    /**
-     * The footprint a run built its structure in, as the run recorded it: pipeline K's base note (the loops its base cleanup
-     * and clip used), else the structure_scan note (pipeline E's plan). Undefined when the run recorded neither.
-     */
-    runFootprint(runId: string): Reference['runFootprint'] {
-        const loopsOf = (v: unknown): Vec2[][] => (Array.isArray(v) ? v : []).map(l => (Array.isArray(l) ? l : []).filter((p): p is Vec2 => Array.isArray(p) && p.length >= 2 && p.every(Number.isFinite))).filter(l => l.length >= 3);
-        const k = this.cache.readRunNote<{ loops?: unknown; footprint?: string }>(runId, 'pipeline_k_base');
-        const kLoops = loopsOf(k?.loops);
-        if (kLoops.length) return { loops: kLoops, source: `the run's own footprint (${k?.footprint ?? 'unnamed'}), as its pipeline K base cleanup and clip used it (pipeline_k_base note)` };
-        const s = this.cache.readRunNote<{ plan?: unknown; planSource?: string }>(runId, 'structure_scan');
-        const sLoops = loopsOf(s?.plan);
-        if (sLoops.length) return { loops: sLoops, source: `the run's own plan (${s?.planSource ?? 'unnamed'}), as its structure_scan note records it` };
-        return undefined;
     }
 
     /** Every pano a run used: its notes (registration, ownership, fit), its stage entries and, when open, its scene. */
@@ -698,8 +679,8 @@ function selectTriangles(t: TileTriangles, keepFlags: Uint8Array): TileTriangles
 /** What placement read the photo's silhouette of the target along, and how every arm was drawn for it (the result's placement.reference). */
 export interface PlacementReference {
     /**
-     * The footprint the scan's target was restricted to: its triangles whose centroid lies within it plus marginM. `used` false:
-     * the whole target was read, and `reason` says why.
+     * Google's vector footprint the scan's target was restricted to, for the reference alone (no arm is clipped): its triangles
+     * whose centroid lies within it plus marginM. `used` false: the whole target was read, and `reason` says why.
      */
     footprint: { used: boolean; source: string; marginM?: number; misfitShare?: number; triangles?: number; of?: number; reason?: string };
     /** Both outlines, the reference's and each arm's, are outer boundaries with their holes filled (targetFilled). */
@@ -709,15 +690,16 @@ export interface PlacementReference {
 }
 
 /**
- * The scan's target restricted to a footprint for placement (one flag per triangle of `t`): its triangles whose centroid
- * lies within the footprint plus BASE_CLEANUP_PARAMS.clipMarginM, the margin pipeline K clips at, so scan debris past the
- * footprint (a slice of a neighbour, ragged fragments of what stands beside) is not read as the building's silhouette.
- * Pipeline K's own fit rule decides whether the footprint is used: when more than footprintMisfit of the target's area
- * standing apronHeightM over the terrain lies more than allowanceM outside it, it does not fit the scan and the whole target
- * is kept (as with no footprint), with the reason.
+ * The scan's target restricted to Google's vector footprint for placement's reference (one flag per triangle of `t`): its
+ * triangles whose centroid lies within the footprint plus BASE_CLEANUP_PARAMS.clipMarginM, the margin pipeline K clips at, so
+ * scan debris past the footprint (a slice of a neighbour, ragged fragments of what stands beside) is not read as the building's
+ * silhouette. Only the reference is restricted: every arm, the raw scan included, is scored as built. Pipeline K's own fit
+ * rule decides whether the footprint is used: when more than footprintMisfit of the target's area standing apronHeightM over
+ * the terrain lies more than allowanceM outside it, it does not fit the scan and the whole target is kept (as with no
+ * footprint, `whyNone` then saying why there is none), with the reason.
  */
-export function placementTarget(t: TileTriangles, targetFlags: Uint8Array, terrain: TerrainLookup, footprint: { loops: Vec2[][]; source: string } | undefined): { flags: Uint8Array; footprint: PlacementReference['footprint'] } {
-    if (!footprint) return { flags: targetFlags, footprint: { used: false, source: 'none', reason: 'no footprint is recorded for the reference: neither the run\'s own nor a Google vector footprint the target pick finds at the place' } };
+export function placementTarget(t: TileTriangles, targetFlags: Uint8Array, terrain: TerrainLookup, footprint: { loops: Vec2[][]; source: string } | undefined, whyNone = 'no Google vector footprint is recorded for the reference'): { flags: Uint8Array; footprint: PlacementReference['footprint'] } {
+    if (!footprint) return { flags: targetFlags, footprint: { used: false, source: 'none', reason: `${whyNone}: the whole target is read` } };
     const P = BASE_CLEANUP_PARAMS, pos = t.positions, flags = new Uint8Array(targetFlags.length);
     let above = 0, aboveOut = 0, kept = 0, of = 0;
     for (let i = 0; i < targetFlags.length; i++) {
@@ -1410,15 +1392,19 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     // the target alone (the scan's)
     const targetTris = hasTarget ? selectTriangles(full, targetFlags) : undefined;
     const targetLabels = hasTarget ? fullLabels.filter((_, i) => targetFlags[i]) : undefined;
-    // where the photo's silhouette of it is read for each arm's placement: the isolate within the building's footprint (the
-    // run's own, else Google's vector footprint the target pick finds at the place), unless that footprint does not fit the
-    // scan; a picked structure is already its footprint's. Every arm is drawn behind the tile's street for it.
-    const vectorPick = isoFlags && !ref.runFootprint && ref.footprints ? pickStructure(scan, terrain, { anchor: { x: 0, z: 0 }, footprints: { buildingAt: ref.footprints.buildingAt, buildings: ref.footprints.raster.buildings } }) : undefined;
+    // where the photo's silhouette of it is read for each arm's placement: the isolate within Google's vector footprint (the one
+    // the reference run's vector stage read, as the target pick chooses it at the place), unless that footprint does not fit the
+    // scan; a structure picked within it is already its footprint's. Never a footprint a build recorded: the reference does not
+    // come from a build it judges. Every arm is drawn behind the tile's street for it, and no arm is ever clipped.
+    const vectorPick = isoFlags && ref.footprints ? pickStructure(scan, terrain, { anchor: { x: 0, z: 0 }, footprints: { buildingAt: ref.footprints.buildingAt, buildings: ref.footprints.raster.buildings } }) : undefined;
     const vectorLoops = vectorPick?.vectorFootprint?.used ? ref.footprints!.raster.buildings.filter(b => vectorPick.vectorFootprint!.featureIds.includes(b.id)).flatMap(b => b.parts.map(p => p[0])).filter(l => l?.length >= 3) : [];
-    const placementFootprint = ref.runFootprint ?? (vectorLoops.length ? { loops: vectorLoops, source: `Google's vector footprint ${vectorPick!.vectorFootprint!.featureIds.join(', ')}, as the target pick chooses it at the place` } : undefined);
+    const noVector = !ref.footprints ? 'no Google vector footprint is recorded for the reference (its run has no vector stage)'
+        : `Google's vector footprints were read, but the target pick finds none for the target (${vectorPick?.vectorFootprint?.reason ?? 'no footprint at the place'})`;
     const placementAt = !hasTarget ? undefined : isoFlags
-        ? placementTarget(full, targetFlags, terrain, placementFootprint)
-        : { flags: targetFlags, footprint: { used: true, source: `the picked structure's own footprint (${pick!.footprintSource}): the target is already within it` } };
+        ? placementTarget(full, targetFlags, terrain, vectorLoops.length ? { loops: vectorLoops, source: `Google's vector footprint ${vectorPick!.vectorFootprint!.featureIds.join(', ')}, as the target pick chooses it at the place` } : undefined, noVector)
+        : pick!.footprintSource === 'vector-footprint'
+            ? { flags: targetFlags, footprint: { used: true, source: 'Google\'s vector footprint the target pick chose: the picked structure is already within it' } }
+            : { flags: targetFlags, footprint: { used: false, source: 'none', reason: `${ref.footprints ? 'the target pick did not use Google\'s vector footprint' : 'no Google vector footprint is recorded for the reference'}: the target is the structure picked on the scan geometry, read whole` } };
     const placementTris = placementAt ? (placementAt.flags === targetFlags ? targetTris : selectTriangles(full, placementAt.flags)) : undefined;
     const placementLabels = placementAt ? (placementAt.flags === targetFlags ? targetLabels : fullLabels.filter((_, i) => placementAt.flags[i])) : undefined;
     const street = hasTarget ? streetMesh(full, fullLabels) : undefined;
@@ -1941,7 +1927,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         },
         regions: regionsNote,
         placement: {
-            note: `Where each build's target is drawn against where the photo shows it, from edges, not by the judge. The photo's silhouette of the target is its structural edges within ${PHOTO_MATCH_PLACEMENT_BAND_PX} px of the outline of the scan's target from the registered pose (${PHOTO_MATCH_METRIC_WIDTH_PX} px wide), the target restricted to the building's footprint plus ${BASE_CLEANUP_PARAMS.clipMarginM} m (reference.footprint: scan debris past it is not the building); each build is drawn alone from the same pose, it and the scan's target behind the reference tile's street (reference.streetInFront), and both outlines are outer boundaries with their holes filled (a hole in the scan is not a silhouette). errorPx is the mean distance from that silhouette to the build's outline as drawn (truncated at ${PHOTO_MATCH_PLACEMENT_TRUNCATION_PX} px; errorDeg the angle): it grows with a move and with a wrong shape. Beside it, shiftPx is the image shift (within ${PHOTO_MATCH_PLACEMENT_SEARCH_PX} px) that brings the outline closest, and residualPx the error left there. Mean over the views where the target fills at least ${HELD_OUT_MIN_SCREEN * 100}% of the frame; per view in views[].placement. A report without reference is the earlier measure: the whole target, holes read, nothing in front.`,
+            note: `Where each build's target is drawn against where the photo shows it, from edges, not by the judge. The photo's silhouette of the target is its structural edges within ${PHOTO_MATCH_PLACEMENT_BAND_PX} px of the outline of the scan's target from the registered pose (${PHOTO_MATCH_METRIC_WIDTH_PX} px wide), the target restricted to Google's vector footprint plus ${BASE_CLEANUP_PARAMS.clipMarginM} m when the reference recorded one that fits the scan (reference.footprint: scan debris past it is not the building); each build is drawn alone from the same pose and scored as built, never clipped (the raw scan included: its pieces past the footprint count against it), it and the scan's target behind the reference tile's street (reference.streetInFront), and both outlines are outer boundaries with their holes filled (a hole in the scan is not a silhouette; a real opening such as an arch with sky behind it is filled too, as placement measures where the building stands). errorPx is the mean distance from that silhouette to the build's outline as drawn (truncated at ${PHOTO_MATCH_PLACEMENT_TRUNCATION_PX} px; errorDeg the angle): it grows with a move and with a wrong shape. Beside it, shiftPx is the image shift (within ${PHOTO_MATCH_PLACEMENT_SEARCH_PX} px) that brings the outline closest, and residualPx the error left there. Mean over the views where the target fills at least ${HELD_OUT_MIN_SCREEN * 100}% of the frame; per view in views[].placement. A report without reference is the earlier measure: the whole target, holes read, nothing in front.`,
             ...(placementReference ? { reference: placementReference } : {}),
             mean: placementMean, views: placementViews.length
         },

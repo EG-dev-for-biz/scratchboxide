@@ -1346,7 +1346,8 @@ export function targetOutline(labels: Uint8Array, w: number, h: number): Uint8Ar
 /**
  * The target with its holes filled (REGION per pixel): every pixel that is not the target and that the frame's border cannot
  * reach (through 4-neighbours) without crossing the target becomes the target, so the target's only outline is its outer
- * boundary. A hole in the scan, a courtyard or an arch's opening seen through is not a silhouette.
+ * boundary. A hole in the scan is not a silhouette. Real openings are filled too (an arch with the sky behind it, a courtyard
+ * seen through): placement measures where the building stands, not its openings, so that is accepted.
  */
 export function targetFilled(labels: Uint8Array, w: number, h: number): Uint8Array {
     const T = REGION.target, out = Uint8Array.from(labels), reached = new Uint8Array(w * h);
@@ -1370,7 +1371,7 @@ export function targetFilled(labels: Uint8Array, w: number, h: number): Uint8Arr
  * Where a build's target is drawn against where the photo shows it, from edges alone (never a vision score). The photo's
  * silhouette of the target is its structural edges within PHOTO_MATCH_PLACEMENT_BAND_PX of the reference's target outline
  * (`reference`: the scan's target drawn alone from the registered pose, at the metric width, labelled as the raw scan arm is;
- * the evaluator restricts it to the building's footprint and draws it, and every arm, behind the reference's street).
+ * the evaluator restricts it to Google's vector footprint and draws it, and every arm, behind the reference's street).
  * The placement error is the mean distance from that silhouette to the build's outline (`arm`: the build drawn alone from the
  * same pose), truncated at PHOTO_MATCH_PLACEMENT_TRUNCATION_PX. Both outlines are outer boundaries (targetFilled): a hole's
  * border is never read, in the scan or in a build, so a build that fills the scan's hole loses nothing by it. Beside it, the
