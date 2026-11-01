@@ -288,6 +288,78 @@ Values written as they are fixed.
     Grounding: 8 images, about $0.06. No 403 or failed call.
   - **No stop rule fired.** Bars 3 and 4 are untested, not missed, and bar 5 is out by amendment 3. On to the Ferry
     Building.
+- **The Ferry Building's paid call**: eval `1_ferry_building_san_francisco_c_20261101T073009_632f`, on a server
+  restarted with its cache at the build-time path. Images are in `docs/screenshots/m1_prereg/ferry_paid_fixed/`.
+  - **Views.** 8 fetched (all 8 kept by the era check), 8 registered, the nearest 4 judged. No eye under the street, and
+    no view where the tile ends inside the frame (the most is 0.9%, in v2).
+    - Judged: ZR9VHLtY (22 m), z6iR0rUI (44 m), 4sXa5k8s (57 m), all 2026-09; and nF68xO_p (92 m, 2025-05).
+    - Edge residuals went from 12 px to 0.9 to 2.2 px.
+  - **Regions.** v2 holds no ground, so it was not asked about the ground. Every other region was judged in every
+    view.
+  - **Bars.**
+
+    | Bar | Views | Value | Result |
+    |---|---|---|---|
+    | 1 | 4 | mean runSd 0.49 (raw 0.53, K 0.47, X1 0.47, X2 0.47) | met; out of the bars by amendment 3 |
+    | 2 | 3 / 4 / 4 | ground 0.24, neighbours 0.35, skyline 0.40 | met |
+    | 3 | 3 / 4 | ground: K 3.89, X1 1.22, gap 2.67; neighbours: K 5.66, X1 3.25, gap 2.41 | met |
+    | 4 | 3 / 4 | X1 agreement: ground 0.01, neighbours 0.00 | met |
+    | 5 (placement) | 4 | errorPx raw 2.91, K 6.47, X2 15.67; X2 − K 9.20 (D 4.3) | met; out of the bars by amendment 3 |
+    | 7 | 4 | 1.00 in every view | met |
+    | 8 | - | `matchedShare` 0.862 | missed, as in the dry run (amendment 3) |
+
+    Placement per view (errorPx, raw / K / X2): ZR9VHLtY 2.74 / 6.84 / 18.90; z6iR0rUI 3.16 / 6.06 / 16.81;
+    4sXa5k8s 1.99 / 8.18 / 15.96; nF68xO_p 3.74 / 4.82 / 11.01. X2 is above K in every view, by 6.2 to 12.1 px.
+  - **The judge, information only.** Overall: raw 5.33, K 4.09, X2 3.50, X1 2.25. Clay shape: raw 4.83, K 3.59,
+    X2 2.75.
+  - **Cost.** Judge: 24 calls, all `gemini-4-argon`: 143,057 tokens in, 4,870 out and 31,957 thinking; $0.65.
+    Grounding: 8 images, about $0.06. No 403 or failed call.
+  - **No stop rule fired.** This was the last place. Griffith Observatory is not judged (see the dry run).
+  - **After the run.** The Ferry's cache is the one at m1-run's build-time path. The ESB's and the Haughwout's are under
+    `places/esb/cache` and `places/haughwout/cache`.
+
+### The result (2026-11-01)
+
+**Every counted bar is met at every place it can be read, and no stop rule fired.**
+
+| Place | Judged views | Views for bars 2 to 4 | Bar 1 | Bars 2, 3, 4 | Bar 5 (placement, X2 − K / D) | Bar 7 | Bar 8 |
+|---|---|---|---|---|---|---|---|
+| ESB | 4 | v0 (the tile ends inside v1 to v3) | 0.35, met | met | 8.70 / 4.5, met | met | 0.996, met |
+| Haughwout | 4 | none (the tile ends inside all 4) | 0.41, information | untested | 7.34 / 6.3, information | met | 0.875, missed (amendment 3) |
+| Ferry Building | 4 | all 4 (the ground in 3) | 0.49, information | met | 9.20 / 4.3, information | met | 0.862, missed (amendment 3) |
+| Griffith Observatory | 0 | - | - | not judged: no Google-captured pano near it | - | - | - |
+
+- **Against the bars, the M1 exit is met.**
+  - The judge repeats itself within its spread (bars 1 and 2).
+  - X1, the hero with no street round it, loses at least 2.4 on the ground and the neighbours wherever they can be read
+    (bars 3 and 4: the ESB and the Ferry).
+  - X2, moved 4 m, is ranked lower by placement measured from edges. At the ESB, where it counts, it is 8.7 px further
+    from the photo's silhouette than K. At the two places where it counts only as information, it is 7.3 and 9.2 px
+    further.
+- **The limits of that result.** These are why the evidence is thin:
+  - The building bars rest on one place, the ESB. Penn 2 is out of this run, and amendment 3 keeps the Haughwout and the
+    Ferry out.
+  - The region bars rest on one view at the ESB and on the Ferry. At the Haughwout the tile ends inside every view.
+  - Griffith Observatory has no held-out view.
+  - The vision judge still scores X2 only 0.6 to 0.8 below K overall. Bar 5 is met because it now reads edges, not
+    the judge.
+- **M2's neighbours** are not part of this run. Penn 2's redo is a separate preregistration.
+- **What the run showed about the views.** Panos past the tile's edge give wrong eyes and photos without the target.
+  - At the Haughwout, 6 of its candidates were such views. The era check caught them and they were swapped.
+  - At the ESB, v1 was such a view. The tile-edge check flagged it.
+  - The tool's candidate check uses the tile to test whether the target is hidden. Past the edge, the tile holds
+    nothing near the camera, so the check passes them. That is a follow-up for the view selection, not a rule of this
+    run.
+- **Cost of this rerun.**
+
+  | Place | Judge | Grounding | Era-check photos | Total |
+  |---|---|---|---|---|
+  | ESB | $0.64 | about $0.06 | none (amendment 7's) | about $0.70 |
+  | Haughwout | $0.64 | about $0.06 | 14 (8, then 6 for the swaps), about $0.10 | about $0.80 |
+  | Ferry | $0.65 | about $0.06 | 8, about $0.06 | about $0.77 |
+
+  The rerun cost about $2.26: judge $1.94, 46 photos about $0.32. With the first run's $1.44, the total is about $3.70,
+  against the $60 stop.
 
 ## Report
 
