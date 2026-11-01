@@ -871,7 +871,7 @@ export function heldOutViews(panos: PanoCandidate[], structure: Structure, conte
     for (const p of near) if (!cands.some(q => Math.hypot(q.x - p.x, q.z - p.z) < 10)) cands.push(p);
     const views: HeldOutCandidateView[] = [], rejected: string[] = [];
     for (const p of cands) {
-        let street = streetAt(p.x, p.z, context, terrain);
+        const street = streetAt(p.x, p.z, context, terrain);
         if (!street) { rejected.push(`${p.panoId}: ${p.d.toFixed(0)} m, no ground under it: it stands past the reference tile's edge`); continue; }
         const eye: Vec3 = [p.x, street.y + 2.5, p.z];
         const eyeGround = street.on;

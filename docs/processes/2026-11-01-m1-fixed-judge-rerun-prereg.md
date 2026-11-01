@@ -380,6 +380,13 @@ Values written as they are fixed.
   - **The tile cannot tell them from the six bad Haughwout views.** It holds nothing round any of their cameras, so
     whether a building stands in front is not measured. Keeping them would need another measured source of what stands
     there, such as Google's vector building footprints.
+  - **The main session's decision (2026-11-01): keep the strict rule, and add no vector footprints.** The acceptance test
+    "the views that were kept must still pass" is set aside for those four. The reasons:
+    - they passed only because their camera was put on the structure's base;
+    - with no tile round the camera, its height and whatever stands in front of it are guesses;
+    - their regions are flagged for the tile's edge anyway;
+    - losing them costs views, not evidence. The ESB still gets clean views, the Haughwout keeps 6 of its 8 plus
+      replacements, and the Ferry is unchanged.
 - **Cost of this rerun.**
 
   | Place | Judge | Grounding | Era-check photos | Total |
