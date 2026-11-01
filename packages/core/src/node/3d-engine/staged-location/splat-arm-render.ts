@@ -35,7 +35,7 @@ import { compileNativeCached, defaultNativeFlags, NativeBuildError } from '../na
 import { repoPath } from '../../process/repo-python';
 import { nearestLabelIndex, type TriangleSoup } from '../../spatial/triangle-surface-index';
 import {
-    PHOTO_MATCH_AMBIENT, PHOTO_MATCH_BACKGROUND, PHOTO_MATCH_CLAY, PHOTO_MATCH_GROUND_BAND_M, PHOTO_MATCH_NEAR_M, REGION,
+    occluderHides, PHOTO_MATCH_AMBIENT, PHOTO_MATCH_BACKGROUND, PHOTO_MATCH_CLAY, PHOTO_MATCH_GROUND_BAND_M, PHOTO_MATCH_NEAR_M, REGION,
     type ArmRender, type TerrainLookup
 } from './photo-match-eval';
 
@@ -45,6 +45,12 @@ export interface SplatArmView {
     camera: PinholeCamera;
     /** Render in the judge's clay (one albedo, its key light and background) instead of its neutral light. */
     clay?: boolean;
+    /**
+     * With labels: what stands in front (its camera z per pixel at the camera's size, >= 1e8 where nothing). A pixel whose
+     * labelling splat it hides (occluderHides, the rule renderTriangles' occluderDepth hides by) takes `skyLabel` in `regions`;
+     * the colour and coverage are left as drawn.
+     */
+    occluderDepth?: Float32Array;
 }
 
 export interface SplatArmRender extends ArmRender {
@@ -227,11 +233,16 @@ export async function renderSplatArm(splatPath: string, views: SplatArmView[], o
             const { width, height } = v.camera, prefix = prefixes[i];
             const info = perView.find(x => x.view === prefix);
             const cov = fs.readFileSync(`${prefix}.cov`);
+            const regions = opts.labels ? new Uint8Array(fs.readFileSync(`${prefix}.reg`)) : undefined;
+            if (regions && v.occluderDepth) {
+                const dep = fs.readFileSync(`${prefix}.dep`), z = new Float32Array(dep.buffer, dep.byteOffset, dep.byteLength / 4);
+                for (let k = 0; k < regions.length; k++) if (z[k] < 1e8 && occluderHides(v.occluderDepth[k], z[k])) regions[k] = opts.skyLabel ?? 0;
+            }
             return {
                 width, height,
                 rgba: new Uint8Array(fs.readFileSync(`${prefix}.rgba`)),
                 coverage: new Float32Array(cov.buffer, cov.byteOffset, cov.byteLength / 4).slice(),
-                ...(opts.labels ? { regions: new Uint8Array(fs.readFileSync(`${prefix}.reg`)) } : {}),
+                ...(regions ? { regions } : {}),
                 triangles: info?.drawn ?? 0,
                 ms: info?.ms ?? 0
             };

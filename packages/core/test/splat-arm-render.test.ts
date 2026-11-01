@@ -86,6 +86,16 @@ describe('renderSplatArm', () => {
         expect(labelled.regions![5 * 160 + 5]).toBe(7);
     }, 120000);
 
+    it('hides a pixel\'s label behind an occluder by the judge\'s rule (occluderHides), leaving the colour as drawn', async () => {
+        // in front of the sheet (10 m) over the left half: 5 m; over the right half 9.8 m, within the rule's slack (0.25 m + 2%)
+        const occluderDepth = Float32Array.from({ length: 160 * 120 }, (_, i) => (i % 160 < 80 ? 5 : 9.8));
+        const [open, hidden] = await renderSplatArm(sheet, [{ camera: CAM }, { camera: CAM, occluderDepth }], { workDir: path.join(WORK, 'w2b'), labels: Uint8Array.from(labels), skyLabel: 7 });
+        expect(hidden.regions![60 * 160 + 55]).toBe(7);
+        expect(hidden.regions![60 * 160 + 105]).toBe(5);
+        expect(open.regions![60 * 160 + 55]).toBe(3);
+        expect(Array.from(hidden.rgba)).toEqual(Array.from(open.rgba));
+    }, 120000);
+
     it('reads the splats\' centres and labels each by the nearest labelled triangle', async () => {
         const pos = await splatPositions(sheet, path.join(WORK, 'w4'));
         expect(pos.length).toBe(list.length * 3);

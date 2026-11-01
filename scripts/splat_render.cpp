@@ -20,7 +20,8 @@
  *   positions <out path>                                                          (float32 x y z per splat, file order)
  *
  * Each view writes <prefix>.rgba (RGBA8, row 0 at the top), <prefix>.cov (float32 coverage) and, with labels,
- * <prefix>.reg (uint8). Prints one JSON line per view, then a summary line.
+ * <prefix>.reg (uint8) and <prefix>.dep (float32: the camera z of the splat that labelled each pixel, 1e9 where none).
+ * Prints one JSON line per view, then a summary line.
  */
 
 #include "scratchbox_splat_raster.hpp"
@@ -105,7 +106,7 @@ int main(int argc, char** argv) {
             const auto r = splatraster::render(splats, labels, skyLabel, cam, l);
             writeFile(prefix + ".rgba", r.rgba);
             writeFile(prefix + ".cov", r.coverage);
-            if (!r.regions.empty()) writeFile(prefix + ".reg", r.regions);
+            if (!r.regions.empty()) { writeFile(prefix + ".reg", r.regions); writeFile(prefix + ".dep", r.regionDepth); }
             const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - v0).count();
             std::cout << "{\"view\":\"" << prefix << "\",\"drawn\":" << r.drawn << ",\"ms\":" << static_cast<long>(ms) << "}" << std::endl;
             views++;

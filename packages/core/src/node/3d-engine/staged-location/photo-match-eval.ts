@@ -195,6 +195,15 @@ function cutoutUv(k: CutoutKind, u: number, v: number, out: Float64Array): boole
 }
 
 /**
+ * Whether what stands in front (its camera z, `occluderZ`; >= 1e8 where nothing) hides a surface at camera z `z`: it is
+ * nearer by more than 0.25 m plus 2 percent of `z`. renderTriangles' `occluderDepth` and the splat arm's (splat-arm-render.ts)
+ * hide by this one rule.
+ */
+export function occluderHides(occluderZ: number, z: number): boolean {
+    return occluderZ < 1e8 && occluderZ < z - (0.25 + 0.02 * z);
+}
+
+/**
  * Renders triangle soups (readTileTriangles: tile frame, linear textures) from a pinhole or an orthographic camera at the
  * camera's own resolution. `supersample` samples per pixel side (2 = 4 samples). Both faces of a triangle render (scan meshes have mixed
  * winding); the nearest surface wins; `occluderDepth` hides what the real place hides. A soup's `cutout` (tree leaves and
@@ -390,10 +399,7 @@ export function renderTriangles(meshes: TileTriangles[], camera: RenderCamera, o
         const i = y * W + x;
         const o = (Math.floor(y / ss) * outW + Math.floor(x / ss));
         let mi = mesh[i];
-        if (mi >= 0 && options.occluderDepth) {
-            const oz = options.occluderDepth[Math.floor(y / ss) * camera.width + Math.floor(x / ss)];
-            if (oz < 1e8 && oz < depth[i] - (0.25 + 0.02 * depth[i])) mi = -1;
-        }
+        if (mi >= 0 && options.occluderDepth && occluderHides(options.occluderDepth[Math.floor(y / ss) * camera.width + Math.floor(x / ss)], depth[i])) mi = -1;
         if (regionCounts) {
             const r = mi < 0 ? REGION.sky : regionOf![mi];
             regionCounts[o * REGION_COUNT + (typeof r === 'number' ? r : r[tri[i]])]++;
@@ -1338,22 +1344,48 @@ export function targetOutline(labels: Uint8Array, w: number, h: number): Uint8Ar
 }
 
 /**
+ * The target with its holes filled (REGION per pixel): every pixel that is not the target and that the frame's border cannot
+ * reach (through 4-neighbours) without crossing the target becomes the target, so the target's only outline is its outer
+ * boundary. A hole in the scan, a courtyard or an arch's opening seen through is not a silhouette.
+ */
+export function targetFilled(labels: Uint8Array, w: number, h: number): Uint8Array {
+    const T = REGION.target, out = Uint8Array.from(labels), reached = new Uint8Array(w * h);
+    const stack = new Int32Array(w * h);
+    let top = 0;
+    const push = (i: number) => { if (!reached[i] && labels[i] !== T) { reached[i] = 1; stack[top++] = i; } };
+    for (let x = 0; x < w; x++) { push(x); push((h - 1) * w + x); }
+    for (let y = 0; y < h; y++) { push(y * w); push(y * w + w - 1); }
+    while (top) {
+        const i = stack[--top], x = i % w;
+        if (x > 0) push(i - 1);
+        if (x < w - 1) push(i + 1);
+        if (i >= w) push(i - w);
+        if (i < (h - 1) * w) push(i + w);
+    }
+    for (let i = 0; i < out.length; i++) if (out[i] !== T && !reached[i]) out[i] = T;
+    return out;
+}
+
+/**
  * Where a build's target is drawn against where the photo shows it, from edges alone (never a vision score). The photo's
  * silhouette of the target is its structural edges within PHOTO_MATCH_PLACEMENT_BAND_PX of the reference's target outline
- * (`reference`: the scan's target drawn alone from the registered pose, at the metric width, labelled as the raw scan arm is).
+ * (`reference`: the scan's target drawn alone from the registered pose, at the metric width, labelled as the raw scan arm is;
+ * the evaluator restricts it to the building's footprint and draws it, and every arm, behind the reference's street).
  * The placement error is the mean distance from that silhouette to the build's outline (`arm`: the build drawn alone from the
- * same pose), truncated at PHOTO_MATCH_PLACEMENT_TRUNCATION_PX. Beside it, the image shift within PHOTO_MATCH_PLACEMENT_SEARCH_PX
- * that brings the outline closest (plus PLACEMENT_SHIFT_COST per pixel of shift), searched every 2 px, then to the pixel, and
- * the error left there: a move shows as a shift, a wrong shape as error no shift removes. The photo's other edges (windows,
- * signs, the street) are never read, so a facade's repeats cannot pull it. Null with too few silhouette or outline pixels.
+ * same pose), truncated at PHOTO_MATCH_PLACEMENT_TRUNCATION_PX. Both outlines are outer boundaries (targetFilled): a hole's
+ * border is never read, in the scan or in a build, so a build that fills the scan's hole loses nothing by it. Beside it, the
+ * image shift within PHOTO_MATCH_PLACEMENT_SEARCH_PX that brings the outline closest (plus PLACEMENT_SHIFT_COST per pixel of
+ * shift), searched every 2 px, then to the pixel, and the error left there: a move shows as a shift, a wrong shape as error no
+ * shift removes. The photo's other edges (windows, signs, the street) are never read, so a facade's repeats cannot pull it.
+ * Null with too few silhouette or outline pixels.
  */
 export function targetPlacement(field: PhotoEdgeField, reference: Uint8Array, arm: Uint8Array, degPerPx: number): TargetPlacement | null {
     const { w, h, edges } = field;
-    const nearRef = distanceTransform(targetOutline(reference, w, h), w, h, PHOTO_MATCH_PLACEMENT_BAND_PX + 1);
+    const nearRef = distanceTransform(targetOutline(targetFilled(reference, w, h), w, h), w, h, PHOTO_MATCH_PLACEMENT_BAND_PX + 1);
     const xs: number[] = [], ys: number[] = [];
     for (let i = 0; i < edges.length; i++) if (edges[i] && nearRef[i] <= PHOTO_MATCH_PLACEMENT_BAND_PX) { xs.push(i % w); ys.push((i - (i % w)) / w); }
     const n = xs.length;
-    const outline = targetOutline(arm, w, h);
+    const outline = targetOutline(targetFilled(arm, w, h), w, h);
     let outlinePx = 0;
     for (let i = 0; i < outline.length; i++) outlinePx += outline[i];
     if (n < PLACEMENT_MIN_PX || outlinePx < PLACEMENT_MIN_PX) return null;
