@@ -31,7 +31,7 @@ import { promisify } from 'util';
 import type { PinholeCamera } from '../../../common/spatial/texture-pass-contracts';
 import { LocalTangentPlane } from '../../../common/coordinate/LocalTangentPlane';
 import { NativeCppCompilerService } from '../native-compiler-service';
-import { buildNativeIfStale } from '../native-build';
+import { compileNativeCached, defaultNativeFlags, NativeBuildError } from '../native-build-cache';
 import { repoPath } from '../../process/repo-python';
 import { nearestLabelIndex, type TriangleSoup } from '../../spatial/triangle-surface-index';
 import {
@@ -67,10 +67,15 @@ export interface SplatArmOptions {
 async function runSplatRender(lines: string[], work: string, signal?: AbortSignal): Promise<string> {
     const manifest = path.join(work, 'manifest.txt');
     fs.writeFileSync(manifest, lines.join('\n') + '\n');
-    const binary = await buildNativeIfStale({
-        source: repoPath('scripts', 'splat_render.cpp'), binary: repoPath('build', 'splat_render'),
-        includeDir: new NativeCppCompilerService().getSdkIncludePath(), libs: ['-lz']
-    });
+    let binary: string;
+    try {
+        binary = (await compileNativeCached({
+            sourcePath: repoPath('scripts', 'splat_render.cpp'), includeDirs: [new NativeCppCompilerService().getSdkIncludePath()],
+            flags: defaultNativeFlags(), libs: ['-lz'], name: 'splat_render', timeoutMs: 300_000
+        })).binaryPath;
+    } catch (err) {
+        throw new Error(`could not build splat_render: ${err instanceof NativeBuildError ? err.compilerOutput.slice(-1500) : String(err)}`);
+    }
     const { stdout } = await execFileAsync(binary, [manifest], { maxBuffer: 16 * 1024 * 1024, ...(signal ? { signal } : {}) });
     return stdout;
 }
@@ -154,8 +159,8 @@ export function splatRegions(positions: Float32Array, reference: TriangleSoup, r
 /** Where a splat world's frame sits on the Earth: its origin, ellipsoidal height. */
 export interface SplatFrame { lat: number; lng: number; heightMeters: number; source: string }
 
-/** The JSON chunk of a GLB (its first chunk). */
-function glbJsonOf(file: string): Record<string, any> {
+/** The JSON chunk of a GLB (its first chunk): here only its top-level extras are read. */
+function glbJsonOf(file: string): { extras?: { anchor?: { lat?: unknown; lng?: unknown; ellipsoidalHeightM?: unknown } } } {
     const b = fs.readFileSync(file);
     if (b.length < 20 || b.readUInt32LE(0) !== 0x46546c67) throw new Error(`${file} is not a GLB`);
     return JSON.parse(b.toString('utf8', 20, 20 + b.readUInt32LE(12)));
@@ -172,10 +177,11 @@ export function splatFrame(splatPath: string): SplatFrame {
     const glb = (JSON.parse(fs.readFileSync(meta, 'utf8')) as { glbPath?: unknown }).glbPath;
     if (typeof glb !== 'string' || !fs.existsSync(glb)) throw new Error(`${meta} names no tile extraction that exists (glbPath ${String(glb)}): give the splat world's origin`);
     const a = glbJsonOf(glb).extras?.anchor;
-    if (typeof a?.lat !== 'number' || typeof a?.lng !== 'number' || typeof a?.ellipsoidalHeightM !== 'number') {
+    const lat = a?.lat, lng = a?.lng, h = a?.ellipsoidalHeightM;
+    if (typeof lat !== 'number' || typeof lng !== 'number' || typeof h !== 'number') {
         throw new Error(`${glb} records no frame anchor (extras.anchor with ellipsoidalHeightM): give the splat world's origin`);
     }
-    return { lat: a.lat, lng: a.lng, heightMeters: a.ellipsoidalHeightM, source: `the extras of ${path.basename(glb)}, the tile extraction the world was built on` };
+    return { lat, lng, heightMeters: h, source: `the extras of ${path.basename(glb)}, the tile extraction the world was built on` };
 }
 
 /**
