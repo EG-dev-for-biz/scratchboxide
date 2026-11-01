@@ -652,3 +652,85 @@ renders, and is not in the judge.
   than 6.63, because the boundary between the building and the neighbour's slice is not in the whole isolate's outline.
   That goes against the decision that scan pieces past the footprint count against the raw arm.
 - **The choice is the main session's.**
+
+## Amendment 3 (2026-11-01): the reference's footprint margin is K's projection allowance
+
+The user decided, relayed by the main session, to change the margin round Google's footprint from 0.3 m to 1.5 m. The
+sections above stand as written. The cut-line rule above was not built.
+
+### Why
+
+1.5 m is `BASE_CLEANUP_PARAMS.allowanceM` (`FOOTPRINT_MAX_PROJECTION_M`), the tolerance pipeline K's fit rule already
+accepts as a building's own projections: storefronts and cornices.
+- A few decimetres between Google's footprint and the scan is a projection or a registration offset, not debris.
+- A neighbour's slice metres out still goes.
+- The judge reads the constant, so it follows K if the allowance changes.
+
+At the ESB, Google's modelled volume stands a few decimetres inside the scanned storefronts. At 0.3 m the reference was
+cut along the base, and the all-facade stand-in view v1 inverted (amendment 2).
+
+### The change
+
+Branch `fix/judge-margin-allowance`, commit 6f972b39.
+- `placementTarget` keeps the target's triangles within the footprint plus `allowanceM`, and reports it in
+  `placement.reference.footprint.marginM`.
+- The doc comment, the tool declaration and the result note give the reasoning above.
+- Nothing else changed:
+  - Google's footprint only, recorded first, else fetched;
+  - the 20% fit rule;
+  - arms as built;
+  - outer outlines;
+  - the street in front.
+- A new test keeps a storefront 0.5 m past the footprint and drops a piece 4 m out.
+
+### Old and new on the real photos
+
+Mean errorPx over the four judged views. "Old" is 97e1371a (amendment 2, 0.3 m); "new" is 1.5 m.
+
+| Place | raw as built | K | X1 | X2 | X2 − K | Isolate kept |
+|---|---|---|---|---|---|---|
+| ESB | 3.96 → 3.62 | 4.53 → 4.06 | 4.53 → 4.06 | 13.91 → 13.98 | 9.38 → **9.92** | 103,022 → 104,759 of 105,452 |
+| Ferry | 3.19 → 3.19 | 4.68 → 4.68 | 4.68 → 4.68 | 15.55 → 15.55 | 10.87 → **10.87** | no footprint fits (fit rule), both margins |
+| Haughwout | 6.63 → 4.99 | 4.13 → 6.83 | 4.13 → 6.83 | 15.63 → 15.75 | 11.50 → **8.92** | 6,355 → 6,820 of 7,219 |
+
+X2 − K per view at 1.5 m:
+- ESB: 15.16, 6.40, 8.63, 9.47;
+- Ferry: 13.22, 9.40, 14.13, 6.70;
+- Haughwout: 8.26, 8.04, 11.64, 7.74.
+
+X2 stays above K in every view.
+
+### The two checks
+
+- **The ESB: the storefront strip is no longer cut, and stand-in v1 no longer inverts.**
+  - The isolate left out shrinks from 4,343 m² to 1,016 m². Under 3 m it shrinks from 2,362 m² to 648 m².
+  - Over the photos, the outline now runs down to the sidewalk along the storefronts and reaches the end of the
+    storefront in v0.
+  - In the stand-in v1 the base line follows the building instead of stepping up at the cut. X2 − K there goes from
+    −10.40 to +14.44.
+- **The Haughwout: the neighbour's slice is only partly out.**
+  - The isolate left out shrinks from 483 m² to 221 m²: at 3 to 15 m from 117 m² to 40 m², and above 15 m from 91 m² to
+    7 m².
+  - The neighbour's storefront and upper bay on Broome St adjoin the building, and the parts within 1.5 m of Google's
+    footprint are back in the reference (v0, v2 and v3). Only the outer parts still go.
+  - So K reads 6.83, not 4.13, and the raw scan, whose debris now counts less, 4.99.
+
+### D on this measure: the stand-in dry run redone
+
+| Place | raw / K / X2, new | X2 − K per view, new | D, amendment 2 | **D, new** |
+|---|---|---|---|---|
+| ESB | 2.17 / 2.98 / 13.99 | 6.22, 14.44, 17.74, 5.67 | 2.3 | **5.5** |
+| Haughwout | 3.71 / 3.26 / 17.23 | 10.30, 12.46, 19.17 (v0 has no placement) | 7.3 | **7.0** |
+| Ferry | 2.68 / 5.90 / 15.06 | 11.88, 9.59, 12.06, 3.09 | 4.6 | **4.6** |
+
+### What bar 5 reads now
+
+| Place | X2 − K | D | Bar 5 |
+|---|---|---|---|
+| ESB | 9.92 | 5.5 | **met** |
+| Haughwout | 8.92 | 7.0 | met; information only (amendment 3 of the first preregistration) |
+| Ferry | 10.87 | 4.6 | met; information only (amendment 3 of the first preregistration) |
+
+**Images** (gitignored): `docs/screenshots/k_outline_placement/margin_{esb,ferry,haughwout}_0.3_vs_1.5.png` and
+`margin_esb_dry_v1_0.3_vs_1.5.png`. Each is the reference's outline over the photo: yellow at 0.3 m only, cyan at 1.5 m
+only, white where both agree.
