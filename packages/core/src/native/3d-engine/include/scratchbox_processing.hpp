@@ -232,7 +232,8 @@ struct DecimateOptions {
                                     // an extra constraint quadric, so simplification can still slide vertices along
                                     // a crease but is heavily penalised for moving them off it
     float creaseAngleDeg{45.0f};   // Dihedral angle threshold (same convention as IsotropicRemeshOptions) between
-                                    // two triangles sharing an edge that counts that edge as a crease
+                                    // two triangles sharing an edge that counts that edge as a crease; also the angle
+                                    // between two copies of one corner's normal that keeps them a hard edge
 };
 
 class QuadricDecimator {
@@ -240,6 +241,14 @@ public:
     /**
      * Decimates mesh using Garland-Heckbert Quadric Error Metrics (QEM).
      * Preserves surface curvature, feature lines, and boundary loops.
+     *
+     * Collapses run on the welded surface. The copies of a corner at one position (the two sides of a UV seam, a hard
+     * edge, a sphere's pole) are one vertex there: they move together, and its quadric holds the planes on every
+     * side, so a seam can neither open into a crack nor slide off the surface. Each copy stays a wedge with its own
+     * attributes, and a collapse is taken only when every wedge of the vertex it removes has exactly one wedge of the
+     * vertex it keeps to become (along a seam, side to side), so seams, colour edges and hard edges reach the output.
+     * A collapse must also keep the surface manifold (the link condition) and, with preventNormalFlips, fold no
+     * triangle around either end of the edge.
      */
     static ScratchboxMesh decimate(const ScratchboxMesh& input, const DecimateOptions& opt = {}) {
         if (input.vertices.empty() || input.indices.empty()) return input;
@@ -252,44 +261,94 @@ public:
 
         if (initialTriCount <= targetTriangles) return input;
 
-        size_t numVerts = input.vertices.size();
-        std::vector<Vertex> verts = input.vertices;
-        std::vector<SymmetricQuadric> quadrics(numVerts);
-        std::vector<bool> vertexDeleted(numVerts, false);
+        const uint32_t numVerts = static_cast<uint32_t>(input.vertices.size());
+        constexpr uint32_t NONE = std::numeric_limits<uint32_t>::max();
+        std::vector<Vertex> wedges = input.vertices;   // per-wedge attributes (only the entries wedgeOf points at are used)
+        std::vector<Vec3> positions(numVerts);         // per welded position (only the entries posOf points at are used)
+        for (uint32_t i = 0; i < numVerts; ++i) positions[i] = input.vertices[i].position;
 
+        // 1. Weld. posOf: each vertex takes the id of the first vertex within eps of it, searched over the 27 cells
+        // around it. wedgeOf: the first vertex at that position whose UVs and colour match and whose normal lies within
+        // creaseAngleDeg of it; a copy that matches none is a wedge of its own.
+        std::vector<uint32_t> posOf(numVerts), wedgeOf(numVerts), nextWedge(numVerts, NONE);
+        {
+            Vec3 lo = positions[0], hi = positions[0];
+            for (const auto& p : positions) {
+                lo = Vec3(std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z));
+                hi = Vec3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
+            }
+            const float eps = std::max(1e-5f, 1e-6f * (hi - lo).length()), inv = 1.0f / eps;
+            auto cellKey = [](int64_t x, int64_t y, int64_t z) -> uint64_t {
+                return (static_cast<uint64_t>(x & 0x1fffff) << 42) | (static_cast<uint64_t>(y & 0x1fffff) << 21) | static_cast<uint64_t>(z & 0x1fffff);
+            };
+            const float normalCos = std::cos(opt.creaseAngleDeg * static_cast<float>(PI) / 180.0f);
+            auto sameWedge = [&](const Vertex& a, const Vertex& b) {
+                auto near2 = [](const Vec2& p, const Vec2& q) { return std::abs(p.x - q.x) <= 1e-5f && std::abs(p.y - q.y) <= 1e-5f; };
+                if (!near2(a.uv, b.uv) || !near2(a.uv1, b.uv1)) return false;
+                if (std::abs(a.color.x - b.color.x) > 1e-3f || std::abs(a.color.y - b.color.y) > 1e-3f ||
+                    std::abs(a.color.z - b.color.z) > 1e-3f || std::abs(a.color.w - b.color.w) > 1e-3f) return false;
+                float la = a.normal.length(), lb = b.normal.length();
+                return la < 1e-6f || lb < 1e-6f || a.normal.dot(b.normal) >= normalCos * la * lb;
+            };
+            std::unordered_map<uint64_t, std::vector<uint32_t>> cells;
+            for (uint32_t i = 0; i < numVerts; ++i) {
+                const Vec3& p = positions[i];
+                int64_t cx = static_cast<int64_t>(std::floor(p.x * inv)), cy = static_cast<int64_t>(std::floor(p.y * inv)), cz = static_cast<int64_t>(std::floor(p.z * inv));
+                uint32_t id = i;
+                for (int64_t dx = -1; dx <= 1 && id == i; ++dx)
+                    for (int64_t dy = -1; dy <= 1 && id == i; ++dy)
+                        for (int64_t dz = -1; dz <= 1 && id == i; ++dz) {
+                            auto it = cells.find(cellKey(cx + dx, cy + dy, cz + dz));
+                            if (it == cells.end()) continue;
+                            for (uint32_t j : it->second) if ((positions[j] - p).length() <= eps) { id = j; break; }
+                        }
+                posOf[i] = id;
+                wedgeOf[i] = i;
+                if (id == i) { cells[cellKey(cx, cy, cz)].push_back(i); continue; }
+                uint32_t last = id;
+                for (uint32_t w = id; w != NONE; last = w, w = nextWedge[w])
+                    if (sameWedge(input.vertices[w], input.vertices[i])) { wedgeOf[i] = w; break; }
+                if (wedgeOf[i] == i) nextWedge[last] = i;
+            }
+        }
+
+        // 2. Triangles on the welded surface, and their plane quadrics. A triangle two of whose corners weld into one
+        // (a UV sphere's zero-area fan at each pole) has no area and no place in a manifold, so it is dropped.
         struct Triangle {
-            uint32_t v[3];
-            Vec3 normal;
+            uint32_t w[3];   // corner wedges; the corner's position is posOf[w]
             bool deleted{false};
         };
-
         std::vector<Triangle> triangles(initialTriCount);
         std::vector<std::vector<uint32_t>> vertTriangles(numVerts);
+        std::vector<SymmetricQuadric> quadrics(numVerts);
+        size_t currentTriCount = 0;
+        auto corner = [&](const Triangle& tri, int k) { return posOf[tri.w[k]]; };
+        auto faceCross = [&](const Triangle& tri) {
+            Vec3 p0 = positions[corner(tri, 0)];
+            return (positions[corner(tri, 1)] - p0).cross(positions[corner(tri, 2)] - p0);
+        };
+        auto faceNormal = [&](const Triangle& tri) {
+            Vec3 n = faceCross(tri);
+            float len = n.length();
+            return len > 1e-8f ? n * (1.0f / len) : Vec3(0, 0, 0);
+        };
 
-        // 1. Compute initial plane quadrics for each face
         for (size_t t = 0; t < initialTriCount; ++t) {
-            uint32_t i0 = input.indices[t * 3 + 0];
-            uint32_t i1 = input.indices[t * 3 + 1];
-            uint32_t i2 = input.indices[t * 3 + 2];
-
-            triangles[t].v[0] = i0;
-            triangles[t].v[1] = i1;
-            triangles[t].v[2] = i2;
+            auto& tri = triangles[t];
+            for (int k = 0; k < 3; ++k) tri.w[k] = wedgeOf[input.indices[t * 3 + k]];
+            uint32_t i0 = corner(tri, 0), i1 = corner(tri, 1), i2 = corner(tri, 2);
+            if (i0 == i1 || i1 == i2 || i2 == i0) { tri.deleted = true; continue; }
+            ++currentTriCount;
 
             vertTriangles[i0].push_back(static_cast<uint32_t>(t));
             vertTriangles[i1].push_back(static_cast<uint32_t>(t));
             vertTriangles[i2].push_back(static_cast<uint32_t>(t));
 
-            Vec3 p0 = verts[i0].position;
-            Vec3 p1 = verts[i1].position;
-            Vec3 p2 = verts[i2].position;
-
-            Vec3 fn = (p1 - p0).cross(p2 - p0);
+            Vec3 fn = faceCross(tri);
             float len = fn.length();
             if (len > 1e-8f) {
                 fn = fn * (1.0f / len);
-                triangles[t].normal = fn;
-                double d = -fn.dot(p0);
+                double d = -fn.dot(positions[i0]);
                 SymmetricQuadric q(fn.x, fn.y, fn.z, d);
                 // Area-weighted quadric
                 q *= (len * 0.5);
@@ -300,111 +359,214 @@ public:
             }
         }
 
-        // 1b. Optional crease-preserving constraint quadrics: an edge with one adjacent face (an open boundary) or
-        // whose two adjacent faces' normals diverge by at least creaseAngleDeg is a "crease" — each of its endpoints
-        // gets an extra quadric for a plane through the edge, perpendicular to the adjacent face (a "fin"), weighted
-        // heavily. Two straight, co-linear fin planes from the same crease agree everywhere along it, so the crease
-        // can still be simplified; moving either endpoint off the crease plane (eg. rounding a box's corner) does not.
-        // preserveBoundary alone pins only the open-boundary edges; preserveCreases adds the sharp interior ones.
-        if (opt.preserveCreases || opt.preserveBoundary) {
-            std::unordered_map<uint64_t, std::array<int32_t, 2>> edgeTris;
-            auto edgeKey = [](uint32_t a, uint32_t b) -> uint64_t {
-                if (a > b) std::swap(a, b);
-                return (static_cast<uint64_t>(a) << 32) | static_cast<uint64_t>(b);
-            };
-            for (size_t t = 0; t < initialTriCount; ++t) {
-                uint32_t tv[3] = { triangles[t].v[0], triangles[t].v[1], triangles[t].v[2] };
-                uint32_t pairs2[3][2] = { { tv[0], tv[1] }, { tv[1], tv[2] }, { tv[2], tv[0] } };
-                for (auto& pair : pairs2) {
-                    uint64_t k = edgeKey(pair[0], pair[1]);
-                    auto [it, inserted] = edgeTris.try_emplace(k, std::array<int32_t, 2>{ static_cast<int32_t>(t), -1 });
-                    if (!inserted && it->second[1] == -1 && it->second[0] != static_cast<int32_t>(t)) it->second[1] = static_cast<int32_t>(t);
-                }
-            }
+        auto edgeKey = [](uint32_t a, uint32_t b) -> uint64_t {
+            if (a > b) std::swap(a, b);
+            return (static_cast<uint64_t>(a) << 32) | static_cast<uint64_t>(b);
+        };
 
-            // An edge open in the indices is an outline only when no other edge joins the same two positions: a UV seam,
-            // or the shared edge of a box built from separate faces, is open in the indices but closed in space.
-            // preserveBoundary alone pins outlines only (pinning a closed sphere's seam as well took its Hausdorff error
-            // at half the triangles from 0.48 to 0.64); preserveCreases still pins every edge open in the indices.
-            std::unordered_map<uint64_t, int> weldedEdgeUses;
-            std::vector<uint32_t> weldId;
-            if (!opt.preserveCreases) {
-                Vec3 lo = verts[0].position, hi = verts[0].position;
-                for (const auto& v : verts) {
-                    lo = Vec3(std::min(lo.x, v.position.x), std::min(lo.y, v.position.y), std::min(lo.z, v.position.z));
-                    hi = Vec3(std::max(hi.x, v.position.x), std::max(hi.y, v.position.y), std::max(hi.z, v.position.z));
+        // 2b. Boundary and crease constraint quadrics: an edge of the welded surface with one face (an outline) or, with
+        // preserveCreases, whose two faces' normals diverge by at least creaseAngleDeg (or that more than two faces
+        // share) is a "crease" — each of its endpoints gets an extra quadric for a plane through the edge, perpendicular
+        // to each adjacent face (a "fin"), weighted heavily. Two straight, co-linear fin planes from the same crease
+        // agree everywhere along it, so the crease can still be simplified; moving either endpoint off the crease plane
+        // (eg. rounding a box's corner) does not. A UV seam or a box built from separate faces is not an outline here:
+        // its copies are welded into one surface above.
+        if (opt.preserveCreases || opt.preserveBoundary) {
+            struct EdgeFaces { int32_t t[2]{-1, -1}; int count{0}; };
+            std::unordered_map<uint64_t, EdgeFaces> edgeFaces;
+            for (size_t t = 0; t < initialTriCount; ++t) {
+                if (triangles[t].deleted) continue;
+                for (int e = 0; e < 3; ++e) {
+                    auto& ef = edgeFaces[edgeKey(corner(triangles[t], e), corner(triangles[t], (e + 1) % 3))];
+                    if (ef.count < 2) ef.t[ef.count] = static_cast<int32_t>(t);
+                    ++ef.count;
                 }
-                const float eps = std::max(1e-5f, 1e-6f * (hi - lo).length()), inv = 1.0f / eps;
-                auto cellKey = [](int64_t x, int64_t y, int64_t z) -> uint64_t {
-                    return (static_cast<uint64_t>(x & 0x1fffff) << 42) | (static_cast<uint64_t>(y & 0x1fffff) << 21) | static_cast<uint64_t>(z & 0x1fffff);
-                };
-                // each vertex takes the id of the first vertex within eps of it, searched over the 27 cells around it
-                std::unordered_map<uint64_t, std::vector<uint32_t>> cells;
-                weldId.resize(numVerts);
-                for (uint32_t i = 0; i < numVerts; ++i) {
-                    const Vec3& p = verts[i].position;
-                    int64_t cx = static_cast<int64_t>(std::floor(p.x * inv)), cy = static_cast<int64_t>(std::floor(p.y * inv)), cz = static_cast<int64_t>(std::floor(p.z * inv));
-                    uint32_t id = i;
-                    for (int64_t dx = -1; dx <= 1 && id == i; ++dx)
-                        for (int64_t dy = -1; dy <= 1 && id == i; ++dy)
-                            for (int64_t dz = -1; dz <= 1 && id == i; ++dz) {
-                                auto it = cells.find(cellKey(cx + dx, cy + dy, cz + dz));
-                                if (it == cells.end()) continue;
-                                for (uint32_t j : it->second) if ((verts[j].position - p).length() <= eps) { id = j; break; }
-                            }
-                    weldId[i] = id;
-                    if (id == i) cells[cellKey(cx, cy, cz)].push_back(i);
-                }
-                for (size_t t = 0; t < initialTriCount; ++t)
-                    for (int e = 0; e < 3; ++e) {
-                        uint32_t wa = weldId[triangles[t].v[e]], wb = weldId[triangles[t].v[(e + 1) % 3]];
-                        if (wa != wb) ++weldedEdgeUses[edgeKey(wa, wb)];
-                    }
             }
-            auto isOutline = [&](uint32_t a, uint32_t b) {
-                if (opt.preserveCreases) return true;
-                if (weldId[a] == weldId[b]) return false; // its ends are one point (a sphere's pole copies)
-                auto it = weldedEdgeUses.find(edgeKey(weldId[a], weldId[b]));
-                return it == weldedEdgeUses.end() || it->second < 2;
-            };
 
             constexpr double CREASE_WEIGHT = 1000.0;
             float creaseCos = std::cos(opt.creaseAngleDeg * static_cast<float>(PI) / 180.0f);
-            for (const auto& [key, tris] : edgeTris) {
-                uint32_t a = static_cast<uint32_t>(key >> 32), b = static_cast<uint32_t>(key & 0xffffffffu);
-                bool isCrease = (tris[1] < 0) && isOutline(a, b);
+            for (const auto& [key, ef] : edgeFaces) {
+                bool isCrease = ef.count == 1;
                 if (!isCrease && opt.preserveCreases) {
-                    float nd = triangles[tris[0]].normal.dot(triangles[tris[1]].normal);
-                    isCrease = nd < creaseCos;
+                    isCrease = ef.count > 2 || faceNormal(triangles[ef.t[0]]).dot(faceNormal(triangles[ef.t[1]])) < creaseCos;
                 }
                 if (!isCrease) continue;
 
-                Vec3 pa = verts[a].position, pb = verts[b].position;
+                uint32_t a = static_cast<uint32_t>(key >> 32), b = static_cast<uint32_t>(key & 0xffffffffu);
+                Vec3 pa = positions[a], pb = positions[b];
                 Vec3 edgeVec = pb - pa;
                 float edgeLen = edgeVec.length();
                 if (edgeLen < 1e-8f) continue;
                 Vec3 edgeDir = edgeVec * (1.0f / edgeLen);
 
-                Vec3 faceN = triangles[tris[0]].normal;
-                Vec3 finN = edgeDir.cross(faceN);
-                float finLen = finN.length();
-                if (finLen < 1e-8f) continue;
-                finN = finN * (1.0f / finLen);
+                for (int f = 0; f < std::min(ef.count, 2); ++f) {
+                    Vec3 faceN = faceNormal(triangles[ef.t[f]]);
+                    Vec3 finN = edgeDir.cross(faceN);
+                    float finLen = finN.length();
+                    if (finLen < 1e-8f) continue;
+                    finN = finN * (1.0f / finLen);
 
-                double d = -finN.dot(pa);
-                SymmetricQuadric fin(finN.x, finN.y, finN.z, d);
-                fin *= (edgeLen * CREASE_WEIGHT);
-                quadrics[a] += fin;
-                quadrics[b] += fin;
+                    double d = -finN.dot(pa);
+                    SymmetricQuadric fin(finN.x, finN.y, finN.z, d);
+                    fin *= (edgeLen * CREASE_WEIGHT);
+                    quadrics[a] += fin;
+                    quadrics[b] += fin;
+                }
             }
         }
 
-        // 2. Track candidate edges and collapse costs
+        // 3. Planning a collapse of the edge (a, b): which end it keeps (u), the target position and its cost, and the
+        // wedge each wedge of the removed end (v) becomes. Returns false when no collapse of the edge is allowed.
+        struct Plan {
+            uint32_t u{0}, v{0};
+            Vec3 target;
+            float attrT{0.0f};   // 0: the target is u's position, 1: v's, 0.5: their midpoint
+            double cost{0.0};
+            std::vector<std::pair<uint32_t, uint32_t>> wedgeMap;   // (wedge of v, wedge of u)
+        };
+        std::vector<uint32_t> ringA, ringB, edgeTris, opposite;
+        auto ringOf = [&](uint32_t a, std::vector<uint32_t>& ring) {
+            // every other corner of a's live triangles, sorted: a neighbour listed once shares an outline edge with a
+            ring.clear();
+            for (uint32_t t : vertTriangles[a]) {
+                const auto& tri = triangles[t];
+                if (tri.deleted) continue;
+                for (int k = 0; k < 3; ++k) if (corner(tri, k) != a) ring.push_back(corner(tri, k));
+            }
+            std::sort(ring.begin(), ring.end());
+        };
+        auto onOutline = [](const std::vector<uint32_t>& ring) {
+            for (size_t i = 0; i < ring.size(); ) {
+                size_t j = i;
+                while (j < ring.size() && ring[j] == ring[i]) ++j;
+                if (j - i == 1) return true;
+                i = j;
+            }
+            return false;
+        };
+        auto mapWedges = [&](uint32_t u, uint32_t v, std::vector<std::pair<uint32_t, uint32_t>>& map) {
+            map.clear();
+            for (uint32_t t : edgeTris) {
+                const auto& tri = triangles[t];
+                uint32_t wu = NONE, wv = NONE;
+                for (int k = 0; k < 3; ++k) {
+                    if (corner(tri, k) == u) wu = tri.w[k];
+                    if (corner(tri, k) == v) wv = tri.w[k];
+                }
+                auto it = std::find_if(map.begin(), map.end(), [&](const auto& m) { return m.first == wv; });
+                if (it == map.end()) map.emplace_back(wv, wu);
+                else if (it->second != wu) return false;   // one wedge of v meets two of u (a seam ends at v)
+            }
+            for (uint32_t t : vertTriangles[v]) {
+                const auto& tri = triangles[t];
+                if (tri.deleted) continue;
+                for (int k = 0; k < 3; ++k)
+                    if (corner(tri, k) == v && std::none_of(map.begin(), map.end(), [&](const auto& m) { return m.first == tri.w[k]; }))
+                        return false;   // a wedge of v with no counterpart at u (the edge leaves v's seam)
+            }
+            return true;
+        };
+        auto foldsOver = [&](uint32_t a, uint32_t b, const Vec3& target) {
+            for (uint32_t end : { a, b }) {
+                for (uint32_t t : vertTriangles[end]) {
+                    const auto& tri = triangles[t];
+                    if (tri.deleted) continue;
+                    Vec3 p[3];
+                    bool hasA = false, hasB = false;
+                    for (int k = 0; k < 3; ++k) {
+                        uint32_t c = corner(tri, k);
+                        hasA |= c == a;
+                        hasB |= c == b;
+                        p[k] = (c == a || c == b) ? target : positions[c];
+                    }
+                    if (hasA && hasB) continue;   // removed by the collapse
+                    Vec3 oldN = faceCross(tri);
+                    Vec3 newN = (p[1] - p[0]).cross(p[2] - p[0]);
+                    float oldLenSq = oldN.lengthSquared();
+                    if (oldLenSq <= 1e-30f) continue;
+                    if (newN.lengthSquared() <= 1e-12f * oldLenSq) return true;   // flattened to a sliver
+                    if (newN.normalized().dot(oldN * (1.0f / std::sqrt(oldLenSq))) < 0.2f) return true;   // Reject fold-over
+                }
+            }
+            return false;
+        };
+        auto planCollapse = [&](uint32_t a, uint32_t b, Plan& plan) -> bool {
+            edgeTris.clear();
+            opposite.clear();
+            for (uint32_t t : vertTriangles[a]) {
+                const auto& tri = triangles[t];
+                if (tri.deleted) continue;
+                uint32_t c[3] = { corner(tri, 0), corner(tri, 1), corner(tri, 2) };
+                if (c[0] != b && c[1] != b && c[2] != b) continue;
+                edgeTris.push_back(t);
+                for (uint32_t x : c) if (x != a && x != b) opposite.push_back(x);
+            }
+            if (edgeTris.empty() || edgeTris.size() > 2) return false;   // no longer an edge, or a non-manifold one
+
+            // Link condition: the only vertices next to both ends are the edge's own opposite corners, or the
+            // collapse would pinch the surface into a non-manifold edge. An inner edge joining two outline vertices
+            // would pinch a strip in two.
+            ringOf(a, ringA);
+            ringOf(b, ringB);
+            if (edgeTris.size() == 2 && onOutline(ringA) && onOutline(ringB)) return false;
+            size_t shared = 0;
+            for (size_t i = 0, j = 0; i < ringA.size() && j < ringB.size(); ) {
+                if (ringA[i] < ringB[j]) ++i;
+                else if (ringB[j] < ringA[i]) ++j;
+                else {
+                    uint32_t x = ringA[i];
+                    if (x != a && x != b) ++shared;
+                    while (i < ringA.size() && ringA[i] == x) ++i;
+                    while (j < ringB.size() && ringB[j] == x) ++j;
+                }
+            }
+            std::sort(opposite.begin(), opposite.end());
+            opposite.erase(std::unique(opposite.begin(), opposite.end()), opposite.end());
+            if (shared != opposite.size()) return false;
+
+            if (mapWedges(a, b, plan.wedgeMap)) { plan.u = a; plan.v = b; }
+            else if (mapWedges(b, a, plan.wedgeMap)) { plan.u = b; plan.v = a; }
+            else return false;
+
+            // A triangle around v whose other corners are both opposite corners of the edge would land on one u
+            // already has (the two triangles left of a tetrahedron).
+            for (uint32_t t : vertTriangles[plan.v]) {
+                const auto& tri = triangles[t];
+                if (tri.deleted || std::find(edgeTris.begin(), edgeTris.end(), t) != edgeTris.end()) continue;
+                uint32_t x = NONE, y = NONE;
+                for (int k = 0; k < 3; ++k) if (corner(tri, k) != plan.v) (x == NONE ? x : y) = corner(tri, k);
+                if (!std::binary_search(opposite.begin(), opposite.end(), x) || !std::binary_search(opposite.begin(), opposite.end(), y)) continue;
+                for (uint32_t s : vertTriangles[plan.u]) {
+                    const auto& other = triangles[s];
+                    if (other.deleted) continue;
+                    bool hasX = false, hasY = false;
+                    for (int k = 0; k < 3; ++k) { hasX |= corner(other, k) == x; hasY |= corner(other, k) == y; }
+                    if (hasX && hasY) return false;
+                }
+            }
+
+            // Test endpoints and midpoint, cheapest first, and take the first that folds nothing
+            SymmetricQuadric Q = quadrics[plan.u] + quadrics[plan.v];
+            Vec3 pu = positions[plan.u], pv = positions[plan.v];
+            struct Candidate { Vec3 p; float attrT; double err; };
+            Candidate cands[3] = { { (pu + pv) * 0.5f, 0.5f, 0.0 }, { pu, 0.0f, 0.0 }, { pv, 1.0f, 0.0 } };
+            for (auto& c : cands) c.err = Q.evaluate(c.p);
+            std::stable_sort(std::begin(cands), std::end(cands), [](const Candidate& x, const Candidate& y) { return x.err < y.err; });
+            for (const auto& c : cands) {
+                if (opt.preventNormalFlips && foldsOver(plan.u, plan.v, c.p)) continue;
+                plan.target = c.p;
+                plan.attrT = c.attrT;
+                plan.cost = c.err;
+                return true;
+            }
+            return false;
+        };
+
+        // 4. Track candidate edges and collapse costs
         struct EdgeCollapse {
-            uint32_t u, v;
-            Vec3 targetPos;
+            uint32_t a, b;
             double cost;
-            uint32_t uGen, vGen;
+            uint32_t aGen, bGen;
 
             bool operator>(const EdgeCollapse& o) const {
                 return cost > o.cost;
@@ -412,171 +574,107 @@ public:
         };
 
         std::vector<uint32_t> vertGen(numVerts, 0);
-
-        auto computeCollapseCost = [&](uint32_t u, uint32_t v, Vec3& outTarget) -> double {
-            SymmetricQuadric Q = quadrics[u] + quadrics[v];
-            Vec3 pu = verts[u].position;
-            Vec3 pv = verts[v].position;
-            Vec3 pmid = (pu + pv) * 0.5f;
-
-            // Test endpoints and midpoint
-            double errU = Q.evaluate(pu);
-            double errV = Q.evaluate(pv);
-            double errMid = Q.evaluate(pmid);
-
-            double minErr = errMid;
-            outTarget = pmid;
-
-            if (errU < minErr) {
-                minErr = errU;
-                outTarget = pu;
-            }
-            if (errV < minErr) {
-                minErr = errV;
-                outTarget = pv;
-            }
-
-            // Normal flip prevention check
-            if (opt.preventNormalFlips) {
-                for (uint32_t tIdx : vertTriangles[u]) {
-                    const auto& tri = triangles[tIdx];
-                    if (tri.deleted || tri.v[0] == v || tri.v[1] == v || tri.v[2] == v) continue;
-
-                    uint32_t o1 = (tri.v[0] == u) ? tri.v[1] : tri.v[0];
-                    uint32_t o2 = (tri.v[2] == u) ? tri.v[1] : tri.v[2];
-
-                    Vec3 oldN = tri.normal;
-                    Vec3 newN = (verts[o1].position - outTarget).cross(verts[o2].position - outTarget);
-                    if (newN.lengthSquared() > 1e-10f) {
-                        newN = newN.normalized();
-                        if (newN.dot(oldN) < 0.2f) return 1e12; // Reject fold-over
-                    }
-                }
-            }
-
-            return minErr;
+        std::vector<bool> vertexDeleted(numVerts, false);
+        std::priority_queue<EdgeCollapse, std::vector<EdgeCollapse>, std::greater<EdgeCollapse>> pq;
+        Plan plan;
+        auto enqueue = [&](uint32_t a, uint32_t b) {
+            if (planCollapse(a, b, plan)) pq.push({ a, b, plan.cost, vertGen[a], vertGen[b] });
         };
 
-        std::priority_queue<EdgeCollapse, std::vector<EdgeCollapse>, std::greater<EdgeCollapse>> pq;
-
-        for (size_t t = 0; t < initialTriCount; ++t) {
-            uint32_t i0 = triangles[t].v[0];
-            uint32_t i1 = triangles[t].v[1];
-            uint32_t i2 = triangles[t].v[2];
-
-            uint32_t pairs[3][2] = {{i0, i1}, {i1, i2}, {i2, i0}};
-            for (auto& pair : pairs) {
-                uint32_t u = pair[0], v = pair[1];
-                if (u > v) std::swap(u, v);
-                Vec3 target;
-                double cost = computeCollapseCost(u, v, target);
-                if (cost < 1e11) {
-                    pq.push({u, v, target, cost, vertGen[u], vertGen[v]});
-                }
+        {
+            std::vector<uint64_t> edges;
+            edges.reserve(currentTriCount * 3);
+            for (size_t t = 0; t < initialTriCount; ++t) {
+                if (triangles[t].deleted) continue;
+                for (int e = 0; e < 3; ++e) edges.push_back(edgeKey(corner(triangles[t], e), corner(triangles[t], (e + 1) % 3)));
             }
+            std::sort(edges.begin(), edges.end());
+            edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+            for (uint64_t key : edges) enqueue(static_cast<uint32_t>(key >> 32), static_cast<uint32_t>(key & 0xffffffffu));
         }
 
-        size_t currentTriCount = initialTriCount;
-
-        // 3. Iterative edge collapse loop
+        // 5. Iterative edge collapse loop
         while (!pq.empty() && currentTriCount > targetTriangles) {
             auto top = pq.top();
             pq.pop();
 
-            uint32_t u = top.u;
-            uint32_t v = top.v;
-
-            if (vertexDeleted[u] || vertexDeleted[v]) continue;
-            if (vertGen[u] != top.uGen || vertGen[v] != top.vGen) continue;
+            if (vertexDeleted[top.a] || vertexDeleted[top.b]) continue;
+            if (vertGen[top.a] != top.aGen || vertGen[top.b] != top.bGen) continue;
             if (top.cost > opt.maxError) break;
 
+            // The ends are unchanged since this was queued, but their neighbourhoods may not be: plan it again
+            if (!planCollapse(top.a, top.b, plan)) continue;
+            if (plan.cost > top.cost) {
+                pq.push({ top.a, top.b, plan.cost, top.aGen, top.bGen });
+                continue;
+            }
+
             // Collapse v into u
-            verts[u].position = top.targetPos;
-            verts[u].normal = (verts[u].normal + verts[v].normal).normalized();
-            verts[u].uv = math::lerp(verts[u].uv, verts[v].uv, 0.5f);
-            verts[u].color = math::lerp(verts[u].color, verts[v].color, 0.5f);
+            uint32_t u = plan.u, v = plan.v;
+            positions[u] = plan.target;
             quadrics[u] += quadrics[v];
+            for (auto [wv, wu] : plan.wedgeMap) {
+                wedges[wu].uv = math::lerp(wedges[wu].uv, wedges[wv].uv, plan.attrT);
+                wedges[wu].uv1 = math::lerp(wedges[wu].uv1, wedges[wv].uv1, plan.attrT);
+                wedges[wu].color = math::lerp(wedges[wu].color, wedges[wv].color, plan.attrT);
+            }
 
             vertexDeleted[v] = true;
             vertGen[u]++;
             vertGen[v]++;
 
-            // Update incident triangles
+            // Update incident triangles: the edge's own collapse away, v's others move to u's wedges
             std::vector<uint32_t> newTriList;
-            std::set<uint32_t> unionTris(vertTriangles[u].begin(), vertTriangles[u].end());
-            unionTris.insert(vertTriangles[v].begin(), vertTriangles[v].end());
-
-            for (uint32_t tIdx : unionTris) {
+            for (uint32_t tIdx : vertTriangles[u]) {
                 auto& tri = triangles[tIdx];
                 if (tri.deleted) continue;
-
-                // Check if triangle collapses into a degenerate line
-                bool hasU = (tri.v[0] == u || tri.v[1] == u || tri.v[2] == u);
-                bool hasV = (tri.v[0] == v || tri.v[1] == v || tri.v[2] == v);
-
-                if (hasU && hasV) {
+                if (corner(tri, 0) == v || corner(tri, 1) == v || corner(tri, 2) == v) {
                     tri.deleted = true;
                     currentTriCount--;
                     continue;
                 }
-
-                // Replace vertex v with u
-                if (tri.v[0] == v) tri.v[0] = u;
-                if (tri.v[1] == v) tri.v[1] = u;
-                if (tri.v[2] == v) tri.v[2] = u;
-
-                Vec3 p0 = verts[tri.v[0]].position;
-                Vec3 p1 = verts[tri.v[1]].position;
-                Vec3 p2 = verts[tri.v[2]].position;
-                Vec3 fn = (p1 - p0).cross(p2 - p0);
-                if (fn.lengthSquared() > 1e-10f) {
-                    tri.normal = fn.normalized();
+                newTriList.push_back(tIdx);
+            }
+            for (uint32_t tIdx : vertTriangles[v]) {
+                auto& tri = triangles[tIdx];
+                if (tri.deleted) continue;
+                for (int k = 0; k < 3; ++k) {
+                    if (corner(tri, k) != v) continue;
+                    tri.w[k] = std::find_if(plan.wedgeMap.begin(), plan.wedgeMap.end(), [&](const auto& m) { return m.first == tri.w[k]; })->second;
                 }
-
                 newTriList.push_back(tIdx);
             }
             vertTriangles[u] = std::move(newTriList);
+            vertTriangles[v].clear();
 
             // Re-evaluate edges connected to u
-            std::set<uint32_t> neighbors;
-            for (uint32_t tIdx : vertTriangles[u]) {
-                const auto& tri = triangles[tIdx];
-                if (tri.deleted) continue;
-                for (int k = 0; k < 3; ++k) {
-                    if (tri.v[k] != u && !vertexDeleted[tri.v[k]]) {
-                        neighbors.insert(tri.v[k]);
-                    }
-                }
-            }
-
-            for (uint32_t nIdx : neighbors) {
-                uint32_t eU = u, eV = nIdx;
-                Vec3 target;
-                double cost = computeCollapseCost(eU, eV, target);
-                if (cost < 1e11) {
-                    pq.push({eU, eV, target, cost, vertGen[eU], vertGen[eV]});
-                }
-            }
+            ringOf(u, ringA);
+            ringA.erase(std::unique(ringA.begin(), ringA.end()), ringA.end());
+            std::vector<uint32_t> neighbors = ringA;
+            for (uint32_t nIdx : neighbors) enqueue(u, nIdx);
         }
 
-        // 4. Pack surviving vertices and triangles
+        // 6. Pack surviving wedges and triangles
         ScratchboxMesh decimated(input.name + "_decimated");
         decimated.material = input.material;
+        decimated.hasUv1 = input.hasUv1;
 
         std::vector<int> remap(numVerts, -1);
         for (size_t t = 0; t < initialTriCount; ++t) {
             if (triangles[t].deleted) continue;
             for (int k = 0; k < 3; ++k) {
-                uint32_t oldIdx = triangles[t].v[k];
-                if (remap[oldIdx] == -1) {
-                    remap[oldIdx] = static_cast<int>(decimated.vertices.size());
-                    decimated.addVertex(verts[oldIdx]);
+                uint32_t w = triangles[t].w[k];
+                if (remap[w] == -1) {
+                    remap[w] = static_cast<int>(decimated.vertices.size());
+                    Vertex out = wedges[w];
+                    out.position = positions[posOf[w]];
+                    decimated.addVertex(out);
                 }
             }
             decimated.addTriangle(
-                static_cast<uint32_t>(remap[triangles[t].v[0]]),
-                static_cast<uint32_t>(remap[triangles[t].v[1]]),
-                static_cast<uint32_t>(remap[triangles[t].v[2]])
+                static_cast<uint32_t>(remap[triangles[t].w[0]]),
+                static_cast<uint32_t>(remap[triangles[t].w[1]]),
+                static_cast<uint32_t>(remap[triangles[t].w[2]])
             );
         }
 
