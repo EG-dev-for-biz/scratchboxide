@@ -135,6 +135,24 @@ The twin rebuilt offline from the run's own polish output (`tileRefineTwin`, no 
 
 ---
 
+### The same fix at the Ferry Building (offline, no build)
+
+M1's rerun on the fixed judge (2026-11-01) put K under the raw scan at the Ferry Building and Haughwout as well, and the
+Ferry's K was the same washed-out grey. K run `cdbda9bb`'s twin was rebuilt offline from its own polish output with the
+committed code (`tileRefineTwin`: no shadow lift, harmonise floor 0.03, the roof lift; no material regions or facade
+reader, which do not change the colour) and rendered from M1's four Ferry views (`heldOutViews` reproduces them exactly):
+
+| View | photo L* / sd / chroma | raw scan | K as built (`cdbda9bb`) | K's twin rebuilt with the fix |
+|---|---|---|---|---|
+| v0 ZR9VHL | 40.4 / 18.5 / 6.5 | 19.7 / 9.2 / 9.1 | 41.2 / 5.5 / 2.3 | 20.3 / 10.4 / 9.2 |
+| v1 z6iR0r | 54.8 / 21.8 / 8.0 | 33.9 / 23.6 / 6.8 | 47.8 / 18.4 / 3.2 | 36.8 / 24.8 / 6.7 |
+| v2 4sXa5k | 52.1 / 17.6 / 11.2 | 24.3 / 13.4 / 9.0 | 41.1 / 13.3 / 3.3 | 27.8 / 18.5 / 8.3 |
+| v3 nF68xO | 40.5 / 27.8 / 4.3 | 32.7 / 17.6 / 5.8 | 44.2 / 11.0 / 2.2 | 33.0 / 17.5 / 6.0 |
+
+The grey is gone and K has the scan's tone. Not changed by this fix, and in K as built too: white spikes along the
+arcade's base (v0) and a pale slab beside the tower's base (v1, v2), which are geometry. M1 also reports K's outline
+2 to 5 px further from the photo's edges than the raw scan's at every judged place; that is a separate problem.
+
 ## 3. What Broke / Didn't Work
 
 * **The raw scan and K are both much darker than the Street View photos** (target L* 20 to 39 against 37 to 80). That is
