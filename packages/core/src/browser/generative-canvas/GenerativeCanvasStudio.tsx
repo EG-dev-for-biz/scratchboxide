@@ -7,7 +7,6 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import type { StageDock } from './studio/stage-dock';
 import { usePersistedProjects } from './hooks/usePersistedProjects';
 import * as React from 'react';
 import {
@@ -36,7 +35,6 @@ import {
     SkillItem,
     StudioAppearanceConfig,
     StudioLayoutMode,
-    StageLayoutMode,
     StudioSettingsTab,
     TokenBudgetMetrics,
     TerminalExecutionError,
@@ -171,6 +169,7 @@ import { useResolvedWorkspaceRoot } from './hooks/useResolvedWorkspaceRoot';
 import { useComposerGitEnv } from './hooks/useComposerGitEnv';
 import { useArtifactExports } from './hooks/useArtifactExports';
 import { useCanvasOpeners } from './hooks/useCanvasOpeners';
+import { useStageLayout } from './hooks/useStageLayout';
 import { useArtifactSync } from './hooks/useArtifactSync';
 import { useLayoutModeSwitch, useCreateEmptyCanvas, UseLayoutModeSwitchDeps } from './hooks/useLayoutModeSwitch';
 import { useWorkspaceFiles, useWorkspaceFileCreation, UseWorkspaceFilesDeps } from './hooks/useWorkspaceFiles';
@@ -329,9 +328,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
     // Layout Modes (layoutMode itself lives in the chat store)
     const [aiInteractionMode, setAiInteractionMode] = React.useState<'agent' | 'ask' | 'plan'>('agent');
-    const [stageLayoutMode, setStageLayoutMode] = React.useState<StageLayoutMode>('single');
-    // a second artifact docked beside the main stage, dragged there from its tab (studio/stage-dock.ts)
-    const [stageDock, setStageDock] = React.useState<StageDock | undefined>();
+    const { stageLayoutMode, setStageLayoutMode, stageDock, setStageDock } = useStageLayout();
     const [docReadOnly, setDocReadOnly] = React.useState<boolean>(false);
     const [documentPaneState, setDocumentPaneState] = React.useState<'split' | 'collapsed' | 'expanded'>('split');
     const [splitRatio, setSplitRatio] = React.useState<number>(CHAT_SPLIT_DEFAULT);
@@ -572,7 +569,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const { handleMorphArtifact, handleOpenInAppBrowser, handlePreviewCodeInCanvas, applyStreamedArtifact } = useCanvasOpeners({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, layoutMode, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setLayoutMode, setMessages, setSessions, showToast, stageLayoutMode });
     const { syncSandboxSaveToMarkdown, triggerGoogleDocsExport, triggerGoogleDriveSave, triggerMarkdownExport } = useArtifactExports({ activeArtifact, artifactHistory, handleOpenInAppBrowser, handleUpdateArtifact, openModal, showToast });
 
-    // Cross-Primitive Event Listeners (Media cards -> 3D scene / Sandbox / Timeline / Composer)
+    // Cross-Primitive Event Listeners (Media cards -> Sandbox / Timeline / Composer; textures go to the open 3D viewport, meshTexture.ts)
     React.useEffect(() => {
         const handleOpenPrimitive = (e: Event) => {
             const detail = (e as CustomEvent).detail;
@@ -620,10 +617,6 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                 showToast('Remix prompt ready in Composer', 'sparkles');
             }
         };
-        const handleApply3DTexture = () => {
-            setLayoutMode('3d');
-            showToast('Texture applied to 3D Scene', 'cube');
-        };
         const handleAddVideoToTimeline = () => {
             setLayoutMode('video');
             showToast('Video added to 4D Timeline', 'film');
@@ -632,14 +625,12 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         window.addEventListener('scratchbox:open-primitive', handleOpenPrimitive);
         window.addEventListener('scratchbox:insert-code', handleInsertCode);
         window.addEventListener('scratchbox:remix-prompt', handleRemixPrompt);
-        window.addEventListener('scratchbox:apply-3d-texture', handleApply3DTexture);
         window.addEventListener('scratchbox:add-video-to-timeline', handleAddVideoToTimeline);
 
         return () => {
             window.removeEventListener('scratchbox:open-primitive', handleOpenPrimitive);
             window.removeEventListener('scratchbox:insert-code', handleInsertCode);
             window.removeEventListener('scratchbox:remix-prompt', handleRemixPrompt);
-            window.removeEventListener('scratchbox:apply-3d-texture', handleApply3DTexture);
             window.removeEventListener('scratchbox:add-video-to-timeline', handleAddVideoToTimeline);
         };
     }, [activeArtifact, artifactHistory, handleCreateEmptyCanvas, handleUpdateArtifact, setActiveArtifact, setLayoutMode, setInputValue, setMessages, showToast]);

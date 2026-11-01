@@ -198,6 +198,7 @@ add(seat, "seat")
 
 for i, (top, foot) in enumerate(zip(tops, feet)):
     leg = sb.sweep_curve_profile(path=[top, foot], profile_dimensions=(0.018, 0.018), scale_taper=(1.0, 0.8))
+    leg.weld_vertices()               # sweep end caps arrive unwelded too; unwelded, subdividing shrinks the tube off its caps
     leg.subdivide(3)
     add(leg, f"leg_{i}")
 
@@ -206,6 +207,7 @@ for i in range(4):
     j = (i + 1) % 4
     t = 0.62 if i % 2 == 0 else 0.72      # stagger heights so rungs do not collide at the legs
     rung = sb.sweep_curve_profile(path=[lerp(tops[i], feet[i], t), lerp(tops[j], feet[j], t)], profile_dimensions=(0.011, 0.011))
+    rung.weld_vertices()
     rung.subdivide(3)
     add(rung, f"rung_{i}")
 

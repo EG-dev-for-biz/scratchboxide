@@ -149,6 +149,8 @@ import { fromInput, generatorErrorForScene, generatorRequestFailure, generatorRu
 import type { SceneContentInput, SceneContentFactories } from './scene3d/syncSceneContent';
 import { syncCustomMeshes, disposeCustomMeshes } from './scene3d/syncCustomMeshes';
 import type { CustomMeshRegistry, CustomMeshDefinition } from './scene3d/syncCustomMeshes';
+import { APPLY_MESH_TEXTURE_EVENT, applyMeshTexture, textureLoadFailureReason, type MeshTextureOutcome, type MeshTextureRequest } from './scene3d/meshTexture';
+import { resolveTextureUrl } from '../../../common/texture-url-resolver';
 import { syncCustomShaders, tickCustomShaders } from './scene3d/syncCustomShaders';
 import type { CustomShaderDefinition } from './scene3d/syncCustomShaders';
 import { tickObjectAnimations } from './scene3d/objectAnimationRuntime';
@@ -3576,6 +3578,49 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             else registry.clear();
         };
     }, []);
+
+    // A media card's texture (meshTexture.ts): set on the selected scene mesh once its images load, else the reason it was not.
+    React.useEffect(() => {
+        const onApplyTexture = (e: Event) => {
+            const request = (e as CustomEvent<MeshTextureRequest>).detail;
+            if (!request || request.claimed) return;
+            const targetId = request.targetId ?? selectedObjectIdRef.current;
+            const edit = applyMeshTexture(sceneDataRef.current, targetId, request.channels);
+            if (!edit.ok) {
+                request.decline(edit.reason, !!targetId);
+                return;
+            }
+            if (!customMeshRegistryRef.current.has(edit.meshId)) {
+                request.decline(`'${edit.meshName}' is not drawn in this viewport, so a texture on it would not show. Nothing was changed.`, true);
+                return;
+            }
+            const meshId = edit.meshId;
+            request.claim((async (): Promise<MeshTextureOutcome> => {
+                const loader = new THREE.TextureLoader();
+                for (const channel of edit.channels) {
+                    const url = request.channels[channel]!;
+                    try {
+                        (await loader.loadAsync(await resolveTextureUrl(url))).dispose();
+                    } catch {
+                        return { status: 'failed', reason: textureLoadFailureReason(channel, url) };
+                    }
+                }
+                // the scene may have changed while the images loaded: apply to it as it is now
+                const now = applyMeshTexture(sceneDataRef.current, meshId, request.channels);
+                if (!now.ok) return { status: 'failed', reason: now.reason };
+                mutateSceneData(() => now.scene, { operator: 'apply_mesh_texture', params: { objectId: meshId, channels: now.channels } });
+                return {
+                    status: 'applied',
+                    meshId,
+                    meshName: now.meshName,
+                    channels: now.channels,
+                    ...(renderModeRef.current === 'clay' ? { note: 'The viewport is in clay mode: switch it to textured to see it.' } : {})
+                };
+            })());
+        };
+        window.addEventListener(APPLY_MESH_TEXTURE_EVENT, onApplyTexture);
+        return () => window.removeEventListener(APPLY_MESH_TEXTURE_EVENT, onApplyTexture);
+    }, [mutateSceneData]);
 
     // ---- 7. Custom shaders from schema ---------------------------------------------
     React.useEffect(() => {

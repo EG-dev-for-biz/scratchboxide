@@ -32,7 +32,7 @@ describe('Facade details, parts split and weathering (reviewer-found defects in 
         const out = await run(`
 def bands(**kw):
     parts = sb.create_building_parts(width=20, depth=12, floors=4, **kw)
-    P = pos(part(parts, 'foundation'))
+    P = pos(part(parts, 'trim'))   # belts and string courses are trim; foundation is the plinth alone
     return [sum(1 for p in P if y - 0.5 < p[1] <= y + 0.001 and p[2] > 6.05) for y in (5.0, 8.4, 11.8, 15.2)]
 plain = bands(); listed = bands(details={"string_course_profile": prof, "string_course_floors": [1]}); every = bands(details={"string_course_profile": prof})
 print("plain", plain); print("listed", listed); print("every", every)
@@ -60,9 +60,10 @@ for roof in ("gable", "hip"):
     it('corner pilasters, moulding caps, balusters and the parts split: no overhang, no degenerate triangle, no gap, no lost brightening', async () => {
         const out = await run(`
 parts = sb.create_building_parts(width=20, depth=12, floors=2, details={"pilaster_width_m": 0.4, "pilaster_projection_m": 0.08})
-P = pos(part(parts, 'foundation')); pf = 0.08 * 1.35
-print("corner_overhang", sum(1 for p in P if p[2] > 6.001 and p[0] < -10 - pf - 1e-3 and 2 < p[1] < 3),
-      sum(1 for p in P if p[0] < -10.001 and p[2] > 6 + pf + 1e-3 and 2 < p[1] < 3))
+P = pos(part(parts, 'trim')); pf = 0.08 * 1.35   # pilasters are trim; the flared base block spans y 0.8 to 1.1
+print("corner_overhang", sum(1 for p in P if p[2] > 6.001 and p[0] < -10 - pf - 1e-3 and 0.7 < p[1] < 1.2),
+      sum(1 for p in P if p[0] < -10.001 and p[2] > 6 + pf + 1e-3 and 0.7 < p[1] < 1.2),
+      "base_verts", sum(1 for p in P if p[0] < -9.5 and p[2] > 5.5 and 0.7 < p[1] < 1.2) > 0)
 parts = sb.create_building_parts(width=20, depth=12, floors=3, bake_curvature_ao=False,
     details={"sill_profile": prof, "hood_profile": prof, "cornice_profile": sb.moulding_profile(0.3, 0.25), "balcony_floors": [1], "pilaster_width_m": 0.3})
 tot = deg = 0
@@ -76,14 +77,14 @@ for m in parts:
 print("tris", tot, "degenerate", deg)
 F = pos(part(parts, 'frame')); slab = 0.8 + 4.2
 bal = [p for p in F if p[2] > 6.05 and slab - 0.01 < p[1] < slab + 0.3]
-print("baluster_gap", round(min(p[1] for p in bal) - slab, 4), "max_trim_shade", round(max(v.color.x for v in part(parts, 'foundation').vertices), 3))
+print("baluster_gap", round(min(p[1] for p in bal) - slab, 4), "max_trim_shade", round(max(v.color.x for v in part(parts, 'trim').vertices), 3))
 w = part(sb.create_building_parts(width=18, depth=18, floors=3, curvature=0.6), 'wall'); byp = {}
 for v, p in zip(w.vertices, pos(w)):
     if abs(v.normal.y) > 0.9: continue
     byp.setdefault(tuple(round(c, 4) for c in p), set()).add(round(v.uv.x, 3))
 print("curved_shared", len(byp), "split_u", sum(1 for k, s in byp.items() if len(s) > 1 and not (k[2] < 0 and abs(k[0]) < 0.6)))
 `);
-        expect(out).toContain('corner_overhang 0 0');
+        expect(out).toContain('corner_overhang 0 0 base_verts True');
         expect(out).toMatch(/tris [1-9]\d* degenerate 0/);           // was 12% of all triangles
         expect(out).toContain('baluster_gap 0.0 max_trim_shade 1.05'); // on the slab; sill tops keep their 1.05
         expect(out).toMatch(/curved_shared [1-9]\d* split_u 0/);      // one u per wall vertex except the seam
@@ -101,7 +102,7 @@ for label, surf in (("label", {"wall": {"coursed": {}, "provenance": "guessed"}}
     try:
         sb.write_textured_building(path, parts, surfaces=surf); print("NO ERROR", label)
     except ValueError as e:
-        print("RAISED", label, str(e)[:40])
+        print("RAISED", label, str(e)[:60])
 for label, meshes, tex in (("target", list(parts), [("nothing_here", "base_color", b"x", "image/png", 1.0, 1.0)]), ("empty", [], [])):
     try:
         sn.io.write_glb_textured(path, meshes, tex); print("NO ERROR", label)
@@ -113,7 +114,7 @@ for label, meshes, tex in (("target", list(parts), [("nothing_here", "base_color
         expect(out).toContain('report measured 0.9');
         expect(out).toContain('RAISED label provenance must be one of');
         expect(out).toContain('RAISED conf wall: confidence must be in 0..1');
-        expect(out).toContain("RAISED slot Unknown surface slot(s) ['walls']");
+        expect(out).toContain("RAISED slot Unknown surface slot(s) or part(s) ['walls']");
         expect(out).toContain("RAISED target write_glb_textured: texture target 'nothing_her");
         expect(out).toContain('RAISED empty write_glb_textured: every mesh is empty');
         expect(out).not.toContain('NO ERROR');
@@ -144,7 +145,7 @@ def decode_png(data):
         out[y*stride:(y+1)*stride] = line; prev = line
     return w, h, ch, bytes(out)
 parts = sb.create_building_parts(width=8, depth=6, floors=2, details={"balcony_floors": [1]})
-recv = [p for p in parts if p.name.rsplit("_", 1)[-1] in ("wall", "foundation", "roof")]
+recv = [p for p in parts if p.name.rsplit("_", 1)[-1] in ("wall", "foundation", "roof", "trim")]   # the balcony slabs are trim
 def bake(**zero):
     prm = sn.weathering.WeatheringParams(); prm.texel_m = 0.1; prm.variation = 0.0
     for k, v in zero.items(): setattr(prm, k, v)

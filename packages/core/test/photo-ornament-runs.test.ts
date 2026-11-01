@@ -60,6 +60,8 @@ describe('run targets', () => {
 });
 
 describe.skipIf(!real)('the focused pass on the real arch fit', () => {
+    // vitest still runs a skipped suite's body to collect its tests, so the setup below must not read a fit that is not there
+    if (!real) return;
     const fit = (() => {
         const f = JSON.parse(fs.readFileSync(real!.fitPath, 'utf8')) as StructureFit;
         f.outputs.fittedGlb = path.join(real!.dir, 'fitted.glb');

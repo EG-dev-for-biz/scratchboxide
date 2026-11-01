@@ -207,10 +207,10 @@ describe('3D intent policy', () => {
         expect(text).toContain('To build an object at a place, call build_3d_object_from_reference with location and placement.');
         expect(text).toContain('except an object at the real place this scene shows: build_3d_object_from_reference with that location, a placement and addToActiveScene: true adds it to this scene (no new staging).');
         expect(text).not.toContain('execute_3d_python_script({ location');
-        // A plinth goes under an object through the tool that built it; a mesh neither tool built is said to be out of
-        // reach instead of being swapped for a script's own geometry (each script run opens a new scene).
+        // A plinth goes under an object through the tool that built it; a mesh no tool built is read back into a script
+        // with sb.read_glb (bdc687bb) instead of being swapped for a guessed replacement (each script run opens a new scene).
         expect(text).toContain('When a script built the scene (its pythonGenerator holds the script), write one script that builds that geometry again from the script plus the plinth');
-        expect(text).toContain('Neither tool can load a mesh it did not build (an imported, scanned or generated model): say so instead of rebuilding a different object.');
+        expect(text).toContain('build_3d_object_from_reference cannot load a mesh it did not build; execute_3d_python_script can, with sb.read_glb(path)');
         expect(text).not.toContain('set the hero asset on it with sb.layout');
     });
 });
@@ -256,9 +256,10 @@ describe('sb script guide', () => {
         const scripted = await buildSystemInstruction({ prompt: 'refactor the login handler', mode: 'agent', activeArtifact: SCRIPT_SCENE } as any);
         expect(SB_PYTHON_SCRIPT_GUIDE.length).toBeGreaterThan(14_000);
         expect(scripted.length - unrelated.length).toBeGreaterThanOrEqual(SB_PYTHON_SCRIPT_GUIDE.length);
-        // Measured 2026-10-21: 50,144 characters (50,043 on main after the midday-lighting sentence of 4c149bee; the
-        // load_tools line of the tool catalog adds 101). The ceiling guards against the guide coming back, not this.
-        expect(unrelated.length).toBeLessThan(51_000);
+        // Measured 2026-10-31: 54,002 characters (50,144 on 2026-10-21; the prompt additions since are not the guide, the
+        // latest b6551d97, d8ce6ada and 9a1493e9). The ceiling guards against the guide (over 14,000 characters) coming back,
+        // not this.
+        expect(unrelated.length).toBeLessThan(56_000);
     });
 
     it('is served by read_sb_script_guide, offered next to execute_3d_python_script', async () => {
