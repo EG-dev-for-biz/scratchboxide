@@ -103,7 +103,7 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
         'The pixel metrics are also given per region of each view: the whole frame, the target building, the ground, the neighbouring buildings, measured trees and the skyline band, with masks taken from the geometry each pixel shows (never from colour) and drawn in the grids. ' +
         'By default it also renders every build in uniform untextured clay from the same poses and has the judge score shape only (massing, openings, surface relief) against the photo: ' +
         'clayScores, clay grids; use them to compare geometry changes (relief, reveals, massing) that the photo texture hides. ' +
-        'Every build\'s placement is also measured from edges, not by the judge: how far its outline is drawn from the photo\'s silhouette of the target, read along the scan\'s target within Google\'s vector footprint (the run\'s, else fetched when judging), outer outlines only, every build as built behind the scan\'s street (placement, px and degrees; 0 = drawn where the photo shows it). ' +
+        'Every build\'s placement is also measured from edges, not by the judge: how far its outline is drawn from the photo\'s silhouette of the target, read along the scan\'s target within Google\'s vector footprint (the run\'s, else fetched when judging) plus pipeline K\'s allowance for a building\'s own projections (a storefront a few decimetres past the footprint stays, a neighbour\'s slice metres out goes), outer outlines only, every build as built behind the scan\'s street (placement, px and degrees; 0 = drawn where the photo shows it). ' +
         'A view whose registered eye stands under the street is not used; a region under 1% of a view is not judged there; a view where the reference tile ends inside the frame (its sky over what stands past the edge) is flagged (tileEdge) and its regions are not judged. ' +
         'With no build named it evaluates the open staged scene. Compare versions by passing arms. Scores are relative judgements, not measurements: report the spread, and say when the views are few. ' +
         'Fails with a typed error (no scores) when no held-out view can be found or registered. Takes a few minutes (Street View fetch, registration, several judge calls per view).',
@@ -760,9 +760,12 @@ export interface PlacementReference {
 
 /**
  * The scan's target restricted to Google's vector footprint for placement's reference (one flag per triangle of `t`): its
- * triangles whose centroid lies within the footprint plus BASE_CLEANUP_PARAMS.clipMarginM, the margin pipeline K clips at, so
- * scan debris past the footprint (a slice of a neighbour, ragged fragments of what stands beside) is not read as the building's
- * silhouette. Only the reference is restricted: every arm, the raw scan included, is scored as built. Pipeline K's own fit
+ * triangles whose centroid lies within the footprint plus BASE_CLEANUP_PARAMS.allowanceM, so scan debris past the footprint (a
+ * slice of a neighbour, ragged fragments of what stands beside) is not read as the building's silhouette. The margin is the
+ * tolerance pipeline K's fit rule already accepts as a building's own projections (storefronts, cornices): a few decimetres
+ * between Google's footprint and the scan is a projection or a registration offset, not debris, and a neighbour's slice metres
+ * out still goes (the user's decision, 2026-11-01; read from K's constant, so the judge follows K if it changes). Only the
+ * reference is restricted: every arm, the raw scan included, is scored as built. Pipeline K's own fit
  * rule decides whether the footprint is used: when more than footprintMisfit of the target's area standing apronHeightM over
  * the terrain lies more than allowanceM outside it, it does not fit the scan and the whole target is kept (as with no
  * footprint, `whyNone` then saying why there is none), with the reason.
@@ -777,7 +780,7 @@ export function placementTarget(t: TileTriangles, targetFlags: Uint8Array, terra
         const o = i * 9;
         const x = (pos[o] + pos[o + 3] + pos[o + 6]) / 3, y = (pos[o + 1] + pos[o + 4] + pos[o + 7]) / 3, z = (pos[o + 2] + pos[o + 5] + pos[o + 8]) / 3;
         const out = outsideFootprint(x, z, footprint.loops);
-        if (out <= P.clipMarginM) { flags[i] = 1; kept++; }
+        if (out <= P.allowanceM) { flags[i] = 1; kept++; }
         const g = terrain.groundAt(x, z);
         if (!(y - g >= P.apronHeightM)) continue;
         const ux = pos[o + 3] - pos[o], uy = pos[o + 4] - pos[o + 1], uz = pos[o + 5] - pos[o + 2], wx = pos[o + 6] - pos[o], wy = pos[o + 7] - pos[o + 1], wz = pos[o + 8] - pos[o + 2];
@@ -786,7 +789,7 @@ export function placementTarget(t: TileTriangles, targetFlags: Uint8Array, terra
         if (out > P.allowanceM) aboveOut += area;
     }
     const misfitShare = above > 0 ? r3(aboveOut / above) : 1;
-    const read = { source: footprint.source, marginM: P.clipMarginM, misfitShare };
+    const read = { source: footprint.source, marginM: P.allowanceM, misfitShare };
     if (misfitShare > P.footprintMisfit) {
         return { flags: targetFlags, footprint: { used: false, ...read, reason: `${Math.round(misfitShare * 100)}% of the target standing ${P.apronHeightM} m over the terrain lies more than ${P.allowanceM} m outside it (pipeline K's fit rule allows ${P.footprintMisfit * 100}%): it does not fit the scan, so the whole target is read` } };
     }
@@ -2027,7 +2030,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         },
         regions: regionsNote,
         placement: {
-            note: `Where each build's target is drawn against where the photo shows it, from edges, not by the judge. The photo's silhouette of the target is its structural edges within ${PHOTO_MATCH_PLACEMENT_BAND_PX} px of the outline of the scan's target from the registered pose (${PHOTO_MATCH_METRIC_WIDTH_PX} px wide), the target restricted to Google's vector footprint plus ${BASE_CLEANUP_PARAMS.clipMarginM} m when one fits the scan (reference.footprint: scan debris past it is not the building; the reference run's vector stage, else fetched at judging time, reference.footprintFetch); each build is drawn alone from the same pose and scored as built, never clipped (the raw scan included: its pieces past the footprint count against it), it and the scan's target behind the reference tile's street (reference.streetInFront), and both outlines are outer boundaries with their holes filled (a hole in the scan is not a silhouette; a real opening such as an arch with sky behind it is filled too, as placement measures where the building stands). errorPx is the mean distance from that silhouette to the build's outline as drawn (truncated at ${PHOTO_MATCH_PLACEMENT_TRUNCATION_PX} px; errorDeg the angle): it grows with a move and with a wrong shape. Beside it, shiftPx is the image shift (within ${PHOTO_MATCH_PLACEMENT_SEARCH_PX} px) that brings the outline closest, and residualPx the error left there. Mean over the views where the target fills at least ${HELD_OUT_MIN_SCREEN * 100}% of the frame; per view in views[].placement. A report without reference is the earlier measure: the whole target, holes read, nothing in front.`,
+            note: `Where each build's target is drawn against where the photo shows it, from edges, not by the judge. The photo's silhouette of the target is its structural edges within ${PHOTO_MATCH_PLACEMENT_BAND_PX} px of the outline of the scan's target from the registered pose (${PHOTO_MATCH_METRIC_WIDTH_PX} px wide), the target restricted to Google's vector footprint plus ${BASE_CLEANUP_PARAMS.allowanceM} m when one fits the scan (reference.footprint: scan debris past it is not the building; the margin is the tolerance pipeline K's fit rule accepts as the building's own projections, storefronts and cornices, so a few decimetres between footprint and scan stay and a neighbour's slice metres out goes; the reference run's vector stage, else fetched at judging time, reference.footprintFetch); each build is drawn alone from the same pose and scored as built, never clipped (the raw scan included: its pieces past the footprint count against it), it and the scan's target behind the reference tile's street (reference.streetInFront), and both outlines are outer boundaries with their holes filled (a hole in the scan is not a silhouette; a real opening such as an arch with sky behind it is filled too, as placement measures where the building stands). errorPx is the mean distance from that silhouette to the build's outline as drawn (truncated at ${PHOTO_MATCH_PLACEMENT_TRUNCATION_PX} px; errorDeg the angle): it grows with a move and with a wrong shape. Beside it, shiftPx is the image shift (within ${PHOTO_MATCH_PLACEMENT_SEARCH_PX} px) that brings the outline closest, and residualPx the error left there. Mean over the views where the target fills at least ${HELD_OUT_MIN_SCREEN * 100}% of the frame; per view in views[].placement. A report without reference is the earlier measure: the whole target, holes read, nothing in front.`,
             ...(placementReference ? { reference: placementReference } : {}),
             mean: placementMean, views: placementViews.length
         },

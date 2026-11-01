@@ -36,6 +36,7 @@ import {
     PHOTO_MATCH_EVALUATE_TOOL, PHOTO_MATCH_ISOLATE_SURFACE_M, type HeldOutRegistration, type PhotoMatchDeps
 } from '../src/node/gemini/tools/location-evidence/photo-match-evaluate';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
+import { BASE_CLEANUP_PARAMS } from '../src/node/3d-engine/staged-location/pipeline-k/base-cleanup';
 import { LOCATION_EVIDENCE_TOOL_DECLARATIONS } from '../src/node/gemini/tools/location-evidence-tools';
 import type { ToolContext } from '../src/node/gemini/tools/types';
 
@@ -965,7 +966,7 @@ describe('photo_match_evaluate tool', () => {
             // Google's footprint of the target (x -7..7): the isolate within it is the reference
             vectorStage('9'.repeat(64), -7, 7);
             const fits = await run();
-            expect(fits.placement.reference.footprint).toMatchObject({ used: true, marginM: 0.3, misfitShare: 0 });
+            expect(fits.placement.reference.footprint).toMatchObject({ used: true, marginM: BASE_CLEANUP_PARAMS.allowanceM, misfitShare: 0 });
             expect(fits.placement.reference.footprint.source).toBe('Google\'s vector footprint block, from the reference run\'s vector stage, as the target pick chooses it at the place');
             expect(fits.placement.reference.footprint.triangles).toBe(fits.placement.reference.footprint.of);
             expect(fits.views[0].placementReference.footprint).toBe(fits.placement.reference.footprint.source);
@@ -1009,7 +1010,7 @@ describe('photo_match_evaluate tool', () => {
             expect(calls[0].place).toEqual({ lat: PLACE.lat, lng: PLACE.lng });
             expect(calls[0].radiusM).toBeGreaterThanOrEqual(100);
             expect(fetched.placement.reference.footprintFetch).toEqual({ radiusM: calls[0].radiusM, buildings: 1, note: '1 extruded building footprint (stand-in)' });
-            expect(fetched.placement.reference.footprint).toMatchObject({ used: true, marginM: 0.3, misfitShare: 0 });
+            expect(fetched.placement.reference.footprint).toMatchObject({ used: true, marginM: BASE_CLEANUP_PARAMS.allowanceM, misfitShare: 0 });
             expect(fetched.placement.reference.footprint.source).toBe('Google\'s vector footprint g/block, fetched at judging time, as the target pick chooses it at the place');
             expect(fetched.views[0].placementReference.footprint).toBe(fetched.placement.reference.footprint.source);
             // a fetched footprint over half the block: pipeline K's fit rule rejects it, as it would a recorded one

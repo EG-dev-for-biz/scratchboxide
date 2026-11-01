@@ -25,6 +25,8 @@ import { castCamera } from '../src/node/3d-engine/staged-location/survey-casting
 import { renderFrameDepth } from '../src/node/spatial/StreetViewPoseRegistrar';
 import { cachedFootprints, footprintSourceOf, placementTarget, storedFootprints, streetMesh } from '../src/node/gemini/tools/location-evidence/photo-match-evaluate';
 import type { FootprintSource } from '../src/node/3d-engine/staged-location/facade-footprints';
+import { BASE_CLEANUP_PARAMS, outsideFootprint } from '../src/node/3d-engine/staged-location/pipeline-k/base-cleanup';
+import { FOOTPRINT_MAX_PROJECTION_M } from '../src/node/3d-engine/staged-location/footprint-lock';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -107,7 +109,7 @@ describe('placement reads the building, not the scan\'s defects', () => {
         const streetDepth = renderFrameDepth(streetMesh(full, fullLabels)!, cam);
 
         const restricted = placementTarget(full, targetFlags, FLAT, { loops: BUILDING_LOOP, source: 'the building\'s footprint' });
-        expect(restricted.footprint).toMatchObject({ used: true, source: 'the building\'s footprint', marginM: 0.3 });
+        expect(restricted.footprint).toMatchObject({ used: true, source: 'the building\'s footprint', marginM: BASE_CLEANUP_PARAMS.allowanceM });
         expect(restricted.footprint.misfitShare!).toBeLessThan(0.2);
         // every building triangle stays; of the debris only its wall on the footprint's edge does (it stands inside the building)
         expect(restricted.footprint.triangles).toBe(nb + 2);
@@ -135,6 +137,29 @@ describe('placement reads the building, not the scan\'s defects', () => {
         // and with none, the whole target is read, and the result says so
         const none = placementTarget(full, targetFlags, FLAT, undefined);
         expect(none).toMatchObject({ flags: targetFlags, footprint: { used: false, source: 'none' } });
+    });
+
+    it('keeps the building\'s own projections within K\'s allowance: a storefront 0.5 m past the footprint stays, a piece 4 m out goes', () => {
+        // the margin is pipeline K's projection allowance, the tolerance its fit rule accepts (1.5 m), not its 0.3 m clip
+        expect(BASE_CLEANUP_PARAMS.allowanceM).toBe(FOOTPRINT_MAX_PROJECTION_M);
+        expect(BASE_CLEANUP_PARAMS.allowanceM).toBe(1.5);
+        // the building; a storefront standing 0.5 m proud of its south face; a neighbour's piece 4 m past its east face
+        const building = soup(box(-10, 10, -10, 10, 20));
+        const storefront = soup(box(-5, 5, 10, 10.5, 3));
+        const piece = soup(box(14, 18, -2, 2, 6));
+        const full = merge([building, storefront, piece, ground()]);
+        const nb = building.texture.length, ns = storefront.texture.length, np = piece.texture.length;
+        const targetFlags = Uint8Array.from({ length: full.texture.length }, (_, i) => (i < nb + ns + np ? 1 : 0));
+        const r = placementTarget(full, targetFlags, FLAT, { loops: BUILDING_LOOP, source: 'the building\'s footprint' });
+        expect(r.footprint).toMatchObject({ used: true, marginM: 1.5 });
+        // every storefront triangle stays, though some lie past the old 0.3 m margin; every triangle of the piece goes
+        const storefrontFlags = [...r.flags.subarray(nb, nb + ns)], pieceFlags = [...r.flags.subarray(nb + ns, nb + ns + np)];
+        expect(storefrontFlags.every(f => f === 1)).toBe(true);
+        expect(pieceFlags.every(f => f === 0)).toBe(true);
+        const P = full.positions;
+        const pastOld = Array.from({ length: ns }, (_, k) => { const o = (nb + k) * 9; return outsideFootprint((P[o] + P[o + 3] + P[o + 6]) / 3, (P[o + 2] + P[o + 5] + P[o + 8]) / 3, BUILDING_LOOP); }).filter(d => d > BASE_CLEANUP_PARAMS.clipMarginM);
+        expect(pastOld.length).toBeGreaterThan(0);
+        expect(r.footprint.triangles).toBe(nb + ns);
     });
 
     it('fills holes: a hole in the scan, or in a build, costs nothing', () => {
