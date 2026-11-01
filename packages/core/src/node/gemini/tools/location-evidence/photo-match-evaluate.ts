@@ -37,13 +37,13 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome } from '../types';
-import type { StagedBuildState, StagedLayer, Vec3 } from '../../../../common/spatial/staged-location-contracts';
+import type { StagedBuildState, StagedLayer, Vec2, Vec3 } from '../../../../common/spatial/staged-location-contracts';
 import {
     aggregateCriteria, aggregateRuns, armLayerTriangles, armMeshesForView, composeGrid, coverageMask, judgeView, judgeViewClay, loadArmLayer, perceptualScores, photoEdgeField, planOutlineCells, regionMasks, regionOverlay, regionScores,
     regionsInFrame, renderPng, renderTriangles, targetPlacement, tileEdgeInFrame, triangleRegions, type TileTopGrid, JUDGE_CRITERIA, JUDGE_REGION_CRITERIA, PHOTO_MATCH_GROUND_BAND_M, PHOTO_MATCH_METRIC_WIDTH_PX, PHOTO_MATCH_OUTLINE_REACH_M, PHOTO_MATCH_PLACEMENT_BAND_PX, PHOTO_MATCH_PLACEMENT_SEARCH_PX,
     PHOTO_MATCH_PLACEMENT_TRUNCATION_PX, PHOTO_MATCH_REGION_LEGEND, PHOTO_MATCH_REGION_MIN_SHARE, PHOTO_MATCH_REGIONS, PHOTO_MATCH_TILE_EDGE_MIN_SHARE, PHOTO_MATCH_TILE_EDGE_REACH_M, REGION,
     type ArmLayer, type ArmRender, type CriterionStat, type JudgeClient, type JudgeCriterion, type JudgeRegionCriterion, type JudgeRun, type PerceptualScores, type PhotoMatchRegion, type RegionMasks, type RegionScore,
-    type TargetPlacement, type TileEdgeReading
+    type TargetPlacement, type TerrainLookup, type TileEdgeReading
 } from '../../../3d-engine/staged-location/photo-match-eval';
 import { readTileTriangles, decodeImageInMemory, type TileTriangles } from '../../../3d-engine/staged-location/tile-texture-transfer';
 import { encodePng } from '../../../3d-engine/staged-location/png-encode';
@@ -60,6 +60,7 @@ import { readGlbScene, renderFrameDepth, sceneToRenderMesh, type PoseCorrection 
 import { buildGroundModel, geodeticToScan, loadScanMesh } from '../../../spatial/StreetViewSurveyPlanner';
 import { pickStructure, PICK_STRUCTURE, STRUCTURE_SEED_SEARCH_M } from '../../../3d-engine/staged-location/extraction-sizing';
 import { evidenceLookup, type EvidenceLookup } from '../../../3d-engine/staged-location/vector-footprints';
+import { BASE_CLEANUP_PARAMS, outsideFootprint } from '../../../3d-engine/staged-location/pipeline-k/base-cleanup';
 import type { RenderMesh3D } from '../../../spatial/HeadlessMeshSilhouetteRenderer';
 import type { GeodeticOrigin } from '../../../spatial/StreetViewSurveyPlanner';
 import { resolveWithinRoot } from '../../../security/path-guard';
@@ -101,7 +102,7 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
         'The pixel metrics are also given per region of each view: the whole frame, the target building, the ground, the neighbouring buildings, measured trees and the skyline band, with masks taken from the geometry each pixel shows (never from colour) and drawn in the grids. ' +
         'By default it also renders every build in uniform untextured clay from the same poses and has the judge score shape only (massing, openings, surface relief) against the photo: ' +
         'clayScores, clay grids; use them to compare geometry changes (relief, reveals, massing) that the photo texture hides. ' +
-        'Every build\'s placement is also measured from edges, not by the judge: the image shift that sets the target\'s outline on the photo\'s edges (placement, px and degrees; 0 = drawn where the photo shows it). ' +
+        'Every build\'s placement is also measured from edges, not by the judge: how far its outline is drawn from the photo\'s silhouette of the target, read along the scan\'s target within the building\'s footprint, outer outlines only, every build behind the scan\'s street (placement, px and degrees; 0 = drawn where the photo shows it). ' +
         'A view whose registered eye stands under the street is not used; a region under 1% of a view is not judged there; a view where the reference tile ends inside the frame (its sky over what stands past the edge) is flagged (tileEdge) and its regions are not judged. ' +
         'With no build named it evaluates the open staged scene. Compare versions by passing arms. Scores are relative judgements, not measurements: report the spread, and say when the views are few. ' +
         'Fails with a typed error (no scores) when no held-out view can be found or registered. Takes a few minutes (Street View fetch, registration, several judge calls per view).',
@@ -319,6 +320,8 @@ interface Reference {
     removedTrees?: string;
     /** Google's building footprints the run read (its vector stage), for the structure pick at the place when nothing was isolated. */
     footprints?: EvidenceLookup;
+    /** The footprint the run built the structure in (its pipeline K base note, else its structure_scan note): loops in the tile frame. */
+    runFootprint?: { loops: Vec2[][]; source: string };
     source: string;
 }
 
@@ -458,6 +461,7 @@ class BuildResolver {
         // the footprints of Google's buildings the vector stage read (in the place's frame: x east, z south, the same origin)
         const vector = this.stageValue<{ sel?: { buildings?: StoredVectorBuilding[] } }>('vector', rec.keys?.vector);
         const footprints = vector?.value.sel?.buildings?.length ? footprintLookup(vector.value.sel.buildings) : undefined;
+        const runFootprint = this.runFootprint(rec.runId);
         return {
             origin: { lat: place.lat, lng: place.lng, heightMeters: tiles.value.originEllipsoidalHeightM },
             place: rec.place?.formattedAddress ?? rec.request?.query ?? `${place.lat.toFixed(6)}, ${place.lng.toFixed(6)}`,
@@ -465,8 +469,24 @@ class BuildResolver {
             ...(iso && fs.existsSync(iso) ? { isolate: iso } : {}),
             ...(removed && fs.existsSync(removed) ? { removedTrees: removed } : {}),
             ...(footprints ? { footprints } : {}),
+            ...(runFootprint ? { runFootprint } : {}),
             source: `staged run ${rec.runId}${welded ? ' (its seam-welded scan, which every stage of the run read)' : ''}`
         };
+    }
+
+    /**
+     * The footprint a run built its structure in, as the run recorded it: pipeline K's base note (the loops its base cleanup
+     * and clip used), else the structure_scan note (pipeline E's plan). Undefined when the run recorded neither.
+     */
+    runFootprint(runId: string): Reference['runFootprint'] {
+        const loopsOf = (v: unknown): Vec2[][] => (Array.isArray(v) ? v : []).map(l => (Array.isArray(l) ? l : []).filter((p): p is Vec2 => Array.isArray(p) && p.length >= 2 && p.every(Number.isFinite))).filter(l => l.length >= 3);
+        const k = this.cache.readRunNote<{ loops?: unknown; footprint?: string }>(runId, 'pipeline_k_base');
+        const kLoops = loopsOf(k?.loops);
+        if (kLoops.length) return { loops: kLoops, source: `the run's own footprint (${k?.footprint ?? 'unnamed'}), as its pipeline K base cleanup and clip used it (pipeline_k_base note)` };
+        const s = this.cache.readRunNote<{ plan?: unknown; planSource?: string }>(runId, 'structure_scan');
+        const sLoops = loopsOf(s?.plan);
+        if (sLoops.length) return { loops: sLoops, source: `the run's own plan (${s?.planSource ?? 'unnamed'}), as its structure_scan note records it` };
+        return undefined;
     }
 
     /** Every pano a run used: its notes (registration, ownership, fit), its stage entries and, when open, its scene. */
@@ -673,6 +693,64 @@ function selectTriangles(t: TileTriangles, keepFlags: Uint8Array): TileTriangles
     const pickF = (a: Float32Array, w: number) => { const o = new Float32Array(keep.length * w); keep.forEach((s, d) => o.set(a.subarray(s * w, s * w + w), d * w)); return o; };
     const pickI = (a: Int32Array, w: number) => { const o = new Int32Array(keep.length * w); keep.forEach((s, d) => o.set(a.subarray(s * w, s * w + w), d * w)); return o; };
     return { ...t, positions: pickF(t.positions, 9), uvs: pickF(t.uvs, 6), normals: pickF(t.normals, 3), texture: pickI(t.texture, 1), flatLinear: pickF(t.flatLinear, 3) };
+}
+
+/** What placement read the photo's silhouette of the target along, and how every arm was drawn for it (the result's placement.reference). */
+export interface PlacementReference {
+    /**
+     * The footprint the scan's target was restricted to: its triangles whose centroid lies within it plus marginM. `used` false:
+     * the whole target was read, and `reason` says why.
+     */
+    footprint: { used: boolean; source: string; marginM?: number; misfitShare?: number; triangles?: number; of?: number; reason?: string };
+    /** Both outlines, the reference's and each arm's, are outer boundaries with their holes filled (targetFilled). */
+    holesFilled: true;
+    /** The reference and every arm drawn behind the reference tile's street (its ground-labelled triangles as occluder depth). */
+    streetInFront: boolean;
+}
+
+/**
+ * The scan's target restricted to a footprint for placement (one flag per triangle of `t`): its triangles whose centroid
+ * lies within the footprint plus BASE_CLEANUP_PARAMS.clipMarginM, the margin pipeline K clips at, so scan debris past the
+ * footprint (a slice of a neighbour, ragged fragments of what stands beside) is not read as the building's silhouette.
+ * Pipeline K's own fit rule decides whether the footprint is used: when more than footprintMisfit of the target's area
+ * standing apronHeightM over the terrain lies more than allowanceM outside it, it does not fit the scan and the whole target
+ * is kept (as with no footprint), with the reason.
+ */
+export function placementTarget(t: TileTriangles, targetFlags: Uint8Array, terrain: TerrainLookup, footprint: { loops: Vec2[][]; source: string } | undefined): { flags: Uint8Array; footprint: PlacementReference['footprint'] } {
+    if (!footprint) return { flags: targetFlags, footprint: { used: false, source: 'none', reason: 'no footprint is recorded for the reference: neither the run\'s own nor a Google vector footprint the target pick finds at the place' } };
+    const P = BASE_CLEANUP_PARAMS, pos = t.positions, flags = new Uint8Array(targetFlags.length);
+    let above = 0, aboveOut = 0, kept = 0, of = 0;
+    for (let i = 0; i < targetFlags.length; i++) {
+        if (!targetFlags[i]) continue;
+        of++;
+        const o = i * 9;
+        const x = (pos[o] + pos[o + 3] + pos[o + 6]) / 3, y = (pos[o + 1] + pos[o + 4] + pos[o + 7]) / 3, z = (pos[o + 2] + pos[o + 5] + pos[o + 8]) / 3;
+        const out = outsideFootprint(x, z, footprint.loops);
+        if (out <= P.clipMarginM) { flags[i] = 1; kept++; }
+        const g = terrain.groundAt(x, z);
+        if (!(y - g >= P.apronHeightM)) continue;
+        const ux = pos[o + 3] - pos[o], uy = pos[o + 4] - pos[o + 1], uz = pos[o + 5] - pos[o + 2], wx = pos[o + 6] - pos[o], wy = pos[o + 7] - pos[o + 1], wz = pos[o + 8] - pos[o + 2];
+        const area = 0.5 * Math.hypot(uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx);
+        above += area;
+        if (out > P.allowanceM) aboveOut += area;
+    }
+    const misfitShare = above > 0 ? r3(aboveOut / above) : 1;
+    const read = { source: footprint.source, marginM: P.clipMarginM, misfitShare };
+    if (misfitShare > P.footprintMisfit) {
+        return { flags: targetFlags, footprint: { used: false, ...read, reason: `${Math.round(misfitShare * 100)}% of the target standing ${P.apronHeightM} m over the terrain lies more than ${P.allowanceM} m outside it (pipeline K's fit rule allows ${P.footprintMisfit * 100}%): it does not fit the scan, so the whole target is read` } };
+    }
+    if (!kept) return { flags: targetFlags, footprint: { used: false, ...read, reason: 'no triangle of the target lies within it' } };
+    return { flags, footprint: { used: true, ...read, triangles: kept, of } };
+}
+
+/** The reference tile's street, for placement: its triangles labelled REGION.ground, as a mesh to take depth from. */
+export function streetMesh(t: TileTriangles, labels: Uint8Array): RenderMesh3D | undefined {
+    let n = 0;
+    for (let i = 0; i < labels.length; i++) if (labels[i] === REGION.ground) n++;
+    if (!n) return undefined;
+    const vertices = new Float32Array(n * 9);
+    for (let i = 0, k = 0; i < labels.length; i++) if (labels[i] === REGION.ground) vertices.set(t.positions.subarray(i * 9, i * 9 + 9), 9 * k++);
+    return { vertices, indices: Uint32Array.from({ length: n * 3 }, (_, j) => j) };
 }
 
 /** A copy of `t` raised by `dy` metres (an arm from another extraction at the same place, onto the reference's frame). */
@@ -1078,6 +1156,12 @@ export interface PhotoMatchViewResult {
     regionsLeftOut?: Partial<Record<JudgeRegionCriterion, string>>;
     /** Per arm, where its target is drawn against where the photo shows it, from edges (targetPlacement); null with no outline. */
     placement?: Record<string, TargetPlacement | null>;
+    /**
+     * What placement was read against here: the footprint the scan's target was restricted to (null: the whole target), outlines
+     * with holes filled, and the street in front. A report without it is the earlier measure (the whole target, holes read,
+     * every arm drawn alone with nothing in front).
+     */
+    placementReference?: { footprint: string | null; holesFilled: true; streetInFront: boolean };
 }
 
 const DEFAULT_RUN_CONCURRENCY = 2;
@@ -1323,9 +1407,22 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     const targetFlags = isoFlags ?? fullLabels.map(l => (l === REGION.target ? 1 : 0));
     const targetCount = targetFlags.reduce((n, f) => n + f, 0);
     const hasTarget = targetCount > 0;
-    // the target alone (the scan's): where the photo's silhouette of it is read for each arm's placement
+    // the target alone (the scan's)
     const targetTris = hasTarget ? selectTriangles(full, targetFlags) : undefined;
     const targetLabels = hasTarget ? fullLabels.filter((_, i) => targetFlags[i]) : undefined;
+    // where the photo's silhouette of it is read for each arm's placement: the isolate within the building's footprint (the
+    // run's own, else Google's vector footprint the target pick finds at the place), unless that footprint does not fit the
+    // scan; a picked structure is already its footprint's. Every arm is drawn behind the tile's street for it.
+    const vectorPick = isoFlags && !ref.runFootprint && ref.footprints ? pickStructure(scan, terrain, { anchor: { x: 0, z: 0 }, footprints: { buildingAt: ref.footprints.buildingAt, buildings: ref.footprints.raster.buildings } }) : undefined;
+    const vectorLoops = vectorPick?.vectorFootprint?.used ? ref.footprints!.raster.buildings.filter(b => vectorPick.vectorFootprint!.featureIds.includes(b.id)).flatMap(b => b.parts.map(p => p[0])).filter(l => l?.length >= 3) : [];
+    const placementFootprint = ref.runFootprint ?? (vectorLoops.length ? { loops: vectorLoops, source: `Google's vector footprint ${vectorPick!.vectorFootprint!.featureIds.join(', ')}, as the target pick chooses it at the place` } : undefined);
+    const placementAt = !hasTarget ? undefined : isoFlags
+        ? placementTarget(full, targetFlags, terrain, placementFootprint)
+        : { flags: targetFlags, footprint: { used: true, source: `the picked structure's own footprint (${pick!.footprintSource}): the target is already within it` } };
+    const placementTris = placementAt ? (placementAt.flags === targetFlags ? targetTris : selectTriangles(full, placementAt.flags)) : undefined;
+    const placementLabels = placementAt ? (placementAt.flags === targetFlags ? targetLabels : fullLabels.filter((_, i) => placementAt.flags[i])) : undefined;
+    const street = hasTarget ? streetMesh(full, fullLabels) : undefined;
+    const placementReference: PlacementReference | undefined = placementAt ? { footprint: placementAt.footprint, holesFilled: true, streetInFront: !!street } : undefined;
 
     // ---------------- arms, context ----------------
     progress(`loading ${arms.length} arms`, 0.22);
@@ -1476,11 +1573,13 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         // the photo's edges and the pose at the metric width (each arm's placement, below)
         const field = targetTris ? photoEdgeField(photo) : undefined;
         const camW = field ? castCamera({ eye: v.eye, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg, widthPx: field.w, heightPx: field.h, ...(reg.correction ? { correction: reg.correction } : {}) }) : undefined;
-        // a splat world, drawn once per pose: in the neutral light, in clay, and alone at the metric width
+        // the tile's street from that pose: what stands in front of the building's base in the photo, for every arm drawn alone
+        const streetW = camW && street ? { occluderDepth: renderFrameDepth(street, camW) } : {};
+        // a splat world, drawn once per pose: in the neutral light, in clay, and alone at the metric width (behind the street)
         const splatRenders = new Map<string, { textured: SplatArmRender; clay?: SplatArmRender; alone?: SplatArmRender }>();
         for (const a of loaded) {
             if (!a.splat) continue;
-            const [textured, ...more] = await renderSplatArm(a.splat.file, [{ camera }, ...(wantClay ? [{ camera, clay: true }] : []), ...(camW ? [{ camera: camW }] : [])], {
+            const [textured, ...more] = await renderSplatArm(a.splat.file, [{ camera }, ...(wantClay ? [{ camera, clay: true }] : []), ...(camW ? [{ camera: camW, ...streetW }] : [])], {
                 labels: splatLabels.get(a.id)!.labels, skyLabel: REGION.sky, offset: a.splat.offsetM, workDir: path.join(splatWork, `${a.id}_v${k}`), ...(signal ? { signal } : {})
             });
             splatRenders.set(a.id, { textured, ...(wantClay ? { clay: more.shift() } : {}), ...(camW ? { alone: more.shift() } : {}) });
@@ -1502,14 +1601,15 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
             else if (tileEdge.flagged) regionsLeftOut[c] = `the reference tile ends inside the frame (${(tileEdge.share * 100).toFixed(1)}% of it is sky past the tile's edge)`;
         }
         const judgedRegions = tileEdge.flagged ? [] : inFrame;
-        // each arm's placement: drawn alone at the metric width from the registered pose, its outline set on the photo's
-        // silhouette of the target (its edges along the scan's target outline from the same pose)
+        // each arm's placement: drawn alone at the metric width from the registered pose behind the tile's street, its outline
+        // set on the photo's silhouette of the target (its edges along the outline of the scan's target within its footprint,
+        // drawn the same way)
         const placement: Record<string, TargetPlacement | null> = {};
-        if (targetTris && field && camW) {
+        if (placementTris && field && camW) {
             const degPerPx = (2 * Math.atan(field.w / (2 * camW.fx)) * 180) / Math.PI / field.w;
-            const refW = renderTriangles([targetTris], camW, { supersample: 1, regions: { meshes: [targetLabels!] } }).regions!;
+            const refW = renderTriangles([placementTris], camW, { supersample: 1, ...streetW, regions: { meshes: [placementLabels!] } }).regions!;
             for (let i = 0; i < loaded.length; i++) {
-                const alone = splatRenders.get(loaded[i].id)?.alone ?? renderTriangles(forView[i].meshes, camW, { supersample: 1, regions: { meshes: armLabels[i] } });
+                const alone = splatRenders.get(loaded[i].id)?.alone ?? renderTriangles(forView[i].meshes, camW, { supersample: 1, ...streetW, regions: { meshes: armLabels[i] } });
                 placement[loaded[i].id] = targetPlacement(field, refW, alone.regions!, degPerPx);
                 await yieldLoop();
             }
@@ -1560,7 +1660,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
                 ...(wantClay ? { clayRenders: clayFiles, clayGrid: path.join(outDir, `grid_${viewId}_clay.png`) } : {}),
                 ...(Object.keys(treeLevels).length ? { trees: treeLevels } : {}),
                 regions: { pixels: masks.pixels, bandPx: masks.bandPx, masks: maskFile, maskGrid, arms: regionArms },
-                tileEdge, judgedRegions, ...(Object.keys(regionsLeftOut).length ? { regionsLeftOut } : {}), placement
+                tileEdge, judgedRegions, ...(Object.keys(regionsLeftOut).length ? { regionsLeftOut } : {}), placement,
+                ...(placementReference && Object.keys(placement).length ? { placementReference: { footprint: placementReference.footprint.used ? placementReference.footprint.source : null, holesFilled: true as const, streetInFront: placementReference.streetInFront } } : {})
             },
             photoBytes: im.bytes, mime: im.mimeType || 'image/jpeg', photo, renders, clayRenders, maskOverlay
         });
@@ -1840,7 +1941,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         },
         regions: regionsNote,
         placement: {
-            note: `Where each build's target is drawn against where the photo shows it, from edges, not by the judge. The photo's silhouette of the target is its structural edges within ${PHOTO_MATCH_PLACEMENT_BAND_PX} px of the scan's target outline from the registered pose (${PHOTO_MATCH_METRIC_WIDTH_PX} px wide); each build is drawn alone from the same pose. errorPx is the mean distance from that silhouette to the build's outline as drawn (truncated at ${PHOTO_MATCH_PLACEMENT_TRUNCATION_PX} px; errorDeg the angle): it grows with a move and with a wrong shape. Beside it, shiftPx is the image shift (within ${PHOTO_MATCH_PLACEMENT_SEARCH_PX} px) that brings the outline closest, and residualPx the error left there. Mean over the views where the target fills at least ${HELD_OUT_MIN_SCREEN * 100}% of the frame; per view in views[].placement.`,
+            note: `Where each build's target is drawn against where the photo shows it, from edges, not by the judge. The photo's silhouette of the target is its structural edges within ${PHOTO_MATCH_PLACEMENT_BAND_PX} px of the outline of the scan's target from the registered pose (${PHOTO_MATCH_METRIC_WIDTH_PX} px wide), the target restricted to the building's footprint plus ${BASE_CLEANUP_PARAMS.clipMarginM} m (reference.footprint: scan debris past it is not the building); each build is drawn alone from the same pose, it and the scan's target behind the reference tile's street (reference.streetInFront), and both outlines are outer boundaries with their holes filled (a hole in the scan is not a silhouette). errorPx is the mean distance from that silhouette to the build's outline as drawn (truncated at ${PHOTO_MATCH_PLACEMENT_TRUNCATION_PX} px; errorDeg the angle): it grows with a move and with a wrong shape. Beside it, shiftPx is the image shift (within ${PHOTO_MATCH_PLACEMENT_SEARCH_PX} px) that brings the outline closest, and residualPx the error left there. Mean over the views where the target fills at least ${HELD_OUT_MIN_SCREEN * 100}% of the frame; per view in views[].placement. A report without reference is the earlier measure: the whole target, holes read, nothing in front.`,
+            ...(placementReference ? { reference: placementReference } : {}),
             mean: placementMean, views: placementViews.length
         },
         viewChecks: {

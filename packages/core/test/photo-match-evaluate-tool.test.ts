@@ -924,8 +924,40 @@ describe('photo_match_evaluate tool', () => {
             expect(v.placement.X2.shiftLengthPx, v.id).toBeGreaterThan(5);
         }
         expect(r.summary).toMatch(new RegExp(`Placement from edges \\(${r.views.length} views; px at the metric width`));
+        // what it was read against: the picked structure (already its footprint's), outer outlines, every arm behind the street
+        expect(r.placement.reference).toMatchObject({ footprint: { used: true }, holesFilled: true, streetInFront: true });
+        expect(r.placement.reference.footprint.source).toMatch(/picked structure's own footprint/);
+        for (const v of r.views) expect(v.placementReference).toMatchObject({ holesFilled: true, streetInFront: true });
         r.views.forEach((v: any, k: number) => fs.copyFileSync(v.grid, path.join(SHOTS, `tool_photo_match_view_checks_view${k}.png`)));
     }, 240_000);
+
+    it('reads placement along the isolate within the run\'s own footprint, and not within one that does not fit the scan', async () => {
+        const note = path.join(root, '.scratchbox', 'cache', 'staged_location', 'runs', RUN, 'pipeline_k_base.json');
+        const run = async (loops: number[][][]) => {
+            fs.writeFileSync(note, JSON.stringify({ loops, groundY: 0, footprint: 'Google vector footprint', report: null }));
+            const out = await createPhotoMatchEvaluateHandler(() => fakeDeps(root))({ views: 1, runs: 1, clay: false }, ctxFor(root, staged.scene));
+            expect(out.status, JSON.stringify(out.resultPayload).slice(0, 600)).toBe('completed');
+            return out.resultPayload as any;
+        };
+        try {
+            // the target's own plan (x -7..7, z -6..6): every triangle of the isolate stays
+            const fits = await run([[[-7, -6], [7, -6], [7, 6], [-7, 6]]]);
+            expect(fits.placement.reference).toMatchObject({ holesFilled: true, streetInFront: true, footprint: { used: true, marginM: 0.3, misfitShare: 0 } });
+            expect(fits.placement.reference.footprint.source).toMatch(/the run's own footprint \(Google vector footprint\).*pipeline_k_base note/);
+            expect(fits.placement.reference.footprint.triangles).toBe(fits.placement.reference.footprint.of);
+            expect(fits.views[0].placementReference.footprint).toBe(fits.placement.reference.footprint.source);
+            expect(fits.placement.mean.raw.errorPx).not.toBeNull();
+            // a corner of it: most of the building past it, so pipeline K's fit rule keeps the whole isolate and says why
+            const off = await run([[[-7, -6], [-3, -6], [-3, -2], [-7, -2]]]);
+            expect(off.placement.reference.footprint).toMatchObject({ used: false });
+            expect(off.placement.reference.footprint.misfitShare).toBeGreaterThan(0.2);
+            expect(off.placement.reference.footprint.reason).toMatch(/does not fit the scan, so the whole target is read/);
+            expect(off.views[0].placementReference.footprint).toBeNull();
+            expect(off.placement.mean.raw.errorPx).toBe(fits.placement.mean.raw.errorPx);
+        } finally {
+            fs.rmSync(note, { force: true });
+        }
+    }, 120_000);
 
     it('flags a view where the reference tile ends inside the frame, before any score: its regions are not judged, its building is', async () => {
         // a tile only 100 m across, a 40 m block at its south-east edge: past the edge beside it the photo would show the city going
