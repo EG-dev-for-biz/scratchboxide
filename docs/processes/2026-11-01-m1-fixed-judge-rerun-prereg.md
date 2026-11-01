@@ -532,8 +532,8 @@ D is half the mean X2 − K gap, and at least 2 px, as before.
 
 The user decided that the judge fetches Google's vector footprint itself when the reference run recorded none, relayed by
 the main session. The sections above stand as written. This section gives the change, a correction to the amendment
-above, and the numbers on it. No judge call was made. The fetch read 12 Google vector tiles, under $0.10 against the
-estimate of under $0.10.
+above, and the numbers on it. No judge call was made. The fetches read 16 Google vector tiles (4 at each place, and 4
+more at the Ferry with the first default), under $0.10 against the estimate of under $0.10.
 
 ### The change (branch `fix/judge-fetch-footprint`)
 
