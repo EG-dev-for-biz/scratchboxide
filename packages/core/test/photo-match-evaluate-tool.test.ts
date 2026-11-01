@@ -32,7 +32,7 @@ import { orthoReferenceCamera, orthoReferenceRecord, type OrthoReference } from 
 import { bearingDeg, type PanoCandidate } from '../src/node/3d-engine/staged-location/streetview-evidence';
 import { buildGroundModel, loadScanMesh, scanToGeodetic } from '../src/node/spatial/StreetViewSurveyPlanner';
 import {
-    collectPanoIds, createPhotoMatchEvaluateHandler, eyeUnderStreet, footprintLookup, heldOutViews, nearTriangleFlags, onSurfaceFlags, surfaceCoverShare, surfacesWithin, visibleStagedLayers, HELD_OUT_MIN_VISIBLE, OPEN_PLACE_RADII_M,
+    collectPanoIds, createPhotoMatchEvaluateHandler, emptyTileAlong, eyeUnderStreet, footprintLookup, heldOutViews, nearTriangleFlags, onSurfaceFlags, surfaceCoverShare, surfacesWithin, visibleStagedLayers, HELD_OUT_MIN_VISIBLE, OPEN_PLACE_RADII_M,
     PHOTO_MATCH_EVALUATE_TOOL, PHOTO_MATCH_ISOLATE_SURFACE_M, type HeldOutRegistration, type PhotoMatchDeps
 } from '../src/node/gemini/tools/location-evidence/photo-match-evaluate';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
@@ -982,30 +982,41 @@ describe('photo_match_evaluate tool', () => {
         fs.copyFileSync(north.regions.maskGrid, path.join(SHOTS, 'tool_photo_match_tile_edge_masks.png'));
     }, 240_000);
 
-    it('never takes a pano past the reference tile\'s edge as a candidate: no ground under it, not an eye on the structure\'s base', async () => {
-        // a tile 100 m across round the block: one pano on it, one 62 m out past its edge (within 60 m of the block's reach,
-        // where the old rule stood the eye on the block's base and kept the view)
+    it('takes no pano past the reference tile\'s edge, nor one whose sight line crosses empty tile, and lists each with its reason', async () => {
+        // a tile 100 m across round the block with a 6 m strip of nothing across it north of the block (no surface, as where an
+        // extraction left a hole): a pano west of the block sees it over the tile; one north of the strip sees it across the strip;
+        // one 62 m out stands past the tile's edge (within 60 m of the block's reach, where the old rule stood the eye on its base)
         const anchor = { lat: 40.75, lng: -74.05 };
-        const textured = writeTileAt(root, '5'.repeat(64), anchor, [{ ...ground(100), png: checkerPng([110, 110, 105], [96, 96, 92]) }, { ...TARGET, png: realFacade }]);
-        const panos: PanoCandidate[] = [
-            { panoId: 'ON_TILE', lat: 0, lng: 0, date: '2025-06', copyright: '© Google', x: 0, z: -38 },
-            { panoId: 'PAST_EDGE', lat: 0, lng: 0, date: '2025-07', copyright: '© Google', x: 0, z: -62 }
-        ];
+        const slab = (z0: number, z1: number): Omit<Part, 'png' | 'color'> => ({ positions: [-50, -0.02, z0, 50, -0.02, z0, 50, -0.02, z1, -50, -0.02, z1], uvs: [0, 0, 8, 0, 8, 8, 0, 8], indices: [0, 2, 1, 0, 3, 2] });
+        const street = checkerPng([110, 110, 105], [96, 96, 92]);
+        const textured = writeTileAt(root, '5'.repeat(64), anchor, [{ ...slab(-50, -26), png: street }, { ...slab(-20, 50), png: street }, { ...TARGET, png: realFacade }]);
+        const pano = (panoId: string, x: number, z: number): PanoCandidate => ({ panoId, lat: 0, lng: 0, date: '2025-06', copyright: '© Google', x, z });
+        const panos = [pano('ON_TILE', -38, 0), pano('ACROSS_GAP', 0, -38), pano('PAST_EDGE', 0, -62)];
         const scan = loadScanMesh(textured.replace(/textured\.glb$/, 'geometry.glb'));
         const terrain = buildGroundModel(scan, { cellMeters: 1 });
         expect(terrain.groundAt(0, -62)).toBeNaN();
+        // the measure alone: the strip is empty tile along the north pano's sight line, nothing is along the west one's
+        const gap = emptyTileAlong(terrain, 0, -38, 0, 0);
+        expect(gap).toBeGreaterThan(4);
+        expect(gap).toBeLessThanOrEqual(6.5);
+        expect(emptyTileAlong(terrain, -38, 0, 0, 0)).toBeLessThanOrEqual(terrain.cellMeters);
         const block = { cx: 0, cz: 0, radiusM: Math.hypot(7, 6), ymin: 0, ymax: 16, mesh: { vertices: Float32Array.from(TARGET.positions), indices: Uint32Array.from(TARGET.indices) } };
         const held = heldOutViews(panos, block, scan.mesh, new Set(), terrain);
         expect(held.views.map(v => [v.panoId, v.eyeGround])).toEqual([['ON_TILE', 'terrain']]);
-        expect(held.rejected).toEqual(['PAST_EDGE: 62 m, no ground under it: it stands past the reference tile\'s edge']);
+        expect(held.rejected).toHaveLength(2);
+        expect(held.rejected).toContain('PAST_EDGE: 62 m, no ground under it: it stands past the reference tile\'s edge');
+        expect(held.rejected.find(r => r.startsWith('ACROSS_GAP'))).toMatch(/^ACROSS_GAP: 38 m, its sight line to the target crosses [4-6]\.\d m of empty tile$/);
+        // without the surface grid (a terrain lookup alone) the sight line is not read, and the pano across the strip is kept
+        expect(heldOutViews(panos, block, scan.mesh, new Set(), { groundAt: (x, z) => terrain.groundAt(x, z) }).views.map(v => v.panoId).sort()).toEqual(['ACROSS_GAP', 'ON_TILE']);
 
-        // the tool: the view on the tile judged, the other not fetched at all
+        // the tool: the view on the tile judged, the other two never fetched, each listed with its reason
         const requests: Array<{ panoId: string; headingDegree: number; pitchDegree: number; fovDegree: number }> = [];
         const out = await createPhotoMatchEvaluateHandler(() => fakeDeps(root, { panos, street: textured, requests }))({ glbs: [staged.altGlb], anchor, views: 2, runs: 1, clay: false }, ctxFor(root));
         const r = out.resultPayload as any;
         expect(out.status, JSON.stringify(r).slice(0, 800)).toBe('completed');
         expect(r.views.map((v: any) => v.panoId)).toEqual(['ON_TILE']);
-        expect(r.heldOut).toMatchObject({ candidates: 1, notQualified: 1, eyeGround: { terrain: 1 } });
+        expect(r.heldOut).toMatchObject({ candidates: 1, notQualified: 2, eyeGround: { terrain: 1 } });
+        expect(r.heldOut.rejected).toEqual(held.rejected);
         expect(requests.map(q => q.panoId)).toEqual(['ON_TILE']);
     }, 120_000);
 
