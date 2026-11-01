@@ -28,6 +28,7 @@ import { readTileTriangles, decodeImageInMemory } from '../src/node/3d-engine/st
 import { castCamera } from '../src/node/3d-engine/staged-location/survey-casting';
 import type { PanoCandidate } from '../src/node/3d-engine/staged-location/streetview-evidence';
 import { buildGroundModel, geodeticToScan, loadScanMesh } from '../src/node/spatial/StreetViewSurveyPlanner';
+import { isGoogleCapture } from '../src/node/spatial/StreetViewGroundingImageService';
 import { createPhotoMatchEvaluateHandler, type PhotoMatchDeps } from '../src/node/gemini/tools/location-evidence/photo-match-evaluate';
 import type { ToolContext } from '../src/node/gemini/tools/types';
 
@@ -57,12 +58,13 @@ describe.skipIf(!CONFIG)('photo-match dry run on real builds (PHOTO_MATCH_DRYRUN
             }
         };
         const listed: PanoCandidate[] = [];
-        // every Google pano the metadata cache holds, in the tile frame
+        // every Google-captured pano the metadata cache holds, in the tile frame (as the real lookup keeps them: "From a Google
+        // User" is a user's photosphere, which the grounding API does not serve)
         const cachedPanos = (origin: Parameters<PhotoMatchDeps['discover']>[0], cacheDir: string): PanoCandidate[] => {
             const meta = JSON.parse(fs.readFileSync(path.join(cacheDir, 'streetview', 'metadata.json'), 'utf8')) as Record<string, { status: string; panoId?: string; lat?: number; lng?: number; date?: string; copyright?: string }>;
             const out = new Map<string, PanoCandidate>();
             for (const v of Object.values(meta)) {
-                if (v.status !== 'OK' || !v.panoId || out.has(v.panoId) || !/Google/.test(v.copyright ?? '')) continue;
+                if (v.status !== 'OK' || !v.panoId || out.has(v.panoId) || !isGoogleCapture(v.copyright)) continue;
                 const q = geodeticToScan(origin, v.lat!, v.lng!);
                 out.set(v.panoId, { panoId: v.panoId, lat: v.lat!, lng: v.lng!, ...(v.date ? { date: v.date } : {}), copyright: v.copyright!, x: q.x, z: q.z });
             }
