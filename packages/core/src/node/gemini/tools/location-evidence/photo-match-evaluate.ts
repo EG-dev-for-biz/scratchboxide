@@ -26,7 +26,10 @@
  *  5. trees (on unless trees: false): a run's regrown SB-Veggie trees are drawn as the viewport would draw them from each pose,
  *     one level per tree by on-screen size and place in the frame with the leaf instances expanded (photo-match-eval.ts
  *     loadArmLayer / armMeshesForView), and the scanned trees the strip measured are cut from the street, so the photo's trees
- *     are compared with the regrown ones and not drawn twice.
+ *     are compared with the regrown ones and not drawn twice;
+ *  6. a splat world as an arm (splat: a .spz or .splat): moved from the frame of the extraction it was built on onto the
+ *     reference's, each splat labelled by the reference tile, and drawn as the app's viewer projects splats, in the same light,
+ *     clay and background (splat-arm-render.ts); everything after the renders treats it as any other arm.
  * No view that cannot be found or registered is ever scored: those end the call with a typed error.
  */
 
@@ -60,6 +63,8 @@ import { evidenceLookup, type EvidenceLookup } from '../../../3d-engine/staged-l
 import type { RenderMesh3D } from '../../../spatial/HeadlessMeshSilhouetteRenderer';
 import type { GeodeticOrigin } from '../../../spatial/StreetViewSurveyPlanner';
 import { resolveWithinRoot } from '../../../security/path-guard';
+import { surfaceIndex } from '../../../spatial/triangle-surface-index';
+import { renderSplatArm, splatFrame, splatOffset, splatPositions, splatRegions, type SplatArmRender, type SplatFrame, type SplatRegions } from '../../../3d-engine/staged-location/splat-arm-render';
 
 export const PHOTO_MATCH_EVALUATE_TOOL = 'photo_match_evaluate';
 
@@ -115,7 +120,7 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
             isolateGlb: { type: 'STRING', description: 'With glbs: the isolated raw scan of the target (tile_refine\'s raw_clay.glb), cut out of the tile for the in-context renders.' },
             arms: {
                 type: 'ARRAY',
-                description: 'Several builds to compare at once, each a run or GLBs (all in the same frame). Replaces runId/glbs.',
+                description: 'Several builds to compare at once, each a run, GLBs (all in the same frame) or a splat world. Replaces runId/glbs.',
                 items: {
                     type: 'OBJECT',
                     properties: {
@@ -123,6 +128,13 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
                         label: { type: 'STRING' },
                         runId: { type: 'STRING' },
                         glbs: { type: 'ARRAY', items: { type: 'STRING' } },
+                        splat: { type: 'STRING', description: 'Instead of a run or GLBs: a splat world (.spz or .splat, location_generate_3dgs\'s fused file), always the whole place. It is moved from the frame of the tile extraction it was built on (read from the tileset.meta.json beside it) onto the reference\'s.' },
+                        origin: {
+                            type: 'OBJECT',
+                            description: 'With splat: the geodetic origin of its frame, when no tileset.meta.json beside it names the extraction.',
+                            properties: { lat: { type: 'NUMBER' }, lng: { type: 'NUMBER' }, heightMeters: { type: 'NUMBER', description: 'Ellipsoidal height of the frame origin.' } },
+                            required: ['lat', 'lng', 'heightMeters']
+                        },
                         scope: { type: 'STRING', description: '"target": the build stands in for the target alone and is drawn in its street (the tile with the target cut out); "place": the build is the whole place (its own street and neighbours) and is drawn on its own. Default: an isolated run is "target", a district run "place", GLBs "target".' }
                     }
                 }
@@ -282,12 +294,17 @@ export function defaultPhotoMatchDeps(): PhotoMatchDeps {
  */
 export type ArmScope = 'target' | 'place';
 
-interface ArmSpec { id: string; label: string; runId?: string; glbs?: string[]; scope?: ArmScope }
+interface ArmSpec { id: string; label: string; runId?: string; glbs?: string[]; splat?: string; origin?: GeodeticOrigin; scope?: ArmScope }
+
+/** Beyond this (m) a splat world's frame is taken to be another place's, not this one's. */
+export const PHOTO_MATCH_SPLAT_MAX_OFFSET_M = 200;
 
 interface ResolvedArm {
     id: string; label: string; glbs: string[]; runId?: string; layers?: Array<{ layer: string; textured: boolean }>; baseline?: boolean; scope: ArmScope;
     /** Metres added to every height to bring the arm's frame onto the reference's (runs extracted at the same place, origin heights apart). */
     dy?: number;
+    /** A splat world: its file, the frame it lies in and the offset (m, tile frame) that moves it onto the reference's. */
+    splat?: { file: string; frame: SplatFrame; offsetM: [number, number, number]; tiltRad: number };
 }
 
 interface Reference {
@@ -552,9 +569,18 @@ function parseArms(args: Record<string, unknown>, active: StagedBuildState | und
             const id = armId(a?.id, k);
             const runId = typeof a?.runId === 'string' && a.runId.trim() ? a.runId.trim() : undefined;
             const glbs = strs(a?.glbs);
-            if (!runId && !glbs.length) throw new PhotoMatchError('bad_arguments', `arm ${id}: give a runId or glbs.`);
-            const scope = a?.scope === 'target' || a?.scope === 'place' ? a.scope as ArmScope : undefined;
-            return { id, label: typeof a?.label === 'string' && a.label.trim() ? a.label.trim() : (runId ? `RUN ${runId}` : `BUILD ${id}`), ...(runId ? { runId } : {}), ...(glbs.length ? { glbs } : {}), ...(scope ? { scope } : {}) };
+            const splat = typeof a?.splat === 'string' && a.splat.trim() ? a.splat.trim() : undefined;
+            if (splat && (runId || glbs.length)) throw new PhotoMatchError('bad_arguments', `arm ${id}: a splat world is an arm of its own, without a runId or glbs.`);
+            if (!runId && !glbs.length && !splat) throw new PhotoMatchError('bad_arguments', `arm ${id}: give a runId, glbs or a splat.`);
+            if (splat && a?.scope === 'target') throw new PhotoMatchError('bad_arguments', `arm ${id}: a splat world is the whole place (scope "place"); it cannot stand in for the target alone.`);
+            const o = a?.origin as { lat?: unknown; lng?: unknown; heightMeters?: unknown } | undefined;
+            const origin = o && typeof o.lat === 'number' && typeof o.lng === 'number' && typeof o.heightMeters === 'number' ? { lat: o.lat, lng: o.lng, heightMeters: o.heightMeters } : undefined;
+            if (o !== undefined && (!splat || !origin)) throw new PhotoMatchError('bad_arguments', `arm ${id}: origin {lat, lng, heightMeters} goes with a splat.`);
+            const scope = splat ? 'place' : a?.scope === 'target' || a?.scope === 'place' ? a.scope as ArmScope : undefined;
+            return {
+                id, label: typeof a?.label === 'string' && a.label.trim() ? a.label.trim() : (runId ? `RUN ${runId}` : `BUILD ${id}`),
+                ...(runId ? { runId } : {}), ...(glbs.length ? { glbs } : {}), ...(splat ? { splat } : {}), ...(origin ? { origin } : {}), ...(scope ? { scope } : {})
+            };
         });
         if (new Set(arms.map(a => a.id)).size !== arms.length) throw new PhotoMatchError('bad_arguments', 'arm ids must differ.');
         return arms;
@@ -608,46 +634,6 @@ export function nearTriangleFlags(t: TileTriangles, ref: TileTriangles, tol = 0.
  * (tile-seam-weld-service, 3 cm), the most a weld moved a vertex of the scan the isolate was cut from.
  */
 export const PHOTO_MATCH_ISOLATE_SURFACE_M = 0.03;
-
-/** Squared distance from p to the triangle (a, b, c) (Ericson, Real-Time Collision Detection 5.1.5). */
-function pointTriangleDist2(P: ArrayLike<number>, o: number, px: number, py: number, pz: number): number {
-    const ax = P[o], ay = P[o + 1], az = P[o + 2], bx = P[o + 3], by = P[o + 4], bz = P[o + 5], cx = P[o + 6], cy = P[o + 7], cz = P[o + 8];
-    const abx = bx - ax, aby = by - ay, abz = bz - az, acx = cx - ax, acy = cy - ay, acz = cz - az;
-    const apx = px - ax, apy = py - ay, apz = pz - az;
-    const d2 = (x: number, y: number, z: number) => (px - x) ** 2 + (py - y) ** 2 + (pz - z) ** 2;
-    const d1 = abx * apx + aby * apy + abz * apz, e1 = acx * apx + acy * apy + acz * apz;
-    if (d1 <= 0 && e1 <= 0) return d2(ax, ay, az);
-    const bpx = px - bx, bpy = py - by, bpz = pz - bz;
-    const d3 = abx * bpx + aby * bpy + abz * bpz, e3 = acx * bpx + acy * bpy + acz * bpz;
-    if (d3 >= 0 && e3 <= d3) return d2(bx, by, bz);
-    const vc = d1 * e3 - d3 * e1;
-    if (vc <= 0 && d1 >= 0 && d3 <= 0) { const v = d1 / (d1 - d3); return d2(ax + v * abx, ay + v * aby, az + v * abz); }
-    const cpx = px - cx, cpy = py - cy, cpz = pz - cz;
-    const d6 = abx * cpx + aby * cpy + abz * cpz, e6 = acx * cpx + acy * cpy + acz * cpz;
-    if (e6 >= 0 && d6 <= e6) return d2(cx, cy, cz);
-    const vb = d6 * e1 - d1 * e6;
-    if (vb <= 0 && e1 >= 0 && e6 <= 0) { const w = e1 / (e1 - e6); return d2(ax + w * acx, ay + w * acy, az + w * acz); }
-    const va = d3 * e6 - d6 * e3;
-    if (va <= 0 && e3 - d3 >= 0 && d6 - e6 >= 0) { const w = (e3 - d3) / (e3 - d3 + d6 - e6); return d2(bx + w * (cx - bx), by + w * (cy - by), bz + w * (cz - bz)); }
-    const den = 1 / (va + vb + vc), v = vb * den, w = vc * den;
-    return d2(ax + abx * v + acx * w, ay + aby * v + acy * w, az + abz * v + acz * w);
-}
-
-/** A point query against triangles: whether a point lies within `tol` of any of them (a uniform grid over their bounds). */
-function surfaceIndex(t: TileTriangles, tol: number, keep?: Uint8Array): (x: number, y: number, z: number) => boolean {
-    const CELL = 2, grid = new Map<string, number[]>(), P = t.positions;
-    const cell = (v: number) => Math.floor(v / CELL);
-    for (let i = 0; i < t.texture.length; i++) {
-        if (keep && !keep[i]) continue;
-        const o = i * 9, lo = [0, 1, 2].map(k => cell(Math.min(P[o + k], P[o + 3 + k], P[o + 6 + k]) - tol)), hi = [0, 1, 2].map(k => cell(Math.max(P[o + k], P[o + 3 + k], P[o + 6 + k]) + tol));
-        for (let x = lo[0]; x <= hi[0]; x++) for (let y = lo[1]; y <= hi[1]; y++) for (let z = lo[2]; z <= hi[2]; z++) {
-            const k = `${x},${y},${z}`, list = grid.get(k);
-            if (list) list.push(o); else grid.set(k, [o]);
-        }
-    }
-    const tol2 = tol * tol;
-    return (x, y, z) => !!grid.get(`${cell(x)},${cell(y)},${cell(z)}`)?.some(o => pointTriangleDist2(P, o, x, y, z) <= tol2);
-}
 
 /**
  * Per triangle of `t`, 1 when its centroid lies on `ref`'s surface (within `tol`, point to triangle). A triangle of `t` that
@@ -1098,6 +1084,16 @@ const DEFAULT_RUN_CONCURRENCY = 2;
 const yieldLoop = () => new Promise<void>(r => setImmediate(r));
 const r2 = (v: number) => Math.round(v * 100) / 100;
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
+
+/** What the result says of a splat arm: its frame, how it was moved, and what its labels say about the move. */
+function splatReport(s: NonNullable<ResolvedArm['splat']>, r: SplatRegions) {
+    return {
+        file: s.file, frame: { lat: s.frame.lat, lng: s.frame.lng, heightMeters: r3(s.frame.heightMeters), source: s.frame.source },
+        offsetM: s.offsetM.map(r3), tiltRad: Number(s.tiltRad.toExponential(2)), splats: r.labels.length, byLabel: r.byLabel,
+        unmatchedShare: r3(r.unmatchedShare), groundGapM: r.groundGapM === null ? null : r3(r.groundGapM),
+        note: 'moved by offsetM alone (the two frames\' up axes differ by tiltRad, left out); groundGapM is the median height of its ground splats over the reference terrain, so a wrong frame shows there; unmatchedShare is the share no reference triangle lay within 0.5 m of'
+    };
+}
 const fmt = (v: number | null) => (v === null ? '-' : v.toFixed(2));
 
 function intArg(v: unknown, def: number, min: number, max: number): number {
@@ -1145,6 +1141,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     let ref: Reference | undefined;
     const arms: ResolvedArm[] = [];
     for (const spec of specs) {
+        // a splat world needs the reference frame to move onto: resolved below, in its place among the arms
+        if (spec.splat) continue;
         if (spec.runId) {
             const rec = builds.record(spec.runId);
             const r = builds.runReference(rec);
@@ -1183,6 +1181,25 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         ref.isolate = builds.file(args.isolateGlb, 'isolateGlb');
     }
     if (typeof args.place === 'string' && args.place.trim()) ref.place = args.place.trim();
+    // splat worlds: each moved from the frame of the extraction it was built on onto the reference's (its panos are not
+    // recorded where the tool can read them: excludePanoIds names them)
+    for (let k = 0; k < specs.length; k++) {
+        const spec = specs[k];
+        if (!spec.splat) continue;
+        const file = builds.file(spec.splat, `arm ${spec.id} splat`);
+        let frame: SplatFrame;
+        try {
+            frame = spec.origin ? { ...spec.origin, source: 'the arm\'s origin' } : splatFrame(file);
+        } catch (e) {
+            throw new PhotoMatchError('bad_arguments', `arm ${spec.id}: ${(e as Error).message}`);
+        }
+        const { offsetM, tiltRad } = splatOffset(ref.origin, frame);
+        const far = Math.hypot(...offsetM);
+        if (far > PHOTO_MATCH_SPLAT_MAX_OFFSET_M) {
+            throw new PhotoMatchError('frame_mismatch', `arm ${spec.id}: the splat world's frame (${frame.lat}, ${frame.lng}, from ${frame.source}) lies ${Math.round(far)} m from the reference's, past ${PHOTO_MATCH_SPLAT_MAX_OFFSET_M} m: it is another place's world.`);
+        }
+        arms.splice(k, 0, { id: spec.id, label: spec.label, glbs: [], scope: 'place', splat: { file, frame, offsetM, tiltRad } });
+    }
     builds.noteGlbPanos(arms.flatMap(a => a.glbs));
     for (const p of Array.isArray(args.excludePanoIds) ? args.excludePanoIds : []) if (typeof p === 'string' && p) builds.used.add(p);
     const withBaseline = args.baseline !== false;
@@ -1312,6 +1329,10 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
 
     // ---------------- arms, context ----------------
     progress(`loading ${arms.length} arms`, 0.22);
+    // a splat world's splats, moved onto the reference frame: their centres label and count them
+    const splatWork = path.join(root, '.scratchbox', 'cache', 'photo_match', `splat_work_${crypto.randomBytes(4).toString('hex')}`);
+    const splatPos = new Map<string, Float32Array>();
+    for (const a of arms) if (a.splat) splatPos.set(a.id, await splatPositions(a.splat.file, path.join(splatWork, a.id), signal, a.splat.offsetM));
     const loaded = arms.map(a => {
         // the raw scan: the tile cut to the target (whole when there is none); any other GLB as written, a trees GLB (tree LOD
         // contract) kept for per-view level selection when trees are drawn
@@ -1321,7 +1342,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         if (a.dy) for (const l of parts) if (l.fixed) l.fixed = liftTriangles(l.fixed, a.dy);
         return {
             ...a, ...(a.baseline && hasTarget ? { label: 'RAW SCAN (CUT TO TARGET)' } : {}),
-            parts, treeLayers: parts.filter(l => l.trees).length, triangles: parts.reduce((s, l) => s + armLayerTriangles(l), 0)
+            parts, treeLayers: parts.filter(l => l.trees).length,
+            triangles: a.splat ? splatPos.get(a.id)!.length / 3 : parts.reduce((s, l) => s + armLayerTriangles(l), 0)
         };
     });
     for (const a of loaded) if (!a.triangles) throw new PhotoMatchError('no_build', `arm ${a.id} has no triangles${a.baseline && hasTarget ? ' on the target' : ''}.`);
@@ -1336,8 +1358,14 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         : a.baseline ? (targetLabels ?? fullLabels)
             : triangleRegions(l.fixed!, terrain, a.scope === 'target' ? (hasTarget || isoFlags ? REGION.target : REGION.neighbours) : placeRule))));
     const targetArmsDrawTrees = loaded.some(a => a.scope === 'target' && a.treeLayers > 0);
-    // each arm's triangles by label (a trees layer counted whole, every level)
+    // a splat world: each splat the label of the nearest labelled triangle of the reference tile it lies on, else the place
+    // rule above from geometry (its splats do not all lie on this extraction's scan)
+    const splatLabels = new Map<string, SplatRegions>();
+    for (const a of loaded) if (a.splat) splatLabels.set(a.id, splatRegions(splatPos.get(a.id)!, full, fullLabels, terrain, (x, z) => (placeAt?.(x, z) ? REGION.target : REGION.neighbours)));
+    // each arm's triangles by label (a trees layer counted whole, every level; a splat world's splats)
     const armTriangles = Object.fromEntries(loaded.map((a, k) => {
+        const s = splatLabels.get(a.id);
+        if (s) return [a.id, { triangles: s.labels.length, ...s.byLabel }];
         const n = { triangles: 0, target: 0, neighbours: 0, ground: 0, trees: 0 };
         a.parts.forEach((l, j) => {
             const lab = armLabels[k][j];
@@ -1369,7 +1397,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
                 }
                 : { source: 'none', reason: 'the build isolated no structure and no structure stands within the pick\'s search window of the frame origin, so the building mask is empty and every standing triangle is a neighbour' },
         arms: 'an arm that stands in for the target (scope target) is the target wherever it stands; a whole place (scope place) is labelled by the target\'s footprint, like the tile'
-            + (outline ? ': with the isolate as the target, its plan outline (placeOutline)' : ''),
+            + (outline ? ': with the isolate as the target, its plan outline (placeOutline)' : '')
+            + (splatLabels.size ? '; a splat world splat by splat, each the label of the nearest labelled triangle of the reference tile within 0.5 m, else by that rule from geometry (its counts are splats)' : ''),
         ...(outline ? {
             placeOutline: {
                 source: 'the isolate\'s plan outline on the terrain grid, from geometry alone',
@@ -1444,9 +1473,21 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         // an arm standing in for the target in its street (or behind the tile's occluders); a whole place on its own
         const drawn = (i: number) => (loaded[i].scope === 'place' ? {} : { ...(occluderDepth ? { occluderDepth } : {}), ...(context ? { context } : {}) });
         const regionsFor = (i: number) => ({ meshes: armLabels[i], ...(contextLabels && loaded[i].scope !== 'place' ? { context: [contextLabels] } : {}) });
+        // the photo's edges and the pose at the metric width (each arm's placement, below)
+        const field = targetTris ? photoEdgeField(photo) : undefined;
+        const camW = field ? castCamera({ eye: v.eye, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg, widthPx: field.w, heightPx: field.h, ...(reg.correction ? { correction: reg.correction } : {}) }) : undefined;
+        // a splat world, drawn once per pose: in the neutral light, in clay, and alone at the metric width
+        const splatRenders = new Map<string, { textured: SplatArmRender; clay?: SplatArmRender; alone?: SplatArmRender }>();
+        for (const a of loaded) {
+            if (!a.splat) continue;
+            const [textured, ...more] = await renderSplatArm(a.splat.file, [{ camera }, ...(wantClay ? [{ camera, clay: true }] : []), ...(camW ? [{ camera: camW }] : [])], {
+                labels: splatLabels.get(a.id)!.labels, skyLabel: REGION.sky, offset: a.splat.offsetM, workDir: path.join(splatWork, `${a.id}_v${k}`), ...(signal ? { signal } : {})
+            });
+            splatRenders.set(a.id, { textured, ...(wantClay ? { clay: more.shift() } : {}), ...(camW ? { alone: more.shift() } : {}) });
+        }
         for (let i = 0; i < loaded.length; i++) {
             const a = loaded[i];
-            renders.push({ id: a.id, label: a.label, r: renderTriangles(forView[i].meshes, camera, { ...drawn(i), regions: regionsFor(i) }) });
+            renders.push({ id: a.id, label: a.label, r: splatRenders.get(a.id)?.textured ?? renderTriangles(forView[i].meshes, camera, { ...drawn(i), regions: regionsFor(i) }) });
             await yieldLoop();
         }
         // the reference regions: the measured tile, whole, from the same pose
@@ -1464,13 +1505,11 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         // each arm's placement: drawn alone at the metric width from the registered pose, its outline set on the photo's
         // silhouette of the target (its edges along the scan's target outline from the same pose)
         const placement: Record<string, TargetPlacement | null> = {};
-        if (targetTris) {
-            const field = photoEdgeField(photo);
-            const camW = castCamera({ eye: v.eye, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg, widthPx: field.w, heightPx: field.h, ...(reg.correction ? { correction: reg.correction } : {}) });
+        if (targetTris && field && camW) {
             const degPerPx = (2 * Math.atan(field.w / (2 * camW.fx)) * 180) / Math.PI / field.w;
             const refW = renderTriangles([targetTris], camW, { supersample: 1, regions: { meshes: [targetLabels!] } }).regions!;
             for (let i = 0; i < loaded.length; i++) {
-                const alone = renderTriangles(forView[i].meshes, camW, { supersample: 1, regions: { meshes: armLabels[i] } });
+                const alone = splatRenders.get(loaded[i].id)?.alone ?? renderTriangles(forView[i].meshes, camW, { supersample: 1, regions: { meshes: armLabels[i] } });
                 placement[loaded[i].id] = targetPlacement(field, refW, alone.regions!, degPerPx);
                 await yieldLoop();
             }
@@ -1481,7 +1520,7 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         if (wantClay) {
             for (let i = 0; i < loaded.length; i++) {
                 const a = loaded[i];
-                clayRenders.push({ id: a.id, label: a.label, r: renderTriangles(forView[i].meshes, camera, { clay: true, ...drawn(i) }) });
+                clayRenders.push({ id: a.id, label: a.label, r: splatRenders.get(a.id)?.clay ?? renderTriangles(forView[i].meshes, camera, { clay: true, ...drawn(i) }) });
                 await yieldLoop();
             }
         }
@@ -1527,6 +1566,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         });
     }
 
+    fs.rmSync(splatWork, { recursive: true, force: true });
+
     // ---------------- the satellite second opinion (opt-in) ----------------
     // A Google Static Maps satellite crop centred on the frame origin, and every arm rendered top-down at its ground sample
     // distance (an orthographic camera, the same neutral light, the same street as context). Judged and gridded like a view,
@@ -1544,17 +1585,19 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
             const forView = loaded.map(a => armMeshesForView(a.parts, cam));
             forView.forEach((f, i) => { const dy = loaded[i].dy; if (dy) f.meshes = f.meshes.map((m, j) => (loaded[i].parts[j].trees ? liftTriangles(m, dy) : m)); });
             const inStreet = (i: number) => (context && loaded[i].scope !== 'place' ? { context } : {});
+            // a splat world has no top-down (orthographic) render: it is left out of the second opinion
+            const drawnHere = loaded.map((a, i) => i).filter(i => !loaded[i].splat);
             const renders: Array<{ id: string; label: string; r: ArmRender }> = [];
-            for (let i = 0; i < loaded.length; i++) {
+            for (const i of drawnHere) {
                 renders.push({ id: loaded[i].id, label: loaded[i].label, r: renderTriangles(forView[i].meshes, cam, inStreet(i)) });
                 await yieldLoop();
             }
             const clayRenders: Array<{ id: string; label: string; r: ArmRender }> = [];
-            if (wantClay) for (let i = 0; i < loaded.length; i++) {
+            if (wantClay) for (const i of drawnHere) {
                 clayRenders.push({ id: loaded[i].id, label: loaded[i].label, r: renderTriangles(forView[i].meshes, cam, { clay: true, ...inStreet(i) }) });
                 await yieldLoop();
             }
-            const mask = coverageMask(renders.find(x => x.id === maskArm)!.r);
+            const mask = coverageMask((renders.find(x => x.id === maskArm) ?? renders[0]).r);
             const viewId = 'sat_ortho';
             const pixel: Record<string, PerceptualScores> = {};
             const files: Record<string, string> = {}, clayFiles: Record<string, string> = {};
@@ -1585,7 +1628,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
                 gsdMetresPerPixel: r3(sat.pixelM), widthM: r2(sat.widthM), heightM: r2(sat.heightM), centre: sat.centre,
                 capturedAt: null, captureDateNote: sat.captureDateNote, attribution: sat.attribution, image: imagePath,
                 camera: `orthographic, straight down from ${cam.eye[1]} m over the frame origin, image x east and y south, one pixel = ${sat.pixelM.toFixed(4)} m`,
-                note: 'A second opinion beside the held-out street views, not counted in scores or clayScores. Rendered in the same street context, with no occluder depth (nothing but trees stands above a roof). The tile photo\'s own roof ortho remains the first opinion on roofs.'
+                note: 'A second opinion beside the held-out street views, not counted in scores or clayScores. Rendered in the same street context, with no occluder depth (nothing but trees stands above a roof). The tile photo\'s own roof ortho remains the first opinion on roofs.',
+                ...(drawnHere.length < loaded.length ? { armsLeftOut: { ids: loaded.filter(a => a.splat).map(a => a.id), reason: 'a splat world has no top-down (orthographic) render' } } : {})
             };
         } catch (err) {
             if (signal?.aborted) throw new PhotoMatchError('stopped', 'The evaluation was stopped.');
@@ -1784,7 +1828,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         judgeModel: judgeModelUse,
         runsPerView: nRuns,
         trees: wantTrees ? (loaded.some(a => a.treeLayers > 0) ? 'regrown trees drawn one level per tree per view, as the viewport chooses it; scanned trees cut from the street' + (ref.removedTrees ? '' : ' (none recorded: they stay)') : 'no arm has a trees layer') : 'off: no trees layer drawn',
-        arms: loaded.map(a => ({ id: a.id, label: a.label, scope: a.scope, triangles: a.triangles, glbs: a.glbs, ...(a.dy ? { liftedM: r3(a.dy) } : {}), ...(a.treeLayers ? { treeLayers: a.treeLayers } : {}), ...(a.runId ? { runId: a.runId } : {}), ...(a.layers ? { layers: a.layers } : {}), ...(a.baseline ? { baseline: true } : {}) })),
+        arms: loaded.map(a => ({ id: a.id, label: a.label, scope: a.scope, triangles: a.triangles, glbs: a.glbs, ...(a.dy ? { liftedM: r3(a.dy) } : {}), ...(a.treeLayers ? { treeLayers: a.treeLayers } : {}), ...(a.runId ? { runId: a.runId } : {}), ...(a.layers ? { layers: a.layers } : {}), ...(a.baseline ? { baseline: true } : {}),
+            ...(a.splat ? { splat: splatReport(a.splat, splatLabels.get(a.id)!) } : {}) })),
         scores,
         clay: wantClay,
         ...(wantClay ? { clayScores, clayJudged: clayScored.length, clayGrids: views.map(v => v.clayGrid).filter((g): g is string => !!g) } : {}),
