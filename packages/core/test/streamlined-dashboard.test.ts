@@ -44,7 +44,8 @@ async function runStreamlinedDashboardTests() {
     // creation starter strip (sb-starter-prompts-grid / sb-starter-chip).
     assert.ok(!studioSource.includes('sb-welcome-mode-strip'), 'Empty hero must not duplicate the composer mode selector');
     assert.ok(studioSource.includes('sb-starter-prompts-grid'), 'Studio must render quick starter strip');
-    assert.ok(studioSource.includes('sb-starter-chip') && studioSource.includes('onClick={() => handleSendMessage(pickStarterPrompt(item))}'), 'Studio must render quick starter buttons that send their prompt');
+    // a world starter opens its world instead (55da18dc, "3D World starter button")
+    assert.ok(studioSource.includes('sb-starter-chip') && /onClick=\{\(\) => (?:item\.world \? void handleOpenStarterWorld\(item\) : )?handleSendMessage\(pickStarterPrompt\(item\)\)\}/.test(studioSource), 'Studio must render quick starter buttons that send their prompt');
     assert.ok(studioSource.includes('sb-cursor-mode-selector'), 'Studio composer must render the mode selector');
     for (const mode of ['agent', 'ask', 'plan']) {
         assert.ok(studioSource.includes(`setAiInteractionMode('${mode}')`), `Composer mode selector must switch to '${mode}' mode`);
