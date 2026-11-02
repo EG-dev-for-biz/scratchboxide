@@ -95,7 +95,9 @@ const hueDistance = (a: number, b: number) => Math.min(Math.abs(a - b), 360 - Ma
 describe.skipIf(!stagedChrome.ok)('every stage revealed in its real build order (synthetic GLBs built to the contracts)', () => {
     let page: StagedPage;
     beforeAll(async () => {
-        page = await openStagedPage({ manualFrames: true });
+        // without multisampling, as the viewport draws on a software GPU: the reveals discard per pixel and every check reads
+        // surfaces, coverage or patterns inside them, not edges; software WebGL (a GPU-less runner) draws each frame ~2x faster
+        page = await openStagedPage({ manualFrames: true, msaa: false });
         serveFixture(page, fixture.glbs, objectIdOf, fixture.sidecar);
     });
     afterAll(async () => { await page?.close(); });

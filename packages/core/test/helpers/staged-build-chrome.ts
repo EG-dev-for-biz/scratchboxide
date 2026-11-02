@@ -77,6 +77,12 @@ export interface StagedPageOptions {
      * the pixels at the same CSS layout: a GPU-less host (Linux CI's software WebGL) renders each frame about 4x faster.
      */
     deviceScaleFactor?: number;
+    /**
+     * WebGL multisampling (default on). Off, the canvas draws one sample a pixel, as the viewport's own fallback renderer
+     * does on a software or blocklisted GPU: edges alias, nothing inside a surface changes, and software WebGL (a GPU-less
+     * Linux CI runner) draws each frame about twice as fast.
+     */
+    msaa?: boolean;
 }
 
 export interface StagedPage {
@@ -145,7 +151,8 @@ ${opts.manualFrames ? MANUAL_FRAMES : ''}</head><body><div id="root"></div><scri
         '--disable-background-networking', '--disable-component-update', '--disable-sync', '--hide-scrollbars',
         '--ignore-gpu-blocklist', '--enable-webgl', `--force-device-scale-factor=${scale}`, '--disable-renderer-backgrounding',
         '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows',
-        `--window-size=${width},${height}`, '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'
+        `--window-size=${width},${height}`, '--remote-debugging-port=0', `--user-data-dir=${profile}`,
+        ...(opts.msaa === false ? ['--webgl-msaa-sample-count=0'] : []), 'about:blank'
     ], { stdio: ['ignore', 'ignore', 'pipe'] });
     // Chrome's last words, for a launch that fails (read throughout, so a full pipe never stalls it)
     let stderrTail = '';
