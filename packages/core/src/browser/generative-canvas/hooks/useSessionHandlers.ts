@@ -26,6 +26,8 @@ export interface UseSessionHandlersDeps {
     activeSession: ChatSession | undefined;
     activeWorkspace: ProjectItem;
     artifactHistory: ChatState['artifactHistory'];
+    /** Bumped each time a saved chat is opened here (GenerativeCanvasStudio). */
+    chatOpenCountRef: React.MutableRefObject<number>;
     currentSessionId: ChatState['currentSessionId'];
     handleSwitchMode: (targetMode: StudioLayoutMode) => void;
     inputRef: React.RefObject<HTMLTextAreaElement>;
@@ -50,7 +52,7 @@ export interface UseSessionHandlersDeps {
 }
 
 export function useSessionHandlers(deps: UseSessionHandlersDeps) {
-    const { activeArtifact, activeSession, activeWorkspace, artifactHistory, currentSessionId, handleSwitchMode, inputRef, layoutMode, messages, openModal, saveCurrentSessionViewState, sessionViewStateCacheRef, sessions, setActiveArtifact, setArtifactHistory, setCurrentSessionId, setInputValue, setIsConversationMenuOpen, setIsSidebarOpen, setLayoutMode, setLiveThinkingText, setMessages, setSessions, setSettingsInitialTab, showToast } = deps;
+    const { activeArtifact, activeSession, activeWorkspace, artifactHistory, chatOpenCountRef, currentSessionId, handleSwitchMode, inputRef, layoutMode, messages, openModal, saveCurrentSessionViewState, sessionViewStateCacheRef, sessions, setActiveArtifact, setArtifactHistory, setCurrentSessionId, setInputValue, setIsConversationMenuOpen, setIsSidebarOpen, setLayoutMode, setLiveThinkingText, setMessages, setSessions, setSettingsInitialTab, showToast } = deps;
 
     const openSettingsToTab = (tab: StudioSettingsTab) => {
         setSettingsInitialTab(tab);
@@ -91,6 +93,7 @@ export function useSessionHandlers(deps: UseSessionHandlersDeps) {
 
     const handleSelectSession = (session: ChatSession) => {
         saveCurrentSessionViewState();
+        chatOpenCountRef.current += 1;
         setCurrentSessionId(session.id);
         setMessages(session.messages || []);
 

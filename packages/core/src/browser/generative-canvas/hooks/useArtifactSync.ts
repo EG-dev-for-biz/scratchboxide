@@ -28,6 +28,7 @@ import { CanvasArtifact, ChatSession, LiveCodeSandboxData, Scene3DData } from '.
 import { captureActiveCanvasPixels } from '../chat/streaming-utils';
 import { PRELOADED_SHOWCASE_DEMOS } from '../demos/preloadedDemos';
 import { GeminiClient } from '../gemini-client';
+import { artifactVersionKey, chatArtifactVersionKeys } from '../state/chat-activity';
 import { ChatState, ChatStore } from '../state/chatStore';
 import { WorkspaceGraphCoordinator } from '../studio/useWorkspaceGraphCoordinator';
 import { WorkspaceConfigClient } from '../workspace-config-client';
@@ -58,10 +59,6 @@ export function shouldAuditArtifactInBackground(artifact: CanvasArtifact | null 
     if (!artifact || isGenerating) return false;
     if (isCuratedShowcaseArtifact(artifact)) return false;
     return artifact.type === '3d-scene' || artifact.type === 'live-code-sandbox' || artifact.type === 'interactive-browser';
-}
-
-function artifactVersionKey(artifact: { id: string; version?: number }): string {
-    return `${artifact.id}-v${artifact.version || 1}`;
 }
 
 /**
@@ -155,6 +152,8 @@ export interface UseArtifactSyncDeps {
     activeArtifact: ChatState['activeArtifact'];
     activeWorkspace: ProjectItem;
     artifactHistory: ChatState['artifactHistory'];
+    /** Bumped each time a saved chat is opened (GenerativeCanvasStudio). */
+    chatOpenCountRef: React.MutableRefObject<number>;
     currentSessionId: ChatState['currentSessionId'];
     graphControllerRef: WorkspaceGraphCoordinator['graphControllerRef'];
     isGenerating: boolean;
@@ -171,7 +170,7 @@ export interface UseArtifactSyncDeps {
 }
 
 export function useArtifactSync(deps: UseArtifactSyncDeps) {
-    const { activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, isGenerating, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions } = deps;
+    const { activeArtifact, activeWorkspace, artifactHistory, chatOpenCountRef, currentSessionId, graphControllerRef, isGenerating, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions } = deps;
 
     /**
      * An artifact edited on its surface: saved, versioned and written through its lens. It becomes the main view, first in
@@ -276,7 +275,7 @@ export function useArtifactSync(deps: UseArtifactSyncDeps) {
                                     artifactRefs: [canonicalArtifact.graphRef!]
                                 };
                             }),
-                            updatedAt: 'Just now'
+                            updatedAt: new Date().toISOString()
                         };
                     }
                     return s;
@@ -293,6 +292,16 @@ export function useArtifactSync(deps: UseArtifactSyncDeps) {
     // Versions the background repair wrote: never audited or repaired again, so repairs cannot chain
     const repairWrittenKeysRef = React.useRef<Set<string>>(new Set());
     const isVerifyingVisualRef = React.useRef<boolean>(false);
+
+    // A chat opened to look at it is not checked again (each check is a paid vision call): the versions it holds when
+    // opened count as checked, so only versions made or edited while it is open are audited. Runs before the audit below.
+    const openedRef = React.useRef<{ id?: string; opens: number }>({ opens: -1 });
+    React.useEffect(() => {
+        const opens = chatOpenCountRef.current;
+        if (openedRef.current.id === currentSessionId && openedRef.current.opens === opens) return;
+        openedRef.current = { id: currentSessionId, opens };
+        for (const key of chatArtifactVersionKeys(messages, activeArtifact, artifactHistory)) verifiedArtifactKeysRef.current.add(key);
+    }, [currentSessionId, messages, activeArtifact, artifactHistory, chatOpenCountRef]);
 
     // Automated Background Visual Verification & Self-Correction Loop
     React.useEffect(() => {

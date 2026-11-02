@@ -28,6 +28,7 @@ import {
     IconTerminal
 } from './canvas-icons';
 import { canCreatePrimitive } from '../../common/product-scope';
+import { chatUpdatedAtMs, formatChatAge } from './state/chat-activity';
 
 export interface SpotlightActionItem {
     id: string;
@@ -241,7 +242,7 @@ export const SpotlightLauncherModal: React.FC<SpotlightLauncherModalProps> = ({
     const sessionActions: SpotlightActionItem[] = (recentSessions || []).slice(0, 4).map(s => ({
         id: `sess-${s.id}`,
         title: s.title || 'Untitled Session',
-        subtitle: `Recent workspace session • ${s.relativeTime || s.dateCategory || 'Today'}`,
+        subtitle: `Recent workspace session • ${formatChatAge(chatUpdatedAtMs(s)) || s.dateCategory || 'Today'}`,
         category: 'Recent',
         icon: <IconChat size={14} className="text-zinc-400" />,
         onExecute: () => {

@@ -8,7 +8,8 @@
  ********************************************************************************/
 
 import * as React from 'react';
-import { CanvasArtifact, ChatSession, StudioAppearanceConfig } from '../canvas-types';
+import { CanvasArtifact, ChatMessage, ChatSession, StudioAppearanceConfig } from '../canvas-types';
+import { chatArtifactVersionKeys } from '../state/chat-activity';
 import { DEFAULT_APPEARANCE_CONFIG, DEFAULT_SESSIONS } from '../state/studio-defaults';
 import { ChatState, Updater } from '../state/chatStore';
 import { WorkspaceConfigClient } from '../workspace-config-client';
@@ -185,7 +186,9 @@ export function usePersistedChatState(
     chatState: ChatState,
     setSessions: (payload: Updater<ChatSession[]>) => void,
     appearanceConfig: StudioAppearanceConfig,
-    workspaceRoot?: string
+    workspaceRoot?: string,
+    /** Bumped each time a saved chat is opened (GenerativeCanvasStudio): the chat as opened is what disk already holds. */
+    chatOpenCountRef?: React.MutableRefObject<number>
 ): { persistSessionsImmediately: (updatedSessions: ChatSession[]) => void } {
     const { sessions, currentSessionId, messages, activeArtifact, artifactHistory, layoutMode, artifactVersions } = chatState;
 
@@ -198,14 +201,28 @@ export function usePersistedChatState(
         return () => { cancelled = true; };
     }, [workspaceRoot]);
 
-    // Only messages carry history worth keeping; an untouched default session is not written.
+    // A chat is written, and its age stamped, only when it changed (chat-activity.ts): opening it, or showing one of its
+    // artifacts or another layout, writes nothing. Only messages carry history worth keeping; an untouched default
+    // session is not written.
+    const writtenRef = React.useRef<{ id?: string; opens: number; messages?: ChatMessage[]; artifactKeys: Set<string> }>({ opens: 0, artifactKeys: new Set() });
     React.useEffect(() => {
-        if (!currentSessionId || messages.length === 0) return;
+        if (!currentSessionId) return;
+        const keys = chatArtifactVersionKeys(messages, activeArtifact, artifactHistory);
+        const opens = chatOpenCountRef?.current ?? 0;
+        if (writtenRef.current.id !== currentSessionId || writtenRef.current.opens !== opens) {
+            writtenRef.current = { id: currentSessionId, opens, messages, artifactKeys: keys };
+            return;
+        }
+        const written = writtenRef.current;
+        if (messages.length === 0 || (messages === written.messages && [...keys].every(k => written.artifactKeys.has(k)))) return;
         const timer = setTimeout(() => {
             const current = sessions.find(s => s.id === currentSessionId);
             if (!current) return;
+            const updatedAt = new Date().toISOString();
+            writtenRef.current = { id: currentSessionId, opens, messages, artifactKeys: keys };
+            setSessions(prev => prev.map(s => (s.id === currentSessionId ? { ...s, updatedAt } : s)));
             void WorkspaceConfigClient.getInstance().saveSession(workspaceRoot, {
-                ...current, messages, activeArtifact, artifactHistory, layoutMode
+                ...current, messages, activeArtifact, artifactHistory, layoutMode, updatedAt
             });
         }, 1500);
         return () => clearTimeout(timer);
@@ -225,8 +242,7 @@ export function usePersistedChatState(
                                     messages,
                                     activeArtifact,
                                     artifactHistory,
-                                    layoutMode,
-                                    updatedAt: 'Just now'
+                                    layoutMode
                                 };
                             }
                             return s;

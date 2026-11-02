@@ -602,7 +602,7 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                             activeArtifact: art,
                             artifactHistory: [art, ...(s.artifactHistory || []).filter(a => a.id !== art.id)],
                             layoutMode: resolvedMode,
-                            updatedAt: 'Just now'
+                            updatedAt: new Date().toISOString()
                         };
                     }));
                 }
@@ -855,7 +855,7 @@ function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, fina
             workspaceName: activeWorkspace.path.split('/').pop() || activeWorkspace.name,
             relativeTime: 'Just now',
             dateCategory: 'Today',
-            updatedAt: 'Just now',
+            updatedAt: new Date().toISOString(),
             messages: nextFullMessages,
             activeArtifact: canvas.activeArtifact,
             artifactHistory: canvas.artifactHistory,

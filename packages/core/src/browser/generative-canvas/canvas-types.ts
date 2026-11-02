@@ -1819,7 +1819,10 @@ export interface ChatSession {
     id: string;
     title: string;
     dateCategory: 'Today' | 'Yesterday' | 'Previous 7 Days' | 'Older';
+    /** When the chat last changed (ISO time); 'Just now' in chats saved before it was stamped (chat-activity.ts). */
     updatedAt: string;
+    /** When the disk store last wrote the chat (ms since the epoch), on chats loaded from disk. */
+    savedAt?: number;
     messages: ChatMessage[];
     activeArtifact?: CanvasArtifact;
     artifactHistory: CanvasArtifact[];

@@ -15,6 +15,7 @@ import { ProjectItem } from '../ProjectsModal';
 import { FileTreeNode, POSE_3D_TREE, SCRATCHBOX_TREE } from './workspace-trees';
 import { WorkspaceFileTree } from './WorkspaceFileTree';
 import { canCreatePrimitive, canShowLayoutMode, isScopedTo3dVfx } from '../../../common/product-scope';
+import { chatUpdatedAtMs, formatChatAge } from '../state/chat-activity';
 
 export function getSessionIcon(session?: ChatSession): React.ReactElement | null {
     if (!session) return null;
@@ -73,7 +74,17 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
     const activeUserName = getActiveUserName();
     const { activeWorkspace, setActiveWorkspace, workspaces, sessions: allSessions, currentSessionId, isSidebarOpen, setIsSidebarOpen, handleCreateNewWorkspace, onCreateWorkspaceFile, handleDeleteSession, handleNewChat, handleSelectSession, onOpenFolder, onOpenWorkspace, openSettingsToTab, showToast, showNewWorkspaceMenu, setShowNewWorkspaceMenu, newWorkspaceInputName, setNewWorkspaceInputName, onFileClick } = props;
     // A file made as a document, sandbox or board is not listed in the 3D/VFX build (common/product-scope.ts); it stays saved.
-    const sessions = React.useMemo(() => allSessions.filter(s => canShowLayoutMode(s.fileType || 'chat')), [allSessions]);
+    // Newest change first, as their ages read (chat-activity.ts); a new chat with nothing in it yet stays on top.
+    const sessions = React.useMemo(() => {
+        const changedAt = new Map(allSessions.map(s => [s.id, chatUpdatedAtMs(s) ?? Number.MAX_SAFE_INTEGER]));
+        return allSessions.filter(s => canShowLayoutMode(s.fileType || 'chat')).sort((a, b) => changedAt.get(b.id)! - changedAt.get(a.id)!);
+    }, [allSessions]);
+    // Chat ages ("5m", "3d") are read against a clock that moves each minute.
+    const [nowMs, setNowMs] = React.useState(() => Date.now());
+    React.useEffect(() => {
+        const timer = setInterval(() => setNowMs(Date.now()), 60_000);
+        return () => clearInterval(timer);
+    }, []);
 
     // Scratchbox Studio Sidebar Layout & Navigation State
     const [sidebarSearchQuery, setSidebarSearchQuery] = React.useState<string>('');
@@ -514,10 +525,9 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
                             <div className="sb-workspace-threads-list animate-fadeIn">
                                 {sessions
                                     .filter(s => (s.workspaceId === activeWorkspace.id || (!s.workspaceId && activeWorkspace.id === 'proj-scratchbox-ide')) && (!sidebarSearchQuery || s.title.toLowerCase().includes(sidebarSearchQuery.toLowerCase())))
-                                    .map((s, idx) => {
+                                    .map(s => {
                                         const isSelected = currentSessionId === s.id;
-                                        const rawTime = s.relativeTime || (idx === 0 ? '8m' : idx === 1 ? '47m' : idx === 2 ? '1h' : '4h');
-                                        const relTime = rawTime === 'Just now' ? 'now' : rawTime.replace(' ago', '');
+                                        const relTime = formatChatAge(chatUpdatedAtMs(s), nowMs);
                                         return (
                                             <div
                                                 key={`ws-active-${s.id}`}
@@ -534,7 +544,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
                                                     <span className="sb-ws-thread-title">{s.title}</span>
                                                 </div>
                                                 <div className="sb-ws-thread-right">
-                                                    <span className="sb-history-time-badge">{relTime}</span>
+                                                    {relTime && <span className="sb-history-time-badge">{relTime}</span>}
                                                     <button
                                                         type="button"
                                                         className="sb-history-item-delete"
@@ -601,6 +611,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
                                     <div className="sb-workspace-threads-list animate-fadeIn">
                                         {projSessions.map(s => {
                                             const isSelected = currentSessionId === s.id;
+                                            const relTime = formatChatAge(chatUpdatedAtMs(s), nowMs);
                                             return (
                                                 <div
                                                     key={`ws-sec-${s.id}`}
@@ -620,7 +631,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
                                                         <span className="sb-ws-thread-title">{s.title}</span>
                                                     </div>
                                                     <div className="sb-ws-thread-right">
-                                                        <span className="sb-history-time-badge">{(s.relativeTime === 'Just now' ? 'now' : (s.relativeTime || '2h')).replace(' ago', '')}</span>
+                                                        {relTime && <span className="sb-history-time-badge">{relTime}</span>}
                                                         <button
                                                             type="button"
                                                             className="sb-history-item-delete"

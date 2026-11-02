@@ -243,7 +243,7 @@ ${content}
                             artifactHistory: s.artifactHistory
                                 ? [canonicalArtifact, ...s.artifactHistory.filter(a => a.id !== canonicalArtifact.id)]
                                 : [canonicalArtifact],
-                            updatedAt: 'Just now'
+                            updatedAt: new Date().toISOString()
                         };
                     }
                     return s;
