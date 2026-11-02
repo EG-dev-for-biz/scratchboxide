@@ -81,6 +81,14 @@ export const HELD_OUT_MIN_VISIBLE = 0.3;
 /** Least share of the frame the structure must fill. */
 export const HELD_OUT_MIN_SCREEN = 0.06;
 /**
+ * Least length of the scan's outline against the sky a candidate view must show, in frame widths (pixels of scan with sky
+ * beside them, over the frame's width). The edge registration weighs that outline most, and a view without it does not lock:
+ * at the 2026-11-02 probes every view under 0.5 failed (the ESB's podium close-ups looking at wall alone, 0 to 0.47, and four
+ * at the Haughwout, 0 to 0.04), save one ESB view at 0.35 that registered on a neighbour's edge; every view that registered
+ * at the Haughwout and the Ferry Building showed 1.06 or more.
+ */
+export const HELD_OUT_MIN_OUTLINE = 0.5;
+/**
  * A pano at least this far inside Google's building footprints all round stands indoors (a shop, a lobby, an atrium): its
  * photo shows the inside, never the street the builds are judged in. A sidewalk pano beside a facade stays: its position's
  * error and the footprint's own reach a metre or two past the wall.
@@ -110,7 +118,7 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
         'By default it also renders every build in uniform untextured clay from the same poses and has the judge score shape only (massing, openings, surface relief) against the photo: ' +
         'clayScores, clay grids; use them to compare geometry changes (relief, reveals, massing) that the photo texture hides. ' +
         'Every build\'s placement is also measured from edges, not by the judge: how far its outline is drawn from the photo\'s silhouette of the target, read along the scan\'s target within Google\'s vector footprint (the run\'s, else fetched when judging) plus pipeline K\'s allowance for a building\'s own projections (a storefront a few decimetres past the footprint stays, a neighbour\'s slice metres out goes), outer outlines only, every build as built behind the scan\'s street (placement, px and degrees; 0 = drawn where the photo shows it). ' +
-        `A pano standing inside Google's building footprints by ${HELD_OUT_INDOOR_INSET_M} m or more all round (an indoor capture) is not used; a view whose registered eye stands under the street is not used; a region under 1% of a view is not judged there; a view where the reference tile ends inside the frame (its sky over what stands past the edge) is flagged (tileEdge) and its regions are not judged. ` +
+        `A pano standing inside Google's building footprints by ${HELD_OUT_INDOOR_INSET_M} m or more all round (an indoor capture) is not used, nor is a view showing less than ${HELD_OUT_MIN_OUTLINE} frame widths of the scan's outline against the sky (wall alone, which the registration cannot lock onto); a view whose registered eye stands under the street is not used; a region under 1% of a view is not judged there; a view where the reference tile ends inside the frame (its sky over what stands past the edge) is flagged (tileEdge) and its regions are not judged. ` +
         'With no build named it evaluates the open staged scene. Compare versions by passing arms. Scores are relative judgements, not measurements: report the spread, and say when the views are few. ' +
         'Fails with a typed error (no scores) when no held-out view can be found or registered. Takes a few minutes (Street View fetch, registration, several judge calls per view).',
     parameters: {
@@ -911,7 +919,7 @@ function openPlace(disc: RenderMesh3D, terrain: { groundAt(x: number, z: number)
 /** What a candidate's eye stands on: the terrain ground model, else the lowest surface within 1.5 m (off the terrain). */
 export type HeldOutEyeGround = 'terrain' | 'lowest-surface';
 
-export interface HeldOutCandidateView extends SelectedView { close: boolean; visibleShare: number; screenShare: number; eyeGround: HeldOutEyeGround }
+export interface HeldOutCandidateView extends SelectedView { close: boolean; visibleShare: number; screenShare: number; eyeGround: HeldOutEyeGround; outlineWidths: number }
 
 /** The street under (x, z): the terrain ground model, else (off it) the lowest surface of `context` within 1.5 m; undefined when neither. */
 function streetAt(x: number, z: number, context: RenderMesh3D, terrain?: { groundAt(x: number, z: number): number }): { y: number; on: HeldOutEyeGround } | undefined {
@@ -965,12 +973,19 @@ export function emptyTileAlong(grid: TileTopGrid, ax: number, az: number, bx: nu
 }
 
 /** How much of a 160 x 120 frame the target fills (screen), and the share of that which the context does not hide (seen). */
-function targetShares(target: RenderMesh3D, context: RenderMesh3D, v: { eye: Vec3; headingDeg: number; pitchDeg: number; fovDeg: number }): { screen: number; seen: number } {
-    const cam = castCamera({ eye: v.eye, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg, widthPx: 160, heightPx: 120 });
+function targetShares(target: RenderMesh3D, context: RenderMesh3D, v: { eye: Vec3; headingDeg: number; pitchDeg: number; fovDeg: number }): { screen: number; seen: number; outline: number } {
+    const W = 160, H = 120;
+    const cam = castCamera({ eye: v.eye, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg, widthPx: W, heightPx: H });
     const isoD = renderFrameDepth(target, cam), ctxD = renderFrameDepth(context, cam);
-    let seen = 0, isoPx = 0;
+    let seen = 0, isoPx = 0, edge = 0;
     for (let i = 0; i < isoD.length; i++) if (isoD[i] < 1e8) { isoPx++; if (ctxD[i] >= isoD[i] - 0.6) seen++; }
-    return { screen: isoPx / isoD.length, seen: isoPx ? seen / isoPx : 0 };
+    // the scan's outline against the sky: scan pixels with sky beside them (what the edge registration weighs most)
+    const sky = (j: number) => ctxD[j] >= 1e8;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        if (!sky(i) && ((x > 0 && sky(i - 1)) || (x < W - 1 && sky(i + 1)) || (y > 0 && sky(i - W)) || (y < H - 1 && sky(i + W)))) edge++;
+    }
+    return { screen: isoPx / isoD.length, seen: isoPx ? seen / isoPx : 0, outline: edge / W };
 }
 
 /**
@@ -1013,12 +1028,14 @@ export function heldOutViews(panos: PanoCandidate[], structure: Structure, conte
         const fovDeg = Math.round(close ? 80 : Math.max(50, Math.min(90, 2 * Math.atan((R * 0.9) / Math.max(1, p.d)) * 180 / Math.PI)));
         const mid = open ? openGroundY : ymin + 0.4 * (ymax - ymin);
         const pitchDeg = Math.round((close ? 12 : Math.max(-5, Math.min(30, Math.atan((mid - eye[1]) / p.d) * 180 / Math.PI))) * 10) / 10;
-        const { screen, seen: share } = targetShares(structure.mesh, context, { eye, headingDeg, pitchDeg, fovDeg });
+        const { screen, seen: share, outline } = targetShares(structure.mesh, context, { eye, headingDeg, pitchDeg, fovDeg });
         if (screen < HELD_OUT_MIN_SCREEN || share < HELD_OUT_MIN_VISIBLE) { rejected.push(`${p.panoId}: ${p.d.toFixed(0)} m, fills ${(screen * 100).toFixed(0)}% of the frame, ${(share * 100).toFixed(0)}% of it unhidden`); continue; }
+        // a view of wall alone (a close-up of a tall building's base) gives the edge registration nothing to lock onto
+        if (outline < HELD_OUT_MIN_OUTLINE) { rejected.push(`${p.panoId}: ${p.d.toFixed(0)} m, shows ${outline.toFixed(2)} frame widths of the scan's outline against the sky (at least ${HELD_OUT_MIN_OUTLINE} needed): too little for the edge registration to lock onto`); continue; }
         views.push({
             panoId: p.panoId, ...(p.date ? { date: p.date } : {}), ...(p.copyright ? { copyright: p.copyright } : {}), eye, headingDeg, pitchDeg, fovDeg, aspectRatio: 'RATIO_4X3',
             distanceM: Math.round(p.d * 10) / 10, facadeHeadingDeg: (headingDeg + 180) % 360, score: share, close,
-            visibleShare: Math.round(share * 100) / 100, screenShare: Math.round(screen * 100) / 100, eyeGround
+            visibleShare: Math.round(share * 100) / 100, screenShare: Math.round(screen * 100) / 100, eyeGround, outlineWidths: Math.round(outline * 100) / 100
         });
     }
     return { views, rejected };
@@ -1083,6 +1100,8 @@ export interface FixedPoseOutcome {
     /** The automatic views' target in this view, measured as they measure it (reported, never a gate): its share of the frame, and the share of it unhidden. */
     targetScreenShare?: number;
     targetVisibleShare?: number;
+    /** The scan's outline against the sky in this view, frame widths (reported, never a gate: a pose asked for is kept). */
+    outlineWidths?: number;
     edgeResidualPx?: { prior: number | null; edge: number | null };
     viewId?: string;
 }
@@ -1170,6 +1189,7 @@ async function fixedPoseViews(specs: FixedPoseSpec[], input: {
             const sh = targetShares(input.target, input.context, view);
             o.targetScreenShare = r2(sh.screen);
             o.targetVisibleShare = r2(sh.seen);
+            o.outlineWidths = r2(sh.outline);
             view.score = sh.seen;
         }
         o.status = 'not-fetched';
