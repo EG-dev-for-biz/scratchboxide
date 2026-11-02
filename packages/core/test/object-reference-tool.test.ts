@@ -1889,7 +1889,9 @@ describe('build_3d_object_from_reference', () => {
         expect(client.calls).toHaveLength(0);
     });
 
-    it('reads a large staged tile in slices without holding up the event loop, once while it is unchanged, and stops while reading it', async () => {
+    // Retried: on a shared CI runner the process itself is sometimes paused longer than the whole one-go read (a 719 ms
+    // stall against a 464 ms read on macOS), which no slicing can prevent; a stall from the read itself fails every try.
+    it('reads a large staged tile in slices without holding up the event loop, once while it is unchanged, and stops while reading it', { retry: 2 }, async () => {
         const tileUri = writeLargeTile('large_tile_test.glb', 900);
         const tileFile = path.join(MODELS_DIR, 'large_tile_test.glb');
         // What reading and binning this tile costs in one go (the sampler built straight through), once the code is
