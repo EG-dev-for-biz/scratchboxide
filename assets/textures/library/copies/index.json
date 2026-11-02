@@ -1,0 +1,192 @@
+{
+ "schema": "scratchbox.texture-library-copies/1",
+ "about": "Working-resolution copies of texture library sets (assets/textures/library/index.json) for producers that run offline from the repository; made by scripts/copy_texture_library_sets.py. Never tinted: a producer tints a copy to the colour it measures. appearance is the publisher's text, for reading; nothing branches on it.",
+ "conventions": {
+  "maps": "albedo: sRGB colour; normal: OpenGL tangent space (+Y up); orm: R occlusion, G roughness, B metalness (glTF's packing)",
+  "realSizeM": "the tile's real width and height in metres: the publisher's, else the vision-model estimate in estimated-sizes.json (sizeSource says which)",
+  "colour": "mean and standard deviation of linear sRGB (Rec. 709, D65) and CIELAB (D65) over the albedo map as written; meanLuminance: Rec. 709 Y"
+ },
+ "sets": [
+  {
+   "id": "bark_willow_02",
+   "publisher": "Poly Haven",
+   "licence": "CC0 1.0",
+   "source": {
+    "bucket": "scratchbox-library-training-textures",
+    "files": [
+     "bark_willow_02/bark_willow_02_ao_8k.png",
+     "bark_willow_02/bark_willow_02_arm_8k.png",
+     "bark_willow_02/bark_willow_02_diff_8k.png",
+     "bark_willow_02/bark_willow_02_nor_gl_8k.png",
+     "bark_willow_02/bark_willow_02_rough_8k.png"
+    ],
+    "pixels": [
+     8192,
+     8192
+    ]
+   },
+   "maps": {
+    "albedo": "bark_willow_02/albedo.jpg",
+    "normal": "bark_willow_02/normal.jpg",
+    "orm": "bark_willow_02/orm.jpg"
+   },
+   "pixels": [
+    2048,
+    2048
+   ],
+   "realSizeM": [
+    2.15,
+    2.15
+   ],
+   "sizeSource": "Poly Haven metadata",
+   "colour": {
+    "meanLinearRgb": [
+     0.2523,
+     0.1992,
+     0.1556
+    ],
+    "spreadLinearRgb": [
+     0.1225,
+     0.1061,
+     0.0928
+    ],
+    "meanLab": [
+     50.69,
+     3.24,
+     9.75
+    ],
+    "spreadLab": [
+     11.48,
+     1.59,
+     2.14
+    ],
+    "meanLuminance": 0.2073
+   },
+   "roughnessMean": 0.6947,
+   "occlusionMean": 0.6645,
+   "normalTiltRmsDeg": 35.11,
+   "appearance": "Bark Willow 02. Wood/Bark/Fissured Bark. Free 8K bark texture showing rough, dry willow bark with deep vertical fissures, layered flaky plates and muted brown-gray tones.",
+   "copiedAt": "2026-11-02"
+  },
+  {
+   "id": "Ground071",
+   "publisher": "ambientCG",
+   "licence": "CC0 1.0",
+   "source": {
+    "bucket": "scratchbox-library-training-textures",
+    "files": [
+     "Ground071/Ground071_8K-PNG_AmbientOcclusion.png",
+     "Ground071/Ground071_8K-PNG_Color.png",
+     "Ground071/Ground071_8K-PNG_NormalGL.png",
+     "Ground071/Ground071_8K-PNG_Roughness.png"
+    ],
+    "pixels": [
+     8192,
+     8192
+    ]
+   },
+   "maps": {
+    "albedo": "Ground071/albedo.jpg",
+    "normal": "Ground071/normal.jpg",
+    "orm": "Ground071/orm.jpg"
+   },
+   "pixels": [
+    2048,
+    2048
+   ],
+   "realSizeM": [
+    1.75,
+    1.75
+   ],
+   "sizeSource": "ambientCG metadata",
+   "colour": {
+    "meanLinearRgb": [
+     0.2456,
+     0.1545,
+     0.0817
+    ],
+    "spreadLinearRgb": [
+     0.143,
+     0.1015,
+     0.0612
+    ],
+    "meanLab": [
+     45.73,
+     6.51,
+     20.2
+    ],
+    "spreadLab": [
+     11.94,
+     1.78,
+     3.87
+    ],
+    "meanLuminance": 0.1686
+   },
+   "roughnessMean": 0.5334,
+   "occlusionMean": 0.8477,
+   "normalTiltRmsDeg": 16.79,
+   "appearance": "Ground 071. Ground. Height field photogrammetry",
+   "copiedAt": "2026-11-02"
+  },
+  {
+   "id": "Moss001",
+   "publisher": "ambientCG",
+   "licence": "CC0 1.0",
+   "source": {
+    "bucket": "scratchbox-library-training-textures",
+    "files": [
+     "Moss001/Moss001_8K-PNG_AmbientOcclusion.png",
+     "Moss001/Moss001_8K-PNG_Color.png",
+     "Moss001/Moss001_8K-PNG_NormalGL.png",
+     "Moss001/Moss001_8K-PNG_Roughness.png"
+    ],
+    "pixels": [
+     8192,
+     8192
+    ]
+   },
+   "maps": {
+    "albedo": "Moss001/albedo.jpg",
+    "normal": "Moss001/normal.jpg",
+    "orm": "Moss001/orm.jpg"
+   },
+   "pixels": [
+    1024,
+    1024
+   ],
+   "realSizeM": [
+    0.45,
+    0.45
+   ],
+   "sizeSource": "ambientCG metadata",
+   "colour": {
+    "meanLinearRgb": [
+     0.2611,
+     0.2569,
+     0.1394
+    ],
+    "spreadLinearRgb": [
+     0.1691,
+     0.1643,
+     0.1187
+    ],
+    "meanLab": [
+     53.92,
+     -5.45,
+     19.32
+    ],
+    "spreadLab": [
+     14.82,
+     7.89,
+     9.57
+    ],
+    "meanLuminance": 0.2493
+   },
+   "roughnessMean": 0.5151,
+   "occlusionMean": 0.8049,
+   "normalTiltRmsDeg": 30.5,
+   "appearance": "Moss 001. Moss. Height field photogrammetry",
+   "copiedAt": "2026-11-02"
+  }
+ ]
+}

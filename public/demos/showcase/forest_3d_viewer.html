@@ -973,14 +973,15 @@
         return;
       }
 
-      // 1. Photo-Derived PBR Texture Sets: the maps embedded in the GLB's own materials (floor, bark, ferns, moss),
-      //    tiled as each surface needs
+      // 1. The surfaces' maps, embedded in the GLB's own materials: the floor's duff, the moss and the bark are texture
+      //    library sets and the fern pinnae a leaf atlas, their UVs laid at each set's real size and their tint in the
+      //    material's base colour factor (extras.sbSurface says which set, its size and what it is tinted to). The
+      //    GLB's factors, normal scale and alpha cutoff are drawn as authored.
       const maxAniso = (renderer && renderer.capabilities) ? renderer.capabilities.getMaxAnisotropy() : 16;
-      function tileMaps(mat, repeatU, repeatV) {
-        for (const tex of [mat.map, mat.normalMap, mat.roughnessMap, mat.metalnessMap]) {
+      function prepareMaps(mat) {
+        for (const tex of [mat.map, mat.normalMap, mat.roughnessMap, mat.metalnessMap, mat.aoMap]) {
           if (!tex) continue;
           tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-          tex.repeat.set(repeatU, repeatV);
           tex.anisotropy = maxAniso;
           tex.needsUpdate = true;
         }
@@ -1053,7 +1054,9 @@
              float airlightMelt = pow(sunAlignment, 4.0) * 0.22;
              gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.92, 0.72), airlightMelt);
 
-             // 6. Multi-Scale Procedural Shader Noise (Macro Structural Grain, Meso Distress, Micro Roughness Jitter)
+             // 6. Multi-Scale Procedural Shader Noise (Macro Structural Grain, Meso Distress, Micro Roughness Jitter), only on
+             //    untextured foliage (the crowns' flat leaves): a leaf map carries its own variation
+             #ifndef USE_MAP
              float macroGrain = sin(vWorldPosVec.x * 0.65) * cos(vWorldPosVec.z * 0.65);
              gl_FragColor.rgb *= (1.0 + 0.08 * macroGrain);
 
@@ -1061,12 +1064,14 @@
              gl_FragColor.rgb *= (1.0 - 0.06 * max(0.0, mesoDistress));
 
              float microJitter = fract(sin(dot(vWorldPosVec.xz * 95.0, vec2(12.9898, 78.233))) * 43758.5453);
-             gl_FragColor.rgb *= (0.94 + 0.12 * microJitter);`
+             gl_FragColor.rgb *= (0.94 + 0.12 * microJitter);
+             #endif`
           );
         };
       }
 
-      // Specular Sun Rim Lighting on Bark & Fallen Logs (Contre-Jour Edge Glow)
+      // Specular Sun Rim Lighting on Bark, Logs and Ground (Contre-Jour Edge Glow). The surface itself (furrows, plates,
+      // needles, wear) is the library set's maps; nothing here paints detail over them.
       function applyBarkSunRimShader(mat, rimStrength = 0.45) {
         mat.onBeforeCompile = (shader) => {
           shader.uniforms.uSunPos = { value: SUN_POSITION };
@@ -1094,36 +1099,10 @@
              float rimAngle = 1.0 - max(0.0, dot(vWorldNormalVec, vVec));
              float sunFacing = max(0.0, dot(vWorldNormalVec, lVec));
              float rimLight = pow(rimAngle, 3.2) * (0.35 + 0.65 * sunFacing) * uRimStrength;
-             vec3 rimColor = vec3(1.0, 0.94, 0.80) * rimLight;
-             gl_FragColor.rgb += rimColor;
-
-             // 2. Multi-Scale Procedural Shader Noise on Bark & Ground
-             float macroBark = sin(vWorldPosVec.x * 0.45) * cos(vWorldPosVec.z * 0.45);
-             // furrows run along the column (they vary around it, barely along it), so no ring or contour bands
-             float mesoBark = sin(vWorldPosVec.x * 9.0 + vWorldPosVec.z * 7.0 + 1.3 * sin(vWorldPosVec.y * 0.9)) * cos((vWorldPosVec.x - vWorldPosVec.z) * 5.0);
-             float microBark = fract(sin(dot(vWorldPosVec.xy * 85.0, vec2(12.9898, 78.233))) * 43758.5453);
-             gl_FragColor.rgb *= (1.0 + 0.10 * macroBark);
-             gl_FragColor.rgb *= (0.92 + 0.16 * microBark);
-
-             // 3. Procedural Edge Wear (Pointiness / Curvature Peak Scuffing)
-             float pointiness = clamp((microBark - 0.5) * 2.0 + (mesoBark > 0.35 ? 0.65 : 0.0), 0.0, 1.0);
-             float edgeWear = pow(pointiness, 2.5) * 0.45;
-             vec3 wornHeartwood = vec3(0.55, 0.38, 0.24); // Lighter scuffed heartwood
-             gl_FragColor.rgb = mix(gl_FragColor.rgb, wornHeartwood, edgeWear);
-
-             // 4. Crevice Grime (Ambient Occlusion & Concave Valley Dirt)
-             if (mesoBark < -0.22) {
-               float grimeIntensity = clamp((-mesoBark - 0.22) / 0.55, 0.0, 1.0);
-               vec3 creviceGrime = vec3(0.07, 0.05, 0.03); // Moist dark organic humus
-               gl_FragColor.rgb = mix(gl_FragColor.rgb, creviceGrime, grimeIntensity * 0.70);
-             }
-
-             // 5. Inverted Layer Weight Fresnel Mask & Upward-Facing Dust Accumulation
-             float upwardPlane = pow(max(0.0, vWorldNormalVec.y), 2.8);
-             float invertedFresnel = pow(1.0 - clamp(abs(dot(vWorldNormalVec, vVec)), 0.0, 1.0), 2.8);
-             float settledDustMask = clamp(upwardPlane * 0.75 + invertedFresnel * 0.35, 0.0, 0.70);
-             vec3 settledDustColor = vec3(0.70, 0.66, 0.56); // Spore dust, lint, and needle silt
-             gl_FragColor.rgb = mix(gl_FragColor.rgb, settledDustColor, settledDustMask * 0.28);`
+             // the rim lights the surface's own colour (its albedo, map included), so it brightens the bark at grazing
+             // angles instead of painting it white
+             vec3 rimColor = vec3(1.0, 0.94, 0.80) * rimLight * clamp(diffuseColor.rgb * 3.0, 0.0, 1.0);
+             gl_FragColor.rgb += rimColor;`
           );
         };
       }
@@ -1153,10 +1132,7 @@
               child.castShadow = true;
               child.receiveShadow = true;
               child.material.vertexColors = true;
-              tileMaps(child.material, 1.0, 0.4);   // the bark photo's furrows run along the column
-              child.material.normalScale = new THREE.Vector2(2.6, 2.6);
-              child.material.roughness = 0.88;
-              child.material.metalness = 0.02;
+              prepareMaps(child.material);
               barkMaterial = barkMaterial || child.material;
               applyBarkSunRimShader(child.material, 0.45);
               child.material.needsUpdate = true;
@@ -1164,32 +1140,30 @@
               child.castShadow = false;
               child.receiveShadow = true;
               child.material.vertexColors = true;
-              tileMaps(child.material, 12.0, 12.0);
-              child.material.normalScale = new THREE.Vector2(2.0, 2.0);
-              child.material.roughness = 0.92;
-              child.material.metalness = 0.01;
+              prepareMaps(child.material);
+              applyBarkSunRimShader(child.material, 0.22);
+              child.material.needsUpdate = true;
+            } else if (name.includes('Moss_Cushions')) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+              child.material.vertexColors = true;
+              prepareMaps(child.material);
+              child.material.side = THREE.DoubleSide;
               applyBarkSunRimShader(child.material, 0.22);
               child.material.needsUpdate = true;
             } else if (name.includes('Fern')) {
               child.castShadow = true;
               child.receiveShadow = true;
               child.material.vertexColors = true;
-              tileMaps(child.material, 2.0, 2.0);
-              child.material.normalScale = new THREE.Vector2(1.8, 1.8);
-              child.material.roughness = 0.42;
-              child.material.metalness = 0.01;
+              prepareMaps(child.material);
               child.material.side = THREE.DoubleSide;
-              child.material.alphaTest = 0.35;
               applyLivingFoliageKernel(child.material, 0xaaf442, 0.85);
               child.material.needsUpdate = true;
             } else if (name.includes('Undergrowth') || name.includes('Moss') || name.includes('Grass')) {
+              // small organs (sorrel, grass, ivy, cones, litter, fungi) in their own vertex colours, no map
               child.castShadow = true;
               child.receiveShadow = true;
               child.material.vertexColors = true;
-              tileMaps(child.material, 4.0, 4.0);
-              child.material.roughnessMap = null;
-              child.material.metalnessMap = null;
-              child.material.normalScale = new THREE.Vector2(1.6, 1.6);
               child.material.roughness = 0.65;
               child.material.metalness = 0.01;
               child.material.side = THREE.DoubleSide;
@@ -1228,18 +1202,32 @@
       //    (extras.sbLod: the distance band each is drawn in); the leaf clusters and twigs are GPU instances.
       function loadCrowns(treesPath, barkMaterial) {
         loader.load(treesPath, (trees) => {
-          const barkMap = barkMaterial && barkMaterial.map ? barkMaterial.map.clone() : null;
-          const barkNormalMap = barkMaterial && barkMaterial.normalMap ? barkMaterial.normalMap.clone() : null;
-          for (const tex of [barkMap, barkNormalMap]) {
-            if (!tex) continue;
-            tex.repeat.set(1, 1);   // the grown wood's UVs are laid out in bark tiles already
-            tex.needsUpdate = true;
+          // the grown wood takes the forest's bark at its real size: each tree's UVs are laid in tiles of the bark SB-Veggie
+          // chose for it (extras.sbTree.texture.bark.tileM), so the forest bark's map repeats tileM / its real size there
+          const barkSurface = barkMaterial && barkMaterial.userData && barkMaterial.userData.sbSurface;
+          const barkRealM = barkSurface && barkSurface.realSizeM ? barkSurface.realSizeM : [1, 1];
+          const woodMaterials = new Map();
+          function woodMaterialFor(tileM) {
+            const key = tileM.map(v => v.toFixed(3)).join(',');
+            if (!woodMaterials.has(key)) {
+              const maps = {};
+              for (const k of ['map', 'normalMap', 'roughnessMap', 'aoMap']) {
+                if (!barkMaterial || !barkMaterial[k]) continue;
+                maps[k] = barkMaterial[k].clone();
+                maps[k].repeat.set(tileM[0] / barkRealM[0], tileM[1] / barkRealM[1]);
+                maps[k].needsUpdate = true;
+              }
+              // the crown geometry has no tangents: three derives them, and glTF's +Y-up normal maps need y flipped there
+              const mat = new THREE.MeshStandardMaterial(Object.assign({
+                name: 'SB_Veggie_Wood', normalScale: new THREE.Vector2(1, -1),
+                color: barkMaterial ? barkMaterial.color.clone() : new THREE.Color().setRGB(0.35, 0.19, 0.12),
+                roughness: maps.roughnessMap ? 1.0 : 0.9, metalness: 0.0
+              }, maps));
+              applyBarkSunRimShader(mat, 0.35);
+              woodMaterials.set(key, mat);
+            }
+            return woodMaterials.get(key);
           }
-          const woodMaterial = new THREE.MeshStandardMaterial({
-            name: 'SB_Veggie_Wood', map: barkMap, normalMap: barkNormalMap, normalScale: new THREE.Vector2(1.6, 1.6),
-            color: new THREE.Color().setRGB(0.35, 0.19, 0.12), roughness: 0.9, metalness: 0.02
-          });
-          applyBarkSunRimShader(woodMaterial, 0.35);
           const leafMaterials = new Map();
           function leafMaterialFor(rgb) {
             const key = rgb.map(v => v.toFixed(3)).join(',');
@@ -1259,6 +1247,8 @@
             if (!ex.sbTree || !ex.stem) return;
             const rgb = (ex.sbTree.colour && ex.sbTree.colour.meanLinearRgb) || [0.05, 0.11, 0.03];
             const leaves = leafMaterialFor(rgb);
+            const barkTex = ex.sbTree.texture && ex.sbTree.texture.bark;
+            const woodMaterial = woodMaterialFor(barkTex && barkTex.tileM ? barkTex.tileM : barkRealM);
             const levels = [];
             for (const lod of node.children) {
               const band = lod.userData && lod.userData.sbLod;

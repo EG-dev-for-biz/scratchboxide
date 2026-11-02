@@ -32,9 +32,11 @@ describe('Hyperrealistic Forest Procedural 3D Reconstruction from Image', () => 
         expect(fs.existsSync(sourcePath)).toBe(true);
         const sourceCode = fs.readFileSync(sourcePath, 'utf8');
 
+        // zlib: the generator reads the reference photograph and writes the fern leaf's maps as PNG
         const result = await compiler.compileSource(sourceCode, {
             outputBinaryName: 'generate_forest_procedural_3d',
-            optimization: '-O3'
+            optimization: '-O3',
+            extraFlags: ['-lz']
         });
 
         if (!result.success) {
@@ -113,10 +115,66 @@ describe('Hyperrealistic Forest Procedural 3D Reconstruction from Image', () => 
         expect(maxX - minX).toBeGreaterThan(20.0); // Broad forest width >= 20m
         expect(maxZ - minZ).toBeGreaterThan(25.0); // Forest depth >= 25m
 
-        // The page draws with the GLB's own maps: four photo sets (albedo, normal, ORM) embedded, and no canopy of
+        // The page draws with the GLB's own maps: four surfaces (albedo, normal, ORM) embedded, and no canopy of
         // needle slivers left in the forest mesh (the crowns are their own GLB)
         expect(gltf.images?.length).toBe(12);
         expect((gltf.meshes as Array<{ name?: string }>).some(m => /Canopy|Foliage/.test(m.name ?? ''))).toBe(false);
+
+        // The surfaces are texture library sets at their real tile size, each tinted to its region of the reference
+        // photograph: the floor's duff, the bark and the moss from the library copies, the fern pinnae a leaf atlas
+        type Surface = { set: string; library: string; realSizeM: number[]; provenance: string; tint: { factor: number[]; pixels: number; regionsPx: number[][] } };
+        const materials = gltf.materials as Array<{ name: string; extras?: { sbSurface?: Surface }; pbrMetallicRoughness: { baseColorFactor: number[] } }>;
+        const surfaceOf = (name: string) => materials.find(m => m.name === name)?.extras?.sbSurface;
+        const copies = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'assets/textures/library/copies/index.json'), 'utf8')) as { sets: Array<{ id: string; realSizeM: number[] }> };
+        for (const name of ['PBR_Forest_Floor', 'PBR_Redwood_Bark', 'PBR_Moss', 'PBR_Sword_Ferns']) {
+            const s = surfaceOf(name);
+            expect(s, name).toBeDefined();
+            expect(s!.provenance).toBe('library');
+            expect(s!.realSizeM.every(v => v > 0.05 && v < 5)).toBe(true);
+            expect(s!.tint.pixels).toBeGreaterThan(1000);
+            expect(s!.tint.factor.every(v => v > 0 && v <= 1)).toBe(true);
+            expect(Math.max(...s!.tint.factor)).toBeGreaterThan(0.2);
+            if (name !== 'PBR_Sword_Ferns') {
+                expect(s!.library).toBe('assets/textures/library/copies/');
+                expect(copies.sets.find(c => c.id === s!.set)?.realSizeM).toEqual(s!.realSizeM);
+            }
+        }
+        expect(surfaceOf('PBR_Sword_Ferns')!.library).toBe('assets/textures/trees/');
+
+        const binOffset = 20 + jsonChunkLen + 8;
+        // the floor's, bark's and moss's colour maps are the library copies' own bytes (not crops of the photograph)
+        for (const name of ['PBR_Forest_Floor', 'PBR_Redwood_Bark', 'PBR_Moss']) {
+            const mat = materials.find(m => m.name === name) as unknown as { pbrMetallicRoughness: { baseColorTexture: { index: number } } };
+            const image = gltf.images[gltf.textures[mat.pbrMetallicRoughness.baseColorTexture.index].source];
+            const view = gltf.bufferViews[image.bufferView];
+            const embedded = buf.subarray(binOffset + (view.byteOffset ?? 0), binOffset + (view.byteOffset ?? 0) + view.byteLength);
+            const copy = fs.readFileSync(path.resolve(process.cwd(), 'assets/textures/library/copies', surfaceOf(name)!.set, 'albedo.jpg'));
+            expect(image.mimeType).toBe('image/jpeg');
+            expect(Buffer.compare(embedded, copy)).toBe(0);
+        }
+        const attribute = (meshName: string, key: string, width: number) => {
+            const mesh = (gltf.meshes as Array<{ name: string; primitives: Array<{ attributes: Record<string, number> }> }>).find(m => m.name === meshName)!;
+            const acc = gltf.accessors[mesh.primitives[0].attributes[key]];
+            const view = gltf.bufferViews[acc.bufferView];
+            const start = binOffset + (view.byteOffset ?? 0) + (acc.byteOffset ?? 0);
+            return new Float32Array(buf.buffer.slice(buf.byteOffset + start, buf.byteOffset + start + acc.count * width * 4));
+        };
+        // the floor's UVs run in duff tiles: 80 m across over the set's real size
+        const floorUv = attribute('Forest_Terrain_Floor', 'TEXCOORD_0', 2);
+        let uMin = Infinity, uMax = -Infinity;
+        for (let i = 0; i < floorUv.length; i += 2) { uMin = Math.min(uMin, floorUv[i]); uMax = Math.max(uMax, floorUv[i]); }
+        const duffSize = surfaceOf('PBR_Forest_Floor')!.realSizeM[0];
+        expect(uMax - uMin).toBeCloseTo(80 / duffSize, 0);
+        // tangents follow the UVs (the normal maps need them): perpendicular to the normal on the columns, not a placeholder
+        const normals = attribute('Forest_Trunks_And_Log', 'NORMAL', 3);
+        const tangents = attribute('Forest_Trunks_And_Log', 'TANGENT', 4);
+        let perpendicular = 0;
+        const n = normals.length / 3;
+        for (let i = 0; i < n; i++) {
+            const dot = normals[i * 3] * tangents[i * 4] + normals[i * 3 + 1] * tangents[i * 4 + 1] + normals[i * 3 + 2] * tangents[i * 4 + 2];
+            if (Math.abs(dot) < 0.05 && Math.abs(Math.abs(tangents[i * 4 + 3]) - 1) < 1e-4) perpendicular++;
+        }
+        expect(perpendicular / n).toBeGreaterThan(0.99);
     }, 60000);
 
     it('should grow every crown with SB-Veggie into the trees GLB beside the forest', () => {
