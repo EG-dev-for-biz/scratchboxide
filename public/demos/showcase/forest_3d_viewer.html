@@ -1198,6 +1198,183 @@
         }
       });
 
+      // 3. The crowns' leaves: the leaf atlas SB-Veggie chose for each tree (extras.sbTree.texture.leaves; the native choice
+      //    matches the atlas's blade width to the leaf of the tree's species, so the crowns the species library calls needle
+      //    or scale leaved draw a needle spray and broadleaves draw leaves), drawn as the app's viewport draws it
+      //    (treeTextureMaterials.ts): each card's blade coordinates (TEXCOORD_0) and pick (_LEAF.x) into one cell of the
+      //    atlas, the leaf cut out by its opacity, tinted by the tree's tint. The atlases are the tree texture library the
+      //    app serves to its viewport (/assets/textures/trees/).
+      const TREE_TEXTURES = '/assets/textures/trees/';
+      const LEAF_CELLS_MAX = 24;
+      const LEAF_ATLAS_PX = 1024;
+      const LEAF_STRETCH = 2;          // a narrow leaf may be drawn up to this much wider (DEFAULT_LEAF_STRETCH)
+      const CARD_ZOOM = [1, 1.15, 1.3, 1.3];
+      const ALPHA_GAIN = [1, 1.1, 1.25, 1.25];
+      const LEAF_ATLAS_VERTEX_PARS = `
+        attribute vec2 _leaf;
+        uniform vec4 uSbCellA[ ${LEAF_CELLS_MAX} ];
+        uniform vec4 uSbCellB[ ${LEAF_CELLS_MAX} ];
+        uniform float uSbCellCount;
+        uniform float uSbLeafStretch;
+        uniform float uSbCardWidth;
+        uniform float uSbZoom;
+        varying vec2 vSbST;
+        varying float vSbBlade;
+        varying vec3 vSbVar;`;
+      const LEAF_ATLAS_VERTEX_MAIN = `
+        {
+          int sbI = int( clamp( floor( _leaf.x * uSbCellCount ), 0.0, uSbCellCount - 1.0 ) );
+          vec4 sbA = uSbCellA[ sbI ];
+          vec4 sbB = uSbCellB[ sbI ];
+          float sbR = sbB.z;
+          float sbDrawn = min( max( sbR, uSbCardWidth ), sbR * uSbLeafStretch );
+          float sbF = min( 1.0, uSbCardWidth / sbDrawn );
+          float sbT = uv.y / sbF;
+          float sbS = 0.5 + ( uv.x - 0.5 ) / ( sbF * sbDrawn );
+          sbS = 0.5 + ( sbS - 0.5 ) / uSbZoom;
+          sbT = 0.5 + ( sbT - 0.5 ) / uSbZoom;
+          vSbST = vec2( sbS, sbT );
+          vec2 sbUv = sbA.xy + sbT * sbA.zw + sbS * sbB.xy;
+          #ifdef USE_MAP
+            vMapUv = sbUv;
+          #endif
+          #ifdef USE_NORMALMAP
+            vNormalMapUv = sbUv;
+          #endif
+          vSbBlade = _leaf.y;
+          float sbJ = fract( _leaf.x * 7.31 + 0.13 );
+          #ifdef USE_INSTANCING
+            sbJ = fract( sbJ + fract( sin( dot( floor( instanceMatrix[ 3 ].xyz * 64.0 ), vec3( 12.9898, 78.233, 37.719 ) ) ) * 43758.5453 ) );
+          #endif
+          float sbK = fract( sbJ * 3.71 + 0.29 );
+          vSbVar = vec3( 1.0 + 0.18 * ( sbJ - 0.5 ) * ( 1.0 + 0.4 * ( sbK - 0.5 ) ), 1.0 + 0.18 * ( sbJ - 0.5 ),
+                         1.0 + 0.18 * ( sbJ - 0.5 ) * ( 1.0 - 0.6 * ( sbK - 0.5 ) ) );
+        }`;
+      const LEAF_ATLAS_FRAGMENT_PARS = `
+        uniform vec3 uSbStem;
+        uniform float uSbMipScale;
+        uniform float uSbAlphaGain;
+        varying vec2 vSbST;
+        varying float vSbBlade;
+        varying vec3 vSbVar;`;
+      // after map_fragment: a stalk takes the stalk colour; every leaf its own small variation of the tree's tint
+      const LEAF_ATLAS_FRAGMENT_COLOR = `
+        if ( vSbBlade < 0.5 ) diffuseColor.rgb = uSbStem * diffuse;
+        diffuseColor.rgb *= vSbVar;`;
+      // after alphamap_fragment: a leaf seen small reads a coarse mip whose edges fall under the cutoff, so its alpha rises
+      // with the mip level; stalks are opaque; outside its cell a card shows nothing
+      const LEAF_ATLAS_FRAGMENT_ALPHA = `
+        #ifdef USE_MAP
+        {
+          vec2 sbTexels = fwidth( vMapUv ) * vec2( textureSize( map, 0 ) );
+          float sbMip = max( 0.0, log2( max( max( sbTexels.x, sbTexels.y ), 1e-6 ) ) );
+          diffuseColor.a *= ( 1.0 + sbMip * uSbMipScale ) * uSbAlphaGain;
+        }
+        #endif
+        if ( vSbBlade < 0.5 ) diffuseColor.a = 1.0;
+        else if ( vSbST.x < 0.0 || vSbST.x > 1.0 || vSbST.y < 0.0 || vSbST.y > 1.0 ) diffuseColor.a = 0.0;`;
+
+      function loadImage(url) {
+        return new Promise((resolve, reject) => {
+          const im = new Image();
+          im.onload = () => resolve(im);
+          im.onerror = () => reject(new Error('cannot load ' + url));
+          im.src = url;
+        });
+      }
+
+      // an atlas's colour with its opacity in the alpha (one texture; clear texels take the leaves' mean colour so no
+      // background bleeds into the mips), and its normal map; both clamped, so a cell never wraps into its neighbour
+      async function loadLeafAtlas(entry) {
+        const [colour, opacity] = await Promise.all([loadImage(TREE_TEXTURES + entry.maps.color), loadImage(TREE_TEXTURES + entry.maps.opacity)]);
+        const k = Math.min(1, LEAF_ATLAS_PX / Math.max(colour.width, colour.height));
+        const w = Math.max(1, Math.round(colour.width * k)), h = Math.max(1, Math.round(colour.height * k));
+        const draw = (im) => {
+          const c = document.createElement('canvas');
+          c.width = w; c.height = h;
+          const ctx = c.getContext('2d', { willReadFrequently: true });
+          ctx.drawImage(im, 0, 0, w, h);
+          return { c, ctx, px: ctx.getImageData(0, 0, w, h) };
+        };
+        const col = draw(colour), op = draw(opacity);
+        const d = col.px.data, a = op.px.data;
+        const mean = [0, 0, 0];
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          d[i + 3] = a[i];
+          if (a[i] >= 128) { mean[0] += d[i]; mean[1] += d[i + 1]; mean[2] += d[i + 2]; n++; }
+        }
+        for (let i = 0; i < d.length; i += 4) {
+          if (d[i + 3] < 128 && n) { d[i] = mean[0] / n; d[i + 1] = mean[1] / n; d[i + 2] = mean[2] / n; }
+        }
+        col.ctx.putImageData(col.px, 0, 0);
+        const map = new THREE.CanvasTexture(col.c);
+        map.colorSpace = THREE.SRGBColorSpace;
+        map.anisotropy = maxAniso;
+        const normalMap = entry.maps.normal ? await new THREE.TextureLoader().loadAsync(TREE_TEXTURES + entry.maps.normal) : null;
+        for (const t of [map, normalMap]) if (t) t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+        return { map, normalMap };
+      }
+
+      function leafAtlasMaterial(entry, atlas, tint, level, cardWidth) {
+        const cells = entry.atlas.cells.slice(0, LEAF_CELLS_MAX);
+        const pad = (arr, fill) => arr.concat(new Array(LEAF_CELLS_MAX - arr.length).fill(fill));
+        const slot = Math.max(0, Math.min(3, level | 0));
+        const uniforms = {
+          uSbCellA: { value: pad(cells.map(c => new THREE.Vector4(c.origin[0], c.origin[1], c.along[0], c.along[1])), new THREE.Vector4()) },
+          uSbCellB: { value: pad(cells.map(c => new THREE.Vector4(c.across[0], c.across[1], c.widthM / c.lengthM, 0)), new THREE.Vector4(0, 0, 1, 0)) },
+          uSbCellCount: { value: cells.length },
+          uSbLeafStretch: { value: LEAF_STRETCH },
+          uSbCardWidth: { value: cardWidth },
+          uSbZoom: { value: CARD_ZOOM[slot] },
+          uSbStem: { value: new THREE.Vector3(...entry.colour.meanLinearRgb).multiplyScalar(0.55) },
+          uSbMipScale: { value: 0.4 },
+          uSbAlphaGain: { value: ALPHA_GAIN[slot] }
+        };
+        const mat = new THREE.MeshStandardMaterial({
+          name: 'SB_Veggie_Leaves_' + entry.id, map: atlas.map, normalMap: atlas.normalMap, roughness: 0.6, metalness: 0.0,
+          side: THREE.DoubleSide, alphaTest: 0.5, alphaToCoverage: true
+        });
+        mat.color.setRGB(tint[0], tint[1], tint[2]);
+        applyLivingFoliageKernel(mat, 0xfff080, 0.55);
+        const foliage = mat.onBeforeCompile;
+        mat.onBeforeCompile = (shader) => {
+          foliage(shader);
+          Object.assign(shader.uniforms, uniforms);
+          shader.vertexShader = shader.vertexShader
+            .replace('#include <common>', '#include <common>\n' + LEAF_ATLAS_VERTEX_PARS)
+            .replace('#include <uv_vertex>', '#include <uv_vertex>\n' + LEAF_ATLAS_VERTEX_MAIN);
+          shader.fragmentShader = shader.fragmentShader
+            .replace('#include <common>', '#include <common>\n' + LEAF_ATLAS_FRAGMENT_PARS)
+            .replace('#include <map_fragment>', '#include <map_fragment>\n' + LEAF_ATLAS_FRAGMENT_COLOR)
+            .replace('#include <alphamap_fragment>', '#include <alphamap_fragment>\n' + LEAF_ATLAS_FRAGMENT_ALPHA);
+        };
+        mat.customProgramCacheKey = () => 'forestLeafAtlas/1';
+        return mat;
+      }
+
+      // draws each waiting leaf card with its tree's atlas; resolves with the number of cards drawn
+      async function drawLeafAtlases(atlasLeaves, cardWidth) {
+        if (!atlasLeaves.length) return 0;
+        if (!(cardWidth > 0)) throw new Error('the crowns GLB gives no leaf card width (sbTrees.clusterLibrary.leafCard.widthRatio)');
+        const r = await fetch(TREE_TEXTURES + 'index.json');
+        if (!r.ok) throw new Error('the tree texture library answered ' + r.status);
+        const index = await r.json();
+        const entries = new Map((index.leaves || []).map(e => [e.id, e]));
+        const atlases = new Map();
+        for (const id of new Set(atlasLeaves.map(l => l.entry))) {
+          if (!entries.has(id)) throw new Error('the tree texture library has no leaf set ' + id);
+          atlases.set(id, await loadLeafAtlas(entries.get(id)));
+        }
+        const materials = new Map();
+        for (const l of atlasLeaves) {
+          const key = l.entry + '|' + l.tint.map(v => v.toFixed(3)).join(',') + '|' + l.level;
+          if (!materials.has(key)) materials.set(key, leafAtlasMaterial(entries.get(l.entry), atlases.get(l.entry), l.tint, l.level, cardWidth));
+          l.mesh.material = materials.get(key);
+        }
+        return atlasLeaves.length;
+      }
+
       // 2. The crowns: SB-Veggie trees (the generator's <model>_trees.glb). Each tree node holds its levels of detail
       //    (extras.sbLod: the distance band each is drawn in); the leaf clusters and twigs are GPU instances.
       function loadCrowns(treesPath, barkMaterial) {
@@ -1242,11 +1419,13 @@
           }
 
           crownTrees = [];
+          const atlasLeaves = [];   // leaf-card meshes the chosen atlas is drawn on once it has loaded
           trees.scene.traverse((node) => {
             const ex = node.userData || {};
             if (!ex.sbTree || !ex.stem) return;
             const rgb = (ex.sbTree.colour && ex.sbTree.colour.meanLinearRgb) || [0.05, 0.11, 0.03];
             const leaves = leafMaterialFor(rgb);
+            const leafTex = ex.sbTree.texture && ex.sbTree.texture.leaves;
             const barkTex = ex.sbTree.texture && ex.sbTree.texture.bark;
             const woodMaterial = woodMaterialFor(barkTex && barkTex.tileM ? barkTex.tileM : barkRealM);
             const levels = [];
@@ -1264,6 +1443,10 @@
                 o.material = isLeaf ? leaves : woodMaterial;
                 o.castShadow = true;
                 o.receiveShadow = true;
+                // a leaf card (blade coordinates and an atlas pick) waits for its tree's atlas
+                if (isLeaf && leafTex && o.isInstancedMesh && o.geometry.getAttribute('_leaf') && o.geometry.getAttribute('uv')) {
+                  atlasLeaves.push({ mesh: o, entry: leafTex.entry, tint: leafTex.tint, level: band.level });
+                }
               });
               // the mid level's crown cards need the leaf atlas the app's viewer bakes; this page draws the near-mid
               // clusters out to the mid level's range instead
@@ -1286,8 +1469,18 @@
           forestGroup.add(trees.scene);
           updateCrownLevels(true);
 
-          document.getElementById('hudStatus').textContent = 'RENDERED (60 FPS)';
-          window.__renderReady = true;
+          const sbTrees = (trees.userData && trees.userData.sbTrees) || (trees.scene.userData && trees.scene.userData.sbTrees) || {};
+          const cardWidth = sbTrees.clusterLibrary && sbTrees.clusterLibrary.leafCard && sbTrees.clusterLibrary.leafCard.widthRatio;
+          document.getElementById('hudStatus').textContent = 'LOADING LEAF ATLASES...';
+          drawLeafAtlases(atlasLeaves, cardWidth).then((n) => {
+            document.getElementById('hudStatus').textContent = 'RENDERED (60 FPS)';
+            window.__leafAtlases = n;
+          }).catch((err) => {
+            // the leaves keep each tree's flat colour
+            console.warn('Leaf atlases not drawn: ' + err.message);
+            document.getElementById('hudStatus').textContent = 'RENDERED (60 FPS) - LEAF ATLASES NOT LOADED';
+            window.__leafAtlases = 0;
+          }).finally(() => { window.__renderReady = true; });
         }, undefined, (err) => {
           console.error('Error loading the crowns GLB from ' + treesPath + ':', err);
           document.getElementById('hudStatus').textContent = 'CROWNS NOT FOUND: run scripts/generate_forest_procedural_3d.cpp';

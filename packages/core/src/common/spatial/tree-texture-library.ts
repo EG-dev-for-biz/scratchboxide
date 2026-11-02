@@ -52,7 +52,9 @@ export interface TreeLeafTextureEntry {
     pixels: [number, number];
     realSizeM: [number, number];
     colour: TreeTextureColour;
-    leaf: { lengthM: number; widthM: number; lengthRangeM: [number, number]; aspect: number; fill: number };
+    /** bladeWidthM: the width of the leaf's flat parts (2 x area / outline; a needle spray's few millimetres, a leaf's
+     *  centimetres), which the native choice matches to the species leaf's; absent on an index not yet measured. */
+    leaf: { lengthM: number; widthM: number; lengthRangeM: [number, number]; aspect: number; fill: number; bladeWidthM?: number };
     /** Opaque share of the whole atlas. */
     coverage: number;
     atlas: { layout: string; cells: TreeLeafCell[] };
@@ -138,6 +140,7 @@ export function validateTreeTextureIndex(doc: unknown): string[] {
         if (!e?.maps?.color || !e.maps.opacity) out.push(`${at}: needs color and opacity maps`);
         if (!colourOk(e?.colour)) out.push(`${at}.colour: bad statistics`);
         if (!(e?.leaf?.lengthM > 0) || !(e.leaf.widthM > 0)) out.push(`${at}.leaf: length and width must be positive`);
+        if (e?.leaf?.bladeWidthM !== undefined && !(e.leaf.bladeWidthM > 0 && e.leaf.bladeWidthM <= e.leaf.widthM)) out.push(`${at}.leaf.bladeWidthM: must be positive and at most the leaf's width`);
         if (!(e?.coverage > 0 && e.coverage <= 1)) out.push(`${at}.coverage: must be in (0, 1]`);
         const cells = e?.atlas?.cells ?? [];
         if (cells.length === 0 || cells.length > MAX_LEAF_CELLS) out.push(`${at}.atlas: 1..${MAX_LEAF_CELLS} cells, has ${cells.length}`);

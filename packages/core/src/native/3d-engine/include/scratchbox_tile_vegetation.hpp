@@ -5333,7 +5333,12 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
                 for (double r : shapes[i].sectorRadii) rs += r / 16.0;
                 tr.look.crownRadiusM = rs;
                 // the species entry's leaf (or frond) is what the leaf set is chosen by; unmatched, a length from the tree's size
-                if (g.hasSpecies && g.species.matched) tr.look.leafLengthHintM = P.growth.species->entries[g.species.entry].leafLengthM;
+                // and its blade width matches the foliage's form (a needle or scale leaf draws a needle spray)
+                if (g.hasSpecies && g.species.matched) {
+                    const auto& sp = P.growth.species->entries[g.species.entry];
+                    tr.look.leafLengthHintM = sp.leafLengthM;
+                    tr.look.leafWidthHintM = tree_textures::bladeWidthOfLeaf(sp.leafLengthM, sp.leafAspect);
+                }
                 const auto& col = cj["colour"]["meanLinearRgb"];
                 if (col.type == io::GlbJsonValue::Array && col.arr.size() == 3 && col[0].type == io::GlbJsonValue::Number) {
                     tr.look.colour.known = true;
@@ -5609,7 +5614,8 @@ inline std::string treeTextureMembers(const PlantedTree& tr, const tree_textures
     const auto& L = lib.leaves[t.leaf];
     const auto& B = lib.bark[t.bark];
     return ",\"texture\":{\"leaves\":{\"entry\":" + json::str(L.id) + ",\"tint\":" + rgb(t.leafTint) + ",\"leafLengthM\":" + json::num(L.leafLengthM) +
-           ",\"targetLeafLengthM\":" + json::num(t.targetLeafLengthM) + ",\"cost\":" + json::num(t.leafCost) + ",\"provenance\":\"library\"}" +
+           ",\"targetLeafLengthM\":" + json::num(t.targetLeafLengthM) + ",\"bladeWidthM\":" + json::num(L.bladeWidthM) +
+           ",\"targetBladeWidthM\":" + json::num(t.targetBladeWidthM) + ",\"cost\":" + json::num(t.leafCost) + ",\"provenance\":\"library\"}" +
            ",\"bark\":{\"entry\":" + json::str(B.id) + ",\"tint\":" + rgb(t.barkTint) + ",\"tileM\":[" + json::num(B.tileAroundM) + "," + json::num(B.tileAlongM) + "]" +
            ",\"reliefIndex\":" + json::num(B.reliefIndex) + ",\"targetReliefIndex\":" + json::num(t.targetRelief) + ",\"sizeShare\":" + json::num(t.sizeShare) +
            ",\"cost\":" + json::num(t.barkCost) + ",\"provenance\":\"library\"}" +
@@ -5998,7 +6004,7 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
                    // a leaf card's TEXCOORD_0 (u = 0.5 + across / length, v = along / length): its outline's box is widthRatio wide
                    ",\"leafCard\":{\"widthRatio\":" + json::num(lib.params.morphology.blade.widthRatio) + ",\"uv\":\"TEXCOORD_0: u = 0.5 + across / blade length, v = along / blade length (base 0)\",\"leafAttribute\":\"_LEAF: x atlas pick in [0, 1), y 1 on a blade, 0 on a stalk or shoot\"}}" + cardsJson +
                    (P.textures ? ",\"textures\":{\"schema\":" + json::str(P.textures->schema) + ",\"index\":" + json::str(P.textureIndex) +
-                                 ",\"woodUv\":\"TEXCOORD_0 in the chosen bark's tiles: u around (whole tiles), v along the path from the root\",\"chosenBy\":\"appearance: measured crown colour, leaf size from the tree's height and crown, bark relief from its size\"}"
+                                 ",\"woodUv\":\"TEXCOORD_0 in the chosen bark's tiles: u around (whole tiles), v along the path from the root\",\"chosenBy\":\"appearance: measured crown colour, leaf size from the species leaf (else the tree's height and crown), the species leaf's blade width (a needle or scale leaf's millimetres draw a needle spray, a broad leaf's centimetres a leaf), bark relief from its size\"}"
                                : std::string()) +
                    (P.growth.species ? ",\"species\":{\"schema\":" + json::str(P.growth.species->schema) + ",\"index\":" + json::str(P.growth.speciesIndex) +
                                        ",\"chosenBy\":\"the crown's measurements: height, crown radius over height, the share of its surface near the apex, its photo hue\"}"

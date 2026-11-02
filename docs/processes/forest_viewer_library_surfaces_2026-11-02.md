@@ -1,8 +1,8 @@
 # Process: The forest demo page's floor, moss, fern and bark surfaces drawn from the texture library at real size
 
 > **Recorded:** 2026-11-02
-> **Status:** Verified (Wideshot, Canopy, Hero and Ferns bookmarks and four close views before and after; no console errors, no failed responses, no `/textures` request; the forest test passes with credentials unreachable). Needs Fix, not done here: the page's lighting was tuned for the old maps (see section 3).
-> **Tags:** `operate-scratchbox` `demos` `pbr-materials` `texture-library` `forest-viewer`
+> **Status:** Verified (Wideshot, Canopy, Hero and Ferns bookmarks and four close views before and after; no console errors, no failed responses, no `/textures` request; the forest test passes with credentials unreachable). Section 6: conifer crowns now draw the needle-spray atlas (species classification linked to the leaf choice), Verified. Needs Fix, not done here: the page's lighting was tuned for the old maps (section 3), and the crowns' architecture still grows broadleaf-like (section 6).
+> **Tags:** `operate-scratchbox` `demos` `pbr-materials` `texture-library` `forest-viewer` `sb-veggie` `tree-species`
 > **Target Domain:** static demo page `/forest_3d_viewer.html` and its native generator `scripts/generate_forest_procedural_3d.cpp`
 
 ---
@@ -111,3 +111,39 @@
 1. Library copies (needs the app's Google credentials; about 2.6 GB of 8K maps): fetch `Ground071`, `Moss001`, `bark_willow_02` with `fetchLibrarySets` into a cache directory, then run `python3 scripts/copy_texture_library_sets.py <cache> Ground071:2048 Moss001:1024 bark_willow_02:2048` from the repository root.
 2. `clang++ -std=c++20 -O3 -pthread -I packages/core/src/native/3d-engine/include scripts/generate_forest_procedural_3d.cpp -o build/3d-native/generate_forest_procedural_3d -lz`, then `build/3d-native/generate_forest_procedural_3d public/models/forest_hyperreal.glb`. The run prints the leaf ranking, each surface's set, real size and tint.
 3. Start an instance on free ports (`operate-scratchbox`) and open `http://127.0.0.1:<web>/forest_3d_viewer.html`. Network shows the two GLBs and nothing under `/textures/`.
+
+---
+
+## 6. Conifer foliage: the species classification linked to the leaf choice and drawn on the page (same day)
+
+* **What prompted it:** the crowns read as broadleaf trees. The species library's chooser (`scratchbox_tree_species.hpp`, the tree classifier: crowns matched by height, crown proportions, top share and hue) already called the forest's crowns conifers: coast redwood 20, spruce 23, Italian cypress 2 (olive 3 and honey locust 1 in the understory). But the classification stopped at the crowns' proportions.
+  - **Leaf choice:** `tree_textures::choose` ignored a species leaf shorter than every atlas leaf (a 2 cm needle against 6.6 cm and up) and never compared leaf form. Every redwood drew a broad leaf (`leaves_01`, heart-shaped), although the tree texture library has a needle-spray atlas (`leaves_08`).
+  - **The page** drew all crown leaves in flat colour, with no atlas.
+* **Measured leaf form** (`scripts/measure_tree_leaf_blades.py`, new): each leaf atlas in `assets/textures/trees/index.json` gains `leaf.bladeWidthM`, the width of its flat parts (2 x opaque area / outline length, outline counted in pixel edges x pi/4, median over its cells).
+
+  | Atlas | bladeWidthM |
+  | :--- | ---: |
+  | broad leaves | 20-53 mm |
+  | `leaves_12` (small lobed, bristle-tipped) | 8.3 mm |
+  | `leaves_08` (needle spray) | 2.65 mm |
+
+  This is data in the library, measured: no form enum and no branch on names.
+* **Native link** (`scratchbox_tree_textures.hpp`, `scratchbox_tile_vegetation.hpp`):
+  - the matched species' leaf now also gives a blade width (`bladeWidthOfLeaf`: the same measure on an ellipse of its length and aspect). Coast redwood 1.8 mm, spruce 1.5 mm, cypress 1.1 mm, olive 9 mm, oak 40 mm.
+  - the leaf choice adds `(ln(entry / species) / 0.6)^2` while the species' width is within 3x of the library's range;
+  - the tree's extras record `bladeWidthM` and `targetBladeWidthM` (declared in `staged-location-contracts.ts`);
+  - the trees GLB's `textures.chosenBy` says so.
+  - **Result for the forest:** all 45 crowns matched to coast redwood, spruce or cypress draw `leaves_08`; the 4 broadleaf understory crowns draw `leaves_06` / `leaves_01`.
+  - This applies to every SB-Veggie build: staged-location trees the species library matches to needles or scales now draw the spray too.
+* **The page** draws each crown's chosen atlas on its leaf cards as the app's viewport does (`treeTextureMaterials.ts`): the card's blade coordinates and `_LEAF` pick into one atlas cell, the leaf cut out by its opacity, tinted by the tree's tint, with the page's foliage lighting kept. The atlases come from `/assets/textures/trees/`, the tree texture library the app serves its viewport, proxied to the API on the page's origin. Without that route the leaves keep each tree's flat colour and the HUD says "LEAF ATLASES NOT LOADED".
+  - **Live:** 408 leaf-card meshes drawn with `leaves_08` / `06` / `01`; no console errors; no failed responses; nothing under `/textures/`.
+* **Before / after** (commit ae720963's headers, generator and page, against this change; headless, same views):
+  - In the crowns view (camera 9 m up, looking into the crowns) the foliage goes from solid leaf flakes to fine needle sprays.
+  - In the Canopy view the overhead foliage is feathery.
+  - In the Wideshot the difference is small: at 32 m under the haze, the crowns' clumped arrangement dominates the leaf.
+
+### Still broadleaf-like (not done)
+
+* **Crown architecture.** SB-Veggie grows long sinuous scaffold limbs by space colonisation into the described crown. A coast redwood has a straight leader with short, near-horizontal, whorled branches carrying drooping sprays. The species entry's `apicalDominance`, `branchAngleRad` and `scaffoldBranches` do not yet produce that form. This is what still reads broadleaf from the bookmarks.
+* **Spray size.** The LOD sizes leaf cards from crown height (0.08-0.14 m), so a 0.34 m spray is drawn at about 0.4 of its size, as in the app's viewport. Sizing the cards from the chosen atlas leaf would change every tree's cluster geometry and budgets.
+* **Foliage colour.** The crowns' described colour is lifted pale by the page's haze and the foliage kernel's airlight.

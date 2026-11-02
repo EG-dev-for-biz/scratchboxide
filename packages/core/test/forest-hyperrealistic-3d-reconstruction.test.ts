@@ -204,6 +204,24 @@ describe('Hyperrealistic Forest Procedural 3D Reconstruction from Image', () => 
         expect(redwoodCrowns.length).toBe(45);
         // a redwood's grown trunk stays inside its fluted column (half the column's base radius)
         for (const t of redwoodCrowns) expect(t.extras!.inferred.trunkRadiusM).toBeLessThan(1.0);
+
+        // the species the library matches carries its leaf's form to the leaf choice: the crowns matched to needle or scale
+        // leaves (blade width of millimetres) draw the library's needle spray, the broadleaf understory draws leaves
+        const textures = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'assets/textures/trees/index.json'), 'utf8')) as { leaves: Array<{ id: string; leaf: { bladeWidthM: number } }> };
+        const bladeOf = (id: string) => textures.leaves.find(e => e.id === id)!.leaf.bladeWidthM;
+        const thinnest = Math.min(...textures.leaves.map(e => e.leaf.bladeWidthM));
+        let needleCrowns = 0;
+        for (const t of trees) {
+            const leaves = t.extras!.sbTree.texture.leaves as { entry: string; bladeWidthM: number; targetBladeWidthM: number };
+            expect(leaves.bladeWidthM).toBe(bladeOf(leaves.entry));
+            if (leaves.targetBladeWidthM > 0 && leaves.targetBladeWidthM < 0.004) {
+                needleCrowns++;
+                expect(leaves.bladeWidthM, t.name).toBe(thinnest);
+            } else {
+                expect(leaves.bladeWidthM, t.name).toBeGreaterThan(0.005);
+            }
+        }
+        expect(needleCrowns).toBeGreaterThanOrEqual(40);
     });
 
     it('should compile and evaluate general BotanicalOrganGenerator, NurseLogGenerator, and BiomassScatterEngine', async () => {

@@ -799,7 +799,8 @@ export interface TreeColourExtras {
  * the median of its planting's measured crowns ('neighbours'), or the library's leaf-on prior ('prior').
  */
 export interface TreeTextureExtras {
-    leaves: { entry: string; tint: [number, number, number]; leafLengthM: number; targetLeafLengthM: number; cost: number; provenance: 'library' };
+    /** bladeWidthM: the entry's measured blade width; targetBladeWidthM: the species leaf's it was matched to (0: not matched on width). */
+    leaves: { entry: string; tint: [number, number, number]; leafLengthM: number; targetLeafLengthM: number; bladeWidthM?: number; targetBladeWidthM?: number; cost: number; provenance: 'library' };
     bark: {
         entry: string; tint: [number, number, number]; tileM: [number, number]; reliefIndex: number; targetReliefIndex: number; sizeShare: number;
         cost: number; provenance: 'library';
@@ -1882,7 +1883,8 @@ const DEFINITIONS = {
         texture: obj(['leaves', 'bark', 'massColourLinear', 'colourProvenance'], {
             leaves: obj(['entry', 'tint', 'leafLengthM', 'targetLeafLengthM', 'cost', 'provenance'], {
                 entry: { type: 'string', minLength: 1 }, tint: arr(ref('nonneg'), { minItems: 3, maxItems: 3 }), leafLengthM: { type: 'number', exclusiveMinimum: 0 },
-                targetLeafLengthM: { type: 'number', exclusiveMinimum: 0 }, cost: ref('nonneg'), provenance: { const: 'library' }
+                targetLeafLengthM: { type: 'number', exclusiveMinimum: 0 }, bladeWidthM: ref('nonneg'), targetBladeWidthM: ref('nonneg'),
+                cost: ref('nonneg'), provenance: { const: 'library' }
             }),
             bark: obj(['entry', 'tint', 'tileM', 'reliefIndex', 'targetReliefIndex', 'sizeShare', 'cost', 'provenance'], {
                 entry: { type: 'string', minLength: 1 }, tint: arr(ref('nonneg'), { minItems: 3, maxItems: 3 }),
