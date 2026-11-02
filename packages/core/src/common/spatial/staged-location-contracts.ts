@@ -762,7 +762,9 @@ export interface TreeLodExtras {
 export interface TreeClusterExtras { clusterMesh: string; hashSeed: number }
 
 /** Leaf blade length (m) = clamp(sizeRatio * crownHeightM, minM, maxM). Continuous, so it scales with the tree. */
-export interface TreeLeafSizeModel { sizeRatioToCrownHeight: number; minM: number; maxM: number }
+/** Blade length = clamp(sizeRatioToCrownHeight x crown height, minM, maxM); with a leaf texture chosen, its leaf's real
+ *  length within [minM, atlasMaxM] (a needle spray's shoot draws at its own size). */
+export interface TreeLeafSizeModel { sizeRatioToCrownHeight: number; minM: number; maxM: number; atlasMaxM?: number }
 
 /** One shared cluster mesh: how many leaves it holds at the near level (leavesLevel0), the near-mid level (trees-lod/2) and the mid level (leavesLevel1). */
 export interface TreeClusterVariant { mesh: string; leavesLevel0: number; leavesNearMid?: number; leavesLevel1: number }
@@ -1908,7 +1910,8 @@ const DEFINITIONS = {
         clusterLibrary: obj(['variants', 'leafSizeModel'], {
             variants: arr(obj(['mesh', 'leavesLevel0', 'leavesLevel1'], { mesh: { type: 'string', minLength: 1 }, leavesLevel0: NONNEG_INT, leavesNearMid: NONNEG_INT, leavesLevel1: NONNEG_INT }), { minItems: 1 }),
             leafSizeModel: obj(['sizeRatioToCrownHeight', 'minM', 'maxM'], {
-                sizeRatioToCrownHeight: ref('nonneg'), minM: { type: 'number', exclusiveMinimum: 0 }, maxM: { type: 'number', exclusiveMinimum: 0 }
+                sizeRatioToCrownHeight: ref('nonneg'), minM: { type: 'number', exclusiveMinimum: 0 }, maxM: { type: 'number', exclusiveMinimum: 0 },
+                atlasMaxM: { type: 'number', exclusiveMinimum: 0 }
             }),
             leafCard: obj(['widthRatio', 'uv', 'leafAttribute'], { widthRatio: { type: 'number', exclusiveMinimum: 0 }, uv: STR, leafAttribute: STR })
         }),

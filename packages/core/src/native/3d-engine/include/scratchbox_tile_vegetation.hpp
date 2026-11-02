@@ -5395,6 +5395,7 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
                 if (tr.hasTextures) {
                     in.cutoutFill = P.textures->leaves[tr.textures.leaf].fill;
                     in.cutoutAspect = P.textures->leaves[tr.textures.leaf].leafWidthM / std::max(1e-6, P.textures->leaves[tr.textures.leaf].leafLengthM);
+                    in.atlasLeafLengthM = P.textures->leaves[tr.textures.leaf].leafLengthM;
                     const auto& bark = P.textures->bark[tr.textures.bark];
                     in.barkTileAroundM = static_cast<float>(bark.tileAroundM);
                     in.barkTileAlongM = static_cast<float>(bark.tileAlongM);
@@ -6023,7 +6024,7 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
                         ",\"cells\":[" + cells + "]}";
         }
         members += ",\"sbTrees\":{\"schema\":\"scratchbox.trees-lod/3\",\"psiSeason\":" + json::num(std::clamp(P.psiSeason, 0.0, 1.0)) + ",\"clusterLibrary\":{\"variants\":[" + variants +
-                   "],\"leafSizeModel\":{\"sizeRatioToCrownHeight\":" + json::num(lib.params.leafSizeRatioToCrownHeight) + ",\"minM\":" + json::num(lib.params.leafMinM) + ",\"maxM\":" + json::num(lib.params.leafMaxM) + "}" +
+                   "],\"leafSizeModel\":{\"sizeRatioToCrownHeight\":" + json::num(lib.params.leafSizeRatioToCrownHeight) + ",\"minM\":" + json::num(lib.params.leafMinM) + ",\"maxM\":" + json::num(lib.params.leafMaxM) + ",\"atlasMaxM\":" + json::num(lib.params.atlasLeafMaxM) + "}" +
                    // a leaf card's TEXCOORD_0 (u = 0.5 + across / length, v = along / length): its outline's box is widthRatio wide
                    ",\"leafCard\":{\"widthRatio\":" + json::num(lib.params.morphology.blade.widthRatio) + ",\"uv\":\"TEXCOORD_0: u = 0.5 + across / blade length, v = along / blade length (base 0)\",\"leafAttribute\":\"_LEAF: x atlas pick in [0, 1), y 1 on a blade, 0 on a stalk or shoot\"}}" + cardsJson +
                    (P.textures ? ",\"textures\":{\"schema\":" + json::str(P.textures->schema) + ",\"index\":" + json::str(P.textureIndex) +

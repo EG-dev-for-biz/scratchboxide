@@ -1210,6 +1210,28 @@
       const LEAF_STRETCH = 2;          // a narrow leaf may be drawn up to this much wider (DEFAULT_LEAF_STRETCH)
       const CARD_ZOOM = [1, 1.15, 1.3, 1.3];
       const ALPHA_GAIN = [1, 1.1, 1.25, 1.25];
+      // how solid a set's leaves are (tree-texture-library.ts leafSolidity): smoothstep of its cells' fill over [0.42, 0.6];
+      // a blade's alpha is lifted with the mip level, a needle spray's porous cover cut at a hashed threshold
+      const SOLID_LEAF_FILL = [0.42, 0.6];
+      function leafSolidity(fill) {
+        const t = Math.min(1, Math.max(0, (fill - SOLID_LEAF_FILL[0]) / (SOLID_LEAF_FILL[1] - SOLID_LEAF_FILL[0])));
+        return t * t * (3 - 2 * t);
+      }
+      // hashed alpha (Wyman and McGuire 2017), as treeTextureMaterials.ts HASHED_ALPHA_FUNCTIONS
+      const HASHED_ALPHA_FUNCTIONS = `
+        float sbHash2( vec2 p ) { return fract( 1.0e4 * sin( 17.0 * p.x + 0.1 * p.y ) * ( 0.1 + abs( sin( 13.0 * p.y + p.x ) ) ) ); }
+        float sbHash3( vec3 p ) { return sbHash2( vec2( sbHash2( p.xy ), p.z ) ); }
+        float sbHashedThreshold( vec3 p ) {
+          float sbScale = 1.0 / max( max( length( dFdx( p ) ), length( dFdy( p ) ) ), 1e-6 );
+          float sbL = log2( sbScale );
+          vec2 sbS = vec2( exp2( floor( sbL ) ), exp2( ceil( sbL ) ) );
+          float sbF = fract( sbL );
+          float sbX = mix( sbHash3( floor( sbS.x * p ) ), sbHash3( floor( sbS.y * p ) ), sbF );
+          float sbA = max( min( sbF, 1.0 - sbF ), 1e-4 );
+          vec3 sbC = vec3( sbX * sbX / ( 2.0 * sbA * ( 1.0 - sbA ) ), ( sbX - 0.5 * sbA ) / ( 1.0 - sbA ), 1.0 - ( 1.0 - sbX ) * ( 1.0 - sbX ) / ( 2.0 * sbA * ( 1.0 - sbA ) ) );
+          float sbT = sbX < 1.0 - sbA ? ( sbX < sbA ? sbC.x : sbC.y ) : sbC.z;
+          return clamp( sbT, 1e-4, 1.0 );
+        }`;
       const LEAF_ATLAS_VERTEX_PARS = `
         attribute vec2 _leaf;
         uniform vec4 uSbCellA[ ${LEAF_CELLS_MAX} ];
@@ -1220,7 +1242,8 @@
         uniform float uSbZoom;
         varying vec2 vSbST;
         varying float vSbBlade;
-        varying vec3 vSbVar;`;
+        varying vec3 vSbVar;
+        varying vec3 vSbHashPos;`;
       const LEAF_ATLAS_VERTEX_MAIN = `
         {
           int sbI = int( clamp( floor( _leaf.x * uSbCellCount ), 0.0, uSbCellCount - 1.0 ) );
@@ -1249,28 +1272,40 @@
           float sbK = fract( sbJ * 3.71 + 0.29 );
           vSbVar = vec3( 1.0 + 0.18 * ( sbJ - 0.5 ) * ( 1.0 + 0.4 * ( sbK - 0.5 ) ), 1.0 + 0.18 * ( sbJ - 0.5 ),
                          1.0 + 0.18 * ( sbJ - 0.5 ) * ( 1.0 - 0.6 * ( sbK - 0.5 ) ) );
+          vSbHashPos = position;
+          #ifdef USE_INSTANCING
+            vSbHashPos += instanceMatrix[ 3 ].xyz;
+          #endif
         }`;
       const LEAF_ATLAS_FRAGMENT_PARS = `
         uniform vec3 uSbStem;
         uniform float uSbMipScale;
         uniform float uSbAlphaGain;
+        uniform float uSbSolidity;
         varying vec2 vSbST;
         varying float vSbBlade;
-        varying vec3 vSbVar;`;
+        varying vec3 vSbVar;
+        varying vec3 vSbHashPos;
+        ${HASHED_ALPHA_FUNCTIONS}`;
       // after map_fragment: a stalk takes the stalk colour; every leaf its own small variation of the tree's tint
       const LEAF_ATLAS_FRAGMENT_COLOR = `
         if ( vSbBlade < 0.5 ) diffuseColor.rgb = uSbStem * diffuse;
         diffuseColor.rgb *= vSbVar;`;
-      // after alphamap_fragment: a leaf seen small reads a coarse mip whose edges fall under the cutoff, so its alpha rises
-      // with the mip level; stalks are opaque; outside its cell a card shows nothing
+      // after alphamap_fragment: a blade seen small reads a coarse mip whose edges fall under the cutoff, so its alpha rises
+      // with the mip level (its solid share); a needle spray's averaged alpha is its true cover, cut at a hashed threshold
+      // so it draws that share of its pixels; stalks are opaque; outside its cell a card shows nothing
       const LEAF_ATLAS_FRAGMENT_ALPHA = `
         #ifdef USE_MAP
         {
           vec2 sbTexels = fwidth( vMapUv ) * vec2( textureSize( map, 0 ) );
           float sbMip = max( 0.0, log2( max( max( sbTexels.x, sbTexels.y ), 1e-6 ) ) );
-          diffuseColor.a *= ( 1.0 + sbMip * uSbMipScale ) * uSbAlphaGain;
+          diffuseColor.a *= ( 1.0 + sbMip * uSbMipScale * uSbSolidity ) * uSbAlphaGain;
         }
         #endif
+        {
+          float sbHashed = diffuseColor.a >= sbHashedThreshold( vSbHashPos ) ? 1.0 : 0.0;
+          diffuseColor.a = mix( sbHashed, diffuseColor.a, uSbSolidity );
+        }
         if ( vSbBlade < 0.5 ) diffuseColor.a = 1.0;
         else if ( vSbST.x < 0.0 || vSbST.x > 1.0 || vSbST.y < 0.0 || vSbST.y > 1.0 ) diffuseColor.a = 0.0;`;
 
@@ -1329,7 +1364,8 @@
           uSbZoom: { value: CARD_ZOOM[slot] },
           uSbStem: { value: new THREE.Vector3(...entry.colour.meanLinearRgb).multiplyScalar(0.55) },
           uSbMipScale: { value: 0.4 },
-          uSbAlphaGain: { value: ALPHA_GAIN[slot] }
+          uSbAlphaGain: { value: ALPHA_GAIN[slot] },
+          uSbSolidity: { value: leafSolidity(entry.leaf.fill) }
         };
         const mat = new THREE.MeshStandardMaterial({
           name: 'SB_Veggie_Leaves_' + entry.id, map: atlas.map, normalMap: atlas.normalMap, roughness: 0.6, metalness: 0.0,
@@ -1349,7 +1385,7 @@
             .replace('#include <map_fragment>', '#include <map_fragment>\n' + LEAF_ATLAS_FRAGMENT_COLOR)
             .replace('#include <alphamap_fragment>', '#include <alphamap_fragment>\n' + LEAF_ATLAS_FRAGMENT_ALPHA);
         };
-        mat.customProgramCacheKey = () => 'forestLeafAtlas/1';
+        mat.customProgramCacheKey = () => 'forestLeafAtlas/2';
         return mat;
       }
 

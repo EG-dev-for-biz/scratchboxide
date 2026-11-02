@@ -152,6 +152,10 @@ struct LodParams {
     double leafSizeRatioToCrownHeight{0.0065};
     double leafMinM{0.08};
     double leafMaxM{0.14};
+    // with a leaf texture chosen (TreeLodInput::atlasLeafLengthM), the cards take its leaf's real length within
+    // [leafMinM, atlasLeafMaxM] instead: a needle spray's shoot draws at its own size, not a blade's (the viewport cuts a
+    // porous set's cover at a hashed threshold, treeTextureMaterials.ts, so a large spray card does not draw as a flake)
+    double atlasLeafMaxM{0.5};
     double referenceLeafM{0.11};         // blade length the library clusters are built at (instances scale from it)
     // leaf clusters
     double clusterRadiusPerLeaf{7.0};    // reach of a cluster's sub-shoot spray, in blade lengths
@@ -1007,6 +1011,7 @@ struct TreeLodInput {
     double leafiness{1.0};                       // the crown's season cue (seasonLeafiness): scales psiSeason and the coverage target
     double cutoutFill{0.0};                      // the chosen leaf texture's fill of its cell (0: no textures; the cut-out coverage is not measured)
     double cutoutAspect{0.0};                    // ... and its leaf's width / length
+    double atlasLeafLengthM{0.0};                // ... and its leaf's real length (0: none; the cards take it, LodParams::atlasLeafMaxM)
 };
 
 /** What the leaves of a tree cover of its measured crown, seen from outside (LodParams coverage*, detail::CoverageViews). */
@@ -1418,7 +1423,7 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
     T.msTwigs = msSince(tPhase); tPhase = Clock::now();
     // ---- leaf-cluster stations ----
     const double H = in.heightAboveSupport;
-    T.leafLengthM = leafLengthFor(P, H);
+    T.leafLengthM = in.atlasLeafLengthM > 0 ? std::clamp(in.atlasLeafLengthM, P.leafMinM, P.atlasLeafMaxM) : leafLengthFor(P, H);
     const double baseScale = T.leafLengthM / P.referenceLeafM;
     double meanReach = 0;
     for (const auto& v : lib.variants) meanReach += v.level0.reach / static_cast<double>(lib.variants.size());

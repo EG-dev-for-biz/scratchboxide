@@ -169,14 +169,27 @@ describe('trees at four levels', () => {
             // triangles per level: near > near-mid > mid > far
             expect(b[0].triangles).toBeGreaterThan(b[1].triangles); expect(b[1].triangles).toBeGreaterThan(b[2].triangles); expect(b[2].triangles).toBeGreaterThan(b[3].triangles);
         }
-        // blade length follows the tree's height within the real range of leaf sizes
+        // blade length follows the tree's height within the real range of leaf sizes; with a leaf texture chosen (the
+        // default) the cards take that set's own leaf length instead, within [minM, atlasMaxM]
         const model = json.extras.sbTrees.clusterLibrary.leafSizeModel;
         expect(model.minM).toBeGreaterThanOrEqual(0.07);
         expect(model.maxM).toBeLessThanOrEqual(0.15);
+        expect(model.atlasMaxM).toBeGreaterThanOrEqual(model.maxM);
+        const index = JSON.parse(fs.readFileSync(path.join(REPO, 'assets/textures/trees/index.json'), 'utf8')) as { leaves: Array<{ id: string; leaf: { lengthM: number } }> };
+        const entryOf = new Map(trees.map((t: any) => [t.extras.sbTree.id, t.extras.sbTree.texture?.leaves?.entry as string | undefined]));
         const lens = planted.stats.perTree.map((t: any) => t.lod.leafLengthM as number);
-        for (const l of lens) { expect(l).toBeGreaterThanOrEqual(model.minM - 1e-9); expect(l).toBeLessThanOrEqual(model.maxM + 1e-9); }
-        // the taller tree's leaves are never smaller than a shorter one's
-        expect(lens[3]).toBeGreaterThanOrEqual(lens[0]);
+        planted.stats.perTree.forEach((t: any, k: number) => {
+            const entry = entryOf.get(t.crownId);
+            if (entry) {
+                const own = index.leaves.find(e => e.id === entry)!.leaf.lengthM;
+                expect(lens[k]).toBeCloseTo(Math.min(model.atlasMaxM, Math.max(model.minM, own)), 6);
+            } else {
+                expect(lens[k]).toBeGreaterThanOrEqual(model.minM - 1e-9);
+                expect(lens[k]).toBeLessThanOrEqual(model.maxM + 1e-9);
+            }
+        });
+        // without textures, the taller tree's leaves are never smaller than a shorter one's
+        if (!entryOf.get(planted.stats.perTree[3].crownId) && !entryOf.get(planted.stats.perTree[0].crownId)) expect(lens[3]).toBeGreaterThanOrEqual(lens[0]);
         // levels: the near-mid level draws about a third of the near level's triangles in its leaves, the mid level about an eighth
         for (const t of planted.stats.perTree) {
             const { level0, nearMid, level1 } = t.lod;

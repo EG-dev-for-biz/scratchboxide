@@ -1,7 +1,7 @@
 # Process: The forest demo page's floor, moss, fern and bark surfaces drawn from the texture library at real size
 
 > **Recorded:** 2026-11-02
-> **Status:** Verified (Wideshot, Canopy, Hero and Ferns bookmarks and four close views before and after; no console errors, no failed responses, no `/textures` request; the forest test passes with credentials unreachable). Section 6: conifer crowns now draw the needle-spray atlas (species classification linked to the leaf choice), Verified. Section 7: pointed crowns whose species holds its leader grow excurrent (a stem through the crown, laterals at the species' angle), Verified. Needs Fix, not done here: the page's lighting was tuned for the old maps (section 3), and spray-sized leaf cards need a porous-leaf coverage rule in the leaf shaders (section 7).
+> **Status:** Verified (Wideshot, Canopy, Hero and Ferns bookmarks and four close views before and after; no console errors, no failed responses, no `/textures` request; the forest test passes with credentials unreachable). Section 6: conifer crowns now draw the needle-spray atlas (species classification linked to the leaf choice), Verified. Section 7: pointed crowns whose species holds its leader grow excurrent (a stem through the crown, laterals at the species' angle), Verified. Needs Fix, not done here: the page's lighting was tuned for the old maps (section 3), and the crowns read lacier with spray-sized cards (section 8).
 > **Tags:** `operate-scratchbox` `demos` `pbr-materials` `texture-library` `forest-viewer` `sb-veggie` `tree-species`
 > **Target Domain:** static demo page `/forest_3d_viewer.html` and its native generator `scripts/generate_forest_procedural_3d.cpp`
 
@@ -176,3 +176,25 @@
   - The leaf shader's mip-alpha boost (`uSbMipScale`, meant to keep a solid leaf from eroding at distance) turned each distant spray card, which covers only 37% of its box, into an opaque flake. The page renders without MSAA, so alpha-to-coverage does not help.
   - The Wideshot read as a field of solid pale flakes, so the cards stay sized from crown height.
   - Drawing sprays at their real size needs a coverage rule for porous leaves (for example hashed alpha, and a boost scaled by the leaf's fill) in the app's viewport shader as well as the page's: a change of its own.
+
+---
+
+## 8. Needle sprays at their real size: a coverage rule for see-through leaves (same day)
+
+* **Why the spray-sized cards flaked** (section 7). A leaf seen small reads a coarse mip of its opacity, whose texels average leaf and gap.
+  - **A blade:** its averaged edge falls under the 0.5 cutoff and erodes, so the shader lifts alpha with the mip level (`uSbMipScale`).
+  - **A needle spray** covers 37% of its card (`leaf.fill` 0.368). Its averaged alpha is its true cover, and the lift raised it past the cutoff into a solid flake.
+  - three's alpha-to-coverage path also sharpens alpha at 0.5, and the forest page renders without MSAA.
+* **The rule:**
+  - `leafSolidity(fill)`, in `common/spatial/tree-texture-library.ts`, is a smoothstep of the atlas cells' measured fill over 0.42-0.60.
+  - The mip lift is scaled by it. The porous share (`1 - solidity`) is cut at a hashed threshold (Wyman and McGuire 2017, object-space at the pixel's scale, stable as the view moves), so a distant spray draws its true share of pixels with or without multisampling.
+  - Every broad leaf in the library (fill 0.615-0.71) has solidity 1 and draws exactly as before. The needle spray (`leaves_08`) is 0; the small lobed oak (`leaves_12`, 0.481) is 0.26.
+* **Where:**
+  - `treeTextureMaterials.ts`: the app's leaf shader (`LEAF_FRAGMENT_ALPHA`) and the textured crown cards (`CARD_ALPHA_COVER`; clay and masked cards unchanged).
+  - The forest page's copy.
+  - The photo-match evaluator's software cut-outs (`tree-lod-view.ts`, `photo-match-eval.ts`, `CutoutKind.solidity`: a pixel hash for its still frames), so the judge sees what the viewport draws.
+* **Leaf cards take the chosen atlas leaf's length** (`TreeLodInput::atlasLeafLengthM`, `LodParams::atlasLeafMaxM` 0.5 m; the trees GLB's `leafSizeModel.atlasMaxM`). The forest's sprays draw at 0.343 m. Broad-leaf textured trees draw at their atlas leaf's length (0.07-0.16 m) instead of 0.08-0.14 m from crown height.
+* **Checks:**
+  - **Live:** the app's own leaf and crown-card materials for `leaves_08` and `leaves_01`, built by `TreeTextureLibrary` from the served index and the crowns GLB's card layout, compile and link in WebGL in the Browser pane with no console errors (temporary check page, removed). On the forest page: 584 atlas cards drawn, no console errors or failed requests.
+  - **Screenshots:** `forest_spray_cards_2026-11-02.jpg` shows blade-sized cards, spray-sized cards with the old lift (flakes), and spray-sized cards with the rule.
+  - **Remaining:** crown triangles on screen fall (Wideshot 9.9 M to 3.8 M: stations are spaced by card size), so the crowns read lacier than the blade-sized ones.
