@@ -128,6 +128,21 @@ Under the user's $100, so no approval is needed. The actual spend is reported af
 5. Make the paid calls, one per place.
 6. Report against the bars, with a labelled proof sheet.
 
+## Amendment 1 (the ESB's views), before any ESB score
+
+Written after the Ferry's paid call and before the ESB's. No ESB view had been judged. No bar, arm or place changes.
+- **Why:** the ESB's probe found a single candidate pano (`uPcMge9M`) in its live search, and registration needs two, so it
+  judged nothing (`no_heldout_registered`, 2.5 s).
+  - **The dry run's search from the cache** (free) finds MAIN's six #21 views: YcgPbg5t, iL6aK4K9, 02zHXunY, mMKyx5tm,
+    GsL270ix and 58DEtdMq. MAIN found 6 of its 7 candidates registering when fetched for real.
+  - **The indoor rule does not cause the difference.** On the merged and on the unmerged footprints, it refuses none of the
+    seven.
+  - **The skill already names this:** a paid call that searches again finds other panos.
+- **The ESB's views are therefore the dry run's `heldOut.judgedPoses`.** That is the skill's own method (main, #15) and
+  MAIN's advice.
+- **They are fetched for real** by a probe pinned to them (`autoViews: false`, one run, no clay, no regions), era-checked on
+  that probe's grids, and pinned for the paid call as above. Fewer than 3 kept, and the ESB is not judged.
+
 ## Run record
 
 (none yet)
