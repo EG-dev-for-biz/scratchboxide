@@ -329,6 +329,123 @@ Values written as they are fixed.
 - **The arms' queue started at 09:54,** two builds at a time, when the load had fallen to 8 and the disk had 20 GB free (the
   parent session moving 27 GB of k-d's cold runs to the G-RAID). An arm stopped by a transient time limit is finished by
   the app's retry of the stage the result names, at most twice; every attempt is kept.
+- **The disk, resolved.** The parent session had the user mount the G-RAID and moved k-d's three cold runs (about 27 GB)
+  there; at 10:16 the Mac had 30 GB free.
+- **noFit (run 7d755776) degraded on the ownership vote's 300 s limit** (`ownership_vote_unavailable`, transient), with 13
+  builds sharing the vision model. In every other arm the vote moved 0.1% to 0.6% of the scan, under the 5% that would
+  replace the geometric isolate, so "the first isolate and everything built on it stand"; in noFit the geometric isolate
+  stood too, so its model is the one the vote would have left. Its ownership stage is retried by the app's retry anyway
+  (`retryRunId 7d755776`, `retryStage ownership`), to keep the rule that no judged arm carries a degradation K lacks.
+- **noOrient (run fb760328) carries `visible_defects`, which its switch explains, so it is judged.** With orient off the
+  scan's inward-facing pieces stay as they are, and the outside check sees their back faces: 1.46% of the building's pixels
+  through holes, 1.40% "showing the inside" (K default: 0.28%), worst at the back faces of FacadeLattice_10044 and
+  relief_m27/m28. That flag is the measured effect of the switch, not a failure of the build (the stop rule's "other than
+  what its switch explains").
+- **noFit is run 7d755776 and its ownership retry f0cec4a5** (complete). The first computed the twin (`..._l2_tex_41544a96`,
+  textures uncached); the retry rebuilt the recorded request, took that twin from the cache and finished the vote, which
+  moved too little to replace the isolate.
+- **noOccl is run 5452f902 and its remesh retry f44cd647** (complete). The first hit the remesh stage's 900 s limit while
+  13 builds shared the machine; the retry computed tile_refine with no occlusion, the straightening, window fit, polish and
+  twin.
+- **The arm check** (`check_arms.py`, the session's scratchpad) reads each arm's run chain: status, degradations, steps
+  skipped and failed, and every stage at or after its switch that came from the cache. It accepts a cached stage only when
+  an earlier attempt of the same arm committed it uncached. 18 arms passed at 10:42 (K, S1, S2, T0, X2, X3 and 12
+  one-offs); the three environment-variable arms were still building.
+- **The environment-variable arms** (noWalls, noSeams, noInpaint) were built from 10:33 on three more servers on this
+  worktree and its cache (`scratchbox-k-step-ablation-nowalls` API 3751, `-noseams` 3754, `-noinpaint` 3757), each with its
+  one variable and `SCRATCHBOX_CACHE_RESTORE=off`, beside the default server's last arm. Each switch changes a different
+  stage's key (the polish's `walls`, tile_refine's input, the rectify's `inpaint`), so the servers share nothing they write.
+- **The environment-variable arms, done by 10:51.** Each server's own process was checked to carry its one variable
+  (`ps eww`). noWalls is run 8b536d92 (complete; `remesh.wallSheets` skipped, the wall grammar, lattice and material regions
+  ran). noInpaint is run d4f92b93 (complete; its straightening recomputed with `fromInpaint` 0). noSeams is run ec2a7573;
+  no `tile_seams` note was written (the weld skipped), and it carries `visible_defects`, which its switch explains, so it is
+  judged. The outside check finds new long, narrow openings, where K's holes are all 30 m² or less: 94 m² (34.1 x 2.76 m) at
+  96 m up, 21.8 m² (37.5 x 0.58 m) and 21.4 m² (36 x 0.6 m). Unwelded tile seams leave cracks of that shape. Its share
+  through holes is 0.40%, against 0.28% for K and the 1% limit.
+- **Every arm, as judged** (run, then its twin; all in `public/models/`, `empire_state_building_new_york_iso_l2_tex_<key>.glb`):
+
+  | Arm | Run (chain) | Twin key | Arm | Run (chain) | Twin key |
+  |---|---|---|---|---|---|
+  | K | 61b8974b (b9684a9b, 15a376d6) | c95df7ef | noRead | bef0accc | 445f88e3 |
+  | T0 | 4b1a3f7a | de179f7e | noClean | 824962ea | 93dafc1b |
+  | noSeams | ec2a7573 | d6928382 | noLattice | 0e36316b | 9a45dd4e |
+  | noOccl | f44cd647 (5452f902) | 4c77c6ba | noBase | 9b68ee31 | 31e55eb0 |
+  | noInpaint | d4f92b93 | 34fbc9f5 | noClip | 36db5cbb | 40a87e7d |
+  | noFit | f0cec4a5 (7d755776) | 41544a96 | noInfill | a1d4b090 | 0f163e43 |
+  | noWalls | 8b536d92 | c5cbd72f | noOrient | fb760328 | 4ce2a7cd |
+  | noHarm | d7a32089 | 16d062fb | noShadow | 6969b1f9 | df247a08 |
+  | noMat | 6dec3e8e | 27f35a3d | | | |
+
+  S1, S2, X2 and X3 are the files in `public/models/k_ablation/` above.
+- **The builds' spend, measured.** Every vision reply the builds made is in this workspace's vision-reply cache (a reply
+  is cached once and served again for identical inputs, so these are the billed calls): 2,188 `gemini-3.8-flash` calls
+  (3.37 M tokens in, 0.69 M out and thinking), $5.13; 45 `gemini-4-argon` calls, $0.56. Street View: each of up to 23 runs
+  surveyed 16 faces, at most 368 images, about $2.60 (an upper bound: repeated fetches may have come from the image cache).
+  **About $6 to $8.50 for the builds**, against the estimate of $4 to $24.
+- **The full free dry run (Step 2), 10:52 to 11:05,** every server stopped, all 21 arms and the raw baseline, credentials
+  unreachable. Out: `docs/screenshots/k_step_ablation_2026-11-02/esb_dryrun/`.
+  - Every arm drew at every view (22 renders a view); 24 stand-in calls (12 textured, 12 clay), as preregistered.
+  - 20 build panos excluded: K's run 17 and T0's run 3 more. The union of the panos named in all 21 run folders, the
+    arms' earlier attempts included, is the same 20, so no pano any build used can be judged.
+  - The same four views as the early dry run; placement in v0 and v1 only.
+  - Placement (stand-in, deciding nothing): raw 2.45, S1 2.53, noBase 2.84, K and every arm whose geometry is K's 3.94,
+    the other geometry arms 3.96 to 4.15, X2 10.55. **D = (10.55 − 3.94) / 2 = 3.3 px**, above the 2 px floor.
+  - The grids, looked at: every arm with the twin is drawn washed-out grey, T0 (de-light only) as much as K; S2 (before
+    the twin) keeps the stone's colour but shows doubled and smeared windows; noFit and noLattice show fewer of them. On
+    the stand-in "photo" (the tile itself) this says where the renders differ, not which is better.
+- **The fetch list.** The dry-run driver reports only a count of fetched views, so, as M1 did, a scratch copy of it (never
+  committed, deleted after) logged the stand-in's grounding requests: G8sOFZp8 (46 m), 58DEtdMq (118 m, looking up 30°),
+  IfRssLv6 (51 m), YcgPbg5t (47 m), QcCvIfC8 (90 m), pIZTkAVT (82 m), mMKyx5tm (98 m, up 30°), AGFKaBOw (55 m).
+- **The era check** (M1's amendment 7 method): the 8 photos fetched through the app (`streetview_grounding_image`, 8
+  images, about $0.06), each set beside the tile at its stand-in pose
+  (`docs/screenshots/k_step_ablation_2026-11-02/era_check/era_check_sheet.jpg`).
+
+  | View | Photo | Kept, and why |
+  |---|---|---|
+  | G8sOFZp8 h218 | 2026-04 | kept: the 34th St podium, the same window grid and storefront base as the tile |
+  | 58DEtdMq h318 up 30° | 2026-04 | kept: the tower over a lower building, as in the tile |
+  | IfRssLv6 h51 | 2024-09 | kept: the podium and its curved entrance canopy, which the tile holds too |
+  | YcgPbg5t h322 | 2026-04 | kept: the street along the podium, the canopy at the right, as in the tile |
+  | QcCvIfC8 h196 | 2026-04 | kept: the neighbour's Liberty-bear mural and the Build-A-Bear front are in the tile too, so the same era |
+  | pIZTkAVT h289 | 2024-09 | kept: the podium with the Starbucks Reserve and the tall Art Deco bay, as in the tile |
+  | mMKyx5tm h334 up 30° | 2026-04 | kept: the tower behind a white building, as in the tile |
+  | AGFKaBOw h195 | **2010-07** | **dropped:** an indoor pano taken inside a shop, looking out through its door; the target is not in the photo, so its era cannot be read |
+
+  AGFKaBOw is passed as `excludePanoIds`, and the logging dry run is made again to find the view that replaces it.
+- **The swap** (the logging dry run with AGFKaBOw excluded, all arms, 11:25 to 11:36,
+  `docs/screenshots/k_step_ablation_2026-11-02/esb_dryrun_swap1/`). The fetch list is the 7 kept views and hKrY0_rr
+  (2024-09, 62 m, h206). Its photo (fetched through the app, 1 image) shows the podium's Starbucks Reserve and Chipotle bays,
+  the piers and the two storeys of windows the tile holds at that pose: **kept**
+  (`era_check/pair_9_hKrY0_rr.jpg`). All 8 views of the paid call's fetch list are era-checked.
+  - The stand-in judges G8sOFZp8, YcgPbg5t, IfRssLv6 and hKrY0_rr (the nearest four that register); placement in three of
+    them. Every arm drew at every view; 24 stand-in calls.
+  - **D is 3.58 px:** half X2 − K on these final views. That is the dry run on the paid call's own arguments, and it is
+    stricter than the 3.3 px of the full dry run before the swap.
+- **The paid call's arguments,** fixed here before it is made: every arm in the table below, in the preregistration's order
+  (K first), `views: 4, runs: 3, clay: true, judgeRegions: true, trees: true, baseline: true, includeSatelliteOrtho: false,
+  excludePanoIds: ["AGFKaBOwt9kkXfbWrA7ljA"]`; 22 renders a call, 24 calls.
+- **Spend before the paid call:** builds about $6 to $8.50 (measured above), era-check photos 9 (about $0.06).
+- **A follow-up for the view selection, not changed here** (the judge's code is the M1 session's): AGFKaBOw stands inside
+  the ESB's ground floor, so the tile has a surface under it and its sight line crosses no empty tile, and the past-edge
+  and sight-line rules let it through. A pano inside the target's own footprint is never a street view of it.
+- **The queue ran all 13 `steps` arms at once, not two at a time.** Its limit (`jobs -r` inside the script's pipeline)
+  saw no jobs, so the arms started 20 s apart from 09:55 to 09:58. The machine held it (load about 66, the server 17.5 GB,
+  27 GB free at 10:11), so they were left to run; an arm stopped by a time limit is finished by the app's retry. This
+  changes how long each arm took, not what it computed.
+- **A coupling found in the build, like those in the table: the lattice off also leaves material regions out.** noLattice
+  (run 0e36316b) logged `twin.materials` failed at once, and its note reads "no rebuilt facade photo to read appearance
+  classes from": material regions read the lattice's rebuilt facades, so with none there is nothing to classify. So
+  noLattice is the lattice and material regions off together. noMat, built separately, tells the two apart.
+- **An early free dry run** (09:59 to 10:09, the same driver and conditions as Step 2) on K, raw, S1, S2, X2 and X3 only,
+  to catch render problems while the arms build. Out: `docs/screenshots/k_step_ablation_2026-11-02/esb_dryrun_early/`.
+  - Every arm drew at every view; 24 stand-in calls; 17 build panos excluded; `matchedShare` 0.996; raw's frame
+    agreement 1.00 in every view.
+  - The fetch list's nearest 4: G8sOFZp8 (2026-04, 46 m), YcgPbg5t (2026-04, 46 m; the tile ends inside 9.1% of it),
+    IfRssLv6 (2024-09, 52 m), AGFKaBOw (**2010-07**, 56 m). All four stand on the podium's sidewalks. In the stand-in, v3's
+    eye stands against the podium wall, which fills the frame.
+  - Placement only in v0 and v1 (v2 and v3: the target fills the frame, no silhouette): raw 2.45, K 3.94, S1 2.53,
+    S2 3.94, X2 10.55, X3 3.94. X3 and S2 equal K exactly, as their geometry is K's.
+  - It led to amendment 1. The full dry run (all arms) is still Step 2, and sets D.
 - **K default's stage-cut snapshots** were cloned (APFS `cp -c`, no extra space) the moment its remesh committed, before any
   other build could overwrite their unkeyed names: `public/models/k_ablation/S1_K_15a376d6_step_remesh_tileRefine.glb` and
   `S2_K_15a376d6_step_polish_orient.glb` (sha256 of S2 checked against the published file).
