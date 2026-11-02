@@ -100,7 +100,7 @@ These rules are for coding agents changing this repository. The in-app chat mode
   - write binary `.glb` and keep the raw extraction;
   - start new workflows from a fresh extraction, never from stale intermediate `.glb`s in `public/models/`;
   - no landmark dictionaries or coordinate hashes: missing coordinates or credentials throw an actionable error.
-- **Atomic building integrity.** No extraction boundary, slice or frustum may cut through a building. The vertical extent is unbounded upward. Grow the boundary to whole connected structures and natural clearings. Contextual cameras must cover the full skyline height.
+- **Atomic building integrity.** No extraction boundary, slice or frustum may cut through a building. The vertical extent is unbounded upward. Grow the boundary to whole connected structures and natural clearings. Contextual cameras must cover the full skyline height. A building two vector feature tiles both carry is one building (`vector-footprints.ts` `mergeTileCopies`: Google names a feature by its tile, so a building on a tile edge arrives twice; kept apart, the copy rasterised last took the Ferry Building's tower from the footprint under the place, 2026-11-02).
 - **Camera dataset conventions** (Nerfstudio export):
   - OpenCV → Nerfstudio camera-to-world flips the Y and Z columns: T_ns = T_cv · diag(1, −1, −1, 1);
   - masks are binarized at ≥ 128;

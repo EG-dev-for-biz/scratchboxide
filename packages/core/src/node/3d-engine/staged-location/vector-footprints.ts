@@ -137,7 +137,58 @@ export async function fetchVectorEvidence(opts: {
             pois.push({ x, z, types: typesOf(p.properties), ...(name ? { name } : {}) });
         }
     }
-    return { buildings: [...byFeature.values()], water, roads, roadTypes, rails, landuse, pois, tiles: tiles.length, zoom: z };
+    return { buildings: mergeTileCopies([...byFeature.values()]), water, roads, roadTypes, rails, landuse, pois, tiles: tiles.length, zoom: z };
+}
+
+/** Buildings of two different feature tiles whose plans overlap by at least this share of the smaller plan are one building. */
+export const SAME_BUILDING_PLAN_OVERLAP = 0.5;
+
+/**
+ * One building two feature tiles carry is one building. A tile carries every feature that reaches into it, a modelled
+ * volume whole, and names its features by the tile (z/x/y/f<i>), so a building on a tile edge arrives twice under two
+ * ids, and rasterised, the copy drawn last takes the cells they share and leaves the other a sliver (the Ferry Building,
+ * 2026-11-02: the footprint under the place kept a 376 m² strip, and its clock tower, under the other copy, was left out
+ * of the structure as a neighbour's). Buildings of different tiles whose plans (on `cellMeters` cells) overlap by at
+ * least SAME_BUILDING_PLAN_OVERLAP of the smaller plan are merged under the first one's id, every part, extrusion and
+ * volume kept. Buildings of one tile are never merged (the tile draws them apart), and neighbours that only touch share
+ * no plan.
+ */
+export function mergeTileCopies(buildings: VectorBuilding[], cellMeters = 1): VectorBuilding[] {
+    const tileOf = (id: string) => id.split('/').slice(0, 3).join('/');
+    // each building's plan on cells aligned to one grid, so two plans compare cell for cell
+    const plans = buildings.map(b => {
+        let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+        for (const part of b.parts) for (const loop of part) for (const [x, z] of loop) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); }
+        if (!(maxX > minX && maxZ > minZ)) return undefined;
+        const i0 = Math.floor(minX / cellMeters), k0 = Math.floor(minZ / cellMeters);
+        const g: EvidenceGrid = { x0: i0 * cellMeters, z0: k0 * cellMeters, nx: Math.ceil(maxX / cellMeters) - i0 + 1, nz: Math.ceil(maxZ / cellMeters) - k0 + 1, cellMeters };
+        const cells = new Uint8Array(g.nx * g.nz);
+        for (const part of b.parts) fillLoops(part, g, cells, 1);
+        let area = 0;
+        for (const c of cells) area += c;
+        return { i0, k0, nx: g.nx, nz: g.nz, cells, area };
+    });
+    const parent = buildings.map((_, i) => i);
+    const find = (i: number): number => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+    for (let a = 0; a < buildings.length; a++) for (let b = a + 1; b < buildings.length; b++) {
+        const pa = plans[a], pb = plans[b];
+        if (!pa || !pb || !pa.area || !pb.area || tileOf(buildings[a].id) === tileOf(buildings[b].id)) continue;
+        const i0 = Math.max(pa.i0, pb.i0), i1 = Math.min(pa.i0 + pa.nx, pb.i0 + pb.nx), k0 = Math.max(pa.k0, pb.k0), k1 = Math.min(pa.k0 + pa.nz, pb.k0 + pb.nz);
+        if (i0 >= i1 || k0 >= k1) continue;
+        let shared = 0;
+        for (let k = k0; k < k1; k++) for (let i = i0; i < i1; i++) if (pa.cells[(k - pa.k0) * pa.nx + i - pa.i0] && pb.cells[(k - pb.k0) * pb.nx + i - pb.i0]) shared++;
+        if (shared >= SAME_BUILDING_PLAN_OVERLAP * Math.min(pa.area, pb.area)) { const ra = find(a), rb = find(b); if (ra !== rb) parent[Math.max(ra, rb)] = Math.min(ra, rb); }
+    }
+    const merged = new Map<number, VectorBuilding>();
+    buildings.forEach((b, i) => {
+        const r = find(i), m = merged.get(r);
+        if (!m) { merged.set(r, { ...b, parts: [...b.parts], ...(b.extruded ? { extruded: [...b.extruded] } : {}), ...(b.volumes ? { volumes: [...b.volumes] } : {}) }); return; }
+        m.parts.push(...b.parts);
+        if (b.extruded) (m.extruded ??= []).push(...b.extruded);
+        if (b.volumes) (m.volumes ??= []).push(...b.volumes);
+        if (b.heightM !== undefined) m.heightM = Math.max(m.heightM ?? 0, b.heightM);
+    });
+    return [...merged.values()];
 }
 
 export interface EvidenceGrid { x0: number; z0: number; nx: number; nz: number; cellMeters: number }
