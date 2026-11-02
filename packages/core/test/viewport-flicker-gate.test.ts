@@ -30,9 +30,12 @@ type V3 = [number, number, number];
 const ROOT = 'scratchbox-cpp-generated-root';
 
 /** Whole-frame and worst-block energy steps between frames, as fractions. */
-// set between what the viewport measured with temporal anti-aliasing (on: 0.02 % / 0.04 % / 0.57 % / 0.86 %) and
-// without it (off: 0.05 % / 0.18 % / 1.45 % / 1.97 %) on 2026-10-28: a change that brings the flicker back fails
-export const FLICKER_LIMITS = { frameMean: 0.0004, frameMax: 0.001, blockMean: 0.01, blockMax: 0.014 };
+// set between what the viewport measured with temporal anti-aliasing (on: 0.013 / 0.015 %, 0.037 / 0.052 %, 0.32 / 0.31 %,
+// 0.44 / 0.53 %) and without it (off: 0.018 / 0.026 %, 0.085 / 0.082 %, 1.37 / 1.47 %, 1.64 / 2.00 %) at half resolution on
+// 2026-11-02, on a Mac GPU / on SwiftShader (the software WebGL of a GPU-less Linux runner): a change that brings the
+// flicker back fails. The whole-frame mean alone does not tell them apart at this size; the block steps and the on/off
+// ratio below do. (At full resolution, 2026-10-28: on 0.02 / 0.04 / 0.57 / 0.86 %, off 0.05 / 0.18 / 1.45 / 1.97 %.)
+export const FLICKER_LIMITS = { frameMean: 0.0003, frameMax: 0.0008, blockMean: 0.007, blockMax: 0.01 };
 
 function grilleGlb(): string {
     const positions: number[] = [], indices: number[] = [];
@@ -142,7 +145,9 @@ describe.skipIf(!stagedChrome.ok)('flicker gate in the real viewport (headless C
 
     beforeAll(async () => {
         glb = grilleGlb();
-        page = await openStagedPage({ width: 1100, height: 720, shotDir: SHOTS, manualFrames: true });
+        // drawn at half resolution (550 x 360 device pixels): software WebGL draws the 80 frames of depth of field, flare,
+        // diffusion and anti-aliasing 4x faster, inside the test's time on a 2-vCPU runner, and the grille stays finer than a pixel
+        page = await openStagedPage({ width: 1100, height: 720, shotDir: SHOTS, manualFrames: true, deviceScaleFactor: 0.5 });
         await mount(scene({ position: EYE, target: TARGET, fov: 26.99, lens: lens(true) }));
         // the hardest case for flicker: detail far brighter than white on black (lit windows at night, glints)
         await page.eval(`(() => {

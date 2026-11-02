@@ -33,7 +33,29 @@ export const PBR_INDEX_SUFFIX = '_index';
 export const PBR_INDEX_VERSION = 1;
 export const PBR_SHORTLIST = 12;
 export const PBR_THUMB_PX = 160;
-const FONT = '/System/Library/Fonts/Helvetica.ttc';
+/** 3 x 5 bitmap digits, row by row: the contact sheet's numbers are drawn as boxes, so an ffmpeg built without drawtext
+ *  (Homebrew's) and a machine without the macOS font still number it. */
+const DIGITS = ['111101101101111', '010110010010111', '111001111100111', '111001111001111', '101101111001001', '111100111001111', '111100111101111', '111001001001001', '111101111101111', '111101111001111'];
+
+/** An ffmpeg filter chain drawing `n` in white on a black@0.7 badge at the image's top left, 5 px per digit pixel. */
+function numberBadge(n: number, px = 5, at = 6): string {
+    const digits = String(n).split('').map(Number);
+    const boxes = [`drawbox=x=${at}:y=${at}:w=${(digits.length * 4 + 1) * px}:h=${7 * px}:color=black@0.7:t=fill`];
+    digits.forEach((d, k) => {
+        for (let r = 0; r < 5; r++) {
+            const row = DIGITS[d].slice(r * 3, r * 3 + 3);
+            for (let c = 0; c < 3;) {
+                if (row[c] !== '1') { c++; continue; }
+                let e = c;
+                while (e < 3 && row[e] === '1') e++;
+                boxes.push(`drawbox=x=${at + (1 + k * 4 + c) * px}:y=${at + (1 + r) * px}:w=${(e - c) * px}:h=${px}:color=white:t=fill`);
+                c = e;
+            }
+        }
+    });
+    return boxes.join(',');
+}
+
 const CACHE_ROOT = path.join(os.homedir(), '.scratchbox', 'pbr-library-cache');
 
 export function resolvePbrLibrary(given?: string): string {
@@ -339,7 +361,7 @@ export async function fastMatchSwatchToLibrary(swatch: { photo: string; descript
         fs.mkdirSync(workDir, { recursive: true });
         const contact = path.join(workDir, `contact_${path.basename(swatch.photo, path.extname(swatch.photo))}.jpg`);
         const cols = 4, rows = Math.ceil(shortlist.length / cols);
-        const labels = shortlist.map((n, i) => `[${i}]drawtext=fontfile=${FONT}:text='${i + 1}':x=6:y=6:fontsize=28:fontcolor=white:box=1:boxcolor=black@0.7[l${i}]`);
+        const labels = shortlist.map((n, i) => `[${i}]${numberBadge(i + 1)}[l${i}]`);
         const pads = Array.from({ length: rows * cols - shortlist.length }, (_, i) => `color=white:s=${PBR_THUMB_PX}x${PBR_THUMB_PX}[l${shortlist.length + i}]`);
         const grid = [...labels, ...pads].join(';') + ';' + Array.from({ length: rows }, (_, r) => `${Array.from({ length: cols }, (_, c) => `[l${r * cols + c}]`).join('')}hstack=${cols}[r${r}]`).join(';') + ';' + (rows > 1 ? `${Array.from({ length: rows }, (_, r) => `[r${r}]`).join('')}vstack=${rows}` : '[r0]null');
         const thumbs = await Promise.all(shortlist.map(n => library.thumb(n)));
@@ -371,7 +393,7 @@ export async function matchSwatchToLibrary(swatch: { photo: string; description:
     fs.mkdirSync(workDir, { recursive: true });
     const contact = path.join(workDir, `contact_${path.basename(swatch.photo, path.extname(swatch.photo))}.jpg`);
     const cols = 4, rows = Math.ceil(short.length / cols);
-    const labels = short.map((n, i) => `[${i}]drawtext=fontfile=${FONT}:text='${i + 1}':x=6:y=6:fontsize=28:fontcolor=white:box=1:boxcolor=black@0.7[l${i}]`);
+    const labels = short.map((n, i) => `[${i}]${numberBadge(i + 1)}[l${i}]`);
     const pads = Array.from({ length: rows * cols - short.length }, (_, i) => `color=white:s=${PBR_THUMB_PX}x${PBR_THUMB_PX}[l${short.length + i}]`);
     const grid = [...labels, ...pads].join(';') + ';' + Array.from({ length: rows }, (_, r) => `${Array.from({ length: cols }, (_, c) => `[l${r * cols + c}]`).join('')}hstack=${cols}[r${r}]`).join(';') + ';' + (rows > 1 ? `${Array.from({ length: rows }, (_, r) => `[r${r}]`).join('')}vstack=${rows}` : '[r0]null');
     const thumbs = await Promise.all(short.map(n => library.thumb(n)));

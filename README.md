@@ -95,7 +95,7 @@ npm test           # vitest: packages/core/test/**  +  desktop-app/test/**
 ```
 
 `npm run test:core` / `npm run test:desktop` run one workspace; `npm run test:watch` watches.
-CI (`.github/workflows/ci.yml`) runs all four plus a no-push Docker build.
+CI (`.github/workflows/ci.yml`) runs all four (on Ubuntu, the tests in ten shards split by measured time) plus a no-push Docker build.
 
 #### Test prerequisites
 
