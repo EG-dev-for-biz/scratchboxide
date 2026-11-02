@@ -1,7 +1,14 @@
 # Preregistration: which step of pipeline K makes it score worse than the raw scan
 
 Date: 2026-11-02. Status: **written before any paid call.** Nothing below changes after this line except the run record
-and the report. A bar, arm, place or view changed after a paid call is a new preregistration that names this one.
+and the report.
+
+**Result (2026-11-02, after the one paid call): indicative only, nothing named.**
+- Only 2 of the 8 fetched views registered, and the preregistration needs 3 judged views.
+- The stage cuts point at the twin's de-light, a step with no off switch: 1.17 of K's 1.83 gap to the raw scan on overall.
+- The facade rebuild accounts for most of the rest.
+- No one-step-off arm reaches the raw scan.
+- See "Report". A bar, arm, place or view changed after a paid call is a new preregistration that names this one.
 
 Branch `feat/k-step-ablation`, cut from `84b54d44` (the tip of `feat/m1-judge-kd`, PR #5). The judge's code
 (`photo-match-evaluate.ts`, `photo-match-eval.ts`) is used as it stands there and is not edited here.
@@ -425,6 +432,10 @@ Values written as they are fixed.
   (K first), `views: 4, runs: 3, clay: true, judgeRegions: true, trees: true, baseline: true, includeSatelliteOrtho: false,
   excludePanoIds: ["AGFKaBOwt9kkXfbWrA7ljA"]`; 22 renders a call, 24 calls.
 - **Spend before the paid call:** builds about $6 to $8.50 (measured above), era-check photos 9 (about $0.06).
+- **The paid call** was made once, at 11:22, through the app's tool endpoint on the default server (API 3741, restarted at
+  11:13 with `SCRATCHBOX_CACHE_RESTORE=off`, the other servers stopped), with the arguments above. The tool-node endpoint
+  sets no tool time limit (`gemini-service.ts` `runToolNode` passes none; the chat's 30 min for `photo_match_evaluate`
+  does not apply), so the 22-arm call could not be cut off part way.
 - **A follow-up for the view selection, not changed here** (the judge's code is the M1 session's): AGFKaBOw stands inside
   the ESB's ground floor, so the tile has a surface under it and its sight line crosses no empty tile, and the past-edge
   and sight-line rules let it through. A pano inside the target's own footprint is never a street view of it.
@@ -452,4 +463,115 @@ Values written as they are fixed.
 
 ## Report
 
-(after the paid call)
+### The result (2026-11-02): indicative only, nothing named
+
+**The paid call, eval `empire_state_building_20_w_34th__20261102T192257_597f`** (11:22 to 11:35):
+- Every judge call was answered by `gemini-4-argon`, with no retry, 403 or failure.
+- Only **2 of the 8 fetched views registered**, so only 2 were judged.
+- Amendment 1 says a run with fewer than 3 judged views is indicative only and names nothing. So **no step is named**, and
+  the Haughwout and the Ferry were not run.
+- The numbers below are what the call measured. They point somewhere, and they decide nothing.
+
+**Why only 2 views.**
+- **The fetch list was not the one the era check checked.** The paid call's own pano lookup (Street View metadata round the
+  isolate) found more panos than the dry-run driver lists from the build's metadata cache, M1's ESB views among them.
+  - Fetched: VqOxFz9R, uPcMge9M, G8sOFZp8, QcCvIfC8, Q1IjAWuz, hKrY0_rr, p88-CBpq and cCtlAloF.
+  - 21 build panos were excluded, against 20 in the dry run.
+- **Six did not register:** "the edge search did not lock onto the scan". G8sOFZp8 went from 12 to 6.35 px, the other
+  five from 12 to 12 px, against a bar of at most 5 px.
+- **The two judged views:**
+  - VqOxFz9R, 2024-09, 83 m: residual 3.16 to 1.10 px. Every region is in frame.
+  - uPcMge9M, 2026-04, 92 m: residual 3.61 to 2.11 px. The tile ends inside 5.2% of the frame, so its regions are left
+    out.
+
+  Both were era-checked and kept in the M1 rerun (its amendment 7 list). Of the views this run's era check covered, only
+  those two and the swap were fetched again.
+
+**Against the bars.**
+
+| Bar | Value | Result |
+|---|---|---|
+| V1 run spread, overall, mean over all arms | 0.086 | met |
+| V2 X2 placement minus K, over the 2 placement views | 16.47 − 4.58 = +11.89 px, D 3.58 | met |
+| V3 X3 at least 1.0 below K on materials and overall | materials 3.67 → 3.00 (−0.67), overall 4.00 → 3.00 (−1.00) | **missed** (materials) |
+| V4 raw frame agreement; `matchedShare` | 1.00, 1.00; 0.996 | met |
+| P raw above K on overall at 3 of 4 views or more | raw 5.83 ± 0.47, K 4.00 ± 0.00 (gap 1.83), raw ahead in 2 of 2 | untested: 2 views |
+| Judged views | 2 | **under 3: indicative only (amendment 1)** |
+
+- **V3's miss says something too:** the judge scores K's materials only 0.67 above one flat grey.
+- **X3's clay renders equal K's:** they score 5.34 each, a gap of 0.00 on identical images.
+
+**Every arm (building mask; judge mean ± run spread; placement in px, lower is better):**
+
+| Arm | Overall | Shape | Materials | Clay shape | Placement |
+|---|---|---|---|---|---|
+| raw | 5.83 ± 0.47 | 5.83 ± 0.47 | 5.50 | 3.34 ± 0.24 | 3.85 |
+| **K** | **4.00 ± 0.00** | **4.50 ± 0.00** | **3.67** | **5.34 ± 0.24** | **4.58** |
+| S1 after tile_refine | 5.83 ± 0.47 | 5.83 ± 0.47 | 5.50 | 3.50 ± 0.00 | 3.91 |
+| S2 before the twin | 5.17 ± 0.24 | 4.67 ± 0.24 | 5.33 | 5.34 ± 0.24 | 4.58 |
+| T0 de-light only | 4.00 ± 0.00 | 4.50 ± 0.00 | 3.67 | 5.34 ± 0.24 | 4.58 |
+| noFit | 4.67 ± 0.24 | 5.50 ± 0.00 | 3.67 | 5.00 ± 0.82 | 4.52 |
+| noLattice | 4.67 ± 0.24 | 5.50 ± 0.00 | 3.67 | 3.50 ± 0.00 | 3.91 |
+| noBase | 3.84 ± 0.24 | 4.50 | 3.67 | 5.34 | 4.63 |
+| noWalls | 4.00 | 4.67 ± 0.24 | 3.67 | 6.34 ± 0.24 | 4.79 |
+| noSeams | 4.00 | 4.50 ± 0.47 | 3.50 | 6.67 ± 0.47 | 4.58 |
+| noOccl | 4.00 | 4.50 | 3.67 | 5.50 ± 0.47 | 4.34 |
+| noClean | 4.00 | 4.50 | 3.67 | 4.67 ± 0.24 | 4.64 |
+| noInpaint, noRead, noClip, noInfill, noOrient, noHarm, noShadow, noMat | 4.00 ± 0.00 each | 4.50 each | 3.67 each | 5.34 ± 0.24 each | 4.58 each |
+| X2 moved 4 m | 3.50 | 3.67 ± 0.24 | 3.50 | 4.34 ± 0.24 | 16.47 |
+| X3 flat colour | 3.00 | 4.50 | 3.00 | 5.34 ± 0.24 | 4.58 |
+
+- No arm can read "moves K": amendment 1 needs 3 judged views for the judge's metrics, and the same sign at every
+  placement view for placement.
+- Per view, overall (VqOxFz / uPcMge):
+  - raw 5.33 / 6.33; S1 5.33 / 6.33; S2 5.00 / 5.33; T0 4.00 / 4.00;
+  - K 4.00 / 4.00; noFit and noLattice 4.33 / 5.00.
+- Placement, VqOxFz:
+  - raw 4.09, S1 4.13, noLattice 4.19, against K and S2 5.62;
+  - in uPcMge all lie within 3.53 to 3.69.
+
+**What it points at, for the next preregistration to test.** This is not a finding of this run.
+1. **The twin's de-light, a step with no off switch, holds most of the loss.**
+   - On overall: S2 5.17, then T0 4.00, which is K's 4.00. That is 1.17 of the 1.83 gap.
+   - On materials: 5.33, then 3.67.
+   - Every switchable twin step scores exactly K's numbers (noHarm, noShadow, noMat, noRead): harmonising, the roof-shadow
+     lift, material regions and the facade reader change nothing the judge sees.
+   - The grids show it plainly. raw, S1 and S2 keep the photo's beige stone, dark windows and black storefront band, while
+     T0 and every arm with the twin are a flat light grey, storefront included
+     (`docs/screenshots/k_step_ablation_2026-11-02/esb_paid/grid_v0_VqOxFz.png`).
+2. **The facade rebuild (rectify, lattice, window fit) holds the rest.**
+   - S1 5.83 to S2 5.17 overall, and 5.83 to 4.67 on shape: the textured renders show doubled, smeared windows.
+   - noLattice and noFit recover 0.67 of it (4.67; shape 5.50) and bring placement at VqOxFz back to the scan's.
+   - In clay the rebuild is better than the scan: K 5.34 against raw 3.34 and noLattice 3.50, with noWalls and noSeams
+     highest at 6.34 and 6.67. So its geometry helps and its texture hurts.
+3. **tile_refine costs nothing:** S1 equals raw on every judge metric.
+4. **The base, clip, infill, orient, cleanup, occlusion, inpaint and seam weld each move K by no more than one run
+   spread.**
+
+**Cost.**
+
+| Part | Count | Cost |
+|---|---|---|
+| Judge | 12 calls, all `gemini-4-argon` (server log): 304,899 tokens in, 26,305 out and thinking | $0.87 |
+| Its Street View photos | 8 | about $0.06 |
+| Footprint fetch | 4 vector tiles | under $0.05 |
+| Era check | 9 photos | about $0.06 |
+| Builds | measured above | about $6 to $8.50 |
+| **In all** | | **about $7 to $9.50**, against the $60 stop and the estimate of $7 to $32 |
+
+### Follow-ups
+
+- **A switch for the twin's de-light.** It is K's own code, and the step this run points at. With it, the de-light can be
+  an arm.
+- **A second paid call, which is a new preregistration naming this one.** The reason it would run: only 2 views
+  registered. The options:
+  - more views (`views: 8`);
+  - fixed poses at views known to register here (VqOxFz9R, uPcMge9M and M1's ESB list).
+
+  Its arms could be cut to raw, K, S1, S2, T0, noFit, noLattice and the decoys.
+- **For the M1 session (the judge and its dry-run driver, not changed here):**
+  - **Fetch list.** The dry-run driver lists only panos in the build's metadata cache, so its fetch list can differ from
+    the paid call's. Here it missed M1's ESB views, and the era check covered a different list.
+  - **View rules.** A pano inside the target's own footprint (AGFKaBOw, an indoor shop pano) passes the past-edge and
+    sight-line rules.
+  - **Registration.** Six of eight podium-side views did not register at the ESB.
