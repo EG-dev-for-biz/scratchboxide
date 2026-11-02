@@ -14,10 +14,14 @@ scene on 2026-10-20). The user asked for the app to fetch data as needed and to 
 
 ### Stage 1: the store (`packages/core/src/node/asset-store/`)
 
-- `~/.scratchbox/assets/blobs/<aa>/<sha256>`: the bytes, one file per distinct content (APFS clones where possible).
+- `~/.scratchbox/assets/blobs/<aa>/<sha256>`: the bytes, one file per distinct content, cloned where the volume allows
+  (`cloneOrCopyFile`: `cp -c` on macOS, since Node's `COPYFILE_FICLONE` makes a full copy there; until 2026-11-02 every
+  blob was a full copy).
   `SCRATCHBOX_HOME` moves the whole home (tests, isolated instances).
 - `~/.scratchbox/scratchbox.db`: one SQLite file through Node's built-in `node:sqlite` (no native package; Node 22.13+,
-  Electron 38's Node qualifies). Tables: `blobs`, `served` (URL path → blob, origin, recipe, rebuilt flag), `recipes`
+  Electron 38's Node qualifies). The dev launcher (`desktop-app/scripts/dev.js`) runs the backend on such a Node when it
+  is started on an older one (`SCRATCHBOX_NODE`, else the newest nvm install of the `.nvmrc` major): nvm's default on
+  the user's machine is 20, so before 2026-11-02 the store never ran there (`[asset-store] not available`). Tables: `blobs`, `served` (URL path → blob, origin, recipe, rebuilt flag), `recipes`
   (how a file was made), `events` (every change, the start of the project change log), `scanned` (sweep memo). WAL mode
   and a busy timeout let several app processes share it.
 - Recorded automatically: `StageCache.publishFile` (every staged layer, with the run as recipe `staged:<runId>`),
@@ -42,6 +46,11 @@ scene on 2026-10-20). The user asked for the app to fetch data as needed and to 
   when it ends, and shows `rebuilt` beside a rebuilt model in the model list. A failed recovery's reason is appended to
   the load error.
 - `GET /api/assets/lookup?path=` and `GET /api/assets/events?subject=&limit=` read the index.
+- A scene from a saved chat opened to look at it (user decision, 2026-11-02; `chat-activity.ts`) asks for
+  `{restoreOnly: true}`: the store's copies are restored and nothing is re-run; a file with a staged recipe is reported
+  unrecoverable with the run that could rebuild it. The viewport does not rebuild that scene's lost files on its own;
+  its "This build's files are not on this machine" notice offers "Rebuild this location". A scene made or edited in the
+  page keeps the automatic rebuild (user decision, 2026-10-23).
 
 ## Evidence (isolated instance on ports 3100–3102, `SCRATCHBOX_HOME` in a scratch dir)
 
@@ -103,3 +112,17 @@ a lost name is never its own replacement. The scene shows the textured arch, its
 - A chat tool `asset_history({ path })` over `/api/assets/events`, so the agent can answer "where did this model come
   from" from the recipe and log.
 - A `generate_image` recipe re-run on request (not automatic: it bills and gives a different image).
+
+## Switched on (2026-11-02)
+
+- Node: the backend now starts on Node 22.18.0 from the launcher (`[asset-store] on (Node 22.18.0): ~/.scratchbox`).
+- Clones: a 0.33 GB model through `putFile` used about 1 MB of free space with `cp -c` (a full 0.33 GB with Node's copy).
+- Every checkout swept once with `scripts/asset_store_sweep_checkouts.ts` (each `git worktree`'s `public/models` and
+  `desktop-app/public/models`; a name in several checkouts is served as its newest copy; stops under 10 GB free):
+  5,824 files from 18 checkouts, 0 failed, 5,285 served paths, 170 GB of clones, free space unchanged at 13.0 GB.
+  The store now keeps those blocks: deleting a worktree no longer frees the space of models it published.
+- Live: the St. Mark's Church chat, whose models are only in the `upbeat-austin-817fb8` worktree, loads its four models
+  from the store (`X-Scratchbox-Asset-Store: stored`); the Jefferson Market Library chat, whose files exist nowhere, sends
+  one restore-only recovery and shows "Rebuild this location" (before: the viewport sent a rebuild request on its own).
+  Report: `app_tour_fixes_2026-11-02.md`.
+

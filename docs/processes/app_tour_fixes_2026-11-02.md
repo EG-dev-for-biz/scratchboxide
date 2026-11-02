@@ -1,7 +1,7 @@
 # Process: Fixing what the 2 Nov app tour found (lost models, chat ages, quiet open, NLE demo, forest page)
 
 > **Recorded:** 2026-11-02
-> **Status:** Verified (items 1-4 fixed and checked live, before and after); Needs Fix (item 5 explained, not fixed here; the shared model store is a proposal)
+> **Status:** Verified (items 1-4 fixed and checked live, before and after; the shared model store switched on and checked live, section 6); Needs Fix (item 5 explained, not fixed here)
 > **Tags:** `operate-scratchbox` `chat-sessions` `3d-viewport` `video-nle` `demos` `asset-store`
 > **Target Domain:** Generative Canvas studio (chat list, session persistence, background visual check), 3D Viewport notices, Video NLE, static demo pages
 
@@ -59,3 +59,21 @@
 3. In a fresh headless browser (refuse `**/gemini/verify-visual` and `**/api/assets/recover`), open the chat "Build 229 Mott Street…", press the last **Open 3D**, wait 45 s: no `PUT /workspace/sessions/*`, no `verify-visual`; the viewport notice reads "This build's files are not on this machine".
 4. Settings → Admin & Demos → the "VFX Matchmove & Neural Video NLE" card's **Launch Stage**: the monitor shows the comparison video and the lanes show three clips; one `PUT` for the chat, which then reads "now".
 5. `/forest_3d_viewer.html`: still grey spikes (item 5, not fixed).
+
+---
+
+## 6. The shared model store, switched on (same day, on the user's yes)
+
+The user approved: run on Node 22, sweep every worktree's models, and make a chat opened to look at offer "Rebuild this location" instead of rebuilding on its own.
+
+* **A blocker found first:** Node's `COPYFILE_FICLONE` does not clone on macOS (libuv answers `ENOSYS` to the forced clone and falls back to a full copy). Measured: a 0.33 GB model copied with it took 0.33 GB of free space; `cp -c` took none. With 13.6 GB free the sweep would have filled the disk. The store now copies with `cp -c` on macOS (`cloneOrCopyFile`); through `putFile` the same model took about 1 MB.
+* **Node 22:** `desktop-app/scripts/dev.js` runs the backend and Vite on the newest nvm Node of the `.nvmrc` major (or `SCRATCHBOX_NODE`) when started on an older Node. Log: `[dev] Node 20.19.5 is too old for the asset store; the backend and Vite run on …/v22.18.0/bin`, then `[asset-store] on (Node 22.18.0): /Users/eligreen/.scratchbox`.
+* **Sweep:** `scripts/asset_store_sweep_checkouts.ts` recorded 5,824 files from 18 checkouts (0 failed), 5,285 served paths, 170 GB as clones, in 320 s; free space stayed at 13.0 GB. A name in several checkouts (94 of them) is served as its newest copy.
+* **St. Mark's Church chat:** this worktree has none of its models; all four load from the store (`200`, `X-Scratchbox-Asset-Store: stored`) and the church renders, with no notice.
+* **Jefferson Market Library chat** (its 6 models exist in no checkout):
+  - Before (store on, old viewport code): one recovery request, then the viewport sent a rebuild request (`fallbackStagedRequest`, a paid staged build) on its own; the test harness refused it.
+  - After: one recovery request `{paths: 5, restoreOnly: true}`, no rebuild request; the notice "This build's files are not on this machine" ends with "Rebuild this location". The recovery summary that used to carry the button clears after 12 s; the button now sits on the notice that stays.
+* **Kept:** a scene made or edited in the page still rebuilds lost files on its own (2026-10-23 decision); a server-side recipe re-run happens only on that path or on the button.
+* **Cost of keeping:** the store holds 170 GB of clone blocks; deleting a worktree no longer frees the space of models it published. Moving cold blobs to the G-RAID volume would need the store to look there; not done.
+* **Checks:** typecheck exit 0; eslint 0 errors; 75 tests in 7 files (store, recovery service, recovery client, chat activity, viewport notices, SPA fallback) pass on Node 22 (CI's version), credentials unreachable.
+
