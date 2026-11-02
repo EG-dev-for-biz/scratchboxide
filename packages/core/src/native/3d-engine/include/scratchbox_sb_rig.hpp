@@ -257,6 +257,10 @@ struct RawJson {
     std::vector<RawJson> arr;
     std::vector<std::pair<std::string, RawJson>> obj;  // keys keep their escaped source text
 
+    // user-provided, not implicit: libstdc++ cannot build the implicit one for a type that holds pairs of itself (see
+    // io::GlbJsonValue)
+    RawJson() {}
+
     static RawJson array() { RawJson j; j.kind = Array; return j; }
     static RawJson object() { RawJson j; j.kind = Object; return j; }
     static RawJson boolean(bool b) { RawJson j; j.kind = Bool; j.raw = b ? "true" : "false"; return j; }
