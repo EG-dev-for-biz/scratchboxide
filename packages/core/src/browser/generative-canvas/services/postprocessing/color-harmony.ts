@@ -41,6 +41,8 @@ export interface ColorHarmonyPlan {
     strength: number;
     chroma: number;
     tint: number;
+    /** Grade the sky and background too (default false: the scene's objects only). */
+    includeSky: boolean;
 }
 
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -68,7 +70,7 @@ export function planColorHarmony(h: SceneColorHarmony | undefined | null): { har
     const tint = finite(h.tint) ? Math.min(1, Math.max(0, h.tint)) : 0;
     // nothing moves: no pass
     if (strength === 0 && chroma === 1 && tint === 0) return { harmony: null, issues };
-    return { harmony: { hueDeg: wrapDeg(h.hueDeg), sectors, strength, chroma, tint }, issues };
+    return { harmony: { hueDeg: wrapDeg(h.hueDeg), sectors, strength, chroma, tint, includeSky: h.includeSky === true }, issues };
 }
 
 /** The harmonised hue (degrees) of hue `hDeg`, before the strength mix. */
@@ -141,6 +143,8 @@ export interface SetColorHarmonyParams {
     strength?: number | null;
     chroma?: number | null;
     tint?: number | null;
+    /** Grade the sky and background too (false or null: the scene's objects only). */
+    includeSky?: boolean | null;
     clear?: boolean;
 }
 
@@ -173,5 +177,10 @@ export function mergeColorHarmony(previous: SceneColorHarmony | undefined, param
     unit('strength', 1);
     unit('chroma', 2);
     unit('tint', 1);
+    if (params.includeSky === null || params.includeSky === false) delete next.includeSky;
+    else if (params.includeSky !== undefined) {
+        if (params.includeSky !== true) fail(`includeSky must be true or false (got ${String(params.includeSky)})`);
+        next.includeSky = true;
+    }
     return next;
 }

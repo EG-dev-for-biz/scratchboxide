@@ -422,7 +422,10 @@ export class VisionModelChain<Stage extends string = string> {
                     ...(hedge.sent ? { hedged: true, hedgeWon: hedge.won, ...(hedge.atMs !== undefined ? { hedgeAtMs: hedge.atMs } : {}) } : {})
                 };
                 this.attempts.push(attempt);
-                console.log(`[vision-call] ${opts.stage} ${model} answered in ${ms} ms${ttftMs !== undefined ? ` (first token ${ttftMs} ms)` : ''}${hedge.sent ? ` hedged${hedge.atMs !== undefined ? ` at ${hedge.atMs} ms` : ''} (${hedge.won ? 'the duplicate won' : 'the first request won'})` : ''}`);
+                // the tokens it billed, when the reply says (what a run's actual cost is read from)
+                const usage = (response as { usageMetadata?: GenerateContentResponse['usageMetadata'] }).usageMetadata;
+                const tokens = usage ? `; tokens in ${usage.promptTokenCount ?? 0}, out ${usage.candidatesTokenCount ?? 0}, thinking ${usage.thoughtsTokenCount ?? 0}` : '';
+                console.log(`[vision-call] ${opts.stage} ${model} answered in ${ms} ms${ttftMs !== undefined ? ` (first token ${ttftMs} ms)` : ''}${hedge.sent ? ` hedged${hedge.atMs !== undefined ? ` at ${hedge.atMs} ms` : ''} (${hedge.won ? 'the duplicate won' : 'the first request won'})` : ''}${tokens}`);
                 return { response, model, ms, ...(ttftMs !== undefined ? { ttftMs } : {}), ...(thinking ? { thinking } : {}), remember: () => this.record(params, opts, model, response, attempt) };
             } catch (err) {
                 const ms = this.now() - started;

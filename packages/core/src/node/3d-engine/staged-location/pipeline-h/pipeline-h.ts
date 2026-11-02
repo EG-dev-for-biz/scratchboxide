@@ -32,9 +32,9 @@
  *     ones (roof-objects.ts). E's vector massing stays, with the reason in the ledger, when the scan's winner is lofted
  *     sections (no flat walls to read) or the scan massing fails.
  *
- * The default procedural build from 2026-10-23 until pipeline I took the 3D Building button on 2026-10-24; still the default
- * where pipeline I's services are not wired. SCRATCHBOX_STAGED_PROCEDURAL or the tool's `pipeline` picks G, H or I. Scored against the Haughwout baseline with .claude/skills/watch-staged-build.
- * Nothing here names a kind of building.
+ * The default procedural build from 2026-10-23 until pipeline I took the 3D Building button on 2026-10-24. Retired as a
+ * choice on 2026-10-30 (user decision): no build selects G or H any more, and this code is kept, frozen, for its rules
+ * and for what pipeline J's refine step and the run notes still use (ledger.ts). Nothing here names a kind of building.
  */
 
 import { PIPELINE_G_VERSION, runPipelineG, type PipelineGInput, type PipelineGOutcome, type RebuildPolicy } from '../pipeline-g/pipeline-g';
@@ -53,21 +53,6 @@ export type PipelineHInput = Omit<PipelineGInput, 'policy'> & {
     /** Milliseconds the rebuild may take before the layer must be written (the stage's budget less what the slot already spent, less its margin). */
     budgetMs: number;
 };
-
-/**
- * Which procedural pipeline a request runs: I by default when its services are wired (user decision 2026-10-24: the 3D
- * Building button runs pipeline I, the character sheet made into a model by Trellis and fitted to the scan), else H (the
- * 2026-10-23 default; stand-in deps such as the tests' never reach the paid services); 'g', 'h', 'i' or 'j' when the
- * tool's `pipeline` or SCRATCHBOX_STAGED_PROCEDURAL asks for one. 'j' runs the same character sheet and scan fit as 'i',
- * with Meshy in place of Trellis as the 3D model service (pipeline-i.ts, fal-meshy.ts). An explicit 'i' or 'j' without
- * the services runs I, which then says why it cannot build.
- */
-export function stagedProcedural(request: { procedural?: boolean; pipeline?: string }, env: NodeJS.ProcessEnv = process.env, pipelineIServices = false): 'g' | 'h' | 'i' | 'j' {
-    const asked = (request.pipeline ?? env.SCRATCHBOX_STAGED_PROCEDURAL ?? '').trim().toLowerCase();
-    if (asked === 'g' || asked === 'h' || asked === 'i' || asked === 'j') return asked;
-    // pipeline J (Meshy, one seed, no colour match) is the 3D Building default (user decision 2026-10-25); I (Trellis) stays selectable
-    return pipelineIServices ? 'j' : 'h';
-}
 
 export async function runPipelineH(input: PipelineHInput): Promise<PipelineGOutcome> {
     const { budgetMs, ...rest } = input;

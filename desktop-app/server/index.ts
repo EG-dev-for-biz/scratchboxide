@@ -11,6 +11,7 @@ import * as http from 'http';
 import { createStandaloneServer, createToolsServer, resolveLaunchToken } from './app';
 import { resolveRendererDist } from './renderer-dist';
 import { warmNativeEngine } from '../../packages/core/src/node/3d-engine/native-warmup';
+import { reportStagedSwitchProblems } from '../../packages/core/src/node/3d-engine/staged-location/staged-switches';
 import type { GeminiService } from '../../packages/core/src/node/gemini-service';
 
 const PORT = parseInt(process.env.PORT || process.env.SCRATCHBOX_API_PORT || '3001', 10);
@@ -21,6 +22,8 @@ const staticDir = resolveRendererDist(__dirname);
 if (!staticDir) {
     console.warn('[Scratchbox] No built renderer found (desktop-app/dist); serving API only. Run `npm run build` or set SCRATCHBOX_STATIC_DIR.');
 }
+// a retired staged-build switch still set, or a value a switch does not take, is said once here
+reportStagedSwitchProblems();
 
 // Fail loudly instead of silently continuing with a half-initialised process.
 process.on('unhandledRejection', (reason: unknown) => {

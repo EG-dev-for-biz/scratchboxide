@@ -99,4 +99,29 @@ describe('pipeline K roofs seen from above', () => {
         expect((wall[0] - wall[2]) / wall[0]).toBeLessThan((src[0] - src[2]) / src[0]);
         expect(twin.provenance[0].method).toMatch(/roofs seen from above \(\d+ texels\) highlights only, no shadow lift/);
     });
+
+    it('a district (K-D) lifts its upward surfaces gently when asked, and leaves them as photographed when not', async () => {
+        const glb = scene([roofAt(20), wallAt(0)]);
+        const src = meanRgb(maroon());
+        const [roof0, wall0] = shownPhotos((await tileRefineTwin(glb, 'l2', { harmonize: { groundY: 0 } })).glb).map(meanRgb);
+        const [roof3, wall3] = shownPhotos((await tileRefineTwin(glb, 'l2', { harmonize: { groundY: 0 }, upwardShadowLift: 0.3 })).glb).map(meanRgb);
+        const [roof6] = shownPhotos((await tileRefineTwin(glb, 'l2', { harmonize: { groundY: 0 }, upwardShadowLift: 0.6 })).glb).map(meanRgb);
+        // off: the roof as photographed; on: lifted, more at 0.6 than 0.3
+        for (let c = 0; c < 3; c++) expect(Math.abs(roof0[c] - src[c])).toBeLessThan(2);
+        expect(roof3[1]).toBeGreaterThan(src[1] + 5);
+        expect(roof6[1]).toBeGreaterThan(roof3[1] + 5);
+        // the wall's lift is the same either way
+        for (let c = 0; c < 3; c++) expect(Math.abs(wall3[c] - wall0[c])).toBeLessThan(2);
+    });
+
+    it('gives a texel an upward surface and a wall share to the upward one when asked (sharedTexel: up)', () => {
+        // a roof and a wall drawing the same photo: every texel is shared
+        const g = parseGlbBytes(scene([roofAt(10), wallAt(10)]));
+        const json: any = g.json;
+        json.materials[1].pbrMetallicRoughness.baseColorTexture.index = 0;
+        const sizes = new Map([[0, { width: N, height: N }]]);
+        const share = (m: Uint8Array, cls: number) => m.filter(v => v === cls).length / (N * N);
+        expect(share(surfaceClassMasks(g, json, sizes).get(0)!, TEXEL_WALL)).toBeGreaterThan(0.95);
+        expect(share(surfaceClassMasks(g, json, sizes, undefined, { sharedTexel: 'up' }).get(0)!, TEXEL_ROOF)).toBeGreaterThan(0.95);
+    });
 });

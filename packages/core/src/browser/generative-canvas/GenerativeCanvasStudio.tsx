@@ -57,6 +57,7 @@ import { InteractiveBrowserPrimitive } from './primitives/InteractiveBrowserPrim
 import { BentoStageLayout } from './BentoStageLayout';
 import { RelatedArtifactsRail } from './RelatedArtifactsRail';
 import { ProjectArtifactController } from './project-artifact-controller';
+import { PROJECT_SAVE_FAILED_EVENT } from './project-artifact-store-client';
 import { UnifiedProjectCoordinator } from './unified-project-coordinator';
 import { isTimestampArtifactId, stableProjectArtifactId } from '../../common/project-artifact-graph-protocol';
 import { SettingsModal } from './SettingsModal';
@@ -310,6 +311,13 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         setGlobalToast({ text, icon });
         setTimeout(() => setGlobalToast(undefined), 3200);
     }, []);
+
+    // a project the server could not load or save is said, never left to the console
+    React.useEffect(() => {
+        const onFailed = (e: Event) => showToast(`Not saved: ${(e as CustomEvent<{ message: string }>).detail?.message ?? 'the project could not be saved'}`, '⚠️');
+        window.addEventListener(PROJECT_SAVE_FAILED_EVENT, onFailed);
+        return () => window.removeEventListener(PROJECT_SAVE_FAILED_EVENT, onFailed);
+    }, [showToast]);
 
     // Composer & generation state
     const [inputValue, setInputValue] = React.useState<string>('');

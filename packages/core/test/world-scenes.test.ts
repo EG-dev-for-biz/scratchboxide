@@ -13,7 +13,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { DirectoryCloudBucket } from '../src/node/cloud-store/cloud-bucket';
 import { readWorldIndex, storeWorld } from '../src/node/cloud-store/world-cache';
-import { listWorldScenes, openWorld, saveWorld, syncWorldScene } from '../src/node/cloud-store/world-scenes';
+import { listWorldScenes, listWorldVersions, openWorld, openWorldVersion, saveWorld, syncWorldScene } from '../src/node/cloud-store/world-scenes';
 
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-world-scenes-'));
 afterAll(() => fs.removeSync(WORK));
@@ -79,6 +79,39 @@ describe('world scenes', () => {
         const after = await openWorld<{ title: string }>(slug, here, bucket);
         expect([after.source, after.version, after.scene.title]).toEqual(['cache', theirs.version, 'theirs']);
         expect(await syncWorldScene(slug, here, bucket)).toBeUndefined();
+    });
+
+    it('lists a world\'s saved versions and opens an older one, or the world as built', async () => {
+        const bucket = new DirectoryCloudBucket(path.join(WORK, 'bucket4'));
+        const slug = 'versioned_street_40.3_-73.7';
+        const built = path.join(WORK, 'built4', slug);
+        await fs.outputJson(path.join(built, 'scene3d.json'), { title: 'built' });
+        await storeWorld(bucket, 'key4', built, { splatCount: 1 });
+        const here = path.join(WORK, 'here4', 'tilesets');
+        await openWorld(slug, here, bucket);
+        const v1 = await saveWorld(slug, { title: 'first' }, here, bucket);
+        const v2 = await saveWorld(slug, { title: 'second' }, here, bucket);
+
+        // listed newest first, each with the time read from its name, from the cloud and, without it, from this machine
+        const listed = await listWorldVersions(slug, here, bucket);
+        expect(listed.source).toBe('cloud');
+        expect(listed.versions.map(v => v.version)).toEqual([v2.version, v1.version].sort().reverse());
+        expect(listed.versions.find(v => v.version === v1.version)!.savedAt).toBe(v1.savedAt.replace(/\.\d+Z$/, 'Z'));
+        expect((await listWorldVersions(slug, here, undefined))).toEqual({ ...listed, source: 'cache' });
+
+        // the older version opens from this machine's copy; on another machine from the cloud, then from its own copy
+        const older = await openWorldVersion<{ title: string }>(slug, v1.version, here, undefined);
+        expect([older.source, older.version, older.scene.title]).toEqual(['cache', v1.version, 'first']);
+        const other = path.join(WORK, 'other4', 'tilesets');
+        await openWorld(slug, other, bucket);
+        expect((await openWorldVersion<{ title: string }>(slug, v1.version, other, bucket)).source).toBe('cloud');
+        expect((await openWorldVersion<{ title: string }>(slug, v1.version, other, undefined)).scene.title).toBe('first');
+
+        // as built is the build's own scene; names that are not versions, and versions never saved, are refused
+        const asBuilt = await openWorldVersion<{ title: string }>(slug, 'built', here, bucket);
+        expect([asBuilt.source, asBuilt.version, asBuilt.scene.title]).toEqual(['local', undefined, 'built']);
+        await expect(openWorldVersion(slug, '../../etc/passwd', here, bucket)).rejects.toThrow(/Not a version name/);
+        await expect(openWorldVersion(slug, '20200101T000000Z-zzzz', here, bucket)).rejects.toThrow(/no saved version/);
     });
 
     it('refuses to save a world the cache does not hold, and to open a name that is not a folder name', async () => {

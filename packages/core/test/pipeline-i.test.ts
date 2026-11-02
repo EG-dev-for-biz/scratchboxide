@@ -11,7 +11,6 @@ import { describe, it, expect, afterAll } from 'vitest';
 import * as fs from 'fs-extra';
 import * as os from 'os';
 import * as path from 'path';
-import { stagedProcedural } from '../src/node/3d-engine/staged-location/pipeline-h/pipeline-h';
 import { registerToFootprint, applyRootTransform, stripMaterials } from '../src/node/3d-engine/staged-location/pipeline-i/register';
 import { planSheetStations } from '../src/node/3d-engine/staged-location/pipeline-i/sheet-stations';
 import { createFalTrellisClient, resolveFalKey, TRELLIS_MODEL, type ModelClient } from '../src/node/3d-engine/staged-location/pipeline-i/fal-trellis';
@@ -82,18 +81,6 @@ function generatedL(yawDeg: number, mirror: boolean): { pos: number[]; idx: numb
     for (let i = 0; i < local.pos.length; i += 3) { const x = local.pos[i], y = local.pos[i + 1], z = local.pos[i + 2]; pos.push(k * (mirror ? -1 : 1) * (c * x + s * z), k * y, k * (-s * x + c * z)); }
     return { pos, idx: local.idx };
 }
-
-describe('pipeline J: the default procedural pipeline when its services are wired', () => {
-    it('defaults to J only with its services; G, H, I and J can be asked for', () => {
-        expect(stagedProcedural({ procedural: true }, {}, true)).toBe('j');
-        expect(stagedProcedural({ procedural: true }, {}, false)).toBe('h');
-        expect(stagedProcedural({ procedural: true, pipeline: 'g' }, {}, true)).toBe('g');
-        expect(stagedProcedural({ procedural: true, pipeline: 'h' }, {}, true)).toBe('h');
-        expect(stagedProcedural({ procedural: true, pipeline: 'i' }, {}, true)).toBe('i');
-        expect(stagedProcedural({ procedural: true, pipeline: 'i' }, {}, false)).toBe('i');
-        expect(stagedProcedural({ procedural: true }, { SCRATCHBOX_STAGED_PROCEDURAL: 'h' }, true)).toBe('h');
-    });
-});
 
 describe('pipeline I: fitting a generated model onto the scan', () => {
     for (const [yaw, mirror] of [[37, false], [212, true]] as Array<[number, boolean]>) {

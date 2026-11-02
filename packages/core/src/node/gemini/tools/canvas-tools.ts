@@ -198,7 +198,7 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'scene_3d_dispatch_operators',
-        description: 'Dispatches high-performance in-memory 3D scene operators against the active 3D canvas stage via DirectDispatchOperatorEngine. Runs on the scene data: transforms (sb_set_transform, sb_translate, sb_rotate, sb_scale), PBR material properties (sb_set_material_pbr), lighting and sun (sb_setup_lighting, sb_set_diurnal_time_of_day), physics and keyframes (sb_add_physics, sb_insert_keyframe), camera framing (sb_set_camera, sb_frame_bounds), and a colour harmony grade on the viewport (sb_set_color_harmony: the objects\' hues moved toward a hue template), without re-compiling geometry. Operators that edit mesh geometry need the live 3D viewport and fail here with errorCode not_available_here.',
+        description: 'Dispatches high-performance in-memory 3D scene operators against the active 3D canvas stage via DirectDispatchOperatorEngine. Runs on the scene data: transforms (sb_set_transform, sb_translate, sb_rotate, sb_scale), PBR material properties (sb_set_material_pbr), lighting and sun (sb_setup_lighting, sb_set_diurnal_time_of_day), physics and keyframes (sb_add_physics, sb_insert_keyframe), camera framing (sb_set_camera, sb_frame_bounds), and a colour harmony grade on the viewport (sb_set_color_harmony: the objects\' hues moved toward a hue template; sb_set_look_match: the strength of, or clearing, a look the user matched from a reference photo), without re-compiling geometry. Operators that edit mesh geometry need the live 3D viewport and fail here with errorCode not_available_here.',
         parameters: {
             type: 'OBJECT',
             properties: {
