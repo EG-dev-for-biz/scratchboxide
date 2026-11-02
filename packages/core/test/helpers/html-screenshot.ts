@@ -57,6 +57,9 @@ export async function saveHtmlScreenshot(
             // local file, so no keychain, sync or background network is needed.
             '--use-mock-keychain', '--password-store=basic', '--no-default-browser-check',
             '--disable-background-networking', '--disable-component-update', '--disable-sync',
+            // greyscale text antialiasing on every host: Linux renders subpixel (LCD) text by default, whose coloured fringes
+            // read as saturated pixels that are not in the page (macOS has drawn no LCD text since 10.14)
+            '--disable-lcd-text',
             `--window-size=${width},${height}`,
             `--user-data-dir=${path.join(work, 'profile')}`,
             `--screenshot=${shotPath}`,

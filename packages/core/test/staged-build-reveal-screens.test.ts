@@ -58,10 +58,14 @@ async function commit(page: StagedPage, state: StagedBuildState, wait: FixtureLa
 /**
  * Three frames of one layer's reveal (0.25, 0.5, 1.0). A layer that adds geometry never loses coverage on the way; a
  * crossfade (`crossfade`) may end below where it started (it replaces the scanned canopy) but no frame may fall below
- * both ends: that would be a hole where neither layer draws.
+ * both ends: that would be a hole where neither layer draws. Where a crossfade starts is its own first frame: the frame
+ * before it can wear the work sweep (a running stage's band, drawn only while nothing reveals), whose height follows the
+ * frame clock, so how many frames the layer took to load (its coverage moved 372 k - 384 k px over 120 idle frames here,
+ * against 375 k at the crossfade's quarter), where the crossfade's own frames never wear it.
  */
 async function revealFrames(page: StagedPage, l: FixtureLayerId, name: string, opts: { tolerance?: number; crossfade?: boolean } = {}): Promise<number[]> {
     const tolerance = opts.tolerance ?? 0.005;
+    if (opts.crossfade) await advanceTo(page, l, 0);
     const before = await coverage(page);
     const out: number[] = [];
     for (const p of [0.25, 0.5, 1.0]) {
@@ -91,7 +95,9 @@ const hueDistance = (a: number, b: number) => Math.min(Math.abs(a - b), 360 - Ma
 describe.skipIf(!stagedChrome.ok)('every stage revealed in its real build order (synthetic GLBs built to the contracts)', () => {
     let page: StagedPage;
     beforeAll(async () => {
-        page = await openStagedPage({ manualFrames: true });
+        // without multisampling, as the viewport draws on a software GPU: the reveals discard per pixel and every check reads
+        // surfaces, coverage or patterns inside them, not edges; software WebGL (a GPU-less runner) draws each frame ~2x faster
+        page = await openStagedPage({ manualFrames: true, msaa: false });
         serveFixture(page, fixture.glbs, objectIdOf, fixture.sidecar);
     });
     afterAll(async () => { await page?.close(); });
