@@ -391,14 +391,30 @@ function writeLargeTile(name: string, n: number): string {
     return `/models/${name}`;
 }
 
+/** CPU time this process has used, in ms (every thread). */
+function cpuMs(): number {
+    const { user, system } = process.cpuUsage();
+    return (user + system) / 1000;
+}
+
 /**
- * The longest gap between 5 ms ticks while it runs: how long the event loop was held up. Stopping counts the gap since
- * the last tick too, since work that runs straight through to the awaited result ends before any tick can report it.
+ * The longest gap between 5 ms ticks while it runs: how long the event loop was held up. `busyMs` counts each gap only
+ * as far as the process used CPU in it, so a gap it spent descheduled (a shared CI runner starved of cores) is not
+ * taken for work holding the loop, while work run straight through uses CPU for the whole gap; `wallMs` is the gap on
+ * the clock. Stopping counts the gap since the last tick too, since work that runs straight through to the awaited
+ * result ends before any tick can report it.
  */
-function lagMonitor(): { stop: () => number } {
-    let max = 0, last = Date.now();
-    const timer = setInterval(() => { const now = Date.now(); max = Math.max(max, now - last - 5); last = now; }, 5);
-    return { stop: () => { clearInterval(timer); return Math.max(max, Date.now() - last - 5); } };
+function lagMonitor(): { stop: () => { busyMs: number; wallMs: number } } {
+    let busyMs = 0, wallMs = 0, last = Date.now(), lastCpu = cpuMs();
+    const tick = () => {
+        const now = Date.now(), cpu = cpuMs();
+        busyMs = Math.max(busyMs, Math.min(now - last, cpu - lastCpu) - 5);
+        wallMs = Math.max(wallMs, now - last - 5);
+        last = now;
+        lastCpu = cpu;
+    };
+    const timer = setInterval(tick, 5);
+    return { stop: () => { clearInterval(timer); tick(); return { busyMs, wallMs }; } };
 }
 
 function stagedScene(tileUri: string, treesUri?: string, treesMeta: Record<string, unknown> = {}): (args: Record<string, unknown>, c: ToolContext) => Promise<ToolHandlerOutcome> {
@@ -1889,19 +1905,19 @@ describe('build_3d_object_from_reference', () => {
         expect(client.calls).toHaveLength(0);
     });
 
-    // Retried: on a shared CI runner the process itself is sometimes paused longer than the whole one-go read (a 719 ms
-    // stall against a 464 ms read on macOS), which no slicing can prevent; a stall from the read itself fails every try.
-    it('reads a large staged tile in slices without holding up the event loop, once while it is unchanged, and stops while reading it', { retry: 2 }, async () => {
+    it('reads a large staged tile in slices without holding up the event loop, once while it is unchanged, and stops while reading it', async () => {
         const tileUri = writeLargeTile('large_tile_test.glb', 900);
         const tileFile = path.join(MODELS_DIR, 'large_tile_test.glb');
         // What reading and binning this tile costs in one go (the sampler built straight through), once the code is
         // warm, as it is for the tool's read below.
         const tileBytes = fs.readFileSync(tileFile);
         expect(SurfaceSampler.fromGlb(tileBytes)!.heightAt(0, 0)).toBeCloseTo(1.5, 5);
-        const started = Date.now();
+        const started = Date.now(), startedCpu = cpuMs();
         SurfaceSampler.fromGlb(tileBytes);
         const syncMs = Date.now() - started;
-        expect(syncMs).toBeGreaterThan(150);
+        // the same read counted as the stalls below are: on the clock, as far as the process used CPU
+        const syncBusyMs = Math.min(syncMs, cpuMs() - startedCpu);
+        expect(syncBusyMs).toBeGreaterThan(150);
 
         const location = 'Union Square, San Francisco';
         const { run } = handlerWith(fakeClient({}), { stageAtLocation: stagedScene(tileUri) });
@@ -1910,13 +1926,13 @@ describe('build_3d_object_from_reference', () => {
         try {
             const lag = lagMonitor();
             const first = await run({ request: 'the vase', specJson: JSON.stringify(VASE), location, placement: { eastMeters: 12, northMeters: 8, headingDeg: 90 } });
-            const maxLagMs = lag.stop();
+            const stall = lag.stop();
             // Kept with the test results (gitignored) to compare runs.
             fs.mkdirSync(path.join(REPO_ROOT, 'test-results'), { recursive: true });
-            fs.writeFileSync(path.join(REPO_ROOT, 'test-results/object_reference_event_loop.json'), JSON.stringify({ syncReadMs: syncMs, longestStallMs: maxLagMs }, null, 1));
+            fs.writeFileSync(path.join(REPO_ROOT, 'test-results/object_reference_event_loop.json'), JSON.stringify({ syncReadMs: syncMs, syncReadBusyMs: syncBusyMs, longestStallMs: stall.wallMs, longestStallBusyMs: stall.busyMs }, null, 1));
             expect(first.status, String(first.resultPayload.error)).toBe('completed');
-            // Read in one go, the loop would wait the whole syncMs; in slices it waits a small part of it.
-            expect(maxLagMs, `longest stall ${maxLagMs} ms against ${syncMs} ms for the whole read`).toBeLessThan(syncMs / 2);
+            // Read in one go, the loop would wait the whole read; in slices it waits a small part of it.
+            expect(stall.busyMs, `longest stall ${stall.busyMs} ms (${stall.wallMs} ms on the clock) against ${syncBusyMs} ms for the whole read`).toBeLessThan(syncBusyMs / 2);
             expect(tileReads()).toBe(1);
 
             // Another object at the place: the unchanged tile is not read again.
