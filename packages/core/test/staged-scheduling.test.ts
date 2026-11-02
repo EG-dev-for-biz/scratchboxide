@@ -208,6 +208,12 @@ describe('the survey: one call per face, all at once', () => {
             return c.client.models.generateContentStream!(p);
         } } };
         const input = () => ({ faces, panos: PANOS, structure: STRUCTURE, ground: GROUND, top: new Float32Array(0), deps: { mapsApiKey: 'k', grounding } });
+        // the survey's own work (the decode, the downscale and the palettes) on this host: the same survey with calls that answer at once
+        const instant = slowClient(0, params => JSON.stringify(perFaceSurveyReply(surveyReply(), textOf(params))));
+        const w0 = Date.now();
+        await runFaceSurvey({ ...input(), chain: new VisionModelChain<string>({ client: instant.client, candidates: ['gemini-4-argon'], replyCache: memoryCache() }) });
+        const workMs = Date.now() - w0;
+        expect(instant.calls()).toBe(4);
         const probe = startLoadProbe();
         const t0 = Date.now();
         const cold = await runFaceSurvey({ ...input(), chain: new VisionModelChain<string>({ client: watch, candidates: ['gemini-4-argon'], replyCache: cache }) });
@@ -215,9 +221,9 @@ describe('the survey: one call per face, all at once', () => {
         const load = await probe.stop();
         expect(c.calls()).toBe(4);
         expect(c.peak()).toBe(4);
-        // the sum would be 4 x DELAY; at once it is about one DELAY (plus the decode and palettes, which run as much
+        // the sum would be 4 x DELAY over the survey's own work; at once it is about one DELAY over it (that work run as much
         // slower as the suite's other forks make CPU work while it runs)
-        expect(coldMs, JSON.stringify(load)).toBeLessThan((2 * DELAY + 1500) * load.slowdown);
+        expect(coldMs, JSON.stringify({ ...load, workMs })).toBeLessThan(workMs * load.slowdown + 2 * DELAY);
         expect(sent.length).toBe(4);
         for (const [w, h] of sent) expect(Math.max(w, h)).toBe(1024);
         // the full image stays in hand for the palette and registration
