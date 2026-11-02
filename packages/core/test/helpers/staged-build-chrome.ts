@@ -72,6 +72,11 @@ export interface StagedPageOptions {
     reducedMotion?: boolean;
     /** Where screenshots go (default test-results/screenshots/staged). */
     shotDir?: string;
+    /**
+     * Device pixels per CSS pixel (default 1). The viewport draws at window.devicePixelRatio, so 0.5 renders a quarter of
+     * the pixels at the same CSS layout: a GPU-less host (Linux CI's software WebGL) renders each frame about 4x faster.
+     */
+    deviceScaleFactor?: number;
 }
 
 export interface StagedPage {
@@ -113,7 +118,7 @@ const MANUAL_FRAMES = `
 
 export async function openStagedPage(opts: StagedPageOptions = {}): Promise<StagedPage> {
     if (!chromePath) throw new Error(stagedChrome.reason);
-    const width = opts.width ?? 1100, height = opts.height ?? 720;
+    const width = opts.width ?? 1100, height = opts.height ?? 720, scale = opts.deviceScaleFactor ?? 1;
     const bundle = await buildHarnessBundle();
     const files = new Map<string, { body: Buffer; type: string; held?: Promise<void> }>();
     const page = `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/harness.css">
@@ -138,7 +143,7 @@ ${opts.manualFrames ? MANUAL_FRAMES : ''}</head><body><div id="root"></div><scri
     const proc: ChildProcess = spawn(chromePath, [
         '--headless=new', '--no-first-run', '--no-default-browser-check', '--use-mock-keychain', '--password-store=basic',
         '--disable-background-networking', '--disable-component-update', '--disable-sync', '--hide-scrollbars',
-        '--ignore-gpu-blocklist', '--enable-webgl', '--force-device-scale-factor=1', '--disable-renderer-backgrounding',
+        '--ignore-gpu-blocklist', '--enable-webgl', `--force-device-scale-factor=${scale}`, '--disable-renderer-backgrounding',
         '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows',
         `--window-size=${width},${height}`, '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'
     ], { stdio: 'ignore' });
@@ -187,7 +192,7 @@ ${opts.manualFrames ? MANUAL_FRAMES : ''}</head><body><div id="root"></div><scri
     await send('Network.enable');
     // Only this harness's own origin is reachable: no tile, Street View or model request can leave the page.
     await send('Network.setBlockedURLs', { urls: ['https://*', 'http://*.com/*', 'http://*.googleapis.com/*', 'http://localhost*'] });
-    await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+    await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: scale, mobile: false });
     // Always set, never inherited: a host with Reduce Motion on (GitHub's macOS runners) would otherwise show every reveal's end state at once.
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: opts.reducedMotion ? 'reduce' : 'no-preference' }] });
     await send('Page.navigate', { url: `${origin}/index.html` });
