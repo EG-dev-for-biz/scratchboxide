@@ -9476,6 +9476,7 @@ body.sb-light .sb-3d-budget-btn {
 .sb-3d-camera-panel .sb-cam-error-text { color: #fda4af; font-size: 10px; }
 .sb-3d-camera-panel .sb-cam-disclosure { align-self: flex-start; padding: 0; border: 0; background: none; color: #a1a1aa; font: inherit; font-size: 10px; cursor: pointer; }
 .sb-3d-camera-panel .sb-cam-disclosure:hover { color: #e4e4e7; }
+.sb-3d-camera-panel .sb-cam-version-list { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; }
 .sb-3d-camera-panel .sb-cam-switch {
     position: relative; width: 26px; height: 15px; padding: 0; border-radius: 999px; cursor: pointer;
     border: 1px solid rgba(255, 255, 255, 0.18); background: rgba(0, 0, 0, 0.4); transition: background 0.12s;

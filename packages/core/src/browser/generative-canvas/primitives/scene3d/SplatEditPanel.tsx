@@ -9,7 +9,8 @@
 
 /**
  * The toolstrip's Edit Splats control: switches the splat brush on (splatEditTool.ts) and sets it, lists the scene's
- * strokes, and saves the scene, its strokes included, as a new version of the world in the cloud (/api/worlds).
+ * strokes, saves the scene, its strokes included, as a new version of the world in the cloud (/api/worlds), and lists
+ * the world's saved versions to open an older one (or the world as built) in place of the scene, undoably.
  */
 
 import * as React from 'react';
@@ -39,11 +40,21 @@ const toHex = (c: [number, number, number]) => `#${c.map(v => Math.round(Math.mi
 const fromHex = (hex: string): [number, number, number] => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255) as [number, number, number];
 
 type SaveState = { phase: 'idle' } | { phase: 'saving' } | { phase: 'saved'; version: string; savedAt: string } | { phase: 'failed'; error: string };
+type WorldVersion = { version: string; savedAt: string };
+type VersionsState = { phase: 'closed' } | { phase: 'loading' } | { phase: 'open'; versions: WorldVersion[] } | { phase: 'failed'; error: string };
+
+/** What the world routes take to open the build's own scene (world-scenes.ts AS_BUILT). */
+const AS_BUILT = 'built';
+
+const whenSaved = (iso: string) => new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
 export function SplatEditControl({ sceneData, mutateSceneData, active, onActive, brush, onBrush, currentScene }: SplatEditControlProps): React.ReactElement {
     const [save, setSave] = React.useState<SaveState>({ phase: 'idle' });
+    const [versions, setVersions] = React.useState<VersionsState>({ phase: 'closed' });
+    const [opening, setOpening] = React.useState<{ version: string } | { version: string; error: string } | null>(null);
     const strokes = sceneData.splatEdits ?? [];
     const slug = sceneData.world?.slug;
+    const openVersion = sceneData.world?.version;
 
     const counts = strokes.reduce((acc, s) => ({ ...acc, [s.op]: (acc[s.op] ?? 0) + 1 }), {} as Record<string, number>);
     const clearAll = () => mutateSceneData(prev => {
@@ -51,6 +62,37 @@ export function SplatEditControl({ sceneData, mutateSceneData, active, onActive,
         delete out.splatEdits;
         return out;
     }, { operator: 'splat_edit_clear', params: { strokes: strokes.length } }, { history: { label: 'Clear splat edits' } });
+
+    const loadVersions = async () => {
+        if (!slug) return;
+        setVersions({ phase: 'loading' });
+        try {
+            const res = await fetch(`/api/worlds/${encodeURIComponent(slug)}/versions`, { cache: 'no-store' });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok || !body.success) throw new Error(body.error || `HTTP ${res.status}`);
+            setVersions({ phase: 'open', versions: body.versions as WorldVersion[] });
+        } catch (err) {
+            setVersions({ phase: 'failed', error: err instanceof Error ? err.message : String(err) });
+        }
+    };
+
+    /** Opens a saved version (or the world as built) in place of the scene; undo brings the scene back. */
+    const openSaved = async (version: string) => {
+        if (!slug) return;
+        setOpening({ version });
+        try {
+            const res = await fetch(`/api/worlds/${encodeURIComponent(slug)}/scene?version=${encodeURIComponent(version)}`, { cache: 'no-store' });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok || !body.success) throw new Error(body.error || `HTTP ${res.status}`);
+            const scene = body.scene as Scene3DData;
+            mutateSceneData(() => scene, { operator: 'world_open_version', params: { version } },
+                { history: { label: version === AS_BUILT ? 'Open the world as built' : `Open version ${version}` } });
+            setSave({ phase: 'idle' });
+            setOpening(null);
+        } catch (err) {
+            setOpening({ version, error: err instanceof Error ? err.message : String(err) });
+        }
+    };
 
     const saveToCloud = async () => {
         if (!slug) return;
@@ -63,6 +105,7 @@ export function SplatEditControl({ sceneData, mutateSceneData, active, onActive,
             if (!res.ok || !body.success) throw new Error(body.error || `HTTP ${res.status}`);
             setSave({ phase: 'saved', version: body.version, savedAt: body.savedAt });
             mutateSceneData(prev => ({ ...prev, world: { slug, version: body.version, savedAt: body.savedAt } }), { operator: 'world_save', params: { version: body.version } }, { history: false });
+            if (versions.phase === 'open') void loadVersions();
         } catch (err) {
             setSave({ phase: 'failed', error: err instanceof Error ? err.message : String(err) });
         }
@@ -143,8 +186,36 @@ export function SplatEditControl({ sceneData, mutateSceneData, active, onActive,
                             <div className="sb-cam-note">
                                 {save.phase === 'saved' ? `Saved as version ${save.version}` :
                                     save.phase === 'failed' ? `Not saved: ${save.error}` :
-                                        sceneData.world?.version ? `Opened version ${sceneData.world.version}` : 'Opened as built (no saved version yet)'}
+                                        openVersion ? `Opened version ${openVersion}` : 'Opened as built'}
                             </div>
+                            <button
+                                type="button" className="sb-cam-disclosure" aria-expanded={versions.phase === 'open'}
+                                onClick={() => (versions.phase === 'open' ? setVersions({ phase: 'closed' }) : void loadVersions())}
+                            >{versions.phase === 'open' ? '▾' : '▸'} Versions{versions.phase === 'loading' ? ' (loading...)' : ''}</button>
+                            {versions.phase === 'failed' && <div className="sb-cam-error-text">Versions not listed: {versions.error}</div>}
+                            {versions.phase === 'open' && (
+                                <div className="sb-cam-version-list" role="list" aria-label="Saved versions">
+                                    {[...versions.versions, { version: AS_BUILT, savedAt: '' }].map(v => {
+                                        const isOpen = v.version === AS_BUILT ? !openVersion : v.version === openVersion;
+                                        const busy = opening && !('error' in opening) ? opening.version : undefined;
+                                        return (
+                                            <div key={v.version} role="listitem" className="sb-cam-row">
+                                                <span className="sb-cam-truncate" title={v.version === AS_BUILT ? 'The world as its build left it' : v.version}>
+                                                    {v.version === AS_BUILT ? 'As built' : whenSaved(v.savedAt)}{isOpen ? ' (open)' : ''}
+                                                </span>
+                                                <button
+                                                    type="button" className="sb-cam-chip" disabled={isOpen || busy !== undefined}
+                                                    onClick={() => void openSaved(v.version)}
+                                                    aria-label={v.version === AS_BUILT ? 'Open the world as built' : `Open version ${v.version}`}
+                                                >{busy === v.version ? 'Opening...' : 'Open'}</button>
+                                            </div>
+                                        );
+                                    })}
+                                    {versions.versions.length === 0 && <div className="sb-cam-note">No saved versions yet.</div>}
+                                </div>
+                            )}
+                            {opening && 'error' in opening && <div className="sb-cam-error-text">Version {opening.version} not opened: {opening.error}</div>}
+                            {versions.phase === 'open' && <div className="sb-cam-note">Opening a version replaces the scene, its splat edits included; undo brings it back.</div>}
                         </div>
                     ) : (
                         <div className="sb-cam-note">This scene is not a cached world, so its edits stay in this chat.</div>

@@ -37,7 +37,7 @@ import { PhotorealGaussianSplatMesh } from '../src/browser/generative-canvas/ser
 
 const angle = (a: number, b: number) => Math.abs((((a - b) % 360) + 540) % 360 - 180);
 const plan = (p: Partial<ColorHarmonyPlan> & { hueDeg: number }): ColorHarmonyPlan =>
-    ({ sectors: [{ offsetDeg: 0, widthDeg: 94 }], strength: 1, chroma: 1, tint: 0, ...p });
+    ({ sectors: [{ offsetDeg: 0, widthDeg: 94 }], strength: 1, chroma: 1, tint: 0, includeSky: false, ...p });
 
 describe('colour harmony maths', () => {
     it('Oklab round-trips linear sRGB, HDR values included', () => {
@@ -120,7 +120,7 @@ describe('colour harmony plan and chain', () => {
         expect(planColorHarmony({ hueDeg: NaN }).issues[0]).toMatch(/hueDeg/);
         expect(planColorHarmony({ hueDeg: 40, strength: 0 }).harmony).toBeNull();
         expect(planColorHarmony({ hueDeg: 40, strength: 0, chroma: 0.5 }).harmony?.chroma).toBe(0.5);
-        expect(planColorHarmony({ hueDeg: -30 }).harmony).toEqual({ hueDeg: 330, sectors: [{ offsetDeg: 0, widthDeg: 94 }], strength: 1, chroma: 1, tint: 0 });
+        expect(planColorHarmony({ hueDeg: -30 }).harmony).toEqual({ hueDeg: 330, sectors: [{ offsetDeg: 0, widthDeg: 94 }], strength: 1, chroma: 1, tint: 0, includeSky: false });
     });
 
     it('draws before the lens passes, and alone needs no temporal anti-aliasing', () => {
@@ -222,6 +222,17 @@ describe('sb_set_color_harmony', () => {
         expect(a).toEqual({ hueDeg: 10, strength: 0.4 });
         expect(mergeColorHarmony(a, { strength: null, tint: 0.5 })).toEqual({ hueDeg: 10, tint: 0.5 });
         expect(mergeColorHarmony(a, { clear: true })).toBeUndefined();
+    });
+
+    it('includeSky is opt-in: the plan carries it, the shader grades every pixel with it, false or null removes it', () => {
+        const on = mergeColorHarmony({ hueDeg: 30 }, { includeSky: true })!;
+        expect(on).toEqual({ hueDeg: 30, includeSky: true });
+        expect(planColorHarmony(on).harmony?.includeSky).toBe(true);
+        expect(planColorHarmony({ hueDeg: 30 }).harmony?.includeSky).toBe(false);
+        expect(mergeColorHarmony(on, { includeSky: false })).toEqual({ hueDeg: 30 });
+        expect(() => mergeColorHarmony(on, { includeSky: 'yes' as any })).toThrow(/includeSky/);
+        const glsl = fs.readFileSync(path.join(__dirname, '../src/browser/generative-canvas/services/postprocessing/ColorHarmonyPass.ts'), 'utf8');
+        expect(glsl).toMatch(/if \(uIncludeSky\) w = 1\.0;/);
     });
 
     it('writes the scene data the viewport draws', () => {

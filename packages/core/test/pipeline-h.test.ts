@@ -24,7 +24,7 @@ import { runMassing, type MassingNode } from '../src/node/3d-engine/staged-locat
 import { writeMassingTexturedGlb } from '../src/node/3d-engine/staged-location/pipeline-e/massing-glb';
 import { dedupeContinuedOpenings, G_POLICY, readingGated, rejectionsByReason } from '../src/node/3d-engine/staged-location/pipeline-g/pipeline-g';
 import type { ProgramItems } from '../src/node/3d-engine/staged-location/pipeline-g/read';
-import { GATE_EXPLAINED, GATE_LIFT, H_POLICY, PIPELINE_H_VERSION, stagedProcedural } from '../src/node/3d-engine/staged-location/pipeline-h/pipeline-h';
+import { GATE_EXPLAINED, GATE_LIFT, H_POLICY, PIPELINE_H_VERSION } from '../src/node/3d-engine/staged-location/pipeline-h/pipeline-h';
 import { ledgerFromMassingNote } from '../src/node/3d-engine/staged-location/pipeline-h/ledger';
 import { vectorSeed, type FootprintLookup } from '../src/node/3d-engine/staged-location/extraction-sizing';
 import type { GroundModel } from '../src/node/spatial/StreetViewSurveyPlanner';
@@ -47,14 +47,6 @@ describe('pipeline H', () => {
         expect(H_POLICY).toMatchObject({ name: 'h', gateExplained: GATE_EXPLAINED, gateLift: GATE_LIFT, dedupeContinued: true, rejectionReasons: true, ledger: true });
         expect(G_POLICY).toEqual({ name: 'g' });
         expect(PIPELINE_H_VERSION).toMatch(/^pipeline-h\/v2\+pipeline-g\//);
-    });
-
-    it('is the default; G only when the request or the environment asks for it', () => {
-        expect(stagedProcedural({ procedural: true }, {})).toBe('h');
-        expect(stagedProcedural({ procedural: true, pipeline: 'h' }, {})).toBe('h');
-        expect(stagedProcedural({ procedural: true }, { SCRATCHBOX_STAGED_PROCEDURAL: 'G' })).toBe('g');
-        expect(stagedProcedural({ procedural: true, pipeline: 'g' }, {})).toBe('g');
-        expect(stagedProcedural({ procedural: true, pipeline: 'h' }, { SCRATCHBOX_STAGED_PROCEDURAL: 'g' })).toBe('h');
     });
 
     it('gates a reading that explains almost none of its plate after its re-read; G gates nothing', () => {

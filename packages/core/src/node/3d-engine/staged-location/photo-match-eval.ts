@@ -23,6 +23,11 @@
  *    the symmetric structural-edge chamfer (texture-fit-metric.ts's edges and truncation) and the mean CIEDE2000 of the
  *    blurred colours, plus how much of the mask the arm covers;
  *  - a grid image: the photo beside every arm render, labelled, for a person to look at.
+ * Regions (`regions` in renderTriangles, triangleRegions, regionMasks, regionScores): every triangle carries a label from
+ * geometry alone (ground when it lies on the measured terrain, else the target, a tree crown the run measured, or a neighbour),
+ * the z-buffer gives each pixel the label of the surface its ray hits (sky where none), and the same secondary numbers are
+ * measured over the whole frame and per region (ground, neighbours, the band where standing geometry meets the sky), so the
+ * place around the building is scored as well as the building. Colour and brightness never decide a label.
  * The clay arm (`clay` in renderTriangles, `judgeViewClay`) renders every arm again from the same pose in one uniform clay,
  * its street in a lighter clay, under a raised key light behind the camera, and the judge scores shape only (massing,
  * openings, surface relief): geometry changes that the photo texture hides (measured relief, reveals) can be scored there.
@@ -92,9 +97,21 @@ export interface ArmRender {
     rgba: Uint8Array;
     /** 0..1 share of each pixel's samples that hit the arm (never its context). */
     coverage: Float32Array;
+    /** With `regions` in renderTriangles: per pixel the REGION label most of its samples hit (REGION.sky where none did). */
+    regions?: Uint8Array;
     triangles: number;
     ms: number;
 }
+
+/**
+ * The region labels (what a ray hits). `standing` labels (target, neighbours, trees) are what can meet the sky in a skyline;
+ * the ground and the sky cannot. Labels are measurement partitions for scoring, assigned from geometry (triangleRegions).
+ */
+export const REGION = { sky: 0, ground: 1, neighbours: 2, target: 3, trees: 4 } as const;
+export const REGION_COUNT = 5;
+/** Majority ties go to the first of these (a pixel half building, half sky counts as building). */
+const REGION_TIE_ORDER = [REGION.target, REGION.trees, REGION.neighbours, REGION.ground, REGION.sky];
+const isStanding = (l: number) => l === REGION.target || l === REGION.neighbours || l === REGION.trees;
 
 interface MipLevel { width: number; height: number; linear: Float32Array }
 const mipCache = new WeakMap<object, MipLevel[]>();
@@ -178,6 +195,15 @@ function cutoutUv(k: CutoutKind, u: number, v: number, out: Float64Array): boole
 }
 
 /**
+ * Whether what stands in front (its camera z, `occluderZ`; >= 1e8 where nothing) hides a surface at camera z `z`: it is
+ * nearer by more than 0.25 m plus 2 percent of `z`. renderTriangles' `occluderDepth` and the splat arm's (splat-arm-render.ts)
+ * hide by this one rule.
+ */
+export function occluderHides(occluderZ: number, z: number): boolean {
+    return occluderZ < 1e8 && occluderZ < z - (0.25 + 0.02 * z);
+}
+
+/**
  * Renders triangle soups (readTileTriangles: tile frame, linear textures) from a pinhole or an orthographic camera at the
  * camera's own resolution. `supersample` samples per pixel side (2 = 4 samples). Both faces of a triangle render (scan meshes have mixed
  * winding); the nearest surface wins; `occluderDepth` hides what the real place hides. A soup's `cutout` (tree leaves and
@@ -213,6 +239,12 @@ export function renderTriangles(meshes: TileTriangles[], camera: RenderCamera, o
      * light: a clay render is lit by the same sun). Relief that matches the wall's colour shows as shadow and occlusion.
      */
     lit?: LitOptions;
+    /**
+     * Region labels (REGION values) per mesh, one for the whole mesh or one per triangle: `meshes` for the arm's, `context`
+     * for the context's, in the order passed. With it the render returns `regions`, the label of the nearest surface each
+     * sample hits (REGION.sky where none, or where `occluderDepth` hid it), the most common per pixel.
+     */
+    regions?: { meshes: Array<number | Uint8Array>; context?: Array<number | Uint8Array> };
 } = {}): ArmRender {
     const t0 = Date.now();
     const ss = Math.max(1, Math.round(options.supersample ?? 2));
@@ -353,13 +385,24 @@ export function renderTriangles(meshes: TileTriangles[], camera: RenderCamera, o
     const outW = camera.width, outH = camera.height;
     const acc = new Float64Array(outW * outH * 3), cov = new Float32Array(outW * outH);
     const col = new Float64Array(3), envSample = new Float64Array(3);
+    // region labels per mesh in draw order (the arm's, then the context's) and a count per label per pixel
+    let regionOf: Array<number | Uint8Array> | undefined, regionCounts: Uint8Array | undefined;
+    if (options.regions) {
+        const ctxLabels = options.context?.length ? options.regions.context ?? [] : [];
+        if (options.regions.meshes.length !== armMeshes || ctxLabels.length !== meshes.length - armMeshes) {
+            throw new Error(`renderTriangles: regions name ${options.regions.meshes.length} + ${ctxLabels.length} meshes for ${armMeshes} + ${meshes.length - armMeshes}`);
+        }
+        regionOf = [...options.regions.meshes, ...ctxLabels];
+        regionCounts = new Uint8Array(outW * outH * REGION_COUNT);
+    }
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
         const i = y * W + x;
         const o = (Math.floor(y / ss) * outW + Math.floor(x / ss));
         let mi = mesh[i];
-        if (mi >= 0 && options.occluderDepth) {
-            const oz = options.occluderDepth[Math.floor(y / ss) * camera.width + Math.floor(x / ss)];
-            if (oz < 1e8 && oz < depth[i] - (0.25 + 0.02 * depth[i])) mi = -1;
+        if (mi >= 0 && options.occluderDepth && occluderHides(options.occluderDepth[Math.floor(y / ss) * camera.width + Math.floor(x / ss)], depth[i])) mi = -1;
+        if (regionCounts) {
+            const r = mi < 0 ? REGION.sky : regionOf![mi];
+            regionCounts[o * REGION_COUNT + (typeof r === 'number' ? r : r[tri[i]])]++;
         }
         if (mi < 0) { acc[o * 3] += bgLin[0]; acc[o * 3 + 1] += bgLin[1]; acc[o * 3 + 2] += bgLin[2]; continue; }
         const m = meshes[mi], t = tri[i], ti = m.texture[t];
@@ -427,7 +470,16 @@ export function renderTriangles(meshes: TileTriangles[], camera: RenderCamera, o
         rgba[o * 4] = linearToSrgb255(acc[o * 3] / k); rgba[o * 4 + 1] = linearToSrgb255(acc[o * 3 + 1] / k); rgba[o * 4 + 2] = linearToSrgb255(acc[o * 3 + 2] / k); rgba[o * 4 + 3] = 255;
         cov[o] /= k;
     }
-    return { width: outW, height: outH, rgba, coverage: cov, triangles: drawn, ms: Date.now() - t0 };
+    let regions: Uint8Array | undefined;
+    if (regionCounts) {
+        regions = new Uint8Array(outW * outH);
+        for (let o = 0; o < outW * outH; o++) {
+            let best: number = REGION.sky, bestN = -1;
+            for (const l of REGION_TIE_ORDER) { const nl = regionCounts[o * REGION_COUNT + l]; if (nl > bestN) { bestN = nl; best = l; } }
+            regions[o] = best;
+        }
+    }
+    return { width: outW, height: outH, rgba, coverage: cov, ...(regions ? { regions } : {}), triangles: drawn, ms: Date.now() - t0 };
 }
 
 // =============================================================================
@@ -825,40 +877,79 @@ function resizeField(f: Float32Array, W: number, H: number, w: number, h: number
     return out;
 }
 
-/** Mean SSIM of two luminance images (0..255) over a mask. */
-export function maskedSsim(a: Float32Array, b: Float32Array, w: number, h: number, mask: Uint8Array, sigma = 1.5): number | null {
+/** Per-pixel SSIM of two luminance images (0..255) (Gaussian window of `sigma` px). */
+function ssimMap(a: Float32Array, b: Float32Array, w: number, h: number, sigma = 1.5): Float64Array {
     const n = w * h;
     const ab = new Float32Array(n), aa = new Float32Array(n), bb = new Float32Array(n);
     for (let i = 0; i < n; i++) { ab[i] = a[i] * b[i]; aa[i] = a[i] * a[i]; bb[i] = b[i] * b[i]; }
     const ma = gaussianBlur(a, w, h, sigma), mb = gaussianBlur(b, w, h, sigma);
     const saa = gaussianBlur(aa, w, h, sigma), sbb = gaussianBlur(bb, w, h, sigma), sab = gaussianBlur(ab, w, h, sigma);
     const C1 = (0.01 * 255) ** 2, C2 = (0.03 * 255) ** 2;
-    let s = 0, k = 0;
+    const out = new Float64Array(n);
     for (let i = 0; i < n; i++) {
-        if (!mask[i]) continue;
         const va = Math.max(0, saa[i] - ma[i] * ma[i]), vb = Math.max(0, sbb[i] - mb[i] * mb[i]), cab = sab[i] - ma[i] * mb[i];
-        s += ((2 * ma[i] * mb[i] + C1) * (2 * cab + C2)) / ((ma[i] * ma[i] + mb[i] * mb[i] + C1) * (va + vb + C2));
+        out[i] = ((2 * ma[i] * mb[i] + C1) * (2 * cab + C2)) / ((ma[i] * ma[i] + mb[i] * mb[i] + C1) * (va + vb + C2));
+    }
+    return out;
+}
+
+function meanOverMask(map: Float64Array, mask: Uint8Array): number | null {
+    let s = 0, k = 0;
+    for (let i = 0; i < map.length; i++) {
+        if (!mask[i]) continue;
+        s += map[i];
         k++;
     }
     return k >= 200 ? s / k : null;
 }
 
-/**
- * The secondary numbers of one arm render against the photo, inside `mask` (photo resolution, 1 = the building).
- * Everything is computed at PHOTO_MATCH_METRIC_WIDTH_PX wide.
- */
-export function perceptualScores(photo: DecodedImage, render: ArmRender, mask: Uint8Array): PerceptualScores {
+/** Mean SSIM of two luminance images (0..255) over a mask. */
+export function maskedSsim(a: Float32Array, b: Float32Array, w: number, h: number, mask: Uint8Array, sigma = 1.5): number | null {
+    return meanOverMask(ssimMap(a, b, w, h, sigma), mask);
+}
+
+/** What the secondary numbers of one render against its photo share between masks, at PHOTO_MATCH_METRIC_WIDTH_PX wide. */
+interface PerceptualPair {
+    W: number; H: number; w: number; h: number;
+    lp: Float32Array; lr: Float32Array; cov: Float32Array; ssim: Float64Array;
+    /** CIEDE2000 of the blurred colours at every second pixel (rows and columns), NaN elsewhere. */
+    de: Float64Array;
+}
+
+function perceptualPair(photo: DecodedImage, render: ArmRender): PerceptualPair {
     const W = photo.width, H = photo.height;
     const w = Math.min(W, PHOTO_MATCH_METRIC_WIDTH_PX), h = Math.max(1, Math.round((H * w) / W));
-    const m = resizeField(Float32Array.from(mask), W, H, w, h);
-    const region = new Uint8Array(w * h);
-    let maskPixels = 0;
-    for (let i = 0; i < region.length; i++) if (m[i] >= 0.5) { region[i] = 1; maskPixels++; }
     const cov = resizeField(render.coverage, W, H, w, h);
+    const lp = reducedLuminance(photo, w, h), lr = reducedLuminance({ width: render.width, height: render.height, rgba: render.rgba }, w, h);
+    // colour: blurred linear RGB -> Lab, CIEDE2000, every second pixel
+    const rp = resizeRgbaBox(photo, w, h), rr = resizeRgbaBox(render, w, h);
+    const chan = (src: Uint8Array, c: number) => { const f = new Float32Array(w * h); for (let i = 0; i < f.length; i++) f[i] = SRGB8_TO_LINEAR[src[i * 4 + c]]; return gaussianBlur(f, w, h, 3); };
+    const P = [0, 1, 2].map(c => chan(rp, c)), R = [0, 1, 2].map(c => chan(rr, c));
+    const de = new Float64Array(w * h).fill(NaN);
+    for (let y = 0; y < h; y += 2) for (let x = 0; x < w; x += 2) {
+        const i = y * w + x;
+        de[i] = deltaE00(linearToLab(P[0][i], P[1][i], P[2][i]), linearToLab(R[0][i], R[1][i], R[2][i]));
+    }
+    return { W, H, w, h, lp, lr, cov, ssim: ssimMap(lp, lr, w, h), de };
+}
+
+const r3n = (v: number | null) => (v === null ? null : Math.round(v * 1000) / 1000);
+
+/** The mask (photo resolution) at the working width: a working pixel is in it when at least half its area is. */
+function workingMask(p: Pick<PerceptualPair, 'W' | 'H' | 'w' | 'h'>, mask: Uint8Array): { region: Uint8Array; pixels: number } {
+    const m = resizeField(Float32Array.from(mask), p.W, p.H, p.w, p.h);
+    const region = new Uint8Array(p.w * p.h);
+    let pixels = 0;
+    for (let i = 0; i < region.length; i++) if (m[i] >= 0.5) { region[i] = 1; pixels++; }
+    return { region, pixels };
+}
+
+function perceptualOnMask(p: PerceptualPair, mask: Uint8Array): PerceptualScores {
+    const { w, h, lp, lr, cov } = p;
+    const { region, pixels: maskPixels } = workingMask(p, mask);
     let covered = 0;
     for (let i = 0; i < region.length; i++) if (region[i] && cov[i] >= 0.5) covered++;
-    const lp = reducedLuminance(photo, w, h), lr = reducedLuminance({ width: render.width, height: render.height, rgba: render.rgba }, w, h);
-    const ssim = maskedSsim(lp, lr, w, h, region);
+    const ssim = meanOverMask(p.ssim, region);
     // structural edges both ways inside the mask (the photo's found around it, so a mask edge does not cut its segments)
     const near = new Uint8Array(w * h);
     const dtMask = distanceTransform(region, w, h, 8);
@@ -867,19 +958,22 @@ export function perceptualScores(photo: DecodedImage, render: ArmRender, mask: U
     const dtP = distanceTransform(eP, w, h, FIT_CHAMFER_TRUNCATION_PX + 1), dtR = distanceTransform(eR, w, h, FIT_CHAMFER_TRUNCATION_PX + 1);
     const ca = chamferMean(eR, dtP, region), cb = chamferMean(eP, dtR, region);
     const edgeChamferPx = ca !== null && cb !== null ? (ca + cb) / 2 : ca ?? cb;
-    // colour: blurred linear RGB -> Lab, CIEDE2000, every second pixel
-    const rp = resizeRgbaBox(photo, w, h), rr = resizeRgbaBox(render, w, h);
-    const chan = (src: Uint8Array, c: number) => { const f = new Float32Array(w * h); for (let i = 0; i < f.length; i++) f[i] = SRGB8_TO_LINEAR[src[i * 4 + c]]; return gaussianBlur(f, w, h, 3); };
-    const P = [0, 1, 2].map(c => chan(rp, c)), R = [0, 1, 2].map(c => chan(rr, c));
     let de = 0, nd = 0;
     for (let y = 0; y < h; y += 2) for (let x = 0; x < w; x += 2) {
         const i = y * w + x;
         if (!region[i]) continue;
-        de += deltaE00(linearToLab(P[0][i], P[1][i], P[2][i]), linearToLab(R[0][i], R[1][i], R[2][i]));
+        de += p.de[i];
         nd++;
     }
-    const r3 = (v: number | null) => (v === null ? null : Math.round(v * 1000) / 1000);
-    return { coverage: maskPixels ? r3(covered / maskPixels)! : 0, ssim: r3(ssim), edgeChamferPx: r3(edgeChamferPx), colourDeltaE: nd >= 50 ? r3(de / nd) : null, maskPixels };
+    return { coverage: maskPixels ? r3n(covered / maskPixels)! : 0, ssim: r3n(ssim), edgeChamferPx: r3n(edgeChamferPx), colourDeltaE: nd >= 50 ? r3n(de / nd) : null, maskPixels };
+}
+
+/**
+ * The secondary numbers of one arm render against the photo, inside `mask` (photo resolution, 1 = the building).
+ * Everything is computed at PHOTO_MATCH_METRIC_WIDTH_PX wide.
+ */
+export function perceptualScores(photo: DecodedImage, render: ArmRender, mask: Uint8Array): PerceptualScores {
+    return perceptualOnMask(perceptualPair(photo, render), mask);
 }
 
 /** The building mask of a view: pixels the reference render covers at least half. */
@@ -887,6 +981,443 @@ export function coverageMask(render: ArmRender): Uint8Array {
     const m = new Uint8Array(render.width * render.height);
     for (let i = 0; i < m.length; i++) if (render.coverage[i] >= 0.5) m[i] = 1;
     return m;
+}
+
+// =============================================================================
+// Regions: what each pixel's ray hits, from geometry
+// =============================================================================
+
+/** The terrain under a point (tile frame, metres), NaN where it is not measured; StreetViewSurveyPlanner's GroundModel is one. */
+export interface TerrainLookup { groundAt(x: number, z: number): number }
+
+/** A triangle is ground when none of its vertices stands more than this above the terrain under it (the base cleanup's street band). */
+export const PHOTO_MATCH_GROUND_BAND_M = 0.6;
+/** Off the measured terrain (the far field), a triangle is ground when its normal is within 60 degrees of vertical. */
+export const PHOTO_MATCH_OFF_TERRAIN_UP = 0.5;
+/** Half-width of the skyline band as a share of the image width (8 px at 640), at least 2 px. */
+export const PHOTO_MATCH_SKYLINE_BAND_SHARE = 0.0125;
+
+/**
+ * Region labels per triangle, from geometry alone: REGION.ground when no vertex stands more than PHOTO_MATCH_GROUND_BAND_M
+ * above the terrain under it (a vertex off the terrain is not counted; a triangle wholly off it is ground when it faces within
+ * 60 degrees of up), else `standing`: one label for the whole mesh, or a function of the triangle and its centroid's (x, z)
+ * (the target's footprint, a matched crown).
+ */
+export function triangleRegions(t: TileTriangles, terrain: TerrainLookup, standing: number | ((tri: number, x: number, z: number) => number)): Uint8Array {
+    const n = t.texture.length, P = t.positions;
+    const out = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+        let known = 0, high = false;
+        for (let k = 0; k < 3 && !high; k++) {
+            const o = i * 9 + k * 3;
+            const g = terrain.groundAt(P[o], P[o + 2]);
+            if (g !== g) continue;
+            known++;
+            if (P[o + 1] - g > PHOTO_MATCH_GROUND_BAND_M) high = true;
+        }
+        const ground = known ? !high : Math.abs(t.normals[i * 3 + 1]) >= PHOTO_MATCH_OFF_TERRAIN_UP;
+        if (ground) out[i] = REGION.ground;
+        else out[i] = typeof standing === 'number' ? standing : standing(i, (P[i * 9] + P[i * 9 + 3] + P[i * 9 + 6]) / 3, (P[i * 9 + 2] + P[i * 9 + 5] + P[i * 9 + 8]) / 3);
+    }
+    return out;
+}
+
+/** The terrain grid a plan outline is drawn on (StreetViewSurveyPlanner's GroundModel is one). */
+export interface TerrainGrid extends TerrainLookup { x0: number; z0: number; nx: number; nz: number; cellMeters: number; cellIndex(x: number, z: number): number }
+
+/**
+ * A cell is in a plan outline when its centre lies within this (m) of a standing triangle in plan: a wall on a cell boundary
+ * takes the cells on both sides, and a wall rebuilt up to half a metre outside the scanned one (K clips at 0.3 m) stays inside.
+ */
+export const PHOTO_MATCH_OUTLINE_REACH_M = 1;
+
+/**
+ * The plan outline of a mesh on the terrain grid, from geometry alone: 1 for every cell whose centre lies within
+ * PHOTO_MATCH_OUTLINE_REACH_M in plan of one of its standing triangles (standing as triangleRegions decides: a roof by its
+ * area, a wall by its foot line), and for every cell those enclose (not 4-connected to the grid's edge through cells outside:
+ * a courtyard, a gap in the roof).
+ */
+export function planOutlineCells(t: TileTriangles, terrain: TerrainGrid, reachM = PHOTO_MATCH_OUTLINE_REACH_M): Uint8Array {
+    const { x0, z0, nx, nz, cellMeters: cell } = terrain;
+    const out = new Uint8Array(nx * nz);
+    const labels = triangleRegions(t, terrain, REGION.target);
+    const P = t.positions, r2 = reachM * reachM;
+    const segDist2 = (px: number, pz: number, ax: number, az: number, bx: number, bz: number) => {
+        const dx = bx - ax, dz = bz - az, l = dx * dx + dz * dz;
+        const s = l > 0 ? Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / l)) : 0;
+        const ex = ax + s * dx - px, ez = az + s * dz - pz;
+        return ex * ex + ez * ez;
+    };
+    for (let i = 0; i < labels.length; i++) {
+        if (labels[i] !== REGION.target) continue;
+        const o = i * 9, ax = P[o], az = P[o + 2], bx = P[o + 3], bz = P[o + 5], cx = P[o + 6], cz = P[o + 8];
+        const area2 = (bx - ax) * (cz - az) - (bz - az) * (cx - ax);
+        const i0 = Math.max(0, Math.floor((Math.min(ax, bx, cx) - reachM - x0) / cell)), i1 = Math.min(nx - 1, Math.floor((Math.max(ax, bx, cx) + reachM - x0) / cell));
+        const k0 = Math.max(0, Math.floor((Math.min(az, bz, cz) - reachM - z0) / cell)), k1 = Math.min(nz - 1, Math.floor((Math.max(az, bz, cz) + reachM - z0) / cell));
+        for (let k = k0; k <= k1; k++) for (let j = i0; j <= i1; j++) {
+            const c = k * nx + j;
+            if (out[c]) continue;
+            const px = x0 + (j + 0.5) * cell, pz = z0 + (k + 0.5) * cell;
+            let inside = false;
+            if (Math.abs(area2) > 1e-9) {
+                const w0 = (bx - px) * (cz - pz) - (bz - pz) * (cx - px), w1 = (cx - px) * (az - pz) - (cz - pz) * (ax - px), w2 = (ax - px) * (bz - pz) - (az - pz) * (bx - px);
+                inside = area2 > 0 ? w0 >= 0 && w1 >= 0 && w2 >= 0 : w0 <= 0 && w1 <= 0 && w2 <= 0;
+            }
+            if (inside || Math.min(segDist2(px, pz, ax, az, bx, bz), segDist2(px, pz, bx, bz, cx, cz), segDist2(px, pz, cx, cz, ax, az)) <= r2) out[c] = 1;
+        }
+    }
+    // the cells outside: 4-connected to the grid's edge through cells not in the outline; the rest are enclosed by it
+    const outside = new Uint8Array(nx * nz), stack: number[] = [];
+    const seed = (c: number) => { if (!out[c] && !outside[c]) { outside[c] = 1; stack.push(c); } };
+    for (let j = 0; j < nx; j++) { seed(j); seed((nz - 1) * nx + j); }
+    for (let k = 0; k < nz; k++) { seed(k * nx); seed(k * nx + nx - 1); }
+    while (stack.length) {
+        const c = stack.pop()!, j = c % nx, k = (c - j) / nx;
+        if (j > 0) seed(c - 1);
+        if (j + 1 < nx) seed(c + 1);
+        if (k > 0) seed(c - nx);
+        if (k + 1 < nz) seed(c + nx);
+    }
+    for (let c = 0; c < out.length; c++) if (!outside[c]) out[c] = 1;
+    return out;
+}
+
+/** The masks the secondary numbers are measured over: the whole frame, the target (building), the ground, the neighbours, the measured tree crowns and the skyline band. */
+export const PHOTO_MATCH_REGIONS = ['frame', 'building', 'ground', 'neighbours', 'trees', 'skyline'] as const;
+export type PhotoMatchRegion = typeof PHOTO_MATCH_REGIONS[number];
+
+export interface RegionMasks {
+    width: number; height: number;
+    /** Per region, 1 = in it (photo resolution). The skyline band overlaps the others. */
+    masks: Record<PhotoMatchRegion, Uint8Array>;
+    /** Pixels per label and in the skyline band (photo resolution). */
+    pixels: { sky: number; ground: number; neighbours: number; target: number; trees: number; skyline: number };
+    /** The band's half-width (px). */
+    bandPx: number;
+}
+
+export function skylineBandPx(width: number): number {
+    return Math.max(2, Math.round(width * PHOTO_MATCH_SKYLINE_BAND_SHARE));
+}
+
+/**
+ * The region masks of a label image (REGION per pixel): one per label, and the skyline band, every pixel within `bandPx`
+ * of a pixel where standing geometry (target, neighbours, trees) and the sky are 4-neighbours, on either side of it.
+ */
+export function regionMasks(labels: Uint8Array, width: number, height: number, bandPx = skylineBandPx(width)): RegionMasks {
+    const n = width * height;
+    const masks = Object.fromEntries(PHOTO_MATCH_REGIONS.map(r => [r, new Uint8Array(n)])) as Record<PhotoMatchRegion, Uint8Array>;
+    masks.frame.fill(1);
+    const pixels = { sky: 0, ground: 0, neighbours: 0, target: 0, trees: 0, skyline: 0 };
+    const edge = new Uint8Array(n);
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const i = y * width + x, l = labels[i];
+        if (l === REGION.sky) pixels.sky++;
+        else if (l === REGION.ground) { pixels.ground++; masks.ground[i] = 1; }
+        else if (l === REGION.neighbours) { pixels.neighbours++; masks.neighbours[i] = 1; }
+        else if (l === REGION.target) { pixels.target++; masks.building[i] = 1; }
+        else if (l === REGION.trees) { pixels.trees++; masks.trees[i] = 1; }
+        // the skyline's own pixels: standing beside sky, and sky beside standing (4-neighbours)
+        const s = isStanding(l), sky = l === REGION.sky;
+        if (!s && !sky) continue;
+        const meets = (j: number) => (s ? labels[j] === REGION.sky : isStanding(labels[j]));
+        if ((x > 0 && meets(i - 1)) || (x + 1 < width && meets(i + 1)) || (y > 0 && meets(i - width)) || (y + 1 < height && meets(i + width))) edge[i] = 1;
+    }
+    const dt = distanceTransform(edge, width, height, bandPx + 1);
+    for (let i = 0; i < n; i++) if (dt[i] <= bandPx) { masks.skyline[i] = 1; pixels.skyline++; }
+    return { width, height, masks, pixels, bandPx };
+}
+
+export interface RegionScore extends Omit<PerceptualScores, 'coverage'> {
+    /** Share of the frame the region holds. */
+    share: number;
+    /**
+     * Share of the region where the arm's render shows what the reference shows (its label; in the skyline band whether it
+     * shows standing geometry, ground or sky), null without the arm's region labels.
+     */
+    agreement: number | null;
+}
+
+/** Ground, standing geometry or sky: what the skyline band's agreement compares. */
+const skylineClass = (l: number) => (l === REGION.sky ? 0 : l === REGION.ground ? 1 : 2);
+
+/**
+ * The secondary numbers of one arm render against the photo in every region of the reference's masks (PHOTO_MATCH_REGIONS),
+ * and how far the arm's own labels agree with the reference's there. A region with no pixels has null numbers.
+ */
+export function regionScores(photo: DecodedImage, render: ArmRender, regions: RegionMasks, reference: Uint8Array): Record<PhotoMatchRegion, RegionScore> {
+    const pair = perceptualPair(photo, render);
+    const total = regions.width * regions.height;
+    const out = {} as Record<PhotoMatchRegion, RegionScore>;
+    for (const r of PHOTO_MATCH_REGIONS) {
+        const mask = regions.masks[r];
+        let inside = 0, agree = 0;
+        for (let i = 0; i < total; i++) {
+            if (!mask[i]) continue;
+            inside++;
+            if (render.regions && (r === 'skyline' ? skylineClass(render.regions[i]) === skylineClass(reference[i]) : render.regions[i] === reference[i])) agree++;
+        }
+        const agreement = render.regions && inside ? r3n(agree / inside) : null;
+        if (!inside) { out[r] = { share: 0, agreement: null, ssim: null, edgeChamferPx: null, colourDeltaE: null, maskPixels: 0 }; continue; }
+        const { coverage: _coverage, ...s } = perceptualOnMask(pair, mask);
+        out[r] = { share: r3n(inside / total)!, agreement, ...s };
+    }
+    return out;
+}
+
+/** The overlay colours of the regions (sRGB); the sky is left as it is. */
+export const PHOTO_MATCH_REGION_COLOURS: { target: Vec3; neighbours: Vec3; ground: Vec3; trees: Vec3; skyline: Vec3 } = {
+    target: [235, 64, 52], neighbours: [56, 116, 240], ground: [64, 196, 84], trees: [196, 72, 220], skyline: [255, 214, 32]
+};
+/** The overlay's legend, for a grid label (the colours by name). */
+export const PHOTO_MATCH_REGION_LEGEND = ['RED TARGET BLUE NEIGHBOURS GREEN GROUND', 'PURPLE TREES YELLOW SKYLINE'] as const;
+
+/** `image` tinted by region (REGION labels at its resolution), the skyline band (when given) drawn over the rest. */
+export function regionOverlay(image: { width: number; height: number; rgba: Uint8Array }, labels: Uint8Array, skyline?: Uint8Array, alpha = 0.45): { width: number; height: number; rgba: Uint8Array } {
+    const C = PHOTO_MATCH_REGION_COLOURS;
+    const byLabel: Array<Vec3 | undefined> = [];
+    byLabel[REGION.target] = C.target; byLabel[REGION.neighbours] = C.neighbours; byLabel[REGION.ground] = C.ground; byLabel[REGION.trees] = C.trees;
+    const rgba = Uint8Array.from(image.rgba);
+    for (let i = 0; i < labels.length; i++) {
+        const band = skyline?.[i];
+        const c = band ? C.skyline : byLabel[labels[i]];
+        if (!c) continue;
+        const a = band ? 0.55 : alpha;
+        for (let k = 0; k < 3; k++) rgba[i * 4 + k] = Math.round(rgba[i * 4 + k] * (1 - a) + c[k] * a);
+    }
+    return { width: image.width, height: image.height, rgba };
+}
+
+// =============================================================================
+// Per view, before any score is read: the regions in the frame, where the tile ends, where the target stands
+// =============================================================================
+
+/**
+ * A region the judge scores must hold at least this share of the frame in the reference's masks. Below it the region is not in
+ * the view: the judge is not asked about it, its score is null and no mean or bar reads it.
+ */
+export const PHOTO_MATCH_REGION_MIN_SHARE = 0.01;
+
+/** The region criteria a view can be judged on: those whose region holds at least `minShare` of the frame. */
+export function regionsInFrame(pixels: RegionMasks['pixels'], total: number, minShare = PHOTO_MATCH_REGION_MIN_SHARE): JudgeRegionCriterion[] {
+    return JUDGE_REGION_CRITERIA.filter(c => pixels[c] / Math.max(1, total) >= minShare);
+}
+
+/** The tile's surfaces on a plan grid (StreetViewSurveyPlanner's GroundModel is one): the highest per cell, NaN where it has none. */
+export interface TileTopGrid { x0: number; z0: number; nx: number; nz: number; cellMeters: number; top: ArrayLike<number> }
+
+/** How far round the point where a ray leaves the tile its surfaces are read (m): the place goes on past the edge about as tall. */
+export const PHOTO_MATCH_TILE_EDGE_REACH_M = 20;
+/** A view whose frame holds at least this share of sky pixels past the tile's edge is flagged (its regions are not judged). */
+export const PHOTO_MATCH_TILE_EDGE_MIN_SHARE = 0.01;
+
+export interface TileEdgeReading {
+    /** Share of the frame labelled sky whose ray leaves the tile lower than its surfaces stand round the point it leaves. */
+    share: number;
+    flagged: boolean;
+    /** Pixels sampled (every `stride`-th, rows and columns), and how many of them lie past the edge. */
+    samples: number; pastEdge: number;
+}
+
+const nearTopCache = new WeakMap<object, { reach: number; near: Float32Array; max: number }>();
+
+/** Per cell, the highest surface within `reachM` (a square window), -Infinity where none; and the highest of all. */
+function nearTop(grid: TileTopGrid, reachM: number): { near: Float32Array; max: number } {
+    const hit = nearTopCache.get(grid.top as object);
+    if (hit && hit.reach === reachM) return hit;
+    const { nx, nz, top } = grid, r = Math.max(1, Math.ceil(reachM / grid.cellMeters));
+    const rows = new Float32Array(nx * nz), near = new Float32Array(nx * nz);
+    let max = -Infinity;
+    for (let k = 0; k < nz; k++) for (let j = 0; j < nx; j++) {
+        let m = -Infinity;
+        for (let jj = Math.max(0, j - r); jj <= Math.min(nx - 1, j + r); jj++) { const v = top[k * nx + jj]; if (v > m) m = v; }
+        rows[k * nx + j] = m;
+        const v = top[k * nx + j];
+        if (v > max) max = v;
+    }
+    for (let k = 0; k < nz; k++) for (let j = 0; j < nx; j++) {
+        let m = -Infinity;
+        for (let kk = Math.max(0, k - r); kk <= Math.min(nz - 1, k + r); kk++) { const v = rows[kk * nx + j]; if (v > m) m = v; }
+        near[k * nx + j] = m;
+    }
+    const out = { reach: reachM, near, max };
+    nearTopCache.set(grid.top as object, out);
+    return out;
+}
+
+/**
+ * Where the reference tile ends inside the frame, from geometry alone: of the pixels the reference labels sky (no surface hit),
+ * those whose ray leaves the tile (its last cell with a surface, else the eye when it never crosses one) lower than the tile's
+ * highest surface within PHOTO_MATCH_TILE_EDGE_REACH_M of that point. The photo shows whatever stands past that edge there,
+ * the masks show sky. A ray that climbs above the tile's highest surface before it leaves is the sky. Read before any score.
+ */
+export function tileEdgeInFrame(labels: Uint8Array, camera: PinholeCamera, grid: TileTopGrid, options: { stride?: number; reachM?: number; minShare?: number } = {}): TileEdgeReading {
+    const stride = options.stride ?? 4, minShare = options.minShare ?? PHOTO_MATCH_TILE_EDGE_MIN_SHARE;
+    const { near, max } = nearTop(grid, options.reachM ?? PHOTO_MATCH_TILE_EDGE_REACH_M);
+    const { x0, z0, nx, nz, cellMeters: cell, top } = grid;
+    const xEnd = x0 + nx * cell, zEnd = z0 + nz * cell;
+    const [ex, ey, ez] = camera.eye;
+    const cellAt = (x: number, z: number) => {
+        const j = Math.floor((x - x0) / cell), k = Math.floor((z - z0) / cell);
+        return j < 0 || k < 0 || j >= nx || k >= nz ? -1 : k * nx + j;
+    };
+    // past the farthest corner of the grid no ray meets a cell
+    const tMax = Math.max(...[[x0, z0], [xEnd, z0], [x0, zEnd], [xEnd, zEnd]].map(([x, z]) => Math.hypot(x - ex, z - ez))) + cell;
+    let samples = 0, pastEdge = 0;
+    for (let py = Math.floor(stride / 2); py < camera.height; py += stride) for (let px = Math.floor(stride / 2); px < camera.width; px += stride) {
+        samples++;
+        if (labels[py * camera.width + px] !== REGION.sky) continue;
+        const xc = (px + 0.5 - camera.cx) / camera.fx, yc = -(py + 0.5 - camera.cy) / camera.fy;
+        const d = [0, 1, 2].map(i => camera.right[i] * xc + camera.up[i] * yc + camera.fwd[i]);
+        const h = Math.hypot(d[0], d[2]);
+        if (h < 1e-9) { if (d[1] < 0) pastEdge++; continue; }
+        const ux = d[0] / h, uz = d[2] / h, slope = d[1] / h;
+        // march in plan, a cell at a time, until the ray leaves the grid (it cannot come back) or climbs past every surface
+        let last = -1, sky = false, inside = false;
+        for (let t = 0; t <= tMax; t += cell) {
+            if (slope >= 0 && ey + slope * t > max) { sky = true; break; }
+            const c = cellAt(ex + ux * t, ez + uz * t);
+            if (c < 0) { if (inside) break; continue; }
+            inside = true;
+            if (top[c] === top[c]) last = t;
+        }
+        if (sky) continue;
+        const te = Math.max(0, last), c = cellAt(ex + ux * te, ez + uz * te);
+        const standing = c >= 0 && near[c] > -Infinity ? near[c] : max;
+        if (ey + slope * te < standing) pastEdge++;
+    }
+    const share = samples ? pastEdge / samples : 0;
+    return { share: Math.round(share * 1000) / 1000, flagged: share >= minShare, samples, pastEdge };
+}
+
+/** Shifts up to this (px at the metric width) are tried when placing a build's target on the photo's silhouette. */
+export const PHOTO_MATCH_PLACEMENT_SEARCH_PX = 40;
+/** Distances from the photo's silhouette to a build's outline count up to this (px at the metric width). */
+export const PHOTO_MATCH_PLACEMENT_TRUNCATION_PX = 24;
+/**
+ * The photo's silhouette of the target: its structural edges within this (px at the metric width) of the reference's target
+ * outline (the scan, registered on the photo to an edge residual of at most 5 px).
+ */
+export const PHOTO_MATCH_PLACEMENT_BAND_PX = 8;
+/** Added to the cost per pixel of shift, so a direction the silhouette leaves free (a long straight edge) resolves to no shift. */
+const PLACEMENT_SHIFT_COST = 0.02;
+/** Least silhouette and outline pixels a placement is read from. */
+const PLACEMENT_MIN_PX = 60;
+
+/** The photo's structural edges at the metric width (texture-fit-metric's: straight segments of at least 22 px). */
+export interface PhotoEdgeField { w: number; h: number; edges: Uint8Array; edgePx: number }
+
+export function photoEdgeField(photo: DecodedImage): PhotoEdgeField {
+    const w = Math.min(photo.width, PHOTO_MATCH_METRIC_WIDTH_PX), h = Math.max(1, Math.round((photo.height * w) / photo.width));
+    const edges = structuralEdges(reducedLuminance(photo, w, h), w, h, new Uint8Array(w * h).fill(1));
+    let edgePx = 0;
+    for (let i = 0; i < edges.length; i++) edgePx += edges[i];
+    return { w, h, edges, edgePx };
+}
+
+export interface TargetPlacement {
+    /**
+     * The placement error: the mean distance (px at the metric width, truncated at PHOTO_MATCH_PLACEMENT_TRUNCATION_PX) from the
+     * photo's silhouette of the target to the build's outline as drawn. Lower is better; it grows with a move and with a wrong shape.
+     */
+    errorPx: number;
+    /** errorPx as an angle (degrees across the frame). */
+    errorDeg: number;
+    /** The image shift (px, x right, y down) that brings the build's outline closest to the silhouette, its length, and the error left at it. */
+    shiftPx: [number, number]; shiftLengthPx: number; residualPx: number;
+    /** The photo's silhouette pixels read, and the build's outline pixels. */
+    silhouettePx: number; outlinePx: number;
+}
+
+/**
+ * The target's outline in a label image at the metric width (REGION per pixel): target pixels with a 4-neighbour that is not
+ * the target, at least 2 px from the frame's edge (where the frame, not the target, ends the region).
+ */
+export function targetOutline(labels: Uint8Array, w: number, h: number): Uint8Array {
+    const out = new Uint8Array(w * h);
+    for (let y = 2; y < h - 2; y++) for (let x = 2; x < w - 2; x++) {
+        const i = y * w + x;
+        if (labels[i] !== REGION.target) continue;
+        if (labels[i - 1] !== REGION.target || labels[i + 1] !== REGION.target || labels[i - w] !== REGION.target || labels[i + w] !== REGION.target) out[i] = 1;
+    }
+    return out;
+}
+
+/**
+ * The target with its holes filled (REGION per pixel): every pixel that is not the target and that the frame's border cannot
+ * reach (through 4-neighbours) without crossing the target becomes the target, so the target's only outline is its outer
+ * boundary. A hole in the scan is not a silhouette. Real openings are filled too (an arch with the sky behind it, a courtyard
+ * seen through): placement measures where the building stands, not its openings, so that is accepted.
+ */
+export function targetFilled(labels: Uint8Array, w: number, h: number): Uint8Array {
+    const T = REGION.target, out = Uint8Array.from(labels), reached = new Uint8Array(w * h);
+    const stack = new Int32Array(w * h);
+    let top = 0;
+    const push = (i: number) => { if (!reached[i] && labels[i] !== T) { reached[i] = 1; stack[top++] = i; } };
+    for (let x = 0; x < w; x++) { push(x); push((h - 1) * w + x); }
+    for (let y = 0; y < h; y++) { push(y * w); push(y * w + w - 1); }
+    while (top) {
+        const i = stack[--top], x = i % w;
+        if (x > 0) push(i - 1);
+        if (x < w - 1) push(i + 1);
+        if (i >= w) push(i - w);
+        if (i < (h - 1) * w) push(i + w);
+    }
+    for (let i = 0; i < out.length; i++) if (out[i] !== T && !reached[i]) out[i] = T;
+    return out;
+}
+
+/**
+ * Where a build's target is drawn against where the photo shows it, from edges alone (never a vision score). The photo's
+ * silhouette of the target is its structural edges within PHOTO_MATCH_PLACEMENT_BAND_PX of the reference's target outline
+ * (`reference`: the scan's target drawn alone from the registered pose, at the metric width, labelled as the raw scan arm is;
+ * the evaluator restricts it to Google's vector footprint and draws it, and every arm, behind the reference's street).
+ * The placement error is the mean distance from that silhouette to the build's outline (`arm`: the build drawn alone from the
+ * same pose), truncated at PHOTO_MATCH_PLACEMENT_TRUNCATION_PX. Both outlines are outer boundaries (targetFilled): a hole's
+ * border is never read, in the scan or in a build, so a build that fills the scan's hole loses nothing by it. Beside it, the
+ * image shift within PHOTO_MATCH_PLACEMENT_SEARCH_PX that brings the outline closest (plus PLACEMENT_SHIFT_COST per pixel of
+ * shift), searched every 2 px, then to the pixel, and the error left there: a move shows as a shift, a wrong shape as error no
+ * shift removes. The photo's other edges (windows, signs, the street) are never read, so a facade's repeats cannot pull it.
+ * Null with too few silhouette or outline pixels.
+ */
+export function targetPlacement(field: PhotoEdgeField, reference: Uint8Array, arm: Uint8Array, degPerPx: number): TargetPlacement | null {
+    const { w, h, edges } = field;
+    const nearRef = distanceTransform(targetOutline(targetFilled(reference, w, h), w, h), w, h, PHOTO_MATCH_PLACEMENT_BAND_PX + 1);
+    const xs: number[] = [], ys: number[] = [];
+    for (let i = 0; i < edges.length; i++) if (edges[i] && nearRef[i] <= PHOTO_MATCH_PLACEMENT_BAND_PX) { xs.push(i % w); ys.push((i - (i % w)) / w); }
+    const n = xs.length;
+    const outline = targetOutline(targetFilled(arm, w, h), w, h);
+    let outlinePx = 0;
+    for (let i = 0; i < outline.length; i++) outlinePx += outline[i];
+    if (n < PLACEMENT_MIN_PX || outlinePx < PLACEMENT_MIN_PX) return null;
+    const T = PHOTO_MATCH_PLACEMENT_TRUNCATION_PX;
+    const dt = distanceTransform(outline, w, h, T + 1);
+    // the build moved by (dx, dy): its outline's distance from each silhouette pixel is the distance at the pixel moved back
+    const cost = (dx: number, dy: number) => {
+        let s = 0, k = 0;
+        for (let p = 0; p < n; p++) {
+            const x = xs[p] - dx, y = ys[p] - dy;
+            if (x < 0 || y < 0 || x >= w || y >= h) continue;
+            s += Math.min(T, dt[y * w + x]); k++;
+        }
+        return k >= 0.6 * n ? s / k : Infinity;
+    };
+    const S = PHOTO_MATCH_PLACEMENT_SEARCH_PX;
+    const c0 = cost(0, 0);
+    let best = { dx: 0, dy: 0, c: c0, j: c0 };
+    const consider = (dx: number, dy: number) => {
+        const c = cost(dx, dy), j = c + PLACEMENT_SHIFT_COST * Math.hypot(dx, dy);
+        if (j < best.j) best = { dx, dy, c, j };
+    };
+    for (let dy = -S; dy <= S; dy += 2) for (let dx = -S; dx <= S; dx += 2) consider(dx, dy);
+    const cx = best.dx, cy = best.dy;
+    for (let dy = cy - 2; dy <= cy + 2; dy++) for (let dx = cx - 2; dx <= cx + 2; dx++) if (Math.abs(dx) <= S && Math.abs(dy) <= S) consider(dx, dy);
+    if (!Number.isFinite(c0)) return null;
+    return {
+        errorPx: Math.round(c0 * 100) / 100, errorDeg: Math.round(c0 * degPerPx * 1000) / 1000,
+        shiftPx: [best.dx, best.dy], shiftLengthPx: Math.round(Math.hypot(best.dx, best.dy) * 100) / 100, residualPx: Math.round(best.c * 100) / 100,
+        silhouettePx: n, outlinePx
+    };
 }
 
 // =============================================================================
@@ -901,7 +1432,13 @@ export function coverageMask(render: ArmRender): Uint8Array {
 export const JUDGE_CRITERIA = ['shape', 'materials', 'detail', 'errors', 'overall', 'realism', 'identity'] as const;
 export const JUDGE_REQUIRED_CRITERIA = ['shape', 'materials', 'detail', 'errors', 'overall'] as const;
 export type JudgeCriterion = typeof JUDGE_CRITERIA[number];
-export type JudgeScores = Record<typeof JUDGE_REQUIRED_CRITERIA[number], number> & Partial<Record<'realism' | 'identity', number>>;
+/**
+ * The place around the building, scored only when a judgement asks for it (`regions`): the ground, the neighbours and the
+ * skyline. The renders stay shuffled and unlabelled; the building's criteria above are asked the same way either way.
+ */
+export const JUDGE_REGION_CRITERIA = ['ground', 'neighbours', 'skyline'] as const;
+export type JudgeRegionCriterion = typeof JUDGE_REGION_CRITERIA[number];
+export type JudgeScores = Record<typeof JUDGE_REQUIRED_CRITERIA[number], number> & Partial<Record<'realism' | 'identity' | JudgeRegionCriterion, number>>;
 
 /** The part of a vision chain the judge calls (VisionModelChain.generate). */
 export interface JudgeClient {
@@ -926,23 +1463,53 @@ export function seededShuffle<T>(items: T[], seed: string): T[] {
     return a;
 }
 
-export function judgePrompt(place: string, count: number): { preamble: string; closing: string } {
+/** The place-around-the-building criteria a judgement asks: every one (`true`), the ones listed, or none. */
+function askedRegions(regions: boolean | readonly JudgeRegionCriterion[] | undefined): JudgeRegionCriterion[] {
+    return regions === true ? [...JUDGE_REGION_CRITERIA] : Array.isArray(regions) ? JUDGE_REGION_CRITERIA.filter(c => regions.includes(c)) : [];
+}
+
+const REGION_NAMES: Record<JudgeRegionCriterion, string> = { ground: 'the ground', neighbours: 'the neighbouring buildings', skyline: 'the skyline' };
+const COUNT_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+
+/**
+ * The textured judgement's prompt. With `regions` (true, or the region criteria in the frame) the same seven building criteria
+ * come first, worded as before, and the region criteria asked score the place around the building (JUDGE_REGION_CRITERIA); a
+ * region the view does not show is not asked. Without it the prompt is the one older reports used.
+ */
+export function judgePrompt(place: string, count: number, options: { regions?: boolean | readonly JudgeRegionCriterion[] } = {}): { preamble: string; closing: string } {
+    const regions = options.regions === true || Array.isArray(options.regions);
+    const asked = askedRegions(options.regions);
+    const listed = asked.map(c => REGION_NAMES[c]);
+    const more = asked.length
+        ? `${COUNT_WORDS[asked.length][0].toUpperCase()}${COUNT_WORDS[asked.length].slice(1)} more judge${asked.length === 1 ? 's' : ''} the place around it: ${listed.length > 1 ? `${listed.slice(0, -1).join(', ')} and ${listed[listed.length - 1]}` : listed[0]}. `
+        : '';
     return {
         preamble: `You are judging how closely 3D reconstructions match a real place. Image 0 is a real photograph (Google Street View) of ${place}. ` +
             `Images 1 to ${count} are renders of ${count} different 3D reconstructions of that building, each rendered from exactly the camera position, direction, field of view and resolution of the photograph, ` +
-            'all with the same flat neutral light on the same flat grey background. Judge only the target building the renders show: ignore the sky, trees, vehicles, people, street furniture and any neighbouring buildings the renders leave out, ' +
-            'and do not reward or penalise a render for the absence of sun and shadows (no render has them). The renders are in no particular order and come from different methods.',
-        closing: `Score every render 1-10 (10 best) against the photograph on seven criteria:\n` +
+            (regions
+                ? 'all with the same flat neutral light on the same flat grey background, which stands where the sky is. Seven criteria judge only the target building the renders show: for them ignore the sky, trees, vehicles, people, street furniture and the neighbouring buildings. ' +
+                more
+                : 'all with the same flat neutral light on the same flat grey background. Judge only the target building the renders show: ignore the sky, trees, vehicles, people, street furniture and any neighbouring buildings the renders leave out, ') +
+            `${regions ? 'Do' : 'and do'} not reward or penalise a render for the absence of sun and shadows (no render has them). The renders are in no particular order and come from different methods.`,
+        closing: `Score every render 1-10 (10 best) against the photograph on ${COUNT_WORDS[7 + asked.length]} criteria:\n` +
             '- shape: shape and silhouette match (massing, roofline, setbacks, openings in the right places);\n' +
             '- materials: materials and colour match (the facade materials and their colours as the photograph shows them);\n' +
             '- detail: detail believability (windows, cornices, ornament, storefronts read as the real ones, at a believable sharpness);\n' +
             '- errors: wrong or invented content, 10 = none (melted or broken geometry, smeared or doubled textures, things painted where they are not, content that is not in the photograph);\n' +
             '- overall: how much the render looks like this place in the photograph;\n' +
             '- realism: does the render look like a real photograph of a real building (convincing materials, sharpness and surface detail), whatever place it shows;\n' +
-            '- identity: would someone who knows this place recognise it in the render (massing, window rhythm, materials, colour, distinctive features such as towers, fire escapes, signage, the storefront layout), whether or not the finer detail is exact.\n' +
-            `Use the whole scale and compare the renders with each other. Reply with JSON only: {"renders":[{"image":1,"shape":n,"materials":n,"detail":n,"errors":n,"overall":n,"realism":n,"identity":n,"note":"at most 20 words on what decides it"}, ...]} with one entry for each of images 1 to ${count}.`
+            `- identity: would someone who knows this place recognise it in the render (massing, window rhythm, materials, colour, distinctive features such as towers, fire escapes, signage, the storefront layout), whether or not the finer detail is exact${asked.length ? ';' : '.'}\n` +
+            asked.map((c, k) => `${REGION_CRITERION_LINES[c]}${k + 1 < asked.length ? ';' : '.'}\n`).join('') +
+            `Use the whole scale and compare the renders with each other. Reply with JSON only: {"renders":[{"image":1,"shape":n,"materials":n,"detail":n,"errors":n,"overall":n,"realism":n,"identity":n,${asked.map(c => `"${c}":n,`).join('')}"note":"at most 20 words on what decides it"}, ...]} with one entry for each of images 1 to ${count}.`
     };
 }
+
+/** Each region criterion as the judge is asked it (the line's end is added where it stands in the list). */
+const REGION_CRITERION_LINES: Record<JudgeRegionCriterion, string> = {
+    ground: '- ground: the ground around the building against the photograph (streets, pavements, kerbs, plazas, lawns and terrain: their layout, levels, materials and colour), 10 = it matches; holes, steps, smears and missing or invented surfaces cost',
+    neighbours: '- neighbours: the other buildings and structures around the target against the photograph (massing, heights, rooflines, facade materials and rhythm), 10 = they match; missing, melted or invented neighbours cost',
+    skyline: '- skyline: the outline where buildings and trees meet the sky (flat grey in every render) against the photograph\'s outline, 10 = the same outline'
+};
 
 /** The clay judgement's prompt: the same pose and blind protocol, every render in untextured clay, shape only. */
 export function clayJudgePrompt(place: string, count: number): { preamble: string; closing: string } {
@@ -959,8 +1526,10 @@ export function clayJudgePrompt(place: string, count: number): { preamble: strin
     };
 }
 
-export function parseJudgeReply(text: string, count: number): { scores: Array<JudgeScores & { note: string }>; problems: string[] } {
-    return parseScores<JudgeScores>(text, count, JUDGE_CRITERIA, JUDGE_REQUIRED_CRITERIA);
+/** A textured judgement's reply; with `regions` the region criteria asked are required too (a reply without them is retried). */
+export function parseJudgeReply(text: string, count: number, options: { regions?: boolean | readonly JudgeRegionCriterion[] } = {}): { scores: Array<JudgeScores & { note: string }>; problems: string[] } {
+    const asked = askedRegions(options.regions);
+    return parseScores<JudgeScores>(text, count, [...JUDGE_CRITERIA, ...asked], [...JUDGE_REQUIRED_CRITERIA, ...asked]);
 }
 
 /** A clay judgement's reply: `shape` in 1-10 for every image. */
@@ -1001,7 +1570,8 @@ const jpegOrPngB64 = (img: { bytes: Uint8Array; mimeType: string }) => ({ inline
  * `seed` and the repeat), unlabelled. Returns the scores mapped back to the arm ids. A reply that does not parse is retried once.
  */
 export async function judgeView(input: JudgeViewInput): Promise<JudgeRun[]> {
-    return judgeRepeats<JudgeScores>(input, judgePrompt, parseJudgeReply, 'photo-match-judge');
+    const regions = input.regions === true || Array.isArray(input.regions) ? input.regions : false;
+    return judgeRepeats<JudgeScores>(input, (place, count) => judgePrompt(place, count, { regions }), (text, count) => parseJudgeReply(text, count, { regions }), 'photo-match-judge');
 }
 
 /**
@@ -1015,6 +1585,11 @@ export async function judgeViewClay(input: JudgeViewInput): Promise<Array<JudgeR
 export interface JudgeViewInput {
     client: JudgeClient; place: string; photo: { bytes: Uint8Array; mimeType: string };
     renders: Array<{ armId: string; png: Uint8Array }>; repeats?: number; seed: string; thinkingBudget?: number; temperature?: number;
+    /**
+     * judgeView: also score the place around the building: every region criterion (true), or only those listed (the regions
+     * the view shows; none listed asks the building criteria in the same words). Ignored by judgeViewClay.
+     */
+    regions?: boolean | readonly JudgeRegionCriterion[];
 }
 
 async function judgeRepeats<S>(
@@ -1053,10 +1628,15 @@ export interface CriterionStat { mean: number; sd: number; min: number; max: num
 
 /** Mean, standard deviation (population) and range of each arm's scores over the runs. */
 export function aggregateRuns(runs: Array<JudgeRun<Partial<Record<JudgeCriterion, number>>>>, armIds: string[]): Record<string, Record<JudgeCriterion, CriterionStat>> {
-    const out: Record<string, Record<JudgeCriterion, CriterionStat>> = {};
+    return aggregateCriteria(runs, armIds, JUDGE_CRITERIA);
+}
+
+/** aggregateRuns over the given criteria (e.g. JUDGE_REGION_CRITERIA). */
+export function aggregateCriteria<C extends string>(runs: Array<JudgeRun<Partial<Record<C, number>>>>, armIds: string[], criteria: readonly C[]): Record<string, Record<C, CriterionStat>> {
+    const out: Record<string, Record<C, CriterionStat>> = {};
     for (const a of armIds) {
-        out[a] = {} as Record<JudgeCriterion, CriterionStat>;
-        for (const c of JUDGE_CRITERIA) {
+        out[a] = {} as Record<C, CriterionStat>;
+        for (const c of criteria) {
             const v = runs.map(r => r.scores[a]?.[c]).filter((x): x is number => typeof x === 'number');
             const mean = v.length ? v.reduce((s, x) => s + x, 0) / v.length : NaN;
             const sd = v.length ? Math.sqrt(v.reduce((s, x) => s + (x - mean) ** 2, 0) / v.length) : NaN;
