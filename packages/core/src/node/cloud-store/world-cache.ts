@@ -13,6 +13,10 @@
  * (`stations/`), then `world.json` last, which marks the copy complete and holds what the result needs to be rebuilt
  * without the build (the viewer, the anchor, the station reports).
  *
+ * A file that a descriptor in the folder (a JSON file at its top or one folder down, with `files: [{ path, source }]`,
+ * as the world's `massing/massing.json` writes) says already lives in the cloud (`source` a gs:// URI) is not uploaded
+ * again: the manifest keeps its link (`linked`), and a fetch leaves it to whoever reads the descriptor.
+ *
  * The key is a hash of what decides the world (the place after the sidewalk snap, the heading, the station counts, the
  * prompt's style words, the pipeline version): a different ask is a different world. Nothing here holds a Street View
  * photograph: they never reach the output folder (street-view-stations.ts).
@@ -71,8 +75,11 @@ export function worldCacheKey(parts: Record<string, string | number | boolean | 
     return crypto.createHash('sha256').update(JSON.stringify([WORLD_CACHE_VERSION, stable])).digest('hex').slice(0, 24);
 }
 
+/** A file of the world kept by its link to a copy already in the cloud, not stored with the world. */
+export type WorldLinkedFile = { path: string; source: string };
+
 /** What `world.json` holds besides the file list: whatever the caller needs to rebuild its result. */
-export type WorldManifest<T> = { key: string; files: string[]; storedAt: string; result: T };
+export type WorldManifest<T> = { key: string; files: string[]; linked?: WorldLinkedFile[]; storedAt: string; result: T };
 
 async function filesUnder(dir: string, rel = ''): Promise<string[]> {
     const out: string[] = [];
@@ -82,6 +89,36 @@ async function filesUnder(dir: string, rel = ''): Promise<string[]> {
         else if (e.isFile() && e.name !== WORLD_MANIFEST) out.push(r);
     }
     return out;
+}
+
+/** The files `outDir` stores, and those a descriptor in it links to a cloud copy instead (see the header). */
+async function worldFiles(outDir: string): Promise<{ files: string[]; linked: WorldLinkedFile[] }> {
+    const all = await filesUnder(outDir);
+    const present = new Set(all);
+    const linked = new Map<string, string>();
+    for (const rel of all.filter(f => f.endsWith('.json') && f.split('/').length <= 2)) {
+        let doc: { files?: unknown };
+        try {
+            doc = await fs.readJson(path.join(outDir, rel));
+        } catch {
+            continue;
+        }
+        if (!Array.isArray(doc?.files)) continue;
+        for (const e of doc.files as Array<{ path?: unknown; source?: unknown }>) {
+            if (typeof e?.path === 'string' && typeof e.source === 'string' && e.source.startsWith('gs://') && present.has(e.path)) linked.set(e.path, e.source);
+        }
+    }
+    return { files: all.filter(f => !linked.has(f)), linked: [...linked].map(([p, source]) => ({ path: p, source })) };
+}
+
+async function writeManifest<T>(bucket: CloudBucket, outDir: string, manifest: WorldManifest<T>): Promise<void> {
+    const tmp = path.join(outDir, `.${WORLD_MANIFEST}.${process.pid}`);
+    await fs.writeJson(tmp, manifest);
+    try {
+        await bucket.putFile(`${WORLD_CACHE_PREFIX}/${manifest.key}/${WORLD_MANIFEST}`, tmp, { contentType: 'application/json', metadata: { world: manifest.key } });
+    } finally {
+        await fs.remove(tmp);
+    }
 }
 
 /** Points the world folder name `slug` at `key`, so the world can be opened (and saved) by its folder name alone. */
@@ -111,19 +148,37 @@ export async function readWorldIndex(bucket: CloudBucket, slug: string): Promise
 
 /** Stores the world built in `outDir` under `key`, the manifest last, then its folder name in the index. Returns the number of files stored. */
 export async function storeWorld<T>(bucket: CloudBucket, key: string, outDir: string, result: T): Promise<number> {
-    const files = await filesUnder(outDir);
+    const { files, linked } = await worldFiles(outDir);
     for (const f of files) await bucket.putFile(`${WORLD_CACHE_PREFIX}/${key}/${f}`, path.join(outDir, f), { metadata: { world: key } });
-    const manifest: WorldManifest<T> = { key, files, storedAt: new Date().toISOString(), result };
-    const tmp = path.join(outDir, `.${WORLD_MANIFEST}.${process.pid}`);
-    await fs.writeJson(tmp, manifest);
-    try {
-        await bucket.putFile(`${WORLD_CACHE_PREFIX}/${key}/${WORLD_MANIFEST}`, tmp, { contentType: 'application/json', metadata: { world: key } });
-    } finally {
-        await fs.remove(tmp);
-    }
+    await writeManifest(bucket, outDir, { key, files, ...(linked.length ? { linked } : {}), storedAt: new Date().toISOString(), result });
     const slug = path.basename(outDir);
     if (WORLD_SLUG.test(slug)) await writeWorldIndex(bucket, slug, key);
     return files.length;
+}
+
+/**
+ * Adds to the world stored under `key` the files written into `outDir` since it was stored (e.g. a massing placed beside
+ * the splats): only files its manifest does not list are uploaded, then the manifest is rewritten with them and the
+ * folder's links, last. Throws when no complete copy of the world is stored. Returns the files uploaded.
+ */
+export async function syncWorldFiles(bucket: CloudBucket, key: string, outDir: string): Promise<string[]> {
+    const tmp = path.join(os.tmpdir(), `sb-world-manifest-${process.pid}-${Date.now()}.json`);
+    let stored: WorldManifest<unknown>;
+    try {
+        if (!(await bucket.download(`${WORLD_CACHE_PREFIX}/${key}/${WORLD_MANIFEST}`, tmp))) throw new Error(`world cache: no stored world ${key} in ${bucket.label}`);
+        stored = await fs.readJson(tmp) as WorldManifest<unknown>;
+    } finally {
+        await fs.remove(tmp);
+    }
+    const { files, linked } = await worldFiles(outDir);
+    const listed = new Set(stored.files);
+    const added = files.filter(f => !listed.has(f));
+    for (const f of added) await bucket.putFile(`${WORLD_CACHE_PREFIX}/${key}/${f}`, path.join(outDir, f), { metadata: { world: key } });
+    const keptLinks = new Map((stored.linked ?? []).map(l => [l.path, l.source]));
+    for (const l of linked) keptLinks.set(l.path, l.source);
+    const allLinks = [...keptLinks].map(([p, source]) => ({ path: p, source }));
+    await writeManifest(bucket, outDir, { ...stored, files: [...stored.files, ...added], ...(allLinks.length ? { linked: allLinks } : {}), storedAt: new Date().toISOString() });
+    return added;
 }
 
 /** Fetches the world stored under `key` into `outDir`; undefined when there is none (or only an interrupted copy). */

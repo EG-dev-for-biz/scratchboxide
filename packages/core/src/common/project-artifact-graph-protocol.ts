@@ -366,7 +366,12 @@ export function serializeProjectGraph(graph: ProjectArtifactGraph): string {
 }
 
 export function parseProjectGraph(serialized: string): ProjectArtifactGraph {
-    const graph = JSON.parse(serialized) as ProjectArtifactGraph;
+    return projectGraphFromObject(JSON.parse(serialized));
+}
+
+/** A graph already parsed (or assembled from parts), checked and normalised as parseProjectGraph does. */
+export function projectGraphFromObject(value: unknown): ProjectArtifactGraph {
+    const graph = value as ProjectArtifactGraph;
     if (!graph || graph.schemaVersion !== PROJECT_ARTIFACT_GRAPH_SCHEMA_VERSION || !graph.project?.id) {
         throw new Error('Unsupported or invalid project artifact graph');
     }

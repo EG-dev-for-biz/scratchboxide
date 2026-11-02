@@ -67,6 +67,22 @@ describe('pipeline K texture harmonisation', () => {
         for (const k of [0, 1]) { const im = images.get(k)!; expect(im.rgba[(10 * N + 1) * 4 + 1] - im.rgba[(10 * N + 5) * 4 + 1]).toBeGreaterThan(25); }
     });
 
+    it('keeps two buildings apart in a district: neither colour is matched to the other, even where they meet flush', () => {
+        const g = wall();
+        const images = new Map<number, RgbaImage8>([[0, stripes(1)], [1, stripes(1.6)]]);
+        const before = meanLuma(images.get(1)!, 0, N);
+        // the left quad (x 0..10) one building, the right (x 10..20) another
+        const r = harmonizeTextures(g, g.json, images, 0, undefined, undefined, { buildingOf: x => (x < 10 ? 0 : 1) });
+        expect(r.seams.pairs).toBe(0);
+        expect(r.gains.maxAbsLog).toBe(0);
+        expect(Math.abs(meanLuma(images.get(1)!, 0, N) - before)).toBeLessThan(2);
+        // the same two photos on one building are matched
+        const g2 = wall(), im2 = new Map<number, RgbaImage8>([[0, stripes(1)], [1, stripes(1.6)]]);
+        const r2 = harmonizeTextures(g2, g2.json, im2, 0, undefined, undefined, { buildingOf: () => 0 });
+        expect(r2.seams.pairs).toBeGreaterThan(0);
+        expect(r2.kept).toBe(true);
+    });
+
     it('leaves a single photo as it was', () => {
         const g = wall();
         const one = stripes(1);
