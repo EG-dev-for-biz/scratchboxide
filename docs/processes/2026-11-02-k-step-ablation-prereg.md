@@ -262,11 +262,76 @@ Under the user's $100 (2026-10-31): no approval needed. The actual spend is repo
 5. Start the server. Era check; commit the outcome.
 6. The paid call. Record and report against the bars, with the grids.
 
+## Amendment 1 (2026-11-02, before any paid call): the sign rules count the views a metric can be read in
+
+**Why.** An early free dry run (K, raw, S1, S2, X2 and X3 only; run record below) chose four views at 46 to 56 m, all on
+the podium's sidewalks, because the past-edge rule at this commit refuses the farther panos M1 used. In two of them the
+target fills the frame, so there is no silhouette and placement is null (`views[].placement` null for every arm). As
+written, "the same sign at 3 or more of the 4 views" could then never hold for placement, and the judge rules assumed
+4 judged views.
+
+**The rules now.** Nothing else changes: arms, views, bars' thresholds, decoys and stop rules are as above.
+- **Placement, "moves K":** \|A − K\| at least 0.25 px and the same sign at **every view with a placement, at least 2**.
+  With fewer than 2 such views placement is untested for every arm, and V2 is untested (then nothing is named on
+  placement, and V2 does not stop the run; V3 must still hold).
+- **V2** reads the mean over the views with a placement, as the tool reports it.
+- **Judge metrics, "moves K" and P:** the same sign at **at least three quarters of the judged views, and at least 3**.
+  With fewer than 3 judged views the run is indicative only (M1's rule) and nothing is named.
+
 ## Run record
 
 Values written as they are fixed.
 
-(none yet)
+- **The app.** Launch entry `scratchbox-k-step-ablation` on this worktree: web 3740, API 3741, tools 3742,
+  `SCRATCHBOX_CACHE_RESTORE=off`, served from source at `c69cf8cb` (this preregistration's commit on `84b54d44`). Builds go
+  through the app's own tool endpoint, `POST /gemini/tools/run-stream` (`google_3d_tiles_get_clay`).
+- **The machine.** 16 cores, with a load average of 330 to 390 from other sessions' test suites while the builds ran; 26 GB
+  free at the first build.
+- **A first K default attempt was lost, and nothing from it is used** (2026-11-02, 08:07 to 08:21). Run 8132aa40 started
+  on the empty cache. Its client was Node's `fetch`, which drops a response after 5 minutes without data (undici's body
+  timeout). The stream fell silent during the facade straightening and the client dropped, which makes the server abort
+  the build. The server was stopped and this worktree's whole `.scratchbox/cache` deleted (only that run had written it;
+  its record is kept in the session's scratchpad). The server was restarted, and K default rebuilt from the empty cache with
+  a `curl` client, which has no idle timeout.
+- **K default, run b9684a9b (08:22 to 08:43), degraded by the machine, not by K.** Resolve, tiles and survey committed,
+  every one a cache miss. The remesh stage then hit its fixed 900 s limit (`remesh_failed`, "Remeshed scan took longer than
+  its 900 s limit", marked transient) while the load average stood near 390: tile_refine took 2.6 min and the facade
+  straightening ran past 8 min, against 86 s in M1. A single building's stage limits have no override (only K-D chunks
+  scale them). The build is not judged as it stands. With the load down to about 150, the remesh stage is retried by the
+  app's own retry (`retryRunId b9684a9b`, `retryStage remesh`), which rebuilds the recorded request and takes the earlier
+  stages from this run's own fresh results.
+- **K default is runs b9684a9b and its retry 15a376d6 together.** b9684a9b computed, as cache misses: resolve, tiles (and
+  the seam weld), the survey, tile_refine (77 s) and the facade straightening (729 s, `pipeline_k` `cached: false`); its
+  window fit was cut off by the stage limit. The retry 15a376d6 took resolve and tiles from that run's results, ran the
+  survey again (uncached: 16 more images), took tile_refine and the straightening from b9684a9b's results (`cached: true`,
+  the same `orthosDir`), and computed the window fit, wall grammar, wall sheets, every polish step and the twin itself.
+  Every stage was computed on this code in this session; none came from an earlier session or the bucket.
+- **15a376d6 then hit the run's own limit** (40 min for an isolated build, `tool-time-budgets.ts`; `run_deadline`, transient)
+  inside the twin's material regions, after harmonising and the facade reader had finished. Its twin was not committed.
+  The textures stage is retried by the app's retry (`retryRunId 15a376d6`, `retryStage textures`), which reuses the
+  committed remesh.
+- **The disk.** Free space fell from 26 GB (08:07) to 2 GB (09:17) and came back to about 9 GB, from other sessions'
+  writes; this worktree holds 1.5 GB. The parent session was asked at 09:15 to have space freed or the G-RAID mounted. The
+  10 GB floor holds for every new arm. K default's textures retry, which finishes a build that started with 19.6 GB free and
+  writes about 0.4 GB, was let run against a 3 GB floor.
+- **K default is complete: run 61b8974b** (the textures retry, 09:24 to 09:58), status `complete`, no degradation. Its
+  twin is `public/models/empire_state_building_new_york_iso_l2_tex_c95df7ef.glb` (152,197,532 bytes), textured "with the
+  tile photo tile_refine carries onto its remesh, de-lit": photo transfer 98.7%, clay 1.3%. Its tile is the welded
+  extraction `staged_location/tiles/dd1a8a9f.../textured_tile_seams_2.glb` (the same tile key as M1's 0bb20154). So K
+  default is the chain b9684a9b → 15a376d6 → 61b8974b, every stage computed on this code today.
+- **The no-op rule: noInpaint is built.** K default's straightening (b9684a9b) inpainted 6,541 texels (`fromInpaint`, in 61
+  of 88 facade reports), unlike M1's 0bb20154. So hole inpaint did something here, and its arm runs.
+- **The decoys,** made from K default's twin with `make_decoys.py` (in the session's scratchpad):
+  - X2: `public/models/k_ablation/X2_K_moved_4m.glb`, the 69 root nodes translated [4, 0, 0]; its binary chunk is K's
+    byte for byte (the same construction as M1's X2, checked on M1's files);
+  - X3: `public/models/k_ablation/X3_K_flat_colour.glb`, 203 base-colour images (of 870) replaced by one 4 x 4 PNG of
+    sRGB (123, 119, 117), the pixel-weighted mean of K's base-colour images.
+- **The arms' queue started at 09:54,** two builds at a time, when the load had fallen to 8 and the disk had 20 GB free (the
+  parent session moving 27 GB of k-d's cold runs to the G-RAID). An arm stopped by a transient time limit is finished by
+  the app's retry of the stage the result names, at most twice; every attempt is kept.
+- **K default's stage-cut snapshots** were cloned (APFS `cp -c`, no extra space) the moment its remesh committed, before any
+  other build could overwrite their unkeyed names: `public/models/k_ablation/S1_K_15a376d6_step_remesh_tileRefine.glb` and
+  `S2_K_15a376d6_step_polish_orient.glb` (sha256 of S2 checked against the published file).
 
 ## Report
 
