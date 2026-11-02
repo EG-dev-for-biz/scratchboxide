@@ -1,6 +1,6 @@
 # Preregistration 3: which stage of pipeline K loses the Ferry Building's geometry
 
-Date: 2026-11-02. Status: **written before its paid call.** Nothing below changes after this line except the run record and
+Date: 2026-11-02. Status: **done 2026-11-02 (indicative): the clip and the cleanup lose the geometry, tied on clay shape.** Written before its paid call; nothing below changes after this line except the run record and
 the report. A bar, arm or view changed after the paid call is a new preregistration that names this one.
 
 ## The two earlier runs, and why this one is made
@@ -112,8 +112,57 @@ Under the user's $100, so no approval is needed. The actual spend is reported af
 
 ## Run record
 
-(none yet)
+- **Dry run:** free, under vitest with credentials unreachable and a stand-in judge.
+  - Every arm rendered at all 5 poses; none was empty and none had 0 triangles.
+  - D = 5.16 (half of X2 − K, 10.32 px).
+  - The stand-in's placement read C4 3.25 → C5 6.40 px. It decided nothing.
+- **Paid call:** `1_ferry_building_san_francisco_c_20261102T215356_77a5`, 13:53–14:12, one call, no re-run.
+  - All 5 fixed poses registered and were judged.
+  - Judge: 30 calls, 405k tokens in and 61k out (thinking included), about $1.54 at the estimate's rates. Five Street View
+    photos, about $0.04. Under the $20 stop.
+- **Bars and ladder:** computed by `bars.py` (D 5.16) and `ladder.py` (this session's scratchpad, `ablation/run3/`), from the
+  report alone.
+- **Records:** the report, bars, ladder, the judge's grids and the proof sheet are in
+  `docs/screenshots/k_step_ablation_2026-11-02/run3_paid/` (gitignored).
 
 ## Report
 
-(after the paid call)
+**The judge can answer, but the run is indicative.**
+- V1 met: mean overall runSd 0.196.
+- V2 met: X2 is 15.49 px against K's 6.50, a gap of 8.99 against D 5.16, at 5 views.
+- V3 met: K − X3 is 1.34 on materials and 1.40 on overall.
+- V4 missed: `matchedShare` 0.862, as expected. Raw frame agreement is 1 at every view.
+
+| Stage | Cut | Clay shape (drop, views down) | Placement px (+ worse, views) | Overall (views down) |
+|---|---|---|---|---|
+| raw scan | | 7.00 | 3.05 | 5.93 |
+| tile_refine | C1 | 7.20 (−0.20, 1/5) | 3.21 (+0.16, 3/5) | 5.47 (4/5) |
+| cleanup | C2 | **4.93 (+2.27, 5/5): loses** | 3.26 (+0.05, 3/5) | 5.27 (3/5) |
+| lattice | C3 | 5.53 (−0.60, 1/5) | 4.09 (+0.83, 4/5) | 5.53 (0/5) |
+| base | C4 | 5.60 (−0.07, 1/5) | 4.09 (0.00, 1/5) | 5.53 (0/5) |
+| clip | C5 | **3.33 (+2.27, 5/5): loses** | **6.47 (+2.38, 5/5): loses** | 4.80 (4/5) |
+| infill | C6 | 3.33 (0.00) | 6.50 (+0.03, 1/5) | 4.73 (1/5) |
+| orient | C7 | 3.33 (0.00) | 6.50 (0.00) | 4.67 (1/5) |
+| twin | K | 3.33 (0.00) | 6.50 (0.00) | 4.67 (0/5) |
+
+Clay spreads are each pair's larger runSd: 0.75 at the cleanup, 0.47 at the clip.
+
+**Two stages lose the geometry. Their clay drops tie at 2.27, and this preregistration named no tie-break, so neither is named
+alone.**
+- **The clip** is the only stage that loses on both measures, and the only one that loses placement.
+  - It cuts every surface at the footprint plus 0.3 m, which removes 588 m² (1,019 triangles).
+  - In the clay renders it tears the clock tower's faces, leaving jagged gaps in C5.
+  - It accounts for 2.38 of K's 3.45 px placement loss against the raw scan.
+- **The cleanup** loses on clay shape, but it does not move the building.
+  - Besides removing 38 pieces (75 triangles), it moves vertices 0.10 m on average and 0.30 m at most (223 clamped).
+  - The arcade front loses its recessed openings: view A62bPf, clay 8.33 → 4.00.
+  - The lattice gives 0.60 back.
+- **After the clip nothing changes.** Infill, orient and the twin move no score.
+- **Read as a decision:** these are the next things to fix at the Ferry.
+  1. The clip, against a footprint that does not hold the tower.
+  2. The cleanup's vertex shift on recessed facades.
+
+  Each fix gets its own preregistration. Like the first two runs, this one is indicative under M1's rule (`matchedShare` under
+  0.99).
+
+Proof sheet: `run3_paid/proof_sheet_run3.png`, with the bars, the ladder, and the clay renders of C1, C2, C4 and C5 at two views.

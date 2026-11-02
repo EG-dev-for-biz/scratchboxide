@@ -132,3 +132,24 @@
    ```bash
    env -i PATH="$PATH" HOME="$(mktemp -d)" ./node_modules/.bin/vitest run packages/core/test/pipeline-k-roof-delight.test.ts packages/core/test/facade-lattice.test.ts
    ```
+
+## 6. Live viewport check (2026-11-02, afternoon)
+
+- **The build:** this worktree's app instance (`scratchbox-k-step-ablation`, ports 3740-3742), the home starter "Build a 3D
+  building of the Empire State Building at 350 Fifth Avenue". It gave a fresh K build, run 8fd4c24b: every stage uncached,
+  533 s in all, every stage committed.
+- **The comparison:** the in-app chat added run 1's K twin (`c95df7ef`, built before the fixes) beside it, 140 m east.
+  - Both towers stand in one scene, under the same studio light.
+  - The two twins' origins differ by 9.7 m and 12.7 m (different geocoded queries). They were matched, so each close-up
+    uses the same camera offset from its tower.
+  - Every image is the app's own scene capture, 1422 × 1209.
+- **Facade colour:** on the south shaft, head-on at 70 m, the fixed K reads L* 35.0, C* 4.4, hue 36°. The old K reads L* 46.1,
+  C* 1.6, hue 37°: flat pale grey against warm stone and brown spandrels.
+- **Reveals:** a window bay at 10 m, 46° off the face.
+  - The old K draws a second, offset edge beside each window and a doubled sill line. The fixed K draws one.
+  - **Seen in both builds, not touched by these fixes:** bright outlines round the glass panes (one notched) and a diagonal
+    seam across the bay. They are left for a later look.
+- **Proof sheet:** `docs/screenshots/k_delight_fix_2026-11-02/proof_sheet_viewport_before_after.png`. The captures are in
+  `viewport/`.
+- **Cost:** the build's vision calls were 371 flash and 25 argon, about $0.85 at the estimates' rates. The chat turn cost
+  cents.
