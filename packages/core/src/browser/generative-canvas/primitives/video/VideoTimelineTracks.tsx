@@ -504,7 +504,7 @@ export const VideoTimelineTracks: React.FC<VideoTimelineTracksProps> = ({
                     {data.tracks.map(track => (
                         <div
                             key={track.id}
-                            className={`h-11 border-b border-zinc-800/60 relative overflow-hidden ${
+                            className={`sb-nle-track-lane h-11 border-b border-zinc-800/60 relative overflow-hidden ${
                                 track.locked ? 'bg-zinc-950/40' : 'bg-zinc-900/20'
                             }`}
                         >

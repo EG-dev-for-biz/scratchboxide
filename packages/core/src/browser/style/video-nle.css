@@ -446,6 +446,12 @@ body.sb-light .sb-stage-document-card:has(.sb-video-stage-wrapper) .sb-document-
     background: #161722;
 }
 
+/* A track's lane, beside its header cell and as tall (the app generates no Tailwind, so the lane's h-11 sets nothing) */
+.sb-nle-track-lane {
+    height: 64px;
+    box-sizing: border-box;
+}
+
 /* Timeline Ruler */
 .sb-nle-ruler {
     height: 28px;
@@ -733,6 +739,8 @@ body.sb-light .sb-stage-document-card:has(.sb-video-stage-wrapper) .sb-document-
 .sb-video-stage-wrapper .top-0, .sb-nle-studio .top-0 { top: 0 !important; }
 .sb-video-stage-wrapper .bottom-0, .sb-nle-studio .bottom-0 { bottom: 0 !important; }
 .sb-video-stage-wrapper .right-0, .sb-nle-studio .right-0 { right: 0 !important; }
+.sb-video-stage-wrapper .top-1, .sb-nle-studio .top-1 { top: 4px !important; }
+.sb-video-stage-wrapper .bottom-1, .sb-nle-studio .bottom-1 { bottom: 4px !important; }
 .sb-video-stage-wrapper .top-1\.5, .sb-nle-studio .top-1\.5 { top: 6px !important; }
 .sb-video-stage-wrapper .bottom-1\.5, .sb-nle-studio .bottom-1\.5 { bottom: 6px !important; }
 

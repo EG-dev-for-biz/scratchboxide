@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { VideoTimelineData, VideoAspectRatio } from '../../services/video/videoTypes';
+import { TimelineElement, VideoTimelineData, VideoAspectRatio } from '../../services/video/videoTypes';
 import { formatTimecode, formatTimecodeShort } from '../../services/video/timecode';
 import { snapToFrameSeconds } from '../../services/video/rationalTime';
 
@@ -37,8 +37,18 @@ function getOrCreateVideoElement(src: string, onFrameReady?: () => void): HTMLVi
     if (onFrameReady) {
         video.onseeked = onFrameReady;
         video.onloadeddata = onFrameReady;
+        video.onerror = onFrameReady;
     }
     return video;
+}
+
+/**
+ * A video clip's media: its own `url` (how demos and the media pool place clips), else its media-pool asset's, else
+ * a project path (`sourcePath`) or a VFX plate's source video.
+ */
+export function clipVideoSource(clip: TimelineElement, data: Pick<VideoTimelineData, 'mediaAssets'>): string | undefined {
+    const pooled = clip.mediaId ? data.mediaAssets?.find(m => m.id === clip.mediaId)?.url : undefined;
+    return clip.url || pooled || clip.sourcePath || clip.vfxPlate?.sourceVideoUri || undefined;
 }
 
 export const VideoPreviewMonitor: React.FC<VideoPreviewMonitorProps> = ({
@@ -53,7 +63,8 @@ export const VideoPreviewMonitor: React.FC<VideoPreviewMonitorProps> = ({
     const [showSafeAreas, setShowSafeAreas] = useState<boolean>(false);
     const [scaleMode, setScaleMode] = useState<'fit' | '100%' | '50%'>('fit');
     const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
-    const [, setVideoTick] = useState<number>(0);
+    // Bumped when a clip's video has a frame (loaded, seeked) or failed, so the monitor draws it without a playhead move.
+    const [videoTick, setVideoTick] = useState<number>(0);
 
     const fps = data.fps || 30;
     const currentTime = data.currentTime || 0;
@@ -164,8 +175,8 @@ export const VideoPreviewMonitor: React.FC<VideoPreviewMonitorProps> = ({
                 const progress = (currentTime - clip.startTime) / Math.max(0.001, clip.duration);
 
                 let drewCustomContent = false;
+                const videoSrc = clip.type === 'video' ? clipVideoSource(clip, { mediaAssets: data.mediaAssets }) : undefined;
                 if (clip.type === 'video') {
-                    const videoSrc = clip.sourcePath || (clip.isVfxPlate && clip.vfxPlate?.sourceVideoUri);
                     if (videoSrc) {
                         const videoEl = getOrCreateVideoElement(videoSrc, () => setVideoTick(t => t + 1));
                         if (videoEl) {
@@ -179,6 +190,24 @@ export const VideoPreviewMonitor: React.FC<VideoPreviewMonitorProps> = ({
                             }
                         }
                     }
+                }
+
+                if (!drewCustomContent && clip.type === 'video') {
+                    // A video clip with no frame to show says why: its media is loading, failed, or was never set. No stand-in picture.
+                    const failed = videoSrc ? getOrCreateVideoElement(videoSrc)?.error : undefined;
+                    ctx.fillStyle = '#18181b';
+                    ctx.fillRect(0, 0, width, height);
+                    ctx.fillStyle = failed ? '#fca5a5' : '#a1a1aa';
+                    ctx.font = '600 14px Inter, system-ui, sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(!videoSrc ? 'NO MEDIA SET FOR THIS CLIP' : failed ? 'MEDIA COULD NOT BE LOADED' : 'LOADING MEDIA…', width / 2, height / 2 - 34);
+                    if (videoSrc) {
+                        ctx.fillStyle = '#71717a';
+                        ctx.font = '400 11px Inter, system-ui, sans-serif';
+                        ctx.fillText(videoSrc, width / 2, height / 2 + 34);
+                    }
+                    drewCustomContent = true;
                 }
 
                 if (!drewCustomContent) {
@@ -272,7 +301,7 @@ export const VideoPreviewMonitor: React.FC<VideoPreviewMonitorProps> = ({
                         ctx.fillText(`ANIMATION CLIP: ${clip.animationClipName} (${((currentTime - clip.startTime) * (clip.animationSpeed || 1.0)).toFixed(2)}s)`, 30, 60);
                     }
                     ctx.restore();
-                } else {
+                } else if (clip.type !== 'video') {
                     // Dynamic motion graphics element
                     const motionX = width / 2 + Math.sin(progress * Math.PI * 4) * 80;
                     const motionY = height / 2 + Math.cos(progress * Math.PI * 2) * 30;
@@ -283,11 +312,13 @@ export const VideoPreviewMonitor: React.FC<VideoPreviewMonitorProps> = ({
                     ctx.fill();
                 }
 
-                // Clip title overlay
-                ctx.fillStyle = '#ffffff';
-                ctx.font = 'bold 20px Inter, system-ui, sans-serif';
-                ctx.textAlign = 'center';
-                ctx.fillText(clip.name, width / 2, height / 2);
+                // Clip title overlay (a video clip shows its own frames, not its name over them)
+                if (clip.type !== 'video') {
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = 'bold 20px Inter, system-ui, sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(clip.name, width / 2, height / 2);
+                }
 
                 if (clip.textContent) {
                     ctx.font = '500 14px Inter, system-ui, sans-serif';
@@ -390,7 +421,7 @@ export const VideoPreviewMonitor: React.FC<VideoPreviewMonitorProps> = ({
 
             ctx.restore();
         }
-    }, [currentTime, data.tracks, fps, showSafeAreas]);
+    }, [currentTime, data.tracks, data.mediaAssets, fps, showSafeAreas, videoTick]);
 
     const toggleFullscreen = () => {
         if (!containerRef.current) return;
