@@ -10,7 +10,15 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// chunkCpuShare sizes its builds by this machine's memory; a test sets the memory it describes (0: the real figure)
+const machine = vi.hoisted(() => ({ totalMem: 0 }));
+vi.mock('os', async importOriginal => {
+    const real = await importOriginal<typeof import('os')>();
+    return { ...real, totalmem: () => machine.totalMem || real.totalmem() };
+});
+
 import { chunkCpuShare, chunkOwner, chunkParallel, chunkTerritory, DISTRICT_CHUNKS_PARAMS, frameTransform, joinChunkGlb, planDistrictChunks } from '../src/node/3d-engine/staged-location/pipeline-k/district-chunks';
 import { nodeWorldMatrices, parseGlbBytes, readAccessor, transformPoint } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
@@ -102,12 +110,19 @@ describe('pipeline K-D: a district in chunks', () => {
         // 16 cores and memory for all: the centre and three chunks, four threads each, four times the time
         const big = 128 * 1024 ** 3;
         expect(chunkParallel(DISTRICT_CHUNKS_PARAMS, big)).toBe(3);
-        expect(chunkCpuShare(16, DISTRICT_CHUNKS_PARAMS)).toMatchObject({ threads: 4, slowdown: 4 });
-        // short of memory: fewer chunks at once, never none
-        expect(chunkParallel(DISTRICT_CHUNKS_PARAMS, 48 * 1024 ** 3)).toBe(1);
-        expect(chunkParallel(DISTRICT_CHUNKS_PARAMS, 8 * 1024 ** 3)).toBe(1);
-        // never fewer than two threads a build
-        expect(chunkCpuShare(4, DISTRICT_CHUNKS_PARAMS).threads).toBeGreaterThanOrEqual(2);
+        try {
+            machine.totalMem = big;
+            expect(chunkCpuShare(16, DISTRICT_CHUNKS_PARAMS)).toMatchObject({ builds: 4, threads: 4, slowdown: 4 });
+            // short of memory: fewer chunks at once, never none, and each build gets more of the cores
+            expect(chunkParallel(DISTRICT_CHUNKS_PARAMS, 48 * 1024 ** 3)).toBe(1);
+            expect(chunkParallel(DISTRICT_CHUNKS_PARAMS, 8 * 1024 ** 3)).toBe(1);
+            machine.totalMem = 8 * 1024 ** 3;
+            expect(chunkCpuShare(16, DISTRICT_CHUNKS_PARAMS)).toMatchObject({ builds: 2, threads: 8, slowdown: 2 });
+            // never fewer than two threads a build
+            expect(chunkCpuShare(4, DISTRICT_CHUNKS_PARAMS).threads).toBeGreaterThanOrEqual(2);
+        } finally {
+            machine.totalMem = 0;
+        }
     });
 
     it("keeps the leaf tiles touching a chunk's rectangle, not those beside it", () => {
