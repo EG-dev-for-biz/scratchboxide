@@ -177,7 +177,64 @@ Under the user's $100, so no approval is needed. The actual spend is reported af
 
 ## Run record
 
-(none yet)
+Values written as they are fixed.
+
+- **The code:** `fix/k-twin-delight` at 0526929f, the commit this preregistration was committed with (PR #17).
+- **The app:** launch entry `scratchbox-k-step-ablation`, web 3740, API 3741, tools 3742, `SCRATCHBOX_CACHE_RESTORE=off`,
+  restarted at 12:36.
+- **Fresh caches.** At 12:35 this worktree's stage caches (9.9 GB: tile_refine, scan_fit, tile_vegetation and every
+  staged_location stage) were deleted, keeping the run records, the judge's earlier outputs and the first run's published
+  GLBs. There were 27 GB free after.
+- **The builds:** the three places' K builds together, then their nine arms at most four at a time (a working limit, unlike
+  the first run's), each finished through the app's retry of a transient time limit, at most twice.
+- **All 12 built from 12:36 to 12:55**, the machine quiet (load 3 to 10). Each was checked (`check2.py`, the session's
+  scratchpad):
+  - its switch's step was skipped, and K ran it;
+  - its twin was not served from the cache, and it has one twin;
+  - it carries no degradation beyond its K's.
+
+  | Place | K | noDelight | noLattice | noFit | K's degradations (every arm carries the same) |
+  |---|---|---|---|---|---|
+  | ESB | b1729e53 (twin 44f4179b) | 74e6d96a (13190436) | 2c1e8b70 (a78f689b) | fa85ab32 (ebfd7acc) | one face not surveyed (transient: its image timed out); the arms have none |
+  | Haughwout | d63567da (47b4e5cb) | 20fa91b0 (472f459c) | 5ed1256c (2a22484e) | 2735d954 (dbc5f36e) | 3 faces no pano looks at; visible holes 18.2% (M1's f4f25a8e: 18.2%) |
+  | Ferry | 345e37dd (411b6d88) | 8d29135e (e0ee8185) | 1080eb5d (d2423751) | bfdfdfbe (d49cc16d) | 3 faces no pano looks at; visible holes 29.7% (M1's cdbda9bb: 29.8%); ownership vote not used |
+
+  - **The Haughwout's and the Ferry's degradations are the places' own.** M1's K builds there carried the same, to the
+    tenth of a percent.
+  - **The ESB's K survey.** A retry of its survey (run d6a673a6) did worse under the load of the arms: four readings timed
+    out at 240 s. It served the same remesh and twin from the cache, so the model is K's either way.
+    - K stays b1729e53.
+    - The survey feeds only K's notes and the judge's exclusions, and the three arms surveyed all 16 faces, so the
+      excluded panos are complete.
+  - **The lattice off again leaves material regions out** (`twin.materials` failed at once at every place: no rebuilt
+    facades to read).
+- **The view probes** (12:56 to 13:15; one call each, scores discarded and not quoted):
+
+  | Place | Fetched | Registered | Probe's judged views | `matchedShare` |
+  |---|---|---|---|---|
+  | ESB | 11 | **2**: VqOxFz9R (2024-09, 83 m), uPcMge9M (2026-04, 92 m) | 2 | 0.996 |
+  | Haughwout | 12 | 7 | 6 | **0.875** |
+  | Ferry | 11 | 5 | 5 | **0.862** |
+
+  - At the ESB nine of the eleven did not register: "the edge search did not lock onto the scan", 12 → 12 px, and
+    G8sOFZp8 12 → 6.35 px. These were the same podium-side panos as the first run's paid call (reported to the M1 session).
+  - **So the ESB is not judged** (fewer than 3 views, this preregistration's rule).
+  - **The Haughwout's and the Ferry's results are indicative** (V4: `matchedShare` under 0.99, as in M1).
+  - Their paid calls are still made, as this preregistration says, for what they show as information.
+- **The era check** (amendment 7's method), on the probes' own grids, which set each real photo beside the raw tile at its
+  registered pose (`docs/screenshots/k_step_ablation_2026-11-02/run2_era/`). **Every view is kept.**
+
+  | Place | Views (pano, photo date, distance, heading) | Kept, and why |
+  |---|---|---|
+  | Haughwout | 4rnMoRUG 2026-04 25 m h58; n_1JJ5Vm 2026-04 28 m h97; hN4AIglX 2026-04 37 m h334; dXtEY_Zc 2026-04 39 m h63; iqiqiEgp 2026-04 43 m h183; nygqgDGF 2026-04 43 m h98 (p15.5, f52) | the cast-iron arcades and the corner clock the tile holds; the storefront signs differ; hN4AIglX, dXtEY_Zc and iqiqiEgp are M1's |
+  | Ferry | 8UfT-51p 2025-05 54 m h46 (p18.5, f50); 4sXa5k8s 2026-09 57 m h121; A62bPfiJ 2026-09 71 m h342; XL-oDO4u 2026-09 110 m h334; GOgaHhj9 2026-09 116 m h133 (the last four p9 to p18, f50) | the clock tower and the arcade as the tile holds them; XL-oDO4u's construction fence is temporary (as M1 found); 4sXa5k8s and XL-oDO4u are M1's |
+
+- **The paid calls' views**, fixed here: these 6 and 5 views as fixed poses (`panoId`, `headingDeg`, `pitchDeg`,
+  `fovDeg` as the probes used them).
+  - Haughwout: `views: 6`. Ferry: `views: 5`.
+  - `runs: 3`, `clay: true`, `judgeRegions: true`, `trees: true`, `baseline: true`.
+- **The decoys** (`make_decoys.py`) are in `public/models/k_ablation2/`. Their flat colours: ESB sRGB (90, 79, 76), against
+  the old K's (123, 119, 117), so darker and warmer with the de-light fixed; Haughwout (87, 80, 90); Ferry (67, 72, 76).
 
 ## Report
 
