@@ -32,7 +32,7 @@ import { orthoReferenceCamera, orthoReferenceRecord, type OrthoReference } from 
 import { bearingDeg, type PanoCandidate } from '../src/node/3d-engine/staged-location/streetview-evidence';
 import { buildGroundModel, loadScanMesh, scanToGeodetic } from '../src/node/spatial/StreetViewSurveyPlanner';
 import {
-    collectPanoIds, createPhotoMatchEvaluateHandler, emptyTileAlong, eyeUnderStreet, footprintLookup, heldOutViews, nearTriangleFlags, onSurfaceFlags, surfaceCoverShare, surfacesWithin, visibleStagedLayers, HELD_OUT_MIN_VISIBLE, OPEN_PLACE_RADII_M,
+    collectPanoIds, createPhotoMatchEvaluateHandler, emptyTileAlong, eyeUnderStreet, footprintLookup, heldOutViews, indoorFootprint, nearTriangleFlags, onSurfaceFlags, surfaceCoverShare, surfacesWithin, visibleStagedLayers, HELD_OUT_INDOOR_INSET_M, HELD_OUT_MIN_VISIBLE, OPEN_PLACE_RADII_M,
     PHOTO_MATCH_EVALUATE_TOOL, PHOTO_MATCH_ISOLATE_SURFACE_M, type HeldOutRegistration, type PhotoMatchDeps
 } from '../src/node/gemini/tools/location-evidence/photo-match-evaluate';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
@@ -1254,6 +1254,89 @@ describe('photo_match_evaluate tool', () => {
         // a pose with no heading, or a field of view the grounding API cannot serve, is refused before anything runs
         expect(((await handler({ poses: [{ lat: PLACE.lat, lng: PLACE.lng }] }, ctxFor(root, staged.scene))).resultPayload as any).message).toMatch(/pose 1: headingDeg/);
         expect(((await handler({ poses: [{ panoId: 'HELD_NORTH', headingDeg: 0, fovDeg: 120 }] }, ctxFor(root, staged.scene))).resultPayload as any).code).toBe('bad_arguments');
+    }, 240_000);
+
+    it('takes no pano standing inside a building\'s footprint: an indoor capture is listed with its reason, a fixed pose there is refused, a sidewalk pano stays', async () => {
+        // the footprint test: on Google's footprints at the point and HELD_OUT_INDOOR_INSET_M all round it
+        const lookup = footprintLookup([{ id: 'block', parts: [{ loops: [[[-7, -6], [7, -6], [7, 6], [-7, 6]]] }] }, { id: 'next', parts: [{ loops: [[[7, -6], [15, -6], [15, 6], [7, 6]]] }] }]);
+        expect(indoorFootprint(0, 0, lookup)).toBeGreaterThan(0);
+        expect(indoorFootprint(7, 0, lookup)).toBeGreaterThan(0); // on the party wall between two footprints: still indoors
+        expect(indoorFootprint(-6.5, 0, lookup)).toBe(0); // half a metre inside the facade: a sidewalk pano's error, not indoors
+        expect(indoorFootprint(0, -9, lookup)).toBe(0);
+        expect(HELD_OUT_INDOOR_INSET_M).toBe(2);
+
+        // the block and the neighbour east of it as Google's footprints, and a pano inside the neighbour
+        const piece = (id: string, x0: number, x1: number, z0: number, z1: number) => ({ id: `g/${id}/e0`, buildingId: `g/${id}`, ring: [[x0, z0], [x1, z0], [x1, z1], [x0, z1]] as Array<[number, number]>, heightSource: 'vector' });
+        const inside: PanoCandidate = { panoId: 'INSIDE_NEIGHBOUR', lat: 0, lng: 0, date: '2025-08', copyright: '© Google', x: 26, z: 0 };
+        const requests: Array<{ panoId: string; headingDegree: number; pitchDegree: number; fovDegree: number }> = [];
+        const deps = (): PhotoMatchDeps => ({
+            ...fakeDeps(root, { panos: [...PANOS, inside], requests }),
+            footprints: async () => ({ buildings: [piece('block', -7, 7, -6, 6), piece('neighbour', 21, 31, -5, 5)], note: '2 extruded building footprints (stand-in)' })
+        });
+        const at = (x: number, z: number) => { const g = scanToGeodetic({ lat: PLACE.lat, lng: PLACE.lng, heightMeters: -30 }, x, 0, z); return { lat: g.lat, lng: g.lng }; };
+        const out = await createPhotoMatchEvaluateHandler(deps)({
+            views: 2, runs: 1, clay: false,
+            poses: [{ panoId: 'INSIDE_NEIGHBOUR', headingDeg: 270 }, { label: 'inside the neighbour', ...at(25, 0), headingDeg: 270 }]
+        }, ctxFor(root, staged.scene));
+        const r = out.resultPayload as any;
+        expect(out.status, JSON.stringify(r).slice(0, 1200)).toBe('completed');
+        expect(r.heldOut.indoor).toEqual({ rule: `inside Google's building footprints (fetched at judging time) by at least ${HELD_OUT_INDOOR_INSET_M} m all round`, panos: 1 });
+        expect(r.heldOut.rejected).toContain(`INSIDE_NEIGHBOUR stands inside Google's building footprint g/neighbour, at least ${HELD_OUT_INDOOR_INSET_M} m from its edge all round: an indoor capture, which shows the inside, not the street`);
+        const [named, near] = r.heldOut.fixed;
+        expect(named).toMatchObject({ pose: 1, status: 'indoors', panoId: 'INSIDE_NEIGHBOUR' });
+        expect(named.reason).toMatch(/^pano INSIDE_NEIGHBOUR stands inside Google's building footprint g\/neighbour/);
+        // a position's pose skips the indoor pano a metre away: the nearest outdoor one is 27 m off, past the limit
+        expect(near).toMatchObject({ pose: 2, status: 'no-pano' });
+        expect(near.reason).toMatch(/nearest Google-captured pano found outdoors \(HIDDEN_EAST\) stands 27\.\d m from the position/);
+        // the sidewalk panos round the block are judged as before; the indoor pano was never fetched
+        expect(r.views.length).toBe(2);
+        expect(r.views.every((v: any) => v.panoId !== 'INSIDE_NEIGHBOUR')).toBe(true);
+        expect(requests.some(q => q.panoId === 'INSIDE_NEIGHBOUR')).toBe(false);
+        fs.writeFileSync(path.join(SHOTS, 'view_rules_indoor.json'), JSON.stringify({ indoor: r.heldOut.indoor, rejected: r.heldOut.rejected, fixed: r.heldOut.fixed, judged: r.views.map((v: any) => v.panoId), panos: [...PANOS, inside] }, null, 1));
+
+        // with no footprints known, the rule cannot be applied and the result says so
+        const bare = await createPhotoMatchEvaluateHandler(() => fakeDeps(root))({ views: 1, runs: 1, clay: false }, ctxFor(root, staged.scene));
+        expect((bare.resultPayload as any).heldOut.indoor).toEqual({ rule: 'not applied: no building footprints are known at the place', panos: 0 });
+    }, 240_000);
+
+    it('judges exactly the views a dry run chose when given its judgedPoses with autoViews false: no search, no stand-in for a view that drops out', async () => {
+        const first = await createPhotoMatchEvaluateHandler(() => fakeDeps(root))({ views: 2, runs: 1, clay: false }, ctxFor(root, staged.scene));
+        const dry = first.resultPayload as any;
+        expect(first.status, JSON.stringify(dry).slice(0, 800)).toBe('completed');
+        expect(dry.heldOut.autoViews).toBe(true);
+        expect(dry.heldOut.judgedPoses).toEqual(dry.views.map((v: any) => ({ panoId: v.panoId, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg })));
+        expect(dry.heldOut.judgedPoses).toHaveLength(2);
+
+        // the "paid call": those poses only; Street View is never searched and the grounding API asked for exactly those views
+        const pinned = (opts: { unlocked?: string[] } = {}) => {
+            const requests: Array<{ panoId: string; headingDegree: number; pitchDegree: number; fovDegree: number }> = [];
+            let searched = 0;
+            const base = fakeDeps(root, { requests, ...opts });
+            const handler = createPhotoMatchEvaluateHandler(() => ({ ...base, discover: async (...a) => { searched++; return base.discover(...a); } }));
+            return { requests, searched: () => searched, run: (args: Record<string, unknown>) => handler({ runs: 1, clay: false, autoViews: false, poses: dry.heldOut.judgedPoses, ...args }, ctxFor(root, staged.scene)) };
+        };
+        const again = pinned();
+        const paid = (await again.run({})).resultPayload as any;
+        expect(paid.heldOut.autoViews).toBe(false);
+        expect(again.searched()).toBe(0);
+        expect(paid.views.map((v: any) => [v.panoId, v.headingDeg, v.pitchDeg, v.fovDeg])).toEqual(dry.views.map((v: any) => [v.panoId, v.headingDeg, v.pitchDeg, v.fovDeg]));
+        expect(paid.heldOut.judgedPoses).toEqual(dry.heldOut.judgedPoses);
+        expect(again.requests.map(q => q.panoId).sort()).toEqual(dry.heldOut.judgedPoses.map((p: any) => p.panoId).sort());
+        // even when asked for more views than poses: no automatic view is added
+        expect(((await pinned().run({ views: 4 })).resultPayload as any).views).toHaveLength(2);
+
+        // a pinned view that does not register drops out with its reason, and nothing stands in for it
+        const lost = pinned({ unlocked: [dry.heldOut.judgedPoses[0].panoId] });
+        const short = (await lost.run({})).resultPayload as any;
+        expect(short.views.map((v: any) => v.panoId)).toEqual([dry.heldOut.judgedPoses[1].panoId]);
+        expect(short.heldOut.fixed[0]).toMatchObject({ status: 'not-registered', panoId: dry.heldOut.judgedPoses[0].panoId });
+        expect(lost.requests).toHaveLength(2);
+        fs.writeFileSync(path.join(SHOTS, 'view_rules_pinned.json'), JSON.stringify({ dry: dry.heldOut.judgedPoses, paid: paid.views.map((v: any) => ({ panoId: v.panoId, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg })), searched: again.searched(), lostOne: { judged: short.views.map((v: any) => v.panoId), fixed: short.heldOut.fixed } }, null, 1));
+
+        // autoViews false with no poses is refused before anything runs
+        const none = await createPhotoMatchEvaluateHandler(() => fakeDeps(root))({ autoViews: false }, ctxFor(root, staged.scene));
+        expect((none.resultPayload as any).code).toBe('bad_arguments');
+        expect((none.resultPayload as any).message).toMatch(/autoViews false judges only the fixed poses/);
     }, 240_000);
 
     it('fails with typed errors and no scores when no view can be held out or registered', async () => {

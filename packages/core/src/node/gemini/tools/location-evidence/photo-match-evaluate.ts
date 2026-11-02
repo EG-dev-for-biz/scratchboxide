@@ -81,6 +81,12 @@ export const HELD_OUT_MIN_VISIBLE = 0.3;
 /** Least share of the frame the structure must fill. */
 export const HELD_OUT_MIN_SCREEN = 0.06;
 /**
+ * A pano at least this far inside Google's building footprints all round stands indoors (a shop, a lobby, an atrium): its
+ * photo shows the inside, never the street the builds are judged in. A sidewalk pano beside a facade stays: its position's
+ * error and the footprint's own reach a metre or two past the wall.
+ */
+export const HELD_OUT_INDOOR_INSET_M = 2;
+/**
  * A place with no structure at it (a park, a plaza): the views look at the tile's surfaces within these radii of the place,
  * the structure pick's own search window first (where it found nothing standing), widened a window at a time until enough
  * views qualify.
@@ -104,7 +110,7 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
         'By default it also renders every build in uniform untextured clay from the same poses and has the judge score shape only (massing, openings, surface relief) against the photo: ' +
         'clayScores, clay grids; use them to compare geometry changes (relief, reveals, massing) that the photo texture hides. ' +
         'Every build\'s placement is also measured from edges, not by the judge: how far its outline is drawn from the photo\'s silhouette of the target, read along the scan\'s target within Google\'s vector footprint (the run\'s, else fetched when judging) plus pipeline K\'s allowance for a building\'s own projections (a storefront a few decimetres past the footprint stays, a neighbour\'s slice metres out goes), outer outlines only, every build as built behind the scan\'s street (placement, px and degrees; 0 = drawn where the photo shows it). ' +
-        'A view whose registered eye stands under the street is not used; a region under 1% of a view is not judged there; a view where the reference tile ends inside the frame (its sky over what stands past the edge) is flagged (tileEdge) and its regions are not judged. ' +
+        `A pano standing inside Google's building footprints by ${HELD_OUT_INDOOR_INSET_M} m or more all round (an indoor capture) is not used; a view whose registered eye stands under the street is not used; a region under 1% of a view is not judged there; a view where the reference tile ends inside the frame (its sky over what stands past the edge) is flagged (tileEdge) and its regions are not judged. ` +
         'With no build named it evaluates the open staged scene. Compare versions by passing arms. Scores are relative judgements, not measurements: report the spread, and say when the views are few. ' +
         'Fails with a typed error (no scores) when no held-out view can be found or registered. Takes a few minutes (Street View fetch, registration, several judge calls per view).',
     parameters: {
@@ -146,7 +152,8 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
                 type: 'ARRAY',
                 description: `Fixed held-out views, judged blind with the automatic ones and counted in views (raised to their number; at most ${PHOTO_MATCH_MAX_VIEWS}). ` +
                     `Each looks from the nearest Google-captured Street View pano within ${FIXED_POSE_MAX_PANO_M} m of lat/lng, or from the pano named, along headingDeg. ` +
-                    'A pano any build used is refused and a view that does not register is not used; heldOut.fixed reports every pose, the pano it used and why any dropped out.',
+                    'A pano any build used is refused and a view that does not register is not used; heldOut.fixed reports every pose, the pano it used and why any dropped out. ' +
+                    'Every result lists the views it chose as poses (heldOut.judgedPoses): pass them back with autoViews false to judge exactly those views again.',
                 items: {
                     type: 'OBJECT',
                     properties: {
@@ -161,6 +168,7 @@ export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
                     required: ['headingDeg']
                 }
             },
+            autoViews: { type: 'BOOLEAN', description: 'False: judge only the fixed poses, with no Street View search and no automatic view added or standing in for a pose that drops out (needs poses). Use it to judge the views a dry run checked (its heldOut.judgedPoses) and no others. Default true.' },
             inContext: { type: 'BOOLEAN', description: 'Render each build inside the photo-textured tile with only the target cut out, the same street for every build (default true). False renders it alone on grey with the tile as an occluder.' },
             judgeModel: { type: 'STRING', description: `Vision model asked first (default ${PHOTO_MATCH_DEFAULT_JUDGE}; the chat's fallbacks follow).` },
             runs: { type: 'NUMBER', description: `Blind judgements per view, each with the order reshuffled (default ${PHOTO_MATCH_DEFAULT_RUNS}).` },
@@ -1036,6 +1044,26 @@ export function openPlaceViews(panos: PanoCandidate[], context: RenderMesh3D, te
     return { ...best!, tried };
 }
 
+/**
+ * The footprint a pano stands inside (feature index + 1), 0 when it does not: on a footprint at its position and at eight
+ * points HELD_OUT_INDOOR_INSET_M round it (any footprint at each, so a party wall between two buildings does not let it out).
+ */
+export function indoorFootprint(x: number, z: number, footprints: Pick<EvidenceLookup, 'buildingAt'>, insetM = HELD_OUT_INDOOR_INSET_M): number {
+    const at = footprints.buildingAt(x, z);
+    if (!at) return 0;
+    for (let k = 0; k < 8; k++) {
+        const a = (k * Math.PI) / 4;
+        if (!footprints.buildingAt(x + insetM * Math.cos(a), z + insetM * Math.sin(a))) return 0;
+    }
+    return at;
+}
+
+/** Why a pano standing inside a footprint is not held out (heldOut.rejected, heldOut.fixed). */
+function indoorReason(panoId: string, footprints: EvidenceLookup, at: number): string {
+    const id = footprints.raster.buildings[at - 1]?.id;
+    return `${panoId} stands inside Google's building footprint${id ? ` ${id}` : ''}, at least ${HELD_OUT_INDOOR_INSET_M} m from its edge all round: an indoor capture, which shows the inside, not the street`;
+}
+
 /** A fixed held-out view as asked for (`poses`): where it looks from and along which direction. */
 export interface FixedPoseSpec { pose: number; label?: string; at: { lat: number; lng: number } | { panoId: string }; headingDeg: number; pitchDeg: number; fovDeg: number }
 
@@ -1045,7 +1073,7 @@ export interface FixedPoseOutcome {
     label?: string;
     requested: FixedPoseSpec['at'];
     headingDeg: number; pitchDeg: number; fovDeg: number;
-    status: 'judged' | 'no-pano' | 'used-by-build' | 'no-ground' | 'duplicate' | 'not-fetched' | 'not-registered';
+    status: 'judged' | 'no-pano' | 'used-by-build' | 'indoors' | 'no-ground' | 'duplicate' | 'not-fetched' | 'not-registered';
     reason?: string;
     panoId?: string;
     date?: string;
@@ -1076,19 +1104,24 @@ function parsePoses(raw: unknown): FixedPoseSpec[] {
         if (Math.abs(pitchDeg) > 90) throw bad('pitchDeg must lie within -90 to 90.');
         if (fovDeg < 10 || fovDeg > 90) throw bad('fovDeg must lie within 10 to 90 (the grounding API serves at most 90).');
         const label = typeof p?.label === 'string' && p.label.trim() ? p.label.trim().slice(0, 60) : undefined;
-        return { pose, ...(label ? { label } : {}), at: panoId ? { panoId } : { lat: lat!, lng: lng! }, headingDeg: ((headingDeg % 360) + 360) % 360, pitchDeg, fovDeg };
+        // a heading already within [0, 360) is kept to the bit: a view passed back (heldOut.judgedPoses) is the very same view
+        const heading = headingDeg >= 0 && headingDeg < 360 ? headingDeg : ((headingDeg % 360) + 360) % 360;
+        return { pose, ...(label ? { label } : {}), at: panoId ? { panoId } : { lat: lat!, lng: lng! }, headingDeg: heading, pitchDeg, fovDeg };
     });
 }
 
 /**
  * The views of the fixed poses: each looks from the nearest Google-captured pano within FIXED_POSE_MAX_PANO_M of its position (or
  * from the pano named), its eye 2.5 m over the street there, along the heading asked for. A pano any build used is refused, as is
- * a pose with no pano near enough, no ground under it, or the very view of an earlier pose. The views that remain are fetched and
- * registered with the automatic ones; `views` maps each to its outcome, which the caller completes.
+ * a pano standing inside a building's footprint (a position's nearest outdoor pano is taken instead), a pose with no pano near
+ * enough, no ground under it, or the very view of an earlier pose. The views that remain are fetched and registered with the
+ * automatic ones; `views` maps each to its outcome, which the caller completes.
  */
 async function fixedPoseViews(specs: FixedPoseSpec[], input: {
     origin: GeodeticOrigin; cacheDir: string; posePanos: NonNullable<PhotoMatchDeps['posePanos']>; signal?: AbortSignal;
     context: RenderMesh3D; terrain: { groundAt(x: number, z: number): number }; used: Set<string>;
+    /** Google's building footprints at the place, when there are any: a pano inside one is not held out. */
+    footprints?: EvidenceLookup;
     /** What the automatic views look at: distances are measured from its centre, and its share of each view is reported when it has a mesh. */
     centre: { x: number; z: number }; target?: RenderMesh3D;
 }): Promise<{ outcomes: FixedPoseOutcome[]; views: Map<SelectedView, FixedPoseOutcome> }> {
@@ -1102,10 +1135,16 @@ async function fixedPoseViews(specs: FixedPoseSpec[], input: {
         const named = 'panoId' in s.at ? s.at.panoId : undefined;
         const point = 'lat' in s.at ? geodeticToScan(input.origin, s.at.lat, s.at.lng) : undefined;
         const found = await input.posePanos(input.origin, point ?? { panoId: named! }, input.cacheDir, input.signal);
-        let pano: PanoCandidate | undefined, dist = 0;
+        const indoors = (p: PanoCandidate) => (input.footprints ? indoorFootprint(p.x, p.z, input.footprints) : 0);
+        let pano: PanoCandidate | undefined, dist = 0, insideNearer: PanoCandidate | undefined;
         if (point) {
-            for (const p of found.panos) { const d = Math.hypot(p.x - point.x, p.z - point.z); if (!pano || d < dist) { pano = p; dist = d; } }
-            if (pano && dist > FIXED_POSE_MAX_PANO_M) { o.reason = `the nearest Google-captured pano found (${pano.panoId}) stands ${dist.toFixed(1)} m from the position, past ${FIXED_POSE_MAX_PANO_M} m`; continue; }
+            for (const p of found.panos) {
+                const d = Math.hypot(p.x - point.x, p.z - point.z);
+                if (indoors(p)) { if (!insideNearer || d < Math.hypot(insideNearer.x - point.x, insideNearer.z - point.z)) insideNearer = p; continue; }
+                if (!pano || d < dist) { pano = p; dist = d; }
+            }
+            if (pano && dist > FIXED_POSE_MAX_PANO_M) { o.reason = `the nearest Google-captured pano found outdoors (${pano.panoId}) stands ${dist.toFixed(1)} m from the position, past ${FIXED_POSE_MAX_PANO_M} m`; continue; }
+            if (!pano && insideNearer) { o.status = 'indoors'; o.panoId = insideNearer.panoId; o.reason = `every Google-captured pano found near the position stands indoors: ${indoorReason(insideNearer.panoId, input.footprints!, indoors(insideNearer))}`; continue; }
         } else {
             pano = found.panos.find(p => p.panoId === named);
         }
@@ -1114,6 +1153,8 @@ async function fixedPoseViews(specs: FixedPoseSpec[], input: {
         if (pano.date) o.date = pano.date;
         if (point) o.panoDistanceM = r2(dist);
         if (input.used.has(pano.panoId)) { o.status = 'used-by-build'; o.reason = `pano ${pano.panoId} was used by a build, so it cannot be held out`; continue; }
+        const inside = indoors(pano);
+        if (inside) { o.status = 'indoors'; o.reason = `pano ${indoorReason(pano.panoId, input.footprints!, inside)}`; continue; }
         const street = streetAt(pano.x, pano.z, input.context, input.terrain);
         if (!street) { o.status = 'no-ground'; o.reason = `no ground under pano ${pano.panoId}: it stands off the reference tile`; continue; }
         o.eyeGround = street.on;
@@ -1263,9 +1304,12 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     const active = activeData?.stagedBuild && Array.isArray(activeData.stagedBuild.layers) ? activeData.stagedBuild : undefined;
     const poses = parsePoses(args.poses);
     if (poses.length && !deps.posePanos) throw new PhotoMatchError('street_view_unavailable', 'fixed poses need a pano lookup (posePanos), and none is configured here.');
-    // fixed poses count toward the views, which are never fewer than they
+    // autoViews false: the fixed poses are the only views (a preregistered call judges exactly the views its dry run checked)
+    const autoViews = args.autoViews !== false;
+    if (!autoViews && !poses.length) throw new PhotoMatchError('bad_arguments', 'autoViews false judges only the fixed poses, so give poses (a dry run\'s heldOut.judgedPoses).');
+    // fixed poses count toward the views, which are never fewer than they (and are exactly they without automatic views)
     const askedViews = intArg(args.views, PHOTO_MATCH_DEFAULT_VIEWS, 1, PHOTO_MATCH_MAX_VIEWS);
-    const nViews = Math.max(askedViews, poses.length);
+    const nViews = autoViews ? Math.max(askedViews, poses.length) : poses.length;
     const nRuns = intArg(args.runs, PHOTO_MATCH_DEFAULT_RUNS, 1, PHOTO_MATCH_MAX_RUNS);
     const wantContext = args.inContext !== false;
     const wantClay = args.clay !== false;
@@ -1392,18 +1436,27 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     const near = structure ? 'the structure' : 'the place';
     progress(`finding Street View panos near ${near} that the build never used`, 0.02);
     const centre = structure ? { x: structure.cx, z: structure.cz } : { x: 0, z: 0 };
-    const panos = await deps.discover(ref.origin, centre, builds.cache.dir, signal);
+    const panos = autoViews ? await deps.discover(ref.origin, centre, builds.cache.dir, signal) : [];
     stopIfAborted(signal);
+    // a pano standing inside a building's footprint is an indoor capture: never a held-out view (with no footprints at the
+    // place, the rule cannot be applied, and heldOut.indoor says so)
+    const indoorRejected: string[] = [];
+    const outdoors = !footprints ? panos : panos.filter(p => {
+        const at = indoorFootprint(p.x, p.z, footprints!);
+        if (at) indoorRejected.push(indoorReason(p.panoId, footprints!, at));
+        return !at;
+    });
     // the fixed poses first: the automatic views never repeat a pano one of them looks from
     if (poses.length) progress(`finding the panos of ${poses.length} fixed pose${poses.length === 1 ? '' : 's'}`, 0.03);
     const fixed = poses.length ? await fixedPoseViews(poses, {
         origin: ref.origin, cacheDir: builds.cache.dir, posePanos: deps.posePanos!, ...(signal ? { signal } : {}), context: contextMesh, terrain, used: builds.used,
-        centre, ...(structure ? { target: structure.mesh } : {})
+        centre, ...(structure ? { target: structure.mesh } : {}), ...(footprints ? { footprints } : {})
     }) : undefined;
     const fixedReady = fixed ? [...fixed.views.keys()] : [];
     const autoExclude = fixedReady.length ? new Set([...builds.used, ...fixedReady.map(v => v.panoId)]) : builds.used;
-    const open = structure ? undefined : openPlaceViews(panos, contextMesh, terrain, autoExclude, fetchCount);
-    const { views: candidates, rejected } = open ?? heldOutViews(panos, structure!, contextMesh, autoExclude, terrain);
+    const open = structure ? undefined : openPlaceViews(outdoors, contextMesh, terrain, autoExclude, fetchCount);
+    const { views: candidates, rejected: notQualified } = open ?? heldOutViews(outdoors, structure!, contextMesh, autoExclude, terrain);
+    const rejected = [...indoorRejected, ...notQualified];
     const viewTarget = {
         rule: viewRule,
         source: viewRule === 'isolate' ? 'the isolate (the scan the build isolated)'
@@ -1414,11 +1467,15 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     };
     const unusedNear = panos.filter(p => !builds.used.has(p.panoId)).length;
     const fixedNote = fixed ? { fixed: fixed.outcomes } : {};
-    if (!candidates.length && !fixedReady.length) {
-        throw new PhotoMatchError('no_heldout_candidates', `No held-out view: of ${panos.length} Google panos near ${near}, ${panos.length - unusedNear} were used by the build and none of the other ${unusedNear} sees enough of it unhidden${fixed ? `, and none of the ${poses.length} fixed poses has a pano that can be held out` : ''}.`, { panosNear: panos.length, usedByBuild: builds.used.size, viewTarget, rejected: rejected.slice(0, 20), ...fixedNote });
+    if (!autoViews && !fixedReady.length) {
+        throw new PhotoMatchError('no_heldout_candidates', `No held-out view: none of the ${poses.length} fixed poses has a pano that can be held out, and autoViews is false, so no automatic view stands in.`, { usedByBuild: builds.used.size, viewTarget, ...fixedNote });
     }
-    // every fixed view, then the automatic ones to fill the fetch (they stand in for fixed views that do not register)
-    const toFetch: SelectedView[] = [...fixedReady, ...spreadViews(candidates, Math.max(0, fetchCount - fixedReady.length))];
+    if (!candidates.length && !fixedReady.length) {
+        throw new PhotoMatchError('no_heldout_candidates', `No held-out view: of ${panos.length} Google panos near ${near}, ${panos.length - unusedNear} were used by the build${indoorRejected.length ? `, ${indoorRejected.length} stand indoors,` : ''} and none of the others sees enough of it unhidden${fixed ? `, and none of the ${poses.length} fixed poses has a pano that can be held out` : ''}.`, { panosNear: panos.length, usedByBuild: builds.used.size, viewTarget, rejected: rejected.slice(0, 20), ...fixedNote });
+    }
+    // every fixed view, then the automatic ones to fill the fetch (they stand in for fixed views that do not register), none
+    // with autoViews false
+    const toFetch: SelectedView[] = [...fixedReady, ...(autoViews ? spreadViews(candidates, Math.max(0, fetchCount - fixedReady.length)) : [])];
     progress(`fetching ${toFetch.length} held-out Street View images through the grounding API`, 0.08);
     const got = await fetchViews(toFetch, { grounding: deps.grounding() }, signal);
     stopIfAborted(signal);
@@ -2047,14 +2104,26 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
             viewTarget,
             // every fixed pose: the pano it looked from and its view, or why it dropped out
             ...(fixed ? { fixed: fixed.outcomes, ...(nViews > askedViews ? { viewsRaisedTo: nViews } : {}) } : {}),
+            // false: only the fixed poses were fetched and judged, no automatic view was looked for or stood in for one
+            autoViews,
             panosNear: panos.length,
             usedByBuild: builds.used.size,
             usedPanoSources: builds.usedSources,
             candidates: candidates.length,
             notQualified: rejected.length,
-            // every pano near the target that is not a candidate, and why: past the tile's edge, a sight line over empty tile,
-            // too little of the target in the frame or unhidden
+            // every pano near the target that is not a candidate, and why: indoors, past the tile's edge, a sight line over empty
+            // tile, too little of the target in the frame or unhidden
             rejected,
+            // the indoor rule: a pano standing inside Google's building footprints by HELD_OUT_INDOOR_INSET_M all round is not used
+            indoor: footprints
+                ? { rule: `inside Google's building footprints (${footprintsFrom}) by at least ${HELD_OUT_INDOOR_INSET_M} m all round`, panos: indoorRejected.length }
+                : { rule: 'not applied: no building footprints are known at the place', panos: 0 },
+            // the views chosen for judging, as poses: passed back as poses with autoViews false, a later call judges exactly these
+            // views (a preregistered paid call, the views its dry run checked), and one that drops out is reported, not replaced
+            judgedPoses: chosen.map(c => {
+                const v = c.im.view, label = fixed?.views.get(v)?.label;
+                return { ...(label ? { label } : {}), panoId: v.panoId, headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, fovDeg: v.fovDeg };
+            }),
             // where each candidate's eye stands, 2.5 m up: the reference tile's terrain, else the lowest surface within 1.5 m (a pano
             // with neither stands past the tile's edge and is not a candidate)
             eyeGround: candidates.reduce((n, v) => ({ ...n, [v.eyeGround]: (n[v.eyeGround] ?? 0) + 1 }), {} as Partial<Record<HeldOutEyeGround, number>>),
