@@ -20,6 +20,10 @@
  * yuvj420p biases every re-encoded image by about dRGB (-0.6, +0.5, -0.9), i.e. Lab
  * da* -0.8 / db* +0.7, which shows up as a colour shift on texels that were never meant to
  * change; its YCbCr -> RGB path is also about -0.17 levels off in green against libjpeg.
+ * 4:2:0 chroma is resampled here too, as libjpeg does (each sample centred on its 2 x 2 block):
+ * swscale sites it differently across versions, and Ubuntu 24.04's ffmpeg 6.1 against Homebrew's
+ * 8.1 shifted it by half a pixel between encode and decode, a 0.26 level round-trip bias on
+ * gradients. ffmpeg only codes the planes it is given and hands back the planes as coded.
  *
  * Robustness: ffmpeg reads its input from a temporary file (never stdin; `-nostdin`), and
  * every invocation has a timeout, because ffmpeg occasionally blocked forever in read() on a
@@ -237,14 +241,98 @@ export function jfifYcc444ToRgba(planes: Buffer | Uint8Array, width: number, hei
     return out;
 }
 
-const DECODE_JPEG_ARGS = (file: string) => ['-v', 'error', '-i', file, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'yuvj444p', 'pipe:1'];
-const DECODE_RGBA_ARGS = (file: string) => ['-v', 'error', '-i', file, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1'];
+// ---------------------------------------------------------------------------------------------
+// 4:2:0 chroma, sited as JPEG sites it (each Cb/Cr sample at the centre of its 2 x 2 luma block)
+// ---------------------------------------------------------------------------------------------
 
-function finishDecode(fmt: EncodedImageFormat, raw: Buffer, dims: { width: number; height: number }, label: string): RgbaImage {
+/** Bytes of planar Y'CbCr 4:2:0 for width x height (chroma planes ceil(w/2) x ceil(h/2), as ffmpeg lays them out). */
+export function yuv420Bytes(width: number, height: number): number {
+    return width * height + 2 * Math.ceil(width / 2) * Math.ceil(height / 2);
+}
+
+/**
+ * Planar 4:4:4 -> 4:2:0: each chroma sample the mean of its 2 x 2 block, edges replicated, rounding alternating
+ * between +1 and +2 along a row (libjpeg's h2v2_downsample), so the subsampling adds no bias.
+ */
+export function subsampleYcc444To420(planes: Buffer | Uint8Array, width: number, height: number): Buffer {
+    const n = width * height, cw = Math.ceil(width / 2), ch = Math.ceil(height / 2);
+    const out = Buffer.alloc(yuv420Bytes(width, height));
+    out.set(planes.subarray(0, n), 0);
+    for (let p = 0; p < 2; p++) {
+        const src = n * (p + 1), dst = n + p * cw * ch;
+        for (let y = 0; y < ch; y++) {
+            const r0 = src + 2 * y * width, r1 = src + Math.min(2 * y + 1, height - 1) * width;
+            let bias = 1;
+            for (let x = 0; x < cw; x++) {
+                const x0 = 2 * x, x1 = Math.min(2 * x + 1, width - 1);
+                out[dst + y * cw + x] = (planes[r0 + x0] + planes[r0 + x1] + planes[r1 + x0] + planes[r1 + x1] + bias) >> 2;
+                bias ^= 3;
+            }
+        }
+    }
+    return out;
+}
+
+/**
+ * Planar Y'CbCr 4:2:0 (JFIF) -> RGBA8: chroma upsampled by libjpeg's h2v2 "fancy" triangle filter (each output sample
+ * 3/4 its own chroma sample and 1/4 the next one toward it, in each direction, rounding alternating +8 / +7), the result
+ * libjpeg-turbo gives by default (which, like it, replicates instead when the chroma is at most 2 samples wide), then
+ * the exact JFIF conversion.
+ */
+export function jfifYcc420ToRgba(planes: Buffer | Uint8Array, width: number, height: number): Buffer {
+    const n = width * height, cw = Math.ceil(width / 2), ch = Math.ceil(height / 2);
+    const full = Buffer.alloc(n * 3);
+    full.set(planes.subarray(0, n), 0);
+    const colsum = new Int32Array(cw);
+    for (let p = 0; p < 2; p++) {
+        const src = n + p * cw * ch, dst = n * (p + 1);
+        if (cw <= 2) {
+            for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) full[dst + y * width + x] = planes[src + (y >> 1) * cw + (x >> 1)];
+            continue;
+        }
+        for (let y = 0; y < height; y++) {
+            const near = y >> 1, far = Math.min(Math.max(y & 1 ? near + 1 : near - 1, 0), ch - 1);
+            for (let x = 0; x < cw; x++) colsum[x] = 3 * planes[src + near * cw + x] + planes[src + far * cw + x];
+            const row = dst + y * width;
+            for (let x = 0; x < width; x++) {
+                const i = x >> 1;
+                full[row + x] = x & 1
+                    ? (3 * colsum[i] + colsum[Math.min(i + 1, cw - 1)] + 7) >> 4
+                    : (3 * colsum[i] + colsum[Math.max(i - 1, 0)] + 8) >> 4;
+            }
+        }
+    }
+    return jfifYcc444ToRgba(full, width, height);
+}
+
+/** How ffmpeg hands back a decoded image: Y'CbCr planes (full resolution, or 4:2:0 as coded) or RGBA. */
+type RawLayout = 'yuv444' | 'yuv420' | 'rgba';
+
+const DECODE_ARGS = (file: string, layout: RawLayout) =>
+    ['-v', 'error', '-i', file, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', layout === 'yuv420' ? 'yuvj420p' : layout === 'yuv444' ? 'yuvj444p' : 'rgba', 'pipe:1'];
+
+/**
+ * A plain Y'CbCr 4:2:0 JPEG comes back in its own planes and is upsampled here, not by ffmpeg's scaler, which sites the
+ * chroma differently across ffmpeg versions; every other JPEG comes back at full resolution in Y'CbCr, anything else RGBA.
+ */
+function rawLayoutOf(fmt: EncodedImageFormat, buf: Buffer): RawLayout {
+    if (fmt !== 'jpeg') return 'rgba';
+    const l = jpegColourLayout(buf);
+    const is420 = l.components === 3 && l.adobeTransform === undefined
+        && l.sampling[0]?.join() === '2,2' && l.sampling[1]?.join() === '1,1' && l.sampling[2]?.join() === '1,1';
+    return is420 ? 'yuv420' : 'yuv444';
+}
+
+function rawBytes(layout: RawLayout, dims: { width: number; height: number }): number {
     const n = dims.width * dims.height;
-    const expected = fmt === 'jpeg' ? n * 3 : n * 4;
+    return layout === 'yuv420' ? yuv420Bytes(dims.width, dims.height) : layout === 'yuv444' ? n * 3 : n * 4;
+}
+
+function finishDecode(layout: RawLayout, raw: Buffer, dims: { width: number; height: number }, label: string): RgbaImage {
+    const expected = rawBytes(layout, dims);
     if (raw.length !== expected) throw new Error(`${label}: expected ${expected} bytes for ${dims.width}x${dims.height}, got ${raw.length}`);
-    return { width: dims.width, height: dims.height, rgba: fmt === 'jpeg' ? jfifYcc444ToRgba(raw, dims.width, dims.height) : raw };
+    const rgba = layout === 'yuv420' ? jfifYcc420ToRgba(raw, dims.width, dims.height) : layout === 'yuv444' ? jfifYcc444ToRgba(raw, dims.width, dims.height) : raw;
+    return { width: dims.width, height: dims.height, rgba };
 }
 
 function decodePngImage(buf: Buffer): RgbaImage {
@@ -253,9 +341,10 @@ function decodePngImage(buf: Buffer): RgbaImage {
 }
 
 /** In-process JPEG decode (jpeg-js), used when ffmpeg is unavailable or fails. Throws with both causes. */
-/** Component count (from the SOF marker) and the Adobe APP14 colour transform byte, when present. */
-function jpegColourLayout(buf: Buffer): { components: number; adobeTransform?: number } {
+/** Component count and each component's [horizontal, vertical] sampling factors (from the SOF marker), and the Adobe APP14 colour transform byte, when present. */
+function jpegColourLayout(buf: Buffer): { components: number; sampling: Array<[number, number]>; adobeTransform?: number } {
     let pos = 2, components = 0, adobeTransform: number | undefined;
+    const sampling: Array<[number, number]> = [];
     while (pos + 4 <= buf.length) {
         if (buf[pos] !== 0xff) { pos++; continue; }
         const marker = buf[pos + 1];
@@ -265,10 +354,16 @@ function jpegColourLayout(buf: Buffer): { components: number; adobeTransform?: n
         const segLen = buf.readUInt16BE(pos + 2);
         if (marker === 0xee && segLen >= 14 && buf.toString('ascii', pos + 4, pos + 9) === 'Adobe') adobeTransform = buf[pos + 15];
         const isSof = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
-        if (isSof && pos + 9 < buf.length) components = buf[pos + 9];
+        if (isSof && pos + 9 < buf.length) {
+            components = buf[pos + 9];
+            for (let c = 0; c < components && pos + 11 + 3 * c < buf.length; c++) {
+                const hv = buf[pos + 11 + 3 * c];
+                sampling.push([hv >> 4, hv & 15]);
+            }
+        }
         pos += 2 + segLen;
     }
-    return { components, adobeTransform };
+    return { components, sampling, adobeTransform };
 }
 
 /**
@@ -315,10 +410,10 @@ export async function decodeImageToRgba(encoded: Buffer | Uint8Array): Promise<R
     const dims = readImageDimensions(buf);
     if (!dims && fmt === 'jpeg') throw new Error('decodeImageToRgba: could not read image dimensions from header');
     try {
-        const raw = await withTempFileAsync(buf, `.${fmt === 'jpeg' ? 'jpg' : fmt}`, file =>
-            runFfmpeg(fmt === 'jpeg' ? DECODE_JPEG_ARGS(file) : DECODE_RGBA_ARGS(file), 'decodeImageToRgba'));
+        const layout = rawLayoutOf(fmt, buf);
+        const raw = await withTempFileAsync(buf, `.${fmt === 'jpeg' ? 'jpg' : fmt}`, file => runFfmpeg(DECODE_ARGS(file, layout), 'decodeImageToRgba'));
         if (!dims) throw new Error('decodeImageToRgba: could not read image dimensions from header');
-        return finishDecode(fmt, raw, dims, 'decodeImageToRgba');
+        return finishDecode(layout, raw, dims, 'decodeImageToRgba');
     } catch (e) {
         if (fmt !== 'jpeg') throw e;
         return decodeJpegInProcess(buf, 'decodeImageToRgba', e);
@@ -338,9 +433,10 @@ export function decodeImageToRgbaSync(encoded: Buffer | Uint8Array): RgbaImage {
     let ffmpegError: unknown;
     if (dims) {
         try {
+            const layout = rawLayoutOf(fmt, buf);
             const raw = withTempFile(buf, `.${fmt === 'jpeg' ? 'jpg' : fmt}`, file =>
-                runFfmpegSync(fmt === 'jpeg' ? DECODE_JPEG_ARGS(file) : DECODE_RGBA_ARGS(file), 'decodeImageToRgbaSync', dims.width * dims.height * 4 + 4096));
-            return finishDecode(fmt, raw, dims, 'decodeImageToRgbaSync');
+                runFfmpegSync(DECODE_ARGS(file, layout), 'decodeImageToRgbaSync', rawBytes(layout, dims) + 4096));
+            return finishDecode(layout, raw, dims, 'decodeImageToRgbaSync');
         } catch (e) {
             ffmpegError = e;
         }
@@ -403,8 +499,8 @@ export async function downscaleJpegFfmpeg(jpeg: Buffer, width: number, height: n
 }
 
 /**
- * Encodes RGBA8 (alpha ignored) to a baseline JPEG: exact JFIF RGB -> Y'CbCr here, ffmpeg's mjpeg encoder
- * only compresses the planes (and subsamples chroma for '420'), so the round trip carries no colour bias.
+ * Encodes RGBA8 (alpha ignored) to a baseline JPEG: exact JFIF RGB -> Y'CbCr (and the 4:2:0 subsampling) here,
+ * ffmpeg's mjpeg encoder only compresses the planes, so the round trip carries no colour bias.
  * Without ffmpeg, jpeg-js encodes at the same quality (always 4:4:4).
  */
 export async function encodeRgbaToJpeg(rgba: Buffer | Uint8Array, width: number, height: number, options: JpegEncodeOptions = {}): Promise<Buffer> {
@@ -413,12 +509,14 @@ export async function encodeRgbaToJpeg(rgba: Buffer | Uint8Array, width: number,
     }
     const qscale = jpegQualityToQscale(options.quality ?? 90);
     const pixFmt = options.chroma === '444' ? 'yuvj444p' : 'yuvj420p';
-    const planes = rgbaToJfifYcc444(rgba, width, height);
+    const ycc = rgbaToJfifYcc444(rgba, width, height);
+    // 4:2:0 is subsampled here, not by ffmpeg's scaler (see jfifYcc420ToRgba): ffmpeg only compresses the planes it is given
+    const planes = pixFmt === 'yuvj420p' ? subsampleYcc444To420(ycc, width, height) : ycc;
     let out: Buffer;
     try {
         out = await withTempFileAsync(planes, '.yuv', file => runFfmpeg([
             '-v', 'error',
-            '-f', 'rawvideo', '-pix_fmt', 'yuvj444p', '-s', `${width}x${height}`, '-i', file,
+            '-f', 'rawvideo', '-pix_fmt', pixFmt, '-s', `${width}x${height}`, '-i', file,
             '-frames:v', '1', '-pix_fmt', pixFmt, '-q:v', String(qscale), '-qmin', String(qscale), '-qmax', String(qscale),
             '-f', 'mjpeg', 'pipe:1'
         ], 'encodeRgbaToJpeg'));

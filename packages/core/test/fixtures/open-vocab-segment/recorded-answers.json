@@ -5,7 +5,20 @@
     "model": "gemini-4-argon",
     "modelVersion": "gemini-4-argon",
     "text": "{\"found\": true, \"label\": \"statue on a plinth\", \"box_2d\": [244, 359, 960, 684], \"positive\": [[302, 502], [546, 503], [883, 502], [358, 623], [658, 419]], \"negative\": [[373, 577], [567, 616], [712, 427], [794, 358], [792, 641]]}",
-    "recordedAt": "2026-10-18T18:21:02.931Z"
+    "recordedAt": "2026-10-18T18:21:02.931Z",
+    "request": {
+      "parts": [
+        {
+          "role": "user",
+          "size": "640x480",
+          "thumb": "SndiWXJaS35oY2xQWmpTX3NnUGdJYntMY4ViT4BdUnhsXINHXXxgc3NSn0tQlVNKk15MoGFNnF5Kl1Q4XHVTVnVUVYRcXZJnYXBeX39aWmhJUHh1U2BFTXBRW3NNVlpjV4BreXZcm08/lGdGnGBOj1FJhE85hGM/PIBtXnh1a49fXHhtWHpyZZNOTIN4YGxsO39cXnBlWXRlWX5YTXZidWpPn1RNilZYlUc5qmhColxFnF9EQnZUTnV4XmxlXm5OSWRgVIR2YoZfSINKYHljaJNvWZhuWIpRUWped31NiF9NqGo2nGdNiFw1kGUqo1JVVmZcUX1lOnhgS21cTmldSGRVVIRLVH5MWHtcsq+zuLuzbYFlZodusZWNgVJJiWE6pkJIjV06kExWsGRRZ2xvVIZNVoxcSn93XYNZSJRTZHFwXn9OWG9YprGsp7CvZnlUnaGkf1xEnVo4iU46pFE7kVhHlVo1h01TV2thSHVkY4FZWGprTX9qP4dWS2lRPX5ZbY51y8PDx8XCnauaRnltdIBRlGdDlkhBklNInWdFpmI3kmJNZnNaTGxVQntEUmxpWYBgTYNXR3dbQnZJj5aMycfGycXEjZCaXWBocnFNj0RKqlVNrFdWl1tQlWRVlF1KWnVQXnFUMoFdXX5fUIVsU2llXXJnT3Bcip6Ky8jGy8XFlKeNZ35fcWpSm1U+mFdLn2ZPjlo6jlExkVY7V4FRVnZrYXVJZGlmYotQWmpeWmdhXGtVtLClyMjEysfBiJ2WS19shFhgnFRMnFk4ompBjFU+lldFlEhDYXJYVnleUoZbVG1hYIVsUmZeT3dpWXA6gpqCzMbGzcXBgXhXVV5fb2VRk1VKnGAsrVZImlZEgl5NkFlITmpeYHlqWoZZYoFhaHJeToReX3RdYnB5gp2Zvrm6uru7gqp8YWJ1g3ZRo1Y6l2pFqFxHl1w+pFs/oVY2UmhdT3tWa3p4T35yP31fVWlWS3RflJidy8bDysbEx8jCysfDjZ2QjnNloF9GgV5HnElBlGc7omc9mlFJS1JhXIFdSnxeSoJeSYhqc3lnRYRZrrSsy8bDysXHysnDy8TItrSucllZikZZnVhLiU1OnFhEiV47gF44WYZrVn5lVGppS3FmaYZjSo5mYYVZhJKAhZd1g6SChJ6MeKyBfJaCkHVIkkNYok05klREoUtCollBlk9M"
+        },
+        {
+          "role": "user",
+          "text": "Find the thing described below in the image and give prompts for an interactive segmenter that will cut it out.\nTarget: \"the statue standing on the plinth, plinth included\"\n\nAnswer with JSON only, in this shape:\n{\"found\": true, \"label\": \"<a few words for what you found>\", \"box_2d\": [ymin, xmin, ymax, xmax], \"positive\": [[y, x], ...], \"negative\": [[y, x], ...]}\nor, when nothing in the image matches the description: {\"found\": false, \"reason\": \"<why>\"}\n\nCoordinates are integers from 0 to 1000, normalised to the image height (y) and width (x).\n- box_2d tightly encloses all of the target that is visible.\n- positive: 3 to 6 points well inside the target, on its own surface (not in gaps or holes, not on anything in front of it), spread over its different parts. At most 8.\n- negative: 0 to 6 points on things that touch, overlap or stand in front of the target but are not part of it (neighbouring things, occluders, what it stands on or against), each near the target's edge. At most 8.\n- If the description fits several things, choose the one it describes best."
+        }
+      ]
+    }
   },
   {
     "key": "67027405e17cf7c491422b61ad076d3cc096307021c605efc4617d0a4d6632aa",
@@ -13,7 +26,20 @@
     "model": "gemini-4-argon",
     "modelVersion": "gemini-4-argon",
     "text": "{\"found\": true, \"label\": \"pale urn on the left\", \"box_2d\": [250, 230, 829, 484], \"positive\": [[281, 357], [469, 357], [600, 282], [600, 432], [750, 357]], \"negative\": [[595, 504], [469, 504], [731, 504], [336, 429], [336, 286]]}",
-    "recordedAt": "2026-10-18T18:21:11.158Z"
+    "recordedAt": "2026-10-18T18:21:11.158Z",
+    "request": {
+      "parts": [
+        {
+          "role": "user",
+          "size": "560x420",
+          "thumb": "Y5B2V297cW9wa3CIWmqKWWuFZXh2cGhqYYRzb15la117dXB6Z2dqaXF3YXJ9eGeIcGF8g3lre1t+Wm6DYF9pXHqNb4V2Zmx6XGt/T3pwcmtsalhkdWl1XXl9aXSBWG93anBvYWN3a3aWZ4CASnB6ZXh4ZlZrYXR+YXV6cVJoX3RmVHKEXXFza3CIaF6EanVtZnVma3iHc2N1XYF9ZWSOUGx6W2xzYH15b2t3X2B0bGh0kKinnaupdXKVamWBcoJjTHGAcm1xYWxuVmpkWV5mZ2NyYFJvfVtmYHtqbWR0Y3d9W2p9XW5oh5elu8fMYHOHWn18V4VpXYNjeGJ5b2qNWmN5c2uJXnZpa2iPcICOZHp+bWt/W3RzW36Eiot4ub3CvcnPmaOrkZSUpJaeoo+YpZ2XpZORgZOYXGiDW2B+c3OITHiJYWaSYoWLUn6IaW5wp6qwv8fOv8fLvcjLs6ulvbCmva6jwLKnwbCokYaSUndzZGd+UW1vgEqCbmdwbml+Y2OJgm5yuMHEu8jNvsjOvcXNv766wLGnuqylv7Gpwq6miYePY3NvaXtqcXhUhFh+YYGGT2hgZGV2YWyCs7/AwMnMvsnNvsXLwbm2v7Gnv66kwLKmwbGlkpGQfYSIbn2GW21ZRnN0cWx8ZmtsZm1nen2Bj6edvsjLvsbMvcXKpKKfwbGnvq6kv7Gov7CnloeMaWN4XWp9ZV5iW3ZeZGx1YXqXWG2NXmd0c3J3kJetprK2cZOPoJWYqaefqaWXrqadr6eeg5COUmt1aWtzam55bGiKXX1tdnSAWGV0amJ8cFuAYFh1VFxwfWt0UHOAUmZ+X3VkYGxoYm9+YXtnbXVlc3+He3mCY3B9anBgUGtyY22Gb3p0Zmp6fWVYXVt+cnd4YVuOX1x3ZnR7UGZvVF9qWYV0W3lvdWmHZn51gWpje2Jse2ZQgmNwbGiYaGB0dVxDVFtpdWhySm53X0NaZHVORYJaX2toUHxdUUlsk4mYS3aUUFNF"
+        },
+        {
+          "role": "user",
+          "text": "Find the thing described below in the image and give prompts for an interactive segmenter that will cut it out.\nTarget: \"the pale urn on the left (not the crate it touches)\"\n\nAnswer with JSON only, in this shape:\n{\"found\": true, \"label\": \"<a few words for what you found>\", \"box_2d\": [ymin, xmin, ymax, xmax], \"positive\": [[y, x], ...], \"negative\": [[y, x], ...]}\nor, when nothing in the image matches the description: {\"found\": false, \"reason\": \"<why>\"}\n\nCoordinates are integers from 0 to 1000, normalised to the image height (y) and width (x).\n- box_2d tightly encloses all of the target that is visible.\n- positive: 3 to 6 points well inside the target, on its own surface (not in gaps or holes, not on anything in front of it), spread over its different parts. At most 8.\n- negative: 0 to 6 points on things that touch, overlap or stand in front of the target but are not part of it (neighbouring things, occluders, what it stands on or against), each near the target's edge. At most 8.\n- If the description fits several things, choose the one it describes best."
+        }
+      ]
+    }
   },
   {
     "key": "7f43be4d895bb016063c1cbfa3d5a1c10b2fcf66974ab5b0fadbfb27e924008a",
@@ -21,7 +47,20 @@
     "model": "gemini-4-argon",
     "modelVersion": "gemini-4-argon",
     "text": "{\"found\": true, \"label\": \"the pale rectangular panel behind the dark vertical post\", \"box_2d\": [275, 282, 752, 718], \"positive\": [[400, 375], [600, 375], [400, 625], [600, 625]], \"negative\": [[350, 500], [500, 500], [650, 500], [200, 375], [800, 625], [500, 220]]}",
-    "recordedAt": "2026-10-18T18:21:28.438Z"
+    "recordedAt": "2026-10-18T18:21:28.438Z",
+    "request": {
+      "parts": [
+        {
+          "role": "user",
+          "size": "600x400",
+          "thumb": "a3padYx8W4VpZ5ZfaIR5bIRxXYRlbphYTWlTMywvaXtlTY5gcGxeUG9RVohhYm5iWn5dV4N7Y3hSWW1sY3yCW4d9S3BWUXhsV250XYFrTn5lTF1QMSsuV4JfVmx1TnxKZZVmXXtsQIdVUXpaaYFUZXBWWX9oXYh0V5xpTG5eUm1qXoZxT4lgZ4dcXGlMNC8wU35nZoZvXZ1oYHJub3lhVYNWZ4FscH1Yb2lnX5FXaXZtY2ZcPnFqXXVcea6Wiaunma6Zdo2FMy8xjrCljK+jjKivdpJ7THtjanBqand0aphhVYFvXIBdWWtkTYN1Xn5Wa3tul7axq8zYr83bj6WrNjMzr83WsMvYrM3ZgpyZUoBjaG9qUopwbnR/gmd3ZoVnO5FdSIZmUIBxUYZllrK6r83YrsvYj6erNTQusM3Wr8vWr87XiqaTYIVoUG1dX4JyYoRiZYBKWIxdUG5VYnVkX4ZoV4VynLu/q8rXsc/Wj6WsNTE0rszUrs7Srs3YiJmaXG9mZ4BvWXlaan9hZINqZ4ZfZX5cWG5ZbXRoX4xznLivrcvYsM/YkKGpNTMxr83XqsrYrc3YhK2UTX12ZHhqXX9mY4BlWINfX3xWZX97bGxfTXNXVIFujra6rc3Yrc3Wj6WqNTEwr87Srs3Uss7XfLiYXnx6V3NubHd4YJFXaIRxU3ptWXNsaHxgW4RTXXxqdIuBd6OIf42QbY1mNTAwfqyhf5ybibGQd49oUGRjXHNoenhpXm5fWGVrd29kTYJncXpbaHdUV4JtXndfZoBhZXpkXXlaMS8xUXF5XINeam1qaIJ7XHljUJBpY2FcXIJaXJF8bV9nX4VsTX1lYoBbYoJ3ZnxiWnFWaZVbS21XMy4ucWhvaoNnVXJeYHRiXIZZYHRjb3xnaYV2ZnFmY3ttWI1cPoltVH9iUmSCTZRWf3hjT3pUZm1VLy8od35OeWxJaWlvTF08YGdtb4BqZXNsPZ95b4ZY"
+        },
+        {
+          "role": "user",
+          "text": "Find the thing described below in the image and give prompts for an interactive segmenter that will cut it out.\nTarget: \"the pale rectangular panel behind the dark vertical post (both visible halves, without the post)\"\n\nAnswer with JSON only, in this shape:\n{\"found\": true, \"label\": \"<a few words for what you found>\", \"box_2d\": [ymin, xmin, ymax, xmax], \"positive\": [[y, x], ...], \"negative\": [[y, x], ...]}\nor, when nothing in the image matches the description: {\"found\": false, \"reason\": \"<why>\"}\n\nCoordinates are integers from 0 to 1000, normalised to the image height (y) and width (x).\n- box_2d tightly encloses all of the target that is visible.\n- positive: 3 to 6 points well inside the target, on its own surface (not in gaps or holes, not on anything in front of it), spread over its different parts. At most 8.\n- negative: 0 to 6 points on things that touch, overlap or stand in front of the target but are not part of it (neighbouring things, occluders, what it stands on or against), each near the target's edge. At most 8.\n- If the description fits several things, choose the one it describes best."
+        }
+      ]
+    }
   },
   {
     "key": "768b9abb398b53d45cb7ca194c3892ea3bc2d46297dfabdf6445fb69c6b35a3f",
@@ -29,7 +68,20 @@
     "model": "gemini-4-argon",
     "modelVersion": "gemini-4-argon",
     "text": "{\"found\": false, \"reason\": \"The image is an abstract noisy pattern with a figure on a pedestal; there is no bicycle leaning against a wall.\"}",
-    "recordedAt": "2026-10-18T18:22:29.268Z"
+    "recordedAt": "2026-10-18T18:22:29.268Z",
+    "request": {
+      "parts": [
+        {
+          "role": "user",
+          "size": "640x480",
+          "thumb": "SndiWXJaS35oY2xQWmpTX3NnUGdJYntMY4ViT4BdUnhsXINHXXxgc3NSn0tQlVNKk15MoGFNnF5Kl1Q4XHVTVnVUVYRcXZJnYXBeX39aWmhJUHh1U2BFTXBRW3NNVlpjV4BreXZcm08/lGdGnGBOj1FJhE85hGM/PIBtXnh1a49fXHhtWHpyZZNOTIN4YGxsO39cXnBlWXRlWX5YTXZidWpPn1RNilZYlUc5qmhColxFnF9EQnZUTnV4XmxlXm5OSWRgVIR2YoZfSINKYHljaJNvWZhuWIpRUWped31NiF9NqGo2nGdNiFw1kGUqo1JVVmZcUX1lOnhgS21cTmldSGRVVIRLVH5MWHtcsq+zuLuzbYFlZodusZWNgVJJiWE6pkJIjV06kExWsGRRZ2xvVIZNVoxcSn93XYNZSJRTZHFwXn9OWG9YprGsp7CvZnlUnaGkf1xEnVo4iU46pFE7kVhHlVo1h01TV2thSHVkY4FZWGprTX9qP4dWS2lRPX5ZbY51y8PDx8XCnauaRnltdIBRlGdDlkhBklNInWdFpmI3kmJNZnNaTGxVQntEUmxpWYBgTYNXR3dbQnZJj5aMycfGycXEjZCaXWBocnFNj0RKqlVNrFdWl1tQlWRVlF1KWnVQXnFUMoFdXX5fUIVsU2llXXJnT3Bcip6Ky8jGy8XFlKeNZ35fcWpSm1U+mFdLn2ZPjlo6jlExkVY7V4FRVnZrYXVJZGlmYotQWmpeWmdhXGtVtLClyMjEysfBiJ2WS19shFhgnFRMnFk4ompBjFU+lldFlEhDYXJYVnleUoZbVG1hYIVsUmZeT3dpWXA6gpqCzMbGzcXBgXhXVV5fb2VRk1VKnGAsrVZImlZEgl5NkFlITmpeYHlqWoZZYoFhaHJeToReX3RdYnB5gp2Zvrm6uru7gqp8YWJ1g3ZRo1Y6l2pFqFxHl1w+pFs/oVY2UmhdT3tWa3p4T35yP31fVWlWS3RflJidy8bDysbEx8jCysfDjZ2QjnNloF9GgV5HnElBlGc7omc9mlFJS1JhXIFdSnxeSoJeSYhqc3lnRYRZrrSsy8bDysXHysnDy8TItrSucllZikZZnVhLiU1OnFhEiV47gF44WYZrVn5lVGppS3FmaYZjSo5mYYVZhJKAhZd1g6SChJ6MeKyBfJaCkHVIkkNYok05klREoUtCollBlk9M"
+        },
+        {
+          "role": "user",
+          "text": "Find the thing described below in the image and give prompts for an interactive segmenter that will cut it out.\nTarget: \"the bicycle leaning against the wall\"\n\nAnswer with JSON only, in this shape:\n{\"found\": true, \"label\": \"<a few words for what you found>\", \"box_2d\": [ymin, xmin, ymax, xmax], \"positive\": [[y, x], ...], \"negative\": [[y, x], ...]}\nor, when nothing in the image matches the description: {\"found\": false, \"reason\": \"<why>\"}\n\nCoordinates are integers from 0 to 1000, normalised to the image height (y) and width (x).\n- box_2d tightly encloses all of the target that is visible.\n- positive: 3 to 6 points well inside the target, on its own surface (not in gaps or holes, not on anything in front of it), spread over its different parts. At most 8.\n- negative: 0 to 6 points on things that touch, overlap or stand in front of the target but are not part of it (neighbouring things, occluders, what it stands on or against), each near the target's edge. At most 8.\n- If the description fits several things, choose the one it describes best."
+        }
+      ]
+    }
   },
   {
     "key": "31aaeb5273bb2315b991ffa872e458e006d682e43f8359ce15f4c46cff5984cf",
@@ -37,7 +89,20 @@
     "model": "gemini-4-argon",
     "modelVersion": "gemini-4-argon",
     "text": "{\"found\": true, \"label\": \"the red object with a short mast\", \"box_2d\": [288, 100, 691, 362], \"positive\": [[590, 230], [590, 145], [590, 315], [470, 215], [355, 250]], \"negative\": [[375, 210], [490, 130], [480, 305], [725, 230]]}",
-    "recordedAt": "2026-10-18T18:22:34.053Z"
+    "recordedAt": "2026-10-18T18:22:34.053Z",
+    "request": {
+      "parts": [
+        {
+          "role": "user",
+          "size": "480x320",
+          "thumb": "fnRtcGxyfn50god+enN2bIV7an11g3Z4f4h2eYRsdoF2eYJ0e3Zea4B3dYV1eYF/cYR3fo5me5B4eIBrgI1uao9tc4SEbXtven9kd4NxcnZrgX9ldHJifYl+dX9qdX12cm5yg3Rrf4tvbX5pf4dkdpljdYZrb4h2goRrf3t1joZ1eGtmYYNyeop7hZN4cI1dlXpXdIJpb3lvdIdegpB8eZR3eopzcY+BeH5eeoludI1ucYZ5b3ZubH5lll1bsUw3dYNggH5venVwc4Z2a4ZoeYBmd3RlboZsfJNsdZxmfox6e3toiXVStz4uyD0puEc0fHpxgnZrg3FkdINkb4tmg4ZydI9sa4p1fopqeox7coBhg29mu0w6v0UxrkkydYBvc394dn5zi4JecYN3cn9xf3Rwbn9lb4Rhemlua5F/hYJheHVueIF0h4t0gHtpgXlveo53int5cXRteXZnd5V5bIR4eopxeotqeot0eH1ggHxlaHp9cHt0en50cYJtbn5icXhmaIBwfIN4gWpsWoZrho9zg4huc49weoZvcIRiaYJubHx2bINtcYBvg4dscIRsdHpoe41scXlwZYdvcXBwh411"
+        },
+        {
+          "role": "user",
+          "text": "Find the thing described below in the image and give prompts for an interactive segmenter that will cut it out.\nTarget: \"the red object with a short mast\"\n\nAnswer with JSON only, in this shape:\n{\"found\": true, \"label\": \"<a few words for what you found>\", \"box_2d\": [ymin, xmin, ymax, xmax], \"positive\": [[y, x], ...], \"negative\": [[y, x], ...]}\nor, when nothing in the image matches the description: {\"found\": false, \"reason\": \"<why>\"}\n\nCoordinates are integers from 0 to 1000, normalised to the image height (y) and width (x).\n- box_2d tightly encloses all of the target that is visible.\n- positive: 3 to 6 points well inside the target, on its own surface (not in gaps or holes, not on anything in front of it), spread over its different parts. At most 8.\n- negative: 0 to 6 points on things that touch, overlap or stand in front of the target but are not part of it (neighbouring things, occluders, what it stands on or against), each near the target's edge. At most 8.\n- If the description fits several things, choose the one it describes best."
+        }
+      ]
+    }
   },
   {
     "key": "4136f4d8c7dd273dcc04849661757f655612c975c8a7b85f372912923e0ee858",
@@ -117,7 +182,20 @@
     "model": "gemini-4-argon",
     "modelVersion": "gemini-4-argon",
     "text": "{\"found\": true, \"label\": \"the red object with a short mast\", \"box_2d\": [244, 396, 703, 688], \"positive\": [[584, 542], [456, 529], [312, 567], [584, 446], [584, 638]], \"negative\": [[350, 521], [350, 608], [678, 412], [678, 671]]}",
-    "recordedAt": "2026-10-18T18:34:19.754Z"
+    "recordedAt": "2026-10-18T18:34:19.754Z",
+    "request": {
+      "parts": [
+        {
+          "role": "user",
+          "size": "480x320",
+          "thumb": "dW10eX9sf4uBgG90dIN4ZoB3d3V8golxfoRscoFxeIN4eXpjdntzcId0e3Rwb4R4eI1vgJRqeIJ3go9qaIdwdYN9dH1zbnxld4RubX5ug3ZnenNceo58hXVycIB3c2pxf3hxgIlwdXtocIVlgJppeYZgdIJteI9uiHdxhYd4gGZoYYdrgYZzhZJyco9igotndYlmcnBvcIhjeJJ3hJB1i3tkcI6BdYZkdYRuf45pbYp0a4dya3lieXt1foJpcnptf39vdXZke4l4t0k1tEk1enxmbntld5B1d6BegYx4cIV4folpbolsb4lkcm9qZoeDfHV0tks5xz4ryTsmwEAygYZjaol0fItqe4t/dH5xcn91dndrdpFweoZian9ydoN2pFNHwUMyxDwssEo9i3JpZ31nd4Vgd3Fven5gf4VkenRqcnxvio5zfn1vfXdufI1zi4OAeHJsdndreI1zZo57foBrfYdofIx5doNggXlmZHl6bXp1f4JwcXxzb4Vkb3dna31td4Z4gmpmYYVvfIhtholxf45udIt0d4VeaX9yZ4VqcHJ2colvf4xqcH1pen5wc4lodXpvaYdpaHJyh4l3fYFt"
+        },
+        {
+          "role": "user",
+          "text": "Find the thing described below in the image and give prompts for an interactive segmenter that will cut it out.\nTarget: \"the red object with a short mast\"\nIn the previous video frame the target was inside box_2d [406, 369, 703, 654]; use it as a hint, but answer with what this image shows.\n\nAnswer with JSON only, in this shape:\n{\"found\": true, \"label\": \"<a few words for what you found>\", \"box_2d\": [ymin, xmin, ymax, xmax], \"positive\": [[y, x], ...], \"negative\": [[y, x], ...]}\nor, when nothing in the image matches the description: {\"found\": false, \"reason\": \"<why>\"}\n\nCoordinates are integers from 0 to 1000, normalised to the image height (y) and width (x).\n- box_2d tightly encloses all of the target that is visible.\n- positive: 3 to 6 points well inside the target, on its own surface (not in gaps or holes, not on anything in front of it), spread over its different parts. At most 8.\n- negative: 0 to 6 points on things that touch, overlap or stand in front of the target but are not part of it (neighbouring things, occluders, what it stands on or against), each near the target's edge. At most 8.\n- If the description fits several things, choose the one it describes best."
+        }
+      ]
+    }
   },
   {
     "key": "34caa8904ef579c69859ada0beb9d35cda6d9888d1d2f6fe706c83d0a263c1dd",
@@ -125,7 +203,20 @@
     "model": "gemini-4-argon",
     "modelVersion": "gemini-4-argon",
     "text": "{\"found\": true, \"label\": \"the red object with a short mast\", \"box_2d\": [219, 544, 688, 854], \"positive\": [[562, 619], [566, 777], [431, 681], [306, 721]], \"negative\": [[325, 673], [447, 594], [619, 512], [516, 875]]}",
-    "recordedAt": "2026-10-18T18:34:31.071Z"
+    "recordedAt": "2026-10-18T18:34:31.071Z",
+    "request": {
+      "parts": [
+        {
+          "role": "user",
+          "size": "480x320",
+          "thumb": "b2pwgYB7hYV7dnd2ZoJ8coB0g3V3f4d3doRseYJ3dIFyfHZkaoBvd4RxiH91b4p7hIlhc4yCfoJjfIpxbI5sc4eBb31rfIJqcnxveHNqf4FlcHhngn59fHppdHdueHF4hHltf41tZ4Blg4pnd5dfc4F1a4xyhn9ujXFlkX9xdXZqZ390goVugJF1c45fhohhb4FvbH5ueYtfiot7c5VzdY16gYF0jmtLgIxqbZFydoF9bHxsb3xsdHxveXh5dolffHxrf3d4bYN3cIpke4BmrlI9yToon3hTcZVle4t7dYdyfX9nZpdsaX1lcXZ4bn+AhXRjfHtmc4RlpVk3yDknxjsmxzsqpllJfI55a4Rkcnxyc39ud5ludnJab5F8cHl3e4Rrhn9miW5htUk2v0UyuFE2g2tUfGtohI1ohoBkdXhqgYl2gn94fXlmiYJseo6Ag3d2bnVne3pocpV7c391e4tydI9qeYlwfHdmeH9manp7cYFyd3l0b4Vtb35jdHVla4Nxf4B3eG5uZIdriI52fodpc45ufYZoa39oZ4VqcHh6aYpndIF2goJpcolyb3ZhfIxvcHluaIBydXdugYxxdXts"
+        },
+        {
+          "role": "user",
+          "text": "Find the thing described below in the image and give prompts for an interactive segmenter that will cut it out.\nTarget: \"the red object with a short mast\"\nIn the previous video frame the target was inside box_2d [359, 517, 688, 819]; use it as a hint, but answer with what this image shows.\n\nAnswer with JSON only, in this shape:\n{\"found\": true, \"label\": \"<a few words for what you found>\", \"box_2d\": [ymin, xmin, ymax, xmax], \"positive\": [[y, x], ...], \"negative\": [[y, x], ...]}\nor, when nothing in the image matches the description: {\"found\": false, \"reason\": \"<why>\"}\n\nCoordinates are integers from 0 to 1000, normalised to the image height (y) and width (x).\n- box_2d tightly encloses all of the target that is visible.\n- positive: 3 to 6 points well inside the target, on its own surface (not in gaps or holes, not on anything in front of it), spread over its different parts. At most 8.\n- negative: 0 to 6 points on things that touch, overlap or stand in front of the target but are not part of it (neighbouring things, occluders, what it stands on or against), each near the target's edge. At most 8.\n- If the description fits several things, choose the one it describes best."
+        }
+      ]
+    }
   },
   {
     "key": "c4e27a0c6da2f1794003ea46de3795f1a1d1982ea8b2088806ee8f463cda12fa",
@@ -149,6 +240,19 @@
     "model": "gemini-4-argon",
     "modelVersion": "gemini-4-argon",
     "text": "{\"found\": true, \"label\": \"the red object with a short mast\", \"box_2d\": [291, 249, 713, 524], \"positive\": [[610, 294], [610, 480], [662, 386], [562, 386], [478, 369], [362, 408]], \"negative\": [[362, 377], [362, 435], [478, 295], [478, 456], [610, 225], [750, 386]]}",
-    "recordedAt": "2026-10-18T18:37:00.114Z"
+    "recordedAt": "2026-10-18T18:37:00.114Z",
+    "request": {
+      "parts": [
+        {
+          "role": "user",
+          "size": "480x320",
+          "thumb": "d21tcnNtg4N/goF4eHh3aIB5cIF4g3d7f4lub4BwfIN1c4Rwf3Nna4NueYBzdX58a498hYhkc4mDgophcIVvcolydYd7cIBneIRubXpufHFrf39hb39vinp5dHp1dXFreHd5gXxsgY9uZXtmgJNneI1adYF7apFwhn5vgHlzjXlycX9ncX13dZNpfJBzd41ggINkcIBxbn9th4FajIl2dpJwd45+cINzdoZlgI5nbZJ0dX58cnJldnlwdYFweXR2f4JZoFNGnGlgaYR6cYhjfn1lb3xcbIh2h5prdZBjd4l+eINue4BrbpJmanVnqVNCxzwpvkQxknBTb4Rjenplg5N6aYtod5B6d4NwgI91a352eH5tdIRvgoxkvEMsxz4myj0osVlCfn9seJFxb2xzd3Jqdolicn1pfXBibZFzgXhlcnpniIl5fXt3f3Fnkohif4yIfXRybnhnen5qco57dIFxf4hucpJud5dpfnJrb3tsa3t4dIZsdXd1b4Zuc39mcXJlbYJzgXtycHluboNti451eItqdJRxeYdla3puaYtnbHF5bYtqeIZ2gH9lc4h5cXpcdIR0dHxraHx0eHtqg410"
+        },
+        {
+          "role": "user",
+          "text": "Find the thing described below in the image and give prompts for an interactive segmenter that will cut it out.\nTarget: \"the red object with a short mast\"\nIn the previous video frame the target was inside box_2d [344, 221, 713, 490]; use it as a hint, but answer with what this image shows.\n\nAnswer with JSON only, in this shape:\n{\"found\": true, \"label\": \"<a few words for what you found>\", \"box_2d\": [ymin, xmin, ymax, xmax], \"positive\": [[y, x], ...], \"negative\": [[y, x], ...]}\nor, when nothing in the image matches the description: {\"found\": false, \"reason\": \"<why>\"}\n\nCoordinates are integers from 0 to 1000, normalised to the image height (y) and width (x).\n- box_2d tightly encloses all of the target that is visible.\n- positive: 3 to 6 points well inside the target, on its own surface (not in gaps or holes, not on anything in front of it), spread over its different parts. At most 8.\n- negative: 0 to 6 points on things that touch, overlap or stand in front of the target but are not part of it (neighbouring things, occluders, what it stands on or against), each near the target's edge. At most 8.\n- If the description fits several things, choose the one it describes best."
+        }
+      ]
+    }
   }
 ]

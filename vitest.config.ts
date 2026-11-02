@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitest/config';
 import path from 'path';
+import DurationShardSequencer from './vitest.shard-sequencer';
 
 export default defineConfig({
     resolve: {
@@ -18,6 +19,8 @@ export default defineConfig({
         hookTimeout: 60_000,
         silent: 'passed-only',
         pool: 'forks',
+        // CI's Ubuntu shards (--shard=i/n) split by measured time (vitest.shard-sequencer.ts).
+        sequence: { sequencer: DurationShardSequencer },
         env: {
             SCRATCHBOX_TEST: '1',
             // Tests exercise the chat model's own first call; the routing race (fast-router.ts) is tested on its own.
