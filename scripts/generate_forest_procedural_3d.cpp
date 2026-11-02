@@ -8,6 +8,14 @@
  * - 7-Tier Biome Stratification (Canopy -> Subcanopy -> Ferns -> Herbs -> Epiphytes -> Debris -> Substrate)
  * - Multi-Mesh glTF 2.0 Binary Output (.glb) with embedded authentic photo-derived PBR texture sets
  * - Macro-to-Micro Rule-Based Clutter Placement
+ * - Every crown grown by SB-Veggie (scratchbox_sb_veggie_grove.hpp) into <output>_trees.glb beside the forest
+ *
+ * Run from the repository root (it reads public/textures, assets/vegetation/species and assets/textures/trees):
+ *   clang++ -std=c++20 -O3 -pthread -I packages/core/src/native/3d-engine/include \
+ *       scripts/generate_forest_procedural_3d.cpp -o build/3d-native/generate_forest_procedural_3d -lz
+ *   build/3d-native/generate_forest_procedural_3d public/models/forest_hyperreal.glb
+ * writes public/models/forest_hyperreal.glb, forest_hyperreal_trees.glb and forest_hyperreal_trees.stats.json, which
+ * /forest_3d_viewer.html loads.
  ********************************************************************************/
 
 #include "scratchbox_engine.hpp"
@@ -15,6 +23,7 @@
 #include "scratchbox_substrate.hpp"
 #include "scratchbox_botanical_texture.hpp"
 #include "scratchbox_infiniti.hpp"
+#include "scratchbox_sb_veggie_grove.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -24,6 +33,7 @@
 #include <cmath>
 #include <chrono>
 #include <algorithm>
+#include <limits>
 
 using namespace scratchbox;
 using namespace scratchbox::geometry;
@@ -69,8 +79,6 @@ static const Vec4 COL_NURSE_LOG_WOOD(0.42f, 0.28f, 0.18f, 1.0f);     // Splinter
 static const Vec4 COL_NURSE_LOG_MOSS(0.30f, 0.60f, 0.16f, 1.0f);     // Dense sunlit moss cap on log
 static const Vec4 COL_FERN_FROND(0.22f, 0.56f, 0.13f, 1.0f);         // Lush sword fern green
 static const Vec4 COL_FERN_HIGHLIGHT(0.50f, 0.82f, 0.18f, 1.0f);     // Sunlit translucent fern tip (SSS)
-static const Vec4 COL_CANOPY_FOLIAGE(0.22f, 0.48f, 0.12f, 0.96f);     // High canopy foliage
-static const Vec4 COL_CANOPY_SUNLIT(0.52f, 0.82f, 0.20f, 1.0f);      // SSS transmitted foliage glow
 static const Vec4 COL_SUNBEAM_GOLD(0.98f, 0.92f, 0.74f, 0.28f);      // Morning crepuscular light beam
 
 // ============================================================================
@@ -228,6 +236,8 @@ ScratchboxMesh generateMossHummock(const Vec3& center, float radiusX = 1.4f, flo
 // ============================================================================
 // 3. Ancient Redwood Trunk Generator with Fluted Buttress Roots & Cork Furrows
 // ============================================================================
+// The column stands vertical: its crown (section 6) is grown about the vertical through its stem, and the column is the
+// leader that crown's limbs leave.
 struct TrunkSpec {
     Vec3 basePos;
     float height;
@@ -235,8 +245,6 @@ struct TrunkSpec {
     float topRadius;
     int buttressLobes;
     float buttressSpread;
-    float leanAngleRad;
-    float leanAzimuthRad;
     bool hasHeroMoss;
     float furrowDepth;
 };
@@ -257,9 +265,8 @@ ScratchboxMesh generateProceduralTrunk(const TrunkSpec& spec) {
         float t = static_cast<float>(ring) / static_cast<float>(vRings);
         float currentY = rootOrigin.y + t * spec.height;
 
-        float leanOffset = std::sin(t * 1.57f) * std::tan(spec.leanAngleRad) * (t * spec.height);
-        float centerX = rootOrigin.x + leanOffset * std::cos(spec.leanAzimuthRad);
-        float centerZ = rootOrigin.z + leanOffset * std::sin(spec.leanAzimuthRad);
+        float centerX = rootOrigin.x;
+        float centerZ = rootOrigin.z;
 
         // Continuous Da Vinci taper transitioning to an organic pointed conifer spire apex
         float coreRadius = (t <= 0.72f)
@@ -355,12 +362,7 @@ ScratchboxMesh generateProceduralTrunk(const TrunkSpec& spec) {
 
     // 2. Close the trunk crown with a conical spire apex cap
     uint32_t apexIdx = static_cast<uint32_t>(mesh.vertices.size());
-    float apexLean = std::sin(1.57f) * std::tan(spec.leanAngleRad) * spec.height;
-    Vec3 apexPos(
-        rootOrigin.x + apexLean * std::cos(spec.leanAzimuthRad),
-        rootOrigin.y + spec.height + 0.55f,
-        rootOrigin.z + apexLean * std::sin(spec.leanAzimuthRad)
-    );
+    Vec3 apexPos(rootOrigin.x, rootOrigin.y + spec.height + 0.55f, rootOrigin.z);
     mesh.addVertex(Vertex(apexPos, Vec3(0, 1, 0), Vec2(0.5f, 1.0f), COL_REDWOOD_BARK));
 
     int topRingBase = vRings * hSectors;
@@ -371,364 +373,6 @@ ScratchboxMesh generateProceduralTrunk(const TrunkSpec& spec) {
 
     mesh.recomputeBounds();
     return mesh;
-}
-
-inline void appendVolumetricNeedleDirect(
-    ScratchboxMesh& mesh,
-    const Vec3& origin,
-    const Vec3& direction,
-    float length,
-    float baseRadius,
-    float tipRadius,
-    const Vec4& baseColor,
-    const Vec4& tipColor
-) {
-    Vec3 dir = direction.normalized();
-    Vec3 refUp = std::abs(dir.y) > 0.92f ? Vec3(1, 0, 0) : Vec3(0, 1, 0);
-    Vec3 side = dir.cross(refUp).normalized();
-    Vec3 up = side.cross(dir).normalized();
-
-    Vec3 baseCenter = origin;
-    Vec3 tipCenter = origin + dir * length;
-    Vec3 apex = tipCenter + dir * (length * 0.08f);
-
-    const int segs = 4;
-    uint32_t baseIdx = static_cast<uint32_t>(mesh.vertices.size());
-
-    for (int i = 0; i < segs; ++i) {
-        float angle = (static_cast<float>(i) / static_cast<float>(segs)) * math::TWO_PI;
-        Vec3 radial = side * std::cos(angle) + up * std::sin(angle);
-        mesh.addVertex(Vertex(baseCenter + radial * baseRadius, radial, Vec2(0.5f, 0.5f), baseColor));
-    }
-
-    uint32_t tipIdx = static_cast<uint32_t>(mesh.vertices.size());
-    for (int i = 0; i < segs; ++i) {
-        float angle = (static_cast<float>(i) / static_cast<float>(segs)) * math::TWO_PI;
-        Vec3 radial = side * std::cos(angle) + up * std::sin(angle);
-        mesh.addVertex(Vertex(tipCenter + radial * tipRadius, radial, Vec2(0.5f, 0.5f), tipColor));
-    }
-
-    uint32_t apexIdx = static_cast<uint32_t>(mesh.vertices.size());
-    mesh.addVertex(Vertex(apex, dir, Vec2(0.5f, 0.5f), tipColor));
-
-    for (int i = 0; i < segs; ++i) {
-        int next = (i + 1) % segs;
-        uint32_t b0 = baseIdx + i;
-        uint32_t b1 = baseIdx + next;
-        uint32_t t0 = tipIdx + i;
-        uint32_t t1 = tipIdx + next;
-
-        mesh.addTriangle(b0, t0, b1);
-        mesh.addTriangle(b1, t0, t1);
-        mesh.addTriangle(t0, apexIdx, t1);
-    }
-}
-
-// Dense Conifer Needle Fan Limb Generator
-// Populates 100% independent 3D conifer needle blades along both sides of every limb
-inline void appendConiferNeedleFanLimb(
-    const Vec3& boughStart,
-    const Vec3& boughEnd,
-    const Vec3& boughDir,
-    float spreadRadius,
-    float profileT,
-    ScratchboxMesh& outWood,
-    ScratchboxMesh& outFoliage,
-    bool isHero
-) {
-    Vec3 up(0, 1, 0);
-    Vec3 side = boughDir.cross(up).normalized();
-    if (side.lengthSquared() < 0.01f) side = Vec3(1, 0, 0);
-    up = side.cross(boughDir).normalized();
-
-    // 1. Main bough wood cylinder
-    const int segs = 5;
-    float rStart = math::lerp(0.15f, 0.06f, profileT);
-    float rEnd = 0.022f;
-    uint32_t bIdx = static_cast<uint32_t>(outWood.vertices.size());
-    for (int i = 0; i < segs; ++i) {
-        float ang = (static_cast<float>(i) / static_cast<float>(segs)) * TWO_PI;
-        Vec3 radial = side * std::cos(ang) + up * std::sin(ang);
-        outWood.addVertex(Vertex(boughStart + radial * rStart, radial, Vec2(0, 0), COL_REDWOOD_BARK));
-        outWood.addVertex(Vertex(boughEnd + radial * rEnd, radial, Vec2(1, 1), COL_REDWOOD_BARK));
-    }
-    for (int i = 0; i < segs; ++i) {
-        int next = (i + 1) % segs;
-        outWood.addTriangle(bIdx + i * 2, bIdx + i * 2 + 1, bIdx + next * 2);
-        outWood.addTriangle(bIdx + next * 2, bIdx + i * 2 + 1, bIdx + next * 2 + 1);
-    }
-
-    // Seal bough limb base (internal trunk anchor) and bough limb tip into closed watertight manifolds
-    uint32_t startCapIdx = static_cast<uint32_t>(outWood.vertices.size());
-    outWood.addVertex(Vertex(boughStart - boughDir * 0.02f, -boughDir, Vec2(0, 0), COL_REDWOOD_BARK));
-    for (int i = 0; i < segs; ++i) {
-        int next = (i + 1) % segs;
-        outWood.addTriangle(startCapIdx, bIdx + next * 2, bIdx + i * 2);
-    }
-
-    uint32_t endCapIdx = static_cast<uint32_t>(outWood.vertices.size());
-    outWood.addVertex(Vertex(boughEnd + boughDir * (rEnd * 0.5f), boughDir, Vec2(1, 1), COL_REDWOOD_BARK));
-    for (int i = 0; i < segs; ++i) {
-        int next = (i + 1) % segs;
-        outWood.addTriangle(bIdx + i * 2 + 1, bIdx + next * 2 + 1, endCapIdx);
-    }
-
-    // 2. Lateral Conifer Branchlets & Dense Needles along the branch
-    int numStations = isHero ? 7 : 5;
-    for (int st = 0; st < numStations; ++st) {
-        float frac = 0.20f + 0.76f * (static_cast<float>(st + 1) / static_cast<float>(numStations));
-        Vec3 stationPos = math::lerp(boughStart, boughEnd, frac);
-
-        // Emit lateral shoots on left and right
-        for (int sideSign = -1; sideSign <= 1; sideSign += 2) {
-            float s = static_cast<float>(sideSign);
-            float shootAngle = 1.05f + 0.15f * std::sin(st * 2.3f);
-            Vec3 shootDir = (boughDir * 0.42f + side * (s * std::sin(shootAngle)) + up * 0.08f).normalized();
-            float shootLen = (spreadRadius * 0.38f) * (1.15f - frac * 0.38f) * (0.85f + 0.28f * (st % 2));
-
-            // Fine twig axis
-            Vec3 shootEnd = stationPos + shootDir * shootLen;
-            shootEnd.y -= shootLen * 0.12f; // Slight downward cantilever droop
-
-            uint32_t tIdx = static_cast<uint32_t>(outFoliage.vertices.size());
-            outFoliage.addVertex(Vertex(stationPos, up, Vec2(0.5f, 0.5f), COL_REDWOOD_BARK));
-            outFoliage.addVertex(Vertex(shootEnd, up, Vec2(0.5f, 0.5f), COL_REDWOOD_BARK));
-            outFoliage.addVertex(Vertex(shootEnd + side * 0.008f, up, Vec2(0.5f, 0.5f), COL_REDWOOD_BARK));
-            outFoliage.addTriangle(tIdx, tIdx + 1, tIdx + 2);
-
-            // Populating 10 to 14 pairs of distinct, independent conifer needles along the shoot
-            int needlePairs = isHero ? 14 : 9;
-            float nLenBase = 0.115f; // 11.5 cm needle length (visible, lush evergreen needle foliage)
-            float nWidthBase = 0.018f; // 1.8 cm needle width
-
-            for (int n = 0; n < needlePairs; ++n) {
-                float nFrac = static_cast<float>(n + 1) / (needlePairs + 1);
-                Vec3 nodePos = math::lerp(stationPos, shootEnd, nFrac);
-                float curLen = nLenBase * (1.10f - nFrac * 0.32f);
-                float curWidth = nWidthBase * (1.05f - nFrac * 0.28f);
-
-                for (int nSideSign = -1; nSideSign <= 1; nSideSign += 2) {
-                    float ns = static_cast<float>(nSideSign);
-                    // Needle orientation: radiating outward from shoot axis with forward sweep and slight droop
-                    Vec3 nDir = (shootDir * 0.32f + side * (ns * 0.90f) - up * (0.08f + 0.06f * nFrac)).normalized();
-
-                    Vec3 p0 = nodePos;
-                    Vec3 p1 = nodePos + nDir * (curLen * 0.55f) + shootDir * (curWidth * 0.5f);
-                    Vec3 p2 = nodePos + nDir * curLen;
-                    Vec3 p3 = nodePos + nDir * (curLen * 0.55f) - shootDir * (curWidth * 0.5f);
-
-                    // Transferred envelope normal with upward sky bias for soft natural SSS illumination
-                    Vec3 envNorm = (nDir * 0.40f + Vec3(0, 0.85f, 0)).normalized();
-
-                    uint32_t vBase = static_cast<uint32_t>(outFoliage.vertices.size());
-                    outFoliage.addVertex(Vertex(p0, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_FOLIAGE));
-                    outFoliage.addVertex(Vertex(p1, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_FOLIAGE));
-                    outFoliage.addVertex(Vertex(p2, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_SUNLIT));
-                    outFoliage.addVertex(Vertex(p3, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_FOLIAGE));
-
-                    outFoliage.addTriangle(vBase, vBase + 1, vBase + 2);
-                    outFoliage.addTriangle(vBase, vBase + 2, vBase + 3);
-                }
-            }
-
-            // Radiating pine needle fascicle (cluster of 4 needles) at shoot tip
-            for (int f = 0; f < 4; ++f) {
-                float fTheta = f * (TWO_PI / 4.0f);
-                Vec3 fDir = (shootDir * 0.82f + side * std::cos(fTheta) * 0.45f + up * std::sin(fTheta) * 0.35f).normalized();
-                appendVolumetricNeedleDirect(
-                    outFoliage, shootEnd, fDir, 0.095f, 0.0055f, 0.0010f,
-                    COL_CANOPY_FOLIAGE, COL_CANOPY_SUNLIT
-                );
-            }
-        }
-    }
-
-    // 3. Terminal Fanning Conifer Needle Spray at Bough End
-    for (int t = -1; t <= 1; ++t) {
-        float tAngle = t * 0.38f;
-        Vec3 tDir = (boughDir * 0.85f + side * std::sin(tAngle) * 0.48f + up * 0.10f).normalized();
-        float tLen = 0.85f;
-        Vec3 tEnd = boughEnd + tDir * tLen;
-
-        int tipPairs = isHero ? 14 : 9;
-        for (int n = 0; n < tipPairs; ++n) {
-            float nFrac = static_cast<float>(n + 1) / (tipPairs + 1);
-            Vec3 nodePos = math::lerp(boughEnd, tEnd, nFrac);
-            float curLen = 0.12f * (1.10f - nFrac * 0.35f);
-            float curWidth = 0.018f;
-
-            for (int nSideSign = -1; nSideSign <= 1; nSideSign += 2) {
-                float ns = static_cast<float>(nSideSign);
-                Vec3 nDir = (tDir * 0.35f + side * (ns * 0.90f) + up * 0.05f).normalized();
-
-                Vec3 p0 = nodePos;
-                Vec3 p1 = nodePos + nDir * (curLen * 0.55f) + tDir * (curWidth * 0.5f);
-                Vec3 p2 = nodePos + nDir * curLen;
-                Vec3 p3 = nodePos + nDir * (curLen * 0.55f) - tDir * (curWidth * 0.5f);
-
-                Vec3 envNorm = (nDir * 0.35f + Vec3(0, 0.88f, 0)).normalized();
-                uint32_t vBase = static_cast<uint32_t>(outFoliage.vertices.size());
-                outFoliage.addVertex(Vertex(p0, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_FOLIAGE));
-                outFoliage.addVertex(Vertex(p1, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_FOLIAGE));
-                outFoliage.addVertex(Vertex(p2, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_SUNLIT));
-                outFoliage.addVertex(Vertex(p3, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_FOLIAGE));
-
-                outFoliage.addTriangle(vBase, vBase + 1, vBase + 2);
-                outFoliage.addTriangle(vBase, vBase + 2, vBase + 3);
-            }
-        }
-    }
-}
-
-// Multi-Tier Botanical Branch Scaffold and Living Conifer Crown Generator
-void appendConiferBranchesAndCrown(
-    const TrunkSpec& trunkSpec,
-    ScratchboxMesh& outWood,
-    ScratchboxMesh& outFoliage,
-    int numTiers = 10,
-    float crownBaseFrac = 0.28f,
-    float maxSpread = 5.2f,
-    bool isHero = false
-) {
-    float groundY = getTerrainHeight(trunkSpec.basePos.x, trunkSpec.basePos.z);
-    Vec3 rootOrigin(trunkSpec.basePos.x, groundY, trunkSpec.basePos.z);
-
-    // 1. Lower deadwood stubs (old-growth natural self-pruned branch snags)
-    int snagCount = isHero ? 4 : 2;
-    for (int s = 0; s < snagCount; ++s) {
-        float tSnag = 0.16f + 0.08f * (static_cast<float>(s) / snagCount);
-        float lean = std::sin(tSnag * 1.57f) * std::tan(trunkSpec.leanAngleRad) * (tSnag * trunkSpec.height);
-        Vec3 snagPos(
-            rootOrigin.x + lean * std::cos(trunkSpec.leanAzimuthRad),
-            rootOrigin.y + tSnag * trunkSpec.height,
-            rootOrigin.z + lean * std::sin(trunkSpec.leanAzimuthRad)
-        );
-        float snagAzim = s * 2.39996f + 0.7f;
-        Vec3 snagDir(std::cos(snagAzim), -0.12f, std::sin(snagAzim));
-        snagDir = snagDir.normalized();
-        float snagLen = 0.45f + 0.35f * (s % 2);
-
-        Vec3 up(0, 1, 0);
-        Vec3 side = snagDir.cross(up).normalized();
-        up = side.cross(snagDir).normalized();
-        uint32_t sIdx = static_cast<uint32_t>(outWood.vertices.size());
-        Vec3 endPos = snagPos + snagDir * snagLen;
-        float rStart = 0.11f, rEnd = 0.04f;
-        for (int i = 0; i < 4; ++i) {
-            float ang = (static_cast<float>(i) / 4.0f) * TWO_PI;
-            Vec3 rad = side * std::cos(ang) + up * std::sin(ang);
-            Vec4 snagCol = math::lerp(COL_REDWOOD_BARK, COL_BARK_FURROW, 0.45f);
-            outWood.addVertex(Vertex(snagPos + rad * rStart, rad, Vec2(0, 0), snagCol));
-            outWood.addVertex(Vertex(endPos + rad * rEnd, rad, Vec2(1, 1), snagCol));
-        }
-        for (int i = 0; i < 4; ++i) {
-            int next = (i + 1) % 4;
-            outWood.addTriangle(sIdx + i * 2, sIdx + i * 2 + 1, sIdx + next * 2);
-            outWood.addTriangle(sIdx + next * 2, sIdx + i * 2 + 1, sIdx + next * 2 + 1);
-        }
-
-        // Close snag deadwood base and cut terminal cap
-        uint32_t snagStartCapIdx = static_cast<uint32_t>(outWood.vertices.size());
-        outWood.addVertex(Vertex(snagPos - snagDir * 0.02f, -snagDir, Vec2(0, 0), COL_REDWOOD_BARK));
-        for (int i = 0; i < 4; ++i) {
-            int next = (i + 1) % 4;
-            outWood.addTriangle(snagStartCapIdx, sIdx + next * 2, sIdx + i * 2);
-        }
-
-        uint32_t snagEndCapIdx = static_cast<uint32_t>(outWood.vertices.size());
-        outWood.addVertex(Vertex(endPos + snagDir * 0.015f, snagDir, Vec2(1, 1), math::lerp(COL_REDWOOD_BARK, COL_BARK_FURROW, 0.60f)));
-        for (int i = 0; i < 4; ++i) {
-            int next = (i + 1) % 4;
-            outWood.addTriangle(sIdx + i * 2 + 1, sIdx + next * 2 + 1, snagEndCapIdx);
-        }
-    }
-
-    // 2. Multi-tier radiating living branch limbs with dense conifer needle fronds
-    for (int tier = 0; tier < numTiers; ++tier) {
-        float tTier = crownBaseFrac + (0.96f - crownBaseFrac) * (static_cast<float>(tier) / static_cast<float>(numTiers));
-        float profileT = (tTier - crownBaseFrac) / (1.0f - crownBaseFrac); // 0 at crown base, 1 at apex
-
-        float lean = std::sin(tTier * 1.57f) * std::tan(trunkSpec.leanAngleRad) * (tTier * trunkSpec.height);
-        Vec3 tierCenter(
-            rootOrigin.x + lean * std::cos(trunkSpec.leanAzimuthRad),
-            rootOrigin.y + tTier * trunkSpec.height,
-            rootOrigin.z + lean * std::sin(trunkSpec.leanAzimuthRad)
-        );
-
-        // Branch count: 3 to 5 limbs per tier
-        int limbsInTier = (profileT > 0.85f) ? 3 : (isHero ? 5 : 4);
-        float tierAzimOffset = tier * 2.39996f; // Golden ratio spiral distribution
-        float spreadRadius = maxSpread * (1.12f - 0.80f * profileT); // Full conical crown taper
-
-        float baseElevation = (profileT < 0.35f) ? -0.05f : (profileT > 0.75f ? 0.28f : 0.08f);
-        float droopAmt = (profileT < 0.50f) ? (spreadRadius * 0.22f) : (spreadRadius * 0.08f);
-
-        for (int b = 0; b < limbsInTier; ++b) {
-            float azimuth = tierAzimOffset + b * (TWO_PI / limbsInTier) + (0.12f * std::sin(b * 1.8f));
-            Vec3 boughDir(std::cos(azimuth), baseElevation, std::sin(azimuth));
-            boughDir = boughDir.normalized();
-
-            Vec3 boughStart = tierCenter;
-            Vec3 boughEnd = boughStart + boughDir * (spreadRadius * (0.88f + 0.24f * (b % 3)));
-            boughEnd.y -= droopAmt; // Cantilever droop under gravity
-
-            // Phototropic tip upturn
-            if (profileT < 0.65f) {
-                boughEnd.y += 0.16f;
-            }
-
-            // Append main limb wood cylinder and dense conifer needle fronds
-            appendConiferNeedleFanLimb(
-                boughStart, boughEnd, boughDir, spreadRadius, profileT,
-                outWood, outFoliage, isHero
-            );
-        }
-    }
-
-    // 3. Spire crown terminal leader shoots pointing skyward with dense needles
-    float apexLean = std::sin(1.57f) * std::tan(trunkSpec.leanAngleRad) * trunkSpec.height;
-    Vec3 apexTip(
-        rootOrigin.x + apexLean * std::cos(trunkSpec.leanAzimuthRad),
-        rootOrigin.y + trunkSpec.height + 0.50f,
-        rootOrigin.z + apexLean * std::sin(trunkSpec.leanAzimuthRad)
-    );
-
-    for (int t = 0; t < 5; ++t) {
-        float tAngle = t * (TWO_PI / 5.0f);
-        Vec3 shootDir(0.20f * std::cos(tAngle), 0.95f, 0.20f * std::sin(tAngle));
-        shootDir = shootDir.normalized();
-        Vec3 sideDir(-shootDir.z, 0, shootDir.x);
-        Vec3 upDir = sideDir.cross(shootDir).normalized();
-
-        float shootLen = 0.90f;
-        Vec3 sEnd = apexTip + shootDir * shootLen;
-
-        for (int n = 0; n < 14; ++n) {
-            float nFrac = static_cast<float>(n + 1) / 15.0f;
-            Vec3 nodePos = math::lerp(apexTip, sEnd, nFrac);
-            float nLen = 0.12f * (1.0f - nFrac * 0.3f);
-            float nWidth = 0.015f;
-
-            for (int sign = -1; sign <= 1; sign += 2) {
-                float s = static_cast<float>(sign);
-                Vec3 nDir = (shootDir * 0.40f + sideDir * (s * 0.88f) + upDir * 0.15f).normalized();
-                Vec3 p0 = nodePos;
-                Vec3 p1 = nodePos + nDir * (nLen * 0.55f) + shootDir * (nWidth * 0.5f);
-                Vec3 p2 = nodePos + nDir * nLen;
-                Vec3 p3 = nodePos + nDir * (nLen * 0.55f) - shootDir * (nWidth * 0.5f);
-
-                Vec3 envNorm = (nDir * 0.35f + Vec3(0, 0.88f, 0)).normalized();
-                uint32_t vBase = static_cast<uint32_t>(outFoliage.vertices.size());
-                outFoliage.addVertex(Vertex(p0, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_FOLIAGE));
-                outFoliage.addVertex(Vertex(p1, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_FOLIAGE));
-                outFoliage.addVertex(Vertex(p2, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_SUNLIT));
-                outFoliage.addVertex(Vertex(p3, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_FOLIAGE));
-
-                outFoliage.addTriangle(vBase, vBase + 1, vBase + 2);
-                outFoliage.addTriangle(vBase, vBase + 2, vBase + 3);
-            }
-        }
-    }
 }
 
 // Meandering surface root runner snaking across the forest floor
@@ -922,168 +566,66 @@ ScratchboxMesh generateSwordFernClump(const Vec3& center, float clumpRadius = 1.
 }
 
 // ============================================================================
-// 6. Multi-Tier Spreading Boughs & Transferred-Normal Canopy Foliage
+// 6. Crowns: SB-Veggie Trees Grown into Described Crowns
 // ============================================================================
-ScratchboxMesh generateCanopyBoughs(
-    const Vec3& origin,
-    float spreadRadius = 5.2f,
-    int numBoughs = 6,
-    float baseElevation = 0.15f,
-    bool droopLimb = true
-) {
-    ScratchboxMesh foliage("Canopy_Boughs_Foliage");
-    foliage.material.name = "PBR_Canopy_Foliage";
-    foliage.material.roughnessFactor = 0.52f;
-    foliage.material.metallicFactor = 0.01f;
-    foliage.material.doubleSided = true;
-    foliage.material.alphaMode = "MASK";
-    foliage.material.alphaCutoff = 0.45f;
+// Every crown is grown by SB-Veggie (scratchbox_sb_veggie_grove.hpp, the vegetation generator every 3D path uses): space
+// colonisation into the crown described here in metres, SB-Veggie leaf clusters, proportions from the tree species
+// library and bark from the tree texture library (each chosen by the crown's measurements and colour, never by name),
+// written at four levels of detail into a GLB of its own. A redwood's crown rises from its fluted column: the grown
+// tree's trunk is kept inside the column (half the column's base radius: inside its deepest furrows at the ground and
+// at the crown base) and its limbs leave the column from the crown base up.
 
-    ScratchboxMesh wood("Canopy_Boughs_Wood");
-    wood.material.name = "PBR_Redwood_Bark";
+// Neighbouring crowns share the gap between their stems: a crown reaches this share of the distance to the nearest other
+// stem past a reach every crown keeps, so foliage stops short of the next column.
+constexpr float CROWN_GAP_SHARE = 0.62f;
+constexpr float CROWN_MIN_REACH_M = 1.2f;
 
-    float angleStep = TWO_PI / static_cast<float>(numBoughs);
-    for (int b = 0; b < numBoughs; ++b) {
-        float azimuth = b * angleStep + (0.18f * std::sin(b * 2.4f));
-        float elevation = baseElevation + 0.12f * (b % 2) - (droopLimb ? 0.08f : 0.0f);
+inline float unitHash(uint32_t a, uint32_t b) {
+    uint32_t h = a * 0x9E3779B1u ^ (b + 0x7F4A7C15u) * 0x85EBCA77u;
+    h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12; h *= 0x297A2D39u; h ^= h >> 15;
+    return static_cast<float>(h & 0xFFFFFFu) / static_cast<float>(0x1000000u);
+}
 
-        Vec3 boughDir(std::cos(azimuth), elevation, std::sin(azimuth));
-        boughDir = boughDir.normalized();
+struct CrownProfile {
+    float crownBaseShare;      // crown base / tree height
+    float widestAt;            // share of the crown's depth where it is widest (0 its base)
+    float topExponent;         // superellipse exponent of its upper profile (1 a cone, 2 a dome)
+    Vec3 leafLinearRgb;        // foliage colour, linear RGB
+    float colourSpread;        // +- share each tree's foliage varies by
+    const char* label;         // free text carried into the GLB
+};
 
-        Vec3 boughStart = origin - Vec3(0, (b % 3) * 0.4f, 0);
-        Vec3 boughEnd = boughStart + boughDir * (spreadRadius * (0.88f + 0.24f * (b % 3)));
-        if (droopLimb) {
-            boughEnd.y -= spreadRadius * 0.22f;
+inline tile_vegetation::DescribedTree describeCrown(const Vec3& stem, float heightM, float crownRadiusM, float trunkRadiusM,
+                                                    const CrownProfile& profile, uint32_t index) {
+    tile_vegetation::DescribedTree d;
+    d.x = stem.x;
+    d.y = getTerrainHeight(stem.x, stem.z);
+    d.z = stem.z;
+    d.heightM = heightM;
+    d.crownRadiusXM = d.crownRadiusZM = crownRadiusM;
+    d.crownBaseHeightM = profile.crownBaseShare * (0.92f + 0.16f * unitHash(index, 1)) * heightM;
+    d.crownWidestAt = profile.widestAt;
+    d.crownTopExponent = profile.topExponent;
+    if (trunkRadiusM > 0.0f) d.trunkRadiusM = trunkRadiusM;
+    const float shade = 1.0f + profile.colourSpread * (2.0f * unitHash(index, 2) - 1.0f);
+    d.leafColourKnown = true;
+    d.leafLinearRgb = {std::clamp(profile.leafLinearRgb.x * shade, 0.0f, 1.0f), std::clamp(profile.leafLinearRgb.y * shade, 0.0f, 1.0f),
+                       std::clamp(profile.leafLinearRgb.z * shade, 0.0f, 1.0f)};
+    d.label = profile.label;
+    return d;
+}
+
+/** Each crown's radius: its own spread, within the gap the nearest other stem (of these crowns or `columns`) leaves it. */
+inline void shareCrownGaps(std::vector<tile_vegetation::DescribedTree>& crowns, const std::vector<Vec3>& columns = {}) {
+    for (size_t i = 0; i < crowns.size(); ++i) {
+        double gap = std::numeric_limits<double>::infinity();
+        for (size_t j = 0; j < crowns.size(); ++j) {
+            if (i != j) gap = std::min(gap, std::hypot(crowns[i].x - crowns[j].x, crowns[i].z - crowns[j].z));
         }
-
-        appendConiferNeedleFanLimb(
-            boughStart, boughEnd, boughDir, spreadRadius, 0.4f,
-            wood, foliage, true
-        );
+        for (const Vec3& c : columns) gap = std::min(gap, std::hypot(crowns[i].x - c.x, crowns[i].z - c.z));
+        const double r = std::min(crowns[i].crownRadiusXM, CROWN_MIN_REACH_M + CROWN_GAP_SHARE * gap);
+        crowns[i].crownRadiusXM = crowns[i].crownRadiusZM = r;
     }
-
-    foliage.merge(wood);
-    foliage.recomputeBounds();
-    return foliage;
-}
-
-// Understory Subcanopy Trees (Pacific Dogwoods / Hemlocks with 3D Anatomical Leaves)
-ScratchboxMesh generateUnderstoryTree(const Vec3& basePos, float height = 5.5f, float spread = 3.2f) {
-    ScratchboxMesh mesh("Understory_Subcanopy_Tree");
-    mesh.material.name = "PBR_Canopy_Foliage";
-    mesh.material.roughnessFactor = 0.58f;
-    mesh.material.metallicFactor = 0.01f;
-    mesh.material.doubleSided = true;
-    mesh.material.alphaMode = "MASK";
-    mesh.material.alphaCutoff = 0.45f;
-
-    float gy = getTerrainHeight(basePos.x, basePos.z);
-    Vec3 root(basePos.x, gy, basePos.z);
-    Vec3 tip = root + Vec3(0.35f, height, -0.25f);
-
-    const int segs = 6;
-    Vec3 dir = (tip - root).normalized();
-    Vec3 up(0, 1, 0);
-    Vec3 side = dir.cross(up).normalized();
-    up = side.cross(dir).normalized();
-
-    uint32_t tIdx = static_cast<uint32_t>(mesh.vertices.size());
-    for (int i = 0; i < segs; ++i) {
-        float a = (static_cast<float>(i) / segs) * TWO_PI;
-        Vec3 rad = side * std::cos(a) + up * std::sin(a);
-        mesh.addVertex(Vertex(root + rad * 0.16f, rad, Vec2(0, 0), COL_REDWOOD_BARK));
-        mesh.addVertex(Vertex(tip + rad * 0.05f, rad, Vec2(1, 1), COL_REDWOOD_BARK));
-    }
-    for (int i = 0; i < segs; ++i) {
-        int next = (i + 1) % segs;
-        mesh.addTriangle(tIdx + i * 2, tIdx + i * 2 + 1, tIdx + next * 2);
-        mesh.addTriangle(tIdx + next * 2, tIdx + i * 2 + 1, tIdx + next * 2 + 1);
-    }
-
-    // Seal understory tree trunk root base and tip into a closed solid hull
-    uint32_t rootCapIdx = static_cast<uint32_t>(mesh.vertices.size());
-    mesh.addVertex(Vertex(root - Vec3(0, 0.35f, 0), Vec3(0, -1, 0), Vec2(0, 0), COL_REDWOOD_BARK));
-    for (int i = 0; i < segs; ++i) {
-        int next = (i + 1) % segs;
-        mesh.addTriangle(rootCapIdx, tIdx + next * 2, tIdx + i * 2);
-    }
-
-    uint32_t tipCapIdx = static_cast<uint32_t>(mesh.vertices.size());
-    mesh.addVertex(Vertex(tip + dir * 0.08f, dir, Vec2(1, 1), COL_REDWOOD_BARK));
-    for (int i = 0; i < segs; ++i) {
-        int next = (i + 1) % segs;
-        mesh.addTriangle(tIdx + i * 2 + 1, tIdx + next * 2 + 1, tipCapIdx);
-    }
-
-    mesh.merge(generateCanopyBoughs(tip, spread, 5, 0.10f, true));
-
-    geometry::Mesh twigs("SubcanopyTwigs");
-    TwigClusterConfig twigCfg;
-    twigCfg.twigLength = 0.65f;
-    twigCfg.leafCount = 7;
-    twigCfg.leafScale = 1.10f;
-    twigCfg.phyllotaxis = PhyllotaxisPattern::GoldenSpiral137;
-    twigCfg.leafConfig.outline = LeafOutline{};
-    twigCfg.leafConfig.laminaCupping = 0.018f;
-    twigCfg.leafConfig.midribDepth = 0.010f;
-    twigCfg.leafConfig.droopCurvature = 0.024f;
-    twigCfg.leafConfig.laminaColor = COL_CANOPY_FOLIAGE;
-    twigCfg.leafConfig.marginColor = COL_CANOPY_SUNLIT;
-
-    for (int b = 0; b < 6; ++b) {
-        float azimuth = b * (TWO_PI / 6.0f) + 0.25f;
-        Vec3 bDir = (Vec3(std::cos(azimuth), 0.15f, std::sin(azimuth))).normalized();
-        Vec3 bAttach = root + Vec3(0, height * (0.45f + 0.08f * b), 0) + bDir * (spread * 0.42f);
-        TwigClusterGenerator::appendTwigCluster(twigs, bAttach, bDir, twigCfg);
-    }
-    mesh.merge(twigs.toScratchboxMesh());
-
-    mesh.recomputeBounds();
-    return mesh;
-}
-
-// Overhanging Foreground Canopy Boughs
-ScratchboxMesh generateOverhangingForegroundCanopy() {
-    ScratchboxMesh foliage("Overhanging_Foreground_Canopy");
-    foliage.material.name = "PBR_Canopy_Foliage";
-    foliage.material.roughnessFactor = 0.52f;
-    foliage.material.metallicFactor = 0.01f;
-    foliage.material.doubleSided = true;
-    foliage.material.alphaMode = "MASK";
-    foliage.material.alphaCutoff = 0.45f;
-
-    ScratchboxMesh wood("Overhanging_Foreground_Wood");
-    wood.material.name = "PBR_Redwood_Bark";
-
-    // 1. Left foreground framing limb dipping into view (Y = 2.4m to 3.4m, Z = 0.4m to 1.8m)
-    appendConiferNeedleFanLimb(
-        Vec3(-2.4f, 3.5f, 0.4f), Vec3(-0.4f, 2.5f, 1.8f), Vec3(0.85f, -0.35f, 0.50f).normalized(),
-        3.2f, 0.35f, wood, foliage, true
-    );
-    // 2. Right foreground framing limb dipping into view
-    appendConiferNeedleFanLimb(
-        Vec3(3.2f, 3.6f, 0.2f), Vec3(0.5f, 2.6f, 1.6f), Vec3(-0.85f, -0.30f, 0.45f).normalized(),
-        3.0f, 0.35f, wood, foliage, true
-    );
-    // 3. Central overhead drape
-    appendConiferNeedleFanLimb(
-        Vec3(-0.3f, 4.2f, 0.8f), Vec3(0.1f, 3.1f, 2.2f), Vec3(0.15f, -0.55f, 0.82f).normalized(),
-        2.6f, 0.40f, wood, foliage, true
-    );
-    // 4. Low mid-left needle spray reaching into sunlight right above ferns
-    appendConiferNeedleFanLimb(
-        Vec3(-1.9f, 2.4f, 0.8f), Vec3(-0.6f, 2.0f, 1.4f), Vec3(0.90f, -0.25f, 0.35f).normalized(),
-        2.2f, 0.30f, wood, foliage, true
-    );
-    // 5. Low mid-right needle spray
-    appendConiferNeedleFanLimb(
-        Vec3(2.4f, 2.6f, 0.6f), Vec3(0.9f, 2.1f, 1.2f), Vec3(-0.88f, -0.22f, 0.38f).normalized(),
-        2.2f, 0.30f, wood, foliage, true
-    );
-
-    foliage.merge(wood);
-    foliage.recomputeBounds();
-    return foliage;
 }
 
 // ============================================================================
@@ -1185,162 +727,105 @@ int main(int argc, char** argv) {
     floor.merge(generateMossHummock(Vec3(-6.0f, 0, -26.0f), 2.1f, 1.5f, 0.40f));
     floor.merge(generateMossHummock(Vec3( 8.0f, 0, -28.0f), 2.3f, 1.6f, 0.44f));
 
-    // 2. Trunks & Tree Architecture Mesh Group
+    // 2. Redwood Columns (Forest_Trunks_And_Log); their crowns are grown in section 5
     ScratchboxMesh allTrunks("Forest_Trunks_And_Log");
     allTrunks.material.name = "PBR_Redwood_Bark";
     allTrunks.material.roughnessFactor = 0.92f;
     allTrunks.material.metallicFactor = 0.01f;
 
-    // Canopy Foliage Mesh Group
-    ScratchboxMesh allFoliage("Forest_Canopy_Foliage");
-    allFoliage.material.name = "PBR_Canopy_Foliage";
-    allFoliage.material.roughnessFactor = 0.58f;
-    allFoliage.material.metallicFactor = 0.01f;
-    allFoliage.material.doubleSided = true;
-    allFoliage.material.alphaMode = "MASK";
-    allFoliage.material.alphaCutoff = 0.45f;
+    std::cout << "🌳 Generating Hero Ancient Redwood Columns across Ecological Groves...\n";
 
-    std::cout << "🌳 Generating Hero Ancient Redwood & Oak Trunks across Ecological Groves...\n";
+    // Each redwood: its fluted column and the spread its crown may reach (section 6 shares it with its neighbours)
+    struct Redwood {
+        TrunkSpec trunk;
+        float crownSpreadM;
+    };
 
     // A. HERO FOREGROUND CORRIDOR (Framed for 1:1 National Geographic Alignment)
+    std::vector<Redwood> redwoods = {
+        // 1. The Monumental Monarch (Hero Ancient Redwood occupying center-right of frame at X = 0.95m, Z = -2.1m)
+        { { Vec3( 0.95f, 0.0f, -2.1f), 36.0f, 1.95f, 0.88f, 10, 1.85f, true, 1.55f }, 6.5f },
+        // 2. Left Sun-Facing Tree (Reaching into sunbeams)
+        { { Vec3(-1.85f, 0.0f, -4.5f), 29.0f, 1.15f, 0.58f,  6, 1.15f, true, 1.25f }, 5.4f },
+        // 3. Mid-Left Receding Tree 1
+        { { Vec3(-3.2f,  0.0f, -6.5f), 28.0f, 0.95f, 0.50f,  5, 0.85f, true, 1.10f }, 4.8f },
+        // 4. Far-Left Framing Redwood (Hugging left edge at X = -4.8m, Z = -0.5m)
+        { { Vec3(-4.8f,  0.0f, -0.5f), 30.0f, 1.40f, 0.70f,  7, 1.25f, true, 1.20f }, 5.5f },
+        // 5. Far-Right Foreground Framing Redwood (X = 4.8f, Z = 0.5f)
+        { { Vec3( 4.8f,  0.0f,  0.5f), 30.0f, 1.45f, 0.72f,  7, 1.20f, true, 1.20f }, 5.5f }
+    };
 
-    // 1. The Monumental Monarch (Hero Ancient Redwood occupying center-right of frame at X = 0.95m, Z = -2.1m)
-    TrunkSpec heroMonarch;
-    heroMonarch.basePos = Vec3(0.95f, 0.0f, -2.1f);
-    heroMonarch.height = 36.0f;
-    heroMonarch.baseRadius = 1.95f;
-    heroMonarch.topRadius = 0.88f;
-    heroMonarch.buttressLobes = 10;
-    heroMonarch.buttressSpread = 1.85f;
-    heroMonarch.leanAngleRad = 1.2f * DEG_TO_RAD;
-    heroMonarch.leanAzimuthRad = -35.0f * DEG_TO_RAD;
-    heroMonarch.hasHeroMoss = true;
-    heroMonarch.furrowDepth = 1.55f;
-    allTrunks.merge(generateProceduralTrunk(heroMonarch));
-    appendConiferBranchesAndCrown(heroMonarch, allTrunks, allFoliage, 18, 0.06f, 6.5f, true);
+    // B. EXPANSIVE WEST & EAST GROVES AND DEEP COLONNADE (Spreading across 80m x 70m)
+    std::cout << "🌲 Constructing Distributed Forest Groves across the Landscape...\n";
+    const std::vector<TrunkSpec> landscapeTrees = {
+        // West Grove (Spreading out to X = -35)
+        { Vec3( -8.5f, 0.0f,   2.5f), 28.0f, 0.95f, 0.55f, 5, 0.85f, true, 1.05f },
+        { Vec3(-11.5f, 0.0f,  -3.5f), 27.0f, 0.85f, 0.48f, 5, 0.75f, true, 0.95f },
+        { Vec3(-15.0f, 0.0f,   1.0f), 28.0f, 0.90f, 0.52f, 4, 0.80f, true, 1.00f },
+        { Vec3(-18.5f, 0.0f,  -6.5f), 26.0f, 0.78f, 0.45f, 4, 0.70f, true, 0.90f },
+        { Vec3(-14.0f, 0.0f, -12.0f), 27.0f, 0.82f, 0.46f, 4, 0.75f, true, 0.95f },
+        { Vec3(-22.0f, 0.0f, -10.5f), 25.0f, 0.75f, 0.42f, 3, 0.65f, false, 0.85f },
+        { Vec3(-27.0f, 0.0f, -15.0f), 26.0f, 0.80f, 0.45f, 3, 0.70f, false, 0.85f },
+        { Vec3(-19.5f, 0.0f, -20.0f), 25.0f, 0.74f, 0.42f, 3, 0.65f, false, 0.80f },
+        { Vec3(-25.5f, 0.0f, -25.5f), 24.0f, 0.70f, 0.40f, 3, 0.60f, false, 0.80f },
+        { Vec3(-16.0f, 0.0f, -29.0f), 25.0f, 0.72f, 0.40f, 3, 0.65f, false, 0.75f },
+        { Vec3(-31.0f, 0.0f, -22.0f), 24.0f, 0.68f, 0.38f, 0, 0.00f, false, 0.75f },
+        { Vec3(-28.0f, 0.0f, -35.0f), 25.0f, 0.70f, 0.40f, 0, 0.00f, false, 0.70f },
+        { Vec3(-20.0f, 0.0f, -39.0f), 24.0f, 0.66f, 0.36f, 0, 0.00f, false, 0.70f },
+        { Vec3(-35.0f, 0.0f, -30.0f), 23.0f, 0.64f, 0.35f, 0, 0.00f, false, 0.65f },
+
+        // East Grove (Spreading out to X = +35)
+        { Vec3(  8.0f, 0.0f,   3.0f), 28.0f, 0.92f, 0.54f, 5, 0.80f, true, 1.00f },
+        { Vec3( 12.0f, 0.0f,  -1.5f), 27.0f, 0.88f, 0.50f, 5, 0.75f, true, 0.95f },
+        { Vec3( 16.5f, 0.0f,   2.5f), 28.0f, 0.90f, 0.52f, 4, 0.80f, true, 0.95f },
+        { Vec3( 14.5f, 0.0f,  -6.5f), 26.0f, 0.80f, 0.45f, 4, 0.70f, true, 0.90f },
+        { Vec3( 10.5f, 0.0f, -11.0f), 27.0f, 0.82f, 0.46f, 4, 0.75f, true, 0.95f },
+        { Vec3( 18.5f, 0.0f, -10.0f), 25.0f, 0.76f, 0.42f, 3, 0.65f, false, 0.85f },
+        { Vec3( 23.0f, 0.0f, -14.5f), 26.0f, 0.78f, 0.44f, 3, 0.70f, false, 0.85f },
+        { Vec3( 15.5f, 0.0f, -18.0f), 25.0f, 0.72f, 0.40f, 3, 0.65f, false, 0.80f },
+        { Vec3( 27.0f, 0.0f, -20.0f), 24.0f, 0.70f, 0.38f, 3, 0.60f, false, 0.80f },
+        { Vec3( 21.0f, 0.0f, -26.0f), 25.0f, 0.72f, 0.40f, 3, 0.65f, false, 0.75f },
+        { Vec3( 17.0f, 0.0f, -31.0f), 24.0f, 0.68f, 0.38f, 0, 0.00f, false, 0.75f },
+        { Vec3( 29.0f, 0.0f, -29.0f), 25.0f, 0.70f, 0.40f, 0, 0.00f, false, 0.70f },
+        { Vec3( 24.0f, 0.0f, -37.0f), 24.0f, 0.66f, 0.36f, 0, 0.00f, false, 0.70f },
+        { Vec3( 33.0f, 0.0f, -25.0f), 23.0f, 0.64f, 0.35f, 0, 0.00f, false, 0.65f },
+
+        // North & Deep Background Colonnade (Z from -10 to -48 across clearing depth)
+        { Vec3( -1.8f, 0.0f, -12.5f), 26.0f, 0.68f, 0.40f, 3, 0.55f, true, 0.85f },
+        { Vec3(  3.2f, 0.0f, -14.5f), 25.0f, 0.65f, 0.38f, 3, 0.50f, true, 0.85f },
+        { Vec3( -4.5f, 0.0f, -16.5f), 26.0f, 0.66f, 0.38f, 3, 0.50f, true, 0.80f },
+        { Vec3(  1.5f, 0.0f, -18.5f), 25.0f, 0.62f, 0.36f, 3, 0.45f, true, 0.80f },
+        { Vec3( -3.0f, 0.0f, -22.5f), 25.0f, 0.60f, 0.35f, 0, 0.00f, false, 0.75f },
+        { Vec3(  3.8f, 0.0f, -25.0f), 24.0f, 0.58f, 0.34f, 0, 0.00f, false, 0.75f },
+        { Vec3( -0.5f, 0.0f, -28.5f), 25.0f, 0.56f, 0.32f, 0, 0.00f, false, 0.70f },
+        { Vec3(  2.4f, 0.0f, -33.0f), 24.0f, 0.54f, 0.30f, 0, 0.00f, false, 0.70f },
+        { Vec3( -4.8f, 0.0f, -37.5f), 25.0f, 0.55f, 0.30f, 0, 0.00f, false, 0.65f },
+        { Vec3(  1.2f, 0.0f, -43.0f), 24.0f, 0.50f, 0.28f, 0, 0.00f, false, 0.65f },
+        { Vec3( -2.0f, 0.0f, -47.0f), 24.0f, 0.48f, 0.26f, 0, 0.00f, false, 0.60f },
+        { Vec3(  4.5f, 0.0f, -48.0f), 23.0f, 0.46f, 0.25f, 0, 0.00f, false, 0.60f }
+    };
+    for (size_t i = 0; i < landscapeTrees.size(); ++i) {
+        redwoods.push_back({ landscapeTrees[i], 3.6f + 1.2f * (static_cast<float>(i % 4) / 3.0f) });
+    }
+
+    // A redwood crown: a narrow cone from about two fifths of the height, widest low down, dark yellow-green foliage
+    const CrownProfile redwoodCrown{ 0.38f, 0.18f, 1.15f, Vec3(0.040f, 0.085f, 0.030f), 0.18f, "coast redwood crown" };
+    std::vector<tile_vegetation::DescribedTree> crowns;
+    std::vector<Vec3> columns;
+    for (size_t i = 0; i < redwoods.size(); ++i) {
+        const TrunkSpec& trunk = redwoods[i].trunk;
+        allTrunks.merge(generateProceduralTrunk(trunk));
+        crowns.push_back(describeCrown(trunk.basePos, trunk.height + 0.55f, redwoods[i].crownSpreadM, 0.5f * trunk.baseRadius,
+                                       redwoodCrown, static_cast<uint32_t>(i)));
+        columns.push_back(trunk.basePos);
+    }
+    shareCrownGaps(crowns);
 
     // Root buttress runners grounding the Monarch into the humus
     allTrunks.merge(generateSurfaceRootRunner(Vec3(0.95f, 0, -2.1f), Vec3(-0.4f, 0, -0.6f), 0.42f, 0.10f));
     allTrunks.merge(generateSurfaceRootRunner(Vec3(0.95f, 0, -2.1f), Vec3( 2.3f, 0, -0.8f), 0.38f, 0.09f));
     allTrunks.merge(generateSurfaceRootRunner(Vec3(0.95f, 0, -2.1f), Vec3( 0.2f, 0, -4.2f), 0.35f, 0.08f));
     allTrunks.merge(generateSurfaceRootRunner(Vec3(0.95f, 0, -2.1f), Vec3( 2.4f, 0, -3.8f), 0.32f, 0.07f));
-
-    // 2. Left Sun-Facing Tree (Reaching into sunbeams with low graceful boughs)
-    TrunkSpec leftSunBoughTree;
-    leftSunBoughTree.basePos = Vec3(-1.85f, 0.0f, -4.5f);
-    leftSunBoughTree.height = 29.0f;
-    leftSunBoughTree.baseRadius = 1.15f;
-    leftSunBoughTree.topRadius = 0.58f;
-    leftSunBoughTree.buttressLobes = 6;
-    leftSunBoughTree.buttressSpread = 1.15f;
-    leftSunBoughTree.leanAngleRad = 1.5f * DEG_TO_RAD;
-    leftSunBoughTree.leanAzimuthRad = 45.0f * DEG_TO_RAD;
-    leftSunBoughTree.hasHeroMoss = true;
-    leftSunBoughTree.furrowDepth = 1.25f;
-    allTrunks.merge(generateProceduralTrunk(leftSunBoughTree));
-    appendConiferBranchesAndCrown(leftSunBoughTree, allTrunks, allFoliage, 16, 0.05f, 5.4f, true);
-
-    // 3. Mid-Left Receding Tree 1
-    TrunkSpec midLeft1;
-    midLeft1.basePos = Vec3(-3.2f, 0.0f, -6.5f);
-    midLeft1.height = 28.0f;
-    midLeft1.baseRadius = 0.95f;
-    midLeft1.topRadius = 0.50f;
-    midLeft1.buttressLobes = 5;
-    midLeft1.buttressSpread = 0.85f;
-    midLeft1.leanAngleRad = 1.2f * DEG_TO_RAD;
-    midLeft1.leanAzimuthRad = 30.0f * DEG_TO_RAD;
-    midLeft1.hasHeroMoss = true;
-    midLeft1.furrowDepth = 1.10f;
-    allTrunks.merge(generateProceduralTrunk(midLeft1));
-    appendConiferBranchesAndCrown(midLeft1, allTrunks, allFoliage, 14, 0.06f, 4.8f, true);
-
-    // 4. Far-Left Framing Redwood (Hugging left edge at X = -4.8m, Z = -0.5m)
-    TrunkSpec farLeft;
-    farLeft.basePos = Vec3(-4.8f, 0.0f, -0.5f);
-    farLeft.height = 30.0f;
-    farLeft.baseRadius = 1.40f;
-    farLeft.topRadius = 0.70f;
-    farLeft.buttressLobes = 7;
-    farLeft.buttressSpread = 1.25f;
-    farLeft.leanAngleRad = 1.8f * DEG_TO_RAD;
-    farLeft.leanAzimuthRad = 85.0f * DEG_TO_RAD;
-    farLeft.hasHeroMoss = true;
-    farLeft.furrowDepth = 1.20f;
-    allTrunks.merge(generateProceduralTrunk(farLeft));
-    appendConiferBranchesAndCrown(farLeft, allTrunks, allFoliage, 16, 0.065f, 5.5f, true);
-
-    // 5. Far-Right Foreground Framing Redwood (X = 4.8f, Z = 0.5f)
-    TrunkSpec farRight;
-    farRight.basePos = Vec3(4.8f, 0.0f, 0.5f);
-    farRight.height = 30.0f;
-    farRight.baseRadius = 1.45f;
-    farRight.topRadius = 0.72f;
-    farRight.buttressLobes = 7;
-    farRight.buttressSpread = 1.20f;
-    farRight.leanAngleRad = 2.2f * DEG_TO_RAD;
-    farRight.leanAzimuthRad = -110.0f * DEG_TO_RAD;
-    farRight.hasHeroMoss = true;
-    farRight.furrowDepth = 1.20f;
-    allTrunks.merge(generateProceduralTrunk(farRight));
-    appendConiferBranchesAndCrown(farRight, allTrunks, allFoliage, 16, 0.065f, 5.5f, true);
-
-    // B. EXPANSIVE WEST & EAST GROVES AND DEEP COLONNADE (Spreading across 80m x 70m)
-    std::cout << "🌲 Constructing Distributed Forest Groves across the Landscape...\n";
-    std::vector<TrunkSpec> landscapeTrees = {
-        // West Grove (Spreading out to X = -35)
-        { Vec3( -8.5f, 0.0f,   2.5f), 28.0f, 0.95f, 0.55f, 5, 0.85f, 1.4f * DEG_TO_RAD,  60.0f * DEG_TO_RAD, true, 1.05f },
-        { Vec3(-11.5f, 0.0f,  -3.5f), 27.0f, 0.85f, 0.48f, 5, 0.75f, 1.2f * DEG_TO_RAD,  45.0f * DEG_TO_RAD, true, 0.95f },
-        { Vec3(-15.0f, 0.0f,   1.0f), 28.0f, 0.90f, 0.52f, 4, 0.80f, 1.8f * DEG_TO_RAD,  70.0f * DEG_TO_RAD, true, 1.00f },
-        { Vec3(-18.5f, 0.0f,  -6.5f), 26.0f, 0.78f, 0.45f, 4, 0.70f, 1.0f * DEG_TO_RAD,  30.0f * DEG_TO_RAD, true, 0.90f },
-        { Vec3(-14.0f, 0.0f, -12.0f), 27.0f, 0.82f, 0.46f, 4, 0.75f, 1.5f * DEG_TO_RAD,  55.0f * DEG_TO_RAD, true, 0.95f },
-        { Vec3(-22.0f, 0.0f, -10.5f), 25.0f, 0.75f, 0.42f, 3, 0.65f, 2.0f * DEG_TO_RAD,  85.0f * DEG_TO_RAD, false, 0.85f },
-        { Vec3(-27.0f, 0.0f, -15.0f), 26.0f, 0.80f, 0.45f, 3, 0.70f, 1.2f * DEG_TO_RAD,  40.0f * DEG_TO_RAD, false, 0.85f },
-        { Vec3(-19.5f, 0.0f, -20.0f), 25.0f, 0.74f, 0.42f, 3, 0.65f, 1.4f * DEG_TO_RAD,  60.0f * DEG_TO_RAD, false, 0.80f },
-        { Vec3(-25.5f, 0.0f, -25.5f), 24.0f, 0.70f, 0.40f, 3, 0.60f, 1.6f * DEG_TO_RAD,  75.0f * DEG_TO_RAD, false, 0.80f },
-        { Vec3(-16.0f, 0.0f, -29.0f), 25.0f, 0.72f, 0.40f, 3, 0.65f, 1.1f * DEG_TO_RAD,  35.0f * DEG_TO_RAD, false, 0.75f },
-        { Vec3(-31.0f, 0.0f, -22.0f), 24.0f, 0.68f, 0.38f, 0, 0.00f, 1.8f * DEG_TO_RAD,  90.0f * DEG_TO_RAD, false, 0.75f },
-        { Vec3(-28.0f, 0.0f, -35.0f), 25.0f, 0.70f, 0.40f, 0, 0.00f, 1.2f * DEG_TO_RAD,  50.0f * DEG_TO_RAD, false, 0.70f },
-        { Vec3(-20.0f, 0.0f, -39.0f), 24.0f, 0.66f, 0.36f, 0, 0.00f, 1.0f * DEG_TO_RAD,  20.0f * DEG_TO_RAD, false, 0.70f },
-        { Vec3(-35.0f, 0.0f, -30.0f), 23.0f, 0.64f, 0.35f, 0, 0.00f, 1.5f * DEG_TO_RAD,  80.0f * DEG_TO_RAD, false, 0.65f },
-
-        // East Grove (Spreading out to X = +35)
-        { Vec3(  8.0f, 0.0f,   3.0f), 28.0f, 0.92f, 0.54f, 5, 0.80f, 1.6f * DEG_TO_RAD, -60.0f * DEG_TO_RAD, true, 1.00f },
-        { Vec3( 12.0f, 0.0f,  -1.5f), 27.0f, 0.88f, 0.50f, 5, 0.75f, 1.4f * DEG_TO_RAD, -45.0f * DEG_TO_RAD, true, 0.95f },
-        { Vec3( 16.5f, 0.0f,   2.5f), 28.0f, 0.90f, 0.52f, 4, 0.80f, 1.8f * DEG_TO_RAD, -75.0f * DEG_TO_RAD, true, 0.95f },
-        { Vec3( 14.5f, 0.0f,  -6.5f), 26.0f, 0.80f, 0.45f, 4, 0.70f, 1.2f * DEG_TO_RAD, -30.0f * DEG_TO_RAD, true, 0.90f },
-        { Vec3( 10.5f, 0.0f, -11.0f), 27.0f, 0.82f, 0.46f, 4, 0.75f, 1.5f * DEG_TO_RAD, -55.0f * DEG_TO_RAD, true, 0.95f },
-        { Vec3( 18.5f, 0.0f, -10.0f), 25.0f, 0.76f, 0.42f, 3, 0.65f, 2.0f * DEG_TO_RAD, -80.0f * DEG_TO_RAD, false, 0.85f },
-        { Vec3( 23.0f, 0.0f, -14.5f), 26.0f, 0.78f, 0.44f, 3, 0.70f, 1.5f * DEG_TO_RAD, -65.0f * DEG_TO_RAD, false, 0.85f },
-        { Vec3( 15.5f, 0.0f, -18.0f), 25.0f, 0.72f, 0.40f, 3, 0.65f, 1.1f * DEG_TO_RAD, -40.0f * DEG_TO_RAD, false, 0.80f },
-        { Vec3( 27.0f, 0.0f, -20.0f), 24.0f, 0.70f, 0.38f, 3, 0.60f, 1.8f * DEG_TO_RAD, -85.0f * DEG_TO_RAD, false, 0.80f },
-        { Vec3( 21.0f, 0.0f, -26.0f), 25.0f, 0.72f, 0.40f, 3, 0.65f, 1.3f * DEG_TO_RAD, -50.0f * DEG_TO_RAD, false, 0.75f },
-        { Vec3( 17.0f, 0.0f, -31.0f), 24.0f, 0.68f, 0.38f, 0, 0.00f, 1.0f * DEG_TO_RAD, -30.0f * DEG_TO_RAD, false, 0.75f },
-        { Vec3( 29.0f, 0.0f, -29.0f), 25.0f, 0.70f, 0.40f, 0, 0.00f, 1.6f * DEG_TO_RAD, -70.0f * DEG_TO_RAD, false, 0.70f },
-        { Vec3( 24.0f, 0.0f, -37.0f), 24.0f, 0.66f, 0.36f, 0, 0.00f, 1.2f * DEG_TO_RAD, -45.0f * DEG_TO_RAD, false, 0.70f },
-        { Vec3( 33.0f, 0.0f, -25.0f), 23.0f, 0.64f, 0.35f, 0, 0.00f, 1.7f * DEG_TO_RAD, -85.0f * DEG_TO_RAD, false, 0.65f },
-
-        // North & Deep Background Colonnade (Z from -10 to -48 across clearing depth)
-        { Vec3( -1.8f, 0.0f, -12.5f), 26.0f, 0.68f, 0.40f, 3, 0.55f, 1.2f * DEG_TO_RAD,  20.0f * DEG_TO_RAD, true, 0.85f },
-        { Vec3(  3.2f, 0.0f, -14.5f), 25.0f, 0.65f, 0.38f, 3, 0.50f, 1.5f * DEG_TO_RAD, -35.0f * DEG_TO_RAD, true, 0.85f },
-        { Vec3( -4.5f, 0.0f, -16.5f), 26.0f, 0.66f, 0.38f, 3, 0.50f, 1.4f * DEG_TO_RAD,  30.0f * DEG_TO_RAD, true, 0.80f },
-        { Vec3(  1.5f, 0.0f, -18.5f), 25.0f, 0.62f, 0.36f, 3, 0.45f, 1.0f * DEG_TO_RAD, -15.0f * DEG_TO_RAD, true, 0.80f },
-        { Vec3( -3.0f, 0.0f, -22.5f), 25.0f, 0.60f, 0.35f, 0, 0.00f, 1.2f * DEG_TO_RAD,  25.0f * DEG_TO_RAD, false, 0.75f },
-        { Vec3(  3.8f, 0.0f, -25.0f), 24.0f, 0.58f, 0.34f, 0, 0.00f, 1.4f * DEG_TO_RAD, -40.0f * DEG_TO_RAD, false, 0.75f },
-        { Vec3( -0.5f, 0.0f, -28.5f), 25.0f, 0.56f, 0.32f, 0, 0.00f, 0.9f * DEG_TO_RAD,  10.0f * DEG_TO_RAD, false, 0.70f },
-        { Vec3(  2.4f, 0.0f, -33.0f), 24.0f, 0.54f, 0.30f, 0, 0.00f, 1.1f * DEG_TO_RAD, -25.0f * DEG_TO_RAD, false, 0.70f },
-        { Vec3( -4.8f, 0.0f, -37.5f), 25.0f, 0.55f, 0.30f, 0, 0.00f, 1.3f * DEG_TO_RAD,  30.0f * DEG_TO_RAD, false, 0.65f },
-        { Vec3(  1.2f, 0.0f, -43.0f), 24.0f, 0.50f, 0.28f, 0, 0.00f, 0.8f * DEG_TO_RAD, -10.0f * DEG_TO_RAD, false, 0.65f },
-        { Vec3( -2.0f, 0.0f, -47.0f), 24.0f, 0.48f, 0.26f, 0, 0.00f, 0.7f * DEG_TO_RAD,   5.0f * DEG_TO_RAD, false, 0.60f },
-        { Vec3(  4.5f, 0.0f, -48.0f), 23.0f, 0.46f, 0.25f, 0, 0.00f, 1.2f * DEG_TO_RAD, -30.0f * DEG_TO_RAD, false, 0.60f }
-    };
-
-    for (size_t i = 0; i < landscapeTrees.size(); ++i) {
-        allTrunks.merge(generateProceduralTrunk(landscapeTrees[i]));
-        float spread = 3.6f + 1.2f * (static_cast<float>(i % 4) / 3.0f);
-        int tiers = 8 + (i % 3);
-        appendConiferBranchesAndCrown(landscapeTrees[i], allTrunks, allFoliage, tiers, 0.09f, spread, false);
-    }
 
     // 4. Fallen Mossy Nurse Logs Spanning the Landscape
     std::cout << "🪵 Generating Massive Fallen Mossy Nurse Logs across Landscape Quadrants...\n";
@@ -1372,15 +857,40 @@ int main(int argc, char** argv) {
     allTrunks.merge(generateShelfPolypores(Vec3(-14.5f, getTerrainHeight(-14.5f, -16.5f) + 0.42f, -16.5f), Vec3(0.3f, 0.2f, 0.9f), 0.28f));
     allTrunks.merge(generateShelfPolypores(Vec3( 14.2f, getTerrainHeight( 14.2f, -12.8f) + 0.40f, -12.8f), Vec3(-0.5f, 0.2f, 0.8f), 0.25f));
 
-    // 5. Understory Subcanopy Trees & Overhanging Archway
-    std::cout << "🌲 Sprouting Understory Subcanopy Trees...\n";
-    allFoliage.merge(generateUnderstoryTree(Vec3(-1.2f, 0, -4.5f), 5.4f, 3.2f));
-    allFoliage.merge(generateUnderstoryTree(Vec3( 1.5f, 0, -5.2f), 5.2f, 3.0f));
-    allFoliage.merge(generateUnderstoryTree(Vec3(-3.2f, 0, -8.0f), 5.8f, 3.5f));
-    allFoliage.merge(generateUnderstoryTree(Vec3( 2.4f, 0, -9.5f), 5.5f, 3.4f));
+    // 5. Understory Subcanopy Trees, then Every Crown Grown by SB-Veggie (section 6)
+    std::cout << "🌲 Describing Understory Subcanopy Crowns in the Gaps between the Columns...\n";
+    // A broadleaf understory crown: a dome from a third of the height, widest at its middle, brighter green than the redwoods
+    const CrownProfile understoryCrown{ 0.32f, 0.45f, 2.2f, Vec3(0.070f, 0.150f, 0.040f), 0.15f, "understory broadleaf crown" };
+    struct UnderstoryTree { float x, z, heightM, spreadM; };
+    const UnderstoryTree understory[] = {
+        {  0.8f,  -7.5f,  5.4f, 2.2f },
+        {  4.5f,  -8.2f,  5.2f, 2.1f },
+        { -6.2f, -10.75f, 5.8f, 2.4f },
+        {  2.4f,  -9.5f,  5.5f, 2.4f }
+    };
+    std::vector<tile_vegetation::DescribedTree> understoryCrowns;
+    for (size_t i = 0; i < std::size(understory); ++i) {
+        const UnderstoryTree& u = understory[i];
+        understoryCrowns.push_back(describeCrown(Vec3(u.x, 0.0f, u.z), u.heightM, u.spreadM, 0.0f, understoryCrown,
+                                                 static_cast<uint32_t>(crowns.size() + i)));
+    }
+    shareCrownGaps(understoryCrowns, columns);
+    crowns.insert(crowns.end(), understoryCrowns.begin(), understoryCrowns.end());
 
-    std::cout << "🌿 Weaving Overhanging Foreground Canopy Archway...\n";
-    allFoliage.merge(generateOverhangingForegroundCanopy());
+    std::cout << "🌳 Growing " << crowns.size() << " Crowns with SB-Veggie (space colonisation, species & texture libraries)...\n";
+    tile_vegetation::GroveOptions grove;
+    grove.seed = 0x5EED0F0E57ull;
+    grove.speciesIndexPath = "assets/vegetation/species/index.json";
+    grove.textureIndexPath = "assets/textures/trees/index.json";
+    grove.reveal = false;
+    grove.label = "forest_3d_viewer crowns";
+    tile_vegetation::GroveResult grown;
+    try {
+        grown = tile_vegetation::growDescribedTrees(crowns, grove);
+    } catch (const std::exception& e) {
+        std::cerr << "❌ Fatal: SB-Veggie could not grow the forest's crowns: " << e.what() << "\n";
+        return 1;
+    }
 
     // 6. Fern Colonies Mesh Group (High Density - 85+ Colonies)
     ScratchboxMesh allFerns("Forest_Sword_Ferns");
@@ -1414,7 +924,9 @@ int main(int argc, char** argv) {
         float fx = fernLocations[f].x;
         float fz = fernLocations[f].z;
         float fy = getTerrainHeight(fx, fz);
-        float radius = (f < 6) ? 2.35f : ((f < 12) ? 1.85f : 1.45f);
+        // a clump's radius sets its fronds' length and arch: 1 m makes sword fern fronds 1.1-1.3 m long arching 0.6-1.1 m
+        // high (the reference's ferns, below a standing eye), not 3 m fronds over the bookmarks' cameras
+        float radius = (f < 6) ? 1.05f : ((f < 12) ? 0.95f : 0.85f);
         int fronds = (f < 6) ? 34 : ((f < 12) ? 26 : 20);
         allFerns.merge(generateSwordFernClump(Vec3(fx, fy, fz), radius, fronds));
     }
@@ -1434,7 +946,7 @@ int main(int argc, char** argv) {
     );
 
     for (const auto& sf : scatteredFerns) {
-        float rad = 1.35f * sf.scale;
+        float rad = 0.85f * sf.scale;
         int numFronds = static_cast<int>(18 * sf.scale);
         allFerns.merge(generateSwordFernClump(sf.position, rad, std::max(10, numFronds)));
     }
@@ -1612,14 +1124,13 @@ int main(int argc, char** argv) {
     Vec3 focalCenter(-1.4f, 1.2f, -5.5f);
     ScratchboxMesh godRays = generateAtmosphericGodRays(sunOrigin, focalCenter, 56);
 
-    // 9. Assemble Discrete Multi-Mesh Array for GlbWriter
+    // 9. Assemble Discrete Multi-Mesh Array for GlbWriter (the crowns are their own GLB, section 6)
     std::vector<ScratchboxMesh> subMeshes = {
         floor,          // Index 0: PBR_Forest_Floor
         allTrunks,      // Index 1: PBR_Redwood_Bark
-        allFoliage,     // Index 2: PBR_Canopy_Foliage
-        allFerns,       // Index 3: PBR_Sword_Ferns
-        allUnderstory,  // Index 4: PBR_Woodland_Undergrowth
-        godRays         // Index 5: PBR_Volumetric_GodRays
+        allFerns,       // Index 2: PBR_Sword_Ferns
+        allUnderstory,  // Index 3: PBR_Woodland_Undergrowth
+        godRays         // Index 4: PBR_Volumetric_GodRays
     };
 
     size_t totalVerts = 0, totalTris = 0;
@@ -1632,50 +1143,44 @@ int main(int argc, char** argv) {
     std::cout << "   Submeshes Count: " << subMeshes.size() << "\n";
     std::cout << "   Total Vertices:  " << totalVerts << "\n";
     std::cout << "   Total Triangles: " << totalTris << "\n";
+    std::cout << "   SB-Veggie Crowns: " << grown.statsJson.substr(0, grown.statsJson.find(",\"perTree\"")) << "}\n";
 
-    // 10. Embed Authentic Photo-Derived PBR Texture Maps into GLB
+    // 10. Embed Authentic Photo-Derived PBR Texture Maps into GLB (the viewer draws with these; a missing map is fatal)
     std::cout << "\n🎨 Embedding Photo-Derived PBR Texture Maps into glTF Materials...\n";
     std::vector<io::EmbeddedTexture> remappedTextures;
 
     auto addPhotoTexture = [&](const std::string& filename, io::TextureUsage usage, int matIdx) {
         std::string fullPath = "public/textures/" + filename;
         auto bytes = loadPngFile(fullPath);
-        if (!bytes.empty()) {
-            io::EmbeddedTexture t;
-            t.name = filename;
-            t.mimeType = "image/png";
-            t.data = std::move(bytes);
-            t.usage = usage;
-            t.materialIndex = matIdx;
-            remappedTextures.push_back(t);
-            std::cout << "   ✅ Embedded " << filename << " into Material " << matIdx << " (" << t.data.size() << " bytes)\n";
+        if (bytes.empty()) {
+            std::cerr << "❌ Fatal: cannot read " << fullPath << " (run from the repository root)\n";
+            return false;
         }
+        io::EmbeddedTexture t;
+        t.name = filename;
+        t.mimeType = "image/png";
+        t.data = std::move(bytes);
+        t.usage = usage;
+        t.materialIndex = matIdx;
+        remappedTextures.push_back(t);
+        std::cout << "   ✅ Embedded " << filename << " into Material " << matIdx << " (" << t.data.size() << " bytes)\n";
+        return true;
     };
 
-    // Material 0: PBR_Forest_Floor
-    addPhotoTexture("photo_forest_floor_albedo.png", io::TextureUsage::BASE_COLOR, 0);
-    addPhotoTexture("photo_forest_floor_normal.png", io::TextureUsage::NORMAL, 0);
-    addPhotoTexture("photo_forest_floor_orm.png", io::TextureUsage::METALLIC_ROUGHNESS, 0);
-
-    // Material 1: PBR_Redwood_Bark
-    addPhotoTexture("photo_redwood_bark_albedo.png", io::TextureUsage::BASE_COLOR, 1);
-    addPhotoTexture("photo_redwood_bark_normal.png", io::TextureUsage::NORMAL, 1);
-    addPhotoTexture("photo_redwood_bark_orm.png", io::TextureUsage::METALLIC_ROUGHNESS, 1);
-
-    // Material 2: PBR_Canopy_Foliage
-    addPhotoTexture("photo_canopy_albedo.png", io::TextureUsage::BASE_COLOR, 2);
-    addPhotoTexture("photo_canopy_normal.png", io::TextureUsage::NORMAL, 2);
-    addPhotoTexture("photo_canopy_orm.png", io::TextureUsage::METALLIC_ROUGHNESS, 2);
-
-    // Material 3: PBR_Sword_Ferns
-    addPhotoTexture("photo_fern_albedo.png", io::TextureUsage::BASE_COLOR, 3);
-    addPhotoTexture("photo_fern_normal.png", io::TextureUsage::NORMAL, 3);
-    addPhotoTexture("photo_fern_orm.png", io::TextureUsage::METALLIC_ROUGHNESS, 3);
-
-    // Material 4: PBR_Woodland_Undergrowth
-    addPhotoTexture("photo_moss_albedo.png", io::TextureUsage::BASE_COLOR, 4);
-    addPhotoTexture("photo_moss_normal.png", io::TextureUsage::NORMAL, 4);
-    addPhotoTexture("photo_moss_orm.png", io::TextureUsage::METALLIC_ROUGHNESS, 4);
+    const struct { const char* set; int material; } photoSets[] = {
+        { "photo_forest_floor", 0 },   // Material 0: PBR_Forest_Floor
+        { "photo_redwood_bark", 1 },   // Material 1: PBR_Redwood_Bark
+        { "photo_fern", 2 },           // Material 2: PBR_Sword_Ferns
+        { "photo_moss", 3 }            // Material 3: PBR_Woodland_Undergrowth
+    };
+    for (const auto& ps : photoSets) {
+        const std::string set = ps.set;
+        if (!addPhotoTexture(set + "_albedo.png", io::TextureUsage::BASE_COLOR, ps.material) ||
+            !addPhotoTexture(set + "_normal.png", io::TextureUsage::NORMAL, ps.material) ||
+            !addPhotoTexture(set + "_orm.png", io::TextureUsage::METALLIC_ROUGHNESS, ps.material)) {
+            return 1;
+        }
+    }
 
     std::cout << "   Total Embedded Textures: " << remappedTextures.size() << "\n";
 
@@ -1695,19 +1200,26 @@ int main(int argc, char** argv) {
         (void)sysRet;
     }
 
-    std::ofstream outFile(outputPath, std::ios::binary);
-    if (!outFile.is_open()) {
-        std::cerr << "❌ Fatal: Could not open output file " << outputPath << "\n";
-        return 1;
+    // The crowns beside the forest: <output>_trees.glb, and what SB-Veggie grew in <output>_trees.stats.json
+    const std::string stem = outputPath.size() > 4 && outputPath.substr(outputPath.size() - 4) == ".glb" ? outputPath.substr(0, outputPath.size() - 4) : outputPath;
+    const std::string treesPath = stem + "_trees.glb";
+    const std::string treesStatsPath = stem + "_trees.stats.json";
+    const std::pair<const std::string*, const std::vector<uint8_t>*> glbs[] = { { &outputPath, &glbData }, { &treesPath, &grown.glb } };
+    for (const auto& [path, bytes] : glbs) {
+        std::ofstream outFile(*path, std::ios::binary);
+        if (!outFile.is_open()) {
+            std::cerr << "❌ Fatal: Could not open output file " << *path << "\n";
+            return 1;
+        }
+        outFile.write(reinterpret_cast<const char*>(bytes->data()), static_cast<std::streamsize>(bytes->size()));
+        std::cout << "✅ Successfully Exported: " << *path << " (" << bytes->size() << " bytes)\n";
     }
-
-    outFile.write(reinterpret_cast<const char*>(glbData.data()), glbData.size());
-    outFile.close();
+    std::ofstream statsFile(treesStatsPath);
+    statsFile << grown.statsJson << "\n";
 
     auto tEnd = std::chrono::high_resolution_clock::now();
     double ms = std::chrono::duration<double, std::milli>(tEnd - tStart).count();
 
-    std::cout << "✅ Successfully Exported: " << outputPath << " (" << glbData.size() << " bytes)\n";
     std::cout << "⏱️ Procedural Forest Generation Completed in " << ms << " ms.\n";
     std::cout << "================================================================\n";
 

@@ -721,7 +721,9 @@
         controls.enableDamping = true;
         controls.dampingFactor = 0.08;
         controls.screenSpacePanning = true;
-        controls.maxPolarAngle = Math.PI / 2 + 0.06;
+        // a view may look up into the crowns from below its target (the canopy bookmark); the ground is kept by the
+        // camera's height floor in animate()
+        controls.maxPolarAngle = Math.PI - 0.05;
         controls.minDistance = 0.4;
         controls.maxDistance = 75.0;
         controls.zoomSpeed = 1.2;
@@ -971,36 +973,29 @@
         return;
       }
 
-      // 1. Preload Photo-Derived High-Definition PBR Texture Sets
-      const texLoader = new THREE.TextureLoader();
-      const basePath = (window.location.protocol === 'file:') ? 'http://localhost:5173/textures/' : 'textures/';
-
+      // 1. Photo-Derived PBR Texture Sets: the maps embedded in the GLB's own materials (floor, bark, ferns, moss),
+      //    tiled as each surface needs
       const maxAniso = (renderer && renderer.capabilities) ? renderer.capabilities.getMaxAnisotropy() : 16;
-      function loadPbrTex(filename, repeatU, repeatV) {
-        const tex = texLoader.load(basePath + filename);
-        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-        tex.repeat.set(repeatU, repeatV);
-        tex.anisotropy = maxAniso;
-        return tex;
+      function tileMaps(mat, repeatU, repeatV) {
+        for (const tex of [mat.map, mat.normalMap, mat.roughnessMap, mat.metalnessMap]) {
+          if (!tex) continue;
+          tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+          tex.repeat.set(repeatU, repeatV);
+          tex.anisotropy = maxAniso;
+          tex.needsUpdate = true;
+        }
       }
 
-      const barkAlbedo = loadPbrTex('photo_redwood_bark_albedo.png', 2.0, 6.0);
-      const barkNormal = loadPbrTex('photo_redwood_bark_normal.png', 2.0, 6.0);
-      const barkOrm    = loadPbrTex('photo_redwood_bark_orm.png', 2.0, 6.0);
-
-      const floorAlbedo = loadPbrTex('photo_forest_floor_albedo.png', 12.0, 12.0);
-      const floorNormal = loadPbrTex('photo_forest_floor_normal.png', 12.0, 12.0);
-      const floorOrm    = loadPbrTex('photo_forest_floor_orm.png', 12.0, 12.0);
-
-      const canopyAlbedo = loadPbrTex('photo_canopy_albedo.png', 3.0, 3.0);
-      const canopyNormal = loadPbrTex('photo_canopy_normal.png', 3.0, 3.0);
-
-      const mossAlbedo = loadPbrTex('photo_moss_albedo.png', 4.0, 4.0);
-      const mossNormal = loadPbrTex('photo_moss_normal.png', 4.0, 4.0);
-
-      const fernAlbedo = loadPbrTex('photo_fern_albedo.png', 2.0, 2.0);
-      const fernNormal = loadPbrTex('photo_fern_normal.png', 2.0, 2.0);
-      const fernOrm    = loadPbrTex('photo_fern_orm.png', 2.0, 2.0);
+      // Instanced copies (the SB-Veggie leaf clusters and twigs) carry their placement in instanceMatrix
+      const WORLD_VARYINGS_VERTEX = `#include <worldpos_vertex>
+             vec4 sbWorldPos = vec4(transformed, 1.0);
+             vec3 sbWorldNormal = objectNormal;
+             #ifdef USE_INSTANCING
+               sbWorldPos = instanceMatrix * sbWorldPos;
+               sbWorldNormal = mat3(instanceMatrix) * sbWorldNormal;
+             #endif
+             vWorldNormalVec = normalize(mat3(modelMatrix) * sbWorldNormal);
+             vWorldPosVec = (modelMatrix * sbWorldPos).xyz;`;
 
       // Algorithmic Living Foliage & Subsurface Scattering (SSS) Shader Injector
       function applyLivingFoliageKernel(mat, sssColorHex = 0xffe888, sssIntensity = 0.70) {
@@ -1015,9 +1010,7 @@
             ${shader.vertexShader}
           `.replace(
             '#include <worldpos_vertex>',
-            `#include <worldpos_vertex>
-             vWorldNormalVec = normalize(mat3(modelMatrix) * normal);
-             vWorldPosVec = (modelMatrix * vec4(position, 1.0)).xyz;`
+            WORLD_VARYINGS_VERTEX
           );
 
           shader.fragmentShader = `
@@ -1084,9 +1077,7 @@
             ${shader.vertexShader}
           `.replace(
             '#include <worldpos_vertex>',
-            `#include <worldpos_vertex>
-             vWorldNormalVec = normalize(mat3(modelMatrix) * normal);
-             vWorldPosVec = (modelMatrix * vec4(position, 1.0)).xyz;`
+            WORLD_VARYINGS_VERTEX
           );
           shader.fragmentShader = `
             uniform vec3 uSunPos;
@@ -1108,7 +1099,8 @@
 
              // 2. Multi-Scale Procedural Shader Noise on Bark & Ground
              float macroBark = sin(vWorldPosVec.x * 0.45) * cos(vWorldPosVec.z * 0.45);
-             float mesoBark = sin(vWorldPosVec.y * 24.0 + vWorldPosVec.x * 6.0) * cos(vWorldPosVec.z * 8.0);
+             // furrows run along the column (they vary around it, barely along it), so no ring or contour bands
+             float mesoBark = sin(vWorldPosVec.x * 9.0 + vWorldPosVec.z * 7.0 + 1.3 * sin(vWorldPosVec.y * 0.9)) * cos((vWorldPosVec.x - vWorldPosVec.z) * 5.0);
              float microBark = fract(sin(dot(vWorldPosVec.xy * 85.0, vec2(12.9898, 78.233))) * 43758.5453);
              gl_FragColor.rgb *= (1.0 + 0.10 * macroBark);
              gl_FragColor.rgb *= (0.92 + 0.16 * microBark);
@@ -1144,6 +1136,7 @@
 
         let vertCount = 0;
         let triCount = 0;
+        let barkMaterial = null;
 
         gltf.scene.traverse((child) => {
           if (child.isMesh) {
@@ -1160,50 +1153,32 @@
               child.castShadow = true;
               child.receiveShadow = true;
               child.material.vertexColors = true;
-              child.material.map = barkAlbedo;
-              child.material.normalMap = barkNormal;
+              tileMaps(child.material, 1.0, 0.4);   // the bark photo's furrows run along the column
               child.material.normalScale = new THREE.Vector2(2.6, 2.6);
-              child.material.roughnessMap = barkOrm;
               child.material.roughness = 0.88;
               child.material.metalness = 0.02;
+              barkMaterial = barkMaterial || child.material;
               applyBarkSunRimShader(child.material, 0.45);
               child.material.needsUpdate = true;
             } else if (name.includes('Floor')) {
               child.castShadow = false;
               child.receiveShadow = true;
               child.material.vertexColors = true;
-              child.material.map = floorAlbedo;
-              child.material.normalMap = floorNormal;
+              tileMaps(child.material, 12.0, 12.0);
               child.material.normalScale = new THREE.Vector2(2.0, 2.0);
-              child.material.roughnessMap = floorOrm;
               child.material.roughness = 0.92;
               child.material.metalness = 0.01;
               applyBarkSunRimShader(child.material, 0.22);
-              child.material.needsUpdate = true;
-            } else if (name.includes('Canopy') || name.includes('Foliage')) {
-              child.castShadow = true;
-              child.receiveShadow = true;
-              child.material.vertexColors = true;
-              // Pure vivid chlorophyll vertex colors without grey texture map washing
-              child.material.map = null;
-              child.material.normalMap = null;
-              child.material.roughness = 0.40;
-              child.material.metalness = 0.01;
-              child.material.doubleSided = true;
-              child.material.alphaTest = 0.0;
-              applyLivingFoliageKernel(child.material, 0xfff080, 0.90);
               child.material.needsUpdate = true;
             } else if (name.includes('Fern')) {
               child.castShadow = true;
               child.receiveShadow = true;
               child.material.vertexColors = true;
-              child.material.map = fernAlbedo;
-              child.material.normalMap = fernNormal;
+              tileMaps(child.material, 2.0, 2.0);
               child.material.normalScale = new THREE.Vector2(1.8, 1.8);
-              child.material.roughnessMap = fernOrm;
               child.material.roughness = 0.42;
               child.material.metalness = 0.01;
-              child.material.doubleSided = true;
+              child.material.side = THREE.DoubleSide;
               child.material.alphaTest = 0.35;
               applyLivingFoliageKernel(child.material, 0xaaf442, 0.85);
               child.material.needsUpdate = true;
@@ -1211,12 +1186,13 @@
               child.castShadow = true;
               child.receiveShadow = true;
               child.material.vertexColors = true;
-              child.material.map = mossAlbedo;
-              child.material.normalMap = mossNormal;
+              tileMaps(child.material, 4.0, 4.0);
+              child.material.roughnessMap = null;
+              child.material.metalnessMap = null;
               child.material.normalScale = new THREE.Vector2(1.6, 1.6);
               child.material.roughness = 0.65;
               child.material.metalness = 0.01;
-              child.material.doubleSided = true;
+              child.material.side = THREE.DoubleSide;
               child.material.alphaTest = 0.30;
               applyLivingFoliageKernel(child.material, 0x98e850, 0.60);
               child.material.needsUpdate = true;
@@ -1231,21 +1207,151 @@
         });
 
         forestGroup.add(gltf.scene);
+        forestTriangles = Math.round(triCount);
 
         document.getElementById('hudVerts').textContent = vertCount.toLocaleString();
-        document.getElementById('hudTris').textContent = Math.round(triCount).toLocaleString();
-        document.getElementById('hudStatus').textContent = 'RENDERED (60 FPS)';
+        document.getElementById('hudTris').textContent = forestTriangles.toLocaleString();
+        document.getElementById('hudStatus').textContent = 'LOADING SB-VEGGIE CROWNS...';
 
-        window.__renderReady = true;
+        loadCrowns(path.replace(/\.glb$/, '_trees.glb'), barkMaterial);
       }, undefined, (err) => {
         console.error('Error loading forest GLB from ' + path + ':', err);
         if (path.startsWith('http://')) {
           console.log('Retrying with relative path models/forest_hyperreal.glb');
           loadModel('models/forest_hyperreal.glb');
         } else {
-          document.getElementById('hudStatus').textContent = 'LOAD FAILED';
+          document.getElementById('hudStatus').textContent = 'MODEL NOT FOUND: run scripts/generate_forest_procedural_3d.cpp';
         }
       });
+
+      // 2. The crowns: SB-Veggie trees (the generator's <model>_trees.glb). Each tree node holds its levels of detail
+      //    (extras.sbLod: the distance band each is drawn in); the leaf clusters and twigs are GPU instances.
+      function loadCrowns(treesPath, barkMaterial) {
+        loader.load(treesPath, (trees) => {
+          const barkMap = barkMaterial && barkMaterial.map ? barkMaterial.map.clone() : null;
+          const barkNormalMap = barkMaterial && barkMaterial.normalMap ? barkMaterial.normalMap.clone() : null;
+          for (const tex of [barkMap, barkNormalMap]) {
+            if (!tex) continue;
+            tex.repeat.set(1, 1);   // the grown wood's UVs are laid out in bark tiles already
+            tex.needsUpdate = true;
+          }
+          const woodMaterial = new THREE.MeshStandardMaterial({
+            name: 'SB_Veggie_Wood', map: barkMap, normalMap: barkNormalMap, normalScale: new THREE.Vector2(1.6, 1.6),
+            color: new THREE.Color().setRGB(0.35, 0.19, 0.12), roughness: 0.9, metalness: 0.02
+          });
+          applyBarkSunRimShader(woodMaterial, 0.35);
+          const leafMaterials = new Map();
+          function leafMaterialFor(rgb) {
+            const key = rgb.map(v => v.toFixed(3)).join(',');
+            if (!leafMaterials.has(key)) {
+              const mat = new THREE.MeshStandardMaterial({
+                name: 'SB_Veggie_Leaves', color: new THREE.Color().setRGB(rgb[0], rgb[1], rgb[2]), roughness: 0.55, metalness: 0.0, side: THREE.DoubleSide
+              });
+              applyLivingFoliageKernel(mat, 0xfff080, 0.55);
+              leafMaterials.set(key, mat);
+            }
+            return leafMaterials.get(key);
+          }
+
+          crownTrees = [];
+          trees.scene.traverse((node) => {
+            const ex = node.userData || {};
+            if (!ex.sbTree || !ex.stem) return;
+            const rgb = (ex.sbTree.colour && ex.sbTree.colour.meanLinearRgb) || [0.05, 0.11, 0.03];
+            const leaves = leafMaterialFor(rgb);
+            const levels = [];
+            for (const lod of node.children) {
+              const band = lod.userData && lod.userData.sbLod;
+              if (!band) continue;
+              const foliage = new Set(band.foliagePrimitives || []);
+              let primitive = 0;
+              lod.traverse((o) => {
+                if (!o.isMesh) return;
+                // leaf clusters and crown cards are the instanced children named _c<k> / _card<k>; the far level's
+                // masses are its foliage primitives
+                const isLeaf = /_c\d+$|_card\d+$/.test(o.name) || /_c\d+$|_card\d+$/.test(o.parent && o.parent.name || '') ||
+                  (o.parent === lod || o === lod ? foliage.has(primitive++) : false);
+                o.material = isLeaf ? leaves : woodMaterial;
+                o.castShadow = true;
+                o.receiveShadow = true;
+              });
+              // the mid level's crown cards need the leaf atlas the app's viewer bakes; this page draws the near-mid
+              // clusters out to the mid level's range instead
+              const cards = lod.children.some(c => /_card\d+$/.test(c.name));
+              levels.push({ node: lod, level: band.level, maxDistM: band.maxDistM, fadeM: band.fadeM || 0, triangles: band.triangles || 0, cards });
+            }
+            levels.sort((a, b) => a.level - b.level);
+            const drawn = [];
+            for (const l of levels) {
+              if (l.cards && drawn.length) {
+                drawn[drawn.length - 1].maxDistM = l.maxDistM;
+                l.node.visible = false;
+              } else {
+                drawn.push(l);
+              }
+            }
+            const centre = new THREE.Vector3(ex.stem[0], 0.5 * (ex.supportY + ex.apex[1]), ex.stem[1]);
+            crownTrees.push({ levels: drawn, centre, shown: null, pick: 0, dEq: 0 });
+          });
+          forestGroup.add(trees.scene);
+          updateCrownLevels(true);
+
+          document.getElementById('hudStatus').textContent = 'RENDERED (60 FPS)';
+          window.__renderReady = true;
+        }, undefined, (err) => {
+          console.error('Error loading the crowns GLB from ' + treesPath + ':', err);
+          document.getElementById('hudStatus').textContent = 'CROWNS NOT FOUND: run scripts/generate_forest_procedural_3d.cpp';
+        });
+      }
+    }
+
+    // Each tree draws the level whose distance band (its far edge, less half the band's fade) holds its distance, read
+    // through the lens as the app's viewport reads it (tree-lod-math.ts screenEquivalentDistance: the distance at a
+    // 45 degree lens with the same on-screen size); while the crowns ask for more than the app's tree triangle budget,
+    // the farthest trees step down a level first.
+    const CROWN_REFERENCE_FOV_DEG = 45;
+    const CROWN_TRIANGLE_BUDGET = 14000000;
+    let crownTrees = [];
+    let forestTriangles = 0;
+    function updateCrownLevels(force) {
+      if (!crownTrees.length) return;
+      const lens = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / Math.tan(THREE.MathUtils.degToRad(CROWN_REFERENCE_FOV_DEG) / 2);
+      let crownTriangles = 0;
+      for (const tree of crownTrees) {
+        tree.dEq = camera.position.distanceTo(tree.centre) * lens;
+        tree.pick = tree.levels.length - 1;
+        for (let i = 0; i < tree.levels.length; i++) {
+          const l = tree.levels[i];
+          if (tree.dEq < l.maxDistM - 0.5 * l.fadeM) { tree.pick = i; break; }
+        }
+        crownTriangles += tree.levels[tree.pick].triangles;
+      }
+      if (crownTriangles > CROWN_TRIANGLE_BUDGET) {
+        const farthestFirst = crownTrees.slice().sort((a, b) => b.dEq - a.dEq);
+        let stepped = true;
+        while (crownTriangles > CROWN_TRIANGLE_BUDGET && stepped) {
+          stepped = false;
+          for (const tree of farthestFirst) {
+            if (crownTriangles <= CROWN_TRIANGLE_BUDGET) break;
+            if (tree.pick >= tree.levels.length - 1) continue;
+            crownTriangles += tree.levels[tree.pick + 1].triangles - tree.levels[tree.pick].triangles;
+            tree.pick += 1;
+            stepped = true;
+          }
+        }
+      }
+      let changed = force;
+      for (const tree of crownTrees) {
+        const pick = tree.levels[tree.pick];
+        if (pick !== tree.shown) {
+          for (const l of tree.levels) l.node.visible = (l === pick);
+          tree.shown = pick;
+          changed = true;
+        }
+      }
+      if (changed) {
+        document.getElementById('hudTris').textContent = (forestTriangles + crownTriangles).toLocaleString();
+      }
     }
 
     function onWindowResize() {
@@ -1310,6 +1416,10 @@
       if (controls) {
         controls.update();
       }
+      if (camera.position.y < 0.8) {
+        camera.position.y = 0.8;
+      }
+      updateCrownLevels(false);
 
       const camEl = document.getElementById('hudCamPos');
       if (camEl) {

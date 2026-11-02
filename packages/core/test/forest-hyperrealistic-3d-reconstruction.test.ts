@@ -112,7 +112,41 @@ describe('Hyperrealistic Forest Procedural 3D Reconstruction from Image', () => 
         expect(maxY - minY).toBeGreaterThan(15.0); // Tall forest canopy >= 15m
         expect(maxX - minX).toBeGreaterThan(20.0); // Broad forest width >= 20m
         expect(maxZ - minZ).toBeGreaterThan(25.0); // Forest depth >= 25m
+
+        // The page draws with the GLB's own maps: four photo sets (albedo, normal, ORM) embedded, and no canopy of
+        // needle slivers left in the forest mesh (the crowns are their own GLB)
+        expect(gltf.images?.length).toBe(12);
+        expect((gltf.meshes as Array<{ name?: string }>).some(m => /Canopy|Foliage/.test(m.name ?? ''))).toBe(false);
     }, 60000);
+
+    it('should grow every crown with SB-Veggie into the trees GLB beside the forest', () => {
+        const treesPath = path.join(outDir, 'forest_hyperreal_trees.glb');
+        expect(fs.existsSync(treesPath)).toBe(true);
+        const buf = fs.readFileSync(treesPath);
+        expect(buf.readUInt32LE(0)).toBe(0x46546C67);
+        const gltf = JSON.parse(buf.toString('utf8', 20, 20 + buf.readUInt32LE(12)));
+        type Node = { name?: string; children?: number[]; extras?: Record<string, any> };
+        const nodes = gltf.nodes as Node[];
+        const trees = nodes.filter(n => n.extras?.sbTree && n.extras?.stem);
+        // 45 redwood crowns on their columns and 4 understory crowns
+        expect(trees.length).toBe(49);
+        for (const t of trees) {
+            expect(t.extras!.crownOrigin).toBe('described');
+            expect(t.extras!.crownSurfaceReached).toBeGreaterThanOrEqual(0.75);
+            const levels = (t.children ?? []).map(i => nodes[i].extras?.sbLod?.level).filter((l): l is number => typeof l === 'number');
+            expect(levels).toEqual([0, 1, 2, 3]);
+        }
+        // the leaf clusters are instanced library meshes, and the species library chose each crown's proportions
+        expect(gltf.extensionsUsed).toContain('EXT_mesh_gpu_instancing');
+        expect(gltf.extras.sbTrees.species.index).toBe('assets/vegetation/species/index.json');
+        const stats = JSON.parse(fs.readFileSync(path.join(outDir, 'forest_hyperreal_trees.stats.json'), 'utf8'));
+        expect(stats.trees).toBe(49);
+        expect(stats.shortOfCrown).toBe(0);
+        const redwoodCrowns = trees.filter(t => t.extras!.label === 'coast redwood crown');
+        expect(redwoodCrowns.length).toBe(45);
+        // a redwood's grown trunk stays inside its fluted column (half the column's base radius)
+        for (const t of redwoodCrowns) expect(t.extras!.inferred.trunkRadiusM).toBeLessThan(1.0);
+    });
 
     it('should compile and evaluate general BotanicalOrganGenerator, NurseLogGenerator, and BiomassScatterEngine', async () => {
         const testCpp = `

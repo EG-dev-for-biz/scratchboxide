@@ -94,6 +94,14 @@
         18
       ]
     },
+    { "id": "coast_redwood", "label": "Coast redwood", "description": "A straight fluted column carrying a narrow cone of short, level-to-drooping limbs from about two fifths of its height, foliage in flat dark sprays.", "heightM": [
+        20,
+        115
+      ], "crownRadiusPerHeight": 0.14, "crownBaseRatio": 0.4, "trunkRadiusPerHeight": 0.025, "topShare": 0.14, "stems": 1, "scaffoldBranches": 7, "apicalDominance": 0.62, "branchAngleRad": 1.4, "leafLengthM": 0.02, "leafAspect": 0.12, "hueDeg": [
+        112,
+        18
+      ]
+    },
     { "id": "scots_pine", "label": "Scots pine", "description": "An irregular rounded crown of long needles on a tall trunk cleared of branches for half its height.", "heightM": [
         8,
         30
