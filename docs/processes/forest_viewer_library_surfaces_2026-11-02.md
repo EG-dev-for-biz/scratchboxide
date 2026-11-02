@@ -1,7 +1,7 @@
 # Process: The forest demo page's floor, moss, fern and bark surfaces drawn from the texture library at real size
 
 > **Recorded:** 2026-11-02
-> **Status:** Verified (Wideshot, Canopy, Hero and Ferns bookmarks and four close views before and after; no console errors, no failed responses, no `/textures` request; the forest test passes with credentials unreachable). Section 6: conifer crowns now draw the needle-spray atlas (species classification linked to the leaf choice), Verified. Section 7: pointed crowns whose species holds its leader grow excurrent (a stem through the crown, laterals at the species' angle), Verified. Sections 8 and 9: needle sprays draw at their real size with a porous coverage rule, their crowns filled as they draw, Verified. Needs Fix, not done here: the page's lighting was tuned for the old maps (section 3).
+> **Status:** Verified (Wideshot, Canopy, Hero and Ferns bookmarks and four close views before and after; no console errors, no failed responses, no `/textures` request; the forest test passes with credentials unreachable). Section 6: conifer crowns now draw the needle-spray atlas (species classification linked to the leaf choice), Verified. Section 7: pointed crowns whose species holds its leader grow excurrent (a stem through the crown, laterals at the species' angle), Verified. Sections 8 and 9: needle sprays draw at their real size with a porous coverage rule, their crowns filled as they draw, Verified. Section 10: every bookmark clear (Photo-Matched and Walk re-framed out of the fern bank and the monarch's bark; the sun shafts parallel and stopped at trunks), Verified. Needs Fix, not done here: the page's lighting was tuned for the old maps (section 3).
 > **Tags:** `operate-scratchbox` `demos` `pbr-materials` `texture-library` `forest-viewer` `sb-veggie` `tree-species`
 > **Target Domain:** static demo page `/forest_3d_viewer.html` and its native generator `scripts/generate_forest_procedural_3d.cpp`
 
@@ -224,3 +224,36 @@
   - In the Canopy and crowns views the 14 M page budget now steps the farthest trees down.
   - Sheet: `forest_dense_crowns_2026-11-02.jpg`, blade cards against lacy sprays against the thicker sprays.
   - The forest test checks the redwoods' cards are the spray's length and their drawn cover over 0.6.
+
+## 10. Every bookmark clear: Photo-Matched and Walk re-framed, the sun shafts made parallel (same day)
+
+* **What blocked them:** #16's hero and fern re-framing (cf7a5998, merged into this branch) left two views inside the scene.
+  - **Photo-Matched** stood at (0, 1.3, 2.2), inside the fern bank (its fronds reach z = 2.5 m): 60% of the frame within 1 m of the camera.
+  - **Walk** stood at (−0.5, 1.35, −1.2), against the monarch's bark and in the fern behind the nurse log: 75% within 1 m, all of it within 2 m.
+  - **Measured by:** a depth render of each view (320 x 200, the share of pixels nearer than 1, 2 and 4 m). The sun shafts write no depth, so they are not counted.
+* **A second cause, in every near view:** the GLB's 56 sun shafts were cones widening from 0.2–0.8 m to 2.6–4.3 m. They ran straight through the trunks.
+  - Where a cone's wall entered a trunk, the depth test cut it along the trunk's own facets: pale faceted wedges over the bark in Hero, Ferns, Canopy and every ground-level candidate.
+  - Their near walls, stacked additively, washed a camera standing in them white. The first Walk candidate past the monarch was one blank white frame.
+* **The fixes:**
+  - **Shafts** (`generate_forest_procedural_3d.cpp` `generateAtmosphericGodRays`): the sun is far, so each shaft is a near-parallel column as wide as its canopy gap, widening by a quarter (forward-scattering halo). It ends where its axis first meets a trunk or the ground (`shaftLengthToFirstBlocker`: the axis marched in 0.25 m steps against the terrain and each trunk's tapering column). It has 32 sides instead of 8, so the viewer's fade toward its outline has normals that reach edge-on.
+  - **Near fade** (page, `createVolumetricSunbeamMaterial`): a shaft's wall fades out within 1–7 m of the eye, so a camera standing in lit air sees the shafts beyond it, not their walls. Wideshot (32 m out) is unchanged.
+  - **Bookmarks** (page `BOOKMARKS`), chosen from a search of 164 candidate cameras, first by near share, then by eye:
+    - **Photo-Matched:** (−1.6, 1.5, 4.6) looking at the same point (0.45, 1.6, −2.1), fov 69. It stands 2.4 m behind the bank's front fronds, the field widened to keep the monarch and the bank the size they had. No candidate behind the bank is fully clear: what lies within 2 m is the floor and fallen twigs at the frame's foot.
+    - **Walk:** (0, 1.6, −6) looking at (1.0, 1.65, −16.8), fov 48, past the monarch at standing eye height, down the deep colonnade between its trunks.
+* **Result** (`docs/screenshots/forest_views_2026-11-02/`, sheet `forest_views_before_after_2026-11-02.jpg`; share within 1 m / within 2 m):
+
+  | View | Before | After |
+  | :--- | ---: | ---: |
+  | Wideshot | 0.00 / 0.00 | 0.00 / 0.00 |
+  | Photo-Matched | **0.60 / 0.77** | 0.00 / 0.10 |
+  | Hero | 0.00 / 0.00 | 0.00 / 0.00 |
+  | Ferns | 0.00 / 0.11 | 0.00 / 0.11 |
+  | Canopy | 0.04 / 0.04 | 0.04 / 0.04 |
+  | Walk | **0.75 / 1.00** | 0.00 / 0.15 (a framing trunk at the right edge) |
+
+  - **Checks:** console errors 0, failed responses 0, `/textures` requests 0 (headless and in the live pane, port 4170).
+  - **Live pane:** the Photo-Matched and Forest Path Walk buttons fly to the new cameras.
+  - **Test:** the forest test passes with credentials unreachable (8 of 8).
+* **Not done:**
+  - **Photo-Matched is a compromise.** It is clear of the bank but no longer stands where the photo's camera would: the photo's near ferns fill its lower left at arm's length, and its nurse log shows between them. Matching that framing needs the bank laid out around a clear stance, not a camera move.
+  - **Shaft direction:** the shafts still fall from the generator's sun (upper right, from (3.8, 18, −14)), while the page's sun light and shadows come from `SUN_POSITION` (−7.5, 22, −16), upper left. The two disagree as before.

@@ -1,7 +1,7 @@
 # Process: The forest demo page's crowns regrown with SB-Veggie, its maps read from the GLB
 
 > **Recorded:** 2026-11-02
-> **Status:** Verified (wideshot, canopy and hero bookmarks show SB-Veggie crowns, the fern bookmark the fern bank; no 404s or console errors; tests pass). The hero and fern bookmarks were re-framed the same day, out of the fern bank. Not changed: the Photo-Matched and Forest Path Walk cameras still stand at or in the fern clumps, so those two frames show fronds and a buttress.
+> **Status:** Verified (wideshot, canopy and hero bookmarks show SB-Veggie crowns, the fern bookmark the fern bank; no 404s or console errors; tests pass). The hero and fern bookmarks were re-framed the same day, out of the fern bank. The Photo-Matched and Forest Path Walk cameras, which stood at or in the fern clumps, were re-framed later the same day ([forest_viewer_library_surfaces_2026-11-02.md](./forest_viewer_library_surfaces_2026-11-02.md) section 10).
 > **Tags:** `operate-scratchbox` `demos` `sb-veggie` `vegetation` `forest-viewer`
 > **Target Domain:** static demo page `/forest_3d_viewer.html` and its native generator `scripts/generate_forest_procedural_3d.cpp`
 

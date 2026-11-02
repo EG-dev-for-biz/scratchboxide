@@ -1009,7 +1009,29 @@ inline void shareCrownGaps(std::vector<tile_vegetation::DescribedTree>& crowns, 
 // ============================================================================
 // 7. Volumetric Atmospheric Crepuscular Sunbeams (God Rays Geometry)
 // ============================================================================
-ScratchboxMesh generateAtmosphericGodRays(const Vec3& sunOrigin, const Vec3& focalCenter, int numRays = 56) {
+// How far a shaft's axis runs from its canopy gap before a trunk or the ground stops the light: the axis is marched in
+// 0.25 m steps against the terrain and each trunk's column (its radius tapering linearly from base to top).
+inline float shaftLengthToFirstBlocker(const Vec3& start, const Vec3& dir, const std::vector<TrunkSpec>& trunks, float maxLength) {
+    constexpr float STEP_M = 0.25f;
+    for (float t = 0.0f; t < maxLength; t += STEP_M) {
+        const Vec3 p = start + dir * t;
+        if (p.y <= getTerrainHeight(p.x, p.z)) return t;
+        for (const TrunkSpec& trunk : trunks) {
+            const float h = p.y - trunk.basePos.y;
+            if (h < 0.0f || h > trunk.height) continue;
+            const float r = trunk.baseRadius + (trunk.topRadius - trunk.baseRadius) * (h / trunk.height);
+            const float dx = p.x - trunk.basePos.x, dz = p.z - trunk.basePos.z;
+            if (dx * dx + dz * dz < r * r) return t;
+        }
+    }
+    return maxLength;
+}
+
+// Crepuscular shafts: the sun is far, so the light through each canopy gap is a near-parallel column as wide as the gap
+// (widening a quarter by the forward-scattering halo), and it ends where a trunk or the ground stops it. A shaft that
+// passed through a trunk would draw the trunk's facets where its wall meets the bark.
+ScratchboxMesh generateAtmosphericGodRays(const Vec3& sunOrigin, const Vec3& focalCenter, const std::vector<TrunkSpec>& trunks,
+                                          int numRays = 56) {
     ScratchboxMesh mesh("Atmospheric_Crepuscular_Sunbeams");
     mesh.material.name = "PBR_Volumetric_GodRays";
     mesh.material.roughnessFactor = 0.99f;
@@ -1027,11 +1049,14 @@ ScratchboxMesh generateAtmosphericGodRays(const Vec3& sunOrigin, const Vec3& foc
         float rDist = 1.0f + 3.6f * std::sin(r * 2.3f);
 
         Vec3 rayStart = sunOrigin + (side * std::cos(rAngle) + up * std::sin(rAngle)) * rDist;
-        float beamLength = (focalCenter - sunOrigin).length() + 22.0f;
+        float beamLength = shaftLengthToFirstBlocker(rayStart, beamDir, trunks, (focalCenter - sunOrigin).length() + 22.0f);
+        if (beamLength < 1.0f) continue;
         float beamRadiusStart = 0.22f + 0.20f * (r % 4);
-        float beamRadiusEnd = 2.6f + 0.85f * (r % 3);
+        float beamRadiusEnd = 1.25f * beamRadiusStart;
 
-        const int raySegments = 8;
+        // 32 sides: the viewer fades a beam toward its outline by its normal against the view, and an 8-sided cone's
+        // interpolated normals stay 22 degrees off edge-on at the outline, which then shows as hard facets in near views
+        const int raySegments = 32;
         uint32_t bIdx = static_cast<uint32_t>(mesh.vertices.size());
 
         for (int i = 0; i < raySegments; ++i) {
@@ -1559,7 +1584,9 @@ int main(int argc, char** argv) {
     std::cout << "☀️ Injecting Morning Crepuscular Sunbeams (56 Volumetric God Rays)...\n";
     Vec3 sunOrigin(3.8f, 18.0f, -14.0f);
     Vec3 focalCenter(-1.4f, 1.2f, -5.5f);
-    ScratchboxMesh godRays = generateAtmosphericGodRays(sunOrigin, focalCenter, 56);
+    std::vector<TrunkSpec> shaftBlockers;
+    for (const Redwood& redwood : redwoods) shaftBlockers.push_back(redwood.trunk);
+    ScratchboxMesh godRays = generateAtmosphericGodRays(sunOrigin, focalCenter, shaftBlockers, 56);
 
     // 9. Assemble Discrete Multi-Mesh Array for GlbWriter (the crowns are their own GLB, section 6). The library-textured
     //    surfaces take their set's map, normal and ORM (roughness from the map: factor 1), their tint as the base colour

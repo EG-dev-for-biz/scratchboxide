@@ -325,10 +325,12 @@
         fov: 52.0,
         buttonId: 'btnWideshot'
       },
+      // the photo-matched view stands 2.4 m behind the fern bank's front fronds, its field widened to keep the monarch
+      // and the bank the size they had from its old stance inside the bank (nothing in frame within 1 m)
       matched: {
-        pos: new THREE.Vector3(0.0, 1.30, 2.20),
+        pos: new THREE.Vector3(-1.60, 1.50, 4.60),
         target: new THREE.Vector3(0.45, 1.60, -2.10),
-        fov: 46.0,
+        fov: 69.0,
         buttonId: 'btnMatchedView'
       },
       // the hero and fern views stand in the clearing in front of the fern bank (its fronds reach z = 2.5 m): the
@@ -351,9 +353,11 @@
         fov: 56.0,
         buttonId: 'btnCanopySunbeams'
       },
+      // the walk stands past the monarch (its old stance was against the monarch's bark and in the fern behind the
+      // nurse log), at standing eye height, looking down the deep colonnade between its trunks
       walk: {
-        pos: new THREE.Vector3(-0.50, 1.35, -1.20),
-        target: new THREE.Vector3(-1.50, 1.40, -12.00),
+        pos: new THREE.Vector3(0.0, 1.60, -6.00),
+        target: new THREE.Vector3(1.00, 1.65, -16.80),
         fov: 48.0,
         buttonId: 'btnWalkPath'
       }
@@ -436,8 +440,13 @@
             float shimmer = 0.88 + 0.12 * sin(uTime * 1.5 + vWorldPosition.x * 0.45 + vWorldPosition.y * 0.35 + vWorldPosition.z * 0.40);
             float dustMotes = 0.94 + 0.06 * sin(uTime * 3.2 + vUv.x * 25.0 + vUv.y * 18.0);
 
+            // 5. Near fade: a shaft's wall within a few metres of the eye fades out. The beams are cones the ground views
+            //    stand in or beside; their near walls, stacked additively, would wash the frame white, where the eye in
+            //    lit air sees only the shafts beyond it
+            float nearFade = smoothstep(1.0, 7.0, length(vViewPosition));
+
             // Ethereal volumetric opacity
-            float alpha = edgeFade * vFade * phase * shimmer * dustMotes * (uIntensity * 0.22);
+            float alpha = edgeFade * vFade * phase * shimmer * dustMotes * nearFade * (uIntensity * 0.22);
 
             // Warm golden solar core transitioning to soft ivory/pale amber edges
             vec3 col = uSunColor * (1.0 + phase * 0.28);
