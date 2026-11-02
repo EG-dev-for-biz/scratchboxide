@@ -15,12 +15,13 @@
  *
  * Layout under <home>:
  *   scratchbox.db                   the index (asset-db.ts)
- *   assets/blobs/<aa>/<sha256>      the bytes, one file per distinct content (APFS clones when the volume allows)
+ *   assets/blobs/<aa>/<sha256>      the bytes, one file per distinct content (clones when the volume allows: cloneOrCopyFile)
  *
  * The store is deliberately simple: synchronous, one process-wide instance, and every method either records what it
  * did or throws. A file is never served from it unless its bytes still match the recorded size.
  */
 
+import { execFileSync } from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -65,6 +66,23 @@ const MIME_BY_EXT: Record<string, string> = {
 
 export function mimeForFile(file: string): string | undefined {
     return MIME_BY_EXT[path.extname(file).toLowerCase()];
+}
+
+/**
+ * Copies `source` to `target` as a clone when the volume allows it (APFS, btrfs: no extra space until either side
+ * changes), else byte for byte. On macOS Node's COPYFILE_FICLONE never clones (libuv answers ENOSYS and falls back to a
+ * full copy, measured 2026-11-02), so there `cp -c` (clonefile) makes the copy; it falls back to a plain copy itself.
+ */
+export function cloneOrCopyFile(source: string, target: string): void {
+    if (process.platform === 'darwin') {
+        try {
+            execFileSync('/bin/cp', ['-c', source, target], { stdio: 'ignore' });
+            return;
+        } catch {
+            fs.rmSync(target, { force: true });
+        }
+    }
+    fs.copyFileSync(source, target, fs.constants.COPYFILE_FICLONE);
 }
 
 export function sha256OfFile(file: string): string {
@@ -224,7 +242,7 @@ export class DurableAssetStore {
         fs.mkdirSync(path.dirname(target), { recursive: true });
         const tmp = `${target}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
         try {
-            fs.copyFileSync(found.file, tmp, fs.constants.COPYFILE_FICLONE);
+            cloneOrCopyFile(found.file, tmp);
             fs.renameSync(tmp, target);
         } catch (err) {
             fs.rmSync(tmp, { force: true });
@@ -335,7 +353,7 @@ export class DurableAssetStore {
         fs.mkdirSync(path.dirname(target), { recursive: true });
         const tmp = `${target}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
         try {
-            fs.copyFileSync(source, tmp, fs.constants.COPYFILE_FICLONE);
+            cloneOrCopyFile(source, tmp);
             fs.renameSync(tmp, target);
         } catch (err) {
             fs.rmSync(tmp, { force: true });

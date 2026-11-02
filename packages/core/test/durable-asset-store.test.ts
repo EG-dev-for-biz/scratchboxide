@@ -17,7 +17,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { DurableAssetStore, normalizeServedPath, sha256OfFile } from '../src/node/asset-store/durable-asset-store';
+import { cloneOrCopyFile, DurableAssetStore, normalizeServedPath, sha256OfFile } from '../src/node/asset-store/durable-asset-store';
 
 const HOME = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-asset-store-')));
 const WORK = path.join(HOME, 'work');
@@ -127,6 +127,16 @@ describe('DurableAssetStore', () => {
         expect(fourth).toMatchObject({ added: 0, unchanged: 3 });
         expect(store.lookup('/models/lost.glb')).toMatchObject({ rebuilt: true, origin: 'recovery', recipeId: 'staged:0000aaaa' });
         store.close();
+    });
+
+    it('copies a file whole and independent (a clone where the volume allows), so a later edit of either side leaves the other', () => {
+        const source = writeGlb('clone-source.glb', 64 * 1024, 3);
+        const target = path.join(WORK, 'clone-target.glb');
+        cloneOrCopyFile(source, target);
+        expect(fs.readFileSync(target).equals(fs.readFileSync(source))).toBe(true);
+        fs.appendFileSync(target, Buffer.from('more'));
+        expect(fs.statSync(source).size).toBe(4 + 64 * 1024);
+        expect(sha256OfFile(source)).not.toBe(sha256OfFile(target));
     });
 
     it('rejects served paths that could escape or alias a directory', () => {
