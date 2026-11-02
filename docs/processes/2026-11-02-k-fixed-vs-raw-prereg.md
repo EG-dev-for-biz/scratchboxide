@@ -1,6 +1,6 @@
 # Preregistration 4: pipeline K, fixed, against the raw scan at the ESB, the Haughwout and the Ferry
 
-Date: 2026-11-02. Status: **written before any of its builds, probes or paid calls.** Nothing below changes after this line
+Date: 2026-11-02. Status: **done 2026-11-02: the ESB judged validly, K below (in clay above); the Haughwout K below and the Ferry K level, both indicative.** Written before any of its builds, probes or paid calls; nothing below changes after this line
 except the run record and the report. A bar, arm, place or view changed after a paid call is a new preregistration that names
 this one.
 
@@ -145,8 +145,84 @@ Written after the Ferry's paid call and before the ESB's. No ESB view had been j
 
 ## Run record
 
-(none yet)
+- **The code:** `fix/k-twin-delight` at 043c0c95 (main merged at e40022f6; the tower fix 69773f1f), pushed to PR #17.
+  - The checks were clean: core typecheck and 54 tests across the judge and vector suites.
+  - The app (`scratchbox-k-step-ablation`, ports 3740-3742) was restarted on the merged code.
+- **The K builds:**
+
+  | Place | Run | Twin | How fresh |
+  |---|---|---|---|
+  | Ferry | 526b7580 | `ferry_building_san_francisco_iso_l2_tex_9e66aad9.glb` | every K stage computed (survey, remesh, ownership, textures uncached) |
+  | ESB | 44a2509b | `empire_state_building_new_york_iso_l2_tex_8fcc910b.glb` | after the stage caches were set aside: remesh 223 s and textures 277 s, uncached; complete |
+  | Haughwout | f568c14b | `haughwout_building_488_broadway_new_york_iso_l2_tex_dbf3ad5a.glb` | the same; remesh 19 s; three survey faces not surveyed, `visible_defects` |
+
+  - **A first ESB and Haughwout pair was discarded unjudged** (2d5ae29c and 5224be3b). They came back in 85 s and 14 s from
+    the stage cache, so they were not uncached builds.
+  - **Before the rebuild:** every remesh, textures and ownership entry except the Ferry's remesh, the two places' tile_refine
+    entries and the vision-reply cache were moved (1.8 GB) to `.scratchbox/cache/_stale_2026-11-02_prereg4/`. The launch
+    entry gained `SCRATCHBOX_CACHE_RESTORE=off`, and the server was restarted.
+  - **The picks are unchanged:** both rebuilt places got their earlier tile_refine keys (7e04d520, 67b7f61b).
+- **Probes, era check and views:**
+  - **Ferry:** probe `1_ferry_..._224922_fd5c`, 6 views. **Every view kept:**
+    - s6niaUIA (2026-09), l3F3P-6Q (2025-05), 3TPQcd2t (2025-01) and M931OjLK (2026-09) show the tower and the arcade as the
+      tile holds them;
+    - GgSwAfFz (2025-05) is a close view of the bay-side annex, and the tile ends inside it, so its regions are not judged;
+    - PwVpHerQ (2014-11) is from the water; the building's massing is the tile's.
+  - **Haughwout:** probe `e_v_haughwout_..._230819_e9b7`, 6 views. These are run 2's six panos, all 2026-04, with the
+    cast-iron facades and the corner clock as the tile holds them (only the storefront signs differ). **Every view kept.**
+  - **ESB (amendment 1):**
+    - the live probe found one candidate and judged nothing;
+    - the dry run's six (MAIN's #21 views) were fetched by a pinned probe, `empire_state_..._231833_96af`, and all 6
+      registered (edge residual 0.83 to 2.86 px);
+    - YcgPbg5t and 02zHXunY show the podium's street walls, and mMKyx5tm, GsL270ix and 58DEtdMq the tower over it;
+    - iL6aK4K9 (2024-09) shows a street-level sidewalk shed in the scan that the photo does not; the massing matches.
+    - **Every view kept.**
+- **Dry runs** (free, `photo-match-dryrun.test.ts`, credentials unreachable): every arm rendered at all 6 poses at each
+  place.
+  - D = 4.99 px at the ESB, 7.25 at the Haughwout and 3.48 at the Ferry.
+- **Paid calls:** one per place on the pinned poses. Every pose was judged.
+  - ESB: `empire_state_building_20_w_34th__20261102T232607_684c`.
+  - Haughwout: `e_v_haughwout_building_488_broad_20261102T232103_2261`.
+  - Ferry: `1_ferry_building_san_francisco_c_20261102T225745_fcc1`.
+- **Records:** the reports, bars, readings and proof sheet are in `docs/screenshots/k_step_ablation_2026-11-02/run4_paid/`
+  (gitignored), read by `bars.py` and `read4.py` (this session's scratchpad, `ablation/run4/`).
 
 ## Report
 
-(after the paid calls)
+| | ESB | Haughwout | Ferry |
+|---|---|---|---|
+| V1 spread (≤ 0.75) | 0.30 met | 0.39 met | 0.47 met |
+| V2 X2 − K placement (≥ D) | 9.09 ≥ 4.99 met | 9.87 ≥ 7.25 met | 6.42 ≥ 3.48 met |
+| V3 K − X3 materials / overall (≥ 1.0) | 3.73 / 2.77 met | 2.50 / 1.94 met | 3.62 / 2.84 met |
+| V4 `matchedShare` (≥ 0.99) | **0.996 met** | 0.875 missed | 0.953 missed |
+| Overall, K / raw (views level) | 4.55 / 6.00 (0/6) | 3.11 / 3.33 (4/6) | 5.34 / 5.50 (5/6) |
+| Shape | 5.39 / 7.33 | 4.00 / 3.89 | 6.61 / 6.78 |
+| Clay shape | **5.61 / 4.28** | 3.83 / 4.11 | 4.89 / 5.33 |
+| Materials | 5.06 / 5.78 | 3.56 / 3.61 | 5.06 / 5.22 |
+| Placement px, K / raw | 3.78 / 3.67 | **7.34 / 4.74**, worse at 6/6 | 3.13 / 3.14 |
+| **Reading** | **K below** (valid) | K below (indicative) | **K level** (indicative) |
+
+- **The ESB is judged for the first time, and validly.** V1 to V4 are all met.
+  - **K is below the raw scan:** 1.45 on overall and 1.94 on shape, at every view.
+  - **In clay K beats the scan by 1.33.** The geometry is better; the loss is in how it reads textured.
+  - **Materials** lose 0.72.
+  - **The worst view is YcgPbg5t:** K 2.33 against the scan's 5.00, from a flat, untextured, light slab at the base, which
+    K generates there.
+  - On the tower views, K stays within about a point of the scan.
+- **The Haughwout: K below, indicatively.**
+  - On the mean it is within the tolerance (−0.22 against 0.59), but it is level at only 4 of 6 views.
+  - Its placement is 2.6 px worse at every view; materials are level.
+- **The Ferry: K level, indicatively.**
+  - Overall is within 0.16 of the scan, at 5 of 6 views; placement is level.
+  - In the second run, before the tower fix, K was 1.20 below overall and 3.45 px worse on placement.
+- **What this points at, deciding nothing yet:**
+  1. The ESB's base: the generated light slab, and the rebuilt podium facade that reads warped (view 02zHXunY).
+  2. The Haughwout's placement.
+  3. The tile photos' blue-purple cast, which every arm shares (the colour-cast note), and the Haughwout's magenta white
+     balance. Both wait, as the parent session said, with the sky-visibility de-light, for arms of their own.
+- **Cost:** about $5.50, under the $8-16 estimate and the $35 stop.
+  - Builds' vision calls $1.25: the Ferry $0.32, the ESB and Haughwout $0.93.
+  - The judge about $3.80: 132 calls of about 6k tokens in and 1.4k out, at the estimate's rates.
+  - Street View photos about $0.35.
+
+Proof sheet: `run4_paid/proof_sheet_run4.png`.
