@@ -12,6 +12,7 @@
  * (scratchbox_splat_raster.hpp). Driven by splat-arm-render.ts through a plain-text manifest:
  *
  *   splats <.spz or .splat path>
+ *   offset <dx> <dy> <dz>                                                          (optional, after splats: moves every splat)
  *   labels <uint8 per splat path> <sky label>                                     (optional: per-pixel regions)
  *   light <ambient> <bg r> <bg g> <bg b> <near m>                                  (sRGB8 background)
  *   clay <albedo r> <albedo g> <albedo b> <ambient> <bg r> <bg g> <bg b>
@@ -19,7 +20,8 @@
  *   positions <out path>                                                          (float32 x y z per splat, file order)
  *
  * Each view writes <prefix>.rgba (RGBA8, row 0 at the top), <prefix>.cov (float32 coverage) and, with labels,
- * <prefix>.reg (uint8). Prints one JSON line per view, then a summary line.
+ * <prefix>.reg (uint8) and <prefix>.dep (float32: the camera z of the splat that labelled each pixel, 1e9 where none).
+ * Prints one JSON line per view, then a summary line.
  */
 
 #include "scratchbox_splat_raster.hpp"
@@ -71,6 +73,11 @@ int main(int argc, char** argv) {
             const bool isSpz = path.size() > 4 && path.compare(path.size() - 4, 4, ".spz") == 0;
             splats = isSpz ? spz::SpzCodec::decode(bytes.data(), bytes.size()) : spz::SplatCodec::decode(bytes.data(), bytes.size());
             if (splats.empty()) { std::cerr << "no splats in " << path << std::endl; return 3; }
+        } else if (key == "offset") {
+            if (splats.empty()) { std::cerr << "an offset before the splats" << std::endl; return 2; }
+            const Vec3 d = readVec(in);
+            if (!in) { std::cerr << "a malformed offset line: " << line << std::endl; return 2; }
+            for (auto& s : splats) s.position = s.position + d;
         } else if (key == "labels") {
             std::string path; int sky = 0; in >> path >> sky;
             if (!readFile(path, labels)) { std::cerr << "cannot read the labels " << path << std::endl; return 3; }
@@ -99,7 +106,7 @@ int main(int argc, char** argv) {
             const auto r = splatraster::render(splats, labels, skyLabel, cam, l);
             writeFile(prefix + ".rgba", r.rgba);
             writeFile(prefix + ".cov", r.coverage);
-            if (!r.regions.empty()) writeFile(prefix + ".reg", r.regions);
+            if (!r.regions.empty()) { writeFile(prefix + ".reg", r.regions); writeFile(prefix + ".dep", r.regionDepth); }
             const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - v0).count();
             std::cout << "{\"view\":\"" << prefix << "\",\"drawn\":" << r.drawn << ",\"ms\":" << static_cast<long>(ms) << "}" << std::endl;
             views++;

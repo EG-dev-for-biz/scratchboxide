@@ -27,11 +27,11 @@ import type { ReliefFacade } from './facade-lattice';
 import { wallCoverage } from './facade-lattice';
 import { encodePng } from './png-encode';
 import { readOccluded } from './pipeline-k/occlusion';
-import { fillHoles, occludedMaskName } from './pipeline-k/ortho-rectify';
+import { fillHoles, occludedMaskName, smoothFillHoles } from './pipeline-k/ortho-rectify';
 import type { WallGrammarFile } from './wall-grammar';
 import type { WindowFitFile, WindowRect } from './window-fit';
 
-export const WALL_SHEETS_VERSION = 'wall-sheets/1';
+export const WALL_SHEETS_VERSION = 'wall-sheets/2';
 export const WALLS_FILE = 'walls.json';
 /** A sheet's facade id: its wall's id past every facade id tile_refine writes. */
 export const SHEET_ID_BASE = 10000;
@@ -104,7 +104,11 @@ export function buildWallSheets(orthosDir: string, grammar: WallGrammarFile, fit
             if (uncovered[k]) rgba.set([128, 128, 128, 255], k * 4);
         }
         const cov = wallCoverage({ rgba, width: W, height: H }, px);
-        const filled = fillHoles({ width: W, height: H, rgba }, px);
+        // the sheet's own repeats, then a smooth fill for what they leave (the nearest texel copied across draws streaks)
+        const filled = fillHoles({ width: W, height: H, rgba }, px, undefined, { nearest: false });
+        const out = filled.image.rgba;
+        const left = Uint8Array.from({ length: W * H }, (_, k) => (uncovered[k] && out[k * 4] === 128 && out[k * 4 + 1] === 128 && out[k * 4 + 2] === 128 ? 1 : 0));
+        const smooth = smoothFillHoles(filled.image, left);
         const holes = uncovered.reduce((a, v) => a + v, 0);
         const id = SHEET_ID_BASE + w.wallId, image = `wall_${w.wallId}.png`, mask = `wall_${w.wallId}_uncovered.png`;
         fs.writeFileSync(path.join(orthosDir, image), encodePng(W, H, Buffer.from(filled.image.rgba), 4));
@@ -114,7 +118,7 @@ export function buildWallSheets(orthosDir: string, grammar: WallGrammarFile, fit
         const facade: ReliefFacade = {
             facadeId: id, image, centroid: c, normal: ref.normal, axisS: S, axisT: T, sMin, sMax, tMin, tMax, pixel: px, width: W, height: H, orthoSMin: sMin, orthoTMax: tMax,
             coverage: 1 - holes / (W * H), uncoveredMask: mask, ...(occMask ? { occludedMask: occMask } : {}), wallCoverage: Math.round(cov.wallCoverage * 1000) / 1000, wallAreaM2: Math.round(cov.wallAreaM2),
-            textureFill: { label: 'generated', texels: holes, share: Math.round((holes / (W * H)) * 1e4) / 1e4, method: `the wall's ${members.length} facade photos laid on one sheet, the member covering most of its own wall first; its ${holes} texels no photo reached filled from the sheet's own repeats (${filled.fill.fromRepeats} at its bay pitch, ${filled.fill.fromStoreys} at its storey pitch, ${filled.fill.fromNearest} from the nearest real texel)` }
+            textureFill: { label: 'generated', texels: holes, share: Math.round((holes / (W * H)) * 1e4) / 1e4, method: `the wall's ${members.length} facade photos laid on one sheet, the member covering most of its own wall first; its ${holes} texels no photo reached filled from the sheet's own repeats (${filled.fill.fromRepeats} at its bay pitch, ${filled.fill.fromStoreys} at its storey pitch), ${smooth} by a smooth fill between the colours at the holes' edges` }
         };
         // the members' windows and panes carried onto the sheet
         const carry = (rects: Array<{ f: ReliefFacade; r: WindowRect }>): WindowRect[] => {

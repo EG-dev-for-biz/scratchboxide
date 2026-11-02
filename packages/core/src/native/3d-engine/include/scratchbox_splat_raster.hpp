@@ -69,6 +69,8 @@ struct Render {
     std::vector<uint8_t> rgba;
     std::vector<float> coverage;
     std::vector<uint8_t> regions;
+    /** With labels: per pixel the camera z of the splat that labelled it (1e9 where none did). */
+    std::vector<float> regionDepth;
     size_t drawn = 0;
 };
 
@@ -168,7 +170,7 @@ inline Render render(const std::vector<spz::GaussianSplat>& splats, const std::v
     out.drawn = list.size();
     std::sort(list.begin(), list.end(), [](const Projected& a, const Projected& b) { return a.z < b.z; });
     std::vector<float> T(N, 1.0f), acc(N * 3, 0.0f);
-    if (!labels.empty()) out.regions.assign(N, skyLabel);
+    if (!labels.empty()) { out.regions.assign(N, skyLabel); out.regionDepth.assign(N, 1e9f); }
     std::vector<uint8_t> labelled(labels.empty() ? 0 : N, 0);
     for (const auto& p : list) {
         for (int y = p.y0; y <= p.y1; ++y) {
@@ -184,7 +186,7 @@ inline Render render(const std::vector<spz::GaussianSplat>& splats, const std::v
                 const float w = T[k] * a;
                 acc[k * 3] += w * p.r; acc[k * 3 + 1] += w * p.g; acc[k * 3 + 2] += w * p.b;
                 T[k] -= w;
-                if (!labelled.empty() && !labelled[k] && T[k] <= 0.5f) { out.regions[k] = labels[p.index]; labelled[k] = 1; }
+                if (!labelled.empty() && !labelled[k] && T[k] <= 0.5f) { out.regions[k] = labels[p.index]; out.regionDepth[k] = p.z; labelled[k] = 1; }
             }
         }
     }
